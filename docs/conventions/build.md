@@ -20,11 +20,15 @@ this the obvious way), not from how much history it accumulated.
 - **`userland/` is split by ROLE, and the build derives things from it
   -- adding a program is a `.c` file and nothing else.** `rt/` (crt0,
   libsys, stack_chk, link.ld), `include/` (the C library's PUBLIC
-  headers, and ONLY those -- see below), `ui/` (the GUI toolkit),
-  `lib/` (userland libraries that aren't UI -- `tosh`, the C library's
-  implementation, and the toy-os-internal headers that are not part of
-  its public surface), `gui/` (windowed apps), `bin/` (command-line
-  programs), `tests/` (single-mechanism diagnostics). **The first three produce
+  headers, and ONLY those -- see below), `libc/` (the C library's
+  implementation, archived as `libc.a`), `ui/` (the GUI toolkit),
+  `lib/` (userland libraries that aren't UI -- `tosh`, and the
+  toy-os-internal headers that are not part of the libc's public
+  surface), `gui/` (windowed apps), `bin/` (command-line programs),
+  `tests/` (single-mechanism diagnostics). **There are TWO archives**:
+  `libc.a` (a `/bin` program needs only this) and `libuapp.a` (Toykit,
+  for a GUI app), linked in that order because Toykit calls the C
+  library and not the other way round. **The first three produce
   objects; the last three produce one ELF per `.c`, and the directory
   also says where it seeds** -- `gui/` and `bin/` to `/bin`, `tests/` to
   `/tests`, which is `docs/filesystem-layout.md`'s distinction stated
@@ -54,6 +58,12 @@ this the obvious way), not from how much history it accumulated.
   zero-pad widths for numbers and `%Ns`/`%-Ns` column padding for
   STRINGS (a value longer than its field pushes the column rather than
   being truncated), but no `*` width.
+  **`printf`, `FILE` and the stream layer exist** (`#include <stdio.h>`)
+  -- buffered, with `stderr` unbuffered and a terminal line buffered.
+  The trap that comes with that: **output not yet flushed is LOST if a
+  program leaves without going through `exit()`**, which `sys_exit()`
+  does. A `FILE` is a reader or a writer and never both, so `fopen`
+  refuses `"r+"` -- the kernel's open file has one mode.
   **`malloc`/`free`/`calloc` DO exist** (`#include <stdlib.h>`), and
   they are not a second allocator: they are `kernel/lib/heap_core.c` --
   the kernel's own free list -- compiled a second time with `SYS_SBRK`
@@ -61,7 +71,7 @@ this the obvious way), not from how much history it accumulated.
   a caller inherits from sbrk: **`free()` never returns memory to the
   kernel** (the break cannot move down, so a process's footprint only
   grows), and a fresh region's pages arrive on touch. What still does
-  NOT exist, on purpose: `realloc`, `FILE`, `printf`, TLS. (`errno`
+  NOT exist, on purpose: `realloc`, `strtol`, `qsort`, TLS. (`errno`
   DOES -- `sys_errno()`/`sys_strerror()` over `abi/errno.h`; the C
   spelling is what is still missing. See `docs/libc-design.md`.)
   Three traps, all of which fail quietly: a header named `string.h`

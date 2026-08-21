@@ -26,13 +26,21 @@ bits 64
 section .text
 global _start
 extern main
-; sys_exit(), not exit(). A hosted crt0 calls exit(), which a libc
-; defines to run atexit handlers and flush stdio before making the real
-; _exit syscall. toy-os has neither, so calling the syscall wrapper
-; directly says what actually happens instead of implying a libc that
-; isn't there. When one exists (Milestone 24), THIS is the line that
-; changes -- and the layering will already be in the right shape.
-extern sys_exit
+; exit(), not sys_exit(). A hosted crt0 calls exit(), which the libc
+; defines to run atexit handlers and FLUSH STDIO before making the real
+; _exit syscall -- and since stdout is buffered, that flush is what
+; makes a program's last printf() reach the screen at all. This was
+; sys_exit() until the stream layer existed and there was nothing for
+; exit() to do.
+;
+; The cost of the hook is that every ring-3 program now pulls exit(),
+; fflush() and the standard streams out of libc.a whether or not it
+; prints anything. -ffunction-sections plus --gc-sections keeps that to
+; the flush path rather than the whole of stdio.
+;
+; A program that calls sys_exit() itself still bypasses all of it, which
+; <stdio.h> documents as the trap that comes with buffering.
+extern exit
 
 _start:
     ; argc / argv / envp into the SysV argument registers for main().
@@ -64,9 +72,9 @@ _start:
 
     ; main()'s return value is the exit status, exactly as in C.
     mov     edi, eax
-    call    sys_exit
+    call    exit
 
-    ; sys_exit() does not return. If it somehow does, stop here rather than
+    ; exit() does not return. If it somehow does, stop here rather than
     ; running off into whatever follows in .text -- a fault with an
     ; obvious cause beats executing arbitrary bytes.
 .hang:

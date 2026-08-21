@@ -56,6 +56,34 @@ size_t k_vsnprintf(char *out, size_t cap, const char *fmt, va_list ap);
 size_t k_snprintf(char *out, size_t cap, const char *fmt, ...)
     __attribute__((format(printf, 3, 4)));
 
+// THE SAME FORMATTER WITH NOWHERE TO RUN OUT OF ROOM.
+//
+// `sink` is handed each run of bytes as they are produced and `ctx` is
+// whatever the caller wants to identify the destination -- a stream, a
+// buffer it grows itself, a checksum. Nothing is stored on the way, so
+// there is no capacity, nothing can be truncated, and no caller has to
+// guess in advance how long a line might get.
+//
+// This is what lets ONE formatter serve both `snprintf` and a `printf`
+// writing to a stream. The alternative -- formatting into a fixed
+// scratch buffer and then writing that -- is what vga_printf() and
+// klog_printf() do below, and it is fine for a diagnostic line and
+// wrong for a C library: it caps the length of anything a program can
+// print at whatever number this file happened to choose.
+//
+// The return value is the number of bytes handed to the sink, i.e. the
+// full length. Unlike k_vsnprintf()'s, it cannot be "more than you
+// got".
+//
+// The sink is called with SHORT runs (currently one byte at a time), so
+// a sink that cares about efficiency must buffer on its own side --
+// which is exactly what a FILE does. Do not add batching here: the
+// scratch buffer it would need is the thing this call exists to avoid.
+typedef void (*k_fmt_sink)(void *ctx, const char *s, size_t n);
+size_t k_vcbprintf(k_fmt_sink sink, void *ctx, const char *fmt, va_list ap);
+size_t k_cbprintf(k_fmt_sink sink, void *ctx, const char *fmt, ...)
+    __attribute__((format(printf, 3, 4)));
+
 // The sink wrappers, which live in kfmt_print.c rather than kfmt.c.
 // One header, two files, on purpose: kfmt.c is freestanding and is
 // compiled a second time into libuapp.a so ring-3 programs share this

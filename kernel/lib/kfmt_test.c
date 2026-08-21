@@ -125,3 +125,53 @@ KTEST("kfmt", "an unrecognised conversion prints literally and eats no argument"
     KTEST_ASSERT(eq(b, "trailing %"));
 }
 #pragma GCC diagnostic pop
+
+// --- the sink form -------------------------------------------------
+//
+// k_vcbprintf() is what the C library's printf() is built on, so what
+// matters is that it agrees with k_snprintf() -- one formatter, two
+// entry points -- and that it is NOT bounded by any buffer this file
+// chose.
+// NOT zero-initialised as a whole: `= {{0},0}` on a 512-byte array
+// makes GCC emit a call to memcpy/memset, which a freestanding kernel
+// does not have. Set the two fields that matter instead.
+struct sinkbuf { char b[512]; size_t n; };
+static void sink_reset(struct sinkbuf *sb) { sb->n = 0; sb->b[0] = '\0'; }
+
+static void sink_collect(void *ctx, const char *s, size_t n) {
+    struct sinkbuf *sb = (struct sinkbuf *)ctx;
+    for (size_t i = 0; i < n && sb->n + 1 < sizeof sb->b; i++) sb->b[sb->n++] = s[i];
+    sb->b[sb->n] = '\0';
+}
+
+KTEST("kfmt", "the sink form produces exactly what snprintf would") {
+    struct sinkbuf sb;
+    sink_reset(&sb);
+    char want[128];
+    size_t nw = k_snprintf(want, sizeof want, "%s=%d [%04x] %-6s|", "id", -42, 255, "ab");
+    size_t ns = k_cbprintf(sink_collect, &sb, "%s=%d [%04x] %-6s|", "id", -42, 255, "ab");
+    KTEST_ASSERT(eq(sb.b, want));
+    KTEST_ASSERT(ns == nw);
+}
+
+KTEST("kfmt", "the sink form is not bounded by KFMT_LINE_MAX") {
+    // A line longer than the fixed buffer vga_printf()/klog_printf()
+    // use. snprintf into that size would report the full length and
+    // store only part; a sink stores all of it, which is the whole
+    // reason printf() is built on this and not on a scratch buffer.
+    //
+    // Length comes from STRINGS, not from a pad width: a numeric width
+    // is bounded by put_num()'s 24-byte scratch, so `%400u` does not
+    // produce 400 characters. That is a pre-existing property of the
+    // number path and nothing to do with the sink -- it is written down
+    // here because the obvious way to write this test walks into it.
+    const char *s60 = "012345678901234567890123456789"
+                      "012345678901234567890123456789";
+    struct sinkbuf sb;
+    sink_reset(&sb);
+    size_t n = k_cbprintf(sink_collect, &sb, "%s%s%s%s%s", s60, s60, s60, s60, s60);
+    KTEST_ASSERT(n == 300);
+    KTEST_ASSERT(n > KFMT_LINE_MAX);
+    KTEST_ASSERT(sb.n == 300);
+    KTEST_ASSERT(sb.b[0] == '0' && sb.b[299] == '9');
+}

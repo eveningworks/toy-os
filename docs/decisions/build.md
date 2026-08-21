@@ -786,3 +786,63 @@ and became something the build enforces. Verified with `gcc -M` on
 `kernel/lib/kfmt.c` both ways -- with the flag it pulls
 `userland/include/string.h`, without it `kernel/include/api/string.h` --
 rather than reasoned about.
+
+## `printf` is built on a SINK, not on a scratch buffer -- and there is still one formatter
+
+`docs/libc-design.md`'s Stage 2. Giving ring 3 a `printf` meant deciding
+where the bytes go while a conversion is being produced, and the obvious
+answer is the one the kernel already uses: `vga_printf()` and
+`klog_printf()` format into a fixed `KFMT_LINE_MAX` buffer and then
+write it.
+
+That is right for a diagnostic line and wrong for a C library. It caps
+everything a program can ever print at a number `kfmt_print.c` happened
+to choose, and the cap is silent -- `k_vsnprintf` reports the length the
+result WOULD have had, so a `printf` built this way could detect its own
+truncation and still have nowhere to put the rest.
+
+The alternative that a real libc uses is a formatter that emits as it
+goes, which `kfmt.c` was already one small change away from: every
+conversion funnels through a single `put()`. So `struct out` gained an
+optional sink, `k_vsnprintf` and the new `k_vcbprintf` became two entry
+points onto one `vformat()`, and the conversions do not know which kind
+they are feeding. **There is still exactly one formatter in the tree**,
+which was the constraint that mattered -- a private `vfprintf` beside
+`kfmt.c` is precisely the duplication the shared-source rule exists to
+prevent, and every real libc has one because none of them share a
+formatter with a kernel.
+
+Two things about the shape. The sink is called with **one byte at a
+time**, deliberately: batching would need a scratch buffer here, which
+is the thing being avoided, and the sink this exists for is a stream's
+own buffer where a byte costs a bounds check and a store. And `printf`'s
+sink is the ordinary `fputc()` path rather than a fast one, so
+`printf("a"); putchar('b');` cannot come out in the wrong order.
+
+It also puts Stage 4's `%f` in the right place: a float conversion
+becomes a hook inside `vformat()`, compiled only into the ring-3 build,
+rather than a second formatter that would have to be kept in step.
+
+## `libc.a` is a second archive beside `libuapp.a`
+
+Same audience question `userland/include/` answered for the headers, one
+layer down. A `/bin` program links the C library; a GUI app links the C
+library plus Toykit. One merged archive would have made the libc's
+audience "toy-os apps" rather than "any C program", which is the
+opposite of what the port-capable target is for.
+
+`kernel/lib/string.c`, `knum.c`, `kfmt.c` and `heap_core.c` are in
+`libc.a` rather than `libuapp.a`, because they ARE the C library's
+implementation: `<string.h>`'s inlines call the first two, `snprintf`
+and `printf` call the third, and `malloc` is the fourth.
+
+**Link order is `libuapp.a` then `libc.a`, and it is not arbitrary.**
+Toykit calls `strlen` and `snprintf`; the C library calls nothing in
+Toykit. A linker resolves an archive against what is still undefined
+when it reaches it, so the dependency has to come first. Reversing them
+fails at link time with undefined `k_*` references from widgets -- loud,
+which is the one good thing about getting this wrong.
+
+The split is cheap now and awkward later: every program that comes to
+depend on the merged shape makes it harder to separate, which is why it
+was done while the libc was three files.

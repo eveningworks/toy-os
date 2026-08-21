@@ -1,0 +1,405 @@
+// The C library's stream layer: FILE, buffering, and the printf family.
+//
+// See <stdio.h> for the contract. This file holds the three things that
+// have real design in them.
+//
+// **A FILE IS A READER OR A WRITER, NEVER BOTH.** That is not a
+// simplification taken for convenience -- the kernel's own open file
+// has a single mode (SYS_O_WRITE or not), so there is no read-write
+// descriptor to build "r+" on. It removes the whole of a real libc's
+// hardest corner (the flush-and-reposition dance when a stream switches
+// direction) and the removal is honest rather than hidden: fopen()
+// refuses the modes it cannot serve.
+//
+// **BUFFERING POLICY IS THE STANDARD ONE, AND IT IS WHY THIS EXISTS.**
+// stderr unbuffered, a terminal line buffered, everything else fully
+// buffered. Without it printf() is one syscall per call, which is worse
+// than the sys_print()-shaped code it replaces -- so a stdio that
+// skipped buffering would make the system slower and not be worth
+// having. "Is it a terminal" is one SYS_FSTAT per stream, asked lazily
+// on first use rather than at fopen(), so a stream nobody touches costs
+// nothing.
+//
+// **PRINTF GOES THROUGH kfmt's SINK FORM, NOT A SCRATCH BUFFER.**
+// k_vcbprintf() hands out bytes as it produces them (api/kfmt.h), so
+// there is exactly one formatter in the tree and a printf() has no
+// maximum line length. The obvious alternative -- format into a fixed
+// buffer, then write it -- is what vga_printf() does, and it caps
+// everything a program can print at a number this file would have had
+// to invent.
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include "rt/sys.h"
+#include "syscall_abi.h"
+
+// --- the stream ------------------------------------------------------
+
+#define F_READ    0x01
+#define F_WRITE   0x02
+#define F_EOF     0x04
+#define F_ERR     0x08
+#define F_INUSE   0x10
+#define F_OWNBUF  0x20 // the buffer came from malloc and fclose frees it
+#define F_MODESET 0x40 // the buffering policy has been decided
+
+struct _FILE {
+    int fd;
+    unsigned char *buf;
+    size_t bufsz;
+    size_t pos;   // reading: next byte to hand out. writing: bytes pending.
+    size_t end;   // reading: bytes valid in buf. unused when writing.
+    int unget;    // one byte of pushback, or -1
+    short mode;   // _IOFBF / _IOLBF / _IONBF
+    short flags;
+};
+
+// The three standard streams get STATIC buffers, so a program that
+// never opens a file makes no allocation at all and printf() works
+// before (and after) the heap does. Everything fopen() returns takes
+// its buffer from malloc.
+static unsigned char g_inbuf[BUFSIZ];
+static unsigned char g_outbuf[BUFSIZ];
+
+static FILE g_std[3] = {
+    { 0, g_inbuf,  BUFSIZ, 0, 0, -1, _IOFBF, F_READ  | F_INUSE },
+    { 1, g_outbuf, BUFSIZ, 0, 0, -1, _IOFBF, F_WRITE | F_INUSE },
+    // stderr is unbuffered and says so up front: F_MODESET keeps the
+    // policy below from asking fstat and deciding otherwise. A
+    // diagnostic that is still sitting in a buffer when the process
+    // dies is a diagnostic that did not happen.
+    { 2, 0,        0,      0, 0, -1, _IONBF, F_WRITE | F_INUSE | F_MODESET },
+};
+
+FILE *const stdin  = &g_std[0];
+FILE *const stdout = &g_std[1];
+FILE *const stderr = &g_std[2];
+
+static FILE g_files[FOPEN_MAX];
+
+// --- policy ----------------------------------------------------------
+
+// Decides line-vs-full buffering the first time a stream is used. One
+// syscall per stream, and only for streams that are actually touched.
+static void decide_buffering(FILE *f) {
+    if (f->flags & F_MODESET) return;
+    f->flags |= F_MODESET;
+    struct sys_stat st;
+    if (sys_fstat(f->fd, &st) == 0 && (st.flags & SYS_STAT_TTY))
+        f->mode = _IOLBF;
+    else
+        f->mode = _IOFBF;
+}
+
+// A stream with no buffer is unbuffered, whatever its mode says --
+// which is how stderr and a failed malloc reach the same code path
+// instead of the second one being a special case nobody tested.
+static int unbuffered(FILE *f) { return f->mode == _IONBF || !f->buf; }
+
+// --- writing ---------------------------------------------------------
+
+// Writes exactly n bytes, looping. SYS_WRITE silently CAPS a write at
+// SYS_WRITE_MAX and returns the capped count, so a single call is not
+// enough even for a buffer this file sized to match -- and a caller
+// that assumed otherwise would drop the tail of every long write
+// without any error to notice.
+static int write_all(FILE *f, const unsigned char *p, size_t n) {
+    while (n) {
+        int64_t w = sys_write(f->fd, p, n);
+        if (w <= 0) { f->flags |= F_ERR; return -1; }
+        p += (size_t)w;
+        n -= (size_t)w;
+    }
+    return 0;
+}
+
+static int flush_write(FILE *f) {
+    if (!(f->flags & F_WRITE) || !f->pos) return 0;
+    size_t n = f->pos;
+    f->pos = 0; // cleared FIRST: a failed write must not be retried by
+                // the next flush, which would emit it twice
+    return write_all(f, f->buf, n);
+}
+
+int fflush(FILE *f) {
+    if (f) return flush_write(f) < 0 ? EOF : 0;
+    // NULL means every stream, and one failure must not stop the rest
+    // from being flushed -- the point of flushing everything is that
+    // the process is going away.
+    int rc = 0;
+    for (int i = 0; i < 3; i++) if (flush_write(&g_std[i]) < 0) rc = EOF;
+    for (int i = 0; i < FOPEN_MAX; i++)
+        if ((g_files[i].flags & F_INUSE) && flush_write(&g_files[i]) < 0) rc = EOF;
+    return rc;
+}
+
+int fputc(int c, FILE *f) {
+    if (!f || !(f->flags & F_WRITE)) return EOF;
+    decide_buffering(f);
+    unsigned char ch = (unsigned char)c;
+    if (unbuffered(f)) return write_all(f, &ch, 1) < 0 ? EOF : (int)ch;
+    f->buf[f->pos++] = ch;
+    if (f->pos == f->bufsz || (f->mode == _IOLBF && ch == '\n'))
+        if (flush_write(f) < 0) return EOF;
+    return (int)ch;
+}
+
+int putc(int c, FILE *f) { return fputc(c, f); }
+int putchar(int c) { return fputc(c, stdout); }
+
+size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *f) {
+    if (!f || !(f->flags & F_WRITE) || !size || !nmemb) return 0;
+    decide_buffering(f);
+    size_t total = size * nmemb;
+    const unsigned char *p = (const unsigned char *)ptr;
+
+    // A block at least as big as the buffer goes STRAIGHT out: copying
+    // it in to copy it out again is pure cost, and it is what makes
+    // writing a large file O(bytes) rather than O(bytes) plus a
+    // memcpy of the same size.
+    if (unbuffered(f) || total >= f->bufsz) {
+        if (flush_write(f) < 0) return 0;
+        if (write_all(f, p, total) < 0) return 0;
+        return nmemb;
+    }
+    if (f->pos + total > f->bufsz && flush_write(f) < 0) return 0;
+    k_memcpy(f->buf + f->pos, p, total);
+    f->pos += total;
+    // Line buffering has to look INSIDE the block: a caller writing a
+    // whole line with fwrite() expects it out at the newline just as
+    // much as one writing it with putchar().
+    if (f->mode == _IOLBF) {
+        for (size_t i = 0; i < total; i++)
+            if (p[i] == '\n') { if (flush_write(f) < 0) return 0; break; }
+    }
+    return nmemb;
+}
+
+int fputs(const char *s, FILE *f) {
+    size_t n = k_strlen(s);
+    return fwrite(s, 1, n, f) == n || n == 0 ? 0 : EOF;
+}
+
+int puts(const char *s) {
+    if (fputs(s, stdout) == EOF) return EOF;
+    return fputc('\n', stdout) == EOF ? EOF : 0;
+}
+
+// --- reading ---------------------------------------------------------
+
+static int refill(FILE *f) {
+    if (!(f->flags & F_READ)) return -1;
+    decide_buffering(f);
+    f->pos = f->end = 0;
+    if (!f->buf) return -1;
+    int64_t n = sys_read(f->fd, f->buf, f->bufsz);
+    if (n < 0) { f->flags |= F_ERR; return -1; }
+    if (n == 0) { f->flags |= F_EOF; return -1; }
+    f->end = (size_t)n;
+    return 0;
+}
+
+int fgetc(FILE *f) {
+    if (!f || !(f->flags & F_READ)) return EOF;
+    if (f->unget >= 0) { int c = f->unget; f->unget = -1; return c; }
+    decide_buffering(f);
+    if (unbuffered(f)) {
+        unsigned char ch;
+        int64_t n = sys_read(f->fd, &ch, 1);
+        if (n < 0) { f->flags |= F_ERR; return EOF; }
+        if (n == 0) { f->flags |= F_EOF; return EOF; }
+        return (int)ch;
+    }
+    if (f->pos == f->end && refill(f) < 0) return EOF;
+    return (int)f->buf[f->pos++];
+}
+
+int getc(FILE *f) { return fgetc(f); }
+int getchar(void) { return fgetc(stdin); }
+
+int ungetc(int c, FILE *f) {
+    // ONE byte, and never a backward seek: a pipe and a terminal have
+    // no position to seek, and this is the call a parser uses to look
+    // one character ahead on exactly those.
+    if (!f || c == EOF || f->unget >= 0) return EOF;
+    f->unget = (unsigned char)c;
+    f->flags &= (short)~F_EOF; // pushing back un-ends the stream
+    return c;
+}
+
+size_t fread(void *ptr, size_t size, size_t nmemb, FILE *f) {
+    if (!f || !(f->flags & F_READ) || !size || !nmemb) return 0;
+    unsigned char *p = (unsigned char *)ptr;
+    size_t want = size * nmemb, got = 0;
+    while (got < want) {
+        int c = fgetc(f);
+        if (c == EOF) break;
+        p[got++] = (unsigned char)c;
+    }
+    return got / size;
+}
+
+char *fgets(char *s, int size, FILE *f) {
+    if (!s || size <= 0 || !f) return 0;
+    int i = 0;
+    while (i < size - 1) {
+        int c = fgetc(f);
+        if (c == EOF) break;
+        s[i++] = (char)c;
+        if (c == '\n') break;
+    }
+    if (i == 0) return 0; // EOF or error with nothing read
+    s[i] = '\0';
+    return s;
+}
+
+// --- formatted output ------------------------------------------------
+
+// The sink kfmt hands bytes to. It is deliberately the ordinary write
+// path rather than a fast one: everything printf() emits goes through
+// the same buffering and the same line-flush rule as everything else,
+// so `printf("a"); putchar('b');` cannot come out in the wrong order.
+static void stream_sink(void *ctx, const char *s, size_t n) {
+    FILE *f = (FILE *)ctx;
+    for (size_t i = 0; i < n; i++) fputc((unsigned char)s[i], f);
+}
+
+int vfprintf(FILE *f, const char *fmt, va_list ap) {
+    if (!f || !(f->flags & F_WRITE)) return -1;
+    size_t n = k_vcbprintf(stream_sink, f, fmt, ap);
+    return (f->flags & F_ERR) ? -1 : (int)n;
+}
+
+int fprintf(FILE *f, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vfprintf(f, fmt, ap);
+    va_end(ap);
+    return n;
+}
+
+int vprintf(const char *fmt, va_list ap) { return vfprintf(stdout, fmt, ap); }
+
+int printf(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vfprintf(stdout, fmt, ap);
+    va_end(ap);
+    return n;
+}
+
+// --- position --------------------------------------------------------
+
+int fseek(FILE *f, long offset, int whence) {
+    if (!f) return -1;
+    if (f->flags & F_WRITE) {
+        if (flush_write(f) < 0) return -1;
+    } else {
+        // SEEK_CUR must be relative to where the CALLER thinks it is,
+        // which is not where the fd is: the buffer holds bytes already
+        // read from the fd and not yet handed out, and a pushback byte
+        // sits one further back still. Getting this wrong is invisible
+        // until a file is read through a buffer boundary.
+        if (whence == SEEK_CUR) {
+            long behind = (long)(f->end - f->pos) + (f->unget >= 0 ? 1 : 0);
+            offset -= behind;
+        }
+        f->pos = f->end = 0;
+    }
+    f->unget = -1;
+    if (sys_lseek(f->fd, offset, whence) < 0) return -1;
+    f->flags &= (short)~F_EOF;
+    return 0;
+}
+
+long ftell(FILE *f) {
+    if (!f) return -1;
+    if (f->flags & F_WRITE) {
+        if (flush_write(f) < 0) return -1;
+        return (long)sys_lseek(f->fd, 0, SEEK_CUR);
+    }
+    long at = (long)sys_lseek(f->fd, 0, SEEK_CUR);
+    if (at < 0) return -1;
+    return at - (long)(f->end - f->pos) - (f->unget >= 0 ? 1 : 0);
+}
+
+void rewind(FILE *f) { fseek(f, 0, SEEK_SET); if (f) f->flags &= (short)~F_ERR; }
+
+// --- open and close --------------------------------------------------
+
+int setvbuf(FILE *f, char *buf, int mode, size_t size) {
+    (void)size;
+    // Only what can be honoured: a mode, and only before the stream has
+    // been used. Refusing a caller-supplied buffer rather than ignoring
+    // it, because silently not using the memory somebody handed over is
+    // how a caller ends up believing a guarantee it does not have.
+    if (!f || buf) return -1;
+    if (mode != _IOFBF && mode != _IOLBF && mode != _IONBF) return -1;
+    if (f->pos || f->end) return -1;
+    f->mode = (short)mode;
+    f->flags |= F_MODESET;
+    return 0;
+}
+
+int fileno(FILE *f) { return f ? f->fd : -1; }
+
+FILE *fopen(const char *path, const char *mode) {
+    if (!path || !mode) return 0;
+
+    int flags, want_read;
+    switch (mode[0]) {
+    case 'r': flags = 0;                                     want_read = 1; break;
+    case 'w': flags = SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC;  want_read = 0; break;
+    case 'a': flags = SYS_O_WRITE | SYS_O_CREAT | SYS_O_APPEND; want_read = 0; break;
+    default: return 0;
+    }
+    // 'b' is accepted and means nothing (there is no text mode here);
+    // '+' is REFUSED, because the kernel's open file has one mode and a
+    // read-write stream cannot be built over it. Returning NULL is the
+    // honest answer -- opening read-only instead would look like it
+    // worked until the first write.
+    for (const char *p = mode + 1; *p; p++)
+        if (*p != 'b') return 0;
+
+    FILE *f = 0;
+    for (int i = 0; i < FOPEN_MAX; i++)
+        if (!(g_files[i].flags & F_INUSE)) { f = &g_files[i]; break; }
+    if (!f) return 0;
+
+    int fd = sys_open(path, flags);
+    if (fd < 0) return 0;
+
+    unsigned char *buf = (unsigned char *)malloc(BUFSIZ);
+    // A stream with no buffer still WORKS -- unbuffered() sends it down
+    // the one-byte path -- so a failed allocation costs speed rather
+    // than the open. That is why there is no error return here.
+    f->fd = fd;
+    f->buf = buf;
+    f->bufsz = buf ? BUFSIZ : 0;
+    f->pos = f->end = 0;
+    f->unget = -1;
+    f->mode = buf ? _IOFBF : _IONBF;
+    f->flags = (short)(F_INUSE | (want_read ? F_READ : F_WRITE) |
+                       (buf ? F_OWNBUF : F_MODESET));
+    return f;
+}
+
+int fclose(FILE *f) {
+    if (!f || !(f->flags & F_INUSE)) return EOF;
+    int rc = flush_write(f) < 0 ? EOF : 0;
+    if (sys_close(f->fd) < 0) rc = EOF;
+    if (f->flags & F_OWNBUF) free(f->buf);
+    // A standard stream can be closed like any other; it just does not
+    // return to a pool, and must not be left looking reusable.
+    if (f >= g_files && f < g_files + FOPEN_MAX) {
+        f->flags = 0;
+        f->buf = 0;
+    } else {
+        f->flags &= (short)~(F_READ | F_WRITE);
+    }
+    return rc;
+}
+
+int feof(FILE *f) { return f && (f->flags & F_EOF) ? 1 : 0; }
+int ferror(FILE *f) { return f && (f->flags & F_ERR) ? 1 : 0; }
+void clearerr(FILE *f) { if (f) f->flags &= (short)~(F_EOF | F_ERR); }

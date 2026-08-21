@@ -105,18 +105,19 @@ breaking that.
 ```
               a ported C program
                      |
-                #include <stdio.h>          <- Stage 1: a real include root
+                #include <stdio.h>          <- userland/include/  [Stage 1]
                      |
    +-----------------+------------------+
-   |        libc (userland/libc/)       |   <- Stages 2-5
+   |     libc.a (userland/libc/)        |   <- Stages 2-5
    |  stdio  stdlib  ctype  time  ...   |
    +-----------------+------------------+
                      |
-        kfmt (shared, one formatter)  ------ float hook, Stage 4
+        kfmt (shared, ONE formatter)  ------ sink form [Stage 2]
+                     |                        float hook [Stage 4]
                      |
           libsys (userland/rt/sys.h)        <- exists; unchanged
                      |
-                  syscalls                  <- Stage 0 adds three
+                  syscalls              <- lseek/fstat/O_APPEND [Stage 0]
 ```
 
 ## What this is NOT
@@ -191,24 +192,53 @@ shared-source rule strips the flag (`SHARED_CFLAGS`), which turns
 "freestanding, toolkit only" from a comment asking nicely into something
 the build enforces.
 
-### Stage 2 -- stdio
+### Stage 2 -- stdio -- DONE
 
-The big one, and the only stage with real design in it. `FILE`,
-`stdin`/`stdout`/`stderr`, `fopen`/`fclose`/`fread`/`fwrite`/`fgets`/
-`fputs`/`fputc`/`getc`/`ungetc`/`fseek`/`ftell`/`rewind`/`fflush`/
-`feof`/`ferror`, and the `printf` family over them.
+`FILE`, `stdin`/`stdout`/`stderr`, `fopen`/`fclose`/`fread`/`fwrite`/
+`fgets`/`fputs`/`fputc`/`getc`/`ungetc`/`fseek`/`ftell`/`rewind`/
+`fflush`/`setvbuf`/`feof`/`ferror`/`fileno`, and the `printf` family
+over them (`userland/libc/stdio.c`). Buffering is the standard policy:
+unbuffered `stderr`, line-buffered on a terminal, fully buffered
+otherwise, with "is it a terminal" being Stage 0's `SYS_STAT_TTY` asked
+once per stream on first use.
 
-The design is the buffering policy, and it is the standard one for a
-reason: **unbuffered `stderr`, line-buffered when the fd is a terminal,
-fully buffered otherwise** -- which is what Stage 0's `fstat` is for. An
-unbuffered `printf` is one syscall per call, which is worse than the
-`sys_print()`-shaped code it replaces, so a libc that skips buffering
-makes the system slower and is not worth having.
+**A FILE IS A READER OR A WRITER, NEVER BOTH**, and that is the one
+place this diverges visibly from POSIX. The kernel's open file has a
+single mode, so there is no read-write descriptor for `"r+"` to be built
+on; `fopen` REFUSES those modes rather than opening something weaker. It
+removes a real libc's hardest corner -- the flush-and-reposition dance
+when a stream changes direction -- and removes it honestly.
 
-Two traps to write down before building it. **`ungetc` is a one-byte
-pushback, not a seek** -- implementing it by seeking backwards breaks on
-a pipe. And **`exit()` must flush**, which is why Stage 3 owns
-`atexit`/`exit` and why they cannot be deferred past this.
+**`printf` is built on `k_vcbprintf`, kfmt's SINK form**, added in the
+same change. The formatter already funnelled every byte through one
+`put()`, so a sink was a small change to shared code rather than a
+second formatter: `struct out` gained a callback and `k_vsnprintf`
+became one of two entry points onto the same `vformat()`. That keeps ONE
+formatter in the tree and gives `printf` no maximum line length -- the
+alternative, formatting into a fixed scratch buffer (what `vga_printf`
+does), caps everything a program can print at a number this file would
+have had to invent.
+
+**`exit`/`atexit` landed here rather than in Stage 3**, because
+buffering means output written is not output emitted, and the thing that
+guarantees a program's last `printf` arrives is `exit()` flushing. That
+is the one-line change in `crt0.asm` the plan predicted. `abort()`
+deliberately does NOT flush: it means the state is not to be trusted,
+and committing a half-written file is worse than losing it.
+
+Three traps, all now in comments beside the code. **`ungetc` is a
+one-byte pushback, never a backward seek** -- a pipe and a terminal have
+no position, and those are exactly what a parser looks ahead on.
+**`ftell` on a read stream is the fd's position MINUS what is unread in
+the buffer**, which is invisibly correct for the first `BUFSIZ` bytes of
+any file and wrong after. And **`SYS_WRITE` silently caps at
+`SYS_WRITE_MAX` and returns the capped count**, so every write loops -- a
+single call drops the tail of anything longer with no error to notice.
+
+The cost, stated plainly: `crt0` now references `exit`, so every ring-3
+program links the flush path whether or not it prints.
+`-ffunction-sections` plus `--gc-sections` keeps that to the flush path
+rather than the whole of stdio.
 
 ### Stage 3 -- the rest of the freestanding half
 
@@ -216,12 +246,12 @@ a pipe. And **`exit()` must flush**, which is why Stage 3 owns
 `k_parse_*` family has no endptr, so this is new code, not a wrapper),
 `atoi`/`atol` on top; `realloc` (copy-based -- it cannot grow in place
 and cannot shrink the process); `qsort` and `bsearch`; `abs`/`labs`/
-`div`; `rand`/`srand` over `krandom`; `abort`; **`exit`/`atexit`**,
-which is one line in `crt0.asm` -- it calls `sys_exit()` directly today
-and says so; a full `<ctype.h>` table; `<assert.h>`; `<setjmp.h>`
-(~15 lines of asm, needed by ports and by nothing here yet);
-`<dirent.h>`'s `opendir`/`readdir`/`closedir` over `sys_listdir`; and a
-`<unistd.h>` that is a thin header over wrappers that all already exist.
+`div`; `rand`/`srand` over `krandom`; a full `<ctype.h>` table;
+`<assert.h>`; `<setjmp.h>` (~15 lines of asm, needed by ports and by
+nothing here yet); `<dirent.h>`'s `opendir`/`readdir`/`closedir` over
+`sys_listdir`; and a `<unistd.h>` that is a thin header over wrappers
+that all already exist. (`exit`/`atexit`/`abort` moved to Stage 2 --
+`exit()` has to flush, so stdio could not ship without them.)
 
 `errno` as an lvalue macro lands here: `#define errno (*__errno_location())`,
 the storage moving out of `sys.c`'s file-static.

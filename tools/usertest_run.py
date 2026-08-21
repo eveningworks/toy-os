@@ -127,6 +127,14 @@ TESTS = [
     # identical bytes cannot tell a working seek from a dead one.
     ("seek_test", None,
      ["seek_test: all checks passed"], ["FAIL"]),
+    # The C library's stream layer. Two of its required lines are load-
+    # bearing and neither is the verdict: "atexit:BA" can only appear if
+    # exit() ran the handlers in LIFO order AND flushed an unterminated
+    # line after main() returned, which no assertion inside main() can
+    # reach. The buffering check inside the file is the other one -- see
+    # the test's own header.
+    ("stdio_test", 0,
+     ["stdio_test: all checks passed", "atexit:BA"], ["FAIL"]),
     # SYS_QUERY from ring 3. Runs fine under `run`: it spawns nothing and
     # waits for nothing, so the legacy loader's missing scheduler slot
     # costs it nothing.

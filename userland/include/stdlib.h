@@ -19,11 +19,28 @@
 // the process's footprint never shrinks. See userland/lib/heap_os.c.
 //
 // Deliberately absent, as everywhere else in this half-libc: no
-// `realloc` growing in place (it copies), no `aligned_alloc`, no
-// `atexit`, no `getenv`. Add one when a second real caller turns up --
-// the bar the toolkit has always held.
+// `realloc` (Stage 3 of docs/libc-design.md), no `aligned_alloc`, and
+// no `getenv` -- which would always answer NULL, because crt0 receives
+// an envp of exactly NULL and SYS_SPAWN has nowhere to put one. A
+// getenv() that cannot ever find anything is worse than its absence.
 #include <stddef.h>
 #include <heap.h> // the toolkit allocator this header renames
+
+// --- leaving ---------------------------------------------------------
+//
+// exit() runs the atexit handlers in reverse order of registration and
+// then FLUSHES EVERY STREAM. crt0 calls it when main() returns, which
+// is what makes a buffered printf() reliable; a program that calls
+// sys_exit() (rt/sys.h) directly bypasses both.
+void exit(int code) __attribute__((noreturn));
+// Returns 0, or -1 if the handler is NULL or the table (32 entries, C's
+// minimum) is full.
+int  atexit(void (*fn)(void));
+// Exits with 134 (128 + SIGABRT) WITHOUT flushing the buffered streams:
+// abort() means the state is not to be trusted, and committing a
+// half-written file is worse than losing it. stderr is unbuffered, so
+// anything already reported is already out.
+void abort(void) __attribute__((noreturn));
 
 // The same contract as kmalloc(): NULL for a zero-sized or unsatisfiable
 // request, 16-byte aligned otherwise.

@@ -5,32 +5,128 @@
 #include <stdarg.h>
 #include <kfmt.h> // the toolkit's formatter; no name clash, unlike string.h's
 
-// The C names for formatted output, for ring 3 only.
-// `#include <stdio.h>`. See <string.h>'s header comment for the
-// whole rationale -- this is its other half, and the two were built
-// together.
+// The C library's stream layer and formatted output, for ring 3 only.
+// `#include <stdio.h>`. See <string.h>'s header comment for the shared
+// rationale -- this is its other half, and the two were built together.
 //
-// snprintf()/vsnprintf() are kfmt's, which means the supported
-// conversions are kfmt's too and NOT a full printf's: %d %u %x %s %c
-// %%, an optional zero-pad width, and the l/ll/z length modifiers. No
-// %f (there is no floating point in this project and the build passes
-// -mno-sse), no %p, no precision, no `*` width. `%Ns`/`%-Ns` pad a
-// string to a column width (never truncating it). Read
-// kfmt.h before assuming a conversion exists -- an unrecognised one is
-// emitted literally and consumes no argument, so a typo shows up in the
-// output rather than desynchronising every argument after it.
+// THE CONVERSION SET IS kfmt's, NOT A FULL printf's: %d %u %x %s %c %%,
+// an optional zero-pad width, `%Ns`/`%-Ns` column padding for strings,
+// and the l/ll/z length modifiers. There is no %f (Stage 4 of
+// docs/libc-design.md), no %p, no precision and no `*` width. An
+// unrecognised conversion is emitted literally and consumes no
+// argument, so a typo shows up in the output rather than
+// desynchronising every argument after it. Read kfmt.h before assuming
+// a conversion exists.
 //
-// Return value is C99's: the length the full result WOULD have had, so
-// `>= cap` means truncated.
+// WHAT A STREAM IS HERE, and the one place it differs from POSIX in a
+// way a caller can see: **a FILE is a reader or a writer, never both.**
+// The kernel's own fd has a single mode (SYS_O_WRITE or not), so there
+// is no "r+"/"w+"/"a+" to implement over it. fopen() REFUSES those
+// modes rather than quietly opening something weaker -- a parser that
+// guesses is the failure this project's conventions exist to prevent.
 //
-// WHAT IS DELIBERATELY MISSING: FILE, fopen, fread, putchar, and
-// printf() itself. All four need a buffered stream layer over the fd
-// syscalls, and buffering is the part with real design in it -- an
-// unbuffered printf() is one syscall per call, which is worse than the
-// puts()-shaped code it would replace. That is Milestone 24's work, not
-// this header's. Write to a buffer here and hand it to sys_print() or
-// sys_eprint() (rt/sys.h); a GUI client's diagnostics go to
-// sys_eprint(), since its stdout goes nowhere useful.
+// BUFFERING is the standard policy and it is the reason this layer
+// exists at all: an unbuffered printf() is one syscall per call, which
+// is worse than the sys_print()-shaped code it replaces. stderr is
+// unbuffered, a stream on a terminal is line buffered, everything else
+// is fully buffered. "Is it a terminal" is SYS_FSTAT's SYS_STAT_TTY
+// flag, asked once per stream.
+//
+// THE TRAP THAT COMES WITH BUFFERING: output written but not yet
+// flushed is LOST if the process leaves without going through exit().
+// crt0 calls exit() when main() returns, and exit() flushes every
+// stream -- but a program that calls sys_exit() directly (rt/sys.h)
+// bypasses all of it, as does a crash. If you mix printf() with
+// sys_write(1, ...) in one program the two orders will not agree
+// either; pick one per stream.
+
+typedef struct _FILE FILE;
+
+extern FILE *const stdin;
+extern FILE *const stdout;
+extern FILE *const stderr;
+
+#define EOF (-1)
+
+// One flush is one write syscall: SYS_WRITE_MAX is 1024 and the kernel
+// silently CAPS a longer write rather than failing it, so a buffer
+// bigger than that would just mean more short writes to loop over.
+#define BUFSIZ 1024
+
+// Streams a program may have open at once, over and above the three
+// standard ones. Bounded by the kernel's own FD_MAX (16 descriptors per
+// address space), so a bigger number here could not be honoured anyway.
+#define FOPEN_MAX 8
+
+#define _IOFBF 0 // fully buffered
+#define _IOLBF 1 // line buffered
+#define _IONBF 2 // unbuffered
+
+// The same three values SYS_LSEEK takes (abi/syscall_abi.h), named as C
+// spells them.
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
+
+// mode is "r", "w" or "a", optionally with a 'b' that is accepted and
+// ignored (there is no text/binary distinction here). Anything else,
+// including every "+" mode, returns NULL -- see the header comment.
+FILE *fopen(const char *path, const char *mode);
+// Flushes, closes the descriptor and releases the slot. Returns 0, or
+// EOF if the final flush failed -- which is the one place a buffered
+// write reports a disk error, since the write() that failed happened
+// long after the fputc() that queued it.
+int   fclose(FILE *f);
+// NULL flushes every open stream. Returns 0, or EOF on a write error.
+int   fflush(FILE *f);
+// Only mode changes are supported and only before any I/O on the
+// stream; `buf` must be NULL and `size` is ignored. Returns 0, or -1.
+// It exists so a program can turn the buffering OFF -- without it there
+// is no escape hatch from a policy this layer chose.
+int   setvbuf(FILE *f, char *buf, int mode, size_t size);
+int   fileno(FILE *f);
+
+size_t fread(void *ptr, size_t size, size_t nmemb, FILE *f);
+size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *f);
+
+int   fgetc(FILE *f);
+int   getc(FILE *f);
+int   getchar(void);
+// ONE byte of pushback, which is all C promises and all this
+// implements. It is NOT a backward seek: a pipe and a terminal have no
+// position, and implementing it as a seek would break on both.
+int   ungetc(int c, FILE *f);
+char *fgets(char *s, int size, FILE *f);
+
+int   fputc(int c, FILE *f);
+int   putc(int c, FILE *f);
+int   putchar(int c);
+int   fputs(const char *s, FILE *f);
+// Appends a newline, as C requires and as fputs() does not.
+int   puts(const char *s);
+
+int   printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+int   fprintf(FILE *f, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+int   vprintf(const char *fmt, va_list ap);
+int   vfprintf(FILE *f, const char *fmt, va_list ap);
+
+// Seeking works only on a stream over a FILE -- a terminal, a pipe and
+// a socket have no position, and these report that as -1 with errno
+// ESPIPE rather than pretending. A pending write is flushed first and a
+// read buffer is discarded, so the position means what the caller
+// thinks it means.
+int      fseek(FILE *f, long offset, int whence);
+long     ftell(FILE *f);
+void     rewind(FILE *f);
+
+int   feof(FILE *f);
+int   ferror(FILE *f);
+void  clearerr(FILE *f);
+
+// --- formatting into a buffer ---------------------------------------
+//
+// These two are not part of the stream layer at all: they are kfmt's
+// formatter under its C name, and they were here before FILE existed.
 
 static inline size_t vsnprintf(char *out, size_t cap, const char *fmt, va_list ap) {
     return k_vsnprintf(out, cap, fmt, ap);
@@ -42,5 +138,11 @@ static inline size_t vsnprintf(char *out, size_t cap, const char *fmt, va_list a
 // k_snprintf, so -Wformat still sees a real printf-attributed function
 // and catches a mismatched argument where it is written.
 #define snprintf k_snprintf
+
+// DELIBERATELY ABSENT: sprintf(), which cannot be given a bound and so
+// cannot be used safely; freopen(), which the single-mode fd model has
+// nothing to do; and tmpfile()/remove()/rename() wrappers, which are
+// sys_unlink()/sys_rename() under another name. Add one when a second
+// real caller turns up, which is the bar the whole toolkit holds.
 
 #endif

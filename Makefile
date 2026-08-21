@@ -473,14 +473,39 @@ LIBUAPP_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBUAPP_SRCS)) \
                $(BUILD)/userland/shared/etc_config.o \
                $(BUILD)/userland/shared/fixed.o \
                $(BUILD)/userland/shared/calc_engine.o \
-               $(BUILD)/userland/shared/string.o \
-               $(BUILD)/userland/shared/knum.o \
-               $(BUILD)/userland/shared/kfmt.o \
-               $(BUILD)/userland/shared/heap_core.o \
                $(BUILD)/userland/shared/klineedit.o \
                $(BUILD)/userland/shared/ttf.o \
                $(BUILD)/userland/shared/klineedit_cases.o
 LIBUAPP      = $(BUILD)/userland/libuapp.a
+
+# libc.a -- the C LIBRARY, a second archive beside the toolkit.
+#
+# The split is by AUDIENCE, the same call userland/include/ made for the
+# headers: a /bin program links the C library and nothing else, while a
+# GUI app links the C library plus Toykit. One archive would have made
+# the libc's audience "toy-os apps" rather than "any C program", which
+# is the opposite of what docs/libc-design.md is aiming at -- and it is
+# cheap to separate now and awkward once every program depends on the
+# merged shape.
+#
+# The four shared objects in here are the C library's implementation:
+# string.c and knum.c are what <string.h>'s inlines call, kfmt.c is the
+# formatter behind snprintf() and printf(), and heap_core.c is malloc.
+# They sit in libc.a rather than libuapp.a for the same audience reason.
+#
+# LINK ORDER MATTERS AND IT IS libuapp THEN libc. Toykit calls strlen()
+# and snprintf(); the C library calls nothing in Toykit. A linker
+# resolves an archive against what is still undefined at the moment it
+# reaches it, so the dependency has to come first -- reversing these two
+# fails at link time with undefined k_* references from widgets, which
+# is at least a loud failure rather than a quiet one.
+LIBC_SRCS = $(shell find userland/libc -name '*.c' 2>/dev/null | sort)
+LIBC_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBC_SRCS)) \
+               $(BUILD)/userland/shared/string.o \
+               $(BUILD)/userland/shared/knum.o \
+               $(BUILD)/userland/shared/kfmt.o \
+               $(BUILD)/userland/shared/heap_core.o
+LIBC         = $(BUILD)/userland/libc.a
 
 # The `rm -f` is load-bearing: `ar rcs` UPDATES an existing archive,
 # adding and replacing members but never removing one whose source file
@@ -493,6 +518,11 @@ LIBUAPP      = $(BUILD)/userland/libuapp.a
 # Building the archive from scratch each time makes it a function of
 # $(LIBUAPP_OBJS) rather than of every object that has ever existed.
 $(LIBUAPP): $(LIBUAPP_OBJS)
+	@mkdir -p $(dir $@)
+	rm -f $@
+	$(AR) rcs $@ $^
+
+$(LIBC): $(LIBC_OBJS)
 	@mkdir -p $(dir $@)
 	rm -f $@
 	$(AR) rcs $@ $^
@@ -558,8 +588,8 @@ uextra = $(patsubst %,$(BUILD)/userland/%.o,$(EXTRA_OBJS_$(notdir $(1))))
 # linker resolves archive members against the undefined symbols it has
 # accumulated so far, so an archive placed before its callers
 # contributes nothing and the link fails with undefined references.
-$(BUILD)/userland/%.elf: $(BUILD)/userland/%.o $(USERLAND_RT) userland/rt/link.ld $(LIBUAPP) $$(call uextra,$$*)
-	$(LD) -n --gc-sections -T userland/rt/link.ld -nostdlib -o $@ $(BUILD)/userland/rt/crt0.o $< $(call uextra,$*) $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(LIBUAPP)
+$(BUILD)/userland/%.elf: $(BUILD)/userland/%.o $(USERLAND_RT) userland/rt/link.ld $(LIBUAPP) $(LIBC) $$(call uextra,$$*)
+	$(LD) -n --gc-sections -T userland/rt/link.ld -nostdlib -o $@ $(BUILD)/userland/rt/crt0.o $< $(call uextra,$*) $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(LIBUAPP) $(LIBC)
 
 # Sources SHARED between the kernel image and userland ELFs, compiled a
 # second time with USERLAND_CFLAGS into build/userland/shared/.

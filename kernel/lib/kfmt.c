@@ -16,6 +16,13 @@
 // semantics for free, with no second pass and no allocation, and it
 // means truncation is handled in exactly one place rather than at every
 // conversion.
+//
+// A cursor can instead carry a SINK, which is what makes one formatter
+// serve both `snprintf` and a `printf` writing to a stream: with a sink
+// there is no buffer and therefore no cap, so nothing can be truncated
+// and no caller has to guess how long a line might get. Everything
+// funnels through put() either way, so the conversions below do not
+// know which kind they are feeding.
 #include "kfmt.h"
 #include "knum.h"
 #include "string.h"
@@ -25,10 +32,18 @@ struct out {
     size_t cap;   // total capacity including the NUL
     size_t len;   // bytes actually stored
     size_t want;  // bytes the full result would need
+    k_fmt_sink sink; // when set, buf/cap/len are unused
+    void *ctx;
 };
 
 static void put(struct out *o, char c) {
     o->want++;
+    // A byte at a time. The sink this exists for is a stream's own
+    // buffer, where a byte costs a bounds check and a store -- and
+    // batching would mean a scratch buffer here, which is the thing a
+    // sink is for avoiding. A sink that finds this too slow should
+    // buffer on its own side, which is exactly what a FILE does.
+    if (o->sink) { o->sink(o->ctx, &c, 1); return; }
     if (o->cap && o->len + 1 < o->cap) o->buf[o->len++] = c;
 }
 
@@ -64,11 +79,12 @@ static void put_num(struct out *o, uint64_t v, int is_signed, int is_hex,
     put_str(o, tmp);
 }
 
-size_t k_vsnprintf(char *out, size_t cap, const char *fmt, va_list ap) {
-    struct out o = { out, cap, 0, 0 };
+// The formatter itself, shared by both entry points below. It knows
+// nothing about where the bytes go.
+static void vformat(struct out *o, const char *fmt, va_list ap) {
 
     for (const char *p = fmt; *p; p++) {
-        if (*p != '%') { put(&o, *p); continue; }
+        if (*p != '%') { put(o, *p); continue; }
 
         const char *start = p; // for the "emit it literally" fallback
         p++;
@@ -103,18 +119,18 @@ size_t k_vsnprintf(char *out, size_t cap, const char *fmt, va_list ap) {
 
         switch (*p) {
         case 'd':
-            put_num(&o, wide ? (uint64_t)va_arg(ap, long) : (uint64_t)(int64_t)va_arg(ap, int),
+            put_num(o, wide ? (uint64_t)va_arg(ap, long) : (uint64_t)(int64_t)va_arg(ap, int),
                      1, 0, width);
             break;
         case 'u':
-            put_num(&o, wide ? (uint64_t)va_arg(ap, unsigned long) : (uint64_t)va_arg(ap, unsigned int),
+            put_num(o, wide ? (uint64_t)va_arg(ap, unsigned long) : (uint64_t)va_arg(ap, unsigned int),
                      0, 0, width);
             break;
         case 'x':
-            put_num(&o, wide ? (uint64_t)va_arg(ap, unsigned long) : (uint64_t)va_arg(ap, unsigned int),
+            put_num(o, wide ? (uint64_t)va_arg(ap, unsigned long) : (uint64_t)va_arg(ap, unsigned int),
                      0, 1, width);
             break;
-        case 'c': put(&o, (char)va_arg(ap, int)); break;
+        case 'c': put(o, (char)va_arg(ap, int)); break;
         case 's': {
             const char *s = va_arg(ap, const char *);
             if (!s) s = "(null)";
@@ -123,26 +139,49 @@ size_t k_vsnprintf(char *out, size_t cap, const char *fmt, va_list ap) {
             // pushes the column instead. Truncating would silently
             // change the value, which is the one thing this toolkit's
             // formatters are not allowed to do (see kfmt.h).
-            if (!left) { for (size_t i = len; i < width; i++) put(&o, ' '); }
-            put_str(&o, s);
-            if (left) { for (size_t i = len; i < width; i++) put(&o, ' '); }
+            if (!left) { for (size_t i = len; i < width; i++) put(o, ' '); }
+            put_str(o, s);
+            if (left) { for (size_t i = len; i < width; i++) put(o, ' '); }
             break;
         }
-        case '%': put(&o, '%'); break;
+        case '%': put(o, '%'); break;
         default:
             // Unrecognised: emit the whole thing literally, including
             // the '%' and any width, and DON'T consume an argument --
             // a typo should be visible in the output, not silently eat
             // the rest of the format string (and not desynchronise
             // every remaining argument, which is far worse).
-            for (const char *q = start; q <= p && *q; q++) put(&o, *q);
+            for (const char *q = start; q <= p && *q; q++) put(o, *q);
             if (!*p) p--; // format ended mid-conversion; stop cleanly
             break;
         }
     }
 
+}
+
+size_t k_vsnprintf(char *out, size_t cap, const char *fmt, va_list ap) {
+    struct out o = { out, cap, 0, 0, 0, 0 };
+    vformat(&o, fmt, ap);
     if (cap) o.buf[o.len] = '\0';
     return o.want;
+}
+
+// The same formatter with nowhere to run out of room. Returns the
+// number of bytes handed to the sink, which is the full length -- there
+// is no truncation to report, so unlike k_vsnprintf's return value this
+// one cannot be "more than you got".
+size_t k_vcbprintf(k_fmt_sink sink, void *ctx, const char *fmt, va_list ap) {
+    struct out o = { 0, 0, 0, 0, sink, ctx };
+    vformat(&o, fmt, ap);
+    return o.want;
+}
+
+size_t k_cbprintf(k_fmt_sink sink, void *ctx, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    size_t n = k_vcbprintf(sink, ctx, fmt, ap);
+    va_end(ap);
+    return n;
 }
 
 size_t k_snprintf(char *out, size_t cap, const char *fmt, ...) {
