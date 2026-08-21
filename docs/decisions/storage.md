@@ -1254,3 +1254,52 @@ checking return values at all, which is what every caller was doing.
 `userland/tests/file_test.c` now round-trips a buffer with zero bytes in
 the middle and asserts on the SIZE READ BACK -- deliberately not on the
 write's return value, since believing that is precisely the mistake.
+
+## The calendar arithmetic left `tz.c`, and `time()` is deliberately not UTC
+
+Two decisions from the C library's `<time.h>` (`docs/libc-design.md`
+Stage 5), both about the same thing: not letting a library invent
+semantics the system does not have.
+
+**The Gregorian arithmetic is `kernel/lib/caltime.c` now, shared into
+ring 3.** It used to sit inside `tz.c`, which also owns the
+`/etc/timezones` database, the persisted city choice and the two DST
+rules -- so that file includes `fs.h`, `klog.h`, `etc_config.h` and
+`setting.h` and can never be compiled into a ring-3 archive. The C
+library needs the arithmetic and none of the machinery. Splitting it
+follows the pattern already used for `geom.c` and `klineedit.c`: the
+part that is pure becomes freestanding and gets compiled twice, and the
+part that is POLICY stays where the policy is. A second copy of
+Hinnant's `days_from_civil` in userland was the alternative, and it is
+exactly the duplication the toolkit exists to end.
+
+**`gmtime()` and `localtime()` are the same function, and `time()` does
+not return UTC.** The RTC is read as local civil time with the selected
+city's offset and DST already applied, and the filesystem's stored
+epochs are derived from that same local reckoning -- which is an
+existing, documented decision (see this file's entry on file
+timestamps): it makes timestamps arithmetic-comparable without inventing
+UTC handling the kernel does not have.
+
+Given that, a `time()` returning true UTC would be worse than one that
+does not. The number programs actually compare `time()` against is a
+file's `st.modified`, and a UTC `time()` beside local epochs puts a
+silent one-to-twelve-hour skew between two values that look like they
+are in the same units. A caller cannot see it, and nothing in the type
+system says otherwise. A documented simplification beats a hidden
+inconsistency.
+
+So the libc reports the system's own reckoning and says so loudly in the
+header. The real fix is system-wide -- a stored UTC offset, so the
+filesystem's epochs become true UTC and the offset is applied at the
+display boundary -- and it is a roadmap item rather than something a
+libc can do from above. When it lands, these two functions become
+genuinely different and no other part of `<time.h>` changes, which is
+the shape that made this safe to defer.
+
+The same reasoning kept `clock()` out. C says it reports processor time;
+the kernel tracks per-process `cpu_ns` but `SYS_PROC_INFO` is indexed by
+table slot and a process cannot learn its own pid, so the honest options
+were "absent" or "wall time under a name that means CPU time". Absent,
+like `fork()` and `sin()` -- a link error says what is missing, and a
+wrong answer in the right units does not.

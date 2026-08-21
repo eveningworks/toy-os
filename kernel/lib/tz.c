@@ -25,6 +25,7 @@
 // shell clock.
 
 #include "tz.h"
+#include "caltime.h"
 #include "fs.h"
 #include "string.h"
 #include "klog.h"
@@ -191,22 +192,14 @@ static int current_index = 0; // UTC until tz_init() loads/sets otherwise
 
 // ---- date math ----
 
-static int is_leap_year(int year) {
-    return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-}
-
-static int days_in_month(int year, int month) {
-    static const int DAYS[] = { 31,28,31,30,31,30,31,31,30,31,30,31 };
-    if (month == 2 && is_leap_year(year)) return 29;
-    return DAYS[month - 1];
-}
-
-// Sakamoto's algorithm. Returns 0=Sunday .. 6=Saturday.
-static int day_of_week(int year, int month, int day) {
-    static const int T[] = { 0,3,2,5,0,3,5,1,4,6,2,4 };
-    if (month < 3) year -= 1;
-    return (year + year/4 - year/100 + year/400 + T[month - 1] + day) % 7;
-}
+// The calendar arithmetic itself now lives in kernel/lib/caltime.c,
+// which is freestanding and therefore shareable with ring 3's <time.h>
+// -- this file is not, because it also owns the /etc/timezones
+// database, the persisted city choice and the DST rules below. Those
+// are POLICY; the Gregorian calendar is not. See caltime.h.
+#define is_leap_year(y)        cal_is_leap(y)
+#define days_in_month(y, m)    cal_days_in_month((y), (m))
+#define day_of_week(y, m, d)   cal_day_of_week((y), (m), (d))
 
 // Day-of-month of the nth (1-based) Sunday in `month`.
 static int nth_sunday(int year, int month, int n) {
@@ -235,19 +228,11 @@ static int last_sunday(int year, int month) {
 // already owns every other piece of calendar math in the kernel.
 
 uint64_t tz_rtc_to_epoch(const struct rtc_time *t) {
-    int y = (int)t->year;
-    int m = (int)t->month;
-    int d = (int)t->day;
-    y -= m <= 2;
-    // Years below 1970 can't come off this hardware path (the RTC
-    // reports a real current date); clamp defensively rather than
-    // underflow the unsigned result.
-    if (y < 0) return 0;
-    int era = y / 400;
-    int yoe = y - era * 400;                                    // [0, 399]
-    int doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;   // [0, 365]
-    int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;            // [0, 146096]
-    long days = (long)era * 146097 + doe - 719468;              // since 1970-01-01
+    int64_t days = cal_days_from_civil((int)t->year, (int)t->month, (int)t->day);
+    // Years below 1970 cannot come off this hardware path (the RTC
+    // reports a real current date); clamp rather than underflow the
+    // unsigned result. caltime returns a SIGNED day count precisely so
+    // this decision is the caller's.
     if (days < 0) return 0;
     return (uint64_t)days * 86400u
          + (uint64_t)t->hour * 3600u
@@ -262,16 +247,8 @@ void tz_epoch_to_rtc(uint64_t epoch, struct rtc_time *out) {
     out->minute = (uint8_t)((rem % 3600u) / 60u);
     out->second = (uint8_t)(rem % 60u);
 
-    long z = (long)days + 719468;
-    long era = z / 146097;
-    long doe = z - era * 146097;                                        // [0, 146096]
-    long yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;   // [0, 399]
-    long y = yoe + era * 400;
-    long doy = doe - (365 * yoe + yoe / 4 - yoe / 100);                 // [0, 365]
-    long mp = (5 * doy + 2) / 153;                                      // [0, 11]
-    long d = doy - (153 * mp + 2) / 5 + 1;                              // [1, 31]
-    long m = mp + (mp < 10 ? 3 : -9);                                   // [1, 12]
-    y += m <= 2;
+    int y, m, d;
+    cal_civil_from_days((int64_t)days, &y, &m, &d);
     out->year = (uint16_t)y;
     out->month = (uint8_t)m;
     out->day = (uint8_t)d;

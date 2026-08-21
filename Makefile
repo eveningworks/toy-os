@@ -488,10 +488,11 @@ LIBUAPP      = $(BUILD)/userland/libuapp.a
 # cheap to separate now and awkward once every program depends on the
 # merged shape.
 #
-# The four shared objects in here are the C library's implementation:
+# The shared objects in here are the C library's implementation:
 # string.c and knum.c are what <string.h>'s inlines call, kfmt.c is the
-# formatter behind snprintf() and printf(), and heap_core.c is malloc.
-# They sit in libc.a rather than libuapp.a for the same audience reason.
+# formatter behind snprintf() and printf(), heap_core.c is malloc, and
+# caltime.c is the calendar arithmetic behind <time.h>. They sit in
+# libc.a rather than libuapp.a for the same audience reason.
 #
 # LINK ORDER MATTERS AND IT IS libuapp THEN libc. Toykit calls strlen()
 # and snprintf(); the C library calls nothing in Toykit. A linker
@@ -511,7 +512,8 @@ LIBC_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBC_SRCS)) \
                $(BUILD)/userland/shared/string.o \
                $(BUILD)/userland/shared/knum.o \
                $(BUILD)/userland/shared/kfmt.o \
-               $(BUILD)/userland/shared/heap_core.o
+               $(BUILD)/userland/shared/heap_core.o \
+               $(BUILD)/userland/shared/caltime.o
 LIBC         = $(BUILD)/userland/libc.a
 
 # The `rm -f` is load-bearing: `ar rcs` UPDATES an existing archive,

@@ -65,6 +65,12 @@ this the obvious way), not from how much history it accumulated.
   are stable on purpose; and **`<unistd.h>` OMITS what this OS does not
   have** (`fork`, `exec`, `select`) rather than stubbing it, so a port
   that needs one gets a link error saying so.
+  **`<time.h>` exists**, with one thing to know: **`gmtime()` and
+  `localtime()` are the SAME function and `time()` is not UTC** -- it
+  returns the system's own local-derived epoch, so that it is comparable
+  with a file's `st.modified`. `clock()` is absent (a process cannot
+  learn its own pid). The calendar arithmetic is `api/caltime.h`,
+  compiled into both rings; `tz.c` keeps the timezone POLICY.
   **`printf`, `FILE` and the stream layer exist** (`#include <stdio.h>`)
   -- buffered, with `stderr` unbuffered and a terminal line buffered.
   The trap that comes with that: **output not yet flushed is LOST if a

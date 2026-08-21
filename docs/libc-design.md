@@ -346,13 +346,49 @@ Not to be confused with `kernel/lib/fixed.h`, which is the KERNEL's
 Q16.16 maths and exists precisely because ring 0 has no floating point.
 Its angles are in turns. The two never meet.
 
-### Stage 5 -- time
+### Stage 5 -- time -- DONE
 
-`time_t`, `gmtime`/`localtime`/`mktime`/`strftime`, `clock()`. The epoch
-conversion already exists (`tz_rtc_to_epoch()`/`tz_epoch_to_rtc()`, and
-`fs_stat()` reports epochs on both backends); what this owns is the
-calendar math and the stored UTC offset that
-`docs/roadmap-details.md`'s `time_t` bullet already describes.
+`time_t`, `struct tm`, `gmtime`/`localtime` (+ `_r`), `mktime`,
+`strftime`, `asctime`/`ctime`, `difftime`.
+
+**THE CALENDAR ARITHMETIC WAS EXTRACTED, NOT REIMPLEMENTED.** It lived
+inside `kernel/lib/tz.c`, which also owns the `/etc/timezones` database,
+the DST rules and the persisted city choice -- so it reaches for `fs.h`,
+`klog.h` and `etc_config.h` and cannot be compiled into ring 3. It is
+`kernel/lib/caltime.c` now: freestanding, shared into `libc.a`, and
+`tz.c` calls it. The alternative was a second copy of Hinnant's
+`days_from_civil` in userland, which is the duplication the whole
+shared-source rule exists to prevent.
+
+**`gmtime()` AND `localtime()` ARE THE SAME FUNCTION HERE, and `time()`
+is not UTC.** That is deliberate and it keeps the system honest. The RTC
+is read as local civil time with the city's offset and DST already
+applied, and the filesystem stores epochs derived from that same
+reckoning. So `time()` returns an epoch directly comparable with a
+file's `st.modified` -- which is what programs actually do with it.
+Making `time()` return true UTC while the filesystem's epochs stayed
+local would have put a silent skew between two numbers that look
+comparable, which is strictly worse than a documented simplification.
+The fix is the system-wide stored-UTC-offset item on the roadmap, not a
+libc patch; when it lands these two become genuinely different and
+nothing else in the header changes.
+
+**`clock()` IS ABSENT**, and the reason is a missing capability rather
+than a decision about time: C says it reports PROCESSOR time, the kernel
+does track per-process `cpu_ns`, and a process has no way to learn its
+own pid -- `SYS_PROC_INFO` is indexed by table slot. A `clock()` over
+wall time would answer a different question in the same units. Same
+choice `<unistd.h>` makes about `fork()` and `<math.h>` about `sin()`:
+absent rather than quietly wrong.
+
+**Where the leap rules actually live, because it is not where you would
+look.** `cal_is_leap()` has no caller on the `<time.h>` path at all --
+the 100/400 rules are encoded inside the era arithmetic of
+`cal_days_from_civil()`. Breaking `cal_is_leap()` reddens a KERNEL
+KTEST (its only callers are `tz.c`'s DST rules) and changes nothing in
+ring 3; dropping the `- yoe/100` term reddens five ring-3 checks. Both
+were measured, and the division is correct -- but a session hunting a
+calendar bug should know which function to look in.
 
 ### Stage 6 -- proof
 

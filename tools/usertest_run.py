@@ -146,6 +146,12 @@ TESTS = [
     # nothing here asserts a 17th significant digit.
     ("libc4_test", 0,
      ["libc4_test: all checks passed"], ["FAIL"]),
+    # Stage 5: time_t, struct tm, mktime, strftime. Every date is a
+    # FIXED known one -- nothing asserts against the current clock, and
+    # every expected value was checked against the host's Python
+    # datetime rather than against the code under test.
+    ("libc5_test", 0,
+     ["libc5_test: all checks passed"], ["FAIL"]),
     ("stdio_test", 0,
      ["stdio_test: all checks passed", "atexit:BA"], ["FAIL"]),
     # SYS_QUERY from ring 3. Runs fine under `run`: it spawns nothing and
