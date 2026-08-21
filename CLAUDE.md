@@ -648,9 +648,11 @@ Bash tools:
   PER-REPOSITORY and a clone does not carry it** -- a fresh checkout on
   another machine falls back to the global identity, which is the real
   name a history rewrite once removed from every commit here.
-  `preflight.sh` refuses to run until it is set (`.git/hooks` is not
-  cloned either, so the guard has to live somewhere that travels);
-  README's "Setting up a second development machine" has the commands. **That
+  `preflight.sh` refuses to run until SOME local identity is set --
+  not this exact one, since demanding that would refuse a fork's own
+  contributors; it notes the difference and proceeds. The guard is in
+  the gate because `.git/hooks` is not cloned either. README's "Setting
+  up another machine (or a fork)" has the full command sequence. **That
   identity is the standing privacy convention, not a default to
   override** -- never let a commit here carry the maintainer's real
   name or personal email (see `docs/decisions.md`'s entry on the

@@ -78,30 +78,41 @@ fail() { echo "preflight: FAIL -- $1"; exit 1; }
 # THE COMMIT IDENTITY IS PER-REPOSITORY, AND A CLONE DOES NOT CARRY IT.
 #
 # `git config --local user.name/email` lives in .git/config, which is
-# not part of what gets cloned -- so a fresh checkout on a new machine
-# silently falls back to the GLOBAL identity, which is somebody's real
-# name and address. This project scrubbed exactly that out of every
-# prior commit with a history rewrite (docs/decisions.md), and nothing
-# in git warns you before the first commit reintroduces it.
+# not part of what gets cloned -- so a fresh checkout falls back to the
+# GLOBAL identity, which for most people is their real name and address.
+# This project scrubbed exactly that out of every prior commit with a
+# history rewrite (docs/decisions.md), and nothing in git warns you
+# before the first commit reintroduces it. By then it is in the history
+# and only another rewrite gets it out.
 #
-# Checked in the gate rather than in a hook, because .git/hooks is not
-# cloned either -- the guard has to live somewhere that travels with the
-# repository, and this is the thing everyone runs before committing.
-want_name="toy-os"
-want_email="noreply@toy-os.local"
-have_name="$(git config user.name 2>/dev/null || true)"
-have_email="$(git config user.email 2>/dev/null || true)"
-if [ "$have_name" != "$want_name" ] || [ "$have_email" != "$want_email" ]; then
-  echo "preflight: this repository's commit identity is not set." >&2
-  echo "preflight:   have: ${have_name:-(unset)} <${have_email:-(unset)}>" >&2
-  echo "preflight:   want: $want_name <$want_email>" >&2
-  echo "preflight: it is per-repository and a CLONE DOES NOT CARRY IT, so a" >&2
-  echo "preflight: fresh checkout falls back to your global identity -- which" >&2
-  echo "preflight: is the real name and address a history rewrite once removed" >&2
-  echo "preflight: from every commit here (docs/decisions.md). Run:" >&2
-  echo "preflight:   git config --local user.name  '$want_name'" >&2
-  echo "preflight:   git config --local user.email '$want_email'" >&2
+# WHAT IS CHECKED, and why it is not the exact value: the hazard is
+# "you did not decide, so your global identity leaked in". Demanding one
+# specific name would also refuse anyone working on a FORK, who has
+# every right to commit as themselves -- so a local identity being SET
+# is the hard requirement, and this project's own convention is a note.
+#
+# In the gate rather than in a git hook because .git/hooks is not cloned
+# either: a guard against a clone-time problem has to live somewhere
+# that travels with the repository.
+conv_name="toy-os"
+conv_email="noreply@toy-os.local"
+local_name="$(git config --local user.name 2>/dev/null || true)"
+local_email="$(git config --local user.email 2>/dev/null || true)"
+if [ -z "$local_name" ] || [ -z "$local_email" ]; then
+  echo "preflight: this repository has no commit identity of its own." >&2
+  echo "preflight: it is per-repository and a CLONE DOES NOT CARRY IT, so" >&2
+  echo "preflight: commits here would use your GLOBAL identity:" >&2
+  echo "preflight:   $(git config user.name 2>/dev/null || echo '(unset)') <$(git config user.email 2>/dev/null || echo '(unset)')>" >&2
+  echo "preflight: set one deliberately -- this project's own convention is" >&2
+  echo "preflight:   git config --local user.name  '$conv_name'" >&2
+  echo "preflight:   git config --local user.email '$conv_email'" >&2
+  echo "preflight: on a fork, your own name and address are fine; the point" >&2
+  echo "preflight: is that it is a CHOICE rather than a leak." >&2
   exit 1
+fi
+if [ "$local_name" != "$conv_name" ] || [ "$local_email" != "$conv_email" ]; then
+  echo "preflight: note -- committing as $local_name <$local_email>," >&2
+  echo "preflight: not this project's convention ($conv_name <$conv_email>)." >&2
 fi
 
 vm_pid_file=""
