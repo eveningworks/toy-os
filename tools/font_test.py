@@ -124,6 +124,111 @@ def wait_log(dbg, needle, timeout=8.0):
         time.sleep(0.3)
 
 
+
+def demo_report(dbg, timeout=10.0):
+    """The Font Demo app's own measurements, as a dict of its log lines.
+
+    WHY ASK THE APP RATHER THAN READ PIXELS. Bold, kerning and a private
+    face are all things a screenshot shows and a screenshot cannot
+    MEASURE: "that looks heavier" and "that looks tighter" are exactly
+    the judgements that let a fallback-to-regular ship. The app measures
+    with the same ugfx_text_width() every widget lays out with, and
+    prints the numbers -- so what is asserted here is the number a real
+    layout would have used, not a human reading of a PNG.
+
+    Its lines go to stderr, which reaches the kernel log, so they arrive
+    through logs() like the compositor's own.
+    """
+    out = {}
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for line in dbg.logs(clear=False):
+            if "fontdemo:" not in line:
+                continue
+            body = line.split("fontdemo:", 1)[1].strip()
+            words = body.split()
+            if not words:
+                continue
+            # TWO words, not one: "session regular ..." and "session bold
+            # ..." are different measurements that both start with
+            # "session", and keying on the first word alone silently made
+            # the second overwrite the first -- so the bold line was read
+            # as the regular one and the bold check could never pass.
+            key = " ".join(words[:2]) if words[0] == "session" else words[0]
+            out[key] = body
+        # `private` is logged last, so its presence means the whole
+        # report landed -- waiting on the FIRST line and then requiring
+        # all of them is the flake docs/testing.md warns about.
+        if "private" in out:
+            return out
+        time.sleep(0.3)
+    return out
+
+
+def check_weights_and_kerning(dbg):
+    """Bold beside regular, kerning applied, and a private face, in ring 3."""
+    dbg.open_app("Font Demo")
+    dbg.settle()
+    rep = demo_report(dbg)
+
+    check("Font Demo reported its measurements",
+          "session regular" in rep and "private" in rep, str(sorted(rep)))
+    if not rep:
+        return
+
+    # --- bold ---------------------------------------------------------
+    #
+    # THE CHECK A FALLBACK CANNOT PASS. A bold mapping that failed, or
+    # one the server answered with the regular atlas, measures the
+    # string at exactly the regular width. Both a designed bold and a
+    # smeared one are wider, because both widen advances to match their
+    # thicker strokes.
+    bold = rep.get("session bold", "")
+    # MEASURED IN INK BY THE APP, not in width -- on a monospace face a
+    # designed bold has exactly the regular advances, so a width probe
+    # reports a working bold as a fallback. See fontdemo.c's glyph_ink().
+    check("the bold weight is distinct from regular, not a fallback",
+          bold.endswith("distinct 1"), bold)
+
+    # --- kerning ------------------------------------------------------
+    #
+    # `plain` is ugfx_text_width(), which kerns; `unkerned` is the sum of
+    # the same characters' advances, which cannot. On a MONOSPACE face
+    # they are equal and this proves nothing, which is why the caller
+    # switches to the proportional face first -- and why the difference
+    # is required to be several pixels rather than merely non-zero.
+    kern = rep.get("kern", "")
+    parts = kern.split()
+    if len(parts) >= 5:
+        plain = int(parts[-3])
+        unkerned = int(parts[-1])
+        check("kerning tightens the sample rather than loosening it",
+              plain < unkerned, f"plain={plain} unkerned={unkerned}")
+        check("the kerning is a real amount, not a rounding artefact",
+              unkerned - plain >= 4, f"delta={unkerned - plain}")
+    else:
+        check("kerning was measured", False, kern)
+
+    # --- the private tier ---------------------------------------------
+    #
+    # A 24px face this app rasterized ITSELF, while the session sits at
+    # 14px. Asserting it is TALLER than the session font is what proves
+    # the private atlas is actually being drawn from: a private load
+    # that silently failed, or a ugfx_set_font() that did nothing, would
+    # report the session's own metrics.
+    priv = rep.get("private", "")
+    sess = rep.get("session regular", "")
+    check("a face this app rasterized for itself loaded", "loaded" in priv, priv)
+    if "loaded" in priv and sess:
+        # Both lines end "<w>x<h>" but the private one has words after
+        # it, so take the last WxH token rather than splitting the whole
+        # line on "x" -- that read "13 distinct 1" as a number.
+        priv_h = int([t for t in priv.split() if "x" in t][-1].split("x")[1])
+        sess_h = int([t for t in sess.split() if "x" in t][-1].split("x")[1])
+        check("the private font is at ITS size, not the session's",
+              priv_h > sess_h, f"private {priv_h}px vs session {sess_h}px")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--sock", default=DEFAULT_SOCK)
@@ -200,6 +305,17 @@ def main():
     check("the baked font is not the face we just left",
           builtin_left != prop_left or abs(builtin_ink - prop_ink) > 100,
           f"left {prop_left} -> {builtin_left}")
+
+    # --- weights, kerning and a private face ---------------------------
+    #
+    # ON THE PROPORTIONAL FACE, deliberately: dejavu-sans-mono has no
+    # `kern` table at all (it is monospace, so kerning it would be
+    # wrong), and every kerning assertion would pass vacuously against
+    # it -- equal is equal.
+    set_face(dbg, PROP)
+    set_size(dbg, 14)
+    time.sleep(1.0)
+    check_weights_and_kerning(dbg)
 
     # Put the machine back the way a fresh image boots.
     set_face(dbg, MONO)

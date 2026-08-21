@@ -584,11 +584,17 @@ manual steps to be worth automating:
   explicitly at the start -- they persist to the disk image, so
   inheriting them makes every measurement relative to a silently wrong
   baseline. In `gui_regress.py`.
-- **`font_test.py`** -- runtime fonts end to end (9 checks): a `.ttf`
+- **`font_test.py`** -- runtime fonts end to end (~15 checks): a `.ttf`
   under `/usr/share/fonts` rasterizes, switching faces reaches the
   screen with NO restart (the compositor is told through `WIN_EV_FONT`),
   a size nobody baked works, and the baked font still draws when no face
-  is selected. Read its docstring before editing, for the same reason
+  is selected. Its second half opens **Font Demo** and asserts on the
+  numbers that app measures for itself: that bold is distinct from
+  regular, that kerning TIGHTENS a sample rather than loosening it, and
+  that a face the app rasterized privately is at ITS size and not the
+  session's. Those run on `liberation-sans` deliberately -- on the
+  default monospace face bold has the regular advances and there is no
+  `kern` table at all, so every one of them would pass vacuously. Read its docstring before editing, for the same reason
   `cursor_theme_test.py`'s says so: the baked font is a complete working
   fallback, so "text is on screen" proves nothing at all -- every check
   is a DIFFERENCE between two states. The load-bearing one is that

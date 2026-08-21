@@ -3241,3 +3241,137 @@ offset in `mods` (0 meaning "no advances -- every cell is `a` wide",
 which is unambiguous because the glyph data always starts the mapping).
 A separate request would have been a second thing a client could forget
 to make, and a client that forgot would silently go back to multiplying.
+
+## Fonts are TWO TIERS: a shared session font, and one an app rasterizes itself
+
+A widget can now ask for a font -- a weight, a size, a face -- and the
+answer comes from one of two places that deliberately do not resemble
+each other.
+
+**Tier 1, the session font.** The desktop's active face, in regular and
+bold, rasterized once by `kernel/drivers/font_face.c` and mapped
+read-only into every client by `WIN_REQ_FONT`. Free to a client, shared
+between all of them, and it moves under them when `fontface`/`fontsize`
+change (`WIN_EV_FONT`). This is the tier that makes every window's text
+identical to the desktop's *by construction* rather than by each app
+being careful, which is the property the request was built for.
+
+**Tier 2, a private font.** An app opens a `.ttf` itself and rasterizes
+it into its own heap (`ugfx_font_load`), at any size and any face. It
+costs that app its memory and its rasterization time, nothing else can
+see it, and no setting moves it.
+
+**Why not one of them.** The obvious design is to extend tier 1 until it
+covers everything: let `WIN_REQ_FONT` name a `(face, weight, px)` triple
+and hand back a mapping. That fails on a property of this kernel rather
+than on taste. **An atlas is never freed** -- clients hold long-lived
+read-only mappings and there is no way to ask them to let go, which is
+the hazard the poison-page fix (978ebf7) exists for -- so the cache is
+bounded and refuses rather than evicting. A per-widget font is exactly
+the workload that turns "8 sizes anyone tried" into an unbounded product
+of faces, weights and sizes, in a cache that can only grow. Serving that
+properly means refcounting mappings across processes, in ring 0, over
+data parsed from untrusted files. The cost is real and the benefit is
+sharing that almost nothing would use.
+
+The opposite extreme -- delete tier 1, every client rasterizes
+everything, which is exactly what Wayland does -- fails for two reasons
+that are specific to this OS. The console and the panic path need glyphs
+in ring 0 *before any process exists*, so the kernel keeps a rasterizer
+whatever clients do. And "all text matches the desktop's setting" stops
+being a fact and becomes something every app must honour separately.
+
+So: the shared tier stays, bounded at two atlases (the two weights of
+one face at one size), and anything it cannot express is the app's own
+problem to solve with the same `ttf.c` -- which already compiled into
+`libuapp.a` for exactly this, one commit earlier, with
+`userland/tests/ttf_test.c` proving the link.
+
+**One handle for both.** `struct ugfx_font` is either kind and a widget
+never asks which. That is what lets a heading start out as the session's
+bold weight and later become 24px Liberation without the widget
+changing, and it is why the private tier needed no new widget API at
+all.
+
+## A weight is not a size, and that is why both are mapped at once
+
+`fontsize` re-maps in place: the machine is at one size, and a size
+change means every client re-asks and gets the new atlas at the same
+address. Bold cannot work that way -- a widget picks a weight *per run
+of text*, so regular and bold have to be readable at the same instant.
+
+Hence `win_font_vaddr(weight)`: `WIN_FONT_VADDR` plus a 4 MiB stride,
+two slots, both mapped for the life of the client. 4 MiB because that is
+`font_face.c`'s entire atlas cache budget, so no single atlas can
+overrun its slot; the gap below `WIN_COMPOSITOR_BASE` is 256 MiB and
+address space costs nothing here.
+
+**The weight rides in `window`,** which is the one field `WIN_REQ_FONT`
+never used -- a font belongs to the session, not to a window, and the
+ABI comment already said so. Widening `struct win_request_msg` for it
+would have put four more bytes on the path of every request including
+`WIN_REQ_PRESENT`, the hot path.
+
+## Bold prefers a real file and falls back to smearing the regular one
+
+A face is a family: `dejavu-sans-mono.ttf` plus an optional
+`dejavu-sans-mono-bold.ttf`, paired by FILENAME and listed once. Where
+the bold file exists it is loaded and rasterized like any other face --
+real letterforms, real metrics.
+
+Where it does not, the regular outlines are rasterized and thickened
+(`ttf_embolden`), and every advance grows by the smear width so the next
+letter does not lap onto the last column of the one before it. **This is
+what GDI does** when a family has no bold face, and what Cairo and
+DirectWrite fall back to. It is visibly worse than a designed bold,
+especially at small sizes where the smear closes a counter.
+
+The alternative -- "a family with no bold file has no bold" -- was
+rejected because the failure is silent: bold would draw as regular, a
+heading would be identical to its body text, and nothing would say why.
+A worse bold that is visibly bold beats a correct-looking one that is
+not there. `vera-mono` ships deliberately without a bold companion so
+this path is exercised on every image rather than merely written.
+
+Pairing by filename rather than by the font's own `name`/`OS/2` tables
+is the same call the face name already makes. fontconfig and DirectWrite
+read the metadata because they must cope with whatever a user has
+installed; this directory is small and seeded by the build.
+
+## Kerning is baked into the atlas as a DENSE matrix, in slot space
+
+`ttf.c` reads the legacy format-0 horizontal `kern` subtable, and
+`font_face.c` evaluates every pair in the 101-glyph set at build time
+into a `count x count` array of signed pixels appended to the atlas.
+
+**Dense, not the sorted pair list the file itself uses.** 101x101 is
+10 KB against an atlas that is 14 KB at 14px and ~640 KB at 64px, and
+the lookup is on a path that runs once per character drawn -- in two
+rings, in measuring and in drawing. A sorted list would save a few KB
+and put a binary search in the inner loop of every string measurement.
+Dense also makes the layout UNCONDITIONAL, which is what lets a client
+DERIVE the kern offset (`win_font_kern_offset()`) instead of being told
+it, and so needs no new ABI field.
+
+**In SLOT space, not glyph ids**, because a client has no `cmap` -- it
+has an atlas and an index. That also means the matrix is meaningless
+outside its own atlas, which is correct: it is scaled to that size.
+
+**Only format 0, and that is a stopping point rather than an
+oversight.** Modern faces keep kerning in GPOS, which is a shaping
+engine's job -- HarfBuzz is ~50k lines and exists because doing it
+properly means lookups, contextual rules and script logic. Of the faces
+shipped, `liberation-sans` has a 908-pair `kern` table and
+`dejavu-sans-mono` has none (it is monospace, so kerning it would be
+wrong). A GPOS-only face renders unkerned, exactly as before.
+
+**The trap, and it only exists in ring 0.** A glyph cell there is
+OPAQUE -- every pixel is written, background included, which is what
+lets the console overwrite a character in place. A negative kern moves
+the pen left, so the new cell's leading columns sit on the previous
+glyph's last ones and painting background there erases the tail of the
+letter just drawn ("To" lost the right tip of the T's crossbar, which
+reads as a rasterizer bug rather than a spacing one).
+`draw_glyph_kerned()` blends exactly those columns over the framebuffer
+instead. Ring 3 needs none of this: `ugfx_draw_char()` already skips
+fully-background pixels.

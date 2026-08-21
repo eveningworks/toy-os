@@ -454,14 +454,16 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~A real glyph cache, since rasterizing per frame is not viable~~ DONE 2026-08-20 -- an atlas per (face, size)
 - [x] ~~Per-glyph advance widths, instead of one fixed cell per character~~ DONE 2026-08-20 -- `gfx_char_advance()`/`ugfx_char_advance()`
 - [ ] The atlas is still the BAKED 101-glyph set, so a loaded face's other 3,000 glyphs are unreachable -- needs UTF-8
-- [ ] No weights: one face, one weight, so nothing can draw bold text beside regular
+- [x] ~~No weights: one face, one weight~~ DONE 2026-08-21 -- a `-bold` file is a weight of its family, synthesized where there is none
 - [ ] Hinting -- glyphs are rendered unhinted, which is visible below about 10px (the baked font was hinted offline)
-- [ ] Kerning pairs from the font's own tables
+- [x] ~~Kerning pairs from the font's own tables~~ DONE 2026-08-21 -- format-0 `kern`, baked into the atlas as a dense slot matrix
+- [ ] Kerning from GPOS, which is where most modern faces keep it -- needs a shaping engine, and is where this deliberately stops
 - [x] ~~`gfx_text_width()` that measures rather than multiplies~~ DONE 2026-08-20
-- [ ] Multiple faces live at once, selected per widget -- one face is active machine-wide today, which is also what blocks weights
+- [x] ~~Multiple faces live at once, selected per widget~~ DONE 2026-08-21 -- two tiers, and a widget takes a `struct ugfx_font *`
+- [ ] Only `uui_label` takes a font so far -- every other widget draws in whatever is current
 - [x] ~~A `/usr/share/fonts` convention and a command to list what loaded~~ DONE 2026-08-20 -- `fontface`
 - [x] ~~Keep the baked font as the guaranteed fallback, so the console works with no disk font~~ DONE 2026-08-20
-- [ ] Move font PARSING out of ring 0, once an atlas can be handed across -- what Windows 10 did with `fontdrvhost`
+- [ ] Move the SESSION font's parsing out of ring 0 -- Windows 10's `fontdrvhost`; an app already rasterizes its own
 - [ ] Apply a composite glyph's 2x2 transform instead of skipping it (accents are pure translations, so nothing needs it yet)
 - [ ] Note the boundary: complex-script shaping
 

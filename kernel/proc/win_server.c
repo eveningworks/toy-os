@@ -526,14 +526,33 @@ static int create_window(int pid, uint64_t pml4, int w, int h, int x, int y,
 static int map_font(int pid, struct win_request_msg *req) {
     (void)pid;
 
+    // `window` IS THE WEIGHT on this request, and on no other. See
+    // WIN_REQ_FONT in abi/win_proto.h: a font belongs to the session,
+    // so this is the one request whose `window` field never named a
+    // window and was free to mean something else.
+    int weight = (int)req->window;
+    if (weight < 0 || weight >= WIN_FONT_WEIGHTS) return 0;
+
     // WHICHEVER FONT THE DESKTOP IS ACTUALLY DRAWING WITH -- a face
     // rasterized from /usr/share/fonts if one is selected, the baked
     // tables otherwise. Clients get the same glyphs either way, which is
     // the whole reason this request exists (see WIN_REQ_FONT in
     // abi/win_proto.h): a client carrying its own copy would keep
     // rendering the old face after `fontface` changed it.
-    const struct font_atlas *atlas = font_face_atlas();
+    const struct font_atlas *atlas =
+        font_face_atlas_weight(weight == WIN_FONT_BOLD ? FONT_WEIGHT_BOLD
+                                                        : FONT_WEIGHT_REGULAR);
     const struct font_ttf_variant *fv = &font_ttf_variants[gfx_font_size()];
+
+    // THE BAKED FONT HAS ONE WEIGHT, so a bold request against it is
+    // REFUSED rather than answered with regular glyphs. A client that
+    // got regular back under the name "bold" would draw a heading
+    // identical to its body text and have no way to find out; a refusal
+    // it can see means it keeps its own regular mapping and knows not
+    // to switch. (font_face.c synthesizes bold for a real FACE with no
+    // bold file -- that path never reaches here, because the atlas it
+    // produces is an ordinary bold atlas.)
+    if (weight == WIN_FONT_BOLD && !atlas) return 0;
 
     uint64_t phys, bytes, adv_off;
     int cw, ch, count;
@@ -548,6 +567,10 @@ static int map_font(int pid, struct win_request_msg *req) {
         bytes = atlas->bytes;
         cw = atlas->cell_w; ch = atlas->cell_h; count = atlas->count;
         adv_off = (uint64_t)count * (uint64_t)cw * (uint64_t)ch;
+        // The kern matrix follows the advances and the client DERIVES
+        // its offset (win_font_kern_offset()) rather than being told --
+        // which is only sound because `bytes` covers all three sections.
+        // font_face.c sizes the allocation for exactly that.
     } else {
         phys = (uint64_t)(uintptr_t)fv->glyphs;
         cw = fv->w; ch = fv->h; count = FONT_TTF_GLYPH_COUNT;
@@ -576,26 +599,27 @@ static int map_font(int pid, struct win_request_msg *req) {
         // owning mapping made an exiting client return kernel .rodata to
         // the physical allocator -- measured, two frames per boot, on
         // the first GUI app to close.
-        if (!vmm_map_user_borrowed(pml4, WIN_FONT_VADDR + i * 4096,
+        if (!vmm_map_user_borrowed(pml4, win_font_vaddr(weight) + i * 4096,
                                     page_base + i * 4096, 0, 0, VMM_MT_NORMAL)) {
             for (uint64_t j = 0; j < i; j++) {
-                vmm_unmap_user_page(pml4, WIN_FONT_VADDR + j * 4096);
+                vmm_unmap_user_page(pml4, win_font_vaddr(weight) + j * 4096);
             }
             klog_write("win_server: font refused -- mapping failed\n");
             return 0;
         }
     }
 
-    // The client sees the mapping at WIN_FONT_VADDR + the same offset
-    // the data has within its first page, so glyph 0 starts exactly
-    // there. Reported as `d`'s companion rather than assumed.
+    // The client sees the mapping at win_font_vaddr(weight) + the same
+    // offset the data has within its first page, so glyph 0 starts
+    // exactly there. Reported as `d`'s companion rather than assumed.
     req->a = cw;
     req->b = ch;
     req->c = count;
     req->d = (int32_t)offset_in_page;
     // `mods` carries the advance table's offset within the mapping, or 0
     // when there is none. 0 is unambiguous because a table can never
-    // START the mapping -- the glyph data does.
+    // START the mapping -- the glyph data does. The KERN table's offset
+    // is derived from this one; see win_font_kern_offset().
     req->mods = adv_off ? (uint32_t)(offset_in_page + adv_off) : 0;
     return 1;
 }

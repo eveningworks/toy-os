@@ -281,13 +281,26 @@ could not be read rather than destroying a possibly-good filesystem.
 baked to bitmaps at build time as the guaranteed fallback, and a
 fixed-point TrueType rasterizer that loads a `.ttf` from
 `/usr/share/fonts` at runtime — so any size works, not just a baked one,
-and a proportional face gets genuine per-glyph advance widths. Because
-the whole UI is font-*derived*, changing the face or the size reflows
-everything rather than clipping it, live, without restarting anything.
+and a proportional face gets genuine per-glyph advance widths and real
+kerning from the font's own tables. A face is a *family*: bold is a
+second file loaded alongside the regular one, or — where a family has no
+bold — synthesized by thickening the regular outlines, which is what GDI
+does. Because the whole UI is font-*derived*, changing the face or the
+size reflows everything rather than clipping it, live, without
+restarting anything.
+
+Fonts come in **two tiers**. The session font is the desktop's face, in
+both weights, rasterized once in the kernel and mapped read-only into
+every window — so all text on screen matches the desktop's setting by
+construction rather than by each app being careful. An app that needs
+something that font cannot express — a different face, a heading at
+twice the body size — rasterizes it *itself*, in ring 3, using the same
+rasterizer, into its own memory; that is what every Wayland client does.
 The honest limit: a loaded face is rasterized into the same 101-glyph
 set the baked one carries — ASCII plus six Nordic letters — so its other
 few thousand glyphs are parsed and unreachable until UTF-8 lands, and
-there are no weights yet.
+kerning is read from the legacy `kern` table only, so a face that keeps
+its kerning in GPOS renders unkerned.
 
 Double-buffered rendering with damage-region clipping, and a
 compositor whose damage invariant is enforced by a verification mode

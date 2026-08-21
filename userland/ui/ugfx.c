@@ -3,6 +3,8 @@
 #include "ui/ugfx.h"
 #include "syscall_abi.h"
 #include "rt/sys.h" // sys_sbrk, sys_win_request -- the screen half, below
+#include "ttf.h"    // the SAME rasterizer the kernel uses -- see ugfx_font_load
+#include "lib/stdlib.h"
 
 static inline int64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
     int64_t ret;
@@ -15,16 +17,29 @@ static inline int64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
     return ret;
 }
 
-// Font state, filled by ugfx_font_init(). Zero until then, which makes
-// a forgotten init draw nothing rather than dereference a wild pointer
-// -- see ugfx.h.
-static const unsigned char *g_glyphs = 0;
-// Per-glyph advances, or NULL when the desktop's font is the baked one
-// (every cell is g_char_w wide). See ugfx_char_advance().
-static const unsigned char *g_advances = 0;
-static int g_char_w = 0;
-static int g_char_h = 0;
-static int g_glyph_count = 0;
+// THE SESSION FONTS, filled by ugfx_font_init(): the desktop's active
+// face in each weight, mapped read-only by the server. Zero until then,
+// which makes a forgotten init draw nothing rather than dereference a
+// wild pointer -- see ugfx.h.
+//
+// TWO OF THEM AND NOT ONE, because both weights are live at the same
+// time. That is the difference between a weight and a size: the machine
+// is only ever at one size, so a size change re-maps in place, while a
+// widget picks a weight per run of text and needs both there at once.
+static struct ugfx_font g_session[UGFX_FONT_WEIGHTS];
+
+// What text draws with right now -- always one of the above, or a font
+// a client rasterized for itself (ugfx_font_load). Never NULL after a
+// successful init.
+static const struct ugfx_font *g_font = &g_session[UGFX_FONT_REGULAR];
+
+// Kept as the old module-level names so that everything below reads as
+// it did; they now just track g_font.
+#define g_glyphs      (g_font->glyphs)
+#define g_advances    (g_font->advances)
+#define g_char_w      (g_font->char_w)
+#define g_char_h      (g_font->char_h)
+#define g_glyph_count (g_font->count)
 
 struct ugfx_surface ugfx_surface_for_window(uint32_t window, int w, int h) {
     struct ugfx_surface s;
@@ -185,27 +200,235 @@ static int glyph_index(unsigned char c) {
     return idx;
 }
 
-int ugfx_font_init(void) {
+// Asks the server for one weight and fills `out`. Returns 1 on success.
+static int map_session_font(int weight, struct ugfx_font *out) {
     struct win_request_msg req;
     for (unsigned i = 0; i < sizeof(req); i++) ((uint8_t *)&req)[i] = 0;
     req.type = WIN_REQ_FONT;
+    req.window = (uint32_t)weight; // `window` IS the weight here -- see win_proto.h
     if (syscall2(SYS_WIN_REQUEST, (uint64_t)(uintptr_t)&req, 0) != 1) return 0;
 
-    g_char_w = req.a;
-    g_char_h = req.b;
-    g_glyph_count = req.c;
+    uint64_t base = win_font_vaddr(weight);
+    out->char_w = req.a;
+    out->char_h = req.b;
+    out->count  = req.c;
     // Glyph 0 sits at the mapping's base PLUS the data's offset within
     // its first page -- the tables are ordinary kernel .rodata and do
     // not start on a page boundary. Ignoring `d` here would shift every
     // glyph by a few bytes and render convincing-looking garbage.
-    g_glyphs = (const unsigned char *)(uintptr_t)(WIN_FONT_VADDR + (uint32_t)req.d);
+    out->glyphs = (const unsigned char *)(uintptr_t)(base + (uint32_t)req.d);
     // `mods` is the advance table's offset in the same mapping, 0 when
     // the font has none. A proportional face loaded from
     // /usr/share/fonts has one; the baked tables never do.
-    g_advances = req.mods
-        ? (const unsigned char *)(uintptr_t)(WIN_FONT_VADDR + (uint32_t)req.mods)
+    out->advances = req.mods
+        ? (const unsigned char *)(uintptr_t)(base + (uint32_t)req.mods)
         : 0;
+    // DERIVED, not returned -- the atlas lays glyphs, advances and kern
+    // back to back in that order, so the third starts where the second
+    // ends. See win_font_kern_offset() in win_proto.h, which is the one
+    // place that arithmetic is written down.
+    uint64_t koff = win_font_kern_offset(req.mods, req.c);
+    out->kern = koff ? (const signed char *)(uintptr_t)(base + koff) : 0;
     return 1;
+}
+
+int ugfx_font_init(void) {
+    if (!map_session_font(UGFX_FONT_REGULAR, &g_session[UGFX_FONT_REGULAR]))
+        return 0;
+    // BOLD IS ALLOWED TO FAIL AND THE INIT STILL SUCCEEDS. The baked
+    // font has one weight, so a machine with no face loaded has no bold
+    // at all -- and an app must not lose its regular text over that. A
+    // failed bold leaves that slot a copy of regular, so
+    // ugfx_font_bold() always returns something drawable and a widget
+    // asking for bold quietly gets regular. That is the same
+    // degradation GDI makes when a family has no bold: text that is not
+    // emphasised, rather than text that is not there.
+    if (!map_session_font(UGFX_FONT_BOLD, &g_session[UGFX_FONT_BOLD]))
+        g_session[UGFX_FONT_BOLD] = g_session[UGFX_FONT_REGULAR];
+
+    // A re-init (WIN_EV_FONT) must not leave the current font pointing
+    // at a private atlas whose backing the app may have freed, so this
+    // resets to the session's regular weight -- which is also what an
+    // app expects after the desktop's font changed under it.
+    g_font = &g_session[UGFX_FONT_REGULAR];
+    return 1;
+}
+
+const struct ugfx_font *ugfx_font_session(int weight) {
+    if (weight < 0 || weight >= UGFX_FONT_WEIGHTS)
+        weight = UGFX_FONT_REGULAR;
+    return &g_session[weight];
+}
+
+const struct ugfx_font *ugfx_font_current(void) { return g_font; }
+
+const struct ugfx_font *ugfx_set_font(const struct ugfx_font *f) {
+    const struct ugfx_font *prev = g_font;
+    // NULL means "back to the session's regular weight" rather than
+    // "no font": every measurement below would return 0 with a NULL
+    // font, and a widget that forgot to restore would collapse the
+    // layout of everything drawn after it instead of looking wrong.
+    g_font = (f && f->glyphs) ? f : &g_session[UGFX_FONT_REGULAR];
+    return prev;
+}
+
+// --- a private font, rasterized by this app (tier 2) ------------------
+//
+// **ONLY THE 95 ASCII SLOTS, and that is a real limit, not laziness.**
+// The session atlas carries 101 slots -- ASCII 32..126 plus six Nordic
+// letters -- but glyph_index() above, which is the whole of what ring 3
+// knows about slot layout, maps `c - WIN_FONT_FIRST_CHAR` and rejects
+// anything past `count`. So a client cannot ADDRESS slots 95..100 today
+// whatever is in them, and rasterizing them here would produce glyphs
+// nothing can ask for. Doing it properly means the UTF-8 migration
+// (docs/roadmap.md), which replaces byte-indexed slots outright.
+//
+// Stated rather than silently matched, because the alternative was to
+// copy font_ttf.h's extra-codepoint table into ring 3 -- a second copy
+// of a table the kernel already owns, kept true by somebody
+// remembering, which is the exact shape this project deletes.
+#define PRIV_SLOTS 95
+
+unsigned long ugfx_font_arena_size(int px) {
+    if (px < 1) px = 1;
+    // A DELIBERATELY LOOSE BOUND. A Latin glyph's advance is well under
+    // 2 * px and its cell well under 2 * px tall, so this is roughly 4x
+    // what a real face needs -- and that costs almost nothing, because
+    // sys_sbrk RESERVES address space and pages arrive on touch (see
+    // docs/conventions/kernel.md). The untouched remainder of an
+    // over-sized arena is never backed by a frame. Asking the caller to
+    // allocate exactly enough would mean measuring the face first, i.e.
+    // opening the file twice.
+    unsigned long cell = (unsigned long)px * 2;
+    return (unsigned long)PRIV_SLOTS * cell * cell
+         + PRIV_SLOTS                        // advances
+         + (unsigned long)PRIV_SLOTS * PRIV_SLOTS; // kern
+}
+
+int ugfx_font_load(const char *path, int px, int bold,
+                    struct ugfx_font *f, void *arena, unsigned long arena_size) {
+    if (!path || !f || !arena || px < 6 || px > 64) return 0;
+    if (arena_size < ugfx_font_arena_size(px)) return 0;
+
+    // The FILE BYTES and the ~69 KB of scratch are transient and come
+    // from the heap, not from the caller's arena: ttf_open() copies
+    // nothing, so the bytes must outlive the parse but NOT the font --
+    // once every glyph is rasterized into the arena, the atlas is
+    // self-contained and the file can go. Making the caller hold half a
+    // megabyte of .ttf forever, for a font it has already rendered,
+    // would be the wrong contract.
+    struct sys_stat st;
+    if (sys_stat(path, &st) != 0) return 0;
+    unsigned long size = (unsigned long)st.size;
+    if (size == 0 || size > 4ul * 1024 * 1024) return 0;
+
+    unsigned char *file = (unsigned char *)malloc(size);
+    if (!file) return 0;
+    int fd = sys_open(path, 0);
+    if (fd < 0) { free(file); return 0; }
+    // Read in a LOOP: sys_read() is allowed to return short, and a
+    // single call that happened to fill a whole font on the shipped
+    // filesystem would be a latent bug on any other one.
+    unsigned long got = 0;
+    while (got < size) {
+        int64_t n = sys_read(fd, file + got, size - got);
+        if (n <= 0) break;
+        got += (unsigned long)n;
+    }
+    sys_close(fd);
+    if (got != size) { free(file); return 0; }
+
+    struct ttf_font t;
+    if (!ttf_open(&t, file, (uint32_t)size)) { free(file); return 0; }
+
+    // struct ttf_scratch is ~69 KB -- FAR past the 16 KiB ring-3 stack,
+    // and USERLAND_CFLAGS carries a -Wframe-larger-than that would catch
+    // it at build time. On the heap, always.
+    struct ttf_scratch *sc = (struct ttf_scratch *)malloc(sizeof *sc);
+    if (!sc) { free(file); return 0; }
+
+    fx_t scale = ttf_scale_for_px(&t, px);
+    int baseline = fx_round(fx_mul(fx_mul(fx_from_int(t.ascent), scale),
+                                    (fx_t)(FX_ONE * 89 / 100)));
+    int below = fx_round(fx_mul(fx_mul(fx_from_int(t.descent), scale),
+                                 (fx_t)(FX_ONE * 60 / 100)));
+    int cell_h = baseline + below;
+
+    // Emboldened only when asked AND the file is not already bold. A
+    // caller passing a `-bold.ttf` with bold=1 would otherwise get a
+    // double-thickened face; there is no way to tell from here, so the
+    // rule is the caller's: pass the bold FILE, or pass bold=1, not
+    // both. Documented in ugfx.h.
+    int smear = bold ? (px / 24 < 1 ? 1 : (px / 24 > 3 ? 3 : px / 24)) : 0;
+
+    int gids[PRIV_SLOTS];
+    unsigned char advs[PRIV_SLOTS];
+    int cell_w = 1;
+    for (int i = 0; i < PRIV_SLOTS; i++) {
+        gids[i] = ttf_glyph_index(&t, (uint32_t)(WIN_FONT_FIRST_CHAR + i));
+        int adv = ttf_advance_px(&t, gids[i], px);
+        if (adv < 0) adv = 0;
+        if (adv > 0) adv += smear;
+        if (adv > 255) adv = 255;
+        advs[i] = (unsigned char)adv;
+        if (adv > cell_w) cell_w = adv;
+    }
+
+    // The bound in ugfx_font_arena_size() is generous, but it is a
+    // bound and not a guarantee about this face -- a display face with
+    // absurd metrics could still overrun it. Checked against the arena
+    // the caller actually gave, so an overrun is a refusal here rather
+    // than a heap corruption in whatever the app allocated next.
+    unsigned long glyph_bytes = (unsigned long)PRIV_SLOTS
+                              * (unsigned long)cell_w * (unsigned long)cell_h;
+    unsigned long need = glyph_bytes + PRIV_SLOTS
+                       + (unsigned long)PRIV_SLOTS * PRIV_SLOTS;
+    if (cell_h < 2 || need > arena_size) { free(sc); free(file); return 0; }
+
+    unsigned char *blob = (unsigned char *)arena;
+    for (unsigned long i = 0; i < need; i++) blob[i] = 0;
+
+    for (int i = 0; i < PRIV_SLOTS; i++) {
+        unsigned char *cell = blob + (unsigned long)i * (unsigned long)cell_w
+                                                       * (unsigned long)cell_h;
+        ttf_render_glyph(&t, gids[i], px, cell, cell_w, cell_h, 0, baseline, sc);
+        // Per cell, after rendering it: the cells are contiguous, so
+        // emboldening the whole blob at once would smear each glyph
+        // into the start of the next (they share rows in memory, not on
+        // screen). Ring 0's font_face.c has the same loop for the same
+        // reason.
+        if (smear) ttf_embolden(cell, cell_w, cell_h, smear);
+    }
+    for (int i = 0; i < PRIV_SLOTS; i++) blob[glyph_bytes + i] = advs[i];
+
+    signed char *kern = (signed char *)(blob + glyph_bytes + PRIV_SLOTS);
+    if (t.kern_pairs) {
+        for (int l = 0; l < PRIV_SLOTS; l++)
+            for (int r = 0; r < PRIV_SLOTS; r++) {
+                int k = ttf_kern_px(&t, gids[l], gids[r], px);
+                if (k > 127) k = 127;
+                if (k < -127) k = -127;
+                kern[l * PRIV_SLOTS + r] = (signed char)k;
+            }
+    }
+
+    free(sc);
+    free(file); // the atlas is self-contained now -- see above
+
+    f->glyphs = blob;
+    f->advances = blob + glyph_bytes;
+    f->kern = kern;
+    f->char_w = cell_w;
+    f->char_h = cell_h;
+    f->count = PRIV_SLOTS;
+    return 1;
+}
+
+int ugfx_kern(int prev, int c) {
+    if (!prev || !g_font->kern) return 0;
+    return win_font_kern(g_font->kern, g_glyph_count,
+                         glyph_index((unsigned char)prev),
+                         glyph_index((unsigned char)c));
 }
 
 // How far the pen moves after drawing `c`.
@@ -228,18 +451,22 @@ int ugfx_char_h(void) { return g_char_h; }
 
 int ugfx_text_width(const char *str) {
     if (!str) return 0;
-    int w = 0;
-    for (int n = 0; str[n]; n++) w += ugfx_char_advance(str[n]);
+    int w = 0, prev = 0;
+    for (int n = 0; str[n]; n++) {
+        w += ugfx_kern(prev, (unsigned char)str[n]) + ugfx_char_advance(str[n]);
+        prev = (unsigned char)str[n];
+    }
     return w;
 }
 
 int ugfx_text_fit_chars(const char *str, int max_w) {
     if (!str || g_char_w <= 0) return 0;
-    int n = 0, used = 0;
+    int n = 0, used = 0, prev = 0;
     while (str[n]) {
-        int adv = ugfx_char_advance(str[n]);
+        int adv = ugfx_kern(prev, (unsigned char)str[n]) + ugfx_char_advance(str[n]);
         if (used + adv > max_w) break;
         used += adv;
+        prev = (unsigned char)str[n];
         n++;
     }
     return n;
@@ -297,11 +524,23 @@ void ugfx_draw_char(struct ugfx_surface *s, int x, int y, char c,
 void ugfx_draw_string(struct ugfx_surface *s, int x, int y,
                        const char *str, uint32_t color, uint32_t bg) {
     if (!s || !str) return;
-    int gx = x;
+    int gx = x, prev = 0;
     for (int n = 0; str[n]; n++) {
+        // The kern comes BEFORE the bounds check, so a run that walks
+        // off the right edge stops at the same character
+        // ugfx_text_width() would have counted. A drawing loop that
+        // spaced text differently from the measuring one is how a
+        // clipped label ends up cut in the wrong place.
+        gx += ugfx_kern(prev, (unsigned char)str[n]);
         if (gx >= s->w) break; // the rest is off the right edge
+        // Nothing special is needed for the overlap a negative kern
+        // creates: ugfx_draw_char() skips fully-background pixels
+        // outright (`if (!a) continue`), so a kerned glyph composites
+        // over its neighbour instead of erasing it. Ring 0's cells ARE
+        // opaque and needed draw_glyph_kerned() for exactly this.
         ugfx_draw_char(s, gx, y, str[n], color, bg);
         gx += ugfx_char_advance(str[n]);
+        prev = (unsigned char)str[n];
     }
 }
 
@@ -325,13 +564,21 @@ int ugfx_draw_string_clipped(struct ugfx_surface *s, int x, int y, int max_w,
     // copy of the string because there is nowhere to put one (a client
     // has no allocator), and a fixed scratch buffer would just move the
     // length limit somewhere less obvious.
-    int gx = x;
+    int gx = x, prev = 0;
     for (int n = 0; n < fits; n++) {
         char one[2];
         one[0] = str[n];
         one[1] = '\0';
+        // The kern is applied HERE rather than inside the one-character
+        // ugfx_draw_string() call, which cannot see it: a run of one
+        // character has no preceding character, so its own loop always
+        // computes 0. Dropping it would space this path differently
+        // from the unclipped one above -- the same string, drawn two
+        // ways, at two widths.
+        gx += ugfx_kern(prev, (unsigned char)str[n]);
         ugfx_draw_string(s, gx, y, one, color, bg);
         gx += ugfx_char_advance(str[n]);
+        prev = (unsigned char)str[n];
     }
     return 0;
 }

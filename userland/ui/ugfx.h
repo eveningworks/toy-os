@@ -116,6 +116,50 @@ void ugfx_fill(struct ugfx_surface *s, uint32_t color);
 void ugfx_fill_rect(struct ugfx_surface *s, int x, int y, int w, int h, uint32_t color);
 void ugfx_draw_rect(struct ugfx_surface *s, int x, int y, int w, int h, uint32_t color);
 
+// --- fonts ------------------------------------------------------------
+//
+// **TWO TIERS, ONE HANDLE.** A struct ugfx_font is either a SESSION
+// font -- the desktop's active face in one weight, mapped read-only by
+// the server, shared by every client and changing under them all when
+// `fontface`/`fontsize` change -- or a PRIVATE one an app rasterized
+// for itself out of a .ttf (ugfx_font_load), which nothing else can see
+// and which no setting moves.
+//
+// Both are the same type on purpose: a widget takes a font and never
+// asks which kind it is, so a heading that starts out bold-from-the-
+// session can become 24px-Liberation-private without the widget
+// changing. Drawing selects one with ugfx_set_font().
+//
+// WHY BOTH EXIST, since one would be simpler. The session font is what
+// keeps every window's text identical to the desktop's by construction
+// -- the property WIN_REQ_FONT was built for -- and it costs a client
+// nothing, because the pages are already rasterized and shared. But it
+// can only ever offer what the desktop is on: one face, two weights,
+// one size. An app wanting a 24px heading beside 11px body text, or a
+// second face entirely, cannot be served by a shared atlas without the
+// kernel caching every combination any app ever asks for, in a cache
+// it can never evict from (clients hold the mappings). So that case
+// rasterizes CLIENT-SIDE, which is what every Wayland client does and
+// what this OS already had the pieces for -- ttf.c compiles into
+// libuapp.a precisely so a ring-3 program can do this.
+//
+// The trade is explicit: a private font costs the app its own memory
+// and its own rasterization time, and does NOT follow the desktop's
+// settings. Use the session font unless you specifically need what it
+// cannot express.
+
+#define UGFX_FONT_REGULAR 0
+#define UGFX_FONT_BOLD    1
+#define UGFX_FONT_WEIGHTS 2
+
+struct ugfx_font {
+    const unsigned char *glyphs;   // count cells of char_w x char_h coverage
+    const unsigned char *advances; // count bytes, or NULL for a fixed cell
+    const signed char   *kern;     // count x count, or NULL -- see ugfx_kern()
+    int char_w, char_h;
+    int count;
+};
+
 // Asks the server for the shared font. Must succeed before any text
 // call below; returns 1 on success, 0 if the server refused (no
 // desktop session). Safe to call again after a font-size change -- it
@@ -133,6 +177,62 @@ int ugfx_font_init(void);
 // that asks THEM rather than multiplying by ugfx_char_w() needed no
 // change at all when proportional faces became loadable.
 int ugfx_char_advance(char c);
+
+// One of the two session fonts. Valid after ugfx_font_init(); the bold
+// one falls back to a copy of regular on a machine whose font has no
+// bold weight (the baked font), so this never returns something
+// undrawable.
+const struct ugfx_font *ugfx_font_session(int weight);
+
+// Makes `f` the font every subsequent text call draws and measures
+// with, RETURNING THE PREVIOUS ONE so save/restore is the shortest
+// thing to write:
+//
+//     const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
+//     ugfx_draw_string(...);
+//     ugfx_set_font(was);
+//
+// NULL (or an unloaded font) means the session's regular weight, not
+// "no font" -- a widget that forgot to restore would otherwise measure
+// everything after it as zero-width and collapse the layout, which is
+// far harder to see than text in the wrong weight.
+const struct ugfx_font *ugfx_set_font(const struct ugfx_font *f);
+const struct ugfx_font *ugfx_font_current(void);
+
+// The kerning adjustment in pixels between two adjacent characters, 0
+// when the current font does not kern them. Every measuring and drawing
+// path in ugfx applies this already; a client drawing its own runs
+// character by character must too, or its text will not match what
+// ugfx_text_width() said.
+int ugfx_kern(int prev, int c);
+
+// --- a private font, rasterized by this app (tier 2) ------------------
+//
+// Loads `path` (a .ttf on the filesystem) and rasterizes the same
+// 101-slot glyph set the session font uses, at `px`, into memory the
+// CALLER owns. Returns 1 on success.
+//
+// `arena` must be at least ugfx_font_arena_size(px) bytes and must stay
+// alive and unmodified for as long as `f` is drawn with -- the font
+// points into it and copies nothing. `bold` embolden the outlines when
+// the file is not already a bold face.
+//
+// **THIS IS NOT CHEAP AND IS NOT A PER-FRAME CALL.** It reads a
+// several-hundred-KB file and fills 101 glyphs; do it once, at startup
+// or when the app's own settings change, and keep the handle. It is
+// also the one place a client needs real memory: an atlas at 14px is
+// ~24 KB and at 32px ~130 KB.
+//
+// It needs no window and no compositor -- rasterizing is arithmetic
+// over a file, which is exactly why ttf.c can be the same source in
+// both rings.
+int ugfx_font_load(const char *path, int px, int bold,
+                    struct ugfx_font *f, void *arena, unsigned long arena_size);
+
+// Bytes ugfx_font_load() needs at `px`. Sized for the worst case at
+// that size, so a caller can allocate before knowing which face it will
+// get -- a face whose glyphs turn out narrower simply uses less.
+unsigned long ugfx_font_arena_size(int px);
 
 int ugfx_char_w(void);
 int ugfx_char_h(void);

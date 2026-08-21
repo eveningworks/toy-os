@@ -60,6 +60,7 @@ int ttf_open(struct ttf_font *f, const uint8_t *data, uint32_t len) {
     // clearly. font_face.c reports the refusal by name.
     if (ver != 0x00010000u && ver != TAG('t', 'r', 'u', 'e')) return 0;
 
+    uint32_t kern_off = 0, kern_len = 0;
     uint32_t num_tables = rd_u16(f, 4);
     if (num_tables == 0 || num_tables > 512) return 0;
     if (!in_range(f, 12, num_tables * 16)) return 0;
@@ -78,6 +79,7 @@ int ttf_open(struct ttf_font *f, const uint8_t *data, uint32_t len) {
         case TAG('h', 'e', 'a', 'd'): f->head = off; break;
         case TAG('h', 'h', 'e', 'a'): f->hhea = off; break;
         case TAG('m', 'a', 'x', 'p'): f->maxp = off; break;
+        case TAG('k', 'e', 'r', 'n'): kern_off = off; kern_len = tlen; break;
         default: break;
         }
     }
@@ -97,6 +99,42 @@ int ttf_open(struct ttf_font *f, const uint8_t *data, uint32_t len) {
     if (f->units_per_em < 16 || f->units_per_em > 16384) return 0;
     if (f->num_glyphs <= 0) return 0;
     if (f->descent < 0) f->descent = 0;
+
+    // `kern` is OPTIONAL, so nothing here may fail the open -- a font
+    // whose kern table is malformed still draws, unkerned. That is the
+    // opposite of the required tables above, and deliberate: refusing a
+    // whole face over an advisory table would lose the user their font
+    // for a defect in the one part of it that only affects spacing.
+    //
+    // Version 0 is the Microsoft/OpenType header (u16 version, u16
+    // nTables). Apple's own `kern` starts with a u32 version 0x00010000
+    // and a u32 nTables, and is NOT read -- the two are distinguishable
+    // by that first u16 and only the Microsoft one appears in the fonts
+    // this OS ships or is likely to be handed.
+    if (kern_off && kern_len >= 4 && rd_u16(f, kern_off) == 0) {
+        uint32_t ntab = rd_u16(f, kern_off + 2);
+        uint32_t p = kern_off + 4;
+        for (uint32_t i = 0; i < ntab && i < 32; i++) {
+            if (!in_range(f, p, 14)) break;
+            uint32_t sub_len = rd_u16(f, p + 2);
+            uint32_t coverage = rd_u16(f, p + 4);
+            // Bit 0 set = horizontal; bit 2 set = cross-stream (a
+            // vertical shift, not a horizontal one); high byte = format.
+            int horizontal = (coverage & 0x0001) != 0;
+            int cross = (coverage & 0x0004) != 0;
+            int format = (int)(coverage >> 8);
+            uint32_t npairs = rd_u16(f, p + 6);
+            uint32_t pairs = p + 14;
+            if (format == 0 && horizontal && !cross && npairs > 0
+                && in_range(f, pairs, npairs * 6)) {
+                f->kern_pairs_off = pairs;
+                f->kern_pairs = (int)npairs;
+                break; // the first usable subtable wins
+            }
+            if (sub_len < 14) break; // a zero-length subtable would loop forever
+            p += sub_len;
+        }
+    }
     return 1;
 }
 
@@ -201,6 +239,54 @@ int ttf_advance_units(const struct ttf_font *f, int gid) {
 int ttf_advance_px(const struct ttf_font *f, int gid, int px) {
     fx_t scale = ttf_scale_for_px(f, px);
     return fx_round(fx_mul(fx_from_int(ttf_advance_units(f, gid)), scale));
+}
+
+// --- kerning ---------------------------------------------------------
+
+int ttf_kern_units(const struct ttf_font *f, int left_gid, int right_gid) {
+    if (!f || !f->kern_pairs || left_gid < 0 || right_gid < 0) return 0;
+    // The pair array is sorted by the 32-bit key (left << 16) | right,
+    // which the spec guarantees and which is what makes this a binary
+    // search over 908 entries rather than a scan per character pair.
+    // A font that lied about the ordering gets a wrong-or-zero kern,
+    // never an out-of-range read: every access below is through rd_u16.
+    uint32_t want = ((uint32_t)left_gid << 16) | (uint32_t)right_gid;
+    int lo = 0, hi = f->kern_pairs - 1;
+    while (lo <= hi) {
+        int mid = lo + (hi - lo) / 2;
+        uint32_t e = f->kern_pairs_off + (uint32_t)mid * 6;
+        uint32_t key = ((uint32_t)rd_u16(f, e) << 16) | rd_u16(f, e + 2);
+        if (key == want) return (int)rd_i16(f, e + 4);
+        if (key < want) lo = mid + 1;
+        else hi = mid - 1;
+    }
+    return 0;
+}
+
+int ttf_kern_px(const struct ttf_font *f, int left_gid, int right_gid, int px) {
+    int units = ttf_kern_units(f, left_gid, right_gid);
+    if (!units) return 0;
+    return fx_round(fx_mul(fx_from_int(units), ttf_scale_for_px(f, px)));
+}
+
+// --- synthetic bold --------------------------------------------------
+
+void ttf_embolden(uint8_t *cov, int w, int h, int strength) {
+    if (!cov || w <= 0 || h <= 0) return;
+    if (strength < 1) strength = 1;
+    if (strength > 4) strength = 4;
+    // Right to left, so a column already widened is never re-read as a
+    // source -- doing it left to right smears the whole row to full ink
+    // instead of thickening the strokes in it.
+    for (int y = 0; y < h; y++) {
+        uint8_t *row = cov + (int64_t)y * w;
+        for (int x = w - 1; x >= 0; x--) {
+            uint8_t v = row[x];
+            for (int d = 1; d <= strength && x - d >= 0; d++)
+                if (row[x - d] > v) v = row[x - d];
+            row[x] = v;
+        }
+    }
 }
 
 // --- outline decoding ------------------------------------------------

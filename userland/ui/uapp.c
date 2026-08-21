@@ -219,6 +219,11 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
         // of the thing should still behave correctly when it happens.
         ugfx_font_init();
         if (d->layout) uui_layout_run(d->layout, 0, 0, a->w, a->h);
+        // AFTER the re-map and the re-layout, never before: an app's
+        // on_font almost always re-measures something, and measuring
+        // against the font that just went away is the one mistake this
+        // callback exists to prevent.
+        if (d->on_font) d->on_font(a);
         a->dirty = 1;
         break;
 

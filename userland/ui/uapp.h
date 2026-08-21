@@ -213,6 +213,16 @@ struct uapp_desc {
     // site.
     void (*on_draw_over)(struct uapp *a, struct uapp_draw *d);
 
+    // THE SESSION FONT CHANGED (`fontface`, `fontsize`). By the time
+    // this runs the toolkit has already re-mapped both weights and
+    // re-run the layout, so an app needs this only if it CACHED
+    // something measured from the font -- a column width, a wrapped
+    // line count, its own window size. Most apps do not, which is why
+    // this is optional and why the toolkit handles the event whether or
+    // not an app implements it (ui/uapp.h's usual deal: an app that has
+    // never heard of fonts still behaves correctly when one changes).
+    void (*on_font)(struct uapp *a);
+
     void (*on_key)(struct uapp *a, int key, unsigned mods);
 
     // Content-relative, in pixels. `buttons` is offered these first;

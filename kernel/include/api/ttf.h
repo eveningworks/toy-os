@@ -71,6 +71,16 @@ struct ttf_font {
     uint32_t glyf, loca, cmap, hmtx, head, hhea, maxp;
     uint32_t glyf_len, loca_len;
 
+    // The format-0 horizontal `kern` subtable's PAIR ARRAY, not the
+    // table's own offset -- ttf_open() walks past the headers once so
+    // that a lookup is a binary search and nothing else. 0 (with
+    // kern_pairs 0) when the font has no kerning this understands,
+    // which is the common case: a monospace face has none by
+    // definition, and a modern proportional face may carry its kerning
+    // only in GPOS (see ttf_kern_units()).
+    uint32_t kern_pairs_off;
+    int kern_pairs;
+
     int units_per_em;
     int loca_long;     // head.indexToLocFormat: 0 = u16 halves, 1 = u32
     int num_glyphs;
@@ -127,6 +137,49 @@ static inline fx_t ttf_scale_for_px(const struct ttf_font *f, int px) {
 // Rounded pixel advance of `gid` at `px`. This is the number that makes
 // proportional text possible at all -- see gfx_char_advance().
 int ttf_advance_px(const struct ttf_font *f, int gid, int px);
+
+// Kerning adjustment for the ordered pair (left, right) in font units,
+// or 0 when the font does not kern that pair. Almost always negative:
+// kerning tucks a pair closer than their advances alone would put them
+// ("AV", "To"), which is why text that ignores it looks loose rather
+// than broken.
+//
+// **Only the legacy format-0 horizontal `kern` subtable is read**, and
+// that is a deliberate stopping point rather than an oversight. A
+// modern OpenType face expresses kerning in GPOS, which is a shaping
+// engine's job -- HarfBuzz is ~50k lines and exists because doing this
+// properly means lookups, contextual rules and script logic. Reading
+// `kern` is ~40 lines and covers what this OS actually draws: of the
+// two faces shipped, liberation-sans carries a 908-pair format-0 table
+// and dejavu-sans-mono has none at all (it is monospace, so kerning it
+// would be wrong anyway). A face with GPOS-only kerning simply renders
+// unkerned, exactly as it does today.
+int ttf_kern_units(const struct ttf_font *f, int left_gid, int right_gid);
+
+// The same adjustment rounded to pixels at `px`. Rounded per pair
+// rather than accumulated in font units, because the caller adds it to
+// an already-rounded advance -- carrying sub-pixel positions would mean
+// every drawing path in both rings tracking a fractional pen, which is
+// a much larger change than kerning is worth here.
+int ttf_kern_px(const struct ttf_font *f, int left_gid, int right_gid, int px);
+
+// SYNTHETIC BOLD: thickens an already-rasterized coverage cell in
+// place, by OR-ing each row with itself shifted right by 1..`strength`
+// pixels (taking the maximum coverage, so an antialiased edge stays
+// antialiased). `strength` is clamped to 1..4.
+//
+// This is what GDI does when a family has no bold face, and what Cairo
+// and DirectWrite fall back to for the same reason -- it is visibly
+// worse than a designed bold, especially at small sizes where the
+// smear closes a counter, and it is the only way a face somebody just
+// dropped into /usr/share/fonts can have a bold at all. font_face.c
+// prefers a real `<name>-bold.ttf` and reaches for this only when
+// there is not one.
+//
+// The caller must leave room: emboldening widens a glyph by `strength`
+// pixels, so a cell sized to the unemboldened advance clips. font_face.c
+// adds it to the cell width and to every advance.
+void ttf_embolden(uint8_t *cov, int w, int h, int strength);
 
 // Rasterizes `gid` into `cov` (w*h bytes, row-major, 0 = background,
 // 255 = fully ink), with the glyph origin at (x_origin, baseline) in

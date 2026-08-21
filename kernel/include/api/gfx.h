@@ -44,6 +44,33 @@ int gfx_font_px(void);
 // see gfx_text_width().
 int gfx_char_advance(int c);
 
+// BOLD IS A GRAPHICS-CONTEXT FLAG, not an argument. gfx_set_bold()
+// switches which weight of the active face every subsequent text call
+// draws with, and RETURNS THE PREVIOUS VALUE so that the save/restore
+// idiom is the shortest correct thing to write:
+//
+//     int was = gfx_set_bold(1);
+//     gfx_draw_string(...);
+//     gfx_set_bold(was);
+//
+// This is SelectObject()/LOGFONT's shape, and it carries that shape's
+// hazard: a caller that forgets to restore changes text somewhere
+// unrelated and far away. Ring 3 deliberately does NOT copy it -- the
+// toolkit passes a uui_font handle instead, because a widget tree is
+// precisely where an unrestored global goes wrong.
+//
+// With the baked font (no face loaded) this has NO EFFECT: the baked
+// tables carry one weight, and gfx_bold() will report what was asked
+// for while the glyphs stay regular. See docs/conventions/gui.md.
+int gfx_set_bold(int on);
+int gfx_bold(void);
+
+// The kerning adjustment in pixels between two adjacent characters,
+// 0 when the face does not kern them (and always 0 for the baked font
+// and for a monospace face). Callers drawing their own runs must apply
+// it or their text will not match what gfx_text_width() measured.
+int gfx_kern(int prev, int c);
+
 // Returns 1 on success (a usable RGB framebuffer was found), 0 otherwise.
 int gfx_init(void);
 

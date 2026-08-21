@@ -40,8 +40,8 @@ this the obvious way), not from how much history it accumulated.
   -- a terminal is monospace by definition -- so a proportional face
   gets a cell as wide as its widest advance there.
 
-- **A LOADED FACE STILL ONLY DRAWS 101 GLYPHS, AND THERE ARE NO
-  WEIGHTS.** Two boundaries that surprise people who have just seen a
+- **A LOADED FACE STILL ONLY DRAWS 101 GLYPHS.** The boundary that
+  surprises people who have just seen a
   real TTF load. An atlas rasterizes exactly the set `tools/genttf.py`
   bakes -- ASCII 32-126 plus six Nordic letters (`font_ttf.h`'s
   `FONT_TTF_GLYPH_COUNT`) -- so DejaVu Sans Mono's other ~3,270 glyphs
@@ -54,10 +54,79 @@ this the obvious way), not from how much history it accumulated.
   slot order is ABI, shared through `WIN_REQ_FONT`, so a client built
   against the old count indexes into the wrong glyph rather than failing.
 
-  And `font_face.c` holds ONE selected face, so a `-Bold.ttf` can be
-  chosen as its own face but cannot be drawn beside the regular one --
-  there is no bold window title and no emphasised label, and adding one
-  is the "multiple faces live at once" roadmap item, not a flag.
+  (A ring-3 PRIVATE font is narrower still -- 95 slots, ASCII only --
+  because `ugfx`'s `glyph_index()` is `c - 32` and cannot address the
+  six extras whatever an atlas holds. Rasterizing them would produce
+  glyphs nothing can ask for.)
+
+- **A FONT IS A HANDLE IN RING 3 AND A CONTEXT FLAG IN RING 0.** Ring 3
+  passes `const struct ugfx_font *`, and `ugfx_set_font()` returns the
+  previous one so save/restore is the shortest correct thing to write;
+  `uui_label` has a `font` field. Ring 0 has `gfx_set_bold()`, which
+  also returns the previous value. The asymmetry is deliberate -- ring
+  0's callers are a console and a handful of drawing sites, while a
+  widget tree is precisely where an unrestored global goes wrong, so the
+  toolkit never got a `ugfx_set_bold()`.
+
+  **A widget's font must be selected for MEASUREMENT as well as for
+  drawing.** `natural_size()` is asked by the layout, long before and
+  far away from any paint, so a bold label whose font is selected only
+  at paint time is measured in regular and laid out too narrow -- text
+  drawn into a box sized for a different font. That is why the font
+  lives on the widget rather than being something an app sets around its
+  draw call, and why `uui_label` wraps BOTH halves in a push/restore.
+
+- **THERE ARE TWO FONT TIERS, AND THE SHARED ONE CANNOT GROW TO COVER
+  THE OTHER.** `ugfx_font_session(weight)` is the desktop's face, mapped
+  by the server, free, shared, and it changes under a running app -- one
+  face, two weights, one size, and nothing else. Anything else is the
+  app's own: `ugfx_font_load()` rasterizes a `.ttf` into memory the app
+  owns, with the same `ttf.c` the kernel uses, at any size or face, and
+  follows no setting.
+
+  **Do not "fix" this by teaching `WIN_REQ_FONT` to serve arbitrary
+  combinations.** An atlas is NEVER FREED -- clients hold the mappings
+  and nothing can ask them to let go -- so that change is really "an
+  unbounded product of faces, weights and sizes in a never-evicted ring-0
+  cache". See `docs/decisions.md`.
+
+- **BOLD IS A WEIGHT OF A FAMILY, AND A FAMILY IS A FILENAME RULE.**
+  `<name>.ttf` plus an optional `<name>-bold.ttf` is ONE face, listed
+  once, with both weights loaded and both mapped
+  (`win_font_vaddr(weight)`). A family with no bold file still HAS a
+  bold: the regular outlines are smeared (`ttf_embolden`) and every
+  advance grows to match, which is what GDI does. `vera-mono` ships
+  without a bold companion on purpose, so that path is exercised on
+  every image rather than merely written.
+
+  **Bold is not reliably WIDER, so do not test it that way.** On a
+  monospace face a designed bold has exactly the regular advances, so a
+  width probe reports a perfectly working bold as a fallback. What is
+  true of every bold is more INK in the same letter -- `fontdemo.c`'s
+  `glyph_ink()` reads it out of the atlas the client already has mapped.
+
+- **KERNING IS APPLIED BY EVERY TEXT PATH, AND MEASURING MUST MATCH
+  DRAWING.** `gfx_kern()`/`ugfx_kern()` give the pair adjustment, and
+  every width, fit-count and draw loop in both rings applies it. A path
+  that draws kerned and measures unkerned cuts a clipped string at a
+  different character from the one it draws -- which is why the clipped
+  ring-3 draw applies the kern ITSELF rather than leaving it to the
+  one-character `ugfx_draw_string()` calls it makes (a run of one
+  character has no preceding character, so its own loop always computes
+  0).
+
+  Only the legacy format-0 `kern` table is read; a GPOS-only face
+  renders unkerned, on purpose (doing it properly is a shaping engine).
+  `liberation-sans` is the only shipped face that kerns, so **a kerning
+  check on the default monospace face passes vacuously** -- switch faces
+  first.
+
+  **The overlap trap, and it exists only in ring 0.** A glyph cell there
+  is OPAQUE, so a negative kern makes the new cell's leading columns
+  erase the tail of the letter just drawn ("To" lost the tip of the T's
+  crossbar). `draw_glyph_kerned()` blends exactly those columns instead.
+  Ring 3 needs none of it -- `ugfx_draw_char()` already skips
+  fully-background pixels.
 
 - **THE FONT CAN CHANGE UNDER A RUNNING CLIENT, AND `WIN_EV_FONT` IS
   HOW IT FINDS OUT.** A client maps the font once, at

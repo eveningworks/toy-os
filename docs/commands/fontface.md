@@ -22,6 +22,23 @@ and listing what is available is a directory listing rather than
 something that has to open every file and read its internal `name`
 table.
 
+**A `-bold` file is a WEIGHT, not a face.** `dejavu-sans-mono.ttf` and
+`dejavu-sans-mono-bold.ttf` are one family listed once, and both are
+loaded and rasterized when you select it -- so an app can draw bold
+text beside regular without a second `fontface`. A family with no
+`-bold` file still has a bold: its regular outlines are thickened
+(`ttf_embolden`), which is what GDI does when a family has no bold face
+and what Cairo and DirectWrite fall back to. `vera-mono` ships without
+one on purpose, so that path is exercised rather than merely written.
+
+Pairing by FILENAME rather than by reading each font's own `name` and
+`OS/2` tables is the same call the face name itself makes: the
+directory is small and seeded by the build, so a suffix rule keeps the
+whole registry a directory listing. Real systems do read the metadata
+(fontconfig indexes every file; DirectWrite builds a family tree) --
+they have to cope with whatever fonts a user has, and toy-os does
+not.
+
 Selecting a face parses it (`kernel/lib/ttf.c`) and rasterizes the
 101-glyph set the baked font also carries, at the size currently in
 effect, into an atlas laid out exactly like a baked one -- which is why
@@ -30,10 +47,17 @@ choice persists to `/etc/toyos.conf` as `font_face` and is applied on
 the next boot BEFORE the size, since an arbitrary size is only
 rasterizable once a face is loaded.
 
-Two faces ship: `dejavu-sans-mono` (the classic Linux terminal face) and
-`liberation-sans`, which is PROPORTIONAL and is there so that per-glyph
-advance widths are observable rather than merely implemented -- pick it
-and the desktop's labels visibly narrow.
+Three faces ship, and each is there to make one thing observable rather
+than merely implemented:
+
+| Face | Why it ships |
+|---|---|
+| `dejavu-sans-mono` | the classic Linux terminal face; the default |
+| `liberation-sans` | PROPORTIONAL, so per-glyph advance widths are visible -- pick it and the desktop's labels narrow. It is also the only shipped face with a `kern` table, so it is where kerning can be seen |
+| `vera-mono` | ships with NO `-bold` companion, so it is the only face on the image whose bold is SYNTHESIZED |
+
+The first two carry a real `-bold` file; `vera-mono` deliberately does
+not.
 
 ## What it deliberately does not do
 
@@ -43,10 +67,16 @@ too large: all of them are refused and the face already in use stays
 active. The alternative -- dropping to the baked font on a bad select --
 loses the user's font because of a typo.
 
-**It does not tell running clients to re-ask.** A GUI client maps the
-font once, at startup (`WIN_REQ_FONT`), so windows already open keep the
-old glyphs until they are reopened. The desktop as a whole picks the new
-face up when it restarts, which init does for you if you kill it.
+**It does not do kerning it cannot see.** Kerning comes from the
+legacy format-0 `kern` table; a face that carries its kerning only in
+GPOS (which is most modern OpenType fonts) renders unkerned. Doing that
+properly means a shaping engine -- HarfBuzz exists for this -- and is a
+deliberate stopping point, not an oversight.
+
+**It does not give you more than the 101 baked glyph slots.** A loaded
+face has thousands of glyphs and the atlas rasterizes the same set the
+baked font carries. Widening that is the UTF-8 migration, not a
+constant.
 
 **`builtin` is not a face.** It is the absence of one: the glyph tables
 `tools/genttf.py` baked into the kernel image, which is what the machine

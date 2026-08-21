@@ -21,6 +21,15 @@ void uui_label_set_text(struct uui_label *l, const char *text) {
     l->text = text;
 }
 
+// Selects the label's font for the duration of one measurement or one
+// paint, restoring whatever was current. Both halves need it and both
+// must agree -- see the `font` field's comment in uui_label.h.
+static void uui_label_draw_body(struct ugfx_surface *s, const struct uui_label *l);
+
+static const struct ugfx_font *push_font(const struct uui_label *l) {
+    return ugfx_set_font(l->font); // NULL means the session regular weight
+}
+
 void uui_label_natural_size(const struct uui_label *l, int *out_w, int *out_h) {
     // The TEXT's width, but a height that does not depend on it: a
     // caption whose row count varied with its content would reflow the
@@ -33,11 +42,13 @@ void uui_label_natural_size(const struct uui_label *l, int *out_w, int *out_h) {
     // added to solve, arriving from the other direction. It takes its
     // width from UUI_FILL_W instead; the floor is so that a label
     // declared without it still draws something rather than nothing.
+    const struct ugfx_font *was = push_font(l);
     if (out_w) {
         if (l->wrap) *out_w = ugfx_char_w() * 8;
         else         *out_w = l->text ? ugfx_text_width(l->text) : 0;
     }
     if (out_h) *out_h = ugfx_char_h() * (l->rows > 0 ? l->rows : 1);
+    ugfx_set_font(was);
 }
 
 // See uui_label.h. Not static, so it can be tested directly: the
@@ -69,6 +80,12 @@ const char *uui_label_wrap_next(const char *src, int max_w, char *out, int cap) 
 }
 
 void uui_label_draw(struct ugfx_surface *s, const struct uui_label *l) {
+    const struct ugfx_font *was = push_font(l);
+    uui_label_draw_body(s, l);
+    ugfx_set_font(was);
+}
+
+static void uui_label_draw_body(struct ugfx_surface *s, const struct uui_label *l) {
     if (!l->text || !l->text[0]) return;
     if (!l->wrap) {
         ugfx_draw_string_clipped(s, l->x, l->y, l->w, l->text, l->fg, l->bg);

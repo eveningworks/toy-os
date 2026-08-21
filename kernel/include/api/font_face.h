@@ -30,18 +30,65 @@
 #define FONT_FACE_NAME_LEN  32
 #define FONT_FACE_PATH_LEN  64  // FS_PATH_MAX
 
+// The suffix that makes a file the BOLD MEMBER OF A FAMILY rather than
+// a face of its own: dejavu-sans-mono.ttf and dejavu-sans-mono-bold.ttf
+// are one face named `dejavu-sans-mono` with two weights, and `fontface`
+// lists it once.
+//
+// A FILENAME CONVENTION RATHER THAN THE FONT'S OWN `name` TABLE, and
+// that is the same call the face name itself already makes. Real
+// systems read the metadata: fontconfig scans every file and indexes
+// its family/weight/slant, and DirectWrite builds a family tree from
+// the same tables. That is the right answer when a system must cope
+// with whatever fonts a user has, and it costs a `name` table parser,
+// an OS/2 usWeightClass reader, and a policy for the many files whose
+// metadata disagrees with itself. Here the directory is small, seeded
+// by the build, and already names faces by filename -- so one more
+// suffix rule keeps the whole registry a directory listing.
+#define FONT_BOLD_SUFFIX "-bold"
+
+enum font_weight {
+    FONT_WEIGHT_REGULAR = 0,
+    FONT_WEIGHT_BOLD    = 1,
+    FONT_WEIGHT_COUNT   = 2,
+};
+
 // What gfx.c draws from. Deliberately the same shape a baked
-// font_ttf_variant has, plus the one thing a baked variant cannot have:
-// per-glyph advances.
+// font_ttf_variant has, plus the two things a baked variant cannot
+// have: per-glyph advances, and kerning.
+//
+// The blob's three sections are laid out BACK TO BACK IN THIS ORDER and
+// nothing may reorder them: glyphs, advances, kern. A ring-3 client is
+// told where the glyphs and the advances start and DERIVES the kern
+// table from `advances + count`, so the order is ABI. See
+// WIN_REQ_FONT in abi/win_proto.h.
 struct font_atlas {
     const uint8_t *glyphs;    // count * cell_w * cell_h coverage bytes
     const uint8_t *advances;  // count bytes: pixel advance per glyph
+
+    // KERNING AS A DENSE count x count MATRIX OF SIGNED PIXELS, indexed
+    // [left * count + right] by ATLAS SLOT (not by glyph id -- a client
+    // has no cmap). Always present in a runtime atlas, all zeros for a
+    // face that does not kern.
+    //
+    // Dense rather than a sorted pair list, which is what the font file
+    // itself uses: 101 x 101 is 10 KB, against an atlas that is 14 KB at
+    // 14px and ~640 KB at 64px, and it makes the lookup an array index
+    // on a path that runs once per character drawn. A sorted list would
+    // save a few KB and put a binary search in the inner loop of every
+    // string measurement in both rings. It also makes the layout
+    // UNCONDITIONAL, which is what lets a client derive the offset
+    // instead of being told it.
+    const int8_t *kern;
+
     int cell_w;               // the fixed cell: the WIDEST advance in the set
     int cell_h;
     int count;                // == FONT_TTF_GLYPH_COUNT
     int px;                   // em size this was rasterized at
     int baseline;             // rows from the cell top to the baseline
     int monospace;            // 1 when every advance is equal
+    int weight;               // enum font_weight
+    int synthetic;            // 1 when a bold was SMEARED rather than loaded
     uint64_t phys;            // page-aligned base, for WIN_REQ_FONT's mapping
     uint64_t bytes;           // total size of that allocation
 };
@@ -50,6 +97,10 @@ struct font_face_info {
     char name[FONT_FACE_NAME_LEN];
     char path[FONT_FACE_PATH_LEN];
     uint64_t size;
+    // The family's bold member, or "" when it has none -- in which case
+    // bold is SYNTHESIZED (ttf_embolden()) rather than unavailable.
+    char bold_path[FONT_FACE_PATH_LEN];
+    int has_bold;
 };
 
 // Scans /usr/share/fonts. Cheap -- a directory listing, no file is
@@ -70,12 +121,24 @@ int font_face_select(const char *name);
 // The active face's name, or "" when the baked font is in use.
 const char *font_face_active(void);
 
-// Rasterizes the active face at `px` and returns the atlas, or NULL if
-// no face is active or the build failed. Cached: asking twice for the
-// same (face, px) is free.
-const struct font_atlas *font_face_build(int px);
+// Rasterizes the active face at `px` in `weight` and returns the atlas,
+// or NULL if no face is active or the build failed. Cached: asking
+// twice for the same (face, weight, px) is free.
+//
+// A BOLD BUILD NEVER FAILS BECAUSE THE FAMILY HAS NO BOLD FILE. It
+// falls back to emboldening the regular outlines, which is what GDI
+// does for a family with no bold face and what Cairo and DirectWrite
+// fall back to. `synthetic` on the returned atlas says which happened.
+const struct font_atlas *font_face_build(int px, enum font_weight weight);
 
-// The atlas gfx.c is currently drawing from, or NULL for the baked font.
+// The atlas gfx.c is currently drawing from at `weight`, or NULL when
+// the baked font is in use (which has one weight and no advances).
+const struct font_atlas *font_face_atlas_weight(enum font_weight weight);
+
+// The regular-weight atlas -- font_face_atlas_weight(FONT_WEIGHT_REGULAR).
+// Kept as its own name because most callers are weight-agnostic and
+// spelling out the enum at every one of them reads as if the choice
+// mattered there.
 const struct font_atlas *font_face_atlas(void);
 
 // Total bytes held by the atlas cache, for `meminfo`/`fonts`.

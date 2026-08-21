@@ -53,6 +53,21 @@ struct uui_label {
     // demanding the width of its longest line, which is what would push
     // a page wider than the window).
     int wrap;
+
+    // WHICH FONT THIS LABEL IS IN. NULL -- the default -- means the
+    // session's regular weight, so every existing label is unchanged.
+    // ugfx_font_session(UGFX_FONT_BOLD) makes a heading; a font the app
+    // rasterized itself (ugfx_font_load) makes one at any size or face.
+    //
+    // **IT AFFECTS MEASUREMENT AS WELL AS DRAWING**, and that is the
+    // whole reason it lives on the widget rather than being something
+    // an app sets around its draw call. natural_size() is asked by the
+    // layout, long before and far away from any drawing, so a bold
+    // label whose font was only selected at paint time would be
+    // measured in regular and laid out too narrow -- text drawn into a
+    // box sized for a different font, which is the failure this field
+    // exists to prevent.
+    const struct ugfx_font *font;
 };
 
 void uui_label_init(struct uui_label *l, const char *text);

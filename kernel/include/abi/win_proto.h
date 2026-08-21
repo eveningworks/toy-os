@@ -335,17 +335,35 @@ struct win_event {
                            // last claimant wins, the same way
                            // display_register() lets the last driver
                            // claim the screen.
-#define WIN_REQ_FONT    5 // No inputs. Maps the desktop's ACTIVE font
-                           // read-only into the client at
-                           // WIN_FONT_VADDR and fills in the metrics:
+#define WIN_REQ_FONT    5 // `window` IN: the weight wanted, 0 = regular,
+                           // 1 = bold (WIN_FONT_REGULAR/WIN_FONT_BOLD).
+                           // Maps that weight of the desktop's ACTIVE
+                           // font read-only into the client at
+                           // win_font_vaddr(weight) and fills in the
+                           // metrics:
                            // a = glyph width, b = glyph height,
                            // c = glyph count, d = the byte offset of
                            // glyph 0 within the mapping (the data does
                            // not necessarily start on a page boundary,
-                           // so glyph 0 lives at WIN_FONT_VADDR + d,
-                           // not at WIN_FONT_VADDR).
-                           // `window` is ignored -- a font belongs to
-                           // the session, not to one window.
+                           // so glyph 0 lives at the mapping base + d,
+                           // not at the base).
+                           //
+                           // A font belongs to the SESSION, not to one
+                           // window -- which is why `window` was free
+                           // to become the weight. It is the one
+                           // request whose `window` field never named
+                           // a window.
+                           //
+                           // **A BOLD REQUEST NEVER FAILS FOR WANT OF A
+                           // BOLD FILE.** A family with none gets its
+                           // regular outlines emboldened (font_face.c,
+                           // ttf_embolden) -- what GDI does, and what
+                           // Cairo and DirectWrite fall back to. A
+                           // client cannot tell, and does not need to.
+                           // What DOES fail is asking for bold with no
+                           // face loaded at all: the BAKED font has one
+                           // weight, so the request returns 0 and the
+                           // client keeps drawing regular.
                            //
                            // WHY THE SERVER HANDS OVER THE FONT rather
                            // than each client carrying its own: the
@@ -363,6 +381,26 @@ struct win_event {
                            // pages out of the kernel image itself, so
                            // a writable mapping would let any client
                            // scribble on kernel .rodata.
+                           //
+                           // `mods` OUT carries the byte offset of the
+                           // ADVANCE table within the mapping, or 0
+                           // when there is none (the baked tables carry
+                           // no advances -- every cell is `a` wide).
+                           // 0 is unambiguous because a table can never
+                           // START the mapping: the glyph data does.
+                           //
+                           // **THE KERN TABLE IS DERIVED, NOT
+                           // RETURNED.** A runtime atlas lays its three
+                           // sections back to back in a fixed order --
+                           // glyphs, advances, kern -- so the kern
+                           // matrix begins at `mods + c` and there is
+                           // no field for it. That order is ABI (see
+                           // struct font_atlas in api/font_face.h);
+                           // reordering the blob silently hands every
+                           // client the wrong table rather than failing.
+                           // `mods == 0` means no advances AND no kern.
+                           // win_font_kern_offset() below is the one
+                           // place that arithmetic is written down.
 
 #define WIN_REQ_CLOSE_PID  12 // a: the pid whose window(s) should be
                            // ASKED to close. Returns 1 if at least one
@@ -890,6 +928,46 @@ static inline uint64_t win_buffer_vaddr(uint32_t window) {
 // window's buffer slot so the two regions can never collide however
 // many windows a client opens.
 #define WIN_FONT_VADDR (WIN_CLIENT_BASE + (uint64_t)WIN_CLIENT_MAX * WIN_BUFFER_STRIDE)
+
+// The weights a client may ask for, and the stride between their
+// mappings. Both are mapped AT ONCE and stay mapped -- that is what
+// distinguishes a weight from a size here: the machine is only ever at
+// one size, and a widget picks a weight per run of text.
+#define WIN_FONT_REGULAR 0
+#define WIN_FONT_BOLD    1
+#define WIN_FONT_WEIGHTS 2
+
+// 4 MiB per weight, which is font_face.c's whole atlas cache budget --
+// so no single atlas can overrun its slot. Costs nothing but address
+// space: the gap between WIN_FONT_VADDR and WIN_COMPOSITOR_BASE is
+// 256 MiB, and nothing is mapped until a client asks.
+#define WIN_FONT_STRIDE  0x0000400000ULL
+
+static inline uint64_t win_font_vaddr(int weight) {
+    return WIN_FONT_VADDR + (uint64_t)weight * WIN_FONT_STRIDE;
+}
+
+// Where the kern matrix starts within a font mapping, given the
+// advance-table offset WIN_REQ_FONT reported in `mods` and the glyph
+// count it reported in `c`. 0 when the mapping has no advance table,
+// which means it has no kern table either (the baked font).
+//
+// Written once, here, because the alternative is the same `mods + c`
+// appearing in gfx code, in the toolkit, and in every test -- and a
+// layout change would then have to find all of them.
+static inline uint64_t win_font_kern_offset(uint32_t adv_off, int count) {
+    return adv_off ? adv_off + (uint64_t)count : 0;
+}
+
+// The kern matrix is count x count SIGNED BYTES indexed
+// [left * count + right] by glyph SLOT -- the same slot index the
+// glyph and advance tables use, not a glyph id (a client has no cmap).
+static inline int win_font_kern(const signed char *kern, int count,
+                                 int left_slot, int right_slot) {
+    if (!kern || left_slot < 0 || right_slot < 0
+        || left_slot >= count || right_slot >= count) return 0;
+    return kern[left_slot * count + right_slot];
+}
 
 // --- the compositor's view of OTHER processes' windows ----------------
 //

@@ -63,7 +63,51 @@ static int cur_font_px = 14;
 // asks through active_*() rather than reading either source directly,
 // which is what keeps the fallback honest: there is one place that
 // decides, and it is three lines long.
-static const struct font_atlas *active_atlas(void) { return font_face_atlas(); }
+// WHICH WEIGHT RING 0 IS DRAWING IN, as a graphics-context flag rather
+// than a parameter on every text call. That is SelectObject()/LOGFONT's
+// model and GTK/Cairo's: a device context carries a font, and drawing
+// uses whatever it carries. The cost is the cost of any such flag --
+// a caller that sets it and does not restore it changes text somewhere
+// unrelated -- which is why gfx_set_bold() RETURNS THE PREVIOUS VALUE,
+// so the save/restore idiom is the shortest thing to write.
+//
+// Ring 3 does not inherit this design: the toolkit has a uui_font
+// handle instead, because a widget tree is exactly where an unrestored
+// global goes wrong.
+static int cur_bold;
+
+// Defined with the rest of the glyph machinery further down; needed
+// here by gfx_kern(), which has to sit beside the weight state it reads.
+static int font_ttf_glyph_index(int c);
+
+static const struct font_atlas *active_atlas(void) {
+    return font_face_atlas_weight(cur_bold ? FONT_WEIGHT_BOLD : FONT_WEIGHT_REGULAR);
+}
+
+int gfx_set_bold(int on) {
+    int prev = cur_bold;
+    cur_bold = on ? 1 : 0;
+    return prev;
+}
+
+int gfx_bold(void) { return cur_bold; }
+
+// The kerning adjustment between two already-drawn characters, in
+// pixels -- 0 for the baked font, for a monospace face, and for any
+// pair the face does not kern. `prev` is 0 at the start of a run.
+//
+// Applied by EVERY text path in this file, which is the property that
+// matters: measurement and drawing must agree, or a clipped string is
+// cut at a different character from the one it is drawn to.
+int gfx_kern(int prev, int c) {
+    if (!prev) return 0;
+    const struct font_atlas *a = active_atlas();
+    if (!a || !a->kern) return 0;
+    int l = font_ttf_glyph_index(prev);
+    int r = font_ttf_glyph_index(c);
+    if (l < 0 || r < 0 || l >= a->count || r >= a->count) return 0;
+    return a->kern[l * a->count + r];
+}
 
 // A baked size's name IS its point size ("8".."24", see genttf.py), so
 // this parses rather than carrying a second table that could drift from
@@ -111,7 +155,15 @@ int gfx_font_px(void) { return cur_font_px; }
 int gfx_set_font_px(int px) {
     if (px < 1 || px > 256) return 0;
     if (font_face_active()[0]) {
-        if (!font_face_build(px)) return 0;
+        if (!font_face_build(px, FONT_WEIGHT_REGULAR)) return 0;
+        // BOTH WEIGHTS, EAGERLY, AND THE BOLD ONE MAY FAIL WITHOUT
+        // FAILING THE SIZE. Building it lazily on the first bold draw
+        // would put a ~10 ms rasterization of 101 glyphs inside a paint,
+        // and a size change is exactly when the machine is already
+        // reflowing everything. A bold build that runs out of cache
+        // leaves gfx_set_bold() drawing regular, which is degraded
+        // rather than broken.
+        font_face_build(px, FONT_WEIGHT_BOLD);
         cur_font_px = px;
         cur_font_size = nearest_baked(px);
         return 1;
@@ -669,7 +721,29 @@ static int font_ttf_glyph_index(int c) {
 // drawing passes the glyph's ADVANCE instead, so a proportional face
 // does not paint cell_w of background past the last letter and over
 // whatever the caller drew beside it.
+static void draw_glyph_kerned(int x, int y, int c, int cols, int kern,
+                              uint32_t fg, uint32_t bg);
+
 static void draw_glyph(int x, int y, int c, int cols, uint32_t fg, uint32_t bg) {
+    draw_glyph_kerned(x, y, c, cols, 0, fg, bg);
+}
+
+// **WHY A KERNED GLYPH CANNOT SIMPLY PAINT ITS OWN BACKGROUND.** A cell
+// here is OPAQUE: every pixel is written, the background included, which
+// is what lets the console overwrite a character in place. A negative
+// kern moves the pen LEFT, so the new cell's leading columns sit on top
+// of the previous glyph's last ones -- and painting background there
+// erases the tail of the letter that was just drawn. "To" lost the right
+// tip of the T's crossbar, which reads as a rasterizer bug rather than a
+// spacing one.
+//
+// So the overlapping columns are BLENDED over whatever is already on
+// screen (gfx_blend_pixel, which reads the framebuffer back) instead of
+// composited against `bg`. Only those columns: the rest of the cell is
+// opaque exactly as before, so the console's overwrite-in-place
+// behaviour is untouched -- kern is 0 on every path it uses.
+static void draw_glyph_kerned(int x, int y, int c, int cols, int kern,
+                              uint32_t fg, uint32_t bg) {
     const struct font_atlas *a = active_atlas();
     int idx = font_ttf_glyph_index(c);
     if (idx < 0) idx = font_ttf_glyph_index('?');
@@ -695,9 +769,16 @@ static void draw_glyph(int x, int y, int c, int cols, uint32_t fg, uint32_t bg) 
     uint8_t bg_g = unpack_channel(bg, green_pos, green_size);
     uint8_t bg_b = unpack_channel(bg, blue_pos, blue_size);
 
+    int overlap = kern < 0 ? -kern : 0;
+    if (overlap > cols) overlap = cols;
+
     for (int row = 0; row < gh; row++) {
         for (int col = 0; col < cols; col++) {
             uint8_t alpha = glyph[row * gw + col];
+            if (col < overlap) {
+                gfx_blend_pixel(x + col, y + row, fg, alpha);
+                continue;
+            }
             uint32_t color;
             if (alpha == 0) {
                 color = bg;
@@ -752,8 +833,12 @@ int gfx_text_width(const char *s) {
     // unguarded, and the ring-3 ugfx_text_width() has always accepted
     // it. Two halves of one API disagreeing about NULL is its own bug.
     if (!s) return 0;
-    int w = 0;
-    for (int i = 0; s[i] && s[i] != '\n'; i++) w += gfx_char_advance((unsigned char)s[i]);
+    int w = 0, prev = 0;
+    for (int i = 0; s[i] && s[i] != '\n'; i++) {
+        int c = (unsigned char)s[i];
+        w += gfx_kern(prev, c) + gfx_char_advance(c);
+        prev = c;
+    }
     return w;
 }
 
@@ -766,11 +851,13 @@ int gfx_text_fit_chars(const char *s, int max_w) {
     if (!s) return 0;
     if (gfx_char_w() <= 0) return 0;
     int n = 0;
-    int used = 0;
+    int used = 0, prev = 0;
     while (s[n] && s[n] != '\n') {
-        int adv = gfx_char_advance((unsigned char)s[n]);
+        int c = (unsigned char)s[n];
+        int adv = gfx_kern(prev, c) + gfx_char_advance(c);
         if (used + adv > max_w) break;
         used += adv;
+        prev = c;
         n++;
     }
     return n;
@@ -805,26 +892,33 @@ int gfx_text_prev(const char *s, int i) {
 int gfx_draw_string_clipped(int x, int y, int max_w, const char *s,
                              uint32_t fg, uint32_t bg) {
     int n = gfx_text_fit_chars(s, max_w);
-    int cx = x;
+    int cx = x, prev = 0;
     for (int i = 0; i < n; i++) {
-        int adv = gfx_char_advance((unsigned char)s[i]);
-        draw_glyph(cx, y, (unsigned char)s[i], adv, fg, bg);
-        cx += adv;
+        int c = (unsigned char)s[i];
+        int k = gfx_kern(prev, c);
+        cx += k;
+        draw_glyph_kerned(cx, y, c, gfx_char_advance(c), k, fg, bg);
+        cx += gfx_char_advance(c);
+        prev = c;
     }
     return s[n] == '\0' || s[n] == '\n';
 }
 
 void gfx_draw_string(int x, int y, const char *s, uint32_t fg, uint32_t bg) {
-    int cx = x;
+    int cx = x, prev = 0;
     int ch = gfx_char_h();
     while (*s) {
         if (*s == '\n') {
             cx = x;
             y += ch;
+            prev = 0; // a new row starts a new run -- nothing kerns across it
         } else {
-            int adv = gfx_char_advance((unsigned char)*s);
-            draw_glyph(cx, y, (unsigned char)*s, adv, fg, bg);
-            cx += adv;
+            int c = (unsigned char)*s;
+            int k = gfx_kern(prev, c);
+            cx += k;
+            draw_glyph_kerned(cx, y, c, gfx_char_advance(c), k, fg, bg);
+            cx += gfx_char_advance(c);
+            prev = c;
         }
         s++;
     }
