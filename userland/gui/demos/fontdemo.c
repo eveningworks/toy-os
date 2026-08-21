@@ -27,6 +27,7 @@
 //   fontdemo: preview face "<name>" bold <0|1> base <px> text-w <w>
 //   fontdemo: preview size <px> <loaded|failed>
 #include "rt/sys.h"
+#include "ui/ulog.h"
 #include "ui/uapp.h"
 #include "ui/ugfx.h"
 #include "ui/uui_dropdown.h"
@@ -35,8 +36,6 @@
 #include "ui/uui_textbox.h"
 #include "ui/uui_focus.h"
 #include "ui/utheme.h"
-#include <stdio.h>
-#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -66,9 +65,9 @@ static const char *const FACE_NAMES[FACE_COUNT] = {
 // The size control: a BASE size, and the ladder is {base, 1.5x, 2x}.
 // Bounded so 2x still fits a sensible window -- the window is sized for
 // the top of this range in on_size().
-#define SIZE_MIN 10
-#define SIZE_MAX 28
-#define SIZE_DEF 16
+#define FD_SIZE_MIN 10
+#define FD_SIZE_MAX 28
+#define FD_SIZE_DEF 16
 #define PREVIEW_ROWS 3
 
 // The kerning sample, unchanged from the plumbing probe: every pair in
@@ -110,14 +109,6 @@ static struct {
     int session_w, session_h, bold_w, bold_h;
 } g;
 
-static void logf_line(const char *fmt, ...) {
-    char line[192];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(line, sizeof line, fmt, ap);
-    va_end(ap);
-    sys_eprint(line);
-}
 
 // --- the plumbing probes (session font), kept for font_test.py --------
 
@@ -150,7 +141,7 @@ static void report(void) {
     const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_REGULAR));
     g.session_w = ugfx_text_width("Handgloves");
     g.session_h = ugfx_char_h();
-    logf_line("fontdemo: session regular %dx%d\n", g.session_w, g.session_h);
+    ulogf("fontdemo: session regular %dx%d\n", g.session_w, g.session_h);
 
     ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
     g.bold_w = ugfx_text_width("Handgloves");
@@ -159,11 +150,11 @@ static void report(void) {
     // face carries the regular advances, so width reports "distinct 0"
     // for a perfectly working bold. More ink in the same letter is what
     // is true of every bold, monospace or not.
-    logf_line("fontdemo: session bold %dx%d distinct %d\n", g.bold_w, g.bold_h,
+    ulogf("fontdemo: session bold %dx%d distinct %d\n", g.bold_w, g.bold_h,
               glyph_ink(ugfx_font_session(UGFX_FONT_BOLD), 'H')
                   > glyph_ink(ugfx_font_session(UGFX_FONT_REGULAR), 'H') ? 1 : 0);
 
-    logf_line("fontdemo: session-descender g regular %d bold %d cell %d\n",
+    ulogf("fontdemo: session-descender g regular %d bold %d cell %d\n",
               glyph_bottom_slack(ugfx_font_session(UGFX_FONT_REGULAR), 'g'),
               glyph_bottom_slack(ugfx_font_session(UGFX_FONT_BOLD), 'g'),
               ugfx_char_h());
@@ -172,7 +163,7 @@ static void report(void) {
     int plain = ugfx_text_width(KERN_SAMPLE);
     int unkerned = 0;
     for (int i = 0; KERN_SAMPLE[i]; i++) unkerned += ugfx_char_advance(KERN_SAMPLE[i]);
-    logf_line("fontdemo: kern \"%s\" plain %d unkerned %d\n", KERN_SAMPLE, plain, unkerned);
+    ulogf("fontdemo: kern \"%s\" plain %d unkerned %d\n", KERN_SAMPLE, plain, unkerned);
 
     ugfx_set_font(was);
 }
@@ -197,7 +188,7 @@ static void reload_fonts(void) {
     if (face < 0 || face >= FACE_COUNT) face = 0;
     int bold = g.bold.checked ? 1 : 0;
     int base = uui_spinbox_value(&g.size);
-    if (base < SIZE_MIN) base = SIZE_MIN;
+    if (base < FD_SIZE_MIN) base = FD_SIZE_MIN;
 
     const char *path = (bold && FACES[face].bold) ? FACES[face].bold
                                                   : FACES[face].regular;
@@ -228,7 +219,7 @@ static void reload_fonts(void) {
 // fonts are untouched; this only re-logs what they already are.
 static void log_preview(void) {
     for (int i = 0; i < PREVIEW_ROWS; i++)
-        logf_line("fontdemo: preview size %d %s\n", g.px[i],
+        ulogf("fontdemo: preview size %d %s\n", g.px[i],
                   g.ok[i] ? "loaded" : "failed");
 
     // The width of the current text at the base size -- the number that
@@ -240,12 +231,12 @@ static void log_preview(void) {
         tw = ugfx_text_width(uui_textbox_text(&g.text));
         ugfx_set_font(was);
     }
-    logf_line("fontdemo: preview face \"%s\" bold %d base %d text-w %d\n",
+    ulogf("fontdemo: preview face \"%s\" bold %d base %d text-w %d\n",
               FACES[g.cur_face].name, g.cur_bold, g.cur_base, tw);
 
     // The family-dropdown rect (content-relative), so a test drives it by
     // asking rather than guessing pixels -- the notepad/taskmgr pattern.
-    logf_line("fontdemo: layout family %d %d %d %d\n",
+    ulogf("fontdemo: layout family %d %d %d %d\n",
               g.family.x, g.family.y, g.family.w, g.family.h);
 }
 
@@ -286,6 +277,7 @@ static void apply(struct uapp *a) {
 }
 
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
+    (void)a;
     struct ugfx_surface *s = d->surface;
     // The toolkit cleared the surface and will paint the controls on top
     // of this. Everything drawn here sits in the preview area below them.
@@ -381,14 +373,14 @@ static void on_open(struct uapp *a) {
 static void on_size(int *w, int *h) {
     *w = ugfx_char_w() * 56;
     if (*w < 620) *w = 620;
-    int ladder = SIZE_MAX + (SIZE_MAX + SIZE_MAX / 2) + SIZE_MAX * 2; // ~4.5x
+    int ladder = FD_SIZE_MAX + (FD_SIZE_MAX + FD_SIZE_MAX / 2) + FD_SIZE_MAX * 2; // ~4.5x
     *h = (ugfx_char_h() + 10) * 2 + GAP * 2 + ladder + PREVIEW_ROWS * 8 + PAD * 3;
 }
 
 int main(void) {
     uui_dropdown_init(&g.family, 0, 0, 0, 0, FACE_NAMES, FACE_COUNT);
     uui_checkbox_init(&g.bold, 0, 0, 0, "Bold", UTHEME_PANEL_BG, UTHEME_TEXT);
-    uui_spinbox_init(&g.size, SIZE_DEF, SIZE_MIN, SIZE_MAX, 2, "px");
+    uui_spinbox_init(&g.size, FD_SIZE_DEF, FD_SIZE_MIN, FD_SIZE_MAX, 2, "px");
     uui_textbox_init(&g.text, PANGRAM);
 
     g.items[0] = (struct uui_item){ .ops = &uui_dropdown_ops, .widget = &g.family, .id = ID_FAMILY };

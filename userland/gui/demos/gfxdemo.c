@@ -16,6 +16,7 @@
 // so tools/gfxdemo_test.py can assert on behaviour rather than pixels
 // alone -- the grammar apps/uidemo.c established.
 #include <stdint.h>
+#include "ui/ulog.h"
 #include "rt/sys.h"
 #include "ui/ugfx.h"
 #include "ui/uui.h"
@@ -104,12 +105,6 @@ static const uint8_t CUBE_EDGES[12][2] = {
     {0,4},{1,5},{2,6},{3,7},   // the struts
 };
 
-// Diagnostics go to STDERR, which the kernel routes to the kernel log
-// rather than to a terminal. A GUI client has no terminal attached, so
-// stdout would land wherever the console's sink happens to point; the
-// kernel log reaches the serial console and `dmesg`, which is where
-// tools/gfxdemo_test.py reads these lines from.
-static void log_line(const char *s) { sys_eprint(s); }
 
 // Appends a decimal integer. There is no printf in ring 3 yet (see
 // docs/roadmap.md's C library requirements), and the log grammar is
@@ -138,7 +133,7 @@ static void log_layout(void) {
     n = append_int(b, n, g_canvas.h);
     b[n++] = '\n';
     b[n] = '\0';
-    log_line(b);
+    ulog(b);
 }
 
 // "gfxdemo: layout buttons <x> <y> <w> <h> <pitch> <count>" -- enough to
@@ -160,7 +155,7 @@ static void log_buttons(void) {
     }
     b[n++] = '\n';
     b[n] = '\0';
-    log_line(b);
+    ulog(b);
 }
 
 static void log_speed(void) {
@@ -171,12 +166,12 @@ static void log_speed(void) {
     n = append_int(b, n, g_speed);
     b[n++] = '\n';
     b[n] = '\0';
-    log_line(b);
+    ulog(b);
 }
 
 
 static void log_scene(void) {
-    log_line(g_scene == SCENE_3D ? "gfxdemo: scene 3d\n" : "gfxdemo: scene 2d\n");
+    ulog(g_scene == SCENE_3D ? "gfxdemo: scene 3d\n" : "gfxdemo: scene 2d\n");
 }
 
 static int checkbox_y(void) { return WIN_H - MARGIN - ugfx_char_h() - 8; }
@@ -358,7 +353,7 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     (void)mods;
     if (key == 'q') { uapp_quit(a, 0); return; } // Esc no longer closes -- Alt+F4 does
     if (key == 'a' || key == 'A') {
-        log_line(uui_checkbox_toggle(&g_aa_check)
+        ulog(uui_checkbox_toggle(&g_aa_check)
                   ? "gfxdemo: aa on\n" : "gfxdemo: aa off\n");
     }
     if (key == 's' || key == 'S') {
@@ -376,7 +371,7 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
 static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
     (void)a; (void)buttons;
     if (uui_checkbox_hit(&g_aa_check, x, y)) {
-        log_line(uui_checkbox_toggle(&g_aa_check)
+        ulog(uui_checkbox_toggle(&g_aa_check)
                   ? "gfxdemo: aa on\n" : "gfxdemo: aa off\n");
     }
 }
@@ -421,8 +416,8 @@ static void on_open(struct uapp *a) {
     g_aa_check.checked = 1;
     layout();
 
-    log_line("gfxdemo: ready\n");
-    log_line("gfxdemo: aa on\n");
+    ulog("gfxdemo: ready\n");
+    ulog("gfxdemo: aa on\n");
     log_layout();
     log_buttons();
     log_speed();
@@ -454,6 +449,6 @@ int main(void) {
         .on_action = on_action,
     };
     int rc = uapp_run(&desc);
-    log_line("gfxdemo: exiting\n");
+    ulog("gfxdemo: exiting\n");
     return rc;
 }

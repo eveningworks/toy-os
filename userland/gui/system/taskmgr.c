@@ -35,6 +35,7 @@
 // a process: see abi/syscall_abi.h's SYS_KILL on why there is no
 // permission check and why the WM is not special-cased.
 #include <stdint.h>
+#include "ui/ulog.h"
 #include <stdarg.h>
 #include "rt/sys.h"
 #include <string.h>
@@ -48,18 +49,6 @@
 #include "ui/uui_layout.h"
 #include "ui/uui_widget.h"
 
-// Diagnostics go to STDERR, which the kernel routes to its log and to
-// dmesg. A windowed client's stdout goes nowhere useful -- finding that
-// out cost a previous session half an hour of "the app is clearly
-// running and the log is empty" (CLAUDE.md).
-static void logf_(const char *fmt, ...) {
-    char line[128];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(line, sizeof line, fmt, ap);
-    va_end(ap);
-    sys_eprint(line);
-}
 
 #define ID_TABLE   1
 #define ID_END     2
@@ -262,7 +251,7 @@ static void on_widget(struct uapp *a, int id, int reason) {
         // The selection moved: any arm was aimed at the previous row and
         // must not survive onto this one.
         if (g_armed) { g_armed = 0; set_labels(); }
-        logf_("taskmgr: selected pid %d\n", selected_pid());
+        ulogf("taskmgr: selected pid %d\n", selected_pid());
         uapp_redraw(a);
         return;
     }
@@ -281,14 +270,14 @@ static void on_widget(struct uapp *a, int id, int reason) {
         // Nothing selected: say so. A silent return here is
         // indistinguishable from a click that missed the button
         // entirely, and a test cannot tell those apart from outside.
-        logf_("taskmgr: no row selected\n");
+        ulogf("taskmgr: no row selected\n");
         return;
     }
 
     if (g_armed != id) {          // first click: arm
         g_armed = id;
         set_labels();
-        logf_("taskmgr: armed %s pid %d\n",
+        ulogf("taskmgr: armed %s pid %d\n",
                 id == ID_KILL ? "kill" : "end", pid);
         uapp_redraw(a);
         return;
@@ -297,15 +286,15 @@ static void on_widget(struct uapp *a, int id, int reason) {
     g_armed = 0;                   // second click: commit
     if (id == ID_KILL) {
         sys_kill(pid, 137); // 128 + SIGKILL's 9, the shell convention
-        logf_("taskmgr: killed pid %d\n", pid);
+        ulogf("taskmgr: killed pid %d\n", pid);
     } else {
         // Polite: ask the window to close. A process with no window
         // simply has nothing to ask, which is reported rather than
         // silently doing nothing.
         if (!uapp_request_close_pid(a, pid)) {
-            logf_("taskmgr: pid %d has no window to close\n", pid);
+            ulogf("taskmgr: pid %d has no window to close\n", pid);
         } else {
-            logf_("taskmgr: asked pid %d to close\n", pid);
+            ulogf("taskmgr: asked pid %d to close\n", pid);
         }
     }
     set_labels();
@@ -340,16 +329,16 @@ static void report_sort(int force) {
     last_dir = g_table.sort_dir;
     strlcpy(last_order, order, sizeof last_order);
 
-    logf_("taskmgr: sort col %d dir %d\n", g_table.sort_col, g_table.sort_dir);
+    ulogf("taskmgr: sort col %d dir %d\n", g_table.sort_col, g_table.sort_dir);
     // Each column's own rect, so a test can click a HEADER without
     // re-deriving column widths from the character counts in COLUMNS[]
     // -- the re-derivation that has drifted in four tools here already.
     for (int c = 0; c < COL_COUNT; c++) {
         int colx, colw;
         uui_table_column_rect(&g_table, c, &colx, &colw);
-        logf_("taskmgr: layout col%d %d %d\n", c, colx, colw);
+        ulogf("taskmgr: layout col%d %d %d\n", c, colx, colw);
     }
-    logf_("taskmgr: order %s\n", order);
+    ulogf("taskmgr: order %s\n", order);
 }
 
 static int on_tick(struct uapp *a) {
@@ -360,16 +349,16 @@ static int on_tick(struct uapp *a) {
     if (g_table.w != last_w || g_table.h != last_h) {
         last_w = g_table.w;
         last_h = g_table.h;
-        logf_("taskmgr: layout table %d %d %d %d\n",
+        ulogf("taskmgr: layout table %d %d %d %d\n",
                 g_table.x, g_table.y, g_table.w, g_table.h);
         // The BUTTONS move with it -- they sit below the table, so a
         // resize relocates them. Reporting only the table left a tool
         // clicking the buttons' pre-resize coordinates, which misses
         // them entirely and reads as "the button does nothing".
-        logf_("taskmgr: layout btn_end %d %d %d %d\n",
+        ulogf("taskmgr: layout btn_end %d %d %d %d\n",
                 g_buttons[BTN_END].x, g_buttons[BTN_END].y,
                 g_buttons[BTN_END].w, g_buttons[BTN_END].h);
-        logf_("taskmgr: layout btn_kill %d %d %d %d\n",
+        ulogf("taskmgr: layout btn_kill %d %d %d %d\n",
                 g_buttons[BTN_KILL].x, g_buttons[BTN_KILL].y,
                 g_buttons[BTN_KILL].w, g_buttons[BTN_KILL].h);
     }
@@ -388,21 +377,21 @@ static void on_open(struct uapp *a) {
     // Report the layout for the test tool, per this repo's rule that a
     // geometry a tool would otherwise re-derive belongs in the app's own
     // log (four tools have been bitten by re-deriving one).
-    logf_("taskmgr: layout table %d %d %d %d\n",
+    ulogf("taskmgr: layout table %d %d %d %d\n",
             g_table.x, g_table.y, g_table.w, g_table.h);
-    logf_("taskmgr: layout row_h %d header_h %d\n",
+    ulogf("taskmgr: layout row_h %d header_h %d\n",
             uui_table_row_h(&g_table), uui_table_header_h(&g_table));
     // The BUTTONS too. A geometry an app does not report is one a test
     // re-derives in Python and gets wrong -- which happened here on the
     // first attempt at driving this window, and is the same mistake four
     // other tools in this repo have already paid for.
-    logf_("taskmgr: layout btn_end %d %d %d %d\n",
+    ulogf("taskmgr: layout btn_end %d %d %d %d\n",
             g_buttons[BTN_END].x, g_buttons[BTN_END].y,
             g_buttons[BTN_END].w, g_buttons[BTN_END].h);
-    logf_("taskmgr: layout btn_kill %d %d %d %d\n",
+    ulogf("taskmgr: layout btn_kill %d %d %d %d\n",
             g_buttons[BTN_KILL].x, g_buttons[BTN_KILL].y,
             g_buttons[BTN_KILL].w, g_buttons[BTN_KILL].h);
-    logf_("taskmgr: rows %d\n", g_row_count);
+    ulogf("taskmgr: rows %d\n", g_row_count);
 
     // The sort state, and the pids IN SCREEN ORDER. The order line is
     // what makes a sorting test assertable at all: "the table changed"

@@ -24,6 +24,7 @@
 // the row you arrived on is marked "current" -- with staging, that is
 // what makes an accidental click visible.)
 #include <stdint.h>
+#include "ui/ulog.h"
 #include <stdarg.h>
 #include "rt/sys.h"
 #include <string.h>
@@ -192,17 +193,6 @@ static struct uui_statusbar g_status_bar;
 static char g_page_title_text[SETTING_ABI_LABEL_MAX];
 static char g_page_desc_text[SETTING_ABI_DESC_MAX];
 
-static void logf_(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
-static void logf_(const char *fmt, ...) {
-    // stderr, not stdout: a windowed client has no terminal, and the
-    // kernel routes stderr to the log where a test tool can read it.
-    char buf[256];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(buf, sizeof buf, fmt, ap);
-    va_end(ap);
-    sys_eprint(buf);
-}
 
 // --- reading the registry --------------------------------------------
 
@@ -560,7 +550,7 @@ static void open_group(int g) {
     if (!g_status[0] || g_page_group == g)
         snprintf(g_status, sizeof g_status, "%s", g_page_title_text);
     relayout_page();
-    logf_("settings: page %s/%s slots %d advanced %d\n",
+    ulogf("settings: page %s/%s slots %d advanced %d\n",
           g_group_cat[g], g_group_key[g], g_slot_count, hidden_advanced);
 }
 
@@ -598,7 +588,7 @@ static int apply_page(void) {
         strlcpy(m.value, staged_value(sl), sizeof m.value);
         if (sys_setting(&m) != 0) { failed++; continue; }
 
-        logf_("settings: set %s %s result %u\n", g_name[sl->setting],
+        ulogf("settings: set %s %s result %u\n", g_name[sl->setting],
               staged_value(sl), m.result);
         if (m.result == SETTING_SAVED) changed++;
         else if (m.result == SETTING_UNSAVED) { changed++; unsaved++; }
@@ -858,7 +848,7 @@ static void on_widget(struct uapp *a, int id, int reason) {
             // back from a screenshot would be asserting the wrong thing
             // anyway -- what matters is that the change was staged and
             // NOT written.
-            logf_("settings: staged %s %s\n", g_name[sl->setting],
+            ulogf("settings: staged %s %s\n", g_name[sl->setting],
                   staged_value(sl));
         }
         uapp_redraw(a);
@@ -1026,18 +1016,18 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
             // observable difference between a wrapped explanation and a
             // truncated one, and settings_test asserts that at least
             // one description on a page actually took two rows.
-            logf_("settings: prose %d %s rows %d width %d text %d\n", i,
+            ulogf("settings: prose %d %s rows %d width %d text %d\n", i,
                   sl->setting >= 0 ? g_name[sl->setting] : "-",
                   sl->explain.rows, sl->explain.w,
                   sl->setting >= 0 ? ugfx_text_width(g_desc[sl->setting]) : 0);
-            logf_("settings: control %d %s %d %d %d %d rows %d kind %s\n", i,
+            ulogf("settings: control %d %s %d %d %d %d rows %d kind %s\n", i,
                   sl->setting >= 0 ? g_name[sl->setting] : "-", x, y, w, hh,
                   sl->choice_count,
                   sl->kind == CTRL_COMBO ? "combo"
                     : sl->kind == CTRL_SLIDER ? "slider"
                     : sl->kind == CTRL_SPIN ? "spin" : "radio");
         }
-        logf_("settings: advanced_toggle %d %d %d %d shown %d\n",
+        ulogf("settings: advanced_toggle %d %d %d %d shown %d\n",
               g_advanced_cb.x, g_advanced_cb.y, g_advanced_cb.w, g_advanced_cb.h,
               g_advanced_has);
     }
@@ -1048,17 +1038,17 @@ static void on_open(struct uapp *a) {
     // The lines tools/ asserts on. Kept in the app rather than derived
     // from a screenshot because a layout is a fact, and a number a test
     // can read beats a picture it has to interpret.
-    logf_("settings: settings %d\n", g_setting_count);
-    logf_("settings: categories %d\n", g_cat_count);
-    logf_("settings: groups %d\n", g_group_count);
-    logf_("settings: nodes %d\n", g_node_count);
-    logf_("settings: layout tree %d %d %d %d\n",
+    ulogf("settings: settings %d\n", g_setting_count);
+    ulogf("settings: categories %d\n", g_cat_count);
+    ulogf("settings: groups %d\n", g_group_count);
+    ulogf("settings: nodes %d\n", g_node_count);
+    ulogf("settings: layout tree %d %d %d %d\n",
           g_tree.x, g_tree.y, g_tree.w, g_tree.h);
-    logf_("settings: layout page %d %d %d %d\n",
+    ulogf("settings: layout page %d %d %d %d\n",
           PAGE_SCROLL.x, PAGE_SCROLL.y, PAGE_SCROLL.w, PAGE_SCROLL.h);
     // The button group holds its buttons' geometry, not its own -- so
     // report the first button's, which is what a test clicks anyway.
-    logf_("settings: layout buttons %d %d %d %d\n",
+    ulogf("settings: layout buttons %d %d %d %d\n",
           g_btn[0].x, g_btn[0].y, g_btn[0].w, g_btn[0].h);
     // Every visible sidebar row, with the y a click should land on --
     // reported by the app rather than re-derived in Python, for the
@@ -1079,7 +1069,7 @@ static void on_open(struct uapp *a) {
         // before the label instead swallowed it into the label, because
         // a label may contain spaces and is therefore captured as the
         // rest of the line.
-        logf_("settings: row %d id %d y %d depth %d %s\n",
+        ulogf("settings: row %d id %d y %d depth %d %s\n",
               r, g_nodes[r].id, g_tree.y + r * rh + rh / 2,
               g_nodes[r].kind == UUI_SIDEBAR_HEADING ? 0 : 1,
               g_nodes[r].label);

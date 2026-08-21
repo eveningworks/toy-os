@@ -40,6 +40,7 @@
 //      "font changed" event to do the same, and there isn't one yet
 //      (see docs/roadmap.md's Milestone 41).
 #include <stdint.h>
+#include "ui/ulog.h"
 #include "rt/sys.h"
 #include "ui/ugfx.h"
 #include "ui/uui.h"
@@ -139,24 +140,6 @@ static char code_for_key(int key) {
     return 0;
 }
 
-// --- self-reported layout --------------------------------------------
-//
-// Calculator reports where its buttons actually are, rather than
-// letting tools/calculator_client_test.py re-derive them from the
-// window size. That test used to invert this app's old sizing formula
-// in Python (`char_h = (ch - 150) // 7`), which is exactly the trap
-// uidemo_test.py and gfxdemo_test.py document: the Python copy drifts
-// silently the moment the layout changes. It did drift here -- after
-// the move to uui_layout it computed a char_h of 18 against a real 17,
-// and its clicks landed several pixels off centre. They still landed
-// INSIDE the buttons, so the suite stayed green while measuring
-// something it no longer understood. That is a worse failure than a
-// red test, and this is the fix.
-//
-// Grammar matches the other two: one line per widget, content-relative,
-// on stderr (which reaches dmesg -- a client's stdout goes to its
-// owning Terminal's scrollback, where no test can read it).
-static void log_line(const char *s) { sys_eprint(s); }
 
 static int append_int(char *buf, int n, int v) {
     if (v < 0) { buf[n++] = '-'; v = -v; }
@@ -182,7 +165,7 @@ static void log_rect(const char *what, const char *name, int x, int y, int w, in
     n = append_int(b, n, h);
     b[n++] = '\n';
     b[n] = '\0';
-    log_line(b);
+    ulog(b);
 }
 
 // --- the layout ------------------------------------------------------
@@ -224,7 +207,7 @@ static void on_open(struct uapp *a) {
         log_rect("btn", BUTTONS[i].label,
                   g_buttons[i].x, g_buttons[i].y, g_buttons[i].w, g_buttons[i].h);
     }
-    log_line("calculator: ready\n");
+    ulog("calculator: ready\n");
 }
 
 int main(void) {

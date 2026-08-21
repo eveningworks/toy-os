@@ -34,6 +34,7 @@
 //   crashtest: ring0 <kind> refused
 //   crashtest: armed <0|1> kinds <n>
 #include "rt/sys.h"
+#include "ui/ulog.h"
 #include "ui/uapp.h"
 #include "ui/uui_button.h"
 #include "ui/uui_button_group.h"
@@ -73,7 +74,6 @@ static int g_armed;
 static struct uui_statusbar g_status;
 static char g_status_msg[96];
 
-static void logf_(const char *s) { sys_eprint(s); }
 
 // --- the ring-3 faults ------------------------------------------------
 //
@@ -105,16 +105,16 @@ static void r3_stack_overflow(void) {
 
 static void do_ring3(int code) {
     switch (code) {
-    case R3_NULL_WRITE:     logf_("crashtest: ring3 null-write\n");  r3_null_write();  break;
-    case R3_NULL_READ:      logf_("crashtest: ring3 null-read\n");   r3_null_read();   break;
-    case R3_DIVIDE_ZERO:    logf_("crashtest: ring3 divide-zero\n"); r3_divide_zero(); break;
-    case R3_BAD_OPCODE:     logf_("crashtest: ring3 bad-opcode\n");  r3_bad_opcode();  break;
-    case R3_STACK_OVERFLOW: logf_("crashtest: ring3 stack-overflow\n"); r3_stack_overflow(); break;
+    case R3_NULL_WRITE:     ulogf("crashtest: ring3 null-write\n");  r3_null_write();  break;
+    case R3_NULL_READ:      ulogf("crashtest: ring3 null-read\n");   r3_null_read();   break;
+    case R3_DIVIDE_ZERO:    ulogf("crashtest: ring3 divide-zero\n"); r3_divide_zero(); break;
+    case R3_BAD_OPCODE:     ulogf("crashtest: ring3 bad-opcode\n");  r3_bad_opcode();  break;
+    case R3_STACK_OVERFLOW: ulogf("crashtest: ring3 stack-overflow\n"); r3_stack_overflow(); break;
     default: return;
     }
     // Only reached if a fault did not happen, which is worth saying --
     // silence would read as "the button did nothing".
-    logf_("crashtest: ring3 trigger RETURNED without faulting\n");
+    ulogf("crashtest: ring3 trigger RETURNED without faulting\n");
 }
 
 static void do_kernel(struct uapp *a, int index) {
@@ -129,7 +129,7 @@ static void do_kernel(struct uapp *a, int index) {
     char buf[96];
     snprintf(buf, sizeof buf, "crashtest: ring0 %s refused\n",
              index >= 0 && index < g_k0_count ? g_k0_label[index] : "?");
-    logf_(buf);
+    ulog(buf);
     snprintf(g_status_msg, sizeof g_status_msg,
              "Refused: boot with `faultinject` to arm kernel faults");
     uapp_redraw(a);
@@ -200,7 +200,7 @@ static void build(void) {
 
     char buf[64];
     snprintf(buf, sizeof buf, "crashtest: armed %d kinds %d\n", g_armed, g_k0_count);
-    logf_(buf);
+    ulog(buf);
 }
 
 // Reported once the layout has placed everything, so a test clicks
@@ -217,7 +217,7 @@ static void log_layout(void) {
                  g_r3.buttons[0].h,
                  g_r3.count > 1 ? g_r3.buttons[1].y - g_r3.buttons[0].y : 0,
                  g_r3.count);
-        logf_(buf);
+        ulog(buf);
     }
     if (g_k0.count > 0) {
         snprintf(buf, sizeof buf, "crashtest: layout ring0 %d %d %d %d pitch %d count %d\n",
@@ -225,7 +225,7 @@ static void log_layout(void) {
                  g_k0.buttons[0].h,
                  g_k0.count > 1 ? g_k0.buttons[1].y - g_k0.buttons[0].y : 0,
                  g_k0.count);
-        logf_(buf);
+        ulog(buf);
     }
 }
 
