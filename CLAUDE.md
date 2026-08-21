@@ -612,6 +612,7 @@ whenever a headline here tells you something you did not already know.
 
 `docs/conventions/build.md`
 
+- **THE C LIBRARY IS CALLED `tolibc`, and its bar for adding a function is the OPPOSITE of everything else here -- it aims to be COMPLETE.**
 - **`userland/` is split by ROLE, and the build derives things from it -- adding a program is a `.c` file and nothing else.**
 - **In ring 3 the toolkit is reachable under the C names -- don't hand-roll a `my_strlen` or a digit loop there either.**
 - **RING-3 CODE HAS A FRAME BUDGET, and a link-time bound on the image.**
@@ -1134,13 +1135,14 @@ detail there, and keep the pointer here to a line. What each file is:
   is the authority on which introspection commands have moved.
 - **`docs/errno-design.md`** -- giving a failed syscall a REASON, staged
   so each step ships on its own.
-- **`docs/libc-design.md`** -- what a real C library still needs, staged
-  so each step ships on its own, with the target decided (our own
-  POSIX-shaped libc, not Linux ABI emulation). **Read it before starting
-  any libc-shaped work**: it measures what already exists against the
-  tree, because that gap was being re-derived every time and got wrong
-  in the same two directions -- `errno` and ring-3 floating point are
-  BUILT, and buffered `stdio` is bigger than it looks.
+- **`docs/libc-design.md`** -- **`tolibc`**, toy-os's C library: the six
+  stages that built it and what each one found. **Read it before
+  starting any libc-shaped work.** The headline facts: it is BUILT
+  (stdio, math including the transcendentals, time, dirent, setjmp,
+  scanf), cJSON runs on it, and **its bar for adding a function is the
+  opposite of the rest of this project** -- complete rather than
+  second-real-caller, because its audience is code not yet written.
+  `userland/libc/README.md` is the shorter front page.
 - **`docs/signals-design.md`** -- signals, a foreground process, and what
   `Ctrl-C` actually needs. Designed, not built. **Read it before
   starting any of Phase 1's signal/TTY/job-control work**: its whole

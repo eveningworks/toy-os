@@ -43,6 +43,17 @@ this the obvious way), not from how much history it accumulated.
   with angle brackets off `userland/include/`, because a program written
   elsewhere says `#include <stdio.h>` or it does not compile.
   ELFs build to `build/userland/**`, not into the source tree.
+- **THE C LIBRARY IS CALLED `tolibc`** (formed like `tosh`: toy-os +
+  `libc`), it lives in `userland/libc/` with its public headers in
+  `userland/include/`, and its archive is `libc.a` -- the NAME is for
+  people, the FILENAME is what a linker expects. `userland/libc/README.md`
+  is its front page. **Its bar for adding a function is the OPPOSITE of
+  everything else here**: `tools/`, Toykit and the kernel toolkit all
+  want a second real caller, and tolibc aims to be COMPLETE, because its
+  audience is code that has not been written yet. What is absent is
+  absent for a stated reason (`fork` -- the process model is
+  posix_spawn-shaped; `signal` -- not built; locales/threads --
+  deliberately not pursued), never for lack of a caller.
 - **In ring 3 the toolkit is reachable under the C names -- don't
   hand-roll a `my_strlen` or a digit loop there either.**
   `#include <string.h>` for `strlen`/`strcmp`/`strlcpy`/`mem*`/the

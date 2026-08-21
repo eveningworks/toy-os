@@ -8,6 +8,8 @@
 #include <stdio.h>
 #include <caltime.h>
 #include "rt/sys.h"
+#include "proc_info.h"
+#include "syscall_abi.h"
 
 #define SECS_PER_DAY 86400
 
@@ -211,3 +213,22 @@ char *asctime(const struct tm *tm) {
 }
 
 char *ctime(const time_t *t) { return asctime(gmtime(t)); }
+
+// --- clock -----------------------------------------------------------
+
+clock_t clock(void) {
+    // REAL PROCESSOR TIME, not wall time. The kernel has tracked
+    // per-process cpu_ns all along; what was missing was any way for a
+    // process to find its OWN row -- SYS_PROC_INFO is indexed by
+    // process-table slot. SYS_GETPID closed that, which is the only
+    // reason this function exists rather than being another documented
+    // absence.
+    int me = sys_getpid();
+    if (me < 0) return (clock_t)-1;   // no scheduler slot: C's "unavailable"
+    struct proc_info pi;
+    for (int i = 0; i < SYS_PROC_MAX; i++) {
+        if (sys_proc_info(i, &pi) && pi.pid == me)
+            return (clock_t)(pi.cpu_ns / 1000u);   // CLOCKS_PER_SEC is 1e6
+    }
+    return (clock_t)-1;
+}

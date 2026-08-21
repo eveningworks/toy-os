@@ -196,6 +196,7 @@ int sys_spawn(struct syscall_ctx *c);
 int sys_waitpid(struct syscall_ctx *c);
 int sys_kill(struct syscall_ctx *c);
 int sys_proc_info(struct syscall_ctx *c);
+int sys_getpid(struct syscall_ctx *c);
 int sys_ticks(struct syscall_ctx *c);
 int sys_console_size(struct syscall_ctx *c);
 int sys_monotonic_ns(struct syscall_ctx *c);

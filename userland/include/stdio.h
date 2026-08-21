@@ -116,11 +116,18 @@ int   vsprintf(char *out, const char *fmt, va_list ap);
 // the h/hh/l/ll/z length modifiers. Returns the number of items
 // assigned, or EOF if input ran out before the first one.
 //
-// scanf() and fscanf() are ABSENT: they need the same core over a
-// stream, and no caller has needed them. sscanf() plus fgets() is the
-// combination that is actually safe anyway.
+// scanf()/fscanf() read from a STREAM through the same scanner -- see
+// userland/libc/scanf.c, where a string and a stream differ only in
+// where the next character comes from. Note that fgets() plus sscanf()
+// is usually the better combination on a terminal, because a failed
+// fscanf leaves the offending input in the stream and the obvious retry
+// loop spins on it forever.
 int   sscanf(const char *s, const char *fmt, ...) __attribute__((format(scanf, 2, 3)));
 int   vsscanf(const char *s, const char *fmt, va_list ap);
+int   scanf(const char *fmt, ...) __attribute__((format(scanf, 1, 2)));
+int   fscanf(FILE *f, const char *fmt, ...) __attribute__((format(scanf, 2, 3)));
+int   vscanf(const char *fmt, va_list ap);
+int   vfscanf(FILE *f, const char *fmt, va_list ap);
 
 int   printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 int   fprintf(FILE *f, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
@@ -157,7 +164,7 @@ static inline size_t vsnprintf(char *out, size_t cap, const char *fmt, va_list a
 #define snprintf k_snprintf
 
 // DELIBERATELY ABSENT: freopen(), which the single-mode fd model has
-// nothing to do; scanf()/fscanf(); and tmpfile()/remove()/rename()
-// wrappers, which are sys_unlink()/sys_rename() under another name.
+// nothing to do, and tmpfile()/remove()/rename() wrappers, which are
+// sys_unlink()/sys_rename() under another name.
 
 #endif

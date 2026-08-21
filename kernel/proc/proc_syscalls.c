@@ -223,6 +223,16 @@ int sys_yield(struct syscall_ctx *c) {
     return 0;
 }
 
+int sys_getpid(struct syscall_ctx *c) {
+    // scheduler_current_pid() answers 0 for the kernel context and for
+    // the legacy loader's unscheduled path. Reported as -1 rather than
+    // passed through, because 0 is not a pid a caller can do anything
+    // with and -1 is the value every other "no answer" here uses.
+    int pid = scheduler_current_pid();
+    c->regs[14] = (uint64_t)(int64_t)(pid > 0 ? pid : -1);
+    return 0;
+}
+
 int sys_proc_info(struct syscall_ctx *c) {
     sys_do_proc_info(c->regs, c->a0, c->a1);
     return 0;

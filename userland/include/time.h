@@ -26,12 +26,12 @@
 // not a libc patch -- and when it lands, gmtime() and localtime() here
 // become genuinely different and nothing else in this header changes.
 //
-// **clock() IS ABSENT.** C says it reports PROCESSOR time, and while
-// the kernel tracks per-process `cpu_ns` (abi/proc_info.h), a process
-// has no way to learn its own pid -- SYS_PROC_INFO is indexed by table
-// slot. A clock() over wall time would answer a different question in
-// the same units, which is the kind of quiet wrongness this library
-// omits rather than ships (see <unistd.h> on fork(), <math.h> on sin()).
+// **clock() REPORTS REAL PROCESSOR TIME**, not wall time. The kernel has
+// tracked per-process `cpu_ns` all along (abi/proc_info.h); what was
+// missing was any way for a process to find its own row, since
+// SYS_PROC_INFO is indexed by process-table slot. SYS_GETPID closed
+// that. It returns (clock_t)-1 for a caller with no scheduler slot,
+// which is C's "unavailable".
 #include <stddef.h>
 #include <stdint.h>
 
@@ -53,6 +53,13 @@ struct tm {
 // Seconds since 1970-01-01 in the system's own reckoning (see above).
 // Also stores it through `t` when that is not NULL, as C specifies.
 time_t time(time_t *t);
+
+typedef int64_t clock_t;
+// MICROSECONDS. C only requires that clock()/CLOCKS_PER_SEC be seconds;
+// a microsecond tick keeps the arithmetic exact against the kernel's
+// nanosecond counter and is what POSIX fixes it at.
+#define CLOCKS_PER_SEC 1000000
+clock_t clock(void);
 
 // Both convert in the same reckoning -- see the header comment. The
 // result is in a STATIC buffer that the next call overwrites, which is

@@ -991,6 +991,19 @@ struct sys_stat {
                       // socket. A path always names something seekable,
                       // so SYS_STAT sets it unconditionally.
 
+#define SYS_GETPID 55 // No arguments. Returns the caller's own pid.
+                      //
+                      // It exists because a process could not find
+                      // ITSELF: SYS_PROC_INFO is indexed by process-
+                      // table SLOT, so reading your own cpu_ns meant
+                      // guessing which row was yours. clock() (ring 3's
+                      // <time.h>) is the caller that made that a real
+                      // gap rather than a curiosity.
+                      //
+                      // Never fails, and never returns 0 -- a caller
+                      // with no scheduler slot (the legacy loader) gets
+                      // -1, which is the one value a real pid cannot be.
+
 #define SYS_LSEEK 53 // RDI = fd, RSI = a SIGNED byte offset, RDX =
                       // one of SYS_SEEK_* below. Moves the fd's
                       // position and returns the NEW position, or a

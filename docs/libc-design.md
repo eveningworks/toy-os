@@ -1,4 +1,4 @@
-# A real C library for toy-os
+# tolibc -- a real C library for toy-os
 
 A staged plan, in the shape `docs/init-design.md` and
 `docs/signals-design.md` used. It answers the question
@@ -6,9 +6,26 @@ A staged plan, in the shape `docs/init-design.md` and
 actually missing between what ring 3 has today and a libc a stranger's
 C program can be compiled against?**
 
-**Status: designed, not built.** Each stage below ships on its own and
-is verifiable on its own; that is the point of staging it rather than
-the reason it is slow.
+**Status: BUILT.** All six stages below are done, and cJSON -- a
+program nobody working on this repo wrote -- parses and re-serialises
+JSON on toy-os. What remains is named at the end of this file.
+
+**It is called `tolibc`**, formed the way `tosh` was (toy-os + `sh`;
+toy-os + `libc`). It sits beside Toykit, and `userland/libc/README.md`
+is its own front page. The archive stays `libc.a`, because a linker
+expects that name and a ported build system saying `-lc` should not have
+to know what this one is called.
+
+**AND THE BAR FOR WHAT GOES IN IS DIFFERENT FROM THE REST OF THIS
+PROJECT.** `tools/`, Toykit and the kernel toolkit all require a second
+REAL caller before a function is added. tolibc aims to be COMPLETE
+instead: if C specifies it, or POSIX specifies one that ported code
+reaches for constantly, it belongs here even when nothing in toy-os
+calls it yet. The difference is the audience -- those serve code written
+here, and this serves code that has not been written yet, for which the
+alternative to a function is a link error in somebody else's source file
+with no explanation attached. What is still absent is absent for a
+REASON (see the end of this file), not for lack of a caller.
 
 **The target is decided: our own POSIX-shaped libc, compiled against.**
 Not Linux syscall-ABI emulation. `docs/roadmap-details.md`'s "A real C
@@ -433,6 +450,62 @@ no environment, opens no files, and spawns nothing. So the port says
 nothing about `getenv` (which cannot work -- see the open questions),
 about `<dirent.h>` or `<time.h>`, or about a program that expects
 `fork`. It is one real program, not a compatibility claim.
+
+## Stage 7 -- completeness, after the port
+
+The port passed with two functions missing, which raised a policy
+question rather than a technical one: does tolibc omit what nothing has
+asked for, or does it aim to be complete? **Complete** -- see the note
+at the top of this file. What that decision added:
+
+- **`scanf`/`fscanf`/`vfscanf`**, over the same scanner `sscanf` uses.
+  A string and a stream differ only in where the next character comes
+  from, so `struct src` is two function pointers and everything else is
+  shared -- the alternative is two copies of the conversion table.
+  **The stream side needed DEEPER PUSHBACK**: deciding that `0x` does
+  not begin a number means putting several characters back, and C
+  guarantees only one. `FILE` carries eight now, which is a permitted
+  extension and cheaper than the private input buffer a scanner would
+  otherwise need in front of the stream's own.
+- **`clock()`, and `SYS_GETPID` under it.** It was absent because C
+  says PROCESSOR time and a process could not find its own row --
+  `SYS_PROC_INFO` is indexed by table slot. That is a missing
+  capability rather than a design decision, so the capability was added:
+  three edits, and `clock()` reports real `cpu_ns`.
+- **The transcendentals** -- `sin`, `cos`, `tan`, the inverse trig,
+  `exp`, `log`, `pow`, the hyperbolics, `hypot`, `cbrt`, `modf`
+  (`userland/libc/math_trig.c`). Published minimax coefficients
+  (fdlibm's, which glibc and musl descend from) rather than Taylor
+  terms, and NOT the x87 instructions -- those work on a stack this
+  userland does not otherwise touch, reduce against a 66-bit pi that
+  Intel documents as lossy for large arguments, and are microcoded and
+  slow, which is why every real libm stopped using them.
+
+**THE ARGUMENT REDUCTION IS WHERE THE ACCURACY LIVES, and the test
+found it.** `sin(1e6)` was wrong in the tenth digit with a two-term
+pi/2, because multiplying the quadrant count by a plain rounded pi/2
+rounds the product and the error scales with the count. The fix is
+fdlibm's: split pi/2 into three doubles whose first has its low 33 bits
+ZERO, so `n * PIO2_1` is exact for `|n| < 2^20`. Full accuracy now holds
+to |x| ~ 1.6e6 and degrades past it; going further needs Payne-Hanek
+reduction against a multi-hundred-bit pi, which is more machinery than
+the whole file and buys correctness for arguments no program has a
+physical reason to pass. The test asserts to 1e6 and stops there
+deliberately.
+
+**AND THE TEST WAS WRONG TWICE BEFORE IT WAS RIGHT**, which is the more
+transferable lesson. `cosh(x)^2 - sinh(x)^2 == 1` reported errors up to
+3e-8 against a `cosh` and `sinh` that were individually correct to
+1e-15: for large x both are about `e^x/2`, so the subtraction cancels
+almost every digit and the check measures the subtraction. Rewriting it
+as `(cosh-sinh)(cosh+sinh)` cancels just as badly. The well-conditioned
+form is `cosh + sinh == exp`, which adds instead of subtracting and pins
+both against a third function. **An identity is only a test where it is
+well conditioned** -- otherwise it measures floating point, not the
+library.
+
+Every expected value in `libm_test.c` was generated by the host's
+Python, not by running toy-os and writing down what it said.
 
 ## Open questions
 

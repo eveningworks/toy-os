@@ -240,6 +240,8 @@ long long sys_lseek(int fd, long long offset, int whence) {
                                     (uint64_t)offset, (uint64_t)whence));
 }
 
+int sys_getpid(void) { return (int)syscall0(SYS_GETPID); }
+
 int sys_fstat(int fd, struct sys_stat *out) {
     return (int)err(syscall2(SYS_FSTAT, (uint64_t)fd, (uint64_t)(uintptr_t)out));
 }

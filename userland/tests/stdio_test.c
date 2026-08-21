@@ -139,9 +139,18 @@ int main(void) {
     check(fgetc(f) == 'o', "fgetc reads the first byte");
     check(ungetc('X', f) == 'X', "ungetc accepts a byte");
     check(fgetc(f) == 'X', "which comes back next");
-    check(ungetc('Y', f) == 'Y' && ungetc('Z', f) == EOF,
-          "and a SECOND pushback is refused, as C allows");
-    check(fgetc(f) == 'Y', "the one pushback still works");
+    // EIGHT deep, not one. C guarantees a single byte and permits more,
+    // and scanf needs more -- deciding that "0x" does not begin a
+    // number means putting several characters back. This asserted the
+    // one-byte limit until scanf arrived and the limit changed; it is
+    // the DOCUMENTED depth that is being checked, not an accident.
+    check(ungetc('Y', f) == 'Y' && ungetc('Z', f) == 'Z',
+          "a second pushback is accepted -- the stack is eight deep");
+    check(fgetc(f) == 'Z' && fgetc(f) == 'Y',
+          "and they come back in reverse order, as a stack");
+    for (int i = 0; i < 8; i++) ungetc('a' + i, f);
+    check(ungetc('!', f) == EOF, "a NINTH is refused");
+    for (int i = 0; i < 8; i++) fgetc(f);   // drain them again
 
     char line[32];
     check(fgets(line, sizeof line, f) != 0 && strcmp(line, "ne\n") == 0,

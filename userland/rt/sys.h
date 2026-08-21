@@ -142,6 +142,12 @@ long long sys_lseek(int fd, long long offset, int whence);
 // socket the size and timestamps are zero, honestly -- there is no
 // length for a pipe to have.
 int     sys_fstat(int fd, struct sys_stat *out);
+
+// The caller's own pid, or -1 for a caller with no scheduler slot (the
+// legacy `run` loader). It exists because SYS_PROC_INFO is indexed by
+// table SLOT, so a process had no way to find its own row -- which is
+// what clock() needs to read its own cpu_ns.
+int     sys_getpid(void);
 // A second NAME for an existing file. -1 with errno EPERM when the
 // mounted filesystem's format has no link counts, which is a property
 // of the volume rather than of these two paths.

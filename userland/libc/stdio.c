@@ -43,13 +43,24 @@
 #define F_OWNBUF  0x20 // the buffer came from malloc and fclose frees it
 #define F_MODESET 0x40 // the buffering policy has been decided
 
+// How many bytes of pushback a stream holds. Eight is comfortably more
+// than any conversion needs and costs eight bytes per FILE.
+#define UNGET_MAX 8
+
 struct _FILE {
     int fd;
     unsigned char *buf;
     size_t bufsz;
     size_t pos;   // reading: next byte to hand out. writing: bytes pending.
     size_t end;   // reading: bytes valid in buf. unused when writing.
-    int unget;    // one byte of pushback, or -1
+    // PUSHBACK, DEEPER THAN C REQUIRES. The standard guarantees one
+    // byte and permits more. scanf needs more than one: deciding that
+    // "0x" is not the start of a number, or that "1e" has no exponent,
+    // means putting several characters back -- and a scanf built on a
+    // one-byte pushback has to buffer its own input instead, which is
+    // a second buffer in front of this one.
+    unsigned char ungetbuf[UNGET_MAX];
+    int ungetn;   // 0 = nothing pushed back; the stack grows upward
     short mode;   // _IOFBF / _IOLBF / _IONBF
     short flags;
 };
@@ -62,13 +73,13 @@ static unsigned char g_inbuf[BUFSIZ];
 static unsigned char g_outbuf[BUFSIZ];
 
 static FILE g_std[3] = {
-    { 0, g_inbuf,  BUFSIZ, 0, 0, -1, _IOFBF, F_READ  | F_INUSE },
-    { 1, g_outbuf, BUFSIZ, 0, 0, -1, _IOFBF, F_WRITE | F_INUSE },
+    { 0, g_inbuf,  BUFSIZ, 0, 0, {0}, 0, _IOFBF, F_READ  | F_INUSE },
+    { 1, g_outbuf, BUFSIZ, 0, 0, {0}, 0, _IOFBF, F_WRITE | F_INUSE },
     // stderr is unbuffered and says so up front: F_MODESET keeps the
     // policy below from asking fstat and deciding otherwise. A
     // diagnostic that is still sitting in a buffer when the process
     // dies is a diagnostic that did not happen.
-    { 2, 0,        0,      0, 0, -1, _IONBF, F_WRITE | F_INUSE | F_MODESET },
+    { 2, 0,        0,      0, 0, {0}, 0, _IONBF, F_WRITE | F_INUSE | F_MODESET },
 };
 
 FILE *const stdin  = &g_std[0];
@@ -201,7 +212,7 @@ static int refill(FILE *f) {
 
 int fgetc(FILE *f) {
     if (!f || !(f->flags & F_READ)) return EOF;
-    if (f->unget >= 0) { int c = f->unget; f->unget = -1; return c; }
+    if (f->ungetn > 0) return (int)f->ungetbuf[--f->ungetn];
     decide_buffering(f);
     if (unbuffered(f)) {
         unsigned char ch;
@@ -221,8 +232,8 @@ int ungetc(int c, FILE *f) {
     // ONE byte, and never a backward seek: a pipe and a terminal have
     // no position to seek, and this is the call a parser uses to look
     // one character ahead on exactly those.
-    if (!f || c == EOF || f->unget >= 0) return EOF;
-    f->unget = (unsigned char)c;
+    if (!f || c == EOF || f->ungetn >= UNGET_MAX) return EOF;
+    f->ungetbuf[f->ungetn++] = (unsigned char)c;
     f->flags &= (short)~F_EOF; // pushing back un-ends the stream
     return c;
 }
@@ -334,12 +345,12 @@ int fseek(FILE *f, long offset, int whence) {
         // sits one further back still. Getting this wrong is invisible
         // until a file is read through a buffer boundary.
         if (whence == SEEK_CUR) {
-            long behind = (long)(f->end - f->pos) + (f->unget >= 0 ? 1 : 0);
+            long behind = (long)(f->end - f->pos) + f->ungetn;
             offset -= behind;
         }
         f->pos = f->end = 0;
     }
-    f->unget = -1;
+    f->ungetn = 0;
     if (sys_lseek(f->fd, offset, whence) < 0) return -1;
     f->flags &= (short)~F_EOF;
     return 0;
@@ -353,7 +364,7 @@ long ftell(FILE *f) {
     }
     long at = (long)sys_lseek(f->fd, 0, SEEK_CUR);
     if (at < 0) return -1;
-    return at - (long)(f->end - f->pos) - (f->unget >= 0 ? 1 : 0);
+    return at - (long)(f->end - f->pos) - f->ungetn;
 }
 
 void rewind(FILE *f) { fseek(f, 0, SEEK_SET); if (f) f->flags &= (short)~F_ERR; }
@@ -410,7 +421,7 @@ FILE *fopen(const char *path, const char *mode) {
     f->buf = buf;
     f->bufsz = buf ? BUFSIZ : 0;
     f->pos = f->end = 0;
-    f->unget = -1;
+    f->ungetn = 0;
     f->mode = buf ? _IOFBF : _IONBF;
     f->flags = (short)(F_INUSE | (want_read ? F_READ : F_WRITE) |
                        (buf ? F_OWNBUF : F_MODESET));
