@@ -592,6 +592,7 @@ toywm: $(BUILD)/userland/wm/main.elf
 # is what it is for: a program nobody working on this repo wrote,
 # compiled against this C library.
 EXTRA_OBJS_cjson_test = ports/cjson/cJSON
+EXTRA_OBJS_cjson_bench = ports/cjson/cJSON
 
 # The extras for one binary, as real object paths.
 uextra = $(patsubst %,$(BUILD)/userland/%.o,$(EXTRA_OBJS_$(notdir $(1))))

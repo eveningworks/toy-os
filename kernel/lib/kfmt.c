@@ -54,19 +54,31 @@ static void put_str(struct out *o, const char *s) {
 // Formats an integer through knum into a scratch buffer, then emits it.
 // Going through the shared converter rather than open-coding the digit
 // loop here is the entire point of this file existing alongside knum.c.
+// `zero` selects '0' padding and `left` left-justifies; without either,
+// a width pads with SPACES on the left, which is what C means by
+// `%5d`. This used to zero-pad every width unconditionally, so `%5u`
+// printed 00042 -- fine for the `%02x` register dumps that were its
+// only callers, and wrong for the half-dozen call sites laying out
+// COLUMNS, which is what a bare width is nearly always for.
+//
+// Zero padding still happens inside the number (after the sign, before
+// the digits) rather than out here, because that is where it belongs
+// and the knum helpers already do it; space padding is applied around
+// the finished text, exactly as %s's is.
 static void put_num(struct out *o, uint64_t v, int is_signed, int is_hex,
-                     unsigned width) {
+                     unsigned width, int zero, int left) {
     char tmp[24];
+    unsigned pad_width = (zero && !left) ? width : 0;
     if (is_hex) {
-        k_htoa(v, tmp, sizeof tmp, width);
+        k_htoa(v, tmp, sizeof tmp, pad_width);
     } else if (is_signed) {
         k_itoa((int64_t)v, tmp, sizeof tmp);
         // knum has no signed zero-padding variant (nothing needs one),
         // so pad here, after the sign.
-        if (width) {
+        if (pad_width) {
             size_t len = k_strlen(tmp);
             int neg = tmp[0] == '-';
-            while (len < width && len + 1 < sizeof tmp) {
+            while (len < pad_width && len + 1 < sizeof tmp) {
                 for (size_t i = len; i > (size_t)neg; i--) tmp[i] = tmp[i - 1];
                 tmp[neg] = '0';
                 len++;
@@ -74,9 +86,14 @@ static void put_num(struct out *o, uint64_t v, int is_signed, int is_hex,
             }
         }
     } else {
-        k_utoa_pad(v, tmp, sizeof tmp, width);
+        k_utoa_pad(v, tmp, sizeof tmp, pad_width);
     }
+    // Space padding, around the finished number -- the same shape %s
+    // uses below, so both conversions pad by one rule.
+    size_t len = k_strlen(tmp);
+    if (!left) { for (size_t i = len; i < width; i++) put(o, ' '); }
     put_str(o, tmp);
+    if (left) { for (size_t i = len; i < width; i++) put(o, ' '); }
 }
 
 // The formatter itself, shared by both entry points below. It knows
@@ -102,6 +119,14 @@ static void vformat(struct out *o, const char *fmt, va_list ap) {
         // format specifier itself into the output.
         int left = 0;
         if (*p == '-') { left = 1; p++; }
+
+        // C's '0' FLAG, which has to be read before the width digits or
+        // it is indistinguishable from a leading zero in the number.
+        // It is what separates `%05u` (zero-padded) from `%5u`
+        // (space-padded); this formatter used to treat every width as
+        // the first and had no way to ask for the second.
+        int zero = 0;
+        if (*p == '0') { zero = 1; p++; }
 
         unsigned width = 0;
         while (k_isdigit(*p)) { width = width * 10 + (unsigned)(*p - '0'); p++; }
@@ -141,15 +166,15 @@ static void vformat(struct out *o, const char *fmt, va_list ap) {
         case 'i':
         case 'd':
             put_num(o, wide ? (uint64_t)va_arg(ap, long) : (uint64_t)(int64_t)va_arg(ap, int),
-                     1, 0, width);
+                     1, 0, width, zero, left);
             break;
         case 'u':
             put_num(o, wide ? (uint64_t)va_arg(ap, unsigned long) : (uint64_t)va_arg(ap, unsigned int),
-                     0, 0, width);
+                     0, 0, width, zero, left);
             break;
         case 'x':
             put_num(o, wide ? (uint64_t)va_arg(ap, unsigned long) : (uint64_t)va_arg(ap, unsigned int),
-                     0, 1, width);
+                     0, 1, width, zero, left);
             break;
         case 'c': put(o, (char)va_arg(ap, int)); break;
         case 's': {

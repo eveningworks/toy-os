@@ -32,9 +32,12 @@
 //              floating point there at all
 //   %c  char                %%  a literal '%'
 //
-// with an optional zero-pad width between the '%' and the conversion
-// (`%04x`, `%02u`), and the `l`/`ll`/`z` length modifiers for 64-bit
-// arguments (`%lx`, `%zu`). Standard printf argument rules apply --
+// with an optional width between the '%' and the conversion, C's rules:
+// `%5u` pads with SPACES, `%05u` with zeroes, `%-5u` left-justifies.
+// (It zero-padded every width until tolibc needed columns -- `%5d`
+// printing 00042 is not what C means and not what a table wants.) Plus
+// the `l`/`ll`/`z` length modifiers for 64-bit arguments (`%lx`,
+// `%zu`). Standard printf argument rules apply --
 // `%x` is an `unsigned int`, `%lx` is 64-bit -- which is not pedantry:
 // varargs are only promoted as far as `int`, so reading a plain `int`
 // as 64-bit would pick up whatever was in the top half of the

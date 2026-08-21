@@ -39,10 +39,15 @@ KTEST("kfmt", "a string width pads, and '-' left-justifies") {
     k_snprintf(b, sizeof b, "[%-8s]", nul);
     KTEST_ASSERT(eq(b, "[(null)  ]"));
 
-    // Numbers are unaffected: '-' is parsed and ignored there, so no
-    // existing zero-padded conversion changes meaning.
+    // NUMBERS NOW FOLLOW C, and this assertion changed with them. It
+    // read "0007|0007" while a width meant zero-padding and '-' was
+    // parsed-then-ignored on a number -- which was fine when the only
+    // callers were %02x register dumps, and wrong the moment anything
+    // wanted a column. `%5d` printing 00042 is not what C means.
+    // Zero padding is still available and still spelled with an
+    // explicit '0'; see this file's width/flag test below.
     k_snprintf(b, sizeof b, "%4u|%-4u", 7u, 7u);
-    KTEST_ASSERT(eq(b, "0007|0007"));
+    KTEST_ASSERT(eq(b, "   7|7   "));
 }
 
 KTEST("kfmt", "the supported conversions") {
@@ -189,9 +194,33 @@ KTEST("kfmt", "the sink form is not bounded by KFMT_LINE_MAX") {
 KTEST("kfmt", "%f in the KERNEL emits literally and consumes no argument") {
     char b[64];
     // The %d after it is the real assertion: if %f had eaten an
-    // argument, 7 would print where 42 should be.
+    // argument, 42 would vanish and %d would read whatever came next.
+    //
+    // -Wformat IS RIGHT to complain here and the warning is suppressed
+    // rather than fixed, because the mismatch is the point: this passes
+    // ONE argument for two conversions on purpose, to prove the first
+    // consumes none. Silencing it locally keeps the build clean without
+    // weakening the check on every other caller in the tree.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat"
+#pragma GCC diagnostic ignored "-Wformat-extra-args"
     k_snprintf(b, sizeof b, "[%f][%d]", 42);
+#pragma GCC diagnostic pop
     KTEST_ASSERT(eq(b, "[%f][42]"));
+}
+
+KTEST("kfmt", "a width pads with SPACES, and '0' asks for zeroes") {
+    char b[64];
+    k_snprintf(b, sizeof b, "[%5u][%05u][%-5u]", 42u, 42u, 42u);
+    KTEST_ASSERT(eq(b, "[   42][00042][42   ]"));
+    // The signed path pads after the sign, which is the case a naive
+    // "prepend zeroes" gets wrong: -0042, not 00-42.
+    k_snprintf(b, sizeof b, "[%6d][%06d]", -42, -42);
+    KTEST_ASSERT(eq(b, "[   -42][-00042]"));
+    // Hex keeps the register-dump behaviour every existing caller
+    // relies on.
+    k_snprintf(b, sizeof b, "[%04x][%4x]", 0xabu, 0xabu);
+    KTEST_ASSERT(eq(b, "[00ab][  ab]"));
 }
 
 KTEST("kfmt", "a precision is parsed rather than emitted literally") {

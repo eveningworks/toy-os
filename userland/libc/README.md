@@ -60,3 +60,25 @@ and each says so in its header:
 
 `docs/libc-design.md` is the full plan and the record of what each stage
 found.
+
+## Measuring it
+
+`/tests/cjson_bench` puts tolibc under sustained load through cJSON --
+parse and print between them hit `malloc`/`realloc` on every node,
+`strtod` on every number, `sprintf` on every number written back, and
+most of `<string.h>`. It is a load test of the allocator and the
+formatter wearing a JSON hat.
+
+**`spawn /tests/cjson_bench`, not `run`**: the legacy `run` loader has
+no scheduler slot, so `clock()` reports "unavailable" and every CPU
+figure collapses to zero. It says so rather than printing zeroes, and
+the wall-clock numbers are still valid there. The report is written to
+`/tmp/cjson_bench.out` as well as the console, because a spawned
+program's output arrives while a harness is between commands.
+
+**It is NOT in the gate, and must not be.** A timing number varies with
+the host, and a benchmark in `preflight.sh` would make the gate flap for
+reasons that have nothing to do with this OS. It is also why the numbers
+are only worth reading as RATIOS -- the same build under `vm.py --kvm`
+against the same build under TCG, or one commit against another on one
+host. An absolute figure from an emulator measures the emulator.
