@@ -62,9 +62,9 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_GETRANDOM]     = { "getrandom",     sys_getrandom,     { A_HEX, A_INT } },
     [SYS_WIN_REQUEST]   = { "win_request",   sys_win_request,   { A_HEX } },
     [SYS_PIPE]          = { "pipe",          sys_pipe,          { A_HEX } },
-    // The args string is an ordinary NUL-terminated string, so A_PATH's
-    // quoting is right for it even though it is not a path.
-    [SYS_SPAWN]         = { "spawn",         sys_spawn,         { A_PATH, A_PATH, A_FD } },
+    // One pointer now: spawn outgrew three registers when the
+    // environment arrived, so it takes a struct (abi/syscall_abi.h).
+    [SYS_SPAWN]         = { "spawn",         sys_spawn,         { A_HEX } },
     [SYS_WAITPID]       = { "waitpid",       sys_waitpid,       { A_INT, A_HEX, A_INT } },
     [SYS_PROC_INFO]     = { "proc_info",     sys_proc_info,     { A_INT, A_HEX } },
     [SYS_KILL]          = { "kill",          sys_kill,          { A_INT, A_INT } },

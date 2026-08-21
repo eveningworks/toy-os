@@ -47,6 +47,7 @@
 // Terminal async-spawn item).
 int elf_build_argv_on_stack(uint64_t stack_phys, uint64_t stack_vaddr,
                              const char *path, const char *args,
+                             const char *env,
                              uint64_t *out_argc, uint64_t *out_argv,
                              uint64_t *out_user_rsp) {
     uint8_t *page = (uint8_t *)(uintptr_t)stack_phys;
@@ -99,13 +100,36 @@ int elf_build_argv_on_stack(uint64_t stack_phys, uint64_t stack_vaddr,
         str_vaddr[i] = stack_vaddr + offset;
     }
 
+    // The ENVIRONMENT's strings, placed the same way and above the
+    // block that will point at them. `env` is a NUL-separated run of
+    // "KEY=VALUE" terminated by an empty string -- one blob rather than
+    // a char** the kernel would have to walk pointer by pointer,
+    // validating each one out of user memory. The same shape `args`
+    // already has, for the same reason.
+    uint64_t env_vaddr[ELF_RUN_MAX_ENVC];
+    int envc = 0;
+    if (env) {
+        for (const char *e = env; *e; ) {
+            size_t len = 0;
+            while (e[len]) len++;
+            if (envc >= ELF_RUN_MAX_ENVC) return 0;   // refuse, never truncate
+            if (len + 1 > offset) return 0;
+            offset -= len + 1;
+            k_memcpy(page + offset, e, len);
+            page[offset + len] = '\0';
+            env_vaddr[envc++] = stack_vaddr + offset;
+            e += len + 1;
+        }
+    }
+
     // The SysV process-entry block, laid out below every string it
     // points at. From RSP upward:
     //
     //     (%rsp)          argc
     //     8(%rsp)         argv[0] .. argv[argc-1]
     //                     NULL              (argv terminator)
-    //                     NULL              (envp, empty for now)
+    //                     envp[0] .. envp[envc-1]
+    //                     NULL              (envp terminator)
     //
     // This is the standard layout a real crt0 expects, and userland/
     // crt0.asm is what reads it. There is deliberately no auxv after
@@ -132,7 +156,7 @@ int elf_build_argv_on_stack(uint64_t stack_phys, uint64_t stack_vaddr,
     // exactly what makes the standard 16-alignment correct here.
     size_t block_bytes = 8                              // argc
                         + (size_t)(argc + 1) * 8        // argv[] + NULL
-                        + 8;                            // envp NULL
+                        + (size_t)(envc + 1) * 8;       // envp[] + NULL
     if (block_bytes + 16 > offset) return 0; // no room for the block plus alignment slack
     offset -= block_bytes;
     offset &= ~(size_t)15; // SysV: 16-aligned AT ENTRY
@@ -141,7 +165,8 @@ int elf_build_argv_on_stack(uint64_t stack_phys, uint64_t stack_vaddr,
     blk[0] = (uint64_t)argc;
     for (int i = 0; i < argc; i++) blk[1 + i] = str_vaddr[i];
     blk[1 + argc] = 0; // argv terminator
-    blk[2 + argc] = 0; // envp terminator -- no environment yet
+    for (int i = 0; i < envc; i++) blk[2 + argc + i] = env_vaddr[i];
+    blk[2 + argc + envc] = 0; // envp terminator
 
     *out_argc = (uint64_t)argc;
     *out_argv = stack_vaddr + offset + 8; // &argv[0], for callers that want it
@@ -223,7 +248,7 @@ int elf_run_from_fs(const char *path, const char *args) {
     syscall_reset_heap(as, UADDR_HEAP_BASE);
 
     uint64_t argc = 0, argv = 0, user_rsp = 0;
-    if (!elf_build_argv_on_stack(stack_phys, UADDR_STACK_VADDR, path, args,
+    if (!elf_build_argv_on_stack(stack_phys, UADDR_STACK_VADDR, path, args, 0,
                                   &argc, &argv, &user_rsp)) {
         vga_write("run: arguments too long for ");
         vga_write(path);

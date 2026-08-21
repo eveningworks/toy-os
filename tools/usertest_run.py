@@ -156,6 +156,12 @@ TESTS = [
     # host's Python rather than by running toy-os. 405 checks, including
     # identities -- but only where they are WELL CONDITIONED, which cost
     # two rewrites to get right (see the file).
+    # The environment, and the only check that matters is the one no
+    # single process can make: that a CHILD inherits. Spawned rather
+    # than `run` because the parent blocks reading the child's pipe and
+    # the legacy loader has no scheduler slot to block on.
+    ("env_test", None,
+     ["env_test: all checks passed"], ["FAIL"]),
     ("libm_test", 0,
      ["libm_test: all checks passed"], ["FAIL"]),
     ("libc4_test", 0,

@@ -46,9 +46,27 @@ int elf_run_from_fs(const char *path, const char *args);
 // 1 on success, 0 if `args` has too many tokens or the strings +
 // pointer array don't fit in the one 4096-byte page -- callers must
 // treat that as a hard failure, not silently truncate.
+// `env` is the child's ENVIRONMENT: a NUL-separated run of "KEY=VALUE"
+// strings terminated by an empty one, or NULL for none. One blob rather
+// than a char** array, so the kernel copies a single validated string
+// instead of walking a pointer array in user memory and validating each
+// entry -- the same shape `args` already has.
+//
+// It is passed EXPLICITLY on every spawn and the kernel stores none of
+// it. Inheritance is tolibc's job, exactly as execve() is the primitive
+// on Unix and execv() is the libc function that passes `environ` for
+// you. See docs/decisions.md.
 int elf_build_argv_on_stack(uint64_t stack_phys, uint64_t stack_vaddr,
                              const char *path, const char *args,
+                             const char *env,
                              uint64_t *out_argc, uint64_t *out_argv,
                              uint64_t *out_user_rsp);
+
+// How many environment entries one process may be given. Bounded by
+// the same single stack page argv lives in, so the real limit is bytes
+// rather than count -- this only stops the pointer array itself
+// overflowing. An env with more entries is REFUSED, never truncated:
+// a silently missing variable is a bug somewhere else entirely.
+#define ELF_RUN_MAX_ENVC 64
 
 #endif

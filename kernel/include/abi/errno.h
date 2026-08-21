@@ -55,6 +55,9 @@
                    // no such hardware
 #define EINVAL 22  // the arguments are wrong: a bad size, a count over a
                    // maximum, a reserved field that is not zero
+#define E2BIG   7  // the argument or ENVIRONMENT list is too long. Its own
+                   // code because "your environment does not fit" is a
+                   // thing a caller can act on, unlike EINVAL
 #define ESPIPE 29  // this stream has no POSITION to move: lseek() on a
                    // console, a pipe or a socket. POSIX's name for it
                    // mentions a pipe only because a pipe was the first

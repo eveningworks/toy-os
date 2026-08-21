@@ -114,6 +114,7 @@ static const struct { int code; const char *msg; } g_errmsg[] = {
     { ENODEV, "no such device" },
     { EINVAL, "invalid argument" },
     { ESPIPE, "illegal seek" },
+    { E2BIG,  "argument list too long" },
     { ENFILE, "too many open files in system" },
     { EMFILE, "too many open files" },
     { ENOTDIR, "not a directory" },
@@ -241,6 +242,49 @@ long long sys_lseek(int fd, long long offset, int whence) {
 }
 
 int sys_getpid(void) { return (int)syscall0(SYS_GETPID); }
+
+// --- the environment --------------------------------------------------
+
+// THE PROCESS'S ENVIRONMENT, set by crt0 from the initial stack.
+//
+// It lives in libsys rather than in tolibc because libsys already owns
+// the whole startup vector: crt0 is this layer, and argc/argv/envp
+// arrive together. Putting it here is also what lets sys_spawn() below
+// pass it automatically, so every existing caller -- tosh, init, the
+// WM -- inherits without being changed.
+//
+// tolibc's <stdlib.h> getenv/setenv are the C API over this same
+// pointer. There is one environment per process and this is it.
+char **environ;
+
+// Flattens `environ` into the blob SYS_SPAWN takes: "K=V\0K=V\0\0".
+//
+// A STATIC buffer, not malloc: libsys sits BELOW the C library and must
+// not depend on an allocator that tolibc provides -- a program can link
+// libsys alone. The cost is that spawn is not re-entrant, which is
+// already true of it for other reasons.
+//
+// Returns 0 if the environment does not fit, and sys_spawn() then
+// refuses rather than passing a truncated one: a child missing half its
+// variables is worse than a child that failed to start.
+static char g_envblob[SYS_ENV_MAX];
+
+static int flatten_env(char **env) {
+    size_t n = 0;
+    if (env) {
+        for (int i = 0; env[i]; i++) {
+            const char *e = env[i];
+            size_t len = 0;
+            while (e[len]) len++;
+            if (n + len + 2 > sizeof g_envblob) return 0;  // + its NUL + the final one
+            for (size_t k = 0; k < len; k++) g_envblob[n++] = e[k];
+            g_envblob[n++] = '\0';
+        }
+    }
+    if (n + 1 > sizeof g_envblob) return 0;
+    g_envblob[n++] = '\0';   // the empty string that ends the run
+    return 1;
+}
 
 int sys_fstat(int fd, struct sys_stat *out) {
     return (int)err(syscall2(SYS_FSTAT, (uint64_t)fd, (uint64_t)(uintptr_t)out));
@@ -462,9 +506,28 @@ int sys_pipe(int fds[2]) {
 }
 
 int sys_spawn(const char *path, const char *args, int stdout_fd) {
-    return (int)err(syscall3(SYS_SPAWN, (uint64_t)(uintptr_t)path,
-                              (uint64_t)(uintptr_t)args, (uint64_t)(int64_t)stdout_fd));
+    // Passes `environ`, which is what makes a child inherit. This is
+    // execv() to sys_spawn_env()'s execve() -- the kernel inherits
+    // nothing, the library does it for you (abi/syscall_abi.h).
+    return sys_spawn_env(path, args, stdout_fd, environ);
 }
+
+int sys_spawn_env(const char *path, const char *args, int stdout_fd, char **env) {
+    if (!flatten_env(env)) { g_errno = E2BIG; return -1; }
+    struct spawn_msg msg;
+    msg.path = path;
+    msg.args = args;
+    // An EMPTY environment is still an environment: the blob is the
+    // single terminating NUL, and the child gets envp[0] == NULL rather
+    // than no envp at all. Passing NULL here would be "no environment",
+    // which is what a kernel-side spawner means and not what a program
+    // with an empty one means.
+    msg.env = g_envblob;
+    msg.stdout_fd = stdout_fd;
+    msg.reserved = 0;
+    return (int)err(syscall1(SYS_SPAWN, (uint64_t)(uintptr_t)&msg));
+}
+
 
 // `pid` may be -1 for "any child of mine" (SYS_WAITPID's ABI comment).
 // Note the -1 RETURN then means "no children at all", which is

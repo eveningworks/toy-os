@@ -59,6 +59,7 @@
 //   - A restart pending: polls with waitpid_nohang so the backoff can
 //     expire, since a blocking wait has no deadline.
 #include "rt/sys.h"
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include "etc_config.h"
@@ -558,11 +559,37 @@ static int start_due(void) {
     return pending;
 }
 
+// THE ENVIRONMENT EVERY PROCESS ON THIS SYSTEM INHERITS.
+//
+// init is pid 1 and the ancestor of everything, and inheritance here is
+// a library convention rather than a kernel one (sys_spawn passes
+// `environ`) -- so whatever init sets is what the whole tree gets, and
+// this is the one place it comes from. That is how a real system does
+// it too: on Linux the environment a login shell has was put there by
+// pid 1 and passed down, not stored anywhere.
+//
+// Deliberately SMALL. Two variables that are true about this system,
+// rather than a list copied from a Unix that has daemons, locales and
+// terminals to describe. Anything that cannot be answered honestly
+// (TERM, USER, SHELL) is better absent: a program reading TERM=xterm
+// here would be told a lie it then acts on.
+static void seed_environment(void) {
+    // /bin is where every program lives (docs/filesystem-layout.md) and
+    // is what tosh already searches; saying so in PATH means a ported
+    // program that builds its own search list agrees with the shell.
+    setenv("PATH", "/bin", 1);
+    // There is one user and no home directories, so HOME is the root.
+    // It exists because ported code reaches for it constantly and
+    // handles it being unset far less often than it should.
+    setenv("HOME", "/", 1);
+}
+
 int main(void) {
     // No pid of its own to report -- there is no getpid() in this ABI,
     // and the kernel names the pid it spawned init as anyway.
     sys_eprint("init: starting\n");
 
+    seed_environment();
     load_target();
     g_fs_gen = sys_fs_generation();
     load_services(1);

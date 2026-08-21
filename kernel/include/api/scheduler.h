@@ -205,6 +205,19 @@ int scheduler_spawn(const char *path, const char *args);
 // syscall.c.
 int scheduler_spawn_piped(const char *path, const char *args, int pipe_idx);
 
+// The same, plus the child's ENVIRONMENT: a NUL-separated run of
+// "KEY=VALUE" strings terminated by an empty one, or NULL for none
+// (which is what scheduler_spawn_piped() passes, and what every
+// kernel-side spawner wants -- an environment is a ring-3 idea the
+// kernel only relays).
+//
+// The kernel STORES NONE OF IT and never inherits: every spawn carries
+// its own, exactly as execve() does on Unix. tolibc is what makes a
+// child inherit its parent's, by passing `environ` for the caller --
+// the execv()-vs-execve() split. See docs/decisions.md.
+int scheduler_spawn_env(const char *path, const char *args, int pipe_idx,
+                         const char *env);
+
 
 // Whether `pid` names a live or reaped-pending process started by
 // scheduler_spawn*(). For SYS_WAITPID's validation.

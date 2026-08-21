@@ -41,6 +41,7 @@ extern main
 ; A program that calls sys_exit() itself still bypasses all of it, which
 ; <stdio.h> documents as the trap that comes with buffering.
 extern exit
+extern environ
 
 _start:
     ; argc / argv / envp into the SysV argument registers for main().
@@ -67,6 +68,17 @@ _start:
     ; programs were entirely unaffected -- which is what makes the bug
     ; look mysterious rather than like an alignment problem.
     and     rsp, -16
+
+    ; PUBLISH envp AS `environ` BEFORE main() RUNS. rdx already holds it
+    ; (computed above as one slot past argv's NULL terminator), and this
+    ; is the only moment the initial stack vector is in registers --
+    ; nothing after entry can find it again.
+    ;
+    ; It is stored rather than merely passed because C programs read the
+    ; global: getenv() takes no envp argument, and neither does the
+    ; sys_spawn() that passes it on to a child. main()'s third parameter
+    ; keeps working as well; the two are the same pointer.
+    mov     [rel environ], rdx
 
     call    main
 

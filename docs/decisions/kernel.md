@@ -3688,3 +3688,64 @@ and, worse, reported `-ENOENT` for any file too large for the staging
 buffer -- `fs_read()` returns NULL for "cannot load this whole" exactly
 as it does for "not there". Nothing had noticed because nothing opened a
 large file; a libc does immediately. It asks `fs_exists()` now.
+
+## The kernel does not store an environment, and inheritance is tolibc's job
+
+`SYS_SPAWN` carries the child's environment EXPLICITLY, as a blob it
+copies onto that child's initial stack, and keeps nothing afterwards.
+There is no per-process environment in the kernel and no inheritance in
+the syscall.
+
+**This looked like a fork and is not one.** The question posed was
+whether a child should inherit its parent's environment automatically
+(what most code expects) or be handed one explicitly (what
+`posix_spawn` does). Unix answers both at once by LAYERING: `execve()`
+is the primitive and takes `envp` explicitly, while `execv()` -- no
+`e` -- is the C library function that passes the global `environ` for
+you. The kernel never inherits anything; the library does it on your
+behalf. `posix_spawn` has the same shape. Windows is the outlier, where
+`CreateProcess` takes an environment block and NULL means "inherit from
+me".
+
+toy-os copies the Unix split, and it fits a process model that was
+already `posix_spawn`-shaped rather than `fork`-shaped. `sys_spawn()`
+is `execv` and `sys_spawn_env()` is `execve`.
+
+**Why not let the kernel inherit.** It would need to store an
+environment per process and copy it at every spawn -- and the thing
+every caller actually wants, "like my parent's but with one change",
+would then need a second syscall to express, because the inherited copy
+is the kernel's rather than the caller's. Passing it explicitly makes
+that case free: the library edits `environ` and hands over the result.
+
+**`environ` lives in libsys, not tolibc.** crt0 IS libsys, and argc,
+argv and envp arrive together on the initial stack -- the startup vector
+is one thing and one layer should own it. Putting it there is also what
+made inheritance free for every existing caller: `sys_spawn()` passes
+`environ` itself, so tosh, init and the WM inherit without a line
+changing. Had it lived in tolibc, libsys could not have reached it and
+every caller would have needed updating by hand.
+
+**One blob, not a `char **`.** The environment crosses as
+`"K=V\0K=V\0\0"`, so the kernel copies a single validated run of bytes.
+A pointer array would mean walking user memory entry by entry,
+validating each pointer and each string separately -- and `args` is
+already one string for exactly this reason. Oversized is refused with
+`E2BIG` rather than truncated, because a child silently missing half its
+variables is a bug that surfaces somewhere else entirely.
+
+**`SYS_SPAWN` became a message struct rather than gaining a second
+syscall number.** Its three argument registers were full. A
+`SYS_SPAWN_ENV` beside it would have left two syscalls doing one job
+forever, and the next argument would have had to pick one -- which is
+how a syscall table grows a shape per feature instead of a row per
+capability. The struct is the shape `SYS_SETTING` and `SYS_WIN_REQUEST`
+already use, and it has a `reserved` field that must be zero so a
+caller built against a later struct is REJECTED rather than silently
+having its extra request dropped.
+
+**A consequence worth stating: a program started by the ring-0 shell's
+`run` has no environment at all.** Inheritance is a library convention,
+so a process gets one only if its parent had one to pass, and the kernel
+shell is not a ring-3 process. That is correct rather than a gap, and it
+disappears when the ring-0 shell does.

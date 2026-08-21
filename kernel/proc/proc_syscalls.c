@@ -1,6 +1,7 @@
 // The process syscalls: exiting, yielding, the heap, spawning, waiting,
 // killing, and the two clocks a process can read.
 #include "syscalls.h"
+#include "heap.h"  // the environment blob, kept off syscall_dispatch()'s frame
 #include "syscall.h"   // syscall_reset_heap()'s own declaration
 #include "syscall_abi.h"
 #include "errno.h"
@@ -263,6 +264,36 @@ int sys_kill(struct syscall_ctx *c) {
     return 0;
 }
 
+// Copies the environment blob out of user memory. It is NOT a C string
+// -- it is a run of them ending in an empty one -- so it cannot go
+// through vmm_copy_string_from_user(), which would stop at the first
+// entry's terminator and hand back one variable out of ten.
+//
+// Copied a byte at a time through the validated-range helper rather
+// than in one block, because the total length is not known until the
+// double NUL is found, and validating a range this has not measured
+// would be validating a guess.
+//
+// Returns the number of bytes written (including the terminator), or 0
+// for a malformed or oversized blob -- REFUSED, never truncated.
+static size_t copy_env_from_user(uint64_t pml4, uint64_t uptr, char *out, size_t cap) {
+    if (!uptr) return 0;
+    size_t n = 0;
+    int prev_nul = 0;
+    while (n < cap) {
+        char ch;
+        if (!vmm_copy_from_user(pml4, &ch, uptr + n, 1)) return 0;
+        out[n++] = ch;
+        if (ch == '\0') {
+            if (prev_nul || n == 1) return n;   // the empty string that ends it
+            prev_nul = 1;
+        } else {
+            prev_nul = 0;
+        }
+    }
+    return 0; // ran past the cap without finding the end
+}
+
 int sys_spawn(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
     int64_t spawn_rc = -ENOENT; // no such program, unless something below says otherwise
@@ -271,12 +302,52 @@ int sys_spawn(struct syscall_ctx *c) {
     // handed to elf_build_argv_on_stack(), which enforces the real
     // limit (one stack page) and rejects anything longer.
     char argbuf[FS_PATH_MAX];
-    if (!vmm_copy_string_from_user(pml4, path, c->a0, FS_PATH_MAX)) {
+
+    // The message struct, copied whole before anything in it is
+    // trusted -- see abi/syscall_abi.h for why spawn outgrew three
+    // registers.
+    struct spawn_msg msg;
+    if (!vmm_copy_from_user(pml4, &msg, c->a0, sizeof msg)) {
+        klog_write("syscall: spawn() rejected -- invalid message pointer\n");
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+    if (msg.reserved != 0) {
+        // A reserved field that is not zero means the caller was built
+        // against a LATER version of this struct than the kernel. Say
+        // so, rather than running a spawn whose extra request was
+        // silently dropped.
+        klog_write("syscall: spawn() rejected -- reserved field is not zero\n");
+        c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+        return 0;
+    }
+
+    // The environment lives on the HEAP, not this frame: SYS_ENV_MAX is
+    // 2 KiB and syscall_dispatch()'s frame is already the one this
+    // kernel measures (see CLAUDE.md's note on -fstack-usage).
+    char *envbuf = 0;
+    const char *env = 0;
+    if (msg.env) {
+        envbuf = kmalloc(SYS_ENV_MAX);
+        if (!envbuf) {
+            c->regs[14] = (uint64_t)(int64_t)-ENOMEM;
+            return 0;
+        }
+        if (!copy_env_from_user(pml4, (uint64_t)(uintptr_t)msg.env, envbuf, SYS_ENV_MAX)) {
+            klog_write("syscall: spawn() rejected -- bad or oversized environment\n");
+            kfree(envbuf);
+            c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+            return 0;
+        }
+        env = envbuf;
+    }
+
+    if (!vmm_copy_string_from_user(pml4, path, (uint64_t)(uintptr_t)msg.path, FS_PATH_MAX)) {
         klog_write("syscall: spawn() rejected -- invalid path pointer\n");
         spawn_rc = -EFAULT;
     } else {
         const char *args = 0;
-        if (c->a1 && vmm_copy_string_from_user(pml4, argbuf, c->a1, FS_PATH_MAX)) args = argbuf;
+        if (msg.args && vmm_copy_string_from_user(pml4, argbuf, (uint64_t)(uintptr_t)msg.args, FS_PATH_MAX)) args = argbuf;
 
         // The child's stdout override, as a DESCRIPTION index rather
         // than a pipe index: the child's fd 1 will simply name this
@@ -287,7 +358,7 @@ int sys_spawn(struct syscall_ctx *c) {
         // pipe nothing will ever write to.
         int stdout_desc = -1;
         int ok = 1;
-        int64_t wfd = (int64_t)c->a2;
+        int64_t wfd = msg.stdout_fd;
         if (wfd >= 0) {
             struct open_file *f = fd_get(pml4, (int)wfd);
             if (!f || f->kind != FD_KIND_PIPE_W) {
@@ -308,10 +379,11 @@ int sys_spawn(struct syscall_ctx *c) {
             // the code stays the default ENOENT rather than inventing a
             // distinction the layer below does not make. Splitting it
             // means giving that function a reason to return first.
-            int pid = scheduler_spawn_piped(path, args, stdout_desc);
+            int pid = scheduler_spawn_env(path, args, stdout_desc, env);
             if (pid > 0) spawn_rc = pid;
         }
     }
+    if (envbuf) kfree(envbuf);
     c->regs[14] = (uint64_t)(int64_t)spawn_rc;
     return 0;
 }

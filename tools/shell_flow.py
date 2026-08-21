@@ -97,9 +97,10 @@ class ShellFlow:
         self.session = QMPSession(port=qmp_port, **session_kwargs)
 
     def type_command(self, text, delay=0.05):
-        """Types `text` character by character, routing letters/digits
-        through send_text() and everything in _SPECIAL_CHARS through
-        its own qcode/combo -- the whole point of this class over
+        """Types `text` character by character, routing lowercase
+        letters and digits through send_text(), UPPERCASE through
+        shift+key (send_text() drops it), and everything in
+        _SPECIAL_CHARS through its own qcode/combo -- the whole point of this class over
         hand-rolling the same dance inline. Does NOT send Enter (see
         run_command(), which does) so a caller building up a line in
         pieces can still call this directly. `delay` between
@@ -112,6 +113,18 @@ class ShellFlow:
                 _SPECIAL_CHARS[ch](self.session)
             elif ch.isalnum() and ch == ch.lower():
                 self.session.send_text(ch, delay=0)
+            elif "A" <= ch <= "Z":
+                # UPPERCASE, which send_text() silently drops -- typing
+                # "PATH" through it yields nothing at all, and the test
+                # that needed it (init's environment reaching a
+                # grandchild) failed as an unmappable character rather
+                # than as a wrong result. shift + the letter's own
+                # qcode, which is its lowercase name.
+                #
+                # Same US-layout caveat as the shifted punctuation
+                # above: a qcode names a PHYSICAL key, so the guest must
+                # be on `kbd=us`.
+                self.session.combo(["shift", ch.lower()])
             else:
                 raise ValueError(
                     f"shell_flow: {ch!r} in {text!r} has no mapping -- "

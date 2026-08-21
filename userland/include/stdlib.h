@@ -18,11 +18,8 @@
 // move down, so free() returns a block to this process's free list and
 // the process's footprint never shrinks. See userland/lib/heap_os.c.
 //
-// Deliberately absent: `aligned_alloc` (nothing needs an alignment
-// stronger than the allocator's 16), and `getenv` -- which would always
-// answer NULL, because crt0 receives an envp of exactly NULL and
-// SYS_SPAWN has nowhere to put one. A getenv() that cannot ever find
-// anything is worse than its absence.
+// Deliberately absent: `aligned_alloc`, since nothing needs an
+// alignment stronger than the allocator's 16.
 #include <stddef.h>
 #include <heap.h> // the toolkit allocator this header renames
 
@@ -97,6 +94,33 @@ void *bsearch(const void *key, const void *base, size_t n, size_t size,
 #define RAND_MAX 32767
 int   rand(void);
 void  srand(unsigned seed);
+
+// --- the environment --------------------------------------------------
+//
+// `environ` is libsys's (rt/sys.h) -- crt0 sets it from the initial
+// stack, because argc, argv and envp arrive together and crt0 is that
+// layer. These are the C API over it.
+//
+// **A CHILD INHERITS BECAUSE THIS LIBRARY PASSES IT**, not because the
+// kernel keeps one: sys_spawn() hands `environ` to SYS_SPAWN, and
+// sys_spawn_env() is the form that takes one explicitly. That is
+// execv() and execve(), and toy-os copies the split deliberately.
+//
+// getenv() returns a pointer INTO the environment -- valid until the
+// next setenv()/unsetenv() touching that name, as C specifies. Copy it
+// if you need it to outlive that.
+char *getenv(const char *name);
+// Copies both strings. `overwrite` of 0 leaves an existing value alone
+// and still reports success. Returns 0, or -1 with errno EINVAL (a NULL
+// or empty name, or one containing '=') or ENOMEM.
+int   setenv(const char *name, const char *value, int overwrite);
+// Removing something absent is NOT an error, as C says.
+int   unsetenv(const char *name);
+// **STORES THE CALLER'S POINTER, with no copy** -- C's real contract,
+// and the reason setenv() exists. The string must outlive the call, so
+// a stack buffer here leaves the environment pointing at a dead frame.
+int   putenv(char *entry);
+int   clearenv(void);
 
 // --- leaving ---------------------------------------------------------
 //

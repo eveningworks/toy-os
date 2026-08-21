@@ -352,6 +352,40 @@ def main():
         # points its OWN fd 1 (or 0) at a file around the spawn and the
         # child inherits it, which is the dance fork() normally exists
         # to allow. Each is asserted by reading the file back through a
+        # THE ENVIRONMENT REACHES A REAL DESCENDANT OF init.
+        #
+        # This is the only place that can be checked. Inheritance is a
+        # LIBRARY convention here -- sys_spawn() passes `environ`, the
+        # kernel stores nothing -- so what a process has depends
+        # entirely on who started it. A program run from the ring-0
+        # shell has no environment at all, correctly, because that
+        # shell is not a ring-3 process and has none to pass.
+        #
+        # On the text target this shell IS init's child, so a program
+        # it spawns is init's grandchild, and PATH arriving here means
+        # the whole chain works: init seeded it, tosh inherited it, and
+        # tosh passed it on. Read back through the debug console's `sh
+        # cat`, a completely different path from the one being tested.
+        print("the environment")
+
+        dbg.send("sh rm /envprobe.txt")
+        time.sleep(0.4)
+        type_line(flow, "/tests/env_child PATH > /envprobe.txt")
+        time.sleep(2.5)
+        out = dbg.send("sh cat /envprobe.txt") or ""
+        check("init's PATH reaches a grandchild through the ring-3 shell",
+              "/bin" in out, out.strip()[:60])
+        # The negative half: a variable nothing set must be absent, or
+        # "it found something" would be satisfied by an environment full
+        # of noise.
+        dbg.send("sh rm /envprobe.txt")
+        time.sleep(0.4)
+        type_line(flow, "/tests/env_child NOSUCHVAR > /envprobe.txt")
+        time.sleep(2.5)
+        out = dbg.send("sh cat /envprobe.txt") or ""
+        check("and a variable nobody set is reported unset",
+              "(unset)" in out, out.strip()[:60])
+
         # completely different path (the debug console's `sh cat`), not
         # by anything the shell reports about itself.
         print("redirection")

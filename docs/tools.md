@@ -171,7 +171,10 @@ manual steps to be worth automating:
   PHYSICAL (pre-`gui`) shell instead of the GUI: `ShellFlow.
   run_command(cmd, subdir=...)` types a full command -- including
   spaces/hyphens/underscores/a few other punctuation chars
-  `qmp_test.py`'s `send_text()` can't handle on its own -- presses
+  `qmp_test.py`'s `send_text()` can't handle on its own, and
+  **UPPERCASE, which `send_text()` silently DROPS** (typing `PATH`
+  through it produces nothing at all; `ShellFlow` sends shift+key) --
+  presses
   Enter, waits, and screenshots, instead of hand-interleaving
   `send_text()`/`send_key('spc')`/`combo(['shift','minus'])` calls
   character by character every session (a real mistake -- a dropped

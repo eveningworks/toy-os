@@ -557,36 +557,49 @@ struct sys_dirent {
                         // [1] = write fd. Returns 1, or -1 (bad
                         // pointer, or no free pipe).
 
-#define SYS_SPAWN   27 // RDI = path, RSI = whitespace-separated args
-                        // (NULL/"" for none), RDX = an fd from
-                        // SYS_PIPE's WRITE end to use as the child's
-                        // stdout, or -1 to inherit. Returns the child's
-                        // pid (> 0), or -1.
-                        //
-                        // THE CHILD INHERITS THE CALLER'S WHOLE
-                        // DESCRIPTOR TABLE -- every fd names the same
-                        // open file in both, refcounted. That is what
-                        // makes redirection possible with no fork():
-                        // the parent points its own fd 1 wherever it
-                        // wants the child's to go, spawns, and puts its
-                        // own back. RDX stays as the one-call shortcut
-                        // for the common "capture this child's stdout"
-                        // case, and is applied after inheriting.
-                        //
-                        // This is what lets a ring-3 program run
-                        // another and read its output -- the thing a
-                        // terminal does, and the first time one
-                        // process here could see another's stdout.
+#define SYS_SPAWN 27 // RDI = pointer to a `struct spawn_msg` (below).
+                      // Returns the child's pid, or a negative errno.
+                      //
+                      // ABI NOTE: this took three registers (path,
+                      // args, stdout_fd) until the environment needed a
+                      // fourth. A struct rather than a second syscall
+                      // number, so there stays ONE spawn -- the shape
+                      // SYS_SETTING and SYS_WIN_REQUEST already use.
+                      // libsys's sys_spawn() keeps its old C signature,
+                      // so nothing above it changed.
 
-// Flag for SYS_WAITPID's RDX. POSIX's WNOHANG under a shorter name and
-// with the same meaning: ask, do not wait.
+// What SYS_SPAWN takes. `path` and `args` are what they always were;
+// `stdout_fd` is a pipe write end this process owns, or -1.
 //
-// It exists because the kernel primitive underneath (scheduler_poll())
-// has ALWAYS been non-blocking, and this syscall was throwing that
-// answer away -- so a ring-3 process could not ask "has it finished?"
-// without committing to wait for it. A compositor has to check the
-// processes it launched once a frame and can never block on one, so
-// without this the first client that does not exit stops the desktop.
+// **`env` IS PASSED EXPLICITLY AND THE KERNEL STORES NONE OF IT.** It
+// is a NUL-separated run of "KEY=VALUE" strings ending in an empty one
+// ("A=1\0B=2\0\0"), or NULL for no environment -- one blob rather than
+// a char** the kernel would walk pointer by pointer, validating each
+// entry out of user memory, which is the same reasoning that makes
+// `args` a single string.
+//
+// There is no inheritance HERE, deliberately. On Unix `execve()` is the
+// primitive and takes envp explicitly; `execv()` is the C LIBRARY
+// function that passes `environ` for you. toy-os copies that split:
+// this is execve, and libsys's sys_spawn() is execv. A kernel that
+// inherited would have to store an environment per process, and the
+// one thing every caller then wants -- "like my parent's, but with one
+// change" -- would need a second syscall to express.
+struct spawn_msg {
+    const char *path;
+    const char *args;      // whitespace-separated, or NULL
+    const char *env;       // "K=V\0K=V\0\0", or NULL
+    int32_t stdout_fd;     // a pipe write end this process owns, or -1
+    int32_t reserved;      // MUST be 0 -- the room the next field goes in
+};
+
+// The most an environment blob may be, including its terminator. It has
+// to fit the child's single argv/env stack page alongside the strings
+// argv already needs, so this is a ceiling rather than a promise: a
+// long argv leaves less. An oversized environment is REFUSED, never
+// truncated -- a silently missing variable is a bug somewhere else.
+#define SYS_ENV_MAX 2048
+
 #define SYS_WNOHANG 1
 
 #define SYS_WAITPID 28 // RDI = pid from SYS_SPAWN, RSI = pointer to an

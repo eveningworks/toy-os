@@ -653,7 +653,8 @@ static void switch_to_kernel(void) {
 // (>= 0) or -1 on any failure (no free slot, missing/unreadable file,
 // `args` too long to fit the one stack page, or the same allocation
 // failures every other ELF-loading path already handles the same way).
-static int spawn_from_fs(const char *path, const char *args, int stdout_desc) {
+static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
+                          const char *env) {
     int slot = -1;
     for (int i = 0; i < MAX_PROCS; i++) {
         if (procs[i].state == SCHED_UNUSED) { slot = i; break; }
@@ -704,7 +705,7 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_desc) {
     }
 
     uint64_t argc = 0, argv = 0, user_rsp = 0;
-    if (!elf_build_argv_on_stack(stack_phys, UADDR_STACK_VADDR, path, args,
+    if (!elf_build_argv_on_stack(stack_phys, UADDR_STACK_VADDR, path, args, env,
                                   &argc, &argv, &user_rsp)) {
         vmm_destroy_address_space(as);
         return -1;
@@ -1320,7 +1321,15 @@ int scheduler_spawn(const char *path, const char *args) {
 }
 
 int scheduler_spawn_piped(const char *path, const char *args, int pipe_idx) {
-    int slot = spawn_from_fs(path, args, pipe_idx);
+    // No environment. Kernel-side spawners (init, the demo) have none
+    // to pass -- an environment is a ring-3 idea that the kernel only
+    // ever relays.
+    return scheduler_spawn_env(path, args, pipe_idx, 0);
+}
+
+int scheduler_spawn_env(const char *path, const char *args, int pipe_idx,
+                         const char *env) {
+    int slot = spawn_from_fs(path, args, pipe_idx, env);
     if (slot < 0) return 0;
 
     // Clear any events left over from the previous tenant of this slot.
@@ -1506,8 +1515,8 @@ enum sched_poll_result scheduler_poll(int pid, int *out_exit_code) {
 }
 
 void scheduler_demo_run(void) {
-    int a = spawn_from_fs("/bin/counter_a", NULL, -1);
-    int b = spawn_from_fs("/bin/counter_b", NULL, -1);
+    int a = spawn_from_fs("/bin/counter_a", NULL, -1, 0);
+    int b = spawn_from_fs("/bin/counter_b", NULL, -1, 0);
     if (a < 0 || b < 0) {
         vga_write("schedtest: failed to spawn one or both counter processes --\n");
         vga_write("were /bin/counter_a and /bin/counter_b seeded onto disk.img?\n");

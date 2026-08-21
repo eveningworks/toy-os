@@ -514,3 +514,34 @@ the same handler twice is a no-op rather than a double call.
 
 Not MSI-X: MSI is a memory write to a Local APIC, and this kernel is
 8259-only. See `docs/roadmap.md`.
+
+
+## THE KERNEL STORES NO ENVIRONMENT, AND `SYS_SPAWN` TAKES A STRUCT
+
+`SYS_SPAWN`'s argument is now `RDI = &struct spawn_msg`
+(`abi/syscall_abi.h`): path, args, env, stdout_fd, and a `reserved`
+field that MUST be zero. It outgrew three registers when the
+environment arrived, and became a struct rather than a second syscall
+number so there stays one spawn with one shape.
+
+**The environment is passed EXPLICITLY on every spawn and the kernel
+keeps none of it.** That is `execve()`, and libsys's `sys_spawn()` --
+which passes `environ` for you -- is `execv()`. Inheritance is a
+LIBRARY convention here, exactly as on Unix; see `docs/decisions.md`
+for why a kernel that inherited would need a second syscall to express
+the one case everybody wants.
+
+Three things follow that are easy to trip over:
+
+- **`environ` lives in `userland/rt/` (libsys), not in tolibc**, because
+  crt0 is libsys and argc/argv/envp arrive together. `<stdlib.h>`'s
+  `getenv`/`setenv` are the C API over that same pointer.
+- **A program started by the ring-0 shell's `run` has NO environment**,
+  correctly: its parent is not a ring-3 process and has none to pass.
+  Do not "fix" this in the kernel.
+- **The blob is `"K=V\0K=V\0\0"`, not a `char **`** -- one validated
+  copy instead of a walk through user memory, the same shape `args`
+  has. Oversized is refused with `E2BIG`, never truncated.
+
+`init` seeds `PATH=/bin` and `HOME=/`, and being pid 1 is what makes
+that the whole system's environment.

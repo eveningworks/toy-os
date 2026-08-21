@@ -148,6 +148,18 @@ int     sys_fstat(int fd, struct sys_stat *out);
 // table SLOT, so a process had no way to find its own row -- which is
 // what clock() needs to read its own cpu_ns.
 int     sys_getpid(void);
+
+// --- the environment --------------------------------------------------
+
+// This process's environment, as a NULL-terminated array of "KEY=VALUE"
+// strings. Set by crt0 from the initial stack; NULL only if crt0 was
+// bypassed.
+//
+// It lives here rather than in tolibc because libsys owns the whole
+// startup vector -- crt0 IS this layer, and argc/argv/envp arrive
+// together. tolibc's <stdlib.h> getenv()/setenv() are the C API over
+// this same pointer.
+extern char **environ;
 // A second NAME for an existing file. -1 with errno EPERM when the
 // mounted filesystem's format has no link counts, which is a property
 // of the volume rather than of these two paths.
@@ -349,6 +361,17 @@ int sys_pipe(int fds[2]);
 // This plus sys_read() on the pipe's read end is how one program runs
 // another and reads what it printed -- the thing a terminal does.
 int sys_spawn(const char *path, const char *args, int stdout_fd);
+
+// The same, with the child's environment given EXPLICITLY -- pass NULL
+// for an empty one. sys_spawn() above is this with `environ`, which is
+// exactly the execv()/execve() split: the KERNEL inherits nothing, and
+// a library function passing your environment for you is what
+// inheritance actually is (abi/syscall_abi.h).
+//
+// Returns -1 with errno E2BIG if the environment does not fit
+// SYS_ENV_MAX -- refused rather than truncated, because a child missing
+// half its variables is worse than one that failed to start.
+int sys_spawn_env(const char *path, const char *args, int stdout_fd, char **env);
 
 // BLOCKS until `pid` exits, then reaps it. Writes the exit code to
 // `*out_code` if non-NULL. Returns the pid, or -1.
