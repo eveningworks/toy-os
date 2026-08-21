@@ -88,6 +88,22 @@ _Static_assert(SETTING_QUALIFIED_MAX == SETTING_ABI_QUALIFIED_MAX,
 enum setting_type {
     SETTING_TYPE_ENUM   = 0, // one of `choice`'s named options
     SETTING_TYPE_STRING = 1, // free text; no choice enumerator
+    // A BOUNDED INTEGER: `min`..`max` inclusive, moved by `step`.
+    //
+    // It exists because the alternative was making every numeric knob an
+    // ENUM of named levels, and `mouse_config.c` said so in as many
+    // words: speed was `slow`/`normal`/`fast` "because the setting is an
+    // ENUM in the registry, which is what gives it a choice list -- and
+    // a choice list is what lets a UI present it at all without
+    // inventing a slider widget. It also bounds the value: a
+    // hand-edited 0 would freeze the pointer." Both of those are what
+    // this type provides directly, so the workaround can go.
+    //
+    // The VALUE IS STILL A STRING everywhere -- `get` writes a number
+    // out, `apply` parses one in, and the /etc file holds text as it
+    // always did. Only the bounds are new. That is what keeps `config`,
+    // etc_config.c and every existing caller untouched.
+    SETTING_TYPE_INT    = 2,
 };
 
 struct setting {
@@ -123,6 +139,17 @@ struct setting {
     // tree rows. That is KDE System Settings' shape: a leaf opens a
     // MODULE with several controls, not a single control.
     const char *group;
+
+    // INT only: the inclusive range and the stepper increment. A UI
+    // reads them to bound its controls; the REGISTRY enforces them, so a
+    // value arriving from `config set` or a hand-edited file is refused
+    // in exactly the same way as one from a spinbox. `step` of 0 is
+    // read as 1.
+    //
+    // `unit` is what the number means -- "%", "px", "ms" -- shown after
+    // it by a UI. NULL when a bare number says enough.
+    int min, max, step;
+    const char *unit;
 
     // ENUM only: writes choice `index` into `out`, returning 1, or
     // returns 0 once `index` is past the last one. A callback rather

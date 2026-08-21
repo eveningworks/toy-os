@@ -36,6 +36,7 @@
 #include "ui/uui_radio_list.h"
 #include "ui/uui_dropdown.h"
 #include "ui/uui_slider.h"
+#include "ui/uui_spinbox.h"
 #include "ui/uui_checkbox.h"
 #include "ui/uui_button.h"
 #include "ui/uui_button_group.h"
@@ -61,7 +62,7 @@
 #define CHOICES_DROPDOWN_MIN 7
 
 // struct slot's `kind`.
-enum { CTRL_RADIO = 0, CTRL_COMBO, CTRL_SLIDER };
+enum { CTRL_RADIO = 0, CTRL_COMBO, CTRL_SLIDER, CTRL_SPIN };
 
 enum { ID_TREE = 1, ID_BODY, ID_PAGE, ID_ADVANCED, ID_BUTTONS, ID_STATUS,
        ID_CONTROL_BASE = 100 }; // + slot, so a control names its own row
@@ -89,6 +90,11 @@ static char     g_cat_of[MAX_SETTINGS][SETTING_ABI_CATEGORY_MAX];
 static char     g_group_of[MAX_SETTINGS][SETTING_ABI_CATEGORY_MAX];
 static uint32_t g_type[MAX_SETTINGS];
 static uint32_t g_widget[MAX_SETTINGS];
+// INT settings only: the range the REGISTRY enforces, reported so a
+// control can bound itself to it. Cached with everything else rather
+// than re-read per draw -- SETTING_OP_INFO is a syscall.
+static int32_t  g_imin[MAX_SETTINGS], g_imax[MAX_SETTINGS], g_istep[MAX_SETTINGS];
+static char     g_unit[MAX_SETTINGS][SETTING_ABI_UNIT_MAX];
 static uint32_t g_sflags[MAX_SETTINGS];
 static int      g_order[MAX_SETTINGS];
 static int      g_setting_count;
@@ -150,15 +156,23 @@ struct slot {
     struct uui_radio_list radio;
     struct uui_dropdown   combo;
     struct uui_slider     slider;
-    // Which of the three is showing. A KIND rather than a pair of flags:
-    // two booleans can express "both" and "neither", and neither is a
-    // state this page has.
+    struct uui_spinbox    spin;
+    // Which of the four is showing. A KIND rather than a set of flags:
+    // booleans can express "both" and "neither", and neither is a state
+    // this page has.
     int kind;
-    // The staged selection, and the value the page opened with. The
-    // baseline is what the "(current)" marker names, which is what makes
-    // an accidental click visible before it is committed.
+    // The staged selection, and the value the page opened with.
+    //
+    // **FOR A CHOICE CONTROL THESE ARE INDICES; FOR CTRL_SPIN THEY ARE
+    // THE NUMBER ITSELF.** That is deliberate rather than a second pair
+    // of fields: everything the page does with them -- "is it different
+    // from the baseline", "is anything staged" -- is an equality test
+    // that reads the same either way, and only staged_value() below has
+    // to know which. Two more fields would mean every one of those
+    // tests growing a branch.
     int staged;
     int baseline;
+    char staged_buf[SETTING_ABI_VALUE_MAX]; // CTRL_SPIN's staged, as text
     int choice_count;
     char choice[MAX_CHOICES][SETTING_ABI_VALUE_MAX];      // display names
     char choice_raw[MAX_CHOICES][SETTING_ABI_VALUE_MAX];  // what gets stored
@@ -302,6 +316,10 @@ static int reload_settings(void) {
         strlcpy(g_group_of[k], m.group,    sizeof g_group_of[k]);
         g_type[k]   = m.type;
         g_widget[k] = m.widget;
+        g_imin[k]   = m.imin;
+        g_imax[k]   = m.imax;
+        g_istep[k]  = m.istep;
+        strlcpy(g_unit[k], m.unit, sizeof g_unit[k]);
         g_sflags[k] = m.sflags;
         g_order[k]  = m.order;
         g_setting_count++;
@@ -387,6 +405,25 @@ static void load_slot(struct slot *sl, int idx) {
     // but the first; a zero there simply reserves one row and the next
     // frame corrects it.
     fit_rows(&sl->explain, g_desc[idx]);
+
+    if (g_type[idx] == SETTING_ABI_TYPE_INT) {
+        // A NUMBER GETS A SPINBOX. The range comes from the REGISTRY
+        // (g_imin/g_imax/g_istep), not from anything this app decides --
+        // so a setting whose bounds change in the kernel needs no edit
+        // here, and a control can never offer a value setting_set()
+        // would refuse.
+        sl->kind = CTRL_SPIN;
+        int cur = 0;
+        for (const char *p = g_value[idx]; *p >= '0' && *p <= '9'; p++)
+            cur = cur * 10 + (*p - '0');
+        uui_spinbox_init(&sl->spin, cur, g_imin[idx], g_imax[idx],
+                          g_istep[idx], g_unit[idx][0] ? g_unit[idx] : 0);
+        // The NUMBER, not an index -- see struct slot.
+        sl->baseline = uui_spinbox_value(&sl->spin);
+        sl->staged = sl->baseline;
+        sl->choice_count = 0;
+        return;
+    }
 
     if (g_type[idx] != SETTING_ABI_TYPE_ENUM) {
         sl->kind = CTRL_RADIO;
@@ -531,6 +568,21 @@ static void open_group(int g) {
 // than assuming it worked: SETTING_UNSAVED means the change is live but
 // will not survive a reboot, which is the one thing a settings UI must
 // never report as plain success.
+// The value this slot would store, whichever control it is showing.
+//
+// ONE FUNCTION, because the alternative is a branch at each of the four
+// places that used to write `choice_raw[staged]` -- the commit, its log
+// line, and the two status-bar messages -- and a kind added later would
+// have to find all of them.
+static const char *staged_value(struct slot *sl) {
+    if (sl->kind == CTRL_SPIN) {
+        snprintf(sl->staged_buf, sizeof sl->staged_buf, "%d", sl->staged);
+        return sl->staged_buf;
+    }
+    if (sl->staged < 0 || sl->staged >= sl->choice_count) return "";
+    return sl->choice_raw[sl->staged];
+}
+
 static int apply_page(void) {
     int changed = 0, failed = 0, unsaved = 0, needs_reboot = 0;
 
@@ -543,11 +595,11 @@ static int apply_page(void) {
         memset(&m, 0, sizeof m);
         m.op = SETTING_OP_SET;
         strlcpy(m.name, g_name[sl->setting], sizeof m.name);
-        strlcpy(m.value, sl->choice_raw[sl->staged], sizeof m.value);
+        strlcpy(m.value, staged_value(sl), sizeof m.value);
         if (sys_setting(&m) != 0) { failed++; continue; }
 
         logf_("settings: set %s %s result %u\n", g_name[sl->setting],
-              sl->choice_raw[sl->staged], m.result);
+              staged_value(sl), m.result);
         if (m.result == SETTING_SAVED) changed++;
         else if (m.result == SETTING_UNSAVED) { changed++; unsaved++; }
         else failed++;
@@ -721,6 +773,14 @@ static void relayout_page(void) {
                                             .widget = &sl->slider,
                                             .id = ID_CONTROL_BASE + i,
                                             .flags = UUI_FILL_W };
+        } else if (sl->kind == CTRL_SPIN) {
+            // NOT UUI_FILL_W: a spinbox wants exactly the width of its
+            // widest number plus its steppers, and stretching it across
+            // the page would put the arrows an inch from the digits.
+            // Its natural size is the right size.
+            PAGE[n++] = (struct uui_item){ .ops = &uui_spinbox_ops,
+                                            .widget = &sl->spin,
+                                            .id = ID_CONTROL_BASE + i };
         } else {
             PAGE[n++] = (struct uui_item){ .ops = &uui_radio_list_ops,
                                             .widget = &sl->radio,
@@ -782,19 +842,24 @@ static void on_widget(struct uapp *a, int id, int reason) {
         // STAGED, not applied. The selection is remembered; Apply or OK
         // is what writes it.
         struct slot *sl = &g_slot[id - ID_CONTROL_BASE];
+        // A SPINBOX REPORTS A NUMBER, and it has already bounded it --
+        // the widget cannot produce a value outside the range the
+        // registry gave it. `staged` therefore holds the number itself
+        // here and an index everywhere else; see struct slot.
         sl->staged = sl->kind == CTRL_COMBO   ? uui_dropdown_selected(&sl->combo)
                     : sl->kind == CTRL_SLIDER ? sl->slider.selected
+                    : sl->kind == CTRL_SPIN   ? uui_spinbox_value(&sl->spin)
                                               : sl->radio.selected;
         if (sl->setting >= 0 && sl->staged >= 0) {
             snprintf(g_status, sizeof g_status, "%s -> %s   (not applied yet)",
-                     g_label[sl->setting], sl->choice_raw[sl->staged]);
+                     g_label[sl->setting], staged_value(sl));
             // LOGGED as well as shown. The status bar is pixels; a test
             // asserting on staging needs a fact, and reading the bar
             // back from a screenshot would be asserting the wrong thing
             // anyway -- what matters is that the change was staged and
             // NOT written.
             logf_("settings: staged %s %s\n", g_name[sl->setting],
-                  sl->choice_raw[sl->staged]);
+                  staged_value(sl));
         }
         uapp_redraw(a);
         return;
@@ -937,7 +1002,8 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     for (int i = 0; i < g_slot_count && !moved; i++) {
         struct slot *sl = &g_slot[i];
         int y = sl->kind == CTRL_COMBO ? sl->combo.y
-                : sl->kind == CTRL_SLIDER ? sl->slider.y : sl->radio.y;
+                : sl->kind == CTRL_SLIDER ? sl->slider.y
+                : sl->kind == CTRL_SPIN   ? sl->spin.y : sl->radio.y;
         if (y != g_last_y[i]) moved = 1;
     }
     if (moved) {
@@ -949,6 +1015,8 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
                 x = sl->combo.x; y = sl->combo.y; w = sl->combo.w; hh = sl->combo.h;
             } else if (sl->kind == CTRL_SLIDER) {
                 x = sl->slider.x; y = sl->slider.y; w = sl->slider.w; hh = sl->slider.h;
+            } else if (sl->kind == CTRL_SPIN) {
+                x = sl->spin.x; y = sl->spin.y; w = sl->spin.w; hh = sl->spin.h;
             } else {
                 x = sl->radio.x; y = sl->radio.y; w = sl->radio.w; hh = sl->radio.h;
             }
@@ -966,7 +1034,8 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
                   sl->setting >= 0 ? g_name[sl->setting] : "-", x, y, w, hh,
                   sl->choice_count,
                   sl->kind == CTRL_COMBO ? "combo"
-                    : sl->kind == CTRL_SLIDER ? "slider" : "radio");
+                    : sl->kind == CTRL_SLIDER ? "slider"
+                    : sl->kind == CTRL_SPIN ? "spin" : "radio");
         }
         logf_("settings: advanced_toggle %d %d %d %d shown %d\n",
               g_advanced_cb.x, g_advanced_cb.y, g_advanced_cb.w, g_advanced_cb.h,
@@ -1049,6 +1118,30 @@ static void on_size(int *w, int *h) {
     // caught this one too.
     g_advanced_cb.size = ugfx_char_h();
 
+    // EACH SETTING'S NAME IN BOLD, so a page of four settings reads as
+    // four blocks rather than eight interchangeable lines of text. The
+    // caption and its explanation were the same weight, and with a
+    // description under every one the page had no visual structure --
+    // the same hierarchy the sidebar's headings give the navigation,
+    // applied to the page.
+    //
+    // Bold rather than a larger size or a rule: everything is laid out
+    // on ONE line pitch, so this changes the letterforms and moves
+    // nothing, where a bigger caption would reflow the page.
+    //
+    // HERE AND NOT IN main(), for the reason the comment above gives
+    // about ugfx_char_h(): nothing font-related is valid until uapp_run()
+    // has fetched the font. The handle would in fact survive it (it is a
+    // pointer to a struct filled in later), but a rule with one silent
+    // exception is worse than no exception -- and on_size runs again
+    // after a font change, so this re-attaches for free.
+    for (int i = 0; i < PAGE_MAX; i++)
+        g_slot[i].caption.font = ugfx_font_session(UGFX_FONT_BOLD);
+    // The page's own title too, or the hierarchy comes out INVERTED: a
+    // regular-weight heading sitting above four bold ones reads as the
+    // least important thing on the page.
+    g_page_title.font = ugfx_font_session(UGFX_FONT_BOLD);
+
     int bw = ugfx_char_w() * 9, bh = ugfx_char_h() + 10;
     for (int i = 0; i < 3; i++) {
         g_btn[i].x = i * (bw + 6);
@@ -1089,6 +1182,7 @@ int main(void) {
     for (int i = 0; i < PAGE_MAX; i++) {
         g_slot[i].setting = -1;
         uui_label_init(&g_slot[i].caption, 0);
+        // (The bold weight is attached in on_size, not here -- see there.)
         uui_label_init(&g_slot[i].explain, 0);
         // One row until a description arrives that needs two -- the row
         // count is recomputed per text in fill_slot(), see there.

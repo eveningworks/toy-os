@@ -461,6 +461,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~`gfx_text_width()` that measures rather than multiplies~~ DONE 2026-08-20
 - [x] ~~Multiple faces live at once, selected per widget~~ DONE 2026-08-21 -- two tiers, and a widget takes a `struct ugfx_font *`
 - [ ] Only `uui_label` takes a font so far -- every other widget draws in whatever is current
+- [ ] A numeric setting gets a spinbox but no SLIDER -- `uui_slider` is enum-only, so there is no drag for a range
 - [x] ~~A `/usr/share/fonts` convention and a command to list what loaded~~ DONE 2026-08-20 -- `fontface`
 - [x] ~~Keep the baked font as the guaranteed fallback, so the console works with no disk font~~ DONE 2026-08-20
 - [ ] Move the SESSION font's parsing out of ring 0 -- Windows 10's `fontdrvhost`; an app already rasterizes its own

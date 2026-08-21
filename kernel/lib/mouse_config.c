@@ -6,17 +6,30 @@
 // Everything that knows what speed and acceleration DO lives in
 // kernel/drivers/mouse.c; this file only maps names to numbers.
 //
-// NAMED CHOICES, not a number. `mouse_speed=slow` rather than
-// `mouse_speed=50` because the setting is an ENUM in the registry, which
-// is what gives it a choice list -- and a choice list is what lets a UI
-// present it at all without inventing a slider widget. It also bounds
-// the value: a hand-edited 0 would freeze the pointer, and the parse
-// below simply does not accept one.
+// SPEED IS A NUMBER; ACCELERATION IS STILL NAMED. That split is the
+// interesting part of this file.
+//
+// Speed used to be an ENUM of named levels, and the comment here said
+// why: a choice list "is what lets a UI present it at all without
+// inventing a slider widget", and it bounded the value, since a
+// hand-edited 0 would freeze the pointer. Both of those were working
+// around a missing registry feature rather than describing the setting,
+// and SETTING_TYPE_INT (api/setting.h) provides them directly -- a range
+// a UI can build a spinbox from, enforced by the registry itself. So
+// speed is now a PERCENTAGE of normal, 25..300, which is what a pointer
+// speed actually is and what every desktop exposes.
+//
+// Acceleration stays an ENUM because it genuinely is one: its values are
+// device-count thresholds where LOWER means MORE acceleration, so the
+// numbers run backwards from the effect. "high" is a better name than 3
+// for the same reason `off` is a better name than 0 -- naming is doing
+// real work there, not standing in for a range.
 #include "mouse_config.h"
 #include "etc_config.h"
 #include "setting.h"
 #include "mouse.h"
 #include "string.h"
+#include "kfmt.h"
 
 #define MOUSE_CONFIG_FILE "/etc/toyos.conf"
 #define MOUSE_SPEED_KEY "mouse_speed"
@@ -26,15 +39,33 @@
 // enumerator, the parser and the getter cannot drift.
 struct named_level { const char *name; int value; };
 
-// Numerators over MOUSE_SPEED_UNIT (mouse.h), so "normal" is exactly 1x
-// and the pointer behaves as it always did when nothing is configured.
-static const struct named_level SPEEDS[] = {
-    { "slow",     MOUSE_SPEED_UNIT / 2 },
-    { "normal",   MOUSE_SPEED_UNIT },
-    { "fast",     MOUSE_SPEED_UNIT * 3 / 2 },
-    { "veryfast", MOUSE_SPEED_UNIT * 2 },
+// Speed as a PERCENTAGE of normal. 100 is exactly 1x, so a machine with
+// nothing configured behaves as it always did.
+//
+// The bounds are the useful range rather than the representable one: 25
+// is slow enough to cross a 1280px screen deliberately, 300 fast enough
+// to be twitchy, and 0 -- which would freeze the pointer entirely -- is
+// not reachable at all, from a spinbox, from `config set`, or from a
+// hand-edited /etc file. setting.c enforces that, not this file.
+#define SPEED_MIN     25
+#define SPEED_MAX     300
+#define SPEED_STEP    25
+#define SPEED_DEFAULT 100
+
+// THE OLD NAMES, STILL READ. An /etc/toyos.conf written before speed
+// became a number says `mouse_speed=slow`, and a numeric parser would
+// reject it and silently leave the pointer at the default -- a setting
+// the user chose, quietly discarded on upgrade. Reading them costs four
+// table rows; the file is rewritten as a number the next time anything
+// sets it, so this is a one-way migration and not a second format to
+// maintain.
+static const struct named_level LEGACY_SPEEDS[] = {
+    { "slow",      50 },
+    { "normal",   100 },
+    { "fast",     150 },
+    { "veryfast", 200 },
 };
-#define SPEED_COUNT ((int)(sizeof SPEEDS / sizeof SPEEDS[0]))
+#define LEGACY_SPEED_COUNT ((int)(sizeof LEGACY_SPEEDS / sizeof LEGACY_SPEEDS[0]))
 
 // Threshold in device counts per packet; 0 is off. Lower threshold =
 // acceleration kicks in sooner, so "high" is the SMALLEST number --
@@ -47,8 +78,28 @@ static const struct named_level ACCELS[] = {
 };
 #define ACCEL_COUNT ((int)(sizeof ACCELS / sizeof ACCELS[0]))
 
-static int g_speed_index = 1; // "normal"
+static int g_speed_pct = SPEED_DEFAULT;
 static int g_accel_index = 0; // "off"
+
+// A percentage into what mouse.c wants: a numerator over
+// MOUSE_SPEED_UNIT, so 100% is exactly the unit.
+static void apply_speed_pct(int pct) {
+    g_speed_pct = pct;
+    mouse_set_speed(MOUSE_SPEED_UNIT * pct / 100);
+}
+
+// Parses a stored speed: a number, or one of the legacy names. Returns
+// the percentage, or -1.
+static int parse_speed(const char *value) {
+    if (!value || !value[0]) return -1;
+    int v = 0;
+    const char *p = value;
+    for (; *p >= '0' && *p <= '9'; p++) v = v * 10 + (*p - '0');
+    if (!*p && p != value) return v;
+    for (int i = 0; i < LEGACY_SPEED_COUNT; i++)
+        if (k_strcmp(LEGACY_SPEEDS[i].name, value) == 0) return LEGACY_SPEEDS[i].value;
+    return -1;
+}
 
 static int find_level(const struct named_level *tbl, int count, const char *name) {
     for (int i = 0; i < count; i++)
@@ -59,11 +110,13 @@ static int find_level(const struct named_level *tbl, int count, const char *name
 void mouse_config_init(void) {
     char value[16];
     if (etc_config_get(MOUSE_CONFIG_FILE, MOUSE_SPEED_KEY, value, sizeof value)) {
-        int i = find_level(SPEEDS, SPEED_COUNT, value);
-        // An unrecognised name leaves the default in place rather than
-        // failing the boot -- the same tolerance every other /etc reader
-        // here has.
-        if (i >= 0) { g_speed_index = i; mouse_set_speed(SPEEDS[i].value); }
+        // An unparseable or out-of-range value leaves the default in
+        // place rather than failing the boot -- the same tolerance every
+        // other /etc reader here has. The RANGE is checked here as well
+        // as in setting.c, because a hand-edited file reaches this
+        // reader without going through setting_set() at all.
+        int pct = parse_speed(value);
+        if (pct >= SPEED_MIN && pct <= SPEED_MAX) apply_speed_pct(pct);
     }
     if (etc_config_get(MOUSE_CONFIG_FILE, MOUSE_ACCEL_KEY, value, sizeof value)) {
         int i = find_level(ACCELS, ACCEL_COUNT, value);
@@ -71,24 +124,29 @@ void mouse_config_init(void) {
     }
 }
 
+int mouse_config_speed_pct(void) { return g_speed_pct; }
+
 // --- the registry descriptors (see setting.h) ------------------------
 
-static int speed_choice(int index, char *out, uint32_t out_size) {
-    if (index < 0 || index >= SPEED_COUNT) return 0;
-    k_strlcpy(out, SPEEDS[index].name, out_size);
-    return 1;
-}
-
 static void speed_get(char *out, uint32_t out_size) {
-    k_strlcpy(out, SPEEDS[g_speed_index].name, out_size);
+    k_snprintf(out, out_size, "%d", g_speed_pct);
 }
 
 static int speed_apply(const char *value) {
-    int i = find_level(SPEEDS, SPEED_COUNT, value);
-    if (i < 0) return SETTING_INVALID;
-    g_speed_index = i;
-    mouse_set_speed(SPEEDS[i].value);
-    return etc_config_set(MOUSE_CONFIG_FILE, MOUSE_SPEED_KEY, SPEEDS[i].name)
+    // The range has ALREADY been checked by setting_set() for an INT
+    // setting -- but not when the shell or a KTEST calls this directly,
+    // so it is checked again rather than assumed. Two cheap comparisons
+    // against the alternative of a code path that can freeze the
+    // pointer.
+    int pct = parse_speed(value);
+    if (pct < SPEED_MIN || pct > SPEED_MAX) return SETTING_INVALID;
+    apply_speed_pct(pct);
+    // WRITTEN AS A NUMBER, always -- including when a legacy name came
+    // in. That is what makes reading the old names a migration rather
+    // than a format this file has to keep supporting.
+    char buf[16];
+    k_snprintf(buf, sizeof buf, "%d", pct);
+    return etc_config_set(MOUSE_CONFIG_FILE, MOUSE_SPEED_KEY, buf)
                ? SETTING_SAVED : SETTING_UNSAVED;
 }
 
@@ -117,11 +175,14 @@ static int accel_apply(const char *value) {
 static const struct setting g_speed_setting = {
     .name   = MOUSE_SPEED_KEY,
     .label  = "Pointer speed",
-    .type   = SETTING_TYPE_ENUM,
+    .type   = SETTING_TYPE_INT,
     .file   = MOUSE_CONFIG_FILE,
     .category = "Input",
     .group  = "Mouse",
-    .choice = speed_choice,
+    .min    = SPEED_MIN,
+    .max    = SPEED_MAX,
+    .step   = SPEED_STEP,
+    .unit   = "%",
     .get    = speed_get,
     .apply  = speed_apply,
 };

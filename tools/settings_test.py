@@ -157,7 +157,7 @@ def _since(mark, pattern):
 
 
 CONTROL_RE = (r"settings: control (\d+) (\S+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) "
-               r"rows (\d+) kind (radio|combo|slider)")
+               r"rows (\d+) kind (radio|combo|slider|spin)")
 
 
 def slots(dbg, mark):
@@ -181,7 +181,7 @@ def controls(dbg, mark):
     for m in _since(mark, CONTROL_RE):
         out[m.group(2)] = {"x": int(m.group(3)), "y": int(m.group(4)),
                             "w": int(m.group(5)), "h": int(m.group(6)),
-                            "rows": int(m.group(7))}
+                            "rows": int(m.group(7)), "kind": m.group(8)}
     return out
 
 
@@ -354,7 +354,10 @@ def main():
     check("...and a long list uses a DROPDOWN, not radio buttons",
           bool(tz) and tz[-1]["kind"] == "combo",
           f"kind={tz[-1]['kind'] if tz else '?'}")
-    mouse_speed = [s for s in page_slots if "mouse_speed" in s["name"]]
+    # NOT mouse_speed any more -- it became SETTING_TYPE_INT and has no
+    # choices to be short. cursor_size is the short ENUM on this page,
+    # and it is what this check was always about.
+    mouse_speed = [s for s in page_slots if "cursor_size" in s["name"]]
     check("...while a short list stays radio buttons",
           bool(mouse_speed) and mouse_speed[-1]["kind"] == "radio",
           f"kind={mouse_speed[-1]['kind'] if mouse_speed else '?'}")
@@ -388,8 +391,13 @@ def main():
     click(tx + tw // 2, mouse_row["y"])
     page_slots = slots(dbg, mark)
     before = stored_value(dbg, "mouse_speed")
-    if not check("the baseline is on disk to begin with", before == "normal",
-                 f"stored={before!r}"):
+    # A NUMBER NOW, not a named level. mouse_speed became
+    # SETTING_TYPE_INT -- a percentage with a registry-enforced range --
+    # so the baseline is whatever digits are on disk, or None when the
+    # key has never been written (a fresh image, which is the normal
+    # case for this suite).
+    if not check("the baseline is on disk or absent, and numeric if present",
+                 before is None or before.isdigit(), f"stored={before!r}"):
         return report()
     speed = [s for s in page_slots if "mouse_speed" in s["name"]]
     if not check("the Mouse page has the speed control", bool(speed)):
@@ -402,20 +410,37 @@ def main():
                  f"controls={sorted(ctls)}"):
         return report()
 
-    # Pick a row that is NOT the current one, so "it changed" cannot pass
-    # by the value already being right.
-    row_h = speed_ctl["h"] // max(speed_ctl["rows"], 1)
-    target_row = 0 if before != "slow" else 2
-    click_y = speed_ctl["y"] + row_h * target_row + row_h // 2
-    click(speed_ctl["x"] + 20, click_y)
+    # A SPINBOX NOW: click its UP stepper, which is the rightmost
+    # ~14px, top half. That is a real change whatever the current value
+    # is -- unless it is already at the maximum, which the range makes
+    # impossible for a default machine.
+    #
+    # The rect comes from the app, so this does not hardcode where the
+    # control sits; only the stepper's width is a widget constant, and
+    # it is checked by the staged value moving rather than assumed.
+    check("the speed control is a spinbox", speed_ctl["kind"] == "spin",
+          f"kind={speed_ctl['kind']}")
+    click_y = speed_ctl["y"] + speed_ctl["h"] // 4
+    click(speed_ctl["x"] + speed_ctl["w"] - 7, click_y)
     # ASSERTED ON A LOGGED FACT, not on the status bar's pixels: the
     # first version looked for the bar's wording in the log, where it
     # never appears, so it failed while the app was working perfectly.
     staged = last(r"settings: staged (\S+) (\S+)")
-    check("clicking a choice reaches the control",
+    check("stepping the spinbox reaches the control",
           staged is not None and "mouse_speed" in staged,
-          f"rect={speed_ctl}, clicked ({speed_ctl['x'] + 20}, {click_y}), "
-          f"staged: {staged or 'nothing'}")
+          f"rect={speed_ctl}, clicked ({speed_ctl['x'] + speed_ctl['w'] - 7}, "
+          f"{click_y}), staged: {staged or 'nothing'}")
+    # ...and it staged a NUMBER IN RANGE. A spinbox that reported an
+    # index (which is what every other control on this page stages)
+    # would still "reach the control" and then write 1 as the pointer
+    # speed -- which the registry would refuse, so the failure would
+    # surface as a mysterious Apply error rather than here.
+    if staged:
+        val = staged.split()[-1]
+        check("...and it staged a number, not a choice index",
+              val.isdigit() and speed_ctl["imin"] <= int(val) <= speed_ctl["imax"]
+              if "imin" in speed_ctl else val.isdigit(),
+              f"staged {val!r}")
 
     # THE LOAD-BEARING CHECK. Selecting must STAGE, not write. A staged
     # model that quietly still applied would look identical on screen.
@@ -577,9 +602,13 @@ def main():
     mark = len(drain(dbg))
     click(tx + tw // 2, mouse_row["y"])
     speed_ctl = controls(dbg, mark).get("system.mouse_speed", speed_ctl)
-    row_h = speed_ctl["h"] // max(speed_ctl["rows"], 1)
     on_disk = stored_value(dbg, "mouse_speed")
-    click(speed_ctl["x"] + 20, speed_ctl["y"] + row_h * (target_row + 1) + row_h // 2)
+    # Step it DOWN this time, so the staged value differs from the one
+    # the Apply test above left behind -- staging the value that is
+    # already stored does nothing at all (setting_set() short-circuits
+    # it), and a Cancel test whose change was a no-op proves nothing.
+    click(speed_ctl["x"] + speed_ctl["w"] - 7,
+          speed_ctl["y"] + speed_ctl["h"] * 3 // 4)
     click(bx + 2 * (bw + 6) + bw // 2, by + bh // 2)   # Cancel
     time.sleep(0.6)
     check("Cancel discards the staged change",

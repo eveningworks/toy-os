@@ -3426,3 +3426,82 @@ The general shape, which is the part worth keeping: **a "choose" step
 and an "apply" step that can silently disagree.** Whenever a setting has
 both, the invariant to assert is that a chosen thing is an applied
 thing -- not that the key was read.
+
+
+## A numeric setting is a TYPE, not four named levels
+
+`mouse_speed` was an ENUM of `slow`/`normal`/`fast`/`veryfast`, and
+`mouse_config.c` said exactly why: a choice list "is what lets a UI
+present it at all without inventing a slider widget", and it bounded the
+value, since a hand-edited 0 would freeze the pointer. Both of those are
+workarounds for a missing registry feature rather than descriptions of
+the setting, so `SETTING_TYPE_INT` removes them: `min`/`max`/`step` on
+the descriptor, reported over the ABI as `imin`/`imax`/`istep`, and a
+`unit` string.
+
+**The range lives in code and is enforced by the REGISTRY.** A spinbox
+knows the bounds and will not offer a value outside them, but `config
+set system.mouse_speed 0` and a hand-edited `/etc/toyos.conf` reach
+`setting_set()` without passing through any UI. `/etc/settings.d` may
+already override a setting's *presentation* (which widget to use, and
+its word wins) -- a range is not presentation, and letting a file widen
+it would restore the exact hazard the enum existed to prevent.
+
+**Refused, not clamped.** A caller that asked for 500 and silently got
+300 has been told its request succeeded, and the next read disagrees
+with what it sent. Out-of-range is a mistake worth reporting.
+
+**The value is still a string everywhere.** `get` writes a number out,
+`apply` parses one in, and the file holds text as it always did -- so
+`config`, `etc_config.c` and every existing caller are untouched. Only
+the bounds are new.
+
+**Acceleration deliberately stays an ENUM.** Its values are device-count
+thresholds where LOWER means MORE acceleration, so the numbers run
+backwards from the effect; `high` is a better name than `3` for the same
+reason `off` is better than `0`. Naming is doing real work there, not
+standing in for a range -- which is the test for whether a setting wants
+this type.
+
+**Old values still load.** A disk written before the change says
+`mouse_speed=slow`; the BOOT reader accepts the four old names and maps
+them to percentages, while the registry does not (they are not numbers,
+and a setting taking both would have two spellings of one value). The
+next write stores a number, so it is a one-way migration rather than a
+second format. That asymmetry is also what makes the KTEST
+discriminating: `"slow"` is the only value the two layers disagree
+about, so it is the only one that reddens when the registry's gate is
+removed -- every numeric case still fails on `speed_apply`'s own check.
+
+## A spinbox shows a value; a slider only shows a magnitude
+
+A slider cannot show that the pointer is at 150%, only that it is
+fastish, and it cannot accept an exact number by dragging. Every desktop
+exposing a numeric setting pairs the two for that reason (KDE puts a
+spinbox beside every slider); GNOME drops it and is regularly criticised
+for it.
+
+`uui_spinbox` **embeds a `uui_textbox`** rather than parsing keys
+itself, because this project has one implementation of what editing
+means (`uui_edit`) and a second living inside a spinbox would drift from
+it the first time either gained a key. What the spinbox adds is the
+steppers, the bounds, and the rule that the field holds a number.
+
+**Typing does not change the value until it is committed.** The field
+holds free text while being edited -- a half-typed "15" on the way to
+"150" is out of range and must not be clamped to 25 under the user's
+fingers -- and the value is adopted on Enter or when focus leaves. A
+stepper has no intermediate state and applies immediately. So `value`
+and the field's text can legitimately disagree for a moment, which is
+the one surprising thing about the widget.
+
+**A stepper at the end of its range draws disabled**, because a control
+that looks live and does nothing is worse than one that says it cannot.
+
+The arrows are drawn as triangles rather than spelled with characters,
+since the atlas is 101 glyphs and has none. The direction is carried by
+the WIDTH sequence with rows always running downward -- an up arrow
+starts narrow at its apex and widens. The first version varied the y
+direction instead and kept the widths, which drew both triangles upside
+down *symmetrically*, so they looked like a matched pair and read as
+deliberate until someone said so.

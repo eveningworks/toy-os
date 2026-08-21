@@ -164,6 +164,27 @@ kernel has never heard of. It is declared here rather than mapped by
 the app for the same reason the app holds no list of settings: a table
 in the UI drifts the moment a subsystem adds a key.
 
+### Which type
+
+`SETTING_TYPE_ENUM` needs a `choice` enumerator and gets radio buttons,
+a dropdown or a slider depending on how many options there are (and on
+what `/etc/settings.d` says). `SETTING_TYPE_STRING` is free text with no
+enumerator. `SETTING_TYPE_INT` is a bounded number: declare `min`, `max`
+and `step`, optionally a `unit` (`"%"`, `"px"`, `"ms"`), and System
+Settings gives it a spinbox.
+
+**The registry enforces an INT's range**, so `config set`, a hand-edited
+`/etc` file and a widget are all checked the same way — a value outside
+it is REFUSED, not clamped. `/etc/settings.d` can override which widget
+a setting uses, but not its bounds: presentation is the file's business
+and a constraint is not.
+
+**Pick ENUM over INT when the names are doing real work.**
+`mouse_accel`'s values are thresholds where lower means more
+acceleration, so `high` is a better name than `3` — the numbers run
+backwards from the effect. `mouse_speed` is a percentage and reads
+better as one, which is why it stopped being four named levels.
+
 **Do not add a setting as a bare `etc_config_get`/`_set` pair.** That is
 the shape the registry replaced, and it leaves nothing able to answer
 "what settings exist" — which is what Control Panel and `config list`

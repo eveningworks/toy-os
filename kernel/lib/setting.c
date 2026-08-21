@@ -31,6 +31,12 @@ int setting_register(const struct setting *s) {
     // picker -- a control that draws and cannot be used, which this
     // project has shipped before. Refuse at registration instead.
     if (s->type == SETTING_TYPE_ENUM && !s->choice) return 0;
+    // An INT with no usable range would accept everything, which is a
+    // STRING wearing the wrong type -- and every UI reading imin/imax
+    // would lay out a control with no ends. Refused at registration, so
+    // the mistake is a boot-time absence rather than a widget that
+    // behaves oddly much later.
+    if (s->type == SETTING_TYPE_INT && s->min >= s->max) return 0;
     // A TUNABLE WITH NO `apply` HOLDS ITS VALUE NOWHERE. The
     // persisted-only flavour (apply == NULL) works because the registry
     // writes the file itself; with no file there is nothing to write
@@ -188,10 +194,49 @@ int setting_get(const char *name, char *out, uint32_t out_size) {
     return 1;
 }
 
+// An INT setting's value, validated against its own bounds. Returns 1
+// and writes the parsed number to `out`, or 0 for anything that is not
+// a number in range.
+//
+// **THE REGISTRY IS THE GATE, NOT THE UI.** A spinbox knows the range
+// and will not offer a value outside it, but `config set
+// system.mouse_speed 0` and a hand-edited /etc/toyos.conf reach this
+// same function without passing through any widget -- and one of those
+// used to be able to freeze the pointer, which is the reason
+// mouse_config.c made speed an ENUM of named levels in the first place.
+// Checking here is what let that workaround go.
+//
+// REFUSED, not clamped. A caller that asked for 500 and silently got
+// 300 has been told its request succeeded, and the next thing it reads
+// back disagrees with what it sent; `config` then prints a value the
+// user did not type. An out-of-range value is a mistake worth
+// reporting.
+static int int_value_ok(const struct setting *s, const char *value, int *out) {
+    if (!value || !value[0]) return 0;
+    int neg = (*value == '-');
+    const char *p = neg ? value + 1 : value;
+    if (!*p) return 0;
+    int32_t v = 0;
+    for (; *p; p++) {
+        if (*p < '0' || *p > '9') return 0;
+        v = v * 10 + (*p - '0');
+        if (v > 1000000) return 0; // no overflow, and no plausible setting
+    }
+    if (neg) v = -v;
+    if (v < s->min || v > s->max) return 0;
+    if (out) *out = (int)v;
+    return 1;
+}
+
 enum setting_result setting_set(const char *name, const char *value) {
     const struct setting *s = setting_find(name);
     if (!s || !value) return SETTING_INVALID;
     if (k_strlen(value) >= SETTING_VALUE_MAX) return SETTING_INVALID;
+    // BEFORE the already-correct check below, so an out-of-range value
+    // is refused rather than being quietly accepted when it happens to
+    // equal what is already there.
+    if (s->type == SETTING_TYPE_INT && !int_value_ok(s, value, 0))
+        return SETTING_INVALID;
 
     // SETTING IT TO WHAT IT ALREADY IS COSTS NOTHING. Without this,
     // re-selecting the current value writes the file and bumps the
@@ -335,8 +380,20 @@ int setting_dispatch(struct setting_msg *msg) {
         msg->widget = setting_text_widget(setting_namespace(s), s->name);
         msg->sflags = setting_text_sflags(setting_namespace(s), s->name);
         msg->order  = setting_text_order(setting_namespace(s), s->name);
-        msg->type = (s->type == SETTING_TYPE_ENUM) ? SETTING_ABI_TYPE_ENUM
-                                                   : SETTING_ABI_TYPE_STRING;
+        msg->type = s->type == SETTING_TYPE_ENUM ? SETTING_ABI_TYPE_ENUM
+                  : s->type == SETTING_TYPE_INT  ? SETTING_ABI_TYPE_INT
+                                                 : SETTING_ABI_TYPE_STRING;
+        // Zero on every other type, so a client that ignores them sees
+        // nothing new -- and a client that reads them on an ENUM gets an
+        // empty range rather than a plausible wrong one.
+        msg->imin = msg->imax = msg->istep = 0;
+        msg->unit[0] = '\0';
+        if (s->type == SETTING_TYPE_INT) {
+            msg->imin  = s->min;
+            msg->imax  = s->max;
+            msg->istep = s->step > 0 ? s->step : 1;
+            k_strlcpy(msg->unit, s->unit ? s->unit : "", sizeof msg->unit);
+        }
         msg->count = choice_count(s);
         msg->value[0] = '\0';
         s->get(msg->value, sizeof msg->value);

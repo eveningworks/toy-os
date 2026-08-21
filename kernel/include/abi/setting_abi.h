@@ -55,6 +55,7 @@ enum setting_result {
 // Mirrors the kernel's SETTING_MAX (api/setting.h); a client should
 // still read the real count from SETTING_OP_COUNT rather than assume
 // this many exist.
+#define SETTING_ABI_UNIT_MAX 8 // "%", "px", "ms" -- see struct setting_msg
 #define SETTING_ABI_CATEGORY_MAX 24 // a UI section name, e.g. "Appearance"
 #define SETTING_ABI_DESC_MAX 120 // one line of explanation, not a paragraph
 
@@ -92,6 +93,13 @@ enum setting_result {
 // and `choice_count` is 0.
 #define SETTING_ABI_TYPE_ENUM   0
 #define SETTING_ABI_TYPE_STRING 1
+// A BOUNDED INTEGER. Its value still travels as text in `value` -- a
+// number written out is a string, and making it an int field would give
+// the message two ways to carry a value that could disagree. What the
+// type adds is `imin`/`imax`/`istep` below, which is what lets a UI
+// offer steppers and a slider instead of a free-text box, and what lets
+// the REGISTRY reject an out-of-range value before any apply() sees it.
+#define SETTING_ABI_TYPE_INT    2
 
 enum setting_op {
     // No inputs. Fills `count` with the number of registered settings.
@@ -175,6 +183,22 @@ struct setting_msg {
 
     uint32_t type;       // out: SETTING_ABI_TYPE_*
     int32_t  count;      // out: settings (COUNT) or choices (INFO)
+
+    // INT only, out on INFO: the inclusive bounds and the amount one
+    // press of a stepper moves by. Zero on every other type, so a client
+    // that ignores them is unaffected.
+    //
+    // THE BOUNDS ARE THE REGISTRY'S, NOT THE UI's. A client may use them
+    // to disable a stepper at the end of the range, but it must not be
+    // the only thing enforcing them: `config set` and a hand-edited
+    // /etc file reach the same setting without passing through any UI,
+    // so setting_set() clamps-or-refuses on its own. A UI that also
+    // knows the range is a courtesy, not the gate.
+    int32_t  imin, imax, istep;
+    // What the number MEANS, shown after it -- "%", "px", "ms". Empty
+    // when a bare number says it. Not a format string: a client prints
+    // the value and then this, and nothing here may reorder them.
+    char     unit[SETTING_ABI_UNIT_MAX];
     uint32_t result;     // out: enum setting_result (SET)
     // Out on EVERY op, so a client can notice someone else changed a
     // setting -- including a hand edit to /etc followed by `settings

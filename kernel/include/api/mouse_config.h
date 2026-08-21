@@ -12,4 +12,11 @@ void mouse_config_init(void);
 // gives them a System Settings page and a `config` entry.
 void mouse_config_setting_register(void);
 
+// The pointer speed currently in effect, as a percentage of normal.
+// Exists for the KTEST that proves a legacy `mouse_speed=slow` in
+// /etc still migrates -- the value is otherwise only reachable through
+// the setting registry's string interface, which deliberately refuses
+// the old names.
+int mouse_config_speed_pct(void);
+
 #endif

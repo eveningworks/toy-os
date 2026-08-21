@@ -532,6 +532,7 @@ whenever a headline here tells you something you did not already know.
 - **An app refuses its OWN second copy -- the launcher never does.**
 - **`uui_table` sorts on a header click, and an app supplies only a COMPARATOR.**
 - **A `uui_scrollview` NOTICES when its content's item list changes**
+- **`uui_spinbox` IS FOR A NUMBER; `uui_slider` IS FOR AN ORDERED ENUM.**
 - **`uui_slider` is for an ORDERED enum**
 - **A CONTROL BELOW THE FOLD IS UNREACHABLE, not merely hard to hit.**
 - **`on_draw` RUNS BEFORE THE WIDGETS; `on_draw_over` RUNS AFTER.**

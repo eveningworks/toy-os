@@ -268,6 +268,20 @@ this the obvious way), not from how much history it accumulated.
   broken layout, one layer away from the cause.
   `uui_scrollview_content_changed()` is still the honest thing to call
   at the point of change and is no longer load-bearing.
+- **`uui_spinbox` IS FOR A NUMBER; `uui_slider` IS FOR AN ORDERED ENUM.**
+  A slider shows a magnitude and cannot show or accept an exact value;
+  a spinbox does both. A setting gets one by declaring
+  `SETTING_TYPE_INT` with `min`/`max`/`step` -- System Settings reads
+  the range from the REGISTRY, so bounds that change in the kernel need
+  no edit in the app. **The registry enforces the range, not the
+  widget**: `config set` and a hand-edited /etc file never pass through
+  a control, and `/etc/settings.d` may override presentation but not
+  bounds. **Typing does not change the value until Enter or focus
+  loss** -- a half-typed "15" on the way to "150" must not be clamped
+  under the user's fingers -- while a stepper applies immediately.
+  A spinbox EMBEDS a `uui_textbox`, because there is one implementation
+  of what editing means.
+
 - **`uui_slider` is for an ORDERED enum** (`userland/ui/uui_slider.h`)
   -- discrete stops, one per choice, with the value an INDEX into the
   same `options` array `uui_radio_list` and `uui_dropdown` take. So a
