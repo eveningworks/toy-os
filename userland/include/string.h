@@ -88,11 +88,8 @@ static inline size_t strlcat(char *dst, const char *src, size_t n) { return k_st
 // this repo's shared-source rule exists to prevent.
 static inline char *strerror(int e) { return (char *)sys_strerror(e); }
 
-// <ctype.h>'s handful, ASCII-only (which is all k_tolower/k_toupper
-// promise -- see api/string.h).
-static inline int isdigit(int c) { return k_isdigit((char)c); }
-static inline int isspace(int c) { return k_isspace((char)c); }
-static inline int tolower(int c) { return k_tolower(c); }
-static inline int toupper(int c) { return k_toupper(c); }
+// <ctype.h>'s functions used to live here, which was always the wrong
+// header for them -- they are in <ctype.h> now, where C puts them, and
+// that file explains why only four of them are k_* wrappers.
 
 #endif

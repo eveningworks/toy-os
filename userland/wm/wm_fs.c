@@ -11,7 +11,7 @@
 // "there may be more" rather than as the whole answer.
 #define WM_FS_MAX_ENTRIES 64
 
-int wm_fs_list(const char *dir, struct dirent *out, int max) {
+int wm_fs_list(const char *dir, struct sys_dirent *out, int max) {
     if (!dir || !out || max <= 0) return -1;
     return sys_listdir(dir, out, max);
 }
@@ -45,19 +45,19 @@ static int split_parent(const char *path, char *dir, unsigned dcap,
 
 // The one lookup all three predicates below share: find `path`'s entry
 // in its parent's listing. Returns 0 if the path is missing.
-static int stat_entry(const char *path, struct dirent *out) {
+static int stat_entry(const char *path, struct sys_dirent *out) {
     char dir[64];
     const char *leaf = 0;
     if (!split_parent(path, dir, sizeof dir, &leaf)) return 0;
 
     // STATIC, not on the stack. A ring-3 stack is 16 KiB with ONE 4 KiB
-    // guard page below it, and WM_FS_MAX_ENTRIES entries of `struct dirent` is
+    // guard page below it, and WM_FS_MAX_ENTRIES entries of `struct sys_dirent` is
     // 5,216 bytes -- a frame that large does not merely overflow, it
     // steps clean OVER the guard into unmapped space, which is the
     // Stack Clash shape. Found by -Wframe-larger-than the day it was
     // added to USERLAND_CFLAGS. Safe here: the WM is one event loop and
     // this does not recurse.
-    static struct dirent ents[WM_FS_MAX_ENTRIES];
+    static struct sys_dirent ents[WM_FS_MAX_ENTRIES];
     int n = sys_listdir(dir, ents, WM_FS_MAX_ENTRIES);
     if (n <= 0) return 0;
     for (int i = 0; i < n; i++) {
@@ -76,13 +76,13 @@ int wm_fs_exists(const char *path) {
 
 int wm_fs_is_dir(const char *path) {
     if (path && path[0] == '/' && path[1] == '\0') return 1;
-    struct dirent e;
+    struct sys_dirent e;
     if (!stat_entry(path, &e)) return 0;
     return e.is_dir != 0;
 }
 
 uint32_t wm_fs_size(const char *path) {
-    struct dirent e;
+    struct sys_dirent e;
     if (!stat_entry(path, &e)) return 0;
     return e.is_dir ? 0 : e.size;
 }

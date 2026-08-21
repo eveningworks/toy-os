@@ -47,14 +47,14 @@ static char g_listdir_dir_path[FS_PATH_MAX];
 
 static void listdir_collect(const char *name, uint32_t size, int is_dir) {
     if (g_listdir_count >= g_listdir_max) return;
-    struct dirent entry;
-    struct dirent *e = &entry;
+    struct sys_dirent entry;
+    struct sys_dirent *e = &entry;
     k_strcpy(e->name, name);
     e->size = size;
     e->is_dir = (uint32_t)is_dir;
 
     // Build "<dir>/<name>" (or "/<name>" when dir is just "/") to look
-    // up this entry's own timestamps -- see struct dirent's `modified`
+    // up this entry's own timestamps -- see struct sys_dirent's `modified`
     // field comment (syscall_abi.h) for why this is here at all.
     // Zeroed rather than left uninitialized on the rare failure path
     // (shouldn't happen for anything fs_list() itself just reported),
@@ -190,7 +190,7 @@ int sys_listdir(struct syscall_ctx *c) {
     if (max > SYS_LISTDIR_MAX) max = SYS_LISTDIR_MAX;
 
     char path[FS_PATH_MAX];
-    if (!vmm_validate_user_range(pml4, c->a1, (uint64_t)max * sizeof(struct dirent)) ||
+    if (!vmm_validate_user_range(pml4, c->a1, (uint64_t)max * sizeof(struct sys_dirent)) ||
         resolve_user_path(pml4, c->a0, path)) {
         klog_write("syscall: listdir() rejected -- invalid pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
@@ -403,7 +403,7 @@ int sys_stat(struct syscall_ctx *c) {
     if (fs_stat(path, &st)) {
         out.ino = st.ino;
         // Epoch is kernel-internal (fs.h); civil time crosses the
-        // boundary, exactly as struct dirent's `modified` does.
+        // boundary, exactly as struct sys_dirent's `modified` does.
         tz_epoch_to_rtc(st.created, &out.created);
         tz_epoch_to_rtc(st.modified, &out.modified);
     }

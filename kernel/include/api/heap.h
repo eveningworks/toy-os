@@ -42,6 +42,21 @@ void *kzalloc(size_t size);
 // domain here, not the ring0/ring3 boundary syscalls have to defend).
 void kfree(void *ptr);
 
+// The usable payload size of a live block, or 0 for NULL / a pointer
+// this heap did not hand out / a block already freed.
+//
+// It exists because realloc() (ring 3's <stdlib.h>) must copy
+// min(old, new) bytes and only the allocator knows the old size --
+// copying `new` bytes from a shorter block walks off the end of the
+// last block in a region into an unmapped page. Answering 0 for a
+// pointer it does not recognise makes that copy degrade to nothing
+// rather than to garbage.
+//
+// It is NOT a promise about how much was REQUESTED: an allocator is
+// free to hand back more than was asked for, and a caller that writes
+// into the difference is relying on this number rather than on its own.
+uint64_t kmalloc_size(const void *ptr);
+
 // Stats -- same shape as pmm_total_frames()/pmm_free_frames(), useful
 // for a future meminfo-style command. `heap_total_bytes()` is every
 // byte this allocator has ever claimed from pmm (used + free);

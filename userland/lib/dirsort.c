@@ -3,7 +3,7 @@
 #include "lib/dirsort.h"
 #include <string.h>
 
-static int cmp(const struct dirent *a, const struct dirent *b,
+static int cmp(const struct sys_dirent *a, const struct sys_dirent *b,
                enum dirsort_key key, int reverse) {
     int r = 0;
     if (key == DIRSORT_SIZE) {
@@ -24,14 +24,14 @@ static int cmp(const struct dirent *a, const struct dirent *b,
     return reverse ? -r : r;
 }
 
-void dirsort(struct dirent *e, int n, enum dirsort_key key, int reverse) {
+void dirsort(struct sys_dirent *e, int n, enum dirsort_key key, int reverse) {
     // Insertion sort. n is bounded by SYS_LISTDIR_MAX and the
     // comparisons are cheap, so a quicksort would be more code than
     // either caller for a list this size. ONE scratch entry, on a ring-3
     // stack with a 2 KiB frame budget (USERLAND_CFLAGS) -- a second full
     // array would not fit.
     for (int i = 1; i < n; i++) {
-        struct dirent v = e[i];
+        struct sys_dirent v = e[i];
         int j = i - 1;
         while (j >= 0 && cmp(&e[j], &v, key, reverse) > 0) {
             e[j + 1] = e[j];

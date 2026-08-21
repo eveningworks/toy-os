@@ -133,6 +133,13 @@ TESTS = [
     # line after main() returned, which no assertion inside main() can
     # reach. The buffering check inside the file is the other one -- see
     # the test's own header.
+    # Stage 3 of the C library. Two of its checks needed a second try to
+    # become real: "zz" cannot catch a strtol that returns the
+    # post-sign position for a failed parse (both pointers are equal for
+    # that input), and nothing else in the file can see whether longjmp
+    # restored rsp, because it also restores rbp. See the test's header.
+    ("libc3_test", 0,
+     ["libc3_test: all checks passed"], ["FAIL"]),
     ("stdio_test", 0,
      ["stdio_test: all checks passed", "atexit:BA"], ["FAIL"]),
     # SYS_QUERY from ring 3. Runs fine under `run`: it spawns nothing and

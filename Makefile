@@ -500,7 +500,14 @@ LIBUAPP      = $(BUILD)/userland/libuapp.a
 # fails at link time with undefined k_* references from widgets, which
 # is at least a loud failure rather than a quiet one.
 LIBC_SRCS = $(shell find userland/libc -name '*.c' 2>/dev/null | sort)
+# .S as well as .c: setjmp/longjmp cannot be written in C at all -- it
+# is eight registers and a stack pointer -- and is the only assembly in
+# the C library. GNU `.S` rather than the kernel's NASM `.asm` because
+# everything under userland/ is built through gcc, which runs the
+# preprocessor and the assembler itself.
+LIBC_ASM  = $(shell find userland/libc -name '*.S' 2>/dev/null | sort)
 LIBC_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBC_SRCS)) \
+               $(patsubst userland/%.S,$(BUILD)/userland/%.o,$(LIBC_ASM)) \
                $(BUILD)/userland/shared/string.o \
                $(BUILD)/userland/shared/knum.o \
                $(BUILD)/userland/shared/kfmt.o \
@@ -521,6 +528,10 @@ $(LIBUAPP): $(LIBUAPP_OBJS)
 	@mkdir -p $(dir $@)
 	rm -f $@
 	$(AR) rcs $@ $^
+
+$(BUILD)/userland/%.o: userland/%.S | version
+	@mkdir -p $(dir $@)
+	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
 $(LIBC): $(LIBC_OBJS)
 	@mkdir -p $(dir $@)

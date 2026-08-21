@@ -141,7 +141,7 @@ static const struct uui_menu_item menu_bar[] = {
 // application's own -- see the file header.
 #define DIALOG_MAX_FILES 32
 static int g_dialog_open;
-static struct dirent g_entries[DIALOG_MAX_FILES];
+static struct sys_dirent g_entries[DIALOG_MAX_FILES];
 static int g_entry_count;
 static int g_sel;
 static int g_dialog_saving; // 1 = "Save As" flavour: type a name
@@ -533,7 +533,7 @@ static void dir_up(void) {
 // file. Returns 1 if the dialog should close.
 static int dialog_activate(void) {
     if (g_sel < 0 || g_sel >= g_entry_count) return 1;
-    struct dirent *e = &g_entries[g_sel];
+    struct sys_dirent *e = &g_entries[g_sel];
 
     if (e->is_dir) {
         if (e->name[0] == '.' && e->name[1] == '.' && e->name[2] == '\0') dir_up();

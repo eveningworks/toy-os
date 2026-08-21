@@ -58,6 +58,13 @@ this the obvious way), not from how much history it accumulated.
   zero-pad widths for numbers and `%Ns`/`%-Ns` column padding for
   STRINGS (a value longer than its field pushes the column rather than
   being truncated), but no `*` width.
+  **`<ctype.h>`, `<assert.h>`, `<setjmp.h>`, `<dirent.h>`, `<unistd.h>`
+  and `<errno.h>` exist too**, with `strtol`/`qsort`/`bsearch`/`realloc`
+  in `<stdlib.h>`. Two things to know: **`qsort` IS NOT STABLE** and
+  must not replace `uui_table`'s or `dirsort`'s insertion sorts, which
+  are stable on purpose; and **`<unistd.h>` OMITS what this OS does not
+  have** (`fork`, `exec`, `select`) rather than stubbing it, so a port
+  that needs one gets a link error saying so.
   **`printf`, `FILE` and the stream layer exist** (`#include <stdio.h>`)
   -- buffered, with `stderr` unbuffered and a terminal line buffered.
   The trap that comes with that: **output not yet flushed is LOST if a
@@ -71,7 +78,8 @@ this the obvious way), not from how much history it accumulated.
   a caller inherits from sbrk: **`free()` never returns memory to the
   kernel** (the break cannot move down, so a process's footprint only
   grows), and a fresh region's pages arrive on touch. What still does
-  NOT exist, on purpose: `realloc`, `strtol`, `qsort`, TLS. (`errno`
+  NOT exist, on purpose: floating-point conversions in `printf`, a
+  locale, threads, TLS. (`errno`
   DOES -- `sys_errno()`/`sys_strerror()` over `abi/errno.h`; the C
   spelling is what is still missing. See `docs/libc-design.md`.)
   Three traps, all of which fail quietly: a header named `string.h`

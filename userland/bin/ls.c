@@ -34,7 +34,7 @@
 // always) and `auto` is a roadmap item, not a silent lie.
 //
 // WHAT IS NOT COLOURED, and why: executables. Real ls colours them from
-// the mode bits, and this filesystem has none -- struct dirent carries a
+// the mode bits, and this filesystem has none -- struct sys_dirent carries a
 // name, a size, is_dir and a timestamp. Colouring /bin's contents by
 // their DIRECTORY would be a rule about where a file sits rather than
 // what it is, so directories are coloured and everything else is left
@@ -65,7 +65,7 @@ static void put(const char *s) { sys_write(1, s, strlen(s)); }
 #define C_DIR   "\033[1;36m" // bright cyan
 #define C_RESET "\033[0m"
 
-static void put_name(const struct opts *o, const struct dirent *e) {
+static void put_name(const struct opts *o, const struct sys_dirent *e) {
     if (o->color && e->is_dir) put(C_DIR);
     put(e->name);
     if (o->color && e->is_dir) put(C_RESET);
@@ -128,7 +128,7 @@ static void put_timestamp(const struct rtc_time *t) {
 // forces -R below to be a queue rather than recursion: SYS_LISTDIR_MAX
 // dirents is far past ring 3's 2 KiB frame budget (USERLAND_CFLAGS), so
 // a recursive call could not have its own.
-static struct dirent g_entries[SYS_LISTDIR_MAX];
+static struct sys_dirent g_entries[SYS_LISTDIR_MAX];
 
 // -R's work list. Breadth-first, because a depth-first walk means
 // recursion and recursion means a per-level buffer this program cannot
@@ -173,7 +173,7 @@ static int list_one(const struct opts *o, const char *path, int with_header) {
             o->reverse);
 
     for (int i = 0; i < (int)count; i++) {
-        struct dirent *e = &g_entries[i];
+        struct sys_dirent *e = &g_entries[i];
 
         if (o->recurse && e->is_dir) queue_push(path, e->name);
 

@@ -63,7 +63,7 @@
 #include <string.h>
 #include "etc_config.h"
 #include "setting_abi.h"
-#include "syscall_abi.h" // struct dirent, SYS_O_*
+#include "syscall_abi.h" // struct sys_dirent, SYS_O_*
 
 #define SERVICES_DIR   "/etc/services.d"
 #define TARGET_SETTING "system.default_target"
@@ -145,7 +145,7 @@ static struct service g_svc[SVC_MAX];
 static int g_svc_count;
 static char g_target[SETTING_ABI_VALUE_MAX];
 static struct etc_config_buf g_cfg;
-static struct dirent g_ents[SVC_MAX * 2];
+static struct sys_dirent g_ents[SVC_MAX * 2];
 static char g_msg[128];
 static unsigned long long g_fs_gen;
 

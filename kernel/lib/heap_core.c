@@ -347,6 +347,38 @@ static void try_merge_next(struct heap_block *b) {
     b->free = HEAP_FREE;
 }
 
+// The usable size of a live block, which realloc() cannot be written
+// without: it has to copy min(old, new) bytes and only the allocator
+// knows the first. Reading `new` bytes from a shorter block would walk
+// off the end of the last block in a region and into an unmapped page.
+//
+// The discrimination is kfree()'s, because the two must agree about
+// which shape a pointer has -- an armed (red-zoned) block's payload
+// length is the word recorded inside its left red-zone, not the
+// header's `size`, which also covers both zones.
+//
+// Returns 0 for NULL or for a pointer this heap did not hand out, which
+// makes "copy min(size, n)" degrade to copying nothing rather than to
+// copying garbage.
+uint64_t kmalloc_size(const void *ptr) {
+    if (!ptr) return 0;
+    if (rz_armed(ptr)) {
+        const struct heap_block *b =
+            (const struct heap_block *)((const uint8_t *)ptr - HEAP_RZ_SIZE) - 1;
+        if (b->free != HEAP_IN_USE) return 0;
+        uint64_t span = *(const uint64_t *)(b + 1);
+        // The same plausibility rule rz_check() applies, so a corrupt
+        // length word answers 0 rather than a huge number.
+        if (span == 0 || (span % HEAP_ALIGN) != 0 || span + 2 * HEAP_RZ_SIZE > b->size)
+            return 0;
+        return span;
+    }
+    const struct heap_block *b = (const struct heap_block *)ptr - 1;
+    if (!header_plausible((struct heap_block *)b)) return 0;
+    if (b->free != HEAP_IN_USE) return 0;
+    return b->size;
+}
+
 void kfree(void *ptr) {
     if (!ptr) return;
 

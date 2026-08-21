@@ -82,7 +82,7 @@ static void bi_ls(struct tosh *sh, const char *arg) {
     // stack with ONE guard page below it -- the Stack Clash shape the
     // WM's own dirent arrays were moved off the stack for. This shell
     // is single-threaded and never lists two directories at once.
-    static struct dirent ents[32];
+    static struct sys_dirent ents[32];
     int n = sys_listdir(path, ents, 32);
     if (n < 0) { emit(sh, "ls: cannot read "); emit(sh, path); emit(sh, "\n"); return; }
     for (int i = 0; i < n; i++) {

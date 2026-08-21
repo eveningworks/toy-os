@@ -127,7 +127,7 @@ int main(void) {
         // legitimate pass as long as the call itself succeeds (RAX >= 0).
         // static: SYS_LISTDIR_MAX dirents overflow the ring-3 frame
         // budget, and a big local array here steps toward the guard page.
-        static struct dirent entries[SYS_LISTDIR_MAX];
+        static struct sys_dirent entries[SYS_LISTDIR_MAX];
         int64_t count = sys_listdir("/etc", entries, SYS_LISTDIR_MAX);
         int ok = (count >= 0);
         if (ok) {
@@ -155,7 +155,7 @@ int main(void) {
     // before it is the shape this repo has been bitten by.
     put("newsyscalls_test: listdir empty-vs-missing phase\n");
     {
-        static struct dirent entries[8];
+        static struct sys_dirent entries[8];
         const char *empty_dir = "/tmp_listdir_empty";
         const char *missing   = "/tmp_listdir_missing";
         const char *a_file    = "/tmp_listdir_file";

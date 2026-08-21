@@ -18,13 +18,77 @@
 // move down, so free() returns a block to this process's free list and
 // the process's footprint never shrinks. See userland/lib/heap_os.c.
 //
-// Deliberately absent, as everywhere else in this half-libc: no
-// `realloc` (Stage 3 of docs/libc-design.md), no `aligned_alloc`, and
-// no `getenv` -- which would always answer NULL, because crt0 receives
-// an envp of exactly NULL and SYS_SPAWN has nowhere to put one. A
-// getenv() that cannot ever find anything is worse than its absence.
+// Deliberately absent: `aligned_alloc` (nothing needs an alignment
+// stronger than the allocator's 16), and `getenv` -- which would always
+// answer NULL, because crt0 receives an envp of exactly NULL and
+// SYS_SPAWN has nowhere to put one. A getenv() that cannot ever find
+// anything is worse than its absence.
 #include <stddef.h>
 #include <heap.h> // the toolkit allocator this header renames
+
+// --- numbers from text -----------------------------------------------
+//
+// NOT wrappers over knum.h's k_parse_* family, and the reason is the
+// contract rather than the arithmetic: k_parse_u64() answers "did the
+// WHOLE string parse", which is what a config file wants, while
+// strtol() must stop at the first byte it cannot use and hand that
+// position back. A parser built on the first cannot be built out of the
+// second without re-scanning, and vice versa. Both are correct; they
+// answer different questions.
+//
+// `base` is 0 or 2..36. Base 0 means C's own literal rules: leading
+// "0x" is hex, a leading "0" is octal, anything else decimal.
+//
+// On overflow the result SATURATES (LONG_MAX/LONG_MIN, ULONG_MAX) and
+// errno is set to ERANGE, which is what C requires -- and is why a
+// caller that cares must clear errno first: a successful call does not
+// clear it.
+//
+// `endptr`, when not NULL, receives the first unconsumed byte. If no
+// conversion was possible it receives `nptr` itself, so a caller can
+// tell "0" from "not a number" -- both return 0.
+long           strtol(const char *nptr, char **endptr, int base);
+unsigned long  strtoul(const char *nptr, char **endptr, int base);
+// atoi()/atol() are strtol() with the errors thrown away, which is
+// exactly what C says they are. They cannot report anything, so reach
+// for strtol() in new code.
+int            atoi(const char *s);
+long           atol(const char *s);
+
+// --- arithmetic -------------------------------------------------------
+
+int   abs(int v);
+long  labs(long v);
+
+// --- sorting and searching --------------------------------------------
+//
+// **qsort IS NOT STABLE**, and this matters here because both existing
+// sorts in this tree deliberately are: uui_table keeps a previous
+// column's order within ties (the behaviour every desktop table has)
+// and dirsort tie-breaks by name. Neither can be replaced by this, and
+// neither should be -- qsort is here because a C library has one, not
+// because anything in toy-os was waiting for it.
+//
+// The comparator returns <0, 0 or >0, as C's does.
+void  qsort(void *base, size_t n, size_t size,
+            int (*cmp)(const void *, const void *));
+void *bsearch(const void *key, const void *base, size_t n, size_t size,
+              int (*cmp)(const void *, const void *));
+
+// --- pseudo-random ----------------------------------------------------
+//
+// **NOT the kernel's entropy source, and not a substitute for it.**
+// This is C's rand(): a deterministic sequence from a seed, for
+// shuffling and sampling. Anything that must be unguessable asks
+// sys_getrandom() (rt/sys.h), which is krandom.h's real generator and
+// reports its own quality.
+//
+// The generator is the one C99 itself prints as an example, so a
+// sequence is reproducible from a seed across any implementation that
+// copies the standard's -- which is what makes a seeded test repeatable.
+#define RAND_MAX 32767
+int   rand(void);
+void  srand(unsigned seed);
 
 // --- leaving ---------------------------------------------------------
 //
@@ -56,5 +120,15 @@ static inline void *calloc(size_t n, size_t size) {
 }
 
 static inline void free(void *p) { kfree(p); }
+
+// Grows or shrinks a block, COPYING every time it moves -- there is no
+// grow-in-place path, because the shared allocator has no call for
+// "extend this block if the next one is free" and adding one to satisfy
+// a single caller is not the bar this project holds. realloc(NULL, n)
+// is malloc(n) and realloc(p, 0) frees and returns NULL, as C says.
+//
+// It cannot make the process smaller either way: free() returns a block
+// to this process's own list and sbrk never moves down.
+void *realloc(void *p, size_t n);
 
 #endif

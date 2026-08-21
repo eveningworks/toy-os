@@ -104,7 +104,7 @@ int     sys_close(int fd);
 int     sys_dup(int fd);            // lowest free fd naming the same stream
 int     sys_dup2(int oldfd, int newfd); // newfd names it too; returns newfd
 int     sys_unlink(const char *path);
-int     sys_listdir(const char *path, struct dirent *out, int max);
+int     sys_listdir(const char *path, struct sys_dirent *out, int max);
 
 // THE CURRENT DIRECTORY IS THE KERNEL'S, and every path above resolves
 // against it -- so a relative path means the same thing here as at any

@@ -240,21 +240,60 @@ program links the flush path whether or not it prints.
 `-ffunction-sections` plus `--gc-sections` keeps that to the flush path
 rather than the whole of stdio.
 
-### Stage 3 -- the rest of the freestanding half
+### Stage 3 -- the rest of the freestanding half -- DONE
 
-`strtol`/`strtoul`/`strtoll` with `endptr`, `base` and `ERANGE` (the
-`k_parse_*` family has no endptr, so this is new code, not a wrapper),
-`atoi`/`atol` on top; `realloc` (copy-based -- it cannot grow in place
-and cannot shrink the process); `qsort` and `bsearch`; `abs`/`labs`/
-`div`; `rand`/`srand` over `krandom`; a full `<ctype.h>` table;
-`<assert.h>`; `<setjmp.h>` (~15 lines of asm, needed by ports and by
-nothing here yet); `<dirent.h>`'s `opendir`/`readdir`/`closedir` over
-`sys_listdir`; and a `<unistd.h>` that is a thin header over wrappers
-that all already exist. (`exit`/`atexit`/`abort` moved to Stage 2 --
-`exit()` has to flush, so stdio could not ship without them.)
+`strtol`/`strtoul`/`atoi`/`atol`, `realloc`, `qsort`/`bsearch`,
+`abs`/`labs`, `rand`/`srand`, `<ctype.h>`, `<assert.h>`, `<setjmp.h>`,
+`<dirent.h>`, `<unistd.h>`, and `errno` as an lvalue.
+(`exit`/`atexit`/`abort` moved to Stage 2 -- `exit()` has to flush, so
+stdio could not ship without them.)
 
-`errno` as an lvalue macro lands here: `#define errno (*__errno_location())`,
-the storage moving out of `sys.c`'s file-static.
+**Four things this stage settled that the plan had wrong or had not
+seen.**
+
+**`qsort` has no caller here, and the plan said it did.** Both sorts in
+this tree are deliberately STABLE with the reasoning written down --
+`uui_table` keeps a previous column's order within ties, `dirsort`
+tie-breaks by name -- and `qsort` is not stable, so replacing either
+would be a regression. `uui_table.c`'s "there is no qsort in this
+toolkit" was a statement of fact, not a wish. It is in the C library
+because C has one; that is a different bar from the toolkit's
+second-real-caller rule, and the difference is the point of choosing
+port-capable.
+
+**`struct dirent` had to be renamed.** POSIX's `<dirent.h>` declares its
+own with `d_name`, and two structs cannot share a tag in one
+translation unit. The syscall ABI's entry is `struct sys_dirent` now,
+which every other ABI struct's naming (`struct sys_stat`) already
+implied.
+
+**`errno.h` collided the way `string.h` did**, and the fix is the same:
+`abi/kerrno.h` is a forwarding header giving the kernel's list a name
+the C library has not taken. **The pattern is now general and stated in
+both shims** -- when the C library takes a name a kernel header already
+uses, the KERNEL header gets a k-prefixed alias. Only those two collide;
+`api/` and `abi/` also own `fs.h`, `heap.h`, `timer.h`, `pipe.h` and
+`query.h`, none of which the C library wants.
+
+**`realloc` forced one addition to the shared allocator.**
+`kmalloc_size()` (`api/heap.h`), because realloc has to copy
+min(old, new) bytes and only the allocator knows the first -- copying
+`new` from a shorter block walks off the end of the last block in a
+region and into an unmapped page. That is a real requirement rather than
+a convenience, which is why it was added despite having one caller.
+
+**`<unistd.h>` omits rather than stubs.** No `fork`, no `exec`, no
+`select`. A `fork()` that always failed would be worse than a link
+error: the link error says "this program needs something this OS does
+not have", which is exactly true and exactly what a porter needs to
+read. `SYS_SPAWN` is `posix_spawn`-shaped on purpose
+(`docs/init-design.md`), and a header pretending otherwise is how that
+decision would get quietly reversed.
+
+`<ctype.h>` wraps the four predicates the toolkit has and defines the
+other eight itself, rather than growing `api/string.h` with eight
+functions no kernel code calls. ASCII only, permanently -- there is no
+locale and locales are on the deliberately-not-pursued list.
 
 ### Stage 4 -- floating point in the formatter
 

@@ -213,7 +213,7 @@ everything libc-shaped is waiting on it. Full plan and staging:
 ### Runtime + interop
 
 - [ ] Inter-process IPC (message passing)
-- [ ] A real C library -- staged in `docs/libc-design.md`; stages 0-2 done (stdio works)
+- [ ] A real C library -- staged in `docs/libc-design.md`; stages 0-3 done, %f and time.h left
 - [ ] FAT16/FAT32 driver
 - [ ] `g_next_kernel_rsp` reentrancy fixed properly
 - [ ] `wintest` made non-modal

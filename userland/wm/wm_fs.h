@@ -2,7 +2,7 @@
 #define WM_FS_H
 
 #include <stdint.h>
-#include "syscall_abi.h" // struct dirent, SYS_O_*
+#include "syscall_abi.h" // struct sys_dirent, SYS_O_*
 
 // The ring-3 WM's filesystem helpers, over libsys.
 //
@@ -32,7 +32,7 @@
 // -1 if the directory could not be read at all -- which is NOT the same
 // as an empty directory, and callers that conflate the two report a
 // missing desktop as an empty one.
-int wm_fs_list(const char *dir, struct dirent *out, int max);
+int wm_fs_list(const char *dir, struct sys_dirent *out, int max);
 
 // Whether `path` exists at all. Answered by looking it up in its
 // PARENT's listing rather than by opening it, because opening a

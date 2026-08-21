@@ -27,6 +27,7 @@
 #include <stdint.h>
 #include "rt/sys.h"
 #include <string.h>
+#include <ctype.h>
 #include <stdio.h>
 #include "setting_abi.h" // enum setting_result, struct setting_msg
 

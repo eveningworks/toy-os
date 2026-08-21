@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include "errno.h" // error numbers -- what a failed syscall returns
-#include "timer.h" // struct rtc_time -- reused by SYS_GETTIME and struct dirent's `modified` below
+#include "timer.h" // struct rtc_time -- reused by SYS_GETTIME and struct sys_dirent's `modified` below
 
 // Syscall numbers (passed in RAX) and argument conventions for `int
 // 0x80`, shared between the kernel's dispatcher (kernel/proc/syscall.c)
@@ -286,7 +286,13 @@ struct win_request {
 // always shorter than a full path, just to avoid a second size constant
 // (fs.c already guarantees every component fits in FS_PATH_MAX, since
 // it's a substring of a path that does).
-struct dirent {
+// NAMED sys_dirent, NOT dirent, and the rename was forced by the C
+// library: POSIX's <dirent.h> declares its own `struct dirent` with
+// `d_name`, and two structs cannot share a tag in one translation unit.
+// The syscall ABI's own structs are `sys_*` anyway (struct sys_stat is
+// the precedent), so this is the odd one out being brought into line
+// rather than a name being surrendered.
+struct sys_dirent {
     char name[64];   // FS_PATH_MAX (fs.h) -- last path component only,
                       // e.g. "notes.txt", not "/docs/notes.txt"
     uint32_t size;    // meaningless (0) for directories, same as fs_list()
@@ -332,7 +338,7 @@ struct dirent {
 
 #define SYS_LISTDIR 13 // RDI = pointer to a NUL-terminated directory
                         // path (same length limit as SYS_OPEN), RSI =
-                        // pointer to an array of `struct dirent` (out),
+                        // pointer to an array of `struct sys_dirent` (out),
                         // RDX = capacity of that array (clamped to
                         // SYS_LISTDIR_MAX). Wraps fs_list() (fs.c).
                         // Returns the number of entries written (RAX,
@@ -949,7 +955,7 @@ struct dirent {
 // What SYS_STAT reports. Deliberately NOT POSIX's `struct stat` -- there
 // are no modes, owners, devices or link counts to put in one, and a
 // struct full of zeroed fields invites a caller to believe them. The
-// timestamps are `struct rtc_time` for the same reason `struct dirent`'s
+// timestamps are `struct rtc_time` for the same reason `struct sys_dirent`'s
 // is: the epoch shape is kernel-internal (fs.h's fs_stat_info) and is
 // converted back to civil time at this boundary.
 struct sys_stat {

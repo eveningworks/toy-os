@@ -61,6 +61,15 @@ static int g_errno;
 
 int sys_errno(void) { return g_errno; }
 
+// What <errno.h>'s `errno` macro expands through, and the reason it is
+// a FUNCTION rather than the variable itself: `errno` has to be an
+// lvalue a program can assign to, and exporting a bare global would
+// commit this file to a name every ported program also uses. musl does
+// exactly this, for the same reason plus a per-thread one that does not
+// apply here yet -- with no threads there is one errno, and TLS is not
+// a prerequisite for spelling it correctly.
+int *__errno_location(void) { return &g_errno; }
+
 // Is this return value an error code rather than a result?
 //
 // The range test is the whole contract, and it is why ERRNO_MAX is small
@@ -195,7 +204,7 @@ int sys_unlink(const char *path) {
     return (int)syscall1(SYS_UNLINK, (uint64_t)(uintptr_t)path);
 }
 
-int sys_listdir(const char *path, struct dirent *out, int max) {
+int sys_listdir(const char *path, struct sys_dirent *out, int max) {
     return (int)err(syscall3(SYS_LISTDIR, (uint64_t)(uintptr_t)path,
                               (uint64_t)(uintptr_t)out, (uint64_t)(int64_t)max));
 }

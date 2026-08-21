@@ -846,3 +846,55 @@ which is the one good thing about getting this wrong.
 The split is cheap now and awkward later: every program that comes to
 depend on the merged shape makes it harder to separate, which is why it
 was done while the libc was three files.
+
+## The C library takes the plain header name; the kernel header gets a `k` alias
+
+Stated once because it has now happened twice and will happen again.
+
+`userland/include/` comes first on the ring-3 include path, because a
+program written elsewhere asking for `<string.h>` or `<errno.h>` means
+the C library's. Two kernel headers already owned those names:
+`kernel/include/api/string.h` (the `k_*` toolkit) and
+`kernel/include/abi/errno.h` (the shared error codes). Neither can be
+reached from the libc header that displaced it -- both `<name.h>` and
+`"name.h"` resolve back to the libc's own file, where the include guard
+turns the reference into a silent no-op and every declaration
+disappears.
+
+**The rule: the C library keeps the plain name, and the kernel header
+gains a k-prefixed forwarding alias** -- `api/kstring.h`, `abi/kerrno.h`
+-- whose entire content is a quoted `#include` of its neighbour. Quoted
+is load-bearing: a quoted search starts in the including file's own
+directory, so the alias reaches the kernel header and cannot reach the
+libc's.
+
+The alternative considered and rejected was putting `-Ikernel/include`
+on the ring-3 path so both could be spelled `<api/string.h>` and
+`<abi/errno.h>`. That resolves the collision and reopens a boundary:
+`<kernel/vmm.h>` would resolve too, and "ring-3 code cannot include
+kernel internals" is currently enforced by that directory simply not
+being on the path. Two forwarding headers are cheaper than an enforced
+boundary.
+
+Only those two collide today. `api/` and `abi/` between them also own
+`fs.h`, `heap.h`, `timer.h`, `pipe.h` and `query.h`, none of which the
+C library wants -- and `time.h` is NOT among them, which is worth
+knowing before Stage 5 adds one.
+
+## `struct dirent` became `struct sys_dirent`
+
+POSIX's `<dirent.h>` declares a `struct dirent` with `d_name`, and two
+structs cannot share a tag in one translation unit. The syscall ABI's
+directory entry had that name; it is `struct sys_dirent` now, across
+fifteen files.
+
+The rename is not a concession -- it is the ABI's own convention
+arriving late. Every other struct crossing that boundary is `sys_*`
+(`struct sys_stat` being the one this most resembles), so `dirent` was
+the outlier, and it only looked correct while nothing needed the C name.
+
+The POSIX struct is deliberately NOT a copy of the ABI one with fields
+renamed: it carries `d_type` and `d_name` and no `d_ino`, because
+`SYS_LISTDIR` does not report an inode and a field that was always zero
+would invite somebody to believe it. `SYS_STAT` reports one, and a
+caller that needs it has the name to ask with.
