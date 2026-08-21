@@ -1114,3 +1114,96 @@ The counter-case is the test for it: acceleration stays an ENUM, because
 its values are thresholds where LOWER means MORE and `high` is a better
 name than `3`. Naming is doing real work there, not standing in for a
 range.
+
+---
+
+## CHECK WHETHER THE FORK IS REAL BEFORE OFFERING IT
+
+The most useful thing this project's "say what Linux and Windows do"
+rule did in the libc work (2026-08-21), and it worked by DELETING a
+question rather than answering one.
+
+The environment milestone was presented to the maintainer as a genuine
+fork: should a child inherit its parent's environment automatically
+(Unix-like, and what most code expects), or be handed one explicitly
+(what `posix_spawn` does, and what toy-os's process model already looks
+like)? Two coherent options, real tradeoffs, worth asking about.
+
+**It is not a fork. Unix does both, by layering.** `execve()` is the
+primitive and takes `envp` EXPLICITLY -- the kernel stores no
+environment and inherits nothing, ever. `execv()`, without the `e`, is a
+C LIBRARY function that passes the global `environ` for you. Inheritance
+is a library convention sitting on an explicit ABI. `posix_spawn` has
+the same shape. Windows is the outlier, and knowing that is what makes
+the pattern visible rather than arbitrary.
+
+Once seen, the design writes itself and is better than either option
+would have been: explicit at the syscall (so "like my parent's but with
+one change" is free), inherited in the library (so every existing caller
+gets it for nothing).
+
+**The habit: research the comparison BEFORE composing the question, not
+after.** A well-constructed either/or is persuasive, and a maintainer
+answering it has no way to know the third answer exists. Two of the
+options offered in this session would have led somewhere worse than the
+thing real systems actually do -- and the cost of checking was ten
+minutes of reading.
+
+Corollary: when you catch this after asking, say so plainly and explain
+what changed. The user chose "the posix_spawn-consistent one"; what
+shipped was both, and the commit message says why.
+
+## THE BAR FOR ADDING SOMETHING DEPENDS ON WHO IT IS FOR
+
+This project's standing rule is "a second REAL caller, not a plausible
+one" -- it governs `tools/`, Toykit, and the kernel toolkit, and it is
+why those stayed small and useful.
+
+**tolibc is the deliberate exception, and the maintainer made it
+explicit**: a C library aims to be COMPLETE. If C specifies a function,
+it belongs there even when nothing in toy-os calls it, because the
+alternative is not a smaller library -- it is a link error in somebody
+else's source file, months later, with no explanation attached.
+
+The difference is the AUDIENCE. `tools/` and Toykit serve code written
+in this repo, where a missing thing gets noticed and added by the person
+who needed it. A C library serves code that has not been written yet,
+often by someone who cannot change it.
+
+**What did NOT change**: absence still needs a REASON. `fork` is absent
+because the process model is `posix_spawn`-shaped by design; `signal`
+because delivery does not exist; locales because they are on the
+not-pursued list. Each says so in its own header. "Nobody asked for it"
+stopped being a reason in tolibc; "this would be a lie about the system"
+did not.
+
+**Recognising which kind of thing you are building is the judgement
+call.** Ask who the next caller is and whether they can add it
+themselves.
+
+## WHEN THE C LIBRARY TAKES A NAME THE KERNEL ALREADY USES
+
+A small pattern, now applied twice, worth knowing before it happens a
+third time.
+
+`userland/include/` comes FIRST on the ring-3 include path, because a
+program written elsewhere asking for `<string.h>` means the C library's.
+That displaced two kernel headers that owned those names --
+`api/string.h` (the `k_*` toolkit) and `abi/errno.h` -- and neither
+could then be reached from the libc header that replaced it: both
+`<name.h>` and `"name.h"` resolve back to the libc's own file, where the
+include guard turns the reference into a silent no-op and every
+declaration disappears.
+
+**The rule: the C library keeps the plain name, and the KERNEL header
+gains a k-prefixed forwarding alias** (`api/kstring.h`, `abi/kerrno.h`)
+whose entire content is a quoted `#include` of its neighbour. Quoted is
+load-bearing -- a quoted search starts in the including file's own
+directory.
+
+The alternative -- putting `-Ikernel/include` on the ring-3 path so both
+could be spelled `<api/string.h>` -- resolves the collision and reopens
+a boundary, since `<kernel/vmm.h>` would resolve too.
+
+**And check the collision list before adding a header.** `api/` and
+`abi/` also own `fs.h`, `heap.h`, `timer.h`, `pipe.h` and `query.h`.

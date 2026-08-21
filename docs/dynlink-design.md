@@ -1,0 +1,187 @@
+# Dynamic linking for toy-os
+
+A staged plan, in the shape `docs/libc-design.md` and
+`docs/signals-design.md` used. It answers the milestone
+`docs/roadmap.md` has carried since Phase 4 -- **what would it take to
+have shared libraries here, and is it worth it?**
+
+**Status: designed, not built.** Nothing here exists. Each stage below
+ships on its own and is verifiable on its own.
+
+**The precondition cleared.** This milestone was deliberately placed
+after "a real C library", because a shared libc is the main reason to
+want dynamic linking at all. tolibc is built (`docs/libc-design.md`),
+so the argument can now be had on its merits.
+
+## The honest case against, first
+
+Because it is strong, and a plan that does not state it is selling
+something.
+
+- **The memory saving here is near zero.** The payoff normally quoted --
+  one copy of libc instead of one per binary -- is worth having when a
+  system runs hundreds of processes. toy-os runs about twenty-five small
+  ones, `--gc-sections` already strips each to what it calls, and
+  `libc.a` is 166 KB of which any given program links a fraction.
+- **Static linking is a respectable modern choice, not a legacy one.**
+  musl exists partly to make static linking pleasant, Go ships static by
+  default, and every unikernel is static by construction. "Real systems
+  do it" is not an argument here, because plenty of real systems do the
+  opposite deliberately.
+- **It is the largest single piece of machinery this project would take
+  on**: a second ELF format, a loader that runs in ring 3 before `main`,
+  relocation processing, symbol resolution, and page sharing across
+  address spaces. Each of those is a place for a bug that presents as
+  "the program crashed somewhere in libc".
+
+**So what IS the case for it?** Two things, and neither is memory:
+
+1. **Plugins** -- loading code that did not exist when the program was
+   linked. There is no other way to do it, and it is what a window
+   manager, a shell, or a driver framework eventually wants.
+2. **Shipping something big.** The roadmap names Doom. A large ported
+   program that expects to `dlopen` its own modules, or simply expects a
+   dynamic toolchain, is much easier to accept than to fight.
+
+If neither of those is wanted, the correct decision is **not to build
+this**, and to record that. This document exists so the choice is made
+with the costs visible rather than by drift.
+
+## What exists today, measured
+
+Checked against the tree, not assumed.
+
+- **Every userland binary is `ET_EXEC` at a fixed address.**
+  `userland/rt/link.ld` places them at `0x8000000000` and asserts they
+  stay under `UADDR_HEAP_BASE`. `elf_load()` handles `PT_LOAD` and
+  nothing else -- no `PT_DYNAMIC`, no interpreter, no relocations.
+- **The build explicitly disables PIC.** `USERLAND_CFLAGS` carries
+  `-fno-pic -fno-pie` and `-mcmodel=large`. The large code model is
+  there because the load address is high; it and PIC interact, and that
+  interaction is the first thing Stage 1 has to settle.
+- **THE PROJECT ALREADY DOES RELOCATION, for a different reason.** The
+  KERNEL relocates itself at boot: `tools/genrelocs.py` extracts every
+  absolute reference from a `--emit-relocs` link and
+  `kernel/arch/x86_64/reloc.c` patches them for KASLR. That is the same
+  arithmetic a dynamic loader does, already written, already tested, and
+  proof the concept is understood here.
+- **There is no `mmap`.** This is the real blocker and it is not
+  specific to dynamic linking: `free()` cannot return memory for the
+  same reason, and `docs/libc-design.md` records it as a standing
+  limitation. `SYS_SBRK` grows one region and never shrinks.
+- **Frames CAN already be shared between address spaces.**
+  `vmm_map_user_borrowed()` maps a frame a process does not own -- which
+  is exactly what several processes sharing one copy of libc needs, and
+  what the compositor already relies on.
+- **`SYS_SPAWN` places argv and envp on the initial stack** and jumps
+  straight to the ELF entry point. There is no step where a loader could
+  run first.
+
+## What real systems do
+
+- **Linux**: the kernel maps the executable, sees `PT_INTERP`, and maps
+  `ld.so` too -- then jumps to `ld.so`, NOT to the program. The dynamic
+  linker is an ordinary userspace program that finishes the job and then
+  transfers control. The kernel knows almost nothing about dynamic
+  linking, which is the property worth copying: it keeps the complexity
+  in ring 3 where a bug is a crashed process.
+- **Windows**: `ntdll.dll` is mapped into every process and the loader
+  lives there; imports are resolved through an Import Address Table that
+  the loader patches. Same shape, different vocabulary.
+- **macOS `dyld`**: same again, plus a shared cache -- one pre-linked
+  image of all system libraries, mapped into every process. Worth
+  knowing about because it is the answer to "relocation at every start
+  is slow", and it is far beyond anything needed here.
+- **Lazy binding (PLT/GOT)** is universal and is an OPTIMISATION: the
+  first call to a function goes through a stub that resolves it and
+  patches the table. Eager binding at load time is simpler, correct, and
+  the right first cut -- glibc's `LD_BIND_NOW` does exactly that.
+
+**Where toy-os should differ**: no symbol versioning, no `LD_PRELOAD`,
+no shared cache, no lazy binding in the first version. Those solve
+problems of scale and compatibility that this system does not have.
+
+## Staging
+
+### Stage 0 -- `mmap`, which is not really this milestone
+
+`mmap`/`munmap` over the existing demand-paging machinery, enough to map
+a file's pages into an address space at a chosen base. **Nothing else
+here can start without it**, and it pays for itself immediately
+elsewhere: `free()` gets a way to return memory, and `docs/libc-design.md`
+loses its standing caveat.
+
+Verifiable alone: a ring-3 test that maps a file, reads it through the
+mapping, and unmaps it -- with `meminfo audit` clean afterwards, since
+mapping a file is exactly where a frame's ownership gets miscounted.
+
+### Stage 1 -- position-independent userland
+
+Turn on `-fPIC` and settle its interaction with `-mcmodel=large`. The
+likely answer is to drop to `-mcmodel=medium` or `small` and move the
+userland load address down, which touches `uaddr.h`'s map -- read
+`docs/conventions/kernel.md`'s note on that map first, since a region's
+END is what the next thing must clear.
+
+Verifiable alone: the whole existing userland builds and every test
+still passes, with nothing dynamic yet. **That is the point of doing it
+as its own stage** -- if PIC breaks something, it is much easier to see
+before a loader exists than after.
+
+### Stage 2 -- `ET_DYN` and a loader that runs first
+
+Teach `elf_load()` about `PT_DYNAMIC` and `PT_INTERP`, and make the
+kernel map the interpreter and enter IT rather than the program. The
+kernel's part ends there -- deliberately, following Linux: everything
+after is a ring-3 program.
+
+Then `/lib/ld-toy.so`: parse `DT_*`, apply `R_X86_64_RELATIVE`,
+`R_X86_64_GLOB_DAT` and `R_X86_64_JUMP_SLOT`, and jump to the real
+entry. Eager binding only.
+
+**The awkward part, named in advance**: the dynamic linker cannot use
+tolibc, because tolibc is what it is about to load. It gets its own
+minimal string/syscall subset -- which is why every real libc ships one
+(`rtld`'s private `memcpy`), and is a duplication with a genuine reason
+rather than the kind this project usually refuses.
+
+Verifiable alone: one trivial `.so` with one function, called from one
+program.
+
+### Stage 3 -- shared libc
+
+Build `libc.so` and link programs against it. The payoff, such as it is.
+
+**This is where frame sharing has to be real**: the loader must map the
+same physical pages into every process rather than reading the file
+again per process, or dynamic linking costs MORE memory than static did.
+`vmm_map_user_borrowed()` is the mechanism; the accounting is the risk,
+and `meminfo audit` is the check that already exists for it.
+
+### Stage 4 -- `dlopen`
+
+`dlopen`/`dlsym`/`dlclose`, which is the plugin case and the reason
+worth doing any of this. Nothing else in the stack changes; the loader
+grows an entry point that runs after startup instead of before it.
+
+### Stage 5 -- lazy binding, only if it is measured to matter
+
+PLT stubs and `_dl_runtime_resolve`. **Do not build this first.** It is
+an optimisation over eager binding, it is the fiddliest assembly in the
+whole plan, and whether it matters here is a measurement nobody has
+taken -- a program linking against one library with a few hundred
+symbols resolves them in microseconds.
+
+## Open questions
+
+- **Is the plugin case actually wanted?** If not, Stages 3-5 have no
+  argument behind them and Stage 0 should be built on its own merits
+  (`free()` returning memory), leaving this document as a record of a
+  decision NOT taken.
+- **Where do `.so` files live?** `docs/filesystem-layout.md` has no
+  `/lib`, and `tools/check_layout.py` enforces that table in both
+  directions, so adding one is a deliberate edit rather than a mkdir.
+- **Does the WM's client protocol survive a relocated address space?**
+  Window buffers are mapped at computed addresses (`uaddr.h`'s
+  per-window stride); PIC does not change that, but Stage 1 moving the
+  userland base might.

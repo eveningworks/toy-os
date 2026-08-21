@@ -1034,3 +1034,119 @@ ran before it in this process, and does anything the test itself does
 establish the thing it is checking? KTESTs run in the live kernel in
 link order, which makes the first question much less obvious than it
 sounds.
+
+---
+
+## AN IDENTITY IS ONLY A TEST WHERE IT IS WELL CONDITIONED
+
+From the libm work (2026-08-21), and the most transferable thing in it.
+
+`cosh(x)^2 - sinh(x)^2 == 1` is true for every real x, so it looks like
+the perfect check for two functions at once: it holds everywhere, needs
+no table of expected values, and cannot be satisfied by accident.
+
+It reported errors up to **3e-8** against a `cosh` and `sinh` that were
+individually correct to 1e-15.
+
+The reason is arithmetic, not implementation: for large x both functions
+are about `e^x/2`, so the two squares are enormous and nearly equal, and
+subtracting them cancels almost every significant digit. The check was
+measuring the SUBTRACTION. Rewriting it as `(cosh-sinh)(cosh+sinh)`
+cancels just as badly, for the same reason -- which took a second round
+to see.
+
+The well-conditioned form is **`cosh + sinh == exp`**: it adds instead
+of subtracting, so nothing cancels, and it pins both functions against a
+THIRD one rather than only against each other.
+
+**The general rule: before using an identity as a test, ask what it does
+to the error.** An identity that subtracts two nearly-equal large
+quantities tests floating point, not your code. Keeping the ill-
+conditioned form for SMALL arguments only, where the quantities are not
+yet nearly equal, is a legitimate way to have both.
+
+## EXPECTED VALUES MUST COME FROM AN INDEPENDENT IMPLEMENTATION
+
+Also from the libm and calendar work, and it is the reason both passed
+first try in a way that meant something.
+
+Every expected value in `libm_test.c` and `libc5_test.c` was generated
+by the HOST's Python -- `math.sin`, `datetime` -- and pasted in. None
+was obtained by running toy-os and writing down what it printed.
+
+That distinction is invisible when the code is right and total when it
+is wrong: a test whose expectations came from the code under test agrees
+with the code under test, including everywhere both are wrong. A
+calendar test written that way will happily certify a calendar that
+thinks 1900 was a leap year.
+
+**This is cheap.** A dozen lines of Python generating C source, run
+once, pasted in. It costs less than deriving the values by hand and is
+the difference between "the implementation is self-consistent" and "the
+implementation is correct".
+
+## THE CONTROL THAT FIRES NOTHING: THREE MORE SHAPES
+
+This repo already has the rule -- a green control means the fixture
+never reached the branch. Three fresh instances, because each failed
+differently and the third is one nobody would predict:
+
+- **The input was too simple to discriminate.** Breaking `strtol`'s
+  "no conversion returns the ORIGINAL pointer" changed nothing, because
+  the test fed it `"zz"` -- for which the original and post-sign
+  pointers are the same address. `"-zz"` and `"0xzz"` reach the branch,
+  because the sign and the prefix have already moved the cursor.
+- **Something else restored the property.** Deleting `longjmp`'s `rsp`
+  restore changed nothing, because `longjmp` also restores `rbp` -- so
+  the caller's frame stayed addressable and a stale (lower) `rsp` merely
+  left dead space below. Only reading `rsp` directly across the jump
+  can see it.
+- **THE BRANCH WAS IN A DIFFERENT FUNCTION THAN ITS NAME SUGGESTS.**
+  Replacing `cal_is_leap()` with the naive every-four-years rule
+  reddened NOTHING in the calendar tests -- because Hinnant's
+  `days_from_civil` encodes the 100/400 rules inside its own era
+  arithmetic and never calls `cal_is_leap` at all. The control fired in
+  a KERNEL ktest instead, since that function's only callers are the DST
+  rules. Dropping the `- yoe/100` term is what reddens the calendar.
+
+**The lesson from the third: when a control fires nothing, do not only
+ask whether the fixture reached the code -- ask whether the code you
+broke is the code that implements the behaviour.** A well-named function
+can be entirely bypassed by the path under test.
+
+## A MEASUREMENT QUANTISED TO THE CLOCK IS NOT A MEASUREMENT
+
+The cJSON benchmark, first version: every timing came back an exact
+multiple of 10000 us. That is the 100 Hz tick showing through -- each
+phase finished in about four ticks, so every figure carried less than
+one significant digit while looking precise to five.
+
+Then the opposite, on the same tool: under KVM a phase finished BETWEEN
+ticks, and dividing by a floor of 1 us produced "657800000 KB/s" for
+something that had simply not been measured at all.
+
+**Two habits.** Size the work against the CLOCK's resolution, not
+against taste -- a few hundred ms against a 10 ms tick. And make a
+result below the resolution SAY SO ("too fast to measure at N rounds")
+rather than dividing by a floor: an absurd number is worse than an
+absent one, because somebody will quote it.
+
+Round numbers are the tell. If every figure ends in the same zeros, the
+tool is reporting the timer.
+
+## ASSERT THE DOCUMENTED BEHAVIOUR, NOT THE ONE YOU REMEMBER
+
+`stdio_test` asserted that a second `ungetc` is refused -- true, and
+deliberately tested, while the pushback was one byte deep. `scanf`
+needed more, `FILE` grew an eight-deep stack (C guarantees one and
+permits more), and that assertion started failing.
+
+The test was not wrong when written and was not wrong to exist. What it
+needed was updating to the NEW documented depth, with the reason
+recorded -- and a check that the ninth pushback is still refused, so the
+new limit is tested rather than merely assumed.
+
+**A failing test after a deliberate change is a question, not a
+verdict**: did the contract change, or did the code break? Answer it in
+the test's comment, so the next session does not have to re-derive which
+it was.

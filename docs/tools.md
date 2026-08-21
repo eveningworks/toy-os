@@ -142,6 +142,12 @@ manual steps to be worth automating:
   after `kernel/fs/` changes), so
   "am I safe to deliver?" is one call instead of three run by hand.
   `--skip-clean` skips the initial `make clean`.
+  **It REFUSES to start while a `vm.py` guest is running**, and that
+  guard is worth its four lines: `make iso` re-seeds `disk.img` while
+  the guest holds a write lock on it, and the first thing to complain is
+  `boot_smoke_test` with "qemu exited early" -- which reads as the
+  kernel failing to boot, several minutes and a whole clean rebuild
+  after the actual mistake. Run `python3 tools/vm.py stop` first.
 - **`gui_flow.py`** -- named, composable QMP click-flows on top of
   `qmp_test.py`'s `QMPSession` (`GuiFlow` class: `enter_gui()`,
   `open_app(name)`, `run_system_action(label)`, `screenshot_named()`),
@@ -167,6 +173,24 @@ manual steps to be worth automating:
   `gui open <name>` and involves no menu, no pixels and nothing to
   drift. `GuiFlow.open_app()` is for a test that wants the real menu
   exercised rather than bypassed -- which is why it still exists.
+- **`vm.py spawn <path> [args]`** -- spawns a guest program and prints
+  the FILE it writes its report to, waiting until that file stops
+  changing. It replaces a three-command dance that was hand-rolled four
+  times in one session: `exec "spawn ..."`, sleep a guessed number of
+  seconds, `exec "cat /tmp/....out"`.
+  **Why a file rather than the console**: a SPAWNED program's output
+  arrives while this harness is between commands, where it is dropped --
+  so every spawned test here writes its verdict to `/tmp` and the
+  harness reads that. Waiting on the artifact rather than on a sleep is
+  this repo's own rule, and it is what makes this reliable rather than
+  merely shorter.
+  **Why spawn rather than `run`**: the legacy `run` loader has no
+  scheduler slot, so a program that blocks (on a pipe, on a child) or
+  asks for its own pid (`clock()`) cannot work under it.
+  It STRIPS the kernel's own log lines before deciding whether the file
+  has appeared -- without that, `elf_run:`/`syscall:` noise around every
+  `cat` looks like stable output and the first version returned three
+  kernel lines for a benchmark that had not finished running.
 - **`shell_flow.py`** -- the same idea as `gui_flow.py`, for the
   PHYSICAL (pre-`gui`) shell instead of the GUI: `ShellFlow.
   run_command(cmd, subdir=...)` types a full command -- including

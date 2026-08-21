@@ -316,6 +316,102 @@ def cmd_exec(args):
     return failed
 
 
+# Lines the KERNEL writes onto the same serial channel a command's
+# output comes back on. They appear around every command regardless of
+# what it did, so anything deciding "is there output yet" has to drop
+# them first -- see cmd_spawn()'s polling loop for what happens
+# otherwise.
+_NOISE_PREFIXES = (
+    "elf_run:", "syscall:", "sh ", "cat:", "vm:",
+)
+
+
+def _strip_kernel_noise(text):
+    if not text:
+        return ""
+    keep = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if any(stripped.startswith(p) for p in _NOISE_PREFIXES):
+            continue
+        keep.append(line)
+    return "\n".join(keep)
+
+
+def cmd_spawn(args):
+    """`spawn` a program and read the file it writes its output to.
+
+    THE DANCE THIS REPLACES, which was hand-rolled four times in one
+    session: `exec "spawn /tests/x"`, sleep for a guessed number of
+    seconds, then `exec "cat /tmp/x.out"`. Three commands, one of which
+    is a magic number.
+
+    Why the file at all: a SPAWNED program's console output arrives
+    while this harness is between commands, where it is dropped -- so
+    every spawned test here writes its verdict to /tmp and the harness
+    reads that instead. Waiting on the ARTIFACT rather than on a sleep
+    is this repo's own rule (see CLAUDE.md), and it is what makes this
+    reliable rather than merely shorter: it polls until the file
+    appears and stops growing.
+
+    Why spawn rather than run: the legacy `run` loader has no scheduler
+    slot, so a program that blocks (on a pipe, on a child) or asks for
+    its own pid (clock()) cannot work under it.
+    """
+    if not _read_pid():
+        print("vm: not running (vm.py start first)")
+        return 1
+
+    out_path = args.out or ("/tmp/" + os.path.basename(args.path) + ".out")
+    # Remove any leftover first: a stale file from a previous run is
+    # indistinguishable from a fresh one, and would be reported as this
+    # run's result.
+    _exec_one(f"sh rm {out_path}", timeout=args.timeout)
+
+    cmd = f"spawn {args.path}" + (f" {args.args}" if args.args else "")
+    started = _exec_one(f"sh {cmd}", timeout=args.timeout) or ""
+    if "started as pid" not in started:
+        print(f"vm: spawn failed\n{started}")
+        return 1
+
+    # Poll for the artifact, then for it to STOP GROWING -- a report
+    # written in pieces would otherwise be read half-finished, which is
+    # the same settled-frame problem screendumps have.
+    #
+    # THE KERNEL TALKS ON THE SAME CHANNEL, and that is not cosmetic:
+    # every `cat` prints "elf_run: calling process_run_ring3()" whether
+    # or not the file exists, so an unfiltered comparison sees stable
+    # output immediately and reports the noise as the result. The first
+    # version of this did exactly that and returned three kernel lines
+    # for a benchmark that had not finished running.
+    deadline = time.time() + args.wait
+    last = None
+    stable = 0
+    while time.time() < deadline:
+        time.sleep(0.5)
+        raw = _exec_one(f"sh cat {out_path}", timeout=args.timeout)
+        body = _strip_kernel_noise(raw)
+        if not body:
+            continue
+        if body == last:
+            stable += 1
+            if stable >= 2:
+                print(body)
+                return 0
+        else:
+            stable = 0
+            last = body
+    if last is not None:
+        print(last)
+        print(f"vm: WARNING -- {out_path} was still changing after {args.wait}s")
+        return 0
+    print(f"vm: {out_path} never appeared within {args.wait}s -- "
+          f"does {args.path} write one? (see tools/usertest_run.py's TESTS table)")
+    return 1
+
+
 def cmd_shot(args):
     if not _read_pid():
         print("vm: not running (vm.py start first)")
@@ -414,6 +510,16 @@ def main():
                         help="send to the debug console directly instead of wrapping in `sh`")
     p_exec.add_argument("--label", action="store_true", help="always print a --- command --- header")
     p_exec.set_defaults(func=cmd_exec)
+
+    p_spawn = sub.add_parser("spawn",
+                              help="spawn a program and print the file it writes")
+    p_spawn.add_argument("path", help="guest path, e.g. /tests/env_test")
+    p_spawn.add_argument("args", nargs="?", default=None, help="arguments, as one string")
+    p_spawn.add_argument("--out", default=None,
+                          help="the file it writes (default /tmp/<name>.out)")
+    p_spawn.add_argument("--wait", type=float, default=30.0,
+                          help="seconds to wait for the artifact to settle")
+    p_spawn.set_defaults(func=cmd_spawn)
 
     p_shot = sub.add_parser("shot", help="screendump to a .png")
     p_shot.add_argument("path")

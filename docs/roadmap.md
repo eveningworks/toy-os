@@ -226,6 +226,8 @@ everything libc-shaped is waiting on it. Full plan and staging:
 
 ### Dynamic linking / shared libraries
 
+Staged in `docs/dynlink-design.md`, including the case against.
+
 - [ ] A shared-object (`.so`-style) file format
 - [ ] A userspace dynamic linker
 - [ ] Shared libc (once Runtime + interop's real C library exists)

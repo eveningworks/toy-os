@@ -918,12 +918,16 @@ before reaching for anything here you have not used recently, and add to
 it (not to a one-off script) when something would save a future session
 real time. The bar is "does this fix a rederive-from-scratch cost".
 
-- **Verify before delivering** -- `preflight.sh` (the gate: clean build +
+- **Verify before delivering** -- `preflight.sh` (**stop your `vm.py`
+  guest first -- it refuses to start while one holds disk.img's write
+  lock**; the gate: clean build +
   iso + `check_deps.py` + `check_layout.py` + `check_dispatch.py` +
   `boot_smoke_test.py` + `ktest_run.py` + `usertest_run.py`),
   `check_docs.py`.
 - **Drive a VM** -- `vm.py` (text in, text out: the fastest path for
-  anything that is not about pixels), `qmp_test.py` (QMP GUI helpers),
+  anything that is not about pixels; **`vm.py spawn <path>` runs a
+  spawned test and prints the file it writes**, replacing the
+  spawn/sleep/cat dance), `qmp_test.py` (QMP GUI helpers),
   `gui_debug.py` (ask the WM what it is doing), `gui_flow.py`,
   `shell_flow.py`, `serial_console.py` (COM1 as a socket: text in, text
   out, and it does not care who owns the keyboard), `serial_capture.py`
@@ -1144,6 +1148,13 @@ detail there, and keep the pointer here to a line. What each file is:
   opposite of the rest of this project** -- complete rather than
   second-real-caller, because its audience is code not yet written.
   `userland/libc/README.md` is the shorter front page.
+- **`docs/dynlink-design.md`** -- shared libraries: what they would
+  take, staged, and **the honest case AGAINST** them here (the memory
+  payoff is near zero at this scale; static linking is a respectable
+  modern choice). Read it before starting anything `.so`-shaped -- its
+  first finding is that `mmap` blocks everything and is worth building
+  on its own merits anyway, and its second is that this project ALREADY
+  does relocation, for KASLR.
 - **`docs/signals-design.md`** -- signals, a foreground process, and what
   `Ctrl-C` actually needs. Designed, not built. **Read it before
   starting any of Phase 1's signal/TTY/job-control work**: its whole

@@ -65,6 +65,30 @@ done
 step() { echo "== $1 =="; }
 fail() { echo "preflight: FAIL -- $1"; exit 1; }
 
+# A VM LEFT RUNNING FAILS THIS GATE MINUTES LATER, AND NOT WHERE YOU
+# LOOK. `make iso` re-seeds disk.img while a guest holds a write lock on
+# it, and the first thing to actually complain is boot_smoke_test, with
+# "qemu exited early (code 1)" -- which reads as the kernel failing to
+# boot rather than as a leftover from the previous command. A whole
+# clean-build cycle is spent getting to that wrong conclusion.
+#
+# Checked here rather than in iso_guard.py because this is about a
+# PROCESS, not about the ISO being stale, and because the fix is one the
+# person running it has to make.
+vm_pid_file=""
+for f in .vm.pid .vm.0.pid .vm.1.pid .vm.2.pid .vm.3.pid; do
+  [ -f "$f" ] || continue
+  if kill -0 "$(cat "$f" 2>/dev/null)" 2>/dev/null; then vm_pid_file="$f"; break; fi
+done
+if [ -n "$vm_pid_file" ]; then
+  echo "preflight: a vm.py guest is still running (pid $(cat "$vm_pid_file"), $vm_pid_file)." >&2
+  echo "preflight: it holds a write lock on disk.img, which \`make iso\`" >&2
+  echo "preflight: re-seeds -- the gate would fail several minutes from now" >&2
+  echo "preflight: in boot_smoke_test, looking like a boot failure." >&2
+  echo "preflight: run \`python3 tools/vm.py stop\` first." >&2
+  exit 1
+fi
+
 if [ "$skip_clean" -eq 0 ]; then
   step "make clean && make all"
   make clean >/tmp/preflight_clean.log 2>&1 || fail "make clean (see /tmp/preflight_clean.log)"
