@@ -134,6 +134,11 @@ static void vformat(struct out *o, const char *fmt, va_list ap) {
         if (*p == 'z') { wide = 1; p++; } // size_t, as in %zu
 
         switch (*p) {
+        // %i is C's alias for %d in printf (they differ only in
+        // scanf, where %i honours a 0x/0 prefix). Added because the
+        // first real ported program used it -- which is the kind of gap
+        // only foreign code finds.
+        case 'i':
         case 'd':
             put_num(o, wide ? (uint64_t)va_arg(ap, long) : (uint64_t)(int64_t)va_arg(ap, int),
                      1, 0, width);

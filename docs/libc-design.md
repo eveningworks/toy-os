@@ -390,14 +390,49 @@ ring 3; dropping the `- yoe/100` term reddens five ring-3 checks. Both
 were measured, and the division is correct -- but a session hunting a
 calendar bug should know which function to look in.
 
-### Stage 6 -- proof
+### Stage 6 -- proof -- DONE
 
-**Build and run a program nobody working on this repo wrote.** A test
-that only exercises code written to pass it proves nothing here -- the
-same lesson as the Nordic-character gates in `docs/decisions.md`. Pick
-something small, self-contained, public-domain and integer-only for the
-first one; the failures it produces are the real specification for
-everything above.
+**cJSON 1.7.19 parses and re-serialises JSON on toy-os**, compiled from
+upstream's source byte for byte (`userland/ports/cjson/`, commit
+`fb16e5cf3587`, MIT). `userland/tests/cjson_test.c` is the harness and
+is ours; the 3,200 lines it links against are not.
+
+**IT DID NOT BUILD ON THE FIRST TRY, WHICH IS THE ENTIRE VALUE OF THE
+STAGE.** Every other test in `userland/tests/` was written by somebody
+who knew what this library supported, so none of them could find a gap:
+they were written around one. cJSON was written years before this OS
+existed and asks for whatever C says exists. It found exactly two
+things, and 3,200 lines compiled clean apart from them:
+
+- **`sprintf`**, which `<stdio.h>` had called deliberately absent
+  because it cannot be given a bound. Same reversal `<string.h>` made
+  for `strncpy` and for the same reason: while the library served only
+  toy-os's own code, refusing a footgun cost nothing; for a
+  port-capable one, omitting a function C requires produces a link error
+  in somebody else's source file rather than a helpful message. It is
+  built on the sink form, so no intermediate buffer caps it.
+- **`sscanf`**, which had simply never been needed. It is NOT built on
+  kfmt: the output formatter is shared with the kernel because the
+  kernel formats constantly, but nothing in ring 0 has ever PARSED a
+  format string, so there is no second caller to share with.
+  `userland/libc/scanf.c` is the C library's alone. `scanf`/`fscanf`
+  stay absent -- no caller, and `sscanf` plus `fgets` is the safe
+  combination anyway.
+- and **`%i`** in the formatter, C's printf alias for `%d`, which no
+  code written here had ever used.
+
+**THE ASSERTION IS A ROUND TRIP AND THE VALUES ARE CHECKED, not the
+shape.** A broken `strtod` that read 3.25 as 3.0 still produces a
+perfectly valid JSON document, so "it parsed" and "it printed" measure
+nothing. Deleting the fractional part of `strtod` reddens exactly the
+five value checks and nothing else -- which is also the proof that the
+harness exercises the C LIBRARY rather than cJSON's internals.
+
+**What this does NOT prove.** cJSON is integer- and string-heavy, uses
+no environment, opens no files, and spawns nothing. So the port says
+nothing about `getenv` (which cannot work -- see the open questions),
+about `<dirent.h>` or `<time.h>`, or about a program that expects
+`fork`. It is one real program, not a compatibility claim.
 
 ## Open questions
 

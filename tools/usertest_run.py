@@ -144,6 +144,14 @@ TESTS = [
     # against literals, since that is the only thing a printf caller can
     # observe -- and the accuracy limit is real (printf_float.c), so
     # nothing here asserts a 17th significant digit.
+    # THE STAGE 6 PROOF: cJSON, vendored byte for byte from upstream
+    # (userland/ports/cjson/), compiled against this C library. Every
+    # other test here was written by somebody who knew what the library
+    # supported; this one was written years before the OS existed. Its
+    # value checks are load-bearing -- a broken strtod still produces
+    # VALID JSON, so "it parsed" would measure nothing.
+    ("cjson_test", 0,
+     ["cjson_test: all checks passed"], ["FAIL"]),
     ("libc4_test", 0,
      ["libc4_test: all checks passed"], ["FAIL"]),
     # Stage 5: time_t, struct tm, mktime, strftime. Every date is a

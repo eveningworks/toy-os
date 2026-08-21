@@ -25,7 +25,7 @@
 //
 // Deliberately NOT a full printf. Supported conversions:
 //
-//   %d  signed decimal      %u  unsigned decimal    %x  lowercase hex
+//   %d %i signed decimal   %u  unsigned decimal    %x  lowercase hex
 //   %s  const char * (NULL prints as "(null)")
 //   %f %e %g (and %F %E %G) -- RING 3 ONLY, see k_fmt_float() below;
 //              in the kernel these emit literally, since there is no

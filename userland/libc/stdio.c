@@ -280,6 +280,39 @@ int fprintf(FILE *f, const char *fmt, ...) {
 
 int vprintf(const char *fmt, va_list ap) { return vfprintf(stdout, fmt, ap); }
 
+// --- sprintf ----------------------------------------------------------
+//
+// UNBOUNDED, which is why <stdio.h> called it deliberately absent until
+// a ported program needed it. The reversal is the same one <string.h>
+// made for strncpy: while this library served only toy-os's code,
+// refusing a footgun cost nothing; for a port-capable library, omitting
+// a function C requires does not produce a helpful message, it produces
+// a link error in somebody else's source. So it exists with the warning
+// attached, and snprintf() stays the one to reach for here.
+//
+// Built on the SINK form, which is what makes it correct rather than
+// merely present: there is no intermediate buffer whose size would cap
+// the output, so it writes exactly what the format produces.
+static void raw_sink(void *ctx, const char *s, size_t n) {
+    char **pp = (char **)ctx;
+    for (size_t i = 0; i < n; i++) *(*pp)++ = s[i];
+}
+
+int vsprintf(char *out, const char *fmt, va_list ap) {
+    char *p = out;
+    size_t n = k_vcbprintf(raw_sink, &p, fmt, ap);
+    *p = '\0';
+    return (int)n;
+}
+
+int sprintf(char *out, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsprintf(out, fmt, ap);
+    va_end(ap);
+    return n;
+}
+
 int printf(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);

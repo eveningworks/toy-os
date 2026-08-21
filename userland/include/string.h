@@ -55,10 +55,17 @@
 // Deliberately NOT a libc. No str[n]cat, no strtok, no locale, no
 // allocation, and nothing here that api/string.h does not already
 // implement. The bar for adding is this project's usual one: a second
-// real caller. In particular strncpy() is absent on purpose -- k_strlcpy
-// exists because strncpy's contract (no guaranteed NUL, pads to width)
-// has caused real bugs everywhere it exists; strlcpy() below is the one
-// to reach for.
+// real caller.
+//
+// **strncpy() IS HERE NOW, AND THE REVERSAL IS THE POINT.** It was
+// absent on purpose while this header served only toy-os's own code:
+// its contract (no guaranteed NUL, pads the whole width) has caused
+// real bugs everywhere it exists, and k_strlcpy is better in every way.
+// But the audience changed -- a port-capable C library that omits a
+// function C requires does not fail with a helpful message, it fails at
+// LINK TIME in somebody else's source file. So it exists, with the
+// warning attached rather than the function removed, and strlcpy()
+// remains the one to reach for in code written here.
 
 // --- the four GCC can emit calls to (real symbols, lib/string.c) -----
 void *memcpy(void *dst, const void *src, size_t n);
@@ -75,6 +82,35 @@ static inline char *strchr(const char *s, int c) { return k_strchr(s, (char)c); 
 static inline char *strrchr(const char *s, int c) { return k_strrchr(s, (char)c); }
 static inline char *strstr(const char *h, const char *n) { return k_strstr(h, n); }
 static inline int strcasecmp(const char *a, const char *b) { return k_strcasecmp(a, b); }
+
+// --- the rest of C's set (real symbols, userland/libc/string.c) ------
+//
+// Out of line rather than inline, because a ported program may take the
+// address of one -- qsort(a, n, sz, (int(*)(const void*,const void*))strcmp)
+// is ordinary C, and a static inline gives every translation unit its
+// own copy of that address.
+//
+// **strncpy: NOT a bounded strcpy.** It does not NUL-terminate when the
+// source is `n` or more characters, and it pads the whole of the rest
+// of `dst` with zeroes when it is shorter. Both surprise people. It is
+// here because C requires it; use strlcpy().
+char  *strncpy(char *dst, const char *src, size_t n);
+char  *strcat(char *dst, const char *src);
+char  *strncat(char *dst, const char *src, size_t n);
+void  *memchr(const void *s, int c, size_t n);
+// The span of `s` made only of bytes in `accept` / not in `reject`.
+size_t strspn(const char *s, const char *accept);
+size_t strcspn(const char *s, const char *reject);
+char  *strpbrk(const char *s, const char *accept);
+// **strtok MODIFIES its input and keeps STATIC state between calls**,
+// which makes it unusable from two places at once. strtok_r takes the
+// state explicitly and is what to use in anything new.
+char  *strtok(char *s, const char *delim);
+char  *strtok_r(char *s, const char *delim, char **saveptr);
+// POSIX rather than C, and universal in ported code. The result comes
+// from malloc() and the caller frees it.
+char  *strdup(const char *s);
+char  *strndup(const char *s, size_t n);
 
 // BSD, not C -- and the reason it is here rather than strncpy is in the
 // header comment above. Copies at most `n` bytes, ALWAYS NUL-terminates,

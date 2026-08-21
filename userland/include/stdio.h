@@ -105,6 +105,23 @@ int   fputs(const char *s, FILE *f);
 // Appends a newline, as C requires and as fputs() does not.
 int   puts(const char *s);
 
+// UNBOUNDED -- it writes as much as the format produces and cannot be
+// told how big `out` is. It exists because C requires it and ported code
+// uses it; snprintf() is the one to reach for in code written here.
+int   sprintf(char *out, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+int   vsprintf(char *out, const char *fmt, va_list ap);
+
+// Reads formatted input from a STRING. Conversions: %d %i %u %o %x %c
+// %s %f/%e/%g %n %%, with a width, `*` to suppress the assignment, and
+// the h/hh/l/ll/z length modifiers. Returns the number of items
+// assigned, or EOF if input ran out before the first one.
+//
+// scanf() and fscanf() are ABSENT: they need the same core over a
+// stream, and no caller has needed them. sscanf() plus fgets() is the
+// combination that is actually safe anyway.
+int   sscanf(const char *s, const char *fmt, ...) __attribute__((format(scanf, 2, 3)));
+int   vsscanf(const char *s, const char *fmt, va_list ap);
+
 int   printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 int   fprintf(FILE *f, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 int   vprintf(const char *fmt, va_list ap);
@@ -139,10 +156,8 @@ static inline size_t vsnprintf(char *out, size_t cap, const char *fmt, va_list a
 // and catches a mismatched argument where it is written.
 #define snprintf k_snprintf
 
-// DELIBERATELY ABSENT: sprintf(), which cannot be given a bound and so
-// cannot be used safely; freopen(), which the single-mode fd model has
-// nothing to do; and tmpfile()/remove()/rename() wrappers, which are
-// sys_unlink()/sys_rename() under another name. Add one when a second
-// real caller turns up, which is the bar the whole toolkit holds.
+// DELIBERATELY ABSENT: freopen(), which the single-mode fd model has
+// nothing to do; scanf()/fscanf(); and tmpfile()/remove()/rename()
+// wrappers, which are sys_unlink()/sys_rename() under another name.
 
 #endif

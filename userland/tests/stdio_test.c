@@ -188,6 +188,48 @@ int main(void) {
     check(big[0] == 'A' && big[2047] == 'A' + (2047 % 26), "with the right contents");
     fclose(f);
 
+    // --- sprintf and sscanf ------------------------------------------
+    //
+    // Both landed only when a PORTED program asked for them
+    // (docs/libc-design.md Stage 6), so they get direct checks here --
+    // cJSON exercises them, but only through paths where a wrong answer
+    // can still produce valid output.
+    sprintf(rb, "%s=%d/%x", "n", -5, 255);
+    check(strcmp(rb, "n=-5/ff") == 0, "sprintf writes an unbounded result");
+
+    int a = 0, b = 0;
+    check(sscanf("12 34", "%d %d", &a, &b) == 2 && a == 12 && b == 34,
+          "sscanf reads two integers");
+    check(sscanf("x=7", "x=%d", &a) == 1 && a == 7, "and matches literal text");
+    check(sscanf("y=7", "x=%d", &a) == 0, "and STOPS when the literal does not match");
+    a = 0;
+    check(sscanf("0x1f", "%i", &a) == 1 && a == 31,
+          "%i honours a 0x prefix, unlike %d");
+    check(sscanf("0x1f", "%d", &a) == 1 && a == 0,
+          "and %d stops at the 'x', reading just the 0");
+    double d = 0;
+    check(sscanf("3.25rest", "%lg", &d) == 1 && d == 3.25,
+          "%lg reads a double -- the exact call cJSON makes");
+    float fl = 0;
+    check(sscanf("1.5", "%f", &fl) == 1 && fl == 1.5f,
+          "%f is a FLOAT and %lf a double, the one modifier that changes the type");
+    char word[16] = {0};
+    check(sscanf("  hello world", "%s", word) == 1 && strcmp(word, "hello") == 0,
+          "%s skips leading space and stops at the next");
+    check(sscanf("abcdef", "%3s", word) == 1 && strcmp(word, "abc") == 0,
+          "a width bounds it");
+    char two[3] = {0};
+    check(sscanf("ab", "%2c", two) == 1 && two[0] == 'a' && two[1] == 'b',
+          "%c reads a block and does NOT skip whitespace");
+    a = b = 0;
+    check(sscanf("5 6", "%*d %d", &a) == 1 && a == 6,
+          "* suppresses an assignment without consuming an argument");
+    int pos = 0;
+    check(sscanf("42abc", "%d%n", &a, &pos) == 1 && pos == 2,
+          "%n reports the position and does not count as an assignment");
+    check(sscanf("", "%d", &a) == EOF, "empty input before the first assignment is EOF");
+    check(sscanf("q", "%d", &a) == 0, "but unmatched input is 0, not EOF");
+
     // --- an unseekable stream says so --------------------------------
     check(fseek(stdout, 0, SEEK_SET) == -1 && sys_errno() == ESPIPE,
           "seeking a terminal stream is refused");

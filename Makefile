@@ -585,6 +585,14 @@ EXTRA_OBJS_toywm      = wm/wm wm/wm_rawin wm/wm_render wm/wm_input wm/wm_client 
 .PHONY: toywm
 toywm: $(BUILD)/userland/wm/main.elf
 
+# THE ONE VENDORED PROGRAM. cjson_test is ours; userland/ports/cjson/ is
+# upstream's source byte for byte (see its README), and it is linked in
+# per-binary rather than added to an archive so that nothing else can
+# accidentally depend on third-party code. docs/libc-design.md's Stage 6
+# is what it is for: a program nobody working on this repo wrote,
+# compiled against this C library.
+EXTRA_OBJS_cjson_test = ports/cjson/cJSON
+
 # The extras for one binary, as real object paths.
 uextra = $(patsubst %,$(BUILD)/userland/%.o,$(EXTRA_OBJS_$(notdir $(1))))
 
