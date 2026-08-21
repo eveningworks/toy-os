@@ -86,7 +86,10 @@ def header_ink_x(qmp, path, rect):
     column moves only when the text was actually repositioned.
     """
     from PIL import Image
-    qmp.screenshot(path)
+    # A SETTLED frame (two identical consecutive reads), not a bare
+    # screenshot: the sort re-render is a client draw plus a compositor
+    # hop, so a raw capture can land on the pre-sort frame under load.
+    qmp.stable_pixels(path)
     im = Image.open(path).convert("RGB")
     x, y, w, h = rect
     px = list(im.crop((x, y, x + w, y + h)).getdata())
@@ -148,6 +151,35 @@ def layout(dbg):
     return out
 
 
+def wait_layout(dbg, ok, timeout=5.0):
+    """Poll the app's layout reports until ok(merged_layout) holds, or
+    timeout. layout(dbg) drains new log lines each call and merges them
+    into the persistent _layout, so the state CONVERGES as the app
+    re-reports -- an observable wait in place of a fixed sleep after an
+    action that changes the table. Returns the merged layout either way,
+    so the caller's own check still runs (and fails with detail) on a
+    timeout, per the 'assert the fact, don't just wait for it' rule."""
+    deadline = time.time() + timeout
+    while True:
+        lay = layout(dbg)
+        if ok(lay) or time.time() >= deadline:
+            return lay
+        time.sleep(0.03)
+
+
+def wait_log(dbg, needle, timeout=4.0):
+    """Accumulate log lines until one contains `needle`, or timeout.
+    logs() CLEARS what it returns, so this keeps polling (each call sees
+    only new lines) rather than reading once after a sleep. Returns True
+    if seen."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if any(needle in l for l in dbg.logs()):
+            return True
+        time.sleep(0.03)
+    return False
+
+
 def window(dbg, title="Task Manager"):
     wins = [w for w in dbg.json("gui windows --json")["windows"]
             if w["title"] == title]
@@ -180,11 +212,13 @@ def main():
         if tok.isdigit():
             victim_pid = int(tok)
     
-    dbg.settle()
-    time.sleep(0.6)
+    dbg.settle()  # the victim will be running by the time Task Manager reads
+                  # the process table; the screen_order() poll below is the
+                  # real safety net if it is slow to appear.
 
     dbg.spawn(TASKMGR, "Task Manager")
-    time.sleep(1.5)
+    # Wait for the app to report a real layout, not a fixed guess.
+    wait_layout(dbg, lambda l: "table" in l and "row_h" in l)
 
     win = window(dbg)
     if not check("Task Manager opened", win is not None):
@@ -222,9 +256,15 @@ def main():
     dbg.send("gui drag %d %d %d %d" % (grip[0], grip[1],
                                         grip[0] + grow_x, grip[1] + grow_y))
     dbg.settle()
-    time.sleep(1.5)
-
-    after = layout(dbg).get("table", before)
+    # Wait for the table to actually follow the resize (both axes grew by
+    # ~the amount the window did), not a fixed 1.5s. A real resize bug
+    # that never grows one axis simply waits out the timeout, then the
+    # checks below report it -- same outcome, faster on success.
+    after = wait_layout(
+        dbg,
+        lambda l: (l.get("table", before)[2] - before[2] >= grow_x * 0.6
+                   and l.get("table", before)[3] - before[3] >= grow_y * 0.6),
+    ).get("table", before)
     dw, dh = after[2] - before[2], after[3] - before[3]
 
     # Generous tolerance: the WM clamps the drag to the screen and the
@@ -269,8 +309,7 @@ def main():
     hdr_x = cx + col0[0] + col0[1] // 2
     dbg.send("gui click %d %d" % (hdr_x, hdr_y))
     dbg.settle()
-    time.sleep(0.8)
-    lay = layout(dbg)
+    lay = wait_layout(dbg, lambda l: l.get("sort") == (0, -1))
     order_desc = lay.get("order", [])
     check("clicking the sorted column REVERSES it",
           lay.get("sort") == (0, -1) and order_desc == sorted(order_before, reverse=True),
@@ -285,8 +324,8 @@ def main():
     name_x, name_w = name_col
     dbg.send("gui click %d %d" % (cx + name_x + name_w // 2, hdr_y))
     dbg.settle()
-    time.sleep(0.8)
-    lay = layout(dbg)
+    lay = wait_layout(dbg, lambda l: l.get("sort", (0, 0))[0] != 0
+                      and l.get("sort", (0, 0))[1] == 1)
     check("a DIFFERENT column starts ascending, not reversed",
           lay.get("sort", (None, None))[1] == 1 and lay.get("sort", (None,))[0] != 0,
           f"sort={lay.get('sort')}")
@@ -314,7 +353,7 @@ def main():
         unsorted_ink = header_ink_x(qmp, f"{args.tmp}/tm_hdr_unsorted.png", hdr_rect)
         dbg.send("gui click %d %d" % (hdr_x, hdr_y))
         dbg.settle()
-        time.sleep(0.8)
+        wait_layout(dbg, lambda l: l.get("sort") == (0, 1))
         sorted_ink = header_ink_x(qmp, f"{args.tmp}/tm_hdr_sorted.png", hdr_rect)
         check("the sort arrow does not overlap the column title",
               unsorted_ink is not None and sorted_ink is not None
@@ -328,13 +367,11 @@ def main():
     # were written against. A test must establish its own preconditions.
     dbg.send("gui click %d %d" % (hdr_x, hdr_y))
     dbg.settle()
-    time.sleep(0.5)
-    lay = layout(dbg)
+    lay = wait_layout(dbg, lambda l: l.get("sort") == (0, -1))
     if lay.get("sort") == (0, -1):
         dbg.send("gui click %d %d" % (hdr_x, hdr_y))
         dbg.settle()
-        time.sleep(0.5)
-        lay = layout(dbg)
+        lay = wait_layout(dbg, lambda l: l.get("sort") == (0, 1))
     check("it can be put back to PID ascending",
           lay.get("sort") == (0, 1), f"sort={lay.get('sort')}")
 
@@ -399,8 +436,7 @@ def main():
         dbg.logs()
         dbg.send("gui click %d %d" % (cx + tx + 60, ry))
         dbg.settle()
-        time.sleep(0.3)
-        if any(f"taskmgr: selected pid {victim_pid}" in l for l in dbg.logs()):
+        if wait_log(dbg, f"taskmgr: selected pid {victim_pid}", timeout=2.0):
             victim_row = row
             break
     if not check("found the victim's row in the table",
@@ -422,9 +458,13 @@ def main():
     # FIRST click only ARMS. A kill on the first click would be a real
     # defect -- the confirmation is the whole safety story here, since
     # there is no dialog.
+    dbg.logs()  # clear, so wait_log below sees the arm from THIS click
     dbg.send("gui click %d %d" % (bx, by))
     dbg.settle()
-    time.sleep(0.6)
+    # Key the "kills nothing" check off the ARM the app logs (a positive
+    # signal) instead of a blind sleep hoping a kill would have fired by
+    # now -- then assert nothing was actually killed.
+    wait_log(dbg, "taskmgr: armed")
     armed_count = dbg.json("gui windows --json")["count"]
     check("one click ARMS and kills nothing",
           armed_count == before_count, f"{before_count} -> {armed_count}")
@@ -432,8 +472,14 @@ def main():
     # SECOND click commits.
     dbg.send("gui click %d %d" % (bx, by))
     dbg.settle()
-    time.sleep(1.8)
-    after_count = dbg.json("gui windows --json")["count"]
+    # Poll for the kill to land: the victim exits and is reaped, so its
+    # window disappears -- an observable, not a fixed 1.8s.
+    deadline = time.time() + 5.0
+    while True:
+        after_count = dbg.json("gui windows --json")["count"]
+        if after_count == before_count - 1 or time.time() >= deadline:
+            break
+        time.sleep(0.05)
     check("the second click ends the process",
           after_count == before_count - 1,
           f"{before_count} -> {after_count}")

@@ -182,6 +182,33 @@ def actions(dbg, clear=True):
     return out
 
 
+def wait_layout(dbg, content, ok, timeout=5.0):
+    """Poll the app's self-reported layout until ok(Layout) holds, or
+    timeout. Layout reads only the LATEST frame (from the last
+    'layout scrollbar' boundary), so as the app redraws after an action
+    the state converges -- an observable wait in place of a fixed sleep.
+    Returns the final Layout either way, so the caller's own check still
+    runs (and fails with detail) on a timeout."""
+    deadline = time.time() + timeout
+    while True:
+        lay = layout(dbg, content)
+        if ok(lay) or time.time() >= deadline:
+            return lay
+        time.sleep(0.03)
+
+
+def wait_actions(dbg, timeout=4.0):
+    """Poll until the app logs a committed action, then return the list
+    (consumed). A menu commit is exactly one action, so non-empty is
+    done; clear=False leaves them intact for the final consuming read."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if actions(dbg, clear=False):
+            return actions(dbg)
+        time.sleep(0.03)
+    return actions(dbg)
+
+
 def unpark(dbg, qmp):
     """Move the real cursor off any menu, to empty desktop.
 
@@ -257,15 +284,14 @@ def run(dbg, qmp, tmp, res):
         if i < len(SAMPLE_LINES) - 1:
             dbg.send(f"gui key {ENTER}")
     dbg.settle()
-    time.sleep(0.4)
 
     win = npwin(dbg)
     content = win["content"]
-    lay = layout(dbg, content)
 
     # --- 1. the app reports what it drew -------------------------------
     want = ["menubar", "title 0", "title 1", "title 2", "statusbar",
             "pane 0", "pane 1", "pane 2"]
+    lay = wait_layout(dbg, content, lambda l: all(l.has(k) for k in want))
     missing = [k for k in want if not lay.has(k)]
     res.check("Notepad reports its menu bar and status bar geometry",
               not missing, f"missing: {missing}")
@@ -289,9 +315,8 @@ def run(dbg, qmp, tmp, res):
 
     dbg.click(*t0)
     dbg.settle()
-    time.sleep(0.4)
+    lay2 = wait_layout(dbg, content, lambda l: l.popups() == [0])
     im2 = shot(qmp, tmp, "mb_file.png")
-    lay2 = layout(dbg, content)
 
     res.check("clicking a title opens its menu", lay2.popups() == [0],
               f"open popup levels: {lay2.popups()}")
@@ -338,16 +363,14 @@ def run(dbg, qmp, tmp, res):
     dbg.settle()
     dbg.click(*lay.centre("title 2"))   # View
     dbg.settle()
-    time.sleep(0.3)
-    lay3 = layout(dbg, content)
+    lay3 = wait_layout(dbg, content, lambda l: l.has("item 0 0"))
     if not lay3.has("item 0 0"):
         res.check("hovering a submenu parent opens the next level", False,
                   "View menu did not open")
         return
     go = lay3.rect("item 0 0")          # "Go to"
     hover(dbg, qmp, go)
-    time.sleep(0.4)
-    lay4 = layout(dbg, content)
+    lay4 = wait_layout(dbg, content, lambda l: l.popups() == [0, 1])
     res.check("hovering a submenu parent opens the next level",
               lay4.popups() == [0, 1], f"open levels: {lay4.popups()}")
 
@@ -363,12 +386,11 @@ def run(dbg, qmp, tmp, res):
         top = lay4.rect("item 1 0")     # "Top of file"
         dbg.click(top[0] + top[2] // 2, top[1] + top[3] // 2)
         dbg.settle()
-        time.sleep(0.4)
-        got = actions(dbg)
+        got = wait_actions(dbg)
         res.check("releasing on a submenu item commits exactly that command",
                   got == [CMD_GOTO_TOP], f"actions: {got} (want [{CMD_GOTO_TOP}])")
         res.check("committing closes the whole chain",
-                  layout(dbg, content).popups() == [],
+                  wait_layout(dbg, content, lambda l: l.popups() == []).popups() == [],
                   "a committed menu must not stay open")
 
     # The real cursor is still parked on the submenu row from hover()
@@ -387,8 +409,7 @@ def run(dbg, qmp, tmp, res):
     # from commit-on-press; see the positive control in the docstring.
     dbg.click(*lay.centre("title 2"))
     dbg.settle()
-    time.sleep(0.3)
-    lay5 = layout(dbg, content)
+    lay5 = wait_layout(dbg, content, lambda l: l.has("item 0 2"))
     if lay5.has("item 0 2"):
         sb = lay5.rect("item 0 2")      # "Status bar"
         actions(dbg)
@@ -405,7 +426,7 @@ def run(dbg, qmp, tmp, res):
     # --- 9. dismissing, and NOT reaching the text underneath ----------
     dbg.click(*lay.centre("title 0"))
     dbg.settle()
-    time.sleep(0.3)
+    wait_layout(dbg, content, lambda l: l.popups() == [0])
     im3 = shot(qmp, tmp, "mb_before_dismiss.png")
     caret_pane = lay.rect("pane 1")     # "Ln n, Col n"
     before_caret = region(im3, caret_pane)
@@ -416,10 +437,10 @@ def run(dbg, qmp, tmp, res):
     actions(dbg)
     dbg.click(*away)
     dbg.settle()
-    time.sleep(0.4)
+    dismissed = wait_layout(dbg, content, lambda l: l.popups() == [])
     im4 = shot(qmp, tmp, "mb_after_dismiss.png")
     res.check("a click outside dismisses the menu",
-              layout(dbg, content).popups() == [], "the menu must close")
+              dismissed.popups() == [], "the menu must close")
     res.check("the dismissing click does NOT reach the text underneath",
               region(im4, caret_pane) == before_caret,
               "the caret moved, so the click fell through to the editor")
@@ -427,8 +448,8 @@ def run(dbg, qmp, tmp, res):
     # --- 10. keyboard -------------------------------------------------
     dbg.send(f"gui key {F10}")
     dbg.settle()
-    time.sleep(0.3)
-    res.check("F10 opens the menu bar", layout(dbg, content).popups() == [0])
+    res.check("F10 opens the menu bar",
+              wait_layout(dbg, content, lambda l: l.popups() == [0]).popups() == [0])
 
     # F10 opens File with its first row highlighted. Right on a row that
     # is NOT a submenu walks to the next TITLE -- the Windows/KDE
@@ -444,13 +465,11 @@ def run(dbg, qmp, tmp, res):
     for _ in range(3):
         dbg.send(f"gui key {RIGHT}")
     dbg.settle()
-    time.sleep(0.3)
-    depth_open = layout(dbg, content).popups()
+    depth_open = wait_layout(dbg, content, lambda l: l.popups() == [0, 1]).popups()
 
     dbg.send(f"gui key {ESC}")
     dbg.settle()
-    time.sleep(0.3)
-    after_one_esc = layout(dbg, content).popups()
+    after_one_esc = wait_layout(dbg, content, lambda l: l.popups() == [0]).popups()
 
     # Only if something is still open. An Esc with no menu open reaches
     # Notepad, which QUITS on it -- so a test that fires Escs blind turns
@@ -459,8 +478,7 @@ def run(dbg, qmp, tmp, res):
     if after_one_esc:
         dbg.send(f"gui key {ESC}")
         dbg.settle()
-        time.sleep(0.3)
-        after_two = layout(dbg, content).popups()
+        after_two = wait_layout(dbg, content, lambda l: l.popups() == []).popups()
     res.check("Esc closes ONE level at a time, not the whole chain",
               after_one_esc == [0] and after_two == [],
               f"opened {depth_open}, after one Esc {after_one_esc}, "
@@ -482,6 +500,10 @@ def run(dbg, qmp, tmp, res):
     # indicator. Establish the state you are measuring from.
     dbg.send("gui key 0x97")   # KEY_HOME
     dbg.settle()
+    # A deliberate bounded wait, not a convertible one: the assertion is a
+    # PIXEL diff of the status panes, and the cursor move has no layout
+    # signal to poll (the pane rects don't change, only their rendered
+    # text). Keep it a settle-plus-grace so the compositor has painted.
     time.sleep(0.4)
     im5 = shot(qmp, tmp, "mb_status_a.png")
     msg_before = region(im5, lay.rect("pane 0"))
@@ -500,29 +522,28 @@ def run(dbg, qmp, tmp, res):
     # --- 12. a checkable item, round trip ------------------------------
     dbg.click(*lay.centre("title 2"))
     dbg.settle()
-    time.sleep(0.3)
-    lay6 = layout(dbg, content)
+    lay6 = wait_layout(dbg, content, lambda l: l.has("item 0 2"))
     if lay6.has("item 0 2"):
         sb = lay6.rect("item 0 2")
         actions(dbg)
         dbg.click(sb[0] + sb[2] // 2, sb[1] + sb[3] // 2)
         dbg.settle()
-        time.sleep(0.4)
-        got = actions(dbg)
-        gone = layout(dbg, content)
+        got = wait_actions(dbg)
+        # has("statusbar") reads the CURRENT frame, so it drops as soon as
+        # the app redraws with the bar hidden -- an observable, not a sleep.
+        gone = wait_layout(dbg, content, lambda l: not l.has("statusbar"))
         res.check("View > Status bar hides the status bar",
                   got == [CMD_STATUSBAR] and not gone.has("statusbar"),
                   f"actions {got}, statusbar still reported: {gone.has('statusbar')}")
 
         dbg.click(*lay.centre("title 2"))
         dbg.settle()
-        time.sleep(0.3)
-        lay7 = layout(dbg, content)
+        lay7 = wait_layout(dbg, content, lambda l: l.has("item 0 2"))
         if lay7.has("item 0 2"):
             sb = lay7.rect("item 0 2")
             dbg.click(sb[0] + sb[2] // 2, sb[1] + sb[3] // 2)
             dbg.settle()
-            time.sleep(0.4)
+            wait_layout(dbg, content, lambda l: l.has("statusbar"))
         back = layout(dbg, content)
         res.check("toggling it back restores the status bar exactly",
                   back.has("statusbar") and back.r.get("statusbar") == lay.r.get("statusbar"),
@@ -531,21 +552,20 @@ def run(dbg, qmp, tmp, res):
     # --- 13. state is asked for: Recent fills in after a save ----------
     dbg.send("gui key 0x13")   # Ctrl-S -> Save As dialog
     dbg.settle()
-    time.sleep(0.4)
-    typ(dbg, SAVE_NAME)
+    time.sleep(0.4)              # deliberate: the app's save dialog logs no
+    typ(dbg, SAVE_NAME)         # layout line to poll for readiness
     dbg.send(f"gui key {ENTER}")
     dbg.settle()
-    time.sleep(0.8)
+    time.sleep(0.8)             # deliberate: wait out the blocking disk write
+                                # (no clean completion signal exposed)
 
     dbg.click(*lay.centre("title 0"))
     dbg.settle()
-    time.sleep(0.3)
-    lay8 = layout(dbg, content)
+    lay8 = wait_layout(dbg, content, lambda l: l.has("item 0 2"))
     if lay8.has("item 0 2"):
         rec = lay8.rect("item 0 2")
         hover(dbg, qmp, rec)
-        time.sleep(0.4)
-        lay9 = layout(dbg, content)
+        lay9 = wait_layout(dbg, content, lambda l: l.popups() == [0, 1])
         res.check("Recent files is greyed until a save, then opens a real submenu",
                   lay9.popups() == [0, 1],
                   f"levels open over Recent after saving: {lay9.popups()} "

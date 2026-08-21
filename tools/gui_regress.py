@@ -87,14 +87,21 @@ REPO = os.path.dirname(HERE)
 # full run total roughly 460s, so the ceiling is the slowest single tool
 # (notepad, ~41s -- forcequit dropped to ~35s in the 663d63b pass, so it
 # is no longer the straggler) and everything between 4 and that is just
-# how many cores are free. Half the cores, capped at 8 -- a TCG guest is a busy
-# CPU thread plus its I/O, so oversubscribing turns wall-clock into
-# settle flakes rather than speed, which is measurable: at five
-# concurrent guests both gfxdemo and notepad failed comparisons they
-# pass alone. Those two now wait on an OBSERVABLE instead of a sleep,
-# which is what makes raising this safe at all -- raise it further only
-# after checking that the tools still wait for something the app says.
-DEFAULT_JOBS = min(8, max(2, (os.cpu_count() or 4) // 2))
+# how many cores are free. HALF the cores (`cpu_count() // 2`), because
+# `cpu_count()` counts hardware THREADS and a TCG guest is a busy CPU
+# thread plus its I/O -- so half the threads is roughly one guest per
+# physical core, and going past that oversubscribes and turns wall-clock
+# into settle flakes rather than speed (measurable: at five concurrent
+# guests on an 8-core box both gfxdemo and notepad failed comparisons
+# they pass alone).
+#
+# The CAP is 12, raised from 8 in the pass that converted menubar and
+# taskmgr to observable waits (so the whole suite waits on something the
+# app SAYS, not a sleep). The cap only bites on a big host: on an 8-core
+# / 16-thread machine `//2` is already 8, so nothing changes there; a
+# 24-thread box now gets 12. It is a ceiling against oversubscription,
+# not a target -- do not raise it above `//2` for a given host.
+DEFAULT_JOBS = min(12, max(2, (os.cpu_count() or 4) // 2))
 
 # In rough dependency order: the widget toolkit first, so a toolkit
 # regression is reported before the apps built on it start failing for
