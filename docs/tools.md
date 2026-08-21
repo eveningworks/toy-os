@@ -584,7 +584,7 @@ manual steps to be worth automating:
   explicitly at the start -- they persist to the disk image, so
   inheriting them makes every measurement relative to a silently wrong
   baseline. In `gui_regress.py`.
-- **`font_test.py`** -- runtime fonts end to end (~15 checks): a `.ttf`
+- **`font_test.py`** -- runtime fonts end to end (~17 checks): a `.ttf`
   under `/usr/share/fonts` rasterizes, switching faces reaches the
   screen with NO restart (the compositor is told through `WIN_EV_FONT`),
   a size nobody baked works, and the baked font still draws when no face
@@ -594,7 +594,15 @@ manual steps to be worth automating:
   that a face the app rasterized privately is at ITS size and not the
   session's. Those run on `liberation-sans` deliberately -- on the
   default monospace face bold has the regular advances and there is no
-  `kern` table at all, so every one of them would pass vacuously. Read its docstring before editing, for the same reason
+  `kern` table at all, so every one of them would pass vacuously.
+
+  It also PROBES THE DEMO'S PIXELS, and the reason is the lesson: the
+  measurement checks above all passed while the demo rendered every
+  letter as a hollow outline, because they read numbers out of the
+  mapped atlas and nothing looked at the screen. The probe asserts the
+  window's DOMINANT colour is the panel background -- not an ink count,
+  which was tried first and passed the broken build by a wide margin
+  because a black background counts as ink. Read its docstring before editing, for the same reason
   `cursor_theme_test.py`'s says so: the baked font is a complete working
   fallback, so "text is on screen" proves nothing at all -- every check
   is a DIFFERENCE between two states. The load-bearing one is that

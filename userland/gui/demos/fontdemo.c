@@ -75,6 +75,22 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     struct ugfx_surface *s = d->surface;
     (void)a;
 
+    // **CLEAR FIRST, AND THIS APP MUST DO IT ITSELF.** An app with
+    // widgets or a layout gets its surface cleared by the toolkit; one
+    // with neither owns the whole surface and is cleared by nobody (see
+    // uapp.h's on_draw). Leaving it means drawing onto an uninitialised
+    // buffer, and with THIS app that failure is spectacular rather than
+    // merely ugly: ugfx_draw_char() skips fully-background pixels, so
+    // the `bg` handed to it never actually fills anything -- it is only
+    // the colour the ANTIALIASED rim is blended toward. On a black
+    // buffer that paints the glyph interiors near-black (invisible) and
+    // the rim light, so every letter renders as a hollow outline.
+    //
+    // Worth knowing beyond this file: passing a `bg` to a text call is
+    // not the same as having a background, and an app that never clears
+    // gets outlines instead of letters.
+    ugfx_fill(s, d->bg);
+
     int row_h = ugfx_char_h() * 2;
     int y = 4;
 

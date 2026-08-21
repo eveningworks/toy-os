@@ -165,10 +165,66 @@ def demo_report(dbg, timeout=10.0):
     return out
 
 
-def check_weights_and_kerning(dbg):
+def check_demo_pixels(dbg, qmp):
+    """The demo's text is drawn on its own background, not onto a void.
+
+    THE CHECK THAT WAS MISSING, and worth having for what it says about
+    the rest of this file: every other assertion in the second half reads
+    numbers the app measured out of the mapped atlas -- widths, advances,
+    ink counts -- and all of them passed while the demo rendered every
+    letter as a hollow outline. The atlas was perfect; the app drew onto
+    a surface it had never cleared. "It measures" is not "it is drawn".
+
+    WHY THE DOMINANT COLOUR AND NOT AN INK COUNT. ugfx_draw_char() skips
+    fully-background pixels, so a `bg` argument fills nothing -- it is
+    only the colour the antialiased rim is blended toward. On an uncleared
+    (black) surface the glyph interiors are painted near-black on black
+    and vanish, leaving the rim. The tempting probe is "mostly solid ink
+    rather than mostly edge pixels", and it is WRONG IN BOTH DIRECTIONS:
+    it was written here first, and the black background counted as 95,136
+    'solid' pixels, so the broken build passed by a wide margin. Measured,
+    not reasoned about -- see CLAUDE.md on thresholds picked without a
+    control.
+
+    What actually separates the two states is what MOST of the window is:
+    the theme's panel background when the app cleared, near-black when it
+    did not.
+    """
+    win = dbg.window("Font Demo")
+    if not win:
+        check("the Font Demo window is on screen for a pixel check", False)
+        return
+    c = win["content"]
+    x, y, w, h = c["x"], c["y"], c["w"], c["h"]
+
+    path = os.path.join(tempfile.gettempdir(), "font_demo.png")
+    qmp.stable_pixels(path, box=(x, y, x + w, y + h))
+    im = Image.open(path).convert("RGB").crop((x, y, x + w, y + h))
+
+    counts = {}
+    for py in range(im.height):
+        for px in range(im.width):
+            p = im.getpixel((px, py))
+            counts[p] = counts.get(p, 0) + 1
+    dominant, dom_n = max(counts.items(), key=lambda kv: kv[1])
+    dom_lum = sum(dominant) // 3
+    total = im.width * im.height
+
+    check("the demo cleared its surface -- text sits on a background",
+          dom_lum > 200, f"dominant={dominant} ({dom_n}/{total})")
+
+    # ...and there IS text on it. Dark pixels, but a small minority: a
+    # window that is mostly ink is a filled rect, not a page of labels.
+    ink = sum(n for p, n in counts.items() if sum(p) // 3 < 60)
+    check("...and there is text drawn on it",
+          200 < ink < total // 4, f"ink={ink}/{total}")
+
+
+def check_weights_and_kerning(dbg, qmp):
     """Bold beside regular, kerning applied, and a private face, in ring 3."""
     dbg.open_app("Font Demo")
     dbg.settle()
+    check_demo_pixels(dbg, qmp)
     rep = demo_report(dbg)
 
     check("Font Demo reported its measurements",
@@ -315,7 +371,7 @@ def main():
     set_face(dbg, PROP)
     set_size(dbg, 14)
     time.sleep(1.0)
-    check_weights_and_kerning(dbg)
+    check_weights_and_kerning(dbg, qmp)
 
     # Put the machine back the way a fresh image boots.
     set_face(dbg, MONO)
