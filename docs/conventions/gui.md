@@ -84,6 +84,14 @@ this the obvious way), not from how much history it accumulated.
   owns, with the same `ttf.c` the kernel uses, at any size or face, and
   follows no setting.
 
+  **The two tiers size their cell differently on purpose.** The session
+  font's cell is squeezed (`ascent*0.89 + descent*0.60`, `genttf.py`'s
+  formula) because it IS the layout grid and a looser one makes the whole
+  UI taller; it clips descenders slightly, as every fixed-cell terminal
+  font does. A private font is not a grid, so it uses the FULL ascent and
+  descent -- copying the squeeze there just clips a 'g' for no benefit,
+  which is what it did until somebody looked at a 24px heading.
+
   **Do not "fix" this by teaching `WIN_REQ_FONT` to serve arbitrary
   combinations.** An atlas is NEVER FREED -- clients hold the mappings
   and nothing can ask them to let go -- so that change is really "an

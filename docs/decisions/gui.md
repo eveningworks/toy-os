@@ -3287,6 +3287,23 @@ problem to solve with the same `ttf.c` -- which already compiled into
 `libuapp.a` for exactly this, one commit earlier, with
 `userland/tests/ttf_test.c` proving the link.
 
+**The two tiers measure their CELL differently, and that is deliberate.**
+`font_face.c` squeezes the session font's cell to
+`ascent*0.89 + descent*0.60`, copying `tools/genttf.py`, and is right to:
+that cell IS the layout grid. `gfx_char_h()` sets console rows, window
+chrome and every font-derived measurement on the machine, so a looser
+cell makes the whole UI taller and stops matching the baked metrics. The
+price is the slight descender clipping every fixed-cell terminal font
+accepts.
+
+A private font is not a grid -- it is a run of text one app draws,
+measured by nothing else -- so `ugfx_font_load()` uses the font's full
+ascent and descent. Paying the squeeze there buys nothing and costs a
+visibly flat 'g': at 24px in `liberation-sans` it removes 2.03px of a
+5.09px descender, which is most of the tail. The formula was copied from
+the kernel side when the private tier was written, which is exactly the
+kind of inheritance to check rather than assume.
+
 **One handle for both.** `struct ugfx_font` is either kind and a widget
 never asks which. That is what lets a heading start out as the session's
 bold weight and later become 24px Liberation without the widget

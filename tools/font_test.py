@@ -272,6 +272,24 @@ def check_weights_and_kerning(dbg, qmp):
     # the private atlas is actually being drawn from: a private load
     # that silently failed, or a ugfx_set_font() that did nothing, would
     # report the session's own metrics.
+    # --- descenders are not clipped -----------------------------------
+    #
+    # A 'g' with its tail cut flat is glaring in a screenshot and
+    # INVISIBLE to every other check here: the glyph has plenty of ink
+    # and the right advance, it is just missing its last rows. The app
+    # reports the empty rows between its lowest ink and the bottom of
+    # its cell, so 0 means the outline runs into the last row.
+    #
+    # This is only asserted for the PRIVATE font. The session font's
+    # cell is deliberately squeezed (it is the layout grid -- see
+    # docs/decisions.md), so it clips descenders on purpose and a check
+    # here would be asserting the opposite of the design.
+    desc = rep.get("descender", "")
+    if desc:
+        slack = int(desc.split("slack")[1].split()[0])
+        check("the private font's descenders are not clipped",
+              slack >= 1, desc)
+
     priv = rep.get("private", "")
     sess = rep.get("session regular", "")
     check("a face this app rasterized for itself loaded", "loaded" in priv, priv)

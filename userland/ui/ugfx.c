@@ -347,12 +347,30 @@ int ugfx_font_load(const char *path, int px, int bold,
     struct ttf_scratch *sc = (struct ttf_scratch *)malloc(sizeof *sc);
     if (!sc) { free(file); return 0; }
 
+    // **THE FULL ASCENT AND DESCENT, UNLIKE THE SESSION FONT**, and the
+    // difference is the point rather than an inconsistency.
+    //
+    // font_face.c squeezes its cell to ascent*0.89 + descent*0.60,
+    // copying tools/genttf.py, and it is right to: the session font's
+    // cell IS the layout grid. gfx_char_h() sets console rows, window
+    // chrome and every font-derived measurement on the machine, so a
+    // looser cell makes the whole UI taller and stops matching the baked
+    // metrics. The price is the slight descender clipping every
+    // fixed-cell terminal font accepts.
+    //
+    // A private font is not a grid. It is a run of text one app draws,
+    // measured by nothing else, so there is nothing to be tight for --
+    // and paying that price here buys nothing and costs a visibly flat
+    // 'g'. At 24px in liberation-sans the squeeze removes 2.03px of a
+    // 5.09px descender, which is most of the tail.
+    //
+    // +1 row of slack because baseline and below are rounded
+    // independently, so a glyph reaching exactly the descent line can
+    // otherwise land on the cell's last row.
     fx_t scale = ttf_scale_for_px(&t, px);
-    int baseline = fx_round(fx_mul(fx_mul(fx_from_int(t.ascent), scale),
-                                    (fx_t)(FX_ONE * 89 / 100)));
-    int below = fx_round(fx_mul(fx_mul(fx_from_int(t.descent), scale),
-                                 (fx_t)(FX_ONE * 60 / 100)));
-    int cell_h = baseline + below;
+    int baseline = fx_round(fx_mul(fx_from_int(t.ascent), scale));
+    int below = fx_round(fx_mul(fx_from_int(t.descent), scale));
+    int cell_h = baseline + below + 1;
 
     // Emboldened only when asked AND the file is not already bold. A
     // caller passing a `-bold.ttf` with bold=1 would otherwise get a

@@ -149,6 +149,22 @@ static int glyph_ink(const struct ugfx_font *f, char c) {
     return ink;
 }
 
+// Empty rows between a glyph's lowest ink and the bottom of its cell.
+// 0 means the outline reaches the last row -- i.e. it is being clipped,
+// or is about to be.
+static int glyph_bottom_slack(const struct ugfx_font *f, char c) {
+    if (!f || !f->glyphs) return -1;
+    int slot = (int)(unsigned char)c - WIN_FONT_FIRST_CHAR;
+    if (slot < 0 || slot >= f->count) return -1;
+    const unsigned char *cell =
+        f->glyphs + (unsigned long)slot * f->char_w * f->char_h;
+    for (int row = f->char_h - 1; row >= 0; row--)
+        for (int col = 0; col < f->char_w; col++)
+            if (cell[row * f->char_w + col])
+                return f->char_h - 1 - row;
+    return -1; // no ink at all
+}
+
 static void logf_line(const char *fmt, ...) {
     char line[160];
     va_list ap;
@@ -195,6 +211,16 @@ static void report(void) {
 
     if (g_private_ok) {
         ugfx_set_font(&g_private);
+        // DESCENDER CLIPPING, REPORTED AS A NUMBER. A 'g' whose tail is
+        // cut flat is obvious in a screenshot and invisible to every
+        // width and ink measurement above -- the glyph has plenty of
+        // ink, it is simply missing its last two rows. So this reports
+        // how many rows of the 'g' cell are BELOW its lowest ink: 0
+        // means the outline runs into the cell's last row, which is
+        // what clipping looks like, and any positive number means the
+        // cell has room for the tail it actually has.
+        logf_line("fontdemo: descender g slack %d cell %d\n",
+                  glyph_bottom_slack(&g_private, 'g'), g_private.char_h);
         logf_line("fontdemo: private %s %d loaded %dx%d\n",
                PRIVATE_FACE, PRIVATE_PX, ugfx_text_width("Handgloves"),
                ugfx_char_h());
