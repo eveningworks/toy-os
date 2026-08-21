@@ -39,7 +39,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gui_debug import DebugConsole          # noqa: E402
+from gui_debug import DebugConsole, enter_gui          # noqa: E402
 from qmp_test import QMPSession             # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
@@ -143,9 +143,7 @@ def main():
 
     if not args.in_gui:
         qmp = QMPSession(port=args.qmp_port)
-        qmp.send_text("gui")
-        qmp.send_key("ret")
-        time.sleep(2.0)
+        enter_gui(qmp, args.sock)
 
     dbg = DebugConsole(args.sock)
     print("desktop entries (ShowIn + live reload)")

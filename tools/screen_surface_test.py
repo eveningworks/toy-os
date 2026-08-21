@@ -55,7 +55,7 @@ import time
 from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gui_debug import DebugConsole          # noqa: E402
+from gui_debug import DebugConsole, enter_gui          # noqa: E402
 from qmp_test import QMPSession             # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
@@ -172,9 +172,7 @@ def main():
         # `vm.py start` lands at the PHYSICAL shell, so the desktop has to
         # be entered by typing. It cannot go over the debug console --
         # `gui` never returns, so it is on debug_console.c's blocked list.
-        qmp.send_text("gui")
-        qmp.send_key("ret")
-        time.sleep(2.0)
+        enter_gui(qmp, args.sock)
 
     dbg = DebugConsole(args.sock)
     acc = []

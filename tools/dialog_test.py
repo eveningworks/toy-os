@@ -38,7 +38,7 @@ import argparse
 import sys, os, tempfile, time
 sys.path.insert(0, "tools")
 from qmp_test import QMPSession
-from gui_debug import DebugConsole
+from gui_debug import DebugConsole, enter_gui
 from PIL import Image
 
 # Scratch screenshots go to a temp directory, NOT the working tree.
@@ -82,7 +82,7 @@ def main():
 
     qmp = QMPSession(port=args.qmp_port)
     if not args.in_gui:
-        qmp.send_text("gui"); qmp.send_key("ret"); time.sleep(2.0)
+        enter_gui(qmp, args.sock)
     dbg = DebugConsole(args.sock)
 
     st = dbg.json("gui taskbar --json")["start"]

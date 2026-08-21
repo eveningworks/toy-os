@@ -46,7 +46,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gui_debug import DebugConsole
+from gui_debug import DebugConsole, enter_gui
 from qmp_test import QMPSession
 
 DEFAULT_SOCK = ".vm.serial"
@@ -350,9 +350,7 @@ def main():
 
     qmp = QMPSession(port=args.qmp_port)
     if not args.in_gui:
-        qmp.send_text("gui")
-        qmp.send_key("ret")
-        time.sleep(3)
+        enter_gui(qmp, args.sock)
 
     res = Result()
     with DebugConsole(args.sock) as dbg:

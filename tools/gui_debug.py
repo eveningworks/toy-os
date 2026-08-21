@@ -485,6 +485,50 @@ class DebugConsole:
         self.close()
 
 
+def wait_for_desktop(sock, timeout=8.0):
+    """Block until the ring-3 desktop is answering on the serial console,
+    or `timeout` elapses. Returns True if it came up.
+
+    The readiness signal is `gui state` returning a real screen -- the
+    WM only answers that once it holds the compositor role. This replaces
+    the fixed `time.sleep(2..3)` every GUI tool used after typing "gui":
+    init starts the desktop at boot (the graphical target), so it is
+    almost always already up by the time a tool connects, and a poll
+    returns in one round trip instead of waiting out a worst-case guess.
+
+    Opens a short-lived DebugConsole per poll and closes it before
+    returning, so it never overlaps the caller's own console (two on one
+    serial socket steal each other's replies -- see capture_panic()).
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with DebugConsole(sock, timeout=1.5) as dbg:
+                st = dbg.state()
+                if isinstance(st, dict) and st.get("screen"):
+                    return True
+        except Exception:
+            pass
+        time.sleep(0.15)
+    return False
+
+
+def enter_gui(qmp, sock=".vm.serial", timeout=8.0):
+    """Enter GUI mode and wait for the desktop to actually be up.
+
+    Types "gui" + Enter at the shell (a no-op if init already started the
+    desktop, which it does under the graphical target -- the common case)
+    and then polls readiness via wait_for_desktop(), rather than sleeping
+    a fixed 2-3s. `sock` must be the SAME serial socket the caller's
+    DebugConsole will use (pass args.sock). Returns wait_for_desktop()'s
+    result; a caller's own settle()/first assertion catches a real
+    failure, so this does not raise on timeout.
+    """
+    qmp.send_text("gui")
+    qmp.send_key("ret")
+    return wait_for_desktop(sock, timeout)
+
+
 if __name__ == "__main__":
     import argparse
 
