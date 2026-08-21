@@ -306,6 +306,19 @@ static int cmd_set(const char *name, const char *value) {
             found.index = i;
             if (sys_setting(&found) != 0) continue;
             if (!name_matches(&found, name)) continue;
+            // AN INT HAS NO CHOICES TO LIST -- it has a RANGE, and
+            // saying so is the whole point of the refusal. Without this
+            // a user who typed 0 was told only that 0 was not accepted,
+            // with nothing to suggest what would be.
+            if (found.type == SETTING_ABI_TYPE_INT) {
+                char r[80];
+                snprintf(r, sizeof r, "  try %d..%d%s%s (in steps of %d)\n",
+                         (int)found.imin, (int)found.imax,
+                         found.unit[0] ? " " : "", found.unit,
+                         (int)(found.istep > 0 ? found.istep : 1));
+                put(r);
+                break;
+            }
             if (found.type != SETTING_ABI_TYPE_ENUM || found.count <= 0) break;
 
             put("  try one of:");

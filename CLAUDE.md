@@ -539,7 +539,7 @@ whenever a headline here tells you something you did not already know.
 - **`uui_label` WRAPS ONLY IF ASKED, AND THE CALLER RESERVES THE ROWS.**
 - **`uui_label` is the caption widget**
 - **`uui_sidebar` IS THE NAVIGATION WIDGET; `uui_tree` MODELS CONTAINMENT.**
-- **`uui_tree` is the navigation widget**
+- **`uui_tree` models containment**
 - **A SETTING DECLARES ITS CATEGORY, and the sidebar is generated from it.**
 - **Control Panel is now SYSTEM SETTINGS**
 - **`uui_table` is the multi-column widget**
@@ -998,9 +998,11 @@ each. The two worth knowing before you start:
 - **`bear -- make all` regenerates `compile_commands.json`, and that is
   what makes `clangd` work here.** Run it from a `make clean`, since it
   only captures what actually recompiles. Reach for the LSP rather than
-  grepping for a signature: `userland/ui/` has 24 widgets whose ops
-  tables are easy to guess wrong, and guessing cost a build cycle and
-  five wrong signatures in one file the day this was set up.
+  grepping for a signature: `userland/ui/` is a couple of dozen widgets
+  whose ops tables are easy to guess wrong, and guessing cost a build
+  cycle and five wrong signatures in one file the day this was set up.
+  (`tools/check_widget_ops.py` prints the current count; it was written
+  here as a number and had already drifted by two.)
 - **`ruff check tools/` and `shellcheck tools/*.sh`** before touching a
   harness. `ruff.toml` pins a narrow ruleset (`F` + `E9`) on purpose --
   the default reports ~320 style findings and buries the class that

@@ -1005,3 +1005,112 @@ the parse to ring 3 is a named roadmap item with its actual blocker
 not.** The comparison's value was not "do what Linux does" -- it was
 knowing precisely which risk was being accepted, and paying for it in
 the one place that could pay.
+
+## Fonts became two tiers, and the shared one deliberately cannot grow (2026-08-21)
+
+A widget can now ask for a weight, a size and a face. The answer comes
+from one of two places that do not resemble each other:
+
+* **The session font** -- the desktop's face in regular and bold,
+  rasterized once in the kernel and mapped read-only into every client
+  by `WIN_REQ_FONT`. Free, shared, and it moves under a running app when
+  `fontface`/`fontsize` change. It offers ONE face, TWO weights, ONE
+  size, and nothing else.
+* **A private font** -- an app opens a `.ttf` and rasterizes it into its
+  own heap (`ugfx_font_load`), at any size or face. Costs that app its
+  memory and its time; no setting moves it.
+
+The obvious design is to extend the shared tier until it covers
+everything. It fails on a property of this kernel rather than on taste:
+**an atlas is never freed**, because clients hold long-lived read-only
+mappings and there is no way to ask them to let go. So a per-widget font
+is an unbounded product of faces × weights × sizes in a cache that can
+only grow, and serving it properly means refcounting mappings across
+processes, in ring 0, over data parsed from untrusted files.
+
+The opposite extreme -- delete the shared tier, every client rasterizes
+everything, which is exactly Wayland -- fails because the console and
+the panic path need glyphs before any process exists, and because "all
+text matches the desktop's setting" stops being a fact and becomes
+something every app must honour.
+
+**One handle (`struct ugfx_font`) is either kind and a widget never asks
+which**, which is what let the private tier land with no new widget API.
+
+The transferable shape: **when a shared cache cannot evict, "just add a
+key to it" is not a small change.**
+
+## A glyph bitmap and a line of text are different heights (2026-08-21)
+
+Every face on the machine clipped its descenders, because one number was
+doing two jobs: the cell glyphs were rasterized into was also the pitch
+everything was laid out against, and it was squeezed to a terminal-like
+height.
+
+Splitting them fixes it with nothing reflowing: `line_h` stays exactly
+what the squeezed cell was, so the baseline does not move, and `cell_h`
+extends further DOWN so the tail exists and paints below the line. This
+is what FreeType, Pango and CoreText all do -- a glyph painting outside
+its line box is ordinary, not a defect.
+
+Two limits worth stating rather than discovering: **ring 0 still clips**,
+because its cells are OPAQUE (that is what lets the console overwrite a
+character in place) and painting the taller bitmap would erase the row
+above; and **the baked font still clips**, because its bitmaps were
+rasterized squeezed at build time.
+
+## "Chosen" and "applied" are two states that can silently disagree (2026-08-21)
+
+`font_face_select()` loads and validates a `.ttf`; the atlas that makes
+it DRAWABLE comes from `gfx_set_font_px()`. `font_config_init()` called
+the first and returned early when `/etc` had no size key -- so a fresh
+disk had a face **active and unbuilt**, `fontface` named it, and every
+glyph came from the baked tables. The whole runtime-font feature fell
+back silently.
+
+It survived a green suite for the feature's entire lifetime because a
+missing size key is the state of a freshly formatted disk and of no
+developer's image, and every test set a size before measuring.
+
+**Whenever a setting has a "choose" step and an "apply" step, the
+invariant to assert is that a chosen thing is an applied thing** -- not
+that the key was read. And the surface where such bugs hide is the
+configuration nobody develops in.
+
+## A navigation sidebar is not an outline view (2026-08-21)
+
+They look alike and behave nothing alike. A tree models CONTAINMENT: a
+parent has children, can be collapsed, and selecting it means something.
+A sidebar models GROUPING: a heading is a caption over the items beneath
+it, it is not a destination, and collapsing it would hide the only
+things the user came for.
+
+Every desktop that ships a settings sidebar (KDE, GNOME, macOS) ships a
+flat list with inert section headers, not an outline view.
+
+The implementation lesson: a heading is unreachable in FIVE places --
+hit testing, hover, selection, the arrow keys and the focus ring -- and
+all of them route through one `is_item()` predicate, because five
+independent checks are five chances for one to drift and make a caption
+clickable by some route the others closed.
+
+## A numeric setting is a type, not four named levels (2026-08-21)
+
+`mouse_speed` was `slow`/`normal`/`fast`/`veryfast`, and the file said
+why: a choice list "is what lets a UI present it at all without
+inventing a slider widget", and it bounded the value since a hand-edited
+0 would freeze the pointer.
+
+Both are workarounds for a missing registry feature rather than
+descriptions of the setting. `SETTING_TYPE_INT` provides them directly
+(`min`/`max`/`step`, enforced by the registry), so the workaround went.
+
+**When a comment explains a design by naming what the system cannot do,
+that is a feature request in disguise** -- and it is worth checking
+whether the constraint is still true before copying the workaround into
+the next setting.
+
+The counter-case is the test for it: acceleration stays an ENUM, because
+its values are thresholds where LOWER means MORE and `high` is a better
+name than `3`. Naming is doing real work there, not standing in for a
+range.

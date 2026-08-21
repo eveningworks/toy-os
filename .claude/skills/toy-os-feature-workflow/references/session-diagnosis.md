@@ -732,3 +732,82 @@ setting applied), and the client-side handler was correct in isolation
 (so reading either half proved nothing). What settled it in one step was
 looking at the WM's own log and seeing NO line from the handler at all --
 i.e. asking "did the recipient run?" rather than "did the sender send?".
+
+## I published a wrong root cause to myself, again -- and the disproving check was one measurement (2026-08-21)
+
+A GUI tool went from 0-in-4 on HEAD to 2-in-4 with a change (measured by
+stashing, which is the repo's rule and it worked). I theorised the cause
+was a client startup cost the change had added -- every client now made
+two font-mapping round trips instead of one -- made the second one lazy,
+and re-measured: **3 in 6. No better.**
+
+The theory was coherent, the mechanism was real, and it was not this
+bug's. Exactly the trap CLAUDE.md names, and I walked into it because
+the theory arrived before the measurement did.
+
+The lazy mapping was kept on its own merits. **A fix that does not fix
+the bug is not thereby a bad change -- but it must be reported as what
+it is**, or the next person reads the commit and believes the flake was
+explained.
+
+## Evidence that evaporates when you check the control (2026-08-21)
+
+Chasing the same flake, I grepped the failing runs' logs for the
+client's expected reply line, found zero, and concluded "the line never
+arrives". Then I grepped a PASSING run: also zero. The tool's log simply
+does not contain those lines.
+
+Ten seconds of checking destroyed a conclusion I had already started
+building on. **Before believing an absence, confirm the thing would be
+PRESENT in the passing case.** An absence is only evidence against a
+background where the presence is expected.
+
+## Instrumenting the wrong branch (2026-08-21)
+
+The helper I instrumented had two paths -- one for "a desktop is up,
+send a keystroke", one for "no desktop, the client ran autonomously and
+steps are found by markers". I patched the first and re-ran; no timing
+output appeared at all, which I nearly read as "the reply never came"
+rather than "this code did not run".
+
+The tool takes the desktop DOWN for this test, so it was always the
+second path. Instrumenting that one found the cause in a single run.
+
+**When instrumentation produces no output, the first hypothesis is that
+the instrumented code did not execute** -- not that the thing being
+measured did not happen.
+
+## The environment was the bug, and it cost most of an investigation (2026-08-21)
+
+Category headings would not render bold. I measured ink, equalised
+colours, forced every row bold as a control, and got byte-identical
+numbers -- which looked like the drawing code being ignored entirely.
+Verified the pipeline was live with a red-heading control (225 red
+pixels), so the build WAS reaching the VM.
+
+The machine was on the BAKED font, which has one weight, so bold
+correctly fell back to regular. An earlier face-switching loop in the
+same long-lived VM had left `font_face=builtin` in `/etc`.
+
+Two lessons. **A long-lived test VM accumulates state that is
+indistinguishable from a bug** -- this is the dirty-fixture rule, but
+the fixture here was a SETTING I had written myself twenty minutes
+earlier. And **when a control changes nothing, ask what the feature
+depends on that the environment might not be providing**, before
+concluding the code path is dead.
+
+(It did lead somewhere: the reason a fresh disk had no bold at all was a
+real pre-existing bug -- a selected font face was never BUILT unless
+/etc happened to carry a size key. See session-design.md.)
+
+## Capture the failure before re-running it (2026-08-21)
+
+A preflight run on a dirty disk failed three KTESTs and I re-ran without
+capturing which. It passed clean, so the failures are CONSISTENT with
+the documented dirty-fixture pattern -- but that is inference, not a
+measurement, and `docs/bugs.md` says capture first for exactly this
+reason.
+
+Recorded in the commit as inference rather than diagnosis. **The cost of
+capturing is one redirect; the cost of not capturing is that the
+question can never be reopened.**

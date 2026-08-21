@@ -21,7 +21,7 @@ directory of text cannot provide about itself. See
 |---|---|
 | `config list` | Every registered setting, its value, and **the file it lives in**. Flags any whose file no longer matches what is live. |
 | `config get <name>` | One value. Falls back to the FACT registry when no setting has that name, so `config get mem.frame_free` answers — **labelled as read-only kernel state**, since a setting survives a reboot and a fact does not exist between them. A list-shaped fact says so and names a tool that can show it. |
-| `config set <name> <value>` | Validate, apply and persist. `name=value` works too. A refusal lists the legal values; a value that applied but did **not** save says so rather than reporting success. |
+| `config set <name> <value>` | Validate, apply and persist. `name=value` works too. A refusal says what WOULD be accepted — the named choices for an enum, the range and step for a number (`try 25..300 % (in steps of 25)`); a value that applied but did **not** save says so rather than reporting success. |
 | `config unset <name>` | Removes the key, so the built-in default applies at the next boot. |
 | `config where <name>` | Just the owning file's path — scriptable. |
 | `config diff` | Settings whose file differs from what is in effect, i.e. exactly what a hand edit changed and what `reload` would apply. |

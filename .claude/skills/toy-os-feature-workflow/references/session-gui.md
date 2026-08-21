@@ -417,3 +417,79 @@ clearing.
 Worth generalising while working anywhere in `vga.c`: every path in it
 that ends in a present is a path that can overwrite the desktop, and the
 ring-0 console has no idea a compositor exists unless it asks.
+
+## An app that never clears its surface draws OUTLINES, not text (2026-08-21)
+
+A ring-3 app with no widgets and no layout owns its whole surface and
+**the toolkit clears nothing for it** (`uapp.h`'s `on_draw` says so). One
+that skips the clear draws onto an uninitialised buffer -- and the way
+that fails is much stranger than "wrong background":
+
+`ugfx_draw_char()` SKIPS fully-background pixels, so the `bg` handed to
+a text call never fills anything. It is only the colour the antialiased
+rim is blended toward. On a black buffer that paints the glyph interiors
+(alpha 255, near-black fg) invisibly and leaves only the rim, so every
+letter renders as a hollow outline -- smeared-looking at 14px, an
+outline typeface at 24px.
+
+**Passing a `bg` to a text call is not the same as having a
+background.** If an app looks like it is rendering in an outline font,
+it never cleared.
+
+## uapp creates the window BEFORE on_open, so slow setup shows a blank window (2026-08-21)
+
+An app that loaded a ~400 KB font file in `on_open` sat on screen as an
+empty rectangle for as long as the read took. `blank_window_test.py`
+caught it as "only 1 distinct colour in its content area", which is
+exactly what that tool is for.
+
+**An app's first paint should depend on nothing it has to go and
+fetch.** Do the expensive thing after the first frame and ask for a
+repaint (`uapp_redraw`), with a placeholder in the meantime.
+
+## Bold is not reliably WIDER -- measure ink (2026-08-21)
+
+The obvious check that a bold weight is distinct from regular is that
+the same string measures wider. On a MONOSPACE face it does not: a
+designed bold has exactly the regular advances, because every cell is
+one width by definition. A width probe reports a perfectly working bold
+as a fallback.
+
+What is true of every bold, monospace or not, is more INK in the same
+letter. A client can count it directly -- the glyph coverage bytes are
+mapped read-only, and reading them is the same data the server
+rasterized.
+
+Related, and it cost an hour: **colour and weight confound every
+luminance-threshold measurement.** A dimmer heading has fewer pixels
+under any darkness threshold whatever its weight, so "is this bolder"
+cannot be measured until the two colours are made identical. Do that
+first, as a temporary control.
+
+## Reserving descender room cost a control its reachability (2026-08-21)
+
+Glyph bitmaps are taller than the line pitch, so a descender on a
+label's last row hangs below its box and whatever is drawn under it can
+paint over the tail. Reserving those two pixels per label seemed
+free -- until a settings page with twenty labels grew 42px and pushed a
+control past the bottom of its own scroll view, which is the "a control
+below the fold is unreachable" trap arriving from a direction nobody
+watches.
+
+It is opt-in now. **Two pixels a widget is nothing until a page has
+twenty of them**, and the general form is that any per-widget size
+increase is a per-PAGE increase you have not measured.
+
+## A symmetric mistake reads as a deliberate design (2026-08-21)
+
+A spinbox's stepper arrows were both drawn upside down. The drawing
+routine varied the y DIRECTION between up and down while keeping the
+width sequence the same, which flips both triangles -- so they still
+looked like a matched pair pointing sensibly apart, and nothing about
+them read as wrong until the user said so.
+
+Direction is now carried by the width sequence with rows always running
+downward, which makes "up" and "down" differ in exactly one place.
+
+**A bug that breaks two things symmetrically survives an eyeball check**,
+because the thing an eye catches is asymmetry.

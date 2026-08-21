@@ -874,7 +874,16 @@ manual steps to be worth automating:
   offsets its destination but not its SOURCE draws the right count of
   pixels in the right box with the wrong contents. And its first check
   is a real gate on the ring-3 HEAP: the client reports geometry only
-  if sbrk handed over a full screen of back buffer. In
+  if sbrk handed over a full screen of back buffer.
+
+  **And a race worth knowing about, because it is the shape of the
+  tool's one intermittent.** The client prints `screenclient: step <k>`
+  and that step's reply as two SEPARATE writes. `one()` used to sweep the
+  log once and scan the section after the marker, so a sweep landing
+  between the two reported "no reply" for a client that was working
+  perfectly -- measured 2 runs in 4 once boot got slightly slower, with
+  every other check in the tool passing. It polls now (6 in 6). A marker
+  is not a guarantee that what follows it has arrived. In
   `gui_regress.py`.
 - **`desktop_entries_test.py`** -- the `.desktop` entry system: the
   `ShowIn=` key and live reload, 13 checks. Its reusable lesson is in the
@@ -886,8 +895,8 @@ manual steps to be worth automating:
 - **`settings_test.py`** -- the ring-3 System Settings app and, through
   it, the settings registry. Run it after touching
   `kernel/lib/setting.c`, `SYS_SETTING`/`SYS_SYSINFO`, or
-  `uui_tree`/`uui_radio_list`/`uui_statusbar`/`uui_layout`'s `hidden`
-  handling. (It was `cpanel_test.py` until the app was renamed on
+  `uui_sidebar`/`uui_radio_list`/`uui_spinbox`/`uui_statusbar`/
+  `uui_layout`'s `hidden` handling. ~40 checks. (It was `cpanel_test.py` until the app was renamed on
   2026-08-19 -- Control Panel is Windows' name, and this shows exactly
   the SETTINGS registry.) Two things it encodes. A change is verified by reading the
   BYTES ON DISK through the console's own `sh cat`, not by believing the
@@ -944,7 +953,7 @@ manual steps to be worth automating:
   version of that check stayed green through the positive control.
 - **`gui_regress.py`** -- runs every GUI test tool, each against
   its own freshly-copied disk image and its own VM, and prints one
-  pass/fail table (~1.5 minutes, ~300 checks across 23 tools). This is the standard check
+  pass/fail table (~1.5 minutes; ~300 checks across ~25 tools, a snapshot rather than a maintained count). This is the standard check
   after touching `apps/ui/`, `userland/`, or anything the WM draws.
   Tools are **STARTED longest-first** (`COST_S`/`pick_order()`), because
   a parallel run cannot end before its slowest member does and
@@ -979,7 +988,7 @@ manual steps to be worth automating:
   `.vm.pid`/`.vm.serial`/4445 every existing caller assumes.
   **WHERE THE WALL-CLOCK TIME ACTUALLY GOES, measured rather than
   assumed, because the obvious answers were both wrong.** A full run is
-  ~425 tool-seconds across 24 tools, so the wall clock is the SLOWEST
+  ~425 tool-seconds across ~25 tools, so the wall clock is the SLOWEST
   SINGLE TOOL, not the total: at `-j4` it was 76s and at `-j8` 72s,
   because both are pinned by the same one tool. **KVM (`--kvm`) buys
   almost nothing either** -- 64s -- since what the slow tools spend
@@ -1246,8 +1255,9 @@ to. Arch package names; all are in the official repos.
   absolute paths.
 
   **This is what makes `clangd` work on this repo**, and it earns its
-  keep on a codebase of this shape: `userland/ui/` alone has 24 widgets
-  whose ops tables and helper signatures are easy to guess wrong.
+  keep on a codebase of this shape: `userland/ui/` alone is a couple of
+  dozen widgets whose ops tables and helper signatures are easy to guess
+  wrong.
   Writing `uui_tree.c` without it cost a build cycle to five wrong
   guesses in one file — `uui_scrollbar_draw`'s arity, three `uui_widget_ops`
   function-pointer types, and `KEY_UP` where this kernel spells it

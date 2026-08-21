@@ -946,3 +946,91 @@ fail, and it fails for the right reason.
 **The test to apply is the repo's own: what would a broken version still
 pass?** If the answer is "this check", delete it or move it somewhere it
 can bite.
+
+## "It measures" is not "it is drawn" (2026-08-21)
+
+Fifteen checks passed while every letter in the app under test rendered
+as a **hollow outline**. Every one of them read numbers out of the mapped
+font atlas -- widths, advances, per-glyph ink counts -- and not one
+looked at what reached the screen. The atlas was perfect; the app drew
+onto a surface it had never cleared.
+
+This is the repo's own "it responds is not it is drawn" arriving from a
+new direction, and the new direction is worth naming because it feels
+like stronger evidence than it is: **asserting on numbers the code
+computed is not asserting on its output.** A measurement check and a
+pixel check are different coverage, and a suite made only of the first
+cannot see anything that goes wrong between computing and painting.
+
+The user found it in a screenshot. Both rendering defects this session
+were found that way and neither by the suite.
+
+## A threshold picked without a control, again -- and it passed the broken build by 95,136 pixels (2026-08-21)
+
+Writing the pixel check that should have caught the above, the obvious
+probe was "is the text mostly SOLID ink rather than mostly edge pixels",
+since an outline is nearly all edge. Measured on the broken build: the
+black background counted as 95,136 "solid" pixels and it passed by a
+wide margin.
+
+What actually separates the two states is what MOST of the window is --
+the panel background when the app cleared, near-black when it did not.
+Dominant colour, not an ink ratio.
+
+**The rule the repo already has, restated because I broke it twice in
+one session: do not reason a threshold, measure it against a
+deliberately broken build.** Both times the reasoning was plausible and
+both times the number was somewhere else entirely.
+
+## Two sabotages can mask each other (2026-08-21)
+
+A positive control disabled the registry's range check AND the boot
+reader's legacy-name table in one build. Nothing reddened on the check
+that mattered: with the legacy names gone, `apply` rejected `"slow"`
+anyway, so removing the registry's gate changed no outcome.
+
+Re-run with ONE sabotage, the right assertion failed immediately.
+
+**Sabotage one thing at a time**, for the same reason you change one
+variable in any experiment -- and be suspicious of a control that
+reddens nothing when you disabled two things, which is the case that
+looks most like "the code is fine".
+
+## Choose test DATA that the bug could actually change (2026-08-21)
+
+The first kerning test asserted on the pairs every kerning demo uses --
+`AV`, `To`. A build that SORTED the lookup key (an easy thing to write,
+and invisible on symmetric pairs) passed it completely, because those
+pairs happened to be in ascending glyph-id order already.
+
+The fix was to find pairs that are ASYMMETRIC in the shipped font --
+`(F,A)` kerns and `(A,F)` does not, with F's gid higher -- so a sorted
+key answers the wrong one and both halves redden.
+
+Same shape for emboldening: "more ink than before" and "not the whole
+cell" both passed a smear that flooded every inked row to the cell's
+edge, because the empty rows above and below stayed empty. What cannot
+survive it is the RIGHTMOST INKED COLUMN moving by more than the smear
+width.
+
+**Ask what the data would have to look like for the bug to change the
+answer**, then go and find that data in the real fixture. A plausible
+example is not a discriminating one.
+
+## A KTEST can be vacuous because of the tests that ran BEFORE it (2026-08-21)
+
+A boot-time invariant -- "a font face that is selected must also be
+built" -- looked like an obvious KTEST. It cannot be one: the font
+KTESTs that run earlier in the same file build an atlas and restore it,
+so by the time the assertion runs the invariant already holds and the
+test passes on the broken build.
+
+It moved to the Python tool and runs FIRST, before anything sets a face
+or a size, because every later check REPAIRS the state it is looking
+for.
+
+**Two questions for any test of a boot-time or first-use state:** what
+ran before it in this process, and does anything the test itself does
+establish the thing it is checking? KTESTs run in the live kernel in
+link order, which makes the first question much less obvious than it
+sounds.
