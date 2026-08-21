@@ -1134,6 +1134,13 @@ detail there, and keep the pointer here to a line. What each file is:
   is the authority on which introspection commands have moved.
 - **`docs/errno-design.md`** -- giving a failed syscall a REASON, staged
   so each step ships on its own.
+- **`docs/libc-design.md`** -- what a real C library still needs, staged
+  so each step ships on its own, with the target decided (our own
+  POSIX-shaped libc, not Linux ABI emulation). **Read it before starting
+  any libc-shaped work**: it measures what already exists against the
+  tree, because that gap was being re-derived every time and got wrong
+  in the same two directions -- `errno` and ring-3 floating point are
+  BUILT, and buffered `stdio` is bigger than it looks.
 - **`docs/signals-design.md`** -- signals, a foreground process, and what
   `Ctrl-C` actually needs. Designed, not built. **Read it before
   starting any of Phase 1's signal/TTY/job-control work**: its whole

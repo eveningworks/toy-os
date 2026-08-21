@@ -1002,19 +1002,22 @@ file onto Notepad). A first rough breakdown:
 Inter-process IPC (message passing) -- today's ring-3 processes are
 isolated from each other with no way to communicate.
 
-A real C library on top of `filetest`'s fd-aware syscalls: CRT0
-(argc/argv from the initial stack -- partially there already,
-`elf_build_argv_on_stack()`/`process_run_ring3_args()`, `userland/bin/ls.c`
-is the one existing caller), TLS (FS.base), FPU/SSE context-switch
-save/restore, and malloc/free -- none of which exist yet. `SYS_SBRK`
-(`kernel/include/abi/syscall_abi.h`) is the only allocator-adjacent syscall
-today, and it's grow-only (no shrink/free) and explicitly documented as
-"legacy-single-process-only" (`kernel/proc/syscall.c`) -- no userland
-code anywhere builds real malloc/free semantics on top of it. TLS in
-particular is also why `kernel/lib/stack_protector.c`'s stack-canary
-guard uses `-mstack-protector-guard=global` instead of GCC's normal
-TLS-based default -- confirmed directly, not theoretical, see
-`docs/decisions.md`.
+A real C library on top of `filetest`'s fd-aware syscalls. **Most of
+the runtime this paragraph once listed as missing now exists** -- crt0
+with argc/argv/envp off a SysV stack (`userland/rt/crt0.asm`), a typed
+syscall layer (`userland/rt/sys.h`), FPU/SSE context-switch
+save/restore (eager FXSAVE/FXRSTOR in `scheduler.c`), and malloc/free
+(`kernel/lib/heap_core.c` compiled twice over a demand-paged `SYS_SBRK`
+that is no longer single-process-only). What is left is the libc
+itself, staged in `docs/libc-design.md`.
+
+TLS (FS.base) is still absent, and is the reason
+`kernel/lib/stack_protector.c`'s stack-canary guard uses
+`-mstack-protector-guard=global` instead of GCC's normal TLS-based
+default -- confirmed directly, not theoretical, see
+`docs/decisions.md`. **It is NOT a libc prerequisite**, despite having
+been listed as one: with no threads, `errno` is a global behind
+`__errno_location()`, which is what musl itself does.
 
 A FAT16/FAT32 driver -- real interop with other OSes' tools and USB
 drives, distinct from the AHCI/SATA item (that's the controller; this is
@@ -1479,6 +1482,12 @@ library, kernel threads, time syscalls, an `errno` convention, and the
 (30). Nothing below duplicates those; if an item here starts growing,
 it probably belongs in one of them instead.
 
+**The full staged plan is `docs/libc-design.md`** -- what exists today
+measured against the tree, what the three remaining syscalls are, and
+six stages that each ship on their own. Read it before starting any of
+this; it exists because the gap was being re-derived (and got wrong in
+the same two directions) every time.
+
 **What this milestone actually owns:**
 
 - **The target itself, decided before any code.** Two coherent answers,
@@ -1497,13 +1506,17 @@ it probably belongs in one of them instead.
     is the first, with the second kept as a later compatibility *shim*
     rather than the foundation -- but this is a real fork, not a
     formality.
-- **SSE, and FPU state across a context switch.** `boot.asm` sets PAE,
-  LME and NXE but never CR4.OSFXSR; userland builds with `-mno-sse
-  -mno-sse2`; nothing FXSAVEs anything anywhere. Every real libc's
-  `memcpy`/`strlen` uses SSE2 unconditionally on x86-64, so the first
-  stock-compiled binary faults or silently corrupts another process's
-  registers. Small, self-contained, and blocks the entire "run ported
-  code" story -- worth doing early even if the rest of this slips.
+- [x] ~~**SSE, and FPU state across a context switch.**~~ DONE, and it
+  was the item most worth doing early: every real libc's
+  `memcpy`/`strlen` uses SSE2 unconditionally on x86-64, so without it
+  the first stock-compiled binary faults or silently corrupts another
+  process's registers. `fpu_init()` clears CR0.EM and sets CR4.OSFXSR
+  (`kernel/arch/x86_64/fpu.c`), `USERLAND_CFLAGS` carries no
+  `-mno-sse`, and `scheduler.c` FXSAVEs/FXRSTORs EAGERLY on every switch
+  -- eagerly because CVE-2018-3665 is what lazy FP restore costs, and
+  Linux deleted its lazy path in 4.14. Both halves are tested:
+  `/tests/fpu_test` proves FP works at all, `/tests/fpu_race` proves two
+  preempted processes do not share the register file.
 - **`time_t`.** Timestamps are broken-down local `struct rtc_time` with
   no stored UTC offset, on purpose (`docs/decisions.md`), which is
   exactly the field needed to convert an existing one. The conversion
@@ -1511,14 +1524,18 @@ it probably belongs in one of them instead.
   tz.c), `fs_stat()` reports epochs on both backends, and TFS3 stores
   them natively with inode room reserved -- what this item still owns
   is the STORED UTC offset and true-UTC semantics.
-- **The unglamorous syscall surface**: `lseek` (file I/O is
-  open-then-sequential-read today), `dup`/`dup2` (which Shell pipes & job control's
-  redirection wants anyway), `stat`/`fstat`, `getpid`, `pipe`,
-  `isatty`, `clock_gettime`, and `chdir`/`getcwd` -- there is no
-  per-process cwd at all right now, it lives in the shell
-  (`apps/shell_path.c`).
-- **`crt0`.** Every binary in `userland/` carries its own copy of two
-  inline syscall stubs and its own `_start`; a real one replaces that.
+- **The unglamorous syscall surface**, most of which has since been
+  built: `dup`/`dup2`, `pipe`, path `stat`, `getpid` (via
+  `SYS_PROC_INFO`), a monotonic clock and a per-process `chdir`/`getcwd`
+  all exist now. **THREE ARE STILL ABSENT, and stdio needs all three**:
+  `lseek` (there is no seek at all -- file I/O is
+  open-then-sequential-read), `fstat` on an open fd (only paths can be
+  stat'd), and `O_APPEND` (`SYS_O_*` is WRITE/CREAT/TRUNC only).
+  `isatty` is a field of `fstat`, not a call of its own.
+- [x] ~~**`crt0`.**~~ DONE -- `userland/rt/crt0.asm` is shared, and a
+  program is a `main()` over `userland/rt/sys.h`'s typed wrappers. What
+  it still hands `main()` is an envp of exactly NULL: there is no
+  environment, and `SYS_SPAWN` has nowhere to put one.
 - **Proof.** Build and run a program nobody working on this repo wrote.
   A test that only exercises code written to pass it proves nothing
   here -- this is the same lesson as the Nordic-character gates
@@ -2213,7 +2230,7 @@ one.
 
 **Items, in full.**
 
-- [ ] **A real C library.** Partly started: `userland/rt/crt0.asm` and `userland/rt/sys.c` (libsys) landed with the ring-3 GUI work, so a program is already just a `main()` over typed syscall wrappers. What a *libc* still needs on top of that, in dependency order: - [x] ~~crt0: `_start`, argc/argv/envp off a SysV stack, call `main()`, exit with its return value~~ -- done. - [x] ~~A syscall layer with one definition per call~~ -- done (`userland/rt/sys.h`). A libc sits ON this, not instead of it. - [x] ~~`malloc`/`free`~~ DONE 2026-08-18, the second way round: `kernel/lib/heap_core.c` compiled twice, with sbrk behind it in ring 3 (`api/heap_os.h`, `userland/lib/stdlib.h`). So it is one allocator, not two. `realloc` is still absent, and `free()` cannot return memory to the kernel until `mmap` exists -- see this file's demand-paging milestone - [x] ~~`string.h`/`mem*`~~ -- done: `userland/lib/string.h`, the C names over the same `k_*` code (one implementation, not two). `memcpy`/`memmove`/`memset`/`memcmp` are real symbols in `userland/lib/cmem.c` because GCC can emit calls to them itself; everything else is a `static inline`. See the git history, and note the `-fno-tree-loop-distribute-` `patterns` flag that now has to stay in `USERLAND_CFLAGS`. - [x] ~~`snprintf`~~ -- done: `userland/lib/stdio.h`, which is kfmt's formatter. It needed `kernel/lib/kfmt.c` split first (the `vga_printf`/`klog_printf` sinks moved to `kfmt_print.c`) so the rest could be freestanding enough for the shared-source rule. `userland/tests/libc_test.c` is its first ring-3 caller and its test. - [ ] `stdio` proper: `printf` and a buffered `FILE` layer over the fd syscalls. Buffering is the part with real design in it -- unbuffered `printf` is one syscall per call, which is worse than the `put()`-shaped code it would replace. - [ ] `errno`. Syscalls return 0/-1/a count today with no shared vocabulary for *why*; this is listed separately below and is a prerequisite for a libc that reports failures usefully. - [ ] TLS (FS.base) -- needed for a per-thread `errno` and for GCC's default stack-protector guard. This is why `-mstack-protector-guard=global` is used today, which is a real workaround rather than a preference (`docs/decisions.md`). - [ ] `atexit`/`exit` split: crt0 currently calls `sys_exit()` directly and says so. A libc interposes `exit()` to run handlers and flush stdio -- that ONE line in `crt0.asm` is the whole change, and the layering is already shaped for it. - [ ] Decide the target before building much of it: our own POSIX-shaped libc, or enough Linux syscall-ABI compatibility to run stock musl binaries. POSIX compatibility owns that decision and it changes what "done" means here. The SysV entry ABI landing already removed one obstacle to the musl route.
+- [ ] **A real C library.** **The staged plan is `docs/libc-design.md`** -- read it before starting any of this, because the gap was being re-derived from scratch every time and got wrong in the same two directions (under-counting stdio, over-counting floating point). The target is DECIDED there: our own POSIX-shaped libc, compiled against, with "a third-party C program builds and runs" as the bar. Already done and not to be re-planned: crt0 (`userland/rt/crt0.asm`), the typed syscall layer (`userland/rt/sys.h` -- a libc sits ON this, not instead of it), `malloc`/`free` (`kernel/lib/heap_core.c` compiled twice; `realloc` absent, and `free()` cannot return memory until `mmap` exists), `string.h`/`mem*`, `snprintf` (kfmt's formatter), **`errno`** (`abi/errno.h` + `sys_errno()` + `sys_strerror()`), and **ring-3 floating point** including context-switch save/restore. What remains, in dependency order: three syscalls (`lseek`, `fstat` on an fd, `O_APPEND`); an include root so `<stdio.h>` resolves; buffered `stdio` (the whole project -- unbuffered `printf` is one syscall per call, which is worse than the `put()`-shaped code it replaces); `strtol`/`qsort`/`realloc`/`ctype`/`assert`/`setjmp`/`dirent` and the `atexit`/`exit` split (ONE line in `crt0.asm`); `%f` via a conversion hook in kfmt rather than a second formatter; `time_t` and the calendar math; and an environment, which `SYS_SPAWN` has nowhere to put today.
 
 ## Dynamic linking / shared libraries
 

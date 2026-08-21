@@ -213,13 +213,13 @@ everything libc-shaped is waiting on it. Full plan and staging:
 ### Runtime + interop
 
 - [ ] Inter-process IPC (message passing)
-- [ ] A real C library
+- [ ] A real C library -- staged in `docs/libc-design.md`
 - [ ] FAT16/FAT32 driver
 - [ ] `g_next_kernel_rsp` reentrancy fixed properly
 - [ ] `wintest` made non-modal
 - [ ] Kernel threads (a scheduler entity without an address space of its own)
 - [ ] User threads (a second thread of execution sharing one address space)
-- [ ] Thread-local storage (FS.base) -- what a per-thread `errno` needs, and GCC's default stack-protector guard
+- [ ] Thread-local storage (FS.base) -- what a per-thread `errno` needs, and GCC's default stack-protector guard; NOT a libc prerequisite
 - [ ] `mmap`-style anonymous memory for userspace
 - [ ] Time syscalls (a monotonic clock and wall-clock read)
 - [ ] A consistent `errno`-style error convention
@@ -272,11 +272,11 @@ everything libc-shaped is waiting on it. Full plan and staging:
 ### POSIX compatibility
 **Needs:** `fork()`/`exec()`-style process model, TTY / virtual terminals and Runtime + interop -- POSIX is mostly a promise about those three.
 
-- [ ] Pick the target: our own POSIX-shaped libc, or Linux syscall-ABI emulation
-- [ ] Enable SSE (CR4.OSFXSR) and save FPU/SSE state per process
+- [x] ~~Pick the target: our own POSIX-shaped libc, or Linux syscall-ABI emulation~~ -- our own, see `docs/libc-design.md`
+- [x] ~~Enable SSE (CR4.OSFXSR) and save FPU/SSE state per process~~ -- eager FXSAVE/FXRSTOR, `/tests/fpu_race` proves it
 - [ ] `time_t`: epoch seconds and a UTC offset stored alongside, next to today's broken-down local `struct rtc_time`
 - [ ] ~~An `errno`-style return convention~~ moved up to its own section (errno-design.md); it needs none of this milestone's prerequisites
-- [ ] The unglamorous syscall surface: `lseek`, `getpid` and the rest -- the path-keyed half landed 2026-08-19
+- [ ] The three syscalls stdio needs: `lseek`, `fstat` on an fd, `O_APPEND` -- the rest of that surface has landed
 - [x] ~~A per-process cwd~~ DONE 2026-08-19 -- `SYS_CHDIR`/`SYS_GETCWD`
 - [ ] `crt0` + a real `_start`, replacing each binary's hand-written syscall stubs
 - [ ] Prove it: build and run a real ported program nobody here wrote
