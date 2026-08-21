@@ -49,7 +49,14 @@
 #define WIN_W 560
 #define WIN_H 380
 
-#define MARGIN 8
+// A small INTERNAL inset so glyphs and the frame don't touch -- not an
+// outer moat. The edit surface fills the content area (see
+// text_rect_for): flush under the menu bar, flush to the status bar,
+// with the scrollbar flush to the right edge. That is how a real
+// editor's edit control owns the whole client rect (Windows Notepad,
+// gedit/GtkTextView); an 8px margin on every side left the field
+// visibly floating inside its own window.
+#define TEXT_PAD 3
 
 #define PATH_MAX_LEN 64 // FS_PATH_MAX
 
@@ -302,19 +309,15 @@ static int scrollbar_w(void) {
     return w;
 }
 
-// Width plus the 2px breathing space between the text and the strip, so
-// the text rect and the bar's own x can never disagree about the gap.
-static int scrollbar_gutter(void) { return scrollbar_w() + 2; }
-
 // Derived from the content SIZE rather than from a surface, because the
 // event callbacks need it too and they never hold one. That it derives
 // at all is what makes this app resizable with no resize code: a bigger
 // window is simply a bigger page.
 static void text_rect_for(int cw, int ch, int *x, int *y, int *w, int *h) {
-    *x = MARGIN;
-    *y = menubar_h() + MARGIN;
-    *w = cw - 2 * MARGIN - scrollbar_gutter(); // room for the scrollbar
-    *h = ch - *y - MARGIN - statusbar_h();
+    *x = TEXT_PAD;
+    *y = menubar_h();
+    *w = cw - TEXT_PAD - scrollbar_w(); // scrollbar sits flush at the right edge
+    *h = ch - *y - statusbar_h();
 }
 
 static void text_rect(struct ugfx_surface *s, int *x, int *y, int *w, int *h) {
@@ -382,7 +385,7 @@ static unsigned menu_item_flags(int code) {
 // responding in another.
 static void scrollbar_rect(int tx, int ty, int tw, int th,
                             int *bx, int *by, int *bw, int *bh) {
-    *bx = tx + tw + 2;
+    *bx = tx + tw; // flush against the text field, which ends at the scrollbar's left edge
     *by = ty;
     *bw = scrollbar_w();
     *bh = th;
