@@ -53,13 +53,14 @@ struct tty_driver {
 // Sets up tty0 -- the physical console -- and nothing else. Called from
 // kernel_main() before anything can type.
 //
-// **tty0 STARTS RAW**, unlike every terminal made after it, and the
-// reason is that its readers predate the layer: the kernel shell and
-// `/bin/tosh` both run `kernel/lib/klineedit.c`, which does its own
-// editing and its own echo. Canonical mode underneath them would buffer
-// the line a second time and echo it twice. They will ask for raw
-// explicitly once SYS_TCSETATTR exists (docs/tty-design.md, stage 2) and
-// this special case goes away with that.
+// **tty0 IS NOT SPECIAL, AND THAT COST ONE LINE IN EACH SHELL.** It
+// starts in POSIX's state like every other terminal (TTY_LFLAG_DEFAULT,
+// abi/tty_abi.h), and the three readers that edit for themselves ask for
+// raw: apps/shell.c calls tty_set_termios() directly, and the two ring-3
+// shells call sys_tty_raw(0). It briefly DID start raw -- so that stage
+// 1 could land with no behaviour change at all -- and keeping that would
+// have meant one terminal on this machine behaving unlike the rest,
+// which is the thing this layer exists to end.
 void tty_init(void);
 
 // tty0. Never NULL after tty_init().

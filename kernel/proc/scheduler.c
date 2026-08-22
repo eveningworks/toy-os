@@ -864,6 +864,7 @@ static uint32_t reported_wait_reason(int reason) {
     case SCHED_WAIT_CHILD: return PROC_WAIT_CHILD;
     case SCHED_WAIT_TIMER: return PROC_WAIT_TIMER;
     case SCHED_WAIT_KEY:   return PROC_WAIT_KEY;
+    case SCHED_WAIT_TTY:   return PROC_WAIT_TTY;
     default:               return PROC_WAIT_NONE;
     }
 }
@@ -1200,6 +1201,7 @@ const char *sched_wait_reason_name(int reason) {
     case SCHED_WAIT_CHILD: return "child";
     case SCHED_WAIT_TIMER: return "timer";
     case SCHED_WAIT_KEY:   return "key";
+    case SCHED_WAIT_TTY:   return "tty";
     default:               return "?";
     }
 }

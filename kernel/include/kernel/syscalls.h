@@ -5,6 +5,8 @@
 #include "syscall_table.h"
 #include "fs.h" // FS_PATH_MAX -- struct open_file's name
 
+struct tty; // kernel/tty.h -- fd_tty() below, without dragging it in here
+
 // Every syscall handler, plus the little that genuinely crosses between
 // the files they live in. Included by syscall_table.c (which needs every
 // handler's address) and by each handler file (which needs its own
@@ -82,7 +84,12 @@ enum fd_mode { FD_MODE_READ, FD_MODE_WRITE };
 // client with no terminal can still say something a test can read.
 enum fd_kind {
     FD_KIND_FILE, FD_KIND_SOCKET, FD_KIND_PIPE_R, FD_KIND_PIPE_W,
-    FD_KIND_CONSOLE, FD_KIND_KLOG
+    FD_KIND_CONSOLE, FD_KIND_KLOG,
+    // The two ends of a pseudo-terminal (kernel/pty.h). Two kinds rather
+    // than one with a flag, because every switch in syscall_fd.c
+    // dispatches on the kind and the two ends do OPPOSITE things: a
+    // write to the master is input, a write to the slave is output.
+    FD_KIND_TTY_MASTER, FD_KIND_TTY_SLAVE
 };
 
 struct open_file {
@@ -107,14 +114,24 @@ struct open_file {
         struct {
             int idx; // index into pipe.c's table
         } pipe;
+        struct {
+            int idx; // index into pty.c's table
+        } pty;
     };
 };
 
 extern struct open_file fd_desc[FD_DESC_MAX];
 
 // --- descriptions ---
-// Allocates one with refs = 1. `pipe_idx` is ignored for other kinds.
-int  fd_desc_alloc(enum fd_kind kind, int pipe_idx);
+// Allocates one with refs = 1. `aux_idx` is the pipe or pty index for
+// the kinds that have one, and ignored for the rest.
+int  fd_desc_alloc(enum fd_kind kind, int aux_idx);
+
+// The TERMINAL an fd names, or NULL when it is not one. What
+// SYS_TCSETPGRP, SYS_TCGETPGRP and the termios calls resolve first --
+// and the one place that knows fd 0 on the console means tty0, so the
+// four of them do not each have to.
+struct tty *fd_tty(uint64_t pml4, int fd);
 // Drops a reference, tearing the description down at zero -- which is
 // where a pipe end is closed and a file forgotten. Every close path
 // goes through here so there is one place that decides "really gone".
@@ -204,6 +221,11 @@ int sys_getpgid(struct syscall_ctx *c);
 int sys_sigaction(struct syscall_ctx *c);
 int sys_tcsetpgrp(struct syscall_ctx *c);
 int sys_tcgetpgrp(struct syscall_ctx *c);
+
+// --- terminals (kernel/tty/tty_syscalls.c) ---------------------------
+int sys_openpty(struct syscall_ctx *c);
+int sys_tcgetattr(struct syscall_ctx *c);
+int sys_tcsetattr(struct syscall_ctx *c);
 int sys_proc_info(struct syscall_ctx *c);
 int sys_getpid(struct syscall_ctx *c);
 int sys_ticks(struct syscall_ctx *c);

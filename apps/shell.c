@@ -671,6 +671,20 @@ void shell_main(void) {
 
     shell_session_init(); // once per boot; the demo and the serial console reach it first, see its comment
 
+    // THIS SHELL EDITS FOR ITSELF, so it asks the console for raw mode
+    // -- ICANON and ECHO off, ISIG on. Exactly what /bin/tosh asks for
+    // through sys_tty_raw(0), and for the same reason: klineedit.c does
+    // the editing and shell_read_line() does the painting, so a kernel
+    // line discipline underneath would buffer every line until Enter and
+    // echo every character twice.
+    //
+    // Through api/keyboard.h rather than kernel/tty.h, because apps/ is
+    // NOT on that include path and reaching around the boundary would be
+    // a compile error rather than a review catch (kernel/include/
+    // README.md). A capability an app needs gets a function on the
+    // app-facing side; this is that function.
+    keyboard_console_set_raw(1);
+
     vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
     // NOT "tosh". That is a real program -- /bin/tosh, a RING-3 shell
     // with its own page -- and this is the kernel's own, which had been

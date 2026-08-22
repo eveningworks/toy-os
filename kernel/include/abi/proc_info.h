@@ -54,7 +54,10 @@
 #define PROC_WAIT_PIPE   2 // data (or EOF) on a pipe it reads
 #define PROC_WAIT_CHILD  3 // a spawned child of it exited
 #define PROC_WAIT_TIMER  4 // a deadline it asked to sleep until
-#define PROC_WAIT_KEY    5 // a keystroke on the physical console (fd 0)
+#define PROC_WAIT_KEY    5 // a keystroke on a terminal it reads
+#define PROC_WAIT_TTY    6 // a terminal's output side -- a pty master
+                           // waiting for its shell to print, or a shell
+                           // waiting for a master that has fallen behind
 
 struct proc_info {
     int32_t  pid;         // 0 means "this slot is empty"; see SYS_PROC_INFO

@@ -117,6 +117,8 @@ static const struct { int code; const char *msg; } g_errmsg[] = {
     { E2BIG,  "argument list too long" },
     { ENFILE, "too many open files in system" },
     { EMFILE, "too many open files" },
+    { ENOTTY, "not a terminal" },
+    { ENOSPC, "no space left" },
     { ENOTDIR, "not a directory" },
     { EISDIR, "is a directory" },
     { ERANGE, "out of range" },
@@ -566,12 +568,49 @@ int sys_sigaction(int sig, int disp) {
                              (uint64_t)(int64_t)disp));
 }
 
-int sys_tcsetpgrp(int pgid) {
-    return (int)err(syscall1(SYS_TCSETPGRP, (uint64_t)(int64_t)pgid));
+int sys_tcsetpgrp(int fd, int pgid) {
+    return (int)err(syscall2(SYS_TCSETPGRP, (uint64_t)(int64_t)fd,
+                             (uint64_t)(int64_t)pgid));
 }
 
-int sys_tcgetpgrp(void) {
-    return (int)err(syscall0(SYS_TCGETPGRP));
+int sys_tcgetpgrp(int fd) {
+    return (int)err(syscall1(SYS_TCGETPGRP, (uint64_t)(int64_t)fd));
+}
+
+int sys_openpty(int *master_fd, int *slave_fd) {
+    struct openpty_msg msg = {0};
+    int r = (int)err(syscall1(SYS_OPENPTY, (uint64_t)(uintptr_t)&msg));
+    if (r < 0) return r;
+    if (master_fd) *master_fd = msg.master_fd;
+    if (slave_fd)  *slave_fd  = msg.slave_fd;
+    return 0;
+}
+
+int sys_tcgetattr(int fd, struct tty_termios *tio) {
+    return (int)err(syscall2(SYS_TCGETATTR, (uint64_t)(int64_t)fd,
+                             (uint64_t)(uintptr_t)tio));
+}
+
+int sys_tcsetattr(int fd, const struct tty_termios *tio) {
+    return (int)err(syscall2(SYS_TCSETATTR, (uint64_t)(int64_t)fd,
+                             (uint64_t)(uintptr_t)tio));
+}
+
+// Raw mode, in one call, because every shell here wants exactly this and
+// three copies of the same four lines is how they drift. ICANON and ECHO
+// off, ISIG left ON: a shell still wants Ctrl-C to interrupt its jobs --
+// it is the LINE EDITING it does for itself (kernel/lib/klineedit.c),
+// not the signalling.
+//
+// Returns 0, or -1 with errno ENOTTY when fd is not a terminal -- which
+// a caller may legitimately ignore, since a shell reading a pipe has
+// nothing to configure.
+int sys_tty_raw(int fd) {
+    struct tty_termios tio;
+    if (sys_tcgetattr(fd, &tio) < 0) return -1;
+    tio.lflag &= ~(uint32_t)(TTY_ICANON | TTY_ECHO);
+    tio.lflag |= TTY_ISIG;
+    return sys_tcsetattr(fd, &tio);
 }
 
 int sys_sleep_ms(int ms) {

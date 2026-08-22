@@ -83,17 +83,27 @@ int sys_sigaction(struct syscall_ctx *c) {
     return 0;
 }
 
+// **BOTH TAKE AN fd NOW.** They took none while "the console" was a
+// complete answer; it stopped being one when a Terminal window got a
+// terminal of its own, and a shell that could only ever move the
+// console's foreground group would be aiming the physical keyboard's
+// Ctrl-C at its own child.
+//
+// Every rule is tty.c's, including who is allowed to call this -- the
+// terminal's owner, and only it. A second copy of that check here is the
+// kind of duplication that drifts (CLAUDE.md's note on the context menu
+// re-implementing wm_request_close()).
 int sys_tcsetpgrp(struct syscall_ctx *c) {
-    // Every rule is tty.c's, including who is allowed to call this --
-    // the console's owner, and only it. A second copy of that check here
-    // is the kind of duplication that drifts (CLAUDE.md's note on the
-    // context menu re-implementing wm_request_close()).
-    c->regs[14] = (uint64_t)(int64_t)tty_set_foreground_pgid((int)(int32_t)c->a0);
+    struct tty *t = fd_tty(c->pml4, (int)(int32_t)c->a0);
+    if (!t) { c->regs[14] = (uint64_t)(int64_t)-ENOTTY; return 0; }
+    c->regs[14] = (uint64_t)(int64_t)tty_set_fg_pgid(t, (int)(int32_t)c->a1);
     return 0;
 }
 
 int sys_tcgetpgrp(struct syscall_ctx *c) {
-    int pgid = tty_foreground_pgid();
+    struct tty *t = fd_tty(c->pml4, (int)(int32_t)c->a0);
+    if (!t) { c->regs[14] = (uint64_t)(int64_t)-ENOTTY; return 0; }
+    int pgid = tty_fg_pgid(t);
     c->regs[14] = (uint64_t)(int64_t)(pgid > 0 ? pgid : -ENODEV);
     return 0;
 }

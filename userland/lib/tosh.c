@@ -291,7 +291,7 @@ static void fd_sink(void *ctx, const char *text, int len) {
 // the same gap for the same reason and closes it no better; the shell
 // ignoring SIGINT is what makes it harmless rather than fatal.
 static void job_foreground(int pgid) {
-    if (pgid > 0) sys_tcsetpgrp(pgid);
+    if (pgid > 0) sys_tcsetpgrp(0, pgid);
 }
 
 // Put this shell's own group back in front, which is what tells the
@@ -299,7 +299,7 @@ static void job_foreground(int pgid) {
 // meaning, abandoning the line being typed.
 static void job_done(void) {
     int mine = sys_getpgid(0);
-    if (mine > 0) sys_tcsetpgrp(mine);
+    if (mine > 0) sys_tcsetpgrp(0, mine);
 }
 
 // Say so when a job was killed by a signal rather than exiting.

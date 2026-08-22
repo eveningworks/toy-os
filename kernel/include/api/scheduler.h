@@ -316,7 +316,8 @@ const void *scheduler_wait_chan_pid(int pid);
 // diagnostic can print a word instead of a pointer.
 //
 // ADDING ONE IS THREE EDITS, and the third is the one that is easy to
-// miss: sched_wait_reason_name() below, scheduler_proc_info()'s
+// miss (SCHED_WAIT_TTY was added this way, and the KTEST caught the
+// missing bound on the first run): sched_wait_reason_name() below, scheduler_proc_info()'s
 // reported_wait_reason() (these are kernel-internal, and ring 3 sees
 // abi/proc_info.h's PROC_WAIT_* instead), and the LOOP BOUND in
 // kernel/proc/proc_info_test.c's "every wait reason is reported" --
@@ -327,6 +328,14 @@ const void *scheduler_wait_chan_pid(int pid);
 #define SCHED_WAIT_CHILD 3 // a spawned child of this process exited
 #define SCHED_WAIT_TIMER 4 // a deadline this process asked to sleep until
 #define SCHED_WAIT_KEY   5 // a keystroke on a terminal this process reads
+#define SCHED_WAIT_TTY   6 // room in, or bytes out of, a terminal's
+                           // OUTPUT side -- a pty master waiting for its
+                           // shell to print, or a shell waiting for a
+                           // master that has fallen behind. Distinct
+                           // from KEY, which is the INPUT side: the two
+                           // are different queues with different
+                           // channels, and a reader told the wrong one
+                           // would read as blocked on the wrong thing.
 
 // The label above as a word, for diagnostics. Never 0 -- an unknown
 // reason reports "?" rather than being left to a caller to handle.

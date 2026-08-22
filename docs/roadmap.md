@@ -77,10 +77,10 @@ and job control is what a terminal on that TTY makes possible.
 - [ ] SIGCHLD on child exit -- the signal exists and its default is ignore; nothing SENDS one yet
 
 ### TTY / virtual terminals
-**Needs:** nothing -- signals landed, and `Ctrl-C` works on the physical console. What is missing is a line discipline to move the INTR recognition into, and a per-terminal version of the foreground group.
+**Needs:** nothing -- the tty layer landed (`docs/tty-design.md`). What is left here is virtual terminals and the output processing below them.
 
 - [x] ~~A ring-3 process can read the console at all (`SYS_READ`'s fd 0, blocking)~~ DONE 2026-08-19
-- [ ] A line discipline (line editing, echo control) separate from the shell's own input loop -- fd 0 is RAW today
+- [x] ~~A line discipline (line editing, echo control) separate from the shell's own input loop~~ DONE 2026-08-22 -- `kernel/tty/ldisc.c`
 - [x] ~~`klineedit.c` compiled a second time for ring 3, so both ring-3 shells share the keymap~~ DONE 2026-08-19
 - [ ] Tab completion in ring 3 -- `apps/completion.c` is kernel-side, so `/bin/tosh` and the GUI Terminal ignore Tab
 - [ ] Ctrl-R reverse search in ring 3 -- needs a query line the console front end cannot yet paint
@@ -90,8 +90,8 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~The concept of a foreground process for a terminal~~ DONE 2026-08-22 -- a foreground GROUP, `kernel/tty.h`, physical console only
 - [ ] Multiple virtual terminals on `Ctrl+Alt+F1..F4`
 - [ ] The GUI Terminal app and the physical console as two clients of the same TTY layer
-- [ ] `termios`-style settings: raw vs cooked, echo on/off, and the per-terminal state to hold them
-- [ ] A per-TTY input queue, so two terminals don't share one keyboard buffer
+- [x] ~~`termios`-style settings: raw vs cooked, echo on/off, and the per-terminal state to hold them~~ DONE 2026-08-22
+- [x] ~~A per-TTY input queue, so two terminals don't share one keyboard buffer~~ DONE 2026-08-22
 - [ ] Window size as a property a program can ask for (the `ioctl` every full-screen program expects)
 - [x] ~~Output processing: ANSI SGR (colour) parsed by the console~~ done -- `kernel/lib/ansi.c`, for the console and any sink
 - [x] ~~ANSI cursor movement, erasing and `?25` visibility~~ done -- `tools/ansi_cursor_test.py` checks the pixels

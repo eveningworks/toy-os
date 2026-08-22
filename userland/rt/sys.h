@@ -10,6 +10,7 @@
 #include "cpuinfo.h" // struct cpu_info, for sys_cpu_info()
 #include "setting_abi.h"
 #include "query_abi.h"
+#include "tty_abi.h"  // struct tty_termios -- the terminal calls below
 #include "signal_abi.h" // SIG*, SIG_DFL/SIG_IGN -- sys_kill() takes a signal
 #include "crash_abi.h" // struct setting_msg, struct sys_info
 
@@ -329,10 +330,36 @@ int sys_sigaction(int sig, int disp);
 //
 // The shell's half of job control: put the job's group in front, wait
 // for it, then put your own back.
-int sys_tcsetpgrp(int pgid);
+//
+// `fd` NAMES THE TERMINAL, and it matters which: a shell in a window
+// must move ITS terminal's foreground group, not the physical console's
+// -- doing the latter would aim the keyboard's Ctrl-C at its child.
+// Pass the fd the shell reads its input from, which is 0.
+int sys_tcsetpgrp(int fd, int pgid);
 
-// The console's foreground group, or -1 with errno ENODEV.
-int sys_tcgetpgrp(void);
+// That terminal's foreground group, -1 with errno ENODEV when nobody
+// owns it, or ENOTTY when `fd` is not a terminal.
+int sys_tcgetpgrp(int fd);
+
+// A new pseudo-terminal: `*master_fd` is the end that BEHAVES like a
+// terminal (write to type at it, read what it prints), `*slave_fd` the
+// end a program uses as its stdin/stdout. Returns 0, or -1 with errno.
+//
+// BOTH ENDS AT ONCE AND NO PATH -- there are no device nodes here, so
+// this is BSD's openpty(3) rather than opening /dev/ptmx. Hand the slave
+// to a child by dup2()ing it onto 0/1/2 before spawning; the child is
+// then on a terminal, and Ctrl-C means what it means everywhere else.
+int sys_openpty(int *master_fd, int *slave_fd);
+
+// A terminal's behaviour. See abi/tty_abi.h -- two lflags and three
+// control characters, not POSIX's four words and 32.
+int sys_tcgetattr(int fd, struct tty_termios *tio);
+int sys_tcsetattr(int fd, const struct tty_termios *tio);
+
+// ICANON and ECHO off, ISIG on -- what every shell here wants, since
+// they all edit for themselves and none of them wants the kernel
+// echoing on top. One call rather than four lines in three shells.
+int sys_tty_raw(int fd);
 
 // Monotonic timer TICKS since boot, at whatever rate the timer runs.
 // Coarse -- 10ms steps today -- and fine for pacing something, but not

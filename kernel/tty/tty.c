@@ -45,9 +45,7 @@ void tty_init(void) {
     t->used = 1;
     t->index = 0;
     t->drv = &console_driver;
-    // RAW, unlike every terminal created after it -- tty.h's tty_init()
-    // comment says why, and that it is temporary.
-    t->tio.lflag = TTY_ISIG;
+    t->tio.lflag = TTY_LFLAG_DEFAULT;
     t->tio.cc[TTY_VINTR]  = 0x03;
     t->tio.cc[TTY_VERASE] = '\b';
     t->tio.cc[TTY_VKILL]  = 0x15;

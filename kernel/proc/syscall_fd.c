@@ -21,7 +21,8 @@
 #include "vmm.h"
 #include "scheduler.h"
 #include "pipe.h"
-#include "tty.h" // the console's owner and foreground group
+#include "pty.h" // a pty end is an fd kind
+#include "tty.h" // terminals -- fd 0 is one, and so is a pty end
 #include "fs.h"
 #include "string.h"
 #include <stddef.h>
@@ -47,13 +48,15 @@ static struct fd_space g_spaces[FD_SPACE_MAX];
 // CR3 like everything else here.
 static uint64_t g_console_owner_pml4;
 
-int fd_desc_alloc(enum fd_kind kind, int pipe_idx) {
+int fd_desc_alloc(enum fd_kind kind, int aux_idx) {
     for (int i = 0; i < FD_DESC_MAX; i++) {
         if (fd_desc[i].refs) continue;
         fd_desc[i].refs = 1;
         fd_desc[i].kind = kind;
         if (kind == FD_KIND_PIPE_R || kind == FD_KIND_PIPE_W)
-            fd_desc[i].pipe.idx = pipe_idx;
+            fd_desc[i].pipe.idx = aux_idx;
+        if (kind == FD_KIND_TTY_MASTER || kind == FD_KIND_TTY_SLAVE)
+            fd_desc[i].pty.idx = aux_idx;
         return i;
     }
     return -1;
@@ -72,6 +75,11 @@ void fd_desc_unref(int di) {
     switch (f->kind) {
     case FD_KIND_PIPE_R: pipe_close_reader(f->pipe.idx); break;
     case FD_KIND_PIPE_W: pipe_close_writer(f->pipe.idx); break;
+    // A pty end. The LAST close of one end wakes anything parked on the
+    // other, which is what makes end-of-file arrive rather than being
+    // waited for forever; pty.c owns that rule, here as for a pipe.
+    case FD_KIND_TTY_MASTER: pty_close_master(f->pty.idx); break;
+    case FD_KIND_TTY_SLAVE:  pty_close_slave(f->pty.idx);  break;
     default: break; // a file needs nothing: fs.c holds no per-open state
     }
     f->kind = FD_KIND_FILE;
@@ -224,6 +232,135 @@ void fd_inherit(uint64_t child, uint64_t parent) {
 // Returns 1 if the caller was PARKED (its syscall has no return value
 // yet -- the wake writes it), 0 otherwise. That is the one thing the
 // dispatcher still needs to know, so it is the return value rather than
+// --- pseudo-terminals ------------------------------------------------
+//
+// Four paths, because the two ENDS do opposite things: a write to the
+// master is INPUT (it goes through the line discipline as if typed) and
+// a write to the slave is OUTPUT. Each pairs a non-blocking call in
+// pty.c/tty.c with the same check-and-park dance the pipe helpers above
+// use, and for the same reason -- the kernel is preemptible, so "empty
+// -> park" must be atomic against the other end or the wake fires with
+// nobody parked yet and is LOST.
+
+static __attribute__((noinline)) int
+sys_do_read_pty_master(uint64_t *regs, uint64_t pml4, int idx,
+                       uint64_t buf_ptr, uint64_t len) {
+    char *kbuf = kmalloc(SYS_WRITE_MAX);
+    if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
+
+    scheduler_preempt_disable();
+    int64_t n = pty_master_read(idx, kbuf, (uint32_t)len);
+    int blocked = 0;
+    if (n >= 0 && !vmm_copy_to_user(pml4, buf_ptr, kbuf, (uint64_t)n)) {
+        klog_write("syscall: read() rejected -- invalid buffer pointer\n");
+        regs[14] = (uint64_t)(int64_t)-EFAULT;
+    } else if (n >= 0) {
+        regs[14] = (uint64_t)n; // bytes, or 0 for EOF (no slave left)
+    } else if (!scheduler_block_current(regs, pty_out_wait_chan(idx), SCHED_WAIT_TTY)) {
+        regs[14] = 0; // nowhere to park -- EOF beats spinning
+    } else {
+        blocked = 1;
+    }
+    scheduler_preempt_enable();
+    kfree(kbuf);
+    return blocked;
+}
+
+static __attribute__((noinline)) int
+sys_do_read_pty_slave(uint64_t *regs, uint64_t pml4, int idx,
+                      uint64_t buf_ptr, uint64_t len) {
+    struct tty *t = pty_tty(idx);
+    if (!t) { regs[14] = (uint64_t)(int64_t)-EBADF; return 0; }
+
+    char *kbuf = kmalloc(SYS_WRITE_MAX);
+    if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
+
+    scheduler_preempt_disable();
+    unsigned n = tty_read(t, kbuf, (unsigned)len);
+    int blocked = 0;
+    if (n && !vmm_copy_to_user(pml4, buf_ptr, kbuf, (uint64_t)n)) {
+        klog_write("syscall: read() rejected -- invalid buffer pointer\n");
+        regs[14] = (uint64_t)(int64_t)-EFAULT;
+    } else if (n) {
+        regs[14] = (uint64_t)n;
+    } else if (!pty_master_open(idx)) {
+        // END OF FILE, and this is the one case that distinguishes a pty
+        // slave from the physical console: a console has no end of input
+        // because the keyboard is always there, but a terminal WINDOW
+        // can be closed, and a shell inside it has to be told rather
+        // than parked forever on a master that will never write again.
+        regs[14] = 0;
+    } else if (!scheduler_block_current(regs, tty_wait_chan(t), SCHED_WAIT_KEY)) {
+        regs[14] = 0;
+    } else {
+        blocked = 1;
+    }
+    scheduler_preempt_enable();
+    kfree(kbuf);
+    return blocked;
+}
+
+static __attribute__((noinline)) void
+sys_do_write_pty_master(uint64_t *regs, uint64_t pml4, int idx,
+                        uint64_t buf_ptr, uint64_t len) {
+    char *kbuf = kmalloc(SYS_WRITE_MAX);
+    if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return; }
+    if (!vmm_copy_from_user(pml4, kbuf, buf_ptr, len)) {
+        klog_write("syscall: write() rejected -- invalid buffer pointer\n");
+        regs[14] = (uint64_t)(int64_t)-EFAULT;
+        kfree(kbuf);
+        return;
+    }
+    // NEVER BLOCKS. This is input, and input is dropped when the queue
+    // is full exactly as a keystroke at the physical keyboard is -- a
+    // terminal emulator that parked here would stop painting while its
+    // shell was busy, which is the opposite of what a terminal is for.
+    int64_t n = pty_master_write(idx, kbuf, (uint32_t)len);
+    regs[14] = (uint64_t)n; // len, or 0 when no terminal is left
+    kfree(kbuf);
+}
+
+static __attribute__((noinline)) int
+sys_do_write_pty_slave(uint64_t *regs, uint64_t pml4, int idx,
+                       uint64_t buf_ptr, uint64_t len) {
+    char *kbuf = kmalloc(SYS_WRITE_MAX);
+    if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
+    if (!vmm_copy_from_user(pml4, kbuf, buf_ptr, len)) {
+        klog_write("syscall: write() rejected -- invalid buffer pointer\n");
+        regs[14] = (uint64_t)(int64_t)-EFAULT;
+        kfree(kbuf);
+        return 0;
+    }
+
+    scheduler_preempt_disable();
+    int64_t n = pty_slave_write(idx, kbuf, (uint32_t)len);
+    int blocked = 0;
+    if (n >= 0) {
+        regs[14] = (uint64_t)n; // len, or 0 when no master remains
+    } else if (!scheduler_block_current(regs, pty_out_wait_chan(idx), SCHED_WAIT_TTY)) {
+        regs[14] = 0;
+    } else {
+        blocked = 1;
+    }
+    scheduler_preempt_enable();
+    kfree(kbuf);
+    return blocked;
+}
+
+// The TERMINAL an fd names, or NULL. ONE place knows that fd 0 on the
+// console means tty0, so the four terminal syscalls do not each have to
+// -- and so a future virtual terminal changes one function.
+struct tty *fd_tty(uint64_t pml4, int fd) {
+    struct open_file *f = fd_get(pml4, fd);
+    if (!f) return NULL;
+    switch (f->kind) {
+    case FD_KIND_CONSOLE:    return tty_console();
+    case FD_KIND_TTY_MASTER:
+    case FD_KIND_TTY_SLAVE:  return pty_tty(f->pty.idx);
+    default:                 return NULL;
+    }
+}
+
 // another out-parameter.
 static __attribute__((noinline)) int
 sys_do_read_pipe(uint64_t *regs, uint64_t pml4, int pipe_idx,
@@ -547,6 +684,14 @@ int sys_write(struct syscall_ctx *c) {
         // The one write that can PARK its caller, so its return value
         // is this function's -- exactly as the pipe read is.
         return sys_do_write_pipe(c->regs, pml4, f->pipe.idx, buf_ptr, len);
+    case FD_KIND_TTY_MASTER:
+        // Typing AT the terminal: through the line discipline, and it
+        // cannot block.
+        sys_do_write_pty_master(c->regs, pml4, f->pty.idx, buf_ptr, len);
+        break;
+    case FD_KIND_TTY_SLAVE:
+        // A program's output. CAN park, when the master is behind.
+        return sys_do_write_pty_slave(c->regs, pml4, f->pty.idx, buf_ptr, len);
     case FD_KIND_FILE:
         if (f->file.mode != FD_MODE_WRITE) {
             klog_write("syscall: write() rejected -- fd is read-only\n");
@@ -594,6 +739,14 @@ int sys_read(struct syscall_ctx *c) {
         // The physical console. Blocks, claims the keyboard, and never
         // reports EOF -- see sys_do_read_console().
         return sys_do_read_console(c->regs, pml4, buf_ptr, len);
+
+    case FD_KIND_TTY_MASTER:
+        // What the terminal has emitted: a program's output and the
+        // discipline's echo, in the order they happened.
+        return sys_do_read_pty_master(c->regs, pml4, f->pty.idx, buf_ptr, len);
+    case FD_KIND_TTY_SLAVE:
+        // What was typed at it -- whole lines in canonical mode.
+        return sys_do_read_pty_slave(c->regs, pml4, f->pty.idx, buf_ptr, len);
 
     case FD_KIND_PIPE_R:
         // Reads from the pipe, and BLOCKS when it is empty with a
@@ -706,6 +859,12 @@ int sys_fstat(struct syscall_ctx *c) {
         out.is_dir = 0; // SYS_OPEN refuses a directory, so an fd is never one
         break;
     case FD_KIND_CONSOLE:
+    case FD_KIND_TTY_MASTER:
+    case FD_KIND_TTY_SLAVE:
+        // What isatty() will read. A pty end is as much a terminal as
+        // the console is -- that is the entire claim of the tty layer,
+        // and a flag that said otherwise would make a program behave
+        // differently in a window than on the console.
         out.flags |= SYS_STAT_TTY;
         break;
     default:

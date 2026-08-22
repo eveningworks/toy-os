@@ -97,6 +97,17 @@
                    // resolved. Its own code because it is the one path
                    // failure that says nothing about the filesystem: the
                    // file may well exist, this kernel just cannot name it
+#define ENOTTY 25  // this fd is not a TERMINAL, and the call only means
+                   // something on one -- tcsetpgrp(), tcsetattr(). Its
+                   // own code because "that is not a terminal" and "you
+                   // may not do that to this terminal" (EPERM) send a
+                   // reader to completely different places: one is a
+                   // wrong fd, the other is a live terminal somebody
+                   // else owns
+#define ENOSPC 28  // a SYSTEM-wide table with no free entry, where the
+                   // caller's own limits are fine -- no terminal left to
+                   // hand out. ENFILE's sibling; distinct from EMFILE,
+                   // which is this process's own table
 #define ENOSYS 38  // the call exists and does nothing yet
 #define ENOTSUP 95 // the thing exists but does not support being asked
                    // THIS way -- a query class that is a LIST has no

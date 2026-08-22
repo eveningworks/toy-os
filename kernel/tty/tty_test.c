@@ -12,7 +12,11 @@
 #include "tty.h"
 #include "keyboard.h"
 #include "win_server.h"
+#include "scheduler.h"
 #include "string.h"
+#include "pty.h"
+#include "fs.h"
+#include "timer.h"
 
 KTEST("tty", "the console provider is registered and agrees with the tty layer") {
     struct query_tty t;
@@ -287,4 +291,91 @@ KTEST("tty", "every terminal has its own wait channel, and tty0 cannot be destro
     // a freed one would leave the keyboard IRQ feeding a dead object.
     tty_destroy(tty_console());
     KTEST_ASSERT(tty_at(0) == tty_console());
+}
+
+// --- pseudo-terminals -------------------------------------------------
+//
+// The kernel-side half. What can only be checked from RING 3 -- that a
+// pty behaves like a terminal to a program holding fds, and that a 0x03
+// written to a master reaches a spawned child as SIGINT -- is
+// /tests/pty_test, driven below by its exit code.
+
+#define PTY_TEST_PATH "/tests/pty_test"
+#define PTY_TIMEOUT_TICKS 600 // 6s at 100Hz; the child it spawns spins
+
+KTEST("tty", "a pty is a terminal, with both ends counted separately") {
+    int idx = pty_create(0);
+    if (idx < 0) KTEST_SKIP("no free pty");
+
+    struct tty *t = pty_tty(idx);
+    int is_tty = t != NULL;
+    // Its DRIVER is what differs from the console; everything above the
+    // driver is the same object, which is the claim of the whole layer.
+    int named_pty = is_tty && tty_driver_name(t)[0] == 'p';
+    int both_open = pty_master_open(idx) && pty_slave_open(idx);
+
+    // Closing ONE end must not free the pty: a master has to be able to
+    // drain what a dead shell already printed.
+    pty_close_slave(idx);
+    int still_there = pty_valid(idx);
+    int slave_gone = !pty_slave_open(idx);
+    pty_close_master(idx);
+    int gone = !pty_valid(idx);
+
+    KTEST_ASSERT(is_tty);
+    KTEST_ASSERT(named_pty);
+    KTEST_ASSERT(both_open);
+    KTEST_ASSERT(still_there);
+    KTEST_ASSERT(slave_gone);
+    KTEST_ASSERT(gone);
+}
+
+KTEST("tty", "a pty read tells WOULD BLOCK from END OF FILE") {
+    // The rule a shell is written against, and the one a terminal gets
+    // wrong: -1 means wait, 0 means there will never be more. A pty that
+    // reported 0 for an empty-but-live terminal would make every shell
+    // in a window exit the moment it caught up with its input.
+    int idx = pty_create(0);
+    if (idx < 0) KTEST_SKIP("no free pty");
+
+    char buf[8];
+    int64_t empty_live = pty_master_read(idx, buf, sizeof buf);
+    pty_close_slave(idx);
+    int64_t empty_dead = pty_master_read(idx, buf, sizeof buf);
+    pty_close_master(idx);
+
+    KTEST_ASSERT_EQ((int)empty_live, -1); // would block
+    KTEST_ASSERT_EQ((int)empty_dead, 0);  // end of file
+}
+
+KTEST("tty", "a slave write with no master is discarded and reported") {
+    // pipe_write()'s answer, for the same reason: there is no SIGPIPE
+    // here, so the write is dropped and says so rather than raising
+    // something this kernel cannot deliver.
+    int idx = pty_create(0);
+    if (idx < 0) KTEST_SKIP("no free pty");
+    pty_close_master(idx);
+    int64_t n = pty_slave_write(idx, "x", 1);
+    pty_close_slave(idx);
+    KTEST_ASSERT_EQ((int)n, 0);
+}
+
+KTEST("tty", "a pty carries a line, and INTR through it, from ring 3") {
+    if (!fs_exists(PTY_TEST_PATH)) KTEST_SKIP("no " PTY_TEST_PATH " on this boot");
+    if (!fs_exists("/tests/spin_test")) KTEST_SKIP("no /tests/spin_test on this boot");
+
+    int pid = scheduler_spawn(PTY_TEST_PATH, 0);
+    KTEST_ASSERT(pid != 0);
+
+    int code = -1;
+    int exited = 0;
+    uint64_t start = pit_ticks();
+    while (pit_ticks() - start < PTY_TIMEOUT_TICKS) {
+        if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
+    }
+    KTEST_ASSERT(exited);
+    // 0 = every phase worked. See userland/tests/pty_test.c for what
+    // each other code means; they are distinct so this reports WHICH
+    // phase broke rather than only that something did.
+    KTEST_ASSERT_EQ(code, 0);
 }

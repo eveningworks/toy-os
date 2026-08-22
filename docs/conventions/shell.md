@@ -375,14 +375,20 @@ Four things that bite:
   drains exactly what it always did. This is `KD_GRAPHICS` plus
   `KDSKBMODE`/`K_OFF` on a Linux VT, and it is not a special case bolted
   on -- it is the same problem with the same answer.
-- **`tty0` STARTS RAW AND EVERY OTHER TERMINAL STARTS POSIX.** A new
-  terminal gets `ICANON|ECHO|ISIG`, because a program that knows nothing
-  about terminals should get a line, echoed, interruptible. `tty0` does
-  not, because its readers predate the layer: the kernel shell and
-  `/bin/tosh` both run `kernel/lib/klineedit.c`, which does its own
-  editing and echo, and canonical mode underneath them would buffer the
-  line twice and echo it twice. That asymmetry is temporary and
-  `tty_init()` says so.
+- **EVERY TERMINAL STARTS POSIX, INCLUDING `tty0`, AND THE SHELLS ASK
+  FOR RAW.** A new terminal gets `ICANON|ECHO|ISIG`, because a program
+  that knows nothing about terminals should get a line, echoed,
+  interruptible. The three shells here edit for themselves
+  (`kernel/lib/klineedit.c`) so they turn ICANON and ECHO off at
+  startup -- `sys_tty_raw(0)` in ring 3, `keyboard_console_set_raw(1)`
+  in `apps/shell.c` -- exactly as `readline` does on Linux. **The ring-0
+  call goes through `api/keyboard.h`, not `kernel/tty.h`**, because
+  `apps/` is not on the internal include path; that is the boundary
+  working, not a workaround.
+- **A SHELL DOES NOT KNOW WHICH KIND OF TERMINAL IT IS ON.**
+  `/bin/tosh` calls `sys_tty_raw(0)` unconditionally and runs unchanged
+  on the physical console and inside a Terminal window. If it ever needs
+  to ask, the layer has failed.
 
 **AND THE COST OF CANONICAL MODE IS REAL AND WAS CHOSEN ANYWAY.** It
 duplicates `klineedit.c`, which is one editor compiled twice and shared

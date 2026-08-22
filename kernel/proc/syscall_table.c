@@ -104,8 +104,11 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     // abi/signal_abi.h is already readable -- the same call `lseek`'s
     // whence made just above.
     [SYS_SIGACTION]     = { "sigaction",     sys_sigaction,     { A_INT, A_INT } },
-    [SYS_TCSETPGRP]     = { "tcsetpgrp",     sys_tcsetpgrp,     { A_INT } },
-    [SYS_TCGETPGRP]     = { "tcgetpgrp",     sys_tcgetpgrp,     { A_END } },
+    [SYS_TCSETPGRP]     = { "tcsetpgrp",     sys_tcsetpgrp,     { A_INT, A_INT } },
+    [SYS_TCGETPGRP]     = { "tcgetpgrp",     sys_tcgetpgrp,     { A_INT } },
+    [SYS_OPENPTY]       = { "openpty",       sys_openpty,       { A_HEX } },
+    [SYS_TCGETATTR]     = { "tcgetattr",     sys_tcgetattr,     { A_INT, A_HEX } },
+    [SYS_TCSETATTR]     = { "tcsetattr",     sys_tcsetattr,     { A_INT, A_HEX } },
 };
 
 #define SYSCALL_TABLE_COUNT (sizeof SYSCALL_TABLE / sizeof SYSCALL_TABLE[0])

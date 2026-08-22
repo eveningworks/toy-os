@@ -19,11 +19,13 @@
 // shared-source rule (geom.c, etc_config.c, calc_engine.c), not a port.
 // There is ONE definition of what Ctrl-A means on this machine.
 //
-// THERE IS NO ECHO FROM THE KERNEL. fd 0 is raw -- bytes as typed, no
-// line discipline -- so what the user sees is what redraw() prints.
-// That is the shape a program with its own editor wants anyway, and it
-// is why a real TTY layer (docs/roadmap.md) belongs under both of us
-// rather than inside either.
+// THERE IS NO ECHO FROM THE KERNEL, BECAUSE THIS SHELL ASKS FOR NONE.
+// main() calls sys_tty_raw(0) -- ICANON and ECHO off, ISIG on -- so
+// bytes arrive as typed and what the user sees is what redraw() prints.
+// There IS a line discipline now (kernel/tty/ldisc.c); a program with
+// its own editor turns it off, exactly as readline does on Linux. The
+// call is unconditional, which is what lets this one binary run on the
+// physical console and inside a Terminal window without knowing which.
 #include "rt/sys.h"
 #include "lib/tosh.h"
 #include <string.h>
@@ -158,6 +160,21 @@ int main(int argc, char **argv) {
     // below), but a signal that arrives some other way must not be
     // fatal either. Belt and braces, cheaply.
     sys_sigaction(SIGINT, SIG_IGN);
+
+    // AND THE TERMINAL IS PUT IN RAW MODE, because this shell edits for
+    // itself (klineedit.c above) and would otherwise be fighting the
+    // kernel's line discipline: canonical mode would hold every line
+    // until Enter -- so redraw() would paint nothing as you type -- and
+    // ECHO would double every character.
+    //
+    // **UNCONDITIONAL, AND THAT IS WHAT MAKES ONE BINARY WORK ON BOTH.**
+    // tty0 already starts raw, so this changes nothing on the physical
+    // console; a pty starts POSIX (abi/tty_abi.h), so in a Terminal
+    // window this is what makes the shell usable. A shell that had to
+    // know which kind of terminal it was on would mean the tty layer had
+    // failed. Failure is ignored on purpose: a shell reading a pipe has
+    // no terminal to configure and should still run.
+    sys_tty_raw(0);
 
     // The console is CLAIMED BY READING IT, and the foreground group is
     // set at the same moment (kernel/tty.h) -- so nothing here has to

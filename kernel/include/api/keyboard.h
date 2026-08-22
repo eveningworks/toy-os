@@ -265,6 +265,20 @@ int  keyboard_compositor_owns(void);
 // True when EITHER reason holds. This is what the blocking reader tests
 // -- never one of the two flags directly.
 int  keyboard_blocking_suspended(void);
+
+// Put the physical console's line discipline in RAW mode, or back to
+// POSIX's (kernel/tty.h, abi/tty_abi.h). Raw is ICANON and ECHO off with
+// ISIG left on: bytes as typed, nothing echoed by the kernel, Ctrl-C
+// still interrupting.
+//
+// **THIS EXISTS FOR apps/, WHICH CANNOT INCLUDE kernel/tty.h.** The
+// kernel's own shell edits for itself (kernel/lib/klineedit.c) and so
+// must turn the discipline off, exactly as /bin/tosh does through
+// sys_tty_raw(0) -- but `apps/` is deliberately not on the internal
+// include path, so the capability gets a function on the app-facing side
+// rather than a reach-around (kernel/include/README.md). Ring 3 uses the
+// syscall; there is one implementation underneath both.
+void keyboard_console_set_raw(int on);
 int keyboard_try_getchar_mods(uint8_t *out_mods);
 
 // The modifiers held RIGHT NOW (KEY_MOD_*), for a caller that has no key

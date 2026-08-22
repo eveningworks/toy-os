@@ -316,6 +316,18 @@ static int tty_pop(uint32_t *out) {
     return 1;
 }
 
+void keyboard_console_set_raw(int on) {
+    struct tty_termios tio;
+    tty_get_termios(tty_console(), &tio);
+    if (on) {
+        tio.lflag &= ~(uint32_t)(TTY_ICANON | TTY_ECHO);
+        tio.lflag |= TTY_ISIG;
+    } else {
+        tio.lflag = TTY_LFLAG_DEFAULT;
+    }
+    tty_set_termios(tty_console(), &tio);
+}
+
 int keyboard_getchar(void) { return keyboard_getchar_mods(0); }
 
 int keyboard_getchar_mods(uint8_t *out_mods) {

@@ -202,10 +202,20 @@ def main():
           "filetest.txt" in after, " ".join(sorted(after)))
 
     print("the console has one reader")
-    # `touch` is a kernel-shell builtin and is NOT on tosh's PATH, so
-    # tosh answers "not found" and nothing is created -- unless the
-    # kernel shell is still reading the same keyboard.
-    flow.type_command("touch /claimprobe.txt")
+    # `rescue touch` is a KERNEL-SHELL-ONLY command -- the kernel's own
+    # copies of the file commands live behind that one name -- so tosh
+    # answers "not found" and nothing is created, UNLESS the kernel shell
+    # is still reading the same keyboard.
+    #
+    # **IT WAS A BARE `touch` AND THE PREMISE HAD GONE STALE.** touch
+    # became a /bin program, so tosh found it on PATH, ran it, and left
+    # the probe file behind -- which reads as "the kernel shell is still
+    # listening", i.e. exactly the failure this check exists to catch,
+    # with nothing wrong. The identical defect was found and fixed in
+    # console_shell_test.py (eaa7529); this tool is run on demand, so it
+    # kept the stale version for longer. `rescue` is the fix because no
+    # /bin program can shadow it.
+    flow.type_command("rescue touch /claimprobe.txt")
     flow.session.send_key("ret")
     time.sleep(1.5)
     mid = root_names(dbg)

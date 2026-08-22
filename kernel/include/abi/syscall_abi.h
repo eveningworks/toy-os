@@ -1191,25 +1191,82 @@ struct sys_stat {
                           // SIG_DFL does not resurrect signals sent while
                           // it was ignored.
 
-#define SYS_TCSETPGRP 59 // RDI = pgid to put in the FOREGROUND of the
-                          // physical console. Returns 0, or -errno:
-                          // -EPERM if the caller does not own the
-                          // console (it has never read fd 0), -ENODEV if
-                          // nothing owns it, -ESRCH for a group with no
-                          // live member.
+#define SYS_TCSETPGRP 59 // RDI = an fd naming a TERMINAL, RSI = the pgid
+                          // to put in front of it. Returns 0, or -errno:
+                          // -ENOTTY if the fd is not a terminal, -EPERM
+                          // if the caller does not own that terminal,
+                          // -ENODEV if nothing owns it, -ESRCH for a
+                          // group with no live member.
                           //
-                          // This is `tcsetpgrp()`, and the console is
-                          // the controlling terminal every process
-                          // shares -- there is one keyboard. A shell
-                          // calls it around each job: put the job's
-                          // group in front, wait, then put its own back.
-                          // Until it does, the shell's own group is in
-                          // front, which is why a shell must also ignore
-                          // SIGINT (SYS_SIGACTION).
+                          // This is `tcsetpgrp()`. A shell calls it
+                          // around each job: put the job's group in
+                          // front, wait, then put its own back. Until it
+                          // does, the shell's own group is in front,
+                          // which is why a shell must also ignore SIGINT
+                          // (SYS_SIGACTION).
+                          //
+                          // **IT TOOK NO fd UNTIL THERE WAS MORE THAN
+                          // ONE TERMINAL**, because "the console" was a
+                          // complete answer. It is not: a Terminal
+                          // window has a foreground group of its own,
+                          // and a shell that could only ever move the
+                          // console's would be pointing the physical
+                          // keyboard's Ctrl-C at its own child.
 
-#define SYS_TCGETPGRP 60 // No arguments. Returns the console's
-                          // foreground group, or -ENODEV when no process
-                          // owns the console.
+#define SYS_TCGETPGRP 60 // RDI = an fd naming a terminal. Returns its
+                          // foreground group, -ENOTTY if the fd is not a
+                          // terminal, or -ENODEV when nobody owns it.
+
+#define SYS_OPENPTY 61 // RDI = pointer to a `struct openpty_msg`, filled
+                       // with a MASTER and a SLAVE descriptor. Returns
+                       // 0, or -errno: -EMFILE with no descriptors free,
+                       // -ENOSPC with no terminals free, -EFAULT for a
+                       // bad pointer.
+                       //
+                       // **BOTH ENDS AT ONCE, AND NO PATH.** Linux opens
+                       // /dev/ptmx for a master and names the slave
+                       // /dev/pts/N; there are no device nodes here and
+                       // vfs.c has no mount table to hang them on (the
+                       // same reason there is no /proc -- see
+                       // docs/query-design.md). This is BSD's
+                       // openpty(3) shape, and it deletes the
+                       // setsid()+TIOCSCTTY dance with it: a process is
+                       // HANDED a terminal rather than acquiring one by
+                       // opening a path.
+                       //
+                       // The caller owns the terminal (tcsetpgrp), and
+                       // the slave is an ordinary fd -- dup2 it onto a
+                       // child's 0/1/2 and that child is on a terminal.
+
+#define SYS_TCGETATTR 62 // RDI = an fd naming a terminal, RSI = pointer
+                         // to a `struct tty_termios` (abi/tty_abi.h) to
+                         // fill. Returns 0 or -errno.
+
+#define SYS_TCSETATTR 63 // RDI = an fd naming a terminal, RSI = pointer
+                         // to a `struct tty_termios`. Returns 0 or
+                         // -errno.
+                         //
+                         // A HALF-TYPED CANONICAL LINE IS DISCARDED,
+                         // always -- POSIX's TCSAFLUSH and the only one
+                         // of its three flush modes worth having here.
+                         // Carrying the line into raw mode would make
+                         // its bytes readable at the instant of the
+                         // change, which is not what a program asking
+                         // for raw mode asked for: it asked for what
+                         // arrives NEXT.
+                         //
+                         // Every shell here calls it at startup to turn
+                         // ICANON and ECHO off, because they all edit
+                         // for themselves (kernel/lib/klineedit.c) --
+                         // exactly as readline does on Linux.
+
+// What SYS_OPENPTY fills in. A struct rather than two out-registers
+// because a syscall here returns one value, and two `int *` arguments
+// would be two user pointers to validate instead of one.
+struct openpty_msg {
+    int32_t master_fd;
+    int32_t slave_fd;
+};
 
 // The longest single SYS_SLEEP, one hour. Not a security limit: it
 // keeps a garbage argument from parking a process for the rest of the

@@ -5,9 +5,10 @@ A staged plan, in the shape `docs/signals-design.md` and
 open: **`Ctrl-C` works on the physical console and does nothing in the
 GUI Terminal, and fixing that twice is the wrong answer.**
 
-**Status: PLANNED. Stage 1 is being built now.** Each stage's section
-says what actually landed and where it differs from what is planned
-here, because on past form some of it will.
+**Status: STAGES 1 AND 2 ARE BUILT (2026-08-22).** A terminal is an
+object, the console is `tty0`, and `SYS_OPENPTY` hands out a pair. Each
+stage's section says what actually landed and where it differs from what
+was planned here, because one thing did.
 
 ## Why this is not "add ptys"
 
@@ -175,7 +176,7 @@ appends to the output queue, which for tty0 means `vga_write()`.
 
 Each stage is a commit that lands green on its own.
 
-### Stage 1 -- the object, and the console becomes `tty0`
+### Stage 1 -- the object, and the console becomes `tty0` -- **BUILT**
 
 `kernel/tty/` gains `struct tty`, the discipline, and a registry. The
 keyboard IRQ stops recognising INTR and calls `tty_input_byte()`
@@ -195,7 +196,16 @@ A compositor owning the keyboard BYPASSES the discipline, feeding the
 raw queue directly, which is `K_OFF` on the VT and is what keeps
 `win_input.c` working unchanged.
 
-### Stage 2 -- `SYS_OPENPTY`, and `termios`
+**What actually happened**, beyond the plan: `SCHED_CHAN_KEY` had to go,
+and that turned out to be the most interesting part. A global "a key
+happened" channel was correct with one console and is the thundering
+herd with one terminal per window. And the discipline's KTESTs found a
+real defect on their first run -- the input queue was the same size as
+the canonical buffer, so a maximum-length line plus its newline did not
+fit and the tail was dropped, breaking the no-truncation promise one
+layer below where it is made.
+
+### Stage 2 -- `SYS_OPENPTY`, and `termios` -- **BUILT**
 
 `SYS_OPENPTY` returns a master fd and a slave fd. `FD_KIND_TTY_MASTER`
 and `FD_KIND_TTY_SLAVE` join the fd table; the read/write switches route
@@ -209,6 +219,28 @@ master close makes the slave read EOF (the pipe rule); the last slave
 close makes the master read EOF; and a tty is freed only when both ends
 are gone. `/tests/pty_test` proves the pair end to end, including that a
 `0x03` written to the master reaches a spawned child as `SIGINT`.
+
+**AND ONE PROMISE IN THIS DOCUMENT WAS REVERSED, which is the honest
+part.** Stage 1 said `tty0` starts raw and that the special case "goes
+away with stage 2". It did -- but not the way this said. The plan was to
+give `tty0` POSIX defaults and have the shells ask for raw, and that is
+exactly what happened; what was not foreseen is that `apps/shell.c`
+CANNOT call `tty_set_termios()`, because `apps/` is deliberately not on
+the `kernel/include/kernel/` include path. The capability got a function
+on the app-facing side instead (`keyboard_console_set_raw()`, in
+`api/keyboard.h`), which is what `kernel/include/README.md` says to do
+and is a better answer than the one planned: ring 0 and ring 3 now ask
+for the same thing through their own boundaries, over one
+implementation.
+
+Two smaller ones. `SYS_TCSETPGRP` and `SYS_TCGETPGRP` had to GAIN an fd
+-- they meant "the console" because there was one, and a shell in a
+window moving the console's foreground group would aim the physical
+keyboard's `Ctrl-C` at its own child. And a sixth wait reason
+(`SCHED_WAIT_TTY`) was needed for the OUTPUT side, distinct from
+`SCHED_WAIT_KEY`: they are different queues with different channels, so
+`ps` says `block(tty)` for a master waiting on its shell and
+`block(key)` for a shell waiting on its keyboard.
 
 ### Stage 3 -- the GUI Terminal becomes a terminal
 
