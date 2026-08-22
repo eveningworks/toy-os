@@ -70,6 +70,16 @@ void utext_putc(struct utext *t, char c);
 // Reads logical index `i`. Out of range returns 0.
 char utext_at(const struct utext *t, int i);
 
+// Writes logical index `i`, in place. Out of range does nothing.
+//
+// **THIS IS WHAT A TERMINAL DOES AND AN EDITOR DOES NOT.** A carriage
+// return moves the caret to column 0 and what follows OVERWRITES what
+// was there; that is how /bin/tosh repaints an edited line through fd 1
+// with nothing but '\r'. Insert-at-cursor cannot express it -- it would
+// push the old text along rather than replacing it -- which is why this
+// exists beside utext_insert() rather than instead of it.
+void utext_set(struct utext *t, int i, char c);
+
 // Scrolls by whole wrapped lines: positive is toward older text.
 // Scrolling back to 0 re-pins to the bottom.
 void utext_scroll(struct utext *t, int delta_lines);

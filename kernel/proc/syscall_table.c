@@ -109,6 +109,7 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_OPENPTY]       = { "openpty",       sys_openpty,       { A_HEX } },
     [SYS_TCGETATTR]     = { "tcgetattr",     sys_tcgetattr,     { A_INT, A_HEX } },
     [SYS_TCSETATTR]     = { "tcsetattr",     sys_tcsetattr,     { A_INT, A_HEX } },
+    [SYS_SET_NONBLOCK]  = { "set_nonblock",  sys_set_nonblock,  { A_INT, A_INT } },
 };
 
 #define SYSCALL_TABLE_COUNT (sizeof SYSCALL_TABLE / sizeof SYSCALL_TABLE[0])

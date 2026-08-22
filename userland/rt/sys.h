@@ -356,6 +356,14 @@ int sys_openpty(int *master_fd, int *slave_fd);
 int sys_tcgetattr(int fd, struct tty_termios *tio);
 int sys_tcsetattr(int fd, const struct tty_termios *tio);
 
+// A read that would BLOCK returns -1 with errno EAGAIN instead. What a
+// program with its own event loop needs when it also has to drain a
+// child -- there is no poll() here, so it drains on a tick.
+//
+// On the DESCRIPTION, so a dup2'd copy shares it: set it on a pty master
+// you own, never on a slave you are about to hand to a child.
+int sys_set_nonblock(int fd, int on);
+
 // ICANON and ECHO off, ISIG on -- what every shell here wants, since
 // they all edit for themselves and none of them wants the kernel
 // echoing on top. One call rather than four lines in three shells.

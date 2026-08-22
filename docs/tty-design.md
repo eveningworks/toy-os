@@ -5,10 +5,13 @@ A staged plan, in the shape `docs/signals-design.md` and
 open: **`Ctrl-C` works on the physical console and does nothing in the
 GUI Terminal, and fixing that twice is the wrong answer.**
 
-**Status: STAGES 1 AND 2 ARE BUILT (2026-08-22).** A terminal is an
-object, the console is `tty0`, and `SYS_OPENPTY` hands out a pair. Each
+**Status: STAGES 1, 2 AND 3 ARE BUILT (2026-08-22). `Ctrl-C` works in a
+Terminal window, through the same code as the physical console's.** A
+terminal is an object, the console is `tty0`, `SYS_OPENPTY` hands out a
+pair, and the GUI Terminal is a real terminal emulator running
+`/bin/tosh` on a pty. Stage 4 (virtual terminals) is still a plan. Each
 stage's section says what actually landed and where it differs from what
-was planned here, because one thing did.
+was planned here, because two things did.
 
 ## Why this is not "add ptys"
 
@@ -242,7 +245,7 @@ keyboard's `Ctrl-C` at its own child. And a sixth wait reason
 `ps` says `block(tty)` for a master waiting on its shell and
 `block(key)` for a shell waiting on its keyboard.
 
-### Stage 3 -- the GUI Terminal becomes a terminal
+### Stage 3 -- the GUI Terminal becomes a terminal -- **BUILT**
 
 `userland/gui/apps/terminal.c` stops linking `tosh` as a library. It
 opens a pty, spawns `/bin/tosh` on the slave, writes keystrokes into the
@@ -253,9 +256,41 @@ REAL PROCESS visible in `ps`.
 **The known risk, named before starting**: `klineedit.c`'s console front
 end repaints a line with `\r` and two passes, because `vga_cursor_move()`
 is a non-destructive seek ring 3 cannot reach. The Terminal's scrollback
-(`utext`) has never had to honour a carriage return. If it cannot,
-that is a second piece of work inside this stage rather than a surprise
-at the end of it.
+(`utext`) has never had to honour a carriage return.
+
+**It turned out to be twelve lines**, because the two-pass repaint needs
+exactly one thing that `utext` lacked -- overwrite in place
+(`utext_set()`). The emulator is a line start and a column: `\n` ends a
+line, `\r` sets the column to 0, `\b` moves it back, and anything else
+overwrites at the column or appends past the end. What made it small is
+that `/bin/tosh` emits nothing else; ANSI is a roadmap item, and the
+kernel console already has a parser (`kernel/lib/ansi.c`) that this
+window should end up sharing rather than duplicating.
+
+**TWO THINGS THE PLAN DID NOT FORESEE, and both were found by tests
+rather than by reading.**
+
+**A pty must be claimed by its first READER, not by whoever opened it.**
+`pty_create()` originally made the opener the owner, which is the
+emulator -- a process that never reads the slave. So the shell's
+`tcsetpgrp()` was refused with `-EPERM`, the foreground group stayed
+wrong, and `Ctrl-C` in a window signalled a group with nothing in it. The
+fix is the console's own rule, and the code is now the same shape in both
+places: claimed on the first read.
+
+**There is no non-blocking read, and a terminal emulator needs one.** The
+window has to service the compositor AND drain its child and cannot sit
+blocked in either. `SYS_SET_NONBLOCK` is `fcntl(F_SETFL, O_NONBLOCK)`
+cut to the one flag; the real answer is `poll()`, which is a bigger
+project and is on the roadmap. Until then the Terminal drains on a 30ms
+tick, and says so.
+
+**And `Ctrl-D` needed `VEOF`**, which the discipline did not have -- plus
+the thing every real shell does and this one did not: **restore the
+terminal's mode around a child**. A shell that leaves the terminal raw
+gives its children a terminal with no `VEOF` at all, so `cat` with no
+arguments could never end. `/bin/tosh` saves the mode at startup and
+brackets every command with it, which is exactly what `readline` does.
 
 ### Stage 4 -- virtual terminals, and what follows
 

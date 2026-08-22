@@ -35,6 +35,12 @@
 // Static, not local: `struct kline_edit` is ~1.2 KiB and `struct
 // uhistory` ~4 KiB, against USERLAND_CFLAGS' -Wframe-larger-than=2048
 // and a 16 KiB ring-3 stack with ONE guard page below it.
+// The terminal as it was before this shell put it in raw mode. Restored
+// around every command, so a child gets a normal, canonical, echoing
+// terminal -- which is what a program that knows nothing about terminals
+// expects, and is the state its own Ctrl-D and Ctrl-C work in.
+static struct tty_termios g_tio_saved;
+
 static struct kline_edit g_ed;
 static struct uhistory   g_hist;
 static struct tosh       g_sh;
@@ -139,11 +145,6 @@ int main(int argc, char **argv) {
     (void)argc; (void)argv;
 
     tosh_init(&g_sh, out_fd1, 0);
-    // THIS shell owns the physical console -- reading fd 0 is its whole
-    // existence -- so a child it spawns should read the same keyboard.
-    // The GUI Terminal leaves this 0 and its children get an empty
-    // stdin instead; see struct tosh's `stdin_ok` for why that matters.
-    g_sh.stdin_ok = 1;
     uhist_init(&g_hist);
 
     // --- job control, in two lines -----------------------------------
@@ -174,6 +175,14 @@ int main(int argc, char **argv) {
     // know which kind of terminal it was on would mean the tty layer had
     // failed. Failure is ignored on purpose: a shell reading a pipe has
     // no terminal to configure and should still run.
+    // ...AND SAVES WHAT IT WAS FIRST, because raw mode is this shell's
+    // preference and not the terminal's state. Every command it runs
+    // gets the terminal back the way it found it -- see run_line()
+    // below. That is exactly what readline does around a command, and
+    // without it `cat` with no arguments could never end: the shell
+    // would have left the terminal raw, where there is no VEOF and
+    // Ctrl-D is just a byte.
+    sys_tcgetattr(0, &g_tio_saved);
     sys_tty_raw(0);
 
     // The console is CLAIMED BY READING IT, and the foreground group is
@@ -208,7 +217,17 @@ int main(int argc, char **argv) {
                 end_line();
                 if (g_ed.len > 0) {
                     uhist_add(&g_hist, g_ed.buf);
+                    // THE TERMINAL GOES BACK TO HOW IT WAS FOR THE
+                    // CHILD, and raw again afterwards. A child inherits
+                    // this terminal, and a program that knows nothing
+                    // about terminals -- `cat` with no arguments is the
+                    // one that proves it -- needs canonical mode with
+                    // echo: it is where Ctrl-D means end of input and
+                    // where the person can see what they are typing.
+                    // readline brackets a command exactly this way.
+                    sys_tcsetattr(0, &g_tio_saved);
                     tosh_run_line(&g_sh, g_ed.buf);
+                    sys_tty_raw(0);
                 }
                 fresh_prompt();
                 break;

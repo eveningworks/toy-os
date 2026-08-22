@@ -130,6 +130,11 @@ unsigned tty_read(struct tty *t, char *dst, unsigned len);
 // console's ring-0 readers. Returns -1 when nothing is readable.
 int tty_read_key(struct tty *t, uint8_t *out_mods);
 
+// Did VEOF arrive on an empty line? CONSUMES the flag -- a caller that
+// asks is the read that will report end of input, and asking twice for
+// one Ctrl-D would end input twice.
+int tty_eof_pending(struct tty *t);
+
 // Is anything readable right now? Distinct from `tty_read(..., 0)`
 // because a caller that is deciding whether to park must not consume.
 int tty_readable(const struct tty *t);

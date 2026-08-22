@@ -790,13 +790,31 @@ manual steps to be worth automating:
   acting on button-down passes every other check and fails only that.
   Geometry is derived from the window's reported content size, not
   hardcoded, so it survives a font-size change.
-- **`uterm_test.py`** -- drives the RING-3 Terminal. Its key check is
-  worth copying elsewhere: it distinguishes a BUILTIN (`echo hi`,
-  handled inside the shell with no spawn) from an EXTERNAL program
+- **`uterm_test.py`** -- drives the RING-3 Terminal, which is a real
+  TERMINAL EMULATOR now: a pty with `/bin/tosh` on the far end. Its key
+  check is worth copying elsewhere: it distinguishes a BUILTIN (`echo
+  hi`, handled inside the shell with no spawn) from an EXTERNAL program
   (`lscpu`, dozens of lines that can only appear if it was spawned and
   its stdout piped back) by INK VOLUME. A terminal that echoed commands
-  but never captured output passes every other check and fails that
-  one.
+  but never captured output passes every other check and fails that one.
+
+  **The check the whole TTY layer exists for is here**: a spinning job is
+  started in the window, `Ctrl-C` is sent as the byte `0x03`, and the job
+  must die while the SHELL SURVIVES -- the second half is load-bearing,
+  since a Ctrl-C that killed the shell too would satisfy the first. Its
+  positive control is the best evidence in the repo that this is ONE
+  implementation and not two that agree: disabling `intr()` in
+  `kernel/tty/ldisc.c` reddens this check AND `ctrlc_test.py`'s
+  physical-keyboard ones, from the same three lines.
+
+  Two premises here went stale in the GOOD direction when the Terminal
+  became an emulator, and both are recorded in the file. A bare `cat` now
+  WAITS for input instead of returning at once -- it has a real terminal
+  to inherit, where before it got a closed pipe -- so the check types
+  Ctrl-D to end it, as a person would. And there is no prompt WIDGET to
+  report a position for any more, so the layout log reports the
+  emulator's CURSOR, which is what would be wrong if `\r` or overwrite
+  were mishandled.
 - **`notepad_client_test.py`** -- drives the RING-3 Notepad and asserts
   a full round trip: type, save, verify the bytes on disk via `cat` (a
   completely independent path -- the editor claiming success proves

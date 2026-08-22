@@ -1260,6 +1260,35 @@ struct sys_stat {
                          // for themselves (kernel/lib/klineedit.c) --
                          // exactly as readline does on Linux.
 
+#define SYS_SET_NONBLOCK 64 // RDI = fd, RSI = 1 to make a read that would
+                            // block return -EAGAIN instead, 0 to restore
+                            // blocking. Returns 0 or -EBADF.
+                            //
+                            // **fcntl(F_SETFL, O_NONBLOCK) CUT TO THE
+                            // ONE THING ANYTHING HERE NEEDS.** A real
+                            // fcntl is a dozen commands over descriptor
+                            // flags, file-status flags and locks; this
+                            // is the flag, by name, with no command
+                            // multiplexer in front of it -- copy the
+                            // shape, not the size.
+                            //
+                            // **AND IT EXISTS BECAUSE THERE IS NO
+                            // poll().** A terminal emulator has to
+                            // service its window's events and drain its
+                            // child's output, and cannot sit blocked in
+                            // either; with poll() it would wait on both
+                            // at once, and that is the right answer and
+                            // a bigger project (docs/roadmap.md). Until
+                            // then it drains on a tick, which costs a
+                            // wakeup per frame and is honest about it.
+                            //
+                            // It affects the DESCRIPTION, not the
+                            // descriptor -- so a dup2'd copy shares it,
+                            // as on Linux, and a child that inherits fd
+                            // 0 inherits the flag with it. Set it on a
+                            // master you own, never on a slave you are
+                            // about to hand to somebody else.
+
 // What SYS_OPENPTY fills in. A struct rather than two out-registers
 // because a syscall here returns one value, and two `int *` arguments
 // would be two user pointers to validate instead of one.

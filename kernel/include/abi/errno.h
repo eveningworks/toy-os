@@ -97,6 +97,12 @@
                    // resolved. Its own code because it is the one path
                    // failure that says nothing about the filesystem: the
                    // file may well exist, this kernel just cannot name it
+#define EAGAIN 11  // the call would have BLOCKED and the fd was asked not
+                   // to. Only ever returned to a caller that set it
+                   // (SYS_SET_NONBLOCK): the default is still to park,
+                   // so nothing that predates this can see it. Distinct
+                   // from SYS_RETRY, which is not an error at all -- see
+                   // that constant's own comment
 #define ENOTTY 25  // this fd is not a TERMINAL, and the call only means
                    // something on one -- tcsetpgrp(), tcsetattr(). Its
                    // own code because "that is not a terminal" and "you

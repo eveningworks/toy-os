@@ -225,6 +225,32 @@ this the obvious way), not from how much history it accumulated.
   declare a column/row/grid, and the window sizes itself from the
   content. Resize, focus and wheel all arrive for free.
   `docs/uapp-design.md` is the full design.
+- **TERMINAL IS A TERMINAL EMULATOR, NOT A SHELL WITH A WINDOW.**
+
+  It opens a pty (`SYS_OPENPTY`), spawns `/bin/tosh` on the slave, writes
+  keystrokes into the master and paints what comes out. The shell in a
+  Terminal window is a REAL PROCESS -- a pid, visible in `ps`, killable,
+  reaped when the window closes.
+
+  It used to link `tosh` as a LIBRARY and call `tosh_run_line()` from its
+  key handler. That is why `Ctrl-C` did nothing here for so long: a
+  window had no console, no foreground group and no terminal to have
+  them on. It works now for the SAME REASON it works on the physical
+  keyboard -- the key becomes the byte `0x03`, goes to a pty master, and
+  `kernel/tty/ldisc.c` recognises it as INTR. Disabling that one function
+  reddens the checks in `uterm_test.py` AND in `ctrlc_test.py`, which is
+  how "one implementation" is known rather than claimed.
+
+  Three things follow. **The window sends KEYS AS BYTES and decides
+  nothing** -- the shell has the line editor, so a Terminal that
+  interpreted Ctrl-A would be the second implementation `klineedit.c`
+  exists to prevent. **The emulation is `\n`, `\r`, `\b` and overwrite,
+  because that is all `/bin/tosh` emits**; ANSI is a roadmap item and
+  should share `kernel/lib/ansi.c` rather than grow a second parser. And
+  **it drains its child on a 30ms tick, because there is no `poll()`** --
+  `SYS_SET_NONBLOCK` is what makes that possible without freezing the
+  window, and the real answer is on the roadmap.
+
 - **An app with a cadence sets `tick_ms` and BLOCKS between frames.**
   `uapp_desc.tick_ms` arms a TWS timer (`WIN_REQ_TIMER` ->
   `WIN_EV_TIMER`), so `on_tick` arrives as an event instead of the loop

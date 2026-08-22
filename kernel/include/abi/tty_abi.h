@@ -40,7 +40,11 @@
 #define TTY_VINTR  0 // ^C -- SIGINT to the foreground group (needs ISIG)
 #define TTY_VERASE 1 // backspace -- rub out the last character (ICANON)
 #define TTY_VKILL  2 // ^U -- discard the whole pending line (ICANON)
-#define TTY_NCCS   4 // slots in the table; 4 rather than 3 for alignment
+#define TTY_VEOF   3 // ^D -- END OF INPUT (ICANON). On a line with text
+                     // it delivers that text WITHOUT a newline; on an
+                     // empty line the reader gets 0, which is what makes
+                     // `cat` with no arguments end when you press it
+#define TTY_NCCS   4 // slots in the table
 
 struct tty_termios {
     uint32_t lflag;            // TTY_*

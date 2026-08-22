@@ -71,7 +71,7 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~A `kill`/`ps`-style shell command~~ DONE 2026-08-22 -- `kill [-SIGNAL] <pid|-pgid>`, and `ps` grew a PGID column
 - [x] ~~Exit-status visible to a waiting parent~~ DONE 2026-08-22 -- 128 + the signal, the convention a shell prints
 - [ ] Userspace signal handlers -- a trampoline that returns through the kernel, not just default dispositions
-- [ ] `Ctrl-C` in the GUI Terminal -- it reads keys as window events, so it owns no console and has no foreground group
+- [x] ~~`Ctrl-C` in the GUI Terminal~~ DONE 2026-08-22 -- it runs `/bin/tosh` on a pty now, so it is the same code as the console's
 - [x] ~~**Ctrl-C interrupting a running program**, the way it works in a Linux shell~~ DONE 2026-08-22 -- a whole pipeline, as one group
 - [ ] SIGSEGV/SIGILL delivered to the process instead of the kernel tearing it down unconditionally
 - [ ] SIGCHLD on child exit -- the signal exists and its default is ignore; nothing SENDS one yet
@@ -89,7 +89,7 @@ and job control is what a terminal on that TTY makes possible.
 - [ ] `Ctrl+D`/`Ctrl+Z` as terminal signals -- `Ctrl+C` is one now; the other two are still keystrokes an app happens to notice
 - [x] ~~The concept of a foreground process for a terminal~~ DONE 2026-08-22 -- a foreground GROUP, `kernel/tty.h`, physical console only
 - [ ] Multiple virtual terminals on `Ctrl+Alt+F1..F4`
-- [ ] The GUI Terminal app and the physical console as two clients of the same TTY layer
+- [x] ~~The GUI Terminal app and the physical console as two clients of the same TTY layer~~ DONE 2026-08-22
 - [x] ~~`termios`-style settings: raw vs cooked, echo on/off, and the per-terminal state to hold them~~ DONE 2026-08-22
 - [x] ~~A per-TTY input queue, so two terminals don't share one keyboard buffer~~ DONE 2026-08-22
 - [ ] Window size as a property a program can ask for (the `ioctl` every full-screen program expects)

@@ -893,3 +893,66 @@ short of the struct's alignment, so `wait_reason` filled a hole that was
 already there. Every existing field kept its offset and `sizeof` did not
 change, which is the same append-without-disturbing move `ppid` made
 into `reserved`'s place, and a `_Static_assert` now holds both true.
+
+## A terminal is an OBJECT, and there is one implementation of `Ctrl-C`
+
+`docs/tty-design.md` is the plan and the staging; this is the part a
+future session would otherwise re-litigate.
+
+**The tempting fix was to let the GUI Terminal notice `Ctrl-C` in its own
+key handler and signal the child it spawned.** It knows the pid; it would
+have worked; it would have been about ten lines. It was refused because
+it would have made the Terminal a THIRD place that decides what `Ctrl-C`
+means, beside the keyboard driver and `kernel/tty.h` -- the exact shape
+this repo has spent several changes deleting (the `ls` wrapper builtin
+died for it). The question is not "how does the Terminal send SIGINT". It
+is **what is a terminal in this OS**, and the answer has to serve the
+physical console and a window equally or it is not an abstraction.
+
+**The test of whether it is real: a shell cannot tell which kind of
+terminal it is on.** `/bin/tosh` calls `sys_tty_raw(0)` unconditionally
+and runs unchanged on the physical console and inside a window. And the
+evidence, rather than the claim: disabling `intr()` in
+`kernel/tty/ldisc.c` -- three lines -- reddens `uterm_test.py`'s
+Ctrl-C-in-a-window check AND `ctrlc_test.py`'s physical-keyboard ones.
+Two implementations that agreed would fail separately.
+
+**No `/dev/ptmx`, and no path at all.** Linux hands out a master by
+opening `/dev/ptmx` and names the slave `/dev/pts/N`. There are no device
+nodes here and `vfs.c` has no mount table to hang them on -- the same
+reason `docs/query-design.md` refused a `/proc` -- so `SYS_OPENPTY`
+returns BOTH fds, which is BSD's `openpty(3)` shape. That deletes the
+`setsid()` + `TIOCSCTTY` dance with it: a process is HANDED a terminal
+rather than acquiring one by opening a path.
+
+**A pty is claimed by its first READER, not by whoever opened it**, and
+getting that wrong is instructive. The first version made the opener the
+owner, on the reasoning that "the process that opened a pty is
+unambiguously the one that has it". It is not: a terminal emulator opens
+the pty and never reads the slave. The shell's `tcsetpgrp()` was refused
+with `-EPERM`, the foreground group stayed wrong, and `Ctrl-C` in a
+window signalled a group with nothing in it. The console's own rule --
+claimed on the first read -- is right for both, which is itself a sign
+the abstraction is the correct one.
+
+**Canonical mode duplicates `klineedit.c`, and was built anyway.** This
+was a deliberate choice with an argued alternative: the discipline could
+have owned only signal generation and echo, leaving line assembly to the
+one editor this project compiles twice. ICANON exists for programs with
+no editor of their own -- `cat` with no arguments is the one that proves
+it -- and the shells turn it off, exactly as `readline` does on Linux. Do
+not "fix" the duplication by deleting either half.
+
+**Which forced the other half nobody predicted: a shell must RESTORE the
+terminal's mode around a child.** A shell that leaves the terminal raw
+hands its children a terminal with no `VEOF`, so `cat` can never end.
+`/bin/tosh` saves the mode at startup and brackets every command with it
+-- `readline`'s behaviour, arrived at the same way, by finding out.
+
+**`SYS_SET_NONBLOCK` exists because there is no `poll()`.** A terminal
+emulator has to service its window's events and drain its child and
+cannot sit blocked in either. The right answer is `poll()`/`select()`,
+which is a bigger project and is on the roadmap; until then the flag is
+`fcntl(F_SETFL, O_NONBLOCK)` cut to the one thing anything here needs,
+and the Terminal drains on a tick. Recorded rather than glossed: an idle
+Terminal wakes 33 times a second to find nothing.

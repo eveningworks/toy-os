@@ -36,15 +36,19 @@
                   // every pty is a terminal -- but a separate cap keeps
                   // this table's arithmetic its own.
 
-// Allocates a pty with ONE master and ONE slave already counted, and
-// makes `owner_pid` the terminal's owner (so it may tcsetpgrp). Returns
-// its index, or -1 when none are free.
+// Allocates a pty with ONE master and ONE slave already counted.
+// Returns its index, or -1 when none are free.
 //
-// Owner at creation rather than at first read, which is the console's
-// rule: the process that opened a pty is unambiguously the one that has
-// it, and there is no equivalent of "a process that never reads must not
-// silence the kernel shell" to guard against.
-int pty_create(int owner_pid);
+// **IT HAS NO OWNER YET, AND THAT IS THE CONSOLE'S RULE.** A terminal is
+// claimed by the first process to READ it (syscall_fd.c), not by the one
+// that made it -- because those are different processes and the reader
+// is the one that needs it. A terminal emulator OPENS the pty and then
+// hands the slave to a shell; if opening had claimed it, the emulator
+// would own a terminal it never reads, and the shell's tcsetpgrp() would
+// be refused as -EPERM -- which is exactly the bug this comment replaced.
+// The symptom was Ctrl-C in a window signalling the wrong group and
+// nothing dying.
+int pty_create(void);
 
 // The terminal behind a pty, or NULL. What the termios and foreground
 // group syscalls resolve an fd to.

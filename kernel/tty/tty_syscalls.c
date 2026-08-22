@@ -24,7 +24,7 @@
 int sys_openpty(struct syscall_ctx *c) {
     struct openpty_msg msg;
 
-    int idx = pty_create(scheduler_current_pid());
+    int idx = pty_create();
     if (idx < 0) {
         klog_write("syscall: openpty() -- no free terminal\n");
         c->regs[14] = (uint64_t)(int64_t)-ENOSPC;
@@ -95,6 +95,18 @@ int sys_tcsetattr(struct syscall_ctx *c) {
     // Moving a FOREGROUND GROUP is different and does check, because
     // that decides where somebody else's Ctrl-C lands.
     tty_set_termios(t, &tio);
+    c->regs[14] = 0;
+    return 0;
+}
+
+// fcntl(F_SETFL, O_NONBLOCK), and only that. Here rather than in
+// syscall_fd.c because the one thing that needs it is a terminal
+// emulator draining its child (see SYS_SET_NONBLOCK's ABI note) -- and
+// because syscall_fd.c already routes; this sets.
+int sys_set_nonblock(struct syscall_ctx *c) {
+    struct open_file *f = fd_get(c->pml4, (int)(int32_t)c->a0);
+    if (!f) { c->regs[14] = (uint64_t)(int64_t)-EBADF; return 0; }
+    f->nonblock = c->a1 ? 1 : 0;
     c->regs[14] = 0;
     return 0;
 }

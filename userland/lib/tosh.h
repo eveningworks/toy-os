@@ -31,27 +31,19 @@ struct tosh {
     // lives in the kernel (SYS_CHDIR/SYS_GETCWD), so a path means the
     // same thing to this shell's builtins and to anything it spawns.
     // A copy here could only ever disagree with it.
+    // **A CHILD INHERITS THIS SHELL'S fd 0, unconditionally.** There
+    // used to be a `stdin_ok` flag and an empty-pipe fallback here,
+    // because the GUI Terminal took keys as WINDOW EVENTS and its fd 0
+    // was a console some other process owned -- a child left to inherit
+    // that blocked forever on a keyboard it would never be given, and
+    // the window hung. That is gone: the Terminal opens a pty and runs
+    // /bin/tosh on the slave, so every shell using this library is on a
+    // real terminal and its children should have it. See
+    // docs/tty-design.md.
     tosh_out_fn out;
     void *ctx;
     int last_status; // exit code of the last external command
 
-    // **MAY A CHILD INHERIT THIS SHELL'S fd 0?** 0 by default, and the
-    // front end says otherwise.
-    //
-    // `/bin/tosh` owns the physical console -- reading fd 0 is its whole
-    // existence -- so a child it spawns should read the same keyboard.
-    // The GUI TERMINAL does not: it takes keys as window events, and its
-    // fd 0 is a console some other process owns (or nobody does). A
-    // child left to inherit that blocks forever on a keyboard it will
-    // never be given, and since the shell waits for its child, the
-    // window stops responding -- a hang, not a wrong answer.
-    //
-    // So a shell with no terminal input to give hands its children an
-    // EMPTY one: a pipe whose write end is closed, which reports EOF at
-    // once. That is what a process with no controlling terminal gets on
-    // a real system, and it is what makes `cat` with no arguments print
-    // nothing in the GUI Terminal instead of freezing it.
-    int stdin_ok;
 };
 
 void tosh_init(struct tosh *sh, tosh_out_fn out, void *ctx);

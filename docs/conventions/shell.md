@@ -323,7 +323,8 @@ run the next command OR close the window with Alt+F4.
 
 Three shells run on this machine: the kernel's own (`apps/shell.c`,
 ring 0), `/bin/tosh` (ring 3, the console on a `text` boot) and the GUI
-Terminal (ring 3, the tosh LIBRARY in a window). All three print the
+Terminal (ring 3, which is `/bin/tosh` again -- on a pty, in a window).
+All three print the
 current directory; the last character says which.
 
 **THE MARKER IS ON THE PROMPT BECAUSE A BANNER SCROLLS AWAY.** Both
@@ -341,6 +342,13 @@ kernel shell has no scheduler slot, so nothing owns the console and
 there is no foreground group to signal. Somebody reading `/>` had no way
 to know which shell they were in, and "Ctrl-C does nothing" is what that
 looks like from the outside.
+
+**AND THERE ARE ONLY TWO SHELL BINARIES NOW.** The GUI Terminal used to
+be a third front end that linked `tosh` as a library; it is a terminal
+emulator running `/bin/tosh` on a pty, so the shell in a window is the
+same program as the shell on a `text` boot -- a real process, with a pid,
+visible in `ps`. `Ctrl-C` works at both `$` prompts, through one line
+discipline.
 
 ## A TERMINAL IS AN OBJECT, AND THE CONSOLE IS `tty0`
 

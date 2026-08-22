@@ -63,6 +63,16 @@ struct tty {
     // finished, which is what ICANON means.
     char     canon[TTY_CANON_MAX];
     unsigned canon_len;
+
+    // VEOF arrived on an EMPTY line: the next read that finds nothing
+    // queued reports end of input instead of parking, and clears this.
+    //
+    // A FLAG RATHER THAN A BYTE IN THE QUEUE, because end of input is
+    // not a character -- a reader must see it as a zero-length read, and
+    // anything queued would arrive as data. It is consumed by one read,
+    // so a second Ctrl-D is needed to end input twice, exactly as on a
+    // real terminal.
+    int eof_pending;
 };
 
 // ldisc.c's entry points, called by tty.c.
@@ -71,5 +81,6 @@ void tty_ldisc_discard_line(struct tty *t);
 
 // tty.c's, called by ldisc.c.
 void tty_enqueue(struct tty *t, uint8_t byte, uint8_t mods);
+void tty_enqueue_wake(struct tty *t);
 
 #endif // KERNEL_TTY_INTERNAL_H

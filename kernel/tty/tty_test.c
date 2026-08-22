@@ -304,7 +304,7 @@ KTEST("tty", "every terminal has its own wait channel, and tty0 cannot be destro
 #define PTY_TIMEOUT_TICKS 600 // 6s at 100Hz; the child it spawns spins
 
 KTEST("tty", "a pty is a terminal, with both ends counted separately") {
-    int idx = pty_create(0);
+    int idx = pty_create();
     if (idx < 0) KTEST_SKIP("no free pty");
 
     struct tty *t = pty_tty(idx);
@@ -335,7 +335,7 @@ KTEST("tty", "a pty read tells WOULD BLOCK from END OF FILE") {
     // wrong: -1 means wait, 0 means there will never be more. A pty that
     // reported 0 for an empty-but-live terminal would make every shell
     // in a window exit the moment it caught up with its input.
-    int idx = pty_create(0);
+    int idx = pty_create();
     if (idx < 0) KTEST_SKIP("no free pty");
 
     char buf[8];
@@ -352,7 +352,7 @@ KTEST("tty", "a slave write with no master is discarded and reported") {
     // pipe_write()'s answer, for the same reason: there is no SIGPIPE
     // here, so the write is dropped and says so rather than raising
     // something this kernel cannot deliver.
-    int idx = pty_create(0);
+    int idx = pty_create();
     if (idx < 0) KTEST_SKIP("no free pty");
     pty_close_master(idx);
     int64_t n = pty_slave_write(idx, "x", 1);

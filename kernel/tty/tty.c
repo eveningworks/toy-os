@@ -49,6 +49,7 @@ void tty_init(void) {
     t->tio.cc[TTY_VINTR]  = 0x03;
     t->tio.cc[TTY_VERASE] = '\b';
     t->tio.cc[TTY_VKILL]  = 0x15;
+    t->tio.cc[TTY_VEOF]   = 0x04;
 }
 
 struct tty *tty_console(void) { return &g_ttys[0]; }
@@ -76,6 +77,7 @@ struct tty *tty_create(const struct tty_driver *drv, void *drv_data) {
         t->tio.cc[TTY_VINTR]  = 0x03;
         t->tio.cc[TTY_VERASE] = '\b';
         t->tio.cc[TTY_VKILL]  = 0x15;
+        t->tio.cc[TTY_VEOF]   = 0x04;
         return t;
     }
     return NULL;
@@ -112,6 +114,12 @@ void tty_enqueue(struct tty *t, uint8_t byte, uint8_t mods) {
     // does. SYS_RETRY is the wake value, so a reader that finds the byte
     // already taken by somebody else parks again rather than reporting a
     // spurious end of input.
+    scheduler_wake(tty_wait_chan(t), SYS_RETRY);
+}
+
+// The wake half of tty_enqueue(), on its own: end of input has no byte
+// to queue and still has to release a parked reader.
+void tty_enqueue_wake(struct tty *t) {
     scheduler_wake(tty_wait_chan(t), SYS_RETRY);
 }
 

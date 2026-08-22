@@ -605,6 +605,11 @@ int sys_tcsetattr(int fd, const struct tty_termios *tio) {
 // Returns 0, or -1 with errno ENOTTY when fd is not a terminal -- which
 // a caller may legitimately ignore, since a shell reading a pipe has
 // nothing to configure.
+int sys_set_nonblock(int fd, int on) {
+    return (int)err(syscall2(SYS_SET_NONBLOCK, (uint64_t)(int64_t)fd,
+                             (uint64_t)(int64_t)on));
+}
+
 int sys_tty_raw(int fd) {
     struct tty_termios tio;
     if (sys_tcgetattr(fd, &tio) < 0) return -1;

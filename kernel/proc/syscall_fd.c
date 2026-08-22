@@ -244,7 +244,7 @@ void fd_inherit(uint64_t child, uint64_t parent) {
 
 static __attribute__((noinline)) int
 sys_do_read_pty_master(uint64_t *regs, uint64_t pml4, int idx,
-                       uint64_t buf_ptr, uint64_t len) {
+                       uint64_t buf_ptr, uint64_t len, int nonblock) {
     char *kbuf = kmalloc(SYS_WRITE_MAX);
     if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
 
@@ -256,6 +256,11 @@ sys_do_read_pty_master(uint64_t *regs, uint64_t pml4, int idx,
         regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else if (n >= 0) {
         regs[14] = (uint64_t)n; // bytes, or 0 for EOF (no slave left)
+    } else if (nonblock) {
+        // ASKED NOT TO BLOCK. -EAGAIN is not "no more data" -- 0 already
+        // means that, and a terminal emulator told the wrong one would
+        // decide its shell had exited.
+        regs[14] = (uint64_t)(int64_t)-EAGAIN;
     } else if (!scheduler_block_current(regs, pty_out_wait_chan(idx), SCHED_WAIT_TTY)) {
         regs[14] = 0; // nowhere to park -- EOF beats spinning
     } else {
@@ -268,12 +273,20 @@ sys_do_read_pty_master(uint64_t *regs, uint64_t pml4, int idx,
 
 static __attribute__((noinline)) int
 sys_do_read_pty_slave(uint64_t *regs, uint64_t pml4, int idx,
-                      uint64_t buf_ptr, uint64_t len) {
+                      uint64_t buf_ptr, uint64_t len, int nonblock) {
     struct tty *t = pty_tty(idx);
     if (!t) { regs[14] = (uint64_t)(int64_t)-EBADF; return 0; }
 
     char *kbuf = kmalloc(SYS_WRITE_MAX);
     if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
+
+    // CLAIMED ON THE FIRST READ, which is the physical console's rule
+    // one line up in this file. The process that OPENED the pty is a
+    // terminal emulator and never reads the slave; the one that reads it
+    // is the shell, and the shell is who needs to move the foreground
+    // group. Claiming at open instead made tcsetpgrp() answer -EPERM to
+    // the only process that had any business calling it.
+    if (!tty_owner(t)) tty_set_owner(t, scheduler_current_pid());
 
     scheduler_preempt_disable();
     unsigned n = tty_read(t, kbuf, (unsigned)len);
@@ -283,6 +296,13 @@ sys_do_read_pty_slave(uint64_t *regs, uint64_t pml4, int idx,
         regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else if (n) {
         regs[14] = (uint64_t)n;
+    } else if (tty_eof_pending(t)) {
+        // Ctrl-D on an empty line. A zero-length read, which is what END
+        // OF INPUT means to a program -- and the only reason `cat` with
+        // no arguments can ever finish.
+        regs[14] = 0;
+    } else if (nonblock && pty_master_open(idx)) {
+        regs[14] = (uint64_t)(int64_t)-EAGAIN;
     } else if (!pty_master_open(idx)) {
         // END OF FILE, and this is the one case that distinguishes a pty
         // slave from the physical console: a console has no end of input
@@ -743,10 +763,10 @@ int sys_read(struct syscall_ctx *c) {
     case FD_KIND_TTY_MASTER:
         // What the terminal has emitted: a program's output and the
         // discipline's echo, in the order they happened.
-        return sys_do_read_pty_master(c->regs, pml4, f->pty.idx, buf_ptr, len);
+        return sys_do_read_pty_master(c->regs, pml4, f->pty.idx, buf_ptr, len, f->nonblock);
     case FD_KIND_TTY_SLAVE:
         // What was typed at it -- whole lines in canonical mode.
-        return sys_do_read_pty_slave(c->regs, pml4, f->pty.idx, buf_ptr, len);
+        return sys_do_read_pty_slave(c->regs, pml4, f->pty.idx, buf_ptr, len, f->nonblock);
 
     case FD_KIND_PIPE_R:
         // Reads from the pipe, and BLOCKS when it is empty with a

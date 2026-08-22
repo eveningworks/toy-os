@@ -131,6 +131,28 @@ void tty_ldisc_input(struct tty *t, uint8_t byte, uint8_t mods) {
         while (t->canon_len) { t->canon_len--; echo_erase(t); }
         return;
     }
+    if (byte == tio->cc[TTY_VEOF]) {
+        // END OF INPUT. With text pending it delivers that text WITHOUT
+        // a newline -- so a program reading lines gets a final partial
+        // one rather than losing it -- and on an empty line it sets the
+        // flag that makes the next read report zero bytes.
+        //
+        // NOT ECHOED, on purpose: there is no character to show, and a
+        // terminal that painted a ^D would put it in the transcript of
+        // every program that ended this way.
+        if (t->canon_len) {
+            for (unsigned i = 0; i < t->canon_len; i++)
+                tty_enqueue(t, (uint8_t)t->canon[i], 0);
+            t->canon_len = 0;
+        } else {
+            t->eof_pending = 1;
+            // Wake anyway: a reader parked on an empty terminal has to
+            // be told, and end of input is exactly the thing it cannot
+            // discover by looking.
+            tty_enqueue_wake(t);
+        }
+        return;
+    }
     if (byte == '\n' || byte == '\r') {
         // BOTH END THE LINE, and what is stored is always '\n'. POSIX
         // spells this ICRNL and makes it optional; there is no iflag
@@ -155,6 +177,15 @@ void tty_ldisc_input(struct tty *t, uint8_t byte, uint8_t mods) {
 }
 
 // --- the reader's side -----------------------------------------------
+
+int tty_eof_pending(struct tty *t) {
+    if (!t || !t->used || !t->eof_pending) return 0;
+    // CONSUMED BY ONE READ. A second Ctrl-D is needed to end input
+    // twice, exactly as on a real terminal -- a sticky flag would make
+    // every later read on this terminal report end of input forever.
+    t->eof_pending = 0;
+    return 1;
+}
 
 int tty_readable(const struct tty *t) {
     if (!t || !t->used) return 0;

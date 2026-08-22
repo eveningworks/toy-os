@@ -70,7 +70,7 @@ static const struct tty_driver pty_driver = {
     .output = pty_output_hook,
 };
 
-int pty_create(int owner_pid) {
+int pty_create(void) {
     for (int i = 0; i < PTY_MAX; i++) {
         if (g_ptys[i].used) continue;
         struct pty *p = &g_ptys[i];
@@ -80,7 +80,8 @@ int pty_create(int owner_pid) {
         if (!p->t) { p->used = 0; return -1; } // TTY_MAX reached first
         p->masters = 1;
         p->slaves = 1;
-        tty_set_owner(p->t, owner_pid);
+        // No owner: the first process to READ the slave claims it. See
+        // pty.h -- the opener and the reader are different processes.
         return i;
     }
     return -1;

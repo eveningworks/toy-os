@@ -95,6 +95,11 @@ enum fd_kind {
 struct open_file {
     int refs; // 0 = free. dup() makes it 2; the last unref tears down.
     enum fd_kind kind;
+    // SYS_SET_NONBLOCK: a read that would park returns -EAGAIN instead.
+    // On the DESCRIPTION, so a dup2'd copy shares it -- which is what
+    // Linux does with O_NONBLOCK and is what makes "set it once on the
+    // fd you own" mean something.
+    uint8_t nonblock;
     union {
         struct {
             char name[FS_PATH_MAX];
@@ -224,6 +229,7 @@ int sys_tcgetpgrp(struct syscall_ctx *c);
 
 // --- terminals (kernel/tty/tty_syscalls.c) ---------------------------
 int sys_openpty(struct syscall_ctx *c);
+int sys_set_nonblock(struct syscall_ctx *c);
 int sys_tcgetattr(struct syscall_ctx *c);
 int sys_tcsetattr(struct syscall_ctx *c);
 int sys_proc_info(struct syscall_ctx *c);

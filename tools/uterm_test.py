@@ -113,7 +113,7 @@ def run(dbg, qmp, tmp, shot_dir, res):
     # hid this; spawning directly does not.)
     deadline = time.time() + SPAWN_TIMEOUT_S
     while time.time() < deadline:
-        if dbg.logs("uterm: layout prompt", clear=False):
+        if dbg.logs("uterm: layout cursor", clear=False):
             break
         time.sleep(0.2)
     dbg.settle()
@@ -125,27 +125,25 @@ def run(dbg, qmp, tmp, shot_dir, res):
     base = ink(qmp, tmp, "ut_base.png", box)
     res.check("it renders its banner", base > 100, f"only {base} ink pixels")
 
-    # --- the prompt follows the transcript ----------------------------
+    # --- the cursor is where the shell put it -------------------------
     #
-    # It used to be pinned to the bottom of the window unconditionally,
-    # so a fresh Terminal showed two banner lines at the top and a
-    # prompt stranded at the foot with a band of empty black between.
-    # A real terminal puts the prompt after the last line and only
-    # reaches the bottom once the screen has filled.
-    #
-    # Paired on purpose: "near the top with a short transcript" alone
-    # would also pass if the prompt were simply nailed to the top, and
-    # "near the bottom after output" alone is what the bug did. Both
-    # together say it FOLLOWS.
-    def prompt_y():
-        for l in reversed(dbg.logs("uterm: layout prompt", clear=False)):
-            return int(l.split("layout prompt")[1].split()[0])
+    # **THE PROMPT IS NOT THIS APP'S ANY MORE.** It used to draw one
+    # itself, below the transcript, and this pair of checks asserted that
+    # it FOLLOWED the transcript rather than being nailed to the bottom.
+    # There is no prompt widget now: Terminal is a terminal emulator, the
+    # prompt is bytes /bin/tosh printed, and it lands wherever the text
+    # does. What replaces the check is the CURSOR -- the emulator's own
+    # position in the buffer, which is the thing that would be wrong if
+    # '\r' or overwrite were mishandled.
+    def cursor_at():
+        for l in reversed(dbg.logs("uterm: layout cursor", clear=False)):
+            return int(l.split("layout cursor")[1].split()[0])
         return None
 
-    short_y = prompt_y()
-    res.check("the prompt follows a short transcript instead of sitting at the bottom",
-              short_y is not None and short_y < c["h"] // 2,
-              f"prompt at y={short_y} in a {c['h']}px content area")
+    start_cursor = cursor_at()
+    res.check("the emulator reports a cursor inside its buffer",
+              start_cursor is not None and start_cursor > 0,
+              f"cursor at {start_cursor}")
 
     # A BUILTIN: handled inside the shell, no spawn.
     type_line(dbg, "echo hi")
@@ -204,12 +202,16 @@ def run(dbg, qmp, tmp, shot_dir, res):
               f"echo left {after_echo} ink, lscpu left {after_lscpu} -- "
               "expected far more if the program's output really arrived")
 
-    # The other half of the pair: lscpu fills the window, so the prompt
-    # must now be at the bottom rather than wherever it started.
-    long_y = prompt_y()
-    res.check("a full transcript pushes the prompt to the bottom",
-              long_y is not None and short_y is not None and long_y > short_y,
-              f"prompt was at y={short_y}, now y={long_y} after lscpu filled the window")
+    # The cursor's other half: a screenful of output must have moved it a
+    # long way, and it must still point INSIDE the buffer. An emulator
+    # that mishandled '\r' would leave it stuck at the start of a line
+    # while the text grew past it -- which looks fine in a screenshot and
+    # puts the caret in the wrong place on the very next keystroke.
+    long_cursor = cursor_at()
+    res.check("a screenful of output moves the cursor with it",
+              long_cursor is not None and start_cursor is not None
+              and long_cursor > start_cursor,
+              f"cursor was {start_cursor}, now {long_cursor} after lscpu")
 
     if shot_dir:
         qmp.screenshot(os.path.abspath(os.path.join(shot_dir, "ring3-terminal-spawn.png")))
@@ -241,13 +243,57 @@ def run(dbg, qmp, tmp, shot_dir, res):
     # prompt again and executed something, through the FILESYSTEM.
     dbg.send("sh rm /filetest.txt")
     dbg.settle()
-    type_line(dbg, "cat", settle=2.5)
-    res.check("a bare `cat` returns instead of hanging the window",
-              dbg.window(TITLE) is not None)
+    # A BARE `cat` NOW WAITS FOR INPUT, AND THAT IS THE FIX RATHER THAN
+    # THE BUG. It used to return at once because the window had no
+    # terminal to lend, so tosh handed every child a closed pipe as stdin
+    # -- honest at the time, and exactly what a process with no
+    # controlling terminal gets. This window has a real pty now, so `cat`
+    # inherits it and blocks for input like it does everywhere else. The
+    # way out is the way out everywhere else too: Ctrl-D.
+    type_line(dbg, "cat", settle=1.5)
+    res.check("a bare `cat` waits for input rather than returning",
+              not root_has("filetest.txt"))
+    key(dbg, "0x04")                    # Ctrl-D: end of input -- cat exits
+    dbg.settle()
+    res.check("...and the window survived it", dbg.window(TITLE) is not None)
     type_line(dbg, "file_test", settle=3.0)
     res.check("...and the terminal still runs the NEXT command",
               root_has("filetest.txt"),
-              "the shell never came back -- a child is still blocked on fd 0")
+              "the shell never came back after Ctrl-D ended `cat`")
+
+    # --- Ctrl-C, WHICH IS THE WHOLE POINT ----------------------------
+    #
+    # This window could not interrupt a job at all until it had a
+    # terminal: it read keys as WINDOW EVENTS, so it owned no console and
+    # had no foreground group. Now the key is written to a pty master as
+    # the byte 0x03 and kernel/tty/ldisc.c recognises it as INTR -- the
+    # SAME function, on the same kind of object, that the keyboard IRQ
+    # feeds for the physical console.
+    #
+    # spin_test writes nothing and makes no syscalls while it spins, so
+    # the only way it can end is signal delivery on a timer tick. A job
+    # that polled would be killed by the other path and would say nothing
+    # about this one.
+    def spinners():
+        out = dbg.send("sh kstack slots") or ""
+        return [l for l in out.splitlines() if "spin_test" in l]
+
+    type_line(dbg, "spin_test 900000", settle=2.0)
+    res.check("a job is running in the window", bool(spinners()),
+              "spin_test never started")
+
+    key(dbg, "0x03")  # Ctrl-C
+    deadline = time.time() + 8
+    while time.time() < deadline and spinners():
+        time.sleep(0.25)
+    res.check("Ctrl-C in a WINDOW interrupts the job", not spinners(),
+              "spin_test survived -- the byte never became a SIGINT")
+
+    # The load-bearing other half: a Ctrl-C that killed the shell too
+    # would pass the check above and leave a dead window. The shell
+    # ignores SIGINT and is not in the job's group.
+    type_line(dbg, "file_test2", settle=2.0)
+    res.check("...and the SHELL survived it", dbg.window(TITLE) is not None)
 
     # And the terminal is still alive and interactive afterwards.
     type_line(dbg, "pwd")

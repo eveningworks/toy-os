@@ -53,22 +53,6 @@ void tosh_init(struct tosh *sh, tosh_out_fn out, void *ctx) {
     sh->out = out;
     sh->ctx = ctx;
     sh->last_status = 0;
-    // SAFE BY DEFAULT: a front end that has not thought about stdin does
-    // not hand its children somebody else's keyboard. See the field.
-    sh->stdin_ok = 0;
-}
-
-// An fd a child can be given as stdin when this shell has none to lend:
-// a pipe whose write end is closed straight away, so a read on it
-// reports EOF instead of blocking. Returns -1 if no pipe was available,
-// which the caller treats as "inherit anyway" -- running the command is
-// better than refusing it, and the worst case is the behaviour that was
-// there before.
-static int empty_stdin(void) {
-    int fds[2];
-    if (sys_pipe(fds) != 1) return -1;
-    sys_close(fds[1]);   // no writer -- the read end is at EOF already
-    return fds[0];
 }
 
 static void emit(struct tosh *sh, const char *s) {
@@ -337,19 +321,11 @@ static int run_external(struct tosh *sh, const char *path, const char *args,
     // write straight there. Piping and re-writing would copy every byte
     // through this process for no reason, and would lose the child's
     // output entirely if it outlived the read loop.
-    // A SHELL WITH NO TERMINAL INPUT LENDS AN EMPTY ONE, never somebody
-    // else's keyboard -- see struct tosh's `stdin_ok`. Applied around the
-    // spawn the same way the pipeline stages point fd 0 at a pipe.
-    int null_in = sh->stdin_ok ? -1 : empty_stdin();
-    int saved_in = -1;
-    if (null_in >= 0) { saved_in = sys_dup(0); sys_dup2(null_in, 0); }
 
     if (stdout_redirected) {
         // PGID_NEW: the child leads a group of its own, so Ctrl-C can be
         // pointed at it without also naming this shell.
         int pid = sys_spawn_group(path, args, -1, environ, PGID_NEW);
-        if (saved_in >= 0) { sys_dup2(saved_in, 0); sys_close(saved_in); }
-        if (null_in >= 0) sys_close(null_in);
         if (pid < 0) return -1;
         job_foreground(sys_getpgid(pid));
         int code = -1;
@@ -361,15 +337,11 @@ static int run_external(struct tosh *sh, const char *path, const char *args,
 
     int fds[2];
     if (sys_pipe(fds) != 1) {
-        if (saved_in >= 0) { sys_dup2(saved_in, 0); sys_close(saved_in); }
-        if (null_in >= 0) sys_close(null_in);
         emit(sh, "tosh: out of pipes\n");
         return -1;
     }
 
     int pid = sys_spawn_group(path, args, fds[1], environ, PGID_NEW);
-    if (saved_in >= 0) { sys_dup2(saved_in, 0); sys_close(saved_in); }
-    if (null_in >= 0) sys_close(null_in);
     if (pid < 0) {
         sys_close(fds[0]);
         sys_close(fds[1]);
@@ -576,11 +548,10 @@ static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
     // stage i+1's input. The LAST stage keeps the shell's own fd 1 --
     // which is a `>` file if the line had one, and otherwise whatever
     // run_stage() below arranges for capture.
-    // THE FIRST STAGE HAS NO UPSTREAM, so it is the one that would
-    // inherit this shell's fd 0 -- and must not, when that is somebody
-    // else's keyboard (struct tosh's `stdin_ok`). Every later stage
-    // reads the pipe from the one before it and is unaffected.
-    int prev_read = sh->stdin_ok ? -1 : empty_stdin();
+    // THE FIRST STAGE HAS NO UPSTREAM, so it INHERITS this shell's fd 0
+    // -- which is the terminal this shell is reading, and is exactly
+    // right. Every later stage reads the pipe from the one before it.
+    int prev_read = -1;
     for (int i = 0; i < n; i++) {
         st[i].in_fd = prev_read;
         prev_read = -1;

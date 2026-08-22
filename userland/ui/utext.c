@@ -9,6 +9,11 @@ char utext_at(const struct utext *t, int i) {
     return t->buf[(t->start + i) % UTEXT_CAP];
 }
 
+void utext_set(struct utext *t, int i, char c) {
+    if (i < 0 || i >= t->count) return;
+    t->buf[(t->start + i) % UTEXT_CAP] = c;
+}
+
 static void set_at(struct utext *t, int i, char c) {
     t->buf[(t->start + i) % UTEXT_CAP] = c;
 }
