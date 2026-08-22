@@ -852,9 +852,17 @@ manual steps to be worth automating:
   must die while the SHELL SURVIVES -- the second half is load-bearing,
   since a Ctrl-C that killed the shell too would satisfy the first. Its
   positive control is the best evidence in the repo that this is ONE
-  implementation and not two that agree: disabling `intr()` in
+  implementation and not two that agree: disabling `signal_char()` in
   `kernel/tty/ldisc.c` reddens this check AND `ctrlc_test.py`'s
   physical-keyboard ones, from the same three lines.
+
+  **`Ctrl-Z` and `fg` are checked here too, and for the sibling reason.**
+  0x1A on the same pty, recognised by the same discipline function, so
+  what this proves is not the suspension -- `jobs_test.py` does that
+  against the physical console -- but that a WINDOW is a terminal in the
+  same sense: same foreground group, same job table, same shell binary.
+  A difference between the two would mean the tty layer had failed at its
+  one job.
 
   **And the check that says a FULL-SCREEN program works here**: it runs
   `/bin/edit` in the window, types, saves with F2 and exits with F3, then

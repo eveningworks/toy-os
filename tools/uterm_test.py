@@ -362,6 +362,48 @@ def run(dbg, qmp, tmp, shot_dir, res):
     type_line(dbg, "file_test2", settle=2.0)
     res.check("...and the SHELL survived it", dbg.window(TITLE) is not None)
 
+    # --- Ctrl-Z, THE SAME MECHANISM WITH A DIFFERENT ENDING ----------
+    #
+    # `Ctrl-Z` is 0x1A on the same pty, recognised as SUSP by the same
+    # ldisc function that just handled INTR -- so what this proves is
+    # not the suspension (tools/jobs_test.py does that against the
+    # physical console) but that a WINDOW is a terminal in the same
+    # sense: same foreground group, same line discipline, same shell
+    # binary. A difference here would mean the tty layer had failed at
+    # its one job.
+    def spin_state():
+        out = dbg.send("sh ps") or ""
+        for line in out.splitlines():
+            p = line.split()
+            if len(p) >= 7 and p[0].isdigit() and p[-1].startswith("spin_test"):
+                return p[3]
+        return None
+
+    type_line(dbg, "spin_test 900000", settle=2.0)
+    res.check("a second job is running in the window", spin_state() is not None,
+              "spin_test never started")
+
+    key(dbg, "0x1a")  # Ctrl-Z
+    deadline = time.time() + 8
+    while time.time() < deadline and spin_state() != "stopped":
+        time.sleep(0.25)
+    res.check("Ctrl-Z in a WINDOW suspends the job", spin_state() == "stopped",
+              f"state is {spin_state()} -- the byte never became a SIGTSTP")
+
+    # `fg` brings it back, which is what says the job table and the
+    # terminal handover work through a pty exactly as they do on tty0.
+    type_line(dbg, "fg", settle=2.0)
+    deadline = time.time() + 8
+    while time.time() < deadline and spin_state() == "stopped":
+        time.sleep(0.25)
+    res.check("...and `fg` resumes it", spin_state() not in (None, "stopped"),
+              f"state is {spin_state()}")
+
+    key(dbg, "0x03")  # tidy up -- the next section wants a quiet machine
+    deadline = time.time() + 8
+    while time.time() < deadline and spin_state() is not None:
+        time.sleep(0.25)
+
     # --- COLOUR REACHES THE WINDOW -----------------------------------
     #
     # `/bin/ls` colours directories, and `--color=auto` is its default --
