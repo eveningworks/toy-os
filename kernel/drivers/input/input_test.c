@@ -16,6 +16,8 @@
 // instructions here).
 #include "input.h"
 #include "keyboard.h"
+#include "keyboard_layout.h" // the parity check asks the LAYOUT what it maps
+#include "kfmt.h"            // klog_printf -- name the unreachable key
 #include "mouse.h"
 #include "scheduler.h"
 #include "ktest.h"
@@ -179,4 +181,81 @@ KTEST("input", "the PS/2 pair registered itself with the core") {
     // Out of range is NULL rather than a wild pointer.
     KTEST_ASSERT_EQ((const void *)input_source_at(-1), (const void *)0);
     KTEST_ASSERT_EQ((const void *)input_source_at(input_source_count()), (const void *)0);
+}
+
+// --- EVERY KEY MUST WORK WHATEVER REPORTED IT ------------------------
+//
+// The property the input core exists for: which driver a key came from
+// is not supposed to be observable. PS/2 hands keyboard.c an AT set-1
+// scancode directly; virtio-input hands input_report_key() an evdev
+// keycode, which this file translates to the same scancode. If the
+// translation has a hole, a key works on one machine and silently does
+// nothing on another -- which is not a "some keys are unsupported"
+// situation, it is the same keyboard behaving differently for reasons
+// the user cannot see.
+//
+// One hole existed and this is the check that would have caught it:
+// KEY_102ND, the extra key an ISO keyboard has between Left Shift and
+// Z, which carries `|` on every Nordic layout. It sat just past the
+// direct range and was not in the table, so `cat x | grep y` could be
+// typed on a PS/2 boot and NOT on an `INPUT=virtio` one.
+
+KTEST("input", "every scancode the layout maps is reachable from a keycode") {
+    // Build the reverse map once: keycode -> scancode, over every
+    // keycode a device could plausibly report. 255 is evdev's own
+    // KEY_MAX for the range that matters here; anything above it is
+    // media and consumer keys with no character.
+    int reachable[128];
+    for (int i = 0; i < 128; i++) reachable[i] = 0;
+    for (uint16_t kc = 1; kc <= 255; kc++) {
+        uint8_t sc; int prefixed;
+        if (!input_keycode_to_scancode(kc, &sc, &prefixed)) continue;
+        // A PREFIXED code is a DIFFERENT key from the bare one -- 0xE0
+        // 0x35 is the keypad slash, not the scancode 0x35 the layout
+        // maps. Only unprefixed codes can satisfy a layout entry, and
+        // counting them together is how this check would have passed
+        // while the bug was present.
+        if (prefixed) continue;
+        if (sc < 128) reachable[sc] = 1;
+    }
+
+    // Every scancode the ACTIVE layout gives a character to, at any
+    // level. Asked of the layout rather than listed here, so this covers
+    // whichever layout the machine booted with and gains new keys when
+    // a layout does.
+    int missing = -1, missing_count = 0;
+    for (int sc = 1; sc < 128; sc++) {
+        int mapped = keyboard_layout_translate((uint8_t)sc, 0, 0) != 0
+                  || keyboard_layout_translate((uint8_t)sc, 1, 0) != 0
+                  || keyboard_layout_translate((uint8_t)sc, 0, 1) != 0;
+        if (!mapped || reachable[sc]) continue;
+        if (missing < 0) missing = sc;
+        missing_count++;
+    }
+    // Named rather than counted: "3 unreachable" sends the next reader
+    // looking, "0x56" tells them which key.
+    if (missing >= 0)
+        klog_printf("input: scancode 0x%x maps a character no keycode reaches "
+                    "(%d in total)\n", missing, missing_count);
+    KTEST_ASSERT_EQ(missing_count, 0);
+}
+
+KTEST("input", "the ISO key that carries `|` translates, and is not prefixed") {
+    // The specific regression, pinned by name. The check above is the
+    // general property and would catch this too -- but only while some
+    // layout maps 0x56, and a US-only boot does not. This one holds
+    // whatever is loaded.
+    uint8_t sc = 0;
+    int prefixed = 1;
+    KTEST_ASSERT(input_keycode_to_scancode(INPUT_KEY_102ND, &sc, &prefixed));
+    KTEST_ASSERT_EQ((int)sc, 0x56);
+    // NOT prefixed: feeding 0xE0 0x56 would make keyboard.c read it as
+    // an extended key of that number, which is nothing -- so the key
+    // would still vanish, just for a second reason.
+    KTEST_ASSERT_EQ(prefixed, 0);
+
+    // ...and a keycode this kernel has no name for is still refused,
+    // so the check above cannot pass by the translation accepting
+    // everything.
+    KTEST_ASSERT(!input_keycode_to_scancode(700, &sc, &prefixed));
 }

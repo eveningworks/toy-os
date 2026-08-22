@@ -28,6 +28,7 @@ suite, and an ordinary change does not affect it. Same category as
 tools/live_boot_test.py.
 """
 import argparse
+import re
 import os
 import shutil
 import socket
@@ -100,7 +101,15 @@ def answer_after(transcript, echoed_command):
         if echoed_command not in ln:
             continue
         for nxt in lines[i + 1:]:
-            if not nxt or nxt.startswith(("elf_run:", "syscall:", "dbg>")):
+            if not nxt or nxt.startswith("dbg>"):
+                continue
+            # ANY kernel log line, not a hand-kept list of prefixes. The
+            # debug console interleaves live klog output with the reply,
+            # and a list that named elf_run: and syscall: let `init:
+            # target graphical` through and reported it as the command's
+            # answer. Every klog line starts "subsystem: "; a command's
+            # own output here does not.
+            if re.match(r"^[a-z][a-z0-9_]*: ", nxt):
                 continue
             return nxt
     return None
@@ -206,9 +215,18 @@ def main():
     got = answer_after(t1b, "config get kernel.ata_nodma")
     check("the PIO tunable reports the FORCING flag, not the effective state",
           got == "off", f"`config get` answered {got!r}, not 'off'")
-    check("...and setting it is REFUSED with the reason, not a bad-value message",
-          "no DMA engine" in t1b and "does not accept" not in t1b,
-          "expected the registry's unavailable() sentence")
+    # THE REASON HAS TO NAME THIS MACHINE'S ACTUAL STORAGE. The first
+    # version of the sentence said "every transfer already goes through
+    # PIO", which is true of an ATA controller with no Bus-Master DMA
+    # and FALSE here: there is no ATA disk at all, and the virtio-blk
+    # device DMAs through its virtqueues. Asserting on "virtio-blk"
+    # rather than on a generic phrase is what pins that down -- a reason
+    # that did not name the device could drift back to the wrong one and
+    # still pass.
+    check("...and setting it is REFUSED with a reason naming the real device",
+          "no ATA disk" in t1b and "virtio-blk" in t1b
+          and "does not accept" not in t1b,
+          "expected the registry's unavailable() sentence, naming virtio-blk")
 
     print("virtio_boot_test: boot 2 -- read it back on a fresh boot")
     t2, err = run_boot(args.iso, args.work, args.qemu_log,

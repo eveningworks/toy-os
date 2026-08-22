@@ -53,20 +53,49 @@ void input_poll_sources(void) {
 // It disappears when /etc/kbs is re-keyed to evdev codes; until then a
 // non-PS/2 keyboard translates once, here, rather than every driver
 // carrying its own idea of the mapping.
-struct extended_key { uint16_t keycode; uint8_t scancode; };
+// `prefixed` is what tells the two kinds apart: most keys past the
+// direct range live behind an 0xE0 prefix on the wire, but three do not
+// (evdev 86/87/88 ARE set-1 0x56/0x57/0x58). Feeding those with a
+// prefix would make keyboard.c read them as the extended keys of the
+// same number -- 0x56 prefixed is nothing, so the key would still
+// vanish, just for a second reason.
+struct mapped_key { uint16_t keycode; uint8_t scancode; uint8_t prefixed; };
 
-static const struct extended_key EXTENDED[] = {
-    { INPUT_KEY_KPENTER,   0x1C }, { INPUT_KEY_RIGHTCTRL, 0x1D },
-    { INPUT_KEY_KPSLASH,   0x35 }, { INPUT_KEY_RIGHTALT,  0x38 },
-    { INPUT_KEY_HOME,      0x47 }, { INPUT_KEY_UP,        0x48 },
-    { INPUT_KEY_PAGEUP,    0x49 }, { INPUT_KEY_LEFT,      0x4B },
-    { INPUT_KEY_RIGHT,     0x4D }, { INPUT_KEY_END,       0x4F },
-    { INPUT_KEY_DOWN,      0x50 }, { INPUT_KEY_PAGEDOWN,  0x51 },
-    { INPUT_KEY_INSERT,    0x52 }, { INPUT_KEY_DELETE,    0x53 },
-    { INPUT_KEY_LEFTMETA,  0x5B }, { INPUT_KEY_RIGHTMETA, 0x5C },
-    { INPUT_KEY_COMPOSE,   0x5D },
+static const struct mapped_key MAPPED[] = {
+    // NOT prefixed: plain set-1 codes that happen to sit past the direct
+    // range. KEY_102ND is the ISO key that carries `|` on every Nordic
+    // layout -- see input.h.
+    { INPUT_KEY_102ND,     0x56, 0 },
+    { INPUT_KEY_F11,       0x57, 0 },
+    { INPUT_KEY_F12,       0x58, 0 },
+
+    { INPUT_KEY_KPENTER,   0x1C, 1 }, { INPUT_KEY_RIGHTCTRL, 0x1D, 1 },
+    { INPUT_KEY_KPSLASH,   0x35, 1 }, { INPUT_KEY_RIGHTALT,  0x38, 1 },
+    { INPUT_KEY_HOME,      0x47, 1 }, { INPUT_KEY_UP,        0x48, 1 },
+    { INPUT_KEY_PAGEUP,    0x49, 1 }, { INPUT_KEY_LEFT,      0x4B, 1 },
+    { INPUT_KEY_RIGHT,     0x4D, 1 }, { INPUT_KEY_END,       0x4F, 1 },
+    { INPUT_KEY_DOWN,      0x50, 1 }, { INPUT_KEY_PAGEDOWN,  0x51, 1 },
+    { INPUT_KEY_INSERT,    0x52, 1 }, { INPUT_KEY_DELETE,    0x53, 1 },
+    { INPUT_KEY_LEFTMETA,  0x5B, 1 }, { INPUT_KEY_RIGHTMETA, 0x5C, 1 },
+    { INPUT_KEY_COMPOSE,   0x5D, 1 },
 };
-#define EXTENDED_COUNT ((int)(sizeof EXTENDED / sizeof EXTENDED[0]))
+#define MAPPED_COUNT ((int)(sizeof MAPPED / sizeof MAPPED[0]))
+
+int input_keycode_to_scancode(uint16_t keycode, uint8_t *out_sc, int *out_prefixed) {
+    if (!keycode) return 0;
+    if (keycode <= INPUT_KEY_EVDEV_DIRECT_MAX) {
+        if (out_sc) *out_sc = (uint8_t)keycode;
+        if (out_prefixed) *out_prefixed = 0;
+        return 1;
+    }
+    for (int i = 0; i < MAPPED_COUNT; i++) {
+        if (MAPPED[i].keycode != keycode) continue;
+        if (out_sc) *out_sc = MAPPED[i].scancode;
+        if (out_prefixed) *out_prefixed = MAPPED[i].prefixed;
+        return 1;
+    }
+    return 0;
+}
 
 void input_report_key(uint16_t keycode, int down) {
     if (!keycode) return;
@@ -76,15 +105,15 @@ void input_report_key(uint16_t keycode, int down) {
         return;
     }
 
-    for (int i = 0; i < EXTENDED_COUNT; i++) {
-        if (EXTENDED[i].keycode != keycode) continue;
+    for (int i = 0; i < MAPPED_COUNT; i++) {
+        if (MAPPED[i].keycode != keycode) continue;
         // The prefix and the code are two separate feeds because that is
         // exactly what the wire looks like on PS/2, and keyboard.c's
         // state machine is written against the wire. Splitting it here
         // means that state machine needs no notion of "an injected key".
-        keyboard_feed_byte(0xE0);
-        keyboard_feed_byte((uint8_t)(down ? EXTENDED[i].scancode
-                                          : (EXTENDED[i].scancode | 0x80)));
+        if (MAPPED[i].prefixed) keyboard_feed_byte(0xE0);
+        keyboard_feed_byte((uint8_t)(down ? MAPPED[i].scancode
+                                          : (MAPPED[i].scancode | 0x80)));
         return;
     }
     // Anything else is a key this kernel has no name for. Dropped

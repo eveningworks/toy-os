@@ -28,7 +28,9 @@
 #include "ata.h"
 #include "scheduler.h"
 #include "string.h"
-#include "kfmt.h"
+#include "kfmt.h"          // k_snprintf -- the reason names the live device
+#include "setting_abi.h"   // SETTING_ABI_DESC_MAX -- the reason's own budget
+#include "block.h"        // blk_name() -- what IS carrying the transfers
 
 #define TUNABLE_CATEGORY "Kernel"
 
@@ -98,14 +100,50 @@ static void ata_nodma_get(char *out, uint32_t cap) {
     k_strlcpy(out, ata_dma_forced_off() ? "on" : "off", cap);
 }
 
-// A machine with no Bus-Master DMA engine is already doing every
-// transfer through PIO, so there is nothing here to force. Saying so is
-// the point: the alternative is a control that accepts a value and
-// changes nothing observable, which is how this setting was found.
+// WHY THIS SETTING CANNOT BE CHANGED HERE -- and there are TWO reasons,
+// which is the whole point of it being a sentence rather than a flag.
+//
+// The first version collapsed them into one and was WRONG on the machine
+// that matters most. It said "every transfer already goes through PIO"
+// whenever DMA was unavailable -- but the common way for that to be true
+// is that there is NO ATA DISK AT ALL (any virtio boot), where nothing
+// goes through ATA in either mode and the disk is a virtio-blk device
+// whose virtqueues the host reads and writes directly. Telling somebody
+// their virtio disk is running in PIO is not a rounding error; it is a
+// wrong answer to the question they asked.
+//
+// `/bin/ata` has drawn the same distinction all along ("no ATA drive
+// present" versus "PIO (this machine has no Bus-Master DMA)"), which is
+// what made the collapse a regression against a fact this tree already
+// knew rather than a hard call.
 static const char *ata_nodma_unavailable(void) {
-    if (ata_dma_hardware_available()) return 0;
-    return "This machine's disk controller has no DMA engine, so every "
-           "transfer already goes through PIO.";
+    // No ATA disk: this setting is about the ATA driver, and the ATA
+    // driver is not carrying anything. Name what IS, so the reader is
+    // not left to guess -- `blk_name()` is what `df` prints.
+    if (!ata_present()) {
+        // Two variants, because a machine with no disk at all should not
+        // be told it is using one. Static buffer rather than a format at
+        // the call site: a setting's reason must outlive the call (it is
+        // copied at the ABI boundary, but the kernel-side caller holds
+        // the pointer first), and this file is not reentrant.
+        static char why[SETTING_ABI_DESC_MAX];
+        const char *dev = blk_name();
+        if (dev && k_strcmp(dev, "none") != 0) {
+            k_snprintf(why, sizeof why,
+                       "This machine has no ATA disk -- storage is on %s, "
+                       "which this setting does not affect.", dev);
+        } else {
+            k_strlcpy(why, "This machine has no ATA disk, so there are no "
+                           "ATA transfers to force through PIO.", sizeof why);
+        }
+        return why;
+    }
+    // An ATA disk with no Bus-Master DMA engine behind it. NOW the
+    // original sentence is true, and only now.
+    if (!ata_dma_hardware_available())
+        return "This machine's ATA controller has no Bus-Master DMA engine, "
+               "so every ATA transfer already goes through PIO.";
+    return 0;
 }
 
 static int ata_nodma_apply(const char *value) {

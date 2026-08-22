@@ -133,6 +133,9 @@ static int  g_show_sysinfo;
 // and relayouts under the user, resetting the scroll position so a long
 // page could not be scrolled at all.
 static int  g_prose_fitted;
+// The label width the last fit was computed at. A CHANGE is what asks
+// for another one -- see on_draw().
+static int  g_prose_fit_w;
 static int  g_show_advanced;
 static int  g_page_group = -1;
 // Does the current page have anything the toggle would reveal?
@@ -374,19 +377,47 @@ static int reload_settings(void) {
 static void fit_rows(struct uui_label *l, const char *text) {
     int need = 1;
     if (text && text[0] && l->w > 0) {
-        // COUNTED, not "one row or two". The two-row version was right
-        // for a one-line description and silently clipped anything
-        // longer -- which an `unavailable` reason usually is, since it
-        // has to be a whole sentence. Wrapping is greedy and per word,
-        // so this over-estimates slightly where a long word forces an
-        // early break; a spare row costs a little height, a missing one
-        // loses text.
-        int tw = ugfx_text_width(text);
-        need = (tw + l->w - 1) / l->w;
+        // RUN THE REAL WRAPPER AND COUNT, rather than dividing the
+        // text's width by the label's.
+        //
+        // Two versions got this wrong in the same direction. "One row or
+        // two" clipped anything needing three. Then `ceil(text / width)`
+        // looked exact and is a LOWER BOUND, not the answer: wrapping
+        // breaks at spaces, so every line ends somewhere short of the
+        // edge and the leftovers add up -- a sentence whose ratio is
+        // 2.0 routinely needs three lines. Reserving two then ellipsised
+        // it, which reads as "wrapping does not work" rather than as an
+        // off-by-one.
+        //
+        // uui_label_wrap_next() is the function draw() itself uses, so
+        // the count cannot disagree with the drawing by construction --
+        // which is the only way to be sure, given that the answer
+        // depends on where the spaces fall.
+        char line[128];
+        const char *p = text;
+        need = 0;
+        while (*p && need < PROSE_ROWS_MAX) {
+            p = uui_label_wrap_next(p, l->w, line, (int)sizeof line);
+            need++;
+        }
         if (need < 1) need = 1;
-        if (need > PROSE_ROWS_MAX) need = PROSE_ROWS_MAX;
     }
     uui_label_set_wrap(l, need);
+}
+
+// THE PROSE LINE A SLOT SHOWS -- the `unavailable` reason when there is
+// one, otherwise the description.
+//
+// ONE FUNCTION BECAUSE TWO PLACES NEED THE SAME ANSWER, and they got
+// different ones: load_slot() set the label to the reason while
+// refit_prose() re-measured the DESCRIPTION, so an unavailable setting's
+// sentence was wrapped to fit a string it was not -- one row, and the
+// reason ellipsised at "...has no DMA...". The rows a label reserves and
+// the text it draws have to be computed from the same string, and the
+// only way to guarantee that is for there to be one place that decides.
+static const char *slot_prose(int idx) {
+    if (idx < 0) return "";
+    return g_unavail[idx][0] ? g_unavail[idx] : g_desc[idx];
 }
 
 // A setting the REGISTRY says cannot be changed here gets every one of
@@ -421,8 +452,7 @@ static void load_slot(struct slot *sl, int idx) {
     // control that once fell below the scroll fold), and of the two the
     // reason is the one the user needs: it explains a control that will
     // not respond, where the description explains one that would.
-    const char *prose = g_unavail[idx][0] ? g_unavail[idx] : g_desc[idx];
-    uui_label_set_text(&sl->explain, prose);
+    uui_label_set_text(&sl->explain, slot_prose(idx));
     // ROWS FROM THE TEXT, at the width this page actually has. A flat
     // two rows for every explanation was the first version, and it cost
     // a row on the nine descriptions out of ten that fit on one --
@@ -438,7 +468,7 @@ static void load_slot(struct slot *sl, int idx) {
     // previous layout's width, which is the current one on every frame
     // but the first; a zero there simply reserves one row and the next
     // frame corrects it.
-    fit_rows(&sl->explain, prose);
+    fit_rows(&sl->explain, slot_prose(idx));
 
     if (g_type[idx] == SETTING_ABI_TYPE_INT) {
         // A NUMBER GETS A SPINBOX. The range comes from the REGISTRY
@@ -873,8 +903,10 @@ static void relayout_page(void) {
 // --- navigation and events -------------------------------------------
 
 static void navigate(int node_id) {
-    // A new page means new labels at new widths -- see g_prose_fitted.
+    // A new page means new labels, so the previous fit says nothing
+    // about them even at the same width -- see g_prose_fitted.
     g_prose_fitted = 0;
+    g_prose_fit_w = 0;
     if (node_id == NODE_SYSINFO) {
         g_show_sysinfo = 1;
         g_page_group = -1;
@@ -1031,7 +1063,10 @@ static int refit_prose(void) {
         struct slot *sl = &g_slot[i];
         if (sl->setting < 0) continue;
         was = sl->explain.rows;
-        fit_rows(&sl->explain, g_desc[sl->setting]);
+        // slot_prose(), NOT g_desc: see its comment. This line reading
+        // the description while load_slot() drew the reason is what
+        // ellipsised every `unavailable` sentence to one row.
+        fit_rows(&sl->explain, slot_prose(sl->setting));
         if (sl->explain.rows != was) changed = 1;
     }
     if (changed) relayout_page();
@@ -1039,8 +1074,27 @@ static int refit_prose(void) {
 }
 
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
-    if (!g_prose_fitted && g_page_desc.w > 0) {
+    // WHICH LABEL'S WIDTH DECIDES, and when to do this again.
+    //
+    // It used to be "once per page, as soon as g_page_desc has a width",
+    // and both halves were wrong. The page description is laid out
+    // before the slots' explanations, so its width could be real while
+    // theirs were still 0 -- and fitting at width 0 reserves one row and
+    // then LOCKS it, which is a description ellipsised for the life of
+    // the page. And a window RESIZE changes every width with nothing
+    // asking for a re-fit, so widening the window made the text no
+    // longer wrap and narrowing it clipped.
+    //
+    // Watching the width the fit was DONE at fixes both, and keeps the
+    // property the once-per-page rule was protecting: on a steady frame
+    // the width is unchanged, so nothing relayouts and the scroll
+    // position stays put. (Re-fitting every frame was the first version
+    // and reset the scroll under the user, so a long page could not be
+    // scrolled at all.)
+    int fit_w = g_slot_count > 0 ? g_slot[0].explain.w : g_page_desc.w;
+    if (fit_w > 0 && (!g_prose_fitted || fit_w != g_prose_fit_w)) {
         g_prose_fitted = 1;
+        g_prose_fit_w = fit_w;
         if (refit_prose()) uapp_redraw(a);
     }
     struct ugfx_surface *s = uapp_surface(d);

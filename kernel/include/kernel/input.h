@@ -81,6 +81,21 @@ void input_poll_sources(void);
 // A key went down (1) or up (0), by evdev keycode.
 void input_report_key(uint16_t keycode, int down);
 
+// The AT set-1 scancode `keycode` translates to, without feeding it to
+// anybody. Returns 1 and fills `*out_sc` (and `*out_prefixed`, if given)
+// for a keycode this kernel can name; 0 for one it drops.
+//
+// EXPOSED SO THE PARITY CHECK CAN EXIST. A key must behave the same
+// whichever driver reported it -- that is the whole point of every
+// device meeting here -- and the translation below is a hand-kept table,
+// which is exactly the kind of thing that grows a hole nobody notices.
+// One did: the ISO key carrying `|` was missing, so a pipeline could be
+// typed on PS/2 and not on virtio-input. input_test.c now asserts that
+// EVERY scancode the active layout maps is reachable from some keycode,
+// so the next hole is a failed test rather than a key that silently
+// does nothing.
+int input_keycode_to_scancode(uint16_t keycode, uint8_t *out_sc, int *out_prefixed);
+
 // Relative pointer motion, in device counts. Speed and acceleration are
 // applied by the pointer state, not by the caller.
 void input_report_rel(int dx, int dy);
@@ -127,6 +142,24 @@ void input_report_wheel(int notches);
 // 1..83 are the AT set-1 make codes unchanged (see gen_kbs.py's note:
 // XKB keycodes are evdev + 8, and evdev matches set 1 for this block).
 #define INPUT_KEY_EVDEV_DIRECT_MAX 83
+
+// ...AND THE THREE PLAIN SET-1 KEYS THAT SIT PAST THE END OF IT.
+//
+// The direct range stops at 83 (KP_DOT) because evdev 84 and 85 are not
+// set-1 codes. But 86, 87 and 88 are again -- 0x56, 0x57, 0x58 -- so
+// they need a mapping rather than the drop they were getting, and they
+// are NOT behind an 0xE0 prefix, which is what makes them a different
+// case from the EXTENDED table in input.c.
+//
+// **KEY_102ND IS THE ONE THAT MATTERS.** It is the extra key an ISO
+// keyboard has between Left Shift and Z, and on every Nordic layout it
+// carries `<`, `>` and -- with AltGr -- **`|`**. Missing it meant a
+// pipeline could not be typed AT ALL on a `INPUT=virtio` boot, while
+// working perfectly on PS/2, because only the virtio path comes through
+// here. See docs/decisions.md.
+#define INPUT_KEY_102ND 86
+#define INPUT_KEY_F11 87
+#define INPUT_KEY_F12 88
 
 #define INPUT_KEY_KPENTER 96
 #define INPUT_KEY_RIGHTCTRL 97
