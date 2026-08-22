@@ -342,7 +342,25 @@ class DebugConsole:
         return self.cursor()
 
     def open_app(self, name):
-        return self.send(f"gui open {name}")
+        """Open a desktop app by NAME, and RAISE if there is no such app.
+
+        **THE NAME IS THE DESKTOP ENTRY'S, INCLUDING ITS CASE** --
+        "Terminal", not "terminal". `gui open` answers a wrong name with
+        `no app named "x". Known apps: ...` and returns normally, so a
+        caller that ignored the reply got a desktop with no window and a
+        test that failed several checks later on something unrelated.
+        That cost a real debugging round; raising with the guest's own
+        list of known apps turns it into one line.
+
+        The reply is still returned on success, so existing callers that
+        read it are unaffected.
+        """
+        out = self.send(f"gui open {name}") or ""
+        if "no app named" in out:
+            known = [ln.strip() for ln in out.splitlines() if ln.strip()]
+            raise ValueError(f"gui open {name!r} was refused by the guest: "
+                             + " | ".join(known[:12]))
+        return out
 
     def spawn(self, path, title=None, timeout=SPAWN_TIMEOUT_S):
         """Run a ring-3 binary and (optionally) wait for its window.

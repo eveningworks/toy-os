@@ -6,7 +6,17 @@ has carried since Phase 1 was written -- **how does `Ctrl-C` stop a
 running program?** -- and it answers it by refusing to treat that as one
 question.
 
-**Status: STAGES 0-2 ARE BUILT (2026-08-22). `Ctrl-C` works.** Stage 3
+**Status: STAGES 0-2 ARE BUILT (2026-08-22). `Ctrl-C` works, on the
+physical console AND in a Terminal window.** The terminal half of this
+document was superseded the same day by `docs/tty-design.md`, which
+turned "the console" into a TERMINAL OBJECT -- so the `SCHED_CHAN_KEY`
+this file names below no longer exists (a reader parks on its own
+terminal) and the INTR recognition left the keyboard driver for a real
+line discipline. What is written here is what was TRUE WHEN IT WAS
+PLANNED, and it is kept that way on purpose: the staging was right, and
+the fact that stage 2 shipped without a TTY layer is the finding.
+
+Stage 3
 (user-space handlers) and stage 4 (job control, stop/continue) are still
 plans. Each stage's own section below says what actually landed and
 where it differs from what was planned here, because two of them do.

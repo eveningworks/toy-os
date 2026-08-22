@@ -378,29 +378,44 @@ This is the milestone that keeps showing up as a prerequisite elsewhere.
 covers signals, the foreground process and `Ctrl-C` as ONE problem for
 the reason stated here.
 
-**Two of the three landed on 2026-08-22.** Signals exist, the console
-has a foreground process GROUP, and `Ctrl-C` interrupts a job on the
-physical console. What this milestone still owns is the LINE DISCIPLINE
-itself -- echo control, raw vs cooked, and a home to move the INTR
-recognition into (it is in the keyboard driver today, and `kernel/tty.h`
-says so) -- plus a per-TERMINAL version of the foreground group, which is
-what multiple virtual terminals need.
+**MOSTLY BUILT AS OF 2026-08-22, and the plan is
+`docs/tty-design.md`.** A terminal is an OBJECT (`kernel/tty/`): an
+input queue, a line discipline over it, an output sink, a `termios`, an
+owner and a foreground group, with the physical console as `tty0` and a
+pty per Terminal window. The INTR recognition left the keyboard driver
+for `ldisc.c`, so `Ctrl-C` in a window and `Ctrl-C` on the keyboard are
+one implementation -- disabling `intr()` reddens the checks for both.
+Canonical mode, echo, erase/kill, `VEOF`, `termios` and the window size
+all exist.
+
+What is LEFT of this milestone: virtual terminals on
+`Ctrl+Alt+F1..F4`, an ALTERNATE SCREEN (a full-screen program's output
+currently lands in the Terminal's scrollback and pushes the transcript
+up), scrolling regions, a controlling terminal per process, and
+per-terminal scrollback.
 
 Signals & process control can deliver a signal, but "deliver SIGINT to the foreground
 process" has no meaning without a foreground process. Shell pipes & job control's job
 control (`fg`/`bg`) is the same problem wearing a different hat. Doing
 those first means inventing a partial answer twice.
 
-Scope it as: a line discipline (echo, raw vs. cooked) that
-the shell reads through instead of touching the keyboard driver -- the
-line-*editing* part of that now exists as `kernel/lib/klineedit.c` and
-should be moved behind the discipline rather than rewritten; a
-per-terminal notion of the foreground process; and then multiple virtual
-terminals as the payoff, since once a terminal is a *thing* rather than
-the only thing, having four of them on `Ctrl+Alt+F1..F4` is mostly
-bookkeeping. The GUI Terminal and the physical console should end up as
-two clients of the same layer, which is a good test that the abstraction
-is real.
+That scoping said: a line discipline the shell reads through instead of
+touching the keyboard driver; a per-terminal foreground process; then
+virtual terminals as the payoff, "since once a terminal is a *thing*
+rather than the only thing, having four of them on `Ctrl+Alt+F1..F4` is
+mostly bookkeeping". It ended with "the GUI Terminal and the physical
+console should end up as two clients of the same layer, which is a good
+test that the abstraction is real."
+
+**They did, and it was the right test** -- it is what found the two
+things the design doc got wrong (a pty must be claimed by its first
+READER, not its opener; and an emulator needs a non-blocking read,
+because it cannot block on its window or on its child). One prediction
+in that paragraph was wrong in a useful way: `klineedit.c` was NOT
+"moved behind the discipline". Canonical mode was written beside it, and
+every shell turns it off -- which is what `readline` does on Linux, and
+is recorded at length in `docs/tty-design.md` as a cost that was chosen
+rather than overlooked.
 
 ### Demand paging & shared memory
 

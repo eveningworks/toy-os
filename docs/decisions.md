@@ -119,7 +119,7 @@ first before re-litigating it from scratch.
 - [Signals deliver on the way back to ring 3, and there are exactly two such places](decisions/kernel.md#signals-deliver-on-the-way-back-to-ring-3-and-there-are-exactly-two-such-places)
 - ["Not the running process" and "not the loaded address space" are different questions](decisions/kernel.md#not-the-running-process-and-not-the-loaded-address-space-are-different-questions)
 - [`SYS_SPAWN` carries the process group, because there is no fork to close the window](decisions/kernel.md#sys_spawn-carries-the-process-group-because-there-is-no-fork-to-close-the-window)
-- [`Ctrl-C` is recognised in the keyboard driver, and that is temporary](decisions/kernel.md#ctrl-c-is-recognised-in-the-keyboard-driver-and-that-is-temporary)
+- [`Ctrl-C` was recognised in the keyboard driver, and that WAS temporary](decisions/kernel.md#ctrl-c-was-recognised-in-the-keyboard-driver-and-that-was-temporary)
 - [The keyboard layout is keyed on evdev keycodes, so only the PS/2 driver sees a scancode](decisions/kernel.md#the-keyboard-layout-is-keyed-on-evdev-keycodes-so-only-the-ps2-driver-sees-a-scancode)
 
 **Filesystem & storage** -- [`decisions/storage.md`](decisions/storage.md) (39 entries)

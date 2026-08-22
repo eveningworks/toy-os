@@ -1590,7 +1590,10 @@ anyway and it silently corrupted nearby memory several calls deep into
 later keystrokes quietly not registering. Any new caller of
 `text_scrollback` (or anything else sized against `SCROLLBACK_CAP`) on a
 kernel-context call path needs a static instance, not a local variable.
-See `apps/editor.c`'s `g_editor_tb` for the fix and the commit for build 377 for the full story.
+The fix was a static instance in `apps/editor.c` (deleted 2026-08-22
+with the kernel-side editor); `/bin/edit` and `/bin/tosh` carry the same
+comment on their own statics, for the same reason and against a ring-3
+stack that also has one guard page.
 
 ## Console scrollback is a character ring in vga.c, and the boot log is echoed to it
 

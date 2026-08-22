@@ -81,8 +81,9 @@ production software. What that means concretely:
 **Works today** — booting on real hardware and QEMU, the shell and its
 line editor, both filesystems with `fsck` and live reformatting, the
 window manager and its apps, fonts loaded and rasterized from disk at
-runtime, ring-3 processes with pipes and `spawn`/`waitpid`, and the full
-test suite: a few hundred in-kernel
+runtime, ring-3 processes with pipes and `spawn`/`waitpid`, a TTY layer
+with pseudo-terminals — so `Ctrl-C` interrupts a job and a full-screen
+editor runs in a Terminal window — and the full test suite: a few hundred in-kernel
 tests, the ring-3 diagnostics, and the GUI tools `gui_regress.py` runs
 as one table.
 
@@ -396,8 +397,9 @@ too big for its window scrolls.
 wrapper per syscall. The shared kernel toolkit is compiled a second time
 under the C names, so a ring-3 `strlen` and the kernel's `k_strlen`
 cannot diverge — and the same rule gives ring 3 the kernel's own
-allocator as `malloc`/`free`, and its line editor, so the two shells and
-the physical one agree about what Ctrl-A does. Adding a program is a
+allocator as `malloc`/`free`, its line editor, and its ANSI parser -- so
+both shells agree about what Ctrl-A does, and the console and a Terminal
+window agree about what `ESC[4;12H` means. Adding a program is a
 `.c` file with no Makefile edit. Still deliberately not a libc — no
 `realloc`, `FILE`, `printf` or `errno`.
 
@@ -428,7 +430,7 @@ kernel/
                 (what apps may use), abi/ (the kernel<->userland
                 contract), kernel/ (internal, off apps/'s path)
 
-apps/           kernel-space programs: the shell, the editor, the demo.
+apps/           kernel-space programs: the shell, the demo, tab completion.
                 No GUI lives here any more.
 
 userland/       ring-3 programs, split by ROLE:
@@ -513,7 +515,8 @@ Selected tools, each documented in its own docstring:
 | [docs/tools.md](docs/tools.md) | Every script in `tools/`: what it does, why it exists, and the traps it encodes. |
 | [docs/settings-and-queries.md](docs/settings-and-queries.md) | Facts vs settings vs tunables, and how an app reads or changes either. |
 | [docs/commands.md](docs/commands.md) | The command index; [docs/commands/](docs/commands/) has one page each. |
-| [docs/signals-design.md](docs/signals-design.md) | Signals, a foreground process, and what `Ctrl-C` needs. Designed, not built. |
+| [docs/signals-design.md](docs/signals-design.md) | Signals, a foreground process, and what `Ctrl-C` needs. Delivery and dispositions BUILT; handlers and job control still planned. |
+| [docs/tty-design.md](docs/tty-design.md) | The TTY layer: a terminal as an object, pseudo-terminals, and one implementation of `Ctrl-C` for the console and a window alike. Stages 1–3 built. |
 | [docs/boot-flags.md](docs/boot-flags.md) | Every word the kernel looks for on the GRUB command line. |
 | [docs/filesystem-layout.md](docs/filesystem-layout.md) | What lives where on the OS's own disk. Checked against the built image by `tools/check_layout.py`. |
 | [docs/gui-guidelines.md](docs/gui-guidelines.md) | How the GUI should look and behave, and how to verify a change to it properly. |

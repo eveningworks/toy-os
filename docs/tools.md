@@ -205,6 +205,14 @@ manual steps to be worth automating:
   `gui open <name>` and involves no menu, no pixels and nothing to
   drift. `GuiFlow.open_app()` is for a test that wants the real menu
   exercised rather than bypassed -- which is why it still exists.
+
+  **THE NAME IS THE DESKTOP ENTRY'S, INCLUDING ITS CASE**: "Terminal",
+  not "terminal". `gui open` answers a wrong name with `no app named
+  "x". Known apps: ...` and returns normally, so a caller that ignored
+  the reply got a desktop with no window and a failure several checks
+  later, on something unrelated. `DebugConsole.open_app()` RAISES on
+  that now, quoting the guest's own list -- one line instead of a
+  debugging round.
 - **`vm.py spawn <path> [args]`** -- spawns a guest program and prints
   the FILE it writes its report to, waiting until that file stops
   changing. It replaces a three-command dance that was hand-rolled four

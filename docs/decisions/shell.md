@@ -173,7 +173,14 @@ windows" is, on its own, no evidence at all that the tour worked.
 
 ## The CLI editor's status bar needs its own line-wrapping pass, not a plain dump-and-let-the-console-wrap
 
-`apps/editor.c`'s `editor_render()` looks like it should be able to get
+**HISTORICAL, AND THE PROBLEM WENT AWAY WITH THE FILE.** `apps/editor.c`
+was deleted on 2026-08-22 when `edit` became `/bin/edit`, which
+ADDRESSES its status row (`ESC[<rows>;1H`) instead of padding newlines
+to reach it -- so the counting this entry is about does not arise. Kept
+because the failure it describes is what a full-screen program does
+wrong on any console, and the lesson generalises to the next one.
+
+`apps/editor.c`'s `editor_render()` looked like it should be able to get
 away with `vga_clear()` + walking the buffer through `vga_putc()` in
 order (which already handles wrap/scroll on its own) -- and the first
 version of it (**Build 377**) did exactly that. It's wrong for a

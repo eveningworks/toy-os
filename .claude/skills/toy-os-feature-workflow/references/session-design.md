@@ -1272,11 +1272,75 @@ the wrong keying looked right for years** -- and why the hole stayed
 invisible until a device reported a key from the part of the range where
 the coincidence stops mattering.
 
-**A BUILTIN THAT CANNOT READ ITS INPUT MUST NOT SHADOW A PROGRAM THAT
-CAN.** tosh's builtin `cat` required a filename, so `foo | cat` printed
-an error instead of its input. `/bin/cat` already read fd 0. Removing
-the builtin fixed it -- and exposed a hang worth knowing about: a shell
-with no terminal input of its own must hand children an EMPTY stdin, not
-somebody else's keyboard, or a child blocks forever on a console the
-window does not own and the shell waiting on it takes the window down
-with it.
+**A BUILTIN MUST NOT SHADOW A `/bin` PROGRAM THAT DOES MORE**, and this
+took three goes to learn. tosh's builtin `cat` required a filename, so
+`foo | cat` printed an error instead of its input. Its `ls` took no
+flags at all -- `ls -l` answered `ls: cannot read -l` -- and coloured
+nothing, while `/bin/ls` has ten flags and colours directories. Its
+`echo` ignored `-n`. Three instances of one mistake, and the third was
+found by the USER, from a screenshot, months after the first.
+
+**The tell is that a command is simply worse than it should be, with
+nothing to say why** -- the program is right and the shell is lying
+about it, so nobody suspects the shell. When a `/bin` program's own test
+suite passes while the command misbehaves at a prompt, look for a
+builtin in front of it before looking anywhere else.
+
+`cd` must be a builtin (it changes the shell's own directory); `pwd` and
+`help` have no `/bin` twin. That is the whole list that survives the
+rule. The kernel shell is the deliberate opposite: its ~30 builtins
+reach into subsystems no syscall exposes, so there is nothing to shadow.
+
+## 2026-08-22 -- the TTY layer, and what "one implementation" is worth
+
+**`Ctrl-C` worked on the physical console and did nothing in a Terminal
+window, and the ten-line fix was the wrong one.** The window knew its
+child's pid and could have signalled it directly. That would have made
+the Terminal a THIRD place deciding what `Ctrl-C` means, beside the
+keyboard driver and the console's owner. The question is not "how does
+this window send SIGINT" but **what is a terminal in this OS** -- and
+the answer has to serve the console and a window equally or it is not an
+abstraction.
+
+**A layer's claim is only worth what a control proves.** "Both Ctrl-Cs
+are one implementation" is a sentence anyone can write. Disabling
+`intr()` in the shared discipline reddens `uterm_test.py`'s
+window check AND `ctrlc_test.py`'s keyboard ones, from three lines. Two
+implementations that merely agreed would fail separately. **Design a
+control that can only pass if the claim is true**, and run it.
+
+**A HEADER THAT PREDICTS ITS OWN FUTURE IS WORTH WRITING.**
+`kernel/tty.h` held two globals and a comment saying that with several
+terminals "this state becomes per terminal, which is bookkeeping,
+because everything below is already asked through functions rather than
+read as globals." That prediction is what made the refactor cheap a
+month later -- the accessors already existed, so nothing above them
+changed. Two other comments in the same area (`keyboard.c`'s "this
+belongs to a line discipline, and there is not one yet", and
+`docs/decisions/kernel.md`'s "putting it in the driver first and moving
+it later is the right order") were both discharged in the same change.
+
+**Three things a design doc got wrong, all found by building:**
+
+- **A pty must be claimed by its first READER, not by whoever opened
+  it.** The opener is a terminal emulator, which never reads the slave.
+  Claiming at open made the shell's `tcsetpgrp()` answer `-EPERM` to the
+  only process with any business calling it, and `Ctrl-C` signalled an
+  empty group. The console's existing rule -- claimed on first read --
+  was right for both.
+- **The plan had `apps/shell.c` calling `tty_set_termios()` directly. It
+  cannot**: `apps/` is deliberately not on the `kernel/include/kernel/`
+  include path, so it was a compile error rather than a review catch.
+  The capability got a function on the app-facing side instead, which is
+  what `kernel/include/README.md` says to do and is a better answer than
+  the planned one.
+- **A terminal emulator needs a non-blocking read**, because it must
+  service its window AND drain its child and cannot block on either.
+  There was no such thing; `poll()` is the real answer and is a bigger
+  project.
+
+**AND THE THING THAT MAKES A FULL-SCREEN PROGRAM WORK IS A GRID.** A
+character STREAM cannot express "put the caret at row 4, column 12", so
+`/bin/edit` printed its escape sequences in a Terminal window. Scrollback
+is the only part that is legitimately a stream -- history is a record of
+what went past, a screen is a thing being drawn on.

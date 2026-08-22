@@ -493,3 +493,52 @@ downward, which makes "up" and "down" differ in exactly one place.
 
 **A bug that breaks two things symmetrically survives an eyeball check**,
 because the thing an eye catches is asymmetry.
+
+## 2026-08-22 -- the Terminal became a terminal
+
+**`apps/ui/` IS GONE.** The kernel image contains no widget code at all.
+The last file in it survived only because the kernel's own `edit` drew
+with it; `edit` is `/bin/edit` now, over `utext` -- the model Notepad
+already used. **When one caller is holding a whole directory alive, ask
+what it would take to move that caller.**
+
+**THE TERMINAL RUNS `/bin/tosh` ON A PTY**, so the shell in a window is
+a real process with a pid, visible in `ps`. It used to LINK tosh as a
+library and call `tosh_run_line()` from its key handler. What that
+deleted is the argument for it: the linked-in shell, the output sink,
+`stdin_ok`'s empty-pipe stdin, a second line editor and a second command
+history -- none of it wrong, all of it there because the window was not
+a terminal.
+
+**ITS SCREEN IS A GRID OF CELLS, NOT A CHARACTER STREAM.** That is what
+lets a full-screen program address it. Scrollback is made of rows that
+scrolled off, so history and screen meet with no seam -- they are the
+same kind of thing.
+
+**AND THE ANSI PARSER IS THE KERNEL'S, COMPILED TWICE.**
+`kernel/lib/ansi.c` is a pure state machine that knows nothing about a
+screen; the console and the window resolve `ESC[4;12H` through the same
+code. A second parser in ring 3 would have been a second set of answers
+to "what does `ESC[0m` clear". **Before writing a parser in ring 3,
+check whether the kernel already has one that touches no hardware** --
+`geom.c`, `klineedit.c`, `calc_engine.c`, `etc_config.c` and now
+`ansi.c` all cross that way, and the Makefile rule already exists.
+
+**A BACKGROUND IS A RECTANGLE, NOT A COLOUR ARGUMENT.**
+`ugfx_draw_string(s, x, y, text, fg, bg)` blends the GLYPH's pixels
+against `bg`; it does not fill the cell. For ordinary text the two are
+indistinguishable, and for reverse video they are not -- a status bar
+comes out as dark letters on black. Fill the run's rect first.
+
+**KEYS GO THROUGH AS BYTES AND THE WINDOW DECIDES NOTHING.** The shell
+has the line editor (`klineedit.c`, compiled twice), so a Terminal that
+interpreted Ctrl-A would be the second implementation that file exists
+to prevent. The toolkit's key codes ARE the byte codes the editor
+switches on, so there is no translation layer -- which is the point: a
+translation layer would be a third place for the keymap to drift.
+
+**AN APP WITH A CHILD NEEDS A NON-BLOCKING READ, because there is no
+`poll()`.** A window must service the compositor and drain its child and
+cannot block on either. `SYS_SET_NONBLOCK` plus a `tick_ms` cadence is
+the shape until `poll()` exists; an idle Terminal waking 33 times a
+second is the honest cost, and it is written down rather than hidden.

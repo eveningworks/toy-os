@@ -97,10 +97,10 @@ to this file too).
    choice -- build it as a reusable **`userland/ui/`** widget vs. a
    one-off -- belongs in this round of questions too, per the project's
    own instruction to ask before adding widgets. (This used to say
-   `apps/ui/`, and that is now wrong: the desktop is a ring-3 process,
-   `apps/ui/` is down to the single widget the kernel's own `edit` draws
-   with, and THERE IS NO LONGER ANY SUCH THING AS A KERNEL-SIDE WIDGET.
-   See CLAUDE.md, which is the current word on this.)
+   `apps/ui/`, and that is now wrong TWICE OVER: the desktop is a ring-3
+   process, and `apps/ui/` was DELETED on 2026-08-22 when `edit` -- its
+   last caller -- became `/bin/edit`. The kernel image contains no widget
+   code at all. See CLAUDE.md, which is the current word on this.)
    See `references/questions-that-worked.md` for real examples from past
    sessions, including ones the user directly praised (phasing options,
    storage-design tradeoffs, encoding choices).
@@ -448,9 +448,10 @@ Where the project stands now, so a session does not re-derive it:
 - **The desktop is a ring-3 process and `apps/wm/` is GONE** (~10,400
   lines, with `apps/gui_apps.c` and `apps/ui/`'s widget set). `gui`
   spawns `/bin/wm/system/toywm`. There is ONE window manager again --
-  the "make every fix twice" hazard is over. `apps/ui/` is down to
-  `ui_scrollback` (the kernel's `edit` draws with it); a new widget goes
-  in `userland/ui/`, always.
+  the "make every fix twice" hazard is over. `apps/ui/` was down to
+  `ui_scrollback` and is now GONE ENTIRELY (2026-08-22), because `edit`
+  -- its last caller -- became `/bin/edit`; a new widget goes in
+  `userland/ui/`, always.
 - **`kill <pid>` and `spawn <path>` are shell commands.** They exist
   because the milestone's exit criterion was untestable without them:
   `gui kill` cannot end the WM (dispatched from inside its own loop, and
@@ -833,6 +834,33 @@ Worth checking against before debugging from scratch:
 - **An execution context the scheduler has no entry for cannot be
   treated as schedulable.** The legacy `process_run_ring3()` path has no
   `procs[]` slot, so it must not be switched away from.
+
+**2026-08-22 (the TTY layer, in three commits). Read this before
+anything terminal-, shell- or Ctrl-C-shaped.**
+
+Where the project stands after it, so a session does not re-derive it:
+
+- **A TERMINAL IS AN OBJECT** (`kernel/tty/`): an input queue, a LINE
+  DISCIPLINE over it, an output sink, a `termios`, an owner and a
+  foreground group. The physical console is `tty0`; a pty is the same
+  object with a different DRIVER. `docs/tty-design.md` is the plan.
+- **`Ctrl-C` WORKS IN A TERMINAL WINDOW**, through the same code as the
+  keyboard's. The GUI Terminal is a real terminal emulator running
+  `/bin/tosh` on a pty, so the shell in a window is a real process.
+- **THE ANSI PARSER AND THE LINE EDITOR ARE BOTH COMPILED TWICE.**
+  `kernel/lib/ansi.c` and `kernel/lib/klineedit.c` serve ring 0 and
+  ring 3. Before writing either in ring 3, check what already exists.
+- **`edit` IS `/bin/edit`** and `apps/ui/` is gone with it. The kernel
+  draws no widgets.
+- **`/bin/tosh` HAS THREE BUILTINS** -- `cd`, `pwd`, `help` -- and each
+  has to be one. A builtin must not shadow a `/bin` program that does
+  more; `cat`, `ls` and `echo` all did, and all three are gone.
+- **New syscalls**: `SYS_OPENPTY`, `SYS_TCGET/SETATTR`,
+  `SYS_TCGET/SETWINSZ`, `SYS_SET_NONBLOCK`. `SYS_TCSETPGRP` gained an
+  fd. `SCHED_CHAN_KEY` is gone -- a reader parks on ITS terminal.
+
+The lessons are in `references/session-design.md`,
+`session-testing.md` and `session-gui.md` under the same date.
 
 **2026-08-18 (init stage 2: a boot target, services, supervision). THE
 THEME OF THIS SESSION IS THAT AUTOMATING A LIFECYCLE REMOVES INTERLOCKS

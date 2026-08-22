@@ -3862,7 +3862,7 @@ caller that predates process groups passes "inherit" without an edit,
 and the "reserved must be zero" check became a range check on a real
 value.
 
-## `Ctrl-C` is recognised in the keyboard driver, and that is temporary
+## `Ctrl-C` was recognised in the keyboard driver, and that WAS temporary
 
 On Unix, `Ctrl-C` is not a kernel feature at all: a terminal's line
 discipline recognises the INTR character and signals the terminal's
@@ -3870,12 +3870,20 @@ foreground process group. Every piece of that sentence is a separate
 mechanism, and it is why `Ctrl-C` is the last thing a system gets rather
 than the first.
 
-toy-os has no line discipline -- fd 0 is raw, with no echo control and
-no cooked mode. The recognition therefore lives in `keyboard.c`, which
-is the one place a key arrives, and `kernel/tty.h` says plainly that it
-belongs somewhere else. Putting it in the driver first and moving it
+toy-os had no line discipline -- fd 0 was raw, with no echo control and
+no cooked mode. The recognition therefore lived in `keyboard.c`, which
+is the one place a key arrives, and `kernel/tty.h` said plainly that it
+belonged somewhere else. Putting it in the driver first and moving it
 later is the right order; discovering it later as a layering mistake
 would not be.
+
+**IT MOVED ON 2026-08-22, AND THE PLAN HELD.** `kernel/tty/ldisc.c` is
+the discipline, the driver just produces keystrokes, and the payoff was
+the one this entry predicted: a Terminal window gets the SAME `Ctrl-C`
+rather than a second answer to the same question -- disabling `intr()`
+reddens the checks for both. `docs/tty-design.md` has the whole staging;
+this entry is kept because the ORDER was the decision, and it was
+right.
 
 **The two outcomes of `tty_intr()` are the two states a shell is in**,
 and keeping both is what makes the feature additive rather than a

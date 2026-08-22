@@ -648,16 +648,21 @@ and settable only by the owner. Setting an owner puts that owner's own
 group in front, so the console is never in the state "owned, with
 nothing in front" -- in which a Ctrl-C would have nowhere to go.
 
-**`tty_intr()` has TWO outcomes and both are right.** With a job in the
-foreground (a group that is not the owner's own) it signals the group
-and the keystroke is DISCARDED, which is what a real line discipline
-does with INTR. With no job it signals nothing and the byte goes
-through, so `Ctrl-C` at a prompt still abandons the line -- the same
-`KLINE_CANCEL` both shells have always had.
+**INTR HAS TWO OUTCOMES AND BOTH ARE RIGHT.** With a job in the
+foreground (a group that is not the owner's own) the discipline signals
+the group and the keystroke is DISCARDED, which is what a line
+discipline does with INTR. With no job it signals nothing and the byte
+goes through, so `Ctrl-C` at a prompt still abandons the line -- the
+same `KLINE_CANCEL` both shells have always had.
 
-**THE RECOGNITION LIVES IN THE KEYBOARD DRIVER AND SHOULD NOT.** On
-Unix this is a line discipline's job, and there is no line discipline
-here yet (fd 0 is RAW). It is in the driver because that is the one
-place a key arrives; when a discipline exists, the decision moves into
-it and `kernel/tty.h` keeps only the ownership half. Written down now
-rather than discovered later as a layering mistake.
+**THE RECOGNITION USED TO LIVE IN THE KEYBOARD DRIVER AND NO LONGER
+DOES.** This section said it "should not", that on Unix it is a line
+discipline's job, and that the decision would move when a discipline
+existed. It did: `kernel/tty/ldisc.c`. The driver produces keystrokes;
+the TERMINAL decides what one MEANS -- which is what lets a Terminal
+window have the same `Ctrl-C` as the physical keyboard rather than a
+second answer to the same question. See `docs/tty-design.md`, and
+**this section is now about the console specifically: the state it
+describes is per TERMINAL**, reached through `tty_owner()` /
+`tty_fg_pgid()` with the console-shaped names kept as one-liners over
+tty0.

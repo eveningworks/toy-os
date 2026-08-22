@@ -673,9 +673,10 @@ under an old doc" trap a future session could hit again elsewhere:
   on-disk rework (the multi-GB file support entry, the git history) had already solved this as a side effect, for
   unrelated reasons, in a different session that had no idea an old
   ELF-binaries plan was depending on that limit staying in place. Three
-  comments (`kernel/lib/etc_config.c`, `apps/editor.c`/`.h`) still
-  cited the old 2048-byte ceiling as real months later -- corrected in
-  the same change that shipped this (see the git history).
+  comments (`kernel/lib/etc_config.c`, and the since-deleted
+  `apps/editor.c`/`.h`) still cited the old 2048-byte ceiling as real
+  months later -- corrected in the same change that shipped this (see
+  the git history).
 - The plan assumed `elf_load()`'s ELF blob would need copying out of
   TFS2's live in-RAM table into a scratch buffer before executing,
   since that memory "isn't stable the way a GRUB module's reserved

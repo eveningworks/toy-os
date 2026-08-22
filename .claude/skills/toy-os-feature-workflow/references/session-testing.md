@@ -1272,3 +1272,60 @@ until the child is really `SCHED_BLOCKED` and asserts that it got there.
 "When a control fires nothing, ask what OTHER path could satisfy the
 same assertion" already existed here; this is the same rule catching a
 fixture that never reached the state under test.
+
+## 2026-08-22 -- testing a terminal, and three tests that measured nothing
+
+**A TEST THAT ASSERTS A SIDE EFFECT DOES NOT TEST THE RENDERING.**
+`/bin/edit` in a Terminal window: type, F2, F3, then read the file back
+through a different path. That check passes whether the escape sequences
+were OBEYED or PRINTED AS TEXT -- the editor writes the file either way.
+Two assertions beside it are what make it mean something: the CARET must
+be near cell 5 (an editor whose `ESC[1;6H` was printed would have one
+hundreds of cells along), and the status bar must really be reverse
+video. The general form is this file's oldest rule -- ask what a broken
+version would still pass -- and it is easiest to forget when the feature
+under test genuinely works.
+
+**AND THE PIXEL CHECK FOR THAT WAS WRONG THE OTHER WAY.** Counting
+pixels of the reverse-video colour does not distinguish a status bar
+from text: glyphs are drawn in the same grey, so a frame with NO BAR AT
+ALL scored 4304. What only a filled background produces is a long
+unbroken horizontal RUN -- a glyph is a few pixels wide, a bar is
+hundreds. **When a colour check does not discriminate, look for a
+geometric property of the thing rather than more of its colour.**
+
+**A PIXEL VALUE FOUND A BUG THAT LOOKED FINE IN THE SCREENSHOT**, which
+is the repo's standing rule earning its place again: the status bar
+rendered as dark letters on black instead of black on grey, because
+`ugfx_draw_string()` blends the GLYPH's pixels against the background it
+is handed and does not fill the cell. Legible, plausible, and not what
+`ESC[7m` asks for. `im.getpixel()` on three rows settled it in seconds.
+
+**TWO STALE PREMISES, AND THE SECOND HAD BEEN FIXED ELSEWHERE MONTHS
+EARLIER.** `stdin_test.py` typed a bare `touch` to prove the kernel
+shell was NOT reading the keyboard -- on the reasoning that `touch` was
+a kernel builtin tosh could not find. `touch` became a `/bin` program;
+tosh found it, ran it, and left the probe file behind, which reads as
+"the kernel shell is still listening", i.e. exactly the failure the
+check exists to catch, with nothing wrong. `console_shell_test.py` had
+the identical defect fixed in `eaa7529`; this tool is run ON DEMAND, so
+it kept the stale version. **A fix to one harness is worth grepping the
+others for.**
+
+**A PREMISE CAN ALSO GO STALE IN THE GOOD DIRECTION.** A bare `cat` in
+the Terminal used to return at once, because the window had no terminal
+and handed children a closed pipe; with a real pty it WAITS for input,
+like everywhere else. The check that asserted "returns instead of
+hanging" was right when written and is now testing the wrong behaviour.
+It types Ctrl-D, as a person would. **When a test fails after a change
+that made something more correct, check whether the test encoded the
+workaround.**
+
+**AND ONE FLAKE MEASURED HONESTLY RATHER THAN BLAMED.** A fault-
+injection KTEST failed 2 runs in 10 on the new tree against 0 in 4 on
+the previous commit -- which at those counts does not distinguish the
+two (0 of 4 is what a 20% rate looks like 41% of the time). The
+plausible mechanism, that the injector arms the NEXT kmalloc and a
+concurrent kernel allocation eats it, is UNPROVEN and says so in
+`docs/bugs.md`. Resist the pull to either claim it pre-existing or
+own it; the number is the honest answer.
