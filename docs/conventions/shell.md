@@ -317,3 +317,27 @@ The hazard predates removing the builtin (`catin` reaches it too), but
 removing the builtin is what made it easy to hit -- and a positive
 control confirms the cost: with the guard removed, `uterm_test` cannot
 run the next command OR close the window with Alt+F4.
+
+
+## `#` IS RING 0 AND `$` IS RING 3, AND THE PROMPT IS WHERE THAT LIVES.
+
+Three shells run on this machine: the kernel's own (`apps/shell.c`,
+ring 0), `/bin/tosh` (ring 3, the console on a `text` boot) and the GUI
+Terminal (ring 3, the tosh LIBRARY in a window). All three print the
+current directory; the last character says which.
+
+**THE MARKER IS ON THE PROMPT BECAUSE A BANNER SCROLLS AWAY.** Both
+existed before and neither helped: the kernel shell and the GUI Terminal
+drew an identical `<cwd>> `, and the kernel shell's banner called it
+"tosh" -- which is a real program, with its own page, that it is not.
+A screenshot of one was indistinguishable from a screenshot of the other.
+
+`#`/`$` rather than a spelling invented here: it is what every Unix uses
+for privileged versus ordinary, so it needs no explaining, and one
+character costs nothing on an 80-column console.
+
+**IT IS NOT COSMETIC.** `Ctrl-C` works only at a `$` prompt -- the
+kernel shell has no scheduler slot, so nothing owns the console and
+there is no foreground group to signal. Somebody reading `/>` had no way
+to know which shell they were in, and "Ctrl-C does nothing" is what that
+looks like from the outside.

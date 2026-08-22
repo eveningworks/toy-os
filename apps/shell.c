@@ -364,10 +364,22 @@ static struct kline_edit g_ed;
 static int shown_len = 0;
 static int shown_cursor = 0;
 
+// **`#` MEANS RING 0, `$` MEANS RING 3**, and the marker is on the
+// PROMPT because that is what you are looking at all day -- a banner
+// scrolls away, and the state it described goes with it.
+//
+// It is Unix's own convention (`#` for the privileged shell, `$` for an
+// ordinary one) rather than a spelling invented here, so it reads
+// without being explained. All three shells on this machine show the
+// cwd, so the final character is the whole difference and the eye can
+// land on it: `/# ` here, `/$ ` in /bin/tosh and in the GUI Terminal.
+//
+// They used to be indistinguishable -- this shell and the GUI Terminal
+// both drew `<cwd>> `.
 static void print_prompt(void) {
     vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
     vga_write(cwd);
-    vga_write("> ");
+    vga_write("# ");
     vga_set_color(shell_fg, VGA_BLACK);
 }
 
@@ -660,14 +672,15 @@ void shell_main(void) {
     shell_session_init(); // once per boot; the demo and the serial console reach it first, see its comment
 
     vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
-    vga_write("tosh -- the toy-os shell. Type 'help' to get started.\n");
+    // NOT "tosh". That is a real program -- /bin/tosh, a RING-3 shell
+    // with its own page -- and this is the kernel's own, which had been
+    // borrowing the name. Two shells introducing themselves identically
+    // is how somebody ends up wondering why Ctrl-C does nothing here.
+    vga_write("toy-os kernel shell (ring 0) -- type `help`.\n");
     vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
 
     for (;;) {
-        vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
-        vga_write(cwd);
-        vga_write("> ");
-        vga_set_color(shell_fg, VGA_BLACK);
+        print_prompt();
 
         shell_read_line(line, LINE_MAX);
         history_add(line);

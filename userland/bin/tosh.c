@@ -49,7 +49,32 @@ static void out_fd1(void *ctx, const char *text, int len) {
 
 static void put(const char *s) { sys_write(1, s, (size_t)strlen(s)); }
 
-static const char *prompt(void) { return "$ "; }
+// `<cwd>$ `. The `$` is what says RING 3 -- the kernel's own shell shows
+// `<cwd># `, Unix's convention for the privileged one -- and the cwd is
+// what this prompt was missing: it was a bare `$`, the one shell on the
+// machine that could not tell you where it was standing.
+//
+// ASKED OF THE KERNEL EVERY TIME, not cached. The cwd belongs to the
+// PROCESS (SYS_CHDIR), so a copy here would be a second record of it
+// and would show as a prompt naming a directory this shell is not in.
+// Cheap: one syscall per prompt, and a prompt is drawn when a human has
+// just pressed a key.
+//
+// Static buffer because redraw() calls this several times per repaint
+// and compares its LENGTH against what is on screen -- a fresh buffer
+// per call would be a dangling pointer the moment it returned.
+static char g_prompt[TOSH_PATH_MAX + 4];
+
+static const char *prompt(void) {
+    char here[TOSH_PATH_MAX];
+    if (sys_getcwd(here, sizeof here) < 0) { here[0] = '/'; here[1] = '\0'; }
+    int n = 0;
+    for (const char *p = here; *p && n < (int)sizeof g_prompt - 3; p++) g_prompt[n++] = *p;
+    g_prompt[n++] = '$';
+    g_prompt[n++] = ' ';
+    g_prompt[n] = '\0';
+    return g_prompt;
+}
 
 // Repaints prompt + line and leaves the caret at ed.cursor.
 //
@@ -139,7 +164,7 @@ int main(int argc, char **argv) {
     // call tcsetpgrp: the first sys_read(0, ...) below does it, and
     // job_foreground()/job_done() in the tosh library move it per job.
 
-    put("tosh -- toy-os shell in ring 3. Ctrl-D to exit.\n");
+    put("tosh -- the toy-os shell, in ring 3. Ctrl-D to exit.\n");
     fresh_prompt();
 
     for (;;) {

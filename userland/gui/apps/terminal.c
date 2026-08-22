@@ -118,7 +118,13 @@ static void draw(struct ugfx_surface *s, int focused) {
     g_prompt_y = py;
     ugfx_draw_string(s, MARGIN, py, prompt_cwd(), ugfx_rgb(120, 200, 120), ugfx_rgb(0, 0, 0));
     int px = MARGIN + ugfx_text_width(prompt_cwd());
-    ugfx_draw_string(s, px, py, "> ", ugfx_rgb(120, 200, 120), ugfx_rgb(0, 0, 0));
+    // `$`, NOT `>`. This is a RING-3 shell, and the kernel's own draws
+    // `<cwd># ` -- Unix's convention for the privileged one. Both used to
+    // draw `<cwd>> `, so a screenshot of this window and one of the
+    // kernel shell were indistinguishable, which is exactly how somebody
+    // ends up asking why Ctrl-C does nothing in the one that has no
+    // console to interrupt.
+    ugfx_draw_string(s, px, py, "$ ", ugfx_rgb(120, 200, 120), ugfx_rgb(0, 0, 0));
     px += 2 * ugfx_char_w();
     ugfx_draw_string_clipped(s, px, py, s->w - px - MARGIN, g_ed.buf,
                               ugfx_rgb(240, 240, 240), ugfx_rgb(0, 0, 0));
@@ -152,7 +158,7 @@ static const char *prompt_cwd(void) {
 
 static void run_current_line(struct uapp *a) {
     put(prompt_cwd());
-    put("> ");
+    put("$ ");
     put(g_ed.buf);
     put("\n");
 
@@ -226,7 +232,7 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
 
     case KLINE_CANCEL:
         put(prompt_cwd());
-        put("> ");
+        put("$ ");
         put(g_ed.buf);
         put("^C\n");
         kline_init(&g_ed);

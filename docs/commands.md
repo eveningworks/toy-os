@@ -5,6 +5,26 @@ Everything `tosh` responds to, grouped the way `help` itself groups them
 version of what `help` prints — the README links here rather than
 carrying it inline.
 
+**WHICH SHELL AM I IN? LOOK AT THE LAST CHARACTER OF THE PROMPT.**
+
+| prompt | shell | where |
+|---|---|---|
+| `/#` | the **kernel shell**, ring 0 | `apps/shell.c` -- this page |
+| `/$` | **`/bin/tosh`**, ring 3 | the console on a `text` boot |
+| `/$` | the **GUI Terminal**, ring 3 | a window on the desktop |
+
+`#` for the privileged shell and `$` for an ordinary one is Unix's own
+convention, so it reads without being explained. All three show the
+current directory, so the final character is the whole difference.
+
+It matters more than tidiness: **`Ctrl-C` only works at a `$` prompt.**
+The kernel shell has no scheduler slot, so nothing owns the console and
+there is no foreground group to signal (`kernel/tty.h`).
+
+They used to be indistinguishable -- the kernel shell and the GUI
+Terminal both drew `<cwd>> `, and the kernel shell introduced itself as
+"tosh", which is a real program that is not it.
+
 **This is the KERNEL's shell** (`apps/shell.c`). On a `graphical` boot
 it is what sits behind the desktop and what *Exit to shell* returns to;
 on a `text` boot init starts `/bin/tosh` on the console instead and this
