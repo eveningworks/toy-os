@@ -47,6 +47,7 @@ void ansi_init(struct ansi_parser *p, enum vga_color fg, enum vga_color bg) {
     p->state = GROUND;
     p->nparam = 0;
     p->bold = 0;
+    p->reverse = 0;
     p->private = 0;
     for (int i = 0; i < ANSI_MAX_PARAMS; i++) p->param[i] = 0;
     p->fg = fg;
@@ -65,8 +66,13 @@ static int apply_sgr(struct ansi_parser *p) {
         int v = p->param[i];
         if (v == 0) {
             p->bold = 0;
+            p->reverse = 0;
             p->fg = DEFAULT_FG;
             p->bg = DEFAULT_BG;
+        } else if (v == 7) {
+            p->reverse = 1;
+        } else if (v == 27) {
+            p->reverse = 0;
         } else if (v == 1) {
             // BOLD IS RETROACTIVE within a sequence: `ESC[31;1m` and
             // `ESC[1;31m` must both give bright red, so the brightness
@@ -100,6 +106,22 @@ static int apply_sgr(struct ansi_parser *p) {
     // foreground is raised: a sequence that already asked for 90..97 has
     // said what it wants.
     if (p->bold && p->fg < 8) p->fg = (enum vga_color)(p->fg + 8);
+
+    // REVERSE VIDEO IS RESOLVED HERE, not left to the caller, and it is
+    // the last thing applied for the same reason bold is retroactive:
+    // `ESC[7;31m` and `ESC[31;7m` must look the same. Swapping in the
+    // parser means every caller -- the console, a GUI terminal -- gets
+    // it without knowing the attribute exists, which is what stops two
+    // of them disagreeing about whether `ESC[0m` clears it.
+    //
+    // It is what a STATUS BAR is made of: `/bin/edit` draws its file
+    // name and key hints this way, and so does every editor that has
+    // ever had one.
+    if (p->reverse) {
+        enum vga_color t = p->fg;
+        p->fg = p->bg;
+        p->bg = t;
+    }
 
     p->nparam = 0;
     for (int i = 0; i < ANSI_MAX_PARAMS; i++) p->param[i] = 0;

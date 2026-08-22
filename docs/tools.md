@@ -807,6 +807,18 @@ manual steps to be worth automating:
   `kernel/tty/ldisc.c` reddens this check AND `ctrlc_test.py`'s
   physical-keyboard ones, from the same three lines.
 
+  **And the check that says a FULL-SCREEN program works here**: it runs
+  `/bin/edit` in the window, types, saves with F2 and exits with F3, then
+  reads the file back through a completely different path. Two assertions
+  beside it are what make that mean something, because a file gets
+  written whatever the screen did with the escape sequences: the CARET
+  must be near cell 5 (an editor whose `ESC[1;6H` was printed rather than
+  obeyed would have a caret hundreds of cells along), and the status bar
+  must be a long unbroken RUN of the reverse-video colour. **Counting
+  bar-coloured PIXELS does not work and was tried** -- glyphs are drawn
+  in the same grey, so a frame with no bar at all scored 4304. A run
+  discriminates: a glyph is a few pixels wide, a bar is hundreds.
+
   Two premises here went stale in the GOOD direction when the Terminal
   became an emulator, and both are recorded in the file. A bare `cat` now
   WAITS for input instead of returning at once -- it has a real terminal

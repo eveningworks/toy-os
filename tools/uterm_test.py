@@ -71,6 +71,48 @@ def type_line(dbg, text, settle=1.2):
     time.sleep(settle)
 
 
+def bar_run(qmp, tmp, name, box):
+    """The longest horizontal RUN of the reverse-video colour.
+
+    `ESC[7m` swaps foreground and background, so a status bar is a solid
+    band of the default foreground (light grey, 0xAAAAAA) with black
+    letters on it. Counting PIXELS of that colour does not distinguish a
+    bar from ordinary text -- glyphs are drawn in the same grey, and a
+    screenful of them scores thousands. What only a filled background
+    produces is a long unbroken RUN: a glyph is a few pixels wide, a bar
+    is hundreds.
+
+    That distinction is the check. An earlier version counted pixels,
+    scored 4304 on a frame with no bar at all, and would have passed
+    whatever the editor drew.
+
+    It is also why the box here is the WHOLE content rect: the transcript
+    box used elsewhere in this file deliberately cuts off the bottom
+    rows, which is exactly where a status bar lives.
+    """
+    from PIL import Image
+    p = os.path.abspath(os.path.join(tmp, name))
+    qmp.screenshot(p)
+    best = 0
+    with Image.open(p) as im:
+        crop = im.convert("RGB").crop(box)
+        w, h = crop.size
+        raw = crop.tobytes()
+        for y in range(h):
+            run = 0
+            base = y * w * 3
+            for x in range(w):
+                i = base + x * 3
+                if (abs(raw[i] - 0xAA) < 12 and abs(raw[i + 1] - 0xAA) < 12
+                        and abs(raw[i + 2] - 0xAA) < 12):
+                    run += 1
+                    if run > best:
+                        best = run
+                else:
+                    run = 0
+    return best
+
+
 def ink(qmp, tmp, name, box):
     """Non-background pixels in the box -- a proxy for how much text is
     on screen, which is all this test needs."""
@@ -294,6 +336,63 @@ def run(dbg, qmp, tmp, shot_dir, res):
     # ignores SIGINT and is not in the job's group.
     type_line(dbg, "file_test2", settle=2.0)
     res.check("...and the SHELL survived it", dbg.window(TITLE) is not None)
+
+    # --- A FULL-SCREEN PROGRAM IN A WINDOW ---------------------------
+    #
+    # `/bin/edit` ADDRESSES its screen -- ESC[4;12H, ESC[K, ESC[7m --
+    # which a character stream cannot express. This window's screen is a
+    # GRID now, driven by the kernel's own ANSI parser compiled into
+    # ring 3, so the escapes are obeyed rather than printed. Before that
+    # they appeared as literal text and the editor was unusable here.
+    #
+    # ASSERTED THROUGH THE FILESYSTEM: what a full-screen program draws
+    # is the one thing a screenshot cannot check cheaply, and "the bytes
+    # reached the disk" is the claim that matters. Read back through a
+    # completely different path, so the editor claiming success proves
+    # nothing on its own.
+    full = (c["x"], c["y"], c["x"] + c["w"], c["y"] + c["h"])
+    plain = bar_run(qmp, tmp, "ut_nobar.png", full)
+    dbg.send("sh rm /uterm_edit.txt")
+    dbg.settle()
+    type_line(dbg, "edit /uterm_edit.txt", settle=2.5)
+    for ch in "hello":
+        key(dbg, HEX.get(ch, ch))
+    dbg.settle()
+
+    # **THE CHECK THAT PROVES THE ESCAPES WERE OBEYED RATHER THAN
+    # PRINTED.** Saving would pass either way -- the editor writes the
+    # file whatever the screen did with its output, which is exactly the
+    # "it responds is not it is drawn" trap docs/gui-guidelines.md warns
+    # about. So: `edit` parks the caret at the CURSOR, which after typing
+    # five characters into an empty file is row 0, column 5. A terminal
+    # that printed `ESC[1;6H` as text would have a caret hundreds of
+    # cells along, at the end of everything it had ever shown.
+    cur = cursor_at()
+    res.check("the editor's cursor sequences MOVED the caret, not printed",
+              cur is not None and cur < 40,
+              f"caret at cell {cur} -- expected row 0, near column 5")
+
+    # ...and the status bar is REVERSE VIDEO, which is the other half of
+    # "the escapes were obeyed": ESC[7m has to swap the colours AND the
+    # swapped background has to be painted. `bar` is measured against
+    # `plain`, taken before the editor opened -- a threshold with no
+    # control is a guess.
+    bar = bar_run(qmp, tmp, "ut_editbar.png", full)
+    res.check("...and its status bar is drawn in reverse video",
+              bar > 100 and bar > plain * 3,
+              f"longest bar-coloured run was {plain}px before, {bar}px now")
+
+    key(dbg, "0x9a")   # F2 -- save
+    time.sleep(1.5)
+    key(dbg, "0x9b")   # F3 -- exit
+    time.sleep(1.5)
+    out = dbg.send("sh cat /uterm_edit.txt") or ""
+    res.check("a full-screen editor runs IN THE WINDOW and saves",
+              "hello" in out, out.strip()[:70])
+
+    # The other half: an editor that never returned, or left the terminal
+    # raw, would satisfy the check above and leave a dead window.
+    res.check("...and the shell came back after it", dbg.window(TITLE) is not None)
 
     # And the terminal is still alive and interactive afterwards.
     type_line(dbg, "pwd")

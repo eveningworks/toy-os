@@ -533,6 +533,7 @@ whenever a headline here tells you something you did not already know.
 - **`apps/ui/` IS GONE, and the GUI toolkit is `userland/ui/`** -- the kernel image contains no widget code at all.
 - **Ring-3 GUI apps are written against Toykit's `uapp`, and a new one is a `.c` file in `userland/gui/` with NO Makefile edit.**
 - **TERMINAL IS A TERMINAL EMULATOR, NOT A SHELL WITH A WINDOW** -- it runs `/bin/tosh` on a pty, so the shell in a window is a real process and `Ctrl-C` there is the same code as the console's.
+- **THE TERMINAL'S SCREEN IS A GRID, AND THE ANSI PARSER IS THE KERNEL'S COMPILED TWICE** -- `/bin/edit` runs in a window because a full-screen program can address a grid; `kernel/lib/ansi.c` answers for both terminals.
 - **An app with a cadence sets `tick_ms` and BLOCKS between frames.**
 - **An app refuses its OWN second copy -- the launcher never does.**
 - **`uui_table` sorts on a header click, and an app supplies only a COMPARATOR.**

@@ -245,12 +245,30 @@ this the obvious way), not from how much history it accumulated.
   Three things follow. **The window sends KEYS AS BYTES and decides
   nothing** -- the shell has the line editor, so a Terminal that
   interpreted Ctrl-A would be the second implementation `klineedit.c`
-  exists to prevent. **The emulation is `\n`, `\r`, `\b` and overwrite,
-  because that is all `/bin/tosh` emits**; ANSI is a roadmap item and
-  should share `kernel/lib/ansi.c` rather than grow a second parser. And
-  **it drains its child on a 30ms tick, because there is no `poll()`** --
+  exists to prevent. **Its screen is a GRID of cells, not a character
+  stream**, which is what lets a full-screen program address it --
+  `/bin/edit` runs in a window because of this, and scrollback is made
+  of rows that scrolled off rather than of a stream. And **it drains its
+  child on a 30ms tick, because there is no `poll()`** --
   `SYS_SET_NONBLOCK` is what makes that possible without freezing the
   window, and the real answer is on the roadmap.
+
+- **THE ANSI PARSER IS THE KERNEL'S, COMPILED TWICE.**
+  `kernel/lib/ansi.c` is a pure state machine that knows nothing about a
+  screen, so the physical console and the GUI Terminal resolve
+  `ESC[4;12H` through the same code -- the shared-source rule, as with
+  `geom.c` and `klineedit.c`. A second parser in ring 3 would be a second
+  set of answers to "what does `ESC[0m` clear", and the two would drift
+  the first time either was extended.
+
+  **Reverse video is resolved IN the parser**, which swaps `fg`/`bg`
+  before the caller sees them, so neither terminal has to know the
+  attribute exists. **And a background is a RECTANGLE, not a colour
+  argument**: `ugfx_draw_string()` blends the glyph's own pixels against
+  the background it is given and does not fill the cell, so a status bar
+  drawn without an explicit `ugfx_fill_rect()` comes out as dark letters
+  on black -- legible, plausible in a screenshot, and wrong. Found by
+  reading pixel values.
 
 - **An app with a cadence sets `tick_ms` and BLOCKS between frames.**
   `uapp_desc.tick_ms` arms a TWS timer (`WIN_REQ_TIMER` ->

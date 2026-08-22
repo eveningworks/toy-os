@@ -31,14 +31,16 @@ written them again, differently.
 
 ## What it does not do
 
-**It needs a terminal that can ADDRESS its screen**, which today means
-the physical console. A full-screen program says "put the caret at row 4,
-column 12", and that needs a grid; the GUI Terminal's screen is a
-character stream in a scrollback, which is right for a shell transcript
-and cannot express moving back up. Running `edit` in a Terminal window
-prints the escape sequences instead of obeying them. Giving that window a
-cursor-addressable grid is a roadmap item, and it is the same item as the
-alternate screen buffer.
+**It needs a terminal that can ADDRESS its screen**, and both of this
+OS's terminals now can: the physical console and a Terminal window, which
+gained a cursor-addressable grid for exactly this. Both resolve the
+escapes through `kernel/lib/ansi.c` -- one parser, compiled twice.
+
+What a window still lacks is an ALTERNATE SCREEN. A real terminal
+switches to a separate buffer for a full-screen program and switches back
+afterwards, so the shell's transcript is exactly as it was; here the
+editor's output goes into the scrollback and pushes the transcript up.
+Roadmap item.
 
 **`nano` is gone as a name.** It was an alias on the kernel builtin, and
 an alias for a `/bin` program would be a second copy of the binary or a

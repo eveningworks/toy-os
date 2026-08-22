@@ -28,21 +28,29 @@
 // it as INTR and signals this terminal's foreground group. That is the
 // same function, on the same object, as the one the keyboard IRQ feeds.
 //
-// THE EMULATION IS DELIBERATELY TINY: `\n`, `\r`, `\b` and overwrite.
-// That is exactly what `/bin/tosh` emits -- its repaint uses '\r' and
-// spaces and nothing else, because a ring-3 program has no cursor-move
-// syscall -- so it is what a terminal here has to honour. ANSI escapes
-// (colour, cursor addressing) are a named roadmap item, not a gap: the
-// kernel console already parses them (kernel/lib/ansi.c) and this
-// window should end up sharing that parser rather than growing a second.
+// **ITS SCREEN IS A GRID, WHICH IS WHAT MAKES A FULL-SCREEN PROGRAM
+// WORK HERE.** It was a character STREAM in a scrollback -- right for a
+// shell transcript, and unable to express "put the caret at row 4,
+// column 12", so `/bin/edit` printed its escape sequences instead of
+// obeying them. A terminal is a grid of cells with a cursor over it;
+// lines that scroll off the top become scrollback, which is the only
+// part that is a stream.
+//
+// **AND THE ANSI PARSER IS THE KERNEL'S OWN, COMPILED TWICE.**
+// kernel/lib/ansi.c is a pure state machine that knows nothing about a
+// screen -- its own header says so -- so the physical console and this
+// window resolve `ESC[4;12H` through the SAME code. A second parser
+// here would be a second set of answers to "what does ESC[0m clear",
+// and the two would drift the first time either was extended. Same
+// shared-source rule as geom.c and klineedit.c.
 #include <stdint.h>
 #include "rt/sys.h"
 #include "ui/ugfx.h"
 #include "ui/uui.h"
 #include "ui/uapp.h"
-#include "ui/utext.h"
 #include "ui/utheme.h"
 #include "keyboard.h"
+#include "ansi.h"   // the kernel's parser, compiled into libuapp too
 
 #define WIN_W 640
 #define WIN_H 400
@@ -50,63 +58,152 @@
 
 #define SHELL "/bin/tosh"
 
-static struct utext g_out;   // the screen: transcript and current line alike
+// The screen. A fixed grid rather than a resizable one: a window can be
+// made large, and 200x60 cells is 24 KiB of statics against a ring-3
+// heap -- cheaper than the arithmetic of growing it, and it bounds what
+// a program can ask for. What actually varies is g_rows/g_cols, derived
+// from the window and told to the child through SYS_TCSETWINSZ.
+#define VT_ROWS 60
+#define VT_COLS 200
+#define SB_ROWS 240   // scrollback lines kept above the screen
+
+struct cell { char ch; uint8_t fg, bg; };
+
+static struct cell g_grid[VT_ROWS][VT_COLS];
+static struct cell g_sb[SB_ROWS][VT_COLS];
+static int g_sb_count;      // lines of scrollback held
+static int g_sb_view;       // how far back the reader has scrolled, in lines
+
+static int g_rows = 24, g_cols = 80;
+static int g_cr, g_cc;      // the cursor, in cells
+static int g_cursor_shown = 1;
+
+static struct ansi_parser g_vt;
+
 static int g_master = -1;    // our end of the pty
 static int g_child;          // the shell's pid, for reaping and for `ps`
 
-// --- the emulator ----------------------------------------------------
-//
-// A terminal is a cursor over a screen. `g_line` is the logical index
-// where the current line starts and `g_col` how far along it the cursor
-// is -- which is all the state '\n', '\r' and '\b' need, and all
-// /bin/tosh's repaint asks for.
-//
-// **WHY A COLUMN AND NOT JUST AN APPEND POINT.** tosh repaints an edited
-// line in two passes: return to column 0, paint the whole line plus
-// spaces to cover what was there before, return to column 0 again, paint
-// only the part before the caret. A terminal that treated '\r' as "start
-// a new line" would show the line twice; one that treated it as "discard
-// this line" would lose everything after the caret on the second pass.
-// Overwrite-in-place is the only reading that produces what the shell
-// means, and it is what a real terminal does.
-static int g_line;
-static int g_col;
+// The 16 ANSI colours as RGB. The parser resolves a sequence to an
+// `enum vga_color`, which is an INDEX -- turning an index into light is
+// the display's business, and the kernel console does exactly the same
+// thing with its own table. Standard VGA values, so a screenshot of this
+// window and one of the console are the same colours.
+static const uint32_t VGA_RGB[16] = {
+    0x000000, 0x0000AA, 0x00AA00, 0x00AAAA, 0xAA0000, 0xAA00AA, 0xAA5500, 0xAAAAAA,
+    0x555555, 0x5555FF, 0x55FF55, 0x55FFFF, 0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF,
+};
 
-static void vt_putc(char c) {
-    if (c == '\n') {
-        // Move to the end before appending: the cursor may be mid-line,
-        // and a newline ends the line rather than splitting it.
-        g_col = g_out.count - g_line;
-        utext_putc(&g_out, '\n');
-        g_line = g_out.count;
-        g_col = 0;
-        return;
-    }
-    if (c == '\r') { g_col = 0; return; }
-    if (c == '\b') { if (g_col > 0) g_col--; return; }
+#define VT_FG 7   // light grey on black -- the console's own default pair
+#define VT_BG 0
 
-    int at = g_line + g_col;
-    if (at < g_out.count) {
-        utext_set(&g_out, at, c);
-    } else {
-        int before = g_out.count;
-        utext_putc(&g_out, c);
-        // THE RING EVICTS ITS OLDEST CHARACTER WHEN FULL, which shifts
-        // every logical index down by one -- including the one that says
-        // where this line starts. Without this the cursor drifts
-        // backwards through the transcript once the scrollback fills,
-        // and only then, which is the kind of bug that shows up after
-        // ten minutes of use and never in a test that types three lines.
-        if (g_out.count == before && g_line > 0) g_line--;
+static void row_clear(struct cell *row, int from) {
+    for (int c = from; c < VT_COLS; c++) {
+        row[c].ch = ' ';
+        row[c].fg = VT_FG;
+        row[c].bg = VT_BG;
     }
-    g_col++;
+}
+
+static void vt_reset_screen(void) {
+    for (int r = 0; r < VT_ROWS; r++) row_clear(g_grid[r], 0);
+    g_cr = g_cc = 0;
+}
+
+// The top line leaves the screen and becomes history. THE ONLY PLACE A
+// STREAM STILL EXISTS -- and it is the right place: scrollback is a
+// record of what went past, while the screen is a thing being drawn on.
+static void vt_scroll(void) {
+    if (g_sb_count == SB_ROWS) {
+        for (int i = 1; i < SB_ROWS; i++)
+            for (int c = 0; c < VT_COLS; c++) g_sb[i - 1][c] = g_sb[i][c];
+        g_sb_count--;
+    }
+    for (int c = 0; c < VT_COLS; c++) g_sb[g_sb_count][c] = g_grid[0][c];
+    g_sb_count++;
+
+    for (int r = 1; r < g_rows; r++)
+        for (int c = 0; c < VT_COLS; c++) g_grid[r - 1][c] = g_grid[r][c];
+    row_clear(g_grid[g_rows - 1], 0);
+}
+
+static void vt_newline(void) {
+    g_cr++;
+    if (g_cr >= g_rows) { g_cr = g_rows - 1; vt_scroll(); }
+}
+
+static void vt_putc_raw(char c) {
+    if (c == '\n') { g_cc = 0; vt_newline(); return; } // no OPOST: LF is CRLF here
+    if (c == '\r') { g_cc = 0; return; }
+    if (c == '\b') { if (g_cc > 0) g_cc--; return; }
+    if (c == '\t') { do { g_cc++; } while (g_cc % 8 && g_cc < g_cols); if (g_cc >= g_cols) { g_cc = 0; vt_newline(); } return; }
+    if ((unsigned char)c < 32) return; // anything else unprintable is dropped
+
+    if (g_cc >= g_cols) { g_cc = 0; vt_newline(); }
+    g_grid[g_cr][g_cc].ch = c;
+    g_grid[g_cr][g_cc].fg = (uint8_t)g_vt.fg;
+    g_grid[g_cr][g_cc].bg = (uint8_t)g_vt.bg;
+    g_cc++;
+}
+
+static void clamp_cursor(void) {
+    if (g_cr < 0) g_cr = 0;
+    if (g_cr >= g_rows) g_cr = g_rows - 1;
+    if (g_cc < 0) g_cc = 0;
+    if (g_cc >= g_cols) g_cc = g_cols - 1;
+}
+
+// One completed cursor/erase sequence. The parser has already applied
+// every default -- "a missing or zero count means 1", 1-based rows and
+// columns -- so this only has to act, which is the point of it being a
+// shared parser rather than a second reading of the spec.
+static void vt_ctrl(void) {
+    switch (g_vt.op) {
+    case ANSI_OP_MOVE_TO: g_cr = g_vt.a - 1; g_cc = g_vt.b - 1; break;
+    case ANSI_OP_UP:      g_cr -= g_vt.a; break;
+    case ANSI_OP_DOWN:    g_cr += g_vt.a; break;
+    case ANSI_OP_RIGHT:   g_cc += g_vt.a; break;
+    case ANSI_OP_LEFT:    g_cc -= g_vt.a; break;
+    case ANSI_OP_COLUMN:  g_cc = g_vt.a - 1; break;
+    case ANSI_OP_ROW:     g_cr = g_vt.a - 1; break;
+    case ANSI_OP_ERASE_LINE:
+        if (g_vt.a == 0) row_clear(g_grid[g_cr], g_cc);
+        else if (g_vt.a == 1) for (int c = 0; c <= g_cc && c < VT_COLS; c++) g_grid[g_cr][c].ch = ' ';
+        else row_clear(g_grid[g_cr], 0);
+        break;
+    case ANSI_OP_ERASE_DISPLAY:
+        if (g_vt.a == 0) {
+            row_clear(g_grid[g_cr], g_cc);
+            for (int r = g_cr + 1; r < g_rows; r++) row_clear(g_grid[r], 0);
+        } else if (g_vt.a == 1) {
+            for (int r = 0; r < g_cr; r++) row_clear(g_grid[r], 0);
+            for (int c = 0; c <= g_cc && c < VT_COLS; c++) g_grid[g_cr][c].ch = ' ';
+        } else {
+            for (int r = 0; r < g_rows; r++) row_clear(g_grid[r], 0);
+        }
+        break;
+    case ANSI_OP_SHOW: g_cursor_shown = 1; break;
+    case ANSI_OP_HIDE: g_cursor_shown = 0; break;
+    // SAVE/RESTORE have no users here yet, and a half-remembered
+    // position is worse than none.
+    default: break;
+    }
+    clamp_cursor();
 }
 
 static void vt_write(const char *buf, int len) {
-    for (int i = 0; i < len; i++) vt_putc(buf[i]);
-    // The caret IS the cursor: utext_draw() draws it at ed.cursor, so
-    // keeping that in step is the whole of caret handling here.
-    g_out.ed.cursor = g_line + g_col;
+    for (int i = 0; i < len; i++) {
+        switch (ansi_feed(&g_vt, buf[i])) {
+        case ANSI_PASS:  vt_putc_raw(buf[i]); break;
+        case ANSI_CTRL:  vt_ctrl(); break;
+        case ANSI_SGR:   break; // the colours are read off the parser per cell
+        case ANSI_EATEN: break;
+        }
+    }
+    // NEW OUTPUT PINS THE VIEW TO THE BOTTOM, which is what every
+    // terminal does: a program printing while you are reading history
+    // brings you back, because otherwise the thing you asked to run
+    // appears to have done nothing.
+    g_sb_view = 0;
 }
 
 // Drain whatever the shell has printed. NON-BLOCKING -- this runs on the
@@ -128,31 +225,97 @@ static int pump(int *out_eof) {
     return got;
 }
 
+static void size_changed(int w, int h);
+
 // --- drawing ----------------------------------------------------------
+//
+// A ROW AT A TIME, IN RUNS OF ONE COLOUR PAIR. Per-cell drawing would be
+// 12,000 calls a frame at this size; a run is one ugfx_draw_string() and
+// there is usually one run per row. The background is painted per run
+// too, which is what makes reverse video -- a status bar -- look like a
+// bar rather than like coloured letters.
+
+static void draw_run(struct ugfx_surface *s, int x, int y,
+                     const char *text, int n, uint8_t fg, uint8_t bg) {
+    if (n <= 0) return;
+    char buf[VT_COLS + 1];
+    for (int i = 0; i < n; i++) buf[i] = text[i];
+    buf[n] = '\0';
+
+    // **THE BACKGROUND IS A RECTANGLE, NOT THE STRING CALL'S `bg`.**
+    // ugfx_draw_string() blends the glyph's own pixels against that
+    // colour; it does not fill the CELL. For ordinary text the two look
+    // identical, and for REVERSE VIDEO they are not: a status bar came
+    // out as dark letters on black instead of black letters on a bar --
+    // legible, and not what was asked for. Caught by reading pixel
+    // values rather than by looking at the screenshot, which is the
+    // whole reason CLAUDE.md says to.
+    if ((bg & 15) != VT_BG)
+        ugfx_fill_rect(s, x, y, n * ugfx_char_w(), ugfx_char_h(), VGA_RGB[bg & 15]);
+    ugfx_draw_string(s, x, y, buf, VGA_RGB[fg & 15], VGA_RGB[bg & 15]);
+}
+
+static void draw_row(struct ugfx_surface *s, const struct cell *row, int y) {
+    int cw = ugfx_char_w();
+    int i = 0;
+    while (i < g_cols) {
+        // TRAILING BLANKS IN THE DEFAULT COLOURS ARE NOT DRAWN -- the
+        // surface is already that colour, and drawing them would cost a
+        // full row of glyphs per line for nothing.
+        int j = i;
+        while (j < g_cols && row[j].fg == row[i].fg && row[j].bg == row[i].bg) j++;
+        int blank = 1;
+        for (int k = i; k < j; k++) if (row[k].ch != ' ') { blank = 0; break; }
+        if (!(blank && row[i].bg == VT_BG)) {
+            char run[VT_COLS];
+            for (int k = i; k < j; k++) run[k - i] = row[k].ch;
+            draw_run(s, MARGIN + i * cw, y, run, j - i, row[i].fg, row[i].bg);
+        }
+        i = j;
+    }
+}
 
 static void draw(struct ugfx_surface *s, int focused) {
-    ugfx_fill(s, ugfx_rgb(0, 0, 0));
-    // ONE TEXT AREA, not a transcript plus a separately-drawn prompt.
-    // The prompt is not this program's any more -- it is bytes the shell
-    // printed, in the same stream as everything else, which is what a
-    // terminal is. That deleted the "where does the prompt go" clamping
-    // this file used to carry.
-    utext_draw(&g_out, s, MARGIN, MARGIN,
-                s->w - 2 * MARGIN, s->h - 2 * MARGIN,
-                ugfx_rgb(220, 220, 220), ugfx_rgb(0, 0, 0),
-                ugfx_rgb(60, 80, 120), focused);
+    ugfx_fill(s, VGA_RGB[VT_BG]);
+    int ch = ugfx_char_h(), cw = ugfx_char_w();
+
+    // Scrolled back: the top rows come from history, the rest from the
+    // screen, and they meet without a seam because both are the same
+    // grid of cells. That is the payoff of scrollback being made of
+    // evicted ROWS rather than of a character stream.
+    for (int r = 0; r < g_rows; r++) {
+        int back = g_sb_view - r;      // >0 means this row is history
+        const struct cell *row;
+        if (back > 0) {
+            int idx = g_sb_count - back;
+            if (idx < 0) continue;     // before the oldest line we kept
+            row = g_sb[idx];
+        } else {
+            row = g_grid[-back];
+        }
+        draw_row(s, row, MARGIN + r * ch);
+    }
+
+    // The caret, only while FOCUSED and only while the program wants it
+    // shown (`ESC[?25l` hides it -- a full-screen program parking the
+    // caret somewhere meaningless turns it off rather than moving it).
+    // An unfocused window drawing a caret claims to be taking input that
+    // is going somewhere else.
+    if (focused && g_cursor_shown && g_sb_view == 0)
+        ugfx_fill_rect(s, MARGIN + g_cc * cw, MARGIN + g_cr * ch, 2, ch,
+                       VGA_RGB[VT_FG]);
 }
 
 // One line, content-relative, on stderr -- the grammar every GUI test
-// tool here asserts on. The CURSOR rather than a prompt row: there is no
-// prompt widget to report the position of any more, and the cursor is
-// the thing a test can predict.
+// tool here asserts on. The CURSOR, as a cell index, because that is the
+// thing that would be wrong if a cursor sequence were mishandled and it
+// is what a test can predict.
 static void log_layout(void) {
     char b[64];
     int n = 0;
     const char *pre = "uterm: layout cursor ";
     while (pre[n]) { b[n] = pre[n]; n++; }
-    int v = g_out.ed.cursor;
+    int v = g_cr * g_cols + g_cc;
     char d[12];
     int c = 0;
     if (v <= 0) d[c++] = '0';
@@ -164,8 +327,44 @@ static void log_layout(void) {
 }
 
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
-    draw(uapp_surface(d), uapp_focused(a));
+    struct ugfx_surface *s = uapp_surface(d);
+    // MEASURED HERE AS WELL AS ON RESIZE, because this is the first
+    // moment the real surface exists -- and because the FONT can change
+    // under a running client (WIN_EV_FONT), which changes the cell size
+    // without changing the window's. It early-outs when nothing moved.
+    size_changed(s->w, s->h);
+    draw(s, uapp_focused(a));
     log_layout();
+}
+
+// HOW BIG THE WINDOW IS, IN CELLS, AND THE CHILD IS TOLD. Only this
+// process can work that out: the size is pixels and the answer is cells,
+// and the conversion needs the font. SYS_TCSETWINSZ is how the shell and
+// anything it runs find out -- /bin/edit asks for it before it draws a
+// single row.
+static void size_changed(int w, int h) {
+    int cw = ugfx_char_w(), ch = ugfx_char_h();
+    if (cw <= 0 || ch <= 0) return;
+    int rows = (h - 2 * MARGIN) / ch;
+    int cols = (w - 2 * MARGIN) / cw;
+    if (rows < 2) rows = 2;
+    if (cols < 8) cols = 8;
+    if (rows > VT_ROWS) rows = VT_ROWS;
+    if (cols > VT_COLS) cols = VT_COLS;
+    if (rows == g_rows && cols == g_cols) return;
+
+    g_rows = rows;
+    g_cols = cols;
+    clamp_cursor();
+    if (g_master >= 0) {
+        struct tty_winsize ws = { (uint16_t)rows, (uint16_t)cols };
+        sys_tcsetwinsz(g_master, &ws);
+    }
+}
+
+static void on_resize(struct uapp *a, int w, int h) {
+    (void)a;
+    size_changed(w, h);
 }
 
 // --- input ------------------------------------------------------------
@@ -177,8 +376,18 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     // to the shell as a byte, because THE SHELL HAS THE LINE EDITOR.
     // This window deciding what Ctrl-A means would be the second
     // implementation kernel/lib/klineedit.c exists to prevent.
-    if (key == KEY_PAGE_UP)   { utext_scroll(&g_out, 5);  uapp_redraw(a); return; }
-    if (key == KEY_PAGE_DOWN) { utext_scroll(&g_out, -5); uapp_redraw(a); return; }
+    if (key == KEY_PAGE_UP) {
+        g_sb_view += g_rows / 2;
+        if (g_sb_view > g_sb_count) g_sb_view = g_sb_count;
+        uapp_redraw(a);
+        return;
+    }
+    if (key == KEY_PAGE_DOWN) {
+        g_sb_view -= g_rows / 2;
+        if (g_sb_view < 0) g_sb_view = 0;
+        uapp_redraw(a);
+        return;
+    }
 
     // EVERY CODE THIS TOOLKIT DELIVERS FITS IN A BYTE -- specials are
     // 0x91-0xA6, which ARE the KEY_* values the shared line editor
@@ -215,9 +424,8 @@ static int on_tick(struct uapp *a) {
 
 static void on_open_cb(struct uapp *a) {
     (void)a;
-    utext_init(&g_out);
-    g_line = 0;
-    g_col = 0;
+    ansi_init(&g_vt, VT_FG, VT_BG);
+    vt_reset_screen();
 
     int slave = -1;
     if (sys_openpty(&g_master, &slave) < 0) {
@@ -305,6 +513,7 @@ int main(void) {
         .on_open = on_open_cb,
         .on_draw = on_draw,
         .on_key  = on_key,
+        .on_resize = on_resize,
         .on_tick = on_tick,
         .on_close = on_close_cb,
     };

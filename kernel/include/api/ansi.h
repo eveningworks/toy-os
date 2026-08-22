@@ -17,7 +17,8 @@
 // does it this way and why `--color=never` is a thing a program can
 // meaningfully offer.
 //
-// WHAT IS AND IS NOT SUPPORTED. SGR (`ESC [ ... m`), cursor movement
+// WHAT IS AND IS NOT SUPPORTED. SGR (`ESC [ ... m`, including REVERSE
+// VIDEO, which is what a status bar is made of), cursor movement
 // (CUP/CUU/CUD/CUF/CUB/CHA/VPA), erasing (ED/EL), save/restore, and
 // DECTCEM cursor visibility (`?25h`/`?25l`). That is the set a program
 // drawing a screen actually uses -- a board game repainting a grid, a
@@ -80,6 +81,8 @@ struct ansi_parser {
     uint8_t state;      // internal; zero-initialised is "ground"
     uint8_t nparam;
     uint8_t bold;       // SGR 1 -- brightens the foreground
+    uint8_t reverse;    // SGR 7 -- fg and bg swap, and the parser does
+                        // the swapping, so a caller never sees this
     uint8_t private;    // a `?`-style private sequence, swallowed whole
     uint16_t param[ANSI_MAX_PARAMS];
     enum vga_color fg;  // the colours a completed ANSI_SGR resolves to
