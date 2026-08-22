@@ -613,6 +613,7 @@ whenever a headline here tells you something you did not already know.
 - **A WRAPPER BUILTIN IS ONE COMMAND WITH TWO HALVES IN TWO RINGS, AND THE RING-3 HALF WILL BE WRONG.**
 - **A COMMAND WITH A READ HALF AND A WRITE HALF MOVES AS ONE PIECE OR NOT AT ALL.**
 - **COLOUR IS AN ESCAPE SEQUENCE, NOT A SYSCALL.**
+- **A TERMINAL IS AN OBJECT, AND THE CONSOLE IS `tty0`** -- `kernel/tty/` holds the line discipline, and `Ctrl-C` on the physical keyboard and in a window are one implementation. INTR left the keyboard driver; `SCHED_CHAN_KEY` is gone.
 - **A `text` BOOT REACHES A RING-3 SHELL, AND THE KERNEL SHELL STANDS DOWN FOR IT.**
 - **RING 3 CAN READ THE CONSOLE -- fd 0, and it BLOCKS.**
 - **A QMP TEST THAT TYPES PUNCTUATION MUST PIN THE GUEST'S KEYBOARD LAYOUT.**

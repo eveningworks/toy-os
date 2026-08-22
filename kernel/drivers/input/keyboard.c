@@ -7,20 +7,19 @@
 #include "syscall_abi.h" // SYS_RETRY -- the wake value a parked fd-0 read gets
 #include "string.h" // k_tolower() -- the Ctrl-key fold
 #include "input.h" // INPUT_KEY_* -- the evdev keycodes everything above the wire uses
-#include "tty.h" // tty_intr() -- what Ctrl-C means, see its own header
+#include "tty.h" // the console terminal -- keys go to its line discipline
 
 #define KBD_DATA_PORT 0x60
 
-// Each slot is (mods << 16) | key -- see keyboard.h's "Modifier bits"
-// comment. The KEY is unchanged from what this driver has always
-// pushed (terminal-encoded: Ctrl-A is 0x01, Alt-B is ESC then 'b'), so
-// every existing consumer that calls keyboard_getchar() and gets the
-// low half back behaves exactly as before. The mods half is additional
-// information for callers that need to tell Shift-Tab from Tab, which
-// the terminal encoding genuinely cannot express.
-static volatile uint32_t ring_buf[256];
-static volatile unsigned int ring_head = 0;
-static volatile unsigned int ring_tail = 0;
+// **THE RING USED TO BE HERE AND IS NOW tty0's.** This driver produces
+// keystrokes; deciding what one MEANS -- whether it ends a line, echoes,
+// or interrupts a job -- belongs to a terminal, and there is one now
+// (kernel/tty.h). What is left here is the wire and the layout.
+//
+// The queue still carries (mods << 16) | key: the KEY is unchanged from
+// what this driver has always pushed (terminal-encoded: Ctrl-A is 0x01,
+// Alt-B is ESC then 'b'), and the mods half is for callers that need to
+// tell Shift-Tab from Tab, which the terminal encoding cannot express.
 static int shift_pressed = 0;
 static int altgr_pressed = 0;
 static int ctrl_pressed = 0;
@@ -74,29 +73,19 @@ static uint8_t current_mods(void) {
     return m;
 }
 
+// A key has been decoded. Hand it to the console terminal, which runs
+// the line discipline over it and queues what a reader should see.
+//
+// EVERY CODE THIS DRIVER PRODUCES FITS IN A BYTE -- the specials
+// included (KEY_ARROW_* and friends are 0x91-0xA6) -- which is what lets
+// a terminal be a byte stream and is the same fact SYS_READ's fd-0
+// contract already states.
+//
+// The wake that used to be here is tty_enqueue()'s now, for the same
+// reason and with the same restraint: this runs in the IRQ1 handler, so
+// only scheduler state and an already-saved trapframe may be touched.
 static void ring_push(uint16_t c) {
-    unsigned int next = (ring_head + 1) % 256;
-    if (next == ring_tail) return; // full, drop
-    ring_buf[ring_head] = ((uint32_t)current_mods() << 16) | c;
-    ring_head = next;
-    // Release anything parked in a ring-3 read of fd 0 (syscall_fd.c).
-    // This runs in the IRQ1 handler, so it may only flip scheduler state
-    // and write an already-saved trapframe -- which is all
-    // scheduler_wake() does; see its own comment on that restraint. The
-    // woken reader pops the key at the next ordinary rotation, not here.
-    //
-    // Waking unconditionally is deliberate: the ring is shared with the
-    // ring-0 blocking reader and with win_input.c, so a woken reader may
-    // find the key already gone. SYS_RETRY is the wake value, so that
-    // case simply parks again rather than reporting a spurious EOF.
-    scheduler_wake(SCHED_CHAN_KEY, SYS_RETRY);
-}
-
-static int ring_pop(uint32_t *out) {
-    if (ring_tail == ring_head) return 0; // empty
-    *out = ring_buf[ring_tail];
-    ring_tail = (ring_tail + 1) % 256;
-    return 1;
+    tty_input(tty_console(), (uint8_t)c, current_mods());
 }
 
 // --- the PS/2 WIRE, and nothing above it -----------------------------
@@ -262,20 +251,13 @@ void keyboard_key_event(uint16_t keycode, int down) {
         int lower = k_tolower((unsigned char)c);
         if (lower < 'a' || lower > 'z') return;
         uint16_t code = (uint16_t)(lower - 'a' + 1);
-        // THE INTR KEY IS THE ONE CONTROL CODE THAT IS NOT JUST A BYTE.
-        // With a job in the foreground of the console it interrupts that
-        // job's process GROUP and is swallowed; with nothing running it
-        // falls through and reaches the line editor as 0x03, which is
-        // what abandons the line today. tty.h has both cases and says
-        // why this recognition lives in the driver for now -- it belongs
-        // to a line discipline, and there is not one yet.
-        //
-        // A SIGNAL, NOT A KILL, and that is forced rather than
-        // stylistic: this runs in the keyboard IRQ, so tearing an
-        // address space down here would call the heap underneath
-        // whatever the CPU was doing. Sending sets a bit; the kernel
-        // acts on it on the way back to ring 3 (kernel/signal.h).
-        if (code == 0x03 && tty_intr()) return;
+        // **INTR IS NOT SPECIAL HERE ANY MORE.** Ctrl-C used to be
+        // recognised on this line, with a comment saying it belonged to
+        // a line discipline and there was not one yet. There is
+        // (kernel/tty/ldisc.c), so 0x03 goes through as an ordinary
+        // control code and the terminal decides what it means -- which
+        // is what makes a Terminal WINDOW able to have the same Ctrl-C
+        // as this keyboard.
         ring_push(code);
         return;
     }
@@ -306,11 +288,33 @@ void keyboard_key_event(uint16_t keycode, int down) {
 static int g_blocking_suspended;
 static int g_console_claimed;
 
-void keyboard_suspend_blocking(int on) { g_blocking_suspended = on ? 1 : 0; }
+void keyboard_suspend_blocking(int on) {
+    g_blocking_suspended = on ? 1 : 0;
+    // ...AND THE CONSOLE'S LINE DISCIPLINE IS MUTED WITH IT. A
+    // compositor reads raw input itself (win_input.c), so a discipline
+    // assembling a line underneath it would swallow keystrokes the
+    // desktop is about to be given, and would echo them onto a screen
+    // it does not own. This is KD_GRAPHICS + KDSKBMODE/K_OFF on a Linux
+    // VT, and it is set from HERE because this is the one place the
+    // compositor's hold is recorded -- registering, deregistering, a
+    // kill and a fault are all the same call.
+    tty_set_bypass(tty_console(), g_blocking_suspended);
+}
 void keyboard_claim_console(int on)    { g_console_claimed = on ? 1 : 0; }
 int  keyboard_console_claimed(void)    { return g_console_claimed; }
 int  keyboard_compositor_owns(void)    { return g_blocking_suspended; }
 int  keyboard_blocking_suspended(void) { return g_blocking_suspended || g_console_claimed; }
+
+// The blocking reader's pop, in the shape its `while` condition wants:
+// a truthy "got one" plus the (mods << 16) | key word it has always
+// unpacked. tty0's queue is the ring this driver used to own.
+static int tty_pop(uint32_t *out) {
+    uint8_t mods = 0;
+    int c = tty_read_key(tty_console(), &mods);
+    if (c < 0) return 0;
+    *out = ((uint32_t)mods << 16) | (uint32_t)c;
+    return 1;
+}
 
 int keyboard_getchar(void) { return keyboard_getchar_mods(0); }
 
@@ -319,9 +323,9 @@ int keyboard_getchar_mods(uint8_t *out_mods) {
     for (;;) {
     // The suspend check comes FIRST and short-circuits, so a suspended
     // reader never pops -- it must not consume a key the compositor is
-    // about to be given (win_input.c drains the same ring, from the
+    // about to be given (win_input.c drains the same queue, from the
     // scheduler_idle() call below).
-    while (keyboard_blocking_suspended() || !ring_pop(&ev)) {
+    while (keyboard_blocking_suspended() || (ev = 0, !tty_pop(&ev))) {
         // hlt wakes on every interrupt, not just a real keypress -- most
         // commonly the 100Hz PIT tick -- so this is a convenient, cheap
         // place to drive the framebuffer console's blinking cursor while
@@ -389,10 +393,7 @@ int keyboard_getchar_mods(uint8_t *out_mods) {
 int keyboard_try_getchar(void) { return keyboard_try_getchar_mods(0); }
 
 int keyboard_try_getchar_mods(uint8_t *out_mods) {
-    uint32_t ev;
-    if (!ring_pop(&ev)) return -1;
-    if (out_mods) *out_mods = (uint8_t)(ev >> 16);
-    return (int)(ev & 0xFFFF);
+    return tty_read_key(tty_console(), out_mods);
 }
 
 void keyboard_read_line(char *buf, unsigned int len) {

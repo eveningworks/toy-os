@@ -21,11 +21,26 @@ something and nothing happened -- who is getting my keystrokes?* On Linux
 that takes `ps -o tpgid` plus `fuser /dev/tty`, because there is a
 filesystem to ask; here it is one command over `QUERY_TTY`.
 
-    console owner:    pid 5 (tosh)
-    foreground group: pgid 7 (spin_test)
-    keyboard:         the ring-0 console
+    tty0 (console) -- the physical console
+      owner:            pid 5 (tosh)
+      foreground group: pgid 7 (spin_test)
+      mode:             raw, isig
 
-    Ctrl-C: sends SIGINT to the foreground group
+    keyboard: read by a ring-3 process through fd 0
+              ring 0's blocking readers are stood down
+
+    Ctrl-C on tty0: sends SIGINT to the foreground group
+
+**One row per terminal.** `tty0` is the physical console; a pty gets a
+row of its own as it is created. The `mode` line is `termios` in the
+words `termios` uses -- `canonical` means a read returns nothing until
+Enter, which from outside is indistinguishable from a terminal that has
+stopped working, so it is stated rather than left to be deduced.
+
+The `keyboard` and `Ctrl-C` lines are about the MACHINE and about `tty0`
+respectively, and sit below the listing for that reason: there is one
+physical keyboard, so "who is holding it" has one answer, and printing
+it per row would make it read as a fact about the last terminal listed.
 
 **Three parties, and they fail in ways that look identical.** A dead
 keyboard is one of: nobody owns the console, somebody owns it but no job

@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "proc_info.h"
+#include "tty_abi.h" // TTY_ICANON/ECHO/ISIG -- the mode line below
 
 // The name behind a pid, or NULL. A SCAN rather than sys_proc_info(pid
 // - 1): pid == slot + 1 is true in the kernel today and is not part of
@@ -58,6 +59,38 @@ static void print_who(const char *label, const char *unit, int id, const char *e
     sys_print(line);
 }
 
+// One terminal. `first` decides whether a blank line separates it from
+// the one above -- a listing of several needs the separation and a
+// machine with only the console must not start with an empty line.
+static void print_tty(const struct query_tty *t, int first) {
+    char head[128];
+    if (!first) sys_print("\n");
+    // NAMED, because with more than one of them "console owner" stops
+    // being a complete sentence. tty0 keeps the word "console" beside
+    // its number: it is the one every reader already has a name for.
+    snprintf(head, sizeof head, "tty%d (%s)%s\n",
+             (int)t->index, t->driver,
+             t->index == 0 ? " -- the physical console" : "");
+    sys_print(head);
+
+    print_who("  owner:            ", "pid",  (int)t->owner_pid,       "nobody");
+    print_who("  foreground group: ", "pgid", (int)t->foreground_pgid, "none");
+
+    // WHAT THE DISCIPLINE IS DOING, in the words termios uses. A
+    // terminal in canonical mode returns nothing until Enter, which
+    // from outside is indistinguishable from one that has stopped
+    // working -- so it is stated rather than left to be deduced.
+    char modes[96];
+    snprintf(modes, sizeof modes, "  mode:             %s%s%s\n",
+             (t->lflag & TTY_ICANON) ? "canonical" : "raw",
+             (t->lflag & TTY_ECHO)   ? ", echo" : "",
+             (t->lflag & TTY_ISIG)   ? ", isig" : "");
+    sys_print(modes);
+
+    if (t->flags & QUERY_TTY_BYPASS)
+        sys_print("                    (discipline MUTED -- a compositor has the keyboard)\n");
+}
+
 int main(int argc, char **argv) {
     (void)argv;
     if (argc > 1) {
@@ -65,28 +98,46 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    // WALKED UNTIL A RECORD IS REFUSED rather than against a count read
+    // first: a list's length is itself a fact and can change between two
+    // reads, so a loop bounded by an earlier answer can walk off the end
+    // of a shorter list. /bin/parttable does the same.
     struct query_tty t;
-    if (sys_query_record(QUERY_TTY, 0, &t, sizeof t) < (int)sizeof t) {
+    int n = 0;
+    for (int i = 0; i < 16; i++) {
+        if (sys_query_record(QUERY_TTY, i, &t, sizeof t) < (int)sizeof t) break;
+        print_tty(&t, n == 0);
+        n++;
+    }
+    if (n == 0) {
         cmd_fail("tty", 0);
         return 1;
     }
 
-    print_who("console owner:    ", "pid",  (int)t.owner_pid,       "nobody");
-    print_who("foreground group: ", "pgid", (int)t.foreground_pgid, "none");
+    // The console's own record, re-read for the machine-wide part
+    // below: the keyboard and the compositor are the MACHINE's, not any
+    // one terminal's, and saying them once under a listing of several is
+    // what stops them reading as facts about the last row printed.
+    if (sys_query_record(QUERY_TTY, 0, &t, sizeof t) < (int)sizeof t) {
+        cmd_fail("tty", 0);
+        return 1;
+    }
+    sys_print("\n");
 
     // The keyboard line is LAST because it is the one that explains the
-    // two above: an owner of 0 is alarming on a text boot and entirely
-    // normal under a desktop, and this is the line that says which.
+    // owners above: an owner of 0 is alarming on a text boot and
+    // entirely normal under a desktop, and this is the line that says
+    // which.
     if (t.flags & QUERY_TTY_COMPOSITOR) {
-        char name[PROC_NAME_MAX], line[128];
-        const char *n = name_of((int)t.compositor_pid, name, sizeof name);
-        snprintf(line, sizeof line, "keyboard:         held by the compositor (pid %d%s%s)\n",
-                 (int)t.compositor_pid, n ? ", " : "", n ? n : "");
+        char cname[PROC_NAME_MAX], line[128];
+        const char *who = name_of((int)t.compositor_pid, cname, sizeof cname);
+        snprintf(line, sizeof line, "keyboard: held by the compositor (pid %d%s%s)\n",
+                 (int)t.compositor_pid, who ? ", " : "", who ? who : "");
         sys_print(line);
     } else if (t.flags & QUERY_TTY_CLAIMED) {
-        sys_print("keyboard:         read by a ring-3 process through fd 0\n");
+        sys_print("keyboard: read by a ring-3 process through fd 0\n");
     } else {
-        sys_print("keyboard:         the ring-0 console\n");
+        sys_print("keyboard: the ring-0 console\n");
     }
 
     // Stated separately from the reason above because BOTH reasons can
@@ -94,18 +145,19 @@ int main(int argc, char **argv) {
     // and because this is the line that says what it costs: the kernel
     // shell's prompt is not reading anything while it is true.
     if (t.flags & QUERY_TTY_SUSPENDED)
-        sys_print("                  ring 0's blocking readers are stood down\n");
+        sys_print("          ring 0's blocking readers are stood down\n");
 
     // Ctrl-C is the thing people are usually asking about, so say
-    // whether it can work rather than leaving it to be inferred from
-    // two ids. A group in front that IS the owner is a shell at its own
-    // prompt -- the key cancels the line and signals nothing, which is
-    // the one case tty_intr() deliberately does not consume.
+    // whether it can work rather than leaving it to be inferred from two
+    // ids. **ABOUT tty0 SPECIFICALLY** -- it is the terminal the
+    // physical keyboard reaches, and the one whose Ctrl-C a person
+    // pressing Ctrl-C right now would be using. A window's terminal has
+    // its own answer, in its own row above.
     if (t.foreground_pgid == 0)
-        sys_print("\nCtrl-C: nothing to interrupt -- no group is in front of the console\n");
+        sys_print("\nCtrl-C on tty0: nothing to interrupt -- no group is in front of it\n");
     else if (t.foreground_pgid == t.owner_pid)
-        sys_print("\nCtrl-C: cancels the line -- the console's owner is its own foreground group\n");
+        sys_print("\nCtrl-C on tty0: cancels the line -- its owner is its own foreground group\n");
     else
-        sys_print("\nCtrl-C: sends SIGINT to the foreground group\n");
+        sys_print("\nCtrl-C on tty0: sends SIGINT to the foreground group\n");
     return 0;
 }

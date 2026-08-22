@@ -304,7 +304,7 @@ sys_do_read_console(uint64_t *regs, uint64_t pml4, uint64_t buf_ptr, uint64_t le
     // simply gets nothing until the desktop exits, which is exactly what
     // the kernel shell behind the desktop already does.
     if (keyboard_compositor_owns()) {
-        if (scheduler_block_current(regs, SCHED_CHAN_KEY, SCHED_WAIT_KEY)) return 1;
+        if (scheduler_block_current(regs, tty_wait_chan(tty_console()), SCHED_WAIT_KEY)) return 1;
         regs[14] = (uint64_t)SYS_RETRY;
         return 0;
     }
@@ -330,17 +330,16 @@ sys_do_read_console(uint64_t *regs, uint64_t pml4, uint64_t buf_ptr, uint64_t le
 
     char kbuf[SYS_WRITE_MAX < 64 ? SYS_WRITE_MAX : 64];
     uint64_t want = len < sizeof kbuf ? len : sizeof kbuf;
-    uint64_t got = 0;
-    while (got < want) {
-        int k = keyboard_try_getchar();
-        if (k < 0) break;
-        kbuf[got++] = (char)(unsigned char)k;
-    }
+    // THE TERMINAL DECIDES WHAT IS READABLE, not this function. In raw
+    // mode that is every byte that has arrived; in canonical mode it is
+    // whole lines only, and a half-typed one reads as nothing -- which
+    // is why this asks the terminal rather than draining a ring.
+    uint64_t got = tty_read(tty_console(), kbuf, (unsigned)want);
 
     if (got == 0) {
         // Nothing queued. Park rather than report EOF: a console has no
         // end of file, and 0 would tell a shell its input had closed.
-        if (scheduler_block_current(regs, SCHED_CHAN_KEY, SCHED_WAIT_KEY)) return 1;
+        if (scheduler_block_current(regs, tty_wait_chan(tty_console()), SCHED_WAIT_KEY)) return 1;
         // Nowhere to park -- kernel code, or the legacy loader's single
         // slot. Answer "nothing yet" the only way a non-blocking caller
         // can be answered, rather than lying about end of input.

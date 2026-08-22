@@ -341,3 +341,52 @@ kernel shell has no scheduler slot, so nothing owns the console and
 there is no foreground group to signal. Somebody reading `/>` had no way
 to know which shell they were in, and "Ctrl-C does nothing" is what that
 looks like from the outside.
+
+## A TERMINAL IS AN OBJECT, AND THE CONSOLE IS `tty0`
+
+`kernel/tty/` holds `struct tty`: an input queue, a line discipline over
+it, an output sink, a `termios`, an owner and a FOREGROUND GROUP. What
+varies between terminals is only the DRIVER underneath -- the keyboard
+and the framebuffer for `tty0`, the other end of a pty for a window.
+
+**Everything above that seam is written once.** Canonical mode, echo,
+erase and kill, and what `Ctrl-C` means are one implementation, and a
+shell cannot tell which kind of terminal it is talking to. That is the
+test of whether the layer is real, and it is why `Ctrl-C` in a Terminal
+window is the same code as `Ctrl-C` on the physical keyboard rather than
+a second answer to the same question.
+
+Four things that bite:
+
+- **INTR IS NOT SPECIAL IN THE KEYBOARD DRIVER ANY MORE.** `keyboard.c`
+  used to recognise `0x03` and call `tty_intr()`, with a comment saying
+  it belonged to a line discipline and there was not one yet. There is.
+  The driver produces keystrokes; the terminal decides what one MEANS.
+- **THERE IS NO GLOBAL "A KEY HAPPENED" CHANNEL.** `SCHED_CHAN_KEY` is
+  gone, and its removal is the point: with a terminal per window it
+  would wake every window's shell for a key typed at any of them --
+  the thundering herd wait channels exist to prevent. A reader parks on
+  `tty_wait_chan(t)`. `SCHED_WAIT_KEY` survives as the REASON, because
+  `block(key)` is still what a person wants to read in `ps`.
+- **A COMPOSITOR HOLDING THE KEYBOARD MUTES THE CONSOLE'S DISCIPLINE**
+  (`tty_set_bypass()`, set from `keyboard_suspend_blocking()` -- the one
+  place the compositor's hold is recorded). Bytes go straight onto the
+  queue with no echo, no line buffering and no INTR, so `win_input.c`
+  drains exactly what it always did. This is `KD_GRAPHICS` plus
+  `KDSKBMODE`/`K_OFF` on a Linux VT, and it is not a special case bolted
+  on -- it is the same problem with the same answer.
+- **`tty0` STARTS RAW AND EVERY OTHER TERMINAL STARTS POSIX.** A new
+  terminal gets `ICANON|ECHO|ISIG`, because a program that knows nothing
+  about terminals should get a line, echoed, interruptible. `tty0` does
+  not, because its readers predate the layer: the kernel shell and
+  `/bin/tosh` both run `kernel/lib/klineedit.c`, which does its own
+  editing and echo, and canonical mode underneath them would buffer the
+  line twice and echo it twice. That asymmetry is temporary and
+  `tty_init()` says so.
+
+**AND THE COST OF CANONICAL MODE IS REAL AND WAS CHOSEN ANYWAY.** It
+duplicates `klineedit.c`, which is one editor compiled twice and shared
+by all three shells -- so every shell here turns ICANON off, exactly as
+`readline` does on Linux. It exists for programs with no editor of their
+own. `docs/tty-design.md` states it at length; do not "fix" it by
+deleting one of the two.

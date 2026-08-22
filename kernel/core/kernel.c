@@ -33,6 +33,7 @@
 #include "cursor_config.h"
 #include "mouse_config.h"
 #include "keyboard_config.h"
+#include "tty.h"    // tty_init() -- the console terminal, before input arrives
 #include "apps.h"
 #include "demo.h"
 #include "scheduler.h"
@@ -215,6 +216,13 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // kernel_main()'s own frame is the only one that can be live at
     // this point (it never returns). See kernel/lib/stack_protector.c.
     stack_guard_randomize();
+
+    // The console terminal (kernel/tty.h). BEFORE any input source
+    // registers, because the first keystroke goes through tty0's line
+    // discipline and a terminal that does not exist yet would drop it.
+    // Needs nothing itself -- no heap, no scheduler -- which is what
+    // lets it sit this early.
+    tty_init();
 
     // The input devices declare themselves to the input core. After
     // idt_init(), because the PS/2 pair is serviced by its own IRQs and

@@ -290,12 +290,19 @@ enum sched_poll_result scheduler_poll(int pid, int *out_exit_code);
 // or they wait on an address that no longer means anything; the
 // per-object wake sites all sit next to the teardown that frees them.
 
-// The channels for events that are genuinely global -- there is one
-// physical keyboard, and one timer. Addresses of unique objects; their
-// contents are never read.
-extern const char sched_chan_key;   // a keystroke on the physical console (fd 0)
+// The one channel for an event that is genuinely global: a deadline. An
+// address of a unique object; its contents are never read.
+//
+// **THERE USED TO BE A SECOND ONE, `SCHED_CHAN_KEY`, AND ITS REMOVAL IS
+// THE POINT OF THE TTY LAYER.** "A keystroke on the physical console"
+// was global because there was one console; with a terminal per window
+// it would wake every window's shell for a key typed at any of them --
+// the thundering herd this whole mechanism exists to avoid,
+// reintroduced by a name. A reader parks on ITS TERMINAL now:
+// `tty_wait_chan()` (kernel/tty.h). SCHED_WAIT_KEY survives as the
+// REASON, because `block(key)` is still what a person wants to read in
+// `ps`.
 extern const char sched_chan_timer; // a deadline a sleeper asked for
-#define SCHED_CHAN_KEY   ((const void *)&sched_chan_key)
 #define SCHED_CHAN_TIMER ((const void *)&sched_chan_timer)
 
 // The channel a process's own children wake when they exit, so a
@@ -319,7 +326,7 @@ const void *scheduler_wait_chan_pid(int pid);
 #define SCHED_WAIT_PIPE  2 // data (or EOF) on a pipe this process reads
 #define SCHED_WAIT_CHILD 3 // a spawned child of this process exited
 #define SCHED_WAIT_TIMER 4 // a deadline this process asked to sleep until
-#define SCHED_WAIT_KEY   5 // a keystroke on the physical console (fd 0)
+#define SCHED_WAIT_KEY   5 // a keystroke on a terminal this process reads
 
 // The label above as a word, for diagnostics. Never 0 -- an unknown
 // reason reports "?" rather than being left to a caller to handle.

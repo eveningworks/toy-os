@@ -1107,10 +1107,11 @@ static void scheduler_rotate(uint64_t *regs) {
 // return is not an error the caller may ignore: it means "you must fall
 // back to non-blocking behaviour", because there is nowhere to put this
 // process to sleep.
-// The two global wait channels. Their CONTENTS are never read -- only
-// their addresses matter, which is the whole point of a channel. `char`
-// rather than `int` so each is guaranteed its own distinct address.
-const char sched_chan_key;
+// The one global wait channel -- a deadline. Its CONTENTS are never
+// read; only its address matters, which is the whole point of a
+// channel. `char` rather than `int` so it is guaranteed its own
+// distinct address. (There were two until terminals became objects; see
+// scheduler.h.)
 const char sched_chan_timer;
 
 // A process's own channel, woken by ITS children when they exit. Using

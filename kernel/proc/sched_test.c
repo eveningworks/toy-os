@@ -13,6 +13,7 @@
 // driven from the serial console that CI runs through at all.
 #include "ktest.h"
 #include "scheduler.h"
+#include "tty.h"
 #include "pipe.h"        // pipe_wait_chan() -- one channel per pipe
 #include "win_events.h" // win_events_wait_chan() -- one channel per client
 #include "proc_info.h"  // PROC_STATE_*
@@ -272,8 +273,12 @@ KTEST("sched", "every waitable object has its own channel") {
     // category wake again, wearing a pointer.
     KTEST_ASSERT(scheduler_wait_chan_pid(1) != scheduler_wait_chan_pid(2));
     KTEST_ASSERT(win_events_wait_chan(1) != win_events_wait_chan(2));
-    KTEST_ASSERT(SCHED_CHAN_KEY != SCHED_CHAN_TIMER);
-    KTEST_ASSERT(SCHED_CHAN_KEY != scheduler_wait_chan_pid(1));
+    // The console terminal's channel, rather than a global "a key
+    // happened" one -- there is no such thing now that a terminal is an
+    // object, and a per-terminal channel is what stops a keystroke in
+    // one window waking every other window's shell.
+    KTEST_ASSERT(tty_wait_chan(tty_console()) != SCHED_CHAN_TIMER);
+    KTEST_ASSERT(tty_wait_chan(tty_console()) != scheduler_wait_chan_pid(1));
 
     int a = pipe_create(), b = pipe_create();
     if (a >= 0 && b >= 0) {
