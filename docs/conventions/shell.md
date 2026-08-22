@@ -450,3 +450,55 @@ by all three shells -- so every shell here turns ICANON off, exactly as
 `readline` does on Linux. It exists for programs with no editor of their
 own. `docs/tty-design.md` states it at length; do not "fix" it by
 deleting one of the two.
+
+## A JOB IS A PROCESS GROUP, AND THE JOB TABLE IS THE SHELL'S
+
+`Ctrl-Z` suspends the console's foreground group; `/bin/tosh` hears
+about it through `SYS_WAITPID`'s `SYS_WUNTRACED`, puts it in
+`userland/lib/tosh_jobs.c`, and `jobs`/`fg` are how a person gets back
+to it.
+
+**THE KERNEL KNOWS ABOUT GROUPS AND NOTHING ABOUT JOBS.** It has no idea
+that `cat big | grep x` is one thing somebody started, which stage's
+status to report, or what to print when they ask what is suspended.
+That is a shell's bookkeeping in bash, dash and zsh alike, and it is a
+shell's here for the same reason: nothing in the kernel would be
+improved by learning what a command line looked like. The table is
+therefore in `userland/lib/`, in its own file rather than another
+section of `tosh.c` -- **the split is by LIFETIME**, since a job outlives
+the command line that made it and everything in `tosh.c` serves one.
+
+Five things that bite:
+
+- **`jobs` AND `fg` HAVE TO BE BUILTINS, and that is the test this
+  file's own shadowing rule sets.** `cd` is a builtin because it changes
+  the SHELL's directory; these are builtins because the table is the
+  shell's and there is nothing for a program to read. A `/bin/fg` would
+  be a separate process, with no view of its parent's table and unable
+  to take the terminal on its behalf -- so there is nothing for it to
+  do MORE of, which is the whole test. POSIX makes them special
+  builtins for the same reason.
+- **A PIPELINE IS ONE JOB.** SUSP reaches the group, so every stage
+  stops together -- which means the wait loop must STOP WAITING on the
+  remaining stages the moment one reports a stop, or the shell parks
+  against processes nothing is going to resume. One entry goes in the
+  table, named by the LAST stage, because that is whose status the
+  pipeline reports.
+- **`fg` DOES THREE THINGS AND THE ORDER IS THE WHOLE THING**: hand the
+  terminal over, THEN `SIGCONT` the group, THEN wait. A job given the
+  terminal only after it starts can miss a `Ctrl-C` typed immediately;
+  one resumed without the terminal keeps running while every keystroke
+  goes to the shell, which reads as a hung job rather than a shell bug.
+  `tools/jobs_test.py`'s discriminating check is exactly that Ctrl-C.
+- **THE SHELL PRINTS `[1]+ Stopped`, BECAUSE NOBODY ELSE CAN.** The
+  kernel SWALLOWS the SUSP key when a job holds the terminal, exactly as
+  it swallows INTR, so the line editor never sees it. Without that line
+  a Ctrl-Z looks like the program having finished -- and unlike a
+  Ctrl-C, the process is still there, holding memory, invisible.
+- **A STOP IS NOT AN EXIT, AND THE CODE SAYS SO.** `SYS_WUNTRACED`
+  answers `SIGNAL_STOP_BASE + sig` (256 + sig) for a child that is still
+  alive and unreaped, beside the existing `SIGNAL_EXIT_BASE + sig` (128)
+  for one that died of a signal. Anything that treats a waitpid result
+  as an exit is wrong on that path -- which is why `sys_waitpid_untraced()`
+  is a separate entry point rather than a flag on `sys_waitpid()`, and
+  why `run_stripped()` suppresses its `[exit N]` line for one.

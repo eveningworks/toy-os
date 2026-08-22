@@ -94,7 +94,9 @@ a command), and the `gui3`/`nano` aliases.
 ### Processes and programs
 
 - [`apps`](apps.md)
+- [`fg`](fg.md)
 - [`gui`](gui.md)
+- [`jobs`](jobs.md)
 - [`kill`](kill.md)
 - [`run`](run.md)
 - [`spawn`](spawn.md)

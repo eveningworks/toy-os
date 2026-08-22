@@ -510,7 +510,7 @@ whenever a headline here tells you something you did not already know.
 - **The kernel RELOCATES ITSELF at boot -- it is not running where it was linked.**
 - **A BLOCKED PROCESS WAITS ON A CHANNEL, AND A CHANNEL IS AN ADDRESS.**
 - **THE KERNEL STORES NO ENVIRONMENT, AND `SYS_SPAWN` TAKES A STRUCT**
-- **A SIGNAL SETS A BIT; THE KERNEL ACTS ON IT WHEN IT IS SAFE TO.**
+- **A SIGNAL SETS A BIT; THE KERNEL ACTS ON IT WHEN IT IS SAFE TO.** -- except STOP/CONTINUE, which act at SEND time and never touch the pending set; STOPPED is a FLAG beside the state, and a test that reads the flag cannot see the bug.
 - **A PROCESS GROUP IS AN INT, AND SPAWN TAKES IT.**
 - **THE CONSOLE HAS AN OWNER AND A FOREGROUND GROUP, AND THE INTR KEY IS TEMPORARY WHERE IT IS.**
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
@@ -616,6 +616,7 @@ whenever a headline here tells you something you did not already know.
 - **A COMMAND WITH A READ HALF AND A WRITE HALF MOVES AS ONE PIECE OR NOT AT ALL.**
 - **COLOUR IS AN ESCAPE SEQUENCE, NOT A SYSCALL.**
 - **`edit` IS A `/bin` PROGRAM, AND THE KERNEL DRAWS NOTHING** -- it renders with ANSI on fd 1 over a raw fd 0, its model is `utext` (shared with Notepad), and moving it emptied `apps/ui/`.
+- **A JOB IS A PROCESS GROUP, AND THE JOB TABLE IS THE SHELL'S** -- `Ctrl-Z`, `jobs` and `fg`; the kernel knows about groups and nothing about jobs.
 - **A TERMINAL IS AN OBJECT, AND THE CONSOLE IS `tty0`** -- `kernel/tty/` holds the line discipline, and `Ctrl-C` on the physical keyboard and in a window are one implementation. INTR left the keyboard driver; `SCHED_CHAN_KEY` is gone.
 - **A `text` BOOT REACHES A RING-3 SHELL, AND THE KERNEL SHELL STANDS DOWN FOR IT.**
 - **RING 3 CAN READ THE CONSOLE -- fd 0, and it BLOCKS.**
@@ -984,7 +985,13 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   lost keystroke), `ctrlc_test.py` (**Ctrl-C interrupting a real job**, through
   the real keyboard on a `text` boot: a spinning job dies, a two-stage
   PIPELINE dies as a unit, the shell survives, and at an empty prompt the
-  key is still a keystroke that cancels the line), `stdin_test.py`
+  key is still a keystroke that cancels the line),
+  `jobs_test.py` (**Ctrl-Z, `jobs` and `fg`** -- its sibling, same shape,
+  same `text` boot: a job SURVIVES and stops accruing CPU, `jobs` names
+  it, `fg` resumes it, and a pipeline suspends and resumes as ONE group.
+  Its discriminating check is the Ctrl-C after `fg`, which is what
+  catches a resume that forgot to hand the terminal over),
+  `stdin_test.py`
   (blocking fd 0 and `/bin/tosh`, which
   needs the physical console and so takes the desktop down first),
   `qemu_matrix.py` (the suite against SEVERAL QEMU

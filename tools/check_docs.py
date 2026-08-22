@@ -267,6 +267,13 @@ def shell_commands():
     way in (tests/echo -> echo_test and friends) and the name on disk is
     the name people type. The builtins come from dispatch() itself,
     which is the only authority on what the shell handles.
+
+    THERE ARE TWO SHELLS AND BOTH ARE ASKED. This used to read only
+    apps/shell.c, which was right when the kernel shell was the only one
+    with builtins -- but /bin/tosh has its own, and the ones that are
+    NOT also kernel builtins were invisible to this check. `jobs` and
+    `fg` were the first two, and they are exactly the shape of thing
+    that ships undocumented: a builtin whose page nothing demands.
     """
     names = set()
     seed_bin = os.path.join(REPO, "seed", "sync", "bin")
@@ -275,6 +282,8 @@ def shell_commands():
             if os.path.isfile(os.path.join(seed_bin, n)):
                 names.add(n)
     for m in re.finditer(r'k_strcmp\(cmd, "([a-z0-9_]+)"\)', read("apps/shell.c")):
+        names.add(m.group(1))
+    for m in re.finditer(r'seq\(cmd, "([a-z0-9_]+)"\)', read("userland/lib/tosh.c")):
         names.add(m.group(1))
     return names
 

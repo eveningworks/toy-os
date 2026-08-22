@@ -42,24 +42,26 @@ static void echo_erase(struct tty *t) {
     t->drv->output(t, "\b \b", 3);
 }
 
-// The INTR character arrived on a terminal with ISIG set. Returns 1 if
-// it was CONSUMED, 0 if the caller should deliver it as an ordinary
-// byte.
+// A SIGNAL-GENERATING CHARACTER arrived on a terminal with ISIG set --
+// INTR (^C) or SUSP (^Z). Returns 1 if it was CONSUMED, 0 if the caller
+// should deliver it as an ordinary byte.
 //
 // THE TWO OUTCOMES ARE THE TWO STATES A SHELL IS IN, and both are
 // right:
 //
 //   - A JOB IS RUNNING (the foreground group is not the owner's own):
-//     the group gets SIGINT and the byte is DISCARDED, which is what a
-//     line discipline does with INTR. Delivering it too would leave a
-//     stray 0x03 for whoever reads next -- and the shell, one
+//     the group gets the signal and the byte is DISCARDED, which is
+//     what a line discipline does with these. Delivering it too would
+//     leave a stray 0x03 for whoever reads next -- and the shell, one
 //     instruction from putting its own group back in front, is exactly
 //     who that is.
 //   - NO JOB IS RUNNING (the shell's own group is in front, or nobody
 //     owns this terminal): nothing is signalled and the byte goes
 //     through, so Ctrl-C at a prompt still abandons the line exactly as
 //     it does today -- KLINE_CANCEL, in the one line editor the shells
-//     share.
+//     share. Ctrl-Z there is an ordinary byte the editor ignores, which
+//     is right: there is no job to suspend, and suspending the shell
+//     itself would leave nobody to resume it.
 //
 // Compared against the OWNER'S group rather than tracking a "is a job
 // running" flag, because the flag would be a second record of the same
@@ -68,12 +70,14 @@ static void echo_erase(struct tty *t) {
 //
 // Called from the keyboard IRQ on tty0, so it may only set bits and
 // flip scheduler state; signal_send_group() keeps to that for
-// everything except SIGKILL, which is why INTR sends SIGINT.
-static int intr(struct tty *t) {
+// everything except SIGKILL, which is why INTR sends SIGINT and SUSP
+// sends SIGTSTP. A stop is a scheduler state flip and nothing else, so
+// it is safe from here for the same reason (abi/signal_abi.h).
+static int signal_char(struct tty *t, int sig) {
     if (!t->owner_pid || !t->fg_pgid) return 0;
     if (t->fg_pgid == scheduler_pgid(t->owner_pid)) return 0;
 
-    signal_send_group(t->fg_pgid, SIGINT);
+    signal_send_group(t->fg_pgid, sig);
     // POSIX flushes the input queue on a signal-generating character.
     // Only the PENDING LINE here, not the whole queue: bytes already
     // readable may belong to a reader this interrupt has nothing to do
@@ -105,8 +109,12 @@ void tty_ldisc_input(struct tty *t, uint8_t byte, uint8_t mods) {
 
     const struct tty_termios *tio = &t->tio;
 
-    if ((tio->lflag & TTY_ISIG) && byte == tio->cc[TTY_VINTR]) {
-        if (intr(t)) return;
+    if (tio->lflag & TTY_ISIG) {
+        // ORDER MATTERS ONLY IF SOMEBODY CONFIGURES THE SAME BYTE
+        // TWICE, which termios permits and nothing here does; INTR
+        // first is the arbitrary-but-stated choice.
+        if (byte == tio->cc[TTY_VINTR] && signal_char(t, SIGINT))  return;
+        if (byte == tio->cc[TTY_VSUSP] && signal_char(t, SIGTSTP)) return;
         // Not consumed -- fall through and deliver it as a byte.
     }
 

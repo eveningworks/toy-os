@@ -50,17 +50,30 @@ static const struct tty_driver console_driver = {
     .winsize = console_winsize,
 };
 
+// The control characters and lflag a fresh terminal starts with.
+//
+// ONE FUNCTION BECAUSE THERE ARE TWO TERMINALS TO CREATE -- tty0 at
+// boot and a pty on demand -- and the list was written out in both.
+// Adding TTY_VSUSP made that concrete: a fifth slot set in one place
+// and not the other is a Ctrl-Z that works on the console and not in a
+// window, which is exactly the kind of difference the tty layer exists
+// to abolish.
+static void tty_termios_defaults(struct tty_termios *tio) {
+    tio->lflag = TTY_LFLAG_DEFAULT;
+    tio->cc[TTY_VINTR]  = 0x03; // ^C
+    tio->cc[TTY_VERASE] = '\b';
+    tio->cc[TTY_VKILL]  = 0x15; // ^U
+    tio->cc[TTY_VEOF]   = 0x04; // ^D
+    tio->cc[TTY_VSUSP]  = 0x1A; // ^Z
+}
+
 void tty_init(void) {
     struct tty *t = &g_ttys[0];
     k_memset(t, 0, sizeof *t);
     t->used = 1;
     t->index = 0;
     t->drv = &console_driver;
-    t->tio.lflag = TTY_LFLAG_DEFAULT;
-    t->tio.cc[TTY_VINTR]  = 0x03;
-    t->tio.cc[TTY_VERASE] = '\b';
-    t->tio.cc[TTY_VKILL]  = 0x15;
-    t->tio.cc[TTY_VEOF]   = 0x04;
+    tty_termios_defaults(&t->tio);
 }
 
 struct tty *tty_console(void) { return &g_ttys[0]; }
@@ -84,11 +97,7 @@ struct tty *tty_create(const struct tty_driver *drv, void *drv_data) {
         t->index = i;
         t->drv = drv;
         t->drv_data = drv_data;
-        t->tio.lflag = TTY_LFLAG_DEFAULT;
-        t->tio.cc[TTY_VINTR]  = 0x03;
-        t->tio.cc[TTY_VERASE] = '\b';
-        t->tio.cc[TTY_VKILL]  = 0x15;
-        t->tio.cc[TTY_VEOF]   = 0x04;
+        tty_termios_defaults(&t->tio);
         return t;
     }
     return NULL;

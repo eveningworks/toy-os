@@ -31,8 +31,8 @@
                              // until one is complete. Off = raw: every
                              // byte is readable the moment it arrives.
 #define TTY_ECHO   (1u << 1) // echo input back to the terminal's output
-#define TTY_ISIG   (1u << 2) // INTR generates a signal instead of being
-                             // delivered as an ordinary byte
+#define TTY_ISIG   (1u << 2) // INTR and SUSP generate signals instead of
+                             // being delivered as ordinary bytes
 
 // Control-character slots. POSIX has 32 of these; this has the ones
 // with an implementation. An unused slot is not reserved for a future
@@ -44,7 +44,12 @@
                      // it delivers that text WITHOUT a newline; on an
                      // empty line the reader gets 0, which is what makes
                      // `cat` with no arguments end when you press it
-#define TTY_NCCS   4 // slots in the table
+#define TTY_VSUSP  4 // ^Z -- SIGTSTP to the foreground group (needs ISIG).
+                     // The SUSPEND key, and the reason it is a terminal
+                     // character rather than something the shell reads:
+                     // the job holds the terminal while it runs, so the
+                     // shell is not reading anything to notice it with
+#define TTY_NCCS   5 // slots in the table
 
 struct tty_termios {
     uint32_t lflag;            // TTY_*

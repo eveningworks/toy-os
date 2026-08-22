@@ -70,6 +70,7 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~Default dispositions (terminate, ignore)~~ DONE 2026-08-22 -- `SYS_SIGACTION`, two dispositions and no handler
 - [x] ~~A `kill`/`ps`-style shell command~~ DONE 2026-08-22 -- `kill [-SIGNAL] <pid|-pgid>`, and `ps` grew a PGID column
 - [x] ~~Exit-status visible to a waiting parent~~ DONE 2026-08-22 -- 128 + the signal, the convention a shell prints
+- [x] ~~`SIGSTOP`/`SIGTSTP`/`SIGCONT` and a stopped process~~ DONE 2026-08-22 -- a flag beside the state, outside the pending set
 - [ ] Userspace signal handlers -- a trampoline that returns through the kernel, not just default dispositions
 - [x] ~~`Ctrl-C` in the GUI Terminal~~ DONE 2026-08-22 -- it runs `/bin/tosh` on a pty now, so it is the same code as the console's
 - [x] ~~**Ctrl-C interrupting a running program**, the way it works in a Linux shell~~ DONE 2026-08-22 -- a whole pipeline, as one group
@@ -86,7 +87,8 @@ and job control is what a terminal on that TTY makes possible.
 - [ ] Ctrl-R reverse search in ring 3 -- needs a query line the console front end cannot yet paint
 - [ ] `/bin/tosh` history that persists -- the kernel shell writes `/etc/history`, ring 3 keeps its ring in memory
 - [ ] A console line longer than the screen is wide repaints wrongly in `/bin/tosh` -- `\r` returns to the start of the ROW
-- [ ] `Ctrl+D`/`Ctrl+Z` as terminal signals -- `Ctrl+C` is one now; the other two are still keystrokes an app happens to notice
+- [x] ~~`Ctrl+Z` as a terminal signal~~ DONE 2026-08-22 -- SUSP in the line discipline, beside INTR
+- [ ] `Ctrl+D` as a terminal signal -- it ends a canonical read; it is still not a signal an app can act on
 - [x] ~~The concept of a foreground process for a terminal~~ DONE 2026-08-22 -- a foreground GROUP, `kernel/tty.h`, physical console only
 - [ ] Multiple virtual terminals on `Ctrl+Alt+F1..F4`
 - [x] ~~The GUI Terminal app and the physical console as two clients of the same TTY layer~~ DONE 2026-08-22
@@ -126,7 +128,8 @@ and job control is what a terminal on that TTY makes possible.
 - [ ] Quoting/escaping, `&&`/`||`/`;`, globbing, aliases, `$?`/`$1`, and a history buffer
 - [ ] Line editing
 - [x] ~~`>`/`<`/`>>` redirection~~ DONE 2026-08-19 -- in `/bin/tosh` and the GUI Terminal
-- [ ] Background jobs (`&`) and `fg`/`bg`/`jobs`
+- [x] ~~`Ctrl-Z`, `jobs` and `fg`~~ DONE 2026-08-22 -- a job table in the shell, over a STOPPED process in the kernel
+- [ ] Background jobs (`&`) and `bg`
 - [x] ~~Tab completion (commands, then paths)~~ done
 - [ ] Globbing (`*`, `?`) expanded by the shell, not each command
 - [ ] Environment variables + `export`

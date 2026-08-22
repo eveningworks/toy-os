@@ -594,24 +594,26 @@ produced once (see `docs/decisions.md`).
 
 ### Shell pipes & job control
 
-New milestone, lightly scoped. Today's shell (`apps/shell.c`) dispatches
-one command at a time to completion -- no `|`, no redirection, no
-backgrounding. A first rough breakdown, and why it comes after Milestones
-5-6 above: piping needs two processes running with a connected fd, and
-backgrounding needs a process that isn't blocking the shell's own prompt --
-both want a real process model first, not just today's "one blocking
-`run`."
+**Most of this milestone is BUILT.** What follows was written when none
+of it was, and is corrected here rather than left to be re-derived: `|`
+pipes (N stages, not two), `>`/`<`/`>>` redirection, `Ctrl-C`, and
+`Ctrl-Z`/`jobs`/`fg` all landed, in `userland/lib/tosh.c` and
+`userland/lib/tosh_jobs.c`. The original scoping note's premise -- that
+this needed a real process model first -- held exactly: every piece of
+it arrived after `SYS_SPAWN`, process groups and the tty layer, and none
+of it needed `fork()`.
 
-- `|` pipes -- connect one command's stdout fd to the next command's stdin
-  fd; needs an in-kernel pipe buffer (a new fd kind, similar in spirit to
-  `syscall.c`'s existing `FD_KIND_FILE`/`FD_KIND_SOCKET` tagged union).
-- `>`/`<`/`>>` redirection -- reopen a command's stdin/stdout against a
-  real file before it runs, reusing the existing `fs_*` calls.
-- Background jobs (`&`) -- run a command via `fork()`/`exec()`-style process model's non-blocking
-  spawn instead of `process_run_ring3()`'s synchronous one, returning
-  control to the prompt immediately.
-- `fg`/`bg`/`jobs` -- track backgrounded processes (extends the `ps`-style
-  listing from Signals & process control) and let the shell wait on one explicitly.
+What is left, and the one thing worth knowing about it:
+
+- **Background jobs (`&`) and `bg`.** Not merely "the same thing without
+  the wait". A background job that READS the terminal competes with the
+  shell for the keyboard, which is the invisible-second-reader bug the
+  init milestone already paid for once -- so `&` needs `SIGTTIN`/
+  `SIGTTOU` (a background process touching the terminal is STOPPED, not
+  served) in the same change, or it reintroduces it.
+- Quoting, globbing, `&&`/`||`/`;`, `$?`, aliases -- the shell LANGUAGE,
+  which is a separate problem from the process plumbing above and does
+  not depend on any of it.
 
 ### Init & service supervision
 

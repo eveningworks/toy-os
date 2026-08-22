@@ -569,7 +569,7 @@ that the whole system's environment.
 ## A SIGNAL SETS A BIT; THE KERNEL ACTS ON IT WHEN IT IS SAFE TO.
 
 `abi/signal_abi.h` for the numbers, `kernel/signal.h` for the policy,
-`docs/signals-design.md` for the staged plan. Six signals, POSIX's
+`docs/signals-design.md` for the staged plan. Nine signals, POSIX's
 numbers, no realtime signals, no queuing, no user-space handlers.
 
 **The one idea: SENDING AND ACTING ARE DIFFERENT MOMENTS.** A signal
@@ -610,6 +610,45 @@ disposition terminates. Stage 3 of the design breaks this invariant;
 immediately, from the sender. That is what makes Force Quit trustworthy
 against a process wedged in its own loop, and it is why the INTR key
 sends `SIGINT` instead: `SIGKILL`'s teardown is not IRQ-safe.
+
+**AND STOP/CONTINUE DELIBERATELY DO NOT GO THROUGH ANY OF IT** --
+`SIGSTOP`, `SIGTSTP` and `SIGCONT` are applied AT SEND TIME, by the
+sender, and never reach the pending set. The invariant above is why:
+suspending is not a kind of dying, so teaching `pending` to mean two
+things would cost every reader of it a policy lookup. And it is safe
+where a termination is not -- a stop flips one byte of scheduler state,
+allocating nothing and freeing nothing, so it is IRQ-safe in the way
+`SIGKILL` is not, which is what lets `Ctrl-Z` work from the keyboard
+handler.
+
+**What that buys, and what it costs.** A stop reaches a process wedged
+inside a kernel path exactly as reliably as a running one, which is more
+than `SIGTERM` can say. The cost is the mirror image: a `SIGTERM` to a
+STOPPED process does nothing until somebody continues it, because
+delivery happens on a return to ring 3 and a suspended process does not
+make one. POSIX behaves identically, and `SIGKILL` is the exception here
+as there.
+
+**STOPPED IS A FLAG BESIDE THE STATE, NOT A FIFTH `enum sched_state`.**
+A process suspended while parked on a pipe has to come back to that
+pipe, so a real state would have to remember which state it displaced
+and what channel that state was waiting on -- bookkeeping for a
+transition nothing here can exercise, because there are no interruptible
+syscalls to wake a blocked process into a stop. As a flag it composes
+with every state for free: **one line in `find_next_runnable()`** honours
+it, a wake still lands and leaves the slot READY-but-stopped, and
+`SIGCONT` is one clear. Linux makes it a state (`TASK_STOPPED`) because
+it CAN wake an interruptible sleeper to stop it promptly; that is the
+decision to revisit when interruptible syscalls land here.
+
+**AND EVERY TEST OF IT THAT READS THE FLAG IS BLIND.** Deleting that one
+line in the picker -- so a "stopped" process carries on running -- left
+five of six KTESTs green, because they all assert on
+`scheduler_test_state()`, which reads the flag the bug does not touch.
+The sixth spawns `/tests/spin_test` and asserts its `cpu_ns` does not
+advance. **Progress, not bookkeeping**, is the only thing that can see
+this class of bug, and the same rule applies to anything else the
+scheduler decides.
 
 **"NOT THE RUNNING PROCESS" AND "NOT THE LOADED ADDRESS SPACE" ARE
 DIFFERENT QUESTIONS**, and conflating them leaked an entire address
