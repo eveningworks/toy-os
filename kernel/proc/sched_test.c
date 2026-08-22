@@ -219,8 +219,8 @@ KTEST("sched", "a wake reaches only the channel it names") {
     // try to RUN one once the wake below marks it READY.
     scheduler_preempt_disable();
 
-    int a = scheduler_test_park(tf_a, &chan_a);
-    int b = scheduler_test_park(tf_b, &chan_b);
+    int a = scheduler_test_park(tf_a, &chan_a, SCHED_WAIT_EVENT);
+    int b = scheduler_test_park(tf_b, &chan_b, SCHED_WAIT_PIPE);
 
     // Everything is captured, then the slots are released, and only
     // then is anything asserted: KTEST_ASSERT returns from the body, so

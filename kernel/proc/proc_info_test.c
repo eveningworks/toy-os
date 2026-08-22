@@ -127,3 +127,86 @@ KTEST("procinfo", "a destroyed address space does not haunt its successor") {
     KTEST_ASSERT_EQ(vmm_user_bytes(again), (uint64_t)0);
     vmm_destroy_address_space(again);
 }
+
+// --- what a blocked process is waiting for ---------------------------
+//
+// scheduler_test_park() fabricates a slot rather than spawning
+// anything, for the reason api/scheduler.h gives: a real process
+// parking on a CHOSEN channel at a chosen moment is a race. Both rules
+// it states are kept below -- the preemption guard spans the whole
+// window, and the slot is released before anything is asserted.
+
+KTEST("procinfo", "a blocked process reports what it waits on") {
+    uint64_t tf[SCHED_TF_SLOTS] = {0};
+    static const char chan;
+
+    scheduler_preempt_disable();
+    int idx = scheduler_test_park(tf, &chan, SCHED_WAIT_PIPE);
+    struct proc_info info;
+    int got = idx >= 0 ? scheduler_proc_info(idx, &info) : 0;
+    if (idx >= 0) scheduler_test_release(idx);
+    scheduler_preempt_enable();
+
+    if (idx < 0) KTEST_SKIP("no free process slots to fabricate");
+    KTEST_ASSERT_EQ(got, 1);
+    KTEST_ASSERT_EQ(info.state, (uint32_t)PROC_STATE_BLOCKED);
+    KTEST_ASSERT_EQ(info.wait_reason, (uint32_t)PROC_WAIT_PIPE);
+}
+
+KTEST("procinfo", "every wait reason is reported, and none as PROC_WAIT_NONE") {
+    // THE CHECK THAT KEEPS TWO ENUMERATIONS IN STEP. The scheduler's
+    // SCHED_WAIT_* and the ABI's PROC_WAIT_* are deliberately separate
+    // (abi/proc_info.h), which means a reason added kernel-side and not
+    // added to scheduler_proc_info()'s mapping would report as "not
+    // waiting for anything" -- a wrong answer that looks like a valid
+    // one. Walking the whole range turns that into a red check.
+    //
+    // The upper bound is SCHED_WAIT_KEY: adding SCHED_WAIT_<sixth>
+    // without extending this loop is the one drift it cannot catch, so
+    // scheduler.h's own comment says to keep them in step.
+    static const char chan;
+    uint32_t seen[SCHED_WAIT_KEY + 1] = {0};
+    int parked_ok = 1;
+
+    for (int r = SCHED_WAIT_EVENT; r <= SCHED_WAIT_KEY; r++) {
+        uint64_t tf[SCHED_TF_SLOTS] = {0};
+        struct proc_info info;
+        scheduler_preempt_disable();
+        int idx = scheduler_test_park(tf, &chan, r);
+        int got = idx >= 0 ? scheduler_proc_info(idx, &info) : 0;
+        if (idx >= 0) scheduler_test_release(idx);
+        scheduler_preempt_enable();
+        if (!got) { parked_ok = 0; break; }
+        seen[r] = info.wait_reason;
+    }
+
+    if (!parked_ok) KTEST_SKIP("no free process slots to fabricate");
+    for (int r = SCHED_WAIT_EVENT; r <= SCHED_WAIT_KEY; r++) {
+        KTEST_ASSERT(seen[r] != PROC_WAIT_NONE);
+        // Distinct, too: a mapping that collapsed two reasons onto one
+        // value would pass the non-zero check and still lie.
+        for (int q = SCHED_WAIT_EVENT; q < r; q++) KTEST_ASSERT(seen[q] != seen[r]);
+    }
+}
+
+KTEST("procinfo", "a runnable process waits on nothing") {
+    // The other half of the field's contract: wait_reason is meaningless
+    // outside PROC_STATE_BLOCKED, so it must be cleared rather than left
+    // holding whatever the slot last parked on. Without the reset a
+    // woken process would keep reading as `block(pipe)` in `ps`.
+    uint64_t tf[SCHED_TF_SLOTS] = {0};
+    static const char chan;
+
+    scheduler_preempt_disable();
+    int idx = scheduler_test_park(tf, &chan, SCHED_WAIT_TIMER);
+    if (idx >= 0) scheduler_wake(&chan, 0); // now READY, still fabricated
+    struct proc_info info;
+    int got = idx >= 0 ? scheduler_proc_info(idx, &info) : 0;
+    if (idx >= 0) scheduler_test_release(idx);
+    scheduler_preempt_enable();
+
+    if (idx < 0) KTEST_SKIP("no free process slots to fabricate");
+    KTEST_ASSERT_EQ(got, 1);
+    KTEST_ASSERT_EQ(info.state, (uint32_t)PROC_STATE_READY);
+    KTEST_ASSERT_EQ(info.wait_reason, (uint32_t)PROC_WAIT_NONE);
+}

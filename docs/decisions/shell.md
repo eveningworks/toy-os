@@ -834,3 +834,62 @@ argument.**
 `heap check` is an ACTION rather than a toggle, and a write-triggered
 action has direct precedent: Linux's `/proc/sys/vm/drop_caches` and
 SLUB's `validate` are both "do it now" on write.
+
+## `tty` reports the console rather than naming it, and the wait reason lives INSIDE `ps`'s state
+
+Two commands answer one question -- *I typed something and nothing
+happened; where did it go?* -- and both diverge from the obvious Unix
+shape on purpose.
+
+**`tty` is not POSIX's `tty`.** That one prints the device name of the
+terminal on stdin (`/dev/pts/3`) and nothing else. toy-os has no device
+nodes, so the only path this command could print would be one it made
+up, and a fabricated `/dev/console` is worse than no answer: it looks
+like something a program could open. What it prints instead is the state
+`kernel/tty.h` and `api/keyboard.h` actually hold -- the console's
+owner, its foreground group, and which of the two reasons has stood the
+ring-0 reader down. On Linux that is `ps -o tpgid` plus `fuser
+/dev/tty`, i.e. no single command, because there is a filesystem to ask
+instead. Keeping the name was still right: the thing it reports IS the
+TTY layer, and when virtual terminals land `QUERY_TTY` becomes a list
+and this grows a row per terminal rather than being renamed.
+
+**One record, not three reads.** Ownership, the foreground group and the
+keyboard stand-down live in two subsystems, and a caller reading them
+one at a time can assemble a state the machine was never in -- a console
+changes hands between two syscalls. Same reasoning that put `df`'s usage
+numbers inside `QUERY_FSINFO`.
+
+**A process can be blocked on the console without owning it**, and `tty`
+reports that honestly rather than smoothing it over. Under a compositor
+`sys_do_read_console()` parks the reader *before* claiming anything,
+because `win_input.c` drains the same key ring to feed the desktop and
+popping a key here would make keystrokes vanish from the desktop at
+random. So a graphical boot with a `/bin/tosh` parked on fd 0 correctly
+reads "console owner: nobody" while `ps` shows that shell as
+`block(key)`. The two together are the picture; either alone is
+misleading.
+
+**The wait reason goes inside `ps`'s STATE column, not in a WCHAN column
+beside it.** Linux puts it beside, showing the kernel symbol being slept
+on (`ps -o stat,wchan`), which is the right shape when the answer is one
+of hundreds of addresses that only a kernel developer can read. Here
+there are five reasons, they are English words, and every one of them is
+meaningless outside `block` -- so a seventh column would be blank on
+every runnable row and would cost width an 80-column console does not
+have. `block(child)` is one fact and reads as one.
+
+**The reported reasons are a SECOND enumeration** (`PROC_WAIT_*` in
+`abi/proc_info.h`, mapped from the scheduler's `SCHED_WAIT_*`), for the
+same reason the states already are: the scheduler must stay free to gain
+a reason without that reaching a ring-3 binary. The cost of two
+enumerations is a mapping somebody has to keep total, so the `procinfo`
+KTESTs walk every scheduler reason and refuse both `PROC_WAIT_NONE` and
+a duplicate -- a sixth reason added kernel-side reddens a check instead
+of silently reporting as "not waiting for anything".
+
+It cost nothing to carry: `struct proc_info`'s `name` ended four bytes
+short of the struct's alignment, so `wait_reason` filled a hole that was
+already there. Every existing field kept its offset and `sizeof` did not
+change, which is the same append-without-disturbing move `ppid` made
+into `reserved`'s place, and a `_Static_assert` now holds both true.

@@ -61,7 +61,7 @@ KTEST("signal", "a signal to a pid or group that does not exist is refused") {
 KTEST("signal", "raising a signal sets a pending bit, and taking it clears the set") {
     uint64_t tf[SCHED_TF_SLOTS];
     scheduler_preempt_disable();
-    int idx = scheduler_test_park(tf, SCHED_CHAN_KEY);
+    int idx = scheduler_test_park(tf, SCHED_CHAN_KEY, SCHED_WAIT_KEY);
     if (idx < 0) {
         scheduler_preempt_enable();
         KTEST_SKIP("no free process slot to fabricate");
@@ -91,7 +91,7 @@ KTEST("signal", "two of the same signal before delivery are ONE signal") {
     // too, and is why a burst of Ctrl-C does not queue up N deaths.
     uint64_t tf[SCHED_TF_SLOTS];
     scheduler_preempt_disable();
-    int idx = scheduler_test_park(tf, SCHED_CHAN_KEY);
+    int idx = scheduler_test_park(tf, SCHED_CHAN_KEY, SCHED_WAIT_KEY);
     if (idx < 0) {
         scheduler_preempt_enable();
         KTEST_SKIP("no free process slot to fabricate");
@@ -115,7 +115,7 @@ KTEST("signal", "two of the same signal before delivery are ONE signal") {
 KTEST("signal", "the LOWEST pending signal is the one taken") {
     uint64_t tf[SCHED_TF_SLOTS];
     scheduler_preempt_disable();
-    int idx = scheduler_test_park(tf, SCHED_CHAN_KEY);
+    int idx = scheduler_test_park(tf, SCHED_CHAN_KEY, SCHED_WAIT_KEY);
     if (idx < 0) {
         scheduler_preempt_enable();
         KTEST_SKIP("no free process slot to fabricate");
@@ -142,7 +142,7 @@ KTEST("signal", "an IGNORED signal is dropped at arrival, not queued") {
     // an ignored signal never gets a bit.
     uint64_t tf[SCHED_TF_SLOTS];
     scheduler_preempt_disable();
-    int idx = scheduler_test_park(tf, SCHED_CHAN_KEY);
+    int idx = scheduler_test_park(tf, SCHED_CHAN_KEY, SCHED_WAIT_KEY);
     if (idx < 0) {
         scheduler_preempt_enable();
         KTEST_SKIP("no free process slot to fabricate");
@@ -174,7 +174,7 @@ KTEST("signal", "starting to ignore a signal drops one already pending") {
     // meaning "must die", that is exactly what would happen.
     uint64_t tf[SCHED_TF_SLOTS];
     scheduler_preempt_disable();
-    int idx = scheduler_test_park(tf, SCHED_CHAN_KEY);
+    int idx = scheduler_test_park(tf, SCHED_CHAN_KEY, SCHED_WAIT_KEY);
     if (idx < 0) {
         scheduler_preempt_enable();
         KTEST_SKIP("no free process slot to fabricate");
@@ -201,7 +201,7 @@ KTEST("signal", "a BLOCKED process is woken with -EINTR so it can be delivered t
     // back into the call the signal is trying to end.
     uint64_t tf[SCHED_TF_SLOTS];
     scheduler_preempt_disable();
-    int idx = scheduler_test_park(tf, SCHED_CHAN_KEY);
+    int idx = scheduler_test_park(tf, SCHED_CHAN_KEY, SCHED_WAIT_KEY);
     if (idx < 0) {
         scheduler_preempt_enable();
         KTEST_SKIP("no free process slot to fabricate");
@@ -242,7 +242,7 @@ KTEST("signal", "every live process is in a group, and nothing is in group 0") {
 KTEST("signal", "setpgid joins an EXISTING group, or leads a new one") {
     uint64_t tf[SCHED_TF_SLOTS];
     scheduler_preempt_disable();
-    int idx = scheduler_test_park(tf, SCHED_CHAN_KEY);
+    int idx = scheduler_test_park(tf, SCHED_CHAN_KEY, SCHED_WAIT_KEY);
     if (idx < 0) {
         scheduler_preempt_enable();
         KTEST_SKIP("no free process slot to fabricate");
@@ -277,9 +277,9 @@ KTEST("signal", "a group signal reaches every member and nobody else") {
     // equally well against a send that signalled EVERYTHING.
     uint64_t tf_a[SCHED_TF_SLOTS], tf_b[SCHED_TF_SLOTS], tf_c[SCHED_TF_SLOTS];
     scheduler_preempt_disable();
-    int ia = scheduler_test_park(tf_a, SCHED_CHAN_KEY);
-    int ib = ia >= 0 ? scheduler_test_park(tf_b, SCHED_CHAN_KEY) : -1;
-    int ic = ib >= 0 ? scheduler_test_park(tf_c, SCHED_CHAN_KEY) : -1;
+    int ia = scheduler_test_park(tf_a, SCHED_CHAN_KEY, SCHED_WAIT_KEY);
+    int ib = ia >= 0 ? scheduler_test_park(tf_b, SCHED_CHAN_KEY, SCHED_WAIT_KEY) : -1;
+    int ic = ib >= 0 ? scheduler_test_park(tf_c, SCHED_CHAN_KEY, SCHED_WAIT_KEY) : -1;
     if (ic < 0) {
         if (ib >= 0) scheduler_test_release(ib);
         if (ia >= 0) scheduler_test_release(ia);

@@ -848,6 +848,26 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
     return slot;
 }
 
+// SCHED_WAIT_* (kernel-internal) -> PROC_WAIT_* (what ring 3 sees).
+//
+// A TRANSLATION RATHER THAN THE SAME NUMBERS TWICE, for the reason
+// abi/proc_info.h gives: the two enumerations are allowed to diverge,
+// and the states already do (they do not agree on BLOCKED). What keeps
+// them in step is procinfo's "every wait reason is reported" KTEST,
+// which walks every SCHED_WAIT_* and refuses PROC_WAIT_NONE -- so a
+// sixth reason added to scheduler.h reddens a check instead of silently
+// reporting as "not waiting for anything".
+static uint32_t reported_wait_reason(int reason) {
+    switch (reason) { // dispatch-ok: bounded by scheduler.h's SCHED_WAIT_* labels
+    case SCHED_WAIT_EVENT: return PROC_WAIT_EVENT;
+    case SCHED_WAIT_PIPE:  return PROC_WAIT_PIPE;
+    case SCHED_WAIT_CHILD: return PROC_WAIT_CHILD;
+    case SCHED_WAIT_TIMER: return PROC_WAIT_TIMER;
+    case SCHED_WAIT_KEY:   return PROC_WAIT_KEY;
+    default:               return PROC_WAIT_NONE;
+    }
+}
+
 int scheduler_proc_info(int index, struct proc_info *out) {
     if (!out || index < 0 || index >= MAX_PROCS) return 0;
 
@@ -860,6 +880,7 @@ int scheduler_proc_info(int index, struct proc_info *out) {
     out->exit_code = 0;
     out->ppid = p->ppid;
     out->pgid = p->pgid;
+    out->wait_reason = PROC_WAIT_NONE;
     out->name[0] = '\0';
 
     if (p->state == SCHED_UNUSED) return 1; // a real answer: slot empty
@@ -884,7 +905,9 @@ int scheduler_proc_info(int index, struct proc_info *out) {
         case SCHED_RUNNING: out->state = PROC_STATE_RUNNING; break;
         case SCHED_READY:   out->state = (index == current_index)
                                           ? PROC_STATE_RUNNING : PROC_STATE_READY; break;
-        case SCHED_BLOCKED: out->state = PROC_STATE_BLOCKED; break;
+        case SCHED_BLOCKED: out->state = PROC_STATE_BLOCKED;
+                            out->wait_reason = reported_wait_reason(p->wait_reason);
+                            break;
         case SCHED_ZOMBIE:  out->state = PROC_STATE_ZOMBIE;  break;
         default:            out->state = PROC_STATE_UNUSED;  break;
     }
@@ -1107,13 +1130,13 @@ const void *scheduler_wait_chan_pid(int pid) {
 // first free slot; -1 when the table is full. Deliberately does NOT
 // touch alive_count -- this slot holds no process, and counting it
 // would make the scheduler believe there is one more thing to run.
-int scheduler_test_park(uint64_t *tf, const void *chan) {
+int scheduler_test_park(uint64_t *tf, const void *chan, int reason) {
     if (!tf) return -1;
     for (int i = 0; i < MAX_PROCS; i++) {
         if (procs[i].state != SCHED_UNUSED) continue;
         procs[i].state = SCHED_BLOCKED;
         procs[i].wait_chan = chan;
-        procs[i].wait_reason = 0;
+        procs[i].wait_reason = reason;
         procs[i].kernel_rsp = (uint64_t)tf;
         // A FABRICATED SLOT MUST LOOK LIKE A FRESH PROCESS, which is
         // exactly what spawn_from_fs() gives a real one. Slots are

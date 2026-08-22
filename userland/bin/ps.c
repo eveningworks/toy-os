@@ -41,6 +41,39 @@ static const char *state_name(uint32_t s) {
     }
 }
 
+static const char *wait_name(uint32_t w) {
+    switch (w) {
+        case PROC_WAIT_EVENT: return "event";
+        case PROC_WAIT_PIPE:  return "pipe";
+        case PROC_WAIT_CHILD: return "child";
+        case PROC_WAIT_TIMER: return "timer";
+        case PROC_WAIT_KEY:   return "key";
+        default:              return "?";
+    }
+}
+
+// The STATE column: `block(pipe)` rather than a bare `block`.
+//
+// **INSIDE THE STATE, NOT BESIDE IT.** Linux's `ps` puts this in a
+// separate WCHAN column naming the kernel symbol being slept on
+// (`ps -o stat,wchan`), which is the right shape when the answer is one
+// of hundreds of addresses. Here there are five reasons and every one of
+// them is meaningless in any other state, so a seventh column would be
+// blank on every runnable row and would cost width an 80-column console
+// does not have. One column, one fact.
+//
+// An unknown reason prints `block(?)` rather than a number: this is a
+// ring-3 binary reading an enumeration the kernel owns, and a kernel
+// that gained a sixth reason without teaching this one about it should
+// say so visibly. The `procinfo` KTESTs are what make that a rare sight.
+static void fmt_state(const struct proc_info *p, char *out, int cap) {
+    if (p->state != PROC_STATE_BLOCKED || p->wait_reason == PROC_WAIT_NONE) {
+        snprintf(out, cap, "%s", state_name(p->state));
+        return;
+    }
+    snprintf(out, cap, "block(%s)", wait_name(p->wait_reason));
+}
+
 // CPU time as seconds with two decimals. Milliseconds would be the
 // obvious unit and is the wrong one: cpu_ns is CUMULATIVE over a
 // process's whole life, so a long-lived desktop reads in the thousands
@@ -57,10 +90,11 @@ static void print_row(const struct proc_info *p, int depth) {
     // for a timestamp and wrong for a table. Formatting the number
     // first and padding it as a STRING is how you get a right-aligned
     // column here.
-    char pid[12], ppid[12], pgid[12], cpu[24], mem[24], line[160], indent[24];
+    char pid[12], ppid[12], pgid[12], state[16], cpu[24], mem[24], line[160], indent[24];
     snprintf(pid, sizeof pid, "%u", (unsigned)p->pid);
     snprintf(ppid, sizeof ppid, "%u", (unsigned)p->ppid);
     snprintf(pgid, sizeof pgid, "%u", (unsigned)p->pgid);
+    fmt_state(p, state, sizeof state);
     fmt_cpu(p->cpu_ns, cpu, sizeof cpu);
     snprintf(mem, sizeof mem, "%u", (unsigned)(p->mem_bytes / 1024));
 
@@ -69,8 +103,8 @@ static void print_row(const struct proc_info *p, int depth) {
     for (int i = 0; i < n; i++) indent[i] = ' ';
     indent[n] = '\0';
 
-    snprintf(line, sizeof line, "%5s %5s %5s %-7s %8s %8s  %s%s\n",
-             pid, ppid, pgid, state_name(p->state), cpu, mem, indent, p->name);
+    snprintf(line, sizeof line, "%5s %5s %5s %-12s %8s %8s  %s%s\n",
+             pid, ppid, pgid, state, cpu, mem, indent, p->name);
     put(line);
 }
 
@@ -79,7 +113,11 @@ static void header(void) {
     // that look alike: the parent is who STARTED it, the group is what a
     // signal REACHES. `kill -TERM -<pgid>` and Ctrl-C act on the second,
     // and neither was visible from a shell before.
-    put("  PID  PPID  PGID STATE      CPU(s)   MEM(K)  NAME\n");
+    //
+    // STATE is twelve wide because the longest thing it holds is
+    // `block(child)` -- widened rather than truncated, since it is the
+    // one column here whose tail is the whole content.
+    put("  PID  PPID  PGID STATE          CPU(s)   MEM(K)  NAME\n");
 }
 
 // Reads the whole table once. A snapshot rather than a slot-at-a-time

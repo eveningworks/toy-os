@@ -25,8 +25,6 @@ buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
 - [ ] `kbd` -- print each keypress as scancode, keycode, character and modifiers  *(Introspecting a running machine)*
-- [ ] `tty` -- the console's owner, its foreground group, and whether a compositor holds the keyboard  *(Introspecting a running machine)*
-- [ ] `ps` says what a blocked process WAITS ON (`block(key)`, `block(pipe)`)  *(Introspecting a running machine)*
 - [ ] `font glyph <char>` -- a glyph's coverage map, its line box, and whether it has ink inside  *(Introspecting a running machine)*
 <!-- END next-up -->
 
@@ -677,8 +675,8 @@ tests that assert it did the right thing. Each of these was written by
 hand as a throwaway probe during a real hunt (see roadmap-details).
 
 - [ ] **NEXT** `kbd` -- print each keypress as scancode, keycode, character and modifiers
-- [ ] **NEXT** `tty` -- the console's owner, its foreground group, and whether a compositor holds the keyboard
-- [ ] **NEXT** `ps` says what a blocked process WAITS ON (`block(key)`, `block(pipe)`)
+- [x] ~~`tty` -- the console's owner, its foreground group, and whether a compositor holds the keyboard~~ DONE 2026-08-22
+- [x] ~~`ps` says what a blocked process WAITS ON (`block(key)`, `block(pipe)`)~~ DONE 2026-08-22
 - [ ] **NEXT** `font glyph <char>` -- a glyph's coverage map, its line box, and whether it has ink inside
 - [ ] `lsfd` -- a process's open descriptors and what each one names
 

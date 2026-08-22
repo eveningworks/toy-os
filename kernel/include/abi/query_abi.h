@@ -137,6 +137,15 @@ struct query_msg {
 // different answer from "every syscall used 0 bytes".
 #define QUERY_KSTACK_SYSCALL 12
 
+// The physical console: who owns it, what is in front of it, and who is
+// holding the keyboard away from it. SCALAR.
+//
+// ONE RECORD BECAUSE THERE IS ONE KEYBOARD. Multiple virtual terminals
+// are a roadmap item, and when they land this becomes a LIST -- which
+// is exactly the growth the registry is shaped for, and why nothing
+// here is addressed as "the" console by name.
+#define QUERY_TTY       13
+
 
 // QUERY_PROVIDERS' record.
 struct query_provider_info {
@@ -353,6 +362,28 @@ struct query_kstack_syscall {
     uint64_t nr;
     uint64_t peak;              // deepest this syscall has ever gone, bytes
     char     name[24];
+};
+
+// QUERY_TTY's record.
+//
+// **THREE PARTIES, NOT ONE, and that is the whole reason this exists.**
+// A console with an owner and no foreground group, a console nobody
+// owns while a compositor holds the keyboard, and a console nobody
+// owns at all are three different machines, and from outside they all
+// look like "typing does nothing". `tty` prints them apart.
+//
+// The pids are 64-bit because every NAMED field is (api/query.h), so
+// `config get tty.owner_pid` works. They are pids on the wire and ints
+// in the kernel; nothing here is ever negative.
+#define QUERY_TTY_COMPOSITOR (1u << 0) // a compositor owns the keyboard
+#define QUERY_TTY_CLAIMED    (1u << 1) // a ring-3 process is reading fd 0
+#define QUERY_TTY_SUSPENDED  (1u << 2) // ring 0's blocking readers stood down
+
+struct query_tty {
+    uint64_t owner_pid;       // first process to read fd 0; 0 = nobody
+    uint64_t foreground_pgid; // the group Ctrl-C reaches; 0 = none
+    uint64_t compositor_pid;  // the registered compositor; 0 = none
+    uint64_t flags;           // QUERY_TTY_*
 };
 
 #endif // ABI_QUERY_ABI_H

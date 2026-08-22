@@ -456,6 +456,64 @@ def main():
         out = dbg.send("sh cat /redir_ls.txt") or ""
         check("a builtin's output redirects too", "bin" in out, out.strip()[:60])
 
+        # --- WHO OWNS THE CONSOLE, AND WHAT IS WAITING FOR IT --------
+        #
+        # `tty` and the wait reason in `ps`'s STATE column both report
+        # state that ONLY EXISTS ON THIS BOOT. Under a desktop the
+        # compositor holds the keyboard, nobody owns the console, and
+        # every assertion below would pass vacuously or not at all -- a
+        # text target is the only way a ring-3 shell owns the physical
+        # console, which is why these live here rather than in the gate.
+        #
+        # Read back through a FILE rather than over this socket, for the
+        # reason tosh_row() gives: a /bin program's output goes to the
+        # screen tosh owns. That also makes it a round trip -- the file
+        # is written by the guest and read by a completely different
+        # path (the debug console's `sh cat`).
+        print("console ownership, and what a blocked process waits on")
+        shell_pid = (tosh_row(dbg) or (0, 0))[0]
+
+        dbg.send("sh rm /tty.txt")
+        time.sleep(0.4)
+        type_line(flow, "tty > /tty.txt")
+        time.sleep(2.5)
+        out = dbg.send("sh cat /tty.txt") or ""
+        check("`tty` names the shell as the console's owner",
+              f"pid {shell_pid} (" in out, out.strip()[:90])
+        # A console with an owner and no foreground group is the state
+        # in which Ctrl-C silently does nothing while everything else
+        # looks healthy -- kernel/tty.h's invariant, from outside.
+        check("...and it has a foreground group, so Ctrl-C means something",
+              "foreground group: none" not in out, out.strip()[:90])
+        # WHICH suspend reason, not merely that there is one: on a text
+        # boot ring 0 stands down because a ring-3 process claimed fd 0,
+        # NOT because a compositor took the keyboard. A `tty` that
+        # confused the two would print a compositor that is not running.
+        check("...because a ring-3 process claimed fd 0, not a compositor",
+              "read by a ring-3 process through fd 0" in out
+              and "compositor" not in out, out.strip()[:90])
+
+        dbg.send("sh rm /ps.txt")
+        time.sleep(0.4)
+        type_line(flow, "ps > /ps.txt")
+        time.sleep(2.5)
+        out = dbg.send("sh cat /ps.txt") or ""
+        # The shell is blocked waiting for the very job writing this
+        # file, so its row must say so. Asserting on the TOSH row rather
+        # than on the whole listing: init is also in waitpid, and a
+        # check that accepted any `block(child)` anywhere would pass
+        # with the shell's own state reported wrongly.
+        tosh_line = next((l for l in out.splitlines() if " tosh" in l), "")
+        check("`ps` says the shell is waiting for its CHILD",
+              "block(child)" in tosh_line, tosh_line.strip()[:90] or out.strip()[:90])
+        # What a broken version would still pass: a state column that
+        # printed a bare `block` for everything would satisfy any check
+        # looking for the word. Every blocked row must NAME a reason.
+        bare = [l.strip() for l in out.splitlines()
+                if " block " in l or l.rstrip().endswith(" block")]
+        check("...and no blocked process reports a bare `block`",
+              not bare, "; ".join(bare)[:90])
+
         # --- PIPELINES ---------------------------------------------
         #
         # `a | b` is the descriptor table's other payoff: the shell

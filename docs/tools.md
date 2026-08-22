@@ -594,6 +594,17 @@ manual steps to be worth automating:
   works), and a failed redirect NOT running the command. Three assert
   PIPELINES -- two stages, three stages (so the loop is exercised
   rather than a special case for two), and a BUILTIN feeding one.
+  Five more assert CONSOLE OWNERSHIP, which only exists on this boot --
+  under a desktop nobody owns the console and every one of them would
+  pass vacuously: `tty` names the shell as the owner, it has a
+  foreground group (the invariant that makes Ctrl-C mean anything), the
+  keyboard stood ring 0 down because a ring-3 process claimed fd 0 and
+  NOT because a compositor took it, `ps` reports the shell as
+  `block(child)` while it waits for the very job writing the file, and
+  no blocked row reports a bare `block` -- which is what a state column
+  that had lost the reason would still satisfy. Read back through a
+  FILE, since a /bin program's output goes to the screen tosh owns
+  rather than to the serial socket.
   Three more assert the SHARED LINE EDITOR at that prompt --
   Home+Delete editing mid-line, Ctrl-U killing a line before it runs,
   and Up recalling the previous command -- each through a filesystem

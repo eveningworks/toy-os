@@ -49,10 +49,6 @@ it has exonerated one this session and convicted another.
 - [ ] A `sched` KTEST fails under KVM, and only under KVM
 - [ ] Other GUI tools may share the calculator's mid-paint flake
 
-## Reproducible
-
-- [ ] `_` is INVISIBLE on the ring-0 console -- typed, accepted and stored correctly, but nothing is drawn; reproduces every time, on both keyboard paths
-
 ## Seen once, cause never established
 
 - [ ] The ring-3 compositor page-faults inside its OWN framebuffer grant on CI -- `RING-3 CRASH: Page fault RIP=0x8000012cf5 CS=0x23 error_code=0x6 CR2=0x85001be400`, then `init: toywm (pid 2) exited with code -1 after 5450 ms`. CR2 is inside WIN_FB_VADDR (0x8500000000) at offset ~1.79 MB, and the grant was 900 pages = 3.6 MB = exactly 1280x720x4, so the faulting address is in the MIDDLE of a region that was granted. error_code 0x6 is write + user + NOT-PRESENT, so a page inside the grant is missing rather than mis-permissioned. Seen on a GitHub runner (QEMU 8.2.2); not yet reproduced locally, including 3 runs through tools/qemu_matrix.py on the same QEMU version

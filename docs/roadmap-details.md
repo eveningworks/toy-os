@@ -3219,37 +3219,3 @@ so, which is the listing cap working as designed rather than a second
 finding.
 
 
-## `_` is INVISIBLE on the ring-0 console
-
-**Repro.** Boot the `text` target and type an underscore at the prompt
-(`Shift` over the key US calls `/` on a `se` layout). The cell advances
-and nothing is drawn. `tools/keyboard_paths_test.py` demonstrates that
-the character really did arrive: it types `touch /kb_probe.txt` and the
-file appears with the underscore in its name, on both keyboard paths.
-The same key in the ring-3 GUI Terminal draws an underscore, though a
-dimmer one than the surrounding text.
-
-**Cause, as far as measured.** The console draws `line_h` rows of each
-glyph's `cell_h`-row bitmap -- 14 of 16 at the default font size --
-deliberately, and `api/font_face.h` says why: a cell here is OPAQUE, so
-painting the taller bitmap would write two rows of background into the
-row below and erase the previous line on every character drawn. That is
-the documented cost of the cell/line split, and for a `g` or a `y` it
-means a clipped tail. For `_`, whose ink is ENTIRELY in that band, it
-means the whole glyph.
-
-The dimness in ring 3 is a separate, smaller thing: the bar is thin
-enough at 14px to land between pixel rows, so antialiasing spreads it
-across two at partial coverage. Nothing is wrong with that rendering; it
-simply reads as a different colour beside fully-covered letters.
-
-**Why it is not fixed here.** The three ways out are all bigger than the
-symptom. Painting the full bitmap needs the console's overwrite-in-place
-to stop being opaque, which is what lets a character be replaced without
-clearing first. Blending only the rows past `line_h` keeps that, but
-then a glyph overwritten in place leaves the old one's overhang behind,
-which for `_` means stale bars after any redraw. Growing `line_h` to fit
-the cell costs the console about an eighth of its rows. Each is a real
-design change to the console's drawing model rather than a fix, and the
-right time to make it is when the TTY layer arrives, which owns that
-model anyway.

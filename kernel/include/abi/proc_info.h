@@ -35,6 +35,27 @@
 #define PROC_STATE_BLOCKED 3
 #define PROC_STATE_ZOMBIE  4 // exited, not yet reaped -- still holds a slot
 
+// What a PROC_STATE_BLOCKED process is waiting for, as a LABEL. Read
+// `ps`'s state column: `block(pipe)`.
+//
+// A SECOND ENUMERATION FOR THE SAME REASON THE STATES ARE ONE: the
+// scheduler's SCHED_WAIT_* (api/scheduler.h) are kernel-internal and
+// free to gain a reason without that reaching a ring-3 binary, and this
+// header's own note above anticipated exactly this field. The mapping
+// lives in scheduler_proc_info(), and a KTEST asserts it is total --
+// every scheduler reason must arrive here as a distinct non-zero value,
+// so a sixth one added kernel-side cannot silently report as "none".
+//
+// MEANINGLESS IN ANY OTHER STATE, and reported as PROC_WAIT_NONE there
+// rather than left at whatever the slot last waited on -- a runnable
+// process that still named a channel would read as blocked on it.
+#define PROC_WAIT_NONE   0
+#define PROC_WAIT_EVENT  1 // a window/input event for this process
+#define PROC_WAIT_PIPE   2 // data (or EOF) on a pipe it reads
+#define PROC_WAIT_CHILD  3 // a spawned child of it exited
+#define PROC_WAIT_TIMER  4 // a deadline it asked to sleep until
+#define PROC_WAIT_KEY    5 // a keystroke on the physical console (fd 0)
+
 struct proc_info {
     int32_t  pid;         // 0 means "this slot is empty"; see SYS_PROC_INFO
     uint32_t state;       // PROC_STATE_*
@@ -60,7 +81,24 @@ struct proc_info {
     // grouping they are acting on. `ps` prints it.
     int32_t  pgid;
     char     name[PROC_NAME_MAX];
+    // PROC_WAIT_*, and only while PROC_STATE_BLOCKED.
+    //
+    // **IT COSTS NOTHING AND MOVES NOTHING.** `name` ends four bytes
+    // short of the struct's 8-byte alignment, so this fills a hole that
+    // was already there: every existing field keeps its offset and
+    // sizeof(struct proc_info) is unchanged, which is the same
+    // append-without-disturbing rule `ppid` followed when it took
+    // `reserved`'s place. A _Static_assert below holds that true.
+    uint32_t wait_reason;
 };
+
+// The hole this field went into. If a future field makes the struct
+// grow, that is fine -- but it must GROW rather than reshuffle, because
+// every offset here is a contract with a ring-3 binary.
+_Static_assert(sizeof(struct proc_info) == 64,
+               "struct proc_info must grow append-only -- existing fields never move");
+_Static_assert(__builtin_offsetof(struct proc_info, name) == 36,
+               "struct proc_info's name must stay where ring-3 binaries expect it");
 
 // **cpu_ns is cumulative, and that is deliberate.** A percentage is the
 // difference between two reads divided by the time elapsed between

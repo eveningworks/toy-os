@@ -304,9 +304,17 @@ extern const char sched_chan_timer; // a deadline a sleeper asked for
 const void *scheduler_wait_chan_pid(int pid);
 
 // What a blocked process is waiting for, as a LABEL for the `kstack`
-// debug surface. Never matched against anything: a wake is decided
-// purely by channel, and these exist so a diagnostic can print a word
-// instead of a pointer. Keep them in step with sched_wait_reason_name().
+// debug surface and for `ps`'s state column. Never matched against
+// anything: a wake is decided purely by channel, and these exist so a
+// diagnostic can print a word instead of a pointer.
+//
+// ADDING ONE IS THREE EDITS, and the third is the one that is easy to
+// miss: sched_wait_reason_name() below, scheduler_proc_info()'s
+// reported_wait_reason() (these are kernel-internal, and ring 3 sees
+// abi/proc_info.h's PROC_WAIT_* instead), and the LOOP BOUND in
+// kernel/proc/proc_info_test.c's "every wait reason is reported" --
+// which is what turns a forgotten mapping into a red check rather than
+// a process that reports as waiting for nothing.
 #define SCHED_WAIT_EVENT 1 // a window/input event for this process
 #define SCHED_WAIT_PIPE  2 // data (or EOF) on a pipe this process reads
 #define SCHED_WAIT_CHILD 3 // a spawned child of this process exited
@@ -620,7 +628,10 @@ int scheduler_wake(const void *chan, int64_t value);
 // Where a wake writes the return value, so a test can read it back.
 // Checked against the real trapframe layout by a _Static_assert.
 #define SCHED_TF_RAX 14
-int  scheduler_test_park(uint64_t *tf, const void *chan);
+// `reason` is a SCHED_WAIT_* label, carried so a fabricated slot looks
+// like a real one -- proc_info's wait_reason is read off it, and a
+// fixture that always parked with 0 could not exercise that at all.
+int  scheduler_test_park(uint64_t *tf, const void *chan, int reason);
 void scheduler_test_release(int idx);
 // The state of one slot, as a PROC_STATE_* value. -1 for a bad index.
 int  scheduler_test_state(int idx);
