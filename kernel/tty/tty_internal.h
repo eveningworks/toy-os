@@ -40,6 +40,7 @@ struct tty {
     void *drv_data;
 
     struct tty_termios tio;
+    struct tty_winsize ws; // only consulted when the driver has no winsize hook
 
     int owner_pid;
     int fg_pgid;

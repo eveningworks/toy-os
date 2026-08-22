@@ -199,12 +199,13 @@ this the obvious way), not from how much history it accumulated.
   fullscreen state is `docs/roadmap.md`'s window-size-as-a-property
   item.
 
-- **`apps/ui/` IS DOWN TO ONE WIDGET, and the GUI toolkit is
-  `userland/ui/`.** What is left is `ui_scrollback.{c,h}`, which the
-  KERNEL's own `edit` command draws with (`apps/editor.c`) and which
-  therefore cannot move to ring 3. **A new widget goes in
+- **`apps/ui/` IS GONE, and the GUI toolkit is `userland/ui/`.** The
+  last thing in it was `ui_scrollback.{c,h}`, which survived only
+  because the kernel's own `edit` drew with it; `edit` is `/bin/edit`
+  now, over the same `utext` model Notepad uses, so **the kernel image
+  contains no widget code at all.** A new widget goes in
   `userland/ui/`. There is no longer any such thing as a kernel-side
-  one.** `apps/theme.h` survives for the same kind of reason:
+  one. `apps/theme.h` survives for the same kind of reason:
   `apps/completion.c` colours the shell's tab-completion with it.
   Three rules the deleted widgets taught still apply to their ring-3
   twins: draw a popup LAST (drawing is immediate-mode, so z-order is

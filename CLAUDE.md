@@ -51,7 +51,7 @@ technical conventions below:
   Don't restate what's visible in a diff or build log, don't pad
   explanations.
 - Before adding a new feature to a GUI app, consider whether it should
-  be a reusable `apps/ui/` widget instead of a one-off (see this
+  be a reusable `userland/ui/` widget instead of a one-off (see this
   file's own note on widgets above) -- and ask the user first either
   way, don't decide unilaterally.
 - Act like a genuinely experienced OS/UI designer, not a generic
@@ -530,7 +530,7 @@ whenever a headline here tells you something you did not already know.
 - **`WIN_CLIENT_MAX_W/H` TRACKS THE DISPLAY CEILING, AND A SCREEN BIGGER THAN IT BREAKS MAXIMIZE SILENTLY.**
 - **A DESKTOP-SIZED WINDOW IS "MAXIMIZED", AND THERE IS NO FULLSCREEN STATE.**
 - **`-vga virtio` IS A REAL DISPLAY DRIVER, and nothing else boots it**
-- **`apps/ui/` IS DOWN TO ONE WIDGET, and the GUI toolkit is `userland/ui/`.**
+- **`apps/ui/` IS GONE, and the GUI toolkit is `userland/ui/`** -- the kernel image contains no widget code at all.
 - **Ring-3 GUI apps are written against Toykit's `uapp`, and a new one is a `.c` file in `userland/gui/` with NO Makefile edit.**
 - **TERMINAL IS A TERMINAL EMULATOR, NOT A SHELL WITH A WINDOW** -- it runs `/bin/tosh` on a pty, so the shell in a window is a real process and `Ctrl-C` there is the same code as the console's.
 - **An app with a cadence sets `tick_ms` and BLOCKS between frames.**
@@ -614,6 +614,7 @@ whenever a headline here tells you something you did not already know.
 - **A WRAPPER BUILTIN IS ONE COMMAND WITH TWO HALVES IN TWO RINGS, AND THE RING-3 HALF WILL BE WRONG.**
 - **A COMMAND WITH A READ HALF AND A WRITE HALF MOVES AS ONE PIECE OR NOT AT ALL.**
 - **COLOUR IS AN ESCAPE SEQUENCE, NOT A SYSCALL.**
+- **`edit` IS A `/bin` PROGRAM, AND THE KERNEL DRAWS NOTHING** -- it renders with ANSI on fd 1 over a raw fd 0, its model is `utext` (shared with Notepad), and moving it emptied `apps/ui/`.
 - **A TERMINAL IS AN OBJECT, AND THE CONSOLE IS `tty0`** -- `kernel/tty/` holds the line discipline, and `Ctrl-C` on the physical keyboard and in a window are one implementation. INTR left the keyboard driver; `SCHED_CHAN_KEY` is gone.
 - **A `text` BOOT REACHES A RING-3 SHELL, AND THE KERNEL SHELL STANDS DOWN FOR IT.**
 - **RING 3 CAN READ THE CONSOLE -- fd 0, and it BLOCKS.**
@@ -1099,7 +1100,7 @@ Five standing rules that are cheaper to know than to rediscover:
   install` timing out after 8 minutes). A gate that cries wolf gets
   ignored, which is worse than no gate. The half worth keeping -- a
   second QEMU -- is `qemu_matrix.py` now.
-- **`gui_regress.py` is the standard check** after touching `apps/ui/`,
+- **`gui_regress.py` is the standard check** after touching
   `userland/`, or anything the WM draws -- always with `--logs DIR`. It
   is ~56s; **its wall clock is bounded by the SLOWEST SINGLE TOOL and by
   the sum over the job count, whichever is larger** (~408 tool-seconds

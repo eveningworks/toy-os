@@ -34,9 +34,20 @@ static void console_output(struct tty *t, const char *buf, unsigned len) {
     for (unsigned i = 0; i < len; i++) vga_putc(buf[i]);
 }
 
+// DERIVED, never stored: the font size is a setting, so the console's
+// grid changes under a running program. A copy here is the one that goes
+// stale, and a full-screen program drawing to a stale size paints past
+// the bottom of the screen.
+static void console_winsize(struct tty *t, uint16_t *rows, uint16_t *cols) {
+    (void)t;
+    *rows = (uint16_t)vga_rows();
+    *cols = (uint16_t)vga_cols();
+}
+
 static const struct tty_driver console_driver = {
     .name = "console",
     .output = console_output,
+    .winsize = console_winsize,
 };
 
 void tty_init(void) {
@@ -134,6 +145,20 @@ void tty_output(struct tty *t, const char *buf, unsigned len) {
 }
 
 // --- termios ---------------------------------------------------------
+
+void tty_get_winsize(struct tty *t, struct tty_winsize *out) {
+    if (!t || !out) return;
+    if (t->drv->winsize) {
+        uint16_t r = 0, c = 0;
+        t->drv->winsize(t, &r, &c);
+        if (r && c) { out->rows = r; out->cols = c; return; }
+    }
+    *out = t->ws;
+}
+
+void tty_set_winsize(struct tty *t, const struct tty_winsize *ws) {
+    if (t && ws) t->ws = *ws;
+}
 
 void tty_get_termios(const struct tty *t, struct tty_termios *out) {
     if (!t || !out) return;

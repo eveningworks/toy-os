@@ -110,6 +110,8 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_TCGETATTR]     = { "tcgetattr",     sys_tcgetattr,     { A_INT, A_HEX } },
     [SYS_TCSETATTR]     = { "tcsetattr",     sys_tcsetattr,     { A_INT, A_HEX } },
     [SYS_SET_NONBLOCK]  = { "set_nonblock",  sys_set_nonblock,  { A_INT, A_INT } },
+    [SYS_TCGETWINSZ]    = { "tcgetwinsz",    sys_tcgetwinsz,    { A_INT, A_HEX } },
+    [SYS_TCSETWINSZ]    = { "tcsetwinsz",    sys_tcsetwinsz,    { A_INT, A_HEX } },
 };
 
 #define SYSCALL_TABLE_COUNT (sizeof SYSCALL_TABLE / sizeof SYSCALL_TABLE[0])

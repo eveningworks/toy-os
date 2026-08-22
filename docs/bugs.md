@@ -48,6 +48,7 @@ it has exonerated one this session and convicted another.
 - [ ] Injected clicks are LOST under parallel `gui_regress` load, and the failing checks are finally named
 - [ ] A `sched` KTEST fails under KVM, and only under KVM
 - [ ] Other GUI tools may share the calculator's mid-paint flake
+- [ ] `mm/kmalloc failure is reported, not papered over` fails intermittently -- 2 runs in 10 on 2026-08-22 against 0 in 4 on the commit before, which at those counts does not distinguish the two (0 of 4 is what a 20% rate looks like 41% of the time). The mechanism is plausible and UNPROVEN: the test arms the injector to fail the NEXT kmalloc, and any other kernel allocation arriving in between eats it -- a desktop is running throughout. Both failures were the first run after a `make iso`; six later runs on the same ISO were clean
 
 ## Seen once, cause never established
 

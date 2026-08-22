@@ -110,3 +110,33 @@ int sys_set_nonblock(struct syscall_ctx *c) {
     c->regs[14] = 0;
     return 0;
 }
+
+int sys_tcgetwinsz(struct syscall_ctx *c) {
+    struct tty *t = fd_tty(c->pml4, (int)(int32_t)c->a0);
+    if (!t) { c->regs[14] = (uint64_t)(int64_t)-ENOTTY; return 0; }
+
+    struct tty_winsize ws = {0, 0};
+    tty_get_winsize(t, &ws);
+    if (!vmm_copy_to_user(c->pml4, c->a1, &ws, sizeof ws)) {
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+    c->regs[14] = 0;
+    return 0;
+}
+
+int sys_tcsetwinsz(struct syscall_ctx *c) {
+    struct tty *t = fd_tty(c->pml4, (int)(int32_t)c->a0);
+    if (!t) { c->regs[14] = (uint64_t)(int64_t)-ENOTTY; return 0; }
+
+    struct tty_winsize ws;
+    if (!vmm_copy_from_user(c->pml4, &ws, c->a1, sizeof ws)) {
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+    // Holding the fd is the capability, as with tcsetattr -- and a
+    // console ignores this anyway, because its size is derived.
+    tty_set_winsize(t, &ws);
+    c->regs[14] = 0;
+    return 0;
+}

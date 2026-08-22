@@ -230,6 +230,8 @@ int sys_tcgetpgrp(struct syscall_ctx *c);
 // --- terminals (kernel/tty/tty_syscalls.c) ---------------------------
 int sys_openpty(struct syscall_ctx *c);
 int sys_set_nonblock(struct syscall_ctx *c);
+int sys_tcgetwinsz(struct syscall_ctx *c);
+int sys_tcsetwinsz(struct syscall_ctx *c);
 int sys_tcgetattr(struct syscall_ctx *c);
 int sys_tcsetattr(struct syscall_ctx *c);
 int sys_proc_info(struct syscall_ctx *c);

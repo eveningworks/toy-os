@@ -12,7 +12,6 @@
 // (apps/shell_rescue.c), for a disk whose /bin is damaged. See
 // `docs/decisions.md`.
 #include "shell_internal.h"
-#include "editor.h"
 
 // Reused across cmd_cat() calls, same reasoning as tfs.c's own
 // g_read_buf (fs_read()'s staging buffer): a fresh kmalloc() every call
@@ -154,33 +153,6 @@ void cmd_write_or_append(const char *args, int append) {
     line[n + 1] = '\0';
 
     if (!fs_write(path, line, append)) vga_write("write: failed\n");
-}
-
-// editor_run() blocks the calling context in its own keyboard-read
-// loop for the whole editing session -- exactly the class of command
-// shell_dispatch() through a vga_sink can't support (see vga.h's
-// struct vga_sink comment and terminal.c's BLOCKED_CMDS top comment).
-// apps/terminal.c gets `edit`/`nano` working anyway by intercepting the
-// command itself and driving editor_handle_key() through its own
-// non-blocking per-keystroke callback instead of ever calling
-// editor_run() through a sink -- see terminal.c's top comment. This
-// guard is a defensive backstop for the case that path is somehow
-// bypassed, not the normal way GUI Terminal support works.
-void cmd_edit(const char *name) {
-    if (!name || k_strlen(name) == 0) {
-        vga_write("usage: edit <file>\n");
-        return;
-    }
-    if (vga_sink_active()) {
-        vga_write("edit: not available here -- run it from the physical shell.\n");
-        return;
-    }
-    char path[FS_PATH_MAX];
-    if (!resolve_path(name, path)) {
-        vga_write("edit: path too long\n");
-        return;
-    }
-    editor_run(path);
 }
 
 void cmd_rm(const char *name) {

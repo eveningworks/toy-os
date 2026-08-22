@@ -46,6 +46,15 @@ struct tty_driver {
     // MAY BE CALLED FROM AN INTERRUPT (echo happens where the key
     // arrives), so it may not block, allocate, or touch user memory.
     void (*output)(struct tty *t, const char *buf, unsigned len);
+
+    // How big this terminal is, in cells. OPTIONAL: a driver that does
+    // not know returns 0, and the stored size is used instead.
+    //
+    // A HOOK RATHER THAN A STORED NUMBER for the console, because its
+    // size CHANGES -- the font size is a setting, and a bigger font
+    // means fewer rows. Storing it would be a second copy of a fact
+    // vga.c already has, and the copy is the one that goes stale.
+    void (*winsize)(struct tty *t, uint16_t *rows, uint16_t *cols);
 };
 
 #define TTY_MAX 8 // terminals, kernel-wide: tty0 plus one per window
@@ -140,6 +149,14 @@ int tty_eof_pending(struct tty *t);
 int tty_readable(const struct tty *t);
 
 // --- termios ---------------------------------------------------------
+
+// The terminal's size in cells. From the driver where it knows (the
+// console asks vga.c), otherwise whatever was last set -- which for a
+// pty is the emulator measuring its own window.
+void tty_get_winsize(struct tty *t, struct tty_winsize *out);
+// Only meaningful for a terminal whose driver does NOT know its own
+// size; a console's answer is derived and this cannot override it.
+void tty_set_winsize(struct tty *t, const struct tty_winsize *ws);
 
 void tty_get_termios(const struct tty *t, struct tty_termios *out);
 // Setting it DISCARDS a partly-typed canonical line rather than

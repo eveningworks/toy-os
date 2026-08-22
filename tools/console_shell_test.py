@@ -514,6 +514,46 @@ def main():
         check("...and no blocked process reports a bare `block`",
               not bare, "; ".join(bare)[:90])
 
+        # --- THE EDITOR, AS A /bin PROGRAM -------------------------
+        #
+        # `edit` was a kernel builtin drawing with vga_putc(). It is a
+        # ring-3 binary now that draws with ANSI escapes on fd 1, asks
+        # SYS_TCGETWINSZ how big the screen is, and reads a raw fd 0 --
+        # which is only possible because a terminal is an object with a
+        # size and a termios (docs/tty-design.md).
+        #
+        # ASSERTED THROUGH THE FILESYSTEM, never through the screen: a
+        # full-screen program's display is exactly the thing a screenshot
+        # cannot check cheaply, and "the bytes reached the disk" is the
+        # claim that matters. Read back by a completely different path
+        # (the debug console's `sh cat`), so the editor claiming success
+        # proves nothing on its own.
+        print("the editor, as a /bin program")
+        dbg.send("sh rm /edit_probe.txt")
+        time.sleep(0.4)
+        type_line(flow, "edit /edit_probe.txt")
+        time.sleep(2.5)
+        flow.session.send_text("hello")
+        time.sleep(0.6)
+        flow.session.send_key("f2")   # save
+        time.sleep(1.5)
+        flow.session.send_key("f3")   # exit
+        time.sleep(1.5)
+        out = dbg.send("sh cat /edit_probe.txt") or ""
+        check("`edit` saves what was typed into it",
+              "hello" in out, out.strip()[:60])
+
+        # THE OTHER HALF: an editor that left the terminal in raw mode,
+        # or never returned at all, would pass the check above and leave
+        # a dead shell. So the shell must run something afterwards --
+        # and F3 must have been what ended it, not a crash.
+        dbg.send("sh rm /filetest.txt")
+        time.sleep(0.4)
+        type_line(flow, "file_test")
+        time.sleep(2.5)
+        check("...and the shell is still usable after it exits",
+              "filetest.txt" in root_names(dbg))
+
         # --- PIPELINES ---------------------------------------------
         #
         # `a | b` is the descriptor table's other payoff: the shell

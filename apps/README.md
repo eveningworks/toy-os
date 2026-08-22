@@ -102,9 +102,6 @@ ring-3 processes now; see the next section.)
   it spawns `/bin/wm/system/toywm` and waits for it. Registered as both
   `gui` and `gui3`, the second an alias kept so notes and scripts that
   ask for the ring-3 desktop by name keep selecting what they meant.
-- **editor** (`editor.c`) -- the `edit` command's buffer and keymap. The
-  one thing in this directory that still draws, which is why
-  `apps/ui/ui_scrollback.c` survives.
 - **demo** (`demo.c`) -- the scripted tour on the demo ISO. Its `gui`
   steps travel over the window transport now (`api/win_debug.h`), the
   same path the debug console and every test tool use.
@@ -124,13 +121,15 @@ Where each thing lives now:
 | `apps/wm/*` (event loop, chrome, compositing, the `gui` debug commands) | `userland/wm/*`, built as `/bin/wm/system/toywm` |
 | `apps/gui_apps.c` (the app registry) | `userland/wm/gui_apps.c`, still reading `/usr/wm/desktop/*.desktop` |
 | `apps/ui/*` (buttons, primitives, focus ring, scrollbar, textbox, radio list, icon grid) | `userland/ui/uui_*` -- Toykit, which is what a client programs against |
+| `apps/ui/ui_scrollback.*` and `apps/editor.*` (the `edit` command) | `/bin/edit`, over `userland/ui/utext.c` -- the model Notepad already used |
 | the GUI apps themselves | `userland/gui/{system,apps,demos}/` |
 
-**What is left of `apps/ui/` is one file**, `ui_scrollback.{c,h}`. It
-survives because the KERNEL's own `edit` command draws with it
-(`apps/editor.c`), so it cannot move to ring 3. Do not add a widget
-here: a new one belongs in `userland/ui/`, and there is no longer any
-such thing as a kernel-side one.
+**`apps/ui/` IS GONE ENTIRELY** as of 2026-08-22. The last thing in it,
+`ui_scrollback.{c,h}`, survived only because the kernel's own `edit`
+drew with it; `edit` is `/bin/edit` now, over the same `utext` model
+Notepad uses, so **the kernel image contains no widget code at all.** A
+widget belongs in `userland/ui/`, and there is no longer any such thing
+as a kernel-side one.
 
 `apps/gui3.c` is all that connects this directory to the desktop: it
 spawns `/bin/wm/system/toywm` and waits for it. When the desktop exits

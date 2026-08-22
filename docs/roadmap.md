@@ -92,10 +92,11 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~The GUI Terminal app and the physical console as two clients of the same TTY layer~~ DONE 2026-08-22
 - [x] ~~`termios`-style settings: raw vs cooked, echo on/off, and the per-terminal state to hold them~~ DONE 2026-08-22
 - [x] ~~A per-TTY input queue, so two terminals don't share one keyboard buffer~~ DONE 2026-08-22
-- [ ] Window size as a property a program can ask for (the `ioctl` every full-screen program expects)
+- [x] ~~Window size as a property a program can ask for (the `ioctl` every full-screen program expects)~~ DONE 2026-08-22
 - [x] ~~Output processing: ANSI SGR (colour) parsed by the console~~ done -- `kernel/lib/ansi.c`, for the console and any sink
 - [x] ~~ANSI cursor movement, erasing and `?25` visibility~~ done -- `tools/ansi_cursor_test.py` checks the pixels
 - [ ] Scrolling regions (DECSTBM) and the alternate screen buffer, which is what a full-screen program's scrollback needs
+- [ ] The GUI Terminal needs a cursor-addressable GRID, not a scrollback stream -- `/bin/edit` runs there and cannot address a screen
 - [ ] Output processing: newline translation, tab expansion
 - [ ] `isatty()`, so a program can tell a terminal from a pipe -- what `ls --color=auto` needs
 - [ ] Cursor movement and screen clearing escapes are swallowed, not implemented

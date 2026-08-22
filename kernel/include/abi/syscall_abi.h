@@ -1289,6 +1289,29 @@ struct sys_stat {
                             // master you own, never on a slave you are
                             // about to hand to somebody else.
 
+#define SYS_TCGETWINSZ 65 // RDI = an fd naming a terminal, RSI = pointer
+                          // to a `struct tty_winsize` to fill. Returns 0
+                          // or -errno.
+                          //
+                          // `ioctl(TIOCGWINSZ)`, which is the FIRST
+                          // thing every full-screen program does -- an
+                          // editor that guessed 80x25 would paint past
+                          // the bottom of anything else.
+#define SYS_TCSETWINSZ 66 // RDI = fd, RSI = pointer to a `struct
+                          // tty_winsize`. Returns 0 or -errno.
+                          //
+                          // For a TERMINAL EMULATOR, which is the only
+                          // thing that knows how big its window is in
+                          // CELLS -- it has the font. The physical
+                          // console derives its own size from vga.c and
+                          // ignores this: a stored copy of a fact the
+                          // kernel already has is the copy that goes
+                          // stale when the font size changes.
+                          //
+                          // POSIX would raise SIGWINCH here. There is
+                          // no such signal yet (docs/roadmap.md); a
+                          // program that cares re-asks.
+
 // What SYS_OPENPTY fills in. A struct rather than two out-registers
 // because a syscall here returns one value, and two `int *` arguments
 // would be two user pointers to validate instead of one.

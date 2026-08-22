@@ -66,7 +66,6 @@ void cmd_cat(const char *name);
 void cmd_touch(const char *name);
 void cmd_mkdir(const char *name);
 void cmd_write_or_append(const char *args, int append);
-void cmd_edit(const char *name);
 void cmd_rm(const char *name);
 void cmd_pwd(void);
 void cmd_cd(const char *args);

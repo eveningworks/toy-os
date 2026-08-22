@@ -350,6 +350,34 @@ same program as the shell on a `text` boot -- a real process, with a pid,
 visible in `ps`. `Ctrl-C` works at both `$` prompts, through one line
 discipline.
 
+## `edit` IS A `/bin` PROGRAM, AND THE KERNEL DRAWS NOTHING
+
+The full-screen editor was `apps/editor.c`, drawing with `vga_putc()`
+and reading with `keyboard_getchar()`. Nothing about editing a file needs
+ring 0, and the three things it took from there are all terminal
+properties now: ANSI escapes on fd 1 instead of the framebuffer,
+`SYS_TCGETWINSZ` instead of `vga_rows()`, a raw fd 0 instead of the
+keyboard driver.
+
+**Moving it emptied `apps/ui/`.** That directory survived one file
+longer than the rest of the widget set purely because `edit` drew with
+it. The kernel image now contains no widget code at all.
+
+**Its text model is `utext`, the same one Notepad uses** -- not a third
+one. `utext.h` records that Notepad hand-wrote sixty lines of key
+handling before the shared edit core existed, and that a second editor
+would have written them again, differently. This is the second editor,
+and it did not.
+
+**What it needs that a window cannot give it yet:** a screen it can
+ADDRESS. The physical console has a grid; the GUI Terminal's screen is a
+character stream in a scrollback, which cannot express "go back up three
+rows". Roadmap item, and the same one as the alternate screen buffer.
+
+**`nano` is gone as a name** -- it was an alias on the builtin, and an
+alias for a `/bin` program would be a second binary or a hard link to
+keep true.
+
 ## A TERMINAL IS AN OBJECT, AND THE CONSOLE IS `tty0`
 
 `kernel/tty/` holds `struct tty`: an input queue, a line discipline over

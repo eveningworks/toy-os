@@ -51,6 +51,21 @@ struct tty_termios {
     uint8_t  cc[TTY_NCCS];     // TTY_V* -> the byte that means it
 };
 
+// How big the terminal is, in CHARACTER CELLS. What every full-screen
+// program asks for first, and what `ioctl(TIOCGWINSZ)` answers on a real
+// system.
+//
+// **CELLS, NOT PIXELS.** A terminal's size is a grid; a window's is in
+// pixels, and the conversion belongs to whoever knows the font. For the
+// physical console that is the kernel (it has the framebuffer and the
+// glyph metrics); for a pty it is the terminal emulator, which measures
+// its own window and says so. Neither answer is derivable from the
+// other, which is why this is asked rather than computed.
+struct tty_winsize {
+    uint16_t rows;
+    uint16_t cols;
+};
+
 // The state a new terminal starts in: POSIX's defaults, deliberately.
 //
 // A PROGRAM THAT KNOWS NOTHING ABOUT TERMINALS SHOULD GET WHAT IT

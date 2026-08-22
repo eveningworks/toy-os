@@ -356,6 +356,14 @@ int sys_openpty(int *master_fd, int *slave_fd);
 int sys_tcgetattr(int fd, struct tty_termios *tio);
 int sys_tcsetattr(int fd, const struct tty_termios *tio);
 
+// How big the terminal is, in CHARACTER CELLS -- what every full-screen
+// program asks for first (ioctl(TIOCGWINSZ) elsewhere). The set half is
+// for a terminal EMULATOR, which is the only thing that knows how big
+// its window is in cells; the physical console derives its own and
+// ignores it.
+int sys_tcgetwinsz(int fd, struct tty_winsize *ws);
+int sys_tcsetwinsz(int fd, const struct tty_winsize *ws);
+
 // A read that would BLOCK returns -1 with errno EAGAIN instead. What a
 // program with its own event loop needs when it also has to drain a
 // child -- there is no poll() here, so it drains on a tick.

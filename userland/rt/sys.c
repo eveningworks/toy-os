@@ -610,6 +610,16 @@ int sys_set_nonblock(int fd, int on) {
                              (uint64_t)(int64_t)on));
 }
 
+int sys_tcgetwinsz(int fd, struct tty_winsize *ws) {
+    return (int)err(syscall2(SYS_TCGETWINSZ, (uint64_t)(int64_t)fd,
+                             (uint64_t)(uintptr_t)ws));
+}
+
+int sys_tcsetwinsz(int fd, const struct tty_winsize *ws) {
+    return (int)err(syscall2(SYS_TCSETWINSZ, (uint64_t)(int64_t)fd,
+                             (uint64_t)(uintptr_t)ws));
+}
+
 int sys_tty_raw(int fd) {
     struct tty_termios tio;
     if (sys_tcgetattr(fd, &tio) < 0) return -1;
