@@ -6,8 +6,9 @@ has carried since Phase 1 was written -- **how does `Ctrl-C` stop a
 running program?** -- and it answers it by refusing to treat that as one
 question.
 
-**Status: STAGES 0-2 ARE BUILT (2026-08-22). `Ctrl-C` works, on the
-physical console AND in a Terminal window.** The terminal half of this
+**Status: STAGES 0-2 AND 4 ARE BUILT (2026-08-22). `Ctrl-C` works, on
+the physical console AND in a Terminal window; so do `Ctrl-Z`, `jobs`,
+`fg`, `bg` and `&`.** The terminal half of this
 document was superseded the same day by `docs/tty-design.md`, which
 turned "the console" into a TERMINAL OBJECT -- so the `SCHED_CHAN_KEY`
 this file names below no longer exists (a reader parks on its own
@@ -16,10 +17,12 @@ line discipline. What is written here is what was TRUE WHEN IT WAS
 PLANNED, and it is kept that way on purpose: the staging was right, and
 the fact that stage 2 shipped without a TTY layer is the finding.
 
-Stage 3
-(user-space handlers) and stage 4 (job control, stop/continue) are still
-plans. Each stage's own section below says what actually landed and
-where it differs from what was planned here, because two of them do.
+Stage 3 (user-space handlers) is the only one still a plan -- and stage
+4 landing before it is itself a finding, since this document assumed the
+order. Job control needed a stopped process and a way to report one, not
+a signal a program can catch. Each stage's own section below says what
+actually landed and where it differs from what was planned here, because
+three of them do.
 
 **AND ONE PREMISE OF THIS DOCUMENT WAS WRONG, which is why the whole
 thing was cheaper than it looked.** Stage 1 said it needed the roadmap's
@@ -119,7 +122,8 @@ compatibility baggage this OS has no reason to inherit: 31 standard
 signals plus 32 realtime ones, queued delivery, `sigaltstack`,
 `SA_RESTART`, `sigprocmask`, stop/continue as separate states. Copy the
 SHAPE -- a mask, a disposition, delivery on return to user mode -- and
-not the size. Six signals is enough to make `Ctrl-C` work and to end a
+not the size. A handful of signals is enough to make `Ctrl-C` work, to
+suspend and resume a job, and to end a
 process politely.
 
 ## The shape
@@ -171,7 +175,8 @@ down as one, so nobody later mistakes it for the design.
   handler. No flags, no masks during handlers, no restart semantics.
 - **Not realtime signals.** No queuing, no payload, no priority.
 - **Not stop/continue.** `SIGSTOP`/`SIGCONT` need a stopped state the
-  scheduler does not have and job control to make it useful. Stage 4.
+  scheduler does not have and job control to make it useful. Stage 4 --
+  which is built now; this line records the scoping as it was.
 - **Not a replacement for `SYS_KILL`'s honesty.** `kill(pid, SIGKILL)`
   must keep working when a process is wedged, ignoring dispositions
   entirely -- that is what makes Force Quit trustworthy.
@@ -274,12 +279,37 @@ stack, and `SYS_SIGRETURN` to unwind it. This is the stage with the
 genuinely hard part in it: the frame must be restored exactly, and a
 handler that faults must not corrupt the interrupted state.
 
-### Stage 4 -- process groups and job control
+### Stage 4 -- process groups and job control -- **BUILT**
 
 `setpgid`, a group as the unit of delivery, `SIGSTOP`/`SIGCONT` and a
 stopped state, `fg`/`bg` in `/bin/tosh`. Also where multiple virtual
 terminals become mostly bookkeeping, since a terminal is by then a
 THING rather than the only thing.
+
+**WHAT LANDED, and the three places it differs from the plan above.**
+Process groups arrived early, with stage 2, because `Ctrl-C` needed
+them; what was left here was stop/continue and the shell's half.
+
+- **A stopped process is a FLAG beside its state, not "a stopped
+  state".** The plan's phrasing assumed Linux's `TASK_STOPPED`, and that
+  shape needs to wake an interruptible sleeper in order to stop it
+  promptly -- a mechanism this kernel does not have. As a flag it
+  composes with BLOCKED for free, which is the case that decides it: a
+  process suspended mid-read must come back to that read.
+  `docs/decisions/kernel.md` has the full argument.
+- **Stop and continue do not go through the pending set at all**, so
+  this stage did not weaken the invariant stage 1 established. They are
+  applied at send time, which is also what makes `Ctrl-Z` safe from the
+  keyboard IRQ.
+- **It arrived BEFORE stage 3**, which this document did not anticipate.
+  Job control needs a process that can be suspended and a way to report
+  a suspension to a waiter; it needs nothing a program can catch. The
+  ordering here was a guess about difficulty, not a dependency.
+
+`SIGTTIN` was not in the plan and turned out to be non-optional: `&`
+without it means two processes reading one keyboard, which is a race
+over every keystroke. There is deliberately no `SIGTTOU` -- see
+`abi/signal_abi.h`.
 
 ## Open questions -- and what the answers turned out to be
 

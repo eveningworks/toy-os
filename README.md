@@ -50,8 +50,16 @@ QEMU, and it does not stop at "hello world from the kernel":
   syscall layer, a preemptive scheduler, **an `init` as pid 1** that
   adopts orphans and **supervises services** described by files in
   `/etc/services.d` (the desktop is one, restarted if it dies), a process
-  tree with pipes and `spawn`/`waitpid`, and per-process FPU state across
-  context switches.
+  tree with pipes and `spawn`/`waitpid`, **signals and job control**
+  (`Ctrl-C`, `Ctrl-Z`, `jobs`/`fg`/`bg`, `&`), and per-process FPU state
+  across context switches.
+- **A real terminal layer** — a terminal is an object with a line
+  discipline, a `termios`, an owner and a foreground process group, so
+  the physical console and a Terminal window are two clients of one
+  implementation. `/bin/tosh` runs on a pty in a window, which makes the
+  shell in it a real process; `Ctrl-C`, `Ctrl-Z`, pipes, redirection and
+  job control are the same code in both places, and a full-screen editor
+  runs in either.
 - **Two real filesystems** — TFS3 (the default: block groups, real
   inodes, hardlinks, journal transactions, superblock backups) and TFS2
   (the original, kept as a second backend). Both journal metadata, so
@@ -82,10 +90,10 @@ production software. What that means concretely:
 line editor, both filesystems with `fsck` and live reformatting, the
 window manager and its apps, fonts loaded and rasterized from disk at
 runtime, ring-3 processes with pipes and `spawn`/`waitpid`, a TTY layer
-with pseudo-terminals — so `Ctrl-C` interrupts a job and a full-screen
-editor runs in a Terminal window — and the full test suite: a few hundred in-kernel
-tests, the ring-3 diagnostics, and the GUI tools `gui_regress.py` runs
-as one table.
+with pseudo-terminals — so `Ctrl-C` interrupts a job, `Ctrl-Z` suspends
+one, and a full-screen editor runs in a Terminal window — and the full
+test suite: a few hundred in-kernel tests, the ring-3 diagnostics, and
+the GUI tools `gui_regress.py` runs as one table.
 
 **[Milestone 41](docs/wm-ring3-design.md) is complete** (2026-08-18):
 the window manager is an ordinary ring-3 process. `gui` spawns
@@ -102,12 +110,22 @@ machine is for, `/etc/services.d` says what to start, and init restarts a
 service that dies — with a backoff, a give-up so a crash loop cannot spin
 the machine, and `Restart=on-failure` semantics so a clean exit (the Start
 menu's *Exit to shell*) means what it says. `target=text` on the GRUB line overrides the target for
-one boot without rewriting the file. **In progress** — a console device,
-then the shell moving to ring 3.
+one boot without rewriting the file. Both of the things listed here as
+in progress have since landed: the console is a TTY object, and a `text`
+boot reaches a ring-3 shell with the kernel's own standing down.
+
+**Job control works** (2026-08-22): `Ctrl-Z` suspends the foreground
+job, `jobs`/`fg`/`bg` manage it, `&` backgrounds one, and a background
+job that reads the terminal is stopped by `SIGTTIN` rather than
+competing with the shell for the keyboard. A pipeline suspends and
+resumes as one process group. The same code serves the physical console
+and a Terminal window, which is the test of whether the TTY layer is
+real.
 
 **Known gaps** — no USB stack, so input on real hardware depends on the
-firmware's legacy PS/2 emulation. No networking, no SMP, no demand
-paging, and no `malloc`/`FILE`/`printf` in userland.
+firmware's legacy PS/2 emulation. No networking and no SMP. Demand
+paging covers the heap but there is no region list, so no `mmap` yet,
+and there are no user-space signal handlers.
 [docs/roadmap.md](docs/roadmap.md) tracks all of it, including a candid
 known-issues list.
 
@@ -400,8 +418,11 @@ cannot diverge — and the same rule gives ring 3 the kernel's own
 allocator as `malloc`/`free`, its line editor, and its ANSI parser -- so
 both shells agree about what Ctrl-A does, and the console and a Terminal
 window agree about what `ESC[4;12H` means. Adding a program is a
-`.c` file with no Makefile edit. Still deliberately not a libc — no
-`realloc`, `FILE`, `printf` or `errno`.
+`.c` file with no Makefile edit. Beside that sits **tolibc**
+([docs/libc-design.md](docs/libc-design.md)) — stdio, math, time,
+dirent, setjmp and scanf — which is the one part of this tree that aims
+to be COMPLETE rather than minimal, because its audience is code that
+has not been written yet.
 
 **Syscalls.** One table maps each number to its handler, and the handlers
 live with the subsystem that owns them — the shape Linux and NT both
@@ -515,8 +536,8 @@ Selected tools, each documented in its own docstring:
 | [docs/tools.md](docs/tools.md) | Every script in `tools/`: what it does, why it exists, and the traps it encodes. |
 | [docs/settings-and-queries.md](docs/settings-and-queries.md) | Facts vs settings vs tunables, and how an app reads or changes either. |
 | [docs/commands.md](docs/commands.md) | The command index; [docs/commands/](docs/commands/) has one page each. |
-| [docs/signals-design.md](docs/signals-design.md) | Signals, a foreground process, and what `Ctrl-C` needs. Delivery and dispositions BUILT; handlers and job control still planned. |
-| [docs/tty-design.md](docs/tty-design.md) | The TTY layer: a terminal as an object, pseudo-terminals, and one implementation of `Ctrl-C` for the console and a window alike. Stages 1–3 built. |
+| [docs/signals-design.md](docs/signals-design.md) | Signals, a foreground process, and what `Ctrl-C` needs. Delivery, dispositions and job control BUILT; user-space handlers still planned. |
+| [docs/tty-design.md](docs/tty-design.md) | The TTY layer: a terminal as an object, pseudo-terminals, and one implementation of `Ctrl-C` and `Ctrl-Z` for the console and a window alike. Stages 1–3 built; virtual terminals are what remain. |
 | [docs/boot-flags.md](docs/boot-flags.md) | Every word the kernel looks for on the GRUB command line. |
 | [docs/filesystem-layout.md](docs/filesystem-layout.md) | What lives where on the OS's own disk. Checked against the built image by `tools/check_layout.py`. |
 | [docs/gui-guidelines.md](docs/gui-guidelines.md) | How the GUI should look and behave, and how to verify a change to it properly. |

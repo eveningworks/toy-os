@@ -60,7 +60,8 @@ together are the picture.
 The `Ctrl-C` line is the practical answer, stated rather than left to be
 inferred from two ids. A foreground group that IS the console's owner is
 a shell at its own prompt: the key cancels the line and signals nothing,
-which is the case `tty_intr()` deliberately does not consume.
+which is the case `signal_char()` in the discipline deliberately does
+not consume -- for `Ctrl-Z` as well as `Ctrl-C`.
 
 `ring 0's blocking readers are stood down` appears whenever either
 reason holds -- a compositor owning the keyboard, or a ring-3 process

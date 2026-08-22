@@ -852,15 +852,49 @@ Where the project stands after it, so a session does not re-derive it:
   ring 3. Before writing either in ring 3, check what already exists.
 - **`edit` IS `/bin/edit`** and `apps/ui/` is gone with it. The kernel
   draws no widgets.
-- **`/bin/tosh` HAS THREE BUILTINS** -- `cd`, `pwd`, `help` -- and each
-  has to be one. A builtin must not shadow a `/bin` program that does
-  more; `cat`, `ls` and `echo` all did, and all three are gone.
+- **`/bin/tosh`'S BUILTINS ARE THE ONES THAT HAVE TO BE.** `cd`, `pwd`,
+  `help`, and (since job control) `jobs`, `fg`, `bg`. A builtin must not
+  shadow a `/bin` program that does more; `cat`, `ls` and `echo` all
+  did, and all three are gone. The test is "could a program do this
+  better", and a builtin passes it by touching the SHELL's own state --
+  writing it (`cd`) or reading it (`fg`).
 - **New syscalls**: `SYS_OPENPTY`, `SYS_TCGET/SETATTR`,
   `SYS_TCGET/SETWINSZ`, `SYS_SET_NONBLOCK`. `SYS_TCSETPGRP` gained an
   fd. `SCHED_CHAN_KEY` is gone -- a reader parks on ITS terminal.
 
 The lessons are in `references/session-design.md`,
 `session-testing.md` and `session-gui.md` under the same date.
+
+**2026-08-22 (job control, in three commits on top of the TTY layer).
+THE THEME IS THAT A TEST READING THE SAME STATE THE CODE WRITES CANNOT
+SEE THE BUG.** Read that before writing a test for anything the kernel
+DECIDES.
+
+Where the project stands after it:
+
+- **A PROCESS CAN BE STOPPED**, and `stopped` is a FLAG beside its
+  state, not a fifth `sched_state`. One line in `find_next_runnable()`
+  honours it. `SIGSTOP`/`SIGTSTP`/`SIGCONT`/`SIGTTIN` exist;
+  `docs/decisions/kernel.md` has why, and when to revisit.
+- **STOP AND CONTINUE NEVER TOUCH THE PENDING SET.** They act at SEND
+  time, which keeps `pending != 0` meaning "must die" with no policy
+  lookup and makes `Ctrl-Z` safe from the keyboard IRQ. The cost: a
+  `SIGTERM` to a stopped process waits until something continues it.
+- **A JOB IS A PROCESS GROUP; THE JOB TABLE IS THE SHELL'S**
+  (`userland/lib/tosh_jobs.c`). The kernel knows nothing about jobs, and
+  nothing in it would be improved by learning. A job holds EVERY stage's
+  pid -- one pid meant `fg` on a resumed pipeline leaked zombies.
+- **`&` NEEDED `SIGTTIN` IN THE SAME CHANGE.** A background job inherits
+  the shell's fd 0, so without it two processes read one keyboard.
+  `tty_check_background_read()` is asked by BOTH ring-3 read paths.
+  There is deliberately no `SIGTTOU`.
+- **`SYS_WUNTRACED` reports a stop as `SIGNAL_STOP_BASE + sig`** (256),
+  beside the existing 128 + sig -- so a waitpid result can now name a
+  child that is STILL ALIVE, which is why it is a separate wrapper
+  (`sys_waitpid_untraced()`) rather than a flag.
+
+The lessons are in `references/session-testing.md` and
+`session-design.md` under the same date.
 
 **2026-08-18 (init stage 2: a boot target, services, supervision). THE
 THEME OF THIS SESSION IS THAT AUTOMATING A LIFECYCLE REMOVES INTERLOCKS

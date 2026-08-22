@@ -1304,7 +1304,7 @@ abstraction.
 
 **A layer's claim is only worth what a control proves.** "Both Ctrl-Cs
 are one implementation" is a sentence anyone can write. Disabling
-`intr()` in the shared discipline reddens `uterm_test.py`'s
+`signal_char()` in the shared discipline reddens `uterm_test.py`'s
 window check AND `ctrlc_test.py`'s keyboard ones, from three lines. Two
 implementations that merely agreed would fail separately. **Design a
 control that can only pass if the claim is true**, and run it.
@@ -1344,3 +1344,70 @@ character STREAM cannot express "put the caret at row 4, column 12", so
 `/bin/edit` printed its escape sequences in a Terminal window. Scrollback
 is the only part that is legitimately a stream -- history is a record of
 what went past, a screen is a thing being drawn on.
+
+## 2026-08-22 -- job control, and what to do when the obvious model is Linux's
+
+**THE MOST TRANSFERABLE DECISION: COPY THE SHAPE ONLY WHERE THE
+MECHANISM UNDER IT EXISTS.** A stopped process is `TASK_STOPPED` on
+Linux -- a real task state -- and that was the obvious model. It is
+wrong here, and the reason is instructive: Linux can move a task into
+that state promptly because it can WAKE AN INTERRUPTIBLE SLEEPER to do
+it. This kernel has no interruptible syscalls, so a state would have to
+remember which state it displaced and what channel that state was
+parked on, for a transition no test could reach. As a flag beside the
+state it composes with all four existing states for one line in the
+picker.
+
+The general form: when a design comparison says "Linux does X", ask what
+mechanism X rests on and whether this tree has it. **The comparison is
+still worth making** -- it is what named the alternative and what gave
+the decision a written trigger for revisiting ("when interruptible
+syscalls land, this becomes both buildable and testable").
+
+**AN INVARIANT IS WORTH ROUTING AROUND RATHER THAN WEAKENING.** The
+signal design rests on `a pending bit means this process must die`,
+which is what lets every reader of `pending` skip a policy lookup. Stop
+and continue could have been queued there with a second meaning. Instead
+they act at SEND time and never touch it -- which is legal precisely
+because suspending allocates nothing, frees nothing and unmaps nothing,
+so it is safe from an IRQ in the way a teardown is not. **Ask whether
+the new thing can avoid the shared state entirely before you widen the
+shared state's contract**; here it also bought reliability against a
+process wedged in a kernel path.
+
+The cost has to be stated where people meet it, not just where it is
+decided: a `SIGTERM` to a stopped process does nothing until it is
+continued. That went in the ABI header, the convention file and
+`docs/commands/kill.md`, because it reads as `kill` being broken.
+
+**A CAPABILITY THAT ADDS A SECOND USER OF A RESOURCE MUST SHIP WITH THE
+ARBITRATION.** `&` and `SIGTTIN` are one change, not two: a background
+job inherits the shell's fd 0, so `&` alone means two processes reading
+one keyboard and a race over every keystroke. Shipping `&` first would
+have been a feature that "works" and silently corrupts input -- the
+invisible-second-reader shape this repo has now hit three times (the
+desktop and the keyboard, init and the console, a job and the terminal).
+
+**AND ONE THING DELIBERATELY NOT BUILT, WRITTEN DOWN AS A DECISION.**
+There is no `SIGTTOU`. It exists on Unix to stop a background process
+WRITING to the terminal, but only under `TOSTOP`, which is unset by
+default everywhere -- so here it would be a signal number with no
+sender. Saying that in the header is worth more than the symmetry: the
+next session will otherwise notice the gap and "fix" it.
+
+**SPLIT BY LIFETIME, NOT BY SIZE.** The job table went in its own file
+rather than another section of `tosh.c` because a job outlives the
+command line that made it and everything else in that file serves one.
+That is a cleaner seam than a line count, and it made the ownership
+argument obvious: the kernel knows about process groups, the shell knows
+about jobs, and nothing in the kernel would be improved by learning what
+a command line looked like.
+
+**A BUILTIN CAN EARN ITS PLACE BY READING SHELL STATE, NOT ONLY BY
+WRITING IT.** The existing rule was "a builtin must not shadow a `/bin`
+program that does more", with `cd` as the example of one that has to be
+a builtin because it changes the shell's own directory. `jobs`/`fg`/`bg`
+pass the same test from the other direction -- a separate process could
+not SEE the table, and `fg` could not take the terminal on its parent's
+behalf. Stating both halves is what makes the rule usable on the next
+case.

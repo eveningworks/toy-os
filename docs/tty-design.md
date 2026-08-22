@@ -9,7 +9,9 @@ GUI Terminal, and fixing that twice is the wrong answer.**
 Terminal window, through the same code as the physical console's.** A
 terminal is an object, the console is `tty0`, `SYS_OPENPTY` hands out a
 pair, and the GUI Terminal is a real terminal emulator running
-`/bin/tosh` on a pty. Stage 4 (virtual terminals) is still a plan. Each
+`/bin/tosh` on a pty. Stage 4 (virtual terminals) is still a plan --
+though the JOB CONTROL this layer was a prerequisite for is built, and
+landed the same day (`docs/signals-design.md`'s stage 4). Each
 stage's section says what actually landed and where it differs from what
 was planned here, because two things did.
 
@@ -167,7 +169,12 @@ appends to the output queue, which for tty0 means `vga_write()`.
   nothing about terminals should get the behaviour it expects, not this
   OS's.
 - **Not job control.** `fg`/`bg`/`SIGTSTP` are stage 4 of
-  `docs/signals-design.md` and need this, not the other way round.
+  `docs/signals-design.md` and need this, not the other way round. That
+  prediction held exactly: job control landed on top of this layer
+  hours later, and needed two things FROM it -- the SUSP character,
+  which went in beside INTR in the same discipline function, and the
+  foreground group, which is what decides whether a reader is a
+  background one. It added nothing here.
 - **Not virtual terminals yet.** `Ctrl+Alt+F1..F4` is bookkeeping once
   the object exists, and is a separate stage on purpose.
 - **Not a `termios` a Unix program could be ported against.** Two
@@ -298,6 +305,13 @@ brackets every command with it, which is exactly what `readline` does.
 scrollback; `isatty()` over `SYS_FSTAT`'s existing `SYS_STAT_TTY` flag;
 window size, which is the `ioctl` every full-screen program wants. Each
 is small once the object exists, and none is in this session's scope.
+
+**`isatty()` and window size are BUILT** (2026-08-22), as are the
+signal-generating characters; what is left of this stage is virtual
+terminals and per-tty scrollback. And the prediction that "each is small
+once the object exists" has now been tested twice by things that were
+not on this list -- SUSP was three lines in the discipline, and the
+background-read rule was one function and two call sites.
 
 ## Open questions
 

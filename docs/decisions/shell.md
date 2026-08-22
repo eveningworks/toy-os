@@ -919,10 +919,12 @@ physical console and a window equally or it is not an abstraction.
 **The test of whether it is real: a shell cannot tell which kind of
 terminal it is on.** `/bin/tosh` calls `sys_tty_raw(0)` unconditionally
 and runs unchanged on the physical console and inside a window. And the
-evidence, rather than the claim: disabling `intr()` in
+evidence, rather than the claim: disabling `signal_char()` in
 `kernel/tty/ldisc.c` -- three lines -- reddens `uterm_test.py`'s
 Ctrl-C-in-a-window check AND `ctrlc_test.py`'s physical-keyboard ones.
-Two implementations that agreed would fail separately.
+Two implementations that agreed would fail separately. `Ctrl-Z` was
+added to the same function later and inherited the property for free,
+which is the clearest evidence the layer is real.
 
 **No `/dev/ptmx`, and no path at all.** Linux hands out a master by
 opening `/dev/ptmx` and names the slave `/dev/pts/N`. There are no device

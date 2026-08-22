@@ -3880,12 +3880,14 @@ would not be.
 **IT MOVED ON 2026-08-22, AND THE PLAN HELD.** `kernel/tty/ldisc.c` is
 the discipline, the driver just produces keystrokes, and the payoff was
 the one this entry predicted: a Terminal window gets the SAME `Ctrl-C`
-rather than a second answer to the same question -- disabling `intr()`
-reddens the checks for both. `docs/tty-design.md` has the whole staging;
+rather than a second answer to the same question -- disabling
+`signal_char()` reddens the checks for both, and `Ctrl-Z` was later
+added to that one function and worked in a window with no further work. `docs/tty-design.md` has the whole staging;
 this entry is kept because the ORDER was the decision, and it was
 right.
 
-**The two outcomes of `tty_intr()` are the two states a shell is in**,
+**The two outcomes of `signal_char()` are the two states a shell is
+in**,
 and keeping both is what makes the feature additive rather than a
 replacement. With a job in front, the group is signalled and the byte is
 DISCARDED, which is what a line discipline does with INTR -- delivering

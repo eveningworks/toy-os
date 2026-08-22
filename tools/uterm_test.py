@@ -372,12 +372,8 @@ def run(dbg, qmp, tmp, shot_dir, res):
     # binary. A difference here would mean the tty layer had failed at
     # its one job.
     def spin_state():
-        out = dbg.send("sh ps") or ""
-        for line in out.splitlines():
-            p = line.split()
-            if len(p) >= 7 and p[0].isdigit() and p[-1].startswith("spin_test"):
-                return p[3]
-        return None
+        found = dbg.processes_named("spin_test")
+        return found[0]["state"] if found else None
 
     type_line(dbg, "spin_test 900000", settle=2.0)
     res.check("a second job is running in the window", spin_state() is not None,

@@ -180,6 +180,31 @@ manual steps to be worth automating:
   `boot_smoke_test` with "qemu exited early" -- which reads as the
   kernel failing to boot, several minutes and a whole clean rebuild
   after the actual mistake. Run `python3 tools/vm.py stop` first.
+- **`gui_debug.py`** -- `DebugConsole`, the connection to the guest's
+  serial debug console, and the thing to reach for BEFORE pixels: it
+  returns facts to assert on rather than an image to interpret.
+  `send(cmd)` runs a debug command, `json(cmd)` parses one with
+  `--json`, `sh <cmd>` runs a KERNEL-shell command, and `settle()` waits
+  for injected input to drain (never replace it with a fixed sleep --
+  the console is asynchronous). `windows()`/`window(title)` ask the WM
+  what it is drawing, and `enter_gui()` polls the desktop ready instead
+  of sleeping.
+
+  **`processes()` gives every process as a dict** (pid, ppid, pgid,
+  state, cpu, name), parsed from `/bin/ps` run through the kernel's
+  shell -- a different reader from whatever ring-3 shell is under test,
+  so a broken one cannot make the two agree.
+  `processes_named(prefix)` filters it and drops zombies.
+
+  **`cpu` is how you tell a SUSPENDED process from an idle one.** A
+  state column says what the kernel thinks; only a number that stops
+  advancing says the scheduler agrees, and that distinction is what
+  caught a "stopped" process still being scheduled. A zombie is included
+  by `processes()` on purpose: filter it out for "is it still running"
+  and ask about it separately for "was everything reaped", because
+  mixing the two makes every count ambiguous between them. Two tools
+  hand-rolled this parser in one session before it moved here, which is
+  this file's usual bar.
 - **`gui_flow.py`** -- named, composable QMP click-flows on top of
   `qmp_test.py`'s `QMPSession` (`GuiFlow` class: `enter_gui()`,
   `open_app(name)`, `run_system_action(label)`, `screenshot_named()`),
@@ -583,7 +608,7 @@ manual steps to be worth automating:
   cannot pass against a wedged shell.
 
   **Both halves were confirmed with positive controls.** Making
-  `tty_intr()` return 0 reddens the three job checks and leaves the
+  `signal_char()` return 0 reddens the three job checks and leaves the
   empty-prompt ones green; replacing `signal_send_group()` with a
   single-pid send reddens exactly the pipeline check.
 - **`jobs_test.py`** -- **job control end to end through the real

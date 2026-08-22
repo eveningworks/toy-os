@@ -29,13 +29,17 @@ Terminal both drew `<cwd>> `, and the kernel shell introduced itself as
 it is what sits behind the desktop and what *Exit to shell* returns to;
 on a `text` boot init starts `/bin/tosh` on the console instead and this
 one stands down, staying reachable as `sh <cmd>` over the serial debug
-console. `/bin/tosh` is a much smaller shell -- **three builtins, `cd`,
-`pwd` and `help`, plus anything on `PATH`** -- and none of the
-kernel-introspection commands below exist there.
+console. `/bin/tosh` is a much smaller shell -- **six builtins: `cd`,
+`pwd`, `help`, and the job-control three (`jobs`, `fg`, `bg`), plus
+anything on `PATH`** -- and none of the kernel-introspection commands
+below exist there.
 
-**THOSE THREE ARE ALL THAT CAN BE BUILTINS.** `cd` changes the SHELL's
-own directory, so a program could not do it; `pwd` and `help` have no
-`/bin` twin. `cat`, `ls` and `echo` were builtins there and all three
+**ALL SIX HAVE TO BE BUILTINS.** `cd` changes the SHELL's own
+directory, so a program could not do it; `pwd` and `help` have no
+`/bin` twin; and `jobs`/`fg`/`bg` read and write the shell's own job
+table, which a separate process could neither see nor act on -- a
+`/bin/fg` could not take the terminal on its parent's behalf. POSIX
+makes the same three special builtins for the same reason. `cat`, `ls` and `echo` were builtins there and all three
 were the same mistake: a builtin that shadows a `/bin` program which
 does MORE. The builtin `cat` required a filename, so `foo | cat` printed
 an error instead of the pipeline; the builtin `ls` took no flags at all,
@@ -125,6 +129,16 @@ Arrows and Home/End to move, plus bash's bindings: `Ctrl-A`/`Ctrl-E`,
 `Alt-B`/`Alt-F`, `Ctrl-K`/`Ctrl-U`/`Ctrl-W`, `Ctrl-Y` yank, `Ctrl-T`
 transpose, `Alt-U`/`Alt-L`/`Alt-C` case, `Ctrl-_` undo, `Ctrl-R` reverse
 history search, `Alt-.` last argument. `help` lists them all.
+
+**`Ctrl-C` and `Ctrl-Z` are NOT the line editor's**, and the difference
+is worth knowing because it decides what they do. With a job running
+they are terminal characters: the kernel signals the console's
+foreground group and the byte never reaches the editor, so the job is
+interrupted or suspended. At an empty prompt there is no job in front,
+nothing is signalled, and the bytes go through as ordinary keystrokes --
+`Ctrl-C` abandons the line and `Ctrl-Z` does nothing. See
+[commands/kill.md](commands/kill.md) and
+[commands/jobs.md](commands/jobs.md).
 
 ## Every command, one page each
 

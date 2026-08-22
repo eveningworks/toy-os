@@ -107,8 +107,16 @@ def vm_run(disk, instance, *argv):
 def slots(dbg):
     """Every live scheduler slot as (pid, name).
 
-    `kstack slots` rather than `ps`: ps is a /bin program, so its output
-    goes to the screen the shell owns rather than to this socket.
+    `kstack slots` rather than `ps` -- a deliberate choice, but NOT for
+    the reason first written here ("ps is a /bin program, so its output
+    goes to the screen"): `sh ps` runs it in the KERNEL's shell, whose
+    output does reach this socket, and jobs_test.py relies on that.
+
+    It stays because this tool only needs existence, and `kstack slots`
+    is one fewer moving part. **If you need a process's STATE or its CPU
+    time, use `DebugConsole.processes()`** (gui_debug.py) rather than
+    extending this -- that is the shared parser, and CPU time is the only
+    way to tell a suspended process from an idle one.
     """
     out = dbg.send("sh kstack slots") or ""
     rows = []

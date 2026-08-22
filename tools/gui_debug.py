@@ -268,6 +268,50 @@ class DebugConsole:
                 return w
         return None
 
+    def processes(self):
+        """Every process as a dict: pid, ppid, pgid, state, cpu, name.
+
+        Parsed from `/bin/ps`, which is run through the KERNEL's shell
+        over this socket -- a different reader from whatever ring-3 shell
+        is under test, so a broken one cannot make this agree with it.
+
+        `state` is the column verbatim (`ready`, `run`, `block(pipe)`,
+        `stopped`, `zombie`), and `cpu` is seconds as a float. **`cpu` is
+        how you tell a suspended process from an idle one**: a label says
+        what the kernel thinks, and only a number that stops advancing
+        says the scheduler agrees. Two tools hand-rolled this parser in
+        one session before it moved here.
+
+        A ZOMBIE IS INCLUDED. Filter it out for "is it still running"
+        questions and ask about it separately for "was everything
+        reaped" -- mixing the two makes every count ambiguous between
+        them.
+        """
+        out = self.send("sh ps") or ""
+        rows = []
+        for line in out.splitlines():
+            f = line.split()
+            # pid and ppid are the first two columns and both numeric;
+            # the name is last, because it is the only column that can
+            # contain nothing surprising. Anything else on this socket
+            # (kernel log lines, the echoed command) fails that shape.
+            if len(f) < 7 or not f[0].isdigit() or not f[1].isdigit():
+                continue
+            try:
+                cpu = float(f[4])
+            except ValueError:
+                continue
+            rows.append({"pid": int(f[0]), "ppid": int(f[1]), "pgid": int(f[2]),
+                         "state": f[3], "cpu": cpu, "name": f[-1]})
+        return rows
+
+    def processes_named(self, prefix, include_zombies=False):
+        """Every process whose name starts with `prefix`. Zombies are
+        excluded by default -- see processes()."""
+        return [p for p in self.processes()
+                if p["name"].startswith(prefix)
+                and (include_zombies or p["state"] != "zombie")]
+
     def probe(self, x, y):
         return self.json(f"gui probe {x} {y} --json")
 

@@ -291,12 +291,22 @@ this the obvious way), not from how much history it accumulated.
 
 ## A BUILTIN MUST NOT SHADOW A `/bin` PROGRAM THAT DOES MORE
 
-**`/bin/tosh` HAS THREE BUILTINS AND EACH ONE HAS TO BE ONE:** `cd`
+**`/bin/tosh` HAS SIX BUILTINS AND EACH ONE HAS TO BE ONE:** `cd`
 changes the SHELL's own directory, so a program could not do it; `pwd`
-and `help` have no `/bin` twin. Everything else is a program.
+and `help` have no `/bin` twin; and `jobs`/`fg`/`bg` read and write the
+shell's own job table, which a separate process could neither see nor
+act on. Everything else is a program.
 
-It took three goes to get there, and all three were the same mistake in
-different clothes:
+**The test is not "is it small" -- it is "could a program do this
+better".** The three job-control builtins pass it for a different reason
+from `cd`, and stating both is what makes the rule usable: `cd` is a
+builtin because a program cannot change its parent's state, and `fg` is
+one because a program cannot READ its parent's state. A `/bin/fg` would
+be a separate process with no view of the table and no way to hand the
+terminal over on its parent's behalf.
+
+It took three goes to learn the other half, and all three were the same
+mistake in different clothes:
 
 - **`cat` required a filename**, so `foo | cat` printed "cat: needs a
   filename" instead of the pipeline's output -- the one thing `cat` is
@@ -410,12 +420,19 @@ test of whether the layer is real, and it is why `Ctrl-C` in a Terminal
 window is the same code as `Ctrl-C` on the physical keyboard rather than
 a second answer to the same question.
 
-Four things that bite:
+Five things that bite:
 
 - **INTR IS NOT SPECIAL IN THE KEYBOARD DRIVER ANY MORE.** `keyboard.c`
   used to recognise `0x03` and call `tty_intr()`, with a comment saying
   it belonged to a line discipline and there was not one yet. There is.
   The driver produces keystrokes; the terminal decides what one MEANS.
+- **A SIGNAL-GENERATING CHARACTER IS ONE FUNCTION, AND ADDING ONE IS
+  THREE LINES.** `signal_char(t, sig)` in `ldisc.c` answers the same
+  question for INTR and SUSP -- is a job in front of this terminal? --
+  and returns whether the byte was consumed. `Ctrl-Z` cost three lines
+  and worked in a Terminal window with no further work, which is the
+  clearest evidence this layer is real rather than two implementations
+  that agree. Add a character here, not in a front end.
 - **THERE IS NO GLOBAL "A KEY HAPPENED" CHANNEL.** `SCHED_CHAN_KEY` is
   gone, and its removal is the point: with a terminal per window it
   would wake every window's shell for a key typed at any of them --

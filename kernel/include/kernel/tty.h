@@ -102,7 +102,8 @@ const void *tty_wait_chan(const struct tty *t);
 
 // One byte has arrived AT the terminal -- a key on the console, or a
 // write to a pty master. Runs the line discipline: echo, erase and
-// kill in canonical mode, INTR when ISIG is set, and finally the queue.
+// kill in canonical mode, the signal-generating characters (INTR and
+// SUSP) when ISIG is set, and finally the queue.
 //
 // `mods` is the KEY_MOD_* word the console's ring has always carried
 // alongside the byte (api/keyboard.h). A terminal is a BYTE stream and

@@ -124,27 +124,8 @@ def vm_run(disk, instance, *argv):
     return r.stdout + r.stderr
 
 
-def ps_rows(dbg):
-    """Every process as (pid, state, cpu, name), from `/bin/ps`.
-
-    Through the debug console's `sh`, which runs it in the KERNEL's
-    shell -- a different reader from the ring-3 one under test, so a
-    broken tosh cannot make this agree with it.
-    """
-    out = dbg.send("sh ps") or ""
-    rows = []
-    for line in out.splitlines():
-        p = line.split()
-        if len(p) >= 7 and p[0].isdigit() and p[1].isdigit():
-            try:
-                rows.append((int(p[0]), p[3], float(p[4]), p[-1]))
-            except ValueError:
-                continue
-    return rows
-
-
 def spinners(dbg):
-    """The LIVE spinners -- a zombie is not one.
+    """The LIVE spinners, as (pid, state, cpu) -- a zombie is not one.
 
     Zombies are excluded here and asked about separately (`zombies()`),
     because mixing them in makes every count check ambiguous between
@@ -152,17 +133,21 @@ def spinners(dbg):
     leak question gets its own check, which is the only way either
     answer means anything.
     """
-    return [(pid, state, cpu) for pid, state, cpu, name in ps_rows(dbg)
-            if name.startswith("spin_test") and state != "zombie"]
+    return [(p["pid"], p["state"], p["cpu"])
+            for p in dbg.processes_named("spin_test")]
 
 
 def zombies(dbg):
-    return [(pid, name) for pid, state, _c, name in ps_rows(dbg)
-            if state == "zombie"]
+    return [(p["pid"], p["name"]) for p in dbg.processes()
+            if p["state"] == "zombie"]
+
+
+def cats(dbg):
+    return [(p["pid"], p["state"]) for p in dbg.processes_named("cat")]
 
 
 def shell_pids(dbg):
-    return [pid for pid, _s, _c, name in ps_rows(dbg) if name.startswith("tosh")]
+    return [p["pid"] for p in dbg.processes_named("tosh")]
 
 
 def wait_for(fn, want, timeout=10.0):
@@ -240,7 +225,7 @@ def main():
 
         shell = shell_pids(dbg)
         if not check("a ring-3 shell is on the console", bool(shell),
-                     f"processes={ps_rows(dbg)}"):
+                     f"processes={dbg.processes()}"):
             return report()
         shell_pid = shell[0]
 
@@ -339,12 +324,12 @@ def main():
         print("Ctrl-Z at an empty prompt suspends nothing")
         flow.session.combo(["ctrl", "z"])
         time.sleep(1.0)
-        rows = ps_rows(dbg)
-        alive = [pid for pid, _s, _c, name in rows if name.startswith("tosh")]
+        rows = dbg.processes()
+        alive = shell_pids(dbg)
         check("the shell survives Ctrl-Z at a prompt", shell_pid in alive,
               f"tosh pids now {alive}")
         check("...and is not itself stopped",
-              all(state != "stopped" for pid, state, _c, _n in rows if pid == shell_pid),
+              all(p["state"] != "stopped" for p in rows if p["pid"] == shell_pid),
               f"processes={rows}")
 
         # The shell still WORKS, which "it exists and is not stopped"
@@ -385,11 +370,10 @@ def main():
         # readers of one keyboard is a race over every keystroke.
         print("a background job that READS the terminal is stopped")
         type_line(flow, "cat &")
-        cats = wait_for(
-            lambda: [(pid, st) for pid, st, _c, n in ps_rows(dbg) if n.startswith("cat")],
-            lambda v: len(v) == 1 and v[0][1] == "stopped")
+        found = wait_for(lambda: cats(dbg),
+                         lambda v: len(v) == 1 and v[0][1] == "stopped")
         check("a background reader is STOPPED, not served",
-              len(cats) == 1 and cats[0][1] == "stopped", f"cat={cats}")
+              len(found) == 1 and found[0][1] == "stopped", f"cat={found}")
 
         # ...and the keyboard still reaches the shell. Without SIGTTIN
         # the two readers split the keystrokes between them and this
@@ -447,9 +431,8 @@ def main():
         # background check being made to fire only once.
         print("`bg` on a READER stops it again")
         type_line(flow, "bg 2")
-        again = wait_for(
-            lambda: [(pid, st) for pid, st, _c, n in ps_rows(dbg) if n.startswith("cat")],
-            lambda v: len(v) == 1 and v[0][1] == "stopped")
+        again = wait_for(lambda: cats(dbg),
+                         lambda v: len(v) == 1 and v[0][1] == "stopped")
         check("a resumed background reader is stopped again",
               len(again) == 1 and again[0][1] == "stopped", f"cat={again}")
 

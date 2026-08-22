@@ -1329,3 +1329,72 @@ plausible mechanism, that the injector arms the NEXT kmalloc and a
 concurrent kernel allocation eats it, is UNPROVEN and says so in
 `docs/bugs.md`. Resist the pull to either claim it pre-existing or
 own it; the number is the honest answer.
+
+## 2026-08-22 -- job control, and a test that read the state the code writes
+
+**THE HEADLINE, and it generalises to anything the kernel DECIDES: a
+test that reads the same state the code under test writes cannot see the
+bug.** Six KTESTs were written for a stopped process. Five asserted on
+`scheduler_test_state()`, which reports the `stopped` flag. Deleting the
+one line in `find_next_runnable()` that honours that flag -- so a
+"stopped" process carries on running -- left all five GREEN, because the
+flag is exactly what the bug does not touch.
+
+The sixth spawns `/tests/spin_test`, suspends it, and asserts its
+`cpu_ns` does not advance across twenty ticks. That one failed, on the
+right assertion (`expected 100000000, got 200000000`). **The rule:
+measure the CONSEQUENCE, not the bookkeeping the consequence is derived
+from.** For the scheduler that is CPU time; for an allocator it would be
+a footprint; for a cache it would be a hit that did not reach the disk.
+
+It is the same shape as this file's older "the data never reached the
+code under test", arriving from the other side: there the fixture missed
+the branch, here the assertion missed the effect.
+
+**AND THE SAME SESSION SHOWED THE CHEAP VERSION OF THE SAME CHECK.** The
+GUI-side tool asks `ps` for the CPU column between two samples two
+seconds apart. One number, no kernel instrumentation, and it
+distinguishes "suspended" from "idle" -- which no state label can, since
+both read as not-running.
+
+**A POSITIVE CONTROL SHOULD LEAVE SOME CHECKS GREEN, and which ones is
+information.** Deleting the SUSP branch in the line discipline reddened
+six checks and left "the job is alive after Ctrl-Z" green -- correct,
+because a job that never received the signal IS alive. Noticing that
+told me the alive check was the weak one and the stopped check was
+carrying the section. **Read which checks stayed green, not just that
+something went red.**
+
+**THREE CONTROLS, THREE DIFFERENT SETS.** Worth doing separately rather
+than as one "break it and see": the picker's flag check, the discipline's
+SUSP branch, and `fg`'s terminal handover each reddened a disjoint set,
+which is what proves the checks are testing three things rather than one
+thing three times. The handover control reddened exactly ONE check -- a
+Ctrl-C sent to a job after `fg` -- and that check exists only because I
+asked what a `fg` that forgot the terminal would still pass.
+
+**A FAILING TEST FOUND A PRE-EXISTING BUG THAT NO CONTROL WOULD HAVE.**
+`cat &` ate the first character of the next command. The cause was
+`sys_do_read_console()` claiming the console on EVERY read while its own
+comment said "on the FIRST read", so the foreground group was re-pointed
+at whoever last called -- invisible for as long as one process was the
+only reader. **A feature that adds a SECOND user of a resource is a test
+of every assumption the first one was silently satisfying**, and this is
+the third time this repo has learned that (the desktop and the keyboard;
+init and the console; now a job and the terminal).
+
+**WHEN A NEW CHECK FAILS, ASK WHETHER IT IS ASSERTING THE RIGHT THING
+FIRST.** Two of the five failures in the first full run were mine
+misdescribing correct behaviour: `bg` on a job that reads input stops it
+again immediately (bash does the same), and a job's stop is reported one
+prompt later than I assumed. Both looked like bugs and were assertions
+written from a guess about the behaviour rather than from what the
+behaviour should be. The fix in each case made the test say something
+truer, and one of them became a check worth having -- "SIGTTIN is not a
+one-shot".
+
+**COUNT ZOMBIES.** Nothing else here did, and a `fg` that waited only for
+the stage whose status it reports left every other stage of a resumed
+pipeline unreaped forever. Every other check in the tool passed while it
+happened. It costs one line against `ps` and it is the only thing that
+can see a whole class of leak.

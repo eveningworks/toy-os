@@ -384,7 +384,8 @@ input queue, a line discipline over it, an output sink, a `termios`, an
 owner and a foreground group, with the physical console as `tty0` and a
 pty per Terminal window. The INTR recognition left the keyboard driver
 for `ldisc.c`, so `Ctrl-C` in a window and `Ctrl-C` on the keyboard are
-one implementation -- disabling `intr()` reddens the checks for both.
+one implementation -- disabling `signal_char()` reddens the checks for
+both, and `Ctrl-Z` joined it later as three more lines.
 Canonical mode, echo, erase/kill, `VEOF`, `termios` and the window size
 all exist.
 
