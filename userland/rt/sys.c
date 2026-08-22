@@ -610,6 +610,12 @@ int sys_set_nonblock(int fd, int on) {
                              (uint64_t)(int64_t)on));
 }
 
+int sys_isatty(int fd) {
+    struct sys_stat st;
+    if (sys_fstat(fd, &st) < 0) return 0;
+    return (st.flags & SYS_STAT_TTY) ? 1 : 0;
+}
+
 int sys_tcgetwinsz(int fd, struct tty_winsize *ws) {
     return (int)err(syscall2(SYS_TCGETWINSZ, (uint64_t)(int64_t)fd,
                              (uint64_t)(uintptr_t)ws));

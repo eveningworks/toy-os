@@ -100,7 +100,7 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~The GUI Terminal needs a cursor-addressable GRID, not a scrollback stream~~ DONE 2026-08-22 -- `/bin/edit` runs in a window
 - [ ] The GUI Terminal has no ALTERNATE SCREEN -- a full-screen program's output lands in the scrollback and scrolls the transcript away
 - [ ] Output processing: newline translation, tab expansion
-- [ ] `isatty()`, so a program can tell a terminal from a pipe -- what `ls --color=auto` needs
+- [x] ~~`isatty()`, so a program can tell a terminal from a pipe -- what `ls --color=auto` needs~~ DONE 2026-08-22
 - [ ] Cursor movement and screen clearing escapes are swallowed, not implemented
 - [ ] A controlling terminal per process, and what happens when it goes away
 - [ ] Scrollback per virtual terminal, not one global console buffer
@@ -113,7 +113,7 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~init starting `/bin/tosh` on the `text` target, in place of the kernel shell~~ DONE 2026-08-19
 - [x] ~~**`dup`/`dup2`-style fd plumbing**, so the shell can wire an arbitrary fd to 0/1/2~~ DONE 2026-08-19
 - [x] ~~A per-process cwd~~ DONE 2026-08-19 -- in the kernel, inherited across spawn; every path syscall resolves against it
-- [ ] `/bin/tosh` still has `ls`/`echo` builtins beside the `/bin` programs -- `cat`'s is gone, which is what made `foo | cat` work
+- [x] ~~`/bin/tosh` still has `ls`/`echo` builtins beside the `/bin` programs~~ DONE 2026-08-22 -- three left, and each has to be one
 - [x] ~~Ring 3 cannot ask which filesystem is mounted~~ DONE 2026-08-20 -- `QUERY_FSINFO`, a provider rather than a wider `SYS_SYSINFO`
 - [ ] The About window still omits its filesystem line, though `QUERY_FSINFO` reports it now -- needs the window widened
 - [x] ~~Tunables: the non-persisting `struct setting`~~ DONE 2026-08-20 -- `kernel.heap_debug`, `kernel.ata_nodma`, `kernel.kstack_track`

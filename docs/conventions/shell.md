@@ -289,29 +289,47 @@ this the obvious way), not from how much history it accumulated.
   removed unconditionally.
 
 
-## A BUILTIN THAT CANNOT READ ITS INPUT MUST NOT SHADOW A PROGRAM THAT CAN.
+## A BUILTIN MUST NOT SHADOW A `/bin` PROGRAM THAT DOES MORE
 
-`cat` was a tosh builtin and required a filename, so `foo | cat` printed
-"cat: needs a filename" instead of the pipeline's output -- the one thing
-`cat` is most often asked to do. The builtin is gone; `/bin/cat` reads
-fd 0 with no argument and is what runs now.
+**`/bin/tosh` HAS THREE BUILTINS AND EACH ONE HAS TO BE ONE:** `cd`
+changes the SHELL's own directory, so a program could not do it; `pwd`
+and `help` have no `/bin` twin. Everything else is a program.
 
-**The general rule this is an instance of:** a builtin exists to be
-FASTER or to change the shell's own state (`cd` must, `pwd` may). One
-that merely reimplements a `/bin` program is a second implementation
-that will drift, and the drift shows up as the program behaving
-differently depending on how it was reached. `docs/roadmap.md` still
-lists `ls` and `echo` in that position.
+It took three goes to get there, and all three were the same mistake in
+different clothes:
 
-**AND A SHELL WITH NO TERMINAL INPUT MUST HAND ITS CHILDREN AN EMPTY
-ONE, never somebody else's keyboard.** `struct tosh`'s `stdin_ok`, set
-only by `/bin/tosh`, which genuinely owns the console. The GUI Terminal
-takes keys as window events and its fd 0 is a console another process
-owns -- a child inheriting that blocks forever on a keyboard it will
-never be given, and since the shell waits for its child, the WINDOW
-HANGS. It is a pipe with the write end closed, so a read reports EOF at
-once, which is what a process with no controlling terminal gets on a
-real system.
+- **`cat` required a filename**, so `foo | cat` printed "cat: needs a
+  filename" instead of the pipeline's output -- the one thing `cat` is
+  most often asked to do. `/bin/cat` reads fd 0 with no argument.
+- **`ls` took no flags at all.** `ls -l` answered `ls: cannot read -l`,
+  and it coloured nothing, while `/bin/ls` has ten flags and colours
+  directories. **Reported from a screenshot**, which is how a shadowing
+  builtin is usually found: the command is simply worse than it should
+  be, with nothing to say why.
+- **`echo` ignored `-n`**, which `/bin/echo` honours.
+
+**The rule this is an instance of:** a builtin exists to be FASTER or to
+change the shell's own state. One that merely reimplements a `/bin`
+program is a second implementation that will drift, and the drift shows
+up as a command behaving differently depending on how it was reached --
+which is the hardest kind of bug to believe, because the program is
+right and the shell is lying about it.
+
+**The kernel shell is deliberately the opposite** and that is not an
+inconsistency: its ~30 builtins (`ktest`, `fsck`, `fsformat`, `dmesg`,
+`gfxbench`...) reach into subsystems no syscall exposes, so there is no
+`/bin` program for them to shadow. The ones that DID have a twin --
+`ls`, `lspci`, `cat`, `edit` -- are gone from it for exactly this rule,
+and the kernel's own file commands live behind `rescue`, a name no
+`/bin` program can shadow.
+
+**AND A CHILD INHERITS THE SHELL'S fd 0**, which is a real terminal in
+both shells now. There used to be a `stdin_ok` flag and an empty-pipe
+fallback here, because the GUI Terminal took keys as window events and
+its fd 0 was a console another process owned -- a child inheriting that
+blocked forever on a keyboard it would never be given, and the window
+hung. That is gone with the reason for it: the Terminal opens a pty and
+runs `/bin/tosh` on the slave (`docs/tty-design.md`).
 
 The hazard predates removing the builtin (`catin` reaches it too), but
 removing the builtin is what made it easy to hit -- and a positive

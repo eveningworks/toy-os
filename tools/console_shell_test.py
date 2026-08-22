@@ -445,16 +445,23 @@ def main():
         check("`<` feeds a file to a program's stdin",
               "Hello" in out, out.strip()[:60])
 
-        # A BUILTIN redirects too. tosh's `ls` prints through the
-        # shell's own sink rather than writing to fd 1, so this is the
-        # check that the sink swap works -- without it `ls > f` would
-        # silently print to the screen and leave an empty file.
+        # A BUILTIN redirects too. A builtin prints through the shell's
+        # own sink rather than writing to fd 1, so this is the check that
+        # the sink swap works -- without it `pwd > f` would silently
+        # print to the screen and leave an empty file.
+        #
+        # **IT USED TO BE `ls`, WHICH IS NO LONGER A BUILTIN.** tosh's
+        # `ls` shadowed /bin/ls and was strictly worse -- no flags, no
+        # colour -- so it went the way `cat`'s builtin did. `pwd` is one
+        # of the three that remain, and each of those has to be one:
+        # `cd` changes the shell's own directory, and `pwd`/`help` have
+        # no /bin twin.
         dbg.send("sh rm /redir_ls.txt")
         time.sleep(0.4)
-        type_line(flow, "ls / > /redir_ls.txt")
+        type_line(flow, "pwd > /redir_ls.txt")
         time.sleep(2.0)
         out = dbg.send("sh cat /redir_ls.txt") or ""
-        check("a builtin's output redirects too", "bin" in out, out.strip()[:60])
+        check("a builtin's output redirects too", "/" in out, out.strip()[:60])
 
         # --- WHO OWNS THE CONSOLE, AND WHAT IS WAITING FOR IT --------
         #
@@ -583,15 +590,16 @@ def main():
         check("a three-stage pipeline works, not just two",
               "Hello" in out, out.strip()[:60])
 
-        # A BUILTIN as the producer. tosh's `ls` prints through the
-        # shell's own sink, so this is the check that a builtin's output
-        # reaches a pipe at all.
+        # A BUILTIN as the producer -- a builtin prints through the
+        # shell's own sink, so this is the check that its output reaches
+        # a pipe at all. `pwd` rather than `ls`, which is a /bin program
+        # now; see the redirection check above.
         dbg.send("sh rm /pipe_ls.txt")
         time.sleep(0.4)
-        type_line(flow, "ls / | catin > /pipe_ls.txt")
+        type_line(flow, "pwd | catin > /pipe_ls.txt")
         time.sleep(3.0)
         out = dbg.send("sh cat /pipe_ls.txt") or ""
-        check("a builtin can feed a pipeline", "bin" in out, out.strip()[:60])
+        check("a builtin can feed a pipeline", "/" in out, out.strip()[:60])
 
         # And a redirect that cannot be opened must NOT run the command.
         # `cat < missing` printing nothing is not enough -- a shell that

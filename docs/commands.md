@@ -29,17 +29,20 @@ Terminal both drew `<cwd>> `, and the kernel shell introduced itself as
 it is what sits behind the desktop and what *Exit to shell* returns to;
 on a `text` boot init starts `/bin/tosh` on the console instead and this
 one stands down, staying reachable as `sh <cmd>` over the serial debug
-console. `/bin/tosh` is a much smaller shell -- `ls`, `cd`,
-`pwd`, `echo`, `help`, and anything on `PATH` -- and none of the
+console. `/bin/tosh` is a much smaller shell -- **three builtins, `cd`,
+`pwd` and `help`, plus anything on `PATH`** -- and none of the
 kernel-introspection commands below exist there.
 
-**`cat` is NOT a tosh builtin, and that is a fix rather than an
-omission.** It was one, and a builtin `cat` requires a filename -- so
-`foo | cat` printed "cat: needs a filename" instead of passing the
-pipeline through, which is `cat`'s most common use. `/bin/cat` reads
-fd 0 when given no argument, so removing the builtin made the pipeline
-work and left `cat file` unchanged. It is one fewer command with two
-implementations (`docs/roadmap.md`). It does have
+**THOSE THREE ARE ALL THAT CAN BE BUILTINS.** `cd` changes the SHELL's
+own directory, so a program could not do it; `pwd` and `help` have no
+`/bin` twin. `cat`, `ls` and `echo` were builtins there and all three
+were the same mistake: a builtin that shadows a `/bin` program which
+does MORE. The builtin `cat` required a filename, so `foo | cat` printed
+an error instead of the pipeline; the builtin `ls` took no flags at all,
+so `ls -l` answered `ls: cannot read -l` and nothing was ever coloured;
+the builtin `echo` ignored `-n`. Removing each made the command behave
+the same however it was reached, which is the whole point
+(`docs/conventions/shell.md`). tosh does have
 REDIRECTION, which this one does not: `cmd > file`, `cmd >> file`
 and `cmd < file`, plus `a | b | c` pipelines (up to four stages), with
 the operators space-separated. A builtin may appear anywhere in a

@@ -187,8 +187,11 @@ def run(dbg, qmp, tmp, shot_dir, res):
               start_cursor is not None and start_cursor > 0,
               f"cursor at {start_cursor}")
 
-    # A BUILTIN: handled inside the shell, no spawn.
-    type_line(dbg, "echo hi")
+    # A BUILTIN: handled inside the shell, no spawn. `pwd`, because
+    # `echo` stopped being one -- it shadowed /bin/echo, which honours
+    # `-n` where the builtin did not. Three builtins remain and each has
+    # to be one; see userland/lib/tosh.c.
+    type_line(dbg, "pwd")
     after_echo = ink(qmp, tmp, "ut_echo.png", box)
     res.check("a builtin runs and its output appears", after_echo > base,
               f"{base} -> {after_echo}")

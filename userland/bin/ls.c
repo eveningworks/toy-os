@@ -27,11 +27,13 @@
 // lands wherever the output lands, which is what every real terminal
 // does and what makes `--color=never` a thing worth offering.
 //
-// WHAT `--color=auto` WOULD NEED, and why it is not here: "colour to a
-// terminal, plain to a pipe" requires asking whether fd 1 IS a terminal,
-// and there is no isatty() -- the kernel knows an fd's kind but nothing
-// exposes it. So the choice is explicit (`never`/`always`, default
-// always) and `auto` is a roadmap item, not a silent lie.
+// `--color=auto` IS THE DEFAULT, and it is what a terminal being a real
+// object bought. "Colour to a terminal, plain to a pipe" needs to know
+// whether fd 1 IS one; that used to be unanswerable here and is now one
+// call (sys_isatty(), over SYS_FSTAT's SYS_STAT_TTY). So `ls` on a
+// terminal is coloured, `ls > out.txt` and `ls | cat` are not, and
+// nobody has to remember a flag -- which is the whole reason real ls
+// defaults to auto. `never` and `always` override it.
 //
 // WHAT IS NOT COLOURED, and why: executables. Real ls colours them from
 // the mode bits, and this filesystem has none -- struct sys_dirent carries a
@@ -215,14 +217,17 @@ static int list_one(const struct opts *o, const char *path, int with_header) {
 }
 
 static void usage(void) {
-    put("usage: ls [-1aCFhlRrSt] [--color=never|always] [dir]\n"
+    put("usage: ls [-1aCFhlRrSt] [--color=never|always|auto] [dir]\n"
         "  -l  long form      -C  multi-column     -h  human sizes\n"
         "  -t  newest first   -S  largest first    -r  reverse\n"
         "  -R  recurse        -a  accepted, no-op (no dotfile convention)\n");
 }
 
 int main(int argc, char **argv) {
-    struct opts o = { 0, 0, 0, 0, 0, 'n', 1 };
+    // The last field is `color`, and its default is AUTO -- resolved
+    // here rather than carried as a third state, because everything
+    // below only ever asks "colour or not".
+    struct opts o = { 0, 0, 0, 0, 0, 'n', sys_isatty(1) };
     // The default, if no positional argument arrives. `/` is the
     // fallback for a caller with no scheduler slot: SYS_GETCWD needs a
     // process, and the legacy `run` loader is not one (see its ABI
@@ -242,6 +247,7 @@ int main(int argc, char **argv) {
             // guessing (CLAUDE.md).
             if (strcmp(a, "--color=never") == 0) o.color = 0;
             else if (strcmp(a, "--color=always") == 0) o.color = 1;
+            else if (strcmp(a, "--color=auto") == 0) o.color = sys_isatty(1);
             else if (strcmp(a, "--help") == 0) { usage(); sys_exit(0); }
             else {
                 put("ls: unknown option: ");

@@ -4,7 +4,7 @@
 // that reach straight into the filesystem, the drivers and the test
 // harness. This is deliberately not that, and not a front-end to it
 // either: it is an ordinary ring-3 program that does what a shell does
-// using only syscalls -- a handful of builtins over the file API, and
+// using only syscalls -- three builtins that have to be builtins, and
 // SYS_SPAWN for everything else.
 //
 // That is the whole point of the exercise. `run foo` in the kernel
@@ -13,10 +13,25 @@
 // program it starts, and its output arrives through a pipe like any
 // other data.
 //
-// Structured as a library rather than a program: userland/terminal.c
-// links it and feeds it a line at a time, because a GUI terminal owns
-// its own event loop and cannot sit in a read() loop of its own. A
-// standalone `tosh` binary would be a thin main() over the same calls.
+// Structured as a library rather than a program: `/bin/tosh` is a thin
+// main() over it. It had a second caller -- the GUI Terminal linked it
+// and fed it a line at a time -- until that window became a real
+// terminal emulator running `/bin/tosh` on a pty, which is the shape
+// this split was always heading for.
+//
+// **THREE BUILTINS, AND EACH ONE HAS TO BE.** `cd` changes the SHELL's
+// own directory, so a program could not do it; `pwd` and `help` have no
+// `/bin` twin. Everything else is a program, and that is a rule rather
+// than an inventory:
+//
+//   **A BUILTIN MUST NOT SHADOW A `/bin` PROGRAM THAT DOES MORE.**
+//
+// `ls` and `echo` were builtins here and both were strictly worse than
+// the programs they hid: this `ls` took no flags at all -- `ls -l`
+// answered "cannot read -l" -- and coloured nothing, while `/bin/ls`
+// has ten flags and colours directories. `cat`'s builtin went first,
+// for the same reason in a different disguise (it could not read fd 0,
+// so `foo | cat` printed an error). Three instances of one mistake.
 #include "lib/tosh.h"
 #include "rt/sys.h"
 #include <ksignal.h> // signal_name() -- one table, shared with the kernel
@@ -73,26 +88,6 @@ static void emit_int(struct tosh *sh, int v) {
 }
 
 // --- builtins ---------------------------------------------------------
-
-static void bi_ls(struct tosh *sh, const char *arg) {
-    // "" means the cwd, which SYS_LISTDIR resolves to for itself.
-    const char *path = (arg && arg[0]) ? arg : ".";
-
-    // STATIC, not a local: 32 dirents is ~2.6 KiB against
-    // USERLAND_CFLAGS' -Wframe-larger-than=2048 and a 16 KiB ring-3
-    // stack with ONE guard page below it -- the Stack Clash shape the
-    // WM's own dirent arrays were moved off the stack for. This shell
-    // is single-threaded and never lists two directories at once.
-    static struct sys_dirent ents[32];
-    int n = sys_listdir(path, ents, 32);
-    if (n < 0) { emit(sh, "ls: cannot read "); emit(sh, path); emit(sh, "\n"); return; }
-    for (int i = 0; i < n; i++) {
-        emit(sh, ents[i].name);
-        if (ents[i].is_dir) emit(sh, "/");
-        emit(sh, "\n");
-    }
-}
-
 
 static void bi_cd(struct tosh *sh, const char *arg) {
     // One syscall. The checks this used to do by hand -- does it exist,
@@ -427,7 +422,6 @@ static int run_stripped(struct tosh *sh, const char *line, int stdout_redirected
 
     if (!cmd[0]) return 0;
 
-    if (seq(cmd, "ls"))   { bi_ls(sh, args);  return 0; }
     if (seq(cmd, "cd"))   { bi_cd(sh, args);  return 0; }
     if (seq(cmd, "pwd"))  {
         char here[TOSH_PATH_MAX];
@@ -436,10 +430,9 @@ static int run_stripped(struct tosh *sh, const char *line, int stdout_redirected
         emit(sh, "\n");
         return 0;
     }
-    if (seq(cmd, "echo")) { if (args) emit(sh, args); emit(sh, "\n"); return 0; }
     if (seq(cmd, "help")) {
         emit(sh, "tosh -- the toy-os shell, running in ring 3.\n"
-                 "builtins: ls cd pwd echo help\n"
+                 "builtins: cd pwd help  (everything else is a program)\n"
                  "redirection: cmd > file, cmd >> file, cmd < file\n"
                  "anything else is spawned from /bin, /usr/bin or /tests\n");
         return 0;
@@ -538,8 +531,7 @@ static int stage_is_builtin(const char *cmd) {
     while (cmd[i] == ' ') i++;
     while (cmd[i] && cmd[i] != ' ' && c < TOSH_PATH_MAX - 1) w[c++] = cmd[i++];
     w[c] = '\0';
-    return seq(w, "ls") || seq(w, "cd") || seq(w, "pwd")
-        || seq(w, "echo") || seq(w, "help");
+    return seq(w, "cd") || seq(w, "pwd") || seq(w, "help");
 }
 
 static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,

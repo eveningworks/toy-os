@@ -356,6 +356,16 @@ int sys_openpty(int *master_fd, int *slave_fd);
 int sys_tcgetattr(int fd, struct tty_termios *tio);
 int sys_tcsetattr(int fd, const struct tty_termios *tio);
 
+// Is this fd a TERMINAL? What `--color=auto` and every "am I
+// interactive?" decision is made of.
+//
+// Over SYS_FSTAT's existing SYS_STAT_TTY flag rather than a syscall of
+// its own: the kernel already answers "what KIND of thing is this fd",
+// and a second call to ask one bit of the same question would be a
+// second thing to keep true. The console and both ends of a pty say
+// yes; a file, a pipe and a socket say no.
+int sys_isatty(int fd);
+
 // How big the terminal is, in CHARACTER CELLS -- what every full-screen
 // program asks for first (ioctl(TIOCGWINSZ) elsewhere). The set half is
 // for a terminal EMULATOR, which is the only thing that knows how big

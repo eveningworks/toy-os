@@ -611,7 +611,7 @@ whenever a headline here tells you something you did not already know.
 - **A PROGRAM STARTED BY A BARE NAME PRINTS NOTHING EXTRA WHEN IT SUCCEEDS -- AND `run <name>` STILL DOES.**
 - **TAB COMPLETION IN COMMAND POSITION IS BUILTINS PLUS ALL OF `PATH`, DEDUPLICATED AND SORTED, WITH NO DIRECTORIES.**
 - **`#` IS RING 0 AND `$` IS RING 3, AND THE PROMPT IS WHERE THAT LIVES** -- all three shells show the cwd, so the last character is the difference; `Ctrl-C` works only at a `$`.
-- **A BUILTIN THAT CANNOT READ ITS INPUT MUST NOT SHADOW A PROGRAM THAT CAN** -- and a shell with no terminal input hands its children an EMPTY stdin, never somebody else's keyboard.
+- **A BUILTIN MUST NOT SHADOW A `/bin` PROGRAM THAT DOES MORE** -- `/bin/tosh` has three (`cd`, `pwd`, `help`) and each has to be one; `cat`, `ls` and `echo` were the same mistake three times.
 - **A WRAPPER BUILTIN IS ONE COMMAND WITH TWO HALVES IN TWO RINGS, AND THE RING-3 HALF WILL BE WRONG.**
 - **A COMMAND WITH A READ HALF AND A WRITE HALF MOVES AS ONE PIECE OR NOT AT ALL.**
 - **COLOUR IS AN ESCAPE SEQUENCE, NOT A SYSCALL.**
