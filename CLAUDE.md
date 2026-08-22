@@ -1019,7 +1019,9 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   (versioning), `genfont.py` / `genttf.py`, `gen_kbs.py` (keyboard
   layouts from XKB data), `gen_cursors.py` (cursor themes),
   `genrelocs.py` (the kernel's own relocation table), `gen_syms.py` (the
-  panic symbol table), `gen_decisions_index.py`, `gen_commands_index.py`.
+  panic symbol table), `gen_decisions_index.py`, `gen_commands_index.py`,
+  `gen_next_up.py` (the roadmap's "Next up" section, from the `**NEXT**`
+  markers on the items themselves).
 - **The repo itself** -- `backup_repo.sh` (run it before ANY change to
   the repo's identity or history -- a mirror clone is not a backup here,
   release assets live only on GitHub).
@@ -1232,6 +1234,16 @@ its position is its layer, so nothing is renumbered when one is
 inserted. Older `Milestone N` references in git history and some source
 comments resolve through the one-way legend at the end of
 `docs/roadmap-details.md`; do not add a number to a new one.
+
+**URGENCY IS A SECOND AXIS, AND IT IS MARKED WHERE THE ITEM LIVES.**
+Put `**NEXT**` on the roadmap item itself and run
+`tools/gen_next_up.py --write`; the "Next up" section at the top of
+`docs/roadmap.md` is GENERATED from those markers, and
+`tools/check_docs.py` fails the build when it is stale. Do NOT hand-write
+a list of titles at the top -- that is the pointer-someone-must-remember
+shape every maintenance burden this repo has deleted. `**NEXT**` means
+"do this before the unmarked work around it", never "this is broken":
+something that MISBEHAVES belongs in `docs/bugs.md`.
 
 **`docs/roadmap.md` IS ORDERED BY WHAT MUST BE BUILT FIRST.** Phases 1-4
 are a dependency chain -- the system runs itself, then memory, then the

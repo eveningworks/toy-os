@@ -326,6 +326,19 @@ to this file too).
    - List every file you added or edited in your response to the user --
      standing instruction, keep it compact. `git status --short` is
      the list.
+   - **END WITH A SHORT "TRY IT YOURSELF" GUIDE** (standing instruction,
+     2026-08-22, asked for twice -- once for the change, then again to
+     make it permanent). A few lines saying how to reach the change on a
+     real boot: the `make run` flags if it needs particular ones, which
+     app or command, what to type, what should happen. Say plainly when
+     a feature is NOT reachable from the default boot -- several are not
+     (`Ctrl-C` needs a `text` target; the ATA/PIO control only greys out
+     under `DISK=virtio`), and a guide that assumes the default sends
+     the reader looking for something that cannot be there. CLAUDE.md
+     carries the full version.
+   - **Urgent follow-on work is marked `**NEXT**` on the roadmap item
+     itself**, then `tools/gen_next_up.py --write`. Never hand-write a
+     priority list at the top of the roadmap.
    - Rebuild (`make all && make iso`) and re-run the boot smoke test one
      more time against the final state (`tools/preflight.sh` again is
      the fastest way to do this), so what you deliver is what you

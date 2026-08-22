@@ -192,6 +192,20 @@ def check_decisions_index_is_current(problems):
                         "tools/gen_decisions_index.py")
 
 
+def check_next_up_is_current(problems):
+    """docs/roadmap.md's "Next up" section is generated from the `**NEXT**`
+    markers on the items themselves. A stale section is exactly what the
+    generator exists to prevent: urgency claimed in one place and the
+    work living in another, drifting the moment an item is reworded or
+    ticked."""
+    gen = os.path.join(REPO, "tools", "gen_next_up.py")
+    r = subprocess.run([sys.executable, gen, "--check"],
+                       capture_output=True, text=True, cwd=REPO)
+    if r.returncode != 0:
+        problems.append("docs/roadmap.md's Next up section is stale -- run "
+                        "tools/gen_next_up.py --write")
+
+
 def check_internal_doc_links(problems):
     """A relative link from one doc to another that does not exist. The
     roadmap split produced exactly this: a pointer to a `## Details`
@@ -366,6 +380,7 @@ def main():
                   check_roadmap_items_are_one_line,
                   check_no_duplicated_sections,
                   check_decisions_index_is_current,
+                  check_next_up_is_current,
                   check_internal_doc_links,
                   check_tools_are_documented,
                   check_every_command_has_a_page,
@@ -376,7 +391,8 @@ def main():
     if not problems:
         print("check_docs: ok -- no dead changelog pointers, no numbered or "
               "versioned milestones, no duplicated roadmap entries, one line "
-              "per roadmap item, the decisions index is current, no broken "
+              "per roadmap item, the decisions index and Next up are "
+              "current, no broken "
               "doc links, every tool documented, every command has a page "
               "and a link")
         return 0

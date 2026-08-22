@@ -1200,3 +1200,75 @@ new limit is tested rather than merely assumed.
 verdict**: did the contract change, or did the code break? Answer it in
 the test's comment, so the next session does not have to re-derive which
 it was.
+
+## 2026-08-22 -- signals, Ctrl-C, and four harness defects that outnumbered the kernel bugs
+
+The day's theme repeated the 2026-08-18 one: **more time went into
+tools lying than into the OS.** Four of the five things that looked
+like kernel bugs were the harness, and each has a transferable shape.
+
+**A FILTER THAT DROPS "NOISE" WILL DROP THE ANSWER.** A helper skipped
+kernel log lines by matching `^[a-z_]+: ` -- and `cat: needs a filename`
+matches it. So a file containing exactly the diagnosis was reported as
+EMPTY, and I published a "pipe with redirect is broken" diagnosis that
+was entirely wrong. Pipes and redirects were fine. Before believing a
+harness that reports NOTHING, print what it actually received.
+
+**A PROBE'S PREMISE GOES STALE WITH THE THING IT PROBES.**
+`console_shell_test.py` typed `touch /kprobe.txt` to prove the kernel
+shell had stood down, on the premise that `touch` was a kernel builtin
+NOT on tosh's PATH. `touch` became a `/bin` program; tosh found it, ran
+it, and the check failed while the property it names was perfectly
+intact -- and left the probe file behind to fail a LATER check too. A
+probe must name something the other side genuinely cannot reach; here
+that is `rescue <cmd>`, which no `/bin` can shadow by construction.
+
+**SAMPLING A STATE THAT IS BEING REACHED IS A FLAKE.** "An idle tosh is
+BLOCKED" sampled the process table once, right after boot, and caught a
+shell that had not got to its blocking read yet -- 2 runs in 4. Polling
+with a bound does not weaken it: a shell that spins never reaches
+BLOCKED, so the bound is what fails. Same rule as
+`QMPSession.stable_pixels()`, arriving from a different direction.
+
+**AND THE ORACLE MATTERS MORE THAN THE ASSERTION.** Comparing two
+screenshots of a typed line to prove two keyboard drivers agree failed
+three times for three reasons that were all the harness: the two boots
+log different things above the prompt (the crop reached into it), the
+caret blinks, and `_` DRAWS NOTHING on the ring-0 console -- so the
+screen literally cannot distinguish a lost keystroke from an invisible
+glyph, which was the distinction under test. Switching the oracle to the
+FILESYSTEM (`touch /kb_probe.txt`; `echo x | touch /kb_pipe.txt`) made
+it exact, layout-independent and one line long. Ask what the oracle can
+physically see before designing the assertion.
+
+**A DISCRIMINATING PROBE BEATS AN OBVIOUS ONE.** For "did `|` arrive",
+`echo hi | cat > f` looks natural and is useless: the same keystrokes
+WITHOUT the pipe still create the file. `echo x | touch /kb_pipe.txt`
+creates it only when the pipe is there. Ask what a broken version would
+still pass -- this repo's oldest testing rule, and it applies to the
+probe's SHAPE, not just to the assertion.
+
+**HOST TOOLS HINT AND THE KERNEL DOES NOT.** Chasing an invisible
+glyph, PIL reported the underscore as a crisp full-coverage row; the
+kernel's own unhinted rasteriser put it two rows lower at a quarter
+coverage. The host measurement was confidently wrong in both position
+and weight. When the question is "what does THIS renderer produce",
+measure it in the guest -- a KTEST dumping the real atlas settled in one
+run what two host measurements had got wrong.
+
+**MEASURE THE BLAST RADIUS BEFORE CHANGING A RASTERISER (or anything
+else that runs over every element).** Before touching glyph rendering, a
+KTEST counted how many of the 101 glyphs the proposed rule would touch.
+The answer -- 1, and it was also the only glyph below half coverage --
+turned a scary-sounding change into an obviously proportionate one, and
+the count went into the code comment so the next reader does not have to
+re-derive it.
+
+**AND THE POSITIVE CONTROL FOUND A FIXTURE BUG, not a code bug.**
+Disabling the EINTR wake left a check GREEN: the child had never been
+scheduled, so the signal was delivered at its first syscall -- a real
+and correct path, but not the one the check names. The test now WAITS
+until the child is really `SCHED_BLOCKED` and asserts that it got there.
+"When a control fires nothing, ask what OTHER path could satisfy the
+same assertion" already existed here; this is the same rule catching a
+fixture that never reached the state under test.

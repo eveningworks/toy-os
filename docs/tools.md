@@ -113,6 +113,27 @@ manual steps to be worth automating:
   which also means this check is skipped in a checkout that has not run
   `make iso`. Exemptions are named with reasons in
   `COMMAND_PAGE_EXEMPT`.
+- **`gen_next_up.py`** -- regenerates the "Next up" section at the top
+  of `docs/roadmap.md` from the `**NEXT**` markers on the items
+  themselves.
+
+  **WHY THERE IS A SECOND AXIS.** The roadmap is ordered by DEPENDENCY,
+  which is what makes reading it top to bottom answer "what next" for
+  the phases -- and deliberately not by priority, since a total priority
+  order would imply the tracks depend on each other when they do not. So
+  urgency cannot share that ordering, and an item states its own where
+  it lives.
+
+  **WHY IT IS GENERATED**, rather than a short hand-kept list of titles
+  at the top: that list is a pointer whose correctness depends on
+  somebody remembering to update a second place, which is the shape of
+  every maintenance burden this repo has deleted (CLAUDE.md's "prefer
+  facts that cannot go stale"). `check_docs.py` runs it with `--check`
+  and fails the build when the committed section is stale, exactly as it
+  already does for the decisions index.
+
+  It collects only UNFINISHED items: a marker that survived a tick would
+  put completed work in the queue, and nobody remembers to remove one.
 - **`gen_commands_index.py`** -- regenerates the categorised index of
   command pages into `docs/commands/README.md`, the same shape (and for
   the same reason) as `gen_decisions_index.py`. **The category comes

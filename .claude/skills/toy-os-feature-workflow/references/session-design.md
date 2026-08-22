@@ -1207,3 +1207,76 @@ a boundary, since `<kernel/vmm.h>` would resolve too.
 
 **And check the collision list before adding a header.** `api/` and
 `abi/` also own `fs.h`, `heap.h`, `timer.h`, `pipe.h` and `query.h`.
+
+## 2026-08-22 -- signals, process groups, and a table pointing the wrong way
+
+**A PLAN'S PREMISE IS WORTH RE-MEASURING BEFORE BUILDING TO IT.**
+`docs/signals-design.md` said stage 1 needed the roadmap's
+"Interruptible syscalls -- a trap gate plus retiring `g_next_kernel_rsp`".
+It did not. Blocking in this kernel already works by rewriting a parked
+process's SAVED TRAPFRAME, and resuming abandons the syscall's C frames
+entirely -- so `-EINTR` is a wake with a different value, about six
+lines. Half an hour of reading made the whole milestone cheaper than
+its own plan claimed. The plan also proposed a single `foreground_pid`;
+that was rejected before it was built, for the reason written into it
+(a pipeline is several processes). Both corrections went back into the
+design doc, which now says what landed and where it differs.
+
+**SENDING AND ACTING ARE DIFFERENT MOMENTS**, and that framing is what
+made signals tractable. A signal can be raised from an IRQ; terminating
+a process calls the heap. So sending sets a bit and the kernel acts only
+where it provably holds nothing -- when the trap came from RING 3. That
+one condition is the whole safety argument, and it is worth writing as a
+sentence rather than as a check.
+
+**TWO DELIVERY POINTS WERE NEEDED AND ONLY ONE WAS DESIGNED.** The end
+of the trap alone makes death a RACE against the process reaching
+`exit()` first, and losing that race is permanent because the exit path
+zombies the slot and the pending bit becomes unreachable. It passed
+most of the time -- the worst way for a race to behave. A positive
+control on each point is what separated them.
+
+**A GUARD THAT REDDENS NOTHING SHOULD BE DELETED, NOT KEPT.** A
+"refuse to park a process with a signal pending" check was written,
+tested, and removed: the syscall-entry delivery means such a process
+never reaches that function. Keeping it would have been an untestable
+guard with a comment claiming a mechanism that was not the one doing
+the work -- which is worse than no guard, because the next reader
+believes it.
+
+**"NOT THE RUNNING PROCESS" AND "NOT THE LOADED ADDRESS SPACE" ARE
+DIFFERENT QUESTIONS.** `switch_to_kernel()` hands the CPU back without
+changing CR3, so a victim the scheduler just switched away from is still
+what CR3 points at -- and the teardown's guard, which can only ask the
+second question, refused and logged it. An entire address space leaked
+per signal, silently. **A guard phrased in terms of what a function can
+OBSERVE is not the invariant it was meant to enforce**, and the gap
+shows up as a refusal that looks like a safety net working.
+
+**A HAND-KEPT TABLE POINTING THE WRONG WAY GROWS A HOLE.** `/etc/kbs`
+was keyed on AT scancodes while the input core's canonical event was
+evdev, so every non-PS/2 driver translated DOWN into a legacy encoding
+through a hand-kept list -- and `KEY_102ND`, the ISO key carrying `|`,
+fell through it. `|` could be typed on PS/2 and not on virtio-input.
+
+Filling the hole was NOT the fix, and the user was right to push back on
+it: the shape produces another hole the next time a device reports a key
+nobody tried. Re-keying the layout on evdev DELETED the table -- Linux's
+arrangement, where `atkbd` translates set 1 into keycodes at the very
+bottom and nothing above sees a scancode. **When a table needs a guard
+to be safe, ask whether the table should exist.**
+
+The values did not change: evdev's numbering was taken from set 1, so
+the two agree for the whole primary block. **That coincidence is why
+the wrong keying looked right for years** -- and why the hole stayed
+invisible until a device reported a key from the part of the range where
+the coincidence stops mattering.
+
+**A BUILTIN THAT CANNOT READ ITS INPUT MUST NOT SHADOW A PROGRAM THAT
+CAN.** tosh's builtin `cat` required a filename, so `foo | cat` printed
+an error instead of its input. `/bin/cat` already read fd 0. Removing
+the builtin fixed it -- and exposed a hang worth knowing about: a shell
+with no terminal input of its own must hand children an EMPTY stdin, not
+somebody else's keyboard, or a child blocks forever on a console the
+window does not own and the shell waiting on it takes the window down
+with it.
