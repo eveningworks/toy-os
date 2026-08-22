@@ -68,6 +68,12 @@ void uui_radio_list_set_geometry(struct uui_radio_list *l, int x, int y) {
 void uui_radio_list_draw(struct ugfx_surface *s, const struct uui_radio_list *l) {
     int selected = l->selected, hovered = l->hovered;
     uint32_t bg = l->bg, fg = l->fg;
+    // Dimmed, and with no hover or focus ring: those say "this responds
+    // to you", which is the one thing a disabled control must not say.
+    if (l->disabled) {
+        fg = uui_state_bg(fg, UUI_STATE_DISABLED);
+        hovered = -1;
+    }
     int x = l->x, y = l->y;
     for (int i = 0; i < l->count; i++) {
         int cx, cy;
@@ -127,6 +133,7 @@ static int rl_ops_hit(const void *w, int cx, int cy) {
 // the list change nothing.
 static int rl_ops_press(void *w, int cx, int cy) {
     struct uui_radio_list *l = (struct uui_radio_list *)w;
+    if (l->disabled) return 0;
     int idx = uui_radio_list_hit(l, cx, cy);
     if (idx < 0) return 0;
     l->armed_prev = l->selected;
@@ -148,6 +155,7 @@ static int rl_ops_press(void *w, int cx, int cy) {
 // time Control Panel was told to stop acting on motion.
 static int rl_ops_release(void *w, int cx, int cy) {
     struct uui_radio_list *l = (struct uui_radio_list *)w;
+    if (l->disabled) return 0;
     int idx = uui_radio_list_hit(l, cx, cy);
     if (idx < 0 && l->armed_prev >= 0) {
         l->selected = l->armed_prev; // dragged off -- put it back
@@ -159,6 +167,7 @@ static int rl_ops_release(void *w, int cx, int cy) {
 static int rl_ops_motion(void *w, int cx, int cy, unsigned buttons) {
     (void)buttons;
     struct uui_radio_list *l = (struct uui_radio_list *)w;
+    if (l->disabled) return 0;
     int hot = uui_radio_list_hit(l, cx, cy);
     if (hot == l->hovered) return 0;
     l->hovered = hot;
@@ -212,7 +221,9 @@ int uui_radio_list_key(struct uui_radio_list *l, int key) {
 
 static int rl_ops_key(void *w, int key, unsigned mods) {
     (void)mods;
-    return uui_radio_list_key((struct uui_radio_list *)w, key);
+    struct uui_radio_list *l = (struct uui_radio_list *)w;
+    if (l->disabled) return 0;
+    return uui_radio_list_key(l, key);
 }
 
 static void rl_ops_set_focused(void *w, int focused) {
@@ -223,7 +234,8 @@ static void rl_ops_set_focused(void *w, int focused) {
 // the tab order rather than being a stop that does nothing -- the same
 // call uui_slider_ops makes.
 static int rl_ops_accepts_focus(const void *w) {
-    return ((const struct uui_radio_list *)w)->count > 0;
+    const struct uui_radio_list *l = (const struct uui_radio_list *)w;
+    return !l->disabled && l->count > 0;
 }
 
 const struct uui_widget_ops uui_radio_list_ops = {

@@ -114,6 +114,26 @@ int main(int argc, char **argv) {
     tosh_init(&g_sh, out_fd1, 0);
     uhist_init(&g_hist);
 
+    // --- job control, in two lines -----------------------------------
+    //
+    // A SHELL LEADS ITS OWN GROUP. Started by init, this shell would
+    // otherwise be in init's, and putting init's group in front of the
+    // console would point every Ctrl-C at pid 1.
+    sys_setpgid(PGID_SELF, PGID_SELF);
+    // AND IGNORES SIGINT, which every real shell does. Whenever no job
+    // is running, this shell's own group is the console's foreground
+    // group -- so a SIGINT sent by hand (`kill -INT`) would end the
+    // shell. The INTR KEY does not send one in that state (kernel/tty.h
+    // delivers the byte instead, so Ctrl-C still abandons the line
+    // below), but a signal that arrives some other way must not be
+    // fatal either. Belt and braces, cheaply.
+    sys_sigaction(SIGINT, SIG_IGN);
+
+    // The console is CLAIMED BY READING IT, and the foreground group is
+    // set at the same moment (kernel/tty.h) -- so nothing here has to
+    // call tcsetpgrp: the first sys_read(0, ...) below does it, and
+    // job_foreground()/job_done() in the tosh library move it per job.
+
     put("tosh -- toy-os shell in ring 3. Ctrl-D to exit.\n");
     fresh_prompt();
 

@@ -195,6 +195,15 @@ int sys_sbrk(struct syscall_ctx *c);
 int sys_spawn(struct syscall_ctx *c);
 int sys_waitpid(struct syscall_ctx *c);
 int sys_kill(struct syscall_ctx *c);
+// Signals and process groups (kernel/proc/signal_syscalls.c). Beside the
+// process syscalls rather than with the signal core, because these are
+// the ring-3 SURFACE of it -- the core has kernel callers of its own
+// (the keyboard's INTR key) and must not depend on the syscall layer.
+int sys_setpgid(struct syscall_ctx *c);
+int sys_getpgid(struct syscall_ctx *c);
+int sys_sigaction(struct syscall_ctx *c);
+int sys_tcsetpgrp(struct syscall_ctx *c);
+int sys_tcgetpgrp(struct syscall_ctx *c);
 int sys_proc_info(struct syscall_ctx *c);
 int sys_getpid(struct syscall_ctx *c);
 int sys_ticks(struct syscall_ctx *c);

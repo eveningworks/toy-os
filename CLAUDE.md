@@ -510,6 +510,9 @@ whenever a headline here tells you something you did not already know.
 - **The kernel RELOCATES ITSELF at boot -- it is not running where it was linked.**
 - **A BLOCKED PROCESS WAITS ON A CHANNEL, AND A CHANNEL IS AN ADDRESS.**
 - **THE KERNEL STORES NO ENVIRONMENT, AND `SYS_SPAWN` TAKES A STRUCT**
+- **A SIGNAL SETS A BIT; THE KERNEL ACTS ON IT WHEN IT IS SAFE TO.**
+- **A PROCESS GROUP IS AN INT, AND SPAWN TAKES IT.**
+- **THE CONSOLE HAS AN OWNER AND A FOREGROUND GROUP, AND THE INTR KEY IS TEMPORARY WHERE IT IS.**
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
 
 ### GUI, Toykit and the desktop
@@ -968,7 +971,11 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   since the console is what it photographs), `init_test.py` (init and
   service supervision), `console_shell_test.py` (a `text` boot reaching a ring-3
   prompt with the kernel shell stood down; boots twice and rewrites
-  `/etc`), `stdin_test.py` (blocking fd 0 and `/bin/tosh`, which
+  `/etc`), `ctrlc_test.py` (**Ctrl-C interrupting a real job**, through
+  the real keyboard on a `text` boot: a spinning job dies, a two-stage
+  PIPELINE dies as a unit, the shell survives, and at an empty prompt the
+  key is still a keystroke that cancels the line), `stdin_test.py`
+  (blocking fd 0 and `/bin/tosh`, which
   needs the physical console and so takes the desktop down first),
   `qemu_matrix.py` (the suite against SEVERAL QEMU
   versions in Docker -- **the bug class one QEMU cannot show you**: a
@@ -1262,6 +1269,35 @@ all of `.claude/`, because those are transient checkouts while the skill
 beside them is real content.
 
 ## Delivering changes
+
+**END EVERY DELIVERY WITH A SHORT "TRY IT YOURSELF" GUIDE** (standing
+project instruction). Whenever a change adds or alters something a
+person can SEE or DO in toy-os, the final response must say -- in a few
+lines, not an essay -- how to reach it on a real boot: which `make run`
+flags if it needs particular ones, which app or which command, what to
+type, and what should happen. The maintainer runs this OS interactively;
+a change that is only ever demonstrated through a test tool's pass/fail
+table has not actually been handed over.
+
+Three rules that keep it useful rather than decorative:
+
+- **Say what to TYPE and what to EXPECT**, as a table or a short block.
+  "Ctrl-C now works" is not a guide; "`spin_test 900000`, then Ctrl-C ->
+  job stops, `^C`, prompt back" is.
+- **Say when a feature is NOT reachable from the default boot.** Several
+  are: `Ctrl-C` needs a `text` target, the ATA/PIO control only greys
+  out on a machine with no DMA engine (`make run VIRTIO=1`), `hires` work
+  needs `KCMDLINE="video=1920x1080"`. A guide that quietly assumes the
+  default boot sends the reader to look for something that cannot be
+  there.
+- **Skip it when there is genuinely nothing to see** -- a refactor, a doc
+  edit, an internal invariant with no user-facing surface. Say so in a
+  line rather than inventing a demonstration.
+
+This is the same instinct as the file list and the layer diagram below,
+pointed at the person rather than at the code: the file list says what
+changed, the diagram says what the system now looks like, and this says
+what is different when you boot it.
 
 List every file added or edited in the final response, as a compact
 list (standing project instruction) -- always, regardless of mode.

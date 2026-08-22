@@ -19,6 +19,18 @@ struct uui_dropdown {
     int open;
     int max_rows;
     uint32_t bg, fg, border;
+
+    // VISIBLE, BUT DOES NOTHING -- the same field uui_button and
+    // uui_checkbox already carry. Set it and the control draws dimmed
+    // and refuses press/motion/release/key, and drops out of the focus
+    // ring so Tab does not stop on something that cannot be used.
+    //
+    // A DISABLED CONTROL IS ONLY AN IMPROVEMENT WITH A REASON BESIDE
+    // IT. Nothing here draws that reason -- the widget has nowhere to
+    // put it -- so whoever sets this owes the user a sentence (System
+    // Settings prints the registry's `unavailable` text above the
+    // control; see abi/setting_abi.h).
+    int disabled;
 };
 
 void uui_dropdown_init(struct uui_dropdown *d, int x, int y, int w, int h,

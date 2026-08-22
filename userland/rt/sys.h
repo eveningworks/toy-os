@@ -10,6 +10,7 @@
 #include "cpuinfo.h" // struct cpu_info, for sys_cpu_info()
 #include "setting_abi.h"
 #include "query_abi.h"
+#include "signal_abi.h" // SIG*, SIG_DFL/SIG_IGN -- sys_kill() takes a signal
 #include "crash_abi.h" // struct setting_msg, struct sys_info
 
 // libsys -- typed wrappers for every syscall a ring-3 program can make.
@@ -287,7 +288,51 @@ int sys_query_field_get(const char *qualified, unsigned long long *out_value,
 // abi/syscall_abi.h, which explains why there is no permission check
 // and what would have to change for there to be one). The polite path
 // is the window close handshake, which an app may refuse.
-int sys_kill(int pid, int exit_code);
+int sys_kill(int pid, int sig);
+
+// --- signals and process groups (abi/signal_abi.h) --------------------
+//
+// sys_kill() above takes a SIGNAL now, not an exit code -- SIGKILL is
+// what its old behaviour is called. A signalled process reports
+// SIGNAL_EXIT_BASE + the signal as its exit code, so a Ctrl-C'd program
+// exits 130 and a SIGTERM'd one 143, exactly as a Unix shell prints
+// them. A NEGATIVE pid names a process GROUP.
+
+// Put `pid` (0 = me) in group `pgid` (0 = the same value as `pid`, i.e.
+// lead a new group). Returns 0, or -1 with errno.
+//
+// You usually do not need this: a child inherits its spawner's group,
+// and sys_spawn_group() below is what a shell wants for a pipeline.
+// This is for a process naming its OWN group, which nothing else can do.
+int sys_setpgid(int pid, int pgid);
+
+// `pid`'s group (0 = me), or -1 with errno ESRCH.
+int sys_getpgid(int pid);
+
+// Set this process's disposition for `sig` to SIG_DFL or SIG_IGN.
+// Returns the PREVIOUS disposition, or -1 with errno.
+//
+// NOT `sigaction`: there is no handler, and passing a function pointer
+// is refused with EINVAL rather than accepted and never called. SIGKILL
+// and SIGQUIT cannot be ignored (EPERM), so there is always something
+// that works.
+//
+// A SHELL SHOULD IGNORE SIGINT. Its own group is in front of the console
+// whenever no job is running, and without a handler to redraw a prompt
+// there is nothing else it could usefully do with one.
+int sys_sigaction(int sig, int disp);
+
+// Put `pgid` in the FOREGROUND of the physical console -- what Ctrl-C
+// interrupts. Returns 0, or -1 with errno: EPERM unless this process
+// owns the console (it has read fd 0), ENODEV if nobody does, ESRCH for
+// a group with no live member.
+//
+// The shell's half of job control: put the job's group in front, wait
+// for it, then put your own back.
+int sys_tcsetpgrp(int pgid);
+
+// The console's foreground group, or -1 with errno ENODEV.
+int sys_tcgetpgrp(void);
 
 // Monotonic timer TICKS since boot, at whatever rate the timer runs.
 // Coarse -- 10ms steps today -- and fine for pacing something, but not
@@ -372,6 +417,18 @@ int sys_spawn(const char *path, const char *args, int stdout_fd);
 // SYS_ENV_MAX -- refused rather than truncated, because a child missing
 // half its variables is worse than one that failed to start.
 int sys_spawn_env(const char *path, const char *args, int stdout_fd, char **env);
+
+// The same, plus the process GROUP the child starts in -- 0 to inherit
+// the caller's, which is what sys_spawn_env() passes.
+//
+// A SHELL RUNNING A PIPELINE WANTS THIS RATHER THAN setpgid() AFTER THE
+// FACT. The child is already running when spawn returns, so a Ctrl-C
+// arriving in between would signal the wrong group -- and unlike POSIX,
+// where both sides of a fork() call setpgid() to close that window,
+// there is no second side here to do it from. Pass the first stage's pid
+// as every later stage's `pgid` and the whole pipeline is one group.
+int sys_spawn_group(const char *path, const char *args, int stdout_fd,
+                     char **env, int pgid);
 
 // BLOCKS until `pid` exits, then reaps it. Writes the exit code to
 // `*out_code` if non-NULL. Returns the pid, or -1.

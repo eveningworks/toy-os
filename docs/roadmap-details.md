@@ -378,6 +378,14 @@ This is the milestone that keeps showing up as a prerequisite elsewhere.
 covers signals, the foreground process and `Ctrl-C` as ONE problem for
 the reason stated here.
 
+**Two of the three landed on 2026-08-22.** Signals exist, the console
+has a foreground process GROUP, and `Ctrl-C` interrupts a job on the
+physical console. What this milestone still owns is the LINE DISCIPLINE
+itself -- echo control, raw vs cooked, and a home to move the INTR
+recognition into (it is in the keyboard driver today, and `kernel/tty.h`
+says so) -- plus a per-TERMINAL version of the foreground group, which is
+what multiple virtual terminals need.
+
 Signals & process control can deliver a signal, but "deliver SIGINT to the foreground
 process" has no meaning without a foreground process. Shell pipes & job control's job
 control (`fg`/`bg`) is the same problem wearing a different hat. Doing
@@ -452,9 +460,21 @@ control in Shell pipes & job control, `run` as it exists today) eventually wants
 
 ### Signals & process control
 
-New milestone, lightly scoped, paired with `fork()`/`exec()`-style process model above (a real
-process model wants a way to influence a process besides "let it exit on
-its own"). A first rough breakdown:
+**STAGES 0-2 ARE BUILT (2026-08-22): signals, process groups, and
+`Ctrl-C` on the physical console.** `docs/signals-design.md` is the
+authority on what landed and where it differs from what was planned;
+this section is kept for the reasoning that led there, and the
+paragraphs below are marked where the outcome contradicts them --
+because two of them do, and one was wrong in a way worth recording.
+
+What is LEFT: user-space handlers (a signal frame on the user stack and
+a `sigreturn` to unwind it), `SIGSEGV` actually raised by the fault
+handler rather than the process being torn down directly, `SIGCHLD`
+actually sent on a child exit, and `Ctrl-C` in the GUI Terminal -- which
+reads keys as window events, so it owns no console and has no foreground
+group.
+
+The original scoping, as written before any of it existed:
 
 - Basic signal delivery -- a `kill(pid, sig)`-equivalent syscall that
   interrupts a running ring-3 process; needs a per-process pending-signal
@@ -498,6 +518,37 @@ What Ctrl-C actually requires, then:
 Userspace signal handlers are a separate, larger item and must not gate
 this: terminate-by-default is the behaviour nearly every program wants
 from Ctrl-C, and shipping that first is what makes the shell usable.
+
+**WHAT THE BUILD ACTUALLY FOUND, against the four bullets above.** The
+last bullet is the one that was wrong, and the third understated what
+was needed:
+
+- **"Nothing in the keyboard driver" is false, and had to be.** It is
+  true that a ring-3 terminal spawning its own children knows its
+  child's pid -- but the PHYSICAL shell is not that terminal. `/bin/tosh`
+  blocks in `read(0)` while its job runs, so a `^C` byte typed at that
+  moment is delivered to whichever process happens to read next, which
+  is the shell, after the job it was meant to interrupt has finished.
+  The key has to be recognised where it ARRIVES. `keyboard.c` does, and
+  `kernel/tty.h` records that this belongs to a line discipline once one
+  exists.
+- **"The foreground process is the terminal's own state" is true and
+  insufficient.** A pipeline is several processes, so the unit has to be
+  a GROUP -- otherwise `cat big | grep x | less` loses one stage to a
+  Ctrl-C and hangs on the rest. Groups turned out to be an int per
+  process and a field compare, which is smaller than this section
+  assumed a kernel concept would be.
+- **"A per-process pending-signal flag the scheduler checks" needed TWO
+  check points, not one.** The end of a trap alone makes death a race
+  against the process reaching `exit()` first, and losing that race is
+  permanent. See `docs/decisions.md`.
+- **The exit status a shell can distinguish is `128 + the signal`**, the
+  convention every Unix shell prints -- so a Ctrl-C'd program exits 130.
+  The shell prints its own `^C`, because with a job running the line
+  editor never sees the key.
+
+The last bullet's premise still stands where it was aimed: user-space
+handlers did NOT gate any of this.
 
 ### Crash reporting & postmortem debugging
 

@@ -98,6 +98,12 @@ static int32_t  g_imin[MAX_SETTINGS], g_imax[MAX_SETTINGS], g_istep[MAX_SETTINGS
 static char     g_unit[MAX_SETTINGS][SETTING_ABI_UNIT_MAX];
 static uint32_t g_sflags[MAX_SETTINGS];
 static int      g_order[MAX_SETTINGS];
+// Why this setting cannot be changed on this machine, or empty. From
+// the registry (abi/setting_abi.h) -- the app never decides this, and
+// never invents the sentence, because a control the UI disabled on a
+// rule of its own is one the registry would still let `config set`
+// change.
+static char     g_unavail[MAX_SETTINGS][SETTING_ABI_DESC_MAX];
 static int      g_setting_count;
 static uint32_t g_generation;
 
@@ -312,6 +318,7 @@ static int reload_settings(void) {
         strlcpy(g_unit[k], m.unit, sizeof g_unit[k]);
         g_sflags[k] = m.sflags;
         g_order[k]  = m.order;
+        strlcpy(g_unavail[k], m.unavailable, sizeof g_unavail[k]);
         g_setting_count++;
     }
     g_generation = m.generation;
@@ -363,9 +370,40 @@ static int reload_settings(void) {
 // guessed. `l->w` is the previous layout's width, which is the current
 // one on every frame but the first; zero there reserves one row and the
 // next frame corrects it.
+#define PROSE_ROWS_MAX 4
 static void fit_rows(struct uui_label *l, const char *text) {
-    int need = (text && text[0] && l->w > 0 && ugfx_text_width(text) > l->w) ? 2 : 1;
+    int need = 1;
+    if (text && text[0] && l->w > 0) {
+        // COUNTED, not "one row or two". The two-row version was right
+        // for a one-line description and silently clipped anything
+        // longer -- which an `unavailable` reason usually is, since it
+        // has to be a whole sentence. Wrapping is greedy and per word,
+        // so this over-estimates slightly where a long word forces an
+        // early break; a spare row costs a little height, a missing one
+        // loses text.
+        int tw = ugfx_text_width(text);
+        need = (tw + l->w - 1) / l->w;
+        if (need < 1) need = 1;
+        if (need > PROSE_ROWS_MAX) need = PROSE_ROWS_MAX;
+    }
     uui_label_set_wrap(l, need);
+}
+
+// A setting the REGISTRY says cannot be changed here gets every one of
+// its controls disabled -- all four, not just the one showing, because
+// /etc/settings.d can swap which one that is with a `Widget=` line and
+// a control that was live only under one presentation is the kind of
+// gap that is found by a user rather than by a test.
+//
+// The widgets go dim and refuse input; the SENTENCE is drawn by
+// relayout_page() in place of the description, since a disabled control
+// with no reason beside it reads as a broken one.
+static void set_slot_enabled(struct slot *sl, int idx) {
+    int off = idx >= 0 && g_unavail[idx][0] != '\0';
+    sl->radio.disabled  = off;
+    sl->combo.disabled  = off;
+    sl->slider.disabled = off;
+    sl->spin.disabled   = off;
 }
 
 static void load_slot(struct slot *sl, int idx) {
@@ -378,7 +416,13 @@ static void load_slot(struct slot *sl, int idx) {
     // Empty is fine and common: /etc/settings.d is optional, and a
     // setting with no file simply has no description. The label reserves
     // its row either way, so a page does not reflow when text appears.
-    uui_label_set_text(&sl->explain, g_desc[idx]);
+    // THE REASON REPLACES THE DESCRIPTION when there is one. Both would
+    // be better, but the row budget is real (see fit_rows below, and the
+    // control that once fell below the scroll fold), and of the two the
+    // reason is the one the user needs: it explains a control that will
+    // not respond, where the description explains one that would.
+    const char *prose = g_unavail[idx][0] ? g_unavail[idx] : g_desc[idx];
+    uui_label_set_text(&sl->explain, prose);
     // ROWS FROM THE TEXT, at the width this page actually has. A flat
     // two rows for every explanation was the first version, and it cost
     // a row on the nine descriptions out of ten that fit on one --
@@ -394,7 +438,7 @@ static void load_slot(struct slot *sl, int idx) {
     // previous layout's width, which is the current one on every frame
     // but the first; a zero there simply reserves one row and the next
     // frame corrects it.
-    fit_rows(&sl->explain, g_desc[idx]);
+    fit_rows(&sl->explain, prose);
 
     if (g_type[idx] == SETTING_ABI_TYPE_INT) {
         // A NUMBER GETS A SPINBOX. The range comes from the REGISTRY
@@ -412,6 +456,7 @@ static void load_slot(struct slot *sl, int idx) {
         sl->baseline = uui_spinbox_value(&sl->spin);
         sl->staged = sl->baseline;
         sl->choice_count = 0;
+        set_slot_enabled(sl, idx);
         return;
     }
 
@@ -423,6 +468,7 @@ static void load_slot(struct slot *sl, int idx) {
         // `config set` exists for these.
         sl->radio.options = 0;
         sl->radio.count = 0;
+        set_slot_enabled(sl, idx);
         return;
     }
 
@@ -474,6 +520,7 @@ static void load_slot(struct slot *sl, int idx) {
     sl->combo.list.selected = sl->staged;
     uui_slider_set_options(&sl->slider, sl->choice_ptr, sl->choice_count);
     sl->slider.selected = sl->staged;
+    set_slot_enabled(sl, idx);
 }
 
 // Does this page have anything staged but not yet applied?
@@ -486,6 +533,10 @@ static int page_dirty(void) {
 
 // Declared here; defined below with the rest of the layout.
 static void relayout_page(void);
+// How many per-setting captions the last relayout_page() emitted. Only
+// a test reads it (see the `settings: page` line) -- a suppressed
+// caption and an absent one are indistinguishable in a screendump.
+static int g_page_captions;
 
 // Shows the page for group `g`. Its settings, in Order= then
 // registration order, with advanced ones held back unless asked for.
@@ -550,8 +601,20 @@ static void open_group(int g) {
     if (!g_status[0] || g_page_group == g)
         snprintf(g_status, sizeof g_status, "%s", g_page_title_text);
     relayout_page();
-    ulogf("settings: page %s/%s slots %d advanced %d\n",
-          g_group_cat[g], g_group_key[g], g_slot_count, hidden_advanced);
+    // `captions` and `disabled` ride along because both are otherwise
+    // INVISIBLE to a test: a caption suppressed as a duplicate of the
+    // page title and a caption that was never there look identical in a
+    // screendump, and a greyed control differs from a live one by a few
+    // units of colour. Reported facts, not pixels -- CLAUDE.md.
+    int captions = 0, off = 0;
+    for (int i = 0; i < g_slot_count; i++) {
+        if (g_slot[i].setting < 0) continue;
+        if (g_unavail[g_slot[i].setting][0]) off++;
+    }
+    captions = g_page_captions; // set by relayout_page() just above
+    ulogf("settings: page %s/%s slots %d advanced %d captions %d disabled %d\n",
+          g_group_cat[g], g_group_key[g], g_slot_count, hidden_advanced,
+          captions, off);
 }
 
 // Applies every staged change on the page. Reports the OUTCOME rather
@@ -741,10 +804,28 @@ static void relayout_page(void) {
                                     .id = 0, .flags = UUI_FILL_W };
     PAGE[n++] = (struct uui_item){ .ops = &uui_label_ops, .widget = &g_page_desc,
                                     .id = 0, .flags = UUI_FILL_W };
+    // A ONE-CONTROL PAGE DOES NOT REPEAT ITS OWN TITLE. A setting that
+    // declares no `group` gets a page of its own NAMED BY ITS LABEL
+    // (group_key_of), so the heading and the sole caption are the same
+    // string -- "Time zone" printed twice, and the same on every other
+    // single-setting page. The title is the one to keep: it is what the
+    // sidebar row says, so dropping the caption leaves the page named
+    // exactly once and named the same way it was reached.
+    //
+    // Compared rather than inferred from "did it declare a group?",
+    // because a declared group whose name happens to match its only
+    // setting reads identically to a reader and should behave the same.
+    int drop_caption = (g_slot_count == 1 && g_slot[0].setting >= 0 &&
+                        strcmp(g_label[g_slot[0].setting], g_page_title_text) == 0);
+
+    g_page_captions = 0;
     for (int i = 0; i < g_slot_count; i++) {
         struct slot *sl = &g_slot[i];
-        PAGE[n++] = (struct uui_item){ .ops = &uui_label_ops, .widget = &sl->caption,
-                                        .id = 0, .flags = UUI_FILL_W };
+        if (!drop_caption) {
+            PAGE[n++] = (struct uui_item){ .ops = &uui_label_ops, .widget = &sl->caption,
+                                            .id = 0, .flags = UUI_FILL_W };
+            g_page_captions++;
+        }
         PAGE[n++] = (struct uui_item){ .ops = &uui_label_ops, .widget = &sl->explain,
                                         .id = 0, .flags = UUI_FILL_W };
         // ONLY THE CONTROL IN USE is declared. Declaring both and hiding
@@ -1026,6 +1107,9 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
                   sl->kind == CTRL_COMBO ? "combo"
                     : sl->kind == CTRL_SLIDER ? "slider"
                     : sl->kind == CTRL_SPIN ? "spin" : "radio");
+            ulogf("settings: enabled %d %s %d\n", i,
+                  sl->setting >= 0 ? g_name[sl->setting] : "-",
+                  sl->radio.disabled ? 0 : 1);
         }
         ulogf("settings: advanced_toggle %d %d %d %d shown %d\n",
               g_advanced_cb.x, g_advanced_cb.y, g_advanced_cb.w, g_advanced_cb.h,

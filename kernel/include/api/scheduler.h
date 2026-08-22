@@ -218,6 +218,20 @@ int scheduler_spawn_piped(const char *path, const char *args, int pipe_idx);
 int scheduler_spawn_env(const char *path, const char *args, int pipe_idx,
                          const char *env);
 
+// The same, plus the process GROUP to start the child in -- 0 to inherit
+// the spawner's, which is what scheduler_spawn_env() passes.
+//
+// AT CREATION rather than through a setpgid() afterwards, and that is
+// the point rather than a convenience: SYS_SPAWN returns a process that
+// is ALREADY RUNNING, so between the spawn and any later regrouping
+// there is a window where a Ctrl-C would signal the wrong group. POSIX
+// lives with the equivalent window by having both sides of a fork() call
+// setpgid(); with no fork here there is no second side, so the window
+// would be unfixable rather than merely awkward. posix_spawn's
+// POSIX_SPAWN_SETPGROUP is the same answer.
+int scheduler_spawn_group(const char *path, const char *args, int pipe_idx,
+                           const char *env, int pgid);
+
 
 // Whether `pid` names a live or reaped-pending process started by
 // scheduler_spawn*(). For SYS_WAITPID's validation.
@@ -427,6 +441,94 @@ void scheduler_guard_pages_init(void);
 int scheduler_kstack_guard_slot(uint64_t addr);
 
 int scheduler_kill(int pid, int exit_code);
+
+// --- signals: the per-process STATE ----------------------------------
+//
+// The POLICY -- what a signal means, when it is acted on, and who may
+// send one -- is kernel/signal.h. This half is here because the state
+// lives in the process table and nothing else may touch it.
+//
+// THE INVARIANT THE WHOLE DESIGN RESTS ON: **a pending bit means the
+// process must die.** An ignored signal is dropped at arrival rather
+// than queued (POSIX's rule for SIG_IGN), and with no user-space
+// handlers every disposition that is not "ignore" is "terminate" -- so
+// `pending != 0` needs no policy lookup to interpret. scheduler.c uses
+// exactly that to decide whether a blocking syscall may park at all,
+// which is what stops a signalled process re-blocking forever between
+// the wake and the delivery. When handlers land (stage 3 of
+// docs/signals-design.md) this stops being true and every reader of
+// `pending` has to be revisited; it is stated here so that grep finds
+// them.
+
+// Sets `sig`'s bit on `pid` and, if that process is parked in a
+// blocking syscall, wakes it with -EINTR so it reaches a point where
+// the signal can be delivered.
+//
+// Returns 1 if the process exists and is alive, 0 otherwise -- INCLUDING
+// the case where the signal was dropped because the process ignores it,
+// which is a successful delivery with nothing to do. Never terminates
+// anything: acting is kernel/signal.h's, and doing it here would mean
+// tearing an address space down from the keyboard IRQ.
+int scheduler_signal_raise(int pid, int sig);
+
+// The pending set, or 0 for a pid with no live slot. Non-zero means
+// "this process is going to be terminated at its next return to ring 3"
+// -- see the invariant above.
+uint32_t scheduler_signal_pending(int pid);
+
+// Takes the LOWEST pending signal and clears the whole set, returning
+// that signal number (0 when nothing was pending). The whole set,
+// because the first one delivered terminates the process and the rest
+// can never be acted on -- leaving them set would be state nobody
+// reads.
+int scheduler_signal_take(int pid);
+
+// Reads or sets whether `pid` ignores `sig`. `scheduler_signal_set_
+// ignored()` returns the PREVIOUS state (0 or 1), or -1 for a bad pid or
+// signal. Turning ignore ON also clears any pending bit for that signal:
+// a process that says "I do not want this" must not be killed by one
+// that arrived a moment earlier.
+int scheduler_signal_ignored(int pid, int sig);
+int scheduler_signal_set_ignored(int pid, int sig, int on);
+
+// --- process groups ---------------------------------------------------
+//
+// Every live process is in exactly one group, and a group is just an
+// int -- no object, no list, no lifetime. Membership is a field compare,
+// which is all "signal the foreground group" and "does this group still
+// have a member?" ever need; a group object would be a structure to
+// allocate, free and get wrong for no gain at this scale.
+//
+// A child inherits its spawner's group unless SYS_SPAWN's `pgid` says
+// otherwise. A process the KERNEL started (init, anything with no
+// spawner) leads a group of its own, so there is never a process in
+// group 0.
+
+// 1 if `pid` is a live process -- READY, RUNNING or BLOCKED. A ZOMBIE
+// is NOT live here: it has no address space left to signal and nothing
+// left to interrupt. Distinct from scheduler_pid_valid(), which counts
+// a zombie because SYS_WAITPID has to be able to reap one.
+int scheduler_pid_alive(int pid);
+
+// The address space behind `pid`, or 0 for a pid with no live slot.
+// scheduler_slot_pml4() answers the same question by SLOT INDEX, for a
+// caller walking the table; this one is for a caller holding a pid.
+uint64_t scheduler_pid_pml4(int pid);
+
+// `pid`'s group, or 0 for a pid with no live slot.
+int scheduler_pgid(int pid);
+
+// Moves `pid` into `pgid`. Returns 1 on success, 0 if `pid` is not a
+// live process, or if `pgid` is neither `pid` itself (creating a group
+// led by it) nor a group some live process is already in -- the check
+// that stops a typo parking a process in a group nothing will ever
+// signal.
+int scheduler_setpgid(int pid, int pgid);
+
+// 1 if any live process is in `pgid`. What SYS_TCSETPGRP validates
+// against, so a shell cannot put a group that has already exited in
+// front of the console and leave Ctrl-C pointed at nothing.
+int scheduler_pgid_live(int pgid);
 
 // Fills `out` with a report on process-table slot `index`
 // (0 .. scheduler_max_procs()-1). An EMPTY slot is a successful call

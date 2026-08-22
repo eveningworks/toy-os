@@ -185,6 +185,28 @@ def controls(dbg, mark):
     return out
 
 
+def page_line(dbg, mark):
+    """The app's own `settings: page` summary for the page opened since `mark`.
+
+    Carries `captions` and `disabled` because neither is visible in a
+    screendump: a caption suppressed as a duplicate of the page title
+    looks exactly like a setting that never had one, and a greyed
+    control differs from a live one by a few units of colour.
+    """
+    drain(dbg)
+    # `(.+?)` rather than `\S+`: a page name is "<category>/<group>"
+    # and BOTH halves are human strings with spaces in them ("Time &
+    # Locale/Time zone").
+    hits = _since(mark, r"settings: page (.+?) slots (\d+) advanced (\d+) "
+                        r"captions (\d+) disabled (\d+)")
+    if not hits:
+        return None
+    m = hits[-1]
+    return {"page": m.group(1), "slots": int(m.group(2)),
+            "advanced": int(m.group(3)), "captions": int(m.group(4)),
+            "disabled": int(m.group(5))}
+
+
 def advanced_toggle(dbg, mark):
     drain(dbg)
     hits = _since(mark, r"settings: advanced_toggle (-?\d+) (-?\d+) (-?\d+) (-?\d+) shown (\d+)")
@@ -334,6 +356,14 @@ def main():
     check("every control on the page was positioned", not zero,
           f"zero-sized: {zero}" if zero else "all have a real rect")
 
+    # A MULTI-SETTING PAGE LABELS EVERY CONTROL. The counterpart of the
+    # timezone check below -- without this one, "captions == 0" would
+    # pass by the app simply never drawing a caption at all.
+    mouse_page = page_line(dbg, mark)
+    check("a multi-setting page captions every control",
+          mouse_page is not None and mouse_page["captions"] == mouse_page["slots"],
+          f"{mouse_page}" if mouse_page else "no page line")
+
     check("...gathered from more than one kernel file",
           any("mouse_" in s["name"] for s in page_slots) and
           any("cursor_" in s["name"] for s in page_slots),
@@ -349,6 +379,15 @@ def main():
     tz = [s for s in tz_slots if "timezone" in s["name"]]
     check("the timezone page loaded every city", tz and tz[-1]["choices"] >= 50,
           f"{tz[-1]['choices'] if tz else 0} choices")
+    # A ONE-CONTROL PAGE DOES NOT PRINT ITS OWN NAME TWICE. A setting
+    # with no `group` gets a page named by its LABEL, so the heading and
+    # the sole caption were the same string -- "Time zone" over "Time
+    # zone", and the same on every other single-setting page.
+    tz_page = page_line(dbg, mark)
+    check("a one-control page does not repeat its title as a caption",
+          tz_page is not None and tz_page["slots"] == 1 and tz_page["captions"] == 0,
+          f"{tz_page}" if tz_page else "no page line")
+
     check("...and a long list uses a DROPDOWN, not radio buttons",
           bool(tz) and tz[-1]["kind"] == "combo",
           f"kind={tz[-1]['kind'] if tz else '?'}")

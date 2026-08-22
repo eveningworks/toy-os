@@ -545,3 +545,99 @@ Three things follow that are easy to trip over:
 
 `init` seeds `PATH=/bin` and `HOME=/`, and being pid 1 is what makes
 that the whole system's environment.
+
+## A SIGNAL SETS A BIT; THE KERNEL ACTS ON IT WHEN IT IS SAFE TO.
+
+`abi/signal_abi.h` for the numbers, `kernel/signal.h` for the policy,
+`docs/signals-design.md` for the staged plan. Six signals, POSIX's
+numbers, no realtime signals, no queuing, no user-space handlers.
+
+**The one idea: SENDING AND ACTING ARE DIFFERENT MOMENTS.** A signal
+can be raised from anywhere -- another process's syscall, a fault, the
+keyboard IRQ -- and terminating a process means freeing page tables and
+kernel bookkeeping, which calls the heap. Doing that from an interrupt
+that landed inside somebody else's `kmalloc` corrupts it. So sending
+only ever sets a bit (and wakes the target if it is parked, with
+`-EINTR`, so it gets somewhere useful), and acting happens **only when
+the trap being handled came from RING 3**. That condition is the whole
+safety argument: if the CPU was executing ring-3 code, the kernel held
+nothing on anybody's behalf. It is where Unix delivers, for the same
+reason.
+
+**TWO DELIVERY POINTS, and both are load-bearing** (each was confirmed
+by disabling it and watching a different check redden):
+
+- **At syscall entry**, before the handler runs -- so a process's own
+  next syscall is a delivery point it always reaches. Without it,
+  whether a woken process died of its signal or exited 0 first was a
+  race, and the exit path zombies the slot, making the pending bit
+  unreachable forever. Linux does the same from the other direction: a
+  fatal signal pending means the syscall returns without doing anything.
+- **At the end of the trap**, which is what reaches a process that makes
+  no syscalls at all -- a spinning loop, interrupted by the timer.
+
+It cannot be at the TOP of `isr_dispatch` for hardware IRQs: an IRQ must
+reach its handler to be acknowledged to the PIC, and returning early
+from one stops interrupts for the rest of the boot.
+
+**A PENDING BIT MEANS THE PROCESS MUST DIE, with no policy lookup.**
+That holds because an ignored signal is DROPPED at arrival rather than
+queued (POSIX's rule for `SIG_IGN`), and with no handlers every other
+disposition terminates. Stage 3 of the design breaks this invariant;
+`api/scheduler.h` says so where grep will find it.
+
+**`SIGKILL` does not go through any of it** -- it terminates
+immediately, from the sender. That is what makes Force Quit trustworthy
+against a process wedged in its own loop, and it is why the INTR key
+sends `SIGINT` instead: `SIGKILL`'s teardown is not IRQ-safe.
+
+**"NOT THE RUNNING PROCESS" AND "NOT THE LOADED ADDRESS SPACE" ARE
+DIFFERENT QUESTIONS**, and conflating them leaked an entire address
+space per signal before it was noticed. `switch_to_kernel()` hands the
+CPU back to the kernel context WITHOUT changing CR3, so a victim the
+scheduler just switched away from is still what CR3 points at --
+and `syscall_process_kill_cleanup()`, which can only ask the second
+question, refused the teardown and logged it. Ask the first, then move
+CR3 to the kernel's before killing.
+
+## A PROCESS GROUP IS AN INT, AND SPAWN TAKES IT.
+
+Every live process is in exactly one group; a group is a field compare,
+not an object. A child inherits its spawner's unless `SYS_SPAWN`'s
+`pgid` says otherwise: `PGID_NEW` leads a new one, a positive value
+joins that one, 0 inherits.
+
+**AT CREATION RATHER THAN THROUGH A LATER `setpgid()`, and that is the
+point.** `SYS_SPAWN` returns a process that is ALREADY RUNNING, so
+between the spawn and any regrouping there is a window where a Ctrl-C
+signals the wrong group. POSIX lives with the equivalent window by
+having both sides of a `fork()` call `setpgid()`; with no fork there is
+no second side, so the window would be unfixable rather than merely
+awkward. `posix_spawn`'s `POSIX_SPAWN_SETPGROUP` is the same answer.
+
+**`SYS_SETPGID` still exists for the one case spawn cannot express**: a
+process naming its OWN group (`setpgid(0, 0)`), which `/bin/tosh` does
+so that a shell started by init does not put init's group in front of
+the console.
+
+## THE CONSOLE HAS AN OWNER AND A FOREGROUND GROUP, AND THE INTR KEY IS TEMPORARY WHERE IT IS.
+
+`kernel/tty.h`. The owner is the first process to read fd 0; the
+foreground group is what `Ctrl-C` interrupts, moved by `SYS_TCSETPGRP`
+and settable only by the owner. Setting an owner puts that owner's own
+group in front, so the console is never in the state "owned, with
+nothing in front" -- in which a Ctrl-C would have nowhere to go.
+
+**`tty_intr()` has TWO outcomes and both are right.** With a job in the
+foreground (a group that is not the owner's own) it signals the group
+and the keystroke is DISCARDED, which is what a real line discipline
+does with INTR. With no job it signals nothing and the byte goes
+through, so `Ctrl-C` at a prompt still abandons the line -- the same
+`KLINE_CANCEL` both shells have always had.
+
+**THE RECOGNITION LIVES IN THE KEYBOARD DRIVER AND SHOULD NOT.** On
+Unix this is a line discipline's job, and there is no line discipline
+here yet (fd 0 is RAW). It is in the driver because that is the one
+place a key arrives; when a discipline exists, the decision moves into
+it and `kernel/tty.h` keeps only the ownership half. Written down now
+rather than discovered later as a layering mistake.

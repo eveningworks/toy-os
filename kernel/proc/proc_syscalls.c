@@ -12,6 +12,9 @@
 #include "scheduler.h"
 #include "process.h"
 #include "pipe.h"
+#include "signal_abi.h" // PGID_NEW -- SYS_SPAWN's three-way group argument
+#include "signal.h"  // signal_send(), signal_send_group() -- SYS_KILL is a signal now
+#include "ksignal.h" // signal_name(), for the log line
 #include "fs.h"
 #include "timer.h"       // pit_ticks() -- SYS_TICKS
 #include "clocksource.h" // clocksource_now_ns() -- SYS_MONOTONIC_NS
@@ -254,13 +257,29 @@ int sys_monotonic_ns(struct syscall_ctx *c) {
 
 int sys_kill(struct syscall_ctx *c) {
     // Unprivileged on purpose -- see SYS_KILL in abi/syscall_abi.h.
-    // A process killing ITSELF is legal and behaves like exiting.
-    int killed = scheduler_kill((int)c->a0, (int)c->a1);
-    if (killed) {
-        klog_printf("syscall: kill(pid %d) by pid %d\n",
-                    (int)c->a0, scheduler_current_pid());
+    // A process signalling ITSELF is legal, and for a fatal signal
+    // behaves like exiting (delivery happens a few instructions later,
+    // on the way back to ring 3).
+    int target = (int)(int32_t)c->a0;
+    int sig    = (int)(int32_t)c->a1;
+
+    // A NEGATIVE TARGET IS A GROUP, POSIX's `kill(-pgid, sig)`. Pids are
+    // 1-based, so this cannot collide with one -- which is exactly why
+    // POSIX could spell it this way and why copying the spelling costs
+    // nothing.
+    int reached = target < 0 ? signal_send_group(-target, sig)
+                              : signal_send(target, sig);
+    if (reached) {
+        klog_printf("syscall: kill(%s %d, SIG%s) by pid %d\n",
+                    target < 0 ? "pgid" : "pid",
+                    target < 0 ? -target : target,
+                    signal_name(sig), scheduler_current_pid());
     }
-    c->regs[14] = (uint64_t)killed;
+    // 1/0, not a count and not an errno: SYS_KILL's failure value has
+    // always been 0, and a negative code is TRUTHY -- flipping it would
+    // silently turn every `if (!sys_kill(...))` caller inside out. See
+    // abi/errno.h's note on the calls deliberately not converted.
+    c->regs[14] = (uint64_t)(reached ? 1 : 0);
     return 0;
 }
 
@@ -312,12 +331,15 @@ int sys_spawn(struct syscall_ctx *c) {
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
         return 0;
     }
-    if (msg.reserved != 0) {
-        // A reserved field that is not zero means the caller was built
-        // against a LATER version of this struct than the kernel. Say
-        // so, rather than running a spawn whose extra request was
-        // silently dropped.
-        klog_write("syscall: spawn() rejected -- reserved field is not zero\n");
+    // `pgid` took the `reserved` field's place -- both are 0 for every
+    // caller that predates it, so the "reserved must be zero" check
+    // becomes a range check on a real value. THREE-WAY: PGID_NEW (-1)
+    // leads a new group, 0 inherits, positive joins. Anything below
+    // PGID_NEW is refused rather than clamped -- SYS_KILL uses a negative
+    // number to MEAN a group, and accepting one here would be taking a
+    // value from the wrong vocabulary.
+    if (msg.pgid < PGID_NEW) {
+        klog_write("syscall: spawn() rejected -- pgid below PGID_NEW\n");
         c->regs[14] = (uint64_t)(int64_t)-EINVAL;
         return 0;
     }
@@ -379,7 +401,9 @@ int sys_spawn(struct syscall_ctx *c) {
             // the code stays the default ENOENT rather than inventing a
             // distinction the layer below does not make. Splitting it
             // means giving that function a reason to return first.
-            int pid = scheduler_spawn_env(path, args, stdout_desc, env);
+            // 0 = inherit the caller's group, which is what every
+            // spawn that predates process groups passes.
+            int pid = scheduler_spawn_group(path, args, stdout_desc, env, msg.pgid);
             if (pid > 0) spawn_rc = pid;
         }
     }

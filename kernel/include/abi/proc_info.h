@@ -50,6 +50,15 @@ struct proc_info {
     // only ever written as 0 and never read, and this keeps the 8-byte
     // alignment that field existed for.
     int32_t  ppid;
+    // This process's GROUP (abi/signal_abi.h). Never 0 for a live slot:
+    // a child inherits its spawner's, and one the kernel started leads
+    // its own.
+    //
+    // Reported because a signal's whole behaviour is "which group did it
+    // reach" -- `kill -TERM -<pgid>` and Ctrl-C both act on a group, and
+    // without this a person debugging either has no way to see the
+    // grouping they are acting on. `ps` prints it.
+    int32_t  pgid;
     char     name[PROC_NAME_MAX];
 };
 

@@ -49,19 +49,20 @@ and job control is what a terminal on that TTY makes possible.
 - [ ] Bound how long a frame can block on I/O
 
 ### Signals & process control
-**Needs:** nothing outstanding to START -- `docs/signals-design.md` is the plan, and stage 1 needs interruptible syscalls.
+**Needs:** nothing -- stages 0-2 of `docs/signals-design.md` are BUILT. What is left is handlers (stage 3) and job control (stage 4).
 
-- [ ] Basic signal delivery (kill-equivalent)
-- [ ] Default dispositions (terminate, ignore)
-- [ ] A `kill`/`ps`-style shell command
-- [ ] Exit-status visible to a waiting parent
+- [x] ~~Basic signal delivery (kill-equivalent)~~ DONE 2026-08-22 -- a pending mask, delivered on the way back to ring 3
+- [x] ~~Default dispositions (terminate, ignore)~~ DONE 2026-08-22 -- `SYS_SIGACTION`, two dispositions and no handler
+- [x] ~~A `kill`/`ps`-style shell command~~ DONE 2026-08-22 -- `kill [-SIGNAL] <pid|-pgid>`, and `ps` grew a PGID column
+- [x] ~~Exit-status visible to a waiting parent~~ DONE 2026-08-22 -- 128 + the signal, the convention a shell prints
 - [ ] Userspace signal handlers -- a trampoline that returns through the kernel, not just default dispositions
-- [ ] **Ctrl-C interrupting a running program**, the way it works in a Linux shell
+- [ ] `Ctrl-C` in the GUI Terminal -- it reads keys as window events, so it owns no console and has no foreground group
+- [x] ~~**Ctrl-C interrupting a running program**, the way it works in a Linux shell~~ DONE 2026-08-22 -- a whole pipeline, as one group
 - [ ] SIGSEGV/SIGILL delivered to the process instead of the kernel tearing it down unconditionally
-- [ ] SIGCHLD on child exit
+- [ ] SIGCHLD on child exit -- the signal exists and its default is ignore; nothing SENDS one yet
 
 ### TTY / virtual terminals
-**Needs:** Signals & process control -- a terminal without signals cannot deliver Ctrl-C, which is most of what makes it a terminal.
+**Needs:** nothing -- signals landed, and `Ctrl-C` works on the physical console. What is missing is a line discipline to move the INTR recognition into, and a per-terminal version of the foreground group.
 
 - [x] ~~A ring-3 process can read the console at all (`SYS_READ`'s fd 0, blocking)~~ DONE 2026-08-19
 - [ ] A line discipline (line editing, echo control) separate from the shell's own input loop -- fd 0 is RAW today
@@ -70,8 +71,8 @@ and job control is what a terminal on that TTY makes possible.
 - [ ] Ctrl-R reverse search in ring 3 -- needs a query line the console front end cannot yet paint
 - [ ] `/bin/tosh` history that persists -- the kernel shell writes `/etc/history`, ring 3 keeps its ring in memory
 - [ ] A console line longer than the screen is wide repaints wrongly in `/bin/tosh` -- `\r` returns to the start of the ROW
-- [ ] `Ctrl+C`/`Ctrl+D`/`Ctrl+Z` as terminal signals, not keystrokes an app happens to notice
-- [ ] The concept of a foreground process for a terminal
+- [ ] `Ctrl+D`/`Ctrl+Z` as terminal signals -- `Ctrl+C` is one now; the other two are still keystrokes an app happens to notice
+- [x] ~~The concept of a foreground process for a terminal~~ DONE 2026-08-22 -- a foreground GROUP, `kernel/tty.h`, physical console only
 - [ ] Multiple virtual terminals on `Ctrl+Alt+F1..F4`
 - [ ] The GUI Terminal app and the physical console as two clients of the same TTY layer
 - [ ] `termios`-style settings: raw vs cooked, echo on/off, and the per-terminal state to hold them
@@ -101,7 +102,7 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~`heap`, `ata` and `kstack` still builtins~~ DONE 2026-08-20 -- `/bin` programs over their query classes and tunables
 - [ ] Directory lookup is O(n) -- measured 2026-08-20 with `mkfiles`: creates stay flat to 5,000 entries, lookups grow with position
 - [x] ~~An environment passed to a child~~ DONE 2026-08-21 -- `SYS_SPAWN` carries it explicitly; `environ` and inheritance are libc's
-- [ ] Ctrl-C
+- [x] ~~Ctrl-C~~ DONE 2026-08-22 -- each job in its own group, `tcsetpgrp` around it
 - [ ] **`#!` handling**, which is the loader's job, not the shell's: `elf_load()` rejects a non-ELF file
 - [x] ~~`|` pipes between two commands~~ DONE 2026-08-19 -- N stages, not two
 - [ ] Quoting/escaping, `&&`/`||`/`;`, globbing, aliases, `$?`/`$1`, and a history buffer

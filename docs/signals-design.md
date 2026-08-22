@@ -6,9 +6,23 @@ has carried since Phase 1 was written -- **how does `Ctrl-C` stop a
 running program?** -- and it answers it by refusing to treat that as one
 question.
 
-**Status: designed, not built.** Nothing here exists yet. Each stage
-below ships on its own and is verifiable on its own; that is the point
-of staging it rather than the reason it is slow.
+**Status: STAGES 0-2 ARE BUILT (2026-08-22). `Ctrl-C` works.** Stage 3
+(user-space handlers) and stage 4 (job control, stop/continue) are still
+plans. Each stage's own section below says what actually landed and
+where it differs from what was planned here, because two of them do.
+
+**AND ONE PREMISE OF THIS DOCUMENT WAS WRONG, which is why the whole
+thing was cheaper than it looked.** Stage 1 said it needed the roadmap's
+"Interruptible syscalls -- a trap gate plus retiring `g_next_kernel_rsp`
+as a single global". It does not. Blocking in this kernel is already
+implemented by rewriting a parked process's SAVED TRAPFRAME
+(`scheduler_wake()` writes its `RAX` slot and marks it READY), and
+resuming it abandons the syscall's kernel C frames entirely -- the
+process returns to ring 3 through `iretq`, never through the C return
+path. So `-EINTR` was not a new mechanism to build; it is a wake with a
+different value, and it is about six lines. The roadmap item is real and
+is about something else (a syscall being PREEMPTIBLE, which none are
+today, since every gate is an interrupt gate).
 
 ## Why this is not "add signals"
 
@@ -154,38 +168,94 @@ down as one, so nobody later mistakes it for the design.
 
 ## Staging
 
-### Stage 0 -- the mechanism, default dispositions only
+### Stage 0 -- the mechanism, default dispositions only -- **BUILT**
 
-`pending` and `disposition` in `struct sched_process`; a delivery check
-where a trapframe is restored; `SYS_KILL` gains a signal number, with
-the current behaviour becoming `SIGKILL`. `/bin/kill` gains `-TERM`,
-`-KILL`, `-INT`.
+`pending` and `ignored` in `struct sched_process`; delivery on the way
+back to ring 3; `SYS_KILL` takes a signal number, with the current
+behaviour becoming `SIGKILL`. `/bin/kill` takes `-TERM`, `-KILL`,
+`-INT`, by name or number, with or without a `SIG` prefix.
 
-**Verifiable on its own:** a process killed with `SIGTERM` exits with a
-distinguishable code; `SIGCHLD` is ignored and changes nothing; `kill
--KILL` still ends a wedged process. No `Ctrl-C` yet, and the docs should
-say so plainly rather than implying the milestone is closer than it is.
+**Two dispositions, not three, and `disposition` became a BITMASK.** The
+plan said a per-signal disposition table; with only `SIG_DFL` and
+`SIG_IGN` to express, a 32-byte table per process would have been 31
+bytes of a slot nobody reads. It becomes a table when handlers do.
 
-### Stage 1 -- interruptible blocking
+**`SYS_SIGACTION` exists and REFUSES a handler pointer** (`-EINVAL`)
+rather than accepting one it would never call. `SIGKILL` and `SIGQUIT`
+cannot be ignored at all.
 
-A signal delivered to a process blocked in `scheduler_block_current()`
-wakes it, and the syscall it was in returns `-EINTR`. **Needs** the
-`docs/roadmap.md` item "Interruptible syscalls -- a trap gate plus
-retiring `g_next_kernel_rsp` as a single global", which is not
-incidental: a signal that cannot interrupt a blocked read cannot stop a
-program waiting for input, which is most of them.
+**DELIVERY TURNED OUT TO NEED TWO PLACES, not one.** The plan said "the
+point where a trapframe is about to be restored". That is the end of
+`isr_dispatch()`, and on its own it makes death a race for any process
+that is about to call `exit()` -- losing that race is permanent, because
+the exit path zombies the slot and the pending bit becomes unreachable.
+The second place is SYSCALL ENTRY, before the handler runs, which a
+process always reaches. Both are load-bearing and each was confirmed by
+disabling it; see `docs/decisions.md`.
 
-### Stage 2 -- a foreground process, and `Ctrl-C`
+**Verified:** `kernel/proc/signal_test.c` (the state machine, on
+fabricated slots) and `userland/tests/signal_test.c` (a real process
+really dying, spawned by the KTEST above because the legacy loader has
+no slot). 12 KTESTs, 27 ring-3 checks.
 
-The console learns `foreground_pid`, set by whatever spawned the
-process it is waiting on. `keyboard.c` recognises the INTR character
-before the key reaches the key ring and sends `SIGINT` to it.
-**This is the stage where `Ctrl-C` starts working**, and it is the
-first one a user can see.
+### Stage 1 -- interruptible blocking -- **BUILT**
 
-`KLINE_CANCEL` stays as it is: with no foreground process, `Ctrl-C` at
-a prompt should still abandon the line. The two do not conflict --
-they apply in states that cannot overlap.
+A signal raised against a process parked in `scheduler_block_current()`
+writes `-EINTR` into its saved trapframe and marks it READY, so it
+reaches a delivery point. `EINTR` is a real errno now
+(`abi/errno.h`), deliberately distinct from `SYS_RETRY` -- libsys
+RETRIES the latter in a loop, which would send a caller straight back
+into the call the signal was trying to end.
+
+**It needed no new mechanism at all** -- see the correction at the top
+of this file. `-EINTR` is a wake with a different value.
+
+**Nothing in ring 3 ever OBSERVES `-EINTR` today**, because every signal
+that can interrupt a call also terminates the process. It exists as the
+honest answer at the ABI, and handlers are what make it visible.
+
+**Verified** by a child parked on an empty pipe -- chosen over one
+blocked on the console, which any keystroke would have released. The
+test also has to WAIT until the child is really `SCHED_BLOCKED` before
+signalling: a positive control showed the first version passing with the
+wake removed entirely, because the child had not been scheduled once and
+was killed at its first syscall instead. The fixture never reached the
+code under test.
+
+### Stage 2 -- a foreground GROUP, and `Ctrl-C` -- **BUILT**
+
+**A GROUP, not the single `foreground_pid` this plan proposed.** The
+stepping stone was rejected before it was built, for the reason written
+into it: a pipeline is several processes, and interrupting only the last
+stage leaves the others running with the shell still waiting on them --
+so `cat big | grep x | less` would hang on `Ctrl-C` rather than stop.
+Process groups turned out to be an int per process and a field compare,
+which is a smaller thing than the plan assumed. `kernel/tty.h` holds the
+console's owner and its foreground group; `SYS_TCSETPGRP`/`SYS_TCGETPGRP`
+move it, and only the owner may.
+
+**Groups are set at SPAWN, not by a later `setpgid()`** -- `SYS_SPAWN`
+carries a `pgid`. POSIX closes the equivalent window by having both
+sides of a `fork()` call `setpgid()`; with no fork there is no second
+side, so the window would be unfixable. See `docs/decisions.md`.
+
+`KLINE_CANCEL` stays exactly as it was, and the two states cannot
+overlap as predicted -- but the mechanism is the other way round from
+what this plan implied. The kernel does not deliver the byte AND the
+signal: with a job in front it signals the group and DISCARDS the key,
+which is what a line discipline does with INTR; with no job it signals
+nothing and the byte goes through. The consequence is that **the shell
+prints its own `^C`**, because with a job running the editor never sees
+the key. `bash` does the same, from the same place.
+
+**Verified** by `tools/ctrlc_test.py`, through the real keyboard on a
+`text` boot: a spinning job dies, a two-stage pipeline dies as a unit,
+the shell survives, and at an empty prompt the line is cancelled instead.
+Both halves have positive controls.
+
+**What Ctrl-C still does NOT reach: the GUI Terminal.** It reads keys as
+window events rather than from fd 0, so it owns no console and has no
+foreground group. That is a roadmap item, not an oversight.
 
 ### Stage 3 -- handlers
 
@@ -201,19 +271,23 @@ stopped state, `fg`/`bg` in `/bin/tosh`. Also where multiple virtual
 terminals become mostly bookkeeping, since a terminal is by then a
 THING rather than the only thing.
 
-## Open questions
+## Open questions -- and what the answers turned out to be
 
-- **Does the kernel shell get a foreground process?** It runs programs
-  through `elf_run_from_fs()`, whose legacy loader has no scheduler slot
-  -- so there is no pid to nominate. Either that path grows one, or
-  `Ctrl-C` works only for `spawn`ed programs and `/bin/tosh`, which may
-  be the honest answer given the shell is meant to move to ring 3.
-- **What does `SIGSEGV` do to the fault handler's diagnostics?** Today a
-  ring-3 fault prints a panic-grade report and kills the process, which
-  is genuinely useful. Naming it `SIGSEGV` must not quietly lose that.
-- **Where does the INTR character get recognised?** `keyboard.c` is the
-  one place a key arrives, but a line discipline is the thing that
-  should own it -- and the discipline does not exist yet. Putting it in
-  the driver first and moving it later is probably right, and should be
-  written down as temporary rather than discovered later as a layering
-  mistake.
+- **Does the kernel shell get a foreground process?** ANSWERED: no, and
+  the honest answer was the right one. `Ctrl-C` works for `/bin/tosh`
+  and anything it runs, because the console's owner is whoever reads fd
+  0 and the legacy loader is not a scheduled process at all. Nothing was
+  added to that path; it disappears when the ring-0 shell does.
+- **What does `SIGSEGV` do to the fault handler's diagnostics?** STILL
+  OPEN, and untouched: a ring-3 fault still prints its panic-grade
+  report and tears the process down directly, without going near the
+  signal machinery. `SIGSEGV` has a number and nothing raises it. The
+  question stands exactly as written.
+- **Where does the INTR character get recognised?** ANSWERED as
+  predicted: in `keyboard.c`, and written down as temporary in
+  `kernel/tty.h` rather than left to be discovered. It moves into a line
+  discipline when there is one.
+- **NEW, and it cost a leak before it was noticed:** "not the running
+  process" and "not the loaded address space" are different questions.
+  `switch_to_kernel()` leaves CR3 on the process it switched away from.
+  See `docs/decisions.md`.

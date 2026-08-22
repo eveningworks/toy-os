@@ -170,7 +170,35 @@ struct setting {
     // desktop's icon positions today; the ring-3 window manager after
     // Milestone 41's stage 4).
     int (*apply)(const char *value);
+
+    // WHY THIS SETTING CANNOT BE CHANGED ON THIS MACHINE, or NULL when
+    // it can. NULL is also the default, so no existing setting had to
+    // be edited and most new ones may ignore this.
+    //
+    // A REASON RATHER THAN A BOOLEAN, deliberately. A control that is
+    // simply dead tells the user nothing and reads as a bug; the whole
+    // value of disabling one is the sentence next to it. GNOME and KDE
+    // both show a lock or a hint beside a control policy has taken
+    // away, and Windows' greyed-out settings without one are the
+    // counter-example everybody has sworn at. So the registry carries
+    // the sentence and every client shows it -- there is nowhere for a
+    // UI to invent its own.
+    //
+    // The registry ENFORCES it: setting_set() refuses while this
+    // returns non-NULL, so `config set` and a hand-edited /etc file are
+    // refused exactly as the UI's control is. A disabled widget is a
+    // courtesy, never the gate -- the same split the INT bounds above
+    // already make.
+    //
+    // Returns a static string; it is copied at the ABI boundary, so
+    // nothing here may hand back a caller's buffer.
+    const char *(*unavailable)(void);
 };
+
+// The reason `s` cannot be changed right now, or NULL when it can.
+// Every caller asks through this rather than testing the callback, so
+// "no callback means available" is written down once.
+const char *setting_unavailable(const struct setting *s);
 
 // 1 if this setting has a file to persist to; 0 for a TUNABLE.
 //

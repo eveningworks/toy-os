@@ -62,6 +62,7 @@ void uui_spinbox_init(struct uui_spinbox *s, int value,
     s->border = ugfx_rgb(170, 172, 180);
     s->step_bg = ugfx_rgb(238, 238, 242);
     render(s);
+    s->disabled = 0;
 }
 
 void uui_spinbox_set_value(struct uui_spinbox *s, int value) {
@@ -186,7 +187,7 @@ void uui_spinbox_draw(struct ugfx_surface *surf, const struct uui_spinbox *s) {
         // A stepper at the end of its range is drawn DISABLED, because a
         // control that looks live and does nothing is worse than one
         // that says it cannot.
-        int usable = up ? (s->value < s->max) : (s->value > s->min);
+        int usable = !s->disabled && (up ? (s->value < s->max) : (s->value > s->min));
         uint32_t bg = s->step_bg;
         if (usable && s->armed == which) bg = uui_state_bg(s->step_bg, UUI_STATE_PRESSED);
         else if (usable && s->hovered == which) bg = uui_state_bg(s->step_bg, UUI_STATE_HOVER);
@@ -272,13 +273,29 @@ static void draw_op(struct ugfx_surface *surf, const void *w) {
 static int hit_op(const void *w, int cx, int cy) {
     return uui_spinbox_hit((const struct uui_spinbox *)w, cx, cy);
 }
-static int press_op(void *w, int cx, int cy) { return uui_spinbox_press(w, cx, cy); }
+// EVERY interactive slot checks `disabled` -- a spinbox is reachable by
+// wheel and by keyboard as well as by pointer, so guarding the press
+// alone would leave two live ways in.
+static int press_op(void *w, int cx, int cy) {
+    if (((struct uui_spinbox *)w)->disabled) return 0;
+    return uui_spinbox_press(w, cx, cy);
+}
 static int motion_op(void *w, int cx, int cy, unsigned b) {
+    if (((struct uui_spinbox *)w)->disabled) return 0;
     return uui_spinbox_motion(w, cx, cy, b);
 }
-static int release_op(void *w, int cx, int cy) { return uui_spinbox_release(w, cx, cy); }
-static int wheel_op(void *w, int notches) { return uui_spinbox_wheel(w, notches); }
-static int key_op(void *w, int key, unsigned mods) { return uui_spinbox_key(w, key, mods); }
+static int release_op(void *w, int cx, int cy) {
+    if (((struct uui_spinbox *)w)->disabled) return 0;
+    return uui_spinbox_release(w, cx, cy);
+}
+static int wheel_op(void *w, int notches) {
+    if (((struct uui_spinbox *)w)->disabled) return 0;
+    return uui_spinbox_wheel(w, notches);
+}
+static int key_op(void *w, int key, unsigned mods) {
+    if (((struct uui_spinbox *)w)->disabled) return 0;
+    return uui_spinbox_key(w, key, mods);
+}
 static void natural_op(const void *w, int *out_w, int *out_h) {
     uui_spinbox_natural_size((const struct uui_spinbox *)w, out_w, out_h);
 }
@@ -287,7 +304,9 @@ static void set_geometry_op(void *w, int x, int y, int rw, int rh) {
 }
 // It takes keys, so it says whether it wants focus -- always yes: a
 // spinbox with no value to edit is not a state it has.
-static int accepts_focus_op(const void *w) { (void)w; return 1; }
+static int accepts_focus_op(const void *w) {
+    return !((const struct uui_spinbox *)w)->disabled;
+}
 
 static void spinbox_bounds_op(const void *w, int *x, int *y, int *ow, int *oh) {
     const struct uui_spinbox *c = w;

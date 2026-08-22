@@ -6,6 +6,7 @@
 #include "scheduler.h" // scheduler_idle(), and the fd-0 reader wake below
 #include "syscall_abi.h" // SYS_RETRY -- the wake value a parked fd-0 read gets
 #include "string.h" // k_tolower() -- the Ctrl-key fold
+#include "tty.h" // tty_intr() -- what Ctrl-C means, see its own header
 
 #define KBD_DATA_PORT 0x60
 
@@ -213,7 +214,23 @@ void keyboard_feed_byte(uint8_t sc) {
     // would be making up an encoding instead of following one.
     if (ctrl_pressed) {
         int lower = k_tolower((unsigned char)c);
-        if (lower >= 'a' && lower <= 'z') ring_push((uint16_t)(lower - 'a' + 1));
+        if (lower < 'a' || lower > 'z') return;
+        uint16_t code = (uint16_t)(lower - 'a' + 1);
+        // THE INTR KEY IS THE ONE CONTROL CODE THAT IS NOT JUST A BYTE.
+        // With a job in the foreground of the console it interrupts that
+        // job's process GROUP and is swallowed; with nothing running it
+        // falls through and reaches the line editor as 0x03, which is
+        // what abandons the line today. tty.h has both cases and says
+        // why this recognition lives in the driver for now -- it belongs
+        // to a line discipline, and there is not one yet.
+        //
+        // A SIGNAL, NOT A KILL, and that is forced rather than
+        // stylistic: this runs in the keyboard IRQ, so tearing an
+        // address space down here would call the heap underneath
+        // whatever the CPU was doing. Sending sets a bit; the kernel
+        // acts on it on the way back to ring 3 (kernel/signal.h).
+        if (code == 0x03 && tty_intr()) return;
+        ring_push(code);
         return;
     }
 

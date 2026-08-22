@@ -57,9 +57,10 @@ static void print_row(const struct proc_info *p, int depth) {
     // for a timestamp and wrong for a table. Formatting the number
     // first and padding it as a STRING is how you get a right-aligned
     // column here.
-    char pid[12], ppid[12], cpu[24], mem[24], line[160], indent[24];
+    char pid[12], ppid[12], pgid[12], cpu[24], mem[24], line[160], indent[24];
     snprintf(pid, sizeof pid, "%u", (unsigned)p->pid);
     snprintf(ppid, sizeof ppid, "%u", (unsigned)p->ppid);
+    snprintf(pgid, sizeof pgid, "%u", (unsigned)p->pgid);
     fmt_cpu(p->cpu_ns, cpu, sizeof cpu);
     snprintf(mem, sizeof mem, "%u", (unsigned)(p->mem_bytes / 1024));
 
@@ -68,13 +69,17 @@ static void print_row(const struct proc_info *p, int depth) {
     for (int i = 0; i < n; i++) indent[i] = ' ';
     indent[n] = '\0';
 
-    snprintf(line, sizeof line, "%5s %5s %-7s %8s %8s  %s%s\n",
-             pid, ppid, state_name(p->state), cpu, mem, indent, p->name);
+    snprintf(line, sizeof line, "%5s %5s %5s %-7s %8s %8s  %s%s\n",
+             pid, ppid, pgid, state_name(p->state), cpu, mem, indent, p->name);
     put(line);
 }
 
 static void header(void) {
-    put("  PID  PPID STATE      CPU(s)   MEM(K)  NAME\n");
+    // PGID is beside PPID because the two answer different questions
+    // that look alike: the parent is who STARTED it, the group is what a
+    // signal REACHES. `kill -TERM -<pgid>` and Ctrl-C act on the second,
+    // and neither was visible from a shell before.
+    put("  PID  PPID  PGID STATE      CPU(s)   MEM(K)  NAME\n");
 }
 
 // Reads the whole table once. A snapshot rather than a slot-at-a-time

@@ -82,11 +82,30 @@ static const struct setting heap_debug_setting = {
 
 static void ata_nodma_get(char *out, uint32_t cap) {
     // The question this answers is "is DMA forced OFF?", so the sense
-    // is inverted from ata_dma_active(). Named for the state it sets
+    // is inverted from DMA being in use. Named for the state it sets
     // rather than the one it reports, matching the `ata nodma` command
     // it replaces -- renaming it to `ata_dma` would flip the meaning of
     // every note and test that mentions it.
-    k_strlcpy(out, ata_dma_active() ? "off" : "on", cap);
+    //
+    // THE FORCING FLAG, NOT ata_dma_active(). This used to report the
+    // effective state, which is `hardware_available && !forced_off` --
+    // so on a machine whose controller has no DMA engine (any virtio
+    // boot) it answered "on" whatever anyone set, and the Settings
+    // radio snapped back to On the instant it was applied. A getter
+    // must return what apply() last accepted; the effective state is
+    // reported by `/bin/ata` and by unavailable() below, where it
+    // cannot be mistaken for the knob. See api/ata.h.
+    k_strlcpy(out, ata_dma_forced_off() ? "on" : "off", cap);
+}
+
+// A machine with no Bus-Master DMA engine is already doing every
+// transfer through PIO, so there is nothing here to force. Saying so is
+// the point: the alternative is a control that accepts a value and
+// changes nothing observable, which is how this setting was found.
+static const char *ata_nodma_unavailable(void) {
+    if (ata_dma_hardware_available()) return 0;
+    return "This machine's disk controller has no DMA engine, so every "
+           "transfer already goes through PIO.";
 }
 
 static int ata_nodma_apply(const char *value) {
@@ -111,6 +130,7 @@ static const struct setting ata_nodma_setting = {
     .choice = onoff_choice,
     .get = ata_nodma_get,
     .apply = ata_nodma_apply,
+    .unavailable = ata_nodma_unavailable,
 };
 
 // ---- kernel.kstack_track --------------------------------------------

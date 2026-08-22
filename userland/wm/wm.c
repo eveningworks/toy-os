@@ -383,7 +383,9 @@ static void wm_force_quit_yes(void) {
     // calls win_server_client_gone(), which destroys the client's
     // windows through the same path a normal exit uses. Removing the
     // window here as well would be a second teardown of the same thing.
-    sys_kill(g_force_quit_pid, -1);
+    // SIGKILL: a client that has stopped answering its event queue is
+    // exactly the case a catchable signal cannot reach.
+    sys_kill(g_force_quit_pid, SIGKILL);
     g_force_quit_pid = 0;
     redraw_pending = 1;
 }

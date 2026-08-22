@@ -228,10 +228,24 @@ static int int_value_ok(const struct setting *s, const char *value, int *out) {
     return 1;
 }
 
+const char *setting_unavailable(const struct setting *s) {
+    if (!s || !s->unavailable) return 0;
+    const char *why = s->unavailable();
+    // An empty string is the same answer as NULL, so a callback may
+    // return either without a client having to test for both.
+    return (why && why[0]) ? why : 0;
+}
+
 enum setting_result setting_set(const char *name, const char *value) {
     const struct setting *s = setting_find(name);
     if (!s || !value) return SETTING_INVALID;
     if (k_strlen(value) >= SETTING_VALUE_MAX) return SETTING_INVALID;
+    // BEFORE anything is applied or written. The REGISTRY is the gate,
+    // not the UI: `config set` and a hand-edited /etc file reach this
+    // same function without passing through any control, so a setting
+    // that cannot take effect here must be refused in one place rather
+    // than in each client. See api/setting.h's `unavailable`.
+    if (setting_unavailable(s)) return SETTING_INVALID;
     // BEFORE the already-correct check below, so an out-of-range value
     // is refused rather than being quietly accepted when it happens to
     // equal what is already there.
@@ -314,6 +328,10 @@ int settings_reload(void) {
         // is no file to have been edited, and re-applying would mean
         // inventing a value. `config reload` leaves it exactly as it is.
         if (!setting_persists(s)) continue;
+        // Nothing this machine can do with it -- and applying anyway
+        // would count a refusal against the FILE, which is not what is
+        // wrong. See api/setting.h's `unavailable`.
+        if (setting_unavailable(s)) continue;
         if (!etc_config_get(s->file, s->name, value, sizeof value)) continue;
         if (!value[0]) continue;
         if (s->apply(value) == SETTING_INVALID) rejected++;
@@ -378,6 +396,10 @@ int setting_dispatch(struct setting_msg *msg) {
         setting_text_description(setting_namespace(s), s->name,
                                  msg->description, sizeof msg->description);
         msg->widget = setting_text_widget(setting_namespace(s), s->name);
+        // Why this one cannot be changed here, or empty. From the
+        // registry rather than /etc: it describes the MACHINE.
+        k_strlcpy(msg->unavailable, setting_unavailable(s) ? setting_unavailable(s) : "",
+                  sizeof msg->unavailable);
         msg->sflags = setting_text_sflags(setting_namespace(s), s->name);
         msg->order  = setting_text_order(setting_namespace(s), s->name);
         msg->type = s->type == SETTING_TYPE_ENUM ? SETTING_ABI_TYPE_ENUM

@@ -233,7 +233,15 @@ static int try_fact(const char *name) {
 }
 
 static int cmd_get(const char *name) {
-    struct setting_msg found;
+    // STATIC, NOT LOCAL. `struct setting_msg` is over a kilobyte, and
+    // the resolve-then-act commands hold two at once -- against
+    // USERLAND_CFLAGS' 2048-byte frame budget and a 16 KiB ring-3 stack
+    // with ONE guard page below it. This program is single-threaded and
+    // never recurses, so the storage costs a page of .bss and buys the
+    // whole frame back. (Trimming a field off the ABI to stay under the
+    // warning would be treating the symptom: the message is a kilobyte
+    // because it usefully carries a kilobyte.)
+    static struct setting_msg found;
     int hits = resolve(name, &found, 1);
     if (hits < 0) { putline("config: registry unavailable"); return 1; }
     if (hits > 1) return 1;             // resolve() listed them
@@ -261,6 +269,17 @@ static int cmd_get(const char *name) {
         return 1;
     }
     putline(m.value);
+    // THE VALUE ALONE WOULD BE A HALF-TRUTH here. `get` returns what
+    // `set` last accepted -- which is the rule a setting must follow --
+    // but on a machine where the setting cannot take effect that number
+    // describes an intention, not the machine. Say which. Second line,
+    // parenthesised, so the first line stays the bare value a script
+    // reads.
+    if (found.unavailable[0]) {
+        char why[SETTING_ABI_DESC_MAX + 32];
+        snprintf(why, sizeof why, "  (not in effect: %s)", found.unavailable);
+        putline(why);
+    }
     return 0;
 }
 
@@ -270,7 +289,7 @@ static int cmd_set(const char *name, const char *value) {
     // something you did not mean to change and persists it -- which is
     // why macOS `defaults` makes the domain mandatory for a write and
     // optional for nothing.
-    struct setting_msg found;
+    static struct setting_msg found;
     int hits = resolve(name, &found, 1);
     if (hits < 0) { putline("config: registry unavailable"); return 1; }
     if (hits > 1) return 1;             // resolve() listed them
@@ -290,6 +309,16 @@ static int cmd_set(const char *name, const char *value) {
     // legal ones, so say what they are rather than making the user go
     // and look.
     if (m.result == SETTING_INVALID) {
+        // A SETTING THIS MACHINE CANNOT CHANGE IS NOT A BAD VALUE, and
+        // saying "does not accept 'off' -- try one of: on off" would be
+        // absurd. The registry knows why and says so; report it and
+        // stop, rather than listing choices none of which would work.
+        if (hits == 1 && found.unavailable[0]) {
+            char why[SETTING_ABI_DESC_MAX + 32];
+            snprintf(why, sizeof why, "config: %s", found.unavailable);
+            putline(why);
+            return 1;
+        }
         int rc = report(name, value, m.result);
         // `found` IS REUSED here rather than a third message declared.
         // struct setting_msg passed a kilobyte when it gained a
@@ -345,7 +374,7 @@ static int cmd_set(const char *name, const char *value) {
 
 static int cmd_unset(const char *name) {
     // Same rule as `set`: removing the wrong setting's key is a write.
-    struct setting_msg found;
+    static struct setting_msg found;
     int hits = resolve(name, &found, 1);
     if (hits < 0) { putline("config: registry unavailable"); return 1; }
     if (hits > 1) return 1;             // resolve() listed them
@@ -375,7 +404,7 @@ static int cmd_unset(const char *name) {
 }
 
 static int cmd_where(const char *name) {
-    struct setting_msg found;
+    static struct setting_msg found;
     int hits = resolve(name, &found, 1);
     if (hits < 0) { putline("config: registry unavailable"); return 1; }
     if (hits > 1) return 1;             // resolve() listed them

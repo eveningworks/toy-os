@@ -590,7 +590,19 @@ struct spawn_msg {
     const char *args;      // whitespace-separated, or NULL
     const char *env;       // "K=V\0K=V\0\0", or NULL
     int32_t stdout_fd;     // a pipe write end this process owns, or -1
-    int32_t reserved;      // MUST be 0 -- the room the next field goes in
+    // The process GROUP to start the child in, or 0 to inherit the
+    // caller's -- which is what every existing caller passed, since this
+    // field was `reserved` and had to be 0.
+    //
+    // HERE RATHER THAN A setpgid() AFTER THE SPAWN, and that is the
+    // point: POSIX has both the parent and the child call setpgid()
+    // after fork() because neither can be sure which runs first, and a
+    // Ctrl-C landing in that window signals the wrong group. This kernel
+    // has no fork -- SYS_SPAWN creates a process that is already
+    // running -- so the race would be unfixable rather than merely
+    // awkward. Passing the group at creation removes it. `posix_spawn`
+    // reached the same answer with POSIX_SPAWN_SETPGROUP.
+    int32_t pgid;
 };
 
 // The most an environment blob may be, including its terminator. It has
@@ -671,10 +683,41 @@ struct spawn_msg {
                           // same call about a far more dangerous
                           // operation and says so.
 
-#define SYS_KILL      31 // RDI = pid, RSI = exit code to report.
-                          // Terminates that process immediately.
-                          // Returns 1 if it was killed, 0 if no such
-                          // process.
+#define SYS_KILL      31 // RDI = pid, RSI = SIGNAL number (abi/signal_abi.h).
+                          // Returns 1 if the signal was delivered, 0 if
+                          // there was no such process or the number is
+                          // not a signal.
+                          //
+                          // **RDI < 0 NAMES A PROCESS GROUP**, POSIX's
+                          // rule: `kill(-pgid, sig)` signals every live
+                          // member of that group and returns 1 if it
+                          // reached at least one. Pids are 1-based, so a
+                          // negative number cannot collide with one.
+                          //
+                          // **THE SECOND ARGUMENT USED TO BE AN EXIT
+                          // CODE**, and this call used to be `kill -9`
+                          // and nothing else. It is a signal now, and a
+                          // signalled process reports SIGNAL_EXIT_BASE +
+                          // the signal as its exit code (130 for a
+                          // Ctrl-C, 143 for a SIGTERM) -- the convention
+                          // every Unix shell prints, and what makes a
+                          // signalled death distinguishable from an
+                          // ordinary non-zero exit. Callers that passed
+                          // a raw code were changed to pass SIGKILL,
+                          // which is exactly what they meant.
+                          //
+                          // WHAT EACH SIGNAL DOES depends on the target's
+                          // disposition (SYS_SIGACTION) and on WHEN the
+                          // kernel can safely act. SIGKILL is immediate
+                          // and unconditional -- that is what keeps a
+                          // force-quit trustworthy against a wedged
+                          // process. Everything else is marked PENDING
+                          // and acted on when the target next returns to
+                          // ring 3, which is the only point the kernel
+                          // holds its register state and holds nothing
+                          // on its behalf. A target parked in a blocking
+                          // syscall is woken with -EINTR so that it gets
+                          // there. See docs/signals-design.md.
                           //
                           // **UNPRIVILEGED, DELIBERATELY.** Any process
                           // may kill any other, including the window
@@ -1097,6 +1140,76 @@ struct sys_stat {
                           // state -- it blocks in waitpid(-1) while it
                           // has children and has nothing to block on
                           // when it does not. See docs/init-design.md.
+
+#define SYS_SETPGID   56 // RDI = pid (0 = the caller), RSI = pgid
+                          // (0 = the same value as `pid`, i.e. lead a
+                          // new group). Returns 0, or -errno: -ESRCH for
+                          // a pid that is not a live process, -EPERM for
+                          // a pgid no live process is in and that is not
+                          // `pid` itself.
+                          //
+                          // **UNPRIVILEGED, like SYS_KILL and for the
+                          // same stated reason** -- there is no user
+                          // model here to gate it on, and POSIX's "your
+                          // own children, before they exec" rule needs a
+                          // session concept this kernel does not have.
+                          //
+                          // MOSTLY YOU WILL NOT NEED IT: a child
+                          // inherits its spawner's group, and SYS_SPAWN
+                          // carries a `pgid` for the case a shell
+                          // actually has -- putting a pipeline's stages
+                          // in one group. POSIX makes both the parent
+                          // and the child call setpgid() after fork()
+                          // precisely because neither can be sure which
+                          // runs first; spawn taking the group removes
+                          // the race instead of documenting it. This
+                          // call exists for the leader naming ITSELF
+                          // (`setpgid(0, 0)`), which nothing else can do.
+
+#define SYS_GETPGID   57 // RDI = pid (0 = the caller). Returns that
+                          // process's group, or -ESRCH.
+
+#define SYS_SIGACTION 58 // RDI = signal, RSI = SIG_DFL or SIG_IGN.
+                          // Returns the PREVIOUS disposition, or -errno:
+                          // -EINVAL for a bad signal or a disposition
+                          // that is neither, -EPERM for SIGKILL or
+                          // SIGQUIT (SIGNAL_UNIGNORABLE).
+                          //
+                          // NOT `sigaction`. There is no handler, no
+                          // mask, no flags and no sa_restorer -- a
+                          // user-space handler needs a signal frame on
+                          // the user stack and a sigreturn to unwind it,
+                          // which is stage 3 of docs/signals-design.md
+                          // and is not built. Refusing a function
+                          // pointer outright beats accepting one and
+                          // never calling it.
+                          //
+                          // AN IGNORED SIGNAL IS DROPPED AT ARRIVAL, not
+                          // held pending -- POSIX's rule, and what makes
+                          // "anything pending is fatal" true inside the
+                          // kernel. So changing a disposition back to
+                          // SIG_DFL does not resurrect signals sent while
+                          // it was ignored.
+
+#define SYS_TCSETPGRP 59 // RDI = pgid to put in the FOREGROUND of the
+                          // physical console. Returns 0, or -errno:
+                          // -EPERM if the caller does not own the
+                          // console (it has never read fd 0), -ENODEV if
+                          // nothing owns it, -ESRCH for a group with no
+                          // live member.
+                          //
+                          // This is `tcsetpgrp()`, and the console is
+                          // the controlling terminal every process
+                          // shares -- there is one keyboard. A shell
+                          // calls it around each job: put the job's
+                          // group in front, wait, then put its own back.
+                          // Until it does, the shell's own group is in
+                          // front, which is why a shell must also ignore
+                          // SIGINT (SYS_SIGACTION).
+
+#define SYS_TCGETPGRP 60 // No arguments. Returns the console's
+                          // foreground group, or -ENODEV when no process
+                          // owns the console.
 
 // The longest single SYS_SLEEP, one hour. Not a security limit: it
 // keeps a garbage argument from parking a process for the rest of the

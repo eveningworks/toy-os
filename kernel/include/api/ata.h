@@ -102,6 +102,22 @@ int ata_dma_active(void);
 // know.
 int ata_dma_hardware_available(void);
 
+// 1 if DMA has been FORCED off by ata_set_dma_forced_off() -- what was
+// asked for, as opposed to what is in effect.
+//
+// The distinction is the whole reason this exists. ata_dma_active()
+// answers "are transfers going through DMA right now?", which is
+// `hardware_available && !forced_off` -- so on a machine with no DMA
+// engine it is 0 whatever anyone asked for. A CONTROL that sets the
+// forcing has to report the forcing back, or it shows a state its own
+// setter cannot produce and snaps back to it (kernel.ata_nodma did
+// exactly that, and the Settings radio was unusable on a virtio boot).
+//
+// Rule of thumb for any setting: get() must return what apply() last
+// accepted. Report the effective state somewhere it cannot be mistaken
+// for the knob -- `/bin/ata` and the setting's own unavailable() reason.
+int ata_dma_forced_off(void);
+
 // Forces every transfer down the PIO fallback (`off` non-zero), or
 // allows DMA again (0). The `ata nodma` shell command and
 // kernel/drivers/ata_test.c's PIO round-trip are the callers.

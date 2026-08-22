@@ -41,6 +41,19 @@
                    // that only a scheduled process can make
 #define ENOENT  2  // no such file
 #define ESRCH   3  // no such process
+#define EINTR   4  // a SIGNAL arrived while this call was parked, so it gave
+                   // up instead of finishing. NOT a failure of the thing
+                   // asked for: the request may be repeated and may then
+                   // succeed. Deliberately distinct from SYS_RETRY, which
+                   // means "woken, nothing happened, ask again" and IS
+                   // retried inside libsys -- a caller that saw a signal's
+                   // interruption as a spurious wakeup would loop straight
+                   // back into the call the signal was trying to end.
+                   // Today every signal that can interrupt a call also
+                   // terminates the process, so no ring-3 code ever
+                   // observes this; it exists as the honest answer at the
+                   // ABI, and is what handlers (docs/signals-design.md
+                   // stage 3) will make visible.
 #define EIO     5  // the device or filesystem refused the transfer
 #define EBADF   9  // not an open descriptor, or open the wrong way (reading a
                    // write-only file, writing a pipe's read end) -- POSIX folds

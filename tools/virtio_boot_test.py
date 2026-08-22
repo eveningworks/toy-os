@@ -87,6 +87,25 @@ def read_until(sock, needle, timeout, transcript):
     return False
 
 
+def answer_after(transcript, echoed_command):
+    """The first line a command printed, skipping its own echo and the
+    kernel's loader chatter.
+
+    A command typed at the debug console is echoed back before it runs,
+    and `elf_run:` lines land between the echo and the output -- so
+    "the next line" is not the answer and has to be looked for.
+    """
+    lines = [ln.strip() for ln in transcript.splitlines()]
+    for i, ln in enumerate(lines):
+        if echoed_command not in ln:
+            continue
+        for nxt in lines[i + 1:]:
+            if not nxt or nxt.startswith(("elf_run:", "syscall:", "dbg>")):
+                continue
+            return nxt
+    return None
+
+
 def run_boot(iso, img, qemu_log, commands, timeout):
     """Boot once, run `commands` over the debug console, return the transcript."""
     qemu = launch(iso, img, qemu_log)
@@ -158,6 +177,38 @@ def main():
     check("TFS3 mounted off virtio", "tfs3: mounted" in t1)
     check("the filesystem is persistent, not RAM-only",
           "RAM-only" not in t1.split("fs: active backend")[-1][:80])
+
+    # --- a setting this machine cannot honour -------------------------
+    #
+    # THIS IS THE MACHINE WHERE `kernel.ata_nodma` GOES WRONG, and it
+    # goes wrong nowhere else: with no ATA drive there is no Bus-Master
+    # DMA engine, so "force PIO" cannot change anything. The getter used
+    # to report the EFFECTIVE state, which is pinned to "on" here -- so
+    # System Settings' radio snapped back to On the instant it was
+    # applied, and `config set ... off` reported success while showing
+    # "on" forever. Checked here rather than in the ktest suite because
+    # only this fixture actually lacks the hardware.
+    print("virtio_boot_test: boot 1b -- the ATA/PIO tunable on a machine with no DMA")
+    t1b, err = run_boot(args.iso, args.work, args.qemu_log,
+                        ["sh config get kernel.ata_nodma",
+                         "sh config set kernel.ata_nodma on"],
+                        args.timeout)
+    if t1b is None:
+        print(f"virtio_boot_test: FAIL -- {err}")
+        return 1
+    if args.verbose:
+        print(t1b)
+    # THE LINE THE `get` ITSELF PRINTED, not "is 'off' anywhere in the
+    # transcript" -- both words appear in the choice list a refusal
+    # prints, so a substring search would pass on the very message this
+    # check exists to tell apart. The console ends lines with CRLF,
+    # hence the strip.
+    got = answer_after(t1b, "config get kernel.ata_nodma")
+    check("the PIO tunable reports the FORCING flag, not the effective state",
+          got == "off", f"`config get` answered {got!r}, not 'off'")
+    check("...and setting it is REFUSED with the reason, not a bad-value message",
+          "no DMA engine" in t1b and "does not accept" not in t1b,
+          "expected the registry's unavailable() sentence")
 
     print("virtio_boot_test: boot 2 -- read it back on a fresh boot")
     t2, err = run_boot(args.iso, args.work, args.qemu_log,

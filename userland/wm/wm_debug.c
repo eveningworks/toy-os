@@ -682,7 +682,7 @@ static void cmd_kill(struct dbg_out *o, int pid) {
         dbg_out_write(o, "usage: gui kill PID\r\n");
         return;
     }
-    if (sys_kill(pid, -1)) {
+    if (sys_kill(pid, SIGKILL)) {
         dbg_out_printf(o, "gui: killed pid %d\r\n", pid);
     } else {
         dbg_out_printf(o, "gui: no such process %d\r\n", pid);

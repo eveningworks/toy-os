@@ -97,6 +97,15 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_LSEEK]         = { "lseek",         sys_lseek,         { A_FD, A_INT, A_INT } },
     [SYS_FSTAT]         = { "fstat",         sys_fstat,         { A_FD, A_HEX } },
     [SYS_GETPID]        = { "getpid",        sys_getpid,        { A_END } },
+    [SYS_SETPGID]       = { "setpgid",       sys_setpgid,       { A_INT, A_INT } },
+    [SYS_GETPGID]       = { "getpgid",       sys_getpgid,       { A_INT } },
+    // The signal traces as a plain number: a name would want a third
+    // argument formatter for six values, and `sigaction(2, 1)` beside
+    // abi/signal_abi.h is already readable -- the same call `lseek`'s
+    // whence made just above.
+    [SYS_SIGACTION]     = { "sigaction",     sys_sigaction,     { A_INT, A_INT } },
+    [SYS_TCSETPGRP]     = { "tcsetpgrp",     sys_tcsetpgrp,     { A_INT } },
+    [SYS_TCGETPGRP]     = { "tcgetpgrp",     sys_tcgetpgrp,     { A_END } },
 };
 
 #define SYSCALL_TABLE_COUNT (sizeof SYSCALL_TABLE / sizeof SYSCALL_TABLE[0])

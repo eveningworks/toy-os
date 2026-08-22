@@ -285,7 +285,11 @@ static void on_widget(struct uapp *a, int id, int reason) {
 
     g_armed = 0;                   // second click: commit
     if (id == ID_KILL) {
-        sys_kill(pid, 137); // 128 + SIGKILL's 9, the shell convention
+        // SIGKILL, which is what Force Quit means: uncatchable, and
+        // the one signal that works on a process wedged in its own
+        // loop. The 137 this used to pass was the EXIT CODE the
+        // kernel now derives from the signal itself.
+        sys_kill(pid, SIGKILL);
         ulogf("taskmgr: killed pid %d\n", pid);
     } else {
         // Polite: ask the window to close. A process with no window

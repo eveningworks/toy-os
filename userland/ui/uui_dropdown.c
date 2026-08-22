@@ -19,6 +19,7 @@ void uui_dropdown_init(struct uui_dropdown *d, int x, int y, int w, int h,
     int rh = ugfx_char_h() + 4;
     int rows = count < d->max_rows ? count : d->max_rows;
     uui_listbox_init(&d->list, x, y + h, w, rows > 0 ? rows * rh : rh, items, count);
+    d->disabled = 0;
 }
 
 int uui_dropdown_selected(const struct uui_dropdown *d) { return d->list.selected; }
@@ -42,17 +43,20 @@ void uui_dropdown_set_geometry(struct uui_dropdown *d, int x, int y, int w, int 
 }
 
 void uui_dropdown_draw(struct ugfx_surface *s, const struct uui_dropdown *d) {
+    // Dimmed text and caret; the face and border stay, so the control
+    // still occupies its place rather than looking absent.
+    uint32_t fg = d->disabled ? uui_state_bg(d->fg, UUI_STATE_DISABLED) : d->fg;
     ugfx_fill_rect(s, d->x, d->y, d->w, d->h, d->bg);
     ugfx_draw_rect(s, d->x, d->y, d->w, d->h, d->border);
 
     const char *label = (d->list.selected >= 0 && d->list.selected < d->list.count)
                             ? d->list.items[d->list.selected] : "";
     ugfx_draw_string_clipped(s, d->x + 6, d->y + (d->h - ugfx_char_h()) / 2,
-                              d->w - 24, label, d->fg, d->bg);
+                              d->w - 24, label, fg, d->bg);
 
     // A caret so it reads as a dropdown rather than a text field.
     int cx = d->x + d->w - 14, cy = d->y + d->h / 2 - 2;
-    for (int i = 0; i < 5; i++) ugfx_fill_rect(s, cx + i, cy + i, 5 - i * 2 + 4, 1, d->fg);
+    for (int i = 0; i < 5; i++) ugfx_fill_rect(s, cx + i, cy + i, 5 - i * 2 + 4, 1, fg);
 }
 
 void uui_dropdown_draw_popup(struct ugfx_surface *s, const struct uui_dropdown *d) {
@@ -139,9 +143,13 @@ static int dd_ops_hit(const void *w, int cx, int cy) {
 }
 static int dd_ops_key(void *w, int key, unsigned mods) {
     (void)mods;
-    return uui_dropdown_key((struct uui_dropdown *)w, key);
+    struct uui_dropdown *d = (struct uui_dropdown *)w;
+    if (d->disabled) return 0;
+    return uui_dropdown_key(d, key);
 }
-static int dd_ops_accepts_focus(const void *w) { (void)w; return 1; }
+static int dd_ops_accepts_focus(const void *w) {
+    return !((const struct uui_dropdown *)w)->disabled;
+}
 
 const struct uui_widget_ops uui_dropdown_focus_ops = {
     .hit = dd_ops_hit,
@@ -164,11 +172,14 @@ static int dd_ops_overlay(const void *w) {
 }
 
 static int dd_ops_press(void *w, int cx, int cy) {
-    return uui_dropdown_click((struct uui_dropdown *)w, cx, cy);
+    struct uui_dropdown *d = (struct uui_dropdown *)w;
+    if (d->disabled) return 0;
+    return uui_dropdown_click(d, cx, cy);
 }
 
 static int dd_ops_motion(void *w, int cx, int cy, unsigned buttons) {
     struct uui_dropdown *d = (struct uui_dropdown *)w;
+    if (d->disabled) return 0;
     if (buttons) return uui_dropdown_drag(d, cx, cy);
     if (!d->open) return 0;
     return uui_listbox_hover(&d->list, cx, cy);
@@ -176,6 +187,7 @@ static int dd_ops_motion(void *w, int cx, int cy, unsigned buttons) {
 
 static int dd_ops_release(void *w, int cx, int cy) {
     (void)cx; (void)cy;
+    if (((struct uui_dropdown *)w)->disabled) return 0;
     uui_dropdown_drag_end((struct uui_dropdown *)w);
     return 0;
 }

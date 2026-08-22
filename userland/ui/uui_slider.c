@@ -24,6 +24,7 @@ void uui_slider_init(struct uui_slider *s, const char *const *options, int count
     // without counting ticks -- what every real slider draws.
     s->fill_bg = ugfx_rgb(120, 150, 200);
     s->thumb_bg = ugfx_rgb(70, 100, 160);
+    s->disabled = 0;
 }
 
 void uui_slider_set_options(struct uui_slider *s, const char *const *options, int count) {
@@ -106,7 +107,8 @@ void uui_slider_draw(struct ugfx_surface *surf, const struct uui_slider *s) {
         ugfx_fill_rect(surf, tx, ty + SLIDER_TRACK_H, 1, SLIDER_TICK_H, s->track_bg);
     }
 
-    uint32_t thumb = s->dragging || s->hovered
+    uint32_t thumb = s->disabled ? uui_state_bg(s->thumb_bg, UUI_STATE_DISABLED)
+                   : (s->dragging || s->hovered)
                        ? uui_state_bg(s->thumb_bg, UUI_STATE_HOVER)
                        : s->thumb_bg;
     ugfx_fill_rect(surf, sx - SLIDER_THUMB_W / 2, ty - SLIDER_THUMB_W / 2,
@@ -118,7 +120,9 @@ void uui_slider_draw(struct ugfx_surface *surf, const struct uui_slider *s) {
     const char *label = s->options[sel];
     int ly = s->y + SLIDER_THUMB_W + SLIDER_LABEL_GAP;
     ugfx_draw_string_clipped(surf, s->x + SLIDER_PAD_X, ly,
-                              s->w - 2 * SLIDER_PAD_X, label, s->fg, s->bg);
+                              s->w - 2 * SLIDER_PAD_X, label,
+                              s->disabled ? uui_state_bg(s->fg, UUI_STATE_DISABLED) : s->fg,
+                              s->bg);
 }
 
 // --- input ------------------------------------------------------------
@@ -201,15 +205,20 @@ static void sl_draw(struct ugfx_surface *surf, const void *w) {
 static int sl_hit(const void *w, int cx, int cy) {
     return uui_slider_hit((const struct uui_slider *)w, cx, cy);
 }
-static int sl_press(void *w, int cx, int cy) { return uui_slider_press(w, cx, cy); }
+static int sl_press(void *w, int cx, int cy) {
+    if (((struct uui_slider *)w)->disabled) return 0;
+    return uui_slider_press(w, cx, cy);
+}
 static int sl_motion(void *w, int cx, int cy, unsigned buttons) {
     (void)buttons;
     struct uui_slider *s = w;
+    if (s->disabled) return 0;
     if (s->dragging) return uui_slider_drag(s, cx, cy);
     return uui_slider_hover(s, cx, cy);
 }
 static int sl_release(void *w, int cx, int cy) {
     (void)cx; (void)cy;
+    if (((struct uui_slider *)w)->disabled) return 0;
     uui_slider_drag_end((struct uui_slider *)w);
     // 1 so the router NAMES this widget to the app -- it reports one
     // only when the widget has a release op, which is how a checkbox
@@ -219,6 +228,7 @@ static int sl_release(void *w, int cx, int cy) {
 static int sl_wheel(void *w, int notches) { return uui_slider_wheel(w, notches); }
 static int sl_key(void *w, int key, unsigned mods) {
     (void)mods;
+    if (((struct uui_slider *)w)->disabled) return 0;
     return uui_slider_key(w, key);
 }
 static void sl_natural(const void *w, int *out_w, int *out_h) {
@@ -228,7 +238,8 @@ static void sl_geometry(void *w, int x, int y, int width, int height) {
     uui_slider_set_geometry((struct uui_slider *)w, x, y, width, height);
 }
 static int sl_accepts_focus(const void *w) {
-    return ((const struct uui_slider *)w)->count > 0;
+    const struct uui_slider *s = (const struct uui_slider *)w;
+    return !s->disabled && s->count > 0;
 }
 
 const struct uui_widget_ops uui_slider_focus_ops = {

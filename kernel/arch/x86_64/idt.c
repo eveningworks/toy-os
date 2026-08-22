@@ -10,6 +10,7 @@
 #include "string.h"
 #include "mouse.h"
 #include "syscall.h"
+#include "signal.h" // signal_deliver_pending() -- see the tail of isr_dispatch
 #include "scheduler.h"
 #include "paging.h"   // paging_kernel_leaf() -- is this stack page mapped?
 #include "vmm.h"
@@ -279,6 +280,27 @@ void isr_dispatch(uint64_t *regs) {
     // scheduler.c's design comment.
     g_next_kernel_rsp = (uint64_t)regs;
 
+    // WHOSE SIGNALS MAY BE ACTED ON WHEN THIS TRAP FINISHES, or 0 for
+    // "none, not now". Captured HERE, before anything runs, because both
+    // halves of the answer are only true at this instant.
+    //
+    // The CS check is the whole safety argument, and it is worth stating
+    // rather than leaving to be re-derived: if the interrupted frame was
+    // RING 3, then the kernel was not part-way through anything on
+    // anybody's behalf -- no half-taken lock, no heap call in flight --
+    // and the process that was running is the one whose address space we
+    // may now free. If it was ring 0, this trap landed inside kernel
+    // work (possibly somebody else's kmalloc) and terminating anything
+    // from here would be the classic interrupt-context corruption.
+    //
+    // scheduler_current_pid() is sampled now because a timer tick may
+    // switch away before the end of this function; signal.c compares
+    // against the value it finds later precisely to notice that.
+    // 0 covers both "kernel code was interrupted" and "ring-3 code with
+    // no scheduler slot" (the legacy process_run_ring3() loader), which
+    // has no pid to signal.
+    int sig_pid = (regs[18] /* cs */ & 3) ? scheduler_current_pid() : 0;
+
     if (vector >= 32 && vector < 48) {
         // Every hardware IRQ (timer, keyboard, mouse, and -- once a
         // driver registers one -- anything else, a NIC chief among
@@ -291,12 +313,40 @@ void isr_dispatch(uint64_t *regs) {
         // registered handler now rather than as a separate line here.
         irq_dispatch((uint8_t)(vector - 32), regs);
     } else if (vector == 128) {
-        // Software interrupt from ring 3 (int 0x80) -- not a hardware
-        // IRQ, so no PIC EOI. syscall_dispatch() may not return (see
-        // syscall.h): the exit syscall jumps straight back into
-        // whichever kernel code called process_run_ring3() instead of
-        // rejoining isr_common's normal epilogue below.
-        syscall_dispatch(regs);
+        // A PENDING SIGNAL BEATS THE SYSCALL, and this is not an
+        // optimisation -- it is what makes interrupting a blocked
+        // program reliable.
+        //
+        // The problem it solves: a process parked in read() is woken
+        // with -EINTR so that it can reach a delivery point, and it
+        // resumes in ring 3 a few instructions from its next syscall.
+        // With delivery only at the END of a trap, whichever of "the
+        // timer ticks" and "the process calls exit()" happened first
+        // decided whether it died of the signal or exited 0 -- and the
+        // exit path zombies the slot, so the pending bit is then
+        // unreachable forever. It passed anyway, most of the time,
+        // which is the worst way for a race to behave.
+        //
+        // Checking here makes the process's OWN next syscall the
+        // delivery point, which it always reaches. Linux does the same
+        // thing from the other direction: a fatal signal pending means
+        // the syscall returns without doing anything.
+        //
+        // Here and not at the top of isr_dispatch, because a hardware
+        // IRQ must reach its handler to be acknowledged to the PIC --
+        // returning early from one would stop interrupts for the rest of
+        // the boot. The timer's own delivery is the check at the bottom.
+        if (sig_pid && scheduler_signal_pending(sig_pid)) {
+            signal_deliver_pending(sig_pid);
+            sig_pid = 0; // acted on; the check at the bottom must not repeat it
+        } else {
+            // Software interrupt from ring 3 (int 0x80) -- not a hardware
+            // IRQ, so no PIC EOI. syscall_dispatch() may not return (see
+            // syscall.h): the exit syscall jumps straight back into
+            // whichever kernel code called process_run_ring3() instead of
+            // rejoining isr_common's normal epilogue below.
+            syscall_dispatch(regs);
+        }
     } else if (vector < 32) {
         uint64_t error_code = regs[16];
         uint64_t rip = regs[17];
@@ -507,4 +557,16 @@ void isr_dispatch(uint64_t *regs) {
                     // isr_in_progress(). NOT reached if syscall_dispatch()
                     // above took the noreturn process_context_exit() path
                     // (legacy SYS_EXIT) -- isr_reset_depth() covers that.
+
+    // THE ONE PLACE A SIGNAL IS ACTED ON: on the way back to ring 3,
+    // which is where Unix delivers and for the same reason (see
+    // kernel/signal.h). After the depth decrement, because this may not
+    // return in the ordinary sense -- terminating the current process
+    // hands the CPU to another one exactly as SYS_EXIT does, and leaving
+    // the depth raised would make isr_in_progress() lie for the rest of
+    // the boot.
+    //
+    // Nothing pending is one load and one branch, which is what it has
+    // to be: this runs on every syscall and every timer tick.
+    if (sig_pid) signal_deliver_pending(sig_pid);
 }

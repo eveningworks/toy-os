@@ -504,6 +504,32 @@ manual steps to be worth automating:
   KCMDLINE="target=text"`. Not in `gui_regress.py`; run it after
   touching the scheduler's parentage, reaping, `SYS_SLEEP`, the target
   setting or the service descriptors.
+- **`ctrlc_test.py`** -- **`Ctrl-C` interrupts the foreground JOB and
+  nothing else**, end to end through the real keyboard (stages 0-2 of
+  `docs/signals-design.md`). Boots the `text` target twice, the same way
+  `console_shell_test.py` does and for the same reasons, because a real
+  ring-3 shell on the physical keyboard is the only place this feature
+  exists -- the GUI Terminal reads keys as window events, owns no
+  console and has no foreground group.
+
+  Twelve checks, and four of them are the ones that matter. A **spinning
+  job** dies: `spin_test` writes nothing and makes no syscalls while it
+  spins, so the only path that can reach it is the timer-tick delivery
+  in `isr_dispatch`. A **two-stage pipeline** dies as a UNIT, which is
+  the check process groups exist for -- signalling the foreground *pid*
+  instead of the group leaves one stage running and the shell waiting on
+  it forever. The **shell survives**, which every other check here would
+  pass without. And at an **empty prompt** the key is still a keystroke:
+  the kernel must not signal, the byte reaches the line editor, and the
+  line is abandoned -- asserted by typing a command, pressing Ctrl-C,
+  pressing Enter, and requiring that the command did NOT run, with a
+  control that runs the same line uncancelled so "the file is absent"
+  cannot pass against a wedged shell.
+
+  **Both halves were confirmed with positive controls.** Making
+  `tty_intr()` return 0 reddens the three job checks and leaves the
+  empty-prompt ones green; replacing `signal_send_group()` with a
+  single-pid send reddens exactly the pipeline check.
 - **`console_shell_test.py`** -- a `text` boot reaches a RING-3 shell
   prompt and the kernel shell is not involved (`docs/init-design.md`'s
   stage 4). Eleven checks: init is what started `/bin/tosh`, an idle

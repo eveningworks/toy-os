@@ -59,6 +59,14 @@ static int scratch_apply(const char *value) {
     return SETTING_INVALID;
 }
 
+// Drives the `unavailable` half: 0 (the default) leaves the scratch
+// setting changeable, non-zero makes it report a reason.
+static int g_scratch_unavailable;
+
+static const char *scratch_unavailable(void) {
+    return g_scratch_unavailable ? "this machine has no such hardware" : 0;
+}
+
 static const struct setting g_scratch = {
     .name   = SCRATCH_NAME,
     .label  = "Scratch colour",
@@ -67,6 +75,7 @@ static const struct setting g_scratch = {
     .choice = scratch_choice,
     .get    = scratch_get,
     .apply  = scratch_apply,
+    .unavailable = scratch_unavailable,
 };
 
 // Registration is per-test rather than once, because a KTEST must
@@ -78,11 +87,13 @@ static void scratch_begin(void) {
     k_strlcpy(g_scratch_value, "amber", sizeof g_scratch_value);
     g_scratch_applies = 1;
     g_scratch_apply_calls = 0;
+    g_scratch_unavailable = 0;
     fs_delete(SCRATCH_FILE); // may not exist
     setting_register(&g_scratch);
 }
 
 static void scratch_end(void) {
+    g_scratch_unavailable = 0;
     setting_unregister(SCRATCH_NAME);
     fs_delete(SCRATCH_FILE);
 }
@@ -322,6 +333,96 @@ KTEST("setting", "a rejected value changes nothing at all") {
     KTEST_ASSERT_EQ(setting_get(SCRATCH_NAME, v, sizeof v), 1);
     KTEST_ASSERT_EQ(k_strcmp(v, "green"), 0);
     scratch_end();
+}
+
+// --- a setting this machine cannot change ----------------------------
+//
+// The rule: get() returns what apply() last accepted, and a setting
+// that cannot take effect HERE is refused by the REGISTRY -- not merely
+// greyed out by whichever UI happened to ask. `config set` and a
+// hand-edited /etc file reach setting_set() without passing through any
+// control, so a check that lived in System Settings would be one the
+// shell walked straight past. See api/setting.h's `unavailable`.
+
+KTEST("setting", "an unavailable setting is refused by the registry, not just by a UI") {
+    scratch_begin();
+    g_scratch_unavailable = 1;
+
+    int calls = g_scratch_apply_calls;
+    enum setting_result r = setting_set(SCRATCH_NAME, "green");
+    int calls_after = g_scratch_apply_calls;
+    char v[SETTING_VALUE_MAX];
+    scratch_get(v, sizeof v);
+    // Capture, release, THEN assert -- a KTEST_ASSERT returns from the
+    // body, and an assertion made while the scratch setting is still
+    // registered leaks it into every later test.
+    scratch_end();
+
+    KTEST_ASSERT(r == SETTING_INVALID);
+    // apply() must not even RUN: refusing after the subsystem has been
+    // poked would leave the machine changed and the caller told no.
+    KTEST_ASSERT(calls_after == calls);
+    KTEST_ASSERT(k_strcmp(v, "amber") == 0);
+}
+
+KTEST("setting", "clearing unavailable() makes the same set succeed") {
+    // The positive control for the test above. Without it, "refused"
+    // would pass equally well against a setting that simply never
+    // accepts anything -- which is what scratch_apply's own reject mode
+    // does, and is a different failure.
+    scratch_begin();
+    g_scratch_unavailable = 1;
+    enum setting_result refused = setting_set(SCRATCH_NAME, "green");
+    g_scratch_unavailable = 0;
+    enum setting_result allowed = setting_set(SCRATCH_NAME, "green");
+    char v[SETTING_VALUE_MAX];
+    scratch_get(v, sizeof v);
+    scratch_end();
+
+    KTEST_ASSERT(refused == SETTING_INVALID);
+    KTEST_ASSERT(allowed == SETTING_SAVED || allowed == SETTING_UNSAVED);
+    KTEST_ASSERT(k_strcmp(v, "green") == 0);
+}
+
+KTEST("setting", "the REASON reaches ring 3 on INFO") {
+    // A disabled control is only an improvement when the user can see
+    // why, so the sentence has to survive the ABI -- a boolean would
+    // not have been enough. Found by INDEX, since that is what INFO
+    // takes and the scratch setting's index is wherever it registered.
+    scratch_begin();
+    g_scratch_unavailable = 1;
+
+    struct setting_msg m;
+    int idx = -1, ok = 0;
+    char reason[SETTING_ABI_DESC_MAX];
+    reason[0] = '\0';
+    for (int i = 0; i < setting_count(); i++) {
+        k_memset(&m, 0, sizeof m);
+        m.op = SETTING_OP_INFO;
+        m.index = i;
+        if (!setting_dispatch(&m)) continue;
+        if (k_strcmp(m.name, SCRATCH_NAME) != 0) continue;
+        idx = i;
+        ok = 1;
+        k_strlcpy(reason, m.unavailable, sizeof reason);
+        break;
+    }
+    // ...and empty once it is available again, so a client that caches
+    // the field is told when the answer changes.
+    char cleared[SETTING_ABI_DESC_MAX];
+    cleared[0] = '\0';
+    if (idx >= 0) {
+        g_scratch_unavailable = 0;
+        k_memset(&m, 0, sizeof m);
+        m.op = SETTING_OP_INFO;
+        m.index = idx;
+        if (setting_dispatch(&m)) k_strlcpy(cleared, m.unavailable, sizeof cleared);
+    }
+    scratch_end();
+
+    KTEST_ASSERT(ok);
+    KTEST_ASSERT(reason[0] != '\0');
+    KTEST_ASSERT(cleared[0] == '\0');
 }
 
 KTEST("setting", "an unregistered name is invalid, not a silent success") {

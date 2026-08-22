@@ -53,6 +53,18 @@ struct uui_spinbox {
     int armed;          // the stepper a press landed on; OWNED
 
     uint32_t bg, fg, border, step_bg;
+
+    // VISIBLE, BUT DOES NOTHING -- the same field uui_button and
+    // uui_checkbox already carry. Set it and the control draws dimmed
+    // and refuses press/motion/release/key, and drops out of the focus
+    // ring so Tab does not stop on something that cannot be used.
+    //
+    // A DISABLED CONTROL IS ONLY AN IMPROVEMENT WITH A REASON BESIDE
+    // IT. Nothing here draws that reason -- the widget has nowhere to
+    // put it -- so whoever sets this owes the user a sentence (System
+    // Settings prints the registry's `unavailable` text above the
+    // control; see abi/setting_abi.h).
+    int disabled;
 };
 
 // `unit` may be NULL. The field is initialised to `value` rendered as

@@ -103,6 +103,8 @@
 #include "kstack.h"    // the guard page, canary and poison fill
 #include "kfmt.h"      // klog_printf, vga_printf
 #include "syscall_abi.h" // SYS_RETRY -- the wake value a blocked waiter sees
+#include "signal_abi.h" // the pending mask and the group each process carries
+#include "errno.h"     // -EINTR, what a signal makes a blocking syscall return
 #include "fs.h"
 #include "gdt.h"
 #include "fpu.h"
@@ -221,6 +223,31 @@ struct sched_process {
     // is not tidiness -- see its comment for the stale-pid bug it
     // exists to prevent.
     int ppid;
+
+    // --- signals (abi/signal_abi.h, kernel/signal.h) -----------------
+    //
+    // `pending` is a BITMASK, not a queue: two SIGINTs before delivery
+    // are one SIGINT, which is what ordinary Unix signals do too.
+    //
+    // **A SET BIT MEANS THIS PROCESS MUST DIE.** An ignored signal is
+    // dropped at arrival rather than queued, and with no user-space
+    // handlers every disposition that is not "ignore" is "terminate" --
+    // so nothing has to consult a policy table to interpret this field.
+    // scheduler_block_current() leans on exactly that. Stage 3 of
+    // docs/signals-design.md breaks the invariant; scheduler.h says so
+    // where grep will find it.
+    uint32_t pending;
+    // Which signals this process ignores. A BITMASK rather than the
+    // per-signal disposition table POSIX has, because there are only two
+    // dispositions to express -- a handler is a function pointer, a
+    // signal frame and a sigreturn, none of which exist yet. A table of
+    // 32 bytes per process pretending otherwise would be a slot nobody
+    // reads (CLAUDE.md).
+    uint32_t ignored;
+    // This process's group. Never 0 for a live slot: a child inherits
+    // its spawner's, and one the kernel started leads its own.
+    int pgid;
+
     // When a SCHED_WAIT_TIMER sleeper wants to be woken, in
     // clocksource nanoseconds. Meaningless in any other state.
     uint64_t wake_at_ns;
@@ -654,7 +681,7 @@ static void switch_to_kernel(void) {
 // `args` too long to fit the one stack page, or the same allocation
 // failures every other ELF-loading path already handles the same way).
 static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
-                          const char *env) {
+                          const char *env, int want_pgid) {
     int slot = -1;
     for (int i = 0; i < MAX_PROCS; i++) {
         if (procs[i].state == SCHED_UNUSED) { slot = i; break; }
@@ -775,6 +802,26 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
     // -- scheduler_current_pid() returns 0 there, which is exactly the
     // "no parent" value, so this needs no special case.
     procs[slot].ppid = scheduler_current_pid();
+    // NOTHING IS PENDING AND NOTHING IS IGNORED for a fresh process --
+    // reset rather than inherited, and both matter. A slot is reused, so
+    // a leftover pending bit would kill the NEXT tenant on its first
+    // instruction; and dispositions do not survive an exec on Unix
+    // either (an ignored signal is the documented exception there, and
+    // this kernel has no fork/exec pair to make that distinction from).
+    procs[slot].pending = 0;
+    procs[slot].ignored = 0;
+    // THE GROUP: what the caller asked for, else the spawner's, else a
+    // group of this process's own. The third case is the kernel context
+    // -- init, the demo, a KTEST -- which has no group to lend, and
+    // leading its own is what keeps `pgid` non-zero for every live slot.
+    if (want_pgid > 0) {
+        procs[slot].pgid = want_pgid;              // join that group
+    } else if (want_pgid == PGID_NEW) {
+        procs[slot].pgid = slot + 1;               // lead one of its own
+    } else {
+        int parent_pgid = scheduler_pgid(procs[slot].ppid);
+        procs[slot].pgid = parent_pgid > 0 ? parent_pgid : slot + 1;
+    }
     // Reset, not inherited: slots are reused, and a reaped process's
     // name and CPU time showing up on its successor would be a
     // reporting bug that looks like a scheduling one.
@@ -812,6 +859,7 @@ int scheduler_proc_info(int index, struct proc_info *out) {
     out->mem_bytes = 0;
     out->exit_code = 0;
     out->ppid = p->ppid;
+    out->pgid = p->pgid;
     out->name[0] = '\0';
 
     if (p->state == SCHED_UNUSED) return 1; // a real answer: slot empty
@@ -1067,6 +1115,17 @@ int scheduler_test_park(uint64_t *tf, const void *chan) {
         procs[i].wait_chan = chan;
         procs[i].wait_reason = 0;
         procs[i].kernel_rsp = (uint64_t)tf;
+        // A FABRICATED SLOT MUST LOOK LIKE A FRESH PROCESS, which is
+        // exactly what spawn_from_fs() gives a real one. Slots are
+        // reused, so without this a test that set a disposition leaves
+        // it for whichever test claims the slot next -- and it presented
+        // exactly that way: three signal tests failed because an earlier
+        // one had left SIGINT ignored on the slot they happened to get.
+        // Establishing the precondition in the fabricator beats each
+        // test remembering to (ktest.h).
+        procs[i].pending = 0;
+        procs[i].ignored = 0;
+        procs[i].pgid = i + 1;
         return i;
     }
     return -1;
@@ -1082,6 +1141,12 @@ void scheduler_test_release(int idx) {
     procs[idx].state = SCHED_UNUSED;
     procs[idx].wait_chan = 0;
     procs[idx].kernel_rsp = 0;
+    // Cleared on the way out as well as on the way in. Belt and braces
+    // is not the reason: an UNUSED slot with a pending bit is a slot the
+    // next real spawn would have to remember to clear, and one of the
+    // two places would eventually be the one that got forgotten.
+    procs[idx].pending = 0;
+    procs[idx].ignored = 0;
 }
 
 // Reported as PROC_STATE_*, never the internal enum: abi/proc_info.h
@@ -1117,6 +1182,22 @@ const char *sched_wait_reason_name(int reason) {
 
 int scheduler_block_current(uint64_t *regs, const void *chan, int reason) {
     if (current_index < 0) return 0;
+
+    // NOTE there is deliberately NO "refuse to park a process with a
+    // signal pending" check here, and it was written, tested and taken
+    // out again rather than never considered. The worry it answered --
+    // a woken process re-entering the same blocking call before delivery
+    // could run, forever -- is real, and is closed one layer up: a
+    // pending signal is delivered at the SYSCALL ENTRY the process makes
+    // next (idt.c), so it cannot reach this function at all. A positive
+    // control confirmed the check reddened nothing, which made it a
+    // guard no test could exercise and a comment claiming a mechanism
+    // that was not the one doing the work.
+    //
+    // WHAT WOULD BRING IT BACK: syscalls that can be preempted
+    // (docs/roadmap.md's "Interruptible syscalls"). Every gate is an
+    // interrupt gate today, so a syscall runs with interrupts off and
+    // nothing can raise a signal against a process part-way through one.
 
     bill_current(); // this slice ends here -- see bill_current()
     int idx = current_index;
@@ -1329,7 +1410,15 @@ int scheduler_spawn_piped(const char *path, const char *args, int pipe_idx) {
 
 int scheduler_spawn_env(const char *path, const char *args, int pipe_idx,
                          const char *env) {
-    int slot = spawn_from_fs(path, args, pipe_idx, env);
+    // 0 = inherit the spawner's group, which is what every kernel-side
+    // caller wants: init's services and the demo's counters belong with
+    // whatever started them.
+    return scheduler_spawn_group(path, args, pipe_idx, env, 0);
+}
+
+int scheduler_spawn_group(const char *path, const char *args, int pipe_idx,
+                           const char *env, int pgid) {
+    int slot = spawn_from_fs(path, args, pipe_idx, env, pgid);
     if (slot < 0) return 0;
 
     // Clear any events left over from the previous tenant of this slot.
@@ -1439,6 +1528,130 @@ enum sched_poll_result scheduler_poll_any(int parent_pid, int *out_pid,
     return any_children ? SCHED_POLL_RUNNING : SCHED_POLL_INVALID;
 }
 
+// --- signals and process groups --------------------------------------
+//
+// The STATE only. What a signal means and when it is acted on is
+// kernel/signal.c -- see api/scheduler.h for why the two are split.
+
+// The slot behind `pid` if it is a live process, else NULL. A ZOMBIE is
+// deliberately not live: it has no address space left to signal and
+// nothing to interrupt.
+static struct sched_process *live_slot(int pid) {
+    if (pid < 1 || pid > MAX_PROCS) return 0;
+    struct sched_process *p = &procs[pid - 1];
+    if (p->state == SCHED_UNUSED || p->state == SCHED_ZOMBIE) return 0;
+    return p;
+}
+
+uint64_t scheduler_pid_pml4(int pid) {
+    struct sched_process *p = live_slot(pid);
+    return p ? p->pml4_phys : 0;
+}
+
+int scheduler_pid_alive(int pid) {
+    return live_slot(pid) != 0;
+}
+
+int scheduler_pgid(int pid) {
+    struct sched_process *p = live_slot(pid);
+    return p ? p->pgid : 0;
+}
+
+int scheduler_pgid_live(int pgid) {
+    if (pgid < 1) return 0;
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (procs[i].state == SCHED_UNUSED || procs[i].state == SCHED_ZOMBIE) continue;
+        if (procs[i].pgid == pgid) return 1;
+    }
+    return 0;
+}
+
+int scheduler_setpgid(int pid, int pgid) {
+    struct sched_process *p = live_slot(pid);
+    if (!p || pgid < 1) return 0;
+    // EITHER lead a group named after yourself, OR join one that exists.
+    // Without the second half a typo drops a process into a group
+    // nothing will ever signal, which is indistinguishable from Ctrl-C
+    // being broken.
+    if (pgid != pid && !scheduler_pgid_live(pgid)) return 0;
+    p->pgid = pgid;
+    return 1;
+}
+
+int scheduler_signal_ignored(int pid, int sig) {
+    struct sched_process *p = live_slot(pid);
+    if (!p || !SIGNAL_VALID(sig)) return 0;
+    return (p->ignored & (1u << sig)) != 0;
+}
+
+int scheduler_signal_set_ignored(int pid, int sig, int on) {
+    struct sched_process *p = live_slot(pid);
+    if (!p || !SIGNAL_VALID(sig)) return -1;
+    int was = (p->ignored & (1u << sig)) != 0;
+    if (on) {
+        p->ignored |= (1u << sig);
+        // AND DROP WHAT IS ALREADY PENDING. A process that has just said
+        // "I do not want this signal" must not be killed by one that
+        // arrived a moment earlier -- and with `pending` meaning "must
+        // die", leaving the bit set would do exactly that.
+        p->pending &= ~(1u << sig);
+    } else {
+        p->ignored &= ~(1u << sig);
+    }
+    return was;
+}
+
+uint32_t scheduler_signal_pending(int pid) {
+    struct sched_process *p = live_slot(pid);
+    return p ? p->pending : 0;
+}
+
+int scheduler_signal_take(int pid) {
+    struct sched_process *p = live_slot(pid);
+    if (!p || !p->pending) return 0;
+    int sig = 0;
+    for (int i = 1; i <= SIGNAL_MAX; i++) {
+        if (p->pending & (1u << i)) { sig = i; break; }
+    }
+    // THE WHOLE SET, not just the one taken: acting on this signal
+    // terminates the process, so the rest can never be acted on and
+    // leaving them set would be state with no reader.
+    p->pending = 0;
+    return sig;
+}
+
+int scheduler_signal_raise(int pid, int sig) {
+    struct sched_process *p = live_slot(pid);
+    if (!p || !SIGNAL_VALID(sig)) return 0;
+
+    // DROPPED, not queued -- POSIX's rule for SIG_IGN, and the thing
+    // that makes `pending != 0` mean "must die" with no policy lookup.
+    // Still a successful delivery: the caller asked for an action and
+    // the action was "nothing".
+    if ((p->ignored & (1u << sig)) && !SIGNAL_UNIGNORABLE(sig)) return 1;
+
+    p->pending |= (1u << sig);
+
+    // A PARKED PROCESS HAS TO BE WOKEN TO BE KILLED, because delivery
+    // only happens on the way back to ring 3 and a blocked process is
+    // not on its way anywhere. -EINTR rather than SYS_RETRY: the two are
+    // deliberately different values (abi/syscall_abi.h), and RETRY would
+    // send the caller straight back into the same blocking call.
+    //
+    // Safe from an interrupt handler, and limited to make that true --
+    // exactly the restraint scheduler_wake() keeps: this only flips
+    // state and writes an already-saved trapframe, and never touches
+    // g_next_kernel_rsp. Freeing the victim's address space here would
+    // mean calling the heap from the keyboard IRQ.
+    if (p->state == SCHED_BLOCKED) {
+        uint64_t *tf = (uint64_t *)(uintptr_t)p->kernel_rsp;
+        tf[TF_RAX] = (uint64_t)(int64_t)-EINTR;
+        p->state = SCHED_READY;
+        p->wait_chan = 0;
+    }
+    return 1;
+}
+
 int scheduler_kill(int pid, int exit_code) {
     if (pid < 1 || pid > MAX_PROCS) return 0;
     int slot = pid - 1;
@@ -1515,8 +1728,8 @@ enum sched_poll_result scheduler_poll(int pid, int *out_exit_code) {
 }
 
 void scheduler_demo_run(void) {
-    int a = spawn_from_fs("/bin/counter_a", NULL, -1, 0);
-    int b = spawn_from_fs("/bin/counter_b", NULL, -1, 0);
+    int a = spawn_from_fs("/bin/counter_a", NULL, -1, 0, 0);
+    int b = spawn_from_fs("/bin/counter_b", NULL, -1, 0, 0);
     if (a < 0 || b < 0) {
         vga_write("schedtest: failed to spawn one or both counter processes --\n");
         vga_write("were /bin/counter_a and /bin/counter_b seeded onto disk.img?\n");

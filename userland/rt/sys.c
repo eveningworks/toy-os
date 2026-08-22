@@ -513,6 +513,13 @@ int sys_spawn(const char *path, const char *args, int stdout_fd) {
 }
 
 int sys_spawn_env(const char *path, const char *args, int stdout_fd, char **env) {
+    // 0 = inherit the caller's group, which is what every caller that
+    // does not care about job control wants.
+    return sys_spawn_group(path, args, stdout_fd, env, 0);
+}
+
+int sys_spawn_group(const char *path, const char *args, int stdout_fd,
+                     char **env, int pgid) {
     if (!flatten_env(env)) { g_errno = E2BIG; return -1; }
     struct spawn_msg msg;
     msg.path = path;
@@ -524,7 +531,7 @@ int sys_spawn_env(const char *path, const char *args, int stdout_fd, char **env)
     // with an empty one means.
     msg.env = g_envblob;
     msg.stdout_fd = stdout_fd;
-    msg.reserved = 0;
+    msg.pgid = pgid;
     return (int)err(syscall1(SYS_SPAWN, (uint64_t)(uintptr_t)&msg));
 }
 
@@ -543,6 +550,28 @@ int sys_waitpid(int pid, int *out_code) {
                      (uint64_t)(uintptr_t)out_code, 0);
     } while (r == SYS_RETRY);
     return (int)err(r);
+}
+
+int sys_setpgid(int pid, int pgid) {
+    return (int)err(syscall2(SYS_SETPGID, (uint64_t)(int64_t)pid,
+                             (uint64_t)(int64_t)pgid));
+}
+
+int sys_getpgid(int pid) {
+    return (int)err(syscall1(SYS_GETPGID, (uint64_t)(int64_t)pid));
+}
+
+int sys_sigaction(int sig, int disp) {
+    return (int)err(syscall2(SYS_SIGACTION, (uint64_t)(int64_t)sig,
+                             (uint64_t)(int64_t)disp));
+}
+
+int sys_tcsetpgrp(int pgid) {
+    return (int)err(syscall1(SYS_TCSETPGRP, (uint64_t)(int64_t)pgid));
+}
+
+int sys_tcgetpgrp(void) {
+    return (int)err(syscall0(SYS_TCGETPGRP));
 }
 
 int sys_sleep_ms(int ms) {

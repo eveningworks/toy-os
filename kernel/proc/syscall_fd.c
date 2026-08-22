@@ -21,6 +21,7 @@
 #include "vmm.h"
 #include "scheduler.h"
 #include "pipe.h"
+#include "tty.h" // the console's owner and foreground group
 #include "fs.h"
 #include "string.h"
 #include <stddef.h>
@@ -313,6 +314,11 @@ sys_do_read_console(uint64_t *regs, uint64_t pml4, uint64_t buf_ptr, uint64_t le
     // there is no other moment the kernel could learn the difference.
     keyboard_claim_console(1);
     g_console_owner_pml4 = pml4;
+    // ...and the console gains an OWNER and a foreground group, which is
+    // what makes Ctrl-C mean anything (kernel/tty.h). Claimed on the
+    // first read for the same reason the keyboard is: a process that
+    // never reads the console must not take it.
+    tty_set_console_owner(scheduler_current_pid());
 
     // Whoever waits for a key is also who flushes the screen -- the
     // console draws into a back buffer and the ring-0 reader's idle loop
@@ -855,6 +861,10 @@ void fd_release_all(uint64_t pml4_phys) {
     if (g_console_owner_pml4 == pml4_phys) {
         g_console_owner_pml4 = 0;
         keyboard_claim_console(0);
+        // The foreground group goes with it. A dead owner's group left
+        // in front would point the next Ctrl-C at whatever reused those
+        // slots.
+        tty_set_console_owner(0);
     }
     // Every descriptor this space holds, dropped through the same
     // refcounted path SYS_CLOSE uses. A pipe end must be RELEASED, not

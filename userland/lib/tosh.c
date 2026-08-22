@@ -19,6 +19,7 @@
 // standalone `tosh` binary would be a thin main() over the same calls.
 #include "lib/tosh.h"
 #include "rt/sys.h"
+#include <ksignal.h> // signal_name() -- one table, shared with the kernel
 
 static int slen(const char *s) { int n = 0; while (s && s[n]) n++; return n; }
 
@@ -268,6 +269,62 @@ static void fd_sink(void *ctx, const char *text, int len) {
 // this shell's sink. THIS is the part that could not exist before
 // SYS_SPAWN/SYS_PIPE: a ring-3 program starting another and reading
 // what it prints.
+// --- job control ------------------------------------------------------
+//
+// EVERY EXTERNAL COMMAND RUNS IN A GROUP OF ITS OWN, and that group goes
+// in FRONT of the console while it runs. That is what makes Ctrl-C reach
+// the job rather than the shell -- the kernel's INTR key signals the
+// console's foreground group (kernel/tty.h) -- and it is why a PIPELINE
+// dies as a unit: all its stages share the group, so one keystroke ends
+// `cat big | grep x | less` instead of leaving two stages running with
+// this shell still waiting on them.
+//
+// THE GUI TERMINAL RUNS THIS SAME CODE AND OWNS NO CONSOLE, so
+// sys_tcsetpgrp() answers EPERM there and every call below is a no-op.
+// Deliberately not guarded: the alternative is this library knowing
+// which front end it is inside, and the kernel already knows the answer.
+// Its Ctrl-C is a separate problem (docs/roadmap.md).
+//
+// The window nobody can close: between the spawn returning and the
+// tcsetpgrp below, a Ctrl-C signals the SHELL's group instead. POSIX has
+// the same gap for the same reason and closes it no better; the shell
+// ignoring SIGINT is what makes it harmless rather than fatal.
+static void job_foreground(int pgid) {
+    if (pgid > 0) sys_tcsetpgrp(pgid);
+}
+
+// Put this shell's own group back in front, which is what tells the
+// kernel there is no job running -- and so restores Ctrl-C's other
+// meaning, abandoning the line being typed.
+static void job_done(void) {
+    int mine = sys_getpgid(0);
+    if (mine > 0) sys_tcsetpgrp(mine);
+}
+
+// Say so when a job was killed by a signal rather than exiting.
+//
+// SOMEBODY HAS TO PRINT THE `^C`, and it cannot be the line editor any
+// more: with a job in the foreground the kernel SWALLOWS the INTR key
+// (kernel/tty.h) rather than delivering the byte, so the editor never
+// sees it and its KLINE_CANCEL never fires. Without this line a Ctrl-C
+// looks like the program having finished normally -- which is exactly
+// the ambiguity `^C` exists to remove. bash prints it for the same
+// reason and from the same place: the shell, not the terminal.
+//
+// The exit code IS the report here: this kernel has one int rather than
+// POSIX's packed wait status, so 128 + the signal is all there is to
+// read (abi/signal_abi.h).
+static void report_signal(struct tosh *sh, int code) {
+    int sig = code - SIGNAL_EXIT_BASE;
+    if (sig <= 0 || sig > SIGNAL_MAX) return;
+    emit(sh, sig == SIGINT ? "^C\n" : "\n");
+    if (sig != SIGINT) {
+        emit(sh, "killed by SIG");
+        emit(sh, signal_name(sig));
+        emit(sh, "\n");
+    }
+}
+
 static int run_external(struct tosh *sh, const char *path, const char *args,
                         int stdout_redirected) {
     // WITH `>` IN EFFECT THERE IS NO PIPE AT ALL. Normally this shell
@@ -280,22 +337,28 @@ static int run_external(struct tosh *sh, const char *path, const char *args,
     // through this process for no reason, and would lose the child's
     // output entirely if it outlived the read loop.
     if (stdout_redirected) {
-        int pid = sys_spawn(path, args, -1); // -1 = inherit, i.e. the file
+        // PGID_NEW: the child leads a group of its own, so Ctrl-C can be
+        // pointed at it without also naming this shell.
+        int pid = sys_spawn_group(path, args, -1, environ, PGID_NEW);
         if (pid < 0) return -1;
+        job_foreground(sys_getpgid(pid));
         int code = -1;
         sys_waitpid(pid, &code);
+        job_done();
+        report_signal(sh, code);
         return code;
     }
 
     int fds[2];
     if (sys_pipe(fds) != 1) { emit(sh, "tosh: out of pipes\n"); return -1; }
 
-    int pid = sys_spawn(path, args, fds[1]);
+    int pid = sys_spawn_group(path, args, fds[1], environ, PGID_NEW);
     if (pid < 0) {
         sys_close(fds[0]);
         sys_close(fds[1]);
         return -1;
     }
+    job_foreground(sys_getpgid(pid));
 
     // Close OUR write end. The child holds its own copy, so this does
     // not end the stream -- but leaving it open would mean the read
@@ -314,6 +377,8 @@ static int run_external(struct tosh *sh, const char *path, const char *args,
 
     int code = -1;
     sys_waitpid(pid, &code);
+    job_done();
+    report_signal(sh, code);
     return code;
 }
 
@@ -523,6 +588,13 @@ static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
         st[last].out_fd = fds[1];
     }
 
+    // ONE GROUP FOR THE WHOLE PIPELINE -- the first external stage
+    // leads it (PGID_NEW), every later stage joins. That is what makes
+    // one Ctrl-C end `cat big | grep x | less` rather than only its last
+    // stage, which would leave two processes running and this shell
+    // still waiting on them. See job_foreground() above.
+    int job_pgid = 0;
+
     // Pass 1: the external stages, in order.
     for (int i = 0; i < n; i++) {
         if (stage_is_builtin(st[i].cmd)) continue;
@@ -547,7 +619,14 @@ static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
         if (st[i].in_fd  >= 0) { saved_in  = sys_dup(0); sys_dup2(st[i].in_fd, 0); }
         if (st[i].out_fd >= 0) { saved_out = sys_dup(1); sys_dup2(st[i].out_fd, 1); }
 
-        st[i].pid = sys_spawn(path, args, -1); // -1 = inherit what we just set
+        // -1 = inherit the fds we just set. The GROUP is explicit: the
+        // first stage leads, the rest join it.
+        st[i].pid = sys_spawn_group(path, args, -1, environ,
+                                     job_pgid > 0 ? job_pgid : PGID_NEW);
+        if (st[i].pid > 0 && job_pgid <= 0) {
+            job_pgid = sys_getpgid(st[i].pid);
+            job_foreground(job_pgid);
+        }
 
         if (saved_in  >= 0) { sys_dup2(saved_in, 0);  sys_close(saved_in); }
         if (saved_out >= 0) { sys_dup2(saved_out, 1); sys_close(saved_out); }
@@ -628,6 +707,12 @@ static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
         sys_waitpid(st[i].pid, &c2);
         code = c2; // the pipeline's status is its LAST stage's, as in sh
     }
+    // AFTER every wait, not after the first: until the last stage has
+    // been reaped there is still a job in front of the console, and
+    // taking the foreground back early would point a Ctrl-C at this
+    // shell while its pipeline was still running.
+    job_done();
+    report_signal(sh, code);
     return code;
 }
 

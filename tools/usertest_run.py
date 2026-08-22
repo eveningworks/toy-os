@@ -223,6 +223,10 @@ EXCLUDED = [
                           "kernel/proc/fd_test.c's KTEST spawns it properly"),
     ("pipe_test",        "needs a parent to spawn it and reap it; exits 3 under `run`, "
                           "and kernel/proc/pipe_test.c's KTEST covers it properly"),
+    ("signal_test",      "needs a procs[] slot of its own: under `run` it has no pid, "
+                          "no process group and no pending mask, so every check would "
+                          "measure the absence of a process rather than the behaviour "
+                          "of one. kernel/proc/signal_test.c spawns it properly"),
     ("cputime_test",     "must be SCHEDULER-spawned to have a procs[] slot at all; "
                           "under `run` (the legacy process_run_ring3 path) it has none, "
                           "so it cannot find itself and nothing is billed to it either. "

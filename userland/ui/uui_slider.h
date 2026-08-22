@@ -35,6 +35,18 @@ struct uui_slider {
     int hovered;    // OWNED
     int dragging;   // OWNED -- 1 while the thumb is held
     uint32_t bg, fg, track_bg, fill_bg, thumb_bg;
+
+    // VISIBLE, BUT DOES NOTHING -- the same field uui_button and
+    // uui_checkbox already carry. Set it and the control draws dimmed
+    // and refuses press/motion/release/key, and drops out of the focus
+    // ring so Tab does not stop on something that cannot be used.
+    //
+    // A DISABLED CONTROL IS ONLY AN IMPROVEMENT WITH A REASON BESIDE
+    // IT. Nothing here draws that reason -- the widget has nowhere to
+    // put it -- so whoever sets this owes the user a sentence (System
+    // Settings prints the registry's `unavailable` text above the
+    // control; see abi/setting_abi.h).
+    int disabled;
 };
 
 void uui_slider_init(struct uui_slider *s, const char *const *options, int count);

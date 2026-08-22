@@ -1059,6 +1059,11 @@ int ata_dma_hardware_available(void) {
     return g_dma_available;
 }
 
+// What was ASKED for, not what is in effect -- see ata.h.
+int ata_dma_forced_off(void) {
+    return g_dma_forced_off;
+}
+
 // Refuses while a non-blocking transfer is in flight: dma_transfer_
 // poll() would otherwise be left waiting on an engine the dispatch
 // sites have stopped considering active, and the caller (a stepped

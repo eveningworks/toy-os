@@ -277,6 +277,22 @@ struct setting_msg {
     // happening?" without a client parsing the file itself and growing
     // a second, divergent copy of the name=value parser.
     char stored[SETTING_ABI_VALUE_MAX];
+
+    // WHY THIS SETTING CANNOT BE CHANGED on this machine, or empty when
+    // it can. Out on INFO. From the registry's own `unavailable()`
+    // (api/setting.h) -- so it describes the MACHINE, not the file, and
+    // it is not something /etc/settings.d can invent.
+    //
+    // A CLIENT MUST SHOW THE SENTENCE, not merely act on it. The reason
+    // this is a string rather than a flag is that a control which is
+    // dead with no explanation is indistinguishable from a broken one;
+    // greying one out is only an improvement when the user can see why.
+    //
+    // Advisory as a control state, authoritative as an outcome: a
+    // client may disable its widget, but SET is refused by the registry
+    // regardless (result SETTING_INVALID), exactly as `config set` and
+    // a hand-edited /etc file are. Same split the INT bounds make.
+    char unavailable[SETTING_ABI_DESC_MAX];
 };
 
 // Whole-machine facts a System Info page wants that no other syscall

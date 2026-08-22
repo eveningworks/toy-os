@@ -3749,3 +3749,143 @@ having its extra request dropped.
 so a process gets one only if its parent had one to pass, and the kernel
 shell is not a ring-3 process. That is correct rather than a gap, and it
 disappears when the ring-0 shell does.
+
+## Signals deliver on the way back to ring 3, and there are exactly two such places
+
+**Why not act at send time.** A signal can be raised from another
+process's syscall, from a fault handler, or from the keyboard IRQ.
+Acting on one means tearing the target down: freeing its page tables and
+the kernel-side bookkeeping keyed to its address space, which calls the
+heap. From an interrupt that landed inside somebody else's `kmalloc`
+that is corruption, not a race. And writing another process's register
+state from inside a syscall the SENDER made is the shape of bug this
+project has already paid for once, with a compositor's mapping revoked
+underneath a live process.
+
+So sending only sets a bit. Acting happens at a point where the kernel
+provably holds nothing: **when the trap being handled came from ring 3.**
+If the CPU was executing ring-3 code when the trap arrived, no kernel
+work was in flight and the process about to be resumed is the one whose
+state may be thrown away. Unix delivers at the same point, from the same
+constraint.
+
+**Two places, and BOTH are needed.** This was found by building one and
+discovering the other by positive control:
+
+- **At syscall entry**, before the handler runs. Without it, a process
+  woken out of a blocking call by `-EINTR` resumes in ring 3 a few
+  instructions from its next syscall -- and whether it died of the
+  signal or reached `exit()` first was a race. Losing that race is
+  permanent: the exit path zombies the slot, so the pending bit can
+  never be acted on. It passed most of the time, which is the worst way
+  for a race to behave. Linux reaches the same rule from the other side:
+  a fatal signal pending means the syscall returns without doing
+  anything.
+- **At the end of the trap**, which is the only thing that reaches a
+  process making no syscalls at all -- a compute loop, interrupted by
+  the timer.
+
+Delivery at the TOP of `isr_dispatch` was considered and is wrong for
+hardware IRQs: an IRQ must reach its handler to be acknowledged to the
+PIC, so returning early from one stops interrupts for the rest of the
+boot.
+
+**A pending bit means "must die", with no policy lookup.** An ignored
+signal is dropped at arrival rather than queued -- POSIX's rule for
+`SIG_IGN` -- and with no user-space handlers every other disposition
+terminates. That is what lets a single `if (pending)` in the trap path
+be the whole delivery test. Handlers break the invariant, and
+`api/scheduler.h` says so beside the field.
+
+**`SIGKILL` deliberately bypasses all of it.** It terminates from the
+sender, ignoring dispositions, which is what makes Force Quit
+trustworthy against a process wedged in its own loop -- the one case the
+pending mechanism cannot reach, because such a process never returns to
+ring 3. It is also why the INTR key sends `SIGINT` rather than
+`SIGKILL`: the immediate teardown is not safe from an interrupt handler.
+
+**A guard that was written, tested and removed.** `scheduler_block_
+current()` briefly refused to park a process with a signal pending, to
+stop a woken process re-entering the same blocking call forever. A
+positive control showed it reddened nothing: the syscall-entry delivery
+above means such a process never reaches that function. Keeping it would
+have been an untestable guard with a comment claiming a mechanism that
+was not the one doing the work. It comes back if syscalls ever become
+preemptible -- every gate is an interrupt gate today, so nothing can
+raise a signal against a process part-way through one.
+
+## "Not the running process" and "not the loaded address space" are different questions
+
+Terminating a signalled process that the scheduler had already switched
+away from leaked its entire address space -- ELF pages, stack, heap,
+window buffer -- once per signal, silently, with only a log line saying
+the cleanup had been refused.
+
+`switch_to_kernel()` hands the CPU back to the kernel context **without
+changing CR3**, because every address space shares the kernel's mappings
+and the kernel context does not care which one it is standing in. So a
+victim that is no longer `current_index` can still be what CR3 points
+at. `syscall_process_kill_cleanup()` guards on "is this the CURRENT
+address space?", which is the only question it can ask, and refused.
+
+The fix is for the caller to ask the first question and then make the
+second one false: if CR3 is the victim's, move it to the kernel's before
+killing. That is safe for exactly the reason the tick did not bother --
+nothing is executing there. It is NOT safe when a process is running in
+that address space, which is the separate branch.
+
+The general lesson: a guard phrased in terms of what a function can
+observe is not the same as the invariant it was meant to enforce, and
+the gap shows up as a refusal that looks like a safety net working.
+
+## `SYS_SPAWN` carries the process group, because there is no fork to close the window
+
+POSIX has both the parent and the child call `setpgid()` after `fork()`,
+because neither can be sure which runs first and a `Ctrl-C` arriving in
+between would signal the wrong group. It is a documented race that
+POSIX papers over with a redundant call from each side.
+
+toy-os has no fork. `SYS_SPAWN` returns a process that is already
+running, so there is no second side to make the redundant call from --
+the window would be genuinely unfixable rather than merely awkward. So
+the group is an argument to the spawn: `PGID_NEW` leads a new group, a
+positive value joins one, 0 inherits the caller's. `posix_spawn` reached
+the same answer with `POSIX_SPAWN_SETPGROUP`, for the same reason.
+
+`SYS_SETPGID` still exists, for the one thing spawn cannot express: a
+process naming its own group. `/bin/tosh` calls it so that a shell
+started by init does not leave init's group in front of the console,
+which would point every `Ctrl-C` at pid 1.
+
+The field it occupies was `reserved`, which had to be zero -- so every
+caller that predates process groups passes "inherit" without an edit,
+and the "reserved must be zero" check became a range check on a real
+value.
+
+## `Ctrl-C` is recognised in the keyboard driver, and that is temporary
+
+On Unix, `Ctrl-C` is not a kernel feature at all: a terminal's line
+discipline recognises the INTR character and signals the terminal's
+foreground process group. Every piece of that sentence is a separate
+mechanism, and it is why `Ctrl-C` is the last thing a system gets rather
+than the first.
+
+toy-os has no line discipline -- fd 0 is raw, with no echo control and
+no cooked mode. The recognition therefore lives in `keyboard.c`, which
+is the one place a key arrives, and `kernel/tty.h` says plainly that it
+belongs somewhere else. Putting it in the driver first and moving it
+later is the right order; discovering it later as a layering mistake
+would not be.
+
+**The two outcomes of `tty_intr()` are the two states a shell is in**,
+and keeping both is what makes the feature additive rather than a
+replacement. With a job in front, the group is signalled and the byte is
+DISCARDED, which is what a line discipline does with INTR -- delivering
+it as well would leave a stray `0x03` for whoever reads next, and the
+shell is exactly who that is. With no job, nothing is signalled and the
+byte goes through, so `Ctrl-C` at a prompt still abandons the line
+through the same `KLINE_CANCEL` both shells have always had.
+
+The consequence worth stating: **the shell has to print the `^C`
+itself**, because with a job running the editor never sees the key.
+`bash` prints it from the same place and for the same reason.

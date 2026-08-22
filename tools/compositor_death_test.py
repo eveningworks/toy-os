@@ -165,8 +165,14 @@ def run_ring3(dbg, desktop_pid):
     time.sleep(2.0)
     after = "\n".join(dbg.logs()) + killed
 
+    # `sh kill <pid>` now sends a SIGNAL (SIGTERM by default) rather than
+    # ending the process with a raw exit code -- so the reply is "sent
+    # SIGTERM to pid N -- toywm", not the "ended pid N" this used to
+    # match. The NAME is the half worth keeping either way: it is what
+    # distinguishes killing the desktop from killing whatever else
+    # happened to be in that slot.
     check("the desktop can be killed at all",
-          "ended pid" in killed and "toywm" in killed, killed.strip()[:60])
+          "sent SIG" in killed and "toywm" in killed, killed.strip()[:60])
 
     # THE exit criterion. `sh` is served by the kernel context, which is
     # not the process that just died, so an answer here is a liveness
