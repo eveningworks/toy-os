@@ -487,8 +487,28 @@ one, `poll()` if it does not). `lsdev` lists them.
 **A key is an evdev KEYCODE**, Linux's numbering, not an AT scancode --
 so a table lifted from a HID or virtio specification lines up without
 adjustment. That is the point: a USB keyboard has no scancodes to speak
-of. The PS/2 driver is the exception and feeds its own state machine
-directly, because it already speaks set 1 and so do the layout tables.
+of.
+
+**AND IT IS EVDEV ALL THE WAY UP NOW, INCLUDING `/etc/kbs`.** The layout
+tables used to be keyed on AT set-1 scancodes, which made the sentence
+above half true: the canonical event was evdev, but anything that was
+not PS/2 had to be translated DOWN into set 1 by the input core to be
+understood. That table was hand-kept and pointed the wrong way, and it
+duly grew a hole -- `KEY_102ND`, the ISO key that carries `|` on every
+Nordic layout, so a pipeline could be typed on PS/2 and not on
+`INPUT=virtio`, with nothing noticing.
+
+The shape now is Linux's: **`keyboard_feed_byte()` is the only place in
+the kernel an AT scancode exists**, it converts set 1 to a keycode on
+the way in, and `keyboard_key_event(keycode, down)` is what every driver
+reaches -- `input_report_key()` calls it with no translation at all.
+`atkbd` does exactly this and nothing above it sees a scancode either.
+
+Two things follow. **A new keyboard needs no table**: report keycodes
+and you are done. And **the one table left is the LEGACY one**, so a
+hole in it breaks the old path rather than the new -- which is also
+what `input_test.c` checks, by requiring every keycode the active layout
+maps to be producible from some PS/2 wire byte.
 
 Three traps. **`INPUT_KEY_*` and `KEY_*` are different vocabularies**
 (the wire's numbers versus the key ring's; four of them collided when

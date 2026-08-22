@@ -6,6 +6,7 @@
 #include "scheduler.h" // scheduler_idle(), and the fd-0 reader wake below
 #include "syscall_abi.h" // SYS_RETRY -- the wake value a parked fd-0 read gets
 #include "string.h" // k_tolower() -- the Ctrl-key fold
+#include "input.h" // INPUT_KEY_* -- the evdev keycodes everything above the wire uses
 #include "tty.h" // tty_intr() -- what Ctrl-C means, see its own header
 
 #define KBD_DATA_PORT 0x60
@@ -98,108 +99,153 @@ static int ring_pop(uint32_t *out) {
     return 1;
 }
 
-#define SC_ARROW_UP    0x48
-#define SC_ARROW_DOWN  0x50
-#define SC_PAGE_UP     0x49
-#define SC_PAGE_DOWN   0x51
-#define SC_ARROW_LEFT  0x4B
-#define SC_ARROW_RIGHT 0x4D
-#define SC_HOME        0x47
-#define SC_END         0x4F
-#define SC_DELETE      0x53
-
-// The function keys, unlike the keys above, aren't 0xE0-prefixed
-// extended scancodes -- they're plain scancodes like any letter key,
-// just ones no layout table maps to anything (0x3C-0x3E and 0x44 are
-// unmapped -- 0, same "nothing happens" as any other unmapped slot).
-// Checked explicitly, before the layout translation, same as the shift
-// keys below them.
+// --- the PS/2 WIRE, and nothing above it -----------------------------
 //
-// Only the four with callers exist: F2/F3 (the file manager), F10 (focus
-// the menu bar) and F4 (Alt+F4 closes a window). Pushing them here and
-// not through the layout translation is also what keeps Alt+F4 whole --
-// it returns before the Alt-prefixes-with-ESC path below, so the key
-// arrives once, with KEY_MOD_ALT set, rather than as ESC + something.
-#define SC_F2 0x3C
-#define SC_F3 0x3D
-#define SC_F4  0x3E
-#define SC_F10 0x44
+// **THE ONE PLACE AN AT SCANCODE EXISTS IN THIS KERNEL.** Everything
+// above keyboard_key_event() speaks Linux evdev keycodes, which is what
+// virtio-input and a USB keyboard report natively and what /etc/kbs is
+// keyed on. This driver is the legacy one, so the legacy encoding stops
+// here -- exactly where Linux keeps it (`atkbd` translates set 1 into
+// keycodes and nothing above it ever sees a scancode).
+//
+// It used to be the other way round: the layout was keyed on scancodes,
+// so the INPUT CORE translated evdev DOWN into set 1 for every non-PS/2
+// device. That table duly grew a hole -- KEY_102ND, the ISO key that
+// carries `|` on every Nordic layout, was missing -- and `|` could be
+// typed on PS/2 and not on virtio-input. Pointing the translation the
+// other way deletes the table rather than fixing it.
+//
+// For the unprefixed block the mapping is the IDENTITY, and that is not
+// luck: evdev's numbering was taken from AT set 1 (KEY_1 = 2 = 0x02, up
+// to KEY_F12 = 88 = 0x58). Only the 0xE0-prefixed keys need a table,
+// because those are the ones evdev renumbered.
+static uint16_t ext_keycode(uint8_t sc) {
+    switch (sc) { // dispatch-ok: bounded by the 0xE0 codes a PS/2 keyboard emits
+    case 0x1C: return INPUT_KEY_KPENTER;
+    case 0x1D: return INPUT_KEY_RIGHTCTRL;
+    case 0x35: return INPUT_KEY_KPSLASH;
+    case 0x38: return INPUT_KEY_RIGHTALT;   // AltGr -- see keyboard_key_event
+    case 0x47: return INPUT_KEY_HOME;
+    case 0x48: return INPUT_KEY_UP;
+    case 0x49: return INPUT_KEY_PAGEUP;
+    case 0x4B: return INPUT_KEY_LEFT;
+    case 0x4D: return INPUT_KEY_RIGHT;
+    case 0x4F: return INPUT_KEY_END;
+    case 0x50: return INPUT_KEY_DOWN;
+    case 0x51: return INPUT_KEY_PAGEDOWN;
+    case 0x52: return INPUT_KEY_INSERT;
+    case 0x53: return INPUT_KEY_DELETE;
+    case 0x5B: return INPUT_KEY_LEFTMETA;
+    case 0x5C: return INPUT_KEY_RIGHTMETA;
+    case 0x5D: return INPUT_KEY_COMPOSE;
+    default:   return 0;                    // a key this kernel has no name for
+    }
+}
 
-// The Windows/Super/Meta keys, both 0xE0-prefixed. Their RELEASE
-// codes (0xDB/0xDC) have bit 7 set, so the press-only guard below
-// already excludes them -- the desktop wants the keypress, not a
-// held-modifier state, since this key ACTS rather than modifies.
-#define SC_SUPER_L 0x5B
-#define SC_SUPER_R 0x5C
+int keyboard_wire_keycode(uint8_t sc, int extended, uint16_t *out) {
+    uint16_t kc = extended ? ext_keycode((uint8_t)(sc & 0x7F))
+                            : (uint16_t)(sc & 0x7F);
+    if (!kc) return 0;
+    if (out) *out = kc;
+    return 1;
+}
 
 // Processes one byte already read from the 8042 by i8042_poll(). This
 // must NOT read port 0x60 itself -- see i8042.h for why.
+//
+// THE WIRE ONLY: an 0xE0 prefix, a release bit, and a scancode. What the
+// key MEANS is keyboard_key_event()'s, which every driver reaches --
+// this function is what makes PS/2 one of them rather than the one the
+// others have to imitate.
 void keyboard_feed_byte(uint8_t sc) {
-
     if (sc == 0xE0) {
         extended_prefix = 1;
         return;
     }
 
+    int down = !(sc & 0x80);
+    uint8_t code = sc & 0x7F;
+
+    uint16_t keycode;
     if (extended_prefix) {
         extended_prefix = 0;
-        if (sc == RIGHT_ALT_PRESS) { altgr_pressed = 1; return; }
-        if (sc == RIGHT_ALT_RELEASE) { altgr_pressed = 0; return; }
-        if (sc == CTRL_PRESS) { ctrl_pressed = 1; return; }   // right Ctrl
-        if (sc == CTRL_RELEASE) { ctrl_pressed = 0; return; }
-        if (!(sc & 0x80)) { // key press, not release
-            // Ctrl+Left/Right are word motion in every readline-ish
-            // line editor, so they get their own codes -- exactly the
-            // KEY_SHIFT_ARROW_* precedent right below, resolved here
-            // from live modifier state at keypress time for the same
-            // reason (see docs/decisions.md).
-            if (ctrl_pressed && sc == SC_ARROW_LEFT) { ring_push(KEY_CTRL_ARROW_LEFT); return; }
-            if (ctrl_pressed && sc == SC_ARROW_RIGHT) { ring_push(KEY_CTRL_ARROW_RIGHT); return; }
-            // Shift+arrow/Home/End get their own codes, decided right
-            // here from the live `shift_pressed` state -- same timing
-            // as the ASCII table swap below for ordinary letter keys,
-            // so a shift release racing the arrow keypress resolves the
-            // same way either family of key already does.
-            if (sc == SC_ARROW_UP) ring_push(shift_pressed ? KEY_SHIFT_ARROW_UP : KEY_ARROW_UP);
-            else if (sc == SC_ARROW_DOWN) ring_push(shift_pressed ? KEY_SHIFT_ARROW_DOWN : KEY_ARROW_DOWN);
-            else if (sc == SC_PAGE_UP) ring_push(KEY_PAGE_UP);
-            else if (sc == SC_PAGE_DOWN) ring_push(KEY_PAGE_DOWN);
-            else if (sc == SC_ARROW_LEFT) ring_push(shift_pressed ? KEY_SHIFT_ARROW_LEFT : KEY_ARROW_LEFT);
-            else if (sc == SC_ARROW_RIGHT) ring_push(shift_pressed ? KEY_SHIFT_ARROW_RIGHT : KEY_ARROW_RIGHT);
-            else if (sc == SC_HOME) ring_push(shift_pressed ? KEY_SHIFT_HOME : KEY_HOME);
-            else if (sc == SC_END) ring_push(shift_pressed ? KEY_SHIFT_END : KEY_END);
-            else if (sc == SC_DELETE) ring_push(KEY_DELETE);
-            // Super/Win opens the Start menu, the way it does on
-            // Windows and KDE. Both sides send the same code: no
-            // desktop distinguishes them, and nothing here should
-            // invent a distinction (same call the driver already
-            // makes for left/right Ctrl).
-            else if (sc == SC_SUPER_L || sc == SC_SUPER_R) ring_push(KEY_SUPER);
-        }
-        return;
+        keycode = ext_keycode(code);
+    } else {
+        // The identity, for the reason ext_keycode() states.
+        keycode = code;
+    }
+    if (!keycode) return;
+    keyboard_key_event(keycode, down);
+}
+
+// --- what a key MEANS, for every driver ------------------------------
+//
+// Keyed on evdev keycodes, so a key behaves identically whether it
+// arrived over PS/2, virtio-input or anything added later. That is the
+// property the input core exists for, and until the layout was re-keyed
+// it was not actually true -- see ext_keycode() above.
+void keyboard_key_event(uint16_t keycode, int down) {
+    // Modifiers first, and they are the only keys whose RELEASE matters.
+    //
+    // LEFT ALT AND RIGHT ALT ARE DIFFERENT KEYS HERE, deliberately: left
+    // Alt is readline's Meta, while right Alt is AltGr, a LAYOUT
+    // modifier that picks a third character. Conflating them would make
+    // AltGr-b try to be Meta-b on a Nordic layout. evdev gives them
+    // separate keycodes, so this needs no prefix bookkeeping -- which is
+    // exactly the kind of thing the scancode encoding made fiddly.
+    switch (keycode) { // dispatch-ok: the modifier set is bounded by the keyboard
+    case INPUT_KEY_LEFTSHIFT:
+    case INPUT_KEY_RIGHTSHIFT: shift_pressed = down; return;
+    case INPUT_KEY_LEFTCTRL:
+    case INPUT_KEY_RIGHTCTRL:  ctrl_pressed = down; return;
+    case INPUT_KEY_LEFTALT:    alt_pressed = down; return;
+    case INPUT_KEY_RIGHTALT:   altgr_pressed = down; return;
+    default: break;
     }
 
-    if (sc == LEFT_SHIFT_PRESS || sc == RIGHT_SHIFT_PRESS) {
-        shift_pressed = 1;
-        return;
-    }
-    if (sc == LEFT_SHIFT_RELEASE || sc == RIGHT_SHIFT_RELEASE) {
-        shift_pressed = 0;
-        return;
-    }
-    if (sc == CTRL_PRESS) { ctrl_pressed = 1; return; }       // left Ctrl
-    if (sc == CTRL_RELEASE) { ctrl_pressed = 0; return; }
-    if (sc == LEFT_ALT_PRESS) { alt_pressed = 1; return; }    // Meta -- not AltGr, see above
-    if (sc == LEFT_ALT_RELEASE) { alt_pressed = 0; return; }
-    if (sc & 0x80) return; // other key releases ignored
+    if (!down) return; // every other key release is ignored
 
-    if (sc == SC_F2) { ring_push(KEY_F2); return; }
-    if (sc == SC_F3) { ring_push(KEY_F3); return; }
-    if (sc == SC_F4) { ring_push(KEY_F4); return; }
-    if (sc == SC_F10) { ring_push(KEY_F10); return; }
+    // Ctrl+Left/Right are word motion in every readline-ish line editor,
+    // so they get their own codes -- exactly the KEY_SHIFT_ARROW_*
+    // precedent below, resolved here from live modifier state at
+    // keypress time for the same reason (see docs/decisions.md).
+    if (ctrl_pressed && keycode == INPUT_KEY_LEFT)  { ring_push(KEY_CTRL_ARROW_LEFT); return; }
+    if (ctrl_pressed && keycode == INPUT_KEY_RIGHT) { ring_push(KEY_CTRL_ARROW_RIGHT); return; }
 
-    if (sc >= 128) return;
-    char c = keyboard_layout_translate(sc, shift_pressed, altgr_pressed);
+    // Shift+arrow/Home/End get their own codes, decided right here from
+    // the live `shift_pressed` state -- same timing as the layout lookup
+    // below for ordinary letter keys, so a shift release racing the
+    // arrow keypress resolves the same way either family already does.
+    switch (keycode) { // dispatch-ok: bounded by the navigation block
+    case INPUT_KEY_UP:       ring_push(shift_pressed ? KEY_SHIFT_ARROW_UP : KEY_ARROW_UP); return;
+    case INPUT_KEY_DOWN:     ring_push(shift_pressed ? KEY_SHIFT_ARROW_DOWN : KEY_ARROW_DOWN); return;
+    case INPUT_KEY_LEFT:     ring_push(shift_pressed ? KEY_SHIFT_ARROW_LEFT : KEY_ARROW_LEFT); return;
+    case INPUT_KEY_RIGHT:    ring_push(shift_pressed ? KEY_SHIFT_ARROW_RIGHT : KEY_ARROW_RIGHT); return;
+    case INPUT_KEY_HOME:     ring_push(shift_pressed ? KEY_SHIFT_HOME : KEY_HOME); return;
+    case INPUT_KEY_END:      ring_push(shift_pressed ? KEY_SHIFT_END : KEY_END); return;
+    case INPUT_KEY_PAGEUP:   ring_push(KEY_PAGE_UP); return;
+    case INPUT_KEY_PAGEDOWN: ring_push(KEY_PAGE_DOWN); return;
+    case INPUT_KEY_DELETE:   ring_push(KEY_DELETE); return;
+    // Super/Win opens the Start menu, the way it does on Windows and
+    // KDE. Both sides send the same code: no desktop distinguishes
+    // them, and nothing here should invent a distinction (the same call
+    // this driver already makes for left/right Ctrl).
+    case INPUT_KEY_LEFTMETA:
+    case INPUT_KEY_RIGHTMETA: ring_push(KEY_SUPER); return;
+    // The four function keys with callers: F2/F3 (the file manager),
+    // F10 (focus the menu bar) and F4 (Alt+F4 closes a window). Pushed
+    // here rather than through the layout is also what keeps Alt+F4
+    // whole -- it returns before the Alt-prefixes-with-ESC path below,
+    // so the key arrives once, with KEY_MOD_ALT set, rather than as ESC
+    // followed by something.
+    case INPUT_KEY_F2:  ring_push(KEY_F2); return;
+    case INPUT_KEY_F3:  ring_push(KEY_F3); return;
+    case INPUT_KEY_F4:  ring_push(KEY_F4); return;
+    case INPUT_KEY_F10: ring_push(KEY_F10); return;
+    default: break;
+    }
+
+    char c = keyboard_layout_translate(keycode, shift_pressed, altgr_pressed);
     if (!c) return;
 
     // Ctrl and Alt are encoded the way a real terminal encodes them --

@@ -81,20 +81,14 @@ void input_poll_sources(void);
 // A key went down (1) or up (0), by evdev keycode.
 void input_report_key(uint16_t keycode, int down);
 
-// The AT set-1 scancode `keycode` translates to, without feeding it to
-// anybody. Returns 1 and fills `*out_sc` (and `*out_prefixed`, if given)
-// for a keycode this kernel can name; 0 for one it drops.
-//
-// EXPOSED SO THE PARITY CHECK CAN EXIST. A key must behave the same
-// whichever driver reported it -- that is the whole point of every
-// device meeting here -- and the translation below is a hand-kept table,
-// which is exactly the kind of thing that grows a hole nobody notices.
-// One did: the ISO key carrying `|` was missing, so a pipeline could be
-// typed on PS/2 and not on virtio-input. input_test.c now asserts that
-// EVERY scancode the active layout maps is reachable from some keycode,
-// so the next hole is a failed test rather than a key that silently
-// does nothing.
-int input_keycode_to_scancode(uint16_t keycode, uint8_t *out_sc, int *out_prefixed);
+// **THERE IS NO KEYCODE-TO-SCANCODE TRANSLATION ANY MORE.** There was,
+// and it is what this header used to spend a paragraph on: the layout
+// tables were keyed on AT scancodes, so every non-PS/2 device had to be
+// converted down into a legacy encoding by a hand-kept table -- which
+// grew a hole (KEY_102ND, the ISO key carrying `|`) that made a
+// pipeline untypeable on virtio-input and fine on PS/2. /etc/kbs is
+// keyed on evdev keycodes now, so a keycode goes straight to
+// keyboard_key_event() and there is nothing left to have a hole in.
 
 // Relative pointer motion, in device counts. Speed and acceleration are
 // applied by the pointer state, not by the caller.
@@ -138,6 +132,9 @@ void input_report_wheel(int notches);
 #define INPUT_KEY_SPACE 57
 #define INPUT_KEY_CAPSLOCK 58
 #define INPUT_KEY_F1 59
+#define INPUT_KEY_F2 60
+#define INPUT_KEY_F3 61
+#define INPUT_KEY_F4 62
 #define INPUT_KEY_F10 68
 // 1..83 are the AT set-1 make codes unchanged (see gen_kbs.py's note:
 // XKB keycodes are evdev + 8, and evdev matches set 1 for this block).

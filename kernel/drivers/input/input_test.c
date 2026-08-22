@@ -186,76 +186,87 @@ KTEST("input", "the PS/2 pair registered itself with the core") {
 // --- EVERY KEY MUST WORK WHATEVER REPORTED IT ------------------------
 //
 // The property the input core exists for: which driver a key came from
-// is not supposed to be observable. PS/2 hands keyboard.c an AT set-1
-// scancode directly; virtio-input hands input_report_key() an evdev
-// keycode, which this file translates to the same scancode. If the
-// translation has a hole, a key works on one machine and silently does
-// nothing on another -- which is not a "some keys are unsupported"
-// situation, it is the same keyboard behaving differently for reasons
-// the user cannot see.
+// is not supposed to be observable.
 //
-// One hole existed and this is the check that would have caught it:
-// KEY_102ND, the extra key an ISO keyboard has between Left Shift and
-// Z, which carries `|` on every Nordic layout. It sat just past the
-// direct range and was not in the table, so `cat x | grep y` could be
-// typed on a PS/2 boot and NOT on an `INPUT=virtio` one.
+// **THAT IS NOW TRUE BY CONSTRUCTION FOR EVERYTHING EXCEPT PS/2.**
+// /etc/kbs is keyed on evdev keycodes, virtio-input reports evdev
+// keycodes, and input_report_key() hands one straight to
+// keyboard_key_event() -- there is no table in between to have a hole
+// in. It used to translate evdev DOWN into AT set-1 scancodes, and that
+// table did have a hole: KEY_102ND, the ISO key carrying `|` on every
+// Nordic layout, so a pipeline could be typed on PS/2 and not on
+// virtio-input.
+//
+// What remains is the LEGACY direction -- the PS/2 wire's set-1 bytes
+// translated up into keycodes, inside the PS/2 driver, exactly where
+// Linux keeps it. These check that one, so a hole there fails the build
+// instead of quietly disabling a key on one machine.
 
-KTEST("input", "every scancode the layout maps is reachable from a keycode") {
-    // Build the reverse map once: keycode -> scancode, over every
-    // keycode a device could plausibly report. 255 is evdev's own
-    // KEY_MAX for the range that matters here; anything above it is
-    // media and consumer keys with no character.
-    int reachable[128];
-    for (int i = 0; i < 128; i++) reachable[i] = 0;
-    for (uint16_t kc = 1; kc <= 255; kc++) {
-        uint8_t sc; int prefixed;
-        if (!input_keycode_to_scancode(kc, &sc, &prefixed)) continue;
-        // A PREFIXED code is a DIFFERENT key from the bare one -- 0xE0
-        // 0x35 is the keypad slash, not the scancode 0x35 the layout
-        // maps. Only unprefixed codes can satisfy a layout entry, and
-        // counting them together is how this check would have passed
-        // while the bug was present.
-        if (prefixed) continue;
-        if (sc < 128) reachable[sc] = 1;
+KTEST("input", "every keycode the layout maps is reachable from the PS/2 wire") {
+    // Build the forward map once: every wire byte, prefixed and not,
+    // to the keycode it produces.
+    // STATIC: 256 ints is a kilobyte, against the kernel's 1024-byte
+    // frame budget and a 16 KiB stack with one guard page below it. A
+    // KTEST is single-threaded and runs once, so .bss is the right home.
+    static int reachable[256];
+    for (int i = 0; i < 256; i++) reachable[i] = 0;
+    for (int ext = 0; ext <= 1; ext++) {
+        for (int sc = 1; sc < 128; sc++) {
+            uint16_t kc = 0;
+            if (!keyboard_wire_keycode((uint8_t)sc, ext, &kc)) continue;
+            if (kc < 256) reachable[kc] = 1;
+        }
     }
 
-    // Every scancode the ACTIVE layout gives a character to, at any
+    // Every keycode the ACTIVE layout gives a character to, at any
     // level. Asked of the layout rather than listed here, so this covers
-    // whichever layout the machine booted with and gains new keys when
-    // a layout does.
+    // whichever one the machine booted with and gains new keys when a
+    // layout does.
     int missing = -1, missing_count = 0;
-    for (int sc = 1; sc < 128; sc++) {
-        int mapped = keyboard_layout_translate((uint8_t)sc, 0, 0) != 0
-                  || keyboard_layout_translate((uint8_t)sc, 1, 0) != 0
-                  || keyboard_layout_translate((uint8_t)sc, 0, 1) != 0;
-        if (!mapped || reachable[sc]) continue;
-        if (missing < 0) missing = sc;
+    for (int kc = 1; kc < 256; kc++) {
+        int mapped = keyboard_layout_translate((uint16_t)kc, 0, 0) != 0
+                  || keyboard_layout_translate((uint16_t)kc, 1, 0) != 0
+                  || keyboard_layout_translate((uint16_t)kc, 0, 1) != 0;
+        if (!mapped || reachable[kc]) continue;
+        if (missing < 0) missing = kc;
         missing_count++;
     }
     // Named rather than counted: "3 unreachable" sends the next reader
-    // looking, "0x56" tells them which key.
+    // looking, "86" tells them which key.
     if (missing >= 0)
-        klog_printf("input: scancode 0x%x maps a character no keycode reaches "
-                    "(%d in total)\n", missing, missing_count);
+        klog_printf("input: keycode %d maps a character no PS/2 wire byte "
+                    "produces (%d in total)\n", missing, missing_count);
     KTEST_ASSERT_EQ(missing_count, 0);
 }
 
-KTEST("input", "the ISO key that carries `|` translates, and is not prefixed") {
+KTEST("input", "the ISO key that carries `|` survives the PS/2 wire unprefixed") {
     // The specific regression, pinned by name. The check above is the
-    // general property and would catch this too -- but only while some
-    // layout maps 0x56, and a US-only boot does not. This one holds
-    // whatever is loaded.
-    uint8_t sc = 0;
-    int prefixed = 1;
-    KTEST_ASSERT(input_keycode_to_scancode(INPUT_KEY_102ND, &sc, &prefixed));
-    KTEST_ASSERT_EQ((int)sc, 0x56);
-    // NOT prefixed: feeding 0xE0 0x56 would make keyboard.c read it as
-    // an extended key of that number, which is nothing -- so the key
-    // would still vanish, just for a second reason.
-    KTEST_ASSERT_EQ(prefixed, 0);
+    // general property and would catch it too -- but only while some
+    // layout maps keycode 86, and a US-only boot does not. This one
+    // holds whatever is loaded.
+    uint16_t kc = 0;
+    KTEST_ASSERT(keyboard_wire_keycode(0x56, 0, &kc));
+    KTEST_ASSERT_EQ((int)kc, INPUT_KEY_102ND);
 
-    // ...and a keycode this kernel has no name for is still refused,
-    // so the check above cannot pass by the translation accepting
-    // everything.
-    KTEST_ASSERT(!input_keycode_to_scancode(700, &sc, &prefixed));
+    // PREFIXED, 0x56 is a different key and this kernel has no name for
+    // it -- so a driver that added a stray 0xE0 would still lose the
+    // key, just for a second reason.
+    KTEST_ASSERT(!keyboard_wire_keycode(0x56, 1, &kc));
+}
+
+KTEST("input", "a keycode goes to the layout unchanged, whichever driver reported it") {
+    // The evdev numbering is what BOTH paths now carry, so the layout
+    // sees the same number either way. Asserted through the layout
+    // rather than by injecting a key: a KTEST runs in the live kernel,
+    // and feeding the real key ring would steal a keystroke from
+    // whoever is typing.
+    //
+    // The escape key is the fixture because every layout has it at
+    // keycode 1 and its character (0x1B) is the same everywhere, so this
+    // does not depend on which layout booted.
+    KTEST_ASSERT_EQ((int)keyboard_layout_translate(INPUT_KEY_ESC, 0, 0), 0x1B);
+
+    // ...and a keycode past the table is refused rather than read out of
+    // bounds, which is what stops the loop above walking off the end.
+    KTEST_ASSERT_EQ((int)keyboard_layout_translate(60000, 0, 0), 0);
 }

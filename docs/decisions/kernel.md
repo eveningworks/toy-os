@@ -3889,3 +3889,58 @@ through the same `KLINE_CANCEL` both shells have always had.
 The consequence worth stating: **the shell has to print the `^C`
 itself**, because with a job running the editor never sees the key.
 `bash` prints it from the same place and for the same reason.
+
+## The keyboard layout is keyed on evdev keycodes, so only the PS/2 driver sees a scancode
+
+**The bug that forced the question.** `|` could not be typed at all on an
+`INPUT=virtio` boot, and worked perfectly on PS/2. The key is `KEY_102ND`
+-- the extra key an ISO keyboard has between Left Shift and Z, which on
+every Nordic layout carries `<`, `>` and, with AltGr, `|`. So a pipeline
+was untypeable on one keyboard and fine on the other, which is not a
+"some keys are unsupported" situation: it is the same keyboard behaving
+differently for a reason the user cannot see.
+
+**The mechanism was a table pointing the wrong way.** `input.h` declared
+evdev the canonical event -- correctly, since that is what virtio-input
+and a USB keyboard report natively -- but `/etc/kbs/*` was keyed on AT
+set-1 SCANCODES. So the input core had to translate evdev DOWN into a
+legacy encoding for every non-PS/2 device, through a hand-kept list. The
+direct range stopped at 83 and the extended table only held 0xE0-prefixed
+keys, so keycode 86 fell between them and was dropped.
+
+**Filling the hole was not the fix.** A hand-kept table in the wrong
+direction grows another hole the next time a device reports a key nobody
+tried; the parity check that would catch it is a guard on a design that
+did not need guarding. So the layout was re-keyed on evdev and the table
+DELETED.
+
+**What Linux does, which is what this now is.** `atkbd` translates AT set
+1 into evdev keycodes and `hid-input` translates HID usages into them;
+above that, everything -- the console keymap, XKB -- is keyed on
+keycodes. There is exactly one translation, at the very bottom, inside
+the LEGACY driver. toy-os had it inverted. Now `keyboard_feed_byte()` is
+the only place in the kernel an AT scancode exists, and
+`keyboard_key_event(keycode, down)` is what every driver reaches --
+`input_report_key()` calls it with nothing in between.
+
+**Why the data did not change.** evdev's numbering was taken from AT set
+1, so the two agree for the whole primary block (KEY_1 = 2 = 0x02, up to
+KEY_F12 = 88 = 0x58). Every value in `/etc/kbs` stayed the same; only the
+key names did (`sc_2a=` became `kc_42=`, hex to decimal). That
+coincidence is exactly why the old naming looked right for years, and
+why the hole was invisible until a device reported a key from the part of
+the range where the coincidence stops mattering.
+
+**Two consequences worth stating.** `tools/gen_kbs.py` got SIMPLER -- XKB
+keycodes are evdev + 8, so it now emits what it already had instead of
+converting down. And a layout file that parses to NOTHING is refused
+rather than loaded, because a disk carrying the old `sc_` form would
+otherwise produce an empty table and a keyboard that types nothing: a
+dead machine, from a file that read perfectly.
+
+**What is still hand-kept, and why that is the right place for it.** The
+PS/2 driver's set-1 -> keycode table. A hole there breaks the LEGACY
+path rather than every modern one, and `input_test.c` asserts that every
+keycode the active layout maps is producible from some wire byte -- with
+a second, named check for `KEY_102ND`, because the general one passes
+vacuously on a `us` boot where no layout maps that key.

@@ -43,83 +43,25 @@ void input_poll_sources(void) {
     }
 }
 
-// --- keycode -> AT set 1 ----------------------------------------------
+// --- a key, straight through -----------------------------------------
 //
-// The seam's one piece of legacy, and it is small on purpose. Codes up
-// to INPUT_KEY_EVDEV_DIRECT_MAX ARE the set-1 make codes -- that is not a
-// coincidence, it is where evdev's numbering came from -- so only the
-// keys that live behind an 0xE0 prefix need a table.
+// **THERE IS NO TRANSLATION HERE ANY MORE, AND THAT IS THE FIX.** This
+// used to convert evdev keycodes DOWN into AT set-1 scancodes, because
+// the layout tables (/etc/kbs) were keyed on scancodes -- so every
+// non-PS/2 device had to speak a legacy encoding to be understood. The
+// table was hand-kept and duly grew a hole: KEY_102ND, the ISO key that
+// carries `|` on every Nordic layout, sat just past the end of it, so a
+// pipeline could be typed on a PS/2 boot and NOT on an `INPUT=virtio`
+// one, with nothing to notice.
 //
-// It disappears when /etc/kbs is re-keyed to evdev codes; until then a
-// non-PS/2 keyboard translates once, here, rather than every driver
-// carrying its own idea of the mapping.
-// `prefixed` is what tells the two kinds apart: most keys past the
-// direct range live behind an 0xE0 prefix on the wire, but three do not
-// (evdev 86/87/88 ARE set-1 0x56/0x57/0x58). Feeding those with a
-// prefix would make keyboard.c read them as the extended keys of the
-// same number -- 0x56 prefixed is nothing, so the key would still
-// vanish, just for a second reason.
-struct mapped_key { uint16_t keycode; uint8_t scancode; uint8_t prefixed; };
-
-static const struct mapped_key MAPPED[] = {
-    // NOT prefixed: plain set-1 codes that happen to sit past the direct
-    // range. KEY_102ND is the ISO key that carries `|` on every Nordic
-    // layout -- see input.h.
-    { INPUT_KEY_102ND,     0x56, 0 },
-    { INPUT_KEY_F11,       0x57, 0 },
-    { INPUT_KEY_F12,       0x58, 0 },
-
-    { INPUT_KEY_KPENTER,   0x1C, 1 }, { INPUT_KEY_RIGHTCTRL, 0x1D, 1 },
-    { INPUT_KEY_KPSLASH,   0x35, 1 }, { INPUT_KEY_RIGHTALT,  0x38, 1 },
-    { INPUT_KEY_HOME,      0x47, 1 }, { INPUT_KEY_UP,        0x48, 1 },
-    { INPUT_KEY_PAGEUP,    0x49, 1 }, { INPUT_KEY_LEFT,      0x4B, 1 },
-    { INPUT_KEY_RIGHT,     0x4D, 1 }, { INPUT_KEY_END,       0x4F, 1 },
-    { INPUT_KEY_DOWN,      0x50, 1 }, { INPUT_KEY_PAGEDOWN,  0x51, 1 },
-    { INPUT_KEY_INSERT,    0x52, 1 }, { INPUT_KEY_DELETE,    0x53, 1 },
-    { INPUT_KEY_LEFTMETA,  0x5B, 1 }, { INPUT_KEY_RIGHTMETA, 0x5C, 1 },
-    { INPUT_KEY_COMPOSE,   0x5D, 1 },
-};
-#define MAPPED_COUNT ((int)(sizeof MAPPED / sizeof MAPPED[0]))
-
-int input_keycode_to_scancode(uint16_t keycode, uint8_t *out_sc, int *out_prefixed) {
-    if (!keycode) return 0;
-    if (keycode <= INPUT_KEY_EVDEV_DIRECT_MAX) {
-        if (out_sc) *out_sc = (uint8_t)keycode;
-        if (out_prefixed) *out_prefixed = 0;
-        return 1;
-    }
-    for (int i = 0; i < MAPPED_COUNT; i++) {
-        if (MAPPED[i].keycode != keycode) continue;
-        if (out_sc) *out_sc = MAPPED[i].scancode;
-        if (out_prefixed) *out_prefixed = MAPPED[i].prefixed;
-        return 1;
-    }
-    return 0;
-}
-
+// The layout is keyed on evdev keycodes now, so this hands the keycode
+// over unchanged and the only translation left in the kernel is set-1
+// -> keycode inside the PS/2 driver -- which is where Linux keeps it
+// (`atkbd`), and where a hole would break the LEGACY path rather than
+// the modern one. See docs/decisions.md.
 void input_report_key(uint16_t keycode, int down) {
     if (!keycode) return;
-
-    if (keycode <= INPUT_KEY_EVDEV_DIRECT_MAX) {
-        keyboard_feed_byte((uint8_t)(down ? keycode : (keycode | 0x80)));
-        return;
-    }
-
-    for (int i = 0; i < MAPPED_COUNT; i++) {
-        if (MAPPED[i].keycode != keycode) continue;
-        // The prefix and the code are two separate feeds because that is
-        // exactly what the wire looks like on PS/2, and keyboard.c's
-        // state machine is written against the wire. Splitting it here
-        // means that state machine needs no notion of "an injected key".
-        if (MAPPED[i].prefixed) keyboard_feed_byte(0xE0);
-        keyboard_feed_byte((uint8_t)(down ? MAPPED[i].scancode
-                                          : (MAPPED[i].scancode | 0x80)));
-        return;
-    }
-    // Anything else is a key this kernel has no name for. Dropped
-    // silently: a keyboard reports many keys nothing here consumes
-    // (media keys, a second numeric block), and logging each one would
-    // turn a harmless keypress into a flood.
+    keyboard_key_event(keycode, down);
 }
 
 void input_report_rel(int dx, int dy) { mouse_feed_rel(dx, dy); }

@@ -34,8 +34,21 @@
 
 #define KB_LAYOUT_DIR "/etc/kbs/"
 
-static char g_table[128];
-static char g_table_shift[128];
+// **INDEXED BY EVDEV KEYCODE, NOT BY AT SCANCODE.** The two agree for
+// the whole primary block, which is why the values in /etc/kbs did not
+// change when the keying did -- but the MEANING is what matters: evdev
+// is what every non-PS/2 keyboard reports natively, so a layout keyed on
+// it needs no translation from any driver. The one translation left is
+// set-1 -> keycode inside the PS/2 driver, which is where Linux keeps
+// it too (`atkbd`). See docs/decisions.md.
+//
+// 256 rather than 128 because evdev keeps going past the block that
+// coincides with set 1; nothing above 127 maps a character today, and
+// the table costs 768 bytes for all three levels.
+#define KB_KEYCODE_MAX 256
+
+static char g_table[KB_KEYCODE_MAX];
+static char g_table_shift[KB_KEYCODE_MAX];
 // AltGr level (XKB "level 3") -- see keyboard_layout.h's
 // keyboard_layout_translate() doc comment for the level-4
 // (Shift+AltGr) scope limit. No FALLBACK_US_ALTGR exists: the
@@ -45,7 +58,7 @@ static char g_table_shift[128];
 // there -- g_table_altgr just stays all-zero (no AltGr chars) when the
 // fallback is active, same "0 means nothing" convention every unmapped
 // slot already has.
-static char g_table_altgr[128];
+static char g_table_altgr[KB_KEYCODE_MAX];
 static char g_current_name[KB_LAYOUT_NAME_MAX] = "us";
 
 // Compiled-in last-resort US table -- applied only if /etc/kbs/us
@@ -69,8 +82,13 @@ static const char FALLBACK_US_SHIFT[128] = {
 };
 
 static void apply_fallback_us(void) {
-    k_memcpy(g_table, FALLBACK_US, sizeof(g_table));
-    k_memcpy(g_table_shift, FALLBACK_US_SHIFT, sizeof(g_table_shift));
+    // The compiled-in tables cover 0..127 only, which is every key they
+    // ever had; clear first so the rest of the keycode space is empty
+    // rather than whatever a previous layout left there.
+    k_memset(g_table, 0, sizeof(g_table));
+    k_memset(g_table_shift, 0, sizeof(g_table_shift));
+    k_memcpy(g_table, FALLBACK_US, sizeof(FALLBACK_US));
+    k_memcpy(g_table_shift, FALLBACK_US_SHIFT, sizeof(FALLBACK_US_SHIFT));
     // No FALLBACK_US_ALTGR -- see g_table_altgr's own declaration
     // comment. Still needs clearing here (not just at load_from_file()
     // time) so falling back mid-session doesn't leave a previously
@@ -79,16 +97,6 @@ static void apply_fallback_us(void) {
     k_memset(g_table_altgr, 0, sizeof(g_table_altgr));
 }
 
-// Parses exactly 2 hex digits at s[0..1] into *out. Returns 1 on
-// success, 0 if either isn't a hex digit. The digit-value lookup this
-// used to carry (plus its is_hex_digit() companion) is knum.h's
-// k_hex_digit() now -- three files had written that same function.
-static int parse_hex2(const char *s, uint8_t *out) {
-    int hi = k_hex_digit(s[0]), lo = k_hex_digit(s[1]);
-    if (hi < 0 || lo < 0) return 0;
-    *out = (uint8_t)((hi << 4) | lo);
-    return 1;
-}
 
 // Parses a value field: a single literal byte, or "0x<hex digits>" for
 // a codepoint above ASCII. Returns the byte value, or -1 if `value`
@@ -118,12 +126,26 @@ static void apply_line(const char *line, uint32_t len) {
     while (i < len && k_isblank(line[i])) i++;
     if (i >= len || line[i] == '#') return; // blank or whole-line comment
 
-    // Expect "sc_" + 2 hex digits.
+    // Expect "kc_" + a DECIMAL evdev keycode.
+    //
+    // `kc_` and decimal, where this used to be `sc_` and hex, and both
+    // halves are deliberate: the name says which vocabulary the number
+    // is in, and decimal is how evdev keycodes are written everywhere
+    // (KEY_102ND is 86, not 0x56). A file in the old form parses to
+    // nothing here, which load_from_file() notices and refuses -- see
+    // its comment, because a silently empty layout is a dead keyboard.
     if (len - i < 5) return;
-    if (line[i] != 's' || line[i+1] != 'c' || line[i+2] != '_') return;
-    uint8_t scancode;
-    if (!parse_hex2(line + i + 3, &scancode)) return;
-    i += 5;
+    if (line[i] != 'k' || line[i+1] != 'c' || line[i+2] != '_') return;
+    i += 3;
+    uint32_t keycode = 0;
+    uint32_t digits = 0;
+    while (i < len && line[i] >= '0' && line[i] <= '9') {
+        keycode = keycode * 10 + (uint32_t)(line[i] - '0');
+        if (keycode >= KB_KEYCODE_MAX) return; // out of range, refused not wrapped
+        i++;
+        digits++;
+    }
+    if (!digits || keycode == 0) return;
 
     enum { LEVEL_BASE, LEVEL_SHIFT, LEVEL_ALTGR } level = LEVEL_BASE;
     static const char SHIFT_SUFFIX[] = "_shift";
@@ -156,9 +178,9 @@ static void apply_line(const char *line, uint32_t len) {
     int v = parse_value(value, value_len);
     if (v < 0) return;
 
-    if (level == LEVEL_SHIFT) g_table_shift[scancode] = (char)v;
-    else if (level == LEVEL_ALTGR) g_table_altgr[scancode] = (char)v;
-    else g_table[scancode] = (char)v;
+    if (level == LEVEL_SHIFT) g_table_shift[keycode] = (char)v;
+    else if (level == LEVEL_ALTGR) g_table_altgr[keycode] = (char)v;
+    else g_table[keycode] = (char)v;
 }
 
 // Reads and applies every line of /etc/kbs/<name>. Returns 1 if the
@@ -191,7 +213,20 @@ static int load_from_file(const char *name) {
         apply_line(data + line_start, pos - line_start);
         if (pos < size) pos++; // skip the '\n' itself
     }
-    return 1;
+
+    // **A LAYOUT THAT MAPS NOTHING IS NOT A LAYOUT.** Reporting success
+    // here would leave every table empty and the keyboard producing no
+    // characters at all -- a dead machine, from a file that read
+    // perfectly. It is a real possibility rather than a defensive
+    // flourish: these files were re-keyed from AT scancodes (`sc_2a=`)
+    // to evdev keycodes (`kc_42=`), so a disk carrying the old form
+    // parses to exactly this. Refusing sends the caller down the same
+    // fallback path a missing file takes, which ends at the compiled-in
+    // US table and a usable keyboard.
+    for (int i = 0; i < KB_KEYCODE_MAX; i++) {
+        if (g_table[i] || g_table_shift[i] || g_table_altgr[i]) return 1;
+    }
+    return 0;
 }
 
 int keyboard_layout_load(const char *name) {
@@ -222,14 +257,14 @@ const char *keyboard_layout_current(void) {
     return g_current_name;
 }
 
-char keyboard_layout_translate(uint8_t scancode, int shift, int altgr) {
-    if (scancode >= 128) return 0;
+char keyboard_layout_translate(uint16_t keycode, int shift, int altgr) {
+    if (keycode >= KB_KEYCODE_MAX) return 0;
     // AltGr takes priority over shift (see this function's doc comment
     // in keyboard_layout.h) -- but only if this scancode/layout
     // actually has an AltGr entry; an unmapped AltGr slot (0) falls
     // through to shift/base, not to producing nothing, so pressing
     // AltGr over a key with no level-3 symbol still types the ordinary
     // character instead of silently eating the keystroke.
-    if (altgr && g_table_altgr[scancode]) return g_table_altgr[scancode];
-    return shift ? g_table_shift[scancode] : g_table[scancode];
+    if (altgr && g_table_altgr[keycode]) return g_table_altgr[keycode];
+    return shift ? g_table_shift[keycode] : g_table[keycode];
 }

@@ -38,13 +38,26 @@ WHAT THIS DOES NOT DO -- read before trusting a generated file blindly:
   character closest to what they'd produce undead (dead_acute -> ',
   dead_grave -> `), same simplification XKB's own "nodeadkeys" layout
   variants make for the same reason.
-- XKB key names -> AT scancode set 1: the keymap's `xkb_keycodes`
-  section gives each key an XKB keycode; XKB keycodes are Linux evdev
-  keycodes + 8 (a fixed, decades-old convention), and evdev keycodes
-  for the primary keyboard block equal AT scancode set 1 make codes
-  directly (KEY_1 = 2 = scancode 0x02, etc) -- this is what lets
-  `keycode - 8` below be the AT scancode this kernel's
-  keyboard_feed_byte() actually receives, no lookup table needed.
+- XKB key names -> Linux EVDEV KEYCODES: the keymap's `xkb_keycodes`
+  section gives each key an XKB keycode, and XKB keycodes are evdev
+  keycodes + 8 (a fixed, decades-old convention). So `keycode - 8`
+  below IS the evdev keycode, with no lookup table anywhere.
+
+  **THESE FILES USED TO BE KEYED ON AT SET-1 SCANCODES, and the switch
+  is the point rather than a rename.** evdev is what every non-PS/2
+  keyboard reports natively (virtio-input, and a USB keyboard when there
+  is one), so keying the layout on scancodes forced every such driver to
+  translate UPWARD into a legacy encoding -- a hand-kept table pointing
+  the wrong way, which duly grew a hole: KEY_102ND, the ISO key carrying
+  `|` on every Nordic layout, was missing, so a pipeline could be typed
+  on PS/2 and not on virtio. Keyed on evdev, there is no table to have a
+  hole in: the one translation left is set-1 -> keycode inside the PS/2
+  driver, which is exactly where Linux keeps it (`atkbd`).
+
+  It happens that evdev and set 1 AGREE for the whole primary block
+  (KEY_1 = 2 = 0x02, and so on up to KEY_F12 = 88 = 0x58), which is why
+  the values in these files did not change when the keying did -- and
+  also why the old naming looked right for years.
 
 Usage:
     python3 tools/gen_kbs.py us > seed/sync/etc/kbs/us
@@ -163,10 +176,13 @@ def generate(layout):
         "# do not hand-edit without re-running the generator (see that script's",
         "# top comment for what it does and doesn't translate: AltGr level 3 only",
         "# (no Shift+AltGr level 4), no dead keys, only the 6 baked Nordic glyphs).",
-        "# Format: name=value, one 'sc_<hex scancode>=<char>' /",
-        "# 'sc_<hex scancode>_shift=<char>' / 'sc_<hex scancode>_altgr=<char>' pair",
-        "# per key; <char> is a literal single character, or 0xNN for a codepoint",
-        "# above ASCII (the Nordic letters). See kernel/lib/keyboard_layout.c.",
+        "# Format: name=value, one 'kc_<decimal evdev keycode>=<char>' /",
+        "# 'kc_<keycode>_shift=<char>' / 'kc_<keycode>_altgr=<char>' pair per key;",
+        "# <char> is a literal single character, or 0xNN for a codepoint above",
+        "# ASCII (the Nordic letters). See kernel/lib/keyboard_layout.c.",
+        "#",
+        "# KEYCODES ARE LINUX EVDEV NUMBERS, not AT scancodes -- decimal, and",
+        "# the same numbers virtio-input and a USB keyboard report natively.",
         "",
     ]
 
@@ -174,8 +190,10 @@ def generate(layout):
     for key in KEY_ORDER:
         if key not in keycodes or key not in key_syms:
             continue
-        scancode = keycodes[key] - 8
-        if scancode < 0 or scancode > 127:
+        keycode = keycodes[key] - 8
+        # KEYCODE_MAX in kernel/lib/keyboard_layout.c. Above it are media
+        # and consumer keys with no character to map.
+        if keycode < 1 or keycode > 255:
             continue
         levels = key_syms[key]
         for level_idx, suffix in ((0, ""), (1, "_shift"), (2, "_altgr")):
@@ -188,7 +206,7 @@ def generate(layout):
                 continue
             cp = ord(ch)
             value = ch if 32 <= cp <= 126 else f"0x{cp:02X}"
-            lines.append(f"sc_{scancode:02x}{suffix}={value}")
+            lines.append(f"kc_{keycode}{suffix}={value}")
 
     if missing:
         lines.append("")

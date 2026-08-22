@@ -149,6 +149,29 @@
 // PS/2 data port. Don't call this from an IRQ handler directly.
 void keyboard_feed_byte(uint8_t sc);
 
+// A key went down or up, by LINUX EVDEV KEYCODE -- what every driver
+// calls, and where a key stops being a wire encoding and starts being a
+// character. keyboard_feed_byte() above is the PS/2 wire's adapter onto
+// this, and the only place in the kernel an AT scancode exists.
+//
+// Reached from the input core (kernel/input.h's input_report_key) for
+// anything that is not PS/2, with no translation in between -- which is
+// the point: a hand-kept evdev-to-scancode table is what let `|` work on
+// one keyboard and not another.
+void keyboard_key_event(uint16_t keycode, int down);
+
+// The evdev keycode the PS/2 wire byte `sc` means -- `extended` for a
+// code that followed an 0xE0 prefix. Returns 1 and fills `*out` for a
+// byte this driver can name, 0 for one it drops.
+//
+// EXPOSED SO THE PARITY CHECK CAN EXIST, and it is the only table left
+// that could have a hole: everything else speaks keycodes already.
+// input_test.c asserts that every keycode the active layout maps a
+// character to is producible from some wire byte -- so a key that works
+// on virtio-input and not on PS/2 is a failed build rather than a
+// keystroke that silently does nothing.
+int keyboard_wire_keycode(uint8_t sc, int extended, uint16_t *out);
+
 // ---- Modifier bits ----
 //
 // Which modifiers were physically held when a key was produced. These

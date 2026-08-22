@@ -481,7 +481,7 @@ whenever a headline here tells you something you did not already know.
 
 - **Monotonic time is an INTERFACE, and wall clock is not one of its implementations.**
 - **The kernel's idle work has ONE owner: `scheduler_idle()`**
-- **INPUT DEVICES REGISTER WITH THE INPUT CORE, and the canonical event is evdev**
+- **INPUT DEVICES REGISTER WITH THE INPUT CORE, and the canonical event is evdev -- including `/etc/kbs`, so only the PS/2 driver ever sees a scancode**
 - **VIRTIO INTERRUPTS ARE OPT-IN, and a forgotten ISR read hangs the machine**
 - **USING A SUBSYSTEM BEFORE ITS init() IS A PANIC, not a soft failure**
 - **A panic NAMES THE FUNCTION**
@@ -971,7 +971,11 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   since the console is what it photographs), `init_test.py` (init and
   service supervision), `console_shell_test.py` (a `text` boot reaching a ring-3
   prompt with the kernel shell stood down; boots twice and rewrites
-  `/etc`), `ctrlc_test.py` (**Ctrl-C interrupting a real job**, through
+  `/etc`), `keyboard_paths_test.py` (**the same keys do the same thing on
+  PS/2 and on virtio-input** -- boots both, types `_` and `|`, and asserts
+  through the FILESYSTEM rather than the screen, because `_` draws
+  nothing on the ring-0 console and a screenshot cannot tell that from a
+  lost keystroke), `ctrlc_test.py` (**Ctrl-C interrupting a real job**, through
   the real keyboard on a `text` boot: a spinning job dies, a two-stage
   PIPELINE dies as a unit, the shell survives, and at an empty prompt the
   key is still a keystroke that cancels the line), `stdin_test.py`

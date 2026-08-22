@@ -34,10 +34,20 @@ int keyboard_layout_load(const char *name);
 // NUL-terminated string.
 const char *keyboard_layout_current(void);
 
-// Translates one scancode (0-127) under the given shift/AltGr state to
-// the character the active layout produces, or 0 if that combination
+// Translates one LINUX EVDEV KEYCODE under the given shift/AltGr state
+// to the character the active layout produces, or 0 if that combination
 // doesn't produce a character in this layout (an unmapped key -- same
 // "0 means nothing" convention keyboard.c's own tables always used).
+//
+// **A KEYCODE, NOT AN AT SCANCODE.** evdev is what every non-PS/2
+// keyboard reports natively, so keying the layout on it means no driver
+// has to translate into a legacy encoding to be understood -- the PS/2
+// driver translates its wire ONCE, on the way in, exactly as `atkbd`
+// does on Linux. The two numberings happen to agree for the whole
+// primary block, which is why /etc/kbs's VALUES did not change when the
+// keying did, and why the old spelling looked right for years while the
+// evdev-to-scancode table it forced on virtio-input quietly had a hole
+// in it. See docs/decisions.md.
 // Values above ASCII are the same Latin-1 codepoints keyboard.h's
 // CHAR_A_RING/CHAR_A_DIAERESIS/etc already use. `altgr` takes priority
 // over `shift` when both are set (this is XKB "level 3" -- AltGr alone
@@ -47,6 +57,6 @@ const char *keyboard_layout_current(void);
 // side by only emitting levels 1-3, not 4). No AltGr entry for the
 // pressed key falls through to whatever shift/base would have
 // produced, exactly like an unmapped scancode always has.
-char keyboard_layout_translate(uint8_t scancode, int shift, int altgr);
+char keyboard_layout_translate(uint16_t keycode, int shift, int altgr);
 
 #endif

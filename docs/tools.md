@@ -504,6 +504,33 @@ manual steps to be worth automating:
   KCMDLINE="target=text"`. Not in `gui_regress.py`; run it after
   touching the scheduler's parentage, reaping, `SYS_SLEEP`, the target
   setting or the service descriptors.
+- **`keyboard_paths_test.py`** -- **the same keys do the same thing
+  whichever driver reported them.** Boots the `text` target twice per
+  input path (PS/2, then `--virtio-input`), on the `se` layout, and
+  types two lines.
+
+  It exists because that property was NOT true and nothing noticed. The
+  layout tables were keyed on AT set-1 scancodes, so the input core had
+  to translate evdev DOWN into that encoding for every non-PS/2 device
+  -- a hand-kept table pointing the wrong way, with a hole at
+  `KEY_102ND`, the ISO key that carries `|` on every Nordic layout. A
+  pipeline could be typed on PS/2 and not on virtio-input.
+
+  **THE ORACLE IS THE FILESYSTEM, NOT THE SCREEN**, and that is the
+  reusable part. `touch /kb_probe.txt` proves `_` arrived -- which a
+  screenshot cannot, because `_` draws NOTHING on the ring-0 console
+  (its ink is below `line_h`), so a lost keystroke and an invisible
+  glyph look identical. `echo x | touch /kb_pipe.txt` proves `|` arrived
+  AND piped: without the pipe the same keystrokes are `echo x touch
+  /kb_pipe.txt`, which creates nothing, so the file's existence is the
+  whole discrimination. Deliberately no `>` in it -- mixing a redirect
+  into a keyboard check makes a failure ambiguous between the two.
+
+  Two harness lessons are written into it. A QMP qcode names a PHYSICAL
+  key by its US label, so on `se` every punctuation key must be spelled
+  out (`_` is Shift over the key US calls `/`). And **`altgr` is not a
+  qcode** -- `alt_r` is; an invalid one is refused by QMP and sends
+  nothing, which reads exactly like the guest dropping the key.
 - **`ctrlc_test.py`** -- **`Ctrl-C` interrupts the foreground JOB and
   nothing else**, end to end through the real keyboard (stages 0-2 of
   `docs/signals-design.md`). Boots the `text` target twice, the same way
