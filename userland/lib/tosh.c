@@ -307,58 +307,32 @@ static void report_signal(struct tosh *sh, int code) {
 
 static int run_external(struct tosh *sh, const char *path, const char *args,
                         int stdout_redirected) {
-    // WITH `>` IN EFFECT THERE IS NO PIPE AT ALL. Normally this shell
-    // captures the child's stdout so it can stream it into its own sink
-    // (the GUI Terminal draws it into a window, and has no fd to hand
-    // over). But when the line said `> file`, this shell has already
-    // pointed its OWN fd 1 at that file, and the child inherits it --
-    // so the right thing is to get out of the way and let the child
-    // write straight there. Piping and re-writing would copy every byte
-    // through this process for no reason, and would lose the child's
-    // output entirely if it outlived the read loop.
+    (void)stdout_redirected; // both cases are the same now -- see below
 
-    if (stdout_redirected) {
-        // PGID_NEW: the child leads a group of its own, so Ctrl-C can be
-        // pointed at it without also naming this shell.
-        int pid = sys_spawn_group(path, args, -1, environ, PGID_NEW);
-        if (pid < 0) return -1;
-        job_foreground(sys_getpgid(pid));
-        int code = -1;
-        sys_waitpid(pid, &code);
-        job_done();
-        report_signal(sh, code);
-        return code;
-    }
-
-    int fds[2];
-    if (sys_pipe(fds) != 1) {
-        emit(sh, "tosh: out of pipes\n");
-        return -1;
-    }
-
-    int pid = sys_spawn_group(path, args, fds[1], environ, PGID_NEW);
-    if (pid < 0) {
-        sys_close(fds[0]);
-        sys_close(fds[1]);
-        return -1;
-    }
+    // **THE CHILD INHERITS THIS SHELL'S fd 1, ALWAYS.** It used to be
+    // captured through a pipe and re-emitted through `sh->out`, because
+    // the GUI Terminal hosted this library, drew into a window and had
+    // no descriptor to hand over -- a child left on the shell's own fd 1
+    // would have printed to the PHYSICAL CONSOLE. That caller is gone:
+    // the Terminal runs `/bin/tosh` on a pty now, so this shell's fd 1
+    // IS a terminal and the child should have it.
+    //
+    // **AND CAPTURING WAS NOT MERELY WASTEFUL, IT WAS WRONG.** A pipe is
+    // not a terminal, so `isatty(1)` was FALSE in every program this
+    // shell ran -- which turned `ls`'s `--color=auto` off and left a
+    // listing in a Terminal window uncoloured, with nothing to say why.
+    // Reported from a screenshot. Anything else deciding "am I
+    // interactive?" would have been wrong the same way.
+    //
+    // What it also removes: copying every byte of a program's output
+    // through this process, and a read loop that would have lost output
+    // from a child outliving it.
+    //
+    // PGID_NEW: the child leads a group of its own, so Ctrl-C can be
+    // pointed at it without also naming this shell.
+    int pid = sys_spawn_group(path, args, -1, environ, PGID_NEW);
+    if (pid < 0) return -1;
     job_foreground(sys_getpgid(pid));
-
-    // Close OUR write end. The child holds its own copy, so this does
-    // not end the stream -- but leaving it open would mean the read
-    // below never sees EOF even after the child exits, because a live
-    // writer (us) would still exist. The classic pipe deadlock.
-    sys_close(fds[1]);
-
-    char buf[256];
-    for (;;) {
-        int64_t n = sys_read(fds[0], buf, sizeof buf - 1);
-        if (n <= 0) break; // 0 = EOF; the read BLOCKS rather than spinning
-        buf[n] = '\0';
-        emit(sh, buf);
-    }
-    sys_close(fds[0]);
-
     int code = -1;
     sys_waitpid(pid, &code);
     job_done();
@@ -555,21 +529,13 @@ static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
         }
     }
 
-    // THE LAST STAGE IS CAPTURED, unless the line redirected it. Not an
-    // optimisation: this shell's sink is not always fd 1. The GUI
-    // Terminal draws into a window and has no descriptor to hand over,
-    // so a last stage left on the shell's own fd 1 would print to the
-    // PHYSICAL CONSOLE -- output that silently appears on another
-    // screen. Skipped for a builtin last stage, which already prints
-    // through the sink.
-    int capture_r = -1;
-    int last = n - 1;
-    if (!stdout_redirected && !stage_is_builtin(st[last].cmd)) {
-        int fds[2];
-        if (sys_pipe(fds) != 1) { emit(sh, "tosh: out of pipes\n"); return -1; }
-        capture_r = fds[0];
-        st[last].out_fd = fds[1];
-    }
+    // **THE LAST STAGE KEEPS THIS SHELL'S fd 1**, which is a terminal.
+    // It used to be captured into a pipe and re-emitted, for the reason
+    // run_external() above records at length -- and with the same cost:
+    // a pipe is not a terminal, so `isatty(1)` was false for the last
+    // stage of every pipeline and `ls | cat` behaved differently from
+    // `ls` for reasons no user could see.
+    (void)stdout_redirected;
 
     // ONE GROUP FOR THE WHOLE PIPELINE -- the first external stage
     // leads it (PGID_NEW), every later stage joins. That is what makes
@@ -672,16 +638,7 @@ static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
     // builtin, run by this same shell -- had not started. Waiting
     // before draining would block on a stage that is itself blocked
     // writing into a capture pipe nobody is emptying.
-    if (capture_r >= 0) {
-        char buf[256];
-        for (;;) {
-            int64_t got = sys_read(capture_r, buf, sizeof buf - 1);
-            if (got <= 0) break; // 0 = EOF
-            buf[got] = '\0';
-            emit(sh, buf);
-        }
-        sys_close(capture_r);
-    }
+
 
     int code = 0;
     for (int i = 0; i < n; i++) {

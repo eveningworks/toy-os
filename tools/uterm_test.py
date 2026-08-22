@@ -71,6 +71,28 @@ def type_line(dbg, text, settle=1.2):
     time.sleep(settle)
 
 
+def cyan_pixels(qmp, tmp, name, box):
+    """Pixels of the DIRECTORY colour `ls` uses (ANSI cyan).
+
+    Cyan is the one colour nothing else in a terminal produces: the
+    default text is grey (r == g == b) and the background is black, so
+    "green and blue well above red" is only ever a coloured run. Counted
+    rather than measured as a run, because a directory name is a few
+    characters and there is no solid band to find.
+    """
+    from PIL import Image
+    p = os.path.abspath(os.path.join(tmp, name))
+    qmp.screenshot(p)
+    n = 0
+    with Image.open(p) as im:
+        raw = im.convert("RGB").crop(box).tobytes()
+        for i in range(0, len(raw), 3):
+            r, g, b = raw[i], raw[i + 1], raw[i + 2]
+            if g > 100 and b > 100 and r + 40 < g:
+                n += 1
+    return n
+
+
 def bar_run(qmp, tmp, name, box):
     """The longest horizontal RUN of the reverse-video colour.
 
@@ -339,6 +361,38 @@ def run(dbg, qmp, tmp, shot_dir, res):
     # ignores SIGINT and is not in the job's group.
     type_line(dbg, "file_test2", settle=2.0)
     res.check("...and the SHELL survived it", dbg.window(TITLE) is not None)
+
+    # --- COLOUR REACHES THE WINDOW -----------------------------------
+    #
+    # `/bin/ls` colours directories, and `--color=auto` is its default --
+    # so a listing here must be coloured, and the SAME listing with
+    # `--color=never` must not. The second half is the control: a
+    # threshold with nothing to compare against is a guess.
+    #
+    # **IT DID NOT WORK AND THE REASON WAS TWO LAYERS DOWN.** tosh
+    # CAPTURED a child's stdout through a pipe and re-emitted it, which
+    # it did because the GUI Terminal used to host it as a library and
+    # had no descriptor to hand over. A pipe is not a terminal, so
+    # isatty(1) was false in every program the shell ran and auto turned
+    # colour OFF -- with nothing on screen to say why. Reported from a
+    # screenshot, twice: first as `ls -l` not working (a builtin
+    # shadowing /bin/ls) and then as this.
+    # PLAIN FIRST, AND THAT ORDERING IS THE POINT. A terminal appends,
+    # so measuring the coloured listing first leaves its pixels on screen
+    # and the `never` run scores exactly the same -- which is what
+    # happened, and it reads as `--color=never` being ignored. Taking the
+    # control first means the only cyan on screen afterwards is the one
+    # this check is about.
+    type_line(dbg, "ls --color=never", settle=1.5)
+    plain_ls = cyan_pixels(qmp, tmp, "ut_nocolor.png", box)
+    res.check("`ls --color=never` puts no colour on screen",
+              plain_ls < 20, f"{plain_ls} directory-coloured pixels")
+
+    type_line(dbg, "ls", settle=1.5)
+    coloured = cyan_pixels(qmp, tmp, "ut_color.png", box)
+    res.check("...and a plain `ls` IS coloured -- the child sees a terminal",
+              coloured > plain_ls + 20,
+              f"{plain_ls} coloured pixels with never, {coloured} without")
 
     # --- A FULL-SCREEN PROGRAM IN A WINDOW ---------------------------
     #
