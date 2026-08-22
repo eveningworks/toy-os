@@ -14,6 +14,7 @@ Lists the jobs this shell is keeping track of: the ones suspended with
 `Ctrl-Z`, one line each.
 
     [1]+  Stopped  spin_test 900000
+    [2]-  Running  spin_test 900000
 
 The number in brackets is the **job id**, which is what `fg` takes. The
 character after it is the marker every Unix shell prints: `+` is the
@@ -48,11 +49,11 @@ back.
 untracked at the moment it happens, with its pid, rather than being
 silently dropped.
 
-**It does not show background jobs**, because there are none yet: `&`
-and `bg` are not built (see `docs/roadmap.md`). Every job here is a
-stopped one.
+**It does not show a job another shell started**, and it does not
+survive this shell exiting — the table is memory, not a file.
 
 ## See also
 
-`fg` to resume one. `kill -STOP`/`-CONT` for the same mechanism without
-a shell's bookkeeping, and `ps` to see the `stopped` state directly.
+`fg` and `bg` to resume one, in front or behind. `cmd &` to start one in
+the background. `kill -STOP`/`-CONT` for the same mechanism without a
+shell's bookkeeping, and `ps` to see the `stopped` state directly.

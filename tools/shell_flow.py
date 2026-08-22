@@ -89,6 +89,9 @@ _SPECIAL_CHARS = {
     # names a PHYSICAL key by its US label, so the guest must be on
     # `kbd=us` or it produces something else.
     "|": lambda s: s.combo(["shift", "backslash"]),
+    # Backgrounding. Shift+7 on a US layout -- and the same physical-key
+    # caveat applies, which on `se` is where a quotation mark lives.
+    "&": lambda s: s.combo(["shift", "7"]),
 }
 
 

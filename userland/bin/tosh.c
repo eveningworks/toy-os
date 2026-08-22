@@ -126,6 +126,14 @@ static void end_line(void) {
 }
 
 static void fresh_prompt(void) {
+    // A PROMPT IS WHERE BACKGROUND NEWS GOES. Every path that draws one
+    // comes through here -- a finished command, a bare Enter, a
+    // cancelled line -- so this is the one place `[1]+ Done` can be
+    // printed without landing in the middle of something else. Before
+    // the repaint, so the report scrolls above the prompt rather than
+    // over it.
+    tosh_reap_jobs(&g_sh);
+
     kline_init(&g_ed);
     uhist_reset(&g_hist);
     g_shown = 0;

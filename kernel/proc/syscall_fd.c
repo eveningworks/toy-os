@@ -288,6 +288,18 @@ sys_do_read_pty_slave(uint64_t *regs, uint64_t pml4, int idx,
     // the only process that had any business calling it.
     if (!tty_owner(t)) tty_set_owner(t, scheduler_current_pid());
 
+    // The same rule as the physical console one screen up, and it has to
+    // be both: a Terminal window is a terminal, so a `&` job started in
+    // one competes for its keyboard exactly as it would for tty0's.
+    {
+        int bg = tty_check_background_read(t);
+        if (bg) {
+            regs[14] = (uint64_t)(int64_t)(bg > 0 ? SYS_RETRY : bg);
+            kfree(kbuf);
+            return 0;
+        }
+    }
+
     scheduler_preempt_disable();
     unsigned n = tty_read(t, kbuf, (unsigned)len);
     int blocked = 0;
@@ -469,13 +481,46 @@ sys_do_read_console(uint64_t *regs, uint64_t pml4, uint64_t buf_ptr, uint64_t le
     // Claiming on the FIRST read rather than at spawn: a process that
     // never reads the console must not silence the kernel shell, and
     // there is no other moment the kernel could learn the difference.
-    keyboard_claim_console(1);
-    g_console_owner_pml4 = pml4;
-    // ...and the console gains an OWNER and a foreground group, which is
-    // what makes Ctrl-C mean anything (kernel/tty.h). Claimed on the
-    // first read for the same reason the keyboard is: a process that
-    // never reads the console must not take it.
-    tty_set_console_owner(scheduler_current_pid());
+    //
+    // **AND ONLY ON THE FIRST, which this used to say and not do.** The
+    // claim ran on EVERY read, so tty_set_console_owner() re-pointed the
+    // owner and the FOREGROUND GROUP at whoever had just called -- which
+    // was invisible while a shell was the only thing that ever read the
+    // console, and is a keystroke thief the moment a second process
+    // does: a background job's first read made it the foreground group,
+    // so the next key went to it instead of the prompt. Found by `cat &`
+    // eating the `j` of the command typed after it.
+    //
+    // A DEAD OWNER IS NOT AN OWNER. fd_release_all() clears the claim
+    // when the owning address space goes, so this normally only sees an
+    // empty console -- but a claim by a pid whose slot has since been
+    // reused would be worse than none, so it is checked rather than
+    // assumed.
+    int console_owner = tty_console_owner();
+    if (!console_owner || !scheduler_pid_alive(console_owner)) {
+        keyboard_claim_console(1);
+        g_console_owner_pml4 = pml4;
+        // ...and the console gains an OWNER and a foreground group,
+        // which is what makes Ctrl-C mean anything (kernel/tty.h).
+        tty_set_console_owner(scheduler_current_pid());
+    }
+
+    // **A BACKGROUND READER IS STOPPED, NOT SERVED.** Two processes
+    // reading one keyboard is not untidy -- which of them gets a given
+    // key is a race, so a `&` job that reads would take keystrokes out
+    // of the shell's prompt at random. See tty_check_background_read().
+    {
+        int bg = tty_check_background_read(tty_console());
+        if (bg) {
+            // SYS_RETRY rather than parking: the caller is suspended
+            // now, so it re-enters this read when somebody continues
+            // it -- by which time it may be the foreground group and
+            // the read simply works. A negative answer is -EIO, for a
+            // process that ignores SIGTTIN and so cannot be stopped.
+            regs[14] = (uint64_t)(int64_t)(bg > 0 ? SYS_RETRY : bg);
+            return 0;
+        }
+    }
 
     // Whoever waits for a key is also who flushes the screen -- the
     // console draws into a back buffer and the ring-0 reader's idle loop

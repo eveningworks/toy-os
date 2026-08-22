@@ -986,11 +986,13 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   the real keyboard on a `text` boot: a spinning job dies, a two-stage
   PIPELINE dies as a unit, the shell survives, and at an empty prompt the
   key is still a keystroke that cancels the line),
-  `jobs_test.py` (**Ctrl-Z, `jobs` and `fg`** -- its sibling, same shape,
-  same `text` boot: a job SURVIVES and stops accruing CPU, `jobs` names
-  it, `fg` resumes it, and a pipeline suspends and resumes as ONE group.
-  Its discriminating check is the Ctrl-C after `fg`, which is what
-  catches a resume that forgot to hand the terminal over),
+  `jobs_test.py` (**job control** -- its sibling, same shape, same `text`
+  boot: a job SURVIVES and stops accruing CPU, `jobs` names it,
+  `fg`/`bg` resume it, `&` backgrounds one, a pipeline suspends as ONE
+  group, and a background READER is stopped rather than served. Two
+  discriminating checks: the Ctrl-C after `fg`, which catches a resume
+  that forgot the terminal, and the command typed after `cat &`, which
+  catches keystroke theft),
   `stdin_test.py`
   (blocking fd 0 and `/bin/tosh`, which
   needs the physical console and so takes the desktop down first),

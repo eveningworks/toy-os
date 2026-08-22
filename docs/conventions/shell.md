@@ -495,6 +495,24 @@ Five things that bite:
   it swallows INTR, so the line editor never sees it. Without that line
   a Ctrl-Z looks like the program having finished -- and unlike a
   Ctrl-C, the process is still there, holding memory, invisible.
+- **`&` IS SAFE ONLY BECAUSE OF `SIGTTIN`, and the two had to land
+  together.** A background job inherits the shell's fd 0, which IS the
+  terminal -- so without the background-read rule two processes read one
+  keyboard and which of them gets a given key is a race. It is the
+  invisible-second-reader bug the init milestone already paid for, in a
+  new place: the job looks healthy, the shell looks healthy, and
+  characters go missing out of the line being typed. A background reader
+  is STOPPED instead (`tty_check_background_read()`, asked by BOTH ring-3
+  read paths), so it waits its turn and `fg` is how it gets served.
+  Proven by disabling it: `cat &` then a typed command, and the command
+  never reaches the shell.
+- **A JOB HOLDS EVERY STAGE'S PID, NOT JUST THE ONE IT REPORTS.** The
+  job's status is its LAST stage's, as in sh -- but a shell must REAP
+  all of them, and a `fg` that waited only for the reported stage left
+  the others zombies forever, holding slots nothing would free. Found by
+  a test check that counted them; the same rule applies to
+  `tosh_reap_jobs()`, which asks after every pid and lets only the last
+  decide whether the job is over.
 - **A STOP IS NOT AN EXIT, AND THE CODE SAYS SO.** `SYS_WUNTRACED`
   answers `SIGNAL_STOP_BASE + sig` (256 + sig) for a child that is still
   alive and unreaped, beside the existing `SIGNAL_EXIT_BASE + sig` (128)

@@ -44,6 +44,31 @@ Seven properties, each with a failure the others would not catch:
    shell must not suspend itself -- there would be nobody left to resume
    it, and the session would be over.
 
+8. **`&` returns the prompt immediately** and the job keeps running --
+   which is the whole point, and is not provable by the job merely
+   existing: a `&` that silently waited would leave the job running too.
+
+9. **A background job that READS the terminal is STOPPED, not served.**
+   This is the check `&` could not safely ship without. Two readers of
+   one keyboard is a race over every keystroke, and the failure is
+   invisible in a process list: the job looks healthy, the shell looks
+   healthy, and characters go missing. Asserted twice over -- the reader
+   ends up `stopped`, and the shell can still run a command afterwards,
+   which is what a stolen keystroke would break.
+
+10. **`bg` resumes without the terminal**, which `fg` is the control
+    for: the same job, resumed the other way, must end up running with
+    the shell still holding the prompt.
+
+11. **SIGTTIN is not a one-shot** -- `bg` on a job that wants input
+    resumes it and it stops again the moment it reads, exactly as bash
+    behaves.
+
+12. **Nothing is left unreaped.** Every stage of every job, not just the
+    one whose status is reported: a `fg` that waits only for the last
+    stage of a resumed pipeline leaves the others zombies forever, and
+    no other check here can see it.
+
 PRECONDITIONS THIS TOOL ESTABLISHES ITSELF
 ------------------------------------------
 Boots twice, as ctrlc_test.py does: the first boot sets the `text`
@@ -119,8 +144,21 @@ def ps_rows(dbg):
 
 
 def spinners(dbg):
+    """The LIVE spinners -- a zombie is not one.
+
+    Zombies are excluded here and asked about separately (`zombies()`),
+    because mixing them in makes every count check ambiguous between
+    "the job is still running" and "a dead one was never reaped". The
+    leak question gets its own check, which is the only way either
+    answer means anything.
+    """
     return [(pid, state, cpu) for pid, state, cpu, name in ps_rows(dbg)
-            if name.startswith("spin_test")]
+            if name.startswith("spin_test") and state != "zombie"]
+
+
+def zombies(dbg):
+    return [(pid, name) for pid, state, _c, name in ps_rows(dbg)
+            if state == "zombie"]
 
 
 def shell_pids(dbg):
@@ -317,6 +355,114 @@ def main():
         check("control: the shell still runs commands",
               "Stopped" not in listing,
               f"jobs output: {listing!r} -- expected an empty table")
+
+        # --- 8. `&` --------------------------------------------------
+        print("`&` backgrounds a job and returns the prompt")
+        type_line(flow, f"{SPINNER} &")
+        bg = wait_for(lambda: spinners(dbg), lambda v: len(v) == 1)
+        if not check("a `&` job starts", len(bg) == 1, f"spinners={bg}"):
+            return report()
+        check("...and is NOT stopped", bg[0][1] != "stopped", f"spinners={bg}")
+
+        # THE PROMPT CAME BACK, which "the job exists" does not prove --
+        # a `&` that silently waited would leave the job running too.
+        # Running a second command while the first is still going is the
+        # difference, and it has to be a command whose effect is visible
+        # from here.
+        type_line(flow, f"jobs > {JOBS_OUT}")
+        time.sleep(1.5)
+        listing = read_file(dbg, JOBS_OUT)
+        check("...and the shell takes another command straight away",
+              "Running" in listing, f"jobs output: {listing!r}")
+        still = spinners(dbg)
+        check("...with the job still running underneath",
+              len(still) == 1 and still[0][1] != "stopped", f"spinners={still}")
+
+        # --- 9. SIGTTIN ------------------------------------------------
+        #
+        # THE CHECK `&` COULD NOT SHIP WITHOUT. `cat` with no arguments
+        # reads fd 0, which is the terminal this shell is reading. Two
+        # readers of one keyboard is a race over every keystroke.
+        print("a background job that READS the terminal is stopped")
+        type_line(flow, "cat &")
+        cats = wait_for(
+            lambda: [(pid, st) for pid, st, _c, n in ps_rows(dbg) if n.startswith("cat")],
+            lambda v: len(v) == 1 and v[0][1] == "stopped")
+        check("a background reader is STOPPED, not served",
+              len(cats) == 1 and cats[0][1] == "stopped", f"cat={cats}")
+
+        # ...and the keyboard still reaches the shell. Without SIGTTIN
+        # the two readers split the keystrokes between them and this
+        # command arrives mangled or not at all -- which is exactly the
+        # failure a process list cannot show.
+        # ...and every keystroke still reaches the SHELL. Without SIGTTIN
+        # the two readers split them and this command arrives mangled or
+        # not at all -- which is exactly the failure a process list
+        # cannot show. A COMPLETE listing, naming both jobs, is the
+        # proof: a stolen character would have left a `not found`.
+        dbg.send(f"sh rm {JOBS_OUT}")
+        time.sleep(0.5)
+        type_line(flow, f"jobs > {JOBS_OUT}")
+        time.sleep(1.5)
+        listing = read_file(dbg, JOBS_OUT)
+        check("...and the SHELL still gets every keystroke",
+              "[1]" in listing and "[2]" in listing and
+              "spin_test" in listing and "cat" in listing,
+              f"jobs output: {listing!r}")
+
+        # --- 10. `bg` --------------------------------------------------
+        #
+        # The control for `fg`: the same resume, the other way round. It
+        # needs a job that does NOT read -- resuming `cat` in the
+        # background just stops it again, which is the next check.
+        print("`bg` resumes without taking the terminal")
+        type_line(flow, SPINNER)
+        wait_for(lambda: spinners(dbg), lambda v: len(v) == 2)
+        flow.session.combo(["ctrl", "z"])
+        susp = wait_for(lambda: spinners(dbg),
+                        lambda v: any(s[1] == "stopped" for s in v))
+        if not check("a foreground job to `bg`", any(s[1] == "stopped" for s in susp),
+                     f"spinners={susp}"):
+            return report()
+
+        type_line(flow, "bg")
+        back = wait_for(lambda: spinners(dbg),
+                        lambda v: len(v) == 2 and all(s[1] != "stopped" for s in v))
+        check("`bg` resumes the job", len(back) == 2 and
+              all(s[1] != "stopped" for s in back), f"spinners={back}")
+
+        # ...and the shell kept the terminal, so it still runs commands
+        # straight away -- which is the whole difference from `fg`.
+        dbg.send(f"sh rm {JOBS_OUT}")
+        time.sleep(0.5)
+        type_line(flow, f"jobs > {JOBS_OUT}")
+        time.sleep(1.5)
+        listing = read_file(dbg, JOBS_OUT)
+        check("...and the shell keeps the prompt", "Running" in listing,
+              f"jobs output: {listing!r}")
+
+        # SIGTTIN IS NOT A ONE-SHOT. `bg` on a job that wants input
+        # resumes it and it stops again the moment it reads -- which is
+        # exactly what bash does, and is the check that would catch the
+        # background check being made to fire only once.
+        print("`bg` on a READER stops it again")
+        type_line(flow, "bg 2")
+        again = wait_for(
+            lambda: [(pid, st) for pid, st, _c, n in ps_rows(dbg) if n.startswith("cat")],
+            lambda v: len(v) == 1 and v[0][1] == "stopped")
+        check("a resumed background reader is stopped again",
+              len(again) == 1 and again[0][1] == "stopped", f"cat={again}")
+
+        # --- 11. nothing was leaked ------------------------------------
+        #
+        # EVERY STAGE OF EVERY JOB HAS TO BE REAPED, and a resumed
+        # pipeline is where that goes wrong: `fg` that waits only for the
+        # stage whose status it reports leaves the others zombies
+        # forever, holding slots nothing will free. Invisible in every
+        # check above, which is why it gets its own.
+        print("nothing was left unreaped")
+        left = zombies(dbg)
+        check("no job left a zombie behind", not left, f"zombies={left}")
 
     finally:
         if not args.keep:

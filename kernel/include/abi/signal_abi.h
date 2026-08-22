@@ -34,6 +34,9 @@
 #define SIGCONT 18  // resume a stopped process. Default action: CONTINUE
 #define SIGSTOP 19  // suspend, uncatchable and unignorable
 #define SIGTSTP 20  // what Ctrl-Z sends to the foreground group
+#define SIGTTIN 21  // a BACKGROUND process tried to read the terminal.
+                    // Default action: stop, so it waits its turn
+                    // instead of stealing the keyboard from the shell
 
 // The highest signal number this kernel accepts. The pending set is a
 // uint32_t bitmask, so 31 is the ceiling the representation allows and
@@ -84,7 +87,18 @@
 // process itself.
 
 // 1 if `s` suspends its target rather than terminating it.
-#define SIGNAL_STOPS(s) ((s) == SIGSTOP || (s) == SIGTSTP)
+#define SIGNAL_STOPS(s) \
+    ((s) == SIGSTOP || (s) == SIGTSTP || (s) == SIGTTIN)
+
+// THERE IS NO SIGTTOU, and that is a decision rather than an omission.
+// It exists on Unix to stop a background process WRITING to the
+// terminal -- but only when `TOSTOP` is set, which it is not by default
+// on Linux or anywhere else, so in practice a background job's output
+// interleaves with the shell's and everyone has learned to live with
+// it. toy-os has no TOSTOP and no reason to grow one, which would leave
+// a signal number with no sender. The read side is different and is why
+// SIGTTIN is here: two readers of one keyboard is not untidy output, it
+// is keystrokes going to the wrong process.
 
 // 1 if `s` resumes a stopped target.
 #define SIGNAL_CONTINUES(s) ((s) == SIGCONT)

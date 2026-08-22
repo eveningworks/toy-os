@@ -28,7 +28,8 @@ static int next_id(void) {
     return 0;
 }
 
-int tosh_jobs_add(int pgid, int pid, const char *cmd, int stopped) {
+int tosh_jobs_add(int pgid, const int *pids, int npid, const char *cmd,
+                  int stopped) {
     int id = next_id();
     if (!id) return 0;
 
@@ -39,7 +40,9 @@ int tosh_jobs_add(int pgid, int pid, const char *cmd, int stopped) {
 
     j->id = id;
     j->pgid = pgid;
-    j->pid = pid;
+    j->npid = 0;
+    for (int i = 0; i < npid && i < TOSH_JOB_PIDS_MAX; i++)
+        if (pids[i] > 0) j->pid[j->npid++] = pids[i];
     j->stopped = stopped;
     int n = 0;
     for (; cmd && cmd[n] && n < TOSH_JOB_CMD_MAX - 1; n++) j->cmd[n] = cmd[n];
@@ -58,7 +61,8 @@ void tosh_jobs_remove(int id) {
     struct tosh_job *j = slot_of(id);
     if (!j) return;
     j->id = 0;
-    j->pgid = j->pid = j->stopped = 0;
+    j->pgid = j->stopped = j->npid = 0;
+    for (int i = 0; i < TOSH_JOB_PIDS_MAX; i++) j->pid[i] = 0;
     j->cmd[0] = '\0';
 
     // THE MARKERS HAVE TO BE REPAIRED, not just cleared. A `+` pointing

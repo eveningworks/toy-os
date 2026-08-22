@@ -24,11 +24,21 @@
 
 #define TOSH_JOBS_MAX 8   // how many suspended/background jobs at once
 #define TOSH_JOB_CMD_MAX 64 // the command line as typed, for `jobs`
+// Must be at least tosh.c's TOSH_STAGE_MAX -- a job holds every stage
+// of its pipeline, and a stage left out of the table is a stage nobody
+// waits for and therefore a permanent zombie.
+#define TOSH_JOB_PIDS_MAX 4
 
 struct tosh_job {
     int  id;      // 1-based, what `[1]` prints. 0 means a free slot
     int  pgid;    // the group -- what a signal is aimed at
-    int  pid;     // the LAST stage, whose status is the job's
+    // **EVERY STAGE, NOT JUST THE LAST.** A job is a pipeline, and a
+    // shell must reap all of it: `fg` on a resumed `a | b` that waited
+    // only for `b` left `a` a zombie forever, holding a slot nothing
+    // would ever free. The LAST one's status is the job's, as in sh --
+    // so the order here is the pipeline's order and matters.
+    int  pid[TOSH_JOB_PIDS_MAX];
+    int  npid;
     int  stopped; // suspended, rather than running in the background
     char cmd[TOSH_JOB_CMD_MAX];
 };
@@ -41,7 +51,8 @@ struct tosh_job {
 // previous -- the `+` and `-` markers `jobs` prints, and what a bare
 // `fg` means. bash's rule, because a person typing `fg` means the one
 // they just suspended.
-int tosh_jobs_add(int pgid, int pid, const char *cmd, int stopped);
+int tosh_jobs_add(int pgid, const int *pids, int npid, const char *cmd,
+                  int stopped);
 
 // The job with `id`, or the CURRENT job when `id` is 0. NULL if there
 // is no such job -- including "no jobs at all", which is the answer a

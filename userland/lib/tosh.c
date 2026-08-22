@@ -314,16 +314,19 @@ static void report_signal(struct tosh *sh, int code) {
 // is in a position to notice. Without this line a Ctrl-Z looks exactly
 // like the program having finished -- and unlike a Ctrl-C, the process
 // is still there, holding memory, invisible.
-static void job_stopped(struct tosh *sh, int pgid, int pid, const char *label) {
-    int id = tosh_jobs_add(pgid, pid, label, 1);
+static void job_stopped(struct tosh *sh, int pgid, const int *pids, int npid,
+                        const char *label) {
+    int id = tosh_jobs_add(pgid, pids, npid, label, 1);
     if (!id) {
         // SAID OUT LOUD rather than dropped. A job with no table entry
         // is one `fg` cannot name and `jobs` will not list, so the only
         // way back to it is `ps` and `kill -CONT` -- which the user
         // needs to be told, at the moment it happens.
-        emit(sh, "\ntosh: too many jobs -- pid ");
-        emit_int(sh, pid);
-        emit(sh, " is stopped and untracked (kill -CONT it)\n");
+        emit(sh, "\ntosh: too many jobs -- group ");
+        emit_int(sh, pgid);
+        emit(sh, " is stopped and untracked (kill -CONT -");
+        emit_int(sh, pgid);
+        emit(sh, ")\n");
         return;
     }
     emit(sh, "\n[");
@@ -341,20 +344,54 @@ static void job_stopped(struct tosh *sh, int pgid, int pid, const char *label) {
 // all three end the same way and the ending is the part with the traps
 // in it: put this shell's group back in front, then decide whether what
 // came back was a death, a suspension or an ordinary exit.
-static int job_wait(struct tosh *sh, int pgid, int pid, const char *label) {
+static int job_wait(struct tosh *sh, int pgid, const int *pids, int npid,
+                    const char *label) {
     int code = -1;
-    sys_waitpid_untraced(pid, &code);
+    for (int i = 0; i < npid; i++) {
+        if (pids[i] <= 0) continue;
+        int c = -1;
+        sys_waitpid_untraced(pids[i], &c);
+        code = c; // the job's status is its LAST stage's, as in sh
+        // **THE WHOLE JOB IS SUSPENDED, so stop waiting on the rest.**
+        // SUSP reaches the GROUP, so the moment one stage reports a
+        // stop the others are stopped too, and waiting on them would
+        // park this shell against processes nothing will resume.
+        if (SIGNAL_IS_STOP(c)) break;
+    }
+    // AFTER every wait, not after the first: until the last stage is
+    // reaped there is still a job in front of the console, and taking
+    // the foreground back early would point a Ctrl-C at this shell
+    // while its pipeline was still running.
     job_done();
     if (SIGNAL_IS_STOP(code)) {
-        job_stopped(sh, pgid, pid, label);
+        job_stopped(sh, pgid, pids, npid, label);
         return code;
     }
     report_signal(sh, code);
     return code;
 }
 
+// Announce a job that has just been put in the background: `[1] 4`,
+// the id and the pid, which is what every shell prints and what makes
+// `kill` and `fg` both possible from what is on screen.
+static void job_backgrounded(struct tosh *sh, int pgid, const int *pids,
+                             int npid, const char *label) {
+    int id = tosh_jobs_add(pgid, pids, npid, label, 0);
+    if (!id) {
+        emit(sh, "tosh: too many jobs -- group ");
+        emit_int(sh, pgid);
+        emit(sh, " is running untracked\n");
+        return;
+    }
+    emit(sh, "[");
+    emit_int(sh, id);
+    emit(sh, "] ");
+    emit_int(sh, pids[npid - 1]);  // the last stage, as every shell prints
+    emit(sh, "\n");
+}
+
 static int run_external(struct tosh *sh, const char *path, const char *args,
-                        const char *label,
+                        const char *label, int background,
                         int stdout_redirected) {
     (void)stdout_redirected; // both cases are the same now -- see below
 
@@ -382,8 +419,19 @@ static int run_external(struct tosh *sh, const char *path, const char *args,
     int pid = sys_spawn_group(path, args, -1, environ, PGID_NEW);
     if (pid < 0) return -1;
     int pgid = sys_getpgid(pid);
+
+    // **A BACKGROUND JOB IS NOT GIVEN THE TERMINAL, AND THAT IS THE
+    // WHOLE OF IT.** No job_foreground(), so Ctrl-C keeps pointing at
+    // this shell and a read from the job hits SIGTTIN instead of
+    // competing with the prompt for keystrokes. No wait either -- the
+    // job is reaped at the next prompt by tosh_reap_jobs().
+    if (background) {
+        job_backgrounded(sh, pgid, &pid, 1, label);
+        return 0;
+    }
+
     job_foreground(pgid);
-    return job_wait(sh, pgid, pid, label);
+    return job_wait(sh, pgid, &pid, 1, label);
 }
 
 // PATH lookup, in the same order and spirit as the kernel shell's
@@ -485,7 +533,9 @@ static int bi_fg(struct tosh *sh, const char *args) {
 
     // Copied out before anything can invalidate the entry -- job_wait()
     // may add a job of its own, and the table is an array.
-    int pgid = job->pgid, pid = job->pid, jid = job->id;
+    int pgid = job->pgid, jid = job->id, npid = job->npid;
+    int pids[TOSH_JOB_PIDS_MAX];
+    for (int i = 0; i < npid; i++) pids[i] = job->pid[i];
     char label[TOSH_JOB_CMD_MAX];
     scopy(label, job->cmd, TOSH_JOB_CMD_MAX);
 
@@ -499,15 +549,125 @@ static int bi_fg(struct tosh *sh, const char *args) {
     job_foreground(pgid);
     sys_kill(-pgid, SIGCONT);
 
-    int code = job_wait(sh, pgid, pid, label);
+    int code = job_wait(sh, pgid, pids, npid, label);
     sh->last_status = code;
     return code;
 }
 
+// `bg [n]` -- resume a suspended job WITHOUT giving it the terminal.
+//
+// The difference from `fg` is one missing line, and it is the whole
+// difference: no job_foreground(), so the shell keeps the terminal and
+// gets its prompt straight back. The job stays in the table, now marked
+// running, because it is still this shell's to report on when it ends.
+//
+// **AND IF IT READS THE TERMINAL IT WILL STOP AGAIN**, by SIGTTIN, which
+// is exactly right and is why `&` was safe to add at all. That shows up
+// at the next prompt as `[1]+ Stopped`, and `fg` is how it gets served.
+static int bi_bg(struct tosh *sh, const char *args) {
+    int id = 0;
+    if (args) {
+        const char *p = args;
+        while (*p == ' ') p++;
+        if (*p == '%') p++;
+        for (; *p >= '0' && *p <= '9'; p++) id = id * 10 + (*p - '0');
+    }
+
+    struct tosh_job *job = tosh_jobs_get(id);
+    if (!job) {
+        emit(sh, "bg: no such job\n");
+        sh->last_status = -1;
+        return -1;
+    }
+    if (!job->stopped) {
+        emit(sh, "bg: job is already running\n");
+        return 0;
+    }
+
+    job->stopped = 0;
+    sys_kill(-job->pgid, SIGCONT);
+
+    emit(sh, "[");
+    emit_int(sh, job->id);
+    emit(sh, "]+ ");
+    emit(sh, job->cmd);
+    emit(sh, " &\n");
+    return 0;
+}
+
+// Everything a background job did while nobody was looking, reported
+// once, just before the next prompt.
+//
+// **CALLED BY THE FRONT END, JUST BEFORE IT DRAWS A PROMPT**, and
+// nowhere else. That is what every shell does and it is not merely
+// convention: a job that exits mid-command would otherwise interleave
+// `[1]+ Done` into the output of whatever is running, and one that
+// exits while the user is halfway through typing would land in the
+// middle of the line. A prompt is the one moment the screen is the
+// shell's -- and the front end is the only thing that knows when one is
+// about to happen, which is why this is not called from
+// tosh_run_line(): a bare Enter draws a prompt and runs no line at all.
+//
+// It ASKS AFTER EACH KNOWN PID rather than scanning: this is a job
+// table, not a process table, and `ps` is the program that scans.
+void tosh_reap_jobs(struct tosh *sh) {
+    for (int id = 1; id <= TOSH_JOBS_MAX; id++) {
+        struct tosh_job *job = tosh_jobs_get(id);
+        if (!job || job->id != id) continue;
+        if (job->stopped) continue;   // nothing to hear from a stopped job
+
+        // EVERY STAGE IS ASKED AFTER, so an earlier one that has
+        // finished is reaped rather than left a zombie -- but only the
+        // LAST one decides whether the job is over, because its status
+        // is the job's.
+        int code = 0, done = 0, stopped = 0;
+        for (int i = 0; i < job->npid; i++) {
+            int c = 0;
+            int r = sys_waitpid_check(job->pid[i], &c);
+            if (r != job->pid[i]) continue;
+            if (SIGNAL_IS_STOP(c)) { stopped = 1; break; }
+            if (i == job->npid - 1) { code = c; done = 1; }
+        }
+        if (!stopped && !done) continue;  // still running
+
+        if (stopped) {
+            // A BACKGROUND JOB THAT STOPPED ITSELF, which in practice
+            // means it tried to read the terminal and SIGTTIN caught it.
+            // Reported rather than left silently parked -- a job that
+            // stopped for input and said nothing is indistinguishable
+            // from one that hung.
+            job->stopped = 1;
+            emit(sh, "[");
+            emit_int(sh, id);
+            emit(sh, "]+  Stopped  ");
+            emit(sh, job->cmd);
+            emit(sh, "\n");
+            continue;
+        }
+
+        emit(sh, "[");
+        emit_int(sh, id);
+        emit(sh, "]+  Done  ");
+        emit(sh, job->cmd);
+        if (code != 0) {
+            emit(sh, "  [exit ");
+            emit_int(sh, code);
+            emit(sh, "]");
+        }
+        emit(sh, "\n");
+        tosh_jobs_remove(id);
+    }
+}
+
+// Declared here because run_stripped() refuses to background one, and
+// the definition lives with the pipeline code that is its other caller.
+static int stage_is_builtin(const char *cmd);
+
 // The body, once redirection has been stripped off and applied. Split
 // out so every `return` below cannot forget to put fd 0/1 back -- the
 // one thing in this file that leaks a descriptor if it is missed.
-static int run_stripped(struct tosh *sh, const char *line, int stdout_redirected) {
+static int run_stripped(struct tosh *sh, const char *line, int background,
+                        int stdout_redirected) {
     // Split into command and the rest. Everything after the first space
     // is handed to the program verbatim -- there is no quoting or
     // globbing here, and pretending otherwise would be worse than not
@@ -523,9 +683,25 @@ static int run_stripped(struct tosh *sh, const char *line, int stdout_redirected
 
     if (!cmd[0]) return 0;
 
+    // **A BUILTIN CANNOT BE BACKGROUNDED, AND IT IS REFUSED RATHER THAN
+    // QUIETLY RUN IN FRONT.** bash backgrounds one by forking a
+    // subshell; with no fork there is no second copy of this shell to
+    // run it in, and running it in the foreground while the user asked
+    // for `&` would be a silent difference in meaning. `cd dir &` is
+    // almost certainly a typo anyway -- the version that "worked" would
+    // change this shell's directory, which is the opposite of what
+    // backgrounding it implies.
+    if (background && stage_is_builtin(cmd)) {
+        emit(sh, cmd);
+        emit(sh, ": cannot be backgrounded -- it runs inside this shell\n");
+        sh->last_status = -1;
+        return -1;
+    }
+
     if (seq(cmd, "cd"))   { bi_cd(sh, args);  return 0; }
     if (seq(cmd, "jobs")) { bi_jobs(sh);       return 0; }
     if (seq(cmd, "fg"))   { return bi_fg(sh, args); }
+    if (seq(cmd, "bg"))   { return bi_bg(sh, args); }
     if (seq(cmd, "pwd"))  {
         char here[TOSH_PATH_MAX];
         if (sys_getcwd(here, sizeof here) < 0) scopy(here, "?", sizeof here);
@@ -535,9 +711,10 @@ static int run_stripped(struct tosh *sh, const char *line, int stdout_redirected
     }
     if (seq(cmd, "help")) {
         emit(sh, "tosh -- the toy-os shell, running in ring 3.\n"
-                 "builtins: cd pwd jobs fg help  (everything else is a program)\n"
+                 "builtins: cd pwd jobs fg bg help  (everything else is a program)\n"
                  "redirection: cmd > file, cmd >> file, cmd < file\n"
-                 "job control: Ctrl-Z suspends, `jobs` lists, `fg [n]` resumes\n"
+                 "job control: cmd & backgrounds, Ctrl-Z suspends, `jobs` lists,\n"
+                 "             `fg [n]` resumes in front, `bg [n]` behind\n"
                  "anything else is spawned from /bin, /usr/bin or /tests\n");
         return 0;
     }
@@ -559,7 +736,7 @@ static int run_stripped(struct tosh *sh, const char *line, int stdout_redirected
         return -1;
     }
 
-    int code = run_external(sh, path, args, line, stdout_redirected);
+    int code = run_external(sh, path, args, line, background, stdout_redirected);
     sh->last_status = code;
     // A STOP IS NOT AN EXIT, and `[exit 276]` for a job the user just
     // suspended would be a lie about a process that is still there.
@@ -639,11 +816,12 @@ static int stage_is_builtin(const char *cmd) {
     while (cmd[i] && cmd[i] != ' ' && c < TOSH_PATH_MAX - 1) w[c++] = cmd[i++];
     w[c] = '\0';
     return seq(w, "cd") || seq(w, "pwd") || seq(w, "help") ||
-           seq(w, "jobs") || seq(w, "fg");
+           seq(w, "jobs") || seq(w, "fg") || seq(w, "bg");
 }
 
 static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
-                        const char *label, int stdout_redirected) {
+                        const char *label, int background,
+                        int stdout_redirected) {
     // Stage i's output goes to a fresh pipe, whose read end becomes
     // stage i+1's input. The LAST stage keeps the shell's own fd 1 --
     // which is a `>` file if the line had one, and otherwise whatever
@@ -708,7 +886,9 @@ static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
                                      job_pgid > 0 ? job_pgid : PGID_NEW);
         if (st[i].pid > 0 && job_pgid <= 0) {
             job_pgid = sys_getpgid(st[i].pid);
-            job_foreground(job_pgid);
+            // A BACKGROUND PIPELINE IS STILL ONE GROUP -- it just is not
+            // the foreground one. Skipping this is the entire difference.
+            if (!background) job_foreground(job_pgid);
         }
 
         if (saved_in  >= 0) { sys_dup2(saved_in, 0);  sys_close(saved_in); }
@@ -753,7 +933,7 @@ static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
             sh->ctx = (void *)(long)st[i].out_fd;
         }
 
-        run_stripped(sh, st[i].cmd, stdout_redirected);
+        run_stripped(sh, st[i].cmd, 0, stdout_redirected);
 
         sh->out = prev;
         sh->ctx = prev_ctx;
@@ -774,33 +954,47 @@ static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
     // writing into a capture pipe nobody is emptying.
 
 
-    int code = 0;
-    for (int i = 0; i < n; i++) {
-        if (st[i].pid <= 0) continue;
-        int c2 = -1;
-        sys_waitpid_untraced(st[i].pid, &c2);
-        code = c2; // the pipeline's status is its LAST stage's, as in sh
-        // **THE WHOLE PIPELINE IS SUSPENDED, so stop waiting on the
-        // rest of it.** SUSP reaches the GROUP, and every stage is in
-        // it -- so the moment one reports a stop, the others are
-        // stopped too and waiting on them would park this shell
-        // against processes nothing is going to resume. One job goes
-        // in the table, named by the LAST stage, because that is whose
-        // status the pipeline reports when it finishes.
-        if (SIGNAL_IS_STOP(c2)) break;
+    // NOT WAITED FOR, and announced under the LAST stage's pid -- which
+    // is the pid whose status the pipeline reports when it ends, and so
+    // the one tosh_reap_jobs() has to ask after.
+    // THE SPAWNED STAGES, in pipeline order. A stage that failed to
+    // start has no pid and is skipped -- it produced nothing and there
+    // is nothing to wait for.
+    int pids[TOSH_JOB_PIDS_MAX];
+    int npid = 0;
+    for (int i = 0; i < n && npid < TOSH_JOB_PIDS_MAX; i++)
+        if (st[i].pid > 0) pids[npid++] = st[i].pid;
+    if (!npid) { job_done(); return 0; }
+
+    if (background) {
+        job_backgrounded(sh, job_pgid, pids, npid, label);
+        return 0;
     }
-    // AFTER every wait, not after the first: until the last stage has
-    // been reaped there is still a job in front of the console, and
-    // taking the foreground back early would point a Ctrl-C at this
-    // shell while its pipeline was still running.
-    job_done();
-    if (SIGNAL_IS_STOP(code)) {
-        int last = st[n - 1].pid > 0 ? st[n - 1].pid : job_pgid;
-        job_stopped(sh, job_pgid, last, label);
-        return code;
-    }
-    report_signal(sh, code);
-    return code;
+
+    // One function for the simple command, the pipeline and `fg`,
+    // because all three end the same way -- see job_wait().
+    return job_wait(sh, job_pgid, pids, npid, label);
+}
+
+// A trailing `&` means BACKGROUND. Removed from the line in place, so
+// nothing downstream has to know about it.
+//
+// TRAILING ONLY, and this shell will not pretend otherwise: `a & b` is
+// two commands in a real shell and one malformed one here, because
+// there is no `;`-style sequencing yet (docs/roadmap.md). A `&` in the
+// middle stays in the line and reaches the program as an argument,
+// which is wrong but VISIBLY wrong -- silently splitting on it would
+// run half of what was typed.
+static int strip_background(char *s) {
+    int n = 0;
+    while (s[n]) n++;
+    while (n > 0 && s[n - 1] == ' ') n--;
+    if (n == 0 || s[n - 1] != '&') return 0;
+    s[n - 1] = '\0';
+    // ...and the spaces before it, so the label a job is listed under
+    // is `sleep 5` rather than `sleep 5 `.
+    for (n--; n > 0 && s[n - 1] == ' '; n--) s[n - 1] = '\0';
+    return 1;
 }
 
 int tosh_run_line(struct tosh *sh, const char *line) {
@@ -809,6 +1003,10 @@ int tosh_run_line(struct tosh *sh, const char *line) {
     // hands us its editor's live buffer).
     char work[TOSH_PATH_MAX];
     scopy(work, line, TOSH_PATH_MAX);
+
+    // BEFORE the redirection parse, because `&` comes after `> file`
+    // and stripping it first is what leaves an ordinary line behind.
+    int background = strip_background(work);
 
     struct tosh_redir r;
     if (redir_parse(sh, work, &r) < 0) {
@@ -845,9 +1043,9 @@ int tosh_run_line(struct tosh *sh, const char *line) {
     if (nst < 0) {
         code = -1;
     } else if (nst > 1) {
-        code = run_pipeline(sh, st, nst, label, r.out_fd >= 0);
+        code = run_pipeline(sh, st, nst, label, background, r.out_fd >= 0);
     } else {
-        code = run_stripped(sh, work, r.out_fd >= 0);
+        code = run_stripped(sh, work, background, r.out_fd >= 0);
     }
 
     sh->out = saved_out;

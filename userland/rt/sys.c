@@ -570,6 +570,18 @@ int sys_waitpid_untraced(int pid, int *out_code) {
     return (int)err(r);
 }
 
+// Asks whether a child has exited OR stopped, without waiting.
+//
+// The combination `jobs` needs: a shell about to print a prompt has to
+// notice a background job that finished AND one that suspended itself
+// (a background reader stopped by SIGTTIN), and must not block on
+// either -- there may be nothing to report at all.
+int sys_waitpid_check(int pid, int *out_code) {
+    return (int)err(syscall3(SYS_WAITPID, (uint64_t)(int64_t)pid,
+                             (uint64_t)(uintptr_t)out_code,
+                             SYS_WNOHANG | SYS_WUNTRACED));
+}
+
 int sys_setpgid(int pid, int pgid) {
     return (int)err(syscall2(SYS_SETPGID, (uint64_t)(int64_t)pid,
                              (uint64_t)(int64_t)pgid));

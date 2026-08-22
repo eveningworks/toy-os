@@ -513,6 +513,15 @@ int sys_waitpid_nohang(int pid, int *out_code);
 // remember it. This is what /bin/tosh's job table exists for.
 int sys_waitpid_untraced(int pid, int *out_code);
 
+// Both at once and neither blocking: returns the pid if the child has
+// exited OR stopped, SYS_RETRY if it is still running, or -1 for a pid
+// that is not this caller's live child. SIGNAL_IS_STOP() on the code
+// tells the two apart -- and a STOP result leaves the child unreaped,
+// so a caller must remember it rather than assume it is gone.
+//
+// What a shell calls once per prompt over its background jobs.
+int sys_waitpid_check(int pid, int *out_code);
+
 // Sleeps for `ms` milliseconds, then returns 0. Returns -1 if the
 // caller has no scheduler slot to park in.
 //

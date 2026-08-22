@@ -129,7 +129,7 @@ and job control is what a terminal on that TTY makes possible.
 - [ ] Line editing
 - [x] ~~`>`/`<`/`>>` redirection~~ DONE 2026-08-19 -- in `/bin/tosh` and the GUI Terminal
 - [x] ~~`Ctrl-Z`, `jobs` and `fg`~~ DONE 2026-08-22 -- a job table in the shell, over a STOPPED process in the kernel
-- [ ] Background jobs (`&`) and `bg`
+- [x] ~~Background jobs (`&`) and `bg`~~ DONE 2026-08-22 -- with `SIGTTIN`, so a background reader stops instead of stealing keys
 - [x] ~~Tab completion (commands, then paths)~~ done
 - [ ] Globbing (`*`, `?`) expanded by the shell, not each command
 - [ ] Environment variables + `export`

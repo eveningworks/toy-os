@@ -135,6 +135,31 @@ void tty_output(struct tty *t, const char *buf, unsigned len);
 // full of characters.
 unsigned tty_read(struct tty *t, char *dst, unsigned len);
 
+// **MAY THE CALLING PROCESS READ THIS TERMINAL AT ALL?** Asked BEFORE
+// tty_read() by every ring-3 read path, and it is the rule that makes
+// `&` safe: a terminal has one foreground group, and a process outside
+// it that reads would take keystrokes meant for the shell -- silently,
+// and at random, since which of the two readers gets a given key is a
+// race.
+//
+// POSIX's answer, and Unix's since job control existed: the background
+// reader is STOPPED (SIGTTIN to its whole group) rather than served or
+// refused, so it simply waits its turn and resumes when `fg` gives it
+// the terminal. Returns:
+//
+//   0     -- go ahead; the caller is in the foreground group, or this
+//            terminal has no owner and so no notion of one
+//   1     -- STOPPED. The caller must answer SYS_RETRY: the process is
+//            suspended and will re-enter this read when it is continued
+//   -EIO  -- the caller IGNORES SIGTTIN, so stopping it is not possible
+//            and serving it would be the theft this exists to prevent.
+//            POSIX's answer for the same case
+//
+// A process may always read a terminal NOBODY owns, which is what keeps
+// this out of the way of the very first reader -- the one that becomes
+// the owner by reading.
+int tty_check_background_read(struct tty *t);
+
 // The same, one byte at a time and with the modifier word, for the
 // console's ring-0 readers. Returns -1 when nothing is readable.
 int tty_read_key(struct tty *t, uint8_t *out_mods);

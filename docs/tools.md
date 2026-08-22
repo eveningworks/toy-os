@@ -586,36 +586,47 @@ manual steps to be worth automating:
   `tty_intr()` return 0 reddens the three job checks and leaves the
   empty-prompt ones green; replacing `signal_send_group()` with a
   single-pid send reddens exactly the pipeline check.
-- **`jobs_test.py`** -- **`Ctrl-Z` suspends a job, `jobs` lists it and
-  `fg` brings it back**, end to end through the real keyboard.
+- **`jobs_test.py`** -- **job control end to end through the real
+  keyboard**: `Ctrl-Z` suspends, `jobs` lists, `fg`/`bg` resume, `&`
+  backgrounds, and a background reader is stopped rather than served.
   `ctrlc_test.py`'s sibling, deliberately the same shape: the two keys
   go down the same path in `kernel/tty/ldisc.c` and differ only in what
   they do at the end of it, so the tools differ only in what they
   assert. Boots the `text` target twice, for the same reason.
 
-  Seventeen checks. Three of them are the ones that matter. **The job
-  survives AND stops** -- surviving is the whole difference from
-  Ctrl-C, but a "suspended" process that keeps running is what a
-  missing check in the scheduler's picker looks like, and no process
-  list can see it; the CPU column can, because nothing that is not
-  scheduled can accrue any. **A pipeline suspends as a unit and is ONE
-  job**, which is the check process groups exist for on this side too.
-  And **`fg` hands the terminal over**, asserted by Ctrl-C'ing the
+  Four checks carry it. **The job survives AND stops** -- surviving is
+  the whole difference from Ctrl-C, but a "suspended" process that keeps
+  running is what a missing check in the scheduler's picker looks like,
+  and no process list can see it; the CPU column can, because nothing
+  that is not scheduled can accrue any. **A pipeline suspends as a unit
+  and is ONE job**, which is the check process groups exist for on this
+  side too. **`fg` hands the terminal over**, asserted by Ctrl-C'ing the
   resumed job: a resume that forgot the terminal leaves the job running
   perfectly while the key goes to the line editor, which looks like a
-  hung job rather than a shell bug.
+  hung job rather than a shell bug. And **a background reader is
+  stopped**, asserted twice over -- `cat &` ends up `stopped`, and the
+  shell still runs the command typed after it, which is the half a
+  process list cannot show.
+
+  It also counts **zombies**, which nothing else here does: a `fg` that
+  waits only for the stage whose status it reports leaves a resumed
+  pipeline's other stages unreaped forever, and every other check passes
+  while it happens.
 
   It reads `jobs` output by REDIRECTING it to a file and `cat`ing that
   back over the serial socket -- a builtin prints through the shell's
   own sink, which goes to the physical screen, and reading it back
   through the kernel's `cat` is an independent path to the same bytes.
 
-  **Both halves were confirmed with positive controls.** Deleting the
-  SUSP branch in `tty_ldisc_input()` reddens six checks -- the stopped
-  ones and the pipeline ones -- while "the job is alive" stays green,
-  which is correct and is why that check is not the interesting one.
-  Removing `job_foreground()` from `fg` reddens exactly one: the Ctrl-C
-  after the resume.
+  **Three positive controls, each reddening a different set.** Deleting
+  the SUSP branch in `tty_ldisc_input()` reddens the stopped and
+  pipeline checks while "the job is alive" stays GREEN -- correct, and
+  why that check is not the interesting one. Removing `job_foreground()`
+  from `fg` reddens exactly one: the Ctrl-C after the resume. And making
+  `tty_check_background_read()` serve everybody reddens the SIGTTIN
+  pair, with `cat` sitting in `block(key)` and the next typed command
+  never reaching the shell at all -- which is the keystroke theft, shown
+  rather than argued.
 - **`console_shell_test.py`** -- a `text` boot reaches a RING-3 shell
   prompt and the kernel shell is not involved (`docs/init-design.md`'s
   stage 4). Eleven checks: init is what started `/bin/tosh`, an idle

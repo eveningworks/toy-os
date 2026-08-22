@@ -43,14 +43,11 @@ back in the table under a new id rather than ending it.
 
 ## What it does NOT do
 
-**There is no `bg`**, so a job can only be resumed in the foreground.
-Background jobs need `&` and the terminal-access signals that stop a
-background reader stealing the keyboard, which are not built (see
-`docs/roadmap.md`).
-
 **It only knows this shell's jobs.** A process suspended with `kill
 -STOP` was never in the table; `kill -CONT` resumes that one.
 
 ## See also
 
-`jobs` for the list and the ids. `Ctrl-Z` is what puts a job in it.
+`jobs` for the list and the ids. `Ctrl-Z` is what puts a job in it, and
+`bg` is the same resume without the terminal — which is what a job that
+reads input cannot use.

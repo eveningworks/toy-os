@@ -3898,6 +3898,73 @@ The consequence worth stating: **the shell has to print the `^C`
 itself**, because with a job running the editor never sees the key.
 `bash` prints it from the same place and for the same reason.
 
+## A stopped process is a FLAG beside its state, and stop/continue never reach the pending set
+
+Job control needed two things the signal design did not have: a process
+that exists but is not scheduled, and a way to say so that did not break
+the invariant everything else rests on. Both had an obvious answer that
+was wrong here.
+
+**The obvious answer to the first is a fifth `enum sched_state`, which
+is what Linux does** (`TASK_STOPPED`). It is wrong for this kernel
+because of the BLOCKED case. A process suspended while parked on a pipe
+has to come back to that pipe, so a real state has to remember which
+state it displaced and what channel that state was waiting on — and
+then `SIGCONT` has to put it back, correctly, into a state the test
+suite cannot reach. It cannot be reached because this kernel has no
+interruptible syscalls (`docs/roadmap.md`): there is no way to wake a
+blocked process in order to stop it, which is exactly the mechanism
+Linux's state transition exists to serve. Building the bookkeeping for a
+transition nothing can exercise is how a subtle bug gets a permanent
+home.
+
+As a flag it composes with all four existing states for nothing. **One
+line in `find_next_runnable()`** honours it; a wake still lands and
+writes the parked trapframe, leaving the slot READY-but-stopped so the
+syscall completes the moment somebody continues it; `SIGCONT` is one
+clear. Userland is unaffected either way — `PROC_STATE_STOPPED` is
+reported ahead of whatever the process was doing underneath, because
+once it is suspended the block is no longer why it is not running.
+
+When interruptible syscalls land, this is the decision to revisit: at
+that point the Linux shape becomes buildable AND testable, and the flag
+stops being the cheaper of the two.
+
+**The second decision is that `SIGSTOP`/`SIGTSTP`/`SIGCONT` are applied
+at SEND time**, by the sender, rather than queued in `pending` and acted
+on at the return to ring 3 like every other signal. The invariant `a
+pending bit means this process must die` is what lets `pending` be read
+with no policy lookup at all, and suspending is not a kind of dying — so
+routing a stop through it would cost every reader a lookup, for nothing.
+
+It is also *safe* to do at send time in a way a termination is not. A
+stop flips one byte of scheduler state: it allocates nothing, frees
+nothing and unmaps nothing, which is the same restraint
+`scheduler_wake()` keeps and the reason both are callable from the
+keyboard IRQ. `Ctrl-Z` arrives there, so this is not a theoretical
+property.
+
+Two consequences worth stating, because each surprises somebody:
+
+- **A stop reaches a process wedged inside a kernel path**, exactly as
+  reliably as a running one — more than `SIGTERM` can say, and the same
+  guarantee `SIGKILL` gets by the same route.
+- **A `SIGTERM` to a STOPPED process does nothing until it is
+  continued.** The bit is set and delivery waits for a return to ring 3
+  that a suspended process does not make. POSIX behaves identically and
+  `SIGKILL` is the exception here as there, but it looks like `kill`
+  being broken, so it is written down in three places including
+  `docs/commands/kill.md`.
+
+**And the testing lesson, which generalises past signals.** Five of the
+six KTESTs written for this assert on `scheduler_test_state()` — the
+flag. Deleting the one line in the picker, so a "stopped" process
+carries on running, left all five GREEN. The sixth spawns
+`/tests/spin_test`, suspends it, and asserts its `cpu_ns` does not
+advance across twenty ticks; that one failed on the right assertion.
+**Anything the scheduler DECIDES has to be tested by measuring progress,
+not by reading the bookkeeping the decision is made from.**
+
 ## The keyboard layout is keyed on evdev keycodes, so only the PS/2 driver sees a scancode
 
 **The bug that forced the question.** `|` could not be typed at all on an

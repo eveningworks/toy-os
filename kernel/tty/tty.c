@@ -185,6 +185,35 @@ void tty_set_termios(struct tty *t, const struct tty_termios *tio) {
     t->tio = *tio;
 }
 
+// --- who may read ----------------------------------------------------
+
+int tty_check_background_read(struct tty *t) {
+    if (!t) return 0;
+
+    // NO OWNER MEANS NO FOREGROUND, so there is nothing to be outside
+    // of. This is what keeps the check out of the way of the FIRST
+    // reader -- the process that becomes the owner by reading, which on
+    // every boot here is a shell.
+    if (!t->owner_pid || !t->fg_pgid) return 0;
+
+    int pid = scheduler_current_pid();
+    if (!pid) return 0;  // kernel context: it has no group to be outside
+    if (scheduler_pgid(pid) == t->fg_pgid) return 0;
+
+    // IGNORING THE SIGNAL DOES NOT EARN THE KEYBOARD. A process that has
+    // asked not to be stopped cannot be stopped, so the only two answers
+    // left are "let it steal input" and "refuse the read"; POSIX picks
+    // the second and so does this.
+    if (scheduler_signal_ignored(pid, SIGTTIN)) return -EIO;
+
+    // THE WHOLE GROUP, not the one process: a background PIPELINE whose
+    // first stage reads would otherwise be half stopped and half
+    // running, with the running half waiting on a pipe nothing will
+    // ever fill.
+    signal_send_group(scheduler_pgid(pid), SIGTTIN);
+    return 1;
+}
+
 // --- ownership -------------------------------------------------------
 
 int tty_owner(const struct tty *t) { return t ? t->owner_pid : 0; }

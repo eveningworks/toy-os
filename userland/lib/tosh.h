@@ -57,4 +57,14 @@ void tosh_init(struct tosh *sh, tosh_out_fn out, void *ctx);
 // running while it waits.
 int tosh_run_line(struct tosh *sh, const char *line);
 
+// Reports every background job that has finished or stopped since the
+// last time it was asked, then forgets the finished ones.
+//
+// **THE FRONT END CALLS THIS IMMEDIATELY BEFORE EVERY PROMPT.** Not
+// from tosh_run_line(), because a bare Enter draws a prompt without
+// running a line, and because output landing in the middle of a
+// running command is exactly what this timing exists to avoid. Cheap
+// when there are no jobs, which is the normal case.
+void tosh_reap_jobs(struct tosh *sh);
+
 #endif
