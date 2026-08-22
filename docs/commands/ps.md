@@ -25,6 +25,15 @@ meaningless outside `block`, so it goes inside the state rather than
 costing a seventh column. `block(?)` means the kernel reported a reason
 this binary does not know about.
 
+**`stopped` means suspended, not idle** -- a process that has been sent
+`SIGSTOP` or `SIGTSTP` (`kill -STOP`, or `Ctrl-Z` on a job). It keeps
+everything it holds and the scheduler simply stops choosing it, so the
+way to confirm it really is suspended is the CPU column: a stopped
+process's CPU time does not advance, while a merely idle one's does when
+it gets work. `stopped` is reported ahead of whatever the process was
+doing underneath -- one suspended mid-read shows `stopped`, not
+`block(pipe)`, because the block is no longer why it is not running.
+
 **PPID and PGID answer different questions that look alike.** The parent
 is who STARTED a process; the group is what a SIGNAL reaches. `kill -TERM
 -<pgid>` and `Ctrl-C` both act on a group, and a shell puts each job it

@@ -22,6 +22,9 @@ static const struct {
     { SIGSEGV, "SEGV" },
     { SIGTERM, "TERM" },
     { SIGCHLD, "CHLD" },
+    { SIGCONT, "CONT" },
+    { SIGSTOP, "STOP" },
+    { SIGTSTP, "TSTP" },
 };
 #define SIGNAL_COUNT (int)(sizeof SIGNALS / sizeof SIGNALS[0])
 

@@ -507,6 +507,42 @@ uint32_t scheduler_signal_pending(int pid);
 // reads.
 int scheduler_signal_take(int pid);
 
+// --- job control: stop and continue ------------------------------------
+//
+// **DELIBERATELY NOT PART OF THE PENDING SET.** Every other signal here
+// means "must die", which is what makes `pending` readable with no
+// policy lookup; suspending changes only whether the scheduler picks a
+// process, frees nothing, and is therefore applied AT SEND TIME -- see
+// abi/signal_abi.h's stop-and-continue section for the full argument.
+// That is also what makes these safe from the keyboard IRQ, which is
+// where Ctrl-Z arrives.
+
+// Suspends `pid`, recording `sig` as what did it. Returns 1 if the
+// process exists (including one already stopped, which is a no-op), 0
+// otherwise. A stopped process keeps everything it holds and stays in
+// whatever state it was in -- READY or BLOCKED -- because `stopped` is
+// a flag beside the state rather than a state of its own; scheduler.c's
+// struct sched_process says why.
+int scheduler_stop(int pid, int sig);
+
+// Resumes `pid`. Returns 1 if it WAS stopped, 0 otherwise -- so a
+// caller can tell a real resume from a SIGCONT to something already
+// running.
+int scheduler_continue(int pid);
+
+// 1 if `pid` is currently suspended.
+int scheduler_stopped(int pid);
+
+// The signal that stopped `pid`, ONCE -- a second call returns 0 until
+// the process is continued and stopped again. That is POSIX's
+// WUNTRACED semantics and the thing that stops a shell's waitpid loop
+// being handed the same suspension forever.
+int scheduler_stop_report(int pid);
+
+// The same, for the first child of `parent_pid` with an unreported
+// stop. Writes that child's pid to `out_pid` when it returns non-zero.
+int scheduler_stop_report_any(int parent_pid, int *out_pid);
+
 // Reads or sets whether `pid` ignores `sig`. `scheduler_signal_set_
 // ignored()` returns the PREVIOUS state (0 or 1), or -1 for a bad pid or
 // signal. Turning ignore ON also clears any pending bit for that signal:

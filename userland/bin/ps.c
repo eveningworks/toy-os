@@ -37,6 +37,7 @@ static const char *state_name(uint32_t s) {
         case PROC_STATE_RUNNING: return "run";
         case PROC_STATE_BLOCKED: return "block";
         case PROC_STATE_ZOMBIE:  return "zombie";
+        case PROC_STATE_STOPPED: return "stopped";
         default:                 return "?";
     }
 }

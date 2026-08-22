@@ -501,6 +501,18 @@ int sys_waitpid(int pid, int *out_code);
 // caller wants.
 int sys_waitpid_nohang(int pid, int *out_code);
 
+// Waits as sys_waitpid() does, but ALSO returns when the child is
+// stopped by SIGSTOP/SIGTSTP. Returns the pid either way; the code is
+// SIGNAL_STOP_BASE + the signal for a stop, and SIGNAL_IS_STOP() is the
+// test (abi/signal_abi.h).
+//
+// **A STOP RESULT MEANS THE CHILD IS STILL ALIVE AND UNREAPED.** It
+// still holds its slot and its memory, and it will report nothing more
+// until it is continued and stopped again -- so a caller that wants to
+// keep waiting must resume it first, and one that walks away must
+// remember it. This is what /bin/tosh's job table exists for.
+int sys_waitpid_untraced(int pid, int *out_code);
+
 // Sleeps for `ms` milliseconds, then returns 0. Returns -1 if the
 // caller has no scheduler slot to park in.
 //

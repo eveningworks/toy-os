@@ -181,6 +181,17 @@ static void proc_name_from_path(char *dst, int cap, const char *path) {
 }
 
 
+// Everything a slot's SIGNAL state has to forget before somebody else
+// gets it -- pending bits, dispositions, and any suspension.
+//
+// ONE FUNCTION FOR THREE CALLERS (spawn, the KTEST slot fabricator, and
+// the release beside it) because the file already predicted the failure
+// mode in prose: "one of the two places would eventually be the one
+// that got forgotten". Adding a third field made that concrete -- a
+// stopped bit surviving into the next tenant is a process that never
+// runs and gives no reason.
+static void signal_state_reset(int slot);
+
 // SCHED_ZOMBIE (Milestone 1 phase 4b, docs/roadmap.md): a process that
 // has exited but hasn't been scheduler_poll()'d yet. Previously
 // scheduler_on_exit() freed a slot straight to SCHED_UNUSED and
@@ -237,6 +248,33 @@ struct sched_process {
     // docs/signals-design.md breaks the invariant; scheduler.h says so
     // where grep will find it.
     uint32_t pending;
+
+    // --- job control: STOPPED, and why it is not a state -------------
+    //
+    // A FLAG BESIDE THE STATE RATHER THAN A FIFTH `enum sched_state`,
+    // and the blocked case is the whole argument. A process suspended
+    // while parked on a pipe must come back to that pipe, so a real
+    // state would have to remember which state it displaced and what
+    // channel that state was waiting on -- bookkeeping for a transition
+    // nothing here can even exercise, because this kernel has no
+    // interruptible syscalls (docs/roadmap.md) to wake a blocked
+    // process into a stop. As a flag it composes with all four states
+    // for free: find_next_runnable() skips it, a wake still lands and
+    // leaves the slot READY-but-stopped, and SIGCONT is one clear.
+    //
+    // Linux makes it a state (TASK_STOPPED) because it CAN wake an
+    // interruptible sleeper to stop it promptly. When interruptible
+    // syscalls land here, this is the decision to revisit.
+    uint8_t stopped;
+    // Has the parent been told about this stop yet? SYS_WUNTRACED
+    // reports a stop ONCE, exactly as POSIX does -- otherwise a shell
+    // looping on waitpid() would be handed the same suspension forever
+    // and could never get back to its prompt.
+    uint8_t stop_reported;
+    // Which signal stopped it, for SIGNAL_STOP_BASE + sig. Meaningless
+    // unless `stopped`.
+    int stop_sig;
+
     // Which signals this process ignores. A BITMASK rather than the
     // per-signal disposition table POSIX has, because there are only two
     // dispositions to express -- a handler is a function pointer, a
@@ -621,7 +659,11 @@ static int find_next_runnable(int start) {
             if (kernel_slot_runnable()) return ROT_KERNEL;
             continue;
         }
-        if (procs[idx].state == SCHED_READY) return idx;
+        // STOPPED IS CHECKED HERE AND NOWHERE ELSE. One picker means
+        // one place suspension has to be honoured -- see the field's
+        // comment in struct sched_process for why it is a flag rather
+        // than a state.
+        if (procs[idx].state == SCHED_READY && !procs[idx].stopped) return idx;
     }
     return ROT_KERNEL;
 }
@@ -808,8 +850,7 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
     // instruction; and dispositions do not survive an exec on Unix
     // either (an ignored signal is the documented exception there, and
     // this kernel has no fork/exec pair to make that distinction from).
-    procs[slot].pending = 0;
-    procs[slot].ignored = 0;
+    signal_state_reset(slot);
     // THE GROUP: what the caller asked for, else the spawner's, else a
     // group of this process's own. The third case is the kernel context
     // -- init, the demo, a KTEST -- which has no group to lend, and
@@ -912,6 +953,17 @@ int scheduler_proc_info(int index, struct proc_info *out) {
         case SCHED_ZOMBIE:  out->state = PROC_STATE_ZOMBIE;  break;
         default:            out->state = PROC_STATE_UNUSED;  break;
     }
+
+    // STOPPED OUTRANKS WHATEVER IT IS STOPPED FROM. A suspended process
+    // is still READY or BLOCKED underneath -- that is the point of the
+    // flag -- but reporting "ready" for something the scheduler will
+    // never pick is a lie of exactly the kind `ps` exists to prevent.
+    // Only over the two live states: a zombie's flag is stale, and
+    // scheduler_kill() clears it for the same reason.
+    if (p->stopped && (out->state == PROC_STATE_READY ||
+                       out->state == PROC_STATE_RUNNING ||
+                       out->state == PROC_STATE_BLOCKED))
+        out->state = PROC_STATE_STOPPED;
     return 1;
 }
 
@@ -1148,8 +1200,7 @@ int scheduler_test_park(uint64_t *tf, const void *chan, int reason) {
         // one had left SIGINT ignored on the slot they happened to get.
         // Establishing the precondition in the fabricator beats each
         // test remembering to (ktest.h).
-        procs[i].pending = 0;
-        procs[i].ignored = 0;
+        signal_state_reset(i);
         procs[i].pgid = i + 1;
         return i;
     }
@@ -1170,8 +1221,7 @@ void scheduler_test_release(int idx) {
     // is not the reason: an UNUSED slot with a pending bit is a slot the
     // next real spawn would have to remember to clear, and one of the
     // two places would eventually be the one that got forgotten.
-    procs[idx].pending = 0;
-    procs[idx].ignored = 0;
+    signal_state_reset(idx);
 }
 
 // Reported as PROC_STATE_*, never the internal enum: abi/proc_info.h
@@ -1180,6 +1230,13 @@ void scheduler_test_release(int idx) {
 // one would silently start lying if it gained a state.
 int scheduler_test_state(int idx) {
     if (idx < 0 || idx >= MAX_PROCS) return -1;
+    // Same precedence scheduler_proc_info() applies, and for the same
+    // reason -- a test asking a stopped slot's state must not be told
+    // "ready" about something that will never be picked.
+    if (procs[idx].stopped &&
+        (procs[idx].state == SCHED_READY || procs[idx].state == SCHED_RUNNING ||
+         procs[idx].state == SCHED_BLOCKED))
+        return PROC_STATE_STOPPED;
     switch (procs[idx].state) { // dispatch-ok: bounded by enum sched_state
     case SCHED_RUNNING: return PROC_STATE_RUNNING;
     case SCHED_READY:   return PROC_STATE_READY;
@@ -1646,6 +1703,92 @@ int scheduler_signal_take(int pid) {
     return sig;
 }
 
+// --- job control ------------------------------------------------------
+
+static void signal_state_reset(int slot) {
+    procs[slot].pending       = 0;
+    procs[slot].ignored       = 0;
+    procs[slot].stopped       = 0;
+    procs[slot].stop_reported = 0;
+    procs[slot].stop_sig      = 0;
+}
+
+int scheduler_stop(int pid, int sig) {
+    struct sched_process *p = live_slot(pid);
+    if (!p) return 0;
+
+    // ALREADY STOPPED IS A SUCCESS WITH NOTHING TO DO, and deliberately
+    // does not re-arm the report: two Ctrl-Zs on one job are one
+    // suspension, so a shell must not be told about it twice. Same
+    // reasoning as the pending mask being a set rather than a queue.
+    if (p->stopped) return 1;
+
+    p->stopped       = 1;
+    p->stop_sig      = sig;
+    p->stop_reported = 0;
+
+    // NOTHING IS DESCHEDULED HERE, and it does not need to be. If the
+    // target is some other process, the picker already will not choose
+    // it. If the target is the CURRENT process -- which is the common
+    // case for Ctrl-Z, since the job being suspended is usually the one
+    // running -- it keeps the CPU until the next timer tick and is then
+    // never picked again. That is at most one tick of extra execution,
+    // observable by nobody but the process itself, and it is what lets
+    // this function be safe to call from the keyboard IRQ: it only
+    // flips a byte, exactly the restraint scheduler_wake() keeps.
+    //
+    // A blocked process stays blocked. Its wake will still land and
+    // still write its trapframe; the slot simply becomes
+    // READY-and-stopped rather than runnable, so the syscall finishes
+    // the moment somebody continues it.
+
+    // The parent may be parked in SYS_WAITPID, and a suspension is
+    // news it asked for if it passed SYS_WUNTRACED. Same channel and
+    // same value an exit uses -- SYS_RETRY means "look again", and
+    // looking again is exactly what finds the stop.
+    scheduler_wake(scheduler_wait_chan_pid(p->ppid), SYS_RETRY);
+    return 1;
+}
+
+int scheduler_continue(int pid) {
+    struct sched_process *p = live_slot(pid);
+    if (!p || !p->stopped) return 0;
+
+    p->stopped  = 0;
+    p->stop_sig = 0;
+    // The report is dropped along with the stop it described: a
+    // suspension nobody heard about before it ended is not something a
+    // shell should be told about afterwards, because by then it is
+    // false.
+    p->stop_reported = 0;
+    return 1;
+}
+
+int scheduler_stopped(int pid) {
+    struct sched_process *p = live_slot(pid);
+    return p && p->stopped;
+}
+
+int scheduler_stop_report(int pid) {
+    struct sched_process *p = live_slot(pid);
+    if (!p || !p->stopped || p->stop_reported) return 0;
+    p->stop_reported = 1;
+    return p->stop_sig;
+}
+
+int scheduler_stop_report_any(int parent_pid, int *out_pid) {
+    if (parent_pid < 1) return 0;
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (procs[i].ppid != parent_pid) continue;
+        int sig = scheduler_stop_report(i + 1);
+        if (sig) {
+            if (out_pid) *out_pid = i + 1;
+            return sig;
+        }
+    }
+    return 0;
+}
+
 int scheduler_signal_raise(int pid, int sig) {
     struct sched_process *p = live_slot(pid);
     if (!p || !SIGNAL_VALID(sig)) return 0;
@@ -1697,6 +1840,13 @@ int scheduler_kill(int pid, int exit_code) {
 
     if (procs[slot].state != SCHED_READY && procs[slot].state != SCHED_BLOCKED)
         return 0; // unused, already a zombie, or running (handled above)
+
+    // A STOPPED PROCESS IS STILL KILLABLE, which is the reason SIGKILL
+    // is exempt from suspension everywhere: a job suspended by Ctrl-Z
+    // must not be unkillable until somebody resumes it. The flag is
+    // cleared here so the zombie it becomes does not report as stopped.
+    procs[slot].stopped       = 0;
+    procs[slot].stop_reported = 0;
 
     procs[slot].state = SCHED_ZOMBIE;
     procs[slot].exit_code = exit_code;

@@ -554,6 +554,22 @@ int sys_waitpid(int pid, int *out_code) {
     return (int)err(r);
 }
 
+// waitpid() that also returns when a child STOPS -- POSIX's WUNTRACED.
+//
+// A SEPARATE ENTRY POINT rather than a flag on sys_waitpid(), because
+// the two have different contracts and the difference is easy to miss:
+// this one can return with the child STILL ALIVE and unreaped, and a
+// caller that treats every result as an exit would drop a suspended job
+// on the floor. SIGNAL_IS_STOP() on the code is how a caller tells.
+int sys_waitpid_untraced(int pid, int *out_code) {
+    int64_t r;
+    do {
+        r = syscall3(SYS_WAITPID, (uint64_t)(int64_t)pid,
+                     (uint64_t)(uintptr_t)out_code, SYS_WUNTRACED);
+    } while (r == SYS_RETRY);
+    return (int)err(r);
+}
+
 int sys_setpgid(int pid, int pgid) {
     return (int)err(syscall2(SYS_SETPGID, (uint64_t)(int64_t)pid,
                              (uint64_t)(int64_t)pgid));

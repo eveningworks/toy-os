@@ -431,6 +431,25 @@ int sys_waitpid(struct syscall_ctx *c) {
     // wait(): it cannot collide with a real pid, which is 1-based.
     // Handled before the validity check below, which asks about a
     // specific process and has nothing to say about this.
+    // A STOP IS CHECKED BEFORE AN EXIT, for both forms below, and the
+    // order is deliberate: a stopped child is still alive, so the poll
+    // that follows would report it as "still running" and park the
+    // caller on a wake that has already happened. Only a caller that
+    // asked (SYS_WUNTRACED) can see one at all.
+    if (!bad && (c->a2 & SYS_WUNTRACED)) {
+        int stopped_pid = pid, sig = 0;
+        if (pid == -1)
+            sig = scheduler_stop_report_any(scheduler_current_pid(), &stopped_pid);
+        else if (scheduler_pid_valid(pid))
+            sig = scheduler_stop_report(pid);
+        if (sig) {
+            int code = SIGNAL_STOP_BASE + sig;
+            if (out) vmm_copy_to_user(pml4, out, &code, sizeof code);
+            c->regs[14] = (uint64_t)(int64_t)stopped_pid;
+            return 0;
+        }
+    }
+
     if (!bad && pid == -1) {
         int child = 0, code = 0;
         enum sched_poll_result r =

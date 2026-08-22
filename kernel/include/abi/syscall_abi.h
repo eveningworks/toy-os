@@ -614,6 +614,17 @@ struct spawn_msg {
 
 #define SYS_WNOHANG 1
 
+// SYS_WAITPID's other flag: report a child that STOPPED as well as one
+// that exited. POSIX's WUNTRACED, and opt-in for the same reason it is
+// opt-in there -- a caller that does not ask must never be handed a
+// result for a process that is still alive.
+//
+// The result is SIGNAL_STOP_BASE + the signal (abi/signal_abi.h), and
+// the child is NOT reaped: it still holds its slot, its memory and its
+// place in the process tree, because it has not finished. A stop is
+// reported ONCE per suspension.
+#define SYS_WUNTRACED 2
+
 #define SYS_WAITPID 28 // RDI = pid from SYS_SPAWN, RSI = pointer to an
                         // int (out) for the exit code, or NULL.
                         // RDX = flags: SYS_WNOHANG to poll instead of
@@ -642,6 +653,15 @@ struct spawn_msg {
                         // nothing can ever change the answer. "Has
                         // children, none dead yet" is the ordinary
                         // block (or SYS_RETRY under SYS_WNOHANG).
+                        //
+                        // SYS_WUNTRACED additionally reports a child
+                        // that was STOPPED (SIGSTOP/SIGTSTP): the
+                        // return is that child's pid and the out code
+                        // is SIGNAL_STOP_BASE + the signal. Nothing is
+                        // reaped -- the child is alive and suspended --
+                        // so a caller that loops must be able to tell
+                        // that result from an exit, which is what the
+                        // separate base exists for.
 
 #define SYS_GETRANDOM 29 // RDI = buffer (out), RSI = byte count. Fills
                           // the buffer with random bytes and returns

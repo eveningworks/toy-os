@@ -229,6 +229,187 @@ KTEST("signal", "a BLOCKED process is woken with -EINTR so it can be delivered t
     KTEST_ASSERT_EQ((int)rax, -EINTR);
 }
 
+// --- job control: stop and continue -------------------------------------
+
+KTEST("signal", "SIGSTOP suspends a process and SIGCONT resumes it") {
+    uint64_t tf[SCHED_TF_SLOTS];
+    scheduler_preempt_disable();
+    int idx = scheduler_test_park(tf, &park_chan, SCHED_WAIT_KEY);
+    if (idx < 0) {
+        scheduler_preempt_enable();
+        KTEST_SKIP("no free process slot to fabricate");
+    }
+    int pid = idx + 1;
+
+    // Woken first, so the slot is READY rather than BLOCKED -- this test
+    // is about the flag, and the blocked case is the next one.
+    scheduler_wake(&park_chan, 0);
+    int before = scheduler_test_state(idx);
+    int sent   = signal_send(pid, SIGSTOP);
+    int during = scheduler_test_state(idx);
+    int was_stopped = scheduler_stopped(pid);
+    int resumed = signal_send(pid, SIGCONT);
+    int after   = scheduler_test_state(idx);
+    int now_stopped = scheduler_stopped(pid);
+
+    scheduler_test_release(idx);
+    scheduler_preempt_enable();
+
+    KTEST_ASSERT(sent);
+    KTEST_ASSERT(resumed);
+    KTEST_ASSERT_EQ(before, PROC_STATE_READY);
+    KTEST_ASSERT_EQ(during, PROC_STATE_STOPPED);
+    KTEST_ASSERT(was_stopped);
+    KTEST_ASSERT_EQ(after, PROC_STATE_READY);
+    KTEST_ASSERT(!now_stopped);
+}
+
+KTEST("signal", "a BLOCKED process stops without losing what it waits on") {
+    // The whole argument for a flag rather than a fifth state: a
+    // process suspended mid-syscall must come back to that syscall. It
+    // stays parked on its channel while stopped, its wake still lands,
+    // and continuing it leaves it exactly where the wake put it.
+    uint64_t tf[SCHED_TF_SLOTS];
+    scheduler_preempt_disable();
+    int idx = scheduler_test_park(tf, &park_chan, SCHED_WAIT_KEY);
+    if (idx < 0) {
+        scheduler_preempt_enable();
+        KTEST_SKIP("no free process slot to fabricate");
+    }
+    int pid = idx + 1;
+
+    signal_send(pid, SIGSTOP);
+    int while_blocked = scheduler_test_state(idx);
+
+    // The wake it was waiting for arrives WHILE it is stopped. It must
+    // still be answered -- the trapframe gets its return value -- and
+    // the process must still not run.
+    int woken = scheduler_wake(&park_chan, 42);
+    int after_wake = scheduler_test_state(idx);
+    int64_t rax = (int64_t)tf[SCHED_TF_RAX];
+
+    signal_send(pid, SIGCONT);
+    int after_cont = scheduler_test_state(idx);
+
+    scheduler_test_release(idx);
+    scheduler_preempt_enable();
+
+    // STOPPED outranks BLOCKED in the report: the block is no longer
+    // why it is not running.
+    KTEST_ASSERT_EQ(while_blocked, PROC_STATE_STOPPED);
+    KTEST_ASSERT_EQ(woken, 1);
+    KTEST_ASSERT_EQ(after_wake, PROC_STATE_STOPPED);
+    KTEST_ASSERT_EQ((int)rax, 42);
+    KTEST_ASSERT_EQ(after_cont, PROC_STATE_READY);
+}
+
+KTEST("signal", "a stop is reported to a waiter ONCE per suspension") {
+    // POSIX's WUNTRACED rule, and the thing that stops a shell's
+    // waitpid loop being handed the same suspension forever.
+    uint64_t tf[SCHED_TF_SLOTS];
+    scheduler_preempt_disable();
+    int idx = scheduler_test_park(tf, &park_chan, SCHED_WAIT_KEY);
+    if (idx < 0) {
+        scheduler_preempt_enable();
+        KTEST_SKIP("no free process slot to fabricate");
+    }
+    int pid = idx + 1;
+
+    signal_send(pid, SIGTSTP);
+    int first  = scheduler_stop_report(pid);
+    int second = scheduler_stop_report(pid);
+    // A SECOND STOP WHILE ALREADY STOPPED IS NOT A SECOND EVENT.
+    signal_send(pid, SIGTSTP);
+    int third  = scheduler_stop_report(pid);
+    // Continued and stopped again IS.
+    signal_send(pid, SIGCONT);
+    signal_send(pid, SIGSTOP);
+    int fourth = scheduler_stop_report(pid);
+
+    signal_send(pid, SIGCONT);
+    scheduler_test_release(idx);
+    scheduler_preempt_enable();
+
+    KTEST_ASSERT_EQ(first, SIGTSTP);
+    KTEST_ASSERT_EQ(second, 0);
+    KTEST_ASSERT_EQ(third, 0);
+    KTEST_ASSERT_EQ(fourth, SIGSTOP);
+}
+
+KTEST("signal", "SIGSTOP cannot be ignored, and SIGCONT to a running process is a no-op") {
+    uint64_t tf[SCHED_TF_SLOTS];
+    scheduler_preempt_disable();
+    int idx = scheduler_test_park(tf, &park_chan, SCHED_WAIT_KEY);
+    if (idx < 0) {
+        scheduler_preempt_enable();
+        KTEST_SKIP("no free process slot to fabricate");
+    }
+    int pid = idx + 1;
+
+    // SIGSTOP is unignorable for the reason SIGKILL is: there has to be
+    // something that always works.
+    scheduler_signal_set_ignored(pid, SIGSTOP, 1);
+    signal_send(pid, SIGSTOP);
+    int stopped_anyway = scheduler_stopped(pid);
+    signal_send(pid, SIGCONT);
+
+    // SIGTSTP, by contrast, IS ignorable -- that is the difference
+    // between the key and the command, exactly as on Unix.
+    scheduler_signal_set_ignored(pid, SIGTSTP, 1);
+    signal_send(pid, SIGTSTP);
+    int ignored_tstp = scheduler_stopped(pid);
+
+    // Continuing something that was never stopped reports delivered and
+    // changes nothing.
+    int cont_ok = signal_send(pid, SIGCONT);
+    int still_running = !scheduler_stopped(pid);
+
+    scheduler_signal_set_ignored(pid, SIGSTOP, 0);
+    scheduler_signal_set_ignored(pid, SIGTSTP, 0);
+    scheduler_test_release(idx);
+    scheduler_preempt_enable();
+
+    KTEST_ASSERT(stopped_anyway);
+    KTEST_ASSERT(!ignored_tstp);
+    KTEST_ASSERT(cont_ok);
+    KTEST_ASSERT(still_running);
+}
+
+KTEST("signal", "a stopped process is still killable") {
+    // The reason SIGKILL is exempt from suspension everywhere: a job
+    // suspended by Ctrl-Z must not be unkillable until somebody resumes
+    // it. Fabricated slots cannot be scheduler_kill()'d (no address
+    // space), so this asserts the state the kill path depends on --
+    // that a stopped slot is still READY or BLOCKED underneath, which
+    // is what scheduler_kill() requires.
+    uint64_t tf[SCHED_TF_SLOTS];
+    scheduler_preempt_disable();
+    int idx = scheduler_test_park(tf, &park_chan, SCHED_WAIT_KEY);
+    if (idx < 0) {
+        scheduler_preempt_enable();
+        KTEST_SKIP("no free process slot to fabricate");
+    }
+    int pid = idx + 1;
+
+    signal_send(pid, SIGSTOP);
+    int alive = scheduler_pid_alive(pid);
+    // A SIGTERM to a stopped process sets its bit and waits -- POSIX's
+    // behaviour, and the one surprise worth a test: it is pending, and
+    // it will not act until something continues the process.
+    signal_send(pid, SIGTERM);
+    int pending = scheduler_signal_pending(pid) != 0;
+    int still_stopped = scheduler_stopped(pid);
+
+    scheduler_signal_take(pid);
+    signal_send(pid, SIGCONT);
+    scheduler_test_release(idx);
+    scheduler_preempt_enable();
+
+    KTEST_ASSERT(alive);
+    KTEST_ASSERT(pending);
+    KTEST_ASSERT(still_stopped);
+}
+
 // --- process groups ----------------------------------------------------
 
 KTEST("signal", "every live process is in a group, and nothing is in group 0") {
@@ -321,11 +502,70 @@ KTEST("signal", "a group signal reaches every member and nobody else") {
 // --- the ring-3 half ----------------------------------------------------
 
 #define SIGNAL_TEST_PATH "/tests/signal_test"
+// A silent, long-running spinner -- see userland/tests/spin_test.c for
+// why it prints nothing. The stop test below needs a process that makes
+// MEASURABLE progress, which is the one thing a fabricated slot cannot
+// do.
+#define SPIN_PATH "/tests/spin_test"
 
 // Generous: the child spawns several long-running children of its own
 // and waits for each to be signalled, and delivery is up to one tick
 // late by design. Still under a couple of seconds in practice.
 #define TIMEOUT_TICKS 900
+
+// THE TEST THE BOOKKEEPING ONES CANNOT BE. Every stop test above
+// asserts on scheduler_test_state(), which reads the flag -- so all of
+// them stay green with find_next_runnable()'s stopped check deleted,
+// and a "stopped" process that carries on running looks perfect. What
+// actually has to be true is that a suspended process STOPS MAKING
+// PROGRESS, and the only way to see that is to give a real one work to
+// do and watch the CPU time it accrues.
+//
+// cpu_ns is the measurement because it is billed from the timer tick
+// against whoever was running: a process nothing schedules cannot
+// accumulate any, no matter what the process table says about it.
+KTEST("signal", "a STOPPED process stops accruing CPU time, and resumes accruing it") {
+    if (!fs_exists(SPIN_PATH)) KTEST_SKIP("no " SPIN_PATH " on this boot");
+
+    // The long form: this has to outlive four observation windows.
+    int pid = scheduler_spawn(SPIN_PATH, "600");
+    KTEST_ASSERT(pid != 0);
+
+    struct proc_info info;
+    int slot = pid - 1;
+
+    // Let it run first, so the measurement has something to compare
+    // against -- a process that never got the CPU at all would show a
+    // flat cpu_ns for reasons having nothing to do with the stop.
+    uint64_t t0 = pit_ticks();
+    while (pit_ticks() - t0 < 20) { }
+    KTEST_ASSERT(scheduler_proc_info(slot, &info));
+    uint64_t ran_before = info.cpu_ns;
+
+    signal_send(pid, SIGSTOP);
+    // Sampled AFTER the stop rather than straddling it: the tick that
+    // suspends it may still bill the slice it was in the middle of.
+    KTEST_ASSERT(scheduler_proc_info(slot, &info));
+    uint64_t stopped_at = info.cpu_ns;
+    t0 = pit_ticks();
+    while (pit_ticks() - t0 < 20) { }
+    KTEST_ASSERT(scheduler_proc_info(slot, &info));
+    uint64_t while_stopped = info.cpu_ns;
+
+    signal_send(pid, SIGCONT);
+    t0 = pit_ticks();
+    while (pit_ticks() - t0 < 20) { }
+    KTEST_ASSERT(scheduler_proc_info(slot, &info));
+    uint64_t after_cont = info.cpu_ns;
+
+    int code = 0;
+    scheduler_kill(pid, 0);
+    scheduler_poll(pid, &code);
+
+    KTEST_ASSERT(ran_before > 0);               // it really was running
+    KTEST_ASSERT_EQ(while_stopped, stopped_at); // it really stopped
+    KTEST_ASSERT(after_cont > while_stopped);   // it really resumed
+}
 
 KTEST("signal", "a real process is terminated by a signal and reports 128 + it") {
     if (!fs_exists(SIGNAL_TEST_PATH)) KTEST_SKIP("no " SIGNAL_TEST_PATH " on this boot");

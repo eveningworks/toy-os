@@ -34,6 +34,13 @@
 #define PROC_STATE_RUNNING 2
 #define PROC_STATE_BLOCKED 3
 #define PROC_STATE_ZOMBIE  4 // exited, not yet reaped -- still holds a slot
+#define PROC_STATE_STOPPED 5 // suspended by SIGSTOP/SIGTSTP -- alive, holds
+                             // everything it held, and will not be picked
+                             // until SIGCONT. Reported AHEAD of whatever
+                             // the process was doing when it stopped: a
+                             // process suspended mid-read is stopped
+                             // first and blocked second, because the
+                             // block is no longer why it is not running
 
 // What a PROC_STATE_BLOCKED process is waiting for, as a LABEL. Read
 // `ps`'s state column: `block(pipe)`.

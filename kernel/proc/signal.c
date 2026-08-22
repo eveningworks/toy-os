@@ -7,11 +7,19 @@
 //
 // HOW LITTLE POLICY THERE IS, and why that is deliberate: with no
 // user-space handlers there are exactly two dispositions, so the whole
-// policy is "SIGCHLD is ignored by default, everything else terminates".
-// That is a complete and useful system -- it is where Ctrl-C starts
-// working -- and it fits in one function. Handlers (stage 3) are what
-// turn this file into something bigger; until then, resisting the
-// temptation to build the table they would need is the point.
+// policy is "SIGCHLD is ignored, stop and continue suspend and resume,
+// everything else terminates". That is a complete and useful system --
+// it is where Ctrl-C and Ctrl-Z both work -- and it fits in one
+// function. Handlers (stage 3 of docs/signals-design.md) are what turn
+// this file into something bigger; until then, resisting the temptation
+// to build the table they would need is the point.
+//
+// THE ONE SURPRISE, AND IT IS POSIX'S TOO: a SIGTERM to a STOPPED
+// process does nothing visible. The bit is set and delivery happens on
+// the way back to ring 3, which a suspended process does not reach --
+// so it dies when somebody continues it, and not before. SIGKILL is the
+// exception, here as on Linux, because it never went through the
+// pending set in the first place.
 #include "signal.h"
 #include "signal_abi.h"
 #include "scheduler.h"
@@ -28,7 +36,7 @@
 // without every existing program having to learn about it. Unix made the
 // same call, and for the same reason.
 static int default_terminates(int sig) {
-    return sig != SIGCHLD;
+    return sig != SIGCHLD && !SIGNAL_STOPS(sig) && !SIGNAL_CONTINUES(sig);
 }
 
 int signal_send(int pid, int sig) {
@@ -54,6 +62,33 @@ int signal_send(int pid, int sig) {
         // SIGKILL cannot be ignored, so the bit is guaranteed to survive.
         if (pid != scheduler_current_pid())
             return scheduler_kill(pid, SIGNAL_EXIT_BASE + SIGKILL);
+    }
+
+    // STOP AND CONTINUE ACT HERE, AT SEND TIME, and never reach the
+    // pending set. Suspending flips one byte of scheduler state -- it
+    // allocates nothing, frees nothing and unmaps nothing -- so unlike
+    // a termination there is no reason to defer it to the target's
+    // return to ring 3, and every reason not to: deferring would mean
+    // teaching `pending` a second meaning, and "a set bit means this
+    // process must die" is the invariant the whole design rests on.
+    //
+    // The consequence worth stating: a stop is delivered to a process
+    // that never reaches ring 3 again -- one wedged inside a kernel
+    // path -- exactly as reliably as to a running one, which is more
+    // than SIGTERM can say. SIGSTOP is unignorable for the same reason
+    // SIGKILL is (abi/signal_abi.h).
+    if (SIGNAL_STOPS(sig)) {
+        if (!SIGNAL_UNIGNORABLE(sig) && scheduler_signal_ignored(pid, sig))
+            return scheduler_pid_alive(pid);
+        return scheduler_stop(pid, sig);
+    }
+    if (SIGNAL_CONTINUES(sig)) {
+        // NOT conditional on it having been stopped: SIGCONT to a
+        // running process is a successful delivery that does nothing,
+        // which is what POSIX says and what a shell's `bg` relies on
+        // when it races a job that woke up on its own.
+        scheduler_continue(pid);
+        return scheduler_pid_alive(pid);
     }
 
     // A signal whose default action is to be ignored, and which the
