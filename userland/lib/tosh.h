@@ -34,6 +34,24 @@ struct tosh {
     tosh_out_fn out;
     void *ctx;
     int last_status; // exit code of the last external command
+
+    // **MAY A CHILD INHERIT THIS SHELL'S fd 0?** 0 by default, and the
+    // front end says otherwise.
+    //
+    // `/bin/tosh` owns the physical console -- reading fd 0 is its whole
+    // existence -- so a child it spawns should read the same keyboard.
+    // The GUI TERMINAL does not: it takes keys as window events, and its
+    // fd 0 is a console some other process owns (or nobody does). A
+    // child left to inherit that blocks forever on a keyboard it will
+    // never be given, and since the shell waits for its child, the
+    // window stops responding -- a hang, not a wrong answer.
+    //
+    // So a shell with no terminal input to give hands its children an
+    // EMPTY one: a pipe whose write end is closed, which reports EOF at
+    // once. That is what a process with no controlling terminal gets on
+    // a real system, and it is what makes `cat` with no arguments print
+    // nothing in the GUI Terminal instead of freezing it.
+    int stdin_ok;
 };
 
 void tosh_init(struct tosh *sh, tosh_out_fn out, void *ctx);

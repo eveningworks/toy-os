@@ -222,6 +222,33 @@ def run(dbg, qmp, tmp, shot_dir, res):
     after_bad = ink(qmp, tmp, "ut_bad.png", box)
     res.check("an unknown command reports itself", after_bad != before)
 
+    # --- A CHILD THAT READS STDIN MUST NOT FREEZE THIS WINDOW --------
+    #
+    # This terminal takes keys as WINDOW EVENTS; its fd 0 is a console
+    # some other process owns, or nobody does. A child left to inherit
+    # that blocks forever on a keyboard it will never be given, and
+    # since the shell waits for its child, the window stops responding.
+    #
+    # It became easy to hit when tosh's builtin `cat` was removed (so
+    # `cat` is /bin/cat, which reads fd 0 with no arguments), but it was
+    # always reachable -- `catin` does the same thing. tosh hands a
+    # child an EMPTY stdin when it has no terminal input of its own; see
+    # struct tosh's `stdin_ok`.
+    #
+    # THE CHECK IS THAT THE NEXT COMMAND STILL RUNS. A screenshot of a
+    # frozen window looks much like a live one, and the window object
+    # survives either way -- so the assertion is that the shell reached a
+    # prompt again and executed something, through the FILESYSTEM.
+    dbg.send("sh rm /filetest.txt")
+    dbg.settle()
+    type_line(dbg, "cat", settle=2.5)
+    res.check("a bare `cat` returns instead of hanging the window",
+              dbg.window(TITLE) is not None)
+    type_line(dbg, "file_test", settle=3.0)
+    res.check("...and the terminal still runs the NEXT command",
+              root_has("filetest.txt"),
+              "the shell never came back -- a child is still blocked on fd 0")
+
     # And the terminal is still alive and interactive afterwards.
     type_line(dbg, "pwd")
     res.check("it survives an external command and a failure",

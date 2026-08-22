@@ -233,7 +233,20 @@ def main():
         check("the kernel shell stood down",
               "kernel shell standing down" in boot)
 
+        # POLLED, NOT SAMPLED ONCE. A shell reaches its blocking read a
+        # moment after init spawns it, so a single sample taken right
+        # after boot catches it READY perfectly legitimately -- measured
+        # at 2 runs in 4 before this was a poll, which reads as an
+        # intermittent kernel bug and is a harness one.
+        #
+        # It does not weaken the check: an idle shell must REACH
+        # SCHED_BLOCKED, and a shell that spins never does, so the bound
+        # is what fails rather than the first unlucky sample.
         row = tosh_row(dbg)
+        deadline = time.time() + 8
+        while time.time() < deadline and not (row and row[1] == 4):
+            time.sleep(0.3)
+            row = tosh_row(dbg)
         # 4 == SCHED_BLOCKED (kernel/proc/scheduler.c's enum sched_state).
         check("an idle tosh is BLOCKED, not spinning",
               bool(row) and row[1] == 4,
@@ -245,9 +258,21 @@ def main():
               " ".join(sorted(before)))
 
         print("the console has one reader, and it is not the kernel shell")
-        # `touch` is a kernel-shell builtin and is NOT on tosh's PATH,
-        # so a working stand-down leaves nothing behind.
-        type_line(flow, "touch /kprobe.txt")
+        # `rescue touch` is a KERNEL-SHELL-ONLY command -- the kernel's
+        # own copies of the file commands live behind that one name
+        # (apps/shell_rescue.c), and there is no /bin/rescue -- so a
+        # working stand-down leaves nothing behind.
+        #
+        # It used to be a bare `touch`, on the premise that `touch` was
+        # a kernel builtin not on tosh's PATH. That premise went stale
+        # when `touch` became a /bin PROGRAM: tosh then found it, ran
+        # it, and created the probe file -- so this check failed while
+        # the property it names was perfectly intact, and left
+        # `kprobe.txt` behind to fail the Ctrl-U check further down as
+        # well. A probe has to name something the OTHER shell genuinely
+        # cannot reach, and `rescue` is the one name guaranteed to stay
+        # that way (CLAUDE.md).
+        type_line(flow, "rescue touch /kprobe.txt")
         time.sleep(1.5)
         check("a kernel-shell builtin typed at the console creates nothing",
               "kprobe.txt" not in root_names(dbg))
@@ -324,7 +349,7 @@ def main():
         #    worked" is distinguishable from "nothing ran at all".
         dbg.send(f"sh rm {MADE}")
         time.sleep(0.4)
-        flow.type_command("touch /kprobe.txt")
+        flow.type_command("rescue touch /kprobe.txt")
         flow.session.combo(["ctrl", "u"])
         time.sleep(0.3)
         type_line(flow, "file_test")

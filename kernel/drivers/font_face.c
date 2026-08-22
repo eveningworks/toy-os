@@ -267,6 +267,74 @@ static uint32_t slot_codepoint(int slot) {
 // always at least 1 (or the "bold" would be identical to the regular
 // and the setting would look broken) and never so wide it closes the
 // counters of an 'e' at 8px.
+// **A GLYPH MUST HAVE INK INSIDE THE LINE BOX, or it is invisible.**
+//
+// Ring 0 paints `line_h` rows of a `cell_h`-row bitmap -- deliberately,
+// because a console cell is OPAQUE and painting the taller bitmap would
+// write background into the row below and erase the previous line on
+// every character drawn (see gfx.c's draw_glyph_kerned). For a `g` that
+// costs the tip of its tail. For a glyph whose ink is ENTIRELY below the
+// box it costs the whole character, and the user sees a blank cell where
+// they typed something.
+//
+// **AT 14px THAT IS EXACTLY ONE GLYPH: `_`** -- measured across the
+// atlas, 1 of 101, and it is also the only one whose peak coverage is
+// under half. Both facts have the same cause. DejaVu Sans Mono puts the
+// underscore at the font's FULL descent (yMin -483, which is hhea's
+// descent exactly) and 0.55px thick at this size, while `line_h` keeps
+// only 60% of the descent -- so the bar lands at rows 14.75..15.30,
+// outside a box that ends at 14, spread over two rows at a quarter
+// coverage each. Invisible on the console; a grey smudge in ring 3,
+// which draws all 16 rows. One defect, two symptoms.
+//
+// So: a glyph with ink but none of it inside the box is rebuilt as a
+// SINGLE FULLY-COVERED ROW on the box's last line. Both halves are
+// needed. Shifting alone would leave a two-row 25% bar -- visible, and
+// still reading as grey rather than as a character. Giving it one solid
+// row is a minimum stroke weight of one pixel, which is what a hinted
+// rasteriser does with a sub-pixel stem and what makes an underscore
+// look like an underscore at terminal sizes.
+//
+// **IT CANNOT MAKE ANYTHING WORSE**, which is the argument for doing it
+// here rather than in the drawing code: it fires only for a glyph that
+// would otherwise be drawn as nothing at all, so the comparison is
+// against blank, not against a slightly different shape. A column counts
+// as inked at half the glyph's own peak, so the bar keeps its width and
+// its antialiased ends do not smear it wider.
+//
+// The alternative fixes were all bigger than the symptom: growing
+// `line_h` reflows every font-derived measurement on the machine (its
+// own comment above says so), and blending the rows past the box keeps
+// the console's overwrite-in-place from clearing them, so an edited line
+// would leave ghost bars behind.
+static void lift_into_line_box(uint8_t *cell, int cell_w, int cell_h, int line_h) {
+    if (line_h <= 0 || line_h >= cell_h) return;
+
+    int peak = 0, peak_in = 0;
+    for (int r = 0; r < cell_h; r++)
+        for (int c = 0; c < cell_w; c++) {
+            int v = cell[r * cell_w + c];
+            if (v > peak) peak = v;
+            if (r < line_h && v > peak_in) peak_in = v;
+        }
+    if (!peak || peak_in) return; // blank, or already visible -- leave it alone
+
+    int thresh = peak / 2;
+    uint8_t row[TTF_MAX_CELL_W]; // the bound the builder already enforces above
+    for (int c = 0; c < cell_w && c < (int)sizeof row; c++) {
+        int best = 0;
+        for (int r = 0; r < cell_h; r++) {
+            int v = cell[r * cell_w + c];
+            if (v > best) best = v;
+        }
+        row[c] = best >= thresh && best > 0 ? 255 : 0;
+    }
+    for (int r = 0; r < cell_h; r++)
+        for (int c = 0; c < cell_w; c++) cell[r * cell_w + c] = 0;
+    for (int c = 0; c < cell_w && c < (int)sizeof row; c++)
+        cell[(line_h - 1) * cell_w + c] = row[c];
+}
+
 static int synth_strength(int px) {
     int s = px / 24;
     if (s < 1) s = 1;
@@ -380,6 +448,7 @@ const struct font_atlas *font_face_build(int px, enum font_weight weight) {
         // pass would smear each glyph into the start of the one after
         // it (they share rows in memory, not on screen).
         if (smear) ttf_embolden(cell, cell_w, cell_h, smear);
+        lift_into_line_box(cell, cell_w, cell_h, line_h);
     }
     kfree(sc);
     for (int s = 0; s < count; s++) blob[glyph_bytes + s] = advances[s];

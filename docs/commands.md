@@ -9,9 +9,17 @@ carrying it inline.
 it is what sits behind the desktop and what *Exit to shell* returns to;
 on a `text` boot init starts `/bin/tosh` on the console instead and this
 one stands down, staying reachable as `sh <cmd>` over the serial debug
-console. `/bin/tosh` is a much smaller shell -- `ls`, `cat`, `cd`,
+console. `/bin/tosh` is a much smaller shell -- `ls`, `cd`,
 `pwd`, `echo`, `help`, and anything on `PATH` -- and none of the
-kernel-introspection commands below exist there. It does have
+kernel-introspection commands below exist there.
+
+**`cat` is NOT a tosh builtin, and that is a fix rather than an
+omission.** It was one, and a builtin `cat` requires a filename -- so
+`foo | cat` printed "cat: needs a filename" instead of passing the
+pipeline through, which is `cat`'s most common use. `/bin/cat` reads
+fd 0 when given no argument, so removing the builtin made the pipeline
+work and left `cat file` unchanged. It is one fewer command with two
+implementations (`docs/roadmap.md`). It does have
 REDIRECTION, which this one does not: `cmd > file`, `cmd >> file`
 and `cmd < file`, plus `a | b | c` pipelines (up to four stages), with
 the operators space-separated. A builtin may appear anywhere in a

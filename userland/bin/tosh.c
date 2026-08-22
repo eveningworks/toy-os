@@ -112,6 +112,11 @@ int main(int argc, char **argv) {
     (void)argc; (void)argv;
 
     tosh_init(&g_sh, out_fd1, 0);
+    // THIS shell owns the physical console -- reading fd 0 is its whole
+    // existence -- so a child it spawns should read the same keyboard.
+    // The GUI Terminal leaves this 0 and its children get an empty
+    // stdin instead; see struct tosh's `stdin_ok` for why that matters.
+    g_sh.stdin_ok = 1;
     uhist_init(&g_hist);
 
     // --- job control, in two lines -----------------------------------

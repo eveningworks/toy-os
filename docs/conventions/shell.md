@@ -287,3 +287,33 @@ this the obvious way), not from how much history it accumulated.
   a kernel that lost the code and reported 0 would otherwise pass. That
   harness went 0/14, all "did it hang?", the first time the banner was
   removed unconditionally.
+
+
+## A BUILTIN THAT CANNOT READ ITS INPUT MUST NOT SHADOW A PROGRAM THAT CAN.
+
+`cat` was a tosh builtin and required a filename, so `foo | cat` printed
+"cat: needs a filename" instead of the pipeline's output -- the one thing
+`cat` is most often asked to do. The builtin is gone; `/bin/cat` reads
+fd 0 with no argument and is what runs now.
+
+**The general rule this is an instance of:** a builtin exists to be
+FASTER or to change the shell's own state (`cd` must, `pwd` may). One
+that merely reimplements a `/bin` program is a second implementation
+that will drift, and the drift shows up as the program behaving
+differently depending on how it was reached. `docs/roadmap.md` still
+lists `ls` and `echo` in that position.
+
+**AND A SHELL WITH NO TERMINAL INPUT MUST HAND ITS CHILDREN AN EMPTY
+ONE, never somebody else's keyboard.** `struct tosh`'s `stdin_ok`, set
+only by `/bin/tosh`, which genuinely owns the console. The GUI Terminal
+takes keys as window events and its fd 0 is a console another process
+owns -- a child inheriting that blocks forever on a keyboard it will
+never be given, and since the shell waits for its child, the WINDOW
+HANGS. It is a pipe with the write end closed, so a read reports EOF at
+once, which is what a process with no controlling terminal gets on a
+real system.
+
+The hazard predates removing the builtin (`catin` reaches it too), but
+removing the builtin is what made it easy to hit -- and a positive
+control confirms the cost: with the guard removed, `uterm_test` cannot
+run the next command OR close the window with Alt+F4.

@@ -95,7 +95,7 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~init starting `/bin/tosh` on the `text` target, in place of the kernel shell~~ DONE 2026-08-19
 - [x] ~~**`dup`/`dup2`-style fd plumbing**, so the shell can wire an arbitrary fd to 0/1/2~~ DONE 2026-08-19
 - [x] ~~A per-process cwd~~ DONE 2026-08-19 -- in the kernel, inherited across spawn; every path syscall resolves against it
-- [ ] `/bin/tosh` has its own `ls`/`cat`/`echo` builtins beside the `/bin` programs -- two implementations of one command
+- [ ] `/bin/tosh` still has `ls`/`echo` builtins beside the `/bin` programs -- `cat`'s is gone, which is what made `foo | cat` work
 - [x] ~~Ring 3 cannot ask which filesystem is mounted~~ DONE 2026-08-20 -- `QUERY_FSINFO`, a provider rather than a wider `SYS_SYSINFO`
 - [ ] The About window still omits its filesystem line, though `QUERY_FSINFO` reports it now -- needs the window widened
 - [x] ~~Tunables: the non-persisting `struct setting`~~ DONE 2026-08-20 -- `kernel.heap_debug`, `kernel.ata_nodma`, `kernel.kstack_track`

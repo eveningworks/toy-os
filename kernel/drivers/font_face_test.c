@@ -25,6 +25,7 @@
 #include "string.h"
 #include "kfmt.h"
 #include "ktest.h"
+#include "klog.h"
 
 #define TEST_FACE "dejavu-sans-mono"
 #define PROP_FACE "liberation-sans"
@@ -655,4 +656,51 @@ KTEST("font_face", "the atlas carries a kern matrix, and only where the face ker
 
     font_face_select(before);
     gfx_set_font_px(before_px);
+}
+
+// --- a glyph the console cannot draw is a glyph nobody can type ------
+//
+// Ring 0 paints `line_h` rows of a `cell_h`-row bitmap, deliberately
+// (gfx.c's draw_glyph_kerned says why). A glyph whose ink is ENTIRELY
+// below the line box is therefore drawn as nothing at all -- not
+// clipped, absent -- and a character that vanishes when typed reads as
+// a broken keyboard rather than a font metric.
+//
+// That is not hypothetical: `_` was exactly this. DejaVu Sans Mono puts
+// the underscore at the font's FULL descent while `line_h` keeps 60% of
+// it, so the bar landed outside the box and the console showed a blank
+// cell. font_face.c's lift_into_line_box() is the fix; this is what
+// stops it coming back at some other size, where a different glyph
+// could fall off the same edge.
+
+KTEST("font", "every glyph has ink inside the line box") {
+    const struct font_atlas *a = font_face_atlas();
+    if (!a || !a->glyphs) KTEST_SKIP("no TTF atlas on this boot");
+    KTEST_ASSERT(a->line_h > 0 && a->line_h <= a->cell_h);
+
+    int outside = -1, outside_count = 0;
+    for (int idx = 0; idx < a->count; idx++) {
+        const unsigned char *gl = a->glyphs + (size_t)idx * a->cell_w * a->cell_h;
+        int any = 0, inside = 0;
+        for (int r = 0; r < a->cell_h && !inside; r++)
+            for (int c = 0; c < a->cell_w; c++) {
+                if (!gl[r * a->cell_w + c]) continue;
+                any = 1;
+                if (r < a->line_h) { inside = 1; break; }
+            }
+        // A BLANK glyph is fine -- the space has no ink anywhere, and
+        // demanding some would fail on the one cell that is meant to be
+        // empty.
+        if (!any || inside) continue;
+        if (outside < 0) outside = idx;
+        outside_count++;
+    }
+    // NAMED, not counted: "1 glyph is invisible" sends the next reader
+    // looking, and the slot number plus its character says which.
+    if (outside >= 0)
+        klog_printf("font: glyph slot %d ('%c') has no ink inside line_h %d "
+                    "of cell_h %d (%d in total)\n",
+                    outside, outside < 95 ? outside + 32 : '?',
+                    a->line_h, a->cell_h, outside_count);
+    KTEST_ASSERT_EQ(outside_count, 0);
 }
