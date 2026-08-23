@@ -52,8 +52,26 @@ this the obvious way), not from how much history it accumulated.
   want a second real caller, and tolibc aims to be COMPLETE, because its
   audience is code that has not been written yet. What is absent is
   absent for a stated reason (`fork` -- the process model is
-  posix_spawn-shaped; `signal` -- not built; locales/threads --
-  deliberately not pursued), never for lack of a caller.
+  posix_spawn-shaped; `sigprocmask` and a non-empty `sa_mask` -- no
+  syscall can honour them; `VMIN`/`VTIME` -- a non-canonical read is
+  always VMIN=1; `select`/`poll`, locales and threads -- deliberately
+  not pursued), never for lack of a caller.
+- **THE POSIX HALF IS HEADERS OVER SYSCALLS THAT ALREADY EXIST**, and
+  the rule that governs it is `docs/libc-design.md`'s: **declare what
+  can be honoured, and nothing else.** `<signal.h>`, `<sys/wait.h>`,
+  `<termios.h>`, `<fcntl.h>`, `<sys/types.h>`, `<strings.h>` and
+  `getopt()` add no syscall -- what they add is a TRANSLATION, and
+  `userland/tests/posix_test.c` tests only that, because the calls
+  underneath have their own tests and a conversion bug looks exactly
+  like them working. **The kernel-facing `struct sigaction` is
+  `struct k_sigaction`** and POSIX's is a different structure converted
+  at the call, the split glibc makes for the same reason. **A request
+  that cannot be honoured is REFUSED, not ignored** -- a non-empty
+  `sa_mask` is `EINVAL` rather than silently dropped, which is the same
+  reject-rather-than-guess rule `kernel/lib`'s parsers follow. And
+  **`tcsetattr()` masks `c_lflag`** to the three bits the line
+  discipline implements, so `<termios.h>`'s inert names never reach a
+  flag space a future `TTY_*` bit will want.
 - **In ring 3 the toolkit is reachable under the C names -- don't
   hand-roll a `my_strlen` or a digit loop there either.**
   `#include <string.h>` for `strlen`/`strcmp`/`strlcpy`/`mem*`/the

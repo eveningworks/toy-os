@@ -24,7 +24,23 @@ the FILENAME is for tools.
 | `math.c` | the EXACT functions -- bit reasoning, no approximation |
 | `math_trig.c` | the APPROXIMATE ones -- polynomials, with measured error |
 | `printf_float.c` | `%f`/`%e`/`%g`, which the kernel's build cannot have |
+| `signal.c` | POSIX's `struct sigaction` converted to the kernel's |
+| `wait.c` | `waitpid()`, whose options pick one of four entry points |
+| `termios.c` | POSIX's `struct termios` converted, and `c_lflag` masked |
+| `fcntl.c` | `open()`'s variadic mode argument, accepted and discarded |
+| `getopt.c` | POSIX option parsing -- stops at the first operand |
+| `strings.c` | `strncasecmp`, `bzero`, `bcopy` |
 | `dirent.c`, `assert.c`, `cmem.c`, `heap_os.c`, `setjmp.S` | the rest |
+
+**The last six are the POSIX half, and none of them adds a syscall.**
+Every one sits on a call that already existed; what they add is the
+TRANSLATION between POSIX's shapes and this kernel's, which is the only
+thing `userland/tests/posix_test.c` tests. The rule they follow is
+`docs/libc-design.md`'s: **declare what can be honoured, and nothing
+else** -- so `sigprocmask()` is absent, a non-empty `sa_mask` is
+`EINVAL` rather than silently dropped, and `VMIN`/`VTIME` are
+undefined so that a polling read is a compile error naming the line
+rather than a program that hangs.
 
 Public headers are `userland/include/`. Four more of tolibc's files are
 not here at all: `string.c`, `knum.c`, `kfmt.c`, `heap_core.c` and

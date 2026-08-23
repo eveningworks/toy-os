@@ -157,10 +157,10 @@ int main(void) {
           sys_signal(99, (sighandler_t)SIG_IGN) == SIG_ERR, 0);
     // A HANDLER WITH NO RESTORER is the one refusal a caller can still
     // trip, and it is why sys_signal() exists: it fills the field in.
-    struct sigaction bad = { .handler = 0x400000, .restorer = 0 };
+    struct k_sigaction bad = { .handler = 0x400000, .restorer = 0 };
     check("a handler with no restorer is refused",
           sys_sigaction(SIGINT, &bad, 0) < 0, 0);
-    struct sigaction odd = { .handler = 0x400000,
+    struct k_sigaction odd = { .handler = 0x400000,
                              .restorer = (uint64_t)(uintptr_t)__sigrestore,
                              .flags = 0x40 };
     check("an unknown SA_ flag is refused, not silently dropped",
@@ -378,7 +378,7 @@ int main(void) {
             check("could get a pipe for the restart check", 0, "no pipes");
             break;
         }
-        struct sigaction act = {
+        struct k_sigaction act = {
             .handler  = (uint64_t)(uintptr_t)on_signal,
             .restorer = (uint64_t)(uintptr_t)__sigrestore,
             .flags    = restart ? SA_RESTART : 0,
@@ -426,7 +426,7 @@ int main(void) {
     // collapse into one delivery, so the deaths here are sequenced --
     // one child fully reaped before the next is spawned -- and the count
     // is then an exact expectation rather than a lower bound.
-    struct sigaction chld = {
+    struct k_sigaction chld = {
         .handler  = (uint64_t)(uintptr_t)on_sigchld,
         .restorer = (uint64_t)(uintptr_t)__sigrestore,
         .flags    = SA_RESTART,

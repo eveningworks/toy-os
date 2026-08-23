@@ -11,16 +11,21 @@
 // link error says "this program needs something this OS does not have",
 // which is exactly true and exactly what a porter needs to read.
 //
-// So there is no fork/exec/pipe2/select/poll/sleep-with-signals here.
-// SYS_SPAWN is posix_spawn-shaped rather than fork-shaped, deliberately
-// (docs/init-design.md), and pretending otherwise in a header is how
-// that decision would get quietly reversed.
+// So there is no fork/exec/pipe2/select/poll here, and sleep() is here
+// but cannot be INTERRUPTED by a signal -- it returns 0 always, rather
+// than POSIX's seconds-remaining, because there is no case in which
+// that number could be anything else. SYS_SPAWN is posix_spawn-shaped
+// rather than fork-shaped, deliberately (docs/init-design.md), and
+// pretending otherwise in a header is how that decision would get
+// quietly reversed.
 #include <stddef.h>
 #include <stdint.h>
 #include "rt/sys.h"
 
-typedef long ssize_t;
-typedef long off_t;
+// The POSIX type names live in <sys/types.h> now, guarded so that
+// whichever header arrives first defines them -- code including only
+// this one keeps working, which is what most of userland/ does.
+#include <sys/types.h>
 
 static inline ssize_t read(int fd, void *buf, size_t n) {
     return (ssize_t)sys_read(fd, buf, n);
@@ -50,5 +55,57 @@ static inline int isatty(int fd) {
     if (sys_fstat(fd, &st) != 0) return 0;
     return (st.flags & SYS_STAT_TTY) ? 1 : 0;
 }
+
+
+// --- processes --------------------------------------------------------
+
+static inline pid_t getpid(void)                  { return sys_getpid(); }
+
+// THERE IS NO fork(). SYS_SPAWN is posix_spawn-shaped, which is a
+// decision with its own entry in docs/decisions.md rather than a gap --
+// so there is no exec* family either, and nothing here pretends
+// otherwise. Use sys_spawn()/sys_spawn_env() in "rt/sys.h".
+
+static inline int pipe(int fds[2])                { return sys_pipe(fds); }
+static inline int setpgid(pid_t pid, pid_t pgid)  { return sys_setpgid(pid, pgid); }
+static inline pid_t getpgid(pid_t pid)            { return sys_getpgid(pid); }
+static inline pid_t getpgrp(void)                 { return sys_getpgid(0); }
+
+// The FOREGROUND process group of the terminal `fd` names -- what
+// Ctrl-C interrupts. POSIX puts these in <unistd.h> rather than
+// <termios.h>, and so do we.
+static inline pid_t tcgetpgrp(int fd)             { return sys_tcgetpgrp(fd); }
+static inline int   tcsetpgrp(int fd, pid_t pgid) { return sys_tcsetpgrp(fd, pgid); }
+
+// Exit WITHOUT running atexit handlers or flushing streams -- which is
+// what makes it different from exit(), and the reason a child that has
+// inherited a parent's buffered output should call this one.
+static inline void _exit(int code) { sys_exit(code); }
+
+// --- sleeping ---------------------------------------------------------
+//
+// Both return 0 and never return early. POSIX's sleep() returns the
+// seconds REMAINING when interrupted -- here nothing interrupts a
+// sleep, so the answer is always 0 rather than a number a caller would
+// have to check.
+static inline unsigned sleep(unsigned sec)  { sys_sleep_ms((int)(sec * 1000)); return 0; }
+static inline int usleep(unsigned long us)  { return sys_sleep_ms((int)(us / 1000)); }
+
+// --- fd flags ---------------------------------------------------------
+
+// Make a read that would block return -1/EAGAIN instead. This is
+// fcntl(F_SETFL, O_NONBLOCK) on a real system; a named call here,
+// because ioctl/fcntl's whole shape is a dispatch chain over an untyped
+// argument and <fcntl.h> says why it is absent.
+static inline int set_nonblock(int fd, int on) { return sys_set_nonblock(fd, on); }
+
+// --- argument parsing -------------------------------------------------
+//
+// POSIX getopt. Parsing STOPS at the first non-option argument (BSD's
+// and POSIX's behaviour), rather than permuting argv the way glibc
+// does -- see userland/libc/getopt.c.
+extern char *optarg;
+extern int optind, opterr, optopt;
+int getopt(int argc, char *const argv[], const char *optstring);
 
 #endif

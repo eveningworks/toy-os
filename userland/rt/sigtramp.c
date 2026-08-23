@@ -2,7 +2,7 @@
 //
 // TWO INSTRUCTIONS, AND THE SECOND ONE IS THE POINT. The kernel pushes
 // the address of `__sigrestore` as a handler's return address (see
-// abi/signal_abi.h's `struct sigaction`), so when an ordinary C handler
+// abi/signal_abi.h's `struct k_sigaction`), so when an ordinary C handler
 // does an ordinary `ret`, it lands here -- and this asks the kernel to
 // put the interrupted process back the way it was.
 //

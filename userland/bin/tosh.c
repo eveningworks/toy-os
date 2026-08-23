@@ -31,7 +31,7 @@
 #include <string.h>
 #include "lib/uhistory.h"
 #include "klineedit.h"
-#include "signal_abi.h" // SIGCHLD, struct sigaction -- see main()
+#include "signal_abi.h" // SIGCHLD, struct k_sigaction -- see main()
 
 // Static, not local: `struct kline_edit` is ~1.2 KiB and `struct
 // uhistory` ~4 KiB, against USERLAND_CFLAGS' -Wframe-larger-than=2048
@@ -249,7 +249,7 @@ int main(int argc, char **argv) {
     // for it: a wait for a named child means the same thing whether or
     // not a signal arrived, and every caller wants that, not just this
     // one.
-    struct sigaction chld = {
+    struct k_sigaction chld = {
         .handler  = (uint64_t)(uintptr_t)on_sigchld,
         .restorer = (uint64_t)(uintptr_t)__sigrestore,
         .flags    = 0,

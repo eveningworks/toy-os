@@ -231,6 +231,12 @@ EXCLUDED = [
                           "kernel/proc/fd_test.c's KTEST spawns it properly"),
     ("pipe_test",        "needs a parent to spawn it and reap it; exits 3 under `run`, "
                           "and kernel/proc/pipe_test.c's KTEST covers it properly"),
+    ("posix_test",       "needs a procs[] slot of its own for the same reasons "
+                          "signal_test does -- it spawns children, waits for them and "
+                          "reads its own process group, none of which the legacy `run` "
+                          "loader has. kernel/proc/signal_test.c spawns it, beside "
+                          "signal_test, since it is the same syscall surface wearing "
+                          "POSIX's names"),
     ("signal_test",      "needs a procs[] slot of its own: under `run` it has no pid, "
                           "no process group and no pending mask, so every check would "
                           "measure the absence of a process rather than the behaviour "

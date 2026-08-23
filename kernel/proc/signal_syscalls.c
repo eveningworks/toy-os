@@ -75,7 +75,7 @@ int sys_sigaction(struct syscall_ctx *c) {
     // and why the argument for it got weaker when handlers landed.
     if (SIGNAL_UNIGNORABLE(sig)) { c->regs[14] = (uint64_t)(int64_t)-EPERM; return 0; }
 
-    struct sigaction act, old;
+    struct k_sigaction act, old;
     if (uact) {
         if (!vmm_copy_from_user(c->pml4, &act, uact, sizeof act)) {
             c->regs[14] = (uint64_t)(int64_t)-EFAULT;

@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include "proc_info.h" // struct proc_info -- scheduler_proc_info() below
-#include "signal_abi.h" // struct sigaction -- the per-process action table below
+#include "signal_abi.h" // struct k_sigaction -- the per-process action table below
 
 // Built as the ORIGINAL Milestone 16 (the old pre-v0.1.0 numbering used
 // by the git history, unrelated to docs/roadmap.md's current
@@ -605,7 +605,7 @@ int scheduler_signal_ignored(int pid, int sig);
 
 // Reads `pid`'s action for `sig` into `out`. Returns 1 on success, 0 for
 // a bad pid or signal.
-int scheduler_signal_action(int pid, int sig, struct sigaction *out);
+int scheduler_signal_action(int pid, int sig, struct k_sigaction *out);
 
 // Installs `act` (or reads only, if NULL) and writes the previous action
 // to `old` (or nowhere, if NULL). Returns 0, or -1 for a bad pid or
@@ -618,8 +618,8 @@ int scheduler_signal_action(int pid, int sig, struct sigaction *out);
 // that arrived a moment earlier. Installing a HANDLER deliberately does
 // not -- there the pending signal is exactly what the caller just
 // arranged to hear about.
-int scheduler_signal_set_action(int pid, int sig, const struct sigaction *act,
-                                struct sigaction *old);
+int scheduler_signal_set_action(int pid, int sig, const struct k_sigaction *act,
+                                struct k_sigaction *old);
 
 // --- process groups ---------------------------------------------------
 //

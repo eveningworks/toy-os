@@ -117,7 +117,7 @@ int signal_send(int pid, int sig) {
     // sat here unexercised. Found by the first check that asked a
     // handler to run.
     if (!default_terminates(sig)) {
-        struct sigaction act;
+        struct k_sigaction act;
         if (!scheduler_signal_action(pid, sig, &act) ||
             !SIG_IS_HANDLER(act.handler))
             return scheduler_pid_alive(pid);
@@ -182,7 +182,7 @@ static int frame_fits(uint64_t sp) {
 //
 // `restartable` says the interrupted trap is a syscall that has NOT RUN
 // YET, which is the only situation in which SA_RESTART means anything.
-static int push_signal_frame(int pid, int sig, const struct sigaction *act,
+static int push_signal_frame(int pid, int sig, const struct k_sigaction *act,
                              uint64_t *regs, int restartable) {
     struct sigframe f;
 
@@ -335,7 +335,7 @@ int signal_deliver_pending(int pid, uint64_t *regs, int at_syscall_entry) {
     int sig = scheduler_signal_take(pid);
     if (!sig) return 0;
 
-    struct sigaction act;
+    struct k_sigaction act;
     if (!scheduler_signal_action(pid, sig, &act)) return 0;
 
     // A HANDLER CAN ONLY BE GIVEN TO THE PROCESS THAT IS ABOUT TO RUN,
@@ -363,7 +363,7 @@ int signal_deliver_pending(int pid, uint64_t *regs, int at_syscall_entry) {
 int signal_deliver_fault(int pid, int sig, uint64_t *regs) {
     if (pid <= 0 || pid != scheduler_current_pid()) return 0;
 
-    struct sigaction act;
+    struct k_sigaction act;
     if (!scheduler_signal_action(pid, sig, &act)) return 0;
     if (!SIG_IS_HANDLER(act.handler)) return 0;
 

@@ -344,7 +344,14 @@ sighandler_t sys_signal(int sig, sighandler_t h);
 
 // What sys_signal() returns on failure. -1 rather than 0, because 0 is
 // SIG_DFL and a perfectly good previous disposition.
+//
+// Guarded because <signal.h> defines the same pointer under its own
+// handler typedef, and a translation unit reaching for both (the libc's
+// own signal.c does) would otherwise get a redefinition warning for two
+// spellings of one value.
+#ifndef SIG_ERR
 #define SIG_ERR ((sighandler_t)-1)
+#endif
 
 // The full call: install `act` (or NULL to only read), write the
 // previous action to `old` (or NULL). Returns 0, or -1 with errno.
@@ -353,10 +360,10 @@ sighandler_t sys_signal(int sig, sighandler_t h);
 // the one this runtime provides, and passing 0 with a handler is EINVAL
 // rather than a guess. sys_signal() exists so that almost nobody has to
 // know that.
-int sys_sigaction(int sig, const struct sigaction *act, struct sigaction *old);
+int sys_sigaction(int sig, const struct k_sigaction *act, struct k_sigaction *old);
 
 // The restorer userland/rt/sigtramp.c provides. Declared so that a
-// caller building its own `struct sigaction` has something to put in the
+// caller building its own `struct k_sigaction` has something to put in the
 // field; there is no reason to write another one.
 void __sigrestore(void);
 

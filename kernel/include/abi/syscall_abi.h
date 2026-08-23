@@ -1216,8 +1216,8 @@ struct sys_stat {
 #define SYS_GETPGID   57 // RDI = pid (0 = the caller). Returns that
                           // process's group, or -ESRCH.
 
-#define SYS_SIGACTION 58 // RDI = signal, RSI = a `const struct sigaction *`
-                          // or 0, RDX = a `struct sigaction *` to write
+#define SYS_SIGACTION 58 // RDI = signal, RSI = a `const struct k_sigaction *`
+                          // or 0, RDX = a `struct k_sigaction *` to write
                           // the previous action into, or 0. Returns 0,
                           // or -errno: -EINVAL for a bad signal or a
                           // handler with no restorer, -EPERM for SIGKILL,
@@ -1386,7 +1386,7 @@ struct sys_stat {
                           // with.
                           //
                           // NOT A CALL A PROGRAM MAKES. The kernel
-                          // pushes the restorer from `struct sigaction`
+                          // pushes the restorer from `struct k_sigaction`
                           // as the handler's return address, so this is
                           // reached by the handler doing an ordinary
                           // `ret` -- see userland/rt/sigtramp.asm, which

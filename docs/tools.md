@@ -1586,6 +1586,25 @@ manual steps to be worth automating:
   a `widget-ops-ok: <reason>` comment, the same mechanism
   `check_dispatch.py` uses. In `preflight.sh`.
 
+- **`loc.py`** -- how big this project is, honestly: source lines with
+  generated files, comments and blank lines all excluded, and the
+  with-comments figure beside it. Not `wc -l`, because the answer
+  depends entirely on knowing which files are GENERATED and that list is
+  not guessable -- `kernel/drivers/font_ttf.c` alone is ~16,700 lines of
+  baked glyph tables from `genttf.py`, a fifth of the tree, and says
+  nothing about how much code anyone wrote. The list is `GENERATED` at
+  the top of the script; **anything a `tools/gen_*` writes into the
+  source tree has to be added to it**, since a missed entry inflates the
+  count silently, which is this script's one failure mode. Its comment
+  stripper tracks string and character literals, so a `"//"` inside a
+  format string is not read as a comment -- a naive stripper
+  under-counts exactly the files that do the most string work.
+  `--by-dir` groups by directory instead of language, `--files N` lists
+  the largest N. Reports the OS itself separately from `tools/`, which
+  is a fifth of the tree and ships in nothing. NOT in `preflight.sh`: a
+  line count is a fact to look up, not a gate, and this file's own rule
+  is that a number nobody has to keep true is the only safe kind.
+
 ---
 
 ## Host tools this repo expects (not in `tools/`)

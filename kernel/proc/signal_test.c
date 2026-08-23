@@ -40,7 +40,7 @@ static const char park_chan;
 // each testing is the DROP-ON-ARRIVAL rule, not the shape of the state
 // that records it.
 static int test_set_ignored(int pid, int sig, int on) {
-    struct sigaction act = { .handler = on ? SIG_IGN : SIG_DFL }, old;
+    struct k_sigaction act = { .handler = on ? SIG_IGN : SIG_DFL }, old;
     if (scheduler_signal_set_action(pid, sig, &act, &old) < 0) return -1;
     return old.handler == SIG_IGN;
 }
@@ -614,9 +614,9 @@ KTEST("signal", "installing a HANDLER keeps a pending signal; SIG_IGN drops it")
     }
     int pid = idx + 1;
 
-    struct sigaction handler = { .handler = 0x400000, .restorer = 0x400010 };
-    struct sigaction ignore  = { .handler = SIG_IGN };
-    struct sigaction old;
+    struct k_sigaction handler = { .handler = 0x400000, .restorer = 0x400010 };
+    struct k_sigaction ignore  = { .handler = SIG_IGN };
+    struct k_sigaction old;
 
     scheduler_signal_raise(pid, SIGINT);
     scheduler_signal_set_action(pid, SIGINT, &handler, &old);
@@ -649,11 +649,11 @@ KTEST("signal", "a sentinel disposition reports back with no restorer left on it
     }
     int pid = idx + 1;
 
-    struct sigaction handler = { .handler = 0x400000, .restorer = 0x400010,
+    struct k_sigaction handler = { .handler = 0x400000, .restorer = 0x400010,
                                  .flags = SA_RESTART };
-    struct sigaction back_to_dfl = { .handler = SIG_DFL, .restorer = 0x400010,
+    struct k_sigaction back_to_dfl = { .handler = SIG_DFL, .restorer = 0x400010,
                                      .flags = SA_RESTART };
-    struct sigaction old, now;
+    struct k_sigaction old, now;
     scheduler_signal_set_action(pid, SIGINT, &handler, &old);
     scheduler_signal_set_action(pid, SIGINT, &back_to_dfl, &old);
     scheduler_signal_action(pid, SIGINT, &now);
@@ -750,6 +750,39 @@ KTEST("signal", "a real process is terminated by a signal and reports 128 + it")
     }
     KTEST_ASSERT(exited);
     // Non-zero means a check inside it failed -- it prints each one to
+    // stderr, so `dmesg` says WHICH rather than only that one did.
+    KTEST_ASSERT_EQ(code, 0);
+}
+
+// --- tolibc's POSIX face over the same syscalls -------------------------
+
+#define POSIX_TEST_PATH "/tests/posix_test"
+
+// SPAWNED HERE RATHER THAN BY usertest_run.py, for exactly the reasons
+// the signal half above is: it spawns children, waits for them, and
+// reads its own process group -- none of which the legacy `run` loader
+// can give a caller.
+//
+// WHY IT LIVES BESIDE THE SIGNAL TESTS AT ALL. It is not testing the
+// signal syscalls again; it is testing tolibc's <signal.h>,
+// <sys/wait.h>, <termios.h>, <fcntl.h> and getopt() -- the TRANSLATION
+// from POSIX's shapes to this kernel's. That translation is invisible
+// to every test above, which speaks the kernel's own names, and a bug
+// in it looks exactly like the underlying syscall working correctly,
+// which it is.
+KTEST("signal", "tolibc's POSIX headers agree with the syscalls underneath them") {
+    if (!fs_exists(POSIX_TEST_PATH)) KTEST_SKIP("no " POSIX_TEST_PATH " on this boot");
+
+    uint64_t t0 = pit_ticks();
+    int pid = scheduler_spawn(POSIX_TEST_PATH, 0);
+    KTEST_ASSERT(pid != 0);
+
+    int code = -1, exited = 0;
+    while (pit_ticks() - t0 < TIMEOUT_TICKS) {
+        if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
+    }
+    KTEST_ASSERT(exited);
+    // Non-zero means a check inside it failed; it names each one on
     // stderr, so `dmesg` says WHICH rather than only that one did.
     KTEST_ASSERT_EQ(code, 0);
 }

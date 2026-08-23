@@ -142,9 +142,18 @@ breaking that.
 Stated so it stays decided, and consistent with
 `docs/roadmap-details.md`'s existing list: no conformance or
 certification, no locales, no `wchar`, no pthreads, no `select`/`poll`,
-no shared-file `mmap`, and **no `signal.h`** -- that is
+and no shared-file `mmap`.
+
+**`signal.h` WAS ON THIS LIST AND ITS REASON EXPIRED.** It said "that is
 `docs/signals-design.md`'s, and a libc that ships a `signal()` which
-cannot deliver anything is worse than one that does not declare it.
+cannot deliver anything is worse than one that does not declare it" --
+correct when written, and signals were built afterwards. The condition
+was "cannot deliver", not "signals are out of scope", so the header
+followed the capability the moment there was one (Stage 9 below). The
+reasoning is worth keeping precisely because it is the rule that let the
+exclusion be lifted without re-litigating anything: **declare what can
+be honoured, and nothing else.** Two things in Stage 8 are still refused
+under it -- `sigprocmask()` and a non-empty `sa_mask`.
 
 ## Staging
 
@@ -560,6 +569,106 @@ and sets a flag; without that distinction the second `setenv` frees
 stack addresses. glibc carries the same flag for the same reason. The
 test catches it in the CHILD rather than the parent, because only an
 inherited environment has entries to lose.
+
+## Stage 9 -- the POSIX half, over capabilities that arrived later
+
+The library's ISO C surface was close to complete and its POSIX surface
+was almost empty -- not because those functions were hard, but because
+`tolibc` was written before the kernel had signals, ptys, termios,
+process groups or a waitpid that could report a stop. **The library
+lagged the kernel, and the effect was that a program ported from Linux
+failed at `#include <signal.h>` rather than at a missing feature.**
+
+**Everything here sits on a syscall that already existed.** No new
+syscall was added. What is new is the TRANSLATION -- POSIX's structures
+converted to the kernel's, a wait status decoded by macro instead of by
+hand -- and that translation is what
+`userland/tests/posix_test.c` tests. It deliberately does not re-test
+the syscalls; they have their own tests, and a bug in a conversion
+looks exactly like the call underneath working, which it is.
+
+- **`<signal.h>`.** `signal()`, `sigaction()`, `raise()`, `kill()`,
+  `strsignal()`, `sig_atomic_t`, and the five `sigset_t` operations.
+  **`sigprocmask()` is absent and a non-empty `sa_mask` is REFUSED with
+  `EINVAL`** -- there is no syscall to block a signal outside its own
+  handler, and a call that returned success having quietly not done it
+  would leave a caller believing a critical section is protected. That
+  is this file's own rule ("declare what can be honoured") applied
+  inside a function rather than to a header, and it is the same instinct
+  as `kernel/lib`'s parsers rejecting rather than guessing.
+- **The kernel's `struct sigaction` became `struct k_sigaction`.**
+  POSIX's has different field names and carries `sa_mask`; the two
+  cannot be one structure. **glibc makes this exact split** and calls
+  its kernel-facing one `struct kernel_sigaction`. The rename touched
+  twelve files and nothing else, and `SIG_IS_HANDLER` had to stop
+  comparing against `SIG_IGN` -- `<signal.h>` redefines the sentinels as
+  function POINTERS, as C requires, and a pointer on the right of that
+  comparison is a constraint violation. It compares against the literal
+  1 now, which is `SIG_IGN`'s value on the line above it.
+- **`<sys/wait.h>`.** The macros are the point. `SYS_WAITPID` already
+  reported all three outcomes, encoded as three disjoint ranges (a plain
+  code, `SIGNAL_EXIT_BASE + sig`, `SIGNAL_STOP_BASE + sig`), and every
+  caller decoded that by hand against those constants -- a rule copied
+  into each program rather than stated once. **The encoding is not
+  Linux's bit-packing and does not need to be**: portable code never
+  looks, which is exactly why POSIX specifies the macros and not the
+  layout. `WIFCONTINUED` is absent because nothing can report it --
+  `SIGCONT` acts at send time and never enters the pending set, so there
+  is no moment at which a waiter could observe it.
+- **`waitpid()`'s options PICK AN ENTRY POINT** rather than being passed
+  through: all four combinations already existed as separate functions
+  with separate blocking contracts. The one real translation is
+  `SYS_RETRY` becoming a return of 0, since POSIX's `WNOHANG` contract
+  is that nothing to report is 0 and a pass-through would read as an
+  error to every caller.
+- **`<termios.h>`.** A separate `struct termios` rather than a typedef,
+  because `t.c_lflag &= ~(ICANON | ECHO)` is the universal idiom and it
+  cannot compile against a struct whose field is called `lflag`.
+  `c_iflag`/`c_oflag`/`c_cflag` are declared, stored and ignored -- and
+  that is honest rather than sloppy: **there is no flow control here to
+  disable and no character size to choose**, so ignoring them is not
+  ignoring a request the terminal could have honoured. **`VMIN`/`VTIME`
+  are deliberately NOT defined**, because a non-canonical read here is
+  exactly `VMIN=1/VTIME=0` and there is no machinery for any other pair
+  -- leaving them undefined turns a polling read into a compile error
+  naming the line, instead of a program that hangs. `tcsetattr()` MASKS
+  `c_lflag` to the three bits the line discipline implements, so this
+  header's inert names cannot be stored in a flag space a future
+  `TTY_*` bit will want.
+- **`<fcntl.h>`.** The names map onto `SYS_O_*`; `O_RDONLY` is 0, which
+  is why the kernel never needed a name for it. `open()` takes and
+  discards the variadic mode argument, so `open(p, O_CREAT|O_WRONLY, 0644)`
+  compiles unchanged against a filesystem with no permission bits.
+  **`fcntl()` itself is absent**: its two common uses have named calls
+  that cannot be got wrong (`dup2`, `set_nonblock`) and the rest rests
+  on machinery this kernel does not have.
+- **`getopt()`, and it earns its place by ending a real inconsistency.**
+  Every `/bin` program parsed its own arguments, and they disagreed --
+  some accepted `-la`, some only `-l -a`. **POSIX behaviour, not
+  glibc's**: parsing STOPS at the first operand rather than permuting
+  `argv`, which is what BSD does unconditionally and what
+  `POSIXLY_CORRECT` selects on Linux. `ls foo -l` meaning different
+  things on different systems is the cost of the convenient version.
+- **`<sys/types.h>`, `<strings.h>`.** Type names in one place, guarded
+  so `<unistd.h>`'s existing `ssize_t`/`off_t` keep working whichever
+  header arrives first; `strncasecmp`, `bzero`, `bcopy`. `strcasecmp` is
+  NOT duplicated -- `<string.h>` already has it over `kernel/lib`'s
+  `k_strcasecmp`, and a second implementation is what the shared-source
+  rule exists to prevent.
+- **`<unistd.h>` gained** `getpid`, `pipe`, `setpgid`/`getpgid`/`getpgrp`,
+  `tcgetpgrp`/`tcsetpgrp` (POSIX puts those here, not in `<termios.h>`),
+  `sleep`/`usleep`, `_exit` and `set_nonblock`. **There is still no
+  `fork()` or `exec*()`**, and that is a decision with its own entry
+  rather than a gap.
+
+**WHAT THE TEST FOUND, and it is the usual shape.** Its first termios
+check asserted that a terminal starts in `TTY_LFLAG_DEFAULT` -- true of
+a terminal at creation, and false for anything a shell spawned, because
+every shell here turns `ICANON` and `ECHO` off at startup. It failed
+against a correct build. What replaced it tests the conversion in BOTH
+directions (set the bits on, read back, clear them, read back), which is
+strictly more than the original asserted: a `tcsetattr` that masked
+everything to zero would have passed the clearing half alone.
 
 ## Open questions
 

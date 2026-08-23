@@ -64,9 +64,16 @@
 #define SIG_IGN 1 // discard it on arrival
 
 // 1 if `h` is a user-space function rather than one of the sentinels.
-#define SIG_IS_HANDLER(h) ((uint64_t)(h) > SIG_IGN)
+//
+// COMPARED AGAINST THE LITERAL 1, not against SIG_IGN, and that is not
+// a style choice: <signal.h> redefines SIG_DFL/SIG_IGN as POSIX
+// requires -- function POINTERS rather than the plain 0 and 1 here --
+// and a pointer on the right of this comparison is a constraint
+// violation. 1 is SIG_IGN's value by the definition directly above, so
+// the two cannot drift apart without that line changing too.
+#define SIG_IS_HANDLER(h) ((uint64_t)(uintptr_t)(h) > 1)
 
-// --- struct sigaction, and the RESTORER ------------------------------
+// --- struct k_sigaction, and the RESTORER ------------------------------
 //
 // POSIX's shape, and POSIX's argument order in SYS_SIGACTION: a signal,
 // the new action or NULL, and somewhere to write the old one or NULL.
@@ -92,7 +99,7 @@
 // rather than ignored -- the restorer is range-checked like any other
 // user pointer, and a handler that returns to a bad one faults in ring 3
 // where a fault belongs.
-struct sigaction {
+struct k_sigaction {
     uint64_t handler;  // SIG_DFL, SIG_IGN, or a `void (*)(int)`
     uint64_t restorer; // where the handler returns to. Required with a
                        // handler, ignored (and reported back as 0) for

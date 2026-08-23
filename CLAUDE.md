@@ -638,6 +638,7 @@ whenever a headline here tells you something you did not already know.
 `docs/conventions/build.md`
 
 - **THE C LIBRARY IS CALLED `tolibc`, and its bar for adding a function is the OPPOSITE of everything else here -- it aims to be COMPLETE.**
+- **THE POSIX HALF OF `tolibc` IS HEADERS OVER SYSCALLS THAT ALREADY EXIST** -- `<signal.h>`, `<sys/wait.h>`, `<termios.h>`, `<fcntl.h>`, `<strings.h>`, `getopt()`; the kernel-facing action struct is `struct k_sigaction` and POSIX's is converted at the call (glibc's split), and anything that cannot be honoured is REFUSED rather than ignored (a non-empty `sa_mask` is `EINVAL`; `VMIN`/`VTIME` are undefined on purpose).
 - **`userland/` is split by ROLE, and the build derives things from it -- adding a program is a `.c` file and nothing else.**
 - **In ring 3 the toolkit is reachable under the C names -- don't hand-roll a `my_strlen` or a digit loop there either.**
 - **RING-3 CODE HAS A FRAME BUDGET, and a link-time bound on the image.**
@@ -1042,6 +1043,9 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   `mkpart_test.py`, `demo_test.py`.
 - **Disk images, from the host** -- `seed_disk.py` (the format-aware
   front end `make iso` calls), `tfs2_writer.py`, `tfs3_writer.py`.
+- **How big is it** -- `loc.py` (source lines with generated files,
+  comments and blanks excluded; add anything a `gen_*` writes into the
+  tree to its `GENERATED` list, or the count silently inflates).
 - **Diagnose** -- `panic_resolve.py` (name every address in a panic),
   `uimg_hostcheck.py` (the JPEG decoder against libjpeg on the HOST,
   over a couple of hundred generated images -- the breadth

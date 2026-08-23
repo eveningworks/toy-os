@@ -300,7 +300,7 @@ struct sched_process {
     // rather than compressed (a handler list keyed by signal, say)
     // because indexing by signal number is what every reader wants and
     // this kernel has 64 slots, not 64 thousand.
-    struct sigaction actions[SIGNAL_MAX + 1];
+    struct k_sigaction actions[SIGNAL_MAX + 1];
     // This process's group. Never 0 for a live slot: a child inherits
     // its spawner's, and one the kernel started leads its own.
     int pgid;
@@ -1740,15 +1740,15 @@ int scheduler_signal_ignored(int pid, int sig) {
     return p->actions[sig].handler == SIG_IGN;
 }
 
-int scheduler_signal_action(int pid, int sig, struct sigaction *out) {
+int scheduler_signal_action(int pid, int sig, struct k_sigaction *out) {
     struct sched_process *p = live_slot(pid);
     if (!p || !SIGNAL_VALID(sig)) return 0;
     if (out) *out = p->actions[sig];
     return 1;
 }
 
-int scheduler_signal_set_action(int pid, int sig, const struct sigaction *act,
-                                struct sigaction *old) {
+int scheduler_signal_set_action(int pid, int sig, const struct k_sigaction *act,
+                                struct k_sigaction *old) {
     struct sched_process *p = live_slot(pid);
     if (!p || !SIGNAL_VALID(sig)) return -1;
     if (old) *old = p->actions[sig];
@@ -1824,7 +1824,7 @@ static void signal_state_reset(int slot) {
     procs[slot].pending       = 0;
     procs[slot].blocked       = 0;
     for (int i = 0; i <= SIGNAL_MAX; i++)
-        procs[slot].actions[i] = (struct sigaction){ 0, 0, 0, 0 };
+        procs[slot].actions[i] = (struct k_sigaction){ 0, 0, 0, 0 };
     procs[slot].stopped       = 0;
     procs[slot].stop_reported = 0;
     procs[slot].stop_sig      = 0;
