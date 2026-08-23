@@ -71,6 +71,30 @@
 // an app. A full-screen app cannot swallow the Start menu.
 #define KEY_SUPER             0xA6
 
+// --- THE FOUR MODIFIER KEYS, AS KEYS ---------------------------------
+//
+// These exist ONLY on the transition path below
+// (keyboard_try_get_transition()) and are NEVER pushed into the console
+// byte stream. That restriction is the whole reason they can exist at
+// all: pressing Shift must not put a byte in front of a shell, and the
+// line editor would have to learn to ignore four new codes if it did.
+//
+// They are here because a modifier produces no character, so it produces
+// no ordinary key event either -- and "is Ctrl held?" is a real question
+// for a program that is not editing text. Doom's stock controls are the
+// worked example: fire is Ctrl, run is Shift, strafe is Alt, and three
+// of its five defaults are therefore invisible to the byte stream.
+//
+// LEFT AND RIGHT ARE THE SAME KEY HERE, exactly as they already are for
+// the shift_pressed/ctrl_pressed state these follow -- and for the same
+// reason Super does not distinguish sides. AltGr stays separate from
+// Alt, which is the one distinction this driver has always made and the
+// one that matters on a Nordic layout.
+#define KEY_SHIFT             0xA7
+#define KEY_CTRL              0xA8
+#define KEY_ALT               0xA9 // LEFT Alt (Meta)
+#define KEY_ALTGR             0xAA
+
 // ---- Ctrl and Alt ----
 //
 // These do NOT get KEY_* codes of their own. They're encoded the way a
@@ -280,6 +304,42 @@ int  keyboard_blocking_suspended(void);
 // syscall; there is one implementation underneath both.
 void keyboard_console_set_raw(int on);
 int keyboard_try_getchar_mods(uint8_t *out_mods);
+
+// --- KEY TRANSITIONS: everything the byte stream cannot say -----------
+//
+// **THE RULE, STATED ONCE: this queue carries every key event the
+// console byte stream cannot represent -- that is, ALL RELEASES, and
+// both edges of the four modifier keys.** Ordinary presses are not
+// duplicated here; they arrive as bytes, the way they always have.
+//
+// It is a SEPARATE queue rather than a flag on the existing one because
+// the existing one is a terminal's input (kernel/tty/), and a terminal
+// is a byte stream: `keyboard.c` states that every code it produces
+// fits in a byte, which is what lets fd 0 be read with read(). A
+// release is not a byte and a line discipline has no use for one --
+// nothing in `klineedit.c` would ever ask "has W come up?". Pushing
+// releases into that stream would put a byte in front of every shell in
+// the system to serve a consumer that is not a shell.
+//
+// WHO READS IT: the compositor path, via win_input.c, which turns a
+// transition into WIN_EV_RAW_KEY (a modifier press) or WIN_EV_RAW_KEY_UP
+// (any release) for a registered compositor. Non-blocking and drained
+// per frame, like the rest of that path.
+//
+// **THE CODE ON A RELEASE IS WHAT THE PRESS PRODUCED**, not what the
+// same physical key would produce now. Pressing W, holding it, pressing
+// Shift and then releasing W reports a release of 'w' -- because 'w' is
+// what went down, and a client that saw 'w' go down and 'W' come up
+// would hold the key forever. The driver remembers, per evdev keycode,
+// which code that key's press emitted; this is the job X11 and Wayland
+// give the client by delivering physical keycodes and letting XKB
+// translate, and doing it here keeps ONE vocabulary on the wire.
+//
+// Returns 1 and fills the outputs, or 0 when nothing is waiting. Any
+// output pointer may be NULL. `down` is 1 for a press (modifiers only)
+// and 0 for a release.
+int keyboard_try_get_transition(uint16_t *out_code, int *out_down,
+                                 uint8_t *out_mods);
 
 // The modifiers held RIGHT NOW (KEY_MOD_*), for a caller that has no key
 // event to read them off. A mouse click is the case: it carries no

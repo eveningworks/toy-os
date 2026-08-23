@@ -47,7 +47,8 @@
 // and replaying each in turn would make the pointer crawl behind the
 // user. Buttons, keys and wheel notches are NOT: each of those is a
 // discrete thing the user did, and a control that arms on press and
-// commits on release needs both halves to arrive.
+// commits on release needs both halves to arrive. That last clause is
+// literal for the keyboard now: a key event carries which edge it is.
 #include "wm_internal.h"
 #include "wm/wm_rawin.h"
 #include "rt/sys.h"
@@ -60,18 +61,43 @@ static int g_mx, g_my;
 static uint8_t g_buttons;
 static int g_seeded;
 
-// Discrete events, held until the frame asks for them. One slot each
-// rather than a queue: the loop consumes them every frame, and two keys
-// arriving inside one frame is not something the hardware can produce at
-// a 100Hz tick.
+// Discrete events, held until the frame asks for them.
 // One queue's worth. The same number as the kernel's depth rather than
 // a tuned one, because "how many can be waiting?" has exactly that
 // answer.
 #define WM_RAWIN_DRAIN_MAX 32
 
-static int g_key = -1;
+// KEYS ARE A QUEUE -- see wm_rawin.h for why that changed when releases
+// arrived. Same depth as the drain budget, for the same reason: a pump
+// cannot deliver more than one queue's worth, so the queue cannot need
+// to hold more.
+#define WM_RAWIN_KEYS 32
+struct rawin_key {
+    int     code;
+    uint8_t mods;
+    uint8_t down;
+};
+static struct rawin_key g_keys[WM_RAWIN_KEYS];
+static int g_key_head, g_key_tail;
+
+// The modifiers as of the most recent key event, kept beside the queue
+// rather than read out of it: desktop.c wants "what is held now" without
+// consuming anything, and taking it from the queue's tail would answer
+// with the OLDEST unconsumed event instead of the newest.
 static uint8_t g_key_mods;
 static int g_wheel;
+
+static void key_push(int code, uint8_t mods, int down) {
+    int next = (g_key_head + 1) % WM_RAWIN_KEYS;
+    // Dropping the OLDEST keeps the most recent releases, which are the
+    // ones that un-stick a key. Unreachable in practice at this depth.
+    if (next == g_key_tail) g_key_tail = (g_key_tail + 1) % WM_RAWIN_KEYS;
+    g_keys[g_key_head].code = code;
+    g_keys[g_key_head].mods = mods;
+    g_keys[g_key_head].down = (uint8_t)(down ? 1 : 0);
+    g_key_head = next;
+    g_key_mods = mods;
+}
 
 void wm_rawin_init(int screen_w, int screen_h) {
     g_mx = screen_w / 2;
@@ -98,8 +124,10 @@ void wm_rawin_pump(void) {
             g_buttons = (uint8_t)ev.mods;
             break;
         case WIN_EV_RAW_KEY:
-            g_key = ev.a;
-            g_key_mods = (uint8_t)ev.mods;
+            key_push(ev.a, (uint8_t)ev.mods, 1);
+            break;
+        case WIN_EV_RAW_KEY_UP:
+            key_push(ev.a, (uint8_t)ev.mods, 0);
             break;
         case WIN_EV_RAW_WHEEL:
             // Accumulated, not replaced: two notches in one frame are
@@ -129,11 +157,20 @@ void wm_rawin_mouse(int *out_x, int *out_y, uint8_t *out_buttons) {
     if (out_buttons) *out_buttons = g_buttons;
 }
 
-int wm_rawin_take_key(uint8_t *out_mods) {
-    int k = g_key;
-    if (out_mods) *out_mods = g_key_mods;
-    g_key = -1;
-    return k;
+int wm_rawin_take_key(uint8_t *out_mods, int *out_down) {
+    if (g_key_tail == g_key_head) {
+        // The mods still answer, so a caller that asked for a key and
+        // got none reads the same modifier state it would have read a
+        // moment ago rather than zero.
+        if (out_mods) *out_mods = g_key_mods;
+        if (out_down) *out_down = 1;
+        return -1;
+    }
+    struct rawin_key k = g_keys[g_key_tail];
+    g_key_tail = (g_key_tail + 1) % WM_RAWIN_KEYS;
+    if (out_mods) *out_mods = k.mods;
+    if (out_down) *out_down = k.down;
+    return k.code;
 }
 
 uint8_t wm_rawin_mods_now(void) { return g_key_mods; }

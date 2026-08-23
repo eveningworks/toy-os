@@ -24,9 +24,19 @@ void wm_rawin_pump(void);
 // The pointer as of the last pump. Any output may be NULL.
 void wm_rawin_mouse(int *out_x, int *out_y, uint8_t *out_buttons);
 
-// The next key, or -1 if none, CONSUMING it -- the same contract
-// keyboard_try_getchar_mods() had, so wm.c's handling is unchanged.
-int wm_rawin_take_key(uint8_t *out_mods);
+// The next key EVENT, or -1 if none, CONSUMING it. `out_down` is 1 for a
+// press and 0 for a release; both may be NULL.
+//
+// **A QUEUE, NOT A SLOT, AND THAT CHANGED WITH RELEASES.** This held one
+// key with a comment arguing that "two keys arriving inside one frame is
+// not something the hardware can produce at a 100Hz tick" -- which was
+// already optimistic under autorepeat and a slow frame, and is simply
+// wrong now: a press and its release routinely land in the same pump,
+// and so do a modifier and the key it modifies. The cost of losing one
+// changed too. A dropped PRESS is a keystroke the user repeats; a
+// dropped RELEASE is a key the client believes is held down forever,
+// which in a game is a player who will not stop walking.
+int wm_rawin_take_key(uint8_t *out_mods, int *out_down);
 
 // The modifiers as of the last key. Replaces keyboard_mods_now() for
 // the one caller that wants modifiers without consuming a key

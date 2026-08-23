@@ -695,6 +695,21 @@ void wm_client_send_key(struct window *win, int key, unsigned mods) {
     win_events_push(win->client_pid, &ev);
 }
 
+// The other edge. A separate function rather than a `down` flag on the
+// one above, because the two have different ROUTING rules a few lines up
+// in wm.c -- a press can be claimed by the WM as a shortcut and a
+// release never is -- and a flag would invite a caller to pass the wrong
+// one at a site that had not thought about which.
+void wm_client_send_key_up(struct window *win, int key, unsigned mods) {
+    if (!wm_client_is_client_window(win)) return;
+    struct win_event ev = {0};
+    ev.type = WIN_EV_KEY_UP;
+    ev.window = win->client_win;
+    ev.a = key;
+    ev.mods = mods;
+    win_events_push(win->client_pid, &ev);
+}
+
 void wm_client_send_mouse(struct window *win, int type, int x, int y, unsigned buttons) {
     if (!wm_client_is_client_window(win)) return;
 

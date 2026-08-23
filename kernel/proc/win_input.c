@@ -98,6 +98,22 @@ void win_input_poll(void) {
     int key = keyboard_try_getchar_mods(&mods);
     if (key != -1) push(WIN_EV_RAW_KEY, key, 0, mods);
 
+    // KEY TRANSITIONS: every release, and both edges of the four
+    // modifier keys -- everything the byte stream above cannot carry
+    // (api/keyboard.h). DRAINED, not sampled once: a press and its
+    // release can both land inside one tick, and reporting only the
+    // first would leave a client holding a key that is already up. The
+    // budget bounds the loop against a device reporting nonsense, and is
+    // the queue's own depth for the reason wm_rawin.c's is -- "how many
+    // can be waiting?" has exactly that answer.
+    uint16_t tcode = 0;
+    int tdown = 0;
+    uint8_t tmods = 0;
+    for (int budget = 64; budget > 0; budget--) {
+        if (!keyboard_try_get_transition(&tcode, &tdown, &tmods)) break;
+        push(tdown ? WIN_EV_RAW_KEY : WIN_EV_RAW_KEY_UP, (int)tcode, 0, tmods);
+    }
+
     int wheel = mouse_get_wheel_delta();
     if (wheel != 0) push(WIN_EV_RAW_WHEEL, wheel, 0, 0);
 }

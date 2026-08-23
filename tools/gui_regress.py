@@ -115,6 +115,7 @@ TOOLS = [
     ("notepad", "notepad_client_test.py", "Notepad in ring 3"),
     ("uterm", "uterm_test.py", "Terminal + the ring-3 shell"),
     ("uapp", "uapp_test.py", "the TWP resize handshake"),
+    ("keyup", "keyup_test.py", "key RELEASES reaching a ring-3 client"),
     ("scrollbar", "scrollbar_test.py", "scrollbar behaviour, per the guidelines"),
     ("menubar", "menubar_test.py", "menu bar, submenus and the status bar"),
     ("forcequit", "forcequit_test.py", "not-responding detection and force quit"),

@@ -1005,6 +1005,31 @@ real scanout hardware does. Do not write a pixel assertion for one.
   considered and is worse: a gradient gives a different answer at each
   end of one string.
 
+- **A KEY RELEASE IS `WIN_EV_KEY_UP`, AND THE FOUR MODIFIER KEYS ARE
+  KEYS.** `WIN_EV_KEY` is a PRESS; a client that needs to know a key is
+  HELD -- a game, a drag modifier, push-to-talk -- sets
+  `uapp_desc.on_key_up`. A separate event type and a separate callback
+  rather than a flag, so an app that has never heard of releases is
+  unchanged (X11's `KeyRelease`, Wayland's `wl_keyboard.key` state,
+  Windows' `WM_KEYUP`; press-only was this protocol's outlier). Five
+  things to know. **A release cannot ride the console byte stream** --
+  presses go through `tty_input()` and a terminal is bytes, so releases
+  take a parallel transition queue (`keyboard_try_get_transition()`)
+  carrying exactly what the byte stream cannot: all releases, and both
+  edges of the modifiers. **`KEY_SHIFT`/`KEY_CTRL`/`KEY_ALT`/`KEY_ALTGR`
+  exist ONLY on that path** and are never pushed as bytes, or pressing
+  Shift would put a character in front of every shell. **A release
+  carries what the PRESS produced**, not what the key would produce now
+  -- press W, press Shift, release W reports `'w'`, and the driver
+  remembers per keycode with FIRST PRESS WINNING so autorepeat under a
+  changed modifier cannot strand the original. **An unmatched release is
+  legal and must be tolerated** -- the WM claims Super and Alt+F4 on the
+  press and delivers the release anyway, the shape an X11 grab produces.
+  And **`wm_rawin.c`'s key slot is a QUEUE now**: a dropped press is a
+  keystroke the user repeats, a dropped release is a key held forever.
+  Proven by `tools/keyup_test.py`, whose load-bearing check uses
+  `QMPSession.key_down()` -- `send-key` presses and releases together
+  and so cannot tell a real release path from a synthesised one.
 - **A SECONDARY CLICK IS THE CLIENT'S INSIDE ITS CONTENT AREA, AND THE
   WM'S EVERYWHERE ELSE.** A right-click on a window's own pixels is
   delivered as `WIN_EV_MOUSE_DOWN` with button bit `0x2`

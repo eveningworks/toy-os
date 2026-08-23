@@ -1020,7 +1020,8 @@ void wm_run(void) {
         // per-window or modal use (e.g. canceling a confirm dialog)
         // instead of double-booking it as "exit everything".
         uint8_t key_mods = 0;
-        int key = wm_rawin_take_key(&key_mods);
+        int key_down = 1;
+        int key = wm_rawin_take_key(&key_mods, &key_down);
         // A `gui key` from the debug console, if the real keyboard had
         // nothing -- deliberately second, so a human at the keyboard is
         // never pre-empted by a queued test keystroke.
@@ -1082,7 +1083,25 @@ void wm_run(void) {
                 // would leave two things claiming the next click.
                 // The context menu is not modal in that sense and is
                 // simply replaced.
-                if (key == KEY_SUPER) {
+                if (key != -1 && !key_down) {
+                    // A RELEASE GOES STRAIGHT TO THE FOCUSED CLIENT, and
+                    // takes none of the shortcut branches below: Super
+                    // and Alt+F4 act on the PRESS, exactly as
+                    // docs/gui-guidelines.md's arm-then-commit rule says
+                    // a control should, and firing them again on the way
+                    // up would toggle the Start menu twice per keystroke.
+                    //
+                    // A client can therefore see a release whose press
+                    // the WM consumed -- Super held over a window, say.
+                    // It has to tolerate that, and every real system says
+                    // the same: an X11 grab produces exactly this shape.
+                    // Tracking held keys means ignoring an up you have no
+                    // down for, which is the sane implementation anyway.
+                    if (f >= 0 && !file_picker_open &&
+                        wm_client_is_client_window(&windows[f])) {
+                        wm_client_send_key_up(&windows[f], key, key_mods);
+                    }
+                } else if (key == KEY_SUPER) {
                     if (!confirm_dialog_open && !file_picker_open) {
                         if (start_menu_open) start_menu_open = 0;
                         else start_menu_open_now();

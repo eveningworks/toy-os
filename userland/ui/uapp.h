@@ -239,6 +239,29 @@ struct uapp_desc {
 
     void (*on_key)(struct uapp *a, int key, unsigned mods);
 
+    // A key came UP. `key` is the code its PRESS produced, so a client
+    // that recorded `key` on the way down can clear the same one --
+    // pressing W, then Shift, then releasing W reports 'w', not 'W'
+    // (abi/win_proto.h's WIN_EV_KEY_UP).
+    //
+    // **MOST APPS MUST NOT WANT THIS.** Text entry, menu shortcuts and
+    // every widget in the toolkit act on the press; an app that also
+    // acted on the release would do everything twice. This is for an app
+    // holding a MODEL of what is currently held down -- a game, a
+    // drag-modifier, a push-to-talk -- which is why it is a separate
+    // callback an app opts into rather than a flag on on_key that every
+    // existing handler would suddenly start seeing.
+    //
+    // The four modifier keys arrive here and in on_key as KEY_SHIFT,
+    // KEY_CTRL, KEY_ALT and KEY_ALTGR (api/keyboard.h); they produce no
+    // character, so they reach an app no other way.
+    //
+    // An unmatched release is POSSIBLE and must be tolerated: the WM
+    // claims some presses as shortcuts (Super, Alt+F4) and delivers the
+    // release regardless, the same shape an X11 grab produces. Ignoring
+    // an up you have no down for is the correct handling.
+    void (*on_key_up)(struct uapp *a, int key, unsigned mods);
+
     // Content-relative, in pixels. `buttons` is offered these first;
     // these still fire, so an app can mix routed controls with its own
     // hit-testing (Shapes' checkbox, Notepad's text area).

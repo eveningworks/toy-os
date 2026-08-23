@@ -84,7 +84,91 @@ static uint8_t current_mods(void) {
 // The wake that used to be here is tty_enqueue()'s now, for the same
 // reason and with the same restraint: this runs in the IRQ1 handler, so
 // only scheduler state and an already-saved trapframe may be touched.
+// --- key transitions: what the byte stream cannot carry --------------
+//
+// See keyboard.h for the rule and the reasoning. Everything here runs in
+// the IRQ1 handler, so it does no more than the tty push beside it does:
+// no allocation, no wake, no lock.
+
+// What code each evdev keycode produced when it went DOWN, so its
+// release can carry the SAME one. Zero means "that key produced nothing
+// on the way down", which is the common case for a key with no glyph on
+// this layout -- and a release with nothing to report is dropped rather
+// than guessed at.
+//
+// Indexed by evdev keycode. 128 covers every code this kernel reports
+// (INPUT_KEY_COMPOSE, 127, is the highest); anything above it is
+// range-checked away rather than wrapped, because a driver reporting an
+// unexpected keycode must not be able to write past this array.
+#define KEY_DOWN_MAX 128
+static uint8_t down_code[KEY_DOWN_MAX];
+
+// Sized so it cannot realistically fill: a human cannot have 32 keys
+// down, and the compositor drains this every frame. On overflow the
+// OLDEST is dropped, which is stated rather than silent -- a dropped
+// release is a key that stays down forever from the client's point of
+// view, so the choice matters even though nothing should reach it.
+#define TRANS_MAX 64
+struct key_transition {
+    uint16_t code;
+    uint8_t  down;
+    uint8_t  mods;
+};
+static struct key_transition trans[TRANS_MAX];
+static unsigned trans_head, trans_tail;
+
+static void trans_push(uint16_t code, int down) {
+    if (!code) return;
+    unsigned next = (trans_head + 1) % TRANS_MAX;
+    if (next == trans_tail) trans_tail = (trans_tail + 1) % TRANS_MAX; // drop oldest
+    trans[trans_head].code = code;
+    trans[trans_head].down = (uint8_t)(down ? 1 : 0);
+    trans[trans_head].mods = current_mods();
+    trans_head = next;
+}
+
+int keyboard_try_get_transition(uint16_t *out_code, int *out_down,
+                                 uint8_t *out_mods) {
+    if (trans_tail == trans_head) return 0;
+    struct key_transition t = trans[trans_tail];
+    trans_tail = (trans_tail + 1) % TRANS_MAX;
+    if (out_code) *out_code = t.code;
+    if (out_down) *out_down = t.down;
+    if (out_mods) *out_mods = t.mods;
+    return 1;
+}
+
+// THE KEYCODE CURRENTLY BEING TRANSLATED, so ring_push() can record what
+// this key produced without every one of its ~20 call sites having to
+// pass it. Set once at the top of keyboard_key_event() and read only
+// from there, both in the same non-preemptible IRQ handler.
+static uint16_t emitting_keycode;
+
+// Whether ring_push() has already run for THIS edge, which is what lets
+// the rule above be "first press, but last push within a press".
+static int first_push_done;
+
 static void ring_push(uint16_t c) {
+    // REMEMBERED BEFORE IT IS SENT, so the release of this key can carry
+    // the same code.
+    //
+    // **THE FIRST PRESS OF A HELD KEY WINS, NOT THE LAST**, and the
+    // difference is autorepeat. Hold W (which reports 'w'), then press
+    // Shift: the repeats that follow report 'W', and recording each of
+    // them would make the eventual release report 'W' for a key the
+    // client watched go down as 'w' -- so it would clear nothing and
+    // hold 'w' forever. Keeping the first means the release always ends
+    // the hold it started. A non-zero entry IS "this key is already
+    // down", so no separate held flag is needed.
+    //
+    // Within a single press the LAST push still wins, which is what
+    // makes Alt-B (pushed as ESC then 'b') release as 'b' rather than as
+    // ESC -- those two pushes share one keycode and one edge.
+    if (emitting_keycode < KEY_DOWN_MAX &&
+        (!down_code[emitting_keycode] || !first_push_done)) {
+        down_code[emitting_keycode] = (uint8_t)c;
+    }
+    first_push_done = 1;
     tty_input(tty_console(), (uint8_t)c, current_mods());
 }
 
@@ -182,17 +266,37 @@ void keyboard_key_event(uint16_t keycode, int down) {
     // AltGr-b try to be Meta-b on a Nordic layout. evdev gives them
     // separate keycodes, so this needs no prefix bookkeeping -- which is
     // exactly the kind of thing the scancode encoding made fiddly.
+    // The state is set BEFORE the transition is pushed, so the `mods`
+    // riding with a modifier's own event describes the world AFTER that
+    // key moved -- a Shift press reports KEY_MOD_SHIFT set. The
+    // alternative reports every modifier press with the modifier absent,
+    // which reads as a bug at every call site that looks.
     switch (keycode) { // dispatch-ok: the modifier set is bounded by the keyboard
     case INPUT_KEY_LEFTSHIFT:
-    case INPUT_KEY_RIGHTSHIFT: shift_pressed = down; return;
+    case INPUT_KEY_RIGHTSHIFT: shift_pressed = down; trans_push(KEY_SHIFT, down); return;
     case INPUT_KEY_LEFTCTRL:
-    case INPUT_KEY_RIGHTCTRL:  ctrl_pressed = down; return;
-    case INPUT_KEY_LEFTALT:    alt_pressed = down; return;
-    case INPUT_KEY_RIGHTALT:   altgr_pressed = down; return;
+    case INPUT_KEY_RIGHTCTRL:  ctrl_pressed = down;  trans_push(KEY_CTRL, down);  return;
+    case INPUT_KEY_LEFTALT:    alt_pressed = down;   trans_push(KEY_ALT, down);   return;
+    case INPUT_KEY_RIGHTALT:   altgr_pressed = down; trans_push(KEY_ALTGR, down); return;
     default: break;
     }
 
-    if (!down) return; // every other key release is ignored
+    // A RELEASE REPORTS WHAT THE PRESS PRODUCED, and then forgets it.
+    // Clearing is what stops a key that is pressed, released, and then
+    // pressed again on a layout where it now produces nothing from
+    // reporting the OLD code on its second release.
+    if (!down) {
+        if (keycode < KEY_DOWN_MAX) {
+            trans_push(down_code[keycode], 0);   // a 0 here is dropped by trans_push
+            down_code[keycode] = 0;
+        }
+        return;
+    }
+
+    // Recorded by ring_push() below, whichever of the many paths out of
+    // this function ends up taking it.
+    emitting_keycode = keycode;
+    first_push_done = 0;
 
     // Ctrl+Left/Right are word motion in every readline-ish line editor,
     // so they get their own codes -- exactly the KEY_SHIFT_ARROW_*

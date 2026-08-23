@@ -301,6 +301,15 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
         if (d->on_key) d->on_key(a, ev->a, ev->mods);
         break;
 
+    case WIN_EV_KEY_UP:
+        // NOT offered to the focus ring. Tab moves focus on the way DOWN
+        // and doing it again on the way up would move it twice per press;
+        // no widget here acts on a key release at all. An app that wants
+        // releases is doing something the widgets are not -- tracking a
+        // held key -- so this goes straight to it.
+        if (d->on_key_up) d->on_key_up(a, ev->a, ev->mods);
+        break;
+
     case WIN_EV_MOUSE_DOWN: {
         a->mouse_x = ev->a;
         a->mouse_y = ev->b;

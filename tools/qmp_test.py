@@ -263,6 +263,41 @@ class QMPSession:
             "arguments": {"keys": [{"type": "qcode", "data": k} for k in qcodes]},
         })
 
+    def key_down(self, qcode):
+        """Press a key and LEAVE IT DOWN. Pair with key_up().
+
+        send_key()/combo() above use QMP's `send-key`, which presses and
+        releases in one go -- so they can never leave a key held, and a
+        test written on them cannot tell a working key-release path from
+        a guest that synthesised the release itself. `input-send-event`
+        carries the edges separately, which is what makes "the app still
+        thinks W is down three frames later" an assertable claim.
+
+        NOTE the guest sees autorepeat while a key is held, exactly as it
+        would from a real keyboard: expect repeated presses, not one.
+        """
+        return self._cmd({
+            "execute": "input-send-event",
+            "arguments": {"events": [{
+                "type": "key",
+                "data": {"down": True,
+                          "key": {"type": "qcode", "data": qcode}},
+            }]},
+        })
+
+    def key_up(self, qcode):
+        """Release a key pressed with key_down(). Releasing a key that is
+        not down is harmless -- QEMU sends the break code regardless, and
+        this kernel drops a release for a key that produced nothing."""
+        return self._cmd({
+            "execute": "input-send-event",
+            "arguments": {"events": [{
+                "type": "key",
+                "data": {"down": False,
+                          "key": {"type": "qcode", "data": qcode}},
+            }]},
+        })
+
     # -- mouse ------------------------------------------------------------
 
     def move_rel(self, dx, dy):

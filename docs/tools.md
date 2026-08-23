@@ -1381,6 +1381,31 @@ manual steps to be worth automating:
   capture a Terminal's content focused, take focus away and require it
   to CHANGE, give focus back and require it to match the first capture
   EXACTLY -- "it changed" alone is satisfied by almost anything.
+- **`keyup_test.py`** -- key RELEASES reaching a ring-3 client, across
+  all five layers that carry one: the driver's transition queue, the
+  kernel's raw-event push, the compositor's raw-input queue, the WM's
+  routing and Toykit's `on_key_up`. 10 checks, also via `winclient`,
+  which keeps a model of what is currently HELD -- nothing else in the
+  tree does, because every real app acts on the press.
+
+  **Its load-bearing check is the one that holds a key down.**
+  `QMPSession.send_key()` wraps QMP's `send-key`, which presses and
+  releases in one go, so a test built on it cannot tell a working
+  release path from a guest that invented the release itself.
+  `key_down()`/`key_up()` (added to `qmp_test.py` for this) carry the
+  edges separately, so "the client still believes W is down a second
+  later, and reports it up only when told" becomes assertable. It also
+  checks that a MODIFIER reaches a client at all -- Ctrl produces no
+  character, so before this it reached one by no path whatsoever -- and
+  that a release carries what the PRESS produced rather than what the
+  key would produce now (press W, press Shift, release W must report
+  `'w'`).
+
+  **One check passes vacuously under the obvious positive control**, and
+  the docstring says so: 2b asserts that no release arrives while a key
+  is down, which a build delivering no releases at all satisfies
+  perfectly. It is worth having -- it catches a release synthesised from
+  a timeout -- but only paired with 2c.
 - **`damage_sweep.py`** -- drives a fixed sequence of window
   interactions (open, raise, drag, minimize/restore, resize by the grip,
   overlays, close) with `gui damage verify on`, and reports every

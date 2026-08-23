@@ -1821,36 +1821,61 @@ the porting surface to implementing a handful of platform functions
 (`DG_Init`, `DG_DrawFrame`, `DG_SleepMs`, `DG_GetKey`, `DG_GetTicksMs`)
 around the original portable Doom source, not a from-scratch renderer.
 
-**Already there today, confirmed directly -- no roadmap work needed:**
-- Disk-hosted ELF execution (`run <name>`, Async I/O to the desktop, done) and
-  static `ET_EXEC` loading with argc/argv delivery.
-- Non-blocking keyboard input (`SYS_READ_KEY`, translated ASCII/`KEY_*`
-  codes) -- covers `DG_GetKey` as-is.
-- A private pixel buffer + present (`SYS_WIN_CREATE`/`SYS_WIN_PRESENT`)
-  -- 32bpp direct RGB, up to 640x480, comfortably over Doom's 320x200.
-  No indexed/paletted mode exists, but that's not a toy-os gap:
-  converting Doom's internal 8-bit palette to RGB per frame is the
-  port's own job, the same thing every real `doomgeneric` backend
-  already does. Covers `DG_DrawFrame`.
-- Basic file read (`SYS_OPEN`/`SYS_READ`/`SYS_CLOSE`) -- enough to read
-  a WAD file's bytes, just not to seek within it (see below).
+**Already there today, RE-CONFIRMED against the code on 2026-08-23** --
+most of what this entry once listed as missing has since landed, so the
+list below is what a port would now find waiting for it:
 
-**Needed, maps to existing milestones (see each milestone's own entry
-above for the full writeup):**
-- malloc/free -- Runtime + interop (Real C library). `SYS_SBRK` exists but
-  is bump-only/single-process-only; nothing builds real allocator
-  semantics on top of it yet, and Doom's zone allocator needs a real
-  heap (the shareware WAD alone is a few MB).
-- A ring-3-readable millisecond clock + a real sleep/delay primitive --
-  Networking (currently filed under Networking, but confirmed general
-  -- see that milestone's own entry). Covers `DG_GetTicksMs`/`DG_SleepMs`.
-- `SYS_SEEK`/lseek -- Desktop productivity apps (Real filesystem API surface). A WAD
-  file is a directory of lumps at arbitrary offsets; today's file I/O
-  is open-then-sequential-read only.
-- A larger/growable user stack -- `fork()`/`exec()`-style process model (process model). Real,
-  call-heavy C code against a single fixed 4KB page is a genuine risk,
-  though untested whether Doom's actual stack depth would exceed it --
-  flagged as "verify with a real answer" rather than an assumed blocker.
+- Disk-hosted ELF execution and static `ET_EXEC` loading with argc/argv.
+- A private pixel buffer and present, through an ordinary `uapp` window;
+  `ugfx_blit()` takes 32bpp with a source stride, so converting Doom's
+  8-bit palette per frame and scaling is the port's own job, as it is in
+  every `doomgeneric` backend.
+- **malloc/free** -- the kernel's allocator compiled into ring 3.
+- **`lseek`**, and `fopen`/`fread`/`fseek`/`ftell` over it, which is what
+  a WAD needs: a directory of lumps at arbitrary offsets.
+- **A millisecond clock and a real sleep** -- `sys_monotonic_ns()` and
+  `sys_sleep_ms()`. `DG_GetTicksMs`/`DG_SleepMs` are covered.
+- **Floating point in ring 3**, with FXSAVE per context switch
+  (`kernel/include/kernel/fpu.h`). Doom is fixed-point, but its
+  `FixedDiv` falls back to `double` and the libc has the transcendentals
+  either way.
+- **A stack that grows** -- 8 MiB reserved, committed on touch. This
+  entry used to flag the fixed stack as a real risk and note it was
+  "untested whether Doom's actual stack depth would exceed it"; the
+  question is now moot rather than answered.
+- **An image with no size limit** -- the heap starts where the ELF ends.
+  Measured: doomgeneric's 83 translation units are ~419 KB text, ~80 KB
+  data, ~271 KB bss, which would have left ~150 KB under the old 1 MiB
+  ceiling before this project's own libc was linked in.
+- **Key RELEASES, and the modifier keys as keys** -- `WIN_EV_KEY_UP` and
+  `uapp_desc.on_key_up`. This was the one blocker nobody had written
+  down: `WIN_EV_KEY` was press-only, so a client could not know a key was
+  HELD, and three of Doom's five stock controls (Ctrl to fire, Shift to
+  run, Alt to strafe) are modifiers that produced no client-visible
+  event at all.
+- **The libc gap is two functions**, measured by linking doomgeneric's
+  objects against `libc.a` + `libuapp.a`: `mkdir` (the savegame
+  directory) and `system` (never called on this path). Everything else
+  it references, this C library already has.
+
+**What a port still has to decide or build:**
+
+- **The WAD.** Doom will not run without an IWAD. The shareware
+  `doom1.wad` is ~4 MB; Freedoom is BSD-licensed and ~11 MB. Where it
+  lives (in the repo, fetched at build time, or supplied by the user)
+  is a licensing question as much as a size one.
+- **The backend**, `DG_Init`/`DG_DrawFrame`/`DG_SleepMs`/`DG_GetTicksMs`/
+  `DG_GetKey` over `uapp`, plus a palette-to-RGB conversion and an
+  integer scale from 320x200.
+- **Vendoring**, in `userland/ports/doom/` beside `userland/ports/cjson/`
+  and linked per-binary through `EXTRA_OBJS_`, so nothing else in the
+  tree can depend on third-party code. doomgeneric is GPL-2 in an MIT
+  repo -- an aggregation, which is fine, and worth saying out loud in
+  `LICENSE` rather than leaving to be inferred.
+- **Frame rate under TCG**, which nothing here can predict and only a
+  running port can measure. Every automated test in this repo runs TCG
+  (see CLAUDE.md), so this is exactly the class of question a green
+  suite says nothing about.
 
 **Explicitly NOT required, despite sounding related:**
 - Dynamic linking / shared libc (Dynamic linking / shared libraries) -- Doom can ship as one

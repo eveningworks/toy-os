@@ -4013,3 +4013,135 @@ right-clicks" was the conservative option and was rejected: it invents
 a mechanism none of the three reference systems has, it makes the
 default behaviour the wrong one, and the thing it protects -- a window
 menu over app content -- is a convenience no real desktop offers.
+
+## A key release is a new event type, and the four modifier keys are keys
+
+`WIN_EV_KEY` was press-only. A client could know a key had been STRUCK
+and never that it was HELD -- and "is W down right now?" is the entire
+input model of a game, a drag modifier, or push-to-talk. Everything in
+this tree edits text or clicks buttons, both of which act on the press,
+so nothing had noticed.
+
+**What everyone else does**, because press-only was the outlier here and
+not a considered position: X11 sends `KeyPress` and `KeyRelease`;
+Wayland's `wl_keyboard.key` carries a pressed/released state, and
+`wl_keyboard.enter` additionally hands a client the set of keys already
+held when focus arrives; Windows sends `WM_KEYDOWN`/`WM_KEYUP`. All
+three keep text entry a separate concern -- Wayland literally splits it
+into `text-input-v3` -- which is exactly what `api/keyboard.h` already
+argued for when it made modifiers LATCHED at press time rather than
+queryable as live state. So this is an addition beside that decision,
+not a reversal of it.
+
+**A separate event type rather than a flag on `WIN_EV_KEY`.** A client
+written before this existed never asked for the new type and simply
+never sees one; a flag on the press would have made every existing
+client start receiving events it would decode as presses. That is the
+promise `ui/uapp.h` makes about optional callbacks, kept at the layer
+where it has to be kept.
+
+### The release cannot ride the console byte stream, and that is what shaped it
+
+The obvious implementation -- push releases where presses already go --
+is impossible, and the reason is worth stating because it looks like an
+arbitrary refusal. Presses go through `tty_input()` into the console
+terminal: `keyboard.c` states that every code it produces fits in a
+byte, which is what lets fd 0 be `read()`. A release is not a byte, and
+a line discipline has no use for one -- nothing in `klineedit.c` would
+ever ask whether W has come up. Pushing releases into that stream would
+put bytes in front of every shell in the system to serve a consumer that
+is not a shell.
+
+So there is a second, parallel **transition queue**
+(`keyboard_try_get_transition()`), and its contents are defined by one
+rule: **everything the byte stream cannot represent** -- all releases,
+and both edges of the four modifier keys. Ordinary presses are not
+duplicated onto it. `win_input.c` turns a transition into
+`WIN_EV_RAW_KEY` (a modifier press) or `WIN_EV_RAW_KEY_UP` (any
+release).
+
+### The modifier keys needed codes of their own
+
+`KEY_SHIFT`, `KEY_CTRL`, `KEY_ALT` and `KEY_ALTGR` (0xA7-0xAA) exist
+**only on the transition path** and are never pushed into the byte
+stream -- pressing Shift must not put a byte in front of a shell, and
+`klineedit.c` would otherwise have to learn to ignore four new codes.
+
+They exist because a modifier produces no character, so it produced no
+key event at all: it was only ever a bit riding along with some other
+key. Doom is the worked example that forced the issue -- fire is Ctrl,
+run is Shift, strafe is Alt, so **three of its five stock controls were
+invisible to a client**. Left and right are the same key here, exactly
+as `shift_pressed`/`ctrl_pressed` already treated them and for the same
+reason Super does not distinguish sides; AltGr stays separate from Alt,
+which is the one distinction this driver has always made and the one
+that matters on a Nordic layout.
+
+### A release carries what the PRESS produced
+
+The driver remembers, per evdev keycode, which code that key's press
+emitted, and the release carries the same one. Press W, hold it, press
+Shift, release W: the release reports `'w'`, not `'W'`. A client that
+watched `'w'` go down and saw `'W'` come up would clear nothing and hold
+`'w'` for the rest of the session.
+
+X11 and Wayland avoid this by delivering PHYSICAL keycodes and letting
+the client translate with XKB. Doing the remembering in the driver keeps
+one vocabulary on the wire, which is the property worth having here --
+a toy-os client has no XKB and should not need one.
+
+**The subtlety is autorepeat, and the rule is FIRST PRESS WINS.** A held
+key repeats, and the repeats are translated afresh -- so W held while
+Shift goes down starts reporting `'W'`. Recording each repeat would make
+the eventual release report `'W'` and strand `'w'`. Recording only the
+first press means the release always ends the hold it started. (Within a
+single press the LAST push still wins, which is what makes Alt-B --
+pushed as ESC then `'b'` -- release as `'b'`.) A non-zero remembered
+code doubles as "this key is already down", so no separate held flag
+exists to disagree with it.
+
+**The residual limitation, stated rather than hidden**: a client keyed
+on the translated code still sees the repeat `'W'` as a new key going
+down, with no release ever coming for it. The real fix is to carry the
+physical keycode alongside the translated one, which needs the byte
+stream to carry a keycode it currently cannot. Nothing needs it yet: a
+client that keys its held-set on what it received and tolerates an
+unmatched release -- which it must anyway, see below -- is unaffected.
+
+### The compositor's raw-key slot had to become a queue
+
+`wm_rawin.c` held ONE key per frame, with a comment arguing that two
+keys inside one 100Hz frame is not something the hardware can produce.
+That was already optimistic under autorepeat and a slow frame, and it is
+simply wrong now: a press and its release routinely land in the same
+pump, as do a modifier and the key it modifies.
+
+The cost of losing one changed too, which is the real argument. **A
+dropped press is a keystroke the user repeats; a dropped release is a
+key the client believes is held forever** -- in a game, a player who
+will not stop walking. Both are a queue now, and the mouse's coalescing
+is unchanged and still right for motion.
+
+### An unmatched release is legal
+
+The WM claims some presses as shortcuts -- Super toggles the Start menu,
+Alt+F4 closes a window -- and those act on the PRESS, per
+`docs/gui-guidelines.md`'s arm-then-commit rule; firing them again on the
+way up would toggle the Start menu twice per keystroke. The release is
+delivered to the focused client regardless, so a client can see a
+release whose press it never saw. It must tolerate that. Every real
+system produces the same shape -- an X11 grab does exactly this -- and
+ignoring an up you have no down for is the correct implementation
+anyway.
+
+### Proving it needed a client that keeps a held set
+
+`tools/keyup_test.py` drives `userland/tests/winclient.c`, which now
+tracks what is currently down. The check that carries the test is the
+one using `QMPSession.key_down()`: `send-key` presses and releases in
+one go, so a test built on it cannot tell a working release path from a
+guest that invented the release itself. Leaving the key physically down
+and requiring the client to still report it held several frames later is
+what nothing press-only can pass. Disabling `on_key_up` in `uapp.c`
+turns 5 of 10 checks red, and the last one reports "still holds 5 keys"
+-- a stuck key, seen from inside the client.

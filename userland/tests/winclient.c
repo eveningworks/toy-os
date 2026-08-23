@@ -26,6 +26,7 @@
 #include <stdint.h>
 #include "rt/sys.h"
 #include "ui/uapp.h"
+#include <stdio.h>
 
 #define WIN_W 320
 #define WIN_H 200
@@ -60,10 +61,64 @@ static void next_color(struct uapp *a) {
     uapp_redraw(a);
 }
 
+// --- WHAT IS CURRENTLY HELD DOWN -------------------------------------
+//
+// The other untested protocol claim this file exists to exercise, beside
+// the on_close veto below: a client can know a key is HELD, not merely
+// that it was struck (abi/win_proto.h's WIN_EV_KEY_UP). Nothing else in
+// the tree tracks a held key, because nothing else needs to -- every app
+// here edits text or clicks buttons, both of which act on the press.
+//
+// Kept as a SET rather than a count, so a key held long enough to
+// autorepeat -- which produces many presses and one release -- is still
+// "one key down". A counter would go up with every repeat and never come
+// back to zero, which is precisely the bug a game would report as "the
+// player will not stop walking".
+#define HELD_MAX 8
+static int g_held[HELD_MAX];
+static int g_held_count;
+
+static int held_index(int key) {
+    for (int i = 0; i < g_held_count; i++) if (g_held[i] == key) return i;
+    return -1;
+}
+
+// Logged to fd 2 (the kernel log, readable with `dmesg` -- see
+// keyboard.h's note that fd 2 here is not a second terminal stream), so
+// tools/keyup_test.py can assert on the transitions rather than on
+// pixels. Only the SET's changes are logged, not every repeat, which is
+// what makes the log a record of what the client believes rather than of
+// what arrived.
+static void log_held(const char *what, int key) {
+    char line[64];
+    // The code, not the character: a release carries whatever the press
+    // produced, and printing it as a glyph would hide the difference
+    // between 'w' and 'W' that this is here to demonstrate.
+    snprintf(line, sizeof line, "winclient: %s %d held=%d\n",
+             what, key, g_held_count);
+    sys_eprint(line);
+}
+
 static void on_key(struct uapp *a, int key, unsigned mods) {
     (void)mods;
+    if (held_index(key) < 0 && g_held_count < HELD_MAX) {
+        g_held[g_held_count++] = key;
+        log_held("keydown", key);
+    }
     if (key == 'q') uapp_quit(a, 0); // Esc no longer closes -- Alt+F4 does
     else next_color(a);
+}
+
+static void on_key_up(struct uapp *a, int key, unsigned mods) {
+    (void)a; (void)mods;
+    int i = held_index(key);
+    // An unmatched release is legal and must be tolerated -- the WM
+    // claims Super and Alt+F4 on the press and delivers the release
+    // anyway (ui/uapp.h). Logged so a test can see it happened rather
+    // than silently ignored.
+    if (i < 0) { log_held("keyup-unmatched", key); return; }
+    g_held[i] = g_held[--g_held_count];
+    log_held("keyup", key);
 }
 
 // REFUSES the first two close requests and accepts the third.
@@ -114,6 +169,7 @@ int main(void) {
         .y       = 180,
         .on_draw = on_draw,
         .on_key  = on_key,
+        .on_key_up = on_key_up,
         .on_press = on_press,
         .on_close = on_close,
     };

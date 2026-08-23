@@ -33,6 +33,10 @@
 
 #define WIN_EV_NONE       0
 #define WIN_EV_KEY        1 // a: key code (api/keyboard.h), mods: KEY_MOD_*
+                            // A PRESS. Autorepeat arrives as more of
+                            // these, exactly as a terminal would send
+                            // them. See WIN_EV_KEY_UP for the other
+                            // edge, and why it is a separate type.
 #define WIN_EV_MOUSE_MOVE 2 // a, b: position, window-relative
 #define WIN_EV_MOUSE_DOWN 3 // a, b: position; mods: button bits -- 0x1
                             // primary (left), 0x2 secondary (right).
@@ -115,11 +119,42 @@
 // runs on every timer tick, so an unconditional push would overflow a
 // 32-deep queue within a fraction of a second and report constant drops
 // while the user did nothing at all.
+// A KEY CAME UP. `a` is the code its PRESS produced and `mods` is the
+// modifier state after the change (api/keyboard.h's transition queue).
+//
+// **A SEPARATE EVENT TYPE, NOT A FLAG ON WIN_EV_KEY.** A client written
+// before this existed keeps working unchanged -- it never asked for this
+// type and simply never sees one -- where a flag on the press would have
+// made every existing client start receiving events it would decode as
+// presses. That is the same promise uapp.h makes about optional
+// callbacks, kept at the protocol layer where it has to be kept.
+//
+// WHY IT EXISTS: without it a client can only know a key was struck,
+// never that it is HELD, and "is W down?" is the whole input model of a
+// game. X11 sends KeyPress/KeyRelease, Wayland's wl_keyboard.key carries
+// a pressed/released state (and wl_keyboard.enter hands a client the set
+// already held), and Windows sends WM_KEYDOWN/WM_KEYUP -- press-only was
+// this protocol's outlier, and text entry stays press-driven regardless,
+// which is why this is an addition rather than a change.
+//
+// **THE FOUR MODIFIER KEYS ARRIVE ON BOTH EDGES** -- KEY_SHIFT, KEY_CTRL,
+// KEY_ALT, KEY_ALTGR as WIN_EV_KEY and WIN_EV_KEY_UP -- because they
+// produce no character and so have never produced an ordinary key event
+// at all. Nothing else changes: a modifier still rides with the key it
+// modified, and an app that only reads `mods` is unaffected.
+#define WIN_EV_KEY_UP    27
+
 #define WIN_EV_RAW_MOUSE 10 // a, b: SCREEN position; mods: button bits
                             // (bit0 = left, bit1 = right), level state.
 #define WIN_EV_RAW_KEY   11 // a: key code (api/keyboard.h), mods:
                             // KEY_MOD_*. Pre-focus: no window has been
                             // chosen yet.
+// The pre-focus counterpart of WIN_EV_KEY_UP, for a registered
+// compositor: a key came up, and no window has been chosen yet.
+// Modifier PRESSES arrive as WIN_EV_RAW_KEY, since the byte stream the
+// ordinary raw keys come from cannot carry them.
+#define WIN_EV_RAW_KEY_UP 28
+
 #define WIN_EV_RAW_WHEEL 12 // a: notches, + = up/away, - = down/toward.
                             // Separate from RAW_MOUSE because the
                             // driver's wheel is a read-and-reset

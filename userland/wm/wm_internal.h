@@ -423,6 +423,7 @@ void wm_client_draw(const struct window *win);
 // mouse one is a WIN_EV_MOUSE_* value; coordinates are screen
 // coordinates and get converted to window-relative inside.
 void wm_client_send_key(struct window *win, int key, unsigned mods);
+void wm_client_send_key_up(struct window *win, int key, unsigned mods);
 void wm_client_send_mouse(struct window *win, int type, int x, int y, unsigned buttons);
 void wm_client_send_close(struct window *win);
 
