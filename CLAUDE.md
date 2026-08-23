@@ -515,6 +515,7 @@ whenever a headline here tells you something you did not already know.
 - **A CHILD'S DEATH RAISES SIGCHLD, AND THE NOTIFICATION HAS ONE HOME.** -- `notify_parent()`, called by BOTH deaths (exit and kill); exit only, never a stop or a continue; and it costs a parent with no handler one compare.
 - **A PROCESS GROUP IS AN INT, AND SPAWN TAKES IT.**
 - **THE CONSOLE HAS AN OWNER AND A FOREGROUND GROUP, AND THE INTR KEY IS TEMPORARY WHERE IT IS.**
+- **A TRACER NAMES ITS CHILD AT THE SPAWN, AND THE TRACE GOES TO ITS TERMINAL.** -- `SPAWN_TRACE` on `SYS_SPAWN`, an unknown spawn flag is `-EINVAL`, and the sink is the tracer's fd 1 (fd 2 here is the KERNEL LOG, not a second terminal stream).
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
 
 ### GUI, Toykit and the desktop
@@ -609,7 +610,7 @@ whenever a headline here tells you something you did not already know.
 `docs/conventions/shell.md`
 
 - **EVERY COMMAND HAS A PAGE IN `docs/commands/`, AND THE BUILD CHECKS IT.**
-- **AN EVERYDAY COMMAND IS A `/bin` PROGRAM, NOT A BUILTIN, AND THE KERNEL'S OWN COPIES LIVE BEHIND ONE NAME: `rescue`.**
+- **AN EVERYDAY COMMAND IS A `/bin` PROGRAM, NOT A BUILTIN, AND THE KERNEL'S OWN COPIES LIVE BEHIND ONE NAME: `rescue`.** -- and `rescue` is the commands you would need to put `/bin` BACK, not everything ring 0 happens to be able to do: `strace` moved out to `/bin` and did not go there.
 - **A PROGRAM STARTED BY A BARE NAME PRINTS NOTHING EXTRA WHEN IT SUCCEEDS -- AND `run <name>` STILL DOES.**
 - **TAB COMPLETION IN COMMAND POSITION IS BUILTINS PLUS ALL OF `PATH`, DEDUPLICATED AND SORTED, WITH NO DIRECTORIES.**
 - **`#` IS RING 0 AND `$` IS RING 3, AND THE PROMPT IS WHERE THAT LIVES** -- all three shells show the cwd, so the last character is the difference; `Ctrl-C` works only at a `$`.
@@ -824,9 +825,13 @@ Note this is NOT a universal explanation -- a failure surviving
 
 **`strace <binary>` is often the fastest way to see what a `/bin` binary
 is doing** -- one decoded line per syscall, and the same lines land in
-`dmesg`, so `python3 tools/vm.py exec "strace file_test"` returns text
-you can assert on. Reach for it before adding temporary `klog_write()`
-calls inside a syscall handler.
+`dmesg`, so `python3 tools/vm.py exec "spawn /bin/strace file_test"`
+followed by `dmesg` returns text you can assert on. Reach for it before
+adding temporary `klog_write()` calls inside a syscall handler. **It is
+a `/bin` PROGRAM, not a builtin**, so at a `#` prompt it needs `spawn`
+(it spawns and waits, which the legacy `run` loader cannot do); at a `$`
+prompt it is an ordinary command, and the trace comes out in THAT
+terminal.
 
 **READ THE ABI COMMENT OF ANY CALL YOU SWAP IN.** The most expensive
 mistake of the ring-3 GUI migration was replacing a non-blocking

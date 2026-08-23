@@ -1,23 +1,51 @@
-#ifndef STRACE_INTERNAL_H
-#define STRACE_INTERNAL_H
+#ifndef KERNEL_STRACE_H
+#define KERNEL_STRACE_H
 
 #include <stdint.h>
 #include <stddef.h>
 
-// Kernel-internal half of syscall tracing -- the hooks the syscall
-// dispatcher and the ELF loaders call. Apps get only api/strace.h
-// (arm/disarm/count); this is on the kernel's include path only, per
-// kernel/include/README.md. See kernel/proc/strace.c for the design.
+// Syscall tracing. All of it is kernel-internal: `strace` is a RING-3
+// PROGRAM now (userland/bin/strace.c) and asks for a trace through
+// SYS_SPAWN's SPAWN_TRACE flag, so nothing under apps/ needs any of
+// this and there is no api/ half any more. This header is on the
+// kernel's include path only, per kernel/include/README.md. See
+// kernel/proc/strace.c for the design.
+//
+// **THERE USED TO BE TWO HEADERS AND ONE OF THEM WAS `api/strace.h`**,
+// carrying arm/disarm/count for the kernel shell's `strace` builtin.
+// The builtin is gone -- ring 0 contains no applications -- so the
+// audience split it existed for is gone with it, and one header is what
+// is left. kapi.h no longer mentions tracing at all.
+
+// Asks that the next process THIS process spawns be traced. SYS_SPAWN
+// calls it when the message carries SPAWN_TRACE, and nothing else does.
+//
+// **SCOPED TO THE CALLER, WHICH IS WHAT MAKES IT RACE-FREE.** It used
+// to be a bare global -- "the next process created anywhere" -- and a
+// spawner preempted between arming and creating had its trace claimed
+// by whoever else spawned in the window. Recording WHO armed it means
+// somebody else's spawn cannot consume it; the arm is a promise to one
+// process, and only that process's own next spawn can collect.
+void strace_arm_for_current(void);
+
+// Cancels an arm that was never consumed -- the binary did not exist,
+// so no process was ever created. A no-op once a process has claimed
+// it, since that process's own exit clears it (strace_release()).
+void strace_disarm(void);
 
 // Called once per new address space, from wherever a process is about
-// to be created (kernel/proc/elf_run.c, kernel/proc/scheduler.c). If
-// an arm is pending (api/strace.h's strace_arm()), this address space
-// becomes the traced one and the arm is consumed; otherwise a no-op.
+// to be created (kernel/proc/elf_run.c, kernel/proc/scheduler.c).
+// Claims the arm if the process making it is the one that armed;
+// otherwise a no-op. This is also where the trace's SINK is decided --
+// see kernel/proc/strace.c.
 void strace_claim(uint64_t pml4_phys);
 
 // Called from syscall_process_exit_cleanup() -- stops tracing if this
 // was the traced address space, so a later, unrelated process running
-// under a recycled CR3 can't inherit the trace.
+// under a recycled CR3 can't inherit the trace. Also where the
+// "N syscalls traced" summary is printed, because this is the one
+// moment the kernel knows the traced process is finished and still
+// knows where its trace was going.
 void strace_release(uint64_t pml4_phys);
 
 // Is the CURRENTLY running address space (CR3) being traced? One read
@@ -55,5 +83,11 @@ size_t strace_format_call(char *out, size_t cap, uint64_t nr,
 // Formats " = <ret>" for `nr`'s return convention (decimal for most,
 // hex for the one syscall that returns a pointer). Returns its length.
 size_t strace_format_ret(char *out, size_t cap, uint64_t nr, uint64_t rax);
+
+// The name for a syscall number, or NULL if this kernel has none. The
+// strace table is the one list of these; a second copy would drift.
+// `kstack syscalls` reads it too, which is why it is not private to
+// strace.c.
+const char *strace_syscall_name(int nr);
 
 #endif

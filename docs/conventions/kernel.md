@@ -771,6 +771,53 @@ point may restart; the trap-tail one must not, or a completed syscall
 runs twice. The two call sites pass an explicit `at_syscall_entry` for
 exactly that reason. See `docs/decisions.md`.
 
+## A TRACER NAMES ITS CHILD AT THE SPAWN, AND THE TRACE GOES TO ITS TERMINAL.
+
+`SPAWN_TRACE` on `SYS_SPAWN`'s `struct spawn_msg` (`abi/syscall_abi.h`),
+`kernel/proc/strace.c` for the tracing, `userland/bin/strace.c` for the
+program -- which is a spawn and a wait and nothing else.
+
+**TRACING IS THE KERNEL'S, SO A TRACER ONLY HAS TO NAME A PROCESS.**
+Every ring-3 syscall funnels through one dispatcher, so three hooks in
+`syscall_dispatch()` cover all of them and a syscall added later is
+traced the moment its number appears in the table. There is nothing for
+a tracer to instrument; there is only the question of WHICH address
+space, and the answer is decided when that address space is built.
+
+**A FLAG ON THE SPAWN, NOT AN ARM-THEN-RUN PAIR.** The builtin's
+mechanism was "the next process created is traced", which has a window
+in it: a spawner preempted between arming and creating has its trace
+claimed by whoever else spawns. Naming the child at creation has no
+window. The arm that remains inside the kernel records WHO asked
+(`strace_arm_for_current()`), so even that one line cannot be collected
+by somebody else.
+
+**AN UNKNOWN SPAWN FLAG IS -EINVAL, NOT IGNORED.** A flag word that
+drops what it does not recognise can never be extended safely: an old
+kernel would accept a new flag and do nothing, which is the worst
+available answer. Same reasoning as the "reserved must be zero" check
+`pgid` replaced.
+
+**THE TRACE GOES TO THE TRACER'S fd 1 -- AND fd 2 IS THE WRONG ANSWER
+HERE EVEN THOUGH IT IS REAL STRACE'S.** fd 2 in this OS is the KERNEL
+LOG, not a second terminal stream, so a trace written there is perfectly
+recorded in `dmesg` and invisible to whoever typed the command. That is
+the trap `userland/lib/cmd.h` and `/bin/ls` already document. fd 0 is
+asked next, because a redirected stdout does not move the person; only a
+tracer with both ends redirected falls back to the physical console.
+
+Two things about the resolution. It happens ONCE, AT THE SPAWN, because
+by the time a line is produced the traced process is the one running and
+a lookup would find ITS descriptors. And it is stored as a tty INDEX,
+not a pointer, so a terminal destroyed under a running trace cannot
+leave a dangling one -- tty0's output hook is `vga_putc()`, so the
+console is index 0 rather than a special case.
+
+**THE SUMMARY LINE IS THE KERNEL'S, because only the kernel can count.**
+`+++ N syscalls traced +++` is printed at `strace_release()`, the one
+moment the count is final and the sink is still known. A ring-3 tracer
+asking for the number back would be a syscall for one integer.
+
 ## A PROCESS GROUP IS AN INT, AND SPAWN TAKES IT.
 
 Every live process is in exactly one group; a group is a field compare,

@@ -28,7 +28,7 @@ const char *const COMPLETION_COMMANDS[] = {
     "cursor", "debug", "dmatest", "dmesg", "edit", "fontface", "fontsize",
     "fputest", "fsck", "fsformat", "gui", "help", "ktest", "history", "keyboard",
     "nano", "pwd", "rescue",
-    "ring3test", "run", "schedtest", "steptest", "strace", "stress",
+    "ring3test", "run", "schedtest", "steptest", "stress",
     "path", "timezone", "write",
     0
 };
@@ -353,7 +353,6 @@ static int complete_argument(struct collector *c, const char *cmd, int arg_index
     if (k_strcmp(cmd, "run") == 0) { complete_executables(c); return 1; }
     // `strace <binary>`'s first argument is an executable, same as
     // `run`'s -- only its own arguments after that are free text.
-    if (k_strcmp(cmd, "strace") == 0 && arg_index == 1) { complete_executables(c); return 1; }
 
     if (k_strcmp(cmd, "help") == 0) {
         add_candidate(c, "tests");

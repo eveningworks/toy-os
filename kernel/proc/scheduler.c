@@ -111,7 +111,7 @@
 #include "fpu.h"
 #include "vga.h"
 #include "klog.h"
-#include "strace_internal.h"
+#include "strace.h"
 #include "uaddr.h"
 #include "clocksource.h" // CPU time is measured, not counted -- bill_current()
 #include "debug_console.h"

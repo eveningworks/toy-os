@@ -441,12 +441,21 @@ Two questions the design answers, both easy to get backwards.
 
 *Why not a global on/off switch?* Because "trace this program" is the
 actual request, and a global switch would also catch whatever else runs
-next. `strace_arm()` marks intent, the next process created claims it
-(`strace_claim()`, one line in `elf_run_from_fs()` and one in the
-scheduler's `spawn_from_fs()`), and `syscall_process_exit_cleanup()`
-releases it -- so a recycled CR3 can't inherit a stale trace. This is
-the same single-slot compare-CR3 pattern `SYS_SBRK`'s heap arming and
-`SYS_WIN_CREATE`'s window state already use in `syscall.c`.
+next. A tracer names the child AT THE SPAWN (`SPAWN_TRACE` on
+`SYS_SPAWN`'s message); `strace_claim()` -- one line in
+`elf_run_from_fs()` and one in the scheduler's `spawn_from_fs()` --
+consumes it as the address space is built, and
+`syscall_process_exit_cleanup()` releases it, so a recycled CR3 cannot
+inherit a stale trace. This is the same single-slot compare-CR3 pattern
+`SYS_SBRK`'s heap arming and `SYS_WIN_CREATE`'s window state already use
+in `syscall.c`.
+
+**This paragraph used to describe a bare `strace_arm()` meaning "the
+next process created ANYWHERE", and that had a race in it** -- an
+arming process preempted between arming and creating had its trace
+claimed by whoever else spawned in the window. The arm records WHO asked
+now, so only that process's own next spawn can collect. See "`strace` is
+a `/bin` program" below.
 
 *Why format on entry but print on exit?* The arguments must be READ
 before the handler runs (a `SYS_READ` fills the buffer its pointer
@@ -459,9 +468,86 @@ handler that faults mid-call prints no line at all, and `SYS_EXIT` --
 which may never return -- has to close out its own line, which is why a
 trace ends with `exit(0) = ?` rather than a return value.
 
-See `kernel/proc/strace.c`'s top comment and the commit that added it for the full writeup, including why `strace`
-resolves binaries through `shell_path_find()` instead of the usual
-`shell_exec_name()`.
+See `kernel/proc/strace.c`'s top comment and the commit that added it
+for the full writeup. Its note about resolving through
+`shell_path_find()` rather than `shell_exec_name()` is gone with the
+builtin it described: a ring-3 tracer cannot reach a ring-0 console app
+at all, so the distinction that rule protected no longer exists.
+
+
+## `strace` is a `/bin` program, and the trace goes to the tracer's terminal
+
+Tracing is the kernel's and always was -- every ring-3 syscall funnels
+through one dispatcher, so three hooks cover all of them and a tracer
+has nothing to instrument. What `strace` had to be, then, was whatever
+could NAME the process to trace. It was a kernel shell builtin, which
+worked because ring-0 code can call `strace_arm()` directly, and it
+became a `/bin` program for the reasons every other builtin moved out --
+plus one specific to it.
+
+**The specific one: a ring-0 command can only print to the physical
+console.** That was invisible while the only shell was the kernel's own,
+and it is a real defect the moment somebody can be sitting in a Terminal
+WINDOW: the trace would have gone to a screen nobody was looking at.
+There is no arrangement in which a ring-0 builtin fixes that, because it
+has no idea which terminal the person asking is on.
+
+*How ring 3 asks.* Three shapes were on the table. A `SYS_STRACE`
+syscall exposing arm/disarm/count verbatim -- smallest, and it keeps the
+arm window and the race in it. A `PTRACE`-shaped attach by pid --
+closest to Linux, the only one that could ever trace a process already
+running, and much the biggest job since there is no stop-on-syscall
+machinery here. Or a FLAG ON THE SPAWN, which is what was built:
+`SPAWN_TRACE` on the `struct spawn_msg` that `SYS_SPAWN` already takes.
+Naming the child at the moment it is created has no window to have a
+race in, and it costs one field in a struct that exists precisely
+because spawn outgrew its registers once already. `posix_spawn`'s flags
+word is the same shape for the same reason. Unknown bits are refused
+rather than ignored: a flag word that silently drops what it does not
+recognise can never be extended safely.
+
+*Where the trace comes out.* The tracer's **fd 1**, resolved once at the
+spawn -- and fd 0 if fd 1 has been redirected, because a person who
+typed `strace foo > out.txt` is still sitting at the terminal their
+shell reads from. Three things about that:
+
+- **fd 1 and not fd 2, which is where real strace puts it**, because
+  **fd 2 in this OS is the KERNEL LOG** rather than a second terminal
+  stream (`kernel/proc/syscall_fd.c` hands every process a KLOG
+  description for it). A trace written "to stderr" here would be
+  perfectly recorded in `dmesg` and invisible to the person who typed
+  the command -- the same trap `userland/lib/cmd.h` and `/bin/ls`
+  already document, and the same answer they reached.
+- **The trace is not written INTO fd 1; it goes to the terminal fd 1
+  NAMES.** So `strace foo | grep x` greps `foo`'s output and never the
+  trace, which is the separation real strace uses stderr to get.
+- **Resolved at the spawn, not per line.** By the time a trace line is
+  produced the traced process is the one running, so a later lookup
+  would find ITS descriptors, not the tracer's. Stored as a tty INDEX
+  rather than a pointer, so a terminal destroyed under a running trace
+  cannot leave a dangling one; tty0's output hook is `vga_putc()`, so
+  the physical console is not a special case, just index 0 and also the
+  fallback.
+
+*Why the summary line is the kernel's.* Only the kernel can count the
+calls. The builtin read `strace_call_count()` after the traced program
+returned, which worked only because tracer and counter were ring-0 code
+in one address space. A ring-3 tracer would need a syscall for one
+integer, so the `+++ N syscalls traced +++` line is printed at
+`strace_release()` instead -- the one moment the count is final and the
+sink is still known.
+
+*What it is not.* `/bin/strace` does not print the trace, and that is
+the design rather than a stub: relaying would mean the kernel handing
+every line to a ring-3 process through a channel that does not exist,
+for text `dmesg` already has. It also cannot attach to a running
+process, follow children, or filter by syscall -- all of which want
+`ptrace`, and none of which anything here has asked for.
+
+*The two headers became one.* `api/strace.h` existed to give `apps/` the
+arm/disarm/count half; with no `apps/` caller left, the audience split
+it embodied is gone and `kernel/strace.h` is what remains. `kapi.h` no
+longer mentions tracing at all.
 
 
 ## The kernel shell stands down from the TARGET, not from the console claim

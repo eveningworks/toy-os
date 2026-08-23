@@ -522,6 +522,11 @@ int sys_spawn_env(const char *path, const char *args, int stdout_fd, char **env)
 
 int sys_spawn_group(const char *path, const char *args, int stdout_fd,
                      char **env, int pgid) {
+    return sys_spawn_flags(path, args, stdout_fd, env, pgid, 0);
+}
+
+int sys_spawn_flags(const char *path, const char *args, int stdout_fd,
+                     char **env, int pgid, unsigned flags) {
     if (!flatten_env(env)) { g_errno = E2BIG; return -1; }
     struct spawn_msg msg;
     msg.path = path;
@@ -534,6 +539,7 @@ int sys_spawn_group(const char *path, const char *args, int stdout_fd,
     msg.env = g_envblob;
     msg.stdout_fd = stdout_fd;
     msg.pgid = pgid;
+    msg.flags = flags;
     return (int)err(syscall1(SYS_SPAWN, (uint64_t)(uintptr_t)&msg));
 }
 

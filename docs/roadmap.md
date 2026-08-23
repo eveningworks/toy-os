@@ -745,6 +745,7 @@ hand as a throwaway probe during a real hunt (see roadmap-details).
 - [ ] Per-process CPU time accounting, which the scheduler doesn't track today
 - [ ] Latency histograms for disk I/O, where the tail is the interesting part and an average hides it
 - [ ] Tracepoints that compile out when disabled, so they can live on hot paths
+- [x] ~~`strace` as a `/bin` program, not a kernel builtin~~ DONE 2026-08-23 -- `SPAWN_TRACE`, and the trace reaches the tracer's terminal
 - [ ] `strace` extended to follow a process's children once `fork()` exists
 
 ### Crash reporting & postmortem debugging

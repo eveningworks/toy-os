@@ -171,6 +171,18 @@ this the obvious way), not from how much history it accumulated.
   `debug`) and the in-kernel demos that cannot be processes at all
   (`ring3test`, `schedtest`, `fputest`).
 
+  **AND `strace` MOVED WITHOUT NEEDING A PROVIDER, which is the other
+  shape a builtin can be waiting on.** It was in ring 0 because ring-0
+  code could call `strace_arm()` directly and ring 3 had no way to say
+  "trace this" at all -- so the capability it was waiting on was not a
+  fact to read but a verb to ask for, and the fix was a FLAG on a call
+  that already existed (`SPAWN_TRACE` on `SYS_SPAWN`) rather than a
+  query class or a new syscall. It also did not go behind `rescue`:
+  that set is deliberately the filesystem commands you would need to
+  put `/bin` back, and a tracer is a diagnostic, not a repair tool. A
+  row there is ring-0 code maintained forever, so the bar for one is
+  "could you fix a broken image without it".
+
 - **A COMMAND WITH A READ HALF AND A WRITE HALF MOVES AS ONE PIECE OR
   NOT AT ALL.** `heap`, `ata` and `kstack` each report something AND
   toggle something (`heap debug on|off`, `ata nodma on|off`, `kstack

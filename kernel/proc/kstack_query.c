@@ -13,7 +13,7 @@
 // this instant, i.e. all of them.
 #include "query.h"
 #include "scheduler.h"
-#include "strace.h"
+#include "strace.h"  // kernel-internal now: `strace` is a ring-3 program
 #include "string.h"
 #include <stddef.h>
 

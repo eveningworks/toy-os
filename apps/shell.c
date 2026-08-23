@@ -168,8 +168,6 @@ static void dispatch(char *line) {
         cmd_apps();
     } else if (k_strcmp(cmd, "run") == 0) {
         cmd_run(args ? args : "");
-    } else if (k_strcmp(cmd, "strace") == 0) {
-        cmd_strace(args ? args : "");
     } else if (k_strcmp(cmd, "ring3test") == 0) {
         vga_write("Running ring-3 isolation test. This does NOT return --\n");
         vga_write("see the diagnostic output for what it proves.\n\n");

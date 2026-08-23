@@ -8,15 +8,24 @@
 //
 // Three decisions worth knowing about:
 //
-// 1. WHO gets traced is an address space, not a global switch. Arming
-//    is "the next process created" (api/strace.h), claimed by
-//    strace_claim() when elf_run_from_fs()/the scheduler builds the
-//    new address space, and dropped by strace_release() when that
-//    process exits. This is the same single-slot, compare-CR3 pattern
-//    SYS_SBRK's heap bookkeeping and SYS_WIN_CREATE's window state
-//    already use (see syscall.c) -- one traced process at a time, which
-//    matches how the shell runs binaries anyway. Untraced code pays one
-//    global read and a compare per syscall.
+// 1. WHO gets traced is an address space, not a global switch. A
+//    tracer asks for it AT THE SPAWN (SYS_SPAWN's SPAWN_TRACE, see
+//    abi/syscall_abi.h); strace_arm_for_current() records that this
+//    process wants its next child traced, strace_claim() consumes it
+//    when the new address space is built, and strace_release() drops it
+//    when that process exits. This is the same single-slot, compare-CR3
+//    pattern SYS_SBRK's heap bookkeeping and SYS_WIN_CREATE's window
+//    state already use (see syscall.c) -- one traced process at a time,
+//    which matches how a tracer runs a binary anyway. Untraced code
+//    pays one global read and a compare per syscall.
+//
+//    **THE ARM IS SCOPED TO WHO ASKED, and that is what closed a race
+//    the builtin had.** It used to be a bare flag meaning "the next
+//    process created ANYWHERE", so a spawner preempted between arming
+//    and creating had its trace claimed by whoever else spawned in the
+//    window -- one process asks for a trace, another one gets traced,
+//    and neither can tell. Recording the pid means only that process's
+//    own next spawn can collect.
 //
 // 2. WHEN the line is printed: the call is FORMATTED on entry (the
 //    arguments must be read before the handler can modify the buffers
@@ -29,11 +38,44 @@
 //    strace_end_noreturn() is for (SYS_EXIT), and that a handler which
 //    faults mid-call prints nothing at all.
 //
-// 3. WHERE it goes: the console AND klog. The console half is the
-//    strace-like part (the trace interleaves with the program's output
-//    the way real strace's stderr does); the klog half is what makes a
-//    trace readable afterwards with `dmesg`, and assertable from
-//    tools/vm.py without a screenshot.
+// 3. WHERE it goes: the TRACER'S TERMINAL and klog. The terminal half
+//    is the strace-like part (the trace interleaves with the program's
+//    output the way real strace's stderr does); the klog half is what
+//    makes a trace readable afterwards with `dmesg`, and assertable
+//    from tools/vm.py without a screenshot.
+//
+//    **WHICH TERMINAL IS DECIDED ONCE, AT CLAIM TIME, AND IT IS THE
+//    TRACER'S fd 1.** This used to be `vga_write()` -- the physical
+//    console, unconditionally -- which was right while the only tracer
+//    was a ring-0 shell command and became wrong the moment `strace`
+//    became a program somebody could run in a Terminal WINDOW: the
+//    trace would have gone to a screen nobody was looking at.
+//
+//    **fd 1 AND NOT fd 2, WHICH IS WHERE REAL STRACE PUTS IT, because
+//    fd 2 IN THIS OS IS THE KERNEL LOG** rather than a second terminal
+//    stream (kernel/proc/syscall_fd.c hands every process a KLOG
+//    description for it). A trace written "to stderr" here would be
+//    perfectly recorded in `dmesg` and invisible to the person who
+//    typed the command -- which is the same trap userland/lib/cmd.h and
+//    /bin/ls already document, and the same answer they reached. When
+//    fd 2 becomes somewhere a terminal can see, this is one line.
+//
+//    Note what this does NOT mean: the trace is not WRITTEN to fd 1. It
+//    goes to the terminal fd 1 NAMES, so `strace foo | grep x` greps
+//    foo's output and never the trace -- the property real strace uses
+//    stderr to get. And when fd 1 is a pipe or a file, fd 0 is asked
+//    next, because the person is still sitting at the terminal their
+//    shell reads from even when they redirected the output.
+//
+//    Resolved at the spawn rather than per line because the traced
+//    process is by then the one running -- ITS fds, not the tracer's,
+//    are what a later lookup would find.
+//
+//    Stored as a tty INDEX rather than a pointer, so a terminal
+//    destroyed under a still-running trace cannot leave a dangling one.
+//    tty0's output hook is vga_putc(), so the physical console is not a
+//    special case here -- it is just index 0, which is also the
+//    fallback when fd 2 is a file or a pipe rather than a terminal.
 //
 // User memory is read only through vmm_validate_user_range(), the same
 // gate the real handlers use -- a traced process must never be able to
@@ -42,20 +84,27 @@
 // pointer rather than being skipped, so a bad pointer is visible in
 // the trace instead of invisible.
 #include "strace.h"
-#include "strace_internal.h"
 #include "syscall_abi.h"
 #include "errno.h"
 #include "syscall_table.h"
 #include "vmm.h"
 #include "vga.h"
 #include "klog.h"
+#include "tty.h"       // tty_at()/tty_output() -- where a trace line goes
+#include "syscalls.h"  // fd_tty() -- the tracer's fd 2, resolved once
+#include "scheduler.h" // scheduler_current_pid() -- who armed the trace
 #include "fs.h"
 #include "knum.h"
 
 // One traced address space at a time (decision 1 above). 0 = none;
 // a real CR3 is never 0, same assumption g_heap_pml4 makes.
 static uint64_t g_traced_pml4 = 0;
-static int g_armed = 0;
+// The pid that asked for its next spawn to be traced, or 0 for nobody.
+// A pid rather than a flag -- see decision 1 above.
+static int g_armed_by = 0;
+// Which terminal the trace prints to, as a tty INDEX. 0 is the physical
+// console, which is also the fallback.
+static int g_sink = 0;
 static uint64_t g_calls = 0;
 
 // Long enough for the worst realistic line: a name, three arguments,
@@ -67,21 +116,41 @@ static uint64_t g_calls = 0;
 static char g_line[STRACE_LINE_MAX];
 static size_t g_len = 0;
 
-void strace_arm(void) { g_armed = 1; }
+void strace_arm_for_current(void) { g_armed_by = scheduler_current_pid(); }
 
-void strace_disarm(void) { g_armed = 0; }
-
-uint64_t strace_call_count(void) { return g_calls; }
+void strace_disarm(void) { g_armed_by = 0; }
 
 void strace_claim(uint64_t pml4_phys) {
-    if (!g_armed || !pml4_phys) return;
-    g_armed = 0;
+    if (!g_armed_by || !pml4_phys) return;
+    // SOMEBODY ELSE'S SPAWN DOES NOT COLLECT. See decision 1: the arm
+    // belongs to one process, and this is the whole of enforcing that.
+    // A kernel-context spawn reports pid 0, which can never match a
+    // real arm, so the legacy loader is excluded for free.
+    if (g_armed_by != scheduler_current_pid()) return;
+    g_armed_by = 0;
     g_traced_pml4 = pml4_phys;
     g_calls = 0;
-}
 
-void strace_release(uint64_t pml4_phys) {
-    if (g_traced_pml4 && g_traced_pml4 == pml4_phys) g_traced_pml4 = 0;
+    // THE TRACER'S TERMINAL, resolved HERE and not later: CR3 is still
+    // the spawner's at this point (the new address space has been built
+    // and not switched to), so this is the one moment the tracer's
+    // descriptor table is the one a lookup finds.
+    //
+    // fd 1 FIRST, THEN fd 0, and the second is not belt-and-braces. fd 1
+    // is where "which terminal is this program talking to" normally
+    // lives -- but `strace foo > out.txt` points it at a FILE, and
+    // falling straight through to the physical console there would put
+    // the trace on a screen the person is not looking at, which is the
+    // exact failure moving strace out of ring 0 was meant to fix. fd 0
+    // still names the terminal they are sitting at, because a shell
+    // redirects output far more often than input. Only a tracer with
+    // BOTH ends redirected has no terminal to name.
+    //
+    // fd 2 is not consulted at all: in this OS it is the KERNEL LOG
+    // rather than a second terminal stream -- see decision 3 above.
+    struct tty *t = fd_tty(vmm_current_pml4(), 1);
+    if (!t) t = fd_tty(vmm_current_pml4(), 0);
+    g_sink = t ? tty_index(t) : 0;
 }
 
 int strace_active(void) {
@@ -371,10 +440,40 @@ size_t strace_format_ret(char *out, size_t cap, uint64_t nr, uint64_t rax) {
 
 // ---- emission --------------------------------------------------------
 
+// Emits one line to wherever this trace is going. Also the summary's
+// route, which is why it is not folded into emit_line().
+static void sink_write(const char *line) {
+    unsigned n = 0;
+    while (line[n]) n++;
+    struct tty *t = tty_at(g_sink);
+    if (t) tty_output(t, line, n);
+    else vga_write(line); // a sink that went away mid-trace
+    klog_write(line);
+}
+
+void strace_release(uint64_t pml4_phys) {
+    if (!g_traced_pml4 || g_traced_pml4 != pml4_phys) return;
+    g_traced_pml4 = 0;
+
+    // **THE SUMMARY IS THE KERNEL'S, because only the kernel can count.**
+    // The old builtin read strace_call_count() after the traced program
+    // returned, which worked only because the tracer was ring-0 code in
+    // the same address space as the counter. A ring-3 tracer would need
+    // a syscall for one number it cannot otherwise see -- so the line is
+    // printed here instead, at the one moment the count is final and the
+    // sink is still known.
+    char line[64];
+    size_t n = 0;
+    ap_str(line, sizeof line, &n, "+++ ");
+    ap_udec(line, sizeof line, &n, g_calls);
+    ap_str(line, sizeof line, &n, " syscalls traced +++\n");
+    sink_write(line);
+}
+
+
 static void emit_line(void) {
     ap_ch(g_line, sizeof(g_line), &g_len, '\n');
-    vga_write(g_line);
-    klog_write(g_line);
+    sink_write(g_line);
     g_len = 0;
     g_line[0] = '\0';
 }

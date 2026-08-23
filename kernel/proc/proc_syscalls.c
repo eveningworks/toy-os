@@ -20,6 +20,7 @@
 #include "clocksource.h" // clocksource_now_ns() -- SYS_MONOTONIC_NS
 #include "uaddr.h"
 #include "string.h"
+#include "strace.h"     // strace_arm_for_current() -- SYS_SPAWN's SPAWN_TRACE
 #include <stddef.h>
 
 // SYS_SBRK state for the LEGACY single process syscall_reset_heap() was
@@ -343,6 +344,17 @@ int sys_spawn(struct syscall_ctx *c) {
         c->regs[14] = (uint64_t)(int64_t)-EINVAL;
         return 0;
     }
+    // AN UNKNOWN FLAG IS REFUSED, NOT IGNORED. `flags` took the tail of
+    // this struct, so every caller that predates it passes 0 -- and a
+    // word that silently drops bits it does not recognise can never be
+    // extended safely, because an old kernel would accept a new flag and
+    // do nothing. Same reasoning as the "reserved must be zero" check
+    // `pgid` replaced.
+    if (msg.flags & ~(uint32_t)SPAWN_FLAGS_ALL) {
+        klog_write("syscall: spawn() rejected -- unknown flag\n");
+        c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+        return 0;
+    }
 
     // The environment lives on the HEAP, not this frame: SYS_ENV_MAX is
     // 2 KiB and syscall_dispatch()'s frame is already the one this
@@ -403,7 +415,14 @@ int sys_spawn(struct syscall_ctx *c) {
             // means giving that function a reason to return first.
             // 0 = inherit the caller's group, which is what every
             // spawn that predates process groups passes.
+            // TRACING IS ARMED HERE AND CONSUMED BY THE SPAWN ITSELF.
+            // The arm records THIS process (kernel/strace.h), so the
+            // window between these two lines is not a race: nobody
+            // else's spawn can collect it. The disarm covers the spawn
+            // having failed before an address space existed.
+            if (msg.flags & SPAWN_TRACE) strace_arm_for_current();
             int pid = scheduler_spawn_group(path, args, stdout_desc, env, msg.pgid);
+            strace_disarm();
             if (pid > 0) spawn_rc = pid;
         }
     }

@@ -520,6 +520,20 @@ int sys_spawn_env(const char *path, const char *args, int stdout_fd, char **env)
 int sys_spawn_group(const char *path, const char *args, int stdout_fd,
                      char **env, int pgid);
 
+// The bottom of the chain, and the only link that is not a convenience:
+// SYS_SPAWN's flag word (SPAWN_* in abi/syscall_abi.h). `/bin/strace`
+// is the only caller, and it passes SPAWN_TRACE.
+//
+// **THE CHAIN ENDS HERE, and the next thing to add belongs in the
+// STRUCT, not in a seventh parameter.** Each of sys_spawn ->
+// sys_spawn_env -> sys_spawn_group -> this one exists because spawn
+// grew one capability; the syscall ABI already learned this lesson one
+// parameter earlier and became `struct spawn_msg` for it
+// (abi/syscall_abi.h). Six arguments is where the same argument starts
+// applying on this side.
+int sys_spawn_flags(const char *path, const char *args, int stdout_fd,
+                     char **env, int pgid, unsigned flags);
+
 // BLOCKS until `pid` exits, then reaps it. Writes the exit code to
 // `*out_code` if non-NULL. Returns the pid, or -1.
 //

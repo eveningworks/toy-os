@@ -603,7 +603,34 @@ struct spawn_msg {
     // awkward. Passing the group at creation removes it. `posix_spawn`
     // reached the same answer with POSIX_SPAWN_SETPGROUP.
     int32_t pgid;
+
+    // SPAWN_* below, or 0. **A FIELD RATHER THAN A SYSCALL, and the
+    // reason is the one this struct exists for**: spawn outgrew three
+    // registers once already, and the answer then was one message
+    // instead of a second spawn. A capability that belongs to the act of
+    // starting a process belongs in the message that starts it.
+    //
+    // Unknown bits are REFUSED, not ignored. A flag word that silently
+    // drops what it does not recognise cannot ever be extended safely --
+    // an old kernel would accept a new flag and do nothing, which is the
+    // worst of both answers.
+    uint32_t flags;
 };
+
+// The child is TRACED: every syscall it makes is decoded and printed
+// (kernel/proc/strace.c). `/bin/strace` is the only caller.
+//
+// **A PROPERTY OF THE SPAWN, NOT A MODE THE TRACER TURNS ON.** The
+// alternative was an arm-then-spawn pair -- "the next process created is
+// traced" -- which is what the kernel-side `strace` builtin did and
+// which has a window in it: the arming process can be preempted between
+// the two calls, and somebody else's spawn claims the arm. Naming the
+// child at the moment it is created has no window to have a race in.
+// posix_spawn's flags word is the same shape, for the same reason.
+#define SPAWN_TRACE 1
+
+// Every flag this kernel knows. Anything outside it is -EINVAL.
+#define SPAWN_FLAGS_ALL (SPAWN_TRACE)
 
 // The most an environment blob may be, including its terminator. It has
 // to fit the child's single argv/env stack page alongside the strings

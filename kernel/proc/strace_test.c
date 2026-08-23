@@ -8,11 +8,20 @@
 // break when a syscall is added or renumbered. The string-decoding
 // path (a real user pointer) needs a real process and is covered by
 // actually running `strace /bin/ls` instead.
+//
+// AND ONE THING THE FORMATTER CANNOT ANSWER: where a trace comes OUT.
+// That moved when `strace` became a ring-3 program, and no amount of
+// formatter coverage can see it -- `dmesg` has the lines either way.
+// /tests/trace_test asserts it through a pty, driven below by its exit
+// code, the same arrangement kernel/tty/tty_test.c gives /tests/pty_test.
 #include "ktest.h"
-#include "strace_internal.h"
+#include "strace.h"
 #include "syscall_abi.h"
 #include "errno.h"
 #include "kapi.h"
+#include "scheduler.h"
+#include "fs.h"
+#include "timer.h" // pit_ticks() -- the spawn's timeout
 
 static int eq(const char *a, const char *b) { return k_strcmp(a, b) == 0; }
 
@@ -93,4 +102,30 @@ KTEST("strace", "a too-small buffer truncates instead of overrunning") {
     KTEST_ASSERT(n < 8);
     KTEST_ASSERT_EQ(buf[n], '\0'); // always terminated, however short
     for (unsigned i = 8; i < sizeof(buf); i++) KTEST_ASSERT_EQ(buf[i], 0x7f);
+}
+
+// --- where the trace comes out ----------------------------------------
+
+#define TRACE_TEST_PATH "/tests/trace_test"
+#define TRACE_TIMEOUT_TICKS 600 // 6s at 100Hz
+
+KTEST("strace", "a trace reaches the TRACER'S terminal, not the console") {
+    if (!fs_exists(TRACE_TEST_PATH)) KTEST_SKIP("no " TRACE_TEST_PATH " on this boot");
+    if (!fs_exists("/bin/hello")) KTEST_SKIP("no /bin/hello on this boot");
+
+    int pid = scheduler_spawn(TRACE_TEST_PATH, 0);
+    KTEST_ASSERT(pid != 0);
+
+    int code = -1;
+    int exited = 0;
+    uint64_t start = pit_ticks();
+    while (pit_ticks() - start < TRACE_TIMEOUT_TICKS) {
+        if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
+    }
+    KTEST_ASSERT(exited);
+    // 0 = every phase worked. The codes are distinct so this reports
+    // WHICH one broke: 5/6 are the untraced control finding trace text
+    // it should not have, 8/9 are the traced spawn finding none, 10 is
+    // an unknown spawn flag being accepted. See userland/tests/trace_test.c.
+    KTEST_ASSERT_EQ(code, 0);
 }

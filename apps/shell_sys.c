@@ -8,7 +8,7 @@
 // happened in. Shares `shell_fg`/history[]/history_count with shell.c
 // (and shell_fs.c) via shell_internal.h.
 #include "shell_internal.h"
-#include "shell.h" // shell_path_find() -- cmd_strace() resolves a binary itself
+#include "shell.h" // shell_path_find()
 #include "apps.h"
 
 // Prints `lines` one at a time (each expected to be one console line,
@@ -191,10 +191,6 @@ static const char *const TEST_HELP_LINES[] = {
     "                  way via fs_read_range_begin/_step, verifies\n",
     "                  byte-for-byte, reports both step counts. Keep small\n",
     "                  (1-5) -- see `stress` for a throughput test.\n",
-    "  strace <bin>  - run a /bin binary with syscall tracing on: one\n",
-    "                  decoded line per syscall (`write(1, \"hi\\n\", 3)\n",
-    "                  = 3`), plus a count when it exits. Also captured\n",
-    "                  in `dmesg`. Ring-3 binaries only.\n",
     "  debug         - list per-subsystem debug-log switches (off by\n",
     "                  default)\n",
     "  debug <s> on|off - flip one on/off at runtime, no rebuild --\n",
@@ -929,19 +925,6 @@ void cmd_run(const char *name_and_args) {
     }
 }
 
-// `strace <binary> [args...]` -- runs a /bin binary with syscall
-// tracing armed, printing one decoded line per syscall it makes (see
-// kernel/proc/strace.c for the kernel half and what the lines look
-// like).
-//
-// Deliberately NOT routed through shell_exec_name() the way cmd_run()
-// is, even though that's the usual "one resolver for everything" rule:
-// shell_exec_name() tries apps.c's kernel-space console apps FIRST,
-// and a kernel-space app makes no syscalls at all (it IS the kernel),
-// so tracing one would arm the tracer, run something untraceable, and
-// print an empty trace -- a confusing non-answer rather than an error.
-// Resolving through shell_path_find() instead means only a real ring-3
-// binary can be traced, and anything else says so.
 // `cursor` / `cursor <style>` -- how the console draws its cursor.
 // Reads VGA_CURSOR_STYLE_NAMES generically (vga.h), so adding a style
 // there needs no change here, same as `debug` and its subsystem list.
@@ -972,54 +955,6 @@ void cmd_cursor(const char *args) {
     vga_write(VGA_CURSOR_STYLE_NAMES[want]);
     print_save_result(r);
     vga_write("\n");
-}
-
-void cmd_strace(const char *name_and_args) {
-    if (!name_and_args || k_strlen(name_and_args) == 0) {
-        vga_write("usage: strace <binary> [args...]\n");
-        vga_write("Traces the syscalls a /bin binary makes, one decoded line each\n");
-        vga_write("(also captured in `dmesg`). Only real ring-3 binaries can be\n");
-        vga_write("traced -- built-in console apps like `gui` make no syscalls.\n");
-        return;
-    }
-
-    // Same first-word/rest split cmd_run() does -- `strace`'s argument
-    // arrives as one string, and the binary's own arguments have to be
-    // handed on separately.
-    char name[LINE_MAX];
-    k_strcpy(name, name_and_args);
-    char *bin_args = name;
-    while (*bin_args && *bin_args != ' ') bin_args++;
-    if (*bin_args == ' ') {
-        *bin_args = '\0';
-        bin_args++;
-        while (*bin_args == ' ') bin_args++;
-    } else {
-        bin_args = 0;
-    }
-
-    char bin_path[FS_PATH_MAX];
-    if (!shell_path_find(name, bin_path)) {
-        vga_write("strace: no such executable: ");
-        vga_write(name);
-        vga_write("\n(`path` shows where executables are searched for; only real\n");
-        vga_write("/bin binaries can be traced, not built-in console apps)\n");
-        return;
-    }
-
-    strace_arm();
-    int exit_code = elf_run_from_fs(bin_path, bin_args);
-    strace_disarm(); // no-op if a process claimed the arm, which it
-                      // normally does -- this covers the case where
-                      // elf_run_from_fs() failed before creating one
-
-    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
-    vga_write("+++ exited with ");
-    vga_write_exit_code(exit_code);
-    vga_write(", ");
-    vga_write_dec((uint32_t)strace_call_count());
-    vga_write(" syscalls traced +++\n");
-    vga_set_color(shell_fg, VGA_BLACK);
 }
 
 static enum vga_color color_from_name(const char *s) {

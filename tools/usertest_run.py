@@ -227,6 +227,10 @@ EXCLUDED = [
                           "no process group and no pending mask, so every check would "
                           "measure the absence of a process rather than the behaviour "
                           "of one. kernel/proc/signal_test.c spawns it properly"),
+    ("trace_test",       "needs a procs[] slot of its own: it SPAWNS a child and waits "
+                          "for it, and the legacy `run` loader has neither a pid to "
+                          "spawn from nor a waitpid that means anything. "
+                          "kernel/proc/strace_test.c spawns it properly"),
     ("cputime_test",     "must be SCHEDULER-spawned to have a procs[] slot at all; "
                           "under `run` (the legacy process_run_ring3 path) it has none, "
                           "so it cannot find itself and nothing is billed to it either. "

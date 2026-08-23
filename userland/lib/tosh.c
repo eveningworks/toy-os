@@ -36,6 +36,7 @@
 #include "rt/sys.h"
 #include <ksignal.h> // signal_name() -- one table, shared with the kernel
 #include "lib/tosh_jobs.h"
+#include "lib/upath.h"  // upath_find_program() -- shared with /bin/strace
 
 static int slen(const char *s) { int n = 0; while (s && s[n]) n++; return n; }
 
@@ -434,42 +435,12 @@ static int run_external(struct tosh *sh, const char *path, const char *args,
     return job_wait(sh, pgid, &pid, 1, label);
 }
 
-// PATH lookup, in the same order and spirit as the kernel shell's
-// (apps/shell_path.c): /bin, then /usr/bin, then /tests. A name
-// containing '/' is a path and is used as given.
-static const char *const PATH_DIRS[] = { "/bin", "/usr/bin", "/tests" };
-#define PATH_DIR_COUNT (int)(sizeof(PATH_DIRS) / sizeof(PATH_DIRS[0]))
-
-// Returns 1 if `out` names a program, 0 if no PATH entry had it, and -1
-// if the search could not be COMPLETED -- which is a third answer, not a
-// shade of "no". Until open() could say why it refused, running out of
-// descriptors was indistinguishable from the file not existing, so a
-// machine with a full fd table reported "not found" for a command that
-// was sitting right there. See docs/errno-design.md.
-static int find_program(const char *name, char *out, int cap) {
-    for (const char *p = name; *p; p++) {
-        if (*p == '/') { scopy(out, name, cap); return 1; }
-    }
-    for (int i = 0; i < PATH_DIR_COUNT; i++) {
-        int n = 0;
-        for (const char *d = PATH_DIRS[i]; *d && n < cap - 2; d++) out[n++] = *d;
-        out[n++] = '/';
-        for (const char *c = name; *c && n < cap - 1; c++) out[n++] = *c;
-        out[n] = '\0';
-        // Probing by opening is the only test available: there is no
-        // stat syscall yet. A directory would open too, but PATH
-        // entries holding a directory named like a command is not a
-        // case worth carrying code for.
-        int fd = sys_open(out, 0);
-        if (fd >= 0) { sys_close(fd); return 1; }
-        // ENOENT is the ordinary answer -- keep looking. Anything else
-        // is about this SHELL, not about this candidate: EMFILE means
-        // the next probe cannot succeed either, so continuing would
-        // walk the whole PATH to arrive at a wrong conclusion.
-        if (sys_errno() != ENOENT) return -1;
-    }
-    return 0;
-}
+// PATH lookup moved to userland/lib/upath.c when `/bin/strace` became
+// its second real caller -- it has to find the same program this shell
+// would, and a second hand-rolled copy of the search would be a place
+// for the two to disagree. The three answers (found / not found / could
+// not complete) are upath.h's, and the reason the third exists is the
+// one this shell paid for.
 
 // --- the job-control builtins -----------------------------------------
 //
@@ -720,7 +691,7 @@ static int run_stripped(struct tosh *sh, const char *line, int background,
     }
 
     char path[TOSH_PATH_MAX];
-    int found = find_program(cmd, path, TOSH_PATH_MAX);
+    int found = upath_find_program(cmd, path, TOSH_PATH_MAX);
     if (found <= 0) {
         emit(sh, cmd);
         if (found < 0) {
@@ -870,7 +841,7 @@ static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
         while (st[i].cmd[k] == ' ') k++;
         const char *args = st[i].cmd[k] ? st[i].cmd + k : 0;
 
-        if (!find_program(cmd, path, TOSH_PATH_MAX)) {
+        if (!upath_find_program(cmd, path, TOSH_PATH_MAX)) {
             emit(sh, cmd);
             emit(sh, ": not found\n");
             continue; // its stage simply produces nothing

@@ -11,7 +11,7 @@
 #include "vga.h"
 #include "klog.h"
 #include "string.h"
-#include "strace_internal.h"
+#include "strace.h"
 #include "uaddr.h"
 
 // Stack/heap/guard addresses come from uaddr.h -- this loader and the

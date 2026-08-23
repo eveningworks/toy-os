@@ -16,7 +16,7 @@
 #include "syscall_table.h"
 #include "vmm.h"
 #include "scheduler.h"
-#include "strace_internal.h"
+#include "strace.h"
 #include "klog.h"
 #include <stddef.h>
 

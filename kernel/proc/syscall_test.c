@@ -15,7 +15,7 @@
 #include "ktest.h"
 #include "syscall_table.h"
 #include "syscall_abi.h"
-#include "strace.h"
+#include "strace.h"  // kernel-internal now: `strace` is a ring-3 program
 #include "kapi.h"
 
 // Every implemented syscall's number, from the table's own point of
