@@ -1090,6 +1090,29 @@ manual steps to be worth automating:
   first version asserted the corner was "not the tile colour", which a
   plain `ugfx_blit()` satisfies by writing black, and only the positive
   control found that. In `gui_regress.py`.
+- **`mines_test.py`** -- Minesweeper (20 checks), and the protocol
+  property it was built to prove: **a secondary click reaching a ring-3
+  client**. The check that matters is a PAIR -- a right-click on the
+  BOARD must flag a cell and leave no context menu open, and a
+  right-click on the TITLE BAR must still open the window menu; either
+  half alone passes under a half-broken split. Game rules are asserted
+  against the client's own `mines: state ...` log line rather than
+  pixels (a screenshot cannot tell a flood fill that opened 51 cells
+  from one that opened 3), and geometry comes from its `mines: layout
+  ...` lines, menu rows included, so nothing here re-derives the app's
+  sizing. Two things its docstring records, both learned the expensive
+  way. **The flag's pixel check compares the SAME cell before and
+  after** -- the first version compared the flagged cell against a
+  different one and passed for the wrong reason, because the cell it
+  flagged happened to be revealed and a revealed cell differs from a
+  covered one whether or not a flag ever drew. And **the clock is
+  asserted to ADVANCE, never to reach N after N seconds**: the guest's
+  timer runs at whatever rate TCG manages, measured here at well under
+  half real time under load. Both positive controls were run -- disabling
+  the WM's content forwarding reddens four checks and nothing else;
+  narrowing the first-click safe zone from the 3x3 neighbourhood to the
+  clicked cell reddens exactly one, on the right assertion. In
+  `gui_regress.py`.
 - **`imgview_test.py`** -- JPEG decoding all the way to a screen (15
   checks), and the only one of the three decoder checks that can see a
   pixel. Its oracle is the host: `data/wallpapers/aurora.jpg` is

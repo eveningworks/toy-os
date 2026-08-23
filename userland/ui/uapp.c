@@ -304,20 +304,33 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
     case WIN_EV_MOUSE_DOWN: {
         a->mouse_x = ev->a;
         a->mouse_y = ev->b;
-        // Routed FIRST, so a widget that wants this press gets it and
-        // takes the pointer grab. The app's on_press still runs: an app
-        // may want a press the widgets ignored (a canvas, a text area),
-        // or may want to log one they took.
-        int changed = 0;
-        int id = a->router.count
-                     ? uui_router_press(&a->router, ev->a, ev->b, &changed) : 0;
-        if (changed) a->dirty = 1;
-        if (id && d->on_widget) d->on_widget(a, id, UUI_REASON_PRESS);
-        // Keyboard focus follows the click, after the widgets have had
-        // the press (a widget takes the pointer grab; this only moves
-        // which one keys go to). See uui_focus_click().
-        if (d->focus && uui_focus_click(d->focus, ev->a, ev->b)) a->dirty = 1;
-        if (d->buttons && uui_button_group_press(d->buttons, ev->a, ev->b)) a->dirty = 1;
+        // ONLY THE PRIMARY BUTTON ACTIVATES A WIDGET. `mods` carries the
+        // button bits (abi/win_proto.h), and TWS delivers a secondary
+        // click inside a client's content area like any other press --
+        // so without this test a right-click would arm buttons, move the
+        // focus and commit menu items, which no toolkit does. Qt and GTK
+        // both hand every button to the app and act on button 1 alone.
+        //
+        // on_press still fires for EVERY button, because the app is the
+        // only thing that can know what a secondary click means to it
+        // (Minesweeper flags a cell; Calculator ignores it).
+        int primary = (ev->mods & 0x1) != 0;
+        if (primary) {
+            // Routed FIRST, so a widget that wants this press gets it and
+            // takes the pointer grab. The app's on_press still runs: an app
+            // may want a press the widgets ignored (a canvas, a text area),
+            // or may want to log one they took.
+            int changed = 0;
+            int id = a->router.count
+                         ? uui_router_press(&a->router, ev->a, ev->b, &changed) : 0;
+            if (changed) a->dirty = 1;
+            if (id && d->on_widget) d->on_widget(a, id, UUI_REASON_PRESS);
+            // Keyboard focus follows the click, after the widgets have had
+            // the press (a widget takes the pointer grab; this only moves
+            // which one keys go to). See uui_focus_click().
+            if (d->focus && uui_focus_click(d->focus, ev->a, ev->b)) a->dirty = 1;
+            if (d->buttons && uui_button_group_press(d->buttons, ev->a, ev->b)) a->dirty = 1;
+        }
         if (d->on_press) d->on_press(a, ev->a, ev->b, ev->mods);
         break;
     }
@@ -330,18 +343,23 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
         // This is the arm that was copied verbatim into three apps.
         a->mouse_x = ev->a;
         a->mouse_y = ev->b;
+        // Masked to the PRIMARY button for the same reason as the press
+        // above: a drag with only the secondary button held is not a
+        // drag as far as a widget is concerned, it is hover with
+        // something else held down.
+        unsigned held = ev->mods & 0x1;
         if (a->router.count) {
             int changed = 0;
             // The GRAB lives here: while a button is held this goes to
             // whoever took the press, wherever the cursor now is, which
             // is what makes a drag work with no app state at all.
-            int id = uui_router_motion(&a->router, ev->a, ev->b, ev->mods, &changed);
+            int id = uui_router_motion(&a->router, ev->a, ev->b, held, &changed);
             if (changed) a->dirty = 1;
             if (id && d->on_widget) d->on_widget(a, id, UUI_REASON_MOTION);
         }
         if (d->buttons) {
-            int changed = ev->mods ? uui_button_group_press(d->buttons, ev->a, ev->b)
-                                    : uui_button_group_hover(d->buttons, ev->a, ev->b);
+            int changed = held ? uui_button_group_press(d->buttons, ev->a, ev->b)
+                                : uui_button_group_hover(d->buttons, ev->a, ev->b);
             if (changed) a->dirty = 1;
         }
         if (d->on_motion) d->on_motion(a, ev->a, ev->b, ev->mods);

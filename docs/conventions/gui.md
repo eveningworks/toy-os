@@ -1004,3 +1004,39 @@ real scanout hardware does. Do not write a pixel assertion for one.
   hand-pick a contrast). Sampling the backdrop to choose an ink was
   considered and is worse: a gradient gives a different answer at each
   end of one string.
+
+- **A SECONDARY CLICK IS THE CLIENT'S INSIDE ITS CONTENT AREA, AND THE
+  WM'S EVERYWHERE ELSE.** A right-click on a window's own pixels is
+  delivered as `WIN_EV_MOUSE_DOWN` with button bit `0x2`
+  (`abi/win_proto.h`); the title bar, the border, the taskbar button and
+  the app icon still open the window menu, and so does the desktop. That
+  is the split Windows, X11 and Wayland all make -- a right-click in
+  Notepad's text area opens Notepad's menu, not the system menu -- and
+  toy-os used to be the outlier, seizing the button over the WHOLE
+  window so that no ring-3 client could ever receive one. Three things
+  to know. **The WM arms the press with the button that made it**
+  (`content_pressed_btn` in `wm_internal.h`): a right-press armed and
+  released on the LEFT button's bit would leave the client holding a
+  `MOUSE_DOWN` with no `MOUSE_UP`, which is the same bug the left button
+  already shipped once. **Toykit acts on `0x1` alone** -- a secondary
+  press never arms a widget, moves the focus or commits a menu item, as
+  in Qt and GTK -- while `uapp_desc.on_press` still receives every
+  button, because only the app knows what a right-click means to it.
+  And **the cost is real and was accepted**: the window menu is no
+  longer reachable from the middle of an app's window, which is exactly
+  the bargain every real desktop makes, and four other ways in remain.
+
+- **MINESWEEPER IS THE FIRST GAME, AND IT IS AN ORDINARY CLIENT**
+  (`userland/gui/apps/mines.c`, `/bin/wm/apps/mines`). It draws its own
+  board rather than introducing a `uui_grid`, because one grid-shaped
+  app does not justify a widget (the second-real-caller bar); a second
+  one -- Sudoku, a memory game, a chess board -- is where that widget
+  comes from. Two things worth knowing. **Its board palette is NOT the
+  theme's**: the numbers 1-8 keep Minesweeper's own colours, because
+  those are CONTENT a player reads the board with rather than chrome,
+  the same argument syntax highlighting makes; the window, panel, menu
+  bar and borders are all themed, and the 3D bevel is dropped for the
+  flat look `docs/gui-guidelines.md` requires. And **flagging commits on
+  PRESS**, the same documented exception a menu gets: a flag is instant
+  in every implementation of this game, and it is undone by
+  right-clicking again rather than by dragging off.

@@ -203,6 +203,7 @@ void wm_handle_left_click(int mx, int my) {
             // ones, so the pressed look appears immediately.
             if (windows[fi].app && windows[fi].app->on_press) {
                 content_pressed = fi;
+                content_pressed_btn = 0x1;
                 windows[fi].app->on_press(&windows[fi], ccx, ccy);
             } else if (wm_client_is_client_window(&windows[fi])) {
                 // A client has no on_press callback -- it does its own
@@ -215,6 +216,7 @@ void wm_handle_left_click(int mx, int my) {
                 // fixes: keyboard input worked and mouse input did
                 // not.
                 content_pressed = fi;
+                content_pressed_btn = 0x1;
             }
             // A ring-3 client gets the same event as a message instead
             // of a callback. It has no on_click/on_press distinction --
@@ -374,6 +376,36 @@ void wm_handle_right_click(int mx, int my) {
         struct window *w = &windows[i];
         if (w->state == WIN_MINIMIZED) continue;
         if (!uui_hit(w->x, w->y, w->w, w->h, mx, my)) continue;
+
+        // THE CONTENT AREA BELONGS TO THE CLIENT, THE FRAME BELONGS TO
+        // THE WM. A secondary click inside a client's own pixels is
+        // delivered to it as WIN_EV_MOUSE_DOWN with button bit 0x2,
+        // exactly as the primary one is; the window menu stays on the
+        // title bar, the app icon, the border, the taskbar button and
+        // Alt+F4. That is the split Windows, X11 and Wayland all make --
+        // a right-click in Notepad's text area opens Notepad's menu, not
+        // the system menu -- and this used to be the one place toy-os
+        // was the outlier, seizing the button over the whole window and
+        // leaving a client with no secondary click at all.
+        //
+        // What it COSTS, stated plainly: the window menu is no longer
+        // reachable from the middle of an app's window. Four other ways
+        // in remain (above), which is the same bargain every real
+        // desktop makes.
+        if (wm_client_is_client_window(w) &&
+            uui_hit(window_content_x(w), window_content_y(w),
+                     window_content_w(w), window_content_h(w), mx, my)) {
+            bring_to_front(i);
+            int fi = window_count - 1;
+            // Armed exactly like the left button's press, or the
+            // MOUSE_UP below would never be sent -- see the same
+            // reasoning in wm_handle_left_click().
+            content_pressed = fi;
+            content_pressed_btn = 0x2;
+            wm_client_send_mouse(&windows[fi], WIN_EV_MOUSE_DOWN, mx, my, 2);
+            redraw_pending = 1;
+            return;
+        }
 
         wm_open_window_menu(i, mx, my);
         return;
@@ -541,7 +573,9 @@ void wm_update_drag_resize(int mx, int my, uint8_t buttons) {
 
     if (content_pressed >= 0) {
         struct window *w = &windows[content_pressed];
-        if (buttons & 0x1) {
+        // The button that ARMED this press is the one whose release
+        // ends it -- see wm_internal.h's content_pressed_btn.
+        if (buttons & content_pressed_btn) {
             // Every tick, not just on change -- on_press decides for
             // itself whether the "hot" button moved (e.g. the mouse
             // slid onto a different button, or off all of them) and
@@ -556,7 +590,8 @@ void wm_update_drag_resize(int mx, int my, uint8_t buttons) {
             // held, which is what lets its widgets re-hit-test and
             // "un-press" when the cursor slides off a control -- the
             // same behaviour on_press gives a kernel app.
-            wm_client_send_mouse(w, WIN_EV_MOUSE_MOVE, mx, my, 1);
+            wm_client_send_mouse(w, WIN_EV_MOUSE_MOVE, mx, my,
+                                  (unsigned)content_pressed_btn);
         } else {
             if (w->app && w->app->on_release) w->app->on_release(w);
             // The release is what COMMITS a click, for a client exactly

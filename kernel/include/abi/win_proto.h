@@ -34,7 +34,25 @@
 #define WIN_EV_NONE       0
 #define WIN_EV_KEY        1 // a: key code (api/keyboard.h), mods: KEY_MOD_*
 #define WIN_EV_MOUSE_MOVE 2 // a, b: position, window-relative
-#define WIN_EV_MOUSE_DOWN 3 // a, b: position; mods: button bits
+#define WIN_EV_MOUSE_DOWN 3 // a, b: position; mods: button bits -- 0x1
+                            // primary (left), 0x2 secondary (right).
+                            //
+                            // BOTH BUTTONS REACH A CLIENT, inside its
+                            // CONTENT area only: the frame, the title
+                            // bar and the taskbar keep the WM's window
+                            // menu on a right-click, and the content
+                            // belongs to the app. Same split as
+                            // Windows, X11 and Wayland. A MOVE while a
+                            // button is held carries that button's bit,
+                            // and the UP that ends the press carries 0
+                            // (the buttons now down, not the one that
+                            // was released).
+                            //
+                            // Toykit acts on 0x1 alone -- a secondary
+                            // press never arms a widget or moves the
+                            // focus -- and passes every button through
+                            // to uapp_desc.on_press, because only the
+                            // app knows what a right-click means to it.
 #define WIN_EV_MOUSE_UP   4 // a, b: position; mods: button bits
 #define WIN_EV_CLOSE      5 // the server wants this window gone
 #define WIN_EV_RESIZE     6 // a, b: PROPOSED content size -- a configure,

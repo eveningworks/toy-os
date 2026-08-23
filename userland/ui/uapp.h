@@ -267,11 +267,12 @@ struct uapp_desc {
     // which is TWS's to solve (see docs/roadmap.md's M41).
     int (*on_close)(struct uapp *a);
 
-    // Non-NULL turns the loop into an animating one: it polls instead
-    // of blocking, calls this once per pass, repaints if it returns 1,
-    // and yields. Shapes needs this -- there is no timer event, so its
-    // animation is driven by its own loop's pace, and blocking would
-    // freeze it.
+    // Called on a cadence; repaints if it returns 1. WITH `tick_ms`
+    // set the loop still BLOCKS and TWS wakes it on a timer, which is
+    // what an app with a rate (a clock, a game's second hand) wants.
+    // WITHOUT it the loop POLLS -- calls this once per pass and yields
+    // -- which is what an animation with no natural rate needs, and
+    // which costs a scheduling slot for as long as the app lives.
     int (*on_tick)(struct uapp *a);
 };
 

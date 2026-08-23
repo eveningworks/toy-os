@@ -134,6 +134,7 @@ TOOLS = [
     ("idle", "idle_desktop_test.py", "nothing paints over an idle desktop"),
     ("imgview", "imgview_test.py", "JPEG decoding, the viewer, and the wallpaper"),
     ("icons", "icons_test.py", "app icons: QOI, alpha compositing, three draw sites"),
+    ("mines", "mines_test.py", "Minesweeper, and a secondary click reaching a client"),
 ]
 
 # Roughly how long each tool takes, in seconds, used ONLY to decide what

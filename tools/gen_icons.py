@@ -161,6 +161,23 @@ def icon_uidemo():
     return im
 
 
+def icon_mines():
+    # A MINE, not a flag. Both are the game's symbols, but a flag at
+    # 20px is a wedge that could be anything, while a spiked ball is
+    # unmistakable -- and it is what winmine.exe, KMines and gnome-mines
+    # all put on the board itself.
+    im, d = tile((190, 78, 70))
+    cx, cy, r = 32, 32, 11
+    for dx, dy in ((0, 1), (1, 0), (1, 1), (1, -1)):
+        d.line([cx - dx * 17, cy - dy * 17, cx + dx * 17, cy + dy * 17],
+               fill=WHITE, width=4)
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=WHITE)
+    # The highlight, in the tile's own hue rather than a fourth colour --
+    # it is what stops the ball reading as a flat blob.
+    d.ellipse([cx - 6, cy - 6, cx - 3, cy - 3], fill=(190, 78, 70, 255))
+    return im
+
+
 def icon_start():
     """The Start button's mark -- NOT an app icon, and deliberately not
     shaped like a UI convention either.
@@ -212,6 +229,7 @@ ICONS = {
     "shapes": icon_shapes,
     "fontdemo": icon_fontdemo,
     "uidemo": icon_uidemo,
+    "mines": icon_mines,
 }
 
 # Crash Test deliberately gets NO icon file. It is the one entry that

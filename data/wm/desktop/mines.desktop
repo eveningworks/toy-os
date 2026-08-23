@@ -1,0 +1,5 @@
+# Minesweeper -- see this directory's README.md for the format.
+Name=Minesweeper
+Exec=/bin/wm/apps/mines
+Category=apps
+Icon=mines

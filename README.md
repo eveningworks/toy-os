@@ -75,7 +75,9 @@ QEMU, and it does not stop at "hello world from the kernel":
   a process, and killing the desktop is survivable. Pictures are ring-3 too: a
   **baseline JPEG decoder** in the toolkit's library gives the desktop a
   real wallpaper and an Image Viewer, with no image parser anywhere in
-  the kernel.
+  the kernel. There is a game, too: **Minesweeper**, which is where the
+  desktop learned to give a right-click to the application under the
+  cursor instead of keeping it for the window menu.
 - **Its own test suite** — `make test` boots the OS headless, runs
   in-kernel tests including deliberate fault injection, and exits
   non-zero on failure. A separate GUI suite drives the desktop over a

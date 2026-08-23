@@ -3958,3 +3958,58 @@ rectangle inside the first is just a border.
 the same rule app icons, font faces and cursor themes already follow, so
 it goes through `icon_get()` and is cached decoded-and-scaled like
 everything else on the strip.
+
+## A right-click on a client's content belongs to the CLIENT, not to the window manager
+
+Until Minesweeper, `wm_handle_right_click()` walked the window list and
+opened the window menu for a right-click anywhere on a window --
+including the middle of the app's own pixels. That was fine while every
+window was drawn by the WM itself, and it quietly became a hole once
+windows belonged to separate processes: **no ring-3 client could ever
+receive a secondary click**, so no app could have a context menu, a
+paste target, or -- the case that finally made it matter -- a way to
+flag a mine.
+
+**What real systems do.** All three give the button to the client and
+claim it only on chrome. Windows sends `WM_RBUTTONDOWN` to the window
+procedure and reserves the system menu for the title bar, the icon and
+Alt+Space. X11 delivers button 3 to the client, and window managers that
+want it take a MODIFIER chord instead (Alt+click in most of them,
+KWin included). Wayland has no ambiguity at all: the compositor draws
+the decorations, so anything inside the surface is the client's by
+construction. toy-os was the outlier, and not deliberately -- it was the
+shape a single-process WM had left behind.
+
+**The split now.** `wm_handle_right_click()` tests the window's CONTENT
+rect (`window_content_x/y/w/h()`) and, for a real client, raises the
+window and sends `WIN_EV_MOUSE_DOWN` with button bit `0x2`. Everything
+else -- the title bar, the 1px border, the resize margin, the taskbar
+button, the desktop -- keeps the menu. The window menu is therefore no
+longer reachable from the middle of an app's window, which is the
+bargain every desktop above makes, and four ways in remain (the title
+bar, the app icon, the taskbar button, Alt+F4).
+
+**The bug this would have shipped without the second half.** A press is
+released by the button that made it. `content_pressed` -- the WM state
+that routes drag-tracking and the eventual `MOUSE_UP` to the pressed
+window -- was hard-coded to end when bit `0x1` went up, because the left
+button was the only one that ever set it. Arming it from a right-click
+without that fix leaves a client holding a `MOUSE_DOWN` that is never
+followed by a `MOUSE_UP`, which is precisely the bug `wm_input.c`
+already documents shipping once for the left button ("keyboard input
+worked and mouse input did not"). Hence `content_pressed_btn`.
+
+**And the toolkit had to be told, or every app would have regressed.**
+`uapp.c` routed any `MOUSE_DOWN` to the widget router, the focus ring
+and the button group, because only one button had ever arrived. Deliver
+a second one and a right-click starts arming Calculator's keys and
+committing menu items. Qt and GTK both hand every button to the app and
+act on button 1 alone; Toykit does the same now -- widgets on `0x1`,
+`on_press` on everything -- so an app that has never heard of a
+secondary click is unchanged, and one that wants it reads `buttons`.
+
+**Why not make it opt-in per client.** A `WIN_HINT_*` saying "send me
+right-clicks" was the conservative option and was rejected: it invents
+a mechanism none of the three reference systems has, it makes the
+default behaviour the wrong one, and the thing it protects -- a window
+menu over app content -- is a convenience no real desktop offers.

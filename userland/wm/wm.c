@@ -113,6 +113,7 @@ int resize_prop_w = -1, resize_prop_h = -1;
 
 int content_dragging = -1; // index into windows[], or -1 -- see wm_internal.h
 int content_pressed = -1; // index into windows[], or -1 -- see wm_internal.h
+int content_pressed_btn = 1; // which button armed it -- see wm_internal.h
 
 int redraw_pending = 1;
 
@@ -743,6 +744,7 @@ void wm_run(void) {
     resizing = -1;
     content_dragging = -1;
     content_pressed = -1;
+    content_pressed_btn = 1;
     title_btn_armed_win = -1;
     title_btn_armed_kind = -1;
     title_btn_pressed_active = 0;

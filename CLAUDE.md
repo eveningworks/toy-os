@@ -594,6 +594,8 @@ whenever a headline here tells you something you did not already know.
 - **THE WALLPAPER IS A REGISTERED SETTING, AND ITS VALUE IS A NAME** -- `desktop.wallpaper`, a filename stem under `/usr/share/wallpapers` or `none`; a GUI test measuring ink over the desktop must turn it off first.
 - **THE START BUTTON'S APPEARANCE IS A REGISTERED SETTING** -- `desktop.start_button` = `text` | `icon` | `both` (XFCE Whisker's three-way), default `text` so the strip's geometry is unchanged; `start_mark()` in `wm_render.c` is the ONE decision the width, the drawing and `gui taskbar --json` all ask, or a missing `start.qoi` yields an icon-width button with a text label in it.
 
+- **A SECONDARY CLICK IS THE CLIENT'S INSIDE ITS CONTENT AREA, AND THE WM'S EVERYWHERE ELSE** -- right-click reaches a ring-3 app as button bit `0x2`, the frame/title bar/taskbar keep the window menu (Windows/X11/Wayland's split); Toykit activates widgets on `0x1` alone while `on_press` sees every button.
+- **MINESWEEPER IS THE FIRST GAME, AND IT IS AN ORDINARY CLIENT** -- `userland/gui/apps/mines.c`; it draws its own board rather than adding a `uui_grid` widget for one caller, its board palette is content and not theme, and flagging commits on PRESS.
 ### Storage, the filesystem, and /etc
 
 `docs/conventions/storage.md`
@@ -987,7 +989,8 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   `screen_surface_test.py`, `scrollbar_test.py`,
   `single_instance_test.py`, `taskmgr_test.py`, `uapp_test.py`,
   `uiclient_test.py`, `uidemo_test.py`, `uterm_test.py`,
-  `winclient_test.py`, `imgview_test.py`, `icons_test.py`.
+  `winclient_test.py`, `imgview_test.py`, `icons_test.py`,
+  `mines_test.py`.
 - **Run on demand, not in the gate** -- `ansi_cursor_test.py` (ANSI
   cursor movement and erasing, as PIXELS -- it kills the desktop first,
   since the console is what it photographs), `init_test.py` (init and

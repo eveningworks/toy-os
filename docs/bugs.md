@@ -86,3 +86,26 @@ happen, which is what an intermittent does to a bisection.
 What would settle it: `tools/flake_hunt.py`-style repeated boots
 sampling the framebuffer, since every symptom above is visible from the
 host.
+
+## The full parallel `gui_regress` run fails a different tool each time
+
+Measured 2026-08-23 while adding Minesweeper. **`uterm` failed 3 of 5
+full-suite runs on that change and 0 of 3 on the commit before it; solo
+(`gui_regress.py -k uterm`) it passed 3 of 3 on the same build.** The
+same afternoon `font` failed one full run on the change and one on the
+commit before, on the same check both times ("the two faces do not have
+the same cell"), so the failures are not specific to one tool.
+
+The failing checks are all observation-timing ones -- a shell that did
+not come back after Ctrl-D, a font change not yet visible -- which is
+the same class as the two entries above about injected clicks being lost
+and `uidemo` failing in the parallel suite. **Cause not established, and
+the tool it lands on moves run to run.** What is NOT known is whether
+the rate genuinely rose with that change or whether three samples of a
+load-dependent flake simply landed badly; at these counts the two are
+not distinguishable (0 of 3 is what a 40% rate looks like 22% of the
+time).
+
+What would settle it: `tools/flake_hunt.py` over the full suite rather
+than over a single tool, and a run pinned to fewer jobs (`-j 2`) to see
+whether the rate tracks concurrency.
