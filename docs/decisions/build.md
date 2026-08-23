@@ -993,6 +993,34 @@ direction is a build error rather than a key that quietly stops working.
 Without it the failure mode is a wrong constant mapping to a key Doom
 does nothing with, which looks exactly like an unbound control.
 
+### Enter is 0x0A here and 0x0D in Doom, and the first test could not see it
+
+The port shipped able to open its menu and unable to START A GAME.
+`/etc/kbs` maps the Enter key to `\n` (0x0A), which is what a terminal
+and a line editor want and is not going to change; `doomkeys.h` defines
+`KEY_ENTER` as 0x0D. So the menu opened, the arrow keys moved the
+highlight, and no item could ever be chosen. Nothing crashed, nothing
+logged, and a screenshot of the menu looked perfect.
+
+Translated in `to_doom_key()`, which is what that function is for: both
+sides are right for their own world, and the seam is where they meet.
+(Backspace is the same shape -- 0x08 here, 0x7f in Doom.)
+
+**THE TEST WRITTEN FOR IT WAS USELESS, AND THAT IS THE LESSON.** The
+first version pressed Enter and asserted the screen CHANGED -- and it
+passed with the fix reverted, because Doom's attract demo keeps playing
+behind the menu, so the screen changes whatever Enter does. A green run
+proves nothing until the control has been seen to fail; this one was run
+and did not fail.
+
+The oracle that works is the INVERSE: once a new game starts, the player
+is standing still, so the screen goes nearly static -- and a demo, by
+definition, cannot. Measured both ways: **0.0009** of pixels changing
+between frames with a game started, against **0.38-0.67** with the fix
+reverted. Three orders of magnitude, where the obvious assertion had
+none. It pairs with the existing "DOOM animates" check, since animating
+before and still after is a combination only a working Enter produces.
+
 ### What the port actually needed, measured rather than assumed
 
 Three things were built for this port in advance. Two of them turned out

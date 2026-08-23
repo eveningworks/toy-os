@@ -28,6 +28,13 @@ THE ASSERTIONS THAT MATTER, and why each is shaped the way it is:
     been impossible before WIN_EV_KEY_UP existed -- not because Escape
     needs a release, but because nothing could have got this far: Doom's
     DG_GetKey() asks for an EDGE, and a press-only OS cannot answer it.
+  * **Enter STARTS A NEW GAME, asserted by the screen going STILL.**
+    Added after the port shipped unable to start one (0x0A against
+    KEY_ENTER's 0x0D). The first version of this check pressed Enter and
+    asserted the screen CHANGED -- and passed with the bug reverted,
+    because the attract demo animates behind the menu regardless. A
+    started game is the one state in which nothing moves, since the
+    player is standing still.
   * **It maximizes, and the IMAGE stays 4:3.** Measured from the ink
     rather than from the window: the bars are exactly black and Doom's
     own darkest pixels are not, so scanning in from the edges for a
@@ -67,7 +74,7 @@ from gui_debug import DebugConsole, enter_gui
 from qmp_test import QMPSession
 
 try:
-    from PIL import Image
+    from PIL import Image, ImageChops
 except ImportError:
     print("doom_test: needs Pillow (pip install pillow)", file=sys.stderr)
     sys.exit(2)
@@ -91,6 +98,17 @@ class Result:
         print(("  PASS  " if ok else "  FAIL  ") + name)
         if not ok and detail:
             print(f"        {detail}")
+
+
+def changed_fraction(a, b):
+    """Fraction of pixels that differ perceptibly between two frames.
+
+    Thresholded at 12 rather than compared exactly: the status bar's face
+    animates and the palette flashes on a pickup, so "identical" is too
+    strict for "the player is standing still"."""
+    diff = ImageChops.difference(a, b).convert("L")
+    changed = sum(1 for p in diff.getdata() if p > 12)
+    return changed / float(diff.size[0] * diff.size[1])
 
 
 def content_box(win):
@@ -175,6 +193,47 @@ def run(dbg, qmp, tmp, res):
     res.check("a keystroke reaches the game (Esc opens the menu)",
               after.tobytes() != before.tobytes(),
               "the screen did not change; input is not reaching the client")
+
+    # --- Enter SELECTS, and the oracle is that the game goes STILL ---
+    #
+    # THIS CHECK EXISTS BECAUSE THE PORT SHIPPED UNABLE TO START A GAME.
+    # `/etc/kbs` maps Enter to 0x0A, because that is what a terminal and
+    # a line editor want; `doomkeys.h` defines KEY_ENTER as 0x0D. Nothing
+    # crashed and nothing logged: the menu opened, the highlight moved
+    # with the arrow keys, and no item could be chosen.
+    #
+    # **AND THE FIRST VERSION OF THIS CHECK WAS USELESS**, which is the
+    # part worth keeping. It pressed Enter and asserted the screen
+    # changed -- and the screen changes anyway, because Doom's attract
+    # demo keeps playing behind the menu. It passed with the fix
+    # reverted. Ask what a broken version would still pass.
+    #
+    # The oracle that works is the opposite of movement: once a NEW GAME
+    # starts, the player is standing still, so the screen goes nearly
+    # STATIC -- while a demo, by definition, cannot. Measured, both ways:
+    # 0.0009 of pixels changing between frames with a game started,
+    # against 0.67 with the fix reverted and the demo still running. The
+    # threshold below sits three orders of magnitude clear of both.
+    #
+    # It pairs with "DOOM animates" above: animating before, still after,
+    # is a combination only a working Enter produces.
+    qmp.send_key("ret")          # New Game
+    time.sleep(1.5)
+    qmp.send_key("ret")          # Knee-Deep in the Dead
+    time.sleep(1.5)
+    qmp.send_key("ret")          # skill level -- the game starts here
+    time.sleep(4.0)
+
+    idle_a = shot("game_a")
+    time.sleep(1.5)
+    idle_b = shot("game_b")
+    changed = changed_fraction(idle_a, idle_b)
+    print(f"        (frame-to-frame change after New Game: {changed:.4f})")
+    res.check("Enter starts a New Game (the screen goes still)",
+              changed < 0.05,
+              f"{changed:.4f} of pixels still changing -- the attract demo "
+              f"is running, so Enter never selected anything. This "
+              f"keyboard sends 0x0A and Doom wants KEY_ENTER (0x0D).")
 
     # --- maximized, and still 4:3 ------------------------------------
     #

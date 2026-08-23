@@ -99,6 +99,18 @@ static unsigned char to_doom_key(int code) {
     case TOYKEY_PAGE_UP:     return KEY_PGUP;
     case TOYKEY_PAGE_DOWN:   return KEY_PGDN;
     case TOYKEY_DELETE:      return KEY_DEL;
+    // --- THE TWO CONTROL CODES THAT DO NOT LINE UP --------------------
+    //
+    // Both are cases of toy-os being right for a Unix and Doom being
+    // right for Doom, meeting here because this is the seam.
+    //
+    // **ENTER IS 0x0A HERE AND 0x0D IN DOOM.** `/etc/kbs` maps the
+    // Enter key to `\n`, which is what a terminal and a line editor
+    // want and is not going to change; `doomkeys.h` defines KEY_ENTER
+    // as 13. Without this line the menu HIGHLIGHT moves with the arrow
+    // keys and nothing can be selected -- New Game included, which is
+    // how this was found.
+    case 0x0A:               return KEY_ENTER;
     // 0x08 is what this keyboard sends for Backspace (Ctrl-H's control
     // code, terminal-style); Doom wants 0x7f. Without this the menu's
     // "erase a character" key does nothing.
