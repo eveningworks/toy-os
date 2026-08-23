@@ -46,6 +46,20 @@ SKIP_DIRS = {".git", "build", "screenshots", "worktrees", ".claude"}
 SKIP_FILES = ("font_ttf.c",)
 ROOTS = ("kernel", "apps", "userland", "tools")
 
+# VENDORED THIRD-PARTY SOURCE, WHICH THIS RULE CANNOT APPLY TO.
+#
+# The convention this script enforces is about how code in THIS project
+# is structured, and its remedy is either to rewrite the chain as a table
+# or to waive it with a comment. Both are edits, and `userland/ports/` is
+# the one place where an edit is forbidden by policy: its value is that
+# it is upstream byte for byte (see each port's README).
+#
+# So a 72-branch `switch` in Doom's p_spec.c is not a finding here. It is
+# somebody else's code, written in 1993, and this project's opinion about
+# dispatch tables has no standing over it -- the same reasoning that
+# turns -Wall off for the same directory in the Makefile.
+SKIP_ROOTS = (os.path.join("userland", "ports"),)
+
 
 def _blank(src):
     """Comments and literals blanked, LENGTH AND LINE BREAKS PRESERVED.
@@ -166,6 +180,9 @@ def walk():
     for root in ROOTS:
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+            if any(dirpath == r or dirpath.startswith(r + os.sep)
+                   for r in SKIP_ROOTS):
+                continue
             for f in filenames:
                 if f.endswith(".c") and f not in SKIP_FILES:
                     yield os.path.join(dirpath, f)

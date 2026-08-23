@@ -163,8 +163,22 @@ static inline size_t vsnprintf(char *out, size_t cap, const char *fmt, va_list a
 // and catches a mismatched argument where it is written.
 #define snprintf k_snprintf
 
+// --- files, by name ---------------------------------------------------
+//
+// ISO C's two file-management functions. They ARE `sys_unlink()` and
+// `sys_rename()` under another name, and this header used to list them
+// as deliberately absent for exactly that reason -- a wrapper adding
+// nothing. That was the wrong bar and is now reversed: `tolibc` aims to
+// be COMPLETE, because its audience is code not yet written
+// (docs/libc-design.md), and code not yet written calls `remove()`. The
+// first real caller was Doom's savegame handling, which is precisely the
+// "somebody else's program" case the argument is about.
+//
+// Both return 0, or -1 with errno set.
+int   remove(const char *path);
+int   rename(const char *oldpath, const char *newpath);
+
 // DELIBERATELY ABSENT: freopen(), which the single-mode fd model has
-// nothing to do, and tmpfile()/remove()/rename() wrappers, which are
-// sys_unlink()/sys_rename() under another name.
+// nothing to do.
 
 #endif

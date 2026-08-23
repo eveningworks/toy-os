@@ -223,12 +223,60 @@ KTEST("kfmt", "a width pads with SPACES, and '0' asks for zeroes") {
     KTEST_ASSERT(eq(b, "[00ab][  ab]"));
 }
 
-KTEST("kfmt", "a precision is parsed rather than emitted literally") {
+KTEST("kfmt", "a precision on an integer is a MINIMUM DIGIT COUNT") {
     char b[64];
-    // %.3d is not a conversion this formatter honours, but it must be
-    // RECOGNISED -- emitting "%.3d" into the output is what happened
-    // before precision was parsed, and it looks like a typo in the
-    // caller rather than a limit of the formatter.
+    // THIS TEST USED TO ASSERT "[5]", on purpose: precision was parsed
+    // and then ignored for integers, and the test recorded that. It was
+    // wrong, and it took foreign code to show it -- Doom builds its HUD
+    // font lump names with "STCFN%.3d", so it asked doom1.wad for
+    // "STCFN33" instead of "STCFN033" and died at startup with
+    // "W_GetNumForName: STCFN33 not found!". A formatter bug wearing the
+    // costume of a missing file.
+    //
+    // Note this does NOT breach the rule that a formatter must not
+    // silently change a value. Precision on an integer only ever ADDS
+    // zeros; the version that dropped them is the one that produced a
+    // wrong string.
     k_snprintf(b, sizeof b, "[%.3d]", 5);
-    KTEST_ASSERT(eq(b, "[5]"));
+    KTEST_ASSERT(eq(b, "[005]"));
+
+    // Doom's actual call, which is the case worth naming.
+    k_snprintf(b, sizeof b, "STCFN%.3d", 33);
+    KTEST_ASSERT(eq(b, "STCFN033"));
+
+    // A number ALREADY longer than the precision is untouched -- the
+    // precision is a minimum, not a field width, and never truncates.
+    k_snprintf(b, sizeof b, "[%.3d]", 12345);
+    KTEST_ASSERT(eq(b, "[12345]"));
+}
+
+KTEST("kfmt", "precision applies to the digits, and the sign sits outside") {
+    char b[64];
+    // The zeros go AFTER the '-', which is the whole reason put_num
+    // pads inside the number rather than around it.
+    k_snprintf(b, sizeof b, "[%.4d]", -7);
+    KTEST_ASSERT(eq(b, "[-0007]"));
+
+    k_snprintf(b, sizeof b, "[%.4u]", 42u);
+    KTEST_ASSERT(eq(b, "[0042]"));
+    k_snprintf(b, sizeof b, "[%.4x]", 0x2Au);
+    KTEST_ASSERT(eq(b, "[002a]"));
+}
+
+KTEST("kfmt", "a precision DISABLES the '0' flag, and %.0d of zero is empty") {
+    char b[64];
+    // C says the '0' flag is ignored when a precision is given for an
+    // integer conversion, so this is width-8 SPACE padding around three
+    // digits -- not eight zeros. Invisible until something formats one
+    // field two ways and the columns stop lining up.
+    k_snprintf(b, sizeof b, "[%08.3d]", 42);
+    KTEST_ASSERT(eq(b, "[     042]"));
+
+    // ...and the corner that looks like a bug and is not: an explicit
+    // precision of zero prints NOTHING for a zero value, which is how a
+    // caller writes an optional field that disappears when empty.
+    k_snprintf(b, sizeof b, "[%.0d]", 0);
+    KTEST_ASSERT(eq(b, "[]"));
+    k_snprintf(b, sizeof b, "[%.0d]", 7);
+    KTEST_ASSERT(eq(b, "[7]"));
 }

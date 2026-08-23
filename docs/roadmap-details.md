@@ -1811,52 +1811,38 @@ port-I/O are a real per-arch project. Full breakdown, proposed
 `kernel/arch/<arch>/` layout, and a phased plan in
 `docs/arch-portability.md`.
 
-Stretch: port a small classic game (e.g. Doom) as an end-to-end stress
-test of real disk-hosted ELF binaries + libc, once both exist. Real
-prerequisite breakdown below, from a research pass through the actual
-ring-3 syscall surface (`kernel/include/abi/syscall_abi.h`, every
-`userland/*.c`) rather than assumption -- the realistic target is a
-`doomgeneric` (github.com/ozkl/doomgeneric)-style port, which reduces
-the porting surface to implementing a handful of platform functions
-(`DG_Init`, `DG_DrawFrame`, `DG_SleepMs`, `DG_GetKey`, `DG_GetTicksMs`)
-around the original portable Doom source, not a from-scratch renderer.
+Stretch: port a small classic game (e.g. Doom) -- **DONE 2026-08-23.**
+`/bin/wm/apps/doom`, an ordinary ring-3 `uapp` client at 640x400
+(doomgeneric's own 2x scale of Doom's 320x200), measured at ~34 fps
+against Doom's own 35Hz target under TCG. `userland/ports/doom/` is
+doomgeneric byte for byte; `userland/doom/` is the backend.
 
-**Already there today, RE-CONFIRMED against the code on 2026-08-23** --
-most of what this entry once listed as missing has since landed, so the
-list below is what a port would now find waiting for it:
+**WHAT IT ACTUALLY NEEDED, measured rather than assumed.** Three things
+were built for it in advance and only one was required:
 
-- Disk-hosted ELF execution and static `ET_EXEC` loading with argc/argv.
-- A private pixel buffer and present, through an ordinary `uapp` window;
-  `ugfx_blit()` takes 32bpp with a source stride, so converting Doom's
-  8-bit palette per frame and scaling is the port's own job, as it is in
-  every `doomgeneric` backend.
-- **malloc/free** -- the kernel's allocator compiled into ring 3.
-- **`lseek`**, and `fopen`/`fread`/`fseek`/`ftell` over it, which is what
-  a WAD needs: a directory of lumps at arbitrary offsets.
-- **A millisecond clock and a real sleep** -- `sys_monotonic_ns()` and
-  `sys_sleep_ms()`. `DG_GetTicksMs`/`DG_SleepMs` are covered.
-- **Floating point in ring 3**, with FXSAVE per context switch
-  (`kernel/include/kernel/fpu.h`). Doom is fixed-point, but its
-  `FixedDiv` falls back to `double` and the libc has the transcendentals
-  either way.
-- **A stack that grows** -- 8 MiB reserved, committed on touch. This
-  entry used to flag the fixed stack as a real risk and note it was
-  "untested whether Doom's actual stack depth would exceed it"; the
-  question is now moot rather than answered.
-- **An image with no size limit** -- the heap starts where the ELF ends.
-  Measured: doomgeneric's 83 translation units are ~419 KB text, ~80 KB
-  data, ~271 KB bss, which would have left ~150 KB under the old 1 MiB
-  ceiling before this project's own libc was linked in.
-- **Key RELEASES, and the modifier keys as keys** -- `WIN_EV_KEY_UP` and
-  `uapp_desc.on_key_up`. This was the one blocker nobody had written
-  down: `WIN_EV_KEY` was press-only, so a client could not know a key was
-  HELD, and three of Doom's five stock controls (Ctrl to fire, Shift to
-  run, Alt to strafe) are modifiers that produced no client-visible
-  event at all.
-- **The libc gap is two functions**, measured by linking doomgeneric's
-  objects against `libc.a` + `libuapp.a`: `mkdir` (the savegame
-  directory) and `system` (never called on this path). Everything else
-  it references, this C library already has.
+- **Key releases: REQUIRED.** `DG_GetKey()` asks for an edge, and Doom's
+  stock controls put fire on Ctrl, run on Shift and strafe on Alt --
+  three of five are modifiers, which produced no client-visible event at
+  all until they became keys.
+- **The 1 MiB image ceiling: NOT required.** 0.72 MiB after
+  `--gc-sections`. The 770 KB measured while planning was the sum of the
+  object files' sections, and the linker drops what nothing reaches.
+- **The growable stack: NOT required.** Disabling `grow_stack()` and
+  running 1,750 frames at ~34 fps produced no fault; Doom fits in the
+  original four pages. This entry previously flagged the fixed stack as
+  the risk and said it was "untested whether Doom's actual stack depth
+  would exceed it". It does not.
+
+**And the bug it found, which is why porting somebody else's program is
+worth doing at all**: `kfmt.c` parsed `printf` precision and ignored it
+for integers, so `"STCFN%.3d"` of 33 gave `STCFN33` and the game died on
+a lump that does not exist. That formatter is compiled into both rings
+and had tests; the tests encoded the bug. See `docs/decisions.md`.
+
+**What is deliberately not there:** sound (there is no audio driver;
+`i_sound.c` resolves to silence on its own), mouse look (Doom aims with
+relative motion and a windowed client gets position, which would need a
+pointer grab TWS does not have), and resizing.
 
 **What a port still has to decide or build:**
 

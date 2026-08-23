@@ -460,6 +460,57 @@ nothing about `getenv` (which cannot work -- see the open questions),
 about `<dirent.h>` or `<time.h>`, or about a program that expects
 `fork`. It is one real program, not a compatibility claim.
 
+## Stage 8 -- the second port, and the bug it found
+
+**DOOM.** ~36,000 lines against cJSON's ~3,000, and the difference is
+not size but SHAPE: cJSON is integer- and string-heavy, opens no files
+and spawns nothing, which Stage 6 said out loud. Doom reads a 4 MB file
+with `fopen`/`fseek`/`fread`, allocates a zone heap, uses floating
+point, and formats strings it then uses as KEYS. That last one is what
+made it valuable.
+
+**Five functions were missing, and all five belong in a C library:**
+
+- **`remove()` and `rename()`**, which `<stdio.h>` had listed as
+  DELIBERATELY ABSENT on the grounds that they are `sys_unlink()` and
+  `sys_rename()` under another name. True, and the wrong bar -- the
+  audience is code not yet written, and code not yet written calls
+  `remove()`. Doom's savegame handling was the first real caller.
+- **`mkdir()`**, and with it `<sys/stat.h>`. The header deliberately
+  does NOT provide `stat()`: `struct stat` is mostly fields TFS3 does
+  not have, and inventing zeroes for them would let ported code compile
+  and then take wrong branches on `st_mode`.
+- **`access()`**, where only `F_OK` can mean anything -- there are no
+  permission bits to check, so `R_OK`/`W_OK`/`X_OK` are accepted and
+  answered as "yes, if it exists".
+- **`system()`**, which needed `/bin/tosh -c` to exist first. Before
+  that flag this could only have reported "no command processor", which
+  POSIX does define an answer for and which would have been honest but
+  out of date -- toy-os has a shell, a spawn and a wait.
+
+**AND THE ONE THAT WAS NOT A GAP BUT A BUG.** Doom died at startup with
+`W_GetNumForName: STCFN33 not found!`. The lump is `STCFN033`;
+`hu_stuff.c` builds the name with `"STCFN%.3d"`; and `kfmt.c` parsed
+precision and then IGNORED IT for integer conversions. The header said
+so and justified it by pointing at `%s`, where precision truncates and
+truncating a value is the one thing these formatters may not do. Right
+about `%s`, wrong to generalise: **precision on an integer only ever
+ADDS digits**, and the version that dropped them was the one producing a
+wrong string.
+
+Two corners came with the fix, neither obvious: the `'0'` flag is
+IGNORED when a precision is given (`%08.3d` of 42 is `"     042"`), and
+the two paddings COUNT DIFFERENT THINGS -- the flag pads the whole field
+including the sign, a precision pads the digits excluding it. The first
+attempt conflated them and put one zero too few in front of every
+negative number.
+
+**This is the argument for building somebody else's program, stated as
+plainly as it can be**: `kfmt.c` had tests, the tests passed, and the
+tests asserted the bug. A test written by someone who knows what the
+library does cannot find what the library gets wrong. `kfmt.c` is
+compiled into both rings, so the kernel's own formatter carried it too.
+
 ## Stage 7 -- completeness, after the port
 
 The port passed with two functions missing, which raised a policy

@@ -191,9 +191,42 @@ static void insert_last_arg(void) {
 }
 
 int main(int argc, char **argv) {
-    (void)argc; (void)argv;
-
     tosh_init(&g_sh, out_fd1, 0);
+
+    // --- `-c <command>`: run ONE line and exit -----------------------
+    //
+    // The non-interactive shell, which is what `system()` needs and what
+    // every real shell has. It returns BEFORE any of the interactive
+    // setup below -- no history, no raw mode, no job control, no signal
+    // handlers, and no prompt -- because none of that belongs to a shell
+    // that is about to run one command and leave.
+    //
+    // **IT MUST NOT TOUCH THE TERMINAL**, and that is the reason for the
+    // early return rather than a flag threaded through main(). A
+    // `system()` call from a GUI app has no terminal of its own; putting
+    // fd 0 in raw mode there would reconfigure whatever terminal it did
+    // inherit and leave it that way for the parent, which is the bug
+    // this shell already documents at the other end (it saves and
+    // restores the termios around every command it runs).
+    //
+    // Everything after the flag is joined back with spaces rather than
+    // requiring one quoted argument, so `tosh -c ls /bin` works as
+    // typed. A real shell would take argv[2] alone and treat the rest as
+    // $0/$1..., but there are no positional parameters here to give them
+    // to, and silently dropping them would be worse than joining them.
+    if (argc >= 3 && argv[1] && argv[1][0] == '-' && argv[1][1] == 'c' &&
+        argv[1][2] == '\0') {
+        char line[512];
+        unsigned n = 0;
+        for (int i = 2; i < argc && n < sizeof line - 1; i++) {
+            if (i > 2 && n < sizeof line - 1) line[n++] = ' ';
+            for (const char *p = argv[i]; *p && n < sizeof line - 1; p++)
+                line[n++] = *p;
+        }
+        line[n] = '\0';
+        return tosh_run_line(&g_sh, line);
+    }
+
     uhist_init(&g_hist);
 
     // --- job control, in two lines -----------------------------------

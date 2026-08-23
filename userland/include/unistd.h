@@ -82,6 +82,25 @@ static inline int   tcsetpgrp(int fd, pid_t pgid) { return sys_tcsetpgrp(fd, pgi
 // inherited a parent's buffered output should call this one.
 static inline void _exit(int code) { sys_exit(code); }
 
+// --- does this path exist? --------------------------------------------
+//
+// **F_OK IS THE ONLY MODE THAT MEANS ANYTHING HERE.** access() asks
+// whether a path is reachable AND whether the caller may read, write or
+// execute it; this filesystem has no permission bits and no user to
+// check them against (docs/filesystem-layout.md), so R_OK/W_OK/X_OK can
+// only be answered as "yes, if it exists". They are accepted and treated
+// as F_OK rather than refused, because a caller asking "can I read
+// this?" on a system where every existing file is readable is asking a
+// question with a correct answer.
+//
+// Returns 0 if the path exists, -1 with errno ENOENT if it does not.
+int access(const char *path, int mode);
+
+#define F_OK 0
+#define X_OK 1
+#define W_OK 2
+#define R_OK 4
+
 // --- sleeping ---------------------------------------------------------
 //
 // Both return 0 and never return early. POSIX's sleep() returns the

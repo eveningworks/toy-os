@@ -938,3 +938,114 @@ from repeated scaling rather than exact arithmetic over the mantissa, so
 `printf_float.c` is the entire surface to replace if correctly-rounded
 output ever matters. That is the payoff for putting the conversion
 behind one function rather than spreading it through the formatter.
+
+## Doom is a vendored port linked into one binary, and it found a printf bug
+
+`userland/ports/doom/` is doomgeneric, byte for byte, beside
+`userland/ports/cjson/` and for the same stated reason one size up: **a
+real program nobody working on this repo wrote, built against this OS.**
+cJSON (~3,000 lines) proved the C library; Doom (~36,000) exercises the
+allocator, stdio over a real 4 MB file, the ELF loader, floating point,
+the window protocol and both edges of the keyboard, all at once and for
+minutes at a time.
+
+**Linked into exactly one binary** (`EXTRA_OBJS_doom`), which is the
+cjson precedent doing real work here: doomgeneric is GPL-2 and toy-os is
+MIT. The two coexist as an aggregation -- a separate program in the same
+repository -- and the per-binary link is what makes "nothing else can
+accidentally depend on GPL code" a property of the build rather than a
+promise. `userland/ports/doom/README.md` says so where somebody editing
+it will look.
+
+**Our backend lives OUTSIDE the vendored directory**, in
+`userland/doom/`, so the boundary between third-party and written-here
+is a directory boundary rather than a convention. It implements the five
+`DG_*` functions and nothing else.
+
+**The file list is WILDCARDED, unlike `EXTRA_OBJS_toywm`'s**, and the
+difference is who owns it. The WM's units are ours, so a stray `.c`
+there should fail to link rather than be absorbed silently; this list is
+upstream's own `SRC_DOOM`, so curating it by hand would mean keeping a
+second copy of somebody else's build in step.
+
+**Warnings are off for the vendored tree and the frame-size warning is
+NOT.** 36,000 lines of 1990s C does not pass `-Wall -Wextra`, and the
+rule for the directory is that nobody may fix it -- so those warnings
+are noise nobody is permitted to act on, and noise that would bury a
+real one from our own code. The frame-size warning stays (raised to
+16 KiB) because it is not style: a frame larger than
+`UADDR_STACK_GROW_GAP` leaps the growable region and dies on a stack
+that was willing to grow for it.
+
+### Two `KEY_*` vocabularies that cannot share a translation unit
+
+`api/keyboard.h` and doomgeneric's `doomkeys.h` both define `KEY_F2`,
+`KEY_F3`, `KEY_F4` and `KEY_F10`, with different values, and neither is
+ours to rename. So the app (`userland/gui/apps/doom.c`) includes one and
+the backend (`userland/doom/dg_toyos.c`) includes the other, and they
+meet through `dg_toyos.h`, which includes neither.
+
+That header carries toy-os's codes written out as `TOYKEY_*` literals --
+a COPY, which this project normally refuses. What makes it acceptable is
+that `doom.c` `_Static_assert`s every one of them against the real macro:
+the check compiles in the file that can see both, and a drift in either
+direction is a build error rather than a key that quietly stops working.
+Without it the failure mode is a wrong constant mapping to a key Doom
+does nothing with, which looks exactly like an unbound control.
+
+### What the port actually needed, measured rather than assumed
+
+Three things were built for this port in advance. Two of them turned out
+not to be required, and saying so is worth more than the tidier story:
+
+- **Key releases WERE required, absolutely.** `DG_GetKey(int *pressed,
+  unsigned char *key)` asks for an EDGE; a press-only OS cannot answer
+  its signature. And Doom's stock controls are fire on Ctrl, run on
+  Shift, strafe on Alt -- three of five are modifier keys, which
+  produced no client-visible event at all before they became keys.
+- **The 1 MiB image ceiling was NOT required.** Measured at 0.72 MiB
+  after `--gc-sections`. The 770 KB figure quoted while planning was the
+  sum of the object files' sections; the linker drops what nothing
+  reaches. It would have fitted, with 28% to spare.
+- **The growable stack was NOT required.** Proven by disabling
+  `grow_stack()` and running Doom for 1,750 frames at ~34 fps with no
+  fault. It fits in the original four pages.
+
+Both memory changes stand on their own merits and neither was wasted --
+but the honest record is that the ceiling was close rather than binding,
+and the stack was never the constraint the roadmap had guessed it was.
+The roadmap had flagged the stack as the risk and said outright it was
+"untested whether Doom's actual stack depth would exceed it". It did not.
+
+### The bug Doom found, which is the whole point of the exercise
+
+Doom died at startup with `W_GetNumForName: STCFN33 not found!` -- a
+missing lump, apparently. The lump in `doom1.wad` is `STCFN033`, and
+`hu_stuff.c` builds that name with `M_snprintf(buffer, 9, "STCFN%.3d",
+j)`. **`kernel/lib/kfmt.c` parsed precision and then ignored it for
+integer conversions**, so `%.3d` of 33 produced `33` and Doom asked for a
+lump that does not exist.
+
+The header said so explicitly -- precision was "HONOURED ONLY BY THE
+FLOAT ONES" -- and justified it by pointing at `%s`, where precision
+TRUNCATES and truncating a value is the one thing this file's formatters
+may not do. That reasoning was right about `%s` and wrong to generalise:
+**precision on an integer can only ADD digits.** The version that
+dropped them was the one silently producing a wrong string.
+
+Fixed, with the two corners C specifies and neither of them obvious:
+
+- **The '0' flag is IGNORED when a precision is given**, so `%08.3d` of
+  42 is `"     042"` and not `"00000042"`.
+- **The two paddings count different things.** The '0' flag pads the
+  whole field, sign included (`%08d` of -7 is `"-0000007"`, eight
+  characters); a precision pads the DIGITS, sign excluded (`%.8d` of -7
+  is `"-00000007"`, nine). The first version of the fix conflated them
+  and put one zero too few in front of every negative number -- caught
+  by a KTEST written before the code was trusted.
+
+`kfmt.c` is compiled into BOTH RINGS, so this fixed the kernel's own
+formatter at the same time. The KTEST that used to assert the old
+behaviour (`%.3d` of 5 is `"5"`) now asserts `"005"` and explains why it
+changed. **This is the case for building somebody else's program**: the
+formatter had tests, the tests passed, and the tests encoded the bug.

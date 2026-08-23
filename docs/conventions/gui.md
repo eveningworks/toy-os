@@ -1051,6 +1051,25 @@ real scanout hardware does. Do not write a pixel assertion for one.
   longer reachable from the middle of an app's window, which is exactly
   the bargain every real desktop makes, and four other ways in remain.
 
+- **DOOM IS A VENDORED PORT, LINKED INTO ONE BINARY, AND ITS BACKEND IS
+  NOT IN THE VENDORED DIRECTORY.** `userland/ports/doom/` is doomgeneric
+  byte for byte; `userland/doom/dg_toyos.c` is the five `DG_*` functions
+  and is ours. It is an ordinary `uapp` client -- window, chrome,
+  taskbar button, icon, single-instance -- with no Doom-shaped special
+  case anywhere in the WM or the kernel. Five things to know.
+  **GPL-2 in an MIT repo**: an aggregation, and `EXTRA_OBJS_doom` links
+  it into one binary so that nothing else can depend on it. **The
+  vendored tree compiles with warnings OFF and the frame-size warning
+  ON** -- the first are noise nobody is allowed to act on, the second is
+  the Stack Clash guarantee. **`api/keyboard.h` and `doomkeys.h` cannot
+  share a translation unit** (both define `KEY_F2`/`F3`/`F4`/`F10` with
+  different values), so they meet through `dg_toyos.h`, whose `TOYKEY_*`
+  copies `doom.c` static-asserts against the real macros. **The IWAD is
+  not in the repository** -- `tools/fetch_wad.py`, and the app says so in
+  its own window when there is none, rather than showing black. And
+  **what the port actually needed was measured**: key releases were
+  required, while the image ceiling (0.72 MiB of 1) and the growable
+  stack (it fits in four pages) were not. See `docs/decisions.md`.
 - **MINESWEEPER IS THE FIRST GAME, AND IT IS AN ORDINARY CLIENT**
   (`userland/gui/apps/mines.c`, `/bin/wm/apps/mines`). It draws its own
   board rather than introducing a `uui_grid`, because one grid-shaped

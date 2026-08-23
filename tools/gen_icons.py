@@ -178,6 +178,27 @@ def icon_mines():
     return im
 
 
+def icon_doom():
+    # A HEALTH/ARMOR-STYLE CHEVRON, not a face and not a gun.
+    #
+    # The obvious pick is the marine's face from the status bar, and it
+    # is the wrong one twice over: it is id's artwork rather than a
+    # pictogram we drew, and at 20px on a taskbar a face becomes three
+    # smudges. A firearm is worse -- it says "shooter" without saying
+    # WHICH, and it is the one subject an icon set for a desktop should
+    # not lean on.
+    #
+    # So: the downward chevron stack that every Doom HUD and box has
+    # used since 1993, in the series' own red. Reads at 20px as a shape
+    # rather than as a picture, which is the whole test.
+    im, d = tile((166, 42, 38))
+    for i, y in enumerate((16, 30, 44)):
+        inset = 4 + i * 3
+        d.polygon([(12 + inset, y), (32, y + 12), (52 - inset, y),
+                   (32, y + 5)], fill=WHITE)
+    return im
+
+
 def icon_start():
     """The Start button's mark -- NOT an app icon, and deliberately not
     shaped like a UI convention either.
@@ -230,6 +251,7 @@ ICONS = {
     "fontdemo": icon_fontdemo,
     "uidemo": icon_uidemo,
     "mines": icon_mines,
+    "doom": icon_doom,
 }
 
 # Crash Test deliberately gets NO icon file. It is the one entry that

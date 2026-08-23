@@ -598,6 +598,7 @@ whenever a headline here tells you something you did not already know.
 
 - **A KEY RELEASE IS `WIN_EV_KEY_UP`, AND THE FOUR MODIFIER KEYS ARE KEYS** -- `uapp_desc.on_key_up`, a separate type and callback so a press-only app is unchanged; releases ride a parallel transition queue because a terminal is a byte stream and a release is not a byte; `KEY_SHIFT`/`KEY_CTRL`/`KEY_ALT`/`KEY_ALTGR` exist only there; a release carries what the PRESS produced (first press wins, so autorepeat cannot strand it); an unmatched release is legal; and `wm_rawin.c`'s key slot became a QUEUE, because a dropped release is a key held forever.
 - **A SECONDARY CLICK IS THE CLIENT'S INSIDE ITS CONTENT AREA, AND THE WM'S EVERYWHERE ELSE** -- right-click reaches a ring-3 app as button bit `0x2`, the frame/title bar/taskbar keep the window menu (Windows/X11/Wayland's split); Toykit activates widgets on `0x1` alone while `on_press` sees every button.
+- **DOOM IS A VENDORED PORT IN `userland/ports/doom/`, LINKED INTO ONE BINARY** -- doomgeneric byte for byte (GPL-2 in an MIT repo, so an aggregation, and the per-binary `EXTRA_OBJS_doom` is what makes "nothing else depends on it" a build property); OUR backend is `userland/doom/`, outside the vendored directory on purpose; the vendored tree compiles with warnings OFF but the frame-size warning ON; and `api/keyboard.h` and `doomkeys.h` CANNOT share a translation unit (both define `KEY_F2`/`F3`/`F4`/`F10` differently), which is why `dg_toyos.h` carries `TOYKEY_*` copies that `doom.c` static-asserts against the real macros. **The IWAD is NOT in the repo** -- `tools/fetch_wad.py`.
 - **MINESWEEPER IS THE FIRST GAME, AND IT IS AN ORDINARY CLIENT** -- `userland/gui/apps/mines.c`; it draws its own board rather than adding a `uui_grid` widget for one caller, its board palette is content and not theme, and flagging commits on PRESS.
 ### Storage, the filesystem, and /etc
 
@@ -625,6 +626,7 @@ whenever a headline here tells you something you did not already know.
 - **AN EVERYDAY COMMAND IS A `/bin` PROGRAM, NOT A BUILTIN, AND THE KERNEL'S OWN COPIES LIVE BEHIND ONE NAME: `rescue`.** -- and `rescue` is the commands you would need to put `/bin` BACK, not everything ring 0 happens to be able to do: `strace` moved out to `/bin` and did not go there.
 - **A PROGRAM STARTED BY A BARE NAME PRINTS NOTHING EXTRA WHEN IT SUCCEEDS -- AND `run <name>` STILL DOES.**
 - **TAB COMPLETION IN COMMAND POSITION IS BUILTINS PLUS ALL OF `PATH`, DEDUPLICATED AND SORTED, WITH NO DIRECTORIES.**
+- **`/bin/tosh -c <command>` RUNS ONE LINE AND EXITS** -- the non-interactive shell `system()` needed; it returns before any interactive setup and must NOT touch the terminal, since a `system()` caller may have inherited somebody else's.
 - **`#` IS RING 0 AND `$` IS RING 3, AND THE PROMPT IS WHERE THAT LIVES** -- all three shells show the cwd, so the last character is the difference; `Ctrl-C` works only at a `$`.
 - **A BUILTIN MUST NOT SHADOW A `/bin` PROGRAM THAT DOES MORE** -- `/bin/tosh` has six (`cd`, `pwd`, `help`, `jobs`, `fg`, `bg`) and each has to be one; `cat`, `ls` and `echo` were the same mistake three times. The test is "could a program do this better", and a builtin passes it by touching the SHELL's own state -- writing it (`cd`) or reading it (`fg`).
 - **A WRAPPER BUILTIN IS ONE COMMAND WITH TWO HALVES IN TWO RINGS, AND THE RING-3 HALF WILL BE WRONG.**
@@ -643,6 +645,7 @@ whenever a headline here tells you something you did not already know.
 `docs/conventions/build.md`
 
 - **THE C LIBRARY IS CALLED `tolibc`, and its bar for adding a function is the OPPOSITE of everything else here -- it aims to be COMPLETE.**
+- **`tolibc` GREW A SECOND PORT'S WORTH OF FUNCTIONS, AND ONE OF THEM WAS A BUG** -- Doom needed `remove()`/`rename()` (both previously listed as deliberately absent), `mkdir()` with a new `<sys/stat.h>` that deliberately has NO `stat()`, `access()` (only `F_OK` can mean anything), and `system()` (which needed `tosh -c`). The bug: `kfmt.c` ignored `printf` precision on integers, so `"%.3d"` of 33 gave `33` and Doom asked its WAD for a lump that does not exist -- in a file compiled into both rings, whose tests asserted the old behaviour.
 - **THE POSIX HALF OF `tolibc` IS HEADERS OVER SYSCALLS THAT ALREADY EXIST** -- `<signal.h>`, `<sys/wait.h>`, `<termios.h>`, `<fcntl.h>`, `<strings.h>`, `getopt()`; the kernel-facing action struct is `struct k_sigaction` and POSIX's is converted at the call (glibc's split), and anything that cannot be honoured is REFUSED rather than ignored (a non-empty `sa_mask` is `EINVAL`; `VMIN`/`VTIME` are undefined on purpose).
 - **`userland/` is split by ROLE, and the build derives things from it -- adding a program is a `.c` file and nothing else.**
 - **In ring 3 the toolkit is reachable under the C names -- don't hand-roll a `my_strlen` or a digit loop there either.**
@@ -997,7 +1000,9 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   `QMPSession.key_down()`, which `send-key` cannot do),
   `winclient_test.py`, `imgview_test.py`, `icons_test.py`,
   `mines_test.py`.
-- **Run on demand, not in the gate** -- `ansi_cursor_test.py` (ANSI
+- **Run on demand, not in the gate** -- `doom_test.py` (DOOM runs, draws,
+  animates and takes input; SKIPS cleanly when no IWAD has been fetched,
+  which is why it is not in the suite), `ansi_cursor_test.py` (ANSI
   cursor movement and erasing, as PIXELS -- it kills the desktop first,
   since the console is what it photographs), `init_test.py` (init and
   service supervision), `console_shell_test.py` (a `text` boot reaching a ring-3
@@ -1051,7 +1056,10 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   chain exists for), `live_boot_test.py`, `fs_switch_test.py`, `tfs3_v1_test.py`,
   `mkpart_test.py`, `demo_test.py`.
 - **Disk images, from the host** -- `seed_disk.py` (the format-aware
-  front end `make iso` calls), `tfs2_writer.py`, `tfs3_writer.py`.
+  front end `make iso` calls), `tfs2_writer.py`, `tfs3_writer.py`,
+  `fetch_wad.py` (puts a Doom IWAD where `make iso` will seed it -- the
+  WAD is deliberately NOT in the repository; `--from` takes one you
+  already own).
 - **How big is it** -- `loc.py` (source lines with generated files,
   comments and blanks excluded; add anything a `gen_*` writes into the
   tree to its `GENERATED` list, or the count silently inflates).

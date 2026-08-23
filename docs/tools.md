@@ -1381,6 +1381,35 @@ manual steps to be worth automating:
   capture a Terminal's content focused, take focus away and require it
   to CHANGE, give focus back and require it to match the first capture
   EXACTLY -- "it changed" alone is satisfied by almost anything.
+- **`doom_test.py`** -- DOOM runs, draws, animates and takes input. 6
+  checks. **ON DEMAND, not in `gui_regress.py`**: it needs an IWAD, and
+  the IWAD is deliberately not in this repository, so a checkout without
+  one gets a clean SKIP rather than a failure.
+
+  Two of its checks are shaped by mistakes made writing it. **"It
+  animates" samples seven frames, not two** -- Doom's attract mode cycles
+  demo, title, credits, and the title screen is legitimately STATIC, so a
+  two-sample comparison lands on it often enough to flake. **The frame
+  rate comes from the app's own report, not from the screen**, which the
+  positive control proves is the right choice: breaking the blit turns
+  three pixel checks red while the rate check stays green and the number
+  goes UP, because it is no longer paying for a blit.
+
+- **`fetch_wad.py`** -- puts a Doom IWAD at
+  `data/doom/doom1.wad`, which `make iso` then stages onto the image.
+  **`data/`, not `seed/sync/`**: the latter is a staging directory the
+  build rewrites, so a 4 MB download placed there survives until the
+  next `make clean` and then silently vanishes.
+  The shareware `doom1.wad` by default; `--from` takes a local
+  `freedoom1.wad` or a retail `DOOM.WAD` you already own.
+
+  **It validates before it writes**, and that is the whole reason it is
+  a script rather than a `curl` line in a README: a download that returns
+  an HTML error page is still a 200, and 341 bytes of `<?xml` named
+  `doom1.wad` fails much later and much more confusingly than it should.
+  It checks the `IWAD` magic and a plausible size, and refuses a PWAD
+  with its own message (a patch is not a game).
+
 - **`keyup_test.py`** -- key RELEASES reaching a ring-3 client, across
   all five layers that carry one: the driver's transition queue, the
   kernel's raw-event push, the compositor's raw-input queue, the WM's
@@ -1634,6 +1663,13 @@ manual steps to be worth automating:
   a `widget-ops-ok: <reason>` comment, the same mechanism
   `check_dispatch.py` uses. In `preflight.sh`.
 
+
+  **IT SKIPS `userland/ports/`.** The rule is about how code in this
+  project is structured and its remedies are both EDITS -- rewrite the
+  chain, or waive it with a comment -- and vendored source is the one
+  place an edit is forbidden by policy. Doom's `p_spec.c` has a
+  72-branch switch written in 1993; it is not a finding, for the same
+  reason the Makefile turns `-Wall` off for that directory.
 - **`loc.py`** -- how big this project is, honestly: source lines with
   generated files, comments and blank lines all excluded, and the
   with-comments figure beside it. Not `wc -l`, because the answer

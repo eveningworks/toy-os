@@ -114,3 +114,11 @@ ci-virtio.img
 # shared -- same reasoning as the generated version.h/build_date.h.
 /compile_commands.json
 /.cache/clangd/
+
+# The Doom IWAD. FETCHED, NOT COMMITTED -- `tools/fetch_wad.py` puts it
+# here. id's shareware licence permits distributing the unmodified
+# shareware PACKAGE; lifting one file out of it into an unrelated
+# project's git history is a different act, and not one this repo needs
+# to perform to work. See docs/decisions.md.
+/data/doom/
+/seed/sync/usr/share/doom/

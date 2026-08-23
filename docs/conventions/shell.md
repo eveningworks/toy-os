@@ -359,6 +359,22 @@ control confirms the cost: with the guard removed, `uterm_test` cannot
 run the next command OR close the window with Alt+F4.
 
 
+## `/bin/tosh -c <command>` RUNS ONE LINE AND EXITS, AND TOUCHES NOTHING ELSE.
+
+The non-interactive shell, added because `system()` needed one. It
+returns before ALL of the interactive setup -- no history, no raw mode,
+no job control, no signal handlers, no prompt -- and that early return is
+the point rather than a shortcut: a `system()` call from a GUI app has no
+terminal of its own, and putting fd 0 in raw mode there would
+reconfigure whatever terminal it inherited and leave it that way for its
+parent. That is the same hazard this shell already guards at the other
+end, saving and restoring the termios around every command it runs.
+
+Arguments after the flag are JOINED with spaces, so `tosh -c ls /bin`
+works as typed. A real shell takes `argv[2]` alone and gives the rest to
+`$0`/`$1`..., but there are no positional parameters here to give them
+to, and silently dropping them would be worse than joining them.
+
 ## `#` IS RING 0 AND `$` IS RING 3, AND THE PROMPT IS WHERE THAT LIVES.
 
 Three shells run on this machine: the kernel's own (`apps/shell.c`,

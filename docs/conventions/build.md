@@ -72,6 +72,20 @@ this the obvious way), not from how much history it accumulated.
   **`tcsetattr()` masks `c_lflag`** to the three bits the line
   discipline implements, so `<termios.h>`'s inert names never reach a
   flag space a future `TTY_*` bit will want.
+- **`tolibc` GREW A SECOND PORT'S WORTH OF FUNCTIONS, AND ONE OF THEM
+  WAS A BUG.** Doom needed `remove()`, `rename()` (both of which
+  `<stdio.h>` had listed as deliberately absent, under the old
+  second-real-caller bar), `mkdir()` with a new `<sys/stat.h>`,
+  `access()` and `system()`. Three things to know. **`<sys/stat.h>` has
+  no `stat()`** -- `struct stat` is mostly fields TFS3 does not have, and
+  inventing zeroes would let ported code compile and then branch wrongly
+  on `st_mode`. **`access()` can only answer `F_OK`**, since there are no
+  permission bits to check. And **`system()` needed `/bin/tosh -c` to
+  exist** first. The bug was `kfmt.c` ignoring `printf` precision on
+  integer conversions: `"%.3d"` of 33 gave `33`, so Doom asked its WAD
+  for a lump that does not exist. That file is compiled into both rings,
+  and its own tests asserted the old behaviour -- see
+  `docs/decisions.md`.
 - **In ring 3 the toolkit is reachable under the C names -- don't
   hand-roll a `my_strlen` or a digit loop there either.**
   `#include <string.h>` for `strlen`/`strcmp`/`strlcpy`/`mem*`/the

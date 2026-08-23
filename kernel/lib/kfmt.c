@@ -65,10 +65,35 @@ static void put_str(struct out *o, const char *s) {
 // the digits) rather than out here, because that is where it belongs
 // and the knum helpers already do it; space padding is applied around
 // the finished text, exactly as %s's is.
+// `prec` is C's PRECISION for an integer conversion: the MINIMUM number
+// of digits, zero-filled on the left. -1 means none was given.
+//
+// **IT CAN ONLY ADD DIGITS, NEVER REMOVE THEM**, which is what makes
+// honouring it consistent with this file's rule that a formatter must
+// not silently change a value. Precision on `%s` truncates and is still
+// ignored for exactly that reason (see the %s case below); precision on
+// an integer is the opposite operation and is safe.
+//
+// C also says the '0' FLAG IS IGNORED when a precision is given -- so
+// `%08.3d` of 42 is "     042", not "00000042". Getting that wrong is
+// invisible until something formats a fixed-width field two ways.
 static void put_num(struct out *o, uint64_t v, int is_signed, int is_hex,
-                     unsigned width, int zero, int left) {
+                     unsigned width, int zero, int left, int prec) {
     char tmp[24];
+    // **THE TWO KINDS OF ZERO PADDING COUNT DIFFERENT THINGS, and that
+    // is not a detail.** The '0' FLAG pads the whole FIELD, sign
+    // included: `%08d` of -7 is "-0000007", eight characters. A
+    // PRECISION pads the DIGITS, sign excluded: `%.8d` of -7 is
+    // "-00000007", nine. Conflating them puts one zero too few in front
+    // of every negative number, which is exactly what the first version
+    // of this did.
+    //
+    // They cannot both apply, because C says a precision makes the '0'
+    // flag ignored -- so this picks one and the signed branch below adds
+    // the sign back on when the precision is the one driving.
+    if (prec >= 0) zero = 0;                    // C: precision overrides '0'
     unsigned pad_width = (zero && !left) ? width : 0;
+    if (prec > 0 && (unsigned)prec > pad_width) pad_width = (unsigned)prec;
     if (is_hex) {
         k_htoa(v, tmp, sizeof tmp, pad_width);
     } else if (is_signed) {
@@ -78,6 +103,9 @@ static void put_num(struct out *o, uint64_t v, int is_signed, int is_hex,
         if (pad_width) {
             size_t len = k_strlen(tmp);
             int neg = tmp[0] == '-';
+            // A precision counts digits, so the sign needs a column of
+            // its own on top of it. A '0'-flag width already includes it.
+            if (prec >= 0 && neg) pad_width++;
             while (len < pad_width && len + 1 < sizeof tmp) {
                 for (size_t i = len; i > (size_t)neg; i--) tmp[i] = tmp[i - 1];
                 tmp[neg] = '0';
@@ -88,6 +116,12 @@ static void put_num(struct out *o, uint64_t v, int is_signed, int is_hex,
     } else {
         k_utoa_pad(v, tmp, sizeof tmp, pad_width);
     }
+    // `%.0d` OF ZERO PRINTS NOTHING. C's one genuinely surprising corner
+    // here, and it is not a curiosity: it is how a caller formats an
+    // optional field that disappears when it is empty. Handled after the
+    // conversion rather than before, so it applies to whichever branch
+    // above produced the digits.
+    if (prec == 0 && v == 0) tmp[0] = '\0';
     // Space padding, around the finished number -- the same shape %s
     // uses below, so both conversions pad by one rule.
     size_t len = k_strlen(tmp);
@@ -131,14 +165,19 @@ static void vformat(struct out *o, const char *fmt, va_list ap) {
         unsigned width = 0;
         while (k_isdigit(*p)) { width = width * 10 + (unsigned)(*p - '0'); p++; }
 
-        // Precision. Parsed for every conversion and HONOURED ONLY BY
-        // THE FLOAT ONES, which is the same shape '-' already has above
-        // (parsed, then ignored on a number). It is not laziness: C's
-        // precision on %s TRUNCATES, and truncating a string is the one
-        // thing this file's formatters are not allowed to do -- see the
-        // %s case below, which pushes the column instead. Silently
-        // ignoring it is better than emitting `%.3s` literally, which
-        // is what happened before this and looked like a typo.
+        // Precision. Honoured by the FLOAT and INTEGER conversions, and
+        // still ignored by %s -- which is not an inconsistency but the
+        // difference between the two operations. On an integer,
+        // precision is a MINIMUM digit count and can only ever ADD
+        // zeros; on a string it TRUNCATES, and truncating a value is the
+        // one thing this file's formatters are not allowed to do (see
+        // the %s case below, which pushes the column instead).
+        //
+        // The integer half was ignored until Doom found it. `%.3d` of 33
+        // printed "33", so hu_stuff.c asked the WAD for lump "STCFN33"
+        // instead of "STCFN033" and the game died at startup with
+        // "W_GetNumForName: STCFN33 not found!" -- a formatter bug
+        // wearing the costume of a missing file.
         int has_prec = 0;
         unsigned prec = 0;
         if (*p == '.') {
@@ -166,15 +205,15 @@ static void vformat(struct out *o, const char *fmt, va_list ap) {
         case 'i':
         case 'd':
             put_num(o, wide ? (uint64_t)va_arg(ap, long) : (uint64_t)(int64_t)va_arg(ap, int),
-                     1, 0, width, zero, left);
+                     1, 0, width, zero, left, has_prec ? (int)prec : -1);
             break;
         case 'u':
             put_num(o, wide ? (uint64_t)va_arg(ap, unsigned long) : (uint64_t)va_arg(ap, unsigned int),
-                     0, 0, width, zero, left);
+                     0, 0, width, zero, left, has_prec ? (int)prec : -1);
             break;
         case 'x':
             put_num(o, wide ? (uint64_t)va_arg(ap, unsigned long) : (uint64_t)va_arg(ap, unsigned int),
-                     0, 1, width, zero, left);
+                     0, 1, width, zero, left, has_prec ? (int)prec : -1);
             break;
         case 'c': put(o, (char)va_arg(ap, int)); break;
         case 's': {

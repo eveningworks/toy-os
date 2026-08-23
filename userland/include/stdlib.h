@@ -138,6 +138,17 @@ int  atexit(void (*fn)(void));
 // anything already reported is already out.
 void abort(void) __attribute__((noreturn));
 
+// Runs `command` through /bin/tosh -c and waits for it. Returns the
+// child's status in <sys/wait.h>'s encoding, or -1 if the shell could
+// not be run. A NULL command asks whether a command processor exists at
+// all and returns non-zero if one does -- POSIX's own contract, and a
+// real check here rather than a constant.
+//
+// It does NOT block SIGCHLD or ignore SIGINT/SIGQUIT for the duration
+// the way POSIX asks, because this libc has no sigprocmask(); see
+// userland/libc/system.c for what that costs a caller.
+int system(const char *command);
+
 // The same contract as kmalloc(): NULL for a zero-sized or unsatisfiable
 // request, 16-byte aligned otherwise.
 static inline void *malloc(size_t n) { return kmalloc(n); }
