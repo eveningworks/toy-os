@@ -2,4 +2,4 @@
 Name=Notepad
 Exec=/bin/wm/apps/notepad
 Category=apps
-Icon=N
+Icon=notepad

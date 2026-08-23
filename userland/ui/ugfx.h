@@ -99,6 +99,23 @@ uint32_t ugfx_get_pixel(const struct ugfx_surface *s, int x, int y);
 void ugfx_blit(struct ugfx_surface *s, int x, int y, int w, int h,
                 const uint32_t *src, int src_pitch_px);
 
+// The same, COMPOSITED: `src` is 0xAARRGGBB (uimg.h's format) and each
+// pixel is blended over what the surface already holds, source-over.
+// Honours the clip and marks damage exactly as ugfx_blit() does.
+//
+// A SEPARATE CALL RATHER THAN A FLAG, because the cost difference is
+// large and the caller always knows which it wants: a straight copy is a
+// memcpy per row, and this is a multiply-add per channel per pixel. A
+// wallpaper is opaque and must not pay for it -- `struct uimg` carries
+// `has_alpha` so a caller can pick without inspecting the pixels.
+//
+// Alpha is STRAIGHT, not premultiplied, matching what every decoder
+// here produces. Fully opaque pixels take the copy path inside the loop,
+// which is what makes an icon that is mostly opaque cost about what a
+// blit does.
+void ugfx_blit_alpha(struct ugfx_surface *s, int x, int y, int w, int h,
+                      const uint32_t *src, int src_pitch_px);
+
 // --- damage -----------------------------------------------------------
 
 // The bounding box of everything drawn since the last reset. Returns 0

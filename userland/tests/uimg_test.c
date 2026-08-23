@@ -15,14 +15,17 @@
 // comparing a decoder against its own output proves it is
 // self-consistent, which a decoder with a wrong IDCT constant also is.
 //
-// The tolerance is 3 per channel and that is not slack: two conforming
-// IDCT implementations are allowed to differ (the JPEG spec specifies
-// the transform, not an arithmetic), and libjpeg's islow and the
-// Loeffler factorisation here disagree by a rounding step. Measured on
-// the host: half the samples land exactly, and nothing exceeds 3.
-// A one-unit error in a single IDCT constant is still caught, though
-// only barely -- which is why the REFUSAL checks below matter too, and
-// why hostcheck's breadth is the primary evidence.
+// EACH VECTOR CARRIES ITS OWN TOLERANCE, and the two values are not a
+// judgement call. JPEG's is 3, because two conforming IDCTs are allowed
+// to differ (the spec fixes the transform, not an arithmetic) and
+// libjpeg's islow disagrees with the Loeffler factorisation here by a
+// rounding step. QOI's is 0: it is lossless, so "close enough" is not a
+// thing that exists, and a single wrong pixel is a bug.
+//
+// A one-unit error in a single IDCT constant is caught only barely at 3
+// -- which is why the REFUSAL checks below matter too, and why
+// hostcheck's breadth is the primary evidence for the JPEG path. The
+// QOI path needs no such hedging.
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
@@ -30,8 +33,6 @@
 #include "lib/uimg.h"
 #include <kerrno.h>
 #include "uimg_vectors.h"
-
-#define TOLERANCE 3
 
 static int g_fail;
 
@@ -47,7 +48,7 @@ static void ok(const char *name, int cond, const char *detail) {
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
-    put("uimg_test: the JPEG decoder, against libjpeg's own output\n");
+    put("uimg_test: the image decoders, against Pillow's own output\n");
 
     for (int i = 0; i < UIMG_VECTOR_COUNT; i++) {
         const struct uimg_vector *v = &uimg_vectors[i];
@@ -59,7 +60,7 @@ int main(int argc, char **argv) {
             // decoder that returned either for both would pass a test
             // that only asked "did it fail".
             struct uimg im;
-            int rc = uimg_decode(v->jpeg, v->jpeg_len, &im);
+            int rc = uimg_decode(v->data, v->len, &im);
             snprintf(detail, sizeof detail, "wanted %d, got %d (%s)",
                      -v->err, rc, uimg_last_error());
             ok(v->name, rc == -v->err, detail);
@@ -68,7 +69,7 @@ int main(int argc, char **argv) {
         }
 
         struct uimg_info info;
-        int rc = uimg_info(v->jpeg, v->jpeg_len, &info);
+        int rc = uimg_info(v->data, v->len, &info);
         if (rc < 0) {
             snprintf(detail, sizeof detail, "info failed: %d (%s)", rc,
                      uimg_last_error());
@@ -83,7 +84,7 @@ int main(int argc, char **argv) {
         }
 
         struct uimg im;
-        rc = uimg_decode(v->jpeg, v->jpeg_len, &im);
+        rc = uimg_decode(v->data, v->len, &im);
         if (rc < 0) {
             snprintf(detail, sizeof detail, "decode failed: %d (%s)", rc,
                      uimg_last_error());
@@ -91,25 +92,33 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        int worst = 0, worst_at = -1;
+        // ALL FOUR CHANNELS, and alpha EXACTLY whatever the tolerance
+        // is: a lossy codec may disagree about colour, never about
+        // whether a pixel is opaque. The JPEG vectors carry alpha 255
+        // throughout, so this is also what proves the JPEG path fills
+        // the byte rather than leaving it zero.
+        int worst = 0, worst_at = -1, alpha_bad = 0;
         long total = 0;
         for (int p = 0; p < im.w * im.h; p++) {
             uint32_t got = im.px[p];
-            const unsigned char *want = v->rgb + (size_t)p * 3;
-            int ch[3] = { (int)((got >> 16) & 0xFF), (int)((got >> 8) & 0xFF),
-                          (int)(got & 0xFF) };
+            const unsigned char *want = v->rgba + (size_t)p * 4;
+            int ch[4] = { (int)((got >> 16) & 0xFF), (int)((got >> 8) & 0xFF),
+                          (int)(got & 0xFF), (int)((got >> 24) & 0xFF) };
+            const int wa[4] = { want[0], want[1], want[2], want[3] };
             for (int k = 0; k < 3; k++) {
-                int d = ch[k] - (int)want[k];
+                int d = ch[k] - wa[k];
                 if (d < 0) d = -d;
                 total += d;
                 if (d > worst) { worst = d; worst_at = p; }
             }
+            if (ch[3] != wa[3]) alpha_bad++;
         }
         snprintf(detail, sizeof detail,
-                 "worst channel off by %d at pixel %d,%d; mean %ld/1000",
-                 worst, worst_at % im.w, worst_at / im.w,
-                 (total * 1000) / (im.w * im.h * 3));
-        ok(v->name, worst <= TOLERANCE, detail);
+                 "worst channel off by %d (tol %d) at pixel %d,%d; mean %ld/1000; "
+                 "%d wrong alpha",
+                 worst, v->tol, worst_at % im.w, worst_at / im.w,
+                 (total * 1000) / (im.w * im.h * 3), alpha_bad);
+        ok(v->name, worst <= v->tol && alpha_bad == 0, detail);
         uimg_free(&im);
     }
 
@@ -120,10 +129,17 @@ int main(int argc, char **argv) {
     // 4x4 image of one colour must scale to that colour at any size --
     // which catches an off-by-one in the weights that a photograph
     // would merely blur.
+    // OPAQUE, and the alpha byte is the point: since the resampler
+    // weights colour BY alpha (uimg.c says why), a fixture left at
+    // alpha 0 scales to transparent black and every check below fails
+    // for a reason that has nothing to do with the weights. This
+    // fixture said 0x336699 until the alpha channel landed, and that is
+    // exactly how it failed.
     struct uimg flat;
     flat.w = flat.h = 4;
+    flat.has_alpha = 0;
     static uint32_t flatpx[16];
-    for (int i = 0; i < 16; i++) flatpx[i] = 0x336699;
+    for (int i = 0; i < 16; i++) flatpx[i] = 0xFF336699;
     flat.px = flatpx;
 
     struct uimg up, down;
@@ -131,7 +147,7 @@ int main(int argc, char **argv) {
     int flat_ok = (rc == 0);
     if (flat_ok) {
         for (int i = 0; i < up.w * up.h; i++)
-            if (up.px[i] != 0x336699) { flat_ok = 0; break; }
+            if (up.px[i] != 0xFF336699) { flat_ok = 0; break; }
     }
     ok("a flat image scales up to the same flat colour", flat_ok, "a weight is wrong");
     if (rc == 0) uimg_free(&up);
@@ -140,7 +156,7 @@ int main(int argc, char **argv) {
     int down_ok = (rc == 0 && down.w == 2 && down.h == 2);
     if (down_ok)
         for (int i = 0; i < 4; i++)
-            if (down.px[i] != 0x336699) { down_ok = 0; break; }
+            if (down.px[i] != 0xFF336699) { down_ok = 0; break; }
     ok("and down to the same flat colour", down_ok, "a weight is wrong");
     if (rc == 0) uimg_free(&down);
 
@@ -148,9 +164,9 @@ int main(int argc, char **argv) {
     // which nearest-neighbour cannot do -- this is the check that tells
     // a box filter from a pixel-picker.
     static uint32_t two[4];
-    two[0] = two[1] = 0x000000;
-    two[2] = two[3] = 0xFFFFFF;
-    struct uimg tt = { .w = 2, .h = 2, .px = two }, half;
+    two[0] = two[1] = 0xFF000000;
+    two[2] = two[3] = 0xFFFFFFFF;
+    struct uimg tt = { .w = 2, .h = 2, .px = two, .has_alpha = 0 }, half;
     rc = uimg_scale(&tt, 1, 1, &half);
     int mid = (rc == 0) ? (int)(half.px[0] & 0xFF) : -1;
     char d2[64];
@@ -158,6 +174,33 @@ int main(int argc, char **argv) {
     ok("averaging two black and two white pixels gives grey",
        mid >= 120 && mid <= 135, d2);
     if (rc == 0) uimg_free(&half);
+
+    // --- and the check the alpha channel exists for -------------------
+    //
+    // Two OPAQUE RED pixels and two FULLY TRANSPARENT ones, averaged
+    // into one. The alpha must land near half -- and the colour must
+    // stay PURE RED.
+    //
+    // That second half is the whole point. Averaging straight RGBA
+    // channel by channel gives (128, 0, 0) at alpha 128, because the
+    // transparent pixels contribute their colour (which a generator
+    // writes as black) as if it were visible. That is the dark halo
+    // every naively downscaled icon has, and it is invisible in any
+    // test that only checks alpha.
+    static uint32_t halo[4];
+    halo[0] = halo[1] = 0xFFFF0000;   // opaque red
+    halo[2] = halo[3] = 0x00000000;   // transparent black
+    struct uimg ha = { .w = 2, .h = 2, .px = halo, .has_alpha = 1 }, hb;
+    rc = uimg_scale(&ha, 1, 1, &hb);
+    uint32_t hp = (rc == 0) ? hb.px[0] : 0;
+    int ha_a = (int)((hp >> 24) & 0xFF), ha_r = (int)((hp >> 16) & 0xFF);
+    int ha_g = (int)((hp >> 8) & 0xFF), ha_b = (int)(hp & 0xFF);
+    char d3[96];
+    snprintf(d3, sizeof d3, "got a=%d r=%d g=%d b=%d, wanted a~128 r=255 g=0 b=0",
+             ha_a, ha_r, ha_g, ha_b);
+    ok("a transparent pixel does not bleed its colour into an opaque one",
+       ha_a >= 120 && ha_a <= 136 && ha_r >= 250 && ha_g == 0 && ha_b == 0, d3);
+    if (rc == 0) uimg_free(&hb);
 
     // fit maths, which the widget and the wallpaper both depend on
     int fw, fh;

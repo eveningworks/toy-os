@@ -2,4 +2,4 @@
 Name=UI Demo
 Exec=/bin/wm/demos/uidemo
 Category=demos
-Icon=U
+Icon=uidemo

@@ -67,3 +67,22 @@ fixed, or turned out not to be a defect -- see `git log`. That is a
 snapshot and not a claim about the system: the intermittents above are
 still open, and the sections above this one are where anything new
 should go first.)*
+
+## The desktop occasionally never paints its first frame
+
+Seen twice on 2026-08-23 while the icon work was in flight: after boot,
+`toywm` is alive and answering `gui state`, its own log shows the
+wallpaper decoded and the first frame timed, and the screen still shows
+the ring-0 console the machine booted with. Injected `gui move` events
+were consumed without the cursor moving.
+
+**Rate: 2 boots out of roughly 8 that afternoon; 0 out of 4 on the same
+build immediately afterwards, and not once since across full
+`gui_regress` runs.** Cause NOT established. It was originally attributed
+to the icon draw path, and that was wrong -- the "isolation" runs that
+appeared to clear each suspect were simply boots where it did not
+happen, which is what an intermittent does to a bisection.
+
+What would settle it: `tools/flake_hunt.py`-style repeated boots
+sampling the framebuffer, since every symptom above is visible from the
+host.

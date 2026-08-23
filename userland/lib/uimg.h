@@ -38,12 +38,25 @@
 // caller-supplied buffer would mean every caller carrying a worst-case
 // one. Every allocation is paired with uimg_free().
 
-// A decoded image. `px` is w*h pixels of 0x00RRGGBB -- exactly what
-// ugfx_blit() takes and what ugfx_rgb() packs, so displaying one is a
-// blit with no conversion pass.
+// A decoded image. `px` is w*h pixels of 0xAARRGGBB -- the low three
+// bytes are exactly what ugfx_blit() takes and what ugfx_rgb() packs, so
+// an OPAQUE image is a blit with no conversion pass.
+//
+// **THE TOP BYTE IS ALPHA AND IT IS ONLY MEANINGFUL HERE**, not in a
+// ugfx surface: a surface is 0x00RRGGBB, because the framebuffer has no
+// alpha to composite against. A codec that has no alpha (JPEG) fills
+// 0xFF, so `px` is uniform whatever produced it and a caller never has
+// to ask which codec it came from -- it asks `has_alpha`.
 struct uimg {
     int w, h;
     uint32_t *px;    // malloc'd by the decode/scale calls; uimg_free() releases it
+
+    // Does any pixel have alpha < 255? Set by the codec, preserved by
+    // uimg_scale(). It exists so a CALLER can pick the cheap path:
+    // compositing a 1280x720 wallpaper per-pixel when every pixel is
+    // opaque is nearly a million pointless blends per repaint, and
+    // ugfx_blit() is a straight copy.
+    int has_alpha;
 };
 
 // What a file SAYS it is, without decoding it. Cheap: parsing a JPEG's
@@ -144,6 +157,14 @@ void uimg_fit_size(int sw, int sh, int bw, int bh, enum uimg_fit mode,
 int uimg_scale(const struct uimg *src, int dw, int dh, struct uimg *out);
 
 // --- codecs -----------------------------------------------------------
+//
+// Two rows in uimg.c's table, and the pair is the point: JPEG is what a
+// camera produces -- lossy, opaque, big -- and QOI is what an ICON needs
+// -- lossless, with an alpha channel, and small enough at 64x64 that the
+// file is smaller than the JPEG header would be. Neither is a substitute
+// for the other, and a decoder that had to be one would be a worse
+// version of both.
 extern const struct uimg_codec uimg_codec_jpeg;
+extern const struct uimg_codec uimg_codec_qoi;
 
 #endif

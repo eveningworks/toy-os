@@ -767,7 +767,7 @@ static int j_emit(struct jdec *j, struct uimg *out) {
             const uint8_t *ly = rows[0];
             for (int x = 0; x < j->w; x++) {
                 uint32_t g = ly[x];
-                row[x] = (g << 16) | (g << 8) | g;
+                row[x] = 0xFF000000u | (g << 16) | (g << 8) | g;
             }
             continue;
         }
@@ -783,7 +783,8 @@ static int j_emit(struct jdec *j, struct uimg *out) {
                 g  = a - ((YCC_G_CB * cb + YCC_G_CR * cr) >> 16);
                 bl = a + ((YCC_B_CB * cb) >> 16);
             }
-            row[x] = ((uint32_t)j_clamp(r) << 16) |
+            row[x] = 0xFF000000u |
+                     ((uint32_t)j_clamp(r) << 16) |
                      ((uint32_t)j_clamp(g) << 8) |
                       (uint32_t)j_clamp(bl);
         }
@@ -793,6 +794,7 @@ static int j_emit(struct jdec *j, struct uimg *out) {
     out->w = j->w;
     out->h = j->h;
     out->px = px;
+    out->has_alpha = 0;   // JPEG has no alpha; every pixel got 0xFF above
     return 0;
 }
 

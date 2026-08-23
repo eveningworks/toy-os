@@ -39,6 +39,9 @@
 // `count` is how many windows the button stands for (1 for an
 // ungrouped button).
 struct taskbar_button {
+    // The icon NAME to draw in this button, or NULL. Borrowed from the
+    // app registry, which outlives one frame's layout.
+    const char *icon;
     int x, w;
     int first;
     int count;
@@ -53,6 +56,18 @@ struct taskbar_button {
 // list, the live font metrics and the tray's width, and a cache would be
 // a fourth thing that can disagree with the other three.
 int taskbar_layout(struct taskbar_button *out, int max);
+
+// The icon column inside a taskbar button: its edge length in pixels,
+// and the icon NAME for the window at index `win` (or NULL when that
+// window's app has no artwork, or is not a launcher's app at all).
+//
+// BOTH LIVE HERE because two callers must agree: wm_render.c draws the
+// icon and this file's make_label() has to reserve the same width, or a
+// label is truncated for a column that is not there -- or worse, runs
+// under one that is. The same "one geometry calculation per widget"
+// rule uui_scrollbar.h states.
+int taskbar_icon_size(void);
+const char *taskbar_icon_name(int win);
 
 // How many windows the last taskbar_layout() could not place at all.
 // Nonzero only when even collapsed, floor-width buttons overflow the

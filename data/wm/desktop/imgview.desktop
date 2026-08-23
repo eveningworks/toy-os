@@ -2,4 +2,4 @@
 Name=Image Viewer
 Exec=/bin/wm/apps/imgview
 Category=apps
-Icon=P
+Icon=imgview

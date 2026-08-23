@@ -2,4 +2,4 @@
 Name=System Settings
 Exec=/bin/wm/system/settings
 Category=system
-Icon=S
+Icon=settings

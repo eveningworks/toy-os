@@ -184,6 +184,35 @@ void ugfx_blit(struct ugfx_surface *s, int x, int y, int w, int h,
     dirty_mark_rect(s, dx, dy, dw, dh);
 }
 
+void ugfx_blit_alpha(struct ugfx_surface *s, int x, int y, int w, int h,
+                      const uint32_t *src, int src_pitch_px) {
+    if (!s || !s->pixels || !src || w <= 0 || h <= 0) return;
+    int dx = x, dy = y, dw = w, dh = h;
+    if (!clip_rect(s, &dx, &dy, &dw, &dh)) return;
+    int sx = dx - x, sy = dy - y;
+
+    for (int j = 0; j < dh; j++) {
+        const uint32_t *srow = src + (uint32_t)(sy + j) * (uint32_t)src_pitch_px + (uint32_t)sx;
+        uint32_t *drow = s->pixels + (uint32_t)(dy + j) * (uint32_t)s->w + (uint32_t)dx;
+        for (int i = 0; i < dw; i++) {
+            uint32_t sp = srow[i];
+            unsigned a = sp >> 24;
+            if (a == 0) continue;                 // nothing to draw
+            if (a == 255) { drow[i] = sp & 0x00FFFFFF; continue; }
+            uint32_t dp = drow[i];
+            uint32_t out = 0;
+            for (int shift = 0; shift <= 16; shift += 8) {
+                unsigned sc = (sp >> shift) & 0xFF;
+                unsigned dc = (dp >> shift) & 0xFF;
+                unsigned v = (sc * a + dc * (255 - a) + 127) / 255;
+                out |= (v & 0xFF) << shift;
+            }
+            drow[i] = out;
+        }
+    }
+    dirty_mark_rect(s, dx, dy, dw, dh);
+}
+
 void ugfx_fill(struct ugfx_surface *s, uint32_t color) {
     if (!s) return;
     ugfx_fill_rect(s, 0, 0, s->w, s->h, color);

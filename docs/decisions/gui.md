@@ -3735,3 +3735,96 @@ way that reads as the compositor's fault. The widget recomputes the
 scale only when the geometry, the fit mode or the image changes, so a
 resolution change is handled without the desktop containing a word
 about scaling.
+
+## QOI is the second codec, and icons are why
+
+The codec table's first extra row could have been PNG -- the format
+anyone can produce -- and it is QOI instead. What forced the choice was
+what an ICON needs, which is not what a photograph needs:
+
+- **An alpha channel.** An icon is a rounded tile on transparency; it
+  has to sit on a wallpaper. JPEG has no transparency at all, so an icon
+  decoded from one arrives in an opaque rectangle.
+- **Lossless edges.** At 48 pixels an icon is almost entirely edge, and
+  a DCT rings around edges. The artefacts a photograph hides are exactly
+  what a flat-colour pictogram shows.
+
+Given those, QOI over PNG came down to cost and to testability. QOI is
+one page of specification -- six chunk types, a 64-entry running hash,
+no entropy coder -- which is ~150 lines here. PNG needs inflate before
+it needs anything else, and inflate deserves a testing pass of its own
+rather than arriving as a prerequisite of icons; it stays on the
+roadmap, where its real argument is written down (any PNG from anywhere
+just works).
+
+The second half is that QOI is LOSSLESS, so the vectors compare
+EXACTLY. JPEG's have to allow 3 per channel, which is the level two
+conforming IDCTs may differ by -- a real tolerance, but one that a
+subtly wrong decoder can hide inside. A tolerance of 0 cannot be hidden
+inside.
+
+**Nothing in this repo writes a QOI file.** Pillow encodes the icons and
+the vectors, and Pillow's own decoder is the reference. That matters
+more here than it did for JPEG: QOI is simple enough that writing an
+encoder would have been easy, and then a misread chunk type would
+round-trip perfectly through the matching bug -- self-consistent and
+wrong, the failure this project keeps naming.
+
+## An icon is a NAME, and the letter tile stayed as the fallback
+
+`Icon=notepad` names an icon; `/usr/share/icons/notepad.qoi` is where
+the lookup finds it. That is freedesktop's rule (a `.desktop` file names
+an icon, the theme resolves it) and it is the third time this project
+has made the same call: a font face is a filename in
+`/usr/share/fonts`, a cursor theme is a directory in
+`/usr/share/cursors`. Naming a PATH in the entry would have made every
+entry carry a directory that only one component knows.
+
+**A one-character `Icon=` is still a letter**, drawn in a tile exactly as
+before, and a name whose file is missing falls back to it. That is what
+let eleven entries keep working while the artwork was being drawn, and
+it is why **Crash Test deliberately ships with no icon file**: the
+fallback then runs on every boot rather than only in a test that
+remembers to ask. `data/fonts/` plays the same trick, shipping
+`vera-mono` with no bold companion so the synthesized-bold path is
+exercised.
+
+The cost, stated: an icon has to be IN that directory. A picture
+elsewhere on the disk cannot be an app's icon without being copied in,
+the same limit the wallpaper setting has.
+
+## Icons are cached decoded-and-scaled, and the cache is what makes them affordable
+
+`icon_get(name, size)` returns a borrowed pointer to an image decoded
+from disk and resampled to that exact size, kept until the `.desktop`
+entries reload. The desktop repaints its icon grid on every damage
+event -- a mouse move, a window closing, a menu opening -- and decoding
+eleven files and resampling each 64->48 on every one of those would be
+milliseconds per frame spent producing the previous frame's pixels.
+
+Two things fall out of it being a cache rather than a loader:
+
+- **A missing file is cached as a negative result.** Crash Test has no
+  icon; without remembering that, every repaint would attempt an open
+  and log a failure, which is both slow and a log nobody can read.
+- **The whole cache is dropped when the entries reload**, rather than
+  entries being evicted individually. That is the one moment new artwork
+  can have appeared, and an LRU here would be a policy with no
+  measurement behind it. `gui icons` reports the count so a test can
+  assert the cache IS a cache -- "the icon is drawn" says nothing about
+  how often it was decoded.
+
+## The window-to-launcher match is `AppId=`, because the obvious key is wrong
+
+A taskbar button needs its app's icon, and a taskbar button is a
+WINDOW -- which knows only the `app_id` its client declared. The
+launcher knows the Exec path. Those two agree for almost every app here
+and not for all of them: Shapes runs `/bin/wm/demos/shapes` and calls
+itself `gfxdemo`, and Terminal runs `uterm`.
+
+So an entry may state `AppId=`, defaulting to the Exec basename. This
+is freedesktop's `StartupWMClass` and it exists for precisely this
+mismatch -- GNOME and KDE need it because a window's WM_CLASS is chosen
+by the application and the launcher file is named by whoever packaged
+it. Deriving the pairing from the binary name alone would work until it
+silently did not, which is the failure mode that key was invented for.

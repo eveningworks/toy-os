@@ -2,4 +2,7 @@
 Name=Shapes
 Exec=/bin/wm/demos/shapes
 Category=demos
-Icon=S
+Icon=shapes
+# The window calls itself this; the Exec basename is different, so the
+# taskbar could not otherwise find this entry (freedesktop's StartupWMClass).
+AppId=gfxdemo

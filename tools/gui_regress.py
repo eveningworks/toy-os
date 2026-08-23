@@ -133,6 +133,7 @@ TOOLS = [
     ("font", "font_test.py", "runtime TTF faces, live switching, proportional widths"),
     ("idle", "idle_desktop_test.py", "nothing paints over an idle desktop"),
     ("imgview", "imgview_test.py", "JPEG decoding, the viewer, and the wallpaper"),
+    ("icons", "icons_test.py", "app icons: QOI, alpha compositing, three draw sites"),
 ]
 
 # Roughly how long each tool takes, in seconds, used ONLY to decide what
@@ -164,6 +165,7 @@ COST_S = {
     "menubar": 32,
     "idle": 10,        # eight captures a third of a second apart
     "imgview": 30,     # two decodes, several settled frames, a wallpaper hop
+    "icons": 25,       # three draw sites, each a settled frame
     "font": 19,        # two face switches and a size change, each settled
     "gfxdemo": 24,
     "cursor": 21,

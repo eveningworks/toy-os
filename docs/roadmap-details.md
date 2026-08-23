@@ -854,6 +854,22 @@ through the generation counter it already polls for `.desktop` files.
 See `docs/decisions.md` for why the value is a NAME rather than a path,
 and for the two GUI tools that had to start turning the wallpaper off.
 
+~~Desktop icons are a letter in a tile~~ -- done: real artwork, in QOI
+(the second codec, chosen for its ALPHA channel and its lossless edges
+-- see `docs/decisions.md`), composited over the wallpaper at three draw
+sites: the desktop grid, the Start menu rows and the taskbar buttons. A
+`.desktop` entry's `Icon=` is a NAME resolved under `/usr/share/icons`,
+a one-character value is still the old letter tile, and Crash Test ships
+with no icon file on purpose so the fallback runs on every boot. The
+artwork is drawn by `tools/gen_icons.py` and ENCODED BY PILLOW, so
+nothing in this repo writes the format its own decoder reads.
+
+Two limits, stated rather than left to be discovered: one 64x64 master
+is box-filtered to every size (freedesktop keeps per-size art because a
+reduction loses the silhouette -- if a 20px menu icon ever looks mushy,
+that is the fix and it changes only the lookup), and there is one icon
+set, so the theme mechanism cursors have is not here yet.
+
 ~~Desktop icon repositioning/dragging~~ -- done, see the commit that added it: each icon now has real per-icon {col, row} state
 (`apps/wm/desktop.c`'s `icon_col`/`icon_row`), draggable via a reusable
 icon-grid + drag-session widget (`apps/ui/ui_icon_grid.h`) built with a

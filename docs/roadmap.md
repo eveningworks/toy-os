@@ -499,10 +499,13 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Basic image decoder (JPEG or similar)~~ DONE 2026-08-23 -- baseline JPEG in ring 3, checked against libjpeg
 - [x] ~~Real wallpaper images~~ DONE 2026-08-23 -- `/usr/share/wallpapers`, a `Wallpaper` key, fit/fill
 - [ ] Progressive JPEG -- refused by name today; it needs a second decoder, since coefficients arrive across many scans
-- [ ] A second codec, to prove the codec table is one: PNG (needs inflate, which is reusable) or QOI (200 lines, and gives an encoder)
+- [x] ~~A second codec, to prove the codec table is one~~ DONE 2026-08-23 -- QOI, with alpha, for the app icons
 - [ ] EXIF orientation -- a photograph shot in portrait is shown the way its pixels are stored
 - [ ] A wallpaper picker in System Settings, rather than only Image Viewer's Desktop menu
 - [x] ~~Desktop icon repositioning/dragging~~ done
+- [x] ~~Desktop icons are a letter in a tile~~ DONE 2026-08-23 -- real artwork, composited, on the desktop, the Start menu and the taskbar
+- [ ] Per-size icon art (freedesktop's `16x16/`, `48x48/`), if one 64px master ever looks mushy at menu-row size
+- [ ] A switchable icon theme, the way cursor themes switch -- needs a second set of artwork first
 - [ ] Per-icon context menus (Rename/Properties)
 - [ ] Full dirty-rect compositor
 - [x] ~~Taskbar notification area (tray)~~ done

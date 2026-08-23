@@ -586,7 +586,8 @@ whenever a headline here tells you something you did not already know.
 - **AN APP LOGS THROUGH `ulog()`/`ulogf()`, not a hand-rolled `logf_`.**
 - **THE TOOLKIT OWNS THE KEYBOARD FOCUS RING: set `uapp_desc.focus`.**
 - **A WIDGET REPORTS ITS RECT THROUGH THE `bounds` OP; a test-facing geometry log is `uapp_log_layout(a, prefix)`.**
-- **AN IMAGE IS DECODED IN RING 3, AND `lib/uimg.h`'s CODEC TABLE IS THE EXTENSION POINT** -- never add an image parser to the kernel, and `-ENOTSUP` (a file this build refuses) is not `-EINVAL` (a broken one).
+- **AN IMAGE IS DECODED IN RING 3, AND `lib/uimg.h`'s CODEC TABLE IS THE EXTENSION POINT** -- never add an image parser to the kernel, and `-ENOTSUP` (a file this build refuses) is not `-EINVAL` (a broken one). Two codecs: JPEG for photographs, QOI for anything needing ALPHA.
+- **AN ICON IS A NAME, NOT A PATH, AND IT IS COMPOSITED** -- `Icon=notepad` resolves to `/usr/share/icons/notepad.qoi` through `icon_get()`, which CACHES the decoded and scaled result; blit it with `ugfx_blit_alpha()`, never `ugfx_blit()`, or its transparent corners land as black.
 - **`uui_image` IS THE ONLY WIDGET THAT OWNS MEMORY, AND IT MUST BE RELEASED.**
 - **THE WALLPAPER IS A REGISTERED SETTING, AND ITS VALUE IS A NAME** -- `desktop.wallpaper`, a filename stem under `/usr/share/wallpapers` or `none`; a GUI test measuring ink over the desktop must turn it off first.
 
@@ -982,7 +983,7 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   `screen_surface_test.py`, `scrollbar_test.py`,
   `single_instance_test.py`, `taskmgr_test.py`, `uapp_test.py`,
   `uiclient_test.py`, `uidemo_test.py`, `uterm_test.py`,
-  `winclient_test.py`, `imgview_test.py`.
+  `winclient_test.py`, `imgview_test.py`, `icons_test.py`.
 - **Run on demand, not in the gate** -- `ansi_cursor_test.py` (ANSI
   cursor movement and erasing, as PIXELS -- it kills the desktop first,
   since the console is what it photographs), `init_test.py` (init and
@@ -1047,8 +1048,10 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
 - **Generated data and the build** -- `gen_version.sh` / `set_version.sh`
   (versioning), `genfont.py` / `genttf.py`, `gen_kbs.py` (keyboard
   layouts from XKB data), `gen_cursors.py` (cursor themes),
-  `gen_imgdata.py` (the wallpapers, and the JPEG decoder's test vectors
-  -- whose reference pixels are LIBJPEG's, not this decoder's),
+  `gen_imgdata.py` (the wallpapers, and the image decoders' test vectors
+  -- whose reference pixels are PILLOW's, not this decoder's),
+  `gen_icons.py` (the app icons, drawn here and encoded by Pillow so no
+  QOI writer in this repo can agree with a bug in its reader),
   `genrelocs.py` (the kernel's own relocation table), `gen_syms.py` (the
   panic symbol table), `gen_decisions_index.py`, `gen_commands_index.py`,
   `gen_next_up.py` (the roadmap's "Next up" section, from the `**NEXT**`

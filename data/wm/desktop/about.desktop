@@ -2,4 +2,4 @@
 Name=About
 Exec=/bin/wm/system/about
 Category=system
-Icon=A
+Icon=about

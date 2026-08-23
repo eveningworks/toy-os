@@ -2,4 +2,4 @@
 Name=Calculator
 Exec=/bin/wm/apps/calculator
 Category=apps
-Icon=C
+Icon=calculator

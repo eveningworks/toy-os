@@ -2,4 +2,4 @@
 Name=Task Manager
 Exec=/bin/wm/system/taskmgr
 Category=system
-Icon=T
+Icon=taskmgr

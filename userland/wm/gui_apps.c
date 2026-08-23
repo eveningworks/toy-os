@@ -5,6 +5,7 @@
 #include "wm/wm_fs.h"
 #include "wm/wm_log.h"
 #include "wm/wm_conf.h"
+#include "kpath.h"   // k_path_basename, for AppId's default
 
 // The Start menu and the desktop icons are built from DATA ON DISK --
 // one file per app in /usr/wm/desktop/, scanned at desktop startup.
@@ -48,6 +49,10 @@ int gui_app_registry_count;
 static char g_names[GUI_APP_MAX][GUI_APP_NAME_MAX];
 static char g_execs[GUI_APP_MAX][GUI_APP_EXEC_MAX];
 static char g_cats[GUI_APP_MAX][16];
+// The Icon= name and the AppId, in the same backing store as the rest --
+// struct gui_app holds POINTERS, so these must outlive a reload.
+static char g_icons[GUI_APP_MAX][GUI_APP_ICON_MAX];
+static char g_appids[GUI_APP_MAX][GUI_APP_ICON_MAX];
 
 // Scanning state: fs_list()'s callback carries no context pointer, so
 // the walk collects filenames here first and parses afterwards. Parsing
@@ -138,11 +143,12 @@ static void load_entry(const char *file) {
     if (!wm_conf_load(path, &cfg)) return;
 
     char name[GUI_APP_NAME_MAX], exec[GUI_APP_EXEC_MAX];
-    char cat[16], icon[8], nodisplay[8];
+    char cat[16], icon[GUI_APP_ICON_MAX], appid[GUI_APP_ICON_MAX], nodisplay[8];
     if (!etc_config_buf_get(&cfg, "Name", name, sizeof name)) return;
     if (!etc_config_buf_get(&cfg, "Exec", exec, sizeof exec)) return;
     if (!etc_config_buf_get(&cfg, "Category", cat, sizeof cat)) k_strlcpy(cat, "apps", sizeof cat);
     if (!etc_config_buf_get(&cfg, "Icon", icon, sizeof icon)) icon[0] = '\0';
+    if (!etc_config_buf_get(&cfg, "AppId", appid, sizeof appid)) appid[0] = '\0';
     if (etc_config_buf_get(&cfg, "NoDisplay", nodisplay, sizeof nodisplay)
         && nodisplay[0] == '1') return;
 
@@ -152,11 +158,21 @@ static void load_entry(const char *file) {
     k_strlcpy(g_names[i], name, GUI_APP_NAME_MAX);
     k_strlcpy(g_execs[i], exec, GUI_APP_EXEC_MAX);
     k_strlcpy(g_cats[i], cat, sizeof g_cats[0]);
+    // A one-character Icon= is a GLYPH, anything longer is a NAME. Both
+    // are stored; the drawing code prefers the file and falls back to
+    // the character (see gui_apps.h).
+    k_strlcpy(g_icons[i], icon[0] && icon[1] ? icon : "", sizeof g_icons[0]);
+    // AppId defaults to the basename of Exec, which is right everywhere
+    // but Shapes -- see gui_apps.h on why the entry gets to say.
+    k_strlcpy(g_appids[i], appid[0] ? appid : k_path_basename(exec),
+              sizeof g_appids[0]);
 
     struct gui_app *a = &gui_app_registry[i];
     k_memset(a, 0, sizeof *a);
     a->name = g_names[i];
     a->icon = icon[0];
+    a->icon_name = g_icons[i];
+    a->app_id = g_appids[i];
     a->resizable = 1;
     a->show_in = parse_show_in(&cfg, file);
 

@@ -13,6 +13,7 @@
 // claim the same bytes, which none of these can.
 static const struct uimg_codec *const codecs[] = {
     &uimg_codec_jpeg,
+    &uimg_codec_qoi,
 };
 #define CODEC_COUNT ((int)(sizeof codecs / sizeof codecs[0]))
 
@@ -172,6 +173,17 @@ void uimg_fit_size(int sw, int sh, int bw, int bh, enum uimg_fit mode,
 // and linear interpolation on a big reduction samples a fraction of the
 // source and aliases -- which is exactly what a downscaled photo shows
 // as shimmering detail. Both are 16.16 fixed point.
+//
+// **COLOUR IS WEIGHTED BY ALPHA, WHICH IS WHY THIS LOOKS ODD.** Mixing
+// straight (non-premultiplied) RGBA by averaging all four channels
+// independently is wrong wherever alpha varies: a transparent pixel
+// still contributes its colour, and since a generator writes (0,0,0,0)
+// outside a shape, every downscaled icon grows a dark halo along its
+// edge. So the alpha channel is averaged by area, and the colour
+// channels are averaged weighted by alpha -- which is the same thing as
+// premultiplying, resampling and unpremultiplying, without the two extra
+// passes over the image. It costs a multiply per channel and it is used
+// even for an opaque image, where alpha is constant and cancels exactly.
 static void resample_axis(const uint32_t *src, uint32_t *dst,
                           int src_n, int dst_n, int lines,
                           int src_step, int src_line, int dst_step, int dst_line) {
@@ -191,10 +203,15 @@ static void resample_axis(const uint32_t *src, uint32_t *dst,
                 const uint32_t *sp = src + (size_t)l * src_line;
                 uint32_t a = sp[(size_t)s0 * src_step];
                 uint32_t b = sp[(size_t)s1 * src_step];
-                uint32_t o = 0;
+                int aa = (int)(a >> 24), ab = (int)(b >> 24);
+                int wa = (65536 - frac), wb = frac;
+                int alpha = (aa * wa + ab * wb) >> 16;
+                int64_t caw = (int64_t)aa * wa, cbw = (int64_t)ab * wb;
+                int64_t den = caw + cbw;
+                uint32_t o = (uint32_t)(alpha & 0xFF) << 24;
                 for (int shift = 0; shift <= 16; shift += 8) {
-                    int ca = (a >> shift) & 0xFF, cb = (b >> shift) & 0xFF;
-                    int v = ca + (((cb - ca) * frac) >> 16);
+                    int ca = (int)((a >> shift) & 0xFF), cb = (int)((b >> shift) & 0xFF);
+                    int v = den ? (int)(((int64_t)ca * caw + (int64_t)cb * cbw) / den) : 0;
                     o |= (uint32_t)(v & 0xFF) << shift;
                 }
                 dst[(size_t)l * dst_line + (size_t)i * dst_step] = o;
@@ -217,22 +234,31 @@ static void resample_axis(const uint32_t *src, uint32_t *dst,
         for (int l = 0; l < lines; l++) {
             const uint32_t *sp = src + (size_t)l * src_line;
             int64_t acc[3] = { 0, 0, 0 };
-            int64_t wsum = 0;
+            int64_t asum = 0, wsum = 0, awsum = 0;
             for (int s = s0; s <= s1; s++) {
                 int64_t lo = (int64_t)s << 16, hi = lo + 65536;
                 int64_t w = (end < hi ? end : hi) - (start > lo ? start : lo);
                 if (w <= 0) continue;
                 uint32_t v = sp[(size_t)s * src_step];
-                acc[0] += (int64_t)((v >> 16) & 0xFF) * w;
-                acc[1] += (int64_t)((v >> 8) & 0xFF) * w;
-                acc[2] += (int64_t)(v & 0xFF) * w;
+                int64_t a = (int64_t)((v >> 24) & 0xFF);
+                int64_t aw = a * w;
+                acc[0] += (int64_t)((v >> 16) & 0xFF) * aw;
+                acc[1] += (int64_t)((v >> 8) & 0xFF) * aw;
+                acc[2] += (int64_t)(v & 0xFF) * aw;
+                asum += a * w;
+                awsum += aw;
                 wsum += w;
             }
             if (wsum == 0) wsum = 1;
+            uint32_t alpha = (uint32_t)(asum / wsum) & 0xFF;
+            uint32_t r = 0, g = 0, b = 0;
+            if (awsum > 0) {
+                r = (uint32_t)(acc[0] / awsum) & 0xFF;
+                g = (uint32_t)(acc[1] / awsum) & 0xFF;
+                b = (uint32_t)(acc[2] / awsum) & 0xFF;
+            }
             dst[(size_t)l * dst_line + (size_t)i * dst_step] =
-                ((uint32_t)(acc[0] / wsum) << 16) |
-                ((uint32_t)(acc[1] / wsum) << 8) |
-                 (uint32_t)(acc[2] / wsum);
+                (alpha << 24) | (r << 16) | (g << 8) | b;
         }
     }
 }
@@ -256,6 +282,7 @@ int uimg_scale(const struct uimg *src, int dw, int dh, struct uimg *out) {
         if (!px) { uimg_set_error("not enough memory to copy the image"); return -ENOMEM; }
         memcpy(px, src->px, (size_t)dw * dh * sizeof *px);
         out->w = dw; out->h = dh; out->px = px;
+        out->has_alpha = src->has_alpha;
         return 0;
     }
 
@@ -279,5 +306,6 @@ int uimg_scale(const struct uimg *src, int dw, int dh, struct uimg *out) {
     out->w = dw;
     out->h = dh;
     out->px = dst;
+    out->has_alpha = src->has_alpha;
     return 0;
 }

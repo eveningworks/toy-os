@@ -919,3 +919,28 @@ real scanout hardware does. Do not write a pixel assertion for one.
   font tools count pixels differing from a FLAT background, and a
   wallpaper saturates them -- establish the precondition, do not weaken
   the assertion.
+
+- **AN ICON IS A NAME, IT IS CACHED, AND IT IS COMPOSITED.** A `.desktop`
+  entry's `Icon=` is a NAME resolved to `/usr/share/icons/<name>.qoi`
+  (freedesktop's rule, and the same filename-is-the-name convention
+  `fontface` and cursor themes follow); a one-character value is the
+  LETTER fallback instead, and a name whose file is missing falls back to
+  it too -- Crash Test ships with no icon file so that path runs on every
+  boot. **Ask `icon_get(name, size)`** (`userland/wm/icon_cache.h`),
+  never `uimg_load()` at a draw site: it decodes and scales ONCE per
+  (name, size), and a draw site that re-decoded would spend milliseconds
+  per repaint producing last frame's pixels. **Blit with
+  `ugfx_blit_alpha()`**: an icon is a rounded tile on transparency, and a
+  plain `ugfx_blit()` writes the file's (0,0,0,0) corners as BLACK --
+  which looks like a square icon rather than like a bug. Sizes come from
+  ONE 64px master, box-filtered down; per-size art (freedesktop's
+  `16x16/`, `48x48/`) is the fix if small icons ever look mushy, and it
+  changes only the lookup.
+
+- **A WINDOW IS MATCHED TO ITS LAUNCHER BY `AppId=`.** The taskbar needs
+  an icon for a window it did not launch, and a window only knows the
+  `app_id` its client declared -- which is not always the Exec basename
+  (Shapes runs `/bin/wm/demos/shapes` and calls itself `gfxdemo`). The
+  entry's optional `AppId=` states the pairing, defaulting to the Exec
+  basename. This is freedesktop's `StartupWMClass`, which exists for
+  exactly this mismatch.

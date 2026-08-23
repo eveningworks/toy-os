@@ -109,7 +109,14 @@ void uui_image_draw(struct ugfx_surface *s, const struct uui_image *im) {
     int oy = (src->h - vh) / 2;
     if (ox < 0) ox = 0;
     if (oy < 0) oy = 0;
-    ugfx_blit(s, vx, vy, vw, vh, src->px + (size_t)oy * src->w + ox, src->w);
+    // COMPOSITED only when the image actually has transparency. An
+    // opaque 1280x720 wallpaper blended per pixel would be nearly a
+    // million multiply-adds on every repaint, to arrive at the value a
+    // copy already gives.
+    if (src->has_alpha)
+        ugfx_blit_alpha(s, vx, vy, vw, vh, src->px + (size_t)oy * src->w + ox, src->w);
+    else
+        ugfx_blit(s, vx, vy, vw, vh, src->px + (size_t)oy * src->w + ox, src->w);
 }
 
 // --- the ops table ----------------------------------------------------

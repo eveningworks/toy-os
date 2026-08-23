@@ -1,6 +1,7 @@
 // See wm_debug.h for what this is for and why it lives here.
 #include "wm_internal.h"
 #include "wm_taskbar.h"
+#include "wm/icon_cache.h"
 #include "wm_tray.h"
 #include "wm_debug.h"
 #include "start_menu.h"
@@ -867,11 +868,28 @@ static void usage(struct dbg_out *o) {
     dbg_out_write(o, "  drag X1 Y1 X2 Y2      synthetic press, interpolated move, release\r\n");
     dbg_out_write(o, "  key <c|0xNN>          synthetic keypress to the focused window\r\n");
     dbg_out_write(o, "  wheel <n>             synthetic wheel notches (+up / -down)\r\n");
+    dbg_out_write(o, "  icons                 how many app icons are decoded and cached\r\n");
     dbg_out_write(o, "  watchdog [<ms>|off]   slow-frame threshold, and how often it fired\r\n");
     dbg_out_write(o, "  pingtimeout [<ticks>] not-responding timeout (a TEST lever)\r\n");
     dbg_out_write(o, "Injected input enters at the WM loop, below the PS/2 driver -- it tests\r\n");
     dbg_out_write(o, "WM/app logic, not the mouse driver. It is also asynchronous: the events\r\n");
     dbg_out_write(o, "drain one per frame, so allow ~100ms before reading the result back.\r\n");
+}
+
+// The icon cache: what has been decoded, and at which size.
+//
+// It exists so a test can assert the cache IS a cache. "The icon is
+// drawn" says nothing about whether the file was decoded once or on
+// every frame, and the difference between those is milliseconds per
+// repaint -- exactly the kind of thing that is invisible until the
+// machine feels slow and nobody knows why.
+static void cmd_icons(struct dbg_out *o, int json) {
+    int n = icon_cache_count();
+    if (json) {
+        dbg_out_printf(o, "{\"cached\":%d}\r\n", n);
+        return;
+    }
+    dbg_out_printf(o, "icons: %d cached (name,size pairs decoded and scaled)\r\n", n);
 }
 
 int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
@@ -888,6 +906,7 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
     if (k_strcmp(sub, "taskbar") == 0)      { cmd_taskbar(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "state") == 0)        { cmd_state(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "compositor") == 0)   { cmd_compositor(o, wants_json(p)); return 1; }
+    if (k_strcmp(sub, "icons") == 0)        { cmd_icons(o, wants_json(p)); return 1; }
 
     if (k_strcmp(sub, "damage") == 0) {
         char *arg = next_tok(&p);

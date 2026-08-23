@@ -57,8 +57,17 @@ system yet (`docs/roadmap.md` has the screenshot tool that would want
 one).
 
 **It does not know about formats no codec claims.** Today that is
-everything except JPEG: the codec table is `userland/lib/uimg.c`, and a
-second format is a row in it plus a file beside it.
+everything except JPEG and QOI -- the codec table is
+`userland/lib/uimg.c`, and a third format is a row in it plus a file
+beside it. QOI is what the application icons are stored in, so
+`imginfo /usr/share/icons/notepad.qoi` reports one:
+
+    /usr/share/icons/notepad.qoi: qoi 64x64, 4 components (all channels linear, alpha)
+
+The colourspace it reports is what the FILE claims, which QOI leaves
+informational -- no decoder, including this one, changes what it does
+because of it. Reported rather than hidden, because a picture that looks
+washed out is otherwise unexplainable.
 
 **It does not print EXIF.** The tags are skipped with every other APPn
 segment, so a photograph shot in portrait is reported, and shown, the

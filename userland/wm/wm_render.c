@@ -14,6 +14,7 @@
 #include "desktop.h"
 #include "wm_tray.h"
 #include "wm_taskbar.h"
+#include "wm/icon_cache.h"
 #include "cursor_theme.h"
 #include "ui/uui.h"
 #include "ui/utheme.h"
@@ -541,8 +542,26 @@ static void draw_taskbar(void) {
         int i = btns[b].first;
         int is_front_and_visible = (i == window_count - 1 && windows[i].state != WIN_MINIMIZED);
         uint32_t wbg = is_front_and_visible ? ugfx_rgb(70, 70, 90) : ugfx_rgb(50, 50, 60);
+
+        // AN ICON WHERE THERE IS ONE, and the label shifted past it --
+        // as on every taskbar since Windows 95. The button is drawn with
+        // an EMPTY label and the text placed here, because
+        // uui_button_draw() centres its label and a centred label beside
+        // a left-hand icon reads as neither centred nor aligned. The
+        // width the label was truncated to already accounts for the
+        // column (wm_taskbar.h says why both live in one place).
+        const struct uimg *ico = btns[b].icon ?
+            icon_get(btns[b].icon, taskbar_icon_size()) : NULL;
         uui_button_draw(wm_surface(), btns[b].x, ty + 4, btns[b].w, taskbar_h - 8,
-                         btns[b].label, wbg, fg, UUI_STATE_REST);
+                         ico ? "" : btns[b].label, wbg, fg, UUI_STATE_REST);
+        if (ico) {
+            ugfx_blit_alpha(wm_surface(), btns[b].x + 4, ty + 5, ico->w, ico->h,
+                            ico->px, ico->w);
+            int tx = btns[b].x + 6 + ico->w;
+            ugfx_draw_string_clipped(wm_surface(), tx, ty + 4 + (taskbar_h - 8 - ugfx_char_h()) / 2,
+                                     btns[b].x + btns[b].w - 4 - tx,
+                                     btns[b].label, fg, wbg);
+        }
     }
 
     draw_tray(ty, bg, fg);

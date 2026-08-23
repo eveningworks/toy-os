@@ -5,18 +5,29 @@ TWO OUTPUTS, ONE TOOL, because both are "a JPEG produced by libjpeg for
 toy-os to read back" and splitting them would mean two scripts with the
 same encoder settings to keep in step.
 
-  --vectors     userland/tests/uimg_vectors.h -- small JPEGs as byte
-                arrays, each with the RGB **libjpeg** decodes them to.
-                That is the whole point of the file: /tests/uimg_test
-                compares userland/lib/uimg_jpeg.c's output against a
+  --vectors     userland/tests/uimg_vectors.h -- small JPEGs and QOIs as
+                byte arrays, each with the RGBA **Pillow** decodes them
+                to. That is the whole point of the file: /tests/uimg_test
+                compares userland/lib/uimg_*.c's output against a
                 different implementation's, not against its own. A
                 decoder tested only against itself is the AES-with-a-
                 wrong-round-key problem docs/roadmap-details.md warns
                 about -- self-consistent and worthless.
 
+                THE QOI VECTORS ARE ENCODED BY PILLOW TOO, which matters
+                more than it does for JPEG: QOI is simple enough that
+                this repo could have written its own encoder, and then a
+                misread chunk type would round-trip perfectly through
+                the matching bug. A foreign encoder cannot do that.
+                Their tolerance is 0 -- QOI is lossless, so "close
+                enough" is not a thing that exists.
+
   --wallpapers  data/wallpapers/*.jpg -- the desktop backgrounds, drawn
                 here rather than committed as somebody's photograph so
                 the repo carries no image it does not own.
+
+(The app icons have their own generator, tools/gen_icons.py, because
+what they need is drawing code rather than encoder settings.)
 
 Both outputs are COMMITTED, like kernel/drivers/font_ttf.c and the
 cursor themes: a checkout without Pillow still builds. Re-run this only
@@ -68,6 +79,41 @@ def gradient(w, h):
     return im
 
 
+def noise(w, h):
+    """Deterministic per-pixel noise -- no two neighbours alike.
+
+    For QOI this is the anti-run image: almost every pixel is a literal
+    or an index hit, so the 64-entry hash table is actually exercised.
+    """
+    im = Image.new("RGB", (w, h))
+    px = im.load()
+    for y in range(h):
+        for x in range(w):
+            s = (x * 1103515245 + y * 12345 + 7) & 0x7FFFFFFF
+            px[x, y] = ((s >> 7) & 255, (s >> 15) & 255, (s >> 3) & 255)
+    return im
+
+
+def alpha_disc(w, h):
+    """A soft-edged disc on transparency -- an icon's shape, in miniature.
+
+    The point is the EDGE: alpha steps through every value between 0 and
+    255 there, so a decoder that dropped the alpha channel, or one that
+    read RGBA chunks as RGB, is wrong in a way an all-or-nothing mask
+    would hide.
+    """
+    im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    px = im.load()
+    cx, cy, r = (w - 1) / 2.0, (h - 1) / 2.0, min(w, h) * 0.42
+    for y in range(h):
+        for x in range(w):
+            d = math.hypot(x - cx, y - cy)
+            a = 255 if d <= r - 1 else (0 if d >= r + 1 else int(255 * (r + 1 - d) / 2))
+            if a:
+                px[x, y] = (240, 90 + int(120 * x / w), 40, a)
+    return im
+
+
 def encode(im, **kw):
     buf = io.BytesIO()
     im.save(buf, format="JPEG", **kw)
@@ -86,17 +132,29 @@ def c_bytes(name, data):
 def build_vectors():
     vectors = []
 
-    def ok(name, im, **kw):
-        data = encode(im, **kw)
-        ref = Image.open(io.BytesIO(data)).convert("RGB")
+    def add(name, data, tol):
+        """One decodable vector: the bytes, and what PILLOW decodes them to."""
+        ref = Image.open(io.BytesIO(data)).convert("RGBA")
         vectors.append({
             "name": name, "jpeg": data, "w": ref.width, "h": ref.height,
-            "rgb": ref.tobytes(), "err": 0,
+            "rgb": ref.tobytes(), "err": 0, "tol": tol,
         })
+
+    def ok(name, im, **kw):
+        # JPEG: lossy, so the tolerance is the level two conforming IDCTs
+        # are allowed to differ by. Alpha is still compared EXACTLY --
+        # the decoder must fill 0xFF, and a vector that ignored alpha
+        # would not notice if it filled 0.
+        add(name, encode(im, **kw), 3)
+
+    def qoi(name, im):
+        buf = io.BytesIO()
+        im.save(buf, format="QOI")
+        add(name, buf.getvalue(), 0)   # lossless: exact, or it is wrong
 
     def bad(name, data, err):
         vectors.append({"name": name, "jpeg": data, "w": 0, "h": 0,
-                        "rgb": None, "err": err})
+                        "rgb": None, "err": err, "tol": 0})
 
     ok("rgb 4:4:4 q95", gradient(16, 16), quality=95, subsampling=0)
     ok("rgb 4:2:2 q90", gradient(24, 16), quality=90, subsampling=1)
@@ -113,11 +171,36 @@ def build_vectors():
     ok("restart markers", gradient(32, 32), quality=85, subsampling=2,
        restart_marker_rows=1)
 
+    # --- QOI, whose chunk types are what there is to get wrong --------
+    #
+    # Each image is shaped to force a different chunk: flat bands are
+    # RUNs, a gradient is DIFF/LUMA, noise is literal RGB plus INDEX
+    # hits off the 64-entry hash, and the alpha one is RGBA chunks. An
+    # image that exercised only runs would pass with the hash function
+    # wrong, which is this format's subtle failure.
+    qoi("qoi flat runs", Image.new("RGB", (24, 16), (30, 90, 160)))
+    qoi("qoi gradient", gradient(24, 16))
+    qoi("qoi noise", noise(20, 12))
+    qoi("qoi rgb, no alpha", gradient(16, 16).convert("RGB"))
+    qoi("qoi with alpha", alpha_disc(24, 24))
+
     prog = encode(gradient(16, 16), quality=85, progressive=True)
     bad("progressive is refused", prog, ENOTSUP)
     truncated = vectors[2]["jpeg"][:len(vectors[2]["jpeg"]) * 6 // 10]
     bad("truncated is refused", truncated, EINVAL)
     bad("not an image", b"this is not a JPEG, not even slightly\n", EINVAL)
+
+    # A QOI truncated mid-chunk, and one whose header lies about its
+    # channel count. Byte-level corruption rather than a short file,
+    # because a decoder that trusts the header is the one that walks off
+    # the end of the buffer.
+    buf = io.BytesIO()
+    alpha_disc(24, 24).save(buf, format="QOI")
+    whole = buf.getvalue()
+    bad("qoi truncated is refused", whole[:len(whole) * 6 // 10], EINVAL)
+    bogus = bytearray(whole)
+    bogus[12] = 7          # channels: legal values are 3 and 4
+    bad("qoi with an impossible channel count", bytes(bogus), EINVAL)
 
     return vectors
 
@@ -125,34 +208,38 @@ def build_vectors():
 def write_vectors(vectors):
     out = ['// GENERATED by tools/gen_imgdata.py -- do not edit by hand.',
            '//',
-           '// Each vector is a JPEG and the RGB **libjpeg** (through Pillow)',
-           '// decodes it to. /tests/uimg_test decodes the same bytes with',
-           '// userland/lib/uimg_jpeg.c and compares, which is the only way to',
-           '// tell a correct decoder from a self-consistent one.',
+           '// Each vector is a file and the RGBA **Pillow** decodes it to --',
+           '// libjpeg for the JPEGs, its own QOI plugin for the QOIs, and it',
+           '// ENCODED the QOIs too. /tests/uimg_test decodes the same bytes',
+           '// with userland/lib/uimg_*.c and compares, which is the only way',
+           '// to tell a correct decoder from a self-consistent one.',
            '#ifndef UIMG_VECTORS_H',
            '#define UIMG_VECTORS_H',
            '',
            'struct uimg_vector {',
            '    const char *name;',
-           '    const unsigned char *jpeg;',
-           '    unsigned jpeg_len;',
+           '    const unsigned char *data;   // the FILE, whatever format it is',
+           '    unsigned len;',
            '    int w, h;                  // expected size; 0 when err != 0',
            '    int err;                   // 0 = must decode; else the POSITIVE',
            '                               // errno the decoder must return',
-           '    const unsigned char *rgb;  // w*h*3 reference pixels, or 0',
+           '    int tol;                   // largest per-channel difference to',
+           '                               // accept: 3 for JPEG (two conforming',
+           '                               // IDCTs may differ), 0 for QOI',
+           '    const unsigned char *rgba; // w*h*4 reference pixels, or 0',
            '};',
            '']
     for i, v in enumerate(vectors):
-        out.append(c_bytes("uimg_vec%d_jpeg" % i, v["jpeg"]))
+        out.append(c_bytes("uimg_vec%d_file" % i, v["jpeg"]))
         if v["rgb"] is not None:
-            out.append(c_bytes("uimg_vec%d_rgb" % i, v["rgb"]))
+            out.append(c_bytes("uimg_vec%d_rgba" % i, v["rgb"]))
         out.append("")
     out.append("static const struct uimg_vector uimg_vectors[] = {")
     for i, v in enumerate(vectors):
-        rgb = ("uimg_vec%d_rgb" % i) if v["rgb"] is not None else "0"
-        out.append('    { "%s", uimg_vec%d_jpeg, sizeof uimg_vec%d_jpeg, '
-                   '%d, %d, %d, %s },' %
-                   (v["name"], i, i, v["w"], v["h"], v["err"], rgb))
+        rgb = ("uimg_vec%d_rgba" % i) if v["rgb"] is not None else "0"
+        out.append('    { "%s", uimg_vec%d_file, sizeof uimg_vec%d_file, '
+                   '%d, %d, %d, %d, %s },' %
+                   (v["name"], i, i, v["w"], v["h"], v["err"], v["tol"], rgb))
     out.append("};")
     out.append("")
     out.append("#define UIMG_VECTOR_COUNT "

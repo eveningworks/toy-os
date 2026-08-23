@@ -21,10 +21,33 @@ struct window; // full definition in wm.h
 struct gui_app {
     const char *name; // shown in the Start menu and the title bar
 
-    // The single character drawn in the desktop icon's tile, from the
-    // entry's Icon= key. 0 falls back to the first letter of the name,
-    // which is what the desktop drew before entries existed.
+    // The entry's Icon= key, read TWO ways.
+    //
+    // `icon_name` is a name in /usr/share/icons -- "notepad" for
+    // notepad.qoi -- which is freedesktop's rule (an Icon= is a name
+    // looked up in a theme, not a path) and the same rule a font face
+    // and a cursor theme already follow here.
+    //
+    // `icon` is the single-character fallback drawn in a tile when there
+    // is no such file. A one-character Icon= means the glyph and nothing
+    // else; a longer one is a name, with the first character still
+    // standing in if the file is missing. That is what lets an entry
+    // predate its artwork -- and Crash Test ships with no icon file on
+    // purpose, so the fallback path is exercised on every boot rather
+    // than merely written.
+    const char *icon_name;   // "" when the entry gave a bare character
     char icon;
+
+    // Which app_id a WINDOW of this entry reports, so the taskbar can
+    // find the icon for a window it did not launch. Defaults to the
+    // basename of Exec, which is right for every app here but one --
+    // Shapes runs /bin/wm/demos/shapes and calls itself "gfxdemo".
+    //
+    // This is freedesktop's StartupWMClass, which exists for exactly
+    // this mismatch: the window's own identity and the launcher's file
+    // name are two different things, and only the entry can say they
+    // are the same app.
+    const char *app_id;
 
     // Computes this app's initial content-area size in pixels, from
     // whatever font size is currently active (gfx_char_w()/gfx_char_h()
@@ -268,6 +291,9 @@ struct gui_app {
 // same choice every other list in this WM makes.
 #define GUI_APP_MAX      32
 #define GUI_APP_NAME_MAX 32
+// An Icon= name or an AppId -- both are short identifiers, and sharing
+// one bound keeps the two arrays that hold them the same shape.
+#define GUI_APP_ICON_MAX 24
 #define GUI_APP_EXEC_MAX 64
 
 // The registry, BUILT AT STARTUP from /usr/wm/desktop/ -- see

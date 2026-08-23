@@ -787,8 +787,8 @@ manual steps to be worth automating:
   disarmed, and a ring-3 crash kills the app WITHOUT taking the desktop
   with it. In `gui_regress.py`, which is only safe because the kernel
   half is disarmed unless `faultinject` is on the command line.
-- **`gen_imgdata.py`** -- generates BOTH things this repo ships as
-  image data: `data/wallpapers/*.jpg` (the desktop backgrounds, drawn
+- **`gen_imgdata.py`** -- generates the wallpapers and the decoders'
+  test vectors: `data/wallpapers/*.jpg` (the desktop backgrounds, drawn
   here rather than committed as somebody's photograph, so the repo owns
   every pixel it carries) and `userland/tests/uimg_vectors.h` (the JPEG
   decoder's test vectors). One tool because both are "a JPEG produced by
@@ -806,6 +806,19 @@ manual steps to be worth automating:
   truncated, not-an-image -- which must come back as the RIGHT errno,
   since a decoder answering "broken" to everything would pass a test
   that only asked whether it failed.
+- **`gen_icons.py`** -- draws the application icons into `data/icons/`
+  (one 64x64 QOI per icon NAME) and `--check`s that the files on disk
+  match the script, the same contract `gen_cursors.py` has. The art is
+  deliberately simple -- a rounded tile in a per-app hue and a white
+  pictogram -- because that is what still reads at 20 pixels in a Start
+  menu row, and it is drawn here rather than committed as somebody's
+  icon set so the repo owns every pixel it ships. **PILLOW encodes
+  them**, which is what keeps `uimg_qoi.c` honest: nothing in this repo
+  writes a QOI file, so a chunk type the decoder misreads cannot
+  round-trip through a matching bug of our own. **Crash Test gets no
+  icon on purpose** -- it is the entry that exercises the letter-tile
+  fallback on every boot, the same trick `data/fonts/` plays by shipping
+  `vera-mono` with no bold companion.
 - **`uimg_hostcheck.py`** -- the same `userland/lib/uimg_jpeg.c`,
   compiled with the host gcc and run against ~180 Pillow-generated
   images (four patterns x five sizes x three subsamplings x three
@@ -1066,6 +1079,17 @@ manual steps to be worth automating:
   capture pipeline can see motion at all (without it, a harness handing
   back one cached frame would report a beautifully steady desktop). In
   `gui_regress.py`.
+- **`icons_test.py`** -- application icons from a `.qoi` file to the
+  screen (9 checks), with the host as the oracle again: Pillow decodes
+  the same file, scales it the same way, composites it over the sampled
+  wallpaper, and the guest has to agree. Covers all three draw sites
+  (desktop, Start menu row, taskbar button -- the last matched through
+  the entry's `AppId=`), the missing-file fallback, and that the cache is
+  a CACHE (`gui icons` reports the count; twelve forced repaints must not
+  change it). **Read its docstring before editing the corner check**: the
+  first version asserted the corner was "not the tile colour", which a
+  plain `ugfx_blit()` satisfies by writing black, and only the positive
+  control found that. In `gui_regress.py`.
 - **`imgview_test.py`** -- JPEG decoding all the way to a screen (15
   checks), and the only one of the three decoder checks that can see a
   pixel. Its oracle is the host: `data/wallpapers/aurora.jpg` is

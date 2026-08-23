@@ -12,6 +12,7 @@
 #include "icon_grid.h"
 #include <stdio.h>
 #include "wm/wm_conf.h"
+#include "wm/icon_cache.h"
 #include "wm/wm_log.h"
 #include "lib/uimg.h"
 #include "ui/uui_image.h"
@@ -399,20 +400,30 @@ void desktop_draw(void) {
                            DESKTOP_ICON_SIZE + 8 + 18, icon_selected_bg);
         }
 
-        ugfx_fill_rect(wm_surface(), x, y, DESKTOP_ICON_SIZE, DESKTOP_ICON_SIZE, ugfx_rgb(60, 90, 130));
-        ugfx_draw_rect(wm_surface(), x, y, DESKTOP_ICON_SIZE, DESKTOP_ICON_SIZE, icon_fg);
+        // A REAL ICON IF THERE IS ONE, the letter tile if there is not.
+        // The picture is composited (it has an alpha channel and a
+        // rounded outline), so it sits on the wallpaper rather than in a
+        // rectangle of its own -- which is the entire reason icons
+        // waited for a codec with alpha.
+        const struct uimg *ico = icon_get(gui_app_registry[i].icon_name,
+                                          DESKTOP_ICON_SIZE);
+        if (ico) {
+            ugfx_blit_alpha(wm_surface(), x, y, ico->w, ico->h, ico->px, ico->w);
+        } else {
+            ugfx_fill_rect(wm_surface(), x, y, DESKTOP_ICON_SIZE, DESKTOP_ICON_SIZE,
+                           ugfx_rgb(60, 90, 130));
+            ugfx_draw_rect(wm_surface(), x, y, DESKTOP_ICON_SIZE, DESKTOP_ICON_SIZE, icon_fg);
 
-        // Stand-in glyph: the app name's first letter, centered in the
-        // square -- see this file's top comment on why (no image
-        // decoder yet).
-        // The entry's Icon= character, falling back to the name's first
-        // letter -- which is what this drew before desktop entries
-        // existed, so an entry with no Icon= looks exactly as it did.
-        char ic = gui_app_registry[i].icon;
-        char initial[2] = { ic ? ic : gui_app_registry[i].name[0], '\0' };
-        int gx = x + (DESKTOP_ICON_SIZE - ugfx_char_w()) / 2;
-        int gy = y + (DESKTOP_ICON_SIZE - ugfx_char_h()) / 2;
-        ugfx_draw_string(wm_surface(), gx, gy, initial, icon_fg, ugfx_rgb(60, 90, 130));
+            // The entry's Icon= character, falling back to the name's
+            // first letter -- which is what this drew before desktop
+            // entries existed, so an entry with no Icon= looks exactly
+            // as it did.
+            char ic = gui_app_registry[i].icon;
+            char initial[2] = { ic ? ic : gui_app_registry[i].name[0], '\0' };
+            int gx = x + (DESKTOP_ICON_SIZE - ugfx_char_w()) / 2;
+            int gy = y + (DESKTOP_ICON_SIZE - ugfx_char_h()) / 2;
+            ugfx_draw_string(wm_surface(), gx, gy, initial, icon_fg, ugfx_rgb(60, 90, 130));
+        }
 
         // CLIPPED to the cell pitch, not drawn free-hand. current_grid()
         // deliberately uses a fixed column width rather than sizing to
@@ -508,6 +519,7 @@ void desktop_draw(void) {
 int desktop_drag_active(void) { return drag.active || sel.armed; }
 
 void desktop_entries_changed(void) {
+    icon_cache_invalidate(); // an entry's artwork can have arrived with it
     positions_loaded = 0;   // re-read from DESKTOP_CONF_PATH, keyed by name
     rb_clear(&sel);         // indices into a table that just changed
     group_drag = 0;         // its snapshot indexes the table that changed

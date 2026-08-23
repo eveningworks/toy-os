@@ -24,9 +24,10 @@
 #include <stdio.h>
 #include "rt/sys.h"
 #include "lib/uimg.h"
-#include "lib/dirsort.h"
 #include "setting_abi.h"
-#include "string.h"
+#include "kpath.h"   // k_path_join/_dirname -- the KERNEL's, linked into ring 3
+#include <dirent.h>
+#include <stdlib.h>
 #include "ui/ugfx.h"
 #include "ui/uui.h"
 #include "ui/uapp.h"
@@ -108,22 +109,6 @@ static struct uui_item g_widgets[] = {
     { &uui_image_ops,   &g_view,  0, 0, ID_IMAGE },
 };
 
-static void scopy(char *dst, const char *src, int cap) {
-    int i = 0;
-    for (; src[i] && i < cap - 1; i++) dst[i] = src[i];
-    dst[i] = '\0';
-}
-
-// "<dir>/<name>", with exactly one slash however the directory ended.
-static void join(char *out, const char *dir, const char *name) {
-    int i = 0;
-    for (; dir[i] && i < PATH_MAX_LEN - 2; i++) out[i] = dir[i];
-    while (i > 1 && out[i - 1] == '/') i--;
-    out[i++] = '/';
-    for (int k = 0; name[k] && i < PATH_MAX_LEN - 1; k++) out[i++] = name[k];
-    out[i] = '\0';
-}
-
 // --- loading ----------------------------------------------------------
 
 static int menubar_h(void) {
@@ -143,29 +128,68 @@ static int statusbar_h(void) {
 // JPEG saved as .dat is listed and a text file called photo.jpg is not.
 // Every real image library sniffs for the same reason -- an extension is
 // a hint typed by a person.
-static void reload_listing(void) {
-    static struct sys_dirent ents[MAX_FILES];
-    g_count = 0;
-    int n = sys_listdir(g_dir, ents, MAX_FILES);
-    if (n < 0) n = 0;
-    dirsort(ents, n, DIRSORT_NAME, 0);
+// Name order, ascending -- the same rule dirsort's DIRSORT_NAME applies,
+// so this listing and `/bin/ls` agree about what row 1 is.
+//
+// qsort over an array of fixed-width names, which is the idiom
+// <stdlib.h> here documents: the element IS the string, so strcmp can be
+// the comparator directly. (Not stable, and it does not need to be --
+// two files cannot share a name.)
+static int by_name(const void *a, const void *b) {
+    return strcmp((const char *)a, (const char *)b);
+}
 
-    for (int i = 0; i < n && g_count < MAX_FILES; i++) {
-        if (ents[i].is_dir) continue;
+static void sort_names(void) {
+    qsort(g_names, (size_t)g_count, sizeof g_names[0], by_name);
+    for (int i = 0; i < g_count; i++) g_name_ptrs[i] = g_names[i];
+}
+
+static void reload_listing(void) {
+    g_count = 0;
+
+    // opendir/readdir and fopen/fread rather than sys_listdir/sys_open:
+    // tolibc is deliberately COMPLETE (docs/libc-design.md), so an
+    // ordinary program should read like an ordinary C program. What
+    // stays a raw syscall is nothing here.
+    DIR *d = opendir(g_dir);
+    if (!d) {
+        uui_listbox_set_items(&g_list, g_name_ptrs, 0);
+        ulogf("imgview: cannot list %s\n", g_dir);
+        return;
+    }
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL && g_count < MAX_FILES) {
         char path[PATH_MAX_LEN];
-        join(path, g_dir, ents[i].name);
+        if (!k_path_join(g_dir, e->d_name, path, sizeof path)) continue;
+
+        // THE PROBE DECIDES WHAT A FILE IS, not the extension:
+        // uimg_probe() reads the magic bytes, so a JPEG saved as .dat is
+        // listed and a text file called photo.jpg is not. Every real
+        // image library sniffs for the same reason -- an extension is a
+        // hint typed by a person. Sixteen bytes is more than any probe
+        // needs and one read either way.
         uint8_t head[16];
-        int fd = sys_open(path, 0);
-        if (fd < 0) continue;
-        int64_t got = sys_read(fd, head, sizeof head);
-        sys_close(fd);
-        if (got < 4 || !uimg_probe(head, (size_t)got)) continue;
-        scopy(g_names[g_count], ents[i].name, PATH_MAX_LEN);
+        FILE *f = fopen(path, "rb");
+        if (!f) continue;
+        size_t got = fread(head, 1, sizeof head, f);
+        fclose(f);
+        if (got < 4 || !uimg_probe(head, got)) continue;
+
+        strlcpy(g_names[g_count], e->d_name, sizeof g_names[0]);
         g_name_ptrs[g_count] = g_names[g_count];
         g_count++;
     }
+    closedir(d);
+
+    // SORTED HERE, not by readdir: SYS_LISTDIR returns whatever order
+    // the filesystem walks, and dirsort is the one ordering /bin/ls and
+    // every app's file list share (lib/dirsort.h says why two of them
+    // drifting is a bug nobody looks for). It sorts dirents, so this
+    // sorts the names it kept -- same comparison, applied to the
+    // filtered list.
+    sort_names();
     uui_listbox_set_items(&g_list, g_name_ptrs, g_count);
-    ulogf("imgview: listing %s -- %d image(s)", g_dir, g_count);
+    ulogf("imgview: listing %s -- %d image(s)\n", g_dir, g_count);
 }
 
 static void show(int index) {
@@ -173,7 +197,7 @@ static void show(int index) {
     g_list.selected = index;
 
     char path[PATH_MAX_LEN];
-    join(path, g_dir, g_names[index]);
+    if (!k_path_join(g_dir, g_names[index], path, sizeof path)) return;
 
     struct uimg_info info;
     int rc = uimg_load_info(path, &info);
@@ -195,7 +219,7 @@ static void show(int index) {
             snprintf(g_stat_size, sizeof g_stat_size, "%dx%d %s", info.w, info.h,
                      info.detail);
             snprintf(g_stat_note, sizeof g_stat_note, "decoded in %llu ms", ms);
-            ulogf("imgview: shown %s %dx%d in %llu ms", g_names[index],
+            ulogf("imgview: shown %s %dx%d in %llu ms\n", g_names[index],
                   info.w, info.h, ms);
         }
     }
@@ -207,11 +231,11 @@ static void show(int index) {
             g_have_img = 0;
             uui_image_set(&g_view, NULL);
         }
-        scopy(g_stat_size, "not shown", sizeof g_stat_size);
-        scopy(g_stat_note, uimg_last_error(), sizeof g_stat_note);
-        ulogf("imgview: refused %s -- %s", g_names[index], uimg_last_error());
+        strlcpy(g_stat_size, "not shown", sizeof g_stat_size);
+        strlcpy(g_stat_note, uimg_last_error(), sizeof g_stat_note);
+        ulogf("imgview: refused %s -- %s\n", g_names[index], uimg_last_error());
     }
-    scopy(g_stat_name, g_names[index], sizeof g_stat_name);
+    strlcpy(g_stat_name, g_names[index], sizeof g_stat_name);
 }
 
 // "Set as wallpaper" -- through the SETTINGS REGISTRY, not by writing
@@ -235,8 +259,8 @@ static int set_setting(const char *name, const char *value) {
     struct setting_msg msg;
     memset(&msg, 0, sizeof msg);
     msg.op = SETTING_OP_SET;
-    scopy(msg.name, name, (int)sizeof msg.name);
-    scopy(msg.value, value, (int)sizeof msg.value);
+    strlcpy(msg.name, name, sizeof msg.name);
+    strlcpy(msg.value, value, sizeof msg.value);
     if (sys_setting(&msg) != 0) return 0;
     // SETTING_UNSAVED means live but not persisted, which a caller must
     // not report as success (setting_abi.h says so in as many words).
@@ -246,33 +270,32 @@ static int set_setting(const char *name, const char *value) {
 static void set_wallpaper(struct uapp *a, const char *mode) {
     if (!mode) {
         int ok = set_setting("desktop.wallpaper", "none");
-        scopy(g_stat_note, ok ? "wallpaper cleared" : "could not clear wallpaper",
+        strlcpy(g_stat_note, ok ? "wallpaper cleared" : "could not clear wallpaper",
               sizeof g_stat_note);
-        ulogf("imgview: wallpaper none -- %s", ok ? "ok" : "FAILED");
+        ulogf("imgview: wallpaper none -- %s\n", ok ? "ok" : "FAILED");
         uapp_redraw(a);
         return;
     }
     if (g_list.selected < 0 || g_list.selected >= g_count) return;
 
-    if (k_strcmp(g_dir, WALLPAPER_DIR) != 0) {
-        scopy(g_stat_note, "only files in /usr/share/wallpapers", sizeof g_stat_note);
-        ulogf("imgview: wallpaper refused -- %s is not %s", g_dir, WALLPAPER_DIR);
+    if (strcmp(g_dir, WALLPAPER_DIR) != 0) {
+        strlcpy(g_stat_note, "only files in /usr/share/wallpapers", sizeof g_stat_note);
+        ulogf("imgview: wallpaper refused -- %s is not %s\n", g_dir, WALLPAPER_DIR);
         uapp_redraw(a);
         return;
     }
 
     // The setting's value is the filename without its extension.
     char stem[PATH_MAX_LEN];
-    scopy(stem, g_names[g_list.selected], PATH_MAX_LEN);
-    for (int i = 0; stem[i]; i++) {
-        if (stem[i] == '.') { stem[i] = '\0'; break; }
-    }
+    strlcpy(stem, g_names[g_list.selected], sizeof stem);
+    char *dot = strrchr(stem, '.');
+    if (dot) *dot = '\0';
 
     int ok = set_setting("desktop.wallpaper", stem);
     ok = set_setting("desktop.wallpaper_mode", mode) && ok;
     snprintf(g_stat_note, sizeof g_stat_note, "%s wallpaper: %s, %s",
              ok ? "set" : "could not set", stem, mode);
-    ulogf("imgview: wallpaper %s mode %s -- %s", stem, mode, ok ? "ok" : "FAILED");
+    ulogf("imgview: wallpaper %s mode %s -- %s\n", stem, mode, ok ? "ok" : "FAILED");
     uapp_redraw(a);
 }
 
@@ -310,52 +333,28 @@ static void layout_all(int cw, int ch) {
 // `layout image` is emitted FIRST on every draw, so a parser has a frame
 // boundary and cannot report a popup that closed three frames ago as
 // still open (the trap tools/menubar_test.py documents).
-static void emit(const char *prefix, const int *v, int n) {
-    char b[112];
-    int i = 0;
-    while (prefix[i]) { b[i] = prefix[i]; i++; }
-    for (int k = 0; k < n; k++) {
-        int m = snprintf(b + i, sizeof b - (unsigned)i, " %d", v[k]);
-        if (m > 0) i += m;
-    }
-    b[i++] = '\n';
-    b[i] = '\0';
-    sys_eprint(b);
-}
-
 static void log_layout(void) {
     int x, y, w, h;
 
-    { int v[4] = { g_view.x, g_view.y, g_view.w, g_view.h };
-      emit("imgview: layout image", v, 4); }
+    ulogf("imgview: layout image %d %d %d %d\n", g_view.x, g_view.y, g_view.w, g_view.h);
     // Where the PICTURE landed inside that box, which is not the same
     // rect: a letterboxed image is smaller than its widget, and a test
     // sampling the widget would be sampling the bars.
-    if (uui_image_drawn_rect(&g_view, &x, &y, &w, &h)) {
-        int v[4] = { x, y, w, h };
-        emit("imgview: layout picture", v, 4);
-    }
-    { int v[4] = { g_list.x, g_list.y, g_list.w, g_list.h };
-      emit("imgview: layout list", v, 4); }
-    { int v[4] = { g_menu.x, g_menu.y, g_menu.w, g_menu.h };
-      emit("imgview: layout menubar", v, 4); }
+    if (uui_image_drawn_rect(&g_view, &x, &y, &w, &h))
+        ulogf("imgview: layout picture %d %d %d %d\n", x, y, w, h);
+    ulogf("imgview: layout list %d %d %d %d\n", g_list.x, g_list.y, g_list.w, g_list.h);
+    ulogf("imgview: layout menubar %d %d %d %d\n", g_menu.x, g_menu.y, g_menu.w, g_menu.h);
     for (int i = 0; i < (int)(sizeof menu_items / sizeof menu_items[0]); i++) {
         if (!uui_menubar_title_rect(&g_menu, i, &x, &y, &w, &h)) continue;
-        int v[5] = { i, x, y, w, h };
-        emit("imgview: layout title", v, 5);
+        ulogf("imgview: layout title %d %d %d %d %d\n", i, x, y, w, h);
     }
     for (int l = 0; l < uui_menubar_depth(&g_menu); l++) {
-        if (uui_menubar_popup_rect(&g_menu, l, &x, &y, &w, &h)) {
-            int v[5] = { l, x, y, w, h };
-            emit("imgview: layout popup", v, 5);
-        }
-        for (int i = 0; uui_menubar_item_rect(&g_menu, l, i, &x, &y, &w, &h); i++) {
-            int v[6] = { l, i, x, y, w, h };
-            emit("imgview: layout item", v, 6);
-        }
+        if (uui_menubar_popup_rect(&g_menu, l, &x, &y, &w, &h))
+            ulogf("imgview: layout popup %d %d %d %d %d\n", l, x, y, w, h);
+        for (int i = 0; uui_menubar_item_rect(&g_menu, l, i, &x, &y, &w, &h); i++)
+            ulogf("imgview: layout item %d %d %d %d %d %d\n", l, i, x, y, w, h);
     }
-    { int v[1] = { g_list.selected };
-      emit("imgview: layout selected", v, 1); }
+    ulogf("imgview: layout selected %d\n", g_list.selected);
 }
 
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
@@ -461,12 +460,14 @@ int main(int argc, char **argv) {
     if (argc > 1 && argv[1][0]) {
         struct sys_stat st;
         if (sys_stat(argv[1], &st) == 0 && !st.is_dir) {
-            scopy(g_dir, argv[1], PATH_MAX_LEN);
-            int n = (int)strlen(g_dir);
-            while (n > 1 && g_dir[n - 1] != '/') n--;
-            if (n > 1) g_dir[n - 1] = '\0';
+            // A file: browse the directory it is in. k_path_dirname() is
+            // the kernel's, KTESTed, and linked into ring 3 -- walking
+            // back over the string by hand here would be the fourth copy
+            // of that loop in this tree.
+            if (!k_path_dirname(argv[1], g_dir, sizeof g_dir))
+                strlcpy(g_dir, DEFAULT_DIR, sizeof g_dir);
         } else {
-            scopy(g_dir, argv[1], PATH_MAX_LEN);
+            strlcpy(g_dir, argv[1], sizeof g_dir);
         }
     }
 
@@ -490,7 +491,7 @@ int main(int argc, char **argv) {
     g_view.max_w = WIN_W;
     g_view.max_h = WIN_H;
 
-    scopy(g_stat_name, "no image", sizeof g_stat_name);
+    strlcpy(g_stat_name, "no image", sizeof g_stat_name);
 
     struct uapp_desc desc = {
         .title        = "Image Viewer",

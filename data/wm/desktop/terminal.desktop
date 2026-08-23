@@ -2,4 +2,7 @@
 Name=Terminal
 Exec=/bin/wm/apps/uterm
 Category=apps
-Icon=T
+Icon=terminal
+# The window calls itself this; the Exec basename is different, so the
+# taskbar could not otherwise find this entry (freedesktop's StartupWMClass).
+AppId=terminal

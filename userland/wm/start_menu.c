@@ -1,5 +1,6 @@
 // See start_menu.h.
 #include "start_menu.h"
+#include "wm/icon_cache.h"
 #include "wm_internal.h"
 #include "confirm_dialog.h"
 #include "ui/uui.h"
@@ -78,7 +79,13 @@ int start_menu_w(void) {
         int n = (int)k_strlen(wm_system_actions[i].label);
         if (n > max_chars) max_chars = n;
     }
-    return max_chars * ugfx_char_w() + 20;
+    // ROOM FOR THE ICON COLUMN, whether or not every row has one:
+    // rows with an icon indent their label by the row height, and a
+    // width that ignored it would clip the longest label the moment
+    // artwork arrived. Reserved unconditionally so the menu does not
+    // change width when an icon file appears or goes missing.
+    int icon_col = ugfx_char_h() + 2;   // item_h - 4 plus its gap
+    return max_chars * ugfx_char_w() + 20 + icon_col;
 }
 
 // Shared by start_menu_draw() and start_menu_handle_click() so the two
@@ -157,11 +164,27 @@ void start_menu_draw(int mx, int my) {
             row_fg = (i == flash_index) ? flash_fg : fg;
             ugfx_fill_rect(wm_surface(), menu_x, y, menu_w, item_h, row_bg);
         }
+        // THE ICON, at the row's own height, and the label indented past
+        // it. Both derive from item_h rather than from a pixel constant,
+        // so a larger font gives larger icons and the row stays
+        // proportioned (docs/gui-guidelines.md: layout is font-derived).
+        const struct gui_app *app = gui_app_visible_at(GUI_SHOW_STARTMENU, i);
+        int isz = item_h - 4;
+        // THE INDENT IS UNCONDITIONAL, the icon is not. A row whose app
+        // has no artwork (Crash Test ships without any, on purpose) still
+        // starts its label in the same column, so the menu reads as a
+        // list rather than as a ragged left edge -- which is what every
+        // real menu does with a missing icon.
+        int text_x = menu_x + 8 + isz;
+        const struct uimg *ico = icon_get(app->icon_name, isz);
+        if (ico)
+            ugfx_blit_alpha(wm_surface(), menu_x + 4, y + 2, ico->w, ico->h,
+                            ico->px, ico->w);
         // Clipped: an app name longer than the menu is wide would
         // otherwise be drawn through the border (docs/gui-guidelines.md).
-        ugfx_draw_string_clipped(wm_surface(), menu_x + 8, y + 3, menu_w - 16,
-                                 gui_app_visible_at(GUI_SHOW_STARTMENU, i)->name,
-                                 row_fg, row_bg);
+        ugfx_draw_string_clipped(wm_surface(), text_x, y + 3,
+                                 menu_x + menu_w - 8 - text_x,
+                                 app->name, row_fg, row_bg);
     }
     if (wm_system_action_count > 0) {
         int divider_y = menu_y + app_rows * item_h;
