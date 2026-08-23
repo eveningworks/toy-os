@@ -33,6 +33,7 @@
 #include "file_picker.h"
 #include "desktop.h"
 #include "wm_tray.h"
+#include "wm_taskbar.h"
 #include "cursor_theme.h"
 #include "kapi.h"
 #include "rt/sys.h"
@@ -836,6 +837,13 @@ void wm_run(void) {
         // to the wrong file.
         wmwd_phase("wallpaper");
         desktop_poll_config();
+
+        // The Start button's appearance, on the same counter. Its own
+        // phase for the watchdog's sake but not because it is slow --
+        // unchanged it is one compare, and a change costs one icon
+        // decode that the cache then keeps.
+        wmwd_phase("startbutton");
+        taskbar_poll_config();
 
         // Drain everything the kernel has queued for us, then read the
         // position out of it. One pump per frame, fully draining -- see

@@ -920,6 +920,30 @@ real scanout hardware does. Do not write a pixel assertion for one.
   wallpaper saturates them -- establish the precondition, do not weaken
   the assertion.
 
+- **THE START BUTTON'S APPEARANCE IS A REGISTERED SETTING:
+  `desktop.start_button` = `text` | `icon` | `both`.** Registered in
+  `kernel/lib/start_button_config.c` as a PERSIST-ONLY descriptor
+  sharing `/etc/desktop.conf` with the wallpaper -- which is what makes
+  it `desktop.`-namespaced, since a namespace is the registered name of
+  the FILE. Three choices rather than a boolean because that is XFCE's
+  Whisker Menu verbatim (Icon / Title / Icon and title) and KDE's
+  launcher option, and because a boolean cannot say `both`, which is
+  what Windows 95 through 7 shipped. **The default is `text`, and that
+  is a testing decision as much as a taste one**: the button's width is
+  derived from what is in it and every window button starts to the right
+  of it, so changing the default would move the whole strip under every
+  pixel-based GUI check at once. **The mark is `/usr/share/icons/start.qoi`**,
+  a name like any other icon (`START_ICON`), drawn by
+  `tools/gen_icons.py`; it is deliberately NOT an app pictogram, since
+  the button opens a menu of all of them. **`start_mark()` in
+  `wm_render.c` is the ONE decision about whether a mark is shown** --
+  the width, the drawing and `gui taskbar --json` all ask it, because a
+  width that says "icon" while the drawing falls back to "text" is a
+  narrow button with a clipped word in it, and that is exactly what
+  missing artwork would produce if the three decided separately. **A
+  tool that changes it must set it back**, since `make iso` re-seeds
+  `disk.img` by sync and a written setting outlives the run.
+
 - **AN ICON IS A NAME, IT IS CACHED, AND IT IS COMPOSITED.** A `.desktop`
   entry's `Icon=` is a NAME resolved to `/usr/share/icons/<name>.qoi`
   (freedesktop's rule, and the same filename-is-the-name convention

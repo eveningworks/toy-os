@@ -592,6 +592,7 @@ whenever a headline here tells you something you did not already know.
 - **TEXT ON A WALLPAPER IS `ugfx_draw_string_shadowed()`, NEVER A GUESSED `bg`** -- `UGFX_TRANSPARENT` blends against what is really on the surface (the one path that reads back), and the shadow's shade is DERIVED from the ink's luminance, because no single ink is legible on every photograph.
 - **`uui_image` IS THE ONLY WIDGET THAT OWNS MEMORY, AND IT MUST BE RELEASED.**
 - **THE WALLPAPER IS A REGISTERED SETTING, AND ITS VALUE IS A NAME** -- `desktop.wallpaper`, a filename stem under `/usr/share/wallpapers` or `none`; a GUI test measuring ink over the desktop must turn it off first.
+- **THE START BUTTON'S APPEARANCE IS A REGISTERED SETTING** -- `desktop.start_button` = `text` | `icon` | `both` (XFCE Whisker's three-way), default `text` so the strip's geometry is unchanged; `start_mark()` in `wm_render.c` is the ONE decision the width, the drawing and `gui taskbar --json` all ask, or a missing `start.qoi` yields an icon-width button with a text label in it.
 
 ### Storage, the filesystem, and /etc
 

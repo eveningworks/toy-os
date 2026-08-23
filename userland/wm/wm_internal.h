@@ -60,6 +60,9 @@ static inline struct ugfx_surface *wm_surface(void) { return &g_wm_screen.back; 
 // regions) and wm_render.c (drawing them), which is why they live here
 // instead of being static in just one of those files.
 #define START_LABEL "Start"
+// The Start button's mark, when `desktop.start_button` asks for one --
+// a NAME under /usr/share/icons like any other icon, not a path.
+#define START_ICON  "start"
 #define WIN_LABEL_MAX_CHARS 7 // how many chars of a window's title the taskbar button shows
 
 int start_btn_w(void);
@@ -305,6 +308,11 @@ const struct uimg *title_icon(int idx, int *out_x, int *out_y, int *out_size);
 // Which .desktop icon name a window's app_id resolves to, or NULL --
 // see wm.c. The taskbar and the title bar both ask.
 const char *wm_window_icon_name(int idx);
+
+// The Start button's mark and its rect, or NULL when the button shows
+// the word instead (`text` mode, or artwork missing from the disk).
+// Same drawn-and-reported-are-one-answer rule as title_icon() above.
+const struct uimg *start_icon(int *out_x, int *out_y, int *out_size);
 
 // Which resize cursor (if any) to show -- WM_CURSOR_H/V are the
 // straight-edge cases (dragging the right or bottom edge alone),

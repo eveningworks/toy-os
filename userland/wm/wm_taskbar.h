@@ -68,6 +68,37 @@ int taskbar_layout(struct taskbar_button *out, int max);
 // title bar asks it too, so it is wm_window_icon_name() in wm.c.
 int taskbar_icon_size(void);
 
+// HOW THE START BUTTON LOOKS: the word, the mark, or both --
+// `desktop.start_button`, an enum the registry owns
+// (kernel/lib/start_button_config.c). XFCE's Whisker Menu offers this
+// same three-way (Icon / Title / Icon and title) and KDE's launcher the
+// same choice against an icon-only default; a boolean cannot express
+// `both`, which is what Windows 95 through 7 shipped.
+//
+// IT LIVES HERE BECAUSE THE STRIP'S GEOMETRY DEPENDS ON IT. The Start
+// button's width is derived from what is inside it (start_btn_w() in
+// wm_render.c), and everything else on the strip starts to the right of
+// that -- so the mode has to be one answer three files agree on, the
+// same rule the icon column above states.
+enum start_button_mode {
+    START_BUTTON_TEXT,   // "Start", as it has always been -- the DEFAULT
+    START_BUTTON_ICON,   // the mark alone, KDE Plasma's default
+    START_BUTTON_BOTH,   // mark then word, Windows 95's
+};
+enum start_button_mode taskbar_start_mode(void);
+
+// The mark's edge length inside the Start button, or 0 when this mode
+// draws no mark. Same "one geometry calculation" rule as
+// taskbar_icon_size(), and the same reason: wm_render.c blits at it and
+// start_btn_w() reserves it.
+int start_icon_size(void);
+
+// Re-reads `desktop.start_button` if anything on the filesystem has
+// changed. Called once per frame from wm.c, beside desktop_poll_config()
+// and for the same reason -- there is no inotify here, so a generation
+// counter is what says "ask again". The idle cost is one compare.
+void taskbar_poll_config(void);
+
 // How many windows the last taskbar_layout() could not place at all.
 // Nonzero only when even collapsed, floor-width buttons overflow the
 // strip. Read by the debug console so a test can assert the strip

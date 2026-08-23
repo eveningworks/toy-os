@@ -30,7 +30,11 @@ that can tell the difference.
      itself reports, with the title shifted clear of it -- and clicking
      it opens the window menu, as Windows' system-menu icon and
      Breeze's window-menu button do.
-  6. The cache is a CACHE: repainting many times does not grow it.
+  6. The Start button honours `desktop.start_button` (text | icon |
+     both): the mark is the start.qoi file, and the STRIP RE-LAYS OUT
+     around it -- which is the half a screenshot of the button alone
+     cannot tell you.
+  7. The cache is a CACHE: repainting many times does not grow it.
 
     python3 tools/vm.py start
     python3 tools/icons_test.py
@@ -49,6 +53,12 @@ POSITIVE CONTROLS, both run against this tool:
     moves, which is why that check is paired with "the title starts
     clear of it": a rect with no picture in it is a clickable square
     the user cannot see, and only the ink check can tell.
+  * make start_btn_w() ignore the mode and always return the text
+    width -> the Start mark still draws (over the label's space) and
+    only the "the strip re-lays out" check goes red. That check is the
+    reason the others are not enough: every appearance check here would
+    pass a build where the button's width never changed and the window
+    buttons beside it therefore sat on top of it.
   * point icon_get() at a name that does not exist -> the desktop, menu
     and corner checks go red and the fallback check stays green. It also
     exposed a harness bug worth keeping fixed: the guest's log line about
@@ -422,7 +432,113 @@ def run(dbg, qmp, tmp, res):
         dbg.click(900, 400)
         time.sleep(0.5)
 
-    # --- 6. the cache is a cache -------------------------------------
+    # --- 6. the Start button -----------------------------------------
+    #
+    # Three appearances of ONE control, and the check that matters is
+    # not "the mark is drawn" -- it is that everything else on the strip
+    # MOVED. The Start button's width is derived from what is in it and
+    # every window button starts to the right of that, so a build that
+    # drew the mark without re-deriving the width would look perfect in
+    # a screenshot of the button and have the window buttons sitting on
+    # top of it.
+    def taskbar_json():
+        """`gui taskbar --json`, or None.
+
+        THE LAST {...}, not the whole reply -- the kernel talks on this
+        channel too, so a log line can land in front of the JSON. Same
+        rule the taskbar section above already had to learn.
+        """
+        import json as _j
+        tb = dbg.send("gui taskbar --json") or ""
+        st = tb.rfind('{"y"')
+        if st < 0:
+            st = tb.rfind("{")
+        if st < 0:
+            return None
+        try:
+            return _j.loads(tb[st:])
+        except ValueError:
+            return None
+
+    def start_w():
+        """The Start button's width, from the guest's own layout."""
+        j = taskbar_json()
+        return j["start"]["w"] if j else None
+
+    widths = {}
+    for mode in ("text", "icon", "both"):
+        dbg.send(f"sh config set desktop.start_button {mode}")
+        # The WM adopts it on its next generation poll, so wait for the
+        # OBSERVABLE (the strip moved) rather than sleeping a guess --
+        # except for the first mode, where nothing has moved yet.
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            w0 = start_w()
+            if w0 is not None and w0 not in widths.values():
+                break
+            time.sleep(0.4)
+        widths[mode] = start_w()
+    res.check("every Start button mode lays the strip out differently",
+              len(set(v for v in widths.values() if v is not None)) == 3,
+              f"Start button widths: {widths}")
+    # AND IN THE RIGHT ORDER, which the set above cannot see: icon-only
+    # is the narrowest and icon+text the widest, so a build that had the
+    # three widths merely DIFFERENT (say, by drawing the mark in the
+    # wrong mode) would still fail here.
+    if all(v is not None for v in widths.values()):
+        res.check("icon-only is narrowest and icon+text widest",
+                  widths["icon"] < widths["text"] < widths["both"],
+                  f"{widths}")
+
+    # The mark itself is the file, checked the same way every other icon
+    # here is. Left in `icon` mode for it, since that is where the mark
+    # is centred and easiest to locate from the reported geometry alone.
+    dbg.send("sh config set desktop.start_button icon")
+    time.sleep(2.0)
+    im5 = shot(qmp, tmp, "icons-start.png")
+    p5 = im5.load()
+    tj = taskbar_json()
+    # THE MARK'S RECT COMES FROM THE GUEST, the same start_icon() that
+    # blitted it -- not a centred position re-derived here, which would
+    # be a second copy of the placement rule and would drift from it.
+    mark = (tj or {}).get("start", {}).get("mark")
+    res.check("the Start button reports its mark's rect in icon mode",
+              bool(mark), f"start: {(tj or {}).get('start')}")
+    if mark:
+        mx, my, msz = mark["x"], mark["y"], mark["size"]
+        swant = host_icon("start", msz)
+        # The button's own background, sampled from a corner the mark
+        # does not reach.
+        btn_bg = p5[6, my + msz - 1]
+        worst, at = 0, None
+        for dx, dy in ((msz // 4, msz // 4), (3 * msz // 4, 3 * msz // 4)):
+            got = p5[mx + dx, my + dy]
+            exp = over(swant.getpixel((dx, dy)), btn_bg)
+            if diff(got, exp) > worst:
+                worst, at = diff(got, exp), ((dx, dy), got, exp)
+        res.check("and it is start.qoi", worst <= TOL + 12,
+                  f"worst channel difference {worst} at {at}, button bg {btn_bg}")
+
+    # AND `text` MODE REPORTS NO MARK, which is the half that proves the
+    # setting reaches the drawing rather than only the width.
+    dbg.send("sh config set desktop.start_button text")
+    deadline = time.time() + 8
+    while time.time() < deadline:
+        tj = taskbar_json()
+        if tj and tj["start"].get("mark") is None:
+            break
+        time.sleep(0.4)
+    res.check("text mode reports no mark at all",
+              (taskbar_json() or {}).get("start", {}).get("mark") is None,
+              "a mark is still reported with the button set to text")
+
+    # The check above already left it on `text`, which is the default --
+    # deliberate, not incidental. `make iso` re-seeds disk.img by SYNC
+    # and never reformats, so a setting written here outlives the run
+    # and every later tool would inherit it (CLAUDE.md's dirty-fixture
+    # rule).
+
+    # --- 7. the cache is a cache -------------------------------------
     #
     # "The icon is drawn" says nothing about whether the file is decoded
     # once or on every frame. This forces a dozen repaints and requires

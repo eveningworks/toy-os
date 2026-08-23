@@ -161,7 +161,37 @@ def icon_uidemo():
     return im
 
 
+def icon_start():
+    """The Start button's mark -- NOT an app icon, and deliberately not
+    shaped like one.
+
+    Every other icon here is a pictogram of what an app IS. This one has
+    no app behind it: it opens a menu of all of them. So it is an
+    abstract mark -- four rounded quadrants around a gap, the "all your
+    things" shape Windows' logo tile and KDE's launcher both settle on
+    -- rather than a picture of anything, which would read as a shortcut
+    to one particular program in the very menu it opens.
+
+    It also has NO PLATE. The Start button draws its own background
+    (uui_button_draw, in the taskbar's accent colour), so a plate here
+    would be a second rounded rectangle inside the first.
+    """
+    im = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    # A 2x2 grid of rounded squares -- GNOME's "show applications" mark
+    # and the shape KDE's default launcher icon reduces to at small
+    # sizes. Drawn nearly edge to edge because it has no plate to sit
+    # inside: at the ~12px the taskbar scales it to, a 4px margin is a
+    # third of the artwork.
+    gap, cell, m = 5, 23, 6
+    for cx in (m, m + cell + gap):
+        for cy in (m, m + cell + gap):
+            d.rounded_rectangle([cx, cy, cx + cell, cy + cell], radius=5, fill=INK)
+    return im
+
+
 ICONS = {
+    "start": icon_start,
     "notepad": icon_notepad,
     "terminal": icon_terminal,
     "calculator": icon_calculator,

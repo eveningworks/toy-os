@@ -511,14 +511,30 @@ static void cmd_menu(struct dbg_out *o, int json) {
 static void cmd_taskbar(struct dbg_out *o, int json) {
     int bar_y = screen_h - taskbar_h;
     int sw = start_btn_w();
+    char start_mark_buf[48];
     static struct taskbar_button btns[64];
     int nb = taskbar_layout(btns, 64);
 
     if (json) {
+        // The MARK's own rect goes in beside the button's, from the same
+        // start_icon() draw_taskbar() blits with -- null in `text` mode
+        // and when the artwork is missing, which is exactly when the
+        // button falls back to the word. A test reads this rather than
+        // re-deriving a centred position and drifting from it.
+        {
+            int mx, my, msz;
+            if (start_icon(&mx, &my, &msz)) {
+                k_snprintf(start_mark_buf, sizeof start_mark_buf,
+                           "{\"x\":%d,\"y\":%d,\"size\":%d}", mx, my, msz);
+            } else {
+                k_strlcpy(start_mark_buf, "null", sizeof start_mark_buf);
+            }
+        }
         dbg_out_printf(o, "{\"y\":%d,\"h\":%d,\"start\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,"
-                     "\"cx\":%d,\"cy\":%d},\"tray_x\":%d,\"hidden\":%d,\"buttons\":[",
+                     "\"cx\":%d,\"cy\":%d,\"mark\":%s},\"tray_x\":%d,\"hidden\":%d,\"buttons\":[",
                      bar_y, taskbar_h, 0, bar_y, sw, taskbar_h,
-                     sw / 2, bar_y + taskbar_h / 2, tray_left(), taskbar_hidden());
+                     sw / 2, bar_y + taskbar_h / 2, start_mark_buf,
+                     tray_left(), taskbar_hidden());
         dbg_out_reserve(o, 48); // room for the ending -- see cmd_windows()
         int listed = 0;
         for (int i = 0; i < nb; i++) {

@@ -3917,3 +3917,44 @@ length or picks one point and is wrong everywhere else -- and the value
 would have to be recomputed on every wallpaper change and every window
 move behind it. A shadow is a fixed cost that works on any backdrop
 without knowing anything about it.
+
+## The Start button's appearance is three choices, not two, and the default is the boring one
+
+`desktop.start_button` takes `text`, `icon` or `both`. A boolean was the
+obvious shape and is wrong: it cannot express `both`, which is what
+Windows 95 through 7 actually shipped and what most people picture when
+they hear "Start button". XFCE's Whisker Menu offers exactly these three
+(Icon / Title / Icon and title) and KDE's Application Launcher exposes
+"Icon and text" against an icon-only default, so three is the mainstream
+shape rather than an invention here.
+
+**The default is `text` for a testing reason, not a taste one.** The
+Start button's width is derived from what is inside it, and every window
+button on the strip starts to the right of that -- so changing the
+default would move the entire taskbar under every pixel-based GUI check
+in one commit. Opt-in costs nothing; a moved baseline costs a day of
+re-reading tools that failed for a reason unrelated to what they test.
+
+**One decision, three readers.** `start_mark()` decides whether a mark
+is shown at all; `start_btn_w()`, `draw_taskbar()` and
+`gui taskbar --json` all ask it rather than each deciding. That is not
+tidiness -- the failure it prevents is specific. The artwork can be
+missing from the disk (the same case Crash Test exercises for app
+icons), and the button then falls back to the word. If the width decided
+independently it would still reserve an icon-sized square, giving a
+narrow button with a clipped label in it: two of the three agreeing and
+one not. The same reasoning as `title_icon()` returning the picture and
+the rect together.
+
+**The mark is not a pictogram.** Every other icon in `tools/gen_icons.py`
+draws what an app IS. This button has no app behind it -- it opens a
+menu of all of them -- so it is an abstract 2x2 grid, GNOME's "show
+applications" mark. A picture of something would read as a shortcut to
+one particular program in the very menu it opens. It also has no plate,
+because the button already draws its own background and a second rounded
+rectangle inside the first is just a border.
+
+**And it is a NAME, not a path** (`START_ICON` -> `/usr/share/icons/start.qoi`),
+the same rule app icons, font faces and cursor themes already follow, so
+it goes through `icon_get()` and is cached decoded-and-scaled like
+everything else on the strip.

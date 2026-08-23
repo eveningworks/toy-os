@@ -6,6 +6,8 @@
 #include "context_menu.h"
 #include "ui/uui.h"
 #include "kapi.h"
+#include "rt/sys.h"
+#include "wm/wm_conf.h"   // struct setting_msg, SETTING_OP_*
 
 #define TB_GAP 4
 
@@ -19,6 +21,53 @@ static int btn_floor(void) { return 3 * ugfx_char_w() + 16; }
 static int g_hidden;
 
 int taskbar_hidden(void) { return g_hidden; }
+
+// --- the Start button's appearance ------------------------------------
+//
+// See wm_taskbar.h. Read through the SETTINGS REGISTRY rather than
+// straight out of /etc/desktop.conf, which is the note
+// desktop.c's wallpaper_reload() carries and the reason is the same:
+// the registry knows the default and the legal values, so reading the
+// file here would put a second copy of the default in a second place
+// and the two would disagree the first time either moved.
+static enum start_button_mode g_start_mode = START_BUTTON_TEXT;
+
+enum start_button_mode taskbar_start_mode(void) { return g_start_mode; }
+
+int start_icon_size(void) {
+    if (g_start_mode == START_BUTTON_TEXT) return 0;
+    int s = taskbar_h - 10;
+    return s < 8 ? 0 : s;
+}
+
+void taskbar_poll_config(void) {
+    static uint64_t seen_gen;
+    static int primed;
+    uint64_t gen = sys_fs_generation();
+    if (primed && gen == seen_gen) return;
+    seen_gen = gen;
+    primed = 1;
+
+    enum start_button_mode want = START_BUTTON_TEXT;
+    struct setting_msg msg;
+    for (unsigned i = 0; i < sizeof msg; i++) ((uint8_t *)&msg)[i] = 0;
+    msg.op = SETTING_OP_GET;
+    k_strlcpy(msg.name, "desktop.start_button", sizeof msg.name);
+    if (sys_setting(&msg) == 0 && msg.value[0]) {
+        if (k_strcmp(msg.value, "icon") == 0) want = START_BUTTON_ICON;
+        else if (k_strcmp(msg.value, "both") == 0) want = START_BUTTON_BOTH;
+    }
+    if (want == g_start_mode) return;
+
+    g_start_mode = want;
+    // THE WHOLE STRIP MOVES, not just the button: every window button
+    // starts to the right of start_btn_w(), so a mode change relays all
+    // of them. Damaging the strip rather than the screen because that
+    // is all that can have changed -- the Start MENU is closed-height
+    // zero when it is not open, and opening it damages its own rect.
+    redraw_pending = 1;
+    wm_damage_rect(0, screen_h - taskbar_h, screen_w, taskbar_h);
+}
 
 // Do these two windows belong to the same application?
 //

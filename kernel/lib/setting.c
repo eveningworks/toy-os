@@ -17,6 +17,7 @@
 #include "keyboard_config.h"
 #include "cursor_theme_config.h"
 #include "wallpaper_config.h"
+#include "start_button_config.h"
 #include "target.h"
 #include "setting_abi.h"
 #include "config_file.h"
@@ -545,6 +546,7 @@ void settings_init(void) {
     keyboard_config_setting_register();
     cursor_theme_setting_register();
     wallpaper_setting_register();
+    start_button_setting_register();
     target_setting_register();
     tunables_register();
     config_files_scan();

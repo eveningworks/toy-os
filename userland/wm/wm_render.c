@@ -24,8 +24,65 @@
 // The one screen this process composites into -- see wm_internal.h.
 struct ugfx_screen g_wm_screen;
 
+// THE START BUTTON'S MARK, AND ITS WIDTH, DERIVED FROM ONE ANSWER.
+//
+// Three functions could each have decided independently whether this
+// button shows a mark -- the width, the drawing, and the debug report.
+// They must not: a width that says "icon" while the drawing says "text"
+// is a narrow button with a clipped word in it, which is exactly what
+// happens when the artwork is missing from the disk and only one of
+// them notices.
+//
+// So `start_mark()` is the single decision, and everything else asks
+// it. NULL means "draw the word": `text` mode, or a mode that wanted a
+// mark and could not have one.
+static const struct uimg *start_mark(int *out_size) {
+    int size = start_icon_size();          // 0 in text mode
+    if (size <= 0) return 0;
+    const struct uimg *ico = icon_get(START_ICON, size);
+    if (!ico) return 0;                    // asked for, not on disk
+    *out_size = size;
+    return ico;
+}
+
+// THE START BUTTON'S WIDTH, and everything else on the strip starts to
+// the right of it (wm_taskbar.c's layout) -- so this is where the three
+// appearance modes turn into geometry.
+//
+// Measured, not multiplied, for the word: ugfx_text_width() rather than
+// length * char_w, since a proportional face makes those disagree (see
+// docs/conventions/gui.md's first GUI rule). The old form was wrong the
+// day runtime fonts landed and merely looked right on a monospace one.
 int start_btn_w(void) {
-    return (int)k_strlen(START_LABEL) * ugfx_char_w() + 24;
+    int size = 0;
+    const struct uimg *ico = start_mark(&size);
+    int label_w = ugfx_text_width(START_LABEL);
+    if (!ico) return label_w + 24;
+    if (taskbar_start_mode() == START_BUTTON_ICON) {
+        // A SQUARE, near enough -- one text button's worth of padding,
+        // so an icon-only button still reads as a button rather than as
+        // a picture floating on the strip.
+        return size + 16;
+    }
+    return size + 5 + label_w + 24;
+}
+
+// WHERE THE MARK GOES, or NULL when the word is drawn instead -- the
+// same one-function-for-both rule title_icon() states: this is what
+// draw_taskbar() blits and what `gui taskbar --json` reports, so a test
+// cannot re-derive it differently.
+const struct uimg *start_icon(int *out_x, int *out_y, int *out_size) {
+    int size = 0;
+    const struct uimg *ico = start_mark(&size);
+    if (!ico) return 0;
+    // CENTRED when it is alone in the button, left-aligned when a word
+    // follows it -- which is what makes `icon` read as a square button
+    // and `both` read as a labelled one.
+    *out_x = (taskbar_start_mode() == START_BUTTON_ICON)
+                 ? 4 + (start_btn_w() - size) / 2 : 4 + 8;
+    *out_y = screen_h - taskbar_h + 5;
+    *out_size = size;
+    return ico;
 }
 
 int win_btn_w(void) {
@@ -571,7 +628,29 @@ static void draw_taskbar(void) {
     int sbw = start_btn_w();
 
     uint32_t start_bg = start_menu_open ? ugfx_rgb(70, 70, 90) : ugfx_rgb(50, 50, 60);
-    uui_button_draw(wm_surface(), 4, ty + 4, sbw, taskbar_h - 8, START_LABEL, start_bg, fg, UUI_STATE_REST);
+    // THE THREE MODES. `text` draws the button exactly as it always
+    // did, label centred by uui_button_draw(); the other two draw the
+    // button with an EMPTY label and place the mark (and, for `both`,
+    // the word) by hand -- the same arrangement the window buttons on
+    // this strip already use, and for the same reason: a centred label
+    // beside a left-hand icon reads as neither centred nor aligned.
+    int sx, sy, sisz;
+    const struct uimg *sico = start_icon(&sx, &sy, &sisz);
+    // The button carries the word only when there is no mark -- with
+    // one, the label is placed by hand beside it (BOTH) or omitted
+    // (ICON), because uui_button_draw() CENTRES its label and a centred
+    // label beside a left-hand mark reads as neither.
+    uui_button_draw(wm_surface(), 4, ty + 4, sbw, taskbar_h - 8,
+                     sico ? "" : START_LABEL, start_bg, fg, UUI_STATE_REST);
+    if (sico) {
+        ugfx_blit_alpha(wm_surface(), sx, sy, sico->w, sico->h, sico->px, sico->w);
+        if (taskbar_start_mode() == START_BUTTON_BOTH) {
+            ugfx_draw_string_clipped(wm_surface(), sx + sisz + 5,
+                                     ty + 4 + (taskbar_h - 8 - ugfx_char_h()) / 2,
+                                     4 + sbw - 8 - (sx + sisz + 5) + 4,
+                                     START_LABEL, fg, start_bg);
+        }
+    }
 
     // The buttons come from taskbar_layout(), which is also what
     // wm_input.c hit-tests against -- this loop used to walk the windows
