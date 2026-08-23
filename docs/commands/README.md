@@ -59,6 +59,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`cd`](cd.md)
 - [`df`](df.md)
 - [`edit`](edit.md)
+- [`imginfo`](imginfo.md)
 - [`less`](less.md)
 - [`ln`](ln.md)
 - [`ls`](ls.md)

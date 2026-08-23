@@ -53,6 +53,7 @@
 #include "ui/uui_dropdown.h"
 #include "ui/uui_textview.h"
 #include "ui/uui_canvas.h"
+#include "ui/uui_image.h"
 #include "ui/uui_menubar.h"
 #include "ui/uui_statusbar.h"
 #include "ui/uui_focus.h"

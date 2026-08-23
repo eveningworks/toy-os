@@ -586,6 +586,9 @@ whenever a headline here tells you something you did not already know.
 - **AN APP LOGS THROUGH `ulog()`/`ulogf()`, not a hand-rolled `logf_`.**
 - **THE TOOLKIT OWNS THE KEYBOARD FOCUS RING: set `uapp_desc.focus`.**
 - **A WIDGET REPORTS ITS RECT THROUGH THE `bounds` OP; a test-facing geometry log is `uapp_log_layout(a, prefix)`.**
+- **AN IMAGE IS DECODED IN RING 3, AND `lib/uimg.h`'s CODEC TABLE IS THE EXTENSION POINT** -- never add an image parser to the kernel, and `-ENOTSUP` (a file this build refuses) is not `-EINVAL` (a broken one).
+- **`uui_image` IS THE ONLY WIDGET THAT OWNS MEMORY, AND IT MUST BE RELEASED.**
+- **THE WALLPAPER IS A REGISTERED SETTING, AND ITS VALUE IS A NAME** -- `desktop.wallpaper`, a filename stem under `/usr/share/wallpapers` or `none`; a GUI test measuring ink over the desktop must turn it off first.
 
 ### Storage, the filesystem, and /etc
 
@@ -979,7 +982,7 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   `screen_surface_test.py`, `scrollbar_test.py`,
   `single_instance_test.py`, `taskmgr_test.py`, `uapp_test.py`,
   `uiclient_test.py`, `uidemo_test.py`, `uterm_test.py`,
-  `winclient_test.py`.
+  `winclient_test.py`, `imgview_test.py`.
 - **Run on demand, not in the gate** -- `ansi_cursor_test.py` (ANSI
   cursor movement and erasing, as PIXELS -- it kills the desktop first,
   since the console is what it photographs), `init_test.py` (init and
@@ -1036,11 +1039,16 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
 - **Disk images, from the host** -- `seed_disk.py` (the format-aware
   front end `make iso` calls), `tfs2_writer.py`, `tfs3_writer.py`.
 - **Diagnose** -- `panic_resolve.py` (name every address in a panic),
+  `uimg_hostcheck.py` (the JPEG decoder against libjpeg on the HOST,
+  over a couple of hundred generated images -- the breadth
+  `/tests/uimg_test` cannot carry),
   `pixel_probe.py` (read exact pixel values -- how a GUI change is
   verified), `screenshot_diff.py`, `iso_guard.py`.
 - **Generated data and the build** -- `gen_version.sh` / `set_version.sh`
   (versioning), `genfont.py` / `genttf.py`, `gen_kbs.py` (keyboard
   layouts from XKB data), `gen_cursors.py` (cursor themes),
+  `gen_imgdata.py` (the wallpapers, and the JPEG decoder's test vectors
+  -- whose reference pixels are LIBJPEG's, not this decoder's),
   `genrelocs.py` (the kernel's own relocation table), `gen_syms.py` (the
   panic symbol table), `gen_decisions_index.py`, `gen_commands_index.py`,
   `gen_next_up.py` (the roadmap's "Next up" section, from the `**NEXT**`

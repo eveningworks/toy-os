@@ -107,7 +107,7 @@ void config_files_scan(void) {
     config_file_register("timezones", "/etc/timezones",
                          "The timezone city database", 1);
     config_file_register("desktop", "/etc/desktop.conf",
-                         "Desktop icon positions", 1);
+                         "Desktop icon positions and wallpaper", 1);
     config_file_register("keymaps", "/etc/kbs",
                          "Keyboard layout tables (dir)", 1);
     config_file_register("apps", "/usr/wm/desktop",

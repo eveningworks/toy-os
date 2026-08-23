@@ -39,7 +39,13 @@
 // has no allocator, so it sizes its list from that constant, and the
 // two disagreeing means a client silently showing only part of the
 // registry. The assert below is what stops that being silent.
-#define SETTING_MAX        16 // registered settings
+// 24 since the wallpaper landed: the registry held 15 and the KTESTs
+// register scratch settings ON TOP of whatever the kernel already has,
+// so a ceiling of 16 meant two new settings failed a test that was
+// about something else entirely (`setting_register(&g_scratch2)`). If
+// this is hit again, raise it -- the cost is a few KB of bss in System
+// Settings, which sizes its arrays from the ABI twin below.
+#define SETTING_MAX        24 // registered settings
 _Static_assert(SETTING_MAX == SETTING_ABI_MAX,
                "SETTING_MAX and SETTING_ABI_MAX must agree -- a client sizes "
                "its array from the ABI one and would truncate the list");

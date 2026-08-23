@@ -12,6 +12,9 @@
 #include "icon_grid.h"
 #include <stdio.h>
 #include "wm/wm_conf.h"
+#include "wm/wm_log.h"
+#include "lib/uimg.h"
+#include "ui/uui_image.h"
 
 #define DESKTOP_ICON_SIZE 48
 #define DESKTOP_ICON_X 16
@@ -25,6 +28,14 @@
 #define DESKTOP_DOUBLE_CLICK_TICKS 30 // ~300ms at the PIT's 100Hz -- same order of magnitude as start_menu.c's flash
 #define DESKTOP_MAX_ICONS 32 // sanity cap on gui_app_registry_count -- registry currently holds 11 entries
 #define DESKTOP_CONF_PATH "/etc/desktop.conf"
+// The plain background, shown when there is no wallpaper and behind a
+// letterboxed one.
+#define DESKTOP_BG ugfx_rgb(24, 60, 90)
+// Where wallpapers live, and what a machine shows when the setting
+// cannot be read at all (the registry's own default is the one that
+// normally answers -- see wallpaper_reload()).
+#define WALLPAPER_DIR     "/usr/share/wallpapers"
+#define WALLPAPER_DEFAULT "aurora"
 
 // Selection AND the in-progress band, both owned by the shared module
 // (api/rubberband.h) rather than by this file. That is what lets a
@@ -205,13 +216,156 @@ static void desktop_load_positions(void) {
     }
 }
 
+// --- the wallpaper ----------------------------------------------------
+//
+// A background image, read from DESKTOP_CONF_PATH's `Wallpaper` key and
+// placed according to `WallpaperMode` (fill / fit). Image Viewer writes
+// both; nothing else has to know about either.
+//
+// THE DESKTOP DECODES IT, IN RING 3, and that is the whole layering
+// point: KWin and Mutter do not parse image formats -- their shell
+// decodes a wallpaper through a toolkit and hands the compositor
+// pixels. Here the desktop IS a ring-3 process, so it can simply call
+// uimg_load(); the kernel gained nothing to parse and nothing to be
+// exploited through (lib/uimg.h has the argument in full).
+//
+// It is drawn through uui_image, the same widget Image Viewer uses.
+// That is worth more than the few lines it saves: the fit maths, the
+// centring, the cropping and -- the part that matters at this size --
+// the CACHE of the scaled copy are one implementation. Rescaling
+// 1280x720 on every desktop repaint would be a stutter that looks like
+// the compositor's fault.
+static struct uimg wallpaper_src;        // the decoded file, full size
+static struct uui_image wallpaper_view;  // placement, and the scaled cache
+static char wallpaper_name[SETTING_ABI_VALUE_MAX];
+static char wallpaper_mode[16];
+static int wallpaper_loaded;
+
+// Reads the two settings and reloads only when something actually
+// changed -- so this is safe to call on a generation bump, which fires
+// for any write anywhere on the filesystem.
+//
+// IT ASKS THE SETTINGS REGISTRY, not the file. `wallpaper` and
+// `wallpaper_mode` are registered settings (kernel/lib/wallpaper_config.c),
+// so the registry knows their defaults and their legal values; reading
+// /etc/desktop.conf directly here would mean a second copy of the
+// default in a second place, and the two would disagree the first time
+// either moved.
+static void wallpaper_reload(void) {
+    char name[sizeof wallpaper_name];
+    char mode[sizeof wallpaper_mode];
+
+    k_strlcpy(name, WALLPAPER_DEFAULT, sizeof name);
+    k_strlcpy(mode, "fill", sizeof mode);
+    struct setting_msg msg;
+    for (unsigned i = 0; i < sizeof msg; i++) ((uint8_t *)&msg)[i] = 0;
+    msg.op = SETTING_OP_GET;
+    k_strlcpy(msg.name, "desktop.wallpaper", sizeof msg.name);
+    if (sys_setting(&msg) == 0 && msg.value[0]) k_strlcpy(name, msg.value, sizeof name);
+    for (unsigned i = 0; i < sizeof msg; i++) ((uint8_t *)&msg)[i] = 0;
+    msg.op = SETTING_OP_GET;
+    k_strlcpy(msg.name, "desktop.wallpaper_mode", sizeof msg.name);
+    if (sys_setting(&msg) == 0 && msg.value[0]) k_strlcpy(mode, msg.value, sizeof mode);
+
+    if (k_strcmp(name, wallpaper_name) == 0 && k_strcmp(mode, wallpaper_mode) == 0)
+        return;
+
+    k_strlcpy(wallpaper_name, name, sizeof wallpaper_name);
+    k_strlcpy(wallpaper_mode, mode, sizeof wallpaper_mode);
+
+    // THE WHOLE DESKTOP IS NOW WRONG, so say so. Without this the new
+    // background sits in memory until something else happens to damage
+    // the desktop -- and because the taskbar clock, a mouse move and a
+    // window opening all do, it LOOKED like it worked while depending on
+    // whatever came next. A wallpaper set on an idle desktop appeared
+    // seconds later or not at all.
+    // THE WHOLE DESKTOP IS NOW WRONG, so declare it rather than waiting
+    // to be noticed. Honest scope: this makes the change PROMPT, not
+    // correct -- the desktop is repainted on its own cadence anyway, so
+    // a wallpaper set without this still appears, about a second later.
+    // Measured, by removing these two lines and watching
+    // tools/imgview_test.py stay green: the tool cannot tell the two
+    // apart, and its comment says so rather than claiming a bug this
+    // fixed.
+    redraw_pending = 1;
+    wm_damage_rect(0, 0, screen_w, screen_h);
+
+    // "fit" letterboxes the whole picture; "fill" covers the screen and
+    // crops, which is what every desktop defaults to.
+    uui_image_set_fit(&wallpaper_view,
+                      k_strcmp(mode, "fit") == 0 ? UIMG_FIT_CONTAIN : UIMG_FIT_COVER);
+
+    uui_image_set(&wallpaper_view, NULL);
+    if (wallpaper_loaded) {
+        uimg_free(&wallpaper_src);
+        wallpaper_loaded = 0;
+    }
+    if (!name[0] || k_strcmp(name, "none") == 0) {
+        wm_logf("desktop: no wallpaper");
+        return;
+    }
+
+    // A NAME, not a path -- the same rule a font face and a cursor theme
+    // follow (kernel/lib/wallpaper_config.c says why).
+    char path[80];
+    k_snprintf(path, sizeof path, "%s/%s.jpg", WALLPAPER_DIR, name);
+
+    uint64_t t0 = sys_ticks();
+    int rc = uimg_load(path, &wallpaper_src);
+    if (rc < 0) {
+        // NOT fatal and NOT silent: the desktop falls back to its plain
+        // colour and says why, because a background that quietly does
+        // not appear is indistinguishable from a compositor bug.
+        wm_logf("desktop: wallpaper %s not shown -- %s", path, uimg_last_error());
+        return;
+    }
+    wallpaper_loaded = 1;
+    uui_image_set(&wallpaper_view, &wallpaper_src);
+    wm_logf("desktop: wallpaper %s %dx%d mode %s in %u ticks", name,
+            wallpaper_src.w, wallpaper_src.h, mode,
+            (unsigned)(sys_ticks() - t0));
+}
+
+// Called once per frame from wm.c, beside the .desktop-entry poll and
+// for the same reason: there is no inotify here, so a global generation
+// counter is what says "something on disk changed, ask again". The idle
+// cost is one compare.
+void desktop_poll_config(void) {
+    static uint64_t seen_gen;
+    static int primed;
+    uint64_t gen = sys_fs_generation();
+    if (!primed) {
+        primed = 1;
+        seen_gen = gen;
+        wallpaper_reload();      // the first call is the initial load
+        return;
+    }
+    if (gen == seen_gen) return;
+    seen_gen = gen;
+    wallpaper_reload();
+}
+
+// Paints the background: the wallpaper if there is one, the plain colour
+// otherwise. The plain colour is also what shows THROUGH a letterboxed
+// ("fit") wallpaper, which is why it is the widget's own background
+// rather than a separate fill.
+static void draw_background(void) {
+    if (wallpaper_loaded) {
+        wallpaper_view.x = 0;
+        wallpaper_view.y = 0;
+        wallpaper_view.w = screen_w;
+        wallpaper_view.h = screen_h;
+        uui_image_draw(wm_surface(), &wallpaper_view);
+        return;
+    }
+    ugfx_fill(wm_surface(), DESKTOP_BG);
+}
+
 void desktop_draw(void) {
     desktop_load_positions();
     struct icon_grid g = current_grid();
 
-    ugfx_fill(wm_surface(), ugfx_rgb(24, 60, 90)); // the plain background color every prior build used --
-                                     // real wallpaper images are blocked on the not-yet-built
-                                     // image decoder, see docs/roadmap.md.
+    draw_background();
 
     uint32_t label_fg = UTHEME_WHITE;
     uint32_t icon_fg = ugfx_rgb(230, 230, 235);

@@ -805,6 +805,14 @@ void wm_run(void) {
         wmwd_phase("desktop_entries");
         poll_desktop_entries();
 
+        // The wallpaper, on the same generation counter. Its own
+        // watchdog phase because it is the one that can be SLOW: a
+        // decode is ~180 ms for a 1280x720 JPEG under TCG, and a slow
+        // frame blamed on 'desktop_entries' would send the next reader
+        // to the wrong file.
+        wmwd_phase("wallpaper");
+        desktop_poll_config();
+
         // Drain everything the kernel has queued for us, then read the
         // position out of it. One pump per frame, fully draining -- see
         // wm_rawin.c on why partial draining backs up.

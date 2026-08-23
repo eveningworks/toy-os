@@ -98,6 +98,11 @@ def set_size(dbg, px):
     time.sleep(1.2)
 
 
+def set_setting(dbg, key, value):
+    dbg.send(f"gui spawn /bin/config set {key} {value}")
+    time.sleep(0.8)
+
+
 def wait_log(dbg, needle, timeout=8.0):
     """The most recent COMPOSITOR log line containing `needle`, waited for.
 
@@ -406,6 +411,11 @@ def main():
     # wrong. Via PROP first so the switch to MONO is a real change --
     # setting a setting to the value it already holds does nothing, by
     # design, and would leave nothing to observe.
+    # AND A FLAT DESKTOP: text_left() finds the leftmost inked column over
+    # a patch of desktop, so a wallpaper puts "ink" in every column and
+    # every measurement collapses to the patch's own edge. Same class as
+    # the face and size below -- establish the state, do not inherit it.
+    set_setting(dbg, "desktop.wallpaper", "none")
     set_size(dbg, 14)
     set_face(dbg, PROP)
     dbg.logs()  # drain, so every wait below sees only what IT caused

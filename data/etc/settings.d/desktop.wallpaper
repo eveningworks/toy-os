@@ -1,0 +1,3 @@
+Description=The desktop background, from /usr/share/wallpapers
+Widget=dropdown
+Choice.none=No wallpaper (plain colour)

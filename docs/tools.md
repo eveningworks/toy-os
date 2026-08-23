@@ -787,6 +787,37 @@ manual steps to be worth automating:
   disarmed, and a ring-3 crash kills the app WITHOUT taking the desktop
   with it. In `gui_regress.py`, which is only safe because the kernel
   half is disarmed unless `faultinject` is on the command line.
+- **`gen_imgdata.py`** -- generates BOTH things this repo ships as
+  image data: `data/wallpapers/*.jpg` (the desktop backgrounds, drawn
+  here rather than committed as somebody's photograph, so the repo owns
+  every pixel it carries) and `userland/tests/uimg_vectors.h` (the JPEG
+  decoder's test vectors). One tool because both are "a JPEG produced by
+  libjpeg for toy-os to read back", and splitting them would leave two
+  scripts with the same encoder settings to keep in step. **The vectors'
+  reference pixels are LIBJPEG's, not this decoder's**, which is the
+  whole point of them: a decoder compared against its own output is
+  self-consistent, and so is one with a wrong IDCT constant. Both
+  outputs are COMMITTED, like the cursor themes and the baked font, so a
+  checkout without Pillow still builds. Nine vectors, chosen for what
+  each can fail at on its own: 4:4:4/4:2:2/4:2:0, a 17x9 image whose
+  partial MCU catches a decoder that forgets to crop its padding,
+  grayscale, restart markers (a decoder ignoring them drifts in BANDS
+  after the first interval), and three refusals -- progressive,
+  truncated, not-an-image -- which must come back as the RIGHT errno,
+  since a decoder answering "broken" to everything would pass a test
+  that only asked whether it failed.
+- **`uimg_hostcheck.py`** -- the same `userland/lib/uimg_jpeg.c`,
+  compiled with the host gcc and run against ~180 Pillow-generated
+  images (four patterns x five sizes x three subsamplings x three
+  qualities, plus grayscale and restart markers), every pixel compared
+  against libjpeg's. **It exists because a guest test can only carry the
+  vectors somebody committed**, and a JPEG decoder's bugs live in the
+  combinations. It is how the chroma upsampler was found to be visibly
+  wrong: replication needed a tolerance of 70 to pass, and the triangle
+  filter libjpeg uses brought the worst case to 3. `--file` checks a
+  real photograph; `--tolerance` tightens the bar. Not in any gate: it
+  needs Pillow, and `/tests/uimg_test` is the version that runs in the
+  guest.
 - **`gen_cursors.py`** -- generates the shipped cursor themes into
   `data/cursors/`, which the Makefile's `seed` target stages onto the
   image. **Into `data/`, NOT `seed/sync/`** -- that tree is gitignored
@@ -1034,6 +1065,25 @@ manual steps to be worth automating:
   clock is the control**: it must CHANGE, which is what proves the
   capture pipeline can see motion at all (without it, a harness handing
   back one cached frame would report a beautifully steady desktop). In
+  `gui_regress.py`.
+- **`imgview_test.py`** -- JPEG decoding all the way to a screen (15
+  checks), and the only one of the three decoder checks that can see a
+  pixel. Its oracle is the host: `data/wallpapers/aurora.jpg` is
+  1280x720 and so is the screen, so the default wallpaper must match
+  libjpeg's decode of that file PIXEL FOR PIXEL, with nothing resampled
+  in between -- and the control beside it is that the same samples must
+  NOT match the other wallpaper. Then Image Viewer: it lists a directory
+  by PROBING its files, decodes, reports where the picture landed, and
+  the fit modes are asserted by geometry and by pixels (letterbox bars
+  must be one flat colour, which a cropped picture cannot satisfy).
+  Finally "Set as wallpaper" is followed across a process boundary --
+  the viewer writes `/etc/desktop.conf`, the desktop notices through the
+  filesystem generation counter, and the background becomes the other
+  image. Both positive controls in its docstring were run: a swapped
+  Cb/Cr reddens exactly the four pixel comparisons and no layout check.
+  It restores the original wallpaper on the way out, and its comment
+  says why that matters -- leaving "no wallpaper" behind fails the NEXT
+  run's first check, which cost a confusing red run. In
   `gui_regress.py`.
 - **`blank_window_test.py`** -- opens EVERY app in the registry and
   requires its window to contain more than a flat fill. Reads the app

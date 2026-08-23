@@ -72,7 +72,10 @@ QEMU, and it does not stop at "hello world from the kernel":
   processes too, owning their windows over **TWP**, the Toy Window
   Protocol, served by **TWS** and programmed against with **Toykit**. The
   kernel keeps the framebuffer and the protocol; everything above them is
-  a process, and killing the desktop is survivable.
+  a process, and killing the desktop is survivable. Pictures are ring-3 too: a
+  **baseline JPEG decoder** in the toolkit's library gives the desktop a
+  real wallpaper and an Image Viewer, with no image parser anywhere in
+  the kernel.
 - **Its own test suite** — `make test` boots the OS headless, runs
   in-kernel tests including deliberate fault injection, and exits
   non-zero on failure. A separate GUI suite drives the desktop over a
@@ -398,6 +401,23 @@ set the baked one carries — ASCII plus six Nordic letters — so its other
 few thousand glyphs are parsed and unreachable until UTF-8 lands, and
 kerning is read from the legacy `kern` table only, so a face that keeps
 its kerning in GPOS renders unkerned.
+
+**Images are decoded in ring 3, by a library, and the kernel never sees
+one.** A baseline JPEG decoder (`userland/lib/uimg_jpeg.c`) sits behind
+a codec table keyed on magic bytes, so a second format is a row and a
+file rather than a branch; it does the whole job in fixed point, since
+there is no floating point in either ring, and upsamples chroma with
+libjpeg's triangle filter so the output matches what any other viewer
+shows. Files it cannot handle — progressive, arithmetic-coded, 12-bit,
+CMYK — are refused *by name*, which is a different answer from "corrupt"
+and reads as one. That is the opposite of the call made for fonts, which
+are parsed in ring 0 because the console needs glyphs before any process
+exists; nothing in ring 0 needs a picture. What proves it works is
+libjpeg itself: the same source file is compiled on the host and
+compared against libjpeg over a couple of hundred generated images, nine
+committed vectors run the same comparison in ring 3, and a GUI tool
+checks the framebuffer against libjpeg's decode of the wallpaper pixel
+for pixel.
 
 Double-buffered rendering with damage-region clipping, and a
 compositor whose damage invariant is enforced by a verification mode

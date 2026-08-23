@@ -44,6 +44,13 @@
 // wm_render_frame() in place of its old bare gfx_clear() fill.
 void desktop_draw(void);
 
+// Re-reads /etc/desktop.conf when the filesystem generation moves, which
+// is how the wallpaper Image Viewer just set appears without either
+// program knowing about the other. One integer compare when nothing has
+// changed -- the same mechanism, and the same reasoning, as wm.c's live
+// reload of /usr/wm/desktop.
+void desktop_poll_config(void);
+
 // Per-tick update for an icon drag in progress -- called from wm.c's
 // wm_run() loop every tick, same shape as wm_input.c's
 // wm_update_drag_resize(): while the left button stays held, the

@@ -179,6 +179,14 @@ TESTS = [
     # costs it nothing.
     ("query_test", 0,
      ["query_test: all checks passed"], ["FAIL"]),
+    # The JPEG decoder in the ring it runs in. Its reference pixels are
+    # LIBJPEG's, recorded by tools/gen_imgdata.py -- a decoder compared
+    # against its own output is self-consistent, which a decoder with a
+    # wrong IDCT constant also is. The breadth (182 images across every
+    # subsampling and quality) is tools/uimg_hostcheck.py's job; this one
+    # proves the same .c file works on this heap, in a real process.
+    ("uimg_test", 0,
+     ["uimg_test: all checks passed"], ["FAIL"]),
     # Not a self-checker: it exists to prove an exit code survives the
     # round trip out of ring 3, so the CODE is the whole assertion.
     ("exit_test", 42, [], []),

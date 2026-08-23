@@ -496,8 +496,12 @@ The desktop is in ring 3 already. These are what it still lacks.
 
 ### Desktop visual polish
 
-- [ ] Basic image decoder (JPEG or similar)
-- [ ] Real wallpaper images
+- [x] ~~Basic image decoder (JPEG or similar)~~ DONE 2026-08-23 -- baseline JPEG in ring 3, checked against libjpeg
+- [x] ~~Real wallpaper images~~ DONE 2026-08-23 -- `/usr/share/wallpapers`, a `Wallpaper` key, fit/fill
+- [ ] Progressive JPEG -- refused by name today; it needs a second decoder, since coefficients arrive across many scans
+- [ ] A second codec, to prove the codec table is one: PNG (needs inflate, which is reusable) or QOI (200 lines, and gives an encoder)
+- [ ] EXIF orientation -- a photograph shot in portrait is shown the way its pixels are stored
+- [ ] A wallpaper picker in System Settings, rather than only Image Viewer's Desktop menu
 - [x] ~~Desktop icon repositioning/dragging~~ done
 - [ ] Per-icon context menus (Rename/Properties)
 - [ ] Full dirty-rect compositor
@@ -532,7 +536,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] Desktop calendar widget
 - [x] ~~Control panel with pluggable applets~~ done
 - [ ] Find/replace in Notepad
-- [ ] An image viewer (needs the desktop-polish milestone's decoder)
+- [x] ~~An image viewer~~ DONE 2026-08-23 -- Image Viewer browses a directory rather than opening a file dialog
 - [ ] Scientific mode for Calculator
 - [ ] CPU/memory history graphs in Task Manager
 - [ ] Per-app settings persisted via `/etc/<app>.conf` (the convention exists, only `desktop.conf` uses it)

@@ -1,0 +1,5 @@
+# Image Viewer -- see this directory's README.md for the format.
+Name=Image Viewer
+Exec=/bin/wm/apps/imgview
+Category=apps
+Icon=P

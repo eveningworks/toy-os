@@ -117,6 +117,13 @@ def main():
     # at the desktop) leaves its size behind, and every measurement here
     # is relative to a baseline that would then be silently wrong. This
     # cost a confusing 9x ratio before it was set explicitly.
+    # THE DESKTOP BACKGROUND MUST BE FLAT for any of this to measure a
+    # cursor: every count below is "pixels differing from the background"
+    # over a patch of desktop, and a wallpaper makes every pixel differ.
+    # Both cursor checks saturated at the full patch (7744 = 88x88) the
+    # day a default wallpaper shipped, which reads exactly like the theme
+    # switch doing nothing.
+    set_setting(dbg, "desktop.wallpaper", "none")
     set_setting(dbg, "cursor_size", "normal")
     set_setting(dbg, "cursor_theme", "bold")
     set_setting(dbg, "cursor_theme", "default")

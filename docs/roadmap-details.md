@@ -820,13 +820,39 @@ rather than imply otherwise.
 
 ### Desktop visual polish
 
-Basic image support (a JPEG or similar decoder, plus a way to blit a
-decoded image into the framebuffer) -- the prerequisite for real wallpaper
-images and window-chrome visual polish, see `docs/decisions.md` for that
-discussion.
+~~Basic image support~~ -- done: a BASELINE JPEG decoder in RING 3
+(`userland/lib/uimg_jpeg.c`, behind `uimg.h`'s codec table), with
+`/bin/imginfo` to inspect a file, `uui_image` to put one in a layout,
+and Image Viewer to look at one. The kernel contains no image parser at
+all and gained no syscall -- see `docs/decisions.md` on why this differs
+from the font parser, which IS in ring 0. Progressive, arithmetic-coded,
+12-bit and CMYK files are refused BY NAME (`-ENOTSUP`, with a sentence)
+rather than half-decoded into a plausible wrong picture.
 
-Real wallpaper images for the desktop background (`apps/wm/desktop.c`
-currently fills a plain color) -- blocked on the image decoder above.
+What it is checked against, since a decoder tested against itself is
+worthless: libjpeg, in three places. `tools/uimg_hostcheck.py` compiles
+the same `.c` with the host gcc and compares ~180 generated images pixel
+by pixel (worst channel difference 3, which is the level two conforming
+IDCTs are allowed to differ by); `/tests/uimg_test` runs nine committed
+vectors in ring 3, including the three refusals; `tools/imgview_test.py`
+compares the FRAMEBUFFER against libjpeg's decode of the same file. The
+host harness earned its place immediately -- it showed the first
+version's chroma upsampling was visibly wrong (replication needed a
+tolerance of 70; libjpeg's triangle filter brought it to 3).
+
+Measured cost, since it decides whether a wallpaper is affordable: 97 ms
+to decode 1280x720 under TCG, once, at desktop start.
+
+~~Real wallpaper images~~ -- done: `/usr/share/wallpapers` holds one
+JPEG per background and two REGISTERED SETTINGS choose between them --
+`desktop.wallpaper` (a filename stem, or `none`) and
+`desktop.wallpaper_mode` (`fill`/`fit`). So `config set
+desktop.wallpaper dusk` works from any shell, System Settings gets a row
+with no edit to it, and Image Viewer's Desktop menu goes through the
+same registry rather than writing a private key. The desktop notices
+through the generation counter it already polls for `.desktop` files.
+See `docs/decisions.md` for why the value is a NAME rather than a path,
+and for the two GUI tools that had to start turning the wallpaper off.
 
 ~~Desktop icon repositioning/dragging~~ -- done, see the commit that added it: each icon now has real per-icon {col, row} state
 (`apps/wm/desktop.c`'s `icon_col`/`icon_row`), draggable via a reusable

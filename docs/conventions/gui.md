@@ -873,3 +873,49 @@ real scanout hardware does. Do not write a pixel assertion for one.
   a test drives a control by asking rather than guessing pixels. Add
   `bounds` to a widget when a test needs to drive it; don't re-hand-roll
   the per-app geometry logger.
+
+- **AN IMAGE IS DECODED IN RING 3, AND `lib/uimg.h`'s CODEC TABLE IS THE
+  EXTENSION POINT.** `uimg_load(path, &im)` gives a `struct uimg` of
+  0x00RRGGBB pixels -- exactly what `ugfx_blit()` takes -- and
+  `uimg_free()` releases it. **Do NOT add an image parser to the
+  kernel**: this is the one place toy-os deliberately does NOT copy its
+  own font-parsing decision, because the console needs glyphs before any
+  process exists and nothing in ring 0 needs a picture (Linux's only
+  in-kernel image is an uncompressed PPM; Windows' codecs are user-mode
+  WIC; a Wayland compositor is handed pixels). A second format is a
+  `struct uimg_codec` row in `uimg.c` plus a file beside it -- never an
+  `if (jpeg) ... else if (png)`. **Errors are negative errnos and the two
+  are not interchangeable**: `-ENOTSUP` is a valid file this build
+  refuses (progressive JPEG, CMYK, 12-bit), `-EINVAL` is a broken one,
+  and `uimg_last_error()` carries the sentence. Formats are identified by
+  PROBING magic bytes, not by extension.
+
+- **`uui_image` IS THE ONLY WIDGET THAT OWNS MEMORY, AND IT MUST BE
+  RELEASED.** It borrows the `struct uimg` (the app decodes and owns
+  that) but owns the SCALED copy it caches, so an app that re-points one
+  at image after image without `uui_image_release()` leaks a screen's
+  worth of pixels each time. The cache is the reason the widget exists at
+  all rather than three lines of `ugfx_blit()` per app: resampling a
+  screen-sized picture costs tens of milliseconds and a repaint happens
+  on every damage event. **Set `max_w`/`max_h` on any viewer of arbitrary
+  files** -- natural size is the image's own, and `uui_layout` OVERFLOWS
+  rather than shrinking, so a 4000px photograph otherwise asks for a
+  4000px window and gets one.
+
+- **THE WALLPAPER IS A REGISTERED SETTING, AND ITS VALUE IS A NAME.**
+  `desktop.wallpaper` (a filename stem under `/usr/share/wallpapers`, or
+  `none`) and `desktop.wallpaper_mode` (`fill`/`fit`), registered in
+  `kernel/lib/wallpaper_config.c` as PERSIST-ONLY descriptors -- the
+  kernel owns the description, the ring-3 desktop owns the behaviour and
+  notices through the generation counter. So `config set
+  desktop.wallpaper dusk` works from any shell, System Settings gets a
+  row for free. An unknown name is STORED, not refused -- the desktop
+  logs why nothing appeared and shows its plain colour, the same as a
+  bogus cursor theme. **A name, not a path**, the same rule `fontface` and cursor
+  themes follow; a picture elsewhere on the disk has to be copied into
+  the directory first, and Image Viewer says so rather than failing
+  quietly. **A GUI test that measures ink over the desktop must turn it
+  off first** (`config set desktop.wallpaper none`): both the cursor and
+  font tools count pixels differing from a FLAT background, and a
+  wallpaper saturates them -- establish the precondition, do not weaken
+  the assertion.

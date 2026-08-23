@@ -3544,3 +3544,194 @@ it before any variant exists is the point: a dark mode is then a
 change tangled up with the mechanism that enables it. See
 `docs/roadmap.md`'s "Theme switching" for what a variant still needs
 (`WIN_EV_THEME` to tell live clients, a dark value per role).
+
+---
+
+## An image decoder is a RING-3 LIBRARY, and the kernel never sees a JPEG
+
+The obvious place for a JPEG decoder in this project is beside
+`kernel/lib/ttf.c`: both parse a complicated file format, both feed
+something drawn, and the font parser is already in ring 0 with every
+read bounds-checked. Putting the image decoder there would have been
+consistent, and it would have been wrong.
+
+**What real systems do.** Linux has no image decoder in the kernel at
+all -- its only in-kernel image is the boot logo, an UNCOMPRESSED PPM
+converted to a C array at build time, precisely so nothing has to parse
+anything. Windows keeps codecs in WIC, a USER-MODE pluggable codec
+framework, and moved even font parsing out of the kernel into
+`fontdrvhost` after a decade of GDI CVEs. Under Wayland the compositor
+never parses an image format: a client hands it a buffer of pixels, and
+KWin and Mutter decode a wallpaper in the shell process through Qt or
+GdkPixbuf.
+
+**Why toy-os follows rather than differs, when it deliberately differs
+for fonts.** The font parser is in ring 0 because the CONSOLE needs
+glyphs before any process exists -- a machine that cannot draw text
+until a disk font has loaded cannot report why the disk font did not
+load. Nothing in ring 0 needs an image. The desktop is a ring-3 process
+now, so the one component that wants a decoded picture can simply call
+`uimg_load()` itself. So the kernel gained no parser, no attack surface
+and no syscall, and a malformed JPEG can at worst kill the one process
+that opened it.
+
+The concrete shape: `userland/lib/uimg.c` + `uimg_jpeg.c`, in
+`libuapp.a`, used by `/bin/imginfo`, Image Viewer and the desktop. The
+kernel is not involved anywhere.
+
+## The codec table is a REGISTRY, with one row, on purpose
+
+`uimg.c` dispatches on a table of `struct uimg_codec` -- probe by magic
+bytes, then info/decode -- while exactly one format exists. A single
+`if (looks_like_jpeg)` would have been shorter.
+
+It is a table because this is the shape every system that ever gained a
+second image format converged on (WIC's codec registry, GdkPixbuf's
+loaders, Qt's image plugins) and because this project already has the
+pattern and has been bitten by not applying it: `display_driver`,
+`block_device`, `clocksource` and `syscall_table.c` are all registries,
+and `tools/check_dispatch.py` exists because `syscall.c` grew to 37
+`else if`s with nothing noticing. Adding PNG or QOI is now a file and a
+row rather than a second mechanism beside the first.
+
+**The probe decides what a file is, not its extension.** Image Viewer
+lists a directory by reading the first sixteen bytes of each file, so a
+JPEG named `.dat` is offered and a text file named `photo.jpg` is not.
+Every real image library sniffs, for the same reason: an extension is a
+hint typed by a person.
+
+## A refusal is a RESULT: `-ENOTSUP` and `-EINVAL` are different answers
+
+The decoder returns `-ENOTSUP` for a progressive JPEG, arithmetic
+coding, 12-bit samples or CMYK, and `-EINVAL` for a file that is
+malformed or truncated -- with a sentence in `uimg_last_error()` either
+way, which is libjpeg's `jpeg_error_mgr` message in effect.
+
+Collapsing the two into "it failed" would be a lie about whose fault it
+is. A progressive JPEG is a perfectly good file that this build cannot
+show; telling a user it is corrupt sends them to re-export a file that
+was never broken. It also makes the refusals testable as behaviour:
+`/tests/uimg_test` asserts the exact code, so a decoder that answered
+"broken" to everything would fail, where a test asking only whether it
+failed would pass it.
+
+Progressive is the one worth naming twice. It is common on the web, and
+it needs a genuinely different decoder -- coefficients arrive across
+many scans and cannot be inverse-transformed until the last one -- so
+half-implementing it would produce a plausible, wrong picture, which is
+the failure mode this project refuses everywhere else too.
+
+## Chroma is upsampled with libjpeg's triangle filter, and the reason is testability as much as quality
+
+The first version replicated chroma samples when expanding a 4:2:0
+image back to full resolution: each stored sample painted a 2x2 block.
+That is the obvious implementation and it is visibly wrong -- a
+saturated edge gains a two-pixel staircase, because the colour step
+lands on a block boundary rather than on the edge.
+
+It was replaced with the TRIANGLE FILTER libjpeg calls "fancy
+upsampling" (3/4 of the nearer stored sample plus 1/4 of the next, in
+each axis), matching libjpeg's arithmetic rather than merely being
+equivalent to it. Two things came out of that, and the second is the
+one worth recording:
+
+- The picture is what every other viewer shows.
+- **The disagreement with libjpeg dropped from 70 to 3 per channel**,
+  which is what makes `tools/uimg_hostcheck.py` a real test. A
+  tolerance of 70 accepts a decoder with a genuinely wrong IDCT; a
+  tolerance of 3 does not. The residual 3 is not slack either -- two
+  conforming IDCT implementations are ALLOWED to differ, since the JPEG
+  spec fixes the transform and not the arithmetic.
+
+The 4:2:2 case is written out separately from the 4:2:0 one even though
+the general form covers it, because libjpeg's `h2v1` path rounds
+differently by one LSB, and that one unit is the difference between
+agreeing to 3 and agreeing to 4.
+
+## The decoder is checked against libjpeg, in three places, and each covers what the others cannot
+
+A decoder tested against its own output is self-consistent, and so is a
+decoder with a wrong round constant -- the same trap
+`docs/roadmap-details.md` records for the encryption milestone. So
+every check here compares against libjpeg:
+
+- **`tools/uimg_hostcheck.py`** compiles `uimg_jpeg.c` with the host gcc
+  and runs ~180 generated images through both. This is the BREADTH: a
+  JPEG decoder's bugs live in the combinations of subsampling, quality
+  and dimensions, which is a sweep of hundreds of files rather than the
+  handful anyone would commit.
+- **`/tests/uimg_test`** runs nine committed vectors in RING 3, on this
+  heap, in a real process -- the gap `/tests/klineedit_test` and
+  `/tests/ttf_test` exist for. It says nothing new about the algorithm
+  and everything about toy-os.
+- **`tools/imgview_test.py`** compares the FRAMEBUFFER against libjpeg's
+  decode of the same file. `aurora.jpg` is 1280x720 and so is the
+  screen, so the default wallpaper is a pixel-for-pixel comparison with
+  nothing resampled in between; its control is that the same samples
+  must NOT match the other wallpaper.
+
+## The wallpaper is a registered SETTING named like a font face, not a path in a file
+
+The first version stored a PATH in `/etc/desktop.conf` under a key
+Image Viewer wrote and the desktop read, with the key's absence meaning
+"take the default" and an empty value meaning "no wallpaper". It worked,
+and it was wrong in a way worth recording: it invented a private
+protocol between two programs for something this system already has a
+mechanism for.
+
+It is two registered settings now -- `desktop.wallpaper` and
+`desktop.wallpaper_mode` (`kernel/lib/wallpaper_config.c`) -- and that
+buys four things a private key could not:
+
+- `config set desktop.wallpaper dusk` works from any shell, and
+  `config list` shows it beside every other setting.
+- System Settings gains a row with no edit to System Settings, because
+  its pages are GENERATED from the registry.
+- A UI has something to OFFER -- the choice list is a directory
+  listing, so dropping a file into `/usr/share/wallpapers` adds a
+  dropdown entry with no code change, exactly as a cursor theme does.
+  (What the registry does NOT do is validate: `config set
+  desktop.wallpaper nosuchimage` is accepted, and the desktop logs why
+  nothing appeared and falls back to its plain colour. That is the same
+  behaviour a bogus cursor theme has, and it is consistency rather than
+  an oversight -- a persist-only setting owned by a ring-3 process has
+  nobody in the kernel who could check it.)
+- A test can establish the desktop's state. That one is not a nicety:
+  `cursor_theme_test.py` and `font_test.py` both measure ink over a
+  patch of DESKTOP, so a wallpaper makes every pixel differ from the
+  background and both tools saturated the moment a default wallpaper
+  shipped. They turn it off now, which is this project's standing rule
+  -- establish the precondition, do not weaken the assertion.
+
+**The value is a NAME, not a path** -- `aurora`, resolved to
+`/usr/share/wallpapers/aurora.jpg`. That is the same rule a font face
+(`fontface`) and a cursor theme already follow here: a user-selectable
+resource is a file in a known directory, named by its filename without
+the extension, so the choice list is a directory listing rather than a
+list somebody maintains. The cost is real and is stated rather than
+hidden: a picture elsewhere on the disk cannot be the wallpaper until it
+is copied in, and Image Viewer says so instead of failing quietly.
+
+The descriptors are PERSIST-ONLY (`.apply` is 0), exactly as the cursor
+theme's are and for the same reason: `setting_register()` takes function
+pointers and a ring-3 process cannot supply one, so the kernel owns the
+DESCRIPTION -- name, label, legal values, which file -- and the desktop
+owns the behaviour, noticing through the generation counter it already
+polls. No image parsing, no path resolution and no policy entered the
+kernel; what entered is a table of names.
+
+## The wallpaper is drawn through `uui_image`, the same widget the viewer uses
+
+The desktop could have blitted its background directly -- it owns the
+screen surface, and a wallpaper is one `ugfx_blit()`. It goes through
+the widget instead, which is what gave `uui_image` its second real
+caller (this project's standing bar for a widget existing at all).
+
+What that buys is not the fit maths, which is small, but the CACHE. A
+scaled copy of a screen-sized picture costs tens of milliseconds to
+produce and the desktop repaints on every damage event; an
+implementation that resampled inside its draw call would stutter in a
+way that reads as the compositor's fault. The widget recomputes the
+scale only when the geometry, the fit mode or the image changes, so a
+resolution change is handled without the desktop containing a word
+about scaling.
