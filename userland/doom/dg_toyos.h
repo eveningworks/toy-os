@@ -46,6 +46,16 @@
 #define TOYKEY_F3           0x9B
 #define TOYKEY_F10          0xA4
 #define TOYKEY_F4           0xA5
+#define TOYKEY_F1           0xAB
+#define TOYKEY_F5           0xAC
+#define TOYKEY_F6           0xAD
+#define TOYKEY_F7           0xAE
+#define TOYKEY_F8           0xAF
+#define TOYKEY_F9           0xB0
+#define TOYKEY_F11          0xB1
+#define TOYKEY_F12          0xB2
+#define TOYKEY_INSERT       0xB3
+#define TOYKEY_PAUSE        0xB8
 #define TOYKEY_SHIFT        0xA7
 #define TOYKEY_CTRL         0xA8
 #define TOYKEY_ALT          0xA9

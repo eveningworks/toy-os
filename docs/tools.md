@@ -1664,6 +1664,13 @@ manual steps to be worth automating:
   `check_dispatch.py` uses. In `preflight.sh`.
 
 
+  **A TRAILING `// dispatch-ok:` ON THE SWITCH'S OWN LINE COUNTS.** It
+  did not, until a construct that had been "waived" that way for months
+  grew past the limit and was reported -- the checker only looked at the
+  lines ABOVE, where a trailing comment can never be. A waiver mechanism
+  that silently does not waive is worse than none: it reads as
+  protection at the call site and provides none.
+
   **IT SKIPS `userland/ports/`.** The rule is about how code in this
   project is structured and its remedies are both EDITS -- rewrite the
   chain, or waive it with a comment -- and vendored source is the one

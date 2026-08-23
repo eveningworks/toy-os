@@ -481,6 +481,7 @@ whenever a headline here tells you something you did not already know.
 
 - **Monotonic time is an INTERFACE, and wall clock is not one of its implementations.**
 - **The kernel's idle work has ONE owner: `scheduler_idle()`**
+- **EVERY KEY REPORTS SOMETHING, AND THE KEYPAD REPORTS CHARACTERS** -- Insert, Menu, the locks, Pause, Print Screen and the keypad used to produce nothing at all; the function row is complete F1-F12; the keypad emits its keycaps' characters rather than new codes; NumLock's off-state is deliberately not modelled; Pause has no release; the fake shifts around Print Screen are dropped.
 - **INPUT DEVICES REGISTER WITH THE INPUT CORE, and the canonical event is evdev -- including `/etc/kbs`, so only the PS/2 driver ever sees a scancode**
 - **VIRTIO INTERRUPTS ARE OPT-IN, and a forgotten ISR read hangs the machine**
 - **USING A SUBSYSTEM BEFORE ITS init() IS A PANIC, not a soft failure**

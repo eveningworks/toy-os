@@ -95,6 +95,58 @@
 #define KEY_ALT               0xA9 // LEFT Alt (Meta)
 #define KEY_ALTGR             0xAA
 
+// --- THE REST OF THE FUNCTION ROW ------------------------------------
+//
+// F2, F3, F4 and F10 got codes first, one per caller, and this header
+// said so: "the four function keys with callers". The row is now
+// complete because something wants the whole of it -- Doom binds F1
+// through F11 (help, save, load, volume, detail, quicksave, end game,
+// messages, quickload, quit, gamma), and half a function row is worse
+// than none: F6 and F9 are quicksave and quickload, which are the two
+// people actually reach for.
+//
+// Numbered in key order rather than in the order they were added, so
+// the block reads as a row. F12 has no caller here and is included
+// anyway -- it is the one key whose absence from a complete-looking run
+// of F1-F11 would look like an oversight rather than a decision.
+#define KEY_F1                0xAB
+#define KEY_F5                0xAC
+#define KEY_F6                0xAD
+#define KEY_F7                0xAE
+#define KEY_F8                0xAF
+#define KEY_F9                0xB0
+#define KEY_F11               0xB1
+#define KEY_F12               0xB2
+
+// --- AND THE REST OF THE KEYBOARD ------------------------------------
+//
+// **EVERY KEY A PC KEYBOARD HAS NOW PRODUCES SOMETHING.** The set above
+// grew one code per caller, which left real keys reporting nothing at
+// all: pressing Insert, the Menu key, either lock key or anything on the
+// numeric keypad was indistinguishable from not pressing a key. That is
+// a bad property for an input layer to have -- an app cannot bind what
+// it never sees, and "does this keyboard even work?" had no answer for a
+// third of the keys on it.
+//
+// The keypad is NOT here, because it does not need codes: it emits the
+// CHARACTERS on the keycaps (`7`, `+`, `.`) and Keypad Enter emits the
+// same `\n` the main Enter does, which is what every OS does and what
+// makes a keypad useful for typing numbers without any app knowing it
+// exists. NumLock's off-state (keypad as arrows) is deliberately NOT
+// modelled -- see keyboard.c.
+//
+// The three LOCK keys report their presses and nothing else: this
+// kernel has no lock STATE, so Caps Lock does not change what a letter
+// key produces. Reporting the press is still worth it -- an app that
+// wants to know is told -- and it is honest about doing nothing more.
+#define KEY_INSERT            0xB3
+#define KEY_MENU              0xB4 // the "context menu" key, right of AltGr
+#define KEY_CAPS_LOCK         0xB5
+#define KEY_NUM_LOCK          0xB6
+#define KEY_SCROLL_LOCK       0xB7
+#define KEY_PAUSE             0xB8
+#define KEY_PRINT_SCREEN      0xB9
+
 // ---- Ctrl and Alt ----
 //
 // These do NOT get KEY_* codes of their own. They're encoded the way a

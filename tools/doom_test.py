@@ -35,6 +35,11 @@ THE ASSERTIONS THAT MATTER, and why each is shaped the way it is:
     because the attract demo animates behind the menu regardless. A
     started game is the one state in which nothing moves, since the
     player is standing still.
+  * **Ctrl FIRES.** Doom's `key_fire` is the abstract KEY_FIRE (0xa3),
+    not a Ctrl keycode, and the platform layer is what maps onto it --
+    this port first mapped Ctrl to KEY_RCTRL, which is bound to nothing,
+    so firing did nothing at all while every menu key worked. Same
+    static-screen oracle, inverted.
   * **It maximizes, and the IMAGE stays 4:3.** Measured from the ink
     rather than from the window: the bars are exactly black and Doom's
     own darkest pixels are not, so scanning in from the edges for a
@@ -234,6 +239,33 @@ def run(dbg, qmp, tmp, res):
               f"{changed:.4f} of pixels still changing -- the attract demo "
               f"is running, so Enter never selected anything. This "
               f"keyboard sends 0x0A and Doom wants KEY_ENTER (0x0D).")
+
+    # --- Ctrl FIRES, which is the other abstract-code trap ------------
+    #
+    # `key_fire` is KEY_FIRE (0xa3) and `key_use` is KEY_USE (0xa2):
+    # ABSTRACT codes that no physical key produces, which Doom expects
+    # the platform layer to map onto. The first version of this port
+    # mapped Ctrl to KEY_RCTRL and let Space through as 0x20 -- both real
+    # Doom key codes, and NEITHER BOUND TO ANYTHING. So the two
+    # most-used controls in the game did nothing, silently, while every
+    # menu key worked.
+    #
+    # The oracle is the standing-still one from above, inverted: the game
+    # is static when idle, so anything that changes the screen while
+    # nobody is moving is the weapon firing. Measured 0.0336 with Ctrl
+    # held against a 0.0000 idle baseline.
+    idle_c = shot("prefire")
+    qmp.key_down("ctrl")
+    time.sleep(1.2)
+    firing = shot("firing")
+    qmp.key_up("ctrl")
+    fired = changed_fraction(idle_c, firing)
+    print(f"        (frame-to-frame change while firing: {fired:.4f})")
+    res.check("Ctrl fires the weapon",
+              fired > 0.005,
+              f"only {fired:.4f} changed while Ctrl was held -- Ctrl is not "
+              f"reaching Doom as KEY_FIRE (0xa3); KEY_RCTRL is bound to "
+              f"nothing")
 
     # --- maximized, and still 4:3 ------------------------------------
     #

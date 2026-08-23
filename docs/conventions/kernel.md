@@ -517,6 +517,39 @@ include there takes the function away from ring 3 silently.
 good documentation, and the silent failure was the defect. See
 `docs/decisions.md` for why not initcall levels.
 
+## EVERY KEY REPORTS SOMETHING, AND THE KEYPAD REPORTS CHARACTERS.
+
+The `KEY_*` set grew one code per caller, which left Insert, the Menu
+key, the three locks, Pause, Print Screen and the whole numeric keypad
+producing NOTHING -- not an unknown code, nothing, because the layout had
+no entry for them and the key was indistinguishable from one nobody
+pressed. **An app cannot bind what it never sees.** Found by porting
+Doom, which binds F1 through F11 against a kernel that emitted four of
+them.
+
+Five things to know:
+
+- **The function row is complete, F1-F12.** Half a row is worse than
+  none -- F6 and F9 are quicksave and quickload.
+- **The keypad emits the characters on its keycaps**, not new codes: its
+  purpose is typing numbers, and an app needing twelve new `KEY_*`
+  values to receive a `7` would be the wrong shape. Keypad Enter is the
+  same `\n` the main Enter sends.
+- **NumLock's off-state is deliberately not modelled.** It needs lock
+  STATE this kernel does not keep for Caps Lock either, and the failure
+  mode is a keypad that types nothing while the light says otherwise.
+- **Pause is six bytes and has no release** (`E1 1D 45 E1 9D C5`), so it
+  is the one key that reports a press with no matching release. A client
+  tracking held keys must tolerate that -- and already must, for the
+  reason `abi/win_proto.h` gives about grabs.
+- **The fake shifts around Print Screen are dropped.** PS/2 brackets
+  PrtSc with `E0 2A` / `E0 AA`; taking them at face value reports a
+  Shift nobody pressed, and leaves `shift_pressed` stuck on if the
+  release half is missed.
+
+The lock keys report their press and change nothing, which is honest
+about there being no lock state here. See `docs/decisions.md`.
+
 ## INPUT DEVICES REGISTER WITH THE INPUT CORE, and the canonical event is evdev
 
 `kernel/include/kernel/input.h`. A device driver does not touch the

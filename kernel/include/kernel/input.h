@@ -131,10 +131,34 @@ void input_report_wheel(int notches);
 #define INPUT_KEY_LEFTALT 56
 #define INPUT_KEY_SPACE 57
 #define INPUT_KEY_CAPSLOCK 58
+// The numeric keypad, evdev's numbering, which is set-1's for this block
+// (see INPUT_KEY_EVDEV_DIRECT_MAX below).
+#define INPUT_KEY_KP7 71
+#define INPUT_KEY_KP8 72
+#define INPUT_KEY_KP9 73
+#define INPUT_KEY_KPMINUS 74
+#define INPUT_KEY_KP4 75
+#define INPUT_KEY_KP5 76
+#define INPUT_KEY_KP6 77
+#define INPUT_KEY_KPPLUS 78
+#define INPUT_KEY_KP1 79
+#define INPUT_KEY_KP2 80
+#define INPUT_KEY_KP3 81
+#define INPUT_KEY_KP0 82
+#define INPUT_KEY_KPDOT 83
+#define INPUT_KEY_KPASTERISK 55
+#define INPUT_KEY_NUMLOCK 69
+#define INPUT_KEY_SCROLLLOCK 70
+#define INPUT_KEY_SYSRQ 99      // Print Screen
 #define INPUT_KEY_F1 59
 #define INPUT_KEY_F2 60
 #define INPUT_KEY_F3 61
 #define INPUT_KEY_F4 62
+#define INPUT_KEY_F5 63
+#define INPUT_KEY_F6 64
+#define INPUT_KEY_F7 65
+#define INPUT_KEY_F8 66
+#define INPUT_KEY_F9 67
 #define INPUT_KEY_F10 68
 // 1..83 are the AT set-1 make codes unchanged (see gen_kbs.py's note:
 // XKB keycodes are evdev + 8, and evdev matches set 1 for this block).
@@ -175,6 +199,7 @@ void input_report_wheel(int notches);
 #define INPUT_KEY_LEFTMETA 125
 #define INPUT_KEY_RIGHTMETA 126
 #define INPUT_KEY_COMPOSE 127
+#define INPUT_KEY_PAUSE 119
 
 // Pointer buttons, evdev numbering.
 #define INPUT_BTN_LEFT   0x110

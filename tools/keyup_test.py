@@ -198,6 +198,28 @@ def run(dbg, qmp, res):
               ("keyup", ord("w")) in t and ("keyup", ord("W")) not in t,
               f"expected a release of 'w' (119), got {t}")
 
+    # --- 4b. THE KEYS THAT USED TO REPORT NOTHING ---------------------
+    #
+    # Insert, the Menu key, the locks and the whole numeric keypad were
+    # silently dropped: no layout entry, so keyboard_layout_translate()
+    # returned 0 and the key was indistinguishable from one nobody
+    # pressed. An app cannot bind what it never sees.
+    #
+    # Checked through the SAME held-set log as everything above, so this
+    # is not a special path -- if a key arrives at all, winclient reports
+    # it going down.
+    for qcode, want, name in (
+        ("kp_7", ord("7"), "keypad 7 types a 7"),
+        ("kp_enter", ord("\n"), "keypad Enter is the same newline as Enter"),
+        ("f6", 0xAD, "F6 (quicksave in Doom) reports a code"),
+        ("insert", 0xB3, "Insert reports a code"),
+    ):
+        qmp.send_key(qcode)
+        settle_input(dbg)
+        t = transitions(dbg)
+        res.check(f"4b. {name}", ("keydown", want) in t,
+                  f"expected a press of {want}, got {t}")
+
     # --- 5. the held set comes back to empty --------------------------
     #
     # The end state, which is what a stuck key actually looks like. Read

@@ -111,7 +111,17 @@ WAIVER_LOOKBACK = 20
 
 
 def _waived(src, pos, lines_before=WAIVER_LOOKBACK):
-    """Is there a waiver comment just above `pos`? Read from the RAW source."""
+    """Is there a waiver comment just above `pos`, or ON ITS OWN LINE?
+
+    Read from the RAW source. **The trailing-comment form counts**, and
+    that is a fix rather than a nicety: `switch (x) { // dispatch-ok: ...`
+    reads naturally, TWO constructs in this tree were already written
+    that way, and both were silently unwaived -- the comment sits AFTER
+    the switch keyword, so a look-backwards window could never see it.
+    Nothing failed at the time because both were under the branch limit;
+    the first one to grow past it reported a chain whose author believed
+    they had waived it years earlier.
+    """
     start = pos
     for _ in range(lines_before):
         nl = src.rfind("\n", 0, start)
@@ -119,7 +129,13 @@ def _waived(src, pos, lines_before=WAIVER_LOOKBACK):
             start = 0
             break
         start = nl
-    return WAIVER in src[start:pos]
+    if WAIVER in src[start:pos]:
+        return True
+    # ...and the rest of the line the construct starts on.
+    eol = src.find("\n", pos)
+    if eol < 0:
+        eol = len(src)
+    return WAIVER in src[pos:eol]
 
 
 def scan(path):

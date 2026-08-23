@@ -81,7 +81,22 @@ static unsigned char to_doom_key(int code) {
     case TOYKEY_ARROW_DOWN:  return KEY_DOWNARROW;
     case TOYKEY_ARROW_LEFT:  return KEY_LEFTARROW;
     case TOYKEY_ARROW_RIGHT: return KEY_RIGHTARROW;
-    case TOYKEY_CTRL:        return KEY_RCTRL;   // fire
+    // **FIRE AND USE ARE ABSTRACT CODES, NOT THE KEYS THEY LOOK LIKE.**
+    // m_controls.c binds `key_fire = KEY_FIRE` and `key_use = KEY_USE`
+    // -- 0xa3 and 0xa2, which no physical key produces. Doom expects the
+    // PLATFORM layer to map onto them, and every upstream backend does
+    // (doomgeneric_sdl.c maps SDLK_LCTRL/RCTRL to KEY_FIRE and
+    // SDLK_SPACE to KEY_USE).
+    //
+    // This was wrong in the first version of this port: Ctrl was mapped
+    // to KEY_RCTRL and Space was allowed through as plain 0x20. Both are
+    // real Doom key codes, and NEITHER IS BOUND TO ANYTHING -- so the
+    // two most-used controls in the game did nothing at all, silently,
+    // while every menu key worked. Shift and Alt below are different:
+    // `key_speed` and `key_strafe` really are KEY_RSHIFT and KEY_RALT,
+    // so those map to the physical codes.
+    case TOYKEY_CTRL:        return KEY_FIRE;    // fire
+    case ' ':                return KEY_USE;     // open doors, press switches
     case TOYKEY_SHIFT:       return KEY_RSHIFT;  // run
     case TOYKEY_ALT:         return KEY_RALT;    // strafe
     // AltGr is deliberately Alt here too. On a Nordic layout it is the
@@ -90,10 +105,28 @@ static unsigned char to_doom_key(int code) {
     // them distinct because a LAYOUT needs to (it picks a third
     // character); a game does not.
     case TOYKEY_ALTGR:       return KEY_RALT;
+    // The function row, all of it: Doom binds F1..F11 for help, save,
+    // load, volume, detail, quicksave, end game, messages, quickload,
+    // quit and gamma. F12 is unbound in Doom and mapped anyway, so this
+    // table has no hole to explain.
+    case TOYKEY_F1:          return KEY_F1;
     case TOYKEY_F2:          return KEY_F2;
     case TOYKEY_F3:          return KEY_F3;
     case TOYKEY_F4:          return KEY_F4;
+    case TOYKEY_F5:          return KEY_F5;
+    case TOYKEY_F6:          return KEY_F6;
+    case TOYKEY_F7:          return KEY_F7;
+    case TOYKEY_F8:          return KEY_F8;
+    case TOYKEY_F9:          return KEY_F9;
     case TOYKEY_F10:         return KEY_F10;
+    case TOYKEY_F11:         return KEY_F11;
+    case TOYKEY_F12:         return KEY_F12;
+    // Pause is `key_pause`, and it is the one key that reports a press
+    // with NO release -- a PS/2 keyboard sends no break code for it
+    // (keyboard.c). Doom only tests the press, so nothing here has to
+    // care, but a client that tracked it as held would hold it forever.
+    case TOYKEY_PAUSE:       return KEY_PAUSE;
+    case TOYKEY_INSERT:      return KEY_INS;
     case TOYKEY_HOME:        return KEY_HOME;
     case TOYKEY_END:         return KEY_END;
     case TOYKEY_PAGE_UP:     return KEY_PGUP;

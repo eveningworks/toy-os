@@ -144,6 +144,9 @@ int keyboard_try_get_transition(uint16_t *out_code, int *out_down,
 // from there, both in the same non-preemptible IRQ handler.
 static uint16_t emitting_keycode;
 
+// Bytes still to drop from a Pause sequence -- see keyboard_feed_byte().
+static int pause_swallow;
+
 // Whether ring_push() has already run for THIS edge, which is what lets
 // the rule above be "first press, but last push within a press".
 static int first_push_done;
@@ -211,6 +214,13 @@ static uint16_t ext_keycode(uint8_t sc) {
     case 0x5B: return INPUT_KEY_LEFTMETA;
     case 0x5C: return INPUT_KEY_RIGHTMETA;
     case 0x5D: return INPUT_KEY_COMPOSE;
+    case 0x37: return INPUT_KEY_SYSRQ;      // Print Screen: E0 2A E0 37
+    // **THE FAKE SHIFTS AROUND PRINT SCREEN ARE DROPPED.** A PS/2
+    // keyboard brackets PrtSc with E0 2A / E0 AA so that a DOS-era
+    // reader saw a shifted key; taking them at face value here would
+    // report a Shift press that nobody made, and leave `shift_pressed`
+    // set if the release half were ever missed.
+    case 0x2A: case 0x36: return 0;
     default:   return 0;                    // a key this kernel has no name for
     }
 }
@@ -231,6 +241,24 @@ int keyboard_wire_keycode(uint8_t sc, int extended, uint16_t *out) {
 // this function is what makes PS/2 one of them rather than the one the
 // others have to imitate.
 void keyboard_feed_byte(uint8_t sc) {
+    // **PAUSE IS SIX BYTES AND HAS NO RELEASE.** It arrives as
+    // E1 1D 45 E1 9D C5 and nothing else uses the E1 prefix, so the
+    // whole sequence is swallowed by counting: report the press when the
+    // prefix arrives and drop the five bytes behind it. There is no
+    // break code to report, which is why this is the one key that
+    // reports a press with no matching release -- documented rather
+    // than smoothed over, because a client tracking held keys has to
+    // tolerate it (and already must, see win_proto.h).
+    if (sc == 0xE1) {
+        pause_swallow = 5;
+        keyboard_key_event(INPUT_KEY_PAUSE, 1);
+        return;
+    }
+    if (pause_swallow) {
+        pause_swallow--;
+        return;
+    }
+
     if (sc == 0xE0) {
         extended_prefix = 1;
         return;
@@ -309,7 +337,14 @@ void keyboard_key_event(uint16_t keycode, int down) {
     // the live `shift_pressed` state -- same timing as the layout lookup
     // below for ordinary letter keys, so a shift release racing the
     // arrow keypress resolves the same way either family already does.
-    switch (keycode) { // dispatch-ok: bounded by the navigation block
+    // dispatch-ok: a keymap is bounded BY THE KEYBOARD. This switch names
+    // every key that does not produce a character -- navigation, the
+    // function row, the locks, the keypad -- and it cannot grow except
+    // by somebody attaching a key that does not exist today. It is also
+    // the exact case CLAUDE.md gives when it says a bounded branch set
+    // should be waived rather than made a table; a table here would be
+    // the same data with a level of indirection in front of it.
+    switch (keycode) {
     case INPUT_KEY_UP:       ring_push(shift_pressed ? KEY_SHIFT_ARROW_UP : KEY_ARROW_UP); return;
     case INPUT_KEY_DOWN:     ring_push(shift_pressed ? KEY_SHIFT_ARROW_DOWN : KEY_ARROW_DOWN); return;
     case INPUT_KEY_LEFT:     ring_push(shift_pressed ? KEY_SHIFT_ARROW_LEFT : KEY_ARROW_LEFT); return;
@@ -325,16 +360,69 @@ void keyboard_key_event(uint16_t keycode, int down) {
     // this driver already makes for left/right Ctrl).
     case INPUT_KEY_LEFTMETA:
     case INPUT_KEY_RIGHTMETA: ring_push(KEY_SUPER); return;
-    // The four function keys with callers: F2/F3 (the file manager),
-    // F10 (focus the menu bar) and F4 (Alt+F4 closes a window). Pushed
+    // THE WHOLE FUNCTION ROW. It was four -- F2/F3 (the file manager),
+    // F10 (the menu bar) and F4 (Alt+F4) -- added one per caller; Doom
+    // binds F1 through F11 and made the rest worth having. Pushed
     // here rather than through the layout is also what keeps Alt+F4
     // whole -- it returns before the Alt-prefixes-with-ESC path below,
     // so the key arrives once, with KEY_MOD_ALT set, rather than as ESC
     // followed by something.
+    case INPUT_KEY_F1:  ring_push(KEY_F1); return;
     case INPUT_KEY_F2:  ring_push(KEY_F2); return;
     case INPUT_KEY_F3:  ring_push(KEY_F3); return;
     case INPUT_KEY_F4:  ring_push(KEY_F4); return;
+    case INPUT_KEY_F5:  ring_push(KEY_F5); return;
+    case INPUT_KEY_F6:  ring_push(KEY_F6); return;
+    case INPUT_KEY_F7:  ring_push(KEY_F7); return;
+    case INPUT_KEY_F8:  ring_push(KEY_F8); return;
+    case INPUT_KEY_F9:  ring_push(KEY_F9); return;
     case INPUT_KEY_F10: ring_push(KEY_F10); return;
+    case INPUT_KEY_F11: ring_push(KEY_F11); return;
+    case INPUT_KEY_F12: ring_push(KEY_F12); return;
+
+    // --- THE KEYS THAT USED TO REPORT NOTHING AT ALL ------------------
+    //
+    // See keyboard.h. Each of these was silently dropped: the layout
+    // has no entry for it, so keyboard_layout_translate() returned 0 and
+    // the key was indistinguishable from one that was never pressed.
+    case INPUT_KEY_INSERT:     ring_push(KEY_INSERT); return;
+    case INPUT_KEY_COMPOSE:    ring_push(KEY_MENU); return;
+    case INPUT_KEY_CAPSLOCK:   ring_push(KEY_CAPS_LOCK); return;
+    case INPUT_KEY_NUMLOCK:    ring_push(KEY_NUM_LOCK); return;
+    case INPUT_KEY_SCROLLLOCK: ring_push(KEY_SCROLL_LOCK); return;
+    case INPUT_KEY_PAUSE:      ring_push(KEY_PAUSE); return;
+    case INPUT_KEY_SYSRQ:      ring_push(KEY_PRINT_SCREEN); return;
+
+    // --- THE NUMERIC KEYPAD, AS THE CHARACTERS ON ITS KEYCAPS ---------
+    //
+    // Not KEY_* codes: the keypad's whole point is to type numbers, and
+    // an app that had to learn twelve new codes to receive a `7` would
+    // be the wrong shape. Keypad Enter is the same `\n` the main Enter
+    // sends, as on every OS.
+    //
+    // **NUMLOCK'S OFF-STATE IS DELIBERATELY NOT MODELLED.** On real
+    // hardware NumLock off turns the keypad into a second set of
+    // arrows/Home/End. Implementing that means holding lock STATE, which
+    // this kernel does not have for Caps Lock either, and the failure
+    // mode of getting it wrong is a keypad that types nothing while the
+    // light says it should. Always-numeric is what a keypad is for, and
+    // the arrows already exist a few inches to the left.
+    case INPUT_KEY_KP0: ring_push('0'); return;
+    case INPUT_KEY_KP1: ring_push('1'); return;
+    case INPUT_KEY_KP2: ring_push('2'); return;
+    case INPUT_KEY_KP3: ring_push('3'); return;
+    case INPUT_KEY_KP4: ring_push('4'); return;
+    case INPUT_KEY_KP5: ring_push('5'); return;
+    case INPUT_KEY_KP6: ring_push('6'); return;
+    case INPUT_KEY_KP7: ring_push('7'); return;
+    case INPUT_KEY_KP8: ring_push('8'); return;
+    case INPUT_KEY_KP9: ring_push('9'); return;
+    case INPUT_KEY_KPDOT:      ring_push('.'); return;
+    case INPUT_KEY_KPPLUS:     ring_push('+'); return;
+    case INPUT_KEY_KPMINUS:    ring_push('-'); return;
+    case INPUT_KEY_KPASTERISK: ring_push('*'); return;
+    case INPUT_KEY_KPSLASH:    ring_push('/'); return;
+    case INPUT_KEY_KPENTER:    ring_push('\n'); return;
     default: break;
     }
 

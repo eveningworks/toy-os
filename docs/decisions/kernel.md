@@ -4398,3 +4398,66 @@ tell a working stack from two depths sharing one physical frame -- both
 read back the constant), and verifies every frame on the way back OUT,
 which is the half a growth bug breaks. With `grow_stack()` disabled it
 faults at `0x807fefcff8`, the first byte below the four mapped pages.
+
+## Every key on the keyboard reports something now, and the keypad reports characters
+
+The `KEY_*` vocabulary grew one code per caller, which is a reasonable
+way to start and leaves a bad end state: pressing **Insert, the Menu
+key, Caps/Num/Scroll Lock, Pause, Print Screen or anything on the
+numeric keypad produced nothing at all.** Not an unknown code -- nothing.
+The layout had no entry, `keyboard_layout_translate()` returned 0, and
+the key was indistinguishable from one nobody pressed.
+
+That is a bad property for an input layer specifically: **an app cannot
+bind what it never sees**, and "does this keyboard work?" had no answer
+for about a third of the keys on it. Found by porting Doom, which binds
+F1 through F11 -- of which this kernel emitted F2, F3, F4 and F10.
+
+Four decisions inside it:
+
+- **The function row is complete, F1-F12.** Half a row is worse than
+  none: F6 and F9 are quicksave and quickload, the two anybody actually
+  reaches for.
+- **The keypad emits CHARACTERS, not codes.** Its whole purpose is
+  typing numbers, and an app that had to learn twelve new `KEY_*` values
+  to receive a `7` would be the wrong shape. Keypad Enter sends the same
+  `\n` the main Enter does, as on every OS.
+- **NumLock's off-state is deliberately not modelled.** On real hardware
+  NumLock off turns the keypad into a second set of arrows. That needs
+  lock STATE, which this kernel does not keep for Caps Lock either, and
+  the failure mode of getting it wrong is a keypad that types nothing
+  while the light says otherwise. Always-numeric is what a keypad is
+  for; the arrows are a few inches to the left.
+- **The lock keys report their press and change nothing.** There is no
+  lock state here, so Caps Lock does not alter what a letter key
+  produces. Reporting the press is still worth it and is honest about
+  doing no more.
+
+Two scancode wrinkles worth knowing, both in `keyboard_feed_byte()`:
+
+- **Pause is six bytes and has no release.** `E1 1D 45 E1 9D C5`, and
+  nothing else uses the `E1` prefix -- so the press is reported when the
+  prefix arrives and the five bytes behind it are counted out. It is the
+  one key that reports a press with no matching release, which a client
+  tracking held keys must tolerate (and already must, for the reason
+  `abi/win_proto.h` gives about grabs).
+- **The fake shifts around Print Screen are dropped.** A PS/2 keyboard
+  brackets PrtSc with `E0 2A` / `E0 AA` so a DOS-era reader saw a
+  shifted key. Taking those at face value would report a Shift nobody
+  pressed -- and leave `shift_pressed` stuck on if the release half were
+  ever missed.
+
+### And the waiver that had never worked
+
+Growing that switch past twenty branches made `tools/check_dispatch.py`
+fail -- on a construct whose author had already waived it, inline:
+`switch (keycode) { // dispatch-ok: ...`. The checker looked only at the
+lines ABOVE the construct, so a trailing comment on the switch's own line
+could never be seen. Nothing had failed before because both constructs
+written that way were under the branch limit; the first one to grow past
+it reported a chain that had been "waived" for months.
+
+The checker accepts the trailing form now. **A waiver mechanism that
+silently does not waive is worse than none**: it reads as protection at
+the call site and provides none, and the moment it matters is exactly
+the moment somebody is busy with something else.
