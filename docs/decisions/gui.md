@@ -3828,3 +3828,92 @@ mismatch -- GNOME and KDE need it because a window's WM_CLASS is chosen
 by the application and the launcher file is named by whoever packaged
 it. Deriving the pairing from the binary name alone would work until it
 silently did not, which is the failure mode that key was invented for.
+
+## The title bar's icon is the compositor's, and the client never names it
+
+Every window's title bar carries its app's icon at the far left, and
+the client is not asked for one. It is resolved exactly as the taskbar
+button's already was: the window carries the `app_id` its client
+declared, a `.desktop` entry carries `AppId=`, and `wm_window_icon_name()`
+matches the two.
+
+**That is Wayland's model, arrived at from the same direction.** A
+client calls `xdg_toplevel.set_app_id` and the compositor finds the
+artwork; `xdg-toplevel-icon-v1` came years later and only for the rare
+client that genuinely needs to override it. X11 did the opposite --
+`_NET_WM_ICON` is pixel data the client uploads -- which means every
+toolkit ships its own scaling, an application can hand the compositor
+anything, and the same app renders differently under two window
+managers. toy-os has the Wayland arrangement already and there was no
+reason to add a second, worse one beside it.
+
+**Which is also why nothing new was added to the protocol.** A window
+already had everything needed; what was missing was a second reader of
+it. The lookup moved out of `wm_taskbar.c` to `wm.c` for that reason
+alone -- "which app is this window" is a property of the window, not of
+the strip that happened to be the first to draw it.
+
+**Whether to show one at all is decided by whether one DECODES**, not
+by whether a name resolves. `title_icon()` returns the picture and the
+rect together, so a window whose artwork is missing (Crash Test, on
+purpose) gets neither -- rather than a clickable square with nothing
+visible in it, which is what a separate "where would the icon go"
+helper would have produced. `gui windows --json` reports that same rect,
+so a test asserts on what the compositor actually did instead of
+re-deriving the geometry and drifting from it.
+
+**Clicking it opens the window menu**, which is what Windows' system
+menu, KWin/Breeze's window-menu button and XFWM all do with that
+corner. It opens on button-DOWN -- `docs/gui-guidelines.md` names a
+menu as the documented exception to arm-then-commit-on-release -- and
+it is anchored under the icon rather than at the cursor, because a menu
+attached to a fixed piece of chrome should not move with the pointer.
+It shares one implementation with the right-click menu
+(`wm_open_window_menu()`); a second copy is precisely where Close would
+have drifted back from `wm_request_close()` (ASK the client) to
+`close_window()` (seize it), which this file has already shipped once.
+
+GNOME deleted the titlebar icon and macOS never had one outside
+document proxy icons, so this is a choice rather than a necessity --
+but toy-os's chrome is Windows/KDE-shaped everywhere else, and an icon
+in that corner is what makes the window menu discoverable at all.
+
+## Text over a wallpaper is SHADOWED, because a guessed background stopped being one
+
+Every `ugfx` text call takes a `bg` and alpha-blends each glyph's
+partial coverage against it -- cheap, and correct as long as the caller
+knows what is behind the text. The desktop's icon labels and its
+version watermark both passed the flat desktop blue, which was exactly
+right until wallpapers arrived. After that, every anti-aliased edge
+carried a halo of a colour no longer anywhere on screen, and the
+watermark's deliberately-dim ink had almost no contrast left over a
+light photograph. It read as a rendering fault rather than as a quiet
+watermark.
+
+**`UGFX_TRANSPARENT` is the fix for the halo**: pass it as `bg` and the
+blend reads the surface back. Only that path reads back, so every other
+caller keeps the no-read-back contract unchanged. It is a sentinel
+rather than a flag because 0xRRGGBB uses the low three bytes, so a
+value with the top byte set cannot collide with a colour.
+
+**Transparency alone does not fix legibility**, which is the second
+half and the reason for `ugfx_draw_string_shadowed()`. A wallpaper is a
+picture the user chose and can be any colour; no single ink works on
+all of them. Every desktop solves this the same way -- macOS, GNOME and
+KDE shadow their icon labels, Windows outlines them -- and a shadow is
+the cheaper of the two here, being one extra pass rather than eight.
+
+**The shadow's shade is DERIVED from the ink's own luminance**, not
+hand-picked: light text gets a dark shadow and dark text a light one.
+That is the rule `uui_state_bg()` already states, and for the same
+reason -- this project has already shipped the equivalent mistake as a
+hover nobody could see, because a hand-picked "lighter" tint is
+invisible on a near-white theme.
+
+**What was NOT done: sampling the backdrop and picking an ink from it.**
+It sounds better and is worse. A gradient gives a different answer at
+each end of a string, so the text either changes colour along its own
+length or picks one point and is wrong everywhere else -- and the value
+would have to be recomputed on every wallpaper change and every window
+move behind it. A shadow is a fixed cost that works on any backdrop
+without knowing anything about it.

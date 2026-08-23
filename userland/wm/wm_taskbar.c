@@ -99,25 +99,6 @@ int taskbar_icon_size(void) {
     return s < 8 ? 0 : s;
 }
 
-// Which icon a WINDOW should show. A window knows the app_id its client
-// declared; a .desktop entry knows which app_id it launches (its AppId=
-// key, freedesktop's StartupWMClass). Matching the two is what lets the
-// taskbar find artwork for a window it did not launch itself.
-//
-// NULL for a window whose client declared no app id, or whose app id
-// matches no entry -- a stand-alone test client, say. Those keep the
-// plain text button they have always had.
-const char *taskbar_icon_name(int win) {
-    if (win < 0 || win >= window_count) return NULL;
-    const char *id = windows[win].app_id;
-    if (!id || !id[0]) return NULL;
-    for (int i = 0; i < gui_app_registry_count; i++) {
-        const struct gui_app *a = &gui_app_registry[i];
-        if (a->app_id && k_strcmp(a->app_id, id) == 0) return a->icon_name;
-    }
-    return NULL;
-}
-
 static void make_label(char *dst, int cap, const char *src, int w, int count) {
     int cw = ugfx_char_w();
     // 24 matches win_btn_w()'s own padding, so a full-width label sits
@@ -202,7 +183,7 @@ int taskbar_layout(struct taskbar_button *out, int max) {
         // The label gets what the ICON does not take. Reserved from the
         // same taskbar_icon_size() the renderer blits with, so the two
         // cannot disagree about where the text starts.
-        out[count].icon = taskbar_icon_name(out[count].first);
+        out[count].icon = wm_window_icon_name(out[count].first);
         int label_w = w - (out[count].icon ? taskbar_icon_size() + 4 : 0);
         make_label(out[count].label, (int)sizeof out[count].label,
                     name, label_w, members);

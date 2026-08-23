@@ -139,6 +139,30 @@ const struct window *wm_get_window(int index) {
     return &windows[index];
 }
 
+// Which icon a WINDOW should show. A window knows the app_id its client
+// declared; a .desktop entry knows which app_id it launches (its AppId=
+// key, freedesktop's StartupWMClass). Matching the two is what lets a
+// window be given artwork the WM did not launch it with.
+//
+// NULL for a window whose client declared no app id, or whose app id
+// matches no entry -- a stand-alone test client, say. Those keep the
+// plain text they have always had, in the taskbar and in the title bar.
+//
+// It lived in wm_taskbar.c while the taskbar was the only asker. It is
+// here now because the title bar asks the same question (see
+// title_icon() in wm_render.c), and "which app is this window" is a
+// property of the window, not of the strip that happens to draw it.
+const char *wm_window_icon_name(int idx) {
+    if (idx < 0 || idx >= window_count) return 0;
+    const char *id = windows[idx].app_id;
+    if (!id || !id[0]) return 0;
+    for (int i = 0; i < gui_app_registry_count; i++) {
+        const struct gui_app *a = &gui_app_registry[i];
+        if (a->app_id && k_strcmp(a->app_id, id) == 0) return a->icon_name;
+    }
+    return 0;
+}
+
 // ---- window lifecycle ----
 
 void bring_to_front(int idx) {

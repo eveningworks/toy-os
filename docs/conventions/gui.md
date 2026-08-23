@@ -944,3 +944,39 @@ real scanout hardware does. Do not write a pixel assertion for one.
   entry's optional `AppId=` states the pairing, defaulting to the Exec
   basename. This is freedesktop's `StartupWMClass`, which exists for
   exactly this mismatch.
+
+- **A WINDOW'S TITLE BAR CARRIES ITS APP ICON, AND `title_icon()` IS THE
+  ONE ANSWER FOR BOTH DRAWING AND CLICKING.** The far-left square of
+  every title bar is the app's icon -- Windows' system-menu icon,
+  Breeze's and XFWM's window-menu button. The client never supplies one:
+  it is resolved from the window's `app_id` through
+  `wm_window_icon_name()` (in `wm.c`, not `wm_taskbar.c` -- the taskbar
+  was merely the first asker), exactly as Wayland's
+  `xdg_toplevel.set_app_id` leaves the artwork to the compositor.
+  **`title_icon(idx, &x, &y, &size)` returns the decoded picture AND the
+  rect together**, so an icon that fails to decode yields no rect either
+  -- never a clickable square with nothing visible in it. `gui windows
+  --json` reports that same rect, so a test asserts on the compositor's
+  own geometry rather than re-deriving it. **Left-clicking it opens the
+  window menu**, on PRESS (a menu is `docs/gui-guidelines.md`'s
+  documented exception to commit-on-release) and anchored under the icon
+  rather than at the cursor, through the SAME `wm_open_window_menu()`
+  the right-click uses -- a second copy is where Close drifts back from
+  asking the client to seizing it.
+
+- **TEXT ON A WALLPAPER IS `ugfx_draw_string_shadowed()`, NEVER A
+  GUESSED `bg`.** Every `ugfx` text call blends a glyph's partial
+  coverage against the `bg` the caller passes, which is right inside a
+  widget and wrong over a wallpaper: the desktop's icon labels and its
+  version watermark both passed the flat desktop blue, and every
+  anti-aliased edge then carried a halo of a colour no longer on screen.
+  **`UGFX_TRANSPARENT` as `bg`** blends against what is actually on the
+  surface -- the one path that reads the surface back, so every other
+  caller keeps the no-read-back contract. **The shadowed forms add
+  legibility on top of that**, which transparency alone does not give:
+  a wallpaper is a user-chosen photograph and no single ink works on all
+  of them, so the string is drawn twice and the shadow's shade is
+  DERIVED from the ink's luminance (the `ui_state_bg()` rule -- never
+  hand-pick a contrast). Sampling the backdrop to choose an ink was
+  considered and is worse: a gradient gives a different answer at each
+  end of one string.

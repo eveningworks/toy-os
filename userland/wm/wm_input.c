@@ -58,6 +58,10 @@ int wm_find_resize_zone(int mx, int my, int *out_right, int *out_bottom) {
     return -1;
 }
 
+// Defined below, beside the ctx_* handlers it wires up -- both this
+// file's click paths open it, and the title-bar one comes first.
+static void wm_open_window_menu(int idx, int mx, int my);
+
 void wm_handle_left_click(int mx, int my) {
     if (confirm_dialog_handle_click(mx, my)) return; // most modal -- checked first, see confirm_dialog.h
     if (file_picker_handle_click(mx, my)) return; // also modal (an app-opened dialog, e.g. Notepad's Save As...) -- see file_picker.h
@@ -143,6 +147,28 @@ void wm_handle_left_click(int mx, int my) {
                 redraw_pending = 1;
                 return;
             }
+            // THE APP ICON OPENS THE WINDOW MENU, on PRESS -- a menu
+            // opens on button-down on every real desktop, and
+            // docs/gui-guidelines.md names that as the documented
+            // exception to arm-then-commit-on-release. Its items still
+            // commit on release.
+            //
+            // Raised first, like any other title-bar click, so the
+            // index the menu targets is the POST-raise one --
+            // bring_to_front() moves the window to the end of the
+            // array and every index above it shifts down.
+            int ix, iy, isz;
+            if (title_icon(i, &ix, &iy, &isz) && uui_hit(ix, iy, isz, isz, mx, my)) {
+                bring_to_front(i);
+                // Anchored under the icon rather than at the cursor,
+                // which is what a menu attached to a fixed piece of
+                // chrome does -- the same thing the menu bar does with
+                // its own titles.
+                wm_open_window_menu(window_count - 1, ix, iy + isz);
+                redraw_pending = 1;
+                return;
+            }
+
             if (w->state != WIN_MAXIMIZED) {
                 bring_to_front(i);
                 resizing = -1;
@@ -282,6 +308,33 @@ static void ctx_toggle_maximize_window(void *ctx) {
 
 static void ctx_open_app(void *ctx) { open_app((const struct gui_app *)ctx); }
 
+// THE WINDOW MENU: one menu for the whole window, mirroring the
+// title-bar buttons' actions rather than requiring a click to land
+// exactly on one of those small squares -- which is the whole point of
+// offering it as a menu at all.
+//
+// TWO WAYS IN, ONE IMPLEMENTATION. A right-click anywhere on the window
+// opens it, and so does a LEFT-click on the title bar's app icon, which
+// is what Windows' system menu and Breeze's window-menu button do. They
+// used to be one call site; a second one is exactly where two copies of
+// a rule stop agreeing -- Close in particular has to stay
+// wm_request_close() (ASK the client) rather than close_window() (seize
+// it), which is a bug this file has already shipped once.
+static void wm_open_window_menu(int idx, int mx, int my) {
+    if (idx < 0 || idx >= window_count) return;
+    const struct window *w = &windows[idx];
+    g_ctx_window_target = idx;
+    static struct context_menu_item items[3];
+    int n = 0;
+    items[n].label = "Minimize"; items[n].on_select = ctx_minimize_window; items[n].ctx = &g_ctx_window_target; n++;
+    if (w->resizable) {
+        items[n].label = (w->state == WIN_MAXIMIZED) ? "Restore" : "Maximize";
+        items[n].on_select = ctx_toggle_maximize_window; items[n].ctx = &g_ctx_window_target; n++;
+    }
+    items[n].label = "Close"; items[n].on_select = ctx_close_window; items[n].ctx = &g_ctx_window_target; n++;
+    context_menu_open_at(mx, my, items, n);
+}
+
 void wm_handle_right_click(int mx, int my) {
     // A right-click always resolves to at most one popup -- close
     // whatever's already open before deciding what (if anything) the
@@ -322,20 +375,7 @@ void wm_handle_right_click(int mx, int my) {
         if (w->state == WIN_MINIMIZED) continue;
         if (!uui_hit(w->x, w->y, w->w, w->h, mx, my)) continue;
 
-        // One menu for the whole window (title bar OR content area) --
-        // mirrors the title-bar buttons' actions rather than requiring
-        // the right-click to land exactly on one of those small
-        // buttons, which is the whole point of offering it as a menu.
-        g_ctx_window_target = i;
-        static struct context_menu_item items[3];
-        int n = 0;
-        items[n].label = "Minimize"; items[n].on_select = ctx_minimize_window; items[n].ctx = &g_ctx_window_target; n++;
-        if (w->resizable) {
-            items[n].label = (w->state == WIN_MAXIMIZED) ? "Restore" : "Maximize";
-            items[n].on_select = ctx_toggle_maximize_window; items[n].ctx = &g_ctx_window_target; n++;
-        }
-        items[n].label = "Close"; items[n].on_select = ctx_close_window; items[n].ctx = &g_ctx_window_target; n++;
-        context_menu_open_at(mx, my, items, n);
+        wm_open_window_menu(i, mx, my);
         return;
     }
 

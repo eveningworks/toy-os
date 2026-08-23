@@ -591,8 +591,17 @@ void ugfx_draw_char(struct ugfx_surface *s, int x, int y, char c,
             // Through put_pixel rather than straight at the buffer, so a
             // glyph obeys the clip rect and marks damage like everything
             // else. The blend is against the CALLER's `bg`, not against
-            // what is already there, so nothing is read back.
-            ugfx_put_pixel(s, px, py, (a == 255) ? color : blend(color, bg, a));
+            // what is already there, so nothing is read back -- UNLESS
+            // the caller asked for UGFX_TRANSPARENT, which is the one
+            // path that reads the surface back (see ugfx.h for the two
+            // costs of that).
+            if (a == 255) {
+                ugfx_put_pixel(s, px, py, color);
+            } else {
+                uint32_t under = (bg == UGFX_TRANSPARENT)
+                                     ? ugfx_get_pixel(s, px, py) : bg;
+                ugfx_put_pixel(s, px, py, blend(color, under, a));
+            }
         }
     }
 }
@@ -657,6 +666,33 @@ int ugfx_draw_string_clipped(struct ugfx_surface *s, int x, int y, int max_w,
         prev = (unsigned char)str[n];
     }
     return 0;
+}
+
+// See ugfx.h. The shadow is picked from the ink's own luminance -- the
+// same "derive the contrast, do not hand-pick it" rule uui.h's
+// ui_state_bg() states, and for the same reason: a hand-picked dark
+// shadow is invisible under dark text, and this project has already
+// shipped the equivalent mistake as a hover nobody could see.
+static uint32_t shadow_for(uint32_t color) {
+    return ugfx_luminance(color) < 128 ? ugfx_rgb(255, 255, 255)
+                                       : ugfx_rgb(0, 0, 0);
+}
+
+void ugfx_draw_string_shadowed(struct ugfx_surface *s, int x, int y,
+                                const char *str, uint32_t color) {
+    ugfx_draw_string(s, x + 1, y + 1, str, shadow_for(color), UGFX_TRANSPARENT);
+    ugfx_draw_string(s, x, y, str, color, UGFX_TRANSPARENT);
+}
+
+int ugfx_draw_string_clipped_shadowed(struct ugfx_surface *s, int x, int y,
+                                       int max_w, const char *str, uint32_t color) {
+    // The SHADOW is clipped to the same max_w as the ink, not to one a
+    // pixel wider: a shadow surviving one character past the text it
+    // belongs to is a ghost letter, which is worse than a clipped
+    // shadow nobody can see is clipped.
+    ugfx_draw_string_clipped(s, x + 1, y + 1, max_w, str, shadow_for(color),
+                             UGFX_TRANSPARENT);
+    return ugfx_draw_string_clipped(s, x, y, max_w, str, color, UGFX_TRANSPARENT);
 }
 
 uint32_t ugfx_rgb(uint8_t r, uint8_t g, uint8_t b) {

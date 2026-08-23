@@ -438,11 +438,16 @@ void desktop_draw(void) {
         // form.
         int label_y = y + DESKTOP_ICON_SIZE + 4;
         int label_max_w = icon_col_w() - 4; // -4: a gap, so adjacent labels never touch
-        uint32_t label_bg = ugfx_rgb(24, 60, 90);
         const char *label = gui_app_registry[i].name;
 
+        // SHADOWED, for the same reason the watermark below is: an icon
+        // label sits on a wallpaper, and the flat DESKTOP_BG it used to
+        // blend its anti-aliasing against stopped being what is behind
+        // it. Every desktop shadows or outlines these -- macOS, GNOME
+        // and KDE shadow, Windows outlines -- because no single ink is
+        // legible on every photograph a person might choose.
         if (ugfx_text_width(label) <= label_max_w) {
-            ugfx_draw_string_clipped(wm_surface(), x, label_y, label_max_w, label, label_fg, label_bg);
+            ugfx_draw_string_clipped_shadowed(wm_surface(), x, label_y, label_max_w, label, label_fg);
         } else {
             // Too long: cut it two characters short and mark the cut, so
             // a truncated label reads AS truncated rather than as a
@@ -456,9 +461,9 @@ void desktop_draw(void) {
             // as nothing at all.
             int cut_w = label_max_w - 2 * ugfx_char_w();
             if (cut_w < ugfx_char_w()) cut_w = ugfx_char_w(); // always show at least one char
-            ugfx_draw_string_clipped(wm_surface(), x, label_y, cut_w, label, label_fg, label_bg);
-            ugfx_draw_string_clipped(wm_surface(), x + cut_w, label_y, 2 * ugfx_char_w(), "..",
-                                     label_fg, label_bg);
+            ugfx_draw_string_clipped_shadowed(wm_surface(), x, label_y, cut_w, label, label_fg);
+            ugfx_draw_string_clipped_shadowed(wm_surface(), x + cut_w, label_y,
+                                              2 * ugfx_char_w(), "..", label_fg);
         }
     }
 
@@ -484,8 +489,21 @@ void desktop_draw(void) {
             "toy-os " TOYOS_VERSION_FULL,
             "built " TOYOS_BUILD_DATE,
         };
-        uint32_t fg = ugfx_rgb(90, 125, 155);
-        uint32_t bg = ugfx_rgb(24, 60, 90);
+        // SHADOWED AND TRANSPARENT, because the backdrop is a
+        // user-chosen photograph. This was a dim blue on a hardcoded
+        // DESKTOP_BG, which was exactly right while the desktop was a
+        // flat colour and wrong the day wallpapers arrived: over a
+        // light wallpaper the ink had almost no contrast left, and
+        // every anti-aliased edge carried a halo of a colour that was
+        // no longer anywhere on screen. It read as a rendering fault
+        // rather than as a deliberately quiet watermark.
+        //
+        // Still deliberately quiet -- a light grey rather than white,
+        // and the shadow is what carries it over a light wallpaper. It
+        // is for the moment you go looking for it; a bright string in
+        // the corner of every screenshot would compete with the
+        // content.
+        uint32_t fg = ugfx_rgb(198, 210, 220);
         int line_h = ugfx_char_h() + 2;
         // Bottom line sits one line above the taskbar; the block grows
         // UPWARDS, so adding a third line later moves nothing.
@@ -494,9 +512,9 @@ void desktop_draw(void) {
             int w = ugfx_text_width(lines[i]);
             // Each line right-aligned on its own width, so the two stay
             // flush to the same edge whatever the font or the strings.
-            ugfx_draw_string_clipped(wm_surface(), screen_w - w - 12,
-                                     base_y - (1 - i) * line_h,
-                                     w, lines[i], fg, bg);
+            ugfx_draw_string_clipped_shadowed(wm_surface(), screen_w - w - 12,
+                                              base_y - (1 - i) * line_h,
+                                              w, lines[i], fg);
         }
     }
 

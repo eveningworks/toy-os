@@ -327,6 +327,28 @@ int ugfx_text_prev(const char *str, int i);
 // not clipping is a documented trap that has caused the same overlap
 // bug twice (see docs/gui-guidelines.md). There was no reason to
 // reproduce that here.
+// TEXT OVER SOMETHING ALREADY DRAWN. Pass this as `bg` to any of the
+// three text calls below and each glyph's partial coverage blends
+// against WHAT IS ON THE SURFACE rather than against a colour the
+// caller had to guess.
+//
+// It exists because a guess is wrong the moment the backdrop stops
+// being flat. The desktop's icon labels and its version watermark both
+// passed the old flat desktop blue as `bg`, which was exactly right
+// until wallpapers arrived -- after which every anti-aliased glyph edge
+// carried a dark halo of a colour nothing on screen had any more, and
+// the text read as smeared rather than as dim.
+//
+// NOT a colour: 0xRRGGBB uses the low three bytes, so a value with the
+// top byte set cannot collide with one.
+//
+// TWO COSTS, both real. It READS THE SURFACE BACK, so it is not usable
+// on a write-only target and is slower than the opaque path -- every
+// other caller keeps the no-read-back contract unchanged. And it makes
+// the text's legibility depend on a backdrop the caller does not
+// control, which is what ugfx_draw_string_shadowed() is for.
+#define UGFX_TRANSPARENT 0xFF000000u
+
 // One glyph at (x, y), alpha-blended between `bg` and `color`. The
 // per-cell primitive a text widget needs -- ugfx_draw_string() is a
 // loop over this.
@@ -342,6 +364,25 @@ void ugfx_draw_string(struct ugfx_surface *s, int x, int y,
 // than silently overflowing its own layout.
 int ugfx_draw_string_clipped(struct ugfx_surface *s, int x, int y, int max_w,
                               const char *str, uint32_t color, uint32_t bg);
+
+// TEXT THAT STAYS LEGIBLE ON A BACKDROP THE CALLER DOES NOT OWN: the
+// string drawn twice, once offset by a pixel in a contrasting shade and
+// once in `color`, both transparently.
+//
+// This is what every desktop does with icon labels over a wallpaper --
+// macOS, GNOME and KDE all shadow them, and Windows outlines them --
+// because a user-chosen photograph can be any colour and no single ink
+// works on all of them. The shadow's direction is fixed (down-right,
+// the conventional light source) and its shade is picked from `color`'s
+// own luminance, so light text gets a dark shadow and dark text a light
+// one without the caller deciding.
+//
+// Costs two passes over the glyphs. Use it for text on a wallpaper, not
+// for text in a widget -- a widget knows its own background.
+void ugfx_draw_string_shadowed(struct ugfx_surface *s, int x, int y,
+                                const char *str, uint32_t color);
+int ugfx_draw_string_clipped_shadowed(struct ugfx_surface *s, int x, int y,
+                                       int max_w, const char *str, uint32_t color);
 
 // --- colour ----------------------------------------------------------
 //

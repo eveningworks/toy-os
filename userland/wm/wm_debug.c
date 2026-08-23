@@ -266,6 +266,22 @@ static void cmd_windows(struct dbg_out *o, int json) {
             // so a test asserting "this really is a ring-3 client" would
             // have nothing to read.
             dbg_out_printf(o, "\"client_pid\":%d,", w->client_pid);
+            // The TITLE-BAR ICON'S OWN RECT, not a formula a tool can
+            // re-derive: which square is drawn AND which square is
+            // clickable is one answer (title_icon(), see
+            // wm_internal.h), so a test reading it cannot drift from
+            // what the compositor actually did. null when this window
+            // shows no icon -- no app_id, no matching .desktop entry,
+            // or no artwork on disk.
+            {
+                int ix, iy, isz;
+                if (title_icon(i, &ix, &iy, &isz)) {
+                    dbg_out_printf(o, "\"icon\":{\"name\":\"%s\",\"x\":%d,\"y\":%d,\"size\":%d},",
+                                 wm_window_icon_name(i), ix, iy, isz);
+                } else {
+                    dbg_out_write(o, "\"icon\":null,");
+                }
+            }
             // The FLAG, not the decorated title: wm_render.c appends
             // "(Not Responding)" at draw time, so the title here is the
             // client's own and a test looking for the suffix in it finds

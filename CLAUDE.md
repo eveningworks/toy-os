@@ -588,6 +588,8 @@ whenever a headline here tells you something you did not already know.
 - **A WIDGET REPORTS ITS RECT THROUGH THE `bounds` OP; a test-facing geometry log is `uapp_log_layout(a, prefix)`.**
 - **AN IMAGE IS DECODED IN RING 3, AND `lib/uimg.h`'s CODEC TABLE IS THE EXTENSION POINT** -- never add an image parser to the kernel, and `-ENOTSUP` (a file this build refuses) is not `-EINVAL` (a broken one). Two codecs: JPEG for photographs, QOI for anything needing ALPHA.
 - **AN ICON IS A NAME, NOT A PATH, AND IT IS COMPOSITED** -- `Icon=notepad` resolves to `/usr/share/icons/notepad.qoi` through `icon_get()`, which CACHES the decoded and scaled result; blit it with `ugfx_blit_alpha()`, never `ugfx_blit()`, or its transparent corners land as black.
+- **A WINDOW'S TITLE BAR CARRIES ITS APP ICON, AND `title_icon()` ANSWERS FOR BOTH DRAWING AND CLICKING** -- resolved from the window's own `app_id` (the client never supplies artwork, as on Wayland); no decode means no rect, so there is never a clickable square with nothing in it; clicking it opens the window menu through the same `wm_open_window_menu()` the right-click uses.
+- **TEXT ON A WALLPAPER IS `ugfx_draw_string_shadowed()`, NEVER A GUESSED `bg`** -- `UGFX_TRANSPARENT` blends against what is really on the surface (the one path that reads back), and the shadow's shade is DERIVED from the ink's luminance, because no single ink is legible on every photograph.
 - **`uui_image` IS THE ONLY WIDGET THAT OWNS MEMORY, AND IT MUST BE RELEASED.**
 - **THE WALLPAPER IS A REGISTERED SETTING, AND ITS VALUE IS A NAME** -- `desktop.wallpaper`, a filename stem under `/usr/share/wallpapers` or `none`; a GUI test measuring ink over the desktop must turn it off first.
 

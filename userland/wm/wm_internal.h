@@ -287,6 +287,25 @@ int  wm_damage_verify_enabled(void);
 struct btn_rects { int min_x, max_x, close_x, y, size; };
 struct btn_rects title_buttons(const struct window *win);
 
+// The app icon at the FAR LEFT of a title bar -- Windows' system-menu
+// icon, KWin/Breeze's and XFWM's window-menu button. Returns the
+// decoded picture (borrowed from icon_cache.h -- never freed, never
+// held across an icon_cache_invalidate()) and fills the square it
+// occupies, or NULL when this window shows none.
+//
+// ONE FUNCTION FOR BOTH BECAUSE DRAWN AND CLICKABLE MUST BE THE SAME
+// RECT. wm_render.c blits what this returns and wm_input.c hit-tests
+// what it filled in, so an icon that fails to decode (Crash Test ships
+// with no file on purpose) yields no rect either -- rather than a
+// clickable square with nothing in it, which is what a separate
+// "where would it go" helper would have produced.
+struct uimg;
+const struct uimg *title_icon(int idx, int *out_x, int *out_y, int *out_size);
+
+// Which .desktop icon name a window's app_id resolves to, or NULL --
+// see wm.c. The taskbar and the title bar both ask.
+const char *wm_window_icon_name(int idx);
+
 // Which resize cursor (if any) to show -- WM_CURSOR_H/V are the
 // straight-edge cases (dragging the right or bottom edge alone),
 // WM_CURSOR_DIAG is the corner (both at once). wm_render.c draws the

@@ -70,6 +70,30 @@ struct btn_rects title_buttons(const struct window *win) {
     return r;
 }
 
+// See wm_internal.h. Two pixels smaller than a title-bar button so the
+// artwork sits INSIDE the bar rather than filling it edge to edge, and
+// centred on the same basis title_buttons() uses so the left and right
+// ends of the bar line up.
+//
+// A floor rather than a clamp at the small end: below ~10px a 64x64
+// icon box-filtered down is a smudge, and no icon at all reads better
+// than a wrong-looking one. The title simply starts where it always
+// did in that case.
+const struct uimg *title_icon(int idx, int *out_x, int *out_y, int *out_size) {
+    if (idx < 0 || idx >= window_count) return 0;
+    int size = WM_TITLEBAR_H - 8;
+    if (size < 10) return 0;
+    const char *name = wm_window_icon_name(idx);
+    if (!name) return 0;
+    const struct uimg *ico = icon_get(name, size);
+    if (!ico) return 0;
+    const struct window *win = &windows[idx];
+    *out_x = win->x + 5;
+    *out_y = win->y + (WM_TITLEBAR_H - size) / 2;
+    *out_size = size;
+    return ico;
+}
+
 // Hand-drawn diagonal X, sized to fit inside a button/icon area of
 // size x size with a small margin. Uses a thickened line (a few
 // parallel diagonals) so it stays visible at both the small 14-18px
@@ -441,13 +465,30 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
         shown = full;
     }
 
+    // THE APP ICON, and the title shifted past it -- Windows' system
+    // menu icon and Breeze's window-menu button, in the same corner
+    // both put it. Drawn BEFORE the width budget below is computed, so
+    // the title is truncated against the room the icon actually left;
+    // appending chrome after a truncation is this codebase's
+    // most-repeated drawing bug (docs/gui-guidelines.md).
+    int text_x = win->x + 6;
+    int ix, iy, isz;
+    const struct uimg *ico = title_icon(idx, &ix, &iy, &isz);
+    if (ico) {
+        // ALPHA, not a plain blit: an icon is a rounded tile on a
+        // transparent field, and a plain blit lands its corners as
+        // black squares on the title bar.
+        ugfx_blit_alpha(wm_surface(), ix, iy, ico->w, ico->h, ico->px, ico->w);
+        text_x = ix + isz + 5;
+    }
+
     char title_buf[WIN_TITLE_MAX + 20];
-    int avail_px = r.min_x - (win->x + 6);
+    int avail_px = r.min_x - text_x;
     int max_chars = avail_px > 0 ? avail_px / ugfx_char_w() : 0;
     int i = 0;
     for (; shown[i] && i < max_chars && i < (int)sizeof title_buf - 1; i++) title_buf[i] = shown[i];
     title_buf[i] = '\0';
-    ugfx_draw_string(wm_surface(), win->x + 6, win->y + (WM_TITLEBAR_H - ugfx_char_h()) / 2, title_buf, titletext, titlebar);
+    ugfx_draw_string(wm_surface(), text_x, win->y + (WM_TITLEBAR_H - ugfx_char_h()) / 2, title_buf, titletext, titlebar);
 
     uint32_t btnbg = ugfx_rgb(230, 230, 235);
     uint32_t btnfg = UTHEME_TEXT;
