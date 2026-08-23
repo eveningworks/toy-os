@@ -163,30 +163,40 @@ def icon_uidemo():
 
 def icon_start():
     """The Start button's mark -- NOT an app icon, and deliberately not
-    shaped like one.
+    shaped like a UI convention either.
 
     Every other icon here is a pictogram of what an app IS. This one has
     no app behind it: it opens a menu of all of them. So it is an
-    abstract mark -- four rounded quadrants around a gap, the "all your
-    things" shape Windows' logo tile and KDE's launcher both settle on
-    -- rather than a picture of anything, which would read as a shortcut
-    to one particular program in the very menu it opens.
+    identity rather than a signpost -- three stacked toy bricks, which is
+    what this OS is called.
 
-    It also has NO PLATE. The Start button draws its own background
+    THE FIRST VERSION WAS A 2x2 OF ROUNDED PANES AND WAS WRONG: that is
+    the Windows logo, near enough that the button read as somebody
+    else's. A 3x3 dot grid (GNOME's "show applications") has the same
+    problem one step removed -- it is a borrowed convention rather than
+    a mark. Every distro solves this with a shape of its own (Debian's
+    swirl, Fedora's f, Arch's mountain) and so does this.
+
+    NO PLATE. The Start button draws its own background
     (uui_button_draw, in the taskbar's accent colour), so a plate here
     would be a second rounded rectangle inside the first.
+
+    DRAWN AS SOLID BLOCKS WITH GAPS, not outlines: at the ~12px the
+    taskbar scales it to, an outline's interior closes up and the whole
+    mark becomes a smudge -- the same failure icon_fontdemo() records
+    for a filled letter A.
     """
     im = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
-    # A 2x2 grid of rounded squares -- GNOME's "show applications" mark
-    # and the shape KDE's default launcher icon reduces to at small
-    # sizes. Drawn nearly edge to edge because it has no plate to sit
-    # inside: at the ~12px the taskbar scales it to, a 4px margin is a
-    # third of the artwork.
-    gap, cell, m = 5, 23, 6
-    for cx in (m, m + cell + gap):
-        for cy in (m, m + cell + gap):
-            d.rounded_rectangle([cx, cy, cx + cell, cy + cell], radius=5, fill=INK)
+    w, h, gap = 22, 20, 5
+    # Two on the bottom, one centred on top -- a stack, which is what
+    # makes it read as bricks rather than as three rectangles.
+    by = 34
+    d.rounded_rectangle([6, by, 6 + w, by + h], radius=4, fill=INK)
+    d.rounded_rectangle([6 + w + gap, by, 6 + w + gap + w, by + h], radius=4, fill=INK)
+    ty = by - h - gap
+    tx = 6 + (w + gap + w - w) // 2
+    d.rounded_rectangle([tx, ty, tx + w, ty + h], radius=4, fill=INK)
     return im
 
 
