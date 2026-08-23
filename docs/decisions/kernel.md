@@ -4250,3 +4250,151 @@ with no caller, is untested code that looks tested.** The first check
 that asked a handler to run found it in one run; the fix is to ask
 whether there is a HANDLER (`SIG_IS_HANDLER` on the action) rather than
 whether the signal is ignored.
+
+## The heap starts where the image ends, so a ring-3 program has no size limit
+
+`UADDR_HEAP_BASE` used to be a fixed `0x8000100000` -- one MiB above the
+image base -- and `userland/rt/link.ld` carried an `ASSERT` refusing any
+binary whose sections reached it. That made a memory-map constant into
+**a hard ceiling on how big a ring-3 program was allowed to be**, and it
+was not a soft one: the linker was the only thing that knew how big the
+image had got, so the failure was a link error with a message telling
+you to raise a kernel constant.
+
+One MiB is small. The measurement that made this urgent: the 83
+translation units of a `doomgeneric` port compile to ~419 KB of text,
+~80 KB of data and ~271 KB of bss -- 770 KB before this project's own
+libc and toolkit are linked in. It would have fitted, with perhaps
+150 KB to spare, which is not a margin anybody should be spending
+thought on.
+
+**The obvious fix is to raise the constant, and it is worth saying why
+that was not done.** It would have worked -- address space below the
+heap is free, nothing else lives there, and moving the base to 256 MiB
+costs a heap span that is reserved rather than mapped, so the cost is
+literally zero bytes of memory. What it does not do is stop anybody
+having to think about it again. A constant that has already been raised
+twice (this one moved with the stack top in M41 stage 4b, and the stack
+pages went 1 -> 4 separately) is a constant that will be raised a third
+time.
+
+So the base is DERIVED instead. `elf_load()` reports the page-aligned
+end of the highest `PT_LOAD` segment (`out_image_end`), and both loaders
+arm the process's heap there -- `struct sched_mm.heap_base`, per
+process, because it is a property of the binary and not of the map.
+**This is what Linux does**: `fs/binfmt_elf.c`'s `set_brk()` sets
+`mm->start_brk` and `mm->brk` from the end of the data segment, with
+ASLR adding a randomised gap on top. There is no equivalent constant in
+Linux to raise, which is the property worth copying.
+
+Three consequences worth knowing:
+
+- **`elf.c`'s bound moved rather than disappeared.** `ELF_IMAGE_END` is
+  `UADDR_GUARD_BASE` now, not the heap base -- the loader still refuses
+  a segment claiming an address the stack or its guard will occupy,
+  because segments are mapped BEFORE the stack and a greedy one would
+  be silently replaced by it. What is gone is the collision with the
+  heap, because there is no longer a fixed heap address to collide
+  with. An image that ran all the way to the guard would leave its
+  process no heap at all and every `sbrk` would refuse -- a useless
+  binary rather than an unsafe one, and the file's own doing.
+- **The image end must be the MAXIMUM over segments, not the last
+  one's.** Program headers are not required to be in address order, and
+  a loader taking the last header's end would start the heap underneath
+  a segment it had just mapped: no fault, corruption on the first
+  `malloc`. `kernel/proc/elf_test.c` asserts this with a fixture whose
+  low segment is declared last, and a positive control (making the last
+  segment win) reddens exactly that check.
+- **`UADDR_HEAP_MIN_BASE` survives as a FLOOR**, not a base. It is
+  where the legacy `elf_run.c` loader starts a heap when it has no
+  image end to derive one from, and the value a corrupt ELF cannot push
+  a heap below.
+
+`userland/tests/bigimage_test.c` is the proof: 4 MiB of `.bss`, four
+times the old ceiling, which under the old `link.ld` **would not have
+linked at all**. It fills every page with an address-derived pattern,
+mallocs a megabyte, writes it, and re-reads the array -- the aliasing
+the ASSERT existed to prevent, now prevented by arithmetic instead of
+by refusal.
+
+## The user stack is reserved and grown on fault, not allocated bigger
+
+The user stack was one 4 KiB page, then four, and the comment above the
+constant said plainly that four "is not a considered maximum" and that
+it "should be REPLACED rather than raised again when a client outgrows
+it". This is that replacement.
+
+**Why not simply raise the page count, which is one line.** Because the
+loader maps stack pages EAGERLY -- a `pmm_alloc_frame()` per page in
+both `scheduler.c` and `elf_run.c` -- so the count is not a limit, it is
+a per-process tax. A 1 MiB stack would be a megabyte of physical memory
+handed to every process at spawn whether it recursed or not, and this
+system runs a desktop, a taskbar, a handful of clients and an init: the
+cost scales with the process count and buys nothing for the processes
+that never go deep.
+
+So: **reserve, and commit on touch.** `UADDR_STACK_MAX_PAGES` is 2048
+(8 MiB, deliberately Linux's default `RLIMIT_STACK` -- a number chosen
+because it is what every C program has been tested against, not because
+anything here measured it). The loader maps `UADDR_STACK_INIT_PAGES`, 4,
+which is a starting working set rather than a limit, so the common
+client never takes a growth fault at all. Everything below arrives
+through `uheap_fault()`, the hook that already existed for the heap.
+This is Linux's `expand_downwards()` in miniature.
+
+**The rule that makes it safe is the GAP, and it is the only interesting
+decision here.** A fault inside the reservation but more than
+`UADDR_STACK_GROW_GAP` (64 KiB -- Linux's own constant) below the mapped
+bottom is REFUSED, logged, and left fatal. Without that rule an 8 MiB
+window would answer any wild pointer with memory instead of a fault
+report, which is strictly worse than the four-page stack it replaced.
+With it, the properties are:
+
+- a function opening a frame extends the stack;
+- a pointer aimed megabytes below the stack still faults, as it always
+  did;
+- a single frame LARGER than the gap dies rather than growing -- which
+  is the Stack Clash shape (CVE-2017-1000364) seen from the inside, and
+  is why `-Wframe-larger-than=2048` in `USERLAND_CFLAGS` is half of this
+  guarantee rather than an unrelated warning. `kernel/proc/uaddr_test.c`
+  asserts the two numbers stay on the right side of each other, because
+  raising the frame limit past the gap is the edit that would quietly
+  cash this in.
+
+**Three things had to move with it, and each was a real bug avoided:**
+
+- **`signal.c`'s `frame_fits()` tests the FLOOR, not the bottom.** It
+  used to check a signal frame landed at or above `UADDR_STACK_BOTTOM`.
+  With a moving bottom that would refuse a legal frame on any process
+  that had grown -- the deeper the call chain, the likelier the refusal,
+  which is exactly backwards for a signal. A frame landing on a
+  reserved-but-unmapped page is fine: `vmm_copy_to_user()` goes through
+  the same fault hook on the way in.
+- **The guard widened from 1 page to 16.** The old comment asked for
+  exactly this if the guard hole ever mattered; a stack that can now
+  grow 8 MiB is when it starts to.
+- **A refused growth is LOGGED, because the fault report cannot say
+  it.** `idt.c` names a fault in the guard as a stack overflow, and a
+  refused growth is not in the guard -- it is inside the reservation,
+  indistinguishable from an ordinary wild pointer. Without the log the
+  two most interesting failures here are both a bare "Page fault".
+
+**Why the stack goes through the same hook as the heap** rather than
+being wired into the `#PF` handler: a syscall whose output lands in a
+not-yet-grown stack page reaches it through `vmm`'s copy helpers, which
+walk page tables rather than dereferencing user addresses and so never
+fault at all. A growth path in the fault handler alone would work for
+ordinary code and fail for `read(fd, buf, n)` with `buf` a deep local --
+which is the same bug the heap had before the hook existed, arriving
+from the opposite direction.
+
+`userland/tests/stackgrow_test.c` proves it, and **no KTEST can**:
+`uaddr_test.c` asserts the map's arithmetic, and every one of those
+assertions passes just as happily on a kernel whose handler grows
+nothing. Only a ring-3 process with a deep call chain can show the pages
+arriving. It descends ~1.6 MiB in 1 KiB frames, fills each with a
+pattern derived from the frame's own ADDRESS (a constant fill cannot
+tell a working stack from two depths sharing one physical frame -- both
+read back the constant), and verifies every frame on the way back OUT,
+which is the half a growth bug breaks. With `grow_stack()` disabled it
+faults at `0x807fefcff8`, the first byte below the four mapped pages.

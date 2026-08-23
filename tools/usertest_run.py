@@ -113,6 +113,17 @@ TESTS = [
     # incidental one. Adds about a second.
     ("memtest", 0,
      ["memtest: PASSED", "sbrk refused as expected"], ["FAIL", "MISMATCH"]),
+    # The stack GROWS: ~1.6 MiB of recursion, verified on the way back
+    # out. The old kernel mapped four pages eagerly and died on the
+    # guard below them, so the depth line is the assertion -- see the
+    # file's note on why no KTEST can cover this.
+    ("stackgrow_test", 0,
+     ["stackgrow_test: all checks passed"], ["FAIL"]),
+    # A 4 MiB image, four times the ceiling userland/rt/link.ld used to
+    # ASSERT against, plus the aliasing check that ceiling existed to
+    # make unnecessary. That it LINKS is half the test.
+    ("bigimage_test", 0,
+     ["bigimage_test: all checks passed"], ["FAIL"]),
     ("guard_test", 0,
      ["guard_test: all checks passed"], ["FAIL"]),
     # malloc/free in ring 3 -- the kernel's own allocator over sbrk.

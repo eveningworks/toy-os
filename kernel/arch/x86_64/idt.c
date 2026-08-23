@@ -504,10 +504,14 @@ void isr_dispatch(uint64_t *regs) {
             vga_printf("error_code=0x%lx\n", error_code);
         }
         if (stack_overflow) {
-            vga_printf("Ran off the bottom of the user stack "
-                       "(0x%lx..0x%lx) into its guard page.\n",
-                       (uint64_t)UADDR_STACK_BOTTOM,
+            vga_printf("The user stack hit its limit: it may grow down to "
+                       "0x%lx (top 0x%lx) and went past it.\n",
+                       (uint64_t)UADDR_STACK_FLOOR,
                        (uint64_t)UADDR_STACK_VADDR + 4096);
+            vga_printf("That is %lu KiB of stack -- shorten the call chain, "
+                       "or move a big local off it.\n",
+                       (unsigned long)((UADDR_STACK_VADDR + 4096
+                                        - UADDR_STACK_FLOOR) / 1024));
         }
         if (kstack_overflow && kstack_legacy) {
             vga_printf("The LEGACY loader's kernel stack overflowed into its "

@@ -141,7 +141,7 @@ struct gui_info {
                         // break -- i.e. a pointer to `increment` freshly
                         // mapped, zeroed bytes -- or -1 if the calling
                         // process never had its heap set up (see
-                        // syscall_reset_heap() in syscall.h) or ran out
+                        // syscall_reset_mm() in syscall.h) or ran out
                         // of physical memory while mapping new pages.
 
 // A real per-window protocol, built on top of SYS_READ_KEY above -- see

@@ -140,17 +140,20 @@ static void make_valid(void) {
 
 // Runs the loader against a fresh address space and tears it down.
 // Returns what elf_load() returned.
-static int try_load(uint64_t *out_entry) {
+static int try_load_end(uint64_t *out_entry, uint64_t *out_end) {
     uint64_t as = vmm_create_address_space();
     if (!as) return -1; // no memory to test with; distinct from a refusal
 
-    uint64_t entry = 0;
-    int rc = elf_load((uint64_t)(uintptr_t)g_elf, ELF_LEN, as, &entry);
+    uint64_t entry = 0, image_end = 0;
+    int rc = elf_load((uint64_t)(uintptr_t)g_elf, ELF_LEN, as, &entry, &image_end);
     if (out_entry) *out_entry = entry;
+    if (out_end) *out_end = image_end;
 
     vmm_destroy_address_space(as);
     return rc;
 }
+
+static int try_load(uint64_t *out_entry) { return try_load_end(out_entry, 0); }
 
 KTEST("elf", "a well-formed executable loads, and reports its entry point") {
     make_valid();
@@ -190,7 +193,7 @@ KTEST("elf", "a buffer shorter than the header is refused") {
     uint64_t entry = 0;
     // 16 bytes: enough for the magic, not for the header the loader
     // would otherwise dereference.
-    int rc = elf_load((uint64_t)(uintptr_t)g_elf, 16, as, &entry);
+    int rc = elf_load((uint64_t)(uintptr_t)g_elf, 16, as, &entry, 0);
     vmm_destroy_address_space(as);
     KTEST_ASSERT_EQ(rc, 0);
 }
@@ -246,18 +249,70 @@ KTEST("elf", "p_filesz larger than p_memsz is refused") {
     KTEST_ASSERT_EQ(try_load(0), 0);
 }
 
-KTEST("elf", "a segment claiming the stack or heap is refused") {
-    // The runner maps the stack and heap AFTER elf_load() returns, so a
-    // segment placed there is either silently replaced or, worse, left
+KTEST("elf", "a segment claiming the stack or its guard is refused") {
+    // The runner maps the stack AFTER elf_load() returns, so a segment
+    // placed there is either silently replaced or, worse, left
     // underneath the stack with the process running on loader-chosen
     // bytes. Neither faults.
+    //
+    // NOT the heap any more: the heap starts where the image ends, so
+    // there is no fixed heap address for a segment to collide with. The
+    // guard below the stack is the first fixed thing above an image.
     make_valid();
-    ph(0)->p_vaddr = UADDR_HEAP_BASE;
+    ph(0)->p_vaddr = UADDR_GUARD_BASE;
     KTEST_ASSERT_EQ(try_load(0), 0);
 
     make_valid();
     ph(0)->p_vaddr = UADDR_STACK_VADDR;
     KTEST_ASSERT_EQ(try_load(0), 0);
+}
+
+KTEST("elf", "the image end is reported, page-aligned and past the segment") {
+    // What the heap base is derived from. A wrong answer here is not a
+    // refusal but an ALIASED heap -- sbrk hands out pages the image is
+    // already using -- so it is worth asserting directly rather than
+    // through whatever the loader does with it.
+    make_valid();
+    uint64_t end = 0;
+    KTEST_ASSERT_EQ(try_load_end(0, &end), 1);
+    KTEST_ASSERT_EQ(end & 4095, 0);
+    KTEST_ASSERT(end >= ph(0)->p_vaddr + ph(0)->p_memsz);
+    KTEST_ASSERT(end - (ph(0)->p_vaddr + ph(0)->p_memsz) < 4096);
+}
+
+KTEST("elf", "the image end is the HIGHEST segment, not the last one") {
+    // Program headers are not required to be in address order. A loader
+    // taking the last header's end would start the heap underneath a
+    // segment it had just mapped -- which faults on nothing and
+    // corrupts on the first malloc.
+    //
+    // So: header 0 is moved UP, header 1 is left at the image base. The
+    // highest address belongs to the FIRST header and the LAST header
+    // is the low one, which is the arrangement a naive loader gets
+    // wrong.
+    make_valid();
+    ph(0)->p_vaddr = IMAGE_BASE + 0x4000;
+
+    uint64_t high_only = 0;
+    KTEST_ASSERT_EQ(try_load_end(0, &high_only), 1);
+    KTEST_ASSERT_EQ(high_only, IMAGE_BASE + 0x5000); // the moved segment's page, rounded up
+
+    // e_phnum MUST be raised with the second header: make_valid()
+    // declares one, and without this line the loader never reads it at
+    // all and the assertion below passes whether or not the maximum is
+    // computed correctly.
+    eh()->e_phnum = 2;
+    ph(1)->p_type = T_PT_LOAD;
+    ph(1)->p_flags = 4;           // PF_R
+    ph(1)->p_offset = PAYLOAD;
+    ph(1)->p_vaddr = IMAGE_BASE;  // BELOW header 0, and read after it
+    ph(1)->p_filesz = 64;
+    ph(1)->p_memsz = 64;
+    ph(1)->p_align = 4096;
+
+    uint64_t end = 0;
+    KTEST_ASSERT_EQ(try_load_end(0, &end), 1);
+    KTEST_ASSERT_EQ(end, high_only); // unchanged: the lower, later segment lost
 }
 
 KTEST("elf", "a segment below the image base is refused") {
@@ -311,7 +366,7 @@ KTEST("elf", "a refused file leaks no frames") {
 
     uint64_t before = pmm_free_frames();
     uint64_t entry = 0;
-    int rc = elf_load((uint64_t)(uintptr_t)g_elf, ELF_LEN, as, &entry);
+    int rc = elf_load((uint64_t)(uintptr_t)g_elf, ELF_LEN, as, &entry, 0);
     uint64_t after = pmm_free_frames();
 
     vmm_destroy_address_space(as);

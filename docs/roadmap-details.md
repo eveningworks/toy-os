@@ -463,16 +463,19 @@ control in Shell pipes & job control, `run` as it exists today) eventually wants
   reuses slot indices as "PIDs" today; a real fork/exec model wants PIDs
   that don't get reused the instant a slot frees up, so a parent's
   `wait(pid)` can't accidentally match the wrong process.
-- Larger/growable user stack -- every ring-3 process gets exactly one
-  fixed 4KB page at a hardcoded `STACK_VADDR`
-  (`kernel/proc/elf_run.c`/`scheduler.c`), mapped once at process start
-  with no growth mechanism (no stack-fault-triggered auto-growth
-  anywhere in the codebase). Fine for today's small test binaries;
-  flagged directly by scoping out what a real C program (e.g. a
-  `doomgeneric`-style port, see the Backlog's Doom entry) would need --
-  untested whether 4KB is actually tight enough to matter for that
-  specific case, but worth having a real answer (a bigger fixed stack,
-  or real growth) rather than an unverified assumption either way.
+- Larger/growable user stack -- DONE 2026-08-23. It went 1 page -> 4
+  pages -> this. A process now reserves 8 MiB of stack address space
+  (`UADDR_STACK_MAX_PAGES`, deliberately Linux's default `RLIMIT_STACK`)
+  and the loader maps four pages of it; everything below arrives on
+  fault through the same hook that faults in heap pages, which is Linux's
+  `expand_downwards()`. A fault more than `UADDR_STACK_GROW_GAP` (64 KiB,
+  Linux's number) below the mapped bottom is REFUSED and logged rather
+  than grown, which is what keeps a wild pointer inside the reservation
+  a fault report instead of an answer -- and the pairing with
+  `-Wframe-larger-than=2048` is what stops a big frame leaping the gap.
+  `userland/tests/stackgrow_test.c` walks ~1.6 MiB down and verifies each
+  frame on the way back out; no KTEST can see any of this, since the map
+  macros are correct whether or not the handler grows anything.
 
 ### Signals & process control
 
@@ -2487,7 +2490,7 @@ caller is a test.
 
 - [ ] `tosh` improvements once the kernel supports them: pipelines (`a | b` -- the pipe primitive exists, the parsing doesn't), redirection, and Ctrl-C (see Signals & process control, whose requirements this migration is what makes achievable).
 
-- [ ] A GROWABLE user stack. Raised from 1 page to 4 after the ring-3 Notepad page-faulted opening its file dialog; the real answer is a page-fault handler that maps another page when the faulting address is just below the stack (`fork()`/`exec()`-style process model), not a bigger constant.
+- [x] ~~A GROWABLE user stack~~ DONE 2026-08-23. Raised from 1 page to 4 after the ring-3 Notepad page-faulted opening its file dialog; the real answer was always a page-fault handler that maps another page when the faulting address is just below the stack, not a bigger constant, and that is what it is now.
 
 - [x] ~~A userland drawing runtime, so a client can render more than flat colour~~ -- done: `userland/ui/ugfx.c` (rects, anti-aliased text, metrics), with the desktop's font mapped READ-ONLY via `WIN_REQ_FONT` rather than copied into each binary. See the git history; `userland/tests/uiclient.c` is the app-shaped client built on it.
 

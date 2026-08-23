@@ -55,16 +55,27 @@ struct elf64_phdr {
 
 // Where a segment is allowed to land.
 //
-// The image links at 0x8000000000 (userland/rt/link.ld) and the heap
-// starts at UADDR_HEAP_BASE, with the guard and stack above that. A
-// segment claiming an address at or past the heap base would be mapped
-// BEFORE the runner maps the stack and heap, so the later mapping
-// silently replaces the segment's pages -- or, worse, the segment's
-// pages survive underneath and the process runs with its stack sitting
-// on loader-controlled bytes. Neither faults; both are decided by a
-// file the loader was handed.
+// The image links at 0x8000000000 (userland/rt/link.ld). A segment
+// claiming an address at or past this ceiling would be mapped BEFORE
+// the runner maps the stack, so the later mapping silently replaces the
+// segment's pages -- or, worse, the segment's pages survive underneath
+// and the process runs with its stack sitting on loader-controlled
+// bytes. Neither faults; both are decided by a file the loader was
+// handed.
+//
+// **THE CEILING IS THE STACK'S GUARD, NOT THE HEAP'S BASE.** It was
+// UADDR_HEAP_BASE, a fixed 1 MiB above the image base, which made this
+// check double as a hard limit on how big a ring-3 program could be --
+// and userland/rt/link.ld carried a matching ASSERT so the failure was
+// a link error rather than a boot-time refusal. The heap starts where
+// the image ENDS now (elf_load's out_image_end below), so there is
+// nothing between the image and the heap to collide with, and the first
+// fixed thing above is the guard. An image that ran all the way up to
+// it would leave its process no heap at all -- sbrk would refuse every
+// call -- which is a useless binary rather than an unsafe one, and it
+// is the file's own doing.
 #define ELF_IMAGE_BASE 0x8000000000ULL
-#define ELF_IMAGE_END  UADDR_HEAP_BASE
+#define ELF_IMAGE_END  UADDR_GUARD_BASE
 
 // a + b, refusing on unsigned overflow. Every bound below is computed
 // from two file-controlled 64-bit values, so a wrapped sum would pass a
@@ -166,7 +177,7 @@ static int segment_ok(const struct elf64_phdr *ph, uint64_t elf_size) {
 }
 
 int elf_load(uint64_t elf_phys_addr, uint64_t elf_size, uint64_t pml4_phys,
-             uint64_t *out_entry) {
+             uint64_t *out_entry, uint64_t *out_image_end) {
     uint8_t *base = (uint8_t *)(uintptr_t)elf_phys_addr;
 
     // Before the header is READ, not after -- dereferencing eh on a
@@ -226,6 +237,18 @@ int elf_load(uint64_t elf_phys_addr, uint64_t elf_size, uint64_t pml4_phys,
     // while an address inside the stack would execute the stack.
     if (eh->e_entry < ELF_IMAGE_BASE || eh->e_entry >= ELF_IMAGE_END) return 0;
 
+    // WHERE THE IMAGE ENDS, which is where the caller starts the heap.
+    //
+    // The highest page-aligned end of any PT_LOAD, not the last
+    // segment's -- program headers are not required to be in address
+    // order, and a loader that assumed they were would put the heap
+    // underneath a segment it had just mapped. Empty segments are
+    // skipped for the reason segment_ok() states: every binary this
+    // build produces ends with a p_memsz 0 header at p_vaddr 0, and
+    // taking its end into the maximum would be harmless while taking a
+    // MINIMUM would not -- so this is written as the max it is.
+    uint64_t image_end = ELF_IMAGE_BASE;
+
     for (uint16_t i = 0; i < eh->e_phnum; i++) {
         struct elf64_phdr *ph = &phdrs[i];
         if (ph->p_type != PT_LOAD) continue;
@@ -233,8 +256,15 @@ int elf_load(uint64_t elf_phys_addr, uint64_t elf_size, uint64_t pml4_phys,
         // destroys the address space, which frees whatever was mapped
         // before it (see elf.h).
         if (!load_segment(base, ph, pml4_phys)) return 0;
+
+        if (ph->p_memsz == 0) continue;
+        // segment_ok() has already refused anything that would overflow
+        // here or land past ELF_IMAGE_END, so both sums are safe.
+        uint64_t end = (ph->p_vaddr + ph->p_memsz + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+        if (end > image_end) image_end = end;
     }
 
     *out_entry = eh->e_entry;
+    if (out_image_end) *out_image_end = image_end;
     return 1;
 }

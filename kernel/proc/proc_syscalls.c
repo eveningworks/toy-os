@@ -2,7 +2,7 @@
 // killing, and the two clocks a process can read.
 #include "syscalls.h"
 #include "heap.h"  // the environment blob, kept off syscall_dispatch()'s frame
-#include "syscall.h"   // syscall_reset_heap()'s own declaration
+#include "syscall.h"   // syscall_reset_mm()'s own declaration
 #include "syscall_abi.h"
 #include "errno.h"
 #include "klog.h"
@@ -23,21 +23,26 @@
 #include "strace.h"     // strace_arm_for_current() -- SYS_SPAWN's SPAWN_TRACE
 #include <stddef.h>
 
-// SYS_SBRK state for the LEGACY single process syscall_reset_heap() was
-// last armed for -- elf_run.c's blocking loader, which has no scheduler
-// slot to keep this in (same reasoning as g_process_ctx above).
+// The demand-paged memory of the LEGACY single process
+// syscall_reset_mm() was last armed for -- elf_run.c's blocking loader,
+// which has no scheduler slot to keep this in (same reasoning as
+// g_process_ctx above).
 //
 // A scheduler-spawned process does NOT use this: it carries its own
-// `struct sched_heap`, armed when its slot is created. Both are the same
+// `struct sched_mm`, armed when its slot is created. Both are the same
 // TYPE and go through the same handler, so the two owners cannot drift
 // in behaviour -- which is the whole reason the legacy side is a struct
 // here rather than the loose pair of globals it used to be.
 static uint64_t g_heap_pml4 = 0;
-static struct sched_heap g_legacy_heap;
+static struct sched_mm g_legacy_mm;
 
-void syscall_reset_heap(uint64_t pml4_phys, uint64_t heap_base) {
+void syscall_reset_mm(uint64_t pml4_phys, uint64_t image_end) {
+    uint64_t heap_base = image_end > UADDR_HEAP_MIN_BASE
+                              ? image_end : UADDR_HEAP_MIN_BASE;
     g_heap_pml4 = pml4_phys;
-    g_legacy_heap.brk = heap_base;
+    g_legacy_mm.heap_base    = heap_base;
+    g_legacy_mm.brk          = heap_base;
+    g_legacy_mm.stack_bottom = UADDR_STACK_INIT_BOTTOM;
 }
 
 SYSCALL_HANDLER sys_do_proc_info(uint64_t *regs, uint64_t rdi, uint64_t rsi) {
@@ -80,7 +85,7 @@ int sys_sbrk(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
     uint64_t inc = c->a0;
 
-    // Refuse unless syscall_reset_heap() armed a heap for exactly
+    // Refuse unless syscall_reset_mm() armed a heap for exactly
     // this address space -- e.g. a process that never had its heap
     // set up (heap_base defaults to 0, which can't equal a real
     // CR3) or, in principle, a scheduler-managed process (this
@@ -89,13 +94,13 @@ int sys_sbrk(struct syscall_ctx *c) {
     // into the wrong address space.
     // WHOSE break this is. A scheduler-spawned process carries its
     // own, armed when its slot is created; the kernel context is the
-    // legacy elf_run.c loader, whose single slot syscall_reset_heap()
+    // legacy elf_run.c loader, whose single slot syscall_reset_mm()
     // arms. Two OWNERS because the legacy loader has no scheduler
     // slot to hold state in -- but one representation and one
     // handler, so the two cannot drift in behaviour, and everything
     // below writes through `hp` rather than to either directly.
-    struct sched_heap *sh = scheduler_current_heap();
-    struct sched_heap *hp = sh ? sh : &g_legacy_heap;
+    struct sched_mm *sh = scheduler_current_mm();
+    struct sched_mm *hp = sh ? sh : &g_legacy_mm;
 
     // The pml4 check applies only to the legacy slot, which is armed
     // for one address space at a time and would otherwise hand a
@@ -153,8 +158,9 @@ int sys_sbrk(struct syscall_ctx *c) {
     return 0;
 }
 
-// Faults in one heap page, for whatever is asking -- the #PF handler,
-// or vmm's copy helpers walking to a frame that is not there yet.
+// Faults in one page of a process's demand-paged memory, for whatever
+// is asking -- the #PF handler, or vmm's copy helpers walking to a frame
+// that is not there yet.
 //
 // Registered with vmm at boot (uheap_fault_init()), rather than called
 // from idt.c directly, because the fault handler is NOT the only entry:
@@ -164,38 +170,29 @@ int sys_sbrk(struct syscall_ctx *c) {
 // unmapped and demand paging would silently break every syscall taking
 // a pointer. See vmm.h.
 //
+// **THE STACK GOES THROUGH THE SAME HOOK, AND IT HAS TO.** A syscall
+// whose output lands in a not-yet-grown stack page reaches it through
+// the copy helpers, exactly as an sbrk'd buffer does -- so a growth path
+// wired only into the #PF handler would work for ordinary code and fail
+// for `read(fd, buf, n)` with `buf` a deep local. That is the same bug
+// the heap had before this hook existed, and it would have come back
+// with the opposite symptom.
+//
 // Returns 1 only if it mapped something and the access should be
 // retried. Everything else is 0 and stays fatal: a wild pointer, the
-// stack guard, an address past the break, or a heap page it could not
-// find a frame for.
-static int uheap_fault(uint64_t pml4_phys, uint64_t vaddr) {
-    if (vaddr < UADDR_HEAP_BASE || vaddr >= UADDR_HEAP_LIMIT) return 0;
+// stack guard, an address past the break, a growth leap too deep to be
+// a stack frame, or a page it could not find a frame for.
 
-    // WHOSE heap this is, resolved by address space rather than by "who
-    // is running": the copy helpers run inside a syscall made by the
-    // owner, but saying so is an assumption, and the legacy loader's
-    // single slot is armed per pml4 anyway.
-    struct sched_heap *hp = scheduler_heap_for_pml4(pml4_phys);
-    if (!hp && g_heap_pml4 && pml4_phys == g_heap_pml4) hp = &g_legacy_heap;
-    if (!hp) return 0;
-
-    // Past the break is NOT a heap page. This is the check that keeps
-    // the reservation meaningful -- without it the whole ~2 GiB region
-    // would fault in on any stray pointer, and a wild write would be
-    // answered with memory instead of a fault report.
-    uint64_t page = vaddr & ~0xFFFULL;
-    if (page < UADDR_HEAP_BASE || page >= hp->brk) return 0;
-
+// Zeroed, because a fresh page carrying somebody else's data is both a
+// surprise to the program and a disclosure between processes. sbrk's
+// eager version zeroed too; nothing changes for a caller.
+static int map_zeroed_user_page(uint64_t pml4_phys, uint64_t page) {
     uint64_t frame = pmm_alloc_frame();
     if (!frame) {
-        klog_printf("heap: no frame for user page %#lx -- the process dies here\n",
+        klog_printf("mm: no frame for user page %#lx -- the process dies here\n",
                     page);
         return 0;
     }
-    // Zeroed, because a fresh heap page carrying somebody else's data
-    // is both a surprise to the program and a disclosure between
-    // processes. sbrk's eager version zeroed too; nothing changes for a
-    // caller.
     for (size_t i = 0; i < 4096; i++) ((uint8_t *)(uintptr_t)frame)[i] = 0;
 
     if (!vmm_map_user_page(pml4_phys, page, frame)) {
@@ -203,6 +200,82 @@ static int uheap_fault(uint64_t pml4_phys, uint64_t vaddr) {
         return 0;
     }
     return 1;
+}
+
+// Grows the stack down to cover `page`, which the caller has already
+// established lies inside the reservation and below the current bottom.
+//
+// EVERY PAGE FROM THE OLD BOTTOM DOWN TO THE FAULTING ONE IS MAPPED, not
+// just the faulting one, and `stack_bottom` is what says so: the field
+// means "every page from here up is mapped", and leaving a hole under a
+// lowered bottom would make that a lie in the direction that never
+// faults -- the next access into the hole would be answered by this same
+// function deciding there was nothing to do.
+static int grow_stack(struct sched_mm *mm, uint64_t pml4_phys, uint64_t page) {
+    while (mm->stack_bottom > page) {
+        uint64_t next = mm->stack_bottom - 4096;
+        if (!map_zeroed_user_page(pml4_phys, next)) return 0;
+        // Committed one page at a time, so a failure part way down
+        // leaves a SHORTER stack that is still entirely mapped rather
+        // than a bottom pointing at a page that was never allocated.
+        mm->stack_bottom = next;
+    }
+    return 1;
+}
+
+static int uheap_fault(uint64_t pml4_phys, uint64_t vaddr) {
+    // WHOSE memory this is, resolved by address space rather than by
+    // "who is running": the copy helpers run inside a syscall made by
+    // the owner, but saying so is an assumption, and the legacy loader's
+    // single slot is armed per pml4 anyway.
+    struct sched_mm *hp = scheduler_mm_for_pml4(pml4_phys);
+    if (!hp && g_heap_pml4 && pml4_phys == g_heap_pml4) hp = &g_legacy_mm;
+    if (!hp) return 0;
+
+    uint64_t page = vaddr & ~0xFFFULL;
+
+    // --- the stack, growing DOWN ---------------------------------------
+    if (uaddr_is_stack_range(vaddr)) {
+        // Already mapped, or above the bottom: not ours to answer. The
+        // access faulted for some other reason (a write to a read-only
+        // page, say), and reporting it is the classifier's job.
+        if (page >= hp->stack_bottom) return 0;
+
+        // HOW FAR BELOW THE BOTTOM DECIDES WHETHER THIS IS A STACK AT
+        // ALL. Within the gap it is a function opening a frame; deeper
+        // than that it is a wild pointer that happens to land in the
+        // reservation, or a frame so large it leapt the growable region,
+        // and both are worth a fault report rather than memory. See
+        // UADDR_STACK_GROW_GAP.
+        if (hp->stack_bottom - page > UADDR_STACK_GROW_GAP) {
+            // LOGGED, because the fault report cannot say this. idt.c
+            // names a fault in the GUARD as a stack overflow, and this
+            // address is not in the guard -- it is inside the
+            // reservation, which from the outside looks like an
+            // ordinary wild pointer. Without this line the two most
+            // interesting failures here (a frame that leapt the gap,
+            // and a pointer aimed into unmapped stack) are both a bare
+            // "Page fault" with nothing to distinguish them.
+            klog_printf("mm: refused to grow the stack to %#lx -- %lu KiB "
+                        "below the bottom (%#lx), further than one frame\n",
+                        page, (unsigned long)((hp->stack_bottom - page) / 1024),
+                        hp->stack_bottom);
+            return 0;
+        }
+
+        if (!grow_stack(hp, pml4_phys, page)) return 0;
+        return 1;
+    }
+
+    // --- the heap, growing UP ------------------------------------------
+    //
+    // Past the break is NOT a heap page. This is the check that keeps
+    // the reservation meaningful -- without it the whole ~2 GiB region
+    // would fault in on any stray pointer, and a wild write would be
+    // answered with memory instead of a fault report.
+    if (page < hp->heap_base || page >= hp->brk) return 0;
+
+    return map_zeroed_user_page(pml4_phys, page);
 }
 
 void uheap_fault_init(void) { vmm_set_fault_handler(uheap_fault); }
@@ -566,6 +639,6 @@ int sys_sleep(struct syscall_ctx *c) {
 void proc_syscall_release(uint64_t pml4_phys) {
     if (g_heap_pml4 == pml4_phys) {
         g_heap_pml4 = 0;
-        g_legacy_heap.brk = 0;
+        g_legacy_mm.brk = 0;
     }
 }

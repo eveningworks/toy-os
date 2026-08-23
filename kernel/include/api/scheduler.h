@@ -87,28 +87,51 @@ int scheduler_current_pid(void);
 // single-instance activation on it.
 int scheduler_exec_path(int pid, char *out, unsigned cap);
 
-// --- the running process's heap ---------------------------------------
+// --- the running process's demand-paged memory ------------------------
 //
-// SYS_SBRK's per-process state, reached by the syscall layer rather than
-// held there.
+// Where this process's heap and stack currently reach, reached by the
+// syscall and fault layers rather than held there.
 //
-// ONE field, and it is a RESERVATION: `brk` is the first address past
-// the heap the process has claimed, and nothing below it is necessarily
-// mapped. Pages arrive on first touch (proc_syscalls.c's uheap_fault(),
-// registered with vmm), which is what makes a ~2 GiB heap affordable.
+// **NAMED FOR LINUX'S `mm_struct`, WHICH IS THE SAME THREE FACTS** --
+// `start_brk`, `brk`, and where the stack is -- for the same reason:
+// they are the boundaries of the two regions that MOVE while a process
+// runs, and every other address in the map is fixed and lives in
+// kernel/uaddr.h. It was `struct sched_heap` with one field while the
+// heap was the only thing that moved.
 //
-// It used to carry a second field, `mapped_end` -- how far pages had
-// actually been allocated behind the break. Demand paging deletes the
-// concept rather than tracking it: the page tables already record which
-// pages exist, and a second record of the same fact could only ever
-// disagree with them, silently and in the direction that matters (a
-// page believed mapped that is not).
+// EVERY FIELD IS A RESERVATION'S EDGE, NOT A MAPPING. Nothing below
+// `brk` and nothing above `stack_bottom` is necessarily mapped -- pages
+// arrive on first touch (proc_syscalls.c's uheap_fault(), registered
+// with vmm), which is what makes a ~2 GiB heap and an 8 MiB stack
+// affordable.
+//
+// It used to carry `mapped_end` -- how far pages had actually been
+// allocated behind the break. Demand paging deletes the concept rather
+// than tracking it: the page tables already record which pages exist,
+// and a second record of the same fact could only ever disagree with
+// them, silently and in the direction that matters (a page believed
+// mapped that is not). `stack_bottom` below is NOT a return of that
+// mistake, and the difference is worth being precise about: it is the
+// LIMIT the fault handler grows from, not a claim about what is mapped.
+// Pages between it and UADDR_STACK_VADDR are all mapped, because the
+// only thing that moves it is the code that maps them.
 //
 // Still a struct handed out by pointer rather than a get/set pair,
 // because there are two owners of one representation (a scheduler slot
 // and the legacy loader's single slot) and they must not drift.
-struct sched_heap {
+struct sched_mm {
+    // The page after this process's loaded image ends -- where its heap
+    // starts, and the floor sbrk may never return below. Per process
+    // because it is derived from the ELF, which is what removed the
+    // fixed ceiling on how big an image was allowed to be.
+    uint64_t heap_base;
+
+    // First address past the heap the process has claimed.
     uint64_t brk;
+
+    // Lowest MAPPED stack page. Moves DOWN as the stack grows, never
+    // past UADDR_STACK_FLOOR.
+    uint64_t stack_bottom;
 };
 
 // A process's CURRENT DIRECTORY -- a normalized absolute path, exactly
@@ -123,7 +146,7 @@ struct sched_heap {
 // children's arguments would be a SECOND path-resolution rule beside
 // kpath.c's, which is the drift that file exists to have fixed once.
 //
-// Same two-owners-one-representation shape as struct sched_heap above:
+// Same two-owners-one-representation shape as struct sched_mm above:
 // a scheduler slot holds one, and the legacy elf_run.c loader (which
 // has no slot) holds a single one of the same type in fs_syscalls.c.
 // The array size is checked against FS_PATH_MAX by a _Static_assert in
@@ -154,21 +177,22 @@ const char *scheduler_cwd(void);
 // two notions of "here" disagree silently.
 void scheduler_set_kernel_cwd(const char *path);
 
-// The heap belonging to a given address space, or NULL if none does.
+// The memory map belonging to a given address space, or NULL if none
+// does.
 //
 // By PML4 rather than by "who is running", because the fault-in path
 // has an address space in hand and asking who is current would be an
 // assumption -- true today for the copy helpers, and not a thing to
 // rely on in a fault handler.
-struct sched_heap *scheduler_heap_for_pml4(uint64_t pml4_phys);
+struct sched_mm *scheduler_mm_for_pml4(uint64_t pml4_phys);
 
-// The heap of the process currently on the CPU, or NULL when the kernel
+// The memory map of the process currently on the CPU, or NULL when the kernel
 // context is running (current_index == -1) -- which is the legacy
 // elf_run.c case, where syscall.c's own single-slot heap still applies.
 // Every scheduler-spawned process has one armed from the moment it is
 // created, so the NULL means "not a scheduled process", never "this
 // process has no heap".
-struct sched_heap *scheduler_current_heap(void);
+struct sched_mm *scheduler_current_mm(void);
 
 // Runs the M16 demo: spawns two small ring-3 counter programs
 // (userland/counter_a.c, counter_b.c) and preemptively round-robins

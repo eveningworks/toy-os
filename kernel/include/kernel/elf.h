@@ -44,7 +44,13 @@
 // this function does not unwind them -- destroying the address space
 // frees every leaf page it owns, which is both simpler and what the
 // callers already have to do for the stack and heap they map next.
+// `out_image_end` receives the page-aligned address just past the
+// highest PT_LOAD segment -- where the caller must start this process's
+// heap (`struct sched_mm.heap_base`). May be NULL for a caller that
+// arms no heap. Deriving it here rather than fixing it in the map is
+// what removed the ceiling on how big a ring-3 image may be; see
+// elf.c's ELF_IMAGE_END and kernel/uaddr.h.
 int elf_load(uint64_t elf_phys_addr, uint64_t elf_size, uint64_t pml4_phys,
-             uint64_t *out_entry);
+             uint64_t *out_entry, uint64_t *out_image_end);
 
 #endif

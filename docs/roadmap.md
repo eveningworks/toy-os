@@ -196,7 +196,7 @@ only expensive part of it.
 - [ ] `exec()`-style in-place process replacement
 - [ ] `wait()`/exit-status reporting for a parent process
 - [ ] Real PID allocation beyond the scheduler's fixed 4-slot table
-- [ ] Larger/growable user stack (today: a single fixed 4KB page, no growth mechanism)
+- [x] ~~Larger/growable user stack~~ DONE 2026-08-23 -- 8 MiB reserved, grown on fault; four pages is the starting working set
 - [ ] Copy-on-write page-fault handler -- the piece `fork()` above needs to not copy the whole address space eagerly
 - [ ] `argv`/`envp` passed to a new process (today's ELF entry takes nothing)
 - [ ] Zombie reaping + parent PID tracking
@@ -439,7 +439,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~An abstract transport behind that protocol~~ DONE 2026-08-18 -- `struct win_transport`
 - [x] ~~A bigger process table (4 slots)~~ DONE 2026-08-18 -- `SCHED_MAX_PROCS` is 64
 - [ ] `tosh` improvements once the kernel supports them: pipelines (`a | b`
-- [ ] A GROWABLE user stack
+- [x] ~~A GROWABLE user stack~~ DONE 2026-08-23
 - [x] ~~A userland drawing runtime, so a client can render more than flat colour~~ done
 - [x] ~~Port the `apps/ui/` widgets Calculator needs to userland~~ done
 - [x] ~~Migrate one real app (Calculator) to `userland/`~~ done

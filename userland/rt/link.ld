@@ -42,18 +42,18 @@ SECTIONS
     .data : { *(.data .data.*) } :data
     .bss : { *(COMMON) *(.bss .bss.*) } :data
 
-    /* THE IMAGE MUST NOT REACH ITS OWN HEAP. UADDR_HEAP_BASE
-       (kernel/include/kernel/uaddr.h) is 0x8000100000, one MiB above
-       the base above, and SYS_SBRK starts handing out pages there --
-       so a binary whose sections passed that address would have its
-       .bss silently aliased by its own malloc. Nothing checked it
-       until this line: the linker is the only place that knows how big
-       the image actually got.
+    /* NO CEILING HERE ANY MORE, and that is the point.
 
-       Kept as a literal rather than including uaddr.h, which is
-       kernel-internal and not on a linker script's include path
-       anyway. If that constant moves, this moves with it -- the
-       message says so. */
-    ASSERT(. <= 0x8000100000,
-           "userland image reached UADDR_HEAP_BASE (0x8000100000) -- it would overlap its own heap; raise the heap base in kernel/include/kernel/uaddr.h or shrink the program")
+       This used to carry an ASSERT refusing any binary whose sections
+       reached UADDR_HEAP_BASE -- a fixed 1 MiB above the base above --
+       because SYS_SBRK started handing out pages there and a bigger
+       image would have had its .bss silently aliased by its own malloc.
+       One MiB is not much for a real program, and the linker was the
+       only thing that knew how big the image had got.
+
+       The kernel derives each process's heap base from where its image
+       actually ENDS now (elf.c's out_image_end -> struct sched_mm's
+       heap_base), which is what Linux does in fs/binfmt_elf.c. So there
+       is nothing fixed for the image to collide with, and the size of a
+       ring-3 program is bounded only by the memory to load it. */
 }

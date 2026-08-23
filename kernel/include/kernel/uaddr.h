@@ -18,21 +18,34 @@
 //
 // The map, low to high:
 //
-//     UADDR_HEAP_BASE   0x8000100000   heap, grows UP via SYS_SBRK
-//         ...                          (~2046 MiB, minus the guard)
-//     UADDR_HEAP_LIMIT                 sbrk refuses at or past here
+//     0x8000000000                     the image: text, rodata, data, bss
+//         ...                          (userland/rt/link.ld places it)
+//     mm->heap_base                    THE PAGE AFTER THE IMAGE ENDS
+//         ...                          heap, grows UP via SYS_SBRK
+//     mm->brk                          sbrk refuses at or past HEAP_LIMIT
+//     UADDR_HEAP_LIMIT
 //     UADDR_GUARD_BASE                 UADDR_GUARD_PAGES unmapped pages
-//     UADDR_STACK_BOTTOM               lowest mapped stack page
-//         ...                          stack, grows DOWN
+//     UADDR_STACK_FLOOR                the stack may never grow past this
+//         ...                          stack, grows DOWN on fault
+//     mm->stack_bottom                 lowest MAPPED stack page
+//         ...
 //     UADDR_STACK_VADDR 0x807FF00000   TOP page: argv, and RSP at entry
 //
-// **HEAP PAGES ARE NOT MAPPED BY sbrk.** The break is a RESERVATION;
-// the frame arrives on the first touch, through vmm's fault-in hook.
-// So the span above is address space, not memory -- a process may
-// reserve far more than the machine has, and finds out on the page it
-// cannot be given rather than at the sbrk call. That is overcommit, and
-// it is the only reason a 2 GiB reservation is affordable at all; see
-// docs/decisions.md.
+// **TWO OF THOSE BOUNDARIES ARE PER-PROCESS, AND THAT IS THE POINT.**
+// `heap_base` and `stack_bottom` live in `struct sched_mm`
+// (api/scheduler.h), not here, because neither is knowable until a
+// particular ELF has been loaded and a particular call chain has run.
+// What this header still fixes is the ENVELOPE they move inside, which
+// is what a bounds check can be written against.
+//
+// **HEAP PAGES ARE NOT MAPPED BY sbrk, AND STACK PAGES ARE NOT MAPPED
+// BY THE LOADER.** Both are RESERVATIONS; the frame arrives on the
+// first touch, through vmm's fault-in hook (proc_syscalls.c's
+// uheap_fault()). So both spans above are address space, not memory --
+// a process may reserve far more than the machine has, and finds out on
+// the page it cannot be given rather than at the call that reserved it.
+// That is overcommit, and it is the only reason a ~2 GiB heap and an
+// 8 MiB stack are affordable at all; see docs/decisions.md.
 //
 // **The guard region is defined by being UNMAPPED, and that is the
 // whole mechanism** -- there is no PTE to set, because a page that was
@@ -59,43 +72,80 @@
 // at the same time (8.3 + 8.3 > 14).
 //
 // It is 0x807FF00000 now, one MiB below WIN_CLIENT_BASE, which the same
-// change moved to 0x8080000000. That leaves ~2046 MiB of heap -- more
+// change moved to 0x8080000000. That leaves ~2038 MiB of heap -- more
 // than any machine this OS boots on has, which is the point: the limit
 // stops being an arbitrary constant somebody has to keep raising and
-// becomes physical memory. It is affordable only because sbrk no longer
-// maps what it reserves.
+// becomes physical memory. It is affordable only because neither sbrk
+// nor the loader maps what it reserves.
 #define UADDR_STACK_VADDR   0x807FF00000ULL
 
-// How many pages of user stack a process gets.
+// How many pages of stack the LOADER maps before the process runs.
 //
 // It was ONE, and that was a real, hit-in-practice limit: the ring-3
 // Notepad page-faulted the moment it opened its file dialog, because
 // its draw path plus two 512-byte I/O buffers does not fit in 4 KiB.
+// Then it was four, described in this comment as "not a considered
+// maximum, just comfortably past the point where an ordinary GUI client
+// fails", with a note that it should be REPLACED rather than raised
+// again. This is that replacement, so four is now merely the WORKING
+// SET a process starts with -- the top page (where argv is laid out and
+// where RSP starts) plus three, enough that the common client never
+// takes a growth fault at all.
+#define UADDR_STACK_INIT_PAGES  4
+
+// How far down the stack is allowed to grow, in pages. 2048 = 8 MiB,
+// which is deliberately Linux's default RLIMIT_STACK -- a number chosen
+// because it is what every C program on earth has been tested against,
+// not because anything here measured it.
 //
-// Four pages is not a considered maximum, just comfortably past the
-// point where an ordinary GUI client fails. The real answer is a
-// growable stack -- a fault handler that maps another page when the
-// faulting address is just below the current bottom, which is what the
-// guard region below would then move down ahead of -- and that is still
-// a roadmap item (Milestone 9). Until then this is a bigger fixed
-// allocation, and it should be REPLACED rather than raised again when a
-// client outgrows it.
-#define UADDR_STACK_PAGES   4
+// This is a RESERVATION of address space and costs nothing until
+// touched. What it does cost is heap: UADDR_HEAP_LIMIT sits below it,
+// so every page reserved here is a page sbrk can never hand out. At
+// ~2 GiB of heap against 8 MiB of stack that trade is not close.
+#define UADDR_STACK_MAX_PAGES   2048
 
-#define UADDR_STACK_BOTTOM  (UADDR_STACK_VADDR - (uint64_t)(UADDR_STACK_PAGES - 1) * 4096)
+// The lowest page the loader maps, and the lowest page the stack may
+// EVER reach. The first moves down as the stack grows; the second does
+// not move at all, and is what every bounds check is written against.
+#define UADDR_STACK_INIT_BOTTOM \
+    (UADDR_STACK_VADDR - (uint64_t)(UADDR_STACK_INIT_PAGES - 1) * 4096)
+#define UADDR_STACK_FLOOR \
+    (UADDR_STACK_VADDR - (uint64_t)(UADDR_STACK_MAX_PAGES - 1) * 4096)
 
-// How many unmapped pages sit below the stack.
+// HOW FAR BELOW THE CURRENT BOTTOM A FAULT MAY LAND AND STILL BE GROWTH.
 //
-// One page catches a function walking off the bottom, which is the
-// common case. It does NOT catch a single frame larger than the guard
-// (a big local array, a deep alloca) jumping clean over the hole into
-// the heap below -- the classic guard-page hole, and the reason real
-// kernels pair a guard with a stack-probe ABI. Widen this rather than
-// adding a second mechanism if that ever bites: address space here is
-// free, and nothing else is allowed in the gap.
-#define UADDR_GUARD_PAGES   1
+// This is the whole difference between "the stack grows" and "any wild
+// pointer in an 8 MiB window is answered with memory instead of a fault
+// report". A fault this far below the mapped bottom or less extends the
+// stack by the pages in between; anything deeper is refused and reported
+// as a stack overflow, exactly as running off the bottom always was.
+//
+// 64 KiB is Linux's number (the constant in its own expand_downwards()
+// check), and it is not arbitrary in either kernel: it has to exceed the
+// largest displacement a single function can reach below RSP before it
+// touches anything nearer, or a big stack frame LEAPS the growable
+// region and dies on a stack that was willing to grow for it. That is
+// the Stack Clash shape (CVE-2017-1000364) seen from the other side.
+//
+// What stops that here is not this constant on its own but the pair of
+// it and -Wframe-larger-than=2048 (Makefile's USERLAND_CFLAGS), which
+// refuses at COMPILE time the frames this would refuse at run time.
+// Raising one without the other is how the guarantee gets lost.
+#define UADDR_STACK_GROW_GAP  (16 * 4096ULL)
 
-#define UADDR_GUARD_BASE    (UADDR_STACK_BOTTOM - (uint64_t)UADDR_GUARD_PAGES * 4096)
+// How many unmapped pages sit below the stack's floor.
+//
+// Sixteen, up from one. One page catches a function walking off the
+// bottom, which is the common case, and does NOT catch a single frame
+// larger than the guard jumping clean over the hole into the heap below
+// -- the classic guard-page hole, and the reason real kernels pair a
+// guard with a stack-probe ABI. The old comment here said to widen this
+// rather than add a second mechanism if it ever bit; a stack that can
+// now grow 8 MiB is when that becomes worth doing rather than noting.
+// Address space in the gap is free and nothing else is allowed in it.
+#define UADDR_GUARD_PAGES   16
+
+#define UADDR_GUARD_BASE    (UADDR_STACK_FLOOR - (uint64_t)UADDR_GUARD_PAGES * 4096)
 
 // Not stated here, but part of the same map: the windowing regions a
 // GUI client gets -- its own window buffers, the shared font, the
@@ -103,19 +153,48 @@
 // compositor's framebuffer grant). They live in abi/win_proto.h,
 // because a CLIENT needs those numbers and this header is
 // kernel-internal. All of them sit well above the addresses below.
-#define UADDR_HEAP_BASE     0x8000100000ULL // heap, grows UP via SYS_SBRK
+
+// THE LOWEST ADDRESS A HEAP MAY START AT. Not where any heap actually
+// starts -- that is `mm->heap_base`, the page after the loaded image
+// ends -- but the floor a corrupt or hostile ELF cannot push it below,
+// and the address the legacy loader still uses when it has no image end
+// to derive one from.
+//
+// It was UADDR_HEAP_BASE, a fixed 1 MiB above the image base, and that
+// made it a CEILING ON THE IMAGE: userland/rt/link.ld carried an ASSERT
+// refusing any binary whose sections reached it, because segments are
+// mapped before the stack and heap and a greedy one would be silently
+// replaced by them. Deriving the base from the image's actual end
+// deletes the ceiling instead of moving it, which is what Linux does
+// (fs/binfmt_elf.c's set_brk() sets mm->start_brk from the end of the
+// data segment; ASLR adds a random gap on top).
+#define UADDR_HEAP_MIN_BASE 0x8000100000ULL
 
 // The first address SYS_SBRK must never map. Derived from the guard,
-// not written down as its own number, so widening the guard moves the
-// heap's ceiling with it instead of quietly opening a gap.
+// not written down as its own number, so widening the guard or the
+// stack's reservation moves the heap's ceiling with it instead of
+// quietly opening a gap.
 #define UADDR_HEAP_LIMIT    UADDR_GUARD_BASE
 
 // True if a faulting address lies in the guard region -- i.e. this
 // fault is a stack overflow rather than a wild pointer. Takes the raw
 // CR2 value; the caller has already established the fault came from
 // ring 3.
+//
+// NOTE what this does NOT catch any more, and why that is not a loss: a
+// fault between the floor and the current bottom is now GROWTH, handled
+// before any classifier sees it, and one that is refused (too deep a
+// leap, or no frame to be had) is reported by uheap_fault()'s own path.
+// This answers only for the region past the point where growth stops.
 static inline int uaddr_is_stack_guard(uint64_t addr) {
-    return addr >= UADDR_GUARD_BASE && addr < UADDR_STACK_BOTTOM;
+    return addr >= UADDR_GUARD_BASE && addr < UADDR_STACK_FLOOR;
+}
+
+// Is this address inside the stack's reservation -- mapped or not?
+// The envelope a growth attempt must land in before anything else about
+// it is considered.
+static inline int uaddr_is_stack_range(uint64_t addr) {
+    return addr >= UADDR_STACK_FLOOR && addr <= UADDR_STACK_VADDR + 4095;
 }
 
 #endif

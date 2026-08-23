@@ -212,20 +212,21 @@ int elf_run_from_fs(const char *path, const char *args) {
     // first syscall. See kernel/proc/strace.c.
     strace_claim(as);
 
-    uint64_t entry = 0;
+    uint64_t entry = 0, image_end = 0;
     // `size` comes from fs_read() above and used to be discarded here;
     // it is what bounds every offset in the file. On failure the address
     // space is destroyed rather than leaked -- see elf.h.
-    if (!elf_load(elf_phys, size, as, &entry)) {
+    if (!elf_load(elf_phys, size, as, &entry, &image_end)) {
         vga_write("run: "); vga_write(path); vga_write(" isn't a valid ELF64 executable\n");
         vmm_destroy_address_space(as);
         return -1;
     }
 
-    // The TOP page holds argv and is where RSP starts; the rest are
-    // mapped below it so the stack has room to grow into.
+    // The TOP page holds argv and is where RSP starts; the rest are the
+    // starting working set. Everything below them is reserved address
+    // space uheap_fault() maps on demand -- see kernel/uaddr.h.
     uint64_t stack_phys = 0;
-    for (int pg = 0; pg < UADDR_STACK_PAGES; pg++) {
+    for (int pg = 0; pg < UADDR_STACK_INIT_PAGES; pg++) {
         uint64_t frame = pmm_alloc_frame();
         if (!frame) {
             vga_write("run: out of physical memory for the stack\n");
@@ -239,13 +240,13 @@ int elf_run_from_fs(const char *path, const char *args) {
     }
 
     // Arms SYS_SBRK for this process unconditionally -- cheap
-    // bookkeeping (see syscall.c's syscall_reset_heap()), not an
+    // bookkeeping (see syscall.c's syscall_reset_mm()), not an
     // allocation, so it costs nothing for a binary that never calls
     // sbrk(). This used to be a case-by-case opt-in (only echo_test.c
     // called it, for the one binary that needed SYS_SBRK) -- made
     // universal here so any /bin binary can use it, not just the ones
     // whose bespoke kernel-side loader remembered to arm it.
-    syscall_reset_heap(as, UADDR_HEAP_BASE);
+    syscall_reset_mm(as, image_end);
 
     uint64_t argc = 0, argv = 0, user_rsp = 0;
     if (!elf_build_argv_on_stack(stack_phys, UADDR_STACK_VADDR, path, args, 0,

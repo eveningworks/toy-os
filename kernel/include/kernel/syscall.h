@@ -35,13 +35,15 @@ void syscall_dispatch(uint64_t *regs);
 // for the same legacy one-process-at-a-time callers.
 //
 // A SCHEDULER-managed process does NOT need this and must not use it:
-// it carries its own `struct sched_heap`, armed when the slot is
+// it carries its own `struct sched_mm`, armed when the slot is
 // created, and SYS_SBRK prefers that whenever one is running
-// (scheduler_current_heap()). That is newer than it sounds -- until
+// (scheduler_current_mm()). That is newer than it sounds -- until
 // M41 stage 4b nothing armed a heap for a spawned process at all, so
 // SYS_SBRK returned -1 for every GUI app, silently, because none of
 // them had ever asked for memory.
-void syscall_reset_heap(uint64_t pml4_phys, uint64_t heap_base);
+// `image_end` is where the loaded ELF ends (elf_load's out_image_end);
+// the heap starts there, or at UADDR_HEAP_MIN_BASE if that is higher.
+void syscall_reset_mm(uint64_t pml4_phys, uint64_t image_end);
 
 // Frees everything a process privately owned once it's gone -- a normal
 // SYS_EXIT, or a ring-3 fault idt.c caught and is recovering from. Two

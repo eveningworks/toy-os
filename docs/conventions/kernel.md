@@ -343,13 +343,13 @@ this the obvious way), not from how much history it accumulated.
   other**, so a positive control that disables one reddens NOTHING --
   disable both, and `guard_test`'s two "untouched sbrk page" checks are
   the ones that fire. And **`mapped_end` is gone** from
-  `struct sched_heap`: the page tables already record which pages exist,
+  `struct sched_mm`: the page tables already record which pages exist,
   and a second record could only disagree with them silently.
 - **THE RING-3 MAP IS SIZED FOR 4K, and a region's END is what the next
   thing must clear.** `WIN_BUFFER_STRIDE` is 64 MiB (a 3840x2160x4
   buffer is 31.6 MiB), `WIN_CLIENT_BASE` `0x8080000000`,
   `WIN_COMPOSITOR_BASE` `0x80A0000000` (16 GiB -- 64 pids x 4 windows),
-  `WIN_FB_VADDR` `0x8500000000`, heap ~2046 MiB below the stack. The
+  `WIN_FB_VADDR` `0x8500000000`, heap ~2038 MiB below the stack. The
   trap: the compositor region is DERIVED
   (`MAX_PIDS * CLIENT_MAX * STRIDE`), so its base looks isolated while
   it spans gigabytes. **This does NOT make 4K work** --
@@ -358,17 +358,58 @@ this the obvious way), not from how much history it accumulated.
   silently under fragmentation). Raising the caps before that is fixed
   turns a hard limit into an intermittent silent failure.
 - **`SYS_SBRK` is PER PROCESS.** The break lives in
-  `struct sched_process` as a `struct sched_heap`, armed when the slot
-  is created; the syscall reaches it through `scheduler_current_heap()`,
+  `struct sched_process` as a `struct sched_mm`, armed when the slot
+  is created; the syscall reaches it through `scheduler_current_mm()`,
   which returns NULL for the kernel context -- meaning "not a scheduled
   process", never "no heap". `elf_run.c`'s legacy blocking loader keeps
   its own single slot (it has no scheduler slot to use) of the SAME type
   through the same handler, so the two owners cannot drift. See
   `docs/decisions.md`.
+- **A RING-3 IMAGE HAS NO SIZE LIMIT, BECAUSE THE HEAP STARTS WHERE IT
+  ENDS.** `elf_load()` reports the page-aligned end of the highest
+  `PT_LOAD` (`out_image_end`) and both loaders arm the process's heap
+  there -- `struct sched_mm.heap_base`, per process, which is Linux's
+  `set_brk()` in `fs/binfmt_elf.c`. It used to be a fixed 1 MiB above
+  the image base with a matching `ASSERT` in `userland/rt/link.ld`, so a
+  program that grew past a megabyte failed to LINK. Three traps. **The
+  image end is the MAXIMUM over segments, not the last one's** --
+  program headers need not be in address order, and taking the last
+  starts the heap underneath a segment that was just mapped (no fault;
+  corruption on the first `malloc`). **`elf.c`'s `ELF_IMAGE_END` moved
+  rather than went away**: it is `UADDR_GUARD_BASE` now, because the
+  stack is still mapped after the segments and a greedy one would be
+  replaced by it. And **`UADDR_HEAP_MIN_BASE` is a FLOOR, not a base** --
+  what the legacy loader uses when it has no image end to derive from.
+  See `docs/decisions.md`.
+- **THE USER STACK IS RESERVED AND GROWN ON FAULT, and the GAP is what
+  keeps that safe.** 8 MiB of reservation (`UADDR_STACK_MAX_PAGES`,
+  Linux's default `RLIMIT_STACK`), of which the loader maps four pages
+  as a starting working set; the rest arrives through the SAME
+  `uheap_fault()` hook the heap uses -- Linux's `expand_downwards()`.
+  Raising the old page count instead would have been one line and a
+  per-process tax, because the loader maps stack pages EAGERLY. Four
+  things to know. **A fault more than `UADDR_STACK_GROW_GAP` (64 KiB,
+  Linux's number) below the mapped bottom is REFUSED and logged**, or an
+  8 MiB window would answer a wild pointer with memory instead of a
+  fault report. **That gap and `-Wframe-larger-than=2048` are ONE
+  guarantee** -- a frame bigger than the gap leaps the growable region
+  and dies on a stack that was willing to grow for it (Stack Clash);
+  `uaddr_test.c` asserts the two stay on the right side of each other.
+  **Anything bounding a signal frame or a stack address must test
+  `UADDR_STACK_FLOOR`, never the current bottom** -- `signal.c`'s
+  `frame_fits()` did the latter, which would refuse a legal frame on any
+  process that had grown. And **no KTEST can see growth at all**: the
+  map macros are correct whether or not the handler grows anything, so
+  the proof is `userland/tests/stackgrow_test.c`.
 - **The ring-3 address-space map is `kernel/include/kernel/uaddr.h`,
-  stated once.** Heap base, heap limit, guard region, stack bottom/top
-  and page counts, read by `scheduler.c`'s spawn path, `elf_run.c`'s
-  legacy loader, `SYS_SBRK` and `idt.c`'s fault report. **The guard
+  stated once.** Heap floor, heap limit, guard region, the stack's
+  floor/initial bottom/top and page counts, read by `scheduler.c`'s
+  spawn path, `elf_run.c`'s legacy loader, `SYS_SBRK` and `idt.c`'s
+  fault report. **Two boundaries are NOT here and cannot be** --
+  `heap_base` and `stack_bottom` are per process and live in
+  `struct sched_mm`, because neither is knowable until a particular ELF
+  has been loaded and a particular call chain has run; what this header
+  fixes is the envelope they move inside. **The guard
   region below the stack is defined by being UNMAPPED** -- there is no
   PTE to set, so an overflow always faulted; what the header buys is
   that sbrk is bounded against it (it had NO ceiling, and a big enough

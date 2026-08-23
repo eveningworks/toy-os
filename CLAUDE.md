@@ -505,7 +505,9 @@ whenever a headline here tells you something you did not already know.
 - **`SYS_SBRK` RESERVES; THE PAGE ARRIVES ON TOUCH.**
 - **THE RING-3 MAP IS SIZED FOR 4K, and a region's END is what the next thing must clear.**
 - **`SYS_SBRK` is PER PROCESS.**
-- **The ring-3 address-space map is `kernel/include/kernel/uaddr.h`, stated once.**
+- **A RING-3 IMAGE HAS NO SIZE LIMIT, BECAUSE THE HEAP STARTS WHERE IT ENDS.** -- derived per process from `elf_load()`'s `out_image_end` (Linux's `set_brk()`), which deleted `link.ld`'s 1 MiB `ASSERT`; the end is the MAXIMUM over segments, not the last one's.
+- **THE USER STACK IS RESERVED AND GROWN ON FAULT, and the GAP is what keeps that safe.** -- 8 MiB reserved, four pages mapped, the rest through the heap's own fault hook; a fault more than `UADDR_STACK_GROW_GAP` below the bottom is refused, and that gap plus `-Wframe-larger-than=2048` are one guarantee, not two. Bound anything against `UADDR_STACK_FLOOR`, never the moving bottom.
+- **The ring-3 address-space map is `kernel/include/kernel/uaddr.h`, stated once.** -- except the two boundaries that are per process (`heap_base`, `stack_bottom`), which live in `struct sched_mm`.
 - **The kernel heap has a debug mode, and it is a RUNTIME toggle**
 - **The kernel RELOCATES ITSELF at boot -- it is not running where it was linked.**
 - **A BLOCKED PROCESS WAITS ON A CHANNEL, AND A CHANNEL IS AN ADDRESS.**

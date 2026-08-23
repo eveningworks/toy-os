@@ -169,8 +169,17 @@ int signal_send_group(int pgid, int sig) {
 // stack that has run out from a stack pointer that has been aimed at
 // somebody else's mapping -- and the second one is the case worth
 // refusing loudly.
+//
+// **AGAINST THE FLOOR, NOT THE CURRENT BOTTOM.** The stack grows on
+// demand now, so the mapped bottom moves down as a process runs, and
+// testing against it would refuse a perfectly legal frame on any
+// process that had grown -- the deeper the call chain, the more likely
+// the refusal, which is the opposite of what a signal is for. The floor
+// is what does not move. A frame landing on a reserved-but-unmapped
+// page is fine: vmm_copy_to_user() walks through the same fault hook
+// that grows the stack, so the page arrives on the way in.
 static int frame_fits(uint64_t sp) {
-    return sp >= UADDR_STACK_BOTTOM &&
+    return sp >= UADDR_STACK_FLOOR &&
            sp + sizeof(struct sigframe) <= UADDR_STACK_VADDR + 4096;
 }
 

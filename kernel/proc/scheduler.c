@@ -354,14 +354,14 @@ struct sched_process {
     //
     // PER PROCESS rather than the file-global pair syscall.c used to
     // hold, and that was not a tidy-up: those globals are armed only by
-    // syscall_reset_heap(), which only elf_run.c's legacy blocking
+    // syscall_reset_mm(), which only elf_run.c's legacy blocking
     // loader calls -- so a SCHEDULER-spawned process, which is every GUI
     // app and everything `gui spawn` starts, had no heap armed and
     // SYS_SBRK returned -1 for it unconditionally. Nothing noticed
     // because nothing spawned had ever asked for memory. A ring-3
     // compositor asks for a whole screen of back buffer on its first
     // line (M41 stage 4b), which is how this surfaced.
-    struct sched_heap heap;
+    struct sched_mm mm;
     // This process's current directory (scheduler.h's struct sched_cwd).
     // Armed at creation from whatever spawned it, so a child starts
     // where its parent was standing -- the property that makes
@@ -763,21 +763,24 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
     // loader (see kernel/proc/strace.c).
     strace_claim(as);
 
-    uint64_t entry = 0;
+    uint64_t entry = 0, image_end = 0;
     // On failure the address space is destroyed rather than leaked --
     // it owns whatever elf_load() mapped before giving up, and every
     // failure path below this point owes the same cleanup. This used to
     // be a bare `return -1`, leaking the PML4, every page table under
     // it and every segment frame.
-    if (!elf_load(elf_phys, size, as, &entry)) {
+    if (!elf_load(elf_phys, size, as, &entry, &image_end)) {
         vmm_destroy_address_space(as);
         return -1;
     }
 
     // The TOP page is where argv is laid out and where RSP starts; the
-    // rest are mapped below it so the stack has somewhere to grow.
+    // rest are this process's starting WORKING SET, so the common client
+    // never takes a growth fault at all. Everything below them is
+    // reserved address space that uheap_fault() maps on demand -- see
+    // kernel/uaddr.h.
     uint64_t stack_phys = 0;
-    for (int pg = 0; pg < UADDR_STACK_PAGES; pg++) {
+    for (int pg = 0; pg < UADDR_STACK_INIT_PAGES; pg++) {
         uint64_t frame = pmm_alloc_frame();
         if (!frame) { vmm_destroy_address_space(as); return -1; }
         uint64_t va = UADDR_STACK_VADDR - (uint64_t)pg * 4096;
@@ -894,7 +897,17 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
     // second entry point, and this one already had that bug -- nothing
     // in the spawn path ever armed a heap, so SYS_SBRK refused every
     // scheduled process.
-    procs[slot].heap.brk = UADDR_HEAP_BASE;
+    //
+    // heap_base comes from the IMAGE rather than from a constant, which
+    // is what lets a ring-3 binary be any size (elf.c's out_image_end).
+    // The max() is belt and braces: elf_load() cannot report an end
+    // below ELF_IMAGE_BASE, but a heap starting under the floor would be
+    // a silent aliasing bug rather than a loud one.
+    uint64_t heap_base = image_end > UADDR_HEAP_MIN_BASE
+                              ? image_end : UADDR_HEAP_MIN_BASE;
+    procs[slot].mm.heap_base   = heap_base;
+    procs[slot].mm.brk         = heap_base;
+    procs[slot].mm.stack_bottom = UADDR_STACK_INIT_BOTTOM;
     // INHERITED, unlike the name and the CPU time above: the cwd is the
     // one piece of a parent's state a child is supposed to start with,
     // which is what makes `mkdir docs` from a shell standing in /tmp
@@ -1507,12 +1520,12 @@ int scheduler_exec_path(int pid, char *out, unsigned cap) {
     return out[0] ? 1 : 0;
 }
 
-struct sched_heap *scheduler_current_heap(void) {
+struct sched_mm *scheduler_current_mm(void) {
     // NULL means "the kernel context is running", which for SYS_SBRK is
     // the legacy elf_run.c process -- not "this process has no heap".
     // Every slot gets one at creation.
     if (current_index < 0) return 0;
-    return &procs[current_index].heap;
+    return &procs[current_index].mm;
 }
 
 // The KERNEL CONTEXT's own directory -- the legacy elf_run.c loader and
@@ -1534,21 +1547,21 @@ void scheduler_set_kernel_cwd(const char *path) {
 }
 
 struct sched_cwd *scheduler_current_cwd(void) {
-    // Same NULL convention as scheduler_current_heap(): "the kernel
+    // Same NULL convention as scheduler_current_mm(): "the kernel
     // context is running", i.e. the legacy loader's slot applies.
     if (current_index < 0) return 0;
     return &procs[current_index].cwd;
 }
 
-// The heap behind a given address space. Walks the table because the
+// The memory map behind a given address space. Walks the table because the
 // caller (a page fault, or a copy helper) has a pml4 and not a pid --
 // and a ZOMBIE is skipped deliberately: its address space is already
 // destroyed, so a fault naming it is a stale mapping, not a heap page.
-struct sched_heap *scheduler_heap_for_pml4(uint64_t pml4_phys) {
+struct sched_mm *scheduler_mm_for_pml4(uint64_t pml4_phys) {
     if (!pml4_phys) return 0;
     for (int i = 0; i < MAX_PROCS; i++) {
         if (procs[i].state == SCHED_UNUSED || procs[i].state == SCHED_ZOMBIE) continue;
-        if (procs[i].pml4_phys == pml4_phys) return &procs[i].heap;
+        if (procs[i].pml4_phys == pml4_phys) return &procs[i].mm;
     }
     return 0;
 }
