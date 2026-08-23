@@ -108,6 +108,14 @@ static int g_job_op;
 static char g_job_dest[PATH_MAX_LEN];
 static int g_job_failures;
 
+// --- live refresh -------------------------------------------------------
+//
+// SYS_FS_GENERATION, the desktop's idiom: one integer compare per tick
+// and no disk I/O. A copy finishing in another process shows up here
+// without anyone pressing anything, which is the whole reason this app
+// does not have to be told when its own child is done either.
+static unsigned long long g_seen_generation;
+
 static struct uui_fileview *active(void)  { return &g_pane[g_active]; }
 static struct uui_fileview *other(void)   { return &g_pane[!g_active]; }
 
@@ -730,14 +738,6 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     }
 }
 
-// --- live refresh -------------------------------------------------------
-//
-// SYS_FS_GENERATION, the desktop's idiom: one integer compare per tick
-// and no disk I/O. A copy finishing in another process shows up here
-// without anyone pressing anything, which is the whole reason this app
-// does not have to be told when its own child is done either.
-static unsigned long long g_seen_generation;
-
 static int on_tick(struct uapp *a) {
     (void)a;
     int changed = poll_job();
@@ -787,6 +787,23 @@ static void on_pane_dir(void *ctx, const char *dir) {
     // rewritten twice per navigation -- 512 bytes, and the alternative
     // is a dirty flag that has to be right.
     uconf_set(FILES_CONF, i ? "right" : "left", dir);
+
+    // ADOPT THE GENERATION OUR OWN WRITE JUST PRODUCED. Without this the
+    // app watches the filesystem, changes it, and then reacts to itself:
+    // every navigation wrote this file, the write bumped
+    // SYS_FS_GENERATION, and the next tick read that as "somebody
+    // changed the disk" and reloaded BOTH panes -- a second full repaint
+    // half a second after the first, which is visible as a flicker on
+    // every single directory change. Measured at 2 frames per
+    // navigation before, 1 after.
+    //
+    // Every watcher needs this: it is why inotify consumers track their
+    // own writes and why a settings daemon ignores the change it just
+    // made. The cost is bounded and worth stating -- a write by ANOTHER
+    // process landing in the same instant is adopted too and its refresh
+    // is skipped, until the next change moves the counter again.
+    g_seen_generation = sys_fs_generation();
+
     refresh_status();
 }
 

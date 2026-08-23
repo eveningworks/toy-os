@@ -20,6 +20,15 @@ WHAT IT ASSERTS, and the interesting ones are the last two:
   * an absolute position lands EXACTLY where the arithmetic says, which
     is what proves the tablet's range is being scaled to the screen
     rather than passed through;
+  * THE GUEST SURVIVES POINTER MOTION DURING ENUMERATION, which is the
+    check that exists because the opposite hung the machine. Motion is
+    injected from the instant QEMU starts, so the tablet has events
+    waiting the moment its INTx is enabled. Before the fix this hung
+    3 boots out of 3, mid-log-line, with nothing else wrong; the device
+    was made interrupt-capable before the handler could see it, so
+    nobody read its ISR and a level-triggered line asserted forever.
+    A boot that merely completes is the whole assertion -- there is
+    nothing subtle to measure, because the failure is a dead machine;
   * a keypress reaches the DESKTOP -- Super opens the Start menu, which
     means the event crossed the driver, the input core, the key ring,
     the kernel's raw-input forwarder and the ring-3 compositor. An
@@ -33,14 +42,65 @@ USAGE
 """
 
 import argparse
+import json
+import os
 import re
+import socket
 import subprocess
 import sys
+import threading
 import time
 
 sys.path.insert(0, "tools")
 from gui_debug import DebugConsole      # noqa: E402
 from qmp_test import QMPSession         # noqa: E402
+
+
+class _Jiggler(threading.Thread):
+    """Absolute pointer motion, injected over QMP as fast as it will go.
+
+    It connects with retries because QEMU may not exist yet, and it
+    swallows every error: the guest is expected to be booting, dying or
+    absent underneath it, and none of that is this thread's business to
+    report. The ASSERTION is whether the boot completed.
+    """
+
+    def __init__(self, port):
+        super().__init__(daemon=True)
+        self.port = port
+        self._stop = threading.Event()
+
+    def stop(self):
+        self._stop.set()
+        self.join(timeout=2)
+
+    def run(self):
+        sock = None
+        x = 0
+        while not self._stop.is_set():
+            if sock is None:
+                try:
+                    sock = socket.create_connection(("127.0.0.1", self.port), timeout=1)
+                    f = sock.makefile("rwb")
+                    f.readline()
+                    f.write(b'{"execute":"qmp_capabilities"}\n')
+                    f.flush()
+                    f.readline()
+                except OSError:
+                    sock = None
+                    time.sleep(0.2)
+                    continue
+            x = (x + 4096) % 32000
+            ev = {"execute": "input-send-event", "arguments": {"events": [
+                {"type": "abs", "data": {"axis": "x", "value": x}},
+                {"type": "abs", "data": {"axis": "y", "value": x}}]}}
+            try:
+                f.write((json.dumps(ev) + "\n").encode())
+                f.flush()
+                f.readline()
+            except OSError:
+                sock = None
+            time.sleep(0.02)
 
 
 class Result:
@@ -68,8 +128,24 @@ def screen_size(dbg):
     return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
 
 
-def run(dbg, qmp, res):
+def run(dbg, qmp, res, race_check=False, booted=True):
     dev = dbg.send("lsdev")
+
+    # THE RACE CHECK, and it asks whether ENUMERATION FINISHED rather
+    # than whether the boot "succeeded". A first version tested vm.py's
+    # exit code and passed on a guest that had wedged partway through --
+    # vm.py's readiness signal is the serial console, which comes up
+    # BEFORE virtio-input runs, so a machine stuck in an interrupt storm
+    # can still look ready. What cannot be faked is the device list: if
+    # the third device storms, nothing after it is ever claimed.
+    if race_check:
+        res.check("all three devices enumerate with the pointer moving through boot",
+                  booted and all(w in dev for w in ("QEMU Virtio Keyboard",
+                                                     "QEMU Virtio Mouse",
+                                                     "QEMU Virtio Tablet")),
+                  "a hang or a short device list here is the virtio-input INTx "
+                  "race (kernel/drivers/virtio/virtio_input.c): the device was "
+                  "made interrupt-capable before its handler could see it")
     for want in ("QEMU Virtio Keyboard", "QEMU Virtio Mouse", "QEMU Virtio Tablet"):
         res.check(f'"{want}" was claimed', want in dev)
     res.check("the PS/2 pair is still registered beside them",
@@ -152,13 +228,31 @@ def main():
     n = args.instance
     sock = ".vm.serial" if n == 0 else f".vm.{n}.serial"
 
+    # KVM FOR THE BOOT, WHEN THERE IS ONE, BECAUSE THE RACE THIS CHECKS
+    # FOR DOES NOT EXIST AT TCG SPEED. Measured: the buggy ordering hung
+    # 3 boots out of 3 under KVM and 0 out of 3 under TCG, with the same
+    # motion injected either way -- so a TCG-only run would report a
+    # green check that cannot fail, which is worse than no check.
+    kvm = os.access("/dev/kvm", os.R_OK | os.W_OK)
     launch = ["python3", "tools/vm.py", "--virtio-input",
               "--instance", str(n), "start"]
-    if subprocess.run(launch).returncode != 0:
-        print("virtio_input_test: could not start the guest")
-        return 1
+    if kvm:
+        launch[3:3] = ["--kvm"]
+
+    # THE POINTER MOVES WHILE THE KERNEL IS STILL ENUMERATING. Started
+    # in the background so motion can be injected during the boot rather
+    # than after it -- see the docstring. vm.py only touches QMP for
+    # `shot`, so the port is ours while it waits on the serial console.
+    proc = subprocess.Popen(launch)
+    jiggler = _Jiggler(4445 + n)
+    jiggler.start()
+    rc = proc.wait()
+    jiggler.stop()
 
     res = Result()
+    if not kvm:
+        print("  SKIP  the boot-with-motion check needs /dev/kvm "
+              "(it cannot fail at TCG speed -- see the docstring)")
     dbg = None
     try:
         deadline = time.time() + 60
@@ -174,7 +268,7 @@ def main():
             time.sleep(0.5)
         qmp = QMPSession(port=4445 + n)
         try:
-            run(dbg, qmp, res)
+            run(dbg, qmp, res, race_check=kvm, booted=(rc == 0))
         finally:
             qmp.close()
     finally:

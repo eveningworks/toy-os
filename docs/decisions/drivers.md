@@ -895,3 +895,58 @@ so "go back to the kernel's own glyphs" is a value the setting can hold
 and round-trip rather than a missing key. A failed select leaves the
 previous face active: dropping to the baked font because of a typo would
 lose the user's font for the wrong reason.
+
+## A virtio device is published to its handler BEFORE its interrupt is enabled
+
+`virtio_enable_intx()` used to do two things in one call: clear
+`PCI_CMD_INTX_DISABLE` and report which line the chipset had routed the
+function to. That reads as a convenience and is a trap, because the
+caller cannot know the line until the device is already able to
+interrupt. Everything the handler depends on therefore got set up
+*after* the device went live.
+
+`virtio_input.c` had exactly that shape. Per device it enabled INTx,
+unmasked the PIC, printed two log lines, and only then incremented
+`g_count` -- the bound its own interrupt handler looped to. A device
+outside that count is a device whose ISR nobody reads, and the ISR read
+is what deasserts a level-triggered INTx line. So an interrupt arriving
+in the window did not cost an event; it hung the machine, because the
+PIC re-delivered it forever and the boot thread never ran again. The two
+`klog_printf()` calls sitting inside the window made it milliseconds
+wide on a serial console.
+
+It presented as a boot that stopped mid-log-line while enumerating the
+third virtio-input device, on some boots and not others. All three
+components of "sometimes" turned out to be measurable:
+
+- **The third device**, because the first two have already unmasked the
+  line it shares, so its window opens at `virtio_intx_enable()` rather
+  than at the PIC unmask.
+- **The tablet specifically**, because it has events waiting the moment
+  the pointer is over the window. A keyboard sitting idle never asserts.
+- **KVM**, because at TCG speed the guest is slow relative to nothing in
+  particular -- the race simply did not reproduce there. Injecting
+  pointer motion through the whole boot: 3 hangs in 3 boots under KVM,
+  0 in 3 under TCG, same build.
+
+The fix is an ordering one, and the API was split to make the ordering
+expressible: `virtio_intx_line()` asks (no side effects),
+`virtio_intx_enable()` commits. Between them the driver registers its
+handler, fills in the fields the handler tests, and registers its input
+source. The PIC unmask comes last.
+
+The handler was also changed to scan the whole device array on
+`present && irq` rather than the first `g_count` entries. That is not
+belt-and-braces: `g_count` exists to count *finished* enumeration, and
+an interrupt handler has no business depending on when a loop body ends.
+Both fields it now tests are set before the device can assert.
+
+**The generalisation, which is the part worth carrying:** any "enable"
+that hands back information the caller needs in order to be ready is an
+API that forces its callers into a race. Split it. The same shape exists
+wherever a subsystem is registered and armed in one step -- a timer that
+returns its own handle, a queue that starts consuming as it is created.
+
+`tools/virtio_input_test.py` carries the regression check and only runs
+it where it can fail (with `/dev/kvm`); it says so when it skips, since
+a check that cannot fail is worse than no check.

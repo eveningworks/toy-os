@@ -162,15 +162,16 @@ int virtio_pci_find(uint16_t type, int index, struct virtio_device *out) {
     return 1;
 }
 
-// Clears PCI_CMD_INTX_DISABLE and reports the line the chipset routed
-// this function to, or 0 if there is none to use.
+// Reports the line the chipset routed this function to, or 0 if there
+// is none to use. NO SIDE EFFECTS -- enabling is virtio_intx_enable()
+// below, and virtio.h says why the two are separate.
 //
 // The caller must install an irq handler that READS THE ISR REGISTER --
 // the read is what deasserts a level-triggered line, and without it the
 // first interrupt never ends. Returning the line rather than
 // registering the handler here keeps this file free of any opinion
 // about how a driver services its device.
-uint8_t virtio_enable_intx(struct virtio_device *d) {
+uint8_t virtio_intx_line(const struct virtio_device *d) {
     if (!d || !d->pci) return 0;
     uint8_t line = d->pci->interrupt_line;
     // 0xFF is the PCI convention for "not connected", and 0 is IRQ0 --
@@ -178,9 +179,14 @@ uint8_t virtio_enable_intx(struct virtio_device *d) {
     // is nothing to enable, and enabling anyway would leave the device
     // free to assert a line nobody listens on.
     if (line == 0xFF || line == 0 || line >= 16) return 0;
-
-    pci_command_update(d->pci, 0, PCI_CMD_INTX_DISABLE);
     return line;
+}
+
+// The commit point: after this the device may assert its line, so
+// everything its handler reaches for has to be in place already.
+void virtio_intx_enable(struct virtio_device *d) {
+    if (!d || !d->pci) return;
+    pci_command_update(d->pci, 0, PCI_CMD_INTX_DISABLE);
 }
 
 // Reads (and thereby CLEARS) the ISR status byte. Bit 0 means "one of

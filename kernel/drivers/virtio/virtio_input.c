@@ -247,9 +247,17 @@ static void (*const POLLS[MAX_INPUT_DEVICES])(void) = { poll_0, poll_1, poll_2, 
 // interrupt context. There is no lock because there is no sharing --
 // an interrupt-driven device has no poll(), so the idle path never
 // touches its queue.
+// IT SCANS THE WHOLE ARRAY, NOT g_count ENTRIES, and that is a fix
+// rather than a style: `g_count` is the number of devices ENUMERATION
+// has finished with, and a device can interrupt from the moment its
+// INTx is enabled -- which is before enumeration reaches the end of its
+// loop body. A device outside the count is a device whose ISR nobody
+// reads, and on a shared level-triggered line that hangs the machine.
+// `present` and `irq` are both set before the device can assert, so
+// they are the honest test.
 static void input_irq_handler(uint64_t *regs) {
     (void)regs;
-    for (int i = 0; i < g_count; i++) {
+    for (int i = 0; i < MAX_INPUT_DEVICES; i++) {
         struct input_dev *d = &g_devs[i];
         if (!d->present || !d->irq) continue;
         if (!(virtio_isr_read(&d->vdev) & VIRTIO_ISR_HAS_QUEUE)) continue;
@@ -311,17 +319,37 @@ void virtio_input_init(void) {
         // idle polling if it did not. Deciding per device rather than
         // per driver means one unrouted device does not cost the others
         // their interrupts, and no device is left with neither.
-        d->irq = virtio_enable_intx(&d->vdev);
-        if (d->irq) {
-            irq_register_handler(d->irq, input_irq_handler);
-            pic_clear_mask(d->irq);
-        }
+        //
+        // THE ORDER HERE IS LOAD-BEARING. Asking for the line has no
+        // side effects; enabling INTx is the point of no return, after
+        // which this device may assert at any instant -- including
+        // during the klog_printf() below, which on a serial console
+        // takes milliseconds. So the handler must be able to SEE this
+        // device first: `present` is set by claim_one(), `irq` is set
+        // here, and only then is the line enabled and unmasked.
+        //
+        // Getting this backwards hung the machine, not merely lost an
+        // event: the third device typically shares an already-unmasked
+        // line with the first two, so its interrupt arrived immediately,
+        // found no owner willing to read its ISR, and repeated forever
+        // (a level-triggered line is deasserted BY that read). It
+        // reproduced every time the pointer moved during boot and never
+        // when it did not -- see docs/decisions/drivers.md.
+        d->irq = virtio_intx_line(&d->vdev);
+        if (d->irq) irq_register_handler(d->irq, input_irq_handler);
 
         g_sources[g_count].name = d->name;
         g_sources[g_count].caps = d->caps;
         g_sources[g_count].poll = d->irq ? 0 : POLLS[g_count];
         g_sources[g_count].irq = d->irq;
         input_register_source(&g_sources[g_count]);
+
+        // The commit point -- everything above is what the handler
+        // needs, and nothing below it is.
+        if (d->irq) {
+            virtio_intx_enable(&d->vdev);
+            pic_clear_mask(d->irq);
+        }
 
         klog_printf("virtio-input: \"%s\" claimed (%s%s%s), %s\n", d->name,
                     (d->caps & INPUT_CAP_KEYS) ? "keys " : "",

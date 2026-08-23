@@ -1193,8 +1193,19 @@ manual steps to be worth automating:
 - **`virtio_input_test.py`** -- the virtio keyboard, mouse and tablet
   (`vm.py --virtio-input`, which is the only thing that attaches them).
   The guest keeps its PS/2 pair as well, deliberately: the input core is
-  supposed to take several sources at once. Four checks earn their
-  place. The tablet must report `abs` and the mouse must NOT, or the
+  supposed to take several sources at once. Five checks earn their
+  place. **The guest must finish enumerating all three devices with the
+  POINTER MOVING through the whole boot** -- motion is injected over QMP
+  from the instant QEMU starts, so the tablet has events waiting the
+  moment its INTx is enabled. That is the check the virtio-input INTx
+  ordering bug was found by, and it only runs with `/dev/kvm`: the race
+  hung 3 boots out of 3 under KVM and 0 out of 3 under TCG, so on a
+  machine without KVM it prints a SKIP with the reason rather than a
+  green check that cannot fail. It also asserts the ENUMERATION rather
+  than the boot's exit code, because a first version tested `vm.py
+  start`'s return and passed on a guest that had wedged partway through
+  -- readiness comes from the serial console, which is up before
+  virtio-input runs. The tablet must report `abs` and the mouse must NOT, or the
   capability is telling us nothing. Two devices must SHARE an interrupt
   line -- QEMU routes the mouse and tablet onto IRQ 10 together, which
   is the case `kernel/arch/x86_64/irq.c`'s handler chain was rewritten

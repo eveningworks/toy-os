@@ -221,10 +221,32 @@ int virtio_has_feature(const struct virtio_device *d, uint64_t bit);
 // memory write to the Local APIC, and this kernel has none (the PIC is
 // all there is -- kernel/arch/x86_64/irq.c). See docs/roadmap.md.
 //
+// TWO CALLS, NOT ONE, AND THE SPLIT IS THE WHOLE POINT. Asking which
+// line a function is on has no side effects; ENABLING is what lets the
+// device start asserting it. A single call that did both forced every
+// caller into an unwinnable order: the line is only known once the
+// device can already interrupt, so anything the handler needs in place
+// -- the device in its own list, above all -- was necessarily set up
+// LATE, and an interrupt arriving in that window found no owner.
+//
+// On a shared, level-triggered INTx line that is not a dropped event,
+// it is a HANG: nobody reads that device's ISR, so the line stays
+// asserted and the interrupt repeats forever. It cost a boot that
+// stopped mid-log line whenever the pointer happened to move while
+// virtio-input was still enumerating (see virtio_input.c).
+//
+// So: virtio_intx_line() first, get everything ready, then
+// virtio_intx_enable() last.
+//
 // Returns the IRQ line the chipset routed this function to, or 0 when
 // there is none usable. The caller installs the handler itself, and
 // that handler MUST read the ISR -- see virtio_isr_read().
-uint8_t virtio_enable_intx(struct virtio_device *d);
+uint8_t virtio_intx_line(const struct virtio_device *d);
+
+// Clears PCI_CMD_INTX_DISABLE. AFTER this returns the device may assert
+// its line at any moment, so everything its handler depends on must
+// already be in place.
+void virtio_intx_enable(struct virtio_device *d);
 
 #define VIRTIO_ISR_HAS_QUEUE  0x1
 #define VIRTIO_ISR_HAS_CONFIG 0x2

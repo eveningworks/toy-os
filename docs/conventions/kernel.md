@@ -592,14 +592,40 @@ last given. And **an absolute device is not scaled by speed or
 acceleration**: those turn a relative device's counts into comfortable
 motion, while an absolute device is already saying where the pointer IS.
 
-## VIRTIO INTERRUPTS ARE OPT-IN, and a forgotten ISR read hangs the machine
+## VIRTIO INTERRUPTS ARE OPT-IN, a forgotten ISR read hangs the machine, and ENABLING IS THE LAST STEP
 
 `virtio_pci_find()` sets `PCI_CMD_INTX_DISABLE` on every device it
-claims. A driver that wants interrupts calls `virtio_enable_intx()`,
-gets its line back, and MUST install a handler that reads the ISR
+claims. A driver that wants interrupts asks which line it is on
+(`virtio_intx_line()`), gets everything ready, and only then enables it
+(`virtio_intx_enable()`). Its handler MUST read the ISR
 (`virtio_isr_read()`) -- the read is what deasserts a level-triggered
 line. Skip it and the PIC re-delivers forever: measured, not feared, by
 a positive control that hung the guest rather than merely losing events.
+
+**THE ORDER IS THE HALF THAT IS EASY TO GET WRONG, AND IT HANGS THE SAME
+WAY.** Between enabling INTx and finishing whatever the handler depends
+on there is a window, and an interrupt arriving inside it finds no owner
+willing to read that device's ISR -- which is the forgotten-ISR-read
+failure arriving by a different route. `virtio_enable_intx()` used to
+enable AND report the line in one call, which forced exactly that
+mistake: the line is only known once the device can already interrupt,
+so `virtio_input.c` registered its handler, its input source and its
+`g_count` entry afterwards. A pointer moving during boot then hung the
+machine mid-log-line, every time, under KVM and never under TCG.
+
+So the API is two calls now, and the rule is: **publish first, enable
+last.** Anything the handler reads -- the device's own list entry, its
+`irq` field, the handler registration itself -- is in place before
+`virtio_intx_enable()`, and the PIC unmask comes after that. And a
+handler must not gate on a counter that enumeration updates at its own
+pace: `input_irq_handler()` scans the whole device array and tests
+`present && irq`, both of which are set before the device can assert.
+
+`tools/virtio_input_test.py` injects pointer motion from the instant
+QEMU starts and requires all three devices to finish enumerating. It
+only runs that check with `/dev/kvm`, and says so when it skips: the
+race does not exist at TCG speed, so a TCG-only run would report a green
+check that cannot fail.
 
 Lines are SHARED (three virtio-input functions land on two IRQs on
 QEMU's default topology), so `irq.c` runs every handler registered on a

@@ -1144,7 +1144,15 @@ real scanout hardware does. Do not write a pixel assertion for one.
     statement about that launch.
   - **Refresh is `SYS_FS_GENERATION` polled in the tick**, the desktop's
     idiom -- one integer compare, no disk I/O, and a copy finishing in
-    another process appears with nobody pressing anything.
+    another process appears with nobody pressing anything. **An app that
+    both watches the filesystem and writes to it must adopt the
+    generation its OWN write produced**, or it reacts to itself: saving
+    the pane directories bumped the counter, the next tick read that as
+    an external change and reloaded both panes, and every navigation
+    repainted twice half a second apart -- visible as a flicker.
+    Measured at 2 frames per navigation before and 1 after. Every
+    watcher needs this; it is why an inotify consumer tracks its own
+    writes.
 - **WHAT OPENS A FILE TYPE IS DECLARED BY THE APP THAT OPENS IT:
   `Handles=` on its `.desktop` entry.** `Handles=.txt .md .conf`, read
   by the File Manager when something is activated, matched whole and
