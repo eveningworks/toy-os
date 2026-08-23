@@ -5,14 +5,19 @@
 // here is the consequence of that split, plus the small amount of policy
 // stage 0-2 of docs/signals-design.md actually has.
 //
-// HOW LITTLE POLICY THERE IS, and why that is deliberate: with no
-// user-space handlers there are exactly two dispositions, so the whole
-// policy is "SIGCHLD is ignored, stop and continue suspend and resume,
-// everything else terminates". That is a complete and useful system --
-// it is where Ctrl-C and Ctrl-Z both work -- and it fits in one
-// function. Handlers (stage 3 of docs/signals-design.md) are what turn
-// this file into something bigger; until then, resisting the temptation
-// to build the table they would need is the point.
+// WHAT HANDLERS ADDED, and it is the second half of this file. Until
+// stage 3 of docs/signals-design.md there were two dispositions and the
+// whole policy was "SIGCHLD is ignored, stop and continue suspend and
+// resume, everything else terminates" -- one function, no table. A
+// handler makes delivery a THIRD thing: build a frame on the user
+// stack, point the trapframe at ring-3 code, and arrange for the
+// process to come back through SYS_SIGRETURN.
+//
+// **THE ONE THING THAT HAS TO BE EXACTLY RIGHT is putting the process
+// back the way it was.** Everything in push_signal_frame() below is in
+// service of that, and the places it deliberately does NOT restore
+// verbatim (CS, SS, the privileged RFLAGS bits) are called out where
+// they happen.
 //
 // THE ONE SURPRISE, AND IT IS POSIX'S TOO: a SIGTERM to a STOPPED
 // process does nothing visible. The bit is set and delivery happens on
@@ -28,6 +33,9 @@
 #include "ksignal.h" // signal_name(), for the log line
 #include "klog.h"
 #include "kfmt.h"
+#include "errno.h"
+#include "uaddr.h"  // UADDR_STACK_* -- where a frame is allowed to land
+#include "gdt.h"    // SEL_USER_CODE/SEL_USER_DATA -- reimposed on sigreturn
 
 // Does `sig`'s DEFAULT action terminate the process?
 //
@@ -122,19 +130,148 @@ int signal_send_group(int pgid, int sig) {
     return reached;
 }
 
-void signal_deliver_pending(int pid) {
-    // The common case, and it must stay this cheap: this runs at the end
-    // of every trap taken from ring 3 -- every syscall and every timer
-    // tick of every process.
-    if (!scheduler_signal_pending(pid)) return;
+// --- the handler path -------------------------------------------------
 
-    int sig = scheduler_signal_take(pid);
-    if (!sig) return;
+// RFLAGS bits ring 3 is allowed to choose for itself on sigreturn.
+//
+// Carry, parity, adjust, zero, sign, direction and overflow -- the
+// condition codes, which are part of the interrupted computation and
+// must come back exactly. Everything ELSE is the kernel's: IOPL would
+// hand out port access, IF would let a process run with interrupts
+// disabled, TF would single-step it, NT/RF/VM are nothing a program
+// here has any business setting. Linux keeps the same list, by the same
+// reasoning, in its `FIX_EFLAGS`.
+#define RFLAGS_USER_MASK 0x0CD5ULL
+// Bit 1 is reserved and always set; IF must be on or the process
+// resumes with interrupts disabled and the machine stops.
+#define RFLAGS_FORCED    0x0202ULL
 
-    // EVERY PENDING SIGNAL TERMINATES, and the invariant that makes that
-    // true is stated on `pending` in scheduler.c: an ignored signal is
-    // dropped at arrival rather than queued, and there are no handlers
-    // for anything else to mean.
+// Where a signal frame may legally live: inside this process's own
+// stack region, whole. Checked BEFORE the copy rather than relying on
+// vmm_copy_to_user() to fault, because "the copy failed" cannot tell a
+// stack that has run out from a stack pointer that has been aimed at
+// somebody else's mapping -- and the second one is the case worth
+// refusing loudly.
+static int frame_fits(uint64_t sp) {
+    return sp >= UADDR_STACK_BOTTOM &&
+           sp + sizeof(struct sigframe) <= UADDR_STACK_VADDR + 4096;
+}
+
+// Build the frame and point `regs` at the handler. Returns 1 if the
+// process is now set up to run its handler, 0 if it could not be -- in
+// which case the caller must fall back to the default action, which is
+// what Linux's force_sigsegv() does and for the same reason: a process
+// whose stack cannot hold a frame cannot be told about anything.
+//
+// `restartable` says the interrupted trap is a syscall that has NOT RUN
+// YET, which is the only situation in which SA_RESTART means anything.
+static int push_signal_frame(int pid, int sig, const struct sigaction *act,
+                             uint64_t *regs, int restartable) {
+    struct sigframe f;
+
+    for (int i = 0; i < SIGFRAME_TF_SLOTS; i++) f.regs[i] = regs[i];
+
+    // WHAT THE INTERRUPTED SYSCALL SEES WHEN THE HANDLER IS DONE, and
+    // this is the whole of SA_RESTART. Applied to the SAVED copy, not to
+    // the live frame, so it takes effect at sigreturn -- after the
+    // handler has run, which is the order POSIX describes.
+    //
+    // Rewinding RIP re-executes `int $0x80` with RAX still holding the
+    // syscall number (nothing has written a return value into this frame
+    // -- idt.c delivers before the dispatcher runs), so the call is made
+    // again from scratch. Without the flag the call fails instead, with
+    // the -EINTR abi/errno.h has always promised and nothing had ever
+    // been in a position to observe.
+    if (restartable) {
+        if (act->flags & SA_RESTART) f.regs[SCHED_TF_RIP] -= SYSCALL_INSN_LEN;
+        else f.regs[SCHED_TF_RAX] = (uint64_t)(int64_t)-EINTR;
+    }
+
+    f.restorer_ret = act->restorer;
+    f.blocked      = scheduler_signal_blocked(pid);
+    f.sig          = sig;
+    f.magic        = SIGFRAME_MAGIC;
+
+    // THE RED ZONE FIRST, then the frame, then the alignment -- in that
+    // order, because each one moves the pointer and getting the order
+    // wrong silently corrupts a leaf function's locals.
+    uint64_t sp = regs[SCHED_TF_RSP] - SIGFRAME_RED_ZONE;
+    sp -= sizeof f;
+
+    // SysV says RSP+8 is 16-byte aligned at function entry -- the state
+    // a `call` leaves. So the frame's own address must be 8 mod 16, and
+    // a handler that gets this wrong faults on the first SSE spill in
+    // anything it calls, which points nowhere near here. This kernel has
+    // already paid for that once, in crt0.
+    sp = (sp & ~15ULL) - 8;
+
+    if (!frame_fits(sp)) {
+        klog_printf("signal: pid %d cannot take SIG%s -- no room at rsp 0x%lx\n",
+                    pid, signal_name(sig), sp);
+        return 0;
+    }
+    if (!vmm_copy_to_user(vmm_current_pml4(), sp, &f, sizeof f)) return 0;
+
+    // BLOCK THE SIGNAL BEING HANDLED. POSIX's default, and load bearing
+    // rather than tidy: without it a signal arriving during its own
+    // handler re-enters it, and a 4-page user stack does not survive
+    // many rounds of that (kernel/uaddr.h).
+    scheduler_signal_set_blocked(pid, f.blocked | (1u << sig));
+
+    regs[SCHED_TF_RSP] = sp;
+    regs[SCHED_TF_RIP] = act->handler;
+    regs[SCHED_TF_RDI] = (uint64_t)sig; // the handler's one argument
+    // DF CLEAR at function entry is part of the same ABI as the stack
+    // alignment above: a handler calling memcpy() with it set copies
+    // backwards. TF clear so a handler is not entered mid-single-step.
+    regs[SCHED_TF_RFLAGS] &= ~0x500ULL;
+    return 1;
+}
+
+// Restores the frame `push_signal_frame()` built, or returns 0 if there
+// is not a valid one to restore. Called only by sys_sigreturn().
+int signal_restore_frame(int pid, uint64_t *regs) {
+    // The handler was entered with RSP pointing at the frame, and its
+    // `ret` popped the restorer address off the front -- so the frame
+    // starts one word BELOW where the restorer is now standing. No
+    // search and no scan: the restorer is three instructions and pushes
+    // nothing (userland/rt/sigtramp.asm), which is what makes this
+    // arithmetic rather than a guess.
+    uint64_t sp = regs[SCHED_TF_RSP] - 8;
+    struct sigframe f;
+
+    if (!frame_fits(sp)) return 0;
+    if (!vmm_copy_from_user(vmm_current_pml4(), &f, sp, sizeof f)) return 0;
+    if (f.magic != SIGFRAME_MAGIC) return 0;
+
+    // EVERY GENERAL REGISTER, RIP AND RSP COME BACK VERBATIM -- that is
+    // the entire job, and a curated subset would be a list to get wrong.
+    for (int i = 0; i <= SCHED_TF_RAX; i++) regs[i] = f.regs[i];
+    regs[SCHED_TF_RIP] = f.regs[SCHED_TF_RIP];
+    regs[SCHED_TF_RSP] = f.regs[SCHED_TF_RSP];
+
+    // AND THESE THREE DO NOT, because this frame lives on the USER
+    // STACK and a program can scribble it. Reimposing the selectors and
+    // masking RFLAGS means the worst a corrupted frame can do is fault
+    // in ring 3, which is where a program's mistakes belong -- rather
+    // than resume with a ring-0 CS, IOPL 3, or interrupts disabled.
+    regs[SCHED_TF_CS]     = SEL_USER_CODE;
+    regs[SCHED_TF_SS]     = SEL_USER_DATA;
+    regs[SCHED_TF_RFLAGS] = (f.regs[SCHED_TF_RFLAGS] & RFLAGS_USER_MASK) |
+                            RFLAGS_FORCED;
+
+    // scheduler_signal_set_blocked() forces SIGKILL and SIGSTOP out of
+    // whatever this says, so a frame edited to make the process
+    // unkillable does not.
+    scheduler_signal_set_blocked(pid, f.blocked);
+    return 1;
+}
+
+// --- acting on a signal -----------------------------------------------
+
+// The default action, once it is known that nothing else applies.
+// Terminates `pid`, from whichever of the two situations it is in.
+static void do_default_action(int pid, int sig) {
     int code = SIGNAL_EXIT_BASE + sig;
     klog_printf("signal: pid %d terminated by SIG%s\n", pid, signal_name(sig));
 
@@ -172,4 +309,68 @@ void signal_deliver_pending(int pid) {
     if (victim && victim == vmm_current_pml4())
         vmm_switch_address_space(vmm_kernel_pml4_phys());
     scheduler_kill(pid, code);
+}
+
+int signal_deliver_pending(int pid, uint64_t *regs, int at_syscall_entry) {
+    // The common case, and it must stay this cheap: this runs at the end
+    // of every trap taken from ring 3 -- every syscall and every timer
+    // tick of every process.
+    int sig = scheduler_signal_take(pid);
+    if (!sig) return 0;
+
+    struct sigaction act;
+    if (!scheduler_signal_action(pid, sig, &act)) return 0;
+
+    // A HANDLER CAN ONLY BE GIVEN TO THE PROCESS THAT IS ABOUT TO RUN,
+    // because building the frame writes its user stack and this code
+    // stands in whichever address space the CPU is in. When the
+    // scheduler switched away mid-trap the target is somebody else, so
+    // the bit goes back and the signal is delivered at that process's
+    // OWN next trap -- which it always reaches, exactly as the pending
+    // set was designed for. Killing does not need this because
+    // scheduler_kill() never touches the victim's address space.
+    if (SIG_IS_HANDLER(act.handler)) {
+        if (pid != scheduler_current_pid()) {
+            scheduler_signal_raise(pid, sig);
+            return 0;
+        }
+        if (push_signal_frame(pid, sig, &act, regs, at_syscall_entry)) return 1;
+        // Fell through: no room for a frame. The process is told the
+        // only way left.
+    }
+
+    do_default_action(pid, sig);
+    return 1;
+}
+
+int signal_deliver_fault(int pid, int sig, uint64_t *regs) {
+    if (pid <= 0 || pid != scheduler_current_pid()) return 0;
+
+    struct sigaction act;
+    if (!scheduler_signal_action(pid, sig, &act)) return 0;
+    if (!SIG_IS_HANDLER(act.handler)) return 0;
+
+    // A FAULT INSIDE THE FAULT'S OWN HANDLER IS THE END OF THE LINE, and
+    // the blocked mask already knows: push_signal_frame() set this bit
+    // on the way in, so finding it set means the handler faulted. Linux
+    // calls this force_sig and resets the disposition to SIG_DFL; the
+    // effect here is the same and the reasoning is the one that matters
+    // -- re-entering a handler that just faulted produces a loop that
+    // ends in a stack overflow rather than a diagnosis.
+    if (scheduler_signal_blocked(pid) & (1u << sig)) {
+        klog_printf("signal: pid %d faulted inside its own SIG%s handler\n",
+                    pid, signal_name(sig));
+        return 0;
+    }
+
+    // NOT RESTARTABLE, and the distinction is the point: a fault is the
+    // instruction itself failing, so there is no call to re-run and
+    // rewinding RIP would re-execute the faulting instruction forever.
+    // The frame puts the process back exactly where it faulted, which is
+    // what lets a handler that FIXES the cause simply return.
+    if (!push_signal_frame(pid, sig, &act, regs, 0)) return 0;
+
+    klog_printf("signal: pid %d took SIG%s at rip 0x%lx -- handler at 0x%lx\n",
+                pid, signal_name(sig), regs[SCHED_TF_RIP], act.handler);
+    return 1;
 }

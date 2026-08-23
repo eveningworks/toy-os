@@ -1,5 +1,6 @@
 // The ring-3 surface of signals and process groups: SYS_SETPGID,
-// SYS_GETPGID, SYS_SIGACTION, SYS_TCSETPGRP, SYS_TCGETPGRP.
+// SYS_GETPGID, SYS_SIGACTION, SYS_SIGRETURN, SYS_TCSETPGRP,
+// SYS_TCGETPGRP.
 //
 // SYS_KILL is deliberately NOT here -- it lives with the other process
 // syscalls in proc_syscalls.c, where it always has. Moving it would make
@@ -16,6 +17,11 @@
 #include "scheduler.h"
 #include "tty.h"
 #include "errno.h"
+#include "signal.h" // signal_restore_frame() -- SYS_SIGRETURN's whole body
+#include "vmm.h"
+#include "klog.h"
+#include "kfmt.h"   // klog_printf()
+#include "syscall.h" // syscall_process_exit_cleanup()
 
 // PGID_SELF (0) means "me", in both arguments of both group calls -- the
 // same shorthand POSIX gives setpgid() and getpgid(). Resolved once,
@@ -55,32 +61,88 @@ int sys_getpgid(struct syscall_ctx *c) {
 }
 
 int sys_sigaction(struct syscall_ctx *c) {
-    int sig  = (int)(int32_t)c->a0;
-    int disp = (int)(int32_t)c->a1;
+    int sig = (int)(int32_t)c->a0;
+    uint64_t uact = c->a1, uold = c->a2;
 
-    int64_t r;
-    if (!SIGNAL_VALID(sig) || (disp != SIG_DFL && disp != SIG_IGN)) {
-        // A HANDLER POINTER LANDS HERE, and that is the intended
-        // outcome: refusing one outright beats accepting it and never
-        // calling it, which is what a userland program would otherwise
-        // have to discover by watching itself die. Stage 3 of
-        // docs/signals-design.md is what makes this legal.
-        r = -EINVAL;
-    } else if (SIGNAL_UNIGNORABLE(sig)) {
-        // SIGKILL and SIGQUIT, so there is always something that works.
-        // Refused even for SIG_DFL -- setting a signal to the
-        // disposition it already has would succeed and teach a caller
-        // that the call sometimes works on it.
-        r = -EPERM;
-    } else {
-        int was = scheduler_signal_set_ignored(scheduler_current_pid(), sig,
-                                                disp == SIG_IGN);
-        // -1 means the caller has no scheduler slot: the legacy
-        // process_run_ring3() loader, which has no signal state to set.
-        r = was < 0 ? -EPERM : (was ? SIG_IGN : SIG_DFL);
+    if (!SIGNAL_VALID(sig)) { c->regs[14] = (uint64_t)(int64_t)-EINVAL; return 0; }
+
+    // SIGKILL, SIGQUIT AND SIGSTOP, so there is always something that
+    // works. Refused even for a plain read of the old action -- not
+    // because reading would hurt, but because a caller that can read one
+    // will try to write one, and a call that succeeds on the query and
+    // fails on the install teaches the wrong thing about which signals
+    // are off limits. abi/signal_abi.h has why SIGQUIT is on this list
+    // and why the argument for it got weaker when handlers landed.
+    if (SIGNAL_UNIGNORABLE(sig)) { c->regs[14] = (uint64_t)(int64_t)-EPERM; return 0; }
+
+    struct sigaction act, old;
+    if (uact) {
+        if (!vmm_copy_from_user(c->pml4, &act, uact, sizeof act)) {
+            c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+            return 0;
+        }
+        // A HANDLER WITHOUT A RESTORER IS REFUSED, not silently given
+        // one. There is nothing sensible the kernel could substitute:
+        // the restorer is ring-3 code, and a handler that returns to a
+        // guessed address faults on the way out of something that
+        // otherwise worked -- the hardest possible place to debug it.
+        // x86-64 Linux refuses the same call for the same reason.
+        if (SIG_IS_HANDLER(act.handler) && !act.restorer) {
+            c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+            return 0;
+        }
+        // Every OTHER field is the caller's business, but an unknown
+        // flag is not: accepting one means a program can ask for
+        // behaviour it will not get and have no way to find out.
+        if (act.flags & ~(uint32_t)SA_RESTART) {
+            c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+            return 0;
+        }
     }
-    c->regs[14] = (uint64_t)r;
+
+    // -1 means the caller has no scheduler slot: the legacy
+    // process_run_ring3() loader, which has no signal state to set.
+    if (scheduler_signal_set_action(scheduler_current_pid(), sig,
+                                    uact ? &act : 0, &old) < 0) {
+        c->regs[14] = (uint64_t)(int64_t)-EPERM;
+        return 0;
+    }
+
+    // THE INSTALL HAS ALREADY HAPPENED IF THIS COPY FAILS, and that is
+    // the honest ordering rather than the tidy one: the alternative is
+    // validating the out pointer first, which is a second walk of the
+    // page tables to make an error path prettier. A caller that passes a
+    // bad `old` gets -EFAULT and an installed action, which POSIX allows
+    // and which is strictly less surprising than an install that
+    // silently did not happen.
+    if (uold && !vmm_copy_to_user(c->pml4, uold, &old, sizeof old)) {
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+
+    c->regs[14] = 0;
     return 0;
+}
+
+// THE ONE SYSCALL THAT DOES NOT RETURN TO ITS CALLER. It rewrites the
+// trapframe it was called through, so the `int $0x80` in the restorer
+// resumes as whatever the handler interrupted -- which is why nothing
+// below writes regs[14] on the success path: RAX is part of the restored
+// state, and overwriting it with a return value would corrupt the very
+// register the interrupted code was using.
+int sys_sigreturn(struct syscall_ctx *c) {
+    int pid = scheduler_current_pid();
+    if (signal_restore_frame(pid, c->regs)) return 0;
+
+    // NO FRAME MEANS THE PROCESS IS ALREADY LOST. It either called this
+    // by hand -- there is nothing to return to -- or corrupted the stack
+    // the frame was on, in which case resuming it would resume garbage.
+    // Killed with SIGSEGV rather than handed an error code, because
+    // there is no register left that a caller could read one out of.
+    klog_printf("signal: pid %d called sigreturn with no valid frame\n", pid);
+    syscall_process_exit_cleanup(vmm_current_pml4());
+    scheduler_on_exit(SIGNAL_EXIT_BASE + SIGSEGV);
+    return 1; // never reached; keeps the dispatcher from writing a result
 }
 
 // **BOTH TAKE AN fd NOW.** They took none while "the console" was a

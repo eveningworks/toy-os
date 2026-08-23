@@ -16,9 +16,17 @@
 #include "rt/sys.h"
 #include <stdio.h>
 #include <string.h>
+#include <setjmp.h>
+#include "errno.h"
 
 static int fails;
 
+// **`noinline` IS LOAD BEARING, not style.** These carry a 192-byte
+// line buffer each, and inlined into a main() with two dozen calls the
+// buffers do not overlap -- 4.4 KB of frame against a 2 KB budget and a
+// 16 KB ring-3 stack. One out-of-line copy costs nothing this test
+// measures.
+__attribute__((noinline))
 static void check(const char *what, int ok, const char *detail) {
     char line[192];
     snprintf(line, sizeof line, "signal: %s %s%s%s\n", ok ? "ok  " : "FAIL",
@@ -27,10 +35,63 @@ static void check(const char *what, int ok, const char *detail) {
     if (!ok) fails++;
 }
 
+__attribute__((noinline))
 static void checkf(const char *what, int ok, int got, int want) {
     char d[64];
     snprintf(d, sizeof d, "got %d, wanted %d", got, want);
     check(what, ok, ok ? 0 : d);
+}
+
+// --- what the handler tests need --------------------------------------
+//
+// `volatile` on every one of these is not decoration: a handler runs
+// between two instructions of code the compiler believes nothing can
+// interrupt, so without it a check reads a value cached in a register
+// from before the signal and reports a working handler as broken.
+static volatile int g_caught;
+static volatile int g_witness;
+static volatile int g_depth;
+static volatile int g_max_depth;
+static volatile int g_entries;
+static jmp_buf g_segv_jmp;
+
+static void on_signal(int sig) { g_caught = sig; }
+
+// Sends itself the same signal it is handling. If the kernel did not
+// block it, this re-enters and g_max_depth climbs; POSIX says it must
+// not, and abi/signal_abi.h says why that matters on a 4-page stack.
+static void on_signal_reentrant(int sig) {
+    g_caught = sig;
+    g_entries++;
+    g_depth++;
+    if (g_depth > g_max_depth) g_max_depth = g_depth;
+    // ONCE, AND THE COUNTER HAS TO BE `entries` RATHER THAN `depth`.
+    // Keyed on depth this never terminates, and it is worth recording
+    // because the failure is the feature working: the blocked signal is
+    // DEFERRED, not dropped, so it is delivered again the moment
+    // sigreturn clears the mask -- at depth 0, where a depth test says
+    // "send another one". Two runs of this test hung the machine before
+    // that was obvious.
+    if (g_entries == 1) sys_kill(sys_getpid(), sig);
+    g_depth--;
+}
+
+// JUMPS OUT rather than returning, and that is not laziness. A fault
+// frame puts the process back on the faulting instruction, so returning
+// from a SIGSEGV handler that has not fixed the cause re-executes the
+// fault forever -- signal.c's own comment says so, and this is what
+// that reads like from the program's side.
+static void on_segv(int sig) {
+    g_caught = sig;
+    longjmp(g_segv_jmp, 1);
+}
+
+// "<pid> <sig>" for /tests/sigpoke, in a static buffer -- the arguments
+// are a single string here, not an argv array.
+static const char *poke_args(int pid, int sig) {
+    static char buf[32];
+    snprintf(buf, sizeof buf, "%d %d", pid, sig);
+    return buf;
 }
 
 // Spin until `pid` is really SCHED_BLOCKED, or give up. Returns 1 if it
@@ -85,19 +146,27 @@ int main(void) {
 
     // SIGKILL is what makes a force-quit trustworthy; a process that
     // could ignore it could not be ended at all.
-    check("SIGKILL cannot be ignored", sys_sigaction(SIGKILL, SIG_IGN) < 0, 0);
-    check("SIGQUIT cannot be ignored either", sys_sigaction(SIGQUIT, SIG_IGN) < 0, 0);
-    // A HANDLER IS REFUSED rather than accepted and never called -- the
-    // difference between a documented limit and a silent one.
-    check("a handler pointer is refused, not accepted and ignored",
-          sys_sigaction(SIGINT, 0x400000) < 0, 0);
+    check("SIGKILL cannot be ignored",
+          sys_signal(SIGKILL, (sighandler_t)SIG_IGN) == SIG_ERR, 0);
+    check("SIGQUIT cannot be ignored either",
+          sys_signal(SIGQUIT, (sighandler_t)SIG_IGN) == SIG_ERR, 0);
     check("a signal number out of range is refused",
-          sys_sigaction(99, SIG_IGN) < 0, 0);
+          sys_signal(99, (sighandler_t)SIG_IGN) == SIG_ERR, 0);
+    // A HANDLER WITH NO RESTORER is the one refusal a caller can still
+    // trip, and it is why sys_signal() exists: it fills the field in.
+    struct sigaction bad = { .handler = 0x400000, .restorer = 0 };
+    check("a handler with no restorer is refused",
+          sys_sigaction(SIGINT, &bad, 0) < 0, 0);
+    struct sigaction odd = { .handler = 0x400000,
+                             .restorer = (uint64_t)(uintptr_t)__sigrestore,
+                             .flags = 0x40 };
+    check("an unknown SA_ flag is refused, not silently dropped",
+          sys_sigaction(SIGINT, &odd, 0) < 0, 0);
 
-    int prev = sys_sigaction(SIGINT, SIG_IGN);
-    checkf("sigaction returns the PREVIOUS disposition", prev == SIG_DFL, prev, SIG_DFL);
-    prev = sys_sigaction(SIGINT, SIG_IGN);
-    checkf("...and reports it changed", prev == SIG_IGN, prev, SIG_IGN);
+    long prev = (long)(uintptr_t)sys_signal(SIGINT, (sighandler_t)SIG_IGN);
+    checkf("signal() returns the PREVIOUS disposition", prev == SIG_DFL, (int)prev, SIG_DFL);
+    prev = (long)(uintptr_t)sys_signal(SIGINT, (sighandler_t)SIG_IGN);
+    checkf("...and reports it changed", prev == SIG_IGN, (int)prev, SIG_IGN);
 
     // THE LOAD-BEARING ONE: an ignored signal must not kill us. If it
     // did, this program would simply stop and the harness would report
@@ -105,7 +174,7 @@ int main(void) {
     // is the evidence.
     sys_kill(me, SIGINT);
     check("an IGNORED signal does not terminate the process", 1, 0);
-    sys_sigaction(SIGINT, SIG_DFL);
+    sys_signal(SIGINT, (sighandler_t)SIG_DFL);
 
     // SIGCHLD's default is to be ignored, which is what lets the kernel
     // send one on every child exit without every program knowing.
@@ -212,6 +281,131 @@ int main(void) {
         checkf("SIGKILL terminates, and reports 128 + 9",
                sc == SIGNAL_EXIT_BASE + SIGKILL, sc, SIGNAL_EXIT_BASE + SIGKILL);
     }
+
+    // --- HANDLERS: the whole of stage 3 ----------------------------------
+    //
+    // Everything above tests a signal ENDING a process. These test one
+    // being caught, run, and RETURNED FROM -- which means the frame the
+    // kernel pushed unwound exactly, or the checks after each one would
+    // not run at all. That is the strongest part of the evidence here:
+    // a corrupted restore does not fail an assertion, it crashes, and
+    // the harness reports a truncated run.
+
+    sys_signal(SIGINT, on_signal);
+    g_caught = 0; g_witness = 0x1234;
+    sys_kill(me, SIGINT);
+    checkf("a handler RUNS when the signal is sent", g_caught == SIGINT,
+           g_caught, SIGINT);
+    check("...and execution resumes after it", g_witness == 0x1234, 0);
+
+    // A HANDLER IS NOT A ONE-SHOT. System V reset the disposition on
+    // every delivery, which is a race every program had to write around;
+    // BSD and glibc leave it installed, and so does this.
+    g_caught = 0;
+    sys_kill(me, SIGINT);
+    checkf("...and stays installed for the next one", g_caught == SIGINT,
+           g_caught, SIGINT);
+
+    // THE REGISTERS COME BACK. A frame that restores RIP and RSP and
+    // loses a callee-saved register produces a bug thousands of
+    // instructions away, so this pins a value in one across the
+    // delivery. Written in asm because C gives no way to insist a
+    // particular register survives a particular statement.
+    uint64_t before = 0x5A5AC0FFEE5A5A11ULL, after = 0;
+    __asm__ volatile (
+        "mov %1, %%r12\n\t"
+        "int $0x80\n\t"        // sys_kill(me, SIGINT) -- inline, so no
+        "mov %%r12, %0"        // call boundary is allowed to spill r12
+        : "=r"(after)
+        : "r"(before), "a"((uint64_t)SYS_KILL), "D"((uint64_t)me),
+          "S"((uint64_t)SIGINT)
+        : "r12", "rcx", "r11", "memory"
+    );
+    check("a general register survives the round trip", after == before, 0);
+
+    // NESTING IS BLOCKED WHILE A HANDLER RUNS -- POSIX's default, and
+    // what stops a repeated signal walking the 4-page user stack into
+    // its guard page. The handler sends itself the same signal; if it
+    // nested, g_depth would come back above 1.
+    sys_signal(SIGINT, on_signal_reentrant);
+    g_depth = 0; g_max_depth = 0; g_entries = 0; g_caught = 0;
+    sys_kill(me, SIGINT);
+    checkf("the signal is BLOCKED inside its own handler", g_max_depth == 1,
+           g_max_depth, 1);
+    // AND DEFERRED, NOT DROPPED -- the second entry is the evidence, and
+    // it is the half that makes the check above mean something. A kernel
+    // that lost the blocked signal entirely would also report max depth
+    // 1, and would be wrong.
+    checkf("...and delivered again once the handler returns", g_entries == 2,
+           g_entries, 2);
+
+    // SIGSEGV IS A SIGNAL NOW, not an unconditional teardown. The
+    // handler jumps clear rather than returning, because returning
+    // would re-execute the faulting instruction forever -- signal.c
+    // says so, and this is what that reads like from ring 3.
+    sys_signal(SIGSEGV, on_segv);
+    g_caught = 0;
+    if (!setjmp(g_segv_jmp)) {
+        // THROUGH A VOLATILE, so the compiler cannot see that this is
+        // a null write and warn about the array bounds of address zero.
+        // The address is deliberately not 0 either: page zero being
+        // unmapped is the mechanism, and 0x10 exercises it without
+        // looking like a forgotten initialisation.
+        static volatile uintptr_t nowhere = 0x10;
+        *(volatile int *)nowhere = 1;
+        check("a null write faulted", 0, "it did not fault at all");
+    }
+    checkf("a FAULT is delivered to the process as SIGSEGV",
+           g_caught == SIGSEGV, g_caught, SIGSEGV);
+    sys_signal(SIGSEGV, (sighandler_t)SIG_DFL);
+
+    // SA_RESTART ACROSS A BLOCKING READ, BOTH WAYS. The child signals us
+    // while we are parked in read(), and the same sequence is run twice
+    // -- once with the flag and once without.
+    //
+    // **RUNNING IT BOTH WAYS IS WHAT MAKES IT A TEST.** With the flag
+    // the read is re-entered and returns its byte; without it the read
+    // fails with EINTR. Either result alone is also what you would see
+    // if the signal had simply arrived before the parent ever blocked,
+    // so one direction proves nothing -- the two DIFFERING is the
+    // evidence that the read was genuinely interrupted.
+    for (int restart = 1; restart >= 0; restart--) {
+        int rfd[2];
+        if (sys_pipe(rfd) != 1) {
+            check("could get a pipe for the restart check", 0, "no pipes");
+            break;
+        }
+        struct sigaction act = {
+            .handler  = (uint64_t)(uintptr_t)on_signal,
+            .restorer = (uint64_t)(uintptr_t)__sigrestore,
+            .flags    = restart ? SA_RESTART : 0,
+        };
+        sys_sigaction(SIGTERM, &act, 0);
+
+        g_caught = 0;
+        int poker = sys_spawn_group("/tests/sigpoke", poke_args(me, SIGTERM),
+                                    rfd[1], 0, PGID_NEW);
+        sys_close(rfd[1]); // the child holds its own copy
+        if (poker > 0) {
+            char b = 0;
+            int n = sys_read(rfd[0], &b, 1);
+            if (restart) {
+                checkf("SA_RESTART: the interrupted read returns its byte",
+                       n == 1 && b == 'R', n, 1);
+            } else {
+                checkf("without it: the interrupted read fails with EINTR",
+                       n < 0 && sys_errno() == EINTR, sys_errno(), EINTR);
+            }
+            checkf("...and either way the handler ran", g_caught == SIGTERM,
+                   g_caught, SIGTERM);
+            sys_waitpid(poker, 0);
+        } else {
+            check("spawned the poker", 0, "spawn failed");
+        }
+        sys_close(rfd[0]);
+    }
+    sys_signal(SIGTERM, (sighandler_t)SIG_DFL);
+    sys_signal(SIGINT, (sighandler_t)SIG_DFL);
 
     // --- signalling something that is not there ---------------------------
     check("a signal to a pid that does not exist is refused",

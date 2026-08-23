@@ -100,10 +100,10 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_SETPGID]       = { "setpgid",       sys_setpgid,       { A_INT, A_INT } },
     [SYS_GETPGID]       = { "getpgid",       sys_getpgid,       { A_INT } },
     // The signal traces as a plain number: a name would want a third
-    // argument formatter for six values, and `sigaction(2, 1)` beside
-    // abi/signal_abi.h is already readable -- the same call `lseek`'s
-    // whence made just above.
-    [SYS_SIGACTION]     = { "sigaction",     sys_sigaction,     { A_INT, A_INT } },
+    // argument formatter for a dozen values, and `sigaction(2, 0x...)`
+    // beside abi/signal_abi.h is already readable -- the same call
+    // `lseek`'s whence made just above.
+    [SYS_SIGACTION]     = { "sigaction",     sys_sigaction,     { A_INT, A_HEX, A_HEX } },
     [SYS_TCSETPGRP]     = { "tcsetpgrp",     sys_tcsetpgrp,     { A_INT, A_INT } },
     [SYS_TCGETPGRP]     = { "tcgetpgrp",     sys_tcgetpgrp,     { A_INT } },
     [SYS_OPENPTY]       = { "openpty",       sys_openpty,       { A_HEX } },
@@ -112,6 +112,12 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_SET_NONBLOCK]  = { "set_nonblock",  sys_set_nonblock,  { A_INT, A_INT } },
     [SYS_TCGETWINSZ]    = { "tcgetwinsz",    sys_tcgetwinsz,    { A_INT, A_HEX } },
     [SYS_TCSETWINSZ]    = { "tcsetwinsz",    sys_tcsetwinsz,    { A_INT, A_HEX } },
+    // NO RETURN VALUE TO TRACE, and strace prints one anyway -- whatever
+    // RAX holds in the restored frame. That is not a bug to paper over:
+    // this call does not return to its caller, so the honest reading of
+    // that number is "what the interrupted code is about to see", which
+    // is exactly what a person debugging a handler wants.
+    [SYS_SIGRETURN]     = { "sigreturn",     sys_sigreturn,     { A_END } },
 };
 
 #define SYSCALL_TABLE_COUNT (sizeof SYSCALL_TABLE / sizeof SYSCALL_TABLE[0])

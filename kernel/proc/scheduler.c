@@ -240,14 +240,28 @@ struct sched_process {
     // `pending` is a BITMASK, not a queue: two SIGINTs before delivery
     // are one SIGINT, which is what ordinary Unix signals do too.
     //
-    // **A SET BIT MEANS THIS PROCESS MUST DIE.** An ignored signal is
-    // dropped at arrival rather than queued, and with no user-space
-    // handlers every disposition that is not "ignore" is "terminate" --
-    // so nothing has to consult a policy table to interpret this field.
-    // scheduler_block_current() leans on exactly that. Stage 3 of
-    // docs/signals-design.md breaks the invariant; scheduler.h says so
-    // where grep will find it.
+    // **A SET BIT MEANS THIS PROCESS HAS SOMETHING TO DELIVER**, and
+    // it used to mean the stronger "must die" -- handlers are what
+    // changed it, exactly as api/scheduler.h predicted they would. An
+    // ignored signal is still dropped at arrival rather than queued, so
+    // a set bit is never a no-op; but whether it terminates the process
+    // or calls one of its own functions now needs `actions[]` below.
+    //
+    // What did NOT change is the one place that leaned on the old
+    // reading: scheduler_block_current() still parks whatever it is
+    // handed, because delivery happens at the syscall ENTRY a process
+    // makes next and it therefore cannot reach that function with
+    // anything pending. Its comment says so at length.
     uint32_t pending;
+
+    // Signals blocked from delivery right now. THE ONLY THING THAT SETS
+    // A BIT HERE IS ENTERING A HANDLER, and sigreturn is the only thing
+    // that clears one -- there is no sigprocmask. POSIX blocks the
+    // signal a handler is running for (that is what SA_NODEFER turns
+    // off), and it is not politeness: without it, holding Ctrl-C down
+    // re-enters the handler on every delivery and walks a 4-page user
+    // stack straight into its guard page.
+    uint32_t blocked;
 
     // --- job control: STOPPED, and why it is not a state -------------
     //
@@ -275,13 +289,17 @@ struct sched_process {
     // unless `stopped`.
     int stop_sig;
 
-    // Which signals this process ignores. A BITMASK rather than the
-    // per-signal disposition table POSIX has, because there are only two
-    // dispositions to express -- a handler is a function pointer, a
-    // signal frame and a sigreturn, none of which exist yet. A table of
-    // 32 bytes per process pretending otherwise would be a slot nobody
-    // reads (CLAUDE.md).
-    uint32_t ignored;
+    // WHAT EACH SIGNAL DOES TO THIS PROCESS: a table now, indexed by
+    // signal number, because a disposition stopped being one bit the
+    // moment it could be a function pointer with a restorer and flags
+    // beside it. This replaced a `uint32_t ignored` bitmask, which was
+    // the right shape while SIG_DFL and SIG_IGN were the only answers.
+    //
+    // Costs 768 bytes per slot -- 48 KB of BSS across all 64. Paid
+    // rather than compressed (a handler list keyed by signal, say)
+    // because indexing by signal number is what every reader wants and
+    // this kernel has 64 slots, not 64 thousand.
+    struct sigaction actions[SIGNAL_MAX + 1];
     // This process's group. Never 0 for a live slot: a child inherits
     // its spawner's, and one the kernel started leads its own.
     int pgid;
@@ -1248,6 +1266,16 @@ int scheduler_test_state(int idx) {
 
 _Static_assert(TF_RAX < SCHED_TF_SLOTS,
                "a test trapframe must be big enough to hold the RAX slot a wake writes");
+_Static_assert(TF_RDI == SCHED_TF_RDI && TF_CS == SCHED_TF_CS &&
+               TF_RFLAGS == SCHED_TF_RFLAGS && TF_RSP == SCHED_TF_RSP &&
+               TF_SS == SCHED_TF_SS,
+               "api/scheduler.h's SCHED_TF_* must match this file's TF_*");
+_Static_assert(TF_VECTOR == SCHED_TF_VECTOR,
+               "api/scheduler.h's SCHED_TF_VECTOR must match TF_VECTOR");
+_Static_assert(TF_RIP == SCHED_TF_RIP,
+               "api/scheduler.h's SCHED_TF_RIP must match TF_RIP");
+_Static_assert(TRAPFRAME_WORDS == SIGFRAME_TF_SLOTS,
+               "abi/signal_abi.h's SIGFRAME_TF_SLOTS must be a whole trapframe");
 _Static_assert(TF_RAX == SCHED_TF_RAX,
                "scheduler.h's public RAX slot index must match the real trapframe layout");
 
@@ -1664,24 +1692,41 @@ int scheduler_setpgid(int pid, int pgid) {
 int scheduler_signal_ignored(int pid, int sig) {
     struct sched_process *p = live_slot(pid);
     if (!p || !SIGNAL_VALID(sig)) return 0;
-    return (p->ignored & (1u << sig)) != 0;
+    return p->actions[sig].handler == SIG_IGN;
 }
 
-int scheduler_signal_set_ignored(int pid, int sig, int on) {
+int scheduler_signal_action(int pid, int sig, struct sigaction *out) {
+    struct sched_process *p = live_slot(pid);
+    if (!p || !SIGNAL_VALID(sig)) return 0;
+    if (out) *out = p->actions[sig];
+    return 1;
+}
+
+int scheduler_signal_set_action(int pid, int sig, const struct sigaction *act,
+                                struct sigaction *old) {
     struct sched_process *p = live_slot(pid);
     if (!p || !SIGNAL_VALID(sig)) return -1;
-    int was = (p->ignored & (1u << sig)) != 0;
-    if (on) {
-        p->ignored |= (1u << sig);
-        // AND DROP WHAT IS ALREADY PENDING. A process that has just said
-        // "I do not want this signal" must not be killed by one that
-        // arrived a moment earlier -- and with `pending` meaning "must
-        // die", leaving the bit set would do exactly that.
-        p->pending &= ~(1u << sig);
-    } else {
-        p->ignored &= ~(1u << sig);
+    if (old) *old = p->actions[sig];
+    if (!act) return 0;
+
+    p->actions[sig] = *act;
+    // A SENTINEL CARRIES NO RESTORER AND NO FLAGS, and normalising here
+    // rather than trusting the caller is what makes the readback
+    // honest: SIG_DFL with a stale restorer left in the struct would be
+    // reported back as something that looks armed and is not.
+    if (!SIG_IS_HANDLER(act->handler)) {
+        p->actions[sig].restorer = 0;
+        p->actions[sig].flags    = 0;
     }
-    return was;
+
+    // AND DROP WHAT IS ALREADY PENDING, for SIG_IGN only. A process that
+    // has just said "I do not want this signal" must not be acted on by
+    // one that arrived a moment earlier. Installing a HANDLER does not
+    // drop it -- there the pending signal is precisely what the caller
+    // has just arranged to hear about, and dropping it would lose a
+    // signal that was legitimately sent.
+    if (act->handler == SIG_IGN) p->pending &= ~(1u << sig);
+    return 0;
 }
 
 uint32_t scheduler_signal_pending(int pid) {
@@ -1689,17 +1734,42 @@ uint32_t scheduler_signal_pending(int pid) {
     return p ? p->pending : 0;
 }
 
-int scheduler_signal_take(int pid) {
+uint32_t scheduler_signal_blocked(int pid) {
     struct sched_process *p = live_slot(pid);
-    if (!p || !p->pending) return 0;
-    int sig = 0;
-    for (int i = 1; i <= SIGNAL_MAX; i++) {
-        if (p->pending & (1u << i)) { sig = i; break; }
-    }
-    // THE WHOLE SET, not just the one taken: acting on this signal
-    // terminates the process, so the rest can never be acted on and
-    // leaving them set would be state with no reader.
-    p->pending = 0;
+    return p ? p->blocked : 0;
+}
+
+void scheduler_signal_set_blocked(int pid, uint32_t mask) {
+    struct sched_process *p = live_slot(pid);
+    // SIGKILL AND SIGSTOP CAN NEVER BE BLOCKED, the same rule that stops
+    // them being ignored -- and enforced HERE rather than at the two
+    // callers, because sigreturn restores this mask from a struct on the
+    // USER STACK and a program that scribbles its own frame must not be
+    // able to make itself unkillable.
+    if (p) p->blocked = mask & ~((1u << SIGKILL) | (1u << SIGSTOP));
+}
+
+int scheduler_signal_deliverable(int pid) {
+    struct sched_process *p = live_slot(pid);
+    if (!p) return 0;
+    uint32_t ready = p->pending & ~p->blocked;
+    if (!ready) return 0;
+    for (int i = 1; i <= SIGNAL_MAX; i++)
+        if (ready & (1u << i)) return i;
+    return 0;
+}
+
+int scheduler_signal_take(int pid) {
+    int sig = scheduler_signal_deliverable(pid);
+    if (!sig) return 0;
+    // ONE BIT, NOT THE WHOLE SET, and that changed with handlers. It
+    // used to clear everything on the reasoning that acting on any
+    // signal terminated the process, so the rest could never be acted
+    // on -- true then, and false the moment a handler can run and
+    // return. Each pending signal now gets its own delivery, the next
+    // one at the sigreturn that ends this one.
+    struct sched_process *p = live_slot(pid);
+    p->pending &= ~(1u << sig);
     return sig;
 }
 
@@ -1707,7 +1777,9 @@ int scheduler_signal_take(int pid) {
 
 static void signal_state_reset(int slot) {
     procs[slot].pending       = 0;
-    procs[slot].ignored       = 0;
+    procs[slot].blocked       = 0;
+    for (int i = 0; i <= SIGNAL_MAX; i++)
+        procs[slot].actions[i] = (struct sigaction){ 0, 0, 0, 0 };
     procs[slot].stopped       = 0;
     procs[slot].stop_reported = 0;
     procs[slot].stop_sig      = 0;
@@ -1797,15 +1869,35 @@ int scheduler_signal_raise(int pid, int sig) {
     // that makes `pending != 0` mean "must die" with no policy lookup.
     // Still a successful delivery: the caller asked for an action and
     // the action was "nothing".
-    if ((p->ignored & (1u << sig)) && !SIGNAL_UNIGNORABLE(sig)) return 1;
+    if (p->actions[sig].handler == SIG_IGN && !SIGNAL_UNIGNORABLE(sig)) return 1;
 
     p->pending |= (1u << sig);
 
-    // A PARKED PROCESS HAS TO BE WOKEN TO BE KILLED, because delivery
+    // A PARKED PROCESS HAS TO BE WOKEN TO BE ACTED ON, because delivery
     // only happens on the way back to ring 3 and a blocked process is
-    // not on its way anywhere. -EINTR rather than SYS_RETRY: the two are
-    // deliberately different values (abi/syscall_abi.h), and RETRY would
-    // send the caller straight back into the same blocking call.
+    // not on its way anywhere.
+    //
+    // **IT IS WOKEN BY REWINDING ITS SYSCALL, NOT BY FAILING IT**, and
+    // this is the one thing handlers changed out here rather than in
+    // signal.c. It used to write -EINTR into the saved RAX and let the
+    // call return; that reaches a delivery point just as reliably, and
+    // it puts the events in the wrong ORDER -- ring 3 sees the call fail
+    // FIRST and runs the handler at some later trap, by which time
+    // there is nothing left to restart and SA_RESTART cannot exist.
+    //
+    // Rewinding RIP over the two bytes of `int $0x80` means the process
+    // re-enters the kernel at the same syscall with its arguments
+    // untouched (RAX still holds the number -- nothing has written a
+    // return value into this frame). idt.c's syscall-entry check sees
+    // the pending signal there and delivers BEFORE the call runs, which
+    // is the moment POSIX describes and the only moment at which
+    // "restart it" and "fail it with -EINTR" are both still available.
+    // Linux reaches the same place from the other end, with a
+    // -ERESTARTSYS its blocking primitives return.
+    //
+    // The vector check is not paranoia: only a syscall can block, so a
+    // frame that says otherwise is one this code does not understand,
+    // and failing the call is the safe answer for it.
     //
     // Safe from an interrupt handler, and limited to make that true --
     // exactly the restraint scheduler_wake() keeps: this only flips
@@ -1814,7 +1906,8 @@ int scheduler_signal_raise(int pid, int sig) {
     // mean calling the heap from the keyboard IRQ.
     if (p->state == SCHED_BLOCKED) {
         uint64_t *tf = (uint64_t *)(uintptr_t)p->kernel_rsp;
-        tf[TF_RAX] = (uint64_t)(int64_t)-EINTR;
+        if (tf[TF_VECTOR] == 0x80) tf[TF_RIP] -= SYSCALL_INSN_LEN;
+        else                       tf[TF_RAX] = (uint64_t)(int64_t)-EINTR;
         p->state = SCHED_READY;
         p->wait_chan = 0;
     }

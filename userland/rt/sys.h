@@ -310,18 +310,55 @@ int sys_setpgid(int pid, int pgid);
 // `pid`'s group (0 = me), or -1 with errno ESRCH.
 int sys_getpgid(int pid);
 
-// Set this process's disposition for `sig` to SIG_DFL or SIG_IGN.
-// Returns the PREVIOUS disposition, or -1 with errno.
+// --- signals: dispositions and handlers -------------------------------
+
+// What a handler is: one argument, the signal number. No siginfo and no
+// ucontext -- POSIX's SA_SIGINFO shape needs the kernel to build two
+// more structures on the user stack for information nothing here has
+// (no sender pid is recorded, no fault address is passed through), and a
+// struct full of zeroes is worse than not offering one.
+typedef void (*sighandler_t)(int);
+
+// Install `h` -- SIG_DFL, SIG_IGN, or a function -- and return the
+// PREVIOUS one, or SIG_ERR with errno set.
 //
-// NOT `sigaction`: there is no handler, and passing a function pointer
-// is refused with EINVAL rather than accepted and never called. SIGKILL
-// and SIGQUIT cannot be ignored (EPERM), so there is always something
-// that works.
+// **THIS IS THE ONE TO REACH FOR.** It fills in the restorer and sets
+// SA_RESTART, which is what a caller almost always wants and cannot
+// sensibly supply itself: the restorer is a private detail of this
+// runtime (userland/rt/sigtramp.c). sys_sigaction() below is for the
+// caller that wants to READ an action back, or wants EINTR instead of a
+// restart.
+//
+// BSD's `signal()` semantics, which is also glibc's: the handler stays
+// installed across deliveries, and interrupted syscalls restart. The
+// ancient System V behaviour -- reset to SIG_DFL on every delivery --
+// is a race nothing should have to write around.
+//
+// SIGKILL, SIGQUIT and SIGSTOP are refused with EPERM, so there is
+// always something that works.
 //
 // A SHELL SHOULD IGNORE SIGINT. Its own group is in front of the console
 // whenever no job is running, and without a handler to redraw a prompt
 // there is nothing else it could usefully do with one.
-int sys_sigaction(int sig, int disp);
+sighandler_t sys_signal(int sig, sighandler_t h);
+
+// What sys_signal() returns on failure. -1 rather than 0, because 0 is
+// SIG_DFL and a perfectly good previous disposition.
+#define SIG_ERR ((sighandler_t)-1)
+
+// The full call: install `act` (or NULL to only read), write the
+// previous action to `old` (or NULL). Returns 0, or -1 with errno.
+//
+// The restorer is YOURS to supply with a handler -- `__sigrestore` is
+// the one this runtime provides, and passing 0 with a handler is EINVAL
+// rather than a guess. sys_signal() exists so that almost nobody has to
+// know that.
+int sys_sigaction(int sig, const struct sigaction *act, struct sigaction *old);
+
+// The restorer userland/rt/sigtramp.c provides. Declared so that a
+// caller building its own `struct sigaction` has something to put in the
+// field; there is no reason to write another one.
+void __sigrestore(void);
 
 // Put `pgid` in the FOREGROUND of the physical console -- what Ctrl-C
 // interrupts. Returns 0, or -1 with errno: EPERM unless this process

@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "proc_info.h" // struct proc_info -- scheduler_proc_info() below
+#include "signal_abi.h" // struct sigaction -- the per-process action table below
 
 // Built as the ORIGINAL Milestone 16 (the old pre-v0.1.0 numbering used
 // by the git history, unrelated to docs/roadmap.md's current
@@ -472,21 +473,39 @@ int scheduler_kill(int pid, int exit_code);
 // send one -- is kernel/signal.h. This half is here because the state
 // lives in the process table and nothing else may touch it.
 //
-// THE INVARIANT THE WHOLE DESIGN RESTS ON: **a pending bit means the
-// process must die.** An ignored signal is dropped at arrival rather
-// than queued (POSIX's rule for SIG_IGN), and with no user-space
-// handlers every disposition that is not "ignore" is "terminate" -- so
-// `pending != 0` needs no policy lookup to interpret. scheduler.c uses
-// exactly that to decide whether a blocking syscall may park at all,
-// which is what stops a signalled process re-blocking forever between
-// the wake and the delivery. When handlers land (stage 3 of
-// docs/signals-design.md) this stops being true and every reader of
-// `pending` has to be revisited; it is stated here so that grep finds
-// them.
+// THE INVARIANT THIS DESIGN USED TO REST ON, AND WHAT REPLACED IT.
+// It was: **a pending bit means the process must die** -- an ignored
+// signal is dropped at arrival rather than queued (POSIX's rule for
+// SIG_IGN), and with no user-space handlers every disposition that is
+// not "ignore" is "terminate", so `pending != 0` needed no policy
+// lookup at all. This header asked grep to find its readers when
+// handlers landed. They landed; here is what each one turned out to be.
+//
+// **The weaker invariant that holds now: a pending bit means this
+// process has SOMETHING TO DELIVER.** Never a no-op -- SIG_IGN is still
+// dropped at arrival -- but the action may now be one of the process's
+// own functions rather than its death, and signal.c looks it up.
+//
+// The three readers, and what happened to each:
+//   - signal.c's signal_deliver_pending() -- consults the action table
+//     now, which is the whole of stage 3.
+//   - idt.c's syscall-entry check -- unchanged, and it MATTERS MORE
+//     than before: it is the point at which an interrupted syscall can
+//     still be restarted (SA_RESTART) or failed (-EINTR), because the
+//     call has not run yet.
+//   - scheduler_block_current() -- unchanged, and its own comment
+//     already explained why: a pending signal is delivered at the
+//     syscall entry a process makes next, so it cannot reach that
+//     function with anything pending. That reasoning never depended on
+//     the strong reading.
 
 // Sets `sig`'s bit on `pid` and, if that process is parked in a
-// blocking syscall, wakes it with -EINTR so it reaches a point where
-// the signal can be delivered.
+// blocking syscall, REWINDS it to its own `int $0x80` so it re-enters
+// the kernel at a delivery point with the call not yet run.
+//
+// The rewind rather than an -EINTR return is what makes SA_RESTART
+// possible at all; scheduler.c's comment at the write has the full
+// argument, and it is worth reading before changing anything here.
 //
 // Returns 1 if the process exists and is alive, 0 otherwise -- INCLUDING
 // the case where the signal was dropped because the process ignores it,
@@ -496,16 +515,45 @@ int scheduler_kill(int pid, int exit_code);
 int scheduler_signal_raise(int pid, int sig);
 
 // The pending set, or 0 for a pid with no live slot. Non-zero means
-// "this process is going to be terminated at its next return to ring 3"
-// -- see the invariant above.
+// "this process has a signal to act on at its next return to ring 3",
+// which is no longer the same as "it is about to die" -- see above.
+//
+// **NOT THE SAME QUESTION AS "is anything deliverable".** A signal
+// blocked while its handler runs is pending and cannot be acted on;
+// scheduler_signal_deliverable() is the one that accounts for that, and
+// is what a caller deciding whether to bother should use.
 uint32_t scheduler_signal_pending(int pid);
 
-// Takes the LOWEST pending signal and clears the whole set, returning
-// that signal number (0 when nothing was pending). The whole set,
-// because the first one delivered terminates the process and the rest
-// can never be acted on -- leaving them set would be state nobody
-// reads.
+// The lowest pending signal that is not currently blocked, or 0. Does
+// not change anything -- for a caller that wants to know before
+// committing.
+int scheduler_signal_deliverable(int pid);
+
+// Takes the lowest deliverable signal and clears JUST THAT BIT,
+// returning its number (0 when there is nothing to take).
+//
+// Just that bit, and it used to be the whole set: the old reasoning was
+// that the first signal delivered terminated the process, so the rest
+// could never be acted on. A handler that runs and RETURNS is what
+// makes the remainder reachable again -- each gets its own delivery, the
+// next one at the sigreturn that ends this one.
 int scheduler_signal_take(int pid);
+
+// --- signals: the BLOCKED mask ----------------------------------------
+//
+// Signals held back from delivery. THERE IS NO sigprocmask: the only
+// thing that blocks a signal is entering its own handler, and the only
+// thing that unblocks one is the sigreturn that leaves it. That is
+// POSIX's default behaviour (what SA_NODEFER turns off) and it is load
+// bearing rather than tidy -- without it, a signal arriving repeatedly
+// while its handler runs re-enters the handler each time and walks a
+// 4-page user stack into its guard page.
+//
+// scheduler_signal_set_blocked() FORCES SIGKILL and SIGSTOP out of the
+// mask, because sigreturn restores it from a struct on the user stack
+// and a program that corrupts its own frame must not become unkillable.
+uint32_t scheduler_signal_blocked(int pid);
+void scheduler_signal_set_blocked(int pid, uint32_t mask);
 
 // --- job control: stop and continue ------------------------------------
 //
@@ -543,13 +591,35 @@ int scheduler_stop_report(int pid);
 // stop. Writes that child's pid to `out_pid` when it returns non-zero.
 int scheduler_stop_report_any(int parent_pid, int *out_pid);
 
-// Reads or sets whether `pid` ignores `sig`. `scheduler_signal_set_
-// ignored()` returns the PREVIOUS state (0 or 1), or -1 for a bad pid or
-// signal. Turning ignore ON also clears any pending bit for that signal:
-// a process that says "I do not want this" must not be killed by one
-// that arrived a moment earlier.
+// --- signals: the ACTION table ----------------------------------------
+//
+// What each signal does to a process: SIG_DFL, SIG_IGN, or a ring-3
+// function with a restorer and flags beside it (abi/signal_abi.h).
+// A bitmask of "ignored" was the right shape while those were the only
+// two answers; a handler is what turned it into a table.
+
+// 1 if `pid` has `sig` set to SIG_IGN. The convenience the send path
+// wants, kept because "is this dropped on arrival?" is asked far more
+// often than the whole action is.
 int scheduler_signal_ignored(int pid, int sig);
-int scheduler_signal_set_ignored(int pid, int sig, int on);
+
+// Reads `pid`'s action for `sig` into `out`. Returns 1 on success, 0 for
+// a bad pid or signal.
+int scheduler_signal_action(int pid, int sig, struct sigaction *out);
+
+// Installs `act` (or reads only, if NULL) and writes the previous action
+// to `old` (or nowhere, if NULL). Returns 0, or -1 for a bad pid or
+// signal -- the POLICY refusals (SIGKILL, a handler with no restorer)
+// are sys_sigaction()'s, because they are about what a CALLER may ask
+// for rather than about what the table can hold.
+//
+// Installing SIG_IGN drops any pending bit for that signal: a process
+// that has just said "I do not want this" must not be acted on by one
+// that arrived a moment earlier. Installing a HANDLER deliberately does
+// not -- there the pending signal is exactly what the caller just
+// arranged to hear about.
+int scheduler_signal_set_action(int pid, int sig, const struct sigaction *act,
+                                struct sigaction *old);
 
 // --- process groups ---------------------------------------------------
 //
@@ -676,10 +746,26 @@ int scheduler_wake(const void *chan, int64_t value);
 //
 // `tf` must point at storage of at least SCHED_TF_SLOTS uint64_t that
 // OUTLIVES the park, because a wake writes the return value into it.
-#define SCHED_TF_SLOTS 16
-// Where a wake writes the return value, so a test can read it back.
-// Checked against the real trapframe layout by a _Static_assert.
-#define SCHED_TF_RAX 14
+//
+// **A WHOLE TRAPFRAME, not the 16 words a park used to need.** It was
+// raised when a signal wake started REWINDING the frame's RIP (index
+// 17) instead of writing -EINTR into its RAX: a fabricated frame that
+// stopped short of RIP would have been written past the end of, and the
+// version of this that was too short passed anyway -- the test's frame
+// said vector 0, so the wake took the -EINTR branch and never touched
+// the index it would have overrun. A test that cannot reach the code
+// under test is the trap CLAUDE.md names; the fix is a real frame.
+#define SCHED_TF_SLOTS 22
+// The indices a caller outside scheduler.c needs. Checked against the
+// real trapframe layout by _Static_asserts in scheduler.c.
+#define SCHED_TF_RDI     9 // a signal handler's one argument
+#define SCHED_TF_RAX    14 // where a wake writes the return value
+#define SCHED_TF_VECTOR 15 // 0x80 for a syscall -- what a rewind checks
+#define SCHED_TF_RIP    17
+#define SCHED_TF_CS     18
+#define SCHED_TF_RFLAGS 19
+#define SCHED_TF_RSP    20
+#define SCHED_TF_SS     21
 // `reason` is a SCHED_WAIT_* label, carried so a fabricated slot looks
 // like a real one -- proc_info's wait_reason is read off it, and a
 // fixture that always parked with 0 could not exercise that at all.

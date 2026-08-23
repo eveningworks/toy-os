@@ -510,7 +510,8 @@ whenever a headline here tells you something you did not already know.
 - **The kernel RELOCATES ITSELF at boot -- it is not running where it was linked.**
 - **A BLOCKED PROCESS WAITS ON A CHANNEL, AND A CHANNEL IS AN ADDRESS.**
 - **THE KERNEL STORES NO ENVIRONMENT, AND `SYS_SPAWN` TAKES A STRUCT**
-- **A SIGNAL SETS A BIT; THE KERNEL ACTS ON IT WHEN IT IS SAFE TO.** -- except STOP/CONTINUE, which act at SEND time and never touch the pending set; STOPPED is a FLAG beside the state, and a test that reads the flag cannot see the bug.
+- **A SIGNAL SETS A BIT; THE KERNEL ACTS ON IT WHEN IT IS SAFE TO.** -- except STOP/CONTINUE, which act at SEND time and never touch the pending set; STOPPED is a FLAG beside the state, and a test that reads the flag cannot see the bug. **`pending` is not `deliverable`**, and confusing them swallows a handler's own `SYS_SIGRETURN`.
+- **A HANDLER IS RING-3 CODE, AND THE KERNEL BORROWS ITS STACK TO CALL IT.** -- the restorer comes from ring 3 (`SA_RESTORER`, not a vDSO), it must not touch the stack, a signal is blocked inside its own handler, and a fault with no handler still prints the full report.
 - **A PROCESS GROUP IS AN INT, AND SPAWN TAKES IT.**
 - **THE CONSOLE HAS AN OWNER AND A FOREGROUND GROUP, AND THE INTR KEY IS TEMPORARY WHERE IT IS.**
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**

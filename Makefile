@@ -206,7 +206,8 @@ USERLAND_CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-pro
 # from which directory a file is in:
 #
 #   rt/     the C runtime every ring-3 program starts through
-#           (crt0.asm, sys.c = libsys, stack_chk.c, link.ld)
+#           (crt0.asm, sys.c = libsys, stack_chk.c, sigtramp.c,
+#           link.ld)
 #   ui/     the GUI toolkit: ugfx, utheme, utext and the widgets.
 #           Mirrors apps/ui/, so a widget's kernel-side and ring-3
 #           versions sit at the same relative path while both exist.
@@ -439,12 +440,17 @@ $(BUILD)/userland/%.o: userland/%.c | version
 # the ELF header's e_entry, which ld takes from the _start symbol; being
 # first also keeps the entry point where a disassembly expects it.
 #
-# sys.o carries the syscall wrappers (userland/sys.c) and stack_chk.o
-# the canary symbols GCC emits references to. All three are linked into
+# sys.o carries the syscall wrappers (userland/sys.c), stack_chk.o the
+# canary symbols GCC emits references to, and sigtramp.o the two
+# instructions a signal handler returns through. All four are linked into
 # every userland ELF, which is what lets a program be nothing but its
 # own main().
+#
+# sigtramp.o is kept honest by --gc-sections rather than by anything
+# here: nothing references __sigrestore unless a program installs a
+# handler, so a program that does not use signals does not carry it.
 USERLAND_RT = $(BUILD)/userland/rt/crt0.o $(BUILD)/userland/rt/sys.o \
-              $(BUILD)/userland/rt/stack_chk.o
+              $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o
 
 # libuapp.a -- the toolkit, the userland libraries, and the sources
 # shared with the kernel, as ONE archive every program links against.
@@ -613,7 +619,7 @@ uextra = $(patsubst %,$(BUILD)/userland/%.o,$(EXTRA_OBJS_$(notdir $(1))))
 # accumulated so far, so an archive placed before its callers
 # contributes nothing and the link fails with undefined references.
 $(BUILD)/userland/%.elf: $(BUILD)/userland/%.o $(USERLAND_RT) userland/rt/link.ld $(LIBUAPP) $(LIBC) $$(call uextra,$$*)
-	$(LD) -n --gc-sections -T userland/rt/link.ld -nostdlib -o $@ $(BUILD)/userland/rt/crt0.o $< $(call uextra,$*) $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(LIBUAPP) $(LIBC)
+	$(LD) -n --gc-sections -T userland/rt/link.ld -nostdlib -o $@ $(BUILD)/userland/rt/crt0.o $< $(call uextra,$*) $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(LIBUAPP) $(LIBC)
 
 # Sources SHARED between the kernel image and userland ELFs, compiled a
 # second time with USERLAND_CFLAGS into build/userland/shared/.

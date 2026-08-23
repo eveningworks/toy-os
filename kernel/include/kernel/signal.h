@@ -51,15 +51,53 @@ int signal_send(int pid, int sig);
 int signal_send_group(int pgid, int sig);
 
 // Act on anything pending for `pid`, if the moment is right. Called from
-// exactly one place -- isr_dispatch(), after the trap has been handled,
-// and only when the interrupted frame was ring 3's. Does nothing for a
-// pid with nothing pending, which is the overwhelmingly common case and
-// is one load and one branch.
+// idt.c, after the trap has been handled, and only when the interrupted
+// frame was ring 3's. Does nothing for a pid with nothing pending, which
+// is the overwhelmingly common case and is one load and one branch.
+//
+// `regs` is the trapframe about to be resumed -- which a handler
+// REWRITES, since entering one means pointing the process at different
+// code with a different stack.
+//
+// **`at_syscall_entry` IS THE WHOLE OF SA_RESTART**, and getting it
+// wrong is silent. It means "the interrupted trap is an `int $0x80`
+// whose handler has not run yet", which is true at exactly one of the
+// two call sites (idt.c's pre-dispatch check) and false at the other
+// (the tail of a trap, where any syscall has already produced its
+// result). Passing 1 from the tail would rewind RIP over a call that
+// already happened and run it a second time.
+//
+// **RETURNS WHETHER IT ACTED**, and the syscall-entry caller must obey
+// it. That call site delivers INSTEAD OF running the syscall, so a
+// delivery that decides to do nothing has to say so or the syscall is
+// silently swallowed -- which is exactly the bug that shipped for an
+// hour: `pending` includes signals BLOCKED by a running handler, so a
+// handler's own SYS_SIGRETURN was eaten and the restorer fell through
+// to its `ud2`. Asking "is anything pending" and then finding nothing
+// deliverable is a legal outcome, not an impossible one.
 //
 // May not return in the ordinary sense: terminating the CURRENT process
 // hands the CPU to something else through scheduler_on_exit(), exactly
 // as SYS_EXIT does.
-void signal_deliver_pending(int pid);
+int signal_deliver_pending(int pid, uint64_t *regs, int at_syscall_entry);
+
+// A SYNCHRONOUS fault, offered to the process that caused it. Returns 1
+// if `regs` now enters a ring-3 handler -- the caller resumes normally
+// and must NOT tear the process down -- and 0 if there is no handler, no
+// room for a frame, or the fault happened inside this signal's own
+// handler, in which case the caller's existing teardown is the answer.
+//
+// THE ASYMMETRY WITH THE PENDING PATH IS DELIBERATE: this acts
+// immediately rather than setting a bit, because a fault is not
+// something that arrived from elsewhere -- the process is standing on
+// the instruction that caused it, and there is nowhere to defer it TO.
+// That is the same reason it cannot be restarted (signal.c).
+int signal_deliver_fault(int pid, int sig, uint64_t *regs);
+
+// Restores the frame a handler is returning through. SYS_SIGRETURN's
+// implementation, and the only caller. Returns 0 if the frame is not one
+// the kernel built, which is a program that corrupted its own stack.
+int signal_restore_frame(int pid, uint64_t *regs);
 
 // The NAMES are api/ksignal.h, not here: `/bin/kill` parses one off a
 // command line and may not include a kernel-internal header, so the

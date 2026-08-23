@@ -10,7 +10,8 @@
 #include "string.h"
 #include "mouse.h"
 #include "syscall.h"
-#include "signal.h" // signal_deliver_pending() -- see the tail of isr_dispatch
+#include "signal.h" // signal_deliver_pending()/_fault() -- see isr_dispatch
+#include "signal_abi.h" // SIGSEGV/SIGILL/SIGFPE -- fault_signal() below
 #include "scheduler.h"
 #include "paging.h"   // paging_kernel_leaf() -- is this stack page mapped?
 #include "vmm.h"
@@ -174,6 +175,29 @@ void idt_init(void) {
 // never runs and this needs forcing back to 0 from outside.
 static volatile int g_isr_depth = 0;
 
+// WHICH SIGNAL AN EXCEPTION IS, or 0 for one no program may catch.
+//
+// The three POSIX names that mean something on this CPU. #PF and #GP are
+// both SIGSEGV -- Linux makes the same call, because from a program's
+// point of view "I touched memory I may not touch" is one event and the
+// distinction between a missing page and a bad segment is the kernel's
+// business. Everything else -- #DF, machine check, the ones a ring-3
+// program cannot raise at all -- has no signal on purpose: a name for
+// something no handler could sensibly act on is a name that invites
+// somebody to try.
+//
+// dispatch-ok: bounded by the CPU's exception vectors, and by the three
+// of them that have a meaning in ring 3.
+static int fault_signal(uint64_t vector) {
+    switch (vector) {
+    case 0:  return SIGFPE;  // #DE -- integer divide by zero
+    case 6:  return SIGILL;  // #UD -- an instruction that is not one
+    case 13: return SIGSEGV; // #GP
+    case 14: return SIGSEGV; // #PF
+    default: return 0;
+    }
+}
+
 int isr_in_progress(void) {
     return g_isr_depth > 0;
 }
@@ -336,8 +360,23 @@ void isr_dispatch(uint64_t *regs) {
         // IRQ must reach its handler to be acknowledged to the PIC --
         // returning early from one would stop interrupts for the rest of
         // the boot. The timer's own delivery is the check at the bottom.
-        if (sig_pid && scheduler_signal_pending(sig_pid)) {
-            signal_deliver_pending(sig_pid);
+        //
+        // **`_deliverable` RATHER THAN `_pending`, AND THE RETURN VALUE
+        // IS CHECKED.** Both halves are the same bug, found the hour
+        // handlers landed: `pending` counts signals BLOCKED by a running
+        // handler, so a handler's own SYS_SIGRETURN took this branch,
+        // delivered nothing, and was never dispatched -- the restorer
+        // returned from an `int $0x80` that had done nothing and ran
+        // into its own `ud2`. Falling through to the syscall when
+        // nothing was delivered makes that unreachable rather than
+        // merely fixed.
+        //
+        // THE `1` IS SA_RESTART, and this is the only call site that
+        // may pass it: the syscall has not run yet, so the frame saved
+        // here can be rewound over the `int $0x80` and the call made
+        // again after the handler returns. See kernel/signal.h.
+        if (sig_pid && scheduler_signal_deliverable(sig_pid) &&
+            signal_deliver_pending(sig_pid, regs, 1)) {
             sig_pid = 0; // acted on; the check at the bottom must not repeat it
         } else {
             // Software interrupt from ring 3 (int 0x80) -- not a hardware
@@ -385,6 +424,29 @@ void isr_dispatch(uint64_t *regs) {
         // is correct, not a gap this closes.
         int recoverable = (cs & 3) == 3 &&
                            (scheduler_current_pid() || process_context_is_armed());
+
+        // **A FAULT IS OFFERED TO THE PROCESS BEFORE IT IS FATAL TO IT.**
+        // A ring-3 program with a handler installed for the signal this
+        // exception maps to gets that handler instead of the teardown
+        // below -- so `catching SIGSEGV` means what it means everywhere
+        // else, and a program can log its own crash, or fix the cause
+        // and simply return.
+        //
+        // Deliberately BEFORE the report: a program that catches a fault
+        // on purpose is not crashing, and printing a panic-grade page of
+        // registers every time it does would make the report worthless
+        // for the case it exists to serve. signal.c logs one line.
+        //
+        // WHAT KEEPS THIS FROM BECOMING A LOOP is the blocked mask, not
+        // a counter: entering the handler blocks the signal, so a fault
+        // INSIDE it finds the bit set, gets no handler, and falls
+        // through to everything below (signal.c's signal_deliver_fault).
+        int fault_sig = fault_signal(vector);
+        if (recoverable && fault_sig && scheduler_current_pid() &&
+            signal_deliver_fault(scheduler_current_pid(), fault_sig, regs)) {
+            g_isr_depth--; // matches this call's own increment -- see isr_in_progress()
+            return;        // resume into the handler; regs now points at it
+        }
 
         // This block was eleven calls to print three lines before
         // kfmt.h existed. It formats into a stack buffer, which is fine
@@ -568,5 +630,8 @@ void isr_dispatch(uint64_t *regs) {
     //
     // Nothing pending is one load and one branch, which is what it has
     // to be: this runs on every syscall and every timer tick.
-    if (sig_pid) signal_deliver_pending(sig_pid);
+    // 0, not 1: whatever trap this was, it is FINISHED. A syscall here
+    // has already produced its result, and rewinding it would run it a
+    // second time.
+    if (sig_pid) signal_deliver_pending(sig_pid, regs, 0);
 }

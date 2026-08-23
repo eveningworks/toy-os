@@ -17,12 +17,11 @@ line discipline. What is written here is what was TRUE WHEN IT WAS
 PLANNED, and it is kept that way on purpose: the staging was right, and
 the fact that stage 2 shipped without a TTY layer is the finding.
 
-Stage 3 (user-space handlers) is the only one still a plan -- and stage
-4 landing before it is itself a finding, since this document assumed the
-order. Job control needed a stopped process and a way to report one, not
-a signal a program can catch. Each stage's own section below says what
-actually landed and where it differs from what was planned here, because
-three of them do.
+**EVERY STAGE IS BUILT.** Stage 4 landed BEFORE stage 3, which is itself
+a finding since this document assumed the order: job control needed a
+stopped process and a way to report one, not a signal a program can
+catch. Each stage's own section below says what actually landed and
+where it differs from what was planned here, because all four do.
 
 **AND ONE PREMISE OF THIS DOCUMENT WAS WRONG, which is why the whole
 thing was cheaper than it looked.** Stage 1 said it needed the roadmap's
@@ -272,12 +271,90 @@ Both halves have positive controls.
 window events rather than from fd 0, so it owns no console and has no
 foreground group. That is a roadmap item, not an oversight.
 
-### Stage 3 -- handlers
+### Stage 3 -- handlers -- **BUILT**
 
 `SYS_SIGACTION` to register one, a signal frame pushed onto the user
 stack, and `SYS_SIGRETURN` to unwind it. This is the stage with the
 genuinely hard part in it: the frame must be restored exactly, and a
 handler that faults must not corrupt the interrupted state.
+
+**WHAT LANDED, and the five places it differs from the plan above.**
+The one-paragraph plan was right about the shape and silent about
+everything that turned out to be decidable.
+
+- **The restorer comes from RING 3, not from a kernel page.** `struct
+  sigaction` carries a `restorer` and the kernel pushes it as the
+  handler's return address, so a handler's ordinary `ret` lands on
+  `userland/rt/sigtramp.c`'s two instructions. This is x86-64 Linux's
+  `SA_RESTORER` exactly; i386 Linux puts the same code in the vDSO,
+  which would have meant a kernel-owned executable page mapped into
+  every address space to serve a runtime every program here already
+  links. What toy-os gives up by choosing this side is that the kernel
+  trusts a userland pointer for control flow -- mitigated, not ignored:
+  the restorer is range-checked, and a handler that returns to a bad one
+  faults in ring 3 where a fault belongs.
+
+- **`SYS_SIGACTION` changed shape rather than gaining an argument.** It
+  was `(signal, SIG_DFL|SIG_IGN)` returning the previous disposition,
+  and a handler needs a restorer and flags beside it -- four arguments
+  in a three-register ABI. It takes POSIX's struct, in POSIX's argument
+  order. `sys_signal()` in `userland/rt/sys.h` is the one-liner every
+  existing caller actually wanted, and it fills the restorer in.
+
+- **A BLOCKING SYSCALL IS NOW WOKEN BY REWINDING IT, and this is the
+  change with the longest reach.** A signal used to wake a parked
+  process by writing `-EINTR` into its saved RAX and letting the call
+  return. That reaches a delivery point just as reliably, and it puts
+  the events in the WRONG ORDER: ring 3 sees the call fail first and
+  runs the handler at some later trap, by which time there is nothing
+  left to restart. Rewinding RIP over the two bytes of `int $0x80`
+  instead means the process re-enters the kernel at the same syscall
+  with its arguments untouched, and delivery happens there -- the one
+  moment at which "restart it" and "fail it with -EINTR" are both still
+  available. Linux reaches the same place from the other end, with the
+  `-ERESTARTSYS` its blocking primitives return.
+
+- **SA_RESTART is in, and `-EINTR` became observable for the first
+  time.** `abi/errno.h` has promised `EINTR` since stage 1 and said
+  plainly that no ring-3 code could ever see one, because every signal
+  that could interrupt a call also terminated the process. Both
+  behaviours are now reachable and both are tested, against each other:
+  the same sequence runs twice, once with the flag and once without, and
+  the checks assert that the two DIFFER -- either result alone is also
+  what an uninterrupted read looks like.
+
+- **A FAULT IS A SIGNAL.** `SIGSEGV`, and `SIGILL`/`SIGFPE` which had to
+  be added, are raised from `idt.c`'s exception path: a ring-3 program
+  with a handler installed gets it instead of the unconditional
+  teardown, and the panic-grade report is suppressed for that case
+  because a program catching a fault on purpose is not crashing. This
+  answers the "STILL OPEN" question at the bottom of this document.
+  A fault is deliberately NOT restartable -- there is no call to re-run,
+  and rewinding would re-execute the faulting instruction forever -- so
+  a handler either fixes the cause and returns, or jumps out.
+
+**AND THE BUG THAT SHIPPED FOR AN HOUR, because it is the shape this
+whole design is prone to.** `idt.c` delivers a pending signal at syscall
+ENTRY *instead of* running the syscall. The check asked "is anything
+pending", and `pending` includes signals a running handler has BLOCKED
+-- so a handler's own `SYS_SIGRETURN` took that branch, delivered
+nothing, and was never dispatched. The restorer returned from an `int
+$0x80` that had done nothing and ran into its own `ud2`. Two fixes, and
+the second is the one that matters: ask `scheduler_signal_deliverable()`
+rather than `_pending()`, and make `signal_deliver_pending()` RETURN
+whether it acted so the syscall runs when it did not. The first fixes
+this bug; the second makes the whole class unreachable.
+
+**What is deliberately NOT here.** No `SA_SIGINFO` -- a `siginfo_t`
+needs a sender pid and a fault address this kernel does not record, and
+a struct full of zeroes is worse than not offering one. No
+`sigprocmask`: the only thing that blocks a signal is entering its own
+handler, and the only thing that unblocks one is the sigreturn that
+leaves it, which is POSIX's default and the whole of what the mask is
+for here. No `sigaltstack`, so a handler runs on the faulting stack --
+which means a stack overflow cannot be caught, and is the one place a
+`SIGSEGV` handler will not help. No queued signals; the pending set is
+still a bitmask, as it is for ordinary Unix signals.
 
 ### Stage 4 -- process groups and job control -- **BUILT**
 
@@ -318,11 +395,16 @@ over every keystroke. There is deliberately no `SIGTTOU` -- see
   and anything it runs, because the console's owner is whoever reads fd
   0 and the legacy loader is not a scheduled process at all. Nothing was
   added to that path; it disappears when the ring-0 shell does.
-- **What does `SIGSEGV` do to the fault handler's diagnostics?** STILL
-  OPEN, and untouched: a ring-3 fault still prints its panic-grade
-  report and tears the process down directly, without going near the
-  signal machinery. `SIGSEGV` has a number and nothing raises it. The
-  question stands exactly as written.
+- **What does `SIGSEGV` do to the fault handler's diagnostics?**
+  ANSWERED by stage 3, and the answer is "nothing, unless somebody is
+  listening". A ring-3 fault with no handler installed prints exactly
+  the report it always did and tears the process down on the same path
+  -- which is every process in this tree except one deliberately
+  catching. A fault WITH a handler prints one line instead, naming the
+  signal, the faulting RIP and the handler, because a program catching a
+  fault on purpose is not crashing and a page of registers per
+  occurrence would make the report worthless for the case it exists to
+  serve.
 - **Where does the INTR character get recognised?** ANSWERED as
   predicted: in `keyboard.c`, and written down as temporary in
   `kernel/tty.h` rather than left to be discovered. It moves into a line

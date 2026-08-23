@@ -64,17 +64,17 @@ and job control is what a terminal on that TTY makes possible.
 - [ ] Bound how long a frame can block on I/O
 
 ### Signals & process control
-**Needs:** nothing -- stages 0-2 of `docs/signals-design.md` are BUILT. What is left is handlers (stage 3) and job control (stage 4).
+**Needs:** nothing -- every stage of `docs/signals-design.md` is BUILT.
 
 - [x] ~~Basic signal delivery (kill-equivalent)~~ DONE 2026-08-22 -- a pending mask, delivered on the way back to ring 3
 - [x] ~~Default dispositions (terminate, ignore)~~ DONE 2026-08-22 -- `SYS_SIGACTION`, two dispositions and no handler
 - [x] ~~A `kill`/`ps`-style shell command~~ DONE 2026-08-22 -- `kill [-SIGNAL] <pid|-pgid>`, and `ps` grew a PGID column
 - [x] ~~Exit-status visible to a waiting parent~~ DONE 2026-08-22 -- 128 + the signal, the convention a shell prints
 - [x] ~~`SIGSTOP`/`SIGTSTP`/`SIGCONT` and a stopped process~~ DONE 2026-08-22 -- a flag beside the state, outside the pending set
-- [ ] Userspace signal handlers -- a trampoline that returns through the kernel, not just default dispositions
+- [x] ~~Userspace signal handlers -- a trampoline that returns through the kernel~~ DONE 2026-08-23 -- the restorer is ring 3's
 - [x] ~~`Ctrl-C` in the GUI Terminal~~ DONE 2026-08-22 -- it runs `/bin/tosh` on a pty now, so it is the same code as the console's
 - [x] ~~**Ctrl-C interrupting a running program**, the way it works in a Linux shell~~ DONE 2026-08-22 -- a whole pipeline, as one group
-- [ ] SIGSEGV/SIGILL delivered to the process instead of the kernel tearing it down unconditionally
+- [x] ~~SIGSEGV/SIGILL delivered to the process, not an unconditional teardown~~ DONE 2026-08-23 -- and SIGFPE; no handler still panics
 - [ ] SIGCHLD on child exit -- the signal exists and its default is ignore; nothing SENDS one yet
 
 ### TTY / virtual terminals

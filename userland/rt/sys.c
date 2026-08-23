@@ -591,9 +591,24 @@ int sys_getpgid(int pid) {
     return (int)err(syscall1(SYS_GETPGID, (uint64_t)(int64_t)pid));
 }
 
-int sys_sigaction(int sig, int disp) {
-    return (int)err(syscall2(SYS_SIGACTION, (uint64_t)(int64_t)sig,
-                             (uint64_t)(int64_t)disp));
+int sys_sigaction(int sig, const struct sigaction *act, struct sigaction *old) {
+    return (int)err(syscall3(SYS_SIGACTION, (uint64_t)(int64_t)sig,
+                             (uint64_t)(uintptr_t)act, (uint64_t)(uintptr_t)old));
+}
+
+sighandler_t sys_signal(int sig, sighandler_t h) {
+    struct sigaction act = {
+        .handler = (uint64_t)(uintptr_t)h,
+        // ONLY WITH A REAL HANDLER. SIG_DFL and SIG_IGN never return
+        // anywhere, so a restorer beside one is a field the kernel would
+        // have to decide to ignore -- and it does, but saying so twice
+        // is how the two copies drift.
+        .restorer = SIG_IS_HANDLER(h) ? (uint64_t)(uintptr_t)__sigrestore : 0,
+        .flags    = SIG_IS_HANDLER(h) ? SA_RESTART : 0,
+    };
+    struct sigaction old;
+    if (sys_sigaction(sig, &act, &old) < 0) return SIG_ERR;
+    return (sighandler_t)(uintptr_t)old.handler;
 }
 
 int sys_tcsetpgrp(int fd, int pgid) {

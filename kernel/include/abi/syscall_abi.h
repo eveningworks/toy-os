@@ -1189,27 +1189,32 @@ struct sys_stat {
 #define SYS_GETPGID   57 // RDI = pid (0 = the caller). Returns that
                           // process's group, or -ESRCH.
 
-#define SYS_SIGACTION 58 // RDI = signal, RSI = SIG_DFL or SIG_IGN.
-                          // Returns the PREVIOUS disposition, or -errno:
-                          // -EINVAL for a bad signal or a disposition
-                          // that is neither, -EPERM for SIGKILL or
-                          // SIGQUIT (SIGNAL_UNIGNORABLE).
+#define SYS_SIGACTION 58 // RDI = signal, RSI = a `const struct sigaction *`
+                          // or 0, RDX = a `struct sigaction *` to write
+                          // the previous action into, or 0. Returns 0,
+                          // or -errno: -EINVAL for a bad signal or a
+                          // handler with no restorer, -EPERM for SIGKILL,
+                          // SIGQUIT or SIGSTOP (SIGNAL_UNIGNORABLE),
+                          // -EFAULT for a pointer outside the caller's
+                          // address space.
                           //
-                          // NOT `sigaction`. There is no handler, no
-                          // mask, no flags and no sa_restorer -- a
-                          // user-space handler needs a signal frame on
-                          // the user stack and a sigreturn to unwind it,
-                          // which is stage 3 of docs/signals-design.md
-                          // and is not built. Refusing a function
-                          // pointer outright beats accepting one and
-                          // never calling it.
+                          // **THIS IS `sigaction` NOW.** It took
+                          // (signal, SIG_DFL|SIG_IGN) and returned the
+                          // previous disposition while a handler was
+                          // stage 3 of docs/signals-design.md and did
+                          // not exist. A handler needs a restorer and
+                          // flags beside it, which is four arguments in
+                          // a three-register ABI -- so it takes POSIX's
+                          // struct instead, in POSIX's argument order.
+                          // `sys_signal()` in userland/rt/sys.h is the
+                          // one-liner every existing caller wanted.
                           //
                           // AN IGNORED SIGNAL IS DROPPED AT ARRIVAL, not
-                          // held pending -- POSIX's rule, and what makes
-                          // "anything pending is fatal" true inside the
-                          // kernel. So changing a disposition back to
-                          // SIG_DFL does not resurrect signals sent while
-                          // it was ignored.
+                          // held pending -- POSIX's rule. So changing a
+                          // disposition back to SIG_DFL does not
+                          // resurrect signals sent while it was ignored.
+                          // A signal with a HANDLER is not dropped: it
+                          // is what the pending set is now mostly for.
 
 #define SYS_TCSETPGRP 59 // RDI = an fd naming a TERMINAL, RSI = the pgid
                           // to put in front of it. Returns 0, or -errno:
@@ -1331,6 +1336,49 @@ struct sys_stat {
                           // POSIX would raise SIGWINCH here. There is
                           // no such signal yet (docs/roadmap.md); a
                           // program that cares re-asks.
+
+// HOW MANY BYTES `int $0x80` IS, so that a restart can rewind over it.
+//
+// It is 0xCD 0x80 -- the two-byte form, because 0x80 does not fit the
+// one-byte `int3`. Named rather than written as a literal 2 in the two
+// places that rewind (api/scheduler.h's signal wake and signal.c's
+// SA_RESTART), since a bare `-= 2` next to an instruction pointer is
+// unreadable and this is the ONE fact both of them depend on.
+//
+// It would change if this kernel ever moved to `syscall`/`sysret`, which
+// is also two bytes (0x0F 0x05) -- so the number survives that, and the
+// name is what makes the coincidence obvious rather than lucky.
+#define SYSCALL_INSN_LEN 2
+
+#define SYS_SIGRETURN 67 // No arguments. Unwinds the signal frame the
+                          // kernel pushed before entering a handler and
+                          // resumes the interrupted code. **NEVER
+                          // RETURNS in the ordinary sense** -- the
+                          // trapframe it returns through is the one
+                          // saved at delivery, not the one it was called
+                          // with.
+                          //
+                          // NOT A CALL A PROGRAM MAKES. The kernel
+                          // pushes the restorer from `struct sigaction`
+                          // as the handler's return address, so this is
+                          // reached by the handler doing an ordinary
+                          // `ret` -- see userland/rt/sigtramp.asm, which
+                          // is the only thing in this tree that issues
+                          // it. Calling it by hand finds no valid frame
+                          // (SIGFRAME_MAGIC) and kills the caller, which
+                          // is the honest answer: there is nothing to
+                          // return to.
+                          //
+                          // WHAT IT REFUSES TO RESTORE VERBATIM: CS, SS,
+                          // and the privileged bits of RFLAGS. Those are
+                          // reimposed by the kernel, so a program that
+                          // corrupts its own frame gets a ring-3 fault
+                          // rather than a ring transition it did not
+                          // earn. Everything else -- every general
+                          // register, RIP, RSP and the blocked mask --
+                          // is restored exactly, because putting the
+                          // process back the way it was is the entire
+                          // job.
 
 // What SYS_OPENPTY fills in. A struct rather than two out-registers
 // because a syscall here returns one value, and two `int *` arguments

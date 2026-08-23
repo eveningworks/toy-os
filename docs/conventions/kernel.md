@@ -569,16 +569,17 @@ that the whole system's environment.
 ## A SIGNAL SETS A BIT; THE KERNEL ACTS ON IT WHEN IT IS SAFE TO.
 
 `abi/signal_abi.h` for the numbers, `kernel/signal.h` for the policy,
-`docs/signals-design.md` for the staged plan. Nine signals, POSIX's
-numbers, no realtime signals, no queuing, no user-space handlers.
+`docs/signals-design.md` for the staged plan, every stage of which is
+built. Twelve signals, POSIX's numbers, no realtime signals, no
+queuing.
 
 **The one idea: SENDING AND ACTING ARE DIFFERENT MOMENTS.** A signal
 can be raised from anywhere -- another process's syscall, a fault, the
 keyboard IRQ -- and terminating a process means freeing page tables and
 kernel bookkeeping, which calls the heap. Doing that from an interrupt
 that landed inside somebody else's `kmalloc` corrupts it. So sending
-only ever sets a bit (and wakes the target if it is parked, with
-`-EINTR`, so it gets somewhere useful), and acting happens **only when
+only ever sets a bit (and wakes the target if it is parked, by REWINDING
+its syscall, so it gets somewhere useful), and acting happens **only when
 the trap being handled came from RING 3**. That condition is the whole
 safety argument: if the CPU was executing ring-3 code, the kernel held
 nothing on anybody's behalf. It is where Unix delivers, for the same
@@ -600,11 +601,20 @@ It cannot be at the TOP of `isr_dispatch` for hardware IRQs: an IRQ must
 reach its handler to be acknowledged to the PIC, and returning early
 from one stops interrupts for the rest of the boot.
 
-**A PENDING BIT MEANS THE PROCESS MUST DIE, with no policy lookup.**
-That holds because an ignored signal is DROPPED at arrival rather than
-queued (POSIX's rule for `SIG_IGN`), and with no handlers every other
-disposition terminates. Stage 3 of the design breaks this invariant;
-`api/scheduler.h` says so where grep will find it.
+**A PENDING BIT MEANS THERE IS SOMETHING TO DELIVER** -- it meant the
+stronger "the process must die" until handlers landed, and
+`api/scheduler.h` records what each of its three readers turned out to
+be. An ignored signal is still DROPPED at arrival rather than queued
+(POSIX's rule for `SIG_IGN`), so a set bit is never a no-op; but whether
+it terminates the process or calls one of its own functions now needs
+the action table.
+
+**AND `pending` IS NOT `deliverable`.** A signal blocked while its own
+handler runs is pending and cannot be acted on. Anything deciding
+whether to bother must ask `scheduler_signal_deliverable()`; asking
+`_pending()` is how a handler's own `SYS_SIGRETURN` got swallowed at the
+syscall-entry delivery point and the restorer ran into its `ud2`. See
+`docs/decisions.md`.
 
 **`SIGKILL` does not go through any of it** -- it terminates
 immediately, from the sender. That is what makes Force Quit trustworthy
@@ -658,6 +668,63 @@ scheduler just switched away from is still what CR3 points at --
 and `syscall_process_kill_cleanup()`, which can only ask the second
 question, refused the teardown and logged it. Ask the first, then move
 CR3 to the kernel's before killing.
+
+## A HANDLER IS RING-3 CODE, AND THE KERNEL BORROWS ITS STACK TO CALL IT.
+
+`abi/signal_abi.h` for `struct sigaction` and the frame,
+`kernel/proc/signal.c` for the build and the restore,
+`userland/rt/sigtramp.c` for the two instructions in the middle.
+`sys_signal()` in `userland/rt/sys.h` is what a program actually calls.
+
+**THE SHAPE, once:** the kernel pushes a `struct sigframe` onto the
+process's own stack (below the 128-byte SysV red zone, aligned so the
+handler is entered as if by `call`), points the trapframe at the handler
+with the signal in RDI, and puts the RESTORER in as the return address.
+The handler returns normally; the restorer issues `SYS_SIGRETURN`; the
+kernel copies the frame back over the trapframe. That is x86-64 Linux's
+`SA_RESTORER` exactly -- `docs/decisions.md` has why, and why the vDSO
+alternative was not taken.
+
+**Four things that bite.**
+
+1. **THE RESTORER MUST NOT TOUCH THE STACK.** The kernel finds the frame
+   at `RSP - 8` and nothing else -- no magic scan, no search. That is
+   why `sigtramp.c` is `__attribute__((naked))`: a C function is
+   entitled to a prologue, and one appearing later (a new line, a build
+   without frame-pointer omission) would silently point the kernel at
+   the wrong eight bytes.
+2. **A SIGNAL IS BLOCKED INSIDE ITS OWN HANDLER, and the mask is the
+   only thing that does any blocking.** There is no `sigprocmask`.
+   Entering the handler sets the bit and `SYS_SIGRETURN` clears it,
+   which is POSIX's default (`SA_NODEFER` turns it off elsewhere) and is
+   load-bearing rather than tidy: without it a repeated signal
+   re-enters and walks a 4-page user stack into its guard. The blocked
+   signal is DEFERRED, not dropped -- it is delivered again the moment
+   sigreturn clears the mask.
+3. **`SYS_SIGRETURN` DOES NOT RESTORE CS, SS OR PRIVILEGED RFLAGS.** The
+   frame lives on the user stack and a program can scribble it, so the
+   selectors are reimposed and RFLAGS is masked to the condition codes.
+   `scheduler_signal_set_blocked()` forces `SIGKILL` and `SIGSTOP` out
+   of any mask for the same reason -- an edited frame must not be able
+   to make a process unkillable.
+4. **A FAULT WITH NO HANDLER STILL PRINTS THE FULL REPORT.** Catching
+   `SIGSEGV` is a deliberate act; every process that has not done it
+   crashes exactly as it always did. A fault is delivered
+   synchronously, is NOT restartable (returning re-executes the faulting
+   instruction), and a fault inside its own handler falls through to the
+   teardown -- Linux's `force_sig`, detected by the blocked bit rather
+   than a counter. **A stack overflow is the one fault a handler cannot
+   catch**: the frame goes on the faulting stack and there is no
+   `sigaltstack`.
+
+**AND `SA_RESTART` IS THE ONLY REASON THE WAKE PATH LOOKS ODD.** A
+signal wakes a process parked in a syscall by rewinding RIP over the
+`int $0x80`, not by returning `-EINTR` -- so the handler runs BEFORE the
+call reports anything, which is the order POSIX describes and the only
+order in which a restart can exist. Only the syscall-ENTRY delivery
+point may restart; the trap-tail one must not, or a completed syscall
+runs twice. The two call sites pass an explicit `at_syscall_entry` for
+exactly that reason. See `docs/decisions.md`.
 
 ## A PROCESS GROUP IS AN INT, AND SPAWN TAKES IT.
 

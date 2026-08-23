@@ -168,7 +168,7 @@ int main(int argc, char **argv) {
     // delivers the byte instead, so Ctrl-C still abandons the line
     // below), but a signal that arrives some other way must not be
     // fatal either. Belt and braces, cheaply.
-    sys_sigaction(SIGINT, SIG_IGN);
+    sys_signal(SIGINT, (sighandler_t)SIG_IGN);
 
     // AND THE TERMINAL IS PUT IN RAW MODE, because this shell edits for
     // itself (klineedit.c above) and would otherwise be fighting the

@@ -34,6 +34,17 @@ static const char park_chan;
 
 // --- the name table (shared with ring 3, api/ksignal.h) ---------------
 
+// The ignore bitmask these tests were written against became an action
+// table when handlers landed (api/scheduler.h). This is the one-line
+// bridge, kept rather than rewriting nine call sites: what they are
+// each testing is the DROP-ON-ARRIVAL rule, not the shape of the state
+// that records it.
+static int test_set_ignored(int pid, int sig, int on) {
+    struct sigaction act = { .handler = on ? SIG_IGN : SIG_DFL }, old;
+    if (scheduler_signal_set_action(pid, sig, &act, &old) < 0) return -1;
+    return old.handler == SIG_IGN;
+}
+
 KTEST("signal", "a signal's name round-trips through the shared table") {
     KTEST_ASSERT(k_strcmp(signal_name(SIGINT), "INT") == 0);
     KTEST_ASSERT(k_strcmp(signal_name(SIGTERM), "TERM") == 0);
@@ -132,15 +143,21 @@ KTEST("signal", "the LOWEST pending signal is the one taken") {
     scheduler_signal_raise(pid, SIGTERM); // 15
     scheduler_signal_raise(pid, SIGINT);  // 2
     int took = scheduler_signal_take(pid);
-    // The WHOLE set is cleared, because acting on one terminates the
-    // process and the rest could never be acted on.
+    // JUST THE ONE TAKEN. This asserted an empty set until handlers
+    // landed, on the reasoning that acting on any signal terminated the
+    // process so the rest could never be acted on -- true then, and
+    // false the moment a handler can run and return. The SIGTERM is
+    // still there, and it is delivered at the sigreturn that ends
+    // SIGINT's handler.
     uint32_t left = scheduler_signal_pending(pid);
+    int next = scheduler_signal_take(pid);
 
     scheduler_test_release(idx);
     scheduler_preempt_enable();
 
     KTEST_ASSERT_EQ(took, SIGINT);
-    KTEST_ASSERT_EQ((int)left, 0);
+    KTEST_ASSERT_EQ((int)left, 1 << SIGTERM);
+    KTEST_ASSERT_EQ(next, SIGTERM);
 }
 
 KTEST("signal", "an IGNORED signal is dropped at arrival, not queued") {
@@ -156,11 +173,11 @@ KTEST("signal", "an IGNORED signal is dropped at arrival, not queued") {
     }
     int pid = idx + 1;
 
-    int was = scheduler_signal_set_ignored(pid, SIGINT, 1);
+    int was = test_set_ignored(pid, SIGINT, 1);
     int raised = scheduler_signal_raise(pid, SIGINT);
     uint32_t pending = scheduler_signal_pending(pid);
     // SIGKILL is unignorable even when asked for, so it still lands.
-    scheduler_signal_set_ignored(pid, SIGKILL, 1);
+    test_set_ignored(pid, SIGKILL, 1);
     scheduler_signal_raise(pid, SIGKILL);
     uint32_t after_kill = scheduler_signal_pending(pid);
 
@@ -190,7 +207,7 @@ KTEST("signal", "starting to ignore a signal drops one already pending") {
 
     scheduler_signal_raise(pid, SIGINT);
     uint32_t before = scheduler_signal_pending(pid);
-    scheduler_signal_set_ignored(pid, SIGINT, 1);
+    test_set_ignored(pid, SIGINT, 1);
     uint32_t after = scheduler_signal_pending(pid);
 
     scheduler_signal_take(pid);
@@ -201,11 +218,19 @@ KTEST("signal", "starting to ignore a signal drops one already pending") {
     KTEST_ASSERT_EQ((int)after, 0);
 }
 
-KTEST("signal", "a BLOCKED process is woken with -EINTR so it can be delivered to") {
+KTEST("signal", "a BLOCKED process is woken by REWINDING its syscall") {
     // Delivery happens on the way back to ring 3, and a parked process
-    // is not on its way anywhere. -EINTR rather than SYS_RETRY, which
-    // libsys retries in a loop -- that would send the caller straight
-    // back into the call the signal is trying to end.
+    // is not on its way anywhere. It used to be woken with -EINTR in its
+    // RAX; it is rewound over its own `int $0x80` instead, so it
+    // re-enters the kernel at a delivery point with the call NOT YET RUN
+    // -- which is the only state in which SA_RESTART can exist at all
+    // (kernel/proc/scheduler.c has the full argument).
+    //
+    // **THE VECTOR IS WHAT MAKES THIS TEST REACH THE CODE.** The
+    // fabricated frame has to say it came from a syscall, because the
+    // wake checks that before rewinding anything -- and the version of
+    // this that did not set it passed while exercising the fallback
+    // instead, which is the trap CLAUDE.md names.
     uint64_t tf[SCHED_TF_SLOTS];
     scheduler_preempt_disable();
     int idx = scheduler_test_park(tf, &park_chan, SCHED_WAIT_KEY);
@@ -215,10 +240,15 @@ KTEST("signal", "a BLOCKED process is woken with -EINTR so it can be delivered t
     }
     int pid = idx + 1;
 
+    tf[SCHED_TF_VECTOR] = 0x80;      // "this frame is a syscall"
+    tf[SCHED_TF_RIP]    = 0x400000;  // whatever follows the `int`
+    tf[SCHED_TF_RAX]    = SYS_READ;  // the number a restart re-uses
+
     int state_before = scheduler_test_state(idx);
     scheduler_signal_raise(pid, SIGTERM);
     int state_after = scheduler_test_state(idx);
-    int64_t rax = (int64_t)tf[SCHED_TF_RAX];
+    uint64_t rip = tf[SCHED_TF_RIP];
+    uint64_t rax = tf[SCHED_TF_RAX];
 
     scheduler_signal_take(pid);
     scheduler_test_release(idx);
@@ -226,7 +256,11 @@ KTEST("signal", "a BLOCKED process is woken with -EINTR so it can be delivered t
 
     KTEST_ASSERT_EQ(state_before, PROC_STATE_BLOCKED);
     KTEST_ASSERT_EQ(state_after, PROC_STATE_READY);
-    KTEST_ASSERT_EQ((int)rax, -EINTR);
+    KTEST_ASSERT_EQ((int)(0x400000 - rip), SYSCALL_INSN_LEN);
+    // AND THE ARGUMENTS SURVIVE, which is the half a rewind is for: a
+    // restart re-runs the call, and it can only do that if the number
+    // and the argument registers are still the ones the caller passed.
+    KTEST_ASSERT_EQ((int)rax, SYS_READ);
 }
 
 // --- job control: stop and continue -------------------------------------
@@ -348,14 +382,14 @@ KTEST("signal", "SIGSTOP cannot be ignored, and SIGCONT to a running process is 
 
     // SIGSTOP is unignorable for the reason SIGKILL is: there has to be
     // something that always works.
-    scheduler_signal_set_ignored(pid, SIGSTOP, 1);
+    test_set_ignored(pid, SIGSTOP, 1);
     signal_send(pid, SIGSTOP);
     int stopped_anyway = scheduler_stopped(pid);
     signal_send(pid, SIGCONT);
 
     // SIGTSTP, by contrast, IS ignorable -- that is the difference
     // between the key and the command, exactly as on Unix.
-    scheduler_signal_set_ignored(pid, SIGTSTP, 1);
+    test_set_ignored(pid, SIGTSTP, 1);
     signal_send(pid, SIGTSTP);
     int ignored_tstp = scheduler_stopped(pid);
 
@@ -364,8 +398,8 @@ KTEST("signal", "SIGSTOP cannot be ignored, and SIGCONT to a running process is 
     int cont_ok = signal_send(pid, SIGCONT);
     int still_running = !scheduler_stopped(pid);
 
-    scheduler_signal_set_ignored(pid, SIGSTOP, 0);
-    scheduler_signal_set_ignored(pid, SIGTSTP, 0);
+    test_set_ignored(pid, SIGSTOP, 0);
+    test_set_ignored(pid, SIGTSTP, 0);
     scheduler_test_release(idx);
     scheduler_preempt_enable();
 
@@ -497,6 +531,139 @@ KTEST("signal", "a group signal reaches every member and nobody else") {
     KTEST_ASSERT_EQ((int)pa, 1 << SIGTERM);
     KTEST_ASSERT_EQ((int)pb, 1 << SIGTERM);
     KTEST_ASSERT_EQ((int)pc, 0);   // the control
+}
+
+// --- handlers: the state rules a ring-3 test cannot reach ---------------
+
+KTEST("signal", "SIGKILL and SIGSTOP cannot be BLOCKED, whatever the mask says") {
+    // The rule exists because sigreturn restores this mask from a struct
+    // on the USER STACK. A program that corrupts its own frame -- or
+    // edits it on purpose -- must not be able to make itself unkillable,
+    // so the clamp lives in the setter rather than at its callers.
+    uint64_t tf[SCHED_TF_SLOTS];
+    scheduler_preempt_disable();
+    int idx = scheduler_test_park(tf, &park_chan, SCHED_WAIT_KEY);
+    if (idx < 0) {
+        scheduler_preempt_enable();
+        KTEST_SKIP("no free process slot to fabricate");
+    }
+    int pid = idx + 1;
+
+    scheduler_signal_set_blocked(pid, 0xFFFFFFFFu); // block everything
+    uint32_t got = scheduler_signal_blocked(pid);
+
+    // AND THE CONSEQUENCE, not just the field: a blocked-everything
+    // process must still have SIGKILL come out of the deliverable end.
+    scheduler_signal_raise(pid, SIGINT);   // blocked -- must not surface
+    int while_blocked = scheduler_signal_deliverable(pid);
+    scheduler_signal_raise(pid, SIGKILL);  // must surface anyway
+    int unblockable = scheduler_signal_deliverable(pid);
+
+    scheduler_signal_set_blocked(pid, 0);
+    scheduler_test_release(idx);
+    scheduler_preempt_enable();
+
+    KTEST_ASSERT_EQ((int)(got & (1u << SIGKILL)), 0);
+    KTEST_ASSERT_EQ((int)(got & (1u << SIGSTOP)), 0);
+    KTEST_ASSERT_EQ((int)(got & (1u << SIGINT)), 1 << SIGINT); // the control
+    KTEST_ASSERT_EQ(while_blocked, 0);
+    KTEST_ASSERT_EQ(unblockable, SIGKILL);
+}
+
+KTEST("signal", "a BLOCKED signal stays pending rather than being dropped") {
+    // The distinction the whole mask rests on. Dropping would be simpler
+    // and would make a handler that re-raises its own signal silently
+    // lose it; POSIX defers, and so does this.
+    uint64_t tf[SCHED_TF_SLOTS];
+    scheduler_preempt_disable();
+    int idx = scheduler_test_park(tf, &park_chan, SCHED_WAIT_KEY);
+    if (idx < 0) {
+        scheduler_preempt_enable();
+        KTEST_SKIP("no free process slot to fabricate");
+    }
+    int pid = idx + 1;
+
+    scheduler_signal_set_blocked(pid, 1u << SIGINT);
+    scheduler_signal_raise(pid, SIGINT);
+    uint32_t pending_while_blocked = scheduler_signal_pending(pid);
+    int deliverable_while_blocked  = scheduler_signal_deliverable(pid);
+
+    scheduler_signal_set_blocked(pid, 0); // what sigreturn does
+    int after_unblock = scheduler_signal_take(pid);
+
+    scheduler_test_release(idx);
+    scheduler_preempt_enable();
+
+    KTEST_ASSERT_EQ((int)pending_while_blocked, 1 << SIGINT);
+    KTEST_ASSERT_EQ(deliverable_while_blocked, 0);
+    KTEST_ASSERT_EQ(after_unblock, SIGINT);
+}
+
+KTEST("signal", "installing a HANDLER keeps a pending signal; SIG_IGN drops it") {
+    // Two rules that look like one and are not. SIG_IGN drops what is
+    // already pending, because a process that has just said "I do not
+    // want this" must not be acted on by one that arrived a moment
+    // earlier. A HANDLER must NOT drop it -- there the pending signal is
+    // precisely what the caller has just arranged to hear about.
+    uint64_t tf[SCHED_TF_SLOTS];
+    scheduler_preempt_disable();
+    int idx = scheduler_test_park(tf, &park_chan, SCHED_WAIT_KEY);
+    if (idx < 0) {
+        scheduler_preempt_enable();
+        KTEST_SKIP("no free process slot to fabricate");
+    }
+    int pid = idx + 1;
+
+    struct sigaction handler = { .handler = 0x400000, .restorer = 0x400010 };
+    struct sigaction ignore  = { .handler = SIG_IGN };
+    struct sigaction old;
+
+    scheduler_signal_raise(pid, SIGINT);
+    scheduler_signal_set_action(pid, SIGINT, &handler, &old);
+    uint32_t kept = scheduler_signal_pending(pid);
+
+    scheduler_signal_set_action(pid, SIGINT, &ignore, &old);
+    uint32_t dropped = scheduler_signal_pending(pid);
+    // And the readback names the handler that WAS there, not the one
+    // being installed -- a previous-value report that reports the new
+    // value is a call nobody can use to save and restore.
+    uint64_t reported = old.handler;
+
+    scheduler_test_release(idx);
+    scheduler_preempt_enable();
+
+    KTEST_ASSERT_EQ((int)kept, 1 << SIGINT);
+    KTEST_ASSERT_EQ((int)dropped, 0);
+    KTEST_ASSERT_EQ((int)(reported == 0x400000), 1);
+}
+
+KTEST("signal", "a sentinel disposition reports back with no restorer left on it") {
+    // Normalised on the way IN, so a readback cannot show SIG_DFL
+    // carrying a stale restorer -- which would look armed and is not.
+    uint64_t tf[SCHED_TF_SLOTS];
+    scheduler_preempt_disable();
+    int idx = scheduler_test_park(tf, &park_chan, SCHED_WAIT_KEY);
+    if (idx < 0) {
+        scheduler_preempt_enable();
+        KTEST_SKIP("no free process slot to fabricate");
+    }
+    int pid = idx + 1;
+
+    struct sigaction handler = { .handler = 0x400000, .restorer = 0x400010,
+                                 .flags = SA_RESTART };
+    struct sigaction back_to_dfl = { .handler = SIG_DFL, .restorer = 0x400010,
+                                     .flags = SA_RESTART };
+    struct sigaction old, now;
+    scheduler_signal_set_action(pid, SIGINT, &handler, &old);
+    scheduler_signal_set_action(pid, SIGINT, &back_to_dfl, &old);
+    scheduler_signal_action(pid, SIGINT, &now);
+
+    scheduler_test_release(idx);
+    scheduler_preempt_enable();
+
+    KTEST_ASSERT_EQ((int)now.handler, SIG_DFL);
+    KTEST_ASSERT_EQ((int)now.restorer, 0);
+    KTEST_ASSERT_EQ((int)now.flags, 0);
 }
 
 // --- the ring-3 half ----------------------------------------------------

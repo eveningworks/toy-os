@@ -4021,3 +4021,161 @@ path rather than every modern one, and `input_test.c` asserts that every
 keycode the active layout maps is producible from some wire byte -- with
 a second, named check for `KEY_102ND`, because the general one passes
 vacuously on a `us` boot where no layout maps that key.
+
+## The signal restorer is ring 3's code, not a kernel-mapped trampoline page
+
+A handler has to get back into the kernel when it returns, and there are
+exactly three places the two instructions that do it can live.
+
+**The one that is dead everywhere:** write them into the signal frame
+itself, on the user stack, and point the return address at the stack.
+i386 Linux did this until NX made an executable stack unacceptable, and
+it is not a candidate here for the same reason -- `nx_test` exists
+precisely because this kernel enforces NX on ring-3 data pages.
+
+**The one taken:** ring 3 supplies the address. `struct sigaction`
+carries a `restorer`, the kernel pushes it as the handler's return
+address, and `userland/rt/sigtramp.c` is the two instructions every
+program in this tree links. This is x86-64 Linux exactly -- the kernel
+*requires* `SA_RESTORER` there and glibc supplies `__restore_rt`.
+
+**The one not taken:** a kernel-owned read-only executable page mapped
+into every address space, holding the same two instructions. That is
+i386 Linux's vDSO (`__kernel_sigreturn`), and it is the more defensible
+design in the abstract: the kernel never trusts a userland pointer for
+control flow, and a binary that linked no C runtime still gets a working
+handler.
+
+It was not taken because the second half of that argument is worth
+nothing here and the first half is affordable. Every ring-3 program in
+this tree starts through `crt0.o` and links `libsys` -- that is what
+`docs/conventions/build.md`'s "every ring-3 program is just a `main()`"
+means, and there is no dynamic linker, no foreign toolchain and no
+third-party binary for the "linked no C runtime" case to describe. So
+the vDSO would buy a guarantee against a hazard that cannot arise, and
+charge a page of address space, a slot in `kernel/uaddr.h`'s map, and a
+kernel-owned executable mapping in every process for it.
+
+**What is actually given up, stated rather than glossed:** the kernel
+takes an address from ring 3 and makes it a return address. Three things
+bound it. The restorer is only ever *pushed as data onto the user
+stack*, never jumped to by the kernel -- the ring-3 `ret` is what
+transfers to it, in ring 3, with ring-3 privileges. `SYS_SIGACTION`
+refuses a handler with a null restorer outright rather than substituting
+one, so the failure mode is an error at install time and not a fault on
+the way out of something that otherwise worked. And a program that
+supplies a *bad* restorer faults in ring 3, which is where a program's
+own mistakes belong. There is no privilege to gain: the process could
+already jump anywhere in its own address space.
+
+## A signal wakes a blocked syscall by REWINDING it, not by failing it
+
+Stage 1 woke a process parked in a blocking syscall by writing `-EINTR`
+into its saved RAX and letting the call return. That is correct as far
+as it goes -- the process reaches a delivery point, which is all the
+wake was for -- and it makes user-space handlers impossible to get
+right.
+
+The problem is ORDER. With `-EINTR` the sequence is: the call fails,
+ring 3 sees the failure, and the handler runs at whatever trap comes
+next. POSIX's sequence is the other way round: the handler runs, and
+*then* the call reports what happened. Every program that has ever been
+written against signals depends on the second one, because the first
+leaves nothing to restart -- by the time the handler runs, control has
+already left the syscall and gone somewhere the kernel cannot see.
+
+So the wake rewinds RIP over the two bytes of `int $0x80` instead
+(`SYSCALL_INSN_LEN`), leaving RAX and the argument registers exactly as
+the caller passed them -- nothing has written a return value into that
+frame. The process resumes, immediately re-enters the kernel at the same
+syscall, and `idt.c`'s syscall-entry check delivers there. That is the
+one instant at which both answers are still available: rewind the SAVED
+frame once more and the call is made again after the handler returns
+(`SA_RESTART`), or write `-EINTR` into it and the call fails after the
+handler returns. Either way the handler goes first.
+
+Linux arrives at the same place from the other end: its blocking
+primitives return `-ERESTARTSYS` and the signal-delivery code turns that
+into a restart or an `EINTR` depending on the action's flags. The
+difference is only where the state lives -- Linux keeps it in the
+in-flight kernel frame, which this kernel does not have, because
+blocking here saves a trapframe and unwinds rather than parking a kernel
+stack.
+
+**The cost, stated: a syscall can now run twice.** Once as the attempt
+that was interrupted before it did anything, and once after the handler.
+That is safe *because* the rewind only happens where the call has not
+run -- the vector must say 0x80 and the frame must be one the wake
+rewound. A signal that becomes pending while a syscall is mid-flight is
+delivered on the way out with the call's real result intact, and nothing
+is rewound. Getting that distinction wrong would silently double every
+write a signalled process made, which is why the two call sites pass an
+explicit `at_syscall_entry` rather than working it out locally.
+
+## Delivering a signal at syscall entry means the syscall must be able to run anyway
+
+`idt.c` checks for a pending signal at `int 0x80` and delivers it
+INSTEAD of dispatching the syscall. That is deliberate and stage 1
+explains why: it makes the process's own next syscall the delivery
+point, which it always reaches, rather than depending on a timer tick.
+
+Handlers made the "instead" load-bearing in a way it had not been. The
+check asked `scheduler_signal_pending()`, and `pending` counts signals
+that a running handler has BLOCKED. So a handler's own `SYS_SIGRETURN`
+matched the check, delivered nothing (the only pending signal was
+blocked), and was never dispatched -- the restorer returned from an
+`int $0x80` that had done nothing at all and ran into its own `ud2`.
+It presented as an Invalid Opcode crash in ring 3 with `RAX=43`, which
+is 0x43, which is 67, which is `SYS_SIGRETURN`.
+
+Two changes, and the second is the one worth keeping in mind. Asking
+`scheduler_signal_deliverable()` -- which accounts for the mask -- fixes
+this bug. Making `signal_deliver_pending()` RETURN whether it acted, and
+falling through to the syscall when it did not, makes the whole class
+unreachable: any future reason for delivery to decline (an action that
+turns out to be SIG_IGN, a process that is no longer current, a frame
+that will not fit) now runs the syscall instead of swallowing it.
+
+The general shape is worth naming because it is not specific to signals:
+**when a check decides to do A INSTEAD OF B, the check and the doing
+must agree about when A is possible.** Two predicates that are nearly
+the same -- "something is pending" and "something can be delivered
+now" -- were close enough to look interchangeable and differed in
+exactly the case that mattered.
+
+## A caught fault is not a crash, and the report says so
+
+A ring-3 exception used to have one outcome: `idt.c` printed a
+panic-grade report -- registers, faulting address, symbol name, stack
+scan -- and tore the process down. That report is genuinely good and
+several bugs in this tree were diagnosed from a pasted copy of it, so
+the question when faults became catchable was what to do with it.
+
+The answer is that it depends on whether anybody is listening. A process
+with no handler for the signal a fault maps to gets exactly the report
+it always did, on exactly the same path -- which is every process in
+this tree, since catching `SIGSEGV` is a deliberate act. A process WITH
+a handler gets one line naming the signal, the faulting RIP and the
+handler, and then runs its handler.
+
+The alternative -- print the full report either way -- was rejected
+because a program that catches faults on purpose is not crashing, and a
+page of registers per occurrence would make the report useless for the
+case it exists to serve. Being able to find the one real crash in a log
+is worth more than being able to see every deliberate one.
+
+**Three properties that make this safe rather than merely tidy.** A
+fault is delivered SYNCHRONOUSLY, not through the pending set -- the
+process is standing on the instruction that caused it and there is
+nowhere to defer it to. It is NOT restartable, so a handler that returns
+without fixing the cause re-executes the faulting instruction and faults
+again, which is correct and is what every Unix does. And a fault INSIDE
+its own handler falls through to the teardown, detected by the blocked
+mask that entering the handler set -- Linux's `force_sig`, arrived at
+for free rather than as a separate counter.
+
+**What a `SIGSEGV` handler still cannot catch here is a stack
+overflow**, because there is no `sigaltstack`: the frame is built on the
+faulting stack, so a stack that has run out has no room for one and
+`frame_fits()` refuses. The process gets the default action, which is
+the honest outcome and the same one it had before.
