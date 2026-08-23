@@ -53,9 +53,12 @@ static volatile int g_witness;
 static volatile int g_depth;
 static volatile int g_max_depth;
 static volatile int g_entries;
+static volatile int g_chld;
 static jmp_buf g_segv_jmp;
 
 static void on_signal(int sig) { g_caught = sig; }
+
+static void on_sigchld(int sig) { (void)sig; g_chld++; }
 
 // Sends itself the same signal it is handling. If the kernel did not
 // block it, this re-enters and g_max_depth climbs; POSIX says it must
@@ -406,6 +409,65 @@ int main(void) {
     }
     sys_signal(SIGTERM, (sighandler_t)SIG_DFL);
     sys_signal(SIGINT, (sighandler_t)SIG_DFL);
+
+    // --- SIGCHLD, on both of the two ways a child can die -----------------
+    //
+    // **TWO CHECKS BECAUSE THERE ARE TWO DEATHS, and the second is the
+    // one a single check would miss.** A process leaves through
+    // scheduler_on_exit() when it exits under its own power and through
+    // scheduler_kill() when somebody else ends it -- separate functions
+    // in the kernel, and this tree has already shipped a bug where work
+    // that belonged in both lived in only one (killing a process freed
+    // none of its memory for months). Testing only the exit path would
+    // pass against exactly that mistake.
+    //
+    // Counted rather than flagged, and reset before each, because the
+    // pending set is a BITMASK: two deaths close enough together
+    // collapse into one delivery, so the deaths here are sequenced --
+    // one child fully reaped before the next is spawned -- and the count
+    // is then an exact expectation rather than a lower bound.
+    struct sigaction chld = {
+        .handler  = (uint64_t)(uintptr_t)on_sigchld,
+        .restorer = (uint64_t)(uintptr_t)__sigrestore,
+        .flags    = SA_RESTART,
+    };
+    sys_sigaction(SIGCHLD, &chld, 0);
+
+    g_chld = 0;
+    int quick = sys_spawn_group("/bin/hello", 0, -1, 0, PGID_NEW);
+    if (quick > 0) {
+        sys_waitpid(quick, 0);
+        checkf("a child exiting on its own raises SIGCHLD in the parent",
+               g_chld == 1, g_chld, 1);
+    } else {
+        check("spawned a short-lived child", 0, "spawn failed");
+    }
+
+    g_chld = 0;
+    int doomed = sys_spawn_group(SPINNER, SPIN_ARGS, -1, 0, PGID_NEW);
+    if (doomed > 0) {
+        // SIGKILL, so the death goes through scheduler_kill() rather
+        // than through the victim's own return to ring 3 -- which is
+        // precisely the path the check above cannot reach.
+        sys_kill(doomed, SIGKILL);
+        sys_waitpid(doomed, 0);
+        checkf("...and so does one that is KILLED by somebody else",
+               g_chld == 1, g_chld, 1);
+    } else {
+        check("spawned a child to kill", 0, "spawn failed");
+    }
+
+    // THE OTHER HALF OF THE CLAIM: with the handler taken away, a child
+    // death must go back to costing this process nothing. If SIGCHLD
+    // were reaching the pending set regardless of disposition, the
+    // default action would terminate us and this line would never
+    // print -- so the check after the spawn is the evidence, exactly as
+    // the ignored-SIGINT check above is.
+    sys_signal(SIGCHLD, (sighandler_t)SIG_DFL);
+    int ignored = sys_spawn_group("/bin/hello", 0, -1, 0, PGID_NEW);
+    if (ignored > 0) sys_waitpid(ignored, 0);
+    check("a child death with SIGCHLD at its default does not disturb the parent",
+          1, 0);
 
     // --- signalling something that is not there ---------------------------
     check("a signal to a pid that does not exist is refused",

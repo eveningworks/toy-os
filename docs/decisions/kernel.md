@@ -4179,3 +4179,74 @@ overflow**, because there is no `sigaltstack`: the frame is built on the
 faulting stack, so a stack that has run out has no room for one and
 `frame_fits()` refuses. The process gets the default action, which is
 the honest outcome and the same one it had before.
+
+## SIGCHLD is sent on exit only, from one helper both deaths call
+
+`SIGCHLD` had a number, a name and a documented default of "ignore" for
+a day before anything sent one. Wiring it up is three lines; the two
+decisions worth recording are where the send lives and what it is sent
+FOR.
+
+**Where: `notify_parent()` in `kernel/proc/scheduler.c`, called by both
+`scheduler_on_exit()` and `scheduler_kill()`.** The tempting spellings
+were the two obvious ones and both are worse. Putting it in the CALLERS
+-- `sys_exit`, the signal-termination path, Task Manager's force quit --
+spreads one fact over three files and makes a fourth kind of death
+silently miss it. Putting it in `scheduler_on_exit()` alone is the
+mistake this file has already made once: killing a process freed none of
+its memory for months, because the teardown lived only in the exit path
+and nobody noticed the kill path was a second one. So the rule is the
+one that survives a future edit rather than the one that is shortest
+today: **the notification is one function and every death calls it.**
+Linux funnels identically, through `exit_notify()` ->
+`do_notify_parent()`; the difference is that Linux has one `do_exit()`
+and toy-os has two entry points, which is exactly why the helper is
+worth its name.
+
+The helper does two things that look like one and are not. The **wake**
+releases a parent parked in `SYS_WAITPID` on that child's channel --
+the synchronous half, and what every waiter in this tree has used since
+blocking landed. The **signal** reaches a parent that is not in
+`waitpid` at all, which is the case a shell sitting at an idle prompt is
+in. Neither substitutes for the other.
+
+**What for: exactly one consumer, and it is `/bin/tosh`.** A shell
+reports `[1]+ Done` at a prompt and nowhere else -- bash does the same,
+because a report landing mid-command or halfway through a typed line is
+worse than a late one. What that leaves is the idle case: the only thing
+that produced a prompt was a KEYSTROKE, so a background job that
+finished while nobody was typing sat unreported and unreaped until the
+next Enter. `SIGCHLD` without `SA_RESTART` makes the shell's blocking
+read fail with `EINTR`, and that is the whole feature. It is also why
+the flag is tested BEFORE the read as well as after it -- and why that
+test-then-block is not the race `pselect()` exists to close on Unix:
+this kernel delivers at SYSCALL ENTRY, so a signal arriving in the
+window comes straight back as `EINTR` instead of being swallowed by a
+read that already parked.
+
+**NOT sent for a stop or a continue, which is a deliberate difference
+from POSIX** (which sends `SIGCHLD` for those too, absent
+`SA_NOCLDSTOP`). A stop is already reported to a waiter that asked, as
+`SIGNAL_STOP_BASE + sig` through `SYS_WUNTRACED`, and that waiter is the
+only consumer there is. The asynchronous route would have to raise a
+pending bit from the keyboard IRQ that delivers `Ctrl-Z` -- safe, since
+raising only flips state, but real machinery for a fact nothing reads.
+The bar this project sets is a second REAL caller, not a plausible one,
+and there is not one. Revisit if something ever needs to hear about a
+suspension without asking for it.
+
+**AND THE BUG THIS EXPOSED IS THE GENERAL LESSON.**
+`signal_send()`'s branch for "the default action is ignore" tested
+`!scheduler_signal_ignored(pid, sig)` -- the exact inverse of what it
+meant. It dropped the signal for a process that had installed a HANDLER
+and let one through for a process that had explicitly set `SIG_IGN`
+(where `scheduler_signal_raise()` dropped it anyway, so that half was
+merely wasted work). `SIGCHLD` is the ONLY signal that can reach that
+branch: stop and continue return above it and everything else
+terminates. With nothing sending a `SIGCHLD`, the branch had no callers
+at all -- so it read as tested code, sat inside a file with KTESTs
+either side of it, and was wrong. **A branch only one caller can reach,
+with no caller, is untested code that looks tested.** The first check
+that asked a handler to run found it in one run; the fix is to ask
+whether there is a HANDLER (`SIG_IS_HANDLER` on the action) rather than
+whether the signal is ignored.

@@ -75,7 +75,7 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~`Ctrl-C` in the GUI Terminal~~ DONE 2026-08-22 -- it runs `/bin/tosh` on a pty now, so it is the same code as the console's
 - [x] ~~**Ctrl-C interrupting a running program**, the way it works in a Linux shell~~ DONE 2026-08-22 -- a whole pipeline, as one group
 - [x] ~~SIGSEGV/SIGILL delivered to the process, not an unconditional teardown~~ DONE 2026-08-23 -- and SIGFPE; no handler still panics
-- [ ] SIGCHLD on child exit -- the signal exists and its default is ignore; nothing SENDS one yet
+- [x] ~~SIGCHLD on child exit~~ DONE 2026-08-23 -- one helper for both deaths; `/bin/tosh` reports `[1]+ Done` with nobody typing
 
 ### TTY / virtual terminals
 **Needs:** nothing -- the tty layer landed (`docs/tty-design.md`). What is left here is virtual terminals and the output processing below them.

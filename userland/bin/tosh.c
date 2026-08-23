@@ -31,6 +31,7 @@
 #include <string.h>
 #include "lib/uhistory.h"
 #include "klineedit.h"
+#include "signal_abi.h" // SIGCHLD, struct sigaction -- see main()
 
 // Static, not local: `struct kline_edit` is ~1.2 KiB and `struct
 // uhistory` ~4 KiB, against USERLAND_CFLAGS' -Wframe-larger-than=2048
@@ -114,6 +115,46 @@ static void redraw(void) {
     g_shown = g_ed.len;
 }
 
+// --- news from a background job ----------------------------------------
+//
+// **THE HANDLER DOES NOTHING BUT SAY IT HAPPENED**, and that is not
+// laziness -- it is the async-signal-safety rule. A handler runs between
+// two arbitrary instructions of whatever this shell was doing, so it may
+// not print (sys_write into a half-written prompt), may not touch the
+// job table (tosh_reap_jobs() walks it, and reap_and_repaint() below may
+// be halfway through the same walk), and may not call anything that
+// allocates. Setting one flag is the whole POSIX-safe repertoire, and it
+// is what every real shell's SIGCHLD handler does. bash's is three
+// lines of exactly this shape.
+//
+// `volatile` because the read loop's only other view of this variable is
+// through a syscall the compiler is entitled to think cannot change it.
+static volatile int g_child_news;
+
+static void on_sigchld(int sig) { (void)sig; g_child_news = 1; }
+
+// What the flag means when the shell gets round to it: erase the line
+// being typed, print whatever the jobs did, and put the line back.
+//
+// **THE LINE HAS TO BE ERASED, NOT JUST SCROLLED PAST.** A report
+// printed on top of a half-typed command leaves the old characters on
+// screen with nothing to say they are stale, and redraw()'s two passes
+// only overwrite as far as g_shown -- they cannot know something else
+// wrote to the row in between. So the row is blanked first, by the same
+// '\r'-and-spaces means redraw() uses (this shell has no cursor
+// addressing; see redraw()'s comment on why).
+static void reap_and_repaint(void) {
+    g_child_news = 0;
+
+    put("\r");
+    int width = (int)strlen(prompt()) + g_shown;
+    for (int i = 0; i < width; i++) put(" ");
+    put("\r");
+
+    tosh_reap_jobs(&g_sh);
+    redraw();
+}
+
 // Ends the current line on screen and starts a fresh one. Used before
 // anything that prints (a command's output, ^C) so it does not land on
 // top of the line being edited.
@@ -193,6 +234,28 @@ int main(int argc, char **argv) {
     sys_tcgetattr(0, &g_tio_saved);
     sys_tty_raw(0);
 
+    // **NO SA_RESTART, AND THAT IS THE ENTIRE POINT OF INSTALLING IT.**
+    // With the flag, the kernel rewinds the interrupted read and this
+    // shell never learns anything happened -- which is what
+    // sys_signal() would give (rt/sys.c sets SA_RESTART for every
+    // handler it installs, the right default for code that does not
+    // want to grow an EINTR loop). Here the interruption IS the message:
+    // it is what turns a shell parked in sys_read() into one that can
+    // report a finished background job while nobody is typing.
+    //
+    // The blocking call that must NOT be interrupted -- waiting on a
+    // foreground job -- is protected in libsys instead, where
+    // sys_waitpid() retries on EINTR (rt/sys.c). That is the right place
+    // for it: a wait for a named child means the same thing whether or
+    // not a signal arrived, and every caller wants that, not just this
+    // one.
+    struct sigaction chld = {
+        .handler  = (uint64_t)(uintptr_t)on_sigchld,
+        .restorer = (uint64_t)(uintptr_t)__sigrestore,
+        .flags    = 0,
+    };
+    sys_sigaction(SIGCHLD, &chld, 0);
+
     // The console is CLAIMED BY READING IT, and the foreground group is
     // set at the same moment (kernel/tty.h) -- so nothing here has to
     // call tcsetpgrp: the first sys_read(0, ...) below does it, and
@@ -203,10 +266,41 @@ int main(int argc, char **argv) {
 
     for (;;) {
         char buf[32];
+
+        // **THE FLAG IS TESTED BEFORE THE READ, NOT ONLY AFTER IT**, and
+        // without this line a job that finishes in the gap between one
+        // read returning and the next one starting is reported at the
+        // NEXT keystroke instead of now -- which is the whole of what
+        // this was built to avoid, failing in exactly the case it was
+        // built for (a `&` job that exits almost immediately).
+        //
+        // On Unix this test-then-block is the classic race that pselect()
+        // and sigsuspend() exist to close: the signal can arrive after
+        // the test and before the sleep, and be missed. It is NOT a race
+        // here, and the reason is where this kernel delivers -- a signal
+        // that becomes pending in that window is acted on at SYSCALL
+        // ENTRY, before the read runs at all (kernel/signal.h), so it
+        // comes straight back as EINTR rather than being swallowed by a
+        // read that already parked. What closes the window is the
+        // kernel's delivery point, not anything this loop does.
+        if (g_child_news) reap_and_repaint();
+
         // Blocks. The kernel parks this process on SCHED_WAIT_KEY and
         // the keyboard IRQ releases it, so an idle shell costs nothing
         // -- `ps` shows it blocked, not ready.
         int64_t n = sys_read(0, buf, sizeof buf);
+
+        // **INTERRUPTED, NOT BROKEN.** A background job finishing is the
+        // one thing that reaches this shell while it is parked here with
+        // nothing to do, and SIGCHLD is deliberately installed WITHOUT
+        // SA_RESTART (see main()) so that it does: the read fails with
+        // EINTR, the news gets printed, and the read is entered again.
+        // Without this branch the -1 would fall into the `n <= 0` exit
+        // below and a finished background job would close the shell.
+        if (n < 0 && sys_errno() == EINTR) {
+            if (g_child_news) reap_and_repaint();
+            continue;
+        }
         if (n <= 0) break; // a console has no EOF; this is an error
 
         for (int64_t i = 0; i < n; i++) {

@@ -547,10 +547,22 @@ int sys_waitpid(int pid, int *out_code) {
     // process was woken and should ask again, not that the child
     // exited. Each pass that finds it still running parks again, so
     // this consumes no CPU while waiting.
+    //
+    // **AND -EINTR IS RETRIED HERE RATHER THAN RETURNED**, which became
+    // load-bearing the moment the kernel started sending SIGCHLD: a
+    // parent with a SIGCHLD handler and no SA_RESTART is woken by its
+    // OWN child's death, and returning -1 from the call that was
+    // waiting for exactly that would be absurd. The caller asked to
+    // wait for a specific child and nothing about a signal changes
+    // that, so the wait continues -- which is what an EINTR loop around
+    // waitpid() does in every Unix program that installs one.
+    //
+    // A caller that genuinely wants to be interrupted has
+    // sys_waitpid_nohang(); this one blocks until it has an answer.
     do {
         r = syscall3(SYS_WAITPID, (uint64_t)(int64_t)pid,
                      (uint64_t)(uintptr_t)out_code, 0);
-    } while (r == SYS_RETRY);
+    } while (r == SYS_RETRY || r == -EINTR);
     return (int)err(r);
 }
 
@@ -563,10 +575,13 @@ int sys_waitpid(int pid, int *out_code) {
 // on the floor. SIGNAL_IS_STOP() on the code is how a caller tells.
 int sys_waitpid_untraced(int pid, int *out_code) {
     int64_t r;
+    // -EINTR retried for the reason sys_waitpid() states: a shell
+    // waiting on its foreground job is the process a SIGCHLD is aimed
+    // at, and it must not have the wait fail underneath it.
     do {
         r = syscall3(SYS_WAITPID, (uint64_t)(int64_t)pid,
                      (uint64_t)(uintptr_t)out_code, SYS_WUNTRACED);
-    } while (r == SYS_RETRY);
+    } while (r == SYS_RETRY || r == -EINTR);
     return (int)err(r);
 }
 

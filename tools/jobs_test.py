@@ -64,7 +64,17 @@ Seven properties, each with a failure the others would not catch:
     resumes it and it stops again the moment it reads, exactly as bash
     behaves.
 
-12. **Nothing is left unreaped.** Every stage of every job, not just the
+12. **A finished background job is reaped WITH NO KEYSTROKE.** The
+    shell reports and reaps at a prompt, and until SIGCHLD existed the
+    only thing that produced a prompt was a key -- so a `&` job that
+    finished while nobody was typing sat as a zombie until the next
+    Enter. Asserted through the process list rather than the screen,
+    which is both an independent path to the same fact and the only one
+    readable from this socket. The control is built in: the job has to
+    be seen RUNNING first, or "no zombie" would also be what a job that
+    never started looks like.
+
+13. **Nothing is left unreaped.** Every stage of every job, not just the
     one whose status is reported: a `fg` that waits only for the last
     stage of a resumed pipeline leaves the others zombies forever, and
     no other check here can see it.
@@ -436,7 +446,51 @@ def main():
         check("a resumed background reader is stopped again",
               len(again) == 1 and again[0][1] == "stopped", f"cat={again}")
 
-        # --- 11. nothing was leaked ------------------------------------
+        # --- 11. a finished background job is reaped with no keystroke --
+        #
+        # **NOT ONE KEY IS SENT BETWEEN STARTING THIS AND ASKING**, and
+        # that is the entire check. Before SIGCHLD reached a shell, the
+        # only thing that ran tosh_reap_jobs() was a prompt and the only
+        # thing that produced a prompt was a keystroke -- so this job
+        # would still be a zombie here, and every other check in this
+        # file would still pass.
+        #
+        # A SHORT spinner on purpose, unlike SPINNER above: this one has
+        # to FINISH while nobody is typing, which is the opposite of what
+        # every other section needs.
+        print("a background job that finishes is reaped with no keystroke")
+
+        # **BY PID, NOT BY AN EMPTY TABLE.** The sections above
+        # deliberately leave jobs behind -- including a STOPPED `cat`,
+        # which cannot be reaped at all until something continues it --
+        # so "no zombies anywhere" is both unreachable here and a weaker
+        # claim than the one worth making. Naming the pid this section
+        # started makes the check exact and immune to whatever else is
+        # lying around.
+        before = {pid for pid, _, _ in spinners(dbg)}
+        type_line(flow, "spin_test 6 &")
+        started = wait_for(lambda: [p for p in spinners(dbg) if p[0] not in before],
+                           lambda v: len(v) == 1)
+        if not check("a short background job starts", len(started) == 1,
+                     f"new spinners={started}"):
+            return report()
+        job_pid = started[0][0]
+
+        # From here on: no input at all. Waiting on the ARTIFACT (the
+        # slot going away) rather than on a fixed sleep, so a slow guest
+        # cannot turn this into a flake -- and the timeout is generous
+        # because the job's own runtime is inside it.
+        def job_state():
+            for p in dbg.processes():
+                if p["pid"] == job_pid:
+                    return p["state"]
+            return "reaped"
+
+        state = wait_for(job_state, lambda v: v == "reaped", timeout=25.0)
+        check("...and is reaped without a key being pressed",
+              state == "reaped", f"pid {job_pid} is {state!r}, wanted 'reaped'")
+
+        # --- 12. nothing was leaked ------------------------------------
         #
         # EVERY STAGE OF EVERY JOB HAS TO BE REAPED, and a resumed
         # pipeline is where that goes wrong: `fg` that waits only for the

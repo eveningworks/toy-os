@@ -104,6 +104,7 @@
 #include "kfmt.h"      // klog_printf, vga_printf
 #include "syscall_abi.h" // SYS_RETRY -- the wake value a blocked waiter sees
 #include "signal_abi.h" // the pending mask and the group each process carries
+#include "signal.h"     // signal_send() -- SIGCHLD to a parent, see notify_parent()
 #include "errno.h"     // -EINTR, what a signal makes a blocking syscall return
 #include "fs.h"
 #include "gdt.h"
@@ -1398,6 +1399,49 @@ int scheduler_wake(const void *chan, int64_t value) {
     return woken;
 }
 
+// A CHILD HAS GONE: wake a parent parked in waitpid, and tell it.
+//
+// **ONE HELPER BECAUSE THERE ARE TWO DEATHS.** A process can leave
+// through scheduler_on_exit() (it exited, or a signal terminated it
+// while it was the running process) or through scheduler_kill()
+// (somebody else ended it) -- and this file has already paid once for
+// treating those as one path and once for treating them as two: the
+// memory-freeing that only lived in the exit path leaked every kill for
+// months. So the notification lives in exactly one function and both
+// deaths call it, which is the only arrangement where adding a third
+// kind of death cannot silently skip it. Linux funnels the same way,
+// through exit_notify() -> do_notify_parent().
+//
+// THE WAKE AND THE SIGNAL ARE DIFFERENT MECHANISMS FOR DIFFERENT
+// WAITERS, and both are needed. The wake releases a parent blocked in
+// SYS_WAITPID on this specific child's channel -- that is the
+// synchronous half, and it is what every waiter in this tree has used
+// since blocking landed. SIGCHLD is the asynchronous half: it reaches a
+// parent that is NOT in waitpid at all, which is the case a shell
+// sitting at an idle prompt is in.
+//
+// **SIGCHLD COSTS NOTHING FOR A PARENT THAT NEVER ASKED FOR IT.**
+// signal_send() drops a default-ignored signal with no handler
+// installed before it reaches the pending set (signal.c), so every
+// existing program -- init, the desktop, every GUI client -- pays one
+// call and one compare per child death and is otherwise untouched. That
+// is exactly why Unix made SIGCHLD's default "ignore": it is what lets
+// the kernel send one on every exit without every program having to
+// learn about it first.
+//
+// NOT SENT FOR A STOP OR A CONTINUE, deliberately. POSIX sends SIGCHLD
+// for those too (absent SA_NOCLDSTOP), and toy-os does not: a stop is
+// already reported to a waiter that asked, through SYS_WUNTRACED's
+// SIGNAL_STOP_BASE (abi/signal_abi.h), which is the only consumer there
+// is. Adding a second, asynchronous route to the same news would mean
+// raising a pending bit from the keyboard IRQ that delivers Ctrl-Z, for
+// a fact nothing reads. Revisit if something ever needs to hear about a
+// suspension without asking.
+static void notify_parent(int ppid) {
+    scheduler_wake(scheduler_wait_chan_pid(ppid), SYS_RETRY);
+    signal_send(ppid, SIGCHLD);
+}
+
 void scheduler_on_exit(int code) {
     if (current_index < 0) return; // defensive; shouldn't happen
 
@@ -1424,8 +1468,9 @@ void scheduler_on_exit(int code) {
     // ONLY that parent. This used to wake every child-waiter in the
     // system, each to re-check its own children and park again; the
     // channel is the parent's slot, so an exit reaches exactly the
-    // process that might care.
-    scheduler_wake(scheduler_wait_chan_pid(procs[current_index].ppid), SYS_RETRY);
+    // process that might care. The SIGCHLD beside it is for a parent
+    // that is not waiting at all -- see notify_parent().
+    notify_parent(procs[current_index].ppid);
 
     // The write end that turns a parent's blocking read into EOF is
     // closed by fd_release_all() now, along with every other
@@ -1950,7 +1995,7 @@ int scheduler_kill(int pid, int exit_code) {
     // off the screen now rather than at reap, or a dead process leaves a
     // window drawing stale pixels and answering no input.
     win_server_client_gone(pid);
-    scheduler_wake(scheduler_wait_chan_pid(procs[slot].ppid), SYS_RETRY);
+    notify_parent(procs[slot].ppid);
 
     // The victim's memory goes NOW, not at reap. A zombie exists to
     // hold an exit code for whoever waits on it; holding an entire

@@ -619,7 +619,7 @@ manual steps to be worth automating:
   they do at the end of it, so the tools differ only in what they
   assert. Boots the `text` target twice, for the same reason.
 
-  Four checks carry it. **The job survives AND stops** -- surviving is
+  Five checks carry it. **The job survives AND stops** -- surviving is
   the whole difference from Ctrl-C, but a "suspended" process that keeps
   running is what a missing check in the scheduler's picker looks like,
   and no process list can see it; the CPU column can, because nothing
@@ -631,7 +631,16 @@ manual steps to be worth automating:
   hung job rather than a shell bug. And **a background reader is
   stopped**, asserted twice over -- `cat &` ends up `stopped`, and the
   shell still runs the command typed after it, which is the half a
-  process list cannot show.
+  process list cannot show. And **a finished background job is reaped
+  with NO KEY PRESSED** -- the shell reports and reaps at a prompt, and
+  until `SIGCHLD` reached a shell the only thing that produced a prompt
+  was a keystroke, so a `&` job that finished while nobody was typing
+  sat as a zombie until the next Enter. Asserted by PID rather than
+  against an empty table, because the sections before it deliberately
+  leave jobs behind -- including a STOPPED `cat`, which cannot be reaped
+  at all until something continues it. Its own control is built in: the
+  job has to be seen RUNNING first, or "no zombie" is also what a job
+  that never started looks like.
 
   It also counts **zombies**, which nothing else here does: a `fg` that
   waits only for the stage whose status it reports leaves a resumed
@@ -643,7 +652,7 @@ manual steps to be worth automating:
   own sink, which goes to the physical screen, and reading it back
   through the kernel's `cat` is an independent path to the same bytes.
 
-  **Three positive controls, each reddening a different set.** Deleting
+  **Four positive controls, each reddening a different set.** Deleting
   the SUSP branch in `tty_ldisc_input()` reddens the stopped and
   pipeline checks while "the job is alive" stays GREEN -- correct, and
   why that check is not the interesting one. Removing `job_foreground()`
@@ -651,7 +660,11 @@ manual steps to be worth automating:
   `tty_check_background_read()` serve everybody reddens the SIGTTIN
   pair, with `cat` sitting in `block(key)` and the next typed command
   never reaching the shell at all -- which is the keystroke theft, shown
-  rather than argued.
+  rather than argued. And taking the `SIGCHLD` handler out of
+  `/bin/tosh` reddens the no-keystroke reap and, downstream of the same
+  cause, the zombie count -- while all twenty-eight other checks stay
+  green, which is what says the new one is measuring something none of
+  them could.
 - **`console_shell_test.py`** -- a `text` boot reaches a RING-3 shell
   prompt and the kernel shell is not involved (`docs/init-design.md`'s
   stage 4). Eleven checks: init is what started `/bin/tosh`, an idle

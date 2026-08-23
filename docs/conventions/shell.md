@@ -420,7 +420,7 @@ test of whether the layer is real, and it is why `Ctrl-C` in a Terminal
 window is the same code as `Ctrl-C` on the physical keyboard rather than
 a second answer to the same question.
 
-Five things that bite:
+Seven things that bite:
 
 - **INTR IS NOT SPECIAL IN THE KEYBOARD DRIVER ANY MORE.** `keyboard.c`
   used to recognise `0x03` and call `tty_intr()`, with a comment saying
@@ -485,7 +485,7 @@ therefore in `userland/lib/`, in its own file rather than another
 section of `tosh.c` -- **the split is by LIFETIME**, since a job outlives
 the command line that made it and everything in `tosh.c` serves one.
 
-Five things that bite:
+Eight things that bite:
 
 - **`jobs` AND `fg` HAVE TO BE BUILTINS, and that is the test this
   file's own shadowing rule sets.** `cd` is a builtin because it changes
@@ -537,3 +537,35 @@ Five things that bite:
   as an exit is wrong on that path -- which is why `sys_waitpid_untraced()`
   is a separate entry point rather than a flag on `sys_waitpid()`, and
   why `run_stripped()` suppresses its `[exit N]` line for one.
+- **`[1]+ Done` IS PRINTED AT A PROMPT, AND `SIGCHLD` IS WHAT MAKES A
+  PROMPT HAPPEN WITH NOBODY TYPING.** `tosh_reap_jobs()` runs from
+  `fresh_prompt()` and nowhere else, because a report landing mid-command
+  or halfway through a typed line is worse than a late one -- bash makes
+  the same call. What that leaves is the idle case: until `SIGCHLD`
+  existed, the only thing that produced a prompt was a KEYSTROKE, so a
+  background job finishing while nobody was typing sat unreported and
+  unreaped until the next Enter. `/bin/tosh` installs a `SIGCHLD`
+  handler **without `SA_RESTART`**, so its blocking `sys_read(0, ...)`
+  fails with `EINTR`; the loop erases the line being typed, reaps, and
+  repaints it. Four things to know:
+  - **THE HANDLER SETS A FLAG AND DOES NOTHING ELSE.** It runs between
+    two arbitrary instructions, so it may not print, may not walk the
+    job table, and may not allocate. One `volatile int` is the whole
+    async-signal-safe repertoire, and it is what bash's does too.
+  - **NO `SA_RESTART` IS THE ENTIRE POINT, so `sys_signal()` is the
+    wrong call to install it with** -- that wrapper sets the flag for
+    every handler, the right default for code that does not want an
+    `EINTR` loop. Here the interruption IS the message.
+  - **THE CALL THAT MUST NOT BE INTERRUPTED IS FIXED IN LIBSYS, NOT IN
+    THE SHELL.** `sys_waitpid()`/`sys_waitpid_untraced()` retry on
+    `EINTR`, because a wait for a named child means the same thing
+    whether or not a signal arrived and EVERY caller wants that. A shell
+    waiting on its foreground job is precisely the process a `SIGCHLD`
+    is aimed at.
+  - **THE FLAG IS TESTED BEFORE THE READ AS WELL AS AFTER IT.** A job
+    that finishes between one read returning and the next starting would
+    otherwise be reported at the next keystroke -- the exact case this
+    was built for. On Unix that test-then-block is the race `pselect()`
+    exists to close; it is not one here, because a signal arriving in
+    the window is delivered at SYSCALL ENTRY and comes straight back as
+    `EINTR`.

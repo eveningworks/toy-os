@@ -669,6 +669,51 @@ and `syscall_process_kill_cleanup()`, which can only ask the second
 question, refused the teardown and logged it. Ask the first, then move
 CR3 to the kernel's before killing.
 
+## A CHILD'S DEATH RAISES SIGCHLD, AND THE NOTIFICATION HAS ONE HOME.
+
+`notify_parent()` in `kernel/proc/scheduler.c`. Every death goes through
+it, and it does two things that look alike and are not: it WAKES a
+parent parked in `SYS_WAITPID` on that child's channel, and it SENDS
+`SIGCHLD` to the parent whether or not one is parked.
+
+**ONE HELPER BECAUSE THERE ARE TWO DEATHS.** A process leaves through
+`scheduler_on_exit()` when it goes under its own power and through
+`scheduler_kill()` when somebody else ends it -- and this file has
+already paid for treating those as one path: the memory-freeing that
+lived only in the exit path leaked every kill for months. So the
+notification lives in exactly one function that both call, which is the
+only arrangement where a third kind of death cannot silently skip it.
+Linux funnels the same way, through `exit_notify()` ->
+`do_notify_parent()`.
+
+**IT COSTS NOTHING FOR A PARENT THAT NEVER ASKED.** `signal_send()`
+drops a default-ignored signal with no handler installed before it
+reaches the pending set, so init, the desktop and every GUI client pay
+one call and one compare per child death and are otherwise untouched.
+That is exactly why Unix made `SIGCHLD`'s default "ignore": it is what
+lets the kernel send one on every exit without every program having to
+learn about it first.
+
+**THE TEST IS "IS THERE A HANDLER", NOT "IS IT IGNORED", and the
+inverse sat in `signal_send()` unexercised until something sent one.**
+The branch read `!scheduler_signal_ignored()`, which drops the signal
+for a process that installed a HANDLER and lets one through for a
+process that set `SIG_IGN`. `SIGCHLD` is the only signal that can reach
+that branch -- stop and continue return above it, everything else
+terminates -- and nothing sent a `SIGCHLD`, so the inversion was
+invisible. **A branch only one caller can reach, with no caller, is
+untested code that reads as tested**; the first check that asked a
+handler to run found it in one run.
+
+**EXIT ONLY -- NOT STOP, NOT CONTINUE**, which is a deliberate
+difference from POSIX (which sends `SIGCHLD` for those too, absent
+`SA_NOCLDSTOP`). A stop is already reported to a waiter that asked for
+it, through `SYS_WUNTRACED`'s `SIGNAL_STOP_BASE`, and that waiter is the
+only consumer there is. A second, asynchronous route to the same news
+would mean raising a pending bit from the keyboard IRQ that delivers
+`Ctrl-Z`, for a fact nothing reads. Revisit if something ever needs to
+hear about a suspension without asking.
+
 ## A HANDLER IS RING-3 CODE, AND THE KERNEL BORROWS ITS STACK TO CALL IT.
 
 `abi/signal_abi.h` for `struct sigaction` and the frame,

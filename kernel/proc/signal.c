@@ -100,11 +100,28 @@ int signal_send(int pid, int sig) {
     }
 
     // A signal whose default action is to be ignored, and which the
-    // process has not asked to hear about, does nothing at all -- there
-    // is no handler for it to run. Reported as delivered, because it
-    // was: the action was "nothing".
-    if (!default_terminates(sig) && !scheduler_signal_ignored(pid, sig))
-        return scheduler_pid_alive(pid);
+    // process has not installed a handler for, does nothing at all --
+    // there is no handler for it to run and no default to fall back on.
+    // Reported as delivered, because it was: the action was "nothing".
+    //
+    // **THE TEST IS "IS THERE A HANDLER", NOT "IS IT IGNORED", and the
+    // difference was invisible until something sent one of these.** This
+    // asked `!scheduler_signal_ignored()`, which is the exact inverse:
+    // it dropped the signal for a process that had installed a HANDLER
+    // and let one through for a process that had explicitly set SIG_IGN
+    // (where scheduler_signal_raise() then dropped it anyway, so the
+    // second half was merely wasted work). SIGCHLD is the only signal
+    // that can reach this branch -- stop and continue return above, and
+    // everything else terminates -- and nothing sent a SIGCHLD until the
+    // scheduler started doing it on every child death, so the inversion
+    // sat here unexercised. Found by the first check that asked a
+    // handler to run.
+    if (!default_terminates(sig)) {
+        struct sigaction act;
+        if (!scheduler_signal_action(pid, sig, &act) ||
+            !SIG_IS_HANDLER(act.handler))
+            return scheduler_pid_alive(pid);
+    }
 
     return scheduler_signal_raise(pid, sig);
 }
