@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include "ui/ugfx.h"
 #include "ui/uui.h"
+#include "ui/uui_fileview.h"
 #include "ui/uapp.h"
 #include "ui/ulog.h"
 #include "ui/utheme.h"
@@ -59,14 +60,16 @@ enum {
 };
 
 static char g_dir[PATH_MAX_LEN] = DEFAULT_DIR;
-static char g_names[MAX_FILES][PATH_MAX_LEN];
-static const char *g_name_ptrs[MAX_FILES];
-static int g_count;
+
+// The sidebar's listing storage. uui_fileview does not own it -- see
+// ui/uui_fileview.h -- and MAX_FILES entries is 5 KB, which is why it is
+// a file-scope array and not a local (the ring-3 frame budget is 2 KiB).
+static struct sys_dirent g_entries[MAX_FILES];
 
 static struct uimg g_img;              // the decoded picture, owned here
 static int g_have_img;
 static struct uui_image g_view;
-static struct uui_listbox g_list;
+static struct uui_fileview g_list;
 static struct uui_menubar g_menu;
 static struct uui_statusbar g_status;
 
@@ -105,7 +108,7 @@ static const struct uui_menu_item menu_items[] = {
 };
 
 static struct uui_item g_widgets[] = {
-    { &uui_listbox_ops, &g_list,  0, 0, ID_LIST },
+    { &uui_fileview_ops, &g_list, 0, 0, ID_LIST },
     { &uui_image_ops,   &g_view,  0, 0, ID_IMAGE },
 };
 
@@ -123,81 +126,57 @@ static int statusbar_h(void) {
     return h;
 }
 
-// Lists `g_dir`, keeping only the files a codec claims. THE PROBE
-// DECIDES, not the extension: uimg_probe() reads the magic bytes, so a
+// The sidebar's filter: keep only the files a codec claims. THE PROBE
+// DECIDES, not the extension -- uimg_probe() reads the magic bytes, so a
 // JPEG saved as .dat is listed and a text file called photo.jpg is not.
-// Every real image library sniffs for the same reason -- an extension is
-// a hint typed by a person.
-// Name order, ascending -- the same rule dirsort's DIRSORT_NAME applies,
-// so this listing and `/bin/ls` agree about what row 1 is.
+// Every real image library sniffs for the same reason: an extension is a
+// hint typed by a person.
 //
-// qsort over an array of fixed-width names, which is the idiom
-// <stdlib.h> here documents: the element IS the string, so strcmp can be
-// the comparator directly. (Not stable, and it does not need to be --
-// two files cannot share a name.)
-static int by_name(const void *a, const void *b) {
-    return strcmp((const char *)a, (const char *)b);
-}
-
-static void sort_names(void) {
-    qsort(g_names, (size_t)g_count, sizeof g_names[0], by_name);
-    for (int i = 0; i < g_count; i++) g_name_ptrs[i] = g_names[i];
-}
-
-static void reload_listing(void) {
-    g_count = 0;
-
-    // opendir/readdir and fopen/fread rather than sys_listdir/sys_open:
-    // tolibc is deliberately COMPLETE (docs/libc-design.md), so an
-    // ordinary program should read like an ordinary C program. What
-    // stays a raw syscall is nothing here.
-    DIR *d = opendir(g_dir);
-    if (!d) {
-        uui_listbox_set_items(&g_list, g_name_ptrs, 0);
-        ulogf("imgview: cannot list %s\n", g_dir);
-        return;
-    }
-    struct dirent *e;
-    while ((e = readdir(d)) != NULL && g_count < MAX_FILES) {
-        char path[PATH_MAX_LEN];
-        if (!k_path_join(g_dir, e->d_name, path, sizeof path)) continue;
-
-        // THE PROBE DECIDES WHAT A FILE IS, not the extension:
-        // uimg_probe() reads the magic bytes, so a JPEG saved as .dat is
-        // listed and a text file called photo.jpg is not. Every real
-        // image library sniffs for the same reason -- an extension is a
-        // hint typed by a person. Sixteen bytes is more than any probe
-        // needs and one read either way.
-        uint8_t head[16];
-        FILE *f = fopen(path, "rb");
-        if (!f) continue;
-        size_t got = fread(head, 1, sizeof head, f);
-        fclose(f);
-        if (got < 4 || !uimg_probe(head, got)) continue;
-
-        strlcpy(g_names[g_count], e->d_name, sizeof g_names[0]);
-        g_name_ptrs[g_count] = g_names[g_count];
-        g_count++;
-    }
-    closedir(d);
-
-    // SORTED HERE, not by readdir: SYS_LISTDIR returns whatever order
-    // the filesystem walks, and dirsort is the one ordering /bin/ls and
-    // every app's file list share (lib/dirsort.h says why two of them
-    // drifting is a bug nobody looks for). It sorts dirents, so this
-    // sorts the names it kept -- same comparison, applied to the
-    // filtered list.
-    sort_names();
-    uui_listbox_set_items(&g_list, g_name_ptrs, g_count);
-    ulogf("imgview: listing %s -- %d image(s)\n", g_dir, g_count);
-}
-
-static void show(int index) {
-    if (index < 0 || index >= g_count) return;
-    g_list.selected = index;
+// A CALLBACK IS WHY THE LISTING COULD BECOME A SHARED WIDGET AT ALL. A
+// uui_fileview that filtered by extension would have taken this away;
+// keeping the policy here is what let the mechanism move out.
+//
+// Directories are rejected too, and the view is pinned to one directory
+// (set_navigable(0)) to match: this window IS the browser for the
+// directory it was handed (see the file header), so a folder row would
+// be a control that leads out of the app's own model.
+static int keep_images(void *ctx, const char *dir, const struct sys_dirent *e) {
+    (void)ctx;
+    if (e->is_dir) return 0;
 
     char path[PATH_MAX_LEN];
-    if (!k_path_join(g_dir, g_names[index], path, sizeof path)) return;
+    if (!k_path_join(dir, e->name, path, sizeof path)) return 0;
+
+    // Sixteen bytes is more than any probe needs and one read either way.
+    uint8_t head[16];
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    size_t got = fread(head, 1, sizeof head, f);
+    fclose(f);
+    return got >= 4 && uimg_probe(head, got);
+}
+
+// Ordering is the WIDGET's now, through lib/dirsort.h -- the same
+// comparison /bin/ls uses, which is the property that made this app's
+// hand-rolled qsort worth deleting rather than keeping (two orderings
+// that must agree is a bug nobody looks for).
+static void reload_listing(void) {
+    uui_fileview_reload(&g_list);
+    ulogf("imgview: listing %s -- %d image(s)\n", g_dir, uui_fileview_count(&g_list));
+}
+
+// The selected file's name, or NULL when nothing is selected.
+static const char *selected_name(void) {
+    return uui_fileview_selected_name(&g_list);
+}
+
+// Decodes and shows whatever the sidebar has selected.
+static void show_selected(void) {
+    const char *name = selected_name();
+    if (!name) return;
+
+    char path[PATH_MAX_LEN];
+    if (!uui_fileview_selected_path(&g_list, path, sizeof path)) return;
 
     struct uimg_info info;
     int rc = uimg_load_info(path, &info);
@@ -219,7 +198,7 @@ static void show(int index) {
             snprintf(g_stat_size, sizeof g_stat_size, "%dx%d %s", info.w, info.h,
                      info.detail);
             snprintf(g_stat_note, sizeof g_stat_note, "decoded in %llu ms", ms);
-            ulogf("imgview: shown %s %dx%d in %llu ms\n", g_names[index],
+            ulogf("imgview: shown %s %dx%d in %llu ms\n", name,
                   info.w, info.h, ms);
         }
     }
@@ -233,9 +212,9 @@ static void show(int index) {
         }
         strlcpy(g_stat_size, "not shown", sizeof g_stat_size);
         strlcpy(g_stat_note, uimg_last_error(), sizeof g_stat_note);
-        ulogf("imgview: refused %s -- %s\n", g_names[index], uimg_last_error());
+        ulogf("imgview: refused %s -- %s\n", name, uimg_last_error());
     }
-    strlcpy(g_stat_name, g_names[index], sizeof g_stat_name);
+    strlcpy(g_stat_name, name, sizeof g_stat_name);
 }
 
 // "Set as wallpaper" -- through the SETTINGS REGISTRY, not by writing
@@ -276,7 +255,8 @@ static void set_wallpaper(struct uapp *a, const char *mode) {
         uapp_redraw(a);
         return;
     }
-    if (g_list.selected < 0 || g_list.selected >= g_count) return;
+    const char *name = selected_name();
+    if (!name) return;
 
     if (strcmp(g_dir, WALLPAPER_DIR) != 0) {
         strlcpy(g_stat_note, "only files in /usr/share/wallpapers", sizeof g_stat_note);
@@ -287,7 +267,7 @@ static void set_wallpaper(struct uapp *a, const char *mode) {
 
     // The setting's value is the filename without its extension.
     char stem[PATH_MAX_LEN];
-    strlcpy(stem, g_names[g_list.selected], sizeof stem);
+    strlcpy(stem, name, sizeof stem);
     char *dot = strrchr(stem, '.');
     if (dot) *dot = '\0';
 
@@ -310,10 +290,7 @@ static void layout_all(int cw, int ch) {
     uui_menubar_set_bounds(&g_menu, 0, 0, cw, ch);
     uui_statusbar_set_geometry(&g_status, 0, ch - sb, cw, sb);
 
-    g_list.x = 0;
-    g_list.y = mb;
-    g_list.w = side;
-    g_list.h = ch - mb - sb;
+    uui_fileview_set_geometry(&g_list, 0, mb, side, ch - mb - sb);
 
     g_view.x = side;
     g_view.y = mb;
@@ -342,7 +319,8 @@ static void log_layout(void) {
     // sampling the widget would be sampling the bars.
     if (uui_image_drawn_rect(&g_view, &x, &y, &w, &h))
         ulogf("imgview: layout picture %d %d %d %d\n", x, y, w, h);
-    ulogf("imgview: layout list %d %d %d %d\n", g_list.x, g_list.y, g_list.w, g_list.h);
+    uui_fileview_ops.bounds(&g_list, &x, &y, &w, &h);
+    ulogf("imgview: layout list %d %d %d %d\n", x, y, w, h);
     ulogf("imgview: layout menubar %d %d %d %d\n", g_menu.x, g_menu.y, g_menu.w, g_menu.h);
     for (int i = 0; i < (int)(sizeof menu_items / sizeof menu_items[0]); i++) {
         if (!uui_menubar_title_rect(&g_menu, i, &x, &y, &w, &h)) continue;
@@ -354,7 +332,7 @@ static void log_layout(void) {
         for (int i = 0; uui_menubar_item_rect(&g_menu, l, i, &x, &y, &w, &h); i++)
             ulogf("imgview: layout item %d %d %d %d %d %d\n", l, i, x, y, w, h);
     }
-    ulogf("imgview: layout selected %d\n", g_list.selected);
+    ulogf("imgview: layout selected %d\n", g_list.table.selected);
 }
 
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
@@ -374,7 +352,7 @@ static void do_command(struct uapp *a, int code) {
     switch (code) {
     case CMD_RELOAD:
         reload_listing();
-        show(g_list.selected < 0 ? 0 : g_list.selected);
+        show_selected();
         break;
     case CMD_EXIT:    uapp_quit(a, 0); return;
     case CMD_FIT:     uui_image_set_fit(&g_view, UIMG_FIT_CONTAIN); break;
@@ -394,7 +372,7 @@ static void on_widget(struct uapp *a, int id, int reason) {
         // Commit on RELEASE, as every control here does
         // (docs/gui-guidelines.md): a press that lands on the wrong row
         // and is dragged off must not have decoded a file.
-        show(g_list.selected);
+        show_selected();
         uapp_redraw(a);
     }
 }
@@ -424,19 +402,15 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
         else uapp_redraw(a);
         return;
     }
-    int next = g_list.selected;
-    if (key == KEY_ARROW_DOWN || key == KEY_ARROW_RIGHT) next++;
-    else if (key == KEY_ARROW_UP || key == KEY_ARROW_LEFT) next--;
-    else if (key == KEY_HOME) next = 0;
-    else if (key == KEY_END) next = g_count - 1;
-    else if (key == 0x9B) { do_command(a, CMD_RELOAD); return; }  // F3 -- there is no F5 code
-    else return;
-
-    if (next < 0) next = 0;
-    if (next > g_count - 1) next = g_count - 1;
-    if (next != g_list.selected) {
-        show(next);
-        uui_listbox_key(&g_list, key);   // keeps the scroll following the selection
+    // Motion is the WIDGET's -- arrows, Home/End and PageUp/PageDown all
+    // arrive through one call, and the scroll follows the selection.
+    // What stays here is what happens AFTER a move: decoding the newly
+    // selected picture.
+    if (key == 0x9B) { do_command(a, CMD_RELOAD); return; }  // F3 -- there is no F5 code
+    if (key == KEY_ARROW_RIGHT) key = KEY_ARROW_DOWN;        // a filmstrip reads both ways
+    else if (key == KEY_ARROW_LEFT) key = KEY_ARROW_UP;
+    if (uui_fileview_key(&g_list, key)) {
+        show_selected();
         uapp_redraw(a);
     }
 }
@@ -444,7 +418,7 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
 static void on_open(struct uapp *a) {
     layout_all(uapp_width(a), uapp_height(a));
     reload_listing();
-    if (g_count > 0) show(0);
+    show_selected();
     (void)a;
 }
 
@@ -482,7 +456,11 @@ int main(int argc, char **argv) {
     g_status.panes[2].chars = 24;
     g_status.count = 3;
 
-    uui_listbox_init(&g_list, 0, 0, 100, 100, g_name_ptrs, 0);
+    uui_fileview_init(&g_list, 0, 0, 100, 100, g_entries, MAX_FILES);
+    uui_fileview_set_mode(&g_list, UUI_FILEVIEW_LIST);
+    uui_fileview_set_navigable(&g_list, 0);
+    uui_fileview_set_filter(&g_list, keep_images, NULL);
+    uui_fileview_set_dir(&g_list, g_dir);
     uui_image_init(&g_view, NULL, UIMG_FIT_CONTAIN);
     // Without these a 4000px photograph would ask for a 4000px window
     // and uui_layout would hand it one (it overflows rather than

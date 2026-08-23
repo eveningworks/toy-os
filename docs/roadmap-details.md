@@ -1066,21 +1066,25 @@ terminal font accepts.
 
 ### Desktop productivity apps
 
-File manager app -- needs a proper filesystem API surface first
-(list/stat/create/delete as real syscalls or a library layer, not the
-fixed ad hoc calls the shell uses today), then the app built on top of
-that. Its icon view can reuse `apps/ui/ui_icon_grid.h` (built for exactly
-this, see Desktop visual polish's entry above) for cell geometry and drag-to-
-reposition instead of re-deriving that math.
+~~File manager app -- needs a proper filesystem API surface first~~ --
+done 2026-08-23, and **the precondition this entry named had already been
+met without anyone updating it**: `SYS_LISTDIR`, `SYS_FSTAT`,
+`SYS_MKDIR`, `SYS_RENAME`, `SYS_UNLINK`, `SYS_CHDIR` and `SYS_LSEEK` all
+shipped in the meantime, so the "fixed ad hoc calls" this warned about
+were already gone. `docs/filemanager-design.md` is the full writeup: it
+is a two-pane COMMANDER rather than an Explorer, because copy and move
+between two visible directories need neither the clipboard nor
+drag-and-drop, and this system has neither.
 
-That filesystem API surface also needs seek: today's ring-3 file I/O
-(`SYS_OPEN`/`SYS_READ`/`SYS_WRITE`/`SYS_CLOSE`, `kernel/include/abi/syscall_abi.h`)
-is open-then-sequential-read-only -- no `SYS_SEEK`/lseek-equivalent
-exists anywhere, and a file fd's `SYS_WRITE` always appends rather than
-writing at a caller-chosen offset. Random access matters for more than
-just a file manager -- e.g. reading a WAD file's lump directory (see the
-Backlog's Doom entry) needs seeking to arbitrary offsets, not just
-reading a file start-to-finish.
+What is left of this entry: the icon view, which is what would reuse
+`api/icon_grid.h` and `api/rubberband.h` for cell geometry and
+drag-to-reposition, and would give the rubber-band module the second
+caller it was shaped for. Multi-selection landed WITHOUT it (a bitmap in
+`uui_fileview`), so an icon view now inherits a selection model rather
+than introducing one.
+
+~~That filesystem API surface also needs seek~~ -- `SYS_LSEEK` exists,
+and Doom (which needed it to read a WAD's lump directory) runs on it.
 
 Desktop calendar: a small popup panel above the taskbar, opened by
 clicking the clock, showing a month grid (view-only, no events yet) --

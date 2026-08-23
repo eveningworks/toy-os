@@ -4145,3 +4145,106 @@ and requiring the client to still report it held several frames later is
 what nothing press-only can pass. Disabling `on_key_up` in `uapp.c`
 turns 5 of 10 checks red, and the last one reports "still holds 5 keys"
 -- a stuck key, seen from inside the client.
+
+## The file manager is a two-pane commander, not an Explorer
+
+The obvious build is an Explorer clone: a places sidebar, one content
+pane, icons, copy/paste. Measured against this tree that plan is blocked
+on two things toy-os does not have, and each of them is a milestone of
+its own: **there is no clipboard** and **there is no drag-and-drop**
+(both live in `docs/roadmap.md`'s "GUI clipboard + drag-and-drop",
+unstarted). Copy/paste and drag-a-file-onto-a-window ARE Explorer's two
+primary verbs, so building that shape first means either shipping a file
+manager whose main actions are greyed out, or pulling an unrelated
+milestone forward to serve one app.
+
+Norton Commander (1986) answered this differently, and Midnight
+Commander, Total Commander, Krusader and Far have kept the answer for
+forty years: put TWO directories on screen and copying needs no transfer
+mechanism at all. The source is the active pane, the destination is the
+other one, F5 is copy. Nothing is carried, so nothing needs a carrier.
+
+So the shape was chosen for what it does NOT require. It also inverts
+the dependency in a useful way: instead of the file manager waiting on
+the clipboard milestone, the clipboard milestone gets its most natural
+first consumer (drag a file from a pane into Notepad) once it exists.
+
+Two consequences worth stating. The keymap is the commanders'
+(F5/F6/F7/F8, Tab, Enter, Backspace, Insert), which is free familiarity
+for anyone who has used one and, incidentally, makes the app drivable
+from a test with no pixel arithmetic at all. And **each pane carries its
+own path strip**: one status line cannot say where two panes are, and
+"which pane does F5 copy FROM" has to be answerable by looking rather
+than by pressing something and finding out.
+
+## File operations are child processes, not loops inside the window
+
+F5 spawns `/bin/cp`, F8 spawns `/bin/rm`, and `on_tick()` reaps them
+with `sys_waitpid_nohang()`. The alternative -- a copy loop inside the
+GUI app -- is what GNOME Files and Explorer actually do, because they
+have threads and an async I/O story. This system has neither, so an
+in-process copy is a frozen window for its duration.
+
+Four things fall out of spawning instead:
+
+- **One implementation of what copying means.** A `/bin/cp` for the
+  shell plus an in-app copy loop is the "make every fix twice" shape
+  this repo has already deleted from the WM and from the `ls` wrapper
+  builtin.
+- **It is testable as text.** `cp -r` can be checked at a prompt with no
+  compositor in the loop, and the GUI test asserts through `ls` rather
+  than through the app's own view.
+- **A failed or huge copy cannot take the window down with it.**
+- **The queue is explicit.** Marked files are N operations, run one
+  child at a time, so the status line can say "Copy 3/7" and name the
+  one that failed.
+
+The cost, stated rather than discovered later: **there is no byte-level
+progress bar**, because a child reports an exit code and not a
+percentage. A progress protocol is a later stage and needs something to
+carry it.
+
+## A mark names a ROW, so every reload clears the marks
+
+`uui_fileview`'s marked set is a bitmap indexed by row. Rows are re-read
+from the filesystem on every reload, so a mark that survived one would
+point at whatever landed in that slot -- which is how a delete ends up
+aimed at the wrong file. Clearing is therefore not a limitation but the
+only correct behaviour for an index into data that was just replaced.
+
+The consequence is a rule for callers: **snapshot the paths before
+acting on marks.** The File Manager does, and it has to -- it reloads
+whenever `SYS_FS_GENERATION` moves, and a copy in progress moves it, so
+a queue that read the marks as it went would lose them halfway through
+its own work.
+
+The bitmap is sized in ROWS rather than entries: the listing plus the
+synthetic `..`, one more than `SYS_LISTDIR_MAX`. That off-by-one is the
+kind that only fires on a full directory.
+
+## `Handles=` on a `.desktop` entry, and no MIME database
+
+Double-clicking a file has to launch something, and the question is
+where the mapping lives. freedesktop's answer is `mimeapps.list` over a
+MIME database; Windows keys extensions off `HKCR`. What both have in
+common, and what is worth copying, is that **the mapping is not inside
+the file manager**.
+
+So a `.desktop` entry declares `Handles=.txt .md .conf`, and the File
+Manager scans the entries the desktop already reads. The app that opens
+a file type is the one that says so, in the file that already declares
+its name, icon and command.
+
+The MIME database is left out deliberately. It would be a second
+registry to seed, keep true and document, and this OS has one image
+decoder that already identifies formats by sniffing magic bytes and one
+text editor. The cost is honest and stated in the format's README: an
+extension is a hint typed by a person, so a JPEG named `.dat` opens
+nothing.
+
+Two details that are decisions rather than accidents. Matching is
+whole-token and case-insensitive against the extension INCLUDING its dot,
+so `.md` cannot claim `.mdx` -- a substring search would. And **a
+handler is spawned and never waited for**: it is a launch, not an
+operation on files, and waiting for a text editor to exit would freeze
+the manager for as long as somebody was editing.

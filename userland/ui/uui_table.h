@@ -67,6 +67,16 @@ typedef void (*uui_table_cell_fn)(void *ctx, int row, int col,
 // indices (the same ones `cell` is called with), never view positions.
 typedef int (*uui_table_cmp_fn)(void *ctx, int row_a, int row_b, int col);
 
+// A row's own background, or 0 for "the ordinary one". Lets an app mark
+// a SET of rows without the table knowing what the mark means -- the
+// same split as `compare`: the widget draws, the app decides. Selection
+// and hover still outrank it, because those say where the pointer and
+// the keyboard are and a mark does not move.
+//
+// The file manager's marked files are the caller; a task manager
+// tinting a stopped process would be the second.
+typedef uint32_t (*uui_table_tint_fn)(void *ctx, int row);
+
 // The permutation is a fixed array because Toykit has no allocator.
 // Past this many rows the table shows the first UUI_TABLE_MAX_ROWS in
 // sorted order and the rest unsorted after them, rather than silently
@@ -102,6 +112,7 @@ struct uui_table {
     // header is inert and no arrow is drawn, so an app opts in purely
     // by supplying a comparator.
     uui_table_cmp_fn compare;
+    uui_table_tint_fn tint;  // NULL = no row ever tinted
     int sort_col;   // UUI_TABLE_UNSORTED, or a column index
     int sort_dir;   // 1 ascending, -1 descending
 
@@ -113,6 +124,14 @@ struct uui_table {
     // indexing stale positions.
     int order[UUI_TABLE_MAX_ROWS];
     int order_rows;
+
+    // A table with NO header: no column titles, no sort arrow, no
+    // clickable header row, and the rows start at the widget's top.
+    // Set by uui_table_set_header(). This is LVS_REPORT vs LVS_LIST on
+    // Win32's list view -- the same widget, and the difference is
+    // columns rather than behaviour. uui_fileview's list mode is the
+    // caller: a narrow sidebar of filenames wants no column titles.
+    int show_header;
 
     int selected;   // row index, or -1
     int hovered;    // OWNED -- driven by uui_table_hover()
@@ -143,6 +162,13 @@ void uui_table_set_rows(struct uui_table *t, int row_count);
 // Turns sorting on: `compare` is called to order rows, and the header
 // becomes clickable. Pass NULL to turn it off again.
 void uui_table_set_compare(struct uui_table *t, uui_table_cmp_fn compare);
+
+// See uui_table_tint_fn. NULL turns it off again.
+void uui_table_set_tint(struct uui_table *t, uui_table_tint_fn tint);
+
+// Shows or hides the header row. On by default; a table with it off
+// still sorts if it has a comparator, it just has nothing to click.
+void uui_table_set_header(struct uui_table *t, int show);
 
 // Sorts by `col` in `dir` (1 ascending, -1 descending), or clears the
 // sort with col = UUI_TABLE_UNSORTED. Rebuilds the order immediately.

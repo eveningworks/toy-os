@@ -978,8 +978,13 @@ static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
     uapp_redraw(a);
 }
 
+// A file named on the command line, opened once the window exists.
+// Empty when there was no argument -- which is every launch until the
+// File Manager started spawning this with a path (a .desktop `Handles=`
+// entry claims .txt and friends, see data/wm/desktop/README.md).
+static char g_arg_path[PATH_MAX_LEN];
+
 static void on_open_cb(struct uapp *a) {
-    (void)a;
     utext_init(&g_text);
     g_path[0] = '\0';
     set_status("F10 for the menu -- Ctrl-O open, Ctrl-S save, Alt+F4 quit");
@@ -995,9 +1000,18 @@ static void on_open_cb(struct uapp *a) {
     g_statusbar.panes[1].text = g_lncol;    g_statusbar.panes[1].chars = 14;
     g_statusbar.panes[2].text = g_modflag;  g_statusbar.panes[2].chars = 4;
     update_indicators();
+
+    // AFTER the widgets are set up, not before: load_file() writes the
+    // status bar and the title, and both have to exist first.
+    if (g_arg_path[0]) {
+        load_file(g_arg_path);
+        set_title(a);
+    }
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    if (argc > 1 && argv[1][0]) scopy(g_arg_path, argv[1], PATH_MAX_LEN);
+
     struct uapp_desc desc = {
         .title      = "untitled",
         .app_id     = "notepad",

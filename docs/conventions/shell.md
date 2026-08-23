@@ -597,3 +597,21 @@ Eight things that bite:
     exists to close; it is not one here, because a signal arriving in
     the window is delivered at SYSCALL ENTRY and comes straight back as
     `EINTR`.
+- **`cp` EXISTS NOW, AND COPYING IS A PROGRAM RATHER THAN A SYSCALL.**
+  `/bin/cp [-r] <source> <dest>`: this OS could rename, delete and
+  create since the fd syscalls landed and could not COPY at all. There
+  is no `SYS_COPY` and there should not be -- a copy is a read loop and
+  a write loop the kernel has no reason to know about. The GUI File
+  Manager SPAWNS this rather than carrying a loop of its own, so there
+  is one implementation of what copying means. Four refusals are
+  deliberate: a directory without `-r`, copying a directory into itself,
+  source and destination being the same file, and a short write (a full
+  disk), which aborts rather than leaving a truncated file that looks
+  copied. **`rm` grew `-r` in the same change**, because `fs_delete()`
+  refuses a non-empty directory and a file manager has to be able to
+  delete a folder. Both walk BREADTH-FIRST OVER AN EXPLICIT QUEUE rather
+  than recursing, and that is forced rather than stylistic: one listing
+  is `SYS_LISTDIR_MAX` x 80 bytes = 20 KB against a 2 KiB ring-3 frame
+  budget. `rm -r` then removes the collected directories in REVERSE,
+  which is deepest-first -- a post-order walk with no recursive
+  function.

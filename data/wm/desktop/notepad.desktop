@@ -3,3 +3,4 @@ Name=Notepad
 Exec=/bin/wm/apps/notepad
 Category=apps
 Icon=notepad
+Handles=.txt .md .conf .log .c .h .cfg

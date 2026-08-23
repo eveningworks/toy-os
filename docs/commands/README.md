@@ -57,6 +57,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`append`](append.md)
 - [`cat`](cat.md)
 - [`cd`](cd.md)
+- [`cp`](cp.md)
 - [`df`](df.md)
 - [`edit`](edit.md)
 - [`imginfo`](imginfo.md)

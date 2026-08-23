@@ -1113,6 +1113,27 @@ manual steps to be worth automating:
   narrowing the first-click safe zone from the 3x3 neighbourhood to the
   clicked cell reddens exactly one, on the right assertion. In
   `gui_regress.py`.
+- **`filemanager_test.py`** -- the File Manager: two panes, marking, and
+  real file operations. **The result of every operation is checked
+  through `ls`, not through the app** -- the manager is the thing under
+  test, so it cannot also be the witness; a version that updated its own
+  list and spawned nothing would pass its own view. Four checks are
+  shaped so a broken version cannot survive them. **Delete is a PAIR**:
+  F8 then Esc must leave the file on disk, and only then does F8-then-
+  Enter remove it -- the first half is what fails on a missing
+  confirmation. **The marked copy requires the UNMARKED file to be
+  absent**, or "it copied everything" would pass too. **Backspace must
+  also select the directory it just left**, which only a correct `up()`
+  produces. And **the active-pane pixel check samples the OTHER pane's
+  header as its control**, so a paint that marked both would fail. It
+  drives the app with `gui key <code>` rather than QMP keystrokes, so
+  nothing here depends on the guest's keyboard layout. Two harness traps
+  it paid for: a batch of log lines can hold SEVERAL frames, so the
+  parser takes only the last (reading each field's last occurrence
+  across the batch mixed one frame's `active` with another's
+  `selected`), and characters typed with `settle=False` outrun the
+  client so a name field commits empty -- which reads exactly like a
+  broken `mkdir`. In `gui_regress.py`.
 - **`imgview_test.py`** -- JPEG decoding all the way to a screen (15
   checks), and the only one of the three decoder checks that can see a
   pixel. Its oracle is the host: `data/wallpapers/aurora.jpg` is

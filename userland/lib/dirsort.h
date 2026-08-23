@@ -29,4 +29,23 @@ enum dirsort_key {
 
 void dirsort(struct sys_dirent *e, int n, enum dirsort_key key, int reverse);
 
+// The comparison dirsort() sorts BY, exposed on its own. <0, 0 or >0
+// for a before/equal/after b, with `name` as the tie-break exactly as
+// above.
+//
+// It exists because ui/uui_fileview.c sorts a VIEW rather than the
+// array -- `uui_table` owns a permutation and asks the app to compare
+// (uui_table.h says why), so it cannot call dirsort() at all. Sharing
+// the comparison rather than reimplementing it is what keeps a file
+// view's order identical to `/bin/ls`'s, which is the property this
+// whole file exists to protect.
+//
+// NOTE THE DIRECTIONS, which are coreutils' and not a table header's:
+// DIRSORT_SIZE puts the LARGEST first and DIRSORT_TIME the NEWEST, the
+// way `ls -S` and `ls -t` do. A column header whose ascending arrow
+// must mean smallest-first negates this rather than adding a third
+// convention -- see uui_fileview.c.
+int dirsort_cmp(const struct sys_dirent *a, const struct sys_dirent *b,
+                 enum dirsort_key key);
+
 #endif // USERLAND_LIB_DIRSORT_H

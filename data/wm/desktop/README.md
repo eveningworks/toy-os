@@ -17,10 +17,33 @@ or the D-Bus activation none of which exist here.
     Name       what the user sees, in the Start menu and under the icon
     Exec       what to launch (see below)
     Category   system | apps | demos -- how the Start menu groups them
-    Icon       a single character, drawn in the icon tile (no image
-               format exists yet; see docs/roadmap.md's Milestone 19)
+    Icon       an icon NAME, resolved to /usr/share/icons/<name>.qoi.
+               A one-character value is still drawn as a letter tile,
+               which is the fallback when no artwork exists
+    Handles    file extensions this app opens (see below)
     NoDisplay  1 to keep it out of the menu and off the desktop
     ShowIn     which surfaces this appears on (see below)
+
+## Handles
+
+    Handles=.txt .md .conf
+
+Which file types this application opens. The File Manager reads these
+when something is activated in a pane, so **the app that opens a file
+type is the one that says so**, in the file that already declares its
+name, icon and command — nothing keeps a table of other applications.
+
+Separated by spaces or commas, matched whole and case-insensitively, and
+matched against the extension INCLUDING its dot (so `.md` does not claim
+`.mdx`). An entry with no `Handles` claims nothing, which is the default
+and right for anything that is not a document viewer.
+
+This is freedesktop.org's `mimeapps.list` idea with the MIME database
+left out, and leaving it out is a decision rather than an omission: a
+MIME registry is a second thing to seed and keep true, while this OS has
+one image decoder that already identifies its formats by sniffing magic
+bytes. The cost is that an extension is a hint typed by a person — a
+JPEG named `.dat` opens nothing here.
 
 ## ShowIn
 

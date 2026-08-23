@@ -1084,3 +1084,77 @@ real scanout hardware does. Do not write a pixel assertion for one.
   PRESS**, the same documented exception a menu gets: a flag is instant
   in every implementation of this game, and it is undone by
   right-clicking again rather than by dragging off.
+- **A DIRECTORY LISTING IS A WIDGET, `uui_fileview`, AND FOUR THINGS
+  SHOULD BE DRAWING ONE.** Before it, three places listed a directory
+  and every one was written from scratch: the WM's file picker
+  (`userland/wm/file_picker.c`), Notepad's Open/Save dialog, and Image
+  Viewer's sidebar -- all doing `sys_listdir()`, `dirsort()`, a
+  synthetic `..` row and descend-on-activate. No real toolkit ships four
+  (Windows has one `SysListView32`, Qt one `QFileSystemModel`, GTK one
+  `GtkFileChooser`). **Image Viewer is converted; the other two are
+  NOT** (`docs/roadmap.md` carries it), so the duplication is smaller
+  and still there. Six things to know:
+  - **It COMPOSES `uui_table`** rather than reimplementing rows,
+    scrolling, the sorting header and keyboard motion. What it adds is
+    what is specific to directories.
+  - **The caller owns the entry storage.** A full listing is
+    `SYS_LISTDIR_MAX` x 80 bytes = 20 KB -- too big for a ring-3 frame
+    (2 KiB) and wrong to bake in, since a sidebar wants 64 entries and a
+    file manager wants 256. `uui_fileview_init()` takes the array.
+  - **Filtering is a CALLBACK, not an extension list**, because Image
+    Viewer decides what an image is by probing MAGIC BYTES -- a `.dat`
+    holding a JPEG is listed and a `.jpg` holding text is not.
+  - **`..` and directories lead under EVERY sort, and the comparator
+    pre-multiplies by the sort direction to do it** -- `uui_table`
+    multiplies by `sort_dir` itself, so the two cancel and the groups
+    hold while the rows inside them reverse.
+  - **A MARK NAMES A ROW, so every reload clears the marks.** They are a
+    bitmap sized in ROWS (the listing plus the synthetic `..`, which is
+    the off-by-one). A caller acting on marks must SNAPSHOT the paths
+    first -- the File Manager does, because a copy in progress moves
+    `SYS_FS_GENERATION` and reloads the panes underneath itself.
+  - **It is usable through the ops table OR directly**, the same
+    arrangement `uui_listbox` and `uui_table` have, because the WM's
+    file picker is a screen-absolute modal the toolkit router never
+    sees.
+- **THE FILE MANAGER IS A TWO-PANE COMMANDER, NOT AN EXPLORER**
+  (`userland/gui/apps/files.c`, `/bin/wm/apps/files`). Explorer's two
+  primary verbs are copy/paste and drag-onto-a-window, and this system
+  has neither a clipboard nor drag-and-drop -- both are their own
+  roadmap milestone. Norton Commander's answer, kept by Midnight
+  Commander, Total Commander and Krusader for forty years, needs
+  neither: with two directories on screen the source is the active pane
+  and the destination is the other one, so nothing is carried and
+  nothing needs a carrier. Five things to know:
+  - **File operations are CHILD PROCESSES.** F5 spawns `/bin/cp`, F8
+    spawns `/bin/rm`, and `on_tick` reaps them with
+    `sys_waitpid_nohang()`. One implementation of copying, testable as
+    text at a prompt, and a failed copy cannot take the window down. The
+    cost, stated rather than discovered: **no byte-level progress**,
+    because a child reports an exit code and not a percentage.
+  - **Marked files run through a QUEUE, one child at a time**, so the
+    status line can say "Copy 3/7" and name the one that failed.
+  - **Each pane carries its OWN path strip**, because one status line
+    cannot say where two panes are, and the active one is drawn in the
+    accent colour -- "which pane does F5 copy FROM" has to be answerable
+    without asking.
+  - **Each pane's directory is remembered in `/etc/files.conf`**, the
+    per-app config convention's second user after `desktop.conf`. An
+    explicit command-line argument WINS and is not saved: it is a
+    statement about that launch.
+  - **Refresh is `SYS_FS_GENERATION` polled in the tick**, the desktop's
+    idiom -- one integer compare, no disk I/O, and a copy finishing in
+    another process appears with nobody pressing anything.
+- **WHAT OPENS A FILE TYPE IS DECLARED BY THE APP THAT OPENS IT:
+  `Handles=` on its `.desktop` entry.** `Handles=.txt .md .conf`, read
+  by the File Manager when something is activated, matched whole and
+  case-insensitively against the extension INCLUDING its dot (so `.md`
+  does not claim `.mdx`). This is freedesktop's `mimeapps.list` shape
+  with the MIME database left out, and leaving it out is the decision:
+  a MIME registry is a second thing to seed and keep true, while this
+  OS's one image decoder already identifies formats by sniffing. The
+  cost is that an extension is a hint typed by a person. **A handler is
+  spawned and NOT waited for** -- it is a launch, not an operation on
+  files. **Notepad takes a path in `argv[1]`** because of this, and
+  titles itself after it, which is also what lets a test tell "opened
+  the file" from "opened a window".

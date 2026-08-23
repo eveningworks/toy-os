@@ -199,6 +199,22 @@ def icon_doom():
     return im
 
 
+def icon_files():
+    # A folder, which is what every file manager on every desktop uses:
+    # a tab along the top of a body, drawn as two rectangles so the fold
+    # reads at 20px as well as at 64. The second, offset folder behind it
+    # is what says MANAGER rather than "a folder" -- Dolphin, Nautilus
+    # and Explorer all carry the same doubling.
+    im, d = tile((240, 190, 70))
+    d.rounded_rectangle([12, 20, 44, 46], radius=3, fill=(200, 150, 40, 255))
+    d.rectangle([16, 16, 30, 22], fill=WHITE)
+    d.rounded_rectangle([18, 22, 52, 50], radius=3, fill=WHITE)
+    d.rectangle([22, 18, 36, 25], fill=WHITE)
+    d.line([24, 32, 46, 32], fill=(190, 160, 90, 255), width=2)
+    d.line([24, 39, 40, 39], fill=(190, 160, 90, 255), width=2)
+    return im
+
+
 def icon_start():
     """The Start button's mark -- NOT an app icon, and deliberately not
     shaped like a UI convention either.
@@ -252,6 +268,7 @@ ICONS = {
     "uidemo": icon_uidemo,
     "mines": icon_mines,
     "doom": icon_doom,
+    "files": icon_files,
 }
 
 # Crash Test deliberately gets NO icon file. It is the one entry that

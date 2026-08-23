@@ -578,14 +578,26 @@ def wait_for_desktop(sock, timeout=8.0):
 def enter_gui(qmp, sock=".vm.serial", timeout=8.0):
     """Enter GUI mode and wait for the desktop to actually be up.
 
-    Types "gui" + Enter at the shell (a no-op if init already started the
-    desktop, which it does under the graphical target -- the common case)
-    and then polls readiness via wait_for_desktop(), rather than sleeping
-    a fixed 2-3s. `sock` must be the SAME serial socket the caller's
-    DebugConsole will use (pass args.sock). Returns wait_for_desktop()'s
-    result; a caller's own settle()/first assertion catches a real
-    failure, so this does not raise on timeout.
+    ASKS FIRST, AND TYPES NOTHING WHEN THE DESKTOP IS ALREADY UP -- which
+    it almost always is, since init starts it under the graphical target.
+    The keystrokes are not free when they are unnecessary: with no window
+    focused they are QUEUED, and the WM delivers them to the first client
+    window that opens. The File Manager caught this by being the first
+    app here to act on a bare Enter -- it received the "i" and the Enter
+    from someone else typing "gui" seconds earlier, treated the Enter as
+    "activate the .. row", and opened one directory above where it had
+    been told to start. Every other tool was unaffected only because its
+    app ignores a stray key.
+
+    Only when the desktop is NOT up does this type "gui" + Enter at the
+    shell, then poll readiness via wait_for_desktop() rather than
+    sleeping a fixed 2-3s. `sock` must be the SAME serial socket the
+    caller's DebugConsole will use (pass args.sock). Returns
+    wait_for_desktop()'s result; a caller's own settle()/first assertion
+    catches a real failure, so this does not raise on timeout.
     """
+    if wait_for_desktop(sock, timeout=1.0):
+        return True
     qmp.send_text("gui")
     qmp.send_key("ret")
     return wait_for_desktop(sock, timeout)

@@ -77,7 +77,13 @@ QEMU, and it does not stop at "hello world from the kernel":
   real wallpaper and an Image Viewer, with no image parser anywhere in
   the kernel. There is a game, too: **Minesweeper**, which is where the
   desktop learned to give a right-click to the application under the
-  cursor instead of keeping it for the window menu.
+  cursor instead of keeping it for the window menu. And there is a
+  **File Manager** — two directory panes side by side, in the Norton
+  Commander tradition rather than Explorer's, because copying between
+  two visible directories needs neither a clipboard nor drag-and-drop
+  and this system has neither yet. Its file operations are spawned
+  `/bin/cp` and `/bin/rm` children, so there is one implementation of
+  what copying means and it works at a shell prompt too.
 - **Its own test suite** — `make test` boots the OS headless, runs
   in-kernel tests including deliberate fault injection, and exits
   non-zero on failure. A separate GUI suite drives the desktop over a

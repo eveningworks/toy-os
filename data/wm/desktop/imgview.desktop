@@ -3,3 +3,4 @@ Name=Image Viewer
 Exec=/bin/wm/apps/imgview
 Category=apps
 Icon=imgview
+Handles=.jpg .jpeg .qoi

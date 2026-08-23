@@ -23,6 +23,7 @@ void uui_table_init(struct uui_table *t, int x, int y, int w, int h,
     t->row_count = 0;
     t->cell = cell;
     t->ctx = ctx;
+    t->show_header = 1;
     t->selected = -1;
     t->hovered = -1;
     t->top = 0;
@@ -32,6 +33,7 @@ void uui_table_init(struct uui_table *t, int x, int y, int w, int h,
     // Sorting off until an app supplies a comparator, so a table that
     // says nothing about sorting behaves exactly as it did before.
     t->compare = 0;
+    t->tint = 0;
     t->sort_col = UUI_TABLE_UNSORTED;
     t->sort_dir = 1;
     t->order_rows = 0;
@@ -52,7 +54,11 @@ int uui_table_row_h(const struct uui_table *t) {
 }
 
 int uui_table_header_h(const struct uui_table *t) {
-    return uui_table_row_h(t);
+    return t->show_header ? uui_table_row_h(t) : 0;
+}
+
+void uui_table_set_header(struct uui_table *t, int show) {
+    t->show_header = show ? 1 : 0;
 }
 
 int uui_table_visible_rows(const struct uui_table *t) {
@@ -139,6 +145,10 @@ int uui_table_view_row(const struct uui_table *t, int source_row) {
 void uui_table_set_compare(struct uui_table *t, uui_table_cmp_fn compare) {
     t->compare = compare;
     order_rebuild(t);
+}
+
+void uui_table_set_tint(struct uui_table *t, uui_table_tint_fn tint) {
+    t->tint = tint;
 }
 
 void uui_table_set_sort(struct uui_table *t, int col, int dir) {
@@ -232,15 +242,11 @@ static void draw_cell(struct ugfx_surface *s, const struct uui_table *t,
     ugfx_draw_string_clipped(s, tx, ty, avail, buf, fg, bg);
 }
 
-void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
-    int rh = uui_table_row_h(t);
-    int hh = uui_table_header_h(t);
-    int vis = uui_table_visible_rows(t);
-    int bar = uui_table_scrollbar_visible(t) ? t->bar_w : 0;
-
-    ugfx_fill_rect(s, t->x, t->y, t->w, t->h, t->bg);
-
-    // --- header ---
+// The header row: column titles, the sort arrow, and the rule under
+// them. Split out because it is skipped ENTIRELY when the header is
+// hidden (uui_table_set_header()) -- the rule below would otherwise
+// land one pixel above the widget's own rect.
+static void table_draw_header(struct ugfx_surface *s, const struct uui_table *t, int hh) {
     ugfx_fill_rect(s, t->x, t->y, t->w, hh, t->head_bg);
     for (int c = 0; c < t->col_count; c++) {
         int cx, cw;
@@ -296,6 +302,18 @@ void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
         if (c > 0) ugfx_fill_rect(s, cx, t->y, 1, hh, t->grid);
     }
     ugfx_fill_rect(s, t->x, t->y + hh - 1, t->w, 1, t->grid);
+}
+
+void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
+    int rh = uui_table_row_h(t);
+    int hh = uui_table_header_h(t);
+    int vis = uui_table_visible_rows(t);
+    int bar = uui_table_scrollbar_visible(t) ? t->bar_w : 0;
+
+    ugfx_fill_rect(s, t->x, t->y, t->w, t->h, t->bg);
+
+    // --- header ---
+    if (hh > 0) table_draw_header(s, t, hh);
 
     // --- rows ---
     for (int i = 0; i < vis; i++) {
@@ -308,8 +326,10 @@ void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
         int ry = t->y + hh + i * rh;
 
         uint32_t rbg = t->bg, rfg = t->fg;
+        uint32_t tint = t->tint ? t->tint(t->ctx, idx) : 0;
         if (idx == t->selected) { rbg = t->sel_bg; rfg = t->sel_fg; }
         else if (idx == t->hovered) { rbg = uui_state_bg(t->bg, UUI_STATE_HOVER); }
+        else if (tint) { rbg = tint; }
 
         if (rbg != t->bg) ugfx_fill_rect(s, t->x, ry, t->w - bar, rh, rbg);
         for (int c = 0; c < t->col_count; c++) draw_cell(s, t, c, idx, ry, rfg, rbg);

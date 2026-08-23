@@ -534,8 +534,9 @@ The desktop is in ring 3 already. These are what it still lacks.
 ### Desktop productivity apps
 **Needs:** Runtime + interop (allocator, file I/O), A layout engine for the GUI (layout) and Runtime font loading & text metrics (fonts).
 
-- [ ] Real RING-3 filesystem API surface (list/stat/create/delete/ seek
-- [ ] File manager app
+- [x] ~~Real RING-3 filesystem API surface (list/stat/create/delete/seek)~~ done -- every one of those is a syscall now
+- [x] ~~File manager app~~ DONE 2026-08-23 -- two panes, marks, and file operations as spawned children
+- [ ] Move Notepad's dialog and the WM's file picker onto `uui_fileview`
 - [ ] Desktop calendar widget
 - [x] ~~Control panel with pluggable applets~~ done
 - [ ] Find/replace in Notepad

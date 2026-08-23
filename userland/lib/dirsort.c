@@ -3,8 +3,8 @@
 #include "lib/dirsort.h"
 #include <string.h>
 
-static int cmp(const struct sys_dirent *a, const struct sys_dirent *b,
-               enum dirsort_key key, int reverse) {
+int dirsort_cmp(const struct sys_dirent *a, const struct sys_dirent *b,
+                 enum dirsort_key key) {
     int r = 0;
     if (key == DIRSORT_SIZE) {
         r = (a->size < b->size) - (a->size > b->size);
@@ -21,6 +21,12 @@ static int cmp(const struct sys_dirent *a, const struct sys_dirent *b,
     // Name is the default AND the tie-break, so two files written in the
     // same second still land in a stable, reproducible order.
     if (r == 0) r = strcmp(a->name, b->name);
+    return r;
+}
+
+static int cmp(const struct sys_dirent *a, const struct sys_dirent *b,
+               enum dirsort_key key, int reverse) {
+    int r = dirsort_cmp(a, b, key);
     return reverse ? -r : r;
 }
 

@@ -136,6 +136,7 @@ TOOLS = [
     ("imgview", "imgview_test.py", "JPEG decoding, the viewer, and the wallpaper"),
     ("icons", "icons_test.py", "app icons: QOI, alpha compositing, three draw sites"),
     ("mines", "mines_test.py", "Minesweeper, and a secondary click reaching a client"),
+    ("files", "filemanager_test.py", "the File Manager: two panes, marks, and real file operations"),
 ]
 
 # Roughly how long each tool takes, in seconds, used ONLY to decide what
@@ -163,6 +164,7 @@ COST_S = {
     # forcequit from ~71s to ~35s (it waits on observable client death
     # now, not a real ping timeout), so notepad (~41s) is the straggler.
     "notepad": 41,     # the current ceiling -- slowest single tool
+    "files": 31,       # measured 2026-08-23, first run
     "forcequit": 35,
     "menubar": 32,
     "idle": 10,        # eight captures a third of a second apart

@@ -601,6 +601,9 @@ whenever a headline here tells you something you did not already know.
 - **A SECONDARY CLICK IS THE CLIENT'S INSIDE ITS CONTENT AREA, AND THE WM'S EVERYWHERE ELSE** -- right-click reaches a ring-3 app as button bit `0x2`, the frame/title bar/taskbar keep the window menu (Windows/X11/Wayland's split); Toykit activates widgets on `0x1` alone while `on_press` sees every button.
 - **DOOM IS A VENDORED PORT IN `userland/ports/doom/`, LINKED INTO ONE BINARY** -- doomgeneric byte for byte (GPL-2 in an MIT repo, so an aggregation, and the per-binary `EXTRA_OBJS_doom` is what makes "nothing else depends on it" a build property); OUR backend is `userland/doom/`, outside the vendored directory on purpose; the vendored tree compiles with warnings OFF but the frame-size warning ON; and `api/keyboard.h` and `doomkeys.h` CANNOT share a translation unit (both define `KEY_F2`/`F3`/`F4`/`F10` differently), which is why `dg_toyos.h` carries `TOYKEY_*` copies that `doom.c` static-asserts against the real macros. **The IWAD is NOT in the repo** -- `tools/fetch_wad.py`.
 - **MINESWEEPER IS THE FIRST GAME, AND IT IS AN ORDINARY CLIENT** -- `userland/gui/apps/mines.c`; it draws its own board rather than adding a `uui_grid` widget for one caller, its board palette is content and not theme, and flagging commits on PRESS.
+- **A DIRECTORY LISTING IS A WIDGET, `uui_fileview`, AND FOUR THINGS SHOULD BE DRAWING ONE** -- it composes `uui_table`; the CALLER owns the 20 KB entry array; filtering is a callback (Image Viewer probes magic bytes); `..` and directories lead under every sort; a MARK names a row so every reload clears the marks; Image Viewer is converted and the WM's file picker and Notepad's dialog are NOT yet.
+- **THE FILE MANAGER IS A TWO-PANE COMMANDER, NOT AN EXPLORER** -- `userland/gui/apps/files.c`; copy and move between two visible directories need neither the clipboard nor drag-and-drop, and this system has neither. File operations are CHILD PROCESSES (`/bin/cp`, `/bin/rm`) reaped with `sys_waitpid_nohang()`, marked files run through a QUEUE, each pane carries its own path strip, and the pair is remembered in `/etc/files.conf`.
+- **WHAT OPENS A FILE TYPE IS DECLARED BY THE APP THAT OPENS IT: `Handles=` on its `.desktop` entry** -- freedesktop's `mimeapps.list` shape with the MIME database left out; matched whole and case-insensitively including the dot; the handler is spawned and NOT waited for, and Notepad takes a path in `argv[1]` because of it.
 ### Storage, the filesystem, and /etc
 
 `docs/conventions/storage.md`
@@ -634,6 +637,7 @@ whenever a headline here tells you something you did not already know.
 - **A COMMAND WITH A READ HALF AND A WRITE HALF MOVES AS ONE PIECE OR NOT AT ALL.**
 - **COLOUR IS AN ESCAPE SEQUENCE, NOT A SYSCALL.**
 - **`edit` IS A `/bin` PROGRAM, AND THE KERNEL DRAWS NOTHING** -- it renders with ANSI on fd 1 over a raw fd 0, its model is `utext` (shared with Notepad), and moving it emptied `apps/ui/`.
+- **`cp` EXISTS NOW, AND COPYING IS A PROGRAM RATHER THAN A SYSCALL** -- `/bin/cp [-r]`, spawned by the GUI file manager rather than reimplemented in it; `rm` grew `-r` in the same change; both walk breadth-first over an explicit QUEUE because one listing is 20 KB against a 2 KiB frame budget, and `rm -r` removes the collected directories in REVERSE (deepest-first, a post-order walk with no recursion).
 - **A JOB IS A PROCESS GROUP, AND THE JOB TABLE IS THE SHELL'S** -- `Ctrl-Z`, `jobs` and `fg`; the kernel knows about groups and nothing about jobs. `[1]+ Done` is printed at a PROMPT, and a `SIGCHLD` handler with NO `SA_RESTART` is what produces one when nobody is typing.
 - **A TERMINAL IS AN OBJECT, AND THE CONSOLE IS `tty0`** -- `kernel/tty/` holds the line discipline, and `Ctrl-C` on the physical keyboard and in a window are one implementation. INTR left the keyboard driver; `SCHED_CHAN_KEY` is gone.
 - **A `text` BOOT REACHES A RING-3 SHELL, AND THE KERNEL SHELL STANDS DOWN FOR IT.**
@@ -1000,7 +1004,8 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   four modifier keys -- its load-bearing check holds a key DOWN with
   `QMPSession.key_down()`, which `send-key` cannot do),
   `winclient_test.py`, `imgview_test.py`, `icons_test.py`,
-  `mines_test.py`.
+  `mines_test.py`, `filemanager_test.py` (**the File Manager, and every
+  file operation asserted through `ls` rather than through the app**).
 - **Run on demand, not in the gate** -- `doom_test.py` (DOOM runs, draws,
   animates and takes input; SKIPS cleanly when no IWAD has been fetched,
   which is why it is not in the suite), `ansi_cursor_test.py` (ANSI
