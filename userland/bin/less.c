@@ -180,9 +180,29 @@ static void draw(int top, int rows, int cols) {
              "space/b page  up/down line  g/G ends  q quit",
              g_lines ? top + 1 : 0, last, g_lines, pct,
              g_truncated ? "  TRUNCATED" : "");
+    // A SOLID BAND, not a run of text. ESC[7m swaps foreground and
+    // background, and the line is PADDED WITH SPACES to the full width
+    // so the inversion covers the whole row -- a bar that stops where
+    // its text does reads as unfinished, and as a label rather than as
+    // chrome. `edit`'s status bar is the same construction, which is
+    // the point: two full-screen programs on this system should not
+    // each invent their own idea of a status line.
+    //
+    // REVERSE VIDEO RATHER THAN A HARDCODED GREY (ESC[47m). Inverting
+    // uses whatever colours are in effect, so the bar stays legible if
+    // the console's theme ever changes; a fixed pair would not, which is
+    // the same argument docs/gui-guidelines.md makes against picking
+    // tints by hand.
     int slen = (int)strlen(status);
-    if (used + slen <= cap) {
+    if (slen > cols) slen = cols;          // never wrap: that costs a row
+    if (used + slen + 12 <= cap) {
+        const char *on = "\x1b[7m", *off = "\x1b[0m";
+        for (const char *e = on; *e; e++) g_frame[used++] = *e;
         for (int k = 0; k < slen; k++) g_frame[used++] = status[k];
+        // Pad to the full width INSIDE the inversion, so the band runs
+        // to the right edge.
+        for (int k = slen; k < cols && used < cap - 6; k++) g_frame[used++] = ' ';
+        for (const char *e = off; *e; e++) g_frame[used++] = *e;
     }
 
     sys_write(1, g_frame, (size_t)used);
@@ -256,6 +276,17 @@ int main(int argc, char **argv) {
     int restore = sys_tcgetattr(key_fd, &saved) == 0;
     if (restore) sys_tty_raw(key_fd);
 
+    // THE ALTERNATE SCREEN, so quitting leaves the terminal exactly as
+    // it was found -- the shell's prompt and whatever was above it,
+    // untouched, with no page left behind and no prompt drawn on top of
+    // a status bar. It is what every pager and editor on a real
+    // terminal does, and the reason `less` does not litter a session.
+    //
+    // A terminal that does not implement it swallows the sequence, so
+    // this is safe everywhere: the physical console ignores both, and
+    // the only thing lost there is the restore.
+    put("\x1b[?1049h");
+
     // THE SIZE COMES FROM THE TERMINAL THIS IS ON, not from the
     // console, and that distinction is the same one the key source
     // above turns on. sys_console_size() reports the PHYSICAL console
@@ -322,7 +353,11 @@ int main(int argc, char **argv) {
 
     // PUT BACK on every way out, including the terminal disappearing --
     // one place rather than one per break, because the way this goes
-    // wrong is a path somebody adds later that forgets.
+    // wrong is a path somebody adds later that forgets. The screen
+    // first, then the mode: leaving raw mode while still on the
+    // alternate screen would show the shell's echo on a screen that is
+    // about to be thrown away.
+    put("\x1b[?1049l");
     if (restore) sys_tcsetattr(key_fd, &saved);
     return 0;
 }

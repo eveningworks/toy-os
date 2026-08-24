@@ -168,6 +168,33 @@ class Terminal:
         cell = 16   # a glyph is ~16px tall at the default font
         return inked // cell, h // cell
 
+    def bar_run(self, raw):
+        """The longest horizontal run of near-white pixels.
+
+        A reverse-video status bar is a SOLID BAND of the default
+        foreground with dark letters on it. Counting light PIXELS does
+        not distinguish it from ordinary text -- glyphs are drawn in the
+        same colour and a screenful scores thousands. What only a filled
+        background produces is a long unbroken RUN: a glyph is a few
+        pixels wide, a bar is hundreds. uterm_test.py learned this the
+        same way, on a check that scored 4304 on a frame with no bar.
+        """
+        w = self.box[2] - self.box[0]
+        h = self.box[3] - self.box[1]
+        best = 0
+        for y in range(h):
+            base = y * w * 3
+            run = 0
+            for x in range(w):
+                i = base + x * 3
+                if raw[i] > 150 and raw[i + 1] > 150 and raw[i + 2] > 150:
+                    run += 1
+                    if run > best:
+                        best = run
+                else:
+                    run = 0
+        return best
+
     @staticmethod
     def diff_pct(a, b):
         """How much two captures differ, as a percentage.
@@ -324,6 +351,15 @@ def probe_pixels(t, tmp):
     check("...and `g` comes back to the first page", d < same,
           f"{d:.2f}% different, against a {noise:.2f}% noise floor")
 
+    # THE STATUS BAR IS A BAND, not a run of text -- measured as the
+    # longest unbroken horizontal run of the foreground colour, because
+    # counting light pixels cannot tell a bar from a screenful of
+    # glyphs.
+    bar = t.bar_run(t.frame(tmp, "less_bar"))
+    width = t.box[2] - t.box[0]
+    check("the status line is a full-width band",
+          bar > width * 0.9, f"longest light run {bar}px of {width}px")
+
     # `q` must be enough to leave -- before the key source was fixed,
     # nothing reached the pager and Ctrl-C was the only way out.
     t.key("q")
@@ -337,6 +373,16 @@ def probe_pixels(t, tmp):
     check("`q` quits the pager and the shell is back",
           "q" in out and "no such file" not in out,
           "the shell did not run a command after q")
+
+    # ...AND THE PAGER LEFT NOTHING BEHIND. The alternate screen
+    # (ESC[?1049h/l) means quitting restores whatever the terminal held
+    # before it started, so the band must be GONE -- a pager that merely
+    # cleared the screen, or one that printed a newline and exited,
+    # would leave its bar in the scrollback. Same measure as above,
+    # which is what makes the pair meaningful.
+    left = t.bar_run(t.frame(tmp, "after_q"))
+    check("...and the alternate screen took its status bar with it",
+          left < width * 0.5, f"longest light run still {left}px")
 
     # ...and through a pipe, where fd 0 is NOT the terminal. A pager
     # that reads its keys from stdin cannot work here at all, which is

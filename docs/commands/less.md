@@ -16,4 +16,16 @@ That used to be `SYS_READ_KEY`, on the correct reasoning that a pager reading ke
 
 **With no terminal at all it dumps rather than refuses.** `cmd | less > out.txt` writes everything and exits, which is what `cat` would have done and what the caller plainly wanted; blocking for a keypress that can never arrive would be the same hang from the other direction.
 
+**It runs on the alternate screen** (`ESC[?1049h`/`l`), so quitting
+restores the terminal exactly as it was found -- the prompt and whatever
+was above it, with no page left behind and no prompt drawn on top of the
+status bar. That is what every pager on a real terminal does, and it is
+why `less` does not litter a session. A terminal without a second screen
+swallows the sequence, so the physical console is unaffected and simply
+does not get the restore.
+
+The status line is a full-width **reverse-video band** rather than a run
+of text -- the same construction `edit` uses, and inverting rather than
+picking a colour pair means it stays legible whatever the theme is.
+
 The key descriptor is put into raw mode and put back before the program returns — a pager that left the terminal raw would hand the shell a prompt with no echo, which looks exactly like a hung machine. Page height comes from `SYS_CONSOLE_SIZE`, not a baked 80x25, because the console is font-derived. Holds the input in memory (256 KB cap, then says TRUNCATED) because a pipe cannot be rewound.

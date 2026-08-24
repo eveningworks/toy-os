@@ -194,6 +194,19 @@ this the obvious way), not from how much history it accumulated.
   FACT about the rest of the system outlives that fact silently**, and
   nothing in a build notices. `apps/shell_sys.c`'s help text had
   advertised Ctrl-L the whole time.
+- **THERE IS AN ALTERNATE SCREEN, AND IT IS WHY A PAGER LEAVES NO
+  WRECKAGE.** `ESC[?1049h`/`l` (`ANSI_OP_ALT_ON`/`OFF`) makes the GUI
+  Terminal save its grid and cursor, hand the program a cleared screen,
+  and put the original back on the way out -- so `less` quits to exactly
+  the prompt it started from, as on any real terminal. Four things:
+  **1049 only**, not 47 or 1047, because it is the spelling that carries
+  the cursor and clears the alternate for you; **a consumer may ignore
+  it** and the physical console does, so a program using it is correct
+  either way and only loses the restore; **scrollback is deliberately
+  not saved**, which is why you cannot scroll back through a pager's
+  session on a real terminal either; and **the parser test asserting
+  1049 was swallowed had to be inverted** -- it was right when written,
+  and the Terminal growing an answer is what changed it.
 - **`dmesg` IS A `/bin` PROGRAM, AND THE LOG LEAVES THE KERNEL THROUGH
   `QUERY_KLOG`.** It was a ring-0 builtin, so at a `$` prompt it resolved
   to a `/bin` lookup, found nothing and failed -- which is what a person

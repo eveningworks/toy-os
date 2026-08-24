@@ -73,6 +73,26 @@ enum ansi_op {
     ANSI_OP_RESTORE,   // RCP
     ANSI_OP_SHOW,      // DECTCEM `?25h`
     ANSI_OP_HIDE,      // `?25l`
+    // THE ALTERNATE SCREEN, DEC private mode 1049. A full-screen
+    // program switches to a second screen, does its work, and switches
+    // back -- and what was on the terminal before it started is exactly
+    // what is there afterwards. That is why `less` and `vim` leave no
+    // wreckage behind on any real terminal, and why a pager that merely
+    // cleared the screen would still lose whatever the shell had
+    // printed before it ran.
+    //
+    // 1049 rather than 47 or 1047: it is the one that saves the CURSOR
+    // as well as the screen, and clears the alternate before switching
+    // to it, so a program does not have to do those itself. xterm added
+    // it for exactly that reason and every terminal since implements
+    // it.
+    //
+    // **A CONSUMER MAY IGNORE THESE**, and the physical console does.
+    // The sequence is swallowed rather than printed either way, so a
+    // program that uses them is correct on a terminal that has no
+    // second screen -- it simply does not get its restore.
+    ANSI_OP_ALT_ON,    // `?1049h` -- save cursor, switch, clear
+    ANSI_OP_ALT_OFF,   // `?1049l` -- switch back, restore cursor
 };
 
 #define ANSI_MAX_PARAMS 8

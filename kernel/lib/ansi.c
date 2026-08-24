@@ -149,6 +149,17 @@ static enum ansi_op resolve_ctrl(struct ansi_parser *p, unsigned char b) {
             p->a = p->b = 0;
             return b == 'h' ? ANSI_OP_SHOW : ANSI_OP_HIDE;
         }
+        // The ALTERNATE SCREEN. 1049 only -- not 47 or 1047, which are
+        // the older spellings that do not carry the cursor and are what
+        // a program reaches for when 1049 is unavailable. Supporting one
+        // spelling means a consumer has one thing to implement; a
+        // program that sends the old pair on this terminal gets no
+        // second screen, which is the same outcome as any terminal that
+        // lacks it.
+        if ((b == 'h' || b == 'l') && p->nparam >= 1 && p->param[0] == 1049) {
+            p->a = p->b = 0;
+            return b == 'h' ? ANSI_OP_ALT_ON : ANSI_OP_ALT_OFF;
+        }
         return ANSI_OP_NONE;
     }
     switch (b) {

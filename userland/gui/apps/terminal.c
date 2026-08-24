@@ -74,6 +74,27 @@ static struct cell g_sb[SB_ROWS][VT_COLS];
 static int g_sb_count;      // lines of scrollback held
 static int g_sb_view;       // how far back the reader has scrolled, in lines
 
+// THE ALTERNATE SCREEN (ESC[?1049h/l). A second grid, plus the cursor
+// the switch saved, so a full-screen program leaves the terminal
+// exactly as it found it -- which is what `less` and `vim` do on every
+// real terminal and the reason they leave no wreckage behind.
+//
+// A COPY OF THE GRID RATHER THAN A SECOND LIVE ONE. Swapping a pointer
+// between two grids would be cheaper, but everything here indexes
+// g_grid directly and a pointer would have to be threaded through all
+// of it; 36 KB of statics is the cost of not doing that, against a
+// ring-3 heap that has it. The saved copy is written once per switch,
+// not per frame.
+//
+// **SCROLLBACK IS NOT SAVED, DELIBERATELY.** On a real terminal the
+// alternate screen has no scrollback at all -- that is why you cannot
+// scroll back through a `less` session -- and keeping the shell's
+// scrollback live underneath is what makes leaving feel like nothing
+// happened.
+static struct cell g_saved[VT_ROWS][VT_COLS];
+static int g_alt;           // on the alternate screen right now
+static int g_saved_cr, g_saved_cc;
+
 static int g_rows = 24, g_cols = 80;
 static int g_cr, g_cc;      // the cursor, in cells
 static int g_cursor_shown = 1;
@@ -179,6 +200,28 @@ static void vt_ctrl(void) {
             for (int c = 0; c <= g_cc && c < VT_COLS; c++) g_grid[g_cr][c].ch = ' ';
         } else {
             for (int r = 0; r < g_rows; r++) row_clear(g_grid[r], 0);
+        }
+        break;
+    case ANSI_OP_ALT_ON:
+        // Idempotent: a program that switches twice must not overwrite
+        // the screen it saved the first time with the alternate one.
+        if (!g_alt) {
+            for (int r = 0; r < VT_ROWS; r++)
+                for (int c = 0; c < VT_COLS; c++) g_saved[r][c] = g_grid[r][c];
+            g_saved_cr = g_cr;
+            g_saved_cc = g_cc;
+            g_alt = 1;
+        }
+        for (int r = 0; r < g_rows; r++) row_clear(g_grid[r], 0);
+        g_cr = g_cc = 0;
+        break;
+    case ANSI_OP_ALT_OFF:
+        if (g_alt) {
+            for (int r = 0; r < VT_ROWS; r++)
+                for (int c = 0; c < VT_COLS; c++) g_grid[r][c] = g_saved[r][c];
+            g_cr = g_saved_cr;
+            g_cc = g_saved_cc;
+            g_alt = 0;
         }
         break;
     case ANSI_OP_SHOW: g_cursor_shown = 1; break;

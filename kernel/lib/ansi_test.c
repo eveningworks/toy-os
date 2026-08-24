@@ -230,15 +230,28 @@ KTEST("ansi", "erase defaults to mode 0, the opposite end from a movement") {
     KTEST_ASSERT(ctrl_op(&p, "\033[9J") == ANSI_OP_NONE);
 }
 
-KTEST("ansi", "DECTCEM is the one private sequence that does something") {
+KTEST("ansi", "the private sequences that do something: DECTCEM and 1049") {
     struct ansi_parser p;
     ansi_init(&p, VGA_LIGHT_GREY, VGA_BLACK);
     KTEST_ASSERT(ctrl_op(&p, "\033[?25l") == ANSI_OP_HIDE);
     KTEST_ASSERT(ctrl_op(&p, "\033[?25h") == ANSI_OP_SHOW);
-    // Every OTHER private sequence stays swallowed -- including the
-    // alternate-screen pair, which this console has no answer for and
-    // which would be worse guessed at than ignored.
-    KTEST_ASSERT(ctrl_op(&p, "\033[?1049h") == ANSI_OP_NONE);
+
+    // THE ALTERNATE SCREEN. This assertion used to be the OPPOSITE --
+    // that 1049 stayed swallowed, "which this console has no answer
+    // for" -- and it was right when it was written. The GUI Terminal
+    // has an answer now (a saved grid), which is what lets `less` and
+    // `edit` leave a terminal exactly as they found it. A consumer that
+    // still has no second screen ignores the op, so the physical
+    // console is unaffected.
+    KTEST_ASSERT(ctrl_op(&p, "\033[?1049h") == ANSI_OP_ALT_ON);
+    KTEST_ASSERT(ctrl_op(&p, "\033[?1049l") == ANSI_OP_ALT_OFF);
+
+    // **ONLY 1049.** 47 and 1047 are the older spellings that do not
+    // carry the cursor; one spelling means a consumer has one thing to
+    // implement, and a program sending the old pair gets what any
+    // terminal without them gives it.
+    KTEST_ASSERT(ctrl_op(&p, "\033[?47h") == ANSI_OP_NONE);
+    KTEST_ASSERT(ctrl_op(&p, "\033[?1047h") == ANSI_OP_NONE);
     KTEST_ASSERT(ctrl_op(&p, "\033[?7l") == ANSI_OP_NONE);
 }
 
