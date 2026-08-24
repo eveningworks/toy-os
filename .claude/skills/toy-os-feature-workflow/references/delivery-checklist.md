@@ -112,19 +112,39 @@ before you start delivering -- don't reconstruct it from memory.
   `git add <the file list from step 2>` then commit with plain `git`
   (identity is already configured as `toy-os <noreply@toy-os.local>`,
   confirmed via `git config user.name`/`user.email`, so no `-c
-  user.name=...` flags needed). Short subject line, then a per-file
-  body:
-  ```
-  git commit -m "$(cat <<'EOF'
-  <short summary as the subject line>
+  user.name=...` flags needed).
 
-  <file path>   - <one-line note on what changed in it>
-  <file path>   - <one-line note on what changed in it>
-  docs/commands/<name>.md - REQUIRED for a new command; the gate fails
-                            the build without it
-  docs/decisions.md - only when the change answers a "why this way"
-  EOF
-  )"
+  **THE SHAPE, since 2026-08-24: problem, then change, then files.**
+  Imperative subject under ~72 chars prefixed with the area; one or two
+  short paragraphs on what was wrong and what caused it; a bullet per
+  change; the file list; then what was verified and what was NOT
+  established. No capitalised lede sentences, no forensics -- the
+  reasoning belongs in `docs/decisions.md`, a comment, or
+  `docs/conventions/`, and a commit repeating them is a third copy.
+  Write it to a file and use `-F`, rather than fighting a heredoc:
+  ```
+  git commit -F <scratch>/msg.txt
+  ```
+  ```
+  settings: show timezone display names, fix list hover and type-ahead
+
+  The dropdown listed raw database tokens because /etc/timezones
+  carries no display column. Hover never worked because
+  uui_router_motion() walked one level of nested containers while
+  press and wheel recurse.
+
+  - /etc/timezones gains an optional fourth field, the display name.
+  - uui_router_motion() recurses like press and wheel.
+
+  Files:
+    kernel/lib/tz.c            display column, parser, seed table
+    userland/ui/uui_route.c    recursive motion delivery
+    docs/commands/<name>.md    REQUIRED for a new command -- the gate
+                               fails the build without it
+
+  Verified: preflight clean, gui_regress all clear, three positive
+  controls each reddened the intended checks.
+  NOT established: <anything measured and left alone>
   ```
 - **Tag, if cutting a release:** `git tag -a v<version> <commit> -m
   "..."` directly.

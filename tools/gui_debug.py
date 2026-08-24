@@ -385,6 +385,44 @@ class DebugConsole:
             qmp.pos[0], qmp.pos[1] = cx, cy
         return self.cursor()
 
+    def hover_frames(self, qmp, tmp, rest_at, hover_at, prefix="hover"):
+        """Two SETTLED frames of the same screen: pointer parked away
+        from the control, then on it. Returns (rest_png, hover_png).
+
+        THREE THINGS THIS PACKAGES, each of which has cost a run:
+
+        1. **The REAL cursor, warped and confirmed.** `gui move` is one
+           WM iteration -- the injected position overrides the mouse for
+           the single wm_run() pass that consumes it, and the next pass
+           reads the driver again and snaps back. It is exactly right
+           for a click (press and release are edges) and useless for
+           hover, which has to persist while a capture is taken. A tool
+           that hovers with `gui move` photographs the frame AFTER the
+           pointer left, and reports a working hover as dead.
+        2. **Settled frames.** A capture landing mid-paint fails a
+           comparison that has nothing wrong with it -- and with the WM
+           in ring 3 the client's repaint is an extra process hop whose
+           timing varies with load. See QMPSession.stable_pixels().
+        3. **A rest frame with the pointer somewhere real.** The cursor
+           sprite is part of the screen, so a "rest" capture taken
+           before the pointer moved at all differs from the hover
+           capture by the sprite as well as by the wash.
+
+        The CALLER still owns where to sample: park the pointer at one
+        end of the control and measure the other, or the sprite's own
+        pixels answer the question instead of the hover state. See
+        changed_rows() for the band form, and dialog_test.py for the
+        two-points form with the neighbouring control as its control.
+        """
+        import os
+        self.warp_cursor(qmp, *rest_at)
+        rest = os.path.abspath(os.path.join(tmp, f"{prefix}-rest.png"))
+        qmp.stable_pixels(rest)
+        self.warp_cursor(qmp, *hover_at)
+        hot = os.path.abspath(os.path.join(tmp, f"{prefix}-on.png"))
+        qmp.stable_pixels(hot)
+        return rest, hot
+
     def open_app(self, name):
         """Open a desktop app by NAME, and RAISE if there is no such app.
 
@@ -545,6 +583,44 @@ class DebugConsole:
 
     def __exit__(self, *exc):
         self.close()
+
+
+def changed_rows(rest_png, hover_png, box, threshold=1.0):
+    """Which pixel ROWS inside `box` differ between two frames.
+
+    For a control whose rows have no reported geometry -- a dropdown's
+    popup, a listbox -- where "the row under the pointer lit up" has to
+    be measured rather than assumed. `box` is a PIL crop box in SCREEN
+    coordinates, (x0, y0, x1, y1); rows are compared as the mean
+    brightness across it, so a row's text contributes to both frames
+    equally and only a background wash moves the number.
+
+    Returns {"rows": [y, ...], "band": (first, last) or None,
+             "rest": {y: mean}, "hover": {y: mean}}.
+
+    THE CONTROL IS THE BAND, not the change. "Something got darker"
+    passes on a repaint, a scroll, or a whole list highlighting at once;
+    what a working hover looks like is ONE band, containing the pointer,
+    no taller than a row. Assert that, not merely that `rows` is
+    non-empty.
+    """
+    from PIL import Image
+    x0, y0, x1, y1 = box
+    a = Image.open(rest_png).convert("RGB")
+    b = Image.open(hover_png).convert("RGB")
+
+    def means(im):
+        out = {}
+        for y in range(y0, min(y1, im.height)):
+            px = list(im.crop((x0, y, x1, y + 1)).getdata())
+            out[y] = sum(sum(p) for p in px) / (3.0 * len(px))
+        return out
+
+    rest, hover = means(a), means(b)
+    rows = [y for y in rest if abs(hover[y] - rest[y]) > threshold]
+    return {"rows": sorted(rows),
+            "band": (min(rows), max(rows)) if rows else None,
+            "rest": rest, "hover": hover}
 
 
 def wait_for_desktop(sock, timeout=8.0):

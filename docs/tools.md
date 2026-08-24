@@ -205,6 +205,33 @@ manual steps to be worth automating:
   mixing the two makes every count ambiguous between them. Two tools
   hand-rolled this parser in one session before it moved here, which is
   this file's usual bar.
+
+  **`warp_cursor(qmp, x, y)` puts the REAL cursor somewhere and CONFIRMS
+  it arrived**, and `hover_frames(qmp, tmp, rest_at, hover_at)` returns
+  the two settled frames a hover check compares. Both exist because
+  `gui move` cannot hold a hover: an injected pointer position overrides
+  the mouse for the single `wm_run()` iteration that consumes it, and
+  the next one reads the driver again and snaps back -- exactly right
+  for a click (press and release are edges), useless for a state that
+  has to survive a capture. A tool that hovers with `gui move`
+  photographs the frame after the pointer left and reports a working
+  hover as dead. `warp_cursor` closes the loop (`goto()` is open-loop
+  and the WM ACCELERATES the delta, so asking for (300,250) from the
+  corner arrives at (450,374)); `hover_frames` adds the two things
+  around it -- settled captures, and a REST frame with the pointer
+  parked somewhere real, since the cursor sprite is part of the screen.
+
+  **`changed_rows(rest, hover, box)` is the band form**, for a control
+  whose rows have no reported geometry -- a dropdown popup, a listbox.
+  It compares mean brightness per pixel row, so text contributes to both
+  frames equally and only a wash moves the number. **Assert the BAND,
+  not the change**: one band, containing the pointer, no taller than a
+  row. "Something got darker" also passes on a repaint, a scroll, or a
+  whole list highlighting at once. Two rules the CALLER still owns: park
+  the pointer at one end of the control and measure the other (or the
+  sprite's own pixels answer the question), and make sure the hovered
+  row is not the SELECTED one, since selection correctly outranks hover
+  and hovering the current value measures nothing.
 - **`gui_flow.py`** -- named, composable QMP click-flows on top of
   `qmp_test.py`'s `QMPSession` (`GuiFlow` class: `enter_gui()`,
   `open_app(name)`, `run_system_action(label)`, `screenshot_named()`),
@@ -1595,6 +1622,16 @@ window without going through it will find its layout polls timing out.
   `damage_sweep.py` is deliberately NOT in it (much slower under
   `gui damage verify on`, and it has its own `--positive-control`
   protocol) -- run that separately.
+
+  **A SECOND CONCURRENT RUN IS REFUSED**, with an flock under `build/`.
+  Every tool takes a VM slot and slots start at 0 for every run, so two
+  suites at once fight over the same pidfiles, serial sockets and QMP
+  ports -- and it does not fail as a port clash. `port_guard` refuses
+  some launches and the rest surface MINUTES later as `BrokenPipeError`
+  or a screenshot that was never written, in whichever tool happened to
+  be mid-command; seven tools "failed" that way in one run here, none of
+  them at fault. An flock rather than a pidfile check, so a run killed
+  with -9 leaves nothing to clean up.
 - **`uapp_test.py`** -- the TWP resize handshake and focus events, via
   `winclient` (which contains no resize code -- it sets
   `.flags = UAPP_RESIZABLE` and nothing else, so what is under test is

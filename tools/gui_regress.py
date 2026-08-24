@@ -320,6 +320,39 @@ def run_one(name, script, disk_src, timeout, keep_logs, slot, kvm=False):
     return ("PASS" if rc == 0 else "FAIL", time.time() - started, summary)
 
 
+def acquire_run_lock():
+    """Refuse a SECOND concurrent suite run. Returns (handle, holder).
+
+    Every tool here takes a VM SLOT, and the slots start at 0 for every
+    run -- so two suites started at once fight over the same pidfiles,
+    serial sockets and QMP ports. It does not fail as a port clash:
+    `port_guard` refuses some of the second run's launches, and the rest
+    surface MINUTES later as `BrokenPipeError` or a screenshot that was
+    never written, in whichever tool happened to be mid-command. Seven
+    tools "failed" that way in one run here, none of them at fault.
+
+    An flock, so a run killed with -9 leaves nothing to clean up: the
+    lock dies with the process that held it. The pid in the file is for
+    the message only.
+    """
+    import fcntl
+    path = os.path.join(REPO, "build", ".gui_regress.lock")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fh = open(path, "a+")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.seek(0)
+        holder = fh.read().strip() or "unknown pid"
+        fh.close()
+        return None, holder
+    fh.seek(0)
+    fh.truncate()
+    fh.write(f"{os.getpid()}\n")
+    fh.flush()
+    return fh, None
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -366,6 +399,13 @@ def main():
 
     if shutil.which("qemu-system-x86_64") is None:
         print("gui_regress: qemu-system-x86_64 not on PATH")
+        return 2
+
+    lock, holder = acquire_run_lock()
+    if lock is None:
+        print(f"gui_regress: another run is already going (pid {holder}).\n"
+              f"gui_regress: two suites share VM slot 0 upwards and would "
+              f"kill each other's guests -- wait for it, or `kill {holder}`.")
         return 2
 
     jobs = max(1, min(args.jobs, len(picked)))

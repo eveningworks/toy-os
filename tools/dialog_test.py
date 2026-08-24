@@ -35,7 +35,7 @@ hardcoded offsets, because the dialog sizes itself to its message and any
 reword would move them.
 """
 import argparse
-import sys, os, tempfile, time
+import sys, tempfile, time
 sys.path.insert(0, "tools")
 from qmp_test import QMPSession
 from gui_debug import DebugConsole, enter_gui
@@ -100,14 +100,6 @@ def main():
     scr = state["screen"]
     cx, cy = scr["w"] // 2, scr["h"] // 2
 
-    # Hover must be held across frames, so it goes through QMP's REAL
-    # PS/2 mouse, not `gui move`: injected input overrides the mouse for
-    # one WM iteration only, after which mouse_get_state() reports the
-    # real pointer again and the hover is recomputed away.
-    print('  parked at', dbg.warp_cursor(qmp, cx, cy - 200))
-    a = os.path.abspath(f"{OUT}/dlg-rest.png")
-    qmp.screenshot(a)
-
     # ASK the WM where the buttons are (`gui dialog --json`), rather than
     # scanning the button row for THEME_BUTTON_BG.
     #
@@ -130,11 +122,14 @@ def main():
     yes_c = (btns[0]["cx"], btns[0]["cy"])
     no_c = (btns[1]["cx"], btns[1]["cy"])
 
-    # Hover Yes.
-    print('  hover at', dbg.warp_cursor(qmp, *yes_c))
-    time.sleep(0.3)
-    b = os.path.abspath(f"{OUT}/dlg-hover-yes.png")
-    qmp.screenshot(b)
+    # Hover Yes. Two SETTLED frames with the REAL pointer parked, via
+    # DebugConsole.hover_frames() -- `gui move` is one WM iteration and
+    # the hover is recomputed away before a capture lands. That helper
+    # carries the rest of the reasoning; this tool supplies the halves
+    # only it knows: where "away" is, and which pixels to read.
+    a, b = dbg.hover_frames(qmp, OUT,
+                            rest_at=(cx, cy - 200), hover_at=yes_c,
+                            prefix="dlg")
 
     # Sample to the LEFT of where the cursor is parked. The sprite is
     # drawn down-and-right from its hotspot and its outline is black, so

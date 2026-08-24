@@ -52,7 +52,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gui_debug import DebugConsole, enter_gui          # noqa: E402
+from gui_debug import DebugConsole, changed_rows, enter_gui   # noqa: E402
 from qmp_test import QMPSession             # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
@@ -478,11 +478,11 @@ def main():
     # the pointer and no hover state in the app could light up. It read
     # as a missing feature and was a routing bug.
     #
-    # THE REAL CURSOR, via DebugConsole.warp_cursor(): `gui move` is one
-    # WM iteration and the pointer then snaps back to where the mouse
-    # really is, so a screenshot taken after it shows no hover at all.
-    # See gui_debug.py, which already had this for dialog_test.
-    from PIL import Image
+    # THE REAL CURSOR AND TWO SETTLED FRAMES, via
+    # DebugConsole.hover_frames(): `gui move` is one WM iteration and
+    # the pointer then snaps back to where the mouse really is, so a
+    # capture taken after it shows no hover at all. See gui_debug.py,
+    # which carries the rest of the reasoning.
     dbg.send(f"gui click {tz_cx} {tz_cy}")          # opens the popup
     dbg.settle()
     time.sleep(0.4)
@@ -493,46 +493,38 @@ def main():
     # the right of it, so the pointer's own pixels are never in the
     # measurement -- otherwise "the row got darker" would be satisfied
     # by the cursor being drawn on it.
-    # ROW 0, and it must not be the SELECTED row: a selected row draws
-    # with the selection colour and hover correctly does not override it,
-    # so hovering the current city would measure nothing and read as a
-    # dead hover. The fixture is what guarantees that (see the top).
-    at_cold = dbg.warp_cursor(qmp, popup_x + 4, popup_top + 130)  # below the rows
-    cold_path = f"{args.tmp}/settings_popup_cold.png"
-    qmp.stable_pixels(cold_path)   # SETTLED, or the comparison is noise
-    at_hot = dbg.warp_cursor(qmp, popup_x + 4, popup_top + 6)     # row 0
-    hot_path = f"{args.tmp}/settings_popup_hover.png"
-    qmp.stable_pixels(hot_path)
+    #
+    # ROW 0 for the hover, and it must not be the SELECTED row: a
+    # selected row draws with the selection colour and hover correctly
+    # does not override it, so hovering the current city would measure
+    # nothing and read as a dead hover. The fixture is what guarantees
+    # that (see the top).
+    rest_png, hover_png = dbg.hover_frames(
+        qmp, args.tmp,
+        rest_at=(popup_x + 4, popup_top + 130),   # below the rows
+        hover_at=(popup_x + 4, popup_top + 6),    # row 0
+        prefix="settings-popup")
+    seen = changed_rows(rest_png, hover_png,
+                        (popup_x + 40, popup_top + 1,
+                         popup_x + tz_ctl["w"] - 8, popup_top + 120))
 
-    cold = Image.open(cold_path).convert("RGB")
-    hot = Image.open(hot_path).convert("RGB")
-    x0, x1 = popup_x + 40, popup_x + tz_ctl["w"] - 8
-
-    def row_mean(im, y):
-        px = list(im.crop((x0, y, x1, y + 1)).getdata())
-        return sum(sum(p) for p in px) / (3.0 * len(px))
-
-    bottom = min(popup_top + 120, cold.height - 1)
-    changed = [y for y in range(popup_top + 1, bottom)
-               if abs(row_mean(hot, y) - row_mean(cold, y)) > 1.0]
-    check("hovering a dropdown row highlights it", bool(changed),
-          f"{len(changed)} rows changed between y={popup_top + 1} and {bottom}; "
-          f"cursor {at_cold} -> {at_hot}, wanted ({popup_x + 4}, {popup_top + 6})")
-    if changed:
+    check("hovering a dropdown row highlights it", bool(seen["rows"]),
+          f"{len(seen['rows'])} rows changed below y={popup_top}")
+    if seen["rows"]:
+        first = seen["rows"][0]
         # DARKER, not merely different: on this near-white theme
         # uui_state_bg() has to darken, and a hover that brightened
         # would be the bug docs/gui-guidelines.md warns about.
         check("...and it gets darker, as a light theme must",
-              row_mean(hot, changed[0]) < row_mean(cold, changed[0]),
-              f"y={changed[0]}: {row_mean(cold, changed[0]):.1f} -> "
-              f"{row_mean(hot, changed[0]):.1f}")
+              seen["hover"][first] < seen["rest"][first],
+              f"y={first}: {seen['rest'][first]:.1f} -> {seen['hover'][first]:.1f}")
         # THE CONTROL POINT, and the half that carries the weight: every
         # OTHER row must be untouched. Without it, a repaint, a scroll,
         # or the whole list lighting up at once would all pass.
-        band = (min(changed), max(changed))
+        lo, hi = seen["band"]
         check("...and only that row",
-              band[0] <= popup_top + 6 <= band[1] and (band[1] - band[0]) < 40,
-              f"changed band y={band}, pointer at {popup_top + 6}")
+              lo <= popup_top + 6 <= hi and (hi - lo) < 40,
+              f"changed band y={seen['band']}, pointer at {popup_top + 6}")
 
     # --- TYPE-AHEAD ---------------------------------------------------
     #

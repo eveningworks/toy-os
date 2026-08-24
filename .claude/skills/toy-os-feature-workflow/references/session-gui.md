@@ -542,3 +542,61 @@ translation layer would be a third place for the keymap to drift.
 cannot block on either. `SYS_SET_NONBLOCK` plus a `tick_ms` cadence is
 the shape until `poll()` exists; an idle Terminal waking 33 times a
 second is the honest cost, and it is written down rather than hidden.
+
+## When one traversal recurses and its sibling does not (2026-08-24)
+
+Reported as "the dropdown items do not highlight on hover". The dropdown
+was fine: `uui_listbox` drew a hover row, `uui_dropdown` forwarded
+motion to it, and the event never arrived. `uui_router_press()` and
+`uui_router_wheel()` walked nested containers to any depth;
+`uui_router_motion()` walked exactly ONE level and had since it was
+written. System Settings nests four deep, so every hover state in the
+app was dead, in every app that nests.
+
+**The generalisable part: when three code paths do the same walk, an
+asymmetry between them fails silently and at a distance.** Nothing
+errors -- a widget that never hears the pointer simply never lights up,
+which reads as a missing feature and sends you to the widget. When you
+add or fix a traversal, read its siblings in the same file and ask
+whether they agree. That is the same instinct as "fill a new widget's
+ops table against `uui_widget.h`, never against the widget you copied".
+
+Three rules the fix had to encode, none of which the one-level version
+had to think about:
+
+- **A widget the cursor has LEFT still has to hear the move**, or its
+  highlight stays lit. Motion goes to everyone; a press stops at the
+  first taker.
+- **A clipping container must not let its children light up outside
+  itself** -- a scroll view lays rows out past its own edges, and those
+  coordinates are somewhere the pointer really can be. Skipping the
+  subtree strands a lit row; passing the real point lights an invisible
+  one. It is told a point no widget can contain instead.
+- **An open overlay gets the real point first**, because it is drawn
+  outside its own rect and its container's -- and is then SKIPPED in the
+  walk, since hearing the move twice lights a row and clears it again.
+
+## A keyboard path that the pointer had and the keyboard did not (2026-08-24)
+
+Two gaps of the same shape, both found by giving a list type-ahead.
+`overlay_active` made an open popup take the next PRESS; nothing gave it
+the next KEY, so typing in a dropdown depended on a focus ring the app
+might not have. And `uui_focus_key()` changed a focused widget's value
+while `on_widget` only ever fired for pointer input, so a control
+changed by the KEYBOARD was staged by nobody and silently dropped by
+Apply.
+
+**Ask what the pointer can do that the keyboard cannot, whenever you
+touch either.** The two halves of an input system drift apart one
+feature at a time, and each gap looks like a missing feature in the app
+rather than a missing rule in the toolkit.
+
+## Forwarding "everything" breaks the behaviour somebody chose (2026-08-24)
+
+Making a CLOSED dropdown accept typed letters, I forwarded every key to
+its list. Home and End are keys: the value started walking with the
+popup shut, which `uidemo_test` asserts against by name ("Home while
+closed does nothing") and which is a deliberate rule -- an arrow must
+not change a setting the user cannot see. A letter is a deliberate
+search; navigation is not. The forward is restricted to printable keys,
+and the test that caught it is the reason the rule is written down.

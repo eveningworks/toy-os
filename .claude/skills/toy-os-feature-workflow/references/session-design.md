@@ -1494,3 +1494,44 @@ feature is disabled" written against a tool that short-circuits on the
 disable flag is measuring the flag, not the behaviour. Put that check
 where the behaviour is -- and prefer a tool that reports the DISCREPANCY
 between a flag and reality over one that trusts the flag.
+
+## The mechanism was already there and unused (2026-08-24)
+
+"The timezone dropdown shows `losangeles`" looked like a feature to
+build. The ABI had carried a display-name field for choices the whole
+time -- `setting_abi.h` even used "Los Angeles" as its worked example --
+filled from `/etc/settings.d`, and nobody had written the file. Half an
+hour of reading turned a design question into "why did the existing
+channel not cover this?", which is a much better question: because
+`Choice.<value>=` lines cannot describe a list COMPUTED from data
+without regenerating the file whenever the data changes. That is what
+justified a new slot (`choice_label`) rather than 92 generated lines,
+and the slot is three lines because the field it fills already existed.
+
+**Before designing a mechanism, grep for the one that was designed for
+this and never wired up.** A missing feature and an unused mechanism
+look identical from the outside.
+
+## A data file gains a field without breaking the machines that have it (2026-08-24)
+
+`/etc/timezones` is seeded once at first boot and never rewritten, so
+adding a fourth column would have left every existing disk showing
+tokens forever -- and rewriting the file on upgrade would clobber a
+hand-edited one. A three-field row still loads, and its display name
+falls back to the COMPILED-IN table by name, then to the token. So an
+old disk gets the feature immediately, a hand-added city shows its token
+until somebody names it, and a hand-RENAMED city stays renamed.
+
+**When you extend a seeded data format, the fallback chain is the
+migration.** Ask what a file written by the previous version does, and
+make the answer "the right thing", not "gets rewritten".
+
+## Say what the identity is, and the presentation follows (2026-08-24)
+
+The one line that settled a dozen small decisions: `losangeles` is the
+IDENTITY -- what is typed, matched, stored -- and "Los Angeles" is
+presentation that nothing parses back. From that: the shell's list shows
+`Los Angeles (losangeles)` (a list you cannot type from is worse than an
+ugly one), type-ahead matches the DISPLAYED string (it is the only thing
+the user can see), and the settings app keeps `choice_raw` beside
+`choice` rather than trying to reverse one into the other.

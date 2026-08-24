@@ -238,6 +238,22 @@ to this file too).
      8. Cropping the region and scaling it up with `Image.NEAREST`
      before looking is the other half of this -- a 5x zoom of one cell
      answers in a glance what a full-screen screenshot cannot.
+   - **A HOVER STATE NEEDS `DebugConsole.hover_frames()`, never `gui
+     move`.** Injected input overrides the pointer for ONE `wm_run()`
+     iteration and then the real mouse takes over, so a capture taken
+     after it photographs the screen with nothing hovered -- a working
+     hover reported as dead, with the cursor confirmed at the right
+     coordinates. The helper warps the REAL cursor (confirmed against
+     the WM: `goto()` is open-loop and the WM ACCELERATES the delta) and
+     returns two settled frames; `changed_rows()` compares a band for a
+     control whose rows have no reported geometry. Assert the BAND --
+     one, containing the pointer, no taller than a row -- and hover a
+     row that is NOT selected, since selection outranks hover.
+   - **ONE `gui_regress` AT A TIME**, and it refuses a second concurrent
+     run now (an flock). Two suites share VM slots from 0 up, and the
+     collision surfaces minutes later as `BrokenPipeError` in whichever
+     tool was mid-command rather than as a port clash -- seven tools
+     "failed" that way in one run, none of them at fault.
    - **A blinking element needs several samples across its period.**
      Sampling a 500ms blink at 250ms intervals aliased into "it never
      blinks" twice in a row and sent me looking for a bug that wasn't
@@ -294,10 +310,19 @@ to this file too).
 5. **Write the docs, in the existing style, not a new one.** THERE IS
    NO CHANGELOG -- it was deleted on 2026-08-18 (see CLAUDE.md). What
    changed goes in the COMMIT MESSAGE, file by file, and `git log` is
-   the chronological record; read a couple of recent commit bodies and
-   match their shape (what was wrong, what actually caused it, the file
-   list, what was verified, what was NOT established) rather than
-   inventing a format. Add a `docs/decisions.md` entry only when the change answers
+   the chronological record.
+
+   **THE MESSAGE IS PROBLEM, THEN CHANGE, THEN FILES** (2026-08-24, at
+   the maintainer's request): imperative subject under ~72 chars with
+   the area as a prefix (`settings:`, `wm:`), a short paragraph on what
+   was wrong and what caused it, a bullet per change, then every file
+   with a one-line note -- plus what was verified and what was NOT
+   established. **No capitalised lede sentences and no war stories**:
+   the bodies had grown into forty-line essays repeating what
+   `docs/decisions.md` and the code comments already said. Read a
+   commit from after that date rather than an older one, since the
+   earlier bodies are deliberately not rewritten; CLAUDE.md and
+   `docs/decisions.md`'s versioning entry carry the worked example. Add a `docs/decisions.md` entry only when the change answers
    a "why does toy-os work this way" question a future session would
    plausibly hit again -- most changes don't need one.
 

@@ -259,6 +259,20 @@ trips them before it knows to look anything up.
   PNG and was invisible in practice; the number is what caught it.
   Always sample a control that should NOT have changed as well -- half
   the assertion is the neighbour staying put.
+- **A HOVER STATE CANNOT BE TESTED WITH `gui move`, and the tool for it
+  is `DebugConsole.hover_frames()`.** An injected pointer position
+  overrides the mouse for the ONE `wm_run()` iteration that consumes it,
+  and the next one reads the driver again and snaps back -- right for a
+  click (press and release are edges), useless for a state that must
+  survive a capture, so the frame photographs the screen after the
+  pointer left and a working hover reads as dead. `hover_frames()` warps
+  the REAL cursor (confirmed against the WM, since `goto()` is open-loop
+  and the WM ACCELERATES the delta) and returns two SETTLED frames;
+  `changed_rows()` compares a band of rows for a control whose rows have
+  no reported geometry. **Assert the BAND, not the change** -- one band,
+  containing the pointer, no taller than a row -- and remember that
+  SELECTION OUTRANKS HOVER, so hovering the selected row measures
+  nothing.
 - **THERE IS ONE LINE EDITOR AND IT IS COMPILED TWICE.**
   `kernel/lib/klineedit.c` also builds into `libuapp.a`, so `/bin/tosh`
   and the ring-3 GUI Terminal edit with the SAME code as the physical
@@ -869,6 +883,14 @@ with `--logs DIR`. If it still fails, prove it is not yours by rebuilding
 `HEAD` (`git stash push -u -m <tag>`, apply by SHA, never a bare pop).
 Note this is NOT a universal explanation -- a failure surviving
 `clean-disk` may be a genuine pre-existing flake.
+
+**AND A TEST THAT APPLIES A SETTING CHANGES THE MACHINE FOR EVERY LATER
+TOOL, not just for itself.** `settings_test` leaves `mouse_speed` and
+`mouse_accel` on disk; a faster accelerated pointer then made
+`warp_cursor` overshoot in `dialog_test` and `menubar_test`, so two
+unrelated tools failed as "hover does nothing" and looked exactly like a
+regression in the change under test. The write does not have to be in
+the failing tool, or in the same run.
 
 **`strace <binary>` is often the fastest way to see what a `/bin` binary
 is doing** -- one decoded line per syscall, and the same lines land in

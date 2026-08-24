@@ -1447,3 +1447,82 @@ not. That decides the shape of a test: anything printing a table gets
 run through the legacy loader, and anything needing a scheduler slot
 (i.e. anything that sleeps) gets checked through the process table
 instead.
+
+## 2026-08-24 -- a hover check, and six ways the fixture rather than the code was wrong
+
+The feature was small (display names, hover, type-ahead in a dropdown).
+Every hour lost went to the harness, and none of it to the OS.
+
+**A HOVER STATE CANNOT BE TESTED WITH `gui move`.** Injected input
+overrides the pointer for the ONE `wm_run()` iteration that consumes it;
+the next one reads the mouse driver again and snaps back. So it is
+exactly right for a click -- press and release are edges -- and useless
+for a state that has to survive a capture. The first version of the
+check reported a working hover as dead, with the cursor confirmed at the
+right coordinates, because the frame was taken after the pointer left.
+Use `DebugConsole.hover_frames()`.
+
+**AND THE HELPER I NEEDED ALREADY EXISTED.** I wrote `place_cursor()`
+into `gui_debug.py`, made it work, and found `warp_cursor()` fifteen
+lines above it -- better documented, and already used by
+`dialog_test.py`. `grep` for the CONCEPT (`cursor`, `warp`, `hover`)
+before adding to a module, not for the name you were about to give it.
+The two are one function now, with both callers on it.
+
+**A FIXED SLEEP IS A RACE THAT HAS NOT BEEN LOST YET.**
+`font_test.py` slept 1.2s after each font change. Once hover started
+causing real repaints, the desktop got busier and the establishing
+change's `wm: font changed` line began landing AFTER the drain that
+followed it -- so the next `wait_log()` returned the PREVIOUS face's
+cell and two genuinely different faces compared equal. 3 runs in 5.
+The sharper half: a change still in flight is observed by the NEXT
+call's wait, so `set_size(14)` then `set_face("builtin")` returned on
+the size's line and measured the old face -- which reads exactly like
+"switching to builtin did nothing". Both wait on a line that is NEW
+since their own command now.
+
+**A COUNTED WAIT IS THE FIX WHEN THE OBSERVABLE IS NOT UNIQUE.** "Wait
+for a line matching X" is not enough when the previous step also emits
+X. Count the matches before acting and wait for the count to RISE.
+
+**AN APP CACHES A SETTING WHEN IT BUILDS A PAGE**, so a fixture set from
+outside mid-run is not necessarily what the next page shows. The
+timezone was set with `sh config set` between two clicks, the file
+contained the new value within half a second, and the page still showed
+the old one. Establish a fixture BEFORE the app starts.
+
+**AND THE LAYOUT LOG IS DEDUPED PER FRAME**, so re-opening the page that
+is already open logs nothing at all -- every reader gets `None`, which
+reads as a broken feature rather than an absent line. Navigate AWAY and
+back.
+
+**SELECTION OUTRANKS HOVER, which makes row 0 the wrong row to hover.**
+On a fresh image the current city was the first row, and hovering it
+measured nothing -- correctly, since a selected row keeps its selection
+colour. The same check passed on a used image where the selection was
+elsewhere. A fixture has to guarantee the thing it measures is
+measurable.
+
+**A TEST THAT APPLIES A SETTING CHANGES THE MACHINE FOR EVERY LATER
+TOOL.** `settings_test` leaves `mouse_speed` and `mouse_accel` on disk;
+a faster accelerated pointer then made `warp_cursor` overshoot in
+`dialog_test` and `menubar_test`, which failed as "hover does nothing".
+Three tools looked broken by my change and were broken by my earlier
+RUN of a test. `make clean-disk && make iso` before believing a GUI
+failure is in CLAUDE.md; this is the mechanism that makes it worth the
+minute.
+
+**AND TWO SUITE RUNS AT ONCE DO NOT FAIL AS A PORT CLASH.** I started a
+`gui_regress` while another was still going: slots start at 0 for every
+run, so they fought over the same pidfiles and QMP ports, and it
+surfaced minutes later as `BrokenPipeError` in whichever tool was
+mid-command. Seven tools "failed", none of them at fault.
+`gui_regress.py` takes an flock now and refuses the second run outright.
+
+**A LOAD FAILURE IS A MEASUREMENT TOO.** Three tools failed once each
+across four full-suite runs (`uapp`, `idle`, `uterm`) and passed 3/3 in
+isolation. Two were weak waits I fixed (`uapp` polled until the window
+existed while the next line needed its resizable HINT -- a poll weaker
+than what follows it). Two I left, measured and said so in the commit,
+because nothing they touch was in the change. "Failed under eight-guest
+load, passes 3/3 alone" is a sentence worth writing; "flaky" is not.
