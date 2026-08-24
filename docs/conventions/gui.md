@@ -40,6 +40,24 @@ this the obvious way), not from how much history it accumulated.
   -- a terminal is monospace by definition -- so a proportional face
   gets a cell as wide as its widest advance there.
 
+- **THE ICON CACHE IS THE TOOLKIT'S NOW, NOT THE WM'S, AND A SIDEBAR
+  HEADING CAN CARRY AN ICON.** `icon_get()` moved from `userland/wm/` to
+  `userland/lib/icon_cache.h` when `uui_sidebar` needed it -- a library
+  that logs through one app's helper is a library only that app can
+  link, so its `wm_logf()` became `ulogf()` and it dropped out of
+  `EXTRA_OBJS_toywm` into `libuapp.a`. Three things:
+  - **AN ICON IS A NAME, NOT A PATH**, as everywhere else here:
+    `uui_sidebar_row.icon` is `"cat-input"` and resolves under
+    `/usr/share/icons`. A missing file means no icon and a plain row,
+    never an error -- which is what keeps it optional in fact.
+  - **HEADINGS ONLY.** A category is stable and there are a handful;
+    the rows under it come and go with what is registered, and an icon
+    per setting is twenty pieces of art whose generic answers read worse
+    than none. An icon on an ITEM is ignored rather than refused.
+  - **THE SIZE IS FONT-DERIVED** (`ugfx_char_h()`), and both the drawing
+    and the measuring ask the same helper for the indent -- a label
+    measured at one indent and drawn at another is the bug that shape
+    invites.
 - **A WINDOW HAS TWO BUFFERS, AND THE COMPOSITOR NEVER READS THE ONE
   BEING DRAWN.** `WIN_REQ_PRESENT` flips which is front and returns the
   new index; the client draws into the other. Wayland's attach/commit,

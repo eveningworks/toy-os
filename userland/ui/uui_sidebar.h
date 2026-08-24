@@ -32,11 +32,14 @@
 // it without pretending a heading is a place.
 //
 // **What it deliberately does NOT do**, so nobody goes looking: no
-// collapsing (see above), no nesting past one level of grouping (a
-// sidebar that needs a second level wants a tree, and should say so),
-// and no icons yet -- the glyph set has no room for them
-// (docs/conventions/gui.md), so adding a picture per row means an image
-// decoder first.
+// collapsing (see above), and no nesting past one level of grouping (a
+// sidebar that needs a second level wants a tree, and should say so).
+//
+// It DOES have icons now, on headings. That paragraph used to say it
+// did not, "because adding a picture per row means an image decoder
+// first" -- true when it was written, and untrue since userland/lib/
+// uimg.c and the icon cache landed. The comment outlived its fact,
+// which is a thing this tree has now caught four times.
 
 #define UUI_SIDEBAR_MAX_ROWS 64
 
@@ -50,6 +53,22 @@ enum uui_sidebar_kind {
 struct uui_sidebar_row {
     const char *label;
     int kind;   // enum uui_sidebar_kind
+    // AN ICON NAME, NOT A PATH, and NULL for none -- the same rule
+    // `Icon=` follows in a .desktop entry: `icon_get()` resolves it
+    // under /usr/share/icons and caches the decoded, scaled result.
+    //
+    // ON HEADINGS ONLY, deliberately. A category is a stable thing worth
+    // recognising by shape, and there are a handful of them; the rows
+    // under it come and go with what is registered, and an icon per
+    // setting is twenty pieces of art whose wrong or generic answers
+    // read worse than no picture at all. An icon on an item is ignored
+    // rather than refused, so a caller that sets one gets a plain row
+    // rather than a surprise.
+    //
+    // A missing file is not an error either: no decode means no icon
+    // means the row draws exactly as it did before, which is what keeps
+    // this optional in fact and not just in principle.
+    const char *icon;
     // The app's own identifier, handed back by uui_sidebar_selected_id().
     // Meaningless on a heading, which can never be selected.
     int id;

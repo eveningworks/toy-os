@@ -12,7 +12,7 @@
 #include "icon_grid.h"
 #include <stdio.h>
 #include "wm/wm_conf.h"
-#include "wm/icon_cache.h"
+#include "lib/icon_cache.h"
 #include "wm/wm_log.h"
 #include "lib/uimg.h"
 #include "ui/uui_image.h"

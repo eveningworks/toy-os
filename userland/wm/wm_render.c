@@ -14,7 +14,7 @@
 #include "desktop.h"
 #include "wm_tray.h"
 #include "wm_taskbar.h"
-#include "wm/icon_cache.h"
+#include "lib/icon_cache.h"
 #include "cursor_theme.h"
 #include "ui/uui.h"
 #include "ui/utheme.h"

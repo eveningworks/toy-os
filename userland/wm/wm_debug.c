@@ -1,7 +1,7 @@
 // See wm_debug.h for what this is for and why it lives here.
 #include "wm_internal.h"
 #include "wm_taskbar.h"
-#include "wm/icon_cache.h"
+#include "lib/icon_cache.h"
 #include "wm_tray.h"
 #include "wm_debug.h"
 #include "start_menu.h"

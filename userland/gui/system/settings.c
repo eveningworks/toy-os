@@ -226,6 +226,30 @@ static const char *group_key_of(int i) {
     return g_group_of[i][0] ? g_group_of[i] : g_label[i];
 }
 
+// THE ICON FOR A CATEGORY, or NULL. A NAME rather than a path, which
+// icon_get() resolves under /usr/share/icons -- the same rule a
+// `.desktop` entry's `Icon=` follows.
+//
+// **MATCHED ON THE CATEGORY STRING, which is the registry's and not
+// this app's.** A category comes from whatever a `struct setting`
+// declared, so this table can only ever be a best effort: a category
+// nobody here anticipated gets NO icon and a plain heading, which is
+// exactly what every heading looked like before. That is the right
+// failure -- the alternative is a generic icon on rows it says nothing
+// about, which is worse than none.
+static const char *category_icon(const char *cat) {
+    static const struct { const char *cat, *icon; } MAP[] = {
+        { "Time & Locale", "cat-time" },
+        { "Appearance",    "cat-appearance" },
+        { "Input",         "cat-input" },
+        { "Startup",       "cat-startup" },
+        { "Kernel",        "cat-kernel" },
+    };
+    for (unsigned i = 0; i < sizeof MAP / sizeof MAP[0]; i++)
+        if (strcmp(cat, MAP[i].cat) == 0) return MAP[i].icon;
+    return 0;
+}
+
 static void rebuild_sidebar(void) {
     g_cat_count = 0;
     g_group_count = 0;
@@ -277,7 +301,8 @@ static void rebuild_sidebar(void) {
         // below can name it.
         g_nodes[g_node_count++] = (struct uui_sidebar_row){
             .label = g_cat[c], .kind = UUI_SIDEBAR_HEADING,
-            .id = NODE_CATEGORY_BASE + c
+            .id = NODE_CATEGORY_BASE + c,
+            .icon = category_icon(g_cat[c])
         };
         for (int g = 0; g < g_group_count; g++) {
             if (strcmp(g_group_cat[g], g_cat[c]) != 0) continue;

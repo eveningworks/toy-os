@@ -1,6 +1,6 @@
 // See start_menu.h.
 #include "start_menu.h"
-#include "wm/icon_cache.h"
+#include "lib/icon_cache.h"
 #include "wm_internal.h"
 #include "confirm_dialog.h"
 #include "ui/uui.h"

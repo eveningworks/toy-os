@@ -254,7 +254,72 @@ def icon_start():
     return im
 
 
+# --- SETTINGS CATEGORIES ----------------------------------------------
+#
+# One per top-level category in System Settings' sidebar, named
+# `cat-<something>` so they sort together in /usr/share/icons and cannot
+# collide with an app's. Drawn flatter and simpler than an app icon on
+# purpose: these are read at about a text row's height beside a bold
+# label, not at 48px on a wallpaper, so a pictogram with any detail in
+# it turns to mush. The tile hue carries most of the recognition at that
+# size; the shape confirms it.
+
+def icon_cat_time():
+    im, d = tile((70, 130, 180))
+    d.ellipse([14, 14, 50, 50], outline=WHITE, width=5)
+    d.line([32, 32, 32, 20], fill=WHITE, width=5)   # hour hand
+    d.line([32, 32, 42, 38], fill=WHITE, width=5)   # minute hand
+    return im
+
+
+def icon_cat_appearance():
+    # A half-filled disc: the universal "contrast/theme" mark, and the
+    # one shape that still reads when it is twelve pixels across.
+    im, d = tile((150, 100, 190))
+    d.ellipse([14, 14, 50, 50], outline=WHITE, width=5)
+    d.pieslice([14, 14, 50, 50], 90, 270, fill=WHITE)
+    return im
+
+
+def icon_cat_input():
+    # A keyboard: an outline with three key rows, the middle one broken
+    # so it does not read as a filled block.
+    im, d = tile((90, 160, 120))
+    d.rounded_rectangle([10, 20, 54, 46], radius=4, outline=WHITE, width=4)
+    for y in (27, 33):
+        d.line([17, y, 47, y], fill=WHITE, width=3)
+    d.line([24, 39, 40, 39], fill=WHITE, width=3)   # the space bar
+    return im
+
+
+def icon_cat_startup():
+    # A power symbol -- a broken ring with a stem, which is what every
+    # system has used for "boot" since the IEC standardised it.
+    im, d = tile((210, 140, 70))
+    d.arc([15, 15, 49, 49], start=300, end=240, fill=WHITE, width=5)
+    d.line([32, 12, 32, 30], fill=WHITE, width=5)
+    return im
+
+
+def icon_cat_kernel():
+    # A chip: a square die with legs on all four sides. The one category
+    # that is about the machine rather than about the session.
+    im, d = tile((110, 120, 135))
+    d.rounded_rectangle([18, 18, 46, 46], radius=3, outline=WHITE, width=4)
+    for t in (25, 32, 39):
+        d.line([t, 10, t, 18], fill=WHITE, width=3)   # top
+        d.line([t, 46, t, 54], fill=WHITE, width=3)   # bottom
+        d.line([10, t, 18, t], fill=WHITE, width=3)   # left
+        d.line([46, t, 54, t], fill=WHITE, width=3)   # right
+    return im
+
+
 ICONS = {
+    "cat-time": icon_cat_time,
+    "cat-appearance": icon_cat_appearance,
+    "cat-input": icon_cat_input,
+    "cat-startup": icon_cat_startup,
+    "cat-kernel": icon_cat_kernel,
     "start": icon_start,
     "notepad": icon_notepad,
     "terminal": icon_terminal,

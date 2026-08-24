@@ -1,6 +1,9 @@
 // See icon_cache.h.
-#include "wm/icon_cache.h"
-#include "wm/wm_log.h"
+#include "lib/icon_cache.h"
+// ulog(), not the WM's logger: this moved out of userland/wm/ when the
+// toolkit's sidebar needed icons too, and a library that logs through
+// one app's helper is a library only that app can link.
+#include "ui/ulog.h"
 #include "string.h"
 #include "kfmt.h"
 
@@ -61,14 +64,14 @@ const struct uimg *icon_get(const char *name, int size) {
         // Logged ONCE per (name, size), because the entry is kept as a
         // negative result -- an icon that is missing must not produce a
         // line per repaint.
-        wm_logf("icons: %s not loaded -- %s\n", path, uimg_last_error());
+        ulogf("icons: %s not loaded -- %s\n", path, uimg_last_error());
         return NULL;
     }
 
     int rc = uimg_scale(&master, size, size, &e->img);
     uimg_free(&master);
     if (rc < 0) {
-        wm_logf("icons: %s could not be scaled to %d -- %s\n", path, size,
+        ulogf("icons: %s could not be scaled to %d -- %s\n", path, size,
                 uimg_last_error());
         return NULL;
     }

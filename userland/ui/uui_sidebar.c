@@ -11,6 +11,7 @@
 #include "ui/uui_sidebar.h"
 #include "ui/uui_widget.h"
 #include "ui/uui_scrollbar.h"
+#include "lib/icon_cache.h" // icon_get() -- a heading may carry an icon
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
 
 #define UUI_SIDEBAR_PAD_X   6  // left inset for a heading
@@ -147,12 +148,28 @@ static void reveal(struct uui_sidebar *s, int row) {
     clamp_top(s);
 }
 
+// A heading's icon is square and sized to the text, so it scales with
+// the font rather than pinning a pixel count -- the rule everything
+// drawn here follows (docs/gui-guidelines.md: layout is FONT-DERIVED).
+static int icon_px(void) { return ugfx_char_h(); }
+
+// How far a heading's label is pushed right to make room for its icon,
+// or 0 when it has none. Asked by BOTH the drawing and the measuring,
+// which is what keeps a label from being measured at one indent and
+// drawn at another.
+static int icon_indent(const struct uui_sidebar *s, int row) {
+    if (s->rows[row].kind != UUI_SIDEBAR_HEADING) return 0;
+    if (!s->rows[row].icon) return 0;
+    return icon_px() + UUI_SIDEBAR_PAD_X;
+}
+
 static int text_x(const struct uui_sidebar *s, int row) {
     // An item is indented under its heading; a heading is not. That is
-    // the entire visual grouping, and it is why headings need no box,
-    // no rule and no icon to read as captions.
+    // the entire visual grouping -- the icon below decorates a heading,
+    // it does not do the grouping.
     return s->x + UUI_SIDEBAR_PAD_X +
-           (s->rows[row].kind == UUI_SIDEBAR_ITEM ? UUI_SIDEBAR_INDENT : 0);
+           (s->rows[row].kind == UUI_SIDEBAR_ITEM ? UUI_SIDEBAR_INDENT : 0) +
+           icon_indent(s, row);
 }
 
 // The widget WANTS room for its longest row at its own indent, measured
@@ -207,6 +224,18 @@ void uui_sidebar_draw(struct ugfx_surface *surf, const struct uui_sidebar *s) {
         else if (!heading && row == s->hovered)
             ugfx_fill_rect(surf, s->x, ry, s->w - bar, rh,
                             uui_state_bg(s->bg, UUI_STATE_HOVER));
+
+        // THE HEADING'S ICON, before the label and at the label's own
+        // height. ugfx_blit_alpha(), never ugfx_blit(): an icon's
+        // corners are transparent and a plain blit lands them as black
+        // squares (docs/conventions/gui.md).
+        if (heading && s->rows[row].icon) {
+            int isz = icon_px();
+            const struct uimg *ic = icon_get(s->rows[row].icon, isz);
+            if (ic)
+                ugfx_blit_alpha(surf, s->x + UUI_SIDEBAR_PAD_X,
+                                 ry + (rh - isz) / 2, ic->w, ic->h, ic->px, ic->w);
+        }
 
         const struct ugfx_font *was =
             ugfx_set_font(heading ? ugfx_font_session(UGFX_FONT_BOLD) : 0);

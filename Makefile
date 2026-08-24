@@ -579,7 +579,11 @@ EXTRA_OBJS_toywm      = wm/wm wm/wm_rawin wm/wm_render wm/wm_input wm/wm_client 
                         wm/wm_debug wm/wm_tray wm/wm_taskbar wm/wm_watchdog \
                         wm/desktop wm/start_menu wm/context_menu \
                         wm/confirm_dialog wm/file_picker wm/cursor_theme \
-                        wm/gui_apps wm/icon_cache wm/wm_log wm/wm_fs wm/wm_conf
+                        wm/gui_apps wm/wm_log wm/wm_fs wm/wm_conf
+# icon_cache is NOT in that list any more: it moved to userland/lib/ when
+# the toolkit's sidebar needed icons too, so it comes from libuapp.a like
+# every other shared piece. The archive is linked into every userland ELF
+# and --gc-sections drops it from the ones that never call icon_get().
 
 # --- the ring-3 WM is BUILT ON DEMAND, not by `make all` ---------------
 #
