@@ -93,14 +93,31 @@ static int read_all(int fd) {
     return g_len;
 }
 
+// One escape sequence, or any short literal, to stdout.
+static void put(const char *s) { sys_write(1, s, strlen(s)); }
+
 // Draws one screenful starting at line `top`, plus a status line.
 static char g_frame[LESS_MAX_BYTES / 8];
 
 static void draw(int top, int rows, int cols) {
-    // No cursor addressing: the console swallows the escapes it cannot
-    // honour (kernel/lib/ansi.c), so repainting means printing a
-    // screenful and letting it scroll. Cheap, and correct on a console
-    // that has no addressing to offer.
+    // HOME, THEN PAINT, THEN ERASE WHAT IS LEFT -- a page REPLACES the
+    // one before it.
+    //
+    // This used to print a screenful and let it scroll, on the stated
+    // reasoning that "the console swallows the escapes it cannot
+    // honour". That was a guess and it was wrong: kernel/lib/ansi.c
+    // honours cursor addressing and erase, on the console and in a
+    // window alike -- /bin/edit has drawn whole screens through the
+    // same parser all along. The cost of the guess was that every page
+    // was APPENDED below the last, so pressing space added text rather
+    // than turning a page, and the file crept upward off the top.
+    //
+    // ESC[J at the END rather than ESC[2J at the start: erasing first
+    // would blank the screen and then paint it, which flickers. Erasing
+    // from wherever the paint finished clears exactly the rows a
+    // shorter page left behind, and touches nothing that is about to be
+    // overwritten anyway.
+    put("\x1b[H");
     int page = rows - 1;             // one row reserved for the status line
     int used = 0;
     int cap = (int)sizeof g_frame;
@@ -120,7 +137,22 @@ static void draw(int top, int rows, int cols) {
             if (used + n + 1 > cap) break;
             for (int k = 0; k < n; k++) g_frame[used++] = g_buf[start + k];
         }
-        if (used + 1 > cap) break;
+        // **ERASE TO END OF LINE BEFORE THE NEWLINE.** A page paints
+        // over the one before it, and a line SHORTER than the one it
+        // replaces would otherwise leave that line's tail on screen --
+        // text from another part of the file, sitting past the end of
+        // the current one. It reads as lines that are not full, and it
+        // is why two draws of the same page did not match: the
+        // leftovers depend on what was there before.
+        //
+        // Per line rather than one ESC[2J at the top, for the reason
+        // the erase at the bottom gives: blanking the whole screen and
+        // repainting it flickers, and this touches only what is not
+        // about to be overwritten anyway.
+        if (used + 4 > cap) break;
+        g_frame[used++] = '\x1b';
+        g_frame[used++] = '[';
+        g_frame[used++] = 'K';
         g_frame[used++] = '\n';
     }
 
@@ -128,9 +160,24 @@ static void draw(int top, int rows, int cols) {
     if (last > g_lines) last = g_lines;
     int pct = g_lines ? (last * 100) / g_lines : 100;
 
-    char status[160];
+    // THE KEYS ARE ON SCREEN, spelled rather than abbreviated. A pager
+    // is the one program where "how do I get out of this" is a real
+    // question a person has, and `less` on a real system is famous for
+    // not answering it. The line is trimmed to the terminal's width by
+    // the caller's `cols`, so a narrow window loses the tail of the
+    // legend rather than wrapping and pushing the page up a row.
+    char status[200];
     snprintf(status, sizeof status,
-             "less: lines %d-%d/%d (%d%%)%s  [space/b, arrows, g/G, q]\n",
+             // **NO TRAILING NEWLINE**, and that is not tidiness. The
+             // status line is the LAST row, so a newline after it
+             // scrolls the terminal by one -- which shifted every
+             // repaint up a row, made two draws of the same page
+             // differ, and let the top of the file creep off the
+             // screen. It read as "it will not go all the way down".
+             // The caret is left at the end of this line, which is
+             // where a pager's caret belongs anyway.
+             "less: %d-%d/%d (%d%%)%s  "
+             "space/b page  up/down line  g/G ends  q quit",
              g_lines ? top + 1 : 0, last, g_lines, pct,
              g_truncated ? "  TRUNCATED" : "");
     int slen = (int)strlen(status);
@@ -139,10 +186,36 @@ static void draw(int top, int rows, int cols) {
     }
 
     sys_write(1, g_frame, (size_t)used);
+    // Whatever the previous page left below this one. A page shorter
+    // than the last (the end of the file) would otherwise show the
+    // tail of the old one under it, which reads as text that will not
+    // scroll away.
+    put("\x1b[J");
+}
+
+static void usage(void) {
+    // The same keys the status line shows, in the same order, because
+    // two lists of one keymap drift and the one on screen is the one
+    // people actually read.
+    put("usage: less [file]\n"
+        "  With no file, reads stdin -- `dmesg | less`.\n"
+        "\n"
+        "  space, f, PageDown   forward one page\n"
+        "  b, PageUp            back one page\n"
+        "  down, Enter          forward one line\n"
+        "  up                   back one line\n"
+        "  g, Home              first page\n"
+        "  G, End               last page\n"
+        "  q                    quit\n");
 }
 
 int main(int argc, char **argv) {
     int fd = 0;   // stdin by default, so `cmd | less` works
+    if (argc > 1 && (strcmp(argv[1], "--help") == 0
+                     || strcmp(argv[1], "-h") == 0)) {
+        usage();
+        return 0;
+    }
     if (argc > 1) {
         fd = sys_open(argv[1], 0)  /* read-only is the default; there is no SYS_O_READ */;
         if (fd < 0) {
@@ -183,9 +256,32 @@ int main(int argc, char **argv) {
     int restore = sys_tcgetattr(key_fd, &saved) == 0;
     if (restore) sys_tty_raw(key_fd);
 
-    int cols = 80;
-    int rows = sys_console_size(&cols);
-    if (rows < 4) rows = 24;      // a console too small to page in
+    // THE SIZE COMES FROM THE TERMINAL THIS IS ON, not from the
+    // console, and that distinction is the same one the key source
+    // above turns on. sys_console_size() reports the PHYSICAL console
+    // -- so in a Terminal window a pager sized its page to a screen it
+    // was not drawing on: too many rows for the window (the tail fell
+    // off the bottom and a page step jumped a screen and a half) and
+    // the wrong width (lines cut in the wrong column). It looked like
+    // three separate bugs and was one wrong question.
+    //
+    // Asked of the KEY descriptor rather than of fd 1, because that is
+    // the one already established to be a terminal -- in `cmd | less`
+    // fd 1 is the terminal and fd 0 is a pipe, and asking a pipe for a
+    // window size gets a refusal, not a size. `edit` sizes itself the
+    // same way.
+    struct tty_winsize ws;
+    int rows = 0, cols = 0;
+    if (sys_tcgetwinsz(key_fd, &ws) == 0 && ws.rows > 1 && ws.cols > 1) {
+        rows = ws.rows;
+        cols = ws.cols;
+    } else {
+        // No terminal answer: fall back to the console's idea, which is
+        // right on a text boot and is the best guess anywhere else.
+        cols = 80;
+        rows = sys_console_size(&cols);
+    }
+    if (rows < 4) rows = 24;      // too small to page in
     if (cols < 8) cols = 80;
     int page = rows - 1;
 

@@ -54,6 +54,13 @@ enum kfmt_arg {
     KFMT_ARG_CHAR,      // one int, passed to %c
     KFMT_ARG_PTR,       // one void *, built from `a`
     KFMT_ARG_INT_INT,   // TWO ints -- the consumption check
+    KFMT_ARG_STAR_INT,  // an int WIDTH then an int value -- `%*d`
+    KFMT_ARG_STAR_STR,  // an int width then a string -- `%*s`
+    // A width, a value, and a STRING after them -- the consumption
+    // check for `*`, which eats TWO arguments rather than one. It uses
+    // the string field for the tail because the struct already has one;
+    // a third numeric field for a single case would be worse.
+    KFMT_ARG_STAR_INT_STR,
 };
 
 struct kfmt_case {

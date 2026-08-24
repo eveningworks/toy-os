@@ -745,6 +745,14 @@ produce a wrong value -- it shifts every later argument in the call, and
 the symptom appears somewhere unrelated. That is the same failure the
 `%.3d` precision gap produced when Doom asked its WAD for `STCFN33`.
 
+A FIFTH turned up the same way the second did -- by looking at a screen
+and seeing the letters. `edit`'s line-number gutter writes `"%*d "`,
+because the column width comes from the file's line count and cannot be
+a literal; `*` was unsupported, so the gutter printed `%*d` down the
+left margin and ate the width as if it were the value. Both `%*d` and
+`%.*s` work now, including C's rules that a negative `*` width means
+left-justify and a negative `*` precision means no precision at all.
+
 Reading the switch after fixing `%X` found four more of the same class,
 none of them yet in anyone's way: `%p`, `%o`, the `+`, space and `#`
 flags, and the `h`/`hh` length modifiers. All are implemented now, with

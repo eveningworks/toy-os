@@ -210,8 +210,24 @@ static void vformat(struct out *o, const char *fmt, va_list ap) {
         int zero = 0;
         if (*p == '0') { zero = 1; p++; }
 
+        // `*` TAKES THE WIDTH FROM AN ARGUMENT, which is how a caller
+        // whose column width is computed at runtime writes it --
+        // `snprintf(b, n, "%*d ", digits, line)`. Missing, it went out
+        // literally and ate the wrong argument, which is this
+        // formatter's standing failure mode (see the case table).
+        //
+        // A NEGATIVE argument means left-justify with that width, which
+        // is what C says and is the only place `-` can arrive after the
+        // flags have been read.
         unsigned width = 0;
-        while (k_isdigit(*p)) { width = width * 10 + (unsigned)(*p - '0'); p++; }
+        if (*p == '*') {
+            p++;
+            int w = va_arg(ap, int);
+            if (w < 0) { left = 1; w = -w; }
+            width = (unsigned)w;
+        } else {
+            while (k_isdigit(*p)) { width = width * 10 + (unsigned)(*p - '0'); p++; }
+        }
 
         // Precision. Honoured by the FLOAT and INTEGER conversions, and
         // still ignored by %s -- which is not an inconsistency but the
@@ -231,7 +247,17 @@ static void vformat(struct out *o, const char *fmt, va_list ap) {
         if (*p == '.') {
             has_prec = 1;
             p++;
-            while (k_isdigit(*p)) { prec = prec * 10 + (unsigned)(*p - '0'); p++; }
+            if (*p == '*') {
+                p++;
+                int pr = va_arg(ap, int);
+                // C: a NEGATIVE precision from `*` means no precision at
+                // all, not a precision of zero -- which would print
+                // nothing for a zero value rather than printing it.
+                if (pr < 0) has_prec = 0;
+                else prec = (unsigned)pr;
+            } else {
+                while (k_isdigit(*p)) { prec = prec * 10 + (unsigned)(*p - '0'); p++; }
+            }
         }
 
         // Length modifiers matter here, they aren't decoration: varargs

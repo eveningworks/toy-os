@@ -145,6 +145,22 @@ class Terminal:
     def frame(self, tmp, tag):
         return self.qmp.stable_pixels(os.path.join(tmp, f"{tag}.png"), box=self.box)
 
+    @staticmethod
+    def diff_pct(a, b):
+        """How much two captures differ, as a percentage.
+
+        BYTE-EXACT EQUALITY IS THE WRONG TEST for "did it come back",
+        because the caret BLINKS: two captures of the same page differ
+        by a few dozen bytes depending on which phase each landed in. A
+        wrong page differs by 15% or more, so a tolerance separates them
+        with room to spare -- and keeps the check strong, which exact
+        equality did not: it reported a correct round trip as a failure.
+        """
+        n = min(len(a), len(b))
+        step = 7
+        diff = sum(1 for i in range(0, n, step) if a[i] != b[i])
+        return 100.0 * diff / max(1, n // step)
+
     def moved(self, tmp, tag, act, settle=2.0):
         """Percent of the content area that changed -- trap 5.
 
@@ -223,12 +239,63 @@ def probe_pixels(t, tmp):
     # A pager on a 401-line fixture -- trap 1.
     t.type(f"less {FIXTURE}")
     t.enter(settle=2.5)
+    first = t.frame(tmp, "less_first")
+    # THE NOISE FLOOR, measured rather than assumed. Two captures of the
+    # SAME page are not byte-identical -- the caret blinks, and a couple
+    # of percent of the area moves with it. Which couple is not worth
+    # explaining and has not been: what matters is that a real page
+    # change is many times larger, so the round-trip checks below
+    # compare against this baseline instead of against zero or against a
+    # number somebody picked.
+    noise = t.diff_pct(first, t.frame(tmp, "less_first2"))
+    same = noise + 4.0
+    print(f"    (noise floor between two captures of one page: {noise:.2f}%)")
     paged = t.moved(tmp, "less", lambda: t.key("0x20"))
     check("space pages `less` forward", paged > 10.0,
           f"{paged:.2f}% moved (typing alone moves {typing:.2f}%)")
+
+    # **"A LOT OF PIXELS MOVED" IS NOT "IT PAGED", and this pair is what
+    # tells them apart.** A pager that APPENDS a screenful below the last
+    # one instead of repainting moves just as many pixels as one that
+    # turns a page -- that shipped, and the check above went green
+    # through it. A pager sized to the wrong terminal moves just as many
+    # again. What only a correct pager does is come BACK: `b` from page
+    # two must reproduce page one exactly, byte for byte.
+    t.key("b")
+    time.sleep(2.0)
+    back = t.frame(tmp, "less_back")
+    d = t.diff_pct(back, first)
+    check("...and `b` returns to the page it left", d < same,
+          f"{d:.2f}% different, against a {noise:.2f}% noise floor")
+
+    # ...and the same round trip over the whole file, which additionally
+    # pins that the LAST page is reachable -- "it will not go all the way
+    # down" was a real symptom of the wrong page height.
+    t.key("G")
+    time.sleep(2.0)
+    end = t.frame(tmp, "less_end")
+    d = t.diff_pct(end, first)
+    check("`G` reaches the end, and it is a different page", d > same * 2,
+          f"{d:.2f}% different, against a {noise:.2f}% noise floor")
+    t.key("g")
+    time.sleep(2.0)
+    d = t.diff_pct(t.frame(tmp, "less_home"), first)
+    check("...and `g` comes back to the first page", d < same,
+          f"{d:.2f}% different, against a {noise:.2f}% noise floor")
+
+    # `q` must be enough to leave -- before the key source was fixed,
+    # nothing reached the pager and Ctrl-C was the only way out.
     t.key("q")
     t.dbg.settle()
     time.sleep(1.5)
+    t.dbg.send("sh rm /qprobe.txt")
+    time.sleep(0.3)
+    t.type("echo q > /qprobe.txt")
+    t.enter()
+    out = t.dbg.send("sh cat /qprobe.txt") or ""
+    check("`q` quits the pager and the shell is back",
+          "q" in out and "no such file" not in out,
+          "the shell did not run a command after q")
 
     # ...and through a pipe, where fd 0 is NOT the terminal. A pager
     # that reads its keys from stdin cannot work here at all, which is

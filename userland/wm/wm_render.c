@@ -612,12 +612,44 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
 // gfx_fill_rect()) -- drawing the grip before that content redraw meant
 // it was invisible, silently painted over a moment later. Not shown
 // when maximized or when the app isn't resizable (see gui_apps.h).
+// A DIAGONAL OF DOTS, six of them in a 3-2-1 triangle stepping up from
+// the corner -- the macOS and GTK grip. It replaced an L of two solid
+// bars, which read as half a crosshair: two axis-aligned strokes say
+// "here is a corner", and a corner is not what the control does. The
+// diagonal says which way to drag, which is the whole message.
+//
+// **DOTS RATHER THAN SOLID DIAGONAL LINES**, and that is the reason it
+// survives at this size. A 1px diagonal on an unantialiased raster is a
+// staircase, and three of them next to a scrollbar's down-arrow -- which
+// sits directly above this on any scrollable window -- read as a smudge
+// competing with a control. Discrete dots read as TEXTURE, which is
+// what a grip should be: findable when looked for, invisible when not.
+#define GRIP_DOT   2   // px, square
+#define GRIP_STEP  3   // px between dot origins -- one clear pixel between
+#define GRIP_INSET 3   // px from the frame's outer edge to the first dot
+#define GRIP_ROWS  3
+
 static void draw_resize_grip(const struct window *win) {
     if (win->state == WIN_MAXIMIZED) return;
     if (!win->resizable) return;
-    uint32_t border = UTHEME_BORDER;
-    ugfx_fill_rect(wm_surface(), win->x + win->w - 8, win->y + win->h - 3, 5, 2, border);
-    ugfx_fill_rect(wm_surface(), win->x + win->w - 3, win->y + win->h - 8, 2, 5, border);
+
+    // The corner the dots are anchored to. Everything below counts
+    // INWARD from here, so the shape cannot drift off the frame when a
+    // window is at the screen edge.
+    int right = win->x + win->w - GRIP_INSET - GRIP_DOT;
+    int bottom = win->y + win->h - GRIP_INSET - GRIP_DOT;
+
+    for (int row = 0; row < GRIP_ROWS; row++) {
+        // Row 0 is the bottom one and is the longest: the triangle's
+        // hypotenuse runs from bottom-left to top-right, which is the
+        // direction the drag goes.
+        for (int col = 0; col + row < GRIP_ROWS; col++) {
+            ugfx_fill_rect(wm_surface(),
+                           right - col * GRIP_STEP,
+                           bottom - row * GRIP_STEP,
+                           GRIP_DOT, GRIP_DOT, UTHEME_BORDER);
+        }
+    }
 }
 
 static void draw_taskbar(void) {

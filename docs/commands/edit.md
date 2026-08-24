@@ -6,13 +6,31 @@
 
 ## Synopsis
 
-    edit <file>
+    edit [-n] <file>
 
 ## Description
 
 A full-screen nano-style editor. Arrows, Home/End, Backspace and Delete
 navigate and edit; **F2 saves** and **F3 exits** (Esc also exits). A file
 that does not exist yet opens empty and is created on the first save.
+
+**Where you are is always on the status bar** -- `Ln 42, Col 7`, 1-based
+because every editor and every error message that will ever name a line
+to you counts from 1. It costs no horizontal space, which is the whole
+reason it is unconditional.
+
+**`-n` adds a gutter of line numbers** down the left. That one costs
+columns an 80-column terminal has few of, so it is opt-in. The width is
+derived from the file's line count rather than fixed, and the numbers
+are right-aligned, so the text does not shift sideways as you cross line
+100. A WRAPPED row is blank in the gutter rather than numbered -- a
+continuation is not a new line, and numbering it would make the file
+look longer than it is, which is what `vim` and `nano -l` also do.
+
+The two answer different questions, which is why both exist: the status
+bar says where the caret is, and the gutter says which line any row on
+screen is -- the question you have when something else named a line
+number at you.
 
 **It was a kernel builtin until 2026-08-22.** Nothing about editing a
 file needs ring 0, and everything the old one took from there now exists

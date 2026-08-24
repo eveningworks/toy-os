@@ -110,6 +110,31 @@ const struct kfmt_case kfmt_cases[] = {
     // literal path's contract rather than just its output.
     { "%q/%d",   KFMT_ARG_INT_INT, 103, 71, 0, "%q/103" },
 
+    // --- `*`, the width taken from an argument -----------------------
+    //
+    // How a caller whose column width is computed at runtime writes it.
+    // `edit`'s line-number gutter is the real one: the width comes from
+    // the file's line count, so it cannot be a literal. Missing, `%*d`
+    // went out as the letters "%*d" AND ate the width as if it were the
+    // value -- the fourth instance of this formatter's standing failure,
+    // found the same way as the second: by looking at the screen.
+    { "[%*d]",   KFMT_ARG_STAR_INT, 5, 42, 0, "[   42]" },
+    { "[%-*d]",  KFMT_ARG_STAR_INT, 5, 42, 0, "[42   ]" },
+    // A NEGATIVE width means left-justify, which is C's rule and the one
+    // place `-` can arrive after the flags have been read.
+    { "[%*d]",   KFMT_ARG_STAR_INT, -5, 42, 0, "[42   ]" },
+    // A width SMALLER than the number does not truncate it.
+    { "[%*d]",   KFMT_ARG_STAR_INT, 1, 4242, 0, "[4242]" },
+    { "[%*s]",   KFMT_ARG_STAR_STR, 6, 0, "ab", "[    ab]" },
+    // ...and it consumes TWO arguments, so whatever follows must still
+    // land on the right one. This is the `*` form of the consumption
+    // check every other conversion here gets, and the first version of
+    // it was itself malformed -- `"%*d/%d"` needs THREE arguments and
+    // the runner passed two, so the trailing %d read garbage and the
+    // case failed against a correct formatter. A case can be wrong in
+    // exactly the way the thing it tests is wrong.
+    { "%*d/%s",  KFMT_ARG_STAR_INT_STR, 3, 5, "tail", "  5/tail" },
+
     // --- the real line that exposed all this -------------------------
     { "U+%04X slot %d", KFMT_ARG_INT_INT, 0x67, 71, 0, "U+0067 slot 71" },
 };
@@ -151,6 +176,18 @@ int kfmt_case_run(const struct kfmt_case *c, char *out, int cap) {
         break;
     case KFMT_ARG_INT_INT:
         k_snprintf(out, (size_t)cap, c->fmt, (int)c->a, (int)c->b);
+        break;
+    // `a` is the WIDTH and `b` is the value -- two ints either way, but
+    // named apart from KFMT_ARG_INT_INT because what the first one MEANS
+    // is the whole point of these cases.
+    case KFMT_ARG_STAR_INT:
+        k_snprintf(out, (size_t)cap, c->fmt, (int)c->a, (int)c->b);
+        break;
+    case KFMT_ARG_STAR_STR:
+        k_snprintf(out, (size_t)cap, c->fmt, (int)c->a, c->s);
+        break;
+    case KFMT_ARG_STAR_INT_STR:
+        k_snprintf(out, (size_t)cap, c->fmt, (int)c->a, (int)c->b, c->s);
         break;
     }
     return k_strcmp(out, c->want) == 0;

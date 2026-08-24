@@ -102,6 +102,31 @@ static void locate(int pos, int *out_line, int *out_col) {
     *out_col = col;
 }
 
+// LINE NUMBERS DOWN THE LEFT, off unless `-n` asked for them.
+//
+// Two separate things answer "where am I", and they answer different
+// questions. The status bar's `Ln N, Col N` is always on and costs no
+// horizontal space -- that is Notepad's and VS Code's answer, and it
+// tells you where the CARET is. The gutter tells you which line any
+// row on screen is, which is the question you have when something else
+// named a line number at you, and it costs columns that an 80-column
+// terminal does not have to spare. So the cheap one is unconditional
+// and the expensive one is opt-in.
+static int g_gutter;
+
+// Wide enough for the highest line number the file can show, plus one
+// space. DERIVED from the count rather than fixed at 4, so a short file
+// does not pay for digits it will never use -- and RIGHT-ALIGNED below,
+// which is what keeps the text from shifting sideways as the numbers
+// grow past a power of ten.
+static int gutter_w(int total_lines) {
+    if (!g_gutter) return 0;
+    int digits = 1;
+    for (int n = total_lines; n >= 10; n /= 10) digits++;
+    if (digits < 3) digits = 3;   // a floor, so short files do not jitter
+    return digits + 1;            // + the separating space
+}
+
 static void render(const char *path, const char *status) {
     int text_rows = g_rows - 1; // the last row is the status bar
     int cur_line, cur_col;
@@ -115,20 +140,50 @@ static void render(const char *path, const char *status) {
     if (cur_line >= first_line + text_rows) first_line = cur_line - text_rows + 1;
     if (first_line < 0) first_line = 0;
 
+    // Total lines, for the gutter's width. Counted rather than tracked
+    // because the buffer is edited through utext and a stale count
+    // would size the gutter for a file that no longer exists.
+    int total_lines = 1;
+    for (int i = 0; i < g_tb.count; i++)
+        if (utext_at(&g_tb, i) == '\n') total_lines++;
+    int gw = gutter_w(total_lines);
+    // The text gets what the gutter leaves. Everything below wraps
+    // against THIS, not g_cols, or a numbered file wraps in a different
+    // place from the one the caret is placed at.
+    int text_cols = g_cols - gw;
+    if (text_cols < 8) { gw = 0; text_cols = g_cols; }   // too narrow to number
+
     ansi("\x1b[H");
     int line = 0, col = 0, row_drawn = 0;
+    // A number is printed at the START of a visible row, and a WRAPPED
+    // row gets blanks instead -- a continuation is not a new line, and
+    // numbering it would make the file look longer than it is. `vim`
+    // and `nano -l` both do this.
+    int need_num = 1;
     for (int i = 0; i < g_tb.count; i++) {
         char c = utext_at(&g_tb, i);
         int visible = (line >= first_line && line < first_line + text_rows);
+        if (visible && gw && need_num) {
+            char num[16];
+            snprintf(num, sizeof num, "%*d ", gw - 1, line + 1);
+            put(num);
+            need_num = 0;
+        }
         if (c == '\n') {
             if (visible) { ansi("\x1b[K"); put("\r\n"); row_drawn++; }
-            line++; col = 0;
+            line++; col = 0; need_num = 1;
             if (line >= first_line + text_rows) break;
             continue;
         }
         if (visible) sys_write(1, &c, 1);
-        if (++col >= g_cols) {
-            if (visible) { put("\r\n"); row_drawn++; }
+        if (++col >= text_cols) {
+            if (visible) {
+                put("\r\n");
+                row_drawn++;
+                // A wrapped continuation: pad the gutter so the text
+                // stays in its column.
+                if (gw) { for (int k = 0; k < gw; k++) put(" "); }
+            }
             line++; col = 0;
             if (line >= first_line + text_rows) break;
         }
@@ -144,15 +199,24 @@ static void render(const char *path, const char *status) {
     // padding with newlines -- padding was how the kernel version did it
     // and it needed a paragraph of comment to explain why the count came
     // out right.
+    // **Ln/Col IS ALWAYS ON**, gutter or not: it costs no horizontal
+    // space, and "where is the caret" is the question you have most
+    // often. 1-BASED, because every editor and every compiler error
+    // that will ever name a line to you counts from 1 -- reporting the
+    // internal 0-based index here would make this the one place that
+    // disagreed.
     char bar[160];
-    snprintf(bar, sizeof bar, "-- %s -- F2 Save  F3 Exit%s%s --",
-             path, status && status[0] ? "  -- " : "", status ? status : "");
+    snprintf(bar, sizeof bar, "-- %s -- F2 Save  F3 Exit  Ln %d, Col %d%s%s --",
+             path, cur_line + 1, cur_col + 1,
+             status && status[0] ? "  -- " : "", status ? status : "");
     ansi_at(g_rows - 1, 0);
     ansi("\x1b[7m");
     for (int i = 0; bar[i] && i < g_cols; i++) sys_write(1, &bar[i], 1);
     ansi("\x1b[0m\x1b[K");
 
-    ansi_at(cur_line - first_line, cur_col);
+    // The caret sits past the gutter, or the column it reports and the
+    // column it is drawn at disagree by exactly the gutter's width.
+    ansi_at(cur_line - first_line, cur_col + gw);
     (void)row_drawn;
 }
 
@@ -182,11 +246,20 @@ static int save(const char *path) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        cmd_usage("edit <file>");
+    // `-n` before or after the path, and exactly one path. A flag-only
+    // invocation is a usage error rather than an empty editor: `edit`
+    // with nothing to edit has nothing to do, and guessing a filename
+    // is the sort of help nobody wants.
+    const char *path = 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-n") == 0) { g_gutter = 1; continue; }
+        if (path) { cmd_usage("edit [-n] <file>"); return 1; }
+        path = argv[i];
+    }
+    if (!path) {
+        cmd_usage("edit [-n] <file>");
         return 1;
     }
-    const char *path = argv[1];
 
     utext_init(&g_tb);
     load(path);

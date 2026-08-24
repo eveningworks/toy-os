@@ -83,7 +83,9 @@ this the obvious way), not from how much history it accumulated.
   (`/bin/font` printed a codepoint where a slot number belonged, because
   the `%X` ate nothing and the `%d` after it read the wrong slot); and
   `%p`, `%o`, `%+d`, `% d`, `%#x` and `%hd`, all found by auditing the
-  switch after the second one. Three things:
+  switch after the second one; and `%*d` -- the width taken from an
+  argument -- found the way the second one was, by looking at the screen
+  and seeing the letters. Three things:
   - **EVERY CONVERSION AND FLAG C DEFINES HAS A CASE, INCLUDING THE ONES
     THAT DO NOTHING HERE** -- `h`/`hh` are accepted and ignored, because
     promotion has already widened the argument; what matters is that
