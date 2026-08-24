@@ -40,6 +40,38 @@ this the obvious way), not from how much history it accumulated.
   -- a terminal is monospace by definition -- so a proportional face
   gets a cell as wide as its widest advance there.
 
+- **A TITLE-BAR BUTTON IS A DISC, AND EVERY GLYPH CENTRES ON THE SAME
+  PIXEL AS IT.** Adwaita's shape, chosen because a circle has no corners
+  to alias at 18px. Four things, three of which were bugs first:
+  - **THE CLOSE BUTTON IS GREY UNTIL HOVERED**, then red. Red marks the
+    destructive action at the moment you are about to take it, not on
+    every title bar all session -- where Windows, GNOME and KDE all
+    ended up. The colour is DERIVED (`uui_state_bg()` shifting the
+    button's own base), so nothing is hand-picked.
+  - **A FILLED CIRCLE NEEDS AN ANTI-ALIASED OUTLINE OVER IT.** The
+    midpoint rasteriser leaves a one-pixel spur at each cardinal point;
+    at this size that does not read as a rough circle, it reads as a
+    COG. Stroking the same radius with `GEOM_AA` in the same colour
+    removes them.
+  - **A DISC CENTRES ON A PIXEL AND A RECTANGLE CENTRES ON A SPAN**, and
+    those agree only when the span is even. Placing a glyph at
+    `(size - w) / 2` put it half a pixel left of its disc at 18px, and
+    `(size - t) / 2` with a 1px stroke put the minimize bar a whole row
+    high at EVERY size. Draw from `cx - h` to `cx + h` inclusive --
+    always odd, always centred, at any font.
+  - **HAIRLINE STROKES AT THIS SIZE.** A 2px wall around a 6px square
+    leaves a 2px hole and stops reading as an outline; Adwaita, Breeze
+    and Segoe MDL2 are all 1px here.
+
+- **AN ICON COLUMN IN A SIDEBAR IS PER SIDEBAR, NOT PER ROW.**
+  `uui_sidebar` reserves one gutter for every row when ANY heading has
+  an icon. Indenting only the rows that have one pushed the headings
+  right while their children stayed put, so the headings ended up
+  further right than the rows beneath them and the hierarchy read
+  backwards. An icon that only some rows carry cannot also be what sets
+  their indent. **And the gutter counts towards natural_size** -- it is
+  added to every row's text origin, so leaving it out asks for exactly
+  that much too little and clips the longest label.
 - **THE ICON CACHE IS THE TOOLKIT'S NOW, NOT THE WM'S, AND A SIDEBAR
   HEADING CAN CARRY AN ICON.** `icon_get()` moved from `userland/wm/` to
   `userland/lib/icon_cache.h` when `uui_sidebar` needed it -- a library

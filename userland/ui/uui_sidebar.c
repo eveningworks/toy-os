@@ -153,23 +153,29 @@ static void reveal(struct uui_sidebar *s, int row) {
 // drawn here follows (docs/gui-guidelines.md: layout is FONT-DERIVED).
 static int icon_px(void) { return ugfx_char_h(); }
 
-// How far a heading's label is pushed right to make room for its icon,
-// or 0 when it has none. Asked by BOTH the drawing and the measuring,
-// which is what keeps a label from being measured at one indent and
-// drawn at another.
-static int icon_indent(const struct uui_sidebar *s, int row) {
-    if (s->rows[row].kind != UUI_SIDEBAR_HEADING) return 0;
-    if (!s->rows[row].icon) return 0;
-    return icon_px() + UUI_SIDEBAR_PAD_X;
+// THE ICON GUTTER: a column every row reserves, whether or not it has
+// an icon, and 0 for a sidebar where no row does.
+//
+// **PER SIDEBAR, NOT PER ROW, and that is the whole point.** The first
+// version indented only the rows that HAD an icon, which pushed the
+// headings right while their child items stayed where they were -- so
+// the headings ended up further right than the rows beneath them and
+// the hierarchy read backwards. An icon that only some rows carry
+// cannot also be the thing that sets their indent. Every sidebar in
+// every system that has icons does it this way for exactly that reason.
+static int icon_gutter(const struct uui_sidebar *s) {
+    for (int i = 0; i < s->count; i++)
+        if (s->rows[i].kind == UUI_SIDEBAR_HEADING && s->rows[i].icon)
+            return icon_px() + UUI_SIDEBAR_PAD_X;
+    return 0;
 }
 
 static int text_x(const struct uui_sidebar *s, int row) {
     // An item is indented under its heading; a heading is not. That is
     // the entire visual grouping -- the icon below decorates a heading,
     // it does not do the grouping.
-    return s->x + UUI_SIDEBAR_PAD_X +
-           (s->rows[row].kind == UUI_SIDEBAR_ITEM ? UUI_SIDEBAR_INDENT : 0) +
-           icon_indent(s, row);
+    return s->x + UUI_SIDEBAR_PAD_X + icon_gutter(s) +
+           (s->rows[row].kind == UUI_SIDEBAR_ITEM ? UUI_SIDEBAR_INDENT : 0);
 }
 
 // The widget WANTS room for its longest row at its own indent, measured
@@ -185,7 +191,12 @@ void uui_sidebar_natural_size(const struct uui_sidebar *s, int *out_w, int *out_
         int heading = s->rows[i].kind == UUI_SIDEBAR_HEADING;
         const struct ugfx_font *was =
             ugfx_set_font(heading ? ugfx_font_session(UGFX_FONT_BOLD) : 0);
-        int w = (heading ? 0 : UUI_SIDEBAR_INDENT) +
+        // THE GUTTER COUNTS TOWARDS THE WIDTH. It is added to every
+        // row's text_x, so leaving it out here makes the widget ask for
+        // exactly the gutter's width less than it needs -- which shows
+        // up as the longest label clipped ("System Informati"), and
+        // gets blamed on the clipping rather than on the measurement.
+        int w = icon_gutter(s) + (heading ? 0 : UUI_SIDEBAR_INDENT) +
                 ugfx_text_width(s->rows[i].label);
         ugfx_set_font(was);
         if (w > widest) widest = w;

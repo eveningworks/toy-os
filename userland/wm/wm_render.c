@@ -156,17 +156,113 @@ const struct uimg *title_icon(int idx, int *out_x, int *out_y, int *out_size) {
 // parallel diagonals) so it stays visible at both the small 14-18px
 // buttons and the larger ones on bigger font sizes, without needing
 // any glyph/font metrics.
+// --- title-bar buttons ------------------------------------------------
+//
+// A DISC PER BUTTON, with the glyph on top. Adwaita's shape, and the
+// reason it survives at this size is that a circle has no corners to
+// alias -- a small filled rectangle with a 1px outline reads as a
+// smudge, which is what the old square buttons did.
+//
+// The colours are DERIVED, not picked: the disc is the same `btnbg` the
+// square used, and hover and pressed come from uui_state_bg() shifting
+// it. That is what let the close button lose its permanent red without
+// anybody choosing a new palette -- it is a grey disc like the others
+// until you hover it, which is where the red belongs. A button that is
+// red before you touch it spends the whole session shouting about the
+// one action you least want to take by accident.
+
+// One stroke weight for all three glyphs, derived from the button so it
+// tracks the font. They were 2px, 1px and hand-drawn before, which is
+// the sort of thing that reads as "unfinished" without being nameable.
+static int btn_stroke(int size) {
+    // THIN, and thin is right here rather than a compromise. At a
+    // 14-pixel button a 2px wall around a 6px square leaves a 2px hole,
+    // so the maximize glyph stops reading as an outline and becomes a
+    // blob. Adwaita, Breeze and the Segoe MDL2 set are all hairline at
+    // this size for the same reason. It thickens on a big font, where a
+    // 1px line would disappear.
+    int t = size / 12;
+    return t < 1 ? 1 : t;
+}
+
+// **ONE CENTRE FOR THE DISC AND EVERY GLYPH, AND ODD EXTENTS AROUND
+// IT.** This is the fix for glyphs that looked a shade off inside their
+// buttons, and the cause is worth stating because it is easy to
+// reintroduce: a filled circle centres on a PIXEL (cx, cy), while a
+// rectangle placed at `(size - w) / 2` centres on a SPAN -- and those
+// two agree only when the span is even. At an 18px button the glyphs
+// sat half a pixel left of the disc, and the minimize bar sat a whole
+// row above it at every size, because `(size - t) / 2` with t = 1 is
+// always short of the middle.
+//
+// So every glyph below is drawn from cx - h to cx + h INCLUSIVE, which
+// is 2h+1 pixels wide and cannot be off-centre at any size or any font.
+static int btn_cx(int x, int size) { return x + size / 2; }
+static int btn_cy(int y, int size) { return y + size / 2; }
+
+// A bar of `thick` pixels centred on `cy`, spanning cx-h..cx+h.
+static void bar_h(int cx, int cy, int h, int thick, uint32_t color) {
+    ugfx_fill_rect(wm_surface(), cx - h, cy - thick / 2, 2 * h + 1, thick, color);
+}
+
+static void bar_v(int cx, int cy, int h, int thick, uint32_t color) {
+    ugfx_fill_rect(wm_surface(), cx - thick / 2, cy - h, thick, 2 * h + 1, color);
+}
+
+// The disc. Inset by a pixel so neighbouring buttons never touch, which
+// at this spacing is what makes three of them read as three.
+static void draw_btn_disc(int x, int y, int size, uint32_t bg) {
+    int r = size / 2 - 1;
+    if (r < 3) r = 3;
+    ugfx_fill_circle(wm_surface(), btn_cx(x, size), btn_cy(y, size), r, bg);
+    // AND AN ANTI-ALIASED OUTLINE OVER THE SAME CIRCLE. The fill's edge
+    // is a midpoint rasteriser's, which leaves a single-pixel spur at
+    // each of the four cardinal points -- at this size that does not
+    // read as a rough circle, it reads as a COG. Stroking the same
+    // radius with aa smooths those away, and it is one call rather than
+    // a second rasteriser.
+    ugfx_draw_circle(wm_surface(), btn_cx(x, size), btn_cy(y, size), r, bg, GEOM_AA);
+}
+
+// How far a glyph reaches from the centre. A quarter of the button, so
+// the glyph is about half its width and clears the disc's edge with the
+// stroke counted.
+static int glyph_h(int size) {
+    int h = size / 4;
+    return h < 2 ? 2 : h;
+}
+
+static void draw_min_icon(int x, int y, int size, uint32_t color) {
+    bar_h(btn_cx(x, size), btn_cy(y, size), glyph_h(size), btn_stroke(size), color);
+}
+
+// Maximize: a square outline at the same stroke weight, drawn as four
+// bars rather than with ugfx_draw_rect() -- that is 1px and would be
+// thinner than the other glyphs on a large font.
+static void draw_max_icon(int x, int y, int size, uint32_t color) {
+    int cx = btn_cx(x, size), cy = btn_cy(y, size);
+    int h = glyph_h(size), t = btn_stroke(size);
+    bar_h(cx, cy - h, h, t, color);
+    bar_h(cx, cy + h, h, t, color);
+    bar_v(cx - h, cy, h, t, color);
+    bar_v(cx + h, cy, h, t, color);
+}
+
 static void draw_close_icon(int x, int y, int size, uint32_t color) {
-    int pad = size / 4;
-    if (pad < 2) pad = 2;
-    int thick = size >= 24 ? 1 : 0; // extra 1px of thickness on bigger buttons
-    for (int i = pad; i < size - pad; i++) {
-        for (int t = -thick; t <= thick; t++) {
-            ugfx_put_pixel(wm_surface(), x + i + t, y + i, color);
-            ugfx_put_pixel(wm_surface(), x + i, y + i + t, color);
-            ugfx_put_pixel(wm_surface(), x + i + t, y + (size - 1 - i), color);
-            ugfx_put_pixel(wm_surface(), x + i, y + (size - 1 - i) + t, color);
-        }
+    // TWO ANTI-ALIASED DIAGONALS about the same centre as everything
+    // else. It was a hand-rolled loop plotting pixels along both
+    // diagonals, which is a staircase -- and it sat next to a disc whose
+    // edge IS anti-aliased, so the one jagged thing on the button was
+    // the glyph. A stroke wider than a pixel is drawn as parallel lines,
+    // because geom has no thick-line primitive and two calls are cheaper
+    // than one.
+    int cx = btn_cx(x, size), cy = btn_cy(y, size);
+    int h = glyph_h(size), t = btn_stroke(size);
+    for (int o = -(t / 2); o <= t / 2; o++) {
+        ugfx_draw_line(wm_surface(), cx - h + o, cy - h, cx + h + o, cy + h,
+                        color, GEOM_AA);
+        ugfx_draw_line(wm_surface(), cx + h + o, cy - h, cx - h + o, cy + h,
+                        color, GEOM_AA);
     }
 }
 
@@ -576,9 +672,10 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
     // background, then each hand-drawn icon goes on top with its own
     // gfx_* calls -- these aren't text, so widgets.h's centered-label
     // path doesn't apply to them (see widgets.h's top comment).
-    uui_button_draw(wm_surface(), r.min_x, r.y, r.size, r.size, 0, btnbg, btnfg,
-                         title_btn_state(0, is_armed, is_hovered) ? UUI_STATE_PRESSED : UUI_STATE_REST);
-    ugfx_fill_rect(wm_surface(), r.min_x + 4, r.y + r.size - 6, r.size - 8, 2, btnfg); // minimize: short bar
+    draw_btn_disc(r.min_x, r.y, r.size,
+                   uui_state_bg(btnbg, title_btn_state(0, is_armed, is_hovered)
+                                        ? UUI_STATE_PRESSED : UUI_STATE_REST));
+    draw_min_icon(r.min_x, r.y, r.size, btnfg);
 
     // Maximize/restore: drawn muted and does nothing when the app isn't
     // resizable (Calculator -- see gui_apps.h) -- a visibly "disabled"
@@ -589,9 +686,9 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
     // from its own muted base color instead of btnbg.
     uint32_t max_bg_base = can_resize ? btnbg : ugfx_rgb(210, 210, 212);
     uint32_t max_fg = can_resize ? btnfg : ugfx_rgb(170, 170, 172);
-    uui_button_draw(wm_surface(), r.max_x, r.y, r.size, r.size, 0, max_bg_base, max_fg,
-                         title_btn_state(1, is_armed, is_hovered));
-    ugfx_draw_rect(wm_surface(), r.max_x + 4, r.y + 4, r.size - 8, r.size - 8, max_fg); // maximize/restore: square outline
+    draw_btn_disc(r.max_x, r.y, r.size,
+                   uui_state_bg(max_bg_base, title_btn_state(1, is_armed, is_hovered)));
+    draw_max_icon(r.max_x, r.y, r.size, max_fg);
 
     // close: red button with a hand-drawn X. This used to draw the font
     // glyph 'x' via gfx_draw_char(), which clipped/overflowed once the
@@ -599,9 +696,20 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
     // way bigger than this button at most sizes). A hand-drawn diagonal
     // cross scales cleanly with r.size instead, same approach already
     // used for the minimize/maximize icons above.
-    uui_button_draw(wm_surface(), r.close_x, r.y, r.size, r.size, 0, ugfx_rgb(190, 60, 60), btnfg,
-                         title_btn_state(2, is_armed, is_hovered));
-    draw_close_icon(r.close_x, r.y, r.size, UTHEME_WHITE);
+    // THE CLOSE BUTTON IS GREY UNTIL YOU HOVER IT. Red is the mark of
+    // the destructive action and it belongs on the moment you are about
+    // to take it, not on every title bar for the whole session --
+    // Windows, GNOME and KDE all moved this way. The glyph goes white on
+    // red so it stays legible against it.
+    int close_state = title_btn_state(2, is_armed, is_hovered);
+    int close_hot = (close_state != UUI_STATE_REST);
+    uint32_t close_bg = close_hot
+        ? uui_state_bg(ugfx_rgb(190, 60, 60),
+                        close_state == UUI_STATE_PRESSED ? UUI_STATE_PRESSED
+                                                          : UUI_STATE_REST)
+        : uui_state_bg(btnbg, UUI_STATE_REST);
+    draw_btn_disc(r.close_x, r.y, r.size, close_bg);
+    draw_close_icon(r.close_x, r.y, r.size, close_hot ? UTHEME_WHITE : btnfg);
 }
 
 // Resize grip hint in the bottom-right corner -- drawn as a separate

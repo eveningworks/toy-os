@@ -1342,7 +1342,13 @@ static void on_size(int *w, int *h) {
     // will not find (docs/conventions/gui.md). The page still scrolls,
     // because a page CAN always outgrow any window; this is about where
     // the default sits, not about removing the scroll view.
-    *w = ugfx_char_w() * 74;
+    // WIDE ENOUGH THAT THE SIDEBAR'S GUTTER DOES NOT COME OUT OF THE
+    // PAGE. The two share one row, and the sidebar takes its natural
+    // width -- so when it grew an icon column, the page silently lost
+    // exactly that much and a description that had fitted on one line
+    // started wrapping onto two. The window is the thing that should
+    // absorb a wider sidebar, not the content beside it.
+    *w = ugfx_char_w() * 82;
     *h = ugfx_char_h() * 32;
 }
 
