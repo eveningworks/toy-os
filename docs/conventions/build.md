@@ -72,6 +72,21 @@ this the obvious way), not from how much history it accumulated.
   **`tcsetattr()` masks `c_lflag`** to the three bits the line
   discipline implements, so `<termios.h>`'s inert names never reach a
   flag space a future `TTY_*` bit will want.
+- **`sys_write()` COMPLETES THE WHOLE BUFFER, because the kernel caps one
+  write at `SYS_WRITE_MAX` (1024) and a short write loses data
+  SILENTLY.** The cap is an artefact of the bounce buffer the kernel
+  copies through, not a promise -- but libsys returned the short count
+  and left the remainder unwritten, so every caller that ignored the
+  count (which is most of them: a write to a terminal "cannot fail")
+  truncated its output at 1 KB. `/bin/less` is how it surfaced: a
+  screenful of ~1.5 KB came out as seventeen lines cut mid-word, with
+  the status line -- which sits at the END of the frame it builds --
+  never written at all. It looked like a pager bug for two rounds of
+  fixing. `/bin/cat` was unaffected only because it streams in
+  1024-byte chunks by construction, and its comment says why.
+  **Asking for 2000 bytes means 2000 bytes**, the same rule
+  `kfmt.h` states for formatting: never silently produce a truncated
+  value.
 - **AN UNRECOGNISED printf CONVERSION DESYNCHRONISES EVERY ARGUMENT AFTER
   IT, AND `kfmt_cases.h` IS THE TABLE THAT STOPS A FOURTH ONE.**
   `kernel/lib/kfmt.c` is the kernel's formatter AND tolibc's `printf`,

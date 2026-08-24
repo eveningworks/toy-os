@@ -166,19 +166,53 @@ void sys_yield(void) { syscall0(SYS_YIELD); }
 // --- console and files -----------------------------------------------
 
 int64_t sys_write(int fd, const void *buf, size_t len) {
-    int64_t r;
-    // Loops on SYS_RETRY, which a write to a FULL PIPE returns when the
-    // process is woken -- the mirror of sys_read() below. Re-sending the
-    // whole buffer is correct because a pipe write is all-or-nothing
-    // (api/pipe.h): a parked write took none of the bytes, so the retry
-    // cannot duplicate them.
+    // TWO LOOPS, AND THEY ARE FOR DIFFERENT THINGS.
     //
-    // Without this loop the caller would see -2 and treat it as a
-    // count, which is worse than the short write this replaced.
-    do {
-        r = syscall3(SYS_WRITE, (uint64_t)fd, (uint64_t)(uintptr_t)buf, (uint64_t)len);
-    } while (r == SYS_RETRY);
-    return err(r);
+    // The inner one retries SYS_RETRY, which a write to a FULL PIPE
+    // returns when the process is woken. Re-sending the whole chunk is
+    // correct because a pipe write is all-or-nothing (api/pipe.h): a
+    // parked write took none of the bytes, so a retry cannot duplicate
+    // them. Without it the caller would see -4095 and treat it as a
+    // count.
+    //
+    // **THE OUTER ONE IS THE ONE THAT WAS MISSING, AND IT LOST DATA
+    // SILENTLY.** The kernel caps a single write at SYS_WRITE_MAX
+    // (1024 bytes, abi/syscall_abi.h) -- an artefact of the bounce
+    // buffer it copies through, not a promise to the caller. A program
+    // handing over more than that got 1024 bytes written, a return
+    // value saying so, and no indication that the remainder had gone
+    // anywhere. Every caller that ignored the count -- which is most of
+    // them, because a write to a terminal "cannot fail" -- silently
+    // truncated its output at 1 KB.
+    //
+    // `less` is how it surfaced: a screenful of ~1.5 KB came out as
+    // seventeen lines cut mid-word, with the status line (which sits at
+    // the END of the frame it builds) never written at all. It looked
+    // like a pager bug, and it was in this function.
+    //
+    // Asking for 2000 bytes means 2000 bytes. A caller that genuinely
+    // wants partial-write semantics -- a non-blocking socket, which
+    // this system does not have -- would need a different call, and
+    // this project's rule against silently truncating a value (see
+    // kfmt.h) points the same way.
+    const char *p = (const char *)buf;
+    size_t done = 0;
+    while (done < len) {
+        int64_t r;
+        do {
+            r = syscall3(SYS_WRITE, (uint64_t)fd,
+                          (uint64_t)(uintptr_t)(p + done),
+                          (uint64_t)(len - done));
+        } while (r == SYS_RETRY);
+        // An error, or a kernel that accepted nothing: report it rather
+        // than spinning. A caller that has already had some bytes
+        // written gets the COUNT, which is what a partial success means
+        // and what every read/write pair here does.
+        if (r < 0) return done ? (int64_t)done : err(r);
+        if (r == 0) break;
+        done += (size_t)r;
+    }
+    return (int64_t)done;
 }
 
 int64_t sys_read(int fd, void *buf, size_t len) {

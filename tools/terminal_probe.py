@@ -145,6 +145,29 @@ class Terminal:
     def frame(self, tmp, tag):
         return self.qmp.stable_pixels(os.path.join(tmp, f"{tag}.png"), box=self.box)
 
+    def ink_rows(self, raw):
+        """How many rows of a capture contain anything but background.
+
+        The capture is raw RGB for the content box, so a row is
+        `width * 3` bytes. Background is black in a terminal, which is
+        what makes "has ink" a byte test rather than a comparison
+        against another frame -- and therefore what lets this see a page
+        that is WRONG rather than merely different.
+        """
+        w = self.box[2] - self.box[0]
+        h = self.box[3] - self.box[1]
+        stride = w * 3
+        inked = 0
+        for y in range(h):
+            base = y * stride
+            row = raw[base:base + stride]
+            if any(row[i] for i in range(0, len(row), 9)):
+                inked += 1
+        # Rows are pixels; report them as TEXT rows so the number in a
+        # failure means something to a person reading it.
+        cell = 16   # a glyph is ~16px tall at the default font
+        return inked // cell, h // cell
+
     @staticmethod
     def diff_pct(a, b):
         """How much two captures differ, as a percentage.
@@ -267,6 +290,24 @@ def probe_pixels(t, tmp):
     d = t.diff_pct(back, first)
     check("...and `b` returns to the page it left", d < same,
           f"{d:.2f}% different, against a {noise:.2f}% noise floor")
+
+    # **A PAGE MUST FILL THE WINDOW**, and this is the check neither of
+    # the two above could make. A pager whose output is TRUNCATED draws
+    # the same short page every time: "a lot of pixels moved" is
+    # satisfied, and the round trip is satisfied too, because a
+    # consistently wrong page is still consistent. Both were green while
+    # every page came out as seventeen lines cut mid-word -- the kernel
+    # caps one write at 1 KB and libsys was not looping, so the tail of
+    # each frame, status line included, went nowhere.
+    #
+    # Counted as ROWS THAT CONTAIN INK, against the rows the window has.
+    # A full page inks nearly all of them; a truncated one leaves the
+    # bottom third blank, which is exactly what was on screen.
+    page = t.frame(tmp, "less_fill")
+    rows_inked, rows_total = t.ink_rows(page)
+    check("a page fills the window rather than stopping short",
+          rows_inked > rows_total * 0.85,
+          f"{rows_inked} of {rows_total} rows have ink")
 
     # ...and the same round trip over the whole file, which additionally
     # pins that the LAST page is reachable -- "it will not go all the way
