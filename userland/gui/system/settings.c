@@ -163,6 +163,20 @@ struct slot {
     int setting;               // index into the arrays above, or -1
     struct uui_label     caption;
     struct uui_label     explain;
+    // AN EMPTY LABEL AFTER THE CONTROL, and it is the whole of this
+    // page's vertical rhythm. A setting is a caption, an optional
+    // explanation and a control, and those three belong TOGETHER; what
+    // needs separating is one setting from the next. Before this, the
+    // only space on the page was the explanation's reserved row, which
+    // sits between a caption and its own control -- so on a page whose
+    // settings have no descriptions (Diagnostics: none of them do) every
+    // element was closer to the wrong neighbour. Proximity is the oldest
+    // rule in layout and it was inverted.
+    //
+    // A label rather than a spacer widget because there is no spacer
+    // widget, and one that existed only here would be a widget with a
+    // single caller -- this project's bar for adding one is a second.
+    struct uui_label     spacer;
     struct uui_radio_list radio;
     struct uui_dropdown   combo;
     struct uui_slider     slider;
@@ -811,9 +825,9 @@ static void draw_sysinfo(struct ugfx_surface *s, int x, int y, int w, int h) {
 // The sidebar is not in the scroll view either: it scrolls itself, and
 // one scroll region per page is the rule.
 
-// title, description, then caption/explain/radio/combo per slot, then
-// the advanced toggle.
-#define PAGE_ITEMS (2 + PAGE_MAX * 4 + 1)
+// title, description, then caption/explain/control/spacer per slot,
+// then the advanced toggle.
+#define PAGE_ITEMS (2 + PAGE_MAX * 5 + 1)
 static struct uui_item PAGE[PAGE_ITEMS];
 static int PAGE_COUNT;
 static struct uui_layout PAGE_LAYOUT;
@@ -856,8 +870,18 @@ static void relayout_page(void) {
                                             .id = 0, .flags = UUI_FILL_W };
             g_page_captions++;
         }
-        PAGE[n++] = (struct uui_item){ .ops = &uui_label_ops, .widget = &sl->explain,
-                                        .id = 0, .flags = UUI_FILL_W };
+        // **ONLY WHEN IT SAYS SOMETHING.** An empty explanation used to
+        // be declared anyway, reserving a row so that a description
+        // appearing later could not reflow the page -- and the cost was
+        // a blank row between every caption and its own control, which
+        // is the gap that made this page look wrong. relayout_page()
+        // rebuilds the item list whenever the page changes, so a reason
+        // arriving simply adds its rows then; there is nothing to
+        // reserve against.
+        if (slot_prose(sl->setting)[0]) {
+            PAGE[n++] = (struct uui_item){ .ops = &uui_label_ops, .widget = &sl->explain,
+                                            .id = 0, .flags = UUI_FILL_W };
+        }
         // ONLY THE CONTROL IN USE is declared. Declaring both and hiding
         // one was the first version, and `hidden` is honoured -- but a
         // hidden widget is still a layout child, and the pair left this
@@ -887,6 +911,15 @@ static void relayout_page(void) {
                                             .widget = &sl->radio,
                                             .id = ID_CONTROL_BASE + i,
                                             .flags = UUI_FILL_W };
+        }
+
+        // The gap that separates this setting from the next -- see
+        // `spacer`. NOT after the last one: a trailing blank row at the
+        // bottom of a scroll view is space you can scroll to and find
+        // nothing in.
+        if (i + 1 < g_slot_count) {
+            PAGE[n++] = (struct uui_item){ .ops = &uui_label_ops, .widget = &sl->spacer,
+                                            .id = 0, .flags = UUI_FILL_W };
         }
     }
     PAGE[n++] = (struct uui_item){ .ops = &uui_checkbox_ops, .widget = &g_advanced_cb,
@@ -1315,6 +1348,11 @@ int main(void) {
         // One row until a description arrives that needs two -- the row
         // count is recomputed per text in fill_slot(), see there.
         uui_label_set_wrap(&g_slot[i].explain, 1);
+        // The separator between one setting and the next: one empty
+        // row, always. See the field's comment for why the space goes
+        // here rather than where it used to be.
+        uui_label_init(&g_slot[i].spacer, "");
+        uui_label_set_wrap(&g_slot[i].spacer, 1);
         g_slot[i].radio.cols = 1;
         g_slot[i].radio.selected = -1;
         g_slot[i].radio.hovered = -1;
