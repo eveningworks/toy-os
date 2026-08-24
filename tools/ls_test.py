@@ -44,6 +44,8 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(REPO, "tools"))
+import vm as vm_mod                   # noqa: E402 -- started_ok(), see its comment
 VM = os.path.join(REPO, "tools", "vm.py")
 WRITER = os.path.join(REPO, "tools", "tfs3_writer.py")
 
@@ -144,7 +146,7 @@ def main():
 
     vm = VM(args.disk, args.instance)
     try:
-        if "ready" not in vm.run("start"):
+        if not vm_mod.started_ok(vm.run("start")):
             print("ls_test: could not start the VM")
             return 2
 

@@ -55,6 +55,19 @@ obvious-looking wrong answer:
 > the write half of a shell command. See
 > [query-design.md](query-design.md) for what is left.
 
+**A tunable can also be a CONSENT switch, and `kernel.kbdtap` is the
+first.** The others trade performance against diagnostics — turning one
+on costs cycles and tells you more. That one gates whether the kernel
+keeps a log of recent keystrokes at all (`kbd`), and its default is off
+because of what the machine would otherwise be holding, not because of
+what it would cost: there is no privilege model here, so `SYS_QUERY`
+exposes anything a provider knows to every ring-3 process. Two rules
+fall out of it and are worth applying to the next one of its kind.
+**Turning such a setting off must ERASE what it collected**, or "off" is
+decorative. And **a tool must not consult the switch instead of looking
+at the data** — one that returns early on `off` cannot tell you when
+`off` is a lie.
+
 ## Names
 
 Every name is `namespace.name`. The namespace is the registered name of

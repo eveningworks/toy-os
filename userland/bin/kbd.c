@@ -40,6 +40,7 @@
 #include <keyboard.h>    // KEY_* and the modifier bits, named below
 #include <signal.h>      // SIGINT -- one of the three ways out
 #include "query_abi.h"   // QUERY_KBDTAP and its record
+#include "setting_abi.h" // kernel.kbdtap -- the tap's own switch
 
 // Records fetched in one poll. A burst faster than this is not lost --
 // it is still in the kernel's ring and comes out on the next poll -- so
@@ -222,51 +223,105 @@ static int tap_count(void) {
     return lo + 1;
 }
 
-// Everything with a sequence number above `after`, newest-first into
+// The index of the first record with a sequence number above `after`,
+// or `count` if there is none. Bisected, because `seq` is monotonic in
+// the index by construction -- the ring is handed out oldest-first.
+static int first_after(unsigned long long after, int count) {
+    int lo = 0, hi = count;
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        struct query_kbdtap r;
+        if (!record_at(mid, &r)) { hi = mid; continue; }
+        if (r.seq > after) hi = mid; else lo = mid + 1;
+    }
+    return lo;
+}
+
+// Everything with a sequence number above `after`, OLDEST FIRST into
 // g_batch. Returns how many were collected.
 //
-// WALKED BACKWARDS FROM THE END, and that is not an optimisation. The
-// ring is fed from an interrupt handler, so it can move between two of
-// these reads; walking forward from a remembered index would drift, and
-// walking forward from 0 would re-read the whole ring to find the two
-// new records at the end of it. Backwards, the stop condition is the
-// data itself -- the first record we have already seen.
+// **IT WALKS FORWARD FROM THE FIRST UNSEEN RECORD, AND THE OBVIOUS
+// BACKWARDS VERSION IS WRONG IN A WAY THAT LIES.** Collecting backwards
+// from the newest until a seen record turns up looks equivalent and is
+// cheaper -- but it has to stop at BATCH, and it stops at the OLD end.
+// So a burst of more than BATCH between two polls yields the newest
+// BATCH, silently drops the rest, and then makes print_batch() report
+// them as LOST -- while every one of them is still sitting in the
+// kernel's ring. A tool whose entire value is being trusted about what
+// did and did not happen must not invent a loss.
+//
+// Forward, a capped batch is simply a batch: the remainder is picked up
+// by the next poll, in order, and a gap in `seq` then means only what it
+// says.
 static int fetch_since(unsigned long long after, int count) {
     int n = 0;
-    for (int i = count - 1; i >= 0 && n < BATCH; i--) {
-        struct query_kbdtap r;
-        if (!record_at(i, &r)) break;
-        if (r.seq <= after) break;
-        g_batch[n++] = r;
+    for (int i = first_after(after, count); i < count && n < BATCH; i++) {
+        if (!record_at(i, &g_batch[n])) break;
+        n++;
     }
     return n;
 }
 
-// Print g_batch[0..n-1] in the order the keys were pressed, and return
-// the highest sequence number printed. `prev` carries the tick count of
-// the last line printed so the gap column spans a poll boundary.
+// Print g_batch[0..n-1], which is already in the order the keys were
+// pressed, and return the highest sequence number printed. `prev` carries
+// the tick count of the last line printed so the gap column spans a poll
+// boundary.
 static unsigned long long print_batch(int n, unsigned long *prev,
                                       unsigned long long last_seq) {
-    // A GAP IN THE SEQUENCE IS SAID OUT LOUD. The ring holds 256 events;
-    // anything that overran it while we were not looking is gone, and a
-    // log that silently skipped from 40 to 300 would be worse than one
-    // that admits it -- the whole value of this tool is being trusted
-    // about what did and did not happen.
-    if (n > 0 && last_seq != 0) {
-        unsigned long long oldest = g_batch[n - 1].seq;
-        if (oldest > last_seq + 1) {
-            char msg[64];
-            snprintf(msg, sizeof msg, "  ... %lu events lost\n",
-                     (unsigned long)(oldest - last_seq - 1));
-            sys_print(msg);
-        }
+    // A REAL GAP IS SAID OUT LOUD, and only a real one. `g_batch[0]` is
+    // the OLDEST record the ring still holds above `last_seq`, so a jump
+    // here means those events were genuinely evicted -- the ring
+    // overran while nothing was reading it. A log that silently skipped
+    // from 40 to 300 would be worse than one that admits it, and a log
+    // that claimed a loss that had not happened would be worse still.
+    if (n > 0 && last_seq != 0 && g_batch[0].seq > last_seq + 1) {
+        char msg[64];
+        snprintf(msg, sizeof msg, "  ... %lu events lost\n",
+                 (unsigned long)(g_batch[0].seq - last_seq - 1));
+        sys_print(msg);
     }
-    for (int i = n - 1; i >= 0; i--) {
+    for (int i = 0; i < n; i++) {
         print_record(&g_batch[i], *prev);
         *prev = (unsigned long)g_batch[i].ticks;
         last_seq = g_batch[i].seq;
     }
     return last_seq;
+}
+
+// --- the tap's switch -------------------------------------------------
+//
+// **THE TAP IS OFF UNLESS SOMEBODY TURNED IT ON**, because a ring
+// holding the last hundred-odd keystrokes is a keylogger by any honest
+// description and `SYS_QUERY` checks nothing -- see
+// kernel/include/kernel/keyboard_tap.h. So this tool has to be able to
+// ask, and live mode arms it for its own duration.
+
+#define TAP_SETTING "kernel.kbdtap"
+
+static int tap_is_on(void) {
+    struct setting_msg m;
+    memset(&m, 0, sizeof m);
+    m.op = SETTING_OP_GET;
+    strlcpy(m.name, TAP_SETTING, sizeof m.name);
+    if (sys_setting(&m) != 0) return -1;
+    return strcmp(m.value, "on") == 0;
+}
+
+static int tap_set(int on) {
+    struct setting_msg m;
+    memset(&m, 0, sizeof m);
+    m.op = SETTING_OP_SET;
+    strlcpy(m.name, TAP_SETTING, sizeof m.name);
+    strlcpy(m.value, on ? "on" : "off", sizeof m.value);
+    if (sys_setting(&m) != 0) return 0;
+    return m.result != SETTING_INVALID;
+}
+
+static void say_it_is_off(void) {
+    sys_print("kbd: the keyboard tap is off, so nothing has been recorded.\n"
+              "     `kbd` on its own turns it on while it runs; to keep it on,\n"
+              "     `config set " TAP_SETTING " on` (it persists, and turning\n"
+              "     it off again wipes what it captured).\n");
 }
 
 // --- live mode --------------------------------------------------------
@@ -306,11 +361,29 @@ static int live(int timeout_s) {
         return 1;
     }
     sys_signal(SIGINT, on_intr);
+    // SIGTERM too, so `kill <pid>` disarms rather than leaving the tap
+    // recording. SIGKILL cannot be caught and would -- which is why the
+    // switch persists visibly in /etc rather than being invisible state:
+    // `config get kernel.kbdtap` always tells the truth about it.
+    sys_signal(SIGTERM, on_intr);
+
+    // ARMED FOR THE DURATION, and only if it was not already on. A tap
+    // somebody deliberately left on must still be on when this exits --
+    // disarming it would silently undo their choice, and lose the
+    // history they were keeping.
+    int was_on = tap_is_on();
+    if (was_on < 0) { cmd_fail("kbd", TAP_SETTING); return 1; }
+    if (!was_on && !tap_set(1)) {
+        sys_print("kbd: could not turn the keyboard tap on.\n");
+        return 1;
+    }
     char intro[128];
     snprintf(intro, sizeof intro,
              "Press keys. Esc twice, Ctrl-C, or %ds without a keypress to quit.\n",
              timeout_s);
     sys_print(intro);
+    if (!was_on)
+        sys_print("(the tap is on for this session only, and is wiped on exit)\n");
     print_header();
 
     int count = tap_count();
@@ -356,7 +429,7 @@ static int live(int timeout_s) {
         // only: Alt-<key> is encoded as ESC then the key and arrives as
         // one event producing two codes, so it cannot be mistaken for
         // one here.
-        for (int i = n - 1; i >= 0; i--) {
+        for (int i = 0; i < n; i++) {
             const struct query_kbdtap *r = &g_batch[i];
             if (!(r->flags & QUERY_KBDTAP_DOWN)) continue;
             if (r->produced == 1 && r->produced_code[0] == 0x1B) esc_run++;
@@ -366,6 +439,10 @@ static int live(int timeout_s) {
         if (esc_run >= 2) break;
     }
 
+    // DISARMED ON EVERY WAY OUT -- Esc, Ctrl-C, SIGTERM, the idle
+    // timeout -- and the kernel wipes the ring as it goes, so a session
+    // leaves no keystrokes behind.
+    if (!was_on) tap_set(0);
     sys_print("\n");
     return 0;
 }
@@ -373,9 +450,34 @@ static int live(int timeout_s) {
 // --- history mode -----------------------------------------------------
 
 static int last(int want) {
+    int on = tap_is_on();
+
+    // **THE RING IS READ BEFORE THE SWITCH IS BELIEVED**, and that is
+    // deliberate rather than defensive tidiness. "The switch says off"
+    // and "there are no keystrokes in the kernel" are different claims,
+    // and only the second one is the promise the default makes. Short-
+    // circuiting on the switch would make this tool structurally unable
+    // to notice the one failure that matters -- a tap recording while it
+    // reports itself as off -- and, worse, make any test written against
+    // this tool pass whether or not the gate exists. (It did. The
+    // in-kernel KTEST caught the removed gate; this did not.)
     int count = tap_count();
-    if (count == 0) {
-        sys_print("kbd: no key events recorded yet\n");
+
+    if (on == 0 && count == 0) { say_it_is_off(); return 1; }
+
+    if (on == 0) {
+        char warn[192];
+        snprintf(warn, sizeof warn,
+                 "kbd: WARNING -- %s reports OFF, but the tap is holding %d\n"
+                 "     record(s). Something is recording keystrokes that should\n"
+                 "     not be. Printing them, because you need to see this.\n",
+                 TAP_SETTING, count);
+        sys_print(warn);
+    } else if (count == 0) {
+        // On and empty: just enabled, or just wiped. A different
+        // sentence from "it is off", because the remedy is different --
+        // press a key.
+        sys_print("kbd: the tap is on, but nothing has been recorded yet.\n");
         return 0;
     }
     if (want > count) want = count;

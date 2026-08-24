@@ -131,6 +131,22 @@ def _read_pid():
     return pid
 
 
+# The one line every caller uses to decide whether `start` worked.
+#
+# **`"ready" in output` IS WRONG, AND IT LOOKS RIGHT.** The failure
+# message for a slot that is already taken is "vm: already running", and
+# "al-ready" CONTAINS "ready" -- so the obvious test passes on the one
+# output that means the opposite, and a tool then talks to somebody
+# else's guest (or to a serial socket that is not there) for reasons that
+# surface much later and point somewhere else. Eight tools here carried
+# that test; this exists so there is one place to be right.
+#
+# Takes the combined stdout+stderr of a `vm.py ... start`, since that is
+# what a subprocess caller has.
+def started_ok(output):
+    return "vm: ready" in (output or "")
+
+
 def cmd_start(args):
     if _read_pid():
         print("vm: already running (vm.py stop first, or vm.py exec ...)")

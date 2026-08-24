@@ -607,21 +607,55 @@ outside every such disagreement looks identical: the key does nothing,
 or the wrong thing. This is the probe that had been hand-written for
 each of those hunts.
 
-**IT RECORDS WHETHER OR NOT ANYTHING IS READING**, and that is the
-decision worth defending, because it costs ~5 KB of BSS and a bounded
-copy in the IRQ1 handler forever. What it buys is that the question can
-be asked AFTER the fact -- press the key that misbehaved, then run `kbd
---last`. An arm-and-drain tap can only watch keys pressed from now on,
-so every use of it starts by reproducing the bug, and an intermittent
-one may not oblige. `dmesg` makes exactly this trade and Linux's evdev
-buffers every event whether or not a client holds the node open. See
-`docs/decisions.md`.
+**IT IS OFF UNLESS SOMEBODY TURNS IT ON, AND THAT IS A PRIVACY DEFAULT
+RATHER THAN A PERFORMANCE ONE.** A ring holding the last ~128
+keystrokes is a keylogger by any honest description, and this kernel has
+no privilege model at all: `SYS_QUERY` checks nothing, so while the tap
+is on ANY ring-3 process can read what was typed, including at a prompt.
+The recording itself is nearly free (~5 KB of BSS and a bounded copy in
+the IRQ1 handler); the default is about what the machine holds, not
+about what it costs.
+
+`kernel.kbdtap` is the switch -- an ordinary tunable beside
+`kernel.kstack_track`, persisted to `/etc`, off out of the box. **Turning
+it off WIPES the ring**, so "off" means there are no keystrokes in kernel
+memory rather than merely no new ones; enabling wipes too, so a session
+starts clean. The sequence numbers deliberately survive a wipe: they are
+a counter, not data, and restarting them would let a reader see a number
+it had already seen. `/bin/kbd`'s live mode arms the tap while it runs
+and disarms on every way out (Esc, Ctrl-C, SIGTERM, the idle timeout),
+which is what keeps the common case one command.
+
+**The cost of the default is real and worth stating**: the question this
+was built for -- "what did the key I just pressed do?" -- can only be
+answered after the fact if the tap was already on. Left off, every use
+begins by reproducing the bug. `dmesg` makes the opposite trade, and can,
+because a kernel log line is not a record of what somebody typed.
+
+**Linux keeps no keypress history either, for a different reason.**
+evdev allocates its buffer PER OPEN CLIENT (`evdev_open()`), so with
+nobody holding `/dev/input/eventN` nothing is stored and `evtest` sees
+only what arrives after it starts; the input core retains current key
+STATE (`EVIOCGKEY`), not history. Its reason is scale -- a ring per
+device per client -- rather than privacy, but the posture that falls out
+is the same one, and worth arriving at deliberately.
 
 **KEYBOARD ONLY, deliberately.** Pointer motion arrives hundreds of
 times a second and would evict every keypress from a ring this size
 before anyone could read it.
 
-Four things to know before touching it.
+Five things to know before touching it.
+
+**The gate is in ONE place, `kbdtap_key()`**, because that is the only
+function that creates a record; `kbdtap_produced()` needs no test of its
+own, since it can only ever attach to a record that already exists. And
+**the in-kernel KTEST is what actually proves the gate**, not the GUI
+tool: an earlier version of `/bin/kbd` short-circuited on the switch
+before reading the ring, so removing the gate entirely changed nothing
+it printed and every check written against it stayed green. `--last`
+reads the ring FIRST now and reports a non-empty ring under an "off"
+switch as an anomaly, loudly -- which is both better behaviour and what
+makes a test of it discriminating.
 
 **The wire byte is PASSED DOWN, not stashed in a static.** `key_event()`
 in `keyboard.c` takes it as an argument and `keyboard_key_event()` --

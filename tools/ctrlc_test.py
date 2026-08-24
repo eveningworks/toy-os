@@ -68,6 +68,7 @@ import time
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "tools"))
 from gui_debug import DebugConsole      # noqa: E402
+import vm as vm_mod                   # noqa: E402 -- started_ok(), see its comment
 from shell_flow import ShellFlow        # noqa: E402
 import port_guard                       # noqa: E402
 
@@ -200,7 +201,7 @@ def main():
 
     try:
         print("first boot -- configuring the target")
-        if "ready" not in vm_run(args.disk, args.instance, "start"):
+        if not vm_mod.started_ok(vm_run(args.disk, args.instance, "start")):
             print("ctrlc_test: could not start the VM")
             return 2
         dbg = DebugConsole(sock)
@@ -211,7 +212,7 @@ def main():
         vm_run(args.disk, args.instance, "stop")
 
         print("second boot -- the one under test")
-        if "ready" not in vm_run(args.disk, args.instance, "start"):
+        if not vm_mod.started_ok(vm_run(args.disk, args.instance, "start")):
             print("ctrlc_test: the text-target boot never became ready")
             return 2
         dbg = DebugConsole(sock)

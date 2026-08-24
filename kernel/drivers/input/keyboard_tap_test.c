@@ -7,12 +7,15 @@
 // in "the oldest retained record is `count` back from the newest" would
 // live. Driving kbdtap_key() directly is what makes it reachable.
 //
-// **THEY WRITE INTO THE LIVE LOG**, which is not a mistake to fix: the
-// tap has exactly one ring and there is no second one to test against.
-// The cost is stated instead -- after `make test`, the first screenful
-// of `kbd --last` is these fixtures rather than anything anyone typed.
-// The sequence numbers stay monotonic across it, so nothing is
-// corrupted; the log is simply older than it looks.
+// **THEY WRITE INTO THE LIVE LOG, AND THEY TURN THE TAP ON TO DO IT**,
+// which is not a mistake to fix: the tap has exactly one ring and there
+// is no second one to test against. Each one saves the tap's real state
+// and restores it, so a run leaves the machine as it found it -- and
+// since disabling WIPES, a machine whose tap was off ends the suite with
+// an empty ring rather than with these fixtures in it. On a machine
+// where the tap was deliberately left on, `make test` costs that
+// session's captured history; that is the honest price and it is stated
+// here rather than discovered.
 //
 // Preemption is disabled around each one, for the reason input_test.c
 // states beside it: a real keystroke landing between the writes and the
@@ -28,6 +31,18 @@
 // off-by-one in the implementation instead of catching it.
 #define BEYOND_ANY_RING 600
 
+// Arm the tap for a test, returning what it was so the test can put it
+// back. Enabling wipes, so every test starts from an empty ring whatever
+// ran before it -- which is the precondition each one would otherwise
+// have to establish for itself.
+static int tap_arm(void) {
+    int was = kbdtap_enabled();
+    kbdtap_set_enabled(1);
+    return was;
+}
+
+static void tap_restore(int was) { kbdtap_set_enabled(was); }
+
 // The tap's own count, the way any reader gets it -- by asking for
 // records until one is refused. Bounded well above any plausible ring.
 static int tap_records(void) {
@@ -40,12 +55,14 @@ static int tap_records(void) {
 
 KTEST("kbdtap", "a key event is recorded with every stage it passed") {
     scheduler_preempt_disable();
+    int was = tap_arm();
     kbdtap_key(0x1E, 0, 30, 1, 0x01 /* KEY_MOD_SHIFT */);
     kbdtap_produced('A');
     int n = tap_records();
 
     struct query_kbdtap r;
     int got = query_read(QUERY_KBDTAP, n - 1, &r, sizeof r);
+    tap_restore(was);
     scheduler_preempt_enable();
 
     KTEST_ASSERT(got == (int)sizeof r);
@@ -60,10 +77,12 @@ KTEST("kbdtap", "a key event is recorded with every stage it passed") {
 
 KTEST("kbdtap", "a key with no scancode reports no scancode, not a zero-ish one") {
     scheduler_preempt_disable();
+    int was = tap_arm();
     kbdtap_key(0, 0, 30, 1, 0);          // what input_report_key() does
     int n = tap_records();
     struct query_kbdtap r;
     int got = query_read(QUERY_KBDTAP, n - 1, &r, sizeof r);
+    tap_restore(was);
     scheduler_preempt_enable();
 
     KTEST_ASSERT(got == (int)sizeof r);
@@ -76,12 +95,14 @@ KTEST("kbdtap", "a key with no scancode reports no scancode, not a zero-ish one"
 
 KTEST("kbdtap", "an extended key carries the prefix as a flag, not as a record") {
     scheduler_preempt_disable();
+    int was = tap_arm();
     int before = tap_records();
     kbdtap_key(0x48, 1, 103, 1, 0);      // Up: e0 48 -> INPUT_KEY_UP
     kbdtap_produced(0x91);               // KEY_ARROW_UP
     int after = tap_records();
     struct query_kbdtap r;
     query_read(QUERY_KBDTAP, after - 1, &r, sizeof r);
+    tap_restore(was);
     scheduler_preempt_enable();
 
     // ONE record for a two-byte sequence. Nothing happened when the
@@ -94,6 +115,7 @@ KTEST("kbdtap", "an extended key carries the prefix as a flag, not as a record")
 
 KTEST("kbdtap", "one event carries both codes of an Alt-<key> sequence") {
     scheduler_preempt_disable();
+    int was = tap_arm();
     kbdtap_key(0x30, 0, 48, 1, 0x04 /* KEY_MOD_ALT */);
     kbdtap_produced(0x1B);               // ESC, then...
     kbdtap_produced('b');                // ...the key -- readline's meta prefix
@@ -101,6 +123,7 @@ KTEST("kbdtap", "one event carries both codes of an Alt-<key> sequence") {
     int n = tap_records();
     struct query_kbdtap r;
     query_read(QUERY_KBDTAP, n - 1, &r, sizeof r);
+    tap_restore(was);
     scheduler_preempt_enable();
 
     KTEST_ASSERT(r.produced == QUERY_KBDTAP_PRODUCED_MAX);
@@ -110,6 +133,7 @@ KTEST("kbdtap", "one event carries both codes of an Alt-<key> sequence") {
 
 KTEST("kbdtap", "the ring wraps: the count saturates and the oldest record moves") {
     scheduler_preempt_disable();
+    int was = tap_arm();
 
     // Fill well past any ring size, with the keycode carrying the
     // iteration number. AN ADDRESS-DERIVED PATTERN, the same reasoning
@@ -137,6 +161,7 @@ KTEST("kbdtap", "the ring wraps: the count saturates and the oldest record moves
         if (cur.seq != prev.seq + 1) { contiguous = 0; break; }
         prev = cur;
     }
+    tap_restore(was);
     scheduler_preempt_enable();
 
     KTEST_ASSERT(a == (int)sizeof oldest && b == (int)sizeof newest);
@@ -151,4 +176,69 @@ KTEST("kbdtap", "the ring wraps: the count saturates and the oldest record moves
     // And the newest really is the last thing written, not a stale slot
     // the wrap walked past.
     KTEST_ASSERT(newest.keycode == ((BEYOND_ANY_RING - 1) & 0x7FF));
+}
+
+// **THE CHECK THE PRIVACY DEFAULT RESTS ON.** Everything above turns the
+// tap on first, so nothing above it can tell a working gate from an
+// absent one -- and "off" is the state the machine ships in. If this
+// ever passes vacuously, a public build is recording keystrokes.
+KTEST("kbdtap", "while the tap is off it records NOTHING") {
+    scheduler_preempt_disable();
+    int was = kbdtap_enabled();
+
+    // On first, and written to, so the ring demonstrably CAN hold
+    // something -- a check that starts from an empty ring cannot tell
+    // "the gate works" from "nothing was written either way".
+    kbdtap_set_enabled(1);
+    kbdtap_key(0x1E, 0, 30, 1, 0);
+    kbdtap_produced('a');
+    int while_on = tap_records();
+
+    kbdtap_set_enabled(0);
+    int after_off = tap_records();          // the WIPE
+    kbdtap_key(0x1E, 0, 30, 1, 0);          // and the GATE
+    kbdtap_produced('a');
+    int while_off = tap_records();
+
+    kbdtap_set_enabled(was);
+    scheduler_preempt_enable();
+
+    KTEST_ASSERT(while_on > 0);     // the positive control, inline
+    KTEST_ASSERT(after_off == 0);   // disabling wiped what was there
+    KTEST_ASSERT(while_off == 0);   // and nothing is recorded while off
+}
+
+// Turning it off has to erase, not merely stop -- a switch that leaves
+// the last hundred keystrokes readable is decorative. Checked against
+// the RECORD's own bytes rather than only against the count, since a
+// count of zero would be satisfied by a bookkeeping reset that left the
+// data in place for the next wrap to expose.
+KTEST("kbdtap", "disabling wipes the ring rather than just stopping it") {
+    scheduler_preempt_disable();
+    int was = kbdtap_enabled();
+
+    kbdtap_set_enabled(1);
+    for (int i = 0; i < 8; i++) {
+        kbdtap_key(0x1E, 0, 30, 1, 0);
+        kbdtap_produced((uint16_t)('a' + i));
+    }
+    int filled = tap_records();
+
+    kbdtap_set_enabled(0);
+    kbdtap_set_enabled(1);   // back on: the ring must be empty, not stale
+    int after = tap_records();
+
+    // And whatever the ring does hand out now must not be the old data.
+    struct query_kbdtap r;
+    int leaked = 0;
+    kbdtap_key(0, 0, 30, 1, 0);              // one fresh record to read
+    if (query_read(QUERY_KBDTAP, 0, &r, sizeof r) == (int)sizeof r)
+        leaked = (r.produced != 0);
+
+    kbdtap_set_enabled(was);
+    scheduler_preempt_enable();
+
+    KTEST_ASSERT(filled == 8);
+    KTEST_ASSERT(after == 0);
+    KTEST_ASSERT(!leaked);
 }

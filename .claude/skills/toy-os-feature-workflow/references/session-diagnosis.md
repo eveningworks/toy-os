@@ -811,3 +811,45 @@ reason.
 Recorded in the commit as inference rather than diagnosis. **The cost of
 capturing is one redirect; the cost of not capturing is that the
 question can never be reopened.**
+
+## The legacy `run` loader freezes the clock, not just the sleep (2026-08-24)
+
+`/bin/kbd`'s live mode spun the machine dead, three times, before the
+cause was found -- and the reason it took three is that the documented
+half of the hazard did not explain it.
+
+**What is written down**: `SYS_SLEEP` refuses a caller with no scheduler
+slot (`-EPERM`), so `run <prog>` cannot sleep and `/bin/less` says to use
+`spawn`. Fine, and a poll loop that ignores the return just spins hot.
+
+**What is NOT written down anywhere, and is the actual killer**: in that
+context `sys_monotonic_ns()` never advances either. Measured -- five
+consecutive polls all read `6210000000`. That context does not reach a
+timer tick, so a loop with a *deadline* has a deadline that can never
+arrive. A hot spin is survivable; a hot spin that can never exit takes
+the whole machine, and every subsequent `sh` command on that guest times
+out with no clue as to why.
+
+Three transferable things:
+
+- **A timeout counted in POLLS silently assumes the sleep works.** The
+  first version counted 500 × 20ms and called that ten seconds; under
+  `spawn` it was ten seconds and under `run` it was microseconds. One
+  number meaning two very different durations depending on how the
+  program was started is a thing nobody debugs twice. Read a clock.
+- **...and then check the clock is running.** Which is the joke: moving
+  to a clock is correct and, on its own, made the hang WORSE (from
+  "exits far too early" to "never exits"). Both bugs were live at once,
+  which is why two rounds of reasoning produced two wrong answers.
+- **Prose in a comment is not enough when the failure mode is a dead
+  machine.** `less` documents the same hazard and lives with it, because
+  a pager that spins is merely slow. `kbd` guards instead:
+  `sys_sleep_ms(0) < 0` means "no scheduler slot", and it says so and
+  exits. Match the strength of the guard to the cost of the failure, not
+  to how unlikely you think it is.
+
+**And the instrumentation lesson, again.** Two rounds of reasoning about
+the loop produced two wrong answers; four `sys_eprint()` lines into the
+KERNEL LOG (fd 2 -- which reaches `dmesg` even when fd 1 is a
+framebuffer nobody can see) answered it in one boot. When a ring-3
+program's stdout is invisible, fd 2 is the way out.

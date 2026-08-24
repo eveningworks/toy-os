@@ -256,6 +256,24 @@ manual steps to be worth automating:
   has appeared -- without that, `elf_run:`/`syscall:` noise around every
   `cat` looks like stable output and the first version returned three
   kernel lines for a benchmark that had not finished running.
+- **`vm.started_ok(output)`** -- the one line every caller uses to decide
+  whether a `vm.py ... start` worked, and it exists because the obvious
+  test is wrong in a way that looks right. `vm.py` answers a slot that is
+  already taken with `vm: already running`, and **"al-ready" contains
+  "ready"** -- so `"ready" in output` passes on the one output that means
+  the opposite, after which the tool talks to a serial socket that is not
+  there and fails several steps later, pointing at whatever it was doing
+  by then. Eight tools here carried that test; there is one place to be
+  right now. Import it as `import vm as vm_mod` (the module runs nothing
+  at import; its CLI is behind `__main__`).
+
+  The sibling hazard, which no helper can fix: **a stopped guest keeps
+  its QMP port for about a minute**, because a `QMPSession` leaves the
+  connection in TIME_WAIT on the server side and `port_guard` -- rightly
+  -- refuses a start against a held port. A tool that boots more than
+  once should take a **fresh slot per boot**
+  (`port_guard.find_free_instance()`) rather than pinning one and waiting
+  it out.
 - **`ansi_cursor_test.py`** -- ANSI cursor movement and erasing, checked
   as PIXELS. `kernel/lib/ansi.c` is a pure state machine whose KTESTs
   assert what a sequence RESOLVES to with no display at all; this is the
@@ -576,13 +594,32 @@ manual steps to be worth automating:
   fake. Stated as its own check at the end rather than left implicit in
   two passing lists.
 
-  Both positive controls were run and each reddened exactly its own
-  claim: dropping the wire byte (`key_event(..., 0, extended)`) failed
-  the five scancode checks and the parity check and left every
-  keycode/character check green; making `kbdtap_produced()` a no-op
+  **It also checks the OFF state first, before anything arms the tap.**
+  `kernel.kbdtap` is off out of the box, so that is the state the system
+  ships in and the one that matters most: keys are typed with the tap
+  off and the log must be empty, and `kbd` must SAY the tap is off
+  rather than print an empty table -- an empty table is what a broken
+  tap looks like too. Live mode is then checked from an off tap, so
+  arming and disarming are asserted rather than assumed.
+
+  Three positive controls were run and each reddened exactly its own
+  claim. Dropping the wire byte (`key_event(..., 0, extended)`) failed
+  the five scancode checks and the parity check, leaving every
+  keycode/character check green. Making `kbdtap_produced()` a no-op
   failed the character checks in BOTH boots -- and the live-mode Esc
   check with them, which is the sign that check is genuinely coupled to
-  the data it claims to test.
+  the data it tests.
+
+  **The third control fired NOTHING, and fixing that changed the
+  program.** Deleting the privacy gate from `kbdtap_key()` -- so the
+  kernel records while the switch says off -- left all 40 checks green,
+  because `kbd --last` consulted the switch and returned before reading
+  the ring. The in-kernel KTEST caught it on the right assertion; this
+  tool structurally could not. `--last` reads the ring FIRST now and
+  reports a non-empty ring under an "off" switch as a loud anomaly, and
+  the same control then reddens four checks across both drivers with
+  "10 rows" naming the leak. **A tool that consults a flag before
+  looking at the thing the flag describes cannot check the flag.**
 
   Three harness traps are written into it, all paid for here. **`"ready"
   not in out` matches "al-ready running"**, so the readiness test passes

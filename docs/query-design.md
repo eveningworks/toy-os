@@ -351,6 +351,50 @@ Two things worth carrying:
   proves a declining client is still alive. A dropped mode looks
   exactly like a broken feature from the outside.
 
+### After the staging -- a class that is a LOG, not a snapshot -- 2026-08-24
+
+`QUERY_KBDTAP` (`/bin/kbd`) is the first class whose records describe
+things that HAPPENED rather than the state of something that IS, and it
+answers open question 1 below for its own case without settling it in
+general.
+
+**It is also the first class that is OFF by default.** `kernel.kbdtap`
+gates the ring, and a query provider whose `count()` legitimately
+returns 0 is already a shape the registry supports (`QUERY_KSTACK_SYSCALL`
+while `kernel.kstack_track` is off). What is new is the reason: not "the
+feature is not collecting" but "collecting is a privacy decision the
+machine's owner has to make" -- `SYS_QUERY` performs no privilege check
+of any kind, so anything a provider exposes is exposed to every ring-3
+process. **That is worth carrying forward as a rule for the registry:
+before adding a class, ask what it discloses, because there is no
+mechanism here that will ask for you.**
+
+**A fixed-size record works because a key event is fixed-size.** The
+question was posed about `dmesg`, where a record is a line of arbitrary
+length; a keypress has four numbers and at most two produced codes, so
+it fits in a struct and needs none of the variable-length machinery.
+
+**What a log needs that a snapshot does not is a SEQUENCE NUMBER.** The
+registry's contract is `count()` plus `fill(index)`, and the ring behind
+this one is fed from an interrupt handler -- so a reader walking
+`0..count-1` may legitimately see a record twice or miss one under a
+burst. `seq` is monotonic and never reused, which makes a repeat
+recognisable and a gap countable; `kbd` prints "12 events lost" rather
+than skipping silently. **Draining on read was the alternative and is
+wrong here**: it makes the log readable exactly once and breaks the
+second reader, which is not a property the registry has anywhere else.
+
+**And it is a genuine LIST, so it declares no named fields.** Not for
+the usual reason (an index in a name meaning a different record a second
+later) but for a stronger one: `kbdtap.keycode` would be a different
+keypress on every read by design.
+
+The trap it added to the pile is in the other direction -- see
+`docs/tools.md` on `kbd_test.py`, and note here that **reading class 0
+to get a count is expensive**: filling a `query_provider_info` calls
+that provider's `count()`, and `QUERY_HEAPCHECK`'s scans the heap. Cheap
+metadata is only cheap when it is stored rather than computed.
+
 ### Stage 4 -- `config` reads facts
 
 The labelled fallback. Last, because it is the only piece that needs

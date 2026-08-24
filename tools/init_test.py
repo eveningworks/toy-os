@@ -86,6 +86,8 @@ import tempfile
 import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(REPO, "tools"))
+import vm as vm_mod                   # noqa: E402 -- started_ok(), see its comment
 VM = os.path.join(REPO, "tools", "vm.py")
 
 # One process row from `ps`: PID PPID STATE CPU MEM NAME.
@@ -178,7 +180,7 @@ def main():
 
     vm = VMSession(args.disk, args.instance)
     try:
-        if "ready" not in vm.run("start"):
+        if not vm_mod.started_ok(vm.run("start")):
             print("init_test: could not start the VM")
             return 2
 

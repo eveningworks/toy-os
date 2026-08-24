@@ -42,7 +42,11 @@ struct tap_rec {
 
 static struct tap_rec g_ring[TAP_MAX];
 static uint32_t g_seq;      // the last sequence number handed out
-static uint32_t g_written;  // records ever written, saturating at TAP_MAX
+static uint32_t g_written;  // records retained, saturating at TAP_MAX
+
+// OFF UNTIL ASKED. See keyboard_tap.h: this is a privacy default, not a
+// performance one, and `kernel.kbdtap` is the switch.
+static int g_enabled;
 
 // Where the record kbdtap_key() opened most recently lives, so
 // kbdtap_produced() can reach it without every one of ring_push()'s ~20
@@ -51,8 +55,26 @@ static uint32_t g_written;  // records ever written, saturating at TAP_MAX
 // read inside one non-preemptible interrupt handler.
 static struct tap_rec *g_open;
 
+int kbdtap_enabled(void) { return g_enabled; }
+
+void kbdtap_set_enabled(int on) {
+    on = on ? 1 : 0;
+
+    // WIPED ON EVERY TRANSITION, in both directions. Off has to mean
+    // "there are no keystrokes in here", or the switch is decorative;
+    // on has to start from a clean ring, or a session opens with
+    // whatever the previous one caught. `g_seq` deliberately survives --
+    // it is a counter, not data, and restarting it would let a reader
+    // see a sequence number it had already seen.
+    k_memset(g_ring, 0, sizeof g_ring);
+    g_written = 0;
+    g_open = 0;
+    g_enabled = on;
+}
+
 void kbdtap_key(uint16_t wire, int extended, uint16_t keycode, int down,
                 uint8_t mods) {
+    if (!g_enabled) return;
     struct tap_rec *r = &g_ring[g_seq & (TAP_MAX - 1)];
     r->seq       = ++g_seq;
     r->ticks     = (uint32_t)pit_ticks();
@@ -69,6 +91,9 @@ void kbdtap_key(uint16_t wire, int extended, uint16_t keycode, int down,
 }
 
 void kbdtap_produced(uint16_t code) {
+    // No `g_enabled` test: g_open is only ever set by kbdtap_key(),
+    // which already refuses while off, and clearing it is part of the
+    // wipe. One gate, in the one place a record is created.
     if (!g_open) return;
     if (g_open->nproduced >= QUERY_KBDTAP_PRODUCED_MAX) return;
     g_open->produced[g_open->nproduced++] = code;

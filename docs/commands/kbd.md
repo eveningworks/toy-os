@@ -14,6 +14,9 @@ What the keyboard actually did, at every stage at once. One line per key
 event, showing the four encodings a keypress passes through before
 anything acts on it.
 
+**The recording is off unless you turn it on.** See *The switch* below;
+running `kbd` with no arguments turns it on for as long as it runs.
+
     $ kbd --last 8
       seq   +ms  scan   code  produced       mods  edge
         1     -  1e       30  'a'            ----  down
@@ -51,12 +54,43 @@ report. So the column tells you which driver a key came through, and a
 the input core working as designed.
 
 **It never reads the keyboard.** The kernel keeps a rolling log of the
-last 256 key events whether or not anything is looking
-(`kernel/include/kernel/keyboard_tap.h`), and this walks that log through
-`QUERY_KBDTAP`. Two things follow. `kbd --last` explains a key you
-pressed *before* you thought to run it -- which is the case that actually
-comes up. And running it inside a Terminal window steals nothing from the
-desktop, because it is reading a record rather than a queue.
+last 256 key events (`kernel/include/kernel/keyboard_tap.h`), and this
+walks that log through `QUERY_KBDTAP`. So running it inside a Terminal
+window steals nothing from the desktop -- it is reading a record rather
+than competing for a queue -- and keys typed during a session still
+reach the shell afterwards, as they would during any other command.
+
+## The switch
+
+**`kernel.kbdtap` is off by default, and `kbd` is the only thing that
+turns it on for you.**
+
+    config get kernel.kbdtap        # off
+    config set kernel.kbdtap on     # record until told otherwise
+    config set kernel.kbdtap off    # stop, and WIPE what was recorded
+
+A buffer holding the last hundred-odd keystrokes is a keylogger, and
+this kernel has no privilege model -- `SYS_QUERY` checks nothing, so
+while the tap is on any program can read what was typed, including at a
+prompt. It costs almost nothing to run; it is off because of what it
+holds, not what it costs.
+
+Three consequences worth knowing:
+
+- **`kbd` with no arguments arms it and disarms it again** on every way
+  out -- Esc, Ctrl-C, `kill`, the idle timeout. If you had already
+  turned it on yourself it is left alone, because disarming it would
+  undo your choice and throw away the history you were keeping.
+- **Turning it off erases.** Off means there are no keystrokes in kernel
+  memory, not merely no new ones. Enabling wipes too, so a session
+  always starts clean.
+- **`kbd --last` needs it to have been on already.** This is the real
+  cost of the default: the tool was built to explain a key that
+  *already* misbehaved, and left off it cannot. Turn it on before
+  reproducing, or leave it on while you are hunting something.
+
+`config get kernel.kbdtap` always tells the truth about the state, which
+matters because a `kill -9` cannot run the disarm.
 
 **Modes.** With no arguments it follows new events as they arrive. With
 `--last [count]` (default 20) it prints the tail of the log and exits;
@@ -87,6 +121,15 @@ This is `evtest`'s shape: toy-os has no device nodes, so the log is a
 query rather than a file, but nothing here takes the keyboard away from
 anyone. `xev` and `wev` are the display-server-side equivalents.
 
+**Linux keeps no keypress history either.** evdev allocates its buffer
+per *open client*, so with nothing holding the device node nothing is
+stored, and `evtest` and `showkey` alike see only what arrives after
+they start; the closest it gets to answering after the fact is a
+current-state bitmap -- which keys are down *now* (`EVIOCGKEY`) -- which
+is state, not history. Its reason is scale rather than privacy, but the
+resulting posture is the one toy-os has: nothing is recorded unless
+somebody asked for it.
+
 ## What it does not do
 
 **Live mode needs a scheduler slot.** Started through the legacy `run`
@@ -113,4 +156,9 @@ no record at all -- which is itself the answer when a keypress produces
 no line.
 
 **The log holds 256 events, about 128 keystrokes.** Older ones are gone;
-a gap in `seq` says how many.
+a gap in `seq` says how many, and a burst larger than one batch is *not*
+reported as a loss -- the remainder arrives on the next poll, in order.
+
+**It cannot show anything from before the tap was switched on**, and
+turning the tap off erases what it had. That is the deliberate cost of
+the default; see *The switch*.

@@ -299,3 +299,37 @@ choice display names) rather than the file layout at all. When a request
 names a SOLUTION, ask what it is a solution TO before enumerating
 variants of it -- the four options were all technically sound and all
 aimed at the wrong thing.
+
+**And one whose OPTIONS were sound and whose AXIS was wrong (2026-08-24,
+the keyboard tap).** The question was "should the kernel keep a rolling
+log of key events, or record only while the tool runs?", and both
+options were laid out honestly with the real cost of each -- ~5 KB of
+BSS and a few instructions in the IRQ handler against having to
+reproduce a bug with the tool already open. The user picked always-on,
+and it was built.
+
+Then the user said the repo might go public, and: *"I don't want my OS
+to tap anyone's keyboard presses to a big buffer."* Which reversed it,
+correctly, and pointed at the axis the question never mentioned. The
+costs I had priced were **cycles and bytes**, both trivial -- so
+"always on" looked free. The cost that decided it was **disclosure**: a
+buffer of the last ~128 keystrokes is a keylogger, this kernel has no
+privilege model, and nothing in the question I asked would have surfaced
+that.
+
+The rule, which is not specific to keyboards: **when an option RETAINS
+user input or user data, one of the trade-offs on the table has to be
+what the machine is now holding and who can read it** -- alongside
+"would you want to explain this to somebody reading the repo?". Ask it
+even when the practical risk on a single-user hobby OS is small, because
+the answer changes what gets built and the user is the only one who can
+weigh it. Two rounds of well-formed questions here still missed it; the
+user supplied it unprompted.
+
+The follow-on question that DID work, asked once the axis was clear, was
+narrow and had exactly one real fork in it: *how* should it be armed
+(tunable only / tunable plus auto-arm from the tool / compile-time), and
+*what happens to what was already captured* when it is switched off. The
+second half is the one worth copying -- "what does OFF mean for the data
+that already exists" is a question a consent switch always has, and a
+design that has not answered it has a decorative switch.

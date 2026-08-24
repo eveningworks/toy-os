@@ -4399,25 +4399,74 @@ read back the constant), and verifies every frame on the way back OUT,
 which is the half a growth bug breaks. With `grow_stack()` disabled it
 faults at `0x807fefcff8`, the first byte below the four mapped pages.
 
-## The keyboard tap records unconditionally, and `kbd` never reads a key
+## The keyboard tap is off by default, and `kbd` never reads a key
 
 `/bin/kbd` prints every stage of a keypress at once -- scancode,
 keycode, character, modifiers. Two things about how it gets them were
 real forks.
 
-**Why the kernel records when nobody is looking.** The obvious design is
-arm-and-drain: a tool says "start recording", reads what arrives, and
-stops. It costs nothing when unused, which for a diagnostic sounds
-right. It was rejected because it answers the wrong question. The
-question people actually have is *"what did the key I just pressed
-do?"*, asked after it did the wrong thing -- and an arm-and-drain tap
-can only ever watch keys pressed from now on, so every use of it begins
-by reproducing the bug with the tool already open. An intermittent one
-may not oblige. `dmesg` makes exactly this trade for exactly this
-reason, and Linux's evdev buffers every event whether or not a client
-holds the device node open. The price is stated rather than hidden: 5 KB
-of BSS (256 records at 20 packed bytes) and a bounded copy in the IRQ1
-handler, forever, for a tool nobody runs most days.
+**Why it is OFF by default, and why that REVERSES what this entry first
+said.** The original design recorded unconditionally, and the argument
+was good: the question people actually have is *"what did the key I just
+pressed do?"*, asked after it did the wrong thing, and an arm-and-drain
+tap can only ever watch keys pressed from now on -- so every use of it
+begins by reproducing the bug with the tool already open, and an
+intermittent one may not oblige. `dmesg` makes exactly that trade.
+
+What the argument left out is that **a ring holding the last ~128
+keystrokes is a keylogger by any honest description, and this kernel has
+no privilege model**: `SYS_QUERY` performs no check of any kind, so while
+the tap is on any ring-3 process can read what was typed, including at a
+prompt. For a single-user hobby OS the practical risk is small. The
+posture is not small: "kernel keystroke buffer, enabled out of the box"
+is not a property to ship in a system anybody else might run or read the
+source of, and what it buys is a debugging shortcut on a machine you are
+already sitting at. `dmesg` can make the opposite trade because a kernel
+log line is not a record of what somebody typed.
+
+So `kernel.kbdtap` is an ordinary tunable beside `kernel.kstack_track`,
+off out of the box, persisted to `/etc`. Two details carry the weight.
+**Disabling WIPES the ring** -- a switch that stops new records while
+leaving the last hundred keystrokes readable is decorative, so off means
+there are none in kernel memory; enabling wipes too, so a session starts
+clean. The sequence numbers deliberately survive, being a counter rather
+than data: restarting them would let a reader see a number it had
+already seen, which is the one thing `seq` exists to prevent. And
+**`/bin/kbd`'s live mode arms the tap for its own duration**, disarming
+on every way out, so the common case is still one command -- while a tap
+somebody deliberately left ON is left alone, since disarming it would
+silently undo their choice and discard the history they were keeping.
+
+The cost, stated rather than glossed: with the tap off, `kbd --last`
+cannot explain a key that already misbehaved. That was the whole
+argument for the original default, and it is the price of this one.
+
+**The gate is proved by a KTEST, not by the GUI tool, and finding that
+out cost a positive control.** `/bin/kbd --last` originally checked the
+switch and returned before reading the ring, which reads as obviously
+correct -- and made the tool structurally unable to notice the single
+failure that matters: a tap recording while reporting itself off.
+Deleting the gate from the kernel changed nothing it printed, so every
+check written against the tool stayed green while the in-kernel KTEST
+went red on exactly the right assertion. `--last` reads the ring FIRST
+now and reports a non-empty ring under an "off" switch as a loud
+anomaly, which is both better behaviour and what makes a test of it
+discriminating. **Generalises: a tool that consults a flag before
+looking at the thing the flag describes cannot check the flag.**
+
+**Linux is not a precedent for keeping a history, and an earlier version
+of this entry wrongly said it was.** Linux keeps none: evdev allocates
+its ring buffer per OPEN CLIENT in `evdev_open()`, so with nobody
+holding `/dev/input/eventN` the client list is empty and nothing is
+retained -- which is exactly why `evtest` and `showkey` can only ever
+watch keys pressed after they start. The nearest thing the input core
+keeps is a current-state bitmap (`EVIOCGKEY`: which keys are down right
+now), and the tty keeps queued input for a reader; both are state, not
+history. Its reason is scale rather than privacy -- a ring per device
+per client -- but the posture that falls out is the same one toy-os has
+now landed on. Copy the shape, not the size -- and **check the claim**,
+which is the rule this entry briefly broke, and which is most tempting
+to skip exactly when the claim supports the conclusion already reached.
 
 **Why it is `evtest`'s shape and not `showkey`'s.** Linux ships both,
 because there are two questions. `showkey` puts the console keyboard

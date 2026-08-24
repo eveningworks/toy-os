@@ -8,7 +8,15 @@ asserted against keys whose every stage is known in advance: the PS/2
 scancode on the wire, the evdev keycode, the character the layout
 produced, and the modifiers held when it was produced.
 
-**THE LOAD-BEARING CHECK IS THE SECOND BOOT.** Typing on PS/2 and
+**THE TAP IS OFF BY DEFAULT, AND THAT IS CHECKED FIRST.** A ring holding
+the last hundred-odd keystrokes is a keylogger by any honest
+description, and `SYS_QUERY` has no privilege check -- so the state this
+system ships in is the one that matters most, and the check that types
+keys with the tap OFF and demands an empty log is the one nobody can
+afford to have pass vacuously. It is written so it cannot: the same keys
+are typed again with the tap on, and must show up.
+
+**THE LOAD-BEARING CHECK OF THE FEATURE ITSELF IS THE SECOND BOOT.** Typing on PS/2 and
 reading back `1e 30 'a'` proves the tool can read its own kernel's ring
 and nothing more; a tap that simply echoed the wire byte would pass it.
 The same keys on `INPUT=virtio` must produce THE SAME keycode and THE
@@ -53,6 +61,7 @@ sys.path.insert(0, os.path.join(REPO, "tools"))
 from gui_debug import DebugConsole      # noqa: E402
 from qmp_test import QMPSession         # noqa: E402
 import port_guard                       # noqa: E402
+import vm as vm_mod                     # noqa: E402 -- started_ok()
 
 VM = os.path.join(REPO, "tools", "vm.py")
 
@@ -138,14 +147,14 @@ def type_keys(qmp):
 def run_path(disk, instance, virtio, label):
     """Boot, type the keys, and return kbd's parsed table (or None)."""
     print(f"{label}: boot")
-    # Stopped first, always. vm.py answers a start against a live
-    # pidfile with "already running" -- which CONTAINS the substring
-    # "ready", so the obvious readiness test passes on the one output
-    # that means the opposite. Matched as "vm: ready" below for that
-    # reason.
+    # Stopped first, always -- the slot may still be held. The readiness
+    # test is vm.started_ok(), NOT `"ready" in out`: vm.py answers a
+    # start against a live pidfile with "already running", and "al-ready"
+    # contains "ready", so the obvious test passes on the one output that
+    # means the opposite.
     vm_run(disk, instance, virtio, "stop")
     out = vm_run(disk, instance, virtio, "start")
-    if "vm: ready" not in out:
+    if not vm_mod.started_ok(out):
         print(f"    (start failed: {out.strip()[-300:]})")
         return None
     # The socket is created by QEMU, not by vm.py's readiness check, and
@@ -159,9 +168,38 @@ def run_path(disk, instance, virtio, label):
     dbg = DebugConsole(sock, timeout=20.0)
     qmp = QMPSession(port=4445 + instance)
     time.sleep(1.0)
+
+    # THE OFF STATE FIRST, before anything turns the tap on. Typed keys
+    # must leave no record, and `kbd` must say why rather than printing
+    # an empty table -- an empty table is what a BROKEN tap looks like
+    # too.
+    off = check_off_state(dbg, qmp, label)
+
+    dbg.send("sh config set kernel.kbdtap on")
+    time.sleep(0.3)
     type_keys(qmp)
     out = dbg.send("sh kbd --last 24") or ""
-    return parse(out), dbg, qmp
+    return parse(out), dbg, qmp, off
+
+
+def check_off_state(dbg, qmp, label):
+    """With the tap off: nothing recorded, and kbd says so."""
+    state = dbg.send("sh config get kernel.kbdtap") or ""
+    check(f"{label}: the tap is OFF on a fresh boot",
+          "off" in state.lower() and "on" not in state.lower().split(),
+          state.replace("\n", " / ")[:80])
+
+    type_keys(qmp)
+    out = dbg.send("sh kbd --last 24") or ""
+    # NOT "the table is empty" -- a broken tap prints an empty table too.
+    # The message naming the switch is what distinguishes "off" from
+    # "recording nothing for some other reason".
+    check(f"{label}: with the tap off, kbd reports no recording and names the switch",
+          "keyboard tap is off" in out and "kernel.kbdtap" in out,
+          out.replace("\n", " / ")[:110])
+    check(f"{label}: ...and no rows were recorded from the keys just typed",
+          len(parse(out)) == 0, f"{len(parse(out))} rows")
+    return True
 
 
 def check_path(rows, label, ps2):
@@ -195,11 +233,18 @@ def check_path(rows, label, ps2):
 
 
 def check_live(dbg, qmp, label):
-    """Live mode: it runs, and it can be quit without reading a keyboard."""
+    """Live mode: it arms the tap, runs, quits, and disarms again."""
+    # FROM AN OFF TAP, because arming is the behaviour under test and a
+    # tap left on by the checks above would let a broken auto-arm pass.
+    dbg.send("sh config set kernel.kbdtap off")
+    time.sleep(0.3)
+
     # A LONG TIMEOUT ON PURPOSE. If the idle timeout could fire during
     # this check, "it quit" would prove nothing about Esc.
     dbg.send("sh spawn /bin/kbd --timeout 120")
     time.sleep(1.2)
+    check(f"{label}: live mode ARMS the tap it needs",
+          "on" in (dbg.send("sh config get kernel.kbdtap") or "").lower())
 
     def state_of_newest_kbd():
         # THE STATE, NOT THE NAME. Earlier runs leave reaped-but-unwaited
@@ -214,7 +259,18 @@ def check_live(dbg, qmp, label):
                 newest = (int(f[0]), f[3])
         return newest
 
-    st = state_of_newest_kbd()
+    # POLLED FOR THE PARKED STATE, not sampled once. It sleeps 20ms
+    # between polls, so it is blocked the overwhelming majority of the
+    # time -- but a single sample can still land in the awake sliver, and
+    # `ready` there means "running", not "broken". Kept as "it PARKS"
+    # rather than weakened to "it is alive": a version that spun instead
+    # of sleeping is exactly what this should catch.
+    st = None
+    for _ in range(15):
+        st = state_of_newest_kbd()
+        if st and st[1].startswith("block"):
+            break
+        time.sleep(0.3)
     if not check(f"{label}: live mode starts and parks between polls",
                  st is not None and st[1].startswith("block"),
                  f"ps says {st}"):
@@ -236,6 +292,13 @@ def check_live(dbg, qmp, label):
     check(f"{label}: Esc twice quits it -- from the LOG, with no read of fd 0",
           st2 is not None and st2[0] == pid and st2[1] == "zombie",
           f"ps says {st2}")
+
+    # AND DISARMS ON THE WAY OUT. A tool that leaves a keystroke recorder
+    # running after it exits is the whole thing the default is there to
+    # prevent, so this is asserted rather than assumed.
+    after = dbg.send("sh config get kernel.kbdtap") or ""
+    check(f"{label}: ...and DISARMS the tap it armed",
+          "off" in after.lower(), after.replace("\n", " / ")[:80])
 
     # THE GUARD, and the reason it exists: through the legacy `run`
     # loader there is no scheduler slot, so the sleep is refused and the
@@ -285,7 +348,7 @@ def main():
             if got is None:
                 tables[label] = None
             else:
-                rows, dbg, qmp = got
+                rows, dbg, qmp, _off = got
                 tables[label] = rows
                 if not virtio:
                     check_live(dbg, qmp, label)

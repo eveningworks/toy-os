@@ -1411,3 +1411,86 @@ pass the same test from the other direction -- a separate process could
 not SEE the table, and `fg` could not take the terminal on its parent's
 behalf. Stating both halves is what makes the rule usable on the next
 case.
+
+## Reading the registry to poll it is a heap scan per poll (2026-08-24)
+
+`QUERY_PROVIDERS` (class 0) reports every class's `count`, so one read
+of it looks like exactly the right way to ask "how many records does
+this list hold?" -- one syscall, no walking. It is a trap in a poll
+loop: filling a provider-info record CALLS that provider's `count()`,
+and some of those do real work (`QUERY_HEAPCHECK` scans the kernel heap,
+`QUERY_MMAUDIT` walks live page tables). At 50 Hz that is a heap scan
+fifty times a second, and `kbd` did not appear to hang so much as make
+the machine stop answering.
+
+The replacement is dumber and correct: probe the list itself by doubling
+and then bisecting (~16 reads of a ring buffer), which also bakes in no
+ring size -- growing the kernel's ring needs no edit in the tool.
+**Generalises to any self-describing registry: the cheap-looking
+metadata read is only cheap if the metadata is stored rather than
+computed.**
+
+## Check the comparison, not just the design (2026-08-24)
+
+The keyboard tap's design entry justified recording unconditionally with
+"dmesg makes this trade, and Linux's evdev buffers every event whether
+or not a client holds the device node open." The first half is right.
+The second is **wrong**: evdev allocates its ring PER OPEN CLIENT in
+`evdev_open()`, so with nothing holding `/dev/input/eventN` the client
+list is empty and nothing is stored -- which is precisely why `evtest`
+can only ever see keys pressed after it starts. Linux keeps no keypress
+history at all; the nearest thing is a current-state bitmap
+(`EVIOCGKEY`).
+
+The user asked "so Linux also keeps a keyboard key buffer?" and the
+honest answer was no. That corrected the justification. **Then the user
+said the repo might go public, and the DESIGN went with it** -- because
+the argument I had never made was the one that decided it: a ring of the
+last ~128 keystrokes is a keylogger, `SYS_QUERY` has no privilege check,
+and "kernel keystroke buffer, on out of the box" is not a thing to ship
+in a public repo. It is a `kernel.kbdtap` tunable now, off by default,
+wiping on disable, with `kbd` arming it for its own duration.
+
+Three things worth carrying:
+
+- **I recommended the default on debugging ergonomics and never weighed
+  what the feature HOLDS.** The cost analysis I offered was cycles and
+  bytes -- both trivial, which made "always on" look free. The real axis
+  was disclosure, and nothing in the question I asked would have
+  surfaced it. **For anything that RETAINS user input or user data, ask
+  what it would look like to somebody reading the repo, not just what it
+  costs to run.**
+- **A wrong claim about Linux is most tempting exactly when it supports
+  the conclusion you already reached.** Second time here (see the
+  restart-policy note, where a false aside made the right option look
+  useless). CLAUDE.md already says to check it.
+- **And the correction made the entry better, not weaker.** "This is
+  what Linux does" became "this is a deliberate divergence and here is
+  what makes it affordable", which is a sentence a future session can
+  actually argue with.
+
+## A tool that consults a flag cannot check the flag (2026-08-24)
+
+Making the keyboard tap opt-in, the positive control for the privacy
+gate -- delete `if (!g_enabled) return;` so the kernel records while the
+switch says off -- **reddened nothing**. All 40 checks in the GUI tool
+stayed green.
+
+The cause is the shape, not the fixture: `kbd --last` read
+`kernel.kbdtap`, saw "off", printed "the tap is off" and returned
+WITHOUT LOOKING AT THE RING. So the tool reported the switch back to
+itself, and no test written against it could ever see a tap recording
+while claiming to be off -- which is the single failure that matters.
+The in-kernel KTEST, which calls `kbdtap_key()` and then reads, caught
+it immediately on the right assertion.
+
+The fix improved the program: `--last` reads the ring FIRST and reports
+a non-empty ring under an "off" switch as a loud anomaly, because a user
+whose kernel is recording against their settings needs to be told. The
+same control then reddens four checks with "10 rows" naming the leak.
+
+**Generalises well past this feature.** Any check of the form "the
+feature is disabled" written against a tool that short-circuits on the
+disable flag is measuring the flag, not the behaviour. Put that check
+where the behaviour is -- and prefer a tool that reports the DISCREPANCY
+between a flag and reality over one that trusts the flag.

@@ -119,6 +119,48 @@ run` window is never at risk. GUI/rendering work still needs
 whether a button is drawn in the right place.
 
 
+### Five ways a harness built on `vm.py` reports the wrong thing
+
+Each of these has cost a session real time here, and none of them fails
+in a way that points at itself.
+
+**`"ready" in output` is the wrong readiness test, because "al-ready"
+contains "ready".** `vm.py start` answers a slot that is already taken
+with `vm: already running`, so the obvious check passes on the one
+output that means the opposite -- and the tool then talks to a serial
+socket that does not exist, several steps later. Use
+**`vm.started_ok(output)`**, which exists so there is one place to be
+right; eight tools here carried the substring test before it was found.
+
+**A stopped guest keeps its QMP port for about a minute, so two boots
+cannot share a slot.** A tool's own `QMPSession` leaves the connection
+in TIME_WAIT on the server side, and `port_guard` correctly refuses the
+next boot on a held port. Take a **fresh slot per boot**
+(`port_guard.find_free_instance()`) rather than waiting it out; until
+that is understood it reads as "the second configuration does not boot".
+
+**`DebugConsole.send()` returns on a quiet period, not on completion.**
+So timing a command with it measures nothing, and output left in the
+socket by a previous command comes back attached to the next one. Assert
+on the guest's own state -- a file, a `ps` row -- not on how long a
+`send()` took.
+
+**A SPAWNED program's stdout never reaches the serial socket.** It goes
+to the console framebuffer; the legacy `run` loader's output does come
+back. So `sh <prog>` returns text you can assert on and `sh spawn
+/bin/<prog>` returns only the loader's own lines. That decides a test's
+shape: anything printing a table gets run through the legacy loader, and
+anything needing a scheduler slot (i.e. anything that sleeps) gets
+checked through the process table instead. **And fd 2 is the KERNEL
+LOG**, so `sys_eprint()` from a ring-3 program reaches `dmesg` even when
+its stdout is a framebuffer nobody can see -- which is the way to
+instrument a spawned program.
+
+**"Is it still running?" must read `ps`'s STATE column, not the name.**
+The kernel shell's `spawn` does not reap, so earlier runs leave zombies
+and `"name" in ps_output` answers yes forever. That check passed with
+the feature under test wholly broken.
+
 ## What the emulator does and does not model
 
 **`make run KVM=1` is not a straight speedup, and throughput numbers from

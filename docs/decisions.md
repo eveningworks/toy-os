@@ -129,7 +129,7 @@ first before re-litigating it from scratch.
 - [SIGCHLD is sent on exit only, from one helper both deaths call](decisions/kernel.md#sigchld-is-sent-on-exit-only-from-one-helper-both-deaths-call)
 - [The heap starts where the image ends, so a ring-3 program has no size limit](decisions/kernel.md#the-heap-starts-where-the-image-ends-so-a-ring-3-program-has-no-size-limit)
 - [The user stack is reserved and grown on fault, not allocated bigger](decisions/kernel.md#the-user-stack-is-reserved-and-grown-on-fault-not-allocated-bigger)
-- [The keyboard tap records unconditionally, and `kbd` never reads a key](decisions/kernel.md#the-keyboard-tap-records-unconditionally-and-kbd-never-reads-a-key)
+- [The keyboard tap is off by default, and `kbd` never reads a key](decisions/kernel.md#the-keyboard-tap-is-off-by-default-and-kbd-never-reads-a-key)
 - [Every key on the keyboard reports something now, and the keypad reports characters](decisions/kernel.md#every-key-on-the-keyboard-reports-something-now-and-the-keypad-reports-characters)
 
 **Filesystem & storage** -- [`decisions/storage.md`](decisions/storage.md) (39 entries)

@@ -17,15 +17,36 @@
 // Every such hunt here has started by hand-writing a probe that prints
 // all four at once. This is that probe, made permanent.
 //
-// **IT RECORDS WHETHER OR NOT ANYTHING IS READING**, which is the design
-// decision worth defending, because it costs a ring buffer and a handful
-// of instructions in the IRQ1 handler forever. What it buys is that the
-// question can be asked AFTER the fact: press the key that misbehaved,
-// then run `kbd --last`. An arm-and-drain tap can only watch keys
-// pressed from now on, so every use of it begins by reproducing the bug
-// with the tool already open -- and an intermittent one may not oblige.
-// dmesg makes exactly this trade, and Linux's evdev buffers every event
-// whether or not a client has the node open.
+// **IT IS OFF UNTIL SOMEBODY TURNS IT ON, AND THAT IS A PRIVACY
+// DECISION RATHER THAN A PERFORMANCE ONE.** A ring holding the last
+// couple of hundred keystrokes is a keylogger by any honest description,
+// and this kernel has NO privilege model: `SYS_QUERY` checks nothing, so
+// while the tap is on, any ring-3 process can read what was typed --
+// including at a prompt. The cost of recording is trivial (~5 KB and a
+// bounded copy in the IRQ1 handler); the reason it is not on by default
+// is that "kernel keylogger, enabled out of the box" is not a thing to
+// ship in a system anyone else might run.
+//
+// So: `kernel.kbdtap` is a tunable, off by default, persisted like every
+// other one -- and **turning it off WIPES the ring**, so "off" means
+// there are no keystrokes in kernel memory rather than merely no new
+// ones. `/bin/kbd`'s live mode arms it while it runs and disarms it on
+// the way out, which is what makes the common case one command.
+//
+// The cost of being off by default is real and worth stating: the
+// question this was built for -- "what did the key I just pressed do?"
+// -- can only be answered after the fact if the tap was already on. Left
+// off, every use of it starts by reproducing the bug. That is the trade
+// this file used to make in the other direction.
+//
+// **LINUX KEEPS NO KEYPRESS HISTORY EITHER, and for a different
+// reason.** evdev allocates its ring PER OPEN CLIENT, in evdev_open(),
+// so with nobody holding /dev/input/eventN there is no buffer to fill
+// and evtest sees only what arrives after it starts; the nearest thing
+// the input core retains is a CURRENT STATE bitmap (EVIOCGKEY), which is
+// state, not history. Its reason is scale rather than privacy -- a ring
+// per device per client -- but the resulting posture is the same one,
+// and worth landing on deliberately rather than by accident.
 //
 // KEYBOARD ONLY, deliberately. Pointer motion arrives hundreds of times
 // a second and would evict every keypress from a ring this size before
@@ -36,7 +57,20 @@
 // no lock -- the same restraint the transition queue beside it observes
 // (api/keyboard.h). Recording is a bounded copy into a static ring.
 
-// Open a record for one key event. `wire` is the PS/2 byte INCLUDING its
+// Whether the tap is recording, and the switch behind `kernel.kbdtap`.
+//
+// **DISABLING WIPES**, which is the half that makes the switch mean
+// something: stopping new records while leaving the last 128 keystrokes
+// readable by anything that asks is not "off". Enabling wipes too, so a
+// session always starts clean.
+//
+// The sequence numbers do NOT restart -- they are a counter, not
+// keystroke data, and keeping them monotonic preserves the "never
+// reused" property a reader relies on to tell a repeat from a gap.
+void kbdtap_set_enabled(int on);
+int  kbdtap_enabled(void);
+
+// Open a record for one key event. A no-op while the tap is off. `wire` is the PS/2 byte INCLUDING its
 // release bit, or 0 for a key that did not arrive over PS/2 (0x00 is not
 // a scancode, so zero is unambiguous); `extended` says it followed an
 // 0xE0 prefix. `mods` is sampled by the caller AFTER a modifier key has

@@ -31,6 +31,7 @@
 #include "kfmt.h"          // k_snprintf -- the reason names the live device
 #include "setting_abi.h"   // SETTING_ABI_DESC_MAX -- the reason's own budget
 #include "block.h"        // blk_name() -- what IS carrying the transfers
+#include "keyboard_tap.h" // kbdtap_enabled()/_set_enabled() -- kernel.kbdtap
 
 #define TUNABLE_CATEGORY "Kernel"
 
@@ -196,8 +197,41 @@ static const struct setting kstack_track_setting = {
     .apply = kstack_track_apply,
 };
 
+// ---- kernel.kbdtap ---------------------------------------------------
+//
+// **THE ONE TUNABLE HERE WHOSE DEFAULT IS A PRIVACY DECISION.** While it
+// is on, the kernel keeps the last ~128 keystrokes (kernel/keyboard_tap.h)
+// and `SYS_QUERY` checks nothing, so any ring-3 process can read what was
+// typed. The cost of recording is trivial; being off by default is about
+// what the machine holds, not about what it costs. Turning it off WIPES
+// the ring, which is the half that makes the switch mean anything.
+
+static void kbdtap_get(char *out, uint32_t cap) {
+    k_strlcpy(out, kbdtap_enabled() ? "on" : "off", cap);
+}
+
+static int kbdtap_apply(const char *value) {
+    int on;
+    if (!parse_onoff(value, &on)) return SETTING_INVALID;
+    kbdtap_set_enabled(on);
+    return SETTING_SAVED;
+}
+
+static const struct setting kbdtap_setting = {
+    .name = "kbdtap",
+    .label = "Record recent key events for `kbd`",
+    .type = SETTING_TYPE_ENUM,
+    .file = CONFIG_PATH_RUNTIME,
+    .category = TUNABLE_CATEGORY,
+    .group = "Diagnostics",
+    .choice = onoff_choice,
+    .get = kbdtap_get,
+    .apply = kbdtap_apply,
+};
+
 void tunables_register(void) {
     setting_register(&heap_debug_setting);
     setting_register(&ata_nodma_setting);
     setting_register(&kstack_track_setting);
+    setting_register(&kbdtap_setting);
 }

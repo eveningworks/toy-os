@@ -1398,3 +1398,52 @@ the stage whose status it reports left every other stage of a resumed
 pipeline unreaped forever. Every other check in the tool passed while it
 happened. It costs one line against `ps` and it is the only thing that
 can see a whole class of leak.
+
+## The harness lied four ways in one afternoon (2026-08-24, the `kbd` tap)
+
+Building `/bin/kbd` and `tools/kbd_test.py`. The feature was small; the
+tooling around it was where all the time went, which is now the usual
+shape here. Four of these cost a build-and-boot cycle each.
+
+**`"ready" not in output` MATCHES "al-ready running".** `vm.py start`
+answers a slot that is already taken with `vm: already running`, and
+that string contains `ready` -- so the obvious readiness test passes on
+the one output that means the opposite, and the tool then talks to a
+serial socket that is not there. It surfaced as `FileNotFoundError` on
+the SECOND boot, i.e. pointing at the second boot's feature rather than
+at the readiness test. **Eight tools here carried it**; there is one
+`vm.started_ok()` now. The general form: a substring test whose needle
+is a substring of the failure message.
+
+**A QMP port stays bound after the guest dies, so two boots cannot share
+a slot.** The tool's own `QMPSession` leaves the connection in TIME_WAIT
+on the SERVER side, so `4445+N` is unbindable for about a minute and
+`port_guard` correctly refuses the next boot on it. Waiting it out adds
+a minute per boot for nothing; take a fresh slot per boot
+(`find_free_instance()`). Until that was understood it read as
+"virtio-input does not boot".
+
+**`ps` must be read for STATE, not for a NAME.** The kernel shell's
+`spawn` does not reap, so every earlier run leaves a `kbd` zombie: `"kbd"
+in ps_output` answers yes forever, and the check passed with live mode
+wholly broken. The version that reads the newest matching row's STATE
+column caught it immediately. Any "is it still running?" check written
+against a name has this bug.
+
+**`DebugConsole.send()` returns on a QUIET PERIOD, not on completion.**
+So timing a command with it measures nothing, and a `0.0s` elapsed for a
+command that should have taken ten seconds is the harness, not the
+guest. Worse, output left in the socket by a previous command comes back
+attached to the next one -- two of the "measurements" that sent me
+looking for a bug were the previous command's tail. Assert on the
+guest's own observable state (`ps`, a file) rather than on how long a
+`send()` took.
+
+And one that is not a lie but a hard constraint worth knowing:
+**a SPAWNED process's stdout goes to the console framebuffer and never
+reaches the serial socket; the legacy `run` loader's does.** So `sh
+<prog>` returns text you can assert on and `sh spawn /bin/<prog>` does
+not. That decides the shape of a test: anything printing a table gets
+run through the legacy loader, and anything needing a scheduler slot
+(i.e. anything that sleeps) gets checked through the process table
+instead.

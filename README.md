@@ -135,10 +135,11 @@ real.
 
 **Known gaps** — no USB stack, so input on real hardware depends on the
 firmware's legacy PS/2 emulation. No networking and no SMP. Demand
-paging covers the heap but there is no region list, so no `mmap` yet,
-and there are no user-space signal handlers.
-[docs/roadmap.md](docs/roadmap.md) tracks all of it, including a candid
-known-issues list.
+paging covers the heap and the user stack, but there is no region list,
+so no `mmap` yet. No shared libraries, and no privilege model: there are
+no user accounts and no permission checks, so anything ring 3 can ask
+for, any process can ask for. [docs/roadmap.md](docs/roadmap.md) tracks
+all of it, including a candid known-issues list.
 
 ## Quick start
 
@@ -355,10 +356,11 @@ its own cursor queue, programming the mode itself so `video=1920x1080`
 is honoured rather than left to whatever GRUB negotiated, and
 **`virtio-input`** (keyboard, mouse and tablet) feeding an **input core**
 whose canonical event is evdev-shaped, so PS/2, virtio and a future USB
-HID driver are all sources in one registry — with a rolling log of the
-last few hundred key events that `kbd` prints as all four encodings at
-once (scancode, keycode, character, modifiers), which is how a key that
-works on one keyboard and not another stops being a mystery — and the first virtio
+HID driver are all sources in one registry — with an opt-in
+diagnostic log (`kernel.kbdtap`, off by default) that `kbd` prints as
+all four encodings of a keypress at once — scancode, keycode, character,
+modifiers — which is how a key that works on one keyboard and not
+another stops being a mystery — and the first virtio
 devices here to complete on a real interrupt rather than a poll. One
 transport, so the next device (net) is a driver rather than a
 bring-up project — and it is about **10× ATA's write throughput under
@@ -446,7 +448,7 @@ too big for its window scrolls.
 wrapper per syscall. The shared kernel toolkit is compiled a second time
 under the C names, so a ring-3 `strlen` and the kernel's `k_strlen`
 cannot diverge — and the same rule gives ring 3 the kernel's own
-allocator as `malloc`/`free`, its line editor, and its ANSI parser -- so
+allocator as `malloc`/`free`, its line editor, and its ANSI parser — so
 both shells agree about what Ctrl-A does, and the console and a Terminal
 window agree about what `ESC[4;12H` means. Adding a program is a
 `.c` file with no Makefile edit. Beside that sits **tolibc**
@@ -459,6 +461,21 @@ has not been written yet.
 live with the subsystem that owns them — the shape Linux and NT both
 settled on. The same row carries what `strace` prints, so tracing and
 dispatch cannot disagree about which syscalls exist.
+
+**Introspection.** Kernel state reaches ring 3 through one self-describing
+registry rather than a `/proc` filesystem: a subsystem registers a
+provider for a fact, and a command formats it — `ps`, `df`, `lspci`,
+`lscpu`, `meminfo`, `kstack`, `tty`, `kbd`. Answering *"what did the
+machine actually do?"* is treated as a first-class job, distinct from a
+test asserting it did the right thing: `strace` decodes a syscall per
+line, `meminfo audit` compares every live address space against the
+allocator, `tty` names who is holding the keyboard, and `kbd` prints a
+keypress at every stage at once — PS/2 scancode, evdev keycode, the
+character the layout produced, and the modifiers held — which is how a
+key that works on one keyboard and not another stops being a mystery.
+The log behind that last one is **off by default** and wipes when
+switched off, because there is no privilege model here and a buffer of
+recent keystrokes is not something to keep without being asked.
 
 ## Architecture
 
@@ -474,10 +491,13 @@ kernel/
   mm/           physical frames, address spaces, the kernel heap
   proc/         ELF64 loader, the syscall table, scheduler, window server
   fs/           TFS3 and TFS2 behind the probe-selecting VFS
+  tty/          the terminal object: line discipline, ptys, tty0
   lib/          services with no hardware of their own: the shared
                 toolkit (strings, numbers, formatting, paths, line
-                editing), JSON, klog, /etc config, entropy
-  drivers/      one piece of hardware each, plus the display registry
+                editing), JSON, klog, /etc config, entropy, tunables
+  drivers/      one piece of hardware each, plus the registries a new
+                one plugs into (display, block, input)
+  test/         the KTEST harness itself
   include/      split by audience and ENFORCED by include paths: api/
                 (what apps may use), abi/ (the kernel<->userland
                 contract), kernel/ (internal, off apps/'s path)
@@ -486,13 +506,16 @@ apps/           kernel-space programs: the shell, the demo, tab completion.
                 No GUI lives here any more.
 
 userland/       ring-3 programs, split by ROLE:
-  rt/           crt0, libsys, linker script
+  rt/           crt0, libsys, the signal trampoline, linker script
+  libc/         tolibc -- the C library, aiming to be COMPLETE
   ui/           Toykit -- the toolkit clients program against
-  lib/          non-UI libraries: the tosh shell, C-name string/stdio
+  lib/          non-UI libraries: the tosh shell, images, history
   wm/           the window manager, itself a ring-3 program
   gui/          windowed apps      -> seeded to /bin
   bin/          command-line tools -> seeded to /bin
   tests/        single-mechanism diagnostics -> seeded to /tests
+  ports/        vendored third-party source, kept separate on purpose
+  doom/         our backend for it, deliberately OUTSIDE ports/
 
 seed/, data/    what gets mirrored onto disk.img at build time
 tools/          build, test and delivery tooling (see Development)
@@ -551,6 +574,7 @@ Selected tools, each documented in its own docstring:
 | `qmp_test.py`, `gui_flow.py`, `shell_flow.py` | Drive the GUI over QEMU's QMP socket, with the mouse/keyboard gotchas already handled. |
 | `tfs3_writer.py`, `tfs2_writer.py` | Read, write, inspect and corrupt-for-testing files inside a `disk.img` from the host, without booting. Each refuses the other's images. |
 | `fs_switch_test.py` | Proves probe, wipefs, live `fsformat` both ways, and reboot persistence. |
+| `kbd_test.py`, `keyboard_paths_test.py` | The input path, asserted on both drivers: that the same keys produce the same keycode and character over PS/2 and virtio-input, and that `kbd`'s four columns say what each stage really did. |
 
 `CLAUDE.md` documents the conventions and environment quirks in depth.
 
@@ -566,8 +590,10 @@ Selected tools, each documented in its own docstring:
 | [docs/testing.md](docs/testing.md) | How to run and drive this OS headlessly, the QMP mechanics, and what the emulator does not model. |
 | [docs/tools.md](docs/tools.md) | Every script in `tools/`: what it does, why it exists, and the traps it encodes. |
 | [docs/settings-and-queries.md](docs/settings-and-queries.md) | Facts vs settings vs tunables, and how an app reads or changes either. |
+| [docs/query-design.md](docs/query-design.md) | How kernel state reaches ring 3, and why it is not `/proc`: `SYS_QUERY`, a self-describing registry, and a provider per fact. |
+| [docs/libc-design.md](docs/libc-design.md) | `tolibc`, the C library — what it covers, and why its bar for adding a function is the opposite of the rest of the project. |
 | [docs/commands.md](docs/commands.md) | The command index; [docs/commands/](docs/commands/) has one page each. |
-| [docs/signals-design.md](docs/signals-design.md) | Signals, a foreground process, and what `Ctrl-C` needs. Delivery, dispositions and job control BUILT; user-space handlers still planned. |
+| [docs/signals-design.md](docs/signals-design.md) | Signals, a foreground process, and what `Ctrl-C` needs. Every stage is built — delivery, dispositions, job control, and ring-3 handlers with a `SA_RESTORER` from userland. |
 | [docs/tty-design.md](docs/tty-design.md) | The TTY layer: a terminal as an object, pseudo-terminals, and one implementation of `Ctrl-C` and `Ctrl-Z` for the console and a window alike. Stages 1–3 built; virtual terminals are what remain. |
 | [docs/boot-flags.md](docs/boot-flags.md) | Every word the kernel looks for on the GRUB command line. |
 | [docs/filesystem-layout.md](docs/filesystem-layout.md) | What lives where on the OS's own disk. Checked against the built image by `tools/check_layout.py`. |

@@ -65,6 +65,7 @@ import time
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "tools"))
 from gui_debug import DebugConsole      # noqa: E402
+import vm as vm_mod                   # noqa: E402 -- started_ok(), see its comment
 from qmp_test import QMPSession         # noqa: E402
 import port_guard                       # noqa: E402
 
@@ -132,7 +133,7 @@ def type_line(qmp, text):
 def run_path(disk, instance, virtio, label):
     """Boot twice on one input path; return (root listing, piped content)."""
     print(f"{label}: boot 1 -- target and layout")
-    if "ready" not in vm_run(disk, instance, virtio, "start"):
+    if not vm_mod.started_ok(vm_run(disk, instance, virtio, "start")):
         return None, None
     dbg = DebugConsole(serial_sock(instance))
     dbg.send("sh keyboard se")
@@ -143,7 +144,7 @@ def run_path(disk, instance, virtio, label):
     vm_run(disk, instance, virtio, "stop")
 
     print(f"{label}: boot 2 -- type")
-    if "ready" not in vm_run(disk, instance, virtio, "start"):
+    if not vm_mod.started_ok(vm_run(disk, instance, virtio, "start")):
         return None, None
     dbg = DebugConsole(serial_sock(instance))
     qmp = QMPSession(port=4445 + instance)
