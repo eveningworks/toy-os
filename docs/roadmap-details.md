@@ -1089,11 +1089,20 @@ than introducing one.
 ~~That filesystem API surface also needs seek~~ -- `SYS_LSEEK` exists,
 and Doom (which needed it to read a WAD's lump directory) runs on it.
 
-Desktop calendar: a small popup panel above the taskbar, opened by
-clicking the clock, showing a month grid (view-only, no events yet) --
-built as a reusable `widget_calendar` piece the same way
-`widget_scrollback`/`widget_button` are, so any future app can embed it
-too.
+Desktop calendar: DONE 2026-08-24. A popup panel above the taskbar,
+opened by clicking the tray clock, showing a month grid with today in
+the accent, `<`/`>` paging and a title that snaps back to today
+(`userland/wm/calendar_popup.c`). Days are not clickable -- there are no
+events to select one for. The week's first column is
+`desktop.week_start`.
+
+The plan here said "a reusable `widget_calendar` piece the same way
+`widget_scrollback`/`widget_button` are", and that was stale twice over
+by the time it was built: that widget set (`apps/ui/`) was deleted when
+the desktop moved to ring 3, and the window manager hosts no `uui`
+router at all -- it draws with `ugfx` like `start_menu.c` beside it. So
+the grid is drawn by the popup, and a `uui_calendar` widget waits for a
+second real caller. See `docs/decisions.md`.
 
 Control panel window with pluggable "applets" (Windows-style) -- first
 applet: display settings (font size + color theme), since both already

@@ -540,7 +540,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Real RING-3 filesystem API surface (list/stat/create/delete/seek)~~ done -- every one of those is a syscall now
 - [x] ~~File manager app~~ DONE 2026-08-23 -- two panes, marks, and file operations as spawned children
 - [ ] Move Notepad's dialog and the WM's file picker onto `uui_fileview`
-- [ ] Desktop calendar widget
+- [x] ~~Desktop calendar widget~~ DONE 2026-08-24 -- a panel popup on the tray clock, not an app
 - [x] ~~Control panel with pluggable applets~~ done
 - [ ] Find/replace in Notepad
 - [x] ~~An image viewer~~ DONE 2026-08-23 -- Image Viewer browses a directory rather than opening a file dialog

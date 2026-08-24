@@ -29,6 +29,7 @@
 #include "win_events.h"
 #include "start_menu.h"
 #include "context_menu.h"
+#include "calendar_popup.h"
 #include "confirm_dialog.h"
 #include "file_picker.h"
 #include "desktop.h"
@@ -740,6 +741,7 @@ void wm_run(void) {
     window_count = 0;
     start_menu_open = 0;
     context_menu_close();
+    calendar_close();
     dragging = -1;
     resizing = -1;
     content_dragging = -1;
@@ -853,6 +855,7 @@ void wm_run(void) {
         // decode that the cache then keeps.
         wmwd_phase("startbutton");
         taskbar_poll_config();
+        calendar_poll_config(); // `desktop.week_start`, same generation poll
 
         // Drain everything the kernel has queued for us, then read the
         // position out of it. One pump per frame, fully draining -- see
@@ -973,7 +976,7 @@ void wm_run(void) {
         // full path while the menu's open so hovering a different row
         // actually updates the highlight instead of only refreshing on
         // the next unrelated redraw.
-        if (mouse_moved && start_menu_open) redraw_pending = 1;
+        if (mouse_moved && (start_menu_open || calendar_open)) redraw_pending = 1;
 
         // Closes the Start menu once a just-clicked row's brief flash
         // has shown long enough -- independent of clicks/movement, so
@@ -1113,6 +1116,7 @@ void wm_run(void) {
                         if (start_menu_open) start_menu_open = 0;
                         else start_menu_open_now();
                         context_menu_open = 0;
+                        calendar_close();
                         redraw_pending = 1;
                     }
                 } else if (key == KEY_F4 && (key_mods & KEY_MOD_ALT) && f >= 0 && !file_picker_open) {

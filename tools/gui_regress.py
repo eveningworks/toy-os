@@ -135,6 +135,7 @@ TOOLS = [
     ("idle", "idle_desktop_test.py", "nothing paints over an idle desktop"),
     ("imgview", "imgview_test.py", "JPEG decoding, the viewer, and the wallpaper"),
     ("icons", "icons_test.py", "app icons: QOI, alpha compositing, three draw sites"),
+    ("calendar", "calendar_test.py", "the tray clock's calendar popup, and week_start"),
     ("mines", "mines_test.py", "Minesweeper, and a secondary click reaching a client"),
     ("files", "filemanager_test.py", "the File Manager: two panes, marks, and real file operations"),
 ]

@@ -1323,6 +1323,24 @@ window without going through it will find its layout polls timing out.
   narrowing the first-click safe zone from the 3x3 neighbourhood to the
   clicked cell reddens exactly one, on the right assertion. In
   `gui_regress.py`.
+- **`calendar_test.py`** -- the tray clock's calendar popup: opening,
+  the grid, paging, and `desktop.week_start`. **The grid is checked
+  against the HOST's `datetime`**, which shares no code with the guest's
+  `cal_days_from_civil()` -- a test that re-derived the first column the
+  same way the code does would agree with a wrong implementation. **Every
+  open/close check is paired with the panel's own pixels**, because
+  `gui calendar --json` reporting `open: true` is exactly what a popup
+  that draws nothing also reports (this repo's "it responds is not it is
+  drawn" trap). The comparison box is the panel rect, whose bottom edge
+  is the taskbar's top edge -- a box containing the once-a-second clock
+  could never settle. **The year boundary is exercised** (paging back
+  past January), since "month - 1" with no wrap is the obvious bug, and
+  **the week_start check restores `monday` afterwards**, since a written
+  setting outlives the run and changes the machine for every later tool.
+  Three positive controls were run: disabling today's highlight reddens
+  one check, ignoring the setting reddens three, and removing the year
+  wrap reddens two -- each on the right assertion and nothing else. In
+  `gui_regress.py`.
 - **`filemanager_test.py`** -- the File Manager: two panes, marking, and
   real file operations. **The result of every operation is checked
   through `ls`, not through the app** -- the manager is the thing under

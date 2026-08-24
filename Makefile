@@ -577,7 +577,7 @@ EXTRA_OBJS_gfxdemo    =
 # silently absorbed into the desktop.
 EXTRA_OBJS_toywm      = wm/wm wm/wm_rawin wm/wm_render wm/wm_input wm/wm_client \
                         wm/wm_debug wm/wm_tray wm/wm_taskbar wm/wm_watchdog \
-                        wm/desktop wm/start_menu wm/context_menu \
+                        wm/desktop wm/start_menu wm/context_menu wm/calendar_popup \
                         wm/confirm_dialog wm/file_picker wm/cursor_theme \
                         wm/gui_apps wm/wm_log wm/wm_fs wm/wm_conf
 # icon_cache is NOT in that list any more: it moved to userland/lib/ when

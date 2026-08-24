@@ -31,6 +31,15 @@ void tray_update_clock(void);
 // own locals exactly.
 void draw_tray(int taskbar_y, uint32_t bg, uint32_t fg);
 
+// The clock's own box in the taskbar strip -- 0 when no clock is
+// registered (which cannot happen after tray_init(), but a caller
+// should not have to know that). Comes from the SAME right-to-left walk
+// draw_tray() uses, so a click cannot be told a different position from
+// the one the clock was drawn at. Two callers: wm_input.c hit-tests a
+// left click against it to open the calendar, calendar_popup.c anchors
+// its panel to it.
+int tray_clock_rect(int *out_x, int *out_y, int *out_w, int *out_h);
+
 // The x the leftmost tray item starts at -- the right edge of the strip
 // the window buttons get. See the definition for why it re-walks the
 // items rather than caching a width.

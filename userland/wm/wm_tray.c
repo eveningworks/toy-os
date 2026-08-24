@@ -107,31 +107,62 @@ void tray_update_clock(void) {
     tray_set_text(clock_tray_id, buf);
 }
 
-// The x the leftmost tray item starts at -- i.e. how far right the
-// window buttons may run before they would draw under the clock.
-// Computed by the SAME right-to-left walk draw_tray() does, so the two
-// cannot disagree; a taskbar that lays its buttons out against a
-// separately-guessed tray width is the shape that let buttons run under
-// the clock in the first place (docs/bugs.md, fixed).
-int tray_left(void) {
-    int cx = screen_w - 16;
-    for (int i = TRAY_MAX_ITEMS - 1; i >= 0; i--) {
-        if (!tray_items[i].active) continue;
-        cx -= (int)k_strlen(tray_items[i].text) * ugfx_char_w();
-        cx -= 12;
-    }
-    return cx - 4; // the fill rect draw_tray() paints starts 4px left of the text
-}
-
-void draw_tray(int taskbar_y, uint32_t bg, uint32_t fg) {
+// THE one right-to-left walk. draw_tray(), tray_left() and
+// tray_clock_rect() all used to be separate copies of this loop in
+// spirit -- and the taskbar's own history says what that costs: window
+// buttons laid out against a separately-guessed tray width ran under
+// the clock (docs/bugs.md, fixed). `want` is the item whose rect the
+// caller is after, or -1 for "just tell me where the strip ends";
+// `visit` (nullable) is called for every active item in draw order.
+// Returns the leftmost x the tray occupies.
+static int tray_walk(int want, int *out_x, int *out_w,
+                     void (*visit)(int id, int x, int w, void *ctx), void *ctx) {
     int cx = screen_w - 16;
     for (int i = TRAY_MAX_ITEMS - 1; i >= 0; i--) {
         if (!tray_items[i].active) continue;
         int text_w = (int)k_strlen(tray_items[i].text) * ugfx_char_w();
         cx -= text_w;
-        int text_y = taskbar_y + (taskbar_h - ugfx_char_h()) / 2;
-        ugfx_fill_rect(wm_surface(), cx - 4, taskbar_y, text_w + 8, taskbar_h, bg);
-        ugfx_draw_string(wm_surface(), cx, text_y, tray_items[i].text, fg, bg);
+        // The item's BOX, not its text: the fill draw_tray() paints
+        // starts 4px left of the glyphs and runs 4px past them, and a
+        // click landing in that padding is a click on the item.
+        if (i == want) { if (out_x) *out_x = cx - 4; if (out_w) *out_w = text_w + 8; }
+        if (visit) visit(i, cx, text_w, ctx);
         cx -= 12;
     }
+    return cx - 4;
+}
+
+int tray_left(void) { return tray_walk(-1, 0, 0, 0, 0); }
+
+// The clock's own box, for the two callers that need to know where it
+// is rather than what it says: wm_input.c hit-tests a click against it,
+// and calendar_popup.c anchors its panel to it. Both ask the walk above
+// rather than re-deriving "the leftmost item, probably" -- the clock is
+// item 0 and therefore leftmost TODAY, and an app registering a tray
+// item does not change where the clock is drawn but would change any
+// guess phrased that way.
+int tray_clock_rect(int *out_x, int *out_y, int *out_w, int *out_h) {
+    if (clock_tray_id < 0) return 0;
+    int x = 0, w = 0;
+    tray_walk(clock_tray_id, &x, &w, 0, 0);
+    if (w <= 0) return 0;
+    if (out_x) *out_x = x;
+    if (out_y) *out_y = screen_h - taskbar_h;
+    if (out_w) *out_w = w;
+    if (out_h) *out_h = taskbar_h;
+    return 1;
+}
+
+struct tray_draw_ctx { int taskbar_y; uint32_t bg; uint32_t fg; };
+
+static void tray_draw_item(int id, int x, int w, void *vctx) {
+    struct tray_draw_ctx *c = (struct tray_draw_ctx *)vctx;
+    int text_y = c->taskbar_y + (taskbar_h - ugfx_char_h()) / 2;
+    ugfx_fill_rect(wm_surface(), x - 4, c->taskbar_y, w + 8, taskbar_h, c->bg);
+    ugfx_draw_string(wm_surface(), x, text_y, tray_items[id].text, c->fg, c->bg);
+}
+
+void draw_tray(int taskbar_y, uint32_t bg, uint32_t fg) {
+    struct tray_draw_ctx ctx = { taskbar_y, bg, fg };
+    tray_walk(-1, 0, 0, tray_draw_item, &ctx);
 }

@@ -3918,6 +3918,50 @@ would have to be recomputed on every wallpaper change and every window
 move behind it. A shadow is a fixed cost that works on any backdrop
 without knowing anything about it.
 
+## The calendar belongs to the panel, not to an application
+
+Clicking the taskbar clock opens a month grid the window manager draws
+itself (`userland/wm/calendar_popup.c`), a peer of the Start menu and
+the context menu. The obvious alternative -- a `Calendar` app in
+`userland/gui/apps/`, opened by the click -- was not taken.
+
+**Nobody does it that way.** Windows 11's clock opens a flyout, GNOME
+Shell's opens a panel, Plasma's digital-clock applet and XFCE's clock
+plugin both open a popup; all four are drawn by the shell that owns the
+panel. The reason is the interaction, not the architecture: looking at
+the date is a glance, and a glance should not cost a process spawn, a
+title bar, a taskbar button and a window to close afterwards.
+
+**The toolkit could not have been reused anyway.** The WM hosts no
+`uui` router -- it draws with `ugfx` directly, as `start_menu.c` and
+`context_menu.c` do -- so a `uui_calendar` widget could not be dropped
+into this popup without first building a widget host inside the
+compositor. That would have been a widget with one hypothetical caller
+and no way to use it, which is the opposite of this project's
+second-real-caller bar. A standalone Calendar app, if one is ever
+wanted for events or a year view, is where that widget earns its place.
+
+**Six week rows, always.** Five fit most months and four fit a
+non-leap February that starts in the first column, but a panel that
+changed height as you paged would move its own `<` and `>` out from
+under the cursor between clicks. Plasma and GNOME both reserve the full
+six for the same reason.
+
+**The days are not clickable, on purpose.** There is nothing to select a
+day FOR until something stores events, and a cell that highlights and
+does nothing reads as a control that is broken rather than as one that
+is absent.
+
+**A dismissing click is not uniformly swallowed.** Clicking outside an
+open menu normally just dismisses it, and that is what happens over the
+desktop or a window -- otherwise dismissing a popup could also raise a
+window or launch an icon. The taskbar is the exception: a click there
+dismisses AND falls through, so the Start button opens on the same click
+that closed the calendar. Windows and Plasma both behave this way, and
+the alternative reads as a dropped click. The clock itself is the third
+case and is swallowed, which is what makes a second click on it a toggle
+instead of a reopen.
+
 ## The Start button's appearance is three choices, not two, and the default is the boring one
 
 `desktop.start_button` takes `text`, `icon` or `both`. A boolean was the

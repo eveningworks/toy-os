@@ -622,6 +622,9 @@ whenever a headline here tells you something you did not already know.
 - **THE WALLPAPER IS A REGISTERED SETTING, AND ITS VALUE IS A NAME** -- `desktop.wallpaper`, a filename stem under `/usr/share/wallpapers` or `none`; a GUI test measuring ink over the desktop must turn it off first.
 - **THE START BUTTON'S APPEARANCE IS A REGISTERED SETTING** -- `desktop.start_button` = `text` | `icon` | `both` (XFCE Whisker's three-way), default `text` so the strip's geometry is unchanged; `start_mark()` in `wm_render.c` is the ONE decision the width, the drawing and `gui taskbar --json` all ask, or a missing `start.qoi` yields an icon-width button with a text label in it.
 
+- **THE TRAY CLOCK OPENS A CALENDAR, AND THE PANEL OWNS IT** -- `userland/wm/calendar_popup.c`, a month grid anchored above the clock with `<`/`>` paging and today in the accent, where Windows/GNOME/Plasma/XFCE all put it; days are not clickable, the panel is always six week rows tall, a dismissing click on the TASKBAR falls through (the Start button acts on it) while one anywhere else is swallowed, and the clock's own rect comes from `tray_clock_rect()` rather than from "the right end of the strip".
+- **THE WEEK'S FIRST COLUMN IS A REGISTERED SETTING: `desktop.week_start` = `monday` | `sunday`** -- persist-only in `/etc/desktop.conf` like the wallpaper and the Start button, adopted on the WM's generation poll; a tool that changes it must set it back.
+
 - **A KEY RELEASE IS `WIN_EV_KEY_UP`, AND THE FOUR MODIFIER KEYS ARE KEYS** -- `uapp_desc.on_key_up`, a separate type and callback so a press-only app is unchanged; releases ride a parallel transition queue because a terminal is a byte stream and a release is not a byte; `KEY_SHIFT`/`KEY_CTRL`/`KEY_ALT`/`KEY_ALTGR` exist only there; a release carries what the PRESS produced (first press wins, so autorepeat cannot strand it); an unmatched release is legal; and `wm_rawin.c`'s key slot became a QUEUE, because a dropped release is a key held forever.
 - **A SECONDARY CLICK IS THE CLIENT'S INSIDE ITS CONTENT AREA, AND THE WM'S EVERYWHERE ELSE** -- right-click reaches a ring-3 app as button bit `0x2`, the frame/title bar/taskbar keep the window menu (Windows/X11/Wayland's split); Toykit activates widgets on `0x1` alone while `on_press` sees every button.
 - **DOOM IS A VENDORED PORT IN `userland/ports/doom/`, LINKED INTO ONE BINARY** -- doomgeneric byte for byte (GPL-2 in an MIT repo, so an aggregation, and the per-binary `EXTRA_OBJS_doom` is what makes "nothing else depends on it" a build property); OUR backend is `userland/doom/`, outside the vendored directory on purpose; the vendored tree compiles with warnings OFF but the frame-size warning ON; and `api/keyboard.h` and `doomkeys.h` CANNOT share a translation unit (both define `KEY_F2`/`F3`/`F4`/`F10` differently), which is why `dg_toyos.h` carries `TOYKEY_*` copies that `doom.c` static-asserts against the real macros. **The IWAD is NOT in the repo** -- `tools/fetch_wad.py`.
@@ -1053,7 +1056,11 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   `QMPSession.key_down()`, which `send-key` cannot do),
   `winclient_test.py`, `imgview_test.py`, `icons_test.py`,
   `mines_test.py`, `filemanager_test.py` (**the File Manager, and every
-  file operation asserted through `ls` rather than through the app**).
+  file operation asserted through `ls` rather than through the app**),
+  `calendar_test.py` (**the tray clock's calendar popup** -- its grid is
+  checked against the HOST's `datetime`, which shares no code with the
+  guest's `cal_days_from_civil()`, and every open/close check is paired
+  with the panel's own pixels so "flagged open" cannot pass for "drawn").
 - **Run on demand, not in the gate** -- `doom_test.py` (DOOM runs, draws,
   animates and takes input; SKIPS cleanly when no IWAD has been fetched,
   which is why it is not in the suite), `ansi_cursor_test.py` (ANSI

@@ -1093,6 +1093,46 @@ real scanout hardware does. Do not write a pixel assertion for one.
   tool that changes it must set it back**, since `make iso` re-seeds
   `disk.img` by sync and a written setting outlives the run.
 
+- **THE TRAY CLOCK OPENS A CALENDAR, AND THE PANEL OWNS IT --
+  `userland/wm/calendar_popup.c`, not an app.** Clicking the clock opens
+  a month grid anchored above it, today in the theme's ACCENT, `<` / `>`
+  to page months, the title to snap back to today; clicking the clock
+  again closes it. That is where Windows 11, GNOME Shell, Plasma's
+  digital-clock applet and XFCE's clock plugin all put it -- a glance at
+  the date costs no process spawn, no title bar and no taskbar button.
+  Five things to know. **The days are not clickable**, deliberately:
+  nothing stores events, and a selection highlight that does nothing
+  reads as a broken control. **The panel is SIX week rows tall whatever
+  the month needs**, or paging would move `<` and `>` out from under the
+  cursor. **A dismissing click on the TASKBAR falls through and one
+  anywhere else does not** -- the Start button acts on the same click
+  that closed the popup (Windows and Plasma both), while a click on the
+  desktop or a window is swallowed like any menu's. The clock itself is
+  the third case, swallowed, which is what makes the second click a
+  toggle rather than a reopen. **Its rect comes from
+  `tray_clock_rect()`** (`wm_tray.h`), the same right-to-left walk that
+  DRAWS the tray, because an app-registered tray item moves the clock
+  and a hit-test phrased as "the right end of the strip" would then open
+  the popup from the wrong control. And **`calendar_geometry()` is the
+  one answer** the drawing, the hit-testing and `gui calendar --json`
+  all ask -- the rule `gui taskbar` was rewritten for after reporting
+  centres eight pixels off the real ones. A CLOSED popup reports TODAY's
+  month, because that is what opening it now would show.
+
+- **THE WEEK'S FIRST COLUMN IS A REGISTERED SETTING:
+  `desktop.week_start` = `monday` | `sunday`.** Registered in
+  `kernel/lib/week_start_config.c` as a PERSIST-ONLY descriptor sharing
+  `/etc/desktop.conf` with the wallpaper and the Start button -- the
+  namespace is the registered name of the FILE. Persist-only because the
+  calendar that reads it is drawn by a ring-3 process and
+  `setting_register()` takes function pointers a process cannot supply;
+  `calendar_poll_config()` adopts it on the same `sys_fs_generation()`
+  poll `taskbar_poll_config()` uses. **Two choices, not seven**: `cal(1)`
+  offers these two, ISO 8601 says Monday, the US and Windows say Sunday,
+  and nothing wants a week starting on a Wednesday. The default is
+  `monday`. **A tool that changes it must set it back** -- the same rule
+  the Start button's entry states, and for the same reason.
+
 - **AN ICON IS A NAME, IT IS CACHED, AND IT IS COMPOSITED.** A `.desktop`
   entry's `Icon=` is a NAME resolved to `/usr/share/icons/<name>.qoi`
   (freedesktop's rule, and the same filename-is-the-name convention

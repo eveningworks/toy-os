@@ -9,6 +9,7 @@
 #include "wm_internal.h"
 #include "start_menu.h"
 #include "context_menu.h"
+#include "calendar_popup.h"
 #include "confirm_dialog.h"
 #include "file_picker.h"
 #include "desktop.h"
@@ -1063,6 +1064,7 @@ static void render_scene(int mx, int my, int has_damage) {
     draw_taskbar();
     if (start_menu_open) start_menu_draw(mx, my);
     context_menu_draw(mx, my); // independent of start_menu_open -- the two are mutually exclusive (see wm_input.c)
+    calendar_draw(mx, my); // the tray clock's popup -- same mutual exclusion, checked inside
     file_picker_draw(); // an app-opened modal (e.g. Notepad's Save As...) -- drawn above ordinary chrome/menus
     confirm_dialog_draw(); // drawn last (topmost, short of the cursor) -- the most modal overlay in the WM
 
@@ -1231,7 +1233,7 @@ void wm_render_frame(int mx, int my) {
     // exactly the rows above that union stale -- "300 px changed
     // outside the damage rect, first at (4,448)", (4,448) being the
     // menu's own top-left corner and 300 being its top two rows.
-    int overlay_now = start_menu_open || context_menu_open ||
+    int overlay_now = start_menu_open || context_menu_open || calendar_open ||
                       file_picker_open || confirm_dialog_open;
     if (overlay_now || overlay_was_open) {
         damage_reset();

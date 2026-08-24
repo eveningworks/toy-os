@@ -5,7 +5,9 @@
 #include "wm_internal.h"
 #include "start_menu.h"
 #include "context_menu.h"
+#include "calendar_popup.h"
 #include "wm_taskbar.h"
+#include "wm_tray.h"
 #include "confirm_dialog.h"
 #include "file_picker.h"
 #include "desktop.h"
@@ -67,14 +69,33 @@ void wm_handle_left_click(int mx, int my) {
     if (file_picker_handle_click(mx, my)) return; // also modal (an app-opened dialog, e.g. Notepad's Save As...) -- see file_picker.h
     if (context_menu_handle_click(mx, my)) return;
     if (start_menu_handle_click(mx, my)) return;
+    // Asked BEFORE the taskbar, which is what makes a second click on
+    // the clock close the popup instead of reopening it: the click is
+    // outside the panel, so this closes and stops, and the tray
+    // hit-test below never runs. See calendar_popup.c's own comment.
+    if (calendar_handle_click(mx, my)) return;
 
     if (my >= screen_h - taskbar_h) {
         int ty = screen_h - taskbar_h;
         int sbw = start_btn_w();
         if (uui_hit(4, ty, sbw, taskbar_h, mx, my)) {
+            calendar_close(); // the two popups are mutually exclusive
             start_menu_open_now();
             redraw_pending = 1;
             return;
+        }
+        // THE CLOCK OPENS THE CALENDAR, and the rect comes from the tray
+        // itself (wm_tray.h) rather than from "the right end of the
+        // strip" -- an app-registered tray item moves the clock left,
+        // and a hit-test phrased as a screen edge would then open the
+        // popup from the wrong control.
+        {
+            int cx, cy, cw, ch;
+            if (tray_clock_rect(&cx, &cy, &cw, &ch) &&
+                uui_hit(cx, cy, cw, ch, mx, my)) {
+                calendar_open_now();
+                return;
+            }
         }
         // The window buttons, their layout and what a click on one does
         // all live in wm_taskbar.c -- this used to walk the windows with
@@ -366,6 +387,7 @@ void wm_handle_right_click(int mx, int my) {
     }
 
     if (context_menu_open) context_menu_close();
+    calendar_close(); // a right-click anywhere dismisses it, as a menu does
 
     if (my >= screen_h - taskbar_h) {
         taskbar_handle_right_click(mx, my);
