@@ -100,12 +100,32 @@ struct proc_info {
     // append-without-disturbing rule `ppid` followed when it took
     // `reserved`'s place. A _Static_assert below holds that true.
     uint32_t wait_reason;
+    // Has this process announced that it finished starting up
+    // (SYS_NOTIFY_READY)? 0 for every process that never calls it,
+    // which is almost all of them -- only a service init supervises has
+    // any reason to.
+    //
+    // **THE FIRST FIELD THAT GREW THE STRUCT.** `ppid` took `reserved`'s
+    // place and `wait_reason` filled the hole after `name`; there is no
+    // hole left, so this adds 8 bytes (4 for the field, 4 of tail
+    // padding the next one can have). That is the append rule working
+    // as intended rather than a break of it: every existing offset is
+    // unchanged, so a ring-3 binary reading the older layout still
+    // finds every field it knows where it left it.
+    //
+    // A BIT, NOT A TIMESTAMP. "When did it become ready" has no reader
+    // -- init logs the interval itself, from the clock it already
+    // sampled at the spawn -- and this project's bar for a field is a
+    // second real caller.
+    uint32_t ready;
 };
 
-// The hole this field went into. If a future field makes the struct
-// grow, that is fine -- but it must GROW rather than reshuffle, because
-// every offset here is a contract with a ring-3 binary.
-_Static_assert(sizeof(struct proc_info) == 64,
+// `wait_reason` went into the hole after `name`; `ready` then grew the
+// struct, which is fine -- but a field must GROW it rather than
+// reshuffle, because every offset here is a contract with a ring-3
+// binary. The assert is the thing that notices, so update it
+// deliberately when a field is added and never to make a build pass.
+_Static_assert(sizeof(struct proc_info) == 72,
                "struct proc_info must grow append-only -- existing fields never move");
 _Static_assert(__builtin_offsetof(struct proc_info, name) == 36,
                "struct proc_info's name must stay where ring-3 binaries expect it");

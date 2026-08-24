@@ -227,6 +227,9 @@ EXCLUDED = [
                           "`run` loader has no scheduler slot to park in -- so the "
                           "write reports 0 there and the test fails against a "
                           "correct kernel; kernel/proc/fd_test.c spawns it"),
+    ("notready",         "never exits and never says anything -- it is init's "
+                          "readiness-timeout fixture, not a test; "
+                          "tools/init_test.py stages it as a service"),
     ("pipedrain",        "the reading half of pipefull_test; on its own it waits "
                           "on a console that never reaches EOF"),
     ("catin",            "copies stdin to stdout; without a `<` it waits on the "

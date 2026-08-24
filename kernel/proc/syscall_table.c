@@ -97,6 +97,7 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_LSEEK]         = { "lseek",         sys_lseek,         { A_FD, A_INT, A_INT } },
     [SYS_FSTAT]         = { "fstat",         sys_fstat,         { A_FD, A_HEX } },
     [SYS_GETPID]        = { "getpid",        sys_getpid,        { A_END } },
+    [SYS_NOTIFY_READY]  = { "notify_ready",  sys_notify_ready,  { A_END } },
     [SYS_SETPGID]       = { "setpgid",       sys_setpgid,       { A_INT, A_INT } },
     [SYS_GETPGID]       = { "getpgid",       sys_getpgid,       { A_INT } },
     // The signal traces as a plain number: a name would want a third

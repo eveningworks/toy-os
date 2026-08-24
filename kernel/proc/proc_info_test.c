@@ -46,6 +46,27 @@ KTEST("procinfo", "an empty slot is a SUCCESSFUL report of pid 0") {
     KTEST_ASSERT_EQ(info.pid, 0);
     KTEST_ASSERT_EQ(info.state, (uint32_t)PROC_STATE_UNUSED);
     KTEST_ASSERT_EQ(info.name[0], '\0');
+    // The 0xAA fill above is what gives this one teeth: an empty slot
+    // must report `ready` as 0 because the field was WRITTEN, not
+    // because it happened to be zero already. init treats the bit as
+    // "this service is up", so a garbage read here would be a desktop
+    // announced as usable before it existed.
+    KTEST_ASSERT_EQ(info.ready, (uint32_t)0);
+}
+
+KTEST("procinfo", "the kernel context cannot announce readiness") {
+    // SYS_NOTIFY_READY records the CALLER, and the kernel context is not
+    // a process -- it has no slot to record it in. Refused rather than
+    // written somewhere harmless, because the one thing this bit must
+    // never do is appear on a row that did not ask for it: init reads
+    // the table by slot and would attribute it to whichever service
+    // that slot holds.
+    //
+    // A KTEST runs in exactly that context, which is why this is
+    // testable here at all and why it is the one half of the syscall a
+    // KTEST can reach -- the ring-3 half is proved by tools/init_test.py
+    // watching a real service announce itself.
+    KTEST_ASSERT_EQ(scheduler_mark_current_ready(), 0);
 }
 
 KTEST("procinfo", "an out-of-range slot is refused") {

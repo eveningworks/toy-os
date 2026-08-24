@@ -249,6 +249,43 @@ this the obvious way), not from how much history it accumulated.
     disk I/O while the console came up, and `ktest_run.py` timed out
     waiting for the prompt.
 
+- **A SERVICE CAN SAY IT IS READY, AND `After=` THEN MEANS "USABLE"
+  RATHER THAN "SPAWNED".** `SYS_NOTIFY_READY` sets a bit on the calling
+  process (`ready` in `abi/proc_info.h`); a descriptor saying
+  `Ready=notify` makes init wait for that bit before starting anything
+  ordered after it. systemd's `Type=notify` with a different transport
+  and the same meaning. Five things to know:
+  - **THE KERNEL DOES NOTHING WITH THE BIT.** It stores it and reports
+    it through `SYS_PROC_INFO`; init is the only reader, so "what counts
+    as ready" stays a userland policy and the scheduler holds no
+    service-manager state. Nothing waits on it, wakes on it or schedules
+    differently for it -- which is why init POLLS, bounded by having a
+    notify service outstanding and by that service's `ReadyTimeout=`.
+  - **A SYSCALL RATHER THAN A CHANNEL, because neither usual transport
+    ports.** There are no unix sockets, so `sd_notify`'s
+    `$NOTIFY_SOCKET` has nothing to be; `PIPE_MAX` is 8 kernel-wide and
+    shared with every shell pipeline, so s6's inherited notification fd
+    would spend an eighth of the supply on a boot-long channel that
+    still could not say who wrote to it. Going through the kernel makes
+    the caller's identity the kernel's rather than a claim in a message,
+    which is Windows' shape (`SetServiceStatus(SERVICE_RUNNING)`).
+  - **THE BARRIER ALWAYS EXPIRES**, and that matters more than the
+    barrier: `ReadyTimeout=` (default 5 s) runs out, init says so and
+    starts the dependents ANYWAY. systemd waits 90 s and then kills the
+    unit; both differ here deliberately, because no key in a descriptor
+    may be able to leave this machine with nothing started. Every "it
+    can never answer now" case releases the barrier too -- given up on,
+    disabled, exited cleanly, a `Restart=no` service past its one run.
+  - **WHERE THE CALL GOES IS THE SERVICE'S DECISION AND IS THE WHOLE
+    DESIGN.** `toywm` announces at its FIRST COMPOSITED FRAME, not at
+    the compositor claim -- the framebuffer grant, the font, the cursor
+    theme and fourteen desktop entries all happen in between. `tosh`
+    announces at its first prompt, not at `main()`.
+  - **CALLING IT UNSUPERVISED IS A NO-OP**, deliberately, so a program
+    need not know how it was started to be correct -- `tosh` in a
+    terminal window calls it exactly as `tosh` on the console does.
+  `data/etc/services.d/README.md` is the full behaviour.
+
   And **`rm /etc/services.d/<name>` DISABLES a service without stopping
   it** (systemd's `disable`, not `stop`). That is the ONLY way to take
   the desktop out of init's hands without a reboot, and **a test that

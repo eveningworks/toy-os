@@ -4567,3 +4567,89 @@ The checker accepts the trailing form now. **A waiver mechanism that
 silently does not waive is worse than none**: it reads as protection at
 the call site and provides none, and the moment it matters is exactly
 the moment somebody is busy with something else.
+
+## Readiness is a syscall the kernel does nothing with, and the barrier always expires
+
+`After=` in `/etc/services.d` ordered SPAWNS: a service was "started"
+the instant `sys_spawn()` returned a pid. That is systemd's
+`Type=simple`, and it is an honest description of a fire-and-forget
+spawn -- but it is not what the key usually wants to mean. The desktop
+is spawned in about a millisecond and is not usable for another three
+hundred; in between it takes the framebuffer grant, initialises the
+font, loads the cursor theme, decodes a wallpaper and reads fourteen
+desktop entries. Nothing ordered after it could tell that window from a
+working desktop.
+
+**The transport, and why the two obvious ones do not port.** systemd's
+`Type=notify` has the service send `READY=1` to an `AF_UNIX` datagram
+socket named in `$NOTIFY_SOCKET`, and attributes it to a sender with
+`SO_PASSCRED`. s6 strips that to a byte written to an inherited fd
+(`notification-fd`). Neither works here. There are no unix sockets, so
+`$NOTIFY_SOCKET` has nothing to name. And a pipe is worse than it looks:
+`PIPE_MAX` is 8 kernel-wide and shared with every shell pipeline, so one
+held open for a whole boot is an eighth of the supply -- and a pipe
+carries no credentials, so with one shared channel the child would have
+to declare its own pid and be believed. Passing a per-service pipe would
+also mean extending `SYS_SPAWN` to hand a child a third descriptor,
+which today inherits only 0/1/2.
+
+So the service calls the manager instead, which is Windows' shape:
+`SetServiceStatus(SERVICE_RUNNING)`, with the SCM making services listed
+in `lpDependencies` wait for RUNNING. `SYS_NOTIFY_READY` takes no
+arguments, because **the caller's identity is the entire message** --
+and having the kernel supply it is exactly what a pipe could not do.
+
+**What the kernel does with it: nothing.** It sets a bit in the process
+slot, reports it through `SYS_PROC_INFO`, and never reads it again.
+Nothing waits on it, wakes on it, or schedules differently because of
+it. That is the line that keeps a service-manager concept out of the
+scheduler: init decides what readiness is worth, and the kernel stores
+an announcement the way it already stores a name and a group. The cost
+is that init POLLS rather than being woken -- bounded twice, since it
+polls only while a notify service is outstanding and each one resolves
+within its own `ReadyTimeout=`. An idle machine never reaches that code.
+
+**One bit, and the trade is real.** `sd_notify` also carries `STATUS=`,
+`RELOADING=`, `MAINPID=` and a watchdog ping. None has a consumer here,
+and this project's bar is a second real caller -- but a richer protocol
+later means a different channel, not a longer message. Said plainly
+rather than left to be discovered.
+
+**The barrier always expires, and that matters more than the barrier.**
+`ReadyTimeout=` defaults to five seconds; when it runs out init logs a
+line naming the service and starts the dependents anyway. systemd waits
+90 s (`TimeoutStartSec`) and then KILLS the unit, failing its
+dependents. Both differ here deliberately. Ninety seconds of a black
+screen is not a diagnosis anybody waits for on a machine with one
+console; and killing a service that is merely slow removes the thing the
+timeout exists to protect. This is the same rule that makes an ordering
+cycle drop an edge, an unknown `Restart=` keep the default and a crash
+loop give up rather than spin: **no key in a descriptor may be able to
+leave the machine with nothing started**, because there is no rescue
+target and no journal to read afterwards. systemd can afford the strict
+answer; this cannot.
+
+Every "it can never answer now" case releases the barrier for the same
+reason -- a service given up on as a crash loop, one whose descriptor
+was deleted, one that exited cleanly, and a `Restart=no` service past
+its single run. Waiting for any of those is waiting for something that
+cannot happen.
+
+**Where the call goes is the service's decision, and is the whole
+design.** The kernel cannot know when a process became useful. `toywm`
+announces at its first COMPOSITED FRAME rather than at the compositor
+claim, and `tosh` at its first prompt rather than at `main()`; both have
+an easy wrong answer that looks perfectly reasonable. Calling it from a
+program init does not supervise is a no-op, deliberately, so a program
+need not know how it was started in order to be correct -- the same
+property `sd_notify()` has in a process launched from a shell.
+
+**One implementation note that bit during the build.** init computed
+"how many services am I still waiting on" BEFORE starting the services
+in that pass, so a service started on the pass got counted as
+not-waited-on, init blocked in `waitpid(-1)`, and nothing could ever
+wake it -- a readiness bit sets no channel and produces no event. The
+desktop came up perfectly and init never noticed. The count is taken
+after `start_due()` now. The general shape: when a new state is entered
+by an action in the same pass, anything derived from that state has to
+be recomputed after the action, not before it.

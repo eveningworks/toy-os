@@ -1407,6 +1407,57 @@ struct sys_stat {
                           // process back the way it was is the entire
                           // job.
 
+#define SYS_NOTIFY_READY 68 // No arguments. The caller declares that it
+                          // has finished starting up and is now doing
+                          // whatever it exists to do. Returns 0, or
+                          // -ESRCH for a caller with no scheduler slot
+                          // (the kernel context and the legacy `run`
+                          // loader, which nothing supervises).
+                          //
+                          // **IT SETS A BIT AND NOTHING ELSE HAPPENS.**
+                          // The kernel does not act on it, wake anybody
+                          // or attach a meaning to it: the bit is
+                          // reported through SYS_PROC_INFO (`ready` in
+                          // abi/proc_info.h) and init is the only thing
+                          // that reads it. That is what keeps a
+                          // service-manager concept out of the
+                          // scheduler -- the kernel stores the
+                          // announcement, userland decides what it is
+                          // worth.
+                          //
+                          // WHY A SYSCALL RATHER THAN A SOCKET. systemd's
+                          // Type=notify has the service send READY=1 to
+                          // an AF_UNIX datagram socket named in
+                          // $NOTIFY_SOCKET, and attributes it to a
+                          // sender with SO_PASSCRED; s6 has it write a
+                          // byte to an inherited fd. Neither ports:
+                          // there are no unix sockets here, PIPE_MAX is
+                          // 8 kernel-wide (shared with every shell
+                          // pipeline, so one held for a whole boot is an
+                          // eighth of the supply), and a pipe carries no
+                          // credentials -- the child would have to
+                          // declare its own pid and be believed. Calling
+                          // the manager instead is Windows' shape
+                          // (SetServiceStatus(SERVICE_RUNNING), which
+                          // the SCM makes dependent services wait for),
+                          // and going through the kernel makes the
+                          // caller's identity the kernel's rather than a
+                          // claim in a message.
+                          //
+                          // ONE BIT, DELIBERATELY. sd_notify also
+                          // carries STATUS=, RELOADING= and a watchdog
+                          // ping; none has a consumer here, and the
+                          // second real caller is this project's bar for
+                          // adding one. What it costs to have chosen
+                          // this shape is that a richer protocol later
+                          // means a different channel, not a longer
+                          // message -- said plainly because it is the
+                          // real trade.
+                          //
+                          // IDEMPOTENT. A second call is not an error; a
+                          // process that announces twice is announcing
+                          // the same thing.
+
 // What SYS_OPENPTY fills in. A struct rather than two out-registers
 // because a syscall here returns one value, and two `int *` arguments
 // would be two user pointers to validate instead of one.

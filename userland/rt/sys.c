@@ -244,6 +244,7 @@ long long sys_lseek(int fd, long long offset, int whence) {
 }
 
 int sys_getpid(void) { return (int)syscall0(SYS_GETPID); }
+int sys_notify_ready(void) { return (int)err(syscall0(SYS_NOTIFY_READY)); }
 
 // --- the environment --------------------------------------------------
 

@@ -311,6 +311,15 @@ int sys_getpid(struct syscall_ctx *c) {
     return 0;
 }
 
+int sys_notify_ready(struct syscall_ctx *c) {
+    // No arguments to validate and nothing to copy: the caller's
+    // identity IS the message, which is the whole reason this is a
+    // syscall rather than a byte on a channel somebody could lie on.
+    int64_t rc = scheduler_mark_current_ready() ? 0 : -ESRCH;
+    c->regs[14] = (uint64_t)rc;
+    return 0;
+}
+
 int sys_proc_info(struct syscall_ctx *c) {
     sys_do_proc_info(c->regs, c->a0, c->a1);
     return 0;

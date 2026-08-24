@@ -756,6 +756,13 @@ void wm_run(void) {
     wm_render_reset(); // first frame must be a full repaint -- see wm_render.c
     tray_init();
 
+    // Announced once per run of this loop. Reset here rather than
+    // declared static-and-forgotten, because `gui` can re-enter it:
+    // announcing again after an "Exit to shell" and a restart is
+    // correct, and the kernel treats a repeat announcement as the same
+    // announcement anyway.
+    int announced_ready = 0;
+
     int mx, my;
     uint8_t buttons;
     wm_rawin_mouse(&mx, &my, &buttons);
@@ -1157,11 +1164,29 @@ void wm_run(void) {
         // exactly when it used to. See wm_render.c's dirty-rectangle
         // comments for why this split is worth having.
         wmwd_phase("render");
+        int rendered = 0;
         if (redraw_pending) {
             redraw_pending = 0;
             wm_render_frame(mx, my);
+            rendered = 1;
         } else if (mouse_moved) {
             wm_render_cursor_move(mx, my);
+        }
+
+        // THE DESKTOP IS USABLE AT ITS FIRST COMPOSITED FRAME, and that
+        // is why the announcement is here and not at the compositor
+        // claim four hundred lines up. Everything between the two can
+        // still fail -- the framebuffer grant, the font, the cursor
+        // theme, the desktop entries -- and a desktop that has claimed
+        // the role but drawn nothing is exactly the state `After=` used
+        // to be unable to tell from a working one.
+        //
+        // sys_notify_ready() is a no-op for anything init does not
+        // supervise, so this is correct whether the desktop was started
+        // as a service or by hand from the shell. See rt/sys.h.
+        if (rendered && !announced_ready) {
+            announced_ready = 1;
+            sys_notify_ready();
         }
 
         wmwd_frame_end();

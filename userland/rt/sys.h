@@ -151,6 +151,23 @@ int     sys_fstat(int fd, struct sys_stat *out);
 // what clock() needs to read its own cpu_ns.
 int     sys_getpid(void);
 
+// Announce that this process has finished starting up -- see
+// SYS_NOTIFY_READY in abi/syscall_abi.h. Returns 0, or -1 for a caller
+// with no scheduler slot.
+//
+// **ONLY init READS IT**, and only for a service whose descriptor says
+// `Ready=notify` (data/etc/services.d/README.md). Calling it from a
+// program nobody supervises is harmless and does nothing -- which is
+// the systemd property worth copying: sd_notify() in a process started
+// from a shell is a no-op, so a program need not know how it was
+// started to be correct.
+//
+// WHERE TO PUT THE CALL is the whole design decision, and it is the
+// caller's: it means "somebody can use me now", not "main() has been
+// entered". The desktop announces at its FIRST COMPOSITED FRAME, not
+// when it claims the compositor role.
+int     sys_notify_ready(void);
+
 // --- the environment --------------------------------------------------
 
 // This process's environment, as a NULL-terminated array of "KEY=VALUE"

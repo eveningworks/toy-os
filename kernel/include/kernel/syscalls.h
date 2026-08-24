@@ -237,6 +237,7 @@ int sys_tcgetattr(struct syscall_ctx *c);
 int sys_tcsetattr(struct syscall_ctx *c);
 int sys_proc_info(struct syscall_ctx *c);
 int sys_getpid(struct syscall_ctx *c);
+int sys_notify_ready(struct syscall_ctx *c);
 int sys_ticks(struct syscall_ctx *c);
 int sys_console_size(struct syscall_ctx *c);
 int sys_monotonic_ns(struct syscall_ctx *c);

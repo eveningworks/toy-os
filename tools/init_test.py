@@ -69,6 +69,25 @@ own `spawn` hands the fixture ITSELF to init, so one reap happens even
 with adoption removed. It counts against what the fixture says it
 abandoned now.
 
+READINESS IS ASSERTED ON TIMESTAMPS, NOT ON LOG ORDER. `Ready=notify`
+means `After=` waits for a service to be USABLE rather than merely
+spawned, and the difference is ~300 ms on the desktop -- so the check
+compares the [seconds] dmesg stamped on "toywm is ready" against the one
+on "started rdyafter". Reading the transcript cannot tell a barrier that
+worked from a log that happens to be in that order. The other half is
+the timeout: /tests/notready stays alive and announces nothing, so the
+barrier can be watched expiring and its dependent starting anyway --
+which is the property that stops a hung service leaving the machine with
+nothing started.
+
+KNOWN FAILING, AND PRE-EXISTING: twelve of these checks fail, and have
+since before the readiness work -- measured by stashing it, rebuilding
+HEAD and re-running (15 of 27 there, the same twelve). Partway through
+the run init stops reaping and stops starting services. See
+`docs/bugs.md` and its repro in `docs/roadmap-details.md`; 19/31 is the
+known-good state today, not a regression. Do not read a failure here as
+proof that a change broke something without checking that list first.
+
 Usage:
     python3 tools/init_test.py
     python3 tools/init_test.py --instance 2     # alongside another VM
@@ -90,8 +109,19 @@ sys.path.insert(0, os.path.join(REPO, "tools"))
 import vm as vm_mod                   # noqa: E402 -- started_ok(), see its comment
 VM = os.path.join(REPO, "tools", "vm.py")
 
-# One process row from `ps`: PID PPID STATE CPU MEM NAME.
-PS_ROW = re.compile(r"^\s*(\d+)\s+(\d+)\s+(\w+)\s+\S+\s+\S+\s+(\S+)\s*$")
+# One process row from `ps`: PID PPID PGID STATE CPU(s) MEM(K) NAME.
+#
+# **PGID IS IN IT, AND LEAVING IT OUT MATCHED NOTHING AT ALL.** `ps`
+# gained that column and this pattern did not, so every row failed to
+# parse and six checks reported a perfectly healthy machine as one where
+# init does not appear in the process table. A regex that matches no
+# line looks exactly like a system that produced no output -- which is
+# why the failure detail prints the row count now.
+#
+# STATE is \S+ rather than \w+ because it can be `block(child)`, which
+# is what an idle init is in.
+PS_ROW = re.compile(
+    r"^\s*(\d+)\s+(\d+)\s+\d+\s+(\S+)\s+\S+\s+\S+\s+(\S+)\s*$")
 
 results = []
 
@@ -177,6 +207,46 @@ def main():
             print("init_test: could not stage the crash-loop fixture\n"
                   + r.stdout + r.stderr, file=sys.stderr)
             return 2
+
+        # THE READINESS FIXTURES, and they have to be here rather than
+        # written at the shell for the same reason the crash-loop one
+        # does: both barriers resolve within the first few seconds, and
+        # a descriptor that arrives after the boot has nothing left to
+        # observe.
+        #
+        # Two pairs, covering the two ways a barrier can end:
+        #
+        #   rdyafter  ordered After= the DESKTOP, which announces itself
+        #             for real ~300 ms after it is spawned. This is the
+        #             one that proves the barrier waits for READINESS
+        #             rather than for the spawn -- without it, `rdyafter`
+        #             starts in the same pass as toywm.
+        #   nrdep     ordered After= a service that never announces
+        #             anything (/tests/notready). It must start anyway,
+        #             once ReadyTimeout= has run out and not before.
+        #
+        # Both dependents are /bin/hello with Restart=no, so they print
+        # a start line, exit at once and leave nothing behind.
+        for name, body in (
+            ("rdyafter", "Name=rdyafter\nExec=/bin/hello\nTarget=graphical\n"
+                         "Restart=no\nAfter=toywm\n"),
+            ("notready", "Name=notready\nExec=/tests/notready\nTarget=graphical\n"
+                         "Restart=no\nReady=notify\nReadyTimeout=1500\n"),
+            ("nrdep",    "Name=nrdep\nExec=/bin/hello\nTarget=graphical\n"
+                         "Restart=no\nAfter=notready\n"),
+        ):
+            f = tempfile.NamedTemporaryFile("w", suffix=".svc", delete=False)
+            f.write(body)
+            f.close()
+            r = subprocess.run(
+                [sys.executable, os.path.join(REPO, "tools", "tfs3_writer.py"),
+                 "write", args.disk, f.name, f"/etc/services.d/{name}"],
+                cwd=REPO, capture_output=True, text=True)
+            os.unlink(f.name)
+            if r.returncode != 0:
+                print(f"init_test: could not stage the {name} fixture\n"
+                      + r.stdout + r.stderr, file=sys.stderr)
+                return 2
 
     vm = VMSession(args.disk, args.instance)
     try:
@@ -497,6 +567,72 @@ def main():
             check("an After= naming nothing loaded is reported and ignored",
                   "names no loaded service" in logs
                   and "init: started ordu as pid" in logs)
+
+            # --- READINESS: After= means "usable", not "spawned" -------
+            #
+            # THE ASSERTION IS ON TIMESTAMPS, not on log order, and that
+            # is what makes it a test. dmesg stamps every line, so the
+            # question "did the dependent start before or after the
+            # thing it is ordered after became ready" has a number
+            # behind it rather than a reading of the transcript.
+            #
+            # POSITIVE CONTROL for whoever changes this: in init.c's
+            # start_due(), drop the svc_waiting_on_deps() line. The two
+            # "waits for" checks must go red and the two "is ready" /
+            # "timeout is reported" checks must stay green -- they are
+            # about the announcement reaching init, not about the
+            # barrier. Verified.
+            deadline = time.time() + 30
+            logs = ""
+            while time.time() < deadline:
+                logs = vm.sh("dmesg")
+                if ("init: started rdyafter as pid" in logs
+                        and "init: started nrdep as pid" in logs):
+                    break
+                time.sleep(0.5)
+
+            def stamp(pattern):
+                """The [seconds] dmesg stamped on the first matching line."""
+                m = re.search(r"\[\s*(\d+\.\d+)\]\s*" + pattern, logs)
+                return float(m.group(1)) if m else None
+
+            wm_started = stamp(r"init: started toywm as pid")
+            wm_ready = stamp(r"init: toywm is ready after (\d+) ms")
+            dep_started = stamp(r"init: started rdyafter as pid")
+
+            # The desktop's own announcement, on an ordinary boot. It is
+            # the first real caller, and the gap it reports is the whole
+            # feature: everything between claiming the compositor role
+            # and compositing a frame used to be invisible.
+            check("the desktop announces itself, later than it was spawned",
+                  wm_ready is not None and wm_started is not None
+                  and wm_ready > wm_started,
+                  f"spawned {wm_started}, ready {wm_ready}")
+
+            # A dependent must not start in the same pass as the service
+            # it is ordered after. Without the barrier these two stamps
+            # are equal to the millisecond.
+            check("After= a notify service waits for the ANNOUNCEMENT",
+                  dep_started is not None and wm_ready is not None
+                  and dep_started >= wm_ready,
+                  f"toywm ready {wm_ready}, rdyafter started {dep_started}")
+
+            nr_started = stamp(r"init: started notready as pid")
+            nr_timeout = stamp(r"init: notready did not report ready")
+            nrdep_started = stamp(r"init: started nrdep as pid")
+
+            # ...and the barrier ALWAYS expires. A machine that starts
+            # nothing has no console left to fix itself from, so this is
+            # the check that says a hung service degrades the boot
+            # instead of ending it.
+            check("a service that never announces is reported, not waited on forever",
+                  nr_timeout is not None and nr_started is not None
+                  and nr_timeout >= nr_started + 1.0,
+                  f"started {nr_started}, timed out {nr_timeout}")
+            check("...and its dependent then starts anyway",
+                  nrdep_started is not None and nr_timeout is not None
+                  and nrdep_started >= nr_timeout,
+                  f"timeout {nr_timeout}, nrdep started {nrdep_started}")
 
     finally:
         vm.run("stop", check_rc=False)

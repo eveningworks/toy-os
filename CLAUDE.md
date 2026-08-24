@@ -498,6 +498,7 @@ whenever a headline here tells you something you did not already know.
 - **THERE IS A PROCESS TREE: `ppid`, reparenting, and `waitpid(-1)`.**
 - **THERE IS AN INIT, IT HOLDS PID 1, AND IT CANNOT BE KILLED.**
 - **INIT STARTS AND SUPERVISES THE DESKTOP, and the desktop is a SERVICE.**
+- **A SERVICE CAN SAY IT IS READY, AND `After=` THEN MEANS "USABLE" RATHER THAN "SPAWNED".** -- `SYS_NOTIFY_READY` sets a bit the kernel does nothing with; `Ready=notify` in a descriptor makes init wait for it. A syscall rather than a socket or a pipe because neither ports (no unix sockets; `PIPE_MAX` is 8 kernel-wide and a pipe carries no credentials). The barrier ALWAYS expires -- `ReadyTimeout=`, then init says so and starts the dependents anyway.
 - **`SYS_SLEEP` exists, and a caller with no scheduler slot gets -1.**
 - **`ps` is a REAL `/bin` PROGRAM, not a builtin**
 - **A PROCESS'S MEMORY IS FREED WHEN IT DIES, NOT WHEN IT IS REAPED -- and killing needs a DIFFERENT entry point from exiting.**

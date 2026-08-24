@@ -77,6 +77,20 @@ void scheduler_on_exit(int code);
 // function's problem). Lets syscall.c pick the right exit path.
 int scheduler_current_pid(void);
 
+// SYS_NOTIFY_READY: record that the process currently in a syscall has
+// finished starting up. Returns 1 if there was a slot to record it in,
+// 0 for a caller the scheduler does not manage (the kernel context, the
+// legacy loader) -- which the syscall reports as -ESRCH rather than
+// pretending to have stored it.
+//
+// **THE KERNEL DOES NOTHING WITH THIS.** It stores a bit and reports it
+// through scheduler_proc_info(); the only reader is init, which is what
+// keeps "what counts as ready" a userland policy. Nothing here waits on
+// it, wakes on it or schedules differently because of it. See
+// abi/syscall_abi.h's SYS_NOTIFY_READY for why a syscall carries it at
+// all rather than a socket or a pipe.
+int scheduler_mark_current_ready(void);
+
 // The full path `pid` was spawned from, copied into `out`. Returns 1 on
 // success, 0 for a pid with no scheduler slot (the legacy loader, or a
 // dead one), leaving `out` an empty string.

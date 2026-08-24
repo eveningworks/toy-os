@@ -305,6 +305,15 @@ struct sched_process {
     // its spawner's, and one the kernel started leads its own.
     int pgid;
 
+    // SYS_NOTIFY_READY: this process has said it finished starting up.
+    // The kernel attaches NO meaning to it and never acts on it -- it
+    // is reported through scheduler_proc_info() and init is the only
+    // reader (see abi/syscall_abi.h's entry). Reset at spawn like every
+    // other per-tenant field, because a slot is reused and inheriting a
+    // ready bit would report a service as up before it had run an
+    // instruction.
+    int ready;
+
     // When a SCHED_WAIT_TIMER sleeper wants to be woken, in
     // clocksource nanoseconds. Meaningless in any other state.
     uint64_t wake_at_ns;
@@ -873,6 +882,9 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
     // either (an ignored signal is the documented exception there, and
     // this kernel has no fork/exec pair to make that distinction from).
     signal_state_reset(slot);
+    // Nothing has announced anything yet. See the field's comment: this
+    // is the same slot-reuse hazard signal_state_reset() covers.
+    procs[slot].ready = 0;
     // THE GROUP: what the caller asked for, else the spawner's, else a
     // group of this process's own. The third case is the kernel context
     // -- init, the demo, a KTEST -- which has no group to lend, and
@@ -942,6 +954,13 @@ static uint32_t reported_wait_reason(int reason) {
     }
 }
 
+int scheduler_mark_current_ready(void) {
+    int pid = scheduler_current_pid();
+    if (pid <= 0) return 0;
+    procs[pid - 1].ready = 1;
+    return 1;
+}
+
 int scheduler_proc_info(int index, struct proc_info *out) {
     if (!out || index < 0 || index >= MAX_PROCS) return 0;
 
@@ -955,12 +974,14 @@ int scheduler_proc_info(int index, struct proc_info *out) {
     out->ppid = p->ppid;
     out->pgid = p->pgid;
     out->wait_reason = PROC_WAIT_NONE;
+    out->ready = 0;
     out->name[0] = '\0';
 
     if (p->state == SCHED_UNUSED) return 1; // a real answer: slot empty
 
     // pid is slot + 1 throughout this file -- 0 is "no process".
     out->pid = index + 1;
+    out->ready = p->ready ? 1u : 0u;
     out->cpu_ns = p->cpu_ns;
     out->exit_code = p->exit_code;
     k_strlcpy(out->name, p->name, sizeof out->name);

@@ -2817,6 +2817,64 @@ process using the image [disk.img]?`.
 `python3 tools/flake_hunt.py ktest -n 10` is the loop for measuring any
 change to it, and it scores these runs as `error` rather than `pass`.
 
+### `tools/init_test.py` fails 12 of its 27 checks, deterministically
+
+Found on 2026-08-24 while adding readiness checks to that tool, and
+**PRE-EXISTING**: measured by stashing the work, rebuilding HEAD and
+re-running -- 15 of 27 checks pass there, and the twelve failures are
+the same twelve. The readiness work added four checks that all pass, so
+a current run reports 19/31.
+
+Two separate problems, and the first was hiding the second.
+
+**The harness bug (fixed in the same change).** `PS_ROW` in
+`tools/init_test.py` matched six columns while `ps` prints seven -- it
+gained a `PGID` column and the pattern did not. Every row failed to
+parse, so six checks reported a perfectly healthy machine as one where
+init does not appear in the process table at all. A regex that matches
+nothing looks exactly like a system that produced no output. Fixing it
+took the tool from 11/27 to 15/27.
+
+**The real one, which remains open.** Partway through the run init
+stops reaping and stops starting services: `ps` shows it in
+`block(timer)` rather than `block(child)`, with several `exit_test`
+zombies whose ppid is 1 and which are never collected, and every later
+phase of the tool ("a service that exits cleanly is NOT restarted", both
+ordering groups, the cycle checks) reports that nothing started. init
+being in a timer sleep means `waitpid(-1)` answered "no children at
+all", which is a permanent answer -- and it has children.
+
+Everything works on an ordinary boot: `spawn /tests/orphan_test` on a
+plain VM gives four `init: reaped orphan pid N` lines and leaves init in
+`block(child)`. So it is something about the state that tool's fixtures
+create -- most likely the crash-loop fixture (`Restart=always` naming a
+binary that does not exist), which is the phase immediately before the
+failures start. **That mechanism is a suspicion, not a finding**; no
+disproving check has been run.
+
+Repro: `python3 tools/init_test.py`, which boots its own copy of
+`disk.img`. Deterministic -- three runs, identical results.
+
+### init starts a descriptor with no `Exec=` five times over
+
+`load_service()` in `userland/bin/init.c` logs `init: <file> has no
+Exec=, ignoring it` and returns -- but the entry has already been
+appended to `g_svc[]` with `seen = 1` and an empty `exec`. Nothing
+ignores it: `start_due()` then spawns the empty path, fails, counts a
+fast failure, and repeats until the crash-loop give-up, printing
+
+    init: <name> failed to start ()
+
+five times. Harmless in effect and a straightforward lie in the log,
+which is the part that costs time -- the message says the descriptor
+was skipped and the evidence says it was not.
+
+Seen 2026-08-24 by writing `/etc/services.d/zz` with only a `Name=` in
+it. The fix is presumably to mark the entry disabled rather than return,
+but "disabled" is sticky across rescans and a descriptor may legitimately
+gain an `Exec=` later, so the right semantics need a moment's thought
+rather than a one-line patch.
+
 ### `heap-debug`'s use-after-free check fails about 1 run in 15
 
 `mm_test.c`'s "a write through a freed pointer is caught by

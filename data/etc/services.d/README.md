@@ -14,8 +14,10 @@ so there is no second format to maintain.
 | `Exec` | yes | An absolute path to a `/bin` binary. No arguments, no shell -- `SYS_SPAWN` takes a path. |
 | `Target` | no | `text`, `graphical`, or absent. Absent means **every** target. |
 | `Restart` | no | `on-failure` (default), `always`, or `no`. |
-| `After` | no | Space-separated service **names** that must be spawned first. |
-| `Before` | no | Space-separated service names this one must be spawned before. |
+| `After` | no | Space-separated service **names** that must be started first. |
+| `Before` | no | Space-separated service names this one must be started before. |
+| `Ready` | no | `spawn` (default) or `notify` -- what "started" MEANS. |
+| `ReadyTimeout` | no | Milliseconds to wait for a `Ready=notify` service. Default 5000. |
 
 `Restart=on-failure` (the default) restarts the service if it CRASHED or
 was killed, and leaves it down if it exited cleanly -- a process that
@@ -56,25 +58,18 @@ describes changing identity.
     Exec=/bin/wm/system/toywm
     After=udevd dbus
 
-**ORDERING IS LAUNCH ORDER, NOT AVAILABILITY.** A service is "started"
-the instant `SYS_SPAWN` returns a pid -- nothing in this system can yet
-say "I am ready", so that is the most init can observe. `After=` promises
-the spawn happened first and nothing more. That is systemd's
-`Type=simple` (also its default); a readiness protocol
-(`Type=notify`/`sd_notify`) is a separate roadmap item, and until it
-exists a service that genuinely needs another one to be USABLE has to
-retry rather than assume.
-
-A backoff does not become a barrier. A service waiting to be restarted
-does not hold up the ones ordered after it -- otherwise a crash-looping
-service would keep the rest of the machine down, which is the opposite of
-what supervision is for.
-
 **Nothing here is a dependency.** `After=` does not start the named
-service, and does not stop this one from starting if the named one failed.
-That is systemd's split between ordering (`After=`) and requirement
-(`Requires=`), and it is worth keeping separate: there is exactly one
-thing to say per key.
+service, and does not stop this one from starting if the named one
+failed. That is systemd's split between ordering (`After=`) and
+requirement (`Requires=`), and it is worth keeping separate: there is
+exactly one thing to say per key. `Ready=notify` below sharpens what the
+ordering WAITS for; it still does not make one service require another.
+
+**A backoff does not become a barrier.** A service waiting to be
+restarted does not hold up the ones ordered after it -- otherwise a
+crash-looping service would keep the rest of the machine down, which is
+the opposite of what supervision is for. A readiness barrier is the same
+shape: it holds up the services ordered after that one and nothing else.
 
 ### A malformed graph never fails a boot
 
@@ -83,15 +78,79 @@ is not necessarily a typo -- naming a service that lives on the *other*
 boot target is perfectly reasonable, and init cannot tell the two apart,
 so it reports what it saw rather than guessing.
 
-A cycle is broken by dropping one edge, and says which service it started
-anyway. systemd does the same; the reason to do it here is harsher than
-tidiness, and it is the same reason the crash-loop give-up exists -- a
-machine that starts nothing has no console left to fix itself from, so a
-typo in an ordering key must never be able to reach that state.
+A cycle is broken by dropping one edge, and says which service it
+started anyway. systemd does the same; the reason to do it here is
+harsher than tidiness, and it is the same reason the crash-loop give-up
+exists -- a machine that starts nothing has no console left to fix
+itself from, so a typo in an ordering key must never be able to reach
+that state. The dropped edges are really dropped, not merely stepped
+over by the sort: the readiness barrier re-reads them on every pass, and
+a surviving cycle edge would be a wait for something that is itself
+waiting.
 
 Services with no constraints between them keep the order their
 descriptors were read in: the sort is stable, so adding an ordering key
 to one service cannot reshuffle unrelated ones.
+
+## `Ready=` decides what "started" MEANS
+
+By default a service is started the instant `sys_spawn()` returns a pid.
+That is systemd's `Type=simple` and it is the honest description of what
+a fire-and-forget spawn can promise -- but it is not what `After=`
+usually wants to mean. The desktop is spawned in a millisecond and is
+not usable for another three hundred: the framebuffer grant, the font,
+the cursor theme, the wallpaper and fourteen desktop entries all happen
+in between, and nothing ordered after it could tell that window from a
+working desktop.
+
+`Ready=notify` closes that gap. The service calls `sys_notify_ready()`
+(`SYS_NOTIFY_READY`) when it is genuinely usable; init sees the bit on
+its row in `SYS_PROC_INFO` and only then starts anything ordered after
+it. That is systemd's `Type=notify`, with the transport changed because
+neither of the usual ones ports: there are no unix sockets here, so
+`sd_notify`'s `$NOTIFY_SOCKET` has nothing to be; and `PIPE_MAX` is 8
+kernel-wide and shared with every shell pipeline, so s6's inherited
+notification fd would spend an eighth of the supply on a boot-long
+channel that still could not say WHO wrote to it. A syscall makes the
+caller's identity the kernel's rather than a claim in a message, which
+is the same reason Windows' SCM has services call
+`SetServiceStatus(SERVICE_RUNNING)` rather than write somewhere.
+
+**WHERE THE CALL GOES IS THE DESIGN DECISION, and it belongs to the
+service.** `toywm` announces at its FIRST COMPOSITED FRAME, not when it
+claims the compositor role; `tosh` announces at its first prompt, not at
+`main()`. The question to answer is "can somebody use me now", and both
+of those have a wrong answer that is easy to reach and looks fine.
+
+Calling it from a program init does not supervise is harmless and does
+nothing, which is deliberate: a program need not know how it was started
+in order to be correct. `tosh` in a terminal window calls it exactly as
+`tosh` on the console does.
+
+### `ReadyTimeout=` -- the barrier always expires
+
+Five seconds by default. When it runs out init logs a line naming the
+service and starts the dependents **anyway**:
+
+    init: notready did not report ready in 1500 ms -- starting the rest anyway
+
+That differs from systemd twice over, and both are deliberate. systemd
+waits 90 seconds (`TimeoutStartSec`) and then KILLS the unit, failing
+its dependents. Ninety seconds of a black screen is not a diagnosis
+anybody waits for on a machine with one console; and killing a service
+that is merely slow removes the thing the timeout was protecting. The
+rule this init holds to everywhere -- see its ordering cycle, its
+unknown `Restart=` and its crash-loop give-up -- is that no key in a
+descriptor may be able to leave the machine with nothing started.
+
+A non-positive `ReadyTimeout=` is refused with a line and the default is
+used. There is deliberately no way to spell "wait forever".
+
+Every "it can never answer now" case releases the barrier too: a service
+that was given up on as a crash loop, one whose descriptor was deleted,
+one that exited cleanly, and a `Restart=no` service that has already had
+its single run. Waiting for any of those would be waiting for something
+that cannot happen.
 
 ## Removing a descriptor DISABLES the service
 
@@ -104,7 +163,9 @@ that service; it does **not** stop the copy already running.
 That split is systemd's `disable` versus `stop`, and it is the right way
 round here: killing a running process because somebody edited a file in
 `/etc` is a surprise, while quietly declining to restart it is what "I
-no longer want this service" actually means.
+no longer want this service" actually means. It also releases any
+readiness barrier that service was holding, for the reason `Ready=`
+above gives: it can never announce itself now.
 
 It is also the only way to take a supervised service out of init's hands
 without rebooting, which is a real need rather than a hypothetical one --

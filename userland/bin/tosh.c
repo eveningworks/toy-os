@@ -297,6 +297,17 @@ int main(int argc, char **argv) {
     put("tosh -- the toy-os shell, in ring 3. Ctrl-D to exit.\n");
     fresh_prompt();
 
+    // A SHELL IS USABLE WHEN THERE IS A PROMPT ON THE SCREEN, which is
+    // here and not at main(): everything above -- the signal handlers,
+    // the job table, the terminal -- has to be in place before a typed
+    // Ctrl-C means anything. init reads this for a service whose
+    // descriptor says `Ready=notify` (data/etc/services.d/README.md);
+    // it is a no-op for the far more common case of a tosh started from
+    // another shell or by a pty, so this needs no test for how it was
+    // started. Deliberately AFTER the interactive setup and never
+    // reached by `tosh -c`, which returns long before this point.
+    sys_notify_ready();
+
     for (;;) {
         char buf[32];
 

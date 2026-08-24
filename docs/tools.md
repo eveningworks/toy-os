@@ -555,7 +555,17 @@ manual steps to be worth automating:
   desktop is init's child, a service that cannot start is given up on
   without taking the desktop with it, killing the desktop brings it back
   with no shell involved, and `After=`/`Before=` decide the order the
-  services are spawned in. **The ordering checks are written against
+  services are spawned in, and `Ready=notify` makes `After=` wait for a
+  service to be USABLE rather than merely spawned. **The readiness
+  checks assert on dmesg TIMESTAMPS, not on log order** -- the desktop
+  announces itself about 300 ms after it is spawned, and a service
+  ordered after it must start at the announcement rather than the
+  spawn, which is a difference a reading of the transcript cannot see.
+  Its other half is the timeout: `/tests/notready` is a fixture that
+  stays alive and never announces anything, so the barrier can be
+  watched expiring and its dependent starting anyway -- the property
+  that keeps a hung service from being able to leave the machine with
+  nothing started. **The ordering checks are written against
   the order they create the files in** -- both groups of three demand
   the REVERSE of it, from opposite ends of the relation, so an init
   ignoring the keys would have to be handed a perfectly reversed
@@ -567,7 +577,10 @@ manual steps to be worth automating:
   with `spawn`, not `run` (the legacy loader's children have ppid 0
   already, so there is nothing to orphan), and the crash-loop fixture is
   a descriptor naming a nonexistent binary, written onto the disk COPY
-  from the host so the machine boots with it already in place. Two
+  from the host so the machine boots with it already in place -- as are
+  the three readiness descriptors, for the same reason: both barriers
+  resolve in the first few seconds, and a descriptor that arrives after
+  the boot has nothing left to observe. Two
   positive controls, in its docstring: `heir = 0` in
   `reparent_children()` reddens the two adoption checks, and dropping
   init's give-up reddens the crash-loop one while the desktop check stays
@@ -575,7 +588,10 @@ manual steps to be worth automating:
   command-line override**, which needs its own ISO -- `make iso
   KCMDLINE="target=text"`. Not in `gui_regress.py`; run it after
   touching the scheduler's parentage, reaping, `SYS_SLEEP`, the target
-  setting or the service descriptors.
+  setting, the service descriptors or readiness. **It currently fails 12
+  of its checks, deterministically and pre-existing** -- see
+  `docs/bugs.md`; a run that reports 19/31 is the known-good state, not
+  a regression.
 - **`kbd_test.py`** -- **`kbd`'s four columns, on both input drivers.**
   Boots twice (PS/2, then `--virtio-input`), types four keys chosen so
   each exercises a different part of the path, and asserts every column

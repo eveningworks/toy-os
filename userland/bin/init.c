@@ -24,14 +24,23 @@
 // somebody else has to keep true -- a number needs renumbering the day a
 // service is inserted between two others, while a name does not.
 //
-// ORDERING IS LAUNCH ORDER, NOT AVAILABILITY. A service is "started"
-// the instant sys_spawn() returns a pid; init cannot observe more than
-// that, because nothing in this system can say "I am ready" yet. So
-// `After=` guarantees the spawn happened first and nothing else --
-// systemd's Type=simple, which is also its default, and the honest
-// description of what a fire-and-forget spawn can promise. A readiness
-// protocol (systemd's Type=notify / sd_notify) is a separate item on
-// docs/roadmap.md.
+// ...and `After=` CAN NOW MEAN "usable", not merely "spawned". A
+// service whose descriptor says `Ready=notify` is not considered
+// started when sys_spawn() returns a pid -- it is started when it calls
+// SYS_NOTIFY_READY, which init sees as a bit on its row in
+// SYS_PROC_INFO. Anything ordered after it waits for that. That is
+// systemd's Type=notify; the default stays `Ready=spawn`, which is
+// Type=simple and the honest description of what a fire-and-forget
+// spawn can promise.
+//
+// THE BARRIER ALWAYS EXPIRES, and that matters more than the barrier.
+// `ReadyTimeout=` bounds the wait; when it runs out init logs a line
+// naming the service and starts the dependents ANYWAY. Same reasoning
+// as the crash-loop give-up below and as the ordering cycle: a machine
+// that starts nothing has no console left to fix itself from, so no
+// key in a descriptor may be able to reach that state. systemd fails
+// the dependents instead, which it can afford because it has a rescue
+// target and a journal to read afterwards.
 //
 // WHY A DIRECTORY OF FILES rather than a compiled-in list: it is the
 // same call the Start menu already made when it stopped being a C table
@@ -56,8 +65,11 @@
 //     waitpid(-1) answers -1, which is PERMANENT -- see its ABI
 //     comment -- so there is nothing to block on. A yield loop here
 //     would burn a core forever and make every CPU figure meaningless.
-//   - A restart pending: polls with waitpid_nohang so the backoff can
-//     expire, since a blocking wait has no deadline.
+//   - A restart pending, or a readiness barrier outstanding: polls with
+//     waitpid_nohang, since a blocking wait has no deadline and neither
+//     a backoff expiring nor a service calling SYS_NOTIFY_READY wakes a
+//     waiter. Both are bounded -- a backoff by its table, a barrier by
+//     ReadyTimeout= -- so this state ends on its own.
 #include "rt/sys.h"
 #include <stdlib.h>
 #include <stdio.h>
@@ -121,6 +133,35 @@ static const int SVC_BACKOFF_MS[] = { 0, 250, 500, 1000, 2000 };
 #define SVC_RESTART_ON_FAILURE 1
 #define SVC_RESTART_ALWAYS     2
 
+// Ready= -- what "started" MEANS for this service.
+//
+// SPAWN is the default and is what every service did before this
+// existed: started is sys_spawn() returning a pid. NOTIFY is systemd's
+// Type=notify -- started is the process calling SYS_NOTIFY_READY, and
+// anything ordered after it waits.
+//
+// The default has to be SPAWN, and not only for compatibility: a
+// service that never calls the syscall would otherwise hold up
+// everything after it for a whole timeout on every boot, so opting IN
+// is the only default under which a descriptor that says nothing about
+// readiness behaves sensibly.
+#define SVC_READY_SPAWN  0
+#define SVC_READY_NOTIFY 1
+
+// How long init waits for a `Ready=notify` service to announce itself
+// before starting its dependents anyway. Five seconds, against a
+// desktop that reaches its first composited frame in well under one on
+// every machine this has been run on -- long enough to absorb a slow
+// boot, short enough that a service which will never report does not
+// look like a hang.
+//
+// systemd's equivalent (TimeoutStartSec) is 90s and KILLS the unit when
+// it expires. Both differ here deliberately: 90s of a black screen is
+// not a diagnosis anyone waits for on a machine with one console, and
+// killing the service would take a desktop that is merely slow and
+// remove it, which is the opposite of what the timeout is protecting.
+#define SVC_READY_TIMEOUT_MS 5000
+
 struct service {
     char name[SVC_NAME_MAX];
     char exec[SVC_EXEC_MAX];
@@ -136,6 +177,19 @@ struct service {
     int  stopped;      // exited cleanly and asked to stay down
     int  disabled;     // its descriptor is gone -- do not start it again
     int  gave_up;
+
+    int  ready_mode;   // SVC_READY_*
+    // Set when this service called SYS_NOTIFY_READY. Cleared at every
+    // start: a restarted service is a new process that has announced
+    // nothing yet.
+    int  ready;
+    // Set when the wait for that announcement ran out. STICKY ACROSS
+    // RESTARTS, unlike `ready`, so a service that keeps failing to
+    // report cannot re-arm the barrier once per restart and hold its
+    // dependents down for the whole crash-loop budget.
+    int  ready_timed_out;
+    unsigned long long ready_timeout_ms;
+    unsigned long long ready_deadline_ms;
 };
 
 // Static, not local: USERLAND_CFLAGS carries -Wframe-larger-than=2048
@@ -189,6 +243,19 @@ static void load_target(void) {
 
 // --- service descriptors ---------------------------------------------
 
+// A DESCRIPTOR LONGER THAN THE PARSER'S BUFFER LOSES ITS LAST KEYS, and
+// silently, which is how `Ready=notify` on the end of a well-commented
+// file can simply not exist. The read is capped at ETC_CONFIG_BUF_MAX
+// (api/etc_config.h) and nothing above it could tell a file that fit
+// from one that was cut in half.
+//
+// Detected by asking for ONE more byte after a full read: a file that
+// has one is over the cap. Reported and then USED ANYWAY rather than
+// refused, which is the same call this file makes for an unknown
+// Restart= and for an ordering cycle -- no key, and no comment, may be
+// able to leave the machine with nothing started. The line is what
+// makes it findable; the alternative was a service quietly running
+// under half its own configuration.
 static int read_file(const char *path, struct etc_config_buf *buf) {
     buf->valid = 0;
     buf->size = 0;
@@ -198,6 +265,12 @@ static int read_file(const char *path, struct etc_config_buf *buf) {
     if (fd < 0) return 0;
 
     int64_t n = sys_read(fd, buf->data, sizeof buf->data - 1);
+    if (n == (int64_t)(sizeof buf->data - 1)) {
+        char extra;
+        if (sys_read(fd, &extra, 1) > 0)
+            logf1("init: %s is longer than the config parser's buffer -- "
+                  "its last keys are being ignored\n", path);
+    }
     sys_close(fd);
     if (n <= 0) return 0;
 
@@ -279,6 +352,33 @@ static void load_service(const char *file) {
             // policy is found the day the service dies and stays dead.
             logf1("init: %s has an unknown Restart=, using on-failure\n",
                   s->name);
+    }
+
+    char ready[16];
+    s->ready_mode = SVC_READY_SPAWN;
+    if (etc_config_buf_get(&g_cfg, "Ready", ready, sizeof ready)) {
+        if (k_strcmp(ready, "notify") == 0) s->ready_mode = SVC_READY_NOTIFY;
+        else if (k_strcmp(ready, "spawn") != 0)
+            // Same call as Restart= above: keep the default rather than
+            // fail the boot, but SAY so. A typo here would otherwise
+            // read as "readiness silently does not work", which is the
+            // hardest kind of not-working to find.
+            logf1("init: %s has an unknown Ready=, using spawn\n", s->name);
+    }
+
+    char timeout[16];
+    s->ready_timeout_ms = SVC_READY_TIMEOUT_MS;
+    if (etc_config_buf_get(&g_cfg, "ReadyTimeout", timeout, sizeof timeout)) {
+        int ms = atoi(timeout);
+        // Zero or negative is not a shorter wait, it is a request for a
+        // barrier that expires before the service can possibly answer --
+        // so it is refused rather than honoured. There is no way to
+        // spell "wait forever" on purpose, and that is the point: see
+        // this file's header on why no key may be able to leave the
+        // machine with nothing started.
+        if (ms > 0) s->ready_timeout_ms = (unsigned long long)ms;
+        else logf1("init: %s has a non-positive ReadyTimeout=, using the default\n",
+                   s->name);
     }
 }
 
@@ -392,6 +492,14 @@ static void build_order(void) {
                 if (!done[i]) { pick = i; break; }
             logf1("init: ordering cycle -- starting %s anyway\n",
                   g_svc[pick].name);
+            // AND THE EDGES ARE REALLY DROPPED, not merely stepped over.
+            // The sort alone could leave them in g_edge[][] because it
+            // only ever reads them once; the readiness barrier reads
+            // them EVERY pass, so a surviving cycle edge would be a
+            // wait for something that is itself waiting -- the exact
+            // "machine with nothing started" this init refuses to be
+            // able to reach.
+            for (int j = 0; j < g_svc_count; j++) g_edge[j][pick] = 0;
         }
 
         done[pick] = 1;
@@ -478,6 +586,14 @@ static void start_service(struct service *s) {
     if (pid > 0) {
         s->pid = pid;
         s->started_ms = now_ms();
+        // A NEW PROCESS HAS ANNOUNCED NOTHING. Cleared on every start,
+        // not only the first, so a restarted service is waited for
+        // again -- while ready_timed_out deliberately is NOT (see the
+        // field). The deadline is armed from the spawn rather than from
+        // the boot, so a service restarted an hour in gets its full
+        // timeout and not a deadline that expired long ago.
+        s->ready = 0;
+        s->ready_deadline_ms = s->started_ms + s->ready_timeout_ms;
         snprintf(g_msg, sizeof g_msg, "init: started %s as pid %d\n",
                  s->name, pid);
         sys_eprint(g_msg);
@@ -532,9 +648,101 @@ static int service_exited(int pid, int code) {
     return 0;
 }
 
+// --- readiness -------------------------------------------------------
+//
+// Does this service still hold up anything ordered after it?
+//
+// EVERY "it will never answer" CASE RELEASES THE BARRIER, and that list
+// is the whole safety argument: a `Ready=notify` service that was given
+// up on, disabled, asked to stay down, or is a one-shot that has
+// already run cannot ever call SYS_NOTIFY_READY, so waiting for it
+// would be waiting forever. The timeout covers the remaining case --
+// a service that is alive and simply never says anything.
+static int svc_gates_dependents(const struct service *s) {
+    if (s->ready_mode != SVC_READY_NOTIFY) return 0; // launch order only
+    if (s->ready || s->ready_timed_out) return 0;
+    if (s->gave_up || s->disabled || s->stopped) return 0;
+    if (s->restart == SVC_RESTART_NO && s->started_once && !s->pid) return 0;
+    return 1;
+}
+
+// Whether anything `idx` is ordered after has yet to become available.
+// Reads g_edge[][] rather than the After= text, so `Before=` on the
+// other end gates exactly the same way -- the two keys were made one
+// edge for precisely this reason.
+static int svc_waiting_on_deps(int idx) {
+    for (int j = 0; j < g_svc_count; j++)
+        if (g_edge[j][idx] && svc_gates_dependents(&g_svc[j])) return 1;
+    return 0;
+}
+
+// How many services have been started and have yet to resolve -- either
+// by announcing themselves or by running out of time.
+//
+// **COUNTED AFTER start_due(), NEVER BEFORE IT.** A service started on
+// this pass is exactly the one whose announcement is about to arrive,
+// and counting before the start left init blocking in waitpid(-1) with
+// nothing that could wake it: the readiness bit sets no channel, and a
+// desktop reporting ready produces no event at all. It cost a boot
+// where the desktop came up perfectly and init never noticed.
+static int count_awaiting_ready(void) {
+    int n = 0;
+    for (int i = 0; i < g_svc_count; i++)
+        if (g_svc[i].started_once && svc_gates_dependents(&g_svc[i])) n++;
+    return n;
+}
+
+// Collects readiness announcements and expires the ones that never
+// came.
+//
+// **IT READS THE PROCESS TABLE, WHICH IS THE ONLY CHANNEL THERE IS.**
+// SYS_NOTIFY_READY sets a bit on the caller's row and does not wake
+// anybody -- deliberately, so the kernel holds no service-manager
+// policy -- so this is a poll, and it is bounded twice over: it runs
+// only while some notify service has yet to resolve, and each such
+// service resolves within its ReadyTimeout. An idle machine never
+// reaches this function's second line.
+//
+// The table is walked by SLOT and matched by PID, not indexed: pid ==
+// slot + 1 is a scheduler internal, and SYS_PROC_INFO's contract is
+// that a caller enumerates.
+static void poll_readiness(void) {
+    unsigned long long now = now_ms();
+    if (!count_awaiting_ready()) return;
+
+    struct proc_info pi;
+    for (int slot = 0; slot < SYS_PROC_MAX; slot++) {
+        if (!sys_proc_info(slot, &pi) || pi.pid == 0 || !pi.ready) continue;
+        for (int i = 0; i < g_svc_count; i++) {
+            struct service *s = &g_svc[i];
+            if (s->pid != pi.pid || s->ready) continue;
+            if (s->ready_mode != SVC_READY_NOTIFY) continue;
+            s->ready = 1;
+            // The INTERVAL rather than a timestamp, because that is the
+            // number a person reads: "how long was this service up
+            // before it was usable" is the question readiness exists to
+            // make answerable at all.
+            snprintf(g_msg, sizeof g_msg, "init: %s is ready after %u ms\n",
+                     s->name, (unsigned)(now - s->started_ms));
+            sys_eprint(g_msg);
+        }
+    }
+
+    for (int i = 0; i < g_svc_count; i++) {
+        struct service *s = &g_svc[i];
+        if (!s->started_once || !svc_gates_dependents(s)) continue;
+        if (now < s->ready_deadline_ms) continue;
+        s->ready_timed_out = 1;
+        snprintf(g_msg, sizeof g_msg,
+                 "init: %s did not report ready in %u ms -- starting the rest anyway\n",
+                 s->name, (unsigned)s->ready_timeout_ms);
+        sys_eprint(g_msg);
+    }
+}
+
 // Starts everything that is down and due. Returns the number of
-// services still waiting on a backoff, which is what decides whether
-// the loop may block.
+// services still waiting on a backoff or on a dependency, which is what
+// decides whether the loop may block.
 static int start_due(void) {
     unsigned long long now = now_ms();
     int pending = 0;
@@ -553,6 +761,16 @@ static int start_due(void) {
         if (s->restart == SVC_RESTART_NO && s->started_once) continue;
         if (s->stopped) continue; // it asked to stay down
         if (now < s->due_ms) { pending++; continue; }
+        // THE BARRIER, and the one place launch order stops being the
+        // whole story. Counted as pending rather than skipped, so the
+        // loop keeps polling instead of blocking on a wake that a
+        // readiness announcement will not produce.
+        //
+        // It holds up only the services ordered after this one. A
+        // notify service that is slow does not delay an unrelated one,
+        // for the same reason a backoff does not: this is an ordering
+        // constraint, not a boot phase.
+        if (svc_waiting_on_deps(g_order[oi])) { pending++; continue; }
         start_service(s);
         if (!s->pid && !s->gave_up) pending++;
     }
@@ -600,7 +818,13 @@ int main(void) {
         // than one iteration late.
         if (services_changed()) load_services(0);
 
-        int pending = start_due();
+        // BEFORE start_due(), so a service that became ready since the
+        // last pass releases its dependents in THIS one rather than a
+        // poll interval later -- and the count comes AFTER it, because
+        // a service started on this very pass is one whose announcement
+        // has not arrived yet. See count_awaiting_ready().
+        poll_readiness();
+        int pending = start_due() + count_awaiting_ready();
 
         int code = 0;
         int pid;

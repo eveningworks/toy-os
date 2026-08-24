@@ -62,11 +62,14 @@ it has exonerated one this session and convicted another.
 
 ## Reproducible
 
-*(Empty. Every entry that was here on 2026-08-20 is fixed, was already
-fixed, or turned out not to be a defect -- see `git log`. That is a
-snapshot and not a claim about the system: the intermittents above are
-still open, and the sections above this one are where anything new
-should go first.)*
+- [ ] `tools/init_test.py` fails 12 of its 27 checks, deterministically and PRE-EXISTING -- init stops reaping and stops starting services partway through the run
+- [ ] init starts a descriptor with no `Exec=` five times over, having logged that it is ignoring it
+
+*(Was empty. Every entry that was here on 2026-08-20 is fixed, was already
+fixed, or turned out not to be a defect -- see `git log`. The two above
+were found on 2026-08-24 by an unrelated change and measured against
+HEAD before being written down. The intermittents are still open, and
+the sections above this one are where anything new should go first.)*
 
 ## The desktop occasionally never paints its first frame
 

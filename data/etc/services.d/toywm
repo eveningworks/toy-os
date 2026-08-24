@@ -7,3 +7,12 @@ Description=The desktop
 Exec=/bin/wm/system/toywm
 Target=graphical
 Restart=on-failure
+# The desktop reports ready at its FIRST COMPOSITED FRAME, not when it
+# claims the compositor role -- the framebuffer grant, the font, the
+# cursor theme and the desktop entries all still happen in between, and
+# a desktop that has claimed the role but drawn nothing is exactly the
+# state `After=` could not tell from a working one. Nothing is ordered
+# after it today; what this buys now is a log line saying when the
+# desktop actually became usable, and a barrier that works the day
+# something is.
+Ready=notify
