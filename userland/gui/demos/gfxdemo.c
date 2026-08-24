@@ -133,7 +133,7 @@ static void log_layout(void) {
     n = append_int(b, n, g_canvas.h);
     b[n++] = '\n';
     b[n] = '\0';
-    ulog(b);
+    uapp_log_layout_line(b);
 }
 
 // "gfxdemo: layout buttons <x> <y> <w> <h> <pitch> <count>" -- enough to

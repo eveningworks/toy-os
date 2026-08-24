@@ -743,8 +743,27 @@ static int g_scrollbar_grab; // how far down the thumb the drag started
 // -- so every rect a test could want is reported here, from the SAME
 // accessors the widget draws with.
 
+// Builds one report line into `b`. Two sinks use it, and the split
+// matters: a LAYOUT line is a per-frame report and goes through the
+// toolkit's gated, deduped path, while an ACTION is an event a test
+// waits for exactly once and must never be suppressed.
+static void fmt_line(char *b, int cap, const char *prefix, const int *v, int n);
+
 static void emit(const char *prefix, const int *v, int n) {
     char b[96];
+    fmt_line(b, sizeof b, prefix, v, n);
+    sys_eprint(b);
+}
+
+// The same line, on the layout path.
+static void emit_layout(const char *prefix, const int *v, int n) {
+    char b[96];
+    fmt_line(b, sizeof b, prefix, v, n);
+    uapp_log_layout_line(b);
+}
+
+static void fmt_line(char *b, int cap, const char *prefix, const int *v, int n) {
+    (void)cap;
     int i = 0;
     while (prefix[i]) { b[i] = prefix[i]; i++; }
     for (int k = 0; k < n; k++) {
@@ -753,7 +772,6 @@ static void emit(const char *prefix, const int *v, int n) {
     }
     b[i++] = '\n';
     b[i] = '\0';
-    sys_eprint(b);
 }
 
 static void log_action(int code) {
@@ -767,42 +785,42 @@ static void log_layout(struct uapp *a) {
     int tx, ty, tw, th, x, y, w, h;
     text_rect_for(cw, ch, &tx, &ty, &tw, &th);
     scrollbar_rect(tx, ty, tw, th, &x, &y, &w, &h);
-    { int v[4] = { x, y, w, h }; emit("notepad: layout scrollbar", v, 4); }
+    { int v[4] = { x, y, w, h }; emit_layout("notepad: layout scrollbar", v, 4); }
 
     // The editable area itself. Added when the toolbar became a menu
     // bar: the text moved up by the difference in chrome height, and a
     // test sampling a hardcoded band below it went on comparing three
     // identical patches of blank background and reporting them as
     // passes. A rect the app states cannot drift that way.
-    { int v[4] = { tx, ty, tw, th }; emit("notepad: layout text", v, 4); }
+    { int v[4] = { tx, ty, tw, th }; emit_layout("notepad: layout text", v, 4); }
 
     { int v[4] = { g_menu.x, g_menu.y, g_menu.w, g_menu.h };
-      emit("notepad: layout menubar", v, 4); }
+      emit_layout("notepad: layout menubar", v, 4); }
 
     for (int i = 0; i < (int)(sizeof menu_bar / sizeof menu_bar[0]); i++) {
         if (!uui_menubar_title_rect(&g_menu, i, &x, &y, &w, &h)) continue;
         int v[5] = { i, x, y, w, h };
-        emit("notepad: layout title", v, 5);
+        emit_layout("notepad: layout title", v, 5);
     }
 
     if (g_show_status) {
         { int v[4] = { g_statusbar.x, g_statusbar.y, g_statusbar.w, g_statusbar.h };
-          emit("notepad: layout statusbar", v, 4); }
+          emit_layout("notepad: layout statusbar", v, 4); }
         for (int i = 0; i < g_statusbar.count; i++) {
             if (!uui_statusbar_pane_rect(&g_statusbar, i, &x, &y, &w, &h)) continue;
             int v[5] = { i, x, y, w, h };
-            emit("notepad: layout pane", v, 5);
+            emit_layout("notepad: layout pane", v, 5);
         }
     }
 
     for (int l = 0; l < uui_menubar_depth(&g_menu); l++) {
         if (uui_menubar_popup_rect(&g_menu, l, &x, &y, &w, &h)) {
             int v[5] = { l, x, y, w, h };
-            emit("notepad: layout popup", v, 5);
+            emit_layout("notepad: layout popup", v, 5);
         }
         for (int i = 0; uui_menubar_item_rect(&g_menu, l, i, &x, &y, &w, &h); i++) {
             int v[6] = { l, i, x, y, w, h };
-            emit("notepad: layout item", v, 6);
+            emit_layout("notepad: layout item", v, 6);
         }
     }
 }

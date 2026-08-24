@@ -206,6 +206,14 @@ static void logline(const char *msg) {
     sys_eprint(line);
 }
 
+// The same line on the LAYOUT path -- gated and deduped by the toolkit,
+// because a geometry report is written every frame and an event is not.
+static void logline_layout(const char *msg) {
+    char line[128];
+    snprintf(line, sizeof line, "uidemo: %s\n", msg);
+    uapp_log_layout_line(line);
+}
+
 static void set_status(const char *s) {
     strlcpy(g.status, s, sizeof g.status);
 }
@@ -282,10 +290,10 @@ static void log_layout(void) {
     for (unsigned i = 0; i < sizeof rows / sizeof rows[0]; i++) {
         snprintf(m, sizeof m, "layout %s %d %d %d %d",
                  rows[i].name, rows[i].x, rows[i].y, rows[i].w, rows[i].h);
-        logline(m);
+        logline_layout(m);
     }
     snprintf(m, sizeof m, "layout listbox_row_h %d", uui_listbox_row_h(&g.list));
-    logline(m);
+    logline_layout(m);
 }
 
 // Which widget is at this point? One function, used by press, click and

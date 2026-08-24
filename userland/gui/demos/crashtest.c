@@ -217,7 +217,7 @@ static void log_layout(void) {
                  g_r3.buttons[0].h,
                  g_r3.count > 1 ? g_r3.buttons[1].y - g_r3.buttons[0].y : 0,
                  g_r3.count);
-        ulog(buf);
+        uapp_log_layout_line(buf);
     }
     if (g_k0.count > 0) {
         snprintf(buf, sizeof buf, "crashtest: layout ring0 %d %d %d %d pitch %d count %d\n",
@@ -225,7 +225,7 @@ static void log_layout(void) {
                  g_k0.buttons[0].h,
                  g_k0.count > 1 ? g_k0.buttons[1].y - g_k0.buttons[0].y : 0,
                  g_k0.count);
-        ulog(buf);
+        uapp_log_layout_line(buf);
     }
 }
 

@@ -596,11 +596,30 @@ def enter_gui(qmp, sock=".vm.serial", timeout=8.0):
     wait_for_desktop()'s result; a caller's own settle()/first assertion
     catches a real failure, so this does not raise on timeout.
     """
-    if wait_for_desktop(sock, timeout=1.0):
-        return True
-    qmp.send_text("gui")
-    qmp.send_key("ret")
-    return wait_for_desktop(sock, timeout)
+    # **TURN THE LAYOUT LOG ON, for every tool at once.** Toykit apps
+    # report their widget geometry so a test can drive them by asking
+    # rather than by guessing pixels -- and that report is OFF by
+    # default (`desktop.layout_log`), because it is written every frame
+    # and made `dmesg` unreadable on any machine with a window open.
+    #
+    # Here rather than in each tool because an app reads the setting
+    # ONCE when it starts, so it has to be on before anything is
+    # launched -- which is exactly what this function is for. Doing it
+    # per tool would mean every new tool rediscovering why its layout
+    # poll times out.
+    ready = wait_for_desktop(sock, timeout=1.0)
+    if not ready:
+        qmp.send_text("gui")
+        qmp.send_key("ret")
+        ready = wait_for_desktop(sock, timeout)
+    try:
+        DebugConsole(sock).send("sh config set desktop.layout_log on")
+    except Exception:
+        # A tool that cannot reach the console has bigger problems than
+        # the layout log, and its own first assertion will say so more
+        # usefully than an exception from here would.
+        pass
+    return ready
 
 
 if __name__ == "__main__":

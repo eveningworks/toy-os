@@ -40,6 +40,33 @@ this the obvious way), not from how much history it accumulated.
   -- a terminal is monospace by definition -- so a proportional face
   gets a cell as wide as its widest advance there.
 
+- **THE LAYOUT LOG IS OFF UNLESS A TEST TURNS IT ON, AND DEDUPED WHEN IT
+  IS.** Every Toykit app reports its widget geometry so a test can drive
+  it by asking rather than by guessing pixels
+  (`uapp_log_layout()`/`uapp_log_layout_line()`/`uapp_logf_layout()`),
+  and it used to write that report EVERY FRAME, unconditionally, to the
+  kernel log. Nine apps, twenty-odd lines a frame. `dmesg` on a machine
+  with a window open was mostly one app repeating itself, and `dmesg -w`
+  was a FEEDBACK LOOP -- printing a line moved the Terminal's caret,
+  which redrew, which logged the new caret, which printed a line. Four
+  things:
+  - **`desktop.layout_log` gates it**, off by default, the same call
+    `kernel.kbdtap` makes: the cost of recording is trivial, and the
+    default is about what the machine SHOWS.
+  - **READ ONCE, at first use.** A test sets it before launching what it
+    means to watch, which `enter_gui()` does for every tool at once --
+    re-reading per frame would put a syscall on the draw path to answer
+    a question that does not change during a run.
+  - **THE DEDUPE IS PER FRAME, NOT PER LINE.** An app emits several
+    lines a frame and each differs from the one before it, so line-wise
+    comparison would never match; what repeats is the whole BLOCK, which
+    is what an idle window produces over and over. The toolkit collects
+    the block during the draw and flushes it before `present()`, because
+    only the toolkit knows when a frame has ended.
+  - **AN ACTION IS NOT A LAYOUT LINE.** Notepad's `emit()` and uidemo's
+    `logline()` serve both; only the layout callers were moved behind
+    the gate. An action is an event a test waits for exactly once and
+    must never be suppressed.
 - **THE TERMINAL SCROLLS BY WHEEL AS WELL AS BY KEY, AND BOTH MOVE THE
   SAME STATE.** `on_wheel` adjusts the one `g_sb_view` Page Up/Down
   already moved, three lines per notch, clamped at both ends -- a

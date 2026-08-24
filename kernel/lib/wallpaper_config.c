@@ -138,7 +138,51 @@ static const struct setting g_mode_setting = {
     .apply = 0,
 };
 
+// ---- desktop.layout_log ---------------------------------------------
+//
+// **A DIAGNOSTIC A HUMAN SHOULD NOT BE DROWNED IN.** Every Toykit app
+// logs its widget geometry so a GUI test can drive it by asking rather
+// than by guessing pixels (uapp_log_layout()), and it did so on EVERY
+// FRAME, unconditionally, to the kernel log. Nine apps, twenty-odd call
+// sites. The result was that `dmesg` on a machine with a window open
+// was mostly one app repeating itself, and `dmesg -w` was a FEEDBACK
+// LOOP: printing a line moved the Terminal's cursor, which redrew,
+// which logged the new cursor, which printed a line.
+//
+// Off by default for the same reason `kernel.kbdtap` is (tunables.c):
+// the cost of recording is trivial, and the default is about what the
+// machine SHOWS, not about what it costs. Persist-only -- each app
+// reads it once at startup, so a test sets it before launching what it
+// intends to watch, which `enter_gui()` does for every tool at once.
+#define LAYOUT_LOG_DEFAULT "off"
+
+static const char *const g_onoff[] = { "off", "on" };
+
+static int layout_log_choice(int index, char *out, uint32_t out_size) {
+    if (index < 0 || index >= (int)(sizeof g_onoff / sizeof g_onoff[0])) return 0;
+    k_strlcpy(out, g_onoff[index], out_size);
+    return 1;
+}
+
+static void layout_log_get(char *out, uint32_t out_size) {
+    if (!etc_config_get(WALLPAPER_CONFIG_FILE, "layout_log", out, out_size))
+        k_strlcpy(out, LAYOUT_LOG_DEFAULT, out_size);
+}
+
+static const struct setting g_layout_log_setting = {
+    .name = "layout_log",
+    .label = "Log widget geometry for GUI tests",
+    .type = SETTING_TYPE_ENUM,
+    .file = WALLPAPER_CONFIG_FILE,
+    .category = "Appearance",
+    .group    = "Diagnostics",
+    .choice = layout_log_choice,
+    .get = layout_log_get,
+    .apply = 0, // persist-only -- an app reads it when it starts
+};
+
 void wallpaper_setting_register(void) {
     setting_register(&g_wallpaper_setting);
     setting_register(&g_mode_setting);
+    setting_register(&g_layout_log_setting);
 }

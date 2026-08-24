@@ -318,6 +318,22 @@ void uapp_redraw(struct uapp *a);
 // on_open (once the widgets are placed). Content-relative.
 void uapp_log_layout(struct uapp *a, const char *prefix);
 
+// One extra layout line, for an app whose report says something the
+// widget walk above cannot -- a cursor cell, a pane rect it draws
+// itself. Subject to the SAME gate and the same per-frame dedupe, which
+// is the whole reason it exists rather than each app calling ulog()
+// directly: a line written straight to the log is one this cannot
+// suppress, and it was ~20 such lines a frame that made `dmesg` useless
+// and `dmesg -w` a feedback loop.
+//
+// Include the trailing newline; the block is emitted verbatim.
+void uapp_log_layout_line(const char *line);
+
+// The formatted form of the same thing, and what an app's own
+// `log_layout()` should call instead of ulogf(). Same gate, same
+// per-frame dedupe.
+void uapp_logf_layout(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+
 // Draw and present NOW, if anything is dirty, instead of waiting for
 // the loop to come round. For a handler that is about to BLOCK and
 // wants what it has already produced on screen first -- Terminal echoes

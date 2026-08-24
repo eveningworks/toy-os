@@ -530,11 +530,11 @@ static void log_layout(struct uapp *a) {
     int cw = uapp_width(a);
     int fx, fy, fw, fh;
     face_rect(cw, &fx, &fy, &fw, &fh);
-    ulogf("mines: layout menubar %d %d %d %d\n", g_menu.x, g_menu.y, g_menu.w, g_menu.h);
-    ulogf("mines: layout face %d %d %d %d\n", fx, fy, fw, fh);
-    ulogf("mines: layout board %d %d %d %d\n", board_x(cw), board_y(),
+    uapp_logf_layout("mines: layout menubar %d %d %d %d\n", g_menu.x, g_menu.y, g_menu.w, g_menu.h);
+    uapp_logf_layout("mines: layout face %d %d %d %d\n", fx, fy, fw, fh);
+    uapp_logf_layout("mines: layout board %d %d %d %d\n", board_x(cw), board_y(),
           board_w(), board_h());
-    ulogf("mines: layout cell %d\n", cell_px());
+    uapp_logf_layout("mines: layout cell %d\n", cell_px());
     // The menu's own rects, so a test clicks rows BY NAME's position
     // rather than by counting item heights in Python -- the trap
     // gui_flow.py's calibrated numbers already paid for. Titles always;
@@ -542,12 +542,12 @@ static void log_layout(struct uapp *a) {
     for (int i = 0; ; i++) {
         int x, y, w, h;
         if (!uui_menubar_title_rect(&g_menu, i, &x, &y, &w, &h)) break;
-        ulogf("mines: layout menutitle %d %d %d %d %d\n", i, x, y, w, h);
+        uapp_logf_layout("mines: layout menutitle %d %d %d %d %d\n", i, x, y, w, h);
     }
     for (int l = 0; l < uui_menubar_depth(&g_menu); l++) {
         int x, y, w, h;
         for (int i = 0; uui_menubar_item_rect(&g_menu, l, i, &x, &y, &w, &h); i++)
-            ulogf("mines: layout menuitem %d %d %d %d %d %d\n", l, i, x, y, w, h);
+            uapp_logf_layout("mines: layout menuitem %d %d %d %d %d %d\n", l, i, x, y, w, h);
     }
 }
 

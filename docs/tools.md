@@ -592,6 +592,15 @@ manual steps to be worth automating:
   of its checks, deterministically and pre-existing** -- see
   `docs/bugs.md`; a run that reports 19/31 is the known-good state, not
   a regression.
+**`enter_gui()` TURNS THE LAYOUT LOG ON**, once, for every tool that
+calls it. Toykit apps report their widget geometry so a test can drive
+them by asking rather than by guessing pixels, and that report is OFF by
+default (`desktop.layout_log`) because it is written every frame and
+made `dmesg` unreadable on any machine with a window open. An app reads
+the setting when it STARTS, so it has to be on before anything is
+launched -- which is what that function is for. A tool that opens a
+window without going through it will find its layout polls timing out.
+
 - **`terminal_probe.py`** -- **the GUI Terminal, asked what it actually
   does**: the editing keys, paging, scrolling and clearing. Written
   because answering three ordinary questions about it took FIVE invalid

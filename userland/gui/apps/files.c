@@ -632,19 +632,19 @@ static void log_layout(void) {
     int x, y, w, h;
     for (int i = 0; i < 2; i++) {
         uui_fileview_ops.bounds(&g_pane[i], &x, &y, &w, &h);
-        ulogf("files: layout pane %d %d %d %d %d\n", i, x, y, w, h);
-        ulogf("files: layout dir %d %s\n", i, uui_fileview_dir(&g_pane[i]));
-        ulogf("files: layout rows %d %d\n", i, uui_fileview_row_count(&g_pane[i]));
+        uapp_logf_layout("files: layout pane %d %d %d %d %d\n", i, x, y, w, h);
+        uapp_logf_layout("files: layout dir %d %s\n", i, uui_fileview_dir(&g_pane[i]));
+        uapp_logf_layout("files: layout rows %d %d\n", i, uui_fileview_row_count(&g_pane[i]));
     }
     const char *sel = uui_fileview_selected_name(active());
-    ulogf("files: layout active %d\n", g_active);
-    ulogf("files: layout selected %s\n", sel ? sel : "-");
-    ulogf("files: layout modal %d\n", (int)g_modal);
-    ulogf("files: layout marked %d %d\n", uui_fileview_mark_count(&g_pane[0]),
+    uapp_logf_layout("files: layout active %d\n", g_active);
+    uapp_logf_layout("files: layout selected %s\n", sel ? sel : "-");
+    uapp_logf_layout("files: layout modal %d\n", (int)g_modal);
+    uapp_logf_layout("files: layout marked %d %d\n", uui_fileview_mark_count(&g_pane[0]),
           uui_fileview_mark_count(&g_pane[1]));
-    ulogf("files: layout job %d %d\n", g_job_at, g_job_count);
+    uapp_logf_layout("files: layout job %d %d\n", g_job_at, g_job_count);
     for (int i = 0; i < (int)(sizeof g_keys / sizeof g_keys[0]); i++)
-        ulogf("files: layout key %d %d %d %d %d\n", i, g_keys[i].x, g_keys[i].y,
+        uapp_logf_layout("files: layout key %d %d %d %d %d\n", i, g_keys[i].x, g_keys[i].y,
               g_keys[i].w, g_keys[i].h);
 }
 

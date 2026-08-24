@@ -366,7 +366,7 @@ static void log_layout(void) {
     while (c > 0) b[n++] = d[--c];
     b[n++] = '\n';
     b[n] = '\0';
-    sys_eprint(b);
+    uapp_log_layout_line(b);
 }
 
 static void on_draw(struct uapp *a, struct uapp_draw *d) {

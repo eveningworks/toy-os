@@ -4,6 +4,9 @@
 #include "ui/uui_route.h"
 #include "ui/uui_focus.h"   // desc.focus -- keyboard focus ring
 #include "ui/ulog.h"        // uapp_log_layout()
+#include "setting_abi.h" // desktop.layout_log -- the gate below
+#include <stdio.h>      // snprintf/vsnprintf, one layout line at a time
+#include <stdarg.h>
 #include "ui/utheme.h"
 
 struct uapp {
@@ -55,6 +58,8 @@ static void copy_text(char *dst, const char *src) {
     dst[i] = '\0';
 }
 
+static void layout_log_flush(void);
+
 static void present(struct uapp *a) {
     struct win_request_msg req;
     req_clear(&req);
@@ -104,6 +109,10 @@ static void flush(struct uapp *a) {
         struct uapp_draw d = { &a->surface, UTHEME_TEXT, UTHEME_PANEL_BG };
         a->desc->on_draw_over(a, &d);
     }
+    // The layout block this frame produced, emitted only if it differs
+    // from the last -- see uapp_log_layout(). Here rather than in the
+    // apps because only the toolkit knows when a frame has ended.
+    layout_log_flush();
     present(a);
 }
 
@@ -111,19 +120,108 @@ static void flush(struct uapp *a) {
 
 void uapp_redraw(struct uapp *a) { a->dirty = 1; }
 
+// --- the layout log ---------------------------------------------------
+//
+// **OFF UNLESS A TEST TURNS IT ON, AND DEDUPED WHEN IT IS.** This is the
+// "log my geometry so a test can drive me by asking, not by guessing
+// pixels" report, and it used to be written on EVERY FRAME,
+// unconditionally, to the kernel log. Nine apps do it. The result was
+// that `dmesg` on a machine with a window open was mostly one app
+// repeating itself -- and `dmesg -w` was a FEEDBACK LOOP: printing a
+// line moved the Terminal's caret, which redrew, which logged the new
+// caret, which printed a line.
+//
+// `desktop.layout_log` gates it, off by default, the same call
+// `kernel.kbdtap` makes: the cost of recording is trivial, and the
+// default is about what the machine SHOWS.
+//
+// READ ONCE, at first use. A test sets the setting before launching the
+// app it intends to watch, which tools/gui_debug.py's enter_gui() does
+// for every tool at once. Re-reading per frame would put a syscall on
+// the draw path to answer a question whose answer does not change
+// during a run.
+static int g_layout_log = -1;   // -1 = not yet asked
+
+static int layout_log_enabled(void) {
+    if (g_layout_log < 0) {
+        struct setting_msg msg;
+        for (unsigned i = 0; i < sizeof msg; i++) ((uint8_t *)&msg)[i] = 0;
+        msg.op = SETTING_OP_GET;
+        // The qualified name: identity is (namespace, name), and the
+        // namespace is the registered name of the file it lives in.
+        const char *n = "desktop.layout_log";
+        unsigned k = 0;
+        while (n[k] && k < sizeof msg.name - 1) { msg.name[k] = n[k]; k++; }
+        msg.name[k] = '\0';
+        g_layout_log = (sys_setting(&msg) == 0 && msg.value[0] == 'o'
+                        && msg.value[1] == 'n') ? 1 : 0;
+    }
+    return g_layout_log;
+}
+
+// THE BLOCK A FRAME PRODUCES, held so it can be compared with the last
+// one. Deduping LINE BY LINE would not work: an app logs several lines
+// per frame, and each differs from the line before it, so nothing would
+// ever match. What repeats is the whole block, which is exactly what an
+// idle window emits over and over.
+#define LAYOUT_BLOCK_MAX 768
+static char g_block[LAYOUT_BLOCK_MAX];
+static int  g_block_len;
+static char g_block_prev[LAYOUT_BLOCK_MAX];
+static int  g_block_prev_len;
+
+// The formatted form, which is what every app's own report uses. It
+// exists so those lines go through the SAME gate and the same per-frame
+// dedupe as the widget walk -- a line written straight to ulogf() is
+// one this cannot suppress, and it was about twenty such lines a frame
+// that made `dmesg` useless.
+void uapp_logf_layout(const char *fmt, ...) {
+    if (!layout_log_enabled()) return;
+    char line[160];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof line, fmt, ap);
+    va_end(ap);
+    uapp_log_layout_line(line);
+}
+
+void uapp_log_layout_line(const char *line) {
+    if (!layout_log_enabled()) return;
+    for (const char *p = line; *p && g_block_len < LAYOUT_BLOCK_MAX - 1; p++)
+        g_block[g_block_len++] = *p;
+}
+
+// Called by the draw path once the app has finished. Emits the block
+// only if it differs from the previous frame's.
+static void layout_log_flush(void) {
+    if (!g_layout_log || !g_block_len) { g_block_len = 0; return; }
+    int same = (g_block_len == g_block_prev_len);
+    for (int i = 0; same && i < g_block_len; i++)
+        if (g_block[i] != g_block_prev[i]) same = 0;
+    if (!same) {
+        g_block[g_block_len] = '\0';
+        ulog(g_block);
+        for (int i = 0; i < g_block_len; i++) g_block_prev[i] = g_block[i];
+        g_block_prev_len = g_block_len;
+    }
+    g_block_len = 0;
+}
+
 // Emits `<prefix>: layout <id> x y w h` for every declared widget that
-// has an id and a `bounds` op -- the standard "log my geometry so a test
-// can drive me by asking, not by guessing pixels" that ~8 apps
-// hand-rolled. Content-relative, exactly as the apps logged it; a test
-// adds the window's content origin. Widgets with no id (0) or no bounds
-// op are skipped, as are hidden ones.
+// has an id and a `bounds` op. Content-relative, exactly as the apps
+// logged it; a test adds the window's content origin. Widgets with no
+// id (0) or no bounds op are skipped, as are hidden ones.
 void uapp_log_layout(struct uapp *a, const char *prefix) {
+    if (!layout_log_enabled()) return;
     for (int i = 0; i < a->router.count; i++) {
         struct uui_item *it = &a->router.items[i];
         if (it->hidden || !it->id || !it->ops || !it->ops->bounds) continue;
         int x, y, w, h;
         it->ops->bounds(it->widget, &x, &y, &w, &h);
-        ulogf("%s: layout %d %d %d %d %d\n", prefix, it->id, x, y, w, h);
+        char line[96];
+        snprintf(line, sizeof line, "%s: layout %d %d %d %d %d\n",
+                 prefix, it->id, x, y, w, h);
+        uapp_log_layout_line(line);
     }
 }
 
