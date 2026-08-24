@@ -183,6 +183,17 @@ this the obvious way), not from how much history it accumulated.
   row there is ring-0 code maintained forever, so the bar for one is
   "could you fix a broken image without it".
 
+- **Ctrl-L CLEARS IN BOTH SHELLS NOW, AND THE COMMENT THAT STOPPED IT
+  WAS TRUE WHEN IT WAS WRITTEN.** `/bin/tosh` handled the shared
+  editor's `KLINE_CLEAR_SCREEN` by printing a newline, on the reasoning
+  that "there is no terminal under this yet" -- true before the TTY
+  layer, and false ever since: the GUI Terminal is a real emulator with
+  `kernel/lib/ansi.c` behind it, the console runs the same parser, and
+  `/bin/edit` already draws whole screens through it. It writes
+  `ESC[2J ESC[H` and repaints. **The general trap: a comment stating a
+  FACT about the rest of the system outlives that fact silently**, and
+  nothing in a build notices. `apps/shell_sys.c`'s help text had
+  advertised Ctrl-L the whole time.
 - **`dmesg` IS A `/bin` PROGRAM, AND THE LOG LEAVES THE KERNEL THROUGH
   `QUERY_KLOG`.** It was a ring-0 builtin, so at a `$` prompt it resolved
   to a `/bin` lookup, found nothing and failed -- which is what a person

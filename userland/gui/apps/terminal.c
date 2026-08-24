@@ -369,6 +369,32 @@ static void on_resize(struct uapp *a, int w, int h) {
 
 // --- input ------------------------------------------------------------
 
+// THE WHEEL SCROLLS THE SCROLLBACK, and it is the same state Page
+// Up/Down moves -- not a second notion of "where the reader is". A
+// terminal that scrolled differently by wheel than by key would be two
+// implementations of one idea, which is the thing this file's own
+// comment about the line editor already warns about.
+//
+// Three lines per notch, which is what every desktop terminal does and
+// what the toolkit's other scroll consumers use; a notch is a detent,
+// not a line. `notches` is positive AWAY from the user (win_proto.h),
+// and away means BACK INTO HISTORY -- the direction the content moves
+// down the screen.
+#define WHEEL_LINES 3
+
+static void on_wheel(struct uapp *a, int notches) {
+    int want = g_sb_view + notches * WHEEL_LINES;
+    // Clamped rather than wrapped, and clamped at BOTH ends: scrolling
+    // past the oldest line must stop there, and scrolling forward past
+    // the live screen must land exactly on it (0) rather than going
+    // negative, which would index above the top of the buffer.
+    if (want > g_sb_count) want = g_sb_count;
+    if (want < 0) want = 0;
+    if (want == g_sb_view) return;   // nothing moved -- do not repaint
+    g_sb_view = want;
+    uapp_redraw(a);
+}
+
 static void on_key(struct uapp *a, int key, unsigned mods) {
     (void)mods;
     // PAGE UP/DOWN SCROLL AND ARE NOT THE SHELL'S. Everything else --
@@ -513,6 +539,7 @@ int main(void) {
         .on_open = on_open_cb,
         .on_draw = on_draw,
         .on_key  = on_key,
+        .on_wheel = on_wheel,
         .on_resize = on_resize,
         .on_tick = on_tick,
         .on_close = on_close_cb,

@@ -592,6 +592,39 @@ manual steps to be worth automating:
   of its checks, deterministically and pre-existing** -- see
   `docs/bugs.md`; a run that reports 19/31 is the known-good state, not
   a regression.
+- **`terminal_probe.py`** -- **the GUI Terminal, asked what it actually
+  does**: the editing keys, paging, scrolling and clearing. Written
+  because answering three ordinary questions about it took FIVE invalid
+  runs before one valid one, and every failure was in the harness rather
+  than in the OS. It encodes all five: **a fixture smaller than one
+  screen cannot test a pager** (the first attempt used a one-screen
+  config file, so `less` exited at once and the space landed at a shell
+  prompt -- `/tests/sample.txt` exists for this, with every line naming
+  its own number); **the taskbar clock ticks once a second**, so any two
+  full-screen captures differ regardless -- crop to the CONTENT rect the
+  WM reports rather than computing one from a guessed title height;
+  **`open_app` wants the entry's exact name** ("Terminal", not
+  "terminal"), and a wrong one opens nothing and returns normally;
+  **`send_text()` silently drops uppercase and most punctuation**, so
+  `echo AB > /f` arrives as `echo  f` -- type through `gui key` instead;
+  and **"the frame changed" is not a measurement**, because the caret
+  BLINKS -- it reports the PERCENTAGE of the content area that moved,
+  where typing ten characters is ~0.2%, a page turn is >20%, and a caret
+  alone is ~0.02%. Without that number, `less` not paging at all reads
+  as "changed".
+
+  **Two kinds of probe, and the first is the one to reach for.** A
+  keystroke that reached the shell and did the right thing leaves
+  different BYTES ON DISK, so the keymap probes drive the Terminal with
+  keys and assert through the FILESYSTEM -- which no redraw timing can
+  fake, and which is how nine editing keys were confirmed working in a
+  single run. Pixels are kept for the questions only pixels answer:
+  whether the screen cleared (the discriminator is that what is LEFT is
+  >90% background -- a clear and a one-line scroll both move a lot of
+  pixels), whether it scrolled, whether a pager paged. Both halves lead
+  with a CONTROL, and the control doubles as the scale for everything
+  after it. `--keys` and `--pixels` run one half. Boots its own VM; not
+  in `gui_regress.py`.
 - **`kbd_test.py`** -- **`kbd`'s four columns, on both input drivers.**
   Boots twice (PS/2, then `--virtio-input`), types four keys chosen so
   each exercises a different part of the path, and asserts every column

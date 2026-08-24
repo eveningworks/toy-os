@@ -40,6 +40,15 @@ this the obvious way), not from how much history it accumulated.
   -- a terminal is monospace by definition -- so a proportional face
   gets a cell as wide as its widest advance there.
 
+- **THE TERMINAL SCROLLS BY WHEEL AS WELL AS BY KEY, AND BOTH MOVE THE
+  SAME STATE.** `on_wheel` adjusts the one `g_sb_view` Page Up/Down
+  already moved, three lines per notch, clamped at both ends -- a
+  terminal that scrolled differently by wheel than by key would be two
+  notions of where the reader is. `uapp_desc.on_wheel` and
+  `WIN_EV_WHEEL` already existed; the app simply never implemented the
+  slot, which is CLAUDE.md's "a slot that is PRESENT and read by nobody"
+  from the other direction -- here the toolkit offered it and the app
+  declined.
 - **`font glyph <char>` SHOWS WHAT WILL ACTUALLY BE DRAWN, AND IT READS
   BOTH SIDES.** `/bin/font` prints one glyph's coverage map, its line
   box and whether it has any ink -- from ring 0 (`QUERY_FONTGLYPH`) and

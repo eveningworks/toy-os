@@ -641,6 +641,8 @@ whenever a headline here tells you something you did not already know.
 - **COLOUR IS AN ESCAPE SEQUENCE, NOT A SYSCALL.**
 - **`edit` IS A `/bin` PROGRAM, AND THE KERNEL DRAWS NOTHING** -- it renders with ANSI on fd 1 over a raw fd 0, its model is `utext` (shared with Notepad), and moving it emptied `apps/ui/`.
 - **`cp` EXISTS NOW, AND COPYING IS A PROGRAM RATHER THAN A SYSCALL** -- `/bin/cp [-r]`, spawned by the GUI file manager rather than reimplemented in it; `rm` grew `-r` in the same change; both walk breadth-first over an explicit QUEUE because one listing is 20 KB against a 2 KiB frame budget, and `rm -r` removes the collected directories in REVERSE (deepest-first, a post-order walk with no recursion).
+- **Ctrl-L CLEARS IN BOTH SHELLS NOW, AND THE COMMENT THAT STOPPED IT WAS TRUE WHEN IT WAS WRITTEN.** -- `/bin/tosh` printed a newline because "there is no terminal under this yet", which the TTY layer made false and nothing noticed. The general trap: a comment stating a FACT about the rest of the system outlives that fact silently.
+- **THE TERMINAL SCROLLS BY WHEEL AS WELL AS BY KEY, AND BOTH MOVE THE SAME STATE.** -- `on_wheel` was a toolkit slot the app never implemented; three lines a notch, clamped both ends.
 - **`dmesg` IS A `/bin` PROGRAM, AND THE LOG LEAVES THE KERNEL THROUGH `QUERY_KLOG`.** -- byte slices, not lines, each carrying its ABSOLUTE offset since boot so a reader can see the ring moved under it. Pagination is gone (`dmesg | less`); the ring-0 copy is `rescue dmesg`.
 - **A JOB IS A PROCESS GROUP, AND THE JOB TABLE IS THE SHELL'S** -- `Ctrl-Z`, `jobs` and `fg`; the kernel knows about groups and nothing about jobs. `[1]+ Done` is printed at a PROMPT, and a `SIGCHLD` handler with NO `SA_RESTART` is what produces one when nobody is typing.
 - **A TERMINAL IS AN OBJECT, AND THE CONSOLE IS `tty0`** -- `kernel/tty/` holds the line discipline, and `Ctrl-C` on the physical keyboard and in a window are one implementation. INTR left the keyboard driver; `SCHED_CHAN_KEY` is gone.
@@ -1019,6 +1021,12 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   service supervision), `console_shell_test.py` (a `text` boot reaching a ring-3
   prompt with the kernel shell stood down; boots twice and rewrites
   `/etc`),
+  `terminal_probe.py` (**the GUI Terminal: editing keys, paging,
+  scrolling, clearing** -- the keymap half asserts through the
+  FILESYSTEM, since a keystroke that worked leaves different bytes on
+  disk; the pixel half reports the PERCENTAGE of the content area that
+  moved, because the caret blinks and "changed" is not a measurement.
+  Encodes five harness traps that cost five invalid runs),
   `kbd_test.py` (**`kbd`'s four columns, on both input drivers** -- the
   load-bearing half is the SECOND boot: the same keys must give the same
   keycode and the same character on `INPUT=virtio` with the scancode

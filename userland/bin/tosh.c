@@ -407,11 +407,28 @@ int main(int argc, char **argv) {
                 break;
 
             case KLINE_CLEAR_SCREEN:
-                // No clear-screen control code reaches ring 3 (that is
-                // a terminal's job, and there is no terminal under this
-                // yet), so the honest thing is a fresh line rather than
-                // a screen that half-clears.
-                put("\n");
+                // ESC[2J ESC[H -- erase the display, put the caret at
+                // the top -- then repaint the prompt and whatever was
+                // being typed, which is what "keeping the line you're
+                // typing" means and what the kernel shell has always
+                // done.
+                //
+                // **THIS USED TO PRINT A NEWLINE**, on the reasoning
+                // that "there is no terminal under this yet". That was
+                // true when it was written and stopped being true when
+                // the TTY layer landed: the GUI Terminal is a real
+                // emulator with kernel/lib/ansi.c behind it, the
+                // physical console runs the same parser, and /bin/edit
+                // already draws whole screens through it. The comment
+                // outlived its fact, and Ctrl-L quietly scrolled by one
+                // line instead of clearing for as long as it did.
+                //
+                // Both front ends now reach the same behaviour by
+                // different means -- the kernel shell calls the console
+                // directly, this writes the escape -- which is the
+                // split klineedit.h describes: the core decides WHAT
+                // Ctrl-L means and each front end owns HOW.
+                put("\x1b[2J\x1b[H");
                 g_shown = 0;
                 redraw();
                 break;
