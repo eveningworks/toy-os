@@ -92,6 +92,11 @@ TESTS = [
     # ring 3 could link a byte of it.
     ("klineedit_test", 0,
      ["klineedit_test: all checks passed"], ["FAIL"]),
+    # The SECOND BUILD of the formatter, not its logic -- the KTEST
+    # beside it runs the identical cases in ring 0. What this pins is
+    # that libc.a has the same kfmt at all, which is the gap a
+    # kernel-only include in the shared half opens silently.
+    ("kfmt_test", 0, ["cases passed"], ["FAIL"]),
     # The TrueType rasterizer's SECOND compilation, and the same gap
     # klineedit_test covers: kernel/lib/ttf.c has KTESTs, and every one
     # of them would pass whether or not ring 3 could link a byte of it.

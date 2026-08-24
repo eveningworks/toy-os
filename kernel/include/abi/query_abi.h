@@ -161,6 +161,138 @@ struct query_msg {
 #define QUERY_KBDTAP    14
 
 
+// ONE GLYPH OF THE FONT THE MACHINE IS DRAWING WITH: its metrics, where
+// its ink actually sits, and a 1-bit map of that ink. LIST -- one record
+// per atlas slot, so `index` IS the slot and the set is the same 101
+// glyphs everything else here uses (font_ttf.h).
+//
+// **WHAT IT IS FOR.** A glyph that rasterised to nothing is
+// pixel-identical to a space, to a missing character and to a font that
+// failed to load, and that has already cost one hunt here -- a client
+// read a session-font cell as entirely blank while the kernel had
+// logged 101/101 glyphs built (docs/bugs.md). "Is this glyph empty
+// right now" had no answer anywhere. It does now, and `max_coverage`
+// answers the harder half: a glyph can have ink and still be too faint
+// to read, which no yes/no flag can distinguish.
+//
+// **THIS IS RING 0's VIEW, WHICH IS NOT NECESSARILY A CLIENT'S.** A GUI
+// client draws from its own read-only mapping of the atlas
+// (WIN_REQ_FONT), so the interesting failure is the two DISAGREEING.
+// `hash` is what makes that answerable without shipping the bitmap
+// across: same coverage bytes, same hash. /bin/font computes the same
+// hash over the mapping it was handed and says whether they match.
+#define QUERY_FONTGLYPH 15
+
+// The ink map is 1 BIT PER PIXEL, and the coverage bytes are 8. That is
+// not a shortcut, it is the split of the two questions: WHERE the ink
+// is belongs to ring 0, which is where a glyph either got rasterised or
+// did not, and HOW DARK it is belongs to whoever draws it. A record is
+// capped at QUERY_RECORD_MAX (256 bytes, api/query.h) and coverage
+// bytes for one cell blow that at any size worth looking at -- the
+// header's own advice is that a class needing more is a list of smaller
+// records, and a list of ROWS would need a second selector this message
+// has nowhere to put.
+#define QUERY_FONTGLYPH_INK_MAX 200 // bytes of ink map carried per record
+#define QUERY_FONTGLYPH_MAP_W_MAX 64 // columns; wider cells are CLIPPED
+
+#define QUERY_FONTGLYPH_FACE      (1u << 0) // a face from /usr/share/fonts,
+                                             // not the baked fallback
+#define QUERY_FONTGLYPH_SYNTHETIC (1u << 1) // its bold was SMEARED, not loaded
+#define QUERY_FONTGLYPH_CLIPPED_W (1u << 2) // the ink map lost columns
+#define QUERY_FONTGLYPH_CLIPPED_H (1u << 3) // ...and/or rows
+
+struct query_fontglyph {
+    uint32_t slot;        // atlas slot, == `index`
+    uint32_t codepoint;   // what this slot draws; 32..126 plus six Latin-1
+    uint32_t flags;       // QUERY_FONTGLYPH_*
+    // FNV-1a over the cell's COVERAGE bytes, cell_w * cell_h of them.
+    // Over the whole cell rather than the ink box, so two glyphs that
+    // agree on where the ink is and disagree on its shape still differ.
+    uint32_t hash;
+
+    // The line box. `cell_h` is the stride between glyph bitmaps and
+    // `line_h` is how far apart two lines sit -- DIFFERENT NUMBERS, and
+    // a glyph legitimately paints below its line (api/font_face.h).
+    uint16_t cell_w, cell_h;
+    uint16_t line_h, baseline;
+    uint16_t advance;     // THIS glyph's advance; == cell_w on a monospace set
+    uint16_t px;          // em size the set was rasterised at
+    uint16_t count;       // glyphs in the set
+
+    // The ink's bounding box within the cell, x1/y1 EXCLUSIVE. All zero
+    // when there is no ink, which `max_coverage == 0` is the reliable
+    // test for -- an empty box and a one-pixel box at the origin are
+    // otherwise the same four numbers.
+    uint16_t ink_x0, ink_y0, ink_x1, ink_y1;
+
+    // The darkest byte anywhere in the cell. 0 means the glyph is
+    // ENTIRELY BLANK. A low value means it rasterised, and faintly --
+    // which looks like a font bug on screen and like a healthy glyph to
+    // any has-ink test.
+    uint8_t  max_coverage;
+    uint8_t  weight;      // enum font_weight
+    uint16_t map_w, map_h; // what the ink map below actually carries
+
+    // 1 bit per pixel, row-major, rows padded to whole bytes:
+    // bit (x & 7) of ink[y * ((map_w + 7) / 8) + (x >> 3)], MSB first.
+    // Set means coverage was non-zero, not "coverage was high".
+    uint8_t  ink[QUERY_FONTGLYPH_INK_MAX];
+};
+
+_Static_assert(sizeof(struct query_fontglyph) <= 256,
+               "a query record must fit QUERY_RECORD_MAX -- see api/query.h");
+
+
+// THE KERNEL LOG, in byte slices. LIST -- record `index` is the slice
+// starting at `index * QUERY_KLOG_DATA`, counted from the OLDEST BYTE
+// STILL RETAINED at the moment of the call.
+//
+// **THIS IS WHAT `dmesg` READS, and it is a fact rather than a file.**
+// Linux hands the log over as a character device (/dev/kmsg, one
+// record per read(), each carrying a sequence number so a reader can
+// see that records aged out); FreeBSD exposes the whole ring through
+// the kern.msgbuf SYSCTL instead. The second shape is the one that
+// ports: there is no mount table here and SYS_QUERY is deliberately not
+// /proc (docs/query-design.md), so a device node would need
+// infrastructure that does not exist to buy nothing this does not
+// already give.
+//
+// **BYTES, NOT LINES, and that is a real choice.** A record per line
+// would be tidier to describe and would cost a scan of the ring per
+// record -- O(n) each, O(n^2) to walk -- because klog.c stores bytes
+// and a line has no index. A long line would still have to be split, so
+// the tidiness would not even be complete. A reader writing the bytes
+// to stdout does not care where the boundaries fall.
+//
+// `first` IS THE POINT OF THE RECORD. It is the absolute offset, since
+// boot, that this slice's first byte came from -- so a reader walking
+// several records can tell that the ring moved underneath it (the
+// kernel kept logging while it read) rather than silently splicing two
+// eras of the log together. Compare consecutive records: `first` must
+// advance by exactly the previous record's `len`.
+#define QUERY_KLOG      16
+
+// Bytes of log per record. Sized so the whole record fits
+// QUERY_RECORD_MAX (256, api/query.h) with the header on top.
+#define QUERY_KLOG_DATA 232
+
+struct query_klog {
+    // Absolute offset of data[0], counted from the first byte ever
+    // logged. NOT a ring position -- see the class comment.
+    uint64_t first;
+    // Bytes ever written and bytes still retained, as of this call.
+    // Reported on every record rather than once, because there is no
+    // "once" in a list interface and a reader that sampled them
+    // separately would be comparing two different instants.
+    uint64_t total;
+    uint32_t retained;
+    uint32_t len;                     // valid bytes in data[]
+    uint8_t  data[QUERY_KLOG_DATA];
+};
+
+_Static_assert(sizeof(struct query_klog) <= 256,
+               "a query record must fit QUERY_RECORD_MAX -- see api/query.h");
+
 // QUERY_PROVIDERS' record.
 struct query_provider_info {
     uint32_t cls;                 // the QUERY_* number to ask for

@@ -481,6 +481,43 @@ def main():
         print("console ownership, and what a blocked process waits on")
         shell_pid = (tosh_row(dbg) or (0, 0))[0]
 
+        # --- dmesg reaches the kernel log from RING 3 ----------------
+        #
+        # It was a ring-0 shell builtin, so at a `$` prompt it resolved
+        # to a /bin lookup, found nothing, and failed -- which is what a
+        # person hits in a Terminal window. What this pins is not that
+        # the command exists but that QUERY_KLOG answers a SCHEDULED
+        # ring-3 process: the `#` prompt reaches it through the legacy
+        # loader, which is a different caller with no scheduler slot, so
+        # a check run only there would prove the wrong half.
+        dbg.send("sh rm /klog.txt")
+        time.sleep(0.4)
+        type_line(flow, "dmesg -n 5 > /klog.txt")
+        time.sleep(2.5)
+        out = dbg.send("sh cat /klog.txt") or ""
+        # STRUCTURAL, not a content match, and the first draft of this
+        # got it wrong in an instructive way: it looked for a boot line
+        # ("toy-os:"), which `-n 5` can never show, because -n tails the
+        # NEWEST lines and those are whatever the machine did a moment
+        # ago. The check failed against a working dmesg.
+        #
+        # What is true of every klog line regardless of when it was
+        # written is its shape -- `[<seconds>] text`, a timestamp klog.c
+        # adds once per logical line. Nothing else the shell could
+        # produce here has it: a "command not found", a usage string or
+        # an empty file all fail it.
+        body = [ln for ln in out.splitlines()
+                if ln.strip() and not ln.startswith("sh ")]
+        stamped = [ln for ln in body if re.match(r"^\[\s*\d+\.\d+\]", ln)]
+        check("`dmesg` reads the kernel log from a ring-3 shell",
+              len(stamped) >= 3, f"{len(stamped)} stamped of {len(body)}")
+        # -n is a TAIL, so a handful of lines and not seventy. Without
+        # this the check above passes against a dmesg that ignores its
+        # flags and dumps the whole ring -- which is also how this test
+        # would start timing out.
+        check("...and -n tails rather than dumping the whole ring",
+              0 < len(stamped) <= 8, f"{len(stamped)} lines")
+
         dbg.send("sh rm /tty.txt")
         time.sleep(0.4)
         type_line(flow, "tty > /tty.txt")

@@ -718,6 +718,12 @@ static int font_ttf_glyph_index(int c) {
     return -1;
 }
 
+// The same walk, under the name the rest of the kernel may call it by
+// (api/gfx.h). A wrapper rather than a rename because this file uses
+// the private name in a dozen places and on a path that runs per
+// character drawn.
+int gfx_glyph_index(int c) { return font_ttf_glyph_index(c); }
+
 // Draws `cols` leftmost columns of one glyph's cell. gfx_draw_char()
 // below passes the whole cell, which is the contract the console
 // depends on (every cell fully painted, background included, so a

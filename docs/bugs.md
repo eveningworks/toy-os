@@ -44,6 +44,7 @@ it has exonerated one this session and convicted another.
 - [ ] `heap-debug`'s use-after-free check fails about 1 run in 15 -- PRE-EXISTING
 - [ ] `newsyscalls_test` fails intermittently in CI, and not locally
 - [ ] `gui_regress.py`'s `uidemo` fails intermittently in the full parallel suite
+- [ ] `gui_regress.py`'s `uterm` fails its two `edit` checks under full parallel load -- 3 runs in 3 on 2026-08-24, against 0 in 1 when the tool is run alone; PRE-EXISTING (the third of those three was HEAD with the day's work stashed, same two checks, same counts)
 - [ ] `damage_hunt.py -j 4` loses VM SLOT 0 every run
 - [ ] Injected clicks are LOST under parallel `gui_regress` load, and the failing checks are finally named
 - [ ] A `sched` KTEST fails under KVM, and only under KVM

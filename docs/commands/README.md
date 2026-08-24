@@ -81,6 +81,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`about`](about.md)
 - [`ata`](ata.md)
 - [`dmesg`](dmesg.md)
+- [`font`](font.md)
 - [`heap`](heap.md)
 - [`kbd`](kbd.md)
 - [`kstack`](kstack.md)

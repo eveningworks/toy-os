@@ -528,7 +528,8 @@ LIBC_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBC_SRCS)) \
                $(BUILD)/userland/shared/kfmt.o \
                $(BUILD)/userland/shared/heap_core.o \
                $(BUILD)/userland/shared/caltime.o \
-               $(BUILD)/userland/shared/ksignal.o
+               $(BUILD)/userland/shared/ksignal.o \
+               $(BUILD)/userland/shared/kfmt_cases.o
 LIBC         = $(BUILD)/userland/libc.a
 
 # The `rm -f` is load-bearing: `ar rcs` UPDATES an existing archive,

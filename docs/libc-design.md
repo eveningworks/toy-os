@@ -734,3 +734,34 @@ everything to zero would have passed the clearing half alone.
   derives things from, and it keeps the libc's audience "any C program"
   rather than "toy-os apps" -- which is the whole point of the
   port-capable target. Cheap to do while the libc is new, awkward after.
+
+## printf's conversion coverage, audited (2026-08-24)
+
+`%X` was missing, and the way it was found is the reason this section
+exists: `/bin/font` printed `U+%04X slot %d` and got a codepoint where
+the slot number belonged. An unrecognised conversion in `kfmt.c` prints
+its letters literally and **consumes no argument**, so a gap does not
+produce a wrong value -- it shifts every later argument in the call, and
+the symptom appears somewhere unrelated. That is the same failure the
+`%.3d` precision gap produced when Doom asked its WAD for `STCFN33`.
+
+Reading the switch after fixing `%X` found four more of the same class,
+none of them yet in anyone's way: `%p`, `%o`, the `+`, space and `#`
+flags, and the `h`/`hh` length modifiers. All are implemented now, with
+`h`/`hh` accepted and ignored (promotion has already widened the
+argument) but **consumed**, which is the half that matters.
+
+What is still deliberately absent: `%n`, the one conversion that writes
+through a caller-supplied pointer and a security footgun everywhere it
+exists; and the `'` and `a`/`A` conversions, which have no caller.
+Floating point lives behind `k_fmt_float()` because `va_arg(ap, double)`
+alone emits SSE in a kernel built `-mno-sse`.
+
+**The guard is `kernel/include/api/kfmt_cases.h`** -- a table of
+(format, argument, expected output) cases run as a KTEST and as
+`/tests/kfmt_test`, so both compilations of the formatter assert the
+same thing. It is exhaustive over conversions and flags rather than a
+selection of interesting ones, precisely because "does nothing" and "is
+not parsed" are indistinguishable from the output of the conversion
+itself -- only the argument AFTER it moves. Every case for a conversion
+that could be missing therefore pins a following `%d` as well.

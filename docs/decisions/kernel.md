@@ -4653,3 +4653,65 @@ desktop came up perfectly and init never noticed. The count is taken
 after `start_due()` now. The general shape: when a new state is entered
 by an action in the same pass, anything derived from that state has to
 be recomputed after the action, not before it.
+
+## The kernel log leaves ring 0 as byte slices with absolute offsets, not as lines or a device
+
+`dmesg` was a ring-0 shell builtin long after `ps`, `meminfo`, `kstack`,
+`heap`, `ata` and `parttable` had become `/bin` programs, and not
+because nobody got to it: the log had no way out of the kernel.
+`klog_dump()` streams into a callback, which is the right shape for a
+console pager and the wrong shape for a syscall, which must fill a
+caller's buffer and return. So the command stayed in ring 0, and at a
+`$` prompt — a Terminal window, the one place a person actually reads a
+log — it resolved to a `/bin` lookup, found nothing, and failed.
+
+**Why a query class and not a device.** Linux exposes the log as
+`/dev/kmsg`: a character device, one record per `read()`, each carrying
+a sequence number so a reader can tell that records aged out. FreeBSD
+exposes the same ring through the `kern.msgbuf` **sysctl** — its general
+introspection registry — instead. The second shape is the one that ports
+here. There is no mount table, and `docs/query-design.md` is explicit
+that `SYS_QUERY` is deliberately not `/proc`; a device node would need
+infrastructure that does not exist in order to buy nothing the registry
+does not already give. `api/query.h`'s opening argument applies directly:
+a syscall per information class grows the syscall number by one per fact
+and leaves nothing able to answer "what facts exist?".
+
+**Why bytes and not lines.** A record per line is tidier to describe and
+is what `/dev/kmsg` does. It would also cost a scan of the ring per
+record — `klog.c` stores bytes and a line has no index, so filling record
+N means finding the Nth newline: O(n) each, O(n²) to walk. And a line
+longer than a record would still have to be split, so the tidiness would
+not even be complete. A reader writing bytes to stdout does not care
+where the boundaries fall.
+
+**The absolute offset is the whole design.** Every slice reports where
+its first byte came from, counted from the first byte ever logged rather
+than from a position in the ring. The ring overwrites its oldest bytes
+while a reader walks it, so a reader indexing by ring position would
+silently re-read or skip whatever moved — and the result would look like
+a valid log. With absolute offsets, a gap between one slice's end and
+the next one's start is detectable, and `/bin/dmesg` prints it where it
+happened. That is what `/dev/kmsg`'s sequence numbers are for, and Linux
+prints a `-` for the same event. A log that silently splices two eras
+together is worse than one with a hole in it, because only the second
+kind can be noticed.
+
+**The ring-0 copy became `rescue dmesg`,** which stretches that set's
+stated rule. `rescue` is nominally "the commands you would need to put
+`/bin` BACK", which is why `strace` went to `/bin` and not there. The
+argument for the exception is that `shell_rescue.c`'s own opening says
+its job is DIAGNOSIS, and a machine whose `/bin` will not load is exactly
+a machine that cannot run `/bin/dmesg` to find out why. It costs one
+table row and no second implementation — the ring-0 pager already
+existed. It ignores its arguments rather than refusing them, because the
+flags belong to the `/bin` program and this is the copy reached for when
+`/bin` is what is broken.
+
+**Pagination did not come along.** The builtin drew `-- more --` and
+blocked on a keystroke, which meant it could not run inside a GUI
+callback and carried a branch to detect that. `dmesg | less` pages it
+with code that already works, which is what the rule against a builtin
+shadowing a `/bin` program that does more is for. `--follow` polls at
+200 ms rather than blocking, because a fact in this registry is computed
+on every read and has no stored form to wait on.

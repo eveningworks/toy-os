@@ -72,6 +72,32 @@ this the obvious way), not from how much history it accumulated.
   **`tcsetattr()` masks `c_lflag`** to the three bits the line
   discipline implements, so `<termios.h>`'s inert names never reach a
   flag space a future `TTY_*` bit will want.
+- **AN UNRECOGNISED printf CONVERSION DESYNCHRONISES EVERY ARGUMENT AFTER
+  IT, AND `kfmt_cases.h` IS THE TABLE THAT STOPS A FOURTH ONE.**
+  `kernel/lib/kfmt.c` is the kernel's formatter AND tolibc's `printf`,
+  and its unknown-conversion path emits the letters literally and
+  CONSUMES NO ARGUMENT -- so a missing feature corrupts output that has
+  nothing to do with it, arbitrarily far away. It has shipped three
+  times: `%.3d` ignored on integers (Doom asked its WAD for `STCFN33`
+  instead of `STCFN033` and died at startup); `%X` missing entirely
+  (`/bin/font` printed a codepoint where a slot number belonged, because
+  the `%X` ate nothing and the `%d` after it read the wrong slot); and
+  `%p`, `%o`, `%+d`, `% d`, `%#x` and `%hd`, all found by auditing the
+  switch after the second one. Three things:
+  - **EVERY CONVERSION AND FLAG C DEFINES HAS A CASE, INCLUDING THE ONES
+    THAT DO NOTHING HERE** -- `h`/`hh` are accepted and ignored, because
+    promotion has already widened the argument; what matters is that
+    they are CONSUMED. "Does nothing" and "is not parsed" look identical
+    until the argument after them moves.
+  - **THE CASES ASSERT CONSUMPTION SEPARATELY FROM RENDERING.** A case
+    puts a second `%d` after the conversion under test and pins ITS
+    value; one that checks only the first conversion's output passes
+    happily while the rest of the line is wrong.
+  - **THE TABLE IS RUN FROM BOTH RINGS** -- a KTEST and
+    `/tests/kfmt_test` -- the `klineedit_cases.h` pattern, because kfmt
+    is compiled twice and its header is one file over two
+    implementations, so a kernel include in the shared half silently
+    takes `snprintf` away from ring 3.
 - **`tolibc` GREW A SECOND PORT'S WORTH OF FUNCTIONS, AND ONE OF THEM
   WAS A BUG.** Doom needed `remove()`, `rename()` (both of which
   `<stdio.h>` had listed as deliberately absent, under the old

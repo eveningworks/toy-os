@@ -4248,3 +4248,62 @@ so `.md` cannot claim `.mdx` -- a substring search would. And **a
 handler is spawned and never waited for**: it is a launch, not an
 operation on files, and waiting for a text editor to exit would freeze
 the manager for as long as somebody was editing.
+
+## A glyph probe reads BOTH the kernel's atlas and a client's mapping, and compares them
+
+A glyph that rasterised to nothing is pixel-identical on screen to a
+space, to a character the font does not carry, and to a font that failed
+to load. Nothing in this system could tell those four apart, and the
+ambiguity cost a hunt that was never resolved: a client read a
+session-font cell as entirely blank while the kernel had logged 101 of
+101 glyphs built, and the VM was gone before anyone could ask which had
+happened (`docs/bugs.md`).
+
+**Why it inspects the RUNNING font rather than the file.** FreeType's
+`ftdump`/`ftview`, `otfinfo` and `fc-match` all inspect a font file or a
+fontconfig setup. That is the right tool when the rasteriser is a
+library you can rerun offline — but here the rasteriser is in ring 0,
+the atlas is built once at a chosen size and weight, and the interesting
+bug is about what got *into* it. A file inspector would agree with the
+screen only by coincidence. X11's `xfd` is the closer ancestor: it
+showed a live server-side font's glyph grid. Most systems do not ship
+one because most systems do not have a font living somewhere you cannot
+re-derive.
+
+**Why it reads two views.** A GUI client draws from its own read-only
+mapping of the atlas (`WIN_REQ_FONT`); ring 0 draws from the atlas
+itself. Those are different pieces of memory and the reported bug is
+exactly the case where they disagree — so either view alone can be
+perfectly healthy while the machine is not. The comparison is an FNV-1a
+hash over the coverage bytes rather than two pictures side by side,
+because "are these two bitmaps identical" is not a question a person
+should be asked to answer by eye, and because shipping a bitmap through
+a query record is not possible anyway (below).
+
+**Why the two pictures have different bit depths**, which looks like an
+inconsistency and is a split of two questions. The client view prints
+8-bit coverage as a grayscale ramp: how dark the ink is belongs to
+whoever draws it, and a glyph whose anti-aliasing collapsed is present,
+non-blank and unreadable — a threshold would hide precisely that. The
+kernel view prints a 1-bit ink map: *where* the ink is belongs to ring
+0, which is where a glyph either got rasterised or did not. The
+practical constraint agrees with the conceptual one — `QUERY_RECORD_MAX`
+is 256 bytes and no cell's coverage bytes fit in that at any size worth
+looking at, while `api/query.h`'s own advice for a class that needs more
+is to be a list of smaller records, and a list of rows would need a
+second selector `struct query_msg` has nowhere to put.
+
+**`peak` rather than a has-ink flag.** A boolean answers "is this glyph
+empty", and the failure that is genuinely hard to see is the one where
+it is not empty and still cannot be read. The darkest byte in the cell
+costs nothing to compute and distinguishes them; the ink bounding box is
+reported beside it but is explicitly NOT the blankness test, because an
+empty box and a single lit pixel at the cell origin are the same four
+numbers.
+
+**A codepoint is accepted as well as a character**, and that is load
+bearing rather than convenient: a space cannot be passed as an argument
+through any shell here, and a space is exactly what you compare a
+suspected-blank glyph against. The six Latin-1 extras cannot be typed on
+the layouts this machine ships either. A single character always wins,
+so `font glyph 0` is the digit.

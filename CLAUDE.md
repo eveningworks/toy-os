@@ -529,6 +529,7 @@ whenever a headline here tells you something you did not already know.
 
 - **MEASURE TEXT, NEVER MULTIPLY: `gfx_char_advance()` / `ugfx_char_advance()`.**
 - **A LOADED FACE STILL ONLY DRAWS 101 GLYPHS.**
+- **`font glyph <char>` SHOWS WHAT WILL ACTUALLY BE DRAWN, AND IT READS BOTH SIDES.** -- `/bin/font`: one glyph's coverage map, line box and ink, from ring 0 (`QUERY_FONTGLYPH`) and from a client's own atlas mapping, compared by hash. `ink NONE` is the point; `peak` is the harder half (a glyph can have ink and be far too faint). The client half needs a compositor AND a scheduled process. A codepoint (`0x20`) is accepted because a space cannot be typed as an argument.
 - **A FONT IS A HANDLE IN RING 3 AND A CONTEXT FLAG IN RING 0.**
 - **THERE ARE TWO FONT TIERS, AND THE SHARED ONE CANNOT GROW TO COVER THE OTHER.**
 - **BOLD IS A WEIGHT OF A FAMILY, AND A FAMILY IS A FILENAME RULE.**
@@ -640,6 +641,7 @@ whenever a headline here tells you something you did not already know.
 - **COLOUR IS AN ESCAPE SEQUENCE, NOT A SYSCALL.**
 - **`edit` IS A `/bin` PROGRAM, AND THE KERNEL DRAWS NOTHING** -- it renders with ANSI on fd 1 over a raw fd 0, its model is `utext` (shared with Notepad), and moving it emptied `apps/ui/`.
 - **`cp` EXISTS NOW, AND COPYING IS A PROGRAM RATHER THAN A SYSCALL** -- `/bin/cp [-r]`, spawned by the GUI file manager rather than reimplemented in it; `rm` grew `-r` in the same change; both walk breadth-first over an explicit QUEUE because one listing is 20 KB against a 2 KiB frame budget, and `rm -r` removes the collected directories in REVERSE (deepest-first, a post-order walk with no recursion).
+- **`dmesg` IS A `/bin` PROGRAM, AND THE LOG LEAVES THE KERNEL THROUGH `QUERY_KLOG`.** -- byte slices, not lines, each carrying its ABSOLUTE offset since boot so a reader can see the ring moved under it. Pagination is gone (`dmesg | less`); the ring-0 copy is `rescue dmesg`.
 - **A JOB IS A PROCESS GROUP, AND THE JOB TABLE IS THE SHELL'S** -- `Ctrl-Z`, `jobs` and `fg`; the kernel knows about groups and nothing about jobs. `[1]+ Done` is printed at a PROMPT, and a `SIGCHLD` handler with NO `SA_RESTART` is what produces one when nobody is typing.
 - **A TERMINAL IS AN OBJECT, AND THE CONSOLE IS `tty0`** -- `kernel/tty/` holds the line discipline, and `Ctrl-C` on the physical keyboard and in a window are one implementation. INTR left the keyboard driver; `SCHED_CHAN_KEY` is gone.
 - **A `text` BOOT REACHES A RING-3 SHELL, AND THE KERNEL SHELL STANDS DOWN FOR IT.**
@@ -653,6 +655,7 @@ whenever a headline here tells you something you did not already know.
 
 - **THE C LIBRARY IS CALLED `tolibc`, and its bar for adding a function is the OPPOSITE of everything else here -- it aims to be COMPLETE.**
 - **`tolibc` GREW A SECOND PORT'S WORTH OF FUNCTIONS, AND ONE OF THEM WAS A BUG** -- Doom needed `remove()`/`rename()` (both previously listed as deliberately absent), `mkdir()` with a new `<sys/stat.h>` that deliberately has NO `stat()`, `access()` (only `F_OK` can mean anything), and `system()` (which needed `tosh -c`). The bug: `kfmt.c` ignored `printf` precision on integers, so `"%.3d"` of 33 gave `33` and Doom asked its WAD for a lump that does not exist -- in a file compiled into both rings, whose tests asserted the old behaviour.
+- **AN UNRECOGNISED printf CONVERSION DESYNCHRONISES EVERY ARGUMENT AFTER IT, AND `kfmt_cases.h` IS THE TABLE THAT STOPS A FOURTH ONE.** -- `kfmt.c` is tolibc's `printf`; an unknown conversion prints its letters and consumes NOTHING, so a missing feature corrupts output far away from itself. Three have shipped (`%.3d`, `%X`, then `%p`/`%o`/`%+d`/`%hd` by audit). Every conversion and flag C defines has a case, run from BOTH rings.
 - **THE POSIX HALF OF `tolibc` IS HEADERS OVER SYSCALLS THAT ALREADY EXIST** -- `<signal.h>`, `<sys/wait.h>`, `<termios.h>`, `<fcntl.h>`, `<strings.h>`, `getopt()`; the kernel-facing action struct is `struct k_sigaction` and POSIX's is converted at the call (glibc's split), and anything that cannot be honoured is REFUSED rather than ignored (a non-empty `sa_mask` is `EINVAL`; `VMIN`/`VTIME` are undefined on purpose).
 - **`userland/` is split by ROLE, and the build derives things from it -- adding a program is a `.c` file and nothing else.**
 - **In ring 3 the toolkit is reachable under the C names -- don't hand-roll a `my_strlen` or a digit loop there either.**

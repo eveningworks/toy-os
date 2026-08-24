@@ -44,6 +44,18 @@ int gfx_font_px(void);
 // see gfx_text_width().
 int gfx_char_advance(int c);
 
+// The ATLAS SLOT a codepoint draws from, or -1 for one this font does
+// not carry. ASCII 32..126 is contiguous at 0..94 and the six Latin-1
+// extras follow (font_ttf.h), which is the layout a runtime face is
+// rasterised into as well -- so one mapping answers for both sources.
+//
+// Exposed because the glyph query (QUERY_FONTGLYPH) has to reach the
+// same slot gfx_draw_char() would, and a second copy of this walk is a
+// second chance to disagree about which glyph a character is. Ring 3
+// necessarily has its own (ugfx.c), because the atlas it maps carries
+// no cmap.
+int gfx_glyph_index(int c);
+
 // BOLD IS A GRAPHICS-CONTEXT FLAG, not an argument. gfx_set_bold()
 // switches which weight of the active face every subsequent text call
 // draws with, and RETURNS THE PREVIOUS VALUE so that the save/restore

@@ -183,6 +183,28 @@ this the obvious way), not from how much history it accumulated.
   row there is ring-0 code maintained forever, so the bar for one is
   "could you fix a broken image without it".
 
+- **`dmesg` IS A `/bin` PROGRAM, AND THE LOG LEAVES THE KERNEL THROUGH
+  `QUERY_KLOG`.** It was a ring-0 builtin, so at a `$` prompt it resolved
+  to a `/bin` lookup, found nothing and failed -- which is what a person
+  hits in a Terminal window, the one place a log actually gets read. Not
+  a regression: it had never been ported, because `klog_dump()` streams
+  into a callback and a syscall has to fill a buffer and return. Four
+  things:
+  - **THE CLASS HANDS OVER BYTE SLICES, NOT LINES.** A record per line
+    would cost a scan of the ring per record (klog.c stores bytes, and a
+    line has no index) and would still have to split a long one.
+  - **EVERY SLICE CARRIES ITS ABSOLUTE OFFSET SINCE BOOT**, which is what
+    makes a walking reader safe: the ring overwrites its oldest bytes
+    while you read, and a gap between one slice's end and the next one's
+    start is REPORTED rather than spliced over. Linux prints a `-` for
+    the same event on `/dev/kmsg`.
+  - **PAGINATION IS GONE.** The builtin blocked on a keystroke and so
+    could not run inside a GUI callback; `dmesg | less` and `dmesg -n 40`
+    are the answers, and both are code that already works.
+  - **THE RING-0 COPY IS `rescue dmesg`**, a deliberate stretch of that
+    set's "what you need to put `/bin` back" rule -- a machine whose
+    `/bin` will not load is exactly one that cannot run `/bin/dmesg` to
+    find out why.
 - **A COMMAND WITH A READ HALF AND A WRITE HALF MOVES AS ONE PIECE OR
   NOT AT ALL.** `heap`, `ata` and `kstack` each report something AND
   toggle something (`heap debug on|off`, `ata nodma on|off`, `kstack

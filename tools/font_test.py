@@ -380,6 +380,108 @@ def check_boot_face_is_live(dbg):
           bold.endswith("distinct 1"), bold)
 
 
+
+_probe_seq = [0]
+
+
+def font_glyph(dbg, arg, flags=""):
+    """`/bin/font glyph <arg>` output, as one string.
+
+    THROUGH A FILE, and not because that is tidy. A spawned process's
+    stdout goes to the console it inherited, so `gui spawn` hands the
+    debug console back its own "spawned as pid N" line and nothing
+    else -- a probe reading that would assert against the spawn message
+    rather than the program, and would pass on any output at all.
+    Running it under `tosh -c` with a redirect puts the output somewhere
+    that can be read back deterministically.
+
+    It also has to be a real SCHEDULED process, which is the client
+    half's requirement: SYS_WIN_REQUEST refuses a caller with no
+    scheduler slot, so the same command typed at the kernel `#` prompt
+    (the legacy `run` loader) can only ever show the ring-0 view.
+
+    The path is unique per call. A shared one read back after a spawn
+    that failed would return the PREVIOUS call's output, which is the
+    quietest way a probe like this can lie.
+    """
+    _probe_seq[0] += 1
+    path = f"/fontprobe{_probe_seq[0]}.txt"
+    dbg.send(f"gui spawn /bin/tosh -c font glyph {arg} {flags} > {path}".strip())
+    # The spawn is asynchronous and the file does not exist until the
+    # child has run. Polled on the ARTIFACT rather than slept on, so a
+    # slow guest costs time instead of a flake.
+    deadline = time.time() + 8
+    out = ""
+    while time.time() < deadline:
+        time.sleep(0.4)
+        out = dbg.send(f"sh cat {path}") or ""
+        if "slot" in out or "font:" in out:
+            break
+    dbg.send(f"sh rm {path}")
+    return out
+
+
+def check_glyph_probe(dbg):
+    """/bin/font: the two views, and the blank-glyph case it exists for."""
+    g = font_glyph(dbg, "g")
+
+    # 'g' is slot 71 -- ASCII 32..126 is contiguous from 0, so
+    # 0x67 - 32 = 71. Pinned as a NUMBER because the bug that produced
+    # this command printed the codepoint here instead (a %X that
+    # consumed no argument, so the following %d read the wrong slot).
+    check("`font glyph g` names the right atlas slot",
+          "slot 71" in g, g.splitlines()[0][:60] if g else "no output")
+
+    # BOTH VIEWS PRESENT, which is the thing that makes the hash line
+    # mean anything -- a run where the client half quietly failed would
+    # still print a kernel block and look healthy.
+    check("...and reports the kernel view", "kernel " in g)
+    check("...and the client's own mapping of the same atlas",
+          "client   cell" in g,
+          "client half missing -- no compositor?" if g else "no output")
+    check("...and the two agree byte for byte",
+          "agree" in g and "DISAGREE" not in g,
+          next((ln.strip() for ln in g.splitlines() if "hash" in ln), "no hash line"))
+
+    # 'g' has a DESCENDER, so its ink reaches below the line box. That
+    # is ordinary rather than a defect (font_face.h), and it is the one
+    # glyph property here that a wrong cell_h/line_h split would hide.
+    check("...and notices that 'g' paints below its line",
+          "paints below its line" in g)
+
+    # THE DISCRIMINATING PAIR. A command that always said "ink yes"
+    # passes every check above; a command that always said "blank"
+    # passes this one. Only a probe that really reads the coverage
+    # bytes passes both -- and telling a blank glyph from a drawn one
+    # is the entire reason this exists (docs/bugs.md's session-font
+    # cell that read as empty while 101/101 glyphs had been built).
+    check("...and 'g' has ink in it", "ink  yes" in g)
+    blank = font_glyph(dbg, "0x20", "--kernel")
+    check("a SPACE is reported as entirely blank",
+          "ink  NONE" in blank,
+          next((ln.strip() for ln in blank.splitlines() if "ink" in ln), "no ink line"))
+    # ...and by codepoint, because a space cannot be passed as an
+    # argument through any shell here -- which is why the numeric form
+    # exists at all.
+    check("...reached by codepoint, since a space cannot be typed",
+          "U+0020" in blank, blank.splitlines()[0][:60] if blank else "no output")
+
+    # The ring-0 view must stand alone: on a `text` boot there is no
+    # compositor and the client half is unreachable, so --kernel has to
+    # carry a picture of its own.
+    #
+    # ASKED OF A GLYPH THAT HAS INK. The first version of this check
+    # demanded a '#' in the SPACE's map, which is the one glyph that
+    # can never have one -- a test asserting the opposite of what it had
+    # just established two lines above.
+    check("--kernel prints a map for a blank glyph too",
+          "ink map (kernel" in blank)
+    inked = font_glyph(dbg, "A", "--kernel")
+    check("...and it has ink in it for a glyph that does",
+          "ink map (kernel" in inked and "#" in inked,
+          next((ln.strip() for ln in inked.splitlines() if "ink " in ln), "no ink line"))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--sock", default=DEFAULT_SOCK)
@@ -497,6 +599,13 @@ def main():
     # Put the machine back the way a fresh image boots.
     set_face(dbg, MONO)
     set_size(dbg, 14)
+    time.sleep(1.0)
+
+    # LAST, and on the restored default face on purpose: every
+    # assertion below names a slot, a cell size or an ink flag of the
+    # font a fresh image boots with, so running it mid-sequence would
+    # pin whatever the previous case happened to leave selected.
+    check_glyph_probe(dbg)
 
     passed = sum(1 for _, ok in checks if ok)
     failed = len(checks) - passed

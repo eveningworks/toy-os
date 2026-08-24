@@ -788,6 +788,16 @@ manual steps to be worth automating:
   that had lost the reason would still satisfy. Read back through a
   FILE, since a /bin program's output goes to the screen tosh owns
   rather than to the serial socket.
+
+  **Two checks cover `dmesg` reaching the kernel log from ring 3**,
+  which is the half the `#` prompt cannot prove: SYS_QUERY answers the
+  legacy loader too, so a check run there would pass against a build
+  where a real scheduled process could not read the log at all. They are
+  STRUCTURAL -- every klog line is `[<seconds>] text`, a stamp klog.c
+  adds per logical line, and nothing else the shell could emit here has
+  it. The first draft looked for a boot line instead and failed against
+  a working `dmesg`, because `-n 5` tails the NEWEST lines and those are
+  whatever the machine did a moment ago.
   Three more assert the SHARED LINE EDITOR at that prompt --
   Home+Delete editing mid-line, Ctrl-U killing a line before it runs,
   and Up recalling the previous command -- each through a filesystem
@@ -982,7 +992,23 @@ manual steps to be worth automating:
   icon cell, so a narrower font mostly just un-truncates them and moves
   three pixels), and crop the frame yourself -- `stable_pixels()` writes
   the whole screen and only COMPARES the box, so scanning its output
-  counts the taskbar as ink. In `gui_regress.py`.
+  counts the taskbar as ink.
+
+  **Its last section drives `/bin/font`**, the glyph probe -- both
+  views, the hash agreement between them, the descender flag on `g`, and
+  the discriminating pair that gives the whole thing teeth: `g` has ink
+  and a SPACE does not. A probe that always answered "ink yes" passes
+  every other check in that section; one that always answered "blank"
+  passes the space check alone. It reaches the space by CODEPOINT
+  (`0x20`), because a space cannot be passed as an argument through any
+  shell here. Two mechanics worth not rediscovering: the output is
+  captured through a FILE (`tosh -c ... > /path`), because a spawned
+  process's stdout goes to the console it inherited and `gui spawn`
+  hands the debug console back only its own "spawned as pid N" line --
+  a probe asserting on that would pass on any output at all; and the
+  path is unique per call, since a shared one read back after a failed
+  spawn returns the PREVIOUS call's output, which is the quietest way a
+  check like this can lie. In `gui_regress.py`.
 - **`check_layout.py`** -- see CLAUDE.md's `docs/` section: verifies the built
   image's directories against `docs/filesystem-layout.md`, and warns
   about orphaned seeded files. Runs in `preflight.sh` and CI.

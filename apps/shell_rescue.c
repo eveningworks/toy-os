@@ -106,6 +106,16 @@ struct rescue_cmd {
 // above. Keep it short: a row here is ring-0 code that has to be
 // maintained forever, and the /bin version is the one that should be
 // getting the features.
+// cmd_dmesg() takes no arguments and every rescue entry is called with
+// them, so this is the adapter and nothing more. Arguments are IGNORED
+// rather than refused: `rescue dmesg -n 40` should show the log, not a
+// usage error, because the flags belong to /bin/dmesg and this is the
+// copy you reach for when /bin is what is broken.
+static void rescue_dmesg(const char *args) {
+    (void)args;
+    cmd_dmesg();
+}
+
 static const struct rescue_cmd RESCUE_CMDS[] = {
     { "ls",       rescue_ls,     "rescue ls [dir]" },
     { "cat",      cmd_cat,       "rescue cat <file>" },
@@ -121,6 +131,18 @@ static const struct rescue_cmd RESCUE_CMDS[] = {
     // rescue edit sits in the write-back cache and a reset loses it.
     // `rescue rm` that does not survive the reboot is not a rescue.
     { "sync",     cmd_sync,      "rescue sync" },
+    // dmesg is here for a different reason from the file commands, and
+    // it is worth being explicit about the stretch. The set is nominally
+    // "what you need to put /bin BACK" -- which is why `strace` went to
+    // /bin and not here -- but this file's own opening says its job is
+    // DIAGNOSIS, and the kernel log is the first thing you want when a
+    // boot is going wrong. A machine whose /bin will not load is exactly
+    // a machine that cannot run /bin/dmesg to find out why.
+    //
+    // It costs nothing to keep: the implementation is klog_dump() plus a
+    // pager that already existed, so this is a table row rather than a
+    // second copy of anything.
+    { "dmesg",    rescue_dmesg,  "rescue dmesg" },
 };
 #define RESCUE_COUNT (sizeof(RESCUE_CMDS) / sizeof(RESCUE_CMDS[0]))
 

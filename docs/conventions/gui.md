@@ -40,6 +40,38 @@ this the obvious way), not from how much history it accumulated.
   -- a terminal is monospace by definition -- so a proportional face
   gets a cell as wide as its widest advance there.
 
+- **`font glyph <char>` SHOWS WHAT WILL ACTUALLY BE DRAWN, AND IT READS
+  BOTH SIDES.** `/bin/font` prints one glyph's coverage map, its line
+  box and whether it has any ink -- from ring 0 (`QUERY_FONTGLYPH`) and
+  from a client's own mapping of the atlas (`WIN_REQ_FONT`), and
+  compares them with an FNV-1a hash over the coverage bytes. Five things
+  to know:
+  - **`ink NONE` is the point.** A glyph that rasterised to nothing is
+    pixel-identical to a space, to a character the font does not carry,
+    and to a font that failed to load; telling those apart had no answer
+    anywhere, and the ambiguity cost a hunt (`docs/bugs.md`'s
+    session-font cell that read as blank while 101/101 glyphs had been
+    built). **`peak` is the harder half** -- a glyph can have ink and
+    still be far too faint to read, which no yes/no flag expresses.
+  - **THE TWO VIEWS ARE DIFFERENT MEMORY, and the disagreement is the
+    diagnosis.** The hash is what makes that answerable without shipping
+    a bitmap across; "these two are identical" is not a question to
+    answer by eye.
+  - **THE PICTURES ARE DIFFERENT DEPTHS ON PURPOSE.** Client: 8-bit
+    coverage as a grayscale ramp, because how dark the ink is belongs to
+    whoever draws it and a collapsed anti-alias is present, non-blank
+    and unreadable. Kernel: a 1-bit ink map, because where the ink is
+    belongs to ring 0 -- and a query record is capped at 256 bytes
+    (`api/query.h`), which no cell's coverage bytes fit in.
+  - **THE CLIENT HALF NEEDS A COMPOSITOR** (`win_server_request()`
+    refuses everything with no role holder and no ring-0 presentation
+    layer) and a SCHEDULED process -- so at a `#` prompt, where the
+    legacy loader has no slot, only the kernel view is reachable. It
+    says which refusal it hit rather than blaming the desktop.
+  - **A CODEPOINT IS ACCEPTED AS WELL AS A CHARACTER** (`0x20`, `U+0020`,
+    `32`), and that is not a convenience: a space cannot be passed as an
+    argument through any shell here, and a space is exactly what you
+    compare a suspected-blank glyph against.
 - **A LOADED FACE STILL ONLY DRAWS 101 GLYPHS.** The boundary that
   surprises people who have just seen a
   real TTF load. An atlas rasterizes exactly the set `tools/genttf.py`

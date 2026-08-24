@@ -2875,6 +2875,26 @@ but "disabled" is sticky across rescans and a descriptor may legitimately
 gain an `Exec=` later, so the right semantics need a moment's thought
 rather than a one-line patch.
 
+### `gui_regress.py`'s `uterm` fails its two `edit` checks under full parallel load
+
+`the editor's cursor sequences MOVED the caret, not printed` and `a
+full-screen editor runs IN THE WINDOW and saves`, both from
+`uterm_test.py`. **PRE-EXISTING**, and measured rather than assumed: 3
+runs in 3 under the full suite on 2026-08-24, of which the third was
+HEAD with that day's work stashed and rebuilt -- same two checks, same
+`25 passed, 2 failed`. Run on its own, `gui_regress.py --only uterm`
+gives 27/27.
+
+It is the load class `docs/bugs.md` already lists twice (lost clicks,
+`uidemo`): port-safe parallel tools still compete for cores, and `edit`
+is a full-screen program whose checks are about escape sequences
+arriving in order. No diagnosis beyond that has been attempted, and none
+should be inferred from this entry -- what is recorded is the rate and
+the fact that it does not depend on the surrounding change.
+
+Repro: `python3 tools/gui_regress.py --logs DIR`, then read
+`DIR/uterm.log`. Compare against `--only uterm`.
+
 ### `heap-debug`'s use-after-free check fails about 1 run in 15
 
 `mm_test.c`'s "a write through a freed pointer is caught by

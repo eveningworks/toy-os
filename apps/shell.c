@@ -134,8 +134,6 @@ static void dispatch(char *line) {
         cmd_fsformat(args ? args : "");
     } else if (k_strcmp(cmd, "ktest") == 0) {
         cmd_ktest(args ? args : "");
-    } else if (k_strcmp(cmd, "dmesg") == 0) {
-        cmd_dmesg();
     } else if (k_strcmp(cmd, "debug") == 0) {
         cmd_debug(args ? args : "");
     } else if (k_strcmp(cmd, "color") == 0) {

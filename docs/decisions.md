@@ -31,7 +31,7 @@ first before re-litigating it from scratch.
 
 ## Index
 
-**Kernel, memory & processes** -- [`decisions/kernel.md`](decisions/kernel.md) (99 entries)
+**Kernel, memory & processes** -- [`decisions/kernel.md`](decisions/kernel.md) (100 entries)
 
 - [IRQ registration: one handler per line, framework-automatic EOI](decisions/kernel.md#irq-registration-one-handler-per-line-framework-automatic-eoi)
 - [Blocking I/O waits: hlt when safe, poll when inside a syscall](decisions/kernel.md#blocking-io-waits-hlt-when-safe-poll-when-inside-a-syscall)
@@ -132,6 +132,7 @@ first before re-litigating it from scratch.
 - [The keyboard tap is off by default, and `kbd` never reads a key](decisions/kernel.md#the-keyboard-tap-is-off-by-default-and-kbd-never-reads-a-key)
 - [Every key on the keyboard reports something now, and the keypad reports characters](decisions/kernel.md#every-key-on-the-keyboard-reports-something-now-and-the-keypad-reports-characters)
 - [Readiness is a syscall the kernel does nothing with, and the barrier always expires](decisions/kernel.md#readiness-is-a-syscall-the-kernel-does-nothing-with-and-the-barrier-always-expires)
+- [The kernel log leaves ring 0 as byte slices with absolute offsets, not as lines or a device](decisions/kernel.md#the-kernel-log-leaves-ring-0-as-byte-slices-with-absolute-offsets-not-as-lines-or-a-device)
 
 **Filesystem & storage** -- [`decisions/storage.md`](decisions/storage.md) (39 entries)
 
@@ -196,7 +197,7 @@ first before re-litigating it from scratch.
 - [A TrueType rasterizer in the kernel, with the baked font kept as the fallback](decisions/drivers.md#a-truetype-rasterizer-in-the-kernel-with-the-baked-font-kept-as-the-fallback)
 - [A virtio device is published to its handler BEFORE its interrupt is enabled](decisions/drivers.md#a-virtio-device-is-published-to-its-handler-before-its-interrupt-is-enabled)
 
-**GUI: window manager, compositor & widgets** -- [`decisions/gui.md`](decisions/gui.md) (120 entries)
+**GUI: window manager, compositor & widgets** -- [`decisions/gui.md`](decisions/gui.md) (121 entries)
 
 - [The ring-3 WM owns the back buffer, and its death drops you to a text shell](decisions/gui.md#the-ring-3-wm-owns-the-back-buffer-and-its-death-drops-you-to-a-text-shell)
 - [The compositor's back buffer is ring-3 memory, and getting it there took two kernel fixes](decisions/gui.md#the-compositors-back-buffer-is-ring-3-memory-and-getting-it-there-took-two-kernel-fixes)
@@ -318,6 +319,7 @@ first before re-litigating it from scratch.
 - [File operations are child processes, not loops inside the window](decisions/gui.md#file-operations-are-child-processes-not-loops-inside-the-window)
 - [A mark names a ROW, so every reload clears the marks](decisions/gui.md#a-mark-names-a-row-so-every-reload-clears-the-marks)
 - [`Handles=` on a `.desktop` entry, and no MIME database](decisions/gui.md#handles-on-a-desktop-entry-and-no-mime-database)
+- [A glyph probe reads BOTH the kernel's atlas and a client's mapping, and compares them](decisions/gui.md#a-glyph-probe-reads-both-the-kernels-atlas-and-a-clients-mapping-and-compares-them)
 
 **Shell, apps & console** -- [`decisions/shell.md`](decisions/shell.md) (27 entries)
 
@@ -349,7 +351,7 @@ first before re-litigating it from scratch.
 - [`tty` reports the console rather than naming it, and the wait reason lives INSIDE `ps`'s state](decisions/shell.md#tty-reports-the-console-rather-than-naming-it-and-the-wait-reason-lives-inside-pss-state)
 - [A terminal is an OBJECT, and there is one implementation of `Ctrl-C`](decisions/shell.md#a-terminal-is-an-object-and-there-is-one-implementation-of-ctrl-c)
 
-**Build, versioning & project docs** -- [`decisions/build.md`](decisions/build.md) (26 entries)
+**Build, versioning & project docs** -- [`decisions/build.md`](decisions/build.md) (27 entries)
 
 - [There is no changelog, milestones are named, and nothing carries a target version](decisions/build.md#there-is-no-changelog-milestones-are-named-and-nothing-carries-a-target-version)
 - [The demo ISO is a separate image, and its tour is a file on it](decisions/build.md#the-demo-iso-is-a-separate-image-and-its-tour-is-a-file-on-it)
@@ -377,9 +379,10 @@ first before re-litigating it from scratch.
 - [`struct dirent` became `struct sys_dirent`](decisions/build.md#struct-dirent-became-struct-sys_dirent)
 - [`%f` is a LINKED SPLIT, not an `#ifdef` and not a runtime hook](decisions/build.md#f-is-a-linked-split-not-an-ifdef-and-not-a-runtime-hook)
 - [Doom is a vendored port linked into one binary, and it found a printf bug](decisions/build.md#doom-is-a-vendored-port-linked-into-one-binary-and-it-found-a-printf-bug)
+- [printf's unknown-conversion path is a bug amplifier, so the case table is exhaustive rather than interesting](decisions/build.md#printfs-unknown-conversion-path-is-a-bug-amplifier-so-the-case-table-is-exhaustive-rather-than-interesting)
 
 **Workflow, testing & tooling** -- [`decisions/workflow.md`](decisions/workflow.md) (1 entries)
 
 - [The GUI suite's wall clock is its slowest tool, so the fix was a timeout knob rather than parallelism](decisions/workflow.md#the-gui-suites-wall-clock-is-its-slowest-tool-so-the-fix-was-a-timeout-knob-rather-than-parallelism)
 
-<!-- 330 entries. Generated by tools/gen_decisions_index.py -- do not edit below the marker by hand. -->
+<!-- 333 entries. Generated by tools/gen_decisions_index.py -- do not edit below the marker by hand. -->

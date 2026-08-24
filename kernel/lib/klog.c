@@ -51,12 +51,19 @@
 static char klog_buf[KLOG_BUF_SIZE];
 static uint32_t klog_head = 0;  // next write position, wraps mod KLOG_BUF_SIZE
 static uint32_t klog_count = 0; // valid bytes currently buffered, caps at KLOG_BUF_SIZE
+// EVERY BYTE EVER WRITTEN, never reset and never wrapped in practice --
+// 64 bits at this log's rate is longer than any machine will run. It is
+// what gives a byte in the ring a name that stays true after the ring
+// has moved past it; see klog_read(). Monotonic for the same reason
+// kbdtap's `seq` is.
+static uint64_t klog_total = 0;
 static int at_line_start = 1;   // true at boot and right after the last '\n' written
 
 static void klog_buf_putc(char c) {
     klog_buf[klog_head] = c;
     klog_head = (klog_head + 1) % KLOG_BUF_SIZE;
     if (klog_count < KLOG_BUF_SIZE) klog_count++;
+    klog_total++;
 }
 
 // Writes "[secs.hh] " straight into the ring buffer (not through
@@ -124,6 +131,46 @@ void klog_write_hex(uint64_t n) {
     klog_write("0x");
     klog_write(buf);
 }
+
+// A SLICE OF THE RING, for a reader that is not a callback -- the query
+// provider (kernel/lib/klog_query.c), which has to fill a fixed-size
+// record and hand it across the syscall boundary rather than stream
+// into a sink.
+//
+// **`from` IS AN ABSOLUTE OFFSET, counted from the first byte ever
+// logged, and that is what makes a walking reader safe.** The ring
+// overwrites its oldest bytes as the kernel keeps logging, so a reader
+// that walked by ring position would silently re-read or skip whatever
+// moved under it between two calls. An absolute offset cannot: a
+// reader that asks for a range which has already aged out is told so
+// (0 bytes copied and *out_first set past what it asked for) rather
+// than handed different bytes than it expected. Linux's /dev/kmsg
+// gives every record a sequence number for exactly this, and prints a
+// '-' when a reader notices a gap.
+//
+// Returns bytes copied. `out_first` receives the absolute offset the
+// FIRST copied byte actually came from, which is `from` clamped up to
+// the oldest byte still retained -- so a reader compares the two and
+// knows whether it lost anything.
+uint32_t klog_read(uint64_t from, char *out, uint32_t cap, uint64_t *out_first) {
+    uint64_t total = klog_total;
+    uint64_t oldest = (total > KLOG_BUF_SIZE) ? total - KLOG_BUF_SIZE : 0;
+    if (from < oldest) from = oldest;
+    if (out_first) *out_first = from;
+    if (!out || !cap || from >= total) return 0;
+
+    uint64_t avail = total - from;
+    uint32_t n = (avail < cap) ? (uint32_t)avail : cap;
+    for (uint32_t i = 0; i < n; i++)
+        out[i] = klog_buf[(uint32_t)((from + i) % KLOG_BUF_SIZE)];
+    return n;
+}
+
+// How many bytes have EVER been written, and how many are still
+// retained. The pair is what a reader needs to size its walk and to
+// notice that the window moved.
+uint64_t klog_total_bytes(void) { return klog_total; }
+uint32_t klog_retained_bytes(void) { return klog_count; }
 
 void klog_dump(void (*putc_cb)(char c)) {
     uint32_t start = (klog_count < KLOG_BUF_SIZE) ? 0 : klog_head;

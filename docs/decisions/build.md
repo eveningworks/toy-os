@@ -1077,3 +1077,62 @@ formatter at the same time. The KTEST that used to assert the old
 behaviour (`%.3d` of 5 is `"5"`) now asserts `"005"` and explains why it
 changed. **This is the case for building somebody else's program**: the
 formatter had tests, the tests passed, and the tests encoded the bug.
+
+## printf's unknown-conversion path is a bug amplifier, so the case table is exhaustive rather than interesting
+
+`kernel/lib/kfmt.c` is the kernel's formatter and, compiled a second
+time into `libc.a`, tolibc's `printf` and `snprintf`. Its handling of a
+conversion it does not recognise is to emit the letters literally and
+consume no argument — which is the documented behaviour, is deliberate,
+and is stated in a comment that calls the alternative "far worse".
+
+The trouble is what it does to a *missing feature*. A conversion nobody
+implemented is indistinguishable from a typo, so it takes the literal
+path, eats nothing, and **every later conversion in the same call reads
+the wrong argument**. A gap therefore corrupts output that has nothing
+to do with it, arbitrarily far away from itself, and the symptom points
+somewhere else entirely.
+
+Three have shipped:
+
+- **`%.3d`** — precision ignored on integers. Doom asked its WAD for
+  lump `STCFN33` instead of `STCFN033` and died at startup with
+  `W_GetNumForName: STCFN33 not found!`, which reads as a missing file.
+- **`%X`** — missing entirely. `/bin/font` printed `U+%04X slot %d` and
+  got `U+%04X slot 103`: the `%X` consumed nothing, so the `%d` read the
+  codepoint and the slot number vanished. Diagnosed as a wrong slot
+  lookup first.
+- **`%p`, `%o`, `%+d`, `% d`, `%#x`, `%hd`, `%hhd`** — found by reading
+  the switch after the second one, before anything tripped over them.
+  `%p` and `%hu` in particular are what ported C reaches for constantly.
+
+So the rule the case table encodes is that **every conversion and every
+flag C defines has a case, including the ones this implementation does
+nothing with**. `h` and `hh` are accepted and ignored, because default
+argument promotion has already widened a `short` or a `char` to `int`
+and there is nothing narrower to read — but they must be *consumed*, and
+"does nothing" and "is not parsed" look identical until the argument
+after them moves.
+
+**Consumption is asserted separately from rendering**, which is the part
+that would be easy to leave out. Each of those cases puts a second `%d`
+after the conversion under test and pins its value; a case checking only
+the first conversion's own output passes happily while the rest of the
+line is wrong — which is exactly how `%X` survived until a person read
+an odd-looking slot number.
+
+**The table runs in both rings**, as `klineedit_cases.h` does and for
+the same reason plus one. kfmt is compiled twice, so "the same source"
+is not "the same behaviour" across two code models and two warning sets;
+and its header is one file over two implementations (`kfmt.c` shared,
+`kfmt_print.c` kernel-only), so a kernel-only include creeping into the
+shared half takes `snprintf` away from userland with no KTEST noticing.
+The ring-3 half also goes through `<stdio.h>`'s `snprintf` rather than
+`k_snprintf`, so a libc wrapper that had drifted from the shared
+formatter is caught rather than agreeing with itself.
+
+`%n` stays deliberately absent — it is the one conversion that writes
+through a caller-supplied pointer, and it has been a security footgun
+everywhere it exists. Floating point stays behind `k_fmt_float()`,
+because `va_arg(ap, double)` alone emits SSE in a kernel built
+`-mno-sse`.

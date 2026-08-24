@@ -43,6 +43,27 @@ void klog_write_hex(uint64_t n);
 // for it, not a userdata pointer.
 void klog_dump(void (*putc_cb)(char c));
 
+// A SLICE OF THE RING BY ABSOLUTE OFFSET -- what /bin/dmesg reads
+// through QUERY_KLOG, and what klog_dump() above cannot express: a
+// callback streams, and a syscall has to fill a fixed buffer and
+// return.
+//
+// `from` counts from the first byte ever logged, not from a ring
+// position, because the ring moves under a reader that takes more than
+// one call to walk it. A reader compares `from` against the
+// `*out_first` it gets back: if the second is larger, bytes it asked
+// for had already aged out. That is the guarantee /dev/kmsg's sequence
+// numbers give on Linux.
+//
+// Returns bytes copied, 0 at the end of the log.
+uint32_t klog_read(uint64_t from, char *out, uint32_t cap, uint64_t *out_first);
+
+// Bytes ever written, and bytes still retained. The first is monotonic
+// and is what an offset is relative to; the second is at most
+// KLOG_BUF_SIZE.
+uint64_t klog_total_bytes(void);
+uint32_t klog_retained_bytes(void);
+
 // Mirrors every klog_write()/klog_putc() byte to the physical console
 // as well as the serial port, while enabled.
 //

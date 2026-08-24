@@ -77,6 +77,36 @@ static void put_str(struct out *o, const char *s) {
 // C also says the '0' FLAG IS IGNORED when a precision is given -- so
 // `%08.3d` of 42 is "     042", not "00000042". Getting that wrong is
 // invisible until something formats a fixed-width field two ways.
+// `is_hex` is three-valued: 0 decimal, 1 lowercase hex (%x), 2 UPPERCASE
+// hex (%X). A third state rather than a ninth parameter, and the case is
+// applied here rather than in k_htoa() -- knum.h's converters are shared
+// with the kernel and have their own tests, and "which case" is a printf
+// concern, not a number-to-string one.
+// OCTAL, kept apart from put_num() rather than folded in as a fourth
+// base. put_num() delegates to knum.h's converters, which have no octal
+// one and do not want a base parameter for a single caller -- so this
+// is the whole conversion, twelve lines, next to the only thing that
+// uses it.
+static void put_oct(struct out *o, uint64_t v, unsigned width, int zero,
+                     int left, int alt) {
+    char tmp[24];
+    int n = 0;
+    if (!v) tmp[n++] = '0';
+    while (v) { tmp[n++] = (char)('0' + (v & 7)); v >>= 3; }
+    // C's '#' on octal means "make sure it starts with a 0", so a value
+    // that already does gains nothing -- unlike hex's 0x, which is
+    // always two extra characters.
+    if (alt && tmp[n - 1] != '0') tmp[n++] = '0';
+
+    int digits = n;
+    if (!left) for (int i = digits; i < (int)width; i++) put(o, zero ? '0' : ' ');
+    while (n--) put(o, tmp[n]);
+    // Left-justified fields pad with SPACES whatever the '0' flag says
+    // -- C ignores '0' when '-' is given, since zeros on the right of a
+    // number would change its value rather than its column.
+    if (left) for (int i = digits; i < (int)width; i++) put(o, ' ');
+}
+
 static void put_num(struct out *o, uint64_t v, int is_signed, int is_hex,
                      unsigned width, int zero, int left, int prec) {
     char tmp[24];
@@ -96,6 +126,9 @@ static void put_num(struct out *o, uint64_t v, int is_signed, int is_hex,
     if (prec > 0 && (unsigned)prec > pad_width) pad_width = (unsigned)prec;
     if (is_hex) {
         k_htoa(v, tmp, sizeof tmp, pad_width);
+        if (is_hex == 2)
+            for (char *q = tmp; *q; q++)
+                if (*q >= 'a' && *q <= 'f') *q = (char)(*q - 'a' + 'A');
     } else if (is_signed) {
         k_itoa((int64_t)v, tmp, sizeof tmp);
         // knum has no signed zero-padding variant (nothing needs one),
@@ -151,8 +184,23 @@ static void vformat(struct out *o, const char *fmt, va_list ap) {
         // this toolkit exists to absorb, and `%-17s` reads as working
         // to anyone who has used printf. Before this it emitted the
         // format specifier itself into the output.
-        int left = 0;
-        if (*p == '-') { left = 1; p++; }
+        // EVERY C FLAG IS PARSED, INCLUDING THE ONES WITH NO EFFECT
+        // HERE, and that is the point rather than pedantry: an
+        // unrecognised character falls through to the literal path at
+        // the bottom, which consumes NO argument and desynchronises
+        // every later conversion in the same call. So `%+d` did not
+        // merely lose its plus -- it shifted the rest of the line.
+        // Parsing a flag costs one branch; not parsing one costs the
+        // whole format string. Same reasoning as %X and the length
+        // modifiers below.
+        int left = 0, plus = 0, space = 0, alt = 0;
+        for (;;) {
+            if (*p == '-')      { left = 1;  p++; }
+            else if (*p == '+') { plus = 1;  p++; }
+            else if (*p == ' ') { space = 1; p++; }
+            else if (*p == '#') { alt = 1;   p++; }
+            else break;
+        }
 
         // C's '0' FLAG, which has to be read before the width digits or
         // it is indistinguishable from a leading zero in the number.
@@ -196,6 +244,13 @@ static void vformat(struct out *o, const char *fmt, va_list ap) {
         int wide = 0;
         while (*p == 'l') { wide = 1; p++; }
         if (*p == 'z') { wide = 1; p++; } // size_t, as in %zu
+        // h and hh are ACCEPTED AND IGNORED, which is correct rather
+        // than lazy: default argument promotion has already widened a
+        // short or a char to int by the time it reaches va_arg, so
+        // there is nothing narrower to read. What matters is that they
+        // are CONSUMED -- an unparsed 'h' hits the literal path and
+        // takes the rest of the call's arguments with it.
+        while (*p == 'h') p++;
 
         switch (*p) {
         // %i is C's alias for %d in printf (they differ only in
@@ -203,18 +258,75 @@ static void vformat(struct out *o, const char *fmt, va_list ap) {
         // first real ported program used it -- which is the kind of gap
         // only foreign code finds.
         case 'i':
-        case 'd':
-            put_num(o, wide ? (uint64_t)va_arg(ap, long) : (uint64_t)(int64_t)va_arg(ap, int),
-                     1, 0, width, zero, left, has_prec ? (int)prec : -1);
+        case 'd': {
+            int64_t sv = wide ? (int64_t)va_arg(ap, long) : (int64_t)va_arg(ap, int);
+            // '+' and ' ' apply to a NON-NEGATIVE value only; a negative
+            // one already carries its sign. '+' wins when both are
+            // given, which is what C says.
+            if (sv >= 0 && (plus || space)) {
+                // Written before the number rather than folded into
+                // put_num(), so the padding rules stay in one place --
+                // the sign is one character in front of a field that is
+                // otherwise formatted exactly as it would be without it.
+                if (width > 0) width--;
+                put(o, plus ? '+' : ' ');
+            }
+            put_num(o, (uint64_t)sv, 1, 0, width, zero, left,
+                     has_prec ? (int)prec : -1);
             break;
+        }
         case 'u':
             put_num(o, wide ? (uint64_t)va_arg(ap, unsigned long) : (uint64_t)va_arg(ap, unsigned int),
                      0, 0, width, zero, left, has_prec ? (int)prec : -1);
             break;
+        // %X IS NOT DECORATION. This file is tolibc's printf as well as
+        // the kernel's (see kfmt.h's note that it is one header and two
+        // files), and an unrecognised conversion here does not merely
+        // print wrong -- it falls through to the default below, emits
+        // the letters literally, and CONSUMES NO ARGUMENT, so every
+        // later conversion in the same call reads the wrong slot. That
+        // is how a missing %X showed up: as a slot number that was
+        // really a codepoint. Same failure class as the %.3d precision
+        // gap that sent Doom to a WAD lump that does not exist.
         case 'x':
-            put_num(o, wide ? (uint64_t)va_arg(ap, unsigned long) : (uint64_t)va_arg(ap, unsigned int),
-                     0, 1, width, zero, left, has_prec ? (int)prec : -1);
+        case 'X': {
+            uint64_t hv = wide ? (uint64_t)va_arg(ap, unsigned long)
+                                : (uint64_t)va_arg(ap, unsigned int);
+            // '#' prefixes a NON-ZERO value with 0x/0X. Zero is exempt
+            // in C, and that exemption is the whole reason the flag is
+            // safe to use in a log line: "0x0" would be wider than the
+            // value it describes.
+            if (alt && hv) {
+                if (width > 1) width -= 2;
+                put(o, '0');
+                put(o, *p == 'X' ? 'X' : 'x');
+            }
+            put_num(o, hv, 0, *p == 'X' ? 2 : 1, width, zero, left,
+                     has_prec ? (int)prec : -1);
             break;
+        }
+        // OCTAL, which nothing in this tree prints and ported code does
+        // -- file modes are the usual reason. Cheap to have and, like
+        // every other conversion here, ruinous to lack: the gap is not
+        // a wrong number but a desynchronised argument list.
+        case 'o':
+            put_oct(o, wide ? (uint64_t)va_arg(ap, unsigned long)
+                             : (uint64_t)va_arg(ap, unsigned int),
+                     width, zero, left, alt);
+            break;
+        // A POINTER, as "0x" plus lowercase hex -- glibc's rendering,
+        // and what every log line that prints one already writes by
+        // hand as "0x%lx". NULL is "(nil)", also glibc's, because a
+        // bare 0x0 in a crash report reads as an address that happens
+        // to be low rather than as the absence of one.
+        case 'p': {
+            uint64_t pv = (uint64_t)(uintptr_t)va_arg(ap, void *);
+            if (!pv) { put_str(o, "(nil)"); break; }
+            put(o, '0');
+            put(o, 'x');
+            put_num(o, pv, 0, 1, 0, 0, 0, -1);
+            break;
+        }
         case 'c': put(o, (char)va_arg(ap, int)); break;
         case 's': {
             const char *s = va_arg(ap, const char *);

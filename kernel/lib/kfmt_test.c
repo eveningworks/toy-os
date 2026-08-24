@@ -4,6 +4,7 @@
 // one shared implementation instead of six.
 #include "ktest.h"
 #include "kfmt.h"
+#include "kfmt_cases.h"
 #include "string.h"
 
 static int eq(const char *a, const char *b) { return k_strcmp(a, b) == 0; }
@@ -279,4 +280,30 @@ KTEST("kfmt", "a precision DISABLES the '0' flag, and %.0d of zero is empty") {
     KTEST_ASSERT(eq(b, "[]"));
     k_snprintf(b, sizeof b, "[%.0d]", 7);
     KTEST_ASSERT(eq(b, "[7]"));
+}
+
+// THE SHARED TABLE, run in ring 0. Its twin is /tests/kfmt_test, which
+// runs the identical cases through libc.a's copy of this formatter --
+// see api/kfmt_cases.h for why a case has to be asserted from both
+// rings rather than just from here.
+KTEST("kfmt", "every conversion and flag in the shared case table") {
+    char got[128];
+    for (int i = 0; i < kfmt_case_count; i++) {
+        if (kfmt_case_run(&kfmt_cases[i], got, sizeof got)) continue;
+        // The FORMAT is named, not the index: an index moves the moment
+        // somebody inserts a case, and a failure report that points at
+        // the wrong line is worse than one that points nowhere.
+        klog_printf("kfmt: case \"%s\" gave \"%s\", wanted \"%s\"\n",
+                    kfmt_cases[i].fmt, got, kfmt_cases[i].want);
+        KTEST_ASSERT(0);
+    }
+}
+
+// A FLOOR ON THE TABLE'S SIZE, which is not a tautology. The table is
+// the only thing standing between this formatter and a fourth silent
+// argument-desynchronisation, so a change that empties it -- a bad
+// merge, a mis-edited array -- must fail rather than pass vacuously.
+// The same guard /tests/klineedit_test carries, for the same reason.
+KTEST("kfmt", "the shared case table is not empty") {
+    KTEST_ASSERT(kfmt_case_count >= 40);
 }

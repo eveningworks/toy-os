@@ -209,4 +209,10 @@ void tty_query_init(void);
 // handler; see kernel/keyboard_tap.h for why it records unconditionally.
 void kbdtap_query_init(void);
 
+// QUERY_FONTGLYPH -- kernel/drivers/font_query.c.
+void fontglyph_query_init(void);
+
+// QUERY_KLOG -- kernel/lib/klog_query.c.
+void klog_query_init(void);
+
 #endif // QUERY_H
