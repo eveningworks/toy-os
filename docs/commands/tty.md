@@ -77,6 +77,8 @@ read of fd 0 and the foreground group is set by a shell through
 a command that could set either would be a way to point somebody else's
 `Ctrl-C` at a process of your choosing.
 
-**There is one console, so there is one record.** Multiple virtual
-terminals are a roadmap item; when they land `QUERY_TTY` becomes a list
-and this grows a row per terminal.
+**It lists terminals, not virtual consoles.** `QUERY_TTY` is a list
+already -- `tty0` plus a pty per Terminal window -- which is what the
+row-per-terminal listing above is. Multiple virtual CONSOLES (several
+`tty` devices on one screen, switched between) are still a roadmap item,
+and would add rows here rather than change the shape.

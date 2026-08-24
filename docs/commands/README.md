@@ -82,6 +82,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`ata`](ata.md)
 - [`dmesg`](dmesg.md)
 - [`heap`](heap.md)
+- [`kbd`](kbd.md)
 - [`kstack`](kstack.md)
 - [`lscpu`](lscpu.md)
 - [`lspci`](lspci.md)

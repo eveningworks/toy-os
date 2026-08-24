@@ -558,6 +558,49 @@ manual steps to be worth automating:
   KCMDLINE="target=text"`. Not in `gui_regress.py`; run it after
   touching the scheduler's parentage, reaping, `SYS_SLEEP`, the target
   setting or the service descriptors.
+- **`kbd_test.py`** -- **`kbd`'s four columns, on both input drivers.**
+  Boots twice (PS/2, then `--virtio-input`), types four keys chosen so
+  each exercises a different part of the path, and asserts every column
+  of the table against what each stage must say: `a` (the plain case),
+  `Shift+a` (the same keycode producing a different character, plus a
+  modifier key that produces none), `F5` (a `KEY_*` code rather than a
+  character), and Up (an extended `0xE0` scancode, whose keycode is NOT
+  its wire byte -- the one shape a naive tap gets wrong).
+
+  **THE LOAD-BEARING HALF IS THE SECOND BOOT.** Reading back `1e 30 'a'`
+  on PS/2 proves only that the tool can read its own kernel's ring; a tap
+  that echoed the wire byte would pass it. The same keys on virtio-input
+  must give the SAME keycode and the SAME character with the scancode
+  column BLANK -- the input core's whole reason for existing, and not
+  something an implementation that is not really reading each stage can
+  fake. Stated as its own check at the end rather than left implicit in
+  two passing lists.
+
+  Both positive controls were run and each reddened exactly its own
+  claim: dropping the wire byte (`key_event(..., 0, extended)`) failed
+  the five scancode checks and the parity check and left every
+  keycode/character check green; making `kbdtap_produced()` a no-op
+  failed the character checks in BOTH boots -- and the live-mode Esc
+  check with them, which is the sign that check is genuinely coupled to
+  the data it claims to test.
+
+  Three harness traps are written into it, all paid for here. **`"ready"
+  not in out` matches "al-ready running"**, so the readiness test passes
+  on the one output that means the opposite -- matched as `"vm: ready"`.
+  **A fresh slot per boot**, because this tool's own `QMPSession` leaves
+  the QMP port in TIME_WAIT on the server side for about a minute after
+  the guest dies, and `port_guard` correctly refuses the next boot on it;
+  pinning both boots to one slot made a socket-lifetime problem look like
+  a virtio failure. And **`ps` is read for STATE, not for the name** --
+  the kernel shell's `spawn` does not reap, so earlier `kbd` zombies make
+  "is kbd running" answer yes forever.
+
+  Runs `kbd --last` through the legacy `run` loader rather than `spawn`,
+  because a spawned process's stdout goes to the console framebuffer and
+  never reaches the serial socket. Live mode is checked through the
+  process table instead, for exactly that reason. Not in
+  `gui_regress.py`: it boots twice and prints a table, so there are no
+  pixels in it.
 - **`keyboard_paths_test.py`** -- **the same keys do the same thing
   whichever driver reported them.** Boots the `text` target twice per
   input path (PS/2, then `--virtio-input`), on the `se` layout, and

@@ -203,4 +203,10 @@ void kstack_query_init(void);
 // against either of them does not matter.
 void tty_query_init(void);
 
+// kernel/drivers/input/'s rolling log of key events -- the scancode, the
+// keycode, the character and the modifiers of each, which /bin/kbd
+// prints. A LIST over a ring the driver fills from its interrupt
+// handler; see kernel/keyboard_tap.h for why it records unconditionally.
+void kbdtap_query_init(void);
+
 #endif // QUERY_H

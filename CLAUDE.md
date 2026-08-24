@@ -483,6 +483,7 @@ whenever a headline here tells you something you did not already know.
 - **The kernel's idle work has ONE owner: `scheduler_idle()`**
 - **EVERY KEY REPORTS SOMETHING, AND THE KEYPAD REPORTS CHARACTERS** -- Insert, Menu, the locks, Pause, Print Screen and the keypad used to produce nothing at all; the function row is complete F1-F12; the keypad emits its keycaps' characters rather than new codes; NumLock's off-state is deliberately not modelled; Pause has no release; the fake shifts around Print Screen are dropped.
 - **INPUT DEVICES REGISTER WITH THE INPUT CORE, and the canonical event is evdev -- including `/etc/kbs`, so only the PS/2 driver ever sees a scancode**
+- **THE KERNEL KEEPS A ROLLING LOG OF KEY EVENTS, AND `kbd` PRINTS IT** -- all four encodings of one keypress on one line (PS/2 scancode, evdev keycode, character, modifiers); recorded UNCONDITIONALLY, so the question can be asked after the key misbehaved rather than only before; keyboard only; and the tool never reads a keyboard, which is what lets it run inside a Terminal window without stealing a key from the desktop.
 - **VIRTIO INTERRUPTS ARE OPT-IN, a forgotten ISR read hangs the machine, and ENABLING IS THE LAST STEP** -- `virtio_intx_line()` then `virtio_intx_enable()`, publish first and enable last; a device that can interrupt before its handler can see it hangs the machine exactly as a forgotten ISR read does, and only under KVM.
 - **USING A SUBSYSTEM BEFORE ITS init() IS A PANIC, not a soft failure**
 - **A panic NAMES THE FUNCTION**
@@ -1013,7 +1014,13 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   since the console is what it photographs), `init_test.py` (init and
   service supervision), `console_shell_test.py` (a `text` boot reaching a ring-3
   prompt with the kernel shell stood down; boots twice and rewrites
-  `/etc`), `keyboard_paths_test.py` (**the same keys do the same thing on
+  `/etc`),
+  `kbd_test.py` (**`kbd`'s four columns, on both input drivers** -- the
+  load-bearing half is the SECOND boot: the same keys must give the same
+  keycode and the same character on `INPUT=virtio` with the scancode
+  column BLANK, which nothing that is not really reading each stage can
+  fake),
+  `keyboard_paths_test.py` (**the same keys do the same thing on
   PS/2 and on virtio-input** -- boots both, types `_` and `|`, and asserts
   through the FILESYSTEM rather than the screen, because `_` draws
   nothing on the ring-0 console and a screenshot cannot tell that from a

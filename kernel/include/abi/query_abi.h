@@ -148,6 +148,18 @@ struct query_msg {
 // console" by name.
 #define QUERY_TTY       13
 
+// The last few hundred KEY EVENTS, as the driver saw them: the PS/2 wire
+// byte, the evdev keycode, what entered the byte stream, and which
+// modifiers were held. LIST, oldest retained record first.
+//
+// **A RING THE KERNEL KEEPS WHETHER OR NOT ANYTHING IS READING**, which
+// is the whole point and the reason it is not an arm-and-drain
+// interface: the question this answers is "what did the key I just
+// pressed actually do", asked AFTER it did the wrong thing. An
+// on-demand tap can only ever watch keys pressed from now on, so every
+// use of it starts by reproducing the bug. dmesg makes the same trade.
+#define QUERY_KBDTAP    14
+
 
 // QUERY_PROVIDERS' record.
 struct query_provider_info {
@@ -396,6 +408,55 @@ struct query_tty {
                               // discipline is doing: canonical, echoing,
                               // signal-generating
     char     driver[QUERY_NAME_MAX]; // "console", "pty"
+};
+
+// QUERY_KBDTAP's record -- ONE KEY EVENT, at every stage at once.
+//
+// The four columns are four different encodings of the same keypress,
+// and a keyboard bug is almost always one stage disagreeing with the
+// next: the wire said the right thing and the keycode is wrong (a hole
+// in a translation table), or the keycode is right and the character is
+// wrong (the layout file). Reading them one at a time cannot show that,
+// which is why they are one record rather than four facts.
+//
+// A LIST, so NO named fields (see api/query.h): an index baked into a
+// name would mean a different keypress a second later.
+
+// `wire` carries the 0xE0 prefix as a FLAG rather than as a second
+// record, because the prefix is not an event -- nothing happened when
+// it arrived, and a reader counting keypresses must not see two.
+#define QUERY_KBDTAP_EXTENDED (1u << 0) // the byte followed an 0xE0 prefix
+#define QUERY_KBDTAP_DOWN     (1u << 1) // a press; absent means a release
+
+// How many codes one event can put into the byte stream. TWO, because
+// Alt-<key> is encoded terminal-style as ESC then the key (api/
+// keyboard.h) and that is one keypress producing two bytes. Nothing
+// here produces three.
+#define QUERY_KBDTAP_PRODUCED_MAX 2
+
+struct query_kbdtap {
+    // MONOTONIC AND NEVER REUSED, which is what makes a ring readable
+    // through a snapshot interface: a reader remembers the last seq it
+    // printed, so a record it has already seen is recognisable and a
+    // GAP is a burst it missed rather than a silent loss.
+    uint64_t seq;
+    uint64_t ticks;      // pit_ticks() when it arrived (api/timer.h)
+    uint64_t flags;      // QUERY_KBDTAP_*
+    // The PS/2 wire byte, INCLUDING its release bit -- 0x1E is A down
+    // and 0x9E is A up, which is what the wire really said. **ZERO
+    // MEANS THE KEY DID NOT ARRIVE OVER PS/2 AT ALL** (0x00 is not a
+    // scancode), and that is a fact worth reading rather than a hole:
+    // a virtio-input or USB keyboard has no scancodes to report, and a
+    // blank column names which driver you are debugging.
+    uint64_t wire;
+    uint64_t keycode;    // Linux evdev (kernel/input.h's INPUT_KEY_*)
+    uint64_t mods;       // KEY_MOD_* held when it was processed
+    // What this event put into the console byte stream: the KEY_* codes
+    // and characters of api/keyboard.h. Zero-filled past `produced`,
+    // and a `produced` of 0 is honest -- a modifier, a release, and a
+    // key this layout does not map all produce nothing.
+    uint64_t produced;   // how many of the two below are meaningful
+    uint64_t produced_code[QUERY_KBDTAP_PRODUCED_MAX];
 };
 
 #endif // ABI_QUERY_ABI_H

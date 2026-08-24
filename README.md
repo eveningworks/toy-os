@@ -355,7 +355,10 @@ its own cursor queue, programming the mode itself so `video=1920x1080`
 is honoured rather than left to whatever GRUB negotiated, and
 **`virtio-input`** (keyboard, mouse and tablet) feeding an **input core**
 whose canonical event is evdev-shaped, so PS/2, virtio and a future USB
-HID driver are all sources in one registry — and the first virtio
+HID driver are all sources in one registry — with a rolling log of the
+last few hundred key events that `kbd` prints as all four encodings at
+once (scancode, keycode, character, modifiers), which is how a key that
+works on one keyboard and not another stops being a mystery — and the first virtio
 devices here to complete on a real interrupt rather than a poll. One
 transport, so the next device (net) is a driver rather than a
 bring-up project — and it is about **10× ATA's write throughput under

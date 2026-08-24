@@ -307,6 +307,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     ata_query_init();
     kstack_query_init();
     tty_query_init();
+    kbdtap_query_init();
     settings_init();
 
     // One-shot boot-time CMOS/RTC readout, logged for the same reason a

@@ -4399,6 +4399,63 @@ read back the constant), and verifies every frame on the way back OUT,
 which is the half a growth bug breaks. With `grow_stack()` disabled it
 faults at `0x807fefcff8`, the first byte below the four mapped pages.
 
+## The keyboard tap records unconditionally, and `kbd` never reads a key
+
+`/bin/kbd` prints every stage of a keypress at once -- scancode,
+keycode, character, modifiers. Two things about how it gets them were
+real forks.
+
+**Why the kernel records when nobody is looking.** The obvious design is
+arm-and-drain: a tool says "start recording", reads what arrives, and
+stops. It costs nothing when unused, which for a diagnostic sounds
+right. It was rejected because it answers the wrong question. The
+question people actually have is *"what did the key I just pressed
+do?"*, asked after it did the wrong thing -- and an arm-and-drain tap
+can only ever watch keys pressed from now on, so every use of it begins
+by reproducing the bug with the tool already open. An intermittent one
+may not oblige. `dmesg` makes exactly this trade for exactly this
+reason, and Linux's evdev buffers every event whether or not a client
+holds the device node open. The price is stated rather than hidden: 5 KB
+of BSS (256 records at 20 packed bytes) and a bounded copy in the IRQ1
+handler, forever, for a tool nobody runs most days.
+
+**Why it is `evtest`'s shape and not `showkey`'s.** Linux ships both,
+because there are two questions. `showkey` puts the console keyboard
+into `K_RAW`/`K_MEDIUMRAW` and prints what arrives -- it takes the
+keyboard, works only on the console, and needs a keyboard MODE to
+switch. `evtest` reads the input core's own events from a device node:
+non-exclusive, sees everything regardless of focus, and changes nothing.
+toy-os has no keyboard modes to add and no device nodes to read, but it
+does have one confluence point every driver passes through
+(`keyboard_key_event()`) and a registry for facts, so the log is a
+`SYS_QUERY` class. That choice is what makes `kbd` usable inside a
+Terminal window while the compositor owns the keyboard -- it is reading
+a record, not competing for a queue.
+
+**A version of it did read fd 0, to tidy up.** Keys pressed during a
+live session stay queued for whoever reads fd 0 next, so the shell gets
+them when its prompt comes back; draining them at exit seemed polite.
+It was wrong twice. fd 0's non-blocking flag lives on the DESCRIPTION,
+which is shared with that shell, so a tool killed mid-drain would hand
+the shell a broken descriptor. And a console read PARKS while a
+compositor owns the keyboard whether or not the descriptor says
+non-blocking -- so the tidy-up hung the tool on precisely the ordinary
+graphical boot it is most useful on. Not draining is also what `evtest`
+does, and what any command that ignores stdin does.
+
+**And live mode refuses the legacy `run` loader by name.** There is no
+scheduler slot there, so `SYS_SLEEP` is refused (`-EPERM`) and -- the
+part that is not written down anywhere else -- the monotonic clock never
+advances either, because that context does not reach a timer tick. A
+poll loop with a deadline then spins at full speed against a deadline
+that can never arrive and takes the machine with it. `/bin/less` carries
+the same hazard as prose in a comment; prose is not enough when the
+failure mode is a dead machine rather than a slow pager, so this one is
+a guard: `sys_sleep_ms(0) < 0` means "no slot", and it says so and
+exits. It also moved the idle timeout from counting polls to reading the
+clock, since a poll count silently assumes the sleep between polls works
+and takes the length it asked for.
+
 ## Every key on the keyboard reports something now, and the keypad reports characters
 
 The `KEY_*` vocabulary grew one code per caller, which is a reasonable

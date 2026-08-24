@@ -8,6 +8,7 @@
 #include "string.h" // k_tolower() -- the Ctrl-key fold
 #include "input.h" // INPUT_KEY_* -- the evdev keycodes everything above the wire uses
 #include "tty.h" // the console terminal -- keys go to its line discipline
+#include "keyboard_tap.h" // the rolling key log /bin/kbd reads
 
 #define KBD_DATA_PORT 0x60
 
@@ -172,8 +173,17 @@ static void ring_push(uint16_t c) {
         down_code[emitting_keycode] = (uint8_t)c;
     }
     first_push_done = 1;
+    // The tap's view of the SAME push, so `kbd` can show a keycode and
+    // the character it turned into on one line. Here rather than at the
+    // ~20 call sites for the reason `emitting_keycode` is here.
+    kbdtap_produced(c);
     tty_input(tty_console(), (uint8_t)c, current_mods());
 }
+
+// Defined below, beneath keyboard_key_event() which is its public face.
+// Declared here because the PS/2 path is the one caller that has a wire
+// byte to hand it.
+static void key_event(uint16_t keycode, int down, uint16_t wire, int extended);
 
 // --- the PS/2 WIRE, and nothing above it -----------------------------
 //
@@ -251,7 +261,7 @@ void keyboard_feed_byte(uint8_t sc) {
     // tolerate it (and already must, see win_proto.h).
     if (sc == 0xE1) {
         pause_swallow = 5;
-        keyboard_key_event(INPUT_KEY_PAUSE, 1);
+        key_event(INPUT_KEY_PAUSE, 1, 0xE1, 0);
         return;
     }
     if (pause_swallow) {
@@ -268,6 +278,7 @@ void keyboard_feed_byte(uint8_t sc) {
     uint8_t code = sc & 0x7F;
 
     uint16_t keycode;
+    int extended = extended_prefix;
     if (extended_prefix) {
         extended_prefix = 0;
         keycode = ext_keycode(code);
@@ -276,7 +287,13 @@ void keyboard_feed_byte(uint8_t sc) {
         keycode = code;
     }
     if (!keycode) return;
-    keyboard_key_event(keycode, down);
+    // THE WIRE BYTE IS PASSED DOWN, not stashed in a static for the tap
+    // to pick up. A static would be written by whichever driver reported
+    // last, so a virtio keypress arriving between an 8042 byte and its
+    // decode would be logged carrying somebody else's scancode -- a
+    // wrong number in a tool whose whole job is being trusted about
+    // numbers. `sc`, not `code`: the release bit is what the wire said.
+    key_event(keycode, down, sc, extended);
 }
 
 // --- what a key MEANS, for every driver ------------------------------
@@ -286,6 +303,17 @@ void keyboard_feed_byte(uint8_t sc) {
 // property the input core exists for, and until the layout was re-keyed
 // it was not actually true -- see ext_keycode() above.
 void keyboard_key_event(uint16_t keycode, int down) {
+    // NO WIRE BYTE: everything that is not PS/2 speaks keycodes, so
+    // there is no scancode to report and the tap logs a blank rather
+    // than a plausible zero (0x00 is not a scancode).
+    key_event(keycode, down, 0, 0);
+}
+
+// The whole of the above, plus what the PS/2 wire said if it was the
+// PS/2 wire that said it. Split out for the keyboard TAP alone: nothing
+// else in this file wants to know which encoding a key arrived in, which
+// is the property the input core exists to provide.
+static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
     // Modifiers first, and they are the only keys whose RELEASE matters.
     //
     // LEFT ALT AND RIGHT ALT ARE DIFFERENT KEYS HERE, deliberately: left
@@ -299,15 +327,37 @@ void keyboard_key_event(uint16_t keycode, int down) {
     // key moved -- a Shift press reports KEY_MOD_SHIFT set. The
     // alternative reports every modifier press with the modifier absent,
     // which reads as a bug at every call site that looks.
+    //
+    // ONE EXIT rather than a `return` per case, so the tap and the
+    // transition queue are fed from the same place and cannot drift into
+    // sampling the modifier state at two different instants.
+    uint16_t mod_code = 0;
     switch (keycode) { // dispatch-ok: the modifier set is bounded by the keyboard
     case INPUT_KEY_LEFTSHIFT:
-    case INPUT_KEY_RIGHTSHIFT: shift_pressed = down; trans_push(KEY_SHIFT, down); return;
+    case INPUT_KEY_RIGHTSHIFT: shift_pressed = down; mod_code = KEY_SHIFT; break;
     case INPUT_KEY_LEFTCTRL:
-    case INPUT_KEY_RIGHTCTRL:  ctrl_pressed = down;  trans_push(KEY_CTRL, down);  return;
-    case INPUT_KEY_LEFTALT:    alt_pressed = down;   trans_push(KEY_ALT, down);   return;
-    case INPUT_KEY_RIGHTALT:   altgr_pressed = down; trans_push(KEY_ALTGR, down); return;
+    case INPUT_KEY_RIGHTCTRL:  ctrl_pressed = down;  mod_code = KEY_CTRL;  break;
+    case INPUT_KEY_LEFTALT:    alt_pressed = down;   mod_code = KEY_ALT;   break;
+    case INPUT_KEY_RIGHTALT:   altgr_pressed = down; mod_code = KEY_ALTGR; break;
     default: break;
     }
+    if (mod_code) {
+        // A modifier produces NO code in the byte stream, so the tap
+        // records the event and nothing produced -- which is the honest
+        // answer and the one that makes a Shift line readable: the
+        // character column is empty and the modifier column is not.
+        kbdtap_key(wire, extended, keycode, down, current_mods());
+        trans_push(mod_code, down);
+        return;
+    }
+
+    // EVERY OTHER KEY, BOTH EDGES, opened here -- before any of the
+    // ~20 paths below can return -- so that a key producing nothing is
+    // still logged. "The scancode arrived and the layout gave back
+    // nothing" is the single most useful line this tool prints, and a
+    // record opened only where a character is emitted could never
+    // carry it.
+    kbdtap_key(wire, extended, keycode, down, current_mods());
 
     // A RELEASE REPORTS WHAT THE PRESS PRODUCED, and then forgets it.
     // Clearing is what stops a key that is pressed, released, and then

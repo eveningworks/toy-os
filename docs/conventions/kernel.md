@@ -592,6 +592,74 @@ last given. And **an absolute device is not scaled by speed or
 acceleration**: those turn a relative device's counts into comfortable
 motion, while an absolute device is already saying where the pointer IS.
 
+## THE KERNEL KEEPS A ROLLING LOG OF KEY EVENTS, AND `kbd` PRINTS IT
+
+`kernel/include/kernel/keyboard_tap.h`, read from ring 3 through
+`QUERY_KBDTAP`, printed by `/bin/kbd`. One record per key event carrying
+all four encodings the convention above describes: the PS/2 wire byte,
+the evdev keycode, whatever entered the console byte stream, and the
+modifiers held when it was processed -- plus a sequence number, a tick
+count and the edge.
+
+**They are ONE record because a keyboard bug is one stage disagreeing
+with the next.** Reading them separately cannot show that, and from
+outside every such disagreement looks identical: the key does nothing,
+or the wrong thing. This is the probe that had been hand-written for
+each of those hunts.
+
+**IT RECORDS WHETHER OR NOT ANYTHING IS READING**, and that is the
+decision worth defending, because it costs ~5 KB of BSS and a bounded
+copy in the IRQ1 handler forever. What it buys is that the question can
+be asked AFTER the fact -- press the key that misbehaved, then run `kbd
+--last`. An arm-and-drain tap can only watch keys pressed from now on,
+so every use of it starts by reproducing the bug, and an intermittent
+one may not oblige. `dmesg` makes exactly this trade and Linux's evdev
+buffers every event whether or not a client holds the node open. See
+`docs/decisions.md`.
+
+**KEYBOARD ONLY, deliberately.** Pointer motion arrives hundreds of
+times a second and would evict every keypress from a ring this size
+before anyone could read it.
+
+Four things to know before touching it.
+
+**The wire byte is PASSED DOWN, not stashed in a static.** `key_event()`
+in `keyboard.c` takes it as an argument and `keyboard_key_event()` --
+the public, every-driver entry point -- passes 0, which is what makes
+"this key did not arrive over PS/2" a fact rather than a hole (0x00 is
+not a scancode). A static would be written by whichever driver reported
+last, so a virtio keypress landing between an 8042 byte and its decode
+would be logged carrying somebody else's scancode: a wrong number in the
+one tool whose whole job is being trusted about numbers.
+
+**The modifier switch has ONE exit.** It sets the state, then records,
+then pushes the transition -- so the tap and the transition queue cannot
+drift into sampling `current_mods()` at two different instants, and a
+Shift press reports Shift held rather than absent.
+
+**The ring stores a PACKED record and the ABI hands out a wide one.**
+Every query value is 64 bits (`api/query.h`), so storing the wide form
+would put 18 KB of mostly padding in the kernel. The packed form is
+private to `keyboard_tap.c` and can change without touching the ABI.
+
+**Reading it is a snapshot of a moving ring, and `seq` is what makes
+that safe.** The ring is fed from an interrupt, so a reader walking
+`0..count-1` may see a record twice or miss one under a burst. Sequence
+numbers are monotonic and never reused, so a repeat is recognisable and
+a gap is countable -- which is why `kbd` can say *"12 events lost"*
+instead of silently skipping. Draining instead would make the log
+readable exactly once and break the second reader.
+
+And two things about the TOOL that are properties of this design rather
+than of its implementation. **It never reads a keyboard**, including on
+the way out, so it can run inside a Terminal window without stealing a
+key from the desktop -- and keys typed during a session still reach the
+shell afterwards, as they would during any other command. **Live mode
+needs a scheduler slot** and refuses the legacy `run` loader by name:
+there, `SYS_SLEEP` is refused AND the monotonic clock never advances, so
+a poll loop spins against a deadline that cannot arrive and takes the
+machine with it.
+
 ## VIRTIO INTERRUPTS ARE OPT-IN, a forgotten ISR read hangs the machine, and ENABLING IS THE LAST STEP
 
 `virtio_pci_find()` sets `PCI_CMD_INTX_DISABLE` on every device it
