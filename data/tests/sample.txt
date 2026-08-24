@@ -1,0 +1,401 @@
+0001  /tests/sample.txt -- a fixture, not a document.
+0002
+0003  Every line begins with its own number, four digits wide. That is
+0004  the whole point: moving identical content is pixel-identical, so a
+0005  scroll test over repeated lines cannot tell a working scroll from a
+0006  dead one. A capture of any part of this file can be placed exactly.
+0007
+0008  It is also deliberately awkward, in the ways text handling breaks:
+0009  a line longer than any terminal is wide, a line of exactly 80
+0010  columns, trailing spaces, a tab, an empty line, and a last line
+0011  with no newline after it. Read the tail of this file before
+0012  assuming what it ends with.
+0013
+0014  LONG: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx <- end of the 400-column line
+0015  EXACTLY-80 follows, padded to column 80 with a marker at the end:
+0016  EXACTLY-80 ..............................................................|
+0017  TRAILING SPACES follow this text:      
+0018  TAB:	after a tab character
+0019
+0020  Ordinary numbered lines follow, to give a pager several screens.
+0021
+0022  A short line.
+0023  A line of fairly ordinary length, of the sort most text is made of.
+0024  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0025
+0026  Another short one.
+0027  Text, unremarkable, about the width of a sentence.
+0028  A short line.
+0029  A line of fairly ordinary length, of the sort most text is made of.
+0030  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0031
+0032  Another short one.
+0033  Text, unremarkable, about the width of a sentence.
+0034  A short line.
+0035  A line of fairly ordinary length, of the sort most text is made of.
+0036  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0037
+0038  Another short one.
+0039  Text, unremarkable, about the width of a sentence.
+0040  A short line.
+0041  A line of fairly ordinary length, of the sort most text is made of.
+0042  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0043
+0044  Another short one.
+0045  Text, unremarkable, about the width of a sentence.
+0046  A short line.
+0047  A line of fairly ordinary length, of the sort most text is made of.
+0048  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0049
+0050  Another short one.
+0051  Text, unremarkable, about the width of a sentence.
+0052  A short line.
+0053  A line of fairly ordinary length, of the sort most text is made of.
+0054  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0055
+0056  Another short one.
+0057  Text, unremarkable, about the width of a sentence.
+0058  A short line.
+0059  A line of fairly ordinary length, of the sort most text is made of.
+0060  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0061
+0062  Another short one.
+0063  Text, unremarkable, about the width of a sentence.
+0064  A short line.
+0065  A line of fairly ordinary length, of the sort most text is made of.
+0066  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0067
+0068  Another short one.
+0069  Text, unremarkable, about the width of a sentence.
+0070  A short line.
+0071  A line of fairly ordinary length, of the sort most text is made of.
+0072  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0073
+0074  Another short one.
+0075  Text, unremarkable, about the width of a sentence.
+0076  A short line.
+0077  A line of fairly ordinary length, of the sort most text is made of.
+0078  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0079
+0080  Another short one.
+0081  Text, unremarkable, about the width of a sentence.
+0082  A short line.
+0083  A line of fairly ordinary length, of the sort most text is made of.
+0084  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0085
+0086  Another short one.
+0087  Text, unremarkable, about the width of a sentence.
+0088  A short line.
+0089  A line of fairly ordinary length, of the sort most text is made of.
+0090  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0091
+0092  Another short one.
+0093  Text, unremarkable, about the width of a sentence.
+0094  A short line.
+0095  A line of fairly ordinary length, of the sort most text is made of.
+0096  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0097
+0098  Another short one.
+0099  Text, unremarkable, about the width of a sentence.
+0100  A short line.
+0101  A line of fairly ordinary length, of the sort most text is made of.
+0102  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0103
+0104  Another short one.
+0105  Text, unremarkable, about the width of a sentence.
+0106  A short line.
+0107  A line of fairly ordinary length, of the sort most text is made of.
+0108  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0109
+0110  Another short one.
+0111  Text, unremarkable, about the width of a sentence.
+0112  A short line.
+0113  A line of fairly ordinary length, of the sort most text is made of.
+0114  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0115
+0116  Another short one.
+0117  Text, unremarkable, about the width of a sentence.
+0118  A short line.
+0119  A line of fairly ordinary length, of the sort most text is made of.
+0120  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0121
+0122  Another short one.
+0123  Text, unremarkable, about the width of a sentence.
+0124  A short line.
+0125  A line of fairly ordinary length, of the sort most text is made of.
+0126  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0127
+0128  Another short one.
+0129  Text, unremarkable, about the width of a sentence.
+0130  A short line.
+0131  A line of fairly ordinary length, of the sort most text is made of.
+0132  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0133
+0134  Another short one.
+0135  Text, unremarkable, about the width of a sentence.
+0136  A short line.
+0137  A line of fairly ordinary length, of the sort most text is made of.
+0138  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0139
+0140  Another short one.
+0141  Text, unremarkable, about the width of a sentence.
+0142  A short line.
+0143  A line of fairly ordinary length, of the sort most text is made of.
+0144  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0145
+0146  Another short one.
+0147  Text, unremarkable, about the width of a sentence.
+0148  A short line.
+0149  A line of fairly ordinary length, of the sort most text is made of.
+0150  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0151
+0152  Another short one.
+0153  Text, unremarkable, about the width of a sentence.
+0154  A short line.
+0155  A line of fairly ordinary length, of the sort most text is made of.
+0156  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0157
+0158  Another short one.
+0159  Text, unremarkable, about the width of a sentence.
+0160  A short line.
+0161  A line of fairly ordinary length, of the sort most text is made of.
+0162  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0163
+0164  Another short one.
+0165  Text, unremarkable, about the width of a sentence.
+0166  A short line.
+0167  A line of fairly ordinary length, of the sort most text is made of.
+0168  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0169
+0170  Another short one.
+0171  Text, unremarkable, about the width of a sentence.
+0172  A short line.
+0173  A line of fairly ordinary length, of the sort most text is made of.
+0174  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0175
+0176  Another short one.
+0177  Text, unremarkable, about the width of a sentence.
+0178  A short line.
+0179  A line of fairly ordinary length, of the sort most text is made of.
+0180  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0181
+0182  Another short one.
+0183  Text, unremarkable, about the width of a sentence.
+0184  A short line.
+0185  A line of fairly ordinary length, of the sort most text is made of.
+0186  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0187
+0188  Another short one.
+0189  Text, unremarkable, about the width of a sentence.
+0190  A short line.
+0191  A line of fairly ordinary length, of the sort most text is made of.
+0192  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0193
+0194  Another short one.
+0195  Text, unremarkable, about the width of a sentence.
+0196  A short line.
+0197  A line of fairly ordinary length, of the sort most text is made of.
+0198  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0199
+0200  Another short one.
+0201  Text, unremarkable, about the width of a sentence.
+0202  A short line.
+0203  A line of fairly ordinary length, of the sort most text is made of.
+0204  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0205
+0206  Another short one.
+0207  Text, unremarkable, about the width of a sentence.
+0208  A short line.
+0209  A line of fairly ordinary length, of the sort most text is made of.
+0210  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0211
+0212  Another short one.
+0213  Text, unremarkable, about the width of a sentence.
+0214  A short line.
+0215  A line of fairly ordinary length, of the sort most text is made of.
+0216  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0217
+0218  Another short one.
+0219  Text, unremarkable, about the width of a sentence.
+0220  A short line.
+0221  A line of fairly ordinary length, of the sort most text is made of.
+0222  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0223
+0224  Another short one.
+0225  Text, unremarkable, about the width of a sentence.
+0226  A short line.
+0227  A line of fairly ordinary length, of the sort most text is made of.
+0228  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0229
+0230  Another short one.
+0231  Text, unremarkable, about the width of a sentence.
+0232  A short line.
+0233  A line of fairly ordinary length, of the sort most text is made of.
+0234  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0235
+0236  Another short one.
+0237  Text, unremarkable, about the width of a sentence.
+0238  A short line.
+0239  A line of fairly ordinary length, of the sort most text is made of.
+0240  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0241
+0242  Another short one.
+0243  Text, unremarkable, about the width of a sentence.
+0244  A short line.
+0245  A line of fairly ordinary length, of the sort most text is made of.
+0246  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0247
+0248  Another short one.
+0249  Text, unremarkable, about the width of a sentence.
+0250  A short line.
+0251  A line of fairly ordinary length, of the sort most text is made of.
+0252  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0253
+0254  Another short one.
+0255  Text, unremarkable, about the width of a sentence.
+0256  A short line.
+0257  A line of fairly ordinary length, of the sort most text is made of.
+0258  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0259
+0260  Another short one.
+0261  Text, unremarkable, about the width of a sentence.
+0262  A short line.
+0263  A line of fairly ordinary length, of the sort most text is made of.
+0264  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0265
+0266  Another short one.
+0267  Text, unremarkable, about the width of a sentence.
+0268  A short line.
+0269  A line of fairly ordinary length, of the sort most text is made of.
+0270  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0271
+0272  Another short one.
+0273  Text, unremarkable, about the width of a sentence.
+0274  A short line.
+0275  A line of fairly ordinary length, of the sort most text is made of.
+0276  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0277
+0278  Another short one.
+0279  Text, unremarkable, about the width of a sentence.
+0280  A short line.
+0281  A line of fairly ordinary length, of the sort most text is made of.
+0282  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0283
+0284  Another short one.
+0285  Text, unremarkable, about the width of a sentence.
+0286  A short line.
+0287  A line of fairly ordinary length, of the sort most text is made of.
+0288  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0289
+0290  Another short one.
+0291  Text, unremarkable, about the width of a sentence.
+0292  A short line.
+0293  A line of fairly ordinary length, of the sort most text is made of.
+0294  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0295
+0296  Another short one.
+0297  Text, unremarkable, about the width of a sentence.
+0298  A short line.
+0299  A line of fairly ordinary length, of the sort most text is made of.
+0300  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0301
+0302  Another short one.
+0303  Text, unremarkable, about the width of a sentence.
+0304  A short line.
+0305  A line of fairly ordinary length, of the sort most text is made of.
+0306  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0307
+0308  Another short one.
+0309  Text, unremarkable, about the width of a sentence.
+0310  A short line.
+0311  A line of fairly ordinary length, of the sort most text is made of.
+0312  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0313
+0314  Another short one.
+0315  Text, unremarkable, about the width of a sentence.
+0316  A short line.
+0317  A line of fairly ordinary length, of the sort most text is made of.
+0318  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0319
+0320  Another short one.
+0321  Text, unremarkable, about the width of a sentence.
+0322  A short line.
+0323  A line of fairly ordinary length, of the sort most text is made of.
+0324  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0325
+0326  Another short one.
+0327  Text, unremarkable, about the width of a sentence.
+0328  A short line.
+0329  A line of fairly ordinary length, of the sort most text is made of.
+0330  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0331
+0332  Another short one.
+0333  Text, unremarkable, about the width of a sentence.
+0334  A short line.
+0335  A line of fairly ordinary length, of the sort most text is made of.
+0336  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0337
+0338  Another short one.
+0339  Text, unremarkable, about the width of a sentence.
+0340  A short line.
+0341  A line of fairly ordinary length, of the sort most text is made of.
+0342  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0343
+0344  Another short one.
+0345  Text, unremarkable, about the width of a sentence.
+0346  A short line.
+0347  A line of fairly ordinary length, of the sort most text is made of.
+0348  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0349
+0350  Another short one.
+0351  Text, unremarkable, about the width of a sentence.
+0352  A short line.
+0353  A line of fairly ordinary length, of the sort most text is made of.
+0354  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0355
+0356  Another short one.
+0357  Text, unremarkable, about the width of a sentence.
+0358  A short line.
+0359  A line of fairly ordinary length, of the sort most text is made of.
+0360  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0361
+0362  Another short one.
+0363  Text, unremarkable, about the width of a sentence.
+0364  A short line.
+0365  A line of fairly ordinary length, of the sort most text is made of.
+0366  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0367
+0368  Another short one.
+0369  Text, unremarkable, about the width of a sentence.
+0370  A short line.
+0371  A line of fairly ordinary length, of the sort most text is made of.
+0372  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0373
+0374  Another short one.
+0375  Text, unremarkable, about the width of a sentence.
+0376  A short line.
+0377  A line of fairly ordinary length, of the sort most text is made of.
+0378  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0379
+0380  Another short one.
+0381  Text, unremarkable, about the width of a sentence.
+0382  A short line.
+0383  A line of fairly ordinary length, of the sort most text is made of.
+0384  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0385
+0386  Another short one.
+0387  Text, unremarkable, about the width of a sentence.
+0388  A short line.
+0389  A line of fairly ordinary length, of the sort most text is made of.
+0390  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0391
+0392  Another short one.
+0393  Text, unremarkable, about the width of a sentence.
+0394  A short line.
+0395  A line of fairly ordinary length, of the sort most text is made of.
+0396  Longer again: enough words to run past the middle of a standard eighty-column terminal without quite reaching its edge.
+0397
+0398  Another short one.
+0399  Text, unremarkable, about the width of a sentence.
+0400  A short line.
+0401  LAST LINE, with no trailing newline after it.

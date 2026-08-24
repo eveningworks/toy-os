@@ -865,6 +865,22 @@ seed: $(DISK_IMG) $(USERLAND_ELVES)
 	# LICENSE's "Third-party data" section for what governs it.
 	mkdir -p $(SEED_DIR)/sync/usr/share/hwdata
 	cp $(PCI_IDS) $(SEED_DIR)/sync/usr/share/hwdata/pci.ids
+	# TWO TEXT FILES THAT SHIP, and they are deliberately not one.
+	#
+	# /usr/share/doc/toy-os.txt is a DOCUMENT -- prose about this system,
+	# meant to be read. /tests/sample.txt is a FIXTURE: every line names
+	# its own number, and the content is hostile on purpose (a
+	# 400-column line, an exactly-80 one, trailing spaces, a tab, and a
+	# last line with no newline). Splitting them is what lets the
+	# fixture be awkward without making the document worse to read, and
+	# what lets the document be edited without breaking a test's line
+	# numbers. Both exist because anything that pages, scrolls or edits
+	# needed a real subject and had to manufacture one -- and the usual
+	# way, repeating a line, produces content whose movement is
+	# pixel-identical. See docs/filesystem-layout.md.
+	mkdir -p $(SEED_DIR)/sync/usr/share/doc
+	cp data/usr/share/doc/toy-os.txt $(SEED_DIR)/sync/usr/share/doc/toy-os.txt
+	cp data/tests/sample.txt $(SEED_DIR)/sync/tests/sample.txt
 	# Desktop entries -- what the Start menu and the desktop icons are
 	# built FROM (see docs/filesystem-layout.md). Hand-authored and
 	# tracked under data/wm/, staged here for the same reason pci.ids is:
