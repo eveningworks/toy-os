@@ -48,13 +48,24 @@ static int g_bold_mapped;
 #define g_char_h      (g_font->char_h)
 #define g_glyph_count (g_font->count)
 
-struct ugfx_surface ugfx_surface_for_window(uint32_t window, int w, int h) {
+// A window's drawing surface: whichever of its TWO buffers is currently
+// the BACK one (abi/win_proto.h's WIN_BUFFER_HALF). `front` is what the
+// server last reported -- 0 for a window that has never presented, and
+// for a single-buffered one, which is why a caller needs no special
+// case for either.
+struct ugfx_surface ugfx_surface_for_window_buf(uint32_t window, int w, int h,
+                                                 int front) {
     struct ugfx_surface s;
     for (unsigned i = 0; i < sizeof s; i++) ((uint8_t *)&s)[i] = 0;
-    s.pixels = (uint32_t *)(uintptr_t)win_buffer_vaddr(window);
+    s.pixels = (uint32_t *)(uintptr_t)(win_buffer_vaddr(window)
+                                        + win_buffer_back_offset(front));
     s.w = w;
     s.h = h;
     return s;
+}
+
+struct ugfx_surface ugfx_surface_for_window(uint32_t window, int w, int h) {
+    return ugfx_surface_for_window_buf(window, w, h, 0);
 }
 
 // --- clip and damage --------------------------------------------------

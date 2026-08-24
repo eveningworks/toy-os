@@ -140,6 +140,68 @@ KTEST("winshare", "both address spaces see the SAME pixels, not a copy") {
     fixture_down(&f);
 }
 
+// THE TEARING INVARIANT: while a window has two buffers, the one the
+// client draws into is never the one the compositor reads.
+//
+// Asserted as MEMORY rather than as a flicker, deliberately. Catching a
+// torn frame means sampling the screen fast enough to land inside one
+// client redraw, which is timing-dependent, flaky, and gets FASTER to
+// miss as the machine gets quicker -- a check that passes more often
+// the less it is true. What actually has to hold is that two pointers
+// differ, and that is decidable.
+KTEST("winshare", "a present flips the buffer, so the two never collide") {
+    struct fixture f = {0};
+    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
+
+    uint64_t cvaddr = 0;
+    KTEST_ASSERT(win_server_map_to_compositor(COMP_PID, CLIENT_PID, f.id, &cvaddr));
+
+    // A window starts at front 0, so the client draws into buffer 1.
+    // Both offsets come from the ABI's own helpers -- if a caller
+    // computed them by hand the test would be checking its own
+    // arithmetic rather than the contract.
+    KTEST_ASSERT(win_buffer_front_offset(0) != win_buffer_back_offset(0));
+    KTEST_ASSERT(win_buffer_front_offset(1) != win_buffer_back_offset(1));
+
+    // Write a marker into the BACK buffer as the client, and confirm the
+    // compositor's FRONT view does not see it. This is the whole
+    // property: a half-finished frame is invisible until it is
+    // presented.
+    uint32_t drawing = 0xDEADBEEF;
+    KTEST_ASSERT(vmm_copy_to_user(f.client_as,
+                                   win_buffer_vaddr(f.id) + win_buffer_back_offset(0),
+                                   &drawing, sizeof drawing));
+    uint32_t seen = 0xFFFFFFFF;
+    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen,
+                                     cvaddr + win_buffer_front_offset(0),
+                                     sizeof seen));
+    KTEST_ASSERT(seen != 0xDEADBEEF);
+
+    // Now present. The server flips, and the marker becomes visible
+    // through the compositor's front view -- the same bytes, reached
+    // from the other address space, which is what makes this about the
+    // FLIP rather than about two unrelated pages.
+    struct win_request_msg req;
+    for (unsigned i = 0; i < sizeof req; i++) ((uint8_t *)&req)[i] = 0;
+    req.type = WIN_REQ_PRESENT;
+    req.window = f.id;
+    int rc = win_server_request(CLIENT_PID, &req);
+    // 1 or 2: the new front index, biased so 0 still means refused.
+    KTEST_ASSERT(rc > 0);
+    int front = rc - 1;
+
+    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen,
+                                     cvaddr + win_buffer_front_offset(front),
+                                     sizeof seen));
+    KTEST_ASSERT_EQ(seen, 0xDEADBEEF);
+
+    // ...and the client is now pointed somewhere ELSE, which is the
+    // half that stops the next frame landing on the one being read.
+    KTEST_ASSERT(win_buffer_back_offset(front) != win_buffer_front_offset(front));
+
+    fixture_down(&f);
+}
+
 // THE ONE THAT MATTERS. A revocation bug leaves the compositor reading
 // frames the allocator has already handed to something else.
 //

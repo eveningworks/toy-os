@@ -4307,3 +4307,66 @@ through any shell here, and a space is exactly what you compare a
 suspected-blank glyph against. The six Latin-1 extras cannot be typed on
 the layouts this machine ships either. A single character always wins,
 so `font glyph 0` is the digit.
+
+## A window has two buffers, both mapped, and present passes an index rather than remapping
+
+The File Manager flickered on every selection: a flash of panel
+background where the rows should be. The cause was not in the app. A
+window had ONE buffer, the client drew straight into it, and
+`comp_map()` mapped those same physical frames into the compositor --
+which repaints on its own cadence, because the taskbar clock forces a
+repaint every second whether or not any client has presented. One
+buffer, two readers, no synchronisation. `WIN_REQ_PRESENT` said "the
+client has finished drawing; composite it", but nothing stopped the
+compositor compositing before that.
+
+An app that clears its whole surface before drawing -- which `files.c`
+does, and which is the ordinary way to write an `on_draw` -- therefore
+had a window in which the buffer held nothing but background, and the
+compositor could read it there.
+
+**Wayland's answer, for Wayland's reason.** A client attaches a buffer
+and commits it; the compositor never reads one that is being drawn.
+That is not a refinement there, it is why the protocol is shaped that
+way, and the same shape ports directly.
+
+**Both buffers stay mapped, in both address spaces.** The obvious
+implementation is to keep one virtual address and remap it to the other
+buffer on each present -- and that costs a page-table edit and a TLB
+flush per frame, in the client's address space and the compositor's, on
+the hottest path there is. Mapping both once at `base` and `base +
+WIN_BUFFER_HALF` makes a flip an integer in a message. A window's slot
+is 64 MiB and the largest buffer `WIN_CLIENT_MAX_W * WIN_CLIENT_MAX_H *
+4` is 8 MiB, so address space was never the constraint.
+
+**Contiguous physical memory is the constraint**, and it is why the
+failure mode is what it is. Each buffer is a `pmm_alloc_contiguous()`
+run -- contiguous so the kernel-visible pointer can be a plain
+`uint32_t *` over the whole buffer rather than a per-page walk on every
+composite -- and that allocation is ALREADY what refuses a window when
+memory fragments. Doubling it doubles the pressure. So a window whose
+second allocation fails is created **single-buffered** rather than
+refused: it tears exactly as every window did before this existed, which
+is strictly better than not opening. `front` stays 0, the flip is a
+no-op, and neither the client nor the compositor needs a special case --
+which is the property that makes the degraded path safe rather than a
+second code path to get wrong.
+
+**The flip happens inside the request**, before the event is queued and
+before the ring-0 presentation hook runs. A client must know which
+buffer is safe to draw into the moment `present()` returns, and the
+compositor must never be pointed at a buffer the client has already
+started on; doing it in the other order leaves a window where both are
+true at once. The request returns the new front index biased by one, so
+zero still means "refused" -- the same trick that keeps a sentinel out
+of the value space.
+
+**The invariant is tested as memory, not as a flicker.** Catching a torn
+frame means sampling the screen fast enough to land inside one client
+redraw: timing-dependent, flaky, and -- worst -- a check that passes
+MORE often the faster the machine gets, which is the wrong direction for
+a regression test to fail in. What actually has to hold is that two
+pointers differ, and that is decidable: `winshare`'s "a present flips
+the buffer" writes a marker into the back buffer, asserts the
+compositor's front view cannot see it, presents, and asserts it now can.
+Verified by deleting the flip and watching exactly that test go red.

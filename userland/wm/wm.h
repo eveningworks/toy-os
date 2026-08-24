@@ -109,7 +109,19 @@ struct window {
 
     int client_pid;
     uint32_t client_win;
+    // WHICHEVER BUFFER IS CURRENTLY THE FRONT ONE. A window has two
+    // (abi/win_proto.h's WIN_BUFFER_HALF) and the client draws into the
+    // one this does NOT point at, which is what stops the compositor
+    // reading a half-drawn frame.
+    //
+    // Kept as a pointer to the front rather than as base-plus-index so
+    // that every reader here -- the blitter, the damage tests, the
+    // not-responding check -- is unchanged: the only code that knows
+    // there are two buffers is the present handler that moves this.
     uint32_t *client_buf;
+    // The base of the pair, because `client_buf` moves and a resize has
+    // to remap from somewhere fixed.
+    uint32_t *client_base;
     int client_w, client_h;
     // Last cursor position delivered to this client, so a stationary
     // cursor doesn't generate a WIN_EV_MOUSE_MOVE every single frame.

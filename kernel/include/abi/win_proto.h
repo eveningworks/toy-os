@@ -183,7 +183,16 @@
 // one: with no compositor these are dropped, exactly as the ring-0
 // win_server_ops calls were skipped when nothing had registered.
 #define WIN_EV_CLIENT_CREATED   15 // a: pid. A window exists; read it.
-#define WIN_EV_CLIENT_PRESENT   16 // a: pid. Its buffer has new pixels.
+#define WIN_EV_CLIENT_PRESENT   16 // a: pid, b: the FRONT buffer index
+                                    // (0 or 1). Its buffer has new
+                                    // pixels, and `b` says which of the
+                                    // two to read -- see
+                                    // WIN_BUFFER_HALF. A compositor
+                                    // remembers this per window,
+                                    // because it also repaints for its
+                                    // own reasons (the clock, another
+                                    // window) when no present has
+                                    // arrived.
 #define WIN_EV_CLIENT_DESTROYED 17 // a: pid. It is going away. The
                                     // buffer is ALREADY freed when this
                                     // arrives -- unlike the ring-0
@@ -322,7 +331,22 @@ struct win_event {
                            // there?" and is told no. `text` was unused
                            // by CREATE, so this costs no bytes.
 #define WIN_REQ_PRESENT 2 // `window`: which one. The client has finished
-                           // drawing into its buffer; composite it.
+                           // drawing into its BACK buffer; make it the
+                           // front one and composite it.
+                           //
+                           // **RETURNS THE NEW FRONT INDEX** (0 or 1),
+                           // or a negative errno. The client draws into
+                           // the other one from here on --
+                           // win_buffer_back_offset() turns that index
+                           // into the offset to draw at. A
+                           // single-buffered window (its second
+                           // allocation failed) always answers 0, so a
+                           // client needs no special case for it.
+                           //
+                           // The swap happens HERE rather than when the
+                           // compositor gets round to reading, because
+                           // a client must know which buffer is safe to
+                           // draw into the moment this returns.
 #define WIN_REQ_DESTROY 3 // `window`: which one. Closes it and unmaps
                            // the buffer.
 #define WIN_REQ_TITLE   4 // `window`: which one; the title comes from
@@ -993,6 +1017,48 @@ struct win_request_msg {
 // with the font region in between; see kernel/uaddr.h for the map.
 #define WIN_CLIENT_BASE   0x8080000000ULL
 #define WIN_BUFFER_STRIDE 0x0004000000ULL // 64 MiB per window slot
+
+// **A WINDOW HAS TWO BUFFERS, AND THIS IS THE SECOND ONE'S OFFSET.**
+//
+// The client draws into whichever is the BACK buffer and the compositor
+// reads whichever is the FRONT; WIN_REQ_PRESENT swaps them. That is
+// Wayland's model (attach a buffer, commit) and it exists for exactly
+// the reason it does there: with one buffer the compositor reads the
+// same memory the client is drawing into, and it composites on its own
+// cadence -- the taskbar clock alone forces a repaint every second --
+// so it will eventually catch a frame halfway through. An app that
+// clears its surface before drawing then flashes its background, which
+// is what the File Manager did on every selection.
+//
+// **BOTH BUFFERS STAY MAPPED, IN BOTH ADDRESS SPACES**, at `base` and
+// `base + WIN_BUFFER_HALF`. The obvious implementation -- remap the one
+// address to the other buffer on each present -- costs a page-table
+// edit and a TLB flush per frame, in two address spaces, on the hot
+// path. Mapping both once and passing an INDEX makes a flip a number in
+// a message. The slot is 64 MiB and the largest buffer
+// WIN_CLIENT_MAX_W * WIN_CLIENT_MAX_H * 4 is 8 MiB, so two fit with
+// room to spare; address space is not the scarce thing here.
+//
+// **THE SCARCE THING IS CONTIGUOUS PHYSICAL MEMORY.** Each buffer is a
+// pmm_alloc_contiguous() run, so a window now needs two of them, and
+// that allocation is already what refuses a window when memory
+// fragments. A window whose SECOND allocation fails is created
+// single-buffered rather than refused: it tears exactly as it did
+// before, which is strictly better than not existing. `front` is then
+// always 0 and the flip is a no-op.
+#define WIN_BUFFER_HALF   0x0002000000ULL // 32 MiB: where buffer 1 starts
+
+// Which buffer a client should DRAW into, given the front index the
+// server last reported. Stated as a function so the arithmetic lives in
+// one place rather than in the toolkit and the compositor separately.
+static inline uint64_t win_buffer_back_offset(int front) {
+    return front ? 0 : WIN_BUFFER_HALF;
+}
+
+// ...and which one the compositor should READ.
+static inline uint64_t win_buffer_front_offset(int front) {
+    return front ? WIN_BUFFER_HALF : 0;
+}
 #define WIN_CLIENT_MAX    4 // windows one client may hold at once
 
 static inline uint64_t win_buffer_vaddr(uint32_t window) {

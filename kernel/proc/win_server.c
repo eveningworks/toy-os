@@ -43,6 +43,23 @@ struct client_window {
     uint32_t *buf;    // kernel-visible (identity-mapped) pixels
     uint64_t vaddr;   // where the client sees it
     uint32_t pages;   // how many frames `buf` spans
+
+    // THE SECOND BUFFER, or NULL when this window is single-buffered.
+    //
+    // A window is double-buffered so the compositor never reads memory
+    // a client is drawing into (see WIN_BUFFER_HALF in abi/win_proto.h).
+    // `front` says which of the two the compositor should read; the
+    // client draws into the other. WIN_REQ_PRESENT flips it.
+    //
+    // **NULL IS A WORKING WINDOW, NOT AN ERROR.** Each buffer is a
+    // contiguous run, and that allocation is already what refuses a
+    // window when physical memory fragments -- so a second one failing
+    // makes the window single-buffered rather than making it not exist.
+    // It then tears exactly as every window did before this, which is
+    // strictly better than refusing to open. `front` stays 0 and the
+    // flip is a no-op.
+    uint32_t *buf2;
+    int front;        // 0 or 1: which buffer the compositor reads
     int w, h;
     // Is this window's buffer currently mapped into the compositor's
     // address space? Tracked per window rather than inferred, because
@@ -322,6 +339,34 @@ static int comp_map(struct client_window *cw) {
             return 0;
         }
     }
+    // THE SECOND BUFFER, into the same slot at WIN_BUFFER_HALF. Both
+    // stay mapped for the whole life of the window, which is what makes
+    // a present a number rather than a remap -- see WIN_BUFFER_HALF in
+    // abi/win_proto.h.
+    //
+    // A failure here is NOT fatal and does not unwind the first: the
+    // compositor can still read buffer 0, which is what a
+    // single-buffered window gives it anyway. What it must never do is
+    // leave the second range half-mapped, so the partial work is undone
+    // and the window is treated as single-buffered from here.
+    if (cw->buf2) {
+        uint64_t v2 = vaddr + WIN_BUFFER_HALF;
+        uint32_t done = 0;
+        for (; done < cw->pages; done++) {
+            uint64_t phys = (uint64_t)(uintptr_t)cw->buf2 + (uint64_t)done * 4096;
+            if (!vmm_map_user_borrowed(g_comp_pml4, v2 + (uint64_t)done * 4096,
+                                        phys, 1, 0, VMM_MT_NORMAL))
+                break;
+        }
+        if (done < cw->pages) {
+            for (uint32_t j = 0; j < done; j++)
+                vmm_unmap_user_page(g_comp_pml4, v2 + (uint64_t)j * 4096);
+            klog_write("win_server: compositor second-buffer mapping failed -- "
+                       "window reads as single-buffered\n");
+            cw->front = 0;
+        }
+    }
+
     cw->comp_mapped = 1;
     cw->comp_span = cw->pages;
 
@@ -401,8 +446,19 @@ static void destroy_window(struct client_window *cw) {
     // came from pmm_alloc_contiguous() and the two allocators are not
     // interchangeable (see api/pmm.h).
     pmm_free_contiguous((uint64_t)(uintptr_t)cw->buf, cw->pages);
+    // ...and the second one, when there is one. Unmapped first for the
+    // same reason the first is: a mapping outliving its frames points
+    // at whatever the allocator hands out next.
+    if (cw->buf2) {
+        for (uint32_t i = 0; i < cw->pages; i++)
+            vmm_unmap_user_page(cw->pml4,
+                                cw->vaddr + WIN_BUFFER_HALF + (uint64_t)i * 4096);
+        pmm_free_contiguous((uint64_t)(uintptr_t)cw->buf2, cw->pages);
+    }
     cw->used = 0;
     cw->buf = NULL;
+    cw->buf2 = NULL;
+    cw->front = 0;
     cw->pages = 0;
 }
 
@@ -466,11 +522,43 @@ static int create_window(int pid, uint64_t pml4, int w, int h, int x, int y,
         }
     }
 
+    // THE SECOND BUFFER. Allocated and mapped exactly like the first,
+    // at `vaddr + WIN_BUFFER_HALF`, and its failure is NOT fatal: the
+    // window is created single-buffered and tears the way every window
+    // did before double buffering existed. Refusing to open a window
+    // because the tear-free path is unavailable would be trading a
+    // cosmetic problem for a functional one.
+    uint64_t phys2 = pmm_alloc_contiguous(pages);
+    if (phys2) {
+        k_memset((void *)(uintptr_t)phys2, 0, (size_t)pages * 4096);
+        uint64_t v2 = vaddr + WIN_BUFFER_HALF;
+        uint32_t done = 0;
+        for (; done < pages; done++) {
+            if (!vmm_map_user_borrowed(pml4, v2 + (uint64_t)done * 4096,
+                                        phys2 + (uint64_t)done * 4096, 1, 0,
+                                        VMM_MT_NORMAL))
+                break;
+        }
+        if (done < pages) {
+            for (uint32_t j = 0; j < done; j++)
+                vmm_unmap_user_page(pml4, v2 + (uint64_t)j * 4096);
+            pmm_free_contiguous(phys2, pages);
+            phys2 = 0;
+            klog_write("win_server: second buffer unmapped -- window is "
+                       "single-buffered\n");
+        }
+    } else {
+        klog_write("win_server: no contiguous memory for a second buffer -- "
+                   "window is single-buffered\n");
+    }
+
     cw->used = 1;
     cw->pid = pid;
     cw->id = (uint32_t)slot;
     cw->pml4 = pml4;
     cw->buf = (uint32_t *)(uintptr_t)phys;
+    cw->buf2 = (uint32_t *)(uintptr_t)phys2;
+    cw->front = 0;
     cw->vaddr = vaddr;
     cw->pages = pages;
     cw->w = w;
@@ -702,10 +790,53 @@ static int resize_window(struct client_window *cw, int w, int h) {
     comp_poison(cw);   // never a hole while the window lives -- see comp_poison()
 
     pmm_free_contiguous((uint64_t)(uintptr_t)cw->buf, cw->pages);
+
+    // THE SECOND BUFFER IS REBUILT AT THE NEW SIZE, and its old frames
+    // go back whatever happens. A resize that cannot find contiguous
+    // memory for it leaves the window SINGLE-BUFFERED at the new size
+    // rather than refusing the resize -- the same trade create_window()
+    // makes, and for the same reason: a window that tears is better
+    // than one that will not change size.
+    if (cw->buf2) {
+        uint64_t v2 = cw->vaddr + WIN_BUFFER_HALF;
+        for (uint32_t i = 0; i < cw->pages; i++)
+            vmm_unmap_user_page(cw->pml4, v2 + (uint64_t)i * 4096);
+        pmm_free_contiguous((uint64_t)(uintptr_t)cw->buf2, cw->pages);
+        cw->buf2 = NULL;
+    }
+
     cw->buf = (uint32_t *)(uintptr_t)phys;
     cw->pages = pages;
     cw->w = w;
     cw->h = h;
+    // BACK TO BUFFER 0. The client rebuilds its surface from the window
+    // base after a resize, so the two must agree on where that is --
+    // and the only value both can assume without being told is 0.
+    cw->front = 0;
+
+    {
+        uint64_t phys2 = pmm_alloc_contiguous(pages);
+        if (phys2) {
+            k_memset((void *)(uintptr_t)phys2, 0, (size_t)pages * 4096);
+            uint64_t v2 = cw->vaddr + WIN_BUFFER_HALF;
+            uint32_t done = 0;
+            for (; done < pages; done++) {
+                if (!vmm_map_user_borrowed(cw->pml4, v2 + (uint64_t)done * 4096,
+                                            phys2 + (uint64_t)done * 4096, 1, 0,
+                                            VMM_MT_NORMAL))
+                    break;
+            }
+            if (done < pages) {
+                for (uint32_t j = 0; j < done; j++)
+                    vmm_unmap_user_page(cw->pml4, v2 + (uint64_t)j * 4096);
+                pmm_free_contiguous(phys2, pages);
+            } else {
+                cw->buf2 = (uint32_t *)(uintptr_t)phys2;
+            }
+        }
+        if (!cw->buf2)
+            klog_write("win_server: resized window is single-buffered\n");
+    }
 
     if (was_comp_mapped) comp_map(cw);
 
@@ -1068,9 +1199,23 @@ int win_server_request(int pid, struct win_request_msg *req) {
     case WIN_REQ_PRESENT: {
         struct client_window *cw = lookup(pid, req->window);
         if (!cw) return 0;
-        tell_compositor(WIN_EV_CLIENT_PRESENT, pid, cw->id, 0, 0);
+        // THE FLIP HAPPENS HERE, before anybody is told. A client must
+        // know which buffer is safe to draw into the moment this
+        // returns, and the compositor must never be pointed at a buffer
+        // the client has already started on -- doing it in the other
+        // order leaves a window where both are true at once.
+        //
+        // A single-buffered window (no second allocation) stays at 0,
+        // so the client keeps drawing where it was and the compositor
+        // keeps reading the same place. That is the old behaviour, and
+        // the caller needs no special case for it.
+        if (cw->buf2) cw->front ^= 1;
+        tell_compositor(WIN_EV_CLIENT_PRESENT, pid, cw->id,
+                        (uint32_t)cw->front, 0);
         if (g_ops && g_ops->window_present) g_ops->window_present(pid, cw->id);
-        return 1;
+        // The new FRONT index: what the compositor will read, and
+        // therefore what the client must NOT draw into.
+        return cw->front + 1;   // 1 or 2, so 0 stays "refused"
     }
     case WIN_REQ_DESTROY: {
         struct client_window *cw = lookup(pid, req->window);

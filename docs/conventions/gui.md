@@ -40,6 +40,37 @@ this the obvious way), not from how much history it accumulated.
   -- a terminal is monospace by definition -- so a proportional face
   gets a cell as wide as its widest advance there.
 
+- **A WINDOW HAS TWO BUFFERS, AND THE COMPOSITOR NEVER READS THE ONE
+  BEING DRAWN.** `WIN_REQ_PRESENT` flips which is front and returns the
+  new index; the client draws into the other. Wayland's attach/commit,
+  and it exists for the reason it does there: the compositor repaints on
+  its OWN cadence -- the taskbar clock forces one every second -- so
+  with a single buffer it eventually catches a frame halfway through,
+  and an app that clears its surface first then flashes its background.
+  That was the File Manager's flicker on every selection. Five things:
+  - **BOTH BUFFERS STAY MAPPED, IN BOTH ADDRESS SPACES**, at `base` and
+    `base + WIN_BUFFER_HALF`. Remapping one address per present would
+    cost a page-table edit and a TLB flush per frame in two address
+    spaces, on the hot path; mapping both once makes a flip a number in
+    a message.
+  - **THE SCARCE THING IS CONTIGUOUS PHYSICAL MEMORY**, not address
+    space -- the slot is 64 MiB and the largest buffer is 8 MiB. Each
+    buffer is a `pmm_alloc_contiguous()` run, and that is already what
+    refuses a window when memory fragments.
+  - **A FAILED SECOND ALLOCATION IS A SINGLE-BUFFERED WINDOW, NOT A
+    REFUSED ONE.** It then tears exactly as every window did before,
+    which is strictly better than not opening. `front` stays 0 and the
+    flip is a no-op, so no caller needs a special case.
+  - **THE FLIP HAPPENS INSIDE THE REQUEST**, before anyone is told: a
+    client must know which buffer is safe the moment present returns,
+    and the compositor must never be pointed at one the client has
+    already started on.
+  - **THE INVARIANT IS TESTED AS MEMORY, NOT AS A FLICKER.** Catching a
+    torn frame means sampling fast enough to land inside one redraw --
+    timing-dependent, and a check that passes more often the faster the
+    machine gets. `winshare`'s "a present flips the buffer" KTEST writes
+    a marker into the back buffer and asserts the compositor's front
+    view cannot see it until the present.
 - **THE LAYOUT LOG IS OFF UNLESS A TEST TURNS IT ON, AND DEDUPED WHEN IT
   IS.** Every Toykit app reports its widget geometry so a test can drive
   it by asking rather than by guessing pixels

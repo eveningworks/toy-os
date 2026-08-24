@@ -62,6 +62,13 @@ struct ugfx_surface {
 // WIN_REQ_CREATE handed back. Clip inactive, damage empty.
 struct ugfx_surface ugfx_surface_for_window(uint32_t window, int w, int h);
 
+// The same, for a window whose FRONT buffer is not 0 -- i.e. after a
+// present. A client draws into the back one; passing the front index
+// keeps that arithmetic in one place (win_buffer_back_offset()) rather
+// than in every caller.
+struct ugfx_surface ugfx_surface_for_window_buf(uint32_t window, int w, int h,
+                                                 int front);
+
 // --- clipping ---------------------------------------------------------
 //
 // Restricts what subsequent drawing MAY touch. The same contract as the

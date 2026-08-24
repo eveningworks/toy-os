@@ -104,6 +104,7 @@ static int on_window_created(int pid, uint32_t id, uint32_t *buf,
     win->client_pid = pid;
     win->client_win = id;
     win->client_buf = buf;
+    win->client_base = buf;   // front is 0 until the first present
     win->client_w = w;
     win->client_h = h;
     win->client_last_mx = INT32_MIN; // nothing delivered yet
@@ -143,9 +144,20 @@ static int on_window_created(int pid, uint32_t id, uint32_t *buf,
     return 1;
 }
 
-static void on_window_present(int pid, uint32_t id) {
+// `front` is which of the window's two buffers now holds finished
+// pixels -- the kernel flipped it inside WIN_REQ_PRESENT, before this
+// event was queued, so by the time this runs the client is already
+// drawing into the other one.
+static void on_window_present(int pid, uint32_t id, int front) {
     int idx = find_client_window(pid, id);
     if (idx < 0) return;
+
+    // Point at the finished buffer. A single-buffered window (its
+    // second allocation failed) always reports 0, so this is a no-op
+    // there and the old behaviour is preserved exactly.
+    if (windows[idx].client_base)
+        windows[idx].client_buf = windows[idx].client_base
+                                + (front ? WIN_BUFFER_HALF / 4 : 0);
 
     // Damage only the CONTENT area, not the whole window: the chrome
     // hasn't changed, and over-damaging is how a compositor quietly
@@ -220,6 +232,7 @@ static void on_window_resized(int pid, uint32_t id, uint32_t *buf, int w, int h)
     wm_damage_rect(win->x, win->y, win->w, win->h);
 
     win->client_buf = buf;
+    win->client_base = buf;
     win->client_w = w;
     win->client_h = h;
     win->w = w + 2;
@@ -575,7 +588,7 @@ int wm_client_handle_event(const struct win_event *ev) {
         break;
     }
     case WIN_EV_CLIENT_PRESENT:
-        on_window_present(pid, id);
+        on_window_present(pid, id, (int)ev->b);
         break;
     case WIN_EV_CLIENT_DESTROYED:
         // The buffer is ALREADY freed by the time this arrives, unlike

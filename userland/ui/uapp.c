@@ -10,6 +10,11 @@
 #include "ui/utheme.h"
 
 struct uapp {
+    // WHICH OF THE WINDOW'S TWO BUFFERS THE COMPOSITOR IS READING. The
+    // surface always points at the OTHER one -- see present(). 0 until
+    // the first present, and 0 forever for a single-buffered window,
+    // so nothing here needs to know which kind it has.
+    int front;
     const struct uapp_desc *desc;
     uint32_t window;
     int w, h;
@@ -65,7 +70,18 @@ static void present(struct uapp *a) {
     req_clear(&req);
     req.type = WIN_REQ_PRESENT;
     req.window = a->window;
-    req_send(&req);
+    int rc = req_send(&req);
+    // THE SERVER ANSWERS WITH THE NEW FRONT INDEX, biased by one so 0
+    // can still mean "refused" (abi/win_proto.h). The next frame must
+    // go into the OTHER buffer -- drawing into the one just handed to
+    // the compositor is precisely the tearing this exists to remove.
+    //
+    // A refusal leaves the surface where it was, which is correct: if
+    // the present did not happen, neither did the flip.
+    if (rc > 0) {
+        a->front = rc - 1;
+        a->surface = ugfx_surface_for_window_buf(a->window, a->w, a->h, a->front);
+    }
 }
 
 // Draw + present, but only if something actually asked. This is the
