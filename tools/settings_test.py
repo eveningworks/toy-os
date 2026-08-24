@@ -185,6 +185,31 @@ def controls(dbg, mark):
     return out
 
 
+CHOICE_RE = r"settings: choice (\d+) (\S+) raw (\S+) shown (.+)"
+
+
+def choice_shown(dbg, mark, name):
+    """(raw, shown) for `name`'s current choice, as the app reports it.
+
+    The two are DIFFERENT STRINGS for a setting whose choices carry
+    display names, and a screendump cannot tell "no display name" from
+    "a value that happens to read like one".
+    """
+    drain(dbg)
+    hits = [m for m in _since(mark, CHOICE_RE) if m.group(2) == name]
+    if not hits:
+        return None
+    return hits[-1].group(3), hits[-1].group(4).strip()
+
+
+def staged_for(dbg, mark, name):
+    """The last value staged for `name` since `mark`, or None."""
+    drain(dbg)
+    hits = [m for m in _since(mark, r"settings: staged (\S+) (\S+)")
+            if m.group(1) == name]
+    return hits[-1].group(2) if hits else None
+
+
 def page_line(dbg, mark):
     """The app's own `settings: page` summary for the page opened since `mark`.
 
@@ -231,6 +256,22 @@ def main():
 
     dbg = DebugConsole(args.sock)
     print("system settings (the settings registry, in ring 3)")
+
+    # THE TIMEZONE FIXTURE, set BEFORE the app starts. The app reads a
+    # setting's value when it builds a page and caches it, so a value
+    # changed from outside mid-run is not necessarily what the next page
+    # shows -- which failed as "no display name" and was a stale read.
+    #
+    # Los Angeles specifically: its stored token ("losangeles") and its
+    # display name differ by more than case, which "utc"/"UTC" does not
+    # -- and it is far enough down a 92-city list that it is never the
+    # popup's FIRST row, which the hover check below depends on.
+    dbg.send("sh config set system.timezone losangeles")
+    dbg.settle()
+    for _ in range(20):
+        if stored_value(dbg, "timezone") == "losangeles":
+            break
+        time.sleep(0.3)
 
     # NOT DebugConsole.spawn(): it polls with logs(), which CLEARS what
     # it returns, and would eat the app's own startup lines.
@@ -398,6 +439,145 @@ def main():
     check("...while a short list stays radio buttons",
           bool(mouse_speed) and mouse_speed[-1]["kind"] == "radio",
           f"kind={mouse_speed[-1]['kind'] if mouse_speed else '?'}")
+
+    # --- THE TIMEZONE DROPDOWN: names, hover, and type-ahead ----------
+    #
+    # All three on the one page with a long list, which is the only
+    # place any of them matters.
+    #
+    # NAVIGATE AWAY AND BACK, not straight back to the page already
+    # open: the app's per-frame layout block is DEDUPED, so re-opening
+    # the page it is already showing logs nothing at all and every
+    # reader below gets None. Going via the Mouse page makes the next
+    # block genuinely different.
+    #
+    # The value itself was set before the app started -- see the fixture
+    # at the top, and why it has to be there rather than here.
+    click(tx + tw // 2, mouse_row["y"])
+    mark_tz = len(drain(dbg))
+    click(tx + tw // 2, tz_row["y"])
+    shown = choice_shown(dbg, mark_tz, "system.timezone")
+    check("the timezone's stored value is still a token",
+          shown is not None and shown[0] == "losangeles",
+          f"{shown}")
+    check("...and what the dropdown shows is a real name",
+          shown is not None and shown[1].startswith("Los Angeles"),
+          f"shown={shown[1]!r}" if shown else "no choice line")
+
+    tz_ctl = controls(dbg, mark_tz).get("system.timezone")
+    if not check("the timezone control reported a rect", tz_ctl is not None):
+        return report()
+    tz_cx = cx + tz_ctl["x"] + tz_ctl["w"] // 2
+    tz_cy = cy + tz_ctl["y"] + tz_ctl["h"] // 2
+
+    # --- HOVER, MEASURED AS PIXELS ------------------------------------
+    #
+    # The bug this exists for: uui_router_motion() delivered a move
+    # event ONE level of containers deep while press and wheel recursed
+    # to any depth, so nothing below this page's scroll view ever heard
+    # the pointer and no hover state in the app could light up. It read
+    # as a missing feature and was a routing bug.
+    #
+    # THE REAL CURSOR, via DebugConsole.warp_cursor(): `gui move` is one
+    # WM iteration and the pointer then snaps back to where the mouse
+    # really is, so a screenshot taken after it shows no hover at all.
+    # See gui_debug.py, which already had this for dialog_test.
+    from PIL import Image
+    dbg.send(f"gui click {tz_cx} {tz_cy}")          # opens the popup
+    dbg.settle()
+    time.sleep(0.4)
+
+    popup_x = cx + tz_ctl["x"]
+    popup_top = cy + tz_ctl["y"] + tz_ctl["h"]
+    # Parked at the popup's LEFT EDGE both times, and sampled well to
+    # the right of it, so the pointer's own pixels are never in the
+    # measurement -- otherwise "the row got darker" would be satisfied
+    # by the cursor being drawn on it.
+    # ROW 0, and it must not be the SELECTED row: a selected row draws
+    # with the selection colour and hover correctly does not override it,
+    # so hovering the current city would measure nothing and read as a
+    # dead hover. The fixture is what guarantees that (see the top).
+    at_cold = dbg.warp_cursor(qmp, popup_x + 4, popup_top + 130)  # below the rows
+    cold_path = f"{args.tmp}/settings_popup_cold.png"
+    qmp.stable_pixels(cold_path)   # SETTLED, or the comparison is noise
+    at_hot = dbg.warp_cursor(qmp, popup_x + 4, popup_top + 6)     # row 0
+    hot_path = f"{args.tmp}/settings_popup_hover.png"
+    qmp.stable_pixels(hot_path)
+
+    cold = Image.open(cold_path).convert("RGB")
+    hot = Image.open(hot_path).convert("RGB")
+    x0, x1 = popup_x + 40, popup_x + tz_ctl["w"] - 8
+
+    def row_mean(im, y):
+        px = list(im.crop((x0, y, x1, y + 1)).getdata())
+        return sum(sum(p) for p in px) / (3.0 * len(px))
+
+    bottom = min(popup_top + 120, cold.height - 1)
+    changed = [y for y in range(popup_top + 1, bottom)
+               if abs(row_mean(hot, y) - row_mean(cold, y)) > 1.0]
+    check("hovering a dropdown row highlights it", bool(changed),
+          f"{len(changed)} rows changed between y={popup_top + 1} and {bottom}; "
+          f"cursor {at_cold} -> {at_hot}, wanted ({popup_x + 4}, {popup_top + 6})")
+    if changed:
+        # DARKER, not merely different: on this near-white theme
+        # uui_state_bg() has to darken, and a hover that brightened
+        # would be the bug docs/gui-guidelines.md warns about.
+        check("...and it gets darker, as a light theme must",
+              row_mean(hot, changed[0]) < row_mean(cold, changed[0]),
+              f"y={changed[0]}: {row_mean(cold, changed[0]):.1f} -> "
+              f"{row_mean(hot, changed[0]):.1f}")
+        # THE CONTROL POINT, and the half that carries the weight: every
+        # OTHER row must be untouched. Without it, a repaint, a scroll,
+        # or the whole list lighting up at once would all pass.
+        band = (min(changed), max(changed))
+        check("...and only that row",
+              band[0] <= popup_top + 6 <= band[1] and (band[1] - band[0]) < 40,
+              f"changed band y={band}, pointer at {popup_top + 6}")
+
+    # --- TYPE-AHEAD ---------------------------------------------------
+    #
+    # The popup is open and owns the keyboard (ui/uui_route.h's overlay
+    # rule), so these keys reach the list with no focus ring involved.
+    # Asserted through the app's STAGED value -- a fact, and the same
+    # channel a click commits through -- not through pixels.
+    mark_key = len(drain(dbg))
+    dbg.key(ord("h"))
+    first = staged_for(dbg, mark_key, "system.timezone")
+    check("typing a letter jumps to that letter", bool(first) and first[0] == "h",
+          f"staged={first!r}")
+
+    mark_key = len(drain(dbg))
+    dbg.key(ord("h"))
+    second = staged_for(dbg, mark_key, "system.timezone")
+    check("...and pressing it again cycles to the next one",
+          bool(second) and second[0] == "h" and second != first,
+          f"{first!r} -> {second!r}")
+
+    # TWO KEYS WITHOUT WAITING: a prefix, not two independent jumps.
+    # Sent back to back on purpose -- the window is a second, and this
+    # is what separates "ho" from "an h, then an o".
+    mark_key = len(drain(dbg))
+    dbg.key(ord("h"), settle=False)
+    dbg.key(ord("o"), settle=False)
+    dbg.settle()
+    time.sleep(0.4)
+    prefix = staged_for(dbg, mark_key, "system.timezone")
+    check("...and two quick keys build a prefix",
+          bool(prefix) and prefix.startswith("ho"),
+          f"staged={prefix!r} (an 'o' city would mean the prefix expired)")
+
+    # NOTHING WAS WRITTEN. Type-ahead stages like every other control
+    # here; a keyboard path that applied directly would be the bug the
+    # whole staged model exists to prevent.
+    check("...and none of it reached the disk",
+          stored_value(dbg, "timezone") == "losangeles",
+          f"stored={stored_value(dbg, 'timezone')!r}")
+
+    dbg.key(0x1B)   # Esc: put the popup away before the next section
+    dbg.settle()
+    # And put the pointer back where the WM starts it, so the sections
+    # below photograph the same screen they always did.
+    dbg.warp_cursor(qmp, 640, 360)
 
     # --- Widget= in /etc overrides the count rule ---------------------
     #

@@ -1304,3 +1304,52 @@ table slot and a process cannot learn its own pid, so the honest options
 were "absent" or "wall time under a name that means CPU time". Absent,
 like `fork()` and `sin()` -- a link error says what is missing, and a
 wrong answer in the right units does not.
+
+## A choice's DISPLAY NAME comes from the data that produced the choice
+
+`/etc/timezones` gained a fourth field — `losangeles,-480,us,Los Angeles`
+— and `struct setting` gained an optional `choice_label` callback beside
+its existing `choice`. Before this the timezone dropdown in System
+Settings listed database tokens: `losangeles`, `newyork`, `saopaulo`.
+
+**The mechanism that already existed and was not enough.**
+`/etc/settings.d/<namespace>.<name>` carries `Choice.<value>=<display
+name>` lines, and `setting_text_choice()` has always filled the ABI's
+`label` field from them — `setting_abi.h` even used "Los Angeles" as its
+worked example. That covers a list whose contents the file's author can
+see: three mouse speeds, two boot targets. It does not cover a list that
+is COMPUTED. The timezones come from `/etc/timezones` and the keyboard
+layouts from a directory, so a `Choice.` line per entry would have to be
+regenerated whenever the data changed — a second copy of the same
+strings, kept true by somebody remembering, which is the shape this
+project deletes on sight. **A setting whose choices are data supplies
+their names from the same data.**
+
+**Three sources, most specific first**, resolved in `SETTING_OP_CHOICE`:
+`/etc/settings.d`, because that is where an installation renames or
+translates one choice and it must be able to override a subsystem;
+then the setting's own `choice_label`; then the value itself, which is
+always presentable if not always pretty. A client draws `label`
+unconditionally and never decides.
+
+**The name is still the identity.** `losangeles` is what `timezone
+<city>` matches, what `/etc/toyos.conf` stores, and what a setting's
+value is; the display name is presentation, and nothing parses it back.
+That is why the shell's `timezone` listing prints `Los Angeles
+(losangeles)` rather than the pretty name alone — a list you cannot type
+from is worse than an ugly one.
+
+**Why the database and not a table in `tz.c`.** The file is the source
+of truth for the cities themselves (that was settled when the hardcoded
+array moved to `/etc/timezones`), so the names belong beside the rows
+they name, where somebody editing the file can see and change them.
+
+**And a row with three fields is still valid**, which is what makes an
+existing machine work: `/etc/timezones` is seeded once and never
+rewritten, so every disk that booted before this change carries 92
+three-field rows. A row with no display name falls back to the
+compiled-in table BY NAME, and then to the token. So an old disk shows
+"Los Angeles" immediately, a hand-added city shows its token until
+somebody names it, and a hand-RENAMED city stays renamed. Compare
+`cursor_theme.c`: a data file that cannot be parsed costs its own
+feature and nothing else.

@@ -411,7 +411,34 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
         // everything else goes to the focused widget. on_key still fires
         // afterwards -- for a key the ring did not take, and so an app
         // can re-read a focused widget whose value the ring just changed.
-        if (d->focus && uui_focus_key(d->focus, ev->a, ev->mods)) a->dirty = 1;
+        // AN OPEN POPUP OUTRANKS BOTH. It is drawn over everything and
+        // is what the user is looking at, so it takes the key before
+        // the focus ring or the app sees it -- the keyboard's half of
+        // the overlay rule the pointer already follows, and what makes
+        // typing in a dropdown work in an app with no focus ring at
+        // all. See ui/uui_route.h.
+        if (a->router.count) {
+            int changed = 0;
+            int id = uui_router_overlay_key(&a->router, ev->a, ev->mods, &changed);
+            if (changed) a->dirty = 1;
+            if (id) {
+                if (d->on_widget) d->on_widget(a, id, UUI_REASON_KEY);
+                break;
+            }
+        }
+        if (d->focus && uui_focus_key(d->focus, ev->a, ev->mods)) {
+            a->dirty = 1;
+            // AND THE APP IS TOLD, by the same id a click on that widget
+            // reports. A focused control whose value the keyboard just
+            // changed is exactly as much a change as a clicked one, and
+            // an app hearing only about clicks silently drops it. Tab
+            // is excluded: it moved focus and changed no value.
+            if (ev->a != '\t' && d->on_widget && d->focus->current >= 0) {
+                int id = uui_router_id_of(&a->router,
+                                          d->focus->items[d->focus->current].widget);
+                if (id) d->on_widget(a, id, UUI_REASON_KEY);
+            }
+        }
         if (d->on_key) d->on_key(a, ev->a, ev->mods);
         break;
 

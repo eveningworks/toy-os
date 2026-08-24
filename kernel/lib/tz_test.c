@@ -62,3 +62,40 @@ KTEST("tz", "city lookup ignores ASCII case") {
     KTEST_ASSERT(tz_find_by_name("definitelynotacity") < 0);
     KTEST_ASSERT(tz_find_by_name("") < 0);
 }
+
+KTEST("tz", "every city has a display name, and it is never a token") {
+    int n = tz_city_count();
+    KTEST_ASSERT(n > 0);
+
+    // EVERY row answers, because tz_city_label() falls back to the name
+    // -- so a caller may draw it unconditionally. Out of range is the
+    // only NULL, matching tz_city_name().
+    //
+    // A display name is capitalised and a token is not, which is what
+    // separates a real name from the fallback. Counted rather than
+    // required of every row: /etc/timezones is a file somebody may add
+    // a city to, and a hand-added row with no display name is
+    // legitimate. A broken fourth column or a broken fallback takes
+    // this to ZERO, which is the failure worth catching.
+    int named = 0;
+    for (int i = 0; i < n; i++) {
+        const char *label = tz_city_label(i);
+        KTEST_ASSERT(label != 0 && label[0] != '\0');
+        if (!(label[0] >= 'a' && label[0] <= 'z')) named++;
+    }
+    KTEST_ASSERT(named > n / 2);
+    KTEST_ASSERT(tz_city_label(-1) == 0);
+    KTEST_ASSERT(tz_city_label(n) == 0);
+}
+
+KTEST("tz", "a two-word city keeps its space, and its token does not") {
+    // losangeles is in the shipped list; on a database somebody has
+    // edited it may not be, and then there is nothing to assert.
+    int idx = tz_find_by_name("losangeles");
+    if (idx < 0) return;
+
+    // THE POINT OF THE WHOLE FEATURE: what is stored and what is shown
+    // are different strings, and the stored one is still the token.
+    KTEST_ASSERT(k_strcmp(tz_city_name(idx), "losangeles") == 0);
+    KTEST_ASSERT(k_strcmp(tz_city_label(idx), "Los Angeles") == 0);
+}

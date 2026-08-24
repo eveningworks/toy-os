@@ -163,6 +163,25 @@ struct setting {
     // layouts are files in a directory, not a compiled-in enum.
     int (*choice)(int index, char *out, uint32_t out_size);
 
+    // OPTIONAL, ENUM only: the DISPLAY name for choice `index` --
+    // "Los Angeles" where `choice` gives `losangeles`. NULL (the
+    // default, and what most settings want) means the value is already
+    // presentable, or that /etc/settings.d names it.
+    //
+    // WHY A CALLBACK WHEN /etc/settings.d ALREADY DOES THIS.
+    // `Choice.<value>=<name>` covers a list the file's author can see:
+    // three mouse speeds, two boot targets. It cannot cover a list that
+    // is COMPUTED -- the timezones come from /etc/timezones, the
+    // keyboard layouts from a directory -- because the file would have
+    // to be regenerated whenever the data changed, which is a second
+    // source of truth for the same strings. A setting whose choices are
+    // data supplies their names from the same data.
+    //
+    // /etc/settings.d STILL WINS where it says something, so an
+    // installation can rename or translate one choice without the
+    // subsystem knowing. See setting_text.h.
+    int (*choice_label)(int index, char *out, uint32_t out_size);
+
     // The current value, as the string that would be written to `file`.
     // Reads the subsystem's live state, not the file: the two agree
     // only until someone edits the file by hand, and the live one is

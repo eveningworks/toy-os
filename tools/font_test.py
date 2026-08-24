@@ -88,14 +88,47 @@ def text_left(qmp, tag):
     return TEXT_X0 + left, ink
 
 
-def set_face(dbg, name):
-    dbg.send(f"gui spawn /bin/config set system.font_face {name}")
-    time.sleep(1.2)
+def set_font_setting(dbg, key, value, timeout=8.0):
+    """Change a font setting, and WAIT for the compositor to say so.
+
+    It slept 1.2s instead, and that is a race rather than a slow path:
+    the setting is written by a short-lived ring-3 process, applied in
+    the kernel, and only then does the client repaint and log its new
+    cell -- three hops whose total is load-dependent. When the
+    ESTABLISHING switch's line landed after the 1.2s, it survived the
+    drain that follows and the next wait_log() returned the PREVIOUS
+    face's cell, so two genuinely different faces compared equal. Seen
+    3 runs in 5 once the desktop had a little more repainting to do.
+
+    Waits for a font-changed line that is NEW since the spawn, and
+    returns it. Setting the face it already holds does nothing, by
+    design, so nothing is logged and this falls back to the timeout --
+    which is why callers establish a state they know differs.
+    """
+    needle = "wm: font changed"
+    before = len([l for l in dbg.logs(clear=False) if needle in l])
+    dbg.send(f"gui spawn /bin/config set {key} {value}")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        lines = [l for l in dbg.logs(clear=False) if needle in l]
+        if len(lines) > before:
+            return lines[-1].strip()
+        time.sleep(0.2)
+    return ""
 
 
-def set_size(dbg, px):
-    dbg.send(f"gui spawn /bin/config set system.font_size {px}")
-    time.sleep(1.2)
+def set_face(dbg, name, timeout=8.0):
+    return set_font_setting(dbg, "system.font_face", name, timeout)
+
+
+def set_size(dbg, px, timeout=8.0):
+    # SAME WAIT AS set_face, and for a sharper reason than tidiness: a
+    # size change still in flight is a font-changed line that lands
+    # inside the NEXT call's wait, which then returns having observed
+    # somebody else's change. `set_size(14); set_face("builtin")` failed
+    # exactly that way -- the capture measured the previous face and
+    # read as "switching to builtin did nothing".
+    return set_font_setting(dbg, "system.font_size", px, timeout)
 
 
 def set_setting(dbg, key, value):

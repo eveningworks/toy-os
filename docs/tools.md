@@ -1029,6 +1029,18 @@ window without going through it will find its layout polls timing out.
   starting ~50px further right than `dejavu-sans-mono` does; a build
   that ignored per-glyph advances passes every other check in the file
   and fails exactly that one, which was verified by making it do so.
+  AND EVERY FONT CHANGE WAITS ON THE COMPOSITOR'S OWN LINE, never on a
+  sleep: `set_face()`/`set_size()` go through one helper that waits for
+  a `wm: font changed` that is NEW since the spawn. The three hops
+  between a setting and a repaint (a short-lived ring-3 process, the
+  kernel, the client) take a load-dependent total, and a fixed sleep let
+  a change land AFTER the drain that followed it -- so the next wait
+  returned the PREVIOUS face's cell and two different faces compared
+  equal. The sharper half is that a change still in flight is observed
+  by the NEXT call's wait: `set_size(14)` then `set_face("builtin")`
+  returned on the size's line and measured the old face, which reads
+  exactly like "switching to builtin did nothing".
+
   Two measurement traps it encodes: measure the RIGHT-ALIGNED version
   text rather than the desktop icon captions (those are clipped to the
   icon cell, so a narrower font mostly just un-truncates them and moves
@@ -1466,6 +1478,19 @@ window without going through it will find its layout polls timing out.
   baseline so much larger that a positive control (making the layout
   ignore `hidden` again) reddened nothing at all. Recorded numbers:
   55% of the shown ink survives when hidden works, 98% when it does not.
+
+  It also drives the TIMEZONE DROPDOWN, which is where three things are
+  covered that nothing else reaches: a choice's display name (the app
+  logs `settings: choice <n> <name> raw <token> shown <display>`, since
+  a screendump cannot tell a missing display name from a value that
+  reads like one), HOVER as pixels, and keyboard type-ahead. Three
+  fixture rules that cost a run each. The timezone is set BEFORE the app
+  starts, because the app caches a setting's value when it builds a
+  page. The page is reached by navigating AWAY and BACK, because the
+  layout log is deduped per frame and re-opening the page already shown
+  logs nothing at all. And the row hovered must not be the SELECTED row
+  -- selection correctly outranks hover, so hovering the current city
+  measures nothing and reads as a dead hover.
 - **`iso_guard.py`** -- refuses to boot a stale `toy-os.iso`, called
   from `vm.py` and `qmp_test.py`'s `launch_qemu_cmd()`. `make all`
   without `make iso`, or a `make iso` that FAILED, otherwise leaves the

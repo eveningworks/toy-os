@@ -251,6 +251,21 @@ static void print_save_result(int r) {
     }
 }
 
+// A row in either listing: the display name, and the TOKEN beside it
+// where they differ -- because the token is what `timezone <name>` and
+// /etc/toyos.conf take, so a list that showed only "Los Angeles" would
+// be a list you cannot type from.
+static void print_city_row(int i) {
+    const char *name = tz_city_name(i);
+    const char *label = tz_city_label(i);
+    vga_write(label ? label : name);
+    if (label && name && k_strcmp(label, name) != 0) {
+        vga_write(" (");
+        vga_write(name);
+        vga_write(")");
+    }
+}
+
 void cmd_timezone(const char *args) {
     if (args && k_strlen(args) > 0) {
         int idx = tz_find_by_name(args);
@@ -278,7 +293,7 @@ void cmd_timezone(const char *args) {
         int n = tz_city_count();
         for (int i = 0; i < n; i++) {
             vga_write("  ");
-            vga_write(tz_city_name(i));
+            print_city_row(i);
             vga_putc('\n');
         }
         return;
@@ -289,7 +304,7 @@ void cmd_timezone(const char *args) {
     for (int i = 0; i < count; i++) {
         vga_write_dec((uint32_t)(i + 1));
         vga_write(i == current ? ") * " : ")   ");
-        vga_write(tz_city_name(i));
+        print_city_row(i);
         vga_putc('\n');
     }
     vga_write("Enter a number (blank to cancel): ");

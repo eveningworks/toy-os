@@ -36,6 +36,7 @@
 #include "ui/uui_label.h"
 #include "ui/uui_radio_list.h"
 #include "ui/uui_dropdown.h"
+#include "ui/uui_focus.h"
 #include "ui/uui_slider.h"
 #include "ui/uui_spinbox.h"
 #include "ui/uui_checkbox.h"
@@ -858,6 +859,20 @@ static int PAGE_COUNT;
 static struct uui_layout PAGE_LAYOUT;
 static struct uui_scrollview PAGE_SCROLL;
 
+// THE PAGE'S CONTROLS ARE A FOCUS RING, rebuilt with the page. Tab
+// moves between the controls of whatever page is open, and that is the
+// whole ring on purpose: the sidebar is reached by clicking, and the
+// buttons commit what the controls staged. Without it a dropdown could
+// never hold keyboard focus, so typing a city name -- which is the
+// point of a 92-item list -- had nowhere to arrive.
+//
+// The FULL ops tables, not the `_focus_ops` ones: they carry `key`,
+// `set_focused` and `accepts_focus` already (ui/uui_widget.h), so a
+// second table per widget would be a second place to drift.
+static struct uui_focusable FOCUS[PAGE_MAX];
+static int FOCUS_COUNT;
+static struct uui_focus PAGE_FOCUS;
+
 static struct uui_item ITEMS_BODY[2];
 static struct uui_layout BODY_LAYOUT;
 static struct uui_item ITEMS[3];
@@ -869,6 +884,7 @@ static struct uui_layout LAYOUT;
 // past the end into a garbage ops table.
 static void relayout_page(void) {
     int n = 0;
+    FOCUS_COUNT = 0;
     PAGE[n++] = (struct uui_item){ .ops = &uui_label_ops, .widget = &g_page_title,
                                     .id = 0, .flags = UUI_FILL_W };
     PAGE[n++] = (struct uui_item){ .ops = &uui_label_ops, .widget = &g_page_desc,
@@ -918,11 +934,13 @@ static void relayout_page(void) {
             PAGE[n++] = (struct uui_item){ .ops = &uui_dropdown_ops,
                                             .widget = &sl->combo,
                                             .id = ID_CONTROL_BASE + i };
+            FOCUS[FOCUS_COUNT++] = (struct uui_focusable){ &sl->combo, &uui_dropdown_ops };
         } else if (sl->kind == CTRL_SLIDER) {
             PAGE[n++] = (struct uui_item){ .ops = &uui_slider_ops,
                                             .widget = &sl->slider,
                                             .id = ID_CONTROL_BASE + i,
                                             .flags = UUI_FILL_W };
+            FOCUS[FOCUS_COUNT++] = (struct uui_focusable){ &sl->slider, &uui_slider_ops };
         } else if (sl->kind == CTRL_SPIN) {
             // NOT UUI_FILL_W: a spinbox wants exactly the width of its
             // widest number plus its steppers, and stretching it across
@@ -931,11 +949,13 @@ static void relayout_page(void) {
             PAGE[n++] = (struct uui_item){ .ops = &uui_spinbox_ops,
                                             .widget = &sl->spin,
                                             .id = ID_CONTROL_BASE + i };
+            FOCUS[FOCUS_COUNT++] = (struct uui_focusable){ &sl->spin, &uui_spinbox_ops };
         } else {
             PAGE[n++] = (struct uui_item){ .ops = &uui_radio_list_ops,
                                             .widget = &sl->radio,
                                             .id = ID_CONTROL_BASE + i,
                                             .flags = UUI_FILL_W };
+            FOCUS[FOCUS_COUNT++] = (struct uui_focusable){ &sl->radio, &uui_radio_list_ops };
         }
 
         // The gap that separates this setting from the next -- see
@@ -951,6 +971,10 @@ static void relayout_page(void) {
                                     .id = ID_ADVANCED, .hidden = !g_advanced_has };
     PAGE_COUNT = n;
     PAGE_LAYOUT.count = n;
+    // The widgets the ring pointed at may have been re-inited by
+    // load_slot(), so it starts again with nothing focused rather than
+    // holding an index into the previous page.
+    uui_focus_init(&PAGE_FOCUS, FOCUS, FOCUS_COUNT);
     // The item list just changed. The scroll view now NOTICES this by
     // itself (uui_scrollview.h), so this is belt-and-braces rather than
     // load-bearing -- kept because saying so at the point of change is
@@ -997,7 +1021,12 @@ static void on_widget(struct uapp *a, int id, int reason) {
     // applied a setting: each motion wrote /etc, bumped fs_generation()
     // and made the desktop re-read every .desktop file. Hovering froze
     // the machine for seconds.
-    if (reason != UUI_REASON_RELEASE) return;
+    // A KEY IS A DELIBERATE ACT AND STAGES; a motion is not. What the
+    // rule above is really about is not acting on a pointer merely
+    // crossing a control -- typing into a focused dropdown, or arrowing
+    // through an open one, is the user choosing a value, and it would
+    // otherwise change on screen and be silently dropped by Apply.
+    if (reason != UUI_REASON_RELEASE && reason != UUI_REASON_KEY) return;
 
     if (id >= ID_CONTROL_BASE && id < ID_CONTROL_BASE + PAGE_MAX) {
         // STAGED, not applied. The selection is remembered; Apply or OK
@@ -1222,6 +1251,18 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
             ulogf("settings: enabled %d %s %d\n", i,
                   sl->setting >= 0 ? g_name[sl->setting] : "-",
                   sl->radio.disabled ? 0 : 1);
+            // WHAT IS STORED AND WHAT IS SHOWN, side by side. They are
+            // different strings for a setting whose choices carry
+            // display names ("losangeles" / "Los Angeles"), and a
+            // screendump cannot tell a missing display name from a
+            // value that happens to look like one. `shown` goes LAST
+            // because it contains spaces.
+            if (sl->kind != CTRL_SPIN && sl->staged >= 0 &&
+                sl->staged < sl->choice_count) {
+                ulogf("settings: choice %d %s raw %s shown %s\n", i,
+                      sl->setting >= 0 ? g_name[sl->setting] : "-",
+                      sl->choice_raw[sl->staged], sl->choice[sl->staged]);
+            }
         }
         ulogf("settings: advanced_toggle %d %d %d %d shown %d\n",
               g_advanced_cb.x, g_advanced_cb.y, g_advanced_cb.w, g_advanced_cb.h,
@@ -1441,6 +1482,9 @@ int main(void) {
         .widgets = ITEMS,
         .widget_count = (int)(sizeof ITEMS / sizeof ITEMS[0]),
         .on_widget = on_widget,
+        // Tab moves between the page's controls; the toolkit owns the
+        // ring (docs/conventions/gui.md). relayout_page() refills it.
+        .focus = &PAGE_FOCUS,
         .on_draw = on_draw,
         .on_draw_over = on_draw_over,
         .on_open = on_open,

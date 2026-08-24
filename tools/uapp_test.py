@@ -83,11 +83,18 @@ def run(dbg, qmp, tmp, res):
     # yet when the injected keys would arrive.
     dbg.send(f"gui spawn {SPAWN_PATH}")
 
+    # POLLED UNTIL THE HINT IS THERE, not merely until the window is.
+    # The next check reads `resizable`, which arrives over TWP after the
+    # window itself does -- so a poll that exits on "the window exists"
+    # is weaker than what follows it, and under the full suite's load
+    # (eight guests on one host) it read False on a window that was
+    # perfectly resizable a moment later. The assertion is unchanged: if
+    # the hint never comes, this still times out and still fails.
     deadline = time.time() + SPAWN_TIMEOUT_S
     win = None
     while time.time() < deadline:
         win = dbg.window(TITLE)
-        if win:
+        if win and win.get("resizable"):
             break
         time.sleep(0.3)
     res.check("winclient runs as a ring-3 client with its own window", win is not None,

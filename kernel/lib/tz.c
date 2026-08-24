@@ -3,8 +3,9 @@
 //
 // Two separate things live under /etc here, and it's worth keeping
 // them straight: /etc/timezones is the DATABASE (every city this
-// build knows about, one per line -- see tz_load_cities()'s top
-// comment for the file format), and /etc/toyos.conf's "timezone=<city>"
+// build knows about, one "name,offset,dst,Display Name" row per line
+// -- see tz_load_cities()'s top comment for the format), and
+// /etc/toyos.conf's "timezone=<city>"
 // key is the SELECTION (which one of those cities is currently
 // active) -- see etc_config.h for the shared reader/writer that key
 // goes through. Before the database file existed, the city list was a
@@ -36,11 +37,19 @@
 enum dst_rule { TZ_DST_NONE, TZ_DST_EU, TZ_DST_US };
 
 #define TZ_NAME_MAX 20 // longest city name today is "losangeles" (10 chars) -- plenty of headroom
+#define TZ_LABEL_MAX 32 // longest display name today is "South Georgia" (13)
 
 struct tz_city {
     char name[TZ_NAME_MAX];    // lowercase, matched by `timezone <name>`
     int base_offset_minutes;   // standard-time UTC offset, before DST
     enum dst_rule dst_rule;
+    // WHAT A PERSON READS: "Los Angeles" for `losangeles`. The name is
+    // a TOKEN -- lowercase, no spaces, so it can be typed as an
+    // argument and stored in a config file -- and a token is not a
+    // display name. Empty here means "no display name", and
+    // tz_city_label() falls back to the token, so every caller may draw
+    // what it returns unconditionally.
+    char label[TZ_LABEL_MAX];
 };
 
 // The in-memory city table, loaded from /etc/timezones by
@@ -88,98 +97,98 @@ static int tz_city_count_loaded = 0;
 // /etc/timezones is shown in whatever order it was written -- which is
 // the honest behaviour for a file somebody chose to edit.
 static const struct tz_city TZ_DEFAULT_CITIES[] = {
-    { "accra",             0, TZ_DST_NONE },
-    { "adelaide",        570, TZ_DST_NONE },
-    { "almaty",          360, TZ_DST_NONE },
-    { "amsterdam",        60, TZ_DST_EU   },
-    { "anchorage",      -540, TZ_DST_US   },
-    { "apia",            780, TZ_DST_NONE },
-    { "athens",          120, TZ_DST_EU   },
-    { "auckland",        720, TZ_DST_NONE },
-    { "azores",          -60, TZ_DST_EU   },
-    { "bakerisland",    -720, TZ_DST_NONE },
-    { "baku",            240, TZ_DST_NONE },
-    { "bangkok",         420, TZ_DST_NONE },
-    { "beijing",         480, TZ_DST_NONE },
-    { "berlin",           60, TZ_DST_EU   },
-    { "bogota",         -300, TZ_DST_NONE },
-    { "brisbane",        600, TZ_DST_NONE },
-    { "brussels",         60, TZ_DST_EU   },
-    { "bucharest",       120, TZ_DST_EU   },
-    { "budapest",         60, TZ_DST_EU   },
-    { "buenosaires",    -180, TZ_DST_NONE },
-    { "cairo",           120, TZ_DST_NONE },
-    { "capeverde",       -60, TZ_DST_NONE },
-    { "caracas",        -240, TZ_DST_NONE },
-    { "chatham",         765, TZ_DST_NONE },
-    { "chicago",        -360, TZ_DST_US   },
-    { "colombo",         330, TZ_DST_NONE },
-    { "copenhagen",       60, TZ_DST_EU   },
-    { "delhi",           330, TZ_DST_NONE },
-    { "denver",         -420, TZ_DST_US   },
-    { "dhaka",           360, TZ_DST_NONE },
-    { "dubai",           240, TZ_DST_NONE },
-    { "dublin",            0, TZ_DST_EU   },
-    { "fiji",            720, TZ_DST_NONE },
-    { "guam",            600, TZ_DST_NONE },
-    { "halifax",        -240, TZ_DST_US   },
-    { "hanoi",           420, TZ_DST_NONE },
-    { "helsinki",        120, TZ_DST_EU   },
-    { "hongkong",        480, TZ_DST_NONE },
-    { "honolulu",       -600, TZ_DST_NONE },
-    { "istanbul",        180, TZ_DST_NONE },
-    { "jakarta",         420, TZ_DST_NONE },
-    { "johannesburg",    120, TZ_DST_NONE },
-    { "kabul",           270, TZ_DST_NONE },
-    { "karachi",         300, TZ_DST_NONE },
-    { "kathmandu",       345, TZ_DST_NONE },
-    { "kiritimati",      840, TZ_DST_NONE },
-    { "kyiv",            120, TZ_DST_EU   },
-    { "lagos",            60, TZ_DST_NONE },
-    { "lima",           -300, TZ_DST_NONE },
-    { "lisbon",            0, TZ_DST_EU   },
-    { "london",            0, TZ_DST_EU   },
-    { "losangeles",     -480, TZ_DST_US   },
-    { "madrid",           60, TZ_DST_EU   },
-    { "manila",          480, TZ_DST_NONE },
-    { "melbourne",       600, TZ_DST_NONE },
-    { "mexicocity",     -360, TZ_DST_NONE },
-    { "midway",         -660, TZ_DST_NONE },
-    { "montevideo",     -180, TZ_DST_NONE },
-    { "moscow",          180, TZ_DST_NONE },
-    { "nairobi",         180, TZ_DST_NONE },
-    { "newfoundland",   -210, TZ_DST_NONE },
-    { "newyork",        -300, TZ_DST_US   },
-    { "noumea",          660, TZ_DST_NONE },
-    { "oslo",             60, TZ_DST_EU   },
-    { "paris",            60, TZ_DST_EU   },
-    { "perth",           480, TZ_DST_NONE },
-    { "phoenix",        -420, TZ_DST_NONE },
-    { "prague",           60, TZ_DST_EU   },
-    { "reykjavik",         0, TZ_DST_NONE },
-    { "riga",            120, TZ_DST_EU   },
-    { "riyadh",          180, TZ_DST_NONE },
-    { "rome",             60, TZ_DST_EU   },
-    { "santiago",       -240, TZ_DST_NONE },
-    { "saopaulo",       -180, TZ_DST_NONE },
-    { "seoul",           540, TZ_DST_NONE },
-    { "singapore",       480, TZ_DST_NONE },
-    { "sofia",           120, TZ_DST_EU   },
-    { "southgeorgia",   -120, TZ_DST_NONE },
-    { "stockholm",        60, TZ_DST_EU   },
-    { "sydney",          600, TZ_DST_NONE },
-    { "taipei",          480, TZ_DST_NONE },
-    { "tallinn",         120, TZ_DST_EU   },
-    { "tashkent",        300, TZ_DST_NONE },
-    { "tehran",          210, TZ_DST_NONE },
-    { "tokyo",           540, TZ_DST_NONE },
-    { "toronto",        -300, TZ_DST_US   },
-    { "utc",               0, TZ_DST_NONE },
-    { "vancouver",      -480, TZ_DST_US   },
-    { "vienna",           60, TZ_DST_EU   },
-    { "vilnius",         120, TZ_DST_EU   },
-    { "warsaw",           60, TZ_DST_EU   },
-    { "yangon",          390, TZ_DST_NONE },
+    { "accra",             0, TZ_DST_NONE,  "Accra"          },
+    { "adelaide",        570, TZ_DST_NONE,  "Adelaide"       },
+    { "almaty",          360, TZ_DST_NONE,  "Almaty"         },
+    { "amsterdam",        60, TZ_DST_EU,    "Amsterdam"      },
+    { "anchorage",      -540, TZ_DST_US,    "Anchorage"      },
+    { "apia",            780, TZ_DST_NONE,  "Apia"           },
+    { "athens",          120, TZ_DST_EU,    "Athens"         },
+    { "auckland",        720, TZ_DST_NONE,  "Auckland"       },
+    { "azores",          -60, TZ_DST_EU,    "Azores"         },
+    { "bakerisland",    -720, TZ_DST_NONE,  "Baker Island"   },
+    { "baku",            240, TZ_DST_NONE,  "Baku"           },
+    { "bangkok",         420, TZ_DST_NONE,  "Bangkok"        },
+    { "beijing",         480, TZ_DST_NONE,  "Beijing"        },
+    { "berlin",           60, TZ_DST_EU,    "Berlin"         },
+    { "bogota",         -300, TZ_DST_NONE,  "Bogota"         },
+    { "brisbane",        600, TZ_DST_NONE,  "Brisbane"       },
+    { "brussels",         60, TZ_DST_EU,    "Brussels"       },
+    { "bucharest",       120, TZ_DST_EU,    "Bucharest"      },
+    { "budapest",         60, TZ_DST_EU,    "Budapest"       },
+    { "buenosaires",    -180, TZ_DST_NONE,  "Buenos Aires"   },
+    { "cairo",           120, TZ_DST_NONE,  "Cairo"          },
+    { "capeverde",       -60, TZ_DST_NONE,  "Cape Verde"     },
+    { "caracas",        -240, TZ_DST_NONE,  "Caracas"        },
+    { "chatham",         765, TZ_DST_NONE,  "Chatham"        },
+    { "chicago",        -360, TZ_DST_US,    "Chicago"        },
+    { "colombo",         330, TZ_DST_NONE,  "Colombo"        },
+    { "copenhagen",       60, TZ_DST_EU,    "Copenhagen"     },
+    { "delhi",           330, TZ_DST_NONE,  "Delhi"          },
+    { "denver",         -420, TZ_DST_US,    "Denver"         },
+    { "dhaka",           360, TZ_DST_NONE,  "Dhaka"          },
+    { "dubai",           240, TZ_DST_NONE,  "Dubai"          },
+    { "dublin",            0, TZ_DST_EU,    "Dublin"         },
+    { "fiji",            720, TZ_DST_NONE,  "Fiji"           },
+    { "guam",            600, TZ_DST_NONE,  "Guam"           },
+    { "halifax",        -240, TZ_DST_US,    "Halifax"        },
+    { "hanoi",           420, TZ_DST_NONE,  "Hanoi"          },
+    { "helsinki",        120, TZ_DST_EU,    "Helsinki"       },
+    { "hongkong",        480, TZ_DST_NONE,  "Hong Kong"      },
+    { "honolulu",       -600, TZ_DST_NONE,  "Honolulu"       },
+    { "istanbul",        180, TZ_DST_NONE,  "Istanbul"       },
+    { "jakarta",         420, TZ_DST_NONE,  "Jakarta"        },
+    { "johannesburg",    120, TZ_DST_NONE,  "Johannesburg"   },
+    { "kabul",           270, TZ_DST_NONE,  "Kabul"          },
+    { "karachi",         300, TZ_DST_NONE,  "Karachi"        },
+    { "kathmandu",       345, TZ_DST_NONE,  "Kathmandu"      },
+    { "kiritimati",      840, TZ_DST_NONE,  "Kiritimati"     },
+    { "kyiv",            120, TZ_DST_EU,    "Kyiv"           },
+    { "lagos",            60, TZ_DST_NONE,  "Lagos"          },
+    { "lima",           -300, TZ_DST_NONE,  "Lima"           },
+    { "lisbon",            0, TZ_DST_EU,    "Lisbon"         },
+    { "london",            0, TZ_DST_EU,    "London"         },
+    { "losangeles",     -480, TZ_DST_US,    "Los Angeles"    },
+    { "madrid",           60, TZ_DST_EU,    "Madrid"         },
+    { "manila",          480, TZ_DST_NONE,  "Manila"         },
+    { "melbourne",       600, TZ_DST_NONE,  "Melbourne"      },
+    { "mexicocity",     -360, TZ_DST_NONE,  "Mexico City"    },
+    { "midway",         -660, TZ_DST_NONE,  "Midway"         },
+    { "montevideo",     -180, TZ_DST_NONE,  "Montevideo"     },
+    { "moscow",          180, TZ_DST_NONE,  "Moscow"         },
+    { "nairobi",         180, TZ_DST_NONE,  "Nairobi"        },
+    { "newfoundland",   -210, TZ_DST_NONE,  "Newfoundland"   },
+    { "newyork",        -300, TZ_DST_US,    "New York"       },
+    { "noumea",          660, TZ_DST_NONE,  "Noumea"         },
+    { "oslo",             60, TZ_DST_EU,    "Oslo"           },
+    { "paris",            60, TZ_DST_EU,    "Paris"          },
+    { "perth",           480, TZ_DST_NONE,  "Perth"          },
+    { "phoenix",        -420, TZ_DST_NONE,  "Phoenix"        },
+    { "prague",           60, TZ_DST_EU,    "Prague"         },
+    { "reykjavik",         0, TZ_DST_NONE,  "Reykjavik"      },
+    { "riga",            120, TZ_DST_EU,    "Riga"           },
+    { "riyadh",          180, TZ_DST_NONE,  "Riyadh"         },
+    { "rome",             60, TZ_DST_EU,    "Rome"           },
+    { "santiago",       -240, TZ_DST_NONE,  "Santiago"       },
+    { "saopaulo",       -180, TZ_DST_NONE,  "Sao Paulo"      },
+    { "seoul",           540, TZ_DST_NONE,  "Seoul"          },
+    { "singapore",       480, TZ_DST_NONE,  "Singapore"      },
+    { "sofia",           120, TZ_DST_EU,    "Sofia"          },
+    { "southgeorgia",   -120, TZ_DST_NONE,  "South Georgia"  },
+    { "stockholm",        60, TZ_DST_EU,    "Stockholm"      },
+    { "sydney",          600, TZ_DST_NONE,  "Sydney"         },
+    { "taipei",          480, TZ_DST_NONE,  "Taipei"         },
+    { "tallinn",         120, TZ_DST_EU,    "Tallinn"        },
+    { "tashkent",        300, TZ_DST_NONE,  "Tashkent"       },
+    { "tehran",          210, TZ_DST_NONE,  "Tehran"         },
+    { "tokyo",           540, TZ_DST_NONE,  "Tokyo"          },
+    { "toronto",        -300, TZ_DST_US,    "Toronto"        },
+    { "utc",               0, TZ_DST_NONE,  "UTC"            },
+    { "vancouver",      -480, TZ_DST_US,    "Vancouver"      },
+    { "vienna",           60, TZ_DST_EU,    "Vienna"         },
+    { "vilnius",         120, TZ_DST_EU,    "Vilnius"        },
+    { "warsaw",           60, TZ_DST_EU,    "Warsaw"         },
+    { "yangon",          390, TZ_DST_NONE,  "Yangon"         },
 };
 #define TZ_DEFAULT_CITY_COUNT ((int)(sizeof(TZ_DEFAULT_CITIES) / sizeof(TZ_DEFAULT_CITIES[0])))
 
@@ -361,9 +370,11 @@ static uint32_t tz_format_int(char *out, int v) {
 
 // Loads TZ_CITIES[] from `data` (TZ_DB_FILE's content, `size` bytes)
 // and returns how many rows were actually loaded (0 if none). Format:
-// one "name,offset_minutes,dst" per line, e.g. "helsinki,120,eu" or
-// "utc,0,none" -- `dst` is "eu", "us", or anything else (including
-// empty) for no DST. '#' starts a comment to end of line (whole-line
+// one "name,offset_minutes,dst,display name" per line, e.g.
+// "helsinki,120,eu,Helsinki" or "losangeles,-480,us,Los Angeles" --
+// `dst` is "eu", "us", or anything else (including empty) for no DST,
+// and the display name is OPTIONAL (see below for what a row without
+// one gets). '#' starts a comment to end of line (whole-line
 // or trailing), blank lines are skipped, and whitespace around each
 // field is trimmed -- the same conventions as etc_config.c's
 // key=value format, just with 3 comma-separated fields per line
@@ -398,7 +409,13 @@ static int tz_load_cities(const char *data, uint32_t size) {
         if (p >= content_end) continue; // no second comma
         p++;
 
+        // The FOURTH field is optional: a row written before display
+        // names existed has three, and stays valid.
         const char *f3 = p, *f3_end = content_end;
+        const char *f4 = 0, *f4_end = content_end;
+        for (const char *q = f3; q < content_end; q++) {
+            if (*q == ',') { f3_end = q; f4 = q + 1; break; }
+        }
 
         const char *ns = f1, *ne = f1_end;
         uint32_t nlen = tz_trim(&ns, ne);
@@ -415,6 +432,32 @@ static int tz_load_cities(const char *data, uint32_t size) {
         TZ_CITIES[count].name[nlen] = '\0';
         TZ_CITIES[count].base_offset_minutes = tz_parse_int(os, oe);
         TZ_CITIES[count].dst_rule = tz_parse_dst(ds, dlen);
+
+        // No display name in the file? Ask the compiled-in table for
+        // one, by name. THAT IS WHAT MAKES AN EXISTING DISK WORK: this
+        // file is seeded once and never rewritten, so a machine that
+        // booted before display names existed has 92 three-field rows
+        // and would otherwise show tokens forever. A row that DOES
+        // carry a name wins, so a hand-added city can name itself and a
+        // hand-renamed one stays renamed.
+        TZ_CITIES[count].label[0] = '\0';
+        if (f4) {
+            const char *ls2 = f4, *le2 = f4_end;
+            uint32_t llen = tz_trim(&ls2, le2);
+            if (llen > 0 && llen < TZ_LABEL_MAX) {
+                k_memcpy(TZ_CITIES[count].label, ls2, llen);
+                TZ_CITIES[count].label[llen] = '\0';
+            }
+        }
+        if (!TZ_CITIES[count].label[0]) {
+            for (int d = 0; d < TZ_DEFAULT_CITY_COUNT; d++) {
+                if (k_strcmp(TZ_DEFAULT_CITIES[d].name, TZ_CITIES[count].name) == 0) {
+                    k_strlcpy(TZ_CITIES[count].label, TZ_DEFAULT_CITIES[d].label,
+                              sizeof TZ_CITIES[count].label);
+                    break;
+                }
+            }
+        }
         count++;
     }
     return count;
@@ -435,7 +478,7 @@ static void tz_seed_default_db(void) {
     // loop below simply stopped when the next line would not fit, and
     // nothing said so. Sized from the table now, so it cannot truncate,
     // and the break below is a backstop rather than the normal path.
-    static char buf[TZ_DEFAULT_CITY_COUNT * (TZ_NAME_MAX + 16) + 1];
+    static char buf[TZ_DEFAULT_CITY_COUNT * (TZ_NAME_MAX + TZ_LABEL_MAX + 16) + 1];
     uint32_t len = 0;
     static const char *const DST_NAMES[] = { "none", "eu", "us" };
     for (int i = 0; i < TZ_DEFAULT_CITY_COUNT; i++) {
@@ -447,7 +490,7 @@ static void tz_seed_default_db(void) {
         // Cannot fire with the buffer sized from the table above -- kept
         // as a backstop, because the day somebody adds a longer name is
         // the day a silent truncation would come back.
-        if (len + nlen + 32 >= sizeof(buf)) {
+        if (len + nlen + (uint32_t)k_strlen(c->label) + 32 >= sizeof(buf)) {
             klog_write("tz: default city list truncated -- buffer too small\n");
             break;
         }
@@ -458,6 +501,9 @@ static void tz_seed_default_db(void) {
         const char *dst = DST_NAMES[c->dst_rule];
         uint32_t dlen = (uint32_t)k_strlen(dst);
         k_memcpy(buf + len, dst, dlen); len += dlen;
+        buf[len++] = ',';
+        uint32_t llen = (uint32_t)k_strlen(c->label);
+        k_memcpy(buf + len, c->label, llen); len += llen;
         buf[len++] = '\n';
     }
     buf[len] = '\0';
@@ -510,6 +556,12 @@ const char *tz_city_name(int index) {
     return TZ_CITIES[index].name;
 }
 
+const char *tz_city_label(int index) {
+    if (index < 0 || index >= tz_city_count_loaded) return 0;
+    const struct tz_city *c = &TZ_CITIES[index];
+    return c->label[0] ? c->label : c->name;
+}
+
 int tz_current_index(void) {
     return current_index;
 }
@@ -538,6 +590,18 @@ static int tz_choice(int index, char *out, uint32_t out_size) {
     return 1;
 }
 
+// The display half of tz_choice(), for a settings UI. Registered as
+// `choice_label` (setting.h) because these names come from DATA -- the
+// loaded database -- and /etc/settings.d cannot hold names for a list
+// whose contents it does not know. A Choice.<value>= line still wins,
+// so an installation may still rename one.
+static int tz_choice_label(int index, char *out, uint32_t out_size) {
+    const char *label = tz_city_label(index);
+    if (!label) return 0;
+    k_strlcpy(out, label, out_size);
+    return 1;
+}
+
 static void tz_get(char *out, uint32_t out_size) {
     const char *name = tz_city_name(tz_current_index());
     k_strlcpy(out, name ? name : "", out_size);
@@ -556,6 +620,7 @@ static const struct setting g_tz_setting = {
     .file   = TZ_CONFIG_FILE,
     .category = "Time & Locale",
     .choice = tz_choice,
+    .choice_label = tz_choice_label,
     .get    = tz_get,
     .apply  = tz_apply,
 };

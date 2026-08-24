@@ -105,6 +105,52 @@ int uui_router_press(struct uui_router *r, int cx, int cy, int *out_changed) {
     return taken ? taken->id : 0;
 }
 
+// A POINT NO WIDGET CAN CONTAIN. A widget the cursor has left still has
+// to HEAR the move, or its highlight stays lit after the pointer has
+// gone; this is what a subtree is told when the cursor is outside the
+// container that clips it. uui_hit() is a half-open range test, so any
+// coordinate this far negative misses everything without a widget
+// needing to know about the convention.
+#define UUI_NOWHERE (-(1 << 20))
+
+// One item, and everything nested inside it. Every widget hears the
+// move -- unlike a press, which stops at the first taker -- because
+// more than one may need to CLEAR a highlight.
+//
+// THIS RECURSES, and for a long time it did not: the loop this replaced
+// walked exactly ONE level of containers while press and wheel walked
+// all of them, so a widget below two containers never received a move
+// event at all. Nothing failed loudly. System Settings nests four deep
+// (window -> body row -> scroll view -> page column), so every hover
+// state on that page was dead -- including the one inside a dropdown's
+// popup, which is where it was finally noticed.
+static int motion_item(struct uui_item *it, int cx, int cy, unsigned buttons,
+                       const struct uui_item *skip, int *id) {
+    if (it->hidden) return 0;      // not drawn, so nothing to highlight
+    if (it == skip) return 0;      // the overlay owner, already told
+    int changed = 0;
+
+    int n = 0;
+    struct uui_item *sub = nested(it, &n);
+    if (sub) {
+        // Children of a container that CLIPS (one with a `hit`) are
+        // told "nowhere" rather than skipped when the cursor is outside
+        // it -- skipping would leave a row lit under a scroll view the
+        // pointer has left, and passing the real point would light a
+        // row that is scrolled out of sight.
+        int ax = cx, ay = cy;
+        if (!container_admits(it, cx, cy)) { ax = UUI_NOWHERE; ay = UUI_NOWHERE; }
+        for (int i = 0; i < n; i++)
+            if (motion_item(&sub[i], ax, ay, buttons, skip, id)) changed = 1;
+    }
+
+    if (it->ops && it->ops->motion && it->ops->motion(it->widget, cx, cy, buttons)) {
+        changed = 1;
+        *id = it->id;
+    }
+    return changed;
+}
+
 int uui_router_motion(struct uui_router *r, int cx, int cy, unsigned buttons,
                        int *out_changed) {
     int changed = 0;
@@ -120,22 +166,53 @@ int uui_router_motion(struct uui_router *r, int cx, int cy, unsigned buttons,
         return id;
     }
 
-    // Otherwise it is a hover: every widget hears it, because more than
-    // one may need to CLEAR a highlight the cursor has left.
+    // The overlay owner first, and with the REAL point: a dropdown's
+    // popup is drawn outside its own rect and usually outside its
+    // container's, so the clipping above would tell it "nowhere" and no
+    // row in an open popup would ever highlight. Same precedence press
+    // and wheel already give it -- and it is skipped in the walk below,
+    // since hearing the move twice would light a row and clear it again.
+    struct uui_item *ov = overlay_owner(r->items, r->count);
+    if (ov && ov->ops->motion && ov->ops->motion(ov->widget, cx, cy, buttons)) {
+        changed = 1;
+        id = ov->id;
+    }
+
+    for (int i = 0; i < r->count; i++)
+        if (motion_item(&r->items[i], cx, cy, buttons, ov, &id)) changed = 1;
+
+    if (out_changed) *out_changed = changed;
+    return id;
+}
+
+static int id_of_item(struct uui_item *it, const void *widget) {
+    if (it->widget == widget) return it->id;
+    int n = 0;
+    struct uui_item *sub = nested(it, &n);
+    for (int i = 0; i < n; i++) {
+        int id = id_of_item(&sub[i], widget);
+        if (id) return id;
+    }
+    return 0;
+}
+
+int uui_router_id_of(const struct uui_router *r, const void *widget) {
+    if (!widget) return 0;
     for (int i = 0; i < r->count; i++) {
-        int n = 0;
-        struct uui_item *sub = nested(&r->items[i], &n);
-        struct uui_item *list = sub ? sub : &r->items[i];
-        int listn = sub ? n : 1;
-        for (int j = 0; j < listn; j++) {
-            if (list[j].hidden) continue;
-            const struct uui_widget_ops *ops = list[j].ops;
-            if (!ops || !ops->motion) continue;
-            if (ops->motion(list[j].widget, cx, cy, buttons)) {
-                changed = 1;
-                id = list[j].id;
-            }
-        }
+        int id = id_of_item(&r->items[i], widget);
+        if (id) return id;
+    }
+    return 0;
+}
+
+int uui_router_overlay_key(struct uui_router *r, int key, unsigned mods,
+                            int *out_changed) {
+    int changed = 0;
+    int id = 0;
+    struct uui_item *ov = overlay_owner(r->items, r->count);
+    if (ov && ov->ops->key && ov->ops->key(ov->widget, key, mods)) {
+        changed = 1;
+        id = ov->id;
     }
     if (out_changed) *out_changed = changed;
     return id;

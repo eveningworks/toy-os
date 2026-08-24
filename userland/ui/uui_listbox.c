@@ -2,6 +2,7 @@
 #include "ui/uui_listbox.h"
 #include "ui/uui_widget.h"  // the ops table the focus ring takes
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
+#include "rt/sys.h"   // sys_monotonic_ns() -- the type-ahead window
 
 // ---------------------------------------------------------------------
 // listbox
@@ -14,6 +15,8 @@ void uui_listbox_init(struct uui_listbox *lb, int x, int y, int w, int h,
     lb->count = count;
     lb->selected = count > 0 ? 0 : -1;
     lb->hovered = -1;
+    lb->seek_len = 0;
+    lb->seek_ns = 0;
     lb->top = 0;
     lb->row_h = 0; // derive from the font
     lb->bar_w = 8;
@@ -32,6 +35,8 @@ void uui_listbox_set_items(struct uui_listbox *lb, const char *const *items, int
     if (lb->selected >= count) lb->selected = count > 0 ? count - 1 : -1;
     if (lb->top > count) lb->top = 0;
     lb->hovered = -1;
+    lb->seek_len = 0;
+    lb->seek_ns = 0;
 }
 
 // Left inset for a row's label. Hoisted out of the draw so
@@ -220,6 +225,94 @@ static void listbox_reveal(struct uui_listbox *lb) {
     listbox_clamp(lb);
 }
 
+// --- type-ahead --------------------------------------------------------
+
+static char seek_fold(char c) {
+    return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+}
+
+// Does item `idx` start with `prefix`? ASCII case-folded, because what
+// is typed is lowercase and what is shown is "Los Angeles" -- and this
+// matches the LABEL, which is the only string the user can see. The
+// item may carry a suffix (System Settings appends "   (current)" to
+// the row in effect); a prefix test is unaffected by it, which is why
+// this is a prefix test and not a substring one.
+static int seek_matches(const struct uui_listbox *lb, int idx,
+                        const char *prefix, int len) {
+    const char *it = lb->items[idx];
+    if (!it) return 0;
+    for (int i = 0; i < len; i++) {
+        if (!it[i]) return 0;
+        if (seek_fold(it[i]) != prefix[i]) return 0;
+    }
+    return 1;
+}
+
+// From `start`, wrapping once, so the same letter pressed twice reaches
+// the NEXT match rather than sitting on the first.
+static int seek_find(const struct uui_listbox *lb, const char *prefix, int len,
+                     int start) {
+    if (len <= 0 || lb->count <= 0) return -1;
+    for (int n = 0; n < lb->count; n++) {
+        int idx = start + n;
+        while (idx >= lb->count) idx -= lb->count;
+        if (seek_matches(lb, idx, prefix, len)) return idx;
+    }
+    return -1;
+}
+
+// A printable key: extend the prefix, or cycle if it repeats a single
+// letter. Returns 1 if the selection moved.
+static int listbox_seek(struct uui_listbox *lb, int key) {
+    char c = seek_fold((char)key);
+    unsigned long long now = sys_monotonic_ns();
+    unsigned long long window = (unsigned long long)UUI_SEEK_WINDOW_MS * 1000000ull;
+
+    // A pause ends a multi-letter search, checked against the LAST
+    // keystroke rather than the first so a slow typist still builds a
+    // prefix as long as they keep going.
+    //
+    // CYCLING DOES NOT EXPIRE, and that is deliberate: 'h' pressed
+    // twice a minute apart should still reach the second h, which is
+    // what Windows Explorer and KDE both do. Only the PREFIX is what a
+    // pause abandons -- 'h', a long pause, then 'e' must mean "an e",
+    // not "he".
+    int expired = (lb->seek_len > 0 && now - lb->seek_ns > window);
+    lb->seek_ns = now;
+
+    int from;
+    if (lb->seek_len == 1 && lb->seek[0] == c) {
+        // The same single letter again: the next item starting with it.
+        from = lb->selected + 1;
+    } else if (expired || lb->seek_len == 0 || lb->seek_len >= UUI_SEEK_MAX) {
+        lb->seek[0] = c;
+        lb->seek_len = 1;
+        from = 0;
+    } else {
+        lb->seek[lb->seek_len++] = c;
+        // A GROWN prefix searches from the top, not from the current
+        // row: "h" then "o" must be free to go backwards to "Honolulu"
+        // from wherever "Halifax" left the selection.
+        from = 0;
+    }
+
+    int idx = seek_find(lb, lb->seek, lb->seek_len, from);
+    if (idx < 0 && lb->seek_len > 1) {
+        // Nothing starts with the whole prefix. Treat the new key as the
+        // start of a fresh search rather than as a dead end -- the
+        // alternative is a list that stops responding to the keyboard
+        // until the window expires.
+        lb->seek[0] = c;
+        lb->seek_len = 1;
+        idx = seek_find(lb, lb->seek, 1, 0);
+    }
+    if (idx < 0 || idx == lb->selected) return 0;
+
+    lb->selected = idx;
+    listbox_reveal(lb);
+    return 1;
+}
+
 int uui_listbox_key(struct uui_listbox *lb, int key) {
     if (lb->count <= 0) return 0;
     int before = lb->selected;
@@ -232,7 +325,17 @@ int uui_listbox_key(struct uui_listbox *lb, int key) {
                                        if (lb->selected < 0) lb->selected = 0; }
     else if (key == KEY_PAGE_DOWN)  { lb->selected += uui_listbox_visible_rows(lb);
                                        if (lb->selected >= lb->count) lb->selected = lb->count - 1; }
+    // A PRINTABLE KEY IS A SEARCH, not a keystroke to pass on. Space is
+    // excluded: it is what activates a control, and no item here starts
+    // with one. KEY_* specials are all >= 0x91 (api/keyboard.h), so the
+    // range test cannot catch an arrow.
+    else if (key > ' ' && key < 0x7F) { return listbox_seek(lb, key); }
     else return 0;
+
+    // Any of the movement keys above ends a search in progress -- the
+    // next letter should start a new one, not extend a prefix the user
+    // has stopped thinking about.
+    lb->seek_len = 0;
 
     listbox_reveal(lb);
     return lb->selected != before;

@@ -12,6 +12,7 @@ void uui_dropdown_init(struct uui_dropdown *d, int x, int y, int w, int h,
     d->x = x; d->y = y; d->w = w; d->h = h;
     d->open = 0;
     d->max_rows = 6;
+    d->focused = 0;
     d->bg = ugfx_rgb(255, 255, 255);
     d->fg = ugfx_rgb(20, 20, 20);
     d->border = ugfx_rgb(150, 155, 165);
@@ -57,6 +58,16 @@ void uui_dropdown_draw(struct ugfx_surface *s, const struct uui_dropdown *d) {
     // A caret so it reads as a dropdown rather than a text field.
     int cx = d->x + d->w - 14, cy = d->y + d->h / 2 - 2;
     for (int i = 0; i < 5; i++) ugfx_fill_rect(s, cx + i, cy + i, 5 - i * 2 + 4, 1, fg);
+
+    // FOCUS IS DRAWN, because a focused dropdown accepts typed letters
+    // and a control that silently answers the keyboard is a control the
+    // user cannot find. Inset by one so it reads as a ring inside the
+    // border rather than a thicker border. Same derivation as
+    // uui_radio_list's, so the two agree.
+    if (d->focused && !d->open) {
+        ugfx_draw_rect(s, d->x + 1, d->y + 1, d->w - 2, d->h - 2,
+                        uui_state_bg(d->fg, UUI_STATE_HOVER));
+    }
 }
 
 void uui_dropdown_draw_popup(struct ugfx_surface *s, const struct uui_dropdown *d) {
@@ -125,6 +136,21 @@ int uui_dropdown_key(struct uui_dropdown *d, int key) {
             d->open = 1;
             return 1;
         }
+        // A LETTER SELECTS WITHOUT OPENING, as a Windows or KDE combobox
+        // does: the list is one line long while closed, so typing "hel"
+        // moves the value to Helsinki in place. This is deliberately
+        // NOT the rule the wheel follows -- a wheel notch over a closed
+        // dropdown is ignored because the pointer is merely passing
+        // over it and the value would change unseen, whereas a typed
+        // letter can only arrive at the control that has focus.
+        //
+        // PRINTABLE KEYS ONLY, and the test is here rather than in the
+        // list: a closed dropdown must go on IGNORING the arrows, Home
+        // and End, so a key cannot walk a value the user cannot see
+        // (uidemo_test asserts it, and forwarding everything broke it).
+        // A letter is a deliberate search; an arrow is navigation that
+        // belongs to whatever is on screen.
+        if (key > ' ' && key < 0x7F) return uui_listbox_key(&d->list, key);
         return 0;
     }
     if (key == 0x1B) { d->open = 0; return 1; }             // Esc dismisses
@@ -151,9 +177,19 @@ static int dd_ops_accepts_focus(const void *w) {
     return !((const struct uui_dropdown *)w)->disabled;
 }
 
+static void dd_ops_set_focused(void *w, int focused) {
+    struct uui_dropdown *d = (struct uui_dropdown *)w;
+    d->focused = focused;
+    // Focus leaving CLOSES the popup. A popup left open while the keys
+    // go somewhere else is a menu nobody is driving, and it would still
+    // be drawn over the rest of the window.
+    if (!focused) d->open = 0;
+}
+
 const struct uui_widget_ops uui_dropdown_focus_ops = {
     .hit = dd_ops_hit,
     .key = dd_ops_key,
+    .set_focused = dd_ops_set_focused,
     .accepts_focus = dd_ops_accepts_focus,
 };
 
@@ -243,6 +279,7 @@ const struct uui_widget_ops uui_dropdown_ops = {
     .draw_overlay   = dd_ops_draw_overlay,
     .hit            = dd_ops_hit,
     .key            = dd_ops_key,
+    .set_focused    = dd_ops_set_focused,
     .accepts_focus  = dd_ops_accepts_focus,
     .overlay_active = dd_ops_overlay,
     .press          = dd_ops_press,

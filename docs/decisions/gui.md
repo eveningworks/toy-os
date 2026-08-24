@@ -4370,3 +4370,92 @@ pointers differ, and that is decidable: `winshare`'s "a present flips
 the buffer" writes a marker into the back buffer, asserts the
 compositor's front view cannot see it, presents, and asserts it now can.
 Verified by deleting the flip and watching exactly that test go red.
+
+## A move event has to reach every widget, and for a long time it stopped one level down
+
+`uui_router_press()` and `uui_router_wheel()` walk nested containers to
+any depth. `uui_router_motion()` walked exactly ONE level: it looked at
+each top-level item, expanded it if it declared children, and delivered
+to those children — and no further. Nothing failed loudly, because a
+widget that never hears the pointer simply never lights up.
+
+System Settings nests four deep (window column → body row → scroll view
+→ page column), so **every hover state in that app was dead**, including
+the rows inside a dropdown's open popup — which is where it was finally
+noticed, reported as "the dropdown does not highlight". `uui_listbox`
+had drawn a hover row all along and `uui_dropdown` had forwarded motion
+to it all along; the event never arrived.
+
+Three things the fix had to get right, none of them obvious:
+
+- **A widget the cursor has LEFT still has to hear the move**, or its
+  highlight stays lit after the pointer has gone. So motion is delivered
+  to every widget, unlike a press, which stops at the first taker.
+- **A container that clips its children must not let them light up
+  outside itself.** A scroll view lays its rows out past its own edges;
+  a row scrolled out of sight is at coordinates the pointer can really
+  be over. Skipping the subtree would strand a lit row, and passing the
+  real point would light an invisible one — so a clipped subtree the
+  cursor is outside of is told a point NO widget can contain
+  (`UUI_NOWHERE`), which every widget hit-tests as "not me" and clears
+  from. No widget knows about the convention.
+- **An open popup gets the real point first**, before any clipping,
+  because it is drawn outside its own rect and usually outside its
+  container's. That is the same precedence `overlay_active` already gave
+  presses and wheels; it is skipped in the walk afterwards, since
+  hearing the move twice would light a row and immediately clear it.
+
+## An open popup takes the KEY, and a focused widget's key change is reported like a click
+
+Two gaps found while giving the timezone list type-ahead, both of the
+same shape: the keyboard had no equivalent of something the pointer
+already had.
+
+**`uui_router_overlay_key()`.** An open dropdown popup covers the window
+and is what the user is looking at, so Esc, Enter, the arrows and a
+typed letter belong to it — not to whatever held focus before it opened.
+Every real toolkit does this. It is the keyboard's half of the
+`overlay_active` rule, and it is also what makes typing in a dropdown
+work in an app that has no focus ring at all.
+
+**And the app is told.** `uui_focus_key()` changed a focused widget's
+value and nobody heard: `on_widget` fired for presses, motions, releases
+and wheels, so a control whose value the KEYBOARD changed was silently
+dropped by Apply. It now reports `UUI_REASON_KEY` with the same id a
+click on that widget reports — looked up by pointer through
+`uui_router_id_of()`, because ids belong to the router and a second copy
+of them in the focus ring would be a second thing to keep in step. Tab
+is excluded: it moved focus and changed no value.
+
+System Settings acts on `UUI_REASON_KEY` as it does on a release, and
+deliberately not on `UUI_REASON_MOTION` — the rule it already had is
+about not acting on a pointer merely crossing a control, and typing is
+not that.
+
+## Type-ahead lives in the listbox, and a repeated letter cycles forever while a prefix expires
+
+A 92-item timezone list is unusable by arrow key. Typing jumps to a
+match, as it does in a Windows combobox and a KDE item view, and it
+lives in `uui_listbox_key()` so the popup, a standalone listbox and
+anything else composing one all gain it from one place.
+
+**The two behaviours are separate, and only one of them expires.** Keys
+typed within a second build a PREFIX (`h`, `e` → Helsinki, past Halifax
+and Hanoi); the same single letter pressed again CYCLES to the next
+match. A pause abandons the prefix — `h`, a long pause, then `e` must
+mean "an e", not "he" — but it must not abandon cycling, because `h`
+pressed twice a minute apart should still reach the second h. Making the
+timeout reset both was the first version, and it is wrong in a way a
+test with a slow harness would not have caught: it depends on how fast
+the keys arrive.
+
+**It matches what is SHOWN, not what is stored** — "Los Angeles", not
+`losangeles` — because the label is the only string the user can see.
+The match is a prefix test, which is also what makes it immune to
+System Settings appending "   (current)" to the row in effect.
+
+A CLOSED dropdown accepts letters too, changing its value in place. That
+is deliberately not the rule the wheel follows: a wheel notch over a
+closed dropdown is ignored because the pointer is merely passing over it
+and the value would change unseen, whereas a typed letter can only
+arrive at the control that has keyboard focus.

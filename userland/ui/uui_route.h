@@ -57,6 +57,7 @@ enum uui_reason {
     UUI_REASON_MOTION,
     UUI_REASON_RELEASE,
     UUI_REASON_WHEEL,
+    UUI_REASON_KEY,
 };
 
 struct uui_router {
@@ -84,6 +85,27 @@ int uui_router_release(struct uui_router *r, int cx, int cy, int *out_changed);
 // The wheel goes to the widget under the cursor, or to the grab holder
 // if there is one. Apps used to send it to a fixed chain of widgets in
 // a fixed order, which is why a wheel over one control scrolled another.
+// AN OPEN POPUP TAKES THE KEY, wherever the focus ring happens to be.
+// A dropdown's popup is drawn over the whole window and its rows are
+// what the user is looking at, so Esc, Enter, the arrows and a typed
+// letter belong to it and not to whatever was focused before it opened
+// -- which is what every real toolkit does, and the keyboard's half of
+// the `overlay_active` rule the pointer already follows.
+//
+// Returns the id of the widget that took the key, or 0 when no overlay
+// is open or it declined -- in which case the caller carries on to the
+// focus ring as before.
+// The id an app knows a widget by, found by POINTER anywhere in the
+// item tree; 0 if it is not declared. The focus ring holds widgets and
+// no ids -- ids belong to the router, and a second copy of them in the
+// ring would be a second thing to keep in step -- so this is how a
+// key-driven change gets reported to an app by the same id its clicks
+// arrive under.
+int uui_router_id_of(const struct uui_router *r, const void *widget);
+
+int uui_router_overlay_key(struct uui_router *r, int key, unsigned mods,
+                            int *out_changed);
+
 int uui_router_wheel(struct uui_router *r, int cx, int cy, int notches,
                       int *out_changed);
 

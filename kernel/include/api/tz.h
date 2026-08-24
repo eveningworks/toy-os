@@ -4,7 +4,8 @@
 #include "timer.h"
 
 // The city list itself lives in /etc/timezones, a plain-text database
-// (one "name,offset_minutes,dst" row per city) auto-seeded on first
+// (one "name,offset_minutes,dst,Display Name" row per city, the last
+// field optional) auto-seeded on first
 // boot and loaded into memory at startup -- see tz.c's top comment for
 // the /etc/timezones (database) vs /etc/toyos.conf's "timezone=<city>"
 // key (selection) split, and the two DST rules implemented (EU, US)
@@ -24,6 +25,17 @@ int tz_city_count(void);
 // Lowercase name of the city at `index` (also what `timezone <name>`
 // matches against), or NULL if `index` is out of range.
 const char *tz_city_name(int index);
+
+// What a person reads for the city at `index`: "Los Angeles" for
+// `losangeles`. Falls back to the name itself when the database row
+// carries no display name and the city is not one this build ships, so
+// a caller may always draw this and never has to decide. NULL only for
+// an out-of-range index, as tz_city_name().
+//
+// The NAME stays the identity -- it is what `timezone <name>` matches,
+// what /etc/toyos.conf stores and what a setting's value is. This is
+// presentation only, and nothing may parse it back.
+const char *tz_city_label(int index);
 
 // Index of the currently selected city (starts at 0 / UTC until
 // tz_init() loads a saved choice or tz_set_index() changes it).

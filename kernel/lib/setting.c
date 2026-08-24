@@ -441,11 +441,23 @@ int setting_dispatch(struct setting_msg *msg) {
         if (!s || s->type != SETTING_TYPE_ENUM || !s->choice) return 0;
         msg->value[0] = '\0';
         if (!s->choice(msg->choice, msg->value, sizeof msg->value)) return 0;
-        // The DISPLAY name rides alongside the value, falling back to
-        // the value itself -- so a client draws `label` unconditionally
-        // and never decides. `value` stays the token that gets stored.
-        setting_text_choice(setting_namespace(s), s->name, msg->value,
-                            msg->label, sizeof msg->label);
+        // The DISPLAY name rides alongside the value -- so a client
+        // draws `label` unconditionally and never decides. `value`
+        // stays the token that gets stored.
+        //
+        // THREE SOURCES, MOST SPECIFIC FIRST: /etc/settings.d, because
+        // that is where an installation renames or translates one
+        // choice; then the setting's own `choice_label`, for a list
+        // computed from data no file could enumerate; then the value
+        // itself, which is always presentable if not always pretty.
+        if (!setting_text_choice(setting_namespace(s), s->name, msg->value,
+                                 msg->label, sizeof msg->label)) {
+            // setting_text_choice() has already written the value into
+            // `label` as its own fallback, so a choice_label that
+            // declines leaves exactly what it would have left.
+            if (s->choice_label)
+                s->choice_label(msg->choice, msg->label, sizeof msg->label);
+        }
         return 1;
     }
 

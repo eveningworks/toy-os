@@ -209,6 +209,34 @@ Subject line stays a short summary as always; this is just the body,
 so a commit is skimmable on GitHub without opening the full diff.
 See CLAUDE.md's own bullet on this.
 
+**The body's VOICE changed in 2026-08-24, at the maintainer's request:
+problem, then change, then files.** It had drifted into an essay --
+capitalised lede sentences stating the rule the session had learned, the
+story of how a bug presented, forty-plus lines of it. The reasoning
+itself is worth keeping and this repo has three better homes for it
+(`docs/decisions.md` for why-this-way, a comment beside the code for the
+trap in it, `docs/conventions/` for the rule), so the commit was saying
+a third time what two other files already said. The shape now:
+
+```
+settings: show timezone display names, fix list hover and type-ahead
+
+One or two short paragraphs: what was wrong, and what actually caused
+it. Present tense, no shouting, no forensics.
+
+- One bullet per change, saying what it does and why.
+- ...
+
+Files:
+  kernel/lib/tz.c            display column, parser, seed table
+  userland/ui/uui_route.c    recursive motion delivery
+```
+
+Imperative subject under ~72 characters, prefixed with the area
+(`settings:`, `wm:`, `kernel:`) as it already was. What did NOT change:
+every changed file is still listed with a one-line note, because that is
+what makes a commit skimmable without the diff.
+
 ## A dev build shows its commit; a release shows only its version
 
 `VERSION` changes about twice a milestone, so for the hundreds of builds

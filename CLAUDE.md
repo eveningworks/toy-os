@@ -462,9 +462,17 @@ trips them before it knows to look anything up.
   so for pre-2026-08-15 work the changelog was the only detailed
   account of a CHANGE -- the decisions themselves are in
   `docs/decisions.md`.
-- **Commit messages list each changed/added file with a one-line note
-  in the body** (subject line stays a short summary) -- see
-  `docs/decisions.md`'s versioning entry for the exact format.
+- **A COMMIT MESSAGE IS PROBLEM, THEN CHANGE, THEN FILES -- not an
+  essay.** Imperative subject under ~72 chars, prefixed with the area
+  (`settings:`, `wm:`, `kernel:`); one or two short paragraphs saying
+  what was wrong and what caused it; a bullet per change; then every
+  changed/added file with a one-line note. **No capitalised lede
+  sentences, no war stories, no forensics** -- the reasoning has three
+  better homes (`docs/decisions.md` for why-this-way, a comment beside
+  the code for the trap, `docs/conventions/` for the rule), and a
+  commit repeating them is the third copy. Bodies before 2026-08-24 are
+  in the old essay voice and are deliberately not rewritten. See
+  `docs/decisions.md`'s versioning entry for the worked example.
 
 ## Conventions indexed here, written up in `docs/conventions/`
 
@@ -644,6 +652,10 @@ whenever a headline here tells you something you did not already know.
 - **Ctrl-L CLEARS IN BOTH SHELLS NOW, AND THE COMMENT THAT STOPPED IT WAS TRUE WHEN IT WAS WRITTEN.** -- `/bin/tosh` printed a newline because "there is no terminal under this yet", which the TTY layer made false and nothing noticed. The general trap: a comment stating a FACT about the rest of the system outlives that fact silently.
 - **A TITLE-BAR BUTTON IS A DISC, AND EVERY GLYPH CENTRES ON THE SAME PIXEL AS IT.** -- close is grey until hovered; a filled circle needs an AA outline over it or its cardinal spurs read as a COG; **a disc centres on a PIXEL and a rectangle on a SPAN**, so draw glyphs from `cx-h` to `cx+h` inclusive (odd, always centred) rather than at `(size-w)/2`.
 - **AN ICON COLUMN IN A SIDEBAR IS PER SIDEBAR, NOT PER ROW** -- indenting only the rows that have an icon puts headings further right than their own children. The gutter must also count towards `natural_size`, or the longest label clips.
+- **A MOVE EVENT REACHES EVERY WIDGET AT EVERY DEPTH NOW, AND HOVER BELOW TWO CONTAINERS WAS DEAD UNTIL IT DID.** -- `uui_router_motion()` walked ONE level while press and wheel recursed; System Settings nests four deep, so no hover in it could light up, including a dropdown popup's rows. A clipped subtree the cursor has LEFT is told a point no widget can contain (so a stale highlight clears), and an open overlay gets the real point first.
+- **AN OPEN POPUP TAKES THE KEY, AND A KEY-DRIVEN CHANGE IS REPORTED LIKE A CLICK.** -- `uui_router_overlay_key()` is `overlay_active`'s keyboard half, which is what makes typing into a dropdown work in an app with no focus ring; `uui_focus_key()` reports `UUI_REASON_KEY` by the router's id, since a focused control's keyboard change used to be silently dropped by Apply.
+- **TYPING IN A LIST SEEKS: `uui_listbox_key()` TAKES PRINTABLE KEYS.** -- keys within a second build a prefix, the same letter again CYCLES and never expires; matched against the DISPLAY name as a prefix. A closed dropdown takes letters (unlike the wheel, which it ignores).
+- **A SETTING WHOSE CHOICES ARE DATA NAMES THEM ITSELF: `choice_label`, tried after `/etc/settings.d` and before the raw value.** -- `Choice.<value>=` lines cannot cover a COMPUTED list (`/etc/timezones`, the keyboard layouts) without regenerating the file whenever the data changes. `/etc/timezones` grew a fourth field for it; a three-field row still loads and falls back by name, which is what makes an existing disk show "Los Angeles" without being rewritten. The VALUE stays the identity.
 - **THE ICON CACHE IS THE TOOLKIT'S NOW (`userland/lib/icon_cache.h`), AND A SIDEBAR HEADING CAN CARRY AN ICON.** -- moved out of `userland/wm/` when `uui_sidebar` needed it; an icon is a NAME, headings only, size font-derived. A missing file means a plain row, never an error.
 - **A WINDOW HAS TWO BUFFERS, AND THE COMPOSITOR NEVER READS THE ONE BEING DRAWN.** -- `WIN_REQ_PRESENT` flips and returns the new front; both buffers stay mapped in both address spaces at `base` and `base + WIN_BUFFER_HALF`, so a flip is a number rather than a remap. A failed second allocation is a SINGLE-BUFFERED window, not a refused one. Tested as memory (a marker invisible until presented), never as a flicker.
 - **THE LAYOUT LOG IS OFF UNLESS A TEST TURNS IT ON, AND DEDUPED WHEN IT IS.** -- `desktop.layout_log`, off by default like `kernel.kbdtap`. Nine apps wrote ~20 geometry lines a FRAME to the kernel log, which made `dmesg` unreadable with any window open and made `dmesg -w` a feedback loop. Read once at first use (`enter_gui()` turns it on for every tool); deduped per FRAME, not per line, because what repeats is the whole block.

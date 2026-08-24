@@ -18,6 +18,7 @@ struct uui_dropdown {
     struct uui_listbox list; // the popup, which IS a listbox
     int open;
     int max_rows;
+    int focused;  // OWNED -- driven by the focus ring's set_focused
     uint32_t bg, fg, border;
 
     // VISIBLE, BUT DOES NOTHING -- the same field uui_button and
@@ -60,6 +61,12 @@ int uui_dropdown_click(struct uui_dropdown *d, int cx, int cy); // 1 if it consu
 int uui_dropdown_drag(struct uui_dropdown *d, int cx, int cy);
 void uui_dropdown_drag_end(struct uui_dropdown *d);
 
+// While OPEN the popup takes everything (Esc dismisses, Enter commits,
+// the rest goes to the list). While CLOSED it takes only the keys that
+// OPEN it -- Down, Enter, Space -- plus a PRINTABLE key, which seeks
+// the value in place the way a Windows or KDE combobox does. The
+// arrows, Home and End are still ignored while closed, deliberately: a
+// value must not walk where the user cannot see it.
 int uui_dropdown_key(struct uui_dropdown *d, int key);
 int uui_dropdown_selected(const struct uui_dropdown *d);
 

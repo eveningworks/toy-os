@@ -1315,3 +1315,51 @@ real scanout hardware does. Do not write a pixel assertion for one.
   files. **Notepad takes a path in `argv[1]`** because of this, and
   titles itself after it, which is also what lets a test tell "opened
   the file" from "opened a window".
+
+- **A MOVE EVENT REACHES EVERY WIDGET AT EVERY DEPTH, AND A CLIPPED
+  SUBTREE THE CURSOR HAS LEFT IS TOLD "NOWHERE".** `uui_router_motion()`
+  walked ONE level of nested containers while press and wheel walked all
+  of them, so nothing below two containers ever heard the pointer -- and
+  a widget that never hears it simply never lights up, which reads as a
+  missing feature rather than a routing bug. System Settings nests four
+  deep, so every hover in it was dead, including a dropdown popup's
+  rows. Three rules the fix encodes: every widget hears a move (unlike a
+  press, which stops at the first taker), because more than one may need
+  to CLEAR a highlight; a container with a `hit` clips its children, and
+  a subtree the cursor is outside of gets a point no widget can contain
+  rather than being skipped, or a row stays lit after the pointer has
+  gone; and an OPEN OVERLAY gets the real point first and is skipped in
+  the walk, since hearing the move twice would light a row and clear it
+  again. See `docs/decisions.md`.
+- **AN OPEN POPUP TAKES THE KEY BEFORE THE FOCUS RING DOES, AND A
+  KEY-DRIVEN CHANGE IS REPORTED LIKE A CLICK.**
+  `uui_router_overlay_key()` is the keyboard's half of `overlay_active`
+  -- what makes typing into a dropdown work in an app with no focus ring
+  at all. And `uui_focus_key()` now tells the app through `on_widget`
+  with `UUI_REASON_KEY`, by the same id a click reports (looked up
+  through `uui_router_id_of()`, because ids belong to the router); Tab
+  is excluded, having changed no value. Before this a focused control's
+  keyboard change was silently dropped by System Settings' Apply.
+- **TYPING IN A LIST SEEKS, AND A REPEATED LETTER CYCLES WHILE A PREFIX
+  EXPIRES.** `uui_listbox_key()` takes any printable key, so the
+  dropdown popup, a standalone listbox and anything else composing one
+  gain it at once. Keys within `UUI_SEEK_WINDOW_MS` build a prefix
+  ("h","e" -> Helsinki past Halifax); the same single letter again
+  cycles to the next match and does NOT expire, because 'h' twice a
+  minute apart should still reach the second h. It matches the string
+  the user can SEE (the display name, "Los Angeles"), as a prefix, which
+  is also why System Settings' "   (current)" suffix does not interfere.
+  A CLOSED dropdown takes letters too -- deliberately unlike the wheel,
+  which it ignores, since a letter can only reach the control that has
+  focus while the pointer merely passes over one.
+- **A SETTING WHOSE CHOICES ARE DATA NAMES THEM ITSELF:
+  `choice_label`.** `/etc/settings.d`'s `Choice.<value>=` lines cover a
+  list a file's author can see; they cannot cover one that is COMPUTED
+  (the timezones from `/etc/timezones`, the keyboard layouts from a
+  directory) without regenerating the file whenever the data changes.
+  Three sources, most specific first: `/etc/settings.d`, then
+  `choice_label`, then the value itself -- so a client draws the ABI's
+  `label` unconditionally and never decides, and an installation can
+  still rename one choice. The VALUE stays the identity: `losangeles` is
+  what is typed, matched and stored, and nothing parses a display name
+  back. See `docs/decisions.md`.
