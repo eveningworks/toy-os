@@ -390,10 +390,13 @@ Canonical mode, echo, erase/kill, `VEOF`, `termios` and the window size
 all exist.
 
 What is LEFT of this milestone: virtual terminals on
-`Ctrl+Alt+F1..F4`, an ALTERNATE SCREEN (a full-screen program's output
-currently lands in the Terminal's scrollback and pushes the transcript
-up), scrolling regions, a controlling terminal per process, and
-per-terminal scrollback.
+`Ctrl+Alt+F1..F4`, scrolling regions (DECSTBM), a controlling terminal
+per process, and per-terminal scrollback. The ALTERNATE SCREEN was on
+this list until 2026-08-24 and is done: `ESC[?1049h/l` in
+`kernel/lib/ansi.c`, saved and restored by the GUI Terminal, which is
+why `less` now quits to exactly the prompt it started from. Scrollback
+is deliberately NOT saved across the switch, and a consumer may ignore
+the sequence -- the console does.
 
 Signals & process control can deliver a signal, but "deliver SIGINT to the foreground
 process" has no meaning without a foreground process. Shell pipes & job control's job
@@ -2305,9 +2308,9 @@ Listed with the honest reason each is or isn't attractive.
 
 **Items, in full.**
 
-- [ ] Ring-3-readable millisecond-ish clock (a tick counter exposed via syscall -- today's only ring-3 time source, `SYS_GETTIME`, is wall-clock/second-resolution only)
+- [x] ~~Ring-3-readable millisecond-ish clock~~ -- `SYS_MONOTONIC_NS` (nanoseconds since boot, monotonic) answers this; when this was written the only ring-3 time source was `SYS_GETTIME`, wall-clock and second-resolution. Monotonic time is an INTERFACE and wall clock is not one of its implementations -- see CLAUDE.md.
 
-- [ ] Sleep/delay primitive (timeouts, retransmission -- a general kernel gap, not networking-specific: also why the PC speaker's `beep` busy-waits on a shared tick counter instead of sleeping, see `docs/decisions.md`)
+- [x] ~~Sleep/delay primitive (timeouts, retransmission)~~ -- `SYS_SLEEP` landed 2026-08-18 with init, which had nothing to block on. It was a general kernel gap rather than a networking one, and one caller has NOT been converted: the PC speaker's `beep` still busy-waits on the shared tick counter (`kernel/drivers/speaker.c`), which is a papercut and not a blocker for anything here.
 
 ## Sound
 
@@ -2487,7 +2490,7 @@ caller is a test.
 
 - [x] ~~**Empty ring 0 of applications first**~~ -- done 2026-08-16 (design doc's stage 0). Notepad, Calculator and Terminal DELETED from the kernel now that the ring-3 versions ship and launch from the Start menu; About and UI Demo ported to `userland/gui/`; the checkbox, dropdown, listbox and text view deleted from `apps/ui/`. The design doc's claim that `apps/ui/` ends with no callers was WRONG and is corrected there: seven files in `apps/wm/` include it, so the rest of it retires with the WM in stage 4. **Task Manager and Control Panel deliberately did NOT move**: each needs a syscall ring 3 does not have (a process list, and `etc_config`), and stage 0 is defined as the stage that adds no kernel capability -- so they move in stage 4 with the syscalls they need, not before. Proven by `gui_regress.py` 13/13 with `uidemo_test.py`'s 28 checks now driving the RING-3 widgets.
 
-- [ ] **Restore the About window's storage line.** The kernel-side About printed the filesystem backend and whether it persists (`fs_backend_name()`/`fs_is_persistent()`); the ring-3 port cannot, because neither has a syscall behind it, and stage 0 added none. Fold it into stage 4's settings/process syscall batch rather than adding a one-off. `df` and `fsck` report both facts meanwhile.
+- [ ] **Restore the About window's storage line.** The kernel-side About printed the filesystem backend and whether it persists (`fs_backend_name()`/`fs_is_persistent()`). This entry used to say the ring-3 port CANNOT, for want of a syscall; that stopped being true on 2026-08-20, when `QUERY_FSINFO` was added so `df` could stop being a builtin, and `sys_query_record(QUERY_FSINFO, 0, ...)` is all it needs. What is actually left is a LAYOUT change: the window's size callback derives from the widest line, so a new line means widening the window and re-checking that callback -- worth doing deliberately rather than as a side effect. `about.c`'s own top comment says the same. `df` reports both facts meanwhile.
 
 - [ ] **Kernel command-line switches for the protections, not just `nokaslr`.** `multiboot_cmdline()` exists and kernel ASLR is its only user; `nowx`, `nonx`, `nosmap`/`nosmep` and a heap-debug switch would join it. The argument is not convenience, it is TESTING: proving a W^X or SMAP KTEST can go red currently means editing the kernel and rebuilding (see CLAUDE.md's positive-control note, and the session that read 132/132 green off a stale ISO), and a boot flag turns that into a launch argument the suite can run both ways. Two rules it has to follow, or it makes things worse: a disabled protection must be reported loudly (`dmesg` and `about`, as `nokaslr` already does with its note), and the affected KTESTs must SKIP with a reason rather than fail -- otherwise booting with `nowx` reddens six checks and the next session "fixes" the tests. Asked for 2026-08-16.
 
@@ -2543,6 +2546,33 @@ caller is a test.
 
 *Before the apps that would use it. Every widget position in `apps/` is
 hand-computed arithmetic today, which is why no window can be resized.*
+
+**Items worth their own note.**
+
+- [ ] **A FOCUS INDICATOR for every widget that takes keys.** Six accept
+  focus and draw nothing to say they have it: `uui_button`,
+  `uui_slider`, `uui_spinbox`, `uui_table`, `uui_tree` and
+  `uui_sidebar`. Four already do it (`uui_checkbox`, `uui_radio_list`,
+  `uui_textbox`, `uui_dropdown`), all the same way -- a `focused` field
+  driven by `set_focused`, drawn as a ring derived from the control's
+  own colour through `uui_state_bg()`, so nothing picks a tint. The
+  reason this matters more than it sounds: a widget that answers the
+  keyboard while showing no sign of holding it makes Tab move an
+  INVISIBLE cursor, and the first thing typed goes somewhere the user
+  did not choose. It became visible when System Settings got a focus
+  ring (2026-08-24) -- the dropdown grew an indicator in the same change
+  precisely because a control that silently takes letters cannot be
+  found.
+- [ ] **Type-ahead in `uui_table`.** `uui_listbox` gained it on
+  2026-08-24 (a prefix within a second, a repeated letter cycling), so
+  a dropdown and a listbox can both be typed at. `uui_fileview`
+  composes a TABLE, so the File Manager -- the one place with hundreds
+  of rows and a name the user already knows -- is the one that still
+  cannot. The table's rows are not strings but columns, so the open
+  question is which column a letter matches: the first, always, or a
+  declared "seek column" per table. Answer that before writing the
+  code; the listbox's implementation itself is thirty lines and moves
+  over unchanged.
 
 ## Runtime font loading & text metrics
 
@@ -3072,7 +3102,7 @@ refer to them by number.
 
 - [x] ~~**The ring-3 desktop cannot give a client a window.**~~ FIXED 2026-08-17. `win_server_request()` had `if (!g_ops) return -1;`, which refused every request past the compositor/framebuffer ones whenever no RING-0 presentation layer was registered -- which, with the WM in ring 3, is always. One guard, and it silently refused both `WIN_REQ_FONT` (so the desktop drew no text and every font-derived measurement collapsed: `WM_TITLEBAR_H` is `ugfx_char_h() + 8`, so chrome became 8px) and `WIN_REQ_CREATE` (so no client could ever get a window). A window server is EITHER a registered ring-0 layer or a registered compositor.
 
-- [ ] **The ring-3 WM busy-waits instead of sleeping.** `wm.c`'s frame loop halted on `hlt` in ring 0; in ring 3 that is privileged, so it calls `sys_yield()` and gives up the rest of its slice. Correct, but an idle desktop now costs a round-robin slot per tick rather than nothing.
+- [ ] **The ring-3 WM busy-waits instead of sleeping.** `wm.c`'s frame loop halted on `hlt` in ring 0; in ring 3 that is privileged, so it calls `sys_yield()` and gives up the rest of its slice. Correct, but an idle desktop now costs a round-robin slot per tick rather than nothing. **What blocks the obvious fix is not the missing syscall.** A compositor is woken by three things -- input, client requests, and its OWN cadence (the taskbar clock, client timers) -- and only the first two arrive as events, so a plain blocking wait would stop the clock. The shape it wants is a compositor-side TIMER, the same thing `WIN_REQ_TIMER` already gives a window client; `SYS_SLEEP` (2026-08-18) and that timer both exist now, so this is a design question about the wait's wake sources rather than a missing primitive. `wm.c`'s own comment at the `sys_yield()` call says the same, and is the place to start.
 
 - [ ] **Injected clicks are LOST under parallel `gui_regress` load, and the failing checks are finally named.** Reproduce by running the full suite (`python3 tools/gui_regress.py --logs DIR`) at the default `-j4`; it needs the parallel load, so a single tool cannot show it.
 

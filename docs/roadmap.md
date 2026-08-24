@@ -91,12 +91,11 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~Output processing: ANSI SGR (colour) parsed by the console~~ done -- `kernel/lib/ansi.c`, for the console and any sink
 - [x] ~~ANSI cursor movement, erasing and `?25` visibility~~ done -- `tools/ansi_cursor_test.py` checks the pixels
 - [x] ~~Reverse video (SGR 7), which is what a status bar is made of~~ DONE 2026-08-22 -- resolved in the parser, so both terminals get it
-- [ ] Scrolling regions (DECSTBM) and the alternate screen buffer, which is what a full-screen program's scrollback needs
+- [ ] Scrolling regions (DECSTBM) -- the alternate screen half of this landed 2026-08-24
 - [x] ~~The GUI Terminal needs a cursor-addressable GRID, not a scrollback stream~~ DONE 2026-08-22 -- `/bin/edit` runs in a window
-- [ ] The GUI Terminal has no ALTERNATE SCREEN -- a full-screen program's output lands in the scrollback and scrolls the transcript away
+- [x] ~~The GUI Terminal has no ALTERNATE SCREEN~~ DONE 2026-08-24 -- `ESC[?1049h/l`, so `less` quits to the prompt it started from
 - [ ] Output processing: newline translation, tab expansion
 - [x] ~~`isatty()`, so a program can tell a terminal from a pipe -- what `ls --color=auto` needs~~ DONE 2026-08-22
-- [ ] Cursor movement and screen clearing escapes are swallowed, not implemented
 - [ ] A controlling terminal per process, and what happens when it goes away
 - [ ] Scrollback per virtual terminal, not one global console buffer
 
@@ -110,7 +109,6 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~A per-process cwd~~ DONE 2026-08-19 -- in the kernel, inherited across spawn; every path syscall resolves against it
 - [x] ~~`/bin/tosh` still has `ls`/`echo` builtins beside the `/bin` programs~~ DONE 2026-08-22 -- three left, and each has to be one
 - [x] ~~Ring 3 cannot ask which filesystem is mounted~~ DONE 2026-08-20 -- `QUERY_FSINFO`, a provider rather than a wider `SYS_SYSINFO`
-- [ ] The About window still omits its filesystem line, though `QUERY_FSINFO` reports it now -- needs the window widened
 - [x] ~~Tunables: the non-persisting `struct setting`~~ DONE 2026-08-20 -- `kernel.heap_debug`, `kernel.ata_nodma`, `kernel.kstack_track`
 - [x] ~~`heap`, `ata` and `kstack` still builtins~~ DONE 2026-08-20 -- `/bin` programs over their query classes and tunables
 - [ ] Directory lookup is O(n) -- measured 2026-08-20 with `mkfiles`: creates stay flat to 5,000 entries, lookups grow with position
@@ -198,7 +196,7 @@ only expensive part of it.
 ### Multi-user & file permissions
 
 - [ ] A minimal user/group model
-- [ ] Per-file owner + permission bits (TFS3's inode already reserves the room
+- [ ] Per-file owner + permission bits -- TFS3's inode already reserves the room for them
 - [ ] Permission checks in `fs_ops` calls
 - [ ] A login prompt (even single-user-by-default)
 - [ ] Password hashing + an `/etc/passwd`-shaped file
@@ -380,7 +378,7 @@ No dependency on the phases above; ordered among themselves.
 **Needs:** the TFS3 inode layer's remaining items -- snapshots are a property of the inode layer, not of the block layer under it.
 
 - [ ] Journal file *data*, not just metadata -- the gap `tfs.c`'s top comment documents honestly today
-- [ ] A multi-slot journal (TFS2's is one record wide; TFS3 already has a 4-slot metadata transaction
+- [ ] A multi-slot journal -- TFS2's is one record wide; TFS3 already has a 4-slot metadata transaction to build on
 - [ ] Copy-on-write block updates
 - [ ] Point-in-time snapshots built on that COW
 - [ ] `fsck` awareness of snapshot-shared blocks (a block referenced twice stops being corruption)
@@ -423,7 +421,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Force-close an unresponsive client~~ done
 - [x] ~~Client-side window resize~~ done
 - [x] ~~Empty ring 0 of applications first~~ done
-- [ ] Restore the About window's storage line
+- [ ] Restore the About window's storage line -- `QUERY_FSINFO` reports it since 2026-08-20; the window has to widen for it
 - [ ] Kernel command-line switches for the protections, not just `nokaslr`
 - [x] ~~A Live-CD boot: run from the ISO with no disk~~ done
 - [ ] Let TFS3 blocks-per-group vary for small volumes
@@ -431,7 +429,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~A ring-3 allocator, and four smaller syscalls~~ DONE 2026-08-18
 - [x] ~~An abstract transport behind that protocol~~ DONE 2026-08-18 -- `struct win_transport`
 - [x] ~~A bigger process table (4 slots)~~ DONE 2026-08-18 -- `SCHED_MAX_PROCS` is 64
-- [ ] `tosh` improvements once the kernel supports them: pipelines (`a | b`
+- [x] ~~`tosh` improvements once the kernel supports them: pipelines, redirection, Ctrl-C~~ DONE 2026-08-19/22 -- all three
 - [x] ~~A GROWABLE user stack~~ DONE 2026-08-23
 - [x] ~~A userland drawing runtime, so a client can render more than flat colour~~ done
 - [x] ~~Port the `apps/ui/` widgets Calculator needs to userland~~ done
@@ -461,8 +459,8 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] A minimum window size that falls out of the content's own minimum -- `uapp_desc.min_w/min_h` is still a declared hint
 - [x] ~~Convert one real app as the proof -- Calculator's grid is the obvious first, being pure arithmetic today~~ DONE 2026-08-18
 - [x] ~~`uui_slider`, so a setting with ordered levels can say `Widget=slider`~~ DONE 2026-08-19 -- discrete stops, one per choice
-- [ ] `uui_label` wraps, so a setting description longer than its column is not simply clipped
-- [ ] Then convert the rest, deleting the per-app pixel math -- 4 of 10 ring-3 apps are laid out today
+- [x] ~~`uui_label` wraps, so a long setting description is not simply clipped~~ done -- only if asked; the caller reserves the rows
+- [ ] Then convert the rest, deleting the per-app pixel math -- Notepad, Terminal and the File Manager still place their own widgets
 - [ ] Scale factor as a single input, so a HiDPI mode is a multiplier and not a rewrite
 - [x] ~~Decide explicitly whether layout is immediate-mode~~ DONE 2026-08-18 -- it is; rects at open and on resize, drawing immediate
 
@@ -480,6 +478,8 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~`gfx_text_width()` that measures rather than multiplies~~ DONE 2026-08-20
 - [x] ~~Multiple faces live at once, selected per widget~~ DONE 2026-08-21 -- two tiers, and a widget takes a `struct ugfx_font *`
 - [ ] Only `uui_label` takes a font so far -- every other widget draws in whatever is current
+- [ ] Type-ahead in `uui_table`, so the File Manager can be typed at -- `uui_listbox` gained it 2026-08-24 and a fileview is a table
+- [ ] A FOCUS INDICATOR for every widget that takes keys -- six accept focus and draw nothing to say so, so Tab moves an invisible cursor
 - [ ] A numeric setting gets a spinbox but no SLIDER -- `uui_slider` is enum-only, so there is no drag for a range
 - [x] ~~A `/usr/share/fonts` convention and a command to list what loaded~~ DONE 2026-08-20 -- `fontface`
 - [x] ~~Keep the baked font as the guaranteed fallback, so the console works with no disk font~~ DONE 2026-08-20
@@ -505,11 +505,11 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] Alt+Tab window switching
 - [ ] Window snapping (half/quarter screen)
 - [ ] Resize from any edge or corner -- only the bottom-right grip works today
-- [ ] Per-window back buffers, so a slow app's redraw can't tear the whole scene
+- [x] ~~Per-window back buffers, so a slow app's redraw can't tear~~ DONE 2026-08-24 -- two buffers, `WIN_REQ_PRESENT` flips
 - [ ] Theme switching -- the theme object landed (`utheme.{h,c}`); a dark mode now needs a dark palette + a `WIN_EV_THEME` broadcast
 - [ ] A user accent colour: a setting + an Appearance page (the `UTHEME_ACCENT` role exists; make it settable)
 - [ ] Migrate apps' `PAD`/`GAP`/size constants to the theme metrics (`utheme_pad/gap/indicator`), so chrome scales from one owner
-- [ ] Finish the 2026-08-21 toolkit centralizations: the remaining apps onto `uapp_log_layout()` and `desc.focus`
+- [ ] Finish the 2026-08-21 toolkit centralizations -- only System Settings and Font Demo set `desc.focus`
 - [ ] A screenshot tool that writes a real image file to disk
 - [ ] A tween/easing helper, once a second real caller exists
 - [ ] Scripted interaction that spans frames, so the demo tour can show real use
@@ -613,8 +613,8 @@ run on, not by order.
 **Needs:** a NIC driver, i.e. virtio, and a real GPU driver's virtio-net.
 
 - [ ] NIC driver (rtl8139 first)
-- [ ] Ring-3-readable millisecond-ish clock (a tick counter exposed via syscall
-- [ ] Sleep/delay primitive (timeouts, retransmission
+- [x] ~~Ring-3-readable millisecond-ish clock~~ done -- `SYS_MONOTONIC_NS`, nanoseconds since boot, monotonic; `/bin/uptime` reads it
+- [x] ~~Sleep/delay primitive (timeouts, retransmission)~~ DONE 2026-08-18 -- `SYS_SLEEP`; `beep` still busy-waits and is a papercut
 - [ ] Ethernet/ARP/IP/UDP stack
 - [ ] TCP + wire up the existing socket syscalls
 - [ ] ICMP echo + a `ping` command -- the smallest end-to-end proof the stack works
@@ -695,8 +695,8 @@ hand as a throwaway probe during a real hunt (see roadmap-details).
 - [x] ~~Fault injection as a first-class facility~~ done
 - [x] ~~Move the existing boot self-tests behind it, so a normal boot stops paying for them~~ done
 - [ ] Coverage honesty: a list of what has NO test
-- [ ] A scriptable POINTER, not a one-frame override
-- [ ] `gui icons [--json]` -- desktop icon geometry
+- [ ] A scriptable POINTER, not a one-frame override -- `gui move` lasts ONE `wm_run()` iteration, so hover needs the real mouse
+- [ ] `gui icons [--json]` reports a CACHE COUNT, not desktop icon GEOMETRY -- the name is taken, the fact a test wants is not there
 - [ ] Finer `gui drag` interpolation
 - [ ] `klineedit_test.c`'s 12 oversized-frame warnings bury the frame budget's signal in that file
 - [x] ~~`gfxdemo_test`'s two scene-restore checks fail under heavy parallel load~~ DONE 2026-08-19 -- it polls for the log line now
@@ -791,7 +791,7 @@ this to be better?".
 - [ ] Nothing detects an ordinary memory LEAK, in either allocator
 - [ ] The shell's command dispatch is a long `if/else` chain, and the fix is not the obvious one
 - [ ] Settings: a ring-3 settings daemon (stage 2)
-- [ ] The ring-3 WM busy-waits instead of sleeping
+- [ ] The ring-3 WM busy-waits instead of sleeping -- the pieces the fix needs (`SYS_SLEEP`, a per-window timer) both exist now
 - [ ] Minesweeper keeps no best times, and there is no `uui_grid` widget until a second grid-shaped app wants one
 - [ ] The kernel ships ~62 KB of `.eh_frame` unwind tables nothing can ever read
 - [ ] The in-kernel test suite is ~30% of `.text` and ships in release images
@@ -799,6 +799,7 @@ this to be better?".
 - [ ] Get blocking disk I/O out of the WM's event loop
 - [ ] Make the GUI test tooling RESOLUTION-AGNOSTIC
 - [ ] Retire `uui_button_group` once nothing needs it
+- [ ] System Settings' focus ring is the PAGE's controls only -- Tab reaches neither the sidebar nor the Apply/OK/Cancel buttons
 - [ ] On a machine with no invariant TSC, CPU percentages round to 0% for sub-tick work
 - [ ] `gfxbench`'s numbers are only meaningful under KVM or on real hardware
 - [ ] **Kernel-side `fsformat tfs3` writes ~73 MB of zeroed inode tables

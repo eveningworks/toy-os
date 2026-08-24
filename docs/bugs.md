@@ -44,7 +44,7 @@ it has exonerated one this session and convicted another.
 - [ ] `heap-debug`'s use-after-free check fails about 1 run in 15 -- PRE-EXISTING
 - [ ] `newsyscalls_test` fails intermittently in CI, and not locally
 - [ ] `gui_regress.py`'s `uidemo` fails intermittently in the full parallel suite
-- [ ] `gui_regress.py`'s `uterm` fails its two `edit` checks under full parallel load -- 3 runs in 3 on 2026-08-24, against 0 in 1 when the tool is run alone; PRE-EXISTING (the third of those three was HEAD with the day's work stashed, same two checks, same counts)
+- [ ] `gui_regress.py`'s `uterm` fails under full parallel load -- 3 runs in 3 on its two `edit` checks (2026-08-24, PRE-EXISTING: the third was HEAD with the day's work stashed); later the same day, 1 full run in 4 failing NINE checks, against 1 in 1 passing alone
 - [ ] `damage_hunt.py -j 4` loses VM SLOT 0 every run
 - [ ] Injected clicks are LOST under parallel `gui_regress` load, and the failing checks are finally named
 - [ ] A `sched` KTEST fails under KVM, and only under KVM
@@ -113,3 +113,28 @@ time).
 What would settle it: `tools/flake_hunt.py` over the full suite rather
 than over a single tool, and a run pinned to fewer jobs (`-j 2`) to see
 whether the rate tracks concurrency.
+
+**2026-08-24: two of these had identifiable causes, and both were the
+harness.** They do not close this entry -- the tool it lands on still
+moves run to run -- but they narrow it, and the shape is worth knowing
+before hunting the next one.
+
+- **`font_test` slept 1.2s after each font change** instead of waiting
+  for the compositor's own `wm: font changed` line. Three hops
+  (a short-lived ring-3 process, the kernel, the client repaint) take a
+  load-dependent total, so under load the ESTABLISHING change's line
+  landed after the drain that followed it and the next `wait_log()`
+  returned the PREVIOUS face's cell -- two different faces comparing
+  equal. It failed 3 runs in 5 once an unrelated change made the desktop
+  repaint more. Both setters wait on a line that is NEW since their own
+  command now, and it passed 6 of 6 after.
+- **`uapp_test` polled until the WINDOW existed** and the next check read
+  its `resizable` HINT, which arrives over TWP afterwards -- a poll
+  weaker than what follows it, which is this repo's own documented flake
+  shape. It now polls for the hint.
+
+Neither was a new defect: both were fixed-sleep assumptions that a
+busier machine invalidated. **When a tool in this class fails, read its
+waits before suspecting the guest** -- and note that a suite run
+alongside anything else (including a second `gui_regress`, which is
+refused outright now) is competing for the same cores.
