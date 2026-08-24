@@ -134,6 +134,13 @@ manual steps to be worth automating:
 
   It collects only UNFINISHED items: a marker that survived a tick would
   put completed work in the queue, and nobody remembers to remove one.
+
+  **The generated block is EXEMPT from `check_docs.py`'s one-line cap.**
+  This copies each marked item and appends its section name, so an item
+  that fits when typed can fail as its own generated copy -- a rule
+  punishing the wrong line, in a file nobody edits by hand. The cap is
+  about what somebody writes; both halves are still checked at the
+  source item.
 - **`gen_commands_index.py`** -- regenerates the categorised index of
   command pages into `docs/commands/README.md`, the same shape (and for
   the same reason) as `gen_decisions_index.py`. **The category comes

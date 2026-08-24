@@ -111,7 +111,20 @@ def check_roadmap_items_are_one_line(problems):
     was one nothing verified."""
     text = read("docs/roadmap.md")
     lines = text.split("\n")
+    # THE GENERATED "Next up" BLOCK IS EXEMPT. gen_next_up.py copies each
+    # marked item and appends its section name, so a hand-written item
+    # that fits can still fail here as its own generated copy -- which is
+    # a rule punishing the wrong line, in a file the author cannot edit.
+    # The cap is about what somebody types; a derived line's length is a
+    # consequence of it. Both are still checked at the source item.
+    generated = False
     for i, line in enumerate(lines, 1):
+        if "BEGIN next-up" in line:
+            generated = True
+        elif "END next-up" in line:
+            generated = False
+        if generated:
+            continue
         if not re.match(r"^- \[[ x]\]", line):
             continue
         # A continuation line is an indented non-blank directly under an
