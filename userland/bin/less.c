@@ -3,26 +3,42 @@
 //
 // TWO THINGS ABOUT THIS ARE NOT OBVIOUS.
 //
-// IT READS KEYS WITH sys_read_key(), NOT FROM fd 0. That is what makes
-// `cmd | less` work at all: in a pipeline fd 0 IS the pipe, so a pager
-// that read its keys from stdin would consume the text it is supposed
-// to be showing and then block forever waiting for a keystroke that
-// arrives on a descriptor it isn't holding. Real less opens /dev/tty
-// for exactly this reason; this OS has no /dev/tty, but SYS_READ_KEY
-// reaches the keyboard directly and independently of any descriptor,
-// which answers the same need.
+// WHERE ITS KEYS COME FROM IS THE WHOLE DESIGN, and the first answer
+// was wrong in a way that only showed up in a window.
 //
-// USE `spawn`, NOT `run`. The legacy `run` loader has no scheduler
-// slot, so SYS_SLEEP returns -1 there (see its ABI comment) and the
-// key-poll loop below spins hot instead of sleeping between checks --
-// which looks exactly like a hung pager. Under `spawn` it idles at
-// ~0.01s of CPU. Measured both ways.
+// It used to read sys_read_key(), on the reasoning that in a pipeline
+// fd 0 IS the pipe, so a pager reading keys from stdin would eat the
+// text it is meant to display. The reasoning is right and the call is
+// not: sys_read_key() is tty_read_key(tty_console()) -- the PHYSICAL
+// console, whoever asks. On a text boot that happens to be this
+// program's terminal. In a GUI Terminal window it is not: the
+// compositor holds the keyboard and this window's input goes to its
+// own pty, so `less` there polled an empty console forever and looked
+// like a hang. It was reported as `dmesg | less` hanging; the pipe had
+// nothing to do with it, and `less <file>` in a window was equally
+// dead.
 //
-// IT ASKS THE CONSOLE HOW BIG IT IS (sys_console_size). The console is
-// font-derived here -- rows and columns come from the active font, and
-// `font_size` is a runtime setting -- so a baked 80x25 would page
-// wrongly on any machine whose font was changed. Same rule the GUI's
-// whole layout follows.
+// So: THE KEY SOURCE IS THE FIRST OF fd 0 AND fd 1 THAT IS A TERMINAL.
+// With a file argument, fd 0 is the terminal and the file is the
+// content. In `cmd | less`, fd 0 is the pipe and fd 1 is the terminal.
+// Both land on the right fd without this program knowing which case it
+// is in. Unix reaches the same place through /dev/tty, which exists
+// because the fd-1 fallback is unreliable THERE -- a process can be
+// backgrounded away from its terminal, and stdout can be a file while
+// the terminal is still wanted. Here neither applies to a pager: if
+// fd 1 is not a terminal the output is going to a file, and a pager
+// with nowhere to page has nothing to ask about.
+//
+// **WITH NO TERMINAL IT DUMPS RATHER THAN REFUSES.** `cmd | less >
+// out.txt` prints everything and exits, which is what `cat` would have
+// done and what the caller plainly wanted; blocking there for a
+// keypress that can never come would be the same hang from the other
+// direction.
+//
+// The fd is put into RAW mode and put back before this returns -- a
+// pager that left the terminal raw would hand the shell a prompt with
+// no echo, which looks exactly like a hung machine. `edit` does the
+// same, for the same reason.
 #include "rt/sys.h"
 #include <string.h>
 #include <stdio.h>
@@ -144,6 +160,29 @@ int main(int argc, char **argv) {
 
     if (g_lines == 0) return 0;   // nothing to page
 
+    // THE KEY SOURCE, decided once -- see the top of this file. fd 2 is
+    // deliberately not a candidate: it is the KERNEL LOG here, not a
+    // second terminal stream.
+    int key_fd = sys_isatty(0) ? 0 : (sys_isatty(1) ? 1 : -1);
+
+    if (key_fd < 0) {
+        // Nowhere to page TO. Write what was read, verbatim and in one
+        // go -- the buffer already holds the text with its newlines, so
+        // this is `cat`, which is exactly what the caller asked for by
+        // sending the output somewhere that is not a screen.
+        int off = 0;
+        while (off < g_len) {
+            int64_t n = sys_write(1, g_buf + off, (size_t)(g_len - off));
+            if (n <= 0) break;
+            off += (int)n;
+        }
+        return 0;
+    }
+
+    struct tty_termios saved;
+    int restore = sys_tcgetattr(key_fd, &saved) == 0;
+    if (restore) sys_tty_raw(key_fd);
+
     int cols = 80;
     int rows = sys_console_size(&cols);
     if (rows < 4) rows = 24;      // a console too small to page in
@@ -155,12 +194,19 @@ int main(int argc, char **argv) {
     for (;;) {
         if (top != last_top) { draw(top, rows, cols); last_top = top; }
 
-        // sys_read_key() is NON-BLOCKING and returns -1 when nothing is
-        // waiting, so sleep between polls rather than spinning a core
-        // flat. 20ms is well under human reaction time and costs
-        // essentially nothing.
-        int k = sys_read_key();
-        if (k < 0) { sys_sleep_ms(20); continue; }
+        // A BLOCKING read of one byte, which is what a pager wants and
+        // what the old poll-and-sleep could not be: sys_read_key() had
+        // no terminal to block on, so it returned -1 forever and the
+        // 20ms sleep was the only thing keeping it off a core.
+        //
+        // Specials arrive as 0x91-0xA6, which ARE the KEY_* codes below
+        // (api/keyboard.h) -- a byte off a terminal needs no
+        // translation layer here, the same contract the shared line
+        // editor relies on.
+        unsigned char ch;
+        int64_t n = sys_read(key_fd, &ch, 1);
+        if (n <= 0) break;   // the terminal went away -- do not spin on it
+        int k = ch;
 
         int max_top = g_lines - page;
         if (max_top < 0) max_top = 0;
@@ -177,5 +223,10 @@ int main(int argc, char **argv) {
         if (top > max_top) top = max_top;
         if (top < 0) top = 0;
     }
+
+    // PUT BACK on every way out, including the terminal disappearing --
+    // one place rather than one per break, because the way this goes
+    // wrong is a path somebody adds later that forgets.
+    if (restore) sys_tcsetattr(key_fd, &saved);
     return 0;
 }

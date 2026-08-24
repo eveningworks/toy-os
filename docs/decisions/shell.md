@@ -1051,3 +1051,52 @@ which is a bigger project and is on the roadmap; until then the flag is
 `fcntl(F_SETFL, O_NONBLOCK)` cut to the one thing anything here needs,
 and the Terminal drains on a tick. Recorded rather than glossed: an idle
 Terminal wakes 33 times a second to find nothing.
+
+## A pager takes its keys from whichever of fd 0 and fd 1 is a terminal, not from the console
+
+`less` read keys with `SYS_READ_KEY`, on reasoning that was right: in a
+pipeline fd 0 is the pipe, so a pager reading keys from stdin would
+consume the text it is meant to display. Real `less` solves that by
+opening `/dev/tty`, and this OS has none, so the console read looked
+like the closest available thing.
+
+It is not. `SYS_READ_KEY` is `tty_read_key(tty_console())` -- the
+PHYSICAL console, whoever asks. On a text boot that happens to be the
+caller's own terminal, so it worked and kept working. In a GUI Terminal
+window it is a different terminal entirely: the compositor holds the
+keyboard (`tty_set_bypass(tty_console(), 1)`), and the window's input
+goes to its own pty. So `less` in a window polled an empty console
+forever. It was reported as `dmesg | less` hanging, and the pipe had
+nothing to do with it -- `less <file>` in a window was equally dead.
+
+**The fix is to ask which descriptor is a terminal rather than to name
+one.** With a file argument fd 0 is the terminal and the file is the
+content; in `cmd | less` fd 0 is the pipe and fd 1 is the terminal. One
+rule -- the first of fd 0 and fd 1 that `isatty()` agrees with -- covers
+both without the program knowing which case it is in. fd 2 is excluded
+deliberately: here it is the kernel log, not a second terminal stream.
+
+**Why not build /dev/tty**, which is what Unix would do and what was
+considered first. It would need a per-process controlling terminal --
+terminals here record an owner, and processes record no terminal -- plus
+a syscall to open it. The reason Unix needs that generality does not
+apply to a pager: a process can be backgrounded away from its terminal
+(so neither fd is one, and it still wants keys), and stdout can be a
+file while the terminal is still wanted. A pager with stdout on a file
+has nowhere to page to, and one in the background should not be reading
+keys. There was exactly one caller of `SYS_READ_KEY` in the tree, so the
+project's own bar -- a second real caller before adding mechanism --
+says the fd rule, and says the limitation out loud instead: **a program
+that genuinely needs its terminal while both descriptors are redirected
+still has no way to ask.** When a second such program exists, that is
+when `/dev/tty` earns its keep.
+
+**With no terminal it dumps rather than refuses.** `cmd | less >
+out.txt` writes everything and exits -- what `cat` would have done, and
+what the caller asked for by sending the output somewhere that is not a
+screen. Blocking for a keypress that cannot arrive would be the same
+hang from the other direction.
+
+The read is BLOCKING now, which the old path could not be: with no
+terminal to block on it returned -1 forever and a 20 ms sleep was the
+only thing keeping it off a core.
