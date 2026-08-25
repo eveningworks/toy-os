@@ -1526,3 +1526,60 @@ existed while the next line needed its resizable HINT -- a poll weaker
 than what follows it). Two I left, measured and said so in the commit,
 because nothing they touch was in the change. "Failed under eight-guest
 load, passes 3/3 alone" is a sentence worth writing; "flaky" is not.
+
+**2026-08-25 (partitioning, TFS2's removal, regex). THE THEME IS THAT A
+POSITIVE CONTROL CAN LIE IN THREE DIFFERENT WAYS, AND I HIT ALL THREE.**
+
+- **THE CONTROL FIRED AND THE MECHANISM WAS ALREADY DONE.** To prove the
+  boot-time partition scan mattered I disabled the `return` that stops
+  the flat probe running after a successful partition mount. Nothing
+  reddened -- because `try_partitions()` had ALREADY called
+  `mount_backend()` before returning, so skipping the `return` changed
+  nothing. Moving the control down to `blk_part_register()` (make the
+  partition device never register) turned the guest into a machine with
+  no `/bin` at all, which is unmistakable. **Ask what the control
+  actually severs, not what line it sits on.**
+- **THE CONTROL FIRED AND MY FIXTURE WAS SOMEWHERE THE CODE NEVER
+  TOUCHES.** Proving that a TFS2 disk is refused rather than reformatted
+  needed a marker that a reformat would destroy. I put it at byte 4096 --
+  inside the 32 KiB TFS3 never writes. The log line said "formatting"
+  and the marker survived, which reads as "the guard works" and is
+  actually "the test proves nothing". Moved to block 8 (the superblock)
+  it came back as `TFS3\x02`. This is CLAUDE.md's own "the data never
+  reached the code under test", and knowing the rule did not stop me.
+- **THE FIXTURE MOVED UNDER THE TEST.** `grep_test` proved the pipe with
+  `dmesg | grep partition`. It passed, then failed minutes later with
+  grep working perfectly: dmesg's ring is finite and the boot lines had
+  aged out. **A test fixture must be something you control** --
+  `/tests/sample.txt` (401 numbered lines) instead, where every expected
+  count is a number the file actually has.
+
+**AN ORACLE THAT SHARES NO CODE IS THE ONLY THING THAT CATCHES A WRONG
+EXPECTATION.** `/tests/regex_test` asserts the engine matches spans I
+wrote; both halves came from the same head in the same hour, so it
+cannot catch me being wrong about POSIX. Running the SAME table against
+glibc agreed on 71 of 74 and isolated exactly three deliberate
+divergences -- and a fourth case where my expected span was simply
+miscounted had already fallen out minutes earlier. `tools/uimg_hostcheck.py`
+does this against libjpeg. **When implementing something with a
+specification, find another implementation and disagree with it on
+purpose**: every difference is then a bug or a documented decision, with
+no third category.
+
+**ON-DEMAND TOOLS ROT, AND NOTHING NOTICES.** `fs_switch_test.py` was
+failing 10 checks against a healthy system and `init_test.py` 16 of 31,
+both for an unknown period, both found by accident. The cause in both
+was the same: a command moved from a kernel builtin to a `/bin` program
+and the tool kept parsing the old output (`df` for "Filesystem:", which
+only `rescue df` still prints). `tools/ondemand_sweep.py` exists now to
+run the ~22 tools nothing else runs; `tools/check_tool_commands.py` is
+the static half and found `kvm_soak.py` driving a `delete` that is `rm`
+now. **When an on-demand tool fails, measure it against HEAD before
+believing you broke it** -- `tools/predates.py` does that in one line.
+
+**AND A COMMENT INSIDE A TOOL AGES LIKE ANY OTHER.** `fs_switch_test`
+said "asserted with `stat`, a builtin" -- true when written, false once
+`stat` moved to `/bin`, and nothing noticed because the tool was never
+run. Same shape as the `Ctrl-L` comment in CLAUDE.md's shell
+conventions: **a comment stating a fact about the rest of the system
+outlives that fact silently.**

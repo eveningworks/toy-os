@@ -589,10 +589,14 @@ Selected tools, each documented in its own docstring:
 | `flake_hunt.py` | Runs one tool N times and reports which CHECKS failed and how often — a rate, not a verdict. |
 | `pixel_probe.py` | Reads exact pixel values out of screenshots, so a rendering change is a number rather than an impression. |
 | `frame_balance.py`, `mem_stress.py` | Physical memory: does a process's teardown return exactly what it took, and does the machine survive running out? The patterns written are address-derived, so two mappings sharing one frame is detectable. |
-| `check_deps.py`, `check_layout.py`, `check_docs.py`, `check_dispatch.py`, `check_widget_ops.py` | The build's own invariants: header tracking is live, the disk matches its documented layout, the docs have no dead pointers, no dispatch chain has quietly grown big enough to want a table, and no widget's ops table is missing a slot it needs. |
+| `check_deps.py`, `check_layout.py`, `check_docs.py`, `check_dispatch.py`, `check_widget_ops.py`, `check_tool_commands.py` | The build's own invariants: header tracking is live, the disk matches its documented layout, the docs have no dead pointers, no dispatch chain has quietly grown big enough to want a table, no widget's ops table is missing a slot it needs, and no tool drives a guest command that has been renamed away. |
+| `ondemand_sweep.py` | Runs the ~21 test tools that neither the gate nor `gui_regress.py` covers, and reports which have rotted — two were found red by accident after failing for an unknown period. A skip is counted apart from a pass. Never a gate. |
+| `predates.py` | Answers "was this already broken?" by measuring: stashes the tree, rebuilds at HEAD, runs the command, restores, compares. |
 | `qmp_test.py`, `gui_flow.py`, `shell_flow.py` | Drive the GUI over QEMU's QMP socket, with the mouse/keyboard gotchas already handled. |
 | `tfs3_writer.py` | Read, write, inspect and corrupt-for-testing files inside a `disk.img` from the host, without booting. `--at-lba`/`--sectors` reach a filesystem inside a partition. |
-| `fs_switch_test.py` | Proves probe, wipefs, live `fsformat` both ways, and reboot persistence. |
+| `fs_switch_test.py` | Proves probe, wipefs, live `fsformat`, and reboot persistence. |
+| `partition_test.py` | Boots with the filesystem inside an MBR or GPT partition. Its real check is `df`: a kernel ignoring partitions still boots, so "it booted" proves nothing. |
+| `regex_hostcheck.py` | tolibc's `<regex.h>` against **glibc's**, over one shared case table — an oracle sharing no code is the only thing that catches a wrong expectation. |
 | `kbd_test.py`, `keyboard_paths_test.py` | The input path, asserted on both drivers: that the same keys produce the same keycode and character over PS/2 and virtio-input, and that `kbd`'s four columns say what each stage really did. |
 
 `CLAUDE.md` documents the conventions and environment quirks in depth.

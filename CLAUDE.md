@@ -1028,12 +1028,26 @@ before reaching for anything here you have not used recently, and add to
 it (not to a one-off script) when something would save a future session
 real time. The bar is "does this fix a rederive-from-scratch cost".
 
+- **Is it MINE, or was it already broken?** -- `predates.py "<command>"`
+  stashes, rebuilds HEAD, runs it, restores and compares. CLAUDE.md's
+  own rule is that "it predates me" is a MEASUREMENT; this is that
+  procedure as a script, including the `-u` and the recover-by-SHA that
+  the prose version gets wrong.
+- **Has the on-demand half rotted?** -- `ondemand_sweep.py` runs the
+  ~22 tools neither `preflight.sh` nor `gui_regress.py` covers. TWO WERE
+  FOUND RED BY ACCIDENT in one session after rotting for an unknown
+  period. A SKIP is counted apart from a PASS. Never a gate.
 - **Verify before delivering** -- `preflight.sh` (**stop your `vm.py`
   guest first -- it refuses to start while one holds disk.img's write
   lock**; the gate: clean build +
   iso + `check_deps.py` + `check_layout.py` + `check_dispatch.py` +
   `boot_smoke_test.py` + `ktest_run.py` + `usertest_run.py`),
-  `check_docs.py`.
+  `check_docs.py`, `check_tool_commands.py` (**every guest command a
+  tool drives still EXISTS** -- it found `kvm_soak.py` driving `delete`,
+  which is `rm` now, so its cleanup had been a no-op and it had been
+  littering `disk.img`. It cannot see a command whose OUTPUT changed,
+  which is the rot that actually bit `fs_switch_test`; that is
+  `ondemand_sweep.py`'s job).
 - **Drive a VM** -- `vm.py` (text in, text out: the fastest path for
   anything that is not about pixels; **`vm.py spawn <path>` runs a
   spawned test and prints the file it writes**, replacing the

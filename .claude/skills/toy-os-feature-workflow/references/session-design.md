@@ -1535,3 +1535,55 @@ presentation that nothing parses back. From that: the shell's list shows
 ugly one), type-ahead matches the DISPLAYED string (it is the only thing
 the user can see), and the settings app keeps `choice_raw` beside
 `choice` rather than trying to reverse one into the other.
+
+**2026-08-25 (partitioning, removing a filesystem, a regex engine).**
+
+- **WHERE A NEW OFFSET LIVES IS THE WHOLE DESIGN.** TFS3 was already
+  volume-relative behind a `{base_lba, sector_count}` seam, so the
+  obvious way to mount from a partition was to set that seam per
+  candidate. It would have worked in forty lines. Instead the offset
+  went one layer DOWN, into a `block_device` that wraps its parent --
+  which is where Linux (`bd_start_sect`) and Windows (`partmgr`) both
+  put it, and which meant `tfs3.c` was not edited at all. **Ask where
+  the equivalent lives in a real system before deciding it belongs in
+  the caller.** The seam still earned its keep: it is why this was a
+  block-layer change and not a filesystem one.
+- **REMOVING A FORMAT SILENTLY REFORMATS EVERY DISK IN IT.** Deleting
+  the TFS2 backend makes a TFS2 disk "readable but claimed by nobody",
+  which is the blank-disk case, which FORMATS. The removal on its own
+  would have destroyed data with a success message. Same rule as "an
+  unreadable superblock is not a foreign disk", from the other
+  direction. A recognise-and-refuse guard was ~15 lines; it was then
+  removed deliberately on the maintainer's word that no such disks
+  exist. **Both halves of that are decisions -- make the second one on
+  purpose rather than inheriting it.**
+- **A DEFAULT MOVES ONLY FOR A BLANK IMAGE.** Making the stock
+  `disk.img` partitioned was safe because `seed_disk.py` asks what shape
+  an image already IS and keeps it; only a blank one gets today's
+  default, and `make clean-disk` is the opt-in. That policy already
+  existed for TFS2 -> TFS3 and was worth reusing verbatim rather than
+  inventing a migration.
+- **tolibc's BAR IS THE OPPOSITE OF EVERYTHING ELSE, AND IT DECIDES
+  PLACEMENT.** `grep` needed a matcher. The project's usual rule (a
+  second real caller, not a plausible one) says keep it private;
+  tolibc's rule says complete rather than minimal, because its audience
+  is code not yet written. It went in as POSIX `<regex.h>`, and `sed`
+  and `awk` inherit it. **Check which bar applies before applying the
+  reflex one.**
+- **AN NFA RATHER THAN A BACKTRACKER, FOR THE SAME REASON `ttf.c`
+  BOUNDS-CHECKS.** Patterns arrive from command lines and files, and a
+  backtracking matcher takes exponential time on `(a*)*b`. The
+  simulation is O(pattern x text) with no bad input. The price is no
+  back-references, which is exactly what an NFA cannot do -- refused by
+  name rather than mis-handled.
+- **A ONE-ROW TABLE IS STILL A TABLE.** With TFS2 gone `g_backends[]`
+  holds one entry and `fs_ops.volume_relative` guards nothing today.
+  Both were kept because FAT32 is next and a collapse would have to be
+  undone by the change after it. **"One implementation" argues for
+  deleting an interface only when nothing is queued behind it.**
+- **AND ONE THING THE SCAN DOES NOT SETTLE.** `try_partitions()` mounts
+  the first partition any backend claims -- unambiguous with one
+  filesystem, wrong the moment a FAT32 ESP sits in partition 1. Real
+  systems NAME the root (`root=`, then `/etc/fstab`) rather than
+  discovering it. Recorded as a roadmap item rather than guessed at,
+  because a cleverer probe order would only move the guess.

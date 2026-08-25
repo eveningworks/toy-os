@@ -1917,6 +1917,74 @@ window without going through it will find its layout polls timing out.
   so `kernel/drivers/partition_test.c` round-trips a real GPT through
   the writer and the parser inside a running kernel.
 
+- **`ondemand_sweep.py`** -- runs the ~22 test tools that **neither**
+  `preflight.sh` nor `gui_regress.py` covers, and reports which have
+  rotted.
+
+  **The gap it fills is measured, not theoretical.** Two of those tools
+  were found red by accident in one session, having failed for an
+  unknown period: `fs_switch_test.py` (10 checks, because `df` and
+  `stat` became `/bin` programs while it still parsed the ring-0
+  output) and `init_test.py` (16 of 31, same class). Neither was a
+  regression; both were rot, and nothing in the repo could notice.
+
+  **A SKIP IS COUNTED SEPARATELY FROM A PASS.** `doom_test` exits 0
+  with no IWAD and `hires_test` passes vacuously on a default-mode ISO
+  -- counting either as a pass reports coverage that does not exist.
+  Preconditions are checked before running, so those report as skips
+  with a reason. The `hires` precondition reads the **built**
+  `iso/boot/grub/grub.cfg`'s `multiboot2` line, not the repo-root
+  template: the template still holds the `@KCMDLINE@` placeholder and
+  documents `video=` in four comments, so a substring search over it is
+  true on every checkout.
+
+  **Serial by default (`-j1`)**, and that is not a conservative
+  guess: nearly all of these take the shared VM slot, the physical
+  console, or boot their own machine. This is not `gui_regress`.
+
+  NEVER A GATE. Several need hardware, Docker or a fetched IWAD, and a
+  check that cannot pass on a clean checkout is one people learn to
+  ignore. Run it before a release, or when you want to know whether the
+  on-demand half of this directory still works. `demo_test.py` is
+  deliberately excluded even from here -- CLAUDE.md says on demand
+  ONLY.
+
+- **`predates.py`** -- answers "did this failure exist before my
+  changes?" by measuring rather than guessing: stashes the tree,
+  rebuilds at HEAD, runs the command you name, restores, and prints
+  both results.
+
+      python3 tools/predates.py "python3 tools/init_test.py"
+
+  CLAUDE.md's rule is that *"it predates me" is a measurement*, and the
+  procedure for taking it was written down in prose with a footgun in
+  it. This is that procedure as a script. It stashes with `-u` (without
+  it your new files stay in the tree and the "HEAD" build is not HEAD
+  -- it silently measures HEAD-plus-your-new-files), recovers **by
+  SHA** rather than by index or a bare `pop`, restores in a `finally`
+  so a Ctrl-C still puts the tree back, drops the stash only after a
+  **clean** apply, and refuses to run mid-rebase or mid-merge.
+
+  It answers "was this already red", and says so: pre-existing is not
+  the same as unrelated, since a change can make a latent bug reachable
+  without causing it.
+
+- **`check_tool_commands.py`** -- static check that every guest command
+  a tool drives still exists, against the same authority `check_docs.py`
+  uses (the seeded `/bin` tree plus both shells' builtins).
+
+  **It found a real one on its first run**: `kvm_soak.py` drove
+  `delete`, which is `rm` now -- so its "force a reload by deleting"
+  half had been a no-op and it had been leaving `zz*.desktop` litter on
+  `disk.img`, which is the dirty-fixture class that makes *other* tools
+  fail.
+
+  **Its limits are stated in the file, because an oversold check is
+  worse than none.** It cannot see a command whose OUTPUT changed,
+  which is the rot that actually bit `fs_switch_test` -- the name `df`
+  stayed valid the whole time. `ondemand_sweep.py` catches that by
+  running things; this is the cheap subset that costs a second.
+
 - **`regex_hostcheck.py`** -- compiles `userland/tests/regex_cases.h`
   twice, once against the real `userland/libc/regex.c` and once against
   the host's glibc `<regex.h>`, and compares.

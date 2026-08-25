@@ -162,6 +162,9 @@ python3 tools/check_dispatch.py || fail "dispatch-chain check"
 step "check_widget_ops.py (widget ops tables with a slot left NULL)"
 python3 tools/check_widget_ops.py || fail "widget ops check"
 
+step "check_tool_commands.py (a tool driving a command that no longer exists)"
+python3 tools/check_tool_commands.py || fail "tool command check"
+
 # The baked font's header is GENERATED, and regenerating it needs a font
 # most checkouts do not have installed -- so a hand-edit there survives
 # until somebody who DOES have it regenerates and silently reverts it.

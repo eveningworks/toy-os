@@ -122,3 +122,10 @@ ci-virtio.img
 # to perform to work. See docs/decisions.md.
 /data/doom/
 /seed/sync/usr/share/doom/
+
+# Work images written by tools/partition_test.py. It defaults to a temp
+# directory now, but an explicit --work in the repo would still land
+# here, and these are GIGABYTES -- one `git add -A` away from a commit
+# GitHub rejects outright (it did).
+/partition_boot*.img
+/partition_boot_qemu.log

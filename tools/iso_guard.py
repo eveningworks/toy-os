@@ -122,6 +122,15 @@ def _newest(root: Path, suffixes=None):
     return newest, newest_mtime
 
 
+# Files the BUILD writes rather than a person. Their mtime moving is
+# not evidence of a failed build, so the refusal above says something
+# different about them. Name only files that are genuinely generated --
+# putting a hand-written file here would silence a real staleness bug.
+GENERATED_SOURCES = {
+    "kernel/include/api/version.h",   # tools/gen_version.sh, on every git state change
+}
+
+
 def check_iso_fresh(repo: Path = REPO, iso_name: str = "toy-os.iso"):
     """Return a list of complaint strings; empty means the ISO is current.
 
@@ -144,11 +153,32 @@ def check_iso_fresh(repo: Path = REPO, iso_name: str = "toy-os.iso"):
             problems.append(f"{out_rel} does not exist -- run `make all && make iso`.")
             continue
         if src_m > out_m:
-            problems.append(
-                f"{src.relative_to(repo)} is NEWER than {out_rel} "
-                f"(by {src_m - out_m:.0f}s) -- that build did not run, or it FAILED. "
-                f"Check `make iso`'s output for an error."
-            )
+            rel = src.relative_to(repo)
+            # A GENERATED file being newer is the ordinary case, not a
+            # failure, and saying "check make iso's output for an error"
+            # sends the reader hunting for one that is not there.
+            #
+            # version.h is the one that actually fires: it embeds
+            # `git rev-parse --short HEAD` plus a dirty marker
+            # (tools/gen_version.sh), so it is rewritten every time you
+            # COMMIT or `git add` -- and the next build regenerates it
+            # before relinking, which is exactly this comparison. It
+            # cost four confused rebuilds in one session before anybody
+            # read the script.
+            if str(rel) in GENERATED_SOURCES:
+                problems.append(
+                    f"{rel} is NEWER than {out_rel} (by {src_m - out_m:.0f}s) "
+                    f"-- but it is GENERATED, and it is regenerated whenever HEAD "
+                    f"or the dirty flag changes (i.e. you have just committed or "
+                    f"staged something). Nothing is wrong: run `make iso` again "
+                    f"and it will be current."
+                )
+            else:
+                problems.append(
+                    f"{rel} is NEWER than {out_rel} "
+                    f"(by {src_m - out_m:.0f}s) -- that build did not run, or it FAILED. "
+                    f"Check `make iso`'s output for an error."
+                )
 
     # 2. Did the build reach the MEDIA the tests actually boot? This is
     #    the `make all` without `make iso` case, which is the one that

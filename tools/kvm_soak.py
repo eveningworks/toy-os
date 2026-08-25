@@ -200,7 +200,7 @@ def drive_workload(dbg, qmp, rounds):
             # whatever the click just made Control Panel do.
             dbg.send(f"sh write /usr/wm/desktop/zz{row}{which}.desktop x")
             time.sleep(0.9)
-            dbg.send(f"sh delete /usr/wm/desktop/zz{row}{which}.desktop")
+            dbg.send(f"sh rm /usr/wm/desktop/zz{row}{which}.desktop")
             time.sleep(0.9)
         seen.extend(l.strip() for l in dbg.logs())
     time.sleep(1.0)

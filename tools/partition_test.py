@@ -42,6 +42,7 @@ import os
 import re
 import socket
 import subprocess
+import tempfile
 import sys
 import time
 
@@ -175,9 +176,16 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--iso", default="toy-os.iso")
     ap.add_argument("--seed", default="seed")
-    ap.add_argument("--work", default="partition_boot.img")
+    # A TEMP DIRECTORY, not the current one. These are 2 GiB images and
+    # the sweep runs tools from the repo root, so defaulting to CWD
+    # dropped four gigabytes into the working tree -- which a `git add
+    # -A` then swept into a commit that GitHub rejected. Nothing that
+    # writes an image this size may default to somewhere tracked.
+    ap.add_argument("--work",
+                    default=os.path.join(tempfile.gettempdir(), "partition_boot.img"))
     ap.add_argument("--timeout", type=float, default=90.0)
-    ap.add_argument("--qemu-log", default="partition_boot_qemu.log")
+    ap.add_argument("--qemu-log",
+                    default=os.path.join(tempfile.gettempdir(), "partition_boot_qemu.log"))
     ap.add_argument("--kind", choices=("gpt", "mbr", "both"), default="both")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
