@@ -164,7 +164,7 @@ void calendar_open_now(void) {
     // and wm_render.c's overlay repaint does not care which is up, so
     // leaving two open would leave one of them drawn over the other
     // with both still taking clicks.
-    start_menu_open = 0;
+    if (start_menu_open) { start_menu_open = 0; start_menu_damage(); }
     context_menu_close();
     redraw_pending = 1;
 }

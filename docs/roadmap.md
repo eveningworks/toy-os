@@ -829,6 +829,7 @@ this to be better?".
 
 - [ ] A key event carries the translated code only, not the physical keycode
 
+- [ ] Four overlays still opt out of damage tracking, so each costs a full-screen repaint per frame while it is open -- the context menu, the calendar popup, the file picker and the confirm dialog; the Start menu was converted and the three steps are the same
 - [ ] `damage_sweep.py`'s random walk can open Notepad's file picker by chance -- harmless, but confusing in a state dump
 - [ ] `SYS_LISTDIR` still truncates at 256 entries, and TFS3 has no such cap -- the fix is an offset argument
 - [ ] Nothing detects an ordinary memory LEAK, in either allocator

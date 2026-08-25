@@ -985,10 +985,12 @@ static void usage(struct dbg_out *o) {
 static void cmd_icons(struct dbg_out *o, int json) {
     int n = icon_cache_count();
     if (json) {
-        dbg_out_printf(o, "{\"cached\":%d}\r\n", n);
+        dbg_out_printf(o, "{\"cached\":%d,\"evictions\":%d}\r\n",
+                       n, icon_cache_evictions());
         return;
     }
-    dbg_out_printf(o, "icons: %d cached (name,size pairs decoded and scaled)\r\n", n);
+    dbg_out_printf(o, "icons: %d cached (name,size pairs decoded and scaled), "
+                   "%d evicted\r\n", n, icon_cache_evictions());
 }
 
 int wm_debug_dispatch_out(char *line, struct dbg_out *o) {

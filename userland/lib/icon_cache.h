@@ -44,4 +44,9 @@ void icon_cache_invalidate(void);
 // to prove the cache is a cache rather than a decode per frame.
 int icon_cache_count(void);
 
+// How many entries have been evicted since boot. Non-zero means the cap
+// is below the working set, which is the thrash this cache exists to
+// avoid -- reported by `gui icons`.
+int icon_cache_evictions(void);
+
 #endif

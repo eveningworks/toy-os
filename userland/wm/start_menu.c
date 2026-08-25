@@ -61,6 +61,39 @@ const int wm_system_action_count = sizeof(wm_system_actions) / sizeof(wm_system_
 // deferred. See docs/decisions.md for the full "why a deadline, not a
 // blocking sleep" writeup.
 static int flash_index = -1;
+
+// WHICH ROW IS HOVERED, tracked rather than derived inside the draw.
+// The draw used to compute it from (mx, my) on every full repaint,
+// which is why wm.c forced a whole-screen repaint on every mouse move
+// while the menu was open -- 60 ms a move at 1280x720, and the cursor
+// lost its cheap sprite path for the menu's entire lifetime. Tracked,
+// a move that stays inside one row costs nothing and a move that
+// crosses rows damages the MENU, not the screen.
+static int hover_index = -1;
+
+// The rect the menu occupies. Computed from the registry rather than
+// from any open/closed state, so it is equally valid for damaging what
+// the menu is about to cover and what it has just vacated.
+void start_menu_damage(void) {
+    int mx, my, mw, item_h, items;
+    start_menu_geometry(&mx, &my, &mw, &item_h, &items);
+    wm_damage_rect(mx, my, mw, item_h * items);
+}
+
+// Returns 1 when the hovered row CHANGED, having damaged the menu.
+// A no-op with the menu closed, so the caller needs no guard.
+int start_menu_update_hover(int mx, int my) {
+    if (!start_menu_open) { hover_index = -1; return 0; }
+    int menu_x, menu_y, menu_w, item_h, total_items;
+    start_menu_geometry(&menu_x, &menu_y, &menu_w, &item_h, &total_items);
+    int row = -1;
+    if (uui_hit(menu_x, menu_y, menu_w, item_h * total_items, mx, my))
+        row = (my - menu_y) / item_h;
+    if (row == hover_index) return 0;
+    hover_index = row;
+    start_menu_damage();
+    return 1;
+}
 static uint64_t flash_until = 0;
 #define START_MENU_FLASH_TICKS 10 // ~100ms at the PIT's 100Hz -- long enough to register as a deliberate flash
 
@@ -105,6 +138,8 @@ void start_menu_geometry(int *out_menu_x, int *out_menu_y, int *out_menu_w,
 void start_menu_open_now(void) {
     start_menu_open = 1;
     flash_index = -1;
+    hover_index = -1;
+    start_menu_damage();
 }
 
 // App items (gui_app_registry) first, then wm_system_actions ("Exit to
@@ -148,12 +183,12 @@ void start_menu_draw(int mx, int my) {
     uint32_t flash_fg = UTHEME_WHITE;
     ugfx_fill_rect(wm_surface(), menu_x, menu_y, menu_w, menu_h, bg);
 
-    int hot = -1;
-    if (flash_index >= 0) {
-        hot = flash_index;
-    } else if (uui_hit(menu_x, menu_y, menu_w, menu_h, mx, my)) {
-        hot = (my - menu_y) / item_h;
-    }
+    // TRACKED, not derived: see hover_index. (mx, my) still arrive so
+    // the signature matches the other overlays and so a caller that
+    // draws outside the main loop is not silently working from a stale
+    // hover -- the tracking runs once a frame in wm.c.
+    (void)mx; (void)my;
+    int hot = flash_index >= 0 ? flash_index : hover_index;
 
     int app_rows = gui_app_visible_count(GUI_SHOW_STARTMENU);
     for (int i = 0; i < app_rows; i++) {
@@ -231,11 +266,13 @@ int start_menu_handle_click(int mx, int my) {
         // closes the menu once the deadline passes.
         flash_index = idx;
         flash_until = sys_ticks() + START_MENU_FLASH_TICKS;
+        start_menu_damage();
     } else {
         // Clicked elsewhere while the menu was open (the desktop, a
         // window) -- no row was selected, so there's nothing to flash;
         // close immediately.
         start_menu_open = 0;
+        start_menu_damage(); // the rows it just vacated
     }
     redraw_pending = 1;
     return 1;
@@ -246,6 +283,8 @@ void start_menu_update(void) {
     if (sys_ticks() >= flash_until) {
         flash_index = -1;
         start_menu_open = 0;
+        hover_index = -1;
+        start_menu_damage(); // the rows it just vacated
         redraw_pending = 1;
     }
 }

@@ -1233,7 +1233,16 @@ void wm_render_frame(int mx, int my) {
     // exactly the rows above that union stale -- "300 px changed
     // outside the damage rect, first at (4,448)", (4,448) being the
     // menu's own top-left corner and 300 being its top two rows.
-    int overlay_now = start_menu_open || context_menu_open || calendar_open ||
+    //
+    // THE START MENU IS NOT IN THIS LIST ANY MORE. It declares its own
+    // damage -- its rect when it opens, when it closes, when a click
+    // flashes a row and when the hovered row changes (start_menu.c) --
+    // so it no longer costs a full-screen repaint per frame for as long
+    // as it is up, which is what made the cursor crawl while it was
+    // open. The others still opt out, and converting each is the same
+    // three steps: track the hover instead of deriving it in the draw,
+    // damage the rect on every state change, drop it from here.
+    int overlay_now = context_menu_open || calendar_open ||
                       file_picker_open || confirm_dialog_open;
     if (overlay_now || overlay_was_open) {
         damage_reset();

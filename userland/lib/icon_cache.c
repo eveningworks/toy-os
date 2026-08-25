@@ -9,7 +9,15 @@
 
 #define ICON_DIR       "/usr/share/icons"
 #define ICON_NAME_MAX  24
-#define ICON_CACHE_MAX 32
+// SIZED FROM THE REAL WORKING SET, which is apps x sizes: ~14 registry
+// entries against the desktop grid, the taskbar, a title bar, a Start
+// menu row, the Start button and a sidebar. 32 was set when the comment
+// below said "eleven apps and three sizes" -- which is 33, already over
+// its own cap, and the wholesale drop below then re-decoded every icon
+// on EVERY frame. Measured: opening the Start menu took a desktop from
+// 30 cached to the cap, after which the count collapsed to 18, 20, 14,
+// 6 frame after frame and the WM logged 100-260 ms frames.
+#define ICON_CACHE_MAX 96
 
 struct icon_entry {
     char name[ICON_NAME_MAX];
@@ -17,11 +25,14 @@ struct icon_entry {
     int missing;          // looked for and not there: remembered, so a
                           // fallback icon costs one failed open, not one
                           // per frame
+    unsigned long long used; // last hit, for the LRU below
     struct uimg img;      // scaled to `size`; px is NULL when missing
 };
 
 static struct icon_entry g_cache[ICON_CACHE_MAX];
 static int g_count;
+static unsigned long long g_clock;   // monotonic, for `used`
+static int g_evictions;              // reported by `gui icons`
 
 void icon_cache_invalidate(void) {
     for (int i = 0; i < g_count; i++) uimg_free(&g_cache[i].img);
@@ -30,6 +41,7 @@ void icon_cache_invalidate(void) {
 }
 
 int icon_cache_count(void) { return g_count; }
+int icon_cache_evictions(void) { return g_evictions; }
 
 static struct icon_entry *find(const char *name, int size) {
     for (int i = 0; i < g_count; i++)
@@ -42,16 +54,34 @@ const struct uimg *icon_get(const char *name, int size) {
     if (!name || !name[0] || size <= 0) return NULL;
 
     struct icon_entry *e = find(name, size);
-    if (e) return e->missing ? NULL : &e->img;
+    if (e) { e->used = ++g_clock; return e->missing ? NULL : &e->img; }
 
-    // FULL IS FULL: the cache is dropped wholesale rather than evicting
-    // one entry. There are eleven apps and three sizes on this desktop,
-    // so the cap is not reached in practice -- and an LRU would be a
-    // policy with no measurement behind it. If this ever starts
-    // thrashing, that is the moment to measure and pick one.
-    if (g_count >= ICON_CACHE_MAX) icon_cache_invalidate();
+    // FULL DROPS ONE ENTRY, NOT ALL OF THEM. It used to drop the cache
+    // wholesale, on the reasoning that the cap was never reached -- and
+    // when it was, the next frame re-decoded everything and hit the cap
+    // again, so the cache became a decode-per-frame with extra steps.
+    // A single LRU eviction degrades instead: a working set one entry
+    // over the cap costs one decode per frame, not thirty.
+    //
+    // THE CAP IS STILL WHAT MATTERS. An LRU over a cap below the working
+    // set thrashes just as surely, only more slowly -- which is why
+    // `gui icons` reports the eviction count, so the next time this is
+    // too small it says so instead of being silently slow.
+    if (g_count >= ICON_CACHE_MAX) {
+        int lru = 0;
+        for (int i = 1; i < g_count; i++)
+            if (g_cache[i].used < g_cache[lru].used) lru = i;
+        if (!g_evictions)
+            ulogf("icons: cache full (%d entries) -- evicting, see `gui icons`\n",
+                  ICON_CACHE_MAX);
+        g_evictions++;
+        uimg_free(&g_cache[lru].img);
+        g_cache[lru] = g_cache[g_count - 1];
+        g_count--;
+    }
 
     e = &g_cache[g_count++];
+    e->used = ++g_clock;
     k_strlcpy(e->name, name, sizeof e->name);
     e->size = size;
     e->missing = 1;

@@ -375,6 +375,7 @@ void wm_handle_right_click(int mx, int my) {
         int hit_row = uui_hit(menu_x, menu_y, menu_w, item_h * total_items, mx, my)
                       ? (my - menu_y) / item_h : -1;
         start_menu_open = 0;
+        start_menu_damage(); // the rows it just vacated
         redraw_pending = 1;
         if (hit_row >= 0 && hit_row < gui_app_registry_count) {
             static struct context_menu_item item[1];

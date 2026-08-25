@@ -51,6 +51,17 @@ void start_menu_open_now(void);
 // function like every other wm_render.c drawing routine).
 void start_menu_draw(int mx, int my);
 
+// Tracks which row the cursor is over. Returns 1 when it CHANGED,
+// having damaged the menu's own rect -- so a mouse move inside one row
+// costs nothing and one across rows repaints the menu rather than the
+// screen. Call once a frame; a no-op while the menu is closed.
+int start_menu_update_hover(int mx, int my);
+
+// Damages the rect the menu occupies, whether or not it is open --
+// which is what makes "the rows it just vacated" declarable by the code
+// that closes it.
+void start_menu_damage(void);
+
 // Handles a left-click at (mx, my) while the popup is open -- routes it
 // to the right app/system-action row (or closes the popup if the click
 // landed outside it), and starts that row's post-click flash the same
