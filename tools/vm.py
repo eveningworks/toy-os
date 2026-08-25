@@ -248,6 +248,24 @@ def cmd_start(args):
         cmd += ["-device", "virtio-keyboard-pci",
                 "-device", "virtio-mouse-pci",
                 "-device", "virtio-tablet-pci"]
+    # An xHCI controller plus USB HID devices, off by default for the
+    # same reason --virtio-input is: every existing test was written
+    # against the PS/2 pair. `--usb xhci` attaches a keyboard, which
+    # does NOT disturb pointer routing; `--usb xhci+mouse` adds a
+    # pointer, and QEMU activates a pointer handler lazily on the first
+    # poll -- so from the moment kernel/drivers/usb/ polls that
+    # endpoint, QMP `rel` events drive the USB mouse instead of the PS/2
+    # one. That is exactly what a mouse test wants and exactly why this
+    # is not on by default (see docs/testing.md).
+    #
+    # Devices are given ids so a test can aim `input-send-event` at one
+    # by name rather than relying on which handler QEMU picked.
+    usb = getattr(args, "usb", "none") or "none"
+    if usb != "none":
+        cmd += ["-device", "qemu-xhci,id=xhci",
+                "-device", "usb-kbd,id=usbkbd,bus=xhci.0"]
+        if usb == "xhci+mouse":
+            cmd += ["-device", "usb-mouse,id=usbmouse,bus=xhci.0"]
     cmd += [
         # A VNC head rather than -display none: input routing needs a
         # display head to exist even when nothing connects to it (see
@@ -517,6 +535,13 @@ def main():
                          "default; with it the guest has BOTH these and the PS/2 "
                          "pair, which is what exercises the input core's "
                          "multiple-source path.")
+    ap.add_argument("--usb", choices=("none", "xhci", "xhci+mouse"),
+                    default="none",
+                    help="attach an xHCI controller and USB HID devices. Off by "
+                         "default; `xhci` adds a usb-kbd, `xhci+mouse` adds a "
+                         "usb-mouse too. A named value rather than a boolean "
+                         "because the mouse changes QMP pointer routing once "
+                         "the guest driver polls it.")
     ap.add_argument("--vga", default="std",
                     help="QEMU -vga adapter (std, vmware, ...). All three of std, "
                          "vmware and virtio have a modesetting driver now (std "

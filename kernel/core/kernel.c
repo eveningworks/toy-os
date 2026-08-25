@@ -51,6 +51,7 @@
 #include "virtio_rng.h"   // virtio-rng -- registers itself as a krandom source
 #include "virtio_gpu.h"   // virtio-gpu -- a display_driver on the virtio transport
 #include "virtio_input.h" // virtio-input -- keyboards/mice/tablets, into the input core
+#include "usb.h"         // xHCI, and USB HID keyboards/mice into the same core
 #include "reloc.h"        // the image's own relocation table -- kernel_relocate()
 
 // Where the running image starts -- a relocated symbol, so under kernel
@@ -264,6 +265,13 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // tablet. They register with the input core, so the desktop and the
     // console consume them without knowing which bus they arrived on.
     virtio_input_init();
+
+    // USB last of the input paths, and deliberately so: PS/2 registered
+    // first, so it stays input source 0 and `lsdev`'s ordering does not
+    // shift under the tests. Needs pmm_init() for its DMA frames,
+    // idt_init() for interrupts and a ticking PIT, and pci_init() --
+    // all of which BOOT_REQUIRE() checks rather than assumes.
+    usb_init();
     klog_write("toy-os: kernel heap initialized\n");
 
     // No self-tests run here any more. pmm/heap/json/tfs each used to be

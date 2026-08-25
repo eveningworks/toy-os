@@ -21,6 +21,7 @@
 #include "serial.h"
 #include "klog.h"
 #include "display.h"  // lsdev names the active display driver
+#include "usb.h"      // lsdev names the USB controller; `usb` dumps its rings
 #include "input.h"    // ...and every registered input source
 #include "virtio_input.h" // ...and whether virtio input is actually delivering
 #include "win_transport.h" // `gui` travels as a protocol message now
@@ -45,6 +46,7 @@ static void dbg_cmd_help(void) {
     klog_write("  help        - this list\r\n");
     klog_write("  meminfo     - physical frame + kernel heap usage\r\n");
     klog_write("  lsdev       - enumerated PCI devices\r\n");
+    klog_write("  usb         - xHCI registers, rings and root ports\r\n");
     klog_write("  lsfs [path] - list a filesystem directory (default /)\r\n");
     klog_write("  ktest [suite] - run the in-kernel test suite\r\n");
     klog_write("  sh <command>  - run any shell command, output back here\r\n");
@@ -194,6 +196,12 @@ static void dbg_cmd_lsdev(void) {
         klog_write("Display: none claimed\r\n");
     }
 
+    char usbline[96];
+    if (usb_controller_summary(usbline, sizeof usbline))
+        klog_printf("USB: %s\r\n", usbline);
+    else
+        klog_write("USB: no controller\r\n");
+
     int ns = input_source_count();
     klog_printf("Input sources (%d):\r\n", ns);
     for (int i = 0; i < ns; i++) {
@@ -316,6 +324,7 @@ static void dbg_dispatch(char *line) {
     else if (k_strcmp(line, "meminfo") == 0) dbg_cmd_meminfo();
     else if (k_strcmp(line, "lsdev") == 0) dbg_cmd_lsdev();
     else if (k_strcmp(line, "lsfs") == 0) dbg_cmd_lsfs(arg);
+    else if (k_strcmp(line, "usb") == 0) usb_dump();
     else if (k_strcmp(line, "ktest") == 0) dbg_cmd_ktest(arg);
     else if (k_strcmp(line, "sh") == 0) dbg_cmd_sh((char *)arg);
     else {

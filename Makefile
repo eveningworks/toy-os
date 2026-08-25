@@ -372,6 +372,9 @@ help:
 	@echo "                             of them -- see the KCMDLINE line above"
 	@echo "     INPUT=ps2|virtio        virtio attaches keyboard/mouse/tablet BESIDE"
 	@echo "                             PS/2, so the input core has two sources"
+	@echo "     USB=none|xhci|xhci+mouse an xHCI controller and USB HID devices."
+	@echo "                             NOTE: attaching usb-kbd takes the keyboard"
+	@echo "                             AWAY from PS/2 -- QEMU routes keys to it"
 	@echo "   Which driver actually claimed the display: type lsdev at the serial"
 	@echo "   debug console. lspci only says the device is on the bus."
 	@echo ""
@@ -1246,6 +1249,33 @@ QEMU_INPUT = $(if $(filter virtio,$(INPUT_KIND)),\
                -device virtio-keyboard-pci -device virtio-mouse-pci \
                -device virtio-tablet-pci,)
 
+# USB. A BUS axis rather than a value of INPUT=, because USB is not an
+# input class -- mass storage is the next thing to arrive on it, and an
+# `INPUT=usb` would have to be renamed the day it does. Named rather
+# than a boolean for the reason the other axes are: `USB=xhci+mouse` is
+# a third value, and it has to be separate because attaching a usb-mouse
+# changes where QMP pointer events go the moment the guest driver polls
+# that endpoint.
+#
+# ATTACHING THIS TAKES THE KEYBOARD AWAY FROM PS/2. QEMU activates a
+# keyboard handler when usb-kbd appears and routes keystrokes to it, so
+# a guest whose USB driver is not working receives NOTHING -- measured,
+# not assumed (see tools/usb_test.py, whose control this property is).
+# That is exactly why it is off by default: adding it to an existing
+# test would silently kill that test's keyboard input.
+#
+# Devices carry ids so a test can aim `input-send-event` at one by name.
+USB_KIND = $(if $(USB),$(USB),none)
+# Every comma inside a device string has to be $(COMMA): make splits
+# $(if)'s arguments on commas, so a literal one silently truncates the
+# device list -- which is how `usb-kbd` disappeared entirely the first
+# time this was written, leaving a controller with nothing plugged in.
+QEMU_USB = $(if $(filter xhci xhci+mouse,$(USB_KIND)),\
+             -device qemu-xhci$(COMMA)id=xhci \
+             -device usb-kbd$(COMMA)id=usbkbd$(COMMA)bus=xhci.0,)\
+           $(if $(filter xhci+mouse,$(USB_KIND)),\
+             -device usb-mouse$(COMMA)id=usbmouse$(COMMA)bus=xhci.0,)
+
 # QEMU has had no default audio backend since 5.x, and -machine
 # pcspk-audiodev is what routes the emulated i8254 speaker to it.
 # Without both, `beep` runs correctly and is simply silent. `pa` is what
@@ -1282,7 +1312,7 @@ BOOT_MEDIUM = $(if $(NODISK)$(LIVE)$(DEMO),cd,\
 QEMU_BOOT = $(if $(filter disk,$(BOOT_MEDIUM)),-boot order=c,-boot order=d -cdrom $(QEMU_ISO))
 
 QEMU_RUN = qemu-system-x86_64 $(QEMU_BOOT) $(QEMU_ACCEL) $(QEMU_DISK) \
-	  $(QEMU_INPUT) \
+	  $(QEMU_INPUT) $(QEMU_USB) \
 	  -serial stdio -vga $(QEMU_VGA) -display $(QEMU_DISPLAY) -m $(MEM) \
 	  $(QEMU_AUDIO) $(QEMU_EXTRA)
 
