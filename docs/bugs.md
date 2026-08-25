@@ -66,7 +66,6 @@ it has exonerated one this session and convicted another.
 
 - [ ] `tools/init_test.py` fails 12 of its 27 checks, deterministically and PRE-EXISTING -- init stops reaping and stops starting services partway through the run
 - [ ] `tools/taskbar_test.py` fails 1 of its 11 checks, deterministically and PRE-EXISTING -- measured 2026-08-25 with `predates.py`, HEAD fails identically
-- [ ] `tools/virtio_gpu_test.py` fails "the screen KEEPS updating (the taskbar clock moves)", deterministically and PRE-EXISTING -- measured 2026-08-25 with `predates.py`, HEAD fails identically; cause never established
 
 *(Was empty. Every entry that was here on 2026-08-20 is fixed, was already
 fixed, or turned out not to be a defect -- see `git log`. The two above
@@ -166,15 +165,24 @@ either still parses the ring-0 output or runs on an image that has no
   stages the directory itself now, 9c3f5c0); `stdin_test.py`
   (`FileNotFoundError` -- it ATTACHES to a running guest, and the sweep
   was not starting one, 299583c). The underlying features were fine in
-  all three cases.
+  all three cases. `console_shell_test.py` passes 33 of 33 as well,
+  and nobody knows which commit fixed its one check.
 
-- **`console_shell_test.py` — 32 of 33.** One check. Not investigated.
+- **`virtio_gpu_test.py` was the same shape, and the entry naming its
+  failing check was wrong.** What failed was `the desktop is actually
+  on screen`, not `the screen KEEPS updating` -- the tool required one
+  colour to cover half the screen, which stopped being true of a
+  working desktop when wallpapers landed (`aurora`'s dominant colour
+  reaches 28%). It measures NON-BLACK coverage now and the driver was
+  never at fault; 11 of 11 pass, with the `DISPLAY_CAP_NEEDS_FLUSH`
+  positive control still reddening exactly that check (0.1% non-black).
+  **The lesson is the mis-transcribed check name**: a triage entry that
+  names the wrong assertion sends the next session at the wrong code.
+
 - **`virtio_input_test.py`** — "a virtio keypress reaches the ring-3
   desktop (Super opens Start)" fails. **This one is NOT obviously rot**
   and deserves a look before anything else here: it is an input-path
   assertion, not a command-name one.
-- **`virtio_gpu_test.py`** — "the screen KEEPS updating (the taskbar
-  clock moves)" fails. Also not obviously rot.
 
 Reproduce: `make clean-disk && make iso && python3 tools/ondemand_sweep.py --logs DIR`.
 

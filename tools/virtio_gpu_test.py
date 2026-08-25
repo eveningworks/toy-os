@@ -44,7 +44,13 @@ sys.path.insert(0, "tools")
 from gui_debug import DebugConsole            # noqa: E402
 from qmp_test import QMPSession               # noqa: E402
 
-DESKTOP_MIN_FRACTION = 0.5   # of the screen, for "the desktop is drawn"
+# For "the desktop is drawn": how much of the screen must be NON-BLACK.
+# It used to be how much a single colour had to cover, which stopped
+# being true of a working desktop the day wallpapers landed -- a
+# photograph has no colour covering half the screen (`aurora`'s
+# dominant one reaches 28%). Non-black measures the property the
+# positive control actually breaks and does not care what is drawn.
+DESKTOP_MIN_NONBLACK = 0.5
 CURSOR_X, CURSOR_Y = 400, 300
 
 
@@ -96,11 +102,16 @@ def run(dbg, qmp, tmp, res):
     im = Image.open(first).convert("RGB")
     colour, count = dominant(im)
     total = im.size[0] * im.size[1]
-    # Non-black, and that clause is not decoration: the positive control
-    # that removes DISPLAY_CAP_NEEDS_FLUSH leaves a screen that is 99.9%
-    # one colour -- black -- and passed this check without it.
+    nonblack = sum(1 for p in im.getdata() if p != (0, 0, 0))
+    # TWO CLAUSES, AND NEITHER IS DECORATION. The positive control that
+    # removes DISPLAY_CAP_NEEDS_FLUSH leaves a screen that is 99.9%
+    # black, which the first clause rejects; a display stuck on one
+    # flat non-black frame is what the second one rejects. Whether that
+    # frame is a wallpaper, a plain background or a window is the next
+    # check's business, not this one's.
     res.check("the desktop is actually on screen",
-              count > total * DESKTOP_MIN_FRACTION and colour != (0, 0, 0),
+              nonblack > total * DESKTOP_MIN_NONBLACK and count < total,
+              f"{100.0 * nonblack / total:.1f}% non-black, "
               f"dominant {colour} covers {100.0 * count / total:.1f}%")
 
 
