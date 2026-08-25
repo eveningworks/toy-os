@@ -1774,3 +1774,53 @@ Same shape as ramfs being deliberately kept OUT of that table (a
 registry is a list of things every consumer will act on). **When you add
 a row, grep for every consumer of the registry**, not just the one you
 are adding it for.
+
+**2026-08-25 (USB: xHCI, and a HID keyboard and mouse). Where the
+project stands, so a session does not re-derive it.**
+
+- **THERE IS A USB STACK, AND IT IS xHCI ONLY.** `kernel/drivers/usb/`:
+  `xhci.c` (controller), `usb_enum.c` (descriptors and standard
+  requests), `usb_hid.c` (boot keyboard and mouse). UHCI/OHCI/EHCI are
+  found by prog_if, named in the log and refused -- a machine that needs
+  this driver has xHCI and nothing else. `USB=xhci|xhci+mouse` on `make
+  run`, `--usb` on `vm.py`, both OFF by default.
+- **A USB KEYBOARD NEEDS NO LAYOUT TABLE.** `/etc/kbs` is keyed on evdev
+  now, so the driver maps HID usages to evdev keycodes and calls
+  `input_report_key()`; modifiers, layout, Ctrl-folding and the tty are
+  all shared with PS/2. This made the roadmap's steps 6 and 7 an order
+  of magnitude smaller than they were written to be.
+- **NO HCD OPS TABLE**, and the reasoning generalises: the usual case
+  against a premature abstraction is that the second implementer may not
+  arrive, but here there is no plausible one, having just refused the
+  only candidates. The precedent is exact -- `virtio_pci.c` +
+  `virtqueue.c` are a shared transport under four drivers with no
+  vtable. What WAS built is `xhci.h`, a plain header, because that seam
+  had two real callers on day one.
+
+**THE DESIGN LESSON WORTH CARRYING: A CONVENTION THAT IS WRITTEN DOWN
+NOWHERE WILL BE GOT WRONG BY THE NEXT DRIVER.** `input_report_rel()`
+wants UP-positive dy, because `mouse_feed_rel()` ends in `mouse_y -= dy`
+and was written against a PS/2 mouse. HID and evdev both report the
+opposite sense. That was discoverable only by reading `mouse.c`, so I
+wrote the driver with the wrong sign AND asserted the wrong rule in a
+comment; a KTEST caught it. The fix was three things, not one: the code,
+the test's name, and **`input.h` finally stating the sign**. When a bug
+comes from an unstated invariant, state it where the next caller looks.
+
+**A SPEC IS NOT THE EMULATOR.** Two xHCI cases where following the
+document produced a bug: a completed port reset is supposed to raise
+PRC, and QEMU performs the whole USB2 reset inside the register write
+and only sets PED -- so waiting on the change bit burned the entire
+backstop (0.53s of boot) and then logged failure for a port that had
+come up perfectly. **Wait on the outcome, not the notification.** And
+QEMU asks for zero scratchpad buffers, so that whole path is unreachable
+in every test here and is marked as such rather than pretended tested.
+
+**A REGISTER WHOSE BITS HAVE DIFFERENT WRITE SEMANTICS NEEDS ONE DOOR.**
+xHCI's PORTSC is seven RW1C bits plus PED, which is write-1-to-DISABLE,
+so the obvious read-modify-write disables the port and clears every
+change bit it read. Everything goes through one `portsc_write()`. Same
+shape for the interrupt acknowledge: `USBSTS.EINT` and `IMAN.IP` are
+both RW1C, so acknowledging writes back ONE bit, never the register --
+getting that wrong is the storm that hung this guest during virtio-input.
+

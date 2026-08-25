@@ -1712,3 +1712,78 @@ the only row. `tools/check_tool_commands.py` cannot catch this class: it
 checks that a command a tool drives still EXISTS, not that its output
 still means what the tool thinks. That gap is `ondemand_sweep.py`'s job,
 and it is the third time this exact rot has bitten `df`'s readers.
+
+**2026-08-25 (USB/xHCI). THE THEME IS THAT THREE SEPARATE "THE DRIVER IS
+BROKEN" RESULTS WERE ALL THE HARNESS, and each one was diagnosed only by
+instrumenting rather than reasoning.**
+
+**A CONTROL CAN BE FREE, AND IT IS WORTH TEN MINUTES TO FIND OUT BEFORE
+WRITING THE FEATURE.** Before a line of the xHCI driver existed, one
+experiment asked: with `-device qemu-xhci -device usb-kbd` attached to a
+build with NO USB support, does a typed `touch /marker` still create the
+file? It did not -- QEMU routes keystrokes to the USB keyboard the moment
+it is attached, so PS/2 receives nothing. That single measurement made
+the whole test suite self-controlling: a broken driver receives no input
+at all, so every keystroke assertion already has its control and no
+`i8042=off` scaffolding was ever needed. **Ask what the emulator does
+with the device BEFORE designing the test around it.** The same fact is
+also why the axis must be off by default -- attaching it to any existing
+tool silently deprives that tool of its keyboard.
+
+**AND RUN THE CONTROL ARM EVEN WHEN THE RESULT LOOKS DECISIVE.** The
+first version of that experiment reported "keys did not reach the
+guest", which was the answer I wanted. The control arm -- the same probe
+with no USB devices -- ALSO reported no keys, because the probe was
+typing at a graphical boot with no shell prompt. The exciting result was
+measuring nothing. Two more harness bugs hid behind it: the socket path
+was `.vm.serial.3` where vm.py writes `.vm.3.serial`, and the guest
+needed `system.default_target text` set on a prior boot.
+
+**A TEST WHOSE ORACLE IS "N THINGS EXIST" MUST PRINT WHICH ONES DID
+NOT.** The ring-wrap phase reported 20 of 25 files missing and looked
+exactly like a driver dying partway. Printing the surviving names cost
+one line and turned "the driver stops after 5 files" into three
+successive, different root causes:
+
+  1. `send_key` SILENTLY DROPS a character it has no qcode for. `touch
+     /usb_one.txt` created `usbone.txt` -- the underscore needs
+     `combo(['shift','minus'])`. The file was "missing" because it was
+     never named that. **A typing helper must refuse an unmappable
+     character, not drop it**; ours raises now.
+  2. **AN UNDRAINED SERIAL SOCKET STALLS THE WHOLE GUEST.** With the
+     text target every spawn logs to COM1; nothing was reading it, the
+     buffer filled, the guest's serial write blocked and the kernel
+     stopped -- USB polling included. It presents as a driver dying
+     after N keystrokes AND RECOVERS the instant anything reads the
+     socket, so a dump taken afterwards shows a perfectly healthy
+     driver with nothing pending. Measured: 5 of 25 files without a
+     periodic drain, 25 of 25 with it. A long-running QMP test must
+     drain the console as it goes.
+  3. Only after both of those did the real driver behaviour show
+     through -- and it was correct.
+
+**THE SIZE OF THE THING BEING TESTED SETS THE SIZE OF THE TEST.** An
+event ring is 256 TRBs, so a driver that never flips its cycle bit works
+for ~128 keystrokes and then goes permanently deaf. Every check that
+types a short marker passes on that driver. The wrap phase types 25
+files -- past a full lap -- and asserts the LAST one; its positive
+control (cycle flip removed) loses files 8 onward while THE FIRST FILE
+STILL PASSES, which is the whole argument in one line. Ask what the
+ring/buffer/cache size is, and type past it.
+
+**AN ASSERTION ON A REQUEST'S EFFECT CANNOT SEE A MISSING REQUEST.**
+QEMU's `usb-hid` reports boot-format whether or not `SET_PROTOCOL(boot)`
+was ever issued, so skipping it is invisible here and breaks on real
+hardware. The only testable thing is that the request was SENT, which
+means counting it in the driver and asserting the counter. Whenever the
+emulator is more forgiving than hardware, assert the action, not the
+outcome.
+
+**A KTEST NAMED FOR THE WRONG ANSWER EARNED ITSELF THE SAME DAY.** The
+mouse test was written as "dy is not negated" from a misreading of
+`input_report_rel()`, and it failed against the driver -- because
+`mouse_feed_rel()` ends in `mouse_y -= dy` and wants UP-positive dy,
+which HID and evdev both invert. The test caught its own author. It is
+renamed for the property rather than the guess, and `input.h` now states
+the sign, which nothing did before.
+

@@ -93,6 +93,9 @@ TOOLS = [
     ("kbd",         "kbd_test.py",             "`kbd`'s four columns, both drivers", True,  None,                   False),
     ("kbd_paths",   "keyboard_paths_test.py",  "PS/2 and virtio-input agree",        True,  None,                   False),
     ("virtio_input", "virtio_input_test.py",   "virtio keyboard, mouse and tablet",  True,  None,                   False),
+    # Boots its own guests with -device qemu-xhci, so it is in the sweep
+    # rather than the gate: three phases and two reboots per phase.
+    ("usb",         "usb_test.py",             "xHCI, and a HID keyboard and mouse", True,  None,                   False),
 
     # --- display ------------------------------------------------------
     ("virtio_gpu",  "virtio_gpu_test.py",      "the virtio GPU driver",              True,  None,                   False),

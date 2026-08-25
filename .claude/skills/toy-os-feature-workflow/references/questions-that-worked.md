@@ -374,3 +374,69 @@ say which of the milestone's own listed items did NOT land, and why. One
 did not (a second mount of ONE backend), and saying so plainly -- with
 what it would take -- was more useful than quietly ticking eleven of
 twelve boxes.
+
+## 2026-08-25 -- USB: three rounds, and the user asked for more mid-build
+
+The request was "lets add USB support (For keyboard and mouse for now).
+Maybe xHCI. What that needs?" -- an open scope with a tentative
+technical suggestion in it, which is exactly the shape that deserves
+questions rather than a guess.
+
+**Round 1, before any code (three questions):**
+
+1. *How far do you want to go?* -- four options SIZED IN LINES AND
+   NAMED BY WHAT YOU GET: a design doc only (the pattern rootfs,
+   signals, TTY and libc all followed), bring-up only (~600 LOC,
+   payoff is `lsdev` naming the controller), all the way to a typing
+   keyboard (~1290), keyboard and mouse (~1400). Each option's preview
+   was a stage table, so the cost was visible rather than described.
+2. *xHCI only, or UHCI first?* -- because `docs/roadmap-details.md`
+   itself recommends UHCI as "dramatically simpler if the goal is
+   first proving out the general model", and disagreeing with the
+   repo's own written plan is a decision the maintainer should make,
+   not one to make silently.
+3. *INTx or poll?* -- with the honest cost on both sides: polling is
+   latency bounded by the idle cadence, INTx is the storm class that
+   already hung this guest 3 boots in 3 under KVM.
+
+The user took the biggest scope, agreed with the xHCI recommendation,
+and **overrode the interrupt recommendation** -- which moved interrupt
+work from a deferred stage into stage 2 and changed the plan
+materially. That override is the evidence the question was real.
+
+**Round 2, mid-build, after "Give me some choices on the way":** the
+command surface (`/bin/lsusb` vs a ring-0 `usb` command vs both), the
+QEMU axis shape (`USB=xhci` vs `INPUT=usb` vs `USB=1`), and commit
+granularity. The axis question mattered more than it looked: `INPUT=usb`
+reads naturally today and is a lie about what USB is, because mass
+storage arrives on the same bus.
+
+**Round 3, unprompted by me:** the user asked for a specific data file
+(`usb.ids`) AND said "check the license first". Checking it properly
+found that upstream offers GPL-2+ *or* 3-clause BSD -- identical to the
+`pci.ids` already shipped under its BSD option -- so no GPL reached the
+disk image and the LICENSE carve-out extended cleanly. **The two
+questions that produced were worth asking:** how much of a 730 KB
+database to ship, and -- the interesting one -- whether to show the
+database name or the device's own string descriptors, which PCI has no
+equivalent of. The user chose "database first, strings under `-v`",
+matching real `lsusb`; I flagged that this hides the string path behind
+a flag nobody types, and the test suite asserts on `lsusb -v`
+specifically because of it.
+
+**What to copy:**
+
+- **Size the options in the units the work is actually paid in.** LOC
+  per stage and "what you can see at the end" beat "small/medium/large".
+- **When the repo's own plan recommends something you disagree with,
+  make it a question.** Do not silently overrule a document the
+  maintainer wrote.
+- **A mid-build request for choices is a signal you stopped offering
+  them.** The second round came because I had made three defensible
+  calls in a row without asking.
+- **"Check the license first" deserves a real answer, not a reflex.**
+  The file itself carried NO licence grant; the project page did, and
+  the distribution package treated it as GPL-2+ only. Reporting "clean,
+  and here is the specific option we are taking and why" is the answer;
+  "it is fine, Linux ships it" is not.
+

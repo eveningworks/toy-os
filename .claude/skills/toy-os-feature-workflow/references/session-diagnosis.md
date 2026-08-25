@@ -885,3 +885,62 @@ repo's own rule -- suspect your test before the code, but verify which
 it is -- would have got there faster than two rebuild-and-rerun cycles.
 **Before diagnosing a VM-driven failure, run `ps -eo args | grep
 qemu-system` and account for every guest.**
+
+**2026-08-25 (the `make iso` hang). THE THEME IS THAT I "FOUND IT" TWICE
+AND WAS WRONG BOTH TIMES, AND THE ANSWER CAME FROM ONE `ls -l /proc/PID/fd`
+THE USER RAN.**
+
+The report: `make iso` stops dead after the last echoed command, no
+output, no error, and `make clean-disk` is the only way out. Ten
+reproduction attempts here, all clean. What eventually solved it was not
+reasoning at all -- it was asking the person who could reproduce it to
+dump the hung process's open files.
+
+**THE ROOT CAUSE, WORTH KNOWING ON ITS OWN: mtools does not read stdin.
+It opens `/dev/tty` and reads the controlling terminal directly.** So
+under `capture_output=True` its question goes into a pipe nobody reads
+while it blocks forever on a terminal nobody can see it waiting on. The
+fix is `start_new_session=True` (no controlling terminal, so
+`open("/dev/tty")` fails with ENXIO and the child gives up, putting its
+complaint in the captured stderr) -- NOT `stdin=DEVNULL`, which mtools
+sails straight past. The evidence was one line: `fd 4 -> /dev/tty`.
+
+**TWO FALSE POSITIVES, BOTH MY OWN MEASUREMENT ERROR, BOTH ANNOUNCED
+BEFORE BEING CHECKED.** Recorded because the pattern matters more than
+the bug:
+
+  1. *"The guest writes to the ESP."* I checksummed `/boot` before and
+     after a boot and it changed. But `make run` RE-RUNS `make iso`
+     first, so my before/after straddled a rebuild -- I was measuring
+     install_grub's own writes. Isolating with raw QEMU (no `make`)
+     showed the guest changes ZERO sectors. **When a "before" is taken
+     around a command that itself rebuilds, it is not a before.**
+  2. *"Your mtools config differs from mine."* It did exist on their
+     machine and not mine, which felt decisive. It was the stock
+     distribution sample with every line commented out -- inert.
+     **The existence of a config file is not a difference in
+     configuration.**
+
+**WHEN YOU CANNOT REPRODUCE, FIX THE INVISIBILITY RATHER THAN GUESSING
+AT THE CAUSE.** Three commits landed before the root cause was known,
+and none of them claimed to be the fix: a timeout so the hang cannot be
+silent, the timeout lowered from 180s to 60s because the reporter had
+killed the build by hand at 18s and would never have seen it, and a
+shared `_timeout_exit()` because one call site was throwing a raw
+`TimeoutExpired` traceback out of subprocess internals. That third
+commit's message is what produced the `mmd` name; the `/proc` dump it
+asked for produced the cause.
+
+**A TIMEOUT NOBODY WAITS OUT TEACHES NOTHING.** Pick the budget from how
+long a human will actually stare at a stalled build, not from how slow
+the operation could theoretically be.
+
+**CHECK THE DIAGNOSTIC COMMAND YOU HAND SOMEONE.** I told them to run
+`fsck.fat -n -v <(dd ...)`. `fsck.fat` seeks, a process substitution is
+a pipe, and they got `Seek to 0:Illegal seek` -- a wasted round trip on
+advice I had not run myself.
+
+**AND THE SELF-MATCH TRAP BIT AGAIN**, exactly as CLAUDE.md warns: a
+`ps aux | grep "[q]emu-system"` inside a shell whose own command line
+contained that string matched itself and printed nonsense.
+

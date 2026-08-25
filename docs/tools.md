@@ -24,7 +24,9 @@ PATH` attaches a second disk on virtio-blk, which then carries the
 filesystem while the IDE drive stays for the `[ata]`/`[atac]` suites,
 and `-v` prints the WHOLE transcript, boot messages included), `vm.py`
 (start a headless VM and run shell commands against it, getting text
-back, `--virtio-disk` likewise — see `docs/testing.md`).
+back, `--virtio-disk` likewise; `--usb xhci|xhci+mouse` attaches an
+xHCI controller and USB HID devices, off by default because attaching a
+`usb-kbd` takes the keyboard AWAY from PS/2 — see `docs/testing.md`).
 
 The rest, added once the build/test/delivery loop had enough repeated
 manual steps to be worth automating:
@@ -1418,6 +1420,54 @@ window without going through it will find its layout polls timing out.
   repaints no framebuffer pixels), because a device-composited cursor
   is handed to the display client out of band and never appears in a
   `screendump` at all. On demand, not in the gate.
+- **`usb_test.py`** -- an xHCI controller and a HID boot keyboard and
+  mouse (`vm.py --usb xhci` / `--usb xhci+mouse`, or `make run
+  USB=xhci+mouse`). Three phases, seventeen checks.
+
+  **It is self-controlling, and that was measured before a line of the
+  driver was written.** QEMU activates a keyboard handler the moment
+  `usb-kbd` is attached and routes host keystrokes to THAT device, so a
+  guest whose USB driver does not work receives nothing at all -- not
+  over USB and not over PS/2 either. Proven on a build with no USB
+  support: with the devices attached a typed `touch /marker` left no
+  file, and without them the identical sequence left one. So every
+  keystroke assertion here already has its control, with no scaffolding
+  and no `i8042=off` needed. It is also why the axis is OFF by default:
+  adding it to a tool written against PS/2 silently deprives that tool
+  of input, which reads exactly like a guest bug.
+
+  **The load-bearing check is the RING WRAP, not the first keystroke.**
+  A driver that ignores the event ring's cycle bit, or never re-posts a
+  consumed TRB, works perfectly for exactly one lap of the ring -- 256
+  TRBs, about 128 keystrokes -- and then goes permanently deaf. A test
+  typing a short marker cannot tell that from a working driver. Phase 2
+  types 25 files, well past a full ring, and asserts the LAST one as
+  well as the first. Its positive control is worth repeating: with the
+  cycle flip removed, files 8 onward vanish while the FIRST file still
+  passes.
+
+  The oracle throughout is the FILESYSTEM read back over the serial
+  console, never the screen -- a keystroke that worked leaves bytes on
+  disk, and the serial console does not care who owns the keyboard.
+
+  Two harness traps it encodes, both of which cost a wrong diagnosis.
+  **`send_key` silently drops a character it has no qcode for**, so
+  `touch /usb_one.txt` quietly created `usbone.txt` and read as a dead
+  driver; anything not a bare lowercase letter or digit is spelled out,
+  and a shifted character goes through `combo()`. And **the serial
+  socket must be drained as the test types**: with the text target every
+  spawn logs to COM1, nothing else reads it, the buffer fills, the
+  guest's serial write blocks and the whole kernel stalls -- which
+  presents as a driver dying after N keystrokes and recovers the instant
+  anything reads the socket, so a dump taken afterwards looks perfectly
+  healthy. Measured: 5 of 25 files without the drain, 25 of 25 with it.
+
+  `--kvm` is not optional before believing a change here. The INTx storm
+  the acknowledge path guards against is invisible under TCG -- the
+  virtio-input version of it hung 3 boots in 3 under KVM and 0 in 3
+  without. `--phase keyboard|wrap|mouse` runs one phase. On demand, not
+  in the gate.
+
 - **`virtio_input_test.py`** -- the virtio keyboard, mouse and tablet
   (`vm.py --virtio-input`, which is the only thing that attaches them).
   The guest keeps its PS/2 pair as well, deliberately: the input core is

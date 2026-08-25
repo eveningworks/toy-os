@@ -388,8 +388,8 @@ as a real display driver** — resource, scanout, transfer-and-flush and
 its own cursor queue, programming the mode itself so `video=1920x1080`
 is honoured rather than left to whatever GRUB negotiated, and
 **`virtio-input`** (keyboard, mouse and tablet) feeding an **input core**
-whose canonical event is evdev-shaped, so PS/2, virtio and a future USB
-HID driver are all sources in one registry — with an opt-in
+whose canonical event is evdev-shaped, so PS/2, virtio and USB HID are
+all sources in one registry — with an opt-in
 diagnostic log (`kernel.kbdtap`, off by default) that `kbd` prints as
 all four encodings of a keypress at once — scancode, keycode, character,
 modifiers — which is how a key that works on one keyboard and not
@@ -399,6 +399,21 @@ transport, so the next device (net) is a driver rather than a
 bring-up project — and it is about **10× ATA's write throughput under
 KVM**, because a virtqueue is shared memory with one doorbell where ATA
 is dense with port I/O and every one of those is a VM exit.
+
+**USB**, because a machine built since roughly Skylake has no PS/2 port
+at all and QEMU is the only reason that has not bitten yet: an **xHCI**
+host controller driver — command ring, event ring, doorbells, per-device
+contexts — with device enumeration on top of it and a **HID
+boot-protocol keyboard and mouse** that register with the same input
+core PS/2 and virtio use, so they need no layout table of their own.
+Interrupt-driven on legacy INTx, because this kernel has no Local APIC
+and therefore no MSI; `/bin/lsusb` names what is attached, from the USB
+ID database and from the device's own string descriptors under `-v`,
+which is a thing PCI devices cannot tell you. xHCI only, deliberately:
+UHCI and OHCI are a quarter of the code and run on nothing made this
+decade. Reach it with `make run USB=xhci+mouse` — attaching a USB
+keyboard takes the keyboard *away* from PS/2, which is exactly what
+makes its test suite self-controlling.
 
 **Memory hardening.** NX and W^X from each ELF segment's real `p_flags`,
 and the kernel's own identity map is W^X too — `.text` is the only
@@ -505,7 +520,7 @@ dispatch cannot disagree about which syscalls exist.
 **Introspection.** Kernel state reaches ring 3 through one self-describing
 registry rather than a `/proc` filesystem: a subsystem registers a
 provider for a fact, and a command formats it — `ps`, `df`, `lspci`,
-`lscpu`, `meminfo`, `kstack`, `tty`, `kbd`. Answering *"what did the
+`lsusb`, `lscpu`, `meminfo`, `kstack`, `tty`, `kbd`. Answering *"what did the
 machine actually do?"* is treated as a first-class job, distinct from a
 test asserting it did the right thing: `strace` decodes a syscall per
 line, `meminfo audit` compares every live address space against the
@@ -620,6 +635,7 @@ Selected tools, each documented in its own docstring:
 | `partition_test.py` | Boots with the filesystem inside an MBR or GPT partition. Its real check is `df`: a kernel ignoring partitions still boots, so "it booted" proves nothing. Its last phase proves `fsformat` cannot be aimed at the bootloader. |
 | `install_grub.py` | Puts GRUB and the kernel onto `disk.img` -- the boot sector, `core.img` in the BIOS boot partition, `/boot` in the FAT32 one -- and answers which medium a launch should boot. |
 | `regex_hostcheck.py` | tolibc's `<regex.h>` against **glibc's**, over one shared case table — an oracle sharing no code is the only thing that catches a wrong expectation. |
+| `usb_test.py` | xHCI, and a HID boot keyboard and mouse. Self-controlling: QEMU routes keystrokes to `usb-kbd` once it is attached, so a broken driver receives nothing at all. Its real check is the ring wrap — a driver ignoring the event ring's cycle bit works for exactly one lap, so it types past 256 TRBs and asserts the *last* file. |
 | `kbd_test.py`, `keyboard_paths_test.py` | The input path, asserted on both drivers: that the same keys produce the same keycode and character over PS/2 and virtio-input, and that `kbd`'s four columns say what each stage really did. |
 
 `CLAUDE.md` documents the conventions and environment quirks in depth.
@@ -682,7 +698,8 @@ third-party material. In short:
   beside the font.
 - The baked JetBrains Mono glyph data in `kernel/drivers/font_ttf.c` is
   under the SIL Open Font License 1.1 ([tools/OFL.txt](tools/OFL.txt)).
-- The bundled `pci.ids` database in `data/` has its own terms.
+- The bundled `pci.ids` and `usb.ids` databases in `data/` have their
+  own terms.
 
 `tools/check_licenses.py` fails the build if a vendored port or a
 shipped font is missing from that inventory — the font list had already
