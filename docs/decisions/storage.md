@@ -1699,3 +1699,77 @@ the running OS, because there is no FAT driver yet — `docs/filesystem-
 layout.md` says why there is deliberately no TFS3 `/boot` either. And
 nothing installs toy-os onto a disk from inside toy-os; `disk.img` is
 still built by the host.
+
+## A drive's root is a partition, and where there is no drive it is ramfs
+
+Two rules landed together, and neither works without the other.
+
+**The root comes from a PARTITION.** A whole-disk volume — a
+"superfloppy" — is a legal shape that no installed system has had in
+twenty years: Windows will not boot one, and no Linux installer
+produces one. `kernel/fs/vfs.c` refuses it by name, writes nothing to
+it, and says what to run instead. What that buys is one probe path
+through the code that decides what to mount, on the one decision where
+being wrong in the permissive direction destroys data — this file
+already carries an entry about a backend removal turning every disk of
+that format into "blank, go format".
+
+**And nothing is auto-formatted any more.** The blank-disk policy wrote
+a fresh filesystem over any readable disk nobody claimed. With the
+whole-disk shape refused there is nowhere left for it to write — a
+partition's contents are the partition's business — so
+`probe_and_mount()` lost its `allow_format` parameter entirely. The
+rule it carried is now true by construction.
+
+**Which needs somewhere to land when there is no usable drive**, and
+before this that place was a fiction. `vfs.c` mounted TFS3 with no disk
+under it, TFS3's `init()` correctly refused, and the machine announced
+`fs: active backend: tfs3 (RAM-only)` while every `fs_*` call failed —
+two comments in the tree pointing at each other about a mode neither
+implemented. So the refusal above could not have shipped first: its
+failure path IS the fallback.
+
+**ramfs is a real backend, not TFS3 on a RAM disk.** The cheap move was
+to point `block_ram.c` at an empty buffer, and it is the wrong shape:
+it means running an on-disk format over memory — superblock, block
+groups, backups and a JOURNAL, all paying for durability that memory
+cannot have — and it fixes the size at mount, where a filesystem in the
+heap can grow into what is actually free. Linux draws the same line;
+`/dev/ram*` survives mainly for compatibility. It is `ramfs` and not
+`tmpfs` because tmpfs can page to swap and this kernel cannot.
+
+**Three implementation decisions worth not re-litigating.** A node
+knows its parent and nothing knows its children — listing scans, but
+create, delete and rename are each a single field write that cannot
+leave a dangling link, where first-child/next-sibling links are three
+fields that must agree. File data is chunked at 4 KiB because
+`heap_os_alloc()` asks `pmm_alloc_contiguous()`: one buffer per file
+would ask for 6144 contiguous frames for a 24 MiB file and fail on a
+fragmented machine while `meminfo` still showed memory free, which is
+the worst diagnostic shape available. And it has a byte budget — half
+of free memory at mount, tmpfs's own default — because this kernel has
+no OOM killer and ramfs draws from the same frames as the allocator
+everything else depends on.
+
+**`init()` became three-valued** (1 / 0 / -1, the shape `probe()`
+already had) because "mounted but not persistent" and "did not mount"
+had been the same answer, and that is precisely what let the log lie.
+
+**AND RAMFS IS NOT IN `g_backends`, WHICH IS NOT AN OVERSIGHT.** That
+table is the ON-DISK registry: `fs_format_backend()` walks it and wipes
+every *other* backend's signatures before formatting with the one
+named. Registering ramfs there would have made `fsformat ramfs confirm`
+erase a working TFS3 superblock and then fail its own persistence
+check. It is reached through its own pointer instead. The general
+lesson is worth more than the instance: **a registry is not a neutral
+place to put something** — it is a list of things every consumer of
+that registry will act on, and the consumers are not all in front of
+you when you add the row.
+
+**What this cost elsewhere.** The live image gains a partition table
+rather than an exemption (the exemption would have lived in the one
+function whose job is to have one rule); `seed_disk.py --flat` is gone;
+`tfs3_v1_test.py` builds a partitioned image. And an existing flat
+`disk.img` stops mounting — `make clean-disk && make iso`, the same
+opt-in TFS2→TFS3 and flat→partitioned both used. Nothing migrates
+silently.

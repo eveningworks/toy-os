@@ -1450,10 +1450,21 @@ window without going through it will find its layout polls timing out.
   in the gate.
 - **`live_boot_test.py`** -- boots `toy-os-live.iso` with NO disk and
   asserts a shipped binary RUNS, plus that `df` reports the image's real
-  size and says RAM-only. Not in `gui_regress.py` (it builds its own
-  QEMU); run it after touching the block layer, TFS3's geometry or the
-  live path. **"It booted" proves nothing here** -- the kernel degrades
-  to an empty RAM filesystem and still reaches a shell and a desktop.
+  size and says it does not persist. Not in `gui_regress.py` (it builds
+  its own QEMU); run it after touching the block layer, TFS3's geometry
+  or the live path. **"It booted" proves nothing here** -- the kernel
+  falls back to ramfs and still reaches a shell and a desktop, which is
+  exactly what an empty live boot looks like.
+
+  **Repaired 2026-08-25, after being unrunnable for an unknown period.**
+  It parsed `df`'s `used:`/`total:` LINES, which became a TABLE when
+  `df` moved to `/bin`, so every number came back 0 and three checks
+  failed against a live boot that was working perfectly. Nobody saw it
+  because the live image could not be BUILT: `LIVE_IMG_MB` was a
+  hardcoded 24 and the seed tree had reached ~33 MiB. Both are fixed --
+  the size is derived from the tree now -- and the lesson is the one
+  `check_tool_commands.py` cannot catch: **it sees a command that was
+  renamed away, never one whose OUTPUT changed.**
 - **`demo_test.py`** -- boots `toy-os-demo.iso` and asserts the scripted
   tour actually PERFORMS (6 checks). **On demand only** -- do not add it
   to `preflight.sh`, `gui_regress.py` or CI (standing request: it boots
@@ -1854,9 +1865,12 @@ window without going through it will find its layout polls timing out.
   BIOS boot partition, a 64 MiB FAT32 `/boot` and TFS3 in the rest, which
   is what `make iso` produces for a fresh `disk.img`. `--partition mbr`
   writes the legacy table, which needs no BIOS boot partition
-  (`core.img` goes in the pre-partition gap) and so gets two;
-  `--flat` writes the old whole-disk volume,
-  still supported and still what the live ISO's RAM image is; `--layout`
+  (`core.img` goes in the pre-partition gap) and so gets two. **There is
+  no `--flat` any more**: the kernel refuses a whole-disk volume
+  (`docs/rootfs-design.md`), so this tool has no way to write one, and
+  even the live ISO's RAM image carries a table. An image that already
+  IS flat is still seeded -- a host tool may legitimately want files in
+  one -- with a loud warning that the kernel will not mount it. `--layout`
   sizes and TYPES the partitions (`1M:bios,64M:esp,rest`). It prints
   `filesystem in partition N -- LBA ..., ... sectors`, which is what
   `partition_test.py` reads rather than assuming partition 1.
@@ -1893,7 +1907,11 @@ window without going through it will find its layout polls timing out.
   partition is reported and skipped rather than being an error, so a
   `disk.img` predating this layout keeps working (booting the ISO).
   It never partitions and never reformats an existing `/boot`.
-- **`tfs3_v1_test.py`** -- boots a freshly built TFS3 **v1** image and
+- **`tfs3_v1_test.py`** -- **repaired 2026-08-25, it had been 0 of 8**:
+  it drove `cat`, `mv` and `dmesg` against an image with no `/bin` on
+  it, months after those became `/bin` programs, and its image was flat
+  once the kernel stopped mounting those. It uses `rescue cat` and
+  friends now and builds a partitioned image. Boots a freshly built TFS3 **v1** image and
   proves the kernel still mounts and uses the older on-disk layout (8
   checks). Run it after touching TFS3's geometry, journal, or any
   operation's credit count. It exists because v2 made v1 support

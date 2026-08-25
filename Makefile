@@ -1030,14 +1030,41 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL)
 # seconds reading the module off an emulated CD-ROM before the kernel
 # ran a single instruction.
 LIVE_IMG    = $(BUILD)/live.img
-LIVE_IMG_MB = 24
 
+# DERIVED FROM THE SEED TREE, not a constant -- and the constant it
+# replaces had already gone stale. It was 24 MiB; the seed tree reached
+# ~33 MiB at some point nobody noticed, because the live image is built
+# by an on-demand target and its failure ("image is out of free blocks")
+# only reaches whoever types `make live-iso`. A number in a Makefile
+# that some other directory has to stay smaller than is the
+# pointer-somebody-must-maintain shape this repo keeps deleting.
+#
+# The tree, plus a quarter for TFS3's metadata and 4 KiB block
+# granularity, plus 8 MiB of room to work in and to cover the partition
+# table's own overhead (the 1 MiB alignment gap at the front and GPT's
+# backup structures at the back). Deferred (`=`), so it is measured
+# when the recipe runs -- which is after `seed` has populated the tree.
+LIVE_IMG_MB = $(shell echo $$(( $$(du -sm --apparent-size $(SEED_DIR)/sync 2>/dev/null | cut -f1) * 5 / 4 + 8 )))
+
+# PARTITIONED, like every other volume this OS mounts. The kernel takes
+# a root from a partition and refuses a whole-disk volume (kernel/fs/
+# vfs.c, docs/rootfs-design.md), and a RAM image is not an exception to
+# that -- it is mounted through the same block layer and the same probe.
+# An exemption would live in the one function whose whole job is to have
+# one rule.
+#
+# One DATA partition and no boot partition: the ISO's GRUB loads the
+# kernel here, so there is nothing for a BIOS boot or ESP partition to
+# hold. `--print-volume` is how the trim afterwards finds the volume
+# rather than assuming an offset.
 $(LIVE_IMG): $(USERLAND_ELVES) seed
 	@mkdir -p $(BUILD)
 	rm -f $(LIVE_IMG)
-	python3 tools/tfs3_writer.py format $(LIVE_IMG) --size $$(( $(LIVE_IMG_MB) * 1024 * 1024 ))
-	python3 tools/tfs3_writer.py sync $(LIVE_IMG) $(SEED_DIR)
-	python3 tools/tfs3_writer.py trim $(LIVE_IMG)
+	truncate -s $$(( $(LIVE_IMG_MB) * 1024 * 1024 )) $(LIVE_IMG)
+	python3 tools/seed_disk.py $(LIVE_IMG) $(SEED_DIR) --layout rest
+	V=`python3 tools/mkpart_test.py $(LIVE_IMG) --print-volume`; \
+	python3 tools/tfs3_writer.py trim $(LIVE_IMG) \
+	    --at-lba $${V%% *} --sectors $${V##* }
 
 iso: version $(KERNEL) $(USERLAND_ELVES) seed
 	mkdir -p iso/boot/grub

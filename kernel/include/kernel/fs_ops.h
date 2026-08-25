@@ -104,13 +104,23 @@ struct fs_ops {
     int (*format)(void);
 
     // Called once this backend is chosen, from fs_init(). Mounts what
-    // probe() claimed (or format() just wrote) and returns 1 if every
-    // mutating call below is written through to real persistent
-    // storage, 0 if it's falling back to RAM-only behavior (files
-    // vanish on reboot) -- same meaning as fs_is_persistent()'s doc
-    // comment in fs.h, just per-backend here. Re-validates the disk
-    // itself (probe()'s answer isn't carried over) so it degrades
-    // safely even if the disk changed between the two calls.
+    // probe() claimed (or format() just wrote). Returns:
+    //   1  mounted, and every mutating call below is written through
+    //      to real persistent storage
+    //   0  mounted, but NOT persistent -- files vanish on reboot (what
+    //      ramfs always answers; same meaning as fs_is_persistent()'s
+    //      doc comment in fs.h, just per-backend here)
+    //  -1  could not mount at all
+    // Re-validates the disk itself (probe()'s answer isn't carried
+    // over) so it degrades safely even if the disk changed between the
+    // two calls.
+    //
+    // THE -1 IS WHY THIS IS THREE-VALUED, and it was a fiction before
+    // it existed: TFS3 has no RAM-only mode, so every 0 it returned
+    // meant "did not mount" -- and vfs.c, reading that as "mounted,
+    // not persistent", announced an active backend on a machine where
+    // every single fs_* call failed. The same 1/0/-1 shape probe()
+    // already uses, for the same reason: two different kinds of no.
     int (*init)(void);
 
     int (*touch)(const char *path);

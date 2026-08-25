@@ -1643,3 +1643,49 @@ the user can see), and the settings app keeps `choice_raw` beside
   already needed, and `mtools` writes a FAT image through a
   `file@@offset` window with no root and no loop device -- which is what
   makes this work in a plain checkout and on a CI runner.
+
+**2026-08-25 (the root filesystem: a partition, or ramfs).**
+
+- **"IT STILL WORKS" IS A CLAIM, AND CHECKING IT CHANGED THE WHOLE
+  TASK.** The ask was "fall back to a ramfs where there is no drive",
+  which reads as improving an existing path. There was no path: a
+  diskless boot mounted NOTHING and announced `tfs3 (RAM-only)` over a
+  machine where every `fs_*` call failed. One `vm.py --disk /dev/null
+  run "write /a.txt hello"` -- fifteen seconds -- turned "improve this"
+  into "this does not exist", before any design was written.
+- **A REGISTRY IS NOT A NEUTRAL PLACE TO PUT SOMETHING.** Registering
+  ramfs in `g_backends` is the obvious way to add a backend, and it
+  would have made `fsformat ramfs confirm` erase a working TFS3
+  superblock: `fs_format_backend()` wipes every OTHER backend's
+  signatures before formatting with the one named, then ramfs would
+  fail its own persistence check. The row is a list of things every
+  consumer of that registry will act on, and the consumers are not all
+  in front of you when you add it.
+- **A THREE-VALUED RETURN, WHERE TWO VALUES WERE HIDING A THIRD.**
+  `init()` meant persistent/not-persistent, TFS3 had no RAM-only mode,
+  so its "did not mount" and "mounted but not persistent" were the same
+  answer -- which is precisely what let vfs.c announce a backend over
+  nothing. `probe()` had used 1/0/-1 all along. **When a log lies, look
+  for two states sharing one value.**
+- **THE STAGING ORDER WAS THE DESIGN.** Refusing a flat volume before
+  ramfs existed would have left a machine with no filesystem, because
+  the refusal's failure path IS the fallback. Worth writing down in the
+  plan rather than discovering at the third stage.
+- **DELETING A SHAPE DELETED A PARAMETER.** With whole-disk volumes
+  refused there is nowhere for a blank-disk auto-format to write, so
+  `probe_and_mount()`'s `allow_format` went with it. The rule it
+  carried is true by construction now. Narrowing what is supported
+  removes code rather than adding a check, when the narrowing is real.
+- **THREE TOOLS WERE ROTTED, AND ONE HID THE OTHER TWO.** The live
+  image could not be built at all (`LIVE_IMG_MB` was a hardcoded 24
+  against a ~33 MiB seed tree), so nothing ran `live_boot_test.py`, so
+  nobody saw that it parsed `df`'s output in a format that changed when
+  `df` became a `/bin` program. `tfs3_v1_test.py` was 0 of 8 for the
+  same family of reason. **A tool that cannot run does not report as
+  broken -- it reports as nothing at all**, and its neighbours rot
+  behind it.
+- **AND THE NUMBER THAT ROTTED WAS IN A MAKEFILE**, where
+  `check_docs.py` and friends do not look. CLAUDE.md's rule against
+  pointing at a number somebody else must keep true applies to build
+  files exactly as much as to prose; `LIVE_IMG_MB` is derived from the
+  seed tree now.

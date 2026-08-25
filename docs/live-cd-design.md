@@ -142,9 +142,13 @@ than a system. Those writes land in the module's own frames and die with
 the power.
 
 That is what a live CD is, and the system already tells the truth about
-it: `fs_is_persistent()` returns 0 on this path exactly as it does on
-today's empty RAM-only boot, so `df`, `fsck` and the About window all
-report "RAM, not persistent" with no new plumbing. **Nothing should
+it: `fs_is_persistent()` returns 0 on this path exactly as it does on a
+ramfs root, so `df`, `fsck` and the About window all report "RAM, not
+persistent" with no new plumbing. (When this was written the comparison
+was "today's empty RAM-only boot", which turned out to be a boot with no
+filesystem at all -- that is `ramfs` now, and the live image is
+PARTITIONED like every other volume this OS mounts. See
+`docs/rootfs-design.md`.) **Nothing should
 special-case a live mount to look persistent**, and nothing should
 quietly write through to a disk that happens to be present -- a live
 session that mutates the user's installed system is the single worst

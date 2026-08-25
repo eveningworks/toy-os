@@ -282,6 +282,67 @@ and one `continue` is worth keeping ahead of the backend that needs it;
 what is not worth keeping is a guard nobody consults, so
 `try_partitions()` reads it on every candidate.
 
+## A DRIVE'S ROOT IS A PARTITION, OR IT IS RAMFS
+
+`probe_and_mount()` (`kernel/fs/vfs.c`) is a table of situations, not a
+fallthrough:
+
+| what is on the machine | root |
+|---|---|
+| a live module, and (`live` on the cmdline or no disk) | TFS3 on `block_ram` |
+| a drive with a table, and a partition a backend claims | that backend |
+| a drive with a table, nothing claimable | **ramfs** |
+| a drive with **no table** | **REFUSED** — say so, then **ramfs** |
+| no drive at all | **ramfs** |
+
+**A whole-disk volume is refused, by name, and nothing is written to
+it.** That shape is legal and no installed system has had it in twenty
+years: Windows will not boot one, and no Linux installer produces one.
+Supporting it meant a second probe path through the code that decides
+what to mount — untested, on the one decision where being wrong in the
+permissive direction destroys data. An image from before the rule is
+told what to run (`make clean-disk && make iso` on the host, or
+`mkpart` then `fsformat` on the machine).
+
+**And nothing is auto-formatted any more.** The old blank-disk policy
+wrote a fresh filesystem over any readable disk nobody claimed; with
+the whole-disk shape gone there is nowhere left for it to write, so
+`probe_and_mount()` lost its `allow_format` parameter. The rule that
+flag carried — an unrecognised disk is not an invitation — is now true
+by construction rather than by a branch remembering it.
+
+**ramfs (`kernel/fs/ramfs.c`) is a real filesystem in the kernel
+heap**, not TFS3 on a RAM disk: no superblock, no journal, no fixed
+size. Three things to know before editing it. **A node knows its
+parent and nothing knows its children**, so create, delete and rename
+are each one field write that cannot leave a dangling link. **File data
+is chunked at 4 KiB**, because `heap_os_alloc()` asks
+`pmm_alloc_contiguous()` and one buffer per file fails on a fragmented
+machine while `meminfo` still shows memory free. And **it has a budget,
+half of free memory at mount** (tmpfs's default), because this kernel
+has no OOM killer and ramfs draws from the same frames as everything
+else.
+
+**It is deliberately NOT in `g_backends`.** That table is the on-disk
+registry, and `fs_format_backend()` wipes every other backend's
+signatures before formatting with the named one — so `fsformat ramfs
+confirm` would erase a working TFS3 superblock and then fail its own
+persistence check. A registry is not a neutral place to put something.
+
+See `docs/rootfs-design.md`.
+
+## `init()` IS THREE-VALUED, AND -1 IS WHY THE LOG STOPPED LYING
+
+`fs_ops.h`: 1 = mounted and persistent, 0 = mounted but not, **-1 =
+could not mount** — the same shape `probe()` has used all along.
+
+Before -1 existed the value was two-way, TFS3 had no RAM-only mode, and
+so every 0 it returned meant "did not mount" while `vfs.c` read it as
+"mounted, not persistent". A diskless boot printed `fs: active backend:
+tfs3 (RAM-only)` over a machine where `write` failed, `ls` failed and
+`g_mounted` was 0. A backend that cannot mount now leaves NO active
+backend and says exactly that.
+
 ## A PARTITIONED DISK IS NEVER AUTO-FORMATTED, AND THE FIRST PARTITION THAT IS OURS IS LEFT ACTIVE
 
 Boot treats an unclaimed readable disk as blank and formats it. Once a

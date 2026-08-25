@@ -8,25 +8,35 @@
 //
 // Backend SELECTION lives here now, display_probe()-style (see
 // kernel/drivers/display/display.c, the pattern this deliberately
-// mirrors): fs_init() brings the disk up once, then walks g_backends
-// in priority order asking each one's probe() -- detection only, no
-// side effects -- and mounts the first backend that recognizes its
-// own superblock. A readable-but-unclaimed disk (blank or foreign) is
-// formatted with the DEFAULT backend, deliberately and here, not by
-// whichever backend happens to run: a backend never formats on its
-// own initiative anymore (that used to be tfs_init()'s else-branch).
-// An UNREADABLE superblock is different from a foreign one -- no
-// formatting happens at all, and the chosen backend's own init()
-// degrades to RAM-only; see tfs3.c's init comment for the data-loss
-// story behind that distinction.
+// mirrors): fs_init() brings the disk up once, then asks each
+// PARTITION's candidates their probe() -- detection only, no side
+// effects -- and mounts the first backend that recognizes its own
+// superblock. probe_and_mount() below is the whole policy, written as
+// the table of situations it is.
 //
-// Adding a filesystem = write its own `struct fs_ops` exposing a
-// `const struct fs_ops whatever_ops`, #include its header below, and
-// add it to g_backends -- nothing else in the kernel or apps/ needs
-// to know that happened.
+// TWO RULES THIS FILE ENFORCES, both of them about not destroying
+// data. A drive's root comes from a PARTITION, never from a whole-disk
+// volume -- an image without a table is refused, told what to do, and
+// left untouched. And NOTHING is auto-formatted: the old blank-disk
+// policy wrote a fresh filesystem over any readable disk nobody
+// claimed, and with the whole-disk shape gone there is nowhere left
+// for it to write. `mkpart` then `fsformat` is how a drive gets a
+// filesystem, both of them things somebody typed.
+//
+// Where there is no usable drive -- no disk, no table, no partition
+// anybody claims -- the root is RAMFS (kernel/fs/ramfs.c), a real
+// filesystem in the kernel heap. Before it existed this file mounted
+// TFS3 with no disk under it and announced "(RAM-only)" over a machine
+// where every fs_* call failed. See docs/rootfs-design.md.
+//
+// Adding an ON-DISK filesystem = write its own `struct fs_ops`
+// exposing a `const struct fs_ops whatever_ops`, #include its header
+// below, and add it to g_backends -- nothing else in the kernel or
+// apps/ needs to know that happened.
 #include "fs.h"
 #include "fs_ops.h"
 #include "tfs3.h"
+#include "ramfs.h"
 #include "ata.h"
 #include "block.h"
 #include "kfmt.h"    // klog_printf
@@ -52,18 +62,19 @@ static const struct fs_ops *const g_backends[] = {
 };
 #define FS_BACKEND_COUNT ((int)(sizeof(g_backends) / sizeof(g_backends[0])))
 
-// The default backend: what a blank disk gets formatted with, and what
-// serves RAM-only boots (no disk at all). Index into g_backends.
+// RAMFS IS DELIBERATELY NOT IN THAT TABLE, and it is not an oversight.
+// g_backends is the list of ON-DISK backends: things a probe can find
+// on a volume, things `fsformat` can write to one. ramfs is neither --
+// it is chosen by the policy below when there is no usable volume at
+// all, and it is reached through this pointer instead.
 //
-// It is TFS3, and with one backend that is not a choice -- it becomes
-// one again when FAT32 lands, and the answer will still be TFS3: a
-// blank disk should get the native format, not the interop one.
-//
-// THE HAZARD THIS INDEX CARRIES, kept because it fired once: pointing
-// it at a backend whose write path did not exist yet quietly
-// reformatted the dev image on one boot. An index is a silent thing to
-// get wrong -- it compiles, it boots, and it destroys a disk.
-#define FS_DEFAULT_BACKEND 0
+// Being in the table would be actively dangerous, which is the part
+// worth keeping: fs_format_backend() wipes every OTHER backend's
+// signatures before formatting with the named one, so `fsformat ramfs`
+// would erase TFS3's superblock from a perfectly good disk and THEN
+// fail its own persistence check. Out of the table, that command finds
+// no such backend and refuses before touching anything.
+static const struct fs_ops *const g_ram_backend = &ramfs_ops;
 
 static const struct fs_ops *g_fs = 0;
 static int g_persistent = 0;
@@ -122,20 +133,40 @@ static int caps_are_honest(const struct fs_ops *fs) {
     return 1;
 }
 
-// Mounts `fs`: runs its init() and records the outcome. Returns the
-// persistent flag init() reported.
+// Mounts `fs`: runs its init() and records the outcome. Returns 1 if it
+// mounted at all, 0 if it could not -- NOT the persistent flag, which
+// is a separate question and a separate field.
+//
+// SAYING "MOUNTED" WHEN NOTHING IS, is the bug this shape exists to
+// stop. init() used to be two-valued and TFS3 has no RAM-only mode, so
+// a diskless boot printed `fs: active backend: tfs3 (RAM-only)` over a
+// machine with no filesystem: `write` failed, `ls` failed, and the one
+// line anybody would read said everything was fine. See fs_ops.h's
+// init() contract for the three values.
 static int mount_backend(const struct fs_ops *fs) {
+    int r = fs->init();
+    if (r < 0) {
+        // Leave NO active backend. A caller that dispatches into a
+        // half-mounted backend is how a failure becomes a fault.
+        g_fs = 0;
+        g_persistent = 0;
+        klog_write("fs: ");
+        klog_write(fs->name);
+        klog_write(" did not mount -- NO FILESYSTEM this boot, every fs_* call will fail\n");
+        return 0;
+    }
     g_fs = fs;
-    // Persistence is the DEVICE's answer, not the backend's: TFS3
-    // mounts a RAM image exactly as it mounts a disk and cannot tell
-    // them apart, so asking it would report a live session as
-    // persistent -- which `df`, `fsck` and the About window would then
-    // repeat to the user.
-    g_persistent = fs->init() && blk_persistent();
+    // Persistence is the DEVICE's answer as well as the backend's:
+    // TFS3 mounts a RAM image exactly as it mounts a disk and cannot
+    // tell them apart, so asking it alone would report a live session
+    // as persistent -- which `df`, `fsck` and the About window would
+    // then repeat to the user. A backend that says 0 (ramfs) is not
+    // persistent whatever the device says.
+    g_persistent = (r == 1) && blk_persistent();
     klog_write("fs: active backend: ");
     klog_write(fs->name);
-    klog_write(g_persistent ? " (persistent)\n" : " (RAM-only)\n");
-    return g_persistent;
+    klog_write(g_persistent ? " (persistent)\n" : " (not persistent -- files vanish on reboot)\n");
+    return 1;
 }
 
 // Probe loop + policy, shared by boot (fs_init) and reformat
@@ -174,10 +205,10 @@ static int try_live_module(void) {
 //    0  there IS a table, but no partition held a filesystem
 //   -1  no partition table at all
 //
-// The caller needs 0 and -1 apart, because a partitioned disk must
-// never be auto-formatted (see probe_and_mount()). In both non-mounting
-// cases the whole disk is restored as the active device, so the flat
-// probe below sees exactly what it always saw.
+// The caller needs 0 and -1 apart, and they now mean two different
+// things to a user: 0 is "your partitions are empty, format one", -1
+// is "this drive has no table and toy-os will not mount it". Both end
+// in ramfs; only one of them is somebody's mistake.
 //
 // The tri-state is also why this reads the table ONCE. A separate
 // "is it partitioned?" pass would cost a second disk read and a second
@@ -302,9 +333,48 @@ static int try_partitions(void) {
     return 0;
 }
 
-static void probe_and_mount(int allow_format) {
-    const struct fs_ops *fallback = g_backends[FS_DEFAULT_BACKEND];
+// Mounts the in-memory root, and says why it came to that. The one
+// place ramfs is chosen, so "when do we end up in RAM" is answerable
+// by reading one function rather than four call sites.
+static void mount_ramfs(const char *why) {
+    klog_write(why);
+    // The honesty check runs here rather than in a probe loop, because
+    // ramfs is never probed -- skipping it would leave the one backend
+    // that can always be reached as the one nothing validates.
+    if (!caps_are_honest(g_ram_backend) || !mount_backend(g_ram_backend)) {
+        g_fs = 0;
+        g_persistent = 0;
+        klog_write("fs: ramfs did not mount either -- NO FILESYSTEM this boot\n");
+    }
+}
 
+// Picks what to mount, and it is a TABLE of situations rather than a
+// fallthrough -- see docs/rootfs-design.md:
+//
+//   a live module, and (`live` asked for, or no disk)  -> TFS3 in RAM
+//   a drive with a table, a partition somebody claims  -> that backend
+//   a drive with a table, nothing claimable            -> ramfs
+//   a drive with NO table                              -> REFUSED, ramfs
+//   no drive at all                                    -> ramfs
+//
+// A DRIVE'S ROOT IS A PARTITION OR IT IS NOTHING. A whole-disk volume
+// ("superfloppy") is a legal shape that no installed system has had in
+// twenty years: Windows will not boot one at all, and no Linux
+// installer produces one. Supporting it meant a second probe path
+// through the code that decides what to mount -- untested, and on the
+// one decision where being wrong in the permissive direction destroys
+// data (see docs/decisions/storage.md's entry on removing a backend).
+// One rule, one path, and an image that predates it is TOLD so.
+//
+// AND NOTHING IS AUTO-FORMATTED ANY MORE. The old blank-disk policy
+// wrote a fresh filesystem over any readable disk nobody claimed,
+// which is why this function used to take an `allow_format` flag. With
+// a whole-disk volume refused there is nowhere left for it to write:
+// a partition's contents are the partition's business, and `mkpart`
+// then `fsformat` is how a drive gets a filesystem. The lesson that
+// flag carried -- an unrecognised disk is not an invitation -- is now
+// true by construction rather than by a branch remembering it.
+static void probe_and_mount(void) {
     // The live image gets first refusal, then the disk. Registering a
     // block device is what makes the probe below read from RAM instead
     // of ATA -- the backends are unchanged and never learn which it is.
@@ -325,73 +395,30 @@ static void probe_and_mount(int allow_format) {
     }
 
     if (!blk_present()) {
-        // No disk: the default backend's init() sets up its RAM-only
-        // mode. Nothing to probe.
-        mount_backend(fallback);
+        mount_ramfs("fs: no disk -- mounting ramfs (nothing here survives a reboot)\n");
         return;
     }
 
-    // Partitions first. A disk that carries a table is a partitioned
-    // disk whether or not anything mounted off it, and that fact has to
-    // outlive this call -- it is what stops the blank-disk policy below
-    // formatting straight over the table.
     int part_result = try_partitions();
-    if (part_result == 1) return;
-    int partitioned = (part_result == 0);
+    if (part_result == 1) return;   // mounted from a partition -- the normal case
 
-    int unreadable = 0;
-    for (int i = 0; i < FS_BACKEND_COUNT; i++) {
-        const struct fs_ops *fs = g_backends[i];
-        if (!caps_are_honest(fs)) {
-            klog_write("fs: backend '");
-            klog_write(fs->name ? fs->name : "?");
-            klog_write("' declares capabilities it doesn't implement -- refusing it\n");
-            continue;
-        }
-        int p = fs->probe();
-        if (p == 1) {
-            mount_backend(fs);
-            return;
-        }
-        if (p < 0) unreadable = 1;
-    }
-
-    if (unreadable) {
-        // At least one backend couldn't read its superblock location
-        // at all. That is a failing disk, not a blank one -- never
-        // format over it. The default backend's init() re-validates
-        // and degrades to RAM-only with its own loud refusal.
-        klog_write("fs: superblock unreadable -- NOT formatting, refusing to destroy a possibly-good disk\n");
-        mount_backend(fallback);
+    if (part_result == 0) {
+        // A table, but no partition held a filesystem: empty partitions
+        // waiting for `fsformat`, not free space to claim.
+        mount_ramfs("fs: no partition holds a filesystem -- mounting ramfs "
+                    "(`fsformat` claims the active partition)\n");
         return;
     }
 
-    // A PARTITIONED DISK IS NEVER BLANK. Its partitions were probed
-    // above and none held a filesystem, which means an empty partition
-    // waiting for `fsformat` -- not free space to claim. Formatting
-    // flat over it would lay a whole-disk volume across every
-    // partition's data, and TFS3 would SURVIVE that (it reserves
-    // volume blocks 0-7, so the table itself stays readable) while the
-    // partitions it describes were being overwritten -- a corruption
-    // that still passes `parttable`. Same instinct as the refusal
-    // above: an unrecognised disk is not an invitation.
-    if (partitioned) {
-        klog_write("fs: partitioned disk, no partition holds a filesystem -- "
-                   "NOT formatting the disk (`fsformat` claims the active partition)\n");
-        mount_backend(fallback);
-        return;
-    }
-
-    // Readable but nobody claimed it: genuinely blank or foreign.
-    if (allow_format) {
-        klog_write("fs: disk claimed by no filesystem -- formatting with the default (");
-        klog_write(fallback->name);
-        klog_write(")\n");
-        if (!fallback->format()) {
-            klog_write("fs: default format failed -- running RAM-only this boot\n");
-        }
-    }
-    mount_backend(fallback);
+    // No table at all: a blank drive, a whole-disk volume from before
+    // this rule, or something foreign. Name the fix, because the
+    // migration is destructive and nobody should have to guess it.
+    klog_write("fs: this disk has NO PARTITION TABLE -- toy-os mounts a root only from a\n");
+    klog_write("fs: partition. Nothing has been written to it. On the host: "
+               "`make clean-disk && make iso`;\n");
+    klog_write("fs: on the machine: `mkpart --gpt <sizes> confirm`, reboot, "
+               "`fsformat tfs3 confirm`.\n");
+    mount_ramfs("fs: mounting ramfs meanwhile (nothing here survives a reboot)\n");
 }
 
 // The directories the rest of the OS assumes exist on whatever is
@@ -429,7 +456,7 @@ static void ensure_layout(void) {
 
 void fs_init(void) {
     ata_init(); // the disk comes up once, here -- before any backend is probed
-    probe_and_mount(1);
+    probe_and_mount();
     ensure_layout();
 }
 
@@ -470,7 +497,7 @@ int fs_format_backend(const char *name) {
     // Remount through the same probe path a boot takes -- the freshly
     // written superblock is what should claim the disk. No formatting
     // on this pass: it just happened.
-    probe_and_mount(0);
+    probe_and_mount();
     if (!(g_fs == target && g_persistent)) return 0;
     // Same layout a boot would leave behind. Without this the disk came
     // back with no /etc and no /tmp until the next reboot, so the very

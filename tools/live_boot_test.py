@@ -99,6 +99,33 @@ class Result:
             print(f"        {detail}")
 
 
+# `df` PRINTS A TABLE, and this tool parsed `used:`/`total:` LINES --
+# the shape it had before df became a /bin program. Every number came
+# back 0 and three checks failed against a live boot that was working
+# perfectly. That rot was invisible because the live image could not be
+# built at all (its size was a hardcoded 24 MiB the seed tree had
+# outgrown), so nothing ran this tool to notice.
+#
+#   filesystem size     used     free     use%  persists
+#   tfs3       23.4M    4.2M     19.2M    17%   no
+def parse_df(df):
+    """(size_kb, used_kb, persists) from df's one data row."""
+    def kb(cell):
+        mult = {"K": 1, "M": 1024, "G": 1024 * 1024}.get(cell[-1:].upper(), 0)
+        if not mult:
+            return int("".join(c for c in cell if c.isdigit()) or 0) // 1024
+        try:
+            return int(float(cell[:-1]) * mult)
+        except ValueError:
+            return 0
+
+    for line in df.splitlines():
+        cols = line.split()
+        if len(cols) >= 6 and cols[0] not in ("filesystem",) and "%" in cols[4]:
+            return kb(cols[1]), kb(cols[2]), cols[5].lower()
+    return 0, 0, ""
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     # The LIVE iso, which is its own artifact (`make live-iso`) -- the
@@ -150,20 +177,13 @@ def main():
 
         # 1. mounted from RAM
         df = sh.run("sh df")
-        # Mounted AND with content: a 130 MB volume with 4 MB used is
-        # the live image. An empty RAM filesystem reports the same
-        # backend name, so the name alone proves nothing.
-        used_kb = 0
-        for line in df.splitlines():
-            if "used:" in line:
-                used_kb = int("".join(c for c in line if c.isdigit()) or 0)
-        total_kb = 0
-        for line in df.splitlines():
-            if "total:" in line:
-                total_kb = int("".join(c for c in line if c.isdigit()) or 0)
+        # Mounted AND with content: an empty RAM filesystem reports the
+        # same backend name, so the name alone proves nothing.
+        size_kb, used_kb, persists = parse_df(df)
         res.check("the filesystem mounted from the live image",
                   "tfs3" in df.lower() and used_kb > 1000,
                   f"{used_kb} KB used -- an empty RAM filesystem, not the image")
+        total_kb = size_kb
 
         # The SIZE has to be the image's, and this is the check that
         # catches a partial last block group being mis-measured. The live
@@ -172,9 +192,9 @@ def main():
         # cannot see one group over-reported (1.4% of the total), and
         # `df` on this volume said 127 MB for a 16 MiB filesystem.
         res.check("the reported size is the image's, not a whole block group",
-                  0 < total_kb < 64 * 1024,
-                  f"df says {total_kb} KB for a ~24 MB image -- the last "
-                  f"group's real span is being ignored")
+                  0 < total_kb < 128 * 1024,
+                  f"df says {total_kb} KB for a live image sized from the seed "
+                  f"tree -- the last group's real span is being ignored")
 
         # 2. shipped content is there -- the check that separates a live
         #    mount from an empty RAM filesystem
@@ -192,7 +212,7 @@ def main():
         # volume claiming persistence would tell a user their files are
         # safe when the next power cycle erases them.
         res.check("the volume reports itself NOT persistent",
-                  "ram-only" in df.lower(), df.strip()[:160])
+                  persists == "no", df.strip()[:160])
     finally:
         if sh:
             sh.close()

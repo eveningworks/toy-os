@@ -25,7 +25,6 @@ buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
 - [ ] `service start|stop|status|list` as a shell command -- `rm`ing a descriptor is the only lever today  *(Init & service supervision)*
-- [ ] A `ramfs` backend -- a real in-memory filesystem, the root wherever there is no usable drive  *(Storage hardening)*
 - [ ] Type-ahead in `uui_table` -- `uui_listbox` gained it 2026-08-24 and a fileview is a table, so the File Manager cannot  *(A layout engine for the GUI)*
 - [ ] A FOCUS INDICATOR for every widget that takes keys -- six accept focus and draw nothing, so Tab moves an invisible cursor  *(A layout engine for the GUI)*
 - [ ] The ring-3 WM busy-waits instead of sleeping -- `SYS_SLEEP` and a per-window timer both exist now  *(Known limitations and papercuts (unscheduled))*
@@ -331,9 +330,9 @@ No dependency on the phases above; ordered among themselves.
 - [ ] LBA48 addressing
 - [ ] A TFS3 test reaching double- and triple-indirect addressing (TFS2's selftest covered this and went with it)
 - [ ] `root=` on the boot line to name the partition to mount, instead of taking the first one a backend claims
-- [ ] **NEXT** A `ramfs` backend -- a real in-memory filesystem, the root wherever there is no usable drive
-- [ ] Report nothing mounted as NOTHING MOUNTED, instead of as an active backend that fails every call
-- [ ] Refuse a whole-disk volume: a drive's root must be a partition, and a flat image says so and boots to ramfs
+- [x] ~~A `ramfs` backend -- a real in-memory filesystem, the root wherever there is no usable drive~~ done
+- [x] ~~Report nothing mounted as NOTHING MOUNTED, instead of as an active backend that fails every call~~ done
+- [x] ~~Refuse a whole-disk volume: a drive's root must be a partition, and a flat image says so and boots to ramfs~~ done
 - [ ] The live CD unpacks into ramfs rather than mounting a RAM block device, retiring `block_ram.c`
 - [ ] A block/buffer cache with write-back
 - [ ] Directory index
@@ -808,6 +807,7 @@ this to be better?".
 - [ ] `SYS_LISTDIR` still truncates at 256 entries, and TFS3 has no such cap -- the fix is an offset argument
 - [ ] Nothing detects an ordinary memory LEAK, in either allocator
 - [ ] `/boot` is a FAT32 partition the OS cannot read, so it cannot update its own kernel
+- [ ] A ramfs root is EMPTY -- no `/bin`, so a diskless boot has a filesystem and no programs
 - [ ] The shell's command dispatch is a long `if/else` chain, and the fix is not the obvious one
 - [ ] Settings: a ring-3 settings daemon (stage 2)
 - [ ] **NEXT** The ring-3 WM busy-waits instead of sleeping -- `SYS_SLEEP` and a per-window timer both exist now

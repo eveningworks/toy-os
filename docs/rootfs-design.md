@@ -1,8 +1,9 @@
 # The root filesystem: a partitioned drive, or RAM
 
-**Status: DESIGNED, NOT BUILT.** Nothing in this file has shipped. Read
-it before starting any of it; the staging is the load-bearing part,
-because two of the stages are only safe in one order.
+**Status: BUILT (stages 1-4), 2026-08-25.** Stage 5 -- the live CD
+unpacking into ramfs -- is deliberately not done; see below. What
+follows is the design as it was written, with a "what actually shipped"
+section at the end recording where the build disagreed with it.
 
 **The one-sentence version:** toy-os should mount its root from a
 PARTITION and nowhere else on a drive, and where there is no usable
@@ -302,3 +303,68 @@ Each stage has one check that a broken version cannot pass:
   requires the table.
 - **Persistence of any kind.** If it needs to survive the power going
   out, it belongs on the drive.
+
+## What actually shipped (2026-08-25)
+
+All four stages, in the designed order. The parts worth recording are
+the places building it disagreed with designing it.
+
+**The design was right about the order.** Stage 4's failure path IS
+ramfs, so refusing a flat volume before ramfs existed would have left a
+machine with no filesystem. Nothing about writing it changed that.
+
+**`fsformat ramfs` would have destroyed a disk, and the design did not
+see it.** Putting ramfs in `g_backends` -- the obvious way to register a
+backend -- makes it a name `fs_format_backend()` accepts, and that
+function wipes every OTHER backend's signatures before formatting with
+the named one. So `fsformat ramfs confirm` would have erased TFS3's
+superblock from a working disk and then failed its own persistence
+check. ramfs is reached through its own pointer instead, and is not in
+the disk-backend table at all. **A registry is not a neutral place to
+put something**; it is a list of things every consumer of that registry
+will act on.
+
+**The KTESTs found a real deviation from `fs.h`, immediately.** ramfs
+accepted a trailing slash (`/d/` resolving to `/d`), which would have
+made two spellings of one path and put the backend at odds with the
+shell's `cd`. Caught by the "a path that is not normalized is refused"
+test on its first run.
+
+**Two positive controls, both fired on the right assertion**: disabling
+the budget reddened the budget test (`wrote < 64`), and clamping a write
+to one chunk reddened the chunk-boundary test on the memcmp rather than
+on a length. The controls are the reason the other eleven are worth
+anything.
+
+**Three tools were found ROTTED, none of it caused by this work**, and
+all three are repaired here because the change could not be verified
+otherwise:
+
+- **The live image could not be built at all.** `LIVE_IMG_MB` was a
+  hardcoded 24 and the seed tree had reached ~33 MiB, so `make
+  live-iso` failed with "image is out of free blocks" -- confirmed
+  against the pre-change recipe. It is derived from the seed tree now.
+  This is exactly the "pointer to a number somebody must keep true"
+  shape CLAUDE.md legislates against, in a Makefile where no check
+  looks.
+- **`tfs3_v1_test.py` was 0 of 8**, driving `cat`, `mv` and `dmesg` --
+  `/bin` programs since the everyday-commands migration -- against an
+  image with no `/bin` on it. It uses `rescue cat` and friends now, and
+  builds a partitioned v1 image. 8 of 8.
+- **`live_boot_test.py` parsed `df`'s old `used:`/`total:` lines**,
+  which became a table when `df` became a `/bin` program. Every number
+  came back 0 and three checks failed against a live boot that worked.
+  Invisible until now, because the live image could not be built.
+
+**And one stale entry the kernel's own guard had been reporting**:
+`dmesg` was still in `apps/completion.c`'s builtin table after moving to
+`/bin`, so typing it printed "is tab-completable but has no dispatch
+case" -- the exact internal error that table's comment says it exists to
+produce.
+
+**What did NOT need doing.** The blank-disk auto-format is gone rather
+than adjusted: with a whole-disk volume refused there is nowhere left
+for it to write, so `probe_and_mount()` lost its `allow_format`
+parameter entirely. The rule it carried -- an unrecognised disk is not
+an invitation -- is true by construction now instead of by a branch
+remembering it.

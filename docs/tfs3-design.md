@@ -575,7 +575,11 @@ Unchanged from the original draft:
 
 - No recursive delete (deleting a non-empty directory fails).
 - No locking against racing mutations (single-threaded kernel).
-- RAM-only fallback mode when no disk is found.
+- RAM-only fallback mode when no disk is found. (TFS3 has none, and
+  saying so here was ambiguous enough that vfs.c mounted it anyway on a
+  diskless boot and announced "(RAM-only)" over nothing. That fallback
+  is `kernel/fs/ramfs.c` now, a separate backend; TFS3's `init()`
+  returns -1 with no disk under it.)
 - Write-through durability: every mutation hits disk before its call
   returns, journal aside. Data journaling/COW/snapshots are roadmap
   Milestone 29, on top of this format or a successor.

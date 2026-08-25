@@ -25,7 +25,11 @@
 // that dispatch() does not handle is reported as an internal error.
 const char *const COMPLETION_COMMANDS[] = {
     "append", "apps", "beep", "cd", "clear", "color",
-    "cursor", "debug", "dmatest", "dmesg", "edit", "fontface", "fontsize",
+    // `dmesg` was here until it became /bin/dmesg and this table's own
+    // guard started reporting it: typing it hit "is tab-completable but
+    // has no dispatch case". complete_executables() offers the real one
+    // off PATH, which is the point of the split.
+    "cursor", "debug", "dmatest", "edit", "fontface", "fontsize",
     "fputest", "fsck", "fsformat", "gui", "help", "ktest", "history", "keyboard",
     "nano", "pwd", "rescue",
     "ring3test", "run", "schedtest", "steptest", "stress",

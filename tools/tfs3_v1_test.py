@@ -81,10 +81,22 @@ def main():
     print(f"tfs3_v1_test: building a v1 image at {img}")
     # 512 MB is plenty and keeps the format fast; the geometry under
     # test doesn't vary with volume size.
-    run(sys.executable, WRITER, "format", img, "--size", str(512 * 1024 * 1024),
-        "--fs-version", "1")
-    run(sys.executable, WRITER, "write", img, seeded, "/marker.txt")
-    info = run(sys.executable, WRITER, "info", img)
+    #
+    # PARTITIONED, because the kernel refuses a whole-disk volume now
+    # (kernel/fs/vfs.c, docs/rootfs-design.md) -- a flat v1 image would
+    # boot to ramfs and every check below would fail for a reason that
+    # has nothing to do with v1. The layout is one data partition: this
+    # image is data, booted from the ISO, so it needs no boot partition.
+    sys.path.insert(0, HERE)
+    import mkpart_test
+    with open(img, "wb") as f:
+        f.truncate(512 * 1024 * 1024)
+    mkpart_test.real_gpt(img, "rest")
+    base, sectors = mkpart_test.volume_of(img)
+    at = ["--at-lba", str(base), "--sectors", str(sectors)]
+    run(sys.executable, WRITER, "format", img, "--fs-version", "1", "--force", *at)
+    run(sys.executable, WRITER, "write", img, seeded, "/marker.txt", *at)
+    info = run(sys.executable, WRITER, "info", img, *at)
     if "TFS3 v1" not in info:
         raise SystemExit(f"the writer didn't produce a v1 image: {info.strip()}")
 
@@ -93,18 +105,24 @@ def main():
     # formatted image has no /bin, so every directory check would have
     # been measuring whether the test seeded the image rather than
     # whether the kernel renamed anything. (It was, at first.)
+    # `rescue cat`, not `cat`. The everyday commands are /bin PROGRAMS
+    # now, and this image is a bare filesystem with no /bin on it -- so
+    # the kernel's own copies are the only ones that can run here. The
+    # tool drove the bare names for months after they moved and every
+    # check failed with "`cat` is a program, and /bin does not have it",
+    # which is the rot an on-demand tool accumulates when nobody runs it.
     out = run(sys.executable, VM, "--instance", SLOT, "--disk", img, "run",
-              "cat /marker.txt",
+              "rescue cat /marker.txt",
               "write /a.txt renameme",
-              "mv /a.txt /b.txt",
-              "cat /b.txt",
-              "mkdir /d1", "mkdir /d2", "mkdir /d1/sub",
-              "mv /d1/sub /d1/moved",          # same parent: fits v1
-              "stat /d1/moved", "stat /d1/sub",
-              "mv /d1/moved /d2/moved",        # cross parent: must refuse
-              "stat /d1/moved", "stat /d2/moved",
-              "truncate /b.txt 4", "cat /b.txt",
-              "fsck", "dmesg")
+              "rescue mv /a.txt /b.txt",
+              "rescue cat /b.txt",
+              "rescue mkdir /d1", "rescue mkdir /d2", "rescue mkdir /d1/sub",
+              "rescue mv /d1/sub /d1/moved",   # same parent: fits v1
+              "rescue stat /d1/moved", "rescue stat /d1/sub",
+              "rescue mv /d1/moved /d2/moved", # cross parent: must refuse
+              "rescue stat /d1/moved", "rescue stat /d2/moved",
+              "rescue truncate /b.txt 4", "rescue cat /b.txt",
+              "fsck", "rescue dmesg")
 
     def section(cmd):
         """The output between `--- cmd ---` and the next `---` marker."""
@@ -121,29 +139,29 @@ def main():
           "tfs3: mounted (v1" in out and "4 journal slots" in out,
           "mount line not in dmesg")
     check("a host-written file reads back in the OS",
-          "written-by-the-host-tool-into-a-v1-image" in section("cat /marker.txt"))
-    check("a file rename works", "/a.txt -> /b.txt" in section("mv /a.txt /b.txt"))
+          "written-by-the-host-tool-into-a-v1-image" in section("rescue cat /marker.txt"))
+    check("a file rename works", "/a.txt -> /b.txt" in section("rescue mv /a.txt /b.txt"))
     check("the renamed file still has its content",
-          "renameme" in section("cat /b.txt"))
+          "renameme" in section("rescue cat /b.txt"))
     check("a same-parent directory rename works",
-          "type:     directory" in section("stat /d1/moved")
-          and "no such" in section("stat /d1/sub"))
+          "type:     directory" in section("rescue stat /d1/moved")
+          and "no such" in section("rescue stat /d1/sub"))
 
-    refusal = section("mv /d1/moved /d2/moved")
+    refusal = section("rescue mv /d1/moved /d2/moved")
     check("a cross-parent directory move is refused, naming the fix",
           "journal is too small" in refusal and "fsformat tfs3 confirm" in refusal,
           refusal.strip()[:80])
     # Refused must mean UNCHANGED -- a half-done move is the failure
     # this whole credit-reservation mechanism exists to prevent. Take
     # the LAST `stat /d1/moved`, the one after the refusal.
-    src_after = out.rsplit("--- stat /d1/moved ---", 1)[1].split("\n--- ", 1)[0]
-    dst_after = section("stat /d2/moved")
+    src_after = out.rsplit("--- rescue stat /d1/moved ---", 1)[1].split("\n--- ", 1)[0]
+    dst_after = section("rescue stat /d2/moved")
     check("the refusal changed nothing -- source intact, destination absent",
           "type:     directory" in src_after and "no such" in dst_after)
     # The LAST `cat /b.txt` -- section() takes the first, which is the
     # one BEFORE the truncate and still reads "renameme". Asserting on
     # that would have passed whether truncate did anything or not.
-    cat_after = out.rsplit("--- cat /b.txt ---", 1)[1].split("\n--- ", 1)[0]
+    cat_after = out.rsplit("--- rescue cat /b.txt ---", 1)[1].split("\n--- ", 1)[0]
     check("truncate works and fsck is clean",
           cat_after.strip() == "rena" and "fsck: clean" in out,
           repr(cat_after.strip()[:40]))

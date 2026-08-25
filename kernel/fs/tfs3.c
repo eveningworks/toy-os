@@ -1927,16 +1927,22 @@ static int tfs3_init(void) {
     g_mounted = 0;
     unmount_state();
     if (!blk_present()) {
-        // tfs3 has no RAM-only mode of its own -- that's the default
-        // backend's job (vfs.c). Reaching here without a disk means
-        // the policy layer chose us anyway; degrade honestly.
+        // tfs3 has no RAM-only mode of its own -- that is ramfs's job
+        // now (kernel/fs/ramfs.c), and vfs.c's policy is what chooses
+        // between us. Reaching here without a disk means something
+        // asked anyway; say so and mount NOTHING.
+        //
+        // -1, not 0: 0 would mean "mounted, but not persistent", which
+        // is exactly the fiction this return value was carrying before
+        // ramfs existed -- vfs.c reported an active backend while
+        // g_mounted stayed 0 and every fs_* call failed. See fs_ops.h.
         klog_write("tfs3: no disk -- cannot mount\n");
-        return 0;
+        return -1;
     }
     set_flat_volume();
     if (load_superblock(1) != 1) {
         klog_write("tfs3: no valid superblock (primary or backup) -- not mounted\n");
-        return 0;
+        return -1;
     }
     if (g_sb.flags != 0) {
         // Feature bits this kernel doesn't implement yet (e.g. the
@@ -1945,7 +1951,7 @@ static int tfs3_init(void) {
         // state -- the capabilities-must-not-lie rule, applied to a
         // format.
         klog_write("tfs3: superblock declares feature bits this kernel doesn't support -- not mounted\n");
-        return 0;
+        return -1;
     }
     derive_geometry();
     replay_journal(); // before anything reads the structures a crash may have half-written
@@ -1954,7 +1960,7 @@ static int tfs3_init(void) {
     g_bbm = kmalloc((size_t)g_sb.gc * T3_BLOCK);
     g_ibm = kmalloc((size_t)g_sb.gc * T3_BLOCK);
     g_rotor = kmalloc(sizeof(uint32_t) * g_sb.gc);
-    if (!g_gd || !g_bbm || !g_ibm || !g_rotor) { unmount_state(); return 0; }
+    if (!g_gd || !g_bbm || !g_ibm || !g_rotor) { unmount_state(); return -1; }
     k_memset(g_bbm_dirty, 0, sizeof(g_bbm_dirty));
     k_memset(g_ibm_dirty, 0, sizeof(g_ibm_dirty));
     k_memset(g_gdt_dirty, 0, sizeof(g_gdt_dirty));
@@ -1964,12 +1970,12 @@ static int tfs3_init(void) {
             !read_block(group_base(g) + 1, g_ibm + (size_t)g * T3_BLOCK)) {
             klog_write("tfs3: bitmap read failed -- not mounted\n");
             unmount_state();
-            return 0;
+            return -1;
         }
     }
     uint32_t bad_gd = 0;
     for (uint32_t tb = 0; tb <= (g_sb.gc - 1) / (T3_BLOCK / 16); tb++) {
-        if (!read_block(g_gdt_block + tb, g_blk)) { kfree(g_gd); g_gd = 0; return 0; }
+        if (!read_block(g_gdt_block + tb, g_blk)) { kfree(g_gd); g_gd = 0; return -1; }
         for (uint32_t i = 0; i < T3_BLOCK / 16; i++) {
             uint32_t g = tb * (T3_BLOCK / 16) + i;
             if (g >= g_sb.gc) break;
@@ -2003,7 +2009,7 @@ static int tfs3_init(void) {
     if (!read_inode(T3_INO_ROOT, &root) || root.type != T3_TYPE_DIR) {
         klog_write("tfs3: root inode invalid -- not mounted\n");
         unmount_state();
-        return 0;
+        return -1;
     }
 
     g_mounted = 1;

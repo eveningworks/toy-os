@@ -16,16 +16,19 @@ instead of off the ISO (see DEFAULT_LAYOUT below, and
 tools/install_grub.py for why /boot cannot be TFS3). It also makes the
 partition path (kernel/fs/vfs.c's scan, block_part.c's window) the one
 every test exercises rather than an on-demand tool. `--partition mbr`
-writes the legacy table instead; `--flat` writes the old whole-disk
-volume, which is still a supported layout and is what the live ISO's
-RAM image is.
+writes the legacy table instead. **There is no `--flat` any more**: the
+kernel takes a root from a partition and refuses a whole-disk volume
+(kernel/fs/vfs.c), so this tool no longer has a way to write one. An
+image that already IS flat is still seeded -- a host tool may
+legitimately want files in one -- with a loud warning that the kernel
+will not mount it.
 
 An EXISTING image keeps whatever layout it has -- partitioned or flat,
 found by tools/mkpart_test.py's volume_of() -- so a checkout does not
 change shape under anybody. `make clean-disk && make iso` is how one
 adopts the new default on purpose.
 
-Usage: seed_disk.py <disk.img> <seed-dir> [--partition gpt|mbr|--flat]
+Usage: seed_disk.py <disk.img> <seed-dir> [--partition gpt|mbr]
                                           [--layout SPEC]
 """
 
@@ -130,10 +133,6 @@ def main():
     ap.add_argument("--partition", choices=("gpt", "mbr"),
                     help=f"table kind for a blank image (default: "
                          f"{DEFAULT_PARTITION})")
-    ap.add_argument("--flat", action="store_true",
-                    help="build a whole-disk volume at LBA 0 instead of "
-                         "partitioning -- still supported, and what the live "
-                         "ISO's RAM image is")
     ap.add_argument("--layout", default=None, metavar="SIZE[:KIND][,...]",
                     help=f"partition sizes, e.g. '64M,rest'; a :KIND suffix "
                          f"names the type (bios, esp, data). Default: "
@@ -153,22 +152,19 @@ def main():
     fmt = probe(disk, base)
 
     if fmt is None and not partitioned:
-        # Genuinely blank. This is the ONLY branch the default applies
-        # to, and it is why moving the default is safe: nothing that
-        # already holds a filesystem is touched.
-        if args.flat:
-            print(f"seed_disk: {disk} is blank -- flat tfs3 at LBA 0 (--flat)")
-            run("tfs3_writer.py", "format", disk)
-            base, sectors = 0, 0
-        else:
-            kind = args.partition or DEFAULT_PARTITION
-            layout = args.layout
-            if layout is None:
-                layout = DEFAULT_LAYOUT if kind == "gpt" else DEFAULT_LAYOUT_MBR
-            print(f"seed_disk: {disk} is blank -- {kind.upper()}, bootable "
-                  f"layout (--flat for the old whole-disk one)")
-            seed_partitioned(disk, seed_dir, kind, layout)
-            return
+        # Genuinely blank, and it gets a TABLE -- there is no longer a
+        # flat option to choose. The kernel mounts a root from a
+        # partition and refuses a whole-disk volume (kernel/fs/vfs.c),
+        # so writing one here would produce an image that seeds
+        # perfectly and then will not mount.
+        kind = args.partition or DEFAULT_PARTITION
+        layout = args.layout
+        if layout is None:
+            layout = DEFAULT_LAYOUT if kind == "gpt" else DEFAULT_LAYOUT_MBR
+        print(f"seed_disk: {disk} is blank -- {kind.upper()}, "
+              f"layout '{layout}'")
+        seed_partitioned(disk, seed_dir, kind, layout)
+        return
     elif fmt is None:
         # A table, but no filesystem in it -- a `mkpart`ed disk that was
         # never formatted. Format into the partition rather than
@@ -183,6 +179,18 @@ def main():
     print(f"seed_disk: {disk} is tfs3, {where}")
     extra = ["--at-lba", str(base), "--sectors", str(sectors)] if partitioned else []
     run("tfs3_writer.py", "sync", disk, seed_dir, *extra)
+
+    # A FLAT IMAGE IS SEEDED, AND WILL NOT MOUNT. Seeding it anyway is
+    # deliberate: this tool's job is to put files where an image keeps
+    # them, and refusing here would break staging a fixture for a host
+    # tool that legitimately reads one. What it must not do is stay
+    # quiet, because everything downstream succeeds and the failure
+    # appears three minutes later as a kernel that boots to ramfs.
+    if not partitioned:
+        print(f"seed_disk: WARNING -- {disk} is a WHOLE-DISK volume, and the "
+              f"kernel will refuse to mount it: a root comes from a partition "
+              f"now (docs/rootfs-design.md). `make clean-disk && make iso` "
+              f"rebuilds it partitioned, DESTROYING what is on it.")
 
     # An image built before the boot partition existed still WORKS -- it
     # just cannot be booted from, so every launcher here falls back to
