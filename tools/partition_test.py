@@ -12,8 +12,12 @@ is still flat at LBA 0:
   - that kernel/drivers/block/block_part.c's window is correct enough
     for a real filesystem to live in it and survive a reboot.
 
-So this builds an image whose ONLY filesystem is inside partition 1 and
-boots it. If TFS3 mounts, every layer is exercised for real: the table
+The stock `disk.img` is partitioned now, so the ordinary suite covers
+the GPT path incidentally. What it does NOT cover is the MBR path, a
+SECOND partition, or a partition whose size differs from the disk's --
+and "it booted" cannot tell a correct window from a lucky one. So this
+builds images whose only filesystem is inside partition 1, at a size
+nothing else on the image shares, and boots them. If TFS3 mounts, every layer is exercised for real: the table
 parser, the partition block device, the volume-relative backend and the
 scan that ties them together.
 

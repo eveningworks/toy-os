@@ -1846,14 +1846,19 @@ window without going through it will find its layout polls timing out.
   default (tfs3) -- the same policy the kernel's blank-disk path
   applies at boot.
 
-  **`--partition gpt|mbr` builds a PARTITIONED image** instead of a flat
-  one: it calls `mkpart_test.py --layout` for the table, then formats
-  TFS3 inside partition 1 and seeds it there. `--layout` defaults to one
-  partition filling the disk. Not the default and never will be -- this
-  repo's `disk.img` is deliberately a flat volume and every other test
-  depends on that; this exists so `partition_test.py` (and a person) can
-  build the other shape on demand. TFS2 is not an option: it addresses
-  the disk absolutely and puts its superblock where the MBR goes.
+  **A BLANK IMAGE IS PARTITIONED NOW** -- a GPT with TFS3 in partition 1,
+  which is what `make iso` produces for a fresh `disk.img`. `--partition
+  mbr` writes the legacy table; `--flat` writes the old whole-disk
+  volume, still supported and still what the live ISO's RAM image is;
+  `--layout` sizes the partitions (default: one filling the disk).
+
+  **An EXISTING image keeps its shape.** It asks `mkpart_test.py`'s
+  `volume_of()` and seeds into whatever it finds, so a checkout does not
+  change layout under anybody -- `make clean-disk && make iso` is the
+  opt-in, the same one that moved TFS2 to TFS3. A partitioned image whose
+  partition 1 is empty (a `mkpart`ed disk nobody formatted) gets formatted
+  IN the partition rather than treated as blank, which is the same
+  refusal the kernel makes at boot.
 - **`tfs3_v1_test.py`** -- boots a freshly built TFS3 **v1** image and
   proves the kernel still mounts and uses the older on-disk layout (8
   checks). Run it after touching TFS3's geometry, journal, or any
@@ -1900,6 +1905,12 @@ window without going through it will find its layout polls timing out.
   derived from the index rather than random, so `make iso` stays
   reproducible (the KERNEL randomises them -- a disk written on a
   running machine has no such requirement).
+
+  **`--print-volume` prints `<base_lba> <sectors>`** for the image's
+  filesystem volume -- partition 1, or the whole image when there is no
+  table. It is the shell-callable form of `volume_of()`, which is the
+  one place the host answers "where does the volume start"; every tool
+  that reaches into a disk image asks it rather than hardcoding 2048.
 
   Note the GPT-verification caveat above is now HISTORY rather than a
   live limitation: TFS3 is the default and reserves volume blocks 0-7,

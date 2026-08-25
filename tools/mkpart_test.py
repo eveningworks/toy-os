@@ -339,18 +339,111 @@ def real_gpt(path, spec):
     return parts
 
 
+# ---- reading a table -----------------------------------------------
+#
+# The DECODER, beside the encoders above for the same reason the kernel
+# keeps partition_read_table() beside partition_write_table(): the field
+# offsets, the CRC and GPT's inclusive end LBA get one implementation
+# each, and a round trip through both is a real check.
+#
+# WHY THE HOST NEEDS THIS AT ALL. Once disk.img carries a partition
+# table, every host tool that reaches into the filesystem -- the seeder,
+# check_layout, the fixture stagers -- has to know where the volume
+# STARTS. Hardcoding 2048 in each of them is the pointer-somebody-must-
+# maintain shape this repo keeps deleting, so they all ask volume_of().
+
+
+def read_table(path):
+    """[(start_lba, sectors), ...] for the image's partitions.
+
+    Empty when there is no table. Deliberately small: this answers
+    "where are the partitions", not "what are their GUIDs" -- the
+    guest's `parttable` is what prints a table, and duplicating that
+    here would be a second thing to keep true.
+    """
+    total = disk_sectors(path)
+    with open(path, "rb") as f:
+        mbr = read_sector(f, 0)
+        if mbr[510] != 0x55 or mbr[511] != 0xAA:
+            return []
+
+        protective = any(mbr[446 + i * 16 + 4] == 0xEE for i in range(4))
+        if not protective:
+            out = []
+            for i in range(4):
+                e = mbr[446 + i * 16:446 + (i + 1) * 16]
+                if e[4] == 0:
+                    continue
+                start, count = struct.unpack("<II", e[8:16])
+                out.append((start, count))
+            return out
+
+        hdr = read_sector(f, 1)
+        if bytes(hdr[0:8]) != b"EFI PART":
+            return []
+        header_size = struct.unpack_from("<I", hdr, 12)[0]
+        stored = struct.unpack_from("<I", hdr, 16)[0]
+        check = bytearray(hdr[:header_size])
+        check[16:20] = b"\0\0\0\0"
+        if crc32(bytes(check)) != stored:
+            return []
+        entry_lba, = struct.unpack_from("<Q", hdr, 72)
+        n_entries, entry_size = struct.unpack_from("<II", hdr, 80)
+
+        out = []
+        per_sector = SECTOR // entry_size
+        for s in range((n_entries + per_sector - 1) // per_sector):
+            if entry_lba + s >= total:
+                break
+            sec = read_sector(f, entry_lba + s)
+            for i in range(per_sector):
+                e = sec[i * entry_size:(i + 1) * entry_size]
+                if e[:16] == b"\0" * 16:
+                    continue
+                first, last = struct.unpack_from("<QQ", e, 32)
+                if last < first:
+                    continue
+                out.append((first, last - first + 1))  # GPT's end is INCLUSIVE
+        return out
+
+
+def volume_of(path):
+    """(base_lba, sectors) for the filesystem volume on this image.
+
+    Partition 1 when the image is partitioned, the whole image when it
+    is not -- so a caller passes the result straight to
+    `tfs3_writer.py --at-lba N --sectors M` and works on either shape
+    without asking which it has. That is the point: the flat image is
+    still a supported layout (the live ISO's RAM image is one), and no
+    tool should have to branch on it.
+    """
+    parts = read_table(path)
+    return parts[0] if parts else (0, disk_sectors(path))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("disk", help="path to the raw disk image to patch (e.g. disk.img)")
-    group = ap.add_mutually_exclusive_group(required=True)
+    group = ap.add_mutually_exclusive_group(required=False)
     group.add_argument("--mbr", action="store_true", help="write a legacy MBR")
     group.add_argument("--gpt", action="store_true", help="write a protective-MBR + GPT")
+    ap.add_argument("--print-volume", action="store_true",
+                    help="print `<base_lba> <sectors>` for the filesystem "
+                         "volume (partition 1, or the whole image) and exit -- "
+                         "the shell-callable form of volume_of()")
     ap.add_argument("--layout", metavar="SIZE[,SIZE...]",
                     help="write a REAL, usable table with these partitions "
                          "(e.g. '64M,rest') instead of the synthetic fixed one. "
                          "Aligned to LBA 2048; --gpt also writes the backup "
                          "structures. This is what seed_disk.py --partition uses.")
     args = ap.parse_args()
+
+    if args.print_volume:
+        base, n = volume_of(args.disk)
+        print(f"{base} {n}")
+        return
+    if not (args.mbr or args.gpt):
+        ap.error("one of --mbr, --gpt or --print-volume is required")
 
     if args.layout:
         parts = real_gpt(args.disk, args.layout) if args.gpt else real_mbr(args.disk, args.layout)

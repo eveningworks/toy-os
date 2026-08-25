@@ -93,7 +93,21 @@ def parse_doc(path):
     return rows
 
 
-def image_format(disk):
+def volume(disk):
+    """(base_lba, sectors) for the image's filesystem volume.
+
+    Partition 1 on a partitioned image, the whole image on a flat one.
+    Asked rather than assumed, because disk.img is partitioned by
+    default now and the live ISO's image is not -- and this check runs
+    in the preflight gate, so getting it wrong fails the build for the
+    wrong reason.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import mkpart_test
+    return mkpart_test.volume_of(disk)
+
+
+def image_format(disk, base_lba=0):
     """'tfs3' by magic -- same probe rule as the kernel and seed_disk.py.
 
     Kept as a lookup returning a NAME rather than collapsed to a
@@ -102,9 +116,11 @@ def image_format(disk):
     as TFS3 did. A TFS2 image is named specifically, because "neither
     magic" would otherwise report a readable disk as unrecognised.
     """
+    at = base_lba * 512
     with open(disk, "rb") as f:
+        f.seek(at)
         lba0 = f.read(5)
-        f.seek(8 * 4096)
+        f.seek(at + 8 * 4096)
         blk8 = f.read(5)
     if blk8[:4] == b"TFS3":
         return "tfs3"
@@ -118,13 +134,15 @@ def dirs_on_image(disk, writer_dir):
     """Every directory on the image, walked breadth-first from /.
     Format-aware by writer name -- tfs3_writer prints
     `d <size> ino=N <name>` (names, not paths)."""
-    fmt = image_format(disk)
+    base, sectors = volume(disk)
+    fmt = image_format(disk, base)
     writer = os.path.join(writer_dir, f"{fmt}_writer.py")
+    vol = ["--at-lba", str(base), "--sectors", str(sectors)] if base else []
     found = set()
     queue = ["/"]
     while queue:
         cur = queue.pop(0)
-        r = subprocess.run([sys.executable, writer, "ls", disk, cur],
+        r = subprocess.run([sys.executable, writer, "ls", disk, cur, *vol],
                            capture_output=True, text=True)
         if r.returncode != 0:
             sys.exit(f"check_layout: couldn't list {cur} on {disk}:\n{r.stderr.strip()}")
@@ -153,8 +171,10 @@ def orphans_on_image(disk, writer_dir, seed_root):
     (/etc/history, a user's saved file) is none of this check's business
     and is never looked at.
     """
-    fmt = image_format(disk)
+    base, sectors = volume(disk)
+    fmt = image_format(disk, base)
     writer = os.path.join(writer_dir, f"{fmt}_writer.py")
+    vol = ["--at-lba", str(base), "--sectors", str(sectors)] if base else []
     found = []
     for sub in sorted(os.listdir(seed_root)):
         seed_dir = os.path.join(seed_root, sub)
@@ -164,7 +184,7 @@ def orphans_on_image(disk, writer_dir, seed_root):
                     if os.path.isfile(os.path.join(seed_dir, n))}
         if not expected:
             continue  # a directory seeded only with subdirectories
-        r = subprocess.run([sys.executable, writer, "ls", disk, "/" + sub],
+        r = subprocess.run([sys.executable, writer, "ls", disk, "/" + sub, *vol],
                            capture_output=True, text=True)
         if r.returncode != 0:
             continue  # not on the image at all -- the directory check owns that

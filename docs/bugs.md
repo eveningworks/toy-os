@@ -138,3 +138,28 @@ busier machine invalidated. **When a tool in this class fails, read its
 waits before suspecting the guest** -- and note that a suite run
 alongside anything else (including a second `gui_regress`, which is
 refused outright now) is competing for the same cores.
+
+## `tools/init_test.py` has rotted: 16 of its 31 checks fail
+
+**MEASURED, not assumed: 15/31 pass both before and after the
+partitioning work** — stashed and rebuilt against the previous commit
+to check, and the count is identical. It is not a regression from
+anything recent; it is an on-demand tool that nothing has run for a
+while, so nothing noticed it going red.
+
+The failures look like one cause, and it is the same rot
+`tools/fs_switch_test.py` had (fixed in the TFS2-removal commit): the
+tool drives commands that have since become `/bin` programs and parses
+output that only the ring-0 builtins still produce. The clearest tell
+is `` `kill 1` is refused`` failing with `elf_run: calling
+process_run_ring3() for /bin/kill` — the tool is reading the loader's
+chatter, not the refusal. Most of the rest are `-- none started` /
+`-- ready None`, i.e. a parse that finds nothing rather than a service
+that did not run.
+
+**Not yet confirmed to be harness-only.** The likelihood is high given
+the shape, but nobody has checked the init/service behaviour by hand
+against a boot, so a real defect hiding behind the rot cannot be ruled
+out. Doing that is the first step of the fix, not an afterthought.
+
+Reproduce: `make iso && python3 tools/init_test.py`.

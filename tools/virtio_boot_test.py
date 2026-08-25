@@ -42,6 +42,12 @@ SERIAL_PORT = 4557  # not ktest_run.py's 4555, so both can run at once
 def launch(iso, virtio_img, qemu_log):
     cmd = [
         "qemu-system-x86_64",
+        # The CD is always the boot medium; disk.img is data. Without
+        # this, SeaBIOS boots a disk that carries a partition table
+        # (0x55AA at LBA 0 is all it checks), jumps into filesystem
+        # bytes and hangs with NO serial output -- indistinguishable
+        # from a kernel that died before its first print.
+        "-boot", "order=d",
         "-cdrom", iso,
         # THE POINT OF THIS TOOL: no `-drive if=ide`. The only disk is
         # on virtio, so ata_init() finds nothing and the filesystem can

@@ -220,6 +220,17 @@ they need are what's left:
 
 ### Storage hardening
 
+`root=` on the boot line -- `kernel/fs/vfs.c`'s `try_partitions()` mounts
+the FIRST partition any volume-relative backend claims. That is
+unambiguous while TFS3 is the only filesystem and stops being so the
+moment FAT32 lands: a disk with a FAT32 ESP in partition 1 and TFS3 in
+partition 2 would boot with the ESP as root. Real systems NAME the root
+volume rather than discovering it (Linux's `root=`, then `/etc/fstab`),
+and that is the fix -- not a cleverer probe order, which would only move
+the guess. Wants `docs/boot-flags.md` to grow a row, and the flag has to
+accept a partition INDEX at minimum; naming by GUID or label is the
+better answer and needs somewhere to put the label.
+
 A TFS3 test reaching double- and triple-indirect addressing -- TFS3 has
 the same 12 direct + 3 indirect-level inode as TFS2, but the deepest
 thing any current test touches is SINGLE-indirect (`fs_test.c`'s

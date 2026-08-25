@@ -1524,3 +1524,48 @@ was the only test that exercised double- and triple-indirect addressing;
 TFS3 has the same three levels and nothing currently reaches past
 single-indirect. That is on `docs/roadmap.md` as a real gap, not
 pretended away.
+
+## The stock `disk.img` is partitioned, and a blank image is the only thing that decides
+
+`disk.img` was a flat TFS3 volume at LBA 0 — a "superfloppy", which is a
+real and legal layout but not what any installed OS looks like. It is a
+GPT with the filesystem in partition 1 now.
+
+**The reason is coverage, not cosmetics.** With a flat default, the
+partition path was exercised by exactly one on-demand tool
+(`tools/partition_test.py`) while every other test, every `make run` and
+every GUI tool ran the flat path. That is the wrong way round for a
+feature meant to be the normal case, and it is the same argument this
+repo already makes for `ata nodma` and `VGA=std`: a path nothing
+reaches is a guess. Both paths are still reachable — the live ISO's RAM
+image is flat, `seed_disk.py --flat` builds a flat disk, and
+`fs_switch_test.py`'s reformat cycle runs on whichever it is given.
+
+**Only a BLANK image is affected.** `seed_disk.py` asks
+`mkpart_test.py`'s `volume_of()` what shape an image already is and
+keeps it — an existing checkout's flat `disk.img` stays flat and keeps
+being seeded in place. `make clean-disk && make iso` is the opt-in, the
+same one that moved TFS2 to TFS3. Nothing migrates by surprise.
+
+**The host needed the kernel's question answered on its side.** Once the
+image carries a table, every host tool that reaches into the filesystem
+has to know where the volume starts, and hardcoding 2048 in each of them
+is the pointer-somebody-must-maintain shape this repo keeps deleting. So
+`volume_of()` is one function, beside the table encoders for the same
+reason the kernel keeps its parser beside its writer, and `check_layout`,
+`ls_test` and `init_test` all ask it. It returns the whole image for an
+unpartitioned one, so no caller branches on the shape.
+
+**`-boot order=d` became mandatory**, in three more launchers than the
+partitioning commit had already fixed — see the entry above; a data disk
+with a table looks bootable to SeaBIOS.
+
+**One thing this DOES NOT settle, and FAT32 will force.** The scan takes
+the first partition a backend claims. With one filesystem that is
+unambiguous. With FAT32 (`docs/roadmap.md`) a disk could hold a FAT32
+ESP in partition 1 and TFS3 in partition 2, and "first claim wins" would
+make the ESP the root — which is wrong, and is why real systems name a
+root volume rather than discovering one (Linux's `root=`, and an
+`/etc/fstab` after that). The fix is a boot-line `root=` naming a
+partition, not a cleverer probe order, and it belongs to the FAT32 work
+rather than being guessed at now.

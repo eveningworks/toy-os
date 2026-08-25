@@ -59,6 +59,12 @@ def launch_cmd(iso, disk, port, virtio_disk=None, memory=256):
     cheap enough to be the default for anything not about pixels."""
     cmd = [
         "qemu-system-x86_64",
+        # The CD is always the boot medium; disk.img is data. Without
+        # this, SeaBIOS boots a disk that carries a partition table
+        # (0x55AA at LBA 0 is all it checks), jumps into filesystem
+        # bytes and hangs with NO serial output -- indistinguishable
+        # from a kernel that died before its first print.
+        "-boot", "order=d",
         "-cdrom", iso,
         # discard=unmap -- see kernel/drivers/ata.c's ata_trim().
         "-drive", f"file={disk},format=raw,if=ide,discard=unmap",

@@ -64,8 +64,10 @@ QEMU, and it does not stop at "hello world from the kernel":
   inodes, hardlinks, journal transactions, superblock backups and an
   `fsck`. It journals metadata, so files survive a power cut. The VFS
   picks a backend by superblock probe, and boot scans the disk's
-  MBR/GPT table for a partition to mount from; `mkpart` writes a table
-  and `fsformat` reformats the mounted volume.
+  MBR/GPT table for a partition to mount from -- **the stock `disk.img`
+  is a GPT with the filesystem in partition 1**, the way an installed OS
+  looks. `mkpart` writes a table, `parttable` reads one, and `fsformat`
+  reformats the mounted volume.
 - **A real GUI, and it is not in the kernel** — the window manager is
   itself a **ring-3 process**: movable, resizable windows, a taskbar, a
   Start menu built from `.desktop` files (picked up live), and a desktop

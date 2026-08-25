@@ -126,6 +126,17 @@ PS_ROW = re.compile(
 results = []
 
 
+
+# The volume a host-side fixture has to be written INTO. disk.img is
+# partitioned by default now, so a writer call with no --at-lba would
+# operate on the whole image and miss the filesystem entirely. Asked
+# rather than assumed, because a flat image is still a valid shape.
+def _volume_args(disk):
+    sys.path.insert(0, os.path.join(REPO, "tools"))
+    import mkpart_test
+    base, sectors = mkpart_test.volume_of(disk)
+    return ["--at-lba", str(base), "--sectors", str(sectors)] if base else []
+
 def check(what, ok, detail=""):
     results.append((what, bool(ok), detail))
     print(f"  {'ok  ' if ok else 'FAIL'}  {what}" + (f"   -- {detail}" if detail else ""))
@@ -200,7 +211,8 @@ def main():
                      "Target=graphical\nRestart=always\n")
         broken.close()
         r = subprocess.run([sys.executable, os.path.join(REPO, "tools", "tfs3_writer.py"),
-                            "write", args.disk, broken.name, "/etc/services.d/broken"],
+                            "write", args.disk, broken.name, "/etc/services.d/broken",
+                            *_volume_args(args.disk)],
                            cwd=REPO, capture_output=True, text=True)
         os.unlink(broken.name)
         if r.returncode != 0:
@@ -240,7 +252,8 @@ def main():
             f.close()
             r = subprocess.run(
                 [sys.executable, os.path.join(REPO, "tools", "tfs3_writer.py"),
-                 "write", args.disk, f.name, f"/etc/services.d/{name}"],
+                 "write", args.disk, f.name, f"/etc/services.d/{name}",
+                 *_volume_args(args.disk)],
                 cwd=REPO, capture_output=True, text=True)
             os.unlink(f.name)
             if r.returncode != 0:

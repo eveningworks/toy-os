@@ -54,6 +54,17 @@ WRITER = os.path.join(REPO, "tools", "tfs3_writer.py")
 BIG_DIR = "/tmp/lsbig"
 BIG_COUNT = 300
 
+
+# The volume a host-side fixture has to be written INTO. disk.img is
+# partitioned by default now, so a writer call with no --at-lba would
+# operate on the whole image and miss the filesystem entirely. Asked
+# rather than assumed, because a flat image is still a valid shape.
+def _volume_args(disk):
+    sys.path.insert(0, os.path.join(REPO, "tools"))
+    import mkpart_test
+    base, sectors = mkpart_test.volume_of(disk)
+    return ["--at-lba", str(base), "--sectors", str(sectors)] if base else []
+
 _fail = 0
 
 
@@ -100,7 +111,7 @@ def stage_fixture(disk):
     tmp.write("x\n")
     tmp.close()
     # The directory first -- `write` does not create parents.
-    r = subprocess.run([sys.executable, WRITER, "mkdir", disk, BIG_DIR],
+    r = subprocess.run([sys.executable, WRITER, "mkdir", disk, BIG_DIR, *_volume_args(disk)],
                        cwd=REPO, capture_output=True, text=True)
     if r.returncode != 0:
         os.unlink(tmp.name)
@@ -110,7 +121,7 @@ def stage_fixture(disk):
         # unpadded f10 sorts before f9 as a STRING, which would make this
         # tool's own expectation wrong rather than the shell's.
         r = subprocess.run([sys.executable, WRITER, "write", disk, tmp.name,
-                            f"{BIG_DIR}/f{i:04d}"],
+                            f"{BIG_DIR}/f{i:04d}", *_volume_args(disk)],
                            cwd=REPO, capture_output=True, text=True)
         if r.returncode != 0:
             os.unlink(tmp.name)

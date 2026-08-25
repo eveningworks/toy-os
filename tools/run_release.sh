@@ -39,6 +39,10 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     exit 1
 fi
 
+# -boot order=d: the CD is the boot medium; the disk is data. A disk
+#   carrying a partition table has 0x55AA at LBA 0, which is all SeaBIOS
+#   checks before treating it as bootable -- it then jumps into
+#   filesystem bytes and hangs with no output at all.
 # -cdrom: the ISO, primary IDE bus.
 # -drive ...,if=ide: disk.img as a SEPARATE ide drive -- ata.c's fixed
 #   0x1F0 ports expect a plain disk here, not the boot CD's ATAPI
@@ -52,6 +56,7 @@ fi
 #   pointer to an absolute one the driver doesn't understand).
 echo "starting toy-os (right Ctrl releases the mouse once grabbed)..."
 exec qemu-system-x86_64 \
+    -boot order=d \
     -cdrom "$ISO" \
     -drive file="$DISK",format=raw,if=ide,discard=unmap \
     -serial stdio \
