@@ -164,8 +164,9 @@ resumes as one process group. The same code serves the physical console
 and a Terminal window, which is the test of whether the TTY layer is
 real.
 
-**Known gaps** — no USB stack, so input on real hardware depends on the
-firmware's legacy PS/2 emulation. No networking and no SMP. Demand
+**Known gaps** — USB is xHCI with a HID boot keyboard and mouse; there
+are no hubs, no mass storage and no HID report-descriptor parsing. No
+networking and no SMP. Demand
 paging covers the heap and the user stack, but there is no region list,
 so no `mmap` yet. No shared libraries, and no privilege model: there are
 no user accounts and no permission checks, so anything ring 3 can ask
@@ -348,7 +349,7 @@ setting both mean?". `make help` lists every axis.
 | `grub-mkrescue` fails on *"cannot find `xorriso`"* or mtools | Install `xorriso` **and** `mtools`; it needs both even for a BIOS-only image. |
 | ISO builds but QEMU says *"no bootable device"* | The BIOS modules package is missing — `grub-pc-bin` (Debian), `grub2-pc-modules` (Fedora), `grub2-i386-pc` (openSUSE), `grub-bios` (Alpine). |
 | No window appears (e.g. over SSH) | `make run NOGRAPHIC=1`. |
-| The mouse doesn't move in QEMU | Don't add `-device usb-tablet`/`usb-mouse`. This kernel's mouse driver is PS/2 only, and an explicit USB pointer device makes QEMU route motion there instead. |
+| The mouse doesn't move in QEMU | Don't add `-device usb-tablet`/`usb-mouse` by hand — QEMU routes pointer motion to a USB device once one is attached, and a run set up for PS/2 then gets none. There *is* a USB HID driver: reach it with `make run USB=xhci+mouse`, which attaches the controller too. |
 | Everything is very slow | `make run` emulates the CPU; `make run KVM=1` runs it natively. That only helps compute-bound code — *ATA* disk I/O measures ~1.9× **slower** under KVM, since each port-I/O instruction becomes a VM exit. That penalty is ATA's, not KVM's: `make run KVM=1 DISK=virtio` puts the disk on virtio-blk and measures ~10× ATA's write throughput, because a virtqueue barely touches port I/O at all. |
 | Drawing is slow on real hardware but fine in QEMU | Reproduce it with `make run KVM=1`. Plain `make run` **ignores guest memory types entirely**, so a write-combined framebuffer behaves like cached RAM and a whole class of graphics bug is invisible. `gfxbench` reports which mechanisms are live. |
 | `disk.img` is 9 GB | It's a *sparse* file — it costs only what is actually written. `make clean-disk` wipes it. |

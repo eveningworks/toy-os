@@ -504,6 +504,7 @@ whenever a headline here tells you something you did not already know.
 - **Monotonic time is an INTERFACE, and wall clock is not one of its implementations.**
 - **The kernel's idle work has ONE owner: `scheduler_idle()`**
 - **EVERY KEY REPORTS SOMETHING, AND THE KEYPAD REPORTS CHARACTERS** -- Insert, Menu, the locks, Pause, Print Screen and the keypad used to produce nothing at all; the function row is complete F1-F12; the keypad emits its keycaps' characters rather than new codes; NumLock's off-state is deliberately not modelled; Pause has no release; the fake shifts around Print Screen are dropped.
+- **USB IS xHCI ONLY, ITS PORTS WAIT ON PED RATHER THAN PRC, AND EVERY DMA OBJECT IS ITS OWN FRAME** -- `kernel/drivers/usb/`; no HCD ops table (one implementer); PORTSC is seven RW1C bits plus a write-1-to-DISABLE one; an interrupt ack writes back ONE bit, never the register; a context entry is 32 or 64 bytes and nothing may assume; `input_report_rel()` wants UP-positive dy, so HID negates. `USB=xhci` is off by default because attaching a `usb-kbd` takes the keyboard away from PS/2.
 - **INPUT DEVICES REGISTER WITH THE INPUT CORE, and the canonical event is evdev -- including `/etc/kbs`, so only the PS/2 driver ever sees a scancode**
 - **`kbd` PRINTS EVERY STAGE OF A KEYPRESS, AND ITS KERNEL LOG IS OFF BY DEFAULT** -- all four encodings on one line (PS/2 scancode, evdev keycode, character, modifiers), from a ring the driver fills. **`kernel.kbdtap` is OFF unless a human turns it on, and turning it off WIPES the ring**, because a buffer of the last ~128 keystrokes is a keylogger and `SYS_QUERY` has no privilege check; `kbd`'s live mode arms it for its own duration and disarms on every way out. Keyboard only; the tool never reads a keyboard, which is what lets it run in a Terminal window without stealing a key from the desktop.
 - **VIRTIO INTERRUPTS ARE OPT-IN, a forgotten ISR read hangs the machine, and ENABLING IS THE LAST STEP** -- `virtio_intx_line()` then `virtio_intx_enable()`, publish first and enable last; a device that can interrupt before its handler can see it hangs the machine exactly as a forgotten ISR read does, and only under KVM.
@@ -1125,6 +1126,16 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   disk; the pixel half reports the PERCENTAGE of the content area that
   moved, because the caret blinks and "changed" is not a measurement.
   Encodes five harness traps that cost five invalid runs),
+  `usb_test.py` (**an xHCI controller and a HID keyboard and mouse** --
+  its control is free and worth knowing: attaching `usb-kbd` makes QEMU
+  route keystrokes to THAT device, so on a build whose USB driver is
+  dead the guest receives nothing at all, from USB or PS/2. Measured
+  before the driver was written. Its load-bearing check is the RING
+  WRAP: a driver that ignores the event ring's cycle bit works for
+  exactly one lap -- 256 TRBs, about 128 keystrokes -- so it types 25
+  files and asserts the LAST one. Also drains the serial socket as it
+  types, because an undrained COM1 stalls the whole guest and reads
+  exactly like a driver dying after N keys),
   `kbd_test.py` (**`kbd`'s four columns, on both input drivers** -- the
   load-bearing half is the SECOND boot: the same keys must give the same
   keycode and the same character on `INPUT=virtio` with the scancode

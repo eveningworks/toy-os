@@ -31,6 +31,7 @@
 #include "barrier.h"
 #include "timer.h"
 #include "bootstage.h"
+#include "usb_hid.h"
 
 // The identity map covers the low 4 GiB and there is no
 // paging_map_kernel_range(), so a BAR above that is unreachable rather
@@ -73,6 +74,10 @@ struct xhci_hc {
 
     uint32_t events_seen;
     uint32_t irqs_seen;
+    uint32_t xfer_ok;
+    uint32_t xfer_bad;
+    uint32_t xfer_orphan;
+    uint32_t last_bad_code;
 
     struct xhci_port_state ports[XHCI_MAX_PORTS];
 };
@@ -585,6 +590,164 @@ int xhci_control(uint8_t slot, const uint8_t setup[8],
     return (int)got;
 }
 
+// --- interrupt-IN endpoints -------------------------------------------
+//
+// DEPTH IS THE POINT. Each endpoint keeps EP_DEPTH TRBs posted at all
+// times, every one pointing at its own slice of a DMA frame, and each
+// is re-posted the moment its report is taken. A ring with one
+// outstanding TRB loses every report that arrives in the window between
+// the controller completing it and the driver posting the next -- which
+// under a polled drain is a very large window. virtio_input.c keeps 64
+// buffers posted for exactly this reason.
+#define EP_DEPTH     16
+#define EP_SLOT_SIZE 64     // comfortably over any HID boot report
+
+struct xhci_ep {
+    uint8_t  in_use;
+    uint8_t  slot;
+    uint8_t  ep_addr;
+    uint16_t mps;
+    struct xhci_ring ring;
+    uint8_t *buf;                       // EP_DEPTH slices of EP_SLOT_SIZE
+    uint64_t buf_phys;
+    uint8_t  buf_of_trb[TRBS_PER_RING]; // which slice a given TRB filled
+    // Completed reports, oldest first. Written by the event dispatch
+    // (interrupt context), read by xhci_take_report().
+    volatile uint8_t  ready[EP_DEPTH];
+    volatile uint16_t ready_len[EP_DEPTH];
+    uint8_t  next_take;
+};
+
+#define MAX_EPS 4
+static struct xhci_ep g_eps[MAX_EPS];
+
+static struct xhci_ep *ep_find(uint8_t slot, uint8_t ep_addr) {
+    for (int i = 0; i < MAX_EPS; i++)
+        if (g_eps[i].in_use && g_eps[i].slot == slot && g_eps[i].ep_addr == ep_addr)
+            return &g_eps[i];
+    return 0;
+}
+
+// Which endpoint owns the TRB a Transfer Event names. Address ranges
+// rather than an id, because that is all the event carries.
+static struct xhci_ep *ep_owning(uint64_t trb_phys) {
+    for (int i = 0; i < MAX_EPS; i++) {
+        struct xhci_ep *e = &g_eps[i];
+        if (!e->in_use) continue;
+        uint64_t lo = e->ring.phys;
+        uint64_t hi = lo + (uint64_t)e->ring.count * sizeof(struct xhci_trb);
+        if (trb_phys >= lo && trb_phys < hi) return e;
+    }
+    return 0;
+}
+
+static void ep_post(struct xhci_ep *e, uint8_t slice) {
+    uint64_t at = xhci_ring_push(&e->ring,
+                                 e->buf_phys + (uint64_t)slice * EP_SLOT_SIZE,
+                                 e->mps,
+                                 XHCI_TRB_SET_TYPE(XHCI_TRB_NORMAL) |
+                                 XHCI_TRB_IOC | XHCI_TRB_ISP);
+    uint32_t idx = (uint32_t)((at - e->ring.phys) / sizeof(struct xhci_trb));
+    if (idx < TRBS_PER_RING) e->buf_of_trb[idx] = slice;
+    ring_doorbell(e->slot, dci_of(e->ep_addr));
+}
+
+// The xHCI Interval field is a LOG, and how to compute it depends on
+// the speed -- which is why bInterval cannot simply be copied across.
+// High/super speed already carry an exponent (1..16 meaning 2^(n-1)
+// microframes); full/low speed carry a frame count, so it has to be
+// converted. Getting this wrong does not fail, it just polls the device
+// at the wrong rate.
+static uint32_t interval_field(uint8_t speed, uint8_t b_interval) {
+    if (speed == XHCI_SPEED_HIGH || speed == XHCI_SPEED_SUPER) {
+        uint32_t v = b_interval ? (uint32_t)b_interval - 1 : 0;
+        return v > 15 ? 15 : v;
+    }
+    uint32_t frames = b_interval ? b_interval : 1;
+    uint32_t log2 = 0;
+    while ((1u << (log2 + 1)) <= frames && log2 < 10) log2++;
+    return log2 + 3;   // frames -> 125 us units
+}
+
+int xhci_add_interrupt_in(uint8_t slot, uint8_t ep_addr, uint16_t mps,
+                          uint8_t interval) {
+    if (!slot || slot > XHCI_MAX_SLOTS || !g_slots[slot].in_use) return -1;
+    if (mps == 0 || mps > EP_SLOT_SIZE) return -1;
+
+    struct xhci_ep *e = 0;
+    for (int i = 0; i < MAX_EPS; i++) if (!g_eps[i].in_use) { e = &g_eps[i]; break; }
+    if (!e) return -1;
+
+    uint64_t ring_phys = 0, buf_phys = 0;
+    void *seg = alloc_frame(&ring_phys);
+    void *buf = alloc_frame(&buf_phys);
+    if (!seg || !buf) return -1;
+
+    e->slot = slot; e->ep_addr = ep_addr; e->mps = mps;
+    e->buf = (uint8_t *)buf; e->buf_phys = buf_phys;
+    e->next_take = 0;
+    for (int i = 0; i < EP_DEPTH; i++) { e->ready[i] = 0; e->ready_len[i] = 0; }
+    xhci_ring_init(&e->ring, seg, ring_phys, TRBS_PER_RING, 0);
+
+    struct xhci_slot *sl = &g_slots[slot];
+    uint32_t dci = dci_of(ep_addr);
+
+    volatile uint32_t *icc = ctx_at(sl->in_ctx, 0);
+    icc[0] = 0;
+    icc[1] = (1u << 0) | (1u << dci);        // slot context + this endpoint
+
+    // The Slot Context has to grow: Context Entries is the HIGHEST DCI
+    // in use, and a controller told 1 will simply not look at entry 3.
+    volatile uint32_t *sc = ctx_at(sl->in_ctx, 1);
+    uint32_t entries = (sc[0] >> 27) & 0x1Fu;
+    if (dci > entries) sc[0] = (sc[0] & 0x07FFFFFFu) | (dci << 27);
+
+    uint8_t speed = 0;
+    for (uint32_t p = 0; p < XHCI_MAX_PORTS; p++)
+        if (sl->port == p + 1) speed = g_hc.ports[p].speed;
+
+    volatile uint32_t *ep = ctx_at(sl->in_ctx, 1 + dci);
+    ep[0] = interval_field(speed, interval) << 16;
+    ep[1] = (3u << 1) |                       // CErr = 3
+            (7u << 3) |                       // EP type 7 = Interrupt IN
+            ((uint32_t)mps << 16);
+    ep[2] = (uint32_t)(ring_phys & 0xFFFFFFFFu) | 1u;   // DCS = 1
+    ep[3] = (uint32_t)(ring_phys >> 32);
+    ep[4] = (uint32_t)mps | ((uint32_t)mps << 16);      // avg TRB len, max ESIT
+
+    e->in_use = 1;   // published before the endpoint can complete anything
+
+    int cc = cmd_submit(sl->in_ctx_phys,
+                        XHCI_TRB_SET_TYPE(XHCI_TRB_CONFIGURE_ENDPOINT) |
+                        ((uint32_t)slot << 24), 0);
+    if (cc != XHCI_CC_SUCCESS) {
+        klog_printf("usb: configure endpoint 0x%x (slot %u) failed: %s\n",
+                    ep_addr, slot, xhci_completion_name((uint32_t)cc));
+        e->in_use = 0;
+        return -cc;
+    }
+
+    for (uint8_t i = 0; i < EP_DEPTH; i++) ep_post(e, i);
+    return 0;
+}
+
+int xhci_take_report(uint8_t slot, uint8_t ep_addr, void *buf, uint32_t cap) {
+    struct xhci_ep *e = ep_find(slot, ep_addr);
+    if (!e) return 0;
+
+    uint8_t i = e->next_take;
+    if (!e->ready[i]) return 0;
+
+    uint32_t len = e->ready_len[i];
+    if (len > cap) len = cap;
+    k_memcpy(buf, e->buf + (uint32_t)i * EP_SLOT_SIZE, len);
+
+    e->ready[i] = 0;
+    e->next_take = (uint8_t)((i + 1) % EP_DEPTH);
+    ep_post(e, i);            // straight back into circulation
+    return (int)len;
+}
+
 // --- interrupts -------------------------------------------------------
 
 // Acknowledging an xHCI interrupt is harder than virtio's single
@@ -666,6 +829,25 @@ void xhci_service(void) {
                 g_xfer_done.residual = ev.status & 0xFFFFFFu;
                 g_xfer_done.slot     = (uint8_t)((ev.control >> 24) & 0xFFu);
                 g_xfer_done.done     = 1;
+            } else {
+                struct xhci_ep *e = ep_owning(src);
+                if (!e) g_hc.xfer_orphan++;
+                else if (code != XHCI_CC_SUCCESS && code != XHCI_CC_SHORT_PACKET) {
+                    g_hc.xfer_bad++; g_hc.last_bad_code = code;
+                } else g_hc.xfer_ok++;
+                if (e && (code == XHCI_CC_SUCCESS || code == XHCI_CC_SHORT_PACKET)) {
+                    uint32_t idx = (uint32_t)((src - e->ring.phys) /
+                                              sizeof(struct xhci_trb));
+                    if (idx < TRBS_PER_RING) {
+                        uint8_t  slice = e->buf_of_trb[idx];
+                        uint32_t resid = ev.status & 0xFFFFFFu;
+                        uint32_t got   = resid <= e->mps ? e->mps - resid : 0;
+                        if (slice < EP_DEPTH) {
+                            e->ready_len[slice] = (uint16_t)got;
+                            e->ready[slice]     = 1;
+                        }
+                    }
+                }
             }
         }
     }
@@ -688,12 +870,17 @@ static void xhci_irq_handler(uint64_t *regs) {
     if (!ack_interrupt()) return;
     g_hc.irqs_seen++;
     xhci_service();
+    // The drain above only moved reports into memory and marked them
+    // ready; decoding them is the HID layer's job. Done here rather
+    // than inside xhci_service() so the re-entrancy guard covers the
+    // ring and nothing else.
+    usb_hid_service_all();
 }
 
 // The polled fallback, used only when the controller has no usable IRQ
 // line. Same shape as virtio_input.c's: an interrupt-driven source
 // leaves poll NULL, so the two can never both run.
-static void xhci_poll_source(void) { xhci_service(); }
+static void xhci_poll_source(void) { xhci_service(); usb_hid_service_all(); }
 
 static struct input_source g_hc_source;
 
@@ -883,12 +1070,14 @@ void usb_init(void) {
     klog_printf("usb: running, %s\n",
                 g_hc.irq ? "interrupt-driven" : "polled");
 
+    usb_query_init();
     scan_ports();
 }
 
 // --- introspection ----------------------------------------------------
 
 int usb_controller_present(void) { return g_hc.present; }
+uint8_t usb_controller_irq(void) { return g_hc.irq; }
 
 int usb_controller_summary(char *buf, uint32_t cap) {
     if (!g_hc.present || !buf || !cap) return 0;
@@ -918,9 +1107,34 @@ void usb_dump(void) {
                 mr32(g_hc.rt, XHCI_IR0 + XHCI_ERDP));
     klog_printf("usb: cmd ring 0x%llx enq %u cyc %u\n",
                 (unsigned long long)g_hc.cmd.phys, g_hc.cmd.enqueue, g_hc.cmd.cycle);
+    klog_printf("usb: xfer ok %u bad %u (last cc %u \"%s\") orphan %u\n",
+                g_hc.xfer_ok, g_hc.xfer_bad, g_hc.last_bad_code,
+                xhci_completion_name(g_hc.last_bad_code), g_hc.xfer_orphan);
+    for (int i = 0; i < MAX_EPS; i++) {
+        struct xhci_ep *e = &g_eps[i];
+        if (!e->in_use) continue;
+        uint32_t rmask = 0;
+        for (int b = 0; b < EP_DEPTH; b++) if (e->ready[b]) rmask |= (1u << b);
+        klog_printf("usb: ep slot %u addr 0x%x next_take %u ready 0x%x enq %u cyc %u\n",
+                    e->slot, e->ep_addr, e->next_take, rmask,
+                    e->ring.enqueue, e->ring.cycle);
+    }
     klog_printf("usb: evt ring 0x%llx deq %u ccs %u, %u event(s), %u irq(s)\n",
                 (unsigned long long)g_hc.evt.phys, g_hc.evt.dequeue, g_hc.evt.ccs,
                 g_hc.events_seen, g_hc.irqs_seen);
+    klog_printf("usb: %d device(s), %u report(s) decoded, "
+                "%u set-protocol(boot) accepted\n",
+                usb_device_count(), usb_hid_reports(),
+                usb_hid_boot_protocol_count());
+    for (int i = 0; i < usb_device_count(); i++) {
+        const struct usb_device_info *d = usb_device_at(i);
+        if (d) klog_printf("usb:  dev %d port %u %04x:%04x \"%s\" class %u/%u/%u\n",
+                           i, d->port, d->vendor_id, d->product_id,
+                           d->product, d->if_class, d->if_subclass, d->if_protocol);
+    }
+    char hl[64];
+    for (int i = 0; usb_hid_describe(i, hl, sizeof hl); i++)
+        klog_printf("usb:  hid %d %s\n", i, hl);
     for (uint32_t p = 0; p < g_hc.max_ports && p < XHCI_MAX_PORTS; p++) {
         uint32_t sc = mr32(g_hc.op, XHCI_PORTSC(p));
         if (!(sc & XHCI_PORTSC_CCS) && !(sc & XHCI_PORTSC_PED)) continue;

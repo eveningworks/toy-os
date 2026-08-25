@@ -1540,6 +1540,29 @@ AHCI/USB level of rigor -- a reasonable first breakdown once picked up:
    `scheduler_tick()`/`switch_to()` assume a single running context).
 
 ### USB (keyboard/mouse)
+**BUILT** for xHCI, a HID boot keyboard and a HID boot mouse; see
+`docs/conventions/kernel.md` and `docs/decisions/drivers.md`. What
+remains is listed on the roadmap: the legacy-support handoff (hardware
+only), mass storage, hubs, and report-descriptor parsing.
+
+**FOUR THINGS THE PLAN BELOW GOT WRONG**, kept because the corrections
+are the useful part. (1) Step 4 names `SET_ADDRESS`; there is no such
+request on xHCI -- addressing is the *Address Device* command with an
+Input Context, and the controller emits the wire request itself, so the
+order is Enable Slot, Address Device, *then* GET_DESCRIPTOR. (2) Steps 6
+and 7 predate the input core and say to feed `keyboard.c`/`mouse.c`
+directly; the real work is registering an `input_source` and calling
+`input_report_*`, which made both steps far smaller than estimated --
+and, because `/etc/kbs` is keyed on evdev now, a USB keyboard needs no
+layout table at all. (3) Step 8 conflates the xHCI USB Legacy Support
+capability (a controller ownership semaphore) with BIOS/SMM PS/2
+emulation (what actually produces ghost keys); they are unrelated and
+both are hardware-only. (4) There is no PS/2 "handoff" to order against:
+the input core is a multi-source registry by construction, both paths
+stay registered, and Linux does the same with `atkbd` and `usbhid`.
+
+The original plan follows.
+
 Needs a USB host controller driver (UHCI/EHCI/xHCI, found the same way the
 e1000 NIC already is, via the existing PCI enumeration) before any device
 can even be enumerated. Low priority: PS/2 already covers mouse/keyboard

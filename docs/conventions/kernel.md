@@ -587,6 +587,75 @@ Five things to know:
 The lock keys report their press and change nothing, which is honest
 about there being no lock state here. See `docs/decisions.md`.
 
+## USB IS xHCI ONLY, ITS PORTS WAIT ON PED RATHER THAN PRC, AND EVERY DMA OBJECT IS ITS OWN FRAME
+
+`kernel/drivers/usb/`. One host controller driver (`xhci.c`), the device
+enumeration on it (`usb_enum.c`), and a HID boot-protocol class driver
+(`usb_hid.c`) that registers keyboards and mice with the input core like
+any other source. UHCI/OHCI/EHCI are found by prog_if, named in the log
+and refused: a machine that needs this driver -- one with no PS/2 port,
+which is everything since roughly Skylake -- has xHCI and nothing else.
+
+**There is no HCD ops table**, and that is a decision rather than a
+deferral: one implementer, no plausible second. `virtio_pci.c` makes the
+same call for its transport, under four device drivers. The seam that
+does exist is `xhci.h`, a plain header splitting xHCI mechanics from USB
+semantics, and it has two real callers on day one.
+
+**A PORT RESET WAITS FOR PED, NOT FOR PRC.** The spec says a completed
+reset raises the Port Reset Change bit, and real hardware does. QEMU
+performs the whole USB2 reset synchronously inside the register write
+and signals it by setting Port Enabled instead, never raising PRC at
+all -- so a loop waiting on the change bit spins its entire backstop and
+then declares failure for a port that came up perfectly (`port 5 reset
+did not complete`, immediately followed by `port 5: connected,
+enabled`). Half a second of boot, and a log line that sends the next
+session looking in the wrong place. Wait on the outcome.
+
+**PORTSC IS SEVEN RW1C BITS AND ONE WRITE-1-TO-DISABLE BIT**, so the
+obvious `portsc |= PR; write(portsc)` disables the port *and* clears
+every change bit it happened to read as 1. Every write goes through
+`portsc_write()`, which masks both sets off. This is the most commonly
+shipped xHCI bug there is.
+
+**ACKNOWLEDGING AN INTERRUPT WRITES BACK ONE BIT, NEVER THE REGISTER.**
+`USBSTS.EINT` and `IMAN.IP` are both RW1C, so a read-modify-write either
+fails to deassert the shared level-triggered line -- the storm that hung
+this guest 3 boots in 3 during virtio-input, and only under KVM -- or
+clears a status bit belonging to another device. `xhci_ack_interrupt()`
+is the one place either is touched. The publish-first/enable-last
+ordering below applies unchanged.
+
+**EVERY DMA OBJECT IS ITS OWN 4 KiB FRAME.** The spec wants 64-byte
+alignment on rings and contexts and forbids a ring segment crossing a
+64 KiB boundary; `pmm_alloc_contiguous()` promises only 4 KiB alignment.
+A 4 KiB-aligned 4 KiB block satisfies the first trivially and cannot
+cross the second, so the rule never bites -- at the cost of ~36 KiB of
+waste for one keyboard, which is nothing. **Do not pack two objects into
+one frame**: the second one's alignment immediately becomes something a
+human has to maintain, and both failure modes are silent.
+
+**THE EVENT RING HAS ONE CONSUMER AT A TIME.** The interrupt handler and
+any synchronous waiter both drain it, so a re-entrancy guard turns the
+second caller into a no-op. Turning the handler away is safe because it
+has already acknowledged the line.
+
+**A CONTEXT ENTRY IS 32 OR 64 BYTES** (`HCCPARAMS1.CSZ`) -- QEMU says 32,
+much real hardware says 64 -- so nothing indexes a context by a
+constant. Reading it wrong reports no error; the controller simply
+parses garbage.
+
+**`input_report_rel()` WANTS UP-POSITIVE dy**, which is the PS/2 sense
+and the opposite of what HID and evdev both report. `usb_hid.c` and
+`virtio_input.c` each negate on the way in. This was written down
+nowhere until a driver got it wrong and a KTEST caught it; `input.h`
+states it now.
+
+`USB=none|xhci|xhci+mouse` on `make run`, `--usb` on `tools/vm.py`, and
+**attaching a `usb-kbd` takes the keyboard away from PS/2** because QEMU
+routes keystrokes to it -- which is why the axis is off by default, and
+what makes `tools/usb_test.py` self-controlling.
+
 ## INPUT DEVICES REGISTER WITH THE INPUT CORE, and the canonical event is evdev
 
 `kernel/include/kernel/input.h`. A device driver does not touch the

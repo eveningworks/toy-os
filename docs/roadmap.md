@@ -639,17 +639,18 @@ run on, not by order.
 
 ### USB
 
-- [ ] Host controller discovery
-- [ ] Bring up xHCI
-- [ ] Root port + device detection
-- [ ] Control transfers + enumeration
-- [ ] HID boot-protocol interrupt transfers
-- [ ] Keyboard integration
-- [ ] Mouse integration
-- [ ] Legacy PS/2 handoff
+- [x] ~~Host controller discovery~~
+- [x] ~~Bring up xHCI~~
+- [x] ~~Root port + device detection~~
+- [x] ~~Control transfers + enumeration~~
+- [x] ~~HID boot-protocol interrupt transfers~~
+- [x] ~~Keyboard integration~~
+- [x] ~~Mouse integration~~
+- [x] ~~PS/2 coexistence -- there is no handoff to do; the input core is a multi-source registry and both paths run at once~~
+- [ ] The xHCI USB Legacy Support handoff (xECP id 1) -- hardware only; QEMU does not implement it, so the branch is unreachable here
 - [ ] USB mass storage (bulk-only transport) -- the first non-disk-bus storage backend
 - [ ] Hub support (devices behind a hub, not just root ports)
-- [ ] Ordering against the PS/2 handoff, so both input paths can coexist during transition
+- [ ] Full HID report-descriptor parsing, for a device that is not boot-protocol
 
 ### Networking
 **Needs:** a NIC driver, i.e. virtio, and a real GPU driver's virtio-net.

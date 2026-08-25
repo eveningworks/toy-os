@@ -14,6 +14,7 @@
 // rather than invents.
 #include "usb.h"
 #include "xhci.h"
+#include "usb_hid.h"
 #include "xhci_regs.h"
 #include "klog.h"
 #include "kfmt.h"
@@ -231,6 +232,11 @@ int usb_enumerate_port(uint8_t port, uint8_t speed) {
                 d->product[0] ? d->product : "(no product string)",
                 d->manufacturer[0] ? d->manufacturer : "",
                 d->if_class, d->if_subclass, d->if_protocol);
+
+    // Binding is the class driver's decision, not enumeration's: a
+    // device this build has no driver for stays in the table and is
+    // reported by lsusb, it just does nothing.
+    usb_hid_bind(d);
     return g_dev_count - 1;
 }
 

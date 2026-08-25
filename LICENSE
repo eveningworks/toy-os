@@ -99,16 +99,26 @@ seed/sync/usr/share/hwdata/pci.ids (seeded onto the disk image as
 of the PCI ID Database maintained by the PCI ID Project at
 https://pci-ids.ucw.cz/. It is not covered by the MIT License above.
 
-Upstream offers it under either the GNU General Public License version
-2 or later, or the 3-clause BSD License. toy-os redistributes it under
-the 3-clause BSD option, reproduced in full below. The file's own
-header comments -- which name the maintainers and the license grant --
-are preserved verbatim in the copy shipped here.
+seed/sync/usr/share/hwdata/usb.ids (seeded as /usr/share/hwdata/usb.ids,
+and read by /bin/lsusb) is a verbatim copy of the USB ID Database
+maintained by Stephen J. Gowdy at https://www.linux-usb.org/usb-ids.html.
+It is likewise not covered by the MIT License above.
+
+Upstream offers BOTH files under either the GNU General Public License
+version 2 or later, or the 3-clause BSD License. toy-os redistributes
+them under the 3-clause BSD option, reproduced in full below. Each
+file's own header comments -- which name the maintainers -- are
+preserved verbatim in the copies shipped here. (usb.ids carries no
+licence grant in its own header; the grant is the one published on the
+project's page above, and matches the one hwdata ships it under.)
 
 Copyright (c) The PCI ID Project contributors.
 Copyright is held by Martin Mares and Albert Pool, and covers the
 aggregation and formatting of the data only, the data itself being
 factual.
+
+Copyright (c) Stephen J. Gowdy and the USB ID Database contributors,
+on the same terms and for the same reason.
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are

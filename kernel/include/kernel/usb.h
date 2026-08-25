@@ -68,6 +68,9 @@ struct usb_device_info {
 // the repo on a machine that happens to have USB.
 void usb_init(void);
 
+// Registers the QUERY_USB provider. Called from usb_init().
+void usb_query_init(void);
+
 // Is there a controller at all? 0 on a machine with no xHCI.
 int usb_controller_present(void);
 
@@ -86,6 +89,11 @@ int usb_enumerate_port(uint8_t port, uint8_t speed);
 // Diagnostic counters. These exist so a test can distinguish "the
 // driver never ran" from "the driver ran and decoded nothing", which
 // an assertion on behaviour alone cannot.
+// The controller's IRQ line, or 0 when it is polled. A HID source
+// mirrors it, so `lsdev` reports the same servicing for the device as
+// for the controller that actually fields its interrupts.
+uint8_t usb_controller_irq(void);
+
 uint32_t usb_events_seen(void);
 uint32_t usb_irqs_seen(void);
 

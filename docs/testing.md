@@ -322,12 +322,13 @@ device.** Two things worth knowing if you ever touch this line:
 here right Ctrl) is an SDL-only display option -- QEMU rejects it
 outright on `gtk` ("Parameter 'grab-mod' is unexpected"), which is why
 this isn't `-display gtk,...` even though gtk was tried first. And
-deliberately NO `-device usb-tablet`/`-device usb-mouse` -- this
-kernel's mouse driver only speaks PS/2 (see `kernel/drivers/mouse.c`),
-there's no USB stack at all, and adding an explicit USB pointer device
-makes QEMU route host mouse motion to THAT instead of the emulated
-PS/2 mouse, so the guest receives nothing and the cursor just never
-moves. Bit an actual user session once (see the commit for build 293's Makefile fix) -- looked exactly like a driver bug, wasn't one.
+deliberately NO `-device usb-tablet`/`-device usb-mouse` on this line --
+adding an explicit USB pointer device makes QEMU route host mouse motion
+to THAT instead of the emulated PS/2 mouse, so a run set up for PS/2
+receives nothing and the cursor just never moves. There IS a USB HID
+driver now (`kernel/drivers/usb/`), but it is reached through the axis
+-- `make run USB=xhci+mouse`, which attaches the controller too -- not
+by adding a device to this recipe by hand. Bit an actual user session once (see the commit for build 293's Makefile fix) -- looked exactly like a driver bug, wasn't one.
 
 
 **The live and demo ISOs are SEPARATE artifacts, on purpose.** The
@@ -598,11 +599,32 @@ The gotchas it already gets right, for when you need to know why:
   emulated PS/2 device the synthetic input uses, and the two fighting
   looks exactly like a flaky test rather than like interference.
   Attaching or detaching mid-run is free.
-- **Mouse input:** this kernel's mouse driver is PS/2, not USB HID --
-  never add `-device usb-tablet` OR `-device usb-mouse` to a headless
-  test launch (same reasoning as `make run`'s comment above -- it's
-  not just a "wrong device" ergonomics thing, it actively breaks
-  routing). `QMPSession.goto()`/`click()`/`drag()` use
+- **Mouse input:** the default headless launch has a PS/2 mouse and no
+  USB at all -- never add `-device usb-tablet` or a bare `-device
+  usb-mouse` to a test launch by hand (same reasoning as `make run`'s
+  comment above -- it's not a "wrong device" ergonomics thing, it
+  actively breaks routing).
+
+  **AMENDED, now that there IS a USB HID driver.** The rule stands for
+  every tool written against PS/2, but the reason has changed and it
+  matters which. It is no longer "the guest cannot read a USB pointer"
+  -- `kernel/drivers/usb/` reads one fine. It is that **QEMU moves
+  input routing to the USB device the moment one is attached**: a
+  `usb-kbd` takes the keyboard from PS/2 immediately, and a `usb-mouse`
+  takes the pointer as soon as the guest driver polls its endpoint. So
+  attaching either to a tool written for PS/2 silently deprives it of
+  input, which reads exactly like a guest bug.
+
+  The supported way in is the axis -- `USB=xhci` / `USB=xhci+mouse` on
+  `make run`, `--usb` on `tools/vm.py` -- off by default for precisely
+  this reason. `tools/usb_test.py` is the one tool that uses it, and the
+  routing switch is what makes it self-controlling: with `usb-kbd`
+  attached, a broken driver means no keystrokes reach the guest at all.
+  QMP's `input-send-event` also takes an optional **`device`**, so a
+  test can aim at `-device usb-kbd,id=usbkbd` by name rather than
+  relying on which handler QEMU picked. `usb-tablet` stays unused: it is
+  absolute, would need `input_report_abs()` scaling, and virtio-tablet
+  already covers that. `QMPSession.goto()`/`click()`/`drag()` use
   `input-send-event` with `rel` axis events against the default
   emulated PS/2 mouse, tracking cursor position client-side since
   there's no absolute cursor query. `wheel()` sends synthetic

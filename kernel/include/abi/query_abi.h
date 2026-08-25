@@ -272,6 +272,13 @@ _Static_assert(sizeof(struct query_fontglyph) <= 256,
 // advance by exactly the previous record's `len`.
 #define QUERY_KLOG      16
 
+// The USB devices an xHCI controller enumerated. A LIST -- one record
+// per device -- read by /bin/lsusb. There is deliberately no scalar
+// "controller" class beside it: `lsdev` already names the controller,
+// and a second class carrying one line would be a second thing to keep
+// true. A machine with no controller simply has zero records.
+#define QUERY_USB       17
+
 // Bytes of log per record. Sized so the whole record fits
 // QUERY_RECORD_MAX (256, api/query.h) with the header on top.
 #define QUERY_KLOG_DATA 232
@@ -452,6 +459,39 @@ struct query_partition {
     uint8_t  unique_guid[16]; // GPT only
     char     name[40];     // GPT only; "" for MBR
 };
+
+// QUERY_USB's record -- one enumerated USB device.
+//
+// BOTH THE IDS AND THE STRINGS ARE CARRIED, because they answer
+// different questions and can legitimately disagree. The ids are what
+// /usr/share/hwdata/usb.ids is keyed on; the strings are what the
+// DEVICE says about itself, which PCI has no equivalent of. `lsusb`
+// prints the database name and shows the strings under -v, which is
+// what real lsusb does.
+//
+// Empty strings are normal: a device is not required to have any.
+struct query_usb {
+    uint64_t port;          // 1-based root port
+    uint64_t slot;          // xHCI slot id
+    uint64_t speed;         // QUERY_USB_SPEED_*
+    uint64_t vendor_id;
+    uint64_t product_id;
+    uint64_t dev_class;     // from the device descriptor; often 0
+    uint64_t if_class;      // the interface a driver bound, if any
+    uint64_t if_subclass;
+    uint64_t if_protocol;
+    uint64_t bound;         // 1 when a driver in this build claimed it
+    char     manufacturer[32];
+    char     product[32];
+};
+
+// QUERY_USB's speed values. Named rather than passing the xHCI protocol
+// speed ID through, because that one is redefinable per controller.
+#define QUERY_USB_SPEED_UNKNOWN 0
+#define QUERY_USB_SPEED_LOW     1
+#define QUERY_USB_SPEED_FULL    2
+#define QUERY_USB_SPEED_HIGH    3
+#define QUERY_USB_SPEED_SUPER   4
 
 // QUERY_HEAP's record.
 //

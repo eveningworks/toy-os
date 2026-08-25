@@ -92,6 +92,14 @@ void input_report_key(uint16_t keycode, int down);
 
 // Relative pointer motion, in device counts. Speed and acceleration are
 // applied by the pointer state, not by the caller.
+//
+// **dy IS UP-POSITIVE**, which is the PS/2 sense and the OPPOSITE of
+// what most device protocols report. mouse_feed_rel() ends in
+// `mouse_y -= dy` because it was written against a PS/2 mouse. evdev's
+// REL_Y and a HID boot mouse both make positive mean DOWN the screen,
+// so both virtio_input.c and usb_hid.c negate on the way in. This was
+// stated nowhere until a driver got it wrong, and the only way to find
+// it was reading mouse.c -- so it is stated here now.
 void input_report_rel(int dx, int dy);
 
 // Absolute position, in the device's own axis range -- scaled to the

@@ -57,6 +57,24 @@ int xhci_set_ep0_mps(uint8_t slot, uint16_t mps);
 int xhci_control(uint8_t slot, const uint8_t setup[8],
                  void *buf, uint16_t len, int in);
 
+// Adds one interrupt-IN endpoint to a configured device and starts its
+// transfer ring, via a Configure Endpoint command. `ep_addr`, `mps` and
+// `interval` come from the endpoint descriptor. Returns 0, or a
+// negative completion code.
+//
+// It pre-posts a DEPTH of TRBs rather than one, and re-posts each on
+// completion. A ring with a single outstanding TRB drops every report
+// that arrives between completion and re-post -- the same reason
+// virtio_input.c keeps 64 buffers posted.
+int xhci_add_interrupt_in(uint8_t slot, uint8_t ep_addr, uint16_t mps,
+                          uint8_t interval);
+
+// Takes the next completed report from that endpoint, if one has
+// arrived, copying at most `cap` bytes. Returns the byte count, or 0
+// when nothing is pending. Re-posts the TRB, so no caller has to think
+// about ring depth.
+int xhci_take_report(uint8_t slot, uint8_t ep_addr, void *buf, uint32_t cap);
+
 // Drains the event ring. Called from the interrupt handler and, when
 // the controller has no usable IRQ line, from the input core's poll.
 void xhci_service(void);

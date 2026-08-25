@@ -950,3 +950,100 @@ returns its own handle, a queue that starts consuming as it is created.
 `tools/virtio_input_test.py` carries the regression check and only runs
 it where it can fail (with `/dev/kvm`); it says so when it skips, since
 a check that cannot fail is worse than no check.
+
+## USB is xHCI only, with no HCD abstraction, and its MMIO is left write-back
+
+Three decisions taken together when `kernel/drivers/usb/` was written,
+because each is only defensible in the light of the others.
+
+**xHCI and nothing else.** UHCI, OHCI and EHCI are perhaps a quarter of
+the code between them, and `docs/roadmap-details.md` had recommended
+starting with UHCI as "dramatically simpler if the goal is first proving
+out the general model". That was rejected. The reason this driver exists
+at all is a machine with no PS/2 port, and Intel dropped the EHCI
+companion controllers at Skylake -- so such a machine presents xHCI and
+nothing else, and a UHCI driver would be an entire controller for a bus
+no hardware made since roughly 2010 has. QEMU's `piix3-usb-uhci` would
+be its only home. The cost is real: xHCI has no simple mode, so nothing
+works until the command ring, the event ring, the cycle bit and the
+doorbells all work at once. It is a small scheduler, not a
+poke-a-register device. The mitigation was to split the ring arithmetic
+into `xhci_ring.c`, which contains no controller and is therefore
+KTESTable on a machine with no USB at all.
+
+**No `struct usb_hcd` ops table.** The usual argument against a
+premature abstraction is that the second implementer might not arrive;
+here there is no plausible second implementer at all, having just
+refused the only candidates. The in-repo precedent is exact rather than
+analogous: `virtio_pci.c` + `virtqueue.c` are a shared transport with
+four device drivers on top, and there is no `struct virtio_transport`
+vtable -- drivers call `virtqueue_submit()` by name. So `usb_hid.c`
+calls `xhci_control()` by name. What *was* built is `xhci.h`, a plain
+header splitting xHCI mechanics from USB semantics, because that seam
+had two real callers on the day it was written (a keyboard and a mouse)
+and mass storage would be a third. If a second controller ever appears,
+converting six functions to an ops table is a mechanical afternoon;
+building the table first would have been the cost with none of the
+benefit.
+
+**MMIO stays write-back, and no `paging_set_uncached()` was built.**
+`boot.asm` identity-maps the low 4 GiB write-back with 2 MiB pages, so
+the xHCI BAR gets a WB PTE, and the reflex is to add an uncached-mapping
+API before touching a register window. It was deliberately not added,
+for reasons that are an argument rather than a test result -- which is
+itself the point.
+
+On real hardware the MTRRs win: firmware marks the PCI hole UC, and UC
+from either MTRR or PAT beats a WB PTE, so the effective type is already
+right. Under TCG, PAT is ignored entirely. Under KVM, emulated MMIO
+traps to the hypervisor on access regardless of the guest's memory type.
+So the question is invisible to `make verify`, to `gui_regress.py` and
+to CI, and a `paging_set_uncached()` written today would be untested
+code guarding an untested hazard -- the shape this repo refuses
+elsewhere (`ata nodma` exists precisely so its fallback is reachable).
+The 2 MiB granularity of the identity map is a second obstacle: a
+per-page memory type would need the mapping split first.
+
+The residual risk, stated rather than dismissed: a machine whose
+firmware leaves the controller's BAR inside a WB MTRR range, or places
+it above TOLUD outside any variable range. There the CPU could cache and
+reorder register accesses, and the driver would misbehave in ways that
+look like a device fault. **If xHCI works under QEMU and misbehaves on
+real hardware, start here.** That sentence is the deliverable; the code
+would have been worse.
+
+What *is* required, and is not about caching at all, is `volatile` on
+every register access -- `xhci.c` copies `virtio_pci.c`'s accessors.
+Polling `USBSTS.CNR` through a non-volatile read is one hoist away from
+an infinite loop, on TCG and KVM alike.
+
+## USB took interrupts from its first commit, and the cost is one function
+
+The xHCI driver was built interrupt-driven rather than polled-first,
+which was not the safer order.
+
+The safe order was available: `input.h` documents a `poll()` hook for a
+source with no interrupt, `scheduler_idle()` already owns the kernel's
+idle work, and `virtio_input.c` ships a polled path as a live fallback.
+Polling would have let the whole device stack land with no interrupt
+code at all, so that when INTx did arrive, any new hang was
+unambiguously that change. Against it: latency under a polled drain is
+bounded by the idle cadence, so it degrades under load -- the worst kind
+of bug to report -- and every other PCI input device here is
+interrupt-driven. Interrupts were chosen, and the polled path is
+retained for a controller whose pin is unusable, in exactly
+`virtio_input.c`'s shape (`.poll = irq ? 0 : thunk`).
+
+**The cost is concentrated in one function.** xHCI's "was it me?" is
+strictly harder than virtio's single destructive byte read:
+`USBSTS.EINT` and `IMAN.IP` are both RW1C, so acknowledging means
+writing a 1 back to exactly the bit being cleared. A read-modify-write
+that writes the register back either fails to deassert the shared
+level-triggered line -- a storm, the failure that hung this guest 3
+boots in 3 under KVM during virtio-input and 0 in 3 under TCG -- or
+clears a status bit belonging to another device on the line.
+`ack_interrupt()` in `xhci.c` is the only place either bit is written.
+
+Because that failure is invisible under TCG, `tools/usb_test.py` grew a
+`--kvm` flag and the change was not believed until it passed there. A
+green TCG suite says nothing about this class.

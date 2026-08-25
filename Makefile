@@ -289,6 +289,17 @@ SEED_DIR = seed
 # new copy from https://pci-ids.ucw.cz/v2.2/pci.ids over data/pci.ids.
 PCI_IDS = data/pci.ids
 
+# The USB ID database, on exactly the same terms as pci.ids above --
+# same directory, same seed step, same path a Linux distribution uses,
+# and the same licence choice. Read at runtime by /bin/lsusb to turn
+# 0627:0001 into "Adomax Technology Co., Ltd". NOT MIT -- upstream
+# (https://www.linux-usb.org/usb-ids.html) offers it under either GPL v2
+# or later or the 3-clause BSD Licence, and this repo redistributes it
+# under the BSD option, see LICENSE. Refreshing it is a deliberate
+# commit: download a new copy from https://www.linux-usb.org/usb.ids
+# over data/usb.ids.
+USB_IDS = data/usb.ids
+
 # Source discovery is RECURSIVE and automatic: every .c under kernel/
 # or apps/ is compiled, and every .asm under kernel/ is assembled, with
 # build/ mirroring the source tree. Adding a directory needs no Makefile
@@ -877,6 +888,7 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL)
 	# LICENSE's "Third-party data" section for what governs it.
 	mkdir -p $(SEED_DIR)/sync/usr/share/hwdata
 	cp $(PCI_IDS) $(SEED_DIR)/sync/usr/share/hwdata/pci.ids
+	cp $(USB_IDS) $(SEED_DIR)/sync/usr/share/hwdata/usb.ids
 	# TWO TEXT FILES THAT SHIP, and they are deliberately not one.
 	#
 	# /usr/share/doc/toy-os.txt is a DOCUMENT -- prose about this system,
