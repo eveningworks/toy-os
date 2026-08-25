@@ -153,7 +153,7 @@ def df_size(transcript):
         if re.match(r"^[a-z][a-z0-9_]*: ", ln):
             continue
         parts = ln.split()
-        if len(parts) >= 2 and parts[0] in ("tfs3", "tfs2"):
+        if len(parts) >= 2 and parts[0] == "tfs3":
             return parts[1]
     return None
 

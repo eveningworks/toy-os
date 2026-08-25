@@ -272,7 +272,7 @@ void cmd_cd(const char *args) {
 }
 
 // Hardlink: `ln <existing> <newname>`. The caps mechanism's showcase
-// command -- on a filesystem whose format has no link counts (tfs2)
+// command -- on a filesystem whose format has no link counts
 // it says so instead of failing mysteriously.
 void cmd_ln(const char *args) {
     char first[FS_PATH_MAX];

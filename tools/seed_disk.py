@@ -3,7 +3,7 @@
 
 The Makefile's `seed` target calls this instead of hardwiring one
 writer tool: it probes the image's magic and delegates to the matching
-writer's `sync`, so an EXISTING checkout's TFS2 disk.img keeps working
+writer's `sync`, so an EXISTING checkout's disk.img keeps working
 untouched while a fresh (blank) image gets today's default format,
 TFS3 -- the same policy kernel/fs/vfs.c's fs_init() applies to a blank
 disk. `make clean-disk && make iso` is therefore how a checkout moves
@@ -20,8 +20,7 @@ is still a supported layout and is what the live ISO's RAM image is.
 An EXISTING image keeps whatever layout it has -- partitioned or flat,
 found by tools/mkpart_test.py's volume_of() -- so a checkout does not
 change shape under anybody. `make clean-disk && make iso` is how one
-adopts the new default on purpose, the same opt-in that moved TFS2 to
-TFS3.
+adopts the new default on purpose.
 
 Usage: seed_disk.py <disk.img> <seed-dir> [--partition gpt|mbr|--flat]
                                           [--layout SPEC]
@@ -43,24 +42,13 @@ def probe(disk, base_lba=0):
     would make a v2 image look BLANK and get reformatted, which is the
     one outcome this probe exists to prevent.
 
-    A TFS2 image is REFUSED by name rather than falling through to
-    None. None means "blank, format it", and formatting over somebody's
-    TFS2 disk because this build stopped speaking the format is the
-    host-side twin of the data-loss bug kernel/fs/vfs.c's
-    disk_is_tfs2() exists to prevent.
     """
     at = base_lba * 512
     with open(disk, "rb") as f:
-        f.seek(at)
-        lba0 = f.read(5)
-        f.seek(at + 8 * 4096)
+        f.seek(at + 8 * 4096)   # block 8 -- TFS3's superblock
         blk8 = f.read(5)
     if blk8[:4] == b"TFS3" and 1 <= blk8[4] <= 2:
         return "tfs3"
-    if lba0[:4] == b"TFS2" and lba0[4:5] == b"\x03":
-        sys.exit(f"seed_disk: {disk} is TFS2, which this build no longer "
-                 f"supports.\n  Back it up if you need it, then "
-                 f"`make clean-disk && make iso`.")
     return None
 
 
@@ -73,9 +61,9 @@ def run(tool, *args):
 def seed_partitioned(disk, seed_dir, kind, layout):
     """Write a table, then put TFS3 inside partition 1 and seed it.
 
-    TFS2 is not an option here and never will be: it addresses the disk
-    absolutely and puts its superblock at LBA 0, which is the MBR. See
-    kernel/include/kernel/fs_ops.h's `volume_relative`.
+    TFS3 is not a parameter: a backend can only live in a partition if
+    it is volume-relative (kernel/include/kernel/fs_ops.h), and it is
+    the only one there is. FAT32 makes this a choice.
     """
     sys.path.insert(0, HERE)
     import mkpart_test

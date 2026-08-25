@@ -9,7 +9,7 @@
 // WHY HERE AND NOT IN THE BLOCK LAYER
 // -----------------------------------
 // The block layer is the tidier home for it and it is the wrong one:
-// TFS2 makes seven direct ata_* calls and partition.c three more, so a
+// A filesystem makes many small metadata reads and writes, so a
 // cache above them would sit beside two bypass paths. A bypass past a
 // WRITE-BACK cache is not a missed optimisation, it is a correctness
 // hole in both directions -- the bypassing reader sees a stale sector,

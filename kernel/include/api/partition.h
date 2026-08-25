@@ -30,7 +30,7 @@
 #define PART_WRITE_MAX_ENTRIES 4
 
 enum partition_table_kind {
-    PART_TABLE_NONE, // no 0x55AA signature at LBA 0 -- e.g. today's disk.img (raw TFS2)
+    PART_TABLE_NONE, // no 0x55AA signature at LBA 0 -- a flat whole-disk volume
     PART_TABLE_MBR,  // legacy MBR, no protective 0xEE entry
     PART_TABLE_GPT,  // protective MBR + a GPT header that passed its CRC32 check
 };

@@ -180,7 +180,7 @@ first before re-litigating it from scratch.
 - [`SYS_MKPART` takes a table, not a sector](decisions/storage.md#sys_mkpart-takes-a-table-not-a-sector)
 - [A partitioned disk is never auto-formatted](decisions/storage.md#a-partitioned-disk-is-never-auto-formatted)
 - [`-boot order=d`, because a partition table looks bootable](decisions/storage.md#-boot-orderd-because-a-partition-table-looks-bootable)
-- [TFS2 was removed, and an old TFS2 disk is refused rather than reformatted](decisions/storage.md#tfs2-was-removed-and-an-old-tfs2-disk-is-refused-rather-than-reformatted)
+- [TFS2 was removed, and what removing a FORMAT costs](decisions/storage.md#tfs2-was-removed-and-what-removing-a-format-costs)
 - [The stock `disk.img` is partitioned, and a blank image is the only thing that decides](decisions/storage.md#the-stock-diskimg-is-partitioned-and-a-blank-image-is-the-only-thing-that-decides)
 
 **Drivers & hardware** -- [`decisions/drivers.md`](decisions/drivers.md) (18 entries)

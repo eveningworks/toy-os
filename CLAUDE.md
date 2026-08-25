@@ -14,7 +14,7 @@ A small x86-64 OS (Multiboot2/GRUB-booted, freestanding C + NASM) with
 ring0/ring3 separation, per-process paging, an ELF64 loader, syscalls,
 a preemptive scheduler, a kernel-space window manager, and two
 disk-backed filesystem (TFS3, mounted from an MBR/GPT partition or
-from a flat volume). No cross-compiler needed -- host and target are
+from a flat volume; FAT32 is planned). No cross-compiler needed -- host and target are
 both x86-64, so plain system `gcc`/`ld`/`nasm` with freestanding flags
 work.
 
@@ -649,7 +649,7 @@ whenever a headline here tells you something you did not already know.
 - **A new TFS3 operation must COUNT ITS JOURNAL CREDITS, and the count is the design.**
 - **Shrinking a file, or anything else that stops referencing a block, commits the pointer change BEFORE freeing the bit.**
 - **THE STOCK `disk.img` IS PARTITIONED (GPT, filesystem in partition 1), AND ONLY A BLANK IMAGE GETS THAT** -- `seed_disk.py` asks `mkpart_test.py`'s `volume_of()` what shape an image already is and KEEPS it, so an existing checkout stays flat until `make clean-disk`. Flat is still supported (`seed_disk.py --flat`; the live ISO's RAM image is one). **A host tool that reaches into the filesystem must ask `volume_of()`** and pass `--at-lba`/`--sectors` to `tfs3_writer.py` -- hardcoding 2048 is the pointer-somebody-must-maintain shape. `try_partitions()` mounts the FIRST partition a backend claims, which stops being unambiguous when FAT32 lands (`root=` is the roadmap item).
-- **AN UNRECOGNISED DISK IS NOT AN INVITATION -- and that now includes a disk whose FORMAT WAS REMOVED.** Dropping the TFS2 backend would have made every TFS2 disk read as "readable but unclaimed", which is the blank-disk case, which FORMATS. `disk_is_tfs2()` in `vfs.c` and `seed_disk.py`'s probe both recognise it and refuse. `struct fs_ops` stays a registry with one row because FAT32 is next.
+- **REMOVING A FILESYSTEM BACKEND SILENTLY REFORMATS EVERY DISK IN THAT FORMAT** -- the probe treats a disk no backend claims as "readable but unclaimed", which is the blank-disk case, which FORMATS. TFS2's removal needed a recognise-and-refuse guard for exactly this; the guard was then removed on the maintainer's word that no such disks exist, so **a TFS2 disk booted today IS reformatted**. Make that call deliberately for the next format: the guard is ~15 lines and the failure is unrecoverable. `struct fs_ops` stays a registry with one row because FAT32 is next.
 - **`/etc` on the persistent filesystem is the config-file convention.**
 - **A PARTITION IS A BLOCK DEVICE, AND THE FILESYSTEM NEVER LEARNS ITS OFFSET** -- `block_part.c` wraps a parent and shifts every LBA (Linux's `bd_start_sect`, Windows' `partmgr`); the active device stays SINGULAR; `blk_read_sectors()` is the VOLUME and `blk_disk_read_sectors()` is the DISK, so a table parser must use the latter; capabilities are inherited and TRIM is CLAMPED; and a backend declares `fs_ops.volume_relative`, the guard that stops the scan offering a partition to a backend that ignores the block layer (TFS2 declared 0; FAT32 will declare 1).
 - **A PARTITIONED DISK IS NEVER AUTO-FORMATTED, AND PARTITION 1 IS LEFT ACTIVE** -- a flat format SURVIVES a GPT (TFS3 reserves volume blocks 0-7), so claiming an unclaimed partitioned disk would lay a whole-disk volume across every partition's data while `parttable` kept printing the table correctly. `fsformat` formats the ACTIVE device, which is what makes `mkpart` -> reboot -> `fsformat` land inside partition 1.

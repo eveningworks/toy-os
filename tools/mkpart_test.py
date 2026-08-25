@@ -4,29 +4,18 @@ partition table onto the first few sectors of a raw disk image, for
 testing kernel/drivers/partition.c's parser (the shell's `parttable`
 command) against real, correctly-checksummed data.
 
-toy-os's own disk.img is one raw TFS2 blob starting at LBA 0 (see
-docs/tfs2-spec.md) -- there is no real MBR/GPT on it, by design (see
-docs/decisions.md's partition-parsing entry), so this exists purely to
-let a QMP test session write one on temporarily.
+toy-os's own disk.img is a GPT with the filesystem in partition 1 now
+(tools/seed_disk.py builds it), so the synthetic tables below are no
+longer the only way to get one -- what they are for is feeding the
+PARSER shapes the seeder does not produce.
 
-This is deliberately TFS2-mount-preserving, not a blind overwrite:
-LBA 0's first 5 bytes (TFS2's "TFS2"+version magic, kernel/drivers/
-tfs.c's tfs_init()) are read back and kept as-is before patching in the
-MBR partition-table region (bytes 446-511, which TFS2 never uses) --
-booting with this in place still mounts the real, unmodified TFS2
-filesystem underneath instead of tfs_init() seeing foreign/blank magic
-and auto-reformatting the disk (which would silently wipe whatever this
-script just wrote before `parttable` ever got a chance to read it).
---gpt's LBA 1 (the GPT header) DOES fully overwrite TFS2's journal
-header that would otherwise live there -- confirmed harmless: TFS2's
-own read_journal_header() checks its own "JRN1" magic first and
-no-ops on a mismatch (GPT headers start "EFI PART"), so this never
-corrupts anything replay_journal() would otherwise act on. Still, treat
-disk.img as scratch during this test either way and restore a real one
-afterward:
-
-    python3 tools/tfs3_writer.py format disk.img --force
-    python3 tools/tfs3_writer.py sync disk.img seed
+The writers preserve LBA 0 bytes 0-445 rather than zeroing the sector:
+the table lives in bytes 446-511 and the signature in the last two, so
+anything a boot sector might hold in front of it survives. Nothing in
+this OS puts anything there (TFS3 never touches volume blocks 0-7, and
+the format that kept its superblock in bytes 0-4 is gone), but writing
+a partition table is not a licence to zero a sector this code does not
+own -- kernel/drivers/partition.c's write_mbr() makes the same call.
 
 **QEMU boot order:** a valid 0x55AA MBR signature on disk.img makes
 SeaBIOS consider it a bootable hard disk -- without an explicit
@@ -111,7 +100,7 @@ def cmd_mbr(path):
         patch_mbr(buf, entries)
         write_sector(f, 0, bytes(buf))
     print(f"wrote legacy MBR to {path} (2 entries: type 0x83 lba=2048, type 0x07 lba=206848)")
-    print("(LBA 0 bytes 0-445 preserved -- TFS2 still mounts normally underneath)")
+    print("(LBA 0 bytes 0-445 preserved -- see the module docstring)")
 
 
 GPT_ENTRY_SIZE = 128
@@ -185,7 +174,7 @@ def cmd_gpt(path):
 
     print(f"wrote GPT (protective MBR + header + {len(entries)} entries) to {path}")
     print(f"disk GUID {DISK_GUID.hex()} (mixed-endian raw bytes, not display order)")
-    print("(LBA 0 bytes 0-445 preserved -- TFS2 still mounts normally underneath)")
+    print("(LBA 0 bytes 0-445 preserved -- see the module docstring)")
 
 
 # ---- real, usable tables ------------------------------------------------

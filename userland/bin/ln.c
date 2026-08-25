@@ -2,7 +2,7 @@
 // carry link counts or they do not, and neither carries symlinks yet.
 //
 // The capability check is the point of the command. On a volume whose
-// format has no link counts (tfs2) the kernel answers EPERM, which is a
+// format has no link counts the kernel answers EPERM, which is a
 // permanent property of the VOLUME rather than of these two paths --
 // so the message says so instead of leaving someone to wonder which of
 // the names was wrong.

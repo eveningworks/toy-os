@@ -378,11 +378,16 @@ int partition_validate(const struct partition_table *in, const char **why) {
     return 1;
 }
 
-// LBA 0 for an MBR table. PRESERVES bytes 0..445, which is what makes
-// this safe to run on a disk that already holds a flat filesystem:
-// TFS2's superblock magic lives in bytes 0..4 and TFS3 never touches
-// volume blocks 0-7 at all, so the table lands in the 66 bytes neither
-// of them uses. tools/mkpart_test.py has always done the same.
+// LBA 0 for an MBR table. PRESERVES bytes 0..445 -- the table lives in
+// bytes 446..511 and the signature in the last two, so everything a
+// boot sector might hold in front of it survives.
+//
+// Nothing in this OS puts anything there: TFS3 never touches volume
+// blocks 0-7, and the format that DID keep its superblock in bytes
+// 0..4 (TFS2) is gone. Preserved anyway, because writing a partition
+// table is not a licence to zero a sector this code does not own, and
+// a disk written elsewhere may well have boot code in it.
+// tools/mkpart_test.py does the same.
 static __attribute__((noinline)) int write_mbr(const struct partition_table *in, int protective) {
     uint8_t sec[PART_SECTOR_SIZE];
     if (!blk_disk_read_sectors(0, 1, sec)) k_memset(sec, 0, sizeof(sec));

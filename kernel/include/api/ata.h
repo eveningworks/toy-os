@@ -25,7 +25,7 @@
 //     is unchanged from before this build.
 //
 // ata_present()/ata_read_sector()/ata_write_sector() -- and every
-// existing caller (fs.c, TFS2) -- neither know nor care which path is
+// existing caller (the VFS, the filesystem) -- neither know nor care which path is
 // active; this is purely an ata.c-internal choice.
 //
 // Chosen over AHCI/SATA specifically because it needs nothing this
@@ -263,7 +263,7 @@ void ata_flush_end_no_flush(void);
 // Phase 1 of the async-I/O roadmap item (docs/roadmap.md): a
 // non-blocking start/poll pair for the DMA path, built alongside the
 // existing blocking ata_read_sectors()/ata_write_sectors() rather than
-// replacing them -- nothing in fs.c/TFS2 uses this yet. Only usable
+// replacing them -- no filesystem uses this yet. Only usable
 // when ata_dma_active() is true (the PIO fallback has no equivalent;
 // polling a busy-wait loop non-blockingly isn't meaningfully
 // different from just blocking on it).

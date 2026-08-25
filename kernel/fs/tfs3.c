@@ -2188,7 +2188,7 @@ static void tfs3_list(const char *dir_path, void (*cb)(const char *name, uint32_
 static int tfs3_stat(const char *path, struct fs_stat_info *out) {
     char norm[T3_PATH_BUF];
     if (!g_mounted || !normalize(path, norm)) return 0;
-    if (k_strcmp(norm, "/") == 0) return 0; // root has no entry -- same contract as tfs2
+    if (k_strcmp(norm, "/") == 0) return 0; // root has no entry
     uint64_t ino;
     struct t3_inode node;
     if (!resolve(norm, &ino) || !read_inode(ino, &node)) return 0;
@@ -2318,7 +2318,7 @@ static int tfs3_mkdir(const char *path) {
     char norm[T3_PATH_BUF];
     if (!g_mounted || !normalize(path, norm)) return 0;
     uint64_t ino;
-    if (resolve(norm, &ino)) return 0; // exists (file OR dir) -- refuse, like tfs2
+    if (resolve(norm, &ino)) return 0; // exists (file OR dir) -- refuse
     return create_entry(path, T3_TYPE_DIR, 0);
 }
 

@@ -209,10 +209,10 @@ static const char *const TEST_HELP_LINES[] = {
     "                  claimed by two files are always reported, never\n",
     "                  repaired -- see fs.h's fs_check().\n",
     "  fsformat <fs> confirm - DESTROY everything on disk and reformat\n",
-    "                  with the named filesystem (tfs2, tfs3), then\n",
+    "                  with the named filesystem (tfs3), then\n",
     "                  remount it live. `df` shows which one is active.\n",
     "  ln <file> <new> - hardlink: a second name for the same file\n",
-    "                  (tfs3 only -- tfs2's format has no link counts)\n",
+    "                  (needs a format with link counts)\n",
     "\n",
     "Every other former *test command (elftest, syscalltest, writetest,\n",
     "ptrtest, guitest, echotest, wintest, filetest, newsyscalltest,\n",
@@ -520,7 +520,7 @@ void cmd_fsck(const char *args) {
 // Real (non-sparse) multi-GB write/read/verify stress test over
 // fs_write_range()/fs_read_range() -- built to answer docs/roadmap.md's
 // long-standing "full end-to-end multi-GB write/read pass hasn't been
-// run yet" item. tfs_selftest() (kernel/fs/TFS2, runs on every
+// run yet" item. TFS2's selftest (removed with the backend, ran on every
 // disk-backed boot) already proves triple-indirect *addressing* --
 // that the pointer chain can be built and walked -- but it only writes
 // 64 bytes at a ~4.6GB offset, not real content filling that space.
@@ -754,7 +754,7 @@ void cmd_dmatest(const char *args) {
 
 // Proves fs_write_range_begin()/fs_write_range_step() (Phase 2) AND
 // fs_read_range_begin()/fs_read_range_step() (Phase 4) of the async-I/O
-// roadmap item (kernel/fs/TFS2) -- writes <mb> megabytes through
+// roadmap item (kernel/fs/) -- writes <mb> megabytes through
 // the stepped write API instead of fs_write_range(), one block at a
 // time via an explicit step loop this command drives itself (standing
 // in for what wm_run() would eventually do once per frame, which Phase

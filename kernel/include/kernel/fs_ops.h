@@ -31,7 +31,7 @@
 // paths. A backend only has to implement path *handling*, not path
 // *normalization*; vfs.c does not renormalize before calling into a
 // backend, so each backend is expected to normalize itself exactly the
-// way TFS2's normalize()/path_is_normalized() do (that logic is
+// way tfs3.c's normalize()/path_is_normalized() do (that logic is
 // backend-internal, not shared, since a future filesystem might have
 // different path rules -- e.g. case-insensitivity, a different max
 // length).
@@ -80,7 +80,7 @@ struct fs_ops {
     //   0  readable, but not mine (blank or foreign bytes)
     //  -1  could not read the superblock at all -- vfs.c treats this
     //      as "refuse to touch the disk" (the data-loss lesson in
-    //      TFS2's init comment), never as "blank, go format"
+    //      tfs3.c's init comment), never as "blank, go format"
     int (*probe)(void);
 
     // Erase every signature by which probe() would recognize this
@@ -131,7 +131,7 @@ struct fs_ops {
     // function pointer here does -- see fs.h's fs_write_range_begin()/
     // fs_write_range_step() for the full contract every backend
     // implementing these two must honor. Both required (not optional/
-    // NULLable) since there's exactly one backend today (TFS2) and it
+    // NULLable) since there's exactly one backend today (TFS3) and it
     // implements them -- see this header's top comment on why a
     // mount-point scheme (which might want optional capabilities per
     // backend) isn't what this struct is for.

@@ -712,7 +712,7 @@ static int dma_transfer(uint32_t lba, int count, void *buf, int is_write,
 // see docs/roadmap.md) -- built from the exact same dma_issue()/
 // dma_finish() halves dma_transfer() uses above, so this doesn't
 // duplicate the register-level protocol, just gives a second way to
-// wait on it. No real caller uses this yet: fs.c/TFS2 still go
+// wait on it. No real caller uses this yet: the filesystem still goes
 // through the blocking dma_transfer_with_retry() path below unchanged.
 // This exists to prove the primitive works in isolation first (see
 // ata_dma_nonblocking_selftest()) before anything higher up the stack

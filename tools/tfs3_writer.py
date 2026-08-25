@@ -604,15 +604,6 @@ def cmd_format(args):
 
     now = local_epoch()
     with open(args.disk, "r+b") as f:
-        # The wipefs rule (see kernel/fs/vfs.c's fs_format_backend and
-        # fs_ops.h's wipe contract): a TFS2 superblock at LBA 0 must
-        # not survive this image becoming TFS3, or the kernel's probe
-        # keeps claiming it as TFS2. Only touched when the magic
-        # actually matches -- an MBR/GPT at LBA 0 is left alone.
-        f.seek(at)
-        if f.read(4) == b"TFS2":
-            f.seek(at)
-            f.write(b"\x00" * SECTOR)
         # Same rule WITHIN this format: an older TFS3 version's backup
         # superblocks sit at positions this version's layout never
         # writes, so leaving them means a future reader whose primary

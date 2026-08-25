@@ -1813,11 +1813,11 @@ window without going through it will find its layout polls timing out.
   screenshots with a pass/fail `--threshold` (default 0.2%) and an
   optional `--out` diff-highlight image, for catching a rendering
   regression manual eyeballing might miss.
-- **`tfs2_writer.py`** -- **REMOVED** along with the TFS2 backend. A
-  TFS2 disk is now refused rather than reformatted, by both the kernel
-  (`disk_is_tfs2()` in `kernel/fs/vfs.c`) and `seed_disk.py`. To read
-  one, check out the commit before the removal; `docs/tfs2-spec.md` is
-  kept for the same reason.
+- **`tfs2_writer.py`** -- **REMOVED** along with the TFS2 backend, and
+  nothing guards against a TFS2 disk any more: one booted today is read
+  as blank and REFORMATTED. To read one, check out a commit before the
+  removal. `docs/tfs2-spec.md` is kept because several
+  `docs/decisions/` entries reason from it.
 - **`tfs3_writer.py`** -- the host-side TFS3 tool: format
   (writes superblock backups + GDT snapshots, wipes a stale TFS2
   signature per the wipefs rule, keeps images sparse by skipping/

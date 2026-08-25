@@ -9,7 +9,7 @@
 // kernel should ever call into for file/directory access. As of the
 // VFS split, it's implemented by kernel/fs/vfs.c, which dispatches
 // every call below to whichever `struct fs_ops` backend is active (see
-// kernel/include/kernel/fs_ops.h) -- today that's always TFS2, the original
+// kernel/include/kernel/fs_ops.h) -- today that's always TFS3, the only
 // flat/directory filesystem. Nothing in this header changed shape when
 // that split happened, on purpose: adding a future filesystem means
 // writing a new backend and pointing vfs.c's fs_init() at it, not
@@ -47,7 +47,7 @@ void fs_init(void);
 // Every path below is a normalized absolute path: it must start with
 // '/' (a bare name like "notes.txt" is silently treated as "/notes.txt"
 // for backward compatibility with callers that predate directories --
-// see TFS2's normalize()), and must not contain "." or ".." components
+// see tfs3.c's normalize()), and must not contain "." or ".." components
 // or a trailing slash (other than the root "/" itself) -- callers that
 // want cwd-relative paths or ".."-style navigation (see the shell's
 // `cd`/`pwd`) resolve to a normalized absolute path themselves before
@@ -305,7 +305,7 @@ int fs_stat(const char *path, struct fs_stat_info *out);
 #define FS_CAP_SYMLINKS   (1u << 2) // format carries symlinks (resolution may still be unimplemented)
 #define FS_CAP_EPOCH_TIME (1u << 3) // timestamps stored as epoch natively, not converted at stat time
 
-// The active backend's short name ("tfs2", "tfs3") -- diagnostic, for
+// The active backend's short name ("tfs3") -- diagnostic, for
 // df/fsck/about-style output. Valid after fs_init(); never NULL.
 const char *fs_backend_name(void);
 
@@ -340,7 +340,7 @@ int fs_link(const char *existing, const char *newpath);
 // something actually changed anyway.
 uint64_t fs_generation(void);
 
-// Reformat the disk with the named backend ("tfs2", "tfs3") and
+// Reformat the disk with the named backend ("tfs3") and
 // remount by re-running the probe loop. DESTROYS the current
 // filesystem contents -- callers own the confirmation UX (see the
 // `fsformat` shell command). Returns 1 on success (new fs mounted), 0
@@ -352,7 +352,7 @@ int fs_format_backend(const char *name);
 // ata.c, so every fs_touch()/fs_write()/fs_mkdir()/fs_delete() above is
 // being persisted to it and files survive a reboot; 0 if no disk was
 // found, in which case this is exactly the old in-memory-only behavior
-// (files vanish on reboot) -- see TFS2's tfs_init() for the
+// (files vanish on reboot) -- see tfs3.c's init for the
 // detection/fallback logic. Purely informational (the `about`
 // shell/GUI screens use it to say which mode they're in) -- every
 // fs_* call above works the same either way.

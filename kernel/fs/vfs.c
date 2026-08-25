@@ -17,10 +17,10 @@
 // own initiative anymore (that used to be tfs_init()'s else-branch).
 // An UNREADABLE superblock is different from a foreign one -- no
 // formatting happens at all, and the chosen backend's own init()
-// degrades to RAM-only; see TFS2's init comment for the data-loss
+// degrades to RAM-only; see tfs3.c's init comment for the data-loss
 // story behind that distinction.
 //
-// Adding a filesystem = write its TFS2-shaped file exposing a
+// Adding a filesystem = write its own `struct fs_ops` exposing a
 // `const struct fs_ops whatever_ops`, #include its header below, and
 // add it to g_backends -- nothing else in the kernel or apps/ needs
 // to know that happened.
@@ -52,18 +52,17 @@ static const struct fs_ops *const g_backends[] = {
 };
 #define FS_BACKEND_COUNT ((int)(sizeof(g_backends) / sizeof(g_backends[0])))
 
-// The default backend: what a blank/foreign disk gets formatted with,
-// and what serves RAM-only boots (no disk at all). Index into
-// g_backends. TFS3 since Stage E of the TFS3 plan -- the write path,
-// fsck and crash recovery are all live and verified, and
-// tools/seed_disk.py applies the same blank-disk policy at build
-// time. An existing TFS2 disk keeps mounting as TFS2 via its probe;
-// only genuinely blank disks get the new format. (Stage B briefly
-// pointed this at tfs3 by ACCIDENT while the write path didn't exist
-// -- combined with a stale-object skew that made the honesty check
-// refuse tfs2, one boot quietly reformatted the dev image. The
-// lesson kept: this constant and the list order above must be read
-// together, which is why they sit one comment apart.)
+// The default backend: what a blank disk gets formatted with, and what
+// serves RAM-only boots (no disk at all). Index into g_backends.
+//
+// It is TFS3, and with one backend that is not a choice -- it becomes
+// one again when FAT32 lands, and the answer will still be TFS3: a
+// blank disk should get the native format, not the interop one.
+//
+// THE HAZARD THIS INDEX CARRIES, kept because it fired once: pointing
+// it at a backend whose write path did not exist yet quietly
+// reformatted the dev image on one boot. An index is a silent thing to
+// get wrong -- it compiles, it boots, and it destroys a disk.
 #define FS_DEFAULT_BACKEND 0
 
 static const struct fs_ops *g_fs = 0;
@@ -194,28 +193,6 @@ static int try_live_module(void) {
 // Order is the table's own order, not "biggest" or "first bootable" --
 // there is nothing here that would make a cleverer policy more correct,
 // and a table's order is the one thing a person writing it controls.
-// Is this a TFS2 disk? Magic "TFS2" plus format version 3 at LBA 0,
-// which is all that is left of a backend this kernel no longer has.
-//
-// WHY THIS STUB EXISTS AT ALL, rather than nothing. Deleting the TFS2
-// backend makes a TFS2 disk "readable but claimed by nobody" -- which
-// is the blank-disk case, and the blank-disk policy FORMATS. So the
-// removal, on its own, would silently destroy the data on every
-// existing TFS2 disk on its next boot. That is precisely the failure
-// docs/decisions.md's "an unreadable superblock is not a foreign disk"
-// entry is about, arriving from a new direction: this time the kernel
-// can read the superblock perfectly and simply no longer speaks the
-// format.
-//
-// So: recognise it, refuse to touch it, and say what to do. Fifteen
-// lines against 2348 deleted, and the alternative is a data-loss bug
-// that only fires on other people's disks.
-static int disk_is_tfs2(void) {
-    uint8_t sec[512];
-    if (!blk_disk_read_sectors(0, 1, sec)) return 0;
-    return sec[0] == 'T' && sec[1] == 'F' && sec[2] == 'S' && sec[3] == '2' && sec[4] == 3;
-}
-
 static int try_partitions(void) {
     const struct block_device *disk = blk_whole_disk();
     if (!disk) return -1;
@@ -389,17 +366,6 @@ static void probe_and_mount(int allow_format) {
         return;
     }
 
-    // A TFS2 disk is READABLE AND FOREIGN, which is the one combination
-    // the blank-disk policy below gets wrong.
-    if (disk_is_tfs2()) {
-        klog_write("fs: this disk is TFS2, which this build no longer supports -- "
-                   "NOT formatting.\n"
-                   "fs: back it up if you need it, then `make clean-disk && make iso` "
-                   "(or `fsformat tfs3 confirm`) to reuse the disk.\n");
-        mount_backend(fallback);
-        return;
-    }
-
     // Readable but nobody claimed it: genuinely blank or foreign.
     if (allow_format) {
         klog_write("fs: disk claimed by no filesystem -- formatting with the default (");
@@ -535,7 +501,7 @@ int fs_delete(const char *path) {
 // **The mechanism, because it is not obvious and it panicked a
 // desktop.** Every backend implements this the same way: free one
 // shared staging buffer, allocate a new one the size of the file, then
-// do a BLOCKING read into it (`g_read_buf` in tfs3.c and TFS2). The
+// do a BLOCKING read into it (`g_read_buf` in tfs3.c). The
 // kernel context is a scheduler participant, so the WM can be preempted
 // in the middle of that read; a ring-3 process then makes a syscall
 // that also reads a file, which frees the buffer the suspended read is

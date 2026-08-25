@@ -113,20 +113,14 @@ def image_format(disk, base_lba=0):
     Kept as a lookup returning a NAME rather than collapsed to a
     constant: FAT32 is the next backend (docs/roadmap.md) and will need
     a second row here and a `fat_writer.py` beside the others, exactly
-    as TFS3 did. A TFS2 image is named specifically, because "neither
-    magic" would otherwise report a readable disk as unrecognised.
+    as TFS3 did.
     """
     at = base_lba * 512
     with open(disk, "rb") as f:
-        f.seek(at)
-        lba0 = f.read(5)
-        f.seek(at + 8 * 4096)
+        f.seek(at + 8 * 4096)   # block 8 -- TFS3's superblock
         blk8 = f.read(5)
     if blk8[:4] == b"TFS3":
         return "tfs3"
-    if lba0[:4] == b"TFS2" and lba0[4:5] == b"\x03":
-        sys.exit(f"check_layout: {disk} is TFS2, which this build no longer "
-                 f"supports -- `make clean-disk && make iso` to rebuild it")
     sys.exit(f"check_layout: {disk} carries no filesystem magic")
 
 
@@ -148,18 +142,13 @@ def dirs_on_image(disk, writer_dir):
             sys.exit(f"check_layout: couldn't list {cur} on {disk}:\n{r.stderr.strip()}")
         for line in r.stdout.splitlines():
             parts = line.split()
-            if fmt == "tfs2":
-                if len(parts) >= 2 and parts[0] == "DIR":
-                    found.add(parts[1])
-                    queue.append(parts[1])
-            else:
-                if len(parts) >= 4 and parts[0] == "d":
-                    name = parts[3]
-                    if name in (".", ".."):
-                        continue
-                    full = (cur.rstrip("/") + "/" + name) if cur != "/" else "/" + name
-                    found.add(full)
-                    queue.append(full)
+            if len(parts) >= 4 and parts[0] == "d":
+                name = parts[3]
+                if name in (".", ".."):
+                    continue
+                full = (cur.rstrip("/") + "/" + name) if cur != "/" else "/" + name
+                found.add(full)
+                queue.append(full)
     return found
 
 
@@ -190,16 +179,10 @@ def orphans_on_image(disk, writer_dir, seed_root):
             continue  # not on the image at all -- the directory check owns that
         for line in r.stdout.splitlines():
             parts = line.split()
-            if fmt == "tfs2":
-                if len(parts) >= 2 and parts[0] == "FILE":
-                    name = parts[1].rsplit("/", 1)[-1]
-                else:
-                    continue
+            if len(parts) >= 4 and parts[0] == "-":
+                name = parts[3]
             else:
-                if len(parts) >= 4 and parts[0] == "-":
-                    name = parts[3]
-                else:
-                    continue
+                continue
             if name not in expected:
                 found.append((f"/{sub}/{name}", os.path.relpath(seed_dir, REPO)))
     return found

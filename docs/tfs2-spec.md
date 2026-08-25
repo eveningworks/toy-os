@@ -1,16 +1,20 @@
 # TFS2 on-disk format (v3 -- block-addressed)
 
-> **TFS2 IS NO LONGER IMPLEMENTED.** The kernel backend (`kernel/fs/tfs.c`)
-> and the host tool (`tools/tfs2_writer.py`) were removed; TFS3 is the only
-> filesystem, and FAT32 is the next one. This page is kept because a
-> byte-level description of a **frozen** format cannot go stale, several
-> `docs/decisions/` entries reason from it, and it is the only thing that
-> would let somebody recover data from an old TFS2 disk.
+> **TFS2 IS NO LONGER IMPLEMENTED, AND NOTHING GUARDS AGAINST IT.** The
+> kernel backend (`kernel/fs/tfs.c`), the host tool
+> (`tools/tfs2_writer.py`) and the recognise-and-refuse check that briefly
+> replaced them are all gone; TFS3 is the only filesystem and FAT32 is the
+> next one.
 >
-> To actually read such a disk, check out the commit before the removal
-> and use `tools/tfs2_writer.py` from there. A running kernel will
-> **refuse** a TFS2 disk rather than reformatting it (`disk_is_tfs2()` in
-> `kernel/fs/vfs.c`), so booting one is safe.
+> **A TFS2 disk booted now is treated as blank and REFORMATTED.** That is
+> a deliberate choice made on the basis that no such disks exist — see
+> `docs/decisions.md`. If you have one, do not boot it; read it with
+> `tools/tfs2_writer.py` from a commit before the removal.
+>
+> This page is kept because a byte-level description of a **frozen**
+> format cannot go stale, and several `docs/decisions/` entries reason
+> from it — TFS3's 32 KiB front reservation exists *because* TFS2's
+> superblock collided with the MBR.
 
 **Status: the LEGACY of toy-os's two filesystems.** Since Milestone 15
 (2026-08-14), TFS3 (`docs/tfs3-spec.md`) is the default for
