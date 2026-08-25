@@ -7,6 +7,12 @@
 </p>
 
 <p align="center">
+  <em>Built with Claude Code. A human makes the design calls; Claude does the
+  research, the implementation and the testing. Every change is built, tested
+  in QEMU and reviewed before it lands.</em>
+</p>
+
+<p align="center">
   <a href="https://github.com/eveningworks/toy-os/actions/workflows/build.yml">
     <img alt="release build" src="https://github.com/eveningworks/toy-os/actions/workflows/build.yml/badge.svg">
   </a>
@@ -26,6 +32,7 @@
 ## Contents
 
 - [What this is](#what-this-is)
+- [How this was built](#how-this-was-built)
 - [Project status](#project-status)
 - [Quick start](#quick-start)
 - [Highlights](#highlights)
@@ -94,6 +101,16 @@ QEMU, and it does not stop at "hello world from the kernel":
 
 No cross-compiler is needed: host and target are both x86-64, so the
 system GCC works with `-ffreestanding` and kernel-appropriate flags.
+
+## How this was built
+
+toy-os is written with [Claude Code](https://claude.com/claude-code),
+Anthropic's agentic coding tool. A human makes the design calls; Claude does
+the research, the implementation and the testing.
+
+The conventions it works under are in [CLAUDE.md](CLAUDE.md), the reasoning
+behind the design is in [docs/decisions.md](docs/decisions.md), and
+`tools/preflight.sh` is the gate every change passes before it lands.
 
 ## Project status
 
