@@ -1917,6 +1917,26 @@ window without going through it will find its layout polls timing out.
   so `kernel/drivers/partition_test.c` round-trips a real GPT through
   the writer and the parser inside a running kernel.
 
+- **`check_licenses.py`** -- every directory under `userland/ports/` and
+  every font in `data/fonts/` must carry a license file **and** be named
+  in `LICENSE`.
+
+  **The inventory had drifted twice before this existed.**
+  `userland/ports/doom/` is GPL-2-or-later source vendored into an MIT
+  repository and `LICENSE` did not mention it at all; the font section
+  described "two complete third-party font files" when there were five,
+  with `vera-mono.ttf` and both bold faces unlisted and Vera a third
+  license family. Neither was a violation on its own — every per-file
+  notice was present, which is what the licenses actually require —
+  but a reader of `LICENSE` could not learn that GPL code was in the
+  tree.
+
+  **What it cannot check, and says so in the file:** whether the license
+  NAMED is the license the code is really under. Nothing static can read
+  a directory and know it is GPL-2-or-later rather than GPL-3. That is a
+  human reading the vendored license file, which is why the entries in
+  `LICENSE` quote the version language rather than paraphrasing it.
+
 - **`ondemand_sweep.py`** -- runs the ~22 test tools that **neither**
   `preflight.sh` nor `gui_regress.py` covers, and reports which have
   rotted.

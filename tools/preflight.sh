@@ -165,6 +165,9 @@ python3 tools/check_widget_ops.py || fail "widget ops check"
 step "check_tool_commands.py (a tool driving a command that no longer exists)"
 python3 tools/check_tool_commands.py || fail "tool command check"
 
+step "check_licenses.py (a vendored port or font missing from LICENSE)"
+python3 tools/check_licenses.py || fail "license inventory check"
+
 # The baked font's header is GENERATED, and regenerating it needs a font
 # most checkouts do not have installed -- so a hand-edit there survives
 # until somebody who DOES have it regenerates and silently reverts it.

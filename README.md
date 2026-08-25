@@ -642,9 +642,22 @@ friends on the filesystem — the ISO alone boots into a near-empty one.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). The baked JetBrains Mono glyph data in
-`kernel/drivers/font_ttf.c` is separately covered by the SIL Open Font
-License 1.1 ([tools/OFL.txt](tools/OFL.txt)); the two runtime-loadable
-fonts in `data/fonts/` carry their own licenses beside them; and the
-bundled `pci.ids` database in `data/` has its own terms — see LICENSE's
-"Third-party font" and "Third-party data" sections.
+MIT — see [LICENSE](LICENSE), which carries the full inventory of
+third-party material. In short:
+
+- **`userland/ports/doom/` is GPL-2-or-later** (doomgeneric). It builds
+  into one binary that nothing else links, so it is an aggregation and
+  the rest of the repository stays MIT. The Doom IWAD is **not** in this
+  repository — `tools/fetch_wad.py` obtains one, under id Software's own
+  terms.
+- `userland/ports/cjson/` is MIT, under its own copyright.
+- The five runtime-loadable fonts in `data/fonts/` are under the
+  Bitstream Vera and SIL Open Font licenses, with each notice shipped
+  beside the font.
+- The baked JetBrains Mono glyph data in `kernel/drivers/font_ttf.c` is
+  under the SIL Open Font License 1.1 ([tools/OFL.txt](tools/OFL.txt)).
+- The bundled `pci.ids` database in `data/` has its own terms.
+
+`tools/check_licenses.py` fails the build if a vendored port or a
+shipped font is missing from that inventory — the font list had already
+drifted from two to five before it existed.

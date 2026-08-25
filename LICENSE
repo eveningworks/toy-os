@@ -31,23 +31,64 @@ The full OFL text is included at tools/OFL.txt and must accompany any
 redistribution of that font data (or substantial rendered derivatives
 of it), per the OFL's own terms.
 
-data/fonts/ contains two complete third-party font files, shipped
+data/fonts/ contains five complete third-party font files, shipped
 verbatim onto the disk image as /usr/share/fonts and loaded at runtime
-(see kernel/drivers/font_face.c). Neither is covered by the MIT License
+(see kernel/drivers/font_face.c). None is covered by the MIT License
 above:
 
-  dejavu-sans-mono.ttf  DejaVu Sans Mono, under the Bitstream Vera
-                        Fonts Copyright and the Arev Fonts Copyright.
-                        Full text: data/fonts/LICENSE-DejaVu.txt.
+  dejavu-sans-mono.ttf       DejaVu Sans Mono, under the Bitstream
+  dejavu-sans-mono-bold.ttf  Vera Fonts Copyright and the Arev Fonts
+                             Copyright. Full text:
+                             data/fonts/LICENSE-DejaVu.txt.
 
-  liberation-sans.ttf   Liberation Sans, under the SIL Open Font
-                        License, Version 1.1. Full text:
-                        data/fonts/LICENSE-Liberation.txt.
+  liberation-sans.ttf        Liberation Sans, under the SIL Open Font
+  liberation-sans-bold.ttf   License, Version 1.1. Full text:
+                             data/fonts/LICENSE-Liberation.txt.
 
-Both license files are copied onto the disk image alongside the fonts
-themselves, because both licenses require the notice to travel with the
-font. The MIT License above governs the rest of this repository (all
-original toy-os source code).
+  vera-mono.ttf              Bitstream Vera Sans Mono, under the
+                             Bitstream Vera Fonts Copyright. Full
+                             text: data/fonts/LICENSE-Vera.txt.
+
+All three license files are copied onto the disk image alongside the
+fonts themselves, because each license requires the notice to travel
+with the font.
+
+---
+
+Third-party code
+
+This repository vendors two third-party programs. Neither is covered by
+the MIT License above, and each keeps its own license file in its own
+directory.
+
+  userland/ports/doom/    doomgeneric, a portable Doom source port
+                          derived from id Software's Doom, under the
+                          GNU General Public License, version 2 OR (at
+                          your option) any later version. Full text:
+                          userland/ports/doom/LICENSE.
+
+        WHAT THIS MEANS IN PRACTICE. The GPL is a license on
+        DISTRIBUTION, and this directory is an aggregation: it builds
+        into one binary (/bin/doom) that nothing else in the system
+        links against, which the build enforces through
+        EXTRA_OBJS_doom. The MIT-licensed toy-os code that binary
+        links (tolibc, the Toykit) is GPL-compatible, so the resulting
+        /bin/doom is distributable under the GPL; the rest of this
+        repository is unaffected and remains MIT. Anyone
+        redistributing a built /bin/doom must offer the corresponding
+        source for it, which this repository is.
+
+        The Doom IWAD is NOT part of this repository and is not
+        redistributed by it -- tools/fetch_wad.py obtains one, and the
+        WAD carries id Software's own terms, which are not an open
+        source license.
+
+  userland/ports/cjson/   cJSON, Copyright (c) 2009-2017 Dave Gamble
+                          and cJSON contributors, under the MIT
+                          License. Full text:
+                          userland/ports/cjson/LICENSE. Its copyright
+                          notice is separate from toy-os's above and
+                          must be preserved.
 
 ---
 
@@ -95,3 +136,16 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+---
+
+Everything else
+
+The MIT License at the top of this file governs the rest of this
+repository -- all original toy-os source code, documentation and
+tooling.
+
+tools/check_licenses.py checks that this inventory stays true: every
+vendored port and every shipped font must carry a license file and be
+named above. A list kept accurate by somebody remembering is the shape
+of every maintenance burden this project has deleted.

@@ -1042,7 +1042,7 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   lock**; the gate: clean build +
   iso + `check_deps.py` + `check_layout.py` + `check_dispatch.py` +
   `boot_smoke_test.py` + `ktest_run.py` + `usertest_run.py`),
-  `check_docs.py`, `check_tool_commands.py` (**every guest command a
+  `check_docs.py`, `check_licenses.py` (**every vendored port and shipped font is named in `LICENSE`** -- `userland/ports/doom/` is GPL-2-OR-LATER inside an MIT repo and was not mentioned there at all, and the font inventory said two when there were five), `check_tool_commands.py` (**every guest command a
   tool drives still EXISTS** -- it found `kvm_soak.py` driving `delete`,
   which is `rm` now, so its cleanup had been a no-op and it had been
   littering `disk.img`. It cannot see a command whose OUTPUT changed,
