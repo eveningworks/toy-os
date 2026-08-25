@@ -116,8 +116,37 @@ def module_dir():
     return None
 
 
+# Every child here runs with a TIMEOUT and with stdin CLOSED, and both
+# halves are load-bearing rather than defensive habit.
+#
+# `capture_output=True` sends a child's prompt into a pipe nobody reads,
+# while stdin stays connected to the terminal -- so a tool that decides
+# to ask a question blocks forever with its question invisible. What the
+# operator sees is `make iso` stopping dead after the last echoed
+# command, with no output, no error and no clue which of the dozen
+# children is responsible. Closing stdin turns that into an immediate
+# EOF and a real error message; the timeout catches everything else,
+# including mtools looping on a damaged FAT chain.
+#
+# The budget is generous on purpose -- copying GRUB's modules into a FAT
+# image on a slow disk is seconds, not minutes -- so hitting it means
+# something is genuinely wrong rather than merely slow.
+RUN_TIMEOUT = 180
+
+
 def _run(cmd, **kw):
-    r = subprocess.run(cmd, capture_output=True, text=True, **kw)
+    kw.setdefault("timeout", RUN_TIMEOUT)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL, **kw)
+    except subprocess.TimeoutExpired:
+        sys.exit(f"install_grub: {os.path.basename(cmd[0])} did not finish in "
+                 f"{kw['timeout']}s and was killed.\n"
+                 f"  command: {' '.join(cmd)}\n"
+                 "  An mtools command that hangs here usually means the FAT32 "
+                 "/boot partition is damaged -- `make clean-disk && make iso` "
+                 "rebuilds the image. Please report it: nothing in a normal "
+                 "build should take this long.")
     if r.returncode != 0:
         sys.exit(f"install_grub: {cmd[0]} failed: {r.stderr.strip() or r.stdout.strip()}")
     return r.stdout
@@ -242,6 +271,7 @@ def mkdirs(disk, esp, dirs):
         # An existing directory is not an error here -- this tool runs on
         # every build and only the first one creates anything.
         subprocess.run([mmd, "-i", mtools_at(disk, esp), d],
+                       stdin=subprocess.DEVNULL, timeout=RUN_TIMEOUT,
                        capture_output=True, text=True)
 
 
@@ -249,8 +279,12 @@ def mtype(disk, esp, path):
     mtype_bin = _tool("mtype")
     if not mtype_bin:
         return None   # no stamp readable -- the modules get re-copied, which is safe
-    r = subprocess.run([mtype_bin, "-i", mtools_at(disk, esp), path],
-                       capture_output=True, text=True)
+    try:
+        r = subprocess.run([mtype_bin, "-i", mtools_at(disk, esp), path],
+                           capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL, timeout=RUN_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return None   # no stamp readable; the modules get re-copied, which is safe
     return r.stdout if r.returncode == 0 else None
 
 
