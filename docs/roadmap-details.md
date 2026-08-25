@@ -238,6 +238,26 @@ lives -- `tools/install_grub.py`), and `partition_is_firmware()` keeps
 it out of the scan entirely, so a future FAT32 backend will never be
 offered it. What is left is genuinely ambiguous cases.
 
+**The root filesystem is a PARTITION, or it is RAM** -- designed in
+`docs/rootfs-design.md`, not built. Three of the four roadmap items
+above are its stages, and the order between them is load-bearing: a
+`ramfs` backend has to exist before a flat volume can be refused, or
+the refusal's failure path is a machine with no filesystem at all.
+
+What the design settles, so it is not re-derived: "RAM-only" today is a
+label on nothing (a diskless boot mounts no filesystem and every `fs_*`
+call fails); ramfs is a real `fs_ops` backend over the kernel heap
+rather than TFS3 on a RAM block device, because a journal and a
+superblock buy nothing against memory that dies with the power; file
+data is CHUNKED because `heap_os_alloc()` asks
+`pmm_alloc_contiguous()`, so one buffer per file fails on a fragmented
+machine while `meminfo` still shows memory free; and it takes a byte
+budget (half of free RAM, tmpfs's own default) because this kernel has
+no OOM killer and the ramfs would compete for frames with the allocator
+everything else depends on. The doc also enumerates exactly what
+refusing a flat volume breaks -- six things, including the live image,
+which gains a partition table rather than an exemption.
+
 A TFS3 test reaching double- and triple-indirect addressing -- TFS3 has
 the same 12 direct + 3 indirect-level inode as TFS2, but the deepest
 thing any current test touches is SINGLE-indirect (`fs_test.c`'s

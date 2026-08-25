@@ -1399,6 +1399,14 @@ detail there, and keep the pointer here to a line. What each file is:
   point is that those are one problem, and that building signal delivery
   alone yields a working `kill -TERM` and a `Ctrl-C` that still does
   nothing.
+- **`docs/rootfs-design.md`** -- what the root filesystem is allowed to
+  be: a PARTITION on a drive, or RAM. Designed, not built. **Read it
+  before touching `fs_init()`'s mount policy or adding a backend**, and
+  note the two findings that change how the work is scoped: today's
+  "RAM-only" is a label on NOTHING (a diskless boot mounts no filesystem
+  and every `fs_*` call fails), and a `ramfs` backend has to land BEFORE
+  a flat volume can be refused, or the refusal's failure path is a
+  machine with no filesystem at all.
 - **`docs/commands.md`** -- the INDEX over `docs/commands/`, which holds
   ONE PAGE PER COMMAND (every `/bin` program and every shell builtin).
   The index keeps only what is true of the shell rather than of any one

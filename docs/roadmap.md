@@ -25,6 +25,7 @@ buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
 - [ ] `service start|stop|status|list` as a shell command -- `rm`ing a descriptor is the only lever today  *(Init & service supervision)*
+- [ ] A `ramfs` backend -- a real in-memory filesystem, the root wherever there is no usable drive  *(Storage hardening)*
 - [ ] Type-ahead in `uui_table` -- `uui_listbox` gained it 2026-08-24 and a fileview is a table, so the File Manager cannot  *(A layout engine for the GUI)*
 - [ ] A FOCUS INDICATOR for every widget that takes keys -- six accept focus and draw nothing, so Tab moves an invisible cursor  *(A layout engine for the GUI)*
 - [ ] The ring-3 WM busy-waits instead of sleeping -- `SYS_SLEEP` and a per-window timer both exist now  *(Known limitations and papercuts (unscheduled))*
@@ -330,6 +331,10 @@ No dependency on the phases above; ordered among themselves.
 - [ ] LBA48 addressing
 - [ ] A TFS3 test reaching double- and triple-indirect addressing (TFS2's selftest covered this and went with it)
 - [ ] `root=` on the boot line to name the partition to mount, instead of taking the first one a backend claims
+- [ ] **NEXT** A `ramfs` backend -- a real in-memory filesystem, the root wherever there is no usable drive
+- [ ] Report nothing mounted as NOTHING MOUNTED, instead of as an active backend that fails every call
+- [ ] Refuse a whole-disk volume: a drive's root must be a partition, and a flat image says so and boots to ramfs
+- [ ] The live CD unpacks into ramfs rather than mounting a RAM block device, retiring `block_ram.c`
 - [ ] A block/buffer cache with write-back
 - [ ] Directory index
 - [x] ~~`fs_rename()`~~ done
