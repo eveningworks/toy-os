@@ -853,3 +853,35 @@ the loop produced two wrong answers; four `sys_eprint()` lines into the
 KERNEL LOG (fd 2 -- which reaches `dmesg` even when fd 1 is a
 framebuffer nobody can see) answered it in one boot. When a ring-3
 program's stdout is invisible, fd 2 is the way out.
+
+## The log was right and the filesystem was empty (2026-08-25)
+
+Symptom: `rescue ls /` printed nothing, `rescue ls /bin` said "not a
+directory", and `rescue df` cheerfully reported **35 MB used** on a
+9 GB persistent TFS3 volume. Every boot line was correct -- the
+partition scan found partition 3, TFS3 mounted, `/boot` mounted.
+
+The discriminating observation is the pair: **usage numbers came from
+the cached superblock, and path lookups came from the volume.** Anything
+that makes those two disagree has repointed the volume without
+disturbing the cache. That located it in one step -- mounting `/boot`
+probes every backend against the ESP, and TFS3's `probe()` writes the
+same `g_vol` its mount uses.
+
+**Generalise: when one half of a subsystem reports healthy and the other
+half fails, ask which half is reading CACHED state.** The healthy half
+is usually the one that stopped looking.
+
+## Two failures in a row, and the second was the harness again (2026-08-25)
+
+`fs_switch_test` failed, then failed again after a rebuild. The second
+run's output had `no response within 30.0s` and a `BlockingIOError` on
+the serial socket. Running `fsformat tfs3 confirm` by hand worked
+perfectly, first try.
+
+What was actually wrong: an `ondemand_sweep.py` I had started ten
+minutes earlier was still running and owned the shared VM slot. This
+repo's own rule -- suspect your test before the code, but verify which
+it is -- would have got there faster than two rebuild-and-rerun cycles.
+**Before diagnosing a VM-driven failure, run `ps -eo args | grep
+qemu-system` and account for every guest.**

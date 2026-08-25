@@ -200,6 +200,19 @@ test's DATA can express the bug at all before suspecting the harness.
 
 ## Filesystem is one active backend, not mount points
 
+**SUPERSEDED on 2026-08-25 -- see "Why the VFS grew a mount table, and
+why it stayed small" below.** `/boot` is a FAT32 partition holding the
+kernel image the machine booted from, and no amount of
+single-backend dispatch makes it readable; `kernel/fs/mount.c` holds a
+prefix-keyed mount table now. What this entry got RIGHT is worth
+keeping, because it is why the change was cheap: it predicted that
+`struct fs_ops` would not need to change shape, only to be looked up
+differently, and not one operation's signature moved. What it did not
+predict is that a backend's VOLUME would have to stop being
+`blk_active()`.
+
+The original entry follows.
+
 `kernel/fs/vfs.c` dispatches every `fs_*` call to a single active
 `struct fs_ops` backend. **Updated at Milestone 15:** there are two
 backends now (`tfs3_ops` and `tfs_ops`), and selection is a

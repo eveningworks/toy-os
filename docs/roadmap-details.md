@@ -1297,6 +1297,76 @@ normalization doing exactly the right thing. `fs_list()` on a directory
 containing a mount point works because the mount point is a REAL
 directory on the parent filesystem -- rule 3 requires it.
 
+### FAT32
+
+**BUILT** on 2026-08-25 -- `kernel/fs/fat32.c`, read-write, with VFAT
+long names, mounted at `/boot`. What follows is what it deliberately is
+NOT, because every line of it is a decision rather than an oversight and
+the next session should not have to re-derive them.
+
+**Not FAT12 or FAT16.** Those are not "FAT32 with smaller numbers": the
+root directory is a fixed-size region rather than a cluster chain, and
+the FAT entries are 12 or 16 bits with a nibble-packed edge case. That
+is a second set of paths through every function in the file, for a
+format nothing on this machine uses. A volume that is not FAT32 is
+REFUSED by name at `probe()` -- a parser rejects rather than guesses.
+
+**Not 4096-byte sectors.** The block layer speaks 512, and reading a
+4K-sector volume with a 512 stride produces plausible garbage rather
+than an error, which is the worst available failure.
+
+**Not Unicode.** Long names are read as UCS-2 and anything outside ASCII
+becomes `?`; creating such a name is REFUSED, because it could never be
+looked up again. This kernel has no Unicode anywhere else either, and a
+half-done encoding is worse than a stated limit.
+
+**Not journalled, because FAT is not.** An interrupted write leaves
+whatever the last completed sector left. There is no analogue of TFS3's
+credit-counted transactions to add -- the format has nowhere to put
+one. That is a real reason to prefer TFS3 for anything that matters,
+and the reason `/boot` is mounted read-only by default.
+
+**`check()` is report-only.** It finds cross-linked clusters and
+pointers outside the volume, and repairs nothing. A real FAT repair
+means rebuilding a lost-cluster list and reconciling the FAT copies,
+which is `fsck.vfat`'s whole job; a half-repair on the partition holding
+the bootloader is worse than a clear report.
+
+**The `ino` is the first cluster**, so every empty file shares 0 --
+which is exactly why `fat32_ops` does not claim `FS_CAP_INODES`. FAT has
+no inode number to report.
+
+**A cluster count below 65525 is accepted, and that is out of spec.**
+The threshold exists so a driver implementing FAT12/16/32 can tell them
+apart; this one implements only FAT32 and discriminates on the BPB's
+FAT32-only fields (`fat_size_16 == 0`, `root_entry_count == 0`, a
+nonzero `fat_size_32`). It is what lets `kernel/fs/fat32_test.c` use a
+512 KiB image rather than a 34 MiB one -- which matters because the test
+volume is a `kmalloc()` and `pmm_alloc_contiguous()` fails on a
+fragmented machine long before it fails on a small one. `format()` still
+picks a cluster size clearing the floor wherever the volume allows, so
+nothing toy-os WRITES is out of spec.
+
+**The steppable read/write pair completes in `begin()`** rather than
+genuinely stepping, as ramfs's does. Doing it properly means a second
+write path through the chain walker, for a mount that is read-only by
+default and holds a bootloader.
+
+**Updating the machine's own kernel is NOT done.** Writing
+`/boot/boot/kernel.bin` from inside toy-os works and is verified, but
+nothing reinstalls GRUB's `core.img`, nothing verifies the image is a
+kernel before overwriting the one that boots the machine, and nothing
+keeps a known-good copy to fall back to. Those three, not the write, are
+what "toy-os can update itself" would mean.
+
+**The path is `/boot/boot/kernel.bin`, not `/boot/kernel.bin.`** The ESP
+holds a `boot/` directory because `tools/install_grub.py` keeps the
+ISO's paths exactly, so ONE `grub.cfg` serves both media. Mounting the
+volume shows it as it is -- the same way a Linux ESP at `/boot/efi`
+shows `/boot/efi/EFI/...`. Flattening it (kernel at the volume root,
+prefix `(hd0,gpt2)/grub`) would read better and would cost that
+shared-config property; it is a real fork, not an oversight.
+
 ### Observability
 
 Every debugging tool this project has is either a print statement or an
@@ -1905,7 +1975,8 @@ a sleeping lock. Only then consider anything pluggable.
 ### Backlog
 
 VFS: multiple filesystem backends mounted at once, not just one chosen at
-boot. The VFS layer supports exactly one active backend today -- a real
+boot. **DONE 2026-08-25** -- see "Real mount points" above; the original
+backlog note follows. The VFS layer supports exactly one active backend today -- a real
 mount-point scheme (`/` on one backend, `/data` on another, say) is the
 natural next step if a second filesystem ever actually shows up and needs
 to coexist with the first, rather than replace it; deferred until then
@@ -3266,7 +3337,7 @@ refer to them by number.
 
 - [ ] **M16 block checksums are NOT simply a block layer, and that is the decision to make.** A block-level checksum layer has to put the checksums somewhere -- either shrinking the device's apparent size or carving a separate metadata area -- and that is a filesystem-shaped choice, not a transparent wrapper. It is why ZFS checksums inside the filesystem (it wants them beside the block pointers, which also gets it self-healing) while dm-integrity does it at block level and pays for a metadata region. Decide WHERE THE CHECKSUM METADATA LIVES before writing either half; the layering follows from that answer rather than the reverse.
 
-- [ ] **`block.h` has ONE ACTIVE DEVICE, mirroring the VFS's one active backend** -- the same "one active X" call made twice, in both cases when only one existed. The tension with `partition.c` is RESOLVED and not the way this predicted: a partition is now a `block_device` that REPLACES its parent (`block_part.c`), so partitions are mountable one at a time with the singular active device intact. It still has to give for Real mount points, which wants two filesystems readable at once. Not urgent.
+- [ ] **`block.h` has ONE ACTIVE DEVICE, mirroring the VFS's one active backend** -- the same "one active X" call made twice, in both cases when only one existed. The tension with `partition.c` is RESOLVED and not the way this predicted: a partition is now a `block_device` that REPLACES its parent (`block_part.c`), so partitions are mountable one at a time with the singular active device intact. **The VFS half GAVE on 2026-08-25** and the block half only partly: `blk_part_create()` makes a device without making it active and a mount holds its own (read through `blkdev_*`), so two filesystems ARE readable at once -- but `blk_active()` still exists, and it is what `parttable`, `mkpart` and `fsformat` mean by "the disk". That last part is the ambiguity left to resolve.
 
 - [ ] **Interfaces that exist with exactly ONE implementation are the same problem seen from the other side, and this repo already flags them as unvalidated.** `struct win_transport` is called out in `docs/decisions.md` for precisely this; `win_server_ops` gets its second implementation in M41 stage 4. These matter more than the missing-interface cases above, because a wrong guess is already baked in rather than still open -- read the decisions entry before designing stage 4 around either.
 

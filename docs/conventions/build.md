@@ -129,6 +129,36 @@ this the obvious way), not from how much history it accumulated.
   for a lump that does not exist. That file is compiled into both rings,
   and its own tests asserted the old behaviour -- see
   `docs/decisions.md`.
+- **WHEN IMPLEMENTING A SPEC, DISAGREE WITH AN INDEPENDENT
+  IMPLEMENTATION ON PURPOSE.** A self-test cannot catch an EXPECTATION
+  being wrong, because the same person wrote the code and the
+  assertions -- a shared misreading of the spec passes both halves
+  happily and looks like coverage. So anything here that implements a
+  documented format or grammar is also run against something that
+  shares no code with it:
+
+  | tool | ours | the oracle |
+  |---|---|---|
+  | `tools/regex_hostcheck.py` | `tolibc`'s `<regex.h>` | GLIBC |
+  | `tools/uimg_hostcheck.py` | the JPEG decoder | libjpeg |
+  | `tools/fat32_test.py` | `kernel/fs/fat32.c` | `mtools` + `fsck.fat` |
+
+  **Every difference is then a bug or a documented decision, with no
+  third category** -- `regex_hostcheck.py`'s `KNOWN_DIVERGENCES` is that
+  rule made mechanical, and an unexplained difference fails.
+
+  **The oracle is also where a strong assertion comes from.** "The file
+  reads back" is satisfied by a driver whose on-disk format is privately
+  wrong, since it is reading its own bytes; "a 185 KiB BINARY extracted
+  by mtools is byte-identical to the build artifact" is not. Reach for
+  the check the other implementation makes possible, not the one your
+  own code makes convenient.
+
+  **The cost, stated:** the oracle is a HOST tool, so these cannot be in
+  the gate -- `preflight.sh` must not start requiring `mtools` or
+  `dosfstools`, the same rule that keeps Docker out of it. They SKIP
+  cleanly when the tool is absent, and a skip is counted apart from a
+  pass.
 - **In ring 3 the toolkit is reachable under the C names -- don't
   hand-roll a `my_strlen` or a digit loop there either.**
   `#include <string.h>` for `strlen`/`strcmp`/`strlcpy`/`mem*`/the

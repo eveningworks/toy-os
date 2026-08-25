@@ -1689,3 +1689,88 @@ the user can see), and the settings app keeps `choice_raw` beside
   pointing at a number somebody else must keep true applies to build
   files exactly as much as to prose; `LIVE_IMG_MB` is derived from the
   seed tree now.
+
+## A contract honoured by accident breaks the day it stops being (2026-08-25, FAT32 + mount points)
+
+`fs_ops.probe()` had said "detection only, no side effects beyond the
+read" since it was written. Both backends violated it -- TFS3's
+`set_flat_volume()` and FAT32's `parse_bpb()` record the device they are
+handed, which IS the mounted volume -- and nothing had ever noticed,
+because probing only ever happened BEFORE anything was mounted.
+
+Mount points made it happen at a second time. Mounting `/boot` probes
+every backend against the ESP, so a TFS3 serving `/` was repointed at
+partition 2: `df` still reported the right numbers (they come from the
+cached superblock) while every path lookup failed. **The root went
+silently empty**, and the first symptom was `rescue ls /` printing
+nothing on a machine whose `df` said 35 MB were in use.
+
+**The general rule: when you make something happen at a SECOND time,
+re-read what it promised.** A contract nothing enforces is being kept by
+the call pattern, and the call pattern is exactly what you are changing.
+The fix was two lines per backend (save and restore) plus a rule in the
+table (a backend at its mount limit is not probed at all) -- cheap once
+found, and invisible until it was.
+
+## Declare the limit you cannot enforce, or it fails silently (2026-08-25)
+
+Every filesystem backend here keeps its state in module-level statics,
+so a second mount of one backend re-points that state and leaves the
+FIRST mount reading the second's volume -- with no error anywhere.
+`fs_ops.max_mounts` exists to turn that into a refusal by name.
+
+Two things worth copying. **The field is not decoration even though
+every backend declares 1**: without it `mount 3 /mnt` on a second TFS3
+partition succeeds and quietly corrupts the root's view. And **say what
+raising it would actually take**, because the obvious answer is wrong:
+per-instance state is necessary and not sufficient, since every op takes
+a PATH and no handle, so a backend cannot tell which of its mounts a
+call belongs to. The shape that fixes it is Linux's `super_block` --
+`init()` returning an opaque handle every op then takes -- and it buys
+nothing until a backend's state is per-instance. Writing that down is
+what stops the next session doing half of it.
+
+## The old entry predicted the change correctly and still missed a piece (2026-08-25)
+
+`docs/decisions/storage.md`'s "Filesystem is one active backend" entry
+said mount points would need no change to `struct fs_ops` -- "it doesn't
+need to change shape, just get looked up differently". That held
+exactly: not one operation's signature moved.
+
+What it did not predict is that a backend's VOLUME would have to stop
+being `blk_active()`. With two mounts there is no single active device a
+backend could correctly assume, and one that assumes anyway reads the
+wrong volume and reports no error. `probe`/`format`/`wipe`/`init` take a
+`struct block_device *` now -- Linux's `super_block->s_bdev`, arriving
+for Linux's reason.
+
+**When superseding an entry, keep what it got right and name what it
+missed.** Both halves are useful; deleting it would have thrown away a
+correct prediction, and leaving it unmarked would have left the next
+session believing a decision that no longer holds.
+
+## Copy the shape, not the size -- and say which parts you dropped (2026-08-25)
+
+Linux resolves a mount per PATH COMPONENT while walking, keeps a tree of
+`struct mount`, and carries per-process namespaces, bind mounts and
+automounts. toy-os resolves a whole path against a flat table of at most
+six entries, once, at the `fs_*` boundary.
+
+That is not laziness, and the reason is worth stating in the doc: paths
+reaching `fs_*` here are ALREADY normalized with no `.`/`..`
+(`api/fs.h`), which removes the entire reason Linux resolves per
+component. One of the five mount rules -- "`..` cannot escape a mount
+root" -- therefore costs no code at all, and the honest way to write
+that down is as a PROPERTY TO KEEP rather than a check that exists.
+
+## A registry row can make a destructive command reachable (2026-08-25)
+
+Adding `fat32_ops` to `g_backends` did more than let a probe find FAT32:
+`fsformat` resolves its argument through that same table, so `fsformat
+fat32 confirm` became a thing a person can type at the root partition.
+That is legitimate and it was not the point of the change.
+
+Same shape as ramfs being deliberately kept OUT of that table (a
+registry is a list of things every consumer will act on). **When you add
+a row, grep for every consumer of the registry**, not just the one you
+are adding it for.

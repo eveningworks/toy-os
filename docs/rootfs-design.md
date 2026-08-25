@@ -5,6 +5,16 @@ unpacking into ramfs -- is deliberately not done; see below. What
 follows is the design as it was written, with a "what actually shipped"
 section at the end recording where the build disagreed with it.
 
+**What has happened SINCE, and changes one assumption here:** a drive's
+root is still a partition, but it is no longer the only mount. The VFS
+has a prefix-keyed mount table (`kernel/fs/mount.c`) and a FAT32 backend
+(`kernel/fs/fat32.c`), so the ESP is mounted read-only at `/boot`
+alongside the TFS3 root. This document's "one root, chosen once" framing
+is still how the ROOT is picked -- `probe_and_mount_root()` is the same
+table of situations -- but "the mounted filesystem" is now "the root
+mount", and `fs_backend_name()`/`fs_is_persistent()` answer for it
+specifically. See `docs/conventions/storage.md`.
+
 **The one-sentence version:** toy-os should mount its root from a
 PARTITION and nowhere else on a drive, and where there is no usable
 drive it should fall back to a real in-memory filesystem instead of
@@ -297,10 +307,12 @@ Each stage has one check that a broken version cannot pass:
 - **An overlay** (read-only base + writable RAM layer). That is what a
   real live CD does, it is a genuine feature, and conflating it with
   this one is how both get done badly.
-- **A mount table.** `fs_ops.h`'s top comment already argues this:
-  exactly one backend is active at a time. ramfs does not change that,
-  and "ramfs on `/tmp` while TFS3 holds `/`" is the feature that
-  requires the table.
+- **A mount table.** `fs_ops.h`'s top comment argued this at the time:
+  exactly one backend is active, and ramfs does not change that.
+  *(SINCE BUILT, 2026-08-25 -- `kernel/fs/mount.c`. The feature named
+  here as the one requiring a table is exactly what arrived:
+  `mount -t ramfs none /mnt` while TFS3 holds `/`, and FAT32 holds
+  `/boot`.)*
 - **Persistence of any kind.** If it needs to survive the power going
   out, it belongs on the drive.
 

@@ -333,3 +333,44 @@ narrow and had exactly one real fork in it: *how* should it be armed
 second half is the one worth copying -- "what does OFF mean for the data
 that already exists" is a question a consent switch always has, and a
 design that has not answered it has a decorative switch.
+
+## FAT32 and mount points (2026-08-25) -- four forks, and the user took the biggest of each
+
+The request was one sentence ("add FAT32 support so /boot shows as
+/boot"), and research turned it into TWO roadmap milestones. The four
+questions asked were:
+
+1. **FAT scope** -- read-only / read+write / read-only-now-write-staged.
+2. **Mount mechanism** -- a small real mount table / a hardcoded `/boot`
+   slot / the full milestone.
+3. **Mount policy** -- automatic + a `mount` command / command only /
+   an `/etc/fstab`.
+4. **The block seam** -- device passed at mount / swap the active device
+   per call / give FAT alone a device pointer.
+
+The user chose **read+write**, **the full milestone**, the recommended
+automount, and the recommended seam.
+
+**What made these work, and is worth copying:**
+
+- **Every option came from the code, not from a template.** Question 4
+  only exists because `blk_active()` is singular and the research found
+  it; a generic "how thorough should this be?" would have surfaced none
+  of the real risk.
+- **Each option named its concrete cost in the repo's own terms.** "The
+  shape CLAUDE.md and `check_dispatch.py` exist to prevent" is a reason
+  the maintainer can weigh; "less clean" is not.
+- **The recommendation was FIRST and marked**, and the user took it
+  twice and overrode it twice -- which is the sign the options were real
+  rather than one answer plus decoration.
+- **The preamble said what Linux and Windows do BEFORE proposing**
+  (Linux's `fs/fat/` is generic with the ESP an ordinary mount; Windows'
+  ESP is a volume with no drive letter), then said which shape toy-os
+  should copy and which size it should not.
+
+**What the biggest-option answer then obliged**, and this is the part to
+plan for: choosing "the full milestone" means the honest report has to
+say which of the milestone's own listed items did NOT land, and why. One
+did not (a second mount of ONE backend), and saying so plainly -- with
+what it would take -- was more useful than quietly ticking eleven of
+twelve boxes.

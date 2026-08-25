@@ -255,11 +255,20 @@ independently verifiable and the kernel shell keeps working throughout.
 builtin in front of them holding the part ring 3 could not ask for.
 Three classes closed that gap and the builtins were deleted:
 
-- `QUERY_FSINFO` (scalar) -- the mounted backend's NAME and whether it
-  persists, beside the usage numbers. It is what `df` was a builtin
-  for, and it also restores the filesystem line
+- `QUERY_FSINFO` (**list** since Real mount points; it was a scalar) --
+  one record per MOUNT: the backend's NAME, where it is mounted, which
+  device it is on, whether it persists and whether it is read-only,
+  beside that mount's usage numbers. It is what `df` was a builtin for,
+  and it also restores the filesystem line
   `userland/gui/system/about.c` had been omitting with a comment
   saying ring 3 could not ask.
+
+  **Going from scalar to list cost its readers nothing**, which is the
+  part worth copying: record 0 is still the ROOT, so `about` and any
+  other caller that only ever asks for record 0 kept working
+  unchanged, and only `df` (which wanted every row) and `/bin/mount`
+  (which is new) had to iterate. A provider that had put the second
+  mount at index 0 would have broken every existing reader silently.
 - `QUERY_MEMMAP` (list) -- the firmware memory map, one record per
   region, over the `multiboot_mmap_foreach()` walk that already
   existed. The first LIST provider outside `QUERY_PROVIDERS` itself.

@@ -1592,3 +1592,123 @@ said "asserted with `stat`, a builtin" -- true when written, false once
 run. Same shape as the `Ctrl-L` comment in CLAUDE.md's shell
 conventions: **a comment stating a fact about the rest of the system
 outlives that fact silently.**
+
+## 2026-08-25 -- FAT32, and the oracle that shares no code with you
+
+**A SELF-TEST CANNOT CATCH AN EXPECTATION BEING WRONG**, because the
+same person wrote the writer and the reader. `kernel/fs/fat32_test.c`
+formats a RAM volume and drives the backend directly, which proves the
+driver agrees with ITSELF -- and a shared misreading of the on-disk
+format passes both halves happily.
+
+So the oracle is the HOST: `tools/fat32_test.py` has the guest write
+into the real ESP, then reads it back with **mtools** and audits the
+volume with **fsck.fat**. Neither shares a line with the driver. This is
+the same call `regex_hostcheck.py` (GLIBC) and `uimg_hostcheck.py`
+(libjpeg) already made; storage now has one too.
+
+**The three checks that discriminate**, each replacing one that a broken
+driver would pass:
+
+- "`ls /boot` lists something" passes on a driver that mangles every
+  long name -> read GRUB's own `grub.cfg` and look for text only a
+  correct chain walk produces.
+- "a file written reads back" passes on a driver whose format is
+  privately wrong, since it is reading its own bytes -> extract a
+  **185 KiB BINARY** with mtools and compare it byte for byte against
+  the build artifact.
+- "the volume still works" passes on one leaking clusters or
+  cross-linking chains, which nothing observable shows for a long time
+  -> `fsck.fat` has the last word.
+
+**A LONG NAME IS THE CHECK; A SHORT ONE CANNOT SEE THE BUG.** This
+driver shipped one build with its LFN set written forwards instead of
+in reverse, which every other FAT implementation reads backwards. Every
+short-named file worked perfectly. The KTEST asserts a long name
+specifically, and additionally that the name is NOT its `~1` alias --
+so a lookup that silently fell back to the 8.3 entry fails it.
+
+**AN ADDRESS-DERIVED PATTERN, NOT A CONSTANT FILL**, for the
+multi-cluster test: a constant cannot detect two file offsets mapping to
+one cluster, because both read back the constant and look perfect.
+`/tests/memtest` made the same call years earlier for the same reason.
+
+**A PERSISTENCE CHECK SHOULD DO THE SMALLEST THING THAT OBSERVES
+PERSISTENCE.** The reboot check originally unmounted `/boot` and
+remounted it read-write before reading -- two commands the check did not
+need, and it failed about one run in four while every host-side check on
+the same image passed. Reading off the auto-mounted read-only mount is
+one command and has been green three runs in three.
+
+## 2026-08-25 -- a whole sweep invalidated by running things beside it
+
+`ondemand_sweep.py` reported 12 of 20 tools failing. Every one of those
+failures was mine: I had `fat32_test`, `fs_switch_test`, `partition_test`
+and `ktest_run` going in parallel with it. The symptoms are exactly the
+ones CLAUDE.md names -- `BrokenPipeError`, `ConnectionResetError`,
+"could not start the VM", "connection refused" -- and they surface in
+whichever tool was mid-command, never in the one that caused them.
+
+Re-run alone on a fresh `make clean-disk && make iso`: **14 pass, 6
+fail**, and every one of the six then measured as pre-existing or a
+flake. **The sweep is single-job on purpose** (nearly every tool takes
+the shared VM slot or the physical console), so the only thing that can
+contend with it is another session -- which means yours.
+
+**Do not judge a suite you are running things beside.** Start it, then
+stop touching QEMU until it finishes.
+
+## 2026-08-25 -- "it predates me" measured five times, and the wrapper that matters
+
+Five sweep failures, all measured with `tools/predates.py`:
+
+| tool | verdict |
+|---|---|
+| `taskbar` | PRE-EXISTING -- HEAD fails identically |
+| `init` | PRE-EXISTING (already in `docs/bugs.md`) |
+| `virtio_gpu` | PRE-EXISTING |
+| `ansi` | passes alone on BOTH sides -- contention flake |
+| `virtio_input` | passes alone on BOTH sides -- contention flake |
+
+**The trap: run the tool the way its runner runs it.** The first attempt
+was `predates.py "python3 tools/taskbar_test.py"` and both sides failed
+with `Connection refused`, because that tool ATTACHES to a QMP session
+somebody else launched. The comparison measured nothing and looked
+authoritative. `predates.py "python3 tools/ondemand_sweep.py --only
+taskbar"` is the right wrapper -- the sweep starts the VM for the tools
+that need one, and stops it for the ones that launch their own.
+
+**And check your tree afterwards.** Five predates runs left six
+undropped `predates-*` stashes. The tree WAS intact (the tool restores
+in a `finally`), but confirm it -- `git status --short | wc -l` against
+the file count you expect -- before doing anything else, and clear the
+stashes only once the work is committed and only by matching their
+names.
+
+## 2026-08-25 -- a fixture that assumed the image had been booted
+
+`ls_test.py` staged `/tmp/lsbig` into `disk.img` from the host and
+failed with `no such directory: /tmp` -- against a perfectly healthy
+system. `/tmp` is created at BOOT by the kernel's layout pass and is
+never seeded by the build, so a freshly `make clean-disk`ed image that
+has not been booted yet does not have one.
+
+It had been latent for as long as the tool existed; nobody had run it on
+a never-booted image. **A host-side fixture must create the directories
+it needs, not inherit them from a boot that may not have happened.**
+Ignoring the mkdir's result is right rather than lazy here: on an image
+that HAS been booted the directory is already there, and either outcome
+leaves what the next line needs.
+
+## 2026-08-25 -- changing a command's output breaks tools that read it positionally
+
+`df` grew an `on` column (the mount point) and started printing one row
+per mount. That shifted every column index by one and made "the tfs3
+row" ambiguous -- and `live_boot_test.py` and `partition_test.py` both
+parse those columns by position.
+
+Both now pick the ROOT row **by its mount point** rather than by being
+the only row. `tools/check_tool_commands.py` cannot catch this class: it
+checks that a command a tool drives still EXISTS, not that its output
+still means what the tool thinks. That gap is `ondemand_sweep.py`'s job,
+and it is the third time this exact rot has bitten `df`'s readers.

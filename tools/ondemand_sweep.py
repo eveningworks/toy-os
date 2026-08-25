@@ -67,6 +67,11 @@ TOOLS = [
     ("partition",   "partition_test.py",       "mounting from an MBR/GPT partition", True,  None,                   False),
     ("fs_switch",   "fs_switch_test.py",       "format, remount, reboot persistence", True, None,                   False),
     ("tfs3_v1",     "tfs3_v1_test.py",         "the older TFS3 on-disk version",     True,  None,                   False),
+    # FAT32 and the mount table, cross-checked on the HOST with mtools
+    # and fsck.fat. It launches its own guest against a COPY of
+    # disk.img, so wants_vm is False; it SKIPS cleanly without mtools,
+    # which is a skip rather than a pass -- see run_one().
+    ("fat32",       "fat32_test.py",           "FAT32 and /boot, against mtools",    True,  None,                   False),
     ("live_boot",   "live_boot_test.py",       "the Live CD's RAM image",            True,
      ("live_iso", "no toy-os-live.iso -- run `make live-iso` first"),                        False),
     ("virtio_boot", "virtio_boot_test.py",     "TFS3 on virtio-blk, no IDE",         True,  None,                   False),

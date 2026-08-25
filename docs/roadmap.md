@@ -239,7 +239,7 @@ everything libc-shaped is waiting on it. Full plan and staging:
 
 - [ ] Inter-process IPC (message passing)
 - [ ] A real C library -- staged in `docs/libc-design.md`; stages 0-5 done, the proof (a real port) left
-- [x] ~~FAT16/FAT32 driver -- `/boot` readable from inside toy-os~~ done -- FAT32 only, read-write
+- [x] ~~FAT16/FAT32 driver -- `/boot` readable from inside toy-os~~ done -- FAT32 only, read-write; see the FAT32 section
 - [ ] `g_next_kernel_rsp` reentrancy fixed properly
 - [ ] `wintest` made non-modal
 - [ ] Kernel threads (a scheduler entity without an address space of its own)
@@ -364,6 +364,30 @@ No dependency on the phases above; ordered among themselves.
 - [x] ~~Path resolution that can't escape a mount via `..` at its root~~ done -- for free: paths are normalized before they arrive
 - [x] ~~A tmpfs/RAM-disk backend as the cheapest possible second mount to test against~~ done -- `mount -t ramfs none /mnt`
 - [ ] Raise `fs_ops.max_mounts` above 1 -- every backend keeps its state in module-level statics, and no op carries a handle
+- [ ] `fs_ops` ops take an opaque per-mount handle from `init()`, Linux's `super_block` -- the prerequisite for the two items above
+- [ ] `mount` cannot name a device on a disk that is not the boot disk -- the source is a partition number on `blk_whole_disk()`
+- [ ] Nothing remounts in place: changing a mount's flags is `umount` then `mount`, and there is no `mount -o remount`
+- [ ] `MOUNT_MAX` is 6 and `PART_SLOTS` is 8, both compile-time
+- [ ] A mount point deeper than one already mounted works, but nothing tests a three-level nest
+- [ ] `fs_read()`'s nested-read refusal is ONE flag for every mount, so two reads on different filesystems still refuse
+- [ ] `fs_check`/`fsck` only ever check the ROOT -- there is no way to fsck `/boot`
+- [ ] `mkpart` and `parttable` still mean `blk_active()`'s disk, which a second mount makes ambiguous
+
+### FAT32
+
+**Needs:** Real mount points, for anywhere to attach a second filesystem.
+
+- [x] ~~Read and write FAT32, with VFAT long names, mounted at `/boot`~~ done -- `kernel/fs/fat32.c`
+- [ ] FAT12 and FAT16 -- a different root-directory layout and FAT width, deliberately not built; a non-FAT32 volume is refused by name
+- [ ] Sector sizes other than 512 -- refused at `probe()` rather than read with the wrong stride
+- [ ] Long names outside ASCII: UCS-2 is read with `?` substitution and REFUSED on create, because this kernel has no Unicode anywhere
+- [ ] `fat32_check()` is report-only -- it finds cross-linked and out-of-range clusters and repairs nothing
+- [ ] Nothing recovers lost clusters after an interrupted write, which FAT has no journal to prevent
+- [ ] `fat32_stat()`'s `ino` is the first cluster, so every empty file shares 0 -- hence no `FS_CAP_INODES`
+- [ ] FAT timestamps are local wall-clock with 2-second resolution, converted at stat time; no birth/access distinction
+- [ ] The steppable read/write pair completes in `begin()` rather than genuinely stepping, unlike TFS3's
+- [ ] `format()` writes a FAT32 below 65525 clusters on a small volume, which other tools call FAT16
+- [ ] No `.` / `..` shown by `fs_list()`, and no way to ask a directory for its parent
 
 ### TFS3: an inode layer
 
@@ -808,6 +832,10 @@ this to be better?".
 - [ ] `SYS_LISTDIR` still truncates at 256 entries, and TFS3 has no such cap -- the fix is an offset argument
 - [ ] Nothing detects an ordinary memory LEAK, in either allocator
 - [ ] The ESP's own layout puts the kernel at `/boot/boot/kernel.bin`, because one `grub.cfg` serves the ISO and the disk
+- [ ] `/boot` is mounted read-only and there is no `/etc/fstab` to say otherwise -- the policy is `mount_boot_auto()`
+- [ ] toy-os cannot update its own kernel yet: the write works, but nothing reinstalls GRUB or verifies the image
+- [ ] A FAT32 `disk_usage()` scans the whole FAT the first time anything asks, inside the VFS preemption guard
+- [ ] `blk_part_create()`'s pool needs one thunk set per slot, because a `block_device` op takes no context argument
 - [ ] A ramfs root is EMPTY -- no `/bin`, so a diskless boot has a filesystem and no programs
 - [ ] The shell's command dispatch is a long `if/else` chain, and the fix is not the obvious one
 - [ ] Settings: a ring-3 settings daemon (stage 2)
