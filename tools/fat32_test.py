@@ -110,7 +110,19 @@ def mtools_at(disk, start_lba):
 
 
 def mrun(args):
-    return subprocess.run(args, capture_output=True, text=True)
+    # stdin closed AND a new session, for the reason install_grub.py
+    # documents at length: mtools does not read stdin, it opens
+    # /dev/tty. Under capture_output a question therefore vanishes and
+    # the tool waits forever on a terminal nobody can see it waiting on.
+    # Without a controlling terminal it fails instead, and says why.
+    try:
+        return subprocess.run(args, capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL,
+                              start_new_session=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        print(f"fat32_test: {os.path.basename(args[0])} timed out -- "
+              f"{' '.join(args)}")
+        return subprocess.CompletedProcess(args, 1, "", "timed out")
 
 
 def main():

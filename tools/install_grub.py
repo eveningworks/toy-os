@@ -116,17 +116,30 @@ def module_dir():
     return None
 
 
-# Every child here runs with a TIMEOUT and with stdin CLOSED, and both
-# halves are load-bearing rather than defensive habit.
+# Every child here runs in a NEW SESSION, with stdin closed and a
+# timeout. All three are load-bearing, and the first one is the whole
+# reason this comment exists.
 #
-# `capture_output=True` sends a child's prompt into a pipe nobody reads,
-# while stdin stays connected to the terminal -- so a tool that decides
-# to ask a question blocks forever with its question invisible. What the
-# operator sees is `make iso` stopping dead after the last echoed
-# command, with no output, no error and no clue which of the dozen
-# children is responsible. Closing stdin turns that into an immediate
-# EOF and a real error message; the timeout catches everything else,
-# including mtools looping on a damaged FAT chain.
+# `capture_output=True` sends a child's prompt into a pipe nobody reads.
+# The obvious guard is to close stdin -- and it is not enough, because
+# **mtools does not read stdin. It opens /dev/tty and reads the
+# controlling terminal directly.** So the question vanishes into the
+# captured stderr, mtools blocks forever on a terminal the operator
+# cannot see it waiting on, and `make iso` stops dead after the last
+# echoed command with no output and no error. Measured from a hung
+# build: `mmd` sat in wait_woken with fd 0 on /dev/null, fd 2 on a pipe,
+# and **fd 4 on /dev/tty**.
+#
+# `start_new_session=True` is what actually fixes it: the child becomes
+# a session leader with NO controlling terminal, so its open("/dev/tty")
+# fails with ENXIO and it must give up -- at which point its complaint
+# lands in the captured stderr and _run() reports it. An invisible
+# infinite hang becomes a visible error naming the real problem.
+#
+# The cost, stated because it is real: a child in its own session does
+# not receive the terminal's Ctrl-C. The timeout is what bounds it, and
+# it also catches the case a session change cannot -- mtools looping on
+# a damaged FAT chain rather than asking a question.
 #
 # 60s is already two orders of magnitude over the real cost -- every
 # child here is sub-second in a normal build, and the slowest (mcopy of
@@ -139,18 +152,20 @@ RUN_TIMEOUT = 60
 # message can print a command that is copy-pasteable rather than one the
 # reader has to work out. A plain default keeps _run() usable before
 # then (and in a unit test).
-_FSCK_HINT = "<the /boot partition>"
+_FSCK_HINT = "/tmp/boot.img   # dd the /boot partition out first"
 
 
-def _run(cmd, **kw):
-    kw.setdefault("timeout", RUN_TIMEOUT)
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True,
-                           stdin=subprocess.DEVNULL, **kw)
-    except subprocess.TimeoutExpired:
-        sys.exit(
+def _timeout_exit(cmd, seconds):
+    """One message for every child that overruns, wherever it was run.
+
+    A raw TimeoutExpired traceback names the command too, but it buries
+    it in twenty lines of subprocess internals and says nothing about
+    what to do -- which is exactly what the first report of this looked
+    like.
+    """
+    sys.exit(
             f"install_grub: {os.path.basename(cmd[0])} did not finish in "
-            f"{kw['timeout']}s and was killed.\n"
+            f"{seconds}s and was killed.\n"
             f"  command: {' '.join(cmd)}\n"
             "\n"
             "  `make clean-disk && make iso` rebuilds the image and clears it.\n"
@@ -163,6 +178,16 @@ def _run(cmd, **kw):
             "      'echo \"== $0\"; cat /proc/$0/wchan; echo; cat /proc/$0/stack 2>/dev/null'\n"
             "\n"
             "  Nothing in a normal build takes this long; please report it.")
+
+
+def _run(cmd, **kw):
+    kw.setdefault("timeout", RUN_TIMEOUT)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL,
+                           start_new_session=True, **kw)
+    except subprocess.TimeoutExpired:
+        _timeout_exit(cmd, kw["timeout"])
     if r.returncode != 0:
         sys.exit(f"install_grub: {cmd[0]} failed: {r.stderr.strip() or r.stdout.strip()}")
     return r.stdout
@@ -286,9 +311,15 @@ def mkdirs(disk, esp, dirs):
     for d in dirs:
         # An existing directory is not an error here -- this tool runs on
         # every build and only the first one creates anything.
-        subprocess.run([mmd, "-i", mtools_at(disk, esp), d],
-                       stdin=subprocess.DEVNULL, timeout=RUN_TIMEOUT,
-                       capture_output=True, text=True)
+        # A non-zero exit is EXPECTED and ignored -- the directory
+        # usually already exists -- but a TIMEOUT is not, and must not
+        # surface as a raw traceback out of subprocess internals.
+        try:
+            subprocess.run([mmd, "-i", mtools_at(disk, esp), d],
+                           stdin=subprocess.DEVNULL, start_new_session=True,
+                           timeout=RUN_TIMEOUT, capture_output=True, text=True)
+        except subprocess.TimeoutExpired:
+            _timeout_exit([mmd, "-i", mtools_at(disk, esp), d], RUN_TIMEOUT)
 
 
 def mtype(disk, esp, path):
@@ -298,9 +329,13 @@ def mtype(disk, esp, path):
     try:
         r = subprocess.run([mtype_bin, "-i", mtools_at(disk, esp), path],
                            capture_output=True, text=True,
-                           stdin=subprocess.DEVNULL, timeout=RUN_TIMEOUT)
+                           stdin=subprocess.DEVNULL, start_new_session=True,
+                           timeout=RUN_TIMEOUT)
     except subprocess.TimeoutExpired:
-        return None   # no stamp readable; the modules get re-copied, which is safe
+        # Swallowed deliberately, unlike everywhere else here: an
+        # unreadable stamp just means the modules get re-copied, and the
+        # mcopy that follows will hit the same wall and report properly.
+        return None
     return r.stdout if r.returncode == 0 else None
 
 
@@ -341,8 +376,11 @@ def install(disk, kernel, grub_cfg, verbose=True, optional=False):
         sys.exit(msg)
 
     global _FSCK_HINT
-    _FSCK_HINT = (f"<(dd if={disk} bs=512 skip={esp[1]} count={esp[2]} "
-                  "status=none)")
+    # A REAL FILE, not a <(process substitution): fsck.fat seeks, and a
+    # pipe cannot be seeked -- the first person handed the substitution
+    # form got "Seek to 0:Illegal seek" and learned nothing.
+    _FSCK_HINT = (f"/tmp/boot.img   # dd if={disk} bs=512 skip={esp[1]} "
+                  f"count={esp[2]} of=/tmp/boot.img status=none")
 
     # ---- 1. the FAT32 /boot volume ---------------------------------
     fresh = not fat_present(disk, esp)

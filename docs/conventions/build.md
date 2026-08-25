@@ -43,6 +43,43 @@ this the obvious way), not from how much history it accumulated.
   with angle brackets off `userland/include/`, because a program written
   elsewhere says `#include <stdio.h>` or it does not compile.
   ELFs build to `build/userland/**`, not into the source tree.
+- **mtools DOES NOT READ stdin -- IT OPENS `/dev/tty`, so a CAPTURED
+  PROMPT HANGS FOREVER.** Anything here driving `mcopy`/`mmd`/`mformat`/
+  `mdir` under `capture_output=True` must also pass
+  **`start_new_session=True`**, and a timeout. `tools/install_grub.py`
+  and `tools/fat32_test.py` are the two.
+
+  The trap is that the obvious guard is not enough. `capture_output=True`
+  sends a child's prompt into a pipe nobody reads, so the natural fix is
+  `stdin=subprocess.DEVNULL` -- and mtools sails straight past it,
+  because it does not read stdin at all: it opens `/dev/tty` and reads
+  the controlling terminal directly. The question disappears into the
+  captured stderr and the tool waits forever on a terminal nobody can
+  see it waiting on. What that looks like is `make iso` stopping dead
+  after the last echoed command, with no output, no error and no
+  indication which of a dozen children is responsible -- and
+  `make clean-disk` appearing to "fix" it, which sends the next person
+  hunting disk corruption that was never there.
+
+  Measured rather than deduced: a hung `mmd` had fd 0 on `/dev/null`,
+  fds 1 and 2 on pipes, and **fd 4 on `/dev/tty`**, parked in
+  `wait_woken`.
+
+  `start_new_session=True` makes the child a session leader with no
+  controlling terminal, so its `open("/dev/tty")` fails with ENXIO, it
+  gives up, and its complaint lands in the captured stderr where the
+  caller reports it -- an invisible hang becomes a visible error naming
+  the real problem. The cost is that such a child no longer receives the
+  terminal's Ctrl-C, which is what the timeout is for.
+
+  Two smaller rules fell out of the same hunt. **A timeout nobody waits
+  out teaches nothing**: the budget is 60s because the first person to
+  hit this killed the build by hand at 18s, and the 180s guard tried
+  first would never have shown them anything. And **`fsck.fat` cannot
+  check a `<(process substitution)`** -- it seeks, a pipe cannot be
+  seeked, and the advice fails with `Seek to 0:Illegal seek`. `dd` the
+  partition to a real file first.
+
 - **THE C LIBRARY IS CALLED `tolibc`** (formed like `tosh`: toy-os +
   `libc`), it lives in `userland/libc/` with its public headers in
   `userland/include/`, and its archive is `libc.a` -- the NAME is for
