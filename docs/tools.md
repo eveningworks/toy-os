@@ -1917,6 +1917,40 @@ window without going through it will find its layout polls timing out.
   so `kernel/drivers/partition_test.c` round-trips a real GPT through
   the writer and the parser inside a running kernel.
 
+- **`regex_hostcheck.py`** -- compiles `userland/tests/regex_cases.h`
+  twice, once against the real `userland/libc/regex.c` and once against
+  the host's glibc `<regex.h>`, and compares.
+
+  **It catches what a self-test structurally cannot: an expected value
+  that is simply wrong.** `/tests/regex_test` asserts that the engine
+  agrees with spans written by the same person at the same time; glibc
+  shares no code, no author and no assumptions. On the first run it
+  confirmed 71 of 74 cases and isolated exactly three deliberate
+  divergences (`\t` as a tab, a stricter unmatched `)`, no
+  back-references), each of which is listed with its reason in
+  `KNOWN_DIVERGENCES` -- an unexplained one fails the run. Same idea as
+  `uimg_hostcheck.py` against libjpeg.
+
+  ON DEMAND: it needs a host gcc and glibc, and the gate must not start
+  requiring either.
+
+- **`grep_test.py`** -- `/bin/grep` driven by typing into a GUI Terminal
+  and asserting through the filesystem, reusing `terminal_probe.py`'s
+  `Terminal` helper.
+
+  **Its load-bearing check is the PIPE**, because every other check
+  names a file on the command line and would pass with grep unable to
+  read stdin at all. The pipe cannot be reached from the kernel debug
+  console: that shell splits on spaces and hands `|` to the program as
+  an argument, so `dmesg | grep partition` there runs `dmesg` with three
+  arguments and fails in a way that reads as a broken grep.
+
+  It asserts against `/tests/sample.txt` (401 numbered lines) rather
+  than `dmesg`, which was the first version and was wrong: dmesg's ring
+  is finite, so the boot lines a pattern names AGE OUT, and the check
+  passed on a fresh boot and failed minutes later with grep working
+  perfectly.
+
 - **`partition_test.py`** -- boots toy-os with its filesystem **inside**
   an MBR or GPT partition. The only thing that exercises `vfs.c`'s
   boot-time partition scan and `block_part.c`'s window end to end; the

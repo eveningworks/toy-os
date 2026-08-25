@@ -67,8 +67,17 @@ from gui_debug import DebugConsole, enter_gui                 # noqa: E402
 from qmp_test import QMPSession                               # noqa: E402
 
 # Characters `gui key` wants as a hex code rather than as themselves.
+# `gui key` takes a hex code for anything the console will not pass
+# through as a bare character. Regex punctuation was added when
+# grep_test.py found that `(` silently produced nothing -- the command
+# ran with a mangled pattern, matched nothing, and read exactly like a
+# broken grep.
 HEX = {" ": "0x20", "/": "0x2f", ".": "0x2e", "-": "0x2d", "_": "0x5f",
-       ">": "0x3e", "<": "0x3c", "|": "0x7c"}
+       ">": "0x3e", "<": "0x3c", "|": "0x7c",
+       "(": "0x28", ")": "0x29", "[": "0x5b", "]": "0x5d",
+       "^": "0x5e", "$": "0x24", "*": "0x2a", "+": "0x2b",
+       "?": "0x3f", "{": "0x7b", "}": "0x7d", "\\": "0x5c",
+       ":": "0x3a", ",": "0x2c", "=": "0x3d", "!": "0x21", '"': "0x22"}
 
 # Control codes, by the name of the key that produces them.
 CTRL = {c: f"0x{ord(c) - ord('a') + 1:02x}" for c in "abcdefghijklmnopqrstuvwxyz"}

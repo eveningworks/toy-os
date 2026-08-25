@@ -148,3 +148,7 @@ a command), and the `gui3`/`nano` aliases.
 ### Storage
 
 - [`mkpart`](mkpart.md)
+
+### Text processing
+
+- [`grep`](grep.md)

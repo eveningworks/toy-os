@@ -87,6 +87,14 @@ TESTS = [
       "ENOENT and EMFILE are distinct: yes"], ["FAIL"]),
     ("fpu_test", 0,
      ["fpu_test: all checks passed"], ["FAIL"]),
+    # tolibc's <regex.h>. The engine's own correctness is checked
+    # against the SAME case table on the host, and against glibc as an
+    # independent oracle (tools/regex_hostcheck.py) -- what this run
+    # adds is the second compilation: ring 3, tolibc's malloc and
+    # ctype, a 2 KiB frame budget. Same gap libc_test and
+    # klineedit_test cover for their own shared sources.
+    ("regex_test", 0,
+     ["regex_test: all"], ["FAIL"]),
     # The shared line editor's SECOND compilation. Same gap libc_test
     # covers: klineedit.c has KTESTs, and they would pass whether or not
     # ring 3 could link a byte of it.

@@ -857,3 +857,5 @@ Smaller or lower-priority items not yet slotted into a section above.
 - [x] ~~Enable SMEP/SMAP (CR4)~~ done
 - [x] ~~Guard page below each user stack~~ done
 - [x] ~~Heap red-zones + use-after-free poisoning in the allocator, behind a `debug` flag~~ done
+
+- [ ] Quoting in `/bin/tosh` -- it splits on `|`, `>` and spaces before anything else, so an argument cannot contain them

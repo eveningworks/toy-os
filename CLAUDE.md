@@ -697,6 +697,8 @@ whenever a headline here tells you something you did not already know.
 `docs/conventions/build.md`
 
 - **THE C LIBRARY IS CALLED `tolibc`, and its bar for adding a function is the OPPOSITE of everything else here -- it aims to be COMPLETE.**
+- **REGEX IS `<regex.h>` IN tolibc, AND IT IS AN NFA** -- `regcomp`/`regexec`, a Thompson NFA with no input that makes it slow (`(a*)*b` is linear here and exponential in a backtracker). NO BACK-REFERENCES, which is what an NFA cannot do and what `regcomp()` refuses by name. Program jumps are RELATIVE, which is what makes `{n,m}` a memcpy rather than a jump-target rewrite. **`/bin/grep` speaks ERE and has no `-E`** -- POSIX's BRE is compatibility baggage, and `regcomp()` implements BRE anyway. **`tosh` splits on `|` before anything else and has NO QUOTING**, so a pattern containing one cannot be typed.
+- **WHEN IMPLEMENTING A SPEC, DISAGREE WITH AN INDEPENDENT IMPLEMENTATION ON PURPOSE** -- `tools/regex_hostcheck.py` runs the regex case table against GLIBC, `tools/uimg_hostcheck.py` runs the JPEG decoder against libjpeg. A self-test cannot catch an EXPECTATION being wrong, because the same person wrote both halves. Every difference is then a bug or a documented decision, with no third category.
 - **`tolibc` GREW A SECOND PORT'S WORTH OF FUNCTIONS, AND ONE OF THEM WAS A BUG** -- Doom needed `remove()`/`rename()` (both previously listed as deliberately absent), `mkdir()` with a new `<sys/stat.h>` that deliberately has NO `stat()`, `access()` (only `F_OK` can mean anything), and `system()` (which needed `tosh -c`). The bug: `kfmt.c` ignored `printf` precision on integers, so `"%.3d"` of 33 gave `33` and Doom asked its WAD for a lump that does not exist -- in a file compiled into both rings, whose tests asserted the old behaviour.
 - **`sys_write()` COMPLETES THE WHOLE BUFFER, because the kernel caps one write at `SYS_WRITE_MAX` (1024) and a short write loses data SILENTLY.** -- libsys returned the short count and dropped the rest, so every caller ignoring the count truncated at 1 KB. `less` looked like a pager bug for two rounds because of it. Asking for 2000 bytes means 2000 bytes.
 - **AN UNRECOGNISED printf CONVERSION DESYNCHRONISES EVERY ARGUMENT AFTER IT, AND `kfmt_cases.h` IS THE TABLE THAT STOPS A FOURTH ONE.** -- `kfmt.c` is tolibc's `printf`; an unknown conversion prints its letters and consumes NOTHING, so a missing feature corrupts output far away from itself. Three have shipped (`%.3d`, `%X`, then `%p`/`%o`/`%+d`/`%hd` by audit). Every conversion and flag C defines has a case, run from BOTH rings.
@@ -1086,6 +1088,11 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   keycode and the same character on `INPUT=virtio` with the scancode
   column BLANK, which nothing that is not really reading each stage can
   fake),
+  `grep_test.py` (**`/bin/grep` through a real ring-3 shell** -- the
+  engine is covered three other ways, so what this adds is the half that
+  is not regex: reading stdin from a PIPE, the flags and the exit
+  status. The pipe is unreachable from the kernel debug console, which
+  splits on spaces and hands `|` to the program as an argument),
   `keyboard_paths_test.py` (**the same keys do the same thing on
   PS/2 and on virtio-input** -- boots both, types `_` and `|`, and asserts
   through the FILESYSTEM rather than the screen, because `_` draws
@@ -1158,6 +1165,11 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   comments and blanks excluded; add anything a `gen_*` writes into the
   tree to its `GENERATED` list, or the count silently inflates).
 - **Diagnose** -- `panic_resolve.py` (name every address in a panic),
+  `regex_hostcheck.py` (**tolibc's `<regex.h>` against GLIBC's**, over the
+  same case table `/tests/regex_test` runs -- an oracle that shares no
+  code catches the failure a self-test cannot, which is an EXPECTATION
+  being wrong. Every remaining difference is listed with its reason in
+  `KNOWN_DIVERGENCES`; an unexplained one fails),
   `uimg_hostcheck.py` (the JPEG decoder against libjpeg on the HOST,
   over a couple of hundred generated images -- the breadth
   `/tests/uimg_test` cannot carry),

@@ -1164,3 +1164,60 @@ through a caller-supplied pointer, and it has been a security footgun
 everywhere it exists. Floating point stays behind `k_fmt_float()`,
 because `va_arg(ap, double)` alone emits SSE in a kernel built
 `-mno-sse`.
+
+## Regex lives in tolibc, not inside grep, and it is an NFA
+
+`grep` needed a matcher and there was none anywhere in the tree — the
+only pattern matching in this OS was `strstr`.
+
+**It went into tolibc as POSIX `<regex.h>`** rather than staying private
+to the command. That is against this project's usual bar (a second real
+caller, not a plausible one) and *with* tolibc's, which is deliberately
+the opposite: complete rather than minimal, because its audience is code
+not yet written (`docs/libc-design.md`). `sed` and `awk` are the obvious
+next callers and would each have reimplemented it.
+
+**The engine is a Thompson NFA, simulated, not a backtracker.** A
+backtracking matcher is markedly shorter to write and is what most
+hand-rolled greps use; it also takes exponential time on `(a*)*b`
+against a run of `a`. Patterns here arrive from command lines and files,
+which is the same "attacker-shaped data" argument that made `ttf.c`
+bounds-check every read. The NFA tracks a *set* of states, so the work
+is O(pattern × text) with no bad input. It is Thompson's 1968
+construction with Pike's simulation — what RE2 and Go's `regexp` use.
+
+The price is paid in one place and stated in the header: **no
+back-references**. They are exactly what an NFA cannot do and what makes
+matching NP-hard. glibc supports them as a GNU extension; `regcomp()`
+here refuses them by name.
+
+**Jumps in the compiled program are RELATIVE**, which is not a detail:
+it is what makes `{n,m}` a `memcpy` of an instruction range instead of a
+rewrite of every jump target inside it. Interval expressions are where
+regex implementations classically get this wrong.
+
+**`grep` speaks ERE and there is no `-E`.** POSIX grep is BRE — `+ ? |`
+literal, grouping spelled `\( \)` — because grep predates the extended
+syntax and could not break existing scripts. That is compatibility
+baggage this OS has no reason to inherit. `regcomp()` implements BRE
+anyway, because it is a lexical difference of about twenty lines and a
+POSIX function whose default mode errors would be a worse lie.
+
+## An oracle that shares no code is how an expectation gets checked
+
+`/tests/regex_test` asserts that the engine agrees with a table of
+expected spans. Both halves were written by the same person in the same
+hour, so it cannot catch the failure that matters most for a spec
+implementation: **an expectation that is simply wrong**.
+
+`tools/regex_hostcheck.py` compiles the same table against the host's
+glibc and compares. On its first run it agreed on 71 of 74 cases and
+isolated three differences, all of which turned out to be deliberate —
+and one case where *my* expected span was miscounted had already been
+caught minutes earlier by the same table run on the host.
+
+The general rule, and it is the same one `tools/uimg_hostcheck.py`
+follows against libjpeg: **when implementing something that has a
+specification, find an independent implementation and disagree with it
+on purpose.** Every difference is then either a bug or a documented
+decision, and there is no third category.
