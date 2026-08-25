@@ -8,8 +8,8 @@
 
 <p align="center">
   <em>Built with Claude Code. A human makes the design calls; Claude does the
-  research, the implementation and the testing. Every change is built, tested
-  in QEMU and reviewed before it lands.</em>
+  implementation and the testing. Every change is built, tested in QEMU and
+  reviewed before it lands.</em>
 </p>
 
 <p align="center">
@@ -106,7 +106,7 @@ system GCC works with `-ffreestanding` and kernel-appropriate flags.
 
 toy-os is written with [Claude Code](https://claude.com/claude-code),
 Anthropic's agentic coding tool. A human makes the design calls; Claude does
-the research, the implementation and the testing.
+the implementation and the testing.
 
 The conventions it works under are in [CLAUDE.md](CLAUDE.md), the reasoning
 behind the design is in [docs/decisions.md](docs/decisions.md), and
