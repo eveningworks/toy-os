@@ -342,11 +342,22 @@ struct query_meminfo {
 #define QUERY_FS_PERSISTENT (1u << 0) // survives a reboot; absent means RAM-only
 #define QUERY_FS_MOUNTED    (1u << 1) // a filesystem is mounted at all
 
+#define QUERY_FS_RDONLY     (1u << 2) // mounted read-only; a write is refused
+#define QUERY_FS_ROOT       (1u << 3) // this is the root mount
+
+// ONE RECORD PER MOUNT, root first. It was a scalar while there was one
+// filesystem; Real mount points made that a lie the moment /boot was
+// mounted, and `df` printing one line for a machine with three
+// filesystems is the shape of wrong answer nobody notices. Index 0 is
+// still the root, so a reader that only ever asks for record 0 keeps
+// getting exactly what it used to.
 struct query_fsinfo {
     uint64_t used_bytes;   // meaningful only with QUERY_FS_MOUNTED
     uint64_t total_bytes;  // usable DATA space, excluding metadata
     uint64_t flags;        // QUERY_FS_*
-    char     name[QUERY_NAME_MAX]; // "tfs3" -- fs_backend_name()
+    char     name[QUERY_NAME_MAX]; // "tfs3" -- the backend
+    char     point[64];    // "/" or "/boot" -- FS_PATH_MAX, spelled out since abi/ has no fs.h
+    char     device[QUERY_NAME_MAX]; // "ata3", "virtio-blk2", or "" for a backend with no volume
 };
 
 // QUERY_MEMMAP's record. One firmware-reported region.

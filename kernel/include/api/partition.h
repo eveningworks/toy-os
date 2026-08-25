@@ -80,6 +80,16 @@ int partition_read_table(struct partition_table *out);
 int partition_is_firmware(const struct partition_entry *pe,
                           enum partition_table_kind kind);
 
+// Is it specifically an EFI System Partition? A NARROWER question than
+// partition_is_firmware(), and the two are asked by different passes
+// for different reasons: nothing may become the ROOT from a firmware
+// partition, but the ESP is exactly what mounts at /boot -- it is FAT,
+// it holds the bootloader and the kernel image, and reading it is the
+// point. A BIOS boot partition is not this: it holds a raw core.img
+// with no filesystem in it at all.
+int partition_is_esp(const struct partition_entry *pe,
+                     enum partition_table_kind kind);
+
 // ---- writing --------------------------------------------------------
 //
 // Writing a table is DESTRUCTIVE and this half of the API does not

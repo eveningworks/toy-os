@@ -509,6 +509,14 @@ int sys_mkpart(const struct mkpart_request *req) {
     return (int)err(syscall1(SYS_MKPART, (uint64_t)(uintptr_t)req));
 }
 
+int sys_mount(const struct mount_request *req) {
+    return (int)err(syscall1(SYS_MOUNT, (uint64_t)(uintptr_t)req));
+}
+
+int sys_umount(const char *point) {
+    return (int)err(syscall1(SYS_UMOUNT, (uint64_t)(uintptr_t)point));
+}
+
 int sys_win_debug(struct win_debug_msg *msg) {
     return (int)err(syscall1(SYS_WIN_DEBUG, (uint64_t)(uintptr_t)msg));
 }

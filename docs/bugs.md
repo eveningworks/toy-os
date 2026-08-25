@@ -46,6 +46,7 @@ it has exonerated one this session and convicted another.
 - [ ] `gui_regress.py`'s `uidemo` fails intermittently in the full parallel suite
 - [ ] `gui_regress.py`'s `uterm` fails under full parallel load -- 3 runs in 3 on its two `edit` checks (2026-08-24, PRE-EXISTING: the third was HEAD with the day's work stashed); later the same day, 1 full run in 4 failing NINE checks, against 1 in 1 passing alone
 - [ ] `damage_hunt.py -j 4` loses VM SLOT 0 every run
+- [ ] `ansi_cursor_test.py` and `virtio_input_test.py` fail under an `ondemand_sweep.py` run sharing the machine with other guests, and pass alone -- both 1 run in 1 failing beside four other VMs, 2 runs in 2 passing on their own (2026-08-25); the sweep is single-job, so what competed was another session's tools, not itself
 - [ ] Injected clicks are LOST under parallel `gui_regress` load, and the failing checks are finally named
 - [ ] A `sched` KTEST fails under KVM, and only under KVM
 - [ ] Other GUI tools may share the calculator's mid-paint flake
@@ -65,6 +66,8 @@ it has exonerated one this session and convicted another.
 
 - [ ] `tools/init_test.py` fails 12 of its 27 checks, deterministically and PRE-EXISTING -- init stops reaping and stops starting services partway through the run
 - [ ] init starts a descriptor with no `Exec=` five times over, having logged that it is ignoring it
+- [ ] `tools/taskbar_test.py` fails 1 of its 11 checks, deterministically and PRE-EXISTING -- measured 2026-08-25 with `predates.py`, HEAD fails identically
+- [ ] `tools/virtio_gpu_test.py` fails "the screen KEEPS updating (the taskbar clock moves)", deterministically and PRE-EXISTING -- measured 2026-08-25 with `predates.py`, HEAD fails identically; cause never established
 
 *(Was empty. Every entry that was here on 2026-08-20 is fixed, was already
 fixed, or turned out not to be a defect -- see `git log`. The two above

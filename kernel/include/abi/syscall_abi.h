@@ -1479,6 +1479,39 @@ struct sys_stat {
                       // kernel having no privilege model to gate a
                       // general write-any-sector primitive with.
 
+#define SYS_MOUNT 70 // RDI = pointer to a `struct mount_request`
+                     // (abi/mount_abi.h). Attaches a filesystem at a
+                     // path. Returns 0, or a negative errno:
+                     // -EINVAL for a bad request (a mount point that is
+                     // not an absolute path, an unknown filesystem
+                     // type, a source that names no partition),
+                     // -ENOTDIR when the mount point does not exist or
+                     // is not a directory, -EBUSY when something is
+                     // already mounted there or that volume is already
+                     // mounted somewhere, -ENOSPC when the mount table
+                     // is full, -ENODEV when nothing recognises the
+                     // filesystem on that volume, -EFAULT for a bad
+                     // pointer.
+                     //
+                     // NOT PRIVILEGED, because this kernel has no
+                     // privilege model -- see abi/mount_abi.h, which
+                     // names sys_mount() as where the check goes when
+                     // one exists.
+
+#define SYS_UMOUNT 71 // RDI = pointer to a NUL-terminated mount point
+                      // (at most MOUNT_POINT_MAX bytes). Detaches what
+                      // is mounted there. Returns 0, or a negative
+                      // errno: -EINVAL for the root (which cannot be
+                      // unmounted) or a path nothing is mounted at,
+                      // -EBUSY when a file on it is still open or
+                      // another filesystem is mounted underneath it,
+                      // -EFAULT for a bad pointer.
+                      //
+                      // FLUSHES BEFORE IT FORGETS. A write-back cache's
+                      // failure surfaces at the flush, and after the
+                      // slot is cleared there is no owner left to
+                      // report it to.
+
 // What SYS_OPENPTY fills in. A struct rather than two out-registers
 // because a syscall here returns one value, and two `int *` arguments
 // would be two user pointers to validate instead of one.

@@ -49,6 +49,8 @@ in check_layout.py changes with it.)
 | `/etc/settings.d` | One text file per setting -- description, choice display names and presentation hints -- see `data/etc/settings.d/README.md`. A setting with no file falls back to its compiled-in label, so this directory may legitimately be empty | build | present |
 | `/tests` | Test/demo binaries -- one kernel mechanism each -- plus `sample.txt`, the text FIXTURE. Every line names its own number, because moving identical content is pixel-identical and a scroll test over repeated lines cannot tell a working scroll from a dead one; the content is hostile on purpose (a 400-column line, an exactly-80 one, trailing spaces, a tab, a last line with no newline). Kept apart from `/usr/share/doc/toy-os.txt` so the fixture can be awkward without making the document worse to read, and so editing the document cannot break a test's line numbers | build | present |
 | `/tmp` | Scratch space | boot | present |
+| `/boot` | MOUNT POINT for the boot volume -- the disk's FAT32 ESP, mounted here READ-ONLY at boot (`kernel/fs/mount.c`). Empty on the root itself, and it stays empty on a machine whose disk has no ESP (a live ISO, a hand-made image), which is the honest picture: that build's kernel came from somewhere else. What is INSIDE it is the ESP's own layout, not this table's -- `tools/install_grub.py` writes `boot/kernel.bin` and `boot/grub/` there, so the running kernel is at `/boot/boot/kernel.bin` | boot | present |
+| `/mnt` | MOUNT POINT for anything mounted by hand (`mount 3 /mnt`, `mount -t ramfs none /mnt`). Empty otherwise, and deliberately: it exists so `mount` has somewhere to attach, since a mount point must already be a directory | boot | present |
 | `/usr` | Container only -- holds `share/`, nothing of its own | build | present |
 | `/usr/share` | Read-only architecture-independent data | build | present |
 | `/usr/share/hwdata` | `pci.ids`, read by `/bin/lspci` | build | present |
@@ -111,18 +113,27 @@ match -- they aren't internal helpers invoked by other programs, they're
 exercises a person runs on purpose. The cost is one name a
 newcomer-from-Linux won't recognise, which this table answers.
 
-**No `/boot` ON THIS VOLUME, and the one that exists is a different
-disk partition.** The kernel and GRUB live at `/boot/kernel.bin` and
-`/boot/grub/` inside disk.img's FAT32 partition, not in the TFS3
+**`/boot` IS A MOUNT POINT, NOT A DIRECTORY WITH FILES IN IT.** The
+kernel and GRUB live inside disk.img's FAT32 partition, not in the TFS3
 filesystem this table describes -- GRUB cannot read TFS3, which is the
-whole reason that partition exists (`tools/install_grub.py`). toy-os has
-no FAT driver yet, so from inside the running OS that volume is not
-mounted and not visible: `ls /boot` correctly says there is nothing
-there. **Do not create a `/boot` on the TFS3 root** -- it would be a
-second directory of that name holding none of the files that boot the
-machine, which is worse than the gap. When the FAT32 backend lands, the
-answer is to MOUNT the real one there (`root=`/mount points, both
-roadmap items).
+whole reason that partition exists (`tools/install_grub.py`). That
+volume is now MOUNTED at `/boot`, read-only, on every boot
+(`kernel/fs/mount.c`), so `ls /boot` shows what is really there.
+
+**Do not create files under `/boot` on the TFS3 root.** They would be
+hidden the moment the ESP mounts over them -- a second set of files of
+that name holding none of the ones that boot the machine, which is
+worse than an empty directory. The directory itself is created on the
+root by `ensure_layout()` because a mount point must already exist and
+be a directory (Linux's rule); on a machine whose disk has no ESP it
+simply stays empty, which is the honest picture.
+
+**What is INSIDE it is the ESP's own layout, not this table's.**
+`install_grub.py` writes `boot/kernel.bin` and `boot/grub/` into the
+volume so that ONE `grub.cfg` serves the ISO and the disk with identical
+paths -- so the running kernel is at `/boot/boot/kernel.bin`. That
+nesting is the volume as it really is, the same way a Linux ESP mounted
+at `/boot/efi` shows `/boot/efi/EFI/...`.
 
 **No merged `/usr`.** Modern distributions make `/bin` a symlink to
 `/usr/bin`. toy-os has no symlinks at all, so that isn't expressible;

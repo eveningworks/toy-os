@@ -2120,6 +2120,35 @@ window without going through it will find its layout polls timing out.
   ON DEMAND, not in the gate: two images, four boots. Same category as
   `virtio_boot_test.py` and `live_boot_test.py`.
 
+- **`fat32_test.py`** -- FAT32 and the mount table, checked against an
+  **independent implementation**. `kernel/fs/fat32_test.c` formats a
+  512 KiB RAM volume and drives the backend directly, which proves the
+  driver agrees with ITSELF -- and a shared misreading of the format
+  passes both halves, because the same person wrote the writer and the
+  reader. So the oracle here is the HOST: `mtools` reads back what the
+  guest wrote and `fsck.fat` audits the volume afterwards, neither
+  sharing a line with `kernel/fs/fat32.c`. Same call as
+  `regex_hostcheck.py` (against GLIBC) and `uimg_hostcheck.py` (against
+  libjpeg).
+
+  It also covers the half no KTEST can reach: that the ESP on the REAL
+  disk -- a volume written by mtools, holding GRUB's own files --
+  mounts at `/boot` on an ordinary boot, and comes up READ-ONLY.
+
+  **Three checks that discriminate**, each replacing one that would
+  pass on a broken driver. "`ls /boot` lists something" passes on a
+  driver that mangles every long name, so it reads GRUB's own
+  `grub.cfg` and looks for text only a correct chain walk produces. "A
+  file written reads back" passes on a driver whose format is privately
+  wrong, so a 185 KiB BINARY is extracted with mtools and compared byte
+  for byte against the build artifact. And "the volume still works"
+  passes on one leaking clusters or cross-linking chains, so `fsck.fat`
+  has the last word.
+
+  ON DEMAND: two boots against a COPY of `disk.img` (never the real
+  one), and it SKIPS cleanly without `mtools`. Needs `dosfstools` for
+  the audit half.
+
 - **`run_release.sh`** -- standalone QEMU launcher shipped as a GitHub
   Release asset (not part of the build), for running from just a
   release download with no checkout. Gunzips `disk.img.gz` if needed,

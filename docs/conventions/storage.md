@@ -428,9 +428,15 @@ iso` is the opt-in.
 NO disk, and a release is an ISO. What changed is which medium the
 ordinary path uses.
 
-**`/boot` is not visible from inside toy-os**, because there is no FAT
-driver yet. Do not create a TFS3 `/boot` to fill the gap; see
-`docs/filesystem-layout.md`.
+**`/boot` IS visible from inside toy-os now** — there is a FAT32 driver
+(`kernel/fs/fat32.c`) and a mount table (`kernel/fs/mount.c`), and the
+ESP is mounted at `/boot` read-only at boot. What is INSIDE it is the
+ESP's own layout: `install_grub.py` writes `boot/kernel.bin` and
+`boot/grub/` there so ONE `grub.cfg` serves the ISO and the disk with
+identical paths, so the running kernel is at `/boot/boot/kernel.bin`.
+That nesting is the volume as it really is, the same way a Linux ESP
+mounted at `/boot/efi` shows `/boot/efi/EFI/...`. Do not create a TFS3
+`/boot` beside it; see `docs/filesystem-layout.md`.
 
 ## NEVER LEAVE THE BOOT ORDER OUT OF A QEMU LINE, AND ASK `boot_medium()` WHICH ONE
 
@@ -457,3 +463,132 @@ A tool that builds its OWN image hardcodes `-boot order=d`, because
 nothing put a bootloader on it — `partition_test.py`,
 `virtio_boot_test.py` and `run_release.sh`, each of which says so where
 it launches.
+
+## A ROOT IS ONE FILESYSTEM, BUT A PATH TREE IS SEVERAL: THE MOUNT TABLE
+
+`vfs.c` dispatched every `fs_*` call to one active backend (`g_fs`), and
+`fs_ops.h` said in as many words that a mount-point scheme was out of
+scope. `/boot` ended that: a FAT32 partition GRUB wrote, on the same
+disk as a TFS3 root, which no amount of single-backend dispatch can make
+readable.
+
+**The split is by concern.** `kernel/fs/mount.c` holds the table, the
+backend registry and the boot policy; `kernel/fs/vfs.c` implements
+`api/fs.h` by resolving a path to a mount and forwarding. Neither half
+wants to be read while working on the other.
+
+**FIVE RULES, and they are in `kernel/mount.h` in full.** Summarised,
+because getting any of them wrong is silent:
+
+1. **Longest prefix wins, at a COMPONENT BOUNDARY.** `/boot` claims
+   `/boot` and `/boot/grub/x`; it does not claim `/bootloader`. A bare
+   `k_strncmp` here hands one filesystem another's files, which is why
+   `under()` is not one.
+2. **The backend is handed a ROOT-RELATIVE path.** `/boot/grub/x`
+   arrives at the FAT driver as `/grub/x`, and the mount point itself as
+   `/`. A backend never learns where it is mounted, which is what lets
+   one driver serve the root and a partition at once.
+3. **Mounting over a non-empty directory is allowed and HIDES it**
+   (Unix), and the point must already exist and be a directory (Linux).
+   That is why `ensure_layout()` creates `/boot` and `/mnt`.
+4. **An operation may not cross a mount.** `rename()` and `link()` take
+   two paths; if they land on different mounts the call is REFUSED, not
+   half-done — Unix's `EXDEV`, and the reason `cp` exists.
+5. **`..` cannot escape a mount root, and it costs no code.** Every path
+   reaching `fs_*` is already normalized with no `.`/`..` (see
+   `api/fs.h`), so `/boot/..` is `/` before any mount is consulted. That
+   is a property to keep, not a check to add.
+
+**A BACKEND DECLARES HOW MANY TIMES IT MAY BE MOUNTED**
+(`fs_ops.max_mounts`), and every one today declares 1 — TFS3, FAT32 and
+ramfs all keep their state in module-level statics. The field is not
+decoration: without it `mount 3 /mnt` on a second TFS3 partition
+succeeds, repoints one set of statics, and the ROOT starts reading the
+other volume, with no error anywhere. Raising it above 1 needs more than
+per-instance state: every op takes a PATH and no handle, so a backend
+cannot tell which of its mounts a call belongs to. The shape that fixes
+that is `init()` returning an opaque handle every op then takes — Linux's
+`super_block` — and it buys nothing until a backend's state is
+per-instance.
+
+## A PROBE MUST NOT DISTURB A MOUNT, AND THAT ONLY BECAME TRUE WHEN IT MATTERED
+
+`fs_ops.h` has always said `probe()` is detection only, with no side
+effects beyond the read. That was true in EFFECT while probing only ever
+happened before anything was mounted — and both backends here record the
+device they are handed, because `set_flat_volume()`/`parse_bpb()` write
+the same state a mount uses.
+
+Mount points made it false the same day. Mounting `/boot` probes every
+backend against the ESP, so a TFS3 already serving `/` was repointed at
+partition 2: `df` still reported the right numbers (they come from the
+cached superblock) and every path lookup failed, so the root went
+**silently empty**. Both backends save and restore their volume state
+around a probe now, and `mount.c` additionally declines to probe a
+backend that is already at its mount limit.
+
+**The general shape, which is this repo's recurring one:** a contract
+that nothing enforced was being honoured by accident, and the accident
+was "this only ever runs at one point in the boot". When you make
+something happen at a second time, re-read what it promised.
+
+## THE BLOCK LAYER HAS ONE ACTIVE DEVICE AND MANY CREATABLE ONES
+
+`blk_active()` is still singular — it is what `parttable`, `mkpart` and
+the ROOT filesystem mean by "the disk". What changed is that creating a
+partition device is now separate from making it active:
+`blk_part_create()` hands one back, `blk_part_register()` does that and
+registers it. A mount holds its own device and reads it through
+`blkdev_*` (the same fault-injection hooks, no dependence on what is
+active); a backend that reached for the `blk_*` wrappers while mounted
+somewhere else would read the WRONG VOLUME and report no error, which is
+the whole reason `fs_ops.init()` takes a device at all.
+
+Asking twice for the same window returns the SAME device, so pointer
+identity answers "is this volume already mounted?".
+
+## FAT32 IS A GENERIC DRIVER, AND NOTHING IN IT KNOWS IT HOLDS A BOOTLOADER
+
+`kernel/fs/fat32.c` mentions no bootloader. That separation is Linux's
+(`fs/fat/` is generic; the ESP is an ordinary mount) and Windows'
+(FASTFAT likewise), and the policy that makes `/boot` **read-only by
+default** lives in `mount_boot_auto()` where a policy belongs.
+
+What the driver deliberately is not: **not FAT12/FAT16** (a different
+root-directory layout and FAT width — a whole second set of paths for a
+format nothing here uses, so a non-FAT32 volume is refused by name);
+**not 4096-byte sectors** (the block layer speaks 512, and reading with
+the wrong stride produces plausible garbage rather than an error); **not
+Unicode** (long names are read as UCS-2 and anything outside ASCII
+becomes `?`; creating such a name is refused, because it could never be
+looked up again); and **not journalled, because FAT is not** — an
+interrupted write leaves whatever the last completed sector left, which
+is a real reason to prefer TFS3 for anything that matters and a real
+reason `/boot` is read-only unless asked otherwise.
+
+**The ordering rule is the same one TFS3 follows.** Growing a file
+extends the FAT chain and FLUSHES it before the directory entry's size
+grows — the other order publishes a length reaching into clusters the
+FAT does not link yet. Shrinking reverses it: the entry stops
+referencing the clusters before they are freed.
+
+**A cluster count below 65525 is out of spec, and this driver accepts
+it.** That threshold exists to tell FAT12/16/32 apart in a driver
+implementing all three; this one implements only FAT32 and
+discriminates on the BPB's FAT32-only fields (`fat_size_16 == 0`,
+`root_entry_count == 0`, a nonzero `fat_size_32`). It is what lets a
+512 KiB KTEST volume exist; `format()` still picks a cluster size that
+clears the floor wherever the volume is big enough.
+
+**The LFN set is stored in REVERSE** — highest index first on disk,
+carrying the `0x40` "last" bit — and writing it forwards produces a name
+every other driver reads backwards. This driver shipped that for one
+build; a short-named file cannot show it, which is why
+`kernel/fs/fat32_test.c` asserts a long name specifically.
+
+**Verify FAT32 against an INDEPENDENT implementation**, the same rule
+`tools/regex_hostcheck.py` and `tools/uimg_hostcheck.py` follow:
+`tools/fat32_test.py` has the guest write into the ESP and then reads it
+back on the HOST with `mtools`, and runs `fsck.fat` over the result. A
+self-test cannot catch an expectation being wrong, because the same
+person wrote both halves.

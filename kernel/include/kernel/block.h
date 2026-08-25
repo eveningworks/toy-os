@@ -130,11 +130,13 @@ int blk_ram_register(uint64_t base, uint64_t bytes);
 // teaching each filesystem to add an offset itself -- is the layering
 // both moved away from, and it would have to be re-done per backend.
 //
-// The active device stays SINGULAR: a partition device REPLACES its
-// parent as the active one rather than sitting beside it, so this
-// needs none of the mount-table work docs/roadmap-details.md's "Real
-// mount points" is holding. Registering a second partition simply
-// re-points the window.
+// THE ACTIVE DEVICE IS NO LONGER THE ONLY ONE. It stays singular --
+// it is what `parttable`, `mkpart` and the ROOT filesystem mean by
+// "the disk" -- but Real mount points needs two volumes alive at once,
+// so creating a partition device is now separate from making it
+// active. blk_part_create() hands one back; blk_part_register() does
+// that and then makes it the active device, which is what the boot
+// scan and `fsformat` want.
 //
 // `parent` must be a device that is already known-good (in practice
 // blk_active() immediately after a disk driver registered), and it is
@@ -152,6 +154,23 @@ int blk_ram_register(uint64_t base, uint64_t bytes);
 int blk_part_register(const struct block_device *parent,
                       uint32_t base_lba, uint32_t sectors, int index);
 
+// The same window WITHOUT making it active -- what a second mount
+// needs, since the mount table holds a device per mount and only one
+// of them can be blk_active(). Asking twice for the same window
+// returns the SAME device, so pointer identity answers "is this volume
+// already mounted?"; the pool is small and bounded, and a caller that
+// exhausts it gets NULL and a logged reason.
+const struct block_device *blk_part_create(const struct block_device *parent,
+                                           uint32_t base_lba, uint32_t sectors,
+                                           int index);
+
+// If `dev` is a partition window, the device it sits on and where it
+// starts there; NULL if it is not one. Lets a caller holding any
+// device answer "which disk is this really on" without the active
+// device having to be it.
+const struct block_device *blk_part_parent(const struct block_device *dev,
+                                           uint32_t *out_base);
+
 // The disk the partition table lives on: the active device, or its
 // PARENT when a partition is active. NULL when nothing is registered.
 const struct block_device *blk_whole_disk(void);
@@ -167,5 +186,25 @@ uint32_t blk_base_lba(void);
 uint32_t blk_disk_sector_count(void);
 int blk_disk_read_sectors(uint32_t lba, int count, void *buf);
 int blk_disk_write_sectors(uint32_t lba, int count, const void *buf);
+
+// ---- I/O on a NAMED device ------------------------------------------
+//
+// The blk_* wrappers above all mean "the active device", which is the
+// right default for the root filesystem and wrong for every other
+// mount. A backend that was handed its own device at mount time uses
+// these instead: same fault-injection hooks, same NULL tolerance, no
+// dependence on which mount happens to be active.
+//
+// A backend calling the active-device wrappers while mounted somewhere
+// else reads the WRONG VOLUME and reports no error, so this pair is
+// not a convenience -- it is the whole reason fs_ops.init() takes a
+// device.
+int blkdev_read_sectors(const struct block_device *dev, uint32_t lba, int count, void *buf);
+int blkdev_write_sectors(const struct block_device *dev, uint32_t lba, int count, const void *buf);
+int blkdev_max_sectors_per_xfer(const struct block_device *dev);
+int blkdev_flush(const struct block_device *dev);
+int blkdev_trim_supported(const struct block_device *dev);
+int blkdev_trim(const struct block_device *dev, uint32_t lba, uint32_t count);
+uint32_t blkdev_sector_count(const struct block_device *dev);
 
 #endif

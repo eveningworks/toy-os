@@ -66,6 +66,13 @@
 #define ENOMEM 12  // out of memory, or a heap request that would run past its
                    // ceiling
 #define EFAULT 14  // the caller handed the kernel a pointer it may not have
+#define EBUSY  16  // the thing exists and is IN USE, so the operation is
+                   // refused rather than done anyway -- umount of a
+                   // filesystem holding an open file, or a mount point
+                   // something is already mounted at. Distinct from
+                   // EPERM (never allowed) and EINVAL (the request is
+                   // wrong): the same call would succeed later.
+
 #define EEXIST 17  // already exists
 #define ENODEV 19  // nothing is registered to serve this -- no window server,
                    // no such hardware

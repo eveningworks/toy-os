@@ -9,10 +9,16 @@
 // of one string. The provider (kernel/fs/fs_query.c) closed that, and
 // the builtin is gone.
 //
-// ONE RECORD, NOT TWO READS. The name and the numbers arrive together
-// on purpose: a `used` sampled at one moment beside a `total` sampled
-// at another describes no filesystem that ever existed, and on a live
-// disk they genuinely differ.
+// ONE RECORD PER MOUNT, NOT TWO READS. The name and the numbers arrive
+// together on purpose: a `used` sampled at one moment beside a `total`
+// sampled at another describes no filesystem that ever existed, and on
+// a live disk they genuinely differ.
+//
+// EVERY MOUNT, since Real mount points. It printed one line while the
+// provider was a scalar; a machine with a TFS3 root and a FAT32 /boot
+// has two filesystems with different sizes, different fullness and
+// different persistence, and one line for them is not a summary, it is
+// the wrong answer for one of them.
 //
 // `total` is usable DATA space -- superblock, journal, bitmaps and
 // record table excluded -- so it answers "how much can I actually
@@ -31,42 +37,48 @@ int main(int argc, char **argv) {
     (void)argc; (void)argv;
 
     struct query_fsinfo fs;
-    int n = sys_query_record(QUERY_FSINFO, 0, &fs, sizeof fs);
-    if (n <= 0) {
-        cmd_fail("df", 0);
-        return 1;
-    }
-    // The ABI promises min(len, record), so a kernel whose struct is
-    // SHORTER than this build expects would leave the tail reading as
-    // zeroes -- which for `name` is an empty string and for `flags` is
-    // "not mounted". Checked rather than assumed; this is the version
-    // tolerance being used rather than merely documented.
-    if ((unsigned)n < sizeof fs) {
-        sys_print("df: this kernel reports fewer fields than expected\n");
-        return 1;
+    char u[16], t[16], f[16], line[200];
+    int shown = 0;
+
+    snprintf(line, sizeof line, "%-10s %-12s %-8s %-8s %-8s %-5s %s\n",
+             "filesystem", "on", "size", "used", "free", "use%", "persists");
+    sys_print(line);
+
+    for (int i = 0; ; i++) {
+        int n = sys_query_record(QUERY_FSINFO, i, &fs, sizeof fs);
+        if (n <= 0) break;
+        // The ABI promises min(len, record), so a kernel whose struct is
+        // SHORTER than this build expects would leave the tail reading
+        // as zeroes -- which for `name` is an empty string and for
+        // `flags` is "not mounted". Checked rather than assumed; this is
+        // the version tolerance being used rather than merely
+        // documented.
+        if ((unsigned)n < sizeof fs) {
+            sys_print("df: this kernel reports fewer fields than expected\n");
+            return 1;
+        }
+        if (!(fs.flags & QUERY_FS_MOUNTED)) continue;
+
+        unsigned long long used = fs.used_bytes, total = fs.total_bytes;
+        unsigned long long free_b = total > used ? total - used : 0;
+        human_size(u, sizeof u, used);
+        human_size(t, sizeof t, total);
+        human_size(f, sizeof f, free_b);
+        // Percent computed on the SMALLER side first so a multi-gigabyte
+        // volume does not overflow the multiply before the divide.
+        unsigned long long pct = total ? (used * 100) / total : 0;
+
+        snprintf(line, sizeof line, "%-10s %-12s %-8s %-8s %-8s %llu%%%s %s\n",
+                 fs.name, fs.point, t, u, f, pct,
+                 pct < 10 ? "  " : (pct < 100 ? " " : ""),
+                 (fs.flags & QUERY_FS_PERSISTENT) ? "yes" : "no -- RAM only");
+        sys_print(line);
+        shown++;
     }
 
-    if (!(fs.flags & QUERY_FS_MOUNTED)) {
+    if (!shown) {
         sys_print("df: no filesystem is mounted\n");
         return 1;
     }
-
-    unsigned long long used = fs.used_bytes, total = fs.total_bytes;
-    unsigned long long free_b = total > used ? total - used : 0;
-    char u[16], t[16], f[16], line[160];
-    human_size(u, sizeof u, used);
-    human_size(t, sizeof t, total);
-    human_size(f, sizeof f, free_b);
-    // Percent computed on the SMALLER side first so a multi-gigabyte
-    // volume does not overflow the multiply before the divide.
-    unsigned long long pct = total ? (used * 100) / total : 0;
-
-    snprintf(line, sizeof line, "%-10s %-8s %-8s %-8s %-5s %s\n",
-             "filesystem", "size", "used", "free", "use%", "persists");
-    sys_print(line);
-    snprintf(line, sizeof line, "%-10s %-8s %-8s %-8s %llu%%%s %s\n",
-             fs.name, t, u, f, pct, pct < 10 ? "  " : (pct < 100 ? " " : ""),
-             (fs.flags & QUERY_FS_PERSISTENT) ? "yes" : "no -- RAM only");
-    sys_print(line);
     return 0;
 }

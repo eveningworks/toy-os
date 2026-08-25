@@ -153,7 +153,12 @@ def build_image(path, size_bytes, kind, layout, seed_dir):
 
 
 def df_size(transcript):
-    """The size column of `df`'s one data row, e.g. '507.6M'.
+    """The size column of `df`'s ROOT row, e.g. '507.6M'.
+
+    THE ROW IS PICKED BY ITS MOUNT POINT. df grew an `on` column with
+    Real mount points and prints one row per mount, so "the tfs3 row"
+    stopped being unambiguous the moment anything else could be TFS3 --
+    and every column index moved by one.
 
     THE KERNEL LOG LINE `tfs3: mounted ...` STARTS WITH THE SAME WORD
     as df's row, and a naive startswith() returns "mounted" as the size
@@ -167,8 +172,8 @@ def df_size(transcript):
         if re.match(r"^[a-z][a-z0-9_]*: ", ln):
             continue
         parts = ln.split()
-        if len(parts) >= 2 and parts[0] == "tfs3":
-            return parts[1]
+        if len(parts) >= 3 and parts[0] == "tfs3" and parts[1] == "/":
+            return parts[2]
     return None
 
 

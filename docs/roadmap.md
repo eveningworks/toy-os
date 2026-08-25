@@ -239,7 +239,7 @@ everything libc-shaped is waiting on it. Full plan and staging:
 
 - [ ] Inter-process IPC (message passing)
 - [ ] A real C library -- staged in `docs/libc-design.md`; stages 0-5 done, the proof (a real port) left
-- [ ] FAT16/FAT32 driver -- and with it, `/boot` readable from inside toy-os
+- [x] ~~FAT16/FAT32 driver -- `/boot` readable from inside toy-os~~ done -- FAT32 only, read-write
 - [ ] `g_next_kernel_rsp` reentrancy fixed properly
 - [ ] `wintest` made non-modal
 - [ ] Kernel threads (a scheduler entity without an address space of its own)
@@ -351,18 +351,19 @@ No dependency on the phases above; ordered among themselves.
 
 ### Real mount points
 
-- [ ] A mount table (path prefix -> backend), replacing vfs.c's single `g_fs`
-- [ ] Path resolution that picks a backend per-path
-- [ ] `mount`/`umount` shell commands
-- [ ] Mount a second TFS3 image alongside the first, as the simplest possible proof
-- [ ] Mount a FAT volume read-only (needs Runtime + interop's FAT driver)
-- [ ] Decide the lookup rule up front, including what a mount point shadowing existing files means
-- [ ] Mounting over a non-empty directory -- allow and hide, or refuse
-- [ ] Refuse to unmount a filesystem with open files, or handle it deliberately
-- [ ] Per-mount flags, read-only first
-- [ ] `df` reporting per-mount rather than one global figure
-- [ ] Path resolution that can't escape a mount via `..` at its root
-- [ ] A tmpfs/RAM-disk backend as the cheapest possible second mount to test against (currently a backlog item)
+- [x] ~~A mount table (path prefix -> backend), replacing vfs.c's single `g_fs`~~ done -- `kernel/fs/mount.c`
+- [x] ~~Path resolution that picks a backend per-path~~ done -- longest prefix, at a component boundary
+- [x] ~~`mount`/`umount` shell commands~~ done -- `/bin` programs, over `SYS_MOUNT`/`SYS_UMOUNT`
+- [ ] Mount a second TFS3 image alongside the first -- needs per-instance backend state and a per-mount handle on every op
+- [x] ~~Mount a FAT volume read-only (needs Runtime + interop's FAT driver)~~ done -- the ESP at `/boot`, read-only by default
+- [x] ~~Decide the lookup rule up front, including what shadowing means~~ done -- five rules, `kernel/mount.h`
+- [x] ~~Mounting over a non-empty directory -- allow and hide, or refuse~~ done -- allow and hide, Unix's rule
+- [x] ~~Refuse to unmount a filesystem with open files, or handle it deliberately~~ done -- refuse, and no lazy/force
+- [x] ~~Per-mount flags, read-only first~~ done -- `MNT_RDONLY`
+- [x] ~~`df` reporting per-mount rather than one global figure~~ done -- `QUERY_FSINFO` is a vector, root first
+- [x] ~~Path resolution that can't escape a mount via `..` at its root~~ done -- for free: paths are normalized before they arrive
+- [x] ~~A tmpfs/RAM-disk backend as the cheapest possible second mount to test against~~ done -- `mount -t ramfs none /mnt`
+- [ ] Raise `fs_ops.max_mounts` above 1 -- every backend keeps its state in module-level statics, and no op carries a handle
 
 ### TFS3: an inode layer
 
@@ -806,7 +807,7 @@ this to be better?".
 - [ ] `damage_sweep.py`'s random walk can open Notepad's file picker by chance -- harmless, but confusing in a state dump
 - [ ] `SYS_LISTDIR` still truncates at 256 entries, and TFS3 has no such cap -- the fix is an offset argument
 - [ ] Nothing detects an ordinary memory LEAK, in either allocator
-- [ ] `/boot` is a FAT32 partition the OS cannot read, so it cannot update its own kernel
+- [ ] The ESP's own layout puts the kernel at `/boot/boot/kernel.bin`, because one `grub.cfg` serves the ISO and the disk
 - [ ] A ramfs root is EMPTY -- no `/bin`, so a diskless boot has a filesystem and no programs
 - [ ] The shell's command dispatch is a long `if/else` chain, and the fix is not the obvious one
 - [ ] Settings: a ring-3 settings daemon (stage 2)
@@ -826,7 +827,7 @@ this to be better?".
 - [ ] Time sources -- the strongest candidate (superseded above)
 - [ ] Stack block devices rather than hooking the filesystem, for M18 encryption at rest
 - [ ] M16 block checksums are NOT simply a block layer, and that is the decision to make
-- [ ] `block.h` has ONE ACTIVE DEVICE, mirroring the VFS's one active backend
+- [ ] `block.h` still has ONE ACTIVE DEVICE -- what `parttable`/`mkpart`/`fsformat` mean by "the disk"
 - [ ] **Interfaces that exist with exactly ONE implementation are the same problem seen from the other side
 - [ ] Keep shaped, do not build (one implementation each)
 
@@ -836,7 +837,7 @@ Smaller or lower-priority items not yet slotted into a section above.
 
 - [ ] Virtio drivers (disk/net)
 - [ ] Multi-architecture support (RISC-V) -- see `docs/arch-portability.md`
-- [ ] A RAM disk backend, once Real mount points makes a second backend addressable
+- [x] ~~A RAM disk backend, once Real mount points makes a second backend addressable~~ done -- `mount -t ramfs none /mnt`
 - [x] ~~`ls` colour/format options beyond `-l`/`-a`~~ done -- `-1CFhlRrSt`, `--color`, sorted by name, and colour as ANSI
 - [ ] Serial debug console: make it writable -- read-only inspection today, deliberately (`docs/decisions.md`)
 - [ ] Replace the fixed `MAX_WINDOWS`-style compile-time caps (and TFS2's `FS_MAX_FILES`) with growable structures

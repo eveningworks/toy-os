@@ -79,6 +79,13 @@ QEMU, and it does not stop at "hello world from the kernel":
   `mkpart` writes a table, `parttable` reads one, and `fsformat`
   reformats the mounted volume -- and refuses to be aimed at the
   bootloader.
+- **Two filesystems at once, and one of them is the boot volume** — a
+  mount table keyed by path prefix, so TFS3 serves `/` and a FAT32
+  driver serves `/boot`, read-only, which is the partition GRUB and the
+  kernel image actually live in. `mount`/`umount` attach anything else
+  (`mount -t ramfs none /mnt` is a scratch filesystem in RAM), `df`
+  reports every mount, and a write to a read-only mount is refused
+  rather than quietly dropped.
 - **A real GUI, and it is not in the kernel** — the window manager is
   itself a **ring-3 process**: movable, resizable windows, a taskbar, a
   Start menu built from `.desktop` files (picked up live), and a desktop
@@ -406,13 +413,21 @@ frame, so teardown cannot hand back memory somebody else is still using,
 and `meminfo audit` checks every live address space against the
 allocator.
 
-**Filesystems.** [TFS3](docs/tfs3-spec.md) is the default: block groups,
+**Filesystems.** [TFS3](docs/tfs3-spec.md) is the root: block groups,
 128-byte checksummed inodes, hardlinks, atomic rename and truncation,
 32-slot journal transactions, ext-style superblock backups, ~590k files
 on a 9 GiB volume. It scales files to gigabytes through direct and
 single/double/triple-indirect pointers, batches ATA flushes, TRIMs freed
 blocks back to the host, and refuses to touch a disk whose superblock
 could not be read rather than destroying a possibly-good filesystem.
+FAT32 is the second on-disk backend — read-write, with VFAT long names —
+and exists because `/boot` is a FAT volume the machine boots from and
+could not read. It is a generic driver: nothing in it knows it holds a
+bootloader, and the read-only-by-default policy lives in the mount code,
+the same split Linux keeps between `fs/fat/` and an ESP in `fstab`.
+ramfs is the third, in the kernel heap, and is what a diskless boot gets
+for a root. A mount table resolves a path to a backend by longest prefix
+at a component boundary, so all three can be mounted at once.
 
 **Graphics and GUI.** Real fonts, two ways: eight sizes of JetBrains Mono
 baked to bitmaps at build time as the guaranteed fallback, and a
@@ -514,7 +529,7 @@ kernel/
                 multiboot, timers, serial + the debug console
   mm/           physical frames, address spaces, the kernel heap
   proc/         ELF64 loader, the syscall table, scheduler, window server
-  fs/           TFS3 behind the probe-selecting VFS
+  fs/           TFS3, FAT32 and ramfs behind the VFS and its mount table
   tty/          the terminal object: line discipline, ptys, tty0
   lib/          services with no hardware of their own: the shared
                 toolkit (strings, numbers, formatting, paths, line
@@ -600,6 +615,7 @@ Selected tools, each documented in its own docstring:
 | `qmp_test.py`, `gui_flow.py`, `shell_flow.py` | Drive the GUI over QEMU's QMP socket, with the mouse/keyboard gotchas already handled. |
 | `tfs3_writer.py` | Read, write, inspect and corrupt-for-testing files inside a `disk.img` from the host, without booting. `--at-lba`/`--sectors` reach a filesystem inside a partition. |
 | `fs_switch_test.py` | Proves probe, wipefs, live `fsformat`, and reboot persistence. |
+| `fat32_test.py` | FAT32 and the mount table against an **independent implementation**: `mtools` reads back what the guest wrote and `fsck.fat` audits the volume. A self-test cannot catch an expectation being wrong; the strongest check is a 185 KiB binary extracted on the host and compared byte for byte. |
 | `partition_test.py` | Boots with the filesystem inside an MBR or GPT partition. Its real check is `df`: a kernel ignoring partitions still boots, so "it booted" proves nothing. Its last phase proves `fsformat` cannot be aimed at the bootloader. |
 | `install_grub.py` | Puts GRUB and the kernel onto `disk.img` -- the boot sector, `core.img` in the BIOS boot partition, `/boot` in the FAT32 one -- and answers which medium a launch should boot. |
 | `regex_hostcheck.py` | tolibc's `<regex.h>` against **glibc's**, over one shared case table — an oracle sharing no code is the only thing that catches a wrong expectation. |

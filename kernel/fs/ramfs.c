@@ -52,6 +52,7 @@
 //    over it every allocating write fails exactly as a full disk does.
 #include "fs.h"
 #include "fs_ops.h"
+#include "block.h" // struct block_device -- the ops signatures take one
 #include "ramfs.h"
 #include "heap.h"
 #include "klog.h"
@@ -358,7 +359,8 @@ static int write_at(struct rnode *n, uint64_t off, const void *buf, uint32_t len
 
 // ---- fs_ops ---------------------------------------------------------
 
-static int ramfs_probe(void) {
+static int ramfs_probe(const struct block_device *dev) {
+    (void)dev;
     // NEVER claims a device. ramfs is chosen by POLICY in vfs.c, not by
     // detection -- there is no superblock to recognise, and a backend
     // that claimed a disk it cannot read would be the worst possible
@@ -366,7 +368,8 @@ static int ramfs_probe(void) {
     return 0;
 }
 
-static int ramfs_wipe(void) {
+static int ramfs_wipe(const struct block_device *dev) {
+    (void)dev;
     // Nothing on any disk bears its signature, so there is nothing to
     // erase. Success, per fs_ops.h ("nothing to wipe counts as
     // success").
@@ -380,12 +383,14 @@ static void drop_everything(void) {
     g_used = 0;
 }
 
-static int ramfs_format(void) {
+static int ramfs_format(const struct block_device *dev) {
+    (void)dev;
     drop_everything();
     return 1;
 }
 
-static int ramfs_init(void) {
+static int ramfs_init(const struct block_device *dev) {
+    (void)dev; // ramfs has no volume -- it IS the volume
     drop_everything();
 
     // The budget: half of what the frame allocator says is free, which
@@ -692,6 +697,12 @@ const struct fs_ops ramfs_ops = {
     // does not go through the block layer at all, so try_partitions()
     // must never offer it a partition. See fs_ops.h.
     .volume_relative = 0,
+    // ONCE, and here that is a property of the node table rather than a
+    // limitation to fix later: g_nodes[] IS the filesystem. A second
+    // ramfs mount would be a second tree, which needs the state to be
+    // per-instance -- worth doing when something wants two scratch
+    // filesystems, and not before.
+    .max_mounts = 1,
     .probe = ramfs_probe,
     .wipe = ramfs_wipe,
     .format = ramfs_format,
@@ -726,7 +737,7 @@ const struct fs_ops ramfs_ops = {
 // the rest of the suite. They drive these directly instead, which is
 // the same shape partition_test.c uses for the block device.
 int ramfs_test_mount(uint64_t budget_bytes) {
-    int r = ramfs_init();
+    int r = ramfs_init(NULL);
     if (r < 0) return 0;
     if (budget_bytes) {
         g_budget = budget_bytes;

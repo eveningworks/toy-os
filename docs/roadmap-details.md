@@ -1254,19 +1254,48 @@ time, exactly as one whole disk was. The remaining work is unchanged.
 The per-backend-statics warning below applies to `tfs3.c` exactly as it
 does to `tfs.c`.
 
-The work is a mount table (longest-matching path prefix -> backend), path
-resolution that consults it, and `mount`/`umount` commands. The honest
-first proof isn't FAT: it's mounting a *second TFS3 image* at `/mnt`,
-because that isolates "does dispatch-by-prefix work" from "does the new
-filesystem driver work". Only then is FAT read-only mounting a
-meaningful test.
+**BUILT.** `kernel/fs/mount.c` holds the table and the boot policy;
+`kernel/fs/vfs.c` resolves a path to a mount and forwards. The five
+rules are in `kernel/mount.h` and the reasoning is in
+`docs/decisions/storage.md`. TFS3 serves `/`, FAT32 serves `/boot`
+(read-only by default), and `mount -t ramfs none /mnt` is a third.
 
-Watch for: relative paths (`cd` across a mount boundary), `fs_list()` on
-a directory containing a mount point, and the fact that several `tfs.c`
-statics (scratch buffers, the bitmap) are per-*backend* state that a
-second instance of the same backend would need its own copy of. That last
-one is the real work, and it's worth knowing before starting rather than
-discovering at the halfway mark.
+**The suggested first proof was a second TFS3 image at `/mnt`, and that
+is the one item still open** -- for the reason this entry predicted.
+Several `tfs3.c` statics (the superblock, the group descriptors, both
+bitmaps, the journal buffers, the block scratch) are per-*backend* state
+that a second instance would need its own copy of, and so are FAT32's FAT
+cache and directory scratch. Every backend declares
+`fs_ops.max_mounts = 1` and the table refuses a second mount BY NAME,
+which turns what would have been a silent data-loss bug (one set of
+statics repointed, the first mount reading the second's volume) into a
+refusal.
+
+What replaced it as the isolating proof is **ramfs at `/mnt`**: a third
+backend with no volume at all, mounted and unmounted by
+`kernel/fs/mount_test.c` on every ktest run, exercising the same
+dispatch with none of FAT32's code in the path.
+
+Raising `max_mounts` needs more than per-instance state. Every op in
+`struct fs_ops` takes a PATH and no handle, so a backend cannot tell
+which of its mounts a call belongs to; the shape that fixes it is
+`init()` returning an opaque handle that every op then takes -- Linux's
+`super_block`. It buys nothing until a backend's state is per-instance,
+which is why it was not done at the same time.
+
+What DID have to change, and was not predicted here: `probe()`,
+`format()`, `wipe()` and `init()` take a `struct block_device *` now
+instead of reading `blk_active()`. With two mounts there is no single
+active device a backend could correctly assume. See
+`docs/conventions/storage.md`.
+
+Two things this entry warned about that turned out to cost nothing:
+relative paths and `..`. Every path reaching `fs_*` is normalized
+before it arrives (`api/fs.h`), so `..` is gone before any mount is
+consulted, and `cd` across a boundary is the shell's lexical
+normalization doing exactly the right thing. `fs_list()` on a directory
+containing a mount point works because the mount point is a REAL
+directory on the parent filesystem -- rule 3 requires it.
 
 ### Observability
 

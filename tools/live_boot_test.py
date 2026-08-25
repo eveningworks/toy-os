@@ -106,10 +106,16 @@ class Result:
 # built at all (its size was a hardcoded 24 MiB the seed tree had
 # outgrown), so nothing ran this tool to notice.
 #
-#   filesystem size     used     free     use%  persists
-#   tfs3       23.4M    4.2M     19.2M    17%   no
+#   filesystem on           size     used     free     use%  persists
+#   tfs3       /            23.4M    4.2M     19.2M    17%   no
+#
+# AND IT GREW AN `on` COLUMN when Real mount points landed, which shifted
+# every index by one and is the same rot again -- a tool reading columns
+# positionally has to be updated with the command. The ROOT row is now
+# picked BY ITS MOUNT POINT rather than by being the only row, since a
+# machine with a /boot has more than one.
 def parse_df(df):
-    """(size_kb, used_kb, persists) from df's one data row."""
+    """(size_kb, used_kb, persists) from df's ROOT row."""
     def kb(cell):
         mult = {"K": 1, "M": 1024, "G": 1024 * 1024}.get(cell[-1:].upper(), 0)
         if not mult:
@@ -121,8 +127,8 @@ def parse_df(df):
 
     for line in df.splitlines():
         cols = line.split()
-        if len(cols) >= 6 and cols[0] not in ("filesystem",) and "%" in cols[4]:
-            return kb(cols[1]), kb(cols[2]), cols[5].lower()
+        if len(cols) >= 7 and cols[0] != "filesystem" and cols[1] == "/" and "%" in cols[5]:
+            return kb(cols[2]), kb(cols[3]), cols[6].lower()
     return 0, 0, ""
 
 

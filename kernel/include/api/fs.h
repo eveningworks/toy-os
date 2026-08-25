@@ -371,6 +371,19 @@ int fs_is_persistent(void);
 // that's already resident.
 int fs_disk_usage(uint64_t *out_used_bytes, uint64_t *out_total_bytes);
 
+// The same numbers for ONE mount rather than for the root -- what the
+// QUERY_FSINFO provider reports per mount, and what `df` prints a row
+// of. `m` is a `const struct mount *` from kernel/mount.h, taken as
+// void * because api/ headers may not include kernel/ ones.
+//
+// IT EXISTS SO THE PREEMPTION GUARD STILL APPLIES. Asking a mount's
+// backend directly is one line and skips vfs.c's FS_OP() section, which
+// is the guard every other path through this header takes -- and the
+// backends are not re-entrant, so a caller preempted inside that call
+// corrupts the walk. See vfs.c's FS_OP comment for what that looked
+// like the first time.
+int fs_mount_usage(const void *m, uint64_t *out_used_bytes, uint64_t *out_total_bytes);
+
 // ---- consistency check / repair (`fsck`) ----
 
 // What one pass over the filesystem found, and (if it was a repair

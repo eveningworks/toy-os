@@ -139,3 +139,44 @@ int blk_trim(uint32_t lba, uint32_t count) {
     if (!blk_trim_supported()) return 0;
     return g_dev->trim(lba, count);
 }
+
+// ---- I/O on a NAMED device ------------------------------------------
+//
+// Everything above answers for the ACTIVE device. These answer for the
+// one the caller was handed at mount time, which is what a filesystem
+// mounted anywhere but the root has to use -- see block.h. The
+// fault-injection hooks are the same ones, deliberately: an error path
+// does not become untestable by being on a second mount.
+int blkdev_read_sectors(const struct block_device *dev, uint32_t lba, int count, void *buf) {
+    if (fault_should_fail_block_read()) return 0;
+    return dev ? dev->read_sectors(lba, count, buf) : 0;
+}
+
+int blkdev_write_sectors(const struct block_device *dev, uint32_t lba, int count, const void *buf) {
+    if (fault_should_fail_block_write()) return 0;
+    return dev ? dev->write_sectors(lba, count, buf) : 0;
+}
+
+int blkdev_max_sectors_per_xfer(const struct block_device *dev) {
+    return dev ? dev->max_sectors_per_xfer() : 1;
+}
+
+// Same contract as blk_flush(): 1 on a device with no cache, because
+// there is nothing that can be lost independently of everything else.
+int blkdev_flush(const struct block_device *dev) {
+    if (dev && (dev->caps & BLK_CAP_FLUSH)) return dev->flush();
+    return 1;
+}
+
+int blkdev_trim_supported(const struct block_device *dev) {
+    return dev && (dev->caps & BLK_CAP_TRIM);
+}
+
+int blkdev_trim(const struct block_device *dev, uint32_t lba, uint32_t count) {
+    if (!blkdev_trim_supported(dev)) return 0;
+    return dev->trim(lba, count);
+}
+
+uint32_t blkdev_sector_count(const struct block_device *dev) {
+    return dev ? dev->sector_count() : 0;
+}

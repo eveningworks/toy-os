@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "partition_abi.h" // struct mkpart_request, for sys_mkpart()
+#include "mount_abi.h"     // struct mount_request, for sys_mount()
 #include <stddef.h>
 #include "syscall_abi.h"
 #include "errno.h"   // sys_errno()'s values
@@ -485,6 +486,18 @@ unsigned long long sys_fs_generation(void);
 // or a negative errno (-EPERM without MKPART_CONFIRM, -EINVAL for a
 // table that overlaps or runs off the disk, -EIO on a write failure).
 int sys_mkpart(const struct mkpart_request *req);
+
+// Attaches a filesystem at a path, and detaches one. See
+// abi/mount_abi.h for the request shape -- in particular why `source`
+// is a PARTITION NUMBER rather than a device path (this OS has no
+// /dev). Both return 0 or a negative errno; the interesting ones are
+// -EBUSY (something is mounted there, or a file on it is open) and
+// -ENODEV (nothing recognises the filesystem on that volume).
+//
+// NOT DESTRUCTIVE: nothing is formatted or overwritten, which is why
+// there is no confirm flag of the kind SYS_MKPART needs.
+int sys_mount(const struct mount_request *req);
+int sys_umount(const char *point);
 
 // Powers the machine off (`reboot` = 0) or restarts it (1). DOES NOT
 // RETURN on success, so a caller that continues past it should treat

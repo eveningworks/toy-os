@@ -1,0 +1,642 @@
+// The mount table, and the boot-time policy that fills it.
+//
+// This was the top half of vfs.c until `/boot` needed to be a second
+// filesystem. The split is by concern, the same call `userland/wm/`
+// made: vfs.c implements api/fs.h by dispatching a path to a backend,
+// and this file decides which backends exist, where they are attached,
+// and what is allowed to attach where. Neither half wants to be read
+// while working on the other.
+//
+// See kernel/mount.h for the five rules this enforces and for what
+// Linux and Windows do. Everything here is about not destroying data:
+// a drive's root comes from a PARTITION, never a whole-disk volume;
+// nothing is auto-formatted; and the ESP -- which holds the bootloader
+// that started this kernel -- is mounted READ-ONLY unless somebody
+// deliberately says otherwise.
+#include "mount.h"
+#include "block.h"
+#include "tfs3.h"
+#include "fat32.h"
+#include "ramfs.h"
+#include "ata.h"
+#include "klog.h"
+#include "kfmt.h"
+#include "string.h"
+#include "multiboot.h"
+#include "partition.h"
+#include "syscalls.h" // fd_desc[] -- the open-file check in mount_remove()
+
+// Priority order: first probe() == 1 wins.
+//
+// Order decides which backend is ASKED first, not which one wins: two
+// formats' magics live at different offsets, so a volume is claimed by
+// at most one probe. There is no contested volume.
+static const struct fs_ops *const g_backends[] = {
+    &tfs3_ops,
+    &fat32_ops,
+};
+#define FS_BACKEND_COUNT ((int)(sizeof(g_backends) / sizeof(g_backends[0])))
+
+// RAMFS IS DELIBERATELY NOT IN THAT TABLE, and it is not an oversight.
+// g_backends is the list of ON-DISK backends: things a probe can find
+// on a volume, things `fsformat` can write to one. ramfs is neither --
+// it is chosen by the policy below when there is no usable volume at
+// all, and it is reached through this pointer instead.
+//
+// Being in the table would be actively dangerous, which is the part
+// worth keeping: fs_format_backend() wipes every OTHER backend's
+// signatures before formatting with the named one, so `fsformat ramfs`
+// would erase TFS3's superblock from a perfectly good disk and THEN
+// fail its own persistence check. Out of the table, that command finds
+// no such backend and refuses before touching anything.
+static const struct fs_ops *const g_ram_backend = &ramfs_ops;
+
+static struct mount g_mounts[MOUNT_MAX];
+
+// ---- the table -----------------------------------------------------
+
+int mount_count(void) {
+    int n = 0;
+    for (int i = 0; i < MOUNT_MAX; i++) if (g_mounts[i].used) n++;
+    return n;
+}
+
+const struct mount *mount_at(int index) {
+    int n = 0;
+    for (int i = 0; i < MOUNT_MAX; i++) {
+        if (!g_mounts[i].used) continue;
+        if (n == index) return &g_mounts[i];
+        n++;
+    }
+    return NULL;
+}
+
+const struct mount *mount_root(void) {
+    for (int i = 0; i < MOUNT_MAX; i++) {
+        if (g_mounts[i].used && g_mounts[i].point_len == 1) return &g_mounts[i];
+    }
+    return NULL;
+}
+
+// Does `path` fall under mount point `point`? RULE 1: the prefix must
+// end at a COMPONENT BOUNDARY. A bare k_strncmp() would hand
+// `/bootloader.cfg` to the mount at `/boot`, which is one filesystem
+// serving another's files with nothing to notice it.
+static int under(const char *point, int plen, const char *path) {
+    if (plen == 1) return 1; // the root claims everything nothing else does
+    if (k_strncmp(path, point, (uint32_t)plen) != 0) return 0;
+    char next = path[plen];
+    return next == '\0' || next == '/';
+}
+
+const struct mount *mount_resolve(const char *path, char *out_sub, int sub_cap) {
+    if (!path) path = "/";
+    const struct mount *best = NULL;
+    for (int i = 0; i < MOUNT_MAX; i++) {
+        const struct mount *m = &g_mounts[i];
+        if (!m->used) continue;
+        if (!under(m->point, m->point_len, path)) continue;
+        // LONGEST prefix, so a mount at /boot/grub would outrank one at
+        // /boot -- nesting works without being a special case.
+        if (!best || m->point_len > best->point_len) best = m;
+    }
+    if (!best) return NULL;
+
+    if (out_sub && sub_cap > 0) {
+        // RULE 2: the backend is handed a root-relative path and never
+        // learns where it is mounted.
+        const char *rest = (best->point_len == 1) ? path : path + best->point_len;
+        if (rest[0] == '\0') { // the mount point itself
+            k_strlcpy(out_sub, "/", (uint32_t)sub_cap);
+        } else {
+            k_strlcpy(out_sub, rest, (uint32_t)sub_cap);
+        }
+    }
+    return best;
+}
+
+// ---- mounting ------------------------------------------------------
+
+// Is a backend already mounted somewhere, and how many times? A
+// backend whose state is module-level statics may be mounted once
+// (fs_ops.max_mounts) -- and the failure of ignoring that is silent
+// rather than loud, which is why it is checked here and not discovered:
+// a second mount would re-point the one set of statics and leave the
+// FIRST mount reading the second one's volume.
+static int mounts_of(const struct fs_ops *fs) {
+    int n = 0;
+    for (int i = 0; i < MOUNT_MAX; i++) {
+        if (g_mounts[i].used && g_mounts[i].fs == fs) n++;
+    }
+    return n;
+}
+
+static struct mount *free_slot(void) {
+    for (int i = 0; i < MOUNT_MAX; i++) if (!g_mounts[i].used) return &g_mounts[i];
+    return NULL;
+}
+
+static struct mount *find_point(const char *point) {
+    for (int i = 0; i < MOUNT_MAX; i++) {
+        if (g_mounts[i].used && k_strcmp(g_mounts[i].point, point) == 0) return &g_mounts[i];
+    }
+    return NULL;
+}
+
+// The display.c caps_are_honest() analogue: a capability and its
+// optional function pointer are one fact stated twice, and a backend
+// whose two statements disagree is refused.
+static int caps_are_honest(const struct fs_ops *fs) {
+    if (!fs->name || !fs->probe || !fs->wipe || !fs->format || !fs->init) return 0;
+    if (fs->max_mounts < 1) return 0;
+    // Optional ops: the bit and the pointer must agree, both ways -- a
+    // NULL op behind a declared cap would crash a caller that trusted
+    // fs_has(); a real op behind an undeclared cap is a feature callers
+    // can never find. display.c's rule, verbatim.
+    if (((fs->caps & FS_CAP_HARDLINKS) != 0) != (fs->link != 0)) return 0;
+    return 1;
+}
+
+// Fills a slot and announces it. `r` is what init() returned.
+static void record(struct mount *slot, const struct fs_ops *fs,
+                   const struct block_device *dev, const char *point,
+                   unsigned flags, int r) {
+    slot->used = 1;
+    k_strlcpy(slot->point, point, sizeof slot->point);
+    slot->point_len = (int)k_strlen(slot->point);
+    slot->fs = fs;
+    slot->dev = dev;
+    slot->flags = flags;
+    // Persistence is the DEVICE's answer as well as the backend's:
+    // TFS3 mounts a RAM image exactly as it mounts a disk and cannot
+    // tell them apart, so asking it alone would report a live session
+    // as persistent -- which `df`, `fsck` and the About window would
+    // then repeat to the user. A backend that says 0 (ramfs) is not
+    // persistent whatever the device says.
+    slot->persistent = (r == 1) && dev && dev->persistent;
+    klog_printf("fs: %s mounted at %s on %s%s%s\n", fs->name, slot->point,
+                dev ? dev->name : "(no device)",
+                (flags & MNT_RDONLY) ? ", read-only" : "",
+                slot->persistent ? "" : " (not persistent -- files vanish on reboot)");
+}
+
+int mount_add(const struct block_device *dev, const char *fstype,
+              const char *point, unsigned flags, const char **why) {
+    static const char *dummy;
+    if (!why) why = &dummy;
+    *why = "";
+
+    if (!point || point[0] != '/') { *why = "mount point must be an absolute path"; return 0; }
+    int plen = (int)k_strlen(point);
+    if (plen >= FS_PATH_MAX) { *why = "mount point too long"; return 0; }
+    if (plen > 1 && point[plen - 1] == '/') { *why = "mount point must not end in '/'"; return 0; }
+
+    if (find_point(point)) { *why = "something is already mounted there"; return 0; }
+
+    // RULE 3: the point must exist and be a directory on whatever
+    // currently answers for it. Linux's rule -- mounting onto nothing
+    // would create a path that exists only while mounted, which no
+    // `ls` of the parent could show.
+    if (plen > 1) {
+        if (!mount_root()) { *why = "nothing is mounted to mount onto"; return 0; }
+        if (!fs_is_dir(point)) { *why = "mount point does not exist, or is not a directory"; return 0; }
+    }
+
+    if (dev) {
+        for (int i = 0; i < MOUNT_MAX; i++) {
+            if (g_mounts[i].used && g_mounts[i].dev == dev) {
+                *why = "that volume is already mounted";
+                return 0;
+            }
+        }
+    }
+
+    struct mount *slot = free_slot();
+    if (!slot) { *why = "the mount table is full"; return 0; }
+
+    // A named type is asked directly; an unnamed one is probed, which
+    // is what `mount 2 /boot` does. ramfs is reachable BY NAME only --
+    // it claims nothing, so a probe would never find it, and that is
+    // what makes `mount ramfs /mnt` a scratch filesystem rather than a
+    // thing that happens to a disk.
+    const struct fs_ops *chosen = NULL;
+    if (fstype && fstype[0]) {
+        if (k_strcmp(fstype, g_ram_backend->name) == 0) {
+            chosen = g_ram_backend;
+            dev = NULL; // it has no volume, whatever was named
+        } else {
+            for (int i = 0; i < FS_BACKEND_COUNT; i++) {
+                if (k_strcmp(g_backends[i]->name, fstype) == 0) { chosen = g_backends[i]; break; }
+            }
+            if (!chosen) { *why = "no such filesystem type"; return 0; }
+            if (!dev) { *why = "that filesystem needs a volume"; return 0; }
+            if (chosen->probe(dev) != 1) { *why = "no such filesystem on that volume"; return 0; }
+        }
+    } else {
+        if (!dev) { *why = "no volume, and no filesystem type named"; return 0; }
+        for (int i = 0; i < FS_BACKEND_COUNT; i++) {
+            const struct fs_ops *fs = g_backends[i];
+            if (!fs->volume_relative || !caps_are_honest(fs)) continue;
+            // A BACKEND AT ITS MOUNT LIMIT IS NOT ASKED. It could not be
+            // mounted anyway, and probing it is what turned a
+            // side-effect in one probe into a silently empty root.
+            if (mounts_of(fs) >= fs->max_mounts) continue;
+            if (fs->probe(dev) == 1) { chosen = fs; break; }
+        }
+        if (!chosen) { *why = "nothing recognises the filesystem on that volume"; return 0; }
+    }
+
+    if (!caps_are_honest(chosen)) { *why = "that backend's capabilities are inconsistent"; return 0; }
+    if (mounts_of(chosen) >= chosen->max_mounts) {
+        *why = "that filesystem can only be mounted once at a time";
+        return 0;
+    }
+
+    int r = chosen->init(dev);
+    if (r < 0) { *why = "the filesystem would not mount"; return 0; }
+
+    record(slot, chosen, dev, point, flags, r);
+    return 1;
+}
+
+// Is any process holding an open file under this mount? `struct
+// open_file` already records a FD_FILE's absolute path, so this needs
+// no new bookkeeping -- and bookkeeping that exists only to answer one
+// question is the kind that drifts out of step with what it counts.
+static int has_open_files(const struct mount *m) {
+    for (int i = 0; i < FD_DESC_MAX; i++) {
+        const struct open_file *f = &fd_desc[i];
+        if (f->refs <= 0 || f->kind != FD_KIND_FILE) continue;
+        if (under(m->point, m->point_len, f->file.name)) return 1;
+    }
+    return 0;
+}
+
+int mount_remove(const char *point, const char **why) {
+    static const char *dummy;
+    if (!why) why = &dummy;
+    *why = "";
+
+    if (!point) { *why = "no mount point given"; return 0; }
+    struct mount *m = find_point(point);
+    if (!m) { *why = "nothing is mounted there"; return 0; }
+    if (m->point_len == 1) { *why = "the root filesystem cannot be unmounted"; return 0; }
+
+    // Something mounted UNDER this one holds it in place, exactly as a
+    // process's open file does. Unmount the deeper one first.
+    for (int i = 0; i < MOUNT_MAX; i++) {
+        if (!g_mounts[i].used || &g_mounts[i] == m) continue;
+        if (under(m->point, m->point_len, g_mounts[i].point)) {
+            *why = "another filesystem is mounted underneath it";
+            return 0;
+        }
+    }
+
+    if (has_open_files(m)) { *why = "a file on it is still open"; return 0; }
+
+    // Flush before forgetting the mount: a write-back cache's failure
+    // surfaces at the flush, and after this the volume has no owner to
+    // report it to.
+    if (m->dev) blkdev_flush(m->dev);
+    if (m->fs->umount) m->fs->umount(m->dev);
+
+    klog_printf("fs: %s unmounted from %s\n", m->fs->name, m->point);
+    k_memset(m, 0, sizeof *m);
+    return 1;
+}
+
+// ---- boot policy ---------------------------------------------------
+
+// A LIVE IMAGE: a filesystem the bootloader handed over as a module,
+// mounted from RAM through the same backend a disk uses. See
+// docs/live-cd-design.md for why it is a filesystem image rather than
+// an archive -- one format, one mount path, no unpack step.
+//
+// WHEN it is used, and the rule is deliberately conservative: only when
+// there is no disk, or when the command line asks for it. A real disk
+// present and unasked-for is mounted exactly as before. A live session
+// that quietly displaced somebody's installed system would be the worst
+// thing this feature could do.
+static int try_live_module(void) {
+    struct multiboot_module_info mod;
+    if (!multiboot_get_module(0, &mod) || !mod.found) return 0;
+    if (mod.end <= mod.start) return 0;
+
+    const char *cmdline = multiboot_cmdline();
+    int forced = cmdline && k_strstr(cmdline, "live");
+    if (ata_present() && !forced) return 0;
+
+    if (!blk_ram_register(mod.start, mod.end - mod.start)) return 0;
+    klog_printf("fs: live image at 0x%x, %u KiB%s\n", (unsigned)mod.start,
+                 (unsigned)((mod.end - mod.start) / 1024),
+                 forced ? " (forced by `live` on the command line)" : "");
+    return 1;
+}
+
+// The boot disk's partition table, read once and kept. try_partitions()
+// needs it, and so does mount_partition_device() when `/bin/mount`
+// names a partition by number long after boot.
+//
+// STATIC, not a stack local: struct partition_table is ~1.5 KB against
+// a 1 KB kernel frame budget -- the same call partition_query.c makes,
+// for the same reason.
+static struct partition_table g_tbl;
+static int g_tbl_valid;
+
+static int read_table(void) {
+    if (g_tbl_valid) return g_tbl.kind != PART_TABLE_NONE;
+    if (!partition_read_table(&g_tbl)) return 0;
+    g_tbl_valid = 1;
+    return g_tbl.kind != PART_TABLE_NONE;
+}
+
+// One entry's window on the disk, in sectors. 0 if the entry cannot be
+// used (an unusable GPT range, or a protective MBR slot).
+static int entry_window(const struct partition_entry *pe, uint32_t *base, uint32_t *count) {
+    if (g_tbl.kind == PART_TABLE_GPT) {
+        // GPT's range is INCLUSIVE at both ends, so the count is
+        // end - start + 1. Getting that off by one costs the last
+        // sector of every volume, which a filesystem notices only when
+        // it is nearly full.
+        if (pe->gpt_lba_end < pe->gpt_lba_start) return 0;
+        uint64_t n = pe->gpt_lba_end - pe->gpt_lba_start + 1;
+        // This kernel addresses the disk with 32-bit LBAs (LBA28 on
+        // ATA, and block_device's own sector_count is uint32_t), so a
+        // partition past that ceiling is REFUSED rather than truncated
+        // into a window that silently aliases.
+        if (pe->gpt_lba_start + n > 0xFFFFFFFFull) return 0;
+        *base = (uint32_t)pe->gpt_lba_start;
+        *count = (uint32_t)n;
+        return 1;
+    }
+    if (pe->mbr_type == 0xEE) return 0; // protective entry, never a filesystem
+    *base = pe->mbr_lba_start;
+    *count = pe->mbr_num_sectors;
+    return *count != 0;
+}
+
+const struct block_device *mount_partition_device(int number) {
+    const struct block_device *disk = blk_whole_disk();
+    if (!disk || !read_table()) return NULL;
+    if (number < 1 || number > g_tbl.entry_count) return NULL;
+    uint32_t base, count;
+    if (!entry_window(&g_tbl.entries[number - 1], &base, &count)) return NULL;
+    return blk_part_create(disk, base, count, number);
+}
+
+// Tries to mount a root out of one of the disk's PARTITIONS.
+// Returns:
+//    1  mounted -- that partition is now the active block device
+//    0  there IS a table, but no partition held a filesystem
+//   -1  no partition table at all
+//
+// The caller needs 0 and -1 apart, and they now mean two different
+// things to a user: 0 is "your partitions are empty, format one", -1
+// is "this drive has no table and toy-os will not mount it". Both end
+// in ramfs; only one of them is somebody's mistake.
+//
+// Order is the table's own order, not "biggest" or "first bootable" --
+// there is nothing here that would make a cleverer policy more correct,
+// and a table's order is the one thing a person writing it controls.
+static int try_partitions(void) {
+    const struct block_device *disk = blk_whole_disk();
+    if (!disk) return -1;
+    if (!read_table()) return -1;
+    if (g_tbl.entry_count == 0) return 0; // an empty table is still a table
+
+    klog_printf("fs: %s partition table, %d entries\n",
+                g_tbl.kind == PART_TABLE_GPT ? "GPT" : "MBR", g_tbl.entry_count);
+
+    // Remembered so the "nothing mounted" path below can re-register
+    // the first partition that is ours -- see there.
+    uint32_t first_base = 0, first_count = 0;
+    int first_ok = 0, first_index = 1;
+
+    for (int i = 0; i < g_tbl.entry_count; i++) {
+        const struct partition_entry *pe = &g_tbl.entries[i];
+        uint32_t base, count;
+
+        // THE FIRMWARE'S PARTITIONS ARE NOT THE ROOT. A BIOS boot
+        // partition holds GRUB's core.img with no filesystem in it, and
+        // the ESP holds /boot/kernel.bin -- this OS's own disk has both
+        // in front of the filesystem. Skipping them here does two
+        // things: neither becomes the ROOT, and neither can become the
+        // "leave partition 1 active" fallback below, which would point
+        // `fsformat` at the bootloader.
+        //
+        // The ESP is not ignored any more, though -- mount_boot_auto()
+        // comes back for it and mounts it at /boot, read-only. That is
+        // a different question from "what is the root", which is why it
+        // is a different pass.
+        if (partition_is_firmware(pe, g_tbl.kind)) {
+            klog_printf("fs: partition %d is the firmware's (bootloader/ESP) -- not the root\n", i + 1);
+            continue;
+        }
+
+        if (!entry_window(pe, &base, &count)) continue;
+        if (!blk_part_register(disk, base, count, i + 1)) continue;
+        if (!first_ok) {
+            first_base = base; first_count = count; first_index = i + 1; first_ok = 1;
+        }
+
+        const struct block_device *dev = blk_active();
+        for (int b = 0; b < FS_BACKEND_COUNT; b++) {
+            const struct fs_ops *fs = g_backends[b];
+            // A backend that addresses the disk absolutely would bypass
+            // the partition window entirely and probe the DISK's LBA 0
+            // -- claiming a partition it never looked at. See fs_ops.h.
+            if (!fs->volume_relative) continue;
+            if (!caps_are_honest(fs)) continue;
+            if (mounts_of(fs) >= fs->max_mounts) continue;
+            if (fs->probe(dev) == 1) {
+                klog_printf("fs: mounting %s from partition %d (LBA %u, %u sectors)\n",
+                            fs->name, i + 1, base, count);
+                const char *why;
+                if (mount_add(dev, fs->name, "/", 0, &why)) return 1;
+                klog_printf("fs: partition %d would not mount: %s\n", i + 1, why);
+            }
+        }
+    }
+
+    // Nothing claimed anything -- every partition is empty, which is
+    // what a freshly `mkpart`ed disk looks like.
+    //
+    // LEAVE THE FIRST PARTITION ACTIVE rather than restoring the whole
+    // disk -- the first one that is OURS, since a firmware partition
+    // never reaches this loop. `fsformat` formats whatever the active
+    // block device is, so this is what makes "mkpart, reboot, fsformat"
+    // put a filesystem INSIDE a partition instead of flat across the
+    // table and every partition it describes. Restoring the disk here
+    // was the obvious thing and it is the wrong thing: it would make
+    // the one command you reach for next quietly undo the one you just
+    // ran.
+    //
+    // If partition 1 will not register (a table describing a window off
+    // the end of the disk), fall back to the whole disk -- that is a
+    // broken table, and refusing to have any active device at all would
+    // be a worse answer than the one this OS has always given.
+    if (first_ok) {
+        klog_printf("fs: no partition holds a filesystem -- leaving partition %d "
+                    "active (LBA %u, %u sectors) for `fsformat`\n",
+                    first_index, first_base, first_count);
+        blk_part_register(disk, first_base, first_count, first_index);
+    } else {
+        blk_register(disk);
+    }
+    return 0;
+}
+
+// Mounts the in-memory root, and says why it came to that. The one
+// place ramfs is chosen, so "when do we end up in RAM" is answerable by
+// reading one function rather than four call sites.
+static void mount_ramfs_root(const char *why_log) {
+    klog_write(why_log);
+    const char *why;
+    // The honesty check runs inside mount_add() -- ramfs is never
+    // probed, so skipping it would leave the one backend that can
+    // always be reached as the one nothing validates.
+    if (!mount_add(NULL, g_ram_backend->name, "/", 0, &why)) {
+        klog_printf("fs: ramfs did not mount either (%s) -- NO FILESYSTEM this boot\n", why);
+    }
+}
+
+// Picks what to mount as the ROOT, and it is a TABLE of situations
+// rather than a fallthrough -- see docs/rootfs-design.md:
+//
+//   a live module, and (`live` asked for, or no disk)  -> TFS3 in RAM
+//   a drive with a table, a partition somebody claims  -> that backend
+//   a drive with a table, nothing claimable            -> ramfs
+//   a drive with NO table                              -> REFUSED, ramfs
+//   no drive at all                                    -> ramfs
+//
+// A DRIVE'S ROOT IS A PARTITION OR IT IS NOTHING. A whole-disk volume
+// ("superfloppy") is a legal shape that no installed system has had in
+// twenty years: Windows will not boot one at all, and no Linux
+// installer produces one. Supporting it meant a second probe path
+// through the code that decides what to mount -- untested, and on the
+// one decision where being wrong in the permissive direction destroys
+// data (see docs/decisions/storage.md's entry on removing a backend).
+// One rule, one path, and an image that predates it is TOLD so.
+//
+// AND NOTHING IS AUTO-FORMATTED. The old blank-disk policy wrote a
+// fresh filesystem over any readable disk nobody claimed. With a
+// whole-disk volume refused there is nowhere left for it to write: a
+// partition's contents are the partition's business, and `mkpart` then
+// `fsformat` is how a drive gets a filesystem. The lesson that flag
+// carried -- an unrecognised disk is not an invitation -- is now true
+// by construction rather than by a branch remembering it.
+static void probe_and_mount_root(void) {
+    // The live image gets first refusal, then the disk. Registering a
+    // block device is what makes the probe below read from RAM instead
+    // of ATA -- the backends are unchanged and never learn which it is.
+    int live = try_live_module();
+    if (!live) {
+        // WHICH DISK WINS, decided here because blk_register() is
+        // last-writer-wins and order alone would otherwise decide it
+        // somewhere nobody looks.
+        //
+        // VIRTIO-BLK FIRST, ATA as the fallback. virtio is the faster
+        // and better-tested path now (see block_virtio.c for the
+        // numbers); ATA is the legacy one, and still the only disk on
+        // real hardware, so it keeps working untouched on any machine
+        // without a virtio device. `novirtio` on the boot line forces
+        // it, which is what keeps that path reachable and therefore
+        // tested.
+        if (!blk_virtio_init()) blk_ata_init();
+    }
+
+    if (!blk_present()) {
+        mount_ramfs_root("fs: no disk -- mounting ramfs (nothing here survives a reboot)\n");
+        return;
+    }
+
+    // A LIVE IMAGE GOES THROUGH THE PARTITION SCAN TOO, and it is not an
+    // exception worth carving out: `make live-iso` seeds it with
+    // `seed_disk.py --layout rest`, so the module the bootloader hands
+    // over carries a table with one partition exactly like a drive
+    // does. Special-casing it here -- probing the whole RAM volume
+    // directly -- made every live boot fall through to ramfs with no
+    // /bin, because the backend's superblock is inside the partition
+    // and not at the volume's LBA 0.
+    int part_result = try_partitions();
+    if (part_result == 1) return;   // mounted from a partition -- the normal case
+
+    if (part_result == 0) {
+        // A table, but no partition held a filesystem: empty partitions
+        // waiting for `fsformat`, not free space to claim.
+        mount_ramfs_root("fs: no partition holds a filesystem -- mounting ramfs "
+                         "(`fsformat` claims the active partition)\n");
+        return;
+    }
+
+    // No table at all: a blank drive, a whole-disk volume from before
+    // this rule, or something foreign. Name the fix, because the
+    // migration is destructive and nobody should have to guess it.
+    klog_write("fs: this disk has NO PARTITION TABLE -- toy-os mounts a root only from a\n");
+    klog_write("fs: partition. Nothing has been written to it. On the host: "
+               "`make clean-disk && make iso`;\n");
+    klog_write("fs: on the machine: `mkpart --gpt <sizes> confirm`, reboot, "
+               "`fsformat tfs3 confirm`.\n");
+    mount_ramfs_root("fs: mounting ramfs meanwhile (nothing here survives a reboot)\n");
+}
+
+void mount_boot_root(void) {
+    probe_and_mount_root();
+}
+
+// THE ESP MOUNTS AT /boot, READ-ONLY.
+//
+// Read-only is the default and not a placeholder: this partition holds
+// the bootloader and the kernel image that started the machine, and a
+// FAT driver's first outing is not where that should be writable by
+// accident. `mount -w 2 /boot` after `umount /boot` is the deliberate
+// way in, which is exactly Linux's shape -- an ESP in /etc/fstab is
+// conventionally `ro` or not mounted at all until something needs it.
+void mount_boot_auto(void) {
+    const struct block_device *disk = blk_whole_disk();
+    if (!disk || !read_table()) return;
+    if (!mount_root()) return;
+
+    for (int i = 0; i < g_tbl.entry_count; i++) {
+        const struct partition_entry *pe = &g_tbl.entries[i];
+        if (!partition_is_esp(pe, g_tbl.kind)) continue;
+
+        uint32_t base, count;
+        if (!entry_window(pe, &base, &count)) continue;
+        const struct block_device *dev = blk_part_create(disk, base, count, i + 1);
+        if (!dev) continue;
+
+        const char *why;
+        if (mount_add(dev, NULL, "/boot", MNT_RDONLY, &why)) return;
+        // Not an error worth alarming about: a machine whose ESP holds
+        // a FAT this kernel cannot read still boots perfectly, and the
+        // only thing lost is being able to look at /boot.
+        klog_printf("fs: /boot not mounted (%s)\n", why);
+        return;
+    }
+}
+
+int mount_reprobe_root(const struct fs_ops *expect) {
+    // Drop everything: a reformat invalidates the root, and anything
+    // mounted under it was reached through a path the root owns.
+    for (int i = 0; i < MOUNT_MAX; i++) k_memset(&g_mounts[i], 0, sizeof g_mounts[i]);
+    g_tbl_valid = 0;
+    probe_and_mount_root();
+    const struct mount *root = mount_root();
+    return root && root->fs == expect && root->persistent;
+}
+
+const struct fs_ops *mount_backend_named(const char *name) {
+    if (!name) return NULL;
+    for (int i = 0; i < FS_BACKEND_COUNT; i++) {
+        if (k_strcmp(g_backends[i]->name, name) == 0) return g_backends[i];
+    }
+    return NULL;
+}
+
+int mount_wipe_others(const struct fs_ops *target, const struct block_device *dev) {
+    for (int i = 0; i < FS_BACKEND_COUNT; i++) {
+        if (g_backends[i] != target) g_backends[i]->wipe(dev);
+    }
+    return 1;
+}

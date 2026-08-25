@@ -1694,11 +1694,13 @@ fixed, asserting the partition NUMBER left active rather than that a
 cheerful line was printed.
 
 **What this does not do.** No UEFI boot (BIOS/i386-pc only, though the
-ESP is now where a UEFI loader would go). No `/boot` visible from inside
-the running OS, because there is no FAT driver yet — `docs/filesystem-
-layout.md` says why there is deliberately no TFS3 `/boot` either. And
-nothing installs toy-os onto a disk from inside toy-os; `disk.img` is
-still built by the host.
+ESP is now where a UEFI loader would go). And nothing installs toy-os
+onto a disk from inside toy-os; `disk.img` is still built by the host.
+
+*(This entry used to end "no `/boot` visible from inside the running OS,
+because there is no FAT driver yet". There is one now —
+`kernel/fs/fat32.c` — and the ESP is mounted at `/boot`, read-only. See
+the mount-table entries below.)*
 
 ## A drive's root is a partition, and where there is no drive it is ramfs
 
@@ -1773,3 +1775,103 @@ function whose job is to have one rule); `seed_disk.py --flat` is gone;
 `disk.img` stops mounting — `make clean-disk && make iso`, the same
 opt-in TFS2→TFS3 and flat→partitioned both used. Nothing migrates
 silently.
+
+## Why the VFS grew a mount table, and why it stayed small
+
+`fs_ops.h` argued for years that one active backend was the whole scope:
+"nothing needs two filesystems simultaneously, and it is meaningfully
+more code for a capability that would sit unused." That was true and
+stopped being true the moment `/boot` mattered. The disk carries a FAT32
+ESP holding the kernel image that started the machine, and the running
+system could not read it — `ls /boot` showed an empty directory because
+there was nothing there to show.
+
+**Why not special-case `/boot`.** The cheap version is one extra backend
+pointer consulted for paths starting with `/boot`. It is also exactly
+the `if/else`-that-grows shape this repo enforces against
+(`tools/check_dispatch.py` exists because `syscall.c` reached 37
+branches and nothing noticed), and the second mount would have to undo
+it. The table is about eighty lines and a longest-prefix lookup.
+
+**Why not Linux's size.** Linux keeps a TREE of `struct mount`, crosses
+mount points during path-component walking, and carries per-process
+namespaces, bind mounts and automounts. toy-os resolves a whole
+normalized path against a flat table of at most six entries, once, at
+the `fs_*` boundary — because its paths are already normalized before
+they arrive (`api/fs.h`), which removes the entire reason Linux
+resolves per component. Copy the shape, not the size.
+
+**What the old prediction got right.** `fs_ops.h` said the struct
+"doesn't need to change shape, just get looked up differently", and that
+held: not one operation's signature changed. What DID have to change is
+where a backend's volume comes from — `probe`/`format`/`wipe`/`init`
+take a `struct block_device *` now instead of reading `blk_active()`,
+which is Linux's `super_block->s_bdev` arriving for Linux's reason.
+With two mounts there is no single active device a backend could
+correctly assume, and one that assumed anyway read the wrong volume and
+reported no error.
+
+**The unmount refusals are the design.** The root cannot go (nothing
+would resolve a path), a filesystem with an open file on it is refused,
+and so is one with another mounted underneath. Linux has `-l` and `-f`
+for the first two; both exist because a network filesystem can hang,
+which nothing here can, and both leave a window where a process holds a
+file on a filesystem that is gone. The open-file check needed no new
+bookkeeping: `struct open_file` already records a descriptor's absolute
+path, so the answer is a walk of the fd table — and bookkeeping that
+exists only to answer one question is the kind that drifts out of step
+with what it counts.
+
+**What is NOT built, stated plainly.** A backend may be mounted ONCE
+(`fs_ops.max_mounts`, and every backend declares 1). The milestone's own
+suggested first proof — a second TFS3 image at `/mnt`, to isolate "does
+dispatch-by-prefix work" from "does the new driver work" — is therefore
+still open. What replaced it as the isolating proof is `ramfs` at
+`/mnt`: a third backend, no volume at all, mounted and unmounted by
+`kernel/fs/mount_test.c` on every ktest run, which exercises the same
+dispatch with none of FAT32's code in the path. Raising `max_mounts`
+needs per-instance backend state AND an opaque per-mount handle threaded
+through every op; neither is worth doing until something wants two
+volumes of one format.
+
+## Why `/boot` is mounted read-only, and where that policy lives
+
+The ESP holds `core.img`, `grub.cfg` and `kernel.bin` — the three things
+that have to be intact for the machine to boot at all. A new FAT driver's
+first outing is not where those should become writable by accident, and
+FAT has no journal, so an interrupted write leaves whatever the last
+completed sector left.
+
+`mount -w`-style access is deliberately two commands (`umount /boot`
+then `mount 2 /boot`) rather than a flag on the automount, because the
+person typing them has then said it twice. Linux's convention is the
+same: an ESP in `/etc/fstab` is conventionally `ro`, or not mounted
+until something needs it.
+
+**The policy is in `mount_boot_auto()`, not in the driver.**
+`kernel/fs/fat32.c` contains no mention of a bootloader — that
+separation is Linux's (`fs/fat/` is generic; the ESP is an ordinary
+mount) and Windows' (FASTFAT likewise). A driver that knew what it held
+would have to be told again for every other FAT volume.
+
+## Why a FAT32-only driver, and why it accepts an out-of-spec cluster count
+
+FAT12 and FAT16 are not "FAT32 with smaller numbers": the root directory
+is a fixed-size region rather than a cluster chain, and the FAT entries
+are 12 or 16 bits with a nibble-packed edge case. Supporting them is a
+second set of paths through every function in the file, for a format
+nothing on this machine uses. A volume that is not FAT32 is REFUSED by
+name at `probe()`, which is the parser-rejects-rather-than-guesses rule.
+
+That choice has one visible consequence. Microsoft's spec picks the FAT
+type from the **cluster count** (below 65525 is FAT16), which exists so a
+driver implementing all three can tell them apart. This one implements
+only FAT32, so it discriminates on the BPB's FAT32-only fields instead —
+`fat_size_16 == 0`, `root_entry_count == 0`, a nonzero `fat_size_32` —
+and will therefore happily mount a small volume that `fsck.fat` would
+call FAT16. That is what lets `kernel/fs/fat32_test.c` use a 512 KiB
+image instead of a 34 MiB one, which matters because the test volume is
+a `kmalloc()` and `pmm_alloc_contiguous()` fails on a fragmented machine
+long before it fails on a small one. `format()` still picks a cluster
+size that clears the 65525 floor wherever the volume is big enough, so
+nothing toy-os *writes* is out of spec.

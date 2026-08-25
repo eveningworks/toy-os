@@ -110,7 +110,17 @@ def stage_fixture(disk):
     tmp = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False)
     tmp.write("x\n")
     tmp.close()
-    # The directory first -- `write` does not create parents.
+    # /tmp FIRST, AND ITS FAILURE IS IGNORED. It is created at BOOT by
+    # the kernel's own layout pass, never seeded by the build -- so a
+    # freshly `make clean-disk`ed image that has not been booted yet has
+    # no /tmp at all, and this fixture failed with "no such directory:
+    # /tmp" against a perfectly healthy system. Ignoring the result is
+    # right rather than lazy: on every image that HAS been booted the
+    # directory is already there, and either outcome leaves what the
+    # line after this needs.
+    subprocess.run([sys.executable, WRITER, "mkdir", disk, "/tmp", *_volume_args(disk)],
+                   cwd=REPO, capture_output=True, text=True)
+    # The directory itself -- `write` does not create parents.
     r = subprocess.run([sys.executable, WRITER, "mkdir", disk, BIG_DIR, *_volume_args(disk)],
                        cwd=REPO, capture_output=True, text=True)
     if r.returncode != 0:

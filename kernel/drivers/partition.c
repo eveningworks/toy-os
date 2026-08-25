@@ -326,6 +326,13 @@ int partition_is_firmware(const struct partition_entry *pe,
     return pe->mbr_type == 0xEF;   // MBR's EFI System type
 }
 
+int partition_is_esp(const struct partition_entry *pe,
+                     enum partition_table_kind kind) {
+    if (!pe) return 0;
+    if (kind == PART_TABLE_GPT) return k_memcmp(pe->gpt_type_guid, GPT_TYPE_ESP, 16) == 0;
+    return pe->mbr_type == 0xEF;
+}
+
 // The sectors a table needs for ITSELF, and which no partition may
 // overlap. MBR: LBA 0. GPT: LBA 0 through 33 at the front, and the
 // last 33 (backup entry array + backup header) at the back.

@@ -148,6 +148,8 @@ a command), and the `gui3`/`nano` aliases.
 ### Storage
 
 - [`mkpart`](mkpart.md)
+- [`mount`](mount.md)
+- [`umount`](umount.md)
 
 ### Text processing
 

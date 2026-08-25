@@ -201,6 +201,8 @@ int sys_fs_generation(struct syscall_ctx *c);
 
 // kernel/drivers/partition_syscall.c -- writing a partition table.
 int sys_mkpart(struct syscall_ctx *c);
+int sys_mount(struct syscall_ctx *c);
+int sys_umount(struct syscall_ctx *c);
 int sys_chdir(struct syscall_ctx *c);
 int sys_getcwd(struct syscall_ctx *c);
 int sys_mkdir(struct syscall_ctx *c);

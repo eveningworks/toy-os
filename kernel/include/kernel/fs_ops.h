@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include "fs.h" // struct fs_stat_info + FS_CAP_* bits, for .stat/.caps below
 
+struct block_device; // kernel/block.h -- what probe()/init() are handed
+
 // The VFS backend interface -- fs.h's public fs_* API (kapi.h's stable
 // surface, unchanged by any of this) is implemented by vfs.c as a thin
 // dispatch layer over exactly one of these, chosen once in fs_init().
@@ -14,16 +16,22 @@
 // changes at all, because they only ever call the fs_* wrappers, never
 // a backend directly.
 //
-// Deliberately NOT a mount-point scheme (multiple backends active at
-// once, routed by path prefix) -- there's exactly one active backend
-// at a time, decided in fs_init(). That's the whole scope: this solves
-// "swap which filesystem toy-os uses" (or add a new one to choose
-// from), not "use two filesystems simultaneously" -- nothing needs the
-// latter yet, and it's meaningfully more code (cross-mount path
-// resolution, conflicts at mount boundaries) for a capability that
-// would sit unused. If that ever changes, this struct is the same
-// building block a mount table would dispatch through per-mount --
-// it doesn't need to change shape, just get looked up differently.
+// THIS IS NOW A MOUNT-POINT SCHEME, and the prediction the paragraph
+// here used to make turned out right: the struct did not change shape,
+// it just gets looked up differently. vfs.c holds a MOUNT TABLE (see
+// mount.h) and picks a backend per path by longest-prefix match, so
+// two filesystems are readable at once -- TFS3 at `/` and FAT32 at
+// `/boot`, which is what made this necessary.
+//
+// What DID have to change is where a backend's volume comes from.
+// probe(), format(), wipe() and init() take a `struct block_device *`
+// now instead of reading blk_active(): with two mounts there is no
+// single active device a backend could correctly assume, and one that
+// assumed anyway would read the wrong volume and report no error.
+// Linux's `super_block->s_bdev`, arriving for the same reason.
+//
+// A backend with per-mount statics can only be mounted ONCE, and says
+// so with `max_mounts` below rather than being found out.
 //
 // Every function pointer here mirrors a fs.h entry point exactly (same
 // signature, same normalized-absolute-path contract, same return-value
@@ -72,16 +80,49 @@ struct fs_ops {
     // this codebase keeps finding, so it is consulted.
     int volume_relative;
 
+    // HOW MANY TIMES THIS BACKEND MAY BE MOUNTED AT ONCE. 1 for a
+    // backend whose state is module-level statics; more when each mount
+    // gets its own instance.
+    //
+    // This is declared rather than discovered because the failure is
+    // silent: a second mount of a single-instance backend does not
+    // crash, it quietly re-points the one set of statics, so the FIRST
+    // mount starts reading the second one's volume. TFS3 declares 1 --
+    // its superblock, group descriptors, bitmaps, journal buffers and
+    // block scratch are all statics, and so are FAT32's FAT cache and
+    // directory scratch. EVERY BACKEND DECLARES 1 TODAY.
+    //
+    // THE FIELD IS STILL NOT DECORATION: without it, `mount 3 /mnt` on
+    // a second TFS3 partition succeeds, re-points one set of statics,
+    // and the ROOT starts reading the other volume -- a data-loss bug
+    // with no error anywhere. With it, that command is refused by name.
+    //
+    // Raising it above 1 needs more than per-instance state: every op
+    // below takes a PATH and no handle, so a backend has no way to tell
+    // which of its mounts a call belongs to. The shape that fixes it is
+    // init() returning an opaque handle that every op then takes --
+    // Linux's `super_block` -- and that is the remaining work on
+    // docs/roadmap.md's "Real mount points". It buys nothing until a
+    // backend's state is per-instance, which is why it is not done
+    // here.
+    int max_mounts;
+
     // Detection only -- read this backend's superblock location and
-    // judge it. NEVER formats, never mounts, no side effects beyond
-    // the read. Only called when a disk is actually present (vfs.c
+    // judge it. NEVER formats, never mounts, NO SIDE EFFECTS BEYOND THE
+    // READ -- and that last clause became load-bearing with mount
+    // points. A probe now runs while this backend may already be
+    // MOUNTED SOMEWHERE ELSE, so one that records the device it was
+    // handed repoints the live mount at a volume it was only asked to
+    // look at. Both backends here save and restore their volume state
+    // around the read because of it; the mount table also declines to
+    // probe a backend that is already at its mount limit. Only called when a disk is actually present (vfs.c
     // owns ata_init()/ata_present() sequencing). Returns:
     //   1  this is my filesystem (magic + version + validation passed)
     //   0  readable, but not mine (blank or foreign bytes)
     //  -1  could not read the superblock at all -- vfs.c treats this
     //      as "refuse to touch the disk" (the data-loss lesson in
     //      tfs3.c's init comment), never as "blank, go format"
-    int (*probe)(void);
+    int (*probe)(const struct block_device *dev);
 
     // Erase every signature by which probe() would recognize this
     // backend's filesystem on the disk -- the primary superblock AND
@@ -93,7 +134,7 @@ struct fs_ops {
     // wipe() before formatting with the chosen one, so a reformat is
     // a clean identity change, not a seance. Idempotent; returns 1
     // on success (nothing to wipe counts as success).
-    int (*wipe)(void);
+    int (*wipe)(const struct block_device *dev);
 
     // Write a fresh, empty filesystem to the disk. Does NOT mount it
     // (fs_init()/fs_format_backend() call init() after). Returns 1 on
@@ -101,7 +142,7 @@ struct fs_ops {
     // called deliberately: from the blank/foreign-disk policy in
     // fs_init(), or from the user-facing `fsformat` command -- a
     // backend never formats on its own initiative anymore.
-    int (*format)(void);
+    int (*format)(const struct block_device *dev);
 
     // Called once this backend is chosen, from fs_init(). Mounts what
     // probe() claimed (or format() just wrote). Returns:
@@ -121,7 +162,7 @@ struct fs_ops {
     // not persistent", announced an active backend on a machine where
     // every single fs_* call failed. The same 1/0/-1 shape probe()
     // already uses, for the same reason: two different kinds of no.
-    int (*init)(void);
+    int (*init)(const struct block_device *dev);
 
     int (*touch)(const char *path);
     int (*write)(const char *path, const char *data, int append);
@@ -189,6 +230,13 @@ struct fs_ops {
     // callers ask fs_has(), vfs.c's probe loop REFUSES a backend
     // whose bit and pointer disagree (caps_are_honest(), modeled on
     // display.c's). Don't add an optional op without its bit.
+
+    // Optional, and NOT paired with a cap bit -- it is not a format
+    // capability, it is a driver having something to release. Called by
+    // mount_remove() after the volume is flushed and before the slot is
+    // forgotten, so a backend can drop caches and free per-mount
+    // buffers. A backend with nothing to release leaves it NULL.
+    void (*umount)(const struct block_device *dev);
 
     // FS_CAP_HARDLINKS. Adds a second name for an existing FILE
     // (never a directory -- that makes the tree a graph); both names

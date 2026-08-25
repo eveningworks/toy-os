@@ -109,6 +109,15 @@
 // ---- state --------------------------------------------------------------
 
 struct t3_vol {
+    // THE DEVICE, not "the active device". TFS3 is handed its volume by
+    // fs_ops.init() now, because with a mount table there is no single
+    // active device it could correctly assume -- a TFS3 root reading
+    // blk_active() while /boot is mounted reads the ESP. Linux's
+    // super_block->s_bdev. The base_lba stays 0 in practice (the
+    // partition window is in the device, block_part.c), and the field
+    // survives because a flat volume seam is what makes a KTEST able to
+    // point this backend at a slice of anything.
+    const struct block_device *dev;
     uint32_t base_lba;
     uint32_t sector_count;
 };
@@ -208,12 +217,12 @@ static void wr16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v
 
 static int vol_read_sectors(uint32_t lba, int count, void *buf) {
     if (lba + (uint32_t)count > g_vol.sector_count) return 0;
-    return blk_read_sectors(g_vol.base_lba + lba, count, buf);
+    return blkdev_read_sectors(g_vol.dev, g_vol.base_lba + lba, count, buf);
 }
 
 static int vol_write_sectors(uint32_t lba, int count, const void *buf) {
     if (lba + (uint32_t)count > g_vol.sector_count) return 0;
-    return blk_write_sectors(g_vol.base_lba + lba, count, buf);
+    return blkdev_write_sectors(g_vol.dev, g_vol.base_lba + lba, count, buf);
 }
 
 static int read_block(uint32_t blk, void *buf) {
@@ -224,9 +233,13 @@ static int write_block(uint32_t blk, const void *buf) {
     return vol_write_sectors(blk * T3_SPB, (int)T3_SPB, buf);
 }
 
-static void set_flat_volume(void) {
+// The whole of the device we were handed. "Flat" means volume-relative
+// with no offset of our own -- the partition window, if there is one,
+// lives in the device (block_part.c) and TFS3 never learns of it.
+static void set_flat_volume(const struct block_device *dev) {
+    g_vol.dev = dev;
     g_vol.base_lba = 0;
-    g_vol.sector_count = blk_sector_count();
+    g_vol.sector_count = blkdev_sector_count(dev);
 }
 
 // ---- superblock ----------------------------------------------------------
@@ -813,8 +826,8 @@ static void alog_rollback(void) {
 // free_block(): the block is free either way, a refused TRIM must not
 // fail the delete. Called with a sorted-ish run start/count.
 static void trim_run(uint32_t first_blk, uint32_t count) {
-    if (!count || !blk_trim_supported()) return;
-    blk_trim(g_vol.base_lba + first_blk * T3_SPB, count * T3_SPB);
+    if (!count || !blkdev_trim_supported(g_vol.dev)) return;
+    blkdev_trim(g_vol.dev, g_vol.base_lba + first_blk * T3_SPB, count * T3_SPB);
 }
 
 // ---- journal: one fixed-size multi-block transaction ---------------------
@@ -917,10 +930,10 @@ static int txn_commit(void) {
     // if the flush cannot say that, the targets below must NOT be
     // overwritten: a half-written target with no durable journal behind
     // it is unrecoverable, while abandoning the transaction here costs
-    // nothing that was not already lost. blk_flush() returned void until
+    // nothing that was not already lost. blkdev_flush(g_vol.dev) returned void until
     // a write-back cache went in underneath (ata_cache.h) -- that is
     // where a deferred write's failure now surfaces.
-    if (!blk_flush()) {
+    if (!blkdev_flush(g_vol.dev)) {
         klog_write("tfs3: journal barrier failed -- transaction abandoned, "
                    "targets untouched\n");
         txn_reset();
@@ -937,7 +950,7 @@ static int txn_commit(void) {
     // work that never reached the disk. A failure here takes the same
     // path a failed target write does -- leave the header committed and
     // let replay finish the job next boot.
-    if (!blk_flush()) ok = 0;
+    if (!blkdev_flush(g_vol.dev)) ok = 0;
     if (ok) {
         int saved = g_txn_count;
         g_txn_count = 0;
@@ -972,7 +985,7 @@ static void replay_journal(void) {
         for (uint32_t i = 0; i < count && all_ok; i++) {
             if (!write_block(rd32(sec + slots + i * 8), g_txn_img[i])) all_ok = 0;
         }
-        if (all_ok && !blk_flush()) {
+        if (all_ok && !blkdev_flush(g_vol.dev)) {
             // Same rule as txn_commit()'s barrier 2: if the replayed
             // targets are not durable, do NOT clear the committed flag
             // below -- the next boot must replay them again.
@@ -1194,7 +1207,7 @@ static int do_write_inner(uint64_t ino, struct t3_inode *node, uint64_t offset,
             // One transfer must fit the ATA path's per-command cap
             // (128 sectors on DMA, 8 on PIO -- ask, don't assume,
             // same rule TFS2's batching follows).
-            uint32_t cap = (uint32_t)blk_max_sectors_per_xfer() / T3_SPB;
+            uint32_t cap = (uint32_t)blkdev_max_sectors_per_xfer(g_vol.dev) / T3_SPB;
             if (cap < 1) cap = 1;
             if (want > cap) want = cap;
             while (run < want) {
@@ -1640,19 +1653,35 @@ static int split_parent(const char *norm, uint64_t *out_parent,
 
 // ---- probe / format / init -------------------------------------------------
 
-static int tfs3_probe(void) {
-    if (!blk_present()) return 0;
-    set_flat_volume();
-    return load_superblock(0);
+// A PROBE MUST NOT DISTURB A MOUNT, and this one used to. fs_ops.h has
+// always said "detection only, no side effects beyond the read", and
+// that was true in effect while probing only ever happened BEFORE
+// anything was mounted -- set_flat_volume() writes g_vol, which is the
+// mounted volume.
+//
+// Real mount points made it false the same day: mounting /boot probes
+// every backend against the ESP, so a TFS3 already serving `/` had its
+// volume repointed at partition 2 and the root went silently empty --
+// `df` still reported the right numbers (they come from the cached
+// superblock) while every path lookup failed. Saved and restored, which
+// is cheaper than a second superblock reader and keeps the one that is
+// tested.
+static int tfs3_probe(const struct block_device *dev) {
+    if (!dev) return 0;
+    struct t3_vol saved = g_vol;
+    set_flat_volume(dev);
+    int r = load_superblock(0);
+    if (g_mounted) g_vol = saved;
+    return r;
 }
 
 // Erase every location the probe recognizes: the primary superblock
 // sector AND both backups (positions derive from the volume size, the
 // same way load_superblock()'s fallback finds them). See fs_ops.h's
 // wipe contract for the mounted-a-corpse story that made this an op.
-static int tfs3_wipe(void) {
-    if (!blk_present()) return 1;
-    set_flat_volume();
+static int tfs3_wipe(const struct block_device *dev) {
+    if (!dev) return 1;
+    set_flat_volume(dev);
     uint8_t zero[ATA_SECTOR_SIZE];
     k_memset(zero, 0, sizeof(zero));
     int ok = vol_write_sectors(T3_SB_BLOCK * T3_SPB, 1, zero);
@@ -1683,9 +1712,9 @@ static int tfs3_wipe(void) {
 
 // Kernel-side format, kept in lockstep with tfs3_writer.py's
 // cmd_format() -- one description of the layout, two writers of it.
-static int tfs3_format(void) {
-    if (!blk_present()) return 0;
-    set_flat_volume();
+static int tfs3_format(const struct block_device *dev) {
+    if (!dev) return 0;
+    set_flat_volume(dev);
 
     // A fresh filesystem is always the newest version.
     set_geometry_version(T3_VERSION);
@@ -1906,7 +1935,7 @@ static int tfs3_format(void) {
         if (!write_block(gbase + gspan - 1, g_blk)) return 0;
     }
 
-    blk_flush(); // one barrier so the whole format is durable before init() re-reads it
+    blkdev_flush(g_vol.dev); // one barrier so the whole format is durable before init() re-reads it
     klog_write("tfs3: formatted a fresh tfs3 filesystem (");
     klog_write_dec(gc); klog_write(" groups, ");
     klog_write_dec(ipg); klog_write(" inodes/group)\n");
@@ -1923,10 +1952,10 @@ static void unmount_state(void) {
     txn_reset();
 }
 
-static int tfs3_init(void) {
+static int tfs3_init(const struct block_device *dev) {
     g_mounted = 0;
     unmount_state();
-    if (!blk_present()) {
+    if (!dev) {
         // tfs3 has no RAM-only mode of its own -- that is ramfs's job
         // now (kernel/fs/ramfs.c), and vfs.c's policy is what chooses
         // between us. Reaching here without a disk means something
@@ -1939,7 +1968,7 @@ static int tfs3_init(void) {
         klog_write("tfs3: no disk -- cannot mount\n");
         return -1;
     }
-    set_flat_volume();
+    set_flat_volume(dev);
     if (load_superblock(1) != 1) {
         klog_write("tfs3: no valid superblock (primary or backup) -- not mounted\n");
         return -1;
@@ -3061,6 +3090,13 @@ const struct fs_ops tfs3_ops = {
     // see fs.h's FS_CAP_* comment on exactly this distinction.
     .caps = FS_CAP_INODES | FS_CAP_HARDLINKS | FS_CAP_SYMLINKS | FS_CAP_EPOCH_TIME,
     .volume_relative = 1, // all I/O is volume-relative through vol_read/vol_write -- mountable from a partition
+    // ONCE. The superblock, group descriptors, both bitmaps, the
+    // journal staging buffers and the block scratch are all
+    // module-level statics, so a second mount would re-point one set of
+    // them and leave the first mount reading the second's volume --
+    // silently. Making them per-instance is its own project; see
+    // docs/roadmap.md's "Real mount points".
+    .max_mounts = 1,
     .probe = tfs3_probe,
     .wipe = tfs3_wipe,
     .format = tfs3_format,
