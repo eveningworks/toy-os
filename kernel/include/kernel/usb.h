@@ -46,6 +46,13 @@ struct usb_device_info {
     uint8_t  if_protocol;
     char     manufacturer[32];
     char     product[32];
+
+    // The HID interrupt-IN endpoint, when this device has one. Zero
+    // `hid_ep` means nothing here bound it.
+    uint8_t  hid_ep;        // bEndpointAddress, so 0x81 is IN endpoint 1
+    uint16_t hid_mps;
+    uint8_t  hid_interval;
+    uint8_t  hid_ifnum;
 };
 
 // Finds and brings up an xHCI controller, enumerates what is attached,
@@ -70,6 +77,11 @@ int usb_controller_summary(char *buf, uint32_t cap);
 
 int usb_device_count(void);
 const struct usb_device_info *usb_device_at(int index);
+
+// Brings one connected root port to "configured and described", adding
+// it to the table above. Returns its index, or -1. Called by xhci.c's
+// port scan; the split is the seam xhci.h describes.
+int usb_enumerate_port(uint8_t port, uint8_t speed);
 
 // Diagnostic counters. These exist so a test can distinguish "the
 // driver never ran" from "the driver ran and decoded nothing", which

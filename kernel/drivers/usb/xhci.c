@@ -77,7 +77,34 @@ struct xhci_hc {
     struct xhci_port_state ports[XHCI_MAX_PORTS];
 };
 
+// One addressed device. The contexts are the controller's view of it,
+// and ep0 is the transfer ring every control request rides on.
+struct xhci_slot {
+    uint8_t  in_use;
+    uint8_t  port;
+    void    *in_ctx;        // Input Context: control + slot + endpoints
+    uint64_t in_ctx_phys;
+    void    *out_ctx;       // Device Context, written BY the controller
+    uint64_t out_ctx_phys;
+    struct xhci_ring ep0;
+};
+
 static struct xhci_hc g_hc;
+static struct xhci_slot g_slots[XHCI_MAX_SLOTS + 1];   // slot ids are 1-based
+
+// Where a synchronous waiter picks up its answer. The event ring has
+// ONE consumer at a time (see the guard in xhci_service), so a
+// completion is recorded here and the waiter spins on `done` rather
+// than popping the ring itself and racing the interrupt handler.
+struct xhci_completion {
+    volatile uint8_t done;
+    uint64_t trb;           // which TRB this completes
+    uint32_t code;          // completion code
+    uint32_t residual;      // bytes NOT transferred
+    uint8_t  slot;
+};
+static volatile struct xhci_completion g_cmd_done;
+static volatile struct xhci_completion g_xfer_done;
 
 // --- MMIO -------------------------------------------------------------
 //
@@ -334,6 +361,230 @@ static int setup_rings(void) {
     return 1;
 }
 
+// --- contexts ---------------------------------------------------------
+//
+// A context entry is 32 OR 64 bytes, and which one is HCCPARAMS1.CSZ.
+// QEMU says 32; a great deal of real hardware says 64. Reading it wrong
+// puts every field at the wrong offset and the controller reports
+// nothing at all -- it simply parses garbage. So no code here indexes a
+// context by a constant; everything goes through ctx_at().
+static inline uint32_t ctx_size(void) { return g_hc.csz64 ? 64u : 32u; }
+
+// Entry `i` of a context block. Entry 0 of an Input Context is the
+// Input Control Context, entry 1 is the Slot Context, and entry
+// 1 + DCI is an endpoint. In a Device (output) Context entry 0 is the
+// Slot Context, so the two are offset by one -- which is why the caller
+// names the entry rather than the endpoint.
+static inline volatile uint32_t *ctx_at(void *base, uint32_t i) {
+    return (volatile uint32_t *)((uint8_t *)base + (uint64_t)i * ctx_size());
+}
+
+// Endpoint 0 is DCI 1; an IN endpoint N is DCI 2N+1, an OUT endpoint N
+// is DCI 2N. This is the number the doorbell wants and the index the
+// contexts are laid out by.
+static inline uint32_t dci_of(uint8_t ep_addr) {
+    uint8_t num = ep_addr & 0x0F;
+    if (!num) return 1;
+    return (uint32_t)(2 * num + ((ep_addr & 0x80) ? 1 : 0));
+}
+
+// Ringing a doorbell is what tells the controller to look at a ring.
+// Slot 0 target 0 is the command ring; slot N target DCI is that
+// device's endpoint.
+static void ring_doorbell(uint32_t slot, uint32_t target) {
+    // The ring writes must be visible before the doorbell, or the
+    // controller reads a TRB that is not there yet. Free on x86, but
+    // the compiler still has to be told -- see barrier.h.
+    kbarrier();
+    *(volatile uint32_t *)(g_hc.db + slot * 4) = target;
+}
+
+// The default max packet size for endpoint 0 at a given speed, used
+// before the device descriptor has been read. A full-speed device may
+// really be 8, 16, 32 or 64 and is corrected afterwards; see
+// xhci_set_ep0_mps().
+static uint16_t default_mps(uint8_t speed) {
+    switch (speed) {  // dispatch-ok: bounded by the xHCI speed ID set
+        case XHCI_SPEED_LOW:   return 8;
+        case XHCI_SPEED_FULL:  return 8;
+        case XHCI_SPEED_HIGH:  return 64;
+        case XHCI_SPEED_SUPER: return 512;
+        default:               return 8;
+    }
+}
+
+// --- synchronous command and transfer submission ----------------------
+
+// Spins until `c->done`, draining the event ring as it goes.
+//
+// Draining here as well as in the interrupt handler is deliberate: it
+// keeps enumeration working whether or not the IRQ is live, which is
+// what lets the polled fallback path be the same code. xhci_service()'s
+// re-entrancy guard is what makes the two safe together.
+static int wait_completion(volatile struct xhci_completion *c, const char *what) {
+    uint32_t spins = 0;
+    while (!c->done) {
+        xhci_service();
+        if (++spins > XHCI_POLL_BACKSTOP) {
+            klog_printf("usb: %s timed out after %u polls\n", what, spins);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+// Enqueues one command, rings doorbell 0 and waits for its Command
+// Completion event. Returns the completion code; `out_slot` receives
+// the slot id the controller assigned, when the command allocates one.
+static int cmd_submit(uint64_t param, uint32_t control, uint8_t *out_slot) {
+    g_cmd_done.done = 0;
+    uint64_t at = xhci_ring_push(&g_hc.cmd, param, 0, control);
+    g_cmd_done.trb = at;
+    ring_doorbell(0, 0);
+
+    if (wait_completion(&g_cmd_done, "command") < 0) return -XHCI_CC_INVALID - 1;
+    if (out_slot) *out_slot = g_cmd_done.slot;
+    return (int)g_cmd_done.code;
+}
+
+int xhci_address_device(uint8_t port, uint8_t speed) {
+    uint8_t slot = 0;
+    int cc = cmd_submit(0, XHCI_TRB_SET_TYPE(XHCI_TRB_ENABLE_SLOT), &slot);
+    if (cc != XHCI_CC_SUCCESS) {
+        klog_printf("usb: enable slot failed: %s\n", xhci_completion_name((uint32_t)cc));
+        return -cc;
+    }
+    if (!slot || slot > XHCI_MAX_SLOTS) {
+        klog_printf("usb: controller assigned slot %u, out of range\n", slot);
+        return -1;
+    }
+
+    struct xhci_slot *sl = &g_slots[slot];
+    uint64_t ep0_phys = 0;
+    sl->in_ctx  = alloc_frame(&sl->in_ctx_phys);
+    sl->out_ctx = alloc_frame(&sl->out_ctx_phys);
+    void *ep0_seg = alloc_frame(&ep0_phys);
+    if (!sl->in_ctx || !sl->out_ctx || !ep0_seg) {
+        klog_printf("usb: out of frames for slot %u\n", slot);
+        return -1;
+    }
+    xhci_ring_init(&sl->ep0, ep0_seg, ep0_phys, TRBS_PER_RING, 0);
+    sl->in_use = 1;
+    sl->port   = port;
+
+    // The controller writes the Device Context, so it has to know where
+    // it is BEFORE the Address Device command runs.
+    g_hc.dcbaa[slot] = sl->out_ctx_phys;
+
+    // Input Control Context: add the Slot Context (A0) and EP0 (A1).
+    volatile uint32_t *icc = ctx_at(sl->in_ctx, 0);
+    icc[0] = 0;                 // drop nothing
+    icc[1] = (1u << 0) | (1u << 1);
+
+    // Slot Context. Route string 0 means "attached to a root port"; a
+    // device behind a hub would need the real route, which is the hub
+    // support this driver deliberately does not have.
+    volatile uint32_t *sc = ctx_at(sl->in_ctx, 1);
+    sc[0] = ((uint32_t)1 << 27) |                 // context entries: EP0 only
+            (((uint32_t)speed & 0xFu) << 20);     // speed
+    sc[1] = ((uint32_t)port << 16);               // root hub port number
+    sc[2] = 0;
+    sc[3] = 0;
+
+    // EP0 Context: a Control endpoint whose transfer ring is ep0.
+    volatile uint32_t *ep = ctx_at(sl->in_ctx, 2);
+    ep[0] = 0;
+    ep[1] = (3u << 1) |                            // CErr = 3
+            (4u << 3) |                            // EP type 4 = Control
+            ((uint32_t)default_mps(speed) << 16);
+    ep[2] = (uint32_t)(ep0_phys & 0xFFFFFFFFu) | 1u;   // DCS = 1
+    ep[3] = (uint32_t)(ep0_phys >> 32);
+    ep[4] = 8;                                     // average TRB length
+
+    cc = cmd_submit(sl->in_ctx_phys,
+                    XHCI_TRB_SET_TYPE(XHCI_TRB_ADDRESS_DEVICE) |
+                    ((uint32_t)slot << 24), 0);
+    if (cc != XHCI_CC_SUCCESS) {
+        klog_printf("usb: address device (slot %u) failed: %s\n",
+                    slot, xhci_completion_name((uint32_t)cc));
+        return -cc;
+    }
+    return slot;
+}
+
+int xhci_set_ep0_mps(uint8_t slot, uint16_t mps) {
+    if (!slot || slot > XHCI_MAX_SLOTS || !g_slots[slot].in_use) return -1;
+    struct xhci_slot *sl = &g_slots[slot];
+
+    volatile uint32_t *icc = ctx_at(sl->in_ctx, 0);
+    icc[0] = 0;
+    icc[1] = (1u << 1);          // evaluate EP0 only
+
+    volatile uint32_t *ep = ctx_at(sl->in_ctx, 2);
+    ep[1] = (ep[1] & 0x0000FFFFu) | ((uint32_t)mps << 16);
+
+    int cc = cmd_submit(sl->in_ctx_phys,
+                        XHCI_TRB_SET_TYPE(XHCI_TRB_EVALUATE_CONTEXT) |
+                        ((uint32_t)slot << 24), 0);
+    if (cc != XHCI_CC_SUCCESS) {
+        klog_printf("usb: evaluate context (slot %u, mps %u) failed: %s\n",
+                    slot, mps, xhci_completion_name((uint32_t)cc));
+        return -cc;
+    }
+    return 0;
+}
+
+int xhci_control(uint8_t slot, const uint8_t setup[8],
+                 void *buf, uint16_t len, int in) {
+    if (!slot || slot > XHCI_MAX_SLOTS || !g_slots[slot].in_use) return -1;
+    struct xhci_slot *sl = &g_slots[slot];
+
+    // The SETUP packet rides in the TRB itself (IDT), so there is no
+    // buffer to allocate for it. Transfer Type: 0 = no data stage,
+    // 2 = OUT, 3 = IN.
+    uint64_t setup_imm = 0;
+    for (int i = 0; i < 8; i++) setup_imm |= (uint64_t)setup[i] << (8 * i);
+    uint32_t trt = len ? (in ? 3u : 2u) : 0u;
+
+    xhci_ring_push(&sl->ep0, setup_imm, 8,
+                   XHCI_TRB_SET_TYPE(XHCI_TRB_SETUP_STAGE) |
+                   XHCI_TRB_IDT | (trt << 16));
+
+    uint64_t data_phys = 0;
+    if (len) {
+        // The caller's buffer is kernel memory, which is identity
+        // mapped, so its virtual address IS its physical address --
+        // the same property virtio_gpu.c relies on for its request
+        // structs. No bounce buffer is needed.
+        data_phys = (uint64_t)(uintptr_t)buf;
+        xhci_ring_push(&sl->ep0, data_phys, len,
+                       XHCI_TRB_SET_TYPE(XHCI_TRB_DATA_STAGE) |
+                       (in ? (1u << 16) : 0) | XHCI_TRB_ISP);
+    }
+
+    // The Status Stage runs in the OPPOSITE direction to the data, and
+    // IN when there was no data at all. It carries IOC, so it is the
+    // TRB whose Transfer Event the waiter matches on.
+    g_xfer_done.done = 0;
+    uint64_t status_trb = xhci_ring_push(&sl->ep0, 0, 0,
+                              XHCI_TRB_SET_TYPE(XHCI_TRB_STATUS_STAGE) |
+                              ((len && in) ? 0 : (1u << 16)) | XHCI_TRB_IOC);
+    g_xfer_done.trb = status_trb;
+
+    ring_doorbell(slot, dci_of(0));
+
+    if (wait_completion(&g_xfer_done, "control transfer") < 0) return -1;
+    if (g_xfer_done.code != XHCI_CC_SUCCESS &&
+        g_xfer_done.code != XHCI_CC_SHORT_PACKET) {
+        return -(int)g_xfer_done.code;
+    }
+    // A short packet is not an error -- it is how a device says "that is
+    // all there was", and the residual says how much less it sent.
+    uint32_t got = len;
+    if (g_xfer_done.residual <= len) got = len - g_xfer_done.residual;
+    return (int)got;
+}
+
 // --- interrupts -------------------------------------------------------
 
 // Acknowledging an xHCI interrupt is harder than virtio's single
@@ -369,8 +620,26 @@ static void note_port_change(void) {
     }
 }
 
+// THE EVENT RING HAS EXACTLY ONE CONSUMER AT A TIME.
+//
+// Two things call xhci_service(): the interrupt handler, and a
+// synchronous waiter spinning for its own completion. On a uniprocessor
+// an interrupt can land in the middle of the waiter's pop, and both
+// would then advance the dequeue index -- losing an event, or reading
+// one slot twice.
+//
+// The guard makes the second caller a no-op rather than a race. It is
+// safe for the interrupt handler to be the one turned away: it has
+// already acknowledged the line by the time it gets here, so nothing
+// storms, and the waiter it interrupted drains the event a moment
+// later. A lock would be the wrong shape -- there is nothing to wait
+// for, only something to skip.
+static volatile uint8_t g_in_service;
+
 void xhci_service(void) {
     if (!g_hc.present || !g_hc.running) return;
+    if (g_in_service) return;
+    g_in_service = 1;
 
     struct xhci_trb ev;
     int drained = 0;
@@ -378,10 +647,29 @@ void xhci_service(void) {
         g_hc.events_seen++;
         drained = 1;
         uint32_t type = XHCI_TRB_TYPE(ev.control);
-        if (type == XHCI_TRB_PORT_STATUS_CHANGE) note_port_change();
-        // Transfer and command completion events are consumed by the
-        // enumeration and HID layers, which land in the next commits.
+        uint64_t src  = (uint64_t)ev.p0 | ((uint64_t)ev.p1 << 32);
+        uint32_t code = (ev.status >> 24) & 0xFFu;
+
+        if (type == XHCI_TRB_PORT_STATUS_CHANGE) {
+            note_port_change();
+        } else if (type == XHCI_TRB_CMD_COMPLETION) {
+            g_cmd_done.trb  = src;
+            g_cmd_done.code = code;
+            g_cmd_done.slot = (uint8_t)((ev.control >> 24) & 0xFFu);
+            g_cmd_done.done = 1;
+        } else if (type == XHCI_TRB_TRANSFER_EVENT) {
+            // A Transfer Event names the TRB that finished. Control
+            // transfers wait on their Status Stage TRB; interrupt
+            // endpoints are matched by the HID layer, which lands next.
+            if (src == g_xfer_done.trb) {
+                g_xfer_done.code     = code;
+                g_xfer_done.residual = ev.status & 0xFFFFFFu;
+                g_xfer_done.slot     = (uint8_t)((ev.control >> 24) & 0xFFu);
+                g_xfer_done.done     = 1;
+            }
+        }
     }
+    g_in_service = 0;
     if (drained) {
         // Advancing ERDP is what tells the controller the slots are
         // reusable. A driver that never does it appears to work on QEMU
@@ -463,10 +751,12 @@ static void scan_ports(void) {
         g_hc.ports[p].connected = (sc & XHCI_PORTSC_CCS) ? 1 : 0;
         g_hc.ports[p].enabled   = (sc & XHCI_PORTSC_PED) ? 1 : 0;
         g_hc.ports[p].speed     = (uint8_t)XHCI_PORTSC_SPEED(sc);
-        if (g_hc.ports[p].connected)
-            klog_printf("usb: port %u: connected, %s, %s\n", p + 1,
-                        speed_name(g_hc.ports[p].speed),
-                        g_hc.ports[p].enabled ? "enabled" : "not enabled");
+        if (!g_hc.ports[p].connected) continue;
+        klog_printf("usb: port %u: connected, %s, %s\n", p + 1,
+                    speed_name(g_hc.ports[p].speed),
+                    g_hc.ports[p].enabled ? "enabled" : "not enabled");
+        if (g_hc.ports[p].enabled)
+            usb_enumerate_port((uint8_t)(p + 1), g_hc.ports[p].speed);
     }
 }
 
@@ -610,9 +900,6 @@ int usb_controller_summary(char *buf, uint32_t cap) {
                             : "not running");
     return 1;
 }
-
-int usb_device_count(void) { return 0; }          // enumeration lands next
-const struct usb_device_info *usb_device_at(int i) { (void)i; return 0; }
 
 uint32_t usb_events_seen(void) { return g_hc.events_seen; }
 uint32_t usb_irqs_seen(void)   { return g_hc.irqs_seen; }
