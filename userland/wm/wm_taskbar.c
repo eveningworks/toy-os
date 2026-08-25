@@ -205,8 +205,17 @@ int taskbar_layout(struct taskbar_button *out, int max) {
     // "not (32)", which names nothing. Five characters is the widest
     // count suffix (" (99+)"). Still capped by fit_width above, so this
     // can only spend space that is genuinely spare.
+    //
+    // THE ICON IS PART OF THE ALLOWANCE, and leaving it out meant the
+    // widening bought nothing: make_label() is handed w MINUS the icon
+    // square, so those five characters were spent on the icon and
+    // "notepad (26)" still came out as "notep (26)". Reserved here from
+    // the same taskbar_icon_size() the loop below subtracts, which is
+    // the same "one source for a measurement" rule that pairs the icon
+    // with the renderer.
     if (grouped) {
-        int cap = natural + 5 * ugfx_char_w();
+        int icon = taskbar_icon_size();
+        int cap = natural + 5 * ugfx_char_w() + (icon ? icon + 4 : 0);
         int wide = fit_width(avail, n, cap);
         if (wide > w) w = wide;
     }

@@ -65,7 +65,6 @@ it has exonerated one this session and convicted another.
 ## Reproducible
 
 - [ ] `tools/init_test.py` fails 12 of its 27 checks, deterministically and PRE-EXISTING -- init stops reaping and stops starting services partway through the run
-- [ ] `tools/taskbar_test.py` fails 1 of its 11 checks, deterministically and PRE-EXISTING -- measured 2026-08-25 with `predates.py`, HEAD fails identically
 
 *(Was empty. Every entry that was here on 2026-08-20 is fixed, was already
 fixed, or turned out not to be a defect -- see `git log`. The two above
