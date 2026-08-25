@@ -65,7 +65,6 @@ it has exonerated one this session and convicted another.
 ## Reproducible
 
 - [ ] `tools/init_test.py` fails 12 of its 27 checks, deterministically and PRE-EXISTING -- init stops reaping and stops starting services partway through the run
-- [ ] init starts a descriptor with no `Exec=` five times over, having logged that it is ignoring it
 - [ ] `tools/taskbar_test.py` fails 1 of its 11 checks, deterministically and PRE-EXISTING -- measured 2026-08-25 with `predates.py`, HEAD fails identically
 - [ ] `tools/virtio_gpu_test.py` fails "the screen KEEPS updating (the taskbar clock moves)", deterministically and PRE-EXISTING -- measured 2026-08-25 with `predates.py`, HEAD fails identically; cause never established
 
@@ -142,13 +141,17 @@ waits before suspecting the guest** -- and note that a suite run
 alongside anything else (including a second `gui_regress`, which is
 refused outright now) is competing for the same cores.
 
-## The on-demand tools: 9 pass, 11 fail, 1 skip
+## The on-demand tools: what the first sweep found
 
 `tools/ondemand_sweep.py` exists because ~21 test tools are run by
 neither `preflight.sh` nor `gui_regress.py`, so nothing notices when
-one rots. Its first full run, on a freshly seeded disk, is above. The
-failures are listed here so the next session inherits the triage rather
-than repeating it.
+one rots. Its first full run, on a freshly seeded disk, found nine
+passing and eleven failing. The failures still open are listed here so
+the next session inherits the triage rather than repeating it; the ones
+that have since been fixed are gone from the list, with the commit that
+fixed them named. **The counts in this section are a snapshot of that
+run, not a current score** -- re-run the sweep before believing any of
+it.
 
 **MOST OF THESE ARE HARNESS ROT, NOT OS BUGS** — and where that was
 checked by hand it is said so. The recurring cause is one thing: a
@@ -156,31 +159,16 @@ command moved from a kernel builtin to a `/bin` program, and the tool
 either still parses the ring-0 output or runs on an image that has no
 `/bin` at all (a freshly formatted one).
 
-- **`tfs3_v1_test.py` — 0 of 8.** Rot, confirmed. It drives `dmesg`,
-  `mv` and `cat` on an image it has just formatted, which therefore has
-  no `/bin`. **The underlying feature is fine and was verified by hand:**
-  a v1 image formatted by `tfs3_writer.py --fs-version 1` mounts as
-  `tfs3: mounted (v1, 4 groups, 8192 inodes/group, 4 journal slots)`.
-  The fix is the one `fs_switch_test.py` already had — `rescue` for the
-  commands that need it.
-- **`init_test.py` — 11 of 18 reached** (15 of 31 when run standalone;
-  it stops at different points). **MEASURED pre-existing**: identical
-  before and after the partitioning work, checked by stashing and
-  rebuilding. The clearest tell is `` `kill 1` is refused`` failing with
-  `elf_run: calling process_run_ring3() for /bin/kill` — the tool is
-  reading the loader's chatter, not the refusal. NOT confirmed
-  harness-only: nobody has checked init and service supervision by hand
-  against a boot, so a real defect could be hiding behind the rot.
-  Doing that is the first step of the fix.
+- **Fixed since:** `tfs3_v1_test.py` (drove `dmesg`/`mv`/`cat` on an
+  image it had just formatted, which therefore has no `/bin` -- it uses
+  `rescue` now, 3857d83); `ls_test.py` (`no such directory: /tmp`, which
+  the kernel creates at mount and a never-booted image has not got -- it
+  stages the directory itself now, 9c3f5c0); `stdin_test.py`
+  (`FileNotFoundError` -- it ATTACHES to a running guest, and the sweep
+  was not starting one, 299583c). The underlying features were fine in
+  all three cases.
+
 - **`console_shell_test.py` — 32 of 33.** One check. Not investigated.
-- **`stdin_test.py`** — dies with a `FileNotFoundError` before running
-  anything. Not investigated.
-- **`ls_test.py`** — `no such directory: /tmp`. It stages a 300-entry
-  fixture from the host into `/tmp`, which does not exist on an image
-  that has never been booted (the kernel creates it at mount). It
-  passes on a disk that has been booted once, which is why it passed
-  earlier the same day and failed in the sweep. The tool should create
-  the directory rather than assume it.
 - **`virtio_input_test.py`** — "a virtio keypress reaches the ring-3
   desktop (Super opens Start)" fails. **This one is NOT obviously rot**
   and deserves a look before anything else here: it is an input-path

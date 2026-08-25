@@ -326,8 +326,17 @@ static void load_service(const char *file) {
     // command is not a service. Refused loudly -- a descriptor that
     // silently does nothing is indistinguishable from one that is not
     // being read at all.
+    //
+    // AN EMPTY exec IS THE "cannot be started" STATE, and returning
+    // without setting it is what made the refusal a lie: the entry is
+    // already in g_svc[] by this point, so start_due() spawned the
+    // empty path five times over while the log claimed it was ignored.
+    // It is deliberately NOT the `disabled` flag, which is sticky
+    // across rescans -- a descriptor that gains an Exec= later is
+    // re-read here and starts, with no separate un-disable step.
     if (!etc_config_buf_get(&g_cfg, "Exec", s->exec, sizeof s->exec)) {
-        logf1("init: %s has no Exec=, ignoring it\n", file);
+        s->exec[0] = '\0';
+        logf1("init: %s has no Exec=, will not start it\n", file);
         return;
     }
 
@@ -662,6 +671,7 @@ static int svc_gates_dependents(const struct service *s) {
     if (s->ready_mode != SVC_READY_NOTIFY) return 0; // launch order only
     if (s->ready || s->ready_timed_out) return 0;
     if (s->gave_up || s->disabled || s->stopped) return 0;
+    if (!s->exec[0]) return 0;                       // nothing to run
     if (s->restart == SVC_RESTART_NO && s->started_once && !s->pid) return 0;
     return 1;
 }
@@ -758,6 +768,9 @@ static int start_due(void) {
         // as "do not start" is the obvious misreading and would leave a
         // one-shot service silently never running.
         if (s->pid || s->gave_up || s->disabled) continue;
+        // A descriptor with no Exec= (see load_service). Skipped rather
+        // than spawned-and-failed, so the log's refusal is the truth.
+        if (!s->exec[0]) continue;
         if (s->restart == SVC_RESTART_NO && s->started_once) continue;
         if (s->stopped) continue; // it asked to stay down
         if (now < s->due_ms) { pending++; continue; }

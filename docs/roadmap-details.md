@@ -3087,26 +3087,6 @@ disproving check has been run.
 Repro: `python3 tools/init_test.py`, which boots its own copy of
 `disk.img`. Deterministic -- three runs, identical results.
 
-### init starts a descriptor with no `Exec=` five times over
-
-`load_service()` in `userland/bin/init.c` logs `init: <file> has no
-Exec=, ignoring it` and returns -- but the entry has already been
-appended to `g_svc[]` with `seen = 1` and an empty `exec`. Nothing
-ignores it: `start_due()` then spawns the empty path, fails, counts a
-fast failure, and repeats until the crash-loop give-up, printing
-
-    init: <name> failed to start ()
-
-five times. Harmless in effect and a straightforward lie in the log,
-which is the part that costs time -- the message says the descriptor
-was skipped and the evidence says it was not.
-
-Seen 2026-08-24 by writing `/etc/services.d/zz` with only a `Name=` in
-it. The fix is presumably to mark the entry disabled rather than return,
-but "disabled" is sticky across rescans and a descriptor may legitimately
-gain an `Exec=` later, so the right semantics need a moment's thought
-rather than a one-line patch.
-
 ### `gui_regress.py`'s `uterm` fails its two `edit` checks under full parallel load
 
 `the editor's cursor sequences MOVED the caret, not printed` and `a
