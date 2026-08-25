@@ -16,6 +16,7 @@
 // this ever moves somewhere hot, cache it THERE rather than here.
 #include "query.h"
 #include "partition.h"
+#include "block.h" // blk_disk_sector_count()
 #include "string.h"
 #include <stddef.h>
 
@@ -47,6 +48,9 @@ static int parttable_fill(int index, void *out) {
     partition_read_table(&g_table);
     t->kind = abi_kind(g_table.kind);
     t->entry_count = (uint64_t)g_table.entry_count;
+    // The disk, not the mounted volume -- blk_disk_sector_count()
+    // ignores any partition window, which is the point.
+    t->disk_sectors = (uint64_t)blk_disk_sector_count();
     if (g_table.kind == PART_TABLE_GPT) {
         k_memcpy(t->disk_guid, g_table.disk_guid, sizeof t->disk_guid);
     }

@@ -1882,6 +1882,15 @@ window without going through it will find its layout polls timing out.
   `sync` to the matching writer, and formats a blank image with the
   default (tfs3) -- the same policy the kernel's blank-disk path
   applies at boot.
+
+  **`--partition gpt|mbr` builds a PARTITIONED image** instead of a flat
+  one: it calls `mkpart_test.py --layout` for the table, then formats
+  TFS3 inside partition 1 and seeds it there. `--layout` defaults to one
+  partition filling the disk. Not the default and never will be -- this
+  repo's `disk.img` is deliberately a flat volume and every other test
+  depends on that; this exists so `partition_test.py` (and a person) can
+  build the other shape on demand. TFS2 is not an option: it addresses
+  the disk absolutely and puts its superblock where the MBR goes.
 - **`tfs3_v1_test.py`** -- boots a freshly built TFS3 **v1** image and
   proves the kernel still mounts and uses the older on-disk layout (8
   checks). Run it after touching TFS3's geometry, journal, or any
@@ -1916,6 +1925,45 @@ window without going through it will find its layout polls timing out.
   CRC32/GUID-encoding details and `docs/decisions.md` for why GPT
   verification needed a host-compiled unit test instead of a live
   boot (TFS2's own journal header collides with the GPT header's LBA).
+
+  **`--layout SIZE[,SIZE...]` writes a REAL, usable table instead** --
+  partitions laid end to end from LBA 2048 (1 MiB alignment), sized by
+  a `K`/`M`/`G` suffix or bare sectors, with exactly one allowed to be
+  `rest`. `--gpt --layout` also writes the BACKUP header and entry
+  array in the last 33 sectors, which the synthetic mode does not: a
+  partition editor on another system reads the backup to cross-check
+  the primary and "repairs" a disk that has none. This is what
+  `seed_disk.py --partition` calls, and its per-partition GUIDs are
+  derived from the index rather than random, so `make iso` stays
+  reproducible (the KERNEL randomises them -- a disk written on a
+  running machine has no such requirement).
+
+  Note the GPT-verification caveat above is now HISTORY rather than a
+  live limitation: TFS3 is the default and reserves volume blocks 0-7,
+  so `kernel/drivers/partition_test.c` round-trips a real GPT through
+  the writer and the parser inside a running kernel.
+
+- **`partition_test.py`** -- boots toy-os with its filesystem **inside**
+  an MBR or GPT partition. The only thing that exercises `vfs.c`'s
+  boot-time partition scan and `block_part.c`'s window end to end; the
+  `partition` KTEST suite proves the encoder and parser agree on a RAM
+  disk and cannot prove either of those.
+
+  **Its load-bearing check is `df`, not "it booted".** A kernel that
+  ignored partitions entirely still boots -- it finds nothing at LBA 0,
+  refuses to format a partitioned disk and runs RAM-only, which looks
+  like a bad image rather than a missing feature. And one that found
+  the partition but got the window wrong would mount something and
+  report the DISK's size. So the assertion is that the mounted volume
+  is 256 MiB while the image is 2 GiB, which only a correct window
+  produces. It also reboots (a write that reached only a cache would
+  pass a same-boot read-back), reads `parttable` from inside a
+  partition (which the old `ata_read_sector()` path could not do), and
+  finishes by driving `/bin/mkpart` in the guest -- including the
+  refusal without `confirm`.
+
+  ON DEMAND, not in the gate: two images, four boots. Same category as
+  `virtio_boot_test.py` and `live_boot_test.py`.
 
 - **`run_release.sh`** -- standalone QEMU launcher shipped as a GitHub
   Release asset (not part of the build), for running from just a

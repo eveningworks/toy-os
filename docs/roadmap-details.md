@@ -277,6 +277,24 @@ overwrites LBA 1, the GPT header's mandated location, on every boot) and
 what verified it instead (a host-compiled unit test including the real
 kernel source unmodified, `tools/mkpart_test.py`).
 
+~~Mounting a filesystem from a partition, and writing a table~~ -- done.
+`kernel/drivers/block/block_part.c` makes a partition a `block_device`
+that shifts every LBA (Linux's `bd_start_sect`, Windows' `partmgr`), so
+TFS3 mounts from one with no backend change; `vfs.c`'s `try_partitions()`
+scans the table at boot and mounts the first partition a
+volume-relative backend claims. Writing is `SYS_MKPART` + `/bin/mkpart`,
+which take a table DESCRIPTION rather than a raw sector write -- this
+kernel has no privilege model to gate a write-any-sector primitive
+with. `partition.c` also stopped calling `ata_read_sector()` directly,
+which had made `parttable` blind on any machine without an IDE
+controller. Verified by `kernel/drivers/partition_test.c` (a GPT and an
+MBR round-tripped through the writer and the parser in a running
+kernel -- the live GPT proof the entry above could not get) and
+`tools/partition_test.py` (four boots, two images, `df` reporting the
+partition's size and not the disk's). Host side:
+`seed_disk.py --partition`, `tfs3_writer.py --at-lba`,
+`mkpart_test.py --layout`. See `docs/decisions.md`.
+
 ### Kernel test harness
 
 **Done** (2026-08-13) -- see the commit that added it. Kept
@@ -1176,11 +1194,15 @@ backends (TFS3 and TFS2), not a compile-time constant, but still one at
 a time; `docs/decisions.md` explains why a mount table stayed out of
 scope. What sets this milestone off is wanting two filesystems READABLE
 at once -- FAT (Runtime + interop) and USB mass storage (USB) both
-produce that need. Two head starts already exist: the probe loop is the
-natural place a per-partition iteration slots in, and TFS3 is fully
-volume-relative behind a `{base_lba, sector_count}` seam
-(`docs/tfs3-design.md`'s "Volumes and partitions"), so mounting it from
-a partition needs no backend change. (TFS2 stays absolute/flat-only.)
+produce that need. Both head starts this entry predicted have since been SPENT, and
+correctly: the per-partition iteration is in the probe loop
+(`try_partitions()` in `vfs.c`), and mounting TFS3 from a partition
+needed no backend change at all -- the offset went into a
+`block_device` wrapper (`block_part.c`) rather than into the seam, so
+TFS3's volume is still `{0, blk_sector_count()}`. (TFS2 stays
+absolute/flat-only, and declares `volume_relative = 0` to say so.)
+What that did NOT buy is this milestone: one partition is mounted at a
+time, exactly as one whole disk was. The remaining work is unchanged.
 The per-backend-statics warning below applies to `tfs3.c` exactly as it
 does to `tfs.c`.
 
@@ -3167,7 +3189,7 @@ refer to them by number.
 
 - [ ] **M16 block checksums are NOT simply a block layer, and that is the decision to make.** A block-level checksum layer has to put the checksums somewhere -- either shrinking the device's apparent size or carving a separate metadata area -- and that is a filesystem-shaped choice, not a transparent wrapper. It is why ZFS checksums inside the filesystem (it wants them beside the block pointers, which also gets it self-healing) while dm-integrity does it at block level and pays for a metadata region. Decide WHERE THE CHECKSUM METADATA LIVES before writing either half; the layering follows from that answer rather than the reverse.
 
-- [ ] **`block.h` has ONE ACTIVE DEVICE, mirroring the VFS's one active backend** -- the same "one active X" call made twice, in both cases when only one existed. Already in mild tension with `partition.c`, which parses MBR/GPT and can enumerate partitions that cannot then be independently mounted, and it has to give for Real mount points (real mount points). Not urgent.
+- [ ] **`block.h` has ONE ACTIVE DEVICE, mirroring the VFS's one active backend** -- the same "one active X" call made twice, in both cases when only one existed. The tension with `partition.c` is RESOLVED and not the way this predicted: a partition is now a `block_device` that REPLACES its parent (`block_part.c`), so partitions are mountable one at a time with the singular active device intact. It still has to give for Real mount points, which wants two filesystems readable at once. Not urgent.
 
 - [ ] **Interfaces that exist with exactly ONE implementation are the same problem seen from the other side, and this repo already flags them as unvalidated.** `struct win_transport` is called out in `docs/decisions.md` for precisely this; `win_server_ops` gets its second implementation in M41 stage 4. These matter more than the missing-interface cases above, because a wrong guess is already baked in rather than still open -- read the decisions entry before designing stage 4 around either.
 

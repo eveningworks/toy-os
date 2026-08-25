@@ -10,8 +10,19 @@
 // single small helper (guid_copy()) instead of needing a second
 // struct-packing convention just for GUIDs.
 #include "partition.h"
-#include "ata.h"
+#include "block.h"
 #include "string.h"
+#include "krandom.h" // GUIDs -- see guid_generate()
+#include "klog.h"
+#include "kfmt.h" // klog_printf
+
+// Sector size, stated here rather than borrowed from a disk driver.
+// This file used to include ata.h for ATA_SECTOR_SIZE and call
+// ata_read_sector() directly, which predated block.h and meant the
+// parser could only ever see an IDE disk -- on `make run VIRTIO=1`
+// there is no IDE controller at all, so `parttable` was reading a disk
+// that was not there. 512 is the block layer's unit, not ATA's.
+#define PART_SECTOR_SIZE 512
 
 #define MBR_SIGNATURE_OFFSET 510
 #define MBR_ENTRY_TABLE_OFFSET 446
@@ -40,8 +51,12 @@ static void guid_copy(uint8_t *out, const uint8_t *raw) {
 // precomputed table, just the bit-at-a-time form. GPT headers are
 // small (~92 bytes) and this runs once per `parttable` invocation, so
 // the simpler code is worth more here than the table's speed.
-static uint32_t crc32(const uint8_t *data, uint32_t len) {
-    uint32_t crc = 0xFFFFFFFF;
+// The running form. The GPT entry array is 16 KiB -- far too big for a
+// kernel stack -- so the writer builds it one sector at a time and
+// feeds each sector through here, which is the only way to get the
+// array's CRC without ever holding the whole array. `crc` starts at
+// 0xFFFFFFFF and the caller inverts at the end.
+static uint32_t crc32_update(uint32_t crc, const uint8_t *data, uint32_t len) {
     for (uint32_t i = 0; i < len; i++) {
         crc ^= data[i];
         for (int b = 0; b < 8; b++) {
@@ -49,7 +64,44 @@ static uint32_t crc32(const uint8_t *data, uint32_t len) {
             crc = (crc >> 1) ^ (0xEDB88320 & mask);
         }
     }
-    return ~crc;
+    return crc;
+}
+
+static uint32_t crc32(const uint8_t *data, uint32_t len) {
+    return ~crc32_update(0xFFFFFFFF, data, len);
+}
+
+static void write_le32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+}
+
+static void write_le64(uint8_t *p, uint64_t v) {
+    write_le32(p, (uint32_t)v);
+    write_le32(p + 4, (uint32_t)(v >> 32));
+}
+
+// A version-4 (random) GUID, per RFC 4122 -- the variant and version
+// nibbles are forced, everything else is entropy.
+//
+// **krandom is NOT a CSPRNG here and this does not need it to be.** A
+// GUID's job is to not collide, not to be unguessable: the quality
+// tiers that matter to a stack canary do not matter to a disk
+// identifier, and even KRANDOM_JITTER gives collision odds that round
+// to zero for the handful of partitions one machine will ever have.
+// Stated rather than assumed, because krandom.h's whole point is that
+// a caller says how much it needs to trust its bytes.
+//
+// The byte order is GPT's, which is the one irregular thing about a
+// GUID: the first three fields are little-endian integers and the last
+// eight bytes are raw, so the "same" GUID prints differently depending
+// on which half you are looking at. Generating all 16 bytes randomly
+// makes that irrelevant here -- but guid_copy() above reads them back
+// in the same layout, so a round trip is exact.
+static void guid_generate(uint8_t *out) {
+    krandom_bytes(out, 16);
+    out[7] = (uint8_t)((out[7] & 0x0F) | 0x40); // version 4
+    out[8] = (uint8_t)((out[8] & 0x3F) | 0x80); // RFC 4122 variant
 }
 
 // Fills out->entries[0..3] from the 4 legacy MBR entries in `mbr`
@@ -99,74 +151,24 @@ static void gpt_name_to_ascii(const uint8_t *utf16le, char *out /* [37] */) {
     out[n] = '\0';
 }
 
-int partition_read_table(struct partition_table *out) {
-    k_memset(out, 0, sizeof(*out));
-    out->kind = PART_TABLE_NONE;
-
-    uint8_t mbr[ATA_SECTOR_SIZE];
-    if (!ata_read_sector(0, mbr)) return 0;
-
-    if (mbr[MBR_SIGNATURE_OFFSET] != 0x55 || mbr[MBR_SIGNATURE_OFFSET + 1] != 0xAA) {
-        return 1; // readable disk, just no MBR/GPT signature -- PART_TABLE_NONE stands
-    }
-
-    if (!mbr_has_gpt_protective_entry(mbr)) {
-        out->kind = PART_TABLE_MBR;
-        parse_mbr_entries(mbr, out);
-        return 1;
-    }
-
-    // Protective MBR present -- read and validate the GPT header at LBA 1.
-    uint8_t hdr[ATA_SECTOR_SIZE];
-    if (!ata_read_sector(GPT_HEADER_LBA, hdr)) {
-        // Disk read failure, not "no GPT" -- fall back to reporting the
-        // protective MBR's own (single, type-0xEE) entry rather than
-        // silently claiming PART_TABLE_NONE.
-        out->kind = PART_TABLE_MBR;
-        parse_mbr_entries(mbr, out);
-        return 1;
-    }
-
-    if (k_strncmp((const char *)hdr, GPT_SIGNATURE, 8) != 0) {
-        out->kind = PART_TABLE_MBR;
-        parse_mbr_entries(mbr, out);
-        return 1;
-    }
-
-    uint32_t header_size = read_le32(hdr + 12);
-    uint32_t stored_crc = read_le32(hdr + 16);
-    if (header_size > ATA_SECTOR_SIZE) header_size = ATA_SECTOR_SIZE; // sanity clamp -- always 92 in practice
-
-    uint8_t hdr_for_crc[ATA_SECTOR_SIZE];
-    k_memcpy(hdr_for_crc, hdr, header_size);
-    hdr_for_crc[16] = 0; hdr_for_crc[17] = 0; hdr_for_crc[18] = 0; hdr_for_crc[19] = 0; // header_crc32 field zeroed for its own check
-    uint32_t computed_crc = crc32(hdr_for_crc, header_size);
-
-    if (computed_crc != stored_crc) {
-        // Signature matched but the header itself is corrupt -- same
-        // fallback as an unreadable/missing header above.
-        out->kind = PART_TABLE_MBR;
-        parse_mbr_entries(mbr, out);
-        return 1;
-    }
-
-    out->kind = PART_TABLE_GPT;
-    out->gpt_header_valid = 1;
-    guid_copy(out->disk_guid, hdr + 56);
-
-    uint64_t entry_lba = read_le64(hdr + 72);
-    uint32_t num_entries = read_le32(hdr + 80);
-    uint32_t entry_size = read_le32(hdr + 84);
-    if (entry_size == 0 || entry_size > ATA_SECTOR_SIZE) entry_size = 128; // spec default -- guards a div-by-zero below
-    if (num_entries > PART_MAX_ENTRIES) num_entries = PART_MAX_ENTRIES; // only read/report as many as we display
-
-    uint32_t entries_per_sector = ATA_SECTOR_SIZE / entry_size;
+// Walks the GPT partition entry array. Its own function, and therefore
+// its own stack frame, so its 512-byte sector buffer does not sit
+// alongside the caller's -- this file is on the BOOT path now (vfs.c
+// scans for a mountable partition) and the kernel frame budget is 1 KB.
+//
+// `noinline` is load-bearing, not decoration: each of these has a
+// single caller, so at -O2 GCC inlines them straight back and the
+// frames merge again -- which is exactly what the split was for. Same
+// reasoning as syscalls.h's SYSCALL_HANDLER.
+static __attribute__((noinline)) void parse_gpt_entries(uint64_t entry_lba, uint32_t num_entries,
+                              uint32_t entry_size, struct partition_table *out) {
+    uint32_t entries_per_sector = PART_SECTOR_SIZE / entry_size;
     uint32_t sectors_needed = (num_entries + entries_per_sector - 1) / entries_per_sector;
 
     out->entry_count = 0;
     for (uint32_t s = 0; s < sectors_needed; s++) {
-        uint8_t buf[ATA_SECTOR_SIZE];
-        if (!ata_read_sector((uint32_t)entry_lba + s, buf)) break;
+        uint8_t buf[PART_SECTOR_SIZE];
+        if (!blk_disk_read_sectors((uint32_t)entry_lba + s, 1, buf)) break;
 
         for (uint32_t i = 0; i < entries_per_sector && out->entry_count < PART_MAX_ENTRIES; i++) {
             const uint8_t *e = buf + i * entry_size;
@@ -184,6 +186,374 @@ int partition_read_table(struct partition_table *out) {
             gpt_name_to_ascii(e + 56, pe->gpt_name);
         }
     }
+}
 
+// Reads and validates the GPT header at LBA 1 and, if it checks out,
+// fills *out from the entry array. Returns 1 on success, 0 if the
+// caller should fall back to reporting the protective MBR's own
+// entries -- which is what an unreadable, unsigned or CRC-failing
+// header means, and is deliberately NOT the same as "no GPT here".
+//
+// Split from partition_read_table() for the stack: the header buffer
+// and the MBR buffer no longer share a frame.
+static __attribute__((noinline)) int parse_gpt(struct partition_table *out) {
+    uint8_t hdr[PART_SECTOR_SIZE];
+    if (!blk_disk_read_sectors(GPT_HEADER_LBA, 1, hdr)) return 0;
+    if (k_strncmp((const char *)hdr, GPT_SIGNATURE, 8) != 0) return 0;
+
+    uint32_t header_size = read_le32(hdr + 12);
+    uint32_t stored_crc = read_le32(hdr + 16);
+    if (header_size > PART_SECTOR_SIZE) header_size = PART_SECTOR_SIZE; // sanity clamp -- always 92 in practice
+
+    // Zeroed IN PLACE rather than into a second buffer: the spec's own
+    // rule is that header_crc32 reads as zero for its own computation,
+    // stored_crc is already saved above, and nothing below reads those
+    // four bytes again. The copy cost 512 bytes of frame for nothing.
+    hdr[16] = 0; hdr[17] = 0; hdr[18] = 0; hdr[19] = 0;
+    if (crc32(hdr, header_size) != stored_crc) return 0;
+
+    out->kind = PART_TABLE_GPT;
+    out->gpt_header_valid = 1;
+    guid_copy(out->disk_guid, hdr + 56);
+
+    uint64_t entry_lba = read_le64(hdr + 72);
+    uint32_t num_entries = read_le32(hdr + 80);
+    uint32_t entry_size = read_le32(hdr + 84);
+    if (entry_size == 0 || entry_size > PART_SECTOR_SIZE) entry_size = 128; // spec default -- guards a div-by-zero below
+    if (num_entries > PART_MAX_ENTRIES) num_entries = PART_MAX_ENTRIES; // only read/report as many as we display
+
+    parse_gpt_entries(entry_lba, num_entries, entry_size, out);
     return 1;
+}
+
+int partition_read_table(struct partition_table *out) {
+    k_memset(out, 0, sizeof(*out));
+    out->kind = PART_TABLE_NONE;
+
+    uint8_t mbr[PART_SECTOR_SIZE];
+    if (!blk_disk_read_sectors(0, 1, mbr)) return 0;
+
+    if (mbr[MBR_SIGNATURE_OFFSET] != 0x55 || mbr[MBR_SIGNATURE_OFFSET + 1] != 0xAA) {
+        return 1; // readable disk, just no MBR/GPT signature -- PART_TABLE_NONE stands
+    }
+
+    if (!mbr_has_gpt_protective_entry(mbr)) {
+        out->kind = PART_TABLE_MBR;
+        parse_mbr_entries(mbr, out);
+        return 1;
+    }
+
+    // Protective MBR present -- the GPT header at LBA 1 decides. Any
+    // failure there falls back to reporting the protective MBR itself,
+    // rather than silently claiming PART_TABLE_NONE.
+    if (!parse_gpt(out)) {
+        out->kind = PART_TABLE_MBR;
+        parse_mbr_entries(mbr, out);
+    }
+    return 1;
+}
+
+// ---- writing a table -----------------------------------------------
+//
+// WHY THE KERNEL ENCODES THIS AND RING 3 DOES NOT. The alternative was
+// a raw sector-write syscall with `mkpart` doing the encoding in ring
+// 3, and it was rejected: this kernel has no privilege model at all
+// (SYS_QUERY has no check either), so a general "write any sector"
+// primitive is a way for any process to corrupt any filesystem, for
+// the convenience of one rare command. A syscall that takes a table
+// DESCRIPTION can be checked -- see partition_validate() -- and there
+// is no primitive left over for anything else to misuse. Linux's
+// BLKPG is shaped the same way, and for the same reason.
+//
+// The second win is that the encoder sits beside the decoder, so the
+// CRC32, the GUID layout and the field offsets have exactly one
+// implementation each and a round trip through both is a real test.
+
+// GPT's fixed geometry. 128 entries of 128 bytes is what every tool
+// writes and every tool expects; the header could declare otherwise,
+// but nothing is gained by being the one disk that does.
+#define GPT_ENTRY_COUNT 128
+#define GPT_ENTRY_SIZE 128
+#define GPT_ENTRY_SECTORS ((GPT_ENTRY_COUNT * GPT_ENTRY_SIZE) / PART_SECTOR_SIZE) // 32
+#define GPT_PRIMARY_ENTRY_LBA 2
+#define GPT_FIRST_USABLE_LBA (GPT_PRIMARY_ENTRY_LBA + GPT_ENTRY_SECTORS) // 34
+#define GPT_HEADER_SIZE 92
+#define GPT_REVISION 0x00010000
+
+// The Microsoft Basic Data type GUID --
+// EBD0A0A2-B9E5-4433-87C0-68B6B72699C7 in GPT's mixed-endian byte
+// order, which is why the bytes below do not read left to right.
+//
+// toy-os has no type GUID of its own and does not want one: a
+// partition type is a hint to OTHER systems about what is inside, and
+// a private GUID would only make every other OS's partition tool
+// describe a toy-os partition as unknown. This one is the most widely
+// recognised "generic filesystem data" answer there is -- Windows,
+// Linux and macOS all understand it, where the Linux-filesystem GUID
+// (0FC63DAF-...) is understood by one of the three.
+static const uint8_t GPT_TYPE_BASIC_DATA[16] = {
+    0xA2, 0xA0, 0xD0, 0xEB, 0xE5, 0xB9, 0x33, 0x44,
+    0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7,
+};
+
+// The sectors a table needs for ITSELF, and which no partition may
+// overlap. MBR: LBA 0. GPT: LBA 0 through 33 at the front, and the
+// last 33 (backup entry array + backup header) at the back.
+static void reserved_span(enum partition_table_kind kind, uint32_t disk_sectors,
+                          uint32_t *front, uint32_t *back) {
+    if (kind == PART_TABLE_GPT) {
+        *front = GPT_FIRST_USABLE_LBA;                 // 0..33
+        *back = GPT_ENTRY_SECTORS + 1;                 // last 33
+    } else {
+        *front = 1;                                    // LBA 0
+        *back = 0;
+    }
+    (void)disk_sectors;
+}
+
+// Every refusal the kernel can make on its own, before a byte is
+// written. A parser REJECTS rather than guesses; a WRITER refuses
+// rather than writing something it would then refuse to read.
+//
+// `*why` is set to a short reason for the caller to log. Returns 1 if
+// the table is safe to write.
+int partition_validate(const struct partition_table *in, const char **why) {
+    uint32_t disk = blk_disk_sector_count();
+    if (!disk) { *why = "no disk"; return 0; }
+
+    if (in->kind != PART_TABLE_MBR && in->kind != PART_TABLE_GPT) {
+        *why = "not an MBR or GPT table"; return 0;
+    }
+    if (in->entry_count < 1 || in->entry_count > PART_WRITE_MAX_ENTRIES) {
+        *why = "entry count out of range"; return 0;
+    }
+    // MBR has exactly four primary slots. Extended partitions are the
+    // workaround for that and are deliberately not implemented: they
+    // are a linked list of sectors scattered through the disk, and GPT
+    // is the answer to wanting more than four.
+    if (in->kind == PART_TABLE_MBR && in->entry_count > 4) {
+        *why = "MBR holds at most 4 partitions -- use GPT"; return 0;
+    }
+
+    uint32_t front, back;
+    reserved_span(in->kind, disk, &front, &back);
+    if ((uint64_t)front + (uint64_t)back >= (uint64_t)disk) {
+        *why = "disk too small for this table"; return 0;
+    }
+
+    for (int i = 0; i < in->entry_count; i++) {
+        const struct partition_entry *a = &in->entries[i];
+        uint64_t a_start, a_count;
+        if (in->kind == PART_TABLE_GPT) {
+            if (a->gpt_lba_end < a->gpt_lba_start) { *why = "partition ends before it starts"; return 0; }
+            a_start = a->gpt_lba_start;
+            a_count = a->gpt_lba_end - a->gpt_lba_start + 1; // GPT's range is INCLUSIVE
+        } else {
+            a_start = a->mbr_lba_start;
+            a_count = a->mbr_num_sectors;
+        }
+
+        if (a_count == 0) { *why = "empty partition"; return 0; }
+        if (a_start < front) { *why = "partition overlaps the table itself"; return 0; }
+        if (a_start + a_count > (uint64_t)disk - back) { *why = "partition runs past the end of the disk"; return 0; }
+
+        for (int j = 0; j < i; j++) {
+            const struct partition_entry *b = &in->entries[j];
+            uint64_t b_start, b_count;
+            if (in->kind == PART_TABLE_GPT) {
+                b_start = b->gpt_lba_start;
+                b_count = b->gpt_lba_end - b->gpt_lba_start + 1;
+            } else {
+                b_start = b->mbr_lba_start;
+                b_count = b->mbr_num_sectors;
+            }
+            // Half-open overlap test. Written out rather than as a
+            // clever one-liner because getting it backwards passes
+            // every test with no partitions adjacent.
+            if (a_start < b_start + b_count && b_start < a_start + a_count) {
+                *why = "partitions overlap each other"; return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+// LBA 0 for an MBR table. PRESERVES bytes 0..445, which is what makes
+// this safe to run on a disk that already holds a flat filesystem:
+// TFS2's superblock magic lives in bytes 0..4 and TFS3 never touches
+// volume blocks 0-7 at all, so the table lands in the 66 bytes neither
+// of them uses. tools/mkpart_test.py has always done the same.
+static __attribute__((noinline)) int write_mbr(const struct partition_table *in, int protective) {
+    uint8_t sec[PART_SECTOR_SIZE];
+    if (!blk_disk_read_sectors(0, 1, sec)) k_memset(sec, 0, sizeof(sec));
+
+    k_memset(sec + MBR_ENTRY_TABLE_OFFSET, 0, MBR_ENTRY_SIZE * MBR_ENTRY_COUNT);
+
+    if (protective) {
+        // One entry covering the whole disk, type 0xEE, starting at LBA
+        // 1 -- the marker that says "the real table is the GPT, do not
+        // treat this disk as unpartitioned". Clamped to 0xFFFFFFFF
+        // because that is all an MBR field can hold, which is exactly
+        // why GPT exists.
+        uint64_t n = (uint64_t)blk_disk_sector_count() - 1;
+        if (n > 0xFFFFFFFFull) n = 0xFFFFFFFFull;
+        uint8_t *e = sec + MBR_ENTRY_TABLE_OFFSET;
+        e[4] = MBR_TYPE_GPT_PROTECTIVE;
+        write_le32(e + 8, 1);
+        write_le32(e + 12, (uint32_t)n);
+    } else {
+        for (int i = 0; i < in->entry_count; i++) {
+            uint8_t *e = sec + MBR_ENTRY_TABLE_OFFSET + i * MBR_ENTRY_SIZE;
+            e[4] = in->entries[i].mbr_type ? in->entries[i].mbr_type : 0x83; // 0x83 = Linux data, the sane default
+            write_le32(e + 8, in->entries[i].mbr_lba_start);
+            write_le32(e + 12, in->entries[i].mbr_num_sectors);
+            // CHS fields left zero. They are meaningless on any disk
+            // this century and every LBA-aware reader ignores them;
+            // faking a geometry would be inventing a fact.
+        }
+    }
+
+    sec[MBR_SIGNATURE_OFFSET] = 0x55;
+    sec[MBR_SIGNATURE_OFFSET + 1] = 0xAA;
+    return blk_disk_write_sectors(0, 1, sec);
+}
+
+// Writes the 32-sector entry array at `lba` and returns its CRC32 --
+// built and hashed one sector at a time, because the whole array is
+// 16 KiB and a kernel stack is 16 KiB. Returns 0 on a write failure,
+// which is indistinguishable from a legitimate CRC of 0; `*ok` carries
+// the real answer.
+static __attribute__((noinline)) uint32_t write_gpt_entries(const struct partition_table *in,
+                                                            uint32_t lba, int *ok) {
+    uint32_t crc = 0xFFFFFFFF;
+    *ok = 1;
+    for (int s = 0; s < GPT_ENTRY_SECTORS; s++) {
+        uint8_t sec[PART_SECTOR_SIZE];
+        k_memset(sec, 0, sizeof(sec));
+
+        const int per_sector = PART_SECTOR_SIZE / GPT_ENTRY_SIZE; // 4
+        for (int i = 0; i < per_sector; i++) {
+            int idx = s * per_sector + i;
+            if (idx >= in->entry_count) break;
+            const struct partition_entry *pe = &in->entries[idx];
+            uint8_t *e = sec + i * GPT_ENTRY_SIZE;
+
+            k_memcpy(e, GPT_TYPE_BASIC_DATA, 16);
+            k_memcpy(e + 16, pe->gpt_unique_guid, 16);
+            write_le64(e + 32, pe->gpt_lba_start);
+            write_le64(e + 40, pe->gpt_lba_end);
+            // attributes (e + 48) left zero: no required-partition
+            // flag, no legacy-BIOS-bootable flag. Nothing here boots
+            // off a partition -- GRUB boots the ISO.
+
+            // The name, ASCII widened to UTF-16LE. The reverse of
+            // gpt_name_to_ascii(); this kernel has no Unicode, so the
+            // round trip is exact for what it can represent and there
+            // is nothing it can represent that it cannot write.
+            for (int c = 0; c < 36 && pe->gpt_name[c]; c++) {
+                e[56 + c * 2] = (uint8_t)pe->gpt_name[c];
+                e[56 + c * 2 + 1] = 0;
+            }
+        }
+
+        crc = crc32_update(crc, sec, PART_SECTOR_SIZE);
+        if (!blk_disk_write_sectors(lba + (uint32_t)s, 1, sec)) { *ok = 0; return 0; }
+    }
+    return ~crc;
+}
+
+// One GPT header. `self` is the LBA it lives at, `other` its twin's,
+// `entry_lba` where ITS copy of the entry array starts -- the primary
+// and backup headers differ in exactly those three fields plus their
+// own CRC, which is why this is one function called twice rather than
+// two nearly-identical ones.
+static __attribute__((noinline)) int write_gpt_header(uint32_t self, uint32_t other,
+                                                      uint32_t entry_lba, uint32_t entries_crc,
+                                                      const uint8_t *disk_guid, uint32_t disk_sectors) {
+    uint8_t sec[PART_SECTOR_SIZE];
+    k_memset(sec, 0, sizeof(sec));
+
+    k_memcpy(sec, GPT_SIGNATURE, 8);
+    write_le32(sec + 8, GPT_REVISION);
+    write_le32(sec + 12, GPT_HEADER_SIZE);
+    write_le32(sec + 16, 0); // header CRC, computed over this field as zero
+    write_le64(sec + 24, self);
+    write_le64(sec + 32, other);
+    write_le64(sec + 40, GPT_FIRST_USABLE_LBA);
+    write_le64(sec + 48, (uint64_t)disk_sectors - 1 - GPT_ENTRY_SECTORS - 1); // last usable
+    k_memcpy(sec + 56, disk_guid, 16);
+    write_le64(sec + 72, entry_lba);
+    write_le32(sec + 80, GPT_ENTRY_COUNT);
+    write_le32(sec + 84, GPT_ENTRY_SIZE);
+    write_le32(sec + 88, entries_crc);
+
+    write_le32(sec + 16, crc32(sec, GPT_HEADER_SIZE));
+    return blk_disk_write_sectors(self, 1, sec);
+}
+
+int partition_write_table(const struct partition_table *in) {
+    const char *why = "";
+    if (!partition_validate(in, &why)) {
+        klog_printf("partition: refusing to write -- %s\n", why);
+        return 0;
+    }
+
+    uint32_t disk = blk_disk_sector_count();
+
+    if (in->kind == PART_TABLE_MBR) {
+        if (!write_mbr(in, 0)) { klog_write("partition: MBR write failed\n"); return 0; }
+        blk_flush();
+        return 1;
+    }
+
+    // GPT. ORDER MATTERS: the backup goes down first, then the primary,
+    // then the protective MBR last. A power cut partway therefore
+    // leaves a disk that still reads as UNPARTITIONED (no 0xEE entry at
+    // LBA 0 yet) rather than one advertising a table whose header was
+    // never written -- the same publish-last discipline the virtio
+    // drivers follow with their interrupt enables.
+    uint32_t backup_hdr = disk - 1;
+    uint32_t backup_entries = backup_hdr - GPT_ENTRY_SECTORS;
+
+    uint8_t disk_guid[16];
+    guid_generate(disk_guid);
+
+    int ok = 0;
+    uint32_t crc_backup = write_gpt_entries(in, backup_entries, &ok);
+    if (!ok) { klog_write("partition: GPT backup entry array write failed\n"); return 0; }
+    uint32_t crc_primary = write_gpt_entries(in, GPT_PRIMARY_ENTRY_LBA, &ok);
+    if (!ok) { klog_write("partition: GPT entry array write failed\n"); return 0; }
+    // Same bytes, so the two CRCs must agree. If they ever did not, one
+    // of the two arrays did not land the way it was built, and writing
+    // headers claiming both is how a disk gets a backup that silently
+    // does not match.
+    if (crc_backup != crc_primary) {
+        klog_write("partition: GPT entry arrays disagree -- refusing to write the headers\n");
+        return 0;
+    }
+
+    if (!write_gpt_header(backup_hdr, GPT_HEADER_LBA, backup_entries, crc_primary, disk_guid, disk)) {
+        klog_write("partition: GPT backup header write failed\n");
+        return 0;
+    }
+    if (!write_gpt_header(GPT_HEADER_LBA, backup_hdr, GPT_PRIMARY_ENTRY_LBA, crc_primary, disk_guid, disk)) {
+        klog_write("partition: GPT header write failed\n");
+        return 0;
+    }
+    if (!write_mbr(in, 1)) { klog_write("partition: protective MBR write failed\n"); return 0; }
+
+    blk_flush();
+    return 1;
+}
+
+// Fills in the fields a caller should not have to invent: a fresh
+// unique GUID per entry, and the MBR type byte's sane default. Kept
+// out of partition_write_table() so that a caller replaying an
+// existing table (a future `parttable --restore`) keeps its GUIDs.
+void partition_fill_defaults(struct partition_table *t) {
+    for (int i = 0; i < t->entry_count; i++) {
+        guid_generate(t->entries[i].gpt_unique_guid);
+        k_memcpy(t->entries[i].gpt_type_guid, GPT_TYPE_BASIC_DATA, 16);
+        if (!t->entries[i].mbr_type) t->entries[i].mbr_type = 0x83;
+    }
 }

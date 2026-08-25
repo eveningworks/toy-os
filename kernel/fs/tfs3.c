@@ -11,8 +11,8 @@
 //
 // Everything on disk is VOLUME-relative: block b lives at sector
 // g_vol.base_lba + b * T3_SPB, and this file only touches the disk
-// through vol_read()/vol_write(). Today the volume is the flat disk
-// ({0, blk_sector_count()}); when partition mounting arrives the
+// through vol_read()/vol_write(). The volume is {0, blk_sector_count()}
+// and STAYS that way even inside a partition, because the
 // probe loop hands in a partition's extent instead and nothing here
 // changes -- that seam is the point (see the design doc's "Volumes
 // and partitions").
@@ -3053,6 +3053,7 @@ const struct fs_ops tfs3_ops = {
     // the format (link counts, type 2) with their ops still to come --
     // see fs.h's FS_CAP_* comment on exactly this distinction.
     .caps = FS_CAP_INODES | FS_CAP_HARDLINKS | FS_CAP_SYMLINKS | FS_CAP_EPOCH_TIME,
+    .volume_relative = 1, // all I/O is volume-relative through vol_read/vol_write -- mountable from a partition
     .probe = tfs3_probe,
     .wipe = tfs3_wipe,
     .format = tfs3_format,

@@ -3,14 +3,31 @@
 
 #include <stdint.h>
 
-// MBR/GPT partition table parsing (Milestone 3, docs/roadmap.md) --
-// read-only, diagnostic-only. TFS2 (kernel/fs/tfs.c) occupies the
-// whole disk starting at LBA 0 today, no partition table at all, so
-// this never gets consulted by the boot/mount path -- it exists purely
-// so `disk.img` (or any other attached disk) CAN be inspected, same
-// spirit as `lspci`. See docs/decisions.md for the full reasoning.
+// MBR/GPT partition tables: reading them, and writing them.
+//
+// THIS IS ON THE BOOT PATH NOW. It was read-only and diagnostic-only
+// for a long time -- this comment said so, and said the boot/mount path
+// never consulted it -- because there was nothing that could mount a
+// volume anywhere but LBA 0. kernel/fs/vfs.c's probe now scans this
+// table for a mountable partition, so a wrong answer here is a machine
+// that does not boot rather than a command that prints nonsense.
+//
+// Reading is safe on any disk. WRITING IS DESTRUCTIVE and lives behind
+// partition_write_table() below, SYS_MKPART, and `/bin/mkpart`.
+//
+// The whole-disk case has not gone away: a disk with no table is still
+// the ordinary shape here, and this repo's own disk.img is one. See
+// docs/decisions/storage.md.
 
 #define PART_MAX_ENTRIES 16 // sanity cap on how many entries are read/reported
+
+// How many partitions this kernel will WRITE. Four, because that is
+// MBR's hard limit and nothing on a toy-os disk wants more -- a GPT
+// table still gets its full 128 on-disk slots, so a real tool can add
+// to one this kernel wrote. Reading is capped separately and higher
+// (PART_MAX_ENTRIES), since a disk arriving from elsewhere is not
+// bound by what we would have written.
+#define PART_WRITE_MAX_ENTRIES 4
 
 enum partition_table_kind {
     PART_TABLE_NONE, // no 0x55AA signature at LBA 0 -- e.g. today's disk.img (raw TFS2)
@@ -54,5 +71,41 @@ struct partition_table {
 // PART_TABLE_NONE either way if nothing valid was found there, so most
 // callers only need to check out->kind, not this return value.
 int partition_read_table(struct partition_table *out);
+
+// ---- writing --------------------------------------------------------
+//
+// Writing a table is DESTRUCTIVE and this half of the API does not
+// pretend otherwise -- see partition_write_table()'s comment in
+// partition.c for why the kernel encodes the table rather than exposing
+// a raw sector write to ring 3.
+
+// Every check the kernel can make without writing anything: bounds,
+// overlap between partitions, overlap with the table's own reserved
+// sectors, and MBR's four-slot limit. Sets *why to a short reason.
+// Returns 1 if the table is safe to write.
+//
+// Split out from the writer so a caller can offer a dry run, and so a
+// KTEST can assert the refusals without touching the disk.
+int partition_validate(const struct partition_table *in, const char **why);
+
+// Fills each entry's unique GUID (fresh and random), its type GUID
+// (generic filesystem data) and its MBR type byte if unset. Call
+// before partition_write_table() when creating a NEW table; skip it
+// when rewriting one whose identities should survive.
+void partition_fill_defaults(struct partition_table *t);
+
+// Writes `in` to the disk. Validates first and refuses rather than
+// writing a partial table. For GPT this writes the backup structures
+// FIRST and the protective MBR LAST, so an interrupted write leaves a
+// disk that reads as unpartitioned rather than one advertising a table
+// that is not there.
+//
+// Does NOT remount anything: the volume in use is unaffected, and the
+// new table takes effect at the next boot. Linux behaves the same way
+// (the kernel refuses to re-read a table on a busy disk).
+//
+// Returns 1 on success, 0 on refusal or a write failure -- the reason
+// is logged either way.
+int partition_write_table(const struct partition_table *in);
 
 #endif

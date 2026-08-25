@@ -65,6 +65,17 @@ struct block_device {
 // device's capability bits and function pointers disagree.
 int blk_register(const struct block_device *dev);
 
+// Registers `dev` as active while recording what it SITS ON. A plain
+// disk is its own whole disk at base 0, which is what blk_register()
+// passes; a partition passes its parent and its start LBA.
+//
+// One entry point rather than a register-then-annotate pair, because a
+// second call is a thing to forget, and forgetting it would leave the
+// partition table being read out of the mounted partition instead of
+// off the disk -- a wrong answer, not an error.
+int blk_register_over(const struct block_device *dev,
+                      const struct block_device *parent, uint32_t base_lba);
+
 // The active device, or NULL when nothing is registered -- which is the
 // normal state on a machine with no disk and no live image, and is what
 // "RAM-only, nothing mounted" means.
@@ -101,5 +112,58 @@ int blk_virtio_init(void);
 // Registers a RAM-backed device over [base, base + bytes). For a live
 // image handed over by the bootloader; see kernel/drivers/block/ram.c.
 int blk_ram_register(uint64_t base, uint64_t bytes);
+
+// ---- partitions ----------------------------------------------------
+//
+// A PARTITION IS A BLOCK DEVICE OVER A WINDOW OF ANOTHER ONE. Every
+// LBA is shifted by base_lba and every transfer is bounds-checked
+// against the window, so the filesystem above sees a device that
+// starts at 0 and ends at the partition's end -- TFS3 needs no change
+// at all, because the device it is handed IS the volume.
+//
+// This is where Linux and Windows both put the offset: Linux gives
+// each partition its own `struct block_device` carrying `bd_start_sect`
+// and the filesystem driver never learns it exists; Windows stacks
+// `partmgr` between the disk driver and the volume. The alternative --
+// teaching each filesystem to add an offset itself -- is the layering
+// both moved away from, and it would have to be re-done per backend.
+//
+// The active device stays SINGULAR: a partition device REPLACES its
+// parent as the active one rather than sitting beside it, so this
+// needs none of the mount-table work docs/roadmap-details.md's "Real
+// mount points" is holding. Registering a second partition simply
+// re-points the window.
+//
+// `parent` must be a device that is already known-good (in practice
+// blk_active() immediately after a disk driver registered), and it is
+// borrowed, not copied -- the disk drivers' device structs are static
+// and outlive everything.
+//
+// Returns 0 and registers nothing if the window is empty or runs past
+// the parent's end.
+// `index` is the partition's 1-based number, used only for the name
+// `df` and the kernel log print ("ata1", "virtio-blk2").
+//
+// Passing an already-active PARTITION as the parent is safe and is
+// what the boot-time scan does: the window re-points to the new
+// partition of the same underlying disk rather than nesting.
+int blk_part_register(const struct block_device *parent,
+                      uint32_t base_lba, uint32_t sectors, int index);
+
+// The disk the partition table lives on: the active device, or its
+// PARENT when a partition is active. NULL when nothing is registered.
+const struct block_device *blk_whole_disk(void);
+
+// Where the active device starts on that disk -- 0 when the active
+// device IS the whole disk.
+uint32_t blk_base_lba(void);
+
+// Whole-disk I/O, ignoring any partition window. This is what a
+// partition-table reader or writer wants and what a filesystem must
+// never use: blk_read_sectors(0) is the volume's first sector, while
+// blk_disk_read_sectors(0) is the MBR. Same fault-injection hooks.
+uint32_t blk_disk_sector_count(void);
+int blk_disk_read_sectors(uint32_t lba, int count, void *buf);
+int blk_disk_write_sectors(uint32_t lba, int count, const void *buf);
 
 #endif

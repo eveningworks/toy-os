@@ -184,7 +184,10 @@ def launch_qemu_cmd(iso="toy-os.iso", disk="disk.img", serial_log="serial.log",
 
     drive = (f"-drive file={disk},format=raw,if=ide,discard=unmap " if disk else "")
     return (
-        f"qemu-system-x86_64 {accel}-cdrom {iso} "
+        # -boot order=d: the CD is always the boot medium here. A disk
+        # with a partition table looks bootable to SeaBIOS (0x55AA at
+        # LBA 0) and hangs with no output at all -- see vm.py.
+        f"qemu-system-x86_64 {accel}-boot order=d -cdrom {iso} "
         # discard=unmap: the guest's ATA TRIM becomes a hole punch in the
         # backing file, so a test that writes and deletes doesn't grow it.
         f"{drive}"

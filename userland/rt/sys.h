@@ -2,6 +2,7 @@
 #define USERLAND_SYS_H
 
 #include <stdint.h>
+#include "partition_abi.h" // struct mkpart_request, for sys_mkpart()
 #include <stddef.h>
 #include "syscall_abi.h"
 #include "errno.h"   // sys_errno()'s values
@@ -474,6 +475,16 @@ unsigned long long sys_monotonic_ns(void);
 // when it moves. Only ever increases, and is non-zero once a filesystem
 // is mounted, so 0 is safe as "not sampled yet".
 unsigned long long sys_fs_generation(void);
+
+// Writes an MBR or GPT partition table to the disk. See
+// abi/partition_abi.h for the request shape and why this takes a table
+// description rather than a raw sector write.
+//
+// DESTRUCTIVE, and it does NOT remount anything -- the volume in use is
+// unaffected and the new table takes effect at the next boot. Returns 0
+// or a negative errno (-EPERM without MKPART_CONFIRM, -EINVAL for a
+// table that overlaps or runs off the disk, -EIO on a write failure).
+int sys_mkpart(const struct mkpart_request *req);
 
 // Powers the machine off (`reboot` = 0) or restarts it (1). DOES NOT
 // RETURN on success, so a caller that continues past it should treat

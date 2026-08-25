@@ -416,6 +416,14 @@ struct query_parttable {
     uint64_t kind;        // QUERY_PART_*
     uint64_t entry_count; // how many QUERY_PARTITION records exist
     uint8_t  disk_guid[16]; // GPT only; all-zero otherwise
+
+    // The WHOLE DISK's size, in 512-byte sectors -- not the mounted
+    // volume's, which is what `df` reports and which is smaller than
+    // this once a filesystem lives in a partition. Carried on the
+    // table's record because a partition layout cannot be reasoned
+    // about without it: `mkpart` needs it to place `rest`, and a
+    // reader needs it to say how much of the disk is unallocated.
+    uint64_t disk_sectors;
 };
 
 // QUERY_PARTITION's record -- one partition.

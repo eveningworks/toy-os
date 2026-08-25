@@ -208,11 +208,29 @@ def parse_inode(raw: bytes):
 # ---- the image ----------------------------------------------------------
 
 class Tfs3Image:
-    def __init__(self, path, writable=False):
+    # THE VOLUME SEAM, and it is the host-side twin of the kernel's.
+    # kernel/fs/tfs3.c addresses everything relative to
+    # {base_lba, sector_count} and reaches the disk only through
+    # vol_read()/vol_write(); this class does the same through
+    # read_bytes()/write_bytes(). That is what lets one image hold a
+    # partition table AND a filesystem inside a partition, with neither
+    # half knowing about the other.
+    #
+    # base_lba=0 with no explicit size is the flat whole-image volume
+    # every existing caller gets, unchanged.
+    def __init__(self, path, writable=False, base_lba=0, sectors=0):
         self.path = path
         self.f = open(path, "r+b" if writable else "rb")
         self.f.seek(0, os.SEEK_END)
-        self.file_size = self.f.tell()
+        image_size = self.f.tell()
+        self.base = base_lba * SECTOR
+        if self.base >= image_size:
+            raise SystemExit(f"{path}: volume starts at LBA {base_lba}, past the "
+                             f"end of a {image_size // SECTOR}-sector image")
+        # file_size is the VOLUME's size from here down -- every
+        # geometry calculation in this file already derives from it, so
+        # nothing else needs to learn about partitions.
+        self.file_size = sectors * SECTOR if sectors else image_size - self.base
         sb = parse_superblock(self.read_bytes(SB_BLOCK * BLOCK, SECTOR))
         if sb is None:
             sb = self._try_backups()
@@ -246,13 +264,16 @@ class Tfs3Image:
     def close(self):
         self.f.close()
 
+    # The ONLY two places the volume base is applied. Every other
+    # method goes through these, exactly as tfs3.c's do -- adding an
+    # offset anywhere else would be a second place for it to be wrong.
     def read_bytes(self, off, n):
-        self.f.seek(off)
+        self.f.seek(self.base + off)
         data = self.f.read(n)
         return data + b"\x00" * (n - len(data))
 
     def write_bytes(self, off, data):
-        self.f.seek(off)
+        self.f.seek(self.base + off)
         self.f.write(data)
 
     def read_block(self, blk):
@@ -518,12 +539,25 @@ def backup_groups(gc):
 # ---- format --------------------------------------------------------------
 
 def cmd_format(args):
+    # The volume base, in bytes. Everything below is VOLUME-relative
+    # from here on -- the same seam Tfs3Image applies, repeated here
+    # because format() writes the raw file directly rather than through
+    # the class (it is building the thing the class reads).
+    at = getattr(args, "at_lba", 0) * SECTOR
+    vol_sectors = getattr(args, "sectors", 0)
+
     size = args.size
     exists = os.path.exists(args.disk)
+    if at and not exists:
+        raise SystemExit("--at-lba formats a volume INSIDE an existing image "
+                         "-- create and partition the image first")
     if exists:
-        size = os.path.getsize(args.disk)
+        # The VOLUME's size, not the image's: a filesystem in a
+        # partition that thinks it owns the whole disk will happily
+        # allocate blocks past its own end.
+        size = vol_sectors * SECTOR if vol_sectors else os.path.getsize(args.disk) - at
         with open(args.disk, "rb") as f:
-            f.seek(SB_BLOCK * BLOCK)
+            f.seek(at + SB_BLOCK * BLOCK)
             sec = f.read(SECTOR)
         old = parse_superblock(sec + b"\x00" * (SECTOR - len(sec))) if sec else None
         if old and not args.force:
@@ -575,9 +609,9 @@ def cmd_format(args):
         # not survive this image becoming TFS3, or the kernel's probe
         # keeps claiming it as TFS2. Only touched when the magic
         # actually matches -- an MBR/GPT at LBA 0 is left alone.
-        f.seek(0)
+        f.seek(at)
         if f.read(4) == b"TFS2":
-            f.seek(0)
+            f.seek(at)
             f.write(b"\x00" * SECTOR)
         # Same rule WITHIN this format: an older TFS3 version's backup
         # superblocks sit at positions this version's layout never
@@ -590,10 +624,10 @@ def cmd_format(args):
             for g in backup_groups(old_gc):
                 gbase = geo["group0"] + g * BLOCKS_PER_GROUP
                 span = min(total_blocks - gbase, BLOCKS_PER_GROUP)
-                f.seek((gbase + span - 1) * BLOCK)
+                f.seek(at + (gbase + span - 1) * BLOCK)
                 f.write(b"\x00" * SECTOR)
         def wblk(blk, data):
-            f.seek(blk * BLOCK)
+            f.seek(at + blk * BLOCK)
             f.write(data)
 
         sb = pack_superblock(total_blocks, BLOCKS_PER_GROUP, ipg, gc,
@@ -638,11 +672,16 @@ def cmd_format(args):
             import ctypes
             libc = ctypes.CDLL(None, use_errno=True)
             fd = f.fileno()
+            # VOLUME-relative, like wblk() -- `at` is added here and
+            # nowhere else. Getting this wrong is not a subtle bug: on a
+            # volume inside a partition, a flat punch lands on top of
+            # the superblock this format just wrote, and the result is
+            # a "successfully formatted" image with nothing in it.
             def punch(off, length):
                 rc = libc.fallocate(fd, 0x03,  # PUNCH_HOLE | KEEP_SIZE
-                                    ctypes.c_long(off), ctypes.c_long(length))
+                                    ctypes.c_long(at + off), ctypes.c_long(length))
                 if rc != 0:  # fall back to literal zeros
-                    f.seek(off)
+                    f.seek(at + off)
                     f.write(b"\x00" * length)
 
         for g in range(gc):
@@ -671,7 +710,7 @@ def cmd_format(args):
         ptrs = [0] * 15
         ptrs[0] = root_block
         root = pack_inode(TYPE_DIR, 2, BLOCK, now, now, ptrs)
-        f.seek((GROUP0_START + 2) * BLOCK + INO_ROOT * INODE_SIZE)
+        f.seek(at + (GROUP0_START + 2) * BLOCK + INO_ROOT * INODE_SIZE)
         f.write(root)
         raw = bytearray(BLOCK)
         struct.pack_into("<IHB", raw, 0, INO_ROOT, 12, 1)
@@ -797,7 +836,7 @@ def delete_path(img, path):
 # ---- commands -------------------------------------------------------------
 
 def cmd_info(args):
-    img = Tfs3Image(args.disk)
+    img = Tfs3Image(args.disk, base_lba=getattr(args, "at_lba", 0), sectors=getattr(args, "sectors", 0))
     sb = img.sb
     print(f"TFS3 v{sb['version']}: {sb['total_blocks']} blocks, {sb['gc']} groups, "
           f"{sb['ipg']} inodes/group, flags={sb['flags']}")
@@ -811,7 +850,7 @@ def cmd_info(args):
 
 
 def cmd_ls(args):
-    img = Tfs3Image(args.disk)
+    img = Tfs3Image(args.disk, base_lba=getattr(args, "at_lba", 0), sectors=getattr(args, "sectors", 0))
     ino = img.lookup(args.path or "/")
     if ino is None:
         raise SystemExit(f"no such path: {args.path}")
@@ -823,7 +862,7 @@ def cmd_ls(args):
 
 
 def cmd_read(args):
-    img = Tfs3Image(args.disk)
+    img = Tfs3Image(args.disk, base_lba=getattr(args, "at_lba", 0), sectors=getattr(args, "sectors", 0))
     ino = img.lookup(args.src)
     if ino is None:
         raise SystemExit(f"no such file: {args.src}")
@@ -840,21 +879,21 @@ def cmd_read(args):
 def cmd_write(args):
     with open(args.src, "rb") as f:
         data = f.read()
-    img = Tfs3Image(args.disk, writable=True)
+    img = Tfs3Image(args.disk, writable=True, base_lba=getattr(args, "at_lba", 0), sectors=getattr(args, "sectors", 0))
     ino = write_file(img, data, args.dst)
     print(f"wrote {len(data)} bytes -> {args.dst} (ino {ino})")
     img.close()
 
 
 def cmd_mkdir(args):
-    img = Tfs3Image(args.disk, writable=True)
+    img = Tfs3Image(args.disk, writable=True, base_lba=getattr(args, "at_lba", 0), sectors=getattr(args, "sectors", 0))
     ino = mkdir_path(img, args.path)
     print(f"mkdir {args.path} (ino {ino})")
     img.close()
 
 
 def cmd_delete(args):
-    img = Tfs3Image(args.disk, writable=True)
+    img = Tfs3Image(args.disk, writable=True, base_lba=getattr(args, "at_lba", 0), sectors=getattr(args, "sectors", 0))
     delete_path(img, args.path)
     print(f"deleted {args.path}")
     img.close()
@@ -864,7 +903,7 @@ def cmd_sync(args):
     """Mirror a seed tree: <seed>/once/ copied only if missing,
     <seed>/sync/ content-hash-synced -- same convention as
     tfs2_writer.py sync (see its docstring)."""
-    img = Tfs3Image(args.disk, writable=True)
+    img = Tfs3Image(args.disk, writable=True, base_lba=getattr(args, "at_lba", 0), sectors=getattr(args, "sectors", 0))
     wrote = skipped = 0
     for mode in ("once", "sync"):
         root = os.path.join(args.seed_dir, mode)
@@ -900,7 +939,7 @@ def cmd_trim(args):
     import ctypes
     FALLOC_FL_KEEP_SIZE = 0x01
     FALLOC_FL_PUNCH_HOLE = 0x02
-    img = Tfs3Image(args.disk)
+    img = Tfs3Image(args.disk, base_lba=getattr(args, "at_lba", 0), sectors=getattr(args, "sectors", 0))
     libc = ctypes.CDLL(None, use_errno=True)
     fd = os.open(args.disk, os.O_RDWR)
     punched = 0
@@ -936,7 +975,7 @@ def cmd_corrupt(args):
     corrupt command: the kernel deliberately avoids producing these,
     so without this fsck could only ever be proven to report 'clean'.
     """
-    img = Tfs3Image(args.disk, writable=True)
+    img = Tfs3Image(args.disk, writable=True, base_lba=getattr(args, "at_lba", 0), sectors=getattr(args, "sectors", 0))
     did = []
 
     if args.leak:
@@ -1049,6 +1088,14 @@ def main():
     p.add_argument("--bytes-per-inode", type=int, default=DEFAULT_BYTES_PER_INODE)
     p.add_argument("--force", action="store_true")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--at-lba", type=int, default=0, metavar="N",
+                   help="format a volume starting at this sector of an existing "
+                        "image, rather than the whole image -- i.e. inside a "
+                        "partition. Pair with --sectors.")
+    p.add_argument("--sectors", type=int, default=0, metavar="N",
+                   help="the volume's size in sectors (default: to the end of "
+                        "the image). REQUIRED with --at-lba when anything "
+                        "follows the partition, such as GPT's backup header.")
     p.add_argument("--fs-version", type=int, default=VERSION, metavar="N",
                    help="on-disk format version to write (1 = the four-slot "
                         "journal, 2 = the 32-slot one, default). v1 exists so "
@@ -1056,16 +1103,27 @@ def main():
                         "testable -- see tools/tfs3_v1_test.py")
     p.set_defaults(fn=cmd_format)
 
-    p = sub.add_parser("info"); p.add_argument("disk"); p.set_defaults(fn=cmd_info)
-    p = sub.add_parser("ls"); p.add_argument("disk"); p.add_argument("path", nargs="?", default="/"); p.set_defaults(fn=cmd_ls)
-    p = sub.add_parser("read"); p.add_argument("disk"); p.add_argument("src"); p.add_argument("dst", nargs="?"); p.set_defaults(fn=cmd_read)
-    p = sub.add_parser("write"); p.add_argument("disk"); p.add_argument("src"); p.add_argument("dst"); p.set_defaults(fn=cmd_write)
-    p = sub.add_parser("mkdir"); p.add_argument("disk"); p.add_argument("path"); p.set_defaults(fn=cmd_mkdir)
-    p = sub.add_parser("delete"); p.add_argument("disk"); p.add_argument("path"); p.set_defaults(fn=cmd_delete)
-    p = sub.add_parser("sync"); p.add_argument("disk"); p.add_argument("seed_dir"); p.set_defaults(fn=cmd_sync)
-    p = sub.add_parser("trim"); p.add_argument("disk"); p.set_defaults(fn=cmd_trim)
+    # Every subcommand takes --at-lba/--sectors, because a volume in a
+    # partition has to be reachable by all of them, not only by format:
+    # `sync` is how the seed tree gets in, and `ls`/`info` are how a
+    # human checks it landed.
+    def vol_opts(p):
+        p.add_argument("--at-lba", type=int, default=0, metavar="N",
+                       help="the volume starts at this sector of the image")
+        p.add_argument("--sectors", type=int, default=0, metavar="N",
+                       help="the volume's size in sectors")
+        return p
 
-    p = sub.add_parser("corrupt")
+    p = vol_opts(sub.add_parser("info")); p.add_argument("disk"); p.set_defaults(fn=cmd_info)
+    p = vol_opts(sub.add_parser("ls")); p.add_argument("disk"); p.add_argument("path", nargs="?", default="/"); p.set_defaults(fn=cmd_ls)
+    p = vol_opts(sub.add_parser("read")); p.add_argument("disk"); p.add_argument("src"); p.add_argument("dst", nargs="?"); p.set_defaults(fn=cmd_read)
+    p = vol_opts(sub.add_parser("write")); p.add_argument("disk"); p.add_argument("src"); p.add_argument("dst"); p.set_defaults(fn=cmd_write)
+    p = vol_opts(sub.add_parser("mkdir")); p.add_argument("disk"); p.add_argument("path"); p.set_defaults(fn=cmd_mkdir)
+    p = vol_opts(sub.add_parser("delete")); p.add_argument("disk"); p.add_argument("path"); p.set_defaults(fn=cmd_delete)
+    p = vol_opts(sub.add_parser("sync")); p.add_argument("disk"); p.add_argument("seed_dir"); p.set_defaults(fn=cmd_sync)
+    p = vol_opts(sub.add_parser("trim")); p.add_argument("disk"); p.set_defaults(fn=cmd_trim)
+
+    p = vol_opts(sub.add_parser("corrupt"))
     p.add_argument("disk")
     p.add_argument("--leak", type=int, default=0, metavar="N")
     p.add_argument("--free-referenced", type=int, default=0, metavar="N")

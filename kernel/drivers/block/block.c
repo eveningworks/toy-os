@@ -8,8 +8,21 @@
 
 static const struct block_device *g_dev;
 
+// What the active device sits on, and where it starts there. For a
+// plain disk these are the device itself and 0; for a partition they
+// are the parent disk and the partition's first LBA. Kept HERE rather
+// than in block_part.c so that "which device does the partition table
+// live on" has one answer whatever is mounted.
+static const struct block_device *g_whole;
+static uint32_t g_base;
+
 int blk_register(const struct block_device *dev) {
-    if (!dev) { g_dev = NULL; return 1; }
+    return blk_register_over(dev, dev, 0);
+}
+
+int blk_register_over(const struct block_device *dev,
+                      const struct block_device *parent, uint32_t base_lba) {
+    if (!dev) { g_dev = NULL; g_whole = NULL; g_base = 0; return 1; }
 
     if (!dev->name || !dev->sector_count || !dev->read_sectors ||
         !dev->write_sectors || !dev->max_sectors_per_xfer) {
@@ -43,8 +56,36 @@ int blk_register(const struct block_device *dev) {
     }
 
     g_dev = dev;
-    klog_printf("block: %s active (%u sectors)\n", dev->name, dev->sector_count());
+    g_whole = parent ? parent : dev;
+    g_base = base_lba;
+    if (base_lba) {
+        klog_printf("block: %s active (%u sectors at LBA %u of %s)\n", dev->name,
+                    dev->sector_count(), base_lba, g_whole->name);
+    } else {
+        klog_printf("block: %s active (%u sectors)\n", dev->name, dev->sector_count());
+    }
     return 1;
+}
+
+const struct block_device *blk_whole_disk(void) { return g_whole; }
+
+uint32_t blk_base_lba(void) { return g_base; }
+
+uint32_t blk_disk_sector_count(void) {
+    return g_whole ? g_whole->sector_count() : 0;
+}
+
+// The fault-injection hooks are the same ones blk_read_sectors() uses:
+// a partition-table read failing under injection is a case worth being
+// able to test, and there is no reason for it to be exempt.
+int blk_disk_read_sectors(uint32_t lba, int count, void *buf) {
+    if (fault_should_fail_block_read()) return 0;
+    return g_whole ? g_whole->read_sectors(lba, count, buf) : 0;
+}
+
+int blk_disk_write_sectors(uint32_t lba, int count, const void *buf) {
+    if (fault_should_fail_block_write()) return 0;
+    return g_whole ? g_whole->write_sectors(lba, count, buf) : 0;
 }
 
 const struct block_device *blk_active(void) { return g_dev; }

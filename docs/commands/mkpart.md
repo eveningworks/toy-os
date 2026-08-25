@@ -1,0 +1,83 @@
+# mkpart
+
+**a `/bin` program.**
+
+**Category:** Storage
+
+## Synopsis
+
+    mkpart [--mbr|--gpt] <size>[K|M|G]|rest [<size>|rest ...] confirm
+      --gpt          write a GPT (default)
+      --mbr          write a legacy MBR -- at most 4 partitions
+      <size>         one partition of that size; `rest` takes what is left
+      confirm        required -- this destroys the disk's current contents
+
+## Description
+
+`/bin/mkpart` writes a partition table to the disk. It is the write half of
+`parttable`, which reads one.
+
+Sizes are laid out end to end from LBA 2048 (the 1 MiB alignment every modern
+tool uses), in the order given, with no gaps and no reordering — what you type
+is what lands, which is the only layout predictable from a command line. A bare
+number is **sectors**; a `K`/`M`/`G` suffix is bytes, rounded **down** to a
+whole sector. Exactly one partition may be `rest`, which takes everything left
+after the sized ones.
+
+A GPT gets the full standard geometry: a protective MBR at LBA 0, a primary
+header at LBA 1, 128 entry slots across LBAs 2–33, and a backup header and
+entry array in the last 33 sectors. Only the first four slots are ever filled
+here — see the limits below — but the array is full-sized, so a partition
+editor on another system can add to a table this wrote.
+
+## What it deliberately does not do
+
+- **It does not format anything.** A partition is a range of sectors; putting a
+  filesystem in one is `fsformat`. Two verbs because they are two decisions,
+  the same split as `fdisk` and `mkfs`.
+- **It does not remount, and nothing about the running system changes.** The
+  new table takes effect at the **next boot**. Linux is the same — the kernel
+  refuses to re-read a table on a busy disk.
+- **There is no interactive mode.** `fdisk`'s prompt-driven editor is a lot of
+  program for a machine with one disk, and a command line can be read back
+  later and driven by a test.
+- **No extended/logical MBR partitions.** They are a linked list of sectors
+  scattered through the disk, and GPT is the answer to wanting more than four.
+
+## Limits
+
+At most **four** partitions, which is MBR's hard limit and enough for a disk
+this size; `--mbr` refuses a fifth outright. MBR start/length fields are 32-bit,
+so `mkpart` refuses rather than truncates a partition that would not fit in one
+— a truncated start LBA is a partition somewhere else entirely.
+
+The kernel validates independently of this program and refuses a table whose
+partitions overlap each other, run past the end of the disk, or sit on top of
+the table's own reserved sectors.
+
+## The trap
+
+**`confirm` is a speed bump, not a permission check.** toy-os has no privilege
+model — there is no uid, and `SYS_QUERY` has none either — so any process can
+set the flag that `confirm` sets. What it stops is the accident, not the
+attacker. If uids ever arrive, `sys_mkpart()` in
+`kernel/drivers/partition_syscall.c` is where the real check goes.
+
+**A partitioned disk is never auto-formatted.** Once a table exists, boot no
+longer treats an unclaimed disk as blank — it would otherwise lay a whole-disk
+filesystem across every partition the table describes, and TFS3 would *survive*
+that (it reserves volume blocks 0–7, so the table stays readable) while the
+partitions were being overwritten. Instead, boot leaves partition 1 as the
+active volume so that `fsformat` claims it.
+
+## Typical use
+
+    mkpart --gpt 64M rest confirm     # two partitions
+    reboot
+    fsformat tfs3 confirm             # a filesystem in partition 1
+    df                                # reports the PARTITION's size, not the disk's
+
+## See also
+
+`parttable` (read a table), `fsformat` (put a filesystem in the active volume),
+`df` (what is mounted, and how big it is).

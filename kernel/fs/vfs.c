@@ -35,6 +35,7 @@
 #include "klog.h"
 #include "string.h"
 #include "scheduler.h" // scheduler_preempt_disable/enable -- see FS_OP below
+#include "partition.h" // the boot-time partition scan below
 
 // Priority order: first probe() == 1 wins. TFS3 goes FIRST when it
 // lands (Stage B of the plan) -- a disk carrying either format is
@@ -164,6 +165,124 @@ static int try_live_module(void) {
     return 1;
 }
 
+// Tries to mount a filesystem out of one of the disk's PARTITIONS.
+// Returns:
+//    1  mounted -- the partition is now the active block device
+//    0  there IS a table, but no partition held a filesystem
+//   -1  no partition table at all
+//
+// The caller needs 0 and -1 apart, because a partitioned disk must
+// never be auto-formatted (see probe_and_mount()). In both non-mounting
+// cases the whole disk is restored as the active device, so the flat
+// probe below sees exactly what it always saw.
+//
+// The tri-state is also why this reads the table ONCE. A separate
+// "is it partitioned?" pass would cost a second disk read and a second
+// ~1.5 KB struct partition_table on the stack, against a 2 KB kernel
+// frame budget (-Wframe-larger-than).
+//
+// This is the per-partition iteration docs/roadmap-details.md's "Real
+// mount points" predicted would slot into the probe loop. It needs no
+// mount table because the active device stays singular: the FIRST
+// partition a backend claims wins, and that is the volume, the same
+// way the first backend to claim a flat disk has always won.
+//
+// Order is the table's own order, not "biggest" or "first bootable" --
+// there is nothing here that would make a cleverer policy more correct,
+// and a table's order is the one thing a person writing it controls.
+static int try_partitions(void) {
+    const struct block_device *disk = blk_whole_disk();
+    if (!disk) return -1;
+
+    // STATIC, not a stack local: struct partition_table is ~1.5 KB
+    // against a 1 KB kernel frame budget. Safe because this runs once
+    // from fs_init() (and again from fs_format_backend()'s remount),
+    // never re-entrantly -- the same call partition_query.c makes, for
+    // the same reason.
+    static struct partition_table tbl;
+    if (!partition_read_table(&tbl)) return -1; // LBA 0 unreadable -- the flat path reports it
+    if (tbl.kind == PART_TABLE_NONE) return -1;
+    if (tbl.entry_count == 0) return 0;         // an empty table is still a table
+
+    klog_printf("fs: %s partition table, %d entries\n",
+                tbl.kind == PART_TABLE_GPT ? "GPT" : "MBR", tbl.entry_count);
+
+    // Remembered so the "nothing mounted" path below can re-register
+    // partition 1 -- see there.
+    uint32_t first_base = 0, first_count = 0;
+    int first_ok = 0;
+
+    for (int i = 0; i < tbl.entry_count; i++) {
+        const struct partition_entry *pe = &tbl.entries[i];
+        uint32_t base, count;
+
+        if (tbl.kind == PART_TABLE_GPT) {
+            // GPT's range is INCLUSIVE at both ends, so the count is
+            // end - start + 1. Getting that off by one costs the last
+            // sector of every volume, which a filesystem notices only
+            // when it is nearly full.
+            if (pe->gpt_lba_end < pe->gpt_lba_start) continue;
+            uint64_t n = pe->gpt_lba_end - pe->gpt_lba_start + 1;
+            // This kernel addresses the disk with 32-bit LBAs (LBA28 on
+            // ATA, and block_device's own sector_count is uint32_t), so
+            // a partition past that ceiling is REFUSED rather than
+            // truncated into a window that silently aliases.
+            if (pe->gpt_lba_start + n > 0xFFFFFFFFull) {
+                klog_printf("fs: partition %d starts past the 32-bit LBA ceiling -- skipped\n", i + 1);
+                continue;
+            }
+            base = (uint32_t)pe->gpt_lba_start;
+            count = (uint32_t)n;
+        } else {
+            if (pe->mbr_type == 0xEE) continue; // protective entry, never a filesystem
+            base = pe->mbr_lba_start;
+            count = pe->mbr_num_sectors;
+        }
+
+        if (!blk_part_register(disk, base, count, i + 1)) continue;
+        if (!first_ok) { first_base = base; first_count = count; first_ok = 1; }
+
+        for (int b = 0; b < FS_BACKEND_COUNT; b++) {
+            const struct fs_ops *fs = g_backends[b];
+            // A backend that addresses the disk absolutely would bypass
+            // the partition window entirely and probe the DISK's LBA 0
+            // -- claiming a partition it never looked at. See fs_ops.h.
+            if (!fs->volume_relative) continue;
+            if (!caps_are_honest(fs)) continue;
+            if (fs->probe() == 1) {
+                klog_printf("fs: mounting %s from partition %d (LBA %u, %u sectors)\n",
+                            fs->name, i + 1, base, count);
+                mount_backend(fs);
+                return 1;
+            }
+        }
+    }
+
+    // Nothing claimed anything -- every partition is empty, which is
+    // what a freshly `mkpart`ed disk looks like.
+    //
+    // LEAVE THE FIRST PARTITION ACTIVE rather than restoring the whole
+    // disk. `fsformat` formats whatever the active block device is, so
+    // this is what makes "mkpart, reboot, fsformat" put a filesystem
+    // INSIDE partition 1 instead of flat across the table and every
+    // partition it describes. Restoring the disk here was the obvious
+    // thing and it is the wrong thing: it would make the one command
+    // you reach for next quietly undo the one you just ran.
+    //
+    // If partition 1 will not register (a table describing a window
+    // off the end of the disk), fall back to the whole disk -- that is
+    // a broken table, and refusing to have any active device at all
+    // would be a worse answer than the one this OS has always given.
+    if (first_ok) {
+        klog_printf("fs: no partition holds a filesystem -- leaving partition 1 "
+                    "active (LBA %u, %u sectors) for `fsformat`\n", first_base, first_count);
+        blk_part_register(disk, first_base, first_count, 1);
+    } else {
+        blk_register(disk);
+    }
+    return 0;
+}
+
 static void probe_and_mount(int allow_format) {
     const struct fs_ops *fallback = g_backends[FS_DEFAULT_BACKEND];
 
@@ -193,6 +312,14 @@ static void probe_and_mount(int allow_format) {
         return;
     }
 
+    // Partitions first. A disk that carries a table is a partitioned
+    // disk whether or not anything mounted off it, and that fact has to
+    // outlive this call -- it is what stops the blank-disk policy below
+    // formatting straight over the table.
+    int part_result = try_partitions();
+    if (part_result == 1) return;
+    int partitioned = (part_result == 0);
+
     int unreadable = 0;
     for (int i = 0; i < FS_BACKEND_COUNT; i++) {
         const struct fs_ops *fs = g_backends[i];
@@ -216,6 +343,22 @@ static void probe_and_mount(int allow_format) {
         // format over it. The default backend's init() re-validates
         // and degrades to RAM-only with its own loud refusal.
         klog_write("fs: superblock unreadable -- NOT formatting, refusing to destroy a possibly-good disk\n");
+        mount_backend(fallback);
+        return;
+    }
+
+    // A PARTITIONED DISK IS NEVER BLANK. Its partitions were probed
+    // above and none held a filesystem, which means an empty partition
+    // waiting for `fsformat` -- not free space to claim. Formatting
+    // flat over it would lay a whole-disk volume across every
+    // partition's data, and TFS3 would SURVIVE that (it reserves
+    // volume blocks 0-7, so the table itself stays readable) while the
+    // partitions it describes were being overwritten -- a corruption
+    // that still passes `parttable`. Same instinct as the refusal
+    // above: an unrecognised disk is not an invitation.
+    if (partitioned) {
+        klog_write("fs: partitioned disk, no partition holds a filesystem -- "
+                   "NOT formatting the disk (`fsformat` claims the active partition)\n");
         mount_backend(fallback);
         return;
     }

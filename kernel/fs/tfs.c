@@ -2320,6 +2320,7 @@ static int tfs_check(int repair, struct fs_check_result *out) {
 const struct fs_ops tfs_ops = {
     .name = "tfs2",
     .caps = 0, // no on-disk inodes/hardlinks/symlinks, timestamps stored civil -- see fs.h's FS_CAP_* comment
+    .volume_relative = 0, // absolute LBAs and direct ata_* calls -- whole disk only, see fs_ops.h
     .probe = tfs_probe,
     .wipe = tfs_wipe,
     .format = tfs_format,

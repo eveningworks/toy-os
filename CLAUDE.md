@@ -649,6 +649,10 @@ whenever a headline here tells you something you did not already know.
 - **A new TFS3 operation must COUNT ITS JOURNAL CREDITS, and the count is the design.**
 - **Shrinking a file, or anything else that stops referencing a block, commits the pointer change BEFORE freeing the bit.**
 - **`/etc` on the persistent filesystem is the config-file convention.**
+- **A PARTITION IS A BLOCK DEVICE, AND THE FILESYSTEM NEVER LEARNS ITS OFFSET** -- `block_part.c` wraps a parent and shifts every LBA (Linux's `bd_start_sect`, Windows' `partmgr`); the active device stays SINGULAR; `blk_read_sectors()` is the VOLUME and `blk_disk_read_sectors()` is the DISK, so a table parser must use the latter; capabilities are inherited and TRIM is CLAMPED; and a backend declares `fs_ops.volume_relative` -- TFS2 is 0 and permanently flat-only.
+- **A PARTITIONED DISK IS NEVER AUTO-FORMATTED, AND PARTITION 1 IS LEFT ACTIVE** -- a flat format SURVIVES a GPT (TFS3 reserves volume blocks 0-7), so claiming an unclaimed partitioned disk would lay a whole-disk volume across every partition's data while `parttable` kept printing the table correctly. `fsformat` formats the ACTIVE device, which is what makes `mkpart` -> reboot -> `fsformat` land inside partition 1.
+- **WRITING A TABLE IS A SYSCALL THAT TAKES A TABLE, NOT A SECTOR** -- `SYS_MKPART` takes a `struct mkpart_request` and the kernel encodes it, because this kernel has no privilege model to gate a write-any-sector primitive with (Linux's `BLKPG` shape). `MKPART_CONFIRM` is a SPEED BUMP, not a permission check. GPT is written backup-first and protective-MBR-last; nothing is remounted.
+- **A PARTITION TABLE MAKES A DATA DISK LOOK BOOTABLE, AND QEMU HANGS WITH NO OUTPUT** -- `0x55AA` at LBA 0 is all SeaBIOS checks, so it boots the data disk and jumps into filesystem bytes. `-boot order=d` is in `QEMU_RUN`, `vm.py` and `launch_qemu_cmd()`; a hand-rolled QEMU line needs it too.
 
 ### The shell, the console, and line editing
 
@@ -1118,6 +1122,13 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   asserts the strip never reaches the tray -- shrink, then grouping by
   application; slow, since every window is a real process),
   `mem_stress.py`, `frame_balance.py` (does teardown balance),
+  `partition_test.py` (**toy-os booting with its filesystem INSIDE an
+  MBR or GPT partition** -- the only thing that exercises `vfs.c`'s
+  boot-time scan and `block_part.c`'s window. Its load-bearing check is
+  `df`: a kernel ignoring partitions still BOOTS, just RAM-only, so
+  "it booted" proves nothing, while "the mounted volume is 256 MiB and
+  the image is 2 GiB" only a correct window can produce. Reboots, and
+  finishes by driving `/bin/mkpart` in the guest),
   `virtio_boot_test.py` (TFS3 mounting off virtio-blk on a
   machine with NO IDE controller, written and read back across a
   REBOOT), `virtio_gpu_test.py` (the GPU -- the ONLY thing here that
@@ -1129,7 +1140,15 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   chain exists for), `live_boot_test.py`, `fs_switch_test.py`, `tfs3_v1_test.py`,
   `mkpart_test.py`, `demo_test.py`.
 - **Disk images, from the host** -- `seed_disk.py` (the format-aware
-  front end `make iso` calls), `tfs2_writer.py`, `tfs3_writer.py`,
+  front end `make iso` calls; **`--partition gpt|mbr` builds a
+  PARTITIONED image** with the filesystem inside partition 1 instead of
+  flat at LBA 0), `tfs2_writer.py`, `tfs3_writer.py` (**every
+  subcommand takes `--at-lba`/`--sectors`**, the host-side twin of the
+  kernel's volume seam -- that is what lets one image hold a table AND
+  a filesystem in a partition), `mkpart_test.py` (**`--layout
+  SIZE[,SIZE...]` writes a REAL, usable table**, aligned and with GPT's
+  backup structures, where the default writes a synthetic one for the
+  parser to chew on),
   `fetch_wad.py` (puts a Doom IWAD where `make iso` will seed it -- the
   WAD is deliberately NOT in the repository; `--from` takes one you
   already own).

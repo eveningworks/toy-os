@@ -175,6 +175,12 @@ def cmd_start(args):
 
     cmd = [
         "qemu-system-x86_64",
+        # The CD is always the boot medium; disk.img is data. Without
+        # this, SeaBIOS boots a disk that carries a partition table
+        # (0x55AA at LBA 0 is all it checks), jumps into filesystem
+        # bytes and hangs with no serial output -- which looks exactly
+        # like a kernel that died before its first print.
+        "-boot", "order=d",
         "-cdrom", args.iso,
         # discard=unmap turns the guest's ATA TRIM into a hole punch in the
         # backing file -- see kernel/drivers/ata.c's ata_trim().

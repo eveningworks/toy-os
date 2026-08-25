@@ -198,6 +198,9 @@ int sys_open(struct syscall_ctx *c);
 int sys_unlink(struct syscall_ctx *c);
 int sys_listdir(struct syscall_ctx *c);
 int sys_fs_generation(struct syscall_ctx *c);
+
+// kernel/drivers/partition_syscall.c -- writing a partition table.
+int sys_mkpart(struct syscall_ctx *c);
 int sys_chdir(struct syscall_ctx *c);
 int sys_getcwd(struct syscall_ctx *c);
 int sys_mkdir(struct syscall_ctx *c);

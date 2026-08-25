@@ -1353,3 +1353,133 @@ compiled-in table BY NAME, and then to the token. So an old disk shows
 somebody names it, and a hand-RENAMED city stays renamed. Compare
 `cursor_theme.c`: a data file that cannot be parsed costs its own
 feature and nothing else.
+
+## A partition is a block device, not an offset the filesystem carries
+
+TFS3 was already volume-relative behind a `{base_lba, sector_count}`
+seam, and `set_flat_volume()` was the one line pinning it to the whole
+disk. The obvious change was therefore to have `vfs.c` set that seam per
+candidate partition and probe each one. That would have worked, in about
+forty lines, and it is not what happened.
+
+**The offset lives one layer down instead**, in
+`kernel/drivers/block/block_part.c`: a `struct block_device` that wraps
+its parent and shifts every LBA. TFS3 needed *no change at all* — the
+volume it sees is `{0, blk_sector_count()}` as before, and that now
+means the partition because the device it was handed *is* the partition.
+
+Three reasons, in the order they mattered.
+
+**It is where Linux and Windows both put it.** Linux gives each
+partition its own `struct block_device` carrying `bd_start_sect`, and
+the filesystem driver never learns partitions exist; Windows stacks
+`partmgr` between the disk driver and the volume manager. Teaching a
+filesystem to add an offset is the layering both moved *away* from.
+
+**It does not have to be done twice.** An offset inside TFS3 is an
+offset TFS3 has; a second volume-relative backend (FAT is the obvious
+one, and it is on the roadmap) would need its own copy, correct in its
+own way. A partition device serves any backend that goes through
+`blk_*`, which is the definition of the seam already there.
+
+**It does not force a mount table.** The worry was `block.h`'s "one
+active device", which
+`docs/roadmap-details.md` had already flagged as being in mild tension
+with `partition.c` enumerating partitions nothing could mount. A
+partition device *replaces* its parent as the active device rather than
+sitting beside it, so the active device stays singular and "Real mount
+points" stays a separate, later project. One partition is mounted at a
+time, exactly as one whole disk was.
+
+**What it cost.** Two things had to learn the difference between "the
+volume" and "the disk". `partition.c` reads through
+`blk_disk_read_sectors()`, because `blk_read_sectors(0)` is now the
+volume's first sector while the MBR is the *disk's* — a parser reading
+its own partition would find no table at all. And `blk_whole_disk()` /
+`blk_base_lba()` exist so that one question has one answer whatever is
+mounted; they live in `block.c` rather than `block_part.c` so there is
+no second call anybody can forget to make.
+
+**And one bug it did not cause but did expose.** `partition.c` called
+`ata_read_sector()` directly, predating `block.h` entirely — so on
+`make run VIRTIO=1`, where there is no IDE controller, `parttable` was
+reading a disk that was not there and reporting "no table" for it.
+Nothing had noticed, because nothing consulted it.
+
+## `SYS_MKPART` takes a table, not a sector
+
+Writing a partition table from ring 3 needs *some* way to reach the
+disk. The obvious primitive is a raw sector write, with `/bin/mkpart`
+doing the MBR/GPT encoding itself. That was rejected, and the first
+reason is the one that decided it.
+
+**This kernel has no privilege model.** There is no uid; `SYS_QUERY` has
+no check either. A general "write any sector" syscall is therefore a way
+for any ring-3 process to destroy any filesystem, permanently, for the
+convenience of one rare command. A syscall that takes a table
+*description* can be checked — `partition_validate()` refuses overlap,
+out-of-bounds and a partition sitting on the table itself — and leaves
+no primitive behind for anything else to misuse. Linux's `BLKPG` and
+Windows' `IOCTL_DISK_SET_DRIVE_LAYOUT_EX` are both shaped this way.
+
+**It puts the encoder beside the decoder.** The CRC32, the 92-byte
+header's field offsets, the 128-byte entry's, GPT's inclusive end LBA
+and its mixed-endian GUID layout now have exactly one implementation
+each, and a round trip through both is a real test — which is what
+`kernel/drivers/partition_test.c` does, and what finally verified the
+GPT half *in a running kernel*. See the entry above on why that was
+previously only provable with a host-compiled harness.
+
+**Some refusals are only possible in the kernel**, because it is the
+only side that knows the disk's true sector count and what is mounted
+from it.
+
+**What `confirm` is not.** `MKPART_CONFIRM` is a speed bump, not a
+permission check — any process can set the flag. It stops the accident
+(a program that meant to read the table and passed a zeroed request),
+not an attacker. It is said out loud in `abi/partition_abi.h` so that
+nobody mistakes it for security, and so a future session adding uids
+knows where the real check goes.
+
+## A partitioned disk is never auto-formatted
+
+Boot has always treated a readable disk that no backend claims as blank,
+and formatted it with the default backend. That is right for a genuinely
+empty disk and wrong the moment a partition table exists: the partitions
+were just probed and none held a filesystem, which means *empty
+partitions waiting for `fsformat`*, not free space to claim.
+
+The failure mode if it did claim it is unusually nasty. A flat TFS3
+format **survives** the presence of a GPT — TFS3 reserves volume blocks
+0–7 precisely so a table can coexist — so the table would still parse
+afterwards and `parttable` would still print both partitions, while a
+whole-disk filesystem lay across the data they describe. A corruption
+that passes its own diagnostic is worse than one that does not.
+
+So a partitioned disk with no filesystem in any partition mounts
+RAM-only and says so. **And it leaves partition 1 as the active block
+device**, which is the part worth writing down: `fsformat` formats
+whatever the active device is, so this is what makes "`mkpart`, reboot,
+`fsformat`" put a filesystem *inside* partition 1. Restoring the whole
+disk there was the obvious thing and it is the wrong thing — it would
+make the one command you reach for next quietly undo the one you just
+ran.
+
+## `-boot order=d`, because a partition table looks bootable
+
+Adding a partition table to `disk.img` broke every headless launch, in
+the most confusing way available: QEMU hung with **no serial output at
+all**, which reads as a kernel that died before its first `klog_write`.
+
+SeaBIOS decides a hard disk is bootable by looking for `0x55AA` at LBA
+0. That signature is part of an MBR — including the protective MBR a GPT
+requires — so a partitioned data disk becomes, as far as the BIOS is
+concerned, the thing to boot. It jumps into 446 bytes of filesystem data
+and stops.
+
+`toy-os.iso` is always the boot medium here and `disk.img` is always
+data, so `-boot order=d` states that in the Makefile's `QEMU_RUN`, in
+`tools/vm.py` and in `qmp_test.py`'s `launch_qemu_cmd()`. It was
+harmless before and is load-bearing now. `tools/mkpart_test.py`'s
+docstring had recorded this hazard years earlier for its own synthetic
+tables; nothing had acted on it, because nothing else wrote a table.

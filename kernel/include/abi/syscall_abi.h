@@ -1458,6 +1458,27 @@ struct sys_stat {
                           // process that announces twice is announcing
                           // the same thing.
 
+#define SYS_MKPART 69 // RDI = pointer to a `struct mkpart_request`
+                      // (abi/partition_abi.h). Writes an MBR or GPT
+                      // partition table to the disk, replacing whatever
+                      // was there. Returns 0, or a negative errno:
+                      // -EINVAL for a table that fails validation
+                      // (overlap, out of bounds, more than MBR's four),
+                      // -EPERM without MKPART_CONFIRM while a
+                      // persistent filesystem is mounted, -EIO if the
+                      // write itself failed, -ENODEV with no disk.
+                      //
+                      // DOES NOT REMOUNT ANYTHING. The volume in use is
+                      // untouched and the new table takes effect at the
+                      // next boot -- Linux behaves the same way, and
+                      // refuses to re-read a table on a busy disk.
+                      //
+                      // A table DESCRIPTION rather than a raw sector
+                      // write, deliberately -- abi/partition_abi.h has
+                      // the reasoning, and it is mostly about this
+                      // kernel having no privilege model to gate a
+                      // general write-any-sector primitive with.
+
 // What SYS_OPENPTY fills in. A struct rather than two out-registers
 // because a syscall here returns one value, and two `int *` arguments
 // would be two user pointers to validate instead of one.

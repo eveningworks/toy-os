@@ -1,9 +1,14 @@
 // parttable -- the attached disk's MBR/GPT partition table.
 //
-// READ-ONLY, and diagnostic. This repo's stock disk.img has NO
-// partition table at all -- one raw filesystem volume -- so "none" is
-// the normal answer here rather than a failure, and saying that clearly
-// is most of the program's job. `mkpart` (tools/) is what writes one.
+// READ-ONLY. This repo's stock disk.img has NO partition table at all
+// -- one raw filesystem volume -- so "none" is the normal answer here
+// rather than a failure, and saying that clearly is most of the
+// program's job. `/bin/mkpart` is what writes one.
+//
+// It reads the WHOLE DISK, not the mounted volume, so it answers the
+// same way whether the running system booted flat or from inside a
+// partition (kernel/drivers/partition.c goes through
+// blk_disk_read_sectors for exactly that reason).
 //
 // TWO CLASSES, because a list alone cannot tell "a table with no
 // partitions" from "no table at all": both are zero records, and the
@@ -51,7 +56,7 @@ int main(int argc, char **argv) {
     if (t.kind == QUERY_PART_NONE) {
         sys_print("No partition table on this disk.\n"
                   "  (a raw filesystem volume, which is what this OS ships --\n"
-                  "   see tools/mkpart_test.py for writing one)\n");
+                  "   `mkpart` writes one; see `help mkpart`)\n");
         return 0;
     }
 

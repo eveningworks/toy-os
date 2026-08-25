@@ -505,6 +505,10 @@ unsigned long long sys_fs_generation(void) {
     return (unsigned long long)syscall0(SYS_FS_GENERATION);
 }
 
+int sys_mkpart(const struct mkpart_request *req) {
+    return (int)err(syscall1(SYS_MKPART, (uint64_t)(uintptr_t)req));
+}
+
 int sys_win_debug(struct win_debug_msg *msg) {
     return (int)err(syscall1(SYS_WIN_DEBUG, (uint64_t)(uintptr_t)msg));
 }

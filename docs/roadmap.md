@@ -326,6 +326,7 @@ No dependency on the phases above; ordered among themselves.
 - [x] ~~Stop treating an unreadable superblock as a foreign disk~~ done
 - [x] ~~An fsck-style pass to reclaim leaked blocks~~ done
 - [x] ~~GPT/MBR partition table parsing~~ done
+- [x] ~~Mounting a filesystem from a partition, and writing a table (`mkpart`)~~ done
 - [ ] LBA48 addressing
 - [ ] A block/buffer cache with write-back
 - [ ] Directory index

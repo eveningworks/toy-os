@@ -74,6 +74,7 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_SETTING]       = { "setting",       sys_setting,       { A_HEX } },
     [SYS_SYSINFO]       = { "sysinfo",       sys_sysinfo,       { A_HEX } },
     [SYS_FS_GENERATION] = { "fs_generation", sys_fs_generation, { A_END } },
+    [SYS_MKPART]        = { "mkpart",        sys_mkpart,        { A_HEX } },
     [SYS_CRASHTEST]     = { "crashtest",     sys_crashtest,     { A_HEX } },
     [SYS_POWEROFF]      = { "poweroff",      sys_poweroff,      { A_INT } },
     [SYS_WIN_DEBUG]     = { "win_debug",     sys_win_debug,     { A_HEX } },

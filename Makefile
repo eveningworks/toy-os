@@ -1212,7 +1212,15 @@ QEMU_AUDIO = $(if $(AUDIO),-audiodev $(AUDIODEV)$(COMMA)id=snd0 -machine pcspk-a
 
 QEMU_EXTRA =
 
-QEMU_RUN = qemu-system-x86_64 -cdrom $(QEMU_ISO) $(QEMU_ACCEL) $(QEMU_DISK) \
+# `-boot order=d` -- THE CD IS ALWAYS THE BOOT MEDIUM HERE, and saying so
+# is not redundant. With no explicit order, SeaBIOS tries the hard disk
+# first whenever it looks bootable, and a disk carrying a PARTITION
+# TABLE looks bootable: the 0x55AA signature at LBA 0 is all it checks.
+# It then jumps into 446 bytes of filesystem data as if they were boot
+# code and hangs with NO serial output at all, which reads as "the
+# kernel died before the first print" rather than as "it never ran".
+# disk.img is data, never a boot medium -- see docs/commands/mkpart.md.
+QEMU_RUN = qemu-system-x86_64 -boot order=d -cdrom $(QEMU_ISO) $(QEMU_ACCEL) $(QEMU_DISK) \
 	  $(QEMU_INPUT) \
 	  -serial stdio -vga $(QEMU_VGA) -display $(QEMU_DISPLAY) -m $(MEM) \
 	  $(QEMU_AUDIO) $(QEMU_EXTRA)

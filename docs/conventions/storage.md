@@ -232,3 +232,98 @@ this the obvious way), not from how much history it accumulated.
     nothing forces one file, and a setting with enough of its own keys
     to be unwieldy there should get its own `/etc/<name>.conf` rather
     than cramming in to match convention.
+
+## A PARTITION IS A BLOCK DEVICE, AND THE FILESYSTEM NEVER LEARNS ITS OFFSET
+
+`kernel/drivers/block/block_part.c` wraps a parent `struct
+block_device` and shifts every LBA by `base_lba`, so what mounts on it
+sees a device starting at sector 0. TFS3 needed no change: its volume is
+`{0, blk_sector_count()}` as always, and that now *means* the partition.
+
+This is Linux's `bd_start_sect` and Windows' `partmgr`. The alternative
+— each filesystem adding its own offset — is the layering both moved
+away from, and it is work every future backend would repeat. See
+`docs/decisions.md`.
+
+Four things to know.
+
+**The active device stays SINGULAR.** A partition *replaces* its parent
+rather than sitting beside it, which is what keeps this clear of the
+mount-table work "Real mount points" is holding. One partition is
+mounted at a time, exactly as one whole disk was.
+
+**`blk_read_sectors()` is the VOLUME; `blk_disk_read_sectors()` is the
+DISK.** `blk_read_sectors(0)` is the mounted volume's first sector.
+The MBR is at the *disk's* sector 0, so anything reading a partition
+table must use the `blk_disk_*` family — a parser reading through its
+own partition window finds no table at all. `blk_whole_disk()` and
+`blk_base_lba()` answer the same question for anything else that needs
+it, and they live in `block.c` so there is one answer whatever is
+mounted.
+
+**Capabilities are INHERITED, both the bit and the pointer**, so
+`blk_register_over()`'s both-directions honesty check keeps holding. The
+one operation that must be *clamped* as well as offset is TRIM: a count
+running past the window's end would discard the next partition's data,
+and TRIM is unrecoverable, so it refuses rather than truncates.
+
+**A backend declares whether it can live in one: `fs_ops.volume_relative`.**
+Not an `FS_CAP_*` bit — those describe a FORMAT and are reported to
+userland — but a fact about how the driver is wired. **TFS2 declares 0**,
+and the reason matters: it makes 24 direct `ata_*` calls that bypass the
+block layer, so a partition device under it is simply ignored and its
+probe reads the DISK's LBA 0 — claiming a partition it never looked at.
+It also puts its superblock at LBA 0 and its journal header at LBA 1,
+which are the MBR and the GPT header. TFS2 stays flat-only, permanently.
+
+## A PARTITIONED DISK IS NEVER AUTO-FORMATTED, AND PARTITION 1 IS LEFT ACTIVE
+
+Boot treats an unclaimed readable disk as blank and formats it. Once a
+table exists that is wrong: the partitions were probed and none held a
+filesystem, which means empty partitions, not free space.
+
+The failure mode is why this is a rule rather than a nicety. A flat TFS3
+format **survives** a GPT — TFS3 reserves volume blocks 0–7 so a table
+can coexist — so `parttable` would keep printing both partitions
+correctly while a whole-disk filesystem lay across their data. A
+corruption that passes its own diagnostic.
+
+So `vfs.c` mounts RAM-only and says so, **and leaves partition 1 as the
+active block device**. `fsformat` formats whatever is active, so that is
+what makes `mkpart` → reboot → `fsformat` put a filesystem inside
+partition 1 rather than flat across the table.
+
+## WRITING A TABLE IS A SYSCALL THAT TAKES A TABLE, NOT A SECTOR
+
+`SYS_MKPART` takes a `struct mkpart_request` (`abi/partition_abi.h`) and
+the kernel encodes it. There is deliberately no raw sector-write
+syscall: this kernel has no privilege model, so such a primitive would
+let any process destroy any filesystem for the convenience of one rare
+command. Linux's `BLKPG` is shaped the same way.
+
+**`MKPART_CONFIRM` is a speed bump, not a permission check** — any
+process can set it. It stops the accident, not the attacker, and
+`abi/partition_abi.h` says so out loud so nobody mistakes it for
+security. `/bin/mkpart` sets it only when the user typed `confirm`, the
+same shape as `fsformat tfs3 confirm`.
+
+**GPT is written backup-first and protective-MBR-LAST**, so an
+interrupted write leaves a disk that reads as unpartitioned rather than
+one advertising a table that is not there — the same publish-last
+discipline the virtio drivers follow with their interrupt enables.
+
+**`SYS_MKPART` does not remount anything.** The new table takes effect at
+the next boot; Linux is the same, and refuses to re-read a table on a
+busy disk.
+
+## A PARTITION TABLE MAKES A DATA DISK LOOK BOOTABLE, AND QEMU HANGS WITH NO OUTPUT
+
+SeaBIOS decides a hard disk is bootable from `0x55AA` at LBA 0 — which
+every MBR has, protective ones included. A partitioned `disk.img` is
+therefore something the BIOS will try to boot, and it jumps into 446
+bytes of filesystem data and stops **with no serial output at all**,
+which reads exactly like a kernel that died before its first print.
+
+`-boot order=d` is in the Makefile's `QEMU_RUN`, `tools/vm.py` and
+`qmp_test.py`'s `launch_qemu_cmd()` for this reason. It was harmless
+before and is load-bearing now. Any hand-rolled QEMU line needs it too.

@@ -47,6 +47,26 @@ struct fs_ops {
     // started biting with the first optional op, link() below.
     uint32_t caps;
 
+    // CAN THIS BACKEND LIVE ANYWHERE BUT LBA 0? 1 if every access goes
+    // through the block layer and is volume-relative, so the backend is
+    // mountable from inside a partition; 0 if it addresses the disk
+    // absolutely and must own the whole of it.
+    //
+    // This is not an FS_CAP_* bit on purpose: those describe what a
+    // FORMAT supports and are reported to userland by fs_has(), while
+    // this describes how the DRIVER is wired and is nobody's business
+    // above vfs.c.
+    //
+    // TFS2 declares 0, and the reason is worth stating rather than
+    // discovering: it makes 24 direct ata_* calls that bypass the block
+    // layer entirely, so a partition device under it would be ignored
+    // and its probe would read the DISK's LBA 0 -- claiming a partition
+    // it had never looked at. It also puts its superblock at LBA 0 and
+    // its journal header at LBA 1, which are the MBR and the GPT
+    // header. It stays flat-only; TFS3 reserves volume blocks 0-7 for
+    // exactly this and declares 1.
+    int volume_relative;
+
     // Detection only -- read this backend's superblock location and
     // judge it. NEVER formats, never mounts, no side effects beyond
     // the read. Only called when a disk is actually present (vfs.c

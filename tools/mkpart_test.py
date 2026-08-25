@@ -49,6 +49,7 @@ correct enough for kernel/drivers/partition.c's read-only parser to
 validate the header and print both entries.
 """
 import argparse
+import os
 import struct
 
 SECTOR = 512
@@ -187,13 +188,177 @@ def cmd_gpt(path):
     print("(LBA 0 bytes 0-445 preserved -- TFS2 still mounts normally underneath)")
 
 
+# ---- real, usable tables ------------------------------------------------
+#
+# Everything above writes a SYNTHETIC table: fixed sizes, no backup GPT,
+# enough for the parser to chew on and not enough to put a filesystem
+# in. What follows writes a table you can actually boot toy-os from --
+# aligned, sized to the image, and with GPT's backup structures present.
+#
+# Kept in this file rather than in a new one because it is the same
+# encoder either way, and two partition-table writers in one tree is
+# exactly the drift this repo keeps deleting.
+
+ALIGN_LBA = 2048          # 1 MiB, what every modern tool aligns to
+GPT_TAIL_SECTORS = 33     # backup entry array (32) + backup header (1)
+
+# Microsoft Basic Data -- the same GUID kernel/drivers/partition.c
+# writes, and for the same reason: it is the one "generic filesystem
+# data" type that Windows, Linux and macOS all recognise.
+BASIC_DATA_GUID = guid_bytes("EBD0A0A2-B9E5-4433-87C0-68B6B72699C7")
+
+
+def disk_sectors(path):
+    return os.path.getsize(path) // SECTOR
+
+
+def parse_layout(spec, usable):
+    """'64M,rest' -> [sectors, ...] laid out end to end.
+
+    Sizes are bytes with a K/M/G suffix, or bare SECTORS -- the same
+    rule /bin/mkpart follows, so a layout typed at one is valid at the
+    other. Exactly one entry may be `rest`.
+    """
+    out, rest_at = [], None
+    for item in spec.split(","):
+        item = item.strip()
+        if item == "rest":
+            if rest_at is not None:
+                raise SystemExit("mkpart_test: only one partition can be `rest`")
+            rest_at = len(out)
+            out.append(0)
+            continue
+        mult = 1
+        if item[-1:] in "KkMmGg":
+            mult = {"k": 1024, "m": 1024 ** 2, "g": 1024 ** 3}[item[-1].lower()]
+            item = item[:-1]
+        if not item.isdigit():
+            raise SystemExit(f"mkpart_test: cannot parse size {item!r}")
+        out.append(int(item) if mult == 1 else int(item) * mult // SECTOR)
+
+    fixed = sum(n for i, n in enumerate(out) if i != rest_at)
+    if fixed > usable:
+        raise SystemExit("mkpart_test: the layout does not fit on this image")
+    if rest_at is not None:
+        out[rest_at] = usable - fixed
+        if out[rest_at] == 0:
+            raise SystemExit("mkpart_test: `rest` has nothing left over")
+    return out
+
+
+def plan(path, spec, gpt):
+    """[(start_lba, sectors), ...] for a layout on this image."""
+    total = disk_sectors(path)
+    tail = GPT_TAIL_SECTORS if gpt else 0
+    usable = total - ALIGN_LBA - tail
+    if usable <= 0:
+        raise SystemExit("mkpart_test: image too small to partition")
+    at = ALIGN_LBA
+    parts = []
+    for n in parse_layout(spec, usable):
+        parts.append((at, n))
+        at += n
+    return parts
+
+
+def real_mbr(path, spec):
+    parts = plan(path, spec, gpt=False)
+    if len(parts) > 4:
+        raise SystemExit("mkpart_test: an MBR holds at most 4 partitions -- use --gpt")
+    entries = [mbr_entry(0x00, 0x83, start, n) for start, n in parts]
+    with open(path, "r+b") as f:
+        buf = read_sector(f, 0)
+        patch_mbr(buf, entries)
+        write_sector(f, 0, bytes(buf))
+    return parts
+
+
+def real_gpt(path, spec):
+    """A complete GPT: protective MBR, primary header + entries, and the
+    BACKUP header + entries in the last 33 sectors.
+
+    The backup is what makes this different from cmd_gpt() above, and it
+    matters for more than tidiness: a real partition editor on another
+    system reads the backup to cross-check the primary, and refuses or
+    "repairs" a disk whose backup is missing.
+    """
+    total = disk_sectors(path)
+    parts = plan(path, spec, gpt=True)
+
+    # Per-partition unique GUIDs derived from the index, not random:
+    # `make iso` should produce a byte-identical image from the same
+    # inputs, and a random GUID would make every rebuild differ. The
+    # KERNEL randomises them (partition.c's guid_generate) because a
+    # disk written on a running machine has no such reproducibility
+    # requirement and collision-avoidance is the point there.
+    entries = [gpt_entry(BASIC_DATA_GUID,
+                         guid_bytes("70796F73-0000-4000-8000-%012X" % (i + 1)),
+                         start, start + n - 1, "toyos%d" % (i + 1))
+               for i, (start, n) in enumerate(parts)]
+    entries_buf = b"".join(entries) + b"\0" * (GPT_ENTRY_SIZE * (GPT_NUM_ENTRIES - len(entries)))
+    entries_crc = crc32(entries_buf)
+
+    entry_sectors = len(entries_buf) // SECTOR      # 32
+    backup_hdr = total - 1
+    backup_entries = backup_hdr - entry_sectors
+
+    def header(self_lba, other_lba, entry_lba):
+        h = bytearray(SECTOR)
+        h[0:8] = b"EFI PART"
+        struct.pack_into("<I", h, 8, 0x00010000)
+        struct.pack_into("<I", h, 12, 92)
+        struct.pack_into("<Q", h, 24, self_lba)
+        struct.pack_into("<Q", h, 32, other_lba)
+        struct.pack_into("<Q", h, 40, GPT_ENTRIES_LBA + entry_sectors)   # first usable = 34
+        struct.pack_into("<Q", h, 48, backup_entries - 1)                # last usable
+        h[56:72] = DISK_GUID
+        struct.pack_into("<Q", h, 72, entry_lba)
+        struct.pack_into("<I", h, 80, GPT_NUM_ENTRIES)
+        struct.pack_into("<I", h, 84, GPT_ENTRY_SIZE)
+        struct.pack_into("<I", h, 88, entries_crc)
+        struct.pack_into("<I", h, 16, crc32(bytes(h[:92])))
+        return bytes(h)
+
+    with open(path, "r+b") as f:
+        # Backup first, protective MBR LAST -- the same publish-last
+        # order kernel/drivers/partition.c writes in, so a half-written
+        # image reads as unpartitioned rather than as a broken table.
+        for i in range(0, len(entries_buf), SECTOR):
+            f.seek((backup_entries * SECTOR) + i)
+            f.write(entries_buf[i:i + SECTOR])
+        write_sector(f, backup_hdr, header(backup_hdr, 1, backup_entries))
+
+        for i in range(0, len(entries_buf), SECTOR):
+            f.seek(GPT_ENTRIES_LBA * SECTOR + i)
+            f.write(entries_buf[i:i + SECTOR])
+        write_sector(f, 1, header(1, backup_hdr, GPT_ENTRIES_LBA))
+
+        mbr_buf = read_sector(f, 0)
+        patch_mbr(mbr_buf, [mbr_entry(0x00, 0xEE, 1, min(total - 1, 0xFFFFFFFF))])
+        write_sector(f, 0, bytes(mbr_buf))
+    return parts
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("disk", help="path to the raw disk image to patch (e.g. disk.img)")
     group = ap.add_mutually_exclusive_group(required=True)
     group.add_argument("--mbr", action="store_true", help="write a legacy MBR")
     group.add_argument("--gpt", action="store_true", help="write a protective-MBR + GPT")
+    ap.add_argument("--layout", metavar="SIZE[,SIZE...]",
+                    help="write a REAL, usable table with these partitions "
+                         "(e.g. '64M,rest') instead of the synthetic fixed one. "
+                         "Aligned to LBA 2048; --gpt also writes the backup "
+                         "structures. This is what seed_disk.py --partition uses.")
     args = ap.parse_args()
+
+    if args.layout:
+        parts = real_gpt(args.disk, args.layout) if args.gpt else real_mbr(args.disk, args.layout)
+        kind = "GPT" if args.gpt else "MBR"
+        print(f"wrote a real {kind} to {args.disk}:")
+        for i, (start, n) in enumerate(parts):
+            print(f"  {i + 1}  LBA {start}  {n} sectors  {n * SECTOR / (1 << 20):.1f} MiB")
+        return
 
     if args.mbr:
         cmd_mbr(args.disk)

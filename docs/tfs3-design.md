@@ -364,15 +364,28 @@ offset = (b - group0_start) % blocks_per_group
 divided raw block numbers -- correct only if groups started at block
 0, which they don't).
 
-## Volumes and partitions (format-proof now, mounting later)
+## Volumes and partitions (BUILT)
 
 Every block number on disk is relative to a **volume**: a contiguous
-sector extent `{ base_lba, sector_count }`. Today the only volume is
-the flat disk (`{0, whole drive}`), and partition MOUNTING is
-explicitly not being built yet -- but the format and the
-implementation shape are partition-proof from day one, by an explicit
-user requirement (toy-os should eventually boot from a TFS3
-partition):
+sector extent `{ base_lba, sector_count }`. This was designed
+partition-proof from day one, by an explicit user requirement (toy-os
+should eventually boot from a TFS3 partition), and **it now does** --
+see `docs/decisions.md` and `tools/partition_test.py`.
+
+The prediction below about "when partition mounting arrives" turned out
+to be half right, and the half it got wrong is the interesting one: the
+change *was* confined to the VFS's probe loop, but the extent is **not**
+handed to the backend. It went into a `block_device` wrapper
+(`kernel/drivers/block/block_part.c`) one layer further down, so TFS3's
+volume is still `{0, blk_sector_count()}` — and that now *means* the
+partition, because the device it is handed IS the partition. Linux
+(`bd_start_sect`) and Windows (`partmgr`) both put it there.
+
+The seam earned its keep anyway, and this is the point worth keeping:
+it is what made partition mounting a change to the block layer and
+**not** to `tfs3.c`, which was not touched at all.
+
+The original reasoning, which still holds:
 
 - Nothing on disk ever stores an absolute LBA. `total_blocks` is the
   volume's size. An image is bit-identical whether it lives at LBA 0
@@ -386,7 +399,10 @@ partition):
   VFS's probe loop: iterate `kernel/drivers/partition.c`'s
   already-parsed MBR/GPT entries, offer each extent to each backend,
   plus the flat-disk extent as the fallback. No format change, no
-  backend change.
+  backend change. *(Built as `try_partitions()` in `kernel/fs/vfs.c`.
+  "No format change, no backend change" held exactly — `tfs3.c` has no
+  edit in it. What is offered per entry is a partition `block_device`
+  rather than an extent; see above.)*
 - The 32 KiB front reserve is volume-relative and kept in all cases:
   essential on a flat disk (MBR/GPT live there), harmless slack
   inside a partition.
