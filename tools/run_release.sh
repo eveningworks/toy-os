@@ -39,9 +39,12 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     exit 1
 fi
 
-# -boot order=d: the CD is the boot medium; the disk is data. A disk
-#   carrying a partition table has 0x55AA at LBA 0, which is all SeaBIOS
-#   checks before treating it as bootable -- it then jumps into
+# -boot order=d: the CD is the boot medium HERE, unlike a built
+#   checkout -- this script runs a downloaded release ISO beside a blank
+#   disk it creates itself, and nothing has installed a bootloader on
+#   that (tools/install_grub.py is a build step). Never omit the order:
+#   a disk carrying a partition table has 0x55AA at LBA 0, which is all
+#   SeaBIOS checks before treating it as bootable -- it then jumps into
 #   filesystem bytes and hangs with no output at all.
 # -cdrom: the ISO, primary IDE bus.
 # -drive ...,if=ide: disk.img as a SEPARATE ide drive -- ata.c's fixed

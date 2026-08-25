@@ -34,7 +34,13 @@ AND IT REBOOTS. A write that only ever reached a cache would pass a
 same-boot read-back, so a directory is created on the first boot and
 looked for on a SECOND one against the same image.
 
-ON DEMAND, not in the gate: it builds two images and boots four times.
+AND IT CHECKS WHAT THE SCAN REFUSES TO TOUCH. disk.img carries a BIOS
+boot partition and a FAT32 /boot in front of the filesystem now, and
+neither is somewhere to mount from -- or, much worse, somewhere
+`fsformat` may be pointed. The last phase boots the real layout with no
+filesystem on it, which is the only state where that choice is visible.
+
+ON DEMAND, not in the gate: it builds three images and boots five times.
 Same category as tools/virtio_boot_test.py and tools/live_boot_test.py.
 """
 import argparse
@@ -55,12 +61,14 @@ SECTOR = 512
 def launch(iso, img, qemu_log):
     cmd = [
         "qemu-system-x86_64",
-        # `-boot order=d` IS LOAD-BEARING HERE and nowhere else in this
-        # repo: the image carries a partition table, so its 0x55AA
-        # signature makes SeaBIOS treat it as a bootable hard disk. It
-        # then jumps into 446 bytes of filesystem data and hangs with NO
-        # serial output at all -- indistinguishable from a kernel that
-        # died before its first print.
+        # `-boot order=d` IS LOAD-BEARING HERE: this tool builds its own
+        # image, whose partition table gives it a 0x55AA signature and
+        # therefore makes SeaBIOS treat it as bootable, while nothing
+        # has put a bootloader on it. SeaBIOS jumps into 446 bytes of
+        # filesystem data and hangs with NO serial output at all --
+        # indistinguishable from a kernel that died before its first
+        # print. (disk.img itself IS bootable now, and an ordinary run
+        # boots it -- see tools/install_grub.py.)
         "-boot", "order=d",
         "-cdrom", iso,
         "-drive", f"file={img},format=raw,if=ide,index=0",
@@ -124,7 +132,12 @@ def run_boot(iso, img, qemu_log, commands, timeout):
 
 
 def build_image(path, size_bytes, kind, layout, seed_dir):
-    """A fresh image with a table and TFS3 inside partition 1."""
+    """A fresh image with a table and TFS3 inside one of its partitions.
+
+    Returns (index, start_lba, sectors) for the partition the filesystem
+    landed in -- read from seed_disk.py's own report rather than assumed
+    to be partition 1, which it is not on the bootable layout.
+    """
     if os.path.exists(path):
         os.remove(path)
     with open(path, "wb") as f:
@@ -135,8 +148,8 @@ def build_image(path, size_bytes, kind, layout, seed_dir):
     if r.returncode != 0:
         print(r.stdout + r.stderr)
         return None
-    m = re.search(r"partition 1 is LBA (\d+), (\d+) sectors", r.stdout)
-    return (int(m.group(1)), int(m.group(2))) if m else None
+    m = re.search(r"filesystem in partition (\d+) -- LBA (\d+), (\d+) sectors", r.stdout)
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
 
 
 def df_size(transcript):
@@ -213,10 +226,10 @@ def main():
         if not plan:
             print("partition_test: FAIL -- could not build the image")
             return 1
-        start, sectors = plan
+        pidx, start, sectors = plan
         want_mib = sectors * SECTOR / (1 << 20)
 
-        print(f"partition_test: {kind.upper()} boot 1 -- mount from partition 1 and write")
+        print(f"partition_test: {kind.upper()} boot 1 -- mount from the partition and write")
         t1, err = run_boot(args.iso, img, args.qemu_log,
                            ["sh mkdir /etc/parttest", "sh sync", "sh df", "sh parttable"],
                            args.timeout)
@@ -229,9 +242,9 @@ def main():
         check(f"[{kind}] the scan found the table",
               f"{kind.upper()} partition table" in t1)
         check(f"[{kind}] a partition became the active block device",
-              re.search(r"block: \w+1 active \(\d+ sectors at LBA %d" % start, t1) is not None)
-        check(f"[{kind}] TFS3 mounted FROM partition 1",
-              "mounting tfs3 from partition 1" in t1)
+              re.search(r"block: \w+%d active \(\d+ sectors at LBA %d" % (pidx, start), t1) is not None)
+        check(f"[{kind}] TFS3 mounted FROM partition {pidx}",
+              f"mounting tfs3 from partition {pidx}" in t1)
 
         # THE DISCRIMINATING CHECK. A flat mount would report the whole
         # 2 GiB image; a wrong window would report something else again.
@@ -239,7 +252,7 @@ def main():
         got_mib = to_mib(got)
         check(f"[{kind}] df reports the PARTITION's size, not the disk's",
               got_mib is not None and abs(got_mib - want_mib) < want_mib * 0.05,
-              f"df said {got!r} (~{got_mib} MiB), partition 1 is {want_mib:.1f} MiB")
+              f"df said {got!r} (~{got_mib} MiB), partition {pidx} is {want_mib:.1f} MiB")
 
         check(f"[{kind}] the filesystem is persistent, not RAM-only",
               "RAM-only" not in t1)
@@ -260,11 +273,51 @@ def main():
             print(t2)
         check(f"[{kind}] the directory written on boot 1 is still there",
               "parttest" in t2)
-        check(f"[{kind}] and it is still mounted from partition 1",
-              "mounting tfs3 from partition 1" in t2)
+        check(f"[{kind}] and it is still mounted from partition {pidx}",
+              f"mounting tfs3 from partition {pidx}" in t2)
 
     # ---- /bin/mkpart, in the guest -----------------------------------
     #
+    # ---- the FIRMWARE partitions --------------------------------------
+    #
+    # WHAT BREAKS IF THIS REGRESSES: `fsformat` formats the BOOTLOADER.
+    # A real disk.img now carries a 1 MiB BIOS boot partition holding
+    # GRUB's core.img and a FAT32 /boot in front of the filesystem
+    # (tools/install_grub.py), and vfs.c's scan has to skip both -- when
+    # it does not, the "leave the first partition active" fallback hands
+    # `fsformat` partition 1, which is GRUB.
+    #
+    # The image has the real layout and NO filesystem, which is the only
+    # state where the fallback runs at all. With the guard removed this
+    # says "leaving partition 1 active"; the assertion is on the NUMBER,
+    # because a scan that skipped nothing still boots and still prints a
+    # cheerful line.
+    print("partition_test: the firmware's partitions are not the OS's")
+    fw_img = f"{os.path.splitext(args.work)[0]}_firmware.img"
+    if os.path.exists(fw_img):
+        os.remove(fw_img)
+    with open(fw_img, "wb") as f:
+        f.truncate(512 * 1024 ** 2)
+    sys.path.insert(0, HERE)
+    import mkpart_test
+    mkpart_test.real_gpt(fw_img, "1M:bios,64M:esp,rest")
+    t4, err = run_boot(args.iso, fw_img, args.qemu_log, ["sh df"], args.timeout)
+    if t4 is None:
+        print(f"partition_test: FAIL -- {err}")
+        return 1
+    if args.verbose:
+        print(t4)
+    check("the BIOS boot partition is recognised as the firmware's",
+          "fs: partition 1 is the firmware's" in t4)
+    check("...and so is the ESP",
+          "fs: partition 2 is the firmware's" in t4)
+    check("...so `fsformat` is aimed at the DATA partition, not at GRUB",
+          "leaving partition 3 active" in t4,
+          "the active partition is not 3 -- fsformat would eat the bootloader")
+    check("...and neither firmware partition became a block device",
+          "block: ata1 active" not in t4 and "block: ata2 active" not in t4)
+    os.remove(fw_img)
+
     # Run on the GPT image, which is already partitioned -- so this also
     # covers repartitioning a disk that has a table, not only a blank
     # one. It is the LAST thing done to that image on purpose: it
@@ -289,7 +342,7 @@ def main():
     # the mounted volume (SYS_MKPART does not remount).
     check("...and the new MBR reads back", "MBR partition table, 2 entries" in t3)
     check("...while the running system stays on the old volume",
-          "mounting tfs3 from partition 1" in t3)
+          "mounting tfs3 from partition" in t3)
 
     failed = [n for n, ok in checks if not ok]
     print()

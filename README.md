@@ -67,14 +67,18 @@ QEMU, and it does not stop at "hello world from the kernel":
   shell in it a real process; `Ctrl-C`, `Ctrl-Z`, pipes, redirection and
   job control are the same code in both places, and a full-screen editor
   runs in either.
-- **A real filesystem, in a real partition** — TFS3: block groups, real
-  inodes, hardlinks, journal transactions, superblock backups and an
-  `fsck`. It journals metadata, so files survive a power cut. The VFS
-  picks a backend by superblock probe, and boot scans the disk's
-  MBR/GPT table for a partition to mount from -- **the stock `disk.img`
-  is a GPT with the filesystem in partition 1**, the way an installed OS
-  looks. `mkpart` writes a table, `parttable` reads one, and `fsformat`
-  reformats the mounted volume.
+- **A real filesystem, in a real partition, on a disk it boots itself**
+  — TFS3: block groups, real inodes, hardlinks, journal transactions,
+  superblock backups and an `fsck`. It journals metadata, so files
+  survive a power cut. The VFS picks a backend by superblock probe, and
+  boot scans the disk's MBR/GPT table for a partition to mount from --
+  **the stock `disk.img` is a GPT with GRUB in a BIOS boot partition,
+  the kernel in a FAT32 `/boot`, and TFS3 in the rest**, the way an
+  installed OS looks. QEMU boots the disk, not a CD. (`/boot` is FAT32
+  because GRUB cannot read TFS3 -- the same reason UEFI's ESP is FAT.)
+  `mkpart` writes a table, `parttable` reads one, and `fsformat`
+  reformats the mounted volume -- and refuses to be aimed at the
+  bootloader.
 - **A real GUI, and it is not in the kernel** — the window manager is
   itself a **ring-3 process**: movable, resizable windows, a taskbar, a
   Start menu built from `.desktop` files (picked up live), and a desktop
@@ -183,7 +187,7 @@ A C toolchain, NASM, GRUB's rescue-image tools, and QEMU.
 |---|---|
 | `gcc`, `binutils`, `make` | Compiles and links the kernel. Any GCC that can target x86-64 works; no cross-compiler required. |
 | `nasm` | Assembles the boot, interrupt and context-switch stubs. |
-| `grub-mkrescue` + `xorriso` + `mtools` | Builds the bootable ISO. `grub-mkrescue` needs all three, and the BIOS modules package (`grub-pc-bin` on Debian, `grub2-pc-modules` on Fedora, `grub2-i386-pc` on openSUSE) is easy to miss. |
+| `grub-mkrescue` + `xorriso` + `mtools` | Builds the bootable ISO. `grub-mkrescue` needs all three, and the BIOS modules package (`grub-pc-bin` on Debian, `grub2-pc-modules` on Fedora, `grub2-i386-pc` on openSUSE) is easy to miss. The same three also make `disk.img` bootable: `grub-mkimage` builds the disk's `core.img` out of that modules package, and `mtools` writes the FAT32 `/boot` with no root and no loop device. |
 | `qemu-system-x86_64` | Runs it. |
 | `python3` | Build-time disk seeding and the test/dev tools. Pillow (`pip install pillow`) is needed only for screenshots. |
 
@@ -286,7 +290,7 @@ scrolls the console history, including the boot log.
 
 ```bash
 make            # kernel.bin + the userland ELF binaries
-make iso        # + toy-os.iso, seeding disk.img
+make iso        # + toy-os.iso; also seeds disk.img and installs GRUB on it
 make run        # build + boot in QEMU with a graphical window
 make live-iso   # a Live CD that boots with no disk attached at all
 make demo-iso   # boots straight into a scripted tour
@@ -595,7 +599,8 @@ Selected tools, each documented in its own docstring:
 | `qmp_test.py`, `gui_flow.py`, `shell_flow.py` | Drive the GUI over QEMU's QMP socket, with the mouse/keyboard gotchas already handled. |
 | `tfs3_writer.py` | Read, write, inspect and corrupt-for-testing files inside a `disk.img` from the host, without booting. `--at-lba`/`--sectors` reach a filesystem inside a partition. |
 | `fs_switch_test.py` | Proves probe, wipefs, live `fsformat`, and reboot persistence. |
-| `partition_test.py` | Boots with the filesystem inside an MBR or GPT partition. Its real check is `df`: a kernel ignoring partitions still boots, so "it booted" proves nothing. |
+| `partition_test.py` | Boots with the filesystem inside an MBR or GPT partition. Its real check is `df`: a kernel ignoring partitions still boots, so "it booted" proves nothing. Its last phase proves `fsformat` cannot be aimed at the bootloader. |
+| `install_grub.py` | Puts GRUB and the kernel onto `disk.img` -- the boot sector, `core.img` in the BIOS boot partition, `/boot` in the FAT32 one -- and answers which medium a launch should boot. |
 | `regex_hostcheck.py` | tolibc's `<regex.h>` against **glibc's**, over one shared case table — an oracle sharing no code is the only thing that catches a wrong expectation. |
 | `kbd_test.py`, `keyboard_paths_test.py` | The input path, asserted on both drivers: that the same keys produce the same keycode and character over PS/2 and virtio-input, and that `kbd`'s four columns say what each stage really did. |
 

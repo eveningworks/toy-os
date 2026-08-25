@@ -67,14 +67,21 @@ attacker. If uids ever arrive, `sys_mkpart()` in
 longer treats an unclaimed disk as blank — it would otherwise lay a whole-disk
 filesystem across every partition the table describes, and TFS3 would *survive*
 that (it reserves volume blocks 0–7, so the table stays readable) while the
-partitions were being overwritten. Instead, boot leaves partition 1 as the
-active volume so that `fsformat` claims it.
+partitions were being overwritten. Instead, boot leaves the first partition
+that is OURS as the active volume so that `fsformat` claims it.
+
+**"Ours" excludes the firmware's.** A GPT BIOS boot partition or an EFI
+System Partition is skipped by the scan entirely — the stock `disk.img` begins
+with both (GRUB's `core.img`, then the FAT32 `/boot` holding the kernel), and
+pointing `fsformat` at either would destroy the machine's ability to boot.
+Real installers make the same distinction; an ESP is never a root filesystem
+candidate.
 
 ## Typical use
 
     mkpart --gpt 64M rest confirm     # two partitions
     reboot
-    fsformat tfs3 confirm             # a filesystem in partition 1
+    fsformat tfs3 confirm             # a filesystem in the active partition
     df                                # reports the PARTITION's size, not the disk's
 
 ## See also

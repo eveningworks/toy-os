@@ -34,6 +34,8 @@ import subprocess
 import sys
 import time
 
+import install_grub
+
 # Every one of these substrings must appear in the serial log for a
 # boot to count as successful. Deliberately loose (substring match, not
 # exact-line match) so small wording tweaks to a serial_write() message
@@ -78,13 +80,14 @@ def launch_qemu(iso, disk, serial_log, qemu_log):
     # involved).
     cmd = [
         "qemu-system-x86_64",
-        # The CD is always the boot medium; disk.img is data. Without
-        # this, SeaBIOS boots a disk that carries a partition table
-        # (0x55AA at LBA 0 is all it checks), jumps into filesystem
-        # bytes and hangs with NO serial output -- indistinguishable
-        # from a kernel that died before its first print.
-        "-boot", "order=d",
-        "-cdrom", iso,
+        # WHICH MEDIUM: the disk carries GRUB and the kernel now, so it
+        # boots itself (`order=c`) and the ISO is only for an image that
+        # cannot -- see tools/install_grub.py. Never NO order: SeaBIOS
+        # boots any disk with 0x55AA at LBA 0, which a partition table
+        # provides, and then hangs inside the table with NO serial
+        # output at all -- indistinguishable from a kernel that died
+        # before its first print.
+        *install_grub.qemu_boot_args(install_grub.boot_medium(disk), iso),
         # discard=unmap: the guest's ATA TRIM (kernel/drivers/ata.c) becomes a
         # hole punch in the backing file, so the image stops growing forever.
         "-drive", f"file={disk},format=raw,if=ide,discard=unmap",

@@ -296,6 +296,36 @@ static const uint8_t GPT_TYPE_BASIC_DATA[16] = {
     0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7,
 };
 
+// THE TWO TYPES THAT BELONG TO THE FIRMWARE, not to whatever OS is on
+// the disk: a BIOS boot partition (21686148-...), which holds a
+// bootloader image and no filesystem at all, and an EFI System
+// Partition (C12A7328-...), which holds /boot. Both are on toy-os's own
+// disk now -- GRUB's core.img lives in the first and the kernel in the
+// second (tools/install_grub.py) -- and neither is ever somewhere to
+// mount a root filesystem or, much worse, somewhere to FORMAT one.
+//
+// Linux installers make the same distinction and for the same reason;
+// offering the ESP as a root target is how you destroy a machine's
+// ability to boot in one command.
+static const uint8_t GPT_TYPE_BIOS_BOOT[16] = {
+    0x48, 0x61, 0x68, 0x21, 0x49, 0x64, 0x6F, 0x6E,
+    0x74, 0x4E, 0x65, 0x65, 0x64, 0x45, 0x46, 0x49,
+};
+static const uint8_t GPT_TYPE_ESP[16] = {
+    0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11,
+    0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B,
+};
+
+int partition_is_firmware(const struct partition_entry *pe,
+                          enum partition_table_kind kind) {
+    if (!pe) return 0;
+    if (kind == PART_TABLE_GPT) {
+        return k_memcmp(pe->gpt_type_guid, GPT_TYPE_BIOS_BOOT, 16) == 0 ||
+               k_memcmp(pe->gpt_type_guid, GPT_TYPE_ESP, 16) == 0;
+    }
+    return pe->mbr_type == 0xEF;   // MBR's EFI System type
+}
+
 // The sectors a table needs for ITSELF, and which no partition may
 // overlap. MBR: LBA 0. GPT: LBA 0 through 33 at the front, and the
 // last 33 (backup entry array + backup header) at the back.

@@ -1587,3 +1587,51 @@ the user can see), and the settings app keeps `choice_raw` beside
   systems NAME the root (`root=`, then `/etc/fstab`) rather than
   discovering it. Recorded as a roadmap item rather than guessed at,
   because a cleverer probe order would only move the guess.
+
+**2026-08-25 (the kernel moved onto the disk, and `/boot` is FAT32).**
+
+- **THE BLOCKER WAS THE FILESYSTEM, NOT THE BOOTLOADER.** "Can GRUB boot
+  the kernel off disk.img?" reads as a bootloader question and is not
+  one: GRUB boots a disk trivially and cannot READ TFS3. Naming the real
+  obstacle first is what turned a vague task into three concrete options
+  (a GRUB module for TFS3, blocklists, a boot partition in a filesystem
+  GRUB already knows) instead of an afternoon of trying things.
+- **AND EVERY REAL SYSTEM ANSWERS IT THE SAME WAY**, which settled the
+  choice rather than decorating it: Linux gets `/boot` on ext4 only
+  because GRUB ships an ext4 driver, and where it does not -- early
+  btrfs, ZFS, an encrypted root -- the answer is a separate small
+  `/boot`. UEFI made that universal, and the ESP is FAT32 because
+  firmware speaks only FAT. Writing a filesystem driver FOR THE LOADER
+  is the ZFS path, and it is why ZFS-on-root took years.
+- **A LAYOUT CHANGE CAN BREAK A HOST TOOL THAT NEVER MENTIONS THE
+  LAYOUT.** `volume_of()` returned `parts[0]`, which was the filesystem
+  right up until partition 1 became GRUB's -- at which point the SEEDER
+  would have formatted over the bootloader, silently, on a checkout that
+  had never been booted. It looks for a TFS3 superblock now. Ask what
+  else in the tree encodes "partition 1" as a synonym for "the volume".
+- **THE SAME MISTAKE EXISTS IN THE KERNEL, AND IT IS WORSE THERE.**
+  `vfs.c`'s "leave the first partition active for `fsformat`" fallback
+  aimed at the 1 MiB partition holding `core.img`. The fix is the one
+  real installers make -- a partition whose GPT type says it is the
+  FIRMWARE's (BIOS boot, ESP) is never a filesystem candidate. Proved by
+  breaking `partition_is_firmware()` and watching a filesystem-less
+  image announce "leaving partition 1 active".
+- **DERIVE A BOOT MEDIUM, DO NOT DECLARE ONE, WHEN THE ERROR IS
+  ASYMMETRIC.** Guessing CD for a bootable disk costs a slower boot;
+  guessing DISK for an image with no bootloader hangs with NO SERIAL
+  OUTPUT AT ALL, because `0x55AA` at LBA 0 is all SeaBIOS checks. So
+  `boot_medium()` asks the image for GRUB's own stamp, and every
+  launcher asks that one function. It is also what let an existing
+  `disk.img` keep working with no migration.
+- **A NEW MEDIUM NEEDS THE STALENESS GUARD MOVED, NOT COPIED.**
+  `iso_guard.py` compared `build/kernel.bin` against `toy-os.iso`. Boot
+  the disk and that comparison measures nothing -- a stale
+  `/boot/kernel.bin` is exactly the silent clean pass it exists to
+  prevent. A file inside a FAT image has no stat-able mtime, so the
+  witness is a stamp the build touches, the same trick `build/.seeded`
+  already used for the userland ELFs.
+- **NO NEW HOST DEPENDENCY, AND THAT WAS WORTH CHECKING FIRST.**
+  `grub-mkimage` comes with the same GRUB packages `grub-mkrescue`
+  already needed, and `mtools` writes a FAT image through a
+  `file@@offset` window with no root and no loop device -- which is what
+  makes this work in a plain checkout and on a CI runner.

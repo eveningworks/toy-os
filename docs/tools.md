@@ -1846,11 +1846,17 @@ window without going through it will find its layout polls timing out.
   default (tfs3) -- the same policy the kernel's blank-disk path
   applies at boot.
 
-  **A BLANK IMAGE IS PARTITIONED NOW** -- a GPT with TFS3 in partition 1,
-  which is what `make iso` produces for a fresh `disk.img`. `--partition
-  mbr` writes the legacy table; `--flat` writes the old whole-disk
-  volume, still supported and still what the live ISO's RAM image is;
-  `--layout` sizes the partitions (default: one filling the disk).
+  **A BLANK IMAGE IS PARTITIONED AND BOOTABLE NOW** -- a GPT with a 1 MiB
+  BIOS boot partition, a 64 MiB FAT32 `/boot` and TFS3 in the rest, which
+  is what `make iso` produces for a fresh `disk.img`. `--partition mbr`
+  writes the legacy table, which needs no BIOS boot partition
+  (`core.img` goes in the pre-partition gap) and so gets two;
+  `--flat` writes the old whole-disk volume,
+  still supported and still what the live ISO's RAM image is; `--layout`
+  sizes and TYPES the partitions (`1M:bios,64M:esp,rest`). It prints
+  `filesystem in partition N -- LBA ..., ... sectors`, which is what
+  `partition_test.py` reads rather than assuming partition 1.
+  `install_grub.py` fills the other two.
 
   **An EXISTING image keeps its shape.** It asks `mkpart_test.py`'s
   `volume_of()` and seeds into whatever it finds, so a checkout does not
@@ -1859,6 +1865,30 @@ window without going through it will find its layout polls timing out.
   partition 1 is empty (a `mkpart`ed disk nobody formatted) gets formatted
   IN the partition rather than treated as blank, which is the same
   refusal the kernel makes at boot.
+- **`install_grub.py`** -- puts GRUB **and the kernel** onto `disk.img`,
+  which is what makes an ordinary `make run` a DISK boot rather than a CD
+  boot. Three writes: `boot.img` at LBA 0 (patched with `core.img`'s LBA,
+  and keeping the existing partition table), `core.img` embedded in the
+  BIOS boot partition -- or, on an MBR, in the gap before the first
+  partition -- with its own block list patched, the part
+  `grub-bios-setup` normally does, and `/boot/kernel.bin` +
+  `/boot/grub` written into the FAT32 partition with `mtools` -- no root,
+  no loop device, no mount.
+
+  **Why `/boot` is FAT32 at all:** GRUB cannot read TFS3 and never will
+  without a module written into its own GPLv3 source tree. Every real
+  system with this problem answers it the same way (Linux's separate
+  `/boot`, UEFI's FAT32 ESP, Windows' System Reserved) -- see
+  `docs/decisions.md`.
+
+  **`--check`** answers "is this image bootable" for a script;
+  **`boot_medium(disk)`** is the same question as a function and is what
+  the Makefile, `vm.py`, `qmp_test.py`, `boot_smoke_test.py` and
+  `serial_console.py` all ask before choosing `-boot order=c` or the CD.
+  **`--optional`** is what the build passes: an image with no boot
+  partition is reported and skipped rather than being an error, so a
+  `disk.img` predating this layout keeps working (booting the ISO).
+  It never partitions and never reformats an existing `/boot`.
 - **`tfs3_v1_test.py`** -- boots a freshly built TFS3 **v1** image and
   proves the kernel still mounts and uses the older on-disk layout (8
   checks). Run it after touching TFS3's geometry, journal, or any
@@ -1894,10 +1924,14 @@ window without going through it will find its layout polls timing out.
   verification needed a host-compiled unit test instead of a live
   boot (TFS2's own journal header collides with the GPT header's LBA).
 
-  **`--layout SIZE[,SIZE...]` writes a REAL, usable table instead** --
+  **`--layout SIZE[:KIND][,...]` writes a REAL, usable table instead** --
   partitions laid end to end from LBA 2048 (1 MiB alignment), sized by
   a `K`/`M`/`G` suffix or bare sectors, with exactly one allowed to be
-  `rest`. `--gpt --layout` also writes the BACKUP header and entry
+  `rest`. The optional `:KIND` is the partition TYPE -- `data` (the
+  default), `bios` (a BIOS boot partition, where GRUB's `core.img` is
+  embedded) or `esp` (an EFI System Partition, the FAT32 `/boot`). The
+  kernel reads those types too, and refuses to mount or format either
+  of the last two. `--gpt --layout` also writes the BACKUP header and entry
   array in the last 33 sectors, which the synthetic mode does not: a
   partition editor on another system reads the backup to cross-check
   the primary and "repairs" a disk that has none. This is what
@@ -1907,10 +1941,13 @@ window without going through it will find its layout polls timing out.
   running machine has no such requirement).
 
   **`--print-volume` prints `<base_lba> <sectors>`** for the image's
-  filesystem volume -- partition 1, or the whole image when there is no
-  table. It is the shell-callable form of `volume_of()`, which is the
-  one place the host answers "where does the volume start"; every tool
-  that reaches into a disk image asks it rather than hardcoding 2048.
+  filesystem volume -- the whole image when there is no table. It is the
+  shell-callable form of `volume_of()`, which is the one place the host
+  answers "where does the volume start"; every tool that reaches into a
+  disk image asks it rather than hardcoding 2048. **It is not "partition
+  1" any more**: a bootable image's partition 1 holds GRUB, so
+  `volume_of()` finds the partition carrying a TFS3 superblock and falls
+  back to the first one that is not the firmware's.
 
   Note the GPT-verification caveat above is now HISTORY rather than a
   live limitation: TFS3 is the default and reserves volume blocks 0-7,

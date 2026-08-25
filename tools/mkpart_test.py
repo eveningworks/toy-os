@@ -4,10 +4,11 @@ partition table onto the first few sectors of a raw disk image, for
 testing kernel/drivers/partition.c's parser (the shell's `parttable`
 command) against real, correctly-checksummed data.
 
-toy-os's own disk.img is a GPT with the filesystem in partition 1 now
-(tools/seed_disk.py builds it), so the synthetic tables below are no
-longer the only way to get one -- what they are for is feeding the
-PARSER shapes the seeder does not produce.
+toy-os's own disk.img is a GPT that toy-os BOOTS from now
+(tools/seed_disk.py builds it: a BIOS boot partition, a FAT32 /boot and
+the filesystem), so the synthetic tables below are no longer the only
+way to get one -- what they are for is feeding the PARSER shapes the
+seeder does not produce.
 
 The writers preserve LBA 0 bytes 0-445 rather than zeroing the sector:
 the table lives in bytes 446-511 and the signature in the last two, so
@@ -17,12 +18,13 @@ the format that kept its superblock in bytes 0-4 is gone), but writing
 a partition table is not a licence to zero a sector this code does not
 own -- kernel/drivers/partition.c's write_mbr() makes the same call.
 
-**QEMU boot order:** a valid 0x55AA MBR signature on disk.img makes
-SeaBIOS consider it a bootable hard disk -- without an explicit
-`-boot order=d` (force CD-ROM first), it may try to boot disk.img's
-(nonexistent) boot code instead of the toy-os.iso GRUB CD, hanging with
-no serial output at all. Always launch with `-boot order=d` while disk.img
-has a partition table on it.
+**QEMU boot order:** a valid 0x55AA MBR signature makes SeaBIOS treat
+an image as a bootable hard disk, and it does not check any further. So
+a DATA disk carrying a table must be launched with `-boot order=d`
+(CD-ROM first) or SeaBIOS jumps into filesystem bytes and hangs with no
+serial output at all. toy-os's own disk.img is genuinely bootable now
+(tools/install_grub.py puts GRUB on it) and boots with `order=c`; any
+image these synthetic writers touch is not, and still needs `order=d`.
 
 Usage:
     python3 tools/mkpart_test.py disk.img --mbr
@@ -196,26 +198,68 @@ GPT_TAIL_SECTORS = 33     # backup entry array (32) + backup header (1)
 # data" type that Windows, Linux and macOS all recognise.
 BASIC_DATA_GUID = guid_bytes("EBD0A0A2-B9E5-4433-87C0-68B6B72699C7")
 
+# The two partition types that belong to the FIRMWARE rather than to
+# this OS, and which a layout can therefore ask for by name:
+#
+#   bios  a BIOS boot partition -- where GRUB's core.img is EMBEDDED,
+#         with no filesystem in it at all. GPT has no equivalent of
+#         MBR's post-table gap, so this type is how a BIOS+GPT machine
+#         gets one; tools/install_grub.py writes core.img into it.
+#   esp   an EFI System Partition -- FAT32, and where /boot lives here.
+#         Typed as an ESP even though this is a BIOS boot: it IS one in
+#         shape (FAT32, /boot/kernel.bin) and naming it so is what lets
+#         the kernel leave it alone (kernel/fs/vfs.c refuses to mount or
+#         format a firmware partition), and what makes the roadmap's
+#         UEFI track a matter of adding a second loader rather than a
+#         second disk layout.
+BIOS_BOOT_GUID = guid_bytes("21686148-6449-6E6F-744E-656564454649")
+
+# MBR type bytes for the same two, for the --mbr path. There is no
+# legacy equivalent of a BIOS boot partition and there does not need to
+# be: an MBR leaves a GAP between the boot sector and the first
+# partition, which is where core.img has always been embedded. GPT has
+# no such gap, which is the whole reason its own type exists.
+MBR_TYPE_DATA = 0x83
+MBR_TYPE_ESP = 0xEF
+
+PART_KINDS = {
+    "data": (BASIC_DATA_GUID, MBR_TYPE_DATA, "toyos"),
+    "bios": (BIOS_BOOT_GUID, MBR_TYPE_ESP, "BIOS boot"),
+    "esp": (ESP_GUID, MBR_TYPE_ESP, "boot"),
+}
+
 
 def disk_sectors(path):
     return os.path.getsize(path) // SECTOR
 
 
 def parse_layout(spec, usable):
-    """'64M,rest' -> [sectors, ...] laid out end to end.
+    """'64M:esp,rest' -> [(sectors, kind), ...] laid out end to end.
 
     Sizes are bytes with a K/M/G suffix, or bare SECTORS -- the same
     rule /bin/mkpart follows, so a layout typed at one is valid at the
     other. Exactly one entry may be `rest`.
+
+    A `:kind` suffix names the partition TYPE (see PART_KINDS); without
+    one an entry is ordinary filesystem data, which is what /bin/mkpart
+    writes and what every layout meant before the boot partition
+    existed.
     """
     out, rest_at = [], None
     for item in spec.split(","):
         item = item.strip()
+        kind = "data"
+        if ":" in item:
+            item, kind = item.rsplit(":", 1)
+            item, kind = item.strip(), kind.strip()
+            if kind not in PART_KINDS:
+                raise SystemExit(f"mkpart_test: unknown partition kind {kind!r} "
+                                 f"(known: {', '.join(sorted(PART_KINDS))})")
         if item == "rest":
             if rest_at is not None:
                 raise SystemExit("mkpart_test: only one partition can be `rest`")
             rest_at = len(out)
-            out.append(0)
+            out.append((0, kind))
             continue
         mult = 1
         if item[-1:] in "KkMmGg":
@@ -223,20 +267,25 @@ def parse_layout(spec, usable):
             item = item[:-1]
         if not item.isdigit():
             raise SystemExit(f"mkpart_test: cannot parse size {item!r}")
-        out.append(int(item) if mult == 1 else int(item) * mult // SECTOR)
+        out.append((int(item) if mult == 1 else int(item) * mult // SECTOR, kind))
 
-    fixed = sum(n for i, n in enumerate(out) if i != rest_at)
+    fixed = sum(n for i, (n, _k) in enumerate(out) if i != rest_at)
     if fixed > usable:
         raise SystemExit("mkpart_test: the layout does not fit on this image")
     if rest_at is not None:
-        out[rest_at] = usable - fixed
-        if out[rest_at] == 0:
+        out[rest_at] = (usable - fixed, out[rest_at][1])
+        if out[rest_at][0] == 0:
             raise SystemExit("mkpart_test: `rest` has nothing left over")
     return out
 
 
 def plan(path, spec, gpt):
-    """[(start_lba, sectors), ...] for a layout on this image."""
+    """[(start_lba, sectors, kind), ...] for a layout on this image.
+
+    The KIND is internal to the encoders below -- everything they RETURN
+    is the (start, sectors) pair every caller has always taken, so a
+    layout that names no kinds behaves exactly as it did.
+    """
     total = disk_sectors(path)
     tail = GPT_TAIL_SECTORS if gpt else 0
     usable = total - ALIGN_LBA - tail
@@ -244,22 +293,23 @@ def plan(path, spec, gpt):
         raise SystemExit("mkpart_test: image too small to partition")
     at = ALIGN_LBA
     parts = []
-    for n in parse_layout(spec, usable):
-        parts.append((at, n))
+    for n, kind in parse_layout(spec, usable):
+        parts.append((at, n, kind))
         at += n
     return parts
 
 
 def real_mbr(path, spec):
-    parts = plan(path, spec, gpt=False)
-    if len(parts) > 4:
+    planned = plan(path, spec, gpt=False)
+    if len(planned) > 4:
         raise SystemExit("mkpart_test: an MBR holds at most 4 partitions -- use --gpt")
-    entries = [mbr_entry(0x00, 0x83, start, n) for start, n in parts]
+    entries = [mbr_entry(0x00, PART_KINDS[kind][1], start, n)
+               for start, n, kind in planned]
     with open(path, "r+b") as f:
         buf = read_sector(f, 0)
         patch_mbr(buf, entries)
         write_sector(f, 0, bytes(buf))
-    return parts
+    return [(start, n) for start, n, _kind in planned]
 
 
 def real_gpt(path, spec):
@@ -272,7 +322,8 @@ def real_gpt(path, spec):
     "repairs" a disk whose backup is missing.
     """
     total = disk_sectors(path)
-    parts = plan(path, spec, gpt=True)
+    planned = plan(path, spec, gpt=True)
+    parts = [(start, n) for start, n, _kind in planned]
 
     # Per-partition unique GUIDs derived from the index, not random:
     # `make iso` should produce a byte-identical image from the same
@@ -280,10 +331,11 @@ def real_gpt(path, spec):
     # KERNEL randomises them (partition.c's guid_generate) because a
     # disk written on a running machine has no such reproducibility
     # requirement and collision-avoidance is the point there.
-    entries = [gpt_entry(BASIC_DATA_GUID,
+    entries = [gpt_entry(PART_KINDS[kind][0],
                          guid_bytes("70796F73-0000-4000-8000-%012X" % (i + 1)),
-                         start, start + n - 1, "toyos%d" % (i + 1))
-               for i, (start, n) in enumerate(parts)]
+                         start, start + n - 1,
+                         PART_KINDS[kind][2] if kind != "data" else "toyos%d" % (i + 1))
+               for i, (start, n, kind) in enumerate(planned)]
     entries_buf = b"".join(entries) + b"\0" * (GPT_ENTRY_SIZE * (GPT_NUM_ENTRIES - len(entries)))
     entries_crc = crc32(entries_buf)
 
@@ -342,12 +394,30 @@ def real_gpt(path, spec):
 # maintain shape this repo keeps deleting, so they all ask volume_of().
 
 
-def read_table(path):
+def kind_of(type_guid: bytes, mbr_type: int) -> str:
+    """'bios', 'esp' or 'data' for one partition's type.
+
+    The only three this OS's own tools write, and the only distinction
+    a host tool needs: a firmware partition (the first two) is NEVER
+    where the filesystem is, which is what volume_of() below is asking.
+    Anything unrecognised reads as 'data' -- a disk from elsewhere is
+    not bound by what we would have written.
+    """
+    if type_guid is not None:
+        for name, (guid, _mbr, _label) in PART_KINDS.items():
+            if type_guid == guid:
+                return name
+        return "data"
+    return "esp" if mbr_type == MBR_TYPE_ESP else "data"
+
+
+def read_table(path, with_kind=False):
     """[(start_lba, sectors), ...] for the image's partitions.
 
-    Empty when there is no table. Deliberately small: this answers
-    "where are the partitions", not "what are their GUIDs" -- the
-    guest's `parttable` is what prints a table, and duplicating that
+    With `with_kind`, [(start_lba, sectors, kind)] instead -- see
+    kind_of(). Empty when there is no table. Deliberately small: this
+    answers "where are the partitions", not "what are their GUIDs" --
+    the guest's `parttable` is what prints a table, and duplicating that
     here would be a second thing to keep true.
     """
     total = disk_sectors(path)
@@ -364,7 +434,8 @@ def read_table(path):
                 if e[4] == 0:
                     continue
                 start, count = struct.unpack("<II", e[8:16])
-                out.append((start, count))
+                out.append((start, count, kind_of(None, e[4])) if with_kind
+                           else (start, count))
             return out
 
         hdr = read_sector(f, 1)
@@ -392,22 +463,53 @@ def read_table(path):
                 first, last = struct.unpack_from("<QQ", e, 32)
                 if last < first:
                     continue
-                out.append((first, last - first + 1))  # GPT's end is INCLUSIVE
+                # GPT's end is INCLUSIVE
+                out.append((first, last - first + 1, kind_of(bytes(e[:16]), 0))
+                           if with_kind else (first, last - first + 1))
         return out
 
 
-def volume_of(path):
-    """(base_lba, sectors) for the filesystem volume on this image.
+def is_tfs3(path, base_lba):
+    """Does a TFS3 superblock sit at this volume's block 8?
 
-    Partition 1 when the image is partitioned, the whole image when it
-    is not -- so a caller passes the result straight to
-    `tfs3_writer.py --at-lba N --sectors M` and works on either shape
-    without asking which it has. That is the point: the flat image is
-    still a supported layout (the live ISO's RAM image is one), and no
-    tool should have to branch on it.
+    The one implementation of that check on the host -- seed_disk.py
+    asks this too. Any format version claims the image: picking one
+    here would make a newer image look BLANK, and a blank image is the
+    one that gets FORMATTED.
     """
-    parts = read_table(path)
-    return parts[0] if parts else (0, disk_sectors(path))
+    with open(path, "rb") as f:
+        f.seek(base_lba * SECTOR + 8 * 4096)
+        blk = f.read(5)
+    return len(blk) == 5 and blk[:4] == b"TFS3" and 1 <= blk[4] <= 2
+
+
+def volume_of(path):
+    """(base_lba, sectors) for the FILESYSTEM volume on this image.
+
+    The whole image when it is not partitioned -- so a caller passes the
+    result straight to `tfs3_writer.py --at-lba N --sectors M` and works
+    on either shape without asking which it has. That is the point: the
+    flat image is still a supported layout (the live ISO's RAM image is
+    one), and no tool should have to branch on it.
+
+    **IT IS NOT "PARTITION 1" ANY MORE.** A bootable disk.img puts a
+    BIOS boot partition and a FAT32 /boot in front of the filesystem
+    (tools/install_grub.py), so the volume is found by LOOKING -- the
+    partition carrying a TFS3 superblock wins, and failing that the
+    first one that is not the firmware's. Answering "partition 1" here
+    would hand every host tool the 1 MiB partition holding GRUB's
+    core.img, and the seeder would format over the bootloader.
+    """
+    parts = read_table(path, with_kind=True)
+    if not parts:
+        return (0, disk_sectors(path))
+    for start, count, _kind in parts:
+        if is_tfs3(path, start):
+            return (start, count)
+    for start, count, kind in parts:
+        if kind == "data":
+            return (start, count)
+    return parts[0][:2]
 
 
 def main():

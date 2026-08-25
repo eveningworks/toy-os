@@ -381,6 +381,9 @@ help:
 	@echo "   make run LIVE=1           the live ISO, with NO disk attached (implies live-iso)"
 	@echo "   make run DEMO=1           the scripted tour, no disk (implies demo-iso)"
 	@echo "   make run NODISK=1         the ordinary ISO with no disk attached either"
+	@echo "   make run BOOT=cd          boot the ISO instead of the disk (default: the"
+	@echo "                             disk, when disk.img carries GRUB -- BOOT=disk"
+	@echo "                             forces it, see tools/install_grub.py)"
 	@echo "   make run KVM=1 VIRTIO=1   ...or any mix; a per-class value such as"
 	@echo "                             VGA=std overrides what VIRTIO=1 chose"
 	@echo ""
@@ -390,7 +393,8 @@ help:
 	@echo "  test           Run the in-kernel test suite (ktest) and exit non-zero on failure"
 	@echo "  verify         Full pre-delivery check: clean build + iso + boot test + ktest"
 	@echo "  clean          Remove build outputs (build/, ELFs, toy-os.iso) -- leaves disk.img alone"
-	@echo "  clean-disk     Wipe disk.img, the persistent filesystem -- use with care"
+	@echo "  clean-disk     Wipe disk.img -- the filesystem AND the bootloader on it;"
+	@echo "                 the next make iso rebuilds both. Use with care"
 	@echo "  version        Regenerate kernel/include/api/version.h (runs automatically as part of all/iso)"
 	@echo "  help           Show this message"
 
@@ -846,7 +850,7 @@ $(DISK_IMG):
 # (keyboard_layout.c) keeps the keyboard working regardless. Delete
 # $(SEED_DIR)/sync/etc/kbs and re-run `make iso` to force a fresh
 # regenerate once xkbcli is installed.
-seed: $(DISK_IMG) $(USERLAND_ELVES)
+seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL)
 	mkdir -p $(SEED_DIR)/sync/bin $(SEED_DIR)/sync/tests
 	# Destination comes from the SOURCE DIRECTORY, not from a list:
 	# build/userland/{gui,bin}/x.elf -> /bin/x, build/userland/tests/x.elf
@@ -974,6 +978,18 @@ seed: $(DISK_IMG) $(USERLAND_ELVES)
 		echo "seed: xkbcli not found -- skipping /etc/kbs regeneration (apt-get install libxkbcommon-tools to enable; kernel falls back to compiled-in US regardless)"; \
 	fi
 	python3 tools/seed_disk.py $(DISK_IMG) $(SEED_DIR)
+	# THE KERNEL GOES ON THE DISK TOO. GRUB cannot read TFS3, so
+	# /boot is a FAT32 partition in front of it and GRUB's core.img
+	# is embedded in a BIOS boot partition in front of THAT -- see
+	# tools/install_grub.py. Same grub.cfg as the ISO's, same paths
+	# inside it, so the two media cannot drift. `--optional` is what
+	# lets a disk.img built before this layout existed keep working:
+	# it has nowhere to install to, so nothing is installed and every
+	# launcher falls back to booting the ISO.
+	sed -e 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' -e 's|@KCMDLINE@|$(KCMDLINE)|' grub.cfg > $(BUILD)/grub-disk.cfg
+	python3 tools/install_grub.py $(DISK_IMG) --kernel $(KERNEL) \
+	    --grub-cfg $(BUILD)/grub-disk.cfg --optional
+	@touch $(BUILD)/.bootdisk
 	# A stamp saying the seed step RAN, which disk.img's own mtime
 	# cannot: seeding is content-hash based, so a rebuild producing
 	# byte-identical ELFs correctly rewrites nothing and leaves the
@@ -1212,15 +1228,32 @@ QEMU_AUDIO = $(if $(AUDIO),-audiodev $(AUDIODEV)$(COMMA)id=snd0 -machine pcspk-a
 
 QEMU_EXTRA =
 
-# `-boot order=d` -- THE CD IS ALWAYS THE BOOT MEDIUM HERE, and saying so
-# is not redundant. With no explicit order, SeaBIOS tries the hard disk
-# first whenever it looks bootable, and a disk carrying a PARTITION
-# TABLE looks bootable: the 0x55AA signature at LBA 0 is all it checks.
-# It then jumps into 446 bytes of filesystem data as if they were boot
-# code and hangs with NO serial output at all, which reads as "the
-# kernel died before the first print" rather than as "it never ran".
-# disk.img is data, never a boot medium -- see docs/commands/mkpart.md.
-QEMU_RUN = qemu-system-x86_64 -boot order=d -cdrom $(QEMU_ISO) $(QEMU_ACCEL) $(QEMU_DISK) \
+# WHICH MEDIUM BOOTS, and why this is derived rather than fixed.
+#
+# The disk is the boot medium now: disk.img carries GRUB and the kernel
+# (tools/install_grub.py), so `-boot order=c` boots the machine the way
+# a real one boots. The ISO is still a boot medium -- it is what the
+# live and demo images ARE, and what a release ships -- so this is a
+# choice rather than a replacement.
+#
+# It is DERIVED because an image built before the boot partition existed
+# has no GRUB on it and must still work: is_bootable() asks the image,
+# and `BOOT=disk`/`BOOT=cd` overrides the answer. Getting this wrong in
+# the CD direction costs a slower boot; getting it wrong in the DISK
+# direction hangs with no output at all, because SeaBIOS checks only for
+# 0x55AA at LBA 0 and a protective MBR has one -- it then jumps into 446
+# bytes of table as if they were boot code. That is why "it has a
+# partition table" is exactly the wrong test, and why the predicate
+# looks for GRUB's own stamp instead.
+BOOT ?= auto
+DISK_BOOTABLE = $(shell python3 tools/install_grub.py $(DISK_IMG) --check >/dev/null 2>&1 && echo 1)
+BOOT_MEDIUM = $(if $(NODISK)$(LIVE)$(DEMO),cd,\
+                $(if $(filter disk,$(BOOT)),disk,\
+                  $(if $(filter cd,$(BOOT)),cd,\
+                    $(if $(DISK_BOOTABLE),disk,cd))))
+QEMU_BOOT = $(if $(filter disk,$(BOOT_MEDIUM)),-boot order=c,-boot order=d -cdrom $(QEMU_ISO))
+
+QEMU_RUN = qemu-system-x86_64 $(QEMU_BOOT) $(QEMU_ACCEL) $(QEMU_DISK) \
 	  $(QEMU_INPUT) \
 	  -serial stdio -vga $(QEMU_VGA) -display $(QEMU_DISPLAY) -m $(MEM) \
 	  $(QEMU_AUDIO) $(QEMU_EXTRA)

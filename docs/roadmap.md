@@ -239,7 +239,7 @@ everything libc-shaped is waiting on it. Full plan and staging:
 
 - [ ] Inter-process IPC (message passing)
 - [ ] A real C library -- staged in `docs/libc-design.md`; stages 0-5 done, the proof (a real port) left
-- [ ] FAT16/FAT32 driver
+- [ ] FAT16/FAT32 driver -- and with it, `/boot` readable from inside toy-os
 - [ ] `g_next_kernel_rsp` reentrancy fixed properly
 - [ ] `wintest` made non-modal
 - [ ] Kernel threads (a scheduler entity without an address space of its own)
@@ -659,7 +659,7 @@ run on, not by order.
 
 ### UEFI boot
 
-- [ ] A UEFI stub/loader alongside the Multiboot2 path
+- [ ] A UEFI stub/loader alongside the Multiboot2 path, in the ESP `disk.img` already has
 - [ ] GOP framebuffer acquisition (instead of GRUB's multiboot tag)
 - [ ] Memory map from `GetMemoryMap()` feeding `pmm.c`
 - [ ] `ExitBootServices()` handoff into the existing `kernel_main()`
@@ -802,6 +802,7 @@ this to be better?".
 - [ ] `damage_sweep.py`'s random walk can open Notepad's file picker by chance -- harmless, but confusing in a state dump
 - [ ] `SYS_LISTDIR` still truncates at 256 entries, and TFS3 has no such cap -- the fix is an offset argument
 - [ ] Nothing detects an ordinary memory LEAK, in either allocator
+- [ ] `/boot` is a FAT32 partition the OS cannot read, so it cannot update its own kernel
 - [ ] The shell's command dispatch is a long `if/else` chain, and the fix is not the obvious one
 - [ ] Settings: a ring-3 settings daemon (stage 2)
 - [ ] **NEXT** The ring-3 WM busy-waits instead of sleeping -- `SYS_SLEEP` and a per-window timer both exist now

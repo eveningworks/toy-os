@@ -648,13 +648,14 @@ whenever a headline here tells you something you did not already know.
 - **TFS3's last block group may be PARTIAL**
 - **A new TFS3 operation must COUNT ITS JOURNAL CREDITS, and the count is the design.**
 - **Shrinking a file, or anything else that stops referencing a block, commits the pointer change BEFORE freeing the bit.**
-- **THE STOCK `disk.img` IS PARTITIONED (GPT, filesystem in partition 1), AND ONLY A BLANK IMAGE GETS THAT** -- `seed_disk.py` asks `mkpart_test.py`'s `volume_of()` what shape an image already is and KEEPS it, so an existing checkout stays flat until `make clean-disk`. Flat is still supported (`seed_disk.py --flat`; the live ISO's RAM image is one). **A host tool that reaches into the filesystem must ask `volume_of()`** and pass `--at-lba`/`--sectors` to `tfs3_writer.py` -- hardcoding 2048 is the pointer-somebody-must-maintain shape. `try_partitions()` mounts the FIRST partition a backend claims, which stops being unambiguous when FAT32 lands (`root=` is the roadmap item).
+- **THE STOCK `disk.img` IS PARTITIONED AND BOOTABLE, AND ONLY A BLANK IMAGE GETS THAT** -- a GPT holding a BIOS boot partition (GRUB's `core.img`), a FAT32 `/boot` and TFS3, in that order. `seed_disk.py` asks `mkpart_test.py`'s `volume_of()` what shape an image already is and KEEPS it, so an existing checkout is untouched until `make clean-disk`. Flat is still supported (`seed_disk.py --flat`; the live ISO's RAM image is one). **A host tool that reaches into the filesystem must ask `volume_of()`** and pass `--at-lba`/`--sectors` to `tfs3_writer.py` -- hardcoding 2048 is the pointer-somebody-must-maintain shape, and "partition 1" is now WRONG as well (`volume_of()` finds the TFS3 volume by looking). `try_partitions()` mounts the FIRST partition a backend claims, minus the firmware's; that stops being unambiguous when FAT32 lands (`root=` is the roadmap item).
 - **REMOVING A FILESYSTEM BACKEND SILENTLY REFORMATS EVERY DISK IN THAT FORMAT** -- the probe treats a disk no backend claims as "readable but unclaimed", which is the blank-disk case, which FORMATS. TFS2's removal needed a recognise-and-refuse guard for exactly this; the guard was then removed on the maintainer's word that no such disks exist, so **a TFS2 disk booted today IS reformatted**. Make that call deliberately for the next format: the guard is ~15 lines and the failure is unrecoverable. `struct fs_ops` stays a registry with one row because FAT32 is next.
 - **`/etc` on the persistent filesystem is the config-file convention.**
 - **A PARTITION IS A BLOCK DEVICE, AND THE FILESYSTEM NEVER LEARNS ITS OFFSET** -- `block_part.c` wraps a parent and shifts every LBA (Linux's `bd_start_sect`, Windows' `partmgr`); the active device stays SINGULAR; `blk_read_sectors()` is the VOLUME and `blk_disk_read_sectors()` is the DISK, so a table parser must use the latter; capabilities are inherited and TRIM is CLAMPED; and a backend declares `fs_ops.volume_relative`, the guard that stops the scan offering a partition to a backend that ignores the block layer (TFS2 declared 0; FAT32 will declare 1).
-- **A PARTITIONED DISK IS NEVER AUTO-FORMATTED, AND PARTITION 1 IS LEFT ACTIVE** -- a flat format SURVIVES a GPT (TFS3 reserves volume blocks 0-7), so claiming an unclaimed partitioned disk would lay a whole-disk volume across every partition's data while `parttable` kept printing the table correctly. `fsformat` formats the ACTIVE device, which is what makes `mkpart` -> reboot -> `fsformat` land inside partition 1.
+- **A PARTITIONED DISK IS NEVER AUTO-FORMATTED, AND THE FIRST PARTITION THAT IS OURS IS LEFT ACTIVE** -- a flat format SURVIVES a GPT (TFS3 reserves volume blocks 0-7), so claiming an unclaimed partitioned disk would lay a whole-disk volume across every partition's data while `parttable` kept printing the table correctly. `fsformat` formats the ACTIVE device, which is what makes `mkpart` -> reboot -> `fsformat` land inside a partition. **"Ours" excludes the FIRMWARE's** -- `vfs.c`'s scan skips a GPT BIOS-boot or ESP partition (`partition_is_firmware()`), so no backend probes one and the fallback cannot aim `fsformat` at the 1 MiB partition holding GRUB; `partition_test.py`'s last phase asserts the partition NUMBER left active on a table with no filesystem in it, the only state where that choice is visible.
 - **WRITING A TABLE IS A SYSCALL THAT TAKES A TABLE, NOT A SECTOR** -- `SYS_MKPART` takes a `struct mkpart_request` and the kernel encodes it, because this kernel has no privilege model to gate a write-any-sector primitive with (Linux's `BLKPG` shape). `MKPART_CONFIRM` is a SPEED BUMP, not a permission check. GPT is written backup-first and protective-MBR-last; nothing is remounted.
-- **A PARTITION TABLE MAKES A DATA DISK LOOK BOOTABLE, AND QEMU HANGS WITH NO OUTPUT** -- `0x55AA` at LBA 0 is all SeaBIOS checks, so it boots the data disk and jumps into filesystem bytes. Now that `disk.img` is partitioned by default this is not hypothetical: `-boot order=d` is in `QEMU_RUN`, `vm.py`, `launch_qemu_cmd()`, `boot_smoke_test.py`, `serial_console.py`, `virtio_boot_test.py` and `run_release.sh`. **A hand-rolled QEMU line needs it too**, and the symptom if you forget is no serial output at all.
+- **TOY-OS BOOTS FROM ITS OWN DISK, AND `/boot` IS FAT32 BECAUSE GRUB CANNOT READ TFS3** -- `tools/install_grub.py` writes `boot.img`, `core.img` and `/boot/kernel.bin` onto `disk.img` at every `make iso`; an ordinary run is `-boot order=c` with no `-cdrom` at all. The ISO stays a boot medium (live, demo, a release), so this is a CHOICE, not a replacement.
+- **NEVER LEAVE THE BOOT ORDER OUT OF A QEMU LINE, AND ASK `boot_medium()` WHICH ONE** -- `0x55AA` at LBA 0 is all SeaBIOS checks, so with no order it boots ANY partitioned disk and, if nothing installed GRUB on that one, jumps into the table and hangs with **no serial output at all** -- indistinguishable from a kernel that died before its first print. The medium is DERIVED from the image (`install_grub.boot_medium()`, asked by `QEMU_RUN`, `vm.py`, `launch_qemu_cmd()`, `boot_smoke_test.py`, `serial_console.py`), so an image predating this layout still boots the ISO; `BOOT=disk|cd` and `--boot` override. A tool that builds its OWN image (`partition_test.py`, `virtio_boot_test.py`, `run_release.sh`) hardcodes `order=d`, because nothing put a bootloader on it.
 
 ### The shell, the console, and line editing
 
@@ -850,13 +851,17 @@ change**, and treat a compiler flag that appears to work only partially
 as a stale-object symptom first (that is exactly how
 `-ffunction-sections` presented).
 
-**`make all` does NOT update `toy-os.iso`, and every headless test boots
-the ISO.** So a `make all` without `make iso` leaves the whole suite
-testing the PREVIOUS build -- and it does not fail loudly, it fails as a
-clean pass. **`make iso`, not `make all`, before any headless run.**
-`tools/iso_guard.py` refuses a stale one now, but the reasoning is worth
-keeping: the data never reached the code under test because the code
-never reached the machine.
+**`make all` REACHES NO BOOT MEDIUM.** It writes `build/kernel.bin` and
+stops: the kernel gets onto `disk.img` (and into `toy-os.iso`) in the
+`seed` step that `make iso` runs. So a `make all` without `make iso`
+leaves the whole suite testing the PREVIOUS build -- and it does not
+fail loudly, it fails as a clean pass. **`make iso`, not `make all`,
+before any headless run**, even though the ordinary run no longer boots
+the ISO -- that target is what installs the kernel on the disk too.
+`tools/iso_guard.py` refuses a stale one now (comparing against
+`build/.bootdisk` on a disk boot and `toy-os.iso` on a CD boot), but the
+reasoning is worth keeping: the data never reached the code under test
+because the code never reached the machine.
 
 **Every automated test here runs TCG, and a green suite therefore says
 nothing about two whole bug classes** -- anything depending on how FAST
@@ -1164,14 +1169,22 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   `mkpart_test.py`, `demo_test.py`.
 - **Disk images, from the host** -- `seed_disk.py` (the format-aware
   front end `make iso` calls; **`--partition gpt|mbr` builds a
-  PARTITIONED image** with the filesystem inside partition 1 instead of
-  flat at LBA 0), `tfs3_writer.py` (**every
+  PARTITIONED, BOOTABLE image** -- a BIOS boot partition, a FAT32
+  `/boot` and the filesystem -- instead of a flat volume at LBA 0),
+  `install_grub.py` (**puts GRUB and the kernel ON `disk.img`**:
+  `boot.img` at LBA 0, `core.img` embedded in the BIOS boot partition,
+  `/boot/kernel.bin` and `/boot/grub` written into the FAT32 one with
+  `mtools`. Also `boot_medium()`, the ONE answer to "does this image
+  boot itself, or does it need the ISO?", which every launcher here
+  asks), `tfs3_writer.py` (**every
   subcommand takes `--at-lba`/`--sectors`**, the host-side twin of the
   kernel's volume seam -- that is what lets one image hold a table AND
   a filesystem in a partition), `mkpart_test.py` (**`--layout
-  SIZE[,SIZE...]` writes a REAL, usable table**, aligned and with GPT's
-  backup structures, where the default writes a synthetic one for the
-  parser to chew on),
+  SIZE[:KIND][,...]` writes a REAL, usable table**, aligned and with
+  GPT's backup structures, where the default writes a synthetic one for
+  the parser to chew on; `:bios`/`:esp` name a firmware partition type,
+  and `volume_of()` finds the TFS3 volume by LOOKING rather than
+  answering "partition 1"),
   `fetch_wad.py` (puts a Doom IWAD where `make iso` will seed it -- the
   WAD is deliberately NOT in the repository; `--from` takes one you
   already own).

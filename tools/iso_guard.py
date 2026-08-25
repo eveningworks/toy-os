@@ -6,11 +6,15 @@ THE BUG THIS EXISTS FOR, which has cost real time in many sessions:
     python3 tools/ktest_run.py
     -> PASS, 256 tests
 
-Both of those pass cleanly while testing the PREVIOUS build. Every
-headless test here boots `toy-os.iso`, and nothing rebuilds it: `make
-all` produces `build/kernel.bin` and stops, and a `make iso` that dies
-on a compile error leaves the last good ISO sitting there. So the tests
-run, the tests pass, and they are measuring code that no longer exists.
+Both of those pass cleanly while testing the PREVIOUS build. Nothing in
+`make all` reaches a boot medium: it produces `build/kernel.bin` and
+stops, and a `make iso` that dies on a compile error leaves the last
+good image sitting there. So the tests run, the tests pass, and they are
+measuring code that no longer exists.
+
+There are TWO media now -- the kernel lives on disk.img as well as in
+the ISO (tools/install_grub.py), and `medium=` says which one is being
+booted so the check compares against the one that will actually run.
 
 It does not fail loudly -- it fails as a clean PASS, which is the worst
 possible direction. It is also what makes a positive control come back
@@ -22,8 +26,9 @@ The check is two rounds of mtime comparison:
      (kernel/ and apps/ -> build/kernel.bin, userland/ ->
      build/userland) -- catches a build that FAILED, or never ran.
   2. Each build output against the MEDIA the tests boot
-     (build/kernel.bin -> toy-os.iso, build/userland -> build/.seeded)
-     -- catches `make all` without `make iso`.
+     (build/kernel.bin -> toy-os.iso, or -> build/.bootdisk on a disk
+     boot; build/userland -> build/.seeded) -- catches `make all`
+     without `make iso`.
 
 Both rounds are needed. Only the first, and a failed `make iso` still
 boots a consistent-but-old pair; only the second, and a successful
@@ -88,6 +93,17 @@ ARTIFACT_PAIRS = (
     ("build/userland", "build/.seeded"),
 )
 
+# The same pairing for a DISK boot. The kernel lives at /boot/kernel.bin
+# inside disk.img's FAT32 partition now (tools/install_grub.py), and a
+# file inside a FAT image has no mtime this can stat -- so the witness
+# is build/.bootdisk, the stamp the Makefile's seed step touches after
+# installing it. Exactly the reason build/.seeded exists for the
+# userland ELFs, one artifact along.
+DISK_ARTIFACT_PAIRS = (
+    ("build/kernel.bin", "build/.bootdisk"),
+    ("build/userland", "build/.seeded"),
+)
+
 BYPASS_ENV = "TOYOS_ALLOW_STALE_ISO"
 
 
@@ -131,16 +147,22 @@ GENERATED_SOURCES = {
 }
 
 
-def check_iso_fresh(repo: Path = REPO, iso_name: str = "toy-os.iso"):
-    """Return a list of complaint strings; empty means the ISO is current.
+def check_iso_fresh(repo: Path = REPO, iso_name: str = "toy-os.iso",
+                    medium: str = "cd"):
+    """Return a list of complaint strings; empty means the boot media are current.
 
     Returns rather than raises so a caller can decide -- `vm.py` fails
     hard, but a tool booting a DIFFERENT image (the live or demo ISO)
     can ask about its own and ignore the answer.
+
+    `medium` is 'cd' or 'disk'. It changes only what the kernel is
+    compared against, and it has to: booting from the disk, a stale
+    toy-os.iso is not evidence of anything, and a stale /boot/kernel.bin
+    is exactly the silent-clean-pass this file exists to prevent.
     """
     problems = []
 
-    if not (repo / iso_name).exists():
+    if medium == "cd" and not (repo / iso_name).exists():
         return [f"{iso_name} does not exist -- run `make iso`."]
 
     # 1. Did the BUILD run? Each source tree against its own output.
@@ -183,17 +205,18 @@ def check_iso_fresh(repo: Path = REPO, iso_name: str = "toy-os.iso"):
     # 2. Did the build reach the MEDIA the tests actually boot? This is
     #    the `make all` without `make iso` case, which is the one that
     #    silently reports a clean pass against the previous build.
-    for out_rel, media_rel in ARTIFACT_PAIRS:
+    for out_rel, media_rel in (DISK_ARTIFACT_PAIRS if medium == "disk" else ARTIFACT_PAIRS):
         out, out_m = _newest(repo / out_rel)
         media = repo / media_rel
         if out is None or not media.exists():
             continue
         media_m = media.stat().st_mtime
         if out_m > media_m:
+            booted = "disk.img" if medium == "disk" else iso_name
             problems.append(
                 f"{out_rel} is NEWER than {media_rel} (by {out_m - media_m:.0f}s) "
                 f"-- a `make all` without `make iso`. Every headless test boots "
-                f"{iso_name} off the seeded image, so it would test the previous build."
+                f"{booted}, so it would test the previous build."
             )
 
     return problems
@@ -256,14 +279,15 @@ def warn_if_disk_stale(disk, repo: Path = REPO):
         print(f"iso_guard: WARNING -- {p}", file=sys.stderr)
 
 
-def assert_iso_fresh(repo: Path = REPO, iso_name: str = "toy-os.iso"):
-    """Exit non-zero with an explanation if the ISO is stale."""
+def assert_iso_fresh(repo: Path = REPO, iso_name: str = "toy-os.iso",
+                     medium: str = "cd"):
+    """Exit non-zero with an explanation if the boot media are stale."""
     if os.environ.get(BYPASS_ENV) == "1":
         print(f"iso_guard: {BYPASS_ENV}=1 -- booting {iso_name} without checking it "
               f"is current.", file=sys.stderr)
         return
 
-    problems = check_iso_fresh(repo, iso_name)
+    problems = check_iso_fresh(repo, iso_name, medium)
     if not problems:
         return
 

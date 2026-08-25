@@ -43,6 +43,7 @@ import socket
 import subprocess
 import sys
 import time
+import install_grub
 import iso_guard
 import port_guard
 
@@ -155,12 +156,19 @@ def cmd_start(args):
         if os.path.exists(stale):
             os.unlink(stale)
 
-    # A stale toy-os.iso boots and PASSES, silently testing the previous
+    # WHICH MEDIUM. The kernel is on disk.img now (tools/install_grub.py),
+    # so the disk boots itself and the ISO is for the images that have no
+    # disk -- live, demo, a release download. Derived rather than fixed
+    # because an image built before the boot partition existed has no
+    # GRUB on it and must keep working; `--boot` overrides.
+    medium = install_grub.boot_medium(args.disk, args.boot)
+
+    # A stale image boots and PASSES, silently testing the previous
     # build -- see tools/iso_guard.py. Checked here because vm.py and
     # qmp_test.py's launch_qemu_cmd() are the two places anything in
     # this repo starts a guest.
     if args.iso == "toy-os.iso":
-        iso_guard.assert_iso_fresh()
+        iso_guard.assert_iso_fresh(medium=medium)
 
     # And a COPY of disk.img taken before the last seed, which runs the
     # new kernel against the OLD /bin binaries. A warning, not a refusal:
@@ -175,13 +183,14 @@ def cmd_start(args):
 
     cmd = [
         "qemu-system-x86_64",
-        # The CD is always the boot medium; disk.img is data. Without
-        # this, SeaBIOS boots a disk that carries a partition table
-        # (0x55AA at LBA 0 is all it checks), jumps into filesystem
-        # bytes and hangs with no serial output -- which looks exactly
-        # like a kernel that died before its first print.
-        "-boot", "order=d",
-        "-cdrom", args.iso,
+        # `order=c` boots the disk's own GRUB; `order=d` boots the ISO
+        # and leaves the disk as data. Never NO order: SeaBIOS tries the
+        # hard disk first whenever it looks bootable, and a partition
+        # table is all it looks for -- it then jumps into 446 bytes of
+        # table as if they were boot code and hangs with no serial output
+        # at all, which reads as a kernel that died before its first
+        # print rather than as one that never ran.
+        *install_grub.qemu_boot_args(medium, args.iso),
         # discard=unmap turns the guest's ATA TRIM into a hole punch in the
         # backing file -- see kernel/drivers/ata.c's ata_trim().
         "-drive", f"file={args.disk},format=raw,if=ide,discard=unmap",
@@ -483,6 +492,9 @@ def main():
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--iso", default="toy-os.iso")
     ap.add_argument("--disk", default="disk.img")
+    ap.add_argument("--boot", choices=("auto", "disk", "cd"), default="auto",
+                    help="which medium to boot: the disk's own GRUB, the ISO, "
+                         "or (default) whichever the image supports")
     ap.add_argument("--instance", type=_instance_arg, default=0, metavar="N",
                     help="run as VM slot N: pidfile .vm.N.pid, socket .vm.N.serial, "
                          f"QMP port {QMP_PORT}+N, VNC :{VNC_DISPLAY}+N. Slot 0 (the "

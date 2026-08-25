@@ -111,6 +111,19 @@ match -- they aren't internal helpers invoked by other programs, they're
 exercises a person runs on purpose. The cost is one name a
 newcomer-from-Linux won't recognise, which this table answers.
 
+**No `/boot` ON THIS VOLUME, and the one that exists is a different
+disk partition.** The kernel and GRUB live at `/boot/kernel.bin` and
+`/boot/grub/` inside disk.img's FAT32 partition, not in the TFS3
+filesystem this table describes -- GRUB cannot read TFS3, which is the
+whole reason that partition exists (`tools/install_grub.py`). toy-os has
+no FAT driver yet, so from inside the running OS that volume is not
+mounted and not visible: `ls /boot` correctly says there is nothing
+there. **Do not create a `/boot` on the TFS3 root** -- it would be a
+second directory of that name holding none of the files that boot the
+machine, which is worse than the gap. When the FAT32 backend lands, the
+answer is to MOUNT the real one there (`root=`/mount points, both
+roadmap items).
+
 **No merged `/usr`.** Modern distributions make `/bin` a symlink to
 `/usr/bin`. toy-os has no symlinks at all, so that isn't expressible;
 `/bin` is a real directory and stays one.

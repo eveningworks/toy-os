@@ -42,11 +42,14 @@ SERIAL_PORT = 4557  # not ktest_run.py's 4555, so both can run at once
 def launch(iso, virtio_img, qemu_log):
     cmd = [
         "qemu-system-x86_64",
-        # The CD is always the boot medium; disk.img is data. Without
-        # this, SeaBIOS boots a disk that carries a partition table
-        # (0x55AA at LBA 0 is all it checks), jumps into filesystem
-        # bytes and hangs with NO serial output -- indistinguishable
-        # from a kernel that died before its first print.
+        # THE CD IS THE BOOT MEDIUM HERE, unlike an ordinary run: this
+        # tool formats its OWN image and nothing installs a bootloader
+        # onto it (tools/install_grub.py writes disk.img at build time,
+        # not this). Without the explicit order SeaBIOS boots the disk
+        # anyway -- 0x55AA at LBA 0 is all it checks -- jumps into
+        # filesystem bytes and hangs with NO serial output, which is
+        # indistinguishable from a kernel that died before its first
+        # print.
         "-boot", "order=d",
         "-cdrom", iso,
         # THE POINT OF THIS TOOL: no `-drive if=ide`. The only disk is

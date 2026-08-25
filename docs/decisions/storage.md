@@ -1484,6 +1484,18 @@ harmless before and is load-bearing now. `tools/mkpart_test.py`'s
 docstring had recorded this hazard years earlier for its own synthetic
 tables; nothing had acted on it, because nothing else wrote a table.
 
+**AMENDED: `disk.img` IS a boot medium now** — it carries GRUB and the
+kernel, and an ordinary run boots it with `-boot order=c` (see "The
+kernel lives on the disk" below). What did NOT change is the hazard, or
+the rule that follows from it: an explicit order is still mandatory
+everywhere, because the failure mode of getting it wrong is the same
+silent hang. What changed is which order is right for which image, and
+that is now derived from the image itself rather than fixed
+(`install_grub.py`'s `boot_medium()`). The tools that build their own
+images — `partition_test.py`, `virtio_boot_test.py`, `run_release.sh` —
+still say `order=d`, and their comments now say why THEIR image is not
+bootable rather than claiming disk.img is not.
+
 ## TFS2 was removed, and what removing a FORMAT costs
 
 TFS3 had been the default for a long time and TFS2 was a probe-selected
@@ -1576,3 +1588,114 @@ root volume rather than discovering one (Linux's `root=`, and an
 `/etc/fstab` after that). The fix is a boot-line `root=` naming a
 partition, not a cleverer probe order, and it belongs to the FAT32 work
 rather than being guessed at now.
+
+**AMENDED: that disk now exists, and half of the problem turned out to
+be answerable by TYPE.** The stock image has an ESP in partition 2 and
+TFS3 in partition 3. The scan skips a partition whose GPT type says it
+belongs to the firmware — BIOS boot or ESP — so a future FAT32 backend
+will not be offered the ESP at all, and `fsformat` cannot be aimed at
+it. That is what real installers do rather than a trick: an ESP is
+never a root filesystem candidate. What is still unsettled is the case
+this cannot help with, TWO ordinary partitions both holding a
+filesystem a backend claims, and `root=` remains the answer to that.
+
+## The kernel lives on the disk, and `/boot` is FAT32 because GRUB cannot read TFS3
+
+The kernel used to exist only inside `toy-os.iso`. Every boot — every
+`make run`, every headless test — was a CD boot with `disk.img` attached
+as data beside it, which is what a live CD looks like and not what an
+installed system looks like. Moving the kernel onto the disk means one
+medium holds the whole OS, and `-boot order=c` boots the machine the way
+a real one boots.
+
+**The obstacle was never the bootloader; it was the filesystem.** GRUB
+boots off a disk trivially. What GRUB cannot do is READ TFS3: there is
+no module for it, and writing one means a third implementation of the
+format (kernel, host writer, and now a loader), living in GRUB's source
+tree, under GPLv3, in an MIT repo — and rotting silently the next time
+the on-disk format moves.
+
+**What real systems do, and it is unanimous.** GRUB reads Linux's
+`/boot` because it ships an ext4 driver. Where it does not — early
+btrfs, ZFS, an encrypted root — every distribution's answer is the same:
+a small separate `/boot` in a filesystem the loader already understands.
+UEFI made that universal, and the ESP is FAT32 for exactly this reason:
+firmware speaks only FAT. Windows does it with its own System Reserved
+volume holding `bootmgr`. Writing a filesystem driver FOR THE LOADER is
+the ZFS path, and it is why ZFS-on-root took years to become routine.
+
+So: three partitions, which is what `tools/seed_disk.py` gives a blank
+image.
+
+    p1   1 MiB   BIOS boot   GRUB's core.img, embedded, no filesystem
+    p2  64 MiB   ESP/FAT32   /boot/kernel.bin + /boot/grub
+    p3  rest     data        TFS3, the OS's own filesystem
+
+**Three alternatives were considered and rejected.** A GRUB module for
+TFS3 — the "purest" answer to the literal question, and the most
+expensive, for the reasons above. Blocklists (`multiboot2 (hd0)+N`),
+which need no filesystem at all and are genuinely the smallest thing
+that works — rejected because the kernel's size gets baked into the
+boot sector, and because "a browsable `/boot`" is most of the point.
+And doing nothing, which keeps a system that cannot boot itself.
+
+**FAT32 also buys the two things next in line.** The partition is typed
+as an EFI System Partition, so the roadmap's UEFI track becomes "add a
+second core image to the same partition" rather than "design a second
+disk layout". And when the planned FAT32 backend lands, toy-os can read
+and write its own `/boot` — which is what it would take for this OS to
+update its own kernel.
+
+**The install is three writes, and each has a trap**
+(`tools/install_grub.py` carries the detail):
+
+- `boot.img` at LBA 0, patched with the LBA of `core.img` at offset
+  `0x5c` **and with the existing partition table and disk signature
+  (bytes `0x1b8`–`0x200`) kept**. Forget the second and the machine
+  boots beautifully off a disk that now describes no partitions.
+- `core.img` into the BIOS boot partition, contiguous, with the block
+  list in its first sector's last 12 bytes pointed at the rest of
+  itself. That is what `grub-bios-setup` patches; a `core.img` written
+  without it loads one sector and jumps into nothing.
+- The FAT volume, written with `mtools` (`mformat`/`mcopy` on a
+  `file@@offset` window) — no root, no loop device, no mount. That is
+  the property that makes this work in a plain checkout and in CI.
+
+**Nothing reformats anything.** `install_grub.py` refuses an image with
+no boot partition rather than reshaping one, and the build passes
+`--optional` so a `disk.img` that predates this layout keeps building
+and keeps booting — off the ISO. `make clean-disk && make iso` is the
+opt-in, the same one that moved TFS2 to TFS3 and flat to partitioned.
+The FAT volume is formatted ONCE and then written into, so anything the
+OS itself eventually puts in `/boot` survives a rebuild.
+
+**The boot medium is derived, not declared.** `boot_medium()` asks the
+image whether GRUB is on it, and the Makefile, `vm.py`, `qmp_test.py`,
+`boot_smoke_test.py` and `serial_console.py` all ask that one function.
+Deriving rather than flag-flipping matters because the failure is
+asymmetric: guessing CD when the disk was bootable costs a slightly
+slower boot, while guessing DISK when it was not hangs with no serial
+output at all (`0x55AA` at LBA 0 is all SeaBIOS checks). `BOOT=disk` /
+`BOOT=cd` and `--boot` override it.
+
+**The ISO is not deprecated and cannot be.** The live and demo images
+boot with NO disk attached — that is the whole property they test — and
+a release is a downloadable ISO. What changed is which medium the
+ORDINARY path uses, not how many there are.
+
+**The kernel had to learn that two partitions are not its business.**
+`vfs.c`'s scan now skips a partition whose type says it belongs to the
+firmware (`partition_is_firmware()`: GPT BIOS boot or ESP, MBR type
+`0xEF`). Without that, the "no partition holds a filesystem — leave the
+first one active" fallback hands `fsformat` the 1 MiB partition holding
+GRUB. That is not a hypothetical: it is what the positive control did,
+and `tools/partition_test.py`'s last phase is the check that it stays
+fixed, asserting the partition NUMBER left active rather than that a
+cheerful line was printed.
+
+**What this does not do.** No UEFI boot (BIOS/i386-pc only, though the
+ESP is now where a UEFI loader would go). No `/boot` visible from inside
+the running OS, because there is no FAT driver yet — `docs/filesystem-
+layout.md` says why there is deliberately no TFS3 `/boot` either. And
+nothing installs toy-os onto a disk from inside toy-os; `disk.img` is
+still built by the host.

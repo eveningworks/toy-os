@@ -38,6 +38,54 @@
 #define SCRATCH_SECTORS 1024
 #define SCRATCH_BYTES (SCRATCH_SECTORS * 512)
 
+// The BIOS boot and EFI System type GUIDs, spelled out here rather than
+// shared with partition.c on purpose: a test that imports the constant
+// under test asserts that the code equals itself. These bytes came off
+// the disk tools/install_grub.py writes.
+static const uint8_t TYPE_BIOS_BOOT[16] = {
+    0x48, 0x61, 0x68, 0x21, 0x49, 0x64, 0x6F, 0x6E,
+    0x74, 0x4E, 0x65, 0x65, 0x64, 0x45, 0x46, 0x49,
+};
+static const uint8_t TYPE_ESP[16] = {
+    0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11,
+    0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B,
+};
+static const uint8_t TYPE_BASIC_DATA[16] = {
+    0xA2, 0xA0, 0xD0, 0xEB, 0xE5, 0xB9, 0x33, 0x44,
+    0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7,
+};
+
+// What stops `fsformat` eating the bootloader. disk.img's first two
+// partitions hold GRUB's core.img and /boot/kernel.bin; vfs.c's scan
+// asks this about every entry before it probes one or leaves one
+// active, so getting it wrong is not a wrong listing -- it is a
+// formatted boot partition.
+KTEST("partition", "the firmware's partitions are recognised as not ours") {
+    struct partition_entry pe;
+
+    k_memset(&pe, 0, sizeof pe);
+    k_memcpy(pe.gpt_type_guid, TYPE_BIOS_BOOT, 16);
+    KTEST_ASSERT(partition_is_firmware(&pe, PART_TABLE_GPT));
+
+    k_memcpy(pe.gpt_type_guid, TYPE_ESP, 16);
+    KTEST_ASSERT(partition_is_firmware(&pe, PART_TABLE_GPT));
+
+    // The one every toy-os filesystem partition carries -- if this came
+    // back true the OS would refuse to mount its own root.
+    k_memcpy(pe.gpt_type_guid, TYPE_BASIC_DATA, 16);
+    KTEST_ASSERT(!partition_is_firmware(&pe, PART_TABLE_GPT));
+
+    // An MBR entry has no GUID at all, so the same table must be read
+    // through its type byte -- a GPT-only check would silently pass
+    // every legacy partition through.
+    k_memset(&pe, 0, sizeof pe);
+    k_memcpy(pe.gpt_type_guid, TYPE_ESP, 16);   // ignored for an MBR
+    pe.mbr_type = 0x83;
+    KTEST_ASSERT(!partition_is_firmware(&pe, PART_TABLE_MBR));
+    pe.mbr_type = 0xEF;
+    KTEST_ASSERT(partition_is_firmware(&pe, PART_TABLE_MBR));
+}
+
 KTEST("partition", "validate refuses partitions that overlap each other") {
     static struct partition_table t;
     k_memset(&t, 0, sizeof t);

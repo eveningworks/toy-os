@@ -210,14 +210,26 @@ static int try_partitions(void) {
     klog_printf("fs: %s partition table, %d entries\n",
                 tbl.kind == PART_TABLE_GPT ? "GPT" : "MBR", tbl.entry_count);
 
-    // Remembered so the "nothing mounted" path below can re-register
-    // partition 1 -- see there.
+    // Remembered so the "nothing mounted" path below can re-register the
+    // first partition that is ours -- see there.
     uint32_t first_base = 0, first_count = 0;
-    int first_ok = 0;
+    int first_ok = 0, first_index = 1;
 
     for (int i = 0; i < tbl.entry_count; i++) {
         const struct partition_entry *pe = &tbl.entries[i];
         uint32_t base, count;
+
+        // THE FIRMWARE'S PARTITIONS ARE NOT OURS. A BIOS boot partition
+        // holds GRUB's core.img with no filesystem in it, and the ESP
+        // holds /boot/kernel.bin -- this OS's own disk has both in front
+        // of the filesystem now (tools/install_grub.py). Skipping them
+        // here does two things: no backend probes them, and neither can
+        // become the "leave partition 1 active" fallback below, which
+        // would point `fsformat` at the bootloader.
+        if (partition_is_firmware(pe, tbl.kind)) {
+            klog_printf("fs: partition %d is the firmware's (bootloader/ESP) -- not ours\n", i + 1);
+            continue;
+        }
 
         if (tbl.kind == PART_TABLE_GPT) {
             // GPT's range is INCLUSIVE at both ends, so the count is
@@ -243,7 +255,9 @@ static int try_partitions(void) {
         }
 
         if (!blk_part_register(disk, base, count, i + 1)) continue;
-        if (!first_ok) { first_base = base; first_count = count; first_ok = 1; }
+        if (!first_ok) {
+            first_base = base; first_count = count; first_index = i + 1; first_ok = 1;
+        }
 
         for (int b = 0; b < FS_BACKEND_COUNT; b++) {
             const struct fs_ops *fs = g_backends[b];
@@ -265,10 +279,11 @@ static int try_partitions(void) {
     // what a freshly `mkpart`ed disk looks like.
     //
     // LEAVE THE FIRST PARTITION ACTIVE rather than restoring the whole
-    // disk. `fsformat` formats whatever the active block device is, so
-    // this is what makes "mkpart, reboot, fsformat" put a filesystem
-    // INSIDE partition 1 instead of flat across the table and every
-    // partition it describes. Restoring the disk here was the obvious
+    // disk -- the first one that is OURS, since a firmware partition
+    // never reaches this loop. `fsformat` formats whatever the active
+    // block device is, so this is what makes "mkpart, reboot, fsformat"
+    // put a filesystem INSIDE a partition instead of flat across the
+    // table and every partition it describes. Restoring the disk here was the obvious
     // thing and it is the wrong thing: it would make the one command
     // you reach for next quietly undo the one you just ran.
     //
@@ -277,9 +292,10 @@ static int try_partitions(void) {
     // a broken table, and refusing to have any active device at all
     // would be a worse answer than the one this OS has always given.
     if (first_ok) {
-        klog_printf("fs: no partition holds a filesystem -- leaving partition 1 "
-                    "active (LBA %u, %u sectors) for `fsformat`\n", first_base, first_count);
-        blk_part_register(disk, first_base, first_count, 1);
+        klog_printf("fs: no partition holds a filesystem -- leaving partition %d "
+                    "active (LBA %u, %u sectors) for `fsformat`\n",
+                    first_index, first_base, first_count);
+        blk_part_register(disk, first_base, first_count, first_index);
     } else {
         blk_register(disk);
     }

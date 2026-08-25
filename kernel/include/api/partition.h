@@ -72,6 +72,14 @@ struct partition_table {
 // callers only need to check out->kind, not this return value.
 int partition_read_table(struct partition_table *out);
 
+// Is this partition the FIRMWARE's rather than an OS's? A GPT BIOS boot
+// partition or an EFI System Partition (MBR: type 0xEF). Both are on
+// toy-os's own disk -- GRUB's core.img and /boot/kernel.bin live in
+// them -- and the boot-time scan neither mounts from one nor offers one
+// to `fsformat`. See partition.c for the GUIDs and the reasoning.
+int partition_is_firmware(const struct partition_entry *pe,
+                          enum partition_table_kind kind);
+
 // ---- writing --------------------------------------------------------
 //
 // Writing a table is DESTRUCTIVE and this half of the API does not

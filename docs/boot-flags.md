@@ -35,8 +35,12 @@ Note `grub.cfg` sets `timeout=0`, so no menu is drawn by default: hold
 sets a non-zero `GRUB_TIMEOUT`.
 
 **Permanently** — add the word to the `multiboot2` line in `grub.cfg`
-and `make iso`. Note the ISO's copy is generated from the repo-root
-`grub.cfg`; edit that one, not `iso/boot/grub/grub.cfg`.
+and `make iso`. Note the repo-root `grub.cfg` is the SOURCE for two
+generated copies -- `iso/boot/grub/grub.cfg` in the ISO and
+`/boot/grub/grub.cfg` inside `disk.img`'s FAT32 boot partition, which is
+the one an ordinary boot reads. Edit the repo-root file; editing either
+copy is overwritten by the next build, and editing only one of them
+gives you a machine whose two boot media disagree.
 
 ## Not flags, and why
 

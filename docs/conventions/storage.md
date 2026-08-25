@@ -282,7 +282,7 @@ and one `continue` is worth keeping ahead of the backend that needs it;
 what is not worth keeping is a guard nobody consults, so
 `try_partitions()` reads it on every candidate.
 
-## A PARTITIONED DISK IS NEVER AUTO-FORMATTED, AND PARTITION 1 IS LEFT ACTIVE
+## A PARTITIONED DISK IS NEVER AUTO-FORMATTED, AND THE FIRST PARTITION THAT IS OURS IS LEFT ACTIVE
 
 Boot treats an unclaimed readable disk as blank and formats it. Once a
 table exists that is wrong: the partitions were probed and none held a
@@ -294,10 +294,20 @@ can coexist — so `parttable` would keep printing both partitions
 correctly while a whole-disk filesystem lay across their data. A
 corruption that passes its own diagnostic.
 
-So `vfs.c` mounts RAM-only and says so, **and leaves partition 1 as the
-active block device**. `fsformat` formats whatever is active, so that is
-what makes `mkpart` → reboot → `fsformat` put a filesystem inside
-partition 1 rather than flat across the table.
+So `vfs.c` mounts RAM-only and says so, **and leaves the first partition
+that is OURS as the active block device**. `fsformat` formats whatever is
+active, so that is what makes `mkpart` → reboot → `fsformat` put a
+filesystem inside a partition rather than flat across the table.
+
+**"Ours" is doing real work in that sentence.** The stock `disk.img`
+starts with a 1 MiB BIOS boot partition holding GRUB's `core.img` and a
+64 MiB FAT32 `/boot` — see the boot convention below — and
+`partition_is_firmware()` (GPT BIOS-boot or ESP type, MBR `0xEF`) is what
+keeps both of them out of this loop entirely. Without it the fallback
+hands `fsformat` the bootloader, which is a command that has always been
+destructive pointed at a partition where it is unrecoverable. Real
+installers make exactly this distinction: an ESP is never offered as a
+root filesystem target.
 
 ## WRITING A TABLE IS A SYSCALL THAT TAKES A TABLE, NOT A SECTOR
 
@@ -322,14 +332,67 @@ discipline the virtio drivers follow with their interrupt enables.
 the next boot; Linux is the same, and refuses to re-read a table on a
 busy disk.
 
-## A PARTITION TABLE MAKES A DATA DISK LOOK BOOTABLE, AND QEMU HANGS WITH NO OUTPUT
+## TOY-OS BOOTS FROM ITS OWN DISK, AND `/boot` IS FAT32 BECAUSE GRUB CANNOT READ TFS3
+
+`disk.img` carries the kernel now. A blank image gets three partitions:
+
+    p1   1 MiB   BIOS boot   GRUB's core.img, embedded, no filesystem
+    p2  64 MiB   ESP/FAT32   /boot/kernel.bin + /boot/grub
+    p3  rest     data        TFS3, the OS's own filesystem
+
+An MBR image (`seed_disk.py --partition mbr`) gets two: there is no BIOS
+boot partition because an MBR leaves a GAP between the boot sector and
+the first partition, and that is where `core.img` has been embedded
+since GRUB 2 shipped. GPT has no gap, which is the entire reason its own
+partition type exists.
+
+**The separate `/boot` is not a workaround, it is what every system that
+hits this does.** GRUB has no TFS3 driver, and writing one means a third
+implementation of the format inside GRUB's GPLv3 source tree. Linux gets
+`/boot` on ext4 only because GRUB ships an ext4 driver; where it does not
+(early btrfs, ZFS, an encrypted root) the answer is a small separate
+`/boot` in a filesystem the loader understands, and UEFI made that
+universal — the ESP is FAT32 because firmware speaks only FAT. Windows
+does the same with its System Reserved volume.
+
+`tools/install_grub.py` writes all three pieces on every `make iso`, and
+its docstring carries the traps (the boot sector must keep the existing
+partition table; `core.img`'s first sector needs its own block list).
+**It never partitions and never reformats an existing `/boot`** — an
+image predating this layout has nowhere to install to, so nothing is
+installed and it keeps booting off the ISO. `make clean-disk && make
+iso` is the opt-in.
+
+**The ISO is still a boot medium** — the live and demo images boot with
+NO disk, and a release is an ISO. What changed is which medium the
+ordinary path uses.
+
+**`/boot` is not visible from inside toy-os**, because there is no FAT
+driver yet. Do not create a TFS3 `/boot` to fill the gap; see
+`docs/filesystem-layout.md`.
+
+## NEVER LEAVE THE BOOT ORDER OUT OF A QEMU LINE, AND ASK `boot_medium()` WHICH ONE
 
 SeaBIOS decides a hard disk is bootable from `0x55AA` at LBA 0 — which
-every MBR has, protective ones included. A partitioned `disk.img` is
-therefore something the BIOS will try to boot, and it jumps into 446
-bytes of filesystem data and stops **with no serial output at all**,
-which reads exactly like a kernel that died before its first print.
+every MBR has, protective ones included. So with no explicit order it
+boots any partitioned disk, and if nothing installed a bootloader on
+that one it jumps into 446 bytes of table and stops **with no serial
+output at all**, which reads exactly like a kernel that died before its
+first print.
 
-`-boot order=d` is in the Makefile's `QEMU_RUN`, `tools/vm.py` and
-`qmp_test.py`'s `launch_qemu_cmd()` for this reason. It was harmless
-before and is load-bearing now. Any hand-rolled QEMU line needs it too.
+Which order is right is a property of the IMAGE, so it is derived rather
+than fixed: `install_grub.boot_medium()` asks whether GRUB is on the
+disk, and the Makefile's `QEMU_RUN`, `tools/vm.py`,
+`qmp_test.py`'s `launch_qemu_cmd()`, `boot_smoke_test.py` and
+`serial_console.py` all ask that one function. `BOOT=disk`/`BOOT=cd` and
+`--boot` override it.
+
+**The error is asymmetric**, which is why the predicate looks for GRUB's
+own stamp in the boot sector rather than for a partition table: guessing
+CD when the disk was bootable costs a slower boot, and guessing DISK
+when it was not is the silent hang above.
+
+A tool that builds its OWN image hardcodes `-boot order=d`, because
+nothing put a bootloader on it — `partition_test.py`,
+`virtio_boot_test.py` and `run_release.sh`, each of which says so where
+it launches.

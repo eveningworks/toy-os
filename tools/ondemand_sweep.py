@@ -76,7 +76,10 @@ TOOLS = [
     ("console",     "console_shell_test.py",   "a text boot reaching a ring-3 shell", True, None,                   False),
     ("ctrlc",       "ctrlc_test.py",           "Ctrl-C interrupting a real job",     True,  None,                   False),
     ("jobs",        "jobs_test.py",            "job control: fg, bg, &, Ctrl-Z",     True,  None,                   False),
-    ("stdin",       "stdin_test.py",           "blocking fd 0 and /bin/tosh",        True,  None,                   False),
+    # wants_vm: stdin_test ATTACHES to a running guest (its own docstring
+    # says to start one first), and without it dies instantly on the
+    # serial socket -- the sweep's fault, per the note above.
+    ("stdin",       "stdin_test.py",           "blocking fd 0 and /bin/tosh",        True,  None,                   True),
     ("terminal",    "terminal_probe.py",       "the GUI Terminal's keys and paging", True,  None,                   True),
     ("grep",        "grep_test.py",            "/bin/grep through a real shell",     True,  None,                   True),
     ("ansi",        "ansi_cursor_test.py",     "ANSI cursor movement, as pixels",    True,  None,                   False),
@@ -143,6 +146,10 @@ def precondition_met(kind):
         # says every check in it passes VACUOUSLY. A precondition that
         # is wrong in the permissive direction manufactures coverage
         # that does not exist, which is worse than reporting a failure.
+        # Reading the ISO's copy is still right even though an ordinary
+        # boot reads disk.img's: both are generated from the repo-root
+        # template with the same KCMDLINE in one `make iso`, so they
+        # cannot disagree about what was baked in.
         cfg = os.path.join(REPO, "iso", "boot", "grub", "grub.cfg")
         if not os.path.exists(cfg):
             return False, "no built ISO tree -- run `make iso` first"

@@ -291,6 +291,31 @@ copy could only disagree with it silently. See `docs/decisions.md`.
 
 ## Interactive runs, and the two extra ISOs
 
+**WHICH MEDIUM A RUN BOOTS, because it is no longer always the ISO.**
+`disk.img` carries GRUB and the kernel (`tools/install_grub.py`), so an
+ordinary `make run` -- and every headless launch through `vm.py`,
+`launch_qemu_cmd()`, `boot_smoke_test.py` or `serial_console.py` -- is
+`-boot order=c` with **no `-cdrom` at all**. The ISO is still what the
+live and demo images ARE, and what a release ships.
+
+The choice is DERIVED from the image, by `install_grub.boot_medium()`:
+an image with no GRUB on it (one built before this layout) boots the ISO
+instead, so an old checkout keeps working. Override with `BOOT=disk` /
+`BOOT=cd` on `make run`, or `--boot` on `vm.py`. Two consequences for
+testing:
+
+- **`make iso` is still the target to run before a headless test**, even
+  though the ISO is not what boots. It is what re-seeds `disk.img` and
+  reinstalls the kernel on it; `make all` reaches no medium at all.
+  `tools/iso_guard.py` compares against `build/.bootdisk` on a disk boot
+  and against `toy-os.iso` on a CD boot, so a stale one is refused
+  either way.
+- **A tool that builds its own image hardcodes `-boot order=d`** --
+  `partition_test.py`, `virtio_boot_test.py`, `run_release.sh`. Nothing
+  installed a bootloader on those, and omitting the order entirely is
+  the worst option: SeaBIOS boots any disk with `0x55AA` at LBA 0 and
+  then hangs inside the partition table with no serial output at all.
+
 **`make run` uses `-display sdl,grab-mod=rctrl`, no explicit pointer
 device.** Two things worth knowing if you ever touch this line:
 `grab-mod` (the key that captures/releases the mouse once grabbed,

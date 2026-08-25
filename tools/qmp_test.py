@@ -130,13 +130,14 @@ import json
 import os
 import socket
 import time
+import install_grub
 import iso_guard
 import port_guard
 
 
 def launch_qemu_cmd(iso="toy-os.iso", disk="disk.img", serial_log="serial.log",
                      qmp_port=4445, vnc_display=5, pidfile="qemu.pid",
-                     kvm=False):
+                     kvm=False, boot="auto"):
     """Return the shell command to launch toy-os headlessly with QMP + a
     working input head. Run it as a plain foreground shell command --
     `-daemonize` makes QEMU fork/detach/return on its own, so it
@@ -159,8 +160,16 @@ def launch_qemu_cmd(iso="toy-os.iso", disk="disk.img", serial_log="serial.log",
     # through -- see tools/iso_guard.py. Only the ordinary ISO is
     # guarded: `live_boot_test.py` and `demo_test.py` pass their own,
     # which are built by separate targets and legitimately lag.
+    #
+    # WHICH MEDIUM has to be decided first, because it decides what
+    # "stale" means: the disk carries GRUB and the kernel now
+    # (tools/install_grub.py), so it boots itself and the ISO is what the
+    # DISKLESS images are. Derived, so an image predating the boot
+    # partition still boots off the ISO; `boot=` overrides.
+    medium = install_grub.boot_medium(disk, None if boot == "auto" else boot)
+
     if iso == "toy-os.iso":
-        iso_guard.assert_iso_fresh()
+        iso_guard.assert_iso_fresh(medium=medium)
 
     # A copy of disk.img older than the last seed -- see vm.py's note.
     iso_guard.warn_if_disk_stale(disk)
@@ -183,11 +192,13 @@ def launch_qemu_cmd(iso="toy-os.iso", disk="disk.img", serial_log="serial.log",
     accel = "-enable-kvm -cpu host " if kvm else ""
 
     drive = (f"-drive file={disk},format=raw,if=ide,discard=unmap " if disk else "")
+    boot_args = " ".join(install_grub.qemu_boot_args(medium, iso))
     return (
-        # -boot order=d: the CD is always the boot medium here. A disk
-        # with a partition table looks bootable to SeaBIOS (0x55AA at
-        # LBA 0) and hangs with no output at all -- see vm.py.
-        f"qemu-system-x86_64 {accel}-boot order=d -cdrom {iso} "
+        # `order=c` boots the disk's own GRUB, `order=d` the ISO. Never
+        # neither: a disk with a partition table looks bootable to
+        # SeaBIOS (0x55AA at LBA 0 is all it checks) and hangs with no
+        # output at all -- see vm.py.
+        f"qemu-system-x86_64 {accel}{boot_args} "
         # discard=unmap: the guest's ATA TRIM becomes a hole punch in the
         # backing file, so a test that writes and deletes doesn't grow it.
         f"{drive}"

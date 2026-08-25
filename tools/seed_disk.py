@@ -9,13 +9,16 @@ TFS3 -- the same policy kernel/fs/vfs.c's fs_init() applies to a blank
 disk. `make clean-disk && make iso` is therefore how a checkout moves
 to TFS3 on purpose; nothing migrates or reformats by surprise.
 
-**A BLANK IMAGE IS PARTITIONED NOW.** It gets a GPT with the filesystem
-inside partition 1, which is what a real OS's disk looks like and what
-makes the partition path (kernel/fs/vfs.c's scan,
-kernel/drivers/block/block_part.c's window) the one every test
-exercises rather than an on-demand tool. `--partition mbr` writes the
-legacy table instead; `--flat` writes the old whole-disk volume, which
-is still a supported layout and is what the live ISO's RAM image is.
+**A BLANK IMAGE IS PARTITIONED, AND BOOTABLE.** It gets a GPT holding a
+BIOS boot partition, a FAT32 /boot and the filesystem -- what a real
+OS's disk looks like, and what lets GRUB boot the kernel off the disk
+instead of off the ISO (see DEFAULT_LAYOUT below, and
+tools/install_grub.py for why /boot cannot be TFS3). It also makes the
+partition path (kernel/fs/vfs.c's scan, block_part.c's window) the one
+every test exercises rather than an on-demand tool. `--partition mbr`
+writes the legacy table instead; `--flat` writes the old whole-disk
+volume, which is still a supported layout and is what the live ISO's
+RAM image is.
 
 An EXISTING image keeps whatever layout it has -- partitioned or flat,
 found by tools/mkpart_test.py's volume_of() -- so a checkout does not
@@ -59,11 +62,16 @@ def run(tool, *args):
 
 
 def seed_partitioned(disk, seed_dir, kind, layout):
-    """Write a table, then put TFS3 inside partition 1 and seed it.
+    """Write a table, then put TFS3 in the FILESYSTEM partition and seed it.
 
     TFS3 is not a parameter: a backend can only live in a partition if
     it is volume-relative (kernel/include/kernel/fs_ops.h), and it is
     the only one there is. FAT32 makes this a choice.
+
+    NOT partition 1 -- the default layout puts a BIOS boot partition and
+    a FAT32 /boot in front of it so the disk can be booted from
+    (tools/install_grub.py). mkpart_test.volume_of() is what finds the
+    right one, and every host tool asks it rather than counting.
     """
     sys.path.insert(0, HERE)
     import mkpart_test
@@ -73,9 +81,15 @@ def seed_partitioned(disk, seed_dir, kind, layout):
 
     parts = (mkpart_test.real_gpt(disk, layout) if kind == "gpt"
              else mkpart_test.real_mbr(disk, layout))  # noqa: E501
-    start, sectors = parts[0]
-    print(f"seed_disk: wrote a {kind.upper()} table; "
-          f"partition 1 is LBA {start}, {sectors} sectors")
+    print(f"seed_disk: wrote a {kind.upper()} table -- "
+          + ", ".join(f"p{i + 1} {n // 2048} MiB" for i, (_lba, n) in enumerate(parts)))
+    start, sectors = mkpart_test.volume_of(disk)
+    index = next(i + 1 for i, (lba, _n) in enumerate(parts) if lba == start)
+    # Named, and machine-readable, because it is no longer "partition 1"
+    # -- tools/partition_test.py reads this line to know which partition
+    # to make its assertions about.
+    print(f"seed_disk: filesystem in partition {index} -- "
+          f"LBA {start}, {sectors} sectors")
 
     # --force because the sectors inside a fresh partition are whatever
     # the image held there before, which may well be an old filesystem's
@@ -89,6 +103,25 @@ def seed_partitioned(disk, seed_dir, kind, layout):
 
 DEFAULT_PARTITION = "gpt"   # what a BLANK image gets
 
+# THE BOOTABLE LAYOUT, and the reason a blank image gets three
+# partitions rather than one: toy-os boots from its own disk, and GRUB
+# cannot read TFS3. So the kernel lives in a filesystem GRUB already
+# understands, in front of the one the OS uses.
+#
+#   p1  1 MiB   BIOS boot   GRUB's core.img, embedded, no filesystem
+#   p2  64 MiB  ESP/FAT32   /boot/kernel.bin + /boot/grub
+#   p3  rest    data        TFS3, the OS's own filesystem
+#
+# tools/install_grub.py writes p1 and p2; this tool writes p3 and never
+# touches the other two. See that file for why /boot is FAT.
+DEFAULT_LAYOUT = "1M:bios,64M:esp,rest"
+
+# ...and the MBR's, which needs no BIOS boot partition: an MBR leaves a
+# gap between the boot sector and the first partition, and that is where
+# core.img has always been embedded. GPT has no gap, which is the entire
+# reason its own partition type exists.
+DEFAULT_LAYOUT_MBR = "64M:esp,rest"
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
@@ -101,9 +134,11 @@ def main():
                     help="build a whole-disk volume at LBA 0 instead of "
                          "partitioning -- still supported, and what the live "
                          "ISO's RAM image is")
-    ap.add_argument("--layout", default="rest", metavar="SIZE[,SIZE...]",
-                    help="partition sizes, e.g. '64M,rest' (default: one "
-                         "partition filling the disk)")
+    ap.add_argument("--layout", default=None, metavar="SIZE[:KIND][,...]",
+                    help=f"partition sizes, e.g. '64M,rest'; a :KIND suffix "
+                         f"names the type (bios, esp, data). Default: "
+                         f"'{DEFAULT_LAYOUT}' for a GPT, "
+                         f"'{DEFAULT_LAYOUT_MBR}' for an MBR")
     args = ap.parse_args()
     disk, seed_dir = args.disk, args.seed_dir
 
@@ -127,24 +162,38 @@ def main():
             base, sectors = 0, 0
         else:
             kind = args.partition or DEFAULT_PARTITION
-            print(f"seed_disk: {disk} is blank -- {kind.upper()} with tfs3 in "
-                  f"partition 1 (--flat for the old whole-disk layout)")
-            seed_partitioned(disk, seed_dir, kind, args.layout)
+            layout = args.layout
+            if layout is None:
+                layout = DEFAULT_LAYOUT if kind == "gpt" else DEFAULT_LAYOUT_MBR
+            print(f"seed_disk: {disk} is blank -- {kind.upper()}, bootable "
+                  f"layout (--flat for the old whole-disk one)")
+            seed_partitioned(disk, seed_dir, kind, layout)
             return
     elif fmt is None:
-        # A table, but no filesystem in partition 1 -- a `mkpart`ed disk
-        # that was never formatted. Format into the partition rather
-        # than treating the image as blank and laying a volume over the
+        # A table, but no filesystem in it -- a `mkpart`ed disk that was
+        # never formatted. Format into the partition rather than
+        # treating the image as blank and laying a volume over the
         # table, which is the same refusal the kernel makes at boot.
-        print(f"seed_disk: {disk} is partitioned but partition 1 is empty -- "
-              f"formatting it")
+        print(f"seed_disk: {disk} is partitioned but has no filesystem -- "
+              f"formatting partition at LBA {base}")
         run("tfs3_writer.py", "format", disk,
             "--at-lba", str(base), "--sectors", str(sectors), "--force")
 
-    where = f"partition 1 (LBA {base}, {sectors} sectors)" if partitioned else "flat at LBA 0"
+    where = f"a partition (LBA {base}, {sectors} sectors)" if partitioned else "flat at LBA 0"
     print(f"seed_disk: {disk} is tfs3, {where}")
     extra = ["--at-lba", str(base), "--sectors", str(sectors)] if partitioned else []
     run("tfs3_writer.py", "sync", disk, seed_dir, *extra)
+
+    # An image built before the boot partition existed still WORKS -- it
+    # just cannot be booted from, so every launcher here falls back to
+    # the ISO for it (tools/install_grub.py's is_bootable()). Say so
+    # once, rather than leaving the difference to be noticed as a
+    # mysteriously slower boot.
+    import install_grub
+    if not install_grub.is_bootable(disk):
+        print(f"seed_disk: {disk} has no boot partition -- booting from the ISO. "
+              f"`make clean-disk && make iso` rebuilds it bootable (it DESTROYS "
+              f"what is on the image, which is why nothing does it for you).")
 
 
 if __name__ == "__main__":
