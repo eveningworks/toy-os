@@ -1560,9 +1560,13 @@ window without going through it will find its layout polls timing out.
   `--disk` is older than the last seed. Testing against a copy is the
   documented way to dodge QEMU's write lock and to stop `make iso`
   re-seeding an image underneath a running VM -- but `make iso` re-seeds
-  the real `disk.img` with the newly built `/bin` binaries, so a copy
-  taken before a rebuild runs the NEW kernel against the OLD userland,
-  which reads exactly like a bug in the app. Measured 2026-08-19, in the
+  the real `disk.img` with the newly built `/bin` binaries AND installs
+  the new kernel on it, so a copy taken before a rebuild is an entire
+  earlier build: it boots the previous kernel too, with nothing
+  mismatched to give it away. (Before the disk carried a kernel this was
+  the narrower "new kernel from the ISO against the old userland"; the
+  warning names whichever case applies.) Either way it reads exactly
+  like a bug in the app. Measured 2026-08-19, in the
   worst possible place: a POSITIVE CONTROL for `/bin/ls`'s truncation
   message, where the guest ran the previous `ls` and the message did not
   appear -- a control that fails reads as "the feature is broken", not

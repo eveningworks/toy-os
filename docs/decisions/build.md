@@ -722,9 +722,13 @@ prerequisite. A target-specific variable would not have; this is
 precisely why they were targets in the first place.
 
 **`MENU=1` is the odd axis**, since GRUB's timeout is baked into
-`grub.cfg` at ISO build time rather than passed to QEMU. It derives
-`GRUB_TIMEOUT` (`?= $(if $(MENU),5,0)`), so the ISO is rebuilt with the
-menu and `GRUB_TIMEOUT=` still overrides both.
+`grub.cfg` at BUILD time rather than passed to QEMU. It derives
+`GRUB_TIMEOUT` (`?= $(if $(MENU),5,0)`), so the media are rebuilt with
+the menu and `GRUB_TIMEOUT=` still overrides both. "Media" plural since
+the kernel moved onto the disk: one repo-root `grub.cfg` is generated
+into the ISO tree AND into `disk.img`'s FAT32 `/boot/grub`, in the same
+`make iso`, so a timeout (or a `KCMDLINE=`) cannot reach one medium and
+miss the other.
 
 Verified with `make -n run <FLAGS>` across every axis, which is the
 check worth repeating: it prints the command line without running it,

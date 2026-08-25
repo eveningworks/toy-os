@@ -87,8 +87,10 @@ a code path reachable for testing.
 
 ## Setting one without editing the menu
 
-Every word above can be baked into the ISO at build time, instead of
-pressing `e` in the GRUB menu and retyping it on each boot:
+Every word above can be baked in at build time, instead of pressing `e`
+in the GRUB menu and retyping it on each boot. `make iso` bakes it into
+BOTH ordinary media -- the ISO and `disk.img`'s FAT32 `/boot/grub` --
+from one repo-root `grub.cfg`, so it takes effect whichever one boots:
 
 ```
 make iso       KCMDLINE="video=1920x1080"

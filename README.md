@@ -282,8 +282,9 @@ cd toy-os
 make run
 ```
 
-That builds the kernel, seeds a disk image, produces `toy-os.iso` and
-boots it in QEMU. **init brings the desktop up on its own**; *Exit to
+That builds the kernel, seeds a disk image, installs GRUB and the kernel
+onto it, and boots **the disk** in QEMU — no CD involved (`make run
+BOOT=cd` boots the ISO instead). **init brings the desktop up on its own**; *Exit to
 shell* in the Start menu drops to the `/>` prompt, and `gui` goes back.
 For a text-only boot, `make iso KCMDLINE="target=text"`. PageUp/PageDown
 scrolls the console history, including the boot log.
@@ -644,6 +645,9 @@ ships `toy-os.iso`, a gzipped `disk.img.gz` and `run_release.sh`, a
 standalone launcher needing no checkout. The disk image matters: there is
 no installer yet, so the pre-seeded image is what puts `/bin/ls` and
 friends on the filesystem — the ISO alone boots into a near-empty one.
+Since the kernel moved onto the disk, `disk.img.gz` is bootable on its
+own too; `run_release.sh` still boots the ISO, so that one script runs an
+older release's disk image as well as a current one.
 
 ## License
 

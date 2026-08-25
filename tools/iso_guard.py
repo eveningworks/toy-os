@@ -233,6 +233,13 @@ def check_disk_fresh(disk: str, repo: Path = REPO):
     OLD ones -- and the VM then runs the NEW kernel from the ISO against
     the OLD userland.
 
+    THAT GOT WORSE, and the fix is the same. The kernel is installed
+    onto disk.img too now, so a copy is a BOOT MEDIUM: a stale one runs
+    the previous kernel as well as the previous userland, which is a
+    consistent earlier build masquerading as this one -- and therefore
+    even harder to spot than a mismatched pair. The message says which
+    of the two you are looking at.
+
     That reads exactly like a bug in the app. It cost a session a wrong
     conclusion in the worst possible place: a POSITIVE CONTROL, lowering
     a kernel limit to prove /bin/ls would report a truncated listing. The
@@ -262,10 +269,20 @@ def check_disk_fresh(disk: str, repo: Path = REPO):
         return []
     lag = seeded.stat().st_mtime - d.stat().st_mtime
     if lag > 0:
+        # WHAT A STALE COPY COSTS YOU GREW. It has always held the
+        # previous /bin binaries; now that the kernel is installed onto
+        # the image too (tools/install_grub.py), a copy the guest BOOTS
+        # runs the previous kernel as well -- so the mismatch is no
+        # longer new-kernel-against-old-userland, it is a whole previous
+        # build wearing the current one's name.
+        import install_grub
+        what = ("the previous kernel AND /bin binaries -- the guest would run "
+                "an entire earlier build" if install_grub.is_bootable(str(d))
+                else "the previous /bin binaries, so the guest would run the "
+                     "new kernel against the old userland")
         problems.append(
-            f"{disk} was copied {lag:.0f}s BEFORE the last seed -- it holds the "
-            f"previous /bin binaries, so the guest would run the new kernel "
-            f"against the old userland. Re-copy it: "
+            f"{disk} was copied {lag:.0f}s BEFORE the last seed -- it holds "
+            f"{what}. Re-copy it: "
             f"cp --reflink=auto --sparse=always disk.img {disk}"
         )
     return problems

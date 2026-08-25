@@ -770,7 +770,9 @@ the traps that have to fire before you know to look anything up.
 
 ```
 make all    # kernel.bin + userland test ELFs
-make iso    # + toy-os.iso (grub-mkrescue)
+make iso    # + toy-os.iso (grub-mkrescue); ALSO seeds disk.img and
+            # installs GRUB + the kernel on it -- still the target to
+            # run before any headless test, whichever medium boots
 make test   # boot headless, run the in-kernel test suite
 make verify # the full pre-delivery gate: clean build + iso + boot test + ktest
             # (same as tools/preflight.sh, which also summarises `git status`)
@@ -788,7 +790,14 @@ make run KVM=1 VIRTIO=1 AUDIO=1 NOGRAPHIC=1 MENU=1 MEM=512
 make run DISK=virtio VGA=virtio INPUT=virtio   # what VIRTIO=1 is short for
 make run LIVE=1    # the live ISO, no disk attached (implies live-iso)
 make run DEMO=1    # the scripted tour, no disk (implies demo-iso)
+make run BOOT=cd   # boot the ISO; BOOT=disk forces the other way
 ```
+
+**`BOOT` IS DERIVED BY DEFAULT, AND THAT IS THE POINT.** `make run` boots
+the DISK, because `disk.img` carries GRUB and the kernel now
+(`tools/install_grub.py`) -- but only if that image actually has them, so
+a checkout whose `disk.img` predates the layout keeps booting the ISO
+with nothing to configure. `make -n run` prints the line it chose.
 
 **`VIRTIO=1` MEANS EVERY DEVICE CLASS -- disk, GPU and input -- not the
 disk.** It used to mean the disk alone, which is a name broader than its
@@ -818,13 +827,15 @@ not. **Every definition is DEFERRED (`=`, never `:=`) and uses `$(if
 ...)` rather than `ifeq`** -- `ifeq` is evaluated once when the Makefile
 is read, so a flag arriving later is invisible to it and silently does
 not appear. And **`MENU=1` works by deriving `GRUB_TIMEOUT`**, because
-the timeout is baked into `grub.cfg` at ISO build time rather than passed
-to QEMU. **Check a change here with `make -n run <FLAGS>`**, which prints
+the timeout is baked into `grub.cfg` at build time rather than passed to
+QEMU -- into BOTH media, since one repo-root `grub.cfg` is generated
+into the ISO tree and into `disk.img`'s FAT32 `/boot/grub`. **Check a change here with `make -n run <FLAGS>`**, which prints
 the command line without running it.
 
-**Boot flags can be baked into the ISO** rather than typed into the GRUB
-menu each boot: `make iso KCMDLINE="video=1920x1080 nokaslr"` (also
-`live-iso`/`demo-iso`). Empty by default, so every automated path is
+**Boot flags can be baked into the media** rather than typed into the
+GRUB menu each boot: `make iso KCMDLINE="video=1920x1080 nokaslr"` (also
+`live-iso`/`demo-iso`) -- into the ISO and into `disk.img`'s
+`/boot/grub/grub.cfg` alike, from one source file. Empty by default, so every automated path is
 unaffected. `docs/boot-flags.md` lists every word. **GRUB's `e` editor
 shows the menuentry BODY only**, so the boot-word summary is repeated
 inside each `menuentry` in the three `grub*.cfg` files -- keep the inline
@@ -877,9 +888,11 @@ open** -- QEMU takes a write lock, and `make iso` re-seeds `disk.img`
 underneath a VM already booted from it. `cp --reflink=auto
 --sparse=always disk.img /tmp/test.img` then `vm.py --disk /tmp/test.img`
 avoids both. **A COPY goes stale the moment you rebuild**, so re-copy
-after every `make iso`, not once at the start of a session: a VM booted
-from a stale copy runs the NEW kernel against the OLD userland, which
-reads exactly like a bug in the app.
+after every `make iso`, not once at the start of a session: a copy is a
+BOOT MEDIUM now (the kernel is installed onto the image), so a stale one
+runs an entire earlier build -- kernel and userland together, nothing
+mismatched to notice -- which reads exactly like a bug in the app.
+`iso_guard` warns and says which case you are in.
 
 **A copy is not enough for `make iso`/`make verify`/`preflight.sh` --
 ASK the user to close their QEMU first (standing request).** Those three

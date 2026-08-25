@@ -705,6 +705,15 @@ believe**, on BOTH sides of the comparison.
 
 ## A STALE COPY OF disk.img MADE A POSITIVE CONTROL LIE (2026-08-19)
 
+**AND A COPY IS A BOOT MEDIUM NOW (2026-08-25).** The kernel is
+installed onto `disk.img` itself, so a stale copy no longer means "the
+new kernel against the old userland" -- it means an entire previous
+build, kernel included, wearing the current one's name. That is harder
+to spot, not easier, because nothing is mismatched. `iso_guard`'s
+warning says which of the two you have; re-copy after every `make iso`,
+same as before.
+
+
 The control looked like it disproved the feature. `ls` reports a
 truncated listing when it fills its array; to prove that check could
 fire, the cap was lowered to 32 against a 40-file directory. It listed

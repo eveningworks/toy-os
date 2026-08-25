@@ -274,15 +274,19 @@ They stay in the tree, frozen, because ~800 places point into them.
 **2026-08-15 (hardening day): Milestone 2 closed, and three lessons
 that each cost real time.**
 
-- **`make all` does NOT rebuild `toy-os.iso`, and every headless test
-  boots the ISO.** A positive control (make `.text` writable, expect
-  the new W^X KTESTs to go red) came back 132/132 GREEN, which reads
-  exactly like "this test measures nothing" and sends you auditing the
-  test. The ISO was simply one build old. `make iso` before any
-  `ktest_run.py`/`boot_smoke_test.py`/`vm.py`/GUI run, and when a
-  positive control fires nothing, check `ls -l build/kernel.bin
-  toy-os.iso` BEFORE suspecting the harness. Same family as the
-  fixture lesson, different cause: the code never reached the machine.
+- **`make all` REACHES NO BOOT MEDIUM.** A positive control (make
+  `.text` writable, expect the new W^X KTESTs to go red) came back
+  132/132 GREEN, which reads exactly like "this test measures nothing"
+  and sends you auditing the test. The ISO was simply one build old.
+  `make iso` before any `ktest_run.py`/`boot_smoke_test.py`/`vm.py`/GUI
+  run, and when a positive control fires nothing, check whether the
+  build reached the machine BEFORE suspecting the harness. Same family
+  as the fixture lesson, different cause: the code never reached the
+  machine. (Written when the ISO was the only medium; a headless run
+  boots `disk.img` now, so the file to compare `build/kernel.bin`
+  against is `build/.bootdisk` -- `tools/iso_guard.py` does it for you
+  either way. The rule is unchanged, and `make iso` is still the target
+  that installs the kernel on both.)
 - **The kernel's own memory is W^X now**, and `linker.ld` is where the
   permissions are decided: four PT_LOAD segments, `ALIGN(4096)` between
   the bands, and `__kimage_start`/`__ktext_start`/`__ktext_end`/
@@ -1586,7 +1590,11 @@ the user can see), and the settings app keeps `choice_raw` beside
   filesystem, wrong the moment a FAT32 ESP sits in partition 1. Real
   systems NAME the root (`root=`, then `/etc/fstab`) rather than
   discovering it. Recorded as a roadmap item rather than guessed at,
-  because a cleverer probe order would only move the guess.
+  because a cleverer probe order would only move the guess. **That disk
+  arrived (see 2026-08-25), and the ESP half turned out to be answerable
+  by TYPE** -- a partition whose GPT type says it is the firmware's is
+  skipped entirely, which is what installers do. `root=` is still the
+  answer for two ordinary partitions that both hold a filesystem.
 
 **2026-08-25 (the kernel moved onto the disk, and `/boot` is FAT32).**
 

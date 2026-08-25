@@ -485,8 +485,9 @@ logs. Both traps cost a session real time; see `docs/decisions.md`.
 
 ## The fast boot check, and CI
 
-**`tools/boot_smoke_test.py`** -- a fast, non-GUI boot check: boots
-`toy-os.iso` headlessly, watches `serial.log` for the expected kernel
+**`tools/boot_smoke_test.py`** -- a fast, non-GUI boot check: boots the
+machine headlessly (the disk, or the ISO for an image that cannot boot
+itself), watches `serial.log` for the expected kernel
 init sequence (or a `PANIC:`), exits 0/1 in a few seconds. No QMP, no
 mouse/keyboard, no screenshots. Use this as the first check for a
 kernel/driver-level change (a new driver, a filesystem backend, a
