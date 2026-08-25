@@ -68,7 +68,7 @@ Written under seed/sync/ (not seed/once/) deliberately: these files
 are pure build output of this generator, the same as an ELF binary
 under seed/sync/bin/ -- every `make iso` should make disk.img's copy
 match the repo's exactly, the same content-hash-synced policy the
-existing `bin` binaries already get (see tools/tfs2_writer.py's
+existing `bin` binaries already get (see tools/tfs3_writer.py's
 `sync` docstring / CLAUDE.md's tools/ section for the once/ vs sync/
 split). seed/once/ is for content a session/user might have
 legitimately changed on the emulated disk since -- not the case here.

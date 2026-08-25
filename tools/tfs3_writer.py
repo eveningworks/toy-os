@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """tools/tfs3_writer.py -- host-side TFS3 v1 read/write tool.
 
-The TFS3 sibling of tools/tfs2_writer.py: gets files onto (or off of)
+The host-side TFS3 tool: gets files onto (or off of)
 a TFS3 disk image without booting toy-os, and is the reference
 implementation the kernel backend (kernel/fs/tfs3.c) is tested
 against. Format spec: docs/tfs3-design.md (block groups, 128-byte
@@ -20,7 +20,7 @@ Commands:
   trim   <img>                     punch holes through free blocks
 
 Write scope is direct + single-indirect blocks per file (12 + 1024
-blocks = ~4.05 MB), the same deliberate cap tfs2_writer.py has -- see
+blocks = ~4.05 MB), a deliberate cap -- see
 docs/decisions.md for why; the seeding path never needs more.
 
 Bit order in bitmaps: bit i of a group's bitmap is byte[i >> 3],
@@ -902,7 +902,9 @@ def cmd_delete(args):
 def cmd_sync(args):
     """Mirror a seed tree: <seed>/once/ copied only if missing,
     <seed>/sync/ content-hash-synced -- same convention as
-    tfs2_writer.py sync (see its docstring)."""
+    the convention the seed tree has always used: `once/` is a first-run
+    default a running system may then edit, `sync/` is build output that
+    should always match."""
     img = Tfs3Image(args.disk, writable=True, base_lba=getattr(args, "at_lba", 0), sectors=getattr(args, "sectors", 0))
     wrote = skipped = 0
     for mode in ("once", "sync"):
@@ -935,7 +937,9 @@ def cmd_sync(args):
 
 def cmd_trim(args):
     """Punch holes through every free block -- same job (and same
-    safety argument) as tfs2_writer.py trim; see its docstring."""
+    safety argument) as the seed step: a free block holds nothing, so
+    handing it back to the host costs nothing and keeps the image
+    sparse."""
     import ctypes
     FALLOC_FL_KEEP_SIZE = 0x01
     FALLOC_FL_PUNCH_HOLE = 0x02
@@ -971,7 +975,7 @@ def cmd_trim(args):
 def cmd_corrupt(args):
     """Inject KNOWN damage so the kernel's fsck (and its backup/journal
     recovery) can be tested against inconsistencies whose exact shape
-    is known in advance -- the same reasoning as tfs2_writer.py's
+    is known in advance -- the same reasoning as the writer's
     corrupt command: the kernel deliberately avoids producing these,
     so without this fsck could only ever be proven to report 'clean'.
     """

@@ -25,7 +25,7 @@
 //     is unchanged from before this build.
 //
 // ata_present()/ata_read_sector()/ata_write_sector() -- and every
-// existing caller (fs.c, tfs.c) -- neither know nor care which path is
+// existing caller (fs.c, TFS2) -- neither know nor care which path is
 // active; this is purely an ata.c-internal choice.
 //
 // Chosen over AHCI/SATA specifically because it needs nothing this
@@ -139,7 +139,7 @@ int ata_set_dma_forced_off(int off);
 // sectors (128 GiB) regardless of the real drive's size.
 //
 // Added so the filesystem can size itself to the disk it actually has
-// instead of a compile-time guess (see tfs.c's FS_DISK_TOTAL_BYTES and
+// instead of a compile-time guess (see TFS2's FS_DISK_TOTAL_BYTES and
 // its runtime clamp). ata_read_sectors()/ata_write_sectors() also
 // range-check against this themselves, so a transfer past the end of
 // the drive fails cleanly and loudly rather than being handed to the
@@ -214,7 +214,7 @@ int ata_write_sectors(uint32_t lba, int count, const void *buf);
 // No caller HAS to use this -- ata_write_sector(s) with no
 // begin()/end() around it behaves exactly as before (flush every
 // write), which is still what every crash-safety-sensitive path
-// (tfs.c's journal/table-slot writes in persist_record()) uses
+// (TFS2's journal/table-slot writes in persist_record()) uses
 // deliberately, unchanged. This is opt-in for genuinely bulk,
 // re-derivable-on-failure data (TFS2's write_range_impl() data-block
 // loop) where losing a bit of durability window in exchange for real
@@ -227,7 +227,7 @@ void ata_flush_end(void);
 // and a way to close a deferral region without one. Both exist for
 // write-ahead-journal-shaped callers, where a specific write must be
 // durable before the next is issued and the begin/end pair can't say
-// that -- see ata.c's own comments on each, and tfs.c's
+// that -- see ata.c's own comments on each, and TFS2's
 // persist_record() for the real caller. Don't reach for either just to
 // "flush a bit less"; ata_flush_begin()/end() is the tool for that.
 int ata_flush_now(void);
@@ -263,7 +263,7 @@ void ata_flush_end_no_flush(void);
 // Phase 1 of the async-I/O roadmap item (docs/roadmap.md): a
 // non-blocking start/poll pair for the DMA path, built alongside the
 // existing blocking ata_read_sectors()/ata_write_sectors() rather than
-// replacing them -- nothing in fs.c/tfs.c uses this yet. Only usable
+// replacing them -- nothing in fs.c/TFS2 uses this yet. Only usable
 // when ata_dma_active() is true (the PIO fallback has no equivalent;
 // polling a busy-wait loop non-blockingly isn't meaningfully
 // different from just blocking on it).

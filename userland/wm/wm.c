@@ -909,7 +909,7 @@ void wm_run(void) {
         // (below still runs, so the write keeps stepping to completion
         // -- wm_exit_requested stays set and this fires on the very next
         // tick after it finishes) rather than abandoning it mid-write:
-        // pending_write's handle owns kernel heap state (see tfs.c's
+        // pending_write's handle owns kernel heap state (see TFS2's
         // struct tfs_write_step) that only gets freed on a terminal
         // fs_write_range_step() result. Same reasoning for pending_read
         // (struct tfs_read_step), and for pending_proc: whichever window

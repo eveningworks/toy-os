@@ -1,6 +1,7 @@
 // TFS3 -- block groups, inodes, dirent blocks. Format spec:
 // docs/tfs3-design.md; host mirror: tools/tfs3_writer.py (the two are
-// kept in lockstep the way tfs.c and tfs2_writer.py are).
+// kept in lockstep with tools/tfs3_writer.py, which reads and writes
+// the same format from the host).
 //
 // STAGE B: probe/format/mount (with backup-superblock fallback) and
 // the whole READ side are real; every mutating op fails honestly with
@@ -100,7 +101,7 @@
 #define T3_PATH_BUF     256
 #define T3_NAME_MAX     255
 
-#define T3_SB_READ_RETRIES 3 // same transient-DMA-miss reasoning as tfs.c's
+#define T3_SB_READ_RETRIES 3 // same transient-DMA-miss reasoning as TFS2's
 
 // Default bytes-per-inode ratio for format(); tfs3_writer.py mirrors.
 #define T3_BYTES_PER_INODE 16384u
@@ -140,7 +141,7 @@ static struct t3_gd *g_gd = 0; // free-count caches, g_sb.gc entries
 
 // In-RAM copies of every group's block/inode bitmap (g_sb.gc * 4 KiB
 // each -- ~284 KiB per cache on the 9 GiB image, the same order as
-// tfs.c's static full-disk bitmap). RAM is the authority during
+// TFS2's static full-disk bitmap). RAM is the authority during
 // operation; changed blocks are written through, UNJOURNALED, with
 // the set-before-use / clear-after-persist ordering that makes a
 // crash cost a leak, never a double allocation -- TFS2's exact
@@ -184,7 +185,7 @@ static void ncache_flush(void) {
 }
 
 // One block of scratch for everything on this (single-threaded)
-// kernel -- same convention as tfs.c's g_io_scratch.
+// kernel -- same convention as TFS2's g_io_scratch.
 static uint8_t g_blk[T3_BLOCK];
 static uint8_t g_ptr_blk[T3_BLOCK]; // indirect-pointer scratch, kept separate from data
 
@@ -808,7 +809,7 @@ static void alog_rollback(void) {
     g_alog.active = 0;
 }
 
-// TRIM freed blocks in runs, best-effort -- parity with tfs.c's
+// TRIM freed blocks in runs, best-effort -- parity with TFS2's
 // free_block(): the block is free either way, a refused TRIM must not
 // fail the delete. Called with a sorted-ish run start/count.
 static void trim_run(uint32_t first_blk, uint32_t count) {
@@ -829,7 +830,7 @@ static void trim_run(uint32_t first_blk, uint32_t count) {
 // slots with the same crash guarantees TFS2 gives, for half the
 // journaled bytes. The doc's journal section records this.
 //
-// Commit discipline = persist_record()'s, generalized (see tfs.c for
+// Commit discipline = persist_record()'s, generalized (see TFS2 for
 // the two-barrier reasoning): stage images + committed header, FLUSH,
 // write targets, FLUSH, clear header (no barrier -- a stale committed
 // header just replays idempotently).
@@ -944,7 +945,7 @@ static int txn_commit(void) {
         g_txn_count = saved;
     } else {
         // Leave the header committed: replay finishes the job next
-        // boot, same call replay_journal() in tfs.c makes.
+        // boot, same call replay_journal() in TFS2 makes.
         klog_write("tfs3: transaction target write failed -- left committed for replay\n");
     }
     txn_reset();
@@ -1192,7 +1193,7 @@ static int do_write_inner(uint64_t ino, struct t3_inode *node, uint64_t offset,
             uint32_t want = (len - total) / T3_BLOCK; // whole blocks left
             // One transfer must fit the ATA path's per-command cap
             // (128 sectors on DMA, 8 on PIO -- ask, don't assume,
-            // same rule tfs.c's batching follows).
+            // same rule TFS2's batching follows).
             uint32_t cap = (uint32_t)blk_max_sectors_per_xfer() / T3_SPB;
             if (cap < 1) cap = 1;
             if (want > cap) want = cap;
@@ -2105,7 +2106,7 @@ static int tfs3_read_range_step(void *handle, uint32_t *out_total) {
         uint32_t got = read_range_impl(&st->node, st->offset + st->total,
                                        st->dst + st->total,
                                        // one block per step, same
-                                       // pacing contract as tfs.c
+                                       // pacing contract as TFS2
                                        T3_BLOCK - (uint32_t)((st->offset + st->total) % T3_BLOCK) <= st->len - st->total
                                            ? T3_BLOCK - (uint32_t)((st->offset + st->total) % T3_BLOCK)
                                            : st->len - st->total);
@@ -2737,7 +2738,7 @@ static int tfs3_write_range_step(void *handle) {
 // Result-field mapping keeps fs_check_result's TFS2-era meanings:
 // records_used = reachable inodes, leaked/referenced_but_free/
 // double_allocated/out_of_range = blocks, exactly as fs.h documents.
-// Repair semantics follow the same rules as tfs.c's: reclaim leaks
+// Repair semantics follow the same rules as TFS2's: reclaim leaks
 // (and TRIM them), re-mark referenced-but-free, zero out-of-range
 // pointers, NEVER resolve a double allocation. TFS3 additions: link
 // counts verified against observed name counts (repaired on a repair

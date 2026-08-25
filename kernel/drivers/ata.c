@@ -108,9 +108,9 @@ static int g_trim_supported = 0;
 // "no bound available, don't range-check". Every one of IDENTIFY's 256
 // words has always been read and discarded here; keeping two of them
 // costs nothing and gives the filesystem a real answer to "how big is
-// this disk" instead of tfs.c's hardcoded FS_DISK_TOTAL_BYTES guess
+// this disk" instead of TFS2's hardcoded FS_DISK_TOTAL_BYTES guess
 // (which silently allocates past the end of a smaller image -- see
-// tfs.c's own clamp).
+// TFS2's own clamp).
 static uint32_t g_sector_count = 0;
 
 // ~1s at the 100Hz PIT tick rate. See wait_not_busy() below for why a
@@ -391,7 +391,7 @@ void ata_flush_end(void) {
 // ata_flush_end() can't serve as that barrier: it only flushes once its
 // own depth reaches 0, so a journal sequence running inside an outer
 // batch would silently get no barrier at all. That's not hypothetical
-// -- tfs.c's fsck repair pass calls persist_record() inside a
+// -- TFS2's fsck repair pass calls persist_record() inside a
 // write_batch_begin()/end() pair, which suppressed every one of the
 // journal's own flushes.
 // The DRIVE's own cache flush, with nothing of ours in front of it.
@@ -419,7 +419,7 @@ int ata_flush_now(void) {
 // issue. Only correct for a caller that has already placed its own
 // ata_flush_now() barriers where durability actually matters AND whose
 // remaining trailing writes are safe to lose in a crash. persist_record()
-// (tfs.c) is the motivating case: its last write clears the journal
+// (TFS2) is the motivating case: its last write clears the journal
 // header, and losing that write costs one redundant (idempotent) replay
 // on the next boot, nothing more. Anything less clear-cut should use
 // ata_flush_end().
@@ -712,7 +712,7 @@ static int dma_transfer(uint32_t lba, int count, void *buf, int is_write,
 // see docs/roadmap.md) -- built from the exact same dma_issue()/
 // dma_finish() halves dma_transfer() uses above, so this doesn't
 // duplicate the register-level protocol, just gives a second way to
-// wait on it. No real caller uses this yet: fs.c/tfs.c still go
+// wait on it. No real caller uses this yet: fs.c/TFS2 still go
 // through the blocking dma_transfer_with_retry() path below unchanged.
 // This exists to prove the primitive works in isolation first (see
 // ata_dma_nonblocking_selftest()) before anything higher up the stack
@@ -1080,7 +1080,7 @@ int ata_set_dma_forced_off(int off) {
 // against; this is what the DMA bounce buffer actually turned out to
 // be, which is smaller if the big contiguous allocation failed, and is
 // the PIO path's own limit when DMA never came up at all. Callers that
-// batch work into transfers (tfs.c's block coalescing) ask this rather
+// batch work into transfers (TFS2's block coalescing) ask this rather
 // than assuming the maximum.
 int ata_max_sectors_per_xfer(void) {
     if (!dma_in_use()) return ATA_PIO_MAX_SECTORS_PER_XFER;
@@ -1258,7 +1258,7 @@ out:
 // block written once stays allocated on the host even after the file
 // that owned it is deleted. Measured before this existed: 8.1 GiB
 // actually allocated against 2.3 MiB the filesystem considered in use.
-// tools/tfs2_writer.py's `trim` is the host-side reclaim for images in
+// tools/tfs3_writer.py's `trim` is the host-side reclaim for images in
 // that state; this is the half that stops them getting there.
 //
 // **It must go out over DMA, not PIO.** DATA SET MANAGEMENT looks like

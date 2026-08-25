@@ -278,7 +278,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // skipped this line entirely -- see vfs.c's ensure_layout().
     fs_init();
     // /bin binaries (e.g. lspci) are no longer bootstrap-installed here
-    // at boot time -- tools/tfs2_writer.py seeds them into disk.img at
+    // at boot time -- tools/tfs3_writer.py seeds them into disk.img at
     // BUILD time now (see the Makefile's `seed` step), so by the time
     // toy-os actually boots they're already on disk. See
     // docs/decisions.md for why this replaced the old GRUB-module/

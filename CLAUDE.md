@@ -13,8 +13,8 @@ conventions that are easy to violate by accident.
 A small x86-64 OS (Multiboot2/GRUB-booted, freestanding C + NASM) with
 ring0/ring3 separation, per-process paging, an ELF64 loader, syscalls,
 a preemptive scheduler, a kernel-space window manager, and two
-disk-backed filesystems (TFS3 the default, TFS2 kept as a
-probe-selected second backend). No cross-compiler needed -- host and target are
+disk-backed filesystem (TFS3, mounted from an MBR/GPT partition or
+from a flat volume). No cross-compiler needed -- host and target are
 both x86-64, so plain system `gcc`/`ld`/`nasm` with freestanding flags
 work.
 
@@ -648,8 +648,9 @@ whenever a headline here tells you something you did not already know.
 - **TFS3's last block group may be PARTIAL**
 - **A new TFS3 operation must COUNT ITS JOURNAL CREDITS, and the count is the design.**
 - **Shrinking a file, or anything else that stops referencing a block, commits the pointer change BEFORE freeing the bit.**
+- **AN UNRECOGNISED DISK IS NOT AN INVITATION -- and that now includes a disk whose FORMAT WAS REMOVED.** Dropping the TFS2 backend would have made every TFS2 disk read as "readable but unclaimed", which is the blank-disk case, which FORMATS. `disk_is_tfs2()` in `vfs.c` and `seed_disk.py`'s probe both recognise it and refuse. `struct fs_ops` stays a registry with one row because FAT32 is next.
 - **`/etc` on the persistent filesystem is the config-file convention.**
-- **A PARTITION IS A BLOCK DEVICE, AND THE FILESYSTEM NEVER LEARNS ITS OFFSET** -- `block_part.c` wraps a parent and shifts every LBA (Linux's `bd_start_sect`, Windows' `partmgr`); the active device stays SINGULAR; `blk_read_sectors()` is the VOLUME and `blk_disk_read_sectors()` is the DISK, so a table parser must use the latter; capabilities are inherited and TRIM is CLAMPED; and a backend declares `fs_ops.volume_relative` -- TFS2 is 0 and permanently flat-only.
+- **A PARTITION IS A BLOCK DEVICE, AND THE FILESYSTEM NEVER LEARNS ITS OFFSET** -- `block_part.c` wraps a parent and shifts every LBA (Linux's `bd_start_sect`, Windows' `partmgr`); the active device stays SINGULAR; `blk_read_sectors()` is the VOLUME and `blk_disk_read_sectors()` is the DISK, so a table parser must use the latter; capabilities are inherited and TRIM is CLAMPED; and a backend declares `fs_ops.volume_relative`, the guard that stops the scan offering a partition to a backend that ignores the block layer (TFS2 declared 0; FAT32 will declare 1).
 - **A PARTITIONED DISK IS NEVER AUTO-FORMATTED, AND PARTITION 1 IS LEFT ACTIVE** -- a flat format SURVIVES a GPT (TFS3 reserves volume blocks 0-7), so claiming an unclaimed partitioned disk would lay a whole-disk volume across every partition's data while `parttable` kept printing the table correctly. `fsformat` formats the ACTIVE device, which is what makes `mkpart` -> reboot -> `fsformat` land inside partition 1.
 - **WRITING A TABLE IS A SYSCALL THAT TAKES A TABLE, NOT A SECTOR** -- `SYS_MKPART` takes a `struct mkpart_request` and the kernel encodes it, because this kernel has no privilege model to gate a write-any-sector primitive with (Linux's `BLKPG` shape). `MKPART_CONFIRM` is a SPEED BUMP, not a permission check. GPT is written backup-first and protective-MBR-last; nothing is remounted.
 - **A PARTITION TABLE MAKES A DATA DISK LOOK BOOTABLE, AND QEMU HANGS WITH NO OUTPUT** -- `0x55AA` at LBA 0 is all SeaBIOS checks, so it boots the data disk and jumps into filesystem bytes. `-boot order=d` is in `QEMU_RUN`, `vm.py` and `launch_qemu_cmd()`; a hand-rolled QEMU line needs it too.
@@ -1142,7 +1143,7 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
 - **Disk images, from the host** -- `seed_disk.py` (the format-aware
   front end `make iso` calls; **`--partition gpt|mbr` builds a
   PARTITIONED image** with the filesystem inside partition 1 instead of
-  flat at LBA 0), `tfs2_writer.py`, `tfs3_writer.py` (**every
+  flat at LBA 0), `tfs3_writer.py` (**every
   subcommand takes `--at-lba`/`--sectors`**, the host-side twin of the
   kernel's volume seam -- that is what lets one image hold a table AND
   a filesystem in a partition), `mkpart_test.py` (**`--layout

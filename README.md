@@ -60,11 +60,12 @@ QEMU, and it does not stop at "hello world from the kernel":
   shell in it a real process; `Ctrl-C`, `Ctrl-Z`, pipes, redirection and
   job control are the same code in both places, and a full-screen editor
   runs in either.
-- **Two real filesystems** — TFS3 (the default: block groups, real
-  inodes, hardlinks, journal transactions, superblock backups) and TFS2
-  (the original, kept as a second backend). Both journal metadata, so
-  files survive a power cut, and both come with an `fsck`. The VFS picks
-  by superblock probe; `fsformat` switches live.
+- **A real filesystem, in a real partition** — TFS3: block groups, real
+  inodes, hardlinks, journal transactions, superblock backups and an
+  `fsck`. It journals metadata, so files survive a power cut. The VFS
+  picks a backend by superblock probe, and boot scans the disk's
+  MBR/GPT table for a partition to mount from; `mkpart` writes a table
+  and `fsformat` reformats the mounted volume.
 - **A real GUI, and it is not in the kernel** — the window manager is
   itself a **ring-3 process**: movable, resizable windows, a taskbar, a
   Start menu built from `.desktop` files (picked up live), and a desktop
@@ -384,10 +385,9 @@ allocator.
 **Filesystems.** [TFS3](docs/tfs3-spec.md) is the default: block groups,
 128-byte checksummed inodes, hardlinks, atomic rename and truncation,
 32-slot journal transactions, ext-style superblock backups, ~590k files
-on a 9 GiB volume. [TFS2](docs/tfs2-spec.md) remains as a second backend,
-format unchanged. Both scale files to gigabytes through direct and
-single/double/triple-indirect pointers, batch ATA flushes, TRIM freed
-blocks back to the host, and refuse to touch a disk whose superblock
+on a 9 GiB volume. It scales files to gigabytes through direct and
+single/double/triple-indirect pointers, batches ATA flushes, TRIMs freed
+blocks back to the host, and refuses to touch a disk whose superblock
 could not be read rather than destroying a possibly-good filesystem.
 
 **Graphics and GUI.** Real fonts, two ways: eight sizes of JetBrains Mono
@@ -490,7 +490,7 @@ kernel/
                 multiboot, timers, serial + the debug console
   mm/           physical frames, address spaces, the kernel heap
   proc/         ELF64 loader, the syscall table, scheduler, window server
-  fs/           TFS3 and TFS2 behind the probe-selecting VFS
+  fs/           TFS3 behind the probe-selecting VFS
   tty/          the terminal object: line discipline, ptys, tty0
   lib/          services with no hardware of their own: the shared
                 toolkit (strings, numbers, formatting, paths, line
@@ -572,7 +572,7 @@ Selected tools, each documented in its own docstring:
 | `frame_balance.py`, `mem_stress.py` | Physical memory: does a process's teardown return exactly what it took, and does the machine survive running out? The patterns written are address-derived, so two mappings sharing one frame is detectable. |
 | `check_deps.py`, `check_layout.py`, `check_docs.py`, `check_dispatch.py`, `check_widget_ops.py` | The build's own invariants: header tracking is live, the disk matches its documented layout, the docs have no dead pointers, no dispatch chain has quietly grown big enough to want a table, and no widget's ops table is missing a slot it needs. |
 | `qmp_test.py`, `gui_flow.py`, `shell_flow.py` | Drive the GUI over QEMU's QMP socket, with the mouse/keyboard gotchas already handled. |
-| `tfs3_writer.py`, `tfs2_writer.py` | Read, write, inspect and corrupt-for-testing files inside a `disk.img` from the host, without booting. Each refuses the other's images. |
+| `tfs3_writer.py` | Read, write, inspect and corrupt-for-testing files inside a `disk.img` from the host, without booting. `--at-lba`/`--sectors` reach a filesystem inside a partition. |
 | `fs_switch_test.py` | Proves probe, wipefs, live `fsformat` both ways, and reboot persistence. |
 | `kbd_test.py`, `keyboard_paths_test.py` | The input path, asserted on both drivers: that the same keys produce the same keycode and character over PS/2 and virtio-input, and that `kbd`'s four columns say what each stage really did. |
 
@@ -603,7 +603,7 @@ Selected tools, each documented in its own docstring:
 | [docs/init-design.md](docs/init-design.md) | The staged plan for an init as pid 1, the process tree under it, and the shell moving to ring 3. |
 | [docs/process-isolation.md](docs/process-isolation.md) | The full ring0/ring3 build-up, told as it was built, bugs included. |
 | [docs/tfs3-spec.md](docs/tfs3-spec.md) / [design](docs/tfs3-design.md) | Byte-level format of the default filesystem, and the reasoning behind it. |
-| [docs/tfs2-spec.md](docs/tfs2-spec.md) | Byte-level format of the legacy second backend. |
+| [docs/tfs2-spec.md](docs/tfs2-spec.md) | Byte-level format of the removed TFS2 backend, kept for the record. |
 | [docs/live-cd-design.md](docs/live-cd-design.md) | How the Live CD carries a filesystem image as a GRUB module. |
 | [docs/arch-portability.md](docs/arch-portability.md) | What is and isn't x86-64-specific, and what a second architecture would take. |
 | [kernel/README.md](kernel/README.md), [apps/README.md](apps/README.md) | Where a new file goes, and how to add an app. |

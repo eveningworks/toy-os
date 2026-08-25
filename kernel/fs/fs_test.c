@@ -1,19 +1,18 @@
-// Filesystem tests. The first wraps the pre-existing tfs_selftest()
+// Filesystem tests. The first used to wrap TFS2's tfs_selftest()
 // (triple-indirect addressing), which used to run on every disk-backed
 // boot -- writing 64 bytes at a 4.6GB offset each time to re-verify
-// something that can only break when tfs.c changes.
+// something that can only break when TFS2 changes.
 //
 // The rest are new and are the reason the fault injector exists: every
 // "what if the disk says no" path added during the storage work was
 // previously reachable only by corrupting a disk image from the host
-// (tools/tfs2_writer.py corrupt) and booting against it.
+// (tools/tfs3_writer.py corrupt) and booting against it.
 #include "ktest.h"
 #include "fault_inject.h"
 #include "kapi.h"
 #include "tfs3.h" // the caps-declaration test below reads tfs3_ops directly
 #include "block.h" // blk_sector_count() -- the geometry test at the bottom
 
-int tfs_selftest(void); // kernel/fs/tfs.c -- needs its file-static state
 
 // One path per test, not one shared path, and every test asserts its
 // own precondition rather than assuming it.
@@ -34,10 +33,14 @@ int tfs_selftest(void); // kernel/fs/tfs.c -- needs its file-static state
         KTEST_ASSERT_EQ(fs_exists(path), 0); /* precondition, not assumption */\
     } while (0)
 
-KTEST("fs", "triple-indirect addressing (legacy selftest)") {
-    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
-    KTEST_ASSERT(tfs_selftest() == 1);
-}
+// NOTE: the triple-indirect addressing test that used to live here was
+// TFS2's own selftest, and it went with TFS2. TFS3 has the same three
+// indirect levels and the deepest thing exercised below is
+// SINGLE-indirect ("truncate cuts a file that uses indirect blocks",
+// 20 blocks). That is a real coverage gap and it is on docs/roadmap.md
+// rather than pretended away -- a file large enough to reach the
+// double- and triple-indirect tables is tens of megabytes, which is
+// why it wants its own tool rather than a KTEST.
 
 KTEST("fs", "tfs3 declares its format capabilities") {
     // Static declaration check -- runs regardless of which backend is
@@ -54,12 +57,13 @@ KTEST("fs", "backend reports a name and honest capabilities") {
     // Valid in every boot mode -- RAM-only still has an active backend.
     KTEST_ASSERT(fs_backend_name() != 0);
     KTEST_ASSERT(fs_backend_name()[0] != '\0');
-    // tfs2 declares no capabilities (no inodes/hardlinks/symlinks, and
-    // its timestamps are stored civil, converted at stat time). When
-    // tfs3 lands this assertion becomes conditional on the name.
-    if (k_strcmp(fs_backend_name(), "tfs2") == 0) {
-        KTEST_ASSERT_EQ(fs_capabilities(), 0u);
-        KTEST_ASSERT_EQ(fs_has(FS_CAP_HARDLINKS), 0);
+    // The capability assertions used to be conditional on the name,
+    // because TFS2 declared none. With TFS2 gone the only backend that
+    // can be active on a disk is TFS3 -- and a backend that reported
+    // NO capabilities would now be a bug rather than a second format.
+    if (fs_is_persistent()) {
+        KTEST_ASSERT_EQ(k_strcmp(fs_backend_name(), "tfs3"), 0);
+        KTEST_ASSERT(fs_has(FS_CAP_INODES));
     }
 }
 

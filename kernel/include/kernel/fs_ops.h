@@ -8,7 +8,7 @@
 // surface, unchanged by any of this) is implemented by vfs.c as a thin
 // dispatch layer over exactly one of these, chosen once in fs_init().
 // Adding a second on-disk filesystem in the future means writing a new
-// `struct fs_ops` (see tfs.c/tfs.h for the reference implementation)
+// `struct fs_ops` (see tfs3.c/tfs3.h for the reference implementation)
 // and pointing vfs.c's fs_init() at it -- fs.h, kapi.h, and every
 // existing caller (apps/, syscall.c, tz.c, font_config.c, ...) need no
 // changes at all, because they only ever call the fs_* wrappers, never
@@ -31,12 +31,12 @@
 // paths. A backend only has to implement path *handling*, not path
 // *normalization*; vfs.c does not renormalize before calling into a
 // backend, so each backend is expected to normalize itself exactly the
-// way tfs.c's normalize()/path_is_normalized() do (that logic is
+// way TFS2's normalize()/path_is_normalized() do (that logic is
 // backend-internal, not shared, since a future filesystem might have
 // different path rules -- e.g. case-insensitivity, a different max
 // length).
 struct fs_ops {
-    const char *name; // short identifier, e.g. "tfs2" -- fs_backend_name() reports it
+    const char *name; // short identifier, e.g. "tfs3" -- fs_backend_name() reports it
 
     // FS_CAP_* bits (fs.h) this backend's FORMAT genuinely supports.
     // Same contract as display.h's caps field: one fact stated twice
@@ -57,14 +57,19 @@ struct fs_ops {
     // this describes how the DRIVER is wired and is nobody's business
     // above vfs.c.
     //
-    // TFS2 declares 0, and the reason is worth stating rather than
-    // discovering: it makes 24 direct ata_* calls that bypass the block
-    // layer entirely, so a partition device under it would be ignored
-    // and its probe would read the DISK's LBA 0 -- claiming a partition
-    // it had never looked at. It also puts its superblock at LBA 0 and
-    // its journal header at LBA 1, which are the MBR and the GPT
-    // header. It stays flat-only; TFS3 reserves volume blocks 0-7 for
-    // exactly this and declares 1.
+    // EVERY BACKEND THAT EXISTS TODAY DECLARES 1, and the field still
+    // earns its place. TFS2 declared 0 and was the reason it exists: it
+    // made 24 direct ata_* calls that bypassed the block layer, so a
+    // partition device under it was ignored and its probe read the
+    // DISK's LBA 0 -- claiming a partition it had never looked at. It
+    // also put its superblock at LBA 0 and its journal header at LBA 1,
+    // which are the MBR and the GPT header.
+    //
+    // TFS2 is gone, but the hazard belongs to ANY backend that reaches
+    // past blk_*, and FAT32 is next (docs/roadmap.md). The guard costs
+    // one int and one `continue` in try_partitions(), which reads it on
+    // every candidate -- a slot nobody consults is the other failure
+    // this codebase keeps finding, so it is consulted.
     int volume_relative;
 
     // Detection only -- read this backend's superblock location and
@@ -75,7 +80,7 @@ struct fs_ops {
     //   0  readable, but not mine (blank or foreign bytes)
     //  -1  could not read the superblock at all -- vfs.c treats this
     //      as "refuse to touch the disk" (the data-loss lesson in
-    //      tfs.c's init comment), never as "blank, go format"
+    //      TFS2's init comment), never as "blank, go format"
     int (*probe)(void);
 
     // Erase every signature by which probe() would recognize this
@@ -126,7 +131,7 @@ struct fs_ops {
     // function pointer here does -- see fs.h's fs_write_range_begin()/
     // fs_write_range_step() for the full contract every backend
     // implementing these two must honor. Both required (not optional/
-    // NULLable) since there's exactly one backend today (tfs.c) and it
+    // NULLable) since there's exactly one backend today (TFS2) and it
     // implements them -- see this header's top comment on why a
     // mount-point scheme (which might want optional capabilities per
     // backend) isn't what this struct is for.

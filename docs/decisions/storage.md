@@ -1483,3 +1483,44 @@ data, so `-boot order=d` states that in the Makefile's `QEMU_RUN`, in
 harmless before and is load-bearing now. `tools/mkpart_test.py`'s
 docstring had recorded this hazard years earlier for its own synthetic
 tables; nothing had acted on it, because nothing else wrote a table.
+
+## TFS2 was removed, and an old TFS2 disk is refused rather than reformatted
+
+TFS3 had been the default for a long time and TFS2 was kept as a
+probe-selected second backend — 2348 lines of kernel plus 1071 of host
+tooling, serving no disk anybody was creating. It was removed.
+
+**The interesting part is not the deletion, it is what deleting it would
+have done on its own.** `vfs.c`'s probe loop asks each backend whether a
+disk is theirs; a disk nobody claims is "readable but unclaimed", and
+the blank-disk policy *formats* that. So dropping the backend would have
+turned every existing TFS2 disk into a blank one on its next boot, and
+destroyed it — silently, with a success message.
+
+That is the same failure as "an unreadable superblock is not a foreign
+disk" above, arriving from the opposite direction: there the kernel
+could not read the superblock, here it reads it perfectly and no longer
+speaks the format. Both end at the same rule — **an unrecognised disk is
+not an invitation**.
+
+So `disk_is_tfs2()` stays: fifteen lines that recognise the magic,
+refuse to touch the disk, and say what to do about it. `seed_disk.py`
+does the same on the host, because `make iso` would otherwise reformat
+the image from the other side. `docs/tfs2-spec.md` is kept for the same
+reason — a byte-level description of a frozen format cannot go stale,
+and it is the only thing that would let somebody recover such a disk
+(with `tools/tfs2_writer.py` from the commit before the removal).
+
+**What was deliberately NOT collapsed.** `struct fs_ops` stays a
+registry and `g_backends[]` stays a table with one row, because FAT32 is
+the next backend and would have to undo the collapse. `volume_relative`
+stays for the same reason: TFS2 was why it exists, but the hazard it
+guards — a backend that reaches past `blk_*` being offered a partition
+and reading the disk's LBA 0 instead — belongs to any such backend, and
+the guard costs one `int` and one `continue`.
+
+**What was lost, stated rather than glossed.** TFS2's `tfs_selftest()`
+was the only test that exercised double- and triple-indirect addressing;
+TFS3 has the same three levels and nothing currently reaches past
+single-indirect. That is on `docs/roadmap.md` as a real gap, not
+pretended away.

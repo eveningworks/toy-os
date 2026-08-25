@@ -20,10 +20,12 @@
 // `display_driver` and `fs_ops` already use here, for the same reason --
 // the implementation swaps and the callers do not notice.
 //
-// **TFS2 deliberately does NOT use this.** It makes 24 direct `ata_*`
-// calls and a live image is always TFS3 (the default format), so
-// rewiring a legacy backend to serve a feature it will never carry
-// would be cost with no return. It keeps talking to ATA.
+// **EVERY FILESYSTEM GOES THROUGH THIS NOW.** TFS2 deliberately did
+// not -- 24 direct `ata_*` calls -- and was removed rather than
+// rewired; `fs_ops.volume_relative` is what stopped the partition scan
+// offering it a window it would have ignored. A future backend that
+// wants a live image, a RAM disk or a partition has to come through
+// here, and declaring otherwise is how it says so.
 
 // Optional capabilities. Declared, not discovered -- the same honesty
 // rule display_driver follows: a device whose bits and function

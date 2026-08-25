@@ -269,12 +269,18 @@ and TRIM is unrecoverable, so it refuses rather than truncates.
 
 **A backend declares whether it can live in one: `fs_ops.volume_relative`.**
 Not an `FS_CAP_*` bit — those describe a FORMAT and are reported to
-userland — but a fact about how the driver is wired. **TFS2 declares 0**,
-and the reason matters: it makes 24 direct `ata_*` calls that bypass the
-block layer, so a partition device under it is simply ignored and its
-probe reads the DISK's LBA 0 — claiming a partition it never looked at.
-It also puts its superblock at LBA 0 and its journal header at LBA 1,
-which are the MBR and the GPT header. TFS2 stays flat-only, permanently.
+userland — but a fact about how the driver is wired.
+
+**Every backend that exists today declares 1, and the field still earns
+its place.** TFS2 declared 0 and was the reason it exists: it made 24
+direct `ata_*` calls that bypassed the block layer, so a partition
+device under it was simply ignored and its probe read the DISK's LBA 0
+— claiming a partition it had never looked at. TFS2 is gone, but the
+hazard is a property of *any* backend that reaches past `blk_*`, and
+FAT32 is next (`docs/roadmap.md`). A guard whose only cost is one `int`
+and one `continue` is worth keeping ahead of the backend that needs it;
+what is not worth keeping is a guard nobody consults, so
+`try_partitions()` reads it on every candidate.
 
 ## A PARTITIONED DISK IS NEVER AUTO-FORMATTED, AND PARTITION 1 IS LEFT ACTIVE
 

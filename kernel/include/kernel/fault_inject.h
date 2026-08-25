@@ -9,7 +9,7 @@
 // that couldn't be zeroed, a superblock that couldn't be read -- and
 // every one of those paths only executes when the hardware misbehaves.
 // Before this existed the only way to reach any of them was
-// tools/tfs2_writer.py's `corrupt` subcommand: damage a disk image on
+// tools/tfs3_writer.py's `corrupt` subcommand: damage a disk image on
 // the host, boot against it, and read the result. That works, but it's
 // slow, it only reaches disk-shaped failures, and it can't test the
 // out-of-memory paths at all.

@@ -220,6 +220,16 @@ they need are what's left:
 
 ### Storage hardening
 
+A TFS3 test reaching double- and triple-indirect addressing -- TFS3 has
+the same 12 direct + 3 indirect-level inode as TFS2, but the deepest
+thing any current test touches is SINGLE-indirect (`fs_test.c`'s
+"truncate cuts a file that uses indirect blocks", 20 blocks). The test
+that covered the deeper tables was TFS2's own `tfs_selftest()` and was
+removed with TFS2. Reaching the triple-indirect table means a file of
+tens of megabytes, so this wants a host-driven tool (the shape
+`tools/ls_test.py` uses to stage a 300-entry directory) rather than a
+KTEST inside a booted kernel.
+
 ~~Full end-to-end multi-GB file write/read stress test over TFS2~~ --
 **done, 2026-08-13.** Both `stress 4200` (326 s) and `stress 8192`
 (692 s) PASSED, each written, read back and verified byte-for-byte,

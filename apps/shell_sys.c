@@ -520,7 +520,7 @@ void cmd_fsck(const char *args) {
 // Real (non-sparse) multi-GB write/read/verify stress test over
 // fs_write_range()/fs_read_range() -- built to answer docs/roadmap.md's
 // long-standing "full end-to-end multi-GB write/read pass hasn't been
-// run yet" item. tfs_selftest() (kernel/fs/tfs.c, runs on every
+// run yet" item. tfs_selftest() (kernel/fs/TFS2, runs on every
 // disk-backed boot) already proves triple-indirect *addressing* --
 // that the pointer chain can be built and walked -- but it only writes
 // 64 bytes at a ~4.6GB offset, not real content filling that space.
@@ -754,7 +754,7 @@ void cmd_dmatest(const char *args) {
 
 // Proves fs_write_range_begin()/fs_write_range_step() (Phase 2) AND
 // fs_read_range_begin()/fs_read_range_step() (Phase 4) of the async-I/O
-// roadmap item (kernel/fs/tfs.c) -- writes <mb> megabytes through
+// roadmap item (kernel/fs/TFS2) -- writes <mb> megabytes through
 // the stepped write API instead of fs_write_range(), one block at a
 // time via an explicit step loop this command drives itself (standing
 // in for what wm_run() would eventually do once per frame, which Phase

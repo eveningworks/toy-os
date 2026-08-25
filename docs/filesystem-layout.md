@@ -192,7 +192,7 @@ the only one that happened: the four ring-3 GUI apps (`calculator`,
 afterwards -- runnable, and frozen at whatever build last synced them.
 Nothing had noticed, because nothing was looking.
 
-## The record budget -- a TFS2 constraint, mostly retired
+## The record budget -- a TFS2 constraint, now fully retired
 
 **On TFS3 (the default format for fresh images since Milestone 15
 landed), the old budget is gone**: ~590,000 inodes on a 9 GiB volume
@@ -209,7 +209,12 @@ remain and are worth knowing:
   direct+single-indirect (~4.03 MB) -- a seeding-path bound, not a
   format one.
 
-A checkout still carrying a TFS2 `disk.img` (the probe keeps mounting
+(TFS2 has since been REMOVED entirely -- a TFS2 disk is refused rather
+than mounted or reformatted. Everything below is history, kept because
+the budget it describes is why several caller-side path buffers are
+sized the way they are.)
+
+A checkout still carrying a TFS2 `disk.img` (the probe used to keep mounting
 it -- nothing reformats by surprise) keeps the old budget: **256
 records including directories, 64-byte full paths**. `make clean-disk
 && make iso` is the deliberate move to TFS3. Until then, on such an

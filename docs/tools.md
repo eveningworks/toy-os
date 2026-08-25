@@ -351,7 +351,7 @@ manual steps to be worth automating:
   needn't until the OS has run. **Read that doc before adding a
   directory, a config file, or any new seeded data**: it also records
   the budgets (64-byte caller-side path buffers everywhere; the
-  256-record table on TFS2-legacy images only -- TFS3, the default
+  256-record table on TFS2 images only -- TFS3, the only
   since Milestone 15, has ~590k inodes) and the `sync`-never-deletes
   trap that makes moving a seeded file need an explicit cleanup. It
   also WARNS (never fails) about orphans -- a file in a seeded directory
@@ -1813,49 +1813,12 @@ window without going through it will find its layout polls timing out.
   screenshots with a pass/fail `--threshold` (default 0.2%) and an
   optional `--out` diff-highlight image, for catching a rendering
   regression manual eyeballing might miss.
-- **`tfs2_writer.py`** -- host-side TFS2 v3 read/write tool: get files
-  onto (or off of) `disk.img` without booting toy-os. **`trim` returns
-  every free block's space to the host** by punching holes through them
-  -- run it if `du disk.img` ever looks large. The image is sparse when
-  created and only ever loses that: a block written once stays allocated
-  on the host even after toy-os deletes the file that owned it, and the
-  dev image had reached 8.1 GiB actually allocated against 2.3 MiB in
-  use before this existed. The kernel issues ATA TRIM as it frees blocks
-  now (`ata_trim()`, plus `discard=unmap` on every `-drive` line), which
-  stops new images getting there; `trim` is for images already in that
-  state, and for the host-side seeding path, which never boots the
-  kernel. Non-destructive: only blocks the filesystem already considers
-  free are touched. `format`
-  initializes a blank/foreign image as an empty TFS2 v3 filesystem --
-  note that running it on a BLANK image opts that image out of the
-  TFS3 default; that's `seed_disk.py`'s job to decide, not a thing to
-  do casually; `write`/`read`
-  for a single file; `ls` for a directory listing; `sync <seed-dir>` to
-  mirror a whole seed tree in (`once/` = copy-once, `sync/` =
-  content-hash-synced -- see its own docstring and
-  `docs/decisions.md`). `write`/`sync` auto-format a blank image first
-  (no-op if already formatted), so a completely fresh `disk.img` can be
-  seeded in one call with no toy-os boot in between -- the Makefile's
-  `seed` target (runs on every `make iso`) goes through
-  `tools/seed_disk.py` now, which delegates here only when the image's
-  magic says TFS2 (a fresh/blank image gets TFS3 -- see
-  `tfs3_writer.py` below). This replaced the old boot-time
-  `BIN_BOOTSTRAP`/GRUB-module install (removed from `kernel.c`/
-  `grub.cfg` -- see `docs/decisions.md`). Writes in-place by default;
-  `--dry-run` on `write`/`sync`/`format` previews without touching the
-  image. `delete`/`mkdir`/`cp` manage paths inside the image, so test
-  state can be set up and cleaned up entirely from the host rather than
-  booting toy-os to type `rm`. Scoped to direct+single-indirect blocks (~4.03 MB/file) -- see
-  `docs/decisions.md` for why. `corrupt` injects a KNOWN inconsistency
-  (`--leak N`, `--free-referenced N`, `--bad-pointer PATH`) so the
-  kernel's `fsck` can be tested against damage whose exact shape is
-  known in advance, and `--stage-journal PATH` (+ `--stage-journal-torn`)
-  leaves an image in the state a crash mid-`persist_record()` produces,
-  which is the only way to exercise `replay_journal()` without an actual
-  power loss -- the inconsistencies `fsck` repairs are ones the
-  kernel deliberately avoids producing, so without this it could only
-  ever be tested against a clean disk and proven to report "clean".
-- **`tfs3_writer.py`** -- the TFS3 sibling of `tfs2_writer.py`: format
+- **`tfs2_writer.py`** -- **REMOVED** along with the TFS2 backend. A
+  TFS2 disk is now refused rather than reformatted, by both the kernel
+  (`disk_is_tfs2()` in `kernel/fs/vfs.c`) and `seed_disk.py`. To read
+  one, check out the commit before the removal; `docs/tfs2-spec.md` is
+  kept for the same reason.
+- **`tfs3_writer.py`** -- the host-side TFS3 tool: format
   (writes superblock backups + GDT snapshots, wipes a stale TFS2
   signature per the wipefs rule, keeps images sparse by skipping/
   hole-punching the zeroed inode tables) / ls / read / write / mkdir /

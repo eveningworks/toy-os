@@ -17,16 +17,15 @@
 // own initiative anymore (that used to be tfs_init()'s else-branch).
 // An UNREADABLE superblock is different from a foreign one -- no
 // formatting happens at all, and the chosen backend's own init()
-// degrades to RAM-only; see tfs.c's init comment for the data-loss
+// degrades to RAM-only; see TFS2's init comment for the data-loss
 // story behind that distinction.
 //
-// Adding a filesystem = write its tfs.c-shaped file exposing a
+// Adding a filesystem = write its TFS2-shaped file exposing a
 // `const struct fs_ops whatever_ops`, #include its header below, and
 // add it to g_backends -- nothing else in the kernel or apps/ needs
 // to know that happened.
 #include "fs.h"
 #include "fs_ops.h"
-#include "tfs.h"
 #include "tfs3.h"
 #include "ata.h"
 #include "block.h"
@@ -37,14 +36,19 @@
 #include "scheduler.h" // scheduler_preempt_disable/enable -- see FS_OP below
 #include "partition.h" // the boot-time partition scan below
 
-// Priority order: first probe() == 1 wins. TFS3 goes FIRST when it
-// lands (Stage B of the plan) -- a disk carrying either format is
-// unambiguous (different magics at different offsets), so order only
-// decides which backend gets asked first, not which one wins a
-// contested disk. There is no contested disk.
+// Priority order: first probe() == 1 wins.
+//
+// ONE BACKEND TODAY, AND THIS IS STILL A TABLE. TFS2 was the second
+// until it was removed; FAT32 is the next one (docs/roadmap.md), and
+// it arrives as a row here plus a `struct fs_ops`, exactly as TFS3
+// did. Collapsing this to a single pointer would have to be undone by
+// the change after next.
+//
+// Order decides which backend is ASKED first, not which one wins: two
+// formats' magics live at different offsets, so a disk is claimed by
+// at most one probe. There is no contested disk.
 static const struct fs_ops *const g_backends[] = {
     &tfs3_ops,
-    &tfs_ops,
 };
 #define FS_BACKEND_COUNT ((int)(sizeof(g_backends) / sizeof(g_backends[0])))
 
@@ -190,6 +194,28 @@ static int try_live_module(void) {
 // Order is the table's own order, not "biggest" or "first bootable" --
 // there is nothing here that would make a cleverer policy more correct,
 // and a table's order is the one thing a person writing it controls.
+// Is this a TFS2 disk? Magic "TFS2" plus format version 3 at LBA 0,
+// which is all that is left of a backend this kernel no longer has.
+//
+// WHY THIS STUB EXISTS AT ALL, rather than nothing. Deleting the TFS2
+// backend makes a TFS2 disk "readable but claimed by nobody" -- which
+// is the blank-disk case, and the blank-disk policy FORMATS. So the
+// removal, on its own, would silently destroy the data on every
+// existing TFS2 disk on its next boot. That is precisely the failure
+// docs/decisions.md's "an unreadable superblock is not a foreign disk"
+// entry is about, arriving from a new direction: this time the kernel
+// can read the superblock perfectly and simply no longer speaks the
+// format.
+//
+// So: recognise it, refuse to touch it, and say what to do. Fifteen
+// lines against 2348 deleted, and the alternative is a data-loss bug
+// that only fires on other people's disks.
+static int disk_is_tfs2(void) {
+    uint8_t sec[512];
+    if (!blk_disk_read_sectors(0, 1, sec)) return 0;
+    return sec[0] == 'T' && sec[1] == 'F' && sec[2] == 'S' && sec[3] == '2' && sec[4] == 3;
+}
+
 static int try_partitions(void) {
     const struct block_device *disk = blk_whole_disk();
     if (!disk) return -1;
@@ -363,6 +389,17 @@ static void probe_and_mount(int allow_format) {
         return;
     }
 
+    // A TFS2 disk is READABLE AND FOREIGN, which is the one combination
+    // the blank-disk policy below gets wrong.
+    if (disk_is_tfs2()) {
+        klog_write("fs: this disk is TFS2, which this build no longer supports -- "
+                   "NOT formatting.\n"
+                   "fs: back it up if you need it, then `make clean-disk && make iso` "
+                   "(or `fsformat tfs3 confirm`) to reuse the disk.\n");
+        mount_backend(fallback);
+        return;
+    }
+
     // Readable but nobody claimed it: genuinely blank or foreign.
     if (allow_format) {
         klog_write("fs: disk claimed by no filesystem -- formatting with the default (");
@@ -498,7 +535,7 @@ int fs_delete(const char *path) {
 // **The mechanism, because it is not obvious and it panicked a
 // desktop.** Every backend implements this the same way: free one
 // shared staging buffer, allocate a new one the size of the file, then
-// do a BLOCKING read into it (`g_read_buf` in tfs3.c and tfs.c). The
+// do a BLOCKING read into it (`g_read_buf` in tfs3.c and TFS2). The
 // kernel context is a scheduler participant, so the WM can be preempted
 // in the middle of that read; a ring-3 process then makes a syscall
 // that also reads a file, which frees the buffer the suspended read is

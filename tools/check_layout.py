@@ -94,23 +94,30 @@ def parse_doc(path):
 
 
 def image_format(disk):
-    """'tfs2' or 'tfs3' by magic -- same probe rule as the kernel and
-    tools/seed_disk.py."""
+    """'tfs3' by magic -- same probe rule as the kernel and seed_disk.py.
+
+    Kept as a lookup returning a NAME rather than collapsed to a
+    constant: FAT32 is the next backend (docs/roadmap.md) and will need
+    a second row here and a `fat_writer.py` beside the others, exactly
+    as TFS3 did. A TFS2 image is named specifically, because "neither
+    magic" would otherwise report a readable disk as unrecognised.
+    """
     with open(disk, "rb") as f:
         lba0 = f.read(5)
         f.seek(8 * 4096)
         blk8 = f.read(5)
     if blk8[:4] == b"TFS3":
         return "tfs3"
-    if lba0[:4] == b"TFS2":
-        return "tfs2"
-    sys.exit(f"check_layout: {disk} carries neither filesystem magic")
+    if lba0[:4] == b"TFS2" and lba0[4:5] == b"\x03":
+        sys.exit(f"check_layout: {disk} is TFS2, which this build no longer "
+                 f"supports -- `make clean-disk && make iso` to rebuild it")
+    sys.exit(f"check_layout: {disk} carries no filesystem magic")
 
 
 def dirs_on_image(disk, writer_dir):
     """Every directory on the image, walked breadth-first from /.
-    Format-aware: tfs2_writer prints `DIR /full/path`, tfs3_writer
-    prints `d <size> ino=N <name>` (names, not paths)."""
+    Format-aware by writer name -- tfs3_writer prints
+    `d <size> ino=N <name>` (names, not paths)."""
     fmt = image_format(disk)
     writer = os.path.join(writer_dir, f"{fmt}_writer.py")
     found = set()

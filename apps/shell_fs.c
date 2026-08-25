@@ -13,7 +13,7 @@
 // `docs/decisions.md`.
 #include "shell_internal.h"
 
-// Reused across cmd_cat() calls, same reasoning as tfs.c's own
+// Reused across cmd_cat() calls, same reasoning as TFS2's own
 // g_read_buf (fs_read()'s staging buffer): a fresh kmalloc() every call
 // with no caller-visible free() would leak.
 static void *g_cat_buf = 0;
@@ -434,7 +434,7 @@ void cmd_fsformat(const char *args) {
     while (*p == ' ') p++;
 
     if (n == 0) {
-        vga_write("usage: fsformat <tfs2|tfs3> confirm\n");
+        vga_write("usage: fsformat <tfs3> confirm\n");
         vga_write("       DESTROYS the current filesystem and reformats with the named one\n");
         return;
     }
@@ -456,6 +456,6 @@ void cmd_fsformat(const char *args) {
         vga_putc('\n');
     } else {
         vga_write("fsformat: failed (unknown filesystem name, or the format itself failed -- see dmesg)\n");
-        vga_write("fsformat: known names: tfs2, tfs3\n");
+        vga_write("fsformat: known names: tfs3\n");
     }
 }

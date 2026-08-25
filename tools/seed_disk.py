@@ -28,19 +28,29 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def probe(disk):
-    """'tfs2', 'tfs3', or None (blank/unknown)."""
+    """'tfs3', or None (blank/unknown).
+
+    Any TFS3 format version claims the image -- the writer reads both
+    v1 (four journal slots) and v2 (32), and picking a version here
+    would make a v2 image look BLANK and get reformatted, which is the
+    one outcome this probe exists to prevent.
+
+    A TFS2 image is REFUSED by name rather than falling through to
+    None. None means "blank, format it", and formatting over somebody's
+    TFS2 disk because this build stopped speaking the format is the
+    host-side twin of the data-loss bug kernel/fs/vfs.c's
+    disk_is_tfs2() exists to prevent.
+    """
     with open(disk, "rb") as f:
         lba0 = f.read(5)
         f.seek(8 * 4096)
         blk8 = f.read(5)
-    # Any TFS3 format version claims the image -- the writer tool reads
-    # both v1 (four journal slots) and v2 (32), and picking a version
-    # here would make a v2 image look BLANK and get reformatted, which
-    # is the one outcome this probe exists to prevent.
     if blk8[:4] == b"TFS3" and 1 <= blk8[4] <= 2:
         return "tfs3"
     if lba0[:4] == b"TFS2" and lba0[4:5] == b"\x03":
-        return "tfs2"
+        sys.exit(f"seed_disk: {disk} is TFS2, which this build no longer "
+                 f"supports.\n  Back it up if you need it, then "
+                 f"`make clean-disk && make iso`.")
     return None
 
 

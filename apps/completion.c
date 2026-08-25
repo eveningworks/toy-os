@@ -383,7 +383,6 @@ static int complete_argument(struct collector *c, const char *cmd, int arg_index
     if (k_strcmp(cmd, "fsformat") == 0) {
         // Backend names only -- deliberately NOT completing "confirm",
         // which exists to be typed on purpose.
-        add_candidate(c, "tfs2");
         add_candidate(c, "tfs3");
         return 1;
     }

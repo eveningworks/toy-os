@@ -9,7 +9,7 @@
 // kernel should ever call into for file/directory access. As of the
 // VFS split, it's implemented by kernel/fs/vfs.c, which dispatches
 // every call below to whichever `struct fs_ops` backend is active (see
-// kernel/include/kernel/fs_ops.h) -- today that's always tfs.c, the original
+// kernel/include/kernel/fs_ops.h) -- today that's always TFS2, the original
 // flat/directory filesystem. Nothing in this header changed shape when
 // that split happened, on purpose: adding a future filesystem means
 // writing a new backend and pointing vfs.c's fs_init() at it, not
@@ -18,7 +18,7 @@
 // Raised from 32 to 256, which is an ON-DISK LAYOUT change (the record
 // table sits between the journal and the free-block bitmap, so a
 // different file count moves FS_BITMAP_START_LBA and everything after
-// it) -- hence the FS_DISK_VERSION bump in tfs.c and the one-time
+// it) -- hence the FS_DISK_VERSION bump in TFS2 and the one-time
 // reformat that comes with it.
 //
 // 32 was not a comfortable margin any more, it was nearly exhausted:
@@ -32,14 +32,14 @@
 // entries (~44KB of .bss) and 256 one-sector records on disk, against
 // a disk that's gigabytes. Directories consume a slot each too (an
 // empty directory is just an entry with no data). Backend-specific
-// (tfs.c's own limit), but lives here since callers may reasonably want
+// (TFS2's own limit), but lives here since callers may reasonably want
 // to size buffers against it regardless of which backend is active.
 #define FS_MAX_FILES 256
 
 // Was FS_NAME_MAX (a single flat name, 32 bytes) before directory
 // support -- now holds a full absolute path like "/docs/notes.txt", so
 // it needed more room. Per-slot on-disk size doesn't actually change
-// (still fits the same 5 sectors -- see FS_RECORD_SECTORS in tfs.c).
+// (still fits the same 5 sectors -- see FS_RECORD_SECTORS in TFS2).
 #define FS_PATH_MAX 64
 
 void fs_init(void);
@@ -47,7 +47,7 @@ void fs_init(void);
 // Every path below is a normalized absolute path: it must start with
 // '/' (a bare name like "notes.txt" is silently treated as "/notes.txt"
 // for backward compatibility with callers that predate directories --
-// see tfs.c's normalize()), and must not contain "." or ".." components
+// see TFS2's normalize()), and must not contain "." or ".." components
 // or a trailing slash (other than the root "/" itself) -- callers that
 // want cwd-relative paths or ".."-style navigation (see the shell's
 // `cd`/`pwd`) resolve to a normalized absolute path themselves before
@@ -117,7 +117,7 @@ int fs_truncate(const char *path, uint64_t size);
 // -- see those two below. The returned pointer is only valid until the
 // next fs_read()/fs_write() call (the backend reuses one staging
 // buffer rather than leaking a fresh allocation every call -- see
-// tfs.c).
+// TFS2).
 const char *fs_read(const char *path, uint32_t *out_size);
 
 // The same "read a small file whole", into memory the CALLER owns.
@@ -352,7 +352,7 @@ int fs_format_backend(const char *name);
 // ata.c, so every fs_touch()/fs_write()/fs_mkdir()/fs_delete() above is
 // being persisted to it and files survive a reboot; 0 if no disk was
 // found, in which case this is exactly the old in-memory-only behavior
-// (files vanish on reboot) -- see tfs.c's tfs_init() for the
+// (files vanish on reboot) -- see TFS2's tfs_init() for the
 // detection/fallback logic. Purely informational (the `about`
 // shell/GUI screens use it to say which mode they're in) -- every
 // fs_* call above works the same either way.

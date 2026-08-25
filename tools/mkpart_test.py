@@ -25,8 +25,8 @@ corrupts anything replay_journal() would otherwise act on. Still, treat
 disk.img as scratch during this test either way and restore a real one
 afterward:
 
-    python3 tools/tfs2_writer.py format disk.img --force
-    python3 tools/tfs2_writer.py sync disk.img seed
+    python3 tools/tfs3_writer.py format disk.img --force
+    python3 tools/tfs3_writer.py sync disk.img seed
 
 **QEMU boot order:** a valid 0x55AA MBR signature on disk.img makes
 SeaBIOS consider it a bootable hard disk -- without an explicit
