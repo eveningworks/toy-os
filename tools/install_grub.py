@@ -128,10 +128,18 @@ def module_dir():
 # EOF and a real error message; the timeout catches everything else,
 # including mtools looping on a damaged FAT chain.
 #
-# The budget is generous on purpose -- copying GRUB's modules into a FAT
-# image on a slow disk is seconds, not minutes -- so hitting it means
-# something is genuinely wrong rather than merely slow.
-RUN_TIMEOUT = 180
+# 60s is already two orders of magnitude over the real cost -- every
+# child here is sub-second in a normal build, and the slowest (mcopy of
+# GRUB's ~300 modules) is a couple of seconds on a slow disk. It is
+# deliberately not larger: a budget nobody waits out teaches nothing,
+# and the first person to hit this killed the build by hand at 18s.
+RUN_TIMEOUT = 60
+
+# Filled in by install() once the ESP's offset is known, so the timeout
+# message can print a command that is copy-pasteable rather than one the
+# reader has to work out. A plain default keeps _run() usable before
+# then (and in a unit test).
+_FSCK_HINT = "<the /boot partition>"
 
 
 def _run(cmd, **kw):
@@ -140,13 +148,21 @@ def _run(cmd, **kw):
         r = subprocess.run(cmd, capture_output=True, text=True,
                            stdin=subprocess.DEVNULL, **kw)
     except subprocess.TimeoutExpired:
-        sys.exit(f"install_grub: {os.path.basename(cmd[0])} did not finish in "
-                 f"{kw['timeout']}s and was killed.\n"
-                 f"  command: {' '.join(cmd)}\n"
-                 "  An mtools command that hangs here usually means the FAT32 "
-                 "/boot partition is damaged -- `make clean-disk && make iso` "
-                 "rebuilds the image. Please report it: nothing in a normal "
-                 "build should take this long.")
+        sys.exit(
+            f"install_grub: {os.path.basename(cmd[0])} did not finish in "
+            f"{kw['timeout']}s and was killed.\n"
+            f"  command: {' '.join(cmd)}\n"
+            "\n"
+            "  `make clean-disk && make iso` rebuilds the image and clears it.\n"
+            "\n"
+            "  Before you do, this is worth capturing -- it is the one state\n"
+            "  that cannot be recovered afterwards:\n"
+            f"    fsck.fat -n -v {_FSCK_HINT}\n"
+            "  and, while it is still stuck, from another terminal:\n"
+            "    pidof mmd mcopy mformat mdir | xargs -r -n1 sh -c \\\n"
+            "      'echo \"== $0\"; cat /proc/$0/wchan; echo; cat /proc/$0/stack 2>/dev/null'\n"
+            "\n"
+            "  Nothing in a normal build takes this long; please report it.")
     if r.returncode != 0:
         sys.exit(f"install_grub: {cmd[0]} failed: {r.stderr.strip() or r.stdout.strip()}")
     return r.stdout
@@ -323,6 +339,10 @@ def install(disk, kernel, grub_cfg, verbose=True, optional=False):
             print(msg)
             return
         sys.exit(msg)
+
+    global _FSCK_HINT
+    _FSCK_HINT = (f"<(dd if={disk} bs=512 skip={esp[1]} count={esp[2]} "
+                  "status=none)")
 
     # ---- 1. the FAT32 /boot volume ---------------------------------
     fresh = not fat_present(disk, esp)
