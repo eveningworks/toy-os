@@ -188,6 +188,12 @@ this the obvious way), not from how much history it accumulated.
   out over PIO and never arrived -- so the KTESTs cover the REFUSALS
   only and the real proof is the host's: write 40 MiB, delete it, and
   require the sparse image's allocated size back at baseline.
+  **`notrim` on the boot line turns discards off for EVERY backend**,
+  gated once in `blk_trim_supported()`/`blkdev_trim_supported()` rather
+  than per driver. It is a diagnostic A/B rather than a preference: a
+  discard punches a hole in the host image and a flush after one is far
+  slower on some host filesystems than others, so "is it the trims?"
+  is answerable in one boot instead of a kernel rebuild.
 - **VIRTIO-BLK IS THE PREFERRED DISK; ATA IS THE LEGACY PATH.** When a
   virtio disk is attached it carries the filesystem, and `novirtio` on
   the boot line forces ATA back (which is what keeps that path

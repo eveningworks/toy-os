@@ -164,7 +164,20 @@ static int do_request(uint32_t type, uint64_t sector, void *data, uint32_t len, 
     int done = virtqueue_poll(&g_vq, head, &used_len);
     g_busy = 0;
 
-    if (!done) return 0;   // virtqueue_poll() logged, and leaked the chain
+    if (!done) {
+        // WHICH REQUEST, by name. virtqueue.c cannot say -- it is
+        // generic -- and its message reports a chain number and a
+        // descriptor count, from which a reader has to infer that a
+        // 2-descriptor chain is a FLUSH. Saying so here turns a bug
+        // report into a diagnosis.
+        klog_printf("virtio-blk: %s at sector %llu never completed\n",
+                    type == VIRTIO_BLK_T_IN ? "read" :
+                    type == VIRTIO_BLK_T_OUT ? "write" :
+                    type == VIRTIO_BLK_T_FLUSH ? "FLUSH (a journal barrier)" :
+                    type == VIRTIO_BLK_T_DISCARD ? "discard" : "request",
+                    (unsigned long long)sector);
+        return 0;   // virtqueue_poll() logged, and leaked the chain
+    }
     if (g_status != VIRTIO_BLK_S_OK) {
         klog_printf("virtio-blk: request type %u at sector %llu failed, status %u\n",
                     type, (unsigned long long)sector, (unsigned)g_status);

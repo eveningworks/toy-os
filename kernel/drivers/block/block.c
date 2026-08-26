@@ -1,6 +1,8 @@
 // The block-device registry -- see kernel/include/kernel/block.h for
 // why a filesystem talks to this rather than to a disk driver.
 #include "block.h"
+#include "multiboot.h"
+#include "string.h"
 #include "fault_inject.h"
 #include "klog.h"
 #include "kfmt.h" // klog_printf
@@ -131,7 +133,36 @@ int blk_flush(void) {
     return 1;
 }
 
+// `notrim` ON THE BOOT LINE STOPS EVERY BACKEND DISCARDING. Gated HERE,
+// at the one place every trim decision passes through, rather than in
+// each driver -- three of them can discard now and a word that only
+// covered one would be a worse answer than none.
+//
+// It exists to be a one-boot A/B. A discard punches a hole in the host
+// image, and a flush after one can be far slower on some host
+// filesystems than on others; when a machine starts failing journal
+// barriers, "is it the trims?" is otherwise only answerable by
+// rebuilding an older kernel. Same reachability argument as `novirtio`
+// and `noahci`, pointed at a capability rather than a driver.
+static int g_trim_disabled = -1;   // -1 = not yet asked
+
+static int trim_disabled(void) {
+    if (g_trim_disabled >= 0) return g_trim_disabled;
+    g_trim_disabled = 0;
+    const char *cmdline = multiboot_cmdline();
+    if (cmdline) {
+        for (const char *p = cmdline; (p = k_strstr(p, "notrim")) != 0; p += 6) {
+            if (p != cmdline && p[-1] != ' ') continue;
+            char after = p[6];
+            if (after == 0 || after == ' ') { g_trim_disabled = 1; break; }
+        }
+    }
+    if (g_trim_disabled) klog_write("block: notrim -- discards are disabled for every backend\n");
+    return g_trim_disabled;
+}
+
 int blk_trim_supported(void) {
+    if (trim_disabled()) return 0;
     return g_dev && (g_dev->caps & BLK_CAP_TRIM);
 }
 
@@ -169,6 +200,10 @@ int blkdev_flush(const struct block_device *dev) {
 }
 
 int blkdev_trim_supported(const struct block_device *dev) {
+    // `notrim` covers this path too. Gating only the active device would
+    // leave a second mount still discarding, which is exactly the "it
+    // only half works" answer a diagnostic switch must not give.
+    if (trim_disabled()) return 0;
     return dev && (dev->caps & BLK_CAP_TRIM);
 }
 
