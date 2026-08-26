@@ -1188,7 +1188,16 @@ window without going through it will find its layout polls timing out.
   Geometry is derived from the window's reported content size, not
   hardcoded, so it survives a font-size change.
 - **`uterm_test.py`** -- drives the RING-3 Terminal, which is a real
-  TERMINAL EMULATOR now: a pty with `/bin/tosh` on the far end. Its key
+  TERMINAL EMULATOR now: a pty with `/bin/tosh` on the far end.
+
+  **Its TAB checks open their own window**, because `run()` ends by
+  closing the first one with Alt+F4 -- three of them passed against
+  nothing on the first run, reading STALE log lines from the window that
+  had been there. The load-bearing one is the SWITCH, not the count: a
+  Terminal that drew a strip and pointed both tabs at ONE session passes
+  every count and every pixel check, so a marker is typed into the
+  second tab and the first is required not to have it. Confirmed by
+  control. Its key
   check is worth copying elsewhere: it distinguishes a BUILTIN (`echo
   hi`, handled inside the shell with no spawn) from an EXTERNAL program
   (`lscpu`, dozens of lines that can only appear if it was spawned and

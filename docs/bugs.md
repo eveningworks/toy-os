@@ -65,6 +65,7 @@ it has exonerated one this session and convicted another.
 ## Reproducible
 
 - [ ] `tools/init_test.py` fails 12 of its 27 checks, deterministically and PRE-EXISTING -- init stops reaping and stops starting services partway through the run
+- [ ] `tools/terminal_probe.py`: leaving the alternate screen does not take the pager's status bar with it -- measured PRE-EXISTING against d5400cb, where the same probe scored 20/23 against 22/23 after the tabs rewrite
 
 *(Was empty. Every entry that was here on 2026-08-20 is fixed, was already
 fixed, or turned out not to be a defect -- see `git log`. The two above

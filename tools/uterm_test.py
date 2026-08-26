@@ -513,6 +513,122 @@ def run(dbg, qmp, tmp, shot_dir, res):
     res.check("Alt+F4 closes it", gone)
 
 
+def tab_count(dbg):
+    """The `tabs N` field of the emulator's own layout line."""
+    for l in reversed(dbg.logs("uterm: layout cursor", clear=False)):
+        parts = l.split()
+        if "tabs" in parts:
+            return int(parts[parts.index("tabs") + 1])
+    return None
+
+
+def check_tabs(dbg, qmp, tmp, res):
+    """Tabs: a second shell in one window, and each keeping its own.
+
+    THE LOAD-BEARING CHECK IS THE SWITCH, not the count. A Terminal that
+    opened a tab, drew a strip and pointed both tabs at ONE session
+    would pass every count and every pixel check here -- so a marker is
+    typed into the second tab and the first is required NOT to have it,
+    then required to have it again on the way back. Only two real
+    sessions can do that.
+
+    Titles are asserted as TEXT from the app's own log rather than from
+    the pixels of a tab label: a label is a few characters at font size
+    and "some ink changed" is not a measurement.
+    """
+    # **ITS OWN WINDOW.** run() ends by closing the Terminal with
+    # Alt+F4, so everything below would otherwise drive a window that is
+    # not there -- and read STALE log lines from the one that was, which
+    # is how three of these checks first passed against nothing.
+    dbg.logs("uterm:", clear=True)
+    dbg.send(f"gui spawn {SPAWN_PATH}")
+    deadline = time.time() + SPAWN_TIMEOUT_S
+    win = None
+    while time.time() < deadline and not win:
+        win = dbg.window(TITLE)
+        time.sleep(0.2)
+    res.check("t0. a Terminal for the tab checks opened", win is not None)
+    if not win:
+        return
+    deadline = time.time() + SPAWN_TIMEOUT_S
+    while time.time() < deadline:
+        if dbg.logs("uterm: layout cursor", clear=False):
+            break
+        time.sleep(0.2)
+    # FOCUS IT. `gui key` reaches the focused window and so does a real
+    # keystroke, and the combos below are real keystrokes.
+    dbg.click(win["x"] + win["w"] // 2, win["y"] + win["h"] // 2)
+    dbg.settle()
+
+    start = tab_count(dbg)
+    res.check("t1. the window starts with one tab", start == 1, f"tabs {start}")
+
+    # Ctrl+Shift+T. The letter has already been folded to a control code
+    # by the time the app sees it, so this pair is the only spelling --
+    # see terminal.c and api/keyboard.h.
+    qmp.combo(["ctrl", "shift", "t"])
+    time.sleep(1.2)
+    dbg.settle()
+    res.check("t2. Ctrl+Shift+T opens a second tab", tab_count(dbg) == 2,
+              f"tabs {tab_count(dbg)}")
+
+    # A MARKER ONLY THE SECOND TAB'S SHELL HAS SEEN.
+    # `cd /bin` changes the second shell's directory, which is what its
+    # OSC title reports -- tosh announces one per directory change.
+    type_line(dbg, "cd /bin")
+    time.sleep(1.0)
+    dbg.settle()
+    titles = [l for l in dbg.logs("uterm: tab", clear=False) if "title" in l]
+    res.check("t3. the shell's OSC title reached its tab",
+              any(l.rstrip().endswith("/bin") for l in titles),
+              f"titles seen: {titles[-3:]}")
+    res.check("t4. the rename named the SECOND tab, not the first",
+              any(l.split()[2] == "1" for l in titles
+                  if len(l.split()) > 3 and l.rstrip().endswith("/bin")),
+              f"titles seen: {titles[-3:]}")
+
+    # Switching. Ctrl+PageUp goes back one, wrapping, as in Konsole.
+    #
+    # **THE WINDOW'S CONTENT ONLY, AND SETTLED.** A whole-screen
+    # comparison across two seconds fails on the taskbar CLOCK, which
+    # has nothing to do with tabs; and a capture that lands mid-paint
+    # fails a comparison with nothing wrong with it. The rows BELOW the
+    # tab strip are the subject -- the strip itself changes on purpose.
+    c = win["content"]
+    strip = 24  # taller than one tab row; the grid starts below it
+    grid_box = (c["x"], c["y"] + strip, c["x"] + c["w"], c["y"] + c["h"])
+
+    def grid(name):
+        p = os.path.abspath(os.path.join(tmp, name))
+        return qmp.stable_pixels(p, box=grid_box)
+
+    in_tab2 = grid("uterm_tab2.png")
+    qmp.combo(["ctrl", "pgup"])
+    time.sleep(1.0)
+    dbg.settle()
+    in_tab1 = grid("uterm_tab1.png")
+    res.check("t5. switching tabs changes what is on screen",
+              in_tab1 != in_tab2, "the two tabs render identically")
+
+    # ...and back, which must restore the SECOND tab's screen. A window
+    # with one shared session would come back to the same pixels either
+    # way, so this pair is what tells two real sessions from one.
+    qmp.combo(["ctrl", "pgdn"])
+    time.sleep(1.0)
+    dbg.settle()
+    back = grid("uterm_tab2b.png")
+    res.check("t6. switching back restores that tab's own screen",
+              back == in_tab2, "the second tab did not come back as it was")
+
+    # Ctrl+Shift+W closes it, and the strip goes with the second tab --
+    # one tab shows no strip, so the row count goes back up.
+    qmp.combo(["ctrl", "shift", "w"])
+    time.sleep(1.2)
+    dbg.settle()
+    res.check("t7. Ctrl+Shift+W closes a tab", tab_count(dbg) == 1,
+              f"tabs {tab_count(dbg)}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -533,6 +649,7 @@ def main():
     res = Result()
     try:
         run(dbg, qmp, args.tmp, args.shot, res)
+        check_tabs(dbg, qmp, args.tmp, res)
     finally:
         dbg.close()
 

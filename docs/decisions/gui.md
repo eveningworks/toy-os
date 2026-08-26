@@ -4813,3 +4813,64 @@ spells every other event out field by field rather than copying a
 struct. A worker with a larger result puts it where both threads agreed
 and posts an index. That also keeps the door open for the payload to
 cross a process boundary later, which a pointer would have closed.
+
+## Terminal tabs are the application's, not the window manager's
+
+Three places could own tabbing and all three exist in the wild. Konsole,
+GNOME Terminal and Windows Terminal put the strip in the APPLICATION.
+KDE also does window tabbing in the COMPOSITOR — group any windows into
+one tabbed frame — which would have given toy-os tabs for every app from
+one implementation, and Terminal would have needed no changes at all.
+And tmux does it inside the terminal PROTOCOL, which is why a tmux
+session survives losing its terminal.
+
+toy-os took the application's, and the argument is what a tab has to
+carry. A tab here is a pty, a shell, a grid, 240 lines of scrollback, an
+alternate screen and a title. A compositor-level tab is a whole window,
+so eight tabs would be eight Terminal processes — and the strip could
+show neither the shell's title nor anything about its state, because the
+compositor knows only that a window exists. The protocol answer (tmux)
+solves a problem this system does not have: nothing here can lose its
+terminal and come back.
+
+**What it costs is that no other app gets tabs for free**, which is why
+the strip is a widget (`uui_tabs`) rather than terminal code: the second
+app that wants one inherits the arithmetic, the hit-testing and the
+press/release discipline. The widget deliberately knows nothing about
+what a tab contains.
+
+**A SESSION IS 220 KiB and the cap is eight.** Grid, scrollback and
+saved screen at 200x60 cells are what dominate; eight bounds the window
+under two megabytes. Slots are allocated on demand and REUSED rather
+than freed, so opening and closing tabs all day does not churn the heap
+— and a slot is only reusable once its reader thread has set `done`,
+because handing a live thread's ring to a new tab would be two producers
+on one queue.
+
+## Terminal has no tick any more, and that is the point of the threads
+
+The old window polled its one pty every 30 ms because there is no
+`poll()` here to wait on the compositor and a child at the same time.
+That cost 33 wake-ups a second on an idle window and put up to 30 ms of
+lag on every echoed keystroke — and N tabs would have been N polls per
+tick.
+
+A reader thread per session blocks in a real `read()` instead, copies
+what arrives into a single-producer/single-consumer ring, and calls
+`uapp_post()`. The window's loop now blocks in `SYS_WAIT_EVENT` and
+wakes only when a key arrives, the compositor says something, or a
+reader has bytes. `tick_ms` and `on_tick` are gone from the descriptor
+entirely.
+
+**The ring rather than the parser is what the thread may touch**, and
+that is not caution — the grid, the scrollback and the parser are read
+by the painter on every frame, so a reader writing into them would be
+racing the frame it is trying to cause. Bytes cross on the ring and the
+main thread does every parse. The same rule every UI toolkit has, stated
+in `docs/conventions/gui.md`.
+
+**A full ring makes the reader WAIT.** Dropping output would corrupt a
+screen in a way nobody could diagnose from the result — a missing escape
+sequence looks like a terminal bug for the rest of the session. Waiting
+costs that thread a slice and nothing else, because the thing it waits
+for is the window draining, which is the window doing its job.

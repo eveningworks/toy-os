@@ -247,7 +247,9 @@ everything libc-shaped is waiting on it. Full plan and staging:
 - [x] ~~Thread-local storage (FS.base)~~ DONE 2026-08-26 -- `__thread` in ring 3, a per-thread errno, reloaded on every switch
 - [ ] A futex, so a mutex can BLOCK -- today's spins and yields, and a detached thread's stack needs one to be reclaimable
 - [ ] Image Viewer decodes on a worker thread, so its window keeps painting through a JPEG
-- [ ] The GUI Terminal reads its pty on a thread instead of polling it every 30 ms
+- [x] ~~The GUI Terminal reads its pty on a thread, not a 30 ms poll~~ DONE 2026-08-26 -- one reader per tab, no cadence left
+- [ ] More than eight Terminal tabs, which needs a scrolling strip rather than a wider one
+- [ ] A tab can be renamed by hand, as Konsole's double-click does
 - [ ] A thread stack with a guard page, which needs an `mprotect`-shaped syscall
 - [ ] Signal dispositions shared by a thread group, as POSIX has them -- per thread here, inherited at create
 - [ ] GCC's default (`%fs:0x28`) stack-protector guard in ring 3, now that TLS exists

@@ -1564,3 +1564,70 @@ and the File Manager spawning `/bin/cp` are still right, because a
 a thread is neither. The case for a thread is work whose RESULT must
 live in the app's own memory: a decoded image is the example, since
 handing one back through a pipe that carries 1 KiB a read is absurd.
+
+## A TAB IS A SESSION, AND `uui_tabs` IS THE STRIP.
+
+`userland/ui/uui_tabs.c` draws a row of tabs and reports clicks; it
+knows nothing about what a tab CONTAINS. **The caller owns the array**,
+exactly as `uui_fileview` owns its entries, and a label is a pointer the
+caller must keep alive -- which is what lets Terminal point one at its
+session's own title buffer and have a shell's OSC title appear with
+nothing copied.
+
+Three things the widget decides, because getting them wrong is what
+makes a tab strip annoying rather than broken:
+
+- **Equal shares, with a floor.** A tab whose width tracked its title
+  would move its own close box while the pointer travelled to it.
+- **`hit` is a BOOLEAN.** Returning the index would make tab 0 -- the
+  one whose index is falsey -- report as not hit, which is CLAUDE.md's
+  standing widget trap and would silently make the first tab unclickable.
+- **Close commits on RELEASE**, like every other control here, and it
+  matters more than usual because the action destroys something: a press
+  dragged off the close box does nothing.
+
+**IN TERMINAL, A TAB IS ITS OWN pty, SHELL, GRID, SCROLLBACK, ALTERNATE
+SCREEN AND TITLE** -- Konsole's model, and GNOME Terminal's and Windows
+Terminal's. The strip belongs to the application because only the
+application can give a tab a terminal's state; WM-level window tabbing
+(KDE has it) would make each tab a whole process and could show neither
+a shell's title nor its scrollback. Per-tab job control is free: each
+shell is spawned `PGID_NEW`, so `Ctrl-C` reaches the job in the tab you
+are looking at.
+
+**ONE TAB SHOWS NO STRIP**, which is Konsole's default and also what
+keeps a single-shell Terminal exactly the window it always was -- same
+geometry, same tests.
+
+**EACH SESSION HAS A READER THREAD, AND IT TOUCHES ONLY ITS RING.**
+Before tabs, Terminal polled one master every 30 ms; N tabs would have
+been N polls. A thread per session blocks in a real read, copies into a
+single-producer/single-consumer ring and calls `uapp_post()`; the MAIN
+thread drains every ring and feeds the parsers. **There is no `tick_ms`
+and no `on_tick` left at all** -- the window blocks and wakes only when
+something has actually happened. A full ring makes the reader WAIT
+rather than drop: dropping would corrupt a screen in a way nobody could
+diagnose from the result.
+
+## A TITLE COMES FROM THE SHELL, AS AN OSC.
+
+`ESC]0;<text>BEL` is what every terminal has taken as "set your title"
+since xterm defined it. `kernel/lib/ansi.c` resolves it to `ANSI_OSC`
+with the text in `p->osc` (api/ansi.h), and `/bin/tosh` emits one **per
+directory change** -- not per prompt, because `prompt()` is called
+several times per repaint and a title emitted there would put an escape
+sequence between every keystroke and its echo.
+
+**A CONSUMER MAY IGNORE IT, AND THE PHYSICAL CONSOLE DOES.** The
+sequence is swallowed either way (`vga.c`'s `default:` case), so a shell
+that sets a title is correct on a terminal with nowhere to put one --
+the same contract the alternate screen already has.
+
+Two parser rules worth knowing before extending it: **an OSC with no
+`;` is DROPPED rather than guessed at**, because "which string is this"
+has no safe default; and a code the terminal does not implement (a
+hyperlink, a clipboard write) is **swallowed, not reported**, or every
+one of them would rename the tab. The title itself is TRUNCATED at
+`ANSI_OSC_MAX` rather than refused -- the one place this parser guesses,
+and deliberately, since a title is decoration and losing its tail beats
+losing the whole thing.

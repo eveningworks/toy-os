@@ -10,7 +10,7 @@
 // have, rather than the one that looks like a bug.
 #include "ansi.h"
 
-enum { GROUND = 0, SAW_ESC, IN_CSI };
+enum { GROUND = 0, SAW_ESC, IN_CSI, IN_OSC, OSC_SAW_ESC };
 
 // ANSI's colour order is not VGA's. ANSI counts black, red, green,
 // yellow, blue, magenta, cyan, white; VGA's bits are blue-green-red, so
@@ -52,6 +52,45 @@ void ansi_init(struct ansi_parser *p, enum vga_color fg, enum vga_color bg) {
     for (int i = 0; i < ANSI_MAX_PARAMS; i++) p->param[i] = 0;
     p->fg = fg;
     p->bg = bg;
+    p->osc[0] = '\0';
+    p->osc_len = 0;
+}
+
+// An OSC ends and its text is handed over.
+//
+// The string is everything after the FIRST `;`, and the number before
+// it is the kind. A body with no `;` at all is malformed and reported
+// as nothing -- this is where the parser rejects rather than guesses,
+// because "which string is this" has no safe default.
+static enum ansi_result finish_osc(struct ansi_parser *p) {
+    p->state = GROUND;
+    int sep = -1;
+    for (int i = 0; i < p->osc_len; i++)
+        if (p->osc[i] == ';') { sep = i; break; }
+    if (sep < 0) { p->osc[0] = '\0'; p->osc_len = 0; return ANSI_EATEN; }
+
+    uint16_t kind = 0;
+    for (int i = 0; i < sep; i++) {
+        if (p->osc[i] < '0' || p->osc[i] > '9') { kind = 0xFFFF; break; }
+        kind = (uint16_t)(kind * 10 + (p->osc[i] - '0'));
+    }
+    // Only the three string-setting codes mean anything here. Anything
+    // else -- a colour query, a clipboard write, a hyperlink -- is
+    // swallowed whole rather than reported, which is what a terminal
+    // that does not implement it should do.
+    if (kind != ANSI_OSC_BOTH && kind != ANSI_OSC_ICON && kind != ANSI_OSC_TITLE) {
+        p->osc[0] = '\0';
+        p->osc_len = 0;
+        return ANSI_EATEN;
+    }
+
+    // Shuffle the text down over the "<kind>;" prefix, in place.
+    int n = 0;
+    for (int i = sep + 1; i < p->osc_len; i++) p->osc[n++] = p->osc[i];
+    p->osc[n] = '\0';
+    p->osc_len = (uint8_t)n;
+    p->a = kind;
+    return ANSI_OSC;
 }
 
 // Applies the collected parameters. Returns 1 if any of them changed a
@@ -200,6 +239,14 @@ enum ansi_result ansi_feed(struct ansi_parser *p, char c) {
         return ANSI_PASS;
 
     case SAW_ESC:
+        if (b == ']') {
+            // OSC -- Operating System Command, which is where a title
+            // arrives. Collected as raw bytes and split in finish_osc().
+            p->state = IN_OSC;
+            p->osc_len = 0;
+            p->osc[0] = '\0';
+            return ANSI_EATEN;
+        }
         if (b == '[') {
             p->state = IN_CSI;
             p->nparam = 0;
@@ -213,6 +260,30 @@ enum ansi_result ansi_feed(struct ansi_parser *p, char c) {
         // Alt-<key> arrives as from the keyboard (keyboard.h), and
         // printing its letter would be worse than swallowing it.
         p->state = GROUND;
+        return ANSI_EATEN;
+
+    case IN_OSC:
+        // BEL is xterm's terminator and by far the common one; ST
+        // (ESC \) is the standards-conformant one and both are
+        // accepted, because shells in the wild emit each.
+        if (b == 0x07) return finish_osc(p);
+        if (b == 0x1B) { p->state = OSC_SAW_ESC; return ANSI_EATEN; }
+        // A control byte inside an OSC means the sender lost its place.
+        // Abandoning is better than swallowing the rest of the stream
+        // looking for a terminator that is not coming -- a newline in
+        // particular would otherwise eat a whole screen of output.
+        if (b < 0x20) { p->state = GROUND; p->osc_len = 0; return ANSI_EATEN; }
+        // TRUNCATE rather than refuse -- see ANSI_OSC_MAX. The bytes
+        // keep being consumed so the terminator is still found.
+        if (p->osc_len < ANSI_OSC_MAX - 1) p->osc[p->osc_len++] = (char)b;
+        return ANSI_EATEN;
+
+    case OSC_SAW_ESC:
+        if (b == '\\') return finish_osc(p); // ST
+        // Not a terminator: that ESC began something else, so abandon
+        // this OSC rather than folding a stray byte into the title.
+        p->state = GROUND;
+        p->osc_len = 0;
         return ANSI_EATEN;
 
     case IN_CSI:

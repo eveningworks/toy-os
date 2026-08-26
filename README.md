@@ -67,7 +67,9 @@ QEMU, and it does not stop at "hello world from the kernel":
   implementation. `/bin/tosh` runs on a pty in a window, which makes the
   shell in it a real process; `Ctrl-C`, `Ctrl-Z`, pipes, redirection and
   job control are the same code in both places, and a full-screen editor
-  runs in either.
+  runs in either. **Terminal has tabs** — each one its own pty, shell,
+  scrollback and title, read by its own thread, with the shell naming
+  its tab through an OSC escape.
 - **A real filesystem, in a real partition, on a disk it boots itself**
   — TFS3: block groups, real inodes, hardlinks, journal transactions,
   superblock backups and an `fsck`. It journals metadata, so files

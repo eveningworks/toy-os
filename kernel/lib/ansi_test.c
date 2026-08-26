@@ -4,6 +4,7 @@
 // rather than through a screenshot of either.
 #include "ktest.h"
 #include "ansi.h"
+#include "string.h" // k_strcmp/k_strlen -- the OSC checks compare text
 
 // Feeds a whole string and reports what came out: how many bytes a
 // caller would have PRINTED, and the colours left behind. That pair is
@@ -265,4 +266,132 @@ KTEST("ansi", "SGR still works, and does not resolve to a control op") {
     feed(&p, "\033[31m", out, sizeof out);
     KTEST_ASSERT(p.fg == VGA_RED);
     KTEST_ASSERT(ctrl_op(&p, "\033[32m") == ANSI_OP_NONE);
+}
+
+// --- OSC: the terminal's title ---------------------------------------
+//
+// Everything here is asserted through the parser alone, with no
+// terminal anywhere near it -- the same split the rest of this file
+// makes. What a GUI Terminal DOES with a title (put it on a tab) is
+// tools/terminal_probe.py's.
+
+// Feeds a sequence and returns the title it produced, or NULL. Also
+// reports how many bytes a caller would have PRINTED, because "the
+// sequence was swallowed" is half of every check below: a terminal that
+// does not implement titles must not paint one across the screen.
+static const char *osc_title(struct ansi_parser *p, const char *seq,
+                              int *out_printed, uint16_t *out_kind) {
+    const char *title = 0;
+    int printed = 0;
+    for (const char *s = seq; *s; s++) {
+        enum ansi_result r = ansi_feed(p, *s);
+        if (r == ANSI_PASS) printed++;
+        else if (r == ANSI_OSC) { title = p->osc; if (out_kind) *out_kind = p->a; }
+    }
+    if (out_printed) *out_printed = printed;
+    return title;
+}
+
+KTEST("ansi", "an OSC title arrives as text and prints nothing") {
+    struct ansi_parser p;
+    ansi_init(&p, VGA_LIGHT_GREY, VGA_BLACK);
+
+    int printed = -1;
+    uint16_t kind = 0xFFFF;
+    const char *t = osc_title(&p, "\033]0;hello\007", &printed, &kind);
+    KTEST_ASSERT(t != 0);
+    KTEST_ASSERT(k_strcmp(t, "hello") == 0);
+    KTEST_ASSERT_EQ((int)kind, ANSI_OSC_BOTH);
+    // THE HALF THAT IS EASY TO FORGET: not one byte of it reached the
+    // screen. A parser that reported the title and also printed it
+    // would pass every other check here.
+    KTEST_ASSERT_EQ(printed, 0);
+}
+
+KTEST("ansi", "both OSC terminators are accepted") {
+    struct ansi_parser p;
+    ansi_init(&p, VGA_LIGHT_GREY, VGA_BLACK);
+
+    // BEL is what xterm defined and what shells actually send.
+    KTEST_ASSERT(k_strcmp(osc_title(&p, "\033]2;bel\007", 0, 0), "bel") == 0);
+    // ST (ESC backslash) is the conformant one, and both are in the wild.
+    KTEST_ASSERT(k_strcmp(osc_title(&p, "\033]2;st\033\\", 0, 0), "st") == 0);
+}
+
+KTEST("ansi", "the OSC kind is reported, and an unknown one is swallowed") {
+    struct ansi_parser p;
+    ansi_init(&p, VGA_LIGHT_GREY, VGA_BLACK);
+
+    uint16_t kind = 0xFFFF;
+    KTEST_ASSERT(osc_title(&p, "\033]2;win\007", 0, &kind) != 0);
+    KTEST_ASSERT_EQ((int)kind, ANSI_OSC_TITLE);
+    KTEST_ASSERT(osc_title(&p, "\033]1;icon\007", 0, &kind) != 0);
+    KTEST_ASSERT_EQ((int)kind, ANSI_OSC_ICON);
+
+    // A code this terminal does not implement -- a hyperlink, say --
+    // must be swallowed rather than reported as a title, or every one
+    // of them would rename the tab.
+    int printed = -1;
+    KTEST_ASSERT(osc_title(&p, "\033]8;;http://x/\007", &printed, 0) == 0);
+    KTEST_ASSERT_EQ(printed, 0);
+}
+
+KTEST("ansi", "a malformed OSC is dropped rather than guessed at") {
+    struct ansi_parser p;
+    ansi_init(&p, VGA_LIGHT_GREY, VGA_BLACK);
+
+    int printed = -1;
+    // No `;` at all: which string this is has no safe default, so there
+    // is nothing to report.
+    KTEST_ASSERT(osc_title(&p, "\033]nonsense\007", &printed, 0) == 0);
+    KTEST_ASSERT_EQ(printed, 0);
+    // A non-numeric kind is the same case.
+    KTEST_ASSERT(osc_title(&p, "\033]x;title\007", 0, 0) == 0);
+}
+
+KTEST("ansi", "an unterminated OSC gives the screen back at the newline") {
+    struct ansi_parser p;
+    ansi_init(&p, VGA_LIGHT_GREY, VGA_BLACK);
+
+    // A program that starts an OSC and never terminates it would
+    // otherwise swallow the rest of the session looking for a BEL. The
+    // control byte is where the parser gives up -- so the text AFTER it
+    // still reaches the screen, which is the whole point.
+    char out[32];
+    int n = feed(&p, "\033]0;lost\nvisible", out, sizeof out);
+    KTEST_ASSERT_EQ(n, 7);
+    KTEST_ASSERT(k_strcmp(out, "visible") == 0);
+}
+
+KTEST("ansi", "an over-long OSC title is truncated, not overflowed") {
+    struct ansi_parser p;
+    ansi_init(&p, VGA_LIGHT_GREY, VGA_BLACK);
+
+    // 200 characters of title into a 64-byte buffer. The assertion is
+    // that it comes back SHORT and NUL-terminated -- the sequence is
+    // still consumed to its terminator, so nothing leaks to the screen
+    // either.
+    char seq[256];
+    int n = 0;
+    seq[n++] = 0x1B; seq[n++] = ']'; seq[n++] = '2'; seq[n++] = ';';
+    for (int i = 0; i < 200; i++) seq[n++] = 'A';
+    seq[n++] = 0x07;
+    seq[n] = '\0';
+
+    int printed = -1;
+    const char *t = osc_title(&p, seq, &printed, 0);
+    KTEST_ASSERT(t != 0);
+    KTEST_ASSERT(k_strlen(t) < ANSI_OSC_MAX);
+    KTEST_ASSERT_EQ(printed, 0);
+}
+
+KTEST("ansi", "a CSI still works after an OSC") {
+    struct ansi_parser p;
+    ansi_init(&p, VGA_LIGHT_GREY, VGA_BLACK);
+
+    // The state machine gained two states; this is what catches one of
+    // them failing to return to ground.
+    KTEST_ASSERT(osc_title(&p, "\033]0;t\007", 0, 0) != 0);
+    KTEST_ASSERT(ctrl_op(&p, "\033[5;9H") == ANSI_OP_MOVE_TO);
+    KTEST_ASSERT(p.a == 5 && p.b == 9);
 }

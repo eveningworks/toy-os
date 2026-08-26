@@ -166,7 +166,34 @@ static void end_line(void) {
     g_shown = 0;
 }
 
+// TELL THE TERMINAL WHERE THIS SHELL IS STANDING.
+//
+// `ESC]0;<text>BEL` is the sequence every terminal has taken as "set
+// your title" since xterm defined it, and it is what puts a useful
+// label on a tab instead of "Shell 2". A terminal that does not
+// implement it swallows the sequence whole -- the physical console
+// does exactly that (kernel/drivers/vga.c's default case), so this
+// costs a `text` boot nothing.
+//
+// **ONLY WHEN THE DIRECTORY CHANGES.** prompt() is called several times
+// per repaint, and a title emitted from there would put an escape
+// sequence between every keystroke and its echo. The cwd is what the
+// title says, so the cwd is what decides whether to say it again.
+static char g_titled[TOSH_PATH_MAX];
+
+static void announce_title(void) {
+    char here[TOSH_PATH_MAX];
+    if (sys_getcwd(here, sizeof here) < 0) return;
+    if (strcmp(here, g_titled) == 0) return;
+    strlcpy(g_titled, here, sizeof g_titled);
+
+    put("\033]0;");
+    put(here);
+    put("\007");
+}
+
 static void fresh_prompt(void) {
+    announce_title();
     // A PROMPT IS WHERE BACKGROUND NEWS GOES. Every path that draws one
     // comes through here -- a finished command, a bare Enter, a
     // cancelled line -- so this is the one place `[1]+ Done` can be

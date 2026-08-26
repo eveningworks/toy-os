@@ -49,7 +49,29 @@ enum ansi_result {
     ANSI_EATEN,  // consumed as part of a sequence; nothing to do yet
     ANSI_SGR,    // a complete SGR sequence: apply `fg`/`bg` from the state
     ANSI_CTRL,   // a complete cursor/erase sequence: act on `op`/`a`/`b`
+    // A complete OSC: the terminal has been told its TITLE. `osc` holds
+    // it and `a` says which of the two strings it is (see ANSI_OSC_*).
+    //
+    // **A CONSUMER MAY IGNORE THIS, and the physical console does.** The
+    // sequence is swallowed either way, which is the whole contract: a
+    // program that sets a title is correct on a terminal that has
+    // nowhere to put one.
+    ANSI_OSC,
 };
+
+// Which string an ANSI_OSC carries, from the number before the first
+// `;`. xterm defined 0 as "both", and every terminal since has kept it
+// -- so a shell that only wants a window title sends 0 and gets it.
+#define ANSI_OSC_BOTH  0 // icon name AND window title
+#define ANSI_OSC_ICON  1 // icon name only
+#define ANSI_OSC_TITLE 2 // window title only
+
+// The longest title kept. A longer one is TRUNCATED rather than
+// refused, which is the one place this parser guesses instead of
+// rejecting -- and deliberately: a title is decoration, so losing its
+// tail is better than losing the whole thing, and no consumer can be
+// harmed by a short string. Every real terminal truncates too.
+#define ANSI_OSC_MAX 64
 
 // What an ANSI_CTRL asks for. The parser resolves the letter AND applies
 // the defaults, so a caller never repeats rules like "a missing or zero
@@ -111,6 +133,10 @@ struct ansi_parser {
     // their defaults applied.
     enum ansi_op op;
     uint16_t a, b;
+    // The text of a completed ANSI_OSC, NUL-terminated. Meaningless in
+    // any other result, and rewritten by the next OSC.
+    char osc[ANSI_OSC_MAX];
+    uint8_t osc_len;
 };
 
 // Arms a parser with the colours the console currently shows, so a
