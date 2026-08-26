@@ -56,6 +56,30 @@ static inline void kbarrier(void) { __atomic_signal_fence(__ATOMIC_SEQ_CST); }
 
 // A real StoreLoad fence (MFENCE on x86-64). Needed only for the one
 // reordering TSO permits -- see this header's top comment.
+// A SPIN-WAIT HINT, and on a virtual machine it is not an optimisation.
+//
+// `pause` tells the CPU this is a spin loop. Three things follow, and
+// the second is the one that matters here:
+//
+//   * it stops the pipeline speculating down a loop that is going
+//     nowhere, and drops power draw;
+//   * **KVM's Pause-Loop Exiting watches for it.** A guest spinning
+//     WITHOUT pause is indistinguishable from a guest doing work, so the
+//     host runs it for its whole timeslice -- including when the thread
+//     it is waiting FOR is the QEMU main loop that would complete the
+//     I/O. A spin with pause exits to the host, which can then schedule
+//     that thread. A busy-wait with no pause starves the very thread it
+//     is waiting on;
+//   * it makes each iteration cost tens of cycles rather than a few, so
+//     a loop bounded by an ITERATION COUNT is worth far more wall-clock
+//     time -- which is what virtqueue.c's backstop is (see its comment
+//     on why the bound is a count and not a duration).
+//
+// None of this is visible under TCG, where the emulator yields
+// constantly and the host is never starved. That is why a suite that is
+// entirely TCG can be green while a KVM guest hangs.
+static inline void cpu_relax(void) { __asm__ volatile ("pause" ::: "memory"); }
+
 static inline void kmb(void) { __atomic_thread_fence(__ATOMIC_SEQ_CST); }
 
 #endif

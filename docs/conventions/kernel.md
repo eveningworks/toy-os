@@ -800,6 +800,32 @@ there, `SYS_SLEEP` is refused AND the monotonic clock never advances, so
 a poll loop spins against a deadline that cannot arrive and takes the
 machine with it.
 
+## A GUEST SPIN-WAIT NEEDS `cpu_relax()`, AND UNDER KVM THAT IS NOT AN OPTIMISATION
+
+`barrier.h`'s `cpu_relax()` is `pause`. KVM's Pause-Loop Exiting is how
+a hypervisor notices a spinning guest and schedules something else, and
+it triggers on that instruction -- so a spin WITHOUT one is
+indistinguishable from useful work, keeps its whole timeslice, and
+**starves the host thread it is waiting for**.
+
+That hung virtio-blk's first `FLUSH` of every run on a KVM guest with an
+SDL display, while reads and writes went through: a flush is the one
+request whose completion waits on the host's own fsync, run by the same
+QEMU thread the spinning vCPU was starving.
+
+**Only the VIRTQUEUE is exposed to this.** `chain_done()` reads
+`vq->used->idx`, which is plain guest RAM, so the loop never exits to
+the host. Every other polled path here -- `ata.c`, `ahci.c` -- reads
+MMIO or a port, which always traps and therefore yields for free.
+
+It helps twice: PLE can deschedule the vCPU, and each iteration costs
+tens of cycles rather than a few, so a loop bounded by an ITERATION
+COUNT is worth roughly an order of magnitude more wall-clock time.
+
+**A TCG-only suite is structurally blind to this class** -- the emulated
+vCPU yields constantly and the host is never starved. That is what
+`tools/kvm_soak.py` is for.
+
 ## VIRTIO INTERRUPTS ARE OPT-IN, a forgotten ISR read hangs the machine, and ENABLING IS THE LAST STEP
 
 `virtio_pci_find()` sets `PCI_CMD_INTX_DISABLE` on every device it

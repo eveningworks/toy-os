@@ -362,10 +362,22 @@ int virtqueue_poll(struct virtqueue *vq, int head, uint32_t *used_len) {
     // Accepted deliberately: a bound that is approximately right always
     // beats one that is exactly right except when it is catastrophically
     // wrong. Sized so that even a slow emulated host gets seconds.
+    // 4. AND THE LOOP PAUSES. Added after a KVM guest hung on the first
+    //    FLUSH of every run while reads and writes went through -- a
+    //    flush is the one request that waits on the HOST's own fsync,
+    //    so it is the one that needs the host to get CPU. A spin with no
+    //    `pause` is invisible to KVM's Pause-Loop Exiting, so the vCPU
+    //    keeps its whole timeslice and starves the QEMU thread that
+    //    would have completed the request. See barrier.h's cpu_relax().
+    //
+    //    It also makes the count above worth roughly an order of
+    //    magnitude more wall-clock time, for free, which is the honest
+    //    mitigation for a bound that is a count.
     uint64_t began = clocksource_now_ns();
     uint64_t polls = 0;
     for (; polls < VIRTQ_POLL_BACKSTOP; polls++) {
         if (chain_done(vq, head, used_len)) return 1;
+        cpu_relax();
     }
 
     // TIMED OUT, AND THE DESCRIPTORS ARE DELIBERATELY LEAKED.

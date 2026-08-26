@@ -294,6 +294,50 @@ parse. Making columns the default broke Notepad's dialog test the same
 day, because that test reads `ls /` a line at a time -- which is exactly
 the pipe case a real ls would have detected.
 
+## A guest spin-wait without `pause` starves the host thread it is waiting for
+
+`virtqueue_poll()` busy-waits for the device to publish a used-ring
+entry. It spun with no `pause` instruction, and under KVM that is not a
+missed optimisation -- it is a hang.
+
+The reported symptom: on `make run KVM=1 DISK=virtio` with an SDL
+display, the FIRST `VIRTIO_BLK_T_FLUSH` of a run never completed. Reads
+and writes went through; only flushes timed out, with 254 of 256
+descriptors still free, so nothing was backed up. TFS3 then abandoned
+every journal transaction, correctly.
+
+**Why only virtio, and only flush.** Three properties have to line up,
+which is why nothing here caught it:
+
+  * `chain_done()` reads `vq->used->idx` -- PLAIN GUEST RAM. Every other
+    polled path in this kernel (ata.c, ahci.c) reads MMIO or a port,
+    which always traps to the hypervisor and therefore yields. The
+    virtqueue is the only spin that can run without ever exiting.
+  * A FLUSH is the only request whose completion waits on the HOST's own
+    fsync, run by QEMU's main-loop thread. A read or a write is usually
+    satisfied from the host page cache and completes fast enough that
+    even a starved main loop gets there.
+  * KVM's Pause-Loop Exiting is how a hypervisor notices a spinning
+    guest and schedules something else, and it triggers on `pause`. A
+    spin without one is indistinguishable from useful work, so the vCPU
+    keeps its whole timeslice -- starving the very thread that would
+    complete the request. With an SDL display that thread is also doing
+    the rendering, which is what made it reproducible on one machine and
+    not another.
+
+Under TCG none of this applies: the emulated vCPU yields constantly and
+the host is never starved. **A suite that is entirely TCG is
+structurally blind to this class**, which is the general lesson and the
+reason `tools/kvm_soak.py` exists.
+
+`cpu_relax()` (barrier.h) is the fix, and it helps twice: PLE can now
+deschedule the spinning vCPU, and each iteration costs tens of cycles
+instead of a few -- so `VIRTQ_POLL_BACKSTOP`, which is an ITERATION
+COUNT rather than a duration, is worth roughly an order of magnitude
+more wall-clock time for free. That is the honest mitigation for a bound
+whose own comment admits it "is worth more or less time on a faster or
+slower machine".
+
 ## virtio: one shared transport, modern-only, polled
 
 **Why a shared core rather than a self-contained virtio-blk.** Every
