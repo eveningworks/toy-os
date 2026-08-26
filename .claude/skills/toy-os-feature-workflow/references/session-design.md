@@ -664,6 +664,60 @@ in a tracked directory (`data/...`) and is staged by the Makefile's
 fallback will hide the feature's absence** -- which is the same trap as
 the next bullet, arriving from a direction the test could not see.
 
+## NEVER WRITE A HAND-AUTHORED FILE INTO `seed/sync/` -- THE SOURCE IS `data/`
+
+**This has now bitten three times, twice in files that shipped ABSENT
+without anything failing.** Added at the maintainer's request
+(2026-08-26) because it "happens pretty much every time".
+
+`seed/sync/` looks like the filesystem the OS will boot with, and it is
+not a source tree. It is BUILD STAGING:
+
+  * it is gitignored (`/seed/sync/` in `.gitignore`), so a file written
+    there is never committed and `git status` says nothing;
+  * `make clean` deletes it wholesale, and `preflight.sh` STARTS with a
+    `make clean` -- so the file survives right up until the moment you
+    run the delivery gate;
+  * everything in it is COPIED there by the Makefile's seed step from a
+    tracked source.
+
+So the failure mode is the worst possible shape: it works perfectly on
+the machine that made it, every test passes, and the artifact exists
+nowhere else. The cursor themes shipped absent this way and the desktop
+silently fell back to its built-in shapes (the Makefile's own comment
+records it). A new app's `.desktop` entry went the same way -- the
+binary and the icon were on the image, because those come from `build/`
+and `data/`, so the app was installed and simply could not be launched
+from the GUI. The delivery even LISTED the file as added, which was
+false: `git add -A` had skipped it.
+
+**Where things actually go:**
+
+| what you are adding | write it here |
+|---|---|
+| a Start-menu / desktop entry | `data/wm/desktop/*.desktop` |
+| a startup entry | `data/wm/startup/` |
+| an app icon | `tools/gen_icons.py` -> `data/icons/` |
+| a font, wallpaper, cursor theme | `data/fonts/`, `data/wallpapers/`, `data/cursors/` |
+| a config file, sample data | `data/` (see `docs/filesystem-layout.md`) |
+| a program | nowhere -- the build discovers `.c` files |
+
+Then run `make iso`, which stages it into `seed/sync/` for you.
+
+**Two checks now exist, and knowing them is cheaper than rediscovering
+the trap.** `tools/check_layout.py` FAILS the build on a file staged
+under `seed/sync/` with no tracked source behind it, naming the `data/`
+directory it should have gone in -- it is in `preflight.sh`, so the gate
+catches this now. And the generic version of the lesson: **after adding
+any data file, check `git status` actually shows it.** A new file that
+does not appear there is not in the build.
+
+**The general shape, which is worth carrying past this repo:** when a
+tree mirrors another tree, find out which one is generated BEFORE
+writing into it. The giveaway here was in the Makefile the whole time,
+two lines above the copy: "staged here ... sync/ is a build-staging tree
+`make clean` deletes wholesale."
+
 ## 2026-08-19: the shell reaches ring 3, and one editor serves three front ends
 
 Where the project stands after it, so a session does not re-derive it:

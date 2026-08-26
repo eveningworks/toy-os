@@ -188,6 +188,49 @@ def orphans_on_image(disk, writer_dir, seed_root):
     return found
 
 
+
+# --- untracked files staged straight into seed/sync/ -------------------
+#
+# `seed/sync/` IS A BUILD-STAGING TREE, NOT A SOURCE TREE. It is
+# gitignored (`/seed/sync/` in .gitignore) and `make clean` deletes it
+# wholesale; everything in it is COPIED there by the Makefile's seed step
+# from a tracked source under `data/`, `build/` or the repo root.
+#
+# So a hand-authored file written straight into it works perfectly on the
+# machine that made it, is never committed, and vanishes at the next
+# `make clean`. That has now happened twice: the cursor themes shipped
+# absent and the desktop silently fell back to its built-in shapes (the
+# Makefile's own comment records it), and a new app's .desktop entry went
+# missing so the app was on the image with no way to launch it.
+#
+# Neither failure is loud. This is the check that makes it loud.
+SEED_SOURCES = {
+    "usr/wm/desktop":    "data/wm/desktop",
+    "usr/wm/startup":    "data/wm/startup",
+    "usr/share/icons":   "data/icons",
+    "usr/share/fonts":   "data/fonts",
+    "usr/share/wallpapers": "data/wallpapers",
+    "usr/share/cursors": "data/cursors",
+}
+
+
+def unsourced_staged_files(seed_root):
+    """Files staged under seed/sync/ with no tracked source behind them."""
+    out = []
+    for rel, src in sorted(SEED_SOURCES.items()):
+        staged = os.path.join(seed_root, rel)
+        source = os.path.join(REPO, src)
+        if not os.path.isdir(staged) or not os.path.isdir(source):
+            continue
+        # Cursor themes are a directory per theme; everything else is flat.
+        for root, _dirs, files in os.walk(staged):
+            for f in files:
+                sub = os.path.relpath(os.path.join(root, f), staged)
+                if not os.path.exists(os.path.join(source, sub)):
+                    out.append((os.path.join(rel, sub), src))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--disk", default=os.path.join(REPO, "disk.img"))
@@ -230,8 +273,24 @@ def main():
         print("write that down, then make the build match it.")
         return 1
 
-    # Warning, not failure -- see the module docstring on why.
+    # A file staged into seed/sync/ with nothing tracked behind it is a
+    # FAILURE, not a warning: it is already invisible to git and will be
+    # gone at the next `make clean`, so the build that produced it is the
+    # only one that will ever have it.
     seed_root = os.path.join(REPO, "seed", "sync")
+    if os.path.isdir(seed_root):
+        unsourced = unsourced_staged_files(seed_root)
+        if unsourced:
+            print("check_layout: FAIL -- file(s) staged into seed/sync/ with no "
+                  "tracked source.\n")
+            for path, src in unsourced:
+                print(f"  seed/sync/{path}")
+                print(f"      Nothing in {src}/ puts it there. seed/sync/ is "
+                      f"gitignored and\n      `make clean` deletes it -- move the "
+                      f"file to {src}/ and re-run `make iso`.")
+            return 1
+
+    # Warning, not failure -- see the module docstring on why.
     if os.path.isdir(seed_root):
         stale = orphans_on_image(args.disk, os.path.join(REPO, "tools"), seed_root)
         if stale:

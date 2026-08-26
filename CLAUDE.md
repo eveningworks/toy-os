@@ -398,6 +398,21 @@ trips them before it knows to look anything up.
   introspection, so the table they want is a `/proc`-shaped interface
   reached once the shell moves to ring 3, and converting first would
   build the wrong table (see `docs/roadmap.md`).
+- **NEVER WRITE A HAND-AUTHORED FILE INTO `seed/sync/` -- IT IS BUILD
+  STAGING, AND THE SOURCE IS `data/`.** It is gitignored and `make
+  clean` deletes it wholesale (and `preflight.sh` STARTS with a `make
+  clean`), so a file written there is never committed, survives until
+  the delivery gate, and then ships ABSENT with nothing failing. That
+  has happened three times: the cursor themes fell back to built-in
+  shapes, and a new app's `.desktop` entry went missing so the app was
+  installed and unlaunchable while its binary and icon -- which come
+  from `build/` and `data/` -- were both present. A Start-menu entry
+  goes in `data/wm/desktop/`, an icon in `tools/gen_icons.py` ->
+  `data/icons/`, a font/wallpaper/cursor theme in its own `data/`
+  directory; `make iso` stages them. `tools/check_layout.py` FAILS the
+  build on a staged file with no tracked source behind it and names the
+  directory it belonged in. The generic check: after adding a data file,
+  confirm `git status` shows it.
 - **`kernel/include/` is split by audience and the build enforces it**
   -- `api/` (what `apps/` may use), `abi/` (the kernel<->userland
   contract `userland/` shares), `kernel/` (internal, and NOT on
