@@ -492,7 +492,13 @@ static int on_tick(struct uapp *a) {
 // --- lifecycle --------------------------------------------------------
 
 static void on_open_cb(struct uapp *a) {
-    (void)a;
+    // THE WHOLE CONTENT AREA IS TEXT, so the shape is named ONCE here
+    // rather than tracked from motion -- which is exactly what xterm
+    // does (its I-beam covers the window, scrollbar included). There is
+    // no on_motion in this app at all, and this is why it does not need
+    // one. The compositor already stops honouring this outside the
+    // content area, so the title bar and the frame keep the arrow.
+    uapp_set_cursor(a, WIN_CURSOR_TEXT);
     ansi_init(&g_vt, VT_FG, VT_BG);
     vt_reset_screen();
 

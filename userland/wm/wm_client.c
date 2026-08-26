@@ -180,6 +180,18 @@ static void on_window_destroyed(int pid, uint32_t id) {
     wm_logf("wm: client pid %d closed window %u\n", pid, id);
 }
 
+// The pointer shape this client wants inside its content area. Stored
+// and nothing else: NO DAMAGE IS RAISED, because the cursor sprite is
+// not part of the scene the damage tracker describes -- wm.c redraws it
+// from wm_cursor_shape_changed() instead, which is a comparison against
+// what was last drawn and so cannot be missed the way a damage rect
+// raised for a window that is not repainting would be.
+static void on_window_cursor(int pid, uint32_t id, int cursor) {
+    int idx = find_client_window(pid, id);
+    if (idx < 0) return;
+    windows[idx].client_cursor = cursor;
+}
+
 static void on_window_title(int pid, uint32_t id, const char *title) {
     int idx = find_client_window(pid, id);
     if (idx < 0) return;
@@ -620,6 +632,9 @@ int wm_client_handle_event(const struct win_event *ev) {
         on_window_resized(pid, id, buf, ev->b, (int)ev->mods);
         break;
     }
+    case WIN_EV_CLIENT_CURSOR:
+        on_window_cursor(pid, id, (int)ev->b);
+        break;
     case WIN_EV_CLIENT_PONG:
         on_window_pong(pid, id, (uint32_t)ev->b);
         break;

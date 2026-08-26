@@ -1187,7 +1187,12 @@ void wm_run(void) {
             redraw_pending = 0;
             wm_render_frame(mx, my);
             rendered = 1;
-        } else if (mouse_moved) {
+        } else if (mouse_moved || wm_cursor_shape_changed(mx, my)) {
+            // THE SHAPE CAN MOVE WHILE THE MOUSE DOES NOT. A client
+            // names its cursor from a motion event it processes some
+            // frames later, so by the time the answer arrives the
+            // pointer has usually stopped -- and without this the
+            // I-beam would appear only on the next twitch of the mouse.
             wm_render_cursor_move(mx, my);
         }
 

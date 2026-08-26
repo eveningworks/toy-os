@@ -4503,3 +4503,86 @@ is deliberately not the rule the wheel follows: a wheel notch over a
 closed dropdown is ignored because the pointer is merely passing over it
 and the value would change unseen, whereas a typed letter can only
 arrive at the control that has keyboard focus.
+
+## The pointer's shape is NAMED by the client and CLAMPED by the compositor
+
+An I-beam over a text field is a request the client has to make, because
+it is the only thing that knows where its text is — and one the
+compositor has to be able to overrule, because a client is a separate
+process that can be slow, wedged or dying.
+
+**Why the client names it rather than drawing it.** X11 let a client
+supply a cursor image, and Wayland's original `wl_pointer.set_cursor`
+did the same; both meant every client loading the cursor theme, and
+Wayland eventually added `cursor-shape-v1` to undo it. Windows settled
+the same way: `WM_SETCURSOR` arrives, the app calls `SetCursor(HCURSOR)`,
+and the system paints. toy-os has no choice anyway — a client draws into
+its own buffer and the sprite is composited above every window — but
+`cursor_theme.h` had already committed to the layering in its header
+comment ("an APP names a shape, the COMPOSITOR owns the theme") and
+shipped a `text` shape in both themes. What was missing was purely the
+message.
+
+**Why not a region list.** The rejected alternative was a client
+publishing text-region rects the compositor hit-tests itself: no round
+trip and no latency. It is a second geometry model that goes stale on
+every scroll and resize, and it can only ever express "text" — a wait
+cursor, or a drag cursor later, needs a different mechanism beside it.
+A named shape costs one message per CHANGE and expresses all of them.
+
+**Why the client's list is shorter than the theme's.** A theme has six
+shapes; `WIN_CURSOR_*` has two. The resize cursors are the compositor's
+own conclusion about a frame the client does not own, and a client
+naming `resize-h` would be claiming an edge it cannot drag. Keeping
+`enum wm_cursor_kind` and `WIN_CURSOR_*` as two lists with an explicit
+mapping is the same call `cursor_theme.c` already made between the WM's
+enum and the file format's order, and for the same reason: adding a
+shape to either must not silently re-point the other.
+
+**Why the clamp is the load-bearing part.** Honouring a client's named
+shape everywhere would mean the last shape it named outlives the pointer
+being over it — and "it will notice" is exactly what stops being true
+when a component becomes a process (the same lesson the poisoned
+compositor mapping records). `client_cursor_at()` honours the shape only
+inside that window's content area, only for the topmost window at the
+point, and never under the taskbar or an open popup. That bounds every
+failure — a dropped event, a wedged client, a client that never resets —
+to "a wrong shape inside one window until the pointer crosses a
+boundary", which needs nobody to notice for it to end. It costs one
+hit-test the compositor was already doing to route input.
+
+**Why the value rides the event.** Every other client→compositor event
+here is thin: it says a window changed and the compositor re-reads with
+`WIN_REQ_WINDOW_INFO`. That is right when the detail does not fit in 24
+bytes. A shape is one small int, `WIN_REQ_WINDOW_INFO`'s four return
+slots are all spoken for, and a round trip would sit between the pointer
+entering a field and the shape changing — the one place here where a
+frame of latency is visible. The cost is that a DROPPED event (a full
+queue) is not recoverable by re-reading; the clamp is what makes that
+bounded rather than permanent.
+
+**Why the redraw hook is a comparison, not a flag.** A client answers a
+motion event some frames later, so the shape usually changes while the
+mouse is standing still — and the cheap render path only runs on a move.
+`wm_cursor_shape_changed()` compares the resolved shape against what was
+last actually drawn, which is the same shape `prev_cursor_*` takes
+("where the sprite really is", not "where we think we put it"): there is
+no dirty bit for a future caller to forget to set or to clear.
+
+**Why a widget slot AND an app call.** Text is not one widget here.
+`uui_textbox`/`uui_textview` declare `WIN_CURSOR_TEXT` in
+`uui_widget_ops.cursor` and every app that ever uses one gets the I-beam
+with no code — that is the router's whole purpose, and the alternative
+was every app re-implementing the same hit-test-then-set. But Notepad
+draws its document itself and the Terminal draws a character grid, and
+those are the two most obviously text-shaped surfaces in the system. So
+the app-facing `uapp_set_cursor()` exists for them, called after the
+widget tree has answered so an app has the last word over its own
+window. The Terminal names its shape ONCE at open rather than tracking
+motion, because its whole content area is text — which is exactly what
+xterm does, I-beam over its own scrollbar included.
+
+The slot is optional and nothing enforces it: NULL means
+`WIN_CURSOR_DEFAULT`, which is the right answer for almost every widget.
+That is why `tools/check_widget_ops.py` has no rule about it, unlike
+`release` beside `press` — a missing `cursor` fails at nothing.

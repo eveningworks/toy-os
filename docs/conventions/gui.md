@@ -774,6 +774,40 @@ this the obvious way), not from how much history it accumulated.
   the arrow from `wm_render.c`'s own arrays**, so re-run it after
   touching those or the shipped theme drifts from the fallback
   (`--check` fails on stale). See `docs/decisions.md`.
+- **A CLIENT NAMES ITS POINTER SHAPE, AND THE COMPOSITOR CLAMPS IT TO
+  THE CONTENT AREA.** `WIN_REQ_CURSOR` (`abi/win_proto.h`) carries a
+  `WIN_CURSOR_*` -- `DEFAULT` or `TEXT` today -- and the kernel forwards
+  it to the compositor as `WIN_EV_CLIENT_CURSOR`. That split is Wayland's
+  `cursor-shape-v1` and Win32's `WM_SETCURSOR`/`SetCursor`; a client here
+  could not paint a pointer anyway, since it draws into its own buffer
+  and the sprite is composited above every window. Six things.
+  **Set on MOTION, not once at startup**, because a window is not
+  uniformly one thing -- an editor's document wants the I-beam and its
+  toolbar does not (X11's per-window `XDefineCursor` is why xterm shows
+  an I-beam over its own scrollbar). **The list a CLIENT may name is
+  SHORTER than the theme's**: no resize shapes, because the frame is the
+  compositor's and a client naming `resize-h` would be claiming an edge
+  it does not own -- `WIN_CURSOR_*` and `enum wm_cursor_kind` are
+  deliberately two lists. **The clamp is the safety property**: a client
+  is a process that answers a motion event some frames later, and a
+  wedged one never answers at all, so `client_cursor_at()`
+  (`wm_render.c`) honours the named shape ONLY inside that window's
+  content area, only for the TOPMOST window at the point, and never
+  under the taskbar or an open popup -- which bounds a stale answer to
+  "wrong inside one window until the pointer crosses a boundary" instead
+  of an I-beam stranded over the desktop. **The VALUE rides the event**,
+  unlike thin `WIN_EV_CLIENT_TITLE`: it is one int, `WIN_REQ_WINDOW_INFO`
+  has no return slot left, and a round trip would sit between the
+  pointer entering a field and the shape changing. **The shape can move
+  while the mouse does not**, so `wm.c` asks `wm_cursor_shape_changed()`
+  beside `mouse_moved` -- a comparison against what was last drawn, not
+  a dirty flag somebody has to remember to set. And **a widget declares
+  it, an app only fills the gaps**: `uui_widget_ops.cursor` (NULL means
+  `DEFAULT`) is what `uui_textbox`/`uui_textview` use, the router asks
+  the deepest widget under the pointer on every motion, and
+  `uapp_set_cursor()` is the escape hatch for a surface that is not a
+  widget -- Notepad's document, the Terminal's grid (named ONCE at open,
+  since the whole grid is text). `tools/cursor_ibeam_test.py`.
 - **The cursor's drawn extent is DERIVED, not a constant.**
   `cursor_rect()` (`userland/wm/wm_render.c`) is the one place that
   answers "what box does the pointer occupy", and the save/restore pair

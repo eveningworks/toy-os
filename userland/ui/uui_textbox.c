@@ -282,6 +282,16 @@ static void textbox_bounds_op(const void *w, int *x, int *y, int *ow, int *oh) {
     *x = c->x; *y = c->y; *ow = c->w; *oh = c->h;
 }
 
+// THE I-BEAM. Declared once here and every app that ever puts a field
+// in a window gets it -- the compositor draws the shape, this only names
+// it (abi/win_proto.h's WIN_REQ_CURSOR). No coordinates are consulted: a
+// field is uniformly a place text goes, unlike a table with one editable
+// column.
+static int tb_ops_cursor(const void *w, int cx, int cy) {
+    (void)w; (void)cx; (void)cy;
+    return WIN_CURSOR_TEXT;
+}
+
 const struct uui_widget_ops uui_textbox_ops = {
     .bounds = textbox_bounds_op,
     .natural_size = te_ops_natural_size,
@@ -294,4 +304,5 @@ const struct uui_widget_ops uui_textbox_ops = {
     .accepts_focus = ops_accepts_focus,
     .press         = tb_ops_press,
     .motion        = tb_ops_motion,
+    .cursor        = tb_ops_cursor,
 };

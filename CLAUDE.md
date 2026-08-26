@@ -592,6 +592,7 @@ whenever a headline here tells you something you did not already know.
 - **The TASKBAR'S LAYOUT IS ONE FUNCTION, and past a floor it groups by app**
 - **The WM has a SLOW-FRAME WATCHDOG**
 - **There is a Crash Test app**
+- **A CLIENT NAMES ITS POINTER SHAPE, AND THE COMPOSITOR CLAMPS IT TO THE CONTENT AREA** -- `WIN_REQ_CURSOR` carries a `WIN_CURSOR_*` (`DEFAULT`/`TEXT`), Wayland's `cursor-shape-v1`; the list a client may name excludes the resize shapes because the frame is not its; the clamp is what stops a wedged client stranding an I-beam over the desktop; a widget declares it through `uui_widget_ops.cursor` and `uapp_set_cursor()` fills the gaps (Notepad's document, the Terminal's grid).
 - **The cursor's shapes are DATA FILES, and a theme is a directory.**
 - **The cursor's drawn extent is DERIVED, not a constant.**
 - **A compositor's view of a dead window is POISONED, not unmapped**
@@ -1115,7 +1116,13 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   with the panel's own pixels so "flagged open" cannot pass for "drawn").
 - **Run on demand, not in the gate** -- `doom_test.py` (DOOM runs, draws,
   animates and takes input; SKIPS cleanly when no IWAD has been fetched,
-  which is why it is not in the suite), `ansi_cursor_test.py` (ANSI
+  which is why it is not in the suite),
+  `cursor_ibeam_test.py` (**the I-beam over text, and the compositor's
+  clamp** -- all four ways a shape gets named, each with a control point
+  beside it; the two shapes are told apart by where they sit RELATIVE TO
+  THE HOTSPOT, so a MISSING sprite fails both tests rather than one, and
+  the load-bearing check is the title bar plus a window dragged UNDER
+  the taskbar), `ansi_cursor_test.py` (ANSI
   cursor movement and erasing, as PIXELS -- it kills the desktop first,
   since the console is what it photographs), `init_test.py` (init and
   service supervision), `console_shell_test.py` (a `text` boot reaching a ring-3

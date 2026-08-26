@@ -349,6 +349,29 @@ void uapp_flush(struct uapp *a);
 void uapp_quit(struct uapp *a, int status);
 int uapp_set_title(struct uapp *a, const char *title);
 
+// WHAT THE POINTER SHOULD LOOK LIKE over this window's content area: a
+// WIN_CURSOR_* (abi/win_proto.h) -- WIN_CURSOR_DEFAULT or
+// WIN_CURSOR_TEXT. The compositor draws it; this window only NAMES it,
+// which is Wayland's cursor-shape-v1 and Win32's SetCursor.
+//
+// **THE ESCAPE HATCH, not the usual route.** An app whose text lives in
+// a widget declares the shape in that widget's ops table (`cursor`,
+// ui/uui_widget.h) and calls nothing: the toolkit asks the widget tree
+// on every motion and sets this for you. This exists for the surfaces
+// that are NOT widgets -- Notepad's document area, the Terminal's grid
+// -- where the app is the only thing that knows where its text is.
+//
+// **CALL IT ON EVERY MOTION, INCLUDING TO SET IT BACK.** It is a state,
+// not an event: whatever was last named stays until something names
+// another, so an app that only sets WIN_CURSOR_TEXT on the way in keeps
+// the I-beam over its own toolbar. Repeats are free -- a call that does
+// not change the shape sends nothing at all, which is what makes this
+// safe on a per-pixel motion path.
+//
+// Called AFTER the widget tree has answered, so an app's on_motion has
+// the last word over its own window.
+void uapp_set_cursor(struct uapp *a, int cursor);
+
 // Asks the WM to close every window owned by `pid` -- the POLITE way to
 // end another process, which it may refuse. Returns 1 if at least one
 // window was asked, 0 if that pid has none. See sys_kill() for the half

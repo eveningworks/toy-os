@@ -498,6 +498,17 @@ int file_picker_handle_click(int mx, int my) {
     return 1;
 }
 
+// The I-beam over the filename field. THE COMPOSITOR'S OWN CHROME, so
+// there is no protocol involved -- but the answer comes from the same
+// widget an app's field would use, which is what keeps the WM's modal
+// and a client's window from disagreeing about what a text field looks
+// like. Returns a WIN_CURSOR_* (abi/win_proto.h).
+int file_picker_cursor_at(int mx, int my) {
+    if (!file_picker_open) return WIN_CURSOR_DEFAULT;
+    return uui_textbox_hit(&g_name_box, mx, my) ? WIN_CURSOR_TEXT
+                                                 : WIN_CURSOR_DEFAULT;
+}
+
 int file_picker_handle_key(int key) {
     if (!file_picker_open) return 0;
 

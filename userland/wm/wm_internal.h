@@ -328,7 +328,15 @@ const struct uimg *start_icon(int *out_x, int *out_y, int *out_size);
 // matching hand-drawn icon; wm.c's wm_run() loop doesn't care about
 // this, it's purely a rendering decision made each frame from
 // wm_find_resize_zone()/the active resizing state below.
-enum wm_cursor_kind { WM_CURSOR_NORMAL, WM_CURSOR_H, WM_CURSOR_V, WM_CURSOR_DIAG };
+// WM_CURSOR_TEXT is the odd one out: the other three are the
+// compositor's own conclusion from geometry it owns, and this one is a
+// CLIENT'S request (abi/win_proto.h's WIN_REQ_CURSOR), honoured only
+// while the pointer is inside that client's content area. Adding a
+// fifth that a client can name means extending WIN_CURSOR_* too --
+// these two lists are deliberately not the same list, because a client
+// has no business asking for a resize cursor on a frame it does not own.
+enum wm_cursor_kind { WM_CURSOR_NORMAL, WM_CURSOR_H, WM_CURSOR_V, WM_CURSOR_DIAG,
+                       WM_CURSOR_TEXT };
 
 // Finds which window (if any) the point (mx, my) is over a resize edge
 // of -- the same topmost-window-wins hit-testing wm_handle_left_click()
@@ -386,6 +394,18 @@ void wm_update_title_hover(int mx, int my);
 // exists).
 void wm_render_frame(int mx, int my);
 void wm_render_cursor_move(int mx, int my);
+
+// HAS THE POINTER'S SHAPE CHANGED SINCE IT WAS LAST DRAWN? A client
+// names its cursor asynchronously (it is a process, and it answers a
+// motion event some frames later), so the shape can move while the
+// mouse is perfectly still -- and the cheap render path above only runs
+// when the mouse moved. Asked once a frame beside `mouse_moved`.
+//
+// A COMPARISON, NOT A FLAG. What was last drawn is recorded by the code
+// that drew it, so there is no "cursor is dirty" bit for a new caller to
+// forget to set or to clear -- the same reason prev_cursor_* is "where
+// the sprite actually is" rather than "where we think we put it".
+int wm_cursor_shape_changed(int mx, int my);
 
 // wm_client.c -- the WM acting as the window server for ring-3 clients.
 // Registers/unregisters itself with kernel/proc/win_server.c around

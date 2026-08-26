@@ -185,6 +185,47 @@ int uui_router_motion(struct uui_router *r, int cx, int cy, unsigned buttons,
     return id;
 }
 
+// Which pointer shape belongs at (cx, cy) -- the deepest widget under
+// the pointer that declares one wins, searched back to front so the
+// topmost control answers, exactly as a press is routed.
+//
+// Deliberately NOT routed through the grab: a drag that started in a
+// text field and wandered onto the toolbar should keep the I-beam only
+// while it is over something that wants one. A grab is about who gets
+// told; the cursor is about what is under it.
+static int cursor_item(struct uui_item *it, int cx, int cy) {
+    if (it->hidden) return WIN_CURSOR_DEFAULT;
+    int n = 0;
+    struct uui_item *sub = nested(it, &n);
+    if (sub) {
+        if (!container_admits(it, cx, cy)) return WIN_CURSOR_DEFAULT;
+        for (int i = n - 1; i >= 0; i--) {
+            int c = cursor_item(&sub[i], cx, cy);
+            if (c != WIN_CURSOR_DEFAULT) return c;
+        }
+        // Fall through to the container's own answer, same as press.
+    }
+    if (!it->ops || !it->ops->cursor) return WIN_CURSOR_DEFAULT;
+    if (it->ops->hit && !it->ops->hit(it->widget, cx, cy)) return WIN_CURSOR_DEFAULT;
+    return it->ops->cursor(it->widget, cx, cy);
+}
+
+int uui_router_cursor(const struct uui_router *r, int cx, int cy) {
+    // An OPEN POPUP is drawn over its siblings and answers first, for
+    // the same reason it is offered every press first: its rows are
+    // outside its own `hit` and the walk below would never reach them.
+    struct uui_item *ov = overlay_owner(r->items, r->count);
+    if (ov && ov->ops->cursor) {
+        int c = ov->ops->cursor(ov->widget, cx, cy);
+        if (c != WIN_CURSOR_DEFAULT) return c;
+    }
+    for (int i = r->count - 1; i >= 0; i--) {
+        int c = cursor_item(&r->items[i], cx, cy);
+        if (c != WIN_CURSOR_DEFAULT) return c;
+    }
+    return WIN_CURSOR_DEFAULT;
+}
+
 static int id_of_item(struct uui_item *it, const void *widget) {
     if (it->widget == widget) return it->id;
     int n = 0;

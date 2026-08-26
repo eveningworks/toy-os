@@ -406,6 +406,25 @@ static void draw_scrollbar(struct ugfx_surface *s, int tx, int ty, int tw, int t
                         NP_SCROLLBAR_FLAGS);
 }
 
+// The Save-as dialog's filename field. ONE FUNCTION FOR BOTH the
+// drawing and the cursor hit test, the same rule the WM's title_icon()
+// follows: a field whose drawn rect and whose reported rect are computed
+// twice is a field they can disagree about, and an I-beam over empty
+// panel would be the visible half of that.
+//
+// Returns 0 when there is no field on screen -- the dialog is closed, or
+// it is the OPEN listing, which has no editable field at all.
+static int dialog_field_rect(int cw, int ch, int *fx, int *fy, int *fw, int *fh) {
+    if (!g_dialog_open || !g_dialog_saving) return 0;
+    int w = cw - 80, x = 40, y = 40;
+    (void)ch;
+    *fx = x + 10;
+    *fy = y + 10 + ugfx_char_h() + 8;
+    *fw = w - 20;
+    *fh = ugfx_char_h() + 4;
+    return 1;
+}
+
 static void draw_dialog(struct ugfx_surface *s) {
     int w = s->w - 80, h = s->h - 80;
     int x = 40, y = 40;
@@ -432,10 +451,15 @@ static void draw_dialog(struct ugfx_surface *s) {
     int list_y = y + 10 + ugfx_char_h() + 8;
 
     if (g_dialog_saving) {
-        ugfx_fill_rect(s, x + 10, list_y, w - 20, row_h, UTHEME_WHITE);
-        ugfx_draw_string(s, x + 14, list_y + 2, g_name_field, UTHEME_TEXT, UTHEME_WHITE);
+        // THE FIELD'S RECT COMES FROM dialog_field_rect(), the same
+        // answer the cursor hit test uses -- computing it twice is how
+        // an I-beam ends up hovering over empty panel.
+        int fx = 0, fy = 0, fw = 0, fh = 0;
+        if (!dialog_field_rect(s->w, s->h, &fx, &fy, &fw, &fh)) return;
+        ugfx_fill_rect(s, fx, fy, fw, fh, UTHEME_WHITE);
+        ugfx_draw_string(s, fx + 4, fy + 2, g_name_field, UTHEME_TEXT, UTHEME_WHITE);
         // Caret, so it reads as an editable field rather than a label.
-        ugfx_fill_rect(s, x + 14 + ugfx_text_width(g_name_field), list_y + 2,
+        ugfx_fill_rect(s, fx + 4 + ugfx_text_width(g_name_field), fy + 2,
                         2, ugfx_char_h(), UTHEME_TEXT);
         return;
     }
@@ -954,6 +978,28 @@ static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
 static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
     int tx, ty, tw, th;
     text_rect_for(uapp_width(a), uapp_height(a), &tx, &ty, &tw, &th);
+
+    // THE I-BEAM, over the document and nothing else: the menu bar, the
+    // status bar and the scrollbar all keep the arrow, and so does the
+    // whole window while a menu popup or a dialog is covering it. The
+    // document is not a widget here, so this is uapp_set_cursor()'s
+    // reason for existing (ui/uapp.h) -- and it is set on EVERY motion,
+    // including back to the arrow, because it is a state and not an
+    // event. Repeats cost nothing; uapp_set_cursor() drops them.
+    {
+        int fx, fy, fw, fh;
+        int over_text;
+        if (dialog_field_rect(uapp_width(a), uapp_height(a), &fx, &fy, &fw, &fh)) {
+            // The Save-as field is the only text in reach while the
+            // dialog is up -- it covers the document, so the document's
+            // own rect must not answer here.
+            over_text = x >= fx && x < fx + fw && y >= fy && y < fy + fh;
+        } else {
+            over_text = x >= tx && x < tx + tw && y >= ty && y < ty + th &&
+                        !uui_menubar_is_open(&g_menu) && !g_dialog_open;
+        }
+        uapp_set_cursor(a, over_text ? WIN_CURSOR_TEXT : WIN_CURSOR_DEFAULT);
+    }
 
     // The menu tracks the cursor whether or not a button is held -- that
     // is what makes press-on-a-title, drag-down, release-on-an-item work,

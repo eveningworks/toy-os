@@ -3587,3 +3587,13 @@ so, which is the listing cap working as designed rather than a second
 finding.
 
 
+
+## Four overlays still opt out of damage tracking
+
+The context menu, the calendar popup, the file picker and the confirm
+dialog each force a full-screen repaint every frame while they are open.
+The Start menu was converted and the three steps are the same: track the
+hovered row rather than deriving it from `(mx, my)` inside the draw,
+damage only the overlay's own rect when that row changes, and stop
+setting `redraw_pending` unconditionally. See `start_menu.c`'s own
+comment for the worked example and the measurement that motivated it.

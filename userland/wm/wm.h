@@ -157,6 +157,18 @@ struct window {
     // is never grounds for anything -- it is paired with a missing pong,
     // which is what separates "declined" from "wedged".
     uint64_t close_asked_tick;
+
+    // WHICH POINTER SHAPE THIS CLIENT ASKED FOR (a WIN_CURSOR_*), and
+    // honoured only while the pointer is inside its CONTENT area --
+    // never over its own title bar, its frame, another window, the
+    // taskbar or the desktop. That clamp is the whole reason a stale or
+    // wedged client cannot leave a wrong cursor on the screen: the
+    // compositor already hit-tests all of that to route input, so
+    // bounding the client's say-so to what it owns costs nothing.
+    //
+    // Always WIN_CURSOR_DEFAULT for a kernel-space app window, which has
+    // no client to ask.
+    int client_cursor;
 };
 
 // Height of a window's title bar in pixels (matches the taskbar height).

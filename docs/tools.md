@@ -1036,6 +1036,29 @@ window without going through it will find its layout polls timing out.
   explicitly at the start -- they persist to the disk image, so
   inheriting them makes every measurement relative to a silently wrong
   baseline. In `gui_regress.py`.
+- **`cursor_ibeam_test.py`** -- the I-beam (12 checks): a client naming
+  its pointer shape (`WIN_REQ_CURSOR`) and the compositor's clamp. It
+  covers all four ways a shape is named -- a widget's ops table
+  (`uui_textbox` in UI Demo, with no app code at all), an app's own
+  `uapp_set_cursor()` (Notepad's document), a window-wide constant set
+  at open (the Terminal's grid), and the WM's own modal chrome
+  (Notepad's Save-as field) -- with a control point beside each: the
+  dropdown next to the textbox, the menu bar and scrollbar and status
+  bar around the document, the dialog's panel below the field.
+  Two things worth knowing before editing it. **The two shapes are told
+  apart by where they sit RELATIVE TO THE HOTSPOT**, not by size or by
+  ink: the arrow is drawn from the pointer down and right (bbox starts
+  at 0,0), the I-beam is centred on it (bbox starts near -3,-8). That is
+  what makes a wrong shape unable to pass as the right one, and a
+  MISSING one fail both tests rather than one. And **the sprite is
+  isolated by a THREE-frame diff** -- away, here, away again, keeping
+  only pixels that differ from both away-frames -- because the
+  two-frame version reported Notepad's menu bar as an I-beam when the
+  menu title under the pointer redrew its hover. Its load-bearing check
+  is the clamp: the same window's TITLE BAR, and the taskbar with the
+  window deliberately dragged UNDER it, must both read as arrow, which
+  a compositor that simply believed the client would fail while every
+  other check still passed. On demand, not in `gui_regress.py`.
 - **`font_test.py`** -- runtime fonts end to end (~20 checks): a `.ttf`
   under `/usr/share/fonts` rasterizes, switching faces reaches the
   screen with NO restart (the compositor is told through `WIN_EV_FONT`),

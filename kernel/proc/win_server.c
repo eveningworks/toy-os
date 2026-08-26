@@ -147,6 +147,14 @@ struct client_window {
 
     unsigned hint_flags;
     int min_w, min_h;
+
+    // The WIN_CURSOR_* shape this window wants under the pointer while
+    // the pointer is inside its content area. Held here for the same
+    // reason the title is: the kernel is where the client's request
+    // arrives, and the compositor is a process that has to be told.
+    // Unlike the title it is also SENT with the event, because it fits
+    // -- see WIN_EV_CLIENT_CURSOR in abi/win_proto.h.
+    int cursor;
 };
 
 // The registered compositor: which process may map other processes'
@@ -582,6 +590,9 @@ static int create_window(int pid, uint64_t pml4, int w, int h, int x, int y,
     cw->hint_flags = 0;
     cw->min_w = 0;
     cw->min_h = 0;
+    // A slot is REUSED, so this has to be cleared rather than assumed:
+    // the previous tenant may have died holding an I-beam.
+    cw->cursor = WIN_CURSOR_DEFAULT;
 
     tell_compositor(WIN_EV_CLIENT_CREATED, pid, cw->id, w, (uint32_t)h);
 
@@ -1244,6 +1255,21 @@ int win_server_request(int pid, struct win_request_msg *req) {
         if (g_ops && g_ops->window_hints) {
             g_ops->window_hints(pid, cw->id, (unsigned)req->a, req->b, req->c);
         }
+        return 1;
+    }
+    case WIN_REQ_CURSOR: {
+        struct client_window *cw = lookup(pid, req->window);
+        if (!cw) return 0;
+        // Refuse rather than clamp -- a client built against a later
+        // WIN_CURSOR_* than this kernel should find out. Negative is
+        // caught by the same bound.
+        if (req->a < 0 || req->a >= WIN_CURSOR_COUNT) return 0;
+        // Accepted and silent when it did not move: a client is expected
+        // to filter, but a client that does not must not make the
+        // compositor's queue its problem.
+        if (cw->cursor == req->a) return 1;
+        cw->cursor = req->a;
+        tell_compositor(WIN_EV_CLIENT_CURSOR, pid, cw->id, req->a, 0);
         return 1;
     }
     case WIN_REQ_RESIZE: {

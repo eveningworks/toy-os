@@ -33,6 +33,12 @@ struct uapp {
     // notches and no coordinates -- and "which widget is under the
     // cursor" is the only sane answer to where a wheel goes.
     int mouse_x, mouse_y;
+
+    // The WIN_CURSOR_* last NAMED to the compositor. Kept so
+    // uapp_set_cursor() can drop the no-op: an app is expected to call
+    // it on every motion event, and a syscall per pixel of pointer
+    // travel is not what that should cost.
+    int cursor;
 };
 
 // One process, one window -- which is what every client does today, and
@@ -274,6 +280,21 @@ int uapp_resize(struct uapp *a, int w, int h) {
     return 1;
 }
 
+void uapp_set_cursor(struct uapp *a, int cursor) {
+    if (cursor < 0 || cursor >= WIN_CURSOR_COUNT) return;
+    if (a->cursor == cursor) return;
+    struct win_request_msg req;
+    req_clear(&req);
+    req.type = WIN_REQ_CURSOR;
+    req.window = a->window;
+    req.a = cursor;
+    // Remember it either way. A server that refuses this (one built
+    // before the request existed) would otherwise be asked again on
+    // every single motion event, forever.
+    a->cursor = cursor;
+    req_send(&req);
+}
+
 int uapp_set_title(struct uapp *a, const char *title) {
     struct win_request_msg req;
     req_clear(&req);
@@ -511,6 +532,14 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
             int changed = held ? uui_button_group_press(d->buttons, ev->a, ev->b)
                                 : uui_button_group_hover(d->buttons, ev->a, ev->b);
             if (changed) a->dirty = 1;
+        }
+        // THE WIDGET TREE ANSWERS FIRST, THE APP OVERRIDES. A text field
+        // declares the I-beam in its ops table and no app writes a line;
+        // an app whose text is not a widget (Notepad's document, the
+        // Terminal's grid) calls uapp_set_cursor() from on_motion below
+        // and gets the last word over its own window.
+        if (a->router.count) {
+            uapp_set_cursor(a, uui_router_cursor(&a->router, ev->a, ev->b));
         }
         if (d->on_motion) d->on_motion(a, ev->a, ev->b, ev->mods);
         break;

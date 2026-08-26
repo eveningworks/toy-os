@@ -38,6 +38,7 @@ static int kind_to_index(enum wm_cursor_kind kind) {
         case WM_CURSOR_H:    return 1;
         case WM_CURSOR_V:    return 2;
         case WM_CURSOR_DIAG: return 3;
+        case WM_CURSOR_TEXT: return 4;
         default:             return 0;
     }
 }
