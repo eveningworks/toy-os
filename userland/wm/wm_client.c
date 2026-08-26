@@ -180,12 +180,9 @@ static void on_window_destroyed(int pid, uint32_t id) {
     wm_logf("wm: client pid %d closed window %u\n", pid, id);
 }
 
-// The pointer shape this client wants inside its content area. Stored
-// and nothing else: NO DAMAGE IS RAISED, because the cursor sprite is
-// not part of the scene the damage tracker describes -- wm.c redraws it
-// from wm_cursor_shape_changed() instead, which is a comparison against
-// what was last drawn and so cannot be missed the way a damage rect
-// raised for a window that is not repainting would be.
+// Stored and nothing else -- no damage: the sprite is not part of the
+// scene the damage tracker describes, and wm.c redraws it from
+// wm_cursor_shape_changed() instead.
 static void on_window_cursor(int pid, uint32_t id, int cursor) {
     int idx = find_client_window(pid, id);
     if (idx < 0) return;
@@ -842,6 +839,7 @@ void wm_client_send_close(struct window *win) {
 // echoes it back in WIN_REQ_PONG (uapp does this, so no application
 // contains ping code), and a client that does not answer within
 int wm_ping_timeout_ticks = WM_PING_TIMEOUT_DEFAULT;
+int wm_ping_interval_ticks = WM_PING_INTERVAL_DEFAULT;
 
 // wm_ping_timeout_ticks is not answering its queue at all. That is
 // xdg_shell's ping and ICCCM's _NET_WM_PING, for the same reason.
@@ -890,20 +888,32 @@ int wm_client_check_liveness(void) {
     for (int i = 0; i < window_count; i++) {
         struct window *w = &windows[i];
         if (!wm_client_is_client_window(w)) continue;
-        if (!w->ping_serial) continue;
+        if (!w->ping_serial) {
+            // ASK, on a cadence. ping_sent_tick doubles as "when the
+            // last one went out" -- it outlives the serial the pong
+            // clears -- so the interval is measured from the last ASK,
+            // not the last answer.
+            if (now - w->ping_sent_tick >= (uint64_t)wm_ping_interval_ticks)
+                wm_client_ping(w);
+            continue;
+        }
         if (now - w->ping_sent_tick < (uint64_t)wm_ping_timeout_ticks) continue;
 
         if (!w->not_responding) {
             w->not_responding = 1;
             redraw_pending = 1;
             wm_logf("wm: client pid %d is not responding\r\n", w->client_pid);
-            // Only a window the user has actually asked to close earns a
-            // dialog. An app that hangs while nobody is trying to do
-            // anything with it gets the title-bar mark and nothing more
-            // -- a modal that appears on its own, over whatever the user
-            // was doing, for a window they never touched, would be worse
-            // than the hang.
-            if (w->close_asked_tick) report = i;
+        }
+        // Only a window the user has actually asked to close earns a
+        // dialog, and only once per ask. An app that hangs while nobody
+        // is trying to do anything with it gets the title-bar mark and
+        // nothing more -- a modal appearing on its own, over whatever
+        // the user was doing, for a window they never touched, would be
+        // worse than the hang.
+        if (w->close_asked_tick &&
+            w->close_asked_tick != w->force_quit_offered_tick) {
+            w->force_quit_offered_tick = w->close_asked_tick;
+            report = i;
         }
     }
     return report;

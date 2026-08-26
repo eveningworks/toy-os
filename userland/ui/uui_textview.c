@@ -251,7 +251,7 @@ static void te_ops_set_geometry(void *w, int x, int y, int width, int height) {
 // functions already existed; only the table was short. Three other
 // widgets had the same gap the same day; tools/check_widget_ops.py
 // exists to stop a fourth. See docs/decisions.md.
-// The I-beam over the document, same rule as uui_textbox's -- see there.
+// Uniformly text, like uui_textbox's.
 static int tv_ops_cursor(const void *w, int cx, int cy) {
     (void)w; (void)cx; (void)cy;
     return WIN_CURSOR_TEXT;

@@ -386,16 +386,11 @@ static void draw_cursor_diag(int x, int y) { // corner resize -- same shape as H
     }
 }
 
-// The built-in I-beam, for a theme that did not ship a `text` shape.
-// Both stock themes do, so this is the degrade path rather than the
-// normal one -- but it has to exist, because "no theme file" must mean
-// "an ordinary-looking pointer", never "no pointer at all".
+// The built-in I-beam, for a theme with no `text` shape.
 //
-// **CENTRED ON THE HOTSPOT, unlike the three above.** A resize wedge is
-// drawn from its anchor down and right; an insertion point is a bar
-// whose MIDDLE is the pixel the user is pointing at, which is where a
-// click will land the caret. CURSOR_TEXT_HOT_X/Y are what cursor_rect()
-// subtracts, and the two must agree or a move strands the sprite.
+// CENTRED ON THE HOTSPOT, unlike the three above, which draw from their
+// anchor down and right. cursor_rect() subtracts the same
+// CURSOR_TEXT_HOT_X/Y; if the two disagree a move strands the sprite.
 #define CURSOR_TEXT_W     7
 #define CURSOR_TEXT_H     17
 #define CURSOR_TEXT_HOT_X 3
@@ -404,9 +399,8 @@ static void draw_cursor_diag(int x, int y) { // corner resize -- same shape as H
 static void draw_cursor_text(int x, int y) {
     uint32_t color = UTHEME_WHITE, outline = ugfx_rgb(0, 0, 0);
     int ox = x - CURSOR_TEXT_HOT_X, oy = y - CURSOR_TEXT_HOT_Y;
-    // Outline: the full 7x17 silhouette -- the serifs top and bottom
-    // plus the shaft -- drawn one pixel out in every direction, so the
-    // bar stays visible over white paper as well as over dark text.
+    // Outline one pixel out all round, so the bar stays visible over
+    // white paper as well as over dark text.
     for (int j = 0; j < CURSOR_TEXT_H; j++) {
         int serif = (j <= 1 || j >= CURSOR_TEXT_H - 2);
         int x0 = serif ? 0 : CURSOR_TEXT_HOT_X - 1;
@@ -420,6 +414,39 @@ static void draw_cursor_text(int x, int y) {
     for (int i = 1; i < CURSOR_TEXT_W - 1; i++) {
         ugfx_put_pixel(wm_surface(), ox + i, oy + 1, color);
         ugfx_put_pixel(wm_surface(), ox + i, oy + CURSOR_TEXT_H - 2, color);
+    }
+}
+
+// The built-in busy pointer, for a theme with no `wait` shape. Centred
+// on its hotspot like the I-beam, not anchored like the wedges.
+#define CURSOR_WAIT_W     11
+#define CURSOR_WAIT_H     15
+#define CURSOR_WAIT_HOT_X 5
+#define CURSOR_WAIT_HOT_Y 7
+
+// Half-width of the glass at row j: 5 at the waist, tapering to 2 at
+// the bars. Matches the shipped theme's silhouette so the fallback and
+// the theme read as the same object.
+static int wait_half(int j) {
+    int d = j - CURSOR_WAIT_HOT_Y;
+    if (d < 0) d = -d;
+    return 5 - (d >= 2) - (d >= 4) - (d >= 6);
+}
+
+static void draw_cursor_wait(int x, int y) {
+    uint32_t color = UTHEME_WHITE, outline = ugfx_rgb(0, 0, 0);
+    int cx = x, oy = y - CURSOR_WAIT_HOT_Y;
+    for (int j = 0; j < CURSOR_WAIT_H; j++) {
+        if (j == 0 || j == CURSOR_WAIT_H - 1) { // the end bars
+            for (int i = -4; i <= 4; i++)
+                ugfx_put_pixel(wm_surface(), cx + i, oy + j, outline);
+            continue;
+        }
+        int h = wait_half(j);
+        ugfx_put_pixel(wm_surface(), cx - h, oy + j, outline);
+        ugfx_put_pixel(wm_surface(), cx + h, oy + j, outline);
+        for (int i = -(h - 1); i <= h - 1; i++)
+            ugfx_put_pixel(wm_surface(), cx + i, oy + j, color);
     }
 }
 
@@ -472,6 +499,7 @@ static void draw_cursor(int x, int y, enum wm_cursor_kind kind) {
         case WM_CURSOR_V:    draw_cursor_v(x, y);    break;
         case WM_CURSOR_DIAG: draw_cursor_diag(x, y); break;
         case WM_CURSOR_TEXT: draw_cursor_text(x, y); break;
+        case WM_CURSOR_WAIT: draw_cursor_wait(x, y); break;
         default:              draw_cursor_normal(x, y); break;
     }
 }
@@ -484,31 +512,18 @@ static void draw_cursor(int x, int y, enum wm_cursor_kind kind) {
 // window's edge mid-drag); otherwise ask the same hit-test the click
 // handler uses (wm_find_resize_zone(), wm_input.c) so hovering shows the
 // cursor before you click, not just while dragging.
-// THE CLIENT'S SAY-SO, CLAMPED TO WHAT THE CLIENT OWNS. A ring-3 app
-// names the shape it wants (abi/win_proto.h's WIN_REQ_CURSOR) and the
-// WM stores it per window; this is the only place it is honoured, and
-// it is honoured only inside that window's CONTENT area.
+// The client's say-so, CLAMPED to what the client owns: its content
+// area, topmost window only, never under the taskbar or a popup.
 //
-// **THE CLAMP IS THE SAFETY PROPERTY, not a nicety.** A client is a
-// process that answers a motion event some frames later, and one that
-// is wedged, slow or dying never answers at all -- so the last shape it
-// named outlives the pointer being over it. Bounding it to the content
-// rect turns "an I-beam stuck over the desktop until something restarts"
-// into "a wrong shape inside one window until the pointer crosses a
-// boundary", which nothing has to notice for it to end. It costs one
-// hit-test the compositor was already doing to route input.
-//
-// Anything drawn ABOVE the windows disqualifies it too: the taskbar,
-// and any open popup or modal. Those are the compositor's own pixels,
-// and a client whose window happens to lie under them does not get to
-// say what the pointer looks like there.
+// The clamp is the safety property. A client is a process; a wedged one
+// never answers, so the shape it last named outlives the pointer being
+// over it. Bounding it costs one hit-test already done for input
+// routing, and turns "stranded over the desktop" into "wrong inside one
+// window until the pointer crosses a boundary".
 static enum wm_cursor_kind client_cursor_at(int mx, int my) {
-    // The file picker is the one piece of the WM's OWN chrome with a
-    // text field in it. It is asked here rather than given a branch of
-    // its own so there is a single answer to "what shape is the pointer",
-    // and it answers from uui_textbox's hit test -- the same widget a
-    // client's field is, so the two cannot disagree about what a field
-    // looks like.
+    // The picker is the WM's own chrome with a text field in it, and it
+    // answers from uui_textbox's hit test -- the same widget a client's
+    // field is, so the two cannot disagree.
     if (file_picker_open) {
         return file_picker_cursor_at(mx, my) == WIN_CURSOR_TEXT
                 ? WM_CURSOR_TEXT : WM_CURSOR_NORMAL;
@@ -521,14 +536,18 @@ static enum wm_cursor_kind client_cursor_at(int mx, int my) {
         struct window *w = &windows[i];
         if (w->state == WIN_MINIMIZED) continue;
         if (!uui_hit(w->x, w->y, w->w, w->h, mx, my)) continue;
-        // TOPMOST HIT WINS EITHER WAY -- a window below this one is
-        // covered here, so the search stops whether or not this window
-        // had anything to say. Falling through to the next one would
-        // let a buried text field show its I-beam through the window
-        // on top of it.
+        // Topmost hit wins EITHER WAY: the search stops whether or not
+        // this window had anything to say, or a buried text field would
+        // show its I-beam through the window covering it.
         if (!uui_hit(window_content_x(w), window_content_y(w),
                      window_content_w(w), window_content_h(w), mx, my)) break;
+        // NOT ANSWERING OUTRANKS WHATEVER IT LAST SAID. A wedged client
+        // cannot name a shape -- naming one needs the event loop that
+        // is wedged -- so this is the case only the compositor can
+        // report, and it must override a stale TEXT.
+        if (w->not_responding) return WM_CURSOR_WAIT;
         if (w->client_cursor == WIN_CURSOR_TEXT) return WM_CURSOR_TEXT;
+        if (w->client_cursor == WIN_CURSOR_WAIT) return WM_CURSOR_WAIT;
         break;
     }
     return WM_CURSOR_NORMAL;
@@ -545,9 +564,8 @@ static enum wm_cursor_kind resolve_cursor_kind(int mx, int my) {
     if (cur_right && cur_bottom) return WM_CURSOR_DIAG;
     if (cur_right) return WM_CURSOR_H;
     if (cur_bottom) return WM_CURSOR_V;
-    // The frame first, the content second: a resize edge is the
-    // compositor's own conclusion about geometry it owns, and it wins
-    // over anything the client inside asked for.
+    // Frame first: a resize edge is geometry the compositor owns, and
+    // wins over anything the client inside asked for.
     return client_cursor_at(mx, my);
 }
 
@@ -593,15 +611,18 @@ static void cursor_rect(enum wm_cursor_kind kind, int x, int y,
         *oy = y - s->hot_y * sc - CURSOR_BOX_MARGIN;
         *w  = s->w * sc + 2 * CURSOR_BOX_MARGIN;
         *h  = s->h * sc + 2 * CURSOR_BOX_MARGIN;
-    } else if (kind == WM_CURSOR_TEXT) {
-        // The one built-in shape drawn CENTRED on its hotspot, so its
-        // box is not the down-and-right one the other three share. These
-        // four constants are draw_cursor_text()'s; if they disagree a
-        // cursor move strands part of the sprite.
-        *ox = x - CURSOR_TEXT_HOT_X - CURSOR_BOX_MARGIN;
-        *oy = y - CURSOR_TEXT_HOT_Y - CURSOR_BOX_MARGIN;
-        *w  = CURSOR_TEXT_W + 2 * CURSOR_BOX_MARGIN;
-        *h  = CURSOR_TEXT_H + 2 * CURSOR_BOX_MARGIN;
+    } else if (kind == WM_CURSOR_TEXT || kind == WM_CURSOR_WAIT) {
+        // Centred on their hotspots, so not the down-and-right box the
+        // other three share. The drawing functions' own constants; if
+        // these disagree a move strands part of the sprite.
+        int cw = kind == WM_CURSOR_TEXT ? CURSOR_TEXT_W : CURSOR_WAIT_W;
+        int chh = kind == WM_CURSOR_TEXT ? CURSOR_TEXT_H : CURSOR_WAIT_H;
+        int hx = kind == WM_CURSOR_TEXT ? CURSOR_TEXT_HOT_X : CURSOR_WAIT_HOT_X;
+        int hy = kind == WM_CURSOR_TEXT ? CURSOR_TEXT_HOT_Y : CURSOR_WAIT_HOT_Y;
+        *ox = x - hx - CURSOR_BOX_MARGIN;
+        *oy = y - hy - CURSOR_BOX_MARGIN;
+        *w  = cw + 2 * CURSOR_BOX_MARGIN;
+        *h  = chh + 2 * CURSOR_BOX_MARGIN;
     } else {
         *ox = x - CURSOR_BOX_MARGIN;
         *oy = y - CURSOR_BOX_MARGIN;
@@ -672,8 +693,7 @@ static void draw_resize_outline(void) {
 
 // Saves what's under (x, y) before drawing the cursor there, so a later
 // cursor-only move can restore it. Used by both render paths.
-// WHAT WAS LAST ACTUALLY DRAWN -- recorded by the code that draws it,
-// for the same reason prev_cursor_* is. -1 is "nothing yet".
+// What was last actually drawn, recorded by the code that drew it.
 static int drawn_cursor_kind = -1;
 
 static void draw_cursor_at(int x, int y) {

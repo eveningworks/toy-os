@@ -158,16 +158,17 @@ struct window {
     // which is what separates "declined" from "wedged".
     uint64_t close_asked_tick;
 
-    // WHICH POINTER SHAPE THIS CLIENT ASKED FOR (a WIN_CURSOR_*), and
-    // honoured only while the pointer is inside its CONTENT area --
-    // never over its own title bar, its frame, another window, the
-    // taskbar or the desktop. That clamp is the whole reason a stale or
-    // wedged client cannot leave a wrong cursor on the screen: the
-    // compositor already hit-tests all of that to route input, so
-    // bounding the client's say-so to what it owns costs nothing.
-    //
-    // Always WIN_CURSOR_DEFAULT for a kernel-space app window, which has
-    // no client to ask.
+    // The close_asked_tick a force-quit dialog was already offered for.
+    // The offer used to ride the TRANSITION into not_responding, which
+    // stopped working the moment pings became periodic: a window can now
+    // be flagged long before anyone asks it to close, and the transition
+    // has then already happened. Comparing against the ASK is what makes
+    // "offer once per request" independent of when the flag was set.
+    uint64_t force_quit_offered_tick;
+
+    // WIN_CURSOR_*, as this client asked. Honoured only inside its
+    // CONTENT area (client_cursor_at(), wm_render.c) -- that clamp is
+    // what stops a wedged client stranding a shape over the desktop.
     int client_cursor;
 };
 

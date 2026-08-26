@@ -441,6 +441,15 @@ trips them before it knows to look anything up.
   `damage_cursor()` about what `prev_cursor_*` actually records exposed
   a real bug weeks later. Keep writing those.
 
+  Four questions, because this rule was broken by a session that had
+  read it: would the sentence be true even if nobody had got it wrong
+  first (if not, it is history)? Does `docs/decisions.md` already say it
+  (then don't repeat it)? Is a real system being NAMED (a clause) or
+  used to JUSTIFY (a paragraph, and it belongs in `docs/decisions.md`)?
+  And more than ~6 lines on a struct field, a `#define` or a small
+  static function is a smell unless it is a genuine trap. There is a
+  worked before/after in the workflow skill's `doc-templates.md`.
+
   What does NOT earn it is the war story. **Cap the anecdote at one
   clause** -- "(a missed declaration left a second cursor on screen)"
   persuades exactly as well as the forensics, and the forensics are in
@@ -592,7 +601,9 @@ whenever a headline here tells you something you did not already know.
 - **The TASKBAR'S LAYOUT IS ONE FUNCTION, and past a floor it groups by app**
 - **The WM has a SLOW-FRAME WATCHDOG**
 - **There is a Crash Test app**
-- **A CLIENT NAMES ITS POINTER SHAPE, AND THE COMPOSITOR CLAMPS IT TO THE CONTENT AREA** -- `WIN_REQ_CURSOR` carries a `WIN_CURSOR_*` (`DEFAULT`/`TEXT`), Wayland's `cursor-shape-v1`; the list a client may name excludes the resize shapes because the frame is not its; the clamp is what stops a wedged client stranding an I-beam over the desktop; a widget declares it through `uui_widget_ops.cursor` and `uapp_set_cursor()` fills the gaps (Notepad's document, the Terminal's grid).
+- **A CLIENT NAMES ITS POINTER SHAPE, AND THE COMPOSITOR CLAMPS IT TO THE CONTENT AREA** -- `WIN_REQ_CURSOR` carries a `WIN_CURSOR_*` (`DEFAULT`/`TEXT`/`WAIT`), Wayland's `cursor-shape-v1`; the list a client may name excludes the resize shapes because the frame is not its; the clamp is what stops a wedged client stranding an I-beam over the desktop; a widget declares it through `uui_widget_ops.cursor` and `uapp_set_cursor()` fills the gaps (Notepad's document, the Terminal's grid).
+- **THE BUSY POINTER HAS TWO SOURCES** -- `uapp_busy_begin()`/`_end()` for work that is slow on purpose (the toolkit remembers what to restore; does NOT nest), and the COMPOSITOR raising it for a window that stopped answering, which OUTRANKS whatever that window last named because a wedged client cannot name anything. `/tests/hangclient`'s `b` key is busy-and-alive, which is what keeps the two testable apart.
+- **EVERY CLIENT IS PINGED ON A CADENCE** -- `WM_PING_INTERVAL_DEFAULT` beside `WM_PING_TIMEOUT_DEFAULT`, levers `gui pingtimeout`/`gui pinginterval`. `wm_client_ping()` used to have ONE caller (the close path), so `(Not Responding)` could only appear while closing. A hung window nobody is closing still raises no DIALOG -- that stays gated on `close_asked_tick`.
 - **The cursor's shapes are DATA FILES, and a theme is a directory.**
 - **The cursor's drawn extent is DERIVED, not a constant.**
 - **A compositor's view of a dead window is POISONED, not unmapped**
@@ -1117,12 +1128,14 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
 - **Run on demand, not in the gate** -- `doom_test.py` (DOOM runs, draws,
   animates and takes input; SKIPS cleanly when no IWAD has been fetched,
   which is why it is not in the suite),
-  `cursor_ibeam_test.py` (**the I-beam over text, and the compositor's
-  clamp** -- all four ways a shape gets named, each with a control point
-  beside it; the two shapes are told apart by where they sit RELATIVE TO
-  THE HOTSPOT, so a MISSING sprite fails both tests rather than one, and
-  the load-bearing check is the title bar plus a window dragged UNDER
-  the taskbar), `ansi_cursor_test.py` (ANSI
+  `cursor_ibeam_test.py` (**named pointer shapes: the I-beam, the busy
+  pointer, and the clamp** -- all four ways a shape gets named, each
+  with a control point beside it; the shapes are told apart by where
+  they sit RELATIVE TO THE HOTSPOT, so a MISSING sprite fails every test
+  rather than one. Two load-bearing checks: the title bar plus a window
+  dragged UNDER the taskbar for the clamp, and a wedged window NOBODY
+  ASKED TO CLOSE, which is the ping cadence's test as much as the
+  cursor's), `ansi_cursor_test.py` (ANSI
   cursor movement and erasing, as PIXELS -- it kills the desktop first,
   since the console is what it photographs), `init_test.py` (init and
   service supervision), `console_shell_test.py` (a `text` boot reaching a ring-3

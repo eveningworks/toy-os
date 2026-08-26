@@ -132,3 +132,78 @@ trimmed down to focus on current capabilities -- if what you're adding
 feels more like background/rationale than "what toy-os does today," it
 likely belongs in `docs/decisions.md` or `docs/roadmap.md` instead of
 growing README further.
+
+## A source comment -- before and after
+
+The rule is in `SKILL.md` step 3. This is the case that produced it: one
+`#define` in `kernel/include/abi/win_proto.h`, written by a session that
+had read CLAUDE.md's "cap the anecdote at one clause" and broke it
+anyway. 37 lines became 10, and nothing a reader needs was lost.
+
+**Before** (the maintainer's word for it: "this is like a war story
+now"):
+
+```c
+#define WIN_REQ_CURSOR     24 // `window`: which one; a: a WIN_CURSOR_*.
+                           // "While the pointer is inside my content
+                           // area, show this."
+                           //
+                           // Set on POINTER MOTION, not once at startup:
+                           // a window is not uniformly one thing, and
+                           // the field this exists for occupies a few
+                           // rows of a window whose toolbar and status
+                           // bar want the arrow. That is why this is a
+                           // request a client repeats rather than a hint
+                           // it declares (WIN_REQ_HINTS) -- X11's
+                           // XDefineCursor is per-window and xterm shows
+                           // an I-beam over its scrollbar because of it.
+                           //
+                           // **IDEMPOTENT, AND THE CLIENT IS EXPECTED TO
+                           // FILTER.** Sending the shape a window
+                           // already has is accepted and tells the
+                           // compositor nothing, so uapp_set_cursor()
+                           // drops the no-op rather than putting a
+                           // syscall and an event on every mouse move.
+                           //
+                           // An unknown shape is refused (0), not
+                           // clamped: a client compiled against a later
+                           // WIN_CURSOR_* than the running kernel should
+                           // find out, rather than silently getting an
+                           // arrow forever.
+                           //
+                           // The shape is per WINDOW and dies with it.
+                           // There is no "reset on leave" message: the
+                           // compositor already stops honouring it the
+                           // moment the pointer leaves the content area,
+                           // so a client that never resets cannot leave
+                           // a wrong cursor over somebody else's window.
+```
+
+**After**:
+
+```c
+#define WIN_REQ_CURSOR     24 // `window`: which one; a: a WIN_CURSOR_*.
+                           // Honoured only inside that window's content
+                           // area, so a client that never resets cannot
+                           // strand a shape elsewhere.
+                           //
+                           // Set per MOTION, not once: a window is not
+                           // uniformly one thing. Idempotent, and
+                           // uapp_set_cursor() drops the no-op rather
+                           // than sending one per mouse move. An unknown
+                           // shape is refused, not clamped.
+```
+
+**What each cut was.** The X11/xterm sentence justified the design --
+that is `docs/decisions.md`'s job, and it says it there. The
+"IDEMPOTENT, AND THE CLIENT IS EXPECTED TO FILTER" paragraph argued for
+a decision the word "idempotent" already states. The refusal paragraph
+explained why refusing beats clamping; the word "refused" is the part a
+reader editing this needs. The last paragraph re-derived the clamp,
+which the first sentence had already given.
+
+**What survived, and why.** The field meanings (nobody can guess them);
+the clamp (an invariant a caller must not assume around); "per MOTION,
+not once" (the trap -- an implementer's instinct is to set it at
+startup); "drops the no-op" (a caller wondering about the cost);
+"refused, not clamped" (a caller handling the return).

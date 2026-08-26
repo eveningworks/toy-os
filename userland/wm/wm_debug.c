@@ -970,6 +970,7 @@ static void usage(struct dbg_out *o) {
     dbg_out_write(o, "  icons                 how many app icons are decoded and cached\r\n");
     dbg_out_write(o, "  watchdog [<ms>|off]   slow-frame threshold, and how often it fired\r\n");
     dbg_out_write(o, "  pingtimeout [<ticks>] not-responding timeout (a TEST lever)\r\n");
+    dbg_out_write(o, "  pinginterval [<ticks>] how often every client is asked (a TEST lever)\r\n");
     dbg_out_write(o, "Injected input enters at the WM loop, below the PS/2 driver -- it tests\r\n");
     dbg_out_write(o, "WM/app logic, not the mouse driver. It is also asynchronous: the events\r\n");
     dbg_out_write(o, "drain one per frame, so allow ~100ms before reading the result back.\r\n");
@@ -1044,6 +1045,25 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
         }
         dbg_out_printf(o, "pingtimeout: %d ticks (%d ms at 100Hz)\r\n",
                        wm_ping_timeout_ticks, wm_ping_timeout_ticks * 10);
+        return 1;
+    }
+
+    // How often every client is ASKED, the other half of the lever
+    // above. A test wanting a hang detected quickly has to shorten both:
+    // detection is interval + timeout.
+    if (k_strcmp(sub, "pinginterval") == 0) {
+        char *arg = next_tok(&p);
+        if (arg) {
+            int ticks;
+            if (parse_int(arg, &ticks) && ticks > 0) {
+                wm_ping_interval_ticks = ticks;
+            } else {
+                dbg_out_write(o, "usage: gui pinginterval [<ticks>]\r\n");
+                return 1;
+            }
+        }
+        dbg_out_printf(o, "pinginterval: %d ticks (%d ms at 100Hz)\r\n",
+                       wm_ping_interval_ticks, wm_ping_interval_ticks * 10);
         return 1;
     }
 

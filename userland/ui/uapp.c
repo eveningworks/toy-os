@@ -34,11 +34,10 @@ struct uapp {
     // cursor" is the only sane answer to where a wheel goes.
     int mouse_x, mouse_y;
 
-    // The WIN_CURSOR_* last NAMED to the compositor. Kept so
-    // uapp_set_cursor() can drop the no-op: an app is expected to call
-    // it on every motion event, and a syscall per pixel of pointer
-    // travel is not what that should cost.
+    // The WIN_CURSOR_* last named, so uapp_set_cursor() can drop the
+    // no-op -- an app calls it on every motion event.
     int cursor;
+    int cursor_before_busy;
 };
 
 // One process, one window -- which is what every client does today, and
@@ -288,11 +287,22 @@ void uapp_set_cursor(struct uapp *a, int cursor) {
     req.type = WIN_REQ_CURSOR;
     req.window = a->window;
     req.a = cursor;
-    // Remember it either way. A server that refuses this (one built
-    // before the request existed) would otherwise be asked again on
-    // every single motion event, forever.
+    // Either way: a server that refuses this (one built before the
+    // request existed) must not be asked again on every motion.
     a->cursor = cursor;
     req_send(&req);
+}
+
+void uapp_busy_begin(struct uapp *a) {
+    a->cursor_before_busy = a->cursor;
+    uapp_set_cursor(a, WIN_CURSOR_WAIT);
+    // The shape has to be ON THE WIRE before the caller blocks, and
+    // uapp_set_cursor() is a syscall, so it already is -- the compositor
+    // reads its queue on its own schedule. Nothing to flush.
+}
+
+void uapp_busy_end(struct uapp *a) {
+    uapp_set_cursor(a, a->cursor_before_busy);
 }
 
 int uapp_set_title(struct uapp *a, const char *title) {
@@ -533,11 +543,7 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
                                 : uui_button_group_hover(d->buttons, ev->a, ev->b);
             if (changed) a->dirty = 1;
         }
-        // THE WIDGET TREE ANSWERS FIRST, THE APP OVERRIDES. A text field
-        // declares the I-beam in its ops table and no app writes a line;
-        // an app whose text is not a widget (Notepad's document, the
-        // Terminal's grid) calls uapp_set_cursor() from on_motion below
-        // and gets the last word over its own window.
+        // The widget tree answers first; on_motion below overrides.
         if (a->router.count) {
             uapp_set_cursor(a, uui_router_cursor(&a->router, ev->a, ev->b));
         }

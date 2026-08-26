@@ -109,6 +109,38 @@ to this file too).
    tools -- there is no mirror to keep in sync, so step 6 is "commit
    what is already there", not "copy it somewhere".
 
+   **KEEP THE COMMENTS SHORT. A COMMENT IS AN INVARIANT AND A TRAP, NOT
+   AN ESSAY** (added 2026-08-26, at the maintainer's request, after a
+   session shipped a 37-line block on ONE `#define` and was told it read
+   as a war story). CLAUDE.md already says this -- "cap the anecdote at
+   one clause" -- and a session following that file's own conventions
+   still broke it, so the rule needs a mechanical test rather than a
+   sentiment:
+
+   - **Would this sentence be true of the code even if nobody had got it
+     wrong first?** If not, it is history: cut it or reduce it to one
+     parenthetical clause. `git log` and `docs/decisions.md` hold the
+     rest.
+   - **Does `docs/decisions.md` already say it?** Then do not say it
+     again beside the code. The decisions file answers "why this way";
+     the comment answers "what must stay true" and "what breaks if you
+     edit this the obvious way". Naming the design in half a line and
+     stopping is the whole job.
+   - **Is a real system being cited to justify a decision, or to name
+     the shape?** Naming is a clause ("Wayland's cursor-shape-v1");
+     justifying is a paragraph and belongs in `docs/decisions.md`.
+   - **Count the lines.** More than ~6 on a struct field, a `#define` or
+     a small static function is a smell. Earn it with a genuine trap --
+     something that fails SILENTLY or AT A DISTANCE -- or cut it.
+
+   The bar to keep in mind while writing: this codebase leans hard on
+   comments and mostly earns it, and existing long ones are deliberately
+   NOT being retro-trimmed. That is not a licence to add more. Write the
+   short version first; a comment that has to be trimmed in review was
+   never doing the extra work.
+
+   `references/doc-templates.md` has a worked before/after.
+
 4. **Build and test -- scale the testing to what changed.**
    - **Check in order of cost.** `tools/boot_smoke_test.py` answers
      "does it still boot" in seconds. `make test` (the in-kernel suite,

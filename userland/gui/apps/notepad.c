@@ -230,9 +230,13 @@ static void recent_push(const char *path) {
 // Plain blocking calls. See the file header for why that is allowed
 // here and is not in the kernel-space version.
 
-static int load_file(const char *path) {
+static int load_file(struct uapp *a, const char *path) {
     int fd = sys_open(path, 0);
     if (fd < 0) { set_status("open failed"); return 0; }
+
+    // A whole file, a chunk at a time, with the event loop stopped:
+    // say so before going quiet (ui/uapp.h).
+    uapp_busy_begin(a);
 
     utext_clear(&g_text);
     char chunk[512];
@@ -242,6 +246,7 @@ static int load_file(const char *path) {
         for (int64_t i = 0; i < n; i++) utext_putc(&g_text, chunk[i]);
     }
     sys_close(fd);
+    uapp_busy_end(a);
 
     g_text.ed.cursor = 0;
     g_text.scroll_offset = 0;
@@ -253,9 +258,10 @@ static int load_file(const char *path) {
     return 1;
 }
 
-static int save_file(const char *path) {
+static int save_file(struct uapp *a, const char *path) {
     int fd = sys_open(path, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
     if (fd < 0) { set_status("save failed"); return 0; }
+    uapp_busy_begin(a);
 
     // Write in chunks rather than a character at a time: one syscall
     // per character would be thousands of kernel entries for a modest
@@ -265,16 +271,18 @@ static int save_file(const char *path) {
     for (int i = 0; i < g_text.count; i++) {
         chunk[n++] = utext_at(&g_text, i);
         if (n == (int)sizeof chunk) {
-            if (sys_write(fd, chunk, (size_t)n) < 0) { sys_close(fd); set_status("write failed"); return 0; }
+            if (sys_write(fd, chunk, (size_t)n) < 0) { sys_close(fd); uapp_busy_end(a); set_status("write failed"); return 0; }
             n = 0;
         }
     }
     if (n > 0 && sys_write(fd, chunk, (size_t)n) < 0) {
         sys_close(fd);
+        uapp_busy_end(a);
         set_status("write failed");
         return 0;
     }
     sys_close(fd);
+    uapp_busy_end(a);
 
     scopy(g_path, path, PATH_MAX_LEN);
     g_dirty = 0;
@@ -406,14 +414,9 @@ static void draw_scrollbar(struct ugfx_surface *s, int tx, int ty, int tw, int t
                         NP_SCROLLBAR_FLAGS);
 }
 
-// The Save-as dialog's filename field. ONE FUNCTION FOR BOTH the
-// drawing and the cursor hit test, the same rule the WM's title_icon()
-// follows: a field whose drawn rect and whose reported rect are computed
-// twice is a field they can disagree about, and an I-beam over empty
-// panel would be the visible half of that.
-//
-// Returns 0 when there is no field on screen -- the dialog is closed, or
-// it is the OPEN listing, which has no editable field at all.
+// ONE FUNCTION FOR BOTH the drawing and the cursor hit test, per
+// title_icon()'s rule -- computed twice is computed differently.
+// Returns 0 when no field is on screen (closed, or the Open listing).
 static int dialog_field_rect(int cw, int ch, int *fx, int *fy, int *fw, int *fh) {
     if (!g_dialog_open || !g_dialog_saving) return 0;
     int w = cw - 80, x = 40, y = 40;
@@ -451,9 +454,6 @@ static void draw_dialog(struct ugfx_surface *s) {
     int list_y = y + 10 + ugfx_char_h() + 8;
 
     if (g_dialog_saving) {
-        // THE FIELD'S RECT COMES FROM dialog_field_rect(), the same
-        // answer the cursor hit test uses -- computing it twice is how
-        // an I-beam ends up hovering over empty panel.
         int fx = 0, fy = 0, fw = 0, fh = 0;
         if (!dialog_field_rect(s->w, s->h, &fx, &fy, &fw, &fh)) return;
         ugfx_fill_rect(s, fx, fy, fw, fh, UTHEME_WHITE);
@@ -558,7 +558,7 @@ static void dir_up(void) {
 
 // Acts on whatever row is selected: descend into a directory, or open a
 // file. Returns 1 if the dialog should close.
-static int dialog_activate(void) {
+static int dialog_activate(struct uapp *a) {
     if (g_sel < 0 || g_sel >= g_entry_count) return 1;
     struct sys_dirent *e = &g_entries[g_sel];
 
@@ -575,7 +575,7 @@ static int dialog_activate(void) {
 
     char p[PATH_MAX_LEN];
     join_path(p, e->name);
-    load_file(p);
+    load_file(a, p);
     return 1;
 }
 
@@ -594,7 +594,7 @@ static void open_dialog(int saving) {
 }
 
 // Returns 1 if the dialog consumed the key.
-static int dialog_key(int key) {
+static int dialog_key(struct uapp *a, int key) {
     if (key == 0x1B) { g_dialog_open = 0; set_status("cancelled"); return 1; }
 
     if (g_dialog_saving) {
@@ -611,7 +611,7 @@ static int dialog_key(int key) {
                 char full[PATH_MAX_LEN];
                 if (g_name_field[0] == '/') scopy(full, g_name_field, PATH_MAX_LEN);
                 else join_path(full, g_name_field);
-                save_file(full);
+                save_file(a, full);
             }
             return 1;
         }
@@ -629,7 +629,7 @@ static int dialog_key(int key) {
     if (key == KEY_ARROW_UP)   { if (g_sel > 0) g_sel--; return 1; }
     if (key == KEY_ARROW_DOWN) { if (g_sel < g_entry_count - 1) g_sel++; return 1; }
     if (key == '\n' || key == '\r') {
-        if (dialog_activate()) g_dialog_open = 0;
+        if (dialog_activate(a)) g_dialog_open = 0;
         return 1;
     }
     return 1; // modal: swallow everything else
@@ -656,7 +656,7 @@ static void do_command(struct uapp *a, int code) {
         open_dialog(0);
         break;
     case CMD_SAVE:
-        if (g_path[0]) save_file(g_path);
+        if (g_path[0]) save_file(a, g_path);
         else open_dialog(1);
         break;
     case CMD_SAVE_AS:
@@ -674,7 +674,7 @@ static void do_command(struct uapp *a, int code) {
             // very slot the path is being read out of.
             char p[PATH_MAX_LEN];
             scopy(p, g_recent[i], PATH_MAX_LEN);
-            load_file(p);
+            load_file(a, p);
         }
         break;
     }
@@ -858,7 +858,7 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
 static void on_key(struct uapp *a, int key, unsigned mods) {
     (void)mods;
     if (g_dialog_open) {
-        dialog_key(key);
+        dialog_key(a, key);
         uapp_redraw(a);
         return;
     }
@@ -957,7 +957,7 @@ static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
                 // trip to the keyboard to enter a directory would be
                 // worse.
                 if (idx == g_sel) {
-                    if (dialog_activate()) g_dialog_open = 0;
+                    if (dialog_activate(a)) g_dialog_open = 0;
                 } else {
                     g_sel = idx;
                 }
@@ -979,20 +979,14 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
     int tx, ty, tw, th;
     text_rect_for(uapp_width(a), uapp_height(a), &tx, &ty, &tw, &th);
 
-    // THE I-BEAM, over the document and nothing else: the menu bar, the
-    // status bar and the scrollbar all keep the arrow, and so does the
-    // whole window while a menu popup or a dialog is covering it. The
-    // document is not a widget here, so this is uapp_set_cursor()'s
-    // reason for existing (ui/uapp.h) -- and it is set on EVERY motion,
-    // including back to the arrow, because it is a state and not an
-    // event. Repeats cost nothing; uapp_set_cursor() drops them.
+    // The I-beam over the document and nothing else. Set on EVERY
+    // motion, including back to the arrow -- it is a state (ui/uapp.h).
     {
         int fx, fy, fw, fh;
         int over_text;
         if (dialog_field_rect(uapp_width(a), uapp_height(a), &fx, &fy, &fw, &fh)) {
-            // The Save-as field is the only text in reach while the
-            // dialog is up -- it covers the document, so the document's
-            // own rect must not answer here.
+            // The dialog COVERS the document, so its rect must not
+            // answer while the field is the only text in reach.
             over_text = x >= fx && x < fx + fw && y >= fy && y < fy + fh;
         } else {
             over_text = x >= tx && x < tx + tw && y >= ty && y < ty + th &&
@@ -1068,7 +1062,7 @@ static void on_open_cb(struct uapp *a) {
     // AFTER the widgets are set up, not before: load_file() writes the
     // status bar and the title, and both have to exist first.
     if (g_arg_path[0]) {
-        load_file(g_arg_path);
+        load_file(a, g_arg_path);
         set_title(a);
     }
 }

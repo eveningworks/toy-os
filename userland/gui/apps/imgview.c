@@ -171,7 +171,7 @@ static const char *selected_name(void) {
 }
 
 // Decodes and shows whatever the sidebar has selected.
-static void show_selected(void) {
+static void show_selected(struct uapp *a) {
     const char *name = selected_name();
     if (!name) return;
 
@@ -181,10 +181,14 @@ static void show_selected(void) {
     struct uimg_info info;
     int rc = uimg_load_info(path, &info);
     if (rc == 0) {
+        // A JPEG decode is the longest thing this app does, and the
+        // status bar already reports how long it took.
+        uapp_busy_begin(a);
         unsigned long long t0 = sys_monotonic_ns();
         struct uimg fresh;
         rc = uimg_load(path, &fresh);
         unsigned long long ms = (sys_monotonic_ns() - t0) / 1000000ull;
+        uapp_busy_end(a);
         if (rc == 0) {
             // The widget is pointed at the NEW image before the old one
             // is freed: pointing it at freed pixels, even for the length
@@ -352,7 +356,7 @@ static void do_command(struct uapp *a, int code) {
     switch (code) {
     case CMD_RELOAD:
         reload_listing();
-        show_selected();
+        show_selected(a);
         break;
     case CMD_EXIT:    uapp_quit(a, 0); return;
     case CMD_FIT:     uui_image_set_fit(&g_view, UIMG_FIT_CONTAIN); break;
@@ -372,7 +376,7 @@ static void on_widget(struct uapp *a, int id, int reason) {
         // Commit on RELEASE, as every control here does
         // (docs/gui-guidelines.md): a press that lands on the wrong row
         // and is dragged off must not have decoded a file.
-        show_selected();
+        show_selected(a);
         uapp_redraw(a);
     }
 }
@@ -410,7 +414,7 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     if (key == KEY_ARROW_RIGHT) key = KEY_ARROW_DOWN;        // a filmstrip reads both ways
     else if (key == KEY_ARROW_LEFT) key = KEY_ARROW_UP;
     if (uui_fileview_key(&g_list, key)) {
-        show_selected();
+        show_selected(a);
         uapp_redraw(a);
     }
 }
@@ -418,8 +422,7 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
 static void on_open(struct uapp *a) {
     layout_all(uapp_width(a), uapp_height(a));
     reload_listing();
-    show_selected();
-    (void)a;
+    show_selected(a);
 }
 
 static void on_resize(struct uapp *a, int w, int h) {

@@ -52,10 +52,9 @@ enum file_picker_mode {
 // same "most modal" priority confirm_dialog_open already has).
 extern int file_picker_open;
 
-// The WIN_CURSOR_* shape the picker wants at (mx, my) -- WIN_CURSOR_TEXT
-// over its filename field, WIN_CURSOR_DEFAULT everywhere else and while
-// it is closed. Asked by wm_render.c's cursor resolution, which cannot
-// consult the client underneath while a modal is up.
+// WIN_CURSOR_TEXT over the filename field, WIN_CURSOR_DEFAULT elsewhere
+// and while closed. Asked by wm_render.c, which cannot consult the
+// client underneath while a modal is up.
 int file_picker_cursor_at(int mx, int my);
 
 // Opens the picker in `mode`, showing `title` (NOT copied -- same

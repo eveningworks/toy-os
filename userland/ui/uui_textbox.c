@@ -282,11 +282,7 @@ static void textbox_bounds_op(const void *w, int *x, int *y, int *ow, int *oh) {
     *x = c->x; *y = c->y; *ow = c->w; *oh = c->h;
 }
 
-// THE I-BEAM. Declared once here and every app that ever puts a field
-// in a window gets it -- the compositor draws the shape, this only names
-// it (abi/win_proto.h's WIN_REQ_CURSOR). No coordinates are consulted: a
-// field is uniformly a place text goes, unlike a table with one editable
-// column.
+// No coordinates consulted: a field is uniformly a place text goes.
 static int tb_ops_cursor(const void *w, int cx, int cy) {
     (void)w; (void)cx; (void)cy;
     return WIN_CURSOR_TEXT;

@@ -74,23 +74,11 @@ struct uui_widget_ops {
     int (*release)(void *w, int cx, int cy);
     int (*wheel)(void *w, int notches);
 
-    // WHICH POINTER SHAPE BELONGS OVER THIS WIDGET at (cx, cy) -- a
-    // WIN_CURSOR_* (abi/win_proto.h). The router asks the deepest widget
-    // the pointer is inside and the app forwards the answer to the
-    // compositor, so a text field declares the I-beam ONCE here and
-    // every app that ever puts one in a window gets it, forever.
-    //
-    // **NOT A CONSTANT, because a widget is not uniformly one thing.**
-    // A table with an editable column wants the I-beam over that column
-    // and the arrow over the rest, and it is the widget that knows
-    // where its own columns are. Taking a point costs a widget that
-    // does not care exactly nothing -- it ignores both arguments.
-    //
-    // NULL means WIN_CURSOR_DEFAULT: a widget that never fills this in
-    // is a widget the pointer looks ordinary over, which is the right
-    // answer for almost all of them. That is why check_widget_ops.py
-    // has no rule about this slot -- unlike `release` beside `press`,
-    // a missing one here fails at nothing.
+    // The WIN_CURSOR_* belonging over this widget at (cx, cy). Takes a
+    // point because a widget is not uniformly one thing -- a table with
+    // an editable column wants the I-beam over that column only.
+    // NULL means WIN_CURSOR_DEFAULT, which is why check_widget_ops.py
+    // has no rule about this slot: a missing one fails at nothing.
     int (*cursor)(const void *w, int cx, int cy);
 
     // Does this widget currently own an OVERLAY that is drawn outside

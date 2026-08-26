@@ -82,14 +82,11 @@ int uui_router_motion(struct uui_router *r, int cx, int cy, unsigned buttons,
                        int *out_changed);
 int uui_router_release(struct uui_router *r, int cx, int cy, int *out_changed);
 
-// The WIN_CURSOR_* shape the widget tree wants at (cx, cy) -- the
-// deepest declaring widget under the pointer wins, an open popup first,
-// WIN_CURSOR_DEFAULT when nothing asks for anything.
+// The WIN_CURSOR_* the widget tree wants at (cx, cy): deepest declaring
+// widget wins, open popup first, DEFAULT when nothing asks.
 //
-// A QUERY, not an event: it changes nothing and consumes nothing, so
-// uapp calls it on every motion and lets uapp_set_cursor() filter the
-// no-ops rather than tracking a "cursor changed" flag through the
-// routing above.
+// A QUERY -- consumes nothing -- so uapp calls it on every motion and
+// lets uapp_set_cursor() filter the no-ops.
 int uui_router_cursor(const struct uui_router *r, int cx, int cy);
 
 // The wheel goes to the widget under the cursor, or to the grab holder

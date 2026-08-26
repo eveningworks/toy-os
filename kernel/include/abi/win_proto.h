@@ -247,44 +247,14 @@
                                     // here, taking your time has a cost
                                     // somebody can see: the console is
                                     // holding the line.
-#define WIN_EV_CLIENT_CURSOR    29 // a: pid, b: the WIN_CURSOR_* shape
-                                    // this window now wants under the
-                                    // pointer.
-                                    //
-                                    // **THE VALUE RIDES THE EVENT**,
-                                    // unlike the thin CLIENT_TITLE /
-                                    // CLIENT_HINTS above. Those are
-                                    // thin because the detail does not
-                                    // fit in 24 bytes; a shape is one
-                                    // small int and `b` was already
-                                    // there, and WIN_REQ_WINDOW_INFO
-                                    // has no return slot left to put
-                                    // it in anyway (a, b, c and d are
-                                    // all spoken for). Making the
-                                    // compositor round-trip for a
-                                    // number it has already been handed
-                                    // would also put a syscall between
-                                    // the pointer entering a field and
-                                    // the shape changing, which is the
-                                    // one place here where a frame of
-                                    // latency is visible.
-                                    //
-                                    // The cost of carrying it: a
-                                    // DROPPED event (a full 32-deep
-                                    // queue) leaves the compositor on
-                                    // the previous shape until the next
-                                    // change, where a thin event could
-                                    // have been recovered by re-reading.
-                                    // Bounded rather than fixed,
-                                    // deliberately -- the compositor
-                                    // clamps to `arrow` outside the
-                                    // window's content area regardless
-                                    // (see wm_render.c's
-                                    // resolve_cursor_kind), so the worst
-                                    // case is a wrong shape inside one
-                                    // window until the pointer next
-                                    // crosses a boundary the client
-                                    // reports.
+#define WIN_EV_CLIENT_CURSOR    29 // a: pid, b: the WIN_CURSOR_* shape.
+                                    // The VALUE rides the event, unlike
+                                    // the thin ones above: it is one int
+                                    // and WIN_REQ_WINDOW_INFO has no
+                                    // return slot left. Cost: a dropped
+                                    // event is not recoverable by
+                                    // re-reading, which the compositor's
+                                    // content-area clamp bounds.
 
 #define WIN_EV_CLIENT_ACTIVATE  24 // a: pid. RAISE this window: a second
                                     // copy of a single-instance app
@@ -789,60 +759,25 @@ struct win_event {
                            // legal no-op rather than an error.
 // --- the cursor a client wants under the pointer -----------------------
 //
-// THE CLIENT NAMES A SHAPE; THE COMPOSITOR DRAWS IT. That split is
-// Wayland's cursor-shape-v1 and Win32's WM_SETCURSOR + SetCursor, and it
-// is the one both arrived at after the alternative -- every client
-// loading the cursor theme and painting its own pointer -- was tried
-// (X11, and Wayland's original wl_pointer.set_cursor) and abandoned. A
-// client here could not paint one anyway: it draws into its own buffer
-// and the pointer is composited above every window.
-//
-// The names are the STABLE part, exactly as in the theme file format
-// (userland/wm/cursor_theme.h). This list is deliberately SHORTER than
-// the theme's: it is what a CLIENT may ask for, and the resize shapes
-// are not on it because the frame is the compositor's and a client
-// naming `resize-h` would be claiming an edge it does not own.
-//
-// The number space is open. `wait` is the obvious next one -- its
-// artwork already ships in both themes -- and it is not here because
-// nothing yet has a real caller for it.
-#define WIN_CURSOR_DEFAULT 0 // whatever the compositor would show anyway
-#define WIN_CURSOR_TEXT    1 // the I-beam: an insertion point lives here
-#define WIN_CURSOR_COUNT   2
+// The client NAMES a shape, the compositor draws it: Wayland's
+// cursor-shape-v1, Win32's SetCursor. Shorter than the theme's six
+// shapes on purpose -- the resize cursors are the frame's, which a
+// client does not own.
+#define WIN_CURSOR_DEFAULT 0
+#define WIN_CURSOR_TEXT    1 // I-beam: an insertion point lives here
+#define WIN_CURSOR_WAIT    2 // busy: this window is working, wait for it
+#define WIN_CURSOR_COUNT   3
 
 #define WIN_REQ_CURSOR     24 // `window`: which one; a: a WIN_CURSOR_*.
-                           // "While the pointer is inside my content
-                           // area, show this."
+                           // Honoured only inside that window's content
+                           // area, so a client that never resets cannot
+                           // strand a shape elsewhere.
                            //
-                           // Set on POINTER MOTION, not once at startup:
-                           // a window is not uniformly one thing, and
-                           // the field this exists for occupies a few
-                           // rows of a window whose toolbar and status
-                           // bar want the arrow. That is why this is a
-                           // request a client repeats rather than a hint
-                           // it declares (WIN_REQ_HINTS) -- X11's
-                           // XDefineCursor is per-window and xterm shows
-                           // an I-beam over its scrollbar because of it.
-                           //
-                           // **IDEMPOTENT, AND THE CLIENT IS EXPECTED TO
-                           // FILTER.** Sending the shape a window
-                           // already has is accepted and tells the
-                           // compositor nothing, so uapp_set_cursor()
-                           // drops the no-op rather than putting a
-                           // syscall and an event on every mouse move.
-                           //
-                           // An unknown shape is refused (0), not
-                           // clamped: a client compiled against a later
-                           // WIN_CURSOR_* than the running kernel should
-                           // find out, rather than silently getting an
-                           // arrow forever.
-                           //
-                           // The shape is per WINDOW and dies with it.
-                           // There is no "reset on leave" message: the
-                           // compositor already stops honouring it the
-                           // moment the pointer leaves the content area,
-                           // so a client that never resets cannot leave
-                           // a wrong cursor over somebody else's window.
+                           // Set per MOTION, not once: a window is not
+                           // uniformly one thing. Idempotent, and
+                           // uapp_set_cursor() drops the no-op rather
+                           // than sending one per mouse move. An unknown
+                           // shape is refused, not clamped.
 #define WIN_REQ_TIMER      14 // `window`: which one; a: the repeat
                            // interval in MILLISECONDS, or 0 to cancel.
                            // Delivers WIN_EV_TIMER every `a` ms until

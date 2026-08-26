@@ -4586,3 +4586,66 @@ The slot is optional and nothing enforces it: NULL means
 `WIN_CURSOR_DEFAULT`, which is the right answer for almost every widget.
 That is why `tools/check_widget_ops.py` has no rule about it, unlike
 `release` beside `press` — a missing `cursor` fails at nothing.
+
+## The busy pointer has two sources, and every client is pinged on a cadence
+
+`wait` shipped in both cursor themes with no caller, alongside `text`.
+Wiring it raised a question `text` did not: who decides an app is busy?
+
+**Two sources, because neither covers the other.** An app knows when it
+is about to do something slow ON PURPOSE — Notepad writing a file, Image
+Viewer decoding a JPEG — and can say so before it goes quiet. That is
+Win32's `SetCursor(IDC_WAIT)` idiom and it is the only source that can
+distinguish "working" from "broken". But the case where a busy pointer
+matters most is the one an app cannot report: it is wedged, and naming a
+cursor needs the event loop that is wedged. So the compositor raises
+`WAIT` for a window that has stopped answering pings, and lets it
+OUTRANK whatever that window last named. A stale `TEXT` from a client
+that died mid-motion must not survive the client.
+
+**`uapp_busy_begin()`/`uapp_busy_end()` rather than two
+`uapp_set_cursor()` calls,** because the second one would have to name
+what to go back to, and every app would answer that differently and
+wrongly — the pointer sitting over a document would get an arrow until
+the next mouse move. The toolkit remembers. It deliberately does not
+nest: there is one level of caller today and a depth counter would be
+machinery for a case that does not exist.
+
+**The request lands even though the caller is about to block.** It is a
+syscall, so the shape reaches the kernel synchronously and the
+compositor reads its own queue on its own schedule. The rule is only
+that it must be sent FIRST — an app that starts the slow work and then
+says so has already lost.
+
+**Why the ping needed a cadence.** `wm_client_ping()` had exactly one
+caller: `wm_client_send_close()`. So `not_responding` — and therefore
+the title bar's `(Not Responding)`, and now the busy pointer — could
+only ever appear while the user was trying to close a window, which is
+the one moment a hang is least surprising and most likely to be
+explained by the close itself. A window that wedged while nobody was
+touching it looked perfectly healthy forever.
+
+`WM_PING_INTERVAL_DEFAULT` is 2s against a 3s timeout. It measures from
+the last ASK rather than the last answer, reusing `ping_sent_tick` —
+which outlives the serial a pong clears — so a window is only asked
+again once the previous answer has landed and worst-case detection is
+interval + timeout. The cost is one wakeup per client per interval: a
+ping is an event, and an event wakes a client blocked in
+`sys_wait_event()`. That is 2s against the 30ms the Terminal already
+ticks at, and it buys the only liveness signal this desktop has.
+
+**What the cadence deliberately does NOT change: a hung window nobody is
+closing still raises no dialog.** `check_liveness()` gates that on
+`close_asked_tick` and it stays gated. A modal appearing on its own, over
+whatever the user was doing, for a window they never touched, is worse
+than the hang — that reasoning predates this change and the cadence does
+not weaken it. The title bar mark and the pointer are ambient; the
+dialog is an interruption.
+
+**The consequence to accept:** an app that blocks for longer than the
+timeout on purpose now gets `(Not Responding)` as well as the busy
+pointer. That is what Windows does, and suppressing the mark for an app
+that had named `WAIT` would let a genuinely hung app hide behind one
+call. The honest reading is that the two marks say different things —
+"this app said it is working" and "this app is not answering" — and an
+app that is both really is both.

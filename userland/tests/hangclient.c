@@ -13,6 +13,12 @@
 // The WM's ping goes unanswered, the title bar gains "(Not Responding)",
 // and asking it to close raises the dialog. Force Quit kills it.
 //
+// Press 'b' and it names the BUSY cursor and keeps answering. That is
+// the contrast case, and the reason it is here: the WM raises the busy
+// pointer by itself for a window that stopped answering, so without an
+// app that is busy AND alive a test cannot tell the client-named half
+// of WIN_REQ_CURSOR from the compositor-raised half.
+//
 // HOW IT HANGS MATTERS
 // --------------------
 // It spins inside its own on_key callback rather than calling
@@ -36,6 +42,7 @@
 #define WIN_H 140
 
 static int g_hung;
+static int g_busy;
 
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
     (void)a;
@@ -44,10 +51,24 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     ugfx_fill(s, bg);
     ugfx_draw_string(s, 10, 10, g_hung ? "hung" : "press h to hang",
                       ugfx_rgb(10, 10, 10), bg);
+    if (!g_hung)
+        ugfx_draw_string(s, 10, 10 + ugfx_char_h() + 4,
+                          g_busy ? "busy (b to clear)" : "press b for busy",
+                          ugfx_rgb(10, 10, 10), bg);
 }
 
 static void on_key(struct uapp *a, int key, unsigned mods) {
     (void)mods;
+    if (key == 'b') {
+        // Busy AND alive: the loop keeps turning, so the ping is still
+        // answered and the WM has no reason of its own to show this.
+        g_busy = !g_busy;
+        if (g_busy) uapp_busy_begin(a);
+        else uapp_busy_end(a);
+        sys_eprint(g_busy ? "hangclient: busy now\n" : "hangclient: not busy\n");
+        uapp_redraw(a);
+        return;
+    }
     if (key != 'h') return;
 
     g_hung = 1;

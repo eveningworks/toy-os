@@ -776,7 +776,7 @@ this the obvious way), not from how much history it accumulated.
   (`--check` fails on stale). See `docs/decisions.md`.
 - **A CLIENT NAMES ITS POINTER SHAPE, AND THE COMPOSITOR CLAMPS IT TO
   THE CONTENT AREA.** `WIN_REQ_CURSOR` (`abi/win_proto.h`) carries a
-  `WIN_CURSOR_*` -- `DEFAULT` or `TEXT` today -- and the kernel forwards
+  `WIN_CURSOR_*` -- `DEFAULT`, `TEXT` or `WAIT` -- and the kernel forwards
   it to the compositor as `WIN_EV_CLIENT_CURSOR`. That split is Wayland's
   `cursor-shape-v1` and Win32's `WM_SETCURSOR`/`SetCursor`; a client here
   could not paint a pointer anyway, since it draws into its own buffer
@@ -808,6 +808,36 @@ this the obvious way), not from how much history it accumulated.
   `uapp_set_cursor()` is the escape hatch for a surface that is not a
   widget -- Notepad's document, the Terminal's grid (named ONCE at open,
   since the whole grid is text). `tools/cursor_ibeam_test.py`.
+- **THE BUSY POINTER HAS TWO SOURCES, AND ONLY ONE OF THEM IS THE APP.**
+  A client brackets work that is slow ON PURPOSE with
+  `uapp_busy_begin()`/`uapp_busy_end()` -- the toolkit remembers what to
+  restore, so "back to what?" is not a question every app answers
+  differently -- and the request must go out BEFORE the caller blocks,
+  which it does, because it is a syscall and the compositor reads its
+  own queue. It DOES NOT NEST. Notepad's load/save and Image Viewer's
+  decode are the callers. **The other source is the compositor**, which
+  raises `WAIT` for a window that stopped answering pings and lets it
+  OUTRANK whatever that window last named -- a wedged client cannot name
+  a shape, because naming one needs the event loop that is wedged, so
+  this is the case only the compositor can report. The two are
+  distinguishable and a test must keep them apart: `/tests/hangclient`
+  has a `b` key that is busy AND alive for exactly that reason.
+- **EVERY CLIENT IS PINGED ON A CADENCE, not just one being closed.**
+  `WM_PING_INTERVAL_DEFAULT` (2s) beside the existing
+  `WM_PING_TIMEOUT_DEFAULT` (3s), both in `wm_internal.h`, both with a
+  `gui` test lever (`pingtimeout`, `pinginterval`). Before this,
+  `wm_client_ping()` had exactly ONE caller -- `wm_client_send_close()`
+  -- so `(Not Responding)` could only ever appear during a close
+  attempt, which is the one moment a hang is least surprising. Three
+  things. **The interval is measured from the last ASK**, using
+  `ping_sent_tick`, which outlives the serial a pong clears; worst-case
+  detection is interval + timeout, because a window is only asked once
+  the previous answer has landed. **A hung window nobody is closing
+  still raises NO dialog** -- `check_liveness()` gates that on
+  `close_asked_tick`, and a modal appearing on its own over a window the
+  user never touched would be worse than the hang. And **the cost is one
+  wakeup per client per interval**, since a ping is an event and an
+  event wakes a client blocked in `sys_wait_event()`.
 - **The cursor's drawn extent is DERIVED, not a constant.**
   `cursor_rect()` (`userland/wm/wm_render.c`) is the one place that
   answers "what box does the pointer occupy", and the save/restore pair

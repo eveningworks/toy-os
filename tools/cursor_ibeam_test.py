@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""The I-beam: a client naming its pointer shape, and the compositor's clamp.
+"""Named pointer shapes: the I-beam, the busy pointer, and the clamp.
 
-A ring-3 app says "text goes here" (abi/win_proto.h's WIN_REQ_CURSOR) and
-the compositor draws the theme's `text` shape while the pointer is inside
-that window's CONTENT area. This drives all four ways a shape gets named
--- a widget's ops table, an app's own uapp_set_cursor(), a window-wide
-constant, and the WM's own modal chrome -- and both halves of the clamp.
+A ring-3 app says "text goes here" or "I am working"
+(abi/win_proto.h's WIN_REQ_CURSOR) and the compositor draws the theme's
+`text` or `wait` shape while the pointer is inside that window's CONTENT
+area. This drives all four ways a shape gets named -- a widget's ops
+table, an app's own uapp_set_cursor(), a window-wide constant, and the
+WM's own modal chrome -- both halves of the clamp, and the one shape the
+COMPOSITOR raises on its own: a window that stopped answering pings.
 
 WHAT MAKES THIS MEASURE ANYTHING, because "a cursor is on screen" is
 satisfied by every possible bug here: the two shapes are told apart by
@@ -51,6 +53,13 @@ PARK = (900, 520)
 # shape at 3x scale, so a cursor_size setting left behind by another tool
 # cannot push ink outside what is being read.
 HALF = 40
+
+HANG_BIN = "/tests/hangclient"
+HANG_TITLE = "Hang Test"
+# Short enough that a wedge is noticed inside a test's patience: the WM
+# only asks once the previous answer has landed, so detection is
+# interval + timeout, not either alone.
+PING_TICKS = 60
 
 checks = []
 
@@ -117,23 +126,52 @@ def is_arrow(b):
     return dy0 >= 0 and dx0 >= 0 and dy1 >= 10 and n >= 40
 
 
+def is_wait(b):
+    """Centred like the I-beam, but WIDE -- 11x15 against the bar's 7."""
+    if not b:
+        return False
+    dx0, dy0, dx1, dy1, n = b
+    return dy0 <= -4 and dx0 <= -4 and dx1 >= 4 and n >= 40
+
+
 def shape(b):
     if b is None:
         return "nothing"
+    if is_wait(b):
+        return f"busy {b}"
     if is_ibeam(b):
         return f"I-beam {b}"
     if is_arrow(b):
         return f"arrow {b}"
-    return f"neither {b}"
+    return f"none of the three {b}"
+
+
+def wait_log(dbg, needle, secs=8.0):
+    deadline = time.time() + secs
+    while time.time() < deadline:
+        if any(needle in l for l in dbg.logs("hangclient:", clear=True)):
+            return True
+        time.sleep(0.2)
+    return False
 
 
 def close_all(dbg):
-    while True:
+    """Close every window, and give up rather than spin.
+
+    `gui close` ASKS, and a wedged client never answers -- so an
+    unbounded loop here hangs the tool against exactly the window this
+    tool deliberately wedges. Anything still standing is killed.
+    """
+    for _ in range(12):
         ws = dbg.json("gui windows --json")["windows"]
         if not ws:
             return
         dbg.send(f"gui close {len(ws) - 1}")
         dbg.settle()
+    for w in dbg.json("gui windows --json")["windows"]:
+        if w.get("client_pid"):
+            dbg.send(f"sh kill {w['client_pid']}")
+    dbg.settle()
 
 
 def read_layout(dbg, title, path, timeout=15.0):
@@ -185,7 +223,7 @@ def main():
     dbg.send("sh config set desktop.layout_log on")
     dbg.settle()
 
-    print("the I-beam over text, and the arrow everywhere else")
+    print("named pointer shapes: the I-beam, the busy pointer, the clamp")
 
     # --- 1. the desktop is the baseline -------------------------------
     close_all(dbg)
@@ -292,6 +330,72 @@ def main():
         check("UI Demo reported textbox and dropdown geometry", False,
               f"got {sorted(rects)}")
     close_all(dbg)
+
+    # --- 6. the BUSY pointer, named by a client that is still alive ----
+    # hangclient's 'b' names WIN_CURSOR_WAIT and keeps pumping, so the
+    # WM has no reason of its own to show it. That separation is the
+    # point: without it, "busy appeared" could equally mean the app hung.
+    dbg.logs("", clear=True)
+    dbg.spawn(HANG_BIN, HANG_TITLE)
+    dbg.settle()
+    win = dbg.window(HANG_TITLE)
+    if not win:
+        check("the hang-test client spawns", False)
+    else:
+        c = win["content"]
+        mid = (c["x"] + c["w"] // 2, c["y"] + c["h"] // 2)
+        b = pr.sprite(*mid)
+        check("a healthy client shows the arrow", is_arrow(b), shape(b))
+
+        dbg.send("gui key b")
+        if not wait_log(dbg, "busy now"):
+            check("hangclient reports itself busy", False)
+        b = pr.sprite(*mid)
+        check("a client that says it is busy gets the busy pointer",
+              is_wait(b), shape(b))
+        # Still answering: the WM must not have marked it, or this check
+        # would be measuring the compositor half by accident.
+        check("...while the WM still considers it healthy",
+              not dbg.window(HANG_TITLE)["not_responding"])
+        b = pr.sprite(c["x"] + c["w"] // 2, win["y"] + 10)
+        check("...and its title bar is still the compositor's",
+              is_arrow(b), shape(b))
+
+        dbg.send("gui key b")
+        wait_log(dbg, "not busy")
+        b = pr.sprite(*mid)
+        check("clearing it restores what was there before",
+              is_arrow(b), shape(b))
+
+        # --- 7. the compositor raises it for a window that WENT QUIET --
+        # NOBODY ASKS THIS WINDOW TO CLOSE. Before the ping cadence,
+        # not_responding could only ever appear during a close attempt,
+        # so this check fails outright without it -- it is the cadence's
+        # test as much as the cursor's.
+        dbg.send(f"gui pingtimeout {PING_TICKS}")
+        dbg.send(f"gui pinginterval {PING_TICKS}")
+        dbg.settle()
+        dbg.send("gui key h")
+        if not wait_log(dbg, "hanging now"):
+            check("hangclient wedges", False)
+        deadline = time.time() + 20.0
+        while time.time() < deadline:
+            w = dbg.window(HANG_TITLE)
+            if w and w["not_responding"]:
+                break
+            time.sleep(0.4)
+        w = dbg.window(HANG_TITLE)
+        flagged = bool(w and w["not_responding"])
+        check("a wedged window nobody is closing is noticed at all", flagged,
+              "flagged with no close request" if flagged
+              else "the ping cadence never fired")
+        b = pr.sprite(*mid)
+        check("and the compositor raises the busy pointer over it",
+              is_wait(b), shape(b))
+    close_all(dbg)
+    dbg.send("gui pingtimeout 300")
+    dbg.send("gui pinginterval 200")
+    dbg.settle()
 
     failed = [n for n, ok in checks if not ok]
     print(f"\n{len(checks) - len(failed)}/{len(checks)} checks passed"

@@ -185,14 +185,10 @@ int uui_router_motion(struct uui_router *r, int cx, int cy, unsigned buttons,
     return id;
 }
 
-// Which pointer shape belongs at (cx, cy) -- the deepest widget under
-// the pointer that declares one wins, searched back to front so the
-// topmost control answers, exactly as a press is routed.
+// The deepest declaring widget under (cx, cy) wins, back to front.
 //
-// Deliberately NOT routed through the grab: a drag that started in a
-// text field and wandered onto the toolbar should keep the I-beam only
-// while it is over something that wants one. A grab is about who gets
-// told; the cursor is about what is under it.
+// NOT routed through the grab: a grab is about who gets told, the
+// cursor is about what is under the pointer.
 static int cursor_item(struct uui_item *it, int cx, int cy) {
     if (it->hidden) return WIN_CURSOR_DEFAULT;
     int n = 0;
@@ -211,9 +207,8 @@ static int cursor_item(struct uui_item *it, int cx, int cy) {
 }
 
 int uui_router_cursor(const struct uui_router *r, int cx, int cy) {
-    // An OPEN POPUP is drawn over its siblings and answers first, for
-    // the same reason it is offered every press first: its rows are
-    // outside its own `hit` and the walk below would never reach them.
+    // An open popup answers first: its rows are outside its own `hit`,
+    // so the walk below would never reach them.
     struct uui_item *ov = overlay_owner(r->items, r->count);
     if (ov && ov->ops->cursor) {
         int c = ov->ops->cursor(ov->widget, cx, cy);

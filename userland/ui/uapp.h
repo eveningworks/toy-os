@@ -349,28 +349,30 @@ void uapp_flush(struct uapp *a);
 void uapp_quit(struct uapp *a, int status);
 int uapp_set_title(struct uapp *a, const char *title);
 
-// WHAT THE POINTER SHOULD LOOK LIKE over this window's content area: a
-// WIN_CURSOR_* (abi/win_proto.h) -- WIN_CURSOR_DEFAULT or
-// WIN_CURSOR_TEXT. The compositor draws it; this window only NAMES it,
-// which is Wayland's cursor-shape-v1 and Win32's SetCursor.
+// Name the WIN_CURSOR_* for this window's content area. THE ESCAPE
+// HATCH: a widget declares its own shape (uui_widget_ops.cursor) and
+// the toolkit sets it for you. This is for surfaces that are not
+// widgets -- Notepad's document, the Terminal's grid.
 //
-// **THE ESCAPE HATCH, not the usual route.** An app whose text lives in
-// a widget declares the shape in that widget's ops table (`cursor`,
-// ui/uui_widget.h) and calls nothing: the toolkit asks the widget tree
-// on every motion and sets this for you. This exists for the surfaces
-// that are NOT widgets -- Notepad's document area, the Terminal's grid
-// -- where the app is the only thing that knows where its text is.
-//
-// **CALL IT ON EVERY MOTION, INCLUDING TO SET IT BACK.** It is a state,
-// not an event: whatever was last named stays until something names
-// another, so an app that only sets WIN_CURSOR_TEXT on the way in keeps
-// the I-beam over its own toolbar. Repeats are free -- a call that does
-// not change the shape sends nothing at all, which is what makes this
-// safe on a per-pixel motion path.
-//
-// Called AFTER the widget tree has answered, so an app's on_motion has
-// the last word over its own window.
+// A STATE, not an event: call it on every motion INCLUDING to set it
+// back, or an app that only sets TEXT on the way in keeps the I-beam
+// over its own toolbar. Repeats send nothing. Runs after the widget
+// tree, so an app has the last word over its own window.
 void uapp_set_cursor(struct uapp *a, int cursor);
+
+// Bracket a blocking stretch: the busy pointer, then whatever was there
+// before. The toolkit remembers, because "restore to what" is a
+// question every app would otherwise answer differently and wrongly.
+//
+// Say so BEFORE going quiet. The request reaches the compositor through
+// the kernel, so it lands even while this process is not pumping its
+// queue -- but only if it was sent first. DOES NOT NEST.
+//
+// The WM raises the busy pointer by itself once a window stops
+// answering pings, so this is for work that is slow ON PURPOSE and
+// finishes: it says "working", where the WM's says "not responding".
+void uapp_busy_begin(struct uapp *a);
+void uapp_busy_end(struct uapp *a);
 
 // Asks the WM to close every window owned by `pid` -- the POLITE way to
 // end another process, which it may refuse. Returns 1 if at least one

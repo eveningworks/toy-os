@@ -1036,9 +1036,10 @@ window without going through it will find its layout polls timing out.
   explicitly at the start -- they persist to the disk image, so
   inheriting them makes every measurement relative to a silently wrong
   baseline. In `gui_regress.py`.
-- **`cursor_ibeam_test.py`** -- the I-beam (12 checks): a client naming
-  its pointer shape (`WIN_REQ_CURSOR`) and the compositor's clamp. It
-  covers all four ways a shape is named -- a widget's ops table
+- **`cursor_ibeam_test.py`** -- named pointer shapes (~20 checks): a
+  client naming its own (`WIN_REQ_CURSOR`), the compositor's clamp, and
+  the one shape the compositor raises by itself. It covers all four ways
+  a shape is named -- a widget's ops table
   (`uui_textbox` in UI Demo, with no app code at all), an app's own
   `uapp_set_cursor()` (Notepad's document), a window-wide constant set
   at open (the Terminal's grid), and the WM's own modal chrome
@@ -1058,7 +1059,19 @@ window without going through it will find its layout polls timing out.
   is the clamp: the same window's TITLE BAR, and the taskbar with the
   window deliberately dragged UNDER it, must both read as arrow, which
   a compositor that simply believed the client would fail while every
-  other check still passed. On demand, not in `gui_regress.py`.
+  other check still passed.
+  Its last two phases are the BUSY pointer, and they are built to keep
+  its two sources apart. `/tests/hangclient`'s `b` key names
+  `WIN_CURSOR_WAIT` and keeps pumping, so the tool asserts the busy
+  shape appears WHILE the WM still considers the window healthy --
+  without that pairing, "busy appeared" would equally mean the app hung.
+  Then `h` wedges it and NOBODY ASKS IT TO CLOSE, which makes that phase
+  the ping cadence's test as much as the cursor's: before
+  `WM_PING_INTERVAL_DEFAULT` existed, `not_responding` could not become
+  true without a close attempt and the check fails outright.
+  It shortens both `gui pingtimeout` and `gui pinginterval` (detection
+  is interval + timeout, not either alone) and sets them back.
+  On demand, not in `gui_regress.py`.
 - **`font_test.py`** -- runtime fonts end to end (~20 checks): a `.ttf`
   under `/usr/share/fonts` rasterizes, switching faces reaches the
   screen with NO restart (the compositor is told through `WIN_EV_FONT`),

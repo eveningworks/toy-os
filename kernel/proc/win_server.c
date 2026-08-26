@@ -148,12 +148,8 @@ struct client_window {
     unsigned hint_flags;
     int min_w, min_h;
 
-    // The WIN_CURSOR_* shape this window wants under the pointer while
-    // the pointer is inside its content area. Held here for the same
-    // reason the title is: the kernel is where the client's request
-    // arrives, and the compositor is a process that has to be told.
-    // Unlike the title it is also SENT with the event, because it fits
-    // -- see WIN_EV_CLIENT_CURSOR in abi/win_proto.h.
+    // WIN_CURSOR_*: the shape this window wants under the pointer. Held
+    // here because the compositor is a process and has to be told.
     int cursor;
 };
 
@@ -590,9 +586,7 @@ static int create_window(int pid, uint64_t pml4, int w, int h, int x, int y,
     cw->hint_flags = 0;
     cw->min_w = 0;
     cw->min_h = 0;
-    // A slot is REUSED, so this has to be cleared rather than assumed:
-    // the previous tenant may have died holding an I-beam.
-    cw->cursor = WIN_CURSOR_DEFAULT;
+    cw->cursor = WIN_CURSOR_DEFAULT; // slots are reused; don't inherit
 
     tell_compositor(WIN_EV_CLIENT_CREATED, pid, cw->id, w, (uint32_t)h);
 
@@ -1260,14 +1254,10 @@ int win_server_request(int pid, struct win_request_msg *req) {
     case WIN_REQ_CURSOR: {
         struct client_window *cw = lookup(pid, req->window);
         if (!cw) return 0;
-        // Refuse rather than clamp -- a client built against a later
-        // WIN_CURSOR_* than this kernel should find out. Negative is
-        // caught by the same bound.
+        // Refuse, don't clamp: a client built against a later
+        // WIN_CURSOR_* should find out.
         if (req->a < 0 || req->a >= WIN_CURSOR_COUNT) return 0;
-        // Accepted and silent when it did not move: a client is expected
-        // to filter, but a client that does not must not make the
-        // compositor's queue its problem.
-        if (cw->cursor == req->a) return 1;
+        if (cw->cursor == req->a) return 1; // no-op, and no event
         cw->cursor = req->a;
         tell_compositor(WIN_EV_CLIENT_CURSOR, pid, cw->id, req->a, 0);
         return 1;

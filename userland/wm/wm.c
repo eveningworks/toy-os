@@ -418,25 +418,25 @@ static void wm_force_quit_yes(void) {
 }
 
 static void wm_force_quit_no(void) {
-    // "Wait" restarts the clock rather than giving up on the window: an
-    // app that was merely slow gets another chance, and one that is
-    // truly wedged will offer the dialog again next time the user asks
-    // it to close. Not re-arming would make the first Wait permanent.
+    // "Wait" restarts the clock rather than giving up: an app that was
+    // merely slow gets another chance, and a wedged one is offered again
+    // the next time the user asks it to close.
+    //
+    // CLEARING close_asked_tick IS WHAT RE-ARMS THAT -- the offer is now
+    // once per ASK (force_quit_offered_tick), so a later Alt+F4 stamps a
+    // new tick and qualifies again. Clearing not_responding beside it is
+    // cosmetic: the periodic ping re-flags a still-wedged window within
+    // interval + timeout, which is honest, since it really is still hung.
     for (int i = 0; i < window_count; i++) {
         if (windows[i].client_pid == g_force_quit_pid) {
             windows[i].close_asked_tick = 0;
+            windows[i].force_quit_offered_tick = 0;
             windows[i].ping_serial = 0;
-            // not_responding TOO. check_liveness() reports only the
-            // TRANSITION into that state, so leaving the flag set made
-            // the first Wait permanent: the window stayed marked, the
-            // transition never happened again, and no later Alt+F4
-            // could ever re-offer the dialog. Measured, not reasoned --
-            // the second Alt+F4 in a row simply did nothing.
             windows[i].not_responding = 0;
             break;
         }
     }
-    redraw_pending = 1; // the title bar drops "(Not Responding)"
+    redraw_pending = 1; // the title bar drops "(Not Responding)" for now
     g_force_quit_pid = 0;
     redraw_pending = 1;
 }
@@ -1188,11 +1188,9 @@ void wm_run(void) {
             wm_render_frame(mx, my);
             rendered = 1;
         } else if (mouse_moved || wm_cursor_shape_changed(mx, my)) {
-            // THE SHAPE CAN MOVE WHILE THE MOUSE DOES NOT. A client
-            // names its cursor from a motion event it processes some
-            // frames later, so by the time the answer arrives the
-            // pointer has usually stopped -- and without this the
-            // I-beam would appear only on the next twitch of the mouse.
+            // The shape moves while the mouse does not: a client answers
+            // a motion event frames later, by which time the pointer has
+            // usually stopped.
             wm_render_cursor_move(mx, my);
         }
 
