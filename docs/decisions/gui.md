@@ -12,6 +12,58 @@ without opening something else is not finished.
 
 ---
 
+## A meter reserves every row it could use, because its content is a value that changes
+
+`uui_meter` (`userland/ui/uui_meter.h`) shows a caption, a big number,
+a unit, an optional detail line and an optional bar -- and its
+`natural_size()` reserves ALL of them whether or not the caller has set
+them.
+
+The first version counted the strings that were non-NULL, which reads
+as the obvious economy and is a height that DEPENDS ON THE CONTENT.
+Disk Mark lays its four tiles out while every value is still `--` and
+the unit and detail are NULL, so each tile got a two-row box; the moment
+a result arrived the meter drew four rows out through the bottom of its
+own border and over the widget below it. Nothing errored, and the
+layout had been correct ten seconds earlier.
+
+That is CLAUDE.md's `natural_size` rule (a widget's size must not depend
+on where it currently is) arriving from a direction the rule does not
+literally name: not on its POSITION, but on its own current text. The
+general form is that a widget whose whole purpose is to display a
+CHANGING value must not measure itself from that value. `uui_label`
+already solved it with `rows`, which the caller reserves and the content
+fills; this is the same answer with the number fixed by the widget,
+because unlike a label there is no meter worth having with fewer rows.
+
+## Work inside a GUI client is bounded in TIME, not in units of work
+
+Disk Mark's passes take tens of seconds. The compositor pings every
+client on a cadence (`WM_PING_INTERVAL_DEFAULT`, and
+`WM_PING_TIMEOUT_DEFAULT` to answer), so a client that blocks through
+its whole job earns the busy pointer and then `(Not Responding)` --
+which is correct behaviour by the WM and useless behaviour by the app.
+
+So the benchmark is a state machine across `on_tick`: one slice of I/O
+per frame, and the app keeps answering. The part worth writing down is
+what the slice is measured in. Fixing it at 4 MiB looked obviously
+sufficient and was not: on an emulated disk that is over a second, and
+the app ran every pass titled `(Not Responding)` while doing exactly
+what it was supposed to. A slice bounded at 120 ms of wall clock instead
+self-tunes -- a fast device does more per tick, a slow one less, and
+there is no constant to revisit when a new storage backend lands.
+
+`uapp_busy_begin()` is the wrong tool for this and the distinction is
+worth keeping: it is for work that is slow and SHORT, where the honest
+answer is a busy pointer and a frozen window for a moment. Anything long
+enough that a user would want progress is long enough to need chunking.
+
+**The bug was found by a test's CONTROL, not by its assertions.**
+`tools/diskmark_test.py` compares each result tile against its own
+before-image and requires the TITLE BAR to be unchanged. Every
+result-tile assertion passed; the control failed, and the control was
+the only thing looking at the title bar.
+
 ## The ring-3 WM owns the back buffer, and its death drops you to a text shell
 
 Two forks settled while writing Milestone 41 stage 4's requirements

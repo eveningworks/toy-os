@@ -99,6 +99,11 @@ QEMU, and it does not stop at "hello world from the kernel":
   the kernel. There is a game, too: **Minesweeper**, which is where the
   desktop learned to give a right-click to the application under the
   cursor instead of keeping it for the window menu. And there is a
+  **Disk Mark** — a CrystalDiskMark-shaped storage benchmark, four
+  profiles across sequential and random 4K, which is how you find out
+  what the AHCI, virtio and IDE paths actually cost on this machine. Its
+  tiles are labelled `Q1T1` and say why: CDM reports queue depths that
+  need asynchronous block I/O, and this OS has none. And there is a
   **File Manager** — two directory panes side by side, in the Norton
   Commander tradition rather than Explorer's, because copying between
   two visible directories needs neither a clipboard nor drag-and-drop

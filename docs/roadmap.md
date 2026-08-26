@@ -622,6 +622,7 @@ run on, not by order.
 - [x] ~~Multi-sector transfers (PRDT scatter-gather)~~
 - [x] ~~Backend selection + fallback~~
 - [ ] NCQ (queued commands) -- needs an ASYNCHRONOUS block interface first, not more AHCI code
+- [ ] An asynchronous `block_device` submit/complete split, which NCQ, readahead and writeback all wait on
 - [ ] A second drive, which needs a block layer whose active device is not singular
 - [ ] A sector cache shared with ATA, if one is ever measured to be worth it
 - [ ] A fault-injection hook that makes the DRIVE refuse a command, so `port_recover()` is exercised

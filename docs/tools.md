@@ -1444,6 +1444,30 @@ window without going through it will find its layout polls timing out.
   and a 35-check suite passed it: every check asserted on the app's LOG,
   and the widgets were live, hit-testable and simply never painted. In
   `gui_regress.py`.
+- **`diskmark_test.py`** -- drives the **Disk Mark** GUI benchmark and
+  asserts on it. **The load-bearing check is the NUMBERS, not the run
+  finishing**: a build whose throughput arithmetic truncated to zero
+  logged "all four passes complete" and drew four tiles reading
+  `0.0 MB/s`, with correct IOPS beside them, so everything an "it ran"
+  check looks at was green.
+
+  Two more that earned their place the same way. **The results must be
+  DRAWN, not merely logged** -- each tile compared as pixels against its
+  own before-image, which is the Calculator-with-invisible-buttons
+  failure. And **the title bar is the CONTROL**: it must NOT change. That
+  one immediately found a real bug -- a 4 MiB slice took over a second
+  on an emulated disk, so the client missed the compositor's pings and
+  ran the whole benchmark reading `Disk Mark (Not Responding)`. The fix
+  was to bound a slice in TIME rather than in bytes, which self-tunes to
+  the device.
+
+  Geometry comes from the client's own `diskmark: layout ...` lines,
+  never re-derived here -- hand-computed coordinates cost two
+  build-and-test cycles while the app was being written. On demand
+  rather than in `gui_regress.py`: it does real disk I/O for tens of
+  seconds, and a benchmark run beside eleven other VMs measures
+  contention. `blank_window_test.py` covers "it draws" in the gate,
+  since that one opens every app in the registry.
 - **`ahci_test.py`** -- boots with the filesystem on a **SATA drive
   behind an ICH9 host bus adapter**, which is the only thing here that
   reaches `kernel/drivers/ahci.c` at all. Several boots, on demand.

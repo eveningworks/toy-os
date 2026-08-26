@@ -583,6 +583,9 @@ whenever a headline here tells you something you did not already know.
 - **`uui_slider` is for an ORDERED enum**
 - **A CONTROL BELOW THE FOLD IS UNREACHABLE, not merely hard to hit.**
 - **`on_draw` RUNS BEFORE THE WIDGETS; `on_draw_over` RUNS AFTER.**
+- **`uui_meter` IS THE READING WIDGET, AND IT RESERVES EVERY ROW IT COULD USE** -- a caption, a big number in its own font, a unit, a detail line, a bar; no `hit`, because a reading is not a control. Its height must NOT depend on which strings are set: a meter's content is a value that CHANGES, and counting the non-NULL ones drew Disk Mark's tiles straight through their own borders.
+- **WORK INSIDE A GUI CLIENT IS BOUNDED IN TIME, NOT IN UNITS OF WORK** -- anything longer than a frame is a state machine across `on_tick`, and the slice is sized in MILLISECONDS. A 4 MiB slice is over a second on an emulated disk, and ran every Disk Mark pass titled `(Not Responding)`. `uapp_busy_begin()` is for work that is slow and SHORT.
+- **A WIDGET ARRAY IS DECLARED TWICE: `uapp_desc.layout` SIZES AND DRAWS, `uapp_desc.widgets` GETS INPUT** -- declaring only the first is a window that renders perfectly and cannot be clicked, silently. And **a lone routed button reports through `on_widget` with the ITEM's id**, not `on_action`, which `uapp.c` fires only from `uapp_desc.buttons` (a `uui_button_group` -- which is why Calculator looks like the opposite example).
 - **`uui_label` WRAPS ONLY IF ASKED, AND THE CALLER RESERVES THE ROWS.**
 - **`uui_label` is the caption widget**
 - **`uui_sidebar` IS THE NAVIGATION WIDGET; `uui_tree` MODELS CONTAINMENT.**
@@ -1232,6 +1235,12 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   "it booted" proves nothing, while "the mounted volume is 256 MiB and
   the image is 2 GiB" only a correct window can produce. Reboots, and
   finishes by driving `/bin/mkpart` in the guest),
+  `diskmark_test.py` (**the Disk Mark GUI benchmark** -- its
+  load-bearing check is the NUMBERS, since a build whose arithmetic
+  truncated to zero still logged "all four passes complete"; the title
+  bar is its CONTROL and immediately caught the client missing the
+  compositor's pings, i.e. running the whole benchmark as
+  `(Not Responding)`),
   `ahci_test.py` (**toy-os booting with its filesystem on a SATA drive
   behind an AHCI HBA** -- the only thing that reaches
   `kernel/drivers/ahci.c`, since every `ahci` KTEST skips on a machine

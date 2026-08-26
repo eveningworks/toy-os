@@ -161,6 +161,21 @@ def icon_uidemo():
     return im
 
 
+def icon_diskmark():
+    # A PLATTER WITH A NEEDLE, not a bar chart. The disc says storage at
+    # 20px where bars say "some app with numbers", and the sweep says
+    # measurement -- which is the same pairing CrystalDiskMark, GNOME
+    # Disks and macOS's Blackmagic test all reach for.
+    im, d = tile((58, 122, 168))
+    cx, cy = 32, 32
+    d.ellipse([cx - 19, cy - 19, cx + 19, cy + 19], outline=WHITE, width=4)
+    d.ellipse([cx - 5, cy - 5, cx + 5, cy + 5], fill=WHITE)
+    # The needle, up and to the right: a reading part-way up its scale
+    # rather than pinned at either end.
+    d.line([cx, cy, cx + 13, cy - 13], fill=WHITE, width=4)
+    return im
+
+
 def icon_mines():
     # A MINE, not a flag. Both are the game's symbols, but a flag at
     # 20px is a wedge that could be anything, while a spiked ball is
@@ -334,6 +349,7 @@ ICONS = {
     "mines": icon_mines,
     "doom": icon_doom,
     "files": icon_files,
+    "diskmark": icon_diskmark,
 }
 
 # Crash Test deliberately gets NO icon file. It is the one entry that

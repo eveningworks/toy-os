@@ -506,6 +506,40 @@ this the obvious way), not from how much history it accumulated.
   a data problem, not a paint-order one. Its own comment had asserted
   the opposite order, which is what made it invisible.
 
+- **`uui_meter` IS THE READING WIDGET, AND IT RESERVES EVERY ROW IT
+  COULD USE.** A caption, a big number in its own font, a unit, an
+  optional detail line and an optional bar -- `userland/ui/uui_meter.h`.
+  It takes no input (no `hit`), because a reading is not a control, and
+  the strings are POINTED AT rather than copied, like `uui_label`'s. The
+  rule to know: **its height does NOT depend on which strings are set**,
+  because a meter's content is a value that CHANGES -- counting the
+  non-NULL ones gave Disk Mark's tiles a two-row box at layout time and
+  four rows of content the moment a result arrived, drawn straight
+  through the border. The big number's font is a field on the widget for
+  the same reason `uui_label`'s is: `natural_size()` is asked long before
+  any painting, so a value measured in one font and drawn in another
+  lands in a box sized for something else.
+- **WORK INSIDE A GUI CLIENT IS BOUNDED IN TIME, NOT IN UNITS OF WORK.**
+  The compositor pings every client (`WM_PING_INTERVAL_DEFAULT` /
+  `WM_PING_TIMEOUT_DEFAULT`), so anything taking longer than a frame is a
+  state machine across `on_tick`, not a loop. **Size the slice in
+  MILLISECONDS**: Disk Mark's first version used 4 MiB, which is over a
+  second on an emulated disk, and it ran every pass titled
+  `(Not Responding)` while behaving exactly as designed. A time budget
+  self-tunes across backends; a byte count has to be revisited per
+  device. `uapp_busy_begin()` is for work that is slow and SHORT -- if a
+  user would want progress, it needs chunking instead.
+- **A WIDGET ARRAY IS DECLARED TWICE, AND BOTH ARE LOAD-BEARING:
+  `uapp_desc.layout` SIZES AND DRAWS, `uapp_desc.widgets` GETS INPUT.**
+  Declaring only the first is a window that renders perfectly and cannot
+  be clicked, with nothing anywhere to say so. Pass the SAME
+  `struct uui_item` array to both (the router recurses into nested
+  layouts through `uui_widget_ops.children`). And **a lone routed button
+  reports through `on_widget` with the ITEM's id, not through
+  `on_action`** -- `uapp.c` fires `on_action` only from
+  `uapp_desc.buttons`, i.e. a `uui_button_group`, which is why
+  Calculator (a grid of buttons in a group) looks like the opposite
+  example.
 - **`uui_label` WRAPS ONLY IF ASKED, AND THE CALLER RESERVES THE ROWS.**
   `uui_label_set_wrap(l, rows)` is Qt's `QLabel::setWordWrap` and
   GtkLabel's `wrap` -- opt-in, because most labels are a word or two in
