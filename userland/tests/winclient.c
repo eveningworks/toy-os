@@ -27,6 +27,7 @@
 #include "rt/sys.h"
 #include "ui/uapp.h"
 #include <stdio.h>
+#include <pthread.h>
 
 #define WIN_W 320
 #define WIN_H 200
@@ -99,11 +100,64 @@ static void log_held(const char *what, int key) {
     sys_eprint(line);
 }
 
+// --- a worker thread waking the main loop ----------------------------
+//
+// The only thing in the tree that exercises uapp_post(), and it is here
+// rather than in a real app for the reason the on_close veto is: a
+// protocol edge case belongs in a diagnostic. What it demonstrates is
+// the whole contract in three lines -- a worker touches NOTHING of the
+// toolkit, posts two numbers, and the main thread is what runs a
+// callback.
+//
+// The tids are logged from both sides because "on_user ran" is not the
+// claim being made: the claim is that it ran on the MAIN thread while
+// some OTHER thread posted it, and only the pair of numbers says that.
+static struct uapp *g_app;
+
+static void *poster(void *arg) {
+    (void)arg;
+    // Deliberately not touching g_app for anything but the parameter --
+    // see ui/uapp.h. Sleeping first is what makes the post arrive while
+    // the main thread is parked in SYS_WAIT_EVENT rather than still
+    // inside on_key.
+    sys_sleep_ms(50);
+    uapp_post(g_app, 42, sys_gettid());
+    return NULL;
+}
+
+static int on_user(struct uapp *a, int a0, int a1) {
+    char line[96];
+    snprintf(line, sizeof line, "winclient: on_user a0=%d from_tid=%d on_tid=%d\n",
+             a0, a1, sys_gettid());
+    sys_eprint(line);
+    next_color(a);
+    return 1;
+}
+
 static void on_key(struct uapp *a, int key, unsigned mods) {
     (void)mods;
+    // **THE HELD-SET BOOKKEEPING RUNS FOR EVERY KEY, BEFORE ANY SPECIAL
+    // CASE.** keyup_test.py reads this log to decide whether a press and
+    // its release were both reported, so a key that takes an early exit
+    // below leaves it seeing a release with no press -- which is exactly
+    // what a stuck key looks like to that tool. Putting the trigger
+    // above this line did that to 'w' for one build.
     if (held_index(key) < 0 && g_held_count < HELD_MAX) {
         g_held[g_held_count++] = key;
         log_held("keydown", key);
+    }
+    if (key == 'p') {
+        // A DETACHED thread: nothing joins it, and the process outlives
+        // it either way. 'p' for post, and deliberately not a key
+        // keyup_test.py drives.
+        g_app = a;
+        pthread_t t;
+        pthread_attr_t at;
+        pthread_attr_init(&at);
+        pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
+        if (pthread_create(&t, &at, poster, NULL) != 0)
+            sys_eprint("winclient: pthread_create FAILED\n");
+        return;
     }
     if (key == 'q') uapp_quit(a, 0); // Esc no longer closes -- Alt+F4 does
     else next_color(a);
@@ -170,6 +224,7 @@ int main(void) {
         .on_draw = on_draw,
         .on_key  = on_key,
         .on_key_up = on_key_up,
+        .on_user = on_user,
         .on_press = on_press,
         .on_close = on_close,
     };

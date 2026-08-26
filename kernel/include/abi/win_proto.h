@@ -142,6 +142,25 @@
 // produce no character and so have never produced an ordinary key event
 // at all. Nothing else changes: a modifier still rides with the key it
 // modified, and an app that only reads `mods` is unaffected.
+#define WIN_EV_USER      30 // a, b: whatever the CLIENT put there. The
+                            // only event a client can put on its OWN
+                            // queue (WIN_REQ_EVENT_PUSH with a target of
+                            // 0), and the reason it exists is threads: a
+                            // worker that has finished has no other way
+                            // to wake a main thread parked in
+                            // SYS_WAIT_EVENT, and polling for it on a
+                            // tick is the cadence this whole mechanism
+                            // is meant to delete.
+                            //
+                            // Qt's postEvent, GTK's g_idle_add, Win32's
+                            // PostMessage, and the eventfd a Wayland
+                            // client puts in its poll set are all this.
+                            //
+                            // The COMPOSITOR never sends one, and no
+                            // client can send one to anybody else -- see
+                            // WIN_REQ_EVENT_PUSH, where restricting the
+                            // TYPE as well as the target is what keeps
+                            // "a client cannot synthesise input" true.
 #define WIN_EV_KEY_UP    27
 
 #define WIN_EV_RAW_MOUSE 10 // a, b: SCREEN position; mods: button bits

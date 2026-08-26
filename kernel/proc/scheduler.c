@@ -1683,12 +1683,18 @@ int scheduler_thread_create(uint64_t entry, uint64_t user_rsp, uint64_t arg,
     tf[TF_RIP]     = entry;
     tf[TF_CS]      = SEL_USER_CODE;
     tf[TF_RFLAGS]  = 0x200; // IF set
-    // 16-ALIGNED, and this is the same trap crt0.asm documents: a
-    // function entered with RSP % 16 == 0 makes GCC emit movaps against
-    // stack slots it believes are aligned, and that faults rather than
-    // mis-storing. The entry point here is called, not returned into,
-    // so it wants the alignment a `call` would have left.
-    tf[TF_RSP]     = (user_rsp - 8) & ~15ull;
+    // **RSP % 16 == 8 AT ENTRY, NOT 0**, which is the same trap
+    // crt0.asm documents and which this line got backwards for one
+    // build. SysV states the rule at the CALLEE: a `call` has just
+    // pushed 8 bytes, so a function begins with RSP % 16 == 8 and GCC
+    // sizes its prologue from that. Hand it a 16-ALIGNED RSP and every
+    // `movaps` it emits against a stack slot faults with a #GP.
+    //
+    // `(x & ~15) - 8`, not `(x - 8) & ~15` -- the second is always
+    // 16-aligned, i.e. always the broken case. It passed every
+    // thread test in the tree, because none of those workers used SSE;
+    // the first GUI client to run one crashed on its first snprintf.
+    tf[TF_RSP]     = (user_rsp & ~15ull) - 8;
     tf[TF_SS]      = SEL_USER_DATA;
 
     procs[slot].pml4_phys  = procs[leader].pml4_phys; // SHARED, not created

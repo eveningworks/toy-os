@@ -248,6 +248,65 @@ def check_maximize(dbg, qmp, tmp, res):
               if back else "window gone")
 
 
+def check_worker_post(dbg, qmp, tmp, res):  # noqa: ARG001 -- tmp unused
+    """A worker thread wakes the main loop, and the callback runs on MAIN.
+
+    uapp_post() is the one Toykit call a worker thread may make, and the
+    property that matters is not "on_user ran" -- it is that some OTHER
+    thread posted it and the MAIN thread ran it. Only the pair of tids
+    says that, which is why winclient logs both.
+
+    A build where uapp_post() silently did nothing, or where the
+    compositor refused a self-post, leaves no line at all; a build where
+    the callback somehow ran on the worker would leave one with two
+    equal tids. Both are distinguishable failures rather than a timeout.
+    """
+    win = dbg.window(TITLE)
+    if not win:
+        res.check("6. a worker thread woke the main loop", False, "no window")
+        return
+
+    dbg.click(win["x"] + win["w"] // 2, win["y"] + win["h"] // 2)
+    dbg.settle()
+    before = len(dbg.logs("winclient: on_user"))
+    # 'p' for post -- NOT 'w', which keyup_test.py drives (see winclient.c).
+    qmp.send_key("p")
+
+    # The worker sleeps 50 ms before posting, so this waits on the LINE
+    # rather than on a fixed delay -- see CLAUDE.md on polls whose exit
+    # condition is weaker than what follows them.
+    deadline = time.time() + 5
+    lines = []
+    while time.time() < deadline:
+        lines = dbg.logs("winclient: on_user")
+        if len(lines) > before:
+            break
+        time.sleep(0.2)
+
+    res.check("6. a worker thread woke the main loop",
+              len(lines) > before,
+              "no on_user line -- uapp_post() reached nothing")
+    if len(lines) <= before:
+        return
+
+    fields = {}
+    for part in lines[-1].split():
+        if "=" in part:
+            k, _, v = part.partition("=")
+            try:
+                fields[k] = int(v)
+            except ValueError:
+                pass
+
+    res.check("6b. the payload arrived unchanged", fields.get("a0") == 42,
+              f"a0={fields.get('a0')}")
+    # THE LOAD-BEARING ONE. Everything else here would pass if uapp_post()
+    # were called on the main thread and delivered synchronously.
+    res.check("6c. the poster was NOT the thread that ran the callback",
+              fields.get("from_tid") not in (None, fields.get("on_tid")),
+              f"from_tid={fields.get('from_tid')} on_tid={fields.get('on_tid')}")
+
+
 def check_focus_caret(dbg, qmp, tmp, res):
     """A caret must not be drawn while its window is unfocused.
 
@@ -363,6 +422,8 @@ def main():
     with DebugConsole(args.sock) as dbg:
         dbg.settle()
         run(dbg, qmp, args.tmp, res)
+        # BEFORE check_focus_caret, which quits winclient with 'q'.
+        check_worker_post(dbg, qmp, args.tmp, res)
         check_focus_caret(dbg, qmp, args.tmp, res)
 
     n_ok, n_bad = len(res.passes), len(res.fails)

@@ -1291,3 +1291,36 @@ same two-owners-one-representation shape the heap and the cwd have.
 Refusing instead, which it did for one build, kills every ring-3 program
 in `crt0`: errno is a `__thread` variable now, so a program with no
 thread pointer faults on its first failing call.
+
+## RING-3 `malloc` TAKES A LOCK; THE KERNEL'S DOES NOT.
+
+`kernel/lib/heap_core.c` is compiled into both rings and holds one
+address-ordered free list, so a walker interrupted between its fit test
+and its store of `HEAP_IN_USE` can hand two callers the same block.
+`kmalloc()`, `kfree()` and `heap_check()` take `heap_os_lock()`, which
+each ring implements for itself (`api/heap_os.h`):
+
+- **Ring 3: a real lock**, a test-and-set that yields. A process has
+  threads now and they are preempted at any instruction.
+- **Ring 0: a no-op**, because nothing preempts kernel code between two
+  instructions of `kmalloc` -- the scheduler only switches ring-3
+  processes and every syscall runs with interrupts off. That is the
+  assumption the file has always stated, and it **ends at SMP**:
+  `docs/smp-design.md` names the kernel heap as split #1, and these two
+  bodies are the slot it fills.
+
+**THE RACE IS REAL BY INSPECTION AND WAS NOT REPRODUCIBLE.** The control
+was run three times with the ring-3 lock emptied out -- 600 allocations,
+then 8000 against a fragmented list, then 8000 against a list whose
+holes were all too small to satisfy any request, so every allocation
+walked its full length. None of them failed. The window is a few
+instructions wide, preemption arrives on a 100 Hz timer and there is one
+core, so the odds per call are somewhere around one in a million. The
+lock is defence and an SMP prerequisite, not a fix for an observed
+failure -- and `/tests/heaprace_test` is honest about which of those it
+can show.
+
+**`malloc` IS NOT ASYNC-SIGNAL-SAFE**, and now it can hang rather than
+merely corrupt: the lock is not recursive, so a signal handler that
+allocates while its own thread holds it deadlocks. That is true of every
+libc's malloc, glibc's included.

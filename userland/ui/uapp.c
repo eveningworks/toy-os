@@ -141,6 +141,23 @@ static void flush(struct uapp *a) {
 
 void uapp_redraw(struct uapp *a) { a->dirty = 1; }
 
+int uapp_post(struct uapp *a, int a0, int a1) {
+    // NOT `a->window`, and not a->anything: this runs on a WORKER
+    // THREAD, where reading toolkit state is the exact thing uapp.h
+    // says not to do. The request needs no window -- the compositor
+    // routes a self-post by pid -- so the parameter is here for symmetry
+    // with every other call in this header and is deliberately unread.
+    (void)a;
+    struct win_request_msg req;
+    for (unsigned i = 0; i < sizeof req; i++) ((char *)&req)[i] = 0;
+    req.type = WIN_REQ_EVENT_PUSH;
+    req.a = 0;              // 0 = "me", the only target a client may name
+    req.b = WIN_EV_USER;    // and the only type it may send
+    req.c = a0;
+    req.d = a1;
+    return req_send(&req);
+}
+
 // --- the layout log ---------------------------------------------------
 //
 // **OFF UNLESS A TEST TURNS IT ON, AND DEDUPED WHEN IT IS.** This is the
@@ -363,6 +380,13 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
         req_send(&req);
         break;
     }
+
+    case WIN_EV_USER:
+        // Posted by this program itself, almost always from a worker
+        // thread -- see uapp_post(). Nothing in the toolkit interprets
+        // the payload; waking the loop IS the message.
+        if (d->on_user && d->on_user(a, (int)ev->a, (int)ev->b)) a->dirty = 1;
+        break;
 
     case WIN_EV_TIMER:
         // The app asked to be woken on a schedule (desc.tick_ms), so

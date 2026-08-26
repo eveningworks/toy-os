@@ -1297,12 +1297,24 @@ int win_server_request(int pid, struct win_request_msg *req) {
         return 1;
     }
     case WIN_REQ_EVENT_PUSH: {
-        // Only the compositor may put events on another process's
+        // Only the compositor may put events on ANOTHER process's
         // queue. Without this any client could synthesise a keystroke
         // into any other -- the protocol's whole access-control story is
         // that a window belongs to a process, and this is the one
         // request that reaches ACROSS processes.
-        if (!g_comp_pid || pid != g_comp_pid) return -1;
+        //
+        // **A CLIENT MAY POST TO ITSELF**, which is the one exception
+        // and is bounded twice: the target must be 0 ("me") and the
+        // type must be WIN_EV_USER. A process can already do anything
+        // it likes to its own state, so posting itself an event grants
+        // nothing new -- what it buys is the ability to WAKE ITSELF,
+        // which a worker thread has no other way to do. Restricting the
+        // type as well as the target is what keeps "a client cannot
+        // synthesise input" true of its own queue too, so a stray post
+        // can never be mistaken for a keystroke.
+        int self_post = (req->a == 0 && (uint32_t)req->b == WIN_EV_USER);
+        if (!self_post && (!g_comp_pid || pid != g_comp_pid)) return -1;
+        if (self_post) req->a = pid;
         if (req->a < 1 || req->a > WIN_SERVER_MAX_PIDS) return -1;
 
         struct win_event ev;

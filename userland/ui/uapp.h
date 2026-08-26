@@ -297,6 +297,15 @@ struct uapp_desc {
     // -- which is what an animation with no natural rate needs, and
     // which costs a scheduling slot for as long as the app lives.
     int (*on_tick)(struct uapp *a);
+
+    // Something this program posted to ITSELF arrived -- see
+    // uapp_post(). `a0`/`a1` are whatever the poster put there;
+    // repaints if it returns 1.
+    //
+    // **THE POSTER IS USUALLY A WORKER THREAD**, and this callback runs
+    // on the MAIN one, which is the entire point: the worker produces a
+    // result and posts, and the widget tree is only ever touched here.
+    int (*on_user)(struct uapp *a, int a0, int a1);
 };
 
 // The ordinary path: open, run until closed, clean up. Returns the
@@ -304,6 +313,23 @@ struct uapp_desc {
 int uapp_run(const struct uapp_desc *desc);
 
 // --- from inside a callback ------------------------------------------
+
+// Wake this program's own event loop, carrying two numbers.
+// `desc.on_user` receives them on the MAIN thread. Returns 0, or -1 if
+// the queue is full.
+//
+// **THIS IS THE ONE CALL IN TOYKIT A WORKER THREAD MAY MAKE**, and the
+// rule around it is the same one every real toolkit has: AppKit is
+// main-thread-only, Qt widgets are main-thread-only, GTK the same. A
+// worker computes into memory it owns and then posts; it must never
+// touch a widget, `ugfx_*`, or the window buffer, because the main
+// thread may be drawing from either at that instant.
+//
+// Two numbers rather than a pointer because the event is a MESSAGE --
+// fixed-layout and readable in a log, the same reason the protocol
+// spells events out field by field. A worker with a result bigger than
+// that puts it somewhere both threads agreed on and posts an index.
+int uapp_post(struct uapp *a, int a0, int a1);
 
 // Marks the content dirty. The loop draws and presents ONCE before it
 // next blocks, so a mouse drag crossing three buttons costs one present

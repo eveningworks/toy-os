@@ -37,3 +37,32 @@ void heap_os_report(const char *msg) { sys_eprint(msg); }
 // No injector in ring 3 yet. The kernel's tests cover the allocator's
 // own out-of-memory path, and it is the same code.
 int heap_os_should_fail_alloc(void) { return 0; }
+
+// THE FREE LIST, AND WHY RING 3 NEEDS A LOCK WHERE THE KERNEL DOES NOT.
+//
+// A process can have threads now, and they are preempted at any
+// instruction -- so two of them inside kmalloc() walk and rewrite one
+// list. heap_core.c's own top comment predicted exactly this ("if a
+// future caller ever needs kmalloc from ... a genuinely preemptible
+// kernel thread, this needs a lock first"); threads are that caller,
+// arriving on the ring-3 side.
+//
+// A SPIN THAT YIELDS, not a futex: there is nothing to park on yet
+// (docs/roadmap.md). Correct under a preemptive round-robin scheduler,
+// because the holder is always eventually run, and cheap in the case
+// that matters -- an uncontended acquire is one atomic exchange, which
+// is what every single-threaded program in this system pays.
+//
+// The acquire/release ordering is not decoration on x86-64's TSO: the
+// COMPILER is what would otherwise hoist a list read out of the
+// critical section.
+static volatile int g_heap_lock;
+
+void heap_os_lock(void) {
+    while (__atomic_exchange_n(&g_heap_lock, 1, __ATOMIC_ACQUIRE))
+        sys_yield();
+}
+
+void heap_os_unlock(void) {
+    __atomic_store_n(&g_heap_lock, 0, __ATOMIC_RELEASE);
+}

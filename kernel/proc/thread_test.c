@@ -17,6 +17,7 @@
 #include "string.h" // k_strcmp -- a thread carries its leader's name
 
 #define THREAD_TEST_PATH "/tests/thread_test"
+#define HEAPRACE_PATH    "/tests/heaprace_test"
 
 // It creates and joins a dozen threads and does no I/O beyond one small
 // file; generous enough that a busy desktop cannot time it out.
@@ -75,6 +76,29 @@ KTEST("thread", "a process's threads are gone when it is") {
         if (scheduler_proc_info(i, &info) && info.pid) after++;
     }
     KTEST_ASSERT_EQ(after, before);
+}
+
+// THE ALLOCATOR, FROM FOUR THREADS AT ONCE. Every existing malloc test
+// is single-threaded, so all of them pass against an unlocked free list
+// -- which is what ring 3 had until threads arrived. Driven from here
+// for the usual reason: threads need a scheduler slot.
+KTEST("thread", "the ring-3 allocator survives four threads hammering it") {
+    if (!fs_exists(HEAPRACE_PATH)) KTEST_SKIP("no " HEAPRACE_PATH " on this boot");
+
+    uint64_t t0 = pit_ticks();
+    int pid = scheduler_spawn(HEAPRACE_PATH, 0);
+    KTEST_ASSERT(pid != 0);
+
+    int code = -1, exited = 0;
+    while (pit_ticks() - t0 < TIMEOUT_TICKS) {
+        if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
+    }
+    // A CRASH IS A FAILURE OF THIS TEST, not an inconclusive run: a
+    // corrupted free list is at least as likely to fault as to hand out
+    // an overlap, so "it did not finish" is one of the two answers this
+    // is looking for and both mean the same thing.
+    KTEST_ASSERT(exited);
+    KTEST_ASSERT_EQ(code, 0);
 }
 
 // WHAT `ps --threads` READS. The reporting path is separate from the

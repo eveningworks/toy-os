@@ -4780,3 +4780,36 @@ in front of the user on every launch. freedesktop's `Terminal=true` is
 for programs whose INTERFACE is a terminal — `edit`, `tosh` — which toy-os
 still cannot launch from the desktop at all. That is a real gap and it is
 on the roadmap; it is a different feature from this bug.
+
+## A client may post an event to itself, and only that
+
+`WIN_REQ_EVENT_PUSH` was compositor-only, and for a good reason: it is
+the one request in the protocol that reaches across processes, so a
+client able to call it could synthesise a keystroke into any other
+program. The protocol's entire access-control story is "a window belongs
+to a process", and that request is the exception.
+
+Threads made the restriction cost something. A Toykit app blocks in
+`SYS_WAIT_EVENT`; a worker thread that finishes has no way to wake it,
+so the completion is only noticed on the next `tick_ms` — and the whole
+point of moving work off the event loop was to stop paying a cadence.
+Every real toolkit solves this the same way and calls it something
+different: Qt `postEvent`, GTK `g_idle_add`, Win32 `PostMessage`, and a
+Wayland client an eventfd in its poll set.
+
+**The relaxation is bounded twice: the target must be 0 ("me") and the
+type must be `WIN_EV_USER`.** Bounding the target is the obvious half —
+a process can already do anything it likes to its own state, so letting
+it wake itself grants nothing new. Bounding the TYPE is the half worth
+explaining: without it a client could push itself a `WIN_EV_KEY`, and
+while that harms nobody else it would make "an event of type KEY came
+from the compositor" false, which is a property a diagnostic reading a
+log should be able to rely on. A stray self-post can never be mistaken
+for input.
+
+**Two numbers, not a pointer.** An event here is a message — fixed
+layout, pointer-free, readable in a log — which is why the protocol
+spells every other event out field by field rather than copying a
+struct. A worker with a larger result puts it where both threads agreed
+and posts an index. That also keeps the door open for the payload to
+cross a process boundary later, which a pointer would have closed.

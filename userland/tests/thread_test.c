@@ -128,6 +128,31 @@ static void *detached_worker(void *arg) {
     return NULL;
 }
 
+// --- the stack a thread starts on ------------------------------------
+//
+// **EVERY CHECK ABOVE PASSED WHILE THIS WAS BROKEN**, which is why it
+// is its own worker. The kernel handed a new thread a 16-ALIGNED RSP,
+// where SysV says a function begins with RSP % 16 == 8 (a `call` has
+// just pushed a return address). GCC then emits `movaps` against stack
+// slots it believes are aligned and the thread takes a #GP -- but only
+// if it uses SSE at all, and none of the workers above do. The first
+// GUI client to run a worker crashed on its first snprintf.
+//
+// So this one deliberately does what ordinary code does: formats into a
+// local buffer and does floating-point arithmetic, both of which GCC
+// compiles to aligned stack traffic.
+static volatile int g_sse_ok;
+
+static void *sse_worker(void *arg) {
+    (void)arg;
+    char buf[80];
+    volatile double d[4] = { 1.5, 2.25, 3.125, 4.0625 };
+    double sum = d[0] + d[1] + d[2] + d[3];
+    snprintf(buf, sizeof buf, "%d/%d", (int)sum, (int)(sum * 16));
+    g_sse_ok = (strcmp(buf, "10/175") == 0);
+    return NULL;
+}
+
 static void *forever(void *arg) {
     (void)arg;
     for (;;) sys_yield();
@@ -224,6 +249,17 @@ int main(void) {
         check(g_detached_ran, "the detached thread still ran");
     } else {
         check(0, "a running thread can be detached");
+    }
+
+    pthread_t sse;
+    if (pthread_create(&sse, NULL, sse_worker, NULL) == 0) {
+        pthread_join(sse, NULL);
+        // Reaching this at all is most of the assertion: a misaligned
+        // stack faults rather than computing the wrong answer, and the
+        // fault kills the whole process.
+        check(g_sse_ok, "a worker can use SSE -- its stack is aligned as SysV requires");
+    } else {
+        check(0, "a worker can use SSE -- its stack is aligned as SysV requires");
     }
 
     check(pthread_equal(pthread_self(), pthread_self()), "pthread_self() is stable");

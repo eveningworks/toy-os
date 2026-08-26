@@ -25,13 +25,16 @@
 // not list adjacency -- two blocks next to each other in the list
 // might come from separate, non-adjacent pmm regions.
 //
-// Not interrupt-safe or reentrant, matching this kernel's existing
-// single-threaded assumptions elsewhere (see userland/wm/wm.c's top
-// comment) -- nothing here is called from an ISR, and the scheduler
-// only ever preempts between ring-3 processes, never kernel-mode code
-// mid-kmalloc. If a future caller ever needs kmalloc from an interrupt
-// handler or a genuinely preemptible kernel thread, this needs a lock
-// first.
+// Not interrupt-safe or reentrant. Nothing here is called from an ISR,
+// and the scheduler only ever preempts between ring-3 processes, never
+// kernel-mode code mid-kmalloc -- so in RING 0 the list needs no lock.
+//
+// **THAT ARGUMENT NEVER APPLIED TO RING 3, and threads are what made it
+// matter**: two threads of one process are preempted at any instruction
+// and share one free list. kmalloc()/kfree()/heap_check() take
+// heap_os_lock(), which is a real lock in ring 3 and a no-op in the
+// kernel -- see api/heap_os.h, and docs/smp-design.md for the day the
+// kernel's half stops being a no-op.
 //
 // DEBUG MODE (`heap debug on`, heap_set_debug()) wraps every subsequent
 // allocation in red-zones and poisons what it frees:
@@ -287,7 +290,11 @@ static int header_plausible(const struct heap_block *b) {
     return 1;
 }
 
-void *kmalloc(size_t size) {
+// THE BODY, called with the lock held. The public entry points below
+// are thin wrappers so that every one of these `return`s does not have
+// to remember to release it -- the shape a `goto out` would otherwise
+// force on a function with six of them.
+static void *kmalloc_locked(size_t size) {
     // Inert unless a test armed it (the kernel wires this to
     // fault_inject.h; ring 3 answers 0 always). Returning NULL here is
     // exactly what a genuinely exhausted heap does, which is the whole
@@ -320,7 +327,17 @@ void *kmalloc(size_t size) {
     return rz ? rz_arm(grown, span) : (void *)(grown + 1);
 }
 
+void *kmalloc(size_t size) {
+    heap_os_lock();
+    void *p = kmalloc_locked(size);
+    heap_os_unlock();
+    return p;
+}
+
 void *kzalloc(size_t size) {
+    // The memset is OUTSIDE the lock deliberately: the block is this
+    // caller's the moment kmalloc() returns it, so zeroing it holds up
+    // nobody else.
     void *p = kmalloc(size);
     if (p) k_memset(p, 0, size);
     return p;
@@ -379,8 +396,7 @@ uint64_t kmalloc_size(const void *ptr) {
     return b->size;
 }
 
-void kfree(void *ptr) {
-    if (!ptr) return;
+static void kfree_locked(void *ptr) {
 
     struct heap_block *b;
     uint64_t span = 0;
@@ -435,6 +451,15 @@ void kfree(void *ptr) {
     if (b->prev && b->prev->free != HEAP_IN_USE) try_merge_next(b->prev);
 }
 
+void kfree(void *ptr) {
+    // The NULL check is out here rather than inside: free(NULL) is
+    // legal and common, and it has no business taking a lock.
+    if (!ptr) return;
+    heap_os_lock();
+    kfree_locked(ptr);
+    heap_os_unlock();
+}
+
 uint64_t heap_total_bytes(void) { return g_total_bytes; }
 uint64_t heap_used_bytes(void) { return g_used_bytes; }
 
@@ -445,12 +470,19 @@ uint64_t heap_used_bytes(void) { return g_used_bytes; }
 // Returns the number of violations found; each one is reported and its
 // block quarantined, exactly as at reuse.
 uint64_t heap_check(void) {
+    // Walks the list, so it locks -- the one diagnostic here that does.
+    // The counters below do not: each is a single aligned word, and a
+    // reader that catches one an allocation early is reading a heap
+    // that is moving anyway.
+    heap_os_lock();
     uint64_t before = g_rz_violations;
     for (struct heap_block *b = g_head; b; b = b->next) {
         if (b->free != HEAP_FREE_POISONED) continue;
         if (!rz_check_poison(b)) quarantine(b);
     }
-    return g_rz_violations - before;
+    uint64_t found = g_rz_violations - before;
+    heap_os_unlock();
+    return found;
 }
 
 // Affects allocations made from here on, not existing ones -- see the

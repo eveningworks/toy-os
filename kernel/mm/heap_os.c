@@ -24,3 +24,11 @@ void *heap_os_alloc(uint64_t bytes) {
 void heap_os_report(const char *msg) { klog_write(msg); }
 
 int heap_os_should_fail_alloc(void) { return fault_should_fail_alloc(); }
+
+// NO-OPS, and heap_os.h says why: nothing preempts kernel code between
+// two instructions of kmalloc(). The day that stops being true is the
+// day SMP lands, and `docs/smp-design.md` names this as the first lock
+// to make real -- so the call sites already exist and only these two
+// bodies change.
+void heap_os_lock(void) { }
+void heap_os_unlock(void) { }

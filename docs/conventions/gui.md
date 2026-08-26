@@ -1524,3 +1524,43 @@ real scanout hardware does. Do not write a pixel assertion for one.
   still rename one choice. The VALUE stays the identity: `losangeles` is
   what is typed, matched and stored, and nothing parses a display name
   back. See `docs/decisions.md`.
+
+## A WORKER THREAD MAY TOUCH NOTHING IN TOYKIT EXCEPT `uapp_post()`.
+
+Every real toolkit has this rule and none of them enforce it: AppKit is
+main-thread-only, Qt widgets are main-thread-only, GTK the same. Toykit
+is no different and cannot be -- the widget tree, the canvas and the
+window buffer are all plain process memory that the main thread may be
+reading at the instant a worker writes.
+
+So the division is: **a worker computes into memory it owns and posts
+two numbers; the main thread runs the callback and touches the widgets.**
+`uapp_post(a, a0, a1)` wakes this program's own event loop and
+`uapp_desc.on_user` receives the pair on the main thread. Two numbers
+rather than a pointer because an event is a MESSAGE -- fixed-layout and
+readable in a log, the same reason the protocol spells every other event
+out field by field. A worker with a bigger result puts it somewhere both
+threads agreed on and posts an index.
+
+**The wake is why this exists at all.** A Toykit app blocks in
+`SYS_WAIT_EVENT`, so without a post a worker's completion is only
+noticed on the next `tick_ms` -- which trades one polling cadence for
+another, and the cadence is the thing worth deleting. Qt's `postEvent`,
+GTK's `g_idle_add`, Win32's `PostMessage` and the eventfd a Wayland
+client puts in its poll set are all the same mechanism.
+
+**A CLIENT MAY POST ONLY TO ITSELF, AND ONLY `WIN_EV_USER`.**
+`WIN_REQ_EVENT_PUSH` is otherwise compositor-only, because it is the one
+request that reaches across processes and a client synthesising a
+keystroke into another program would be the end of the protocol's access
+control. Restricting the TYPE as well as the target is what keeps that
+true of a client's own queue too: a stray self-post can never be
+mistaken for input.
+
+**AND LONG WORK STILL USUALLY BELONGS IN A CHILD PROCESS.** This does
+not replace the `/bin` pattern -- Disk Mark spawning `/bin/diskbench`
+and the File Manager spawning `/bin/cp` are still right, because a
+`/bin` program is independently useful and independently testable where
+a thread is neither. The case for a thread is work whose RESULT must
+live in the app's own memory: a decoded image is the example, since
+handing one back through a pipe that carries 1 KiB a read is absurd.

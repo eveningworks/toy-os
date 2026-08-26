@@ -246,6 +246,8 @@ everything libc-shaped is waiting on it. Full plan and staging:
 - [x] ~~User threads (a second thread sharing one address space)~~ DONE 2026-08-26 -- a slot whose `tgid` names another
 - [x] ~~Thread-local storage (FS.base)~~ DONE 2026-08-26 -- `__thread` in ring 3, a per-thread errno, reloaded on every switch
 - [ ] A futex, so a mutex can BLOCK -- today's spins and yields, and a detached thread's stack needs one to be reclaimable
+- [ ] Image Viewer decodes on a worker thread, so its window keeps painting through a JPEG
+- [ ] The GUI Terminal reads its pty on a thread instead of polling it every 30 ms
 - [ ] A thread stack with a guard page, which needs an `mprotect`-shaped syscall
 - [ ] Signal dispositions shared by a thread group, as POSIX has them -- per thread here, inherited at create
 - [ ] GCC's default (`%fs:0x28`) stack-protector guard in ring 3, now that TLS exists

@@ -44,4 +44,29 @@ void heap_os_report(const char *msg);
 // machine. Ring 3 always answers 0; there is no injector there yet.
 int heap_os_should_fail_alloc(void);
 
+// MUTUAL EXCLUSION OVER THE FREE LIST, and the fourth thing the
+// allocator deliberately does not know: what a "thread" is on this side.
+//
+// heap_core.c holds ONE address-ordered list, and a walker that is
+// interrupted halfway through a split or a coalesce leaves it
+// inconsistent -- so any ring with two concurrent callers needs these
+// to be real. The two rings answer differently, and both answers are
+// correct for their ring:
+//
+//   - **Ring 3: a real lock.** A process can have several threads
+//     (`docs/conventions/kernel.md`) and they are preempted at any
+//     instruction, so two of them in malloc() would corrupt the list.
+//   - **Ring 0: a no-op**, because the kernel is not preempted inside
+//     kernel code -- the scheduler only ever switches ring-3 processes,
+//     and every syscall runs with interrupts off. That assumption is
+//     stated in heap_core.c's top comment and ENDS AT SMP: the kernel
+//     heap is split #1 in `docs/smp-design.md`, and this is the slot
+//     that gets filled in.
+//
+// NOT RECURSIVE, and malloc() is therefore not async-signal-safe -- a
+// signal handler that allocates while its own thread holds this lock
+// deadlocks. That is true of every libc's malloc, glibc's included.
+void heap_os_lock(void);
+void heap_os_unlock(void);
+
 #endif
