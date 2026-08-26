@@ -272,6 +272,16 @@ _Static_assert(sizeof(struct query_fontglyph) <= 256,
 // advance by exactly the previous record's `len`.
 #define QUERY_KLOG      16
 
+// The AHCI host bus adapter: its version, what it offers, and which
+// port carries the drive. SCALAR. The ports themselves are
+// QUERY_AHCI_PORT -- the same split as QUERY_PARTTABLE/QUERY_PARTITION,
+// and for the same reason: one thing with one set of numbers, and rows.
+#define QUERY_AHCI      18
+
+// One record per IMPLEMENTED port. LIST -- so a machine with no AHCI
+// controller has zero records, which is a successful answer.
+#define QUERY_AHCI_PORT 19
+
 // The USB devices an xHCI controller enumerated. A LIST -- one record
 // per device -- read by /bin/lsusb. There is deliberately no scalar
 // "controller" class beside it: `lsdev` already names the controller,
@@ -528,6 +538,45 @@ struct query_ata {
     uint64_t flags;             // QUERY_ATA_*
     uint64_t max_sectors_xfer;  // per transfer
     uint64_t sector_count;      // the drive's capacity, in sectors
+};
+
+// QUERY_AHCI's record.
+#define QUERY_AHCI_PRESENT (1u << 0) // a controller was found and mapped
+#define QUERY_AHCI_DRIVE   (1u << 1) // a SATA drive answered IDENTIFY
+#define QUERY_AHCI_IRQ     (1u << 2) // completions arrive by interrupt
+#define QUERY_AHCI_64BIT   (1u << 3) // CAP.S64A
+#define QUERY_AHCI_NCQ     (1u << 4) // CAP.SNCQ -- advertised, and not used
+#define QUERY_AHCI_SSS     (1u << 5) // CAP.SSS: staggered spin-up
+#define QUERY_AHCI_LBA48   (1u << 6) // the DRIVE's addressing, not the HBA's
+
+#define QUERY_AHCI_MODEL_MAX 48 // IDENTIFY's 40 characters, rounded up
+
+struct query_ahci {
+    uint64_t flags;             // QUERY_AHCI_*
+    uint64_t version;           // the VS register: 0x00010301 is 1.3.1
+    uint64_t ports_impl;        // implemented ports, not ports with a drive
+    uint64_t command_slots;     // CAP.NCS + 1; this driver uses one
+    uint64_t active_port;       // the port carrying the block device
+    uint64_t irq;               // PIC line, 0 when polled
+    uint64_t sector_count;
+    uint64_t max_sectors_xfer;
+    char     model[QUERY_AHCI_MODEL_MAX];
+};
+
+// QUERY_AHCI_PORT's record. `port` is the HARDWARE's number and the
+// record index is a position in the implemented list -- they differ
+// whenever PI has a gap, which is why both exist.
+#define QUERY_AHCI_PORT_DEVICE  (1u << 0) // DET says the link is up to a device
+#define QUERY_AHCI_PORT_RUNNING (1u << 1) // PxCMD.ST and .FRE are both set
+#define QUERY_AHCI_PORT_ACTIVE  (1u << 2) // this port carries the block device
+
+struct query_ahci_port {
+    uint64_t port;
+    uint64_t flags;             // QUERY_AHCI_PORT_*
+    uint64_t det;               // PxSSTS.DET: 3 = present, link established
+    uint64_t ipm;               // PxSSTS.IPM: 1 = active
+    uint64_t speed;             // PxSSTS.SPD: 1/2/3 = 1.5/3/6 Gbps
+    uint64_t signature;         // PxSIG: 0x00000101 is a SATA disk
 };
 
 // QUERY_KSTACK's record -- one live kernel stack.

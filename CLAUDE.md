@@ -657,6 +657,8 @@ whenever a headline here tells you something you did not already know.
 - **THERE ARE THREE WORDS FOR SYSTEM STATE AND THEY ARE FIXED: FACT, SETTING, TUNABLE.**
 - **Setting a setting to the value it already has does NOTHING**
 - **`etc_config.c` is SPLIT: the parser is shared, the file I/O is kernel-only.**
+- **THE DISK PRECEDENCE IS VIRTIO-BLK, THEN AHCI, THEN ATA, and each rung has a boot word that steps down to the next** -- decided in ONE line in `kernel/fs/mount.c`; `novirtio` and `noahci` are what keep the lower rungs reachable. `noahci` is NOT a driver kill switch: only `blk_ahci_init()` reads it.
+- **AHCI ENUMERATES EVERY PORT AND DRIVES ONE, AND SAYS SO** -- `kernel/drivers/ahci.c`; NCQ and 64-bit addressing are REPORTED, not used (what NCQ needs is an asynchronous block interface, not more AHCI code); NO sector cache, unlike ATA, which is what makes `BLK_CAP_FLUSH` a real FLUSH CACHE EXT. Start the engine only after `PxCLB`/`PxFB` are set and unmask INTx only after the handler is registered; acknowledge **port first, then the HBA**; `CFL` is the FIS length in DWORDS (five), not the 64-byte slot. The PRDT is one entry per 4 KiB page, and `tools/ahci_test.py` is the only thing that runs any of it.
 - **VIRTIO-BLK IS THE PREFERRED DISK; ATA IS THE LEGACY PATH.**
 - **A filesystem talks to a `block_device`, not to a disk.**
 - **TFS3's last block group may be PARTIAL**
@@ -1229,6 +1231,14 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   "it booted" proves nothing, while "the mounted volume is 256 MiB and
   the image is 2 GiB" only a correct window can produce. Reboots, and
   finishes by driving `/bin/mkpart` in the guest),
+  `ahci_test.py` (**toy-os booting with its filesystem on a SATA drive
+  behind an AHCI HBA** -- the only thing that reaches
+  `kernel/drivers/ahci.c`, since every `ahci` KTEST skips on a machine
+  with no controller. Its load-bearing check is therefore **`0
+  skipped`**, not "the tests passed". Also reboots to prove the write
+  landed, compares the guest's read of `/boot` against **mtools** on the
+  host, and rewrites the image's `grub.cfg` to test the `noahci`
+  precedence rung),
   `virtio_boot_test.py` (TFS3 mounting off virtio-blk on a
   machine with NO IDE controller, written and read back across a
   REBOOT), `virtio_gpu_test.py` (the GPU -- the ONLY thing here that

@@ -191,11 +191,20 @@ def cmd_start(args):
         # at all, which reads as a kernel that died before its first
         # print rather than as one that never ran.
         *install_grub.qemu_boot_args(medium, args.iso),
-        # discard=unmap turns the guest's ATA TRIM into a hole punch in the
-        # backing file -- see kernel/drivers/ata.c's ata_trim().
-        "-drive", f"file={args.disk},format=raw,if=ide,discard=unmap",
         "-m", str(getattr(args, "mem", 0) or 2048),
     ]
+    # THE BOOT DISK, and which controller it hangs off. `--disk-kind
+    # ahci` is the only way anything here reaches kernel/drivers/ahci.c,
+    # the same reason --vga virtio and --virtio-input exist; the
+    # Makefile's DISK= axis is its interactive twin.
+    # discard=unmap turns the guest's TRIM into a hole punch in the
+    # backing file -- see kernel/drivers/ata.c's ata_trim().
+    if getattr(args, "disk_kind", "ide") == "ahci":
+        cmd += ["-device", "ich9-ahci,id=ahci",
+                "-drive", f"file={args.disk},format=raw,if=none,id=sata0,discard=unmap",
+                "-device", "ide-hd,drive=sata0,bus=ahci.0"]
+    else:
+        cmd += ["-drive", f"file={args.disk},format=raw,if=ide,discard=unmap"]
     if args.kvm:
         # Matches `make run KVM=1`'s flags, so what this measures is what
         # that target actually does. Off by default because /dev/kvm
@@ -526,6 +535,9 @@ def main():
                     help="guest RAM in MiB (default 2048). Smaller makes "
                           "memory exhaustion reachable -- see tools/mem_stress.py")
     ap.add_argument("--timeout", type=float, default=30.0)
+    ap.add_argument("--disk-kind", choices=("ide", "ahci"), default="ide",
+                    help="which controller --disk hangs off; ahci is an ICH9 HBA "
+                         "and is what exercises kernel/drivers/ahci.c")
     ap.add_argument("--virtio-disk", default=None,
                     help="attach PATH as a virtio-blk disk. Off by default; with it "
                          "the guest gets a second disk on virtio-blk-pci, which is "

@@ -1,0 +1,629 @@
+// AHCI (SATA), one drive, DMA + interrupt. See kernel/include/kernel/ahci.h
+// for what this drives and where it deliberately stops short of Linux's.
+//
+// THE ONE ORDERING THAT MATTERS, because getting it wrong hangs the
+// machine rather than losing a transfer: the command engine is started
+// only after PxCLB/PxFB point at real memory, and the interrupt line is
+// unmasked only after the handler is registered. A level-triggered INTx
+// asserted with nobody willing to clear PxIS is never deasserted.
+#include "ahci.h"
+#include "pci.h"
+#include "pci_internal.h"
+#include "pmm.h"
+#include "irq.h"
+#include "pic.h"
+#include "timer.h"
+#include "klog.h"
+#include "kfmt.h"
+#include "string.h"
+#include "idt.h"
+#include "barrier.h"
+#include <stddef.h>
+
+// ---- the register map (AHCI 1.3.1, section 3) ------------------------
+
+#define HBA_CAP   0x00
+#define HBA_GHC   0x04
+#define HBA_IS    0x08
+#define HBA_PI    0x0C
+#define HBA_VS    0x10
+#define HBA_CAP2  0x24
+#define HBA_BOHC  0x28
+
+#define GHC_HR    (1u << 0)   // HBA reset
+#define GHC_IE    (1u << 1)   // interrupts to the host
+#define GHC_AE    (1u << 31)  // AHCI enable -- not IDE-emulation mode
+
+#define CAP_NP    0x1Fu       // ports supported, minus one
+#define CAP_NCS_SHIFT 8
+#define CAP_NCS   0x1Fu       // command slots, minus one
+#define CAP_SSS   (1u << 27)  // staggered spin-up
+#define CAP_SNCQ  (1u << 30)
+#define CAP_S64A  (1u << 31)
+
+#define CAP2_BOH  (1u << 0)   // BIOS/OS handoff is implemented
+#define BOHC_BOS  (1u << 0)   // BIOS owns the HBA
+#define BOHC_OOS  (1u << 1)   // the OS is asking for it
+
+#define PORT_BASE 0x100
+#define PORT_SIZE 0x80
+
+#define PX_CLB   0x00
+#define PX_CLBU  0x04
+#define PX_FB    0x08
+#define PX_FBU   0x0C
+#define PX_IS    0x10
+#define PX_IE    0x14
+#define PX_CMD   0x18
+#define PX_TFD   0x20
+#define PX_SIG   0x24
+#define PX_SSTS  0x28
+#define PX_SCTL  0x2C
+#define PX_SERR  0x30
+#define PX_CI    0x38
+
+#define PXCMD_ST  (1u << 0)
+#define PXCMD_SUD (1u << 1)   // spin-up device, only meaningful with CAP.SSS
+#define PXCMD_FRE (1u << 4)   // FIS receive enable
+#define PXCMD_FR  (1u << 14)  // FIS receive running
+#define PXCMD_CR  (1u << 15)  // command list running
+
+#define PXIS_TFES (1u << 30)  // task file error -- the drive refused
+
+// The completion bits (D2H register FIS, PIO setup, DMA setup,
+// set-device-bits) AND the fatal error bits. The errors have to be in
+// here: without them a refused command raises no interrupt at all, and
+// the waiter below sits out its whole one-second budget before
+// reporting a TIMEOUT for something the drive answered immediately.
+// Hot-plug and PHY events stay masked -- a handler with nothing to do
+// about an event is worse than no handler.
+#define PXIE_ERR  ((1u << 30) | (1u << 29) | (1u << 28) | (1u << 27) | (1u << 26))
+#define PXIE_MASK (0x0000000Fu | PXIE_ERR)
+
+#define PXTFD_ERR (1u << 0)
+#define PXTFD_DRQ (1u << 3)
+#define PXTFD_BSY (1u << 7)
+
+#define SIG_SATA  0x00000101u
+
+// ---- the command structures (AHCI 1.3.1, section 4.2) ---------------
+
+struct cmd_header {
+    uint16_t flags;      // CFL:5, A, W, P, R, B, C, rsvd, PMP:4
+    uint16_t prdtl;
+    volatile uint32_t prdbc;
+    uint32_t ctba, ctbau;
+    uint32_t rsvd[4];
+};
+
+struct prd {
+    uint32_t dba, dbau, rsvd;
+    uint32_t dbc;        // bits 21:0 are the byte count MINUS ONE
+};
+
+#define PRDT_ENTRIES 16  // one per 4 KiB page of the bounce buffer
+
+struct cmd_table {
+    uint8_t cfis[64];
+    uint8_t acmd[16];
+    uint8_t rsvd[48];
+    struct prd prdt[PRDT_ENTRIES];
+};
+
+// ATA commands issued as a Register H2D FIS.
+#define FIS_TYPE_H2D    0x27
+#define ATA_IDENTIFY    0xEC
+#define ATA_READ_DMA_EX 0x25
+#define ATA_WRITE_DMA_E 0x35
+#define ATA_FLUSH_EXT   0xEA
+
+// ---- state ----------------------------------------------------------
+
+#define AHCI_MAX_PORTS 32
+#define DMA_BUF_FRAMES PRDT_ENTRIES   // 64 KiB = 128 sectors per command
+
+static volatile uint8_t *g_abar;
+static const struct pci_device *g_pci;
+static uint32_t g_cap, g_pi;
+static int g_port_count;
+static struct ahci_port_status g_ports[AHCI_MAX_PORTS];
+
+static int g_active = -1;             // index into g_ports, not a port number
+static volatile uint8_t *g_preg;      // the active port's register block
+static struct cmd_header *g_clist;
+static struct cmd_table *g_ctable;
+static uint8_t *g_buf;
+static uint64_t g_clist_phys, g_fis_phys, g_ctable_phys, g_buf_phys;
+static uint32_t g_buf_frames;
+
+static uint32_t g_sectors;
+static int g_lba48;
+static char g_model[41];
+static uint8_t g_irq;
+static volatile int g_irq_fired;
+static volatile uint32_t g_irq_status;   // PxIS as the handler saw it
+
+// ~1 s at PIT_HZ, the same budget ata.c gives a transfer. A drive that
+// has not answered in a second under an emulator is not going to.
+#define WAIT_TICKS 100
+// The interrupts-off bound, where pit_ticks() cannot advance -- same
+// reasoning as ata.c's ATA_POLL_LIMIT.
+#define POLL_LIMIT 2000000
+
+static inline uint32_t hba_r(uint32_t off) { return *(volatile uint32_t *)(g_abar + off); }
+static inline void hba_w(uint32_t off, uint32_t v) { *(volatile uint32_t *)(g_abar + off) = v; }
+static inline uint32_t px_r(volatile uint8_t *p, uint32_t off) { return *(volatile uint32_t *)(p + off); }
+static inline void px_w(volatile uint8_t *p, uint32_t off, uint32_t v) { *(volatile uint32_t *)(p + off) = v; }
+
+static volatile uint8_t *port_regs(int port) {
+    return g_abar + PORT_BASE + (uint32_t)port * PORT_SIZE;
+}
+
+// Waits for `mask` to read back clear in `reg`, up to ~`ticks`. Returns
+// 0 on timeout. Bounded by an iteration count as well, because
+// pit_ticks() is frozen when this is reached with interrupts off.
+static int wait_clear(volatile uint8_t *p, uint32_t reg, uint32_t mask, uint64_t ticks) {
+    uint64_t start = pit_ticks();
+    for (uint64_t guard = 0; guard < (uint64_t)POLL_LIMIT; guard++) {
+        if (!(px_r(p, reg) & mask)) return 1;
+        if (pit_ticks() - start > ticks) return 0;
+    }
+    return 0;
+}
+
+// ---- port bring-up ---------------------------------------------------
+
+static void port_stop(volatile uint8_t *p) {
+    uint32_t cmd = px_r(p, PX_CMD);
+    px_w(p, PX_CMD, cmd & ~PXCMD_ST);
+    wait_clear(p, PX_CMD, PXCMD_CR, WAIT_TICKS);
+    cmd = px_r(p, PX_CMD);
+    px_w(p, PX_CMD, cmd & ~PXCMD_FRE);
+    wait_clear(p, PX_CMD, PXCMD_FR, WAIT_TICKS);
+}
+
+// Starts the engine. Refuses while the drive is busy: PxCMD.ST set with
+// BSY or DRQ still asserted is the one sequence the spec calls out as
+// undefined, and it presents as a port that accepts commands and never
+// completes one.
+static int port_start(volatile uint8_t *p) {
+    if (!wait_clear(p, PX_TFD, PXTFD_BSY | PXTFD_DRQ, WAIT_TICKS)) return 0;
+    px_w(p, PX_CMD, px_r(p, PX_CMD) | PXCMD_FRE);
+    px_w(p, PX_CMD, px_r(p, PX_CMD) | PXCMD_ST);
+    return 1;
+}
+
+// A FATAL ERROR STOPS THE COMMAND ENGINE, and nothing restarts it on its
+// own -- so without this the first refused command wedges the drive and
+// every later transfer times out, which reads as a dead disk rather than
+// as one bad sector. AHCI 1.3.1's 6.2.2 recovery: stop, clear PxSERR,
+// clear PxIS, start.
+//
+// UNEXERCISED BY ANY TEST HERE, and deliberately said out loud: the
+// bounds check refuses a bad LBA before the drive ever sees one, and
+// QEMU produces no media errors. See docs/roadmap.md.
+static void port_recover(volatile uint8_t *p) {
+    port_stop(p);
+    px_w(p, PX_SERR, px_r(p, PX_SERR));
+    px_w(p, PX_IS, px_r(p, PX_IS));
+    if (!port_start(p)) klog_write("ahci: the port would not restart after an error\n");
+}
+
+// ---- issuing one command --------------------------------------------
+
+// Fills slot 0's Register H2D FIS. `count` is in sectors; `lba` is
+// 48-bit even on a 28-bit drive, because READ/WRITE DMA EXT is the only
+// command this driver issues and it has no 28-bit form.
+static void build_fis(uint8_t command, uint64_t lba, uint16_t count) {
+    uint8_t *f = g_ctable->cfis;
+    k_memset(f, 0, 64);
+    f[0] = FIS_TYPE_H2D;
+    f[1] = 0x80;                 // C: this is a command, not a control update
+    f[2] = command;
+    f[4] = (uint8_t)(lba);
+    f[5] = (uint8_t)(lba >> 8);
+    f[6] = (uint8_t)(lba >> 16);
+    f[7] = 0x40;                 // LBA mode; no drive/head select on SATA
+    f[8] = (uint8_t)(lba >> 24);
+    f[9] = (uint8_t)(lba >> 32);
+    f[10] = (uint8_t)(lba >> 40);
+    f[12] = (uint8_t)(count);
+    f[13] = (uint8_t)(count >> 8);
+}
+
+// One PRD per 4 KiB page, which is the shape Linux's ahci_fill_sg()
+// produces and what keeps the multi-entry path ordinary rather than
+// dead. `bytes` of 0 means a command that moves no data (FLUSH), which
+// takes no PRD at all -- a zero-length entry is not the same thing and
+// some drives reject it.
+static int build_prdt(uint32_t bytes) {
+    int n = 0;
+    uint32_t done = 0;
+    while (done < bytes && n < PRDT_ENTRIES) {
+        uint32_t chunk = bytes - done;
+        if (chunk > 4096) chunk = 4096;
+        g_ctable->prdt[n].dba  = (uint32_t)(g_buf_phys + done);
+        g_ctable->prdt[n].dbau = 0;
+        g_ctable->prdt[n].rsvd = 0;
+        g_ctable->prdt[n].dbc  = chunk - 1;   // byte count MINUS ONE
+        done += chunk;
+        n++;
+    }
+    return (done == bytes) ? n : -1;
+}
+
+static void irq_handler(uint64_t *regs) {
+    (void)regs;
+    if (!g_abar || !g_preg) return;
+    uint32_t is = hba_r(HBA_IS);
+    if (!is) return;                    // a shared line, and not ours
+    uint32_t pis = px_r(g_preg, PX_IS);
+    // PORT FIRST, THEN THE HBA. Clearing HBA_IS while PxIS still holds
+    // a bit leaves the port re-asserting immediately, which on a
+    // level-triggered line is a hang rather than a lost completion.
+    px_w(g_preg, PX_IS, pis);
+    hba_w(HBA_IS, is);
+    g_irq_status = pis;
+    g_irq_fired = 1;
+}
+
+// Waits for slot 0 to retire. Interrupts-off callers (a ring-3 syscall
+// reaching the filesystem -- see idt.h's isr_in_progress()) cannot be
+// woken by the handler and poll PxCI instead; the hardware clears it
+// either way, so both paths observe the same completion.
+static int wait_command(void) {
+    if (isr_in_progress() || !g_irq) {
+        for (uint64_t i = 0; i < (uint64_t)POLL_LIMIT; i++) {
+            if (!(px_r(g_preg, PX_CI) & 1u)) {
+                g_irq_status = px_r(g_preg, PX_IS);
+                px_w(g_preg, PX_IS, g_irq_status);
+                hba_w(HBA_IS, hba_r(HBA_IS));
+                return 1;
+            }
+            // A task file error retires the command without clearing
+            // PxCI, so this is a completion to report, not a timeout.
+            if (px_r(g_preg, PX_IS) & PXIS_TFES) {
+                g_irq_status = px_r(g_preg, PX_IS);
+                px_w(g_preg, PX_IS, g_irq_status);
+                hba_w(HBA_IS, hba_r(HBA_IS));
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    uint64_t start = pit_ticks();
+    while (!g_irq_fired) {
+        if (pit_ticks() - start > WAIT_TICKS) return 0;
+        __asm__ volatile ("hlt");
+    }
+    // The completion interrupt and the slot retiring are two events, and
+    // an error interrupt arrives with PxCI still set.
+    if (g_irq_status & PXIS_TFES) return 1;
+    return wait_clear(g_preg, PX_CI, 1u, WAIT_TICKS);
+}
+
+// Issues slot 0 and waits. `bytes` is how much data the PRDT should
+// describe; `write` says which way it moves. Returns 1 on success.
+static int run_command(uint8_t command, uint64_t lba, uint16_t count,
+                       uint32_t bytes, int write) {
+    if (!g_preg) return 0;
+
+    int prdtl = build_prdt(bytes);
+    if (prdtl < 0) return 0;
+
+    build_fis(command, lba, count);
+
+    // CFL is the FIS length in DWORDS -- a Register H2D FIS is 20 bytes,
+    // five dwords, NOT the 64-byte slot it sits in. Bit 6 is W.
+    g_clist[0].flags = (uint16_t)(5u | (write ? (1u << 6) : 0));
+    g_clist[0].prdtl = (uint16_t)prdtl;
+    g_clist[0].prdbc = 0;
+    g_clist[0].ctba  = (uint32_t)g_ctable_phys;
+    g_clist[0].ctbau = 0;
+
+    if (!wait_clear(g_preg, PX_TFD, PXTFD_BSY | PXTFD_DRQ, WAIT_TICKS)) return 0;
+
+    px_w(g_preg, PX_IS, px_r(g_preg, PX_IS));   // stale bits from a previous error
+    px_w(g_preg, PX_SERR, px_r(g_preg, PX_SERR));
+    g_irq_fired = 0;
+    g_irq_status = 0;
+    kmb();                                      // the tables above must land first
+    px_w(g_preg, PX_CI, 1u);
+
+    if (!wait_command()) {
+        klog_printf("ahci: command 0x%x timed out (tfd 0x%x, is 0x%x)\n",
+                    command, px_r(g_preg, PX_TFD), px_r(g_preg, PX_IS));
+        return 0;
+    }
+    kmb();
+
+    if (g_irq_status & PXIS_TFES) {
+        klog_printf("ahci: command 0x%x refused (tfd 0x%x)\n", command, px_r(g_preg, PX_TFD));
+        port_recover(g_preg);
+        return 0;
+    }
+    if (px_r(g_preg, PX_TFD) & PXTFD_ERR) {
+        klog_printf("ahci: command 0x%x set ERR (tfd 0x%x)\n", command, px_r(g_preg, PX_TFD));
+        return 0;
+    }
+    return 1;
+}
+
+// ---- IDENTIFY -------------------------------------------------------
+
+// IDENTIFY's model string is 20 big-endian 16-bit words, i.e. every
+// pair of bytes is swapped, and it is space-padded rather than
+// terminated.
+static void copy_model(const uint16_t *id) {
+    for (int i = 0; i < 20; i++) {
+        g_model[i * 2]     = (char)(id[27 + i] >> 8);
+        g_model[i * 2 + 1] = (char)(id[27 + i] & 0xFF);
+    }
+    g_model[40] = 0;
+    for (int i = 39; i >= 0 && g_model[i] == ' '; i--) g_model[i] = 0;
+}
+
+static int identify(void) {
+    if (!run_command(ATA_IDENTIFY, 0, 0, 512, 0)) return 0;
+
+    const uint16_t *id = (const uint16_t *)g_buf;
+    copy_model(id);
+
+    uint64_t sectors;
+    if (id[83] & (1u << 10)) {          // 48-bit addressing supported
+        g_lba48 = 1;
+        sectors = (uint64_t)id[100] | ((uint64_t)id[101] << 16) |
+                  ((uint64_t)id[102] << 32) | ((uint64_t)id[103] << 48);
+    } else {
+        g_lba48 = 0;
+        sectors = (uint32_t)id[60] | ((uint32_t)id[61] << 16);
+    }
+    if (!sectors) return 0;
+
+    // The block layer counts sectors in 32 bits. Clamping and SAYING SO
+    // beats wrapping: a silently truncated capacity is a filesystem
+    // that formats fine and corrupts past 2 TiB.
+    if (sectors > 0xFFFFFFFFull) {
+        klog_printf("ahci: drive reports %llu sectors -- clamped to 2 TiB (32-bit block layer)\n",
+                    (unsigned long long)sectors);
+        sectors = 0xFFFFFFFFull;
+    }
+    g_sectors = (uint32_t)sectors;
+    return 1;
+}
+
+// ---- init ------------------------------------------------------------
+
+// Some firmware owns the HBA until asked for it. QEMU does not
+// implement the handoff at all, which is why this is guarded on CAP2
+// rather than run blind.
+static void bios_handoff(void) {
+    if (!(hba_r(HBA_CAP2) & CAP2_BOH)) return;
+    hba_w(HBA_BOHC, hba_r(HBA_BOHC) | BOHC_OOS);
+    uint64_t start = pit_ticks();
+    while (hba_r(HBA_BOHC) & BOHC_BOS) {
+        if (pit_ticks() - start > WAIT_TICKS) {
+            klog_write("ahci: firmware did not release the HBA -- taking it anyway\n");
+            return;
+        }
+    }
+}
+
+static const struct pci_device *find_hba(void) {
+    for (int i = 0; i < pci_device_count(); i++) {
+        const struct pci_device *d = pci_device_at(i);
+        // prog_if 0x01 is "AHCI 1.0"; a 0x06 subclass with anything else
+        // there is a SATA controller in some vendor-specific mode this
+        // driver cannot speak.
+        if (d && d->class_code == 0x01 && d->subclass == 0x06 && d->prog_if == 0x01) return d;
+    }
+    return 0;
+}
+
+// Records every implemented port and what is on it. Enumeration is
+// separate from bring-up because the answer is worth reporting even for
+// the ports this driver will not use.
+static void scan_ports(void) {
+    for (int port = 0; port < AHCI_MAX_PORTS; port++) {
+        if (!(g_pi & (1u << port))) continue;
+        volatile uint8_t *p = port_regs(port);
+        uint32_t ssts = px_r(p, PX_SSTS);
+        uint32_t cmd  = px_r(p, PX_CMD);
+        struct ahci_port_status *s = &g_ports[g_port_count++];
+        s->port      = (uint8_t)port;
+        s->det       = (uint8_t)(ssts & 0xF);
+        s->ipm       = (uint8_t)((ssts >> 8) & 0xF);
+        s->speed     = (uint8_t)((ssts >> 4) & 0xF);
+        s->signature = px_r(p, PX_SIG);
+        s->running   = (cmd & (PXCMD_ST | PXCMD_FRE)) == (PXCMD_ST | PXCMD_FRE);
+        s->active    = 0;
+    }
+}
+
+// The command list, the FIS receive area and the one command table all
+// live in the first frame; the bounce buffer follows. The alignments
+// the spec demands (1 KiB, 256 B, 128 B) are satisfied by the offsets
+// below given a page-aligned base, which is what pmm_alloc_contiguous()
+// returns -- so there is no alignment arithmetic to get wrong.
+#define OFF_CLIST  0x000   // 32 headers, 1 KiB
+#define OFF_FIS    0x400   // 256 B
+#define OFF_CTABLE 0x500   // 128 + 16 * PRDT_ENTRIES
+
+static int alloc_dma(void) {
+    uint32_t frames = DMA_BUF_FRAMES;
+    uint64_t base = pmm_alloc_contiguous(1 + frames);
+    if (!base) {
+        frames = 1;
+        base = pmm_alloc_contiguous(1 + frames);
+        if (!base) return 0;
+        klog_write("ahci: only got a 4 KiB DMA buffer (contiguous pool too fragmented)\n");
+    }
+    g_buf_frames = frames;
+    g_clist_phys  = base + OFF_CLIST;
+    g_fis_phys    = base + OFF_FIS;
+    g_ctable_phys = base + OFF_CTABLE;
+    g_buf_phys    = base + 4096;
+    // Identity-mapped below 4 GiB, the same assumption ata.c and
+    // virtio's register windows make.
+    g_clist  = (struct cmd_header *)(uintptr_t)g_clist_phys;
+    g_ctable = (struct cmd_table *)(uintptr_t)g_ctable_phys;
+    g_buf    = (uint8_t *)(uintptr_t)g_buf_phys;
+    k_memset((void *)(uintptr_t)base, 0, 4096);
+    return 1;
+}
+
+// Brings up `index`'s port and IDENTIFYs whatever is on it. Leaves the
+// port stopped again on failure, so a second candidate can be tried
+// without inheriting half-configured state.
+static int claim_port(int index) {
+    struct ahci_port_status *s = &g_ports[index];
+    volatile uint8_t *p = port_regs(s->port);
+
+    port_stop(p);
+    px_w(p, PX_CLB,  (uint32_t)g_clist_phys);
+    px_w(p, PX_CLBU, 0);
+    px_w(p, PX_FB,   (uint32_t)g_fis_phys);
+    px_w(p, PX_FBU,  0);
+    px_w(p, PX_SERR, px_r(p, PX_SERR));
+    px_w(p, PX_IS,   px_r(p, PX_IS));
+    if (g_cap & CAP_SSS) px_w(p, PX_CMD, px_r(p, PX_CMD) | PXCMD_SUD);
+
+    if (!port_start(p)) {
+        klog_printf("ahci: port %u would not start (tfd 0x%x)\n", s->port, px_r(p, PX_TFD));
+        return 0;
+    }
+
+    g_preg = p;
+    if (!identify()) {
+        port_stop(p);
+        g_preg = 0;
+        return 0;
+    }
+    s->running = 1;
+    s->active = 1;
+    g_active = index;
+    return 1;
+}
+
+void ahci_init(void) {
+    g_pci = find_hba();
+    if (!g_pci) return;   // the ordinary case on an IDE or virtio machine
+
+    uint64_t abar = pci_bar_mem_addr(g_pci, 5);
+    if (!abar) {
+        klog_write("ahci: controller found but BAR5 is unimplemented or I/O space\n");
+        return;
+    }
+    if (abar + 0x1100 > 0x100000000ull) {
+        klog_printf("ahci: ABAR at 0x%llx is above 4 GiB -- this kernel identity-maps only"
+                    " the low 4 GiB\n", (unsigned long long)abar);
+        return;
+    }
+    g_abar = (volatile uint8_t *)(uintptr_t)abar;
+
+    pci_command_update(g_pci, PCI_CMD_MEMORY | PCI_CMD_BUS_MASTER | PCI_CMD_INTX_DISABLE, 0);
+
+    bios_handoff();
+    hba_w(HBA_GHC, hba_r(HBA_GHC) | GHC_AE);   // before ANY other register means what it says
+    g_cap = hba_r(HBA_CAP);
+    g_pi  = hba_r(HBA_PI);
+    scan_ports();
+
+    uint32_t vs = hba_r(HBA_VS);
+    klog_printf("ahci: HBA %u.%u%u, %d port%s implemented, %d command slot%s\n",
+                (vs >> 16) & 0xFFFF, (vs >> 8) & 0xFF, vs & 0xFF,
+                g_port_count, g_port_count == 1 ? "" : "s",
+                ahci_command_slots(), ahci_command_slots() == 1 ? "" : "s");
+
+    if (!g_port_count) return;
+    if (!alloc_dma()) {
+        klog_write("ahci: out of contiguous memory for the command list -- no drive claimed\n");
+        return;
+    }
+
+    for (int i = 0; i < g_port_count; i++) {
+        // DET 3 is "device present, PHY communication established"; the
+        // signature separates a disk from an ATAPI drive, an enclosure
+        // or a port multiplier, none of which this driver speaks.
+        if (g_ports[i].det != 3 || g_ports[i].signature != SIG_SATA) continue;
+        if (claim_port(i)) break;
+    }
+
+    if (g_active < 0) {
+        klog_write("ahci: no SATA drive on any implemented port\n");
+        return;
+    }
+
+    // THE COMMIT POINT. Everything the handler reads exists now; before
+    // this the device is free to assert nothing.
+    uint8_t line = g_pci->interrupt_line;
+    if (line != 0xFF && line != 0 && line < 16) {
+        g_irq = line;
+        irq_register_handler(g_irq, irq_handler);
+        px_w(g_preg, PX_IE, PXIE_MASK);
+        hba_w(HBA_GHC, hba_r(HBA_GHC) | GHC_IE);
+        pci_command_update(g_pci, 0, PCI_CMD_INTX_DISABLE);
+        pic_clear_mask(g_irq);
+    }
+
+    klog_printf("ahci: port %u: \"%s\", %u sectors, LBA%s, %d sectors/transfer, %s\n",
+                g_ports[g_active].port, g_model, g_sectors, g_lba48 ? "48" : "28",
+                ahci_max_sectors_per_xfer(),
+                g_irq ? "IRQ-driven" : "polled (no interrupt line)");
+    if (g_irq) klog_printf("ahci: on IRQ %u\n", g_irq);
+}
+
+// ---- transfers -------------------------------------------------------
+
+int ahci_present(void) { return g_active >= 0 && g_sectors > 0; }
+uint32_t ahci_sector_count(void) { return ahci_present() ? g_sectors : 0; }
+int ahci_max_sectors_per_xfer(void) { return (int)(g_buf_frames * 4096 / AHCI_SECTOR_SIZE); }
+
+// A transfer is refused rather than clamped when it runs past the end
+// of the drive: a short read that reports success is how a filesystem
+// ends up parsing whatever the bounce buffer held last.
+static int bounds_ok(uint32_t lba, int count) {
+    if (count <= 0 || count > ahci_max_sectors_per_xfer()) return 0;
+    if (lba > g_sectors || (uint32_t)count > g_sectors - lba) return 0;
+    return 1;
+}
+
+int ahci_read_sectors(uint32_t lba, int count, void *buf) {
+    if (!ahci_present() || !buf || !bounds_ok(lba, count)) return 0;
+    uint32_t bytes = (uint32_t)count * AHCI_SECTOR_SIZE;
+    if (!run_command(ATA_READ_DMA_EX, lba, (uint16_t)count, bytes, 0)) return 0;
+    k_memcpy(buf, g_buf, bytes);
+    return 1;
+}
+
+int ahci_write_sectors(uint32_t lba, int count, const void *buf) {
+    if (!ahci_present() || !buf || !bounds_ok(lba, count)) return 0;
+    uint32_t bytes = (uint32_t)count * AHCI_SECTOR_SIZE;
+    k_memcpy(g_buf, buf, bytes);
+    return run_command(ATA_WRITE_DMA_E, lba, (uint16_t)count, bytes, 1);
+}
+
+int ahci_flush(void) {
+    if (!ahci_present()) return 0;
+    return run_command(ATA_FLUSH_EXT, 0, 0, 0, 0);
+}
+
+// ---- diagnostics -----------------------------------------------------
+
+int ahci_controller_present(void) { return g_abar != 0; }
+uint32_t ahci_version(void) { return g_abar ? hba_r(HBA_VS) : 0; }
+uint32_t ahci_capabilities(void) { return g_cap; }
+int ahci_command_slots(void) { return g_abar ? (int)(((g_cap >> CAP_NCS_SHIFT) & CAP_NCS) + 1) : 0; }
+int ahci_active_port(void) { return g_active >= 0 ? g_ports[g_active].port : -1; }
+uint8_t ahci_irq_line(void) { return g_irq; }
+int ahci_irq_driven(void) { return g_irq != 0; }
+int ahci_lba48(void) { return g_lba48; }
+const char *ahci_model(void) { return g_model; }
+int ahci_port_count(void) { return g_port_count; }
+
+int ahci_port_status(int index, struct ahci_port_status *out) {
+    if (index < 0 || index >= g_port_count || !out) return 0;
+    *out = g_ports[index];
+    return 1;
+}

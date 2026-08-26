@@ -1444,6 +1444,39 @@ window without going through it will find its layout polls timing out.
   and a 35-check suite passed it: every check asserted on the app's LOG,
   and the widgets were live, hit-testable and simply never painted. In
   `gui_regress.py`.
+- **`ahci_test.py`** -- boots with the filesystem on a **SATA drive
+  behind an ICH9 host bus adapter**, which is the only thing here that
+  reaches `kernel/drivers/ahci.c` at all. Three boots, 17 checks, on
+  demand.
+
+  **Its load-bearing check is `0 skipped`.** Every `ahci` KTEST guards
+  itself on a controller being on the PCI bus, so on the default IDE
+  boot all five skip and the suite is green because nothing ran -- the
+  exact failure mode this repo keeps finding. Asserting the skip count
+  is what makes the KTESTs mean anything.
+
+  The other three that a broken driver would not pass: **`df` reporting
+  a persistent TFS3 root** (a kernel that ignored the controller still
+  BOOTS, just into ramfs, so "it booted" proves nothing); **a REBOOT**
+  between the write and the read, since a write that only reached a
+  buffer passes a same-boot read-back; and **mtools reading the same
+  `/boot/grub/grub.cfg` off the host**, an oracle sharing no code with
+  either the AHCI driver or `fat32.c` -- `mtype` on the image versus the
+  guest's own `cat`, the same call `fat32_test.py` and
+  `regex_hostcheck.py` make. That phase SKIPS without mtools.
+
+  The third boot rewrites the image's `grub.cfg` with mtools to add
+  `noahci`, and asserts the driver STILL runs while the block layer does
+  not take it -- the precedence rung, and the only way to test a boot
+  word without `make iso KCMDLINE=`, which would rebuild the media every
+  other tool shares.
+
+  Its positive control is to stop `build_prdt()` advancing the buffer
+  address between entries. That reddens exactly the multi-entry PRDT
+  KTEST and NOTHING ELSE -- the machine boots, mounts, writes and
+  reboots perfectly, because TFS3's 4 KiB blocks are one PRD entry. It
+  is a good demonstration of why the check is written as a comparison
+  against single-sector reads rather than as "the data came back".
 - **`virtio_boot_test.py`** -- boots with **no IDE controller at all**
   and the filesystem on virtio-blk, then writes a file, REBOOTS, and
   reads it back (6 checks). Builds its own QEMU; on demand, not in the

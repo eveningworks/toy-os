@@ -601,6 +601,87 @@ that survived the positive controls -- "is anything on screen" passes on
 a black screen, and a channel-order test passes on a format that rotates
 channels rather than swapping two.
 
+## AHCI enumerates every port and drives one, and NCQ is reported rather than used
+
+An AHCI host bus adapter owns up to 32 ports, each with a 32-slot
+command list, and the whole reason it outperforms legacy IDE on real
+hardware is NCQ -- several commands in flight at once, retired out of
+order. Linux drives it that way (`drivers/ata/ahci.c` over `libahci`,
+each port a full libata port); Windows' `storahci.sys` is a StorPort
+miniport with the same shape.
+
+`kernel/drivers/ahci.c` deliberately takes only half of that. It
+ENUMERATES every implemented port and reports what is on each -- the
+link state, the speed, the signature -- because that is the hardware's
+actual structure and a driver that pretended a port it never looked at
+does not exist would be lying about what it found. But exactly one
+drive becomes the block device, driven through slot 0 with one command
+outstanding.
+
+The reason is that a queue has nothing to queue. `blk_active()` is
+singular, `struct block_device` has no asynchronous form, and every
+caller above it -- TFS3, FAT32, the partition scan -- issues one
+transfer and waits for it. NCQ would add a slot allocator, a per-slot
+completion path and `PxSACT` handling in order to keep exactly one
+command in flight, which is what the code does now with none of that.
+The honest version of this is to SAY so, which is why `/bin/ahci`
+prints "offered by the HBA, not used" rather than leaving a reader to
+infer from `CAP.SNCQ` that queuing is happening. The prerequisite is an
+asynchronous block interface, not more AHCI code, and it is on
+`docs/roadmap.md` as such.
+
+The same reasoning covers `CAP.S64A`: the HBA offers 64-bit DMA
+addresses and this driver's buffers come from `pmm_alloc_contiguous()`
+below 4 GiB, so every `*U` register is written zero. Reported, not used.
+
+## AHCI is not cached, and that is the difference from ata.c rather than an oversight
+
+`ata_cache.c` is a write-back sector cache under
+`ata_read_sectors()`/`ata_write_sectors()`, and its own header explains
+that it lives in the driver rather than the block layer precisely so no
+bypass path can exist. Adding a second driver was the moment to ask
+whether the cache should move up a layer and serve both.
+
+It should not, because the cache is not there to be fast in general --
+it is there because ATA's PIO fallback makes a 512-byte metadata read
+genuinely expensive, and because ATA's DMA path costs one command and
+one completion interrupt per transfer however small. AHCI's does too,
+but a cache that saves an interrupt while ADDING the risk a write-back
+cache carries is not obviously a win, and virtio-blk -- measured ~10x
+ATA's throughput -- was left uncached for exactly this reason and has
+not wanted one.
+
+What the absence buys is that `BLK_CAP_FLUSH` on `block_ahci.c` means a
+real FLUSH CACHE EXT reaching the drive, with nothing above it that
+could be holding dirty lines. A capability bit that means what it says
+is worth more here than a cache nobody has measured a need for; the
+moment somebody measures one, generalising `atac_*` to hold a
+`block_device` is the shape to reach for, and it is a roadmap item
+rather than a comment.
+
+## `noahci` is a precedence word, not a kill switch
+
+The block layer's disk precedence is virtio-blk, then AHCI, then legacy
+ATA (`kernel/fs/mount.c`, one line, in one place). Two boot words step
+it down a rung each: `novirtio` was already there and `noahci` joins it,
+for the reason `nopat` and `notsc` exist -- a fallback nothing can reach
+is a guess, and legacy IDE is still the only disk on some machines.
+
+What it deliberately does NOT do is disable the driver. `ahci_init()`
+still runs, finds the HBA, brings up the port, IDENTIFYs the drive and
+reports all of it through `/bin/ahci`; `blk_ahci_init()` is the only
+thing that consults the word. The alternative -- skipping the whole
+driver -- would make the flag untestable in the useful direction,
+because "the machine came up on ATA" and "the AHCI driver crashed
+before it could claim anything" produce the same boot. With the split,
+`tools/ahci_test.py` can assert both halves at once: the driver ran, and
+the block layer did not take it.
+
+The cost is worth naming. On a machine whose ONLY disk is the SATA one,
+`noahci` yields ramfs rather than a fallback, because there is nothing
+on the IDE controller to fall back to. That is the correct outcome and
+it looks like a failure, so the boot log says which rung it landed on.
+
 ## The input core: one vocabulary, a source registry, and evdev as canonical
 
 **What was wrong.** There was no seam at all. `i8042_poll()` fed bytes

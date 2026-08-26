@@ -18,6 +18,7 @@
 #include "heap.h"
 #include "pci.h"
 #include "virtio_blk.h"
+#include "ahci.h"
 #include "vmsvga.h"
 #include "bochs.h"
 #include "vesafb.h"
@@ -253,6 +254,13 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // either way. Silent and allocation-free when there is none.
     virtio_blk_init();
 
+    // The SATA host bus adapter, if the machine has one. Same ordering
+    // constraint as the virtio devices above (its command list and
+    // bounce buffer come from pmm_alloc_contiguous()) and the same
+    // silence when absent. Before fs_init(), because mount.c asks
+    // blk_ahci_init() whether to hand it the disk.
+    ahci_init();
+
     // The entropy device, same ordering constraint (it wants a
     // virtqueue) and the same silence when absent. It raises krandom's
     // reported quality from TSC jitter to real host entropy, which
@@ -313,6 +321,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     partition_query_init();
     heap_query_init();
     ata_query_init();
+    ahci_query_init();
     kstack_query_init();
     tty_query_init();
     kbdtap_query_init();

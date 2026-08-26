@@ -194,6 +194,11 @@ void heap_query_init(void);
 // half is kernel.ata_nodma, a tunable -- this only reports.
 void ata_query_init(void);
 
+// kernel/drivers/'s providers for the AHCI controller and its ports.
+// Two classes, for the same reason partition_query_init() registers
+// two: the HBA is a scalar and a port is a row.
+void ahci_query_init(void);
+
 // kernel/proc/'s providers for kernel stacks and per-syscall depth.
 void kstack_query_init(void);
 

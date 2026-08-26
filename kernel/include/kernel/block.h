@@ -111,6 +111,16 @@ void blk_ata_init(void);
 // place, and block_virtio.c for the measurements behind it.
 int blk_virtio_init(void);
 
+// Registers the AHCI drive as the active device, if there is one and
+// it should have it. Returns 1 if it took the role.
+//
+// PRECEDENCE: virtio-blk first (measured, see block_virtio.c), then
+// AHCI, then ATA -- AHCI is what a modern machine presents and legacy
+// IDE is the fallback. `noahci` on the boot line forces ATA back, which
+// is what keeps that path reachable and therefore tested. The choice is
+// made in one place, kernel/fs/mount.c.
+int blk_ahci_init(void);
+
 // Registers a RAM-backed device over [base, base + bytes). For a live
 // image handed over by the bootloader; see kernel/drivers/block/ram.c.
 int blk_ram_register(uint64_t base, uint64_t bytes);

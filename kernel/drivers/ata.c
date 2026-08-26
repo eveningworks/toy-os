@@ -1,5 +1,5 @@
-// ATA/IDE, primary bus, master drive, 28-bit LBA. See ata.h for why
-// this was chosen over AHCI, and for the two-transfer-path design (PIO
+// ATA/IDE, primary bus, master drive, 28-bit LBA. See ata.h for where
+// this sits now that AHCI exists, and for the two-transfer-path design (PIO
 // fallback vs. Bus-Master DMA + IRQ14) this file implements. The
 // detection sequence in ata_init() follows the standard "identify, bail
 // out early at every step that doesn't look like a plain ATA master"

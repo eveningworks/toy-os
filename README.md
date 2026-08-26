@@ -330,6 +330,7 @@ overrides it, so `VIRTIO=1 VGA=std` is a legal thing to ask for:
 
 ```bash
 make run DISK=virtio        # virtio-blk, and NO IDE controller at all
+make run DISK=ahci          # a SATA drive behind an ICH9 host bus adapter
 make run VGA=virtio         # the virtio-gpu driver
 make run VGA=vmware         # the adapter with a hardware cursor
 make run INPUT=virtio       # virtio keyboard, mouse and tablet
@@ -379,7 +380,11 @@ transition done by hand. Linear RGB framebuffer falling back to 80×25 VGA
 text. PS/2 keyboard and mouse sharing the 8042 through one dispatcher,
 with keyboard layouts as *data files* generated from Linux's own XKB data
 rather than a compiled-in table. PIT, CMOS RTC, PC speaker, MBR/GPT
-partition parsing, and a **virtio** stack: PCI capability walking and
+partition parsing, three disk drivers — legacy IDE with a Bus-Master DMA
+path and a PIO fallback, **AHCI** driving a SATA drive off a mapped BAR5
+with a per-page PRDT and interrupt-driven completion, and virtio-blk —
+behind one `block_device` registry that the filesystems above never look
+through, and a **virtio** stack: PCI capability walking and
 64-bit BAR decoding underneath a shared modern-virtio transport, with
 `virtio-blk` on top of it as the preferred disk, `virtio-rng` feeding
 the kernel's entropy pool (a QEMU guest usually has no RDSEED/RDRAND,

@@ -372,8 +372,9 @@ help:
 	@echo "                             GPU and input at once. The modern machine."
 	@echo ""
 	@echo "   Each class also picks its own, and a per-class value overrides VIRTIO=1:"
-	@echo "     DISK=ide|virtio         virtio removes the IDE controller ENTIRELY, so"
-	@echo "                             the filesystem mounts only if virtio works"
+	@echo "     DISK=ide|virtio|ahci    virtio removes the IDE controller ENTIRELY, so"
+	@echo "                             the filesystem mounts only if virtio works;"
+	@echo "                             ahci is a SATA drive on an ICH9 HBA
 	@echo "     VGA=std|virtio|vmware   virtio is the virtio-gpu driver, which nothing"
 	@echo "                             else in the build exercises; vmware has a"
 	@echo "                             HARDWARE cursor, which screendump cannot"
@@ -1244,12 +1245,22 @@ INPUT_KIND = $(if $(INPUT),$(INPUT),$(if $(VIRTIO),virtio,ps2))
 QEMU_DISK_IDE    = -drive file=$(DISK_IMG),format=raw,if=ide,discard=unmap
 QEMU_DISK_VIRTIO = -drive file=$(DISK_IMG),format=raw,if=none,id=vblk,discard=unmap \
                    -device virtio-blk-pci,drive=vblk,disable-legacy=on
+# DISK=ahci is a SATA drive behind an ICH9 host bus adapter -- what a
+# machine built this decade presents, and what kernel/drivers/ahci.c
+# drives. The legacy IDE controller is still on the bus (this is an
+# i440fx machine) and has nothing attached to it, which is what makes
+# `noahci` on the boot line a real fallback test rather than a
+# no-disk boot.
+QEMU_DISK_AHCI   = -device ich9-ahci,id=ahci \
+                   -drive file=$(DISK_IMG),format=raw,if=none,id=sata0,discard=unmap \
+                   -device ide-hd,drive=sata0,bus=ahci.0
 # LIVE and DEMO attach NO -drive at all, and that is the whole point of
 # them rather than an optimisation: pointing the live ISO at disk.img
 # would let the ordinary disk path run and prove nothing about the live
 # one.
 QEMU_DISK = $(if $(NODISK)$(LIVE)$(DEMO),,\
-              $(if $(filter virtio,$(DISK_KIND)),$(QEMU_DISK_VIRTIO),$(QEMU_DISK_IDE)))
+              $(if $(filter virtio,$(DISK_KIND)),$(QEMU_DISK_VIRTIO),\
+                $(if $(filter ahci,$(DISK_KIND)),$(QEMU_DISK_AHCI),$(QEMU_DISK_IDE))))
 
 # Input. PS/2 by default (the 8042 the console has always used);
 # `INPUT=virtio` attaches the three virtio-input devices BESIDE it, so

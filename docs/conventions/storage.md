@@ -139,6 +139,40 @@ this the obvious way), not from how much history it accumulated.
   first, surfacing as the system and `config` disagreeing about a file.
   **If you add an entry point, ask which half it belongs in: does it
   look at a buffer, or at a file?**
+- **THE DISK PRECEDENCE IS VIRTIO-BLK, THEN AHCI, THEN ATA, and each
+  rung has a boot word that steps down to the next.** `kernel/fs/mount.c`
+  decides it in ONE line, because `blk_register()` is last-writer-wins
+  and order alone would otherwise settle it somewhere nobody looks.
+  `novirtio` and `noahci` are what keep the lower rungs reachable and
+  therefore tested. **`noahci` is not a driver kill switch** -- the
+  driver still finds the HBA, brings up the port and reports it through
+  `/bin/ahci`; only `blk_ahci_init()` reads the word, so a test can
+  assert "the driver ran" and "the block layer did not take it" at once.
+  On a machine whose only disk is the SATA one that means ramfs, which
+  is correct and looks like a failure, so the boot log says which rung
+  it landed on.
+- **AHCI ENUMERATES EVERY PORT AND DRIVES ONE, AND SAYS SO.**
+  `kernel/drivers/ahci.c`: up to 32 ports are scanned and reported
+  (link state, speed, signature -- an ATAPI drive or a port multiplier
+  answers the link and is not a disk), and exactly one SATA drive
+  becomes the block device through command slot 0 with one transfer
+  outstanding. **NCQ and 64-bit addressing are REPORTED, not used**, and
+  `/bin/ahci` prints that rather than leaving a reader to infer queuing
+  from `CAP.SNCQ`: what NCQ needs is an asynchronous block interface,
+  not more AHCI code. **There is no sector cache under it** -- unlike
+  ATA and like virtio-blk -- which is what makes its `BLK_CAP_FLUSH` a
+  real FLUSH CACHE EXT rather than a write-back queue. Three traps in
+  the driver: the command engine is started only after `PxCLB`/`PxFB`
+  point at real memory and the INTx line unmasked only after the handler
+  is registered (a level-triggered line asserted with nobody to clear
+  `PxIS` is a hang, not a lost completion); the interrupt is
+  acknowledged **port first, then the HBA**, for the same reason; and
+  `CFL` in a command header is the FIS length in DWORDS -- five for a
+  Register H2D FIS, not the 64-byte slot it sits in. The PRDT carries
+  **one entry per 4 KiB page**, which is what Linux's `ahci_fill_sg()`
+  produces and what keeps the multi-entry path ordinary rather than dead
+  code; `tools/ahci_test.py` is the only thing that runs any of it,
+  because every `ahci` KTEST skips without a controller.
 - **VIRTIO-BLK IS THE PREFERRED DISK; ATA IS THE LEGACY PATH.** When a
   virtio disk is attached it carries the filesystem, and `novirtio` on
   the boot line forces ATA back (which is what keeps that path

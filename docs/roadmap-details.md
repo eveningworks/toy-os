@@ -1393,52 +1393,48 @@ Four pieces, roughly independent:
 
 ### AHCI/SATA driver
 
-Today's `ata.c` depends on the legacy IDE controller real modern hardware
-increasingly lacks. Moderate step up from `ata.c`, not a new paradigm:
-still "one drive, DMA + interrupt," just MMIO-based (mapped ABAR, BAR5)
-instead of fixed I/O ports, with a richer per-port command/FIS format
-instead of `select_lba()`'s register writes. Reuses existing
-infrastructure throughout (`pci.c` enumeration, `pmm_alloc_contiguous()`
-for the command list/FIS-receive area, `irq_register_handler()` for
-completion). Broken into steps, each with its own pass/fail so a session
-can stop at any boundary with something real proven:
+**BUILT** -- `kernel/drivers/ahci.c` and `kernel/drivers/block/block_ahci.c`.
+A SATA drive behind a host bus adapter carries the root filesystem, with
+DMA transfers and interrupt-driven completion, on
+`make run DISK=ahci`. `tools/ahci_test.py` is the only thing that
+exercises it, and `docs/decisions/drivers.md` carries the three design
+calls (why one port is driven and every port is reported, why there is
+no sector cache, why `noahci` is a precedence word rather than a kill
+switch).
 
-1. PCI discovery + ABAR mapping -- find the controller (class 0x01,
-   subclass 0x06), map BAR5's MMIO region, read the HBA's
-   capability/global registers. Test: `lspci`-adjacent output shows the
-   controller found, with version and implemented-port-count fields read
-   back correctly.
-2. Port detection -- enumerate implemented ports (PI register), read each
-   one's SIG/SSTS.DET to find which actually have a drive attached. Test:
-   a diagnostic command lists detected ports and per-port drive presence,
-   matching whatever QEMU was launched with (`-device ahci` + an attached
-   drive).
-3. Bring up one port -- allocate its command list + FIS-receive area,
-   initialize the structures, start the port's command engine. Test: no
-   hang/crash; the port's PxCMD register reads back "running" per the
-   AHCI spec.
-4. IDENTIFY DEVICE, polled (no IRQ yet) -- issue the first real command (a
-   Register FIS wrapping ATA IDENTIFY), poll for completion, parse
-   capacity out of the response. Test: a shell command prints the drive's
-   real model string and capacity.
-5. IRQ-driven read -- wire up the port's interrupt, issue a 48-bit READ
-   DMA EXT, confirm completion via IRQ instead of polling. Test: read a
-   known sector (e.g. the TFS2 superblock) and byte-compare against the
-   same sector read via legacy `ata.c`.
-6. IRQ-driven write + read/write parity with `ata.c`'s public API -- same
-   shape as `ata_read_sector()`/`ata_write_sector()` so `tfs.c` doesn't
-   need to change to use either backend. Test: TFS2's own boot self-test
-   (`fs: selftest passed`) passes when routed through the AHCI path.
-7. Multi-sector transfers + PRDT scatter-gather sized to a whole 4KB TFS2
-   block in one command (matching `FS_BLOCK_SECTORS`). Test: `stress <mb>`
-   passes end-to-end over the AHCI path, including the write-batching from
-   Storage hardening -- confirms the new driver behaves correctly under real
-   sustained load, not just a handful of manual reads.
-8. Backend selection + fallback -- `fs.c` prefers AHCI when a controller's
-   found at boot, falls back to legacy IDE, then RAM-only, same fallback
-   spirit `fs.c` already has. Test: boot once against a legacy-IDE-only
-   QEMU invocation and once against an AHCI one, confirm `dmesg` shows the
-   correct backend chosen each time.
+What is deliberately NOT built, and what each would actually need:
+
+- **NCQ.** The real reason AHCI outperforms IDE, and it needs an
+  ASYNCHRONOUS block interface rather than more AHCI code:
+  `struct block_device` has no submit/complete split and every caller
+  above it issues one transfer and waits. Adding slot allocation and
+  `PxSACT` handling today would keep exactly one command in flight,
+  which is what slot 0 already does with none of it.
+- **A second drive.** The driver already enumerates and reports every
+  port; what it cannot do is register two block devices, because
+  `blk_active()` is singular and this OS has no `/dev`. Real mount
+  points made two MOUNTS possible, not two disks.
+- **A shared sector cache.** `ata_cache.c` is ATA-private on purpose
+  (its header says why). Generalising it to hold a `block_device` is
+  the shape, and the bar is a measurement rather than symmetry --
+  virtio-blk has been uncached and faster than ATA throughout.
+- **A fault-injection hook that makes the DRIVE refuse a command.**
+  `port_recover()` exists because a fatal error clears `PxCMD.ST` and
+  nothing restarts it, so without it one bad sector wedges the disk
+  permanently -- and it is the one path in the driver that no test
+  reaches. The bounds check refuses a bad LBA before the drive sees
+  one, and QEMU produces no media errors. `fault_inject.h` fails a
+  transfer from the KERNEL side, which is the opposite direction: what
+  is missing is a way to make the DEVICE answer with `PxIS.TFES` set.
+
+- **Hot-plug and surprise removal.** `PxIE` masks the PHY and
+  hot-plug bits today, because a handler with nothing to do about the
+  event is worse than no handler. It needs the block layer to be able
+  to say "this device is gone" to a mounted filesystem, which is the
+  same missing piece as surprise removal of a USB stick.
+- **Port multipliers.** Detected and reported by signature already
+  (`/bin/ahci` names one); speaking to the devices behind it is the
+  part that is not built.
 
 ### NVMe / modern storage
 

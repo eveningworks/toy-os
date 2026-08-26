@@ -1,0 +1,51 @@
+// The AHCI drive, as a block device. A thin adapter, the same shape as
+// block_ata.c and block_virtio.c: the driver keeps its behaviour and
+// this only states which of it the block layer may use.
+#include "block.h"
+#include "ahci.h"
+#include "multiboot.h"
+#include "string.h"
+
+static uint32_t ahci_blk_sector_count(void) { return ahci_sector_count(); }
+static int ahci_blk_read(uint32_t lba, int count, void *buf) { return ahci_read_sectors(lba, count, buf); }
+static int ahci_blk_write(uint32_t lba, int count, const void *buf) { return ahci_write_sectors(lba, count, buf); }
+static int ahci_blk_max_xfer(void) { return ahci_max_sectors_per_xfer(); }
+static int ahci_blk_flush(void) { return ahci_flush(); }
+
+// FLUSH is unconditional and means a real FLUSH CACHE EXT reaching the
+// drive: there is no write-back cache above this one (ahci.h says why),
+// so the bit and the function agree in the way blk_register() checks.
+//
+// Static rather than local: blk_register() keeps the POINTER.
+static const struct block_device AHCI_DEV = {
+    .name = "ahci",
+    .sector_count = ahci_blk_sector_count,
+    .read_sectors = ahci_blk_read,
+    .write_sectors = ahci_blk_write,
+    .max_sectors_per_xfer = ahci_blk_max_xfer,
+    .persistent = 1,
+    .caps = BLK_CAP_FLUSH,
+    .flush = ahci_blk_flush,
+    .trim = 0,
+};
+
+// `noahci` on the boot line forces the ATA fallback, matched as a whole
+// word. Same shape and same purpose as `novirtio`: a fallback nothing
+// can reach is a guess.
+static int ahci_disabled(void) {
+    const char *cmdline = multiboot_cmdline();
+    if (!cmdline) return 0;
+    for (const char *p = cmdline; (p = k_strstr(p, "noahci")) != 0; p += 6) {
+        if (p != cmdline && p[-1] != ' ') continue;
+        char after = p[6];
+        if (after == 0 || after == ' ') return 1;
+    }
+    return 0;
+}
+
+int blk_ahci_init(void) {
+    if (!ahci_present()) return 0;
+    if (ahci_disabled()) return 0;
+    // No announcement: blk_register() already logs the device it accepts.
+    return blk_register(&AHCI_DEV);
+}

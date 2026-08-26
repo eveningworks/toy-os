@@ -28,17 +28,14 @@
 // existing caller (the VFS, the filesystem) -- neither know nor care which path is
 // active; this is purely an ata.c-internal choice.
 //
-// Chosen over AHCI/SATA specifically because it needs nothing this
-// kernel doesn't already have: PCI enumeration (build 390) and IRQ
-// handling (build 400) are both now in place, which is exactly what
-// unlocked this build -- but AHCI would still additionally need MMIO
-// BAR mapping and scatter-gather command lists this driver has no use
-// for. It's also exactly what QEMU's default `-drive ...,if=ide`
-// presents. The tradeoff: real modern hardware increasingly lacks a
-// legacy IDE controller at all, so this won't find a disk on that
-// class of machine -- see fs.c's graceful "no disk -> RAM-only"
-// fallback for what happens then, and README's "Ideas for what's next"
-// for what AHCI support would additionally require.
+// THIS IS THE LEGACY PATH NOW, not the only one. AHCI exists
+// (kernel/drivers/ahci.c) and sits above this in the block layer's
+// precedence, because real modern hardware increasingly lacks a legacy
+// IDE controller at all; `noahci` on the boot line steps back down to
+// here, which is what keeps this driver reachable and therefore tested.
+// It is still exactly what QEMU's default `-drive ...,if=ide` presents,
+// and still the whole disk on a machine with neither a virtio device
+// nor an HBA.
 #define ATA_SECTOR_SIZE 512
 
 // Probes the primary bus for a master drive via IDENTIFY DEVICE and

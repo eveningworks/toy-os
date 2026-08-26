@@ -137,7 +137,7 @@ import port_guard
 
 def launch_qemu_cmd(iso="toy-os.iso", disk="disk.img", serial_log="serial.log",
                      qmp_port=4445, vnc_display=5, pidfile="qemu.pid",
-                     kvm=False, boot="auto"):
+                     kvm=False, boot="auto", disk_kind="ide"):
     """Return the shell command to launch toy-os headlessly with QMP + a
     working input head. Run it as a plain foreground shell command --
     `-daemonize` makes QEMU fork/detach/return on its own, so it
@@ -191,7 +191,19 @@ def launch_qemu_cmd(iso="toy-os.iso", disk="disk.img", serial_log="serial.log",
     # the emulated path without anyone deciding to.
     accel = "-enable-kvm -cpu host " if kvm else ""
 
-    drive = (f"-drive file={disk},format=raw,if=ide,discard=unmap " if disk else "")
+    # `disk_kind="ahci"` puts the SAME image behind an ICH9 host bus
+    # adapter instead of the legacy IDE controller, which is the only
+    # way anything here reaches kernel/drivers/ahci.c -- the same reason
+    # --vga virtio and --virtio-input exist. The Makefile's DISK= axis
+    # is the interactive twin of this.
+    if not disk:
+        drive = ""
+    elif disk_kind == "ahci":
+        drive = (f"-device ich9-ahci,id=ahci "
+                 f"-drive file={disk},format=raw,if=none,id=sata0,discard=unmap "
+                 f"-device ide-hd,drive=sata0,bus=ahci.0 ")
+    else:
+        drive = f"-drive file={disk},format=raw,if=ide,discard=unmap "
     boot_args = " ".join(install_grub.qemu_boot_args(medium, iso))
     return (
         # `order=c` boots the disk's own GRUB, `order=d` the ISO. Never

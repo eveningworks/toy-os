@@ -613,15 +613,18 @@ run on, not by order.
 
 ### AHCI/SATA driver
 
-- [ ] PCI discovery + ABAR mapping
-- [ ] Port detection
-- [ ] Bring up one port
-- [ ] IDENTIFY DEVICE (polled)
-- [ ] IRQ-driven read
-- [ ] IRQ-driven write + `ata.c` parity
-- [ ] Multi-sector transfers (PRDT scatter-gather)
-- [ ] Backend selection + fallback
-- [ ] NCQ (queued commands) -- the real reason AHCI outperforms IDE
+- [x] ~~PCI discovery + ABAR mapping~~
+- [x] ~~Port detection~~
+- [x] ~~Bring up one port~~
+- [x] ~~IDENTIFY DEVICE (polled)~~
+- [x] ~~IRQ-driven read~~
+- [x] ~~IRQ-driven write + `ata.c` parity~~
+- [x] ~~Multi-sector transfers (PRDT scatter-gather)~~
+- [x] ~~Backend selection + fallback~~
+- [ ] NCQ (queued commands) -- needs an ASYNCHRONOUS block interface first, not more AHCI code
+- [ ] A second drive, which needs a block layer whose active device is not singular
+- [ ] A sector cache shared with ATA, if one is ever measured to be worth it
+- [ ] A fault-injection hook that makes the DRIVE refuse a command, so `port_recover()` is exercised
 - [ ] Hot-plug detect + surprise-removal handling
 - [ ] Port multiplier awareness (detect and report, not necessarily support)
 

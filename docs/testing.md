@@ -184,6 +184,13 @@ whole virtio path works. (`VIRTIO=1` also does it, along with the GPU
 and input -- it is the switch over every device class, not a disk
 flag.)
 
+**TESTING ON AHCI.** `make run DISK=ahci` hangs `disk.img` off an ICH9
+host bus adapter instead of the legacy IDE controller, and
+`vm.py --disk-kind ahci` / `launch_qemu_cmd(disk_kind="ahci")` are the
+headless forms. Nothing in the gate boots that way, so every `ahci`
+KTEST skips on an ordinary run -- `tools/ahci_test.py` is what makes
+them execute, and it asserts the SKIP COUNT for exactly that reason.
+
 **The reason this is a CI job and not just an option:** it found a real
 driver bug that reproduced NOWHERE locally. The runner has QEMU 8.2.2
 against 11.1 here and its CPU makes the kernel pick a different
@@ -315,6 +322,9 @@ testing:
   installed a bootloader on those, and omitting the order entirely is
   the worst option: SeaBIOS boots any disk with `0x55AA` at LBA 0 and
   then hangs inside the partition table with no serial output at all.
+  `ahci_test.py` is the exception that proves the rule: it COPIES
+  `disk.img`, which carries GRUB, so it is `order=c` and attaches no
+  ISO at all.
 
 **`make run` uses `-display sdl,grab-mod=rctrl`, no explicit pointer
 device.** Two things worth knowing if you ever touch this line:

@@ -535,14 +535,14 @@ static void probe_and_mount_root(void) {
         // last-writer-wins and order alone would otherwise decide it
         // somewhere nobody looks.
         //
-        // VIRTIO-BLK FIRST, ATA as the fallback. virtio is the faster
-        // and better-tested path now (see block_virtio.c for the
-        // numbers); ATA is the legacy one, and still the only disk on
-        // real hardware, so it keeps working untouched on any machine
-        // without a virtio device. `novirtio` on the boot line forces
-        // it, which is what keeps that path reachable and therefore
-        // tested.
-        if (!blk_virtio_init()) blk_ata_init();
+        // VIRTIO-BLK, THEN AHCI, THEN ATA. virtio is the faster and
+        // better-tested path (see block_virtio.c for the numbers);
+        // AHCI is what a modern machine actually presents; legacy IDE
+        // is the fallback, and still the only disk on some hardware, so
+        // it keeps working untouched. `novirtio` and `noahci` on the
+        // boot line step down one rung each, which is what keeps the
+        // lower paths reachable and therefore tested.
+        if (!blk_virtio_init() && !blk_ahci_init()) blk_ata_init();
     }
 
     if (!blk_present()) {
