@@ -98,16 +98,18 @@ Your icon ARRANGEMENT survives a reload: positions live in
 
 ## Exec
 
-Two forms, because two kinds of app exist during Milestone 41:
+One form. Every entry names a real ring-3 binary:
 
     Exec=/bin/wm/apps/calculator     spawn that binary (a ring-3 client)
-    Exec=builtin:taskmgr             a kernel-space app, called through
-                                     apps/gui_apps.c's callback table
 
-The `builtin:` form disappears when the last kernel-space app moves to
-ring 3 (Milestone 41's stage 4) -- at which point every entry here names
-a real binary and the callback table goes with it. Naming it explicitly
-now is what lets the two coexist without the file format caring.
+`Exec=builtin:<name>` named a kernel-space app through a callback table
+and is GONE, along with the last kernel-space app -- the kernel image
+contains no application code at all now. `userland/wm/gui_apps.c` says
+so at the top.
+
+There is no `Terminal=` key: every entry here is a GUI program, and a
+program that needs a terminal has no way to be launched from the desktop
+yet. See `docs/roadmap.md`.
 
 ## Why the binaries moved under /bin/wm/
 

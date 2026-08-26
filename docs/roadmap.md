@@ -579,6 +579,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] Scientific mode for Calculator
 - [ ] CPU/memory history graphs in Task Manager
 - [ ] Per-app settings persisted via `/etc/<app>.conf` (the convention exists, only `desktop.conf` uses it)
+- [ ] `Terminal=true` on a `.desktop` entry, so a TUI program can be launched from the desktop
 
 ## Hardware
 

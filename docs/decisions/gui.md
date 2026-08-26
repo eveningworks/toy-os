@@ -4649,3 +4649,61 @@ that had named `WAIT` would let a genuinely hung app hide behind one
 call. The honest reading is that the two marks say different things —
 "this app said it is working" and "this app is not answering" — and an
 app that is both really is both.
+
+## The console stops presenting under a desktop, and a panic overrides that
+
+The framebuffer console draws into a kernel-owned back buffer and
+publishes it with one full blit. Nothing on that path asked who owned the
+screen, so any ring-3 process writing to fd 1 painted the whole text
+console over the desktop. `dmesg` covered 100% of it; DOOM was how it was
+noticed, because doomgeneric prints a startup banner and DOOM is the
+loudest program in the tree.
+
+**Suppress the PRESENT, not the drawing.** The back buffer is the
+kernel's own and nobody is looking at it while the desktop is up, so
+drawing into it costs nothing and is what keeps the text. Stopping
+`fb_putc` as well would leave a hole in the console's buffer and its
+scrollback, and returning to the console would then show a screen that
+never existed. This is exactly Linux's `KD_GRAPHICS`: fbcon keeps
+tracking the text and stops painting, and switching back to the VT shows
+you what accumulated.
+
+The precedent was already here and applied to one caller: `vga_reflow()`
+skips its `fb_clear()` under a compositor, and its comment names the
+mechanism ("fb_clear() ends in vga_present(), which blits the console's
+whole buffer over whatever the desktop has on screen"). The guard just
+never moved to the place every caller passes through.
+
+**A PANIC MUST OVERRIDE IT, and that is why there are two entry points.**
+The fault handler calls `vga_present()` explicitly, because a panic halts
+without ever reaching the idle loop that normally publishes. Guarding
+that call would have made every panic under a running desktop invisible —
+the machine would stop with the desktop's last frame on screen,
+indistinguishable from a hang, which is the single worst thing to break
+while fixing a cosmetic bleed. So `vga_present()` is the routine path and
+carries the check, and `vga_present_force()` ignores it.
+
+**Default-safe, in that direction specifically.** A new routine caller
+gets the check without knowing it exists; the two callers that mean to
+paint over whatever is there — the panic report, and `vga_resume()` — say
+so. `vga_resume()` uses the forced form even though it runs after the
+compositor has already been deregistered: a repaint whose whole purpose
+is "the desktop is gone, show the console" must not become silently
+skippable if someone later reorders `win_server_set_compositor()`.
+
+**Where a GUI-launched program's output goes was left alone.** A child
+inherits the WM's fds, so it still writes to `tty0` — now invisibly, and
+readable after the desktop exits. Sending it to the kernel log instead
+would show it in `dmesg` while the desktop is up, which is better for
+debugging, but it makes a GUI-launched process's fds differ from a
+shell-launched one's for no rule anyone could state. Discarding it would
+destroy the output of an app trying to report why it failed to start.
+Fixing the paint fixes every writer at once, which neither of those does.
+
+**And it is not an argument for `Terminal=`.** The question "should DOOM
+open a Terminal window to show that text?" has a clear answer: no. No
+desktop shows a GUI app's diagnostics that way, and it would put a window
+in front of the user on every launch. freedesktop's `Terminal=true` is
+for programs whose INTERFACE is a terminal — `edit`, `tosh` — which toy-os
+still cannot launch from the desktop at all. That is a real gap and it is
+on the roadmap; it is a different feature from this bug.

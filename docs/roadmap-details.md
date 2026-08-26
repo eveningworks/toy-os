@@ -3597,3 +3597,26 @@ hovered row rather than deriving it from `(mx, my)` inside the draw,
 damage only the overlay's own rect when that row changes, and stop
 setting `redraw_pending` unconditionally. See `start_menu.c`'s own
 comment for the worked example and the measurement that motivated it.
+
+## `Terminal=true` on a `.desktop` entry
+
+Every `.desktop` entry today is a GUI program: `Exec=` names a binary
+that opens its own window. A genuinely terminal-shaped program -- `edit`,
+`tosh`, `less` -- has no way to appear in the Start menu, because
+launching it would spawn a process with no window and stdout going to a
+console nobody can see.
+
+freedesktop's answer is a `Terminal=` key: `false` (the default) means
+"GUI program, launch it directly", `true` means "this is a terminal
+program -- run it inside a terminal emulator". toy-os has the emulator
+already (`/bin/wm/apps/terminal` runs `/bin/tosh` on a pty), so the work
+is the key, the parse, and having the desktop spawn the Terminal with a
+command to run instead of the shell.
+
+**This is NOT how a GUI app's diagnostics should be shown.** The question
+came up as "should DOOM open a terminal to show its startup text?", and
+the answer is no -- no desktop does that, and it would put a window in
+front of the user on every launch to show `Z_Init:` lines nobody asked
+for. DOOM's output goes to the console like any other program's and is
+readable after `Exit to shell`. `Terminal=` is for programs whose
+INTERFACE is a terminal, which is a different thing.

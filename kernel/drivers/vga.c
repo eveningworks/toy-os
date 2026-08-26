@@ -388,16 +388,46 @@ int vga_cursor_style_parse(const char *name, enum vga_cursor_style *out) {
 // Publishes everything the console has drawn since the last present.
 // Cheap when nothing changed, so callers on an idle path can call it
 // unconditionally -- only the dirty bounding box is blitted.
+// Publishes the console's back buffer. TWO ENTRY POINTS, and the
+// difference is who owns the screen.
+//
+// vga_present() is the ROUTINE one and does NOTHING while a compositor
+// holds the screen: the console keeps drawing into its own back buffer,
+// it just stops blitting that over the desktop. Linux's KD_GRAPHICS, for
+// the same reason -- a program's output must not paint over a graphical
+// session. Anything a process printed is still there and vga_resume()
+// puts it on screen when the desktop goes away.
+//
+// vga_present_force() ignores that, for the one caller whose whole
+// purpose is to paint over whatever is there: a PANIC. Guarding it would
+// have made every panic under a running desktop invisible.
+//
+// Default-safe on purpose: a new routine caller gets the check without
+// knowing it exists, and the two that mean to override say so.
+static void present_now(void) {
+    gfx_present();
+    gfx_flush();
+    fb_last_present_tick = pit_ticks();
+}
+
+void vga_present_force(void) {
+    if (!fb_mode) return;
+    present_now();
+}
+
 void vga_present(void) {
     if (!fb_mode) return;
+    // THE DESKTOP OWNS THE SCREEN. Without this, any ring-3 process
+    // writing to fd 1 blits the text console over the whole desktop --
+    // DOOM's startup banner was the visible case, `dmesg` covers 100% of
+    // the screen, and it is not the writer's fault in either.
+    if (win_server_any()) return;
     // Both modes, in the one place, so no caller has to know which is
     // live. Double-buffered, gfx_present() blits the dirty box and
     // publishes it; drawing straight at the display it is a no-op and
     // gfx_flush() is what tells a driver-owned mode to show the region.
     // Exactly one of the two does the work on any given boot.
-    gfx_present();
-    gfx_flush();
-    fb_last_present_tick = pit_ticks();
+    present_now();
 }
 
 // The mid-burst present. Bounded to one per PIT tick (100Hz) so a
@@ -720,6 +750,12 @@ void vga_resume(void) {
     // so the screen and this file's row/col agree again.
     gfx_set_double_buffered(1);
     sb_repaint(0);
+    // _force, so this does not depend on the caller having already
+    // cleared the compositor registration. It has (win_server.c's
+    // compositor_gone() runs after), but a repaint whose whole point is
+    // "the desktop is gone, show the console" must not be silently
+    // skippable by a future reordering.
+    vga_present_force();
 }
 
 void vga_reflow(void) {

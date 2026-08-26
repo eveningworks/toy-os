@@ -601,6 +601,7 @@ whenever a headline here tells you something you did not already know.
 - **The TASKBAR'S LAYOUT IS ONE FUNCTION, and past a floor it groups by app**
 - **The WM has a SLOW-FRAME WATCHDOG**
 - **There is a Crash Test app**
+- **THE KERNEL CONSOLE STOPS PRESENTING WHILE A COMPOSITOR OWNS THE SCREEN** -- `vga_present()` no-ops on `win_server_any()` and `vga_resume()` repaints on the way out (Linux's `KD_GRAPHICS`); otherwise any ring-3 process writing to fd 1 blits the whole text console over the desktop. **`vga_present_force()` is the override and a PANIC is its caller** -- guarding the routine path alone hides every panic under a running desktop. The console keeps DRAWING, so the text survives to be repainted.
 - **A CLIENT NAMES ITS POINTER SHAPE, AND THE COMPOSITOR CLAMPS IT TO THE CONTENT AREA** -- `WIN_REQ_CURSOR` carries a `WIN_CURSOR_*` (`DEFAULT`/`TEXT`/`WAIT`), Wayland's `cursor-shape-v1`; the list a client may name excludes the resize shapes because the frame is not its; the clamp is what stops a wedged client stranding an I-beam over the desktop; a widget declares it through `uui_widget_ops.cursor` and `uapp_set_cursor()` fills the gaps (Notepad's document, the Terminal's grid).
 - **THE BUSY POINTER HAS TWO SOURCES** -- `uapp_busy_begin()`/`_end()` for work that is slow on purpose (the toolkit remembers what to restore; does NOT nest), and the COMPOSITOR raising it for a window that stopped answering, which OUTRANKS whatever that window last named because a wedged client cannot name anything. `/tests/hangclient`'s `b` key is busy-and-alive, which is what keeps the two testable apart.
 - **EVERY CLIENT IS PINGED ON A CADENCE** -- `WM_PING_INTERVAL_DEFAULT` beside `WM_PING_TIMEOUT_DEFAULT`, levers `gui pingtimeout`/`gui pinginterval`. `wm_client_ping()` used to have ONE caller (the close path), so `(Not Responding)` could only appear while closing. A hung window nobody is closing still raises no DIALOG -- that stays gated on `close_asked_tick`.
@@ -1135,7 +1136,14 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   rather than one. Two load-bearing checks: the title bar plus a window
   dragged UNDER the taskbar for the clamp, and a wedged window NOBODY
   ASKED TO CLOSE, which is the ping cadence's test as much as the
-  cursor's), `ansi_cursor_test.py` (ANSI
+  cursor's),
+  `console_bleed_test.py` (**the kernel console must not paint over the
+  desktop, and must not lose the text either** -- a noisy program's fd 1
+  reaches the framebuffer console, which used to blit its whole buffer
+  over the screen; both halves are checked, since a fix that just stopped
+  the console DRAWING would pass one and fail the other. DELETES
+  `/etc/services.d/toywm` and does not restore it -- `make iso` re-seeds
+  it), `ansi_cursor_test.py` (ANSI
   cursor movement and erasing, as PIXELS -- it kills the desktop first,
   since the console is what it photographs), `init_test.py` (init and
   service supervision), `console_shell_test.py` (a `text` boot reaching a ring-3

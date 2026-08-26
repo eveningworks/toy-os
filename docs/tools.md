@@ -1072,6 +1072,24 @@ window without going through it will find its layout polls timing out.
   It shortens both `gui pingtimeout` and `gui pinginterval` (detection
   is interval + timeout, not either alone) and sets them back.
   On demand, not in `gui_regress.py`.
+- **`console_bleed_test.py`** -- the kernel console vs the desktop (5
+  checks). A ring-3 process writing to fd 1 reaches the framebuffer
+  console, which draws into its own back buffer and then BLITS THAT OVER
+  THE WHOLE SCREEN -- so `dmesg` covered 100% of the desktop and DOOM's
+  startup banner was how it got noticed. TWO properties, and a fix that
+  only stopped the console DRAWING would pass one and fail the other:
+  nothing bleeds through while the desktop is up, and the accumulated
+  text is still there once it goes away. The second is checked against
+  the console as it looked BEFORE the desktop started -- "is there any
+  text" would pass vacuously, since the boot log is already on that
+  screen. The bleed check carries its own control (a real window opening
+  MUST move the same pixels), for the reason `idle_desktop_test.py`
+  exists. It kills the desktop rather than driving the Start menu, since
+  both reach `compositor_gone()` and one of them cannot fail for reasons
+  this tool is not about -- and it DELETES `/etc/services.d/toywm` first
+  so init cannot restart it mid-check, without restoring it (there is
+  nothing in the guest to copy it back from; `make iso` re-seeds it).
+  On demand, not in `gui_regress.py`.
 - **`font_test.py`** -- runtime fonts end to end (~20 checks): a `.ttf`
   under `/usr/share/fonts` rasterizes, switching faces reaches the
   screen with NO restart (the compositor is told through `WIN_EV_FONT`),

@@ -116,7 +116,18 @@ void vga_reflow(void);
 // human" moment and covers the tail of any burst. A path that prints
 // and then HALTS without reaching that loop must call this itself, or
 // its last output is never seen; the fault handler's panic report does.
+//
+// DOES NOTHING WHILE A COMPOSITOR HOLDS THE SCREEN. The console keeps
+// drawing into its back buffer and stops blitting it over the desktop,
+// which is Linux's KD_GRAPHICS; vga_resume() puts the accumulated text
+// on screen when the desktop goes away. Without it any process writing
+// to fd 1 paints the console over the whole desktop.
 void vga_present(void);
+
+// The same, ignoring that check. For the one caller whose job is to
+// paint over whatever is there: a PANIC, which must be visible under a
+// running desktop or it is not a panic report.
+void vga_present_force(void);
 
 // Re-enables console double buffering and repaints, after the window
 // manager has been using the screen. Called on the way out of GUI mode.

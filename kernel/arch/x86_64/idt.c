@@ -587,7 +587,11 @@ void isr_dispatch(uint64_t *regs) {
         // kernel panic never reaches that loop -- it halts below -- so
         // without this the banner reporting the panic is the one thing
         // that never makes it to the screen.
-        vga_present();
+        //
+        // _force, because the ordinary present does nothing while a
+        // compositor owns the screen -- which would hide every panic
+        // that happens under a running desktop.
+        vga_present_force();
 
         if ((cs & 3) == 3 && ring3_hook) {
             ring3_hook(vector, error_code, cs, cr2);
