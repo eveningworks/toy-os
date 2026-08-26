@@ -330,6 +330,32 @@ the host is never starved. **A suite that is entirely TCG is
 structurally blind to this class**, which is the general lesson and the
 reason `tools/kvm_soak.py` exists.
 
+**CONFIRMED BY THE FIX, not by a reproduction.** It was never reproduced
+on the machine it was diagnosed on -- that host had no display for SDL,
+and six attempts under KVM with virtio as the root all passed, including
+the reporter's exact device mix and a positive control that cut the
+poll budget by a thousandfold and still did not fire. The diagnosis was
+inference from four facts the log made available: the first request in
+flight (254 of 256 descriptors free, so not a queue running down),
+flushes only, KVM only, and one machine only. Adding `cpu_relax()` fixed
+it on the reporting machine first try. Worth knowing because the commit
+that introduced it says "not reproduced" and a later reader would
+otherwise be right to distrust it.
+
+**AND THE FIRST VERSION OF THE FIX COST A THIRD OF WRITE THROUGHPUT.**
+Pausing from the first iteration is free on an IDLE host -- measured
+identical, 3470 against 3397 KB/s -- and is not free on a busy one: PLE
+yields the vCPU, and getting rescheduled behind a QEMU thread rendering
+at 1080p takes milliseconds. Reads barely noticed, because the host page
+cache answers before a spin gets going. Writes collapsed to 0.2 MB/s and
+16 ms per 4 KiB operation -- a scheduling round trip, not a disk --
+because a journal barrier is a real host fsync and so is the one wait
+that actually reaches the backoff. **The property that makes `pause`
+necessary is the same one that makes it expensive**, so it has to be
+earned: `VIRTQ_SPIN_TIGHT` iterations without it first, which covers any
+completion the host already has in hand, and `pause` only once the wait
+is clearly long. Every adaptive spinlock has this shape for this reason.
+
 `cpu_relax()` (barrier.h) is the fix, and it helps twice: PLE can now
 deschedule the spinning vCPU, and each iteration costs tens of cycles
 instead of a few -- so `VIRTQ_POLL_BACKSTOP`, which is an ITERATION

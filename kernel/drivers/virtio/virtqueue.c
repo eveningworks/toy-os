@@ -59,6 +59,13 @@
 // roughly 12 ms of emulated time, so this is on the order of seconds.
 #define VIRTQ_POLL_BACKSTOP 20000000ull
 
+// How long to spin TIGHTLY before backing off to `pause`. Sized to
+// cover a completion the host already has in hand -- a few tens of
+// microseconds -- so the ordinary read or write never yields the vCPU
+// at all, and only a wait that is genuinely long (a FLUSH, which is a
+// real fsync on the host) pays for the hypervisor's attention.
+#define VIRTQ_SPIN_TIGHT 8192ull
+
 // Descriptors abandoned by a timeout. See virtqueue_poll().
 static uint32_t g_lost_chains = 0;
 
@@ -373,11 +380,27 @@ int virtqueue_poll(struct virtqueue *vq, int head, uint32_t *used_len) {
     //    It also makes the count above worth roughly an order of
     //    magnitude more wall-clock time, for free, which is the honest
     //    mitigation for a bound that is a count.
+    //
+    // 5. AND IT PAUSES ONLY AFTER A TIGHT SPIN FIRST, because doing it
+    //    from the first iteration cost a THIRD of write throughput on a
+    //    loaded host. `pause` is free when the host is idle -- measured
+    //    identical here, 3470 against 3397 KB/s -- and it is not free
+    //    when the host is busy: PLE yields the vCPU, and getting
+    //    rescheduled behind a QEMU thread that is rendering at 1080p
+    //    takes milliseconds. Reads barely noticed (the host page cache
+    //    answers before the tight spin runs out); WRITES collapsed to
+    //    0.2 MB/s, because a journal barrier is a real host fsync and so
+    //    is the one wait that reaches the backoff -- 16 ms for a 4 KiB
+    //    write, which is a scheduling round trip, not a disk.
+    //
+    //    So: spin tight for the common case, back off only once this is
+    //    clearly a long wait. The same shape every adaptive spinlock
+    //    uses, and for the same reason.
     uint64_t began = clocksource_now_ns();
     uint64_t polls = 0;
     for (; polls < VIRTQ_POLL_BACKSTOP; polls++) {
         if (chain_done(vq, head, used_len)) return 1;
-        cpu_relax();
+        if (polls >= VIRTQ_SPIN_TIGHT) cpu_relax();
     }
 
     // TIMED OUT, AND THE DESCRIPTORS ARE DELIBERATELY LEAKED.

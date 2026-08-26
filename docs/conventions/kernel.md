@@ -822,6 +822,14 @@ It helps twice: PLE can deschedule the vCPU, and each iteration costs
 tens of cycles rather than a few, so a loop bounded by an ITERATION
 COUNT is worth roughly an order of magnitude more wall-clock time.
 
+**BUT IT MUST BE EARNED, NOT UNCONDITIONAL.** Pausing from the first
+iteration is free on an idle host and costs a THIRD of write throughput
+on a busy one -- yielding means waiting for a real reschedule. Spin
+tight for `VIRTQ_SPIN_TIGHT` iterations first, which covers any
+completion the host already has in hand, and back off only once the wait
+is clearly long. The property that makes `pause` necessary is the same
+one that makes it expensive.
+
 **A TCG-only suite is structurally blind to this class** -- the emulated
 vCPU yields constantly and the host is never starved. That is what
 `tools/kvm_soak.py` is for.
