@@ -1451,6 +1451,10 @@ window without going through it will find its layout polls timing out.
   `0.0 MB/s`, with correct IOPS beside them, so everything an "it ran"
   check looks at was green.
 
+  **It also covers the spawn, the report file and the reap**, since the
+  app does no I/O itself -- it runs `/bin/diskbench` and polls what that
+  writes.
+
   Two more that earned their place the same way. **The results must be
   DRAWN, not merely logged** -- each tile compared as pixels against its
   own before-image, which is the Calculator-with-invisible-buttons

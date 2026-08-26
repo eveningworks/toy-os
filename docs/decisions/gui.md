@@ -36,33 +36,54 @@ already solved it with `rows`, which the caller reserves and the content
 fills; this is the same answer with the number fixed by the widget,
 because unlike a label there is no meter worth having with fewer rows.
 
-## Work inside a GUI client is bounded in TIME, not in units of work
+## Long work does not belong in a GUI client at all -- it belongs in a child process
 
-Disk Mark's passes take tens of seconds. The compositor pings every
-client on a cadence (`WM_PING_INTERVAL_DEFAULT`, and
-`WM_PING_TIMEOUT_DEFAULT` to answer), so a client that blocks through
-its whole job earns the busy pointer and then `(Not Responding)` --
-which is correct behaviour by the WM and useless behaviour by the app.
+Disk Mark's passes take minutes. The compositor pings every client on a
+cadence (`WM_PING_INTERVAL_DEFAULT`, `WM_PING_TIMEOUT_DEFAULT` to
+answer), so a client that blocks through its whole job earns the busy
+pointer and then `(Not Responding)` -- correct behaviour by the WM and
+useless behaviour by the app.
 
-So the benchmark is a state machine across `on_tick`: one slice of I/O
-per frame, and the app keeps answering. The part worth writing down is
-what the slice is measured in. Fixing it at 4 MiB looked obviously
-sufficient and was not: on an emulated disk that is over a second, and
-the app ran every pass titled `(Not Responding)` while doing exactly
-what it was supposed to. A slice bounded at 120 ms of wall clock instead
-self-tunes -- a fast device does more per tick, a slow one less, and
-there is no constant to revisit when a new storage backend lands.
+**THE FIRST ANSWER WAS WRONG AND IS WORTH KEEPING FOR WHY.** It sliced
+the work across `on_tick` and bounded each slice at 120 ms of wall
+clock, which sounds exactly right. It shipped, and the window still read
+`(Not Responding)` through every pass. The reason is that a slice can
+only be bounded between UNITS, and the unit was a 1 MiB transfer -- which
+on this OS is 1024 syscalls, because `SYS_WRITE_MAX` is 1 KiB and libsys
+loops to complete a bigger buffer. One unit ran for seconds. **Bounding
+a loop does nothing when one turn of it is unbounded**, and the budget
+check never got to run.
 
-`uapp_busy_begin()` is the wrong tool for this and the distinction is
-worth keeping: it is for work that is slow and SHORT, where the honest
-answer is a busy pointer and a frozen window for a moment. Anything long
-enough that a user would want progress is long enough to need chunking.
+The fix is not a smaller unit. It is that the work does not belong in
+the event loop: `/bin/diskbench` does the I/O and the GUI polls what it
+writes. That is CrystalDiskMark's own shape (a worker while the window
+stays live) and the pattern already here -- the File Manager spawns
+`/bin/cp` rather than reimplementing copying. Three things fell out of
+it that the sliced version could not have:
 
-**The bug was found by a test's CONTROL, not by its assertions.**
-`tools/diskmark_test.py` compares each result tile against its own
-before-image and requires the TITLE BAR to be unchanged. Every
-result-tile assertion passed; the control failed, and the control was
-the only thing looking at the title bar.
+* The window cannot stall however slow a device is, including one
+  retrying a failing sector.
+* The measurement stops being distorted by the tick cadence.
+* The benchmark is runnable from a shell, where it can be measured with
+  no desktop competing at all -- which is a materially different number:
+  16 MiB is ~7 s standalone against ~25 s with the desktop up.
+
+**A polled report is a SNAPSHOT, not a log.** The child first APPENDED
+its progress and results to a file the GUI re-read. `sys_read` carries
+at most 1 KiB per call, so the results -- which come last, after
+hundreds of progress lines -- were never in what the poller saw: the
+window sat at "Done." with four empty tiles. Writing the whole current
+state each time, at most six lines, is always complete in one read.
+
+**And the poll is itself I/O.** At the 30 ms tick an animation wants,
+re-reading that file competed with the benchmark and roughly halved the
+numbers. 500 ms is what `ui/uapp.h` names for a process list, and it is
+what a poller wants.
+
+`uapp_busy_begin()` remains the right tool for work that is slow and
+SHORT, where a frozen window for a moment is the honest answer. Anything
+long enough that a user would want progress is long enough to need a
+child.
 
 ## The ring-3 WM owns the back buffer, and its death drops you to a text shell
 

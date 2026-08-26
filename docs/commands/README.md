@@ -147,6 +147,10 @@ a command), and the `gui3`/`nano` aliases.
 - [`steptest`](steptest.md)
 - [`stress`](stress.md)
 
+### Diagnostics
+
+- [`diskbench`](diskbench.md)
+
 ### Storage
 
 - [`mkpart`](mkpart.md)

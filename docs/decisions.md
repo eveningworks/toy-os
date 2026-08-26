@@ -218,7 +218,7 @@ first before re-litigating it from scratch.
 **GUI: window manager, compositor & widgets** -- [`decisions/gui.md`](decisions/gui.md) (131 entries)
 
 - [A meter reserves every row it could use, because its content is a value that changes](decisions/gui.md#a-meter-reserves-every-row-it-could-use-because-its-content-is-a-value-that-changes)
-- [Work inside a GUI client is bounded in TIME, not in units of work](decisions/gui.md#work-inside-a-gui-client-is-bounded-in-time-not-in-units-of-work)
+- [Long work does not belong in a GUI client at all -- it belongs in a child process](decisions/gui.md#long-work-does-not-belong-in-a-gui-client-at-all----it-belongs-in-a-child-process)
 - [The ring-3 WM owns the back buffer, and its death drops you to a text shell](decisions/gui.md#the-ring-3-wm-owns-the-back-buffer-and-its-death-drops-you-to-a-text-shell)
 - [The compositor's back buffer is ring-3 memory, and getting it there took two kernel fixes](decisions/gui.md#the-compositors-back-buffer-is-ring-3-memory-and-getting-it-there-took-two-kernel-fixes)
 - [A stale test fixture stops crossing the boundary it tests, silently](decisions/gui.md#a-stale-test-fixture-stops-crossing-the-boundary-it-tests-silently)

@@ -519,16 +519,22 @@ this the obvious way), not from how much history it accumulated.
   the same reason `uui_label`'s is: `natural_size()` is asked long before
   any painting, so a value measured in one font and drawn in another
   lands in a box sized for something else.
-- **WORK INSIDE A GUI CLIENT IS BOUNDED IN TIME, NOT IN UNITS OF WORK.**
-  The compositor pings every client (`WM_PING_INTERVAL_DEFAULT` /
-  `WM_PING_TIMEOUT_DEFAULT`), so anything taking longer than a frame is a
-  state machine across `on_tick`, not a loop. **Size the slice in
-  MILLISECONDS**: Disk Mark's first version used 4 MiB, which is over a
-  second on an emulated disk, and it ran every pass titled
-  `(Not Responding)` while behaving exactly as designed. A time budget
-  self-tunes across backends; a byte count has to be revisited per
-  device. `uapp_busy_begin()` is for work that is slow and SHORT -- if a
-  user would want progress, it needs chunking instead.
+- **LONG WORK BELONGS IN A CHILD PROCESS, NOT IN A GUI CLIENT'S EVENT
+  LOOP.** The compositor pings every client
+  (`WM_PING_INTERVAL_DEFAULT` / `WM_PING_TIMEOUT_DEFAULT`), so a client
+  that blocks through a long job reads `(Not Responding)` for the
+  duration. **Slicing it across `on_tick` is NOT enough** -- a slice can
+  only be bounded between UNITS, and one unit here was a 1 MiB transfer,
+  which is 1024 syscalls because `SYS_WRITE_MAX` is 1 KiB. Disk Mark
+  shipped with a 120 ms slice budget that never got to run. Spawn a
+  `/bin` program and poll it (the File Manager's `/bin/cp` pattern);
+  the work is then also reachable from a shell, which is a different and
+  more honest measurement. Three consequences: **a polled report is a
+  SNAPSHOT, not a log** (`sys_read` carries 1 KiB, so appended results
+  land past where a poller ever reads -- that showed as "Done." with
+  empty tiles); **the poll is itself I/O**, so use ~500 ms rather than an
+  animation cadence, which halved the numbers; and `uapp_busy_begin()`
+  stays for work that is slow and SHORT.
 - **A WIDGET ARRAY IS DECLARED TWICE, AND BOTH ARE LOAD-BEARING:
   `uapp_desc.layout` SIZES AND DRAWS, `uapp_desc.widgets` GETS INPUT.**
   Declaring only the first is a window that renders perfectly and cannot

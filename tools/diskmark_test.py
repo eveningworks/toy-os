@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Drive Disk Mark (userland/gui/apps/diskmark.c) and assert on it.
 
+THE APP DOES NO I/O ITSELF -- it spawns /bin/diskbench and polls what
+that prints, so this also covers the spawn, the report file and the
+reap. The version that ran the passes in its own event loop sat at
+"Disk Mark (Not Responding)" for the length of a pass, which is why the
+title-bar control below is not optional.
+
 THE LOAD-BEARING CHECK IS THE NUMBERS, NOT THE RUN FINISHING. A build
 whose throughput arithmetic truncated to zero logged "all four passes
 complete" and drew four tiles reading `0.0 MB/s`, with correct IOPS
@@ -45,7 +51,7 @@ TITLE = "Disk Mark"
 # on the app's OWN completion line, so this only bounds a hang.
 RUN_TIMEOUT_S = 240.0
 
-PROFILES = ["SEQ1M Q1T1 READ", "SEQ1M Q1T1 WRITE",
+PROFILES = ["SEQ1K Q1T1 READ", "SEQ1K Q1T1 WRITE",
             "RND4K Q1T1 READ", "RND4K Q1T1 WRITE"]
 
 
@@ -61,6 +67,20 @@ def layout_of(lines):
         elif p[0] == "tile" and len(p) >= 6:
             tiles[int(p[1])] = tuple(int(v) for v in p[2:6])
     return run, tiles
+
+
+def this_run(text):
+    """The log from THIS run's spawn onward.
+
+    `dmesg` returns the whole ring, so an earlier run's "all four passes
+    complete" satisfies a naive grep -- which is exactly what happened:
+    the tool declared success on a stale line, screenshotted mid-run and
+    then failed three cleanup checks because the child was still going.
+    Every assertion below therefore reads only from the last spawn.
+    """
+    marker = "diskmark: spawned"
+    i = text.rfind(marker)
+    return text[i:] if i >= 0 else ""
 
 
 def results_of(text):
@@ -137,13 +157,14 @@ def main():
 
     deadline = time.time() + RUN_TIMEOUT_S
     done = False
+    log = ""
     while time.time() < deadline:
         time.sleep(4)
-        log = con.send("sh dmesg")
+        log = this_run(con.send("sh dmesg"))
         if "diskmark: all four passes complete" in log:
             done = True
             break
-        if "diskmark: a transfer failed" in log or "diskmark: could not" in log:
+        if "diskbench failed" in log or "could not start" in log:
             break
     check("the run completed", done)
 
@@ -190,7 +211,23 @@ def main():
     # SELF-CLEANING. The temp file is the only litter this app can leave,
     # and the size picker exists to bound it.
     ls = con.send("sh ls /tmp")
-    check("the temp file was removed", "diskmark.tmp" not in ls)
+    # BOTH of them: the worker's scratch file and the report the GUI
+    # polls. An interrupted run leaving either behind is the litter the
+    # size picker exists to bound.
+    check("the worker's temp file was removed", "diskmark.tmp" not in ls)
+    check("the report file was removed", "diskmark.out" not in ls)
+
+    # The child must be REAPED, not left a zombie -- the GUI polls with
+    # sys_waitpid_nohang() and a missed reap is a slot that never returns.
+    ps = con.send("sh ps")
+    check("the diskbench child was reaped", "diskbench" not in ps)
+
+    # And each result logged EXACTLY ONCE. The drain re-reads the whole
+    # report every tick and is idempotent by design, so a show_result()
+    # that did not check for "unchanged" reprinted every result on every
+    # tick and buried dmesg.
+    once = all(log.count(f"diskmark: result {p} ") <= 1 for p in PROFILES)
+    check("each result was logged once, not every tick", once)
 
     failures = [n for n, ok in checks if not ok]
     print()

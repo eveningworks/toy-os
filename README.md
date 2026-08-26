@@ -101,9 +101,13 @@ QEMU, and it does not stop at "hello world from the kernel":
   cursor instead of keeping it for the window menu. And there is a
   **Disk Mark** — a CrystalDiskMark-shaped storage benchmark, four
   profiles across sequential and random 4K, which is how you find out
-  what the AHCI, virtio and IDE paths actually cost on this machine. Its
-  tiles are labelled `Q1T1` and say why: CDM reports queue depths that
-  need asynchronous block I/O, and this OS has none. And there is a
+  what the AHCI, virtio and IDE paths actually cost on this machine. It
+  does no I/O itself: `/bin/diskbench` does the work and the window
+  polls it, so a pass that takes minutes cannot freeze the GUI — and the
+  same numbers are available from a shell. Its tiles say `SEQ1K` and
+  `Q1T1` rather than borrowing CDM's headings, because both of those are
+  real limits here: a syscall carries 1 KiB (`SYS_WRITE_MAX`) and there
+  is no asynchronous block I/O to give a queue depth any meaning. And there is a
   **File Manager** — two directory panes side by side, in the Norton
   Commander tradition rather than Explorer's, because copying between
   two visible directories needs neither a clipboard nor drag-and-drop
