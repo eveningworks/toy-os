@@ -12,6 +12,57 @@ without opening something else is not finished.
 
 ---
 
+## `SYS_WRITE_MAX` is a throughput constant, because every write is a journal commit
+
+It was 1024, described in its own comment as "an artefact of the bounce
+buffer the syscall copies through, not a promise to the caller". That is
+true and it buried the more important fact: **the cap decides how many
+cache flushes a megabyte of ring-3 writing costs.**
+
+Each `fs_write*()` call is one complete TFS3 transaction, and
+`txn_commit()` ends with TWO `blkdev_flush()` barriers -- real flushes
+reaching the device. `do_write()` commits ONCE for the whole range it is
+handed, however large. So the arithmetic is:
+
+| writer | bytes per call | transactions per MiB | **flushes per MiB** |
+|---|---|---|---|
+| `stress` (ring 0, `fs_write_range`) | 1 MiB | 1 | **2** |
+| ring 3, cap at 1 KiB | 1 KiB | 1024 | **2048** |
+| ring 3, cap at 64 KiB | 64 KiB | 16 | **32** |
+
+That is the whole reason a ring-3 write measured ~30x slower than the
+same bytes written from the kernel shell, and it was invisible because
+nothing compared the two until `/bin/diskbench` existed. Measured on
+KVM + virtio, 16 MiB: sequential write **3.4 -> 114.3 MB/s**, sequential
+read 12.2 -> 76.2, and RND4K -- whose 4 KiB operation was FOUR syscalls
+and is now one -- 867 -> 3938 IOPS. The whole run went from 7 s to 1 s.
+
+**Two things this is not.** It is not the architectural answer: Linux
+and Windows are fast because they do not flush on write at all -- a
+`write(2)` lands in the page cache and returns, writeback happens on a
+timer (`dirty_expire_centisecs`, 30 s), and the journal commits every
+~5 s (`commit=5`) with one barrier for thousands of operations.
+toy-os makes a STRONGER promise -- every write durable when it returns
+-- and pays roughly a thousandfold for it. Closing that gap is a
+write-back cache, not a bigger constant. And it is not free: a 64 KiB
+buffer wants sixteen CONTIGUOUS frames, so `bounce_alloc()` asks for
+what the call actually needs and halves down to a 1 KiB floor rather
+than failing, which is a short transfer and every caller already handles
+one.
+
+**THE TRAP IT SPRANG, and it is the reason to write this down.** Raising
+the constant nearly deadlocked pipes. `pipe_write()` is all-or-nothing:
+a write that does not fit takes none of the bytes and PARKS the writer
+to retry the whole thing. That is safe only while one write can always
+eventually fit -- which held for free while 1024 < `PIPE_BUF_SIZE`
+(4096), with nothing enforcing it and a header comment stating it as a
+happy consequence. At 64 KiB a writer would park on a request the pipe
+could never satisfy. `sys_do_write_pipe()` clamps explicitly now.
+The general shape: **a constant three files away was load-bearing for
+an invariant nothing checked**, and the comment that noticed the
+relationship described it as a coincidence rather than a requirement.
+
+
 ## A filesystem talks to a BLOCK DEVICE, and persistence is the device's answer
 
 TFS3 called `ata_*` directly, which was fine while a disk was the only

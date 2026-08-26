@@ -34,6 +34,7 @@
 // so a reader needs no floating point -- there is none in this project's
 // shared code and this program has no business being the exception.
 #include "rt/sys.h"
+#include "syscall_abi.h"   // SYS_WRITE_MAX -- the sequential request size
 #include "lib/cmd.h"
 #include <stdio.h>
 #include <string.h>
@@ -112,11 +113,14 @@ static void emit_transient(const char *fmt, ...) {
 #define DEFAULT_PATH "/tmp/diskbench.tmp"
 #define DEFAULT_MIB  64
 
-// The sequential request. 1 KiB because that is what one syscall
-// carries -- asking for more does not make a bigger transfer, it makes
-// more syscalls, which is the thing the SEQ1K label exists to be honest
-// about.
-#define SEQ_BLOCK 1024
+// The sequential request IS whatever one syscall carries. Asking for
+// more does not make a bigger transfer, it makes more syscalls -- and
+// each one is a whole TFS3 transaction with two barriers, which is what
+// made this measure a thousandth of the ring-0 `stress` command.
+//
+// DERIVED, not a literal, so the profile cannot claim a size the kernel
+// no longer uses: the label is built from it below.
+#define SEQ_BLOCK SYS_WRITE_MAX
 #define RND_BLOCK 4096
 
 #define P_SEQ_READ  0
@@ -125,8 +129,12 @@ static void emit_transient(const char *fmt, ...) {
 #define P_RND_WRITE 3
 #define PROFILES    4
 
+// "SEQ", not "SEQ1M" and not "SEQ1K": the size is SYS_WRITE_MAX, which
+// has changed once and would strand any number baked into a name here
+// (CLAUDE.md: prefer facts that cannot go stale). Callers that want the
+// figure read the `syscall-bytes` line below.
 static const char *NAME[PROFILES] = {
-    "SEQ1K-read", "SEQ1K-write", "RND4K-read", "RND4K-write",
+    "SEQ-read", "SEQ-write", "RND4K-read", "RND4K-write",
 };
 
 // WRITE FIRST: the write is what lays the file down, so a separate
@@ -134,7 +142,14 @@ static const char *NAME[PROFILES] = {
 // caller displays them in read-then-write order regardless.
 static const int ORDER[PROFILES] = { P_SEQ_WRITE, P_SEQ_READ, P_RND_WRITE, P_RND_READ };
 
-static uint8_t g_buf[RND_BLOCK];
+// BIG ENOUGH FOR THE LARGEST REQUEST, which is the sequential one and
+// is therefore SYS_WRITE_MAX. Sized at RND_BLOCK once, back when the
+// sequential unit was 1 KiB -- raising the syscall cap to 64 KiB turned
+// every sequential transfer into a 60 KiB overrun of this array, and
+// the kernel's copy-from-user correctly refused the range rather than
+// reading whatever followed it.
+#define IO_BUF_MAX (SEQ_BLOCK > RND_BLOCK ? SEQ_BLOCK : RND_BLOCK)
+static uint8_t g_buf[IO_BUF_MAX];
 static uint32_t g_rand = 0x9E3779B9u;
 
 // A repeatable spread of offsets, not entropy: a benchmark whose access
@@ -264,6 +279,10 @@ int main(int argc, char **argv) {
     }
 
     for (unsigned i = 0; i < sizeof g_buf; i++) g_buf[i] = (uint8_t)(i * 31u + 7u);
+
+    // STATED, so a reader of the report knows what "SEQ" meant on the
+    // build that produced it.
+    emit("diskbench: syscall-bytes %u\n", (unsigned)SEQ_BLOCK);
 
     uint64_t total = (uint64_t)mib * 1024u * 1024u;
     for (int step = 0; step < PROFILES; step++) {

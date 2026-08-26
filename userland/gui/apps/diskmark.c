@@ -23,6 +23,7 @@
 // Q1T1 footer exists to avoid. See userland/bin/diskbench.c.
 #include <stdint.h>
 #include "rt/sys.h"
+#include "syscall_abi.h"   // SYS_WRITE_MAX -- named in the footer
 #include "ui/ulog.h"
 #include "ui/ugfx.h"
 #include "ui/uui.h"
@@ -50,13 +51,13 @@
 #define PROFILES    4
 
 static const char *PROFILE_NAME[PROFILES] = {
-    "SEQ1K Q1T1 READ", "SEQ1K Q1T1 WRITE",
+    "SEQ Q1T1 READ", "SEQ Q1T1 WRITE",
     "RND4K Q1T1 READ", "RND4K Q1T1 WRITE",
 };
 
 // What diskbench calls them on the wire.
 static const char *WIRE_NAME[PROFILES] = {
-    "SEQ1K-read", "SEQ1K-write", "RND4K-read", "RND4K-write",
+    "SEQ-read", "SEQ-write", "RND4K-read", "RND4K-write",
 };
 
 static const char *const SIZE_ITEMS[] = { "16 MiB", "64 MiB", "256 MiB" };
@@ -128,8 +129,9 @@ static int root_ok(char *why, int cap) {
         // things CrystalDiskMark reports that this OS cannot deliver,
         // and stating them beats letting a heading imply otherwise.
         snprintf(g_footer, sizeof g_footer,
-                 "%s on %s  -  1 KiB per syscall (SYS_WRITE_MAX), Q1T1: no async block I/O",
-                 fs.name, fs.device[0] ? fs.device : "(no volume)");
+                 "%s on %s  -  %u KiB per syscall (SYS_WRITE_MAX), Q1T1: no async block I/O",
+                 fs.name, fs.device[0] ? fs.device : "(no volume)",
+                 (unsigned)(SYS_WRITE_MAX / 1024));
         return 1;
     }
     snprintf(why, cap, "could not read the root mount");

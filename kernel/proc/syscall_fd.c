@@ -27,6 +27,30 @@
 #include "string.h"
 #include <stddef.h>
 
+// A BOUNCE BUFFER FOR ONE TRANSFER, sized to what this call actually
+// needs rather than to the maximum.
+//
+// Every site below used to ask for SYS_WRITE_MAX flat. That was
+// harmless while the cap was 1 KiB and is not now that it is 64: a
+// one-byte console write would reserve 64 KiB, and a 64 KiB allocation
+// wants sixteen CONTIGUOUS frames, which a fragmented pool can refuse.
+//
+// So it asks for `*len` and HALVES down to a 1 KiB floor on failure,
+// reporting back how much it got. The caller then moves less -- a SHORT
+// transfer, which every caller here already handles, because libsys
+// loops a write to completion and a short read is Unix's rule
+// everywhere. A fragmented heap therefore costs throughput rather than
+// turning a write into -ENOMEM.
+static void *bounce_alloc(uint64_t *len) {
+    uint64_t want = *len ? *len : 1;
+    for (;;) {
+        void *p = kmalloc((size_t)want);
+        if (p) { *len = want; return p; }
+        if (want <= 1024) return NULL;
+        want /= 2;
+    }
+}
+
 // The table itself. Its TYPES are in syscalls.h, because SYS_OPEN
 // (kernel/fs/fs_syscalls.c) and SYS_SPAWN (proc_syscalls.c) index it
 // too; the storage is here, with the code that owns it.
@@ -245,7 +269,7 @@ void fd_inherit(uint64_t child, uint64_t parent) {
 static __attribute__((noinline)) int
 sys_do_read_pty_master(uint64_t *regs, uint64_t pml4, int idx,
                        uint64_t buf_ptr, uint64_t len, int nonblock) {
-    char *kbuf = kmalloc(SYS_WRITE_MAX);
+    char *kbuf = bounce_alloc(&len);
     if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
 
     scheduler_preempt_disable();
@@ -277,7 +301,7 @@ sys_do_read_pty_slave(uint64_t *regs, uint64_t pml4, int idx,
     struct tty *t = pty_tty(idx);
     if (!t) { regs[14] = (uint64_t)(int64_t)-EBADF; return 0; }
 
-    char *kbuf = kmalloc(SYS_WRITE_MAX);
+    char *kbuf = bounce_alloc(&len);
     if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
 
     // CLAIMED ON THE FIRST READ, which is the physical console's rule
@@ -335,7 +359,7 @@ sys_do_read_pty_slave(uint64_t *regs, uint64_t pml4, int idx,
 static __attribute__((noinline)) void
 sys_do_write_pty_master(uint64_t *regs, uint64_t pml4, int idx,
                         uint64_t buf_ptr, uint64_t len) {
-    char *kbuf = kmalloc(SYS_WRITE_MAX);
+    char *kbuf = bounce_alloc(&len);
     if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return; }
     if (!vmm_copy_from_user(pml4, kbuf, buf_ptr, len)) {
         klog_write("syscall: write() rejected -- invalid buffer pointer\n");
@@ -352,10 +376,11 @@ sys_do_write_pty_master(uint64_t *regs, uint64_t pml4, int idx,
     kfree(kbuf);
 }
 
+
 static __attribute__((noinline)) int
 sys_do_write_pty_slave(uint64_t *regs, uint64_t pml4, int idx,
                        uint64_t buf_ptr, uint64_t len) {
-    char *kbuf = kmalloc(SYS_WRITE_MAX);
+    char *kbuf = bounce_alloc(&len);
     if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
     if (!vmm_copy_from_user(pml4, kbuf, buf_ptr, len)) {
         klog_write("syscall: write() rejected -- invalid buffer pointer\n");
@@ -401,7 +426,7 @@ sys_do_read_pipe(uint64_t *regs, uint64_t pml4, int pipe_idx,
     // cannot write into the user pointer itself once SMAP is on
     // (vmm.h). len is capped at SYS_WRITE_MAX by the caller. Heap
     // rather than stack, for the reason sys_do_write_console() gives.
-    char *kbuf = kmalloc(SYS_WRITE_MAX);
+    char *kbuf = bounce_alloc(&len);
     if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
 
     // CHECK AND PARK MUST BE ATOMIC AGAINST THE OTHER END.
@@ -569,7 +594,7 @@ SYSCALL_HANDLER sys_do_write_console(uint64_t *regs, uint64_t pml4, int kind,
     // one sits above pipe_write() and the console. A write already
     // costs far more than an allocation. Same call as the one
     // etc_config_file.c makes, and for the same reason.
-    char *kbuf = kmalloc(SYS_WRITE_MAX);
+    char *kbuf = bounce_alloc(&len);
     if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return; }
     if (!vmm_copy_from_user(pml4, kbuf, buf_ptr, len)) {
         klog_write("syscall: write() rejected -- invalid buffer pointer\n");
@@ -604,7 +629,21 @@ SYSCALL_HANDLER sys_do_write_console(uint64_t *regs, uint64_t pml4, int kind,
 static __attribute__((noinline)) int
 sys_do_write_pipe(uint64_t *regs, uint64_t pml4, int pipe_idx,
                   uint64_t buf_ptr, uint64_t len) {
-    char *kbuf = kmalloc(SYS_WRITE_MAX); // heap -- see sys_do_write_console()
+    // CLAMPED TO THE PIPE BUFFER, and this is load-bearing rather than
+    // tidy. pipe_write() is ALL-OR-NOTHING: a write that does not fit
+    // takes none of the bytes and parks the writer to retry the whole
+    // thing (api/pipe.h). That is only safe while one write can always
+    // eventually fit -- which held for free while SYS_WRITE_MAX was
+    // 1024 against a 4096-byte pipe, and stopped holding the moment the
+    // cap became 64 KiB: a writer would park on a request the pipe can
+    // never satisfy and never wake. A DEADLOCK, not a slow path.
+    //
+    // Clamping keeps POSIX's guarantee too -- a write up to PIPE_BUF is
+    // atomic -- and costs the caller nothing, because libsys's
+    // sys_write() loops on a short count.
+    if (len > PIPE_BUF_SIZE) len = PIPE_BUF_SIZE;
+
+    char *kbuf = bounce_alloc(&len); // heap -- see sys_do_write_console()
     if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
 
     int blocked = 0;
@@ -657,7 +696,7 @@ SYSCALL_HANDLER sys_do_write_file(uint64_t *regs, uint64_t pml4, struct open_fil
     // Heap, not stack -- see sys_do_write_console(). This one sits
     // directly above the whole TFS3 journal and ATA path, which is the
     // deepest chain in the kernel.
-    char *tmp = kmalloc(SYS_WRITE_MAX);
+    char *tmp = bounce_alloc(&len);
     if (!tmp) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return; }
     if (!vmm_copy_from_user(pml4, tmp, buf_ptr, len)) {
         klog_write("syscall: write() rejected -- invalid buffer pointer\n");
@@ -694,7 +733,7 @@ SYSCALL_HANDLER sys_do_read_file(uint64_t *regs, uint64_t pml4, struct open_file
     // copied out; handing it the user pointer directly is what SMAP
     // forbids (vmm.h). len is capped at SYS_WRITE_MAX by the caller.
     uint64_t off = f->file.pos;
-    char *kbuf = kmalloc(SYS_WRITE_MAX);   // heap -- see sys_do_write_console()
+    char *kbuf = bounce_alloc(&len);   // heap -- see sys_do_write_console()
     if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return; }
     uint32_t n = fs_read_range(f->file.name, off, kbuf, (uint32_t)len);
     if (!vmm_copy_to_user(pml4, buf_ptr, kbuf, n)) {

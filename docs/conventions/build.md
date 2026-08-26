@@ -109,6 +109,23 @@ this the obvious way), not from how much history it accumulated.
   **`tcsetattr()` masks `c_lflag`** to the three bits the line
   discipline implements, so `<termios.h>`'s inert names never reach a
   flag space a future `TTY_*` bit will want.
+- **`SYS_WRITE_MAX` IS A THROUGHPUT CONSTANT, NOT JUST A BUFFER SIZE,
+  AND IT IS 64 KiB.** Every `fs_write*()` call is one complete TFS3
+  transaction and `txn_commit()` ends with TWO barriers, while
+  `do_write()` commits once for the whole range however large -- so the
+  cap decides how many device flushes a megabyte of ring-3 writing
+  costs. At 1 KiB that was 2048 per MiB against the 2 the ring-0
+  `stress` command pays, which is why a ring-3 write measured ~30x
+  slower than the same bytes from the kernel shell. Raising it to 64 KiB
+  measured 3.4 -> 114.3 MB/s sequential write. **The remaining gap is
+  architectural**: Linux does not flush on write at all (page cache,
+  writeback on a timer, journal commit every ~5 s), so toy-os is making
+  a stronger promise and paying for it. **And raising it nearly
+  deadlocked pipes** -- `pipe_write()` is all-or-nothing and parks a
+  writer that does not fit, which was safe only while 1024 <
+  `PIPE_BUF_SIZE`; `sys_do_write_pipe()` clamps explicitly now. A
+  constant three files away was load-bearing for an invariant nothing
+  checked.
 - **`sys_write()` COMPLETES THE WHOLE BUFFER, because the kernel caps one
   write at `SYS_WRITE_MAX` (1024) and a short write loses data
   SILENTLY.** The cap is an artefact of the bounce buffer the kernel

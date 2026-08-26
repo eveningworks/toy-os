@@ -58,11 +58,17 @@ void pipe_close_writer(int idx);
 // shell draining continuously, and unavoidable once `|` made the reader
 // a second process that may not have run yet.
 //
-// Atomic because it can afford to be: a single write is capped at
-// SYS_WRITE_MAX (1024) against a PIPE_BUF_SIZE (4096) buffer, so one
-// write always fits once the pipe drains and a parked writer cannot
-// wait on a request too large to ever satisfy. POSIX guarantees the
-// same for writes up to PIPE_BUF.
+// Atomic because it can afford to be: the syscall CLAMPS a pipe write to
+// PIPE_BUF_SIZE, so one write always fits once the pipe drains and a
+// parked writer cannot wait on a request too large to ever satisfy.
+// POSIX guarantees the same for writes up to PIPE_BUF.
+//
+// **THE CLAMP IS WHAT MAKES THIS SAFE, and it used to be free.** While
+// SYS_WRITE_MAX was 1024 against a 4096-byte pipe the property held
+// with nothing enforcing it; raising the cap to 64 KiB would have
+// parked writers on requests the pipe could never satisfy -- a
+// deadlock, from a constant three files away. sys_do_write_pipe()
+// enforces it explicitly now.
 int64_t pipe_write(int idx, const char *src, uint32_t len);
 
 // Copies up to `len` bytes out.

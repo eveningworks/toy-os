@@ -51,7 +51,7 @@ TITLE = "Disk Mark"
 # on the app's OWN completion line, so this only bounds a hang.
 RUN_TIMEOUT_S = 240.0
 
-PROFILES = ["SEQ1K Q1T1 READ", "SEQ1K Q1T1 WRITE",
+PROFILES = ["SEQ Q1T1 READ", "SEQ Q1T1 WRITE",
             "RND4K Q1T1 READ", "RND4K Q1T1 WRITE"]
 
 

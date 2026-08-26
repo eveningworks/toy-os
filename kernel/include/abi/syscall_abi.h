@@ -68,7 +68,25 @@
                     // changes behaviour at all: position 0 of an
                     // emptied file IS its end.
 
-#define SYS_WRITE_MAX 1024
+// The most one read or write syscall carries. An artefact of the bounce
+// buffer the syscall copies through, not a promise to the caller --
+// libsys loops to complete a bigger buffer (see sys_write()).
+//
+// **IT IS A THROUGHPUT CONSTANT, AND IT WAS 1024.** Each fs_write*()
+// call is one complete TFS3 transaction, and each transaction commits
+// with TWO barriers -- real cache flushes reaching the device. So the
+// cap sets how many flushes a megabyte of ring-3 writing costs: at
+// 1 KiB it was 2048 per MiB, against the 2 per MiB the ring-0 `stress`
+// command pays by handing fs_write_range() a whole megabyte. That is
+// the entire reason a ring-3 write measured ~30x slower than the same
+// bytes written from the kernel shell.
+//
+// 64 KiB rather than more because the buffer wants CONTIGUOUS frames
+// (sixteen of them), and because the remaining gap is not this constant
+// -- it is that toy-os barriers every write while Linux batches its
+// journal commits onto a ~5 second timer and lets the page cache absorb
+// the rest. See docs/decisions/storage.md.
+#define SYS_WRITE_MAX 65536
 
 // The value a BLOCKING syscall returns when the process was woken but
 // must call again -- the spurious-wakeup contract every blocking call
