@@ -310,7 +310,7 @@ sys_do_read_pty_slave(uint64_t *regs, uint64_t pml4, int idx,
     // is the shell, and the shell is who needs to move the foreground
     // group. Claiming at open instead made tcsetpgrp() answer -EPERM to
     // the only process that had any business calling it.
-    if (!tty_owner(t)) tty_set_owner(t, scheduler_current_pid());
+    if (!tty_owner(t)) tty_set_owner(t, scheduler_current_tgid());
 
     // The same rule as the physical console one screen up, and it has to
     // be both: a Terminal window is a terminal, so a `&` job started in
@@ -527,7 +527,7 @@ sys_do_read_console(uint64_t *regs, uint64_t pml4, uint64_t buf_ptr, uint64_t le
         g_console_owner_pml4 = pml4;
         // ...and the console gains an OWNER and a foreground group,
         // which is what makes Ctrl-C mean anything (kernel/tty.h).
-        tty_set_console_owner(scheduler_current_pid());
+        tty_set_console_owner(scheduler_current_tgid());
     }
 
     // **A BACKGROUND READER IS STOPPED, NOT SERVED.** Two processes

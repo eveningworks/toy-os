@@ -1521,19 +1521,26 @@ than being interrupted a hundred times a second regardless. Also a
 prerequisite for SMP.
 
 ### SMP (multi-core)
-Large undertaking, and a prerequisite is ACPI/MADT parsing (ACPI + real power/timer)
-to even discover the other cores. Lightly sketched, not yet scoped to the
-AHCI/USB level of rigor -- a reasonable first breakdown once picked up:
+**`docs/smp-design.md` is the full design**, staged so each step ships on
+its own -- ACPI tables, then the Local APIC, then application processors
+parked, then a real spinlock and one kernel lock, then the scheduler,
+then TLB shootdown, then splitting the lock in measured order. It also
+carries the measurement of what in the tree is single-core today, and
+the honest case AGAINST doing this at all.
 
-1. Discover other cores via the MADT's local APIC entries (needs
-   ACPI + real power/timer done first).
-2. Bring up application processors via the INIT-SIPI-SIPI sequence,
-   starting each one in a small real-mode trampoline that gets it into
-   long mode.
-3. Give each core its own GDT/IDT/stack -- today's kernel assumes exactly
-   one of each.
-4. Make the scheduler aware of more than one core (today's
-   `scheduler_tick()`/`switch_to()` assume a single running context).
+**The two findings that change how it is scoped.** The RSDP is already
+in hand -- GRUB passes it in a multiboot2 tag that `kernel/core/multiboot.c`
+already walks -- so discovering cores needs no AML interpreter and is
+much smaller than "ACPI table parsing" suggests. And the BKL is not a
+mistake to avoid: it is what makes SMP shippable before the locking
+audit is finished, which is exactly the position Linux 2.0 was in and
+exactly the position this kernel is in now.
+
+**What threads bought it** (done 2026-08-26): the scheduler entity is
+now the right object for a per-CPU run queue to hold, and two runnable
+threads of one program is the first real reason to want a second core.
+Threads also create the first TLB shootdown hazard, since two cores can
+now be in one address space.
 
 ### USB (keyboard/mouse)
 **BUILT** for xHCI, a HID boot keyboard and a HID boot mouse; see
@@ -2278,7 +2285,7 @@ existing.
 
 **Items, in full.**
 
-- [ ] **Blocking + wait queues.** The big one, and it subsumes several current workarounds. A process waiting on a timer, a pipe, a window event or the disk should be OFF the run queue until the thing it waits for happens.
+- [x] ~~**Blocking + wait queues.**~~ DONE 2026-08-20 -- a wait channel is an ADDRESS, so a wake reaches one pipe or one client rather than a category. The roadmap ticked this and this list did not, which is the drift a duplicated item always produces.
 
 - [ ] **Retire `uapp_desc.tick_ms` as a REQUIREMENT.** It exists because an app with no cadence otherwise polls with `sys_yield()` at full speed; Control Panel omits it and burns 100% of every slice it is given. With wait queues it becomes an optimisation rather than the difference between a well-behaved app and a spinning one.
 

@@ -77,6 +77,63 @@ void scheduler_on_exit(int code);
 // function's problem). Lets syscall.c pick the right exit path.
 int scheduler_current_pid(void);
 
+// --- threads ---------------------------------------------------------
+//
+// A THREAD IS A SLOT WHOSE GROUP LEADER IS SOMEBODY ELSE, and `tgid !=
+// pid` is the whole definition (Linux's). It shares its leader's
+// address space -- and through it the fd table, which is keyed by CR3
+// and never learned about pids -- plus the heap, the cwd, the parent
+// link and the process group. It keeps its own kernel stack, FP state,
+// trapframe, signal disposition table and thread pointer.
+//
+// Three consequences worth knowing before calling any of these:
+//   - **A THREAD IS NOT A CHILD.** waitpid() never returns one; only
+//     scheduler_thread_poll() collects a thread.
+//   - **A PROCESS DIES AS A WHOLE.** exit(), a fault, and a kill by any
+//     of its tids all end every thread in the group, because there is
+//     one address space and the teardown destroys it.
+//   - **A tid is a pid**, from the same 1..SCHED_MAX_PROCS space, so a
+//     thread costs a process slot.
+
+// The PROCESS on the CPU, where scheduler_current_pid() is the THREAD.
+// Equal for anything that is not a thread. Use this for anything that
+// means "which program is this" -- a window's owner, a terminal's
+// owner, a child's parent, getpid.
+int scheduler_current_tgid(void);
+
+// The group `pid` belongs to, or 0 if that slot is empty.
+int scheduler_tgid(int pid);
+
+// Starts another thread of the CALLER's process at `entry`, with `arg`
+// in the SysV first-argument register and `user_rsp` as its stack top.
+// Returns the new tid (> 0) or a negative errno.
+//
+// THE STACK IS RING 3's, not the kernel's: this is clone(CLONE_VM)'s
+// shape rather than pthread_create()'s, and the library that allocates
+// stacks, remembers return values and runs destructors lives in ring 3
+// (userland/libc/pthread.c) where it belongs. `fs_base` is the new
+// thread's thread pointer, 0 for none. A `detached` thread leaves no
+// zombie for anybody to join.
+int scheduler_thread_create(uint64_t entry, uint64_t user_rsp, uint64_t arg,
+                             uint64_t fs_base, int detached);
+
+// Ends the calling THREAD. The process survives unless the caller is
+// the group leader, which exits the process instead -- see the function
+// for why. Does not return.
+void scheduler_on_thread_exit(int code);
+
+// scheduler_thread_poll() is declared beside scheduler_poll() below,
+// which is where `enum sched_poll_result` is defined.
+
+// Nobody will join `tid`. Reaps it if it is already dead. 0, or a
+// negative errno.
+int scheduler_thread_detach(int tid);
+
+// Point the calling thread's %fs at `base`. Ring 3 owns everything
+// behind that pointer; the kernel remembers the number and reloads it
+// on every switch. 0, or a negative errno.
+int scheduler_set_tls(uint64_t base);
+
 // SYS_NOTIFY_READY: record that the process currently in a syscall has
 // finished starting up. Returns 1 if there was a slot to record it in,
 // 0 for a caller the scheduler does not manage (the kernel context, the
@@ -300,6 +357,13 @@ enum sched_poll_result {
 // reaped.
 enum sched_poll_result scheduler_poll(int pid, int *out_exit_code);
 
+// The same three-valued answer for a THREAD (see the threads section
+// above): EXITED reaps `tid` and fills *out_code, RUNNING means not
+// yet, INVALID means it is not a joinable thread of this process. The
+// CALLER parks on scheduler_wait_chan_pid(tid) for the RUNNING case,
+// because only a syscall handler holds a trapframe to park.
+enum sched_poll_result scheduler_thread_poll(int tid, int *out_code);
+
 // A BLOCKED PROCESS WAITS ON A CHANNEL, AND A CHANNEL IS JUST AN
 // ADDRESS. `scheduler_wake(chan, value)` releases exactly the processes
 // parked on that address -- so a waker names THE OBJECT that changed
@@ -367,6 +431,7 @@ const void *scheduler_wait_chan_pid(int pid);
 #define SCHED_WAIT_CHILD 3 // a spawned child of this process exited
 #define SCHED_WAIT_TIMER 4 // a deadline this process asked to sleep until
 #define SCHED_WAIT_KEY   5 // a keystroke on a terminal this process reads
+#define SCHED_WAIT_THREAD 7 // a thread of this process, being joined
 #define SCHED_WAIT_TTY   6 // room in, or bytes out of, a terminal's
                            // OUTPUT side -- a pty master waiting for its
                            // shell to print, or a shell waiting for a

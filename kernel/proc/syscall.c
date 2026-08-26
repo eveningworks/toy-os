@@ -109,10 +109,11 @@ void syscall_dispatch(uint64_t *regs) {
     int blocked = 0;
     if (traced) {
         strace_begin(nr, c.a0, c.a1, c.a2);
-        if (nr == SYS_EXIT) {
-            // The one handler that may never return (the legacy
-            // process_context_exit() path doesn't), so its line has to
-            // be closed out before dispatching rather than after.
+        if (nr == SYS_EXIT || nr == SYS_THREAD_EXIT) {
+            // The two handlers that may never return (the legacy
+            // process_context_exit() path doesn't, and a thread exit
+            // switches away), so the line has to be closed out before
+            // dispatching rather than after.
             strace_end_noreturn();
             traced = 0;
         }

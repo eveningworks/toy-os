@@ -16,11 +16,19 @@ ENTRY(_start)
    does. The ALIGN(4096)s are load-bearing, not cosmetic: NX/W^X is
    enforced per 4KiB page, so .text and .data can't share one page
    without one of them getting the wrong permission. */
+/* PT_TLS is what tells the linker how big a thread's TLS block is, and
+   that is what every `%fs:offset` in the program is computed against.
+   It is not loaded on its own -- .tdata's bytes reach memory through
+   the data PT_LOAD below, which is why both sections name two segments.
+   The kernel's ELF loader ignores anything that is not PT_LOAD
+   (kernel/proc/elf.c) and userland/rt/tls.c builds each thread's block
+   from the symbols this script exports. */
 PHDRS
 {
     text   PT_LOAD FLAGS(5);
     rodata PT_LOAD FLAGS(4);
     data   PT_LOAD FLAGS(6);
+    tls    PT_TLS  FLAGS(4);
 }
 
 SECTIONS
@@ -39,8 +47,28 @@ SECTIONS
     . = ALIGN(4096);
     .rodata : { *(.rodata*) } :rodata
     . = ALIGN(4096);
+    /* THREAD-LOCAL STORAGE, and the order matters: .tdata's initialised
+       bytes are the template every thread's block is copied from, and
+       .tbss adds the zeroed tail. .tbss is NOBITS and does not advance
+       the location counter, so .bss below starts where .tbss did --
+       that is correct, because no thread's TLS lives in the image. */
+    .tdata : { *(.tdata .tdata.*) } :data :tls
+    .tbss  : { *(.tbss .tbss.*) *(.tcommon) } :data :tls
     .data : { *(.data .data.*) } :data
     .bss : { *(COMMON) *(.bss .bss.*) } :data
+
+    /* What userland/rt/tls.c needs to build a block: where the template
+       is, how much of it to copy, and how much to zero after it. The
+       ADDRESS of each symbol is the value -- there is nothing at it. */
+    PROVIDE_HIDDEN(__tls_template = ADDR(.tdata));
+    PROVIDE_HIDDEN(__tls_filesz   = SIZEOF(.tdata));
+    PROVIDE_HIDDEN(__tls_memsz    = SIZEOF(.tdata) + SIZEOF(.tbss));
+    /* THE ALIGNMENT IS PART OF THE ADDRESS ARITHMETIC, not a
+       performance hint: the linker resolves each `%fs:offset` against
+       the block size ROUNDED UP TO IT, so a runtime that rounds to
+       anything else places the .tdata template where nothing reads it.
+       MAX because either section may be the empty one. */
+    PROVIDE_HIDDEN(__tls_align    = MAX(ALIGNOF(.tdata), ALIGNOF(.tbss)));
 
     /* NO CEILING HERE ANY MORE, and that is the point.
 

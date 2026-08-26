@@ -6,13 +6,23 @@
 
 ## Synopsis
 
-    ps [--tree]
+    ps [--tree] [--threads]
 
 ## Description
 
 One line per process: pid, ppid, pgid, state, CPU time, memory, name.
 Reads `SYS_PROC_INFO`. `--tree` shows the parent/child structure
 instead, which is what makes reparenting to init visible.
+
+**Threads are hidden unless you ask** (`--threads`, or `-T`), as in
+every Unix `ps`: a program's threads are that program's business, and a
+default listing showing six rows where a person expects one process is
+worse than one that needs a flag. A thread's name prints in braces --
+`{tosh}` -- because it has no name of its own: it carries its leader's,
+so an unmarked listing would look like six shells rather than one shell
+with five threads. Its PID column is its TID, and its PPID is the
+process it belongs to, which is also what nests it under that process
+in `--tree`.
 
 **The STATE column says what a blocked process is waiting FOR** --
 `block(pipe)`, `block(key)`, `block(child)`, `block(timer)`,

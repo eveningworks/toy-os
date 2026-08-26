@@ -124,6 +124,12 @@
                    // caller's own limits are fine -- no terminal left to
                    // hand out. ENFILE's sibling; distinct from EMFILE,
                    // which is this process's own table
+#define EDEADLK 35 // this thread already holds the lock it is asking for.
+                   // Ring 3 only, and the one code here with no kernel
+                   // caller: a default mutex that CAN see the deadlock
+                   // must report it rather than hang (<pthread.h>), and
+                   // a userland-only code still belongs in this table
+                   // because there is one errno space, not two
 #define ENOSYS 38  // the call exists and does nothing yet
 #define ENOTSUP 95 // the thing exists but does not support being asked
                    // THIS way -- a query class that is a LIST has no

@@ -42,6 +42,10 @@ extern main
 ; <stdio.h> documents as the trap that comes with buffering.
 extern exit
 extern environ
+; THREAD-LOCAL STORAGE BEFORE ANYTHING ELSE RUNS. errno is a __thread
+; variable, so every libc call that can fail reads %fs -- with FS.base
+; still 0 that is a wild store to a low address. See userland/rt/tls.c.
+extern __rt_tls_init
 
 _start:
     ; argc / argv / envp into the SysV argument registers for main().
@@ -68,6 +72,17 @@ _start:
     ; programs were entirely unaffected -- which is what makes the bug
     ; look mysterious rather than like an alignment problem.
     and     rsp, -16
+
+    ; Held across the call below in callee-saved registers -- the
+    ; initial stack vector is only in registers for these few
+    ; instructions, and nothing after entry can find it again.
+    mov     rbx, rdi
+    mov     r12, rsi
+    mov     r13, rdx
+    call    __rt_tls_init
+    mov     rdi, rbx
+    mov     rsi, r12
+    mov     rdx, r13
 
     ; PUBLISH envp AS `environ` BEFORE main() RUNS. rdx already holds it
     ; (computed above as one slot past argv's NULL terminator), and this

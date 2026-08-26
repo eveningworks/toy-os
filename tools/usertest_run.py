@@ -226,6 +226,10 @@ EXCLUDED = [
     ("stackovf_test",    "runs off the stack on purpose; the assertion is the KERNEL's "
                           "report, not an exit code -- see its own top comment"),
     ("write_bad_test",   "hands the kernel a bad pointer on purpose"),
+    ("thread_test",      "SYS_THREAD_CREATE needs the caller to hold a scheduler "
+                          "slot, and `run` is the legacy loader, which has none -- "
+                          "so every check would fail against a correct kernel; "
+                          "kernel/proc/thread_test.c spawns it"),
     ("waitany_test",     "SYS_WAITPID(-1) needs the caller to BE a scheduled process; "
                           "`run` uses the legacy loader, which has no pid, so nothing it "
                           "spawns has a parent and wait-any has nobody to ask about. "

@@ -1530,6 +1530,79 @@ struct sys_stat {
                       // slot is cleared there is no owner left to
                       // report it to.
 
+// --- threads ---------------------------------------------------------
+//
+// A THREAD IS A PROCESS THAT SHARES ITS CREATOR'S ADDRESS SPACE, which
+// makes it a slot in the same table with the same kind of id. Three
+// facts a caller has to know:
+//
+//   - **A tid comes out of the pid space**, so `SYS_KILL` on one kills
+//     the whole process (there is no tkill), and a thread costs a
+//     process slot.
+//   - **SYS_GETPID answers for the PROCESS**, the same value in every
+//     thread. SYS_GETTID is what tells them apart.
+//   - **SYS_EXIT ends the PROCESS**, whichever thread calls it -- POSIX's
+//     exit_group. SYS_THREAD_EXIT ends one thread.
+//
+// The stack and everything on top of it (return values, destructors,
+// the pthread_t) are RING 3's: userland/libc/pthread.c. The kernel does
+// not allocate a thread stack, exactly as clone(2) does not.
+
+#define SYS_THREAD_CREATE 72 // RDI = pointer to a `struct thread_create_msg`.
+                             // Starts another thread of the calling
+                             // process. Returns the new tid (> 0), or a
+                             // negative errno: -EFAULT for a stack or
+                             // entry pointer that is not the caller's
+                             // memory, -EAGAIN when the process table
+                             // is full, -EPERM when the caller is not a
+                             // scheduled process.
+
+#define SYS_THREAD_EXIT 73 // RDI = exit code. Ends the CALLING thread
+                           // and does not return. From the initial
+                           // thread it exits the process instead --
+                           // see kernel/proc/scheduler.c's
+                           // scheduler_on_thread_exit() for why.
+
+#define SYS_THREAD_JOIN 74 // RDI = tid. Blocks until that thread of
+                           // this process exits, reaps it, and returns
+                           // its exit code. -ESRCH when the tid is not
+                           // a joinable thread of the caller's process
+                           // (already joined, detached, another
+                           // program's, or the caller itself).
+
+#define SYS_THREAD_DETACH 75 // RDI = tid. Says nobody will join it, so
+                             // its exit frees the slot. Reaps it if it
+                             // has already exited. 0, or -ESRCH/-EINVAL.
+
+#define SYS_GETTID 76 // No arguments. The calling THREAD's id, where
+                      // SYS_GETPID is its process's. Equal in a program
+                      // that never creates a thread.
+
+#define SYS_SET_TLS 77 // RDI = the calling thread's thread pointer,
+                       // what %fs-relative addressing resolves against.
+                       // Ring 3 owns the layout behind it entirely
+                       // (userland/rt/tls.c); the kernel remembers the
+                       // number and reloads it on every switch. Returns
+                       // 0, or -EPERM off a scheduled process.
+                       //
+                       // arch_prctl(ARCH_SET_FS)'s job, named for what
+                       // it does rather than for the register, because
+                       // this is the only architecture-specific thing
+                       // in the ABI and hiding it behind a generic name
+                       // would make it look portable.
+
+// What SYS_THREAD_CREATE takes. A struct because the call needs five
+// arguments and this ABI carries three -- the same thing SYS_SPAWN did
+// when an environment arrived.
+struct thread_create_msg {
+    uint64_t entry;     // where the new thread starts
+    uint64_t stack_top; // its stack pointer; grows DOWN from here
+    uint64_t arg;       // the SysV first argument to `entry`
+    uint64_t tls;       // its thread pointer, or 0 for none
+    int32_t  detached;  // non-zero: leave no zombie to join
+    int32_t  reserved;  // keeps the struct 8-byte aligned in both rings
+};
+
 // What SYS_OPENPTY fills in. A struct rather than two out-registers
 // because a syscall here returns one value, and two `int *` arguments
 // would be two user pointers to validate instead of one.

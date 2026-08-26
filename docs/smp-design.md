@@ -1,0 +1,272 @@
+# SMP: more than one core, staged
+
+**Status: DESIGNED, NOT BUILT (2026-08-26).** Nothing in this document
+exists in the tree. It is written to be executed in order, each stage
+shippable and testable on its own, with the honest case against at the
+end.
+
+**Read this before touching `kernel/arch/x86_64/irq.c`, the scheduler's
+`current_index`, or anything that adds a module-level buffer to a
+subsystem a syscall can reach.**
+
+**The one-sentence version:** toy-os should discover its other cores
+through ACPI, start them, give each one its own GDT/TSS/stack and a
+per-CPU pointer to what it is running, and let them all run user code in
+parallel behind a SINGLE kernel lock -- then split that lock subsystem
+by subsystem, in the order the measurements below give.
+
+## What has just landed, and why it matters here
+
+Threads (`docs/conventions/kernel.md`, "A THREAD IS A SLOT WHOSE `tgid`
+NAMES SOMEBODY ELSE") are the prerequisite this project already paid
+for. Not because SMP needs threads -- it does not -- but because the
+scheduler entity is now the right shape: a slot is a schedulable thing
+with its own kernel stack, FP state and trapframe, and a process is a
+group of them sharing an address space. That is exactly the object a
+per-CPU run queue holds.
+
+It also creates the first real reason to want SMP in this system: two
+threads of one program can now be runnable at the same instant, and on
+one core that is a time slice each.
+
+And it creates the first TLB shootdown hazard. Before threads, one
+address space was live on one CPU by construction; now two cores can be
+in the same PML4, so an unmap on one must be seen by the other. See
+stage 6.
+
+## What real systems do
+
+**Linux 2.0 (1996) shipped SMP behind a single Big Kernel Lock.** One
+CPU inside the kernel at a time; user code ran in parallel, everything
+else serialised. It worked, it scaled badly, and removing it took
+fifteen years -- the last `lock_kernel()` came out in 2.6.39 (2011).
+The interesting part is not that they regretted it: it is that the BKL
+was what made SMP *shippable* before the locking audit was done, and the
+split then happened subsystem by subsystem against real measurements
+rather than guesses.
+
+**Windows NT was SMP from 3.1 (1993)**, designed rather than retrofitted:
+per-CPU `KPRCB`, IRQL as a per-CPU interrupt-masking level, spinlocks
+with a defined acquisition order, and a dispatcher lock. NT never had a
+BKL because it never had a uniprocessor kernel to convert.
+
+**Both discover CPUs the same way** -- the ACPI MADT's Local APIC
+entries -- and start them the same way, with the INIT-SIPI-SIPI sequence
+into a real-mode trampoline. Linux's is `arch/x86/realmode/rm/trampoline_64.S`.
+There is no alternative shape worth considering here; this part is
+architecture, not design.
+
+**Where toy-os sits:** structurally it is pre-2.0 Linux. A preemptive
+uniprocessor kernel with no spinlock primitive, whose only mutual
+exclusion is "turn preemption off". So the BKL path is not an
+imitation of a mistake -- it is the same position Linux was in, and the
+same move is available.
+
+## What is single-core here today, measured
+
+Not a survey of everything that could be wrong. These are the things
+counted in the tree on 2026-08-26.
+
+| | today | why SMP breaks it |
+|---|---|---|
+| GDT, TSS, `kernel_stack0` | one of each (`kernel/arch/x86_64/gdt.c`) | `TSS.RSP0` is per CPU: two cores sharing one would land two ring-3 traps on one stack |
+| IDT | one, loaded once | shareable as-is -- the IDT is read-only to the CPU. Each core must still `lidt` it |
+| interrupt controller | 8259 PIC, 16 lines, handler chain per line (`irq.c`, 75 lines) | the PIC delivers to one CPU. MSI and IPIs both need a Local APIC, which this kernel has none of |
+| timer | fixed 100 Hz PIT | one interrupt for the whole machine; SMP wants a per-core timer, which is the LAPIC timer |
+| "what is running" | `current_index`, `rotation_pos`, `g_next_kernel_rsp` -- three file-scope globals | each has to become per CPU. `g_next_kernel_rsp` is read by `isr_common`'s epilogue in assembly |
+| run queue | one `procs[64]` array scanned by `find_next_runnable()` | correct under a lock; a per-core queue is a later optimisation, not a correctness fix |
+| mutual exclusion | `scheduler_preempt_disable()`, 11 call sites outside tests, in 4 files | turning preemption off on ONE core stops nothing on another. Every one of these is a critical section that needs a real lock |
+| filesystem | `tfs3.c` parses through module-level scratch (`g_blk`, `g_ptr_blk`, `g_bbm`, the journal image) | two cores in `fs_read()` overwrite each other's block. This is the bug the preemption guard already exists for, minus the guard |
+| kernel heap | one free list (`g_head`/`g_tail` in `heap_core.c`) | two concurrent `kmalloc`s corrupt the list |
+| console | `vga.c`'s cursor and back buffer | interleaved output, and a torn present |
+| ACPI | none at all | there is no way to find out how many cores exist |
+
+**The RSDP is already reachable**, which shortens stage 1 considerably:
+GRUB passes it in multiboot2 tags 14/15, and `kernel/core/multiboot.c`
+already walks that list for the framebuffer, the command line, the
+memory map and the modules. Finding the MADT needs no AML interpreter --
+the tables that matter here are fixed-layout structures, and the
+interpreter is only needed for the parts of ACPI this project has said
+it does not want.
+
+## The staging
+
+Each stage boots and is testable on its own. Stages 1-3 change no
+behaviour at all -- they add facts and then add cores that do nothing --
+which is what makes them safe to land separately.
+
+### Stage 1 -- ACPI tables, read-only
+
+Find the RSDP from the multiboot2 tag, validate its checksum, walk the
+XSDT (or RSDT on an older table), and expose the MADT. Nothing acts on
+it yet.
+
+Ship it as a fact and a command: `QUERY_CPUS`, and `cpuinfo` printing
+one line per Local APIC entry -- APIC id, enabled, online (always "no"
+at this stage). That makes the whole stage verifiable from a shell and
+gives the later stages a display surface for free.
+
+**What this must NOT become:** an ACPI subsystem. The FADT and HPET
+tables are separate roadmap items; AML is not wanted at all. Parse the
+MADT and stop.
+
+### Stage 2 -- the Local APIC, still one core
+
+Enable the BSP's LAPIC, move the timer off the PIT and onto the LAPIC
+timer, and keep the PIC path working for a machine that reports no APIC.
+Route the legacy IRQs through the I/O APIC using the MADT's interrupt
+source overrides.
+
+This is worth landing alone even if SMP stops here: it is what MSI-X
+needs (`docs/roadmap.md`'s Local APIC item), it gives more than 16
+vectors, and a per-core timer is the prerequisite for anything tickless.
+
+**The trap this stage carries:** an interrupt source override says the
+ISA IRQ number is not the GSI. Ignoring them works on QEMU's default
+machine and fails on real hardware and on some QEMU machine types --
+which is exactly the class `tools/qemu_matrix.py` exists to catch.
+
+### Stage 3 -- application processors, parked
+
+INIT-SIPI-SIPI each AP into a trampoline below 1 MiB that walks it from
+real mode to long mode and into a C entry point. Each AP gets its own
+GDT, its own TSS with its own `RSP0` stack, loads the shared IDT, enables
+its LAPIC, and halts in a loop.
+
+**Per-CPU state arrives here, and the mechanism is `swapgs` + GS.base.**
+Each core's GS.base points at its own `struct cpu`, which holds at
+minimum: the APIC id, the current thread, the per-CPU idle context, and
+the depth of whatever lock it holds. This is what `current_index` becomes.
+Linux's `this_cpu_ptr`, NT's `KPRCB`. `swapgs` on kernel entry and exit
+is the part that must not be got wrong: it is why the kernel entry path,
+not the scheduler, is the first thing to change in this stage.
+
+`cpuinfo` now reports the APs as online, which is the whole test.
+
+### Stage 4 -- a real spinlock, and the kernel lock
+
+Two things, in this order.
+
+**A spinlock primitive.** A ticket lock, not a test-and-set: a
+test-and-set lock is unfair and can starve a waiter indefinitely, which
+under a hypervisor turns into a several-millisecond stall. It must use
+`cpu_relax()` in its spin (`kernel/include/kernel/barrier.h` already
+says why, and the reason is the same: KVM's Pause-Loop Exiting). It must
+also record the holder for a diagnostic, because the first SMP deadlock
+is otherwise a machine that simply stops.
+
+**One lock around the kernel.** Taken on every entry from ring 3 --
+syscall, fault, interrupt -- and released on the way out. User code runs
+on every core in parallel; kernel code does not.
+
+The rule that makes this safe is the one it is easy to get wrong: **an
+interrupt handler must take the same lock**, or an IRQ on core B walks
+into a data structure core A is halfway through. That means interrupts
+must be disabled while the lock is held on the same core (or the handler
+deadlocks against itself), which is exactly the `spin_lock_irqsave`
+discipline Linux and NT's IRQL both encode.
+
+### Stage 5 -- the scheduler picks per core
+
+`find_next_runnable()` becomes "find a runnable slot no other core is
+running", and `switch_to()` writes the per-CPU `current` rather than a
+global. One global run queue under the kernel lock is the right first
+version: a per-core queue is a scalability optimisation and it brings
+load balancing, work stealing and affinity with it -- three problems
+this system does not have yet.
+
+**The kernel's own rotation participant (`ROT_KERNEL`) is the awkward
+part.** It exists because the kernel context is a schedulable thing here.
+With N cores it becomes the per-core idle loop, which is what
+`scheduler_idle()` already is -- but "the kernel context" as a single
+saved trapframe (`kernel_saved_rsp`) is a uniprocessor idea and has to
+become per CPU.
+
+### Stage 6 -- TLB shootdown
+
+Once two cores can be in one address space -- which threads make
+routine -- unmapping a page needs every core that has it cached to
+invalidate it. An IPI to the cores running that address space, and a
+wait for their acknowledgement, before the frame is freed.
+
+The paths that unmap today: `vmm_unmap_user_page()` (window revocation),
+address-space teardown, and the poisoning of a dead client's mapping.
+Teardown is safe by construction (the address space has no runners
+left); the other two are not.
+
+### Stage 7 -- split the lock, in measured order
+
+The order comes from the table above, and each split is its own change
+with its own test:
+
+1. **The kernel heap** -- one lock inside `heap_core.c`. Every subsystem
+   allocates, so this is the most contended thing in the kernel.
+2. **The filesystem** -- and this one is not a lock, it is the scratch
+   buffers. `tfs3.c`'s module-level state is what
+   `scheduler_preempt_disable()` was papering over; the honest fix is
+   per-call state, and a lock over the backend is the interim.
+3. **The console** -- a lock around `vga.c`'s present and cursor.
+4. **The scheduler's own table**, which is what lets a core reschedule
+   without holding the kernel lock.
+5. Everything else, when something measures it.
+
+**Do not skip the measurement.** The BKL is not a bug to be ashamed of;
+splitting a lock nothing contends for adds a race surface and buys
+nothing.
+
+## Testing, and the part that is genuinely hard
+
+**Every automated test in this repo runs TCG, and TCG serialises.**
+`qemu-system-x86_64 -smp 4` under TCG runs the cores round-robin in one
+host thread, so a missing lock produces a green suite. This is the same
+gap `kernel/include/kernel/barrier.h` already documents for memory
+barriers, and it is worse here: the whole point of the work is
+concurrency.
+
+So the SMP suite has to be a KVM suite. `tools/kvm_soak.py` is the
+existing shape to extend, and the stages have very different
+testability:
+
+- Stages 1-3 are testable under TCG, because "how many cores are online"
+  is a fact, not a race. `cpuinfo` reporting four online cores under
+  `-smp 4` is a real check.
+- Stages 4-7 are only meaningfully testable under KVM with `-smp`, under
+  load, for minutes -- and the honest statement is that a soak test
+  finding nothing is weak evidence. The strong evidence is a lock
+  discipline that is stated and checked by inspection, plus an assertion
+  in the lock itself that catches a recursive acquire.
+- **A positive control is mandatory here and unusually easy**: remove
+  one lock and the soak must fail. If it does not, the soak is not
+  exercising the path.
+
+## The honest case against
+
+**One core is enough for what this system does.** The desktop, the
+compositor and every app in the tree fit inside a 100 Hz round-robin
+with time to spare; the measured problems in `docs/bugs.md` are not
+throughput problems. SMP would make nothing here faster that anybody
+notices.
+
+**It adds a bug class this project cannot test well.** Every existing
+correctness argument in the kernel assumes one thread of control, and
+some of them are load-bearing and subtle -- the lost-wakeup arguments in
+`scheduler_block_current()` and `sys_waitpid()` are correct *because*
+interrupts are off and there is one core. Each of those becomes a
+lock-ordering argument instead, and TCG cannot check any of them.
+
+**The parts worth having are separable.** Stage 2 -- the Local APIC and
+a per-core timer -- delivers MSI-X, more vectors and tickless idle
+without a single line of locking. If the goal is "the machine gets
+better", stage 2 is most of the value and none of the risk.
+
+**What SMP is actually for here** is that it is a real operating system
+milestone with a real design, and the locking audit it forces would find
+things. That is a legitimate reason to build it. It is not a performance
+argument, and it should not be sold as one.
+
+## Out of scope, deliberately
+
+NUMA. CPU hotplug. Scheduling domains, load balancing and work stealing.
+CPU affinity as an API. Per-core memory allocators. `sched_ext`-style
+pluggable policy -- and note the common misreading: Linux does not "let
+you switch schedulers", it has compile-time classes.

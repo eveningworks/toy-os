@@ -245,7 +245,10 @@ int sys_win_present(struct syscall_ctx *c) {
 
 int sys_win_request(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
-    int pid = scheduler_current_pid();
+    // THE PROCESS, not the calling thread: a window belongs to the
+    // program, so a second thread of it must find the same windows and
+    // the same event queue rather than a fresh, empty client.
+    int pid = scheduler_current_tgid();
 
     if (!vmm_validate_user_range(pml4, c->a0, sizeof(struct win_request_msg))) {
         klog_write("syscall: win_request() rejected -- invalid user pointer\n");
@@ -319,7 +322,7 @@ int sys_win_debug(struct syscall_ctx *c) {
     // same reason: the client shares the page and could otherwise
     // change a field between validation and use.
     uint64_t pml4 = c->pml4;
-    int pid = scheduler_current_pid();
+    int pid = scheduler_current_tgid(); // the process -- see sys_win_request()
     if (!vmm_validate_user_range(pml4, c->a0, sizeof(struct win_debug_msg))) {
         klog_write("syscall: win_debug() rejected -- invalid user pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
@@ -345,7 +348,7 @@ int sys_win_debug(struct syscall_ctx *c) {
 // PARAMETER, for the reason send_recv() gives.
 static int event_get(struct syscall_ctx *c, int blocking) {
     uint64_t pml4 = c->pml4;
-    int pid = scheduler_current_pid();
+    int pid = scheduler_current_tgid(); // the process -- see sys_win_request()
 
     if (!vmm_validate_user_range(pml4, c->a0, sizeof(struct win_event))) {
         klog_write("syscall: event() rejected -- invalid user pointer\n");

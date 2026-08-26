@@ -122,6 +122,12 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_SIGRETURN]     = { "sigreturn",     sys_sigreturn,     { A_END } },
     [SYS_MOUNT]         = { "mount",         sys_mount,         { A_HEX } },
     [SYS_UMOUNT]        = { "umount",        sys_umount,        { A_PATH } },
+    [SYS_THREAD_CREATE] = { "thread_create", sys_thread_create, { A_HEX } },
+    [SYS_THREAD_EXIT]   = { "thread_exit",   sys_thread_exit,   { A_INT } },
+    [SYS_THREAD_JOIN]   = { "thread_join",   sys_thread_join,   { A_INT } },
+    [SYS_THREAD_DETACH] = { "thread_detach", sys_thread_detach, { A_INT } },
+    [SYS_GETTID]        = { "gettid",        sys_gettid,        { A_END } },
+    [SYS_SET_TLS]       = { "set_tls",       sys_set_tls,       { A_HEX } },
 };
 
 #define SYSCALL_TABLE_COUNT (sizeof SYSCALL_TABLE / sizeof SYSCALL_TABLE[0])

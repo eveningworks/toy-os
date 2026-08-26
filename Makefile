@@ -174,10 +174,16 @@ DISK_IMG = disk.img
 # memcpy), so an FP-enabled kernel would need an FXSAVE on every
 # interrupt vector rather than only where the scheduler swaps processes.
 USERLAND_CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie \
-                   -mno-red-zone -mcmodel=large \
+                   -mno-red-zone -mcmodel=large -ftls-model=local-exec \
                    -Wall -Wextra -Wframe-larger-than=2048 -O2 -g -c $(LIBC_INCLUDES) $(API_INCLUDES) -Iuserland \
                    -ffunction-sections -fdata-sections -MMD -MP \
                    -fno-tree-loop-distribute-patterns
+# -ftls-model=local-exec: a `__thread` variable is reached as a fixed
+# offset from %fs and nothing else. The other three models exist for
+# code that might end up in a shared library, which nothing here can be
+# -- and both of the dynamic ones need a __tls_get_addr() and a GOT
+# this build has no linker to fill in. See userland/rt/tls.c.
+#
 # -Wframe-larger-than for RING 3, which had none while the kernel side
 # has had one since kernel stacks got guard pages. The reason is the
 # same and the mechanism is weaker here: a ring-3 stack has ONE 4 KiB
@@ -461,16 +467,18 @@ $(BUILD)/userland/%.o: userland/%.c | version
 # first also keeps the entry point where a disassembly expects it.
 #
 # sys.o carries the syscall wrappers (userland/sys.c), stack_chk.o the
-# canary symbols GCC emits references to, and sigtramp.o the two
-# instructions a signal handler returns through. All four are linked into
-# every userland ELF, which is what lets a program be nothing but its
-# own main().
+# canary symbols GCC emits references to, sigtramp.o the two
+# instructions a signal handler returns through, and tls.o the
+# thread-local storage crt0 installs before main(). All five are linked
+# into every userland ELF, which is what lets a program be nothing but
+# its own main().
 #
 # sigtramp.o is kept honest by --gc-sections rather than by anything
 # here: nothing references __sigrestore unless a program installs a
 # handler, so a program that does not use signals does not carry it.
 USERLAND_RT = $(BUILD)/userland/rt/crt0.o $(BUILD)/userland/rt/sys.o \
-              $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o
+              $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o \
+              $(BUILD)/userland/rt/tls.o
 
 # libuapp.a -- the toolkit, the userland libraries, and the sources
 # shared with the kernel, as ONE archive every program links against.
@@ -699,7 +707,7 @@ uextra = $(patsubst %,$(BUILD)/userland/%.o,$(EXTRA_OBJS_$(notdir $(1))))
 # accumulated so far, so an archive placed before its callers
 # contributes nothing and the link fails with undefined references.
 $(BUILD)/userland/%.elf: $(BUILD)/userland/%.o $(USERLAND_RT) userland/rt/link.ld $(LIBUAPP) $(LIBC) $$(call uextra,$$*)
-	$(LD) -n --gc-sections -T userland/rt/link.ld -nostdlib -o $@ $(BUILD)/userland/rt/crt0.o $< $(call uextra,$*) $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(LIBUAPP) $(LIBC)
+	$(LD) -n --gc-sections -T userland/rt/link.ld -nostdlib -o $@ $(BUILD)/userland/rt/crt0.o $< $(call uextra,$*) $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(BUILD)/userland/rt/tls.o $(LIBUAPP) $(LIBC)
 
 # Sources SHARED between the kernel image and userland ELFs, compiled a
 # second time with USERLAND_CFLAGS into build/userland/shared/.

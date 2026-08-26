@@ -4715,3 +4715,141 @@ with code that already works, which is what the rule against a builtin
 shadowing a `/bin` program that does more is for. `--follow` polls at
 200 ms rather than blocking, because a fact in this registry is computed
 on every read and has no stored form to wait on.
+
+## A thread is a slot with a `tgid`, not a second kind of object
+
+The two shapes are both real. Windows NT has `KTHREAD` inside
+`EPROCESS`: the process is a container and the thread is what the
+scheduler runs, two object types from the first release. Linux has one
+`task_struct`, and `clone(CLONE_VM | CLONE_FILES | CLONE_SIGHAND)`
+produces another one that happens to share everything — the kernel has
+no concept named "thread" at all, and `tgid != pid` is the only thing
+that distinguishes one.
+
+toy-os took Linux's. The argument is not elegance, it is the existing
+code: `procs[]` is indexed everywhere, a pid is a slot index plus one, a
+wait channel is `&procs[i]`, a kernel stack is `kstacks[i]`, and
+`SCHED_MAX_PROCS` sizes four unrelated tables (`win_server.c`,
+`win_events.c`, `mm_audit.c`, `kstack_query.c`). A separate thread
+object would have had to be threaded through every one of those, and
+each of them would then need to answer "and what about threads?"
+separately. As a slot with one extra field, a thread is schedulable, has
+a kernel stack, can be traced and shows up in `ps` with no work at all.
+
+What it costs is honest and worth stating: **a thread consumes a process
+slot**, so 64 is the total across all programs, and a program that
+creates a thread per connection would exhaust it. Raising the number is
+a `#define`; the per-slot cost is a 16 KiB kernel stack plus 512 bytes
+of FP state plus a 768-byte signal table.
+
+**The fd table needed no change**, which is the best evidence the shape
+was right. It is keyed by CR3 (`syscall_fd.c`), not by pid, so two slots
+sharing an address space share their descriptors without a line being
+written. That keying was chosen for the legacy loader, which has no pid;
+it happened to be the threading-correct answer years early.
+
+**`scheduler_current_pid()` kept its meaning and a second call was
+added.** It answers the THREAD, which is what every existing caller
+wanted (a wait channel, a kill target, a kernel stack, a trace);
+`scheduler_current_tgid()` answers the PROCESS, and the handful of
+callers that meant that — a window's owner, a terminal's owner, a
+child's parent, `getpid`, `setpgid(0, …)` — were moved one at a time.
+The alternative, redefining the old call to mean the process, would have
+been a silent change to every one of those call sites in the direction
+that fails quietly.
+
+## A process exits as a whole, whichever thread calls exit()
+
+POSIX has two calls: `exit_group(2)` ends every thread, `exit(2)` ends
+one. toy-os has the same pair (`SYS_EXIT`, `SYS_THREAD_EXIT`) and the
+same default, and here it is not a choice. `syscall_process_exit_cleanup()`
+destroys the address space, and a surviving thread would be resumed into
+unmapped memory a few instructions later. So `SYS_EXIT` releases the
+group; a fault does too (the same path); and `SYS_KILL` naming any tid
+redirects to the leader rather than tearing down an address space its
+siblings are standing in. A `tkill(2)` — signal one thread specifically —
+is the call that would behave differently, and there is none.
+
+**The leader calling `pthread_exit()` exits the process**, where POSIX
+keeps the process alive until the last thread leaves. Honouring that
+means a zombie leader holding the tgid while its siblings run, and
+nothing in this kernel can wait for "the group is empty" — the leader's
+slot is what `waitpid()` names and what `scheduler_poll()` reaps. The
+divergence is documented in `<pthread.h>` and in the ABI, because it is
+the kind of thing a ported program discovers at the worst moment.
+
+**Threads are excluded from every child walk.** `waitpid()` handing a
+process one of its own threads would be a corpse the program never
+created; Linux spells the exclusion `__WNOTHREAD`. A thread's `ppid`
+still names its leader, so `ps --tree` nests it — a display fact, never a
+wait one, and the three walks that had to learn the difference are
+`scheduler_poll_any()`, `reparent_children()` and
+`scheduler_stop_report_any()`.
+
+## The kernel does not allocate thread stacks
+
+`SYS_THREAD_CREATE` takes an entry point and a stack top and allocates
+nothing. That is `clone(2)`'s shape; `pthread_create()`'s — where the
+library picks a size, maps a region and installs a guard page — lives in
+`userland/libc/pthread.c`.
+
+The reason is that none of that work needs a privilege ring 3 lacks. A
+thread stack is ordinary process memory, `malloc` already exists in ring
+3 (the kernel's own allocator, compiled twice), and the heap is
+demand-paged, so a 64 KiB stack costs only the pages actually touched.
+Putting the allocation in the kernel would mean a second address-space
+region with its own layout rules in `uaddr.h`, a policy about default
+sizes, and a way to express "I want a bigger one" through the ABI —
+three decisions bought for nothing.
+
+Two consequences that are real limitations rather than tidy trade-offs,
+and both are named in `<pthread.h>` rather than left to be discovered:
+
+**A thread stack has no guard page.** The initial thread's is grown on
+fault with a guard gap below it, and the kernel's own stacks have guard
+pages; a thread's is a malloc'd extent, so an overrun walks into another
+allocation instead of faulting. Fixing it needs an `mprotect`-shaped
+syscall, which this system does not have and which is a roadmap item on
+its own merits.
+
+**A detached thread's stack is never reclaimed.** Nothing can safely
+free memory a dying thread is still standing on: between "I am about to
+exit" and the syscall that ends it, the thread is still pushing. Linux
+solves it with `CLONE_CHILD_CLEARTID` — the kernel zeroes a word in the
+dying thread's memory and futex-wakes whoever is watching, *after* the
+stack is no longer in use. That needs a futex, which is the same missing
+primitive the mutex is spinning around, so both are one roadmap item.
+Joining a thread reclaims everything; the leak is the price of not
+joining, and it ends at process exit.
+
+## errno became thread-local before anything could see it be wrong
+
+`userland/rt/sys.c`'s errno had carried a comment for months saying it
+was the variable that would need TLS once two threads could be in a
+syscall at once. Making it `__thread` in the same change as threads was
+deliberate rather than tidy: a shared errno is invisible to every test
+that does not deliberately fail a call in two threads and compare, so it
+would have shipped working-looking and broken. The thread test asserts
+exactly that pair, and it is the only check in the file that a shared
+errno fails.
+
+Doing it required the whole TLS mechanism — a PT_TLS segment, a linker
+script that keeps `.tdata`/`.tbss`, a block installed before `main()`,
+and a kernel that reloads FS.base on every switch — which is why TLS is
+not a separate later milestone. There is no half of it that is useful
+alone: `%fs` with nothing behind it is a fault, and a thread with a
+shared errno is a bug generator.
+
+**The layout is the psABI's variant II**, with the thread pointer at the
+END of the block and variables at negative offsets. The size the runtime
+allocates must be `memsz` rounded up to the SEGMENT's own alignment,
+because that is the number the linker subtracted when it resolved every
+`%fs:offset`; rounding to a convenient 16 instead shifts the whole block
+under the offsets reading it, and nothing fails loudly.
+
+**GCC does not believe a linker symbol's address is data.** The address
+of a declared object cannot be null, so `for (i = 0; i < (size_t)__tls_filesz; i++)`
+compiles bottom-tested and a `filesz` of 0 counts to 2^64. It was a page
+fault in every ring-3 program, a few thousand bytes past the buffer, on
+the first build that had TLS in it. `linker_value()` launders the number
+through an empty `asm` and emits no instruction.

@@ -46,18 +46,21 @@ static inline int64_t syscall0(uint64_t num) {
 // back the -1 it has always had. So no existing call site changes
 // behaviour, and one that wants the reason asks sys_errno().
 //
-// A GLOBAL, and the caveat that comes with it: this is exactly the
-// variable that needs thread-local storage once a process can have two
-// threads in a syscall at once (docs/roadmap.md lists TLS and threads).
-// It is correct today because there is only ever one thread per process,
-// and it is here rather than in the kernel because the RETURNED code is
-// the ABI -- see abi/errno.h. When TLS lands, this declaration moves and
-// nothing else does.
+// PER THREAD, which is what `__thread` buys and why TLS existed before
+// pthreads did: two threads failing in two different syscalls must not
+// overwrite each other's reason, and a shared errno makes every
+// diagnostic in a threaded program a race. It is here rather than in
+// the kernel because the RETURNED code is the ABI -- see abi/errno.h.
+//
+// The one thing this declaration costs: it is read on every failing
+// syscall, so %fs must already point somewhere real. crt0 installs the
+// initial thread's TLS before main() and sys_thread_create()'s callers
+// pass a block per thread -- see userland/rt/tls.c.
 //
 // NOT CLEARED ON SUCCESS, as POSIX specifies: a caller reads it only
 // after a call has told it something failed. Clearing it would cost
 // every successful syscall a store for the benefit of nobody.
-static int g_errno;
+static __thread int g_errno;
 
 int sys_errno(void) { return g_errno; }
 
@@ -65,9 +68,8 @@ int sys_errno(void) { return g_errno; }
 // a FUNCTION rather than the variable itself: `errno` has to be an
 // lvalue a program can assign to, and exporting a bare global would
 // commit this file to a name every ported program also uses. musl does
-// exactly this, for the same reason plus a per-thread one that does not
-// apply here yet -- with no threads there is one errno, and TLS is not
-// a prerequisite for spelling it correctly.
+// exactly this, and the per-thread half of its reason applies here now:
+// the address this returns is THIS thread's errno.
 int *__errno_location(void) { return &g_errno; }
 
 // Is this return value an error code rather than a result?
@@ -118,6 +120,7 @@ static const struct { int code; const char *msg; } g_errmsg[] = {
     { ENFILE, "too many open files in system" },
     { EMFILE, "too many open files" },
     { ENOTTY, "not a terminal" },
+    { EDEADLK, "would deadlock" },
     { ENOSPC, "no space left" },
     { ENOTDIR, "not a directory" },
     { EISDIR, "is a directory" },
@@ -149,6 +152,49 @@ const char *sys_strerror(int e) {
 
 int64_t sys_call(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3) {
     return syscall3(num, a1, a2, a3);
+}
+
+// --- threads ---------------------------------------------------------
+
+int sys_gettid(void) { return (int)syscall0(SYS_GETTID); }
+
+int sys_thread_create(void (*entry)(void *), void *stack_top, void *arg,
+                      void *tls, int detached) {
+    struct thread_create_msg msg = {
+        .entry     = (uint64_t)(uintptr_t)entry,
+        .stack_top = (uint64_t)(uintptr_t)stack_top,
+        .arg       = (uint64_t)(uintptr_t)arg,
+        .tls       = (uint64_t)(uintptr_t)tls,
+        .detached  = detached ? 1 : 0,
+        .reserved  = 0,
+    };
+    return (int)err(syscall1(SYS_THREAD_CREATE, (uint64_t)(uintptr_t)&msg));
+}
+
+void sys_thread_exit(int code) {
+    syscall1(SYS_THREAD_EXIT, (uint64_t)(int64_t)code);
+    for (;;) { } // does not return -- see sys_exit()
+}
+
+int sys_thread_join(int tid) {
+    int64_t r;
+    // The same retry contract sys_waitpid() documents: SYS_RETRY means
+    // "you were woken, ask again", and each pass that finds the thread
+    // still running parks again, so the wait costs no CPU. -EINTR is
+    // retried for waitpid's reason too -- a signal is not an answer to
+    // "has this thread finished".
+    do {
+        r = syscall1(SYS_THREAD_JOIN, (uint64_t)(int64_t)tid);
+    } while (r == SYS_RETRY || r == -EINTR);
+    return (int)err(r);
+}
+
+int sys_thread_detach(int tid) {
+    return (int)err(syscall1(SYS_THREAD_DETACH, (uint64_t)(int64_t)tid));
+}
+
+int sys_set_tls(void *base) {
+    return (int)err(syscall1(SYS_SET_TLS, (uint64_t)(uintptr_t)base));
 }
 
 // --- process ---------------------------------------------------------

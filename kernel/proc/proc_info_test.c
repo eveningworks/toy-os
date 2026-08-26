@@ -186,10 +186,10 @@ KTEST("procinfo", "every wait reason is reported, and none as PROC_WAIT_NONE") {
     // extending this loop is the one drift it cannot catch, so
     // scheduler.h's own comment lists this as the third of three edits.
     static const char chan;
-    uint32_t seen[SCHED_WAIT_TTY + 1] = {0};
+    uint32_t seen[SCHED_WAIT_THREAD + 1] = {0};
     int parked_ok = 1;
 
-    for (int r = SCHED_WAIT_EVENT; r <= SCHED_WAIT_TTY; r++) {
+    for (int r = SCHED_WAIT_EVENT; r <= SCHED_WAIT_THREAD; r++) {
         uint64_t tf[SCHED_TF_SLOTS] = {0};
         struct proc_info info;
         scheduler_preempt_disable();
@@ -202,7 +202,7 @@ KTEST("procinfo", "every wait reason is reported, and none as PROC_WAIT_NONE") {
     }
 
     if (!parked_ok) KTEST_SKIP("no free process slots to fabricate");
-    for (int r = SCHED_WAIT_EVENT; r <= SCHED_WAIT_TTY; r++) {
+    for (int r = SCHED_WAIT_EVENT; r <= SCHED_WAIT_THREAD; r++) {
         KTEST_ASSERT(seen[r] != PROC_WAIT_NONE);
         // Distinct, too: a mapping that collapsed two reasons onto one
         // value would pass the non-zero check and still lie.

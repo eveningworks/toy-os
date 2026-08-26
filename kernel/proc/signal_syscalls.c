@@ -27,7 +27,9 @@
 // same shorthand POSIX gives setpgid() and getpgid(). Resolved once,
 // here, rather than in each handler.
 static int this_pid_if_zero(int pid) {
-    return pid == PGID_SELF ? scheduler_current_pid() : pid;
+    // The PROCESS: a process group holds processes, so "me" in
+    // setpgid()/getpgid() is the caller's program and not its thread.
+    return pid == PGID_SELF ? scheduler_current_tgid() : pid;
 }
 
 int sys_setpgid(struct syscall_ctx *c) {

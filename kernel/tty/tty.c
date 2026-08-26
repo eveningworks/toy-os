@@ -196,7 +196,7 @@ int tty_check_background_read(struct tty *t) {
     // every boot here is a shell.
     if (!t->owner_pid || !t->fg_pgid) return 0;
 
-    int pid = scheduler_current_pid();
+    int pid = scheduler_current_tgid(); // the process owns a terminal
     if (!pid) return 0;  // kernel context: it has no group to be outside
     if (scheduler_pgid(pid) == t->fg_pgid) return 0;
 
@@ -234,7 +234,7 @@ int tty_fg_pgid(const struct tty *t) { return t ? t->fg_pgid : 0; }
 int tty_set_fg_pgid(struct tty *t, int pgid) {
     if (!t) return -ENODEV;
     if (!t->owner_pid) return -ENODEV;
-    if (scheduler_current_pid() != t->owner_pid) return -EPERM;
+    if (scheduler_current_tgid() != t->owner_pid) return -EPERM;
     if (pgid < 1 || !scheduler_pgid_live(pgid)) return -ESRCH;
     t->fg_pgid = pgid;
     return 0;

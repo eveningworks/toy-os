@@ -1206,3 +1206,88 @@ second answer to the same question. See `docs/tty-design.md`, and
 describes is per TERMINAL**, reached through `tty_owner()` /
 `tty_fg_pgid()` with the console-shaped names kept as one-liners over
 tty0.
+
+## A THREAD IS A SLOT WHOSE `tgid` NAMES SOMEBODY ELSE.
+
+`kernel/proc/scheduler.c`. There is no thread object and no second kind
+of scheduler entity: `SYS_THREAD_CREATE` takes another `procs[]` slot
+and points it at the caller's address space. `tgid != pid` is the whole
+definition of "this is a thread" -- Linux's, where `clone(CLONE_VM |
+CLONE_FILES | CLONE_SIGHAND)` produces another `task_struct` and the
+kernel has no idea it made something people call a thread. Windows NT
+made the opposite call (`KTHREAD` inside `EPROCESS`, two objects from
+the start); toy-os followed Linux because every `procs[]` walk, every
+`kill`, every wait channel and every kernel stack already keys on a slot,
+and a second entity type would have had to be threaded through all of
+them.
+
+**WHAT FOLLOWS THE GROUP, AND WHAT FOLLOWS THE SLOT.** The group owns
+the address space, the fd table, the heap, the cwd, the parent link and
+the process group. The slot owns the kernel stack, the FP state, the
+trapframe, the signal disposition table and the thread pointer. The fd
+table needed no change at all: it is keyed by CR3 (`syscall_fd.c`), so
+sharing an address space shares the descriptors for free -- which is the
+best evidence that keying it that way was right.
+
+**THE PROCESS DIES AS A WHOLE.** `SYS_EXIT` from any thread, a fault in
+any thread, and `SYS_KILL` naming any tid all end every thread in the
+group -- POSIX's `exit_group`, and not a policy choice: there is one
+address space and the teardown destroys it, so a surviving thread would
+be resumed into unmapped memory. A tid is therefore not separately
+killable and `scheduler_kill()` redirects one to its leader; `tkill(2)`
+is the call that would be different, and there is none.
+
+**A THREAD IS NOT A CHILD.** Its `ppid` names its leader so `ps --tree`
+can nest it, and every walk over a process's children skips it --
+`scheduler_poll_any()`, `reparent_children()`, `scheduler_stop_report_any()`.
+`waitpid()` must never hand a process one of its own threads (Linux
+spells this `__WNOTHREAD`); `scheduler_thread_poll()` is how a thread is
+collected instead.
+
+**WHICH CALLS MEAN THE PROCESS.** `scheduler_current_pid()` is the
+THREAD and `scheduler_current_tgid()` is the PROCESS, and they were equal
+everywhere until this landed -- so every existing caller kept working and
+the ones that meant "which program is this" had to be moved over one at a
+time: a window's owner, a terminal's owner, a child's parent,
+`getpid()`, `setpgid(0, ...)`. The rule for a new caller is the question
+it is really asking. A window belongs to a program, so a second thread of
+it must find the same windows rather than a fresh, empty client.
+
+**THE STACK IS RING 3's.** `SYS_THREAD_CREATE` takes an entry point and a
+stack top and allocates nothing, which is `clone(2)`'s shape rather than
+`pthread_create()`'s. Everything with a malloc in it -- the stack, the
+TLS block, the return value, the descriptor -- is `userland/libc/pthread.c`.
+Two consequences are worth knowing before writing threaded code: a thread
+stack has **no guard page** (there is no `mprotect` to make one), and a
+**detached thread's stack is never reclaimed**, because nothing can
+safely free memory a dying thread is still standing on. Linux solves the
+second with `CLONE_CHILD_CLEARTID` and a futex wake.
+
+**SIGNAL DISPOSITIONS ARE PER THREAD HERE**, where POSIX makes them per
+process and only the MASK per thread. A new thread inherits a copy of its
+creator's table, so `signal(SIGINT, h)` before a `pthread_create()`
+behaves as POSIX describes; what differs is a `sigaction()` in one thread
+after the fact, which the others do not see. Sharing the table needs an
+indirection through the leader on every delivery path, and nothing here
+has wanted it yet.
+
+## THE THREAD POINTER IS FS.base, AND THE SCHEDULER RELOADS IT.
+
+`kernel/arch/x86_64/tls.c` writes the MSR; `switch_to()` calls it on
+every switch. It has to: `iretq` reloads CS and SS and leaves the hidden
+segment bases exactly as they were, so without this every thread would
+read the last-scheduled thread's `__thread` storage -- silently, since
+the addresses are all valid.
+
+**THE KERNEL OWNS ONE NUMBER AND RING 3 OWNS EVERYTHING BEHIND IT.**
+`SYS_SET_TLS` is `arch_prctl(ARCH_SET_FS)` with a name that says what it
+does; the layout is `userland/rt/tls.c`'s, built from symbols
+`userland/rt/link.ld` exports. That division is glibc's.
+
+**THE LEGACY LOADER HAS A THREAD POINTER TOO.** A process run by
+`elf_run.c` has no slot to keep one in, so it goes in the kernel
+context's own (`kernel_fs_base`, reloaded by `switch_to_kernel()`) -- the
+same two-owners-one-representation shape the heap and the cwd have.
+Refusing instead, which it did for one build, kills every ring-3 program
+in `crt0`: errno is a `__thread` variable now, so a program with no
+thread pointer faults on its first failing call.

@@ -57,10 +57,11 @@ of these changed it.
 - **`errno` EXISTS.** `abi/errno.h`, `sys_errno()`, `sys_strerror()`,
   and every wrapper whose failure value is `-1` sets it. What is missing
   is only the C spelling: `errno` as an lvalue macro.
-  **TLS is not a prerequisite for it.** With no threads, musl's own
-  `errno` is `*__errno_location()` over a global; TLS is a
-  stack-protector and future-threads item, and listing it under libc has
-  made it look like a blocker twice.
+  **TLS was not a prerequisite for it, and is now what it uses.** With
+  no threads, musl's own `errno` is `*__errno_location()` over a global,
+  and that is what shipped. Threads (2026-08-26) made the global wrong
+  rather than merely unfashionable, so it is `__thread` now and
+  `__errno_location()` returns this thread's.
 - **`string.h` and `mem*` are done**, as the C names over the shared
   `k_*` toolkit -- one implementation, not two (`userland/include/string.h`).
 - **`snprintf`/`vsnprintf` are done**, as kfmt's formatter. The
@@ -141,8 +142,17 @@ breaking that.
 
 Stated so it stays decided, and consistent with
 `docs/roadmap-details.md`'s existing list: no conformance or
-certification, no locales, no `wchar`, no pthreads, no `select`/`poll`,
-and no shared-file `mmap`.
+certification, no locales, no `wchar`, no `select`/`poll`, and no
+shared-file `mmap`.
+
+**`pthread.h` WAS ON THIS LIST AND ITS REASON EXPIRED**, the same way
+`signal.h`'s did below: there were no threads to build it on. There are
+now, so `<pthread.h>` exists -- create/join/detach/self/exit, attributes,
+mutexes, condition variables and `pthread_once`. What it deliberately
+does NOT have is listed in the header itself and is about the kernel
+underneath rather than about the library: no cancellation, no
+thread-specific data keys (`__thread` is the answer), no barriers or
+rwlocks, and a mutex that spins and yields because there is no futex.
 
 **`signal.h` WAS ON THIS LIST AND ITS REASON EXPIRED.** It said "that is
 `docs/signals-design.md`'s, and a libc that ships a `signal()` which

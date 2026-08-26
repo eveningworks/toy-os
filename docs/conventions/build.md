@@ -269,6 +269,23 @@ this the obvious way), not from how much history it accumulated.
   `USERLAND_CFLAGS`'s `-fno-tree-loop-distribute-patterns` is what stops
   a real `memcpy` recursing into itself through `k_memcpy` -- it LINKS
   and blows the stack at runtime.
+- **EVERY RING-3 PROGRAM CARRIES A TLS BLOCK, AND `crt0` INSTALLS IT
+  BEFORE `main()`.** `userland/rt/link.ld` places `.tdata`/`.tbss` and
+  exports the three numbers that describe them; `userland/rt/tls.c`
+  lays a block out and points `%fs` at its END, which is the x86-64
+  psABI's variant II -- a `__thread` variable lives at a NEGATIVE offset
+  from the thread pointer. `USERLAND_CFLAGS` carries
+  `-ftls-model=local-exec` so an access is a fixed `%fs:offset` and
+  nothing else; the other three models need a `__tls_get_addr()` and a
+  GOT that only a dynamic linker fills in.
+  **Two traps, both paid for.** The block must be
+  `align_up(memsz, the SEGMENT's alignment)` -- rounding to anything
+  else silently shifts every variable under the offsets that read it.
+  And **a linker symbol's address is data, which GCC does not believe**:
+  the address of a declared object cannot be null, so a loop bounded by
+  one is compiled bottom-tested and a size of 0 counts to 2^64. That was
+  a page fault in every ring-3 program; `linker_value()` launders the
+  number through an empty `asm` and costs no instruction.
 - **RING-3 CODE HAS A FRAME BUDGET, and a link-time bound on the
   image.** `USERLAND_CFLAGS` carries `-Wframe-larger-than=2048` and
   `userland/rt/link.ld` `ASSERT`s that the image stays below

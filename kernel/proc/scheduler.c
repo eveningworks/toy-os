@@ -109,6 +109,7 @@
 #include "fs.h"
 #include "gdt.h"
 #include "fpu.h"
+#include "tls.h"    // FS.base -- a thread pointer is per THREAD, see switch_to()
 #include "vga.h"
 #include "klog.h"
 #include "strace.h"
@@ -119,6 +120,12 @@
 #include "input.h"     // input_poll_sources() -- ditto, for a device with no IRQ
 #include "string.h" // k_strlcpy -- proc_name_from_path()
 #include <stddef.h>
+
+// The thread pointer belonging to the KERNEL CONTEXT -- which in
+// practice means a ring-3 process the legacy elf_run.c loader is
+// running, since ring 0 itself never reads %fs. See
+// scheduler_set_tls().
+static uint64_t kernel_fs_base;
 
 // Defined in idt.c; isr.asm's isr_common epilogue reloads rsp from this
 // immediately before popping registers and iretq'ing. isr_dispatch sets
@@ -234,7 +241,34 @@ struct sched_process {
     // Set once at spawn and changed only by reparent_children(), which
     // is not tidiness -- see its comment for the stale-pid bug it
     // exists to prevent.
+    //
+    // A THREAD'S PARENT IS ITS GROUP LEADER, and every walk over a
+    // process's children skips threads -- see `tgid` below.
     int ppid;
+
+    // --- threads: which group this slot belongs to -------------------
+    //
+    // The pid of the thread-group LEADER, which for an ordinary process
+    // is its own pid. `tgid != pid` IS the definition of "this slot is
+    // a thread", Linux's, and it is what every parent/child walk here
+    // filters on.
+    //
+    // What follows the GROUP: the address space, the fd table (keyed by
+    // CR3, so shared without anything being written here), the heap and
+    // the cwd -- both read through the leader's slot, never copied --
+    // the parent link, and the process group. What stays PER SLOT: the
+    // kernel stack, the FP state, the trapframe, the signal disposition
+    // table and the thread pointer below.
+    int tgid;
+
+    // FS.base for this thread: what %fs-relative addressing in ring 3
+    // resolves against, so a `__thread` variable has somewhere to live.
+    // Restored by switch_to(); 0 until SYS_SET_TLS names one.
+    uint64_t fs_base;
+
+    // Nobody will join this thread, so its exit frees the slot outright
+    // rather than leaving a zombie for a join that is not coming.
+    uint8_t detached;
 
     // --- signals (abi/signal_abi.h, kernel/signal.h) -----------------
     //
@@ -447,6 +481,26 @@ static volatile int alive_count = 0;
 // syscall.c depends on that through scheduler_current_pid(), and
 // conflating the two would change every M8-M15 exit path.
 static int rotation_pos = ROT_KERNEL;
+
+// --- thread groups ---------------------------------------------------
+//
+// A thread is a slot whose leader is somebody else. Everything a
+// PROCESS owns is read through the leader's slot, so there is one copy
+// of it however many threads share it -- which is the difference
+// between this and two processes that happen to share a page table.
+
+static int is_thread(int idx) {
+    return procs[idx].tgid != idx + 1;
+}
+
+// The slot holding what this group shares. Falls back to `idx` for a
+// group whose leader is already gone -- unreachable while a thread runs
+// (the group dies as a unit) and it keeps every caller here total.
+static int leader_index(int idx) {
+    int lead = procs[idx].tgid - 1;
+    if (lead < 0 || lead >= MAX_PROCS) return idx;
+    return lead;
+}
 
 static uint64_t kernel_stack_top(int idx) {
     return kstack_top(&kstacks[idx]);
@@ -711,6 +765,10 @@ static int find_next_runnable(int start) {
 static void switch_to(int idx) {
     kstack_verify(idx);   // before trusting anything else about this slot
     fpu_restore(procs[idx].fpu);
+    // The thread pointer, and it has to be here: iretq reloads CS and SS
+    // and leaves the hidden segment bases alone, so without this every
+    // thread would read the last-scheduled thread's `__thread` storage.
+    arch_set_fs_base(procs[idx].fs_base);
     g_next_kernel_rsp = procs[idx].kernel_rsp;
     vmm_switch_address_space(procs[idx].pml4_phys);
     gdt_set_kernel_stack(kernel_stack_top(idx));
@@ -727,6 +785,12 @@ static void switch_to(int idx) {
 static void switch_to_kernel(void) {
     current_index = -1;
     rotation_pos = ROT_KERNEL;
+    // The LEGACY loader's thread pointer -- the same
+    // two-owners-one-representation shape the heap and the cwd have
+    // (scheduler.h): a process run by elf_run.c has no slot to keep one
+    // in, and without this the last scheduled thread's %fs would still
+    // be loaded when it resumed.
+    arch_set_fs_base(kernel_fs_base);
     g_next_kernel_rsp = kernel_saved_rsp;
 }
 
@@ -840,6 +904,11 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
     fpu_init_state(procs[slot].fpu);
     procs[slot].wait_chan = 0;
     procs[slot].wait_reason = 0;
+    // A NEW PROCESS LEADS ITS OWN THREAD GROUP -- everything below this
+    // line is per-group state, and it has exactly one member.
+    procs[slot].tgid     = slot + 1;
+    procs[slot].fs_base  = 0;
+    procs[slot].detached = 0;
 
     // THE CHILD'S FILE DESCRIPTORS, built here because this is where
     // its address space first exists. It inherits the caller's whole
@@ -874,7 +943,7 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
     // The CALLER is the parent. 0 when the kernel context spawned this
     // -- scheduler_current_pid() returns 0 there, which is exactly the
     // "no parent" value, so this needs no special case.
-    procs[slot].ppid = scheduler_current_pid();
+    procs[slot].ppid = scheduler_current_tgid();
     // NOTHING IS PENDING AND NOTHING IS IGNORED for a fresh process --
     // reset rather than inherited, and both matter. A slot is reused, so
     // a leftover pending bit would kill the NEXT tenant on its first
@@ -950,6 +1019,7 @@ static uint32_t reported_wait_reason(int reason) {
     case SCHED_WAIT_TIMER: return PROC_WAIT_TIMER;
     case SCHED_WAIT_KEY:   return PROC_WAIT_KEY;
     case SCHED_WAIT_TTY:   return PROC_WAIT_TTY;
+    case SCHED_WAIT_THREAD: return PROC_WAIT_THREAD;
     default:               return PROC_WAIT_NONE;
     }
 }
@@ -973,6 +1043,7 @@ int scheduler_proc_info(int index, struct proc_info *out) {
     out->exit_code = 0;
     out->ppid = p->ppid;
     out->pgid = p->pgid;
+    out->tgid = 0;
     out->wait_reason = PROC_WAIT_NONE;
     out->ready = 0;
     out->name[0] = '\0';
@@ -981,6 +1052,7 @@ int scheduler_proc_info(int index, struct proc_info *out) {
 
     // pid is slot + 1 throughout this file -- 0 is "no process".
     out->pid = index + 1;
+    out->tgid = p->tgid;
     out->ready = p->ready ? 1u : 0u;
     out->cpu_ns = p->cpu_ns;
     out->exit_code = p->exit_code;
@@ -1322,6 +1394,7 @@ const char *sched_wait_reason_name(int reason) {
     case SCHED_WAIT_TIMER: return "timer";
     case SCHED_WAIT_KEY:   return "key";
     case SCHED_WAIT_TTY:   return "tty";
+    case SCHED_WAIT_THREAD: return "join";
     default:               return "?";
     }
 }
@@ -1476,15 +1549,51 @@ static void notify_parent(int ppid) {
     signal_send(ppid, SIGCHLD);
 }
 
+// Free a slot outright, keeping the live count honest whichever state
+// it was in. A ZOMBIE has already been subtracted.
+static void slot_release(int idx) {
+    if (procs[idx].state == SCHED_UNUSED) return;
+    if (procs[idx].state != SCHED_ZOMBIE) alive_count--;
+    procs[idx].state = SCHED_UNUSED;
+}
+
+// Every OTHER thread of `leader`'s group stops existing.
+//
+// Freed outright rather than zombied: a thread is not waitable by
+// anything outside its own process, so a corpse nobody can reap would
+// hold its slot for the rest of the boot. Their kernel stacks are
+// simply never resumed again -- the same thing scheduler_kill() does to
+// a process parked mid-syscall, and sound for the same reason: a
+// trapframe lives on its own slot's stack and nothing outside the slot
+// points at it.
+static void group_release_threads(int leader) {
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (i == leader) continue;
+        if (procs[i].state == SCHED_UNUSED) continue;
+        if (procs[i].tgid == leader + 1) slot_release(i);
+    }
+}
+
 void scheduler_on_exit(int code) {
     if (current_index < 0) return; // defensive; shouldn't happen
+
+    // A PROCESS EXITS AS A WHOLE, whichever of its threads called
+    // exit() -- POSIX's exit_group(), and not a choice: there is one
+    // address space and the cleanup below is about to destroy it, so a
+    // surviving thread would be resumed into unmapped memory.
+    //
+    // The status is reported on the LEADER's slot even when a thread is
+    // what exited, because the leader's pid is what the parent waited
+    // for. The calling thread's own slot is freed with its siblings'.
+    int leader = leader_index(current_index);
+    group_release_threads(leader);
 
     // SCHED_ZOMBIE, not SCHED_UNUSED -- see this file's comment on that
     // enum value. The slot (and its exit_code) stays held until whoever
     // spawned it calls scheduler_poll().
-    procs[current_index].state = SCHED_ZOMBIE;
-    procs[current_index].exit_code = code;
-    alive_count--;
+    if (procs[leader].state != SCHED_ZOMBIE) alive_count--;
+    procs[leader].state = SCHED_ZOMBIE;
+    procs[leader].exit_code = code;
 
     // Tell the window server to drop anything this client still owned.
     // Here rather than at reap: a zombie's windows must come off the
@@ -1492,11 +1601,11 @@ void scheduler_on_exit(int code) {
     // polling it -- otherwise a crashed client leaves a window that
     // draws stale pixels and answers no input. A no-op when no server
     // is registered, which is every non-GUI boot.
-    win_server_client_gone(current_index + 1);
+    win_server_client_gone(leader + 1);
 
     // Its children lose their parent before anything can reuse this
     // slot -- see reparent_children() for why that ordering matters.
-    reparent_children(current_index + 1);
+    reparent_children(leader + 1);
 
     // A parent blocked in SYS_WAITPID has to hear about this -- and
     // ONLY that parent. This used to wake every child-waiter in the
@@ -1504,7 +1613,7 @@ void scheduler_on_exit(int code) {
     // channel is the parent's slot, so an exit reaches exactly the
     // process that might care. The SIGCHLD beside it is for a parent
     // that is not waiting at all -- see notify_parent().
-    notify_parent(procs[current_index].ppid);
+    notify_parent(procs[leader].ppid);
 
     // The write end that turns a parent's blocking read into EOF is
     // closed by fd_release_all() now, along with every other
@@ -1527,8 +1636,207 @@ void scheduler_on_exit(int code) {
     switch_to(next);
 }
 
+// --- threads ---------------------------------------------------------
+//
+// A thread is an ordinary slot with somebody else's `tgid`. It gets its
+// own kernel stack, FP state, trapframe, signal table and thread
+// pointer; it shares its leader's address space, and through the
+// address space the fd table, because that is keyed by CR3 and never
+// learned about pids at all (syscall_fd.c).
+//
+// What this is NOT is fork(): there is no copy of anything. The new
+// thread starts at an address ring 3 named, on a stack ring 3
+// allocated, which is clone(CLONE_VM|CLONE_FILES)'s shape rather than
+// pthread_create()'s -- the library half lives in ring 3 where it
+// belongs (userland/libc/pthread.c).
+int scheduler_thread_create(uint64_t entry, uint64_t user_rsp, uint64_t arg,
+                             uint64_t fs_base, int detached) {
+    // The kernel context has no address space to share, and the legacy
+    // loader has no slot to lead a group -- both are "not a process".
+    if (current_index < 0) return -EPERM;
+    int caller = current_index;
+    int leader = leader_index(caller);
+
+    if (!entry || !user_rsp) return -EFAULT;
+    // THE STACK IS THE CALLER'S, so a bad pointer must fail HERE, where
+    // the caller can see -EFAULT, rather than as a page fault on the new
+    // thread's first push -- which would kill the whole process for a
+    // mistake one call made. Validating also faults the page in, which
+    // is what makes a freshly malloc'd stack usable: the heap is
+    // demand-paged, so the memory the caller "has" is not mapped yet.
+    if (!vmm_validate_user_range(procs[leader].pml4_phys, user_rsp - 64, 64))
+        return -EFAULT;
+
+    int slot = -1;
+    for (int i = 0; i < MAX_PROCS; i++)
+        if (procs[i].state == SCHED_UNUSED) { slot = i; break; }
+    if (slot < 0) return -EAGAIN;
+
+    // The same synthesized first trapframe a spawn builds, minus
+    // everything about loading an image: this thread's code is already
+    // mapped, because it is its creator's.
+    uint64_t *tf = (uint64_t *)(kernel_stack_top(slot) - TRAPFRAME_WORDS * 8);
+    for (int i = 0; i < TF_VECTOR; i++) tf[i] = 0;
+    tf[TF_RDI]     = arg;   // the SysV first argument: void *arg
+    tf[TF_VECTOR]  = 0;
+    tf[TF_ERRCODE] = 0;
+    tf[TF_RIP]     = entry;
+    tf[TF_CS]      = SEL_USER_CODE;
+    tf[TF_RFLAGS]  = 0x200; // IF set
+    // 16-ALIGNED, and this is the same trap crt0.asm documents: a
+    // function entered with RSP % 16 == 0 makes GCC emit movaps against
+    // stack slots it believes are aligned, and that faults rather than
+    // mis-storing. The entry point here is called, not returned into,
+    // so it wants the alignment a `call` would have left.
+    tf[TF_RSP]     = (user_rsp - 8) & ~15ull;
+    tf[TF_SS]      = SEL_USER_DATA;
+
+    procs[slot].pml4_phys  = procs[leader].pml4_phys; // SHARED, not created
+    procs[slot].kernel_rsp = (uint64_t)tf;
+    kstack_arm_slot(slot);
+    fpu_init_state(procs[slot].fpu);
+    procs[slot].wait_chan   = 0;
+    procs[slot].wait_reason = 0;
+    procs[slot].tgid     = leader + 1;
+    procs[slot].fs_base  = fs_base;
+    procs[slot].detached = detached ? 1 : 0;
+    // Its parent is its leader, which is what makes `ps --tree` show a
+    // thread under the process it belongs to. Every walk over a
+    // process's CHILDREN skips threads, so this is a display fact and
+    // never a wait() one.
+    procs[slot].ppid     = leader + 1;
+    procs[slot].pgid     = procs[leader].pgid;
+    signal_state_reset(slot);
+    // DISPOSITIONS ARE INHERITED, which is as close to POSIX's
+    // per-process disposition as a per-thread table gets: a thread
+    // created after signal(SIGINT, h) runs the same handler its creator
+    // would. `pending` is not inherited -- a signal raised before this
+    // thread existed was not raised at it.
+    for (int i = 0; i <= SIGNAL_MAX; i++)
+        procs[slot].actions[i] = procs[caller].actions[i];
+    procs[slot].ready   = 0;
+    procs[slot].cpu_ns  = 0;
+    k_strlcpy(procs[slot].name, procs[leader].name, sizeof procs[slot].name);
+    k_strlcpy(procs[slot].exec_path, procs[leader].exec_path,
+              sizeof procs[slot].exec_path);
+    // The heap and the cwd belong to the GROUP and are read through the
+    // leader (scheduler_current_mm/_cwd). Zeroed rather than copied, so
+    // a reader that forgets gets an obvious 0 instead of a second copy
+    // that drifts.
+    procs[slot].mm = (struct sched_mm){ 0, 0, 0 };
+    procs[slot].cwd.path[0] = '\0';
+    win_events_reset(slot + 1); // the previous tenant's, see spawn
+    procs[slot].state = SCHED_READY;
+    alive_count++;
+    return slot + 1;
+}
+
+// One THREAD ends; the process does not.
+//
+// The leader is the exception, and deliberately: pthread_exit() from
+// the initial thread would have to leave a zombie leader holding the
+// tgid while its siblings ran on, with nothing in this kernel able to
+// wait for that. It exits the PROCESS instead -- a divergence from
+// POSIX, where the process survives until the last thread leaves.
+void scheduler_on_thread_exit(int code) {
+    if (current_index < 0) return;
+    if (!is_thread(current_index)) { scheduler_on_exit(code); return; }
+
+    int me = current_index;
+    procs[me].exit_code = code;
+    if (procs[me].detached) {
+        slot_release(me);      // nobody is coming to reap it
+    } else {
+        procs[me].state = SCHED_ZOMBIE;
+        alive_count--;
+    }
+    // Whoever is joining. Harmless when nobody is: a wake with no
+    // waiter on the channel is a loop over the table finding nothing.
+    scheduler_wake(scheduler_wait_chan_pid(me + 1), SYS_RETRY);
+
+    bill_current();
+    current_index = -1;
+    int next = find_next_runnable(rotation_pos);
+    if (next == ROT_KERNEL) { switch_to_kernel(); return; }
+    switch_to(next);
+}
+
+// Reap `tid` if it is dead, and say so; otherwise say "not yet".
+//
+// A THREE-VALUED ANSWER rather than a blocking call, for the reason
+// every other wait here is shaped this way: the caller (proc_syscalls.c)
+// is what parks, because parking means writing the CALLER's trapframe
+// and only a syscall handler holds one.
+enum sched_poll_result scheduler_thread_poll(int tid, int *out_code) {
+    if (tid < 1 || tid > MAX_PROCS) return SCHED_POLL_INVALID;
+    if (current_index < 0) return SCHED_POLL_INVALID;
+    int slot = tid - 1;
+    // ONLY WITHIN ONE PROCESS. A tid is a slot index like any other, so
+    // without this a program could join another program's thread and
+    // free its slot.
+    if (procs[slot].state == SCHED_UNUSED) return SCHED_POLL_INVALID;
+    if (procs[slot].tgid != procs[current_index].tgid) return SCHED_POLL_INVALID;
+    if (slot == current_index) return SCHED_POLL_INVALID; // joining itself
+    if (!is_thread(slot)) return SCHED_POLL_INVALID;      // the leader is not joinable
+    if (procs[slot].detached) return SCHED_POLL_INVALID;  // and neither is a detached one
+
+    if (procs[slot].state == SCHED_ZOMBIE) {
+        if (out_code) *out_code = procs[slot].exit_code;
+        procs[slot].state = SCHED_UNUSED; // reaped -- see scheduler_poll()
+        return SCHED_POLL_EXITED;
+    }
+    return SCHED_POLL_RUNNING;
+}
+
+// Nobody will join `tid`, so let its exit free the slot. Applied to a
+// thread that has ALREADY exited, this reaps it -- which is what makes
+// detach-after-the-fact safe rather than a leak.
+int scheduler_thread_detach(int tid) {
+    if (tid < 1 || tid > MAX_PROCS) return -EINVAL;
+    if (current_index < 0) return -EPERM;
+    int slot = tid - 1;
+    if (procs[slot].state == SCHED_UNUSED) return -ESRCH;
+    if (procs[slot].tgid != procs[current_index].tgid) return -ESRCH;
+    if (!is_thread(slot)) return -EINVAL;
+    if (procs[slot].detached) return -EINVAL;
+
+    procs[slot].detached = 1;
+    if (procs[slot].state == SCHED_ZOMBIE) procs[slot].state = SCHED_UNUSED;
+    return 0;
+}
+
+// The thread pointer this thread's %fs resolves against. Ring 3 owns
+// the layout behind it entirely (userland/rt/tls.c); the kernel only
+// remembers the number and reloads it on every switch.
+int scheduler_set_tls(uint64_t base) {
+    // A ring-3 process the LEGACY loader is running has no slot, and it
+    // still needs a thread pointer -- every program does, since errno
+    // is a `__thread` variable now. It goes in the kernel context's own
+    // slot, which switch_to_kernel() reloads.
+    if (current_index < 0) kernel_fs_base = base;
+    else                   procs[current_index].fs_base = base;
+    arch_set_fs_base(base); // whoever asked is running -- take effect now
+    return 0;
+}
+
 int scheduler_current_pid(void) {
     return current_index < 0 ? 0 : current_index + 1;
+}
+
+// The PROCESS on the CPU, where scheduler_current_pid() is the THREAD.
+// Equal for everything that is not a thread, which is why every caller
+// that predates threads kept working -- and why the ones that mean "the
+// process" (a window's owner, a terminal's owner, a child's parent,
+// getpid) had to be moved over one at a time rather than in bulk.
+int scheduler_current_tgid(void) {
+    if (current_index < 0) return 0;
+    return procs[current_index].tgid;
+}
+
+int scheduler_tgid(int pid) {
+    if (pid < 1 || pid > MAX_PROCS) return 0;
+    if (procs[pid - 1].state == SCHED_UNUSED) return 0;
+    return procs[pid - 1].tgid;
 }
 
 int scheduler_exec_path(int pid, char *out, unsigned cap) {
@@ -1546,7 +1854,10 @@ struct sched_mm *scheduler_current_mm(void) {
     // the legacy elf_run.c process -- not "this process has no heap".
     // Every slot gets one at creation.
     if (current_index < 0) return 0;
-    return &procs[current_index].mm;
+    // THE LEADER'S, not this slot's: threads share one heap because they
+    // share one address space, and a per-thread copy of `brk` would let
+    // two sbrk()s hand out the same page.
+    return &procs[leader_index(current_index)].mm;
 }
 
 // The KERNEL CONTEXT's own directory -- the legacy elf_run.c loader and
@@ -1571,7 +1882,9 @@ struct sched_cwd *scheduler_current_cwd(void) {
     // Same NULL convention as scheduler_current_mm(): "the kernel
     // context is running", i.e. the legacy loader's slot applies.
     if (current_index < 0) return 0;
-    return &procs[current_index].cwd;
+    // The leader's, for scheduler_current_mm()'s reason: `cd` in one
+    // thread moves the whole process, which is what chdir() means.
+    return &procs[leader_index(current_index)].cwd;
 }
 
 // The memory map behind a given address space. Walks the table because the
@@ -1582,6 +1895,11 @@ struct sched_mm *scheduler_mm_for_pml4(uint64_t pml4_phys) {
     if (!pml4_phys) return 0;
     for (int i = 0; i < MAX_PROCS; i++) {
         if (procs[i].state == SCHED_UNUSED || procs[i].state == SCHED_ZOMBIE) continue;
+        // Threads share their leader's address space, so every one of
+        // them would match -- and the first match must be the one slot
+        // that owns the heap, or a growth fault in a thread would move
+        // a `brk` nothing else reads.
+        if (is_thread(i)) continue;
         if (procs[i].pml4_phys == pml4_phys) return &procs[i].mm;
     }
     return 0;
@@ -1659,6 +1977,11 @@ static void reparent_children(int dead_pid) {
     if (dead_pid <= 0) return;
     int heir = (g_init_pid != dead_pid) ? g_init_pid : 0;
     for (int i = 0; i < MAX_PROCS; i++) {
+        // A THREAD IS NOT A CHILD. Its ppid names its leader for
+        // display only, and by the time a leader dies its threads are
+        // already gone -- adopting one out to init would hand init a
+        // slot it can never reap.
+        if (is_thread(i)) continue;
         if (procs[i].state != SCHED_UNUSED && procs[i].ppid == dead_pid) {
             procs[i].ppid = heir;
         }
@@ -1706,6 +2029,11 @@ enum sched_poll_result scheduler_poll_any(int parent_pid, int *out_pid,
     int any_children = 0;
     for (int i = 0; i < MAX_PROCS; i++) {
         if (procs[i].state == SCHED_UNUSED) continue;
+        // A thread is not a child: wait() must never hand a process one
+        // of its own threads, which is the rule Linux spells
+        // __WNOTHREAD. scheduler_thread_poll() is how a thread is
+        // collected.
+        if (is_thread(i)) continue;
         if (procs[i].ppid != parent_pid) continue;
         any_children = 1;
         if (procs[i].state == SCHED_ZOMBIE) {
@@ -1930,6 +2258,7 @@ int scheduler_stop_report(int pid) {
 int scheduler_stop_report_any(int parent_pid, int *out_pid) {
     if (parent_pid < 1) return 0;
     for (int i = 0; i < MAX_PROCS; i++) {
+        if (is_thread(i)) continue; // not a child -- see scheduler_poll_any()
         if (procs[i].ppid != parent_pid) continue;
         int sig = scheduler_stop_report(i + 1);
         if (sig) {
@@ -1997,6 +2326,15 @@ int scheduler_kill(int pid, int exit_code) {
     if (pid < 1 || pid > MAX_PROCS) return 0;
     int slot = pid - 1;
 
+    // A TID IS NOT SEPARATELY KILLABLE: the cleanup below destroys an
+    // address space, and a thread's is its siblings'. Naming a thread
+    // kills the process it belongs to, which is what kill(2) means and
+    // what tkill(2) exists separately for.
+    if (procs[slot].state != SCHED_UNUSED && is_thread(slot)) {
+        slot = procs[slot].tgid - 1;
+        pid  = slot + 1;
+    }
+
     // Killing the CURRENT process would have to switch away and never
     // come back, which is scheduler_on_exit()'s job and reached through
     // SYS_EXIT. Refused rather than half-implemented: the caller here is
@@ -2019,6 +2357,9 @@ int scheduler_kill(int pid, int exit_code) {
     // cleared here so the zombie it becomes does not report as stopped.
     procs[slot].stopped       = 0;
     procs[slot].stop_reported = 0;
+
+    // Its threads go with it, for scheduler_on_exit()'s reason.
+    group_release_threads(slot);
 
     procs[slot].state = SCHED_ZOMBIE;
     procs[slot].exit_code = exit_code;

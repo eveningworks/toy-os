@@ -81,6 +81,88 @@ int sys_exit(struct syscall_ctx *c) {
     return 0;
 }
 
+// --- threads ---------------------------------------------------------
+//
+// The kernel half is deliberately four small calls: create a thread on
+// a stack ring 3 supplies, end one, collect one, and forget one. The
+// library on top of them -- pthread_t, return values, destructors,
+// stack allocation -- is userland/libc/pthread.c, because none of it
+// needs a privilege the kernel has and all of it needs a malloc.
+
+int sys_thread_create(struct syscall_ctx *c) {
+    struct thread_create_msg msg;
+    if (!vmm_copy_from_user(c->pml4, &msg, c->a0, sizeof msg)) {
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+    if (msg.reserved != 0) { // an unset field is the only legal value
+        c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+        return 0;
+    }
+    int64_t rc = scheduler_thread_create(msg.entry, msg.stack_top, msg.arg,
+                                          msg.tls, msg.detached);
+    c->regs[14] = (uint64_t)rc;
+    return 0;
+}
+
+int sys_thread_exit(struct syscall_ctx *c) {
+    int code = (int)c->a0;
+    // NO syscall_process_exit_cleanup() HERE, and that is the whole
+    // difference from sys_exit(): the address space, the fd table and
+    // the window state belong to the PROCESS, and its other threads are
+    // still using every one of them. A thread that tore them down would
+    // leave its siblings running with no memory.
+    //
+    // Called from the group leader this exits the process instead, and
+    // that path does need the cleanup -- so it goes through sys_exit()'s
+    // code rather than around it.
+    if (scheduler_current_pid() && scheduler_current_tgid() != scheduler_current_pid()) {
+        scheduler_on_thread_exit(code);
+        return 0;
+    }
+    return sys_exit(c);
+}
+
+int sys_thread_join(struct syscall_ctx *c) {
+    int tid = (int)c->a0;
+    int code = 0;
+    enum sched_poll_result r = scheduler_thread_poll(tid, &code);
+    if (r == SCHED_POLL_EXITED) {
+        c->regs[14] = (uint64_t)(int64_t)code;
+        return 0;
+    }
+    if (r == SCHED_POLL_INVALID) {
+        c->regs[14] = (uint64_t)(int64_t)-ESRCH;
+        return 0;
+    }
+    // Still running: park on the thread being joined. Interrupts are
+    // off for the whole handler, so "still running" and "park" are
+    // atomic against the exit that would wake us -- the same
+    // lost-wakeup argument SYS_WAITPID makes.
+    if (!scheduler_block_current(c->regs, scheduler_wait_chan_pid(tid),
+                                  SCHED_WAIT_THREAD)) {
+        c->regs[14] = (uint64_t)(int64_t)-EPERM; // nowhere to park
+        return 0;
+    }
+    return 1; // parked -- the wake writes SYS_RETRY and ring 3 asks again
+}
+
+int sys_thread_detach(struct syscall_ctx *c) {
+    c->regs[14] = (uint64_t)(int64_t)scheduler_thread_detach((int)c->a0);
+    return 0;
+}
+
+int sys_gettid(struct syscall_ctx *c) {
+    int tid = scheduler_current_pid();
+    c->regs[14] = (uint64_t)(int64_t)(tid > 0 ? tid : -1);
+    return 0;
+}
+
+int sys_set_tls(struct syscall_ctx *c) {
+    c->regs[14] = (uint64_t)(int64_t)scheduler_set_tls(c->a0);
+    return 0;
+}
+
 int sys_sbrk(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
     uint64_t inc = c->a0;
@@ -302,11 +384,15 @@ int sys_yield(struct syscall_ctx *c) {
 }
 
 int sys_getpid(struct syscall_ctx *c) {
-    // scheduler_current_pid() answers 0 for the kernel context and for
+    // THE PROCESS, not the thread: every thread of one program answers
+    // the same pid, which is what getpid() means and what SYS_GETTID is
+    // for when a caller wants them told apart.
+    //
+    // scheduler_current_tgid() answers 0 for the kernel context and for
     // the legacy loader's unscheduled path. Reported as -1 rather than
     // passed through, because 0 is not a pid a caller can do anything
     // with and -1 is the value every other "no answer" here uses.
-    int pid = scheduler_current_pid();
+    int pid = scheduler_current_tgid();
     c->regs[14] = (uint64_t)(int64_t)(pid > 0 ? pid : -1);
     return 0;
 }
@@ -540,7 +626,7 @@ int sys_waitpid(struct syscall_ctx *c) {
     if (!bad && (c->a2 & SYS_WUNTRACED)) {
         int stopped_pid = pid, sig = 0;
         if (pid == -1)
-            sig = scheduler_stop_report_any(scheduler_current_pid(), &stopped_pid);
+            sig = scheduler_stop_report_any(scheduler_current_tgid(), &stopped_pid);
         else if (scheduler_pid_valid(pid))
             sig = scheduler_stop_report(pid);
         if (sig) {
@@ -554,7 +640,7 @@ int sys_waitpid(struct syscall_ctx *c) {
     if (!bad && pid == -1) {
         int child = 0, code = 0;
         enum sched_poll_result r =
-            scheduler_poll_any(scheduler_current_pid(), &child, &code);
+            scheduler_poll_any(scheduler_current_tgid(), &child, &code);
         if (r == SCHED_POLL_EXITED) {
             if (out) vmm_copy_to_user(pml4, out, &code, sizeof code);
             c->regs[14] = (uint64_t)(int64_t)child;
@@ -567,7 +653,7 @@ int sys_waitpid(struct syscall_ctx *c) {
             c->regs[14] = (uint64_t)(int64_t)-ECHILD;
         } else if (c->a2 & SYS_WNOHANG) {
             c->regs[14] = (uint64_t)(int64_t)SYS_RETRY;
-        } else if (!scheduler_block_current(c->regs, scheduler_wait_chan_pid(scheduler_current_pid()), SCHED_WAIT_CHILD)) {
+        } else if (!scheduler_block_current(c->regs, scheduler_wait_chan_pid(scheduler_current_tgid()), SCHED_WAIT_CHILD)) {
             c->regs[14] = (uint64_t)(int64_t)-EPERM; // nowhere to park -- not a scheduled process
         } else {
             return 1; // parked -- the wake writes the return value
@@ -600,7 +686,7 @@ int sys_waitpid(struct syscall_ctx *c) {
             // handler, so "still running" and "park" are atomic
             // against the exit that would wake us -- the same
             // lost-wakeup argument as SYS_WAIT_EVENT.
-            if (!scheduler_block_current(c->regs, scheduler_wait_chan_pid(scheduler_current_pid()), SCHED_WAIT_CHILD)) {
+            if (!scheduler_block_current(c->regs, scheduler_wait_chan_pid(scheduler_current_tgid()), SCHED_WAIT_CHILD)) {
                 c->regs[14] = (uint64_t)(int64_t)-EPERM; // nowhere to park
             } else {
                 return 1;

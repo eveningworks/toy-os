@@ -105,8 +105,14 @@ static void print_row(const struct proc_info *p, int depth) {
     for (int i = 0; i < n; i++) indent[i] = ' ';
     indent[n] = '\0';
 
-    snprintf(line, sizeof line, "%5s %5s %5s %-12s %8s %8s  %s%s\n",
-             pid, ppid, pgid, state, cpu, mem, indent, p->name);
+    // A THREAD IS NAMED IN BRACES, because it has no name of its own:
+    // it carries its leader's, so `tosh` twice in a listing would look
+    // like two shells rather than one with a thread. `htop` colours
+    // them instead, which a text column cannot.
+    snprintf(line, sizeof line, "%5s %5s %5s %-12s %8s %8s  %s%s%s%s\n",
+             pid, ppid, pgid, state, cpu, mem, indent,
+             p->tgid == p->pid ? "" : "{", p->name,
+             p->tgid == p->pid ? "" : "}");
     put(line);
 }
 
@@ -126,12 +132,17 @@ static void header(void) {
 // walk because --tree has to look at every row before drawing any of
 // them, and because a table that changes under a walk would otherwise
 // print a child above the parent it names.
-static int snapshot(struct proc_info *out, int cap) {
+static int snapshot(struct proc_info *out, int cap, int with_threads) {
     int n = 0;
     struct proc_info info;
     for (int i = 0; i < SYS_PROC_MAX && n < cap; i++) {
         if (!sys_proc_info(i, &info)) continue;
         if (info.pid == 0) continue; // empty slot -- skip, never stop
+        // HIDDEN BY DEFAULT, as in every Unix ps: a program's threads
+        // are an implementation detail of that program, and a listing
+        // that shows six of them where a person expects one process is
+        // a worse default than one that needs a flag.
+        if (!with_threads && info.tgid != info.pid) continue;
         out[n++] = info;
     }
     return n;
@@ -153,18 +164,20 @@ static void print_tree(struct proc_info *procs, int n, int parent, int depth) {
 }
 
 int main(int argc, char **argv) {
-    int tree = 0;
+    int tree = 0, threads = 0;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--tree") == 0 || strcmp(argv[i], "-t") == 0) {
             tree = 1;
+        } else if (strcmp(argv[i], "--threads") == 0 || strcmp(argv[i], "-T") == 0) {
+            threads = 1;
         } else {
-            put("usage: ps [--tree]\n");
+            put("usage: ps [--tree] [--threads]\n");
             return 1;
         }
     }
 
     static struct proc_info procs[SYS_PROC_MAX];
-    int n = snapshot(procs, SYS_PROC_MAX);
+    int n = snapshot(procs, SYS_PROC_MAX, threads);
 
     header();
     if (!tree) {

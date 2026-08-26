@@ -30,6 +30,7 @@ the FILENAME is for tools.
 | `fcntl.c` | `open()`'s variadic mode argument, accepted and discarded |
 | `getopt.c` | POSIX option parsing -- stops at the first operand |
 | `strings.c` | `strncasecmp`, `bzero`, `bcopy` |
+| `pthread.c` | threads: the stack, the TLS block and the return value |
 | `dirent.c`, `assert.c`, `cmem.c`, `heap_os.c`, `setjmp.S` | the rest |
 
 **The last six are the POSIX half, and none of them adds a syscall.**
@@ -66,11 +67,10 @@ and each says so in its header:
 - **`fork`/`exec`** -- toy-os's process model is `posix_spawn`-shaped on
   purpose (`docs/init-design.md`). A `fork()` here would be a lie about
   the kernel, not a convenience.
-- **`signal`/`raise`** -- `docs/signals-design.md` is designed and not
-  built; a `signal()` that could never deliver anything is worse than
-  its absence.
-- **threads, locales, wide characters** -- listed as deliberately not
-  pursued in `docs/roadmap-details.md`.
+- **locales and wide characters** -- listed as deliberately not pursued
+  in `docs/roadmap-details.md`. **Threads came off this list**
+  (2026-08-26): `<pthread.h>` is here now, over the kernel's four thread
+  syscalls, and what it still lacks is named in its own header.
 - **the `float` forms (`sinf`, `powf`) and `long double`** -- ordinary
   omissions, and the only ones on this list that are just work.
 

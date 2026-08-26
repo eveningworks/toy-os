@@ -243,8 +243,12 @@ everything libc-shaped is waiting on it. Full plan and staging:
 - [ ] `g_next_kernel_rsp` reentrancy fixed properly
 - [ ] `wintest` made non-modal
 - [ ] Kernel threads (a scheduler entity without an address space of its own)
-- [ ] User threads (a second thread of execution sharing one address space)
-- [ ] Thread-local storage (FS.base) -- what a per-thread `errno` needs, and GCC's default stack-protector guard; NOT a libc prerequisite
+- [x] ~~User threads (a second thread sharing one address space)~~ DONE 2026-08-26 -- a slot whose `tgid` names another
+- [x] ~~Thread-local storage (FS.base)~~ DONE 2026-08-26 -- `__thread` in ring 3, a per-thread errno, reloaded on every switch
+- [ ] A futex, so a mutex can BLOCK -- today's spins and yields, and a detached thread's stack needs one to be reclaimable
+- [ ] A thread stack with a guard page, which needs an `mprotect`-shaped syscall
+- [ ] Signal dispositions shared by a thread group, as POSIX has them -- per thread here, inherited at create
+- [ ] GCC's default (`%fs:0x28`) stack-protector guard in ring 3, now that TLS exists
 - [ ] `mmap`-style anonymous memory for userspace
 - [ ] Time syscalls (a monotonic clock and wall-clock read)
 - [ ] A consistent `errno`-style error convention
@@ -710,6 +714,9 @@ run on, not by order.
 - [ ] CI booting both, or the second path rots
 
 ### SMP
+
+Staged in `docs/smp-design.md`, including the case AGAINST and the
+measurement of what is single-core in the tree today.
 
 - [ ] Discover other cores via MADT
 - [ ] Bring up application processors (INIT-SIPI-SIPI)

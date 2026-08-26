@@ -65,6 +65,7 @@
 #define PROC_WAIT_TTY    6 // a terminal's output side -- a pty master
                            // waiting for its shell to print, or a shell
                            // waiting for a master that has fallen behind
+#define PROC_WAIT_THREAD 7 // a thread of the same process, being joined
 
 struct proc_info {
     int32_t  pid;         // 0 means "this slot is empty"; see SYS_PROC_INFO
@@ -118,6 +119,15 @@ struct proc_info {
     // sampled at the spawn -- and this project's bar for a field is a
     // second real caller.
     uint32_t ready;
+    // The THREAD GROUP this slot belongs to: the pid of its leader,
+    // which for an ordinary process is its own pid. `tgid != pid` is
+    // what makes a slot a thread rather than a process, and it is the
+    // only way a reader can tell -- everything else about a thread
+    // (name, ppid, memory) is deliberately its leader's.
+    //
+    // Free: it lands in the tail padding `ready` left behind, so every
+    // offset and the size are unchanged.
+    int32_t  tgid;
 };
 
 // `wait_reason` went into the hole after `name`; `ready` then grew the

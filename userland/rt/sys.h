@@ -153,6 +153,61 @@ int     sys_fstat(int fd, struct sys_stat *out);
 // what clock() needs to read its own cpu_ns.
 int     sys_getpid(void);
 
+// --- thread-local storage (userland/rt/tls.c) ------------------------
+//
+// How big one thread's TLS block is, and how to build one in memory the
+// caller supplies. <pthread.h> is the only caller: a program gets TLS by
+// declaring a `__thread` variable, and crt0 has already installed the
+// initial thread's block before main() runs.
+
+// Bytes rt_tls_install() needs, block plus TCB.
+uint64_t rt_tls_size(void);
+
+// Lay a thread's TLS out in `mem` (at least rt_tls_size() bytes,
+// 16-byte aligned) and return the THREAD POINTER to hand to
+// sys_thread_create(). Does not install it -- the block belongs to a
+// thread that does not exist yet.
+void    *rt_tls_install(void *mem);
+
+// --- threads ---------------------------------------------------------
+//
+// The raw calls. <pthread.h> is the interface a program should use;
+// these are what it is built out of, and what a program that wants a
+// thread without a pthread_t can call directly.
+//
+// **A THREAD SHARES EVERYTHING EXCEPT ITS STACK AND ITS TLS.** Same
+// memory, same descriptors, same cwd, same pid -- sys_getpid() answers
+// the same value in every thread of a program, and sys_gettid() is what
+// tells them apart.
+
+// This THREAD's id, where sys_getpid() is its process's. Equal in a
+// program that never creates one.
+int     sys_gettid(void);
+
+// Start `entry(arg)` on a stack whose TOP is `stack_top` -- the CALLER
+// allocates it, and the kernel never grows it, so it is a fixed extent
+// like every pthread stack. `tls` is the new thread's thread pointer
+// (NULL for none); `detached` non-zero means nobody will join it.
+// Returns the new tid, or -1 with sys_errno() set.
+int     sys_thread_create(void (*entry)(void *), void *stack_top, void *arg,
+                          void *tls, int detached);
+
+// End the calling thread. From a program's INITIAL thread this exits
+// the process instead -- see SYS_THREAD_EXIT in abi/syscall_abi.h.
+// Does not return.
+void    sys_thread_exit(int code);
+
+// Block until `tid` exits and return its exit code, or -1 with
+// sys_errno() set when it is not a joinable thread of this process.
+int     sys_thread_join(int tid);
+
+// Say nobody will join `tid`, so its exit frees its slot. 0, or -1.
+int     sys_thread_detach(int tid);
+
+// Point this thread's %fs at `base`. userland/rt/tls.c owns the layout
+// behind it; a program should not call this directly.
+int     sys_set_tls(void *base);
+
 // Announce that this process has finished starting up -- see
 // SYS_NOTIFY_READY in abi/syscall_abi.h. Returns 0, or -1 for a caller
 // with no scheduler slot.

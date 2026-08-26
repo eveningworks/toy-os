@@ -569,6 +569,8 @@ whenever a headline here tells you something you did not already know.
 - **A PROCESS GROUP IS AN INT, AND SPAWN TAKES IT.**
 - **THE CONSOLE HAS AN OWNER AND A FOREGROUND GROUP, AND THE INTR KEY IS TEMPORARY WHERE IT IS.**
 - **A TRACER NAMES ITS CHILD AT THE SPAWN, AND THE TRACE GOES TO ITS TERMINAL.** -- `SPAWN_TRACE` on `SYS_SPAWN`, an unknown spawn flag is `-EINVAL`, and the sink is the tracer's fd 1 (fd 2 here is the KERNEL LOG, not a second terminal stream).
+- **A THREAD IS A SLOT WHOSE `tgid` NAMES SOMEBODY ELSE** -- Linux's shape, not NT's: no thread object, no second scheduler entity. The GROUP owns the address space, the fd table (keyed by CR3, so shared for free), the heap, the cwd, the parent link and the process group; the SLOT owns the kernel stack, FP state, trapframe, signal dispositions and thread pointer. **The process dies as a whole** (`exit_group`; a tid is not separately killable), **a thread is not a child** (`waitpid` never returns one), and **the stack is RING 3's** -- `SYS_THREAD_CREATE` allocates nothing, so a thread stack has no guard page and a DETACHED thread's stack is never reclaimed. `scheduler_current_pid()` is the THREAD; `scheduler_current_tgid()` is the PROCESS, and a caller has to know which it means.
+- **THE THREAD POINTER IS FS.base, AND THE SCHEDULER RELOADS IT** -- `iretq` leaves the hidden segment bases alone, so without a reload on every switch every thread reads the last-scheduled thread's `__thread` storage, silently. The kernel owns ONE number (`SYS_SET_TLS`, `arch_prctl(ARCH_SET_FS)`'s job); the layout behind it is `userland/rt/tls.c`'s. The LEGACY loader has one too, in the kernel context's own slot -- refusing there kills every ring-3 program in `crt0`, because errno is `__thread` now.
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
 
 ### GUI, Toykit and the desktop
@@ -754,6 +756,7 @@ whenever a headline here tells you something you did not already know.
 - **THE POSIX HALF OF `tolibc` IS HEADERS OVER SYSCALLS THAT ALREADY EXIST** -- `<signal.h>`, `<sys/wait.h>`, `<termios.h>`, `<fcntl.h>`, `<strings.h>`, `getopt()`; the kernel-facing action struct is `struct k_sigaction` and POSIX's is converted at the call (glibc's split), and anything that cannot be honoured is REFUSED rather than ignored (a non-empty `sa_mask` is `EINVAL`; `VMIN`/`VTIME` are undefined on purpose).
 - **`userland/` is split by ROLE, and the build derives things from it -- adding a program is a `.c` file and nothing else.**
 - **In ring 3 the toolkit is reachable under the C names -- don't hand-roll a `my_strlen` or a digit loop there either.**
+- **EVERY RING-3 PROGRAM CARRIES A TLS BLOCK, AND `crt0` INSTALLS IT BEFORE `main()`** -- `.tdata`/`.tbss` from `userland/rt/link.ld`, laid out by `userland/rt/tls.c` with `%fs` pointing at the block's END (the psABI's variant II, so a `__thread` variable is at a NEGATIVE offset). `-ftls-model=local-exec`, because every other model wants a dynamic linker. Two traps: the block must be rounded to the SEGMENT's alignment, not a convenient one; and **a linker symbol's address is data GCC does not believe is data** -- a loop bounded by one is compiled bottom-tested, so a size of 0 counts to 2^64 (a page fault in every ring-3 program until `linker_value()` laundered it).
 - **RING-3 CODE HAS A FRAME BUDGET, and a link-time bound on the image.**
 - **Every ring-3 program is just a `main()`.**
 - **`linker.ld` decides kernel memory PERMISSIONS, not just placement.**
@@ -1495,6 +1498,16 @@ detail there, and keep the pointer here to a line. What each file is:
   point is that those are one problem, and that building signal delivery
   alone yields a working `kill -TERM` and a `Ctrl-C` that still does
   nothing.
+- **`docs/smp-design.md`** -- more than one core: ACPI/MADT, the Local
+  APIC, bringing up application processors, a real spinlock and ONE
+  kernel lock first (Linux 2.0's move), then splitting it in measured
+  order. Designed, not built. **Read it before adding a module-level
+  buffer to anything a syscall reaches**, and note the two findings that
+  change the scoping: the RSDP is already in hand (a multiboot2 tag
+  `multiboot.c` already walks, so no AML interpreter is needed), and the
+  BKL is the thing that makes SMP shippable before the locking audit is
+  done. It carries the measurement of what is single-core in the tree
+  today, and the honest case AGAINST.
 - **`docs/rootfs-design.md`** -- what the root filesystem is allowed to
   be: a PARTITION on a drive, or RAM. Designed, not built. **Read it
   before touching `fs_init()`'s mount policy or adding a backend**, and

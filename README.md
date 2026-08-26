@@ -58,8 +58,9 @@ QEMU, and it does not stop at "hello world from the kernel":
   adopts orphans and **supervises services** described by files in
   `/etc/services.d` (the desktop is one, restarted if it dies), a process
   tree with pipes and `spawn`/`waitpid`, **signals and job control**
-  (`Ctrl-C`, `Ctrl-Z`, `jobs`/`fg`/`bg`, `&`), and per-process FPU state
-  across context switches.
+  (`Ctrl-C`, `Ctrl-Z`, `jobs`/`fg`/`bg`, `&`), **threads** sharing one
+  address space with `<pthread.h>` and real thread-local storage, and
+  per-process FPU state across context switches.
 - **A real terminal layer** — a terminal is an object with a line
   discipline, a `termios`, an owner and a foreground process group, so
   the physical console and a Terminal window are two clients of one
@@ -669,6 +670,7 @@ Selected tools, each documented in its own docstring:
 | [docs/query-design.md](docs/query-design.md) | How kernel state reaches ring 3, and why it is not `/proc`: `SYS_QUERY`, a self-describing registry, and a provider per fact. |
 | [docs/libc-design.md](docs/libc-design.md) | `tolibc`, the C library — what it covers, and why its bar for adding a function is the opposite of the rest of the project. |
 | [docs/commands.md](docs/commands.md) | The command index; [docs/commands/](docs/commands/) has one page each. |
+| [docs/smp-design.md](docs/smp-design.md) | More than one core, staged — ACPI/MADT, the Local APIC, application processors, one kernel lock first and then splitting it. Designed, not built, with the case against. |
 | [docs/signals-design.md](docs/signals-design.md) | Signals, a foreground process, and what `Ctrl-C` needs. Every stage is built — delivery, dispositions, job control, and ring-3 handlers with a `SA_RESTORER` from userland. |
 | [docs/tty-design.md](docs/tty-design.md) | The TTY layer: a terminal as an object, pseudo-terminals, and one implementation of `Ctrl-C` and `Ctrl-Z` for the console and a window alike. Stages 1–3 built; virtual terminals are what remain. |
 | [docs/boot-flags.md](docs/boot-flags.md) | Every word the kernel looks for on the GRUB command line. |
