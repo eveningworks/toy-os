@@ -26,6 +26,7 @@
 #define VIRTIO_BLK_T_IN    0   // read
 #define VIRTIO_BLK_T_OUT   1   // write
 #define VIRTIO_BLK_T_FLUSH 4
+#define VIRTIO_BLK_T_DISCARD 11
 
 #define VIRTIO_BLK_S_OK     0
 #define VIRTIO_BLK_S_IOERR  1
@@ -39,6 +40,23 @@
 #define VIRTIO_BLK_F_SEG_MAX  (1ull << 2)
 #define VIRTIO_BLK_F_RO       (1ull << 5)
 #define VIRTIO_BLK_F_FLUSH    (1ull << 9)
+#define VIRTIO_BLK_F_DISCARD  (1ull << 13)
+
+// The discard half of the config block (spec 5.2.4). Only meaningful
+// once VIRTIO_BLK_F_DISCARD is negotiated; reading them otherwise is
+// reading whatever the device left there.
+#define VIRTIO_BLK_CFG_MAX_DISCARD_SECTORS 0x24
+#define VIRTIO_BLK_CFG_MAX_DISCARD_SEG     0x28
+#define VIRTIO_BLK_CFG_DISCARD_ALIGNMENT   0x2C
+
+// One discard SEGMENT. The device READS this, exactly like a write's
+// data buffer -- a discard is a data-out request whose payload happens
+// to describe ranges rather than contain them.
+struct virtio_blk_discard_seg {
+    uint64_t sector;
+    uint32_t num_sectors;
+    uint32_t flags;      // bit 0 is "unmap", and only write-zeroes uses it
+};
 
 // One transfer at a time, so one header and one status byte. Both are
 // DMA targets, so they must be in memory the device can reach: a
@@ -54,6 +72,13 @@ struct virtio_blk_req_hdr {
 
 static struct virtio_blk_req_hdr g_hdr __attribute__((aligned(16)));
 static volatile uint8_t g_status;
+
+// One segment, because this driver issues one discard at a time and the
+// block layer hands it one contiguous range. Static for the same reason
+// the header is: it is a DMA target and must be at a physical address
+// the device can reach.
+static struct virtio_blk_discard_seg g_discard __attribute__((aligned(16)));
+static uint32_t g_max_discard;    // sectors, 0 when the feature is absent
 
 static struct virtio_device g_dev;
 static struct virtqueue g_vq;
@@ -167,6 +192,26 @@ int virtio_blk_flush(void) {
     return do_request(VIRTIO_BLK_T_FLUSH, 0, 0, 0, 0);
 }
 
+int virtio_blk_discard_supported(void) {
+    return g_present && g_max_discard > 0;
+}
+
+// A discard is refused rather than split when it is larger than the
+// device will take in one segment: a partial discard reporting success
+// would leave the caller believing blocks were released that were not,
+// and the block layer's contract is refused-never-short.
+int virtio_blk_discard(uint32_t lba, uint32_t count) {
+    if (!virtio_blk_discard_supported() || count == 0) return 0;
+    if (g_readonly) return 0;
+    if (lba >= g_capacity || count > g_capacity - lba) return 0;
+    if (count > g_max_discard) return 0;
+
+    g_discard.sector = lba;
+    g_discard.num_sectors = count;
+    g_discard.flags = 0;
+    return do_request(VIRTIO_BLK_T_DISCARD, 0, &g_discard, sizeof g_discard, 0);
+}
+
 void virtio_blk_init(void) {
     g_dev.name = "virtio-blk";
     // No such device is the ordinary case: silent, no allocation, no
@@ -174,7 +219,8 @@ void virtio_blk_init(void) {
     if (!virtio_pci_find(VIRTIO_ID_BLK, 0, &g_dev)) return;
 
     uint64_t wanted = VIRTIO_BLK_F_FLUSH | VIRTIO_BLK_F_SIZE_MAX
-                    | VIRTIO_BLK_F_SEG_MAX | VIRTIO_BLK_F_RO;
+                    | VIRTIO_BLK_F_SEG_MAX | VIRTIO_BLK_F_RO
+                    | VIRTIO_BLK_F_DISCARD;
     if (!virtio_begin(&g_dev, wanted)) return;   // logged its own reason
 
     if (!virtqueue_setup(&g_dev, 0, &g_vq)) {
@@ -194,6 +240,14 @@ void virtio_blk_init(void) {
         if (sectors > 0 && sectors < g_max_xfer) g_max_xfer = sectors;
     }
 
+    // A device may negotiate DISCARD and still advertise a zero maximum,
+    // which means it cannot actually take one -- so the CAPABILITY is
+    // the maximum, not the feature bit. QEMU reports zero here unless
+    // the drive was given `discard=unmap`.
+    if (virtio_has_feature(&g_dev, VIRTIO_BLK_F_DISCARD)) {
+        g_max_discard = virtio_cfg_read32(&g_dev, VIRTIO_BLK_CFG_MAX_DISCARD_SECTORS);
+    }
+
     virtio_driver_ok(&g_dev);
     g_present = 1;
 
@@ -201,8 +255,9 @@ void virtio_blk_init(void) {
         klog_printf("virtio-blk: capacity %llu sectors exceeds the block layer's 32-bit"
                     " sector index -- exposing 4294967295\n", (unsigned long long)g_capacity);
     }
-    klog_printf("virtio-blk: %llu sectors, max %u per transfer, flush %s%s\n",
+    klog_printf("virtio-blk: %llu sectors, max %u per transfer, flush %s, discard %s%s\n",
                 (unsigned long long)g_capacity, g_max_xfer,
                 virtio_blk_flush_supported() ? "yes" : "no",
+                g_max_discard ? "yes" : "no",
                 g_readonly ? ", READ-ONLY" : "");
 }

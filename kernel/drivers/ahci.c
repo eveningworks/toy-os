@@ -116,6 +116,14 @@ struct cmd_table {
 #define ATA_READ_DMA_EX 0x25
 #define ATA_WRITE_DMA_E 0x35
 #define ATA_FLUSH_EXT   0xEA
+#define ATA_DSM         0x06
+#define DSM_FEATURE_TRIM 0x01
+
+// DSM's payload is 512-byte blocks of 8-byte range entries: a 48-bit
+// starting LBA in the low six bytes, then a 16-bit sector count. A zero
+// count terminates the list, which is why the block is zeroed first.
+#define DSM_ENTRIES_PER_BLOCK (AHCI_SECTOR_SIZE / 8)
+#define DSM_MAX_RANGE 0xFFFFu   // one entry's 16-bit sector count
 
 // ---- state ----------------------------------------------------------
 
@@ -138,6 +146,7 @@ static uint32_t g_buf_frames;
 
 static uint32_t g_sectors;
 static int g_lba48;
+static int g_trim;                    // IDENTIFY word 169 bit 0
 static char g_model[41];
 static uint8_t g_irq;
 static volatile int g_irq_fired;
@@ -214,12 +223,13 @@ static void port_recover(volatile uint8_t *p) {
 // Fills slot 0's Register H2D FIS. `count` is in sectors; `lba` is
 // 48-bit even on a 28-bit drive, because READ/WRITE DMA EXT is the only
 // command this driver issues and it has no 28-bit form.
-static void build_fis(uint8_t command, uint64_t lba, uint16_t count) {
+static void build_fis(uint8_t command, uint8_t features, uint64_t lba, uint16_t count) {
     uint8_t *f = g_ctable->cfis;
     k_memset(f, 0, 64);
     f[0] = FIS_TYPE_H2D;
     f[1] = 0x80;                 // C: this is a command, not a control update
     f[2] = command;
+    f[3] = features;             // DSM's TRIM bit; zero for everything else
     f[4] = (uint8_t)(lba);
     f[5] = (uint8_t)(lba >> 8);
     f[6] = (uint8_t)(lba >> 16);
@@ -305,14 +315,14 @@ static int wait_command(void) {
 
 // Issues slot 0 and waits. `bytes` is how much data the PRDT should
 // describe; `write` says which way it moves. Returns 1 on success.
-static int run_command(uint8_t command, uint64_t lba, uint16_t count,
+static int run_command(uint8_t command, uint8_t features, uint64_t lba, uint16_t count,
                        uint32_t bytes, int write) {
     if (!g_preg) return 0;
 
     int prdtl = build_prdt(bytes);
     if (prdtl < 0) return 0;
 
-    build_fis(command, lba, count);
+    build_fis(command, features, lba, count);
 
     // CFL is the FIS length in DWORDS -- a Register H2D FIS is 20 bytes,
     // five dwords, NOT the 64-byte slot it sits in. Bit 6 is W.
@@ -365,10 +375,13 @@ static void copy_model(const uint16_t *id) {
 }
 
 static int identify(void) {
-    if (!run_command(ATA_IDENTIFY, 0, 0, 512, 0)) return 0;
+    if (!run_command(ATA_IDENTIFY, 0, 0, 0, 512, 0)) return 0;
 
     const uint16_t *id = (const uint16_t *)g_buf;
     copy_model(id);
+
+    // Word 169 bit 0: DATA SET MANAGEMENT's TRIM bit is supported.
+    g_trim = (id[169] & 0x0001) != 0;
 
     uint64_t sectors;
     if (id[83] & (1u << 10)) {          // 48-bit addressing supported
@@ -592,7 +605,7 @@ static int bounds_ok(uint32_t lba, int count) {
 int ahci_read_sectors(uint32_t lba, int count, void *buf) {
     if (!ahci_present() || !buf || !bounds_ok(lba, count)) return 0;
     uint32_t bytes = (uint32_t)count * AHCI_SECTOR_SIZE;
-    if (!run_command(ATA_READ_DMA_EX, lba, (uint16_t)count, bytes, 0)) return 0;
+    if (!run_command(ATA_READ_DMA_EX, 0, lba, (uint16_t)count, bytes, 0)) return 0;
     k_memcpy(buf, g_buf, bytes);
     return 1;
 }
@@ -601,12 +614,51 @@ int ahci_write_sectors(uint32_t lba, int count, const void *buf) {
     if (!ahci_present() || !buf || !bounds_ok(lba, count)) return 0;
     uint32_t bytes = (uint32_t)count * AHCI_SECTOR_SIZE;
     k_memcpy(g_buf, buf, bytes);
-    return run_command(ATA_WRITE_DMA_E, lba, (uint16_t)count, bytes, 1);
+    return run_command(ATA_WRITE_DMA_E, 0, lba, (uint16_t)count, bytes, 1);
 }
+
+// TRIM, through DATA SET MANAGEMENT. The range list travels DEVICE-WARD,
+// so this is a WRITE-direction transfer -- getting that backwards is
+// silent: the drive acknowledges a command whose payload never arrived
+// and nothing is discarded (ata.c's DSM comment has the long version of
+// that failure, which cost a build there).
+int ahci_trim(uint32_t lba, uint32_t count) {
+    if (!ahci_trim_supported() || count == 0) return 0;
+    if (lba > g_sectors || count > g_sectors - lba) return 0;
+
+    while (count > 0) {
+        k_memset(g_buf, 0, AHCI_SECTOR_SIZE);
+
+        int n = 0;
+        while (count > 0 && n < DSM_ENTRIES_PER_BLOCK) {
+            uint32_t chunk = count > DSM_MAX_RANGE ? DSM_MAX_RANGE : count;
+            uint8_t *e = &g_buf[n * 8];
+            e[0] = (uint8_t)(lba);
+            e[1] = (uint8_t)(lba >> 8);
+            e[2] = (uint8_t)(lba >> 16);
+            e[3] = (uint8_t)(lba >> 24);
+            e[4] = 0;   // the block layer is 32-bit, so the top 16 bits
+            e[5] = 0;   // of the 48-bit field are always zero
+            e[6] = (uint8_t)(chunk);
+            e[7] = (uint8_t)(chunk >> 8);
+            lba += chunk;
+            count -= chunk;
+            n++;
+        }
+
+        // The range list is already in the bounce buffer, so this does
+        // NOT go through the usual copy -- `count` here means descriptor
+        // BLOCKS, not sectors, which is DSM's own meaning for the field.
+        if (!run_command(ATA_DSM, DSM_FEATURE_TRIM, 0, 1, AHCI_SECTOR_SIZE, 1)) return 0;
+    }
+    return 1;
+}
+
+int ahci_trim_supported(void) { return ahci_present() && g_trim; }
 
 int ahci_flush(void) {
     if (!ahci_present()) return 0;
-    return run_command(ATA_FLUSH_EXT, 0, 0, 0, 0);
+    return run_command(ATA_FLUSH_EXT, 0, 0, 0, 0, 0);
 }
 
 // ---- diagnostics -----------------------------------------------------

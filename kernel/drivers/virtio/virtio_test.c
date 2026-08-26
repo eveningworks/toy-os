@@ -33,6 +33,9 @@
 #include "pci.h"
 #include "pci_internal.h"
 #include "ktest.h"
+#include "virtio_blk.h"
+#include "block.h"
+#include "scheduler.h"
 
 // Is there ANY virtio device on the bus? Asked through pci.c so that a
 // bug in virtio_pci_find() cannot make this answer "no" and skip.
@@ -253,4 +256,44 @@ KTEST("virtio", "the descriptor pool balances across many transfers") {
 
     virtqueue_teardown(&vq);
     *(volatile uint8_t *)(d.common + VIRTIO_COMMON_STATUS) = 0;
+}
+
+// ---- virtio-blk's discard -------------------------------------------
+//
+// REFUSALS ONLY, and for the same reason ahci_test.c's TRIM tests are:
+// a real discard of a real range on the mounted root would destroy the
+// filesystem the test is running from. That a discard actually REACHES
+// the host is proved by tools/virtio_boot_test.py, which writes 40 MiB,
+// deletes it, and requires the sparse image's allocated size to come
+// back to baseline -- a number the guest cannot influence.
+
+KTEST("virtio-blk", "discard refuses what it cannot release") {
+    if (!virtio_blk_present()) KTEST_SKIP("no virtio-blk on this machine");
+    if (!virtio_blk_discard_supported())
+        KTEST_SKIP("this device advertises no discard maximum (no discard=unmap)");
+
+    uint32_t sectors = virtio_blk_sector_count();
+
+    scheduler_preempt_disable();
+    int zero = virtio_blk_discard(0, 0);
+    int past = virtio_blk_discard(sectors, 1);
+    int wrap = virtio_blk_discard(sectors - 1, 2);
+    scheduler_preempt_enable();
+
+    KTEST_ASSERT(!zero);
+    KTEST_ASSERT(!past);
+    KTEST_ASSERT(!wrap);
+}
+
+// THE CAPABILITY IS THE MAXIMUM, NOT THE FEATURE BIT. A device may
+// negotiate DISCARD and advertise a zero max_discard_sectors, which
+// means it cannot take one -- and QEMU does exactly that unless the
+// drive was given `discard=unmap`. A driver that read the feature bit
+// alone would declare BLK_CAP_TRIM and then fail every discard.
+KTEST("virtio-blk", "the block layer's TRIM capability matches the device's maximum") {
+    if (!virtio_blk_present()) KTEST_SKIP("no virtio-blk on this machine");
+    const char *name = blk_name();
+    if (!name || name[0] != 'v') KTEST_SKIP("virtio-blk is not the active device");
+
+    KTEST_ASSERT_EQ(blk_trim_supported() ? 1 : 0, virtio_blk_discard_supported() ? 1 : 0);
 }

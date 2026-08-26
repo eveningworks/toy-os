@@ -173,6 +173,21 @@ this the obvious way), not from how much history it accumulated.
   produces and what keeps the multi-entry path ordinary rather than dead
   code; `tools/ahci_test.py` is the only thing that runs any of it,
   because every `ahci` KTEST skips without a controller.
+- **ALL THREE DISKS DISCARD NOW, AND THE CAPABILITY IS THE DEVICE'S
+  ANSWER RATHER THAN ITS FEATURE BIT.** ATA has DSM/TRIM, AHCI has the
+  same command through `run_command()`, and virtio-blk has
+  `VIRTIO_BLK_F_DISCARD`. Two things to know. **A virtio device may
+  negotiate DISCARD and advertise a `max_discard_sectors` of ZERO**,
+  which means it cannot take one -- QEMU does exactly that unless the
+  drive was given `discard=unmap` -- so `block_virtio.c` declares
+  `BLK_CAP_TRIM` from the MAXIMUM, and `block_ahci.c` declares it from
+  IDENTIFY word 169, both at registration where the answer is already
+  known (`block_ata.c` still advertises blind, and says why). And **a
+  TRIM that acknowledges and discards nothing is invisible from inside
+  the guest** -- that shipped once in `ata.c`, where the range list went
+  out over PIO and never arrived -- so the KTESTs cover the REFUSALS
+  only and the real proof is the host's: write 40 MiB, delete it, and
+  require the sparse image's allocated size back at baseline.
 - **VIRTIO-BLK IS THE PREFERRED DISK; ATA IS THE LEGACY PATH.** When a
   virtio disk is attached it carries the filesystem, and `novirtio` on
   the boot line forces ATA back (which is what keeps that path

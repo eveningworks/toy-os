@@ -548,6 +548,7 @@ struct query_ata {
 #define QUERY_AHCI_NCQ     (1u << 4) // CAP.SNCQ -- advertised, and not used
 #define QUERY_AHCI_SSS     (1u << 5) // CAP.SSS: staggered spin-up
 #define QUERY_AHCI_LBA48   (1u << 6) // the DRIVE's addressing, not the HBA's
+#define QUERY_AHCI_TRIM    (1u << 7) // DATA SET MANAGEMENT: freed blocks are discarded
 
 #define QUERY_AHCI_MODEL_MAX 48 // IDENTIFY's 40 characters, rounded up
 

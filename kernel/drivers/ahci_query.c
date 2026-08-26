@@ -24,6 +24,7 @@ static int hba_fill(int index, void *out) {
     if (cap & (1u << 30))          a->flags |= QUERY_AHCI_NCQ;
     if (cap & (1u << 27))          a->flags |= QUERY_AHCI_SSS;
     if (ahci_lba48())              a->flags |= QUERY_AHCI_LBA48;
+    if (ahci_trim_supported())     a->flags |= QUERY_AHCI_TRIM;
 
     a->version          = ahci_version();
     a->ports_impl       = (uint64_t)ahci_port_count();

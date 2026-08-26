@@ -22,7 +22,7 @@ AND IT REBOOTS. A write that only reached a buffer would pass a
 same-boot read-back, so files are written on boot 1 and read on boot 2
 against the same image.
 
-THE INDEPENDENT ORACLE is mtools: the guest reads /boot/grub/grub.cfg
+TWO INDEPENDENT ORACLES. mtools: the guest reads /boot/grub/grub.cfg
 through the AHCI driver and FAT32, and the host reads the same file out
 of the same image with `mtype`, which shares no line of code with either.
 "the file reads back" is what a privately-wrong driver passes; "the host
@@ -281,6 +281,44 @@ def main():
 
     check("the files survived a reboot", "f000003" in t2)
     check("and their size survived with them", "20000 bytes" in t2)
+
+    # ---- TRIM, measured from the HOST --------------------------------
+    #
+    # THE ONLY ORACLE THAT CANNOT BE FOOLED BY THE GUEST. A drive that
+    # acknowledges DSM and discards nothing looks identical from inside
+    # toy-os -- that exact failure shipped once in ata.c, where the
+    # range list went out over PIO and never arrived. What it cannot fake
+    # is the ALLOCATED size of the sparse image on this filesystem.
+    def allocated(path):
+        return os.stat(path).st_blocks * 512
+
+    print("ahci_test: TRIM -- write 40 MiB, delete it, watch the image")
+    base = allocated(args.work)
+    t4, err = run_boot(args.work, args.qemu_log, [
+        ("sh mkdir /trim_probe", None),
+        ("sh mkfiles /trim_probe 40 1000000", "created"),
+        ("sh sync", None),
+    ], args.timeout)
+    if t4 is None:
+        print(f"ahci_test: FAIL -- {err}")
+        return 1
+    grown = allocated(args.work)
+    check("writing 40 MiB grows the host image", grown - base > 30 * 1024 * 1024,
+          f"grew by {(grown - base) // (1024 * 1024)} MiB")
+
+    t5, err = run_boot(args.work, args.qemu_log, [
+        ("sh rm -r /trim_probe", None),
+        ("sh sync", None),
+    ], args.timeout)
+    if t5 is None:
+        print(f"ahci_test: FAIL -- {err}")
+        return 1
+    reclaimed = allocated(args.work)
+    # Back to within a megabyte of where it started. Not exactly equal:
+    # the deletion itself writes metadata.
+    check("deleting it hands the blocks back (TRIM reached the drive)",
+          reclaimed - base < 1024 * 1024,
+          f"still {(reclaimed - base) // 1024} KiB above baseline")
 
     # ---- boot 3: `noahci` steps down ---------------------------------
     print("ahci_test: boot 3 -- `noahci` hands the disk back to legacy IDE")

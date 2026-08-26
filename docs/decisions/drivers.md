@@ -634,6 +634,44 @@ The same reasoning covers `CAP.S64A`: the HBA offers 64-bit DMA
 addresses and this driver's buffers come from `pmm_alloc_contiguous()`
 below 4 GiB, so every `*U` register is written zero. Reported, not used.
 
+## A discard capability comes from the device's ANSWER, not from its feature bit -- and only the host can prove one worked
+
+Two things about TRIM/discard were learned the expensive way here, and
+both generalise past storage.
+
+**A negotiated feature is not an available one.** virtio-blk may
+negotiate `VIRTIO_BLK_F_DISCARD` and then advertise a
+`max_discard_sectors` of ZERO, which means it cannot accept a discard at
+all -- and QEMU does exactly that unless the drive was given
+`discard=unmap`. A driver reading the feature bit alone would declare
+`BLK_CAP_TRIM`, and then fail every discard the filesystem issued, at
+which point `block.h`'s both-directions honesty check has been satisfied
+by a capability that lies. So `block_virtio.c` declares the bit from the
+MAXIMUM, and `block_ahci.c` from IDENTIFY word 169 -- both read at
+REGISTRATION, where the answer is already settled. `block_ata.c` still
+advertises blind and documents why (its identify data is not necessarily
+settled that early), which is the exception that makes the rule
+readable.
+
+**A TRIM that discards nothing is invisible from inside the guest.**
+This is not hypothetical: `ata.c`'s first DSM implementation sent the
+range list over PIO, the drive accepted the command, returned no error,
+and nothing whatsoever was discarded. Every guest-side check passes. The
+only oracle that cannot be fooled is OUTSIDE -- the ALLOCATED size of
+the sparse host image (`st_blocks`), which the guest cannot influence.
+So `tools/ahci_test.py` and `tools/virtio_boot_test.py` both write
+40 MiB, delete it, and require the image back at its baseline, and the
+KTESTs deliberately cover only the REFUSALS (zero count, past the end,
+a range that wraps) because a real discard on the mounted root would
+destroy the filesystem the test is running from.
+
+**Assert BOTH halves of a reclaim.** The first version of that check
+only looked for the blocks coming back, and passed on an image that had
+never grown -- `shutil.copyfile` had produced a fully-allocated 9.6 GB
+copy, so there was no sparseness left to lose. "It went back down" is
+satisfied by "it never went up". The growth assertion is what turned a
+silent pass into a visible failure.
+
 ## AHCI is not cached, and that is the difference from ata.c rather than an oversight
 
 `ata_cache.c` is a write-back sector cache under

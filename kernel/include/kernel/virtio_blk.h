@@ -26,6 +26,22 @@ uint32_t virtio_blk_sector_count(void);
 int virtio_blk_read_sectors(uint32_t lba, int count, void *buf);
 int virtio_blk_write_sectors(uint32_t lba, int count, const void *buf);
 int virtio_blk_flush(void);
+
+// DISCARD -- virtio's TRIM. Tells the host `count` sectors from `lba`
+// hold nothing worth keeping, which is what stops a sparse disk.img
+// growing forever (sparseness is only ever lost).
+//
+// REFUSED, NEVER SHORT: a range larger than the device's own
+// max_discard_sectors comes back 0 rather than being partly done, since
+// a partial discard reporting success would leave the caller believing
+// blocks were released that were not.
+int virtio_blk_discard(uint32_t lba, uint32_t count);
+
+// Whether a discard issued right now would go out. NOT the feature bit:
+// a device may negotiate DISCARD and advertise a zero maximum, which
+// means it cannot take one. QEMU does exactly that unless the drive was
+// given `discard=unmap`.
+int virtio_blk_discard_supported(void);
 int virtio_blk_max_sectors_per_xfer(void);
 int virtio_blk_flush_supported(void);
 

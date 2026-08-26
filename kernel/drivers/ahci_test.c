@@ -12,6 +12,7 @@
 #include "heap.h"
 #include "string.h"
 #include "scheduler.h"
+#include "block.h"
 
 // Is there a controller ON THE BUS, independent of whether the driver
 // claimed it? That is what separates "this machine has no AHCI" (skip)
@@ -117,6 +118,41 @@ KTEST("ahci", "a transfer past the drive or past the buffer is refused") {
     KTEST_ASSERT(!big_ok);
     KTEST_ASSERT(!zero_ok);
     KTEST_ASSERT(!null_ok);
+}
+
+// TRIM IS TESTED FOR ITS REFUSALS ONLY, and deliberately: a real
+// discard of a real range on the mounted root would destroy the
+// filesystem this test is running from. That a TRIM actually reaches
+// the drive is proved from the HOST by tools/ahci_test.py, which writes
+// 40 MiB, deletes it, and requires disk.img's ALLOCATED size to come
+// back to its baseline -- an oracle the guest cannot be wrong about.
+KTEST("ahci", "TRIM refuses what it cannot discard") {
+    if (!hba_on_bus()) KTEST_SKIP("no AHCI controller on this machine");
+    if (!ahci_present()) KTEST_SKIP("no drive claimed");
+    if (!ahci_trim_supported()) KTEST_SKIP("this drive does not support DSM TRIM");
+
+    scheduler_preempt_disable();
+    int zero    = ahci_trim(0, 0);
+    int past    = ahci_trim(ahci_sector_count(), 1);
+    int wrap    = ahci_trim(ahci_sector_count() - 1, 2);
+    scheduler_preempt_enable();
+
+    KTEST_ASSERT(!zero);
+    KTEST_ASSERT(!past);
+    KTEST_ASSERT(!wrap);
+}
+
+// The capability bit and the function pointer must agree, in BOTH
+// directions -- block.h refuses a device whose bits and pointers
+// disagree, so this is really asking whether block_ahci.c consulted the
+// drive at registration rather than advertising blind.
+KTEST("ahci", "the block layer's TRIM capability matches the drive's answer") {
+    if (!hba_on_bus()) KTEST_SKIP("no AHCI controller on this machine");
+    if (!ahci_present()) KTEST_SKIP("no drive claimed");
+    const char *name = blk_name();
+    if (!name || name[0] != 'a' || name[1] != 'h') KTEST_SKIP("AHCI is not the active device");
+
+    KTEST_ASSERT_EQ(blk_trim_supported() ? 1 : 0, ahci_trim_supported() ? 1 : 0);
 }
 
 KTEST("ahci", "the drive acknowledges a flush") {

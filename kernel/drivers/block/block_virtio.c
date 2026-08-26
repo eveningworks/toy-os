@@ -14,6 +14,7 @@ static int vblk_read(uint32_t lba, int count, void *buf) { return virtio_blk_rea
 static int vblk_write(uint32_t lba, int count, const void *buf) { return virtio_blk_write_sectors(lba, count, buf); }
 static int vblk_max_xfer(void) { return virtio_blk_max_sectors_per_xfer(); }
 static int vblk_flush(void) { return virtio_blk_flush(); }
+static int vblk_trim(uint32_t lba, uint32_t count) { return virtio_blk_discard(lba, count); }
 
 // FLUSH is decided at registration from the NEGOTIATED features, which
 // is a deliberate divergence from block_ata.c's advertise-uncondition-
@@ -75,10 +76,15 @@ int blk_virtio_init(void) {
         VIRTIO_DEV.caps |= BLK_CAP_FLUSH;
         VIRTIO_DEV.flush = vblk_flush;
     }
-    // No BLK_CAP_TRIM: VIRTIO_BLK_F_DISCARD needs discard=unmap on the
-    // drive and a separate segment format, and TFS3's trim path is
-    // already exercised through ATA. Declaring no bit and providing no
-    // trim() passes blk_register()'s both-directions honesty check.
+    // TRIM comes from the device's own maximum, not from the feature
+    // bit: a device may negotiate DISCARD and advertise a zero
+    // max_discard_sectors, which means it cannot take one. QEMU does
+    // that unless the drive was given `discard=unmap`, so this bit is
+    // absent on a plainly-attached disk and present on the Makefile's.
+    if (virtio_blk_discard_supported()) {
+        VIRTIO_DEV.caps |= BLK_CAP_TRIM;
+        VIRTIO_DEV.trim = vblk_trim;
+    }
 
     // No announcement here: blk_register() already logs
     // "block: <name> active (<n> sectors)" for every device it accepts,

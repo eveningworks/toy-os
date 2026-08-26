@@ -1446,8 +1446,7 @@ window without going through it will find its layout polls timing out.
   `gui_regress.py`.
 - **`ahci_test.py`** -- boots with the filesystem on a **SATA drive
   behind an ICH9 host bus adapter**, which is the only thing here that
-  reaches `kernel/drivers/ahci.c` at all. Three boots, 17 checks, on
-  demand.
+  reaches `kernel/drivers/ahci.c` at all. Several boots, on demand.
 
   **Its load-bearing check is `0 skipped`.** Every `ahci` KTEST guards
   itself on a controller being on the PCI bus, so on the default IDE
@@ -1465,7 +1464,16 @@ window without going through it will find its layout polls timing out.
   guest's own `cat`, the same call `fat32_test.py` and
   `regex_hostcheck.py` make. That phase SKIPS without mtools.
 
-  The third boot rewrites the image's `grub.cfg` with mtools to add
+  **TRIM gets its own oracle, and it is the host filesystem.** A drive
+  that acknowledges DSM and discards nothing is indistinguishable from a
+  working one inside toy-os -- that exact failure shipped once in
+  `ata.c`, where the range list went out over PIO and never arrived. So
+  the tool writes 40 MiB, deletes it, and requires the sparse image's
+  ALLOCATED size (`st_blocks`) to come back to baseline. Both halves are
+  asserted: a check that only looked for the blocks coming BACK passes
+  trivially on an image that never grew.
+
+  A later boot rewrites the image's `grub.cfg` with mtools to add
   `noahci`, and asserts the driver STILL runs while the block layer does
   not take it -- the precedence rung, and the only way to test a boot
   word without `make iso KCMDLINE=`, which would rebuild the media every

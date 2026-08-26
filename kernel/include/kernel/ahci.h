@@ -60,6 +60,22 @@ int ahci_write_sectors(uint32_t lba, int count, const void *buf);
 // The bounce buffer's size in sectors -- what caps one command.
 int ahci_max_sectors_per_xfer(void);
 
+// DATA SET MANAGEMENT's TRIM: tells the drive `count` sectors from `lba`
+// hold nothing worth keeping. Returns 1 when the drive acknowledged.
+//
+// WHAT IT IS ACTUALLY FOR HERE is the host image: `disk.img` is created
+// sparse and sparseness is only ever LOST, so without this a block
+// written once stays allocated on the host forever. Whether a real SSD
+// does anything with it is between the drive and its firmware.
+int ahci_trim(uint32_t lba, uint32_t count);
+
+// Whether a TRIM issued right now would actually go out: a drive that
+// answered IDENTIFY with word 169 bit 0 set. Asked at REGISTRATION by
+// block_ahci.c, which is what lets BLK_CAP_TRIM mean what it says --
+// IDENTIFY has completed by then, unlike ATA's, which has to advertise
+// the bit blind.
+int ahci_trim_supported(void);
+
 // FLUSH CACHE EXT. Returns 1 when the drive acknowledged, 0 when it
 // refused or there is no drive. A caller treating 0 as "probably fine"
 // is the corruption bug ata_cache.h's header describes.

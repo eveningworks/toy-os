@@ -245,7 +245,11 @@ def cmd_start(args):
     # (1af4:1001), which the driver does handle, but the modern form is
     # what the transport is written against.
     if getattr(args, "virtio_disk", None):
-        cmd += ["-drive", f"file={args.virtio_disk},format=raw,if=none,id=vblk",
+        # discard=unmap for parity with the Makefile's DISK=virtio line.
+        # Without it QEMU advertises max_discard_sectors as ZERO, the
+        # driver correctly reports that it cannot discard, and the whole
+        # TRIM path is silently untestable through this tool.
+        cmd += ["-drive", f"file={args.virtio_disk},format=raw,if=none,id=vblk,discard=unmap",
                 "-device", "virtio-blk-pci,drive=vblk,disable-legacy=on"]
     # virtio input devices, off by default so every existing test keeps
     # the PS/2 pair it was written against. With this the guest gets a

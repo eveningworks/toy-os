@@ -18,6 +18,7 @@ interrupt — and then the drive, and then every port.
       drive: "QEMU HARDDISK" on port 0
       capacity: 18874368 sectors (9.0G), LBA48
       transfers: DMA, up to 128 sectors each
+      TRIM: in use -- freed blocks are discarded to the host image
       NCQ: offered by the HBA, not used (one command in flight)
       64-bit addressing: offered, not needed (DMA buffers are below 4 GiB)
       port  link       speed     signature
@@ -31,6 +32,12 @@ service or a port multiplier all report a device on the link and none of
 them is a disk. `link only` means DET is non-zero but not 3 — a link
 that came up partially, which is a cabling answer rather than a driver
 one.
+
+**TRIM is stated rather than left as a flag**, the same way `ata` does
+it: TRIM is about what happens to the HOST IMAGE, not to throughput.
+With it in use a deleted file's blocks are actually released and
+`disk.img` shrinks; without it the image only ever grows. It comes from
+IDENTIFY word 169, read at registration.
 
 **NCQ and 64-bit addressing are reported precisely because this driver
 does not use them.** The HBA offers both; the driver issues one command

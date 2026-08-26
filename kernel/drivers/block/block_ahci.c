@@ -11,13 +11,20 @@ static int ahci_blk_read(uint32_t lba, int count, void *buf) { return ahci_read_
 static int ahci_blk_write(uint32_t lba, int count, const void *buf) { return ahci_write_sectors(lba, count, buf); }
 static int ahci_blk_max_xfer(void) { return ahci_max_sectors_per_xfer(); }
 static int ahci_blk_flush(void) { return ahci_flush(); }
+static int ahci_blk_trim(uint32_t lba, uint32_t count) { return ahci_trim(lba, count); }
 
 // FLUSH is unconditional and means a real FLUSH CACHE EXT reaching the
 // drive: there is no write-back cache above this one (ahci.h says why),
 // so the bit and the function agree in the way blk_register() checks.
 //
-// Static rather than local: blk_register() keeps the POINTER.
-static const struct block_device AHCI_DEV = {
+// TRIM is decided at REGISTRATION from the drive's own IDENTIFY answer,
+// which is block_virtio.c's rule rather than block_ata.c's: IDENTIFY has
+// completed by the time this runs, so the bit can mean exactly "a TRIM
+// issued now goes out" instead of being advertised blind.
+//
+// Static and MUTABLE: blk_register() keeps the POINTER, so a stack copy
+// would leave the block layer reading a dead frame.
+static struct block_device AHCI_DEV = {
     .name = "ahci",
     .sector_count = ahci_blk_sector_count,
     .read_sectors = ahci_blk_read,
@@ -46,6 +53,12 @@ static int ahci_disabled(void) {
 int blk_ahci_init(void) {
     if (!ahci_present()) return 0;
     if (ahci_disabled()) return 0;
+
+    if (ahci_trim_supported()) {
+        AHCI_DEV.caps |= BLK_CAP_TRIM;
+        AHCI_DEV.trim = ahci_blk_trim;
+    }
+
     // No announcement: blk_register() already logs the device it accepts.
     return blk_register(&AHCI_DEV);
 }

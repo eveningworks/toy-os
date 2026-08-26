@@ -93,6 +93,11 @@ int main(int argc, char **argv) {
                (a.flags & QUERY_AHCI_LBA48) ? "48" : "28");
         printf("  transfers: DMA, up to %llu sectors each\n",
                (unsigned long long)a.max_sectors_xfer);
+        // Stated rather than left as a flag, like `ata` does: TRIM is
+        // about what happens to the HOST IMAGE, not to throughput.
+        printf("  TRIM: %s\n", (a.flags & QUERY_AHCI_TRIM)
+               ? "in use -- freed blocks are discarded to the host image"
+               : "not supported by this drive");
     } else {
         printf("  no SATA drive on any implemented port\n");
     }

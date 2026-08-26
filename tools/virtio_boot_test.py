@@ -30,7 +30,6 @@ tools/live_boot_test.py.
 import argparse
 import re
 import os
-import shutil
 import socket
 import subprocess
 import sys
@@ -55,7 +54,11 @@ def launch(iso, virtio_img, qemu_log):
         # THE POINT OF THIS TOOL: no `-drive if=ide`. The only disk is
         # on virtio, so ata_init() finds nothing and the filesystem can
         # only mount if the virtio path works end to end.
-        "-drive", f"file={virtio_img},format=raw,if=none,id=vblk",
+        # discard=unmap is what makes VIRTIO_BLK_F_DISCARD mean anything:
+        # without it QEMU advertises max_discard_sectors as ZERO, the
+        # driver correctly reports it cannot discard, and the TRIM phase
+        # below would skip rather than test.
+        "-drive", f"file={virtio_img},format=raw,if=none,id=vblk,discard=unmap",
         "-device", "virtio-blk-pci,drive=vblk,disable-legacy=on",
         "-m", "256",
         "-display", "none",
@@ -135,9 +138,18 @@ def run_boot(iso, img, qemu_log, commands, timeout):
         if not read_until(sock, "debug console ready", timeout, transcript):
             return None, "the debug console never came up"
         for cmd in commands:
+            # A command may be (text, needle): wait on the ARTIFACT
+            # rather than a fixed sleep. Writing 40 MiB takes ~17 s here,
+            # and a 1.5 s settle silently measured a PARTIAL write.
+            needle = None
+            if isinstance(cmd, tuple):
+                cmd, needle = cmd
             sock.sendall((cmd + "\n").encode())
-            time.sleep(1.5)
-            read_until(sock, "\x00never-matches\x00", 1.5, transcript)
+            if needle:
+                read_until(sock, needle, timeout, transcript)
+            else:
+                time.sleep(1.5)
+                read_until(sock, "\x00never-matches\x00", 1.5, transcript)
         return "".join(transcript), None
     finally:
         try:
@@ -166,7 +178,12 @@ def main():
     # Work on a COPY: this test writes to the filesystem, and the real
     # disk.img is re-seeded by `make iso` and may be open in the user's
     # own QEMU.
-    shutil.copyfile(args.disk, args.work)
+    # SPARSE, and not shutil.copyfile: disk.img is ~4 MB of data in a
+    # 9 GB sparse file, so a hole-filling copy costs 9 GB -- of RAM when
+    # the destination is a tmpfs. It also destroys the only oracle the
+    # discard phase below has, since a fully-allocated image cannot grow.
+    subprocess.run(["cp", "--reflink=auto", "--sparse=always", args.disk, args.work],
+                   check=True)
 
     checks = []
 
@@ -195,6 +212,41 @@ def main():
     check("TFS3 mounted off virtio", "tfs3: mounted" in t1)
     check("the filesystem is persistent, not RAM-only",
           "RAM-only" not in t1.split("fs: active backend")[-1][:80])
+
+    check("the device negotiated discard", "discard yes" in t1)
+
+    # --- DISCARD, measured from the HOST ------------------------------
+    #
+    # A device that accepts a discard and releases nothing looks
+    # identical from inside toy-os. What it cannot fake is the ALLOCATED
+    # size of the sparse image on this filesystem -- so: write 40 MiB,
+    # delete it, require the blocks back. Same oracle tools/ahci_test.py
+    # uses for AHCI's TRIM.
+    def allocated(path):
+        return os.stat(path).st_blocks * 512
+
+    base = allocated(args.work)
+    t_w, err = run_boot(args.iso, args.work, args.qemu_log,
+                        ["sh mkdir /vdiscard",
+                         ("sh mkfiles /vdiscard 40 1000000", "created"),
+                         "sh sync"],
+                        args.timeout)
+    if t_w is None:
+        print(f"virtio_boot_test: FAIL -- {err}")
+        return 1
+    grown = allocated(args.work)
+    check("writing 40 MiB grows the host image", grown - base > 30 * 1024 * 1024,
+          f"grew by {(grown - base) // (1024 * 1024)} MiB")
+
+    t_d, err = run_boot(args.iso, args.work, args.qemu_log,
+                        [("sh rm -r /vdiscard", "dbg>"), "sh sync"], args.timeout)
+    if t_d is None:
+        print(f"virtio_boot_test: FAIL -- {err}")
+        return 1
+    back = allocated(args.work)
+    check("deleting it hands the blocks back (discard reached the host)",
+          back - base < 1024 * 1024,
+          f"still {(back - base) // 1024} KiB above baseline")
 
     # --- a setting this machine cannot honour -------------------------
     #
