@@ -66,6 +66,7 @@ DST = "/fmdest"
 K_TAB, K_ENTER, K_ESC, K_BACKSPACE = "0x09", "0x0a", "0x1b", "0x08"
 K_DOWN, K_UP = "0x92", "0x91"
 K_INSERT = "0xb3"
+K_HOME = "0x97"
 K_F2, K_F5, K_F6, K_F7, K_F8 = "0x9a", "0xac", "0xad", "0xae", "0xaf"
 
 
@@ -296,9 +297,44 @@ def run(dbg, qmp, tmp, res):
     res.check("and selects the directory it just left",
               lay.selected == "sub", f"selected {lay.selected!r}")
 
+    # --- 4b. type-ahead --------------------------------------------------
+    # The fixture sorts on screen as: .., sub, one.txt, three.txt,
+    # two.txt (directories lead). So 't' must reach three.txt and a
+    # second 't' must CYCLE to two.txt -- the pair is what tells a
+    # working search from one that finds a t and stops. `sys_listdir`
+    # makes no promise about the order it hands the entries over in, so
+    # a search walking that order rather than the sorted view lands
+    # somewhere this cannot predict, which is the point.
+    dbg.key(K_HOME)
+    lay = wait_layout(dbg, win, lambda l: True) or lay
+
+    dbg.key("t")
+    lay = wait_layout(dbg, win, lambda l: l.selected == "three.txt") or lay
+    res.check("typing a letter seeks to the first matching row",
+              lay.selected == "three.txt", f"selected {lay.selected!r}")
+
+    dbg.key("t")
+    lay = wait_layout(dbg, win, lambda l: l.selected == "two.txt") or lay
+    res.check("the same letter again cycles to the next match",
+              lay.selected == "two.txt", f"selected {lay.selected!r}")
+
+    # A prefix, not just a letter: 'o' alone would reach one.txt anyway,
+    # so the check that means something is that 'o' then 'n' does not
+    # land on three.txt by way of a search that ignored the second key.
+    dbg.key("o")
+    dbg.key("n")
+    lay = wait_layout(dbg, win, lambda l: l.selected == "one.txt") or lay
+    res.check("two letters build a prefix", lay.selected == "one.txt",
+              f"selected {lay.selected!r}")
+
     # --- 5. marking, and copying the marked SET ------------------------
-    # Down past `sub` onto the files, then mark two of them. Insert
-    # toggles and steps down, so two presses mark two adjacent rows.
+    # Home, then down past `sub` onto the files, and mark two of them.
+    # Insert toggles and steps down, so two presses mark two adjacent
+    # rows. The Home is not decoration: this phase used to inherit the
+    # selection the phase above left, which made it fail the moment a
+    # phase was inserted between them.
+    dbg.key(K_HOME)
+    dbg.key(K_DOWN)
     dbg.key(K_DOWN)
     dbg.key(K_INSERT)
     dbg.key(K_INSERT)

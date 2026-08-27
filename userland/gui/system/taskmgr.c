@@ -436,6 +436,9 @@ static struct uui_layout LAYOUT;
 
 int main(void) {
     uui_table_init(&g_table, 0, 0, 100, 100, COLUMNS, COL_COUNT, cell, 0);
+    // Typing a letter seeks by NAME, not by PID: column 0 here is a
+    // number nobody knows by heart.
+    uui_table_set_seek_col(&g_table, 1);
     // Opting in is one call. Sorted by PID ascending to start with,
     // which is the order the process table is already in -- so the
     // opening view is unchanged and the first header click is the first

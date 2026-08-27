@@ -2768,16 +2768,20 @@ hand-computed arithmetic today, which is why no window can be resized.*
   ring (2026-08-24) -- the dropdown grew an indicator in the same change
   precisely because a control that silently takes letters cannot be
   found.
-- [ ] **Type-ahead in `uui_table`.** `uui_listbox` gained it on
-  2026-08-24 (a prefix within a second, a repeated letter cycling), so
-  a dropdown and a listbox can both be typed at. `uui_fileview`
-  composes a TABLE, so the File Manager -- the one place with hundreds
-  of rows and a name the user already knows -- is the one that still
-  cannot. The table's rows are not strings but columns, so the open
-  question is which column a letter matches: the first, always, or a
-  declared "seek column" per table. Answer that before writing the
-  code; the listbox's implementation itself is thirty lines and moves
-  over unchanged.
+- [x] ~~**Type-ahead in `uui_table`.**~~ DONE 2026-08-27. The column a
+  letter matches is DECLARED, `uui_table_set_seek_col()` --
+  GtkTreeView's `search-column`, because column 0 is the name in a file
+  listing and the PID in Task Manager, and Win32's always-column-0 rule
+  has no way to say so. It defaults to 0 rather than to off: a table
+  searching an unhelpful column says so the first time anyone types,
+  while one that ignores letters fails silently. The search itself came
+  out of `uui_listbox` into `userland/ui/uui_seek.c` and both widgets
+  call it, so there is one implementation rather than the two the item
+  as written would have produced. The part that was not thirty lines
+  moving over unchanged: a table's rows are PULLED and its app indices
+  are not the order on screen, so the seek walks VIEW positions and
+  converts back -- the same rule `uui_table_key()`'s arrows already
+  followed.
 
 ## Runtime font loading & text metrics
 

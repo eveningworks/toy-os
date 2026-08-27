@@ -24,7 +24,6 @@ FIRST, and this is what to do first among things that are all
 buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
-- [ ] Type-ahead in `uui_table` -- `uui_listbox` gained it 2026-08-24 and a fileview is a table, so the File Manager cannot  *(A layout engine for the GUI)*
 - [ ] A FOCUS INDICATOR for every widget that takes keys -- six accept focus and draw nothing, so Tab moves an invisible cursor  *(A layout engine for the GUI)*
 - [ ] The ring-3 WM busy-waits instead of sleeping -- `SYS_SLEEP` and a per-window timer both exist now  *(Known limitations and papercuts (unscheduled))*
 - [ ] System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons  *(Known limitations and papercuts (unscheduled))*
@@ -510,7 +509,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~`uui_slider`, so a setting with ordered levels can say `Widget=slider`~~ DONE 2026-08-19 -- discrete stops, one per choice
 - [x] ~~`uui_label` wraps, so a long setting description is not simply clipped~~ done -- only if asked; the caller reserves the rows
 - [ ] Then convert the rest, deleting the per-app pixel math -- Notepad, Terminal and the File Manager still place their own widgets
-- [ ] **NEXT** Type-ahead in `uui_table` -- `uui_listbox` gained it 2026-08-24 and a fileview is a table, so the File Manager cannot
+- [x] ~~Type-ahead in `uui_table`~~ DONE 2026-08-27 -- a DECLARED seek column, and one search shared with `uui_listbox`
 - [ ] **NEXT** A FOCUS INDICATOR for every widget that takes keys -- six accept focus and draw nothing, so Tab moves an invisible cursor
 - [ ] Scale factor as a single input, so a HiDPI mode is a multiplier and not a rewrite
 - [x] ~~Decide explicitly whether layout is immediate-mode~~ DONE 2026-08-18 -- it is; rects at open and on resize, drawing immediate

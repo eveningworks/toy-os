@@ -5,6 +5,7 @@
 #include "ui/ugfx.h"
 #include "ui/uui_primitives.h"
 #include "ui/uui_scrollbar.h"
+#include "ui/uui_seek.h"
 
 // --- table: rows in columns, with a header ---------------------------
 //
@@ -37,6 +38,10 @@
 // into a shared scratch buffer.
 typedef void (*uui_table_cell_fn)(void *ctx, int row, int col,
                                    char *out, int cap);
+
+// Also called by TYPE-AHEAD, which is off the paint path and asks for
+// rows that are not visible -- so a cell fn must write only into `out`
+// and must not assume it is being drawn.
 
 // --- sorting ----------------------------------------------------------
 //
@@ -133,6 +138,15 @@ struct uui_table {
     // caller: a narrow sidebar of filenames wants no column titles.
     int show_header;
 
+    // TYPE-AHEAD. `seek_col` is which column a typed letter matches,
+    // GtkTreeView's search-column -- because column 0 is the identifying
+    // one in a file listing and the PID in Task Manager. It defaults to
+    // 0 rather than to off: a table that searches an unhelpful column
+    // says so the first time anyone types, while one that ignores
+    // letters entirely fails silently.
+    struct uui_seek seek;
+    int seek_col;
+
     int selected;   // row index, or -1
     int hovered;    // OWNED -- driven by uui_table_hover()
     int top;        // first visible row; OWNED
@@ -169,6 +183,10 @@ void uui_table_set_tint(struct uui_table *t, uui_table_tint_fn tint);
 // Shows or hides the header row. On by default; a table with it off
 // still sorts if it has a comparator, it just has nothing to click.
 void uui_table_set_header(struct uui_table *t, int show);
+
+// Which column type-ahead matches. A negative column turns the search
+// off, for a table whose rows have no name worth typing.
+void uui_table_set_seek_col(struct uui_table *t, int col);
 
 // Sorts by `col` in `dir` (1 ascending, -1 descending), or clears the
 // sort with col = UUI_TABLE_UNSORTED. Rebuilds the order immediately.

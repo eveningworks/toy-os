@@ -1502,17 +1502,33 @@ real scanout hardware does. Do not write a pixel assertion for one.
   is excluded, having changed no value. Before this a focused control's
   keyboard change was silently dropped by System Settings' Apply.
 - **TYPING IN A LIST SEEKS, AND A REPEATED LETTER CYCLES WHILE A PREFIX
-  EXPIRES.** `uui_listbox_key()` takes any printable key, so the
-  dropdown popup, a standalone listbox and anything else composing one
+  EXPIRES.** `userland/ui/uui_seek.c` holds the search and BOTH
+  `uui_listbox_key()` and `uui_table_key()` call it, so the dropdown
+  popup, a standalone listbox, Task Manager and every `uui_fileview`
   gain it at once. Keys within `UUI_SEEK_WINDOW_MS` build a prefix
   ("h","e" -> Helsinki past Halifax); the same single letter again
   cycles to the next match and does NOT expire, because 'h' twice a
   minute apart should still reach the second h. It matches the string
   the user can SEE (the display name, "Los Angeles"), as a prefix, which
-  is also why System Settings' "   (current)" suffix does not interfere.
+  is also why System Settings' "   (current)" suffix and
+  `uui_fileview`'s trailing '/' on a directory do not interfere.
   A CLOSED dropdown takes letters too -- deliberately unlike the wheel,
   which it ignores, since a letter can only reach the control that has
   focus while the pointer merely passes over one.
+- **A TABLE DECLARES WHICH COLUMN A LETTER MATCHES:
+  `uui_table_set_seek_col()`.** GtkTreeView's `search-column`, and the
+  reason it is not Win32's always-column-0 is that column 0 is the name
+  in a file listing and the **PID** in Task Manager. It defaults to 0
+  rather than to off: a table searching an unhelpful column says so the
+  first time anyone types, while one that ignores letters fails
+  silently. A negative column turns the search off. Two things to know.
+  **The search walks VIEW positions, not app rows** -- a table's rows
+  are pulled and sorted, so cycling in the data's order moves the
+  selection somewhere the user is not looking, exactly the bug
+  `uui_table_key()`'s arrows already avoid; `uui_table_source_row()`
+  converts the answer back. And **`uui_table_set_rows()` must NOT reset
+  the prefix**: Task Manager calls it on every refresh, so a resetting
+  version drops the second letter of anything typed across a tick.
 - **A SETTING WHOSE CHOICES ARE DATA NAMES THEM ITSELF:
   `choice_label`.** `/etc/settings.d`'s `Choice.<value>=` lines cover a
   list a file's author can see; they cannot cover one that is COMPUTED

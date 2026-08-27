@@ -5,6 +5,7 @@
 #include "ui/ugfx.h"
 #include "ui/uui_primitives.h"
 #include "ui/uui_scrollbar.h"
+#include "ui/uui_seek.h"
 
 
 // Split out of the single uwidgets.c/.h this used to be, one file per
@@ -13,18 +14,8 @@
 
 // --- listbox ----------------------------------------------------------
 
-// TYPE-AHEAD: a printable key jumps to the first item starting with it,
-// and keys typed in quick succession build a longer prefix -- 'h', 'e'
-// reaches "Helsinki" past "Halifax" and "Hanoi". Pressing the SAME
-// single letter again cycles through the items starting with it. This
-// is what Windows' comboboxes and KDE's item views both do, and with 92
-// timezones it is the difference between a list and a scroll.
-//
-// The window is why a longer prefix cannot be a mode: after this long
-// with no key, the next letter starts a fresh search, so a list can
-// never be left in a state where typing 'h' does not go to an 'h'.
-#define UUI_SEEK_MAX 24
-#define UUI_SEEK_WINDOW_MS 1000
+// TYPE-AHEAD: a printable key jumps to the first item starting with
+// it. The mechanism is shared with uui_table -- see ui/uui_seek.h.
 
 struct uui_listbox {
     int x, y, w, h;
@@ -41,13 +32,8 @@ struct uui_listbox {
     int thumb_grab;
     uint32_t bg, fg, sel_bg, sel_fg, track_bg, thumb_bg;
 
-    // TYPE-AHEAD state, all OWNED -- driven by uui_listbox_key(). The
-    // prefix typed so far, and when its last keystroke arrived; a gap
-    // longer than UUI_SEEK_WINDOW_MS starts a new search rather than
-    // extending an abandoned one.
-    char seek[UUI_SEEK_MAX];
-    int seek_len;
-    unsigned long long seek_ns;
+    // TYPE-AHEAD state, OWNED -- driven by uui_listbox_key().
+    struct uui_seek seek;
 };
 
 void uui_listbox_init(struct uui_listbox *lb, int x, int y, int w, int h,

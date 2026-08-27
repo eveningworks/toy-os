@@ -85,6 +85,13 @@ TESTS = [
     # which hangs the compositor rather than drawing something wrong.
     ("wrap_test", None,
      ["0 failure(s)"], ["FAIL"]),
+    # Type-ahead in uui_listbox and uui_table. Its load-bearing checks
+    # are the SORTED ones: a table's rows are pulled and its app indices
+    # are not the order on screen, so a search walking app order cycles
+    # somewhere the user is not looking while every single-match check
+    # still passes. The fixture is stored in reverse for that reason.
+    ("typeahead_test", 0,
+     ["typeahead_test: 0 failure(s)"], ["FAIL"]),
     # Error codes reaching ring 3. Its load-bearing check is that a full
     # descriptor table and a missing file are DIFFERENT answers, which
     # needs a process that has really run out of fds -- see the file.

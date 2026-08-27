@@ -244,6 +244,9 @@ void uui_fileview_init(struct uui_fileview *fv, int x, int y, int w, int h,
     // to hover (docs/gui-guidelines.md).
     fv->mark_bg = ugfx_rgb(250, 232, 190);
     uui_table_set_sort(&fv->table, FV_COL_NAME, 1);
+    // Typing a letter seeks by NAME, in both modes. Stated rather than
+    // left to the default, so a reordered column list moves it too.
+    uui_table_set_seek_col(&fv->table, FV_COL_NAME);
 }
 
 void uui_fileview_set_mode(struct uui_fileview *fv, enum uui_fileview_mode mode) {

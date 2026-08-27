@@ -37,6 +37,10 @@ void uui_table_init(struct uui_table *t, int x, int y, int w, int h,
     t->sort_col = UUI_TABLE_UNSORTED;
     t->sort_dir = 1;
     t->order_rows = 0;
+    // See the header: column 0 by default, so a table that says nothing
+    // about searching still answers the keyboard.
+    t->seek_col = 0;
+    uui_seek_reset(&t->seek);
 
     t->bg = ugfx_rgb(255, 255, 255);
     t->fg = ugfx_rgb(20, 20, 20);
@@ -55,6 +59,11 @@ int uui_table_row_h(const struct uui_table *t) {
 
 int uui_table_header_h(const struct uui_table *t) {
     return t->show_header ? uui_table_row_h(t) : 0;
+}
+
+void uui_table_set_seek_col(struct uui_table *t, int col) {
+    t->seek_col = (col < t->col_count) ? col : -1;
+    uui_seek_reset(&t->seek);
 }
 
 void uui_table_set_header(struct uui_table *t, int show) {
@@ -506,6 +515,38 @@ static void table_reveal(struct uui_table *t) {
     table_clamp(t);
 }
 
+// --- type-ahead --------------------------------------------------------
+//
+// The search is ui/uui_seek.h's, shared with uui_listbox. What is added
+// here is the index space: the callback is handed a VIEW position and
+// pulls the cell for the app row behind it, so a sorted table cycles in
+// the order on SCREEN. Walking the app's order instead would make the
+// same letter jump around a sorted table, which is the bug
+// uui_table_key()'s arrow handling already avoids.
+
+static void tb_seek_text(void *ctx, int view_row, char *out, int cap) {
+    const struct uui_table *t = (const struct uui_table *)ctx;
+    out[0] = '\0';
+    if (!t->cell || t->seek_col < 0) return;
+    int row = uui_table_source_row(t, view_row);
+    if (row < 0) return;
+    t->cell(t->ctx, row, t->seek_col, out, cap);
+}
+
+// Returns 1 if the selection moved.
+static int table_seek(struct uui_table *t, int key) {
+    if (t->seek_col < 0 || !t->cell) return 0;
+    int view = uui_table_view_row(t, t->selected);
+    int idx = uui_seek_key(&t->seek, key, t->row_count, view,
+                            tb_seek_text, t);
+    if (idx < 0) return 0;
+    int row = uui_table_source_row(t, idx);
+    if (row < 0 || row == t->selected) return 0;
+    t->selected = row;
+    table_reveal(t);
+    return 1;
+}
+
 int uui_table_key(struct uui_table *t, int key) {
     if (t->row_count <= 0) return 0;
     int before = t->selected;
@@ -525,11 +566,16 @@ int uui_table_key(struct uui_table *t, int key) {
     else if (key == KEY_PAGE_UP)    { view -= vis; if (view < 0) view = 0; }
     else if (key == KEY_PAGE_DOWN)  { view += vis;
                                        if (view >= t->row_count) view = t->row_count - 1; }
+    // A PRINTABLE KEY IS A SEARCH, not a keystroke to pass on.
+    else if (uui_seek_is_key(key)) return table_seek(t, key);
     else return 0;
 
     if (view < 0) view = 0;
     t->selected = uui_table_source_row(t, view);
     if (t->selected < 0) t->selected = 0;
+    // A movement key ends a search in progress, so the next letter
+    // starts a new one rather than extending an abandoned prefix.
+    uui_seek_reset(&t->seek);
     table_reveal(t);
     return t->selected != before;
 }
