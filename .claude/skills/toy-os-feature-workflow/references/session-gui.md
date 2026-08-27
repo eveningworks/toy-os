@@ -600,3 +600,32 @@ closed does nothing") and which is a deliberate rule -- an arrow must
 not change a setting the user cannot see. A letter is a deliberate
 search; navigation is not. The forward is restricted to printable keys,
 and the test that caught it is the reason the rule is written down.
+
+## The widget takes keys; the app routes none (2026-08-27)
+
+Type-ahead was added to `uui_table`, tested, shipped -- and did nothing
+in Task Manager, which the maintainer found in a minute. The widget was
+correct. `uapp.c` offers a key to `uapp_desc.focus` and then to
+`uapp_desc.on_key`, and Task Manager declared NEITHER, so no key had
+ever reached `uui_table_key()`. Arrows, Home/End and paging had been
+dead there since the app was written; nobody noticed because nobody
+tries to arrow around a process list.
+
+This is one level up from the 2026-08-24 entry above. That one was about
+the pointer having a path the keyboard did not INSIDE the toolkit. This
+is the toolkit having the path and the APP not connecting to it -- and
+it fails the same way, silently, looking like a broken widget.
+
+**When you add a `key` op, grep for who routes to it.** `.focus` and
+`.on_key` are the only two doors; an app with neither is a closed
+building. That is CLAUDE.md's own "a slot that is PRESENT and read by
+nobody" rule, arriving from the app side rather than the widget side --
+and it is why `tools/check_key_routing.py` exists now.
+
+**The routing choice is real, and it is not always the focus ring.** A
+`uapp_desc.focus` ring is the toolkit's idiom and gives Tab between
+controls -- but no widget draws a focus indicator yet, so adding a ring
+adds a Tab stop nobody can see. For an app with ONE keyboard-hungry
+widget, forwarding from `on_key` is what the File Manager does and what
+Task Manager does now. Ask before assuming the documented idiom is the
+right one for the app in front of you.

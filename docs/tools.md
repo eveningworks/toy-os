@@ -1427,6 +1427,13 @@ window without going through it will find its layout polls timing out.
   `selected`), and characters typed with `settle=False` outrun the
   client so a name field commits empty -- which reads exactly like a
   broken `mkdir`. In `gui_regress.py`.
+
+  **Its type-ahead phase is 4b, deliberately not renumbered in**:
+  inserting a numbered phase would have renumbered eight, which is this
+  repo's docs-edit hazard applied to a test file. It also forced phase 5
+  to establish its own selection with Home rather than inheriting the
+  phase above's -- the insertion broke it on the first run, which is the
+  argument for the rule rather than a reason to move the phase.
 - **`imgview_test.py`** -- JPEG decoding all the way to a screen (15
   checks), and the only one of the three decoder checks that can see a
   pixel. Its oracle is the host: `data/wallpapers/aurora.jpg` is
@@ -1773,6 +1780,17 @@ window without going through it will find its layout polls timing out.
   the height by 16 px against 300, so "it changed" was satisfied. On its
   first run it found a pre-existing bug in `uui_listbox` (see the
   widget-`hit` trap in the widget section above).
+
+  **IT IS ALSO THE ONLY PLACE IN THE SUITE THAT USES THE KEYBOARD ON A
+  TABLE, and it was not, for most of its life.** Every check in it drove
+  by MOUSE -- rows, headers, buttons -- so the app's entire key handler
+  could be absent and all of them passed, which is exactly what happened:
+  Task Manager declared neither `uapp_desc.focus` nor `on_key`, so the
+  table's arrows, Home/End, paging and type-ahead had never worked there.
+  Two checks cover it now, and the second is the load-bearing one: an
+  arrow must reach the table at all, and a typed letter must select by
+  NAME rather than by the PID column. **Ask which input device a tool's
+  checks use** -- a suite that only clicks cannot see a dead keyboard.
 - **`single_instance_test.py`** -- one copy of an app, and relaunching
   it raising the copy that exists (`WIN_REQ_ACTIVATE`,
   `UAPP_SINGLE_INSTANCE`; 9 checks). Run it after touching TWP's create
@@ -2359,6 +2377,26 @@ window without going through it will find its layout polls timing out.
   when `uui_layout_run()` has no early exit at all. Waive in place with
   a `widget-ops-ok: <reason>` comment, the same mechanism
   `check_dispatch.py` uses. In `preflight.sh`.
+- **`check_key_routing.py`** -- its sibling, and the inverse question:
+  `check_widget_ops.py` catches an ops slot nobody filled, this catches
+  a filled slot nobody can REACH. An app whose `struct uapp_desc` names
+  a widget whose ops table has a `.key` must declare `.focus` or
+  `.on_key`, because those are the only two doors in `uapp.c`. It
+  exists because type-ahead was added to `uui_table`, tested, and
+  shipped doing nothing in Task Manager -- which declared neither, so no
+  key had ever reached the widget and its arrows and paging had been
+  dead since the app was written. Nothing caught it because every check
+  in `taskmgr_test.py` drives by MOUSE. **The key-capable set is
+  DERIVED** from the `.key` slots in `userland/ui/*.c` rather than
+  listed, so a new widget is covered the day it gains a key handler --
+  and `uui_menubar_ops`, which has no `.key` and is reached through
+  `uui_router_overlay_key()`, correctly does not count. **It reads the
+  code, not the comments**, which its own positive control caught: with
+  `.on_key = on_key,` commented out the first version still matched the
+  text and reported the app as routed. Waive with a `key-routing-ok:
+  <reason>` comment; `diskmark.c` is the one waiver, because an OPEN
+  popup takes keys through the overlay path regardless. In
+  `preflight.sh`.
 
 
   **A TRAILING `// dispatch-ok:` ON THE SWITCH'S OWN LINE COUNTS.** It

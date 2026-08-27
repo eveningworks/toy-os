@@ -372,6 +372,12 @@ int main(void) {
                                 // makes 64 MiB a multi-minute run.
     uui_button_init(&g_run, 0, 0, 0, 0, "Run", UTHEME_BUTTON_BG, UTHEME_TEXT, 0);
 
+    // key-routing-ok: the popup is what takes keys here, and an OPEN
+    // popup gets them from uui_router_overlay_key() before either door
+    // in uapp.c -- so the dropdown is fully usable by keyboard once it
+    // is open. What a closed one loses is the letter seek; the arrows
+    // are deliberately inert there anyway (ui/uui_dropdown.h). Listed
+    // under the roadmap's papercuts.
     g_bar_items[0].ops = &uui_dropdown_ops;
     g_bar_items[0].widget = &g_size;
     g_bar_items[1].ops = &uui_button_ops;

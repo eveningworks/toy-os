@@ -382,6 +382,14 @@ trips them before it knows to look anything up.
   whether it wants them -- that rule found `uui_tree` relying on the
   default the hour it was added). Waive with a `widget-ops-ok: <reason>`
   comment, as with `check_dispatch.py`.
+- **AND `tools/check_key_routing.py` FAILS THE BUILD ON THE INVERSE:
+  A FILLED SLOT NOBODY CAN REACH.** An app whose `uapp_desc` names a
+  widget with a `.key` op must declare `.focus` or `.on_key` -- the only
+  two doors in `uapp.c`. Task Manager declared neither, so `uui_table`'s
+  arrows, paging and type-ahead were dead there for months while every
+  check in its test drove by MOUSE. The key-capable set is DERIVED from
+  `userland/ui/*.c`, so a new widget is covered the day it gains a key
+  handler. Waive with `key-routing-ok: <reason>`.
 - **A DISPATCH CHAIN OVER ~20 BRANCHES SHOULD BE A TABLE, and
   `tools/check_dispatch.py` fails the build when one isn't.** The
   recurring shape here: something dispatches on a kind -- a syscall
@@ -1134,6 +1142,7 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   guest first -- it refuses to start while one holds disk.img's write
   lock**; the gate: clean build +
   iso + `check_deps.py` + `check_layout.py` + `check_dispatch.py` +
+  `check_widget_ops.py` + `check_key_routing.py` +
   `boot_smoke_test.py` + `ktest_run.py` + `usertest_run.py`),
   `check_docs.py`, `check_licenses.py` (**every vendored port and shipped font is named in `LICENSE`** -- `userland/ports/doom/` is GPL-2-OR-LATER inside an MIT repo and was not mentioned there at all, and the font inventory said two when there were five), `check_tool_commands.py` (**every guest command a
   tool drives still EXISTS** -- it found `kvm_soak.py` driving `delete`,
@@ -1164,7 +1173,10 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   `forcequit_test.py`, `gfxdemo_test.py`, `idle_desktop_test.py`,
   `menubar_test.py`, `notepad_client_test.py`, `sched_gui_test.py`,
   `screen_surface_test.py`, `scrollbar_test.py`,
-  `single_instance_test.py`, `taskmgr_test.py`, `uapp_test.py`,
+  `single_instance_test.py`, `taskmgr_test.py` (**the table widget, and
+  the only checks in the suite that use the KEYBOARD there** -- every
+  other one drives by mouse, which is how the table's whole key handler
+  stayed dead and unnoticed), `uapp_test.py`,
   `uiclient_test.py`, `uidemo_test.py`, `uterm_test.py`,
   `keyup_test.py` (key RELEASES reaching a ring-3 client, including the
   four modifier keys -- its load-bearing check holds a key DOWN with

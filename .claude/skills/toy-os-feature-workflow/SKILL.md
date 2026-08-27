@@ -162,11 +162,12 @@ to this file too).
      unchecked cleanup produced a confusing CI cascade.
    - `tools/preflight.sh` runs the standard build+test loop
      (`make clean && make all && make iso`, then `check_layout.py`,
-     `check_dispatch.py`, `check_widget_ops.py`,
-     `boot_smoke_test.py`, `ktest_run.py`, then a `git status --short`
-     summary) in one command -- `make verify` is the same thing without the git
-     summary -- use it as the default "am I safe to keep going /
-     safe to deliver" check instead of chaining the steps by hand.
+     `check_dispatch.py`, `check_widget_ops.py`, `check_key_routing.py`,
+     `boot_smoke_test.py`, `ktest_run.py`, `usertest_run.py`, then a
+     `git status --short` summary) in one command -- `make verify` is the
+     same thing without the git summary -- use it as the default "am I
+     safe to keep going / safe to deliver" check instead of chaining the
+     steps by hand.
      `--skip-clean` skips the initial `make clean` for a faster
      iteration loop while still testing the fresh boot path.
    - Anything touching rendering, input, or window/widget behavior:

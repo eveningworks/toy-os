@@ -1837,3 +1837,47 @@ of milliseconds later. This repo's documented flake shape, found again:
 a poll whose exit condition is weaker than what the code after it
 needs.
 
+
+## 2026-08-27 -- type-ahead in `uui_table`: a suite that drives by mouse, and a fixture that could not tell two orderings apart
+
+Three lessons, and the first is the one that let a broken feature ship
+with a green suite and a written try-it guide.
+
+**A SUITE THAT DRIVES BY MOUSE CANNOT SEE A DEAD KEYBOARD PATH.** Every
+check in `taskmgr_test.py` clicked -- rows, headers, buttons -- so the
+app's entire key handler could be absent and all 20 checks passed. The
+new widget test covered the widget in isolation and
+`filemanager_test.py` covered an app that DOES route keys, so between
+them nothing could see that a second app routed none. Two green tests
+about a mechanism are not coverage of every caller of it. **Ask which
+INPUT DEVICE each check uses, and whether any check uses the one your
+change is about.**
+
+**AND THE HANDOVER CLAIMED IT ANYWAY.** The delivery's try-it guide said
+"Task Manager, type `t` -> selects toywm". That path was never run. A
+try-it guide is a set of assertions about the built system: if a row of
+it has not been executed, it is a guess, and the maintainer executing it
+is the test. Run the guide before writing it.
+
+**A FIXTURE WITH ONE MATCH PER LETTER CANNOT DISTINGUISH TWO ORDERINGS.**
+The table's search must walk the SORTED view, not the app's row array.
+The first fixture had four rows with distinct initials, so a control
+that deliberately walked the array passed EVERY check -- one match is at
+the same place in both orders. This is the repo's "the data never
+reached the code under test" rule from a new angle: the data reached it,
+and could not DISCRIMINATE. Rebuilt so two rows share an initial and the
+array order is the reverse of the sorted order, the control failed
+exactly two checks with the inverted values.
+
+The general form: **for a check about ORDER, the fixture must have at
+least two candidates AND the two orders must disagree about which comes
+first.** Write down what the wrong implementation would answer, and
+confirm the fixture makes that a different number.
+
+**A NEW TEST'S NAME MAY ALREADY BE TAKEN, AND `cat >` DOES NOT ASK.**
+`userland/tests/seek_test.c` was written straight over the existing
+`lseek` test -- a tracked file, clobbered without being read. `git
+status` showed ` M` rather than `??`, which is the tell. Restored with
+`git checkout` and renamed to `typeahead_test.c`. Check the name is free
+before creating a file, and read `git status` after: an ` M` on a file
+you meant to CREATE is a file you destroyed.
