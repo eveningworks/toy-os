@@ -1662,6 +1662,25 @@ window without going through it will find its layout polls timing out.
   the size is derived from the tree now -- and the lesson is the one
   `check_tool_commands.py` cannot catch: **it sees a command that was
   renamed away, never one whose OUTPUT changed.**
+
+  **A SECOND PHASE, 2026-08-27: the mount POLICY** (`--phase policy`,
+  and part of a bare run). "Live only when asked for, or when there is
+  no disk" is what stops a live session displacing an installed system,
+  and it was enforced by asking `ata_present()` -- the LEGACY IDE probe
+  -- so on a machine whose only disk is AHCI or virtio the kernel
+  concluded "no disk" and took over anyway. **Every live test here
+  booted with NO DISK, which is the one configuration where the right
+  and the wrong predicate agree.** The phase boots one scratch ISO (it
+  builds its own, with the `live` word left out) twice and requires
+  OPPOSITE outcomes -- declined with an AHCI disk attached, used without
+  one -- so each run is the other's control. Reported by a user booting
+  real hardware, which is where this class of bug lives.
+
+  It reads the kernel's own `fs:` lines off a serial log rather than
+  driving the console, and it builds its ISO from `build/kernel.bin`, so
+  **build before running it** -- a tool that restores a working tree
+  without rebuilding (`predates.py`) leaves it testing the other
+  kernel.
 - **`demo_test.py`** -- boots `toy-os-demo.iso` and asserts the scripted
   tour actually PERFORMS (6 checks). **On demand only** -- do not add it
   to `preflight.sh`, `gui_regress.py` or CI (standing request: it boots

@@ -30,12 +30,30 @@ The four checks:
      do -- a user would expect their files to survive the power going
      off.
 
-    python3 tools/live_boot_test.py
+PHASE 2: THE POLICY, WHICH IS THE HALF THAT SILENTLY BROKE
+----------------------------------------------------------
+"Live only when asked for, or when there is no disk" is the rule that
+keeps a live session from displacing somebody's installed system. It was
+enforced by asking `ata_present()` -- the LEGACY IDE probe -- so on a
+machine whose only disk is AHCI or virtio the kernel concluded "no disk"
+and took over anyway. Nothing saw it, because every automated live test
+here boots with NO DISK AT ALL, which is the one configuration where
+both the right and the wrong predicate agree.
+
+So phase 2 boots the SAME scratch ISO twice, with the `live` word left
+out, and requires OPPOSITE outcomes: with a disk attached the image must
+be declined, and with no disk it must be used. Each run is the other's
+control -- a kernel that always takes the image, or never does, fails
+one of them whatever it does to the other.
+
+    python3 tools/live_boot_test.py                 # both phases
+    python3 tools/live_boot_test.py --phase nodisk  # just the original
     echo $?
 """
 
 import argparse
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -132,6 +150,107 @@ def parse_df(df):
     return 0, 0, ""
 
 
+# --- phase 2: the mount POLICY ----------------------------------------
+
+# `live` is deliberately absent from this entry: phase 2 is about what
+# the kernel decides when nobody asked. The shipped live ISO's default
+# entry forces it, so this cannot be tested with that image.
+UNASKED_CFG = """insmod all_video
+set gfxpayload=auto
+set timeout=0
+menuentry "toy-os (unasked)" {
+    multiboot2 /boot/kernel.bin
+    module2 /boot/live.img live.img
+    boot
+}
+"""
+
+
+def build_unasked_iso(tmp, kernel, image):
+    """A one-entry ISO carrying the live module and NOT asking for it."""
+    tree = os.path.join(tmp, "live_policy_iso")
+    subprocess.run(f"rm -rf {tree}", shell=True, check=True)
+    os.makedirs(os.path.join(tree, "boot", "grub"))
+    subprocess.run(f"cp {kernel} {tree}/boot/kernel.bin", shell=True, check=True)
+    subprocess.run(f"cp {image} {tree}/boot/live.img", shell=True, check=True)
+    with open(os.path.join(tree, "boot", "grub", "grub.cfg"), "w") as f:
+        f.write(UNASKED_CFG)
+    iso = os.path.join(tmp, "live_policy.iso")
+    mkrescue = shutil.which("grub-mkrescue") or shutil.which("grub2-mkrescue")
+    if not mkrescue:
+        return None
+    subprocess.run(f"{mkrescue} -o {iso} {tree}", shell=True, check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return iso
+
+
+def foreign_disk(tmp):
+    """A disk with a real GPT and nothing toy-os can claim.
+
+    Not a blank image: a kernel that ignored partition tables would treat
+    a blank one as "no disk" and pass phase 2 for the wrong reason.
+    """
+    path = os.path.join(tmp, "live_policy_disk.img")
+    subprocess.run(f"rm -f {path} && truncate -s 256M {path}", shell=True, check=True)
+    here = os.path.dirname(os.path.abspath(__file__))
+    subprocess.run(f"python3 {here}/mkpart_test.py {path} --gpt --layout 200M",
+                   shell=True, check=True, stdout=subprocess.DEVNULL)
+    return path
+
+
+def boot_and_read_fs_lines(iso, disk, tmp, tag, timeout_s=25):
+    """Boot once and return the kernel's own `fs:` lines."""
+    log = os.path.abspath(os.path.join(tmp, f"live_policy_{tag}.log"))
+    if os.path.exists(log):
+        os.remove(log)
+    drive = ""
+    if disk:
+        # AHCI on purpose -- an IDE disk is the one kind the old
+        # predicate could see, so it would pass with the bug present.
+        drive = (f" -device ahci,id=ahci -drive if=none,id=d0,file={disk},format=raw"
+                 f" -device ide-hd,drive=d0,bus=ahci.0")
+    cmd = (f"timeout {timeout_s} qemu-system-x86_64 -cdrom {iso} -boot order=d"
+           f" -m 512{drive} -serial file:{log} -display none -no-reboot")
+    subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL)
+    if not os.path.exists(log):
+        return []
+    with open(log, "rb") as f:
+        text = f.read().decode("utf-8", "replace")
+    return [ln for ln in text.splitlines() if ln.startswith("fs:")]
+
+
+def run_policy_phase(res, tmp):
+    kernel, image = "build/kernel.bin", "build/live.img"
+    for f in (kernel, image):
+        if not os.path.exists(f):
+            res.check("phase 2 could run", False, f"{f} not found -- run `make live-iso`")
+            return
+    iso = build_unasked_iso(tmp, kernel, image)
+    if iso is None:
+        print("live_boot_test: no grub-mkrescue -- skipping the policy phase")
+        return
+    disk = foreign_disk(tmp)
+
+    # A disk is present and nobody asked for a live session: the image
+    # must be DECLINED. The disk holds no toy-os filesystem, so the
+    # honest outcome is ramfs -- and saying so is itself the evidence
+    # that the disk was the thing consulted.
+    lines = boot_and_read_fs_lines(iso, disk, tmp, "disk")
+    used_image = any("live image" in ln for ln in lines)
+    res.check("an unasked-for live image does NOT displace a real disk",
+              bool(lines) and not used_image,
+              " | ".join(lines[:4]) or "no fs: lines at all")
+
+    # The same ISO with no disk: now it MUST use the image. Without this
+    # half, a kernel that never touched the module would pass the check
+    # above and this tool would call a dead feature healthy.
+    lines = boot_and_read_fs_lines(iso, None, tmp, "nodisk")
+    res.check("with no disk at all, the image IS used (the control)",
+              any("live image" in ln for ln in lines),
+              " | ".join(lines[:4]) or "no fs: lines at all")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     # The LIVE iso, which is its own artifact (`make live-iso`) -- the
@@ -140,11 +259,19 @@ def main():
     # belongs to the image that needs it. See the Makefile.
     ap.add_argument("--iso", default="toy-os-live.iso")
     ap.add_argument("--tmp", default="/tmp")
+    ap.add_argument("--phase", choices=("both", "nodisk", "policy"),
+                    default="both", help="which phase to run")
     args = ap.parse_args()
 
     if not os.path.exists(args.iso):
         print(f"live_boot_test: {args.iso} not found -- run `make live-iso` first")
         return 1
+
+    res = Result()
+
+    if args.phase == "policy":
+        run_policy_phase(res, args.tmp)
+        return report(res)
 
     serial = os.path.abspath(os.path.join(args.tmp, "live_serial.log"))
     sock = os.path.abspath(os.path.join(args.tmp, "live.serial"))
@@ -161,7 +288,6 @@ def main():
     cmd = cmd.replace(f"-serial file:{serial}", f"-serial unix:{sock},server,nowait")
     subprocess.run(cmd, shell=True, check=True)
 
-    res = Result()
     sh = None
     try:
         deadline = time.time() + BOOT_TIMEOUT_S
@@ -228,6 +354,13 @@ def main():
             if pid:
                 subprocess.run(f"kill {pid}", shell=True)
 
+    if args.phase == "both":
+        run_policy_phase(res, args.tmp)
+
+    return report(res)
+
+
+def report(res):
     print(f"\nlive_boot_test: {len(res.passes)} passed, {len(res.fails)} failed")
     for f in res.fails:
         print(f"  FAILED: {f}")

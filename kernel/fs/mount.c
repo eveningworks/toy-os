@@ -317,14 +317,19 @@ int mount_remove(const char *point, const char **why) {
 // present and unasked-for is mounted exactly as before. A live session
 // that quietly displaced somebody's installed system would be the worst
 // thing this feature could do.
-static int try_live_module(void) {
+//
+// WHO ASKS THE "IS THERE A DISK" QUESTION IS THE CALLER'S JOB, and that
+// is the fix: this used to ask `ata_present()` itself, which is the
+// LEGACY IDE probe. On a machine whose only disk is AHCI or virtio it
+// answered "no disk" and a live boot displaced the real one anyway;
+// on a machine presenting both, the opposite. The predicate that was
+// meant is blk_present(), and it cannot be read here -- it is only true
+// after the disk drivers have run, which a FORCED live session must
+// happen before. So the caller asks, in that order.
+static int try_live_module(int forced) {
     struct multiboot_module_info mod;
     if (!multiboot_get_module(0, &mod) || !mod.found) return 0;
     if (mod.end <= mod.start) return 0;
-
-    const char *cmdline = multiboot_cmdline();
-    int forced = cmdline && k_strstr(cmdline, "live");
-    if (ata_present() && !forced) return 0;
 
     if (!blk_ram_register(mod.start, mod.end - mod.start)) return 0;
     klog_printf("fs: live image at 0x%x, %u KiB%s\n", (unsigned)mod.start,
@@ -526,10 +531,15 @@ static void mount_ramfs_root(const char *why_log) {
 // carried -- an unrecognised disk is not an invitation -- is now true
 // by construction rather than by a branch remembering it.
 static void probe_and_mount_root(void) {
-    // The live image gets first refusal, then the disk. Registering a
+    // The live image gets first refusal ONLY IF ASKED FOR. Registering a
     // block device is what makes the probe below read from RAM instead
-    // of ATA -- the backends are unchanged and never learn which it is.
-    int live = try_live_module();
+    // of a disk -- the backends are unchanged and never learn which it
+    // is. See try_live_module() for why the two halves of the rule are
+    // asked at different points.
+    const char *cmdline = multiboot_cmdline();
+    int forced = cmdline && k_strstr(cmdline, "live") ? 1 : 0;
+
+    int live = forced ? try_live_module(1) : 0;
     if (!live) {
         // WHICH DISK WINS, decided here because blk_register() is
         // last-writer-wins and order alone would otherwise decide it
@@ -543,6 +553,10 @@ static void probe_and_mount_root(void) {
         // boot line step down one rung each, which is what keeps the
         // lower paths reachable and therefore tested.
         if (!blk_virtio_init() && !blk_ahci_init()) blk_ata_init();
+
+        // The other half of the rule, now that it can be answered: no
+        // disk of any kind, so a live image displaces nothing.
+        if (!blk_present()) live = try_live_module(0);
     }
 
     if (!blk_present()) {
