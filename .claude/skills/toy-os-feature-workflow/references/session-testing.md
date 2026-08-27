@@ -1881,3 +1881,68 @@ status` showed ` M` rather than `??`, which is the tell. Restored with
 `git checkout` and renamed to `typeahead_test.c`. Check the name is free
 before creating a file, and read `git status` after: an ` M` on a file
 you meant to CREATE is a file you destroyed.
+
+**2026-08-27: THE BUG CLASS THAT NEEDS A CONFIGURATION NO TEST
+PRODUCES. Three of them in one session, all reported from real
+hardware, none findable by any check in this repo.**
+
+- A UEFI boot failed in GRUB (`no suitable video mode found`) because no
+  `grub.cfg` here loads a video driver. Every automated boot is BIOS,
+  where the i386-pc core image has VBE built in.
+- The live image displaced a real disk, because the guard asked
+  `ata_present()` -- the LEGACY IDE probe. Every live test boots with
+  **no disk**, which is the one configuration where the right and the
+  wrong predicate agree.
+- A machine's second drive did not exist, because the disk init line
+  short-circuited. Every test here attaches **exactly one disk**, which
+  is the one configuration where "which driver ran" and "which disk is
+  root" cannot disagree.
+
+**The general form: find the PARAMETER your fixtures all pin to one
+value.** How many disks. Which firmware. Which controller. How many of a
+thing exist. A suite built entirely at one value cannot see anything
+that only misbehaves at another, and it will be completely green while
+it cannot.
+
+The habit that follows: when writing a test, say what its fixture holds
+FIXED, and ask whether the code under test branches on it.
+`tools/multidisk_test.py` exists because the answer was "the number of
+disks", and it took a user booting a laptop to ask.
+
+**REPRODUCE A REAL-HARDWARE REPORT LOCALLY BEFORE THEORISING.** The UEFI
+failure looked like a hardware problem and took four minutes to
+reproduce exactly, under OVMF (`/usr/share/edk2/x64/OVMF_CODE.4m.fd` as
+pflash) -- report to repeatable test to two-line fix. Ask what a
+different QEMU MACHINE would show, not only a different QEMU version:
+`qemu_matrix.py` varies the emulator, while firmware, controller and
+drive count are separate axes it does not touch.
+
+**A POSITIVE CONTROL THAT REDDENS NOTHING MEANS THE TEST NEVER REACHES
+THE PATH -- a finding about the TEST, not a green light.** A new
+`SYS_WAIT_READY` KTEST got a control that made the call CONSUME the
+event it waited for, the exact bug its design prevents. Nothing went
+red: the test only exercised the block-then-wake path, where a woken
+syscall returns through its saved trapframe and never re-runs the body,
+so the consuming line could not execute. A fourth sub-check for the
+already-queued path made the control fail on the right assertion
+(`expected 4, got 3`).
+
+The existing rule is "a green test proves nothing until you have seen it
+go red". The sharper version: **when the control fires nothing, do not
+conclude the code is fine -- find which path the fixture actually
+takes.**
+
+**A RESTORED TREE IS NOT A REBUILT TREE.** `predates.py` restores the
+SOURCE and, until this session, left `build/` and `disk.img` holding
+what HEAD produced -- so the next tool run tested the other kernel while
+every file on disk said otherwise. It reported a working fix as broken
+twice before the cause was spotted. The tool rebuilds after restoring
+now; the habit to keep is that **anything building from `build/` or a
+boot image needs the build to be current, and nothing tells you when it
+is not.**
+
+**AND `predates.py` STASHES UNTRACKED FILES.** A tool written this
+session does not exist during the HEAD run, so the comparison prints an
+argparse "unrecognized arguments" and calls it a difference. It warns
+now. The measurement is only valid for a command that exists on both
+sides.

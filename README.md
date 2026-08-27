@@ -82,6 +82,13 @@ QEMU, and it does not stop at "hello world from the kernel":
   `mkpart` writes a table, `parttable` reads one, and `fsformat`
   reformats the mounted volume -- and refuses to be aimed at the
   bootloader.
+- **Every disk driver enumerates, and the root is a separate choice** —
+  all of them run at boot and each registers what it finds into a device
+  table (`ata0`, `ahci0`, `virtio0`, `ram0`; partitions `ata0p3`), which
+  `lsblk` prints. What carries the root comes from `root=` on the boot
+  line, else driver precedence — Linux's split, and NT's. Before this a
+  machine with a virtio disk never ran the AHCI driver at all, so its
+  SATA drive did not exist.
 - **Two filesystems at once, and one of them is the boot volume** — a
   mount table keyed by path prefix, so TFS3 serves `/` and a FAT32
   driver serves `/boot`, read-only, which is the partition GRUB and the
@@ -539,7 +546,7 @@ dispatch cannot disagree about which syscalls exist.
 
 **Introspection.** Kernel state reaches ring 3 through one self-describing
 registry rather than a `/proc` filesystem: a subsystem registers a
-provider for a fact, and a command formats it — `ps`, `df`, `lspci`,
+provider for a fact, and a command formats it — `ps`, `df`, `lsblk`, `lspci`,
 `lsusb`, `lscpu`, `meminfo`, `kstack`, `tty`, `kbd`. Answering *"what did the
 machine actually do?"* is treated as a first-class job, distinct from a
 test asserting it did the right thing: `strace` decodes a syscall per

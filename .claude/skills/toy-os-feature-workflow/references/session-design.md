@@ -1878,3 +1878,59 @@ shape for the interrupt acknowledge: `USBSTS.EINT` and `IMAN.IP` are
 both RW1C, so acknowledging writes back ONE bit, never the register --
 getting that wrong is the storm that hung this guest during virtio-input.
 
+
+**2026-08-27: TWO DECISIONS FUSED INTO ONE LINE, AND HOW THAT LOOKS
+FROM THE INSIDE.**
+
+The block layer decided which driver ran and which disk carried the root
+with a single expression:
+
+    if (!blk_virtio_init() && !blk_ahci_init()) blk_ata_init();
+
+It reads as precedence and it is also a short circuit, so a machine with
+a virtio disk never ran the AHCI driver AT ALL -- its SATA drive was not
+merely unpreferred, it did not exist. Unmountable, invisible to
+`parttable`, absent from every tool. A live boot was worse: it
+registered the RAM image and skipped disk init entirely, so a live
+session could not touch the disks a live CD exists to rescue.
+
+Neither Linux nor NT fuses them, and the split is the whole design: a
+driver registers everything it probes, and `root=` (or BCD's
+`osdevice`) names the one to boot from, resolved later against devices
+that are already there. **Finding is not claiming.**
+
+**The tell, generalised: an expression that both DOES something and
+DECIDES something.** `if (!init_a() && !init_b()) init_c();` performs
+initialisation and selects a winner in one place, so you cannot change
+the policy without changing what runs, or add a device without changing
+the policy. Splitting it cost one table and one `root=` parser and made
+four separate problems go away at once.
+
+**THREE THINGS THAT ONLY SHOWED UP AFTER THE SPLIT**, each invisible in
+the design and obvious in the first test:
+
+- **A device that is CREATED but never made ACTIVE still needs a name.**
+  `/boot`'s partition goes through `blk_part_create()`, never through
+  `blk_register()`, so it was absent from the table -- and
+  `mount ata0p2 /mnt` failed while that exact partition was mounted at
+  `/boot`. A table that only records winners is not a table.
+- **Only the ROOT's disk had its partitions enumerated.** So a second
+  drive was listed and still unreachable: named at the disk level,
+  unnameable at the partition level, which is worse than not listing it
+  because it looks usable. The old table reader could address only the
+  active disk, so it needed a device-taking variant before the pass
+  could exist at all.
+- **Numbering by slot order disagreed with the partition table.** The
+  root partition came out `ata0p1` when it is table entry 3 (the two
+  ahead are the firmware's and are skipped), so the name matched nothing
+  a person could see and `root=ata0p3` would have missed. **An identity
+  a user types must be the one they can READ somewhere else.**
+
+**AND THE LIMIT THAT IS NOT A GAP.** A second volume of the same format
+still will not mount -- `fs_ops.max_mounts` is 1 for every backend, and
+raising it needs per-instance state behind an opaque handle threaded
+through every op. Worth saying out loud in the docs, because after this
+change the device resolves and the volume reads, so the refusal looks
+like the new code failing rather than an old rule holding. **When a
+change makes something newly reachable, check which OLD refusals now
+appear for the first time** -- and say which ones are deliberate.

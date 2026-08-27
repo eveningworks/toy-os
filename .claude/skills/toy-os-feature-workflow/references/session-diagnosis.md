@@ -992,3 +992,58 @@ Three runs, HEAD passing and the tree failing every time, is what turned
 not have, because the failure had already been seen to pass once on an
 aged VM.
 
+
+**2026-08-27: TURNING AN INTERMITTENT INTO A DETERMINISTIC FAILURE IS
+STILL A REGRESSION, AND ONLY A RATE ON BOTH SIDES SHOWS IT.**
+
+A compositor change made `uterm_test`'s two `edit` checks fail. Those
+checks were ALREADY in `docs/bugs.md` as intermittent, cause never
+established -- so "it predates me" was true and would have been the
+wrong conclusion. Measured on equally clean disks: **HEAD 1 run in 3,
+the change 6 in 6.** At a true rate of 1/3, six-for-six is p≈0.0014.
+
+The verdict that fits: the defect predates the change, and the change
+makes it reliable. That is still not shippable, and it is a different
+sentence from either "I broke it" or "it predates me".
+
+**Two things this needed that a single paired run does not give.**
+`predates.py` runs each side ONCE, which cannot distinguish 1/3 from
+6/6 -- it reported "HEAD fails and the working tree does not" on one
+sampling and the opposite on another. For anything already known to be
+flaky, run N on each side. And **re-run on a fresh image first**: the
+first paired comparison ran against a `disk.img` the KTEST suite had
+left a corrupted file on, and `make iso` then failed outright with
+`sparse files are outside this tool's write scope`. `make clean-disk`
+between batches is in CLAUDE.md for this reason and it still caught me.
+
+**WHEN TWO HYPOTHESES FAIL, STOP AND INSTRUMENT.** Both were plausible
+and both were wrong, and each cost a build-and-test cycle:
+
+- *The wait is too long.* Set `WM_IDLE_WAIT_MS` to 10 -- exactly the old
+  100 Hz cadence. Still failed 1 in 1. So it is not the duration, it is
+  the blocking.
+- *The compositor out-runs its clients.* An event-woken loop runs a
+  frame per present, where a tick-paced one could not exceed 100/s, so a
+  streaming client should be able to squeeze the pty chain. Added a
+  `WM_MIN_FRAME_MS` floor. It got WORSE -- 9 failures instead of 2.
+
+Both were discriminating experiments, which is why each was worth one
+cycle. After the second, the honest move was to park the work on a
+branch with the evidence in the commit message rather than guess a
+third time. The repo's own rule is "when something fails twice, stop
+reasoning and go look" -- looking here means a frame counter, not
+another theory.
+
+**A FAILURE CAN BE THE HARNESS NOT HAVING RUN AT ALL.** A `uterm` run
+that printed no `FAIL` lines looked like a pass; it was `vm.py start`
+racing the previous `stop`, so `QMPSession` got `Connection refused` and
+the tool died before its first check. Empty output is not a green run.
+Wait on the PORT accepting rather than on a fixed sleep -- an `until`
+loop probing `connect_ex` -- which is the same "wait on an observable,
+not a duration" rule the GUI tools already follow.
+
+**AND THE CONSOLE PREFIX MATTERS: `vm.py` sends `sh <cmd>`.** The ring-0
+debug console's own commands are kernel introspection; `df`, `dmesg` and
+`ls` are `/bin` PROGRAMS reached through `sh`. A hand-rolled serial
+driver that forgets the prefix gets `unknown command: df` and reads as a
+broken guest; one that doubles it gets `Unknown command: sh`.

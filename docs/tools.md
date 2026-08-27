@@ -2275,6 +2275,21 @@ window without going through it will find its layout polls timing out.
   the same as unrelated, since a change can make a latent bug reachable
   without causing it.
 
+  **TWO TRAPS IT NOW HANDLES ITSELF, both of which produced a wrong
+  answer here before it did.** The `-u` that makes the HEAD build honest
+  also takes UNTRACKED files away -- so a tool written this session does
+  not exist during the HEAD run, and the failure reads as the tool being
+  broken rather than absent (an argparse "unrecognized arguments" is
+  what it actually looks like). It names such files up front now, and
+  says the comparison is not a measurement.
+
+  And **restoring the SOURCE does not restore the ARTIFACTS**: `build/`
+  and any boot image still hold what HEAD produced, so whatever is run
+  next silently tests the other kernel while every file on disk says
+  otherwise. That reported a working fix as broken here, twice. With
+  `--build` it rebuilds the working tree after restoring, so the tree is
+  left as it was found -- including what was built from it.
+
 - **`check_tool_commands.py`** -- static check that every guest command
   a tool drives still exists, against the same authority `check_docs.py`
   uses (the seeded `/bin` tree plus both shells' builtins).
@@ -2324,6 +2339,26 @@ window without going through it will find its layout polls timing out.
   is finite, so the boot lines a pattern names AGE OUT, and the check
   passed on a fresh boot and failed minutes later with grep working
   perfectly.
+
+- **`multidisk_test.py`** -- two disks on two different drivers, which is
+  the one configuration nothing else here boots. Every other tool
+  attaches exactly one disk, and that is precisely the shape where
+  "which driver ran" and "which disk is root" cannot disagree -- so the
+  short-circuiting `if (!blk_virtio_init() && !blk_ahci_init())
+  blk_ata_init();` was invisible to all of them while it made a
+  machine's second drive not exist.
+
+  Seven checks: both disks enumerated and named, `root=` overriding the
+  driver precedence, the OTHER disk's partitions named too, exactly one
+  device marked as the root, a named device resolving where an unknown
+  one is refused by name, and an unknown `root=` reporting what it does
+  have and booting anyway. Its positive control is the old short circuit
+  restored, which reddens six of the seven and whose detail shows the
+  bug outright -- `have ahci0` and no `ata0` at all.
+
+  It builds its own boot image per phase (`make iso KCMDLINE=...`, then
+  a copy), so **it rewrites `disk.img`'s GRUB line** and puts it back at
+  the end. On demand, not in any gate.
 
 - **`partition_test.py`** -- boots toy-os with its filesystem **inside**
   an MBR or GPT partition. The only thing that exercises `vfs.c`'s

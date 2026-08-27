@@ -176,6 +176,7 @@ reported through `disk_usage()` so `df` shows something meaningful:
 
 | what is on the machine | root |
 |---|---|
+| `root=<device>` on the cmdline naming a device this boot found | that device |
 | a live module, and (`live` on the cmdline or no disk) | TFS3 on `block_ram` |
 | a drive with a table, and a partition a backend claims | that backend, in that partition |
 | a drive with a table, nothing claimable | **ramfs**, and say that `fsformat` claims the active partition |

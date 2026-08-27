@@ -6,7 +6,7 @@
 
 ## Synopsis
 
-    mount [-r] [-t <fstype>] <partition|none> <mountpoint>
+    mount [-r] [-t <fstype>] <device|partition|none> <mountpoint>
            mount                  list what is mounted
 
 ## Description
@@ -17,14 +17,31 @@ is already attached. Both halves go through the mount table in
 `df` formats differently, so there is no syscall here that only `mount` uses.
 
     device   on             type     options
-    ata3     /              tfs3     rw
-    ata2     /boot          fat32    ro
+    ata0p3   /              tfs3     rw
+    ata0p2   /boot          fat32    ro
 
-**The source is a partition NUMBER, not a path.** toy-os has no `/dev`, so
-there is nothing to name a volume with: `mount 2 /boot` means "the second
-partition of the boot disk". `parttable` prints the numbers. A filesystem that
-needs no volume at all is named by type instead, with `none` as the source —
-`mount -t ramfs none /mnt` gives you a scratch filesystem in RAM.
+**The source is a DEVICE NAME, or a partition number, or `none`.**
+
+A name is what `lsblk` prints — `ata0p3`, `ahci0p1`, `virtio0` — and it is the
+only form that can reach a second disk. Every driver enumerates at boot and
+every device it finds is named (`kernel/include/kernel/block.h`), so a machine
+with two drives can mount either: `mount ahci0p1 /mnt`.
+
+A bare NUMBER is the older form and still works, but it can only ever mean a
+partition of the **root's** disk — `mount 2 /boot` is "the second partition of
+the disk the root came from". That was unambiguous when one disk was all the
+kernel could see. It no longer is, so prefer the name; the number is kept
+because it is what `parttable` prints and what existing scripts pass.
+
+A filesystem that needs no volume at all is named by type instead, with `none`
+as the source — `mount -t ramfs none /mnt` gives you a scratch filesystem in
+RAM.
+
+**A name this boot did not find is refused by name**, which is a different
+answer from "nothing recognises the filesystem on that volume" — the first
+means no such device, the second means the device was found and read and no
+backend claimed what was on it. Worth knowing when a mount fails: they point
+at different problems.
 
 **The mount point must already exist and be a directory**, which is Linux's
 rule. Mounting onto nothing would create a path that exists only while
@@ -64,17 +81,24 @@ mounted as something it is not.
   state in module-level statics, so a second mount of the same backend is
   refused by name rather than silently repointing the first one. See
   `fs_ops.h`'s `max_mounts` for what raising it would take.
+
+  **This is what stops a second TFS3 disk being mounted**, now that a second
+  disk is reachable at all. The device resolves and the volume is read; the
+  backend is simply already in use by the root. Enumeration did not change
+  this and was not meant to — it changed whether the device could be NAMED.
 - An operation naming two paths — `mv`, `ln` — is refused across a mount
   boundary. That is Unix's `EXDEV`, and `cp` is the answer.
 
 ## Examples
 
     mount                          # what is mounted, and how
-    mount 2 /boot                  # the ESP, read-write
-    mount -r 2 /boot               # the ESP, read-only (what boot does)
+    mount ata0p2 /boot             # the ESP, by name
+    mount ahci0p1 /mnt             # a partition on the SECOND disk
+    mount 2 /boot                  # the same ESP, by number, on the root's disk
+    mount -r 2 /boot               # read-only (what boot does)
     mount -t ramfs none /mnt       # a scratch filesystem in RAM
     mount -t fat32 3 /mnt          # only FAT32 is asked; anything else is refused
 
 ## See also
 
-`umount`, `df`, `parttable`, `mkpart`, `fsformat`, `fsck`
+`lsblk` (what the devices are called), `umount`, `df`, `parttable`, `mkpart`, `fsformat`, `fsck`

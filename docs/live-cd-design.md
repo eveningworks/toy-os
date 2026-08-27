@@ -57,9 +57,16 @@ already. Check these before assuming anything needs building:
   `module2` line comes back. So a module cannot be handed out by
   `pmm_alloc_frame()`.
 - **The VFS already has a no-disk path.** `vfs.c` degrades to a
-  RAM-only filesystem when `ata_present()` is false, and
-  `fs_is_persistent()` already reports that honestly (`about`, `df` and
-  `fsck` all print it). What that path lacks is CONTENT: it comes up
+  RAM-only filesystem when there is no disk, and `fs_is_persistent()`
+  already reports that honestly (`about`, `df` and `fsck` all print it).
+
+  **The predicate said `ata_present()` when this was written, and that
+  was a bug for as long as it stood** (fixed 2026-08-27): it is the
+  LEGACY IDE probe, so on a machine whose only disk is AHCI or virtio
+  the kernel concluded "no disk" and a live image displaced the real one.
+  It is `blk_present()` now, asked by the CALLER — the `live`-on-the-
+  command-line half has to be answered BEFORE the disk drivers run, and
+  the is-there-a-disk half cannot be answered until after. What that path lacks is CONTENT: it comes up
   with an empty filesystem, so there is no `/bin` and nothing to run.
 - **TFS3's block I/O is already one indirection wide.** Every read and
   write in `kernel/fs/tfs3.c` goes through `vol_read_sectors()` /
@@ -237,6 +244,13 @@ pure indirection, so anything that goes red is a mistake in it.
 - A RAM block device over a `[base, size)` handed to it at init.
 - `vfs.c` learns the boot policy: a live module is mounted when there is
   no disk, or when the command line asks for it.
+
+  **BUILT, and with one correction to what is written above:** the disk
+  drivers all run either way now, so a live session SEES the machine's
+  disks (`lsblk`) and can mount them — it simply does not take its root
+  from one. Skipping disk init on a forced live boot, which is what this
+  originally did, made a live CD unable to touch the disks it exists to
+  rescue.
 - `grub.cfg` gains a `module2 /boot/live.img` line and a second menu
   entry; the Makefile builds `live.img` with `tfs3_writer.py` from the
   same seed tree `disk.img` uses, sized to fit rather than 9 GB sparse.

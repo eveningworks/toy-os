@@ -74,6 +74,9 @@ TOOLS = [
     ("fat32",       "fat32_test.py",           "FAT32 and /boot, against mtools",    True,  None,                   False),
     ("live_boot",   "live_boot_test.py",       "the Live CD's RAM image",            True,
      ("live_iso", "no toy-os-live.iso -- run `make live-iso` first"),                        False),
+    # Two disks on two drivers -- the one configuration no other tool
+    # here boots, and the shape the enumerate-everything bug needed.
+    ("multidisk",   "multidisk_test.py",       "two disks, two drivers, root=",      True,  None,                   False),
     ("virtio_boot", "virtio_boot_test.py",     "TFS3 on virtio-blk, no IDE",         True,  None,                   False),
     ("ahci",        "ahci_test.py",            "TFS3 on a SATA drive behind an HBA",  True,  None,                   False),
     ("diskmark",    "diskmark_test.py",        "the Disk Mark GUI benchmark",        True,  None,                   True),

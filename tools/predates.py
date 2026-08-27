@@ -102,6 +102,24 @@ def main():
     work_rc, work_out = run(args.command, "working")
 
     # --- HEAD.
+    # UNTRACKED FILES GO INTO THE STASH TOO (`-u`), so anything created
+    # but not yet committed -- a tool written this session, most often --
+    # DOES NOT EXIST during the HEAD run. That is correct (HEAD really
+    # does not have it) and it is confusing, because the failure looks
+    # like the tool being broken rather than absent: an argparse "
+    # "unrecognized arguments" or a "No such file". Say so up front when
+    # the command names one.
+    untracked = [f[3:] for f in dirty.splitlines() if f.startswith("?? ")]
+    named = [u for u in untracked if u and u in args.command]
+    if named:
+        print("predates: NOTE -- the command names untracked file(s) that HEAD "
+              "does not have:")
+        for u in named:
+            print(f"predates:   {u}")
+        print("predates: the HEAD run will fail to find them. That is not a "
+              "measurement -- commit them first, or compare a command that "
+              "exists on both sides.")
+
     tag = f"predates-{int(time.time())}"
     git("stash", "push", "-u", "-m", tag)
     # Recover the SHA NOW, while it is unambiguous. Looking it up later
@@ -137,6 +155,18 @@ def main():
         # when the stash is the only copy of something.
         git("stash", "drop", stash_sha, check=False)
         print(f"predates: working tree restored ({n_files} file(s)), stash dropped")
+
+        # AND REBUILT, because restoring the SOURCE does not restore the
+        # ARTIFACTS: build/ and any boot image still hold what HEAD
+        # produced. The next thing anyone runs then tests the other
+        # kernel while every file on disk says otherwise -- which is a
+        # wrong answer with nothing to suggest it is wrong, and it cost
+        # this tool's own author a bogus bug report. Leaving the tree
+        # where it was found includes what was built from it.
+        if args.build:
+            print("predates: rebuilding the working tree "
+                  "(HEAD's build artifacts are still in place)")
+            run(args.build, "restore")
 
     print()
     print(f"  HEAD ({head}):  exit {head_rc}")

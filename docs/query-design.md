@@ -409,6 +409,25 @@ metadata is only cheap when it is stored rather than computed.
 The labelled fallback. Last, because it is the only piece that needs
 BOTH registries to be settled.
 
+### The block device table -- DONE 2026-08-27
+
+`QUERY_BLKDEV` (`kernel/drivers/block/block_query.c`), with `/bin/lsblk`
+over it: one record per registered block device, disk and partition
+alike.
+
+A LIST and nothing else, deliberately unlike `QUERY_PARTTABLE` /
+`QUERY_PARTITION` next door. That pair is split because "a table with no
+partitions" and "no table at all" are both zero records and mean
+different things; here zero records means one thing only -- no disk was
+found -- so a scalar beside the list would answer a question nobody has.
+
+**It reads no disk.** The partition provider hits the platter on every
+call, by design; this one cannot, because what it reports is the
+kernel's own table. That difference is worth noticing when adding a
+provider: a fact that already lives in kernel memory does not need the
+"every read hits the device" discipline, and paying it anyway would be a
+cache nobody asked for.
+
 ## Open questions
 
 1. **Does a class get to be variable-length?** `dmesg` is a buffer, not
