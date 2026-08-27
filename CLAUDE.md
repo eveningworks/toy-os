@@ -848,11 +848,23 @@ so do not add a target for a new combination.**
 
 ```
 make run KVM=1 VIRTIO=1 AUDIO=1 NOGRAPHIC=1 MENU=1 MEM=512
+make run WINDOW=full   # or WINDOW=fit -- see below; sdl cannot scale
 make run DISK=virtio VGA=virtio INPUT=virtio   # what VIRTIO=1 is short for
 make run LIVE=1    # the live ISO, no disk attached (implies live-iso)
 make run DEMO=1    # the scripted tour, no disk (implies demo-iso)
 make run BOOT=cd   # boot the ISO; BOOT=disk forces the other way
 ```
+
+**`WINDOW` IS THE AXIS FOR A GUEST MODE THAT DOES NOT FIT THE MONITOR.**
+`-display sdl` (the default) has no scaling and no window placement --
+its only suboptions are gl/grab-mod/show-cursor/window-close -- so the
+window is the framebuffer plus decorations and a `video=1920x1080` guest
+cannot fit a 1920x1080 screen. `WINDOW=full` adds `-full-screen` (no
+decorations, still pixel-exact); `WINDOW=fit` switches to
+`gtk,zoom-to-fit=on`, the only one that helps when the guest mode is
+BIGGER than the monitor and the only one that blurs the font. An unknown
+value is refused rather than falling back, because `fit`/`full` are this
+Makefile's names and a typo cannot be caught downstream.
 
 **`BOOT` IS DERIVED BY DEFAULT, AND THAT IS THE POINT.** `make run` boots
 the DISK, because `disk.img` carries GRUB and the kernel now

@@ -380,7 +380,7 @@ help:
 	@echo "   Each class also picks its own, and a per-class value overrides VIRTIO=1:"
 	@echo "     DISK=ide|virtio|ahci    virtio removes the IDE controller ENTIRELY, so"
 	@echo "                             the filesystem mounts only if virtio works;"
-	@echo "                             ahci is a SATA drive on an ICH9 HBA
+	@echo "                             ahci is a SATA drive on an ICH9 HBA"
 	@echo "     VGA=std|virtio|vmware   virtio is the virtio-gpu driver, which nothing"
 	@echo "                             else in the build exercises; vmware has a"
 	@echo "                             HARDWARE cursor, which screendump cannot"
@@ -397,6 +397,11 @@ help:
 	@echo "   debug console. lspci only says the device is on the bus."
 	@echo ""
 	@echo "   make run AUDIO=1          PC speaker wired to sound (AUDIODEV=alsa etc.)"
+	@echo "   make run WINDOW=full      start full-screen -- no decorations, so a guest"
+	@echo "                             mode as big as the monitor is pixel-exact AND fits"
+	@echo "   make run WINDOW=fit       a resizable window the guest is SCALED into (gtk)."
+	@echo "                             The only one that helps when the guest mode is"
+	@echo "                             BIGGER than the monitor; it blurs the font"
 	@echo "   make run NOGRAPHIC=1      serial only, no window -- use this over SSH"
 	@echo "   make run MENU=1           show the GRUB boot menu (5s) instead of booting"
 	@echo "   make run MEM=512          a smaller machine"
@@ -1148,13 +1153,16 @@ demo-iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG)
 # -vga std: explicit (matches QEMU's own default, but pinned here so the
 #   higher 1280x720 mode boot.asm requests isn't at the mercy of a
 #   per-host/per-distro QEMU default changing underneath us).
-# -display gtk,zoom-to-fit=off,grab-mod=rctrl: shows the framebuffer at
-#   its native resolution, one real pixel per emulated pixel --
-#   zoom-to-fit would let GTK scale the window and blur/blend the
-#   (deliberately sharp, nearest-neighbor-scaled) font. grab-mod=rctrl
-#   sets the key that captures/releases the mouse once it's grabbed
-#   (right Ctrl) -- only meaningful now that -device usb-mouse (below)
-#   makes the pointer relative and therefore actually need grabbing.
+# -display sdl,grab-mod=rctrl: shows the framebuffer at its native
+#   resolution, one real pixel per emulated pixel. (This comment said
+#   `gtk,zoom-to-fit=off` long after the recipe had moved to sdl; the
+#   reasoning was the same either way -- scaling would blur the
+#   deliberately sharp, nearest-neighbour font -- but sdl cannot scale
+#   at all, which is what the WINDOW axis below exists for.)
+#   grab-mod=rctrl sets the key that captures/releases the mouse once
+#   it's grabbed (right Ctrl) -- only meaningful now that -device
+#   usb-mouse (below) makes the pointer relative and therefore actually
+#   need grabbing.
 # -usb -device usb-mouse: without this, recent QEMU defaults to an
 #   absolute USB tablet pointer for the GTK display, which never needs
 #   grabbing but also means host and guest cursor positions are just
@@ -1192,6 +1200,8 @@ demo-iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG)
 #   make run VGA=vmware             the adapter with a hardware cursor
 #   make run INPUT=virtio           just input: virtio keyboard/mouse/tablet
 #   make run AUDIO=1                PC speaker wired to PulseAudio
+#   make run WINDOW=full            full-screen, so a monitor-sized guest fits
+#   make run WINDOW=fit             a resizable window the guest is scaled into
 #   make run NOGRAPHIC=1            serial only, no window (over SSH)
 #   make run MENU=1                 show GRUB's menu instead of booting
 #   make run MEM=512                a smaller machine
@@ -1224,7 +1234,45 @@ MEM ?= 2048
 QEMU_ISO     = $(if $(DEMO),$(DEMO_ISO),$(if $(LIVE),$(LIVE_ISO),$(ISO)))
 RUN_PREREQ   = $(if $(DEMO),demo-iso,$(if $(LIVE),live-iso,iso $(DISK_IMG)))
 QEMU_ACCEL   = $(if $(KVM),-enable-kvm -cpu host,)
-QEMU_DISPLAY = $(if $(NOGRAPHIC),none,sdl$(COMMA)grab-mod=rctrl)
+
+# WHAT THE FRAMEBUFFER APPEARS IN, and whether it may be SCALED.
+#
+# `-display sdl` cannot scale or place its window -- its only suboptions
+# are gl/grab-mod/show-cursor/window-close -- so the window is exactly
+# the guest's framebuffer plus decorations. Ask for a mode the size of
+# the monitor (`make iso KCMDLINE="video=1920x1080"`) and it cannot fit
+# on that monitor, which is what this axis is for:
+#
+#   sdl    the default, unchanged: one real pixel per emulated pixel
+#   full   the same backend, started full-screen. No decorations, so a
+#          guest mode the size of the monitor is pixel-exact AND fits
+#   fit    gtk with zoom-to-fit: freely resizable, and the guest is
+#          SCALED into whatever size the window is. The only one of the
+#          three that helps when the guest mode is BIGGER than the
+#          monitor, and the only one that blurs the font -- which is why
+#          it is not the default
+#
+# NOGRAPHIC=1 still wins over all three: no window at all.
+#
+# An unknown value is REFUSED rather than falling back to the default.
+# `fit` and `full` are this Makefile's names rather than QEMU's, so a
+# typo cannot be caught downstream the way `VGA=vitrio` is -- it would
+# silently give a plain sdl window and look like the flag doing nothing.
+WINDOW ?= sdl
+# $(strip) because the continuations below put whitespace inside the
+# expansion, which a shell tolerates and `make -n run` should not print.
+#
+# `fit` carries no grab-mod: that is an sdl suboption, and gtk has no
+# equivalent (its own list is clipboard/full-screen/gl/grab-on-hover/
+# show-tabs/show-cursor/window-close/show-menubar/zoom-to-fit), so
+# releasing the pointer there is GTK's own Ctrl+Alt rather than rctrl.
+QEMU_DISPLAY = $(strip $(if $(NOGRAPHIC),none,\
+                 $(if $(filter fit,$(WINDOW)),gtk$(COMMA)zoom-to-fit=on,\
+                   $(if $(filter sdl full,$(WINDOW)),sdl$(COMMA)grab-mod=rctrl,\
+                     $(error WINDOW=$(WINDOW) is not one of: sdl, full, fit)))))
+# Separate from QEMU_DISPLAY because -full-screen is a GLOBAL flag, not
+# a suboption of the backend -- it works with either one.
+QEMU_FULLSCREEN = $(if $(NOGRAPHIC),,$(if $(filter full,$(WINDOW)),-full-screen,))
 
 # --- the three DEVICE-CLASS axes, and the one switch over all of them --
 #
@@ -1345,7 +1393,7 @@ QEMU_BOOT = $(if $(filter disk,$(BOOT_MEDIUM)),-boot order=c,-boot order=d -cdro
 
 QEMU_RUN = qemu-system-x86_64 $(QEMU_BOOT) $(QEMU_ACCEL) $(QEMU_DISK) \
 	  $(QEMU_INPUT) $(QEMU_USB) \
-	  -serial stdio -vga $(QEMU_VGA) -display $(QEMU_DISPLAY) -m $(MEM) \
+	  -serial stdio -vga $(QEMU_VGA) -display $(QEMU_DISPLAY) $(QEMU_FULLSCREEN) -m $(MEM) \
 	  $(QEMU_AUDIO) $(QEMU_EXTRA)
 
 run: $(RUN_PREREQ)
