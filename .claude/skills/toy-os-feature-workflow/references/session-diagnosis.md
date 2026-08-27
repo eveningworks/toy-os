@@ -1047,3 +1047,37 @@ debug console's own commands are kernel introspection; `df`, `dmesg` and
 `ls` are `/bin` PROGRAMS reached through `sh`. A hand-rolled serial
 driver that forgets the prefix gets `unknown command: df` and reads as a
 broken guest; one that doubles it gets `Unknown command: sh`.
+
+**2026-08-27: TWO BUGS CAN HIDE EACH OTHER, AND THE PAIR LOOKS
+HEALTHY.** `tfs3_writer.py trim` punched free blocks at a
+VOLUME-relative offset through the raw fd -- every other access in that
+file goes through `Tfs3Image`, which adds `base_lba * 512`, and this one
+did not. On a partitioned image that is one partition-start early, onto
+blocks in use. The SECOND bug walked each group's bitmap to
+`BLOCKS_PER_GROUP` when the last group may be PARTIAL, so it asked to
+punch ~71 MB past the volume's end -- which the offset error pulled back
+inside the file. A trim-past-the-end became a corrupt-the-beginning, and
+together they printed a perfectly plausible `punched N blocks`.
+
+**Fixing one made the other visible immediately** -- the bounds guard
+added with the offset fix fired on the first run and named the second.
+The generalisable bit: **when a destructive operation has been "working"
+and you find one fault in it, expect a second that the first was
+masking**, and add the guard before assuming the fix is complete. A
+punch is silent by nature; it cannot fail loudly the way a bad write
+can, which is exactly why it needed a range check it did not have.
+
+**AND THE SYMPTOM POINTED NOWHERE NEAR THE CAUSE.** The report was "the
+live CD has binaries but no apps on the desktop". `/bin` was intact, the
+shell worked, the filesystem mounted and reported its size correctly.
+Only three directories were gone, and `live_boot_test.py`'s "a directory
+the image shipped is readable" check passed throughout because it reads
+`/bin/wm/apps` -- which happened to sit far enough from a free run to
+survive. **A corruption that lands somewhere SPECIFIC needs a check that
+looks THERE**; "some directory is readable" is a check that cannot fail
+for the right reason.
+
+The bisect that found it in two commands: list the image BEFORE the
+build's last step and AFTER it. The build printed `sync: 218 written, 0
+unchanged` and the tree has exactly 218 files, so the write half was
+provably fine and only what came after could be at fault.

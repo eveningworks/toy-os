@@ -930,7 +930,27 @@ def cmd_trim(args):
     """Punch holes through every free block -- same job (and same
     safety argument) as the seed step: a free block holds nothing, so
     handing it back to the host costs nothing and keeps the image
-    sparse."""
+    sparse.
+
+    **THE OFFSET IS THE FILE'S, AND THE BITMAP'S IS THE VOLUME'S.**
+    Every other read and write here goes through Tfs3Image, which adds
+    `base_lba * 512`; this one calls fallocate() on the raw fd and has
+    to add it itself. It did not, so on a PARTITIONED image every punch
+    landed one partition-start early -- 1 MiB, 256 blocks -- on blocks
+    that were in use.
+
+    It destroyed `/usr/wm/desktop`, `/etc/services.d` and
+    `/usr/wm/startup` in every live image built after disk.img became
+    partitioned: the live CD booted with a full /bin and a desktop with
+    NO APPS, because the .desktop entries the Start menu is built from
+    had been punched to zeros. Reported from real hardware; no test here
+    saw it, because the only live check that reads a directory reads
+    `/bin/wm/apps`, which lives far enough from a free run to survive.
+
+    Hence the bounds guard below. A punch is destructive and silent --
+    it cannot fail loudly the way a bad write can -- so the range is
+    checked against the volume rather than trusted.
+    """
     import ctypes
     FALLOC_FL_KEEP_SIZE = 0x01
     FALLOC_FL_PUNCH_HOLE = 0x02
@@ -942,15 +962,28 @@ def cmd_trim(args):
         for g in range(img.sb["gc"]):
             base = img.group_base(g)
             bitmap = img.read_block(base)
-            end = BLOCKS_PER_GROUP
+            # THE LAST GROUP MAY BE PARTIAL, and its bitmap still has a
+            # bit per slot of a FULL group -- the ones past the volume's
+            # end read as free. Walking to BLOCKS_PER_GROUP therefore
+            # asked to punch blocks that do not exist; with the offset
+            # bug above it did so INSIDE the file, which is how a
+            # trim-past-the-end became a corrupt-the-beginning.
+            # group_span() is what every other geometry calculation here
+            # already uses.
+            end = img.group_span(g)
             run_start = None
             for i in range(end + 1):
                 free = (i < end and not (bitmap[i >> 3] >> (i & 7)) & 1)
                 if free and run_start is None:
                     run_start = i
                 elif not free and run_start is not None:
-                    off = (base + run_start) * BLOCK
+                    off = img.base + (base + run_start) * BLOCK
                     length = (i - run_start) * BLOCK
+                    if off < img.base or off + length > img.base + img.file_size:
+                        raise SystemExit(
+                            f"trim: refusing to punch {length} bytes at {off} -- "
+                            f"outside the volume [{img.base}, {img.base + img.file_size}). "
+                            f"That is a bug in this tool, not a bad image.")
                     rc = libc.fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
                                         ctypes.c_long(off), ctypes.c_long(length))
                     if rc != 0:

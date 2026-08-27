@@ -334,6 +334,26 @@ def main():
         res.check("a directory the image shipped is readable",
                   "calculator" in ls and "notepad" in ls, ls.strip()[:200])
 
+        # 2b. THE DIRECTORIES A BAD TRIM ATE. `tfs3_writer.py trim`
+        #     punched holes at a VOLUME-relative offset through the raw
+        #     fd, so on a partitioned image every punch landed one
+        #     partition-start early -- on blocks that were in use. It
+        #     emptied /usr/wm/desktop, /etc/services.d and
+        #     /usr/wm/startup in every live image, and the live CD then
+        #     booted with a full /bin and a desktop with NO APPS.
+        #
+        #     Check 2 above could not see it: it reads /bin/wm/apps,
+        #     which sat far enough from a free run to survive. So this
+        #     names the three that did not -- a corruption that lands
+        #     somewhere specific needs a check that looks THERE, and
+        #     "some directory is readable" is not that check.
+        for d, want in (("/usr/wm/desktop", ".desktop"),
+                        ("/etc/services.d", "toywm"),
+                        ("/usr/wm/startup", "")):
+            got = sh.run(f"sh ls {d}")
+            ok = want in got if want else len(got.split()) > 2
+            res.check(f"{d} survived the image build", ok, got.strip()[:200])
+
         # 3. and its data blocks really are reachable
         out = sh.run("sh run libc_test")
         res.check("a binary from the live image runs",

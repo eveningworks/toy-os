@@ -2091,6 +2091,37 @@ window without going through it will find its layout polls timing out.
   fresh image gets; v1 (four slots, GDT at 14, group 0 at 30) exists so
   the layout the kernel still mounts stays PRODUCIBLE and therefore
   testable -- `tools/tfs3_v1_test.py` is its caller.
+
+  **`trim` CORRUPTED EVERY LIVE IMAGE FOR AS LONG AS disk.img HAS BEEN
+  PARTITIONED, and two bugs were stacked so that neither showed.** It
+  punches holes through free blocks, and it does so with `fallocate()`
+  on the raw fd -- so unlike every other read and write in that file it
+  does NOT go through `Tfs3Image`, which is what adds `base_lba * 512`.
+  It punched at a VOLUME-relative offset, which on a partitioned image
+  is one partition-start early: 1 MiB, 256 blocks, landing on blocks
+  that were in use.
+
+  The second bug hid the first. It walked each group's bitmap to
+  `BLOCKS_PER_GROUP`, but **TFS3's last group may be PARTIAL** and the
+  bits past the volume's end read as free -- so it asked to punch ~71 MB
+  beyond the volume, which the offset error pulled back INSIDE the file.
+  A trim-past-the-end became a corrupt-the-beginning, and the two
+  errors together produced a plausible-looking `punched N blocks` line.
+
+  What it destroyed: `/usr/wm/desktop`, `/etc/services.d` and
+  `/usr/wm/startup`. So the live CD booted with a full `/bin`, a
+  working shell, and a **desktop with no apps** -- the Start menu is
+  built from those `.desktop` files. Reported from real hardware.
+  `disk.img` was never affected because **`trim` runs only on the live
+  image** (one line in the Makefile), which is why a disk boot looked
+  perfect throughout.
+
+  Nothing here caught it: `live_boot_test.py`'s "a directory the image
+  shipped is readable" reads `/bin/wm/apps`, which sat far enough from a
+  free run to survive. It names the three that did not now. The fix adds
+  a bounds guard, because **a punch is destructive and silent** -- it
+  cannot fail loudly the way a bad write can, and that guard is what
+  surfaced the second bug.
   **TFS3 is the default format for FRESH images** (blank-disk policy
   in `vfs.c` and `seed_disk.py`); an existing TFS2 disk.img keeps
   mounting as TFS2 -- `make clean-disk && make iso` is the deliberate
