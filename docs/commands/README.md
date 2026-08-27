@@ -106,6 +106,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`jobs`](jobs.md)
 - [`kill`](kill.md)
 - [`run`](run.md)
+- [`service`](service.md)
 - [`spawn`](spawn.md)
 - [`strace`](strace.md)
 

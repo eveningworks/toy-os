@@ -15,10 +15,10 @@ group. With no signal named it sends `TERM`, as every Unix does.
 
 The signal may be given by name or by number, with or without a `SIG`
 prefix and in any case: `-TERM`, `-SIGTERM`, `-term` and `-15` are the
-same request. The signals this kernel has are `INT` (2), `QUIT` (3),
-`KILL` (9), `SEGV` (11), `TERM` (15), `CHLD` (17), `CONT` (18), `STOP`
-(19) and `TSTP` (20) — POSIX's numbers, so nothing here means something
-different from everywhere else.
+same request. The signals this kernel has are `HUP` (1), `INT` (2),
+`QUIT` (3), `KILL` (9), `SEGV` (11), `TERM` (15), `CHLD` (17), `CONT`
+(18), `STOP` (19) and `TSTP` (20) — POSIX's numbers, so nothing here
+means something different from everywhere else.
 
 **A negative target is a process GROUP**, POSIX's spelling: `kill -TERM
 -4` signals every live member of group 4. Pids are 1-based, so a
@@ -41,6 +41,13 @@ wedged inside a kernel path may not die at all.
 terminates the target immediately and cannot be ignored. It is the last
 resort rather than the first, because a process killed that way gets no
 chance to finish what it was doing.
+
+**init discards any signal it has no handler for**, `KILL` included —
+Linux's `SIGNAL_UNKILLABLE`, and for its reason: a machine whose pid 1
+died has nothing left to reap orphans or supervise anything. It still
+*catches* what it has asked for, which is how `service` reaches it with
+`HUP`. `kill 1` therefore succeeds and does nothing; the kernel log says
+so.
 
 **A process may ignore a signal**, and a shell ignores `INT` on purpose
 — so `kill -INT` aimed at `/bin/tosh` does nothing, by design. `KILL`,
@@ -82,7 +89,8 @@ ordinary non-zero exit.
 
 ## See also
 
-`ps` for pids and groups. `Ctrl-C` at a shell prompt is the same
+`service` for starting and stopping the things init supervises, which
+is `kill -HUP 1` with a request behind it. `ps` for pids and groups. `Ctrl-C` at a shell prompt is the same
 mechanism with no typing: it sends `INT` to the console's foreground
 group — see `docs/signals-design.md`. `Ctrl-Z` is `-TSTP` the same way,
 and `jobs`/`fg`/`bg` in `/bin/tosh` are `-CONT` with bookkeeping.

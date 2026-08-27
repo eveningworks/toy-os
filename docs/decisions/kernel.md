@@ -4853,3 +4853,111 @@ compiles bottom-tested and a `filesz` of 0 counts to 2^64. It was a page
 fault in every ring-3 program, a few thousand bytes past the buffer, on
 the first build that had TLS in it. `linker_value()` launders the number
 through an empty `asm` and emits no instruction.
+
+## A service is controlled by a file and a doorbell, and init cannot be killed by a signal it has not caught
+
+Two things landed together because neither works without the other: a
+`service start|stop|status|list` command, and the discovery -- made
+while triaging why `tools/init_test.py` failed 12 of its 27 checks --
+that `kill 1` had been killing init since signals landed.
+
+### The control channel
+
+**What real systems do.** `systemctl` talks to pid 1 over D-Bus, or its
+private `AF_UNIX` socket at `/run/systemd/private`. SysV `telinit`
+writes a fixed-size record into the `/run/initctl` FIFO. runit's `sv`
+and s6's `s6-svc` write a command byte into a FIFO inside the service's
+own supervise directory. Windows' SCM is reached by RPC.
+
+**None of the transports port, and the same two facts kill all four.**
+There are no unix sockets here, and no named pipes: `PIPE_MAX` is 8
+kernel-wide and a pipe has to be inherited, so there is nothing an
+unrelated program started minutes later could open. What is left is the
+filesystem and signals -- so the request is a FILE and the signal is a
+DOORBELL, which is runit's object plus SysV's `kill -HUP 1`.
+
+`/bin/service` appends `<verb> <name>` to `/tmp/init.ctl` and sends
+`SIGHUP`; init reads every line on its next pass, acts, and deletes the
+file. **The signal cannot be the message** -- it carries no payload, and
+a handler may do nothing but set a flag -- and the file cannot be the
+signal, because with a service running init BLOCKS in `waitpid(-1)` and
+would not read it until something died. Each half is doing the thing the
+other cannot.
+
+**The answer comes back the same way, as `/tmp/init.status`** -- one line
+per service. init is the only thing that knows a service is down on
+purpose: the process table shows an absence, and an absence cannot tell
+`stopped` from `crash-loop` from "never declared". runit writes the same
+file per service. This one is text rather than runit's packed binary, so
+`cat /tmp/init.status` works on a machine whose `/bin` is damaged, which
+is exactly when somebody wants it.
+
+**It is published ON DEMAND and only when the machine is SETTLED, which
+is two gates and both earn their place.** Nothing is written until a
+doorbell has arrived, because there is no tmpfs here and every write is
+a real disk transaction -- so `/bin/service`'s read half rings the bell
+itself when it finds no file, and every later read finds one already
+current. And nothing is written on a pass with a service in a restart
+backoff or yet to announce itself, which is the honest description of a
+file that says where things CAME TO REST.
+
+The second gate was also forced. init writing one ~120-byte file at
+0.8 s WEDGED THE COMPOSITOR -- it presented nothing at all, cursor
+included, while `ps` still showed the desktop ready and accruing CPU
+(3 runs in 3; a write at 1.5 s is harmless). That is a compositor bug
+and it is filed with its measurement in `docs/bugs.md`; deferring past
+the startup is not a fix for it, and the entry says so. What made the
+deferral the right call anyway is that it is what the file MEANS: the
+same gate covers a desktop restarted with `service start`, which lands
+in the same window.
+
+**Both live in `/tmp` because that is the only runtime directory here.**
+On a real system they would be under `/run`, whose one relevant property
+-- it is a tmpfs, so it is empty at boot -- `/tmp` does not have
+(`docs/filesystem-layout.md` says it is not emptied). So init deletes
+the control file at startup: a request left behind by a machine that
+lost power is not a request, and obeying it would be a service stopping
+itself on the next boot for no visible reason.
+
+**An admin stop is its own flag, not the existing `stopped`.** A stopped
+service is `SIGTERM`ed and therefore exits with `128 + SIGTERM`, which
+`Restart=on-failure` and `Restart=always` both read as a failure to
+recover from -- so reusing the "exited cleanly, stay down" flag would
+have put the desktop straight back. The stop outranks `Restart=`
+entirely, which is systemd's behaviour and the only one that makes
+`service stop` mean anything.
+
+**`sys_waitpid()` had to gain an interruptible sibling.** The wrapper
+retries `-EINTR` on purpose -- a shell woken by its own child's SIGCHLD
+must not have its wait fail underneath it -- which meant init went
+straight back to sleep with the flag its handler had just set unread,
+and `service stop` did nothing at all with no error anywhere.
+`sys_waitpid_intr()` is a separate entry point rather than a flag, for
+the reason `sys_waitpid_untraced()` is one: it returns something the
+existing callers are written not to expect.
+
+### Why `kill 1` worked, and what fixes it
+
+`scheduler_kill()` has refused pid 1 since init existed. Signals then
+added a SECOND way to terminate a process, and it does not go through
+that function: when the victim is the process about to be resumed,
+`do_default_action()` takes SYS_EXIT's path --
+`syscall_process_exit_cleanup()` then `scheduler_on_exit()` -- which
+never asks whose pid it is. So `/bin/kill 1` sent a SIGTERM that init
+had no handler for, and init died. The desktop was reparented to the
+kernel, orphans stopped being reaped, and nothing said anything.
+
+The guard goes in `do_default_action()`, which is the one place the
+default action is decided and therefore covers both branches. That is
+Linux's `SIGNAL_UNKILLABLE`, and it keeps Linux's split: init still
+CATCHES what it has installed a handler for -- which is what the
+doorbell depends on -- and simply cannot die of what it has not. A fault
+in init is unaffected, because a fault reaches ring 3 through
+`signal_deliver_fault()` and never through the default action, which is
+also what `force_sig()` arranges on Linux and for the same reason: a
+pid 1 that segfaults should die and say so, not loop.
+
+**The lesson is the one this tree keeps relearning**: when a subsystem
+gains a second implementation, re-read every guard named after the
+first. The invariant was tested -- `tools/init_test.py` had a `kill 1`
+check -- but it asserted `1 in ps`, and a zombie passes that.

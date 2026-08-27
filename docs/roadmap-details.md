@@ -3052,43 +3052,53 @@ process using the image [disk.img]?`.
 `python3 tools/flake_hunt.py ktest -n 10` is the loop for measuring any
 change to it, and it scores these runs as `error` rather than `pass`.
 
-### `tools/init_test.py` fails 12 of its 27 checks, deterministically
+### A filesystem write during the desktop's STARTUP wedges the compositor
 
-Found on 2026-08-24 while adding readiness checks to that tool, and
-**PRE-EXISTING**: measured by stashing the work, rebuilding HEAD and
-re-running -- 15 of 27 checks pass there, and the twelve failures are
-the same twelve. The readiness work added four checks that all pass, so
-a current run reports 19/31.
+Found on 2026-08-27 while adding `/bin/service`: init began writing a
+~120-byte status file to `/tmp` at about 0.8 s, and `idle_desktop_test`
+went red on its CLOCK CONTROL -- the check that exists to prove motion
+is visible at all.
 
-Two separate problems, and the first was hiding the second.
+**What the wedge looks like.** The compositor presents NOTHING. The
+taskbar clock stops, and an injected mouse move does not move the cursor
+on screen either, so it is not a clock bug. Everything else looks
+healthy: `ps` shows `toywm` in `ready` with its CPU still advancing,
+`gui state --json` keeps answering with `redraw_pending` false and no
+damage (it reads kernel-side records, so it answers whatever the client
+is doing), the kernel log is silent, and `uptime` proves the timer tick
+is fine. It recovers on its own -- the same VM was ticking again about
+40 s later -- and what shakes it loose was not established.
 
-**The harness bug (fixed in the same change).** `PS_ROW` in
-`tools/init_test.py` matched six columns while `ps` prints seven -- it
-gained a `PGID` column and the pattern did not. Every row failed to
-parse, so six checks reported a perfectly healthy machine as one where
-init does not appear in the process table at all. A regex that matches
-nothing looks exactly like a system that produced no output. Fixing it
-took the tool from 11/27 to 15/27.
+**Measured**, with one write at ~0.8 s: 3 runs in 3 wedged, and 0 in 3
+with that write removed. A `touch` issued from the debug console at
+~1.5 s does NOT wedge it, on this commit or on `85f3850`, so the window
+is roughly the first second -- while the desktop is still building its
+first composited frame.
 
-**The real one, which remains open.** Partway through the run init
-stops reaping and stops starting services: `ps` shows it in
-`block(timer)` rather than `block(child)`, with several `exit_test`
-zombies whose ppid is 1 and which are never collected, and every later
-phase of the tool ("a service that exits cleanly is NOT restarted", both
-ordering groups, the cycle checks) reports that nothing started. init
-being in a timer sleep means `waitpid(-1)` answered "no children at
-all", which is a permanent answer -- and it has children.
+**A partial finding, and it was NOT kept.** `poll_desktop_entries()` in
+`userland/wm/wm.c` defers a reload for three reasons and not for "the
+desktop has not drawn yet", so the write's `sys_fs_generation()` bump
+made it re-read all fifteen `.desktop` files mid-startup. Guarding that
+until the first composited frame took the failure from 1 distinct clock
+frame in 8 to 2 in 8 -- better and still wedged, so the reload is part
+of this and not the whole of it. The guard was reverted rather than
+shipped as a half-fix in a file this change does not otherwise touch.
 
-Everything works on an ordinary boot: `spawn /tests/orphan_test` on a
-plain VM gives four `init: reaped orphan pid N` lines and leaves init in
-`block(child)`. So it is something about the state that tool's fixtures
-create -- most likely the crash-loop fixture (`Restart=always` naming a
-binary that does not exist), which is the phase immediately before the
-failures start. **That mechanism is a suspicion, not a finding**; no
-disproving check has been run.
+Also unexplained, and noted in case it is the same thing: the boot log
+carries a burst of ~14 `syscall: open() rejected -- file not found`
+lines immediately after that reload.
 
-Repro: `python3 tools/init_test.py`, which boots its own copy of
-`disk.img`. Deterministic -- three runs, identical results.
+**init works around it rather than standing on it**: the status file is
+published only once somebody has rung the doorbell, and only on a pass
+where nothing is pending, so no write lands while a service is starting
+up. That is right on its own terms (see `docs/decisions.md`), and it is
+not a fix -- anything else writing to the filesystem in that window will
+still wedge the desktop.
+
+Repro: boot a fresh copy of `disk.img`, get any process to write a file
+within the first second, then sample the taskbar clock for ~3 s.
+`python3 tools/gui_regress.py -k idle` is the packaged version once a
+trigger is in place.
 
 ### `gui_regress.py`'s `uterm` fails its two `edit` checks under full parallel load
 

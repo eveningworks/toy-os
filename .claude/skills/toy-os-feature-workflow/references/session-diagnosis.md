@@ -944,3 +944,51 @@ advice I had not run myself.
 `ps aux | grep "[q]emu-system"` inside a shell whose own command line
 contained that string matched itself and printed nonsense.
 
+**2026-08-27 -- a one-line feature wedged the compositor, and the only
+thing that saw it was one test's CONTROL check.** init started writing a
+~120-byte status file at 0.8 s of boot. Everything passed except
+`idle_desktop_test`'s "the taskbar clock DOES change (proves motion is
+visible)" -- the check that exists to stop the two checks above it from
+passing vacuously. Without it, a suite of ~300 GUI checks would have
+called a desktop that presents NOTHING a clean run.
+
+**A CONTROL CHECK FAILING IS NOT A HARNESS PROBLEM, and the temptation
+to read it as one is strong** -- it is the check that is not about the
+feature. Here it was the only true statement in the report: the two
+"steady" checks passing meant the screen was frozen, which is what they
+look like when the harness is right and the guest is dead.
+
+**EVERY PIECE OF EVIDENCE POINTED AT A HEALTHY MACHINE.** `ps` showed
+the desktop `ready` with its CPU advancing; `gui state --json` answered
+every time with `redraw_pending` false and no damage; `uptime` proved
+the timer tick was fine; the kernel log was silent. Three of those are
+worthless for the question asked: `gui state` reads KERNEL-side window
+records, so it answers whatever the client is doing, and a compositor
+that has stopped presenting still burns CPU in its own loop. **Ask what
+your instrument is actually attached to** -- the one that settled it was
+injecting a mouse move and watching the CURSOR not move, which is the
+only probe that goes all the way to the screen.
+
+**"IT REPRODUCES ONLY UNDER THE HARNESS" MEANT "ONLY ON A FRESH BOOT."**
+Every manual attempt passed, because a VM I had been poking at for two
+minutes was long past the window. The failing runs were all ~9 s after
+boot. When a tool fails and a hand-run of the same steps does not,
+compare the machine's AGE before doubting the tool.
+
+**BISECT YOUR OWN CHANGE BEFORE READING ANY MORE CODE.** Four candidate
+mechanisms, three of them plausible, and one build with the write
+disabled answered it in 40 s. I had read four source files first.
+
+**A PARTIAL FIX IS NOT A FIX, AND SHIPPING ONE IS WORSE THAN NOTHING.**
+Guarding the WM's desktop-entry reload until the first composited frame
+took the failure from 1 distinct frame in 8 to 2 in 8. That is a real
+finding about the mechanism and it was written into `docs/bugs.md`; the
+code was REVERTED, because a half-fix in a file the change does not
+otherwise touch reads to the next session as a solved problem.
+
+**AND `predates.py` ANSWERS THE ONLY QUESTION THAT MATTERS FIRST.**
+Three runs, HEAD passing and the tree failing every time, is what turned
+"is this mine?" from an argument into a fact -- and one run each would
+not have, because the failure had already been seen to pass once on an
+aged VM.
+

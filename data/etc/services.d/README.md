@@ -10,7 +10,7 @@ so there is no second format to maintain.
 | Key | Required | Meaning |
 |---|---|---|
 | `Name` | yes | What init calls it in the log. Not the filename. |
-| `Description` | no | A sentence for a human. Unused today; `service status` will show it. |
+| `Description` | no | A sentence for a human. `service status <name>` prints it. |
 | `Exec` | yes | An absolute path to a `/bin` binary. No arguments, no shell -- `SYS_SPAWN` takes a path. |
 | `Target` | no | `text`, `graphical`, or absent. Absent means **every** target. |
 | `Restart` | no | `on-failure` (default), `always`, or `no`. |
@@ -152,6 +152,24 @@ one that exited cleanly, and a `Restart=no` service that has already had
 its single run. Waiting for any of those would be waiting for something
 that cannot happen.
 
+## `service` is the lever on a running init
+
+`/bin/service` starts and stops these without editing anything and
+without a reboot (`docs/commands/service.md`):
+
+    service                  # every service, one line each
+    service status toywm     # that one, plus this file's Description=
+    service stop toywm       # SIGTERM it and keep it down
+    service start toywm      # and back up
+    service reload           # re-read this directory NOW
+
+`stop` and *deleting the file* are different requests, and the split is
+systemd's `stop` versus `disable`: a stop is undone by `service start`
+and by a reboot, while a deleted descriptor means init stops restarting
+it and nothing brings it back until the file does. An admin stop
+outranks `Restart=` entirely -- it has to, because the service dies with
+`128 + SIGTERM`, which every policy here reads as a failure.
+
 ## Removing a descriptor DISABLES the service
 
 init re-reads this directory whenever the filesystem changes
@@ -194,5 +212,14 @@ init polling forever on an idle machine, which is the whole thing
 `SYS_SLEEP` exists to avoid. It also lands the right way round for the
 case that matters -- REMOVING a descriptor and then killing the service
 works, because the kill is itself the wake-up. ADDING one while the
-desktop is up waits for something to happen; `spawn /bin/hello` at the
-shell is a one-line nudge, since `spawn` reparents to init.
+desktop is up waits for something to happen, and **`service reload` is
+how you stop waiting**: it sends init the `SIGHUP` that breaks its
+`waitpid`, which is what a `HUP` has meant to an init since SysV.
+
+**A DESCRIPTOR MUST APPEAR WHOLE.** Because a rescan can happen on any
+filesystem change, a file built up line by line in this directory can be
+read half-written -- and a half-written one whose `After=` names a
+service not loaded yet is not an error, it is an ordering key init
+correctly ignores, so the service starts in the wrong order and nothing
+looks wrong. Write the file elsewhere and `mv` it in, which is the same
+advice a real system gives for a unit file.

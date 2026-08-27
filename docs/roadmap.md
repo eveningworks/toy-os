@@ -24,7 +24,6 @@ FIRST, and this is what to do first among things that are all
 buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
-- [ ] `service start|stop|status|list` as a shell command -- `rm`ing a descriptor is the only lever today  *(Init & service supervision)*
 - [ ] Type-ahead in `uui_table` -- `uui_listbox` gained it 2026-08-24 and a fileview is a table, so the File Manager cannot  *(A layout engine for the GUI)*
 - [ ] A FOCUS INDICATOR for every widget that takes keys -- six accept focus and draw nothing, so Tab moves an invisible cursor  *(A layout engine for the GUI)*
 - [ ] The ring-3 WM busy-waits instead of sleeping -- `SYS_SLEEP` and a per-window timer both exist now  *(Known limitations and papercuts (unscheduled))*
@@ -51,7 +50,7 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~Start services at boot in a DECLARED ORDER~~ DONE 2026-08-19 -- `After=`/`Before=`, topologically sorted
 - [x] ~~A readiness signal, so `After=` can mean "usable" rather than "spawned"~~ DONE 2026-08-24 -- `Ready=notify`
 - [x] ~~Restart a service that exits unexpectedly, with a backoff so a crash loop doesn't spin the machine~~ DONE 2026-08-18
-- [ ] **NEXT** `service start|stop|status|list` as a shell command -- `rm`ing a descriptor is the only lever today
+- [x] ~~`service start|stop|status|list` as a shell command~~ DONE 2026-08-27 -- a request file plus a `SIGHUP` doorbell
 - [x] ~~Reap orphans -- init adopts them, which is half of why it exists~~ DONE 2026-08-18
 - [ ] Shut services down in reverse order on `reboot`/`poweroff`
 - [ ] A service's output routed somewhere readable rather than the console it doesn't own (stderr reaches `dmesg` today)

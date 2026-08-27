@@ -644,6 +644,14 @@ int sys_spawn_flags(const char *path, const char *args, int stdout_fd,
 // sys_wait_event() -- the loop lives here rather than in every caller.
 int sys_waitpid(int pid, int *out_code);
 
+// Blocks as sys_waitpid() does, but a SIGNAL ENDS THE WAIT: returns
+// -EINTR when a handler ran, rather than going back to sleep.
+//
+// For a process whose reason to wake may not be a child at all -- init
+// blocks on its children and is asked to do things by SIGHUP. Every
+// other caller here wants sys_waitpid()'s retry.
+int sys_waitpid_intr(int pid, int *out_code);
+
 // Asks whether a child has finished, WITHOUT waiting. Returns the pid
 // (reaped, exit code written), SYS_RETRY if it is still running, or -1
 // for a pid that is not this caller's live child.

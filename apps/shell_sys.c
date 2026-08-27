@@ -103,7 +103,7 @@ static const char *const HELP_LINES[] = {
     "\n",
     "Programs (in /bin, run by name -- not builtins):\n",
     "  ls cat echo rm touch mkdir mv ln stat truncate sync less\n",
-    "  df meminfo uptime time about random ps kill spawn reboot\n",
+    "  df meminfo uptime time about random ps kill spawn service reboot\n",
     "  lspci lscpu parttable heap ata kstack config tosh\n",
     "  (`<name> --help` where it has one; `path` shows where they are\n",
     "   found, and `rescue` is the kernel's own copy of the file ones)\n",

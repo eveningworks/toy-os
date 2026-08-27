@@ -27,6 +27,11 @@
 // number meaning something different here from everywhere else is a trap
 // for anybody who has used a Unix.
 
+#define SIGHUP   1  // "your configuration changed" -- the signal a daemon
+                    // re-reads on, and what `service` rings init's
+                    // doorbell with. Default action terminates, as on
+                    // Unix, so a program that has not asked for it is
+                    // not quietly immune to a kill
 #define SIGINT   2  // what Ctrl-C sends to the foreground group
 #define SIGQUIT  3  // the second escape hatch, for when SIGINT is ignored
 #define SIGILL   4  // an illegal instruction (#UD)

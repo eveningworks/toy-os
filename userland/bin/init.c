@@ -81,6 +81,34 @@
 #define SERVICES_DIR   "/etc/services.d"
 #define TARGET_SETTING "system.default_target"
 
+// THE CONTROL CHANNEL: a request file plus a doorbell.
+//
+// /bin/service appends `<verb> <name>` to CONTROL_PATH and sends SIGHUP;
+// init reads every line, acts, and deletes the file. That is runit's
+// `supervise/control` object plus SysV's `kill -HUP 1`, and it is the
+// shape that ports: there are no unix sockets here for systemd's D-Bus
+// and no named pipes for /run/initctl.
+//
+// THE SIGNAL IS THE WAKE, NOT THE MESSAGE, and it has to be: with a
+// service running init BLOCKS in waitpid(-1), so a file written while
+// the desktop is up is not noticed until something dies. The handler
+// carries no payload (a signal cannot), which is why the verb is in a
+// file and the file is read by the loop rather than by the handler.
+//
+// STATUS_PATH is the answer coming back -- one line per service,
+// rewritten whenever anything changes, because init is the only thing
+// that knows a service is down ON PURPOSE rather than merely absent
+// from the process table. runit writes the same file per service; this
+// one is text and greppable, so `cat` is a working `service list`.
+//
+// BOTH LIVE IN /tmp because they are runtime state, which is what /run
+// is for on a real system and /tmp is the only such directory here.
+// /tmp is NOT emptied at boot (docs/filesystem-layout.md), so a request
+// left by a machine that lost power would otherwise be obeyed by the
+// next boot: init deletes the control file at startup for that reason.
+#define CONTROL_PATH   "/tmp/init.ctl"
+#define STATUS_PATH    "/tmp/init.status"
+
 // Sixteen, not eight: ordering only means anything with several
 // services, and the table is static rather than on the stack, so the
 // cap costs address space instead of the ring-3 guard page. Overflow
@@ -176,6 +204,13 @@ struct service {
     int  seen;         // survived the last scan
     int  stopped;      // exited cleanly and asked to stay down
     int  disabled;     // its descriptor is gone -- do not start it again
+    // An operator asked for this service to be DOWN (`service stop`).
+    // Separate from `stopped` because the two are cleared by different
+    // things and one of them must survive a non-zero exit: a service
+    // stopped by hand is SIGTERMed, so it dies with 128 + SIGTERM, and
+    // reusing `stopped` would leave the restart policy looking at a
+    // failure and putting it straight back.
+    int  admin_stopped;
     int  gave_up;
 
     int  ready_mode;   // SVC_READY_*
@@ -634,6 +669,15 @@ static int service_exited(int pid, int code) {
                  s->name, pid, code, (unsigned)ran);
         sys_eprint(g_msg);
 
+        // AN ADMIN STOP OUTRANKS THE RESTART POLICY, including
+        // `Restart=always`. It is checked before the policy for the same
+        // reason the flag exists at all: the exit code here is 128 +
+        // SIGTERM, which every policy below reads as a failure.
+        if (s->admin_stopped) {
+            logf1("init: %s stopped\n", s->name);
+            return 1;
+        }
+
         if (s->restart == SVC_RESTART_NO) return 1;
 
         // A CLEAN exit is a request to stop, not a failure. Only
@@ -670,7 +714,7 @@ static int service_exited(int pid, int code) {
 static int svc_gates_dependents(const struct service *s) {
     if (s->ready_mode != SVC_READY_NOTIFY) return 0; // launch order only
     if (s->ready || s->ready_timed_out) return 0;
-    if (s->gave_up || s->disabled || s->stopped) return 0;
+    if (s->gave_up || s->disabled || s->stopped || s->admin_stopped) return 0;
     if (!s->exec[0]) return 0;                       // nothing to run
     if (s->restart == SVC_RESTART_NO && s->started_once && !s->pid) return 0;
     return 1;
@@ -750,6 +794,203 @@ static void poll_readiness(void) {
     }
 }
 
+// --- the control channel ---------------------------------------------
+
+// Set by the SIGHUP handler and read by the loop. A FLAG IS ALL A
+// HANDLER MAY DO: it interrupts the loop between any two instructions,
+// so reading a file, spawning or logging from inside it would run in
+// the middle of whatever the loop was halfway through -- and `malloc`
+// here is not async-signal-safe (its lock is not recursive).
+static volatile int g_hup;
+
+static void on_hup(int sig) { (void)sig; g_hup = 1; }
+
+// NO SA_RESTART, and that is the entire point of using sigaction()
+// here rather than sys_signal(): a restarted waitpid(-1) goes straight
+// back to blocking and the loop never gets a chance to read the request.
+// The doorbell IS the -EINTR.
+static void install_hup_handler(void) {
+    struct k_sigaction act = {
+        .handler  = (uint64_t)(uintptr_t)on_hup,
+        .restorer = (uint64_t)(uintptr_t)__sigrestore,
+        .flags    = 0,
+    };
+    if (sys_sigaction(SIGHUP, &act, 0) < 0)
+        sys_eprint("init: could not install the SIGHUP handler -- "
+                   "`service` will not be able to reach me\n");
+}
+
+// Finds a service by name, or NULL. Names are what a descriptor's
+// `Name=` says, which is also what After=/Before= resolve against.
+static struct service *find_service(const char *name) {
+    for (int i = 0; i < g_svc_count; i++)
+        if (k_strcmp(g_svc[i].name, name) == 0) return &g_svc[i];
+    return 0;
+}
+
+static void control_start(const char *name) {
+    struct service *s = find_service(name);
+    if (!s) { logf1("init: start: no service named %s\n", name); return; }
+    if (s->disabled) {
+        logf1("init: start: %s has no descriptor -- put one back in "
+              SERVICES_DIR "\n", s->name);
+        return;
+    }
+    if (s->pid) { logf1("init: start: %s is already running\n", s->name); return; }
+
+    // EVERY reason it is down is cleared, which is what makes `start`
+    // mean "start it" rather than "start it unless something earlier
+    // decided otherwise". The crash-loop counter goes with them: an
+    // operator asking again is explicitly overruling the give-up, and
+    // leaving the count would give the service one attempt before it
+    // gave up again.
+    s->admin_stopped = 0;
+    s->stopped       = 0;
+    s->gave_up       = 0;
+    s->fast_failures = 0;
+    s->due_ms        = 0;
+    // A `Restart=no` service has already had its one run; asking for it
+    // again is a second run, not a restart, so the flag that would skip
+    // it is cleared too.
+    s->started_once  = 0;
+    logf1("init: start: %s\n", s->name);
+}
+
+static void control_stop(const char *name) {
+    struct service *s = find_service(name);
+    if (!s) { logf1("init: stop: no service named %s\n", name); return; }
+
+    // SET BEFORE THE SIGNAL, never after: the child's death is what
+    // wakes the loop, and a flag set after sending it races the exit
+    // handling that would otherwise restart the service.
+    s->admin_stopped = 1;
+    if (!s->pid) { logf1("init: stop: %s is not running\n", s->name); return; }
+
+    // SIGTERM, and no escalation to SIGKILL after a timeout the way
+    // systemd does. A service that ignores it stays up and says so in
+    // the status file, which is a state an operator can see and reach
+    // with `kill -9`; a timeout that force-kills would be a policy this
+    // has no second caller for yet.
+    snprintf(g_msg, sizeof g_msg, "init: stop: sending SIGTERM to %s (pid %d)\n",
+             s->name, s->pid);
+    sys_eprint(g_msg);
+    sys_kill(s->pid, SIGTERM);
+}
+
+// Reads and obeys the request file. Deleted afterwards WHETHER OR NOT
+// every line made sense -- a request that could not be parsed has been
+// reported, and leaving it would make init re-run it on every later
+// doorbell.
+static char g_ctl[512];
+
+static void apply_control(void) {
+    int fd = sys_open(CONTROL_PATH, 0);
+    if (fd < 0) return;                       // a bare `reload`: no file
+    int64_t n = sys_read(fd, g_ctl, sizeof g_ctl - 1);
+    sys_close(fd);
+    sys_unlink(CONTROL_PATH);
+    if (n <= 0) return;
+    g_ctl[n] = '\0';
+
+    char *p = g_ctl;
+    while (*p) {
+        char *line = p;
+        while (*p && *p != '\n') p++;
+        if (*p) *p++ = '\0';
+
+        char *sp = line;
+        while (*sp && *sp != ' ') sp++;
+        if (!*sp) continue;                   // no name: nothing to act on
+        *sp++ = '\0';
+        while (*sp == ' ') sp++;
+        if (!*sp) continue;
+
+        if (k_strcmp(line, "start") == 0)      control_start(sp);
+        else if (k_strcmp(line, "stop") == 0)  control_stop(sp);
+        else logf1("init: unknown control request %s\n", line);
+    }
+}
+
+// --- the status file -------------------------------------------------
+
+// One word for why a service is where it is. Ordered by how much it
+// overrides: a running service is running whatever else is set, and
+// `disabled` outranks the rest because a service with no descriptor is
+// no longer declared at all.
+static const char *svc_state(const struct service *s) {
+    if (s->pid)                                       return "running";
+    if (s->disabled)                                  return "disabled";
+    if (s->admin_stopped)                             return "stopped";
+    if (s->gave_up)                                   return "crash-loop";
+    if (!s->exec[0])                                  return "no-exec";
+    if (s->stopped)                                   return "exited";
+    if (s->restart == SVC_RESTART_NO && s->started_once) return "done";
+    if (s->due_ms > now_ms())                         return "waiting";
+    return "starting";
+}
+
+// `-` for a service that never announces anything, so the column does
+// not claim a spawn-mode service is "not ready" -- it has nothing to be.
+static const char *svc_ready(const struct service *s) {
+    if (s->ready_mode != SVC_READY_NOTIFY) return "-";
+    // The column is about the process that is RUNNING. `ready` is left
+    // set after an exit (it is cleared at the next start, so that the
+    // readiness barrier is not re-armed on the way down), which would
+    // otherwise show a stopped service as ready.
+    if (!s->pid)            return "-";
+    if (s->ready)           return "yes";
+    if (s->ready_timed_out) return "timeout";
+    return "no";
+}
+
+// PUBLISHED ON DEMAND, AND ONLY WHEN THE MACHINE IS SETTLED. Two gates,
+// and each one is load-bearing:
+//
+//   g_publish -- nothing is written until somebody rings the doorbell.
+//   There is no tmpfs here, so every write is a real disk transaction,
+//   and a status nobody has asked for is one nobody reads.
+//
+//   `settled` -- never while a service is in a restart backoff or has
+//   yet to announce itself. That is the honest description of the file
+//   (it says where things CAME TO REST) and it is also what keeps init
+//   from writing during a desktop's startup, which WEDGES THE
+//   COMPOSITOR: a filesystem write between roughly 0.4 s and 1.5 s of
+//   boot leaves it presenting nothing at all, cursor included. That is
+//   a compositor bug, filed in docs/bugs.md with its reproduction; this
+//   avoids standing on it, and the deferral is right on its own terms.
+//
+// WRITTEN ONLY WHEN IT CHANGED, once both gates are open: the loop runs
+// on every child exit and every doorbell, and a service manager that
+// rewrites a file each pass writes to the disk forever on an idle
+// machine.
+static char g_status[2048];
+static char g_status_prev[2048];
+static int g_publish;
+
+static void write_status(int settled) {
+    if (!g_publish || !settled) return;
+
+    int n = snprintf(g_status, sizeof g_status,
+                     "# NAME             STATE       PID  FAILS  READY    EXEC\n");
+    for (int i = 0; i < g_svc_count && n > 0 && n < (int)sizeof g_status; i++) {
+        struct service *s = &g_svc[i];
+        n += snprintf(g_status + n, sizeof g_status - (unsigned)n,
+                      "%-18s %-10s %4d %6d  %-7s  %s\n",
+                      s->name, svc_state(s), s->pid, s->fast_failures,
+                      svc_ready(s), s->exec);
+    }
+    if (n <= 0 || n >= (int)sizeof g_status) return;   // a formatter that
+                                                       // does not fit writes
+                                                       // nothing (kfmt.h)
+    if (k_strcmp(g_status, g_status_prev) == 0) return;
+
+    int fd = sys_open(STATUS_PATH, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
+    if (fd < 0) return;                // no disk, or a full one: not fatal
+    sys_write(fd, g_status, (size_t)n);
+    sys_close(fd);
+    k_strlcpy(g_status_prev, g_status, sizeof g_status_prev);
+}
+
 // Starts everything that is down and due. Returns the number of
 // services still waiting on a backoff or on a dependency, which is what
 // decides whether the loop may block.
@@ -772,7 +1013,8 @@ static int start_due(void) {
         // than spawned-and-failed, so the log's refusal is the truth.
         if (!s->exec[0]) continue;
         if (s->restart == SVC_RESTART_NO && s->started_once) continue;
-        if (s->stopped) continue; // it asked to stay down
+        if (s->stopped) continue;       // it asked to stay down
+        if (s->admin_stopped) continue; // somebody else asked it to
         if (now < s->due_ms) { pending++; continue; }
         // THE BARRIER, and the one place launch order stops being the
         // whole story. Counted as pending rather than skipped, so the
@@ -821,15 +1063,44 @@ int main(void) {
     sys_eprint("init: starting\n");
 
     seed_environment();
+    install_hup_handler();
+    // NEITHER FILE SURVIVES A BOOT. /tmp is not emptied here
+    // (docs/filesystem-layout.md), which is the one way it differs from
+    // /run being a tmpfs: a request left behind by a machine that lost
+    // power would otherwise be obeyed by the next one, and last boot's
+    // status would be read as this boot's.
+    //
+    // BEFORE ANYTHING IS SPAWNED, deliberately. These are the only
+    // writes init makes during startup, and doing them here puts them
+    // ahead of the desktop existing at all -- see write_status() on why
+    // a write once it is starting up is not harmless.
+    sys_unlink(CONTROL_PATH);
+    sys_unlink(STATUS_PATH);
     load_target();
     g_fs_gen = sys_fs_generation();
     load_services(1);
 
     for (;;) {
-        // Rescan before deciding what to start, so a descriptor added or
-        // removed since the last pass is honoured on this one rather
-        // than one iteration late.
-        if (services_changed()) load_services(0);
+        // A DOORBELL IS BOTH A REQUEST AND A RESCAN. Read before
+        // deciding what to start, so a `service start` takes effect on
+        // this pass rather than the next one.
+        if (g_hup) {
+            g_hup = 0;
+            // FROM HERE ON THERE IS A READER. Everything before the
+            // first doorbell is a boot nobody was watching, and init
+            // writes nothing during it -- see write_status().
+            g_publish = 1;
+            apply_control();
+            // Resync the generation our own read-and-delete moved, so
+            // the branch below does not rescan a second time for it.
+            services_changed();
+            load_services(0);
+        } else if (services_changed()) {
+            // Rescan before deciding what to start, so a descriptor
+            // added or removed since the last pass is honoured on this
+            // one rather than one iteration late.
+            load_services(0);
+        }
 
         // BEFORE start_due(), so a service that became ready since the
         // last pass releases its dependents in THIS one rather than a
@@ -838,6 +1109,12 @@ int main(void) {
         // has not arrived yet. See count_awaiting_ready().
         poll_readiness();
         int pending = start_due() + count_awaiting_ready();
+
+        // AFTER the pass, not before: what an operator wants to read is
+        // where this pass left things, and writing first would publish
+        // the previous state with a fresh timestamp on it. `!pending` is
+        // the settled test -- see write_status().
+        write_status(!pending);
 
         int code = 0;
         int pid;
@@ -851,7 +1128,10 @@ int main(void) {
                 continue;
             }
         } else {
-            pid = sys_waitpid(-1, &code);
+            // INTERRUPTIBLE, because a control request is not a child
+            // exiting: sys_waitpid() retries -EINTR and would park init
+            // again with the doorbell unanswered.
+            pid = sys_waitpid_intr(-1, &code);
         }
 
         if (pid > 0) {
@@ -867,6 +1147,12 @@ int main(void) {
             }
             continue;
         }
+
+        // A DOORBELL LOOKS EXACTLY LIKE "no children" HERE -- both
+        // land as a negative return. Sleeping on it would delay every
+        // request by the idle interval for no reason, so the flag is
+        // asked before the sleep rather than after it.
+        if (g_hup) continue;
 
         // -1: no children at all. Nothing to wait on, so idle.
         sys_sleep_ms(IDLE_SLEEP_MS);

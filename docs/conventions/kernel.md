@@ -295,6 +295,61 @@ this the obvious way), not from how much history it accumulated.
   role straight back. Both had passed for months on the accidental
   interlock that `gui` blocking the shell provided -- **automating a
   lifecycle removes interlocks somebody depended on**; look for them.
+- **A SERVICE IS CONTROLLED BY A FILE PLUS A DOORBELL, AND `/bin/service`
+  IS THE LEVER.** `service [list] | status <name> | start <name> | stop
+  <name> | reload`. The READ half asks init nothing once the file
+  exists -- it reads `/tmp/init.status`, one line per service, because
+  init is the only thing that can say a service is down ON PURPOSE (the
+  process table shows an absence, and an absence cannot tell `stopped`
+  from `crash-loop` from "never declared"). That file is PUBLISHED ON
+  DEMAND -- nothing until a doorbell has arrived, so the first reader
+  rings it -- and only on a SETTLED pass, never while a service is in a
+  backoff or yet to announce itself. The WRITE half appends `<verb> <name>` to `/tmp/init.ctl`
+  and sends `SIGHUP`, which is runit's `supervise/control` plus SysV's
+  `kill -HUP 1`; D-Bus and a FIFO both need transports this system has
+  not got. Five things to know:
+  - **THE SIGNAL CANNOT BE THE MESSAGE AND THE FILE CANNOT BE THE
+    SIGNAL.** A signal carries no payload and a handler may do nothing
+    but set a flag; a file written while a service is running is not
+    read, because init BLOCKS in `waitpid(-1)` until something dies.
+  - **`sys_waitpid()` RETRIES `-EINTR` AND CANNOT BE THE WAIT.** Use
+    `sys_waitpid_intr()` for anything whose reason to wake may not be a
+    child. The retry is right for a shell and it silently swallowed the
+    whole doorbell: init slept on with the flag its handler had just set
+    unread, and `service stop` did nothing with no error anywhere.
+  - **AN ADMIN STOP IS ITS OWN FLAG AND OUTRANKS `Restart=`,
+    `always` INCLUDED** -- a stopped service is SIGTERMed, so it exits
+    `128 + SIGTERM`, which every restart policy reads as a failure.
+    `stop` (undone by `start` or a reboot) and DELETING the descriptor
+    (systemd's `disable`, survives a reboot) stay different requests.
+  - **`/tmp` IS NOT `/run`, so init CLEARS BOTH FILES at startup**, and
+    before it spawns anything -- `/tmp` is not emptied at boot here, so
+    a request left by a machine that lost power would be obeyed and last
+    boot's status read as this boot's. Ordering them ahead of the first
+    spawn is deliberate: **a filesystem write once the desktop is
+    STARTING UP wedges the compositor** (`docs/bugs.md`), which is the
+    other half of why the status is published on demand rather than at
+    boot.
+  - **A DESCRIPTOR MUST APPEAR WHOLE**: init rescans on ANY filesystem
+    change, so a file built line by line in `/etc/services.d` can be
+    read half-written -- and a half-written `After=` names a service not
+    loaded yet, which init IGNORES correctly and then starts the service
+    in the wrong order, looking like an ordering bug. Write it elsewhere
+    and `mv` it in.
+- **INIT CANNOT BE KILLED BY A SIGNAL IT HAS NOT CAUGHT, and the guard
+  is in `do_default_action()` rather than only in `scheduler_kill()`.**
+  Linux's `SIGNAL_UNKILLABLE`. `scheduler_kill()` had refused pid 1
+  since init existed, and signals then added a SECOND way to terminate a
+  process that does not go through it: when the victim is the process
+  about to be resumed, the default action takes SYS_EXIT's path
+  instead. So `kill 1` killed init -- the desktop was reparented to the
+  kernel and orphans stopped being reaped, silently. Two halves worth
+  keeping: init still CATCHES what it installs a handler for (which is
+  what `service` depends on), and a FAULT in init still kills it,
+  because a fault is delivered through `signal_deliver_fault()` and
+  never reaches the default action -- Linux's `force_sig()`, same
+  reasoning. **When a subsystem gains a second implementation, re-read
+  every guard named after the first.**
 - **`SYS_SLEEP` exists, and a caller with no scheduler slot gets -1.**
   RDI is milliseconds; the caller parks on a deadline and the timer tick
   releases it, so the RESOLUTION is one tick and a sleep never returns

@@ -1787,3 +1787,53 @@ which HID and evdev both invert. The test caught its own author. It is
 renamed for the property rather than the guess, and `input.h` now states
 the sign, which nothing did before.
 
+**2026-08-27 -- `tools/init_test.py`: 15/31 to 37/37, and the guess about
+why was half right in the worst way.** It had been written down as
+harness rot, which three of the four causes were. The fourth was a
+kernel bug the tool's own check could not see.
+
+**AN ASSERTION A BROKEN VERSION STILL PASSES IS NOT A CHECK, and the
+worked example is `1 in vm.ps()`.** The tool asked whether pid 1 was in
+the process table after `kill 1`. A killed init is a ZOMBIE, and a
+zombie is in the table -- so the check was green while init had been
+dying on that line for months, and every check after it failed for
+reasons that read like separate rot. Assert the STATE, not the presence.
+
+**`check_tool_commands.py` BEING GREEN IS NOT EVIDENCE OF HARNESS ROT.**
+It says every command a tool drives still exists, which was true
+throughout; the triage note reasoned from "the commands are fine, so it
+must be output-shape rot" and reached the wrong half of the system. It
+cannot see a command whose OUTPUT changed, and it cannot see the guest
+being broken.
+
+**THE PHASE BEFORE THE FAILURES IS NOT NECESSARILY THE PHASE THAT CAUSED
+THEM.** The open note blamed the crash-loop fixture, "the phase
+immediately before the failures start". The phase immediately before was
+actually `kill 1`, one earlier than the note had counted, and it was
+killing init outright. Count the phases in the OUTPUT, not from the
+narrative.
+
+**A DESCRIPTOR BUILT LINE BY LINE CAN BE READ HALF-WRITTEN.** The
+ordering fixtures wrote `Name=` then appended `Exec=`, `Restart=` and
+`After=` into a directory init rescans on every filesystem change. A
+rescan landing between the lines sees a file whose `After=` names a
+service that does not exist YET -- which init correctly ignores with a
+log line, and then starts it out of order. Measured `ordx ordz ordy`
+against the asserted `ordz ordy ordx`. Build the file elsewhere and `mv`
+it in; that is what a real system tells you to do with a unit file, for
+this reason.
+
+**dmesg IS A RING, so a stamp asserted at the end of a long run reads
+`None`.** The readiness checks compare timestamps from the first two
+seconds of the boot, and by the time the tool had killed the desktop,
+driven a new command and written a dozen descriptors, those lines had
+scrolled out. Snapshot early, assert late -- and note the failure mode
+is a missing stamp, which looks exactly like the feature not working.
+
+**A POLL ON THE KERNEL'S LINE IS NOT A POLL ON init's.** The tool waited
+for `init started as pid`, which the KERNEL prints at the spawn, and
+then grepped that same snapshot for init's own first service start tens
+of milliseconds later. This repo's documented flake shape, found again:
+a poll whose exit condition is weaker than what the code after it
+needs.
+

@@ -665,6 +665,32 @@ int sys_waitpid(int pid, int *out_code) {
     return (int)err(r);
 }
 
+// waitpid() that a SIGNAL may interrupt: blocks like sys_waitpid(), but
+// returns -EINTR instead of going back to sleep.
+//
+// **THE ONE WAIT A DOORBELL CAN REACH.** sys_waitpid() retries EINTR,
+// which is right for a shell waiting on its own foreground job and
+// wrong for a supervisor: init blocks here with nothing to do until a
+// child dies, and a request arriving by signal has no child's death
+// behind it. Retrying would put init straight back to sleep with the
+// flag its handler just set unread -- which it did, silently, and read
+// exactly like `service stop` doing nothing.
+//
+// A SEPARATE ENTRY POINT rather than a flag, for the same reason
+// sys_waitpid_untraced() is one: the contracts differ in what a caller
+// must handle afterwards, and -EINTR is a return the existing callers
+// are written not to expect.
+int sys_waitpid_intr(int pid, int *out_code) {
+    int64_t r;
+    // SYS_RETRY is still looped: it means "you were woken, ask again",
+    // which is the kernel's parking contract and not an interruption.
+    do {
+        r = syscall3(SYS_WAITPID, (uint64_t)(int64_t)pid,
+                     (uint64_t)(uintptr_t)out_code, 0);
+    } while (r == SYS_RETRY);
+    return (int)err(r);
+}
+
 // waitpid() that also returns when a child STOPS -- POSIX's WUNTRACED.
 //
 // A SEPARATE ENTRY POINT rather than a flag on sys_waitpid(), because

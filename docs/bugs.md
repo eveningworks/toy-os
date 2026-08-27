@@ -65,7 +65,8 @@ it has exonerated one this session and convicted another.
 
 ## Reproducible
 
-- [ ] `tools/init_test.py` fails 12 of its 27 checks, deterministically and PRE-EXISTING -- init stops reaping and stops starting services partway through the run
+- [ ] A filesystem write during the desktop's STARTUP wedges the compositor -- it then presents nothing at all, cursor included, while `ps` still shows `toywm` ready and accruing CPU and the kernel log says nothing. Measured 2026-08-27: 3 runs in 3 with one ~120-byte write at 0.8 s, 0 in 3 without it; a write at ~1.5 s is harmless. It recovers on its own eventually (ticking again on a VM up ~40 s), trigger unestablished. `tools/idle_desktop_test.py`'s clock CONTROL is the only thing in the suite that sees it
+- [ ] A process spawned from the RING-0 debug console leaks an unreapable zombie -- `spawn` is `/bin/spawn` now and runs under the legacy loader, which has no scheduler slot, so `SYS_SPAWN` records its child's ppid as 0. Nothing waits for it and no parent death can reparent it, so the slot is held until reboot. `/bin/spawn`'s own header still claims "the child is reparented to init when this exits". The obvious fix -- parent it to init -- would BREAK `strace` at a `#` prompt, which finds its child precisely because both are pid 0; what it really needs is the legacy loader having an identity
 - [ ] `tools/terminal_probe.py`: leaving the alternate screen does not take the pager's status bar with it -- measured PRE-EXISTING against d5400cb, where the same probe scored 20/23 against 22/23 after the tabs rewrite
 
 *(Was empty. Every entry that was here on 2026-08-20 is fixed, was already
@@ -186,28 +187,3 @@ either still parses the ring-0 output or runs on an image that has no
   assertion, not a command-name one.
 
 Reproduce: `make clean-disk && make iso && python3 tools/ondemand_sweep.py --logs DIR`.
-
-## `tools/init_test.py` has rotted (detail for the entry above)
-
-**MEASURED, not assumed: 15/31 pass both before and after the
-partitioning work** — stashed and rebuilt against the previous commit
-to check, and the count is identical. It is not a regression from
-anything recent; it is an on-demand tool that nothing has run for a
-while, so nothing noticed it going red.
-
-The failures look like one cause, and it is the same rot
-`tools/fs_switch_test.py` had (fixed in the TFS2-removal commit): the
-tool drives commands that have since become `/bin` programs and parses
-output that only the ring-0 builtins still produce. The clearest tell
-is `` `kill 1` is refused`` failing with `elf_run: calling
-process_run_ring3() for /bin/kill` — the tool is reading the loader's
-chatter, not the refusal. Most of the rest are `-- none started` /
-`-- ready None`, i.e. a parse that finds nothing rather than a service
-that did not run.
-
-**Not yet confirmed to be harness-only.** The likelihood is high given
-the shape, but nobody has checked the init/service behaviour by hand
-against a boot, so a real defect hiding behind the rot cannot be ruled
-out. Doing that is the first step of the fix, not an afterthought.
-
-Reproduce: `make iso && python3 tools/init_test.py`.

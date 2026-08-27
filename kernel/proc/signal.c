@@ -298,6 +298,19 @@ int signal_restore_frame(int pid, uint64_t *regs) {
 // The default action, once it is known that nothing else applies.
 // Terminates `pid`, from whichever of the two situations it is in.
 static void do_default_action(int pid, int sig) {
+    // INIT CANNOT DIE OF A DEFAULT ACTION, and the guard has to be here
+    // as well as in scheduler_kill(): when the victim is the RUNNING
+    // process the branch below takes SYS_EXIT's path instead, which
+    // never asks. That is Linux's SIGNAL_UNKILLABLE, and it keeps the
+    // same split -- init still CATCHES anything it installs a handler
+    // for (delivery has already run one by the time this is reached);
+    // what it cannot do is die of a signal it has not.
+    if (pid == scheduler_init_pid()) {
+        klog_printf("signal: init (pid %d) discarded SIG%s -- no handler\n",
+                    pid, signal_name(sig));
+        return;
+    }
+
     int code = SIGNAL_EXIT_BASE + sig;
     klog_printf("signal: pid %d terminated by SIG%s\n", pid, signal_name(sig));
 

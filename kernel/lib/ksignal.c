@@ -16,6 +16,7 @@ static const struct {
     int sig;
     const char *name;
 } SIGNALS[] = {
+    { SIGHUP,  "HUP"  },
     { SIGINT,  "INT"  },
     { SIGQUIT, "QUIT" },
     { SIGKILL, "KILL" },
