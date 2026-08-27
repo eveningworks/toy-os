@@ -1529,6 +1529,21 @@ real scanout hardware does. Do not write a pixel assertion for one.
   converts the answer back. And **`uui_table_set_rows()` must NOT reset
   the prefix**: Task Manager calls it on every refresh, so a resetting
   version drops the second letter of anything typed across a tick.
+- **A WIDGET THAT TAKES KEYS STILL GETS NONE UNTIL THE APP ROUTES
+  THEM.** `uapp.c` offers a key to `uapp_desc.focus` and then to
+  `uapp_desc.on_key`; an app declaring NEITHER -- as Task Manager did
+  from the day it was written -- reaches no widget's `key` op at all,
+  and nothing says so. Its table's arrows, Home/End, paging and
+  type-ahead were dead for months behind a suite that drives every
+  check by mouse. Two ways to fix it and the choice is real: a
+  `uapp_desc.focus` ring is the toolkit's own idiom and gives Tab
+  between controls, but no widget draws a focus indicator yet
+  (`docs/roadmap.md`), so it adds a Tab stop nobody can see; forwarding
+  from `on_key` to the one widget that wants keys is what the File
+  Manager does and what Task Manager now does. **The general check: when
+  a widget gains a key handler, grep for the app's routing** -- the same
+  shape as CLAUDE.md's rule about a slot that is present and read by
+  nobody.
 - **A SETTING WHOSE CHOICES ARE DATA NAMES THEM ITSELF:
   `choice_label`.** `/etc/settings.d`'s `Choice.<value>=` lines cover a
   list a file's author can see; they cannot cover one that is COMPUTED

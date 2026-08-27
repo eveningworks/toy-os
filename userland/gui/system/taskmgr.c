@@ -48,6 +48,7 @@
 #include "ui/uui_button_group.h"
 #include "ui/uui_layout.h"
 #include "ui/uui_widget.h"
+#include "ui/uui_route.h"   // UUI_REASON_KEY
 
 
 #define ID_TABLE   1
@@ -405,6 +406,19 @@ static void on_open(struct uapp *a) {
     report_sort(1);
 }
 
+// The table is the only thing here that wants the keyboard, so keys go
+// straight to it -- the File Manager's arrangement. A uapp_desc.focus
+// ring would be the toolkit's own idiom, but it would put a Tab stop on
+// the button group, and no widget here draws a focus indicator yet
+// (docs/roadmap.md's item), so Tab would move a cursor nobody can see.
+static void on_key(struct uapp *a, int key, unsigned mods) {
+    (void)mods;
+    if (!uui_table_key(&g_table, key)) return;
+    // Report it the way a click on a row is reported, so the armed
+    // action is cleared and the selection is logged from one place.
+    on_widget(a, ID_TABLE, UUI_REASON_KEY);
+}
+
 static void on_size(int *w, int *h) {
     // THE BUTTONS ARE SIZED HERE, not in main(). ugfx_char_w() returns 0
     // until uapp_run() has fetched the font, so sizing them in main()
@@ -481,6 +495,7 @@ int main(void) {
         .min_w = 0, .min_h = 0,
         .widgets = ITEMS,
         .widget_count = 2,
+        .on_key = on_key,
         .on_widget = on_widget,
         .on_open = on_open,
         .on_tick = on_tick,

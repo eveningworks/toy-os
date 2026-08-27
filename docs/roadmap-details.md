@@ -2781,7 +2781,11 @@ hand-computed arithmetic today, which is why no window can be resized.*
   moving over unchanged: a table's rows are PULLED and its app indices
   are not the order on screen, so the seek walks VIEW positions and
   converts back -- the same rule `uui_table_key()`'s arrows already
-  followed.
+  followed. And the widget was only half of it: Task Manager declared
+  neither `uapp_desc.focus` nor `on_key`, so no key had ever reached
+  its table -- arrows included -- and the whole GUI suite passed because
+  every check there drives by mouse. It forwards from `on_key` now, as
+  the File Manager does.
 
 ## Runtime font loading & text metrics
 

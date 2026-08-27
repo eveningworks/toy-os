@@ -69,6 +69,9 @@ DEFAULT_SOCK = ".vm.serial"
 TASKMGR = "/bin/wm/system/taskmgr"
 VICTIM = "/bin/wm/demos/uidemo"   # something to list and then kill
 
+# `gui key` takes a character or a code (userland/wm/wm_debug.c).
+K_DOWN = "0x92"
+
 checks = []
 
 
@@ -444,6 +447,30 @@ def main():
         passed = sum(1 for _, ok, _ in checks if ok)
         print(f"\ntaskmgr_test: {passed} passed, {len(checks) - passed} failed")
         return 1
+
+    # --- the keyboard reaches the table -------------------------------
+    #
+    # WHY THIS IS HERE AT ALL: uui_table has taken keys since it was
+    # written, and Task Manager routed none to it -- it declares no
+    # focus ring, so uapp.c had nowhere to send one. Every check above
+    # drives the app by MOUSE, so the whole suite passed with the
+    # table's entire key handler dead. Type-ahead shipped "working" on
+    # that basis.
+    #
+    # The selection is on the victim's row here, so Down moves off it
+    # and the letter must bring it back. `u` is uidemo's initial and
+    # nothing else in the table starts with one.
+    dbg.logs()
+    dbg.key(K_DOWN)
+    moved = wait_log(dbg, "taskmgr: selected pid ", timeout=2.0)
+    check("an arrow key reaches the table at all", bool(moved),
+          "no `selected pid` line -- no key reaches the widget")
+
+    dbg.logs()
+    dbg.key("u")
+    check("typing a letter seeks by NAME, not by PID",
+          bool(wait_log(dbg, f"taskmgr: selected pid {victim_pid}", timeout=2.0)),
+          f"`u` did not select uidemo (pid {victim_pid})")
 
     before_count = dbg.json("gui windows --json")["count"]
 
