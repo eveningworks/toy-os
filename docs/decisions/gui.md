@@ -4926,14 +4926,33 @@ when it is not.
 
 What replaced it is the other standard answer: the selected tab takes
 the theme's FIELD colour, rounds its top corners, and carries a 2px
-accent along its BOTTOM edge, the edge touching the page. VS Code and
-libadwaita both mark a tab this way.
+accent bar. VS Code marks a tab this way (`tab.activeBorderTop`).
 
-**The strip's ground is the WINDOW colour, not the panel colour**, and
-that is load-bearing rather than incidental: field over panel is ten
-units out of 255, which is the change docs/gui-guidelines.md warns looks
-plausible in a screenshot and is invisible in practice. Field over
-window is twenty, and the accent underline carries the rest.
+**Where the accent goes and how dark the resting tabs are were both got
+wrong first, and the corrections are the useful part.** The accent
+started on the BOTTOM edge, on the reasoning that it is the edge
+touching the page — but in a terminal the page is black, so a thin blue
+line there has the least contrast of anywhere it could be. It is on the
+TOP edge now, against the light chrome. And resting tabs were left the
+strip's own colour, which made the selected tab a twenty-unit lift; that
+shipped and was reported as hard to tell apart with three tabs open.
+Resting tabs are the CONTROL colour now — darker than the ground, so
+the strip reads as wells with one tab raised — and the lift is thirty.
+
+**The lesson generalises past this widget.** Twenty units out of 255
+survived a pixel check, a screenshot review and a written claim that it
+was enough. What settled it was three tabs open at once, which is the
+state the strip exists for and not the state it was looked at in. A
+contrast judgement made on two elements does not transfer to six.
+
+**And the fills were not the whole problem.** A terminal's tabs report
+their shell's directory, so every tab in the same place carries the
+SAME label — three tabs reading `/` are indistinguishable however they
+are shaded. `uui_tabs.numbered` prefixes `1: `, `2: ` past one tab
+(Konsole's `%n: %d`, iTerm2's), which fixes identity and count together.
+The widget draws it rather than the caller baking it into a label,
+because a label is not owned and a shell rewrites its own
+asynchronously.
 
 **Every colour is the theme's, which is what the page-colour version
 could not be.** `page_bg` had to be supplied by the caller, because the

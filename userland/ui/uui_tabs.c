@@ -30,6 +30,7 @@ void uui_tabs_init(struct uui_tabs *t, struct uui_tab *tabs, int count,
     t->count = count;
     t->selected = 0;
     t->show_new = 0;
+    t->numbered = 0;
     t->hovered = -1;
     t->hovered_close = 0;
     t->hovered_new = 0;
@@ -104,10 +105,28 @@ static int close_rect(const struct uui_tabs *t, int index,
     return 1;
 }
 
+// "N: " for tab `index`, or empty. ONE TAB IS NOT NUMBERED -- a lone
+// "1:" is three characters saying nothing.
+static void number_prefix(const struct uui_tabs *t, int index, char *out,
+                           int cap) {
+    out[0] = '\0';
+    if (!t->numbered || t->count < 2 || cap < 6) return;
+    int n = index + 1;
+    int i = 0;
+    if (n >= 10) out[i++] = (char)('0' + (n / 10) % 10);
+    out[i++] = (char)('0' + n % 10);
+    out[i++] = ':';
+    out[i++] = ' ';
+    out[i] = '\0';
+}
+
 void uui_tabs_natural_size(const struct uui_tabs *t, int *out_w, int *out_h) {
     int widest = TAB_MIN_W;
+    char pre[6];
     for (int i = 0; i < t->count; i++) {
-        int need = 2 * TAB_PAD_X + ugfx_text_width(t->tabs[i].label);
+        number_prefix(t, i, pre, sizeof pre);
+        int need = 2 * TAB_PAD_X + ugfx_text_width(pre)
+                    + ugfx_text_width(t->tabs[i].label);
         if (t->tabs[i].closable) need += CLOSE_W + TAB_PAD_X;
         if (need > widest) widest = need;
     }
@@ -216,15 +235,21 @@ static void draw_one(struct ugfx_surface *s, const struct uui_tabs *t, int i) {
     // measures nothing (docs/gui-guidelines.md).
     uint32_t ink = UTHEME_TEXT;
     if (is_sel) {
-        // The lift is the FILL plus the accent, and the accent sits on
-        // the bottom edge -- the one touching the page -- so it reads as
-        // pointing at what the tab shows.
+        // **THE ACCENT IS ON TOP**, against the light chrome. On the
+        // bottom edge it is a thin line over a terminal's black page,
+        // which is where it has the least contrast of anywhere it could
+        // be. Inset by the corner radius so it follows the rounding
+        // instead of overhanging it.
         fill_top_rounded(s, x, y, w, h, corner_r(), UTHEME_WHITE);
-        ugfx_fill_rect(s, x, y + h - 2, w, 2, UTHEME_ACCENT);
+        ugfx_fill_rect(s, x + corner_r(), y, w - 2 * corner_r(), 2,
+                        UTHEME_ACCENT);
     } else {
-        if (st != UUI_STATE_REST)
-            fill_top_rounded(s, x + 1, y + 1, w - 2, h - 1, corner_r(),
-                              uui_state_bg(UTHEME_PANEL_BG, st));
+        // RECESSED, not bare. Leaving these the strip's own colour left
+        // the selected tab lifted by ten units out of 255; the control
+        // colour is darker than the ground, so the strip reads as wells
+        // with one tab raised out of them.
+        fill_top_rounded(s, x, y, w, h, corner_r(),
+                          uui_state_bg(UTHEME_BUTTON_BG, st));
         // A HAIRLINE, NOT A BORDER. Separators only between two resting
         // tabs: one beside the selected tab would land against that
         // tab's own rounded edge and read as a stray mark.
@@ -236,12 +261,23 @@ static void draw_one(struct ugfx_surface *s, const struct uui_tabs *t, int i) {
     int bx, by, bw, bh;
     int has_close = close_rect(t, i, &bx, &by, &bw, &bh);
     int text_w = w - 2 * TAB_PAD_X - (has_close ? CLOSE_W + TAB_PAD_X : 0);
+    int tx = x + TAB_PAD_X, ty = y + (h - ugfx_char_h()) / 2 + 1;
+
+    // The number goes first and the label gets what is left -- so a long
+    // title clips and the number, which is the part that tells the tabs
+    // apart, never does.
+    char pre[6];
+    number_prefix(t, i, pre, sizeof pre);
+    if (pre[0] && text_w > 0) {
+        int pw = ugfx_text_width(pre);
+        ugfx_draw_string_clipped(s, tx, ty, text_w, pre, ink, UGFX_TRANSPARENT);
+        tx += pw;
+        text_w -= pw;
+    }
     if (text_w > 0) {
         // CLIPPED, never plain: a title from a shell is arbitrary text
         // and gfx_draw_string() does not clip (docs/gui-guidelines.md).
-        ugfx_draw_string_clipped(s, x + TAB_PAD_X,
-                                  y + (h - ugfx_char_h()) / 2 + 1,
-                                  text_w, t->tabs[i].label, ink,
+        ugfx_draw_string_clipped(s, tx, ty, text_w, t->tabs[i].label, ink,
                                   UGFX_TRANSPARENT);
     }
     if (has_close) {

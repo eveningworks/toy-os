@@ -21,11 +21,18 @@
 // own title buffers, so a title arriving from the shell (an OSC
 // sequence, api/ansi.h) shows up with nothing copied.
 //
-// **THE SELECTED TAB IS A LIGHT FILL WITH AN ACCENT UNDERLINE**, the
-// way VS Code and libadwaita mark one: the tab takes the theme's field
-// colour, rounds its top corners, and carries a 2px accent along its
-// BOTTOM edge, which is the edge touching the page. Resting tabs are
-// flat on the strip with a hairline between them.
+// **THE SELECTED TAB IS A LIGHT FILL WITH AN ACCENT BAR ON TOP**, the
+// way VS Code marks one (`tab.activeBorderTop`): the tab takes the
+// theme's field colour, rounds its top corners, and carries a 2px accent
+// along its TOP edge. Resting tabs are filled with the CONTROL colour --
+// darker than the strip's own ground, so they read as recessed and the
+// selected tab as raised out of them.
+//
+// Both of those are corrections, and the reason is worth keeping: the
+// accent used to sit on the BOTTOM edge, where it is a thin blue line
+// directly above a terminal's black page and has almost no contrast,
+// and resting tabs used to be the strip's own colour, which left the
+// selected one lifted by ten units. Three tabs were hard to tell apart.
 //
 // This deliberately does NOT try to merge the tab into the page by
 // filling it with the page's own colour (Windows Terminal's and
@@ -57,6 +64,19 @@ struct uui_tabs {
     // button that walks across the strip is a target you have to look
     // for. Off by default, so an existing caller is unchanged.
     int show_new;
+
+    // **NUMBER THE TABS: `1: label`, `2: label`.** Konsole's default tab
+    // format (`%n: %d`) and iTerm2's, and it answers two questions at
+    // once -- the highest number is how many there are, the lit one is
+    // where you are. It earns its place when labels COLLIDE, which for a
+    // terminal is the common case rather than the odd one: every tab
+    // sitting in the same directory reports the same title.
+    //
+    // Drawn by the widget rather than baked into the caller's labels,
+    // because a label is not owned (see above) and a shell rewrites its
+    // own asynchronously. Suppressed at one tab, where a number says
+    // nothing. Off by default.
+    int numbered;
 
     // Driven by the widget from pointer input; an app never sets these.
     int hovered;                // tab index under the cursor, or -1

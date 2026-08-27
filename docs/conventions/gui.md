@@ -1636,16 +1636,32 @@ a shell's title nor its scrollback. Per-tab job control is free: each
 shell is spawned `PGID_NEW`, so `Ctrl-C` reaches the job in the tab you
 are looking at.
 
-**THE SELECTED TAB IS A LIGHT LIFT WITH AN ACCENT UNDERLINE.** It takes
-the theme's FIELD colour, rounds its top corners and carries a 2px
-accent along its bottom edge -- the edge touching the page -- the way VS
-Code and libadwaita mark one. Resting tabs are flat with a hairline
-between them, and **the strip's ground is the WINDOW colour rather than
-the panel colour** so the lift is twenty units rather than ten; ten is
-the change `docs/gui-guidelines.md` warns is invisible in practice. The
-strip's baseline is drawn under every tab and broken by the selected
-tab's accent, so the break is a consequence of the fill rather than a
-second calculation that has to agree with it.
+**THE SELECTED TAB IS A LIGHT LIFT WITH AN ACCENT BAR ON TOP.** It
+takes the theme's FIELD colour, rounds its top corners and carries a 2px
+accent along its TOP edge, the way VS Code marks one
+(`tab.activeBorderTop`). **Resting tabs are filled with the CONTROL
+colour**, which is darker than the strip's own ground, so the strip
+reads as wells with one tab raised out of them.
+
+Both of those are corrections and the reasons are worth keeping. The
+accent sat on the BOTTOM edge, where it is a thin line directly above a
+terminal's black page and has the least contrast of anywhere it could
+be; and resting tabs were left the strip's own colour, so the selected
+one was lifted by TWENTY units out of 255 -- which shipped, and was
+reported as hard to tell apart with three tabs open. Thirty is the
+current lift and `uterm_test`'s c17 has its floor at twenty-five, above
+what was reported, because a check that accepts twenty accepts the bug.
+
+**THE TABS ARE NUMBERED WHEN THERE IS MORE THAN ONE**
+(`uui_tabs.numbered`): `1: label`, Konsole's `%n: %d` and iTerm2's. It
+answers two questions at once -- the highest number is how many there
+are, the lit one is where you are -- and it earns its place because
+terminal labels COLLIDE by default: every tab in the same directory
+reports the same title, and three tabs reading `/` are indistinguishable
+however they are shaded. The widget draws it rather than the caller
+baking it into a label, because a label is not owned and a shell
+rewrites its own asynchronously. The number goes FIRST and the label
+takes what is left, so a long title clips and the number never does.
 
 Filling the selected tab with the PAGE's own colour instead -- Windows
 Terminal's and Konsole's merged tab -- was built and rejected: against

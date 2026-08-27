@@ -1245,6 +1245,7 @@ static void on_open_cb(struct uapp *a) {
     g_strip.on_close  = tab_closed;
     g_strip.on_new    = tab_new;
     g_strip.show_new  = 1;
+    g_strip.numbered  = 1;   // every tab in one directory reports the same title
 
     uui_menubar_init(&g_menu, menu_bar,
                       (int)(sizeof menu_bar / sizeof menu_bar[0]));

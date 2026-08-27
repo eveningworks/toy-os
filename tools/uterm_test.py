@@ -881,6 +881,11 @@ def check_completion(dbg, qmp, res):
         return
     dbg.click(win["x"] + win["w"] // 2, win["y"] + win["h"] // 2)
     dbg.settle()
+    # A KNOWN-CLEAN LINE. Whatever ran before this may have left the
+    # editor mid-line, and a completion check that types onto the end of
+    # someone else's text is asserting nothing.
+    key(dbg, "0x0d")
+    dbg.settle()
 
     dbg.send("sh rm /ct_gui_dir")
     dbg.send("sh rm /ct_gui_file")
@@ -924,6 +929,99 @@ def check_completion(dbg, qmp, res):
     dbg.settle()
 
 
+def check_tab_legibility(dbg, qmp, res):
+    """Can you tell the tabs apart, and see which one is open?
+
+    **THIS IS THE CHECK FOR A REPORTED COMPLAINT**, and the complaint is
+    what makes it sharp: three tabs sitting in the same directory all
+    report the same title, so their labels are IDENTICAL. Two tabs drawn
+    from identical labels are pixel-identical unless something else
+    distinguishes them -- which is the "moving identical content is
+    pixel-identical" trap in docs/gui-guidelines.md, arriving from the
+    other side. c16 asserts they differ; only the tab NUMBER can make
+    that true here.
+
+    c17 reads the two fills as VALUES rather than looking at them, with
+    the resting tab beside it as the control -- a selection marked by a
+    few units is invisible in practice and looks fine in a screenshot,
+    which is exactly how the first version of this strip shipped.
+    """
+    win = dbg.window(TITLE)
+    if win:
+        # Dismiss any menu the checks above left open by CLICKING the
+        # grid, not by pressing Esc. Esc with no menu open is a byte to
+        # the shell, and klineedit reads it as the Alt prefix -- it then
+        # swallows the next keystroke, which broke the completion checks
+        # that run after this one.
+        c0 = win["content"]
+        dbg.click(c0["x"] + c0["w"] // 2, c0["y"] + c0["h"] - 20)
+        dbg.settle()
+    if not win:
+        res.check("c16pre. a Terminal is up for the legibility checks", False)
+        return
+
+    tabs = [rect(dbg, "tab", i) for i in range(3)]
+    res.check("c16pre. three tabs, so two of them are resting",
+              all(t is not None for t in tabs) and tab_count(dbg) == 3,
+              f"tabs {tab_count(dbg)}")
+    if not all(t is not None for t in tabs):
+        return
+
+    from PIL import Image
+    shot = os.path.abspath(os.path.join("/tmp", "ut_tabs_legible.png"))
+    qmp.stable_pixels(shot)
+    c = win["content"]
+    with Image.open(shot) as raw:
+        im = raw.convert("RGB")
+
+        def crop(t):
+            # THE LABEL AREA ONLY -- the left half. Cropping the whole
+            # tab made this check pass with numbering disabled: tab 0
+            # carries a separator hairline on its right edge and tab 1
+            # does not (its neighbour is the selected tab), so the crops
+            # differed by that one line whatever the labels said. Caught
+            # by a positive control, which is the only thing that would
+            # have caught it.
+            return im.crop((c["x"] + t[0], c["y"] + t[1],
+                            c["x"] + t[0] + t[2] // 2,
+                            c["y"] + t[1] + t[3])).tobytes()
+
+        def fill(t):
+            # The middle of the tab: past the label, short of the close box.
+            return im.getpixel((c["x"] + t[0] + t[2] // 2,
+                                c["y"] + t[1] + t[3] // 2))
+
+        # Tabs 0 and 1 are both RESTING and both labelled "/" -- so
+        # anything that tells them apart has to be drawn by the widget.
+        res.check("c16. two resting tabs with the same label still differ",
+                  crop(tabs[0]) != crop(tabs[1]),
+                  "they render identically, so nothing distinguishes them")
+
+        sel = layout_field(dbg, "sel")
+        if sel is None or not 0 <= sel < 3:
+            res.check("c17. the selected tab's fill is visibly lifted", False,
+                      f"selected {sel}")
+            return
+        other = 0 if sel != 0 else 1
+        fs, fo = fill(tabs[sel]), fill(tabs[other])
+        delta = max(abs(fs[k] - fo[k]) for k in range(3))
+        # **THE FLOOR IS ABOVE WHAT WAS REPORTED AS TOO SUBTLE.** A
+        # twenty-unit lift (field over window) shipped and was reported
+        # as hard to see with three tabs open, so a check that accepts
+        # twenty accepts the bug. Resting tabs are the control colour
+        # now, which is thirty.
+        res.check("c17. the selected tab's fill is visibly lifted",
+                  delta >= 25,
+                  f"selected {fs} vs resting {fo} -- delta {delta}, want >= 25")
+
+        # ...AND THE CONTROL: the two RESTING tabs must have the SAME
+        # fill. Without it, "the fills differ" would pass on a strip
+        # where every tab is a different colour for no reason.
+        f0, f1 = fill(tabs[0]), fill(tabs[1])
+        res.check("c18. ...and two resting tabs share one fill",
+                  f0 == f1, f"{f0} vs {f1}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -946,6 +1044,7 @@ def main():
         run(dbg, qmp, args.tmp, args.shot, res)
         check_tabs(dbg, qmp, args.tmp, res)
         check_chrome(dbg, qmp, res)
+        check_tab_legibility(dbg, qmp, res)
         check_completion(dbg, qmp, res)
     finally:
         dbg.close()
