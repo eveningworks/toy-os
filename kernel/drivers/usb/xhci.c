@@ -32,6 +32,7 @@
 #include "timer.h"
 #include "bootstage.h"
 #include "usb_hid.h"
+#include "multiboot.h" // multiboot_cmdline() -- the `nousb` flag
 
 // The identity map covers the low 4 GiB and there is no
 // paging_map_kernel_range(), so a BAR above that is unreachable rather
@@ -949,9 +950,29 @@ static void scan_ports(void) {
 
 // --- init -------------------------------------------------------------
 
+// `nousb` on the boot line skips the controller entirely, matched as a
+// whole word -- the same shape as `noahci` and `novirtio`, and here for
+// the same reason: a machine this driver hangs is a machine with no way
+// to reach a prompt and say so. See docs/bugs.md.
+static int usb_disabled(void) {
+    const char *cmdline = multiboot_cmdline();
+    if (!cmdline) return 0;
+    for (const char *p = cmdline; (p = k_strstr(p, "nousb")) != 0; p += 5) {
+        if (p != cmdline && p[-1] != ' ') continue;
+        char after = p[5];
+        if (after == 0 || after == ' ') return 1;
+    }
+    return 0;
+}
+
 void usb_init(void) {
     BOOT_REQUIRE(BOOT_SUB_PCI);
     BOOT_REQUIRE(BOOT_SUB_PMM);
+
+    if (usb_disabled()) {
+        klog_printf("usb: disabled by `nousb` on the boot line\n");
+        return;
+    }
 
     const struct pci_device *d = find_xhci();
     if (!d) return;

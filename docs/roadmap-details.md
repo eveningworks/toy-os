@@ -3078,6 +3078,61 @@ process using the image [disk.img]?`.
 `python3 tools/flake_hunt.py ktest -n 10` is the loop for measuring any
 change to it, and it scores these runs as `error` rather than `pass`.
 
+### xHCI bring-up HANGS one real laptop
+
+Reported 2026-08-27 from a legacy-BIOS boot of the live ISO on an Intel
+laptop. The boot stops dead during USB bring-up and never reaches a
+prompt, so nothing after `usb_init()` runs.
+
+**The last output on screen**, in order:
+
+```
+usb: xHCI controller 8086:9cb1 at 00:14.0, BAR0 0xf7100000
+usb:  xECP 2 supported-protocol USB 2.0, ports 1..11
+usb:  xECP 2 supported-protocol USB 3.0, ports 12..15
+usb:  xECP 193
+usb:
+```
+
+**What that rules out.** `reset_controller()` runs BEFORE `walk_xecp()`
+and prints on failure, so the reset completed. The walk terminated on
+its own -- id 193 is in the xHCI spec's vendor-defined range (192-255),
+not garbage, and the walk is bounded at 64 hops anyway. So the hang is
+after the walk: `mw32(CONFIG)`, `setup_rings()`, or the log line
+following them. The trailing bare `usb: ` is unexplained and is the
+thing to chase first, since `klog_printf()` formats into a buffer before
+writing and should not be able to emit a partial line.
+
+**THE LEAD, and it is the "the data never reached the code under test"
+shape.** Under QEMU the very next line after the walk is `usb: N slots
+(...)`, and the ONLY log line that can come between them is
+`setup_rings()`'s `usb: %u scratchpad page(s)` -- which begins with
+exactly the `usb: ` that is the last thing this laptop printed. QEMU's
+controller reports **zero** scratchpad buffers (that line never appears
+in a local boot, verified 2026-08-27 with a `qemu-xhci` A/B), so the
+whole scratchpad branch -- an array frame plus up to 512 more frames,
+one `pmm_alloc_contiguous(1)` at a time -- **has never executed in any
+test in this repo**. Real Intel silicon does request them. The count
+macro itself is correct (`XHCI_HCS2_SPB_MAX` reads both the Hi and Lo
+fields), so if this is it, it is the allocation or what the controller
+does with the result, not the parse.
+
+**A second suspect, weaker.** No USB Legacy Support capability (id 1)
+appears in the walk, and Intel PCH silicon is expected to have one.
+This driver implements no BIOS-to-OS handoff at all -- `xhci.c` says so,
+and says QEMU's lack of the capability is why. A BIOS still owning the
+controller with its SMI sources armed is a known way for this to hang on
+real hardware and be invisible under emulation. Nothing here has tested
+either suspect.
+
+**Getting past it:** `nousb` on the boot line, added in the same change
+as this entry (`docs/boot-flags.md`).
+
+**What would move it forward**, in cost order: boot `nousb` and confirm
+the machine is otherwise fine; add a log line either side of
+`setup_rings()` to bisect the hang to a statement; then dump the full
+capability chain including the ones the walk stops before.
+
 ### A filesystem write during the desktop's STARTUP wedges the compositor
 
 Found on 2026-08-27 while adding `/bin/service`: init began writing a
