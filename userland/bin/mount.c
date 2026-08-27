@@ -24,7 +24,7 @@
 #include <string.h>
 
 static const char *USAGE =
-    "mount [-r] [-t <fstype>] <partition|none> <mountpoint>\n"
+    "mount [-r] [-t <fstype>] <device|partition|none> <mountpoint>\n"
     "       mount                  list what is mounted";
 
 static int list(void) {

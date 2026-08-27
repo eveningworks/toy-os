@@ -235,7 +235,7 @@ def check_internal_doc_links(problems):
 
 
 def check_tools_are_documented(problems):
-    """Every tool in tools/ is named somewhere in CLAUDE.md.
+    """Every tool in tools/ is named in CLAUDE.md AND in docs/tools.md.
 
     CLAUDE.md already states the rule -- "any genuinely reusable tooling
     built during a session belongs in tools/... update the files that
@@ -244,20 +244,31 @@ def check_tools_are_documented(problems):
     scratch, which is the exact cost the tools/ directory exists to
     avoid.
 
+    **BOTH FILES, because checking one of them found the other missing.**
+    This asked CLAUDE.md alone, so `multidisk_test.py` was added to the
+    index, passed the gate, and was absent from `docs/tools.md` -- the
+    file CLAUDE.md itself calls "the full reference for every script in
+    tools/". The two halves are the same rule and an index that is true
+    while the reference it points at is not is the shape this repo keeps
+    deleting.
+
     Deliberately a NAME check and nothing more: it says the tool is
     mentioned, not that what is written about it is still true. That is
     the honest limit of what a script can tell.
     """
-    claude = read("CLAUDE.md")
+    where = {"CLAUDE.md": read("CLAUDE.md"),
+             "docs/tools.md": read("docs/tools.md")}
     tools_dir = os.path.join(REPO, "tools")
     if not os.path.isdir(tools_dir):
         return
     for name in sorted(os.listdir(tools_dir)):
         if os.path.splitext(name)[1] not in (".py", ".sh"):
             continue
-        if name not in claude:
-            problems.append(f"tools/{name} is not mentioned in CLAUDE.md -- "
-                             f"add it to the `## tools/` listing")
+        for doc, text in where.items():
+            if name not in text:
+                hint = ("add it to the `## tools/` listing" if doc == "CLAUDE.md"
+                        else "add an entry -- CLAUDE.md calls this the full reference")
+                problems.append(f"tools/{name} is not mentioned in {doc} -- {hint}")
 
 
 # Commands that are real but are not something a person types at a
@@ -357,18 +368,71 @@ def check_commands_index_is_current(problems):
                          "tools/gen_commands_index.py")
 
 
+# C string escapes that appear in a usage line. \n is the only one that
+# matters in practice (a two-line synopsis), but a literal backslash has
+# to be handled or the unescaping corrupts a Windows-ish path example.
+def _unescape(text):
+    return text.replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"')
+
+
+def usage_string(body):
+    """The program's usage text, from either form, or None.
+
+    `cmd_usage("...")` directly, or `cmd_usage(NAME)` where NAME is a
+    file-scope constant built from one or more adjacent literals:
+
+        static const char *USAGE =
+            "mount [-r] ... <mountpoint>\n"
+            "       mount     list what is mounted";
+
+    Adjacent literals are concatenated the way C does, so a synopsis
+    split over lines compares as the one string a reader sees.
+    """
+    m = re.search(r'cmd_usage\(\s*"((?:[^"\\]|\\.)*)"', body)
+    if m:
+        return _unescape(m.group(1))
+
+    m = re.search(r'cmd_usage\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)', body)
+    if not m:
+        return None
+    name = m.group(1)
+
+    # The constant's definition: a #define or a file-scope char pointer
+    # or array, followed by one or more adjacent string literals.
+    decl = re.search(
+        r'(?:#\s*define\s+' + re.escape(name) + r'\b'
+        r'|(?:static\s+)?const\s+char\s*\*?\s*' + re.escape(name) +
+        r'(?:\s*\[\s*\])?\s*=)'
+        r'((?:\s*"(?:[^"\\]|\\.)*")+)', body)
+    if not decl:
+        return None
+    parts = re.findall(r'"((?:[^"\\]|\\.)*)"', decl.group(1))
+    return _unescape("".join(parts))
+
+
 def check_command_synopsis_matches(problems):
     """A page's Synopsis is the program's own cmd_usage() string.
 
-    ONLY WHERE THE PROGRAM DECLARES ONE. Sixteen of the /bin programs
-    call cmd_usage() with a literal; the rest take no arguments or print
-    their own help, and there is nothing to compare against. Checking
-    where it is possible is worth more than a rule that applies
-    everywhere and verifies nothing.
+    ONLY WHERE THE PROGRAM DECLARES ONE. Most /bin programs do; the rest
+    take no arguments or print their own help, and there is nothing to
+    compare against. Checking where it is possible is worth more than a
+    rule that applies everywhere and verifies nothing.
 
     This is the anti-drift half of the folder: the PROSE on a page is
     what only a person can write and no script should police, while the
     SYNTAX is exactly what goes quietly wrong when a flag is added.
+
+    **IT USED TO MATCH ONLY A STRING LITERAL, AND FOUR PROGRAMS ESCAPED
+    IT SILENTLY** -- `mount`, `umount`, `grep` and `mkpart` all pass a
+    named `USAGE` constant. `mount`'s source argument then grew a whole
+    new form (a device name) with nothing comparing the page against the
+    program, which is precisely what this check exists to catch. A
+    skipped program looked identical to a program with no usage at all,
+    so the gap could not be seen from the output either.
+
+    Both forms are resolved now, including a constant built from several
+    adjacent literals -- `mount`'s spans two lines, and taking only the
+    first would have compared half a synopsis and called it a match.
     """
     pages_dir = os.path.join(REPO, "docs", "commands")
     if not os.path.isdir(pages_dir):
@@ -384,11 +448,17 @@ def check_command_synopsis_matches(problems):
         if not os.path.isfile(page):
             continue  # the coverage check above already said so
         body = open(os.path.join(bin_dir, src), encoding="utf-8").read()
-        m = re.search(r'cmd_usage\("([^"]*)"', body)
-        if not m:
+        usage = usage_string(body)
+        if usage is None:
             continue
-        usage = m.group(1)
-        if usage not in open(page, encoding="utf-8").read():
+        # A page carries the usage inside a Markdown code block, which
+        # is indented four spaces on EVERY line. Compare against both
+        # forms rather than stripping indentation away: keeping it exact
+        # means a synopsis whose own alignment drifts is still caught,
+        # which matters for the two-line ones.
+        indented = "\n".join("    " + ln for ln in usage.split("\n"))
+        text = open(page, encoding="utf-8").read()
+        if usage not in text and indented not in text:
             problems.append(f"docs/commands/{name}.md does not carry the "
                              f"program's own usage line: {usage!r}")
 

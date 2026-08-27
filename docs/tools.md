@@ -109,7 +109,22 @@ manual steps to be worth automating:
   Where a program declares a `cmd_usage()` string the page must carry it
   verbatim, so a flag added to the program and not to the page fails the
   build; the PROSE is deliberately unchecked, since that is the part
-  only a person can write. The `/bin` list comes from the SEED TREE
+  only a person can write.
+
+  **BOTH FORMS OF THAT STRING COUNT, and for a while only one did.** The
+  match was a string LITERAL, so the four programs passing a named
+  `USAGE` constant -- `mount`, `umount`, `grep`, `mkpart` -- were skipped
+  in silence, indistinguishable in the output from a program with no
+  usage at all. `mount`'s source argument then grew a whole new form (a
+  device name) with nothing comparing the page against the program,
+  which is exactly what this check exists to catch. A named constant is
+  resolved now, including one built from several adjacent literals, and
+  the page's four-space code-block indent is accepted on either side.
+
+  **And a tool must be named in `docs/tools.md` as well as CLAUDE.md.**
+  Only the index was checked, so `multidisk_test.py` was added there,
+  passed the gate, and was missing from the file CLAUDE.md itself calls
+  the full reference. The `/bin` list comes from the SEED TREE
   rather than from `userland/bin/*.c`, because the Makefile renames some
   programs on the way in and the name on disk is the name people type --
   which also means this check is skipped in a checkout that has not run

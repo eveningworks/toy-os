@@ -1565,7 +1565,8 @@ detail there, and keep the pointer here to a line. What each file is:
   command -- how a name is resolved, the line-editing keys.
   **`tools/check_docs.py` FAILS THE BUILD when a command has no page**,
   and when a page documents nothing that exists; where a program
-  declares a `cmd_usage()` string, the page must carry it verbatim, so a
+  declares a `cmd_usage()` string -- a literal or a named constant -- the
+  page must carry it verbatim, so a
   flag added to the program and not to the page is a build failure. The
   prose is deliberately unchecked -- that is the part only a person can
   write. Exemptions are listed by name with a reason in that script's

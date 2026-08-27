@@ -14,7 +14,8 @@ nothing explains. `docs/roadmap.md` had wanted that check since the
 man-pages milestone was written.
 
 **A page's Synopsis is checked; its prose is not.** Where a program
-declares a `cmd_usage()` string, the page must carry that string
+declares a `cmd_usage()` string (a literal or a named constant), the
+page must carry that string
 verbatim -- so a flag added to the program and not to the page is a
 build failure. Everything else is deliberately unchecked: the prose is
 the part only a person can write, and the syntax is the part that goes
