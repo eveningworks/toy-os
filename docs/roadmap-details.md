@@ -1542,6 +1542,57 @@ threads of one program is the first real reason to want a second core.
 Threads also create the first TLB shootdown hazard, since two cores can
 now be in one address space.
 
+### Confirm the xHCI BIOS handoff on the laptop it was written for
+
+`legacy_handoff()` is built and **cannot be exercised here**: QEMU
+advertises no USB Legacy Support capability, so `legsup_off` stays 0 and
+the whole path is dead in every test in this repo. `usb_test.py` passing
+17/17 proves only that bring-up still works on a controller with nothing
+to hand off.
+
+The evidence it is RIGHT is one boot log showing `bios-owned=1` and a
+freeze whose position moved when unrelated logging changed the timing --
+a CPU in SMM, not a driver bug. The evidence it WORKS does not exist.
+
+What to look for, booting with neither `nousb` nor `usbtrace`:
+
+    usb: BIOS owns the controller -- requesting handoff
+    usb: legacy handoff done (legsup 0x..., os-owned=1)
+    usb: running, interrupt-driven
+
+Then an external USB mouse should work -- the user-visible test, and
+what `nousb` currently costs. If it still hangs, `usbtrace` prints a
+line per step and the new `requesting handoff` / `did not release` lines
+say whether the BIOS answered at all.
+
+**Delete `docs/bugs.md`'s entry when this passes.** A fixed bug is
+deleted rather than struck through, and until a boot on that machine
+says so it is diagnosed, not fixed.
+
+### `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR
+
+`walk_xecp()` follows a device-supplied chain whose every `next` is up
+to 255 DWORDs, so 64 hops can reach ~65 KB from the capability base --
+past a typical 64 KiB xHCI BAR, into MMIO nothing decodes, which on real
+hardware is an unclaimed cycle rather than a polite 0xFFFFFFFF.
+
+It is bounded today by `XHCI_XECP_MAX_OFF` (a flat 64 KiB) and an
+all-ones check that stops the runaway one bad read would start. Both
+stand in for the fact that would settle it: **how big the BAR actually
+is.** `pci_internal.h` has `pci_bar_mem_addr()` and no size.
+
+The probe is standard and belongs to PCI, not xHCI: disable memory
+decode, write all-ones to the BAR, read back, restore the value and the
+decode bit; the size is the low set bit of the returned mask. Getting
+the restore wrong un-maps a working device, which is why it wants one
+implementation with one caller-visible answer rather than open-coding in
+a driver.
+
+**Not urgent for correctness on the machine that prompted it** -- its
+capabilities all sit between +0x8000 and +0x8480, well inside any
+plausible BAR, and its hang was the BIOS handoff. This is the guard
+becoming real rather than heuristic.
+
 ### USB (keyboard/mouse)
 **BUILT** for xHCI, a HID boot keyboard and a HID boot mouse; see
 `docs/conventions/kernel.md` and `docs/decisions/drivers.md`. What
@@ -1745,6 +1796,27 @@ an error. Either the mount path detects and converts, or the version byte
 gets bumped and it's a reformat like every other format change here.
 
 ### UEFI boot
+
+**MEASURED 2026-08-27, so the starting point is known rather than
+assumed.** Booting `toy-os.iso` under OVMF
+(`/usr/share/edk2/x64/OVMF_CODE.4m.fd` as pflash) fails in two stages,
+and only the first is fixed:
+
+1. `video/video.c:grub_video_set_mode:782:no suitable video mode found`,
+   because none of the `grub*.cfg` files loaded a video driver. GRUB's
+   i386-pc core image has VBE built in, so a BIOS boot finds an adapter
+   by luck; the EFI build reaches `efi_gop` only if something insmods
+   it. **Fixed** -- `insmod all_video` and `set gfxpayload=auto`. That
+   was a real bug on any EFI-booted medium and worth fixing on its own.
+2. GRUB then **page-faults inside the firmware** and the kernel never
+   runs -- no `kernel_main reached` on the serial line. So toy-os still
+   does not boot under UEFI at all, and stage 1 only removed the error
+   that was hiding stage 2.
+
+Do not read "the video fix works" as "UEFI boots". It does not. What
+that fix bought is a UEFI attempt that fails somewhere informative
+instead of at the first mode set.
+
 
 The kernel boots as a Multiboot2 image via GRUB, on BIOS/CSM. That's
 fine in QEMU and increasingly not fine on real hardware, where CSM is

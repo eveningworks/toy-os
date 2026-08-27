@@ -24,7 +24,9 @@ FIRST, and this is what to do first among things that are all
 buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
-- [ ] The ring-3 WM busy-waits instead of sleeping -- `SYS_SLEEP` and a per-window timer both exist now  *(Known limitations and papercuts (unscheduled))*
+- [ ] Confirm the xHCI BIOS handoff on the laptop it was written for, then delete the bug entry  *(USB)*
+- [ ] `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR, not a 64 KiB guess  *(USB)*
+- [ ] The ring-3 WM busy-waits instead of sleeping -- built on branch `wm-wait-ready`, PARKED: it regresses `uterm`  *(Known limitations and papercuts (unscheduled))*
 - [ ] System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons  *(Known limitations and papercuts (unscheduled))*
 <!-- END next-up -->
 
@@ -370,7 +372,7 @@ No dependency on the phases above; ordered among themselves.
 - [x] ~~A tmpfs/RAM-disk backend as the cheapest possible second mount to test against~~ done -- `mount -t ramfs none /mnt`
 - [ ] Raise `fs_ops.max_mounts` above 1 -- every backend keeps its state in module-level statics, and no op carries a handle
 - [ ] `fs_ops` ops take an opaque per-mount handle from `init()`, Linux's `super_block` -- the prerequisite for the two items above
-- [ ] `mount` cannot name a device on a disk that is not the boot disk -- the source is a partition number on `blk_whole_disk()`
+- [x] ~~`mount` cannot name a device on a disk that is not the boot disk~~ DONE 2026-08-27 -- a source may be a device name (`lsblk`)
 - [ ] Nothing remounts in place: changing a mount's flags is `umount` then `mount`, and there is no `mount -o remount`
 - [ ] `MOUNT_MAX` is 6 and `PART_SLOTS` is 8, both compile-time
 - [ ] A mount point deeper than one already mounted works, but nothing tests a three-level nest
@@ -659,7 +661,9 @@ run on, not by order.
 - [x] ~~Keyboard integration~~
 - [x] ~~Mouse integration~~
 - [x] ~~PS/2 coexistence -- there is no handoff to do; the input core is a multi-source registry and both paths run at once~~
-- [ ] The xHCI USB Legacy Support handoff (xECP id 1) -- hardware only; QEMU does not implement it, so the branch is unreachable here
+- [x] ~~The xHCI USB Legacy Support handoff (xECP id 1)~~ BUILT 2026-08-27 -- unconfirmed on hardware; see `docs/bugs.md`
+- [ ] **NEXT** Confirm the xHCI BIOS handoff on the laptop it was written for, then delete the bug entry
+- [ ] **NEXT** `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR, not a 64 KiB guess
 - [ ] USB mass storage (bulk-only transport) -- the first non-disk-bus storage backend
 - [ ] Hub support (devices behind a hub, not just root ports)
 - [ ] Full HID report-descriptor parsing, for a device that is not boot-protocol
@@ -701,7 +705,7 @@ run on, not by order.
 
 ### UEFI boot
 
-- [ ] A UEFI stub/loader alongside the Multiboot2 path, in the ESP `disk.img` already has
+- [ ] A UEFI stub/loader alongside the Multiboot2 path -- GRUB's EFI build faults before the kernel runs (measured 2026-08-27)
 - [ ] GOP framebuffer acquisition (instead of GRUB's multiboot tag)
 - [ ] Memory map from `GetMemoryMap()` feeding `pmm.c`
 - [ ] `ExitBootServices()` handoff into the existing `kernel_main()`
@@ -856,7 +860,7 @@ this to be better?".
 - [ ] A ramfs root is EMPTY -- no `/bin`, so a diskless boot has a filesystem and no programs
 - [ ] The shell's command dispatch is a long `if/else` chain, and the fix is not the obvious one
 - [ ] Settings: a ring-3 settings daemon (stage 2)
-- [ ] **NEXT** The ring-3 WM busy-waits instead of sleeping -- `SYS_SLEEP` and a per-window timer both exist now
+- [ ] **NEXT** The ring-3 WM busy-waits instead of sleeping -- built on branch `wm-wait-ready`, PARKED: it regresses `uterm`
 - [ ] Minesweeper keeps no best times, and there is no `uui_grid` widget until a second grid-shaped app wants one
 - [ ] The kernel ships ~62 KB of `.eh_frame` unwind tables nothing can ever read
 - [ ] The in-kernel test suite is ~30% of `.text` and ships in release images
