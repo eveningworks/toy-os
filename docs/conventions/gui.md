@@ -1565,6 +1565,47 @@ a thread is neither. The case for a thread is work whose RESULT must
 live in the app's own memory: a decoded image is the example, since
 handing one back through a pipe that carries 1 KiB a read is absurd.
 
+## A MENU BAR IN AN APP WITH ROUTED WIDGETS MUST BE `uui_menubar_ops`.
+
+`uui_menubar` has two interfaces now and picking the wrong one is a
+silent bug rather than a style choice.
+
+The HAND-ROUTED one is what Notepad uses: the app owns its
+`on_press`/`on_motion`/`on_release` and calls `uui_menubar_press()` and
+friends from them. That is correct for an app whose other controls are
+hand-drawn, and Notepad declares no routed widgets at all.
+
+**AN APP THAT DECLARES `uapp_desc.widgets` MUST USE THE OPS TABLE
+INSTEAD**, because a popup drops down OVER whatever is below the bar and
+`uui_router_press()` runs before the app's own `on_press` (`uapp.c`).
+Hand-routing there means a click on the File menu's first row ALSO lands
+on the widget underneath it -- in Terminal, on a tab. That is the exact
+problem `uui_widget_ops.overlay_active` exists to solve: a widget
+claiming an overlay is offered every press first, with no hit test. The
+popup is painted from `draw_overlay`, which `uui_router_draw()` runs
+after every widget's `draw`, so the z-order comes out right with nothing
+for the app to sequence by hand.
+
+The one wrinkle is how a commit gets out. The ops `release` slot returns
+only "did anything change", so there is nowhere for a code to come back
+through: the widget PARKS it, and the app takes it with
+`uui_menubar_take_code()` when the router names the widget through
+`uapp_desc.on_widget`. Taken once and cleared, because a redraw must not
+replay a command.
+
+**KEYS ARE STILL THE APP'S.** There is no `key` slot on the table, so
+F10 and the arrows are handled in the app's own `on_key` through
+`uui_menubar_key()` -- which also means an app is free to decide that an
+open menu outranks whatever else wants the keyboard. Terminal needs that
+ordering explicitly: every key it does not claim is a byte for the shell.
+
+**A HIDEABLE MENU BAR NEEDS A WAY BACK, AND F10 IS IT.** Terminal's
+View > Menu Bar hides the row (Konsole's, because in a terminal a row of
+chrome is a row of the product), and F10 REVEALS a hidden bar as well as
+opening it, so the toggle is never a one-way door. Konsole's own
+Ctrl+Shift+M is unavailable here: Ctrl folds `M` to 0x0D, so the binding
+would be indistinguishable from Shift+Enter (`api/keyboard.h`).
+
 ## A TAB IS A SESSION, AND `uui_tabs` IS THE STRIP.
 
 `userland/ui/uui_tabs.c` draws a row of tabs and reports clicks; it
@@ -1595,9 +1636,33 @@ a shell's title nor its scrollback. Per-tab job control is free: each
 shell is spawned `PGID_NEW`, so `Ctrl-C` reaches the job in the tab you
 are looking at.
 
-**ONE TAB SHOWS NO STRIP**, which is Konsole's default and also what
-keeps a single-shell Terminal exactly the window it always was -- same
-geometry, same tests.
+**THE SELECTED TAB IS FILLED WITH THE PAGE, NOT WITH A CONTROL
+COLOUR.** `uui_tabs.page_bg` is whatever sits directly below the strip;
+the selected tab takes it, rounds its top corners and drops its bottom
+edge, so the tab and the page read as one shape. That is Windows
+Terminal's and Konsole's selected tab, and it is what makes a strip over
+a BLACK terminal look like a terminal rather than like a form. The
+widget derives its INK from that colour's luminance, so a dark page gets
+light labels with the caller choosing nothing; unselected tabs are flat
+with a hairline between them, and the strip's baseline is drawn under
+every tab and painted over by the selected one -- the seam is a
+consequence of the fill rather than a second calculation that has to
+agree with it.
+
+**THE `+` IS PINNED AT THE RIGHT END, AND IT TAKES ITS WIDTH BEFORE THE
+TABS SHARE WHAT IS LEFT.** `uui_tabs.show_new` plus `on_new`, off by
+default -- GtkNotebook's action widget and QTabBar's corner widget, and
+the placement GNOME Terminal and macOS Terminal use. Pinned rather than
+riding after the last tab (Chrome's, Windows Terminal's) because on an
+equal-share strip a button that walks rightward as tabs open is a target
+you have to look for. Subtracting its width FIRST is what keeps it off
+the last tab's close box.
+
+**ONE TAB STILL SHOWS THE STRIP**, which is a deliberate reversal of
+Konsole's default: the strip carries the `+`, and a control that only
+appears once you already have what it creates is not a control. The cost
+is a row of chrome on a single-shell window; what is bought is a
+geometry that does not jump when a second tab opens.
 
 **EACH SESSION HAS A READER THREAD, AND IT TOUCHES ONLY ITS RING.**
 Before tabs, Terminal polled one master every 30 ms; N tabs would have

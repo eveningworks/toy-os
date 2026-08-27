@@ -249,7 +249,7 @@ everything libc-shaped is waiting on it. Full plan and staging:
 - [ ] Image Viewer decodes on a worker thread, so its window keeps painting through a JPEG
 - [x] ~~The GUI Terminal reads its pty on a thread, not a 30 ms poll~~ DONE 2026-08-26 -- one reader per tab, no cadence left
 - [ ] More than eight Terminal tabs, which needs a scrolling strip rather than a wider one
-- [ ] A tab can be renamed by hand, as Konsole's double-click does
+- [x] ~~A tab can be renamed by hand~~ DONE 2026-08-27 -- Terminal > Rename Tab; the name outranks the shell's OSC
 - [ ] A thread stack with a guard page, which needs an `mprotect`-shaped syscall
 - [ ] Signal dispositions shared by a thread group, as POSIX has them -- per thread here, inherited at create
 - [ ] GCC's default (`%fs:0x28`) stack-protector guard in ring 3, now that TLS exists

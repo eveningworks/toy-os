@@ -513,13 +513,41 @@ def run(dbg, qmp, tmp, shot_dir, res):
     res.check("Alt+F4 closes it", gone)
 
 
-def tab_count(dbg):
-    """The `tabs N` field of the emulator's own layout line."""
+def layout_field(dbg, name, default=None):
+    """A named field of the emulator's own layout line.
+
+    Fields are read BY NAME rather than by position -- the line has
+    grown three times, and terminal.c's own note says the only fixed
+    thing about it is that `cursor` comes first.
+    """
     for l in reversed(dbg.logs("uterm: layout cursor", clear=False)):
         parts = l.split()
-        if "tabs" in parts:
-            return int(parts[parts.index("tabs") + 1])
+        if name in parts:
+            return int(parts[parts.index(name) + 1])
+    return default
+
+
+def tab_count(dbg):
+    """The `tabs N` field of the emulator's own layout line."""
+    return layout_field(dbg, "tabs")
+
+
+def rect(dbg, kind, index=None):
+    """A rect the app reported: `uterm: layout <kind> [i] x y w h`."""
+    want = f"uterm: layout {kind} "
+    for l in reversed(dbg.logs(want, clear=False)):
+        v = l.split(want)[1].split()
+        if index is None:
+            return [int(n) for n in v[:4]]
+        if int(v[0]) == index:
+            return [int(n) for n in v[1:5]]
     return None
+
+
+def centre(win, r):
+    """A reported content-relative rect, as a screen point to click."""
+    c = win["content"]
+    return c["x"] + r[0] + r[2] // 2, c["y"] + r[1] + r[3] // 2
 
 
 def check_tabs(dbg, qmp, tmp, res):
@@ -595,7 +623,10 @@ def check_tabs(dbg, qmp, tmp, res):
     # fails a comparison with nothing wrong with it. The rows BELOW the
     # tab strip are the subject -- the strip itself changes on purpose.
     c = win["content"]
-    strip = 24  # taller than one tab row; the grid starts below it
+    # **THE APP SAYS WHERE ITS GRID STARTS.** This was a hardcoded 24,
+    # which the menu bar's arrival pushed the chrome past -- a band that
+    # then compares two patches of tab strip and calls them a pass.
+    strip = layout_field(dbg, "chrome", 24)
     grid_box = (c["x"], c["y"] + strip, c["x"] + c["w"], c["y"] + c["h"])
 
     def grid(name):
@@ -620,13 +651,194 @@ def check_tabs(dbg, qmp, tmp, res):
     res.check("t6. switching back restores that tab's own screen",
               back == in_tab2, "the second tab did not come back as it was")
 
-    # Ctrl+Shift+W closes it, and the strip goes with the second tab --
-    # one tab shows no strip, so the row count goes back up.
+    # Ctrl+Shift+W closes it. The strip STAYS -- it is drawn at one tab
+    # now, because it carries the "+" (terminal.c's chrome_h()).
     qmp.combo(["ctrl", "shift", "w"])
     time.sleep(1.2)
     dbg.settle()
     res.check("t7. Ctrl+Shift+W closes a tab", tab_count(dbg) == 1,
               f"tabs {tab_count(dbg)}")
+
+
+def item_rect(dbg, level, index):
+    """One reported menu row: `uterm: layout item <level> <i> x y w h`."""
+    if index is None:
+        return None
+    for l in reversed(dbg.logs("uterm: layout item ", clear=False)):
+        v = [int(n) for n in l.split("uterm: layout item ")[1].split()[:6]]
+        if v[0] == level and v[1] == index:
+            return v[2:]
+    return None
+
+
+def open_menu(dbg, win, title):
+    """Open one menu, having CLEARED the rows the last one reported.
+
+    Without the clear, `last_item_index` counts rows from every popup
+    opened so far -- the File menu's four plus the Terminal menu's eight
+    -- and names a row the open popup does not have. That is this repo's
+    stale-log trap, and it read exactly like the menu item not working.
+    """
+    dbg.logs("uterm: layout item ", clear=True)
+    dbg.click(*centre(win, title))
+    dbg.settle()
+
+
+def last_item_index(dbg, level):
+    """The bottom row of an open popup, so a test names a row by where it
+    is rather than by counting the menu tree in two places."""
+    best = None
+    for l in dbg.logs("uterm: layout item ", clear=False):
+        v = [int(n) for n in l.split("uterm: layout item ")[1].split()[:6]]
+        if v[0] == level:
+            best = v[1] if best is None else max(best, v[1])
+    return best
+
+
+def check_chrome(dbg, qmp, res):
+    """The "+" button and the menu bar, on a Terminal that is already up.
+
+    **THE LOAD-BEARING CHECK IS c6**, and a positive control says so
+    rather than the name: dropping `overlay_active` from uui_menubar_ops
+    reddens c6 (and c8a behind it) and NOTHING ELSE here. Without that
+    slot the router hit-tests a popup row against the bar's own rect,
+    which it is outside, so no menu command commits at all.
+
+    c8b and c8c ask the sharper question -- whether a popup click falls
+    THROUGH onto the tab strip under it -- and they are honest to keep
+    but they cannot currently fail: once the menu is a routed overlay
+    the router offers it every press first, so the fall-through is
+    unreachable by construction. They are here to catch a future menu
+    that goes back to being hand-routed, which is the shape Notepad
+    still has. Do not read them as evidence that the ordering works;
+    c6 is that evidence.
+
+    The command they commit is Rename Tab, chosen because it moves
+    NEITHER the selection nor the tab count -- so both are free to act
+    as fall-through detectors. New Tab cannot: it selects the tab it
+    creates, so a moved selection would prove nothing (which is exactly
+    how the first version of this check failed against correct code).
+
+    Geometry comes from the app's own reported rects, never derived: a
+    menu row's position depends on the font and on what is nested where,
+    and a test that computes it is asserting its own arithmetic.
+    """
+    win = dbg.window(TITLE)
+    res.check("c0. a Terminal is up for the chrome checks", win is not None)
+    if not win:
+        return
+
+    # The strip is drawn at ONE tab now, which is what makes "+" reachable
+    # before a second tab exists. Asserted as the button's own rect --
+    # "the strip is tall enough" is a different claim.
+    plus = rect(dbg, "newtab")
+    res.check("c1. the + button has a rect at one tab",
+              plus is not None and plus[2] > 0 and tab_count(dbg) == 1,
+              f"newtab {plus} tabs {tab_count(dbg)}")
+    if not plus:
+        return
+
+    before = tab_count(dbg)
+    dbg.click(*centre(win, plus))
+    time.sleep(1.2)
+    dbg.settle()
+    res.check("c2. clicking + opens a tab", tab_count(dbg) == before + 1,
+              f"tabs {before} -> {tab_count(dbg)}")
+
+    res.check("c3. the menu bar is shown by default",
+              layout_field(dbg, "menu") == 1,
+              f"menu {layout_field(dbg, 'menu')}")
+
+    title0 = rect(dbg, "title", 0)
+    res.check("c4. the File title has a reported rect", title0 is not None)
+    if not title0:
+        return
+
+    before = tab_count(dbg)
+    open_menu(dbg, win, title0)       # a menu bar OPENS on press
+    row = item_rect(dbg, 0, 0)        # "New Tab"
+    res.check("c5. the File popup reported its rows", row is not None)
+    if not row:
+        return
+    dbg.click(*centre(win, row))
+    time.sleep(1.2)
+    dbg.settle()
+    # THE ROUTED PATH: uui_menubar_ops parks the code and on_widget takes
+    # it, which is a different path from the one Notepad hand-routes.
+    res.check("c6. File > New Tab opens a tab through the menu",
+              tab_count(dbg) == before + 1,
+              f"tabs {before} -> {tab_count(dbg)}")
+
+    # --- the fall-through triple -------------------------------------
+    term = rect(dbg, "title", 1)      # "Terminal"; row 0 is Rename Tab
+    res.check("c7. the Terminal title has a reported rect", term is not None)
+    if not term:
+        return
+    sel_before = layout_field(dbg, "sel")
+    count_before = tab_count(dbg)
+    open_menu(dbg, win, term)
+    row = item_rect(dbg, 0, 0)
+    tab0 = rect(dbg, "tab", 0)
+    covered = (row is not None and tab0 is not None
+               and row[1] < tab0[1] + tab0[3]
+               and row[0] < tab0[0] + tab0[2])
+    res.check("c8. that row really does cover tab 0",
+              covered, f"row {row} tab0 {tab0}")
+    res.check("c8pre. and tab 0 is NOT the selected one",
+              sel_before != 0, f"selected {sel_before}")
+    if not row:
+        return
+    dbg.click(*centre(win, row))
+    time.sleep(0.8)
+    dbg.settle()
+    res.check("c8a. Terminal > Rename Tab opened the prompt",
+              layout_field(dbg, "rename") == 1,
+              f"rename {layout_field(dbg, 'rename')}")
+    res.check("c8b. the click did NOT select the tab under it",
+              layout_field(dbg, "sel") == sel_before,
+              f"selected {sel_before} -> {layout_field(dbg, 'sel')}")
+    res.check("c8c. ...nor land on that tab's close box",
+              tab_count(dbg) == count_before,
+              f"tabs {count_before} -> {tab_count(dbg)}")
+
+    dbg.send("gui key 0x1b")   # Esc: cancel the rename
+    time.sleep(0.5)
+    dbg.settle()
+    res.check("c8d. Esc cancels the rename prompt",
+              layout_field(dbg, "rename") == 0,
+              f"rename {layout_field(dbg, 'rename')}")
+
+    # Hiding the bar, and F10 getting it back -- the half that makes the
+    # toggle a toggle rather than a one-way door.
+    view = rect(dbg, "title", 2)
+    res.check("c9. the View title has a reported rect", view is not None)
+    if not view:
+        return
+    open_menu(dbg, win, view)
+    menurow = item_rect(dbg, 0, last_item_index(dbg, 0))
+    res.check("c10. the View popup reported its rows", menurow is not None)
+    if not menurow:
+        return
+
+    chrome_before = layout_field(dbg, "chrome")
+    dbg.click(*centre(win, menurow))
+    time.sleep(0.8)
+    dbg.settle()
+    res.check("c11. View > Menu Bar hides the bar",
+              layout_field(dbg, "menu") == 0,
+              f"menu {layout_field(dbg, 'menu')}")
+    # AND THE GRID GREW. "the flag flipped" is not "the row was given
+    # back" -- a hidden bar that still reserved its row would pass c10.
+    res.check("c12. hiding it gives the row back to the grid",
+              layout_field(dbg, "chrome") < chrome_before,
+              f"chrome {chrome_before} -> {layout_field(dbg, 'chrome')}")
+
+    dbg.send("gui key 0xa4")   # F10
+    time.sleep(0.8)
+    dbg.settle()
+    res.check("c13. F10 brings a hidden menu bar back",
+              layout_field(dbg, "menu") == 1,
+              f"menu {layout_field(dbg, 'menu')}")
 
 
 def main():
@@ -650,6 +862,7 @@ def main():
     try:
         run(dbg, qmp, args.tmp, args.shot, res)
         check_tabs(dbg, qmp, args.tmp, res)
+        check_chrome(dbg, qmp, res)
     finally:
         dbg.close()
 

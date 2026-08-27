@@ -212,6 +212,7 @@ void uui_menubar_init(struct uui_menubar *m, const struct uui_menu_item *items,
     m->bx = m->by = 0;
     m->bw = m->bh = 0;
     m->item_flags = 0;
+    m->committed = -1;
 
     m->bar_bg      = ugfx_rgb(235, 235, 238);
     m->fg          = ugfx_rgb(20, 20, 20);
@@ -609,3 +610,78 @@ int uui_menubar_key(struct uui_menubar *m, int key, int *out_code) {
     if (key >= 33 && key < 127) return letter_jump(m, key, out_code);
     return 1; // an open menu owns the keyboard
 }
+
+// --- as a routed widget -------------------------------------------------
+//
+// See ui/uui_menubar.h. The whole point of this table is `overlay_active`:
+// the popup is drawn outside the bar's own rect and over whatever is
+// below it, so the router has to offer this widget every press BEFORE it
+// hit-tests anything else.
+
+int uui_menubar_take_code(struct uui_menubar *m) {
+    int c = m->committed;
+    m->committed = -1;
+    return c;
+}
+
+static void ops_natural(const void *w, int *ow, int *oh) {
+    uui_menubar_natural_size((const struct uui_menubar *)w, ow, oh);
+}
+
+static void ops_geometry(void *w, int x, int y, int width, int height) {
+    uui_menubar_set_geometry((struct uui_menubar *)w, x, y, width, height);
+}
+
+static void ops_bounds(const void *w, int *x, int *y, int *ow, int *oh) {
+    const struct uui_menubar *m = (const struct uui_menubar *)w;
+    if (x)  *x  = m->x;
+    if (y)  *y  = m->y;
+    if (ow) *ow = m->w;
+    if (oh) *oh = m->h;
+}
+
+static void ops_draw(struct ugfx_surface *s, const void *w) {
+    uui_menubar_draw(s, (const struct uui_menubar *)w);
+}
+
+static void ops_draw_overlay(struct ugfx_surface *s, const void *w) {
+    uui_menubar_draw_popup(s, (const struct uui_menubar *)w);
+}
+
+static int ops_overlay_active(const void *w) {
+    return uui_menubar_is_open((const struct uui_menubar *)w);
+}
+
+static int ops_hit(const void *w, int cx, int cy) {
+    return uui_menubar_hit((const struct uui_menubar *)w, cx, cy);
+}
+
+static int ops_press(void *w, int cx, int cy) {
+    return uui_menubar_press((struct uui_menubar *)w, cx, cy);
+}
+
+static int ops_motion(void *w, int cx, int cy, unsigned buttons) {
+    (void)buttons;
+    return uui_menubar_motion((struct uui_menubar *)w, cx, cy);
+}
+
+static int ops_release(void *w, int cx, int cy) {
+    struct uui_menubar *m = (struct uui_menubar *)w;
+    int code = uui_menubar_release(m, cx, cy);
+    if (code < 0) return 0;
+    m->committed = code;
+    return 1;
+}
+
+const struct uui_widget_ops uui_menubar_ops = {
+    .natural_size   = ops_natural,
+    .set_geometry   = ops_geometry,
+    .bounds         = ops_bounds,
+    .draw           = ops_draw,
+    .draw_overlay   = ops_draw_overlay,
+    .hit            = ops_hit,
+    .press          = ops_press,
+    .motion         = ops_motion,
+    .release        = ops_release,
+    .overlay_active = ops_overlay_active,
+};

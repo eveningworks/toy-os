@@ -9,6 +9,15 @@
 #define TAB_PAD_X   (ugfx_char_w())
 #define TAB_MIN_W   (ugfx_char_w() * 6)
 #define CLOSE_W     (ugfx_char_w() * 2)
+#define NEW_W       (ugfx_char_w() * 3)
+
+// The selected tab's top corners. A third of the line height reads as a
+// deliberate curve at every font size the desktop offers; below three
+// pixels a round is indistinguishable from a chamfer.
+static int corner_r(void) {
+    int r = ugfx_char_h() / 3;
+    return r < 3 ? 3 : r;
+}
 
 int uui_tabs_height(void) {
     return ugfx_char_h() + ugfx_char_h() / 2;
@@ -20,17 +29,39 @@ void uui_tabs_init(struct uui_tabs *t, struct uui_tab *tabs, int count,
     t->tabs = tabs;
     t->count = count;
     t->selected = 0;
+    t->page_bg = UTHEME_WINDOW_BG;
+    t->show_new = 0;
     t->hovered = -1;
     t->hovered_close = 0;
+    t->hovered_new = 0;
     t->pressed = -1;
     t->pressed_close = 0;
+    t->pressed_new = 0;
     t->on_select = 0;
     t->on_close = 0;
+    t->on_new = 0;
     t->ctx = ctx;
 }
 
 void uui_tabs_set_geometry(struct uui_tabs *t, int x, int y, int w, int h) {
     t->x = x; t->y = y; t->w = w; t->h = h;
+}
+
+// How much of the strip the tabs get. The "+" is subtracted FIRST, which
+// is what pins it: sharing the whole strip and then drawing over the
+// right-hand tab would put a button on top of that tab's close box.
+static int tabs_area_w(const struct uui_tabs *t) {
+    int w = t->w - (t->show_new ? NEW_W : 0);
+    return w < 0 ? 0 : w;
+}
+
+int uui_tabs_new_rect(const struct uui_tabs *t, int *x, int *y, int *w, int *h) {
+    if (!t->show_new) return 0;
+    if (x) *x = t->x + tabs_area_w(t);
+    if (y) *y = t->y;
+    if (w) *w = NEW_W;
+    if (h) *h = t->h;
+    return 1;
 }
 
 // The width one tab gets. EQUAL SHARES of the strip, clamped to a floor
@@ -43,7 +74,7 @@ void uui_tabs_set_geometry(struct uui_tabs *t, int x, int y, int w, int h) {
 // all, and a caller that allows forty needs a scroll of its own.
 static int tab_width(const struct uui_tabs *t) {
     if (t->count <= 0) return 0;
-    int w = t->w / t->count;
+    int w = tabs_area_w(t) / t->count;
     return w < TAB_MIN_W ? TAB_MIN_W : w;
 }
 
@@ -81,7 +112,8 @@ void uui_tabs_natural_size(const struct uui_tabs *t, int *out_w, int *out_h) {
         if (t->tabs[i].closable) need += CLOSE_W + TAB_PAD_X;
         if (need > widest) widest = need;
     }
-    if (out_w) *out_w = widest * (t->count > 0 ? t->count : 1);
+    if (out_w) *out_w = widest * (t->count > 0 ? t->count : 1)
+                        + (t->show_new ? NEW_W : 0);
     if (out_h) *out_h = uui_tabs_height();
 }
 
@@ -93,10 +125,16 @@ void uui_tabs_select(struct uui_tabs *t, int index) {
     if (t->on_select) t->on_select(t->ctx, index);
 }
 
+static int hit_new(const struct uui_tabs *t, int cx, int cy) {
+    int x, y, w, h;
+    return uui_tabs_new_rect(t, &x, &y, &w, &h) && uui_hit(x, y, w, h, cx, cy);
+}
+
 // Which tab, and whether the point is on its close box. -1 for neither.
 static int tab_at(const struct uui_tabs *t, int cx, int cy, int *on_close) {
     if (on_close) *on_close = 0;
     if (!uui_hit(t->x, t->y, t->w, t->h, cx, cy)) return -1;
+    if (hit_new(t, cx, cy)) return -1;   // the "+" is not tab N + 1
     int tw = tab_width(t);
     if (tw <= 0) return -1;
     int idx = (cx - t->x) / tw;
@@ -107,15 +145,68 @@ static int tab_at(const struct uui_tabs *t, int cx, int cy, int *on_close) {
     return idx;
 }
 
+// --- drawing ----------------------------------------------------------
+
+// A rect whose TOP corners are rounded. Kept static rather than promoted
+// to ugfx: one caller, which is this project's bar for a shared helper.
+//
+// The arc is tested at PIXEL CENTRES against radius r, which is what
+// makes the inset sequence read as a curve (2,1,0,0 at r=4) rather than
+// as a staircase; testing corners instead cuts a full r off the top row.
+static void fill_top_rounded(struct ugfx_surface *s, int x, int y, int w,
+                              int h, int r, uint32_t c) {
+    if (r < 1 || w < 2 * r || h < r) { ugfx_fill_rect(s, x, y, w, h, c); return; }
+    for (int dy = 0; dy < r; dy++) {
+        int ay = 2 * r - 2 * dy - 1;
+        int inset = 0;
+        while (inset < r) {
+            int ax = 2 * r - 2 * inset - 1;
+            if (ax * ax + ay * ay <= 4 * r * r) break;
+            inset++;
+        }
+        ugfx_fill_rect(s, x + inset, y + dy, w - 2 * inset, 1, c);
+    }
+    ugfx_fill_rect(s, x, y + r, w, h - r, c);
+}
+
+// Legible ink for a given ground. The theme has one light-on-dark role
+// and this is it -- the same choice ugfx_draw_string_shadowed() makes
+// from luminance rather than from a guessed colour.
+static uint32_t ink_on(uint32_t bg) {
+    return ugfx_luminance(bg) < 128 ? UTHEME_ACCENT_TEXT : UTHEME_TEXT;
+}
+
+// Two strokes rather than a glyph: the font has no multiplication sign,
+// and an 'x' at this size reads as a letter.
+//
+// **THE TARGET IS GENEROUS AND THE MARK IS NOT.** Drawing corner to
+// corner of the hit box made a close mark nearly as tall as the strip,
+// crowding the label beside it; every real tab puts a small mark in a
+// large target, and only the target has to be easy to hit.
 static void draw_close(struct ugfx_surface *s, int x, int y, int w, int h,
                         uint32_t ink) {
-    // Two strokes rather than a glyph: the font has no multiplication
-    // sign, and an 'x' at this size reads as a letter.
-    int n = w < h ? w : h;
-    for (int i = 1; i < n - 1; i++) {
-        ugfx_fill_rect(s, x + i, y + i, 1, 1, ink);
-        ugfx_fill_rect(s, x + (n - 1 - i), y + i, 1, 1, ink);
+    int box = w < h ? w : h;
+    int n = ugfx_char_h() / 2;
+    if (n < 5) n = 5;
+    if (n > box) n = box;
+    int gx = x + (w - n) / 2, gy = y + (h - n) / 2;
+    for (int i = 0; i < n; i++) {
+        ugfx_fill_rect(s, gx + i, gy + i, 1, 1, ink);
+        ugfx_fill_rect(s, gx + (n - 1 - i), gy + i, 1, 1, ink);
     }
+}
+
+// The "+", drawn for the same reason the close box is: the font's '+'
+// is a text glyph on a text baseline, and this one has to sit on the
+// button's centre.
+static void draw_plus(struct ugfx_surface *s, int cx, int cy, int n,
+                       uint32_t ink) {
+    // A CROSS CENTRES ON A PIXEL, so the arm runs from cx-h to cx+h
+    // inclusive -- an odd span, always centred. Halving an even width
+    // instead puts it a pixel left of the close boxes beside it.
+    int half = n / 2;
+    ugfx_fill_rect(s, cx - half, cy, 2 * half + 1, 1, ink);
+    ugfx_fill_rect(s, cx, cy - half, 1, 2 * half + 1, ink);
 }
 
 static void draw_one(struct ugfx_surface *s, const struct uui_tabs *t, int i) {
@@ -131,18 +222,27 @@ static void draw_one(struct ugfx_surface *s, const struct uui_tabs *t, int i) {
     // for the selected tab: a hover shift on top of the selected fill
     // is a two-unit change nobody can see, and a test measuring it
     // measures nothing (docs/gui-guidelines.md).
-    uint32_t base = is_sel ? UTHEME_WINDOW_BG : UTHEME_PANEL_BG;
-    uint32_t ink  = UTHEME_TEXT;
-    ugfx_fill_rect(s, x, y, w, h, uui_state_bg(base, st));
-
-    // The selected tab is joined to the page below it and separated
-    // from its neighbours -- the border is drawn on three sides only,
-    // which is what makes a strip read as tabs rather than buttons.
-    ugfx_fill_rect(s, x, y, 1, h, UTHEME_BORDER);
-    ugfx_fill_rect(s, x + w - 1, y, 1, h, UTHEME_BORDER);
-    ugfx_fill_rect(s, x, y, w, 1, UTHEME_BORDER);
-    if (!is_sel) ugfx_fill_rect(s, x, y + h - 1, w, 1, UTHEME_BORDER);
-    if (is_sel)  ugfx_fill_rect(s, x, y, w, 2, UTHEME_ACCENT);
+    uint32_t ink;
+    if (is_sel) {
+        // THE PAGE REACHING UP. Filled with what is below it, rounded at
+        // the top and with no bottom edge, so the tab and the page are
+        // one shape; the accent line marks it without boxing it in.
+        ink = ink_on(t->page_bg);
+        fill_top_rounded(s, x, y, w, h, corner_r(), t->page_bg);
+        ugfx_fill_rect(s, x + corner_r(), y, w - 2 * corner_r(), 2,
+                        UTHEME_ACCENT);
+    } else {
+        ink = UTHEME_TEXT;
+        if (st != UUI_STATE_REST)
+            fill_top_rounded(s, x + 1, y + 1, w - 2, h - 1, corner_r(),
+                              uui_state_bg(UTHEME_PANEL_BG, st));
+        // A HAIRLINE, NOT A BORDER. Separators only between two resting
+        // tabs: one beside the selected tab would draw a line across the
+        // seam that tab exists to hide.
+        int right_sel = (i + 1 == t->selected);
+        if (i + 1 < t->count && !right_sel)
+            ugfx_fill_rect(s, x + w - 1, y + h / 4, 1, h / 2, UTHEME_BORDER);
+    }
 
     int bx, by, bw, bh;
     int has_close = close_rect(t, i, &bx, &by, &bw, &bh);
@@ -160,6 +260,18 @@ static void draw_one(struct ugfx_surface *s, const struct uui_tabs *t, int i) {
                           ? UTHEME_ACCENT : ink;
         draw_close(s, bx, by, bw, bh, cink);
     }
+}
+
+static void draw_new(struct ugfx_surface *s, const struct uui_tabs *t) {
+    int x, y, w, h;
+    if (!uui_tabs_new_rect(t, &x, &y, &w, &h)) return;
+    enum uui_state st = UUI_STATE_REST;
+    if (t->pressed_new)      st = UUI_STATE_PRESSED;
+    else if (t->hovered_new) st = UUI_STATE_HOVER;
+    if (st != UUI_STATE_REST)
+        fill_top_rounded(s, x + 1, y + 1, w - 2, h - 1, corner_r(),
+                          uui_state_bg(UTHEME_PANEL_BG, st));
+    draw_plus(s, x + w / 2, y + h / 2, ugfx_char_w(), UTHEME_TEXT);
 }
 
 // --- the ops table ---------------------------------------------------
@@ -183,7 +295,13 @@ static void ops_bounds(const void *w, int *x, int *y, int *ow, int *oh) {
 static void ops_draw(struct ugfx_surface *s, const void *w) {
     const struct uui_tabs *t = (const struct uui_tabs *)w;
     ugfx_fill_rect(s, t->x, t->y, t->w, t->h, UTHEME_PANEL_BG);
+    // THE BASELINE IS WHAT THE SELECTED TAB BREAKS. Drawn under every
+    // tab and then painted over by the selected one, so the seam is a
+    // consequence of the fill rather than a second calculation that has
+    // to agree with it.
+    ugfx_fill_rect(s, t->x, t->y + t->h - 1, t->w, 1, UTHEME_BORDER);
     for (int i = 0; i < t->count; i++) draw_one(s, t, i);
+    draw_new(s, t);
 }
 
 static int ops_hit(const void *w, int cx, int cy) {
@@ -191,11 +309,12 @@ static int ops_hit(const void *w, int cx, int cy) {
     // A BOOLEAN, and this is the rule CLAUDE.md keeps: returning the
     // index would make tab 0 -- the one whose index is falsey -- report
     // as not hit, so the first tab silently could not be clicked.
-    return tab_at(t, cx, cy, 0) >= 0;
+    return tab_at(t, cx, cy, 0) >= 0 || hit_new(t, cx, cy);
 }
 
 static int ops_press(void *w, int cx, int cy) {
     struct uui_tabs *t = (struct uui_tabs *)w;
+    if (hit_new(t, cx, cy)) { t->pressed_new = 1; return 1; }
     int on_close = 0;
     int i = tab_at(t, cx, cy, &on_close);
     if (i < 0) return 0;
@@ -213,17 +332,26 @@ static int ops_motion(void *w, int cx, int cy, unsigned buttons) {
     struct uui_tabs *t = (struct uui_tabs *)w;
     int on_close = 0;
     int i = tab_at(t, cx, cy, &on_close);
-    int changed = (i != t->hovered) || (on_close != t->hovered_close);
+    int on_new = hit_new(t, cx, cy);
+    int changed = (i != t->hovered) || (on_close != t->hovered_close)
+                  || (on_new != t->hovered_new);
     t->hovered = i;
     t->hovered_close = on_close;
+    t->hovered_new = on_new;
     return changed;
 }
 
 static int ops_release(void *w, int cx, int cy) {
     struct uui_tabs *t = (struct uui_tabs *)w;
     int armed = t->pressed, armed_close = t->pressed_close;
+    int armed_new = t->pressed_new;
     t->pressed = -1;
     t->pressed_close = 0;
+    t->pressed_new = 0;
+    if (armed_new) {
+        if (hit_new(t, cx, cy) && t->on_new) t->on_new(t->ctx);
+        return 1;
+    }
     if (armed < 0) return 0;
 
     int on_close = 0;

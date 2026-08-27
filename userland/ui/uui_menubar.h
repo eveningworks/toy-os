@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "ui/ugfx.h"
 #include "ui/uui_primitives.h"
+#include "ui/uui_widget.h"
 
 // uui_menubar -- a menu bar with nested pull-down menus, the control
 // Windows and KDE both put across the top of an application window.
@@ -135,6 +136,10 @@ struct uui_menubar {
     // Asked per item; NULL means every item is enabled and unticked.
     unsigned (*item_flags)(int code);
 
+    // The code a commit produced, for the ROUTED path only -- see
+    // uui_menubar_ops below. -1 when there is nothing waiting.
+    int committed;
+
     uint32_t bar_bg, fg, popup_bg, hot_bg, border, accel_fg, disabled_fg;
 };
 
@@ -221,6 +226,31 @@ void uui_menubar_close(struct uui_menubar *m);
 // These are what makes that possible for a control whose rectangles are
 // computed at open time and depend on what is nested where.
 // Each returns 1 and fills the rect, or 0 if that thing is not present.
+
+// --- as a routed widget ------------------------------------------------
+//
+// Every call above is the HAND-ROUTED interface, which Notepad uses: the
+// app owns its own on_press/on_motion/on_release and calls into the menu
+// from them. That works for an app whose other controls are hand-drawn.
+//
+// **AN APP WITH ROUTED WIDGETS NEEDS THIS TABLE INSTEAD**, and not for
+// tidiness: a popup drops down OVER whatever is below the bar, and the
+// router runs before an app's own on_press, so a click on the File
+// menu's first item would ALSO land on the widget underneath it. That is
+// the problem `uui_widget_ops.overlay_active` exists to solve -- a
+// widget claiming an overlay is offered every press first, with no hit
+// test -- and this table declares it. The popup is drawn from
+// `draw_overlay`, which uui_router_draw() runs after every widget's
+// `draw`, so the z-order comes out right with nothing for the app to
+// order by hand.
+//
+// A commit still has to reach the app. The ops `release` slot returns
+// only "did anything change", so the code is parked and the app takes it
+// when the router names this widget through uapp_desc.on_widget.
+// TAKEN ONCE and cleared: a redraw must not replay a command.
+int uui_menubar_take_code(struct uui_menubar *m);
+
+extern const struct uui_widget_ops uui_menubar_ops;
 
 int uui_menubar_title_rect(const struct uui_menubar *m, int index,
                             int *x, int *y, int *w, int *h);

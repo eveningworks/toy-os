@@ -76,6 +76,8 @@
 #include "ui/utheme.h"
 #include "ui/ulog.h"
 #include "ui/uui_tabs.h"
+#include "ui/uui_menubar.h"
+#include "ui/uui_textbox.h"
 #include "keyboard.h"
 #include "ansi.h"   // the kernel's parser, compiled into libuapp too
 
@@ -149,6 +151,10 @@ struct session {
     int child;                  // the shell's pid, for reaping and `ps`
 
     char title[TITLE_MAX];
+    // A HAND-GIVEN TITLE OUTRANKS THE SHELL'S. Konsole's rule: once you
+    // name a tab, its shell's OSC sequences stop moving the label --
+    // otherwise the next `cd` silently undoes the rename.
+    int title_locked;
 
     // --- the reader thread's ring ------------------------------------
     //
@@ -174,6 +180,93 @@ static struct uui_tabs g_strip;
 static struct uui_tab  g_tablabels[MAX_TABS];
 static int g_tab_slot[MAX_TABS];
 static int g_ntabs;
+
+// --- the menu bar -----------------------------------------------------
+//
+// **THERE IS NO EDIT MENU, AND THAT IS NOT AN OVERSIGHT.** Copy and
+// Paste are what an Edit menu is for and this OS has no clipboard at
+// all (docs/conventions/gui.md), so the menu would be two permanently
+// greyed rows advertising something that does not exist.
+//
+// The bar can be hidden, as Konsole's can, because a terminal is the one
+// app where a row of chrome is a row of the product. **F10 brings it
+// back** -- Konsole's own Ctrl+Shift+M is unavailable here, since Ctrl
+// folds 'M' to 0x0D and the binding would be indistinguishable from
+// Shift+Enter (api/keyboard.h).
+enum {
+    CMD_NEW_TAB = 1, CMD_CLOSE_TAB, CMD_EXIT,
+    CMD_RENAME, CMD_CLEAR_SCREEN, CMD_CLEAR_SB, CMD_RESET,
+    CMD_INTR, CMD_EOF,
+    CMD_TOP, CMD_BOTTOM, CMD_MENUBAR,
+    CMD_NEXT_TAB, CMD_PREV_TAB,
+};
+
+static const struct uui_menu_item file_items[] = {
+    UUI_MENU("New Tab",       CMD_NEW_TAB,   "Ctrl+Shift+T"),
+    UUI_MENU("Close Tab",     CMD_CLOSE_TAB, "Ctrl+Shift+W"),
+    UUI_MENU_SEP,
+    UUI_MENU("Exit",          CMD_EXIT,      "Alt+F4"),
+};
+
+static const struct uui_menu_item term_items[] = {
+    UUI_MENU("Rename Tab...", CMD_RENAME,       0),
+    UUI_MENU_SEP,
+    UUI_MENU("Clear Screen",     CMD_CLEAR_SCREEN, 0),
+    UUI_MENU("Clear Scrollback", CMD_CLEAR_SB,     0),
+    UUI_MENU("Reset Terminal",   CMD_RESET,        0),
+    UUI_MENU_SEP,
+    UUI_MENU("Send Interrupt", CMD_INTR, "Ctrl-C"),
+    UUI_MENU("Send EOF",       CMD_EOF,  "Ctrl-D"),
+};
+
+static const struct uui_menu_item view_items[] = {
+    UUI_MENU("Scroll to Top",    CMD_TOP,    "PgUp"),
+    UUI_MENU("Scroll to Bottom", CMD_BOTTOM, "PgDn"),
+    UUI_MENU_SEP,
+    UUI_MENU("Menu Bar",         CMD_MENUBAR, "F10"),
+};
+
+static const struct uui_menu_item tabs_items[] = {
+    UUI_MENU("Next Tab",     CMD_NEXT_TAB, "Ctrl+PgDn"),
+    UUI_MENU("Previous Tab", CMD_PREV_TAB, "Ctrl+PgUp"),
+};
+
+static const struct uui_menu_item menu_bar[] = {
+    UUI_SUBMENU("File",     file_items),
+    UUI_SUBMENU("Terminal", term_items),
+    UUI_SUBMENU("View",     view_items),
+    UUI_SUBMENU("Tabs",     tabs_items),
+};
+
+static struct uui_menubar g_menu;
+static int g_menu_shown = 1;
+
+// --- renaming a tab ---------------------------------------------------
+//
+// A field over the GRID, never over the strip: the grid carries no
+// routed widget, so the prompt cannot be clicked through onto a tab.
+// A press anywhere outside it cancels, which is what a lightweight
+// prompt does -- this is not a modal and does not pretend to be one.
+static struct uui_textbox g_rename;
+static int g_rename_open;
+static int g_rename_slot = -1;
+
+// The chrome, declared for INPUT and drawn by the toolkit after on_draw
+// (ui/uapp.c's order); on_draw positions both -- see ui/uapp.h on why a
+// widget array is two declarations and what happens when an app writes
+// only one.
+//
+// **THE MENU BAR IS FIRST, AND THE ORDER IS LOAD-BEARING.** Its popup
+// drops over the tab strip, and a routed widget claiming an overlay is
+// offered every press before anything is hit-tested (uui_route.c) -- so
+// declaring the menu here is what stops a click on the File menu's first
+// row ALSO landing on the tab underneath it.
+#define ID_MENU 1
+#define ID_TABS 2
+static struct uui_item g_widgets[] = {
+    { .ops = &uui_menubar_ops, .widget = &g_menu,  .id = ID_MENU },
+    { .ops = &uui_tabs_ops,    .widget = &g_strip, .id = ID_TABS },
+};
 
 static struct uapp *g_app;
 static int g_rows = 24, g_cols = 80;  // one window, so one size for all
@@ -332,6 +425,7 @@ static void session_default_title(struct session *s, char *dst) {
 }
 
 static void vt_title(struct session *s) {
+    if (s->title_locked) return;
     char want[TITLE_MAX];
     int i = 0;
     while (s->vt.osc[i] && i < TITLE_MAX - 1) { want[i] = s->vt.osc[i]; i++; }
@@ -573,11 +667,21 @@ static void close_tab(int tab) {
 // too, which is what makes reverse video -- a status bar -- look like a
 // bar rather than like coloured letters.
 
-static int strip_h(void) {
-    // ONE TAB SHOWS NO STRIP, which is Konsole's default and what keeps
-    // a single-shell Terminal exactly the window it has always been --
-    // same geometry, same tests.
-    return g_ntabs > 1 ? uui_tabs_height() : 0;
+static int menubar_h(void) {
+    if (!g_menu_shown) return 0;
+    int h = 0;
+    uui_menubar_natural_size(&g_menu, 0, &h);
+    return h;
+}
+
+// **THE STRIP IS ALWAYS DRAWN NOW, EVEN AT ONE TAB.** It used to hide
+// itself below two, which is Konsole's default -- but the strip carries
+// the "+" and a control that is only there once you already have what it
+// creates is no control at all. The cost is one row of chrome on a
+// single-shell window and a geometry that no longer jumps when a second
+// tab opens, which is the half worth having.
+static int chrome_h(void) {
+    return menubar_h() + uui_tabs_height();
 }
 
 static void draw_run(struct ugfx_surface *s, int x, int y,
@@ -621,7 +725,7 @@ static void draw_row(struct ugfx_surface *s, const struct cell *row, int y) {
 
 static void draw(struct ugfx_surface *s, int focused) {
     struct session *ses = active();
-    int top = strip_h();
+    int top = chrome_h();
     // ONLY THE GRID AREA, not the whole surface: the toolkit paints the
     // tab strip after this runs, and a full-surface fill here would wipe
     // whatever it had already put down (ui/uapp.c's draw order).
@@ -661,6 +765,22 @@ static void draw(struct ugfx_surface *s, int focused) {
 // tool here asserts on. The CURSOR, as a cell index, because that is the
 // thing that would be wrong if a cursor sequence were mishandled and it
 // is what a test can predict.
+// One reported rect, optionally carrying an index. See log_layout() on
+// why these do not go through ulogf().
+static void emit_rect(const char *prefix, int index, int x, int y, int w, int h) {
+    char b[96];
+    if (index < 0) snprintf(b, sizeof b, "%s %d %d %d %d\n", prefix, x, y, w, h);
+    else snprintf(b, sizeof b, "%s %d %d %d %d %d\n", prefix, index, x, y, w, h);
+    uapp_log_layout_line(b);
+}
+
+static void emit_item(int level, int index, int x, int y, int w, int h) {
+    char b[96];
+    snprintf(b, sizeof b, "uterm: layout item %d %d %d %d %d %d\n",
+             level, index, x, y, w, h);
+    uapp_log_layout_line(b);
+}
+
 static void log_layout(void) {
     struct session *s = active();
     if (!s) return;
@@ -669,12 +789,83 @@ static void log_layout(void) {
     // `split()[0]`, so a row/column PAIR there parses as neither. Extra
     // fields are safe after it and are what a tabbed window adds.
     char b[96];
-    snprintf(b, sizeof b, "uterm: layout cursor %d rows %d cols %d tabs %d\n",
-             s->cr * g_cols + s->cc, g_rows, g_cols, g_ntabs);
+    // The CHROME's height, so a pixel check aiming at the grid does not
+    // guess where it starts -- the menu bar's arrival moved that edge
+    // and a hardcoded band would have gone on comparing the strip.
+    snprintf(b, sizeof b,
+             "uterm: layout cursor %d rows %d cols %d tabs %d sel %d menu %d "
+             "chrome %d rename %d\n",
+             s->cr * g_cols + s->cc, g_rows, g_cols, g_ntabs,
+             g_strip.selected, g_menu_shown, chrome_h(), g_rename_open);
     uapp_log_layout_line(b);
+
+    // The chrome's rects, the same grammar Notepad reports -- a test
+    // clicking a menu row must be told where it is, not derive it.
+    //
+    // THROUGH uapp_log_layout_line(), NEVER ulogf(): that call is what
+    // the `desktop.layout_log` gate and the per-frame dedupe hang off
+    // (docs/conventions/gui.md), and a raw log here would write this
+    // whole block on every frame with a window open.
+    int x, y, w, h;
+    if (uui_tabs_new_rect(&g_strip, &x, &y, &w, &h))
+        emit_rect("uterm: layout newtab", -1, x, y, w, h);
+    for (int i = 0; i < g_strip.count; i++)
+        if (uui_tabs_rect(&g_strip, i, &x, &y, &w, &h))
+            emit_rect("uterm: layout tab", i, x, y, w, h);
+    for (int i = 0; i < (int)(sizeof menu_bar / sizeof menu_bar[0]); i++)
+        if (uui_menubar_title_rect(&g_menu, i, &x, &y, &w, &h))
+            emit_rect("uterm: layout title", i, x, y, w, h);
+    for (int l = 0; l < uui_menubar_depth(&g_menu); l++)
+        for (int i = 0; uui_menubar_item_rect(&g_menu, l, i, &x, &y, &w, &h); i++)
+            emit_item(l, i, x, y, w, h);
 }
 
 static void size_changed(int w, int h);
+
+// --- renaming ---------------------------------------------------------
+
+// The field, centred over the GRID. Derived from the window rather than
+// stored, so it survives a resize and a font change with nothing to keep
+// in step -- the same reason nothing else here caches a pixel.
+static void rename_rect(int w, int h, int *x, int *y, int *fw, int *fh) {
+    int width = w / 2;
+    if (width < ugfx_char_w() * 16) width = ugfx_char_w() * 16;
+    if (width > w - 4 * utheme_pad()) width = w - 4 * utheme_pad();
+    *fw = width;
+    *fh = utheme_control_h();
+    *x = (w - width) / 2;
+    *y = chrome_h() + (h - chrome_h() - *fh) / 2;
+}
+
+static void rename_begin(void) {
+    struct session *s = active();
+    if (!s) return;
+    g_rename_slot = s->index;
+    uui_textbox_init(&g_rename, s->title);
+    uui_textbox_set_active(&g_rename, 1);
+    g_rename_open = 1;
+}
+
+// An EMPTY name hands the tab back to its shell rather than blanking it:
+// a tab with no label is unreadable, and "undo the rename" needs somewhere
+// to live. That is the same judgement vt_title() already makes about an
+// empty OSC.
+static void rename_commit(void) {
+    g_rename_open = 0;
+    struct session *s = (g_rename_slot >= 0 && g_rename_slot < MAX_TABS)
+                          ? g_slot[g_rename_slot] : 0;
+    g_rename_slot = -1;
+    if (!s || !s->live) return;
+    const char *want = uui_textbox_text(&g_rename);
+    if (!want || !want[0]) {
+        s->title_locked = 0;
+        session_default_title(s, s->title);
+    } else {
+        strlcpy(s->title, want, sizeof s->title);
+        s->title_locked = 1;
+    }
+    ulogf("uterm: tab %d title %s\n", s->index, s->title);
+}
 
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
     struct ugfx_surface *s = uapp_surface(d);
@@ -683,12 +874,44 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     // under a running client (WIN_EV_FONT), which changes the cell size
     // without changing the window's. It early-outs when nothing moved.
     size_changed(s->w, s->h);
-    // The strip is positioned here rather than by a layout: this window
-    // has one widget over a canvas it paints itself, and running a
+    // The chrome is positioned here rather than by a layout: this window
+    // is two strips over a canvas it paints itself, and running a
     // uui_layout for that would be more machinery than arithmetic.
-    uui_tabs_set_geometry(&g_strip, 0, 0, s->w, uui_tabs_height());
+    int mh = menubar_h();
+    uui_menubar_set_geometry(&g_menu, 0, 0, s->w, mh);
+    // The whole content area, so a menu that will not fit below the bar
+    // may flip or slide against the window rather than off it.
+    uui_menubar_set_bounds(&g_menu, 0, 0, s->w, s->h);
+    uui_tabs_set_geometry(&g_strip, 0, mh, s->w, uui_tabs_height());
+    // WHAT THE SELECTED TAB MERGES INTO, re-asserted per frame because
+    // the palette is a live theme read (ui/utheme.h) and the grid's own
+    // ground is what has to win here, not the window background.
+    g_strip.page_bg = VGA_RGB[VT_BG];
+    g_widgets[0].hidden = !g_menu_shown;
     draw(s, uapp_focused(a));
     log_layout();
+}
+
+// The rename prompt, over the grid and after everything else -- see the
+// note beside g_rename. uapp runs on_draw_over last (ui/uapp.c), which
+// is the same z-order rule uui_menubar_draw_popup() states.
+static void on_draw_over(struct uapp *a, struct uapp_draw *d) {
+    (void)a;
+    if (!g_rename_open) return;
+    struct ugfx_surface *s = uapp_surface(d);
+    int fx, fy, fw, fh;
+    rename_rect(s->w, s->h, &fx, &fy, &fw, &fh);
+    uui_textbox_set_geometry(&g_rename, fx, fy, fw, fh);
+    int pad = utheme_pad();
+    ugfx_fill_rect(s, fx - pad, fy - pad - ugfx_char_h() - pad,
+                    fw + 2 * pad, fh + 3 * pad + ugfx_char_h(),
+                    UTHEME_PANEL_BG);
+    ugfx_draw_rect(s, fx - pad, fy - pad - ugfx_char_h() - pad,
+                    fw + 2 * pad, fh + 3 * pad + ugfx_char_h(),
+                    UTHEME_BORDER);
+    ugfx_draw_string(s, fx, fy - pad - ugfx_char_h(), "Rename tab:",
+                      UTHEME_TEXT, UTHEME_PANEL_BG);
+    uui_textbox_draw(s, &g_rename);
 }
 
 // HOW BIG THE WINDOW IS, IN CELLS, AND EVERY CHILD IS TOLD. Only this
@@ -703,7 +926,7 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
 static void size_changed(int w, int h) {
     int cw = ugfx_char_w(), ch = ugfx_char_h();
     if (cw <= 0 || ch <= 0) return;
-    int rows = (h - strip_h() - 2 * MARGIN) / ch;
+    int rows = (h - chrome_h() - 2 * MARGIN) / ch;
     int cols = (w - 2 * MARGIN) / cw;
     if (rows < 2) rows = 2;
     if (cols < 8) cols = 8;
@@ -788,7 +1011,100 @@ static void reap_dead_tabs(void) {
 #define CTRL_SHIFT_T 0x14
 #define CTRL_SHIFT_W 0x17
 
+// One byte to the shell, the way a keystroke would arrive. THE MENU
+// SENDS THE SAME BYTE THE KEY DOES rather than reaching for
+// sys_kill(): Ctrl-C is interpreted by kernel/tty/ldisc.c, which is
+// what makes it reach the foreground JOB rather than the shell.
+static void send_byte(char b) {
+    struct session *s = active();
+    if (s && s->master >= 0) sys_write(s->master, &b, 1);
+}
+
+static unsigned menu_item_flags(int code) {
+    switch (code) {
+    case CMD_MENUBAR:   return g_menu_shown ? UUI_MI_CHECKED : 0;
+    case CMD_NEXT_TAB:
+    case CMD_PREV_TAB:  return g_ntabs > 1 ? 0 : UUI_MI_DISABLED;
+    default:            return 0;
+    }
+}
+
+static void step_tab(int delta) {
+    if (g_ntabs <= 1) return;
+    int next = g_strip.selected + delta;
+    if (next < 0) next = g_ntabs - 1;          // wraps, as Konsole does
+    if (next >= g_ntabs) next = 0;
+    uui_tabs_select(&g_strip, next);
+}
+
+static void do_command(struct uapp *a, int code) {
+    struct session *s = active();
+    switch (code) {
+    case CMD_NEW_TAB:   open_tab(); break;
+    case CMD_CLOSE_TAB: close_tab(g_strip.selected); break;
+    case CMD_EXIT:      uapp_quit(a, 0); return;
+    case CMD_RENAME:    rename_begin(); break;
+    case CMD_CLEAR_SCREEN:
+        if (s) { vt_reset_screen(s); s->sb_view = 0; }
+        break;
+    case CMD_CLEAR_SB:
+        if (s) { s->sb_count = 0; s->sb_view = 0; }
+        break;
+    case CMD_RESET:
+        // WHAT `reset` DOES: the screen, the parser's colours and modes,
+        // and the view. Not the scrollback -- `reset` on a real terminal
+        // leaves history alone, which is why Clear Scrollback is its own
+        // row rather than part of this one.
+        if (s) {
+            ansi_init(&s->vt, VT_FG, VT_BG);
+            vt_reset_screen(s);
+            s->alt = 0;
+            s->cursor_shown = 1;
+            s->sb_view = 0;
+        }
+        break;
+    case CMD_INTR:      send_byte(0x03); break;
+    case CMD_EOF:       send_byte(0x04); break;
+    case CMD_TOP:       if (s) s->sb_view = s->sb_count; break;
+    case CMD_BOTTOM:    if (s) s->sb_view = 0; break;
+    case CMD_MENUBAR:   g_menu_shown = !g_menu_shown; size_changed(uapp_width(a), uapp_height(a)); break;
+    case CMD_NEXT_TAB:  step_tab(+1); break;
+    case CMD_PREV_TAB:  step_tab(-1); break;
+    default: return;
+    }
+    uapp_redraw(a);
+}
+
 static void on_key(struct uapp *a, int key, unsigned mods) {
+    // --- the rename prompt owns every key while it is up --------------
+    if (g_rename_open) {
+        if (key == '\n' || key == '\r') { rename_commit(); tabs_rebuild(); }
+        else if (key == 0x1B)             { g_rename_open = 0; g_rename_slot = -1; }
+        else if (!uui_textbox_key_mods(&g_rename, key, mods)) return;
+        uapp_redraw(a);
+        return;
+    }
+
+    // --- an open menu owns it next ------------------------------------
+    if (uui_menubar_is_open(&g_menu)) {
+        int code = -1;
+        if (uui_menubar_key(&g_menu, key, &code)) {
+            if (code >= 0) do_command(a, code);
+            uapp_redraw(a);
+            return;
+        }
+    }
+
+    // F10 REVEALS A HIDDEN BAR AS WELL AS OPENING IT, so hiding the menu
+    // is never a one-way door. It is intercepted rather than sent to the
+    // shell, which is the same trade every app with a menu bar makes.
+    if (key == KEY_F10) {
+        if (!g_menu_shown) { g_menu_shown = 1; size_changed(uapp_width(a), uapp_height(a)); }
+        else { int c = -1; uui_menubar_key(&g_menu, key, &c); }
+        uapp_redraw(a);
+        return;
+    }
+
     // --- the tab bindings, which are Konsole's ------------------------
     if ((mods & KEY_MOD_SHIFT) && key == CTRL_SHIFT_T) {
         if (open_tab()) uapp_redraw(a);
@@ -800,13 +1116,8 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
         return;
     }
     if ((mods & KEY_MOD_CTRL) && (key == KEY_PAGE_UP || key == KEY_PAGE_DOWN)) {
-        if (g_ntabs > 1) {
-            int next = g_strip.selected + (key == KEY_PAGE_DOWN ? 1 : -1);
-            if (next < 0) next = g_ntabs - 1;      // wraps, as Konsole does
-            if (next >= g_ntabs) next = 0;
-            uui_tabs_select(&g_strip, next);
-            uapp_redraw(a);
-        }
+        step_tab(key == KEY_PAGE_DOWN ? +1 : -1);
+        uapp_redraw(a);
         return;
     }
 
@@ -870,6 +1181,37 @@ static void tab_closed(void *ctx, int index) {
     if (g_app) uapp_redraw(g_app);
 }
 
+static void tab_new(void *ctx) {
+    (void)ctx;
+    open_tab();
+    if (g_app) uapp_redraw(g_app);
+}
+
+// The router names a widget to the app; the menu bar's commit is parked
+// in the widget and taken here (ui/uui_menubar.h). Only the menu reports
+// this way -- the strip's own callbacks say what happened directly.
+static void on_widget(struct uapp *a, int id, int reason) {
+    (void)reason;
+    if (id != ID_MENU) return;
+    int code = uui_menubar_take_code(&g_menu);
+    if (code >= 0) do_command(a, code);
+}
+
+// A press the router did not consume. Its only job is the rename prompt:
+// clicking away cancels, and clicking IN it places the caret.
+static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
+    (void)buttons;
+    if (!g_rename_open) return;
+    int fx, fy, fw, fh;
+    rename_rect(uapp_width(a), uapp_height(a), &fx, &fy, &fw, &fh);
+    uui_textbox_set_geometry(&g_rename, fx, fy, fw, fh);
+    if (uui_textbox_hit(&g_rename, x, y))
+        g_rename.ed.cursor = uui_textbox_index_at_x(&g_rename, x);
+    else
+        { g_rename_open = 0; g_rename_slot = -1; }
+    uapp_redraw(a);
+}
+
 static void on_open_cb(struct uapp *a) {
     // The whole grid is text, so this is named ONCE rather than tracked
     // from motion -- which is why this app needs no on_motion at all.
@@ -880,6 +1222,12 @@ static void on_open_cb(struct uapp *a) {
     uui_tabs_init(&g_strip, g_tablabels, 0, 0);
     g_strip.on_select = tab_selected;
     g_strip.on_close  = tab_closed;
+    g_strip.on_new    = tab_new;
+    g_strip.show_new  = 1;
+
+    uui_menubar_init(&g_menu, menu_bar,
+                      (int)(sizeof menu_bar / sizeof menu_bar[0]));
+    g_menu.item_flags = menu_item_flags;
 
     if (!open_tab()) {
         ulog("uterm: could not open a pty or start " SHELL "\n");
@@ -892,14 +1240,6 @@ static int on_close_cb(struct uapp *a) {
     for (int i = 0; i < MAX_TABS; i++) session_stop(g_slot[i]);
     return 1; // yes, close
 }
-
-// The tab strip is declared for INPUT only. It is drawn by the toolkit
-// after on_draw (ui/uapp.c's order) and positioned by on_draw itself --
-// see ui/uapp.h on why a widget array is two declarations and what
-// happens when an app writes only one.
-static struct uui_item g_widgets[] = {
-    { .ops = &uui_tabs_ops, .widget = &g_strip, .id = 1 },
-};
 
 int main(void) {
     struct uapp_desc desc = {
@@ -922,6 +1262,9 @@ int main(void) {
         .widget_count = (int)(sizeof g_widgets / sizeof g_widgets[0]),
         .on_open = on_open_cb,
         .on_draw = on_draw,
+        .on_draw_over = on_draw_over,
+        .on_widget = on_widget,
+        .on_press = on_press,
         .on_key  = on_key,
         .on_user = on_user,
         .on_wheel = on_wheel,

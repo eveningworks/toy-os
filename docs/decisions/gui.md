@@ -4874,3 +4874,62 @@ screen in a way nobody could diagnose from the result — a missing escape
 sequence looks like a terminal bug for the rest of the session. Waiting
 costs that thread a slice and nothing else, because the thing it waits
 for is the window draining, which is the window doing its job.
+
+## `uui_menubar` kept its hand-routed interface when it gained an ops table
+
+Terminal needed a menu bar and already declared a routed widget (the tab
+strip). That combination is a bug the toolkit could not express: the
+router runs before an app's own `on_press` (`uapp.c`), so a popup drawn
+over the strip commits a menu item AND clicks the tab underneath it.
+
+`uui_widget_ops` already had the mechanism — `overlay_active`, built for
+the dropdown, which offers a widget every press before anything is
+hit-tested — and `uui_menubar` was the one control in the toolkit that
+never declared it. So it got an ops table, and the ordering is now a
+property of the design rather than of a guard someone has to remember.
+
+**The obvious next step was to delete the hand-routed calls and convert
+Notepad, Files, Imgview and Mines. That was not done, and the reason is
+that the two interfaces are not redundant.** An app with no routed
+widgets — Notepad has none — gains nothing from the table and loses the
+ability to sequence the menu against its own modal state, which is real
+there: Notepad's file dialog has to outrank the menu, and it expresses
+that by simply not calling into it. Converting would mean giving the
+router a notion of app-level modality that nothing else wants.
+
+So the rule is a rule about the APP, not about the widget:
+`uapp_desc.widgets` non-empty means use the table. That is stated in
+`docs/conventions/gui.md`, and it is the kind of thing a future session
+would otherwise re-derive by shipping the click-through bug once.
+
+**The commit code is parked rather than returned** because the ops
+`release` slot returns "did anything change" and there is nowhere for a
+code to travel. `uui_menubar_take_code()` clears on read, so a redraw
+cannot replay a command — the alternative, a callback on the struct,
+would have been a second reporting mechanism beside `on_widget` for a
+widget that already has one.
+
+## A tab strip's selected tab is filled with the PAGE, not with a control colour
+
+The old strip drew every tab as a bordered box with an accent bar on
+top. It read as a row of buttons, because that is what it was: four
+borders and a fill from the theme's control palette.
+
+What every modern terminal does instead — Windows Terminal, Konsole,
+Chrome's tabs before them — is fill the selected tab with whatever the
+page below it is, round its top corners, and drop its bottom edge, so
+the tab and the page are one shape. `uui_tabs.page_bg` is that colour,
+supplied by the caller because the widget cannot know it: Terminal's
+page is a BLACK VT ground, which is content rather than theme.
+
+**The ink then has to be derived rather than chosen.** A caller that
+also picked the label colour would get it wrong the first time somebody
+put a light page under a strip, so the widget reads `page_bg`'s
+luminance and takes `UTHEME_ACCENT_TEXT` for a dark one — the theme's
+one light-on-dark role, the same decision `ugfx_draw_string_shadowed()`
+makes.
+
+**The baseline is drawn under every tab and painted over by the selected
+one.** Computing where to break it would be a second piece of arithmetic
+that has to agree with the fill to the pixel, which is the shape of the
+close-box bug this widget's own comments already warn about.
