@@ -1379,3 +1379,32 @@ can show.
 merely corrupt: the lock is not recursive, so a signal handler that
 allocates while its own thread holds it deadlocks. That is true of every
 libc's malloc, glibc's included.
+
+## THE BIOS OWNS THE xHCI UNTIL YOU ASK FOR IT, AND THE ASK COMES FIRST.
+
+`legacy_handoff()` (`kernel/drivers/usb/xhci.c`) sets the OS Owned
+semaphore in the USB Legacy Support capability, waits for the BIOS Owned
+semaphore to clear, forces it clear on timeout rather than refusing to
+continue, and then **disables every SMI source in USBLEGCTLSTS and
+write-1-clears its status bits**. That last part is the half that
+actually protects the driver, and it runs whether or not ownership was
+granted. Linux's `quirk_usb_handoff_xhci`, in its shape.
+
+**THE ORDERING IS THE RULE.** The capability walk runs BEFORE
+`reset_controller()`, because the walk is where the capability is found
+and the reset is a write to the operational registers. A handoff
+performed after the first write is not a handoff — and that is exactly
+how this was wrong: the walk used to run after the reset, so the driver
+reset a controller whose owner it had not yet discovered.
+
+**WHAT IT LOOKS LIKE WHEN IT IS MISSING is not a driver bug.** One Intel
+laptop froze during bring-up mid-log-line, at a different point each
+boot, and the point MOVED when unrelated trace logging was added.
+Nothing in a driver's own control flow explains a hang that relocates
+when you print more; a CPU that has entered SMM and not returned does.
+
+**NONE OF THIS PATH RUNS UNDER QEMU**, which advertises no
+legacy-support capability — so `legsup_off` stays 0, `legacy_handoff()`
+returns immediately, and every test here exercises the no-BIOS case
+only. `usbtrace` on the boot line prints a line per bring-up step, which
+is how the machine that does have one was diagnosed.

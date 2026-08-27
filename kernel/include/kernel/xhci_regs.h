@@ -163,8 +163,25 @@
 #define XHCI_XECP_ID_PROTO  2   // Supported Protocol
 
 // USB Legacy Support (xECP id 1)
+//
+// The BIOS owns the controller until the OS asks for it, and while it
+// does, register accesses trap into the firmware's SMM handler. An OS
+// that starts driving the controller without asking is poking hardware
+// somebody else is servicing -- which is why this handoff is the FIRST
+// thing to do, before the reset.
 #define XHCI_LEGSUP_BIOS_OWNED (1u << 16)
 #define XHCI_LEGSUP_OS_OWNED   (1u << 24)
+
+// USBLEGCTLSTS, one dword past the capability: SMI enables in the low
+// half, write-1-to-clear SMI status in the high half.
+#define XHCI_LEGCTLSTS         4
+
+// The masks are Linux's (drivers/usb/host/pci-quirks.c), kept in its
+// form rather than rederived: AND with DISABLE_SMI to keep the bits
+// that are not SMI enables, then OR the SMI_EVENTS status bits to clear
+// them (they are RW1C, so writing a one is what clears one).
+#define XHCI_LEGACY_DISABLE_SMI ((0x7u << 1) + (0xFFu << 5) + (0x7u << 17))
+#define XHCI_LEGACY_SMI_EVENTS  (0x7u << 29)
 
 // A TRB, as the controller sees it. 16 bytes, and the layout is the
 // same for every type -- what the first three dwords MEAN varies.

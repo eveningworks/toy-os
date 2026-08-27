@@ -1236,3 +1236,51 @@ clears a status bit belonging to another device on the line.
 Because that failure is invisible under TCG, `tools/usb_test.py` grew a
 `--kvm` flag and the change was not believed until it passed there. A
 green TCG suite says nothing about this class.
+
+## The xHCI BIOS handoff, and why "QEMU does not implement it" was the wrong reason to skip it
+
+`xhci.c` logged the USB Legacy Support capability and deliberately did
+not act on it. The comment said why: the capability is the BIOS handoff,
+QEMU does not implement one, so there was nothing to hand off from.
+
+That reasoning is sound about QEMU and wrong about the world. The
+capability exists precisely on the machines that are not QEMU, and on
+those the BIOS **owns the controller** until an OS asks for it. While it
+does, register accesses trap into the firmware's SMM handler. A driver
+that starts resetting and configuring is poking a device somebody else
+is still servicing.
+
+**What that looks like from outside is not a driver bug.** One Intel
+laptop froze during bring-up with no pattern: mid-log-line, at a
+different point each boot, and the point MOVED when unrelated trace
+logging was added. Nothing in the driver's own control flow explains a
+hang that relocates when you print more — a CPU that has entered SMM and
+not returned does.
+
+So the handoff is built, in Linux's shape
+(`drivers/usb/host/pci-quirks.c`, `quirk_usb_handoff_xhci`): set the OS
+Owned semaphore, wait for the BIOS Owned semaphore to clear, force it
+clear on timeout rather than refusing to proceed, and then disable every
+SMI source in USBLEGCTLSTS and write-1-clear its status bits. The SMI
+disable is the half that actually protects the driver, and it runs
+whether or not ownership was granted.
+
+**THE ORDERING IS THE DECISION, not the code.** Linux does this in a PCI
+quirk that runs BEFORE the driver binds. Here the capability walk used
+to run AFTER `reset_controller()`, so the reset -- a write to the
+operational registers -- happened while the firmware still owned the
+device, before anything had even discovered that it did. The walk moved
+ahead of the reset. A handoff performed after the first write is not a
+handoff.
+
+**It is untestable here and that is stated rather than hidden.** QEMU
+advertises no legacy-support capability, so `legsup_off` stays 0 and the
+whole path is dead in every test in this repo. `usb_test.py` proves only
+that bring-up still works on a controller with nothing to hand off. The
+evidence for the path itself is one machine's boot log.
+
+The general lesson is the one this repo keeps meeting: **"the emulator
+does not have it" is a reason the code is untested, never a reason the
+code is unnecessary.** The same sentence had already been written about
+the scratchpad-buffer branch a few days earlier, and that branch turned
+out to be fine while this one was fatal.

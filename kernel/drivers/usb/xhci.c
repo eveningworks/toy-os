@@ -60,6 +60,10 @@ struct xhci_hc {
     uint32_t max_ports;
     uint32_t max_intrs;
     uint8_t  csz64;          // HCCPARAMS1.CSZ: 64-byte contexts
+    // Where the USB Legacy Support capability sits, in bytes from the
+    // capability base, or 0 for a controller that has none (QEMU).
+    // Found by the walk, used by the handoff.
+    uint32_t legsup_off;
     uint8_t  ac64;
     uint32_t page_size;
 
@@ -305,6 +309,7 @@ static void walk_xecp(uint32_t hcc1) {
                         first, first + cnt - 1);
             (void)name;
         } else if (id == XHCI_XECP_ID_LEGACY) {
+            g_hc.legsup_off = off;   // the handoff below needs to find it again
             klog_printf("usb:  xECP %u usb-legacy-support (bios-owned=%u)\n",
                         id, (v & XHCI_LEGSUP_BIOS_OWNED) ? 1u : 0u);
         } else {
@@ -314,6 +319,70 @@ static void walk_xecp(uint32_t hcc1) {
         if (!next) break;
         off += next * 4;
     }
+}
+
+// Ask the BIOS for the controller, then silence its SMIs.
+//
+// **THIS IS WHY ONE LAPTOP HUNG, and the driver did not do it at all.**
+// The comment where the capability is logged said the handoff was not
+// built because QEMU does not implement the capability -- true, and it
+// meant the one machine that DOES implement it drove a controller its
+// firmware still owned. Every register write then trapped into the
+// BIOS's SMM handler, and the boot froze at an arbitrary point: mid-log
+// line, in a different place each time, moving when unrelated logging
+// changed the timing. Exactly what a CPU that has entered SMM and not
+// come back looks like from outside.
+//
+// Linux does this in a PCI quirk (quirk_usb_handoff_xhci) that runs
+// BEFORE its driver binds, and the ordering is the point: the request
+// has to come before the reset, not after, or the reset is itself a
+// write to somebody else's device.
+//
+// Returns 1 if the OS owns the controller afterwards. A REFUSAL IS NOT
+// FATAL: Linux forces the bit clear on timeout and carries on, because
+// a BIOS that will not answer has usually stopped caring rather than
+// stayed active, and the SMI disable below is what actually protects
+// us either way.
+static int legacy_handoff(void) {
+    if (!g_hc.legsup_off) return 1;   // no such capability; nothing owns it
+
+    uint32_t legsup = mr32(g_hc.cap, g_hc.legsup_off);
+    if (legsup & XHCI_LEGSUP_BIOS_OWNED) {
+        klog_printf("usb: BIOS owns the controller -- requesting handoff\n");
+        mw32(g_hc.cap, g_hc.legsup_off, legsup | XHCI_LEGSUP_OS_OWNED);
+
+        uint32_t spins = 0;
+        while (mr32(g_hc.cap, g_hc.legsup_off) & XHCI_LEGSUP_BIOS_OWNED) {
+            if (++spins > XHCI_POLL_BACKSTOP) {
+                klog_printf("usb: BIOS did not release the controller -- "
+                            "taking it anyway\n");
+                // Force both bits: claim ownership and drop the BIOS's
+                // claim. Linux does the same, and leaving the BIOS bit
+                // set would leave the firmware believing it still has a
+                // device this driver is about to reset.
+                uint32_t v = mr32(g_hc.cap, g_hc.legsup_off);
+                v |= XHCI_LEGSUP_OS_OWNED;
+                v &= ~XHCI_LEGSUP_BIOS_OWNED;
+                mw32(g_hc.cap, g_hc.legsup_off, v);
+                break;
+            }
+            cpu_relax();
+        }
+    }
+
+    // SMIs OFF, AND THE STATUS BITS CLEARED, whether or not the handoff
+    // above was granted. This is the half that stops the traps: an
+    // enable left set means the next ordinary register write is another
+    // trip into firmware.
+    uint32_t ctl = mr32(g_hc.cap, g_hc.legsup_off + XHCI_LEGCTLSTS);
+    ctl &= XHCI_LEGACY_DISABLE_SMI;
+    ctl |= XHCI_LEGACY_SMI_EVENTS;
+    mw32(g_hc.cap, g_hc.legsup_off + XHCI_LEGCTLSTS, ctl);
+
+    uint32_t now = mr32(g_hc.cap, g_hc.legsup_off);
+    klog_printf("usb: legacy handoff done (legsup 0x%x, os-owned=%u)\n",
+                now, (now & XHCI_LEGSUP_OS_OWNED) ? 1u : 0u);
+    return (now & XHCI_LEGSUP_BIOS_OWNED) ? 0 : 1;
 }
 
 // --- bring-up ---------------------------------------------------------
@@ -1095,13 +1164,19 @@ void usb_init(void) {
                 d->vendor_id, d->device_id, d->bus, d->device, d->function,
                 (unsigned long long)bar0);
 
+    // THE CAPABILITY WALK COMES FIRST, because the BIOS handoff is in
+    // it and the handoff has to happen before the reset -- resetting a
+    // controller the firmware still owns is a write to somebody else's
+    // device. This used to run after, which is how a machine whose BIOS
+    // owned the controller hung before reaching any of the rest.
+    walk_xecp(hcc1);
+    legacy_handoff();
+
     if (!reset_controller()) return;
 
     // PAGESIZE is only meaningful after reset. Bit n set means 2^(n+12).
     uint32_t ps = mr32(g_hc.op, XHCI_PAGESIZE) & 0xFFFFu;
     g_hc.page_size = ps ? (uint32_t)(4096u * (ps & (uint32_t)(-(int32_t)ps))) : 4096u;
-
-    walk_xecp(hcc1);
 
     USBT("usb: trace: op=+0x%x rt=+0x%x db=+0x%x ac64=%u csz64=%u\n",
          (unsigned)(g_hc.op - g_hc.cap), (unsigned)(g_hc.rt - g_hc.cap),
