@@ -250,11 +250,50 @@ static int usb_traced(void) {
 // implements USB Legacy Support (xECP id 1, the BIOS handoff -- QEMU
 // does not, which is why the handoff is not built), and where the
 // Supported Protocol capabilities put the USB2 and USB3 port ranges.
+// How far into the register window the capability chain may reach.
+//
+// **THE HOP COUNT IS NOT A BOUND ON THE ADDRESS.** Each `next` is up to
+// 255 DWORDS, so 64 hops can walk 65 KB -- past the end of a typical
+// 64 KiB xHCI BAR and into MMIO nothing decodes. On real hardware that
+// read does not politely return garbage: it is an unclaimed cycle, and
+// one Intel laptop hangs on it hard enough that the boot stops mid-log
+// line with no further output at all.
+//
+// 64 KiB because that is the usual window and this driver cannot ask
+// for the real size -- there is no pci_bar_mem_size(). That is the
+// proper fix and it is a PCI change (probe by writing all-ones with
+// decode off), not an xHCI one; until it exists this is a conservative
+// cap plus the all-ones check below, which is what actually stops the
+// runaway.
+#define XHCI_XECP_MAX_OFF 0x10000u
+
 static void walk_xecp(uint32_t hcc1) {
     uint32_t off = XHCI_HCC1_XECP(hcc1) * 4;   // xECP is in DWORDS
     int hops = 0;
+    USBT("usb: trace: xecp walk from +0x%x\n", off);
     while (off && hops++ < 64) {               // bounded: the chain is device-supplied
+        if (off >= XHCI_XECP_MAX_OFF) {
+            klog_printf("usb: xECP chain leaves the register window at +0x%x "
+                        "-- stopping\n", off);
+            return;
+        }
+        // BEFORE the read, not only after: if the read itself is what
+        // hangs -- an unclaimed MMIO cycle on real hardware -- then a
+        // line printed afterwards never appears, and the trace names
+        // the previous offset instead of the fatal one.
+        USBT("usb: trace: xecp read +0x%x\n", off);
         uint32_t v  = mr32(g_hc.cap, off);
+        USBT("usb: trace: xecp +0x%x = 0x%x\n", off, v);
+
+        // ALL-ONES IS WHAT AN UNCLAIMED READ LOOKS LIKE when the bus is
+        // well behaved, and it is a runaway if believed: id 0xFF is not
+        // a capability and next 0xFF strides another 1020 bytes, so the
+        // walk marches off through 64 hops of nothing.
+        if (v == 0xFFFFFFFFu) {
+            klog_printf("usb: xECP read at +0x%x came back all-ones "
+                        "-- stopping\n", off);
+            return;
+        }
         uint32_t id = XHCI_XECP_ID(v);
         if (id == XHCI_XECP_ID_PROTO) {
             // Supported Protocol: name, then the port range it covers.
