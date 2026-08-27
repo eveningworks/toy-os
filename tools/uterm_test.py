@@ -62,6 +62,14 @@ def key(dbg, k):
     dbg.send(f"gui key {k}")
 
 
+def type_text(dbg, text):
+    """Types without pressing Enter -- what a completion check needs,
+    since the whole point is what Tab does to a HALF-TYPED line."""
+    for ch in text:
+        key(dbg, HEX.get(ch, ch))
+    dbg.settle()
+
+
 def type_line(dbg, text, settle=1.2):
     for ch in text:
         key(dbg, HEX.get(ch, ch))
@@ -183,8 +191,18 @@ def run(dbg, qmp, tmp, shot_dir, res):
     dbg.settle()
 
     c = win["content"]
-    # The transcript area, clear of the prompt line at the bottom.
-    box = (c["x"] + 4, c["y"] + 4, c["x"] + c["w"] - 4, c["y"] + c["h"] - 30)
+    # The TRANSCRIPT, clear of the prompt line at the bottom and -- the
+    # part that matters -- clear of the CHROME at the top.
+    #
+    # This box started at the content origin, so the menu bar and the tab
+    # strip counted as terminal output. It only ever worked because the
+    # chrome happened to be dark: painting the selected tab a light
+    # colour added ~25k "ink" pixels that no shell had printed, and the
+    # ratio check below (lscpu must leave twice what `pwd` did) failed
+    # deterministically with the emulator working perfectly. The app
+    # reports where its grid starts; ask it rather than assume.
+    top = layout_field(dbg, "chrome", 4)
+    box = (c["x"] + 4, c["y"] + top, c["x"] + c["w"] - 4, c["y"] + c["h"] - 30)
 
     base = ink(qmp, tmp, "ut_base.png", box)
     res.check("it renders its banner", base > 100, f"only {base} ink pixels")
@@ -841,6 +859,71 @@ def check_chrome(dbg, qmp, res):
               f"menu {layout_field(dbg, 'menu')}")
 
 
+def check_completion(dbg, qmp, res):
+    """Tab completion inside the Terminal window.
+
+    **ASSERTED THROUGH THE FILESYSTEM, not through pixels.** A completion
+    that worked leaves different bytes on disk -- `mkdi<Tab> <path>`
+    creates a directory only if Tab turned it into `mkdir` -- and that is
+    checkable with `sh ls`, which shares no code with the shell under
+    test. Reading the completed text off the screen would assert the
+    emulator's rendering as much as the completion.
+
+    The load-bearing check is c14: a directory and a FILE share a prefix,
+    so `cd` can only finish the word if it filters to directories. With
+    files included there are two candidates, completion stops at the
+    shared prefix, and the `cd` fails -- which the cwd then shows.
+    """
+    win = dbg.window(TITLE)
+    res.check("c14pre. a Terminal is up for the completion checks",
+              win is not None)
+    if not win:
+        return
+    dbg.click(win["x"] + win["w"] // 2, win["y"] + win["h"] // 2)
+    dbg.settle()
+
+    dbg.send("sh rm /ct_gui_dir")
+    dbg.send("sh rm /ct_gui_file")
+    dbg.settle()
+
+    # `mkdi<Tab>` -> `mkdir`, proving FIRST-WORD completion off PATH.
+    # Typed as a real keystroke stream, Tab included, so the byte goes
+    # down the pty exactly as a person's would.
+    type_text(dbg, "mkdi")
+    key(dbg, "0x09")   # Tab, the same path every other keystroke here takes
+    dbg.settle()
+    time.sleep(0.5)
+    type_line(dbg, " /ct_gui_dir", settle=1.5)
+    listing = dbg.send("sh ls /")
+    res.check("c14. Tab completed a PATH program in first position",
+              "ct_gui_dir" in listing,
+              "the directory was never created, so `mkdi` did not become `mkdir`")
+
+    # A file beside it, sharing the prefix. Now `cd /ct_gui_<Tab>` has
+    # two candidates unless `cd` filters to directories.
+    dbg.send("sh write /ct_gui_file x")
+    dbg.settle()
+    type_text(dbg, "cd /ct_gui_")
+    key(dbg, "0x09")   # Tab, the same path every other keystroke here takes
+    dbg.settle()
+    time.sleep(0.5)
+    type_line(dbg, "", settle=1.5)
+    type_line(dbg, "pwd", settle=1.5)
+
+    # The shell announces its directory as an OSC title on every change,
+    # which is text the app logs -- so where the shell now stands is
+    # readable without looking at a single pixel.
+    titles = [l.rstrip() for l in dbg.logs("uterm: tab", clear=False)
+              if "title" in l]
+    res.check("c15. Tab on `cd` completed to the DIRECTORY, not the shared prefix",
+              any(l.endswith("/ct_gui_dir") for l in titles),
+              f"last titles: {titles[-3:]}")
+
+    dbg.send("sh rm /ct_gui_file")
+    dbg.send("sh rm /ct_gui_dir")
+    dbg.settle()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -863,6 +946,7 @@ def main():
         run(dbg, qmp, args.tmp, args.shot, res)
         check_tabs(dbg, qmp, args.tmp, res)
         check_chrome(dbg, qmp, res)
+        check_completion(dbg, qmp, res)
     finally:
         dbg.close()
 

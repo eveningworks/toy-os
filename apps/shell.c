@@ -27,7 +27,7 @@
 #include "shell.h"
 #include "shell_internal.h"
 #include "apps.h"
-#include "completion.h"
+#include "shell_complete.h"
 
 // Ctrl-<letter> arrives as that letter's control code -- see keyboard.h
 // on the encoding. Only reverse_search() below has to name one

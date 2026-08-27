@@ -41,3 +41,12 @@ int upath_find_program(const char *name, char *out, int cap) {
     }
     return 0;
 }
+
+int upath_dir_count(void) {
+    return (int)(sizeof PATH_DIRS / sizeof PATH_DIRS[0]);
+}
+
+const char *upath_dir(int index) {
+    if (index < 0 || index >= upath_dir_count()) return 0;
+    return PATH_DIRS[index];
+}

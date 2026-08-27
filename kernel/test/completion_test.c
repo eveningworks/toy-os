@@ -23,7 +23,7 @@
 // an exact candidate list -- which would fail the day a program is
 // added, teaching everyone to ignore it.
 #include "ktest.h"
-#include "completion.h"
+#include "shell_complete.h"
 #include "string.h"
 
 // ONE SHARED RESULT, NOT A LOCAL PER TEST. `struct completion_result`

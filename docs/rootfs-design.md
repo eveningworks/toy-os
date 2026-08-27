@@ -369,7 +369,7 @@ otherwise:
   Invisible until now, because the live image could not be built.
 
 **And one stale entry the kernel's own guard had been reporting**:
-`dmesg` was still in `apps/completion.c`'s builtin table after moving to
+`dmesg` was still in `apps/shell_complete.c`'s builtin table after moving to
 `/bin`, so typing it printed "is tab-completable but has no dispatch
 case" -- the exact internal error that table's comment says it exists to
 produce.

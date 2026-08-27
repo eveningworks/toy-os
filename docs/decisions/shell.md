@@ -24,7 +24,7 @@ Built across four phases -- the commit for build 183, 193, 203, 253.
 
 ## Tab completion is a shared candidate generator, not a shared line editor
 
-`apps/completion.c` answers one question -- "given this line and cursor,
+`kernel/lib/completion.c` answers one question -- "given this line and cursor,
 what could this word become?" -- and does no input handling and no
 drawing at all. Both shells call it from their own input loops and
 present the result their own way: `shell.c` with `vga_putc()`/
@@ -775,7 +775,7 @@ rule. `apps/` is compiled with `-Ikernel/include/kernel` removed
 (`APPS_CFLAGS` in the Makefile) -- the boundary that stops an app
 reaching into drivers and page tables -- and `ktest.h` is behind it.
 Kernel code carries `-Iapps`, so a test in `kernel/` can include
-`apps/completion.h` while the reverse is a compile error. The
+`apps/shell_complete.h` while the reverse is a compile error. The
 alternative was moving `ktest.h` into `api/`, which widens an audience
 boundary for a test facility and would let any app register kernel
 tests; one file in an unexpected place is the cheaper price.
@@ -1100,3 +1100,48 @@ hang from the other direction.
 The read is BLOCKING now, which the old path could not be: with no
 terminal to block on it returned -1 forever and a 20 ms sleep was the
 only thing keeping it off a core.
+
+## Tab completion is one engine plus a per-ring environment, not two completers
+
+`apps/completion.c` was kernel-side and reached the filesystem through
+`fs_list()`. `/bin/tosh` therefore ignored Tab entirely, and its own
+comment said so — it had a `KLINE_COMPLETE` case whose whole body was a
+paragraph explaining why it did nothing.
+
+The obvious fix was a second, smaller completer in `userland/lib/`:
+tosh has six builtins where the kernel shell has forty, and no argument
+sets worth speaking of, so the ring-3 version would have been perhaps a
+third the size. It was rejected for the reason this project keeps
+rejecting it — the part that would have been copied is not the command
+list, it is the **prefix filtering, the common-prefix arithmetic, the
+dedupe and the candidate sort**, which is where completion is actually
+subtle. This repo has deleted that shape three times (one line editor,
+one ANSI parser, one allocator) and each deletion followed the two
+copies drifting.
+
+So the engine moved to `kernel/lib/completion.c` and is compiled twice,
+like `klineedit.c` beside it. **What made that possible is that
+completion never actually needed a filesystem — it needed to LIST a
+directory**, which is one function pointer. `struct completion_env`
+carries that, plus the PATH directories, the builtin names, a cwd
+resolver and an argument-domain callback.
+
+**The two environments are deliberately not parity.** Ring 0 completes
+`color`, `debug`, `fontface`, `timezone` and a console app registry;
+none of those exist at a `$` prompt, and offering them would be offering
+commands that fail. Ring 3 adds exactly one rule the kernel shell has no
+use for: `cd` offers directories only.
+
+**An argument completer returns a domain, not a bool.** The kernel
+version answered "did I fill the collector, yes or no", and
+directories-only cannot be expressed that way without every caller
+re-filtering. `enum completion_domain` has PATHS, DIRS, FILLED and NONE,
+so "this argument is a directory" is a thing an env can SAY rather than
+a thing it has to implement.
+
+**The listing differs on purpose.** The kernel shell prints a fixed
+four columns of sixteen, and its own comment says that is because it
+cannot query the console width. `tosh` can — `SYS_TCGETWINSZ` — so it
+fits the columns to the window, and a resized Terminal relists at the
+new width. Making them identical would have meant making the one that
+can measure behave like the one that cannot.

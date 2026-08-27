@@ -86,7 +86,7 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~A ring-3 process can read the console at all (`SYS_READ`'s fd 0, blocking)~~ DONE 2026-08-19
 - [x] ~~A line discipline (line editing, echo control) separate from the shell's own input loop~~ DONE 2026-08-22 -- `kernel/tty/ldisc.c`
 - [x] ~~`klineedit.c` compiled a second time for ring 3, so both ring-3 shells share the keymap~~ DONE 2026-08-19
-- [ ] Tab completion in ring 3 -- `apps/completion.c` is kernel-side, so `/bin/tosh` and the GUI Terminal ignore Tab
+- [x] ~~Tab completion in ring 3~~ DONE 2026-08-27 -- `kernel/lib/completion.c` compiled into both rings behind a `completion_env`
 - [ ] Ctrl-R reverse search in ring 3 -- needs a query line the console front end cannot yet paint
 - [ ] `/bin/tosh` history that persists -- the kernel shell writes `/etc/history`, ring 3 keeps its ring in memory
 - [ ] A console line longer than the screen is wide repaints wrongly in `/bin/tosh` -- `\r` returns to the start of the ROW

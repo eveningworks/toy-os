@@ -29,7 +29,6 @@ void uui_tabs_init(struct uui_tabs *t, struct uui_tab *tabs, int count,
     t->tabs = tabs;
     t->count = count;
     t->selected = 0;
-    t->page_bg = UTHEME_WINDOW_BG;
     t->show_new = 0;
     t->hovered = -1;
     t->hovered_close = 0;
@@ -169,13 +168,6 @@ static void fill_top_rounded(struct ugfx_surface *s, int x, int y, int w,
     ugfx_fill_rect(s, x, y + r, w, h - r, c);
 }
 
-// Legible ink for a given ground. The theme has one light-on-dark role
-// and this is it -- the same choice ugfx_draw_string_shadowed() makes
-// from luminance rather than from a guessed colour.
-static uint32_t ink_on(uint32_t bg) {
-    return ugfx_luminance(bg) < 128 ? UTHEME_ACCENT_TEXT : UTHEME_TEXT;
-}
-
 // Two strokes rather than a glyph: the font has no multiplication sign,
 // and an 'x' at this size reads as a letter.
 //
@@ -222,23 +214,20 @@ static void draw_one(struct ugfx_surface *s, const struct uui_tabs *t, int i) {
     // for the selected tab: a hover shift on top of the selected fill
     // is a two-unit change nobody can see, and a test measuring it
     // measures nothing (docs/gui-guidelines.md).
-    uint32_t ink;
+    uint32_t ink = UTHEME_TEXT;
     if (is_sel) {
-        // THE PAGE REACHING UP. Filled with what is below it, rounded at
-        // the top and with no bottom edge, so the tab and the page are
-        // one shape; the accent line marks it without boxing it in.
-        ink = ink_on(t->page_bg);
-        fill_top_rounded(s, x, y, w, h, corner_r(), t->page_bg);
-        ugfx_fill_rect(s, x + corner_r(), y, w - 2 * corner_r(), 2,
-                        UTHEME_ACCENT);
+        // The lift is the FILL plus the accent, and the accent sits on
+        // the bottom edge -- the one touching the page -- so it reads as
+        // pointing at what the tab shows.
+        fill_top_rounded(s, x, y, w, h, corner_r(), UTHEME_WHITE);
+        ugfx_fill_rect(s, x, y + h - 2, w, 2, UTHEME_ACCENT);
     } else {
-        ink = UTHEME_TEXT;
         if (st != UUI_STATE_REST)
             fill_top_rounded(s, x + 1, y + 1, w - 2, h - 1, corner_r(),
                               uui_state_bg(UTHEME_PANEL_BG, st));
         // A HAIRLINE, NOT A BORDER. Separators only between two resting
-        // tabs: one beside the selected tab would draw a line across the
-        // seam that tab exists to hide.
+        // tabs: one beside the selected tab would land against that
+        // tab's own rounded edge and read as a stray mark.
         int right_sel = (i + 1 == t->selected);
         if (i + 1 < t->count && !right_sel)
             ugfx_fill_rect(s, x + w - 1, y + h / 4, 1, h / 2, UTHEME_BORDER);
@@ -294,9 +283,13 @@ static void ops_bounds(const void *w, int *x, int *y, int *ow, int *oh) {
 
 static void ops_draw(struct ugfx_surface *s, const void *w) {
     const struct uui_tabs *t = (const struct uui_tabs *)w;
-    ugfx_fill_rect(s, t->x, t->y, t->w, t->h, UTHEME_PANEL_BG);
+    // THE STRIP GROUND IS DARKER THAN THE SELECTED TAB, which is what
+    // makes the selection a LIFT rather than a tint: panel over field is
+    // ten units and would be the "moved the background by two out of
+    // 255" trap docs/gui-guidelines.md names.
+    ugfx_fill_rect(s, t->x, t->y, t->w, t->h, UTHEME_WINDOW_BG);
     // THE BASELINE IS WHAT THE SELECTED TAB BREAKS. Drawn under every
-    // tab and then painted over by the selected one, so the seam is a
+    // tab and then painted over by that tab's accent, so the break is a
     // consequence of the fill rather than a second calculation that has
     // to agree with it.
     ugfx_fill_rect(s, t->x, t->y + t->h - 1, t->w, 1, UTHEME_BORDER);

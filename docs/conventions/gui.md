@@ -355,7 +355,7 @@ this the obvious way), not from how much history it accumulated.
   contains no widget code at all.** A new widget goes in
   `userland/ui/`. There is no longer any such thing as a kernel-side
   one. `apps/theme.h` survives for the same kind of reason:
-  `apps/completion.c` colours the shell's tab-completion with it.
+  `apps/shell_complete.c` colours the shell's tab-completion with it.
   Three rules the deleted widgets taught still apply to their ring-3
   twins: draw a popup LAST (drawing is immediate-mode, so z-order is
   call order); **route keys through the focus ring, never by trying each
@@ -1636,18 +1636,23 @@ a shell's title nor its scrollback. Per-tab job control is free: each
 shell is spawned `PGID_NEW`, so `Ctrl-C` reaches the job in the tab you
 are looking at.
 
-**THE SELECTED TAB IS FILLED WITH THE PAGE, NOT WITH A CONTROL
-COLOUR.** `uui_tabs.page_bg` is whatever sits directly below the strip;
-the selected tab takes it, rounds its top corners and drops its bottom
-edge, so the tab and the page read as one shape. That is Windows
-Terminal's and Konsole's selected tab, and it is what makes a strip over
-a BLACK terminal look like a terminal rather than like a form. The
-widget derives its INK from that colour's luminance, so a dark page gets
-light labels with the caller choosing nothing; unselected tabs are flat
-with a hairline between them, and the strip's baseline is drawn under
-every tab and painted over by the selected one -- the seam is a
-consequence of the fill rather than a second calculation that has to
-agree with it.
+**THE SELECTED TAB IS A LIGHT LIFT WITH AN ACCENT UNDERLINE.** It takes
+the theme's FIELD colour, rounds its top corners and carries a 2px
+accent along its bottom edge -- the edge touching the page -- the way VS
+Code and libadwaita mark one. Resting tabs are flat with a hairline
+between them, and **the strip's ground is the WINDOW colour rather than
+the panel colour** so the lift is twenty units rather than ten; ten is
+the change `docs/gui-guidelines.md` warns is invisible in practice. The
+strip's baseline is drawn under every tab and broken by the selected
+tab's accent, so the break is a consequence of the fill rather than a
+second calculation that has to agree with it.
+
+Filling the selected tab with the PAGE's own colour instead -- Windows
+Terminal's and Konsole's merged tab -- was built and rejected: against
+near-white chrome a terminal's black page makes the selected tab a black
+block. See `docs/decisions/gui.md`. Every colour here is the theme's,
+which is what that version could not be, since the page colour had to
+come from the caller.
 
 **THE `+` IS PINNED AT THE RIGHT END, AND IT TAKES ITS WIDTH BEFORE THE
 TABS SHARE WHAT IS LEFT.** `uui_tabs.show_new` plus `on_new`, off by

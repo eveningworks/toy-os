@@ -4909,27 +4909,39 @@ cannot replay a command — the alternative, a callback on the struct,
 would have been a second reporting mechanism beside `on_widget` for a
 widget that already has one.
 
-## A tab strip's selected tab is filled with the PAGE, not with a control colour
+## A tab strip's selected tab is a light lift, not the page's own colour
 
-The old strip drew every tab as a bordered box with an accent bar on
-top. It read as a row of buttons, because that is what it was: four
-borders and a fill from the theme's control palette.
+The first strip drew every tab as a four-sided box with an accent bar on
+top. It read as a row of buttons, because that is what it was.
 
-What every modern terminal does instead — Windows Terminal, Konsole,
-Chrome's tabs before them — is fill the selected tab with whatever the
-page below it is, round its top corners, and drop its bottom edge, so
-the tab and the page are one shape. `uui_tabs.page_bg` is that colour,
-supplied by the caller because the widget cannot know it: Terminal's
-page is a BLACK VT ground, which is content rather than theme.
+The replacement tried what Windows Terminal and Konsole do: fill the
+selected tab with whatever the PAGE below it is, round its top corners
+and drop its bottom edge, so the tab and the page are one shape. It was
+built, and it is worth recording why it came back out. **A terminal's
+page is black, and this theme's chrome is near-white**, so the selected
+tab became a solid black block sitting in a light strip directly under a
+light menu bar. The merge is a good effect when the chrome is already
+dark — which is the case in every system that does it — and a heavy one
+when it is not.
 
-**The ink then has to be derived rather than chosen.** A caller that
-also picked the label colour would get it wrong the first time somebody
-put a light page under a strip, so the widget reads `page_bg`'s
-luminance and takes `UTHEME_ACCENT_TEXT` for a dark one — the theme's
-one light-on-dark role, the same decision `ugfx_draw_string_shadowed()`
-makes.
+What replaced it is the other standard answer: the selected tab takes
+the theme's FIELD colour, rounds its top corners, and carries a 2px
+accent along its BOTTOM edge, the edge touching the page. VS Code and
+libadwaita both mark a tab this way.
 
-**The baseline is drawn under every tab and painted over by the selected
-one.** Computing where to break it would be a second piece of arithmetic
-that has to agree with the fill to the pixel, which is the shape of the
-close-box bug this widget's own comments already warn about.
+**The strip's ground is the WINDOW colour, not the panel colour**, and
+that is load-bearing rather than incidental: field over panel is ten
+units out of 255, which is the change docs/gui-guidelines.md warns looks
+plausible in a screenshot and is invisible in practice. Field over
+window is twenty, and the accent underline carries the rest.
+
+**Every colour is the theme's, which is what the page-colour version
+could not be.** `page_bg` had to be supplied by the caller, because the
+widget cannot know what an app paints below it — so a dark mode would
+have moved the strip and left that one fill behind. With the fill coming
+from `utheme_current()`, swapping the palette moves the whole strip.
+
+**The baseline is drawn under every tab and broken by the selected tab's
+accent.** Computing where to break it would be a second piece of
+arithmetic that has to agree with the fill to the pixel, which is the
+shape of the close-box bug this widget's own comments warn about.

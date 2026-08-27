@@ -31,6 +31,7 @@
 #include <string.h>
 #include "lib/uhistory.h"
 #include "klineedit.h"
+#include "lib/ucomplete.h"
 #include "signal_abi.h" // SIGCHLD, struct k_sigaction -- see main()
 
 // Static, not local: `struct kline_edit` is ~1.2 KiB and `struct
@@ -152,6 +153,65 @@ static void reap_and_repaint(void) {
     put("\r");
 
     tosh_reap_jobs(&g_sh);
+    redraw();
+}
+
+// --- Tab -------------------------------------------------------------
+//
+// Candidate generation is the SHARED engine (api/completion.h), the same
+// source the kernel shell runs; everything here is this shell's own idea
+// of how to show the result.
+//
+// **THE COLUMNS ARE FITTED TO THE REAL TERMINAL WIDTH**, which this
+// shell can ask for and the kernel shell cannot -- apps/shell.c prints a
+// fixed 4x16 grid and its own comment says that is because it "can't
+// actually query" the console width. A window that has been resized
+// reports the new width, because the emulator sends SYS_TCSETWINSZ on
+// every resize.
+static void end_line(void);
+
+static int term_cols(void) {
+    struct tty_winsize ws;
+    if (sys_tcgetwinsz(0, &ws) < 0 || ws.cols < 20) return 80;
+    return ws.cols;
+}
+
+static void complete_line(void) {
+    // ~3 KB, and a ring-3 frame is budgeted at 2 KB
+    // (-Wframe-larger-than=2048), so static rather than stack.
+    static struct completion_result r;
+    if (completion_run_env(ucomplete_env(), g_ed.buf, g_ed.cursor, &r) == 0) return;
+
+    if (r.insert[0]) kline_insert_str(&g_ed, r.insert);
+    if (r.add_space) kline_insert_str(&g_ed, " ");
+
+    if (r.count <= 1) { // a single candidate needs no list
+        redraw();
+        return;
+    }
+
+    // Ambiguous: list what is available, then reprint the prompt and the
+    // line so the user is back where they were with more information.
+    end_line();
+
+    int widest = 0;
+    for (int i = 0; i < r.count; i++) {
+        int l = (int)strlen(r.candidates[i]);
+        if (l > widest) widest = l;
+    }
+    int colw = widest + 2;
+    int cols = term_cols() / colw;
+    if (cols < 1) cols = 1;   // a candidate wider than the window gets a row
+
+    int col = 0;
+    for (int i = 0; i < r.count; i++) {
+        put(r.candidates[i]);
+        if (++col == cols || i + 1 == r.count) { put("\n"); col = 0; continue; }
+        for (int p = (int)strlen(r.candidates[i]); p < colw; p++) put(" ");
+    }
+    if (r.truncated) put("... (more matches not shown)\n");
+
+    g_shown = 0;
     redraw();
 }
 
@@ -461,12 +521,7 @@ int main(int argc, char **argv) {
                 break;
 
             case KLINE_COMPLETE:
-                // Tab does nothing here YET. Completion lives in
-                // apps/completion.c, which is kernel-side and reaches
-                // the filesystem through kernel APIs; a ring-3 version
-                // is its own change (docs/roadmap.md) and a second
-                // half-built one would be the drift this whole file is
-                // avoiding.
+                complete_line();
                 break;
 
             case KLINE_SEARCH:

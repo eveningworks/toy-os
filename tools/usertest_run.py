@@ -73,6 +73,12 @@ VM = os.path.join(REPO, "tools", "vm.py")
 TESTS = [
     ("libc_test", 0,
      ["libc_test: all checks passed"], ["FAIL"]),
+    # Tab completion's engine, built for ring 3. The KTESTs cover the
+    # same source through the KERNEL shell's environment and would pass
+    # whether or not a byte of it linked into libuapp.a -- this is the
+    # link, plus userland/lib/ucomplete.c's own filesystem hooks.
+    ("complete_test", 0,
+     ["complete_test: 0 failure(s)"], ["FAIL"]),
     # uui_label's word wrapping. Its load-bearing check is that a word
     # wider than the line is BROKEN rather than refused: refusing it
     # returns the same cursor and loops forever inside a draw call,

@@ -106,11 +106,24 @@ on the way past. It used to live in `apps/shell.c` and in `struct tosh`
 as two private copies, which is why a bare name handed to a spawned
 program silently meant `/docs`.
 
-Tab completes commands, paths, and known argument sets (`run`, `color`,
-`debug`, `keyboard`, `timezone`, `fontsize`, `fsck`, `fsformat`,
-`cursor`, `help`). One Tab extends as far as the candidates agree and
-lists them in columns if more than one remains, zsh-style. Identical in
-the physical shell and the GUI Terminal.
+Tab completes commands and paths in **both** shells. One Tab extends as
+far as the candidates agree and lists them in columns if more than one
+remains, zsh-style. The engine is one source compiled twice
+(`kernel/lib/completion.c`, `api/completion.h`), so what a Tab MEANS is
+identical at a `#` prompt and at a `$` one; everything a ring differs on
+arrives through a `struct completion_env`.
+
+What each shell offers past that is not identical, because their command
+sets are not. The **kernel shell** adds argument sets for commands that
+only exist at a `#` prompt (`run`, `color`, `debug`, `keyboard`,
+`timezone`, `fontsize`, `fsck`, `fsformat`, `cursor`, `help`) and its
+console app registry. **`/bin/tosh`** has six builtins and one argument
+rule: `cd` offers **directories only**, as bash and zsh do.
+
+The two also LIST differently, and that is deliberate. `tosh` fits the
+columns to the real terminal width, which it can ask for with
+`SYS_TCGETWINSZ`; the kernel shell prints a fixed four columns of
+sixteen because it cannot query the console's width.
 
 In command position the candidates are the shell's own builtins plus
 **every executable on `PATH`**, and they come back **deduplicated and
@@ -118,7 +131,9 @@ sorted**, with directories excluded — bash's behaviour. A name that
 exists in two places (`ls` is both a builtin wrapper and `/bin/ls`) is
 offered once; that does not change which one runs, since the first
 `PATH` match still wins at run time. `kernel/test/completion_test.c`
-asserts all three properties.
+asserts all three properties in ring 0, and `/tests/complete_test` does
+it again in ring 3 — the KTESTs run inside the kernel and cannot see
+whether a byte of the engine links into `libuapp.a`.
 
 ## Command-line editing
 

@@ -765,6 +765,22 @@ static void draw(struct ugfx_surface *s, int focused) {
 // tool here asserts on. The CURSOR, as a cell index, because that is the
 // thing that would be wrong if a cursor sequence were mishandled and it
 // is what a test can predict.
+// Has anything the rect lines below describe moved since the last
+// frame? A signature rather than a comparison of the text: the values
+// are small integers and this runs on every draw.
+static int chrome_moved(void) {
+    static int prev = -1;
+    int sig = g_strip.count
+            + 17 * g_strip.selected
+            + 313 * g_menu_shown
+            + 1021 * uui_menubar_depth(&g_menu)
+            + 4093 * (g_menu.open_root + 1)
+            + 65537 * g_strip.w;
+    if (sig == prev) return 0;
+    prev = sig;
+    return 1;
+}
+
 // One reported rect, optionally carrying an index. See log_layout() on
 // why these do not go through ulogf().
 static void emit_rect(const char *prefix, int index, int x, int y, int w, int h) {
@@ -806,6 +822,15 @@ static void log_layout(void) {
     // the `desktop.layout_log` gate and the per-frame dedupe hang off
     // (docs/conventions/gui.md), and a raw log here would write this
     // whole block on every frame with a window open.
+    //
+    // **AND ONLY WHEN THE CHROME ACTUALLY MOVED.** The dedupe is per
+    // BLOCK, so a cursor that advanced by one cell re-emits everything
+    // in the block with it -- which made a scrolling program log ~17
+    // geometry lines a frame instead of the one line that changed.
+    // These rects move when a tab opens or a menu does, not when a
+    // shell prints, so they carry their own guard.
+    if (!chrome_moved()) return;
+
     int x, y, w, h;
     if (uui_tabs_new_rect(&g_strip, &x, &y, &w, &h))
         emit_rect("uterm: layout newtab", -1, x, y, w, h);
@@ -883,10 +908,6 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     // may flip or slide against the window rather than off it.
     uui_menubar_set_bounds(&g_menu, 0, 0, s->w, s->h);
     uui_tabs_set_geometry(&g_strip, 0, mh, s->w, uui_tabs_height());
-    // WHAT THE SELECTED TAB MERGES INTO, re-asserted per frame because
-    // the palette is a live theme read (ui/utheme.h) and the grid's own
-    // ground is what has to win here, not the window background.
-    g_strip.page_bg = VGA_RGB[VT_BG];
     g_widgets[0].hidden = !g_menu_shown;
     draw(s, uapp_focused(a));
     log_layout();

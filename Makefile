@@ -509,6 +509,7 @@ LIBUAPP_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBUAPP_SRCS)) \
                $(BUILD)/userland/shared/calc_engine.o \
                $(BUILD)/userland/shared/ansi.o \
                $(BUILD)/userland/shared/klineedit.o \
+               $(BUILD)/userland/shared/completion.o \
                $(BUILD)/userland/shared/ttf.o \
                $(BUILD)/userland/shared/klineedit_cases.o
 LIBUAPP      = $(BUILD)/userland/libuapp.a

@@ -31,4 +31,11 @@
 // had nothing to do with the candidate. See docs/errno-design.md.
 int upath_find_program(const char *name, char *out, int cap);
 
+// The search list, by index, for anything that has to ENUMERATE what a
+// bare name could be rather than resolve one -- Tab completion's first
+// word. The same shape apps/shell.h exposes for the kernel shell's PATH,
+// so one engine can walk either (api/completion.h).
+int upath_dir_count(void);
+const char *upath_dir(int index);
+
 #endif

@@ -272,6 +272,32 @@ this the obvious way), not from how much history it accumulated.
   `./docs:` is not what a reader wants where `/docs:` was. Resolve
   once, up front, and every later use stays absolute.
 
+- **TAB COMPLETION IS ONE ENGINE COMPILED TWICE, AND A RING SUPPLIES A
+  `struct completion_env`.** `kernel/lib/completion.c` builds into the
+  kernel image and into `libuapp.a`, the same as `klineedit.c`,
+  `ansi.c` and `heap_core.c` -- so a Tab means the same thing at a `#`
+  prompt and at a `$` one. **It is freestanding and must stay that
+  way**: it touches no filesystem of its own, because ring 0 has
+  `fs_list()` and ring 3 has `sys_listdir()`, and a kernel include here
+  silently takes completion away from ring 3 (the trap `kfmt.h`
+  already carries).
+
+  The env carries the builtin names, the PATH directories, the two
+  filesystem hooks, a cwd resolver, and an argument-domain callback.
+  `apps/shell_complete.c` is the kernel shell's; `userland/lib/
+  ucomplete.c` is `/bin/tosh`'s. **The two are NOT parity, and should
+  not be** -- most of the kernel shell's argument sets are for commands
+  that only exist at a `#` prompt (`color`, `debug`, `fontface`,
+  `timezone`), and tosh has six builtins plus one rule: `cd` offers
+  DIRECTORIES ONLY. An argument completer returns a
+  `enum completion_domain` rather than a bool, which is what lets
+  "directories only" be a domain instead of every caller filtering.
+
+  **A ring-3 build needs a ring-3 TEST.** `/tests/complete_test` exists
+  because the KTESTs run inside the kernel and would pass whether or
+  not a byte of the engine linked into `libuapp.a` -- the same reason
+  `klineedit_test` exists beside `klineedit`'s KTESTs.
+
 - **TAB COMPLETION IN COMMAND POSITION IS BUILTINS PLUS ALL OF `PATH`,
   DEDUPLICATED AND SORTED, WITH NO DIRECTORIES.** That is bash's
   behaviour and it is the bar. All three properties were missing at

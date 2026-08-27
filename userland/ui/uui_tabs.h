@@ -21,15 +21,19 @@
 // own title buffers, so a title arriving from the shell (an OSC
 // sequence, api/ansi.h) shows up with nothing copied.
 //
-// **THE SELECTED TAB IS FILLED WITH THE PAGE, NOT WITH A CONTROL
-// COLOUR.** `page_bg` is what sits directly below the strip, and the
-// selected tab takes it, rounds its top corners and drops its bottom
-// edge -- so it reads as the page reaching up rather than as a button
-// above it. That is Windows Terminal's and Konsole's selected tab, and
-// it is the one thing that makes a strip over a BLACK terminal look
-// like a terminal instead of like a form. The widget derives its ink
-// from that colour's luminance, so a dark page gets light labels
-// without the caller choosing them.
+// **THE SELECTED TAB IS A LIGHT FILL WITH AN ACCENT UNDERLINE**, the
+// way VS Code and libadwaita mark one: the tab takes the theme's field
+// colour, rounds its top corners, and carries a 2px accent along its
+// BOTTOM edge, which is the edge touching the page. Resting tabs are
+// flat on the strip with a hairline between them.
+//
+// This deliberately does NOT try to merge the tab into the page by
+// filling it with the page's own colour (Windows Terminal's and
+// Konsole's selected tab). That was built and rejected: against this
+// theme's near-white chrome a terminal's black page makes the selected
+// tab a black block in a light strip, and the merge is not worth it.
+// Every colour here is the THEME's, so a dark mode moves the strip with
+// everything else -- see docs/decisions/gui.md.
 
 // What the widget needs to know about one tab. Deliberately not a
 // "session" or a "page": this widget draws a strip and reports clicks,
@@ -45,11 +49,6 @@ struct uui_tabs {
     struct uui_tab *tabs;       // NOT owned -- the caller's array
     int count;
     int selected;
-
-    // What the strip sits on. See the header comment: the selected tab
-    // is filled with it and merges into it. Defaults to the theme's
-    // window background at init.
-    uint32_t page_bg;
 
     // A "+" PINNED AT THE RIGHT END -- GtkNotebook's action widget and
     // QTabBar's corner widget, and the placement GNOME Terminal and
