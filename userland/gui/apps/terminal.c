@@ -416,11 +416,15 @@ static void vt_ctrl(struct session *s) {
 // A title the SHELL sent. Copied rather than pointed at: the parser
 // rewrites its own buffer on the next OSC, and the tab strip holds this
 // pointer for as long as the tab exists.
+// **JUST "Shell", WITH NO NUMBER.** It used to append the session's SLOT,
+// which the strip's own numbering (uui_tabs.numbered) then contradicted:
+// a recycled slot made the third tab read `3: Shell 1`. The strip numbers
+// by position; the title says what the tab IS.
 static void session_default_title(struct session *s, char *dst) {
-    const char *d = "Shell ";
+    (void)s;
+    const char *d = "Shell";
     int n = 0;
     while (d[n]) { dst[n] = d[n]; n++; }
-    dst[n++] = (char)('1' + s->index);
     dst[n] = '\0';
 }
 
@@ -520,22 +524,47 @@ static int drain(struct session *s) {
 
 // --- sessions ---------------------------------------------------------
 
-static void tabs_rebuild(void) {
-    g_ntabs = 0;
-    for (int i = 0; i < MAX_TABS; i++) {
-        struct session *s = g_slot[i];
+// **THE STRIP'S ORDER IS `g_tab_slot`, AND IT IS THE ORDER TABS WERE
+// OPENED IN -- not the order their sessions sit in memory.** This walked
+// the slot array instead, and slots are RECYCLED: closing a middle tab
+// freed its slot, and the next new tab silently reappeared in that hole
+// rather than at the right end. Every terminal and every browser appends.
+//
+// So this function only DROPS entries (a tab whose shell has gone) and
+// refreshes their labels; appending is open_tab()'s job.
+static void tabs_refresh(void) {
+    // FOLLOW THE SELECTED SLOT, NOT ITS INDEX. Closing a tab to the LEFT
+    // of the selected one shifts every index right of it, so clamping an
+    // index moves the selection onto a different shell.
+    int want = (g_strip.selected >= 0 && g_strip.selected < g_ntabs)
+                 ? g_tab_slot[g_strip.selected] : -1;
+    int old_index = g_strip.selected;
+
+    int n = 0;
+    for (int i = 0; i < g_ntabs; i++) {
+        int slot = g_tab_slot[i];
+        struct session *s = (slot >= 0 && slot < MAX_TABS) ? g_slot[slot] : 0;
         if (!s || !s->live) continue;
-        g_tab_slot[g_ntabs] = i;
-        g_tablabels[g_ntabs].label = s->title;
-        // A LONE TAB HAS NO CLOSE BOX, because closing it is closing the
-        // window and the window already has an X. Konsole hides the whole
-        // strip at one tab, which is the same judgement.
-        g_tablabels[g_ntabs].closable = 1;
-        g_ntabs++;
+        g_tab_slot[n] = slot;
+        g_tablabels[n].label = s->title;
+        // EVERY TAB HAS A CLOSE BOX, the lone one included: the strip is
+        // drawn at one tab now (chrome_h()), so hiding the box would
+        // leave a control-shaped gap rather than no control.
+        g_tablabels[n].closable = 1;
+        n++;
     }
-    g_strip.count = g_ntabs;
-    if (g_strip.selected >= g_ntabs) g_strip.selected = g_ntabs - 1;
-    if (g_strip.selected < 0) g_strip.selected = 0;
+    g_ntabs = n;
+    g_strip.count = n;
+
+    int sel = -1;
+    for (int i = 0; i < n; i++) if (g_tab_slot[i] == want) { sel = i; break; }
+    // The selected tab itself went. Its INDEX is then the right answer:
+    // it lands on whatever took its place, or on the new last tab --
+    // which is what Konsole and every browser do.
+    if (sel < 0) sel = old_index;
+    if (sel >= n) sel = n - 1;
+    if (sel < 0) sel = 0;
+    g_strip.selected = sel;
 }
 
 static int session_start(int slot) {
@@ -644,10 +673,14 @@ static int open_tab(void) {
         if (!s->live && s->done) { slot = i; break; }
     }
     if (slot < 0) return 0;
+    if (g_ntabs >= MAX_TABS) return 0;
     if (!session_start(slot)) return 0;
-    tabs_rebuild();
-    for (int i = 0; i < g_ntabs; i++)
-        if (g_tab_slot[i] == slot) g_strip.selected = i;
+    // APPENDED, so a new tab is always the RIGHT-HAND one whatever slot
+    // it got -- see tabs_refresh() on what walking the slots did instead.
+    g_tab_slot[g_ntabs] = slot;
+    g_ntabs++;
+    g_strip.selected = g_ntabs - 1;
+    tabs_refresh();
     return 1;
 }
 
@@ -655,7 +688,7 @@ static void close_tab(int tab) {
     if (tab < 0 || tab >= g_ntabs) return;
     struct session *s = g_slot[g_tab_slot[tab]];
     session_stop(s);
-    tabs_rebuild();
+    tabs_refresh();
     if (g_ntabs == 0 && g_app) uapp_quit(g_app, 0);
 }
 
@@ -765,12 +798,23 @@ static void draw(struct ugfx_surface *s, int focused) {
 // tool here asserts on. The CURSOR, as a cell index, because that is the
 // thing that would be wrong if a cursor sequence were mishandled and it
 // is what a test can predict.
+// The ORDER, folded to one number. Part of the signature below because
+// closing a middle tab and opening another changes which slot sits
+// where without changing the count -- and that order is exactly what a
+// test asserting "a new tab went to the right end" has to see.
+static int order_sig(void) {
+    int v = 0;
+    for (int i = 0; i < g_ntabs; i++) v = v * 11 + g_tab_slot[i] + 1;
+    return v;
+}
+
 // Has anything the rect lines below describe moved since the last
 // frame? A signature rather than a comparison of the text: the values
 // are small integers and this runs on every draw.
 static int chrome_moved(void) {
     static int prev = -1;
     int sig = g_strip.count
+            + 7 * order_sig()
             + 17 * g_strip.selected
             + 313 * g_menu_shown
             + 1021 * uui_menubar_depth(&g_menu)
@@ -837,6 +881,15 @@ static void log_layout(void) {
     for (int i = 0; i < g_strip.count; i++)
         if (uui_tabs_rect(&g_strip, i, &x, &y, &w, &h))
             emit_rect("uterm: layout tab", i, x, y, w, h);
+    // WHICH SESSION IS AT WHICH POSITION. A rect says where a tab is
+    // drawn and nothing about which shell it holds, so a test checking
+    // that a new tab was APPENDED rather than dropped into a recycled
+    // slot's hole cannot see the difference without this.
+    for (int i = 0; i < g_ntabs; i++) {
+        char b[64];
+        snprintf(b, sizeof b, "uterm: layout tabslot %d %d\n", i, g_tab_slot[i]);
+        uapp_log_layout_line(b);
+    }
     for (int i = 0; i < (int)(sizeof menu_bar / sizeof menu_bar[0]); i++)
         if (uui_menubar_title_rect(&g_menu, i, &x, &y, &w, &h))
             emit_rect("uterm: layout title", i, x, y, w, h);
@@ -1019,7 +1072,7 @@ static void reap_dead_tabs(void) {
         struct session *s = g_slot[i];
         if (!s || !s->live || !s->eof) continue;
         session_stop(s);
-        tabs_rebuild();
+        tabs_refresh();
     }
     if (g_ntabs == 0 && g_app) uapp_quit(g_app, 0);
 }
@@ -1099,7 +1152,7 @@ static void do_command(struct uapp *a, int code) {
 static void on_key(struct uapp *a, int key, unsigned mods) {
     // --- the rename prompt owns every key while it is up --------------
     if (g_rename_open) {
-        if (key == '\n' || key == '\r') { rename_commit(); tabs_rebuild(); }
+        if (key == '\n' || key == '\r') { rename_commit(); tabs_refresh(); }
         else if (key == 0x1B)             { g_rename_open = 0; g_rename_slot = -1; }
         else if (!uui_textbox_key_mods(&g_rename, key, mods)) return;
         uapp_redraw(a);

@@ -1022,6 +1022,92 @@ def check_tab_legibility(dbg, qmp, res):
                   f0 == f1, f"{f0} vs {f1}")
 
 
+def tab_order(dbg):
+    """Which session slot sits at which tab position, as the app reports it.
+
+    A tab RECT says where a tab is drawn and nothing about which shell it
+    holds, so this is the only way to see whether a new tab was appended
+    or dropped into a recycled slot's hole.
+    """
+    seen = {}
+    for l in dbg.logs("uterm: layout tabslot ", clear=False):
+        v = l.split("uterm: layout tabslot ")[1].split()
+        seen[int(v[0])] = int(v[1])
+    return [seen[i] for i in sorted(seen)] if seen else []
+
+
+def check_tab_order(dbg, qmp, res):
+    """A NEW TAB GOES TO THE RIGHT END, whatever slot it is given.
+
+    **THE SCENARIO IS THE ONLY ONE THAT SHOWS IT**: with no closures,
+    slots fill 0,1,2 and a slot-ordered strip appends by accident. Close
+    a MIDDLE tab and its slot is recycled -- so the next new tab reused
+    that slot and silently reappeared in the hole, halfway along the
+    strip. Opening tabs without closing one first cannot see this.
+    """
+    win = dbg.window(TITLE)
+    if not win:
+        res.check("c19pre. a Terminal is up for the order checks", False)
+        return
+    c = win["content"]
+    dbg.click(c["x"] + c["w"] // 2, c["y"] + c["h"] - 20)
+    dbg.settle()
+
+    # Get to exactly three tabs, whatever the checks above left behind.
+    plus = rect(dbg, "newtab")
+    if not plus:
+        res.check("c19pre. the + button has a rect", False)
+        return
+    guard = 0
+    while (tab_count(dbg) or 0) < 3 and guard < 6:
+        dbg.click(*centre(win, plus))
+        time.sleep(1.2)
+        dbg.settle()
+        guard += 1
+    res.check("c19pre. three tabs for the order checks", tab_count(dbg) == 3,
+              f"tabs {tab_count(dbg)}")
+    if tab_count(dbg) != 3:
+        return
+
+    before = tab_order(dbg)
+    res.check("c19. the app reports which slot sits at which position",
+              len(before) == 3, f"order {before}")
+    if len(before) != 3:
+        return
+    middle_slot = before[1]
+
+    # Select the MIDDLE tab and close it with Ctrl+Shift+W. By keyboard
+    # rather than by its close box: the box's position is the widget's
+    # arithmetic, and a test that re-derives it is asserting its own.
+    qmp.combo(["ctrl", "pgup"])
+    time.sleep(0.8)
+    dbg.settle()
+    res.check("c20pre. the middle tab is selected",
+              layout_field(dbg, "sel") == 1,
+              f"selected {layout_field(dbg, 'sel')}")
+    qmp.combo(["ctrl", "shift", "w"])
+    time.sleep(1.4)
+    dbg.settle()
+    res.check("c20. closing the middle tab leaves two",
+              tab_count(dbg) == 2, f"tabs {tab_count(dbg)}")
+    if tab_count(dbg) != 2:
+        return
+
+    # ...and now open one. The freed slot is the LOWEST free one, so a
+    # strip ordered by slot puts this tab back in the middle.
+    dbg.logs("uterm: layout tabslot ", clear=True)
+    dbg.click(*centre(win, plus))
+    time.sleep(1.2)
+    dbg.settle()
+    after = tab_order(dbg)
+    res.check("c21. the new tab is at the RIGHT END, not in the freed hole",
+              len(after) == 3 and after[-1] == middle_slot,
+              f"order {before} -> {after}, recycled slot {middle_slot}")
+    res.check("c22. ...and it is the selected one",
+              layout_field(dbg, "sel") == 2,
+              f"selected {layout_field(dbg, 'sel')} of {tab_count(dbg)}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1045,6 +1131,7 @@ def main():
         check_tabs(dbg, qmp, args.tmp, res)
         check_chrome(dbg, qmp, res)
         check_tab_legibility(dbg, qmp, res)
+        check_tab_order(dbg, qmp, res)
         check_completion(dbg, qmp, res)
     finally:
         dbg.close()

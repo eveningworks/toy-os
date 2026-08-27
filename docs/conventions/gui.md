@@ -1652,6 +1652,26 @@ reported as hard to tell apart with three tabs open. Thirty is the
 current lift and `uterm_test`'s c17 has its floor at twenty-five, above
 what was reported, because a check that accepts twenty accepts the bug.
 
+**A NEW TAB IS APPENDED, AND THE STRIP'S ORDER IS NOT SLOT ORDER.**
+Terminal keeps sessions in a fixed array and RECYCLES slots, so a strip
+built by walking that array appends only by accident -- it does so while
+slots fill 0,1,2, and stops the moment a middle tab is closed, because
+the next new tab takes the freed slot and reappears in the hole halfway
+along. `g_tab_slot` is the order of record and `open_tab()` appends to
+it, which is what every terminal and every browser does.
+
+**The selection follows the SLOT, not the index**, for the same reason:
+closing a tab to the left of the selected one shifts every index right
+of it, so clamping an index silently moves the selection onto a
+different shell. Only when the selected tab is the one that WENT does
+its index become the right answer -- it then lands on whatever took its
+place, which is Konsole's behaviour and every browser's.
+
+**And a session's default title carries no number**: it is `Shell`, not
+`Shell 3`. The strip numbers by POSITION and the slot is recycled, so
+the two disagreed as soon as a middle tab was closed -- the third tab
+would read `3: Shell 1`.
+
 **THE TABS ARE NUMBERED WHEN THERE IS MORE THAN ONE**
 (`uui_tabs.numbered`): `1: label`, Konsole's `%n: %d` and iTerm2's. It
 answers two questions at once -- the highest number is how many there
