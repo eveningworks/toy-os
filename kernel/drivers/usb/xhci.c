@@ -217,6 +217,32 @@ static const struct pci_device *find_xhci(void) {
     return 0;
 }
 
+// `usbtrace` on the boot line prints a line per bring-up STEP.
+//
+// Bring-up is a dozen MMIO writes with no output between them, so a
+// machine that hangs in there shows its last message as whatever came
+// BEFORE the whole sequence -- which is the extended-capability walk,
+// and points at the wrong place. There is no serial on a laptop, so the
+// screen is the only channel and the trace has to be on it.
+//
+// Off by default because a healthy boot would carry a dozen lines
+// forever, and matched as a whole word like `nousb` beside it.
+static int usb_traced(void) {
+    static int cached = -1;
+    if (cached >= 0) return cached;
+    cached = 0;
+    const char *cmdline = multiboot_cmdline();
+    if (!cmdline) return 0;
+    for (const char *p = cmdline; (p = k_strstr(p, "usbtrace")) != 0; p += 8) {
+        if (p != cmdline && p[-1] != ' ') continue;
+        char after = p[8];
+        if (after == 0 || after == ' ') { cached = 1; break; }
+    }
+    return cached;
+}
+
+#define USBT(...) do { if (usb_traced()) klog_printf(__VA_ARGS__); } while (0)
+
 // Walks the extended capability chain, logging every id.
 //
 // This costs twenty lines and answers two questions for free that would
@@ -307,6 +333,7 @@ static int reset_controller(void) {
 static int setup_rings(void) {
     uint64_t dcbaa_phys = 0, cmd_phys = 0, evt_phys = 0, erst_phys = 0;
 
+    USBT("usb: trace: allocating ring frames\n");
     g_hc.dcbaa = (volatile uint64_t *)alloc_frame(&dcbaa_phys);
     void *cmd_seg = alloc_frame(&cmd_phys);
     void *evt_seg = alloc_frame(&evt_phys);
@@ -335,6 +362,7 @@ static int setup_rings(void) {
     // than hand the controller a misaligned buffer.
     uint32_t hcs2 = mr32(g_hc.cap, XHCI_HCSPARAMS2);
     uint32_t spb  = XHCI_HCS2_SPB_MAX(hcs2);
+    USBT("usb: trace: scratchpad wanted=%u pagesize=%u\n", spb, g_hc.page_size);
     if (spb) {
         if (g_hc.page_size > 4096) {
             klog_printf("usb: controller wants %u scratchpad pages of %u bytes;"
@@ -356,11 +384,16 @@ static int setup_rings(void) {
         klog_printf("usb: %u scratchpad page(s)\n", spb);
     }
 
+    USBT("usb: trace: DCBAAP\n");
     mw64(g_hc.op, XHCI_DCBAAP, dcbaa_phys);
+    USBT("usb: trace: CRCR\n");
     mw64(g_hc.op, XHCI_CRCR, cmd_phys | XHCI_CRCR_RCS);
 
+    USBT("usb: trace: ERSTSZ\n");
     mw32(g_hc.rt, XHCI_IR0 + XHCI_ERSTSZ, 1);
+    USBT("usb: trace: ERDP\n");
     mw64(g_hc.rt, XHCI_IR0 + XHCI_ERDP, evt_phys);
+    USBT("usb: trace: ERSTBA\n");
     // ERSTBA LAST: writing it is what arms the interrupter, so the
     // segment table and the dequeue pointer must already be valid.
     mw64(g_hc.rt, XHCI_IR0 + XHCI_ERSTBA, erst_phys);
@@ -1031,11 +1064,18 @@ void usb_init(void) {
 
     walk_xecp(hcc1);
 
+    USBT("usb: trace: op=+0x%x rt=+0x%x db=+0x%x ac64=%u csz64=%u\n",
+         (unsigned)(g_hc.op - g_hc.cap), (unsigned)(g_hc.rt - g_hc.cap),
+         (unsigned)(g_hc.db - g_hc.cap), g_hc.ac64, g_hc.csz64);
+
     uint32_t slots = g_hc.max_slots;
     if (slots > XHCI_MAX_SLOTS) slots = XHCI_MAX_SLOTS;
+    USBT("usb: trace: writing CONFIG=%u\n", slots);
     mw32(g_hc.op, XHCI_CONFIG, slots);
 
+    USBT("usb: trace: setup_rings\n");
     if (!setup_rings()) return;
+    USBT("usb: trace: rings done\n");
 
     klog_printf("usb: %u slots (%u used), %u interrupters, %u ports, "
                 "%u-byte contexts, %u-byte pages\n",

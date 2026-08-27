@@ -1946,3 +1946,39 @@ session does not exist during the HEAD run, so the comparison prints an
 argparse "unrecognized arguments" and calls it a difference. It warns
 now. The measurement is only valid for a command that exists on both
 sides.
+
+**2026-08-27: I LEFT TWELVE BACKGROUND WAIT-LOOPS RUNNING, AND
+CLAUDE.md ALREADY SAID NOT TO.** The user found them in their task list,
+ages 35-100 minutes, every one of them mine.
+
+The rule is "DON'T ADD A WAIT LOOP FOR WORK THAT IS ALREADY IN THE
+BACKGROUND -- the completion is already the signal", and knowing it was
+not enough, so here is the mechanical version.
+
+**A background job NOTIFIES you when it finishes. That notification is
+the wait.** Starting a second background job whose only purpose is to
+watch the first is always redundant: it cannot make the answer arrive
+sooner, and it doubles what has to be cleaned up. What it feels like at
+the time is impatience -- the foreground Bash call has a 120 s cap, the
+job takes eight minutes, and spawning a watcher feels like progress. It
+is not. Start the job, say what you are waiting for, and stop.
+
+**IF YOU DO WRITE ONE, WAIT ON SOMETHING THAT MUST BECOME TRUE.** Half
+of mine could never exit:
+
+- `until [ -f tools/idle_cpu.py ]` -- that file had gone to a BRANCH, so
+  on `main` the condition was unreachable forever.
+- `until [ -s <task output> ]` -- the job had already finished and had
+  written nothing, so the file stayed empty for the rest of the session.
+- `until ! pgrep -f preflight.sh` -- fine, except when the process had
+  exited before the loop started, in which case it exits at once and is
+  pure noise, and if it had NOT, the notification was coming anyway.
+
+Before writing the condition, ask **what makes this true, and can it
+still happen?** A file another process must create, that no process is
+going to create, is a loop with no exit.
+
+**AND CLEAN UP AT THE END.** `ps -eo pid,ppid,comm | awk '$3=="sleep"'`
+finds them; killing the PARENT shell ends the task, and the harness then
+reports it. A leaked sleeper costs nothing in CPU and everything in the
+user's ability to see what is actually running.

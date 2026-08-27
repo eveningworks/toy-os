@@ -1110,7 +1110,7 @@ opening it:
   can never exit -- reporting a finished suite as still RUNNING, which
   is worse than the leak because it is indistinguishable from the real
   thing. If a wait genuinely is needed, wait on the ARTIFACT (`until [
-  -s out.log ]`), which cannot match itself.
+  -s out.log ]`), which cannot match itself -- and **only on one that MUST come to exist**. Twelve wait-loops were left running in one session, several of them unable to exit at all: one waited for a file that had gone to a BRANCH, another for the output of a job that had already finished and written nothing. Before writing the condition, ask what makes it true and whether that can still happen; then remember that **the job's own completion notification was already the signal**, so the loop was redundant even when it worked.
 - **Prefer `tools/gui_debug.py` to pixels** for anything not literally
   about rendering -- it returns facts to assert on rather than an image
   to interpret. It is asynchronous: call `DebugConsole.settle()` before
