@@ -352,6 +352,21 @@ void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
                             t->row_count, vis, t->row_count - vis - t->top,
                             t->track_bg, t->thumb_bg, 0);
     }
+
+    // On the selected ROW, because that is what the arrows move. Round
+    // the whole widget instead when the selection is scrolled out of
+    // view or there is none -- focus is still here, and an indicator
+    // that disappears is the thing this exists to prevent. `selected`
+    // is an app row and the loop above walks VIEW positions, so it has
+    // to be converted, the same rule uui_table_key()'s arrows follow.
+    if (t->focused) {
+        int view = uui_table_view_row(t, t->selected);
+        int i = view - t->top;
+        if (view >= 0 && i >= 0 && i < vis)
+            uui_focus_ring(s, t->x, t->y + hh + i * rh, t->w - bar, rh);
+        else
+            uui_focus_ring(s, t->x, t->y, t->w, t->h);
+    }
 }
 
 void uui_table_natural_size(const struct uui_table *t, int *out_w, int *out_h) {
@@ -628,6 +643,9 @@ static int tb_ops_key(void *w, int key, unsigned mods) {
 }
 
 static int tb_ops_accepts_focus(const void *w) { (void)w; return 1; }
+static void tb_ops_set_focused(void *w, int focused) {
+    ((struct uui_table *)w)->focused = focused;
+}
 
 static int tb_ops_press(void *w, int cx, int cy) {
     struct uui_table *t = (struct uui_table *)w;
@@ -661,6 +679,7 @@ const struct uui_widget_ops uui_table_ops = {
     .hit = tb_ops_hit,
     .key = tb_ops_key,
     .accepts_focus = tb_ops_accepts_focus,
+    .set_focused   = tb_ops_set_focused,
     .press = tb_ops_press,
     .motion = tb_ops_motion,
     .release = tb_ops_release,

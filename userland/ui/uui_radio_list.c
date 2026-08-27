@@ -100,8 +100,7 @@ void uui_radio_list_draw(struct ugfx_surface *s, const struct uui_radio_list *l)
         // (see uui_radio_list_key) -- a second highlight would be a
         // position that can never differ from this one.
         if (l->focused && i == selected) {
-            ugfx_draw_rect(s, cx, cy, radio_col_w(l) - 2, radio_row_h(l) - 2,
-                            uui_state_bg(fg, UUI_STATE_HOVER));
+            uui_focus_ring(s, cx, cy, radio_col_w(l) - 2, radio_row_h(l) - 2);
         }
     }
 }

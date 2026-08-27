@@ -48,6 +48,7 @@ struct uui_tree {
 
     int selected;    // NODE index, or -1
     int hovered;     // NODE index, or -1; OWNED
+    int focused;     // OWNED -- driven by the focus ring's set_focused
     int top;         // first visible VISIBLE-row; OWNED
     int row_h;       // 0 = derive from the font
     int bar_w;

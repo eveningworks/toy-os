@@ -219,12 +219,15 @@ void uui_sidebar_draw(struct ugfx_surface *surf, const struct uui_sidebar *s) {
 
     ugfx_fill_rect(surf, s->x, s->y, s->w, s->h, s->bg);
 
+    int sel_ry = -1; // the selected row's screen y, or -1 if off-screen
+
     for (int r = 0; r < vis; r++) {
         int row = s->top + r;
         if (row >= s->count) break;
         int ry = s->y + r * rh;
         int heading = s->rows[row].kind == UUI_SIDEBAR_HEADING;
         int selected = (row == s->selected) && !heading;
+        if (selected) sel_ry = ry;
 
         // NO HOVER AND NO SELECTION BOX ON A HEADING. A caption that
         // lights up under the pointer is telling the user it can be
@@ -269,6 +272,13 @@ void uui_sidebar_draw(struct ugfx_surface *surf, const struct uui_sidebar *s) {
         uui_scrollbar_draw(surf, s->x + s->w - bar, s->y, bar, s->h,
                             s->count, vis, offset_of(s),
                             s->track_bg, s->thumb_bg, 0);
+
+    // On the selected row, or round the pane when it is scrolled off --
+    // see uui_listbox.c for why an indicator that can vanish is not one.
+    if (s->focused) {
+        if (sel_ry >= 0) uui_focus_ring(surf, s->x, sel_ry, s->w - bar, rh);
+        else             uui_focus_ring(surf, s->x, s->y, s->w, s->h);
+    }
 }
 
 // --- input --------------------------------------------------------------
@@ -407,6 +417,10 @@ static void set_geometry_op(void *w, int x, int y, int rw, int rh) {
 // the tab order rather than being a stop that does nothing. Note it is
 // items and not rows: a sidebar of nothing but headings is unreachable,
 // which is correct and is the whole point of the distinction.
+static void set_focused_op(void *w, int focused) {
+    ((struct uui_sidebar *)w)->focused = focused;
+}
+
 static int accepts_focus_op(const void *w) {
     return first_item((const struct uui_sidebar *)w) >= 0;
 }
@@ -414,6 +428,7 @@ static int accepts_focus_op(const void *w) {
 const struct uui_widget_ops uui_sidebar_ops = {
     .draw = draw_op,
     .accepts_focus = accepts_focus_op,
+    .set_focused = set_focused_op,
     .hit = hit_op,
     .press = press_op,
     .motion = motion_op,

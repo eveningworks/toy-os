@@ -374,7 +374,8 @@ manual steps to be worth automating:
 - **`usertest_run.py`** -- runs the self-checking ring-3 diagnostics in
   `/tests` (`libc_test`, `fpu_test`, `klineedit_test`, `newsyscalls_test`,
   `file_test`, `write_test`, `exit_test`, `random_test`, `memtest`,
-  `guard_test`, `malloc_test`, `wrap_test`) as one pass/fail table, asserting BOTH an
+  `guard_test`, `malloc_test`, `wrap_test`, `focusring_test`) as one
+  pass/fail table, asserting BOTH an
   exit code and required output. In `preflight.sh`. It fills a real gap:
   `make test` runs inside the kernel and `gui_regress.py` covers the
   windowed clients, so nothing ever ran a plain `/tests` binary except a
@@ -394,7 +395,14 @@ manual steps to be worth automating:
   verdict carries the whole assertion, and it writes that verdict to
   `/tmp/<name>.out`: a spawned program's console output arrives while
   the harness is between commands, where it is dropped, so the harness
-  waits on the ARTIFACT rather than on the timing.
+  waits on the ARTIFACT rather than on the timing. `focusring_test` is
+  the same shape and covers the eleven widgets that accept keyboard
+  focus, drawing each into a plain surface and counting accent pixels
+  -- **both ways**, absent unfocused and present focused, since a
+  one-sided check passes on a control that rings itself
+  unconditionally. Its load-bearing checks are the ROW ones: a ring
+  round the whole box and a ring on the selected row both put accent
+  pixels down, and only the height tells them apart.
 - **`/bin/mkfiles`** (a guest program, not a host tool, but this is
   where anyone looks for it) -- fills a directory with N files to test
   the filesystem at scale: `mkfiles /big 5000`, `mkfiles /docs 100 512`,

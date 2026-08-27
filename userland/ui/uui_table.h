@@ -149,6 +149,7 @@ struct uui_table {
 
     int selected;   // row index, or -1
     int hovered;    // OWNED -- driven by uui_table_hover()
+    int focused;    // OWNED -- driven by the focus ring's set_focused
     int top;        // first visible row; OWNED
     int row_h;      // 0 = derive from the font
     int bar_w;

@@ -1,6 +1,7 @@
 // Interaction states and the button painter. Split out of uui.c --
 // see ui/uui_primitives.h.
 #include "ui/uui_primitives.h"
+#include "ui/utheme.h"
 
 #define UUI_PRESSED_NUDGE 1
 
@@ -52,4 +53,9 @@ void uui_button_draw(struct ugfx_surface *s, int x, int y, int w, int h,
     // its own reads as a colour change.
     if (state == UUI_STATE_PRESSED) { lx += UUI_PRESSED_NUDGE; ly += UUI_PRESSED_NUDGE; }
     ugfx_draw_string_clipped(s, lx, ly, w, label, fg, fill);
+}
+
+void uui_focus_ring(struct ugfx_surface *s, int x, int y, int w, int h) {
+    if (w <= 0 || h <= 0) return;
+    ugfx_draw_rect(s, x, y, w, h, UTHEME_ACCENT);
 }

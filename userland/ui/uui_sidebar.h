@@ -81,6 +81,7 @@ struct uui_sidebar {
 
     int selected;   // ROW index, or -1; never a heading
     int hovered;    // ROW index, or -1; OWNED, never a heading
+    int focused;    // OWNED -- driven by the focus ring's set_focused
     int top;        // first visible row; OWNED
     int row_h;      // 0 = derive from the font
     int bar_w;

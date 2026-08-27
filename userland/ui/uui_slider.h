@@ -34,6 +34,7 @@ struct uui_slider {
     int selected;   // index, or -1 when there is nothing to select
     int hovered;    // OWNED
     int dragging;   // OWNED -- 1 while the thumb is held
+    int focused;    // OWNED -- driven by the focus ring's set_focused
     uint32_t bg, fg, track_bg, fill_bg, thumb_bg;
 
     // VISIBLE, BUT DOES NOTHING -- the same field uui_button and

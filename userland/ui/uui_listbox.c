@@ -92,6 +92,20 @@ void uui_listbox_draw(struct ugfx_surface *s, const struct uui_listbox *lb) {
                             lb->count, vis, lb->count - vis - lb->top,
                             lb->track_bg, lb->thumb_bg, 0);
     }
+
+    // THE SELECTED ROW IS NOT THE FOCUS INDICATOR: a selected row looks
+    // identical whether or not the list is the thing answering the
+    // arrows, so two lists side by side say nothing about which one is
+    // listening. The ring goes on that row, or round the box when it is
+    // scrolled off or nothing is selected -- an indicator that vanishes
+    // is not one.
+    if (lb->focused) {
+        int view = lb->selected - lb->top;
+        if (lb->selected >= 0 && view >= 0 && view < vis)
+            uui_focus_ring(s, lb->x, lb->y + view * rh, text_w, rh);
+        else
+            uui_focus_ring(s, lb->x, lb->y, lb->w, lb->h);
+    }
 }
 
 void uui_listbox_natural_size(const struct uui_listbox *lb, int *out_w, int *out_h) {
@@ -270,9 +284,8 @@ int uui_listbox_key(struct uui_listbox *lb, int key) {
 // --- focus ------------------------------------------------------------
 //
 // Focus-only ops (see uui_textbox.c's note on why these tables are not
-// full ones). A listbox has no focused/unfocused state of its own --
-// selection is already visible -- so set_focused is absent rather than
-// a no-op that pretends otherwise.
+// full ones). It carries set_focused -- see the ring in the draw above.
+//
 // `>= 0`, NOT the row index.
 //
 // uui_listbox_hit() returns a ROW, and the router tests this slot as a
@@ -293,11 +306,15 @@ static int lb_ops_key(void *w, int key, unsigned mods) {
     return uui_listbox_key((struct uui_listbox *)w, key);
 }
 static int lb_ops_accepts_focus(const void *w) { (void)w; return 1; }
+static void lb_ops_set_focused(void *w, int focused) {
+    ((struct uui_listbox *)w)->focused = focused;
+}
 
 const struct uui_widget_ops uui_listbox_focus_ops = {
     .hit = lb_ops_hit,
     .key = lb_ops_key,
     .accepts_focus = lb_ops_accepts_focus,
+    .set_focused   = lb_ops_set_focused,
 };
 
 // --- routed pointer input (ui/uui_route.h) ----------------------------
@@ -374,6 +391,7 @@ const struct uui_widget_ops uui_listbox_ops = {
     .hit           = lb_ops_bounds,
     .key           = lb_ops_key,
     .accepts_focus = lb_ops_accepts_focus,
+    .set_focused   = lb_ops_set_focused,
     .press         = lb_ops_press,
     .motion        = lb_ops_motion,
     .release       = lb_ops_release,

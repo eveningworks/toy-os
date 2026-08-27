@@ -231,11 +231,17 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
 
     ugfx_fill_rect(s, t->x, t->y, t->w, t->h, t->bg);
 
+    // The selected row's SCREEN y, captured as the rows are walked --
+    // there is no node-index-to-row conversion to call, and the loop
+    // already has the answer.
+    int sel_ry = -1;
+
     for (int r = 0; r < vis; r++) {
         int node = uui_tree_node_at_row(t, t->top + r);
         if (node < 0) break;
         int ry = t->y + r * rh;
         int selected = (node == t->selected);
+        if (selected) sel_ry = ry;
         if (selected)
             ugfx_fill_rect(s, t->x, ry, t->w - bar, rh, t->sel_bg);
         else if (node == t->hovered)
@@ -269,6 +275,14 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
     if (bar)
         uui_scrollbar_draw(s, t->x + t->w - bar, t->y, bar, t->h,
                             total, vis, tree_offset(t), t->track_bg, t->thumb_bg, 0);
+
+    // On the selected row, or round the box when it is collapsed away
+    // or scrolled off -- see uui_listbox.c for why an indicator that can
+    // vanish is not one.
+    if (t->focused) {
+        if (sel_ry >= 0) uui_focus_ring(s, t->x, sel_ry, t->w - bar, rh);
+        else             uui_focus_ring(s, t->x, t->y, t->w, t->h);
+    }
 }
 
 // --- input ------------------------------------------------------------
@@ -466,6 +480,10 @@ const struct uui_widget_ops uui_tree_focus_ops = {
 // tools/check_widget_ops.py grew a rule pairing `key` with this one:
 // the ring's default is "accepts", so nothing behaved differently, but
 // a default is not a statement.
+static void tree_set_focused_op(void *w, int focused) {
+    ((struct uui_tree *)w)->focused = focused;
+}
+
 static int tree_accepts_focus_op(const void *w) {
     return ((const struct uui_tree *)w)->count > 0;
 }
@@ -473,6 +491,7 @@ static int tree_accepts_focus_op(const void *w) {
 const struct uui_widget_ops uui_tree_ops = {
     .draw = tree_draw_op,
     .accepts_focus = tree_accepts_focus_op,
+    .set_focused   = tree_set_focused_op,
     .hit = tree_hit_op,
     .press = tree_press_op,
     .motion = tree_motion_op,

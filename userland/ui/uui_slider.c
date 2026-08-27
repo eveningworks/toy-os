@@ -114,6 +114,12 @@ void uui_slider_draw(struct ugfx_surface *surf, const struct uui_slider *s) {
     ugfx_fill_rect(surf, sx - SLIDER_THUMB_W / 2, ty - SLIDER_THUMB_W / 2,
                     SLIDER_THUMB_W, SLIDER_THUMB_W, thumb);
 
+    // The ring goes round the THUMB, not the whole control: the arrows
+    // move the thumb, so that is where the keyboard's cursor is.
+    if (s->focused && !s->disabled)
+        uui_focus_ring(surf, sx - SLIDER_THUMB_W / 2 - 2, ty - SLIDER_THUMB_W / 2 - 2,
+                        SLIDER_THUMB_W + 4, SLIDER_THUMB_W + 4);
+
     // The CURRENT option's name under the track. Without it the control
     // shows a position and never says what that position means, which
     // for named levels is the whole content.
@@ -241,10 +247,14 @@ static int sl_accepts_focus(const void *w) {
     const struct uui_slider *s = (const struct uui_slider *)w;
     return !s->disabled && s->count > 0;
 }
+static void sl_set_focused(void *w, int focused) {
+    ((struct uui_slider *)w)->focused = focused;
+}
 
 const struct uui_widget_ops uui_slider_focus_ops = {
     .key = sl_key,
     .accepts_focus = sl_accepts_focus,
+    .set_focused = sl_set_focused,
 };
 
 // FILLED AGAINST uui_widget.h, not against a neighbouring widget: three
@@ -261,4 +271,5 @@ const struct uui_widget_ops uui_slider_ops = {
     .wheel         = sl_wheel,
     .key           = sl_key,
     .accepts_focus = sl_accepts_focus,
+    .set_focused   = sl_set_focused,
 };

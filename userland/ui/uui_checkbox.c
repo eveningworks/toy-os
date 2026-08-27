@@ -77,12 +77,9 @@ void uui_checkbox_draw(struct ugfx_surface *s, const struct uui_checkbox *cb) {
 
     // The focus indicator LAST, so it sits over the label rather than
     // under it, and around the whole clickable area -- which is what
-    // Space acts on. Drawn as an outline rather than a wash because the
-    // hover wash is off by default here (see the header) and two
-    // different meanings sharing one visual is worse than either.
+    // Space acts on.
     if (cb->focused && !cb->disabled) {
-        ugfx_draw_rect(s, cb->x - 2, cb->y - 2, cb->w + 4, cb->h + 4,
-                        uui_state_bg(fg, UUI_STATE_HOVER));
+        uui_focus_ring(s, cb->x - 2, cb->y - 2, cb->w + 4, cb->h + 4);
     }
 }
 

@@ -548,6 +548,11 @@ static int fv_ops_key(void *w, int key, unsigned mods) {
 
 static int fv_ops_accepts_focus(const void *w) { (void)w; return 1; }
 
+// Forwarded to the table it composes, which is what draws the ring.
+static void fv_ops_set_focused(void *w, int focused) {
+    ((struct uui_fileview *)w)->table.focused = focused;
+}
+
 static int fv_ops_press(void *w, int cx, int cy) {
     return uui_fileview_press((struct uui_fileview *)w, cx, cy);
 }
@@ -576,6 +581,7 @@ const struct uui_widget_ops uui_fileview_ops = {
     .hit = fv_ops_hit,
     .key = fv_ops_key,
     .accepts_focus = fv_ops_accepts_focus,
+    .set_focused = fv_ops_set_focused,
     .press = fv_ops_press,
     .motion = fv_ops_motion,
     .release = fv_ops_release,

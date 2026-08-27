@@ -192,6 +192,11 @@ void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f) {
     if (f->active) {
         ugfx_fill_rect(s, x + pad + (f->ed.cursor - start) * char_w, ty,
                         CARET_W, ugfx_char_h(), fg);
+        // The border too, not the caret alone: the caret says WHERE the
+        // next character lands, the ring says WHICH control is listening,
+        // and a caret 200px away is easy to miss. Over the border rather
+        // than inside it, so the field does not appear to shrink.
+        uui_focus_ring(s, x, y, w, h);
     }
 }
 

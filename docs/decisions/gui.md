@@ -4964,3 +4964,58 @@ from `utheme_current()`, swapping the palette moves the whole strip.
 accent.** Computing where to break it would be a second piece of
 arithmetic that has to agree with the fill to the pixel, which is the
 shape of the close-box bug this widget's own comments warn about.
+
+## A focus indicator is one helper in the theme's accent, drawn by the widget
+
+Every widget that accepts keyboard focus draws a 1px ring through
+`uui_focus_ring()` (`userland/ui/uui_primitives.c`) in `UTHEME_ACCENT`.
+Three alternatives were real and two were rejected.
+
+**Why the accent rather than a wash of the control's own colour.** The
+four widgets that had an indicator before this all derived it as
+`uui_state_bg(fg, UUI_STATE_HOVER)` -- the same 22/255 shift the hover
+state uses. That is defensible in isolation and wrong as a system:
+focus and hover answer different questions ("where will my typing go"
+against "what is under the pointer"), and a shared visual vocabulary
+makes neither legible. `utheme.h` has named `accent` as the
+`selection / highlight / focus / checkmark` role since it was written
+and nothing had ever used it for focus. GTK, Qt and Win32 all draw
+focus in the accent, and the File Manager had independently arrived at
+`UTHEME_ACCENT` for its active-pane outline -- a second caller for the
+same visual meaning, reached without coordination.
+
+The cost is explicit: an accent ring does not follow a control's own
+colour the way a derived wash does, so a widget on a background close
+to the accent gets a weak indicator. Accepted, because there is one
+palette and the accent is chosen to contrast with the surfaces in it.
+
+**Why the widget passes the rect rather than the focus manager drawing
+it.** `uui_focus` knows which item is current and every ops table
+carries `bounds`, so one rectangle drawn there would have covered every
+widget including any added later, with no per-widget code at all. It
+was rejected because a rectangle round the whole widget is wrong for
+exactly the widgets that needed this most: a table or a sidebar is a
+list of rows and the keyboard's cursor is ON A ROW, so a box round a
+300px table says "somewhere in here". The helper takes a rect for that
+reason, and each widget passes the shape it knows -- the row for a
+list, the thumb for a slider, the whole control for a spinbox (whose
+Up/Down keys belong to the steppers, not to the field it embeds).
+
+**Why a row widget falls back to ringing the box.** A list can hold
+focus with nothing selected, or with the selection scrolled out of
+view. Drawing nothing in that case would reintroduce the original
+defect -- an indicator that disappears is not one -- so the ring goes
+round the widget instead, which is still true and still findable.
+
+**And why `uui_listbox` got one despite having declined.** Its ops
+table carried a comment saying a listbox has no focused state of its
+own because "selection is already visible". That is the argument this
+change exists to reject: a selected row looks identical whether or not
+the list is the control answering the arrow keys, so two lists side by
+side say nothing about which one is listening. Windows greys an
+unfocused ListView's selection and GTK dims it for the same reason.
+
+See `docs/conventions/gui.md` for the rule, and
+`/tests/focusring_test` for the assertion -- each widget checked both
+ways, because a one-sided check passes on a control that rings itself
+unconditionally.

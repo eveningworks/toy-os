@@ -2754,20 +2754,38 @@ hand-computed arithmetic today, which is why no window can be resized.*
 
 **Items worth their own note.**
 
-- [ ] **A FOCUS INDICATOR for every widget that takes keys.** Six accept
-  focus and draw nothing to say they have it: `uui_button`,
-  `uui_slider`, `uui_spinbox`, `uui_table`, `uui_tree` and
-  `uui_sidebar`. Four already do it (`uui_checkbox`, `uui_radio_list`,
-  `uui_textbox`, `uui_dropdown`), all the same way -- a `focused` field
-  driven by `set_focused`, drawn as a ring derived from the control's
-  own colour through `uui_state_bg()`, so nothing picks a tint. The
-  reason this matters more than it sounds: a widget that answers the
-  keyboard while showing no sign of holding it makes Tab move an
-  INVISIBLE cursor, and the first thing typed goes somewhere the user
-  did not choose. It became visible when System Settings got a focus
-  ring (2026-08-24) -- the dropdown grew an indicator in the same change
-  precisely because a control that silently takes letters cannot be
-  found.
+- [x] ~~**A FOCUS INDICATOR for every widget that takes keys.**~~ DONE
+  2026-08-27. **The item's own list of six was wrong in both
+  directions**, which is the part worth recording. It named
+  `uui_button`, which has no `key` op at all and was therefore never a
+  tab stop that could go invisible; and it omitted `uui_listbox` and
+  `uui_fileview`, which do take keys and drew nothing -- the listbox
+  having declined an indicator in a comment, on the argument that its
+  selection is already visible. That argument is exactly what the item
+  rejects: a selected row looks identical whether or not the list is
+  the control answering the arrows, so two lists side by side say
+  nothing about which one is listening. The real set was seven:
+  `uui_slider`, `uui_spinbox`, `uui_table`, `uui_tree`, `uui_sidebar`,
+  `uui_listbox` and `uui_fileview` (which forwards to the table it
+  composes).
+
+  What landed is one helper, `uui_focus_ring()` in `uui_primitives.c`,
+  drawing a 1px ring in the theme's **accent** -- the role `utheme.h`
+  has named `selection / highlight / focus / checkmark` since it was
+  written and which nothing had used for focus. The four that already
+  drew one were converted to it, so the three geometries and one
+  hover-derived tint they used between them became one answer. The
+  CALLER passes the rect, because only the widget knows its own shape:
+  a list rings the focused ROW and falls back to the box when the
+  selection is scrolled off, and a slider rings its thumb. Proved by
+  `/tests/focusring_test`, whose load-bearing checks are the row ones
+  -- a ring round the whole box and a ring on the selected row both put
+  accent pixels on the surface, and only the height tells them apart.
+
+  Two things this did NOT do. `uui_button` still takes no keys, so it
+  is still not a tab stop; and no app puts a table, tree or sidebar in
+  a focus ring yet, which is its own item ("System Settings' focus ring
+  is the PAGE's controls").
 - [x] ~~**Type-ahead in `uui_table`.**~~ DONE 2026-08-27. The column a
   letter matches is DECLARED, `uui_table_set_seek_col()` --
   GtkTreeView's `search-column`, because column 0 is the name in a file

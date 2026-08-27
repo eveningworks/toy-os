@@ -62,11 +62,9 @@ void uui_dropdown_draw(struct ugfx_surface *s, const struct uui_dropdown *d) {
     // FOCUS IS DRAWN, because a focused dropdown accepts typed letters
     // and a control that silently answers the keyboard is a control the
     // user cannot find. Inset by one so it reads as a ring inside the
-    // border rather than a thicker border. Same derivation as
-    // uui_radio_list's, so the two agree.
+    // border rather than a thicker border.
     if (d->focused && !d->open) {
-        ugfx_draw_rect(s, d->x + 1, d->y + 1, d->w - 2, d->h - 2,
-                        uui_state_bg(d->fg, UUI_STATE_HOVER));
+        uui_focus_ring(s, d->x + 1, d->y + 1, d->w - 2, d->h - 2);
     }
 }
 

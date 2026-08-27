@@ -85,6 +85,15 @@ TESTS = [
     # which hangs the compositor rather than drawing something wrong.
     ("wrap_test", None,
      ["0 failure(s)"], ["FAIL"]),
+    # A focus indicator on every widget that accepts focus. Its
+    # load-bearing checks are the ROW ones: a ring round the whole box
+    # and a ring on the selected row both put accent pixels on the
+    # surface, and only the height tells them apart. Each widget is also
+    # asserted BOTH ways -- absent unfocused, present focused -- because
+    # a one-sided check passes on a control that rings itself
+    # unconditionally.
+    ("focusring_test", None,
+     ["0 failure(s)"], ["FAIL"]),
     # Type-ahead in uui_listbox and uui_table. Its load-bearing checks
     # are the SORTED ones: a table's rows are pulled and its app indices
     # are not the order on screen, so a search walking app order cycles

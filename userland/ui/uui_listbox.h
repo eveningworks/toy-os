@@ -23,6 +23,7 @@ struct uui_listbox {
     int count;
     int selected;  // or -1
     int hovered;   // OWNED -- driven by uui_listbox_hover()
+    int focused;   // OWNED -- driven by the focus ring's set_focused
     int top;       // first visible row; OWNED
     int row_h;     // 0 = derive from the font
     int bar_w;

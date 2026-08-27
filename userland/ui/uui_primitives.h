@@ -76,6 +76,21 @@ int uui_hit(int x, int y, int w, int h, int px, int py);
 #define UUI_PAD_Y (ugfx_char_h() / 2)
 
 
+// --- keyboard focus ----------------------------------------------------
+
+// A 1px ring in the theme's ACCENT (utheme.h's focus role), around
+// (x, y, w, h). Every widget that can hold keyboard focus draws its
+// indicator through this one call, so focus looks like one thing --
+// and NOT like hover, which is a wash of the control's own colour.
+//
+// THE CALLER PASSES THE RECT, because only the widget knows its own
+// shape: a list rings the focused ROW and falls back to the box when
+// nothing is selected, a slider rings its thumb. A ring around the
+// whole widget would be a 300px box on a table.
+//
+// See docs/decisions.md for why the accent rather than a derived tint.
+void uui_focus_ring(struct ugfx_surface *s, int x, int y, int w, int h);
+
 // Fills the rect with `bg` shifted for `state`, then centres `label`
 // (may be NULL) in `fg`. Pressed draws a darker fill plus a 1px
 // down-right nudge of the label -- the darker fill alone reads as a

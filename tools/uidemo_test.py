@@ -58,6 +58,11 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole, enter_gui          # noqa: E402
+
+# utheme.c's `accent`, which uui_focus_ring() draws every focus indicator
+# in. Duplicated here rather than derived, deliberately: a test that read
+# the colour out of the guest would agree with a broken guest.
+UTHEME_ACCENT_RGB = (70, 110, 160)
 from qmp_test import QMPSession             # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
@@ -479,6 +484,60 @@ def check_widgets_drawn(d, qmp, tmp):
                   f"only {n} non-background pixels in its own rect")
 
 
+def check_focus_is_visible(d, qmp, tmp):
+    """A focused widget SAYS SO on screen -- the pixel half of the Tab checks.
+
+    Every focus check above asserts on the app's log: Tab moved focus to
+    the listbox, and it did. For a long time that was the whole story
+    and the listbox drew nothing to say it -- Tab moved an invisible
+    cursor, and the first thing typed went somewhere the user did not
+    choose (docs/roadmap.md's focus-indicator item). "It responds" is
+    not "it is drawn", for the fourth time in this project.
+
+    Asserted as ACCENT pixels inside the widget's own rect, BOTH WAYS:
+    present with the listbox focused and absent with focus moved away.
+    A one-sided check passes on a widget that rings itself
+    unconditionally, which is a control lying about holding the keyboard
+    rather than one saying nothing.
+
+    The counterpart at the widget level is /tests/focusring_test, which
+    covers all eleven of them off-screen; what this adds is that the
+    ring survives the compositor and reaches the glass.
+
+    POSITIVE CONTROL: make uui_focus_ring() return immediately. The
+    first check goes red; **the second stays GREEN**, which is the
+    asymmetry worth knowing -- an absence check cannot catch a ring that
+    never draws, exactly as this file's scrollbar control recorded.
+    """
+    from PIL import Image
+    c = d.win["content"]
+    x, y, w, h = d.layout["listbox"]
+
+    def accent():
+        path = os.path.abspath(os.path.join(tmp, "uidemo_focus.png"))
+        qmp.screenshot(path)
+        im = Image.open(path).convert("RGB")
+        n = 0
+        for j in range(c["y"] + y, c["y"] + y + h):
+            for i in range(c["x"] + x, c["x"] + x + w):
+                if im.getpixel((i, j)) == UTHEME_ACCENT_RGB:
+                    n += 1
+        return n
+
+    # Driven by CLICKING, the way the focus checks above are: there is
+    # no command that sets focus, and a check should reach the widget by
+    # the path a person would.
+    d.click(*d.list_row(0))
+    lit = accent()
+    d.click(*d.textbox_center())
+    dark = accent()
+
+    d._record("a focused listbox is ringed in the accent", lit > 0, [],
+              "no accent pixels in the listbox's rect while it had focus")
+    d._record("...and an unfocused one is not", dark == 0, [],
+              f"{dark} accent pixel(s) still there after focus moved away")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -504,6 +563,7 @@ def main():
 
     print("\n== containment ==")
     check_widgets_drawn(d, qmp, "/tmp")
+    check_focus_is_visible(d, qmp, "/tmp")
     check_containment(d, qmp, "/tmp")
 
     if args.shot:

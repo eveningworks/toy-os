@@ -178,6 +178,11 @@ void uui_spinbox_draw(struct ugfx_surface *surf, const struct uui_spinbox *s) {
     }
 
     int sx = s->x + s->w - STEP_W;
+    // The field's own focus ring would leave its right edge one pixel
+    // left of the separator, reading as a stray accent line inside the
+    // control; this one rings the whole box at the end instead.
+    if (s->field.active) ugfx_fill_rect(surf, sx - 1, s->y + 1, 1, s->h - 2, s->field.bg);
+
     int half = s->h / 2;
     for (int i = 0; i < 2; i++) {
         int up = (i == 0);
@@ -201,6 +206,12 @@ void uui_spinbox_draw(struct ugfx_surface *surf, const struct uui_spinbox *s) {
     }
     ugfx_draw_rect(surf, s->x, s->y, s->w, s->h, s->border);
     ugfx_fill_rect(surf, sx, s->y, 1, s->h, s->border);
+
+    // Round the whole control, steppers included: Up/Down are the
+    // spinbox's keys, not the field's, so the field alone would understate
+    // what has focus.
+    if (s->field.active && !s->disabled)
+        uui_focus_ring(surf, s->x, s->y, s->w, s->h);
 }
 
 // --- input --------------------------------------------------------------
@@ -308,6 +319,17 @@ static int accepts_focus_op(const void *w) {
     return !((const struct uui_spinbox *)w)->disabled;
 }
 
+// FOCUS ARRIVING IS THE FIELD BECOMING ACTIVE, and focus LEAVING is a
+// COMMIT -- the header's rule that a typed value is adopted on Enter or
+// when focus leaves. Without this the ring could focus a spinbox, keys
+// reached the field anyway, and no caret appeared (an edit with no
+// visible cursor, and no commit when Tab moved on).
+static void set_focused_op(void *w, int focused) {
+    struct uui_spinbox *s = w;
+    if (focused) { s->field.active = 1; return; }
+    if (s->field.active) { s->field.active = 0; uui_spinbox_commit(s); }
+}
+
 static void spinbox_bounds_op(const void *w, int *x, int *y, int *ow, int *oh) {
     const struct uui_spinbox *c = w;
     *x = c->x; *y = c->y; *ow = c->w; *oh = c->h;
@@ -317,6 +339,7 @@ const struct uui_widget_ops uui_spinbox_ops = {
     .bounds = spinbox_bounds_op,
     .draw = draw_op,
     .accepts_focus = accepts_focus_op,
+    .set_focused = set_focused_op,
     .hit = hit_op,
     .press = press_op,
     .motion = motion_op,

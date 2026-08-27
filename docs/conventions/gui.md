@@ -1537,13 +1537,55 @@ real scanout hardware does. Do not write a pixel assertion for one.
   type-ahead were dead for months behind a suite that drives every
   check by mouse. Two ways to fix it and the choice is real: a
   `uapp_desc.focus` ring is the toolkit's own idiom and gives Tab
-  between controls, but no widget draws a focus indicator yet
-  (`docs/roadmap.md`), so it adds a Tab stop nobody can see; forwarding
-  from `on_key` to the one widget that wants keys is what the File
-  Manager does and what Task Manager now does. **The general check: when
+  between controls, and every widget that accepts focus draws an
+  indicator now (see the entry below), so a Tab stop is visible;
+  forwarding from `on_key` to the one widget that wants keys is what
+  the File Manager does and what Task Manager now does, and is still
+  the simpler answer for an app with exactly one key-taking widget. **The general check: when
   a widget gains a key handler, grep for the app's routing** -- the same
   shape as CLAUDE.md's rule about a slot that is present and read by
   nobody.
+- **A FOCUS INDICATOR IS `uui_focus_ring()`, IN THE THEME'S ACCENT, AND
+  THE WIDGET PASSES THE RECT.** Every widget that accepts keyboard focus
+  draws one: a 1px ring in `UTHEME_ACCENT`, through the one helper in
+  `uui_primitives.c`. Before it there were three geometries and a
+  hover-derived tint between four widgets, and seven more that took keys
+  and drew nothing at all -- so Tab moved an invisible cursor and the
+  first thing typed went somewhere the user did not choose. Four things
+  to know.
+
+  **The ACCENT, not a wash of the control's own colour.** Focus and
+  hover answer different questions -- "where will my typing go" against
+  "what is under the pointer" -- and a shared visual vocabulary makes
+  neither legible; `utheme.h` has named `accent` as the focus role since
+  it was written. GTK, Qt and Windows all draw focus in the accent, and
+  the File Manager had independently outlined its active pane in
+  `UTHEME_ACCENT` already.
+
+  **The CALLER passes the rect, because only the widget knows its own
+  shape.** A list rings the focused ROW, a slider rings its thumb, a
+  spinbox rings the whole control including its steppers (Up/Down are
+  the spinbox's keys, not the field's). A ring the focus manager drew
+  from `bounds` would be a 300px box round a table.
+
+  **A ROW WIDGET FALLS BACK TO THE BOX** when the selection is scrolled
+  out of view or there is none. An indicator that vanishes with the
+  selection is the bug this exists to remove, and a widget can hold
+  focus with nothing selected.
+
+  **A SELECTION IS NOT AN INDICATOR**, which `uui_listbox` assumed for a
+  long time in a comment: a selected row looks identical whether or not
+  the list is the control answering the arrows, so two lists side by
+  side say nothing about which one is listening.
+
+  Tested at the widget level by `/tests/focusring_test` (all eleven,
+  off-screen, each asserted BOTH ways -- absent unfocused, present
+  focused, since a one-sided check passes on a control that rings itself
+  unconditionally) and on-screen by `uidemo_test.py`. **Its
+  load-bearing checks are the ROW ones**: a ring round the box and a
+  ring on the row both put accent pixels on the surface, and only the
+  height tells them apart.
+
 - **A SETTING WHOSE CHOICES ARE DATA NAMES THEM ITSELF:
   `choice_label`.** `/etc/settings.d`'s `Choice.<value>=` lines cover a
   list a file's author can see; they cannot cover one that is COMPUTED
