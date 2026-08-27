@@ -334,7 +334,7 @@ No dependency on the phases above; ordered among themselves.
 - [x] ~~Mounting a filesystem from a partition, and writing a table (`mkpart`)~~ done
 - [ ] LBA48 addressing
 - [ ] A TFS3 test reaching double- and triple-indirect addressing (TFS2's selftest covered this and went with it)
-- [ ] `root=` on the boot line to name the partition to mount, instead of taking the first one a backend claims
+- [x] ~~`root=` names the device to mount as the root~~ DONE 2026-08-27 -- every driver enumerates into a device table (`lsblk`)
 - [x] ~~A `ramfs` backend -- a real in-memory filesystem, the root wherever there is no usable drive~~ done
 - [x] ~~Report nothing mounted as NOTHING MOUNTED, instead of as an active backend that fails every call~~ done
 - [x] ~~Refuse a whole-disk volume: a drive's root must be a partition, and a flat image says so and boots to ramfs~~ done

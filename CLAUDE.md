@@ -695,6 +695,7 @@ whenever a headline here tells you something you did not already know.
 - **THERE ARE THREE WORDS FOR SYSTEM STATE AND THEY ARE FIXED: FACT, SETTING, TUNABLE.**
 - **Setting a setting to the value it already has does NOTHING**
 - **`etc_config.c` is SPLIT: the parser is shared, the file I/O is kernel-only.**
+- **EVERY DISK DRIVER RUNS, AND THE ROOT IS A SEPARATE CHOICE** -- all three inits are called unconditionally and each registers what it finds into **block.h's device table** (`ata0`, `ahci0`, `virtio0`, `ram0`; partitions `ata0p3`, numbered by the PARTITION TABLE so they match `parttable`). The root comes from `root=` on the boot line, else registration order. It was `if (!blk_virtio_init() && !blk_ahci_init()) blk_ata_init();` -- a short circuit, so a virtio machine never ran the AHCI driver and its SATA disk did not EXIST, and a live boot skipped disk init entirely so a live session could not see the machine's own drives. **Every test here boots ONE disk, which is the one shape where the bug cannot show.** Three traps: a device created but never made active must still be TRACKED (`blk_track()`, or `/boot`'s partition has no name and cannot be mounted); every disk's partitions are named, not just the root's (`partition_read_table_of()`); and a second volume of one format still will not mount, which is `fs_ops.max_mounts` and not this. `/bin/lsblk` shows the table.
 - **THE DISK PRECEDENCE IS VIRTIO-BLK, THEN AHCI, THEN ATA, and each rung has a boot word that steps down to the next** -- decided in ONE line in `kernel/fs/mount.c`; `novirtio` and `noahci` are what keep the lower rungs reachable. `noahci` is NOT a driver kill switch: only `blk_ahci_init()` reads it.
 - **AHCI ENUMERATES EVERY PORT AND DRIVES ONE, AND SAYS SO** -- `kernel/drivers/ahci.c`; NCQ and 64-bit addressing are REPORTED, not used (what NCQ needs is an asynchronous block interface, not more AHCI code); NO sector cache, unlike ATA, which is what makes `BLK_CAP_FLUSH` a real FLUSH CACHE EXT. Start the engine only after `PxCLB`/`PxFB` are set and unmask INTx only after the handler is registered; acknowledge **port first, then the HBA**; `CFL` is the FIS length in DWORDS (five), not the 64-byte slot. The PRDT is one entry per 4 KiB page, and `tools/ahci_test.py` is the only thing that runs any of it.
 - **ALL THREE DISKS DISCARD, AND THE CAPABILITY IS THE DEVICE'S ANSWER RATHER THAN ITS FEATURE BIT** -- a virtio device may negotiate DISCARD and advertise a `max_discard_sectors` of ZERO (QEMU does, without `discard=unmap`), so `block_virtio.c` declares `BLK_CAP_TRIM` from the MAXIMUM and `block_ahci.c` from IDENTIFY word 169. **A TRIM that acknowledges and discards nothing is invisible from inside the guest**, so the KTESTs cover REFUSALS only and the real oracle is the HOST: write 40 MiB, delete it, require the sparse image's allocated size back at baseline. **`notrim` turns discards off for EVERY backend**, gated once in `blk_trim_supported()` -- a diagnostic A/B, since a flush after a hole-punch is far slower on some hosts than others.
@@ -1285,6 +1286,11 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   real chain walk, a 185 KiB BINARY extracted on the host and compared
   byte for byte, and `fsck.fat`'s verdict. Boots twice against a COPY of
   `disk.img`; SKIPS without `mtools`),
+  `multidisk_test.py` (**two disks on two different drivers, which is the
+  configuration no other test here boots** -- every one attaches exactly
+  one, and that is the shape the enumerate-everything bug needed. Asserts
+  both are named, that `root=` picks the boot disk over the precedence,
+  and that an unknown `root=` reports rather than hangs),
   `partition_test.py` (**toy-os booting with its filesystem INSIDE an
   MBR or GPT partition** -- the only thing that exercises `vfs.c`'s
   boot-time scan and `block_part.c`'s window. Its load-bearing check is

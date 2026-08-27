@@ -1939,3 +1939,56 @@ a `kmalloc()` and `pmm_alloc_contiguous()` fails on a fragmented machine
 long before it fails on a small one. `format()` still picks a cluster
 size that clears the 65525 floor wherever the volume is big enough, so
 nothing toy-os *writes* is out of spec.
+
+## Enumerating every disk is a separate question from choosing the root
+
+The block layer used to answer both with one line: whichever driver
+found a disk first got to run, and by running got to carry the root.
+
+    if (!blk_virtio_init() && !blk_ahci_init()) blk_ata_init();
+
+Two decisions, fused, and the fusion was invisible because **every test
+in this repo boots a machine with exactly one disk** — the one shape
+where "which driver ran" and "which disk is root" cannot disagree.
+
+Neither Linux nor NT fuses them. A Linux driver registers every device
+it probes (`sda`, `vda`, `nvme0n1`) whether or not anything mounts it,
+and `root=` on the command line names the one to boot from — resolved
+later, by the VFS, from a device that is already there. NT's PnP manager
+builds a device object per device and the boot path comes from BCD's
+`osdevice`. In both, *finding* a disk is not *claiming* it.
+
+toy-os now does the same: every driver runs, every device it finds goes
+into a table with a name, and the root is chosen afterwards from `root=`
+or from registration order. Registration order is kept as the default
+precedence — virtio, then AHCI, then ATA — because that ordering was
+measured (`block_virtio.c`) and nothing about this change disputes it.
+
+**What it cost to have them fused**, both reported from real hardware
+rather than found here: a machine with a virtio disk had its SATA drive
+enumerated by nobody, so `parttable` could not see it and `mount` could
+not reach it; and a live boot registered the RAM image and skipped disk
+init, so a live session could not touch the machine's own disks — which
+is most of what a live CD is for.
+
+**Why a name and not an index.** The table could have been positional,
+with `root=2`. It is a name because a positional identity silently
+renumbers when enumeration order changes, which is the failure mode
+UUIDs exist to solve and which a person cannot see happening. The scheme
+is `<driver><index>` rather than Linux's `sd`/`vd`/`nvme` split: that
+split is historical (different subsystems grew different letters), the
+driver is a genuine lever here (`novirtio` and `noahci` are boot words a
+person uses), and there is no `/dev` for `/dev/sda1` to be a path into.
+
+**Why the partition number is the TABLE's.** `ata0p3` is the third entry
+in the partition table even when the two before it are the firmware's
+and were skipped, so it lines up with `parttable`. Numbering by slot
+order instead made the root partition `ata0p1` — a name that agreed with
+nothing a person could see, and that `root=ata0p3` would have missed.
+
+**What is deliberately still refused.** A second volume of the same
+format does not mount: `fs_ops.max_mounts` is 1 for every backend, and
+raising it needs per-instance state behind an opaque handle threaded
+through every op (Linux's `super_block`). Enumeration does not change
+that and was not meant to. It changes whether the device can be NAMED
+and reached at all, which was the actual blocker.

@@ -72,6 +72,14 @@ struct partition_table {
 // callers only need to check out->kind, not this return value.
 int partition_read_table(struct partition_table *out);
 
+// The same, on a NAMED device rather than the active one. A machine has
+// more than one disk now (block.h's table), and a partition table that
+// can only be read off the active one leaves every other disk's
+// partitions unreachable -- unnameable, and therefore unmountable.
+struct block_device;
+int partition_read_table_of(const struct block_device *dev,
+                            struct partition_table *out);
+
 // Is this partition the FIRMWARE's rather than an OS's? A GPT BIOS boot
 // partition or an EFI System Partition (MBR: type 0xEF). Both are on
 // toy-os's own disk -- GRUB's core.img and /boot/kernel.bin live in

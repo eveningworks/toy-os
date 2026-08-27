@@ -160,7 +160,8 @@ static void gpt_name_to_ascii(const uint8_t *utf16le, char *out /* [37] */) {
 // single caller, so at -O2 GCC inlines them straight back and the
 // frames merge again -- which is exactly what the split was for. Same
 // reasoning as syscalls.h's SYSCALL_HANDLER.
-static __attribute__((noinline)) void parse_gpt_entries(uint64_t entry_lba, uint32_t num_entries,
+static __attribute__((noinline)) void parse_gpt_entries(const struct block_device *dev,
+                              uint64_t entry_lba, uint32_t num_entries,
                               uint32_t entry_size, struct partition_table *out) {
     uint32_t entries_per_sector = PART_SECTOR_SIZE / entry_size;
     uint32_t sectors_needed = (num_entries + entries_per_sector - 1) / entries_per_sector;
@@ -168,7 +169,7 @@ static __attribute__((noinline)) void parse_gpt_entries(uint64_t entry_lba, uint
     out->entry_count = 0;
     for (uint32_t s = 0; s < sectors_needed; s++) {
         uint8_t buf[PART_SECTOR_SIZE];
-        if (!blk_disk_read_sectors((uint32_t)entry_lba + s, 1, buf)) break;
+        if (!blkdev_read_sectors(dev, (uint32_t)entry_lba + s, 1, buf)) break;
 
         for (uint32_t i = 0; i < entries_per_sector && out->entry_count < PART_MAX_ENTRIES; i++) {
             const uint8_t *e = buf + i * entry_size;
@@ -196,9 +197,10 @@ static __attribute__((noinline)) void parse_gpt_entries(uint64_t entry_lba, uint
 //
 // Split from partition_read_table() for the stack: the header buffer
 // and the MBR buffer no longer share a frame.
-static __attribute__((noinline)) int parse_gpt(struct partition_table *out) {
+static __attribute__((noinline)) int parse_gpt(const struct block_device *dev,
+                                               struct partition_table *out) {
     uint8_t hdr[PART_SECTOR_SIZE];
-    if (!blk_disk_read_sectors(GPT_HEADER_LBA, 1, hdr)) return 0;
+    if (!blkdev_read_sectors(dev, GPT_HEADER_LBA, 1, hdr)) return 0;
     if (k_strncmp((const char *)hdr, GPT_SIGNATURE, 8) != 0) return 0;
 
     uint32_t header_size = read_le32(hdr + 12);
@@ -222,16 +224,29 @@ static __attribute__((noinline)) int parse_gpt(struct partition_table *out) {
     if (entry_size == 0 || entry_size > PART_SECTOR_SIZE) entry_size = 128; // spec default -- guards a div-by-zero below
     if (num_entries > PART_MAX_ENTRIES) num_entries = PART_MAX_ENTRIES; // only read/report as many as we display
 
-    parse_gpt_entries(entry_lba, num_entries, entry_size, out);
+    parse_gpt_entries(dev, entry_lba, num_entries, entry_size, out);
     return 1;
 }
 
+// Reads the table on the ACTIVE disk -- the boot-time caller and every
+// existing tool mean that one.
 int partition_read_table(struct partition_table *out) {
+    return partition_read_table_of(blk_whole_disk(), out);
+}
+
+// ...and the same on ANY disk, which is what makes a second drive's
+// partitions reachable at all. Every read below goes through `dev`
+// rather than blk_disk_read_sectors(), which could only ever answer for
+// the active one -- so before this, a machine's other disks had a
+// partition table nothing in the kernel could parse.
+int partition_read_table_of(const struct block_device *dev,
+                            struct partition_table *out) {
+    if (!dev) return 0;
     k_memset(out, 0, sizeof(*out));
     out->kind = PART_TABLE_NONE;
 
     uint8_t mbr[PART_SECTOR_SIZE];
-    if (!blk_disk_read_sectors(0, 1, mbr)) return 0;
+    if (!blkdev_read_sectors(dev, 0, 1, mbr)) return 0;
 
     if (mbr[MBR_SIGNATURE_OFFSET] != 0x55 || mbr[MBR_SIGNATURE_OFFSET + 1] != 0xAA) {
         return 1; // readable disk, just no MBR/GPT signature -- PART_TABLE_NONE stands
@@ -246,7 +261,7 @@ int partition_read_table(struct partition_table *out) {
     // Protective MBR present -- the GPT header at LBA 1 decides. Any
     // failure there falls back to reporting the protective MBR itself,
     // rather than silently claiming PART_TABLE_NONE.
-    if (!parse_gpt(out)) {
+    if (!parse_gpt(dev, out)) {
         out->kind = PART_TABLE_MBR;
         parse_mbr_entries(mbr, out);
     }

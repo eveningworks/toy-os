@@ -294,7 +294,12 @@ def main():
     if os.path.isdir(seed_root):
         stale = orphans_on_image(args.disk, os.path.join(REPO, "tools"), seed_root)
         if stale:
-            fmt = image_format(args.disk)
+            # WITH THE VOLUME'S BASE. Without it this reads LBA 0 of a
+            # PARTITIONED disk, finds no magic and exits -- failing the
+            # gate for the wrong reason, which is the one thing this
+            # module's own docstring says not to do. Only reachable when
+            # the image has orphans, which is why it survived.
+            fmt = image_format(args.disk, volume(args.disk)[0])
             print(f"check_layout: WARNING -- {len(stale)} orphaned file(s) on the image.")
             print("  `sync` is additive and never deletes, so a binary that MOVED "
                   "leaves\n  its old copy behind forever, frozen at an old build:\n")

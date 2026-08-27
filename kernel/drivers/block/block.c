@@ -18,6 +18,89 @@ static const struct block_device *g_dev;
 static const struct block_device *g_whole;
 static uint32_t g_base;
 
+static struct blk_entry g_table[BLK_MAX_DEVICES];
+static int g_count;
+
+// `<driver><index>` for a disk, `<disk>p<n>` for a partition. The index
+// counts devices of the SAME driver already in the table, so a second
+// SATA drive would be ahci1 without anything having to track it.
+//
+// The driver's own `name` is the stem, minus anything that cannot go in
+// an identifier a person types at a prompt -- "virtio-blk" becomes
+// "virtio", which is also the word the boot line already uses
+// (`novirtio`).
+static void make_name(char *out, const struct block_device *dev,
+                      const struct block_device *parent, uint32_t base_lba) {
+    char stem[BLK_NAME_MAX];
+    int n = 0;
+    for (const char *p = dev->name; *p && n < BLK_NAME_MAX - 1; p++) {
+        if (*p == '-') break;   // "virtio-blk" -> "virtio"
+        stem[n++] = *p;
+    }
+    stem[n] = 0;
+
+    if (base_lba || parent != dev) {
+        // A partition ALREADY KNOWS ITS NAME -- block_part.c built it
+        // from the partition TABLE's index, which is the number a person
+        // reads out of `parttable` and types into `root=`. Deriving one
+        // here instead would number by slot order and disagree with the
+        // table whenever a partition ahead of it is skipped.
+        k_strlcpy(out, dev->name, BLK_NAME_MAX);
+        return;
+    }
+
+    int nth = 0;
+    for (int i = 0; i < g_count; i++)
+        if (g_table[i].dev == g_table[i].parent &&
+            k_strncmp(g_table[i].name, stem, (uint32_t)n) == 0) nth++;
+    k_snprintf(out, BLK_NAME_MAX, "%s%d", stem, nth);
+}
+
+// Adds `dev`, or returns the entry it already has. Idempotent because
+// re-registering the same device is ordinary -- mount.c hands the root
+// back and forth, and a probe saves and restores it.
+static const struct blk_entry *table_add(const struct block_device *dev,
+                                          const struct block_device *parent,
+                                          uint32_t base_lba) {
+    for (int i = 0; i < g_count; i++)
+        if (g_table[i].dev == dev) return &g_table[i];
+    if (g_count >= BLK_MAX_DEVICES) return NULL;
+
+    struct blk_entry *e = &g_table[g_count];
+    e->dev = dev;
+    e->parent = parent;
+    e->base_lba = base_lba;
+    make_name(e->name, dev, parent, base_lba);
+    g_count++;
+    return e;
+}
+
+int blk_track(const struct block_device *dev,
+              const struct block_device *parent, uint32_t base_lba) {
+    if (!dev) return 0;
+    return table_add(dev, parent ? parent : dev, base_lba) != NULL;
+}
+
+int blk_device_count(void) { return g_count; }
+
+const struct blk_entry *blk_device_at(int i) {
+    if (i < 0 || i >= g_count) return NULL;
+    return &g_table[i];
+}
+
+const struct blk_entry *blk_device_by_name(const char *name) {
+    if (!name) return NULL;
+    for (int i = 0; i < g_count; i++)
+        if (k_strcmp(g_table[i].name, name) == 0) return &g_table[i];
+    return NULL;
+}
+
+const char *blk_device_name(const struct block_device *dev) {
+    for (int i = 0; i < g_count; i++)
+        if (g_table[i].dev == dev) return g_table[i].name;
+    return "?";
+}
+
 int blk_register(const struct block_device *dev) {
     return blk_register_over(dev, dev, 0);
 }
@@ -57,16 +140,33 @@ int blk_register_over(const struct block_device *dev,
         return 0;
     }
 
+    const struct blk_entry *e = table_add(dev, parent ? parent : dev, base_lba);
+    if (!e) {
+        klog_printf("block: no room in the device table for %s\n", dev->name);
+        return 0;
+    }
+
     g_dev = dev;
     g_whole = parent ? parent : dev;
     g_base = base_lba;
     if (base_lba) {
-        klog_printf("block: %s active (%u sectors at LBA %u of %s)\n", dev->name,
-                    dev->sector_count(), base_lba, g_whole->name);
+        klog_printf("block: %s active (%u sectors at LBA %u of %s)\n", e->name,
+                    dev->sector_count(), base_lba, blk_device_name(g_whole));
     } else {
-        klog_printf("block: %s active (%u sectors)\n", dev->name, dev->sector_count());
+        klog_printf("block: %s active (%u sectors)\n", e->name, dev->sector_count());
     }
     return 1;
+}
+
+int blk_set_root(const struct block_device *dev) {
+    for (int i = 0; i < g_count; i++) {
+        if (g_table[i].dev != dev) continue;
+        g_dev   = g_table[i].dev;
+        g_whole = g_table[i].parent;
+        g_base  = g_table[i].base_lba;
+        return 1;
+    }
+    return 0; // not registered -- a `root=` naming something never found
 }
 
 const struct block_device *blk_whole_disk(void) { return g_whole; }

@@ -183,7 +183,20 @@ const struct block_device *blk_part_create(const struct block_device *parent,
     s->base = base_lba;
     s->sectors = sectors;
     s->used = 1;
-    k_snprintf(s->name, sizeof(s->name), "%s%d", parent->name, index);
+    // `<disk>p<index>`, and the index is the PARTITION TABLE's, not a
+    // count of how many slots are in use -- `root=ata0p3` has to mean
+    // the third entry in the table, which is what a person reading
+    // `parttable` will type. Naming by slot order made partition 3 of
+    // this disk "ata0p1", because the two firmware partitions ahead of
+    // it are skipped.
+    //
+    // The DISK's name comes from the block table rather than from
+    // parent->name, which is the driver's stem ("ata") and not an
+    // identity ("ata0"); the fallback keeps a partition of an
+    // unregistered parent nameable rather than calling it "?p3".
+    const char *pname = blk_device_name(parent);
+    if (pname[0] == '?') pname = parent->name;
+    k_snprintf(s->name, sizeof(s->name), "%sp%d", pname, index);
 
     s->dev.name = s->name;
     s->dev.sector_count = g_thunks[free_slot].count;
@@ -199,6 +212,11 @@ const struct block_device *blk_part_create(const struct block_device *parent,
     s->dev.flush = (parent->caps & BLK_CAP_FLUSH) ? g_thunks[free_slot].flush : NULL;
     s->dev.trim  = (parent->caps & BLK_CAP_TRIM)  ? g_thunks[free_slot].trim  : NULL;
 
+    // Into the block table even though nothing is being made active --
+    // the table is what gives a device its NAME, and an unnamed device
+    // cannot be mounted by name. /boot's partition arrives here and
+    // never through blk_register().
+    blk_track(&s->dev, parent, base_lba);
     return &s->dev;
 }
 

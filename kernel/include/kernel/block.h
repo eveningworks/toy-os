@@ -63,8 +63,78 @@ struct block_device {
     int (*trim)(uint32_t lba, uint32_t count); // BLK_CAP_TRIM
 };
 
-// Registers the active device. Returns 0 (and registers nothing) if the
-// device's capability bits and function pointers disagree.
+// ---- the device table ------------------------------------------------
+//
+// EVERY device a driver finds is registered here, whether or not it
+// carries the root. That split -- enumerate everything, choose the root
+// separately -- is Linux's and Windows NT's alike: a Linux driver
+// registers `sda`/`vda`/`nvme0n1` as it probes and the root comes from
+// `root=` on the command line, and NT's PnP manager builds a device
+// object per device while the boot path comes from BCD's `osdevice`.
+//
+// toy-os had the two FUSED, and it cost exactly what you would expect.
+// `if (!blk_virtio_init() && !blk_ahci_init()) blk_ata_init();` short-
+// circuits, so a machine with a virtio disk never ran the AHCI driver at
+// all and its SATA disk did not exist -- unmountable, invisible to
+// `parttable`, absent from every tool. A live boot was worse: it
+// registered the RAM image and skipped disk init entirely, so a live
+// session could not see the machine's own disks, which is most of what
+// a live CD is for.
+//
+// NAMES ARE `<driver><index>`, and a partition is `<disk>p<n>` --
+// `ata0`, `ahci0`, `virtio0`, `ram0`, `ahci0p1`. Named after the DRIVER
+// rather than Linux's sd/vd/nvme split because the driver is a real
+// user-facing lever here (`novirtio` and `noahci` already exist) and
+// because this OS has no /dev for `/dev/sda1` to be a path into.
+#define BLK_NAME_MAX 16     // "virtio0p15" and room to spare
+#define BLK_MAX_DEVICES 16  // disks plus their partitions
+
+struct blk_entry {
+    const struct block_device *dev;
+    const struct block_device *parent; // the disk it sits on; itself for a disk
+    uint32_t base_lba;                 // where it starts on that disk
+    char name[BLK_NAME_MAX];
+};
+
+// How many devices are registered, and the i'th of them. NULL past the
+// end, so a caller can walk without asking the count first.
+int blk_device_count(void);
+const struct blk_entry *blk_device_at(int i);
+
+// The entry for a name (`ahci0`, `ahci0p1`), or NULL. Exact match.
+const struct blk_entry *blk_device_by_name(const char *name);
+
+// This device's registered name, or "?" for one that is not in the
+// table. Never NULL -- a diagnostic must not have to check.
+const char *blk_device_name(const struct block_device *dev);
+
+// Adds a device to the table WITHOUT touching the root. For a device
+// that is created but never made active -- a partition somebody mounts
+// at /boot, which reaches blk_part_create() and not blk_register().
+// Idempotent. Returns 0 only if the table is full.
+//
+// The distinction matters because the table is what NAMES a device, and
+// a device with no name cannot be reached: `mount ata0p2 /mnt` failed
+// for exactly this reason while /boot was mounted from that very
+// partition.
+int blk_track(const struct block_device *dev,
+              const struct block_device *parent, uint32_t base_lba);
+
+// Makes an already-registered device the ROOT: what blk_active() and
+// every blk_*() wrapper answer for. Returns 0 for a device that is not
+// in the table, which is what stops `root=` naming something that was
+// never found.
+//
+// SEPARATE FROM REGISTRATION on purpose -- that is the whole point of
+// the table. A driver finding a disk no longer thereby claims the root.
+int blk_set_root(const struct block_device *dev);
+
+// Registers a device. Returns 0 (and registers nothing) if the device's
+// capability bits and function pointers disagree.
+//
+// STILL SETS THE ROOT, last-writer-wins, so the boot order in
+// kernel/fs/mount.c keeps deciding precedence exactly as it did. What
+// changed is that losing that race no longer means being forgotten.
 int blk_register(const struct block_device *dev);
 
 // Registers `dev` as active while recording what it SITS ON. A plain

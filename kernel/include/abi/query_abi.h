@@ -291,6 +291,10 @@ _Static_assert(sizeof(struct query_fontglyph) <= 256,
 
 // Bytes of log per record. Sized so the whole record fits
 // QUERY_RECORD_MAX (256, api/query.h) with the header on top.
+// One record per registered block device -- disks and partitions.
+// LIST. See block.h's device table and `/bin/lsblk`.
+#define QUERY_BLKDEV 20
+
 #define QUERY_KLOG_DATA 232
 
 struct query_klog {
@@ -428,6 +432,23 @@ struct query_mmaudit {
 struct query_random {
     uint64_t quality;              // QUERY_RANDOM_*, ordered by trust
     char     name[QUERY_NAME_MAX]; // "TSC jitter", "hardware (RDSEED/RDRAND)"
+};
+
+// QUERY_BLKDEV's record -- one per registered block device, disks and
+// partitions alike. A LIST: the table's shape is the whole answer, and
+// what is in it depends on the machine.
+//
+// Every disk a driver found is here even when it carries nothing that
+// is mounted, which is the point of the table (block.h): a device that
+// is not enumerated cannot be named, and one that cannot be named
+// cannot be mounted.
+struct query_blkdev {
+    char name[16];      // "ata0", "ahci0p1" -- what `mount` and `root=` take
+    char parent[16];    // the disk a partition sits on; empty for a disk
+    uint64_t sectors;   // 512 bytes each
+    uint64_t base_lba;  // where it starts on its parent; 0 for a disk
+    uint64_t is_root;   // 1 if this is the device the root is mounted from
+    uint64_t persistent;// 0 for a RAM-backed live image
 };
 
 // QUERY_PARTTABLE's record -- the table, not its entries.

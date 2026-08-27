@@ -647,3 +647,55 @@ build; a short-named file cannot show it, which is why
 back on the HOST with `mtools`, and runs `fsck.fat` over the result. A
 self-test cannot catch an expectation being wrong, because the same
 person wrote both halves.
+
+## EVERY DISK DRIVER RUNS, AND THE ROOT IS A SEPARATE CHOICE.
+
+`kernel/fs/mount.c` calls `blk_ata_init()`, `blk_ahci_init()` and
+`blk_virtio_init()` unconditionally, and each registers what it finds
+into **block.h's device table**. What carries the root is decided
+afterwards: `root=` on the boot line, else registration order (ATA,
+AHCI, virtio, so virtio wins — unchanged).
+
+**It used to be one line, and the short circuit was the bug**:
+
+    if (!blk_virtio_init() && !blk_ahci_init()) blk_ata_init();
+
+A machine with a virtio disk never ran the AHCI driver at all, so its
+SATA disk did not exist — unmountable, invisible to `parttable`, absent
+from every tool. A live boot was worse: it registered the RAM image and
+skipped disk init entirely, so a live session could not see the
+machine's own drives, which is most of what a live CD is for.
+
+Enumeration is READ-ONLY — identify, read a table — so running every
+driver costs a probe and claims nothing.
+
+**NAMES ARE `<driver><index>`, PARTITIONS `<disk>p<n>`**: `ata0`,
+`ahci0`, `virtio0`, `ram0`, `ahci0p3`. The partition number is the
+**partition table's**, not a count of slots in use, so `ata0p3` is the
+third table entry even when the two ahead of it are the firmware's and
+were skipped — that is the number `parttable` prints and the one a
+person will type. Named after the driver rather than Linux's sd/vd/nvme
+split, because the driver is a real lever here (`novirtio`, `noahci`)
+and this OS has no `/dev` for a path to lead into.
+
+**THREE THINGS THAT ARE EASY TO GET WRONG.**
+
+**A device that is CREATED but never made active still has to be in the
+table**, because the table is what NAMES it and an unnamed device cannot
+be mounted. `blk_part_create()` calls `blk_track()` for exactly this:
+`/boot`'s partition never goes through `blk_register()`, and
+`mount ata0p2 /mnt` failed while that very partition was mounted.
+
+**Every disk's partitions are named, not just the root's**
+(`name_all_partitions()`), through `partition_read_table_of(dev, ...)`
+rather than the active-device reader. Without that pass a second drive
+is enumerated and still unreachable — listed and unusable, which is the
+worse half of not enumerating it.
+
+**A second volume of the same format still will not mount**, and that is
+`fs_ops.max_mounts` (every backend says ONE), not a gap here. So the
+test for reachability is WHICH refusal comes back: "nothing recognises
+the filesystem" means the name resolved and the window was read, where
+an unknown name is refused by name.
+
+`/bin/lsblk` is how a person sees any of this.

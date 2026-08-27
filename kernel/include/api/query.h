@@ -186,6 +186,9 @@ void krandom_query_init(void);
 // table" are different answers a list alone cannot distinguish.
 void partition_query_init(void);
 
+// The block device table -- one record per disk and partition.
+void block_query_init(void);
+
 // kernel/mm/'s heap providers -- the counters, and the scan that runs
 // on read (see heap_query.c on why those are two classes).
 void heap_query_init(void);

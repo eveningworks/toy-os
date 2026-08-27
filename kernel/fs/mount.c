@@ -355,10 +355,23 @@ static int read_table(void) {
     return g_tbl.kind != PART_TABLE_NONE;
 }
 
+static int entry_window_of(const struct partition_table *tbl,
+                           const struct partition_entry *pe,
+                           uint32_t *base, uint32_t *count);
+
 // One entry's window on the disk, in sectors. 0 if the entry cannot be
 // used (an unusable GPT range, or a protective MBR slot).
 static int entry_window(const struct partition_entry *pe, uint32_t *base, uint32_t *count) {
-    if (g_tbl.kind == PART_TABLE_GPT) {
+    return entry_window_of(&g_tbl, pe, base, count);
+}
+
+// The same, against a table the caller supplies -- name_all_partitions()
+// walks a disk that is not the active one and must not read g_tbl, which
+// caches the ROOT disk's table.
+static int entry_window_of(const struct partition_table *tbl,
+                           const struct partition_entry *pe,
+                           uint32_t *base, uint32_t *count) {
+    if (tbl->kind == PART_TABLE_GPT) {
         // GPT's range is INCLUSIVE at both ends, so the count is
         // end - start + 1. Getting that off by one costs the last
         // sector of every volume, which a filesystem notices only when
@@ -403,6 +416,127 @@ const struct block_device *mount_partition_device(int number) {
 // Order is the table's own order, not "biggest" or "first bootable" --
 // there is nothing here that would make a cleverer policy more correct,
 // and a table's order is the one thing a person writing it controls.
+// Gives every partition of every DISK a device (and therefore a name),
+// so `mount ahci0p1 /mnt` can reach a drive that carries no root.
+//
+// Reads each disk's own table through partition_read_table_of() rather
+// than the active-device reader, and creates a window per usable entry.
+// Nothing is mounted and nothing becomes active: this is naming, which
+// is a separate question from what the root is -- the same split the
+// device table exists for.
+//
+// A disk with no table, or one whose entries are unusable, simply
+// contributes nothing. That is not an error: a blank drive is a
+// perfectly ordinary thing to have plugged in.
+static void name_all_partitions(void) {
+    // Snapshot the count: creating windows APPENDS to the table, and a
+    // loop over a growing table would walk into the partitions it just
+    // made and try to sub-partition them.
+    int disks = blk_device_count();
+    for (int i = 0; i < disks; i++) {
+        const struct blk_entry *e = blk_device_at(i);
+        if (!e || e->dev != e->parent) continue;   // a partition, not a disk
+
+        // STATIC, not a stack local: struct partition_table is ~1.5 KB
+        // against a 1 KB kernel frame budget, the same call g_tbl and
+        // partition_query.c both make. Reused per disk, and separate
+        // from g_tbl, which caches the ROOT's table.
+        static struct partition_table tbl;
+        if (!partition_read_table_of(e->dev, &tbl)) continue;
+        if (tbl.kind == PART_TABLE_NONE || tbl.entry_count == 0) continue;
+
+        for (int n = 0; n < tbl.entry_count; n++) {
+            uint32_t base, count;
+            if (!entry_window_of(&tbl, &tbl.entries[n], &base, &count)) continue;
+            blk_part_create(e->dev, base, count, n + 1);
+        }
+    }
+}
+
+// `root=` -- which device carries the root, by the name block.h's table
+// gave it (`ahci0`, `virtio0`, `ata0p2`). Empty when unset.
+//
+// A PARTITION CANNOT BE NAMED UNTIL IT EXISTS, and partitions are only
+// registered once try_partitions() walks a table. So this is split: the
+// DISK half is applied at boot, before the scan, and decides which disk
+// gets scanned; the PARTITION half is remembered here and consulted
+// inside the scan. Naming a partition therefore also names its disk,
+// which is what a reader would expect from `root=ahci0p2`.
+static char g_root_disk[BLK_NAME_MAX];
+static int  g_root_part;   // 1-based partition number, 0 = any
+
+// Same substring-plus-boundary matching every boot word here uses, and
+// for the reason target.c gives: without the boundary check a longer
+// word ending in `root=` would silently match.
+static int cmdline_root(const char *cmdline, char *out, uint32_t out_size) {
+    if (!cmdline) return 0;
+    for (const char *p = cmdline; (p = k_strstr(p, "root=")) != 0; p += 5) {
+        if (p != cmdline && p[-1] != ' ') continue;
+        const char *v = p + 5;
+        uint32_t n = 0;
+        while (v[n] && v[n] != ' ' && n + 1 < out_size) n++;
+        if (n == 0) return 0;
+        k_memcpy(out, v, n);
+        out[n] = '\0';
+        return 1;
+    }
+    return 0;
+}
+
+// Splits `ahci0p2` into the disk `ahci0` and the partition 2. A name
+// with no `p<digits>` tail is a whole disk and leaves g_root_part 0.
+//
+// The scan is from the END: a driver stem can contain a `p` of its own
+// one day, and the partition suffix is always the last one followed by
+// nothing but digits.
+static void split_root(const char *name) {
+    k_strlcpy(g_root_disk, name, sizeof g_root_disk);
+    g_root_part = 0;
+
+    int len = (int)k_strlen(g_root_disk);
+    for (int i = len - 1; i > 0; i--) {
+        if (g_root_disk[i] != 'p') continue;
+        int all_digits = (i + 1 < len);
+        for (int j = i + 1; j < len && all_digits; j++)
+            if (g_root_disk[j] < '0' || g_root_disk[j] > '9') all_digits = 0;
+        if (!all_digits) break;
+        int v = 0;
+        for (int j = i + 1; j < len; j++) v = v * 10 + (g_root_disk[j] - '0');
+        if (v > 0) { g_root_part = v; g_root_disk[i] = '\0'; }
+        break;
+    }
+}
+
+// A `root=` that names nothing is REPORTED AND IGNORED, never fatal.
+// Every /etc reader here treats a typo that way, and the argument is
+// stronger on the boot line: a machine that refuses to boot because of
+// one mistyped word gives its owner nothing to fix it with. What it
+// must not do is fail SILENTLY, so the table is printed.
+static void root_override(const char *cmdline) {
+    char want[BLK_NAME_MAX];
+    if (!cmdline_root(cmdline, want, sizeof want)) return;
+
+    split_root(want);
+    const struct blk_entry *e = blk_device_by_name(g_root_disk);
+    if (e && blk_set_root(e->dev)) {
+        if (g_root_part)
+            klog_printf("fs: root=%s -- disk %s, partition %d\n",
+                        want, g_root_disk, g_root_part);
+        else
+            klog_printf("fs: root=%s -- using %s\n", want, g_root_disk);
+        return;
+    }
+
+    klog_printf("fs: root=%s names no device this boot found; using %s instead\n",
+                want, blk_present() ? blk_device_name(blk_active()) : "nothing");
+    for (int i = 0; i < blk_device_count(); i++) {
+        const struct blk_entry *d = blk_device_at(i);
+        klog_printf("fs:   have %s (%u sectors)\n", d->name, d->dev->sector_count());
+    }
+    g_root_disk[0] = '\0';
+    g_root_part = 0;
+}
+
 static int try_partitions(void) {
     const struct block_device *disk = blk_whole_disk();
     if (!disk) return -1;
@@ -437,6 +571,11 @@ static int try_partitions(void) {
             klog_printf("fs: partition %d is the firmware's (bootloader/ESP) -- not the root\n", i + 1);
             continue;
         }
+
+        // `root=<disk>p<n>` names ONE partition. Others are still
+        // registered by the pass above -- they stay mountable by hand --
+        // but only the named one is offered to a backend as the root.
+        if (g_root_part && g_root_part != i + 1) continue;
 
         if (!entry_window(pe, &base, &count)) continue;
         if (!blk_part_register(disk, base, count, i + 1)) continue;
@@ -539,25 +678,44 @@ static void probe_and_mount_root(void) {
     const char *cmdline = multiboot_cmdline();
     int forced = cmdline && k_strstr(cmdline, "live") ? 1 : 0;
 
-    int live = forced ? try_live_module(1) : 0;
-    if (!live) {
-        // WHICH DISK WINS, decided here because blk_register() is
-        // last-writer-wins and order alone would otherwise decide it
-        // somewhere nobody looks.
-        //
-        // VIRTIO-BLK, THEN AHCI, THEN ATA. virtio is the faster and
-        // better-tested path (see block_virtio.c for the numbers);
-        // AHCI is what a modern machine actually presents; legacy IDE
-        // is the fallback, and still the only disk on some hardware, so
-        // it keeps working untouched. `novirtio` and `noahci` on the
-        // boot line step down one rung each, which is what keeps the
-        // lower paths reachable and therefore tested.
-        if (!blk_virtio_init() && !blk_ahci_init()) blk_ata_init();
+    // EVERY DRIVER RUNS, WHATEVER THE OTHERS FOUND. This was
+    // `if (!blk_virtio_init() && !blk_ahci_init()) blk_ata_init();`, and
+    // the short circuit meant a machine with a virtio disk never ran the
+    // AHCI driver at all -- its SATA disk did not exist, for `parttable`
+    // or `mount` or anything else. Enumeration is READ-ONLY (identify,
+    // read the table), so running all three costs nothing but the probe
+    // and is what makes every disk reachable. See block.h's device
+    // table for the split this is half of.
+    //
+    // ORDER STILL SETS PRECEDENCE, because blk_register() is
+    // last-writer-wins: ATA, then AHCI, then VIRTIO, so virtio ends up
+    // the default root exactly as before -- it is the faster and
+    // better-tested path (block_virtio.c has the numbers), AHCI is what
+    // a modern machine presents, legacy IDE is the fallback and still
+    // the only disk on some hardware. `novirtio` and `noahci` step down
+    // a rung each, which keeps the lower paths reachable and tested.
+    blk_ata_init();
+    blk_ahci_init();
+    blk_virtio_init();
 
-        // The other half of the rule, now that it can be answered: no
-        // disk of any kind, so a live image displaces nothing.
-        if (!blk_present()) live = try_live_module(0);
-    }
+    // The live image: asked for, or nothing else to mount. It registers
+    // LAST, so it takes the root from any disk above -- which is the
+    // rule, and now the disks stay in the table and stay reachable, so a
+    // live session can see and mount the machine's own drives. That is
+    // most of what a live CD is for, and it could not before.
+    if (forced || !blk_present()) try_live_module(forced);
+
+    // `root=` overrides the precedence, naming a disk from the table.
+    // Linux's `root=` and NT's BCD `osdevice`: the boot line decides,
+    // not whichever driver happened to probe last.
+    root_override(cmdline);
+
+    // Every disk's partitions get a name, not just the root's. A device
+    // with no name cannot be mounted, so without this pass the second
+    // drive is enumerated and still unusable -- visible in the table and
+    // impossible to reach, which is the worse half of not enumerating it
+    // at all. Creating a window does NOT mount or activate it.
+    name_all_partitions();
 
     if (!blk_present()) {
         mount_ramfs_root("fs: no disk -- mounting ramfs (nothing here survives a reboot)\n");

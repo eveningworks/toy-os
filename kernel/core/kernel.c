@@ -319,6 +319,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     mm_audit_query_init();
     krandom_query_init();
     partition_query_init();
+    block_query_init();
     heap_query_init();
     ata_query_init();
     ahci_query_init();

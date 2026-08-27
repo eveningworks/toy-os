@@ -41,14 +41,24 @@ static int why_to_errno(const char *why) {
     return -EINVAL;
 }
 
-// A source names a PARTITION NUMBER on the boot disk, or nothing at all
-// when the filesystem type needs no volume. Anything else is refused
-// rather than guessed at -- this OS has no /dev, and accepting a
-// device-looking path that resolved to nothing would be a mount that
-// silently attached the wrong thing.
+// A source names a DEVICE (`ahci0p1`, block.h's table), or a partition
+// NUMBER on the boot disk, or nothing at all when the filesystem type
+// needs no volume. Anything else is refused rather than guessed at --
+// this OS has no /dev, and accepting a device-looking path that resolved
+// to nothing would be a mount that silently attached the wrong thing.
+//
+// THE NUMBER IS THE OLDER FORM AND IS KEPT, but it can only ever mean a
+// partition of the ROOT's disk, which stopped being the only disk when
+// every driver started enumerating. A number is what `parttable` prints
+// and what every existing script passes; a name is the only way to reach
+// the second disk at all.
 static int source_device(const char *src, const struct block_device **out) {
     *out = NULL;
     if (!src || !src[0]) return 1;   // no volume; the fstype must supply one
+
+    const struct blk_entry *e = blk_device_by_name(src);
+    if (e) { *out = e->dev; return 1; }
+
     int n = 0;
     for (const char *p = src; *p; p++) {
         if (*p < '0' || *p > '9') return 0;
