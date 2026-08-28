@@ -28,7 +28,18 @@
 // tried to own those would be reimplementing the widget, which is what
 // docs/gui-guidelines.md's "behaviour belongs to the component" forbids.
 
-#define UUI_TREE_MAX_NODES 64 // bounds the collapsed-state bitmap below
+#define UUI_TREE_MAX_NODES 64 // bounds the collapsed-state bitmap below;
+                               // UUI_TREE_CLOSED/OPEN nodes are not in it
+                               // and a lazy tree may exceed this count
+
+// A node's parenthood/expansion contract -- see `kind` below.
+enum uui_tree_kind {
+    UUI_TREE_AUTO = 0, // parent iff the next node is deeper; expansion
+                        // state lives in the widget's bitmap (the
+                        // original contract, and the zero default)
+    UUI_TREE_CLOSED,   // the APP owns expansion (a lazy tree): this node
+    UUI_TREE_OPEN,     //   IS a parent and this is its current state
+};
 
 struct uui_tree_node {
     const char *label;
@@ -39,6 +50,15 @@ struct uui_tree_node {
     // The app's own identifier for this row, handed back by
     // uui_tree_selected_id(). Opaque here.
     int id;
+    // UUI_TREE_AUTO for a static outline. CLOSED/OPEN declare a LAZY
+    // parent: its children are simply absent from the array until the
+    // app puts them there, so parenthood cannot be derived and the
+    // widget must be told. An expander click on one reports through
+    // on_toggle instead of flipping the bitmap -- the app relists,
+    // rebuilds the array and calls uui_tree_set_nodes_keep(), and the
+    // new array's `kind` is the new truth. GtkTreeView's
+    // row-expanded/test-expand-row split, minus the model.
+    int kind;
 };
 
 struct uui_tree {
@@ -59,6 +79,11 @@ struct uui_tree {
     // the APP's const array and collapsing is the widget's state --
     // writing into the caller's data would make a `const` array a lie.
     uint64_t collapsed;
+
+    // Set by uui_tree_set_on_toggle(); NULL for a static tree. Called
+    // with the node's id and 1 to expand / 0 to collapse.
+    void (*on_toggle)(void *ctx, int id, int expand);
+    void *toggle_ctx;
 
     uint32_t bg, fg, sel_bg, sel_fg, track_bg, thumb_bg, guide;
 };
@@ -84,6 +109,18 @@ struct uui_tree {
 void uui_tree_init(struct uui_tree *t, int x, int y, int w, int h,
                     const struct uui_tree_node *nodes, int count);
 void uui_tree_set_nodes(struct uui_tree *t, const struct uui_tree_node *nodes, int count);
+
+// set_nodes, but KEEPING the scroll position (clamped) -- what a lazy
+// tree's rebuild-on-toggle wants, since dropping `top` would fling the
+// view back to the root on every expand. The selection is still only
+// clamped: node ids are the app's and may not survive its rebuild, so
+// re-selecting is the app's job (uui_tree_select_id()).
+void uui_tree_set_nodes_keep(struct uui_tree *t, const struct uui_tree_node *nodes, int count);
+
+// The lazy half of UUI_TREE_CLOSED/OPEN -- see struct uui_tree_node.
+// Without a callback, a kind-declared expander is inert.
+void uui_tree_set_on_toggle(struct uui_tree *t,
+                             void (*fn)(void *ctx, int id, int expand), void *ctx);
 
 // --- what the app asks --------------------------------------------------
 

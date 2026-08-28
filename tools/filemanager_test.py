@@ -59,6 +59,7 @@ TITLE = "File Manager"
 SPAWN_PATH = "/bin/wm/apps/files"
 SRC = "/fmtest"
 DST = "/fmdest"
+FILES_CONF = "/etc/files.conf"
 
 # `gui key` takes a character or a code (userland/wm/wm_debug.c), which
 # is why nothing here depends on the guest's keyboard layout -- the trap
@@ -68,6 +69,7 @@ K_DOWN, K_UP = "0x92", "0x91"
 K_INSERT = "0xb3"
 K_HOME = "0x97"
 K_F2, K_F5, K_F6, K_F7, K_F8 = "0x9a", "0xac", "0xad", "0xae", "0xaf"
+K_F10, K_LEFT, K_RIGHT = "0xa4", "0x95", "0x96"
 
 
 class Layout:
@@ -92,6 +94,8 @@ class Layout:
         self.dir = {}
         self.rows = {}
         self.marked = (0, 0)
+        self.view = None      # [mode0, mode1, single, tree_on, tree_nodes]
+        self.treebox = None   # [x, y, w, h, row_h, selected_id]
         self.active = None
         self.selected = None
         self.modal = None
@@ -113,6 +117,12 @@ class Layout:
                 self.modal = int(p[1])
             elif p[0] == "marked" and len(p) >= 3:
                 self.marked = (int(p[1]), int(p[2]))
+            elif p[0] == "view" and len(p) >= 8:
+                # "view <mode0> <mode1> single <s> tree <t> <nodes>"
+                self.view = [int(p[1]), int(p[2]), int(p[4]),
+                             int(p[6]), int(p[7])]
+            elif p[0] == "treebox" and len(p) >= 7:
+                self.treebox = [int(v) for v in p[1:7]]
 
     def complete(self):
         return 0 in self.pane and 1 in self.pane and self.active is not None
@@ -202,6 +212,52 @@ def wait_listing(dbg, path, pred, timeout=25.0):
             return names
         time.sleep(0.5)
     return names
+
+
+def menu_pick(dbg, *steps):
+    """Drive the app's menu bar by keyboard: F10 opens the first menu
+    with its first item hot, then each step. Ends with K_ENTER in the
+    caller's list. Keyboard, not pixels: the menu's geometry is the
+    toolkit's business."""
+    dbg.key(K_F10)
+    time.sleep(0.15)
+    for k in steps:
+        dbg.key(k)
+        time.sleep(0.12)
+    time.sleep(0.3)
+
+
+def band_drag(dbg, qmp, x0, y0, x1, y1, steps=4):
+    """A drag whose ENDPOINTS are confirmed, not assumed. qmp.drag()'s
+    open-loop goto lands a large jump about a third of the way
+    (warp_cursor's own measurement), so a rubber band swept with it
+    covers some unknown smaller rectangle -- this one warps the REAL
+    cursor through each waypoint and releases only once the far corner
+    is truly reached."""
+    dbg.warp_cursor(qmp, x0, y0)
+    qmp.mouse_down()
+    time.sleep(0.2)
+    for i in range(1, steps + 1):
+        dbg.warp_cursor(qmp, x0 + (x1 - x0) * i // steps,
+                         y0 + (y1 - y0) * i // steps)
+    qmp.mouse_up()
+    time.sleep(0.3)
+
+
+def ink_count(png, rect, rgb, tol=14):
+    """How many sampled pixels inside `rect` are within `tol` of `rgb`.
+    The icons view's folder glyph is (240, 190, 70) -- gen_icons.py's
+    icon_folder() -- which no table row ever draws."""
+    from PIL import Image
+    im = Image.open(png).convert("RGB")
+    x, y, w, h = rect
+    n = 0
+    for yy in range(y, y + h, 2):
+        for xx in range(x, x + w, 2):
+            px = im.getpixel((xx, yy))
+            if all(abs(px[i] - rgb[i]) <= tol for i in range(3)):
+                n += 1
+    return n
 
 
 def setup_fixture(dbg):
@@ -434,6 +490,148 @@ def run(dbg, qmp, tmp, res):
     conf = dbg.send("sh cat /etc/files.conf") or ""
     res.check("the navigated pane's directory is written to /etc/files.conf",
               f"left={SRC}" in conf, f"conf: {conf!r}")
+
+
+    # --- 11. the icons view, the rubber band, one pane, and the tree ----
+    # A fresh, known fixture: the sections above deleted, created and
+    # renamed things, and these checks want a listing they can count.
+    dbg.send(f"sh rm -r {SRC}")
+    dbg.send(f"sh mkdir {SRC}")
+    for n in ("alpha.txt", "bravo.txt", "charlie.txt", "delta.txt", "echo.txt"):
+        dbg.send(f"sh touch {SRC}/{n}")
+    dbg.send(f"sh mkdir {SRC}/sub")
+    # 6 entries + ".." = 7 rows, arriving via the generation poll.
+    lay = wait_layout(dbg, win, lambda l: l.rows.get(0) == 7 and
+                       l.dir.get(0) == SRC and l.active == 0)
+    res.check("the fixture reload arrived (7 rows, left pane active)",
+              lay is not None and lay.rows.get(0) == 7 and lay.active == 0,
+              f"lay={lay and (lay.rows, lay.dir, lay.active)}")
+    if lay is None:
+        teardown_fixture(dbg)
+        return
+
+    # Section 9 opened Notepad, which sits on top and HOLDS THE FOCUS
+    # -- F10 would open ITS menu, and a focusing click would land on it.
+    # Close everything that is not the File Manager (`gui close` asks
+    # through wm_request_close(), the X button's own path); the FM then
+    # tops the stack and takes the focus back.
+    ox, oy = win["content"]["x"], win["content"]["y"]
+    for w2 in sorted(dbg.windows(), key=lambda w2: -w2["z"]):
+        if w2["title"] != TITLE:
+            dbg.send(f"gui close {w2['z']}")
+            time.sleep(0.3)
+    deadline = time.time() + 8.0
+    while time.time() < deadline:
+        if all(w2["title"] == TITLE for w2 in dbg.windows()):
+            break
+        time.sleep(0.3)
+
+    # View -> Icons switches the ACTIVE pane only.
+    menu_pick(dbg, K_RIGHT, K_DOWN, K_ENTER)
+    lay = wait_layout(dbg, win, lambda l: l.view and l.view[0] == 2)
+    res.check("View->Icons puts the active pane in icons mode, the other stays",
+              lay is not None and lay.view and lay.view[0] == 2 and lay.view[1] == 1,
+              f"view={lay and lay.view}")
+    if not (lay and lay.view and lay.view[0] == 2):
+        teardown_fixture(dbg)
+        return
+
+    # The folder glyph's own yellow is on screen in the icons pane and
+    # NOT in the details pane -- the control that catches a mode switch
+    # that was reported and never drawn.
+    png = os.path.join(tmp, "fm_icons.png")
+    qmp.stable_pixels(png)
+    px, py, pw, ph = lay.pane[0]
+    qx, qy, qw, qh = lay.pane[1]
+    folder = (240, 190, 70)
+    left_ink = ink_count(png, (ox + px, oy + py, pw, ph), folder)
+    right_ink = ink_count(png, (ox + qx, oy + qy, qw, qh), folder)
+    res.check("folder-icon ink is in the icons pane and not in the details pane",
+              left_ink > 20 and right_ink == 0,
+              f"left={left_ink} right={right_ink}")
+
+    # The grid takes the keyboard: type-ahead, Enter, Backspace.
+    dbg.key("0x73")  # 's' seeks to sub/
+    lay = wait_layout(dbg, win, lambda l: l.selected == "sub")
+    res.check("type-ahead seeks in the grid", lay is not None and lay.selected == "sub",
+              f"selected={lay and lay.selected}")
+    dbg.key(K_ENTER)
+    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == f"{SRC}/sub")
+    res.check("Enter descends from the grid",
+              lay is not None and lay.dir.get(0) == f"{SRC}/sub", f"dir={lay and lay.dir}")
+    dbg.key(K_BACKSPACE)
+    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == SRC)
+    res.check("Backspace comes back up",
+              lay is not None and lay.dir.get(0) == SRC, f"dir={lay and lay.dir}")
+
+    # The rubber band: sweep from empty space over the grid; the marks
+    # are the band's selection. 6 markable entries (".." is not).
+    x0, y0 = ox + px + pw - 25, oy + py + ph - 15
+    x1, y1 = ox + px + 8, oy + py + 8
+    band_drag(dbg, qmp, x0, y0, x1, y1)
+    lay = wait_layout(dbg, win, lambda l: l.marked[0] == 6)
+    res.check("a rubber-band sweep marks every swept icon",
+              lay is not None and lay.marked[0] == 6, f"marked={lay and lay.marked}")
+    qmp.click_at(x0, y0)
+    lay = wait_layout(dbg, win, lambda l: l.marked[0] == 0)
+    res.check("a click on empty space unmarks everything",
+              lay is not None and lay.marked[0] == 0, f"marked={lay and lay.marked}")
+
+    # One pane: the active pane fills the width; toggling back restores.
+    cw = win["content"]["w"]
+    menu_pick(dbg, K_RIGHT, K_DOWN, K_DOWN, K_ENTER)
+    lay = wait_layout(dbg, win, lambda l: l.view and l.view[2] == 1)
+    res.check("View->Second pane collapses to one pane, full width",
+              lay is not None and lay.view and lay.view[2] == 1 and
+              lay.pane[0][2] > cw * 3 // 4,
+              f"view={lay and lay.view} pane0={lay and lay.pane.get(0)}")
+    menu_pick(dbg, K_RIGHT, K_DOWN, K_DOWN, K_ENTER)
+    lay = wait_layout(dbg, win, lambda l: l.view and l.view[2] == 0)
+    res.check("toggling again restores the second pane",
+              lay is not None and lay.view and lay.view[2] == 0 and
+              lay.pane[0][2] < cw * 3 // 4, f"view={lay and lay.view}")
+
+    # The folder tree: a lazy uui_tree over the open set.
+    menu_pick(dbg, K_RIGHT, K_DOWN, K_DOWN, K_DOWN, K_ENTER)
+    lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 1 and l.treebox)
+    res.check("View->Folder tree adds the tree column and the panes move right",
+              lay is not None and lay.view and lay.view[3] == 1 and
+              lay.view[4] > 1 and lay.pane[0][0] > 0 and lay.treebox is not None,
+              f"view={lay and lay.view} pane0={lay and lay.pane.get(0)}")
+    if lay and lay.treebox:
+        tx, ty, tw, th, trh, tsel = lay.treebox
+        res.check("the tree pre-selects the active pane's directory",
+                  tsel >= 1, f"selected id={tsel}")
+
+        # Row 1 is "/"'s first child ("bin"). Clicking its LABEL
+        # navigates the active pane; clicking its EXPANDER (depth-1
+        # triangle at x ~ pad + indent) relists and GROWS the node
+        # count without navigating anywhere new.
+        n_before = lay.view[4]
+        qmp.click_at(ox + tx + tw // 2, oy + ty + trh + trh // 2)
+        lay = wait_layout(dbg, win, lambda l: l.dir.get(0) not in (SRC, None))
+        res.check("clicking a tree row navigates the active pane",
+                  lay is not None and lay.dir.get(0) not in (SRC, None),
+                  f"dir={lay and lay.dir}")
+        qmp.click_at(ox + tx + 20, oy + ty + trh + trh // 2)
+        lay = wait_layout(dbg, win, lambda l: l.view and l.view[4] > n_before)
+        res.check("clicking its expander lazily lists the directory's children",
+                  lay is not None and lay.view and lay.view[4] > n_before,
+                  f"nodes {n_before} -> {lay and lay.view and lay.view[4]}")
+        qmp.click_at(ox + tx + 20, oy + ty + trh + trh // 2)
+        lay = wait_layout(dbg, win, lambda l: l.view and l.view[4] == n_before)
+        res.check("clicking it again collapses back to the open set",
+                  lay is not None and lay.view and lay.view[4] == n_before,
+                  f"nodes -> {lay and lay.view and lay.view[4]}")
+
+    # The choices persist -- and are then RESET, because a leftover
+    # icons/tree state changes what every later run of this tool sees
+    # (CLAUDE.md: a test that applies a setting changes the machine).
+    conf = dbg.send(f"sh cat {FILES_CONF}") or ""
+    res.check("the view choices persist in /etc/files.conf",
+              "left_view=icons" in conf and "tree=1" in conf and "panes=2" in conf,
+              f"conf: {conf!r}")
+    dbg.send(f"sh rm {FILES_CONF}")
 
     teardown_fixture(dbg)
 

@@ -1145,12 +1145,12 @@ is a two-pane COMMANDER rather than an Explorer, because copy and move
 between two visible directories need neither the clipboard nor
 drag-and-drop, and this system has neither.
 
-What is left of this entry: the icon view, which is what would reuse
-`api/icon_grid.h` and `api/rubberband.h` for cell geometry and
-drag-to-reposition, and would give the rubber-band module the second
-caller it was shaped for. Multi-selection landed WITHOUT it (a bitmap in
-`uui_fileview`), so an icon view now inherits a selection model rather
-than introducing one.
+Nothing is left of this entry: the icon view landed 2026-08-28 as
+`UUI_FILEVIEW_ICONS` (a mode of `uui_fileview`, not a new widget),
+reusing `api/icon_grid.h` for cell geometry and giving
+`api/rubberband.h` the second caller it was shaped for -- the sweep's
+selection is applied straight onto the marks the multi-selection work
+had already put in the widget.
 
 ~~That filesystem API surface also needs seek~~ -- `SYS_LSEEK` exists,
 and Doom (which needed it to read a WAD's lump directory) runs on it.

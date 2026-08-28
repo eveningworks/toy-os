@@ -587,8 +587,8 @@ this the obvious way), not from how much history it accumulated.
   destination that can be collapsed. Every desktop that ships a settings
   sidebar (KDE, GNOME, macOS) ships a flat list with inert headers, not
   an outline view; System Settings uses `uui_sidebar` for that reason.
-  A sidebar deliberately has no collapsing, no second level of nesting,
-  and no icons (the glyph set has no room for them).
+  A sidebar deliberately has no collapsing and no second level of
+  nesting; a HEADING may carry an icon (see the icon-cache entry).
 
 - **`uui_tree` models containment** (`userland/ui/uui_tree.h`) --
   rows at a DEPTH with collapsible parents. **The nodes are the app's
@@ -607,6 +607,23 @@ this the obvious way), not from how much history it accumulated.
   not choosing it. And **`natural_size` counts every node, collapsed or
   not** -- a tree that shrank when collapsed would make the layout
   twitch under the user's own click.
+
+  **A LAZY tree declares its parents instead of deriving them.**
+  `UUI_TREE_CLOSED`/`UUI_TREE_OPEN` on `uui_tree_node.kind` mark a node
+  whose children are simply ABSENT from the array until the app puts
+  them there -- so parenthood cannot come from the depth run and has to
+  be said. An expander click on one reports through
+  `uui_tree_set_on_toggle()`'s callback and flips NOTHING: the app
+  relists, rebuilds the array and calls `uui_tree_set_nodes_keep()`
+  (set_nodes, but keeping the scroll position), and the new array's
+  `kind` is the new truth -- GtkTreeView's
+  test-expand-row/row-expanded split with the model left out. The
+  collapse bitmap and its 64-node cap apply only to derived
+  (`UUI_TREE_AUTO`) nodes, so a lazy tree may exceed
+  `UUI_TREE_MAX_NODES`. Re-selection after a rebuild is the APP's, by
+  its own key -- the File Manager keys on the PATH, because node ids
+  are slots and a rebuild renumbers every slot. See
+  `docs/decisions.md`.
 - **A SETTING DECLARES ITS CATEGORY, and the sidebar is generated from
   it.** `struct setting.category` (`api/setting.h`) is a free string --
   `"Appearance"`, `"Input"`, `"Startup"` -- carried to ring 3 on
@@ -620,8 +637,8 @@ this the obvious way), not from how much history it accumulated.
   `userland/gui/system/settings.c`, `/bin/wm/system/settings`, driven by
   `tools/settings_test.py`. Renamed because Control Panel is Windows'
   name and this shows exactly the SETTINGS registry (not facts, not
-  tunables). The shape is KDE System Settings': a `uui_tree` sidebar,
-  one page, a status bar. **The rename left a stale
+  tunables). The shape is KDE System Settings': a `uui_sidebar` on
+  the left, one page, a status bar. **The rename left a stale
   `/bin/wm/system/cpanel` on any existing `disk.img`**, because `make
   iso` re-seeds by SYNC -- `make clean-disk && make iso` for a fresh
   image, or delete it by hand.
@@ -1403,7 +1420,7 @@ real scanout hardware does. Do not write a pixel assertion for one.
   (Windows has one `SysListView32`, Qt one `QFileSystemModel`, GTK one
   `GtkFileChooser`). **Image Viewer is converted; the other two are
   NOT** (`docs/roadmap.md` carries it), so the duplication is smaller
-  and still there. Six things to know:
+  and still there. Seven things to know:
   - **It COMPOSES `uui_table`** rather than reimplementing rows,
     scrolling, the sorting header and keyboard motion. What it adds is
     what is specific to directories.
@@ -1427,6 +1444,21 @@ real scanout hardware does. Do not write a pixel assertion for one.
     arrangement `uui_listbox` and `uui_table` have, because the WM's
     file picker is a screen-absolute modal the toolkit router never
     sees.
+  - **`UUI_FILEVIEW_ICONS` is the first NON-TABLE mode** (list and
+    details are both column sets on `uui_table`; icons is LVS_ICON to
+    their LVS_REPORT/LIST): the grid draws, hit-tests, scrolls and
+    moves the keyboard itself, over `icon_grid.h`'s cell math and
+    `icon_get()`'s `folder`/`file` artwork -- while the SELECTION, the
+    marks and the sort order stay the TABLE's state, so every path
+    accessor answers identically in all three modes and switching back
+    finds the header sort untouched (see `docs/decisions.md`). Dragging
+    EMPTY SPACE sweeps a rubber band (`rubberband.h`'s second caller,
+    the one it was shaped for) whose selection IS the marks, applied by
+    toggle-to-match on every motion -- so a click on empty space is
+    "unmark everything" with no special case. A caller that reloads on
+    a timer must skip while `uui_fileview_band_active()` says a sweep
+    is in progress: a reload clears the very marks the band is choosing
+    (the desktop's `desktop_drag_active()` rule).
 - **THE FILE MANAGER IS A TWO-PANE COMMANDER, NOT AN EXPLORER**
   (`userland/gui/apps/files.c`, `/bin/wm/apps/files`). Explorer's two
   primary verbs are copy/paste and drag-onto-a-window, and this system
@@ -1435,7 +1467,7 @@ real scanout hardware does. Do not write a pixel assertion for one.
   Commander, Total Commander and Krusader for forty years, needs
   neither: with two directories on screen the source is the active pane
   and the destination is the other one, so nothing is carried and
-  nothing needs a carrier. Five things to know:
+  nothing needs a carrier. Six things to know:
   - **File operations are CHILD PROCESSES.** F5 spawns `/bin/cp`, F8
     spawns `/bin/rm`, and `on_tick` reaps them with
     `sys_waitpid_nohang()`. One implementation of copying, testable as
@@ -1452,6 +1484,16 @@ real scanout hardware does. Do not write a pixel assertion for one.
     per-app config convention's second user after `desktop.conf`. An
     explicit command-line argument WINS and is not saved: it is a
     statement about that launch.
+  - **The View menu is per-PANE for the mode and per-WINDOW for the
+    shape.** Details/Icons set the ACTIVE pane's `uui_fileview` mode
+    (two panes in two modes is normal in any commander that grew a
+    thumbnail view); "Second pane" collapses to one full-width pane --
+    Tab still swaps WHICH one that is, and F5/F6 still aim at the
+    hidden pane's directory, which keeps existing; "Folder tree" adds a
+    lazy `uui_tree` column on the left whose rows navigate the active
+    pane, with only user-expanded directories ever listed. All four
+    choices persist in `/etc/files.conf`
+    (`left_view`/`right_view`/`panes`/`tree`).
   - **Refresh is `SYS_FS_GENERATION` polled in the tick**, the desktop's
     idiom -- one integer compare, no disk I/O, and a copy finishing in
     another process appears with nobody pressing anything. **An app that

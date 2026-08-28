@@ -5023,3 +5023,75 @@ See `docs/conventions/gui.md` for the rule, and
 `/tests/focusring_test` for the assertion -- each widget checked both
 ways, because a one-sided check passes on a control that rings itself
 unconditionally.
+
+## The icons view is a MODE of uui_fileview, not a new widget
+
+`UUI_FILEVIEW_ICONS` joins `LIST` and `DETAILS` on the same widget,
+even though it is the first mode that cannot forward to `uui_table` --
+the grid draws, hit-tests, scrolls and moves the keyboard itself. A
+separate `uui_iconview` widget was the obvious alternative and was
+rejected.
+
+**Why one widget.** The hard-won state is not the drawing: it is the
+row model (the synthetic `..`, the caller-owned entries), the mark
+bitmap and its clear-on-reload rule, the sort order, and a dozen path
+accessors that apps and four test tools already speak. A second widget
+would either duplicate all of it or grow a shared "directory model"
+layer that only these two widgets would ever use. Win32 made the same
+call: LVS_ICON is a STYLE of one ListView, not a sibling control, and
+switching styles there keeps the selection for the same reason it does
+here. The seam was already in place -- `uui_fileview_set_mode()`
+existed, and every input path dispatches on the mode in one place.
+
+**What stays the table's even in icons mode.** The selection
+(`table.selected`), the marks, the sort permutation (the grid displays
+`uui_table_source_row()` order, so directories still lead), and even
+type-ahead -- a letter goes through `uui_table_key()` and only the
+reveal is the grid's. Switching modes therefore never loses state, and
+switching back finds the header sort untouched.
+
+**The rubber band's selection IS the marks.** The sweep could have had
+its own selection set beside the marks (the desktop's band has one),
+but a file manager already has exactly one "set of files the next
+operation acts on" and two would need a precedence rule no user could
+predict. So every band motion applies toggle-to-match onto the marks,
+and `rb_end()`'s plain-click-clears rule becomes "click empty space to
+unmark everything" for free. The cost: a timed reload clears marks
+mid-sweep, so the app skips its generation poll while
+`uui_fileview_band_active()` -- the same interlock the desktop's
+`desktop_drag_active()` encodes.
+
+## uui_tree stays static -- a lazy tree is the app's rebuild
+
+The File Manager's folder column needed a tree whose directories load
+on expand. The obvious extension -- give `uui_tree` a
+populate-children callback and let it splice nodes into its own model
+-- was rejected; instead a node can DECLARE its parenthood
+(`UUI_TREE_CLOSED`/`UUI_TREE_OPEN` in `uui_tree_node.kind`), and an
+expander click on a declared node reports through
+`uui_tree_set_on_toggle()` and changes nothing. The app relists,
+rebuilds its flat array, and hands it back with
+`uui_tree_set_nodes_keep()`.
+
+**Why the widget cannot own the loading.** Toykit widgets own no
+memory and do no I/O -- the nodes are a caller-owned flat array
+precisely so there is no allocator and no teardown, and a widget that
+lists directories has crossed into being an app. GtkTreeView splits at
+the same joint (test-expand-row asks, the MODEL loads, row-expanded
+reports); this is that split with the model layer left out, because
+one caller does not buy a model abstraction.
+
+**Why kind is per-node rather than a widget-level "lazy" flag.** A
+declared parent is the only honest way to draw an expander on a node
+whose children are absent from the array -- derivation from the depth
+run cannot see them. With the app owning the open set, the widget's
+collapse bitmap goes unused in a lazy tree, which is also what frees a
+lazy tree from `UUI_TREE_MAX_NODES` (the cap bounds the bitmap, and
+only `UUI_TREE_AUTO` nodes use it).
+
+**The open set is keyed by PATH, ids are slots.** A rebuild renumbers
+every node, so the app remembers what is open (and what was selected)
+by path and re-selects after `set_nodes_keep()`. The widget keeps only
+the scroll position across the swap -- dropping it flung the view back
+to the root on every expand, which is why `set_nodes_keep()` exists
+rather than apps poking `t->top`.

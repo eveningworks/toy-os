@@ -20,6 +20,8 @@ void uui_tree_init(struct uui_tree *t, int x, int y, int w, int h,
     t->bar_w = 8;
     t->thumb_grab = -1;
     t->collapsed = 0; // EXPANDED by default -- see the header
+    t->on_toggle = 0;
+    t->toggle_ctx = 0;
     t->bg = ugfx_rgb(246, 246, 248);
     t->fg = ugfx_rgb(20, 20, 20);
     t->sel_bg = ugfx_rgb(205, 220, 240);
@@ -41,15 +43,36 @@ void uui_tree_set_nodes(struct uui_tree *t, const struct uui_tree_node *nodes, i
     t->collapsed = 0;
 }
 
-// --- structure, derived from the depth run ----------------------------
+static void tree_clamp(struct uui_tree *t);
+
+void uui_tree_set_nodes_keep(struct uui_tree *t, const struct uui_tree_node *nodes,
+                              int count) {
+    int top = t->top;
+    uui_tree_set_nodes(t, nodes, count);
+    t->top = top;
+    tree_clamp(t);
+}
+
+void uui_tree_set_on_toggle(struct uui_tree *t,
+                             void (*fn)(void *ctx, int id, int expand), void *ctx) {
+    t->on_toggle = fn;
+    t->toggle_ctx = ctx;
+}
+
+// --- structure, derived from the depth run (or declared -- see `kind`) --
 
 int uui_tree_is_parent(const struct uui_tree *t, int node) {
-    if (node < 0 || node >= t->count - 1) return 0;
+    if (node < 0 || node >= t->count) return 0;
+    if (t->nodes[node].kind != UUI_TREE_AUTO) return 1; // declared lazy parent
+    if (node >= t->count - 1) return 0;
     return t->nodes[node + 1].depth > t->nodes[node].depth;
 }
 
 int uui_tree_is_collapsed(const struct uui_tree *t, int node) {
-    if (node < 0 || node >= UUI_TREE_MAX_NODES) return 0;
+    if (node < 0 || node >= t->count) return 0;
+    if (t->nodes[node].kind != UUI_TREE_AUTO)
+        return t->nodes[node].kind == UUI_TREE_CLOSED;
+    if (node >= UUI_TREE_MAX_NODES) return 0;
     return (t->collapsed >> node) & 1u;
 }
 
@@ -99,6 +122,16 @@ static int row_of_node(const struct uui_tree *t, int node) {
 
 int uui_tree_set_collapsed(struct uui_tree *t, int node, int collapsed) {
     if (!uui_tree_is_parent(t, node)) return 0; // a leaf: no-op, not an error
+    if (t->nodes[node].kind != UUI_TREE_AUTO) {
+        // The APP owns this node's state: report the request and flip
+        // nothing -- the rebuilt array's `kind` is what changes it.
+        // NOTE the callback may call uui_tree_set_nodes_keep() before
+        // this returns, so `node` must not be used after it.
+        if (uui_tree_is_collapsed(t, node) == !!collapsed) return 0;
+        if (!t->on_toggle) return 0;
+        t->on_toggle(t->toggle_ctx, t->nodes[node].id, !collapsed);
+        return 1;
+    }
     if (node >= UUI_TREE_MAX_NODES) return 0;
     int was = uui_tree_is_collapsed(t, node);
     if (was == !!collapsed) return 0;
@@ -470,6 +503,14 @@ static void tree_set_geometry_op(void *w, int x, int y, int rw, int rh) {
     tree_clamp(t);
 }
 
+static void tree_bounds_op(const void *w, int *x, int *y, int *out_w, int *out_h) {
+    const struct uui_tree *t = w;
+    if (x) *x = t->x;
+    if (y) *y = t->y;
+    if (out_w) *out_w = t->w;
+    if (out_h) *out_h = t->h;
+}
+
 const struct uui_widget_ops uui_tree_focus_ops = {
     .key = tree_key_op,
 };
@@ -490,6 +531,7 @@ static int tree_accepts_focus_op(const void *w) {
 
 const struct uui_widget_ops uui_tree_ops = {
     .draw = tree_draw_op,
+    .bounds = tree_bounds_op,
     .accepts_focus = tree_accepts_focus_op,
     .set_focused   = tree_set_focused_op,
     .hit = tree_hit_op,

@@ -4,6 +4,8 @@
 #include "rt/sys.h"     // sys_listdir(), sys_ticks()
 #include "kpath.h"      // k_path_join/_dirname -- the KERNEL's, linked into ring 3
 #include "lib/human.h"  // human_size()
+#include "lib/icon_cache.h" // icon_get() -- the icons view's artwork
+#include "icon_grid.h"      // cell math, shared with the desktop
 #include <string.h>
 #include <stdio.h>
 #include "keyboard.h"   // KEY_* codes, as delivered by WIN_EV_KEY
@@ -44,6 +46,8 @@ static const struct sys_dirent *fv_entry(const struct uui_fileview *fv, int row)
 static int fv_is_up_row(const struct uui_fileview *fv, int row) {
     return fv->has_up && row == 0;
 }
+
+static void ic_reveal(struct uui_fileview *fv); // icons mode, below
 
 int uui_fileview_row_count(const struct uui_fileview *fv) {
     return fv->count + (fv->has_up ? 1 : 0);
@@ -135,9 +139,10 @@ static void fv_cell(void *ctx, int row, int col, char *out, int cap) {
 
     switch (col) {
     case FV_COL_NAME:
-        // A trailing '/' marks a directory, which is `ls -F`'s answer
-        // and needs no artwork -- icon_get() is WM-internal today (see
-        // docs/filemanager-design.md's open questions).
+        // A trailing '/' marks a directory: `ls -F`'s answer, kept in
+        // the table modes even though the icons view draws artwork --
+        // a text row with no glyph column still has to say which rows
+        // descend.
         if (e->is_dir) snprintf(out, (size_t)cap, "%s/", e->name);
         else           snprintf(out, (size_t)cap, "%s", e->name);
         break;
@@ -251,6 +256,13 @@ void uui_fileview_init(struct uui_fileview *fv, int x, int y, int w, int h,
 
 void uui_fileview_set_mode(struct uui_fileview *fv, enum uui_fileview_mode mode) {
     fv->mode = mode;
+    if (mode == UUI_FILEVIEW_ICONS) {
+        // The table keeps its columns and sort: the grid displays the
+        // same order, and switching back finds the header as it was.
+        fv->icon_top = 0;
+        rb_clear(&fv->band);
+        return;
+    }
     if (mode == UUI_FILEVIEW_LIST) {
         fv->table.cols = fv_cols_list;
         fv->table.col_count = 1;
@@ -293,6 +305,7 @@ int uui_fileview_reload(struct uui_fileview *fv) {
     fv->truncated = 0;
     fv->failed = 0;
     uui_fileview_clear_marks(fv); // see uui_fileview.h -- a mark names a ROW
+    rb_clear(&fv->band);           // its selection is those rows
     fv->has_up = fv->navigable && !fv_at_root(fv);
 
     int n = sys_listdir(fv->dir, fv->entries, fv->cap);
@@ -330,6 +343,7 @@ int uui_fileview_reload(struct uui_fileview *fv) {
                               ? uui_table_source_row(&fv->table, 0) : -1;
     }
     fv->last_click_row = -1;
+    if (fv->mode == UUI_FILEVIEW_ICONS) ic_reveal(fv);
     return !fv->failed;
 }
 
@@ -340,6 +354,7 @@ int uui_fileview_set_dir(struct uui_fileview *fv, const char *dir) {
     // preserve-by-name is for a refresh of the same directory.
     fv->table.selected = -1;
     fv->table.top = 0;
+    fv->icon_top = 0;
     int ok = uui_fileview_reload(fv);
     if (fv->on_dir_changed) fv->on_dir_changed(fv->ctx, fv->dir);
     return ok;
@@ -387,6 +402,7 @@ int uui_fileview_select_name(struct uui_fileview *fv, const char *name) {
         fv->table.selected = fv->has_up ? i + 1 : i;
         // Scroll it into view: a selection the user cannot see is a
         // selection they will act on by accident.
+        if (fv->mode == UUI_FILEVIEW_ICONS) { ic_reveal(fv); return 1; }
         int view = uui_table_view_row(&fv->table, fv->table.selected);
         int vis = uui_table_visible_rows(&fv->table);
         if (view >= 0) {
@@ -428,6 +444,337 @@ int uui_fileview_activate(struct uui_fileview *fv) {
     return 1;
 }
 
+// --- icons mode -------------------------------------------------------
+//
+// The cell math is icon_grid.h's (the desktop's, compiled into ring 3);
+// the artwork is icon_cache's "folder"/"file" at a font-derived size.
+// Everything below speaks VIEW positions -- the table's sorted order --
+// and converts through uui_table_source_row()/_view_row() at the edges,
+// so selection, marks and sorting are ONE state across all three modes.
+
+static int ic_px(void)   { return ugfx_char_h() * 2; }  // the icon box
+static int ic_pad(void)  { return 4; }
+
+static int ic_cell_w(void) {
+    // A label's worth of pitch, never narrower than the icon -- the
+    // desktop's icon_col_w() tradeoff (fixed pitch, clipped labels).
+    int w = 14 * ugfx_char_w();
+    int m = ic_px() + 8;
+    return w < m ? m : w;
+}
+
+static int ic_cell_h(void) { return ic_px() + ugfx_char_h() + 10; }
+
+static int ic_cols(const struct uui_fileview *fv) {
+    int n = (fv->table.w - fv->table.bar_w - 2 * ic_pad()) / ic_cell_w();
+    return n > 0 ? n : 1;
+}
+
+static int ic_total_rows(const struct uui_fileview *fv) {
+    int cols = ic_cols(fv);
+    return (uui_fileview_row_count(fv) + cols - 1) / cols;
+}
+
+static int ic_vis_rows(const struct uui_fileview *fv) {
+    int n = (fv->table.h - 2 * ic_pad()) / ic_cell_h();
+    return n > 0 ? n : 1;
+}
+
+static int ic_bar_visible(const struct uui_fileview *fv) {
+    return ic_total_rows(fv) > ic_vis_rows(fv);
+}
+
+// Bottom-anchored offset, uui_scrollbar's convention (see uui_tree.c).
+static int ic_offset(const struct uui_fileview *fv) {
+    return ic_total_rows(fv) - ic_vis_rows(fv) - fv->icon_top;
+}
+
+static void ic_clamp(struct uui_fileview *fv) {
+    int max_top = ic_total_rows(fv) - ic_vis_rows(fv);
+    if (max_top < 0) max_top = 0;
+    if (fv->icon_top > max_top) fv->icon_top = max_top;
+    if (fv->icon_top < 0) fv->icon_top = 0;
+}
+
+static int ic_set_offset(struct uui_fileview *fv, int offset) {
+    int before = fv->icon_top;
+    fv->icon_top = ic_total_rows(fv) - ic_vis_rows(fv) - offset;
+    ic_clamp(fv);
+    return fv->icon_top != before;
+}
+
+static struct icon_grid ic_grid(const struct uui_fileview *fv) {
+    struct icon_grid g;
+    g.origin_x = fv->table.x + ic_pad();
+    // Scrolled: grid row `icon_top` lands on the widget's first row.
+    g.origin_y = fv->table.y + ic_pad() - fv->icon_top * ic_cell_h();
+    g.cell_w = ic_cell_w();
+    g.cell_h = ic_cell_h();
+    g.cols = ic_cols(fv);
+    return g;
+}
+
+// A VIEW position's cell rectangle, in content coordinates.
+static void ic_cell_rect(const struct uui_fileview *fv, int view,
+                          int *out_x, int *out_y) {
+    struct icon_grid g = ic_grid(fv);
+    icon_grid_cell_rect(&g, view % g.cols, view / g.cols, out_x, out_y);
+}
+
+// VIEW position at (cx, cy), or -1. Exact, not nearest-cell:
+// icon_grid_nearest_cell() clamps, and "empty space" must stay
+// answerable here or the rubber band could never begin.
+static int ic_hit_view(const struct uui_fileview *fv, int cx, int cy) {
+    const struct uui_table *t = &fv->table;
+    if (!uui_hit(t->x, t->y, t->w, t->h, cx, cy)) return -1;
+    if (ic_bar_visible(fv) && cx >= t->x + t->w - t->bar_w) return -1;
+    int lx = cx - (t->x + ic_pad());
+    int ly = cy - (t->y + ic_pad()) + fv->icon_top * ic_cell_h();
+    if (lx < 0 || ly < 0) return -1;
+    int col = lx / ic_cell_w();
+    if (col >= ic_cols(fv)) return -1;
+    int view = (ly / ic_cell_h()) * ic_cols(fv) + col;
+    return view < uui_fileview_row_count(fv) ? view : -1;
+}
+
+static void ic_reveal(struct uui_fileview *fv) {
+    int view = uui_table_view_row(&fv->table, fv->table.selected);
+    if (view < 0) { ic_clamp(fv); return; }
+    int grow = view / ic_cols(fv);
+    int vis = ic_vis_rows(fv);
+    if (grow < fv->icon_top) fv->icon_top = grow;
+    else if (grow >= fv->icon_top + vis) fv->icon_top = grow - vis + 1;
+    ic_clamp(fv);
+}
+
+// Move the selection by `delta` VIEW positions, clamped to the ends.
+static int ic_step(struct uui_fileview *fv, int delta) {
+    int rows = uui_fileview_row_count(fv);
+    if (rows <= 0) return 0;
+    int view = uui_table_view_row(&fv->table, fv->table.selected);
+    int next = view < 0 ? 0 : view + delta;
+    if (next < 0) next = 0;
+    if (next >= rows) next = rows - 1;
+    if (view == next) return 0;
+    fv->table.selected = uui_table_source_row(&fv->table, next);
+    ic_reveal(fv);
+    fv_report_select(fv);
+    return 1;
+}
+
+// The band's items are view positions; rubberband.h asks geometry only.
+static int ic_rb_count(void *ctx) {
+    return uui_fileview_row_count((const struct uui_fileview *)ctx);
+}
+
+static void ic_rb_rect(void *ctx, int index, int *x, int *y, int *w, int *h) {
+    const struct uui_fileview *fv = (const struct uui_fileview *)ctx;
+    ic_cell_rect(fv, index, x, y);
+    *w = ic_cell_w();
+    *h = ic_cell_h();
+}
+
+// Make the MARKS agree with the band's selection. Toggle-by-difference,
+// so mark_count stays right and ".." (never markable) stays out.
+static void ic_apply_band(struct uui_fileview *fv) {
+    int rows = uui_fileview_row_count(fv);
+    for (int view = 0; view < rows; view++) {
+        int src = uui_table_source_row(&fv->table, view);
+        if (fv_is_up_row(fv, src)) continue;
+        int want = rb_is_selected(&fv->band, view);
+        if (want != uui_fileview_is_marked(fv, src))
+            uui_fileview_toggle_mark(fv, src);
+    }
+}
+
+int uui_fileview_band_active(const struct uui_fileview *fv) {
+    return fv->band.armed;
+}
+
+static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
+    const struct uui_table *t = &fv->table;
+    ugfx_fill_rect(s, t->x, t->y, t->w, t->h, t->bg);
+
+    int rows = uui_fileview_row_count(fv);
+    int cols = ic_cols(fv), vis = ic_vis_rows(fv);
+    int px = ic_px(), cw = ic_cell_w(), chh = ic_cell_h();
+    int first = fv->icon_top * cols;
+    int last = first + (vis + 1) * cols; // +1: the partial row at the bottom
+    if (last > rows) last = rows;
+
+    int sel_x = -1, sel_y = -1; // the selected cell, for the focus ring
+
+    for (int view = first; view < last; view++) {
+        int src = uui_table_source_row(t, view);
+        int x, y;
+        ic_cell_rect(fv, view, &x, &y);
+
+        // Same precedence as the table's rows: selection, hover, tint.
+        uint32_t bg = t->bg;
+        int selected = (src == t->selected);
+        if (selected) { bg = t->sel_bg; sel_x = x; sel_y = y; }
+        else if (src == t->hovered) bg = uui_state_bg(t->bg, UUI_STATE_HOVER);
+        else if (uui_fileview_is_marked(fv, src)) bg = fv->mark_bg;
+        if (bg != t->bg) ugfx_fill_rect(s, x, y, cw - 2, chh - 2, bg);
+
+        int is_up = fv_is_up_row(fv, src);
+        const struct sys_dirent *e = fv_entry(fv, src);
+        const char *name = is_up ? ".." : (e ? e->name : "");
+        int is_dir = is_up || (e && e->is_dir);
+
+        const struct uimg *ico = icon_get(is_dir ? "folder" : "file", px);
+        int ix = x + (cw - px) / 2;
+        if (ico) {
+            ugfx_blit_alpha(s, ix, y + 2, ico->w, ico->h, ico->px, ico->w);
+        } else {
+            // The desktop's letter tile, for a build whose icon files
+            // are missing rather than merely unthemed.
+            ugfx_fill_rect(s, ix, y + 2, px, px, ugfx_rgb(60, 90, 130));
+            char initial[2] = { name[0] ? name[0] : '?', 0 };
+            ugfx_draw_string(s, ix + (px - ugfx_char_w()) / 2,
+                              y + 2 + (px - ugfx_char_h()) / 2, initial,
+                              ugfx_rgb(230, 230, 235), ugfx_rgb(60, 90, 130));
+        }
+
+        int max_w = cw - 6;
+        int tw = ugfx_text_width(name);
+        int lx = tw < max_w ? x + (cw - tw) / 2 : x + 3;
+        ugfx_draw_string_clipped(s, lx, y + 2 + px + 2, max_w, name,
+                                  selected ? t->sel_fg : t->fg, bg);
+    }
+
+    if (ic_bar_visible(fv))
+        uui_scrollbar_draw(s, t->x + t->w - t->bar_w, t->y, t->bar_w, t->h,
+                            ic_total_rows(fv), vis, ic_offset(fv),
+                            t->track_bg, t->thumb_bg, 0);
+
+    // The band, above everything it crosses. An outline, not a fill --
+    // the same call the desktop makes (no alpha blend to fill with).
+    int bx, by, bw, bh;
+    if (rb_rect(&fv->band, &bx, &by, &bw, &bh))
+        ugfx_draw_rect(s, bx, by, bw, bh, t->fg);
+
+    if (t->focused) {
+        if (sel_x >= 0) uui_focus_ring(s, sel_x, sel_y, cw - 2, chh - 2);
+        else            uui_focus_ring(s, t->x, t->y, t->w, t->h);
+    }
+}
+
+static int ic_hover(struct uui_fileview *fv, int cx, int cy) {
+    int view = ic_hit_view(fv, cx, cy);
+    int src = view >= 0 ? uui_table_source_row(&fv->table, view) : -1;
+    if (src == fv->table.hovered) return 0;
+    fv->table.hovered = src;
+    return 1;
+}
+
+static int ic_press(struct uui_fileview *fv, int cx, int cy) {
+    struct uui_table *t = &fv->table;
+    if (!uui_hit(t->x, t->y, t->w, t->h, cx, cy)) return 0;
+
+    if (ic_bar_visible(fv) && cx >= t->x + t->w - t->bar_w) {
+        int vis = ic_vis_rows(fv), total = ic_total_rows(fv);
+        int off = ic_offset(fv);
+        enum uui_scrollbar_zone zone =
+            uui_scrollbar_hit(t->x + t->w - t->bar_w, t->y, t->bar_w, t->h,
+                              total, vis, off, cx, cy, 0);
+        if (zone == UUI_SB_THUMB) {
+            int thumb_y, thumb_h;
+            uui_scrollbar_thumb_rect(t->y, t->h, total, vis, off,
+                                      &thumb_y, &thumb_h, t->bar_w, 0);
+            t->thumb_grab = cy - thumb_y;
+            return 1;
+        }
+        int page = vis > 1 ? vis - 1 : 1;
+        if (zone == UUI_SB_ABOVE) ic_set_offset(fv, off + page);
+        else if (zone == UUI_SB_BELOW) ic_set_offset(fv, off - page);
+        return 1;
+    }
+
+    int view = ic_hit_view(fv, cx, cy);
+    if (view < 0) {
+        // Empty space: maybe a band, maybe a deselecting click --
+        // rb_end() tells them apart, so nothing is decided here.
+        rb_begin(&fv->band, cx, cy, RB_REPLACE);
+        return 1;
+    }
+
+    int src = uui_table_source_row(t, view);
+    int changed = (t->selected != src);
+    t->selected = src;
+
+    unsigned long now = sys_ticks();
+    int is_double = (src == fv->last_click_row &&
+                      now - fv->last_click_tick <= UUI_FILEVIEW_DOUBLE_CLICK_TICKS);
+    fv->last_click_tick = now;
+    fv->last_click_row = is_double ? -1 : src;
+
+    if (is_double) return uui_fileview_activate(fv) || 1;
+    if (changed) fv_report_select(fv);
+    return 1;
+}
+
+static int ic_drag(struct uui_fileview *fv, int cx, int cy) {
+    struct uui_table *t = &fv->table;
+    if (t->thumb_grab >= 0) {
+        int off = uui_scrollbar_offset_for_drag(t->y, t->h, ic_total_rows(fv),
+                                                 ic_vis_rows(fv), cy,
+                                                 t->thumb_grab, t->bar_w, 0);
+        return ic_set_offset(fv, off);
+    }
+    if (fv->band.armed) {
+        struct rb_ops ops = { ic_rb_count, ic_rb_rect };
+        rb_motion(&fv->band, cx, cy, &ops, fv);
+        ic_apply_band(fv);
+        return 1;
+    }
+    return 0;
+}
+
+static void ic_drag_end(struct uui_fileview *fv) {
+    fv->table.thumb_grab = -1;
+    if (fv->band.armed) {
+        // A plain click on empty space clears the band's selection
+        // (rubberband.h's rule), so this apply is also "click empty
+        // space to unmark everything".
+        rb_end(&fv->band);
+        ic_apply_band(fv);
+    }
+}
+
+static int ic_wheel(struct uui_fileview *fv, int notches) {
+    int before = fv->icon_top;
+    fv->icon_top += notches;
+    ic_clamp(fv);
+    return fv->icon_top != before;
+}
+
+static int ic_key(struct uui_fileview *fv, int key) {
+    int cols = ic_cols(fv), vis = ic_vis_rows(fv);
+    int rows = uui_fileview_row_count(fv);
+    if (rows <= 0) return 0;
+
+    switch (key) {
+    case KEY_ARROW_LEFT:  return ic_step(fv, -1);
+    case KEY_ARROW_RIGHT: return ic_step(fv, 1);
+    case KEY_ARROW_UP:    return ic_step(fv, -cols);
+    case KEY_ARROW_DOWN:  return ic_step(fv, cols);
+    case KEY_PAGE_UP:     return ic_step(fv, -vis * cols);
+    case KEY_PAGE_DOWN:   return ic_step(fv, vis * cols);
+    case KEY_HOME:        return ic_step(fv, -rows);
+    case KEY_END:         return ic_step(fv, rows);
+    default:
+        // Letters: the table's type-ahead moves the selection in the
+        // shared sort order; only the scroll state is this mode's.
+        if (uui_table_key(&fv->table, key)) {
+            ic_reveal(fv);
+            fv_report_select(fv);
+            return 1;
+        }
+        return 0;
+    }
+}
+
 // --- the direct interface ---------------------------------------------
 
 void uui_fileview_set_geometry(struct uui_fileview *fv, int x, int y, int w, int h) {
@@ -436,6 +783,7 @@ void uui_fileview_set_geometry(struct uui_fileview *fv, int x, int y, int w, int
 }
 
 void uui_fileview_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
+    if (fv->mode == UUI_FILEVIEW_ICONS) { ic_draw(s, fv); return; }
     uui_table_draw(s, &fv->table);
 }
 
@@ -444,10 +792,15 @@ void uui_fileview_natural_size(const struct uui_fileview *fv, int *out_w, int *o
 }
 
 int uui_fileview_hit(const struct uui_fileview *fv, int cx, int cy) {
+    if (fv->mode == UUI_FILEVIEW_ICONS) {
+        int view = ic_hit_view(fv, cx, cy);
+        return view >= 0 ? uui_table_source_row(&fv->table, view) : -1;
+    }
     return uui_table_hit(&fv->table, cx, cy);
 }
 
 int uui_fileview_hover(struct uui_fileview *fv, int cx, int cy) {
+    if (fv->mode == UUI_FILEVIEW_ICONS) return ic_hover(fv, cx, cy);
     return uui_table_hover(&fv->table, cx, cy);
 }
 
@@ -459,6 +812,8 @@ int uui_fileview_press(struct uui_fileview *fv, int cx, int cy) {
     // (ui/uui_route.c) -- which is how clicking the blank part of a file
     // manager pane failed to make that pane the active one, while
     // clicking a row worked.
+    if (fv->mode == UUI_FILEVIEW_ICONS) return ic_press(fv, cx, cy);
+
     int inside = uui_hit(fv->table.x, fv->table.y, fv->table.w, fv->table.h, cx, cy);
 
     if (uui_table_press(&fv->table, cx, cy)) return 1; // the scrollbar
@@ -481,14 +836,17 @@ int uui_fileview_press(struct uui_fileview *fv, int cx, int cy) {
 }
 
 int uui_fileview_drag(struct uui_fileview *fv, int cx, int cy) {
+    if (fv->mode == UUI_FILEVIEW_ICONS) return ic_drag(fv, cx, cy);
     return uui_table_drag(&fv->table, cx, cy);
 }
 
 void uui_fileview_drag_end(struct uui_fileview *fv) {
+    if (fv->mode == UUI_FILEVIEW_ICONS) { ic_drag_end(fv); return; }
     uui_table_drag_end(&fv->table);
 }
 
 int uui_fileview_wheel(struct uui_fileview *fv, int notches) {
+    if (fv->mode == UUI_FILEVIEW_ICONS) return ic_wheel(fv, notches);
     return uui_table_wheel(&fv->table, notches);
 }
 
@@ -496,13 +854,17 @@ int uui_fileview_key(struct uui_fileview *fv, int key) {
     if (key == '\n' || key == '\r') return uui_fileview_activate(fv);
     if (key == '\b') return uui_fileview_up(fv);
     if (key == KEY_INSERT || key == ' ') {
-        // Toggle and STEP DOWN, which is what makes marking a run of
+        // Toggle and STEP ON, which is what makes marking a run of
         // files one repeated keystroke -- every commander does this, and
-        // a toggle that stayed put would need two keys per file.
+        // a toggle that stayed put would need two keys per file. "On"
+        // is the next row in the table modes and the next CELL in the
+        // grid, which is the same view position either way.
         if (!uui_fileview_toggle_mark(fv, fv->table.selected)) return 0;
-        uui_table_key(&fv->table, KEY_ARROW_DOWN);
+        if (fv->mode == UUI_FILEVIEW_ICONS) ic_step(fv, 1);
+        else uui_table_key(&fv->table, KEY_ARROW_DOWN);
         return 1;
     }
+    if (fv->mode == UUI_FILEVIEW_ICONS) return ic_key(fv, key);
     if (uui_table_key(&fv->table, key)) {
         fv_report_select(fv);
         return 1;

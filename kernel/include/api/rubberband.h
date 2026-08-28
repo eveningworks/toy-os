@@ -29,11 +29,12 @@
 // run.
 
 // Items are tracked in a fixed bitset, because there is no allocator on
-// either side of this boundary. Comfortably above the desktop's icon
-// count and any directory a file manager can currently show; a caller
-// with more items must page them, and rb_ops::count is clamped to this
-// so an over-large answer can never write past the bitset.
-#define RB_MAX_ITEMS 128
+// either side of this boundary. Sized to SYS_LISTDIR_MAX so a file
+// manager pane's full listing fits (its rows can still be listing+1 --
+// the synthetic "..", which cannot be selected anyway); a caller with
+// more items must page them, and rb_ops::count is clamped to this so an
+// over-large answer can never write past the bitset.
+#define RB_MAX_ITEMS 256
 #define RB_WORDS ((RB_MAX_ITEMS + 31) / 32)
 
 // How far the pointer must travel before a press becomes a BAND rather

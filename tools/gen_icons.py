@@ -230,6 +230,33 @@ def icon_files():
     return im
 
 
+
+def icon_folder():
+    # NOT an app icon: a plain folder glyph for the file manager's icons
+    # view, drawn with no tile() plate -- a listing entry sits in a pane,
+    # not on a wallpaper, and a plate would read as a button.
+    im = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.rounded_rectangle([6, 14, 34, 24], radius=4, fill=(230, 176, 60, 255))
+    d.rounded_rectangle([6, 20, 58, 52], radius=4, fill=(240, 190, 70, 255))
+    d.rounded_rectangle([6, 20, 58, 26], radius=2, fill=(214, 162, 52, 255))
+    return im
+
+
+def icon_file():
+    # A page with a folded corner, the universal "some file" glyph --
+    # per-type artwork is the icon THEME's future problem, not this
+    # function's.
+    im = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    grey = (140, 145, 155, 255)
+    d.rounded_rectangle([14, 8, 50, 56], radius=3, fill=WHITE, outline=grey, width=2)
+    d.polygon([(38, 8), (50, 20), (38, 20)], fill=(210, 214, 222, 255), outline=grey)
+    for yy in (28, 35, 42):
+        d.line([20, yy, 44, yy], fill=(170, 175, 185, 255), width=2)
+    return im
+
+
 def icon_start():
     """The Start button's mark -- NOT an app icon, and deliberately not
     shaped like a UI convention either.
@@ -349,6 +376,8 @@ ICONS = {
     "mines": icon_mines,
     "doom": icon_doom,
     "files": icon_files,
+    "folder": icon_folder,
+    "file": icon_file,
     "diskmark": icon_diskmark,
 }
 

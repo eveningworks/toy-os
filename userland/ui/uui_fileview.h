@@ -6,6 +6,7 @@
 #include "ui/uui_table.h"
 #include "syscall_abi.h"  // struct sys_dirent
 #include "lib/dirsort.h"  // enum dirsort_key, dirsort_cmp()
+#include "rubberband.h"   // the icons view's drag selection
 
 // --- fileview: a directory, as a widget -------------------------------
 //
@@ -48,6 +49,14 @@ enum uui_fileview_mode {
     // Name / Size / Modified, with the sortable header. LVS_REPORT vs
     // LVS_LIST on Win32: one widget, and the difference is columns.
     UUI_FILEVIEW_DETAILS,
+    // An icon grid (LVS_ICON). The FIRST mode that is not the table:
+    // drawing, hit-testing, scrolling and keyboard motion are the
+    // widget's own here, over icon_grid.h's cell math -- but the
+    // SELECTION, the marks, the sort order and every path accessor stay
+    // the table's state, so a caller sees one widget whatever the mode.
+    // Dragging empty space sweeps a rubber band that MARKS what it
+    // covers (rubberband.h's second caller, as designed).
+    UUI_FILEVIEW_ICONS,
 };
 
 // Return 1 to list this entry, 0 to hide it. Directories are offered
@@ -108,6 +117,10 @@ struct uui_fileview {
     // Double-click state, in sys_ticks(). OWNED.
     int last_click_row;
     unsigned long last_click_tick;
+
+    // --- icons mode only (see enum uui_fileview_mode) ---------------
+    int icon_top;            // first visible grid ROW; OWNED
+    struct rubberband band;  // empty-space drag -> marks; OWNED
 
     // --- what the app hears about. All optional. --------------------
     //
@@ -176,6 +189,12 @@ void uui_fileview_clear_marks(struct uui_fileview *fv);
 // acting -- see the struct's note on why marks do not survive a reload.
 int  uui_fileview_marked_path(const struct uui_fileview *fv, int n, char *out, int cap);
 int  uui_fileview_marked_is_dir(const struct uui_fileview *fv, int n);
+
+// A rubber-band drag is in progress (icons mode). A caller that reloads
+// on a timer must skip the reload while this is set: a reload clears the
+// marks the band is mid-way through choosing (the desktop's
+// desktop_drag_active() rule).
+int  uui_fileview_band_active(const struct uui_fileview *fv);
 
 // Acts on the selection: descends into a directory (reporting
 // on_dir_changed), or reports on_open for a file. Returns 1 if anything

@@ -38,6 +38,8 @@
 #include "ui/ugfx.h"
 #include "ui/uui.h"
 #include "ui/uui_fileview.h"
+#include "ui/uui_tree.h"
+#include "lib/dirsort.h"
 #include "ui/uapp.h"
 #include "ui/ulog.h"
 #include "ui/utheme.h"
@@ -50,6 +52,7 @@
 
 #define ID_LEFT  1
 #define ID_RIGHT 2
+#define ID_TREE  3
 
 // Each pane's directory, remembered across runs. The per-app
 // `/etc/<app>.conf` convention has existed since desktop.conf and had
@@ -64,6 +67,7 @@
 enum {
     CMD_COPY = 1, CMD_MOVE, CMD_MKDIR, CMD_RENAME, CMD_DELETE,
     CMD_REFRESH, CMD_SWAP, CMD_EXIT,
+    CMD_VIEW_DETAILS, CMD_VIEW_ICONS, CMD_VIEW_PANES, CMD_VIEW_TREE,
 };
 
 // The listings. 256 entries x 80 bytes = 20 KB per pane, which is why
@@ -74,6 +78,30 @@ static struct sys_dirent g_right_entries[PANE_FILES];
 
 static struct uui_fileview g_pane[2];
 static int g_active;            // 0 = left, 1 = right
+
+// View options, all persisted in FILES_CONF. `g_single` shows only the
+// ACTIVE pane (Tab still swaps which one that is, and F5/F6 still act
+// toward the hidden one's directory -- the pane keeps existing, it just
+// is not shown). The commander shape stays the default.
+static int g_single;
+static int g_tree_on;
+
+// --- the directory tree -----------------------------------------------
+//
+// A LAZY uui_tree (UUI_TREE_CLOSED/OPEN): only the directories the user
+// has expanded are listed at all, so the node array is a view of the
+// open set, rebuilt on every toggle. The app owns which PATHS are open
+// -- paths, not node indices, because a rebuild renumbers every slot.
+#define TREE_MAX 96
+#define TREE_OPEN_MAX 24
+
+static struct uui_tree g_tree;
+static struct uui_tree_node g_tree_nodes[TREE_MAX];
+static char g_tree_path[TREE_MAX][PATH_MAX_LEN];
+static int g_tree_count;
+static char g_tree_open[TREE_OPEN_MAX][PATH_MAX_LEN];
+static int g_tree_open_count;
+static struct sys_dirent g_tree_scratch[SYS_LISTDIR_MAX];
 
 static struct uui_menubar g_menu;
 static struct uui_statusbar g_status;
@@ -119,6 +147,117 @@ static unsigned long long g_seen_generation;
 static struct uui_fileview *active(void)  { return &g_pane[g_active]; }
 static struct uui_fileview *other(void)   { return &g_pane[!g_active]; }
 
+// The open set speaks PATHS. "/" is put in it at startup.
+static int tree_is_open(const char *path) {
+    for (int i = 0; i < g_tree_open_count; i++)
+        if (strcmp(g_tree_open[i], path) == 0) return 1;
+    return 0;
+}
+
+// Closing a directory also closes everything UNDER it: a reopened
+// parent showing grandchildren the user never re-expanded would mean
+// the open set held paths the tree no longer shows.
+static void tree_set_open(const char *path, int open) {
+    if (open) {
+        if (tree_is_open(path)) return;
+        if (g_tree_open_count >= TREE_OPEN_MAX) return;
+        strlcpy(g_tree_open[g_tree_open_count++], path, PATH_MAX_LEN);
+        return;
+    }
+    int len = (int)strlen(path);
+    int at_root = (len == 1 && path[0] == '/');
+    int kept = 0;
+    for (int i = 0; i < g_tree_open_count; i++) {
+        const char *q = g_tree_open[i];
+        int under = strncmp(q, path, (size_t)len) == 0 &&
+                     (at_root || q[len] == '/' || q[len] == '\0');
+        if (under) continue;
+        if (kept != i) strlcpy(g_tree_open[kept], q, PATH_MAX_LEN);
+        kept++;
+    }
+    g_tree_open_count = kept;
+}
+
+static int tree_find_path(const char *path) {
+    for (int i = 0; i < g_tree_count; i++)
+        if (strcmp(g_tree_path[i], path) == 0) return i;
+    return -1;
+}
+
+static void tree_select_path(const char *path) {
+    int i = tree_find_path(path);
+    if (i >= 0) uui_tree_select_id(&g_tree, i);
+}
+
+// Rebuild the node array from the open set. Each open directory's
+// subdirectories are INSERTED right after it and the scan continues
+// forward, which reaches them in DFS (display) order with no recursion
+// and ONE scratch listing -- a recursive walk needs a listing per
+// level, which the 2 KiB ring-3 frame budget cannot hold.
+static void tree_rebuild(void) {
+    // The selection survives by PATH: ids are slots and slots move.
+    char sel[PATH_MAX_LEN];
+    sel[0] = '\0';
+    int id = uui_tree_selected_id(&g_tree);
+    if (id >= 0 && id < g_tree_count) strlcpy(sel, g_tree_path[id], sizeof sel);
+
+    strlcpy(g_tree_path[0], "/", PATH_MAX_LEN);
+    g_tree_nodes[0].depth = 0;
+    g_tree_nodes[0].kind = tree_is_open("/") ? UUI_TREE_OPEN : UUI_TREE_CLOSED;
+    g_tree_count = 1;
+
+    for (int i = 0; i < g_tree_count; i++) {
+        if (g_tree_nodes[i].kind != UUI_TREE_OPEN) continue;
+        int n = sys_listdir(g_tree_path[i], g_tree_scratch, SYS_LISTDIR_MAX);
+        if (n < 0) continue;
+
+        // Directories only, joinable only (a path past FS_PATH_MAX is
+        // skipped, not truncated), in name order.
+        int nd = 0;
+        char probe[PATH_MAX_LEN];
+        for (int j = 0; j < n; j++) {
+            if (!g_tree_scratch[j].is_dir) continue;
+            if (!k_path_join(g_tree_path[i], g_tree_scratch[j].name, probe,
+                              sizeof probe)) continue;
+            if (nd != j) g_tree_scratch[nd] = g_tree_scratch[j];
+            nd++;
+        }
+        dirsort(g_tree_scratch, nd, DIRSORT_NAME, 0);
+        int room = TREE_MAX - g_tree_count;
+        if (nd > room) nd = room; // a full tree stops growing, silently
+
+        if (nd <= 0) continue;
+        memmove(&g_tree_nodes[i + 1 + nd], &g_tree_nodes[i + 1],
+                (size_t)(g_tree_count - i - 1) * sizeof g_tree_nodes[0]);
+        memmove(&g_tree_path[i + 1 + nd], &g_tree_path[i + 1],
+                (size_t)(g_tree_count - i - 1) * sizeof g_tree_path[0]);
+        for (int j = 0; j < nd; j++) {
+            char *dst = g_tree_path[i + 1 + j];
+            k_path_join(g_tree_path[i], g_tree_scratch[j].name, dst, PATH_MAX_LEN);
+            g_tree_nodes[i + 1 + j].depth = g_tree_nodes[i].depth + 1;
+            g_tree_nodes[i + 1 + j].kind =
+                tree_is_open(dst) ? UUI_TREE_OPEN : UUI_TREE_CLOSED;
+        }
+        g_tree_count += nd;
+    }
+
+    // Labels point INTO g_tree_path (static, so they outlive the
+    // widget); ids are slots, valid until the next rebuild.
+    for (int i = 0; i < g_tree_count; i++) {
+        g_tree_nodes[i].id = i;
+        g_tree_nodes[i].label = i == 0 ? "/" : k_path_basename(g_tree_path[i]);
+    }
+    uui_tree_set_nodes_keep(&g_tree, g_tree_nodes, g_tree_count);
+    if (sel[0]) tree_select_path(sel);
+}
+
+static void tree_toggle(void *ctx, int id, int expand) {
+    (void)ctx;
+    if (id < 0 || id >= g_tree_count) return;
+    tree_set_open(g_tree_path[id], expand);
+    tree_rebuild();
+}
+
 // --- the modal ---------------------------------------------------------
 //
 // Its own, in this window, exactly as Notepad's dialog is: a client
@@ -143,6 +282,14 @@ static const struct uui_menu_item file_items[] = {
     UUI_MENU("Exit",           CMD_EXIT,    "Alt+F4"),
 };
 
+static const struct uui_menu_item view_items[] = {
+    UUI_MENU("Details",     CMD_VIEW_DETAILS, 0),
+    UUI_MENU("Icons",       CMD_VIEW_ICONS,   0),
+    UUI_MENU_SEP,
+    UUI_MENU("Second pane", CMD_VIEW_PANES,   0),
+    UUI_MENU("Folder tree", CMD_VIEW_TREE,    0),
+};
+
 static const struct uui_menu_item go_items[] = {
     UUI_MENU("Other pane",     CMD_SWAP,    "Tab"),
     UUI_MENU("Refresh",        CMD_REFRESH, "Ctrl+R"),
@@ -150,6 +297,7 @@ static const struct uui_menu_item go_items[] = {
 
 static const struct uui_menu_item menu_items[] = {
     UUI_SUBMENU("File", file_items),
+    UUI_SUBMENU("View", view_items),
     UUI_SUBMENU("Go",   go_items),
 };
 
@@ -161,7 +309,9 @@ static struct uui_item g_widgets[] = {
     { &uui_button_ops,   &g_keys[2], 0, 0, CMD_MKDIR },
     { &uui_button_ops,   &g_keys[3], 0, 0, CMD_RENAME },
     { &uui_button_ops,   &g_keys[4], 0, 0, CMD_DELETE },
+    { &uui_tree_ops,     &g_tree,    0, 0, ID_TREE },
 };
+#define WIDGET_TREE ((int)(sizeof g_widgets / sizeof g_widgets[0]) - 1)
 
 static void set_note(const char *s) { strlcpy(g_stat_note, s, sizeof g_stat_note); }
 
@@ -489,6 +639,32 @@ static void do_command(struct uapp *a, int code) {
     case CMD_SWAP:
         g_active = !g_active;
         break;
+    case CMD_VIEW_DETAILS:
+    case CMD_VIEW_ICONS: {
+        // The ACTIVE pane's, not the window's: two panes with two modes
+        // is normal in every commander that grew a thumbnail view.
+        enum uui_fileview_mode m = code == CMD_VIEW_ICONS ? UUI_FILEVIEW_ICONS
+                                                           : UUI_FILEVIEW_DETAILS;
+        uui_fileview_set_mode(active(), m);
+        uconf_set(FILES_CONF, g_active ? "right_view" : "left_view",
+                   m == UUI_FILEVIEW_ICONS ? "icons" : "details");
+        g_seen_generation = sys_fs_generation(); // adopt our own write
+        break;
+    }
+    case CMD_VIEW_PANES:
+        g_single = !g_single;
+        uconf_set(FILES_CONF, "panes", g_single ? "1" : "2");
+        g_seen_generation = sys_fs_generation();
+        break;
+    case CMD_VIEW_TREE:
+        g_tree_on = !g_tree_on;
+        if (g_tree_on) {
+            tree_rebuild();
+            tree_select_path(uui_fileview_dir(active()));
+        }
+        uconf_set(FILES_CONF, "tree", g_tree_on ? "1" : "0");
+        g_seen_generation = sys_fs_generation();
+        break;
     case CMD_EXIT:
         uapp_quit(a, 0);
         return;
@@ -550,10 +726,35 @@ static void layout_all(int cw, int ch) {
     int panes_y = mb + hdr;
     int panes_h = ch - mb - sb - kr - hdr;
     if (panes_h < 1) panes_h = 1;
-    int half = cw / 2;
 
-    uui_fileview_set_geometry(&g_pane[0], 0, panes_y, half, panes_h);
-    uui_fileview_set_geometry(&g_pane[1], half, panes_y, cw - half, panes_h);
+    // The tree column sits left of the panes and spans their headers
+    // too -- it has no path strip of its own.
+    int tx = 0;
+    if (g_tree_on) {
+        int tw = ugfx_char_w() * 18;
+        if (tw > cw / 3) tw = cw / 3;
+        uui_tree_ops.set_geometry(&g_tree, 0, mb, tw, ch - mb - sb - kr);
+        tx = tw;
+    }
+    int pw = cw - tx;
+
+    if (g_single) {
+        // Both panes get the full rect; only the active one is SHOWN.
+        // The hidden one keeps sane geometry so nothing draws from junk
+        // the frame it comes back.
+        uui_fileview_set_geometry(&g_pane[0], tx, panes_y, pw, panes_h);
+        uui_fileview_set_geometry(&g_pane[1], tx, panes_y, pw, panes_h);
+    } else {
+        int half = pw / 2;
+        uui_fileview_set_geometry(&g_pane[0], tx, panes_y, half, panes_h);
+        uui_fileview_set_geometry(&g_pane[1], tx + half, panes_y, pw - half, panes_h);
+    }
+
+    // Visibility is decided beside the geometry: the router skips a
+    // hidden item, so a hidden pane cannot be clicked either.
+    g_widgets[0].hidden = g_single && g_active != 0;
+    g_widgets[1].hidden = g_single && g_active != 1;
+    g_widgets[WIDGET_TREE].hidden = !g_tree_on;
 
     int n = (int)(sizeof g_keys / sizeof g_keys[0]);
     int gap = utheme_gap();
@@ -609,6 +810,7 @@ static void draw_modal(struct ugfx_surface *s) {
 static void draw_pane_headers(struct ugfx_surface *s) {
     int hdr = panehdr_h();
     for (int i = 0; i < 2; i++) {
+        if (g_single && i != g_active) continue;
         int x, y, w, h;
         uui_fileview_ops.bounds(&g_pane[i], &x, &y, &w, &h);
         (void)h;
@@ -638,6 +840,14 @@ static void log_layout(void) {
     }
     const char *sel = uui_fileview_selected_name(active());
     uapp_logf_layout("files: layout active %d\n", g_active);
+    uapp_logf_layout("files: layout view %d %d single %d tree %d %d\n",
+          (int)g_pane[0].mode, (int)g_pane[1].mode, g_single, g_tree_on,
+          g_tree_on ? g_tree_count : 0);
+    if (g_tree_on) {
+        uui_tree_ops.bounds(&g_tree, &x, &y, &w, &h);
+        uapp_logf_layout("files: layout treebox %d %d %d %d %d %d\n", x, y, w, h,
+              uui_tree_row_h(&g_tree), uui_tree_selected_id(&g_tree));
+    }
     uapp_logf_layout("files: layout selected %s\n", sel ? sel : "-");
     uapp_logf_layout("files: layout modal %d\n", (int)g_modal);
     uapp_logf_layout("files: layout marked %d %d\n", uui_fileview_mark_count(&g_pane[0]),
@@ -682,6 +892,18 @@ static void on_widget(struct uapp *a, int id, int reason) {
         // Clicking a pane makes it the active one, which is what makes
         // "the other pane" a thing the mouse can choose.
         g_active = (id == ID_RIGHT);
+        refresh_status();
+        uapp_redraw(a);
+        return;
+    }
+    if (id == ID_TREE) {
+        // Navigate the ACTIVE pane there. Guarded against the selection
+        // that did not move -- an expander click also releases here, and
+        // re-entering the same directory would reset its selection.
+        int nid = uui_tree_selected_id(&g_tree);
+        if (nid >= 0 && nid < g_tree_count &&
+            strcmp(g_tree_path[nid], uui_fileview_dir(active())) != 0)
+            uui_fileview_set_dir(active(), g_tree_path[nid]);
         refresh_status();
         uapp_redraw(a);
         return;
@@ -742,11 +964,18 @@ static int on_tick(struct uapp *a) {
     (void)a;
     int changed = poll_job();
 
+    // Not under a rubber band: a reload clears the marks the band is
+    // mid-way through choosing (the desktop's desktop_drag_active() rule).
+    if (uui_fileview_band_active(&g_pane[0]) ||
+        uui_fileview_band_active(&g_pane[1]))
+        return changed;
+
     unsigned long long gen = sys_fs_generation();
     if (gen != g_seen_generation) {
         g_seen_generation = gen;
         uui_fileview_reload(&g_pane[0]);
         uui_fileview_reload(&g_pane[1]);
+        if (g_tree_on) tree_rebuild(); // a dir can have appeared or gone
         refresh_status();
         changed = 1;
     }
@@ -804,6 +1033,10 @@ static void on_pane_dir(void *ctx, const char *dir) {
     // is skipped, until the next change moves the counter again.
     g_seen_generation = sys_fs_generation();
 
+    // The tree follows the ACTIVE pane, Explorer's rule -- but only to a
+    // node that is already visible; navigating does not force dirs open.
+    if (g_tree_on && i == g_active) tree_select_path(dir);
+
     refresh_status();
 }
 
@@ -853,12 +1086,35 @@ int main(int argc, char **argv) {
         g_pane[i].on_open = on_pane_open;
         g_pane[i].ctx = (void *)(intptr_t)i;
     }
+
+    // The remembered view options. Unknown values fall back to the
+    // defaults they misspell, deliberately -- a config file is not a
+    // place to fail from.
+    char opt[16];
+    if (uconf_get(FILES_CONF, "panes", opt, sizeof opt))
+        g_single = (opt[0] == '1');
+    if (uconf_get(FILES_CONF, "tree", opt, sizeof opt))
+        g_tree_on = (opt[0] == '1');
+    if (uconf_get(FILES_CONF, "left_view", opt, sizeof opt) && !strcmp(opt, "icons"))
+        uui_fileview_set_mode(&g_pane[0], UUI_FILEVIEW_ICONS);
+    if (uconf_get(FILES_CONF, "right_view", opt, sizeof opt) && !strcmp(opt, "icons"))
+        uui_fileview_set_mode(&g_pane[1], UUI_FILEVIEW_ICONS);
+
+    uui_tree_init(&g_tree, 0, 0, 100, 100, g_tree_nodes, 0);
+    uui_tree_set_on_toggle(&g_tree, tree_toggle, 0);
+    strlcpy(g_tree_open[0], "/", PATH_MAX_LEN);
+    g_tree_open_count = 1;
+
     uui_fileview_set_dir(&g_pane[0], left);
     uui_fileview_set_dir(&g_pane[1], right);
     // Hooked up AFTER the opening directories are set, so starting the
     // app with an explicit argument does not silently rewrite the
     // remembered pair -- an argument is a statement about this launch.
     for (int i = 0; i < 2; i++) g_pane[i].on_dir_changed = on_pane_dir;
+    if (g_tree_on) {
+        tree_rebuild();
+        tree_select_path(uui_fileview_dir(active()));
+    }
     set_note("F5 copy  F6 move  F7 new  F8 delete");
 
     // One line, once: which directories this instance opened with and

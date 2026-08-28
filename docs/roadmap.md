@@ -840,7 +840,7 @@ hand as a throwaway probe during a real hunt (see roadmap-details).
 ## Not built yet, and deliberately so
 
 - [ ] Group DRAG for a rubber-band selection
-- [ ] **A ring-3 file manager**, the second caller the rubber-band module was shaped for
+- [x] ~~**A ring-3 file manager**, the second caller the rubber-band module was shaped for~~ DONE 2026-08-28 (the icons view's sweep)
 ## Known limitations and papercuts (unscheduled)
 
 Things this OS does not do yet, or does in a way worth improving --

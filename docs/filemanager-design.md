@@ -241,9 +241,10 @@ A file with no handler opens nothing and says so in the status bar.
 
 Stated so they are limitations rather than discoveries:
 
-- **No icon view in the first cut.** It is the natural second stage, and
-  it is what finally gives `api/icon_grid.h` and `api/rubberband.h` the
-  second caller they were written for.
+- ~~**No icon view in the first cut.**~~ BUILT 2026-08-28 as the second
+  stage it was called: `UUI_FILEVIEW_ICONS`, over `api/icon_grid.h`'s
+  cell math, with `api/rubberband.h`'s sweep marking files -- the
+  second caller both were written for.
 - ~~**No multi-selection.**~~ BUILT after all, at the maintainer's
   request: Insert or Space marks a row and steps down, marked rows are
   tinted, and F5/F6/F8 act on the whole set through a job QUEUE that
@@ -309,17 +310,20 @@ which is the natural thing to add the day a second caller wants one.
 
 ### Later, in rough order
 
-Icon view over `icon_grid.h` + `rubberband.h` (and multi-selection with
-it); a copy-progress protocol; `SYS_LISTDIR` pagination; then drag a
-file into Notepad, once the clipboard/DND milestone exists.
+~~Icon view over `icon_grid.h` + `rubberband.h`~~ (BUILT 2026-08-28,
+with a per-pane View menu, an optional single-pane layout and a lazy
+`uui_tree` folder column beside it); a copy-progress protocol;
+`SYS_LISTDIR` pagination; then drag a file into Notepad, once the
+clipboard/DND milestone exists.
 
 ## Open questions
 
-- **Does the file manager get file-TYPE icons?** `icon_get()` is
-  `userland/wm/icon_cache.h` -- WM-internal, keyed by app name. Sharing
-  it with ring-3 apps means moving it to a library, which is a real
-  boundary move and probably its own change. The first cut uses a
-  directory/file marker and no artwork.
+- **Does the file manager get file-TYPE icons?** Partly settled:
+  `icon_get()` moved to `userland/lib/icon_cache.h` when `uui_sidebar`
+  needed it, and the icons view draws `folder`/`file` artwork through
+  it. PER-TYPE icons (a page for `.txt`, a picture for `.jpg`) are
+  still open -- they want a type-to-icon mapping, which is `Handles=`'s
+  territory the day something needs it.
 - **Should `..` sort with the directories or always lead?** Always
   leads here, as every commander does, even under a reversed sort.
 - **One window or many?** One, with two panes. A second instance is
