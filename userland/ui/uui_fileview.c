@@ -288,6 +288,12 @@ void uui_fileview_set_filter(struct uui_fileview *fv,
     fv->filter_ctx = ctx;
 }
 
+void uui_fileview_set_thumb(struct uui_fileview *fv,
+                             uui_fileview_thumb_fn fn, void *ctx) {
+    fv->thumb = fn;
+    fv->thumb_ctx = ctx;
+}
+
 static int fv_at_root(const struct uui_fileview *fv) {
     return fv->dir[0] == '/' && fv->dir[1] == '\0';
 }
@@ -521,6 +527,16 @@ static void ic_cell_rect(const struct uui_fileview *fv, int view,
     icon_grid_cell_rect(&g, view % g.cols, view / g.cols, out_x, out_y);
 }
 
+int uui_fileview_cell_rect(const struct uui_fileview *fv, int view,
+                            int *x, int *y, int *w, int *h) {
+    if (fv->mode != UUI_FILEVIEW_ICONS) return 0;
+    if (view < 0 || view >= uui_fileview_row_count(fv)) return 0;
+    ic_cell_rect(fv, view, x, y);
+    if (w) *w = ic_cell_w();
+    if (h) *h = ic_cell_h();
+    return 1;
+}
+
 // VIEW position at (cx, cy), or -1. Exact, not nearest-cell:
 // icon_grid_nearest_cell() clamps, and "empty space" must stay
 // answerable here or the rubber band could never begin.
@@ -622,18 +638,36 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
         const char *name = is_up ? ".." : (e ? e->name : "");
         int is_dir = is_up || (e && e->is_dir);
 
-        const struct uimg *ico = icon_get(is_dir ? "folder" : "file", px);
-        int ix = x + (cw - px) / 2;
-        if (ico) {
-            ugfx_blit_alpha(s, ix, y + 2, ico->w, ico->h, ico->px, ico->w);
+        // A thumbnail if the app has one READY (see uui_fileview_thumb_fn
+        // -- this is a lookup, never a decode), else the generic icon.
+        const struct uimg *thumb = 0;
+        if (!is_dir && e && fv->thumb)
+            thumb = fv->thumb(fv->thumb_ctx, fv->dir, e, px);
+        if (thumb) {
+            int tx2 = x + (cw - thumb->w) / 2;
+            int ty2 = y + 2 + (px - thumb->h) / 2;
+            if (thumb->has_alpha)
+                ugfx_blit_alpha(s, tx2, ty2, thumb->w, thumb->h, thumb->px, thumb->w);
+            else
+                ugfx_blit(s, tx2, ty2, thumb->w, thumb->h, thumb->px, thumb->w);
+            // A hairline frame: a photo's edge can match the pane and a
+            // frameless thumbnail reads as a rendering glitch.
+            ugfx_draw_rect(s, tx2 - 1, ty2 - 1, thumb->w + 2, thumb->h + 2,
+                            t->grid);
         } else {
-            // The desktop's letter tile, for a build whose icon files
-            // are missing rather than merely unthemed.
-            ugfx_fill_rect(s, ix, y + 2, px, px, ugfx_rgb(60, 90, 130));
-            char initial[2] = { name[0] ? name[0] : '?', 0 };
-            ugfx_draw_string(s, ix + (px - ugfx_char_w()) / 2,
-                              y + 2 + (px - ugfx_char_h()) / 2, initial,
-                              ugfx_rgb(230, 230, 235), ugfx_rgb(60, 90, 130));
+            const struct uimg *ico = icon_get(is_dir ? "folder" : "file", px);
+            int ix = x + (cw - px) / 2;
+            if (ico) {
+                ugfx_blit_alpha(s, ix, y + 2, ico->w, ico->h, ico->px, ico->w);
+            } else {
+                // The desktop's letter tile, for a build whose icon
+                // files are missing rather than merely unthemed.
+                ugfx_fill_rect(s, ix, y + 2, px, px, ugfx_rgb(60, 90, 130));
+                char initial[2] = { name[0] ? name[0] : '?', 0 };
+                ugfx_draw_string(s, ix + (px - ugfx_char_w()) / 2,
+                                  y + 2 + (px - ugfx_char_h()) / 2, initial,
+                                  ugfx_rgb(230, 230, 235), ugfx_rgb(60, 90, 130));
+            }
         }
 
         int max_w = cw - 6;

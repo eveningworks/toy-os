@@ -1,0 +1,39 @@
+#ifndef UOPEN_H
+#define UOPEN_H
+
+// uopen -- which program opens this file?
+//
+// FREEDESKTOP'S SPLIT, WITHOUT THE DAEMON. Two layers, asked in order:
+//
+//   1. /etc/mimeapps.conf -- the USER's choice per extension:
+//      `.jpg=imgview`, where the value names a DESKTOP ENTRY (the
+//      filename stem under /usr/wm/desktop), or a literal /path as the
+//      escape hatch, or `-` for "cleared". mimeapps.list's
+//      [Default Applications] role. `/bin/open -s` edits it.
+//   2. `Handles=` on the .desktop entries -- what each app DECLARES,
+//      shipped with the app (mimeinfo.cache's role, scanned live:
+//      at this scale a directory read IS the cache).
+//
+// Resolution is IN-PROCESS. Linux and KDE run no daemon for this
+// either; macOS's LaunchServices is the outlier, and a service here
+// would need query IPC this OS does not have, to answer what a
+// directory scan answers. See docs/decisions.md.
+//
+// Extensions match WHOLE and case-insensitively, INCLUDING the dot
+// (".md" never claims ".mdx").
+
+#define UOPEN_CONF "/etc/mimeapps.conf"
+
+// The program that opens `path`, written into `exec`. Returns 1, or 0
+// when nothing claims the extension (or there is none). An override
+// naming an entry that no longer exists falls through to the
+// declarations rather than failing -- a stale choice must not make a
+// type unopenable.
+int uopen_resolve(const char *path, char *exec, int cap);
+
+// Resolve and spawn, NOT waited for -- an opener that waited would
+// freeze its caller for as long as the editor stays open. A DIRECTORY
+// opens in the File Manager. Returns the pid, or a negative value.
+int uopen_spawn(const char *path);
+
+#endif

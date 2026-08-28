@@ -40,6 +40,8 @@
 #include "ui/uui_fileview.h"
 #include "ui/uui_tree.h"
 #include "ui/uui_toolbar.h"
+#include "lib/uimg.h"
+#include "lib/uopen.h"
 #include "lib/dirsort.h"
 #include "ui/uapp.h"
 #include "ui/ulog.h"
@@ -61,11 +63,6 @@
 // `/etc/<app>.conf` convention has existed since desktop.conf and had
 // exactly one user; this is the second.
 #define FILES_CONF "/etc/files.conf"
-
-// Where the desktop entries live (docs/filesystem-layout.md). Read here
-// for `Handles=`, so that what opens a .txt is declared by the app that
-// opens it rather than tabulated inside this one.
-#define DESKTOP_ENTRY_DIR "/usr/wm/desktop"
 
 enum {
     CMD_COPY = 1, CMD_MOVE, CMD_MKDIR, CMD_RENAME, CMD_DELETE,
@@ -140,6 +137,114 @@ static int g_job_count, g_job_at;
 static int g_job_op;
 static char g_job_dest[PATH_MAX_LEN];
 static int g_job_failures;
+
+
+// --- thumbnails ---------------------------------------------------------
+//
+// The icons view asks uui_fileview's thumb callback per visible cell,
+// and that callback must be a LOOKUP (uui_fileview.h says why). The
+// decode happens HERE, on the tick, at most a couple per pass -- the
+// lazy shape every desktop thumbnailer has, minus the daemon: a folder
+// of photos populates over a few ticks instead of freezing the window
+// for as many full JPEG decodes as it has files.
+//
+// Keyed by PATH + MTIME + SIZE-ON-DISK, so a rewritten file re-decodes
+// and a renamed one simply misses. LRU over a fixed table, icon_cache's
+// arrangement; ~4 KB of pixels per ready entry at the default font.
+#define THUMB_MAX 48
+#define THUMB_PER_TICK 2
+
+enum thumb_state { THUMB_EMPTY = 0, THUMB_PENDING, THUMB_READY, THUMB_NOT_IMAGE };
+
+struct thumb {
+    char path[PATH_MAX_LEN];
+    struct rtc_time mtime;
+    uint32_t fsize;
+    unsigned long long used;  // LRU clock; also "most recently WANTED"
+    int px;
+    enum thumb_state state;
+    struct uimg im;           // valid when READY
+};
+
+static struct thumb g_thumbs[THUMB_MAX];
+static unsigned long long g_thumb_clock;
+
+static struct thumb *thumb_slot(const char *path) {
+    struct thumb *lru = &g_thumbs[0];
+    for (int i = 0; i < THUMB_MAX; i++) {
+        if (g_thumbs[i].state != THUMB_EMPTY &&
+            strcmp(g_thumbs[i].path, path) == 0)
+            return &g_thumbs[i];
+        if (g_thumbs[i].used < lru->used) lru = &g_thumbs[i];
+    }
+    uimg_free(&lru->im); // safe on a never-decoded image (uimg.h)
+    memset(lru, 0, sizeof *lru);
+    strlcpy(lru->path, path, sizeof lru->path);
+    return lru;
+}
+
+// The fileview's callback: a lookup that may ENQUEUE, never a decode.
+static const struct uimg *pane_thumb(void *ctx, const char *dir,
+                                      const struct sys_dirent *e, int px) {
+    (void)ctx;
+    char path[PATH_MAX_LEN];
+    if (!k_path_join(dir, e->name, path, sizeof path)) return 0;
+
+    struct thumb *t = thumb_slot(path);
+    t->used = ++g_thumb_clock;
+
+    int stale = t->state == THUMB_EMPTY || t->px != px ||
+                 t->fsize != e->size ||
+                 memcmp(&t->mtime, &e->modified, sizeof t->mtime) != 0;
+    if (stale) {
+        t->mtime = e->modified;
+        t->fsize = e->size;
+        t->px = px;
+        uimg_free(&t->im);
+        t->state = THUMB_PENDING;
+    }
+    return t->state == THUMB_READY ? &t->im : 0;
+}
+
+// Decode the most recently WANTED pending entries -- "wanted" is the
+// LRU clock the lookup stamps, so what is on screen populates first.
+// Returns 1 if anything became ready (the caller repaints).
+static int thumb_tick(void) {
+    int changed = 0;
+    for (int n = 0; n < THUMB_PER_TICK; n++) {
+        struct thumb *pick = 0;
+        for (int i = 0; i < THUMB_MAX; i++)
+            if (g_thumbs[i].state == THUMB_PENDING &&
+                (!pick || g_thumbs[i].used > pick->used))
+                pick = &g_thumbs[i];
+        if (!pick) break;
+
+        // Sniff before loading: uimg_load() reads the WHOLE file, and
+        // most files in a directory are not images.
+        uint8_t head[16];
+        FILE *f = fopen(pick->path, "rb");
+        size_t got = f ? fread(head, 1, sizeof head, f) : 0;
+        if (f) fclose(f);
+        if (got < 4 || !uimg_probe(head, got)) {
+            pick->state = THUMB_NOT_IMAGE;
+            continue;
+        }
+
+        struct uimg full;
+        if (uimg_load(pick->path, &full) != 0) {
+            pick->state = THUMB_NOT_IMAGE; // broken or refused: the icon
+            continue;
+        }
+        int tw, th;
+        uimg_fit_size(full.w, full.h, pick->px, pick->px, UIMG_FIT_CONTAIN,
+                       &tw, &th);
+        int rc = uimg_scale(&full, tw, th, &pick->im);
+        uimg_free(&full);
+        pick->state = rc == 0 ? THUMB_READY : THUMB_NOT_IMAGE;
+        if (rc == 0) changed = 1;
+    }
+    return changed;
+}
 
 // --- live refresh -------------------------------------------------------
 //
@@ -521,57 +626,6 @@ static int poll_job(void) {
     return 1;
 }
 
-// --- opening a file -----------------------------------------------------
-//
-// THE ASSOCIATION IS THE OTHER APP'S STATEMENT, NOT THIS ONE'S. A
-// `.desktop` entry declares `Handles=.txt .md`, and this walks those
-// entries looking for one that claims the extension. That is
-// freedesktop's mimeapps.list shape with the MIME database left out
-// (docs/filemanager-design.md says why), and it is what keeps a table of
-// other applications from accumulating inside the file manager -- which
-// is precisely what Explorer, Finder and every desktop moved OUT of it.
-static int handles_ext(const char *list, const char *ext) {
-    // A space/comma-separated list, matched whole -- ".md" must not
-    // match ".mdx", which a substring search would.
-    for (const char *p = list; *p;) {
-        while (*p == ' ' || *p == ',') p++;
-        const char *start = p;
-        while (*p && *p != ' ' && *p != ',') p++;
-        int n = (int)(p - start);
-        if (n > 0 && (int)strlen(ext) == n && strncasecmp(start, ext, (size_t)n) == 0)
-            return 1;
-    }
-    return 0;
-}
-
-// The program that claims `path`'s extension, written into `out`.
-static int handler_for(const char *path, char *out, int cap) {
-    const char *dot = strrchr(k_path_basename(path), '.');
-    if (!dot || !dot[1]) return 0;
-
-    static struct sys_dirent entries[SYS_LISTDIR_MAX];
-    int n = sys_listdir(DESKTOP_ENTRY_DIR, entries, SYS_LISTDIR_MAX);
-    for (int i = 0; i < n; i++) {
-        if (entries[i].is_dir) continue;
-
-        char entry[PATH_MAX_LEN];
-        if (!k_path_join(DESKTOP_ENTRY_DIR, entries[i].name, entry, sizeof entry))
-            continue;
-
-        // Loaded ONCE and asked twice: etc_config_get() re-reads the
-        // whole file per key, which is what made a nine-entry desktop
-        // reload cost 54 whole-file reads (CLAUDE.md).
-        struct etc_config_buf cfg;
-        if (!uconf_load(entry, &cfg)) continue;
-
-        char list[ETC_CONFIG_MAX / 4];
-        if (!etc_config_buf_get(&cfg, "Handles", list, sizeof list)) continue;
-        if (!handles_ext(list, dot)) continue;
-        if (etc_config_buf_get(&cfg, "Exec", out, (uint32_t)cap)) return 1;
-    }
-    return 0;
-}
-
 // --- commands ---------------------------------------------------------
 
 static void open_prompt(int cmd, const char *title, const char *initial) {
@@ -932,6 +986,17 @@ static void log_layout(void) {
           uui_fileview_mark_count(&g_pane[1]));
     uapp_logf_layout("files: layout hover %d %d\n", g_pane[0].table.hovered,
           g_pane[1].table.hovered);
+    for (int i = 0; i < 2; i++) {
+        int cx, cy, cw2, ch2;
+        if (!uui_fileview_cell_rect(&g_pane[i], 0, &cx, &cy, &cw2, &ch2))
+            continue;
+        int cols = 1, xx, yy, ww, hh;
+        while (uui_fileview_cell_rect(&g_pane[i], cols, &xx, &yy, &ww, &hh) &&
+                yy == cy)
+            cols++;
+        uapp_logf_layout("files: layout cellgrid %d %d %d %d %d %d\n", i,
+              cx, cy, cw2, ch2, cols);
+    }
     uapp_logf_layout("files: layout job %d %d\n", g_job_at, g_job_count);
     for (int i = 0; i < (int)(sizeof g_keys / sizeof g_keys[0]); i++)
         uapp_logf_layout("files: layout key %d %d %d %d %d\n", i, g_keys[i].x, g_keys[i].y,
@@ -1039,6 +1104,7 @@ static int on_tick(struct uapp *a) {
     (void)a;
     int changed = poll_job();
     if (uui_toolbar_tick(&g_toolbar)) changed = 1;
+    if (thumb_tick()) changed = 1;
 
     // Not under a rubber band: a reload clears the marks the band is
     // mid-way through choosing (the desktop's desktop_drag_active() rule).
@@ -1058,10 +1124,14 @@ static int on_tick(struct uapp *a) {
     return changed;
 }
 
+// The resolver is lib/uopen.h now -- the user's /etc/mimeapps.conf
+// override outranks the .desktop declarations, and /bin/open speaks
+// the same one, so a double click here and `open x.txt` at a prompt
+// cannot disagree.
 static void on_pane_open(void *ctx, const char *path) {
     (void)ctx;
     char exec[PATH_MAX_LEN];
-    if (!handler_for(path, exec, sizeof exec)) {
+    if (!uopen_resolve(path, exec, sizeof exec)) {
         // Said out loud rather than doing nothing: a double click that
         // produces silence reads as a broken app.
         snprintf(g_stat_note, sizeof g_stat_note, "no app for %s",
@@ -1165,6 +1235,7 @@ int main(int argc, char **argv) {
                            i ? g_right_entries : g_left_entries, PANE_FILES);
         g_pane[i].on_open = on_pane_open;
         g_pane[i].ctx = (void *)(intptr_t)i;
+        uui_fileview_set_thumb(&g_pane[i], pane_thumb, 0);
     }
 
     // The remembered view options. Unknown values fall back to the

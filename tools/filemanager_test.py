@@ -99,6 +99,7 @@ class Layout:
         self.treebox = None   # [x, y, w, h, row_h, selected_id]
         self.menu = None      # open level-0 popup [x, y, w, h]
         self.menuhot = None   # (open depth, level-0 hot row)
+        self.cellgrid = {}    # pane -> [x0, y0, cell_w, cell_h, cols]
         self.toolbar = None   # the strip [x, y, w, h]
         self.tbitems = {}     # item index -> [x, y, w, h]
         self.active = None
@@ -136,6 +137,8 @@ class Layout:
                 self.menu = [int(v) for v in p[1:5]]
             elif p[0] == "menuhot" and len(p) >= 3:
                 self.menuhot = (int(p[1]), int(p[2]))
+            elif p[0] == "cellgrid" and len(p) >= 7:
+                self.cellgrid[int(p[1])] = [int(v) for v in p[2:7]]
             elif p[0] == "toolbar" and len(p) >= 5:
                 self.toolbar = [int(v) for v in p[1:5]]
             elif p[0] == "tbitem" and len(p) >= 6:
@@ -866,6 +869,119 @@ def run(dbg, qmp, tmp, res):
     res.check("hovering a button shows its tooltip, and only then",
               n_before == 0 and n_after > 20, f"cream {n_before} -> {n_after}")
     dbg.warp_cursor(qmp, *park)
+
+
+    # --- 15. thumbnails in the icons view -------------------------------
+    # A QOI and a JPEG show their own pixels; a text file keeps the
+    # generic glyph. Decoding is LAZY (a couple per tick), so the checks
+    # POLL for the thumbnail's ink rather than expecting it in frame one.
+    dbg.send(f"sh rm -r {SRC}")
+    dbg.send(f"sh mkdir {SRC}")
+    dbg.send(f"sh cp /usr/share/icons/doom.qoi {SRC}/game.qoi")
+    dbg.send(f"sh cp /usr/share/wallpapers/dusk.jpg {SRC}/photo.jpg")
+    dbg.send(f"sh touch {SRC}/readme.txt")
+    wait_listing(dbg, SRC, lambda names: "readme.txt" in names)
+
+    # Navigate the left pane there (type-ahead: f, m, t seeks fmtest
+    # over fmdest) and switch it to icons.
+    for c in ("0x66", "0x6d", "0x74"):
+        dbg.key(c)
+        time.sleep(0.15)
+    dbg.key(K_ENTER)
+    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == SRC)
+    menu_pick(dbg, K_RIGHT, K_DOWN, K_ENTER)
+    lay = wait_layout(dbg, win, lambda l: l.view and l.view[0] == 2 and
+                       0 in l.cellgrid)
+    res.check("the pane is in icons mode over the image fixture",
+              lay is not None and lay.view and lay.view[0] == 2 and
+              lay.dir.get(0) == SRC and 0 in lay.cellgrid,
+              f"view={lay and lay.view} dir={lay and lay.dir.get(0)}")
+
+    if lay and 0 in lay.cellgrid:
+        gx, gy, gcw, gch, gcols = lay.cellgrid[0]
+
+        def cell_rect(view):
+            # Icon-box portion of the cell only (the label row excluded).
+            return (ox + gx + (view % gcols) * gcw,
+                    oy + gy + (view // gcols) * gch, gcw, gch - 14)
+
+        # Rows: ..(0) game.qoi(1) photo.jpg(2) readme.txt(3).
+        doom_red = (166, 42, 38)  # the doom icon's plate, its dominant ink
+        deadline = time.time() + 8.0
+        red = 0
+        png = os.path.join(tmp, "fm_thumbs.png")
+        while time.time() < deadline:
+            qmp.stable_pixels(png)
+            red = ink_count(png, cell_rect(1), doom_red, tol=12)
+            if red > 10:
+                break
+            time.sleep(0.5)
+        res.check("a .qoi cell shows the image's own pixels (lazily decoded)",
+                  red > 10, f"doom-red in game.qoi cell: {red}")
+        res.check("control: the .txt cell has none of that ink",
+                  ink_count(png, cell_rect(3), doom_red, tol=12) == 0, "")
+
+        # The JPEG: a photo has CHROMA, the generic grey/white glyph has
+        # none -- count pixels whose channels spread more than 30.
+        from PIL import Image
+        im = Image.open(png).convert("RGB")
+
+        def chroma(rect):
+            x, y, w, h = rect
+            n = 0
+            for yy in range(y, y + h):
+                for xx in range(x, x + w):
+                    r, g, b = im.getpixel((xx, yy))
+                    if max(r, g, b) - min(r, g, b) > 30:
+                        n += 1
+            return n
+
+        res.check("a .jpg cell shows the photo, and the .txt cell stays grey",
+                  chroma(cell_rect(2)) > 40 and chroma(cell_rect(3)) < 10,
+                  f"chroma jpg={chroma(cell_rect(2))} txt={chroma(cell_rect(3))}")
+
+    # --- 16. associations: /bin/open and the override file --------------
+    # The File Manager resolves through lib/uopen now, so an override
+    # set at a PROMPT changes what a double click here opens.
+    def close_others():
+        for w2 in sorted(dbg.windows(), key=lambda w2: -w2["z"]):
+            if w2["title"] != TITLE:
+                dbg.send(f"gui close {w2['z']}")
+                time.sleep(0.3)
+
+    def open_selected_and_wait(fragment, timeout=15.0):
+        dbg.key(K_ENTER)
+        deadline = time.time() + timeout
+        titles = []
+        while time.time() < deadline:
+            titles = [w2["title"] for w2 in dbg.windows()]
+            if any(fragment in t for t in titles):
+                return titles
+            time.sleep(0.3)
+        return titles
+
+    dbg.send("sh spawn /bin/open -s .txt imgview")
+    dbg.key("0x72")  # 'r' seeks readme.txt
+    lay = wait_layout(dbg, win, lambda l: l.selected == "readme.txt")
+    titles = open_selected_and_wait("Image")
+    res.check("an override in /etc/mimeapps.conf outranks the Handles= declaration",
+              any("Image" in t for t in titles), f"windows {titles}")
+    close_others()
+
+    out = dbg.send("sh spawn /bin/open -l") or ""
+    res.check("open -l lists the override", ".txt=imgview" in out, repr(out[:160]))
+
+    dbg.send("sh spawn /bin/open -s .txt -")
+    titles = open_selected_and_wait("readme.txt")
+    res.check("clearing it (-s .txt -) hands the type back to the declaration",
+              any("readme.txt" in t and "Image" not in t for t in titles),
+              f"windows {titles}")
+    close_others()
+
+    out = dbg.send(f"sh spawn /bin/open {SRC}/game.qoi.nope") or ""
+    res.check("open refuses a type nothing claims, by name",
+              "nothing opens" in out, repr(out[:160]))
+    dbg.send("sh rm /etc/mimeapps.conf")
 
     dbg.send(f"sh rm {FILES_CONF}")
 

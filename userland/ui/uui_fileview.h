@@ -65,6 +65,18 @@ enum uui_fileview_mode {
 typedef int (*uui_fileview_filter_fn)(void *ctx, const char *dir,
                                        const struct sys_dirent *e);
 
+// The ICONS view's thumbnail source: the image to draw for this entry
+// at (up to) `px` x `px`, or NULL for the generic file icon. Called
+// during DRAW for visible cells only, so it must be a CACHE LOOKUP,
+// never a decode -- a JPEG decoded in the draw path freezes the window
+// for as long as the folder has photos, which is why every desktop
+// thumbnails asynchronously. The caller owns the pixels and their
+// lifetime; the widget only blits what it is handed this frame.
+struct uimg;
+typedef const struct uimg *(*uui_fileview_thumb_fn)(void *ctx, const char *dir,
+                                                     const struct sys_dirent *e,
+                                                     int px);
+
 struct uui_fileview {
     struct uui_table table; // the whole visual/input mechanism
 
@@ -90,6 +102,9 @@ struct uui_fileview {
 
     uui_fileview_filter_fn filter;
     void *filter_ctx;
+
+    uui_fileview_thumb_fn thumb; // NULL = every file gets the generic icon
+    void *thumb_ctx;
 
     // --- marks ------------------------------------------------------
     //
@@ -157,6 +172,14 @@ void uui_fileview_set_navigable(struct uui_fileview *fv, int navigable);
 
 void uui_fileview_set_filter(struct uui_fileview *fv,
                               uui_fileview_filter_fn fn, void *ctx);
+void uui_fileview_set_thumb(struct uui_fileview *fv,
+                             uui_fileview_thumb_fn fn, void *ctx);
+
+// The icons-mode cell rectangle for a VIEW position, content-relative.
+// For tests and layout logs (docs/gui-guidelines.md: a test asks the
+// app where things are). Returns 0 outside icons mode or the range.
+int  uui_fileview_cell_rect(const struct uui_fileview *fv, int view,
+                             int *x, int *y, int *w, int *h);
 
 // Lists `dir` and shows it. Returns 1 on success; on failure the view
 // shows the directory as EMPTY and `failed` is set -- a caller that

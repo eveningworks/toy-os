@@ -303,10 +303,11 @@ gates.
 
 ### Stage 5 -- associations -- **BUILT**
 
-`Handles=` on `.desktop` entries; Enter on a `.txt` opens Notepad. The
-manager reads the entries itself rather than asking the desktop, because
-it is a separate process and there is no query for "who opens this" --
-which is the natural thing to add the day a second caller wants one.
+`Handles=` on `.desktop` entries; Enter on a `.txt` opens Notepad.
+The "query for who opens this" this section predicted arrived with the
+second caller (2026-08-28): `userland/lib/uopen.c` resolves for the
+manager AND `/bin/open`, with the user's `/etc/mimeapps.conf` override
+outranking the declarations (see `docs/decisions.md`).
 
 ### Later, in rough order
 
@@ -318,7 +319,9 @@ clipboard/DND milestone exists.
 
 ## Open questions
 
-- **Does the file manager get file-TYPE icons?** Partly settled:
+- **Does the file manager get file-TYPE icons?** Superseded for
+  images: the icons view shows real THUMBNAILS for anything
+  `uimg_probe()` claims (2026-08-28). For the rest, still open:
   `icon_get()` moved to `userland/lib/icon_cache.h` when `uui_sidebar`
   needed it, and the icons view draws `folder`/`file` artwork through
   it. PER-TYPE icons (a page for `.txt`, a picture for `.jpg`) are

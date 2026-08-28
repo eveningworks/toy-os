@@ -5119,3 +5119,65 @@ returns "repaint needed". The stated cost: tooltip latency is the
 app's tick granularity (the File Manager's 500ms tick puts a tip at
 0.5-1s), and an app with no tick gets no tooltips -- its buttons still
 work, so the degradation is the feature, not the control.
+
+## Thumbnails decode on the tick -- not in the draw, not in a daemon
+
+The icons view's thumbnails could have been decoded where they are
+drawn (simplest), in a worker thread (the `uapp_post()` pattern's
+stated use case), or by a thumbnailer service (what freedesktop
+desktops actually run). The tick won.
+
+**Why not the draw.** A JPEG decode is unbounded work, and the draw
+path runs per frame: entering a folder of photos would freeze the
+window for as many full decodes as it has files -- the exact class
+CLAUDE.md's "long work belongs in a child process" rule exists for,
+except a thumbnail's RESULT must land in the app's own memory, so a
+`/bin` child cannot carry it. The widget contract states it: the thumb
+callback is a LOOKUP, and `uui_fileview` never decodes.
+
+**Why not a thread or a daemon (yet).** The worker-thread shape is
+right in principle and was deliberately deferred: the tick version is
+single-threaded, ~40 lines, and bounds the stall to one decode per
+pass -- if a directory of huge photos ever makes that stall felt, the
+thread is the upgrade and the cache/callback seam does not move.
+A thumbnailer SERVICE (freedesktop's daemons, Windows' thumbcache) is
+off the table for the same reason the association resolver has no
+daemon: no query IPC, and nothing at this scale to amortise.
+
+**The cache key is path + mtime + size.** A rewritten file re-decodes,
+a renamed one misses and re-decodes under its new name, and eviction
+is the icon cache's LRU-over-a-fixed-table. Pending entries decode
+most-recently-WANTED first, so what is on screen populates before
+what was scrolled past.
+
+## File associations: declarations plus an override file, and no service
+
+Asked directly ("a manageable database file? and a service that
+handles it?"), so the answer is recorded. The declaration side already
+existed -- `Handles=` on each app's `.desktop` entry -- and the choice
+was what to add: a central database file replacing it, a resolver
+daemon, or freedesktop's split. The split won: apps DECLARE where the
+app lives (installing one brings its associations), the USER overrides
+per extension in `/etc/mimeapps.conf`, and the override outranks.
+
+**Why no central-file-as-single-source.** Windows' Registry shape
+means installing an app no longer brings its associations -- the
+central table must be edited in step with every app added or removed,
+which is the third-file-someone-must-remember shape this repo keeps
+deleting.
+
+**Why no daemon.** Linux and KDE resolve associations IN-PROCESS
+(gio/KService over generated caches); macOS's LaunchServices daemon is
+the outlier. Here a daemon would need query IPC that does not exist
+(no sockets; pipes carry no credentials and only 0/1/2 inherit), to
+answer what `userland/lib/uopen.c` answers with one directory scan --
+and a cache is not needed at a dozen entries. If entry counts ever
+make the scan felt, the freedesktop answer is a GENERATED file
+(mimeinfo.cache), still not a process.
+
+**The override names a desktop ENTRY, not a binary.** `.txt=imgview`
+survives an app's Exec moving; `/path` stays as the escape hatch; a
+dangling override FALLS THROUGH to the declarations, because a stale
+choice must degrade to the default, not to an unopenable type.
+`/bin/open` is the second caller that earned the library, and its
+`-s`/`-l` verbs are what make the file manageable without an editor.

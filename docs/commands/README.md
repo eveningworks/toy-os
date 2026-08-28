@@ -68,6 +68,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`mkdir`](mkdir.md)
 - [`mkfiles`](mkfiles.md)
 - [`mv`](mv.md)
+- [`open`](open.md)
 - [`pwd`](pwd.md)
 - [`rescue`](rescue.md)
 - [`rm`](rm.md)

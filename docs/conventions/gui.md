@@ -1444,6 +1444,17 @@ real scanout hardware does. Do not write a pixel assertion for one.
     arrangement `uui_listbox` and `uui_table` have, because the WM's
     file picker is a screen-absolute modal the toolkit router never
     sees.
+  - **A thumbnail is a LOOKUP the app answers, never a decode the
+    widget does.** `uui_fileview_set_thumb()`'s callback returns a
+    ready image for a cell or NULL for the generic icon; the File
+    Manager's cache decodes LAZILY on its tick, a couple of files per
+    pass (`thumb_tick()`), keyed by path + mtime + size so a rewritten
+    file re-decodes. Decoding in the draw path would freeze the window
+    for as many full JPEG decodes as the folder has photos, which is
+    why every desktop thumbnails asynchronously (see
+    `docs/decisions.md`). Sniff before loading: `uimg_probe()` on 16
+    header bytes, because most files are not images and
+    `uimg_load()` reads the whole file.
   - **`uui_fileview_set_active_mark()` draws the active-pane border
     from INSIDE the widget's own draw** -- the File Manager drew it
     from `on_draw_over`, which runs after the router's overlay pass, so
@@ -1516,10 +1527,20 @@ real scanout hardware does. Do not write a pixel assertion for one.
     Measured at 2 frames per navigation before and 1 after. Every
     watcher needs this; it is why an inotify consumer tracks its own
     writes.
-- **WHAT OPENS A FILE TYPE IS DECLARED BY THE APP THAT OPENS IT:
-  `Handles=` on its `.desktop` entry.** `Handles=.txt .md .conf`, read
-  by the File Manager when something is activated, matched whole and
-  case-insensitively against the extension INCLUDING its dot (so `.md`
+- **WHAT OPENS A FILE TYPE IS DECLARED BY THE APP THAT OPENS IT --
+  AND THE USER'S CHOICE IN `/etc/mimeapps.conf` OUTRANKS IT.**
+  `Handles=.txt .md .conf` on the app's `.desktop` entry declares;
+  `/etc/mimeapps.conf` (`.jpg=imgview`, a desktop-entry name, a
+  literal `/path`, or `-` for cleared) overrides -- freedesktop's
+  declarations-vs-`mimeapps.list` split, resolved by
+  `userland/lib/uopen.c` with NO daemon (Linux and KDE run none
+  either; a service here would need query IPC the OS has not got, to
+  answer a directory scan). `/bin/open` speaks the same resolver from
+  a prompt and manages the override file (`-l`/`-s`), so a double
+  click and `open x.txt` cannot disagree; a directory opens the File
+  Manager; a DANGLING override falls through to the declarations
+  rather than making a type unopenable. Extensions match whole and
+  case-insensitively INCLUDING the dot (so `.md`
   does not claim `.mdx`). This is freedesktop's `mimeapps.list` shape
   with the MIME database left out, and leaving it out is the decision:
   a MIME registry is a second thing to seed and keep true, while this
