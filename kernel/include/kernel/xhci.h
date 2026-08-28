@@ -29,10 +29,30 @@
 
 // --- what usb_enum.c and usb_hid.c call ------------------------------
 
-// Enable Slot, then Address Device, for a device sitting on `port`
-// (1-based) at `speed`. Allocates the slot's contexts and its endpoint-0
-// transfer ring. Returns the slot id, or a negative completion code.
-int xhci_address_device(uint8_t port, uint8_t speed);
+// Enable Slot, then Address Device, for a device on root port
+// `root_port` (1-based) at `speed`, reached through `route` (the xHCI
+// route string; 0 for a root-port device). For a low/full-speed device
+// behind a HIGH-speed hub, `tt_slot`/`tt_port` name the hub doing the
+// split transactions; zero otherwise. Allocates the slot's contexts and
+// its endpoint-0 transfer ring. Returns the slot id, or a negative
+// completion code.
+int xhci_address_device(uint8_t root_port, uint32_t route, uint8_t speed,
+                        uint8_t tt_slot, uint8_t tt_port);
+
+// Disable Slot plus teardown: frees the slot's contexts, its ep0 ring
+// and every interrupt endpoint configured on it. The one door out, used
+// by detach and by enumeration's own failure path -- a failed
+// enumeration used to leak its slot, which is what made a retry
+// impossible.
+void xhci_disable_slot(uint8_t slot);
+
+// Marks the slot a HUB in its input slot context (hub flag, port count,
+// and TT think time for a high-speed hub). Takes effect with the next
+// Configure Endpoint command, which is xhci_add_interrupt_in()'s -- so
+// the hub driver calls this before configuring the status-change
+// endpoint. The controller refuses to route through a slot not marked
+// this way.
+void xhci_slot_set_hub(uint8_t slot, uint8_t n_ports, uint8_t ttt);
 
 // Corrects endpoint 0's max packet size once the device descriptor has
 // said what it really is, via an Evaluate Context command.
@@ -75,9 +95,16 @@ int xhci_add_interrupt_in(uint8_t slot, uint8_t ep_addr, uint16_t mps,
 // about ring depth.
 int xhci_take_report(uint8_t slot, uint8_t ep_addr, void *buf, uint32_t cap);
 
-// Drains the event ring. Called from the interrupt handler and, when
-// the controller has no usable IRQ line, from the input core's poll.
+// Drains the event ring. Called from the interrupt handler and from
+// the input core's poll -- BOTH are always live now (see usb_init()'s
+// comment on why the poll is a backup rather than an either/or), and
+// the single-consumer guard inside is what makes that safe.
 void xhci_service(void);
+
+// The work an event marks but must not do in interrupt context: root
+// port attach/detach (enumeration is synchronous control transfers) and
+// halted-endpoint recovery. Called from the input core's poll.
+void xhci_deferred_work(void);
 
 // A completion code's name, for logs. Never NULL.
 const char *xhci_completion_name(uint32_t code);

@@ -1284,3 +1284,48 @@ does not have it" is a reason the code is untested, never a reason the
 code is unnecessary.** The same sentence had already been written about
 the scratchpad-buffer branch a few days earlier, and that branch turned
 out to be fine while this one was fatal.
+
+## The xHCI poll runs beside its IRQ, deliberately unlike virtio-input
+
+The convention up to this point was virtio_input.c's either/or: an
+interrupt-driven source leaves `poll` NULL, so the two can never both
+run. The xHCI controller source now registers its poll UNCONDITIONALLY,
+IRQ or not, and that is a decision worth defending because it breaks a
+stated rule.
+
+The reason is what the two drivers trust. virtio's interrupt is
+negotiated with a hypervisor that also implements the device, so "the
+IRQ works" is part of the same contract as "the device works". xHCI's
+INTx line comes from PCI config byte 0x3C, which is whatever the BIOS
+wrote there -- and on a modern PCH routing through the IOAPIC (which
+this kernel does not program; the PIC is all there is), that value can
+be plausible and DEAD. A driver that trusts it registers everything
+with `poll = NULL` and the mouse is silently, permanently deaf, with
+`usb: running, interrupt-driven` in the log as the only witness. There
+is no way to *detect* a dead line that is cheaper than simply also
+polling: the poll drains an already-empty ring in a handful of reads
+when the IRQ is live, and it runs only from `scheduler_idle()`.
+
+What makes the double drain safe is the single-consumer guards --
+`xhci_service()`'s existing one, plus one added to
+`usb_hid_service_all()` when the poll became unconditional. The
+alternative shape, a watchdog that notices `irqs_seen == 0` and
+retro-registers poll thunks, was considered and dropped: it is more
+state, it has a window before it fires, and its only payoff is a purer
+lsdev line.
+
+Deferred work rides the same poll for a different reason: hot-plug
+enumeration and halt recovery are synchronous command submissions, and
+the event drain they would have to run inside is single-consumer -- a
+command issued from there waits on a completion the drain itself would
+have to pop. Linux defers to a hub worker thread for the same shape of
+reason; this kernel's idle poll is its worker thread.
+
+Two consequences measured rather than assumed: a boot-time connect
+change arrives BEFORE the port scan has recorded anything, so the
+deferred attach must skip a port that already has an enumerated device
+(the first version re-reset the boot keyboard's port and dropped its
+first keystrokes -- caught by usb_test's wrap phase and predates.py);
+and a failed enumeration must disable its slot, or a retry burns a
+fresh slot per attempt (slots 2 and 3 leaked in one boot log before
+the failure paths called `xhci_disable_slot()`).

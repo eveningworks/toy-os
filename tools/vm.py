@@ -275,10 +275,18 @@ def cmd_start(args):
     # by name rather than relying on which handler QEMU picked.
     usb = getattr(args, "usb", "none") or "none"
     if usb != "none":
-        cmd += ["-device", "qemu-xhci,id=xhci",
-                "-device", "usb-kbd,id=usbkbd,bus=xhci.0"]
-        if usb == "xhci+mouse":
-            cmd += ["-device", "usb-mouse,id=usbmouse,bus=xhci.0"]
+        cmd += ["-device", "qemu-xhci,id=xhci"]
+        if usb == "xhci+hub":
+            # The keyboard AND mouse both sit BEHIND a usb-hub (QEMU's
+            # is a USB 1.1 full-speed hub), which is the only headless
+            # way to exercise route strings and the hub class driver.
+            cmd += ["-device", "usb-hub,id=usbhub,port=1,bus=xhci.0",
+                    "-device", "usb-kbd,id=usbkbd,bus=xhci.0,port=1.1",
+                    "-device", "usb-mouse,id=usbmouse,bus=xhci.0,port=1.2"]
+        else:
+            cmd += ["-device", "usb-kbd,id=usbkbd,bus=xhci.0"]
+            if usb == "xhci+mouse":
+                cmd += ["-device", "usb-mouse,id=usbmouse,bus=xhci.0"]
     cmd += [
         # A VNC head rather than -display none: input routing needs a
         # display head to exist even when nothing connects to it (see
@@ -551,13 +559,14 @@ def main():
                          "default; with it the guest has BOTH these and the PS/2 "
                          "pair, which is what exercises the input core's "
                          "multiple-source path.")
-    ap.add_argument("--usb", choices=("none", "xhci", "xhci+mouse"),
+    ap.add_argument("--usb", choices=("none", "xhci", "xhci+mouse", "xhci+hub"),
                     default="none",
                     help="attach an xHCI controller and USB HID devices. Off by "
                          "default; `xhci` adds a usb-kbd, `xhci+mouse` adds a "
-                         "usb-mouse too. A named value rather than a boolean "
-                         "because the mouse changes QMP pointer routing once "
-                         "the guest driver polls it.")
+                         "usb-mouse too, `xhci+hub` puts a keyboard AND mouse "
+                         "behind a usb-hub (the route-string path). A named "
+                         "value rather than a boolean because the mouse changes "
+                         "QMP pointer routing once the guest driver polls it.")
     ap.add_argument("--vga", default="std",
                     help="QEMU -vga adapter (std, vmware, ...). All three of std, "
                          "vmware and virtio have a modesetting driver now (std "

@@ -26,33 +26,61 @@
 // xhci_control() by name. If a second controller ever arrives,
 // converting xhci.h's handful of functions is a mechanical afternoon.
 
-#define USB_MAX_DEVICES 8
+#define USB_MAX_DEVICES   8
+#define USB_MAX_INTERFACES 4   // per device; a Unifying receiver has 3
+
+// One interface out of a configuration descriptor, with its first
+// interrupt-IN endpoint (ep 0 when it has none). A composite device --
+// a wireless receiver is the canonical one: keyboard interface first,
+// mouse second -- is several of these on one slot, and a driver that
+// looks only at the first binds the keyboard half and leaves the mouse
+// dead.
+struct usb_interface_info {
+    uint8_t  ifnum;
+    uint8_t  if_class;
+    uint8_t  if_subclass;
+    uint8_t  if_protocol;
+    uint8_t  ep;            // bEndpointAddress, so 0x81 is IN endpoint 1
+    uint8_t  interval;
+    uint16_t mps;
+};
 
 // What a device reported about itself, for `lsusb` and the debug
 // console. Filled by enumeration; the strings are the device's own
 // string descriptors, empty when it has none.
 struct usb_device_info {
     uint8_t  in_use;
-    uint8_t  port;          // 1-based root port
+    uint8_t  port;          // 1-based port on its PARENT (root, or a hub)
+    uint8_t  root_port;     // 1-based root port the whole chain hangs off
     uint8_t  slot;          // xHCI slot id
     uint8_t  speed;         // XHCI_SPEED_*
+    // Topology. Route string 0 / depth 0 is a root-port device; a hub
+    // child carries its hub's slot in parent_slot so a detach can take
+    // the subtree down with it.
+    uint32_t route;         // xHCI route string (4 bits per tier)
+    uint8_t  parent_slot;   // 0 for a root-port device
+    uint8_t  depth;         // hubs above this device
+    uint8_t  tt_slot;       // the high-speed hub doing this device's
+    uint8_t  tt_port;       //   split transactions; 0 when none
     uint16_t vendor_id;
     uint16_t product_id;
     uint8_t  dev_class;
     uint8_t  dev_subclass;
     uint8_t  dev_protocol;
-    uint8_t  if_class;      // the interface this driver bound, if any
+    uint8_t  if_class;      // interface 0's triple, for lsusb
     uint8_t  if_subclass;
     uint8_t  if_protocol;
     char     manufacturer[32];
     char     product[32];
 
-    // The HID interrupt-IN endpoint, when this device has one. Zero
-    // `hid_ep` means nothing here bound it.
-    uint8_t  hid_ep;        // bEndpointAddress, so 0x81 is IN endpoint 1
-    uint16_t hid_mps;
-    uint8_t  hid_interval;
-    uint8_t  hid_ifnum;
+    struct usb_interface_info ifs[USB_MAX_INTERFACES];
+    uint8_t  if_count;
+
+    // Set by the class drivers: bound is what lsusb reports, and for a
+    // HID device the first bound interface's endpoint mirrors into
+    // hid_ep for the tests that predate composite support.
+    uint8_t  bound;
+    uint8_t  hid_ep;
 };
 
 // Finds and brings up an xHCI controller, enumerates what is attached,
@@ -83,8 +111,52 @@ const struct usb_device_info *usb_device_at(int index);
 
 // Brings one connected root port to "configured and described", adding
 // it to the table above. Returns its index, or -1. Called by xhci.c's
-// port scan; the split is the seam xhci.h describes.
+// port scan; the split is the seam xhci.h describes. Cleans its slot up
+// and retries once internally -- a real low/full-speed device is
+// entitled to fumble its first descriptor read, and Linux retries too.
 int usb_enumerate_port(uint8_t port, uint8_t speed);
+
+// The same, for a device behind a hub: the route string and TT fields
+// come from the hub driver, which is the only caller that has them.
+int usb_enumerate_device(uint8_t root_port, uint8_t parent_port,
+                         uint32_t route, uint8_t depth, uint8_t speed,
+                         uint8_t parent_slot, uint8_t tt_slot, uint8_t tt_port);
+
+// Tears down every device on `root_port` -- the device itself and, when
+// it is a hub, everything behind it. Called from the deferred detach
+// work; never from interrupt context (it issues commands).
+void usb_detach_root_port(uint8_t root_port);
+
+// The slot of the device sitting directly on `root_port`, or 0 for an
+// empty port. How the deferred attach tells a REAL plug from the
+// connect-change the bring-up itself raises for a device scan_ports()
+// already enumerated.
+uint8_t usb_root_port_slot(uint8_t root_port);
+
+// Tears down one device (and its subtree, when it is a hub) by slot.
+void usb_detach_slot(uint8_t slot);
+
+// The configuration-descriptor walk, exported for the KTESTs: fills
+// `out` with up to `max` interfaces, each carrying its first
+// interrupt-IN endpoint. Returns the interface count, or -1 for a
+// descriptor that is malformed (refused, never guessed at).
+int usb_parse_config_interfaces(const uint8_t *cfg, uint32_t total,
+                                struct usb_interface_info *out, int max);
+
+// --- hubs (usb_hub.c) -------------------------------------------------
+
+// Binds an enumerated hub: reads its hub descriptor, powers its ports,
+// scans them, and configures the status-change endpoint so later
+// connects and disconnects are seen. Returns 1 when it took the device.
+int usb_hub_bind(struct usb_device_info *d);
+
+// Processes any queued hub status-change reports: resets and enumerates
+// new devices, detaches unplugged ones. Deferred work only -- it does
+// control transfers, so it must never run from the interrupt handler.
+void usb_hub_service(void);
+
+// Forgets the hub state for `slot` (called by the detach path).
+void usb_hub_forget(uint8_t slot);
 
 // Diagnostic counters. These exist so a test can distinguish "the
 // driver never ran" from "the driver ran and decoded nothing", which

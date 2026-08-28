@@ -301,11 +301,144 @@ def phase_mouse(instance, kvm=False):
         g.cleanup()
 
 
+def input_sources(lsdev_text):
+    """Just the `Input sources` section of an lsdev capture.
+
+    The capture carries kernel log lines too, and after an unplug one of
+    them IS `input: usb-mouse unregistered` -- so a whole-capture
+    substring check reports the source still present at the exact moment
+    it was removed. The forbidden-substring-must-be-scoped rule, again.
+    """
+    lines, taking = [], False
+    for ln in (lsdev_text or "").splitlines():
+        if ln.startswith("Input sources"):
+            taking = True
+            continue
+        if taking:
+            if not ln.startswith(" "):
+                break
+            lines.append(ln)
+    return "\n".join(lines)
+
+
+def phase_hotplug(instance, kvm=False):
+    """A mouse plugged in AFTER boot works, and unplugging it cleans up.
+
+    The port scan used to run exactly once, so this phase is the whole
+    hot-plug feature's test: device_add on a RUNNING guest is the only
+    headless stand-in for a human plugging a mouse into a laptop.
+    """
+    print("\nphase 4: hot-plug")
+    g = Guest(instance, "xhci", kvm)
+    try:
+        if not g.start():
+            return check("guest boots for the hot-plug test", False)
+        d = g.console()
+        qmp = g.qmp()
+        time.sleep(2.0)
+
+        srcs = input_sources(d.send("lsdev"))
+        check("no usb-mouse before the plug (the control)",
+              "usb-mouse" not in srcs)
+
+        qmp.device_add("usb-mouse", "hotmouse", bus="xhci.0")
+        time.sleep(2.5)          # deferred work runs at idle; generous
+
+        srcs = input_sources(d.send("lsdev"))
+        check("a mouse plugged in AFTER boot registers", "usb-mouse" in srcs)
+        dump = d.send("usb") or ""
+        check("the hot-plugged mouse enumerated (class 3/1/2)",
+              "class 3/1/2" in dump)
+
+        # It must WORK, not just enumerate: move the pointer through it.
+        d.send("gui")
+        time.sleep(2.5)
+        def cursor():
+            st = d.send("gui state") or ""
+            for line in st.splitlines():
+                if "cursor" in line:
+                    nums = [int(t) for t in line.replace("(", " ").replace(")", " ")
+                            .replace(",", " ").split() if t.lstrip("-").isdigit()]
+                    if len(nums) >= 2:
+                        return nums[0], nums[1]
+            return None
+        start = cursor()
+        for _ in range(10):
+            qmp.move_rel(9, 7)
+            time.sleep(0.05)
+        time.sleep(0.6)
+        moved = cursor()
+        check("the hot-plugged mouse moves the pointer",
+              start is not None and moved is not None and moved != start,
+              f"{start} -> {moved}")
+
+        qmp.device_del("hotmouse")
+        time.sleep(2.5)
+        srcs = input_sources(d.send("lsdev"))
+        check("unplugging unregisters the input source",
+              "usb-mouse" not in srcs)
+        dump = d.send("usb") or ""
+        check("the guest is still answering after the unplug", bool(dump.strip()))
+        check("the detached device left the table",
+              "class 3/1/2" not in dump)
+        return True
+    finally:
+        g.cleanup()
+
+
+def phase_hub(instance, kvm=False):
+    """A keyboard and mouse BEHIND A HUB both work -- the route-string path.
+
+    QEMU's usb-hub is a USB 1.1 full-speed hub, so this exercises hub
+    enumeration, per-port power/reset and route strings; what it cannot
+    reach is the TT path (low/full behind a HIGH-speed hub), which only
+    real hardware presents.
+    """
+    print("\nphase 5: hub")
+    g = Guest(instance, "xhci+hub", kvm)
+    try:
+        if not g.start():
+            return check("guest boots with a hub topology", False)
+        d = g.console()
+        d.send("sh config set system.default_target text")
+        d.send("sh rm /hub_one.txt")
+        time.sleep(0.4)
+        g.stop()
+
+        if not g.start():
+            return check("guest reboots into the text target", False)
+        d = g.console()
+        qmp = g.qmp()
+        time.sleep(2.5)
+
+        dump = d.send("usb") or ""
+        check("the hub enumerated (class 9)", "class 9/" in dump)
+        check("the keyboard behind the hub enumerated (class 3/1/1)",
+              "class 3/1/1" in dump)
+        check("the mouse behind the hub enumerated (class 3/1/2)",
+              "class 3/1/2" in dump)
+        lsdev = d.send("lsdev") or ""
+        check("both hub children registered as input sources",
+              "usb-keyboard" in lsdev and "usb-mouse" in lsdev)
+
+        # A keystroke THROUGH the hub: only the routed path can deliver
+        # it, since QEMU gives the usb-kbd the keyboard the moment it is
+        # attached (the tool's self-controlling property, unchanged).
+        type_line(qmp, "touch /hub_one.txt")
+        names = d.send("sh ls /") or ""
+        check("a keystroke through the hub reaches the shell",
+              "hub_one.txt" in names)
+        return True
+    finally:
+        g.cleanup()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--instance", default="auto")
-    ap.add_argument("--phase", choices=("all", "keyboard", "wrap", "mouse"),
+    ap.add_argument("--phase", choices=("all", "keyboard", "wrap", "mouse",
+                                        "hotplug", "hub"),
                     default="all")
     # The INTx storm class this driver's acknowledge path guards against
     # is INVISIBLE under TCG -- virtio-input's version of it hung 3 boots
@@ -335,6 +468,10 @@ def main():
         phase_ring_wrap(inst, args.kvm)
     if args.phase in ("all", "mouse"):
         phase_mouse(inst, args.kvm)
+    if args.phase in ("all", "hotplug"):
+        phase_hotplug(inst, args.kvm)
+    if args.phase in ("all", "hub"):
+        phase_hub(inst, args.kvm)
 
     failed = [n for n, ok, _ in results if not ok]
     print(f"\nusb_test: {len(results) - len(failed)}/{len(results)} checks passed")

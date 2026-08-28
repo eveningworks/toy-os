@@ -393,7 +393,8 @@ help:
 	@echo "                             of them -- see the KCMDLINE line above"
 	@echo "     INPUT=ps2|virtio        virtio attaches keyboard/mouse/tablet BESIDE"
 	@echo "                             PS/2, so the input core has two sources"
-	@echo "     USB=none|xhci|xhci+mouse an xHCI controller and USB HID devices."
+	@echo "     USB=none|xhci|xhci+mouse|xhci+hub an xHCI controller and USB HID"
+	@echo "                             devices; xhci+hub puts them behind a hub."
 	@echo "                             NOTE: attaching usb-kbd takes the keyboard"
 	@echo "                             AWAY from PS/2 -- QEMU routes keys to it"
 	@echo "   Which driver actually claimed the display: type lsdev at the serial"
@@ -1484,11 +1485,16 @@ USB_KIND = $(if $(USB),$(USB),none)
 # $(if)'s arguments on commas, so a literal one silently truncates the
 # device list -- which is how `usb-kbd` disappeared entirely the first
 # time this was written, leaving a controller with nothing plugged in.
-QEMU_USB = $(if $(filter xhci xhci+mouse,$(USB_KIND)),\
-             -device qemu-xhci$(COMMA)id=xhci \
+QEMU_USB = $(if $(filter xhci xhci+mouse xhci+hub,$(USB_KIND)),\
+             -device qemu-xhci$(COMMA)id=xhci,)\
+           $(if $(filter xhci xhci+mouse,$(USB_KIND)),\
              -device usb-kbd$(COMMA)id=usbkbd$(COMMA)bus=xhci.0,)\
            $(if $(filter xhci+mouse,$(USB_KIND)),\
-             -device usb-mouse$(COMMA)id=usbmouse$(COMMA)bus=xhci.0,)
+             -device usb-mouse$(COMMA)id=usbmouse$(COMMA)bus=xhci.0,)\
+           $(if $(filter xhci+hub,$(USB_KIND)),\
+             -device usb-hub$(COMMA)id=usbhub$(COMMA)port=1$(COMMA)bus=xhci.0 \
+             -device usb-kbd$(COMMA)id=usbkbd$(COMMA)bus=xhci.0$(COMMA)port=1.1 \
+             -device usb-mouse$(COMMA)id=usbmouse$(COMMA)bus=xhci.0$(COMMA)port=1.2,)
 
 # QEMU has had no default audio backend since 5.x, and -machine
 # pcspk-audiodev is what routes the emulated i8254 speaker to it.

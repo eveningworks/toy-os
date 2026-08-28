@@ -3175,35 +3175,34 @@ following them. The trailing bare `usb: ` is unexplained and is the
 thing to chase first, since `klog_printf()` formats into a buffer before
 writing and should not be able to emit a partial line.
 
-**THE LEAD, and it is the "the data never reached the code under test"
-shape.** Under QEMU the very next line after the walk is `usb: N slots
-(...)`, and the ONLY log line that can come between them is
-`setup_rings()`'s `usb: %u scratchpad page(s)` -- which begins with
-exactly the `usb: ` that is the last thing this laptop printed. QEMU's
-controller reports **zero** scratchpad buffers (that line never appears
-in a local boot, verified 2026-08-27 with a `qemu-xhci` A/B), so the
-whole scratchpad branch -- an array frame plus up to 512 more frames,
-one `pmm_alloc_contiguous(1)` at a time -- **has never executed in any
-test in this repo**. Real Intel silicon does request them. The count
-macro itself is correct (`XHCI_HCS2_SPB_MAX` reads both the Hi and Lo
-fields), so if this is it, it is the allocation or what the controller
-does with the result, not the parse.
+**CAUSE ESTABLISHED 2026-08-27** (this section's earlier text chased
+two suspects; a later `usbtrace` boot settled it). The chain on this
+machine continues past where the original walk stopped, and hop 3 is
+`xECP 1 usb-legacy-support (bios-owned=1)`: the BIOS owned the
+controller, every register write trapped into SMM, and the freeze moved
+when unrelated logging changed the timing -- a CPU in SMM that never
+came back. The fix is `legacy_handoff()` plus moving the capability
+walk BEFORE the reset; `docs/decisions/drivers.md` has the full entry.
+The scratchpad lead was real as a coverage gap (that branch still first
+runs on hardware) but was not the cause.
 
-**A second suspect, weaker.** No USB Legacy Support capability (id 1)
-appears in the walk, and Intel PCH silicon is expected to have one.
-This driver implements no BIOS-to-OS handoff at all -- `xhci.c` says so,
-and says QEMU's lack of the capability is why. A BIOS still owning the
-controller with its SMI sources armed is a known way for this to hang on
-real hardware and be invisible under emulation. Nothing here has tested
-either suspect.
+**Getting past it:** `nousb` on the boot line (`docs/boot-flags.md`).
 
-**Getting past it:** `nousb` on the boot line, added in the same change
-as this entry (`docs/boot-flags.md`).
+**What confirms it**, on the machine, booting with `usbtrace`:
 
-**What would move it forward**, in cost order: boot `nousb` and confirm
-the machine is otherwise fine; add a log line either side of
-`setup_rings()` to bisect the hang to a statement; then dump the full
-capability chain including the ones the walk stops before.
+```
+usb: BIOS owns the controller -- requesting handoff
+usb: legacy handoff done (legsup 0x..., os-owned=1)
+usb: running, interrupt-driven
+```
+
+then `usb: port N: connected, ...` and `bound as usb-mouse` for an
+external mouse -- which is the user-visible test, and what `nousb`
+currently costs. Since 2026-08-28 the same boot also exercises port
+power (this PCH likely reports PPC=1), and a mouse that enumerates but
+does not move should be taken to the `usb` debug-console dump: `xfer
+ok/bad`, `irqs_seen` and a `HALTED` mark tell "no interrupts" apart
+from "endpoint halted" from "reports arriving undecoded".
 
 ### A filesystem write during the desktop's STARTUP wedges the compositor
 

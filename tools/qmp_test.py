@@ -258,6 +258,20 @@ class QMPSession:
         self._sock.sendall((json.dumps(obj) + "\n").encode())
         return self._recv_json()
 
+    # -- hot-plug ----------------------------------------------------------
+    #
+    # QEMU can attach and detach USB devices on a RUNNING guest, which is
+    # the only headless way to test hot-plug: there is no physical port
+    # to touch. `driver` is a QEMU device type (usb-mouse, usb-kbd,
+    # usb-hub), and the id names it for device_del later.
+    def device_add(self, driver, dev_id, **props):
+        args = {"driver": driver, "id": dev_id}
+        args.update(props)
+        return self._cmd({"execute": "device_add", "arguments": args})
+
+    def device_del(self, dev_id):
+        return self._cmd({"execute": "device_del", "arguments": {"id": dev_id}})
+
     # -- keyboard ---------------------------------------------------------
 
     def send_key(self, qcode):

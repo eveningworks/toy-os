@@ -65,6 +65,12 @@ struct input_source {
 };
 
 void input_register_source(const struct input_source *src);
+
+// Removes a registered source -- USB hot-unplug is why this exists.
+// The caller must first make sure the source's poll can never fire
+// again (its own in_use flag); see the comment in input.c.
+void input_unregister_source(const struct input_source *src);
+
 int  input_source_count(void);
 const struct input_source *input_source_at(int index);
 

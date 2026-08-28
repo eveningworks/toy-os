@@ -632,7 +632,8 @@ The gotchas it already gets right, for when you need to know why:
   attaching either to a tool written for PS/2 silently deprives it of
   input, which reads exactly like a guest bug.
 
-  The supported way in is the axis -- `USB=xhci` / `USB=xhci+mouse` on
+  The supported way in is the axis -- `USB=xhci` / `USB=xhci+mouse` /
+  `USB=xhci+hub` (keyboard and mouse behind a `usb-hub`) on
   `make run`, `--usb` on `tools/vm.py` -- off by default for precisely
   this reason. `tools/usb_test.py` is the one tool that uses it, and the
   routing switch is what makes it self-controlling: with `usb-kbd`

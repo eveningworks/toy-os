@@ -1583,8 +1583,15 @@ window without going through it will find its layout polls timing out.
   is handed to the display client out of band and never appears in a
   `screendump` at all. On demand, not in the gate.
 - **`usb_test.py`** -- an xHCI controller and a HID boot keyboard and
-  mouse (`vm.py --usb xhci` / `--usb xhci+mouse`, or `make run
-  USB=xhci+mouse`). Three phases, seventeen checks.
+  mouse (`vm.py --usb xhci` / `--usb xhci+mouse` / `--usb xhci+hub`, or
+  `make run USB=xhci+mouse`). Five phases: keyboard, ring wrap, mouse,
+  HOT-PLUG (QMP `device_add`/`device_del` on the running guest -- the
+  only headless stand-in for a human plugging a mouse in, and the
+  detach check must scope its lsdev assertion to the Input sources
+  section, because the capture also carries the kernel's own
+  `usb-mouse unregistered` log line), and HUB (both HID devices behind
+  a `usb-hub`, which is what exercises route strings; QEMU's hub is
+  full-speed, so the TT path stays hardware-only).
 
   **It is self-controlling, and that was measured before a line of the
   driver was written.** QEMU activates a keyboard handler the moment

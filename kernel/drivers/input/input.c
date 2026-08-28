@@ -30,6 +30,23 @@ void input_register_source(const struct input_source *src) {
                 (src->caps & INPUT_CAP_WHEEL) ? "wheel" : "");
 }
 
+// USB hot-unplug is the caller: a source whose device is gone must
+// leave the registry, or lsdev keeps naming a mouse that is not there.
+// Compacting under input_poll_sources()' feet is safe on this
+// uniprocessor -- the unregister runs FROM a source's own poll, so the
+// walk merely sees a shorter list on its next index -- but a removed
+// source's poll must never run again, which is why callers clear their
+// own in_use flag first.
+void input_unregister_source(const struct input_source *src) {
+    for (int i = 0; i < g_count; i++) {
+        if (g_sources[i] != src) continue;
+        for (int j = i; j + 1 < g_count; j++) g_sources[j] = g_sources[j + 1];
+        g_count--;
+        klog_printf("input: %s unregistered\n", src->name);
+        return;
+    }
+}
+
 int input_source_count(void) { return g_count; }
 
 const struct input_source *input_source_at(int index) {

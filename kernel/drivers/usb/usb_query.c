@@ -39,11 +39,11 @@ static int usb_q_fill(int index, void *out) {
     q->if_class    = d->if_class;
     q->if_subclass = d->if_subclass;
     q->if_protocol = d->if_protocol;
-    // "Bound" means a driver in THIS build claimed it, which is not the
-    // same as "it is a HID device" -- a HID device whose endpoint could
-    // not be configured is present and unbound, and lsusb should say so
-    // rather than implying it works.
-    q->bound       = d->hid_ep ? 1 : 0;
+    // "Bound" means a driver in THIS build claimed it (HID or hub),
+    // which is not the same as "it is a HID device" -- a HID device
+    // whose endpoint could not be configured is present and unbound,
+    // and lsusb should say so rather than implying it works.
+    q->bound       = d->bound;
     k_strlcpy(q->manufacturer, d->manufacturer, sizeof q->manufacturer);
     k_strlcpy(q->product, d->product, sizeof q->product);
     return 1;

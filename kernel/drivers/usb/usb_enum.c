@@ -31,6 +31,7 @@
 #define DESC_ENDPOINT   5
 
 #define USB_CLASS_HID   3
+#define USB_CLASS_HUB   9
 
 // bmRequestType
 #define DIR_IN          0x80
@@ -109,55 +110,75 @@ static void read_string(uint8_t slot, uint8_t index, char *out, uint32_t cap) {
 
 // --- the walk ---------------------------------------------------------
 
-// Finds the first HID interface in a configuration and its interrupt-IN
-// endpoint. Returns 1 on success.
+// Walks a configuration and records EVERY interface, each with its
+// first interrupt-IN endpoint (ep 0 when it has none). All of them,
+// not the first HID one: a wireless receiver is a keyboard interface
+// followed by a mouse interface on one device, and a walk that stopped
+// at the first bound the keyboard and left the mouse dead.
 //
 // The bounds here are the point. `total` is the device's own
 // wTotalLength, already clamped by the caller to what was actually
 // read; every descriptor's bLength is checked to be non-zero and to fit
 // before it is stepped over. A zero bLength would otherwise be an
 // infinite loop, and an oversized one would walk off the buffer.
-static int find_hid_interface(const uint8_t *cfg, uint32_t total,
-                              uint8_t *out_if_class, uint8_t *out_if_sub,
-                              uint8_t *out_if_proto, uint8_t *out_ep,
-                              uint16_t *out_mps, uint8_t *out_interval,
-                              uint8_t *out_ifnum) {
+int usb_parse_config_interfaces(const uint8_t *cfg, uint32_t total,
+                                struct usb_interface_info *out, int max) {
     uint32_t o = 0;
-    int in_hid = 0;
+    int count = 0;
+    struct usb_interface_info *cur = 0;
     while (o + 2 <= total) {
         uint32_t blen = cfg[o];
         uint8_t  btype = cfg[o + 1];
-        if (blen < 2 || o + blen > total) return 0;   // refuse, do not guess
+        if (blen < 2 || o + blen > total) return -1;   // refuse, do not guess
 
         if (btype == DESC_INTERFACE && blen >= 9) {
-            in_hid = (cfg[o + 5] == USB_CLASS_HID);
-            if (in_hid) {
-                *out_ifnum   = cfg[o + 2];
-                *out_if_class = cfg[o + 5];
-                *out_if_sub   = cfg[o + 6];
-                *out_if_proto = cfg[o + 7];
+            // An ALTERNATE SETTING re-describes an interface number
+            // already seen; setting 0 is what SET_CONFIGURATION selects,
+            // so only bAlternateSetting 0 opens a new record.
+            if (cfg[o + 3] != 0) {
+                cur = 0;
+            } else if (count < max) {
+                cur = &out[count++];
+                cur->ifnum       = cfg[o + 2];
+                cur->if_class    = cfg[o + 5];
+                cur->if_subclass = cfg[o + 6];
+                cur->if_protocol = cfg[o + 7];
+                cur->ep = 0; cur->mps = 0; cur->interval = 0;
+            } else {
+                cur = 0;   // over the cap: counted structure, dropped detail
             }
-        } else if (btype == DESC_ENDPOINT && blen >= 7 && in_hid) {
+        } else if (btype == DESC_ENDPOINT && blen >= 7 && cur && !cur->ep) {
             uint8_t addr = cfg[o + 2];
             uint8_t attr = cfg[o + 3];
             if ((addr & 0x80) && (attr & 0x03) == 3) {   // interrupt IN
-                *out_ep       = addr;
-                *out_mps      = (uint16_t)(cfg[o + 4] | ((uint16_t)cfg[o + 5] << 8));
-                *out_interval = cfg[o + 6];
-                return 1;
+                cur->ep       = addr;
+                cur->mps      = (uint16_t)(cfg[o + 4] | ((uint16_t)cfg[o + 5] << 8));
+                cur->interval = cfg[o + 6];
             }
         }
         o += blen;
     }
+    return count;
+}
+
+static struct usb_device_info *dev_alloc(void) {
+    for (int i = 0; i < USB_MAX_DEVICES; i++)
+        if (!g_devs[i].in_use) return &g_devs[i];
     return 0;
 }
 
-// Brings one connected port all the way to "configured and described".
-// Returns the index into the device table, or -1.
-int usb_enumerate_port(uint8_t port, uint8_t speed) {
-    if (g_dev_count >= USB_MAX_DEVICES) return -1;
+// Brings one device -- root-port or hub-child -- all the way to
+// "configured and described". Returns the index into the device table,
+// or -1 WITH ITS SLOT DISABLED: the failure path frees what it
+// allocated, which is what makes the caller's reset-and-retry start
+// from nothing instead of from a wedged half-enumeration.
+int usb_enumerate_device(uint8_t root_port, uint8_t parent_port,
+                         uint32_t route, uint8_t depth, uint8_t speed,
+                         uint8_t parent_slot, uint8_t tt_slot, uint8_t tt_port) {
+    struct usb_device_info *d = dev_alloc();
+    if (!d) return -1;
 
-    int slot = xhci_address_device(port, speed);
+    int slot = xhci_address_device(root_port, route, speed, tt_slot, tt_port);
     if (slot < 0) return -1;
 
     // Eight bytes first, because bMaxPacketSize0 is byte 7 and the
@@ -165,7 +186,8 @@ int usb_enumerate_port(uint8_t port, uint8_t speed) {
     // correcting it is what hangs on a device whose real MPS is 64.
     int got = get_descriptor((uint8_t)slot, DESC_DEVICE, 0, 0, g_desc_buf, 8);
     if (got < 8) {
-        klog_printf("usb: port %u: short device descriptor (%d)\n", port, got);
+        klog_printf("usb: port %u: short device descriptor (%d)\n", parent_port, got);
+        xhci_disable_slot((uint8_t)slot);
         return -1;
     }
     uint16_t real_mps = g_desc_buf[7];
@@ -175,13 +197,19 @@ int usb_enumerate_port(uint8_t port, uint8_t speed) {
 
     got = get_descriptor((uint8_t)slot, DESC_DEVICE, 0, 0, g_desc_buf, 18);
     if (got < 18) {
-        klog_printf("usb: port %u: device descriptor truncated (%d)\n", port, got);
+        klog_printf("usb: port %u: device descriptor truncated (%d)\n", parent_port, got);
+        xhci_disable_slot((uint8_t)slot);
         return -1;
     }
 
-    struct usb_device_info *d = &g_devs[g_dev_count];
     k_memset(d, 0, sizeof *d);
-    d->port         = port;
+    d->port         = parent_port;
+    d->root_port    = root_port;
+    d->route        = route;
+    d->depth        = depth;
+    d->parent_slot  = parent_slot;
+    d->tt_slot      = tt_slot;
+    d->tt_port      = tt_port;
     d->slot         = (uint8_t)slot;
     d->speed        = speed;
     d->dev_class    = g_desc_buf[4];
@@ -196,11 +224,13 @@ int usb_enumerate_port(uint8_t port, uint8_t speed) {
     // claiming more than 4 KiB of descriptors is refused rather than
     // allowed to overrun.
     got = get_descriptor((uint8_t)slot, DESC_CONFIG, 0, 0, g_desc_buf, 9);
-    if (got < 9) return -1;
+    if (got < 9) { xhci_disable_slot((uint8_t)slot); return -1; }
     uint32_t total = (uint32_t)(g_desc_buf[2] | ((uint32_t)g_desc_buf[3] << 8));
     uint8_t  cfg_value = g_desc_buf[5];
     if (total < 9 || total > sizeof g_desc_buf) {
-        klog_printf("usb: port %u: config descriptor claims %u bytes\n", port, total);
+        klog_printf("usb: port %u: config descriptor claims %u bytes\n",
+                    parent_port, total);
+        xhci_disable_slot((uint8_t)slot);
         return -1;
     }
     got = get_descriptor((uint8_t)slot, DESC_CONFIG, 0, 0, g_desc_buf, (uint16_t)total);
@@ -210,39 +240,100 @@ int usb_enumerate_port(uint8_t port, uint8_t speed) {
     read_string((uint8_t)slot, i_prod,  d->product,      sizeof d->product);
 
     if (set_configuration((uint8_t)slot, cfg_value) < 0) {
-        klog_printf("usb: port %u: set configuration failed\n", port);
+        klog_printf("usb: port %u: set configuration failed\n", parent_port);
+        xhci_disable_slot((uint8_t)slot);
         return -1;
     }
 
-    uint8_t ep = 0, interval = 0, ifnum = 0;
-    uint16_t mps = 0;
-    if (find_hid_interface(g_desc_buf, total, &d->if_class, &d->if_subclass,
-                           &d->if_protocol, &ep, &mps, &interval, &ifnum)) {
-        d->hid_ep       = ep;
-        d->hid_mps      = mps;
-        d->hid_interval = interval;
-        d->hid_ifnum    = ifnum;
+    int ifc = usb_parse_config_interfaces(g_desc_buf, total, d->ifs,
+                                          USB_MAX_INTERFACES);
+    if (ifc > 0) {
+        d->if_count    = (uint8_t)ifc;
+        d->if_class    = d->ifs[0].if_class;
+        d->if_subclass = d->ifs[0].if_subclass;
+        d->if_protocol = d->ifs[0].if_protocol;
     }
 
     d->in_use = 1;
     g_dev_count++;
 
-    klog_printf("usb: port %u: %04x:%04x \"%s\" %s, class %u/%u/%u\n",
-                port, d->vendor_id, d->product_id,
+    klog_printf("usb: %s %u: %04x:%04x \"%s\" %s, class %u/%u/%u, %u interface(s)\n",
+                depth ? "hub port" : "port", parent_port,
+                d->vendor_id, d->product_id,
                 d->product[0] ? d->product : "(no product string)",
                 d->manufacturer[0] ? d->manufacturer : "",
-                d->if_class, d->if_subclass, d->if_protocol);
+                d->if_class, d->if_subclass, d->if_protocol, d->if_count);
 
-    // Binding is the class driver's decision, not enumeration's: a
+    // Binding is the class drivers' decision, not enumeration's: a
     // device this build has no driver for stays in the table and is
     // reported by lsusb, it just does nothing.
-    usb_hid_bind(d);
-    return g_dev_count - 1;
+    if (d->dev_class == USB_CLASS_HUB ||
+        (d->if_count && d->ifs[0].if_class == USB_CLASS_HUB))
+        usb_hub_bind(d);
+    else
+        usb_hid_bind(d);
+    return (int)(d - g_devs);
 }
 
+int usb_enumerate_port(uint8_t port, uint8_t speed) {
+    return usb_enumerate_device(port, port, 0, 0, speed, 0, 0, 0);
+}
+
+// --- detach -----------------------------------------------------------
+
+static struct usb_device_info *dev_by_slot(uint8_t slot) {
+    for (int i = 0; i < USB_MAX_DEVICES; i++)
+        if (g_devs[i].in_use && g_devs[i].slot == slot) return &g_devs[i];
+    return 0;
+}
+
+// Depth-first: a hub's children go before the hub, because a child's
+// Disable Slot while its route still exists is the orderly direction.
+void usb_detach_slot(uint8_t slot) {
+    struct usb_device_info *d = dev_by_slot(slot);
+    if (!d) return;
+    d->in_use = 0;           // off the table first, so recursion terminates
+    g_dev_count--;
+
+    for (int i = 0; i < USB_MAX_DEVICES; i++)
+        if (g_devs[i].in_use && g_devs[i].parent_slot == slot)
+            usb_detach_slot(g_devs[i].slot);
+
+    usb_hid_unbind(slot);
+    usb_hub_forget(slot);
+    xhci_disable_slot(slot);
+    klog_printf("usb: %04x:%04x \"%s\" detached\n",
+                d->vendor_id, d->product_id,
+                d->product[0] ? d->product : "");
+}
+
+uint8_t usb_root_port_slot(uint8_t root_port) {
+    for (int i = 0; i < USB_MAX_DEVICES; i++)
+        if (g_devs[i].in_use && g_devs[i].root_port == root_port &&
+            g_devs[i].depth == 0)
+            return g_devs[i].slot;
+    return 0;
+}
+
+void usb_detach_root_port(uint8_t root_port) {
+    for (int i = 0; i < USB_MAX_DEVICES; i++)
+        if (g_devs[i].in_use && g_devs[i].root_port == root_port &&
+            g_devs[i].depth == 0)
+            usb_detach_slot(g_devs[i].slot);
+}
+
+// --- the table, as lsusb sees it ---------------------------------------
+//
+// `index` is a position among the LIVE entries, not a table offset --
+// a detach leaves no hole visible from outside, so QUERY_USB's
+// count/fill pair stays consistent.
 int usb_device_count(void) { return g_dev_count; }
 
 const struct usb_device_info *usb_device_at(int index) {
-    if (index < 0 || index >= g_dev_count) return 0;
-    return &g_devs[index];
+    if (index < 0) return 0;
+    for (int i = 0; i < USB_MAX_DEVICES; i++) {
+        if (!g_devs[i].in_use) continue;
+        if (index-- == 0) return &g_devs[i];
+    }
+    return 0;
 }

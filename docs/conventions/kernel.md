@@ -718,11 +718,57 @@ about there being no lock state here. See `docs/decisions.md`.
 ## USB IS xHCI ONLY, ITS PORTS WAIT ON PED RATHER THAN PRC, AND EVERY DMA OBJECT IS ITS OWN FRAME
 
 `kernel/drivers/usb/`. One host controller driver (`xhci.c`), the device
-enumeration on it (`usb_enum.c`), and a HID boot-protocol class driver
+enumeration on it (`usb_enum.c`), a HID boot-protocol class driver
 (`usb_hid.c`) that registers keyboards and mice with the input core like
-any other source. UHCI/OHCI/EHCI are found by prog_if, named in the log
+any other source, and a USB2 hub class driver (`usb_hub.c`).
+UHCI/OHCI/EHCI are found by prog_if, named in the log
 and refused: a machine that needs this driver -- one with no PS/2 port,
 which is everything since roughly Skylake -- has xHCI and nothing else.
+
+**ENUMERATION RECORDS EVERY INTERFACE, AND HID BINDS EVERY BOOT ONE.**
+A wireless receiver is a keyboard interface followed by a mouse
+interface on one plug, and a walk that stops at the first HID interface
+binds the keyboard and leaves the mouse silently dead -- which is
+exactly what shipped first. `usb_parse_config_interfaces()` is exported
+and KTESTed against a canned receiver descriptor because QEMU has no
+stock composite HID device to test with.
+
+**HOT-PLUG AND HALT RECOVERY ARE DEFERRED WORK, NEVER DONE IN THE EVENT
+DRAIN.** A port change event only sets a pending bit; enumeration and
+the Reset Endpoint/Set TR Dequeue pair are synchronous command
+submissions that would deadlock on the single-consumer guard if run
+from inside `xhci_service()`. `xhci_deferred_work()` runs them from the
+controller's poll. Two traps already paid for: **the bring-up itself
+raises a connect change for a device that was there all along**, so a
+deferred attach must skip a port that already has an enumerated device
+(acting on it re-resets a working port and kills its endpoints -- the
+boot keyboard measurably dropped its first keystrokes); and **a failed
+enumeration must disable its slot**, or every retry burns a fresh one.
+
+**THE CONTROLLER'S POLL RUNS BESIDE ITS IRQ, deliberately breaking
+virtio_input.c's either/or.** On real hardware the BIOS-reported INTx
+line can be plausible and dead (a stale PIRQ value), and a driver that
+trusts it has a mouse that is silently, permanently deaf. The poll is
+the backup; the single-consumer guards (`xhci_service()`'s and
+`usb_hid_service_all()`'s) are what make the double drain safe. The
+per-HID sources still leave `poll` NULL when the IRQ is live -- their
+decode rides the controller's poll. See `docs/decisions.md`.
+
+**PORTS ARE POWERED BEFORE THEY ARE SCANNED when `HCCPARAMS1.PPC` says
+they need it.** On such a controller ports come out of reset UNPOWERED
+and CCS never rises, so a connected mouse reads as an empty port with
+nothing logged. QEMU reports PPC=0, which is how the branch stayed
+unwritten for the driver's whole QEMU life -- it first runs on hardware.
+
+**HUBS ARE USB2 ONLY, AND A CHILD'S SPEED IS NOT ITS ROOT PORT'S.**
+`usb_hub.c` rides the same machinery HID does (the status-change pipe
+is an ordinary interrupt-IN endpoint whose reports are port bitmaps)
+and adds the port state machine: power, reset, the route string, and
+the TT fields naming the HIGH-speed hub that does split transactions
+for a low/full-speed child. A USB3 hub is refused by name. Endpoint
+intervals must come from the DEVICE's speed (`g_slots[].speed`), not
+the root port's -- behind a hub the two differ. QEMU's `usb-hub` is
+full-speed, so the TT path is spec-correct but hardware-only.
 
 **There is no HCD ops table**, and that is a decision rather than a
 deferral: one implementer, no plausible second. `virtio_pci.c` makes the
@@ -779,10 +825,12 @@ and the opposite of what HID and evdev both report. `usb_hid.c` and
 nowhere until a driver got it wrong and a KTEST caught it; `input.h`
 states it now.
 
-`USB=none|xhci|xhci+mouse` on `make run`, `--usb` on `tools/vm.py`, and
-**attaching a `usb-kbd` takes the keyboard away from PS/2** because QEMU
-routes keystrokes to it -- which is why the axis is off by default, and
-what makes `tools/usb_test.py` self-controlling.
+`USB=none|xhci|xhci+mouse` on `make run`, `--usb` on `tools/vm.py`
+(which adds `xhci+hub`: keyboard and mouse behind a `usb-hub`, the
+route-string path), and **attaching a `usb-kbd` takes the keyboard away
+from PS/2** because QEMU routes keystrokes to it -- which is why the
+axis is off by default, and what makes `tools/usb_test.py`
+self-controlling.
 
 ## INPUT DEVICES REGISTER WITH THE INPUT CORE, and the canonical event is evdev
 

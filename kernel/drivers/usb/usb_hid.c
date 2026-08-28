@@ -112,10 +112,18 @@ struct hid_dev {
     struct input_source src;
 };
 
-#define MAX_HID 4
+// Room for a composite receiver (keyboard + mouse on one plug) beside
+// a wired pair, with slots REUSED on unbind -- hot-unplug would
+// otherwise burn one forever per replug.
+#define MAX_HID 6
 static struct hid_dev g_hid[MAX_HID];
-static int g_hid_count;
 static uint32_t g_reports;
+
+static struct hid_dev *hid_alloc(void) {
+    for (int i = 0; i < MAX_HID; i++)
+        if (!g_hid[i].in_use) return &g_hid[i];
+    return 0;
+}
 
 // Counted because its absence is INVISIBLE on QEMU. QEMU's usb-hid
 // reports boot format whether or not SET_PROTOCOL was ever issued, so a
@@ -128,10 +136,16 @@ uint32_t usb_hid_reports(void) { return g_reports; }
 uint32_t usb_hid_boot_protocol_count(void) { return g_setproto_ok; }
 
 int usb_hid_describe(int index, char *buf, uint32_t cap) {
-    if (index < 0 || index >= g_hid_count || !buf || !cap) return 0;
-    struct hid_dev *d = &g_hid[index];
-    k_snprintf(buf, cap, "%s slot %u ep 0x%x", d->name, d->slot, d->ep);
-    return 1;
+    if (index < 0 || !buf || !cap) return 0;
+    for (int i = 0; i < MAX_HID; i++) {
+        if (!g_hid[i].in_use) continue;
+        if (index-- == 0) {
+            k_snprintf(buf, cap, "%s slot %u ep 0x%x",
+                       g_hid[i].name, g_hid[i].slot, g_hid[i].ep);
+            return 1;
+        }
+    }
+    return 0;
 }
 
 // --- the keyboard differ ----------------------------------------------
@@ -233,19 +247,40 @@ static void hid_service_one(struct hid_dev *d) {
     }
 }
 
+// ONE consumer of the report queues at a time. The controller's poll
+// runs beside its IRQ now (see xhci_poll_source), so the interrupt can
+// land in the middle of a polled decode; without this both would
+// advance next_take and re-post one slice twice. The turned-away
+// caller loses nothing -- the reports stay queued for the next pass.
+// Same shape as xhci_service()'s guard, for the same reason.
+static volatile uint8_t g_in_hid;
+
 // One thunk per slot, because struct input_source carries no context
 // pointer -- the same reason virtio_input.c has poll_0..poll_3.
-static void poll_0(void) { hid_service_one(&g_hid[0]); }
-static void poll_1(void) { hid_service_one(&g_hid[1]); }
-static void poll_2(void) { hid_service_one(&g_hid[2]); }
-static void poll_3(void) { hid_service_one(&g_hid[3]); }
-static void (*const POLLS[MAX_HID])(void) = { poll_0, poll_1, poll_2, poll_3 };
+static void poll_slot(int i) {
+    if (g_in_hid) return;
+    g_in_hid = 1;
+    if (g_hid[i].in_use) hid_service_one(&g_hid[i]);
+    g_in_hid = 0;
+}
+static void poll_0(void) { poll_slot(0); }
+static void poll_1(void) { poll_slot(1); }
+static void poll_2(void) { poll_slot(2); }
+static void poll_3(void) { poll_slot(3); }
+static void poll_4(void) { poll_slot(4); }
+static void poll_5(void) { poll_slot(5); }
+static void (*const POLLS[MAX_HID])(void) = {
+    poll_0, poll_1, poll_2, poll_3, poll_4, poll_5,
+};
 
 // The interrupt path: the controller's IRQ has already moved the report
 // into memory, so this only has to decode what is waiting.
 void usb_hid_service_all(void) {
-    for (int i = 0; i < g_hid_count; i++)
+    if (g_in_hid) return;
+    g_in_hid = 1;
+    for (int i = 0; i < MAX_HID; i++)
         if (g_hid[i].in_use) hid_service_one(&g_hid[i]);
+    g_in_hid = 0;
 }
 
 // --- binding ----------------------------------------------------------
@@ -273,44 +308,68 @@ static int hid_set_idle_and_boot(uint8_t slot, uint8_t ifnum) {
     return 0;
 }
 
-// Binds one enumerated device if it is a boot keyboard or mouse.
-// Returns 1 when it took it.
-int usb_hid_bind(const struct usb_device_info *info) {
-    if (!info || g_hid_count >= MAX_HID) return 0;
-    if (info->if_class != 3 || info->if_subclass != HID_SUB_BOOT) return 0;
-    if (info->if_protocol != HID_IF_KEYBOARD && info->if_protocol != HID_IF_MOUSE)
-        return 0;
-    if (!info->hid_ep) return 0;
+// Binds EVERY boot keyboard/mouse interface an enumerated device
+// carries -- a composite wireless receiver is a keyboard interface
+// followed by a mouse interface on one plug, and binding only the
+// first is a receiver whose mouse half is silently dead. Returns how
+// many it took.
+int usb_hid_bind(struct usb_device_info *info) {
+    if (!info) return 0;
+    int took = 0;
+    for (int i = 0; i < info->if_count; i++) {
+        const struct usb_interface_info *ifc = &info->ifs[i];
+        if (ifc->if_class != 3 || ifc->if_subclass != HID_SUB_BOOT) continue;
+        if (ifc->if_protocol != HID_IF_KEYBOARD &&
+            ifc->if_protocol != HID_IF_MOUSE) continue;
+        if (!ifc->ep) continue;
 
-    struct hid_dev *d = &g_hid[g_hid_count];
-    k_memset(d, 0, sizeof *d);
-    d->slot     = info->slot;
-    d->ep       = info->hid_ep;
-    d->is_mouse = (info->if_protocol == HID_IF_MOUSE);
+        struct hid_dev *d = hid_alloc();
+        if (!d) break;
+        k_memset(d, 0, sizeof *d);
+        d->slot     = info->slot;
+        d->ep       = ifc->ep;
+        d->is_mouse = (ifc->if_protocol == HID_IF_MOUSE);
 
-    if (hid_set_idle_and_boot(info->slot, info->hid_ifnum) < 0) {
-        klog_printf("usb: slot %u: set protocol(boot) failed\n", info->slot);
-        return 0;
+        if (hid_set_idle_and_boot(info->slot, ifc->ifnum) < 0) {
+            klog_printf("usb: slot %u if %u: set protocol(boot) failed\n",
+                        info->slot, ifc->ifnum);
+            continue;
+        }
+        if (xhci_add_interrupt_in(info->slot, ifc->ep,
+                                  ifc->mps, ifc->interval) < 0)
+            continue;
+
+        k_snprintf(d->name, sizeof d->name, "usb-%s",
+                   d->is_mouse ? "mouse" : "keyboard");
+        d->src.name = d->name;
+        d->src.caps = d->is_mouse ? (INPUT_CAP_REL | INPUT_CAP_WHEEL)
+                                  : INPUT_CAP_KEYS;
+        // An interrupt-driven source leaves poll NULL -- its decode
+        // rides the controller's own always-on poll; a polled one gets
+        // its thunk, indexed by the slot it landed in.
+        d->src.irq  = usb_controller_irq();
+        d->src.poll = d->src.irq ? 0 : POLLS[d - g_hid];
+
+        d->in_use = 1;          // published before the source can be polled
+        input_register_source(&d->src);
+
+        if (!info->hid_ep) info->hid_ep = ifc->ep;
+        info->bound = 1;
+        took++;
+        klog_printf("usb: slot %u: bound as %s on endpoint 0x%x\n",
+                    info->slot, d->name, ifc->ep);
     }
-    if (xhci_add_interrupt_in(info->slot, info->hid_ep,
-                              info->hid_mps, info->hid_interval) < 0)
-        return 0;
+    return took;
+}
 
-    k_snprintf(d->name, sizeof d->name, "usb-%s",
-               d->is_mouse ? "mouse" : "keyboard");
-    d->src.name = d->name;
-    d->src.caps = d->is_mouse ? (INPUT_CAP_REL | INPUT_CAP_WHEEL) : INPUT_CAP_KEYS;
-    // An interrupt-driven source leaves poll NULL and reports from the
-    // handler; a polled one gets its thunk. Exactly virtio_input.c's
-    // `.poll = d->irq ? 0 : POLLS[i]`, so lsdev reads the same either way.
-    d->src.irq  = usb_controller_irq();
-    d->src.poll = d->src.irq ? 0 : POLLS[g_hid_count];
-
-    d->in_use = 1;
-    g_hid_count++;          // published before the source can be polled
-    input_register_source(&d->src);
-
-    klog_printf("usb: slot %u: bound as %s on endpoint 0x%x\n",
-                info->slot, d->name, info->hid_ep);
-    return 1;
+// Unbinds every interface bound on `slot` -- the detach path. The slot
+// is cleared BEFORE the source unregisters, so an interrupt landing in
+// between decodes nothing rather than touching a dying endpoint.
+void usb_hid_unbind(uint8_t slot) {
+    for (int i = 0; i < MAX_HID; i++) {
+        struct hid_dev *d = &g_hid[i];
+        if (!d->in_use || d->slot != slot) continue;
+        d->in_use = 0;
+        input_unregister_source(&d->src);
+    }
 }

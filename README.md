@@ -200,8 +200,10 @@ machine with a broken `/lib` still boots to something that can fix it.
 Read-only library pages are served from a kernel image cache and
 shared — one frame of libc text, machine-wide.
 
-**Known gaps** — USB is xHCI with a HID boot keyboard and mouse; there
-are no hubs, no mass storage and no HID report-descriptor parsing. No
+**Known gaps** — USB is xHCI with a HID boot keyboard and mouse, USB2
+hubs and hot-plug; there is no mass storage, no USB3-hub support and no
+HID report-descriptor parsing (a mouse whose HID interface does not
+declare the boot subclass enumerates and does nothing). No
 networking and no SMP. Dynamic linking is eager-binding with no
 `dlopen` yet, `mmap` has no `MAP_SHARED` and no `mprotect`, and there
 is no `fork`. No privilege model: there are
@@ -449,9 +451,16 @@ at all and QEMU is the only reason that has not bitten yet: an **xHCI**
 host controller driver — command ring, event ring, doorbells, per-device
 contexts — with device enumeration on top of it and a **HID
 boot-protocol keyboard and mouse** that register with the same input
-core PS/2 and virtio use, so they need no layout table of their own.
-Interrupt-driven on legacy INTx, because this kernel has no Local APIC
-and therefore no MSI; `/bin/lsusb` names what is attached, from the USB
+core PS/2 and virtio use, so they need no layout table of their own. A
+**composite device binds every boot interface** (a wireless receiver is
+a keyboard and a mouse on one plug), **USB2 hubs** work — route
+strings, per-port power and reset, TT fields for a low-speed mouse
+behind a high-speed hub — and **hot-plug** does too: plug in after
+boot and it enumerates, unplug and it is torn down, input source and
+all. Interrupt-driven on legacy INTx with an always-on polled backup,
+because this kernel has no Local APIC and therefore no MSI — and a
+BIOS-reported INTx line can be plausible and dead;
+`/bin/lsusb` names what is attached, from the USB
 ID database and from the device's own string descriptors under `-v`,
 which is a thing PCI devices cannot tell you. xHCI only, deliberately:
 UHCI and OHCI are a quarter of the code and run on nothing made this
@@ -688,7 +697,7 @@ Selected tools, each documented in its own docstring:
 | `partition_test.py` | Boots with the filesystem inside an MBR or GPT partition. Its real check is `df`: a kernel ignoring partitions still boots, so "it booted" proves nothing. Its last phase proves `fsformat` cannot be aimed at the bootloader. |
 | `install_grub.py` | Puts GRUB and the kernel onto `disk.img` -- the boot sector, `core.img` in the BIOS boot partition, `/boot` in the FAT32 one -- and answers which medium a launch should boot. |
 | `regex_hostcheck.py` | tolibc's `<regex.h>` against **glibc's**, over one shared case table — an oracle sharing no code is the only thing that catches a wrong expectation. |
-| `usb_test.py` | xHCI, and a HID boot keyboard and mouse. Self-controlling: QEMU routes keystrokes to `usb-kbd` once it is attached, so a broken driver receives nothing at all. Its real check is the ring wrap — a driver ignoring the event ring's cycle bit works for exactly one lap, so it types past 256 TRBs and asserts the *last* file. |
+| `usb_test.py` | xHCI: a HID boot keyboard and mouse, hot-plug (QMP `device_add` on the running guest) and a `usb-hub` with both devices behind it. Self-controlling: QEMU routes keystrokes to `usb-kbd` once attached, so a broken driver receives nothing. Its real check is the ring wrap — past 256 TRBs, asserting the *last* file. |
 | `kbd_test.py`, `keyboard_paths_test.py` | The input path, asserted on both drivers: that the same keys produce the same keycode and character over PS/2 and virtio-input, and that `kbd`'s four columns say what each stage really did. |
 
 `CLAUDE.md` documents the conventions and environment quirks in depth.

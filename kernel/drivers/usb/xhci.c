@@ -68,8 +68,16 @@ struct xhci_hc {
     uint32_t page_size;
 
     uint8_t  irq;            // 0 when polled
+    uint8_t  ppc;            // HCCPARAMS1.PPC: ports need PORTSC.PP set
     uint8_t  present;
     uint8_t  running;
+
+    // Deferred root-port work, one bit per port (0-based). Set by the
+    // event dispatch, consumed by xhci_deferred_work() -- enumeration
+    // is synchronous control transfers, and running those inside the
+    // event drain would deadlock on the single-consumer guard.
+    volatile uint32_t attach_pending;
+    volatile uint32_t detach_pending;
 
     struct xhci_ring cmd;
     struct xhci_ring evt;
@@ -83,6 +91,7 @@ struct xhci_hc {
     uint32_t xfer_bad;
     uint32_t xfer_orphan;
     uint32_t last_bad_code;
+    uint32_t ep_recoveries;
 
     struct xhci_port_state ports[XHCI_MAX_PORTS];
 };
@@ -91,7 +100,8 @@ struct xhci_hc {
 // and ep0 is the transfer ring every control request rides on.
 struct xhci_slot {
     uint8_t  in_use;
-    uint8_t  port;
+    uint8_t  port;          // ROOT port; a hub child's own speed differs
+    uint8_t  speed;         // the DEVICE's speed, for endpoint intervals
     void    *in_ctx;        // Input Context: control + slot + endpoints
     uint64_t in_ctx_phys;
     void    *out_ctx;       // Device Context, written BY the controller
@@ -594,7 +604,8 @@ static int cmd_submit(uint64_t param, uint32_t control, uint8_t *out_slot) {
     return (int)g_cmd_done.code;
 }
 
-int xhci_address_device(uint8_t port, uint8_t speed) {
+int xhci_address_device(uint8_t root_port, uint32_t route, uint8_t speed,
+                        uint8_t tt_slot, uint8_t tt_port) {
     uint8_t slot = 0;
     int cc = cmd_submit(0, XHCI_TRB_SET_TYPE(XHCI_TRB_ENABLE_SLOT), &slot);
     if (cc != XHCI_CC_SUCCESS) {
@@ -606,18 +617,24 @@ int xhci_address_device(uint8_t port, uint8_t speed) {
         return -1;
     }
 
+    // in_use from the moment the controller knows the slot, so every
+    // failure below can hand cleanup to xhci_disable_slot() -- the
+    // failed attempts used to leak their slots, and the retry then
+    // burned a fresh one per try.
     struct xhci_slot *sl = &g_slots[slot];
+    sl->in_use = 1;
     uint64_t ep0_phys = 0;
     sl->in_ctx  = alloc_frame(&sl->in_ctx_phys);
     sl->out_ctx = alloc_frame(&sl->out_ctx_phys);
     void *ep0_seg = alloc_frame(&ep0_phys);
     if (!sl->in_ctx || !sl->out_ctx || !ep0_seg) {
         klog_printf("usb: out of frames for slot %u\n", slot);
+        xhci_disable_slot(slot);
         return -1;
     }
     xhci_ring_init(&sl->ep0, ep0_seg, ep0_phys, TRBS_PER_RING, 0);
-    sl->in_use = 1;
-    sl->port   = port;
+    sl->port   = root_port;
+    sl->speed  = speed;
 
     // The controller writes the Device Context, so it has to know where
     // it is BEFORE the Address Device command runs.
@@ -628,14 +645,18 @@ int xhci_address_device(uint8_t port, uint8_t speed) {
     icc[0] = 0;                 // drop nothing
     icc[1] = (1u << 0) | (1u << 1);
 
-    // Slot Context. Route string 0 means "attached to a root port"; a
-    // device behind a hub would need the real route, which is the hub
-    // support this driver deliberately does not have.
+    // Slot Context. The route string is 4 bits per tier below the root
+    // port (0 for a root-port device); the root hub port number is the
+    // ROOT port for every device in the chain, however deep. The TT
+    // fields name the HIGH-speed hub doing split transactions for a
+    // low/full-speed device -- zero when there is none, and the hub
+    // driver is the only caller that ever passes them.
     volatile uint32_t *sc = ctx_at(sl->in_ctx, 1);
     sc[0] = ((uint32_t)1 << 27) |                 // context entries: EP0 only
-            (((uint32_t)speed & 0xFu) << 20);     // speed
-    sc[1] = ((uint32_t)port << 16);               // root hub port number
-    sc[2] = 0;
+            (((uint32_t)speed & 0xFu) << 20) |    // speed
+            (route & 0xFFFFFu);                   // route string [19:0]
+    sc[1] = ((uint32_t)root_port << 16);          // root hub port number
+    sc[2] = (uint32_t)tt_slot | ((uint32_t)tt_port << 8);
     sc[3] = 0;
 
     // EP0 Context: a Control endpoint whose transfer ring is ep0.
@@ -654,6 +675,7 @@ int xhci_address_device(uint8_t port, uint8_t speed) {
     if (cc != XHCI_CC_SUCCESS) {
         klog_printf("usb: address device (slot %u) failed: %s\n",
                     slot, xhci_completion_name((uint32_t)cc));
+        xhci_disable_slot(slot);
         return -cc;
     }
     return slot;
@@ -679,6 +701,32 @@ int xhci_set_ep0_mps(uint8_t slot, uint16_t mps) {
         return -cc;
     }
     return 0;
+}
+
+// Reset Endpoint, then Set TR Dequeue Pointer: the two commands that
+// bring a HALTED endpoint back. The dequeue is pointed at the ring's
+// current ENQUEUE with its current cycle state -- everything the
+// controller had in flight is abandoned, and the caller re-posts what
+// it wants outstanding.
+static int recover_halted(uint8_t slot, uint32_t dci, struct xhci_ring *ring) {
+    int cc = cmd_submit(0, XHCI_TRB_SET_TYPE(XHCI_TRB_RESET_ENDPOINT) |
+                           ((uint32_t)slot << 24) | (dci << 16), 0);
+    if (cc != XHCI_CC_SUCCESS) return -cc;
+    uint64_t deq = ring->phys + (uint64_t)ring->enqueue * sizeof(struct xhci_trb);
+    cc = cmd_submit(deq | (ring->cycle ? 1u : 0u),
+                    XHCI_TRB_SET_TYPE(XHCI_TRB_SET_TR_DEQUEUE) |
+                    ((uint32_t)slot << 24) | (dci << 16), 0);
+    if (cc != XHCI_CC_SUCCESS) return -cc;
+    g_hc.ep_recoveries++;
+    return 0;
+}
+
+void xhci_slot_set_hub(uint8_t slot, uint8_t n_ports, uint8_t ttt) {
+    if (!slot || slot > XHCI_MAX_SLOTS || !g_slots[slot].in_use) return;
+    volatile uint32_t *sc = ctx_at(g_slots[slot].in_ctx, 1);
+    sc[0] |= (1u << 26);                                        // Hub flag
+    sc[1] = (sc[1] & 0x00FFFFFFu) | ((uint32_t)n_ports << 24);  // Number of Ports
+    sc[2] = (sc[2] & ~(3u << 16)) | (((uint32_t)ttt & 3u) << 16);
 }
 
 int xhci_control(uint8_t slot, const uint8_t setup[8],
@@ -723,6 +771,13 @@ int xhci_control(uint8_t slot, const uint8_t setup[8],
     if (wait_completion(&g_xfer_done, "control transfer") < 0) return -1;
     if (g_xfer_done.code != XHCI_CC_SUCCESS &&
         g_xfer_done.code != XHCI_CC_SHORT_PACKET) {
+        // A STALL is a legitimate answer to a request the device does
+        // not support (SET_IDLE, commonly) -- but it also HALTS ep0, so
+        // without this the next control transfer to the device fails
+        // too and one refused request kills the whole enumeration.
+        // Invisible on QEMU, whose devices never halt the endpoint.
+        if (g_xfer_done.code == XHCI_CC_STALL)
+            recover_halted(slot, 1, &sl->ep0);
         return -(int)g_xfer_done.code;
     }
     // A short packet is not an error -- it is how a device says "that is
@@ -758,9 +813,17 @@ struct xhci_ep {
     volatile uint8_t  ready[EP_DEPTH];
     volatile uint16_t ready_len[EP_DEPTH];
     uint8_t  next_take;
+    // A STALL or transaction error HALTS the endpoint, and a halted
+    // endpoint ignores its doorbell forever -- so without recovery one
+    // marginal packet kills the mouse silently. Marked by the event
+    // dispatch, recovered by xhci_deferred_work().
+    volatile uint8_t halted;
+    uint8_t  recover_tries;
 };
 
-#define MAX_EPS 4
+// HID interfaces (a composite receiver is two on one device) plus one
+// status-change endpoint per hub.
+#define MAX_EPS 10
 static struct xhci_ep g_eps[MAX_EPS];
 
 static struct xhci_ep *ep_find(uint8_t slot, uint8_t ep_addr) {
@@ -828,6 +891,7 @@ int xhci_add_interrupt_in(uint8_t slot, uint8_t ep_addr, uint16_t mps,
     e->slot = slot; e->ep_addr = ep_addr; e->mps = mps;
     e->buf = (uint8_t *)buf; e->buf_phys = buf_phys;
     e->next_take = 0;
+    e->halted = 0; e->recover_tries = 0;
     for (int i = 0; i < EP_DEPTH; i++) { e->ready[i] = 0; e->ready_len[i] = 0; }
     xhci_ring_init(&e->ring, seg, ring_phys, TRBS_PER_RING, 0);
 
@@ -844,12 +908,11 @@ int xhci_add_interrupt_in(uint8_t slot, uint8_t ep_addr, uint16_t mps,
     uint32_t entries = (sc[0] >> 27) & 0x1Fu;
     if (dci > entries) sc[0] = (sc[0] & 0x07FFFFFFu) | (dci << 27);
 
-    uint8_t speed = 0;
-    for (uint32_t p = 0; p < XHCI_MAX_PORTS; p++)
-        if (sl->port == p + 1) speed = g_hc.ports[p].speed;
-
+    // The DEVICE's speed, not the root port's: behind a hub the two
+    // differ (a low-speed mouse on a full-speed hub), and the interval
+    // conversion is per-speed.
     volatile uint32_t *ep = ctx_at(sl->in_ctx, 1 + dci);
-    ep[0] = interval_field(speed, interval) << 16;
+    ep[0] = interval_field(sl->speed, interval) << 16;
     ep[1] = (3u << 1) |                       // CErr = 3
             (7u << 3) |                       // EP type 7 = Interrupt IN
             ((uint32_t)mps << 16);
@@ -890,6 +953,38 @@ int xhci_take_report(uint8_t slot, uint8_t ep_addr, void *buf, uint32_t cap) {
     return (int)len;
 }
 
+void xhci_disable_slot(uint8_t slot) {
+    if (!slot || slot > XHCI_MAX_SLOTS || !g_slots[slot].in_use) return;
+    struct xhci_slot *sl = &g_slots[slot];
+
+    // The controller first: Disable Slot stops every endpoint, so the
+    // frames below have stopped being DMA targets before they are
+    // freed. A refusal is logged and the frames freed anyway -- the
+    // device is already gone, and a controller that will not answer
+    // this command has bigger problems than a leak.
+    int cc = cmd_submit(0, XHCI_TRB_SET_TYPE(XHCI_TRB_DISABLE_SLOT) |
+                           ((uint32_t)slot << 24), 0);
+    if (cc != XHCI_CC_SUCCESS)
+        klog_printf("usb: disable slot %u: %s\n", slot,
+                    xhci_completion_name((uint32_t)cc));
+
+    for (int i = 0; i < MAX_EPS; i++) {
+        struct xhci_ep *e = &g_eps[i];
+        if (!e->in_use || e->slot != slot) continue;
+        e->in_use = 0;   // unpublished before its memory goes away
+        pmm_free_contiguous(e->ring.phys, 1);
+        pmm_free_contiguous(e->buf_phys, 1);
+    }
+
+    g_hc.dcbaa[slot] = 0;
+    // Guarded: the address-failure path arrives here with some of these
+    // never allocated, and freeing "frame zero" would free real memory.
+    if (sl->in_ctx_phys)  pmm_free_contiguous(sl->in_ctx_phys, 1);
+    if (sl->out_ctx_phys) pmm_free_contiguous(sl->out_ctx_phys, 1);
+    if (sl->ep0.phys)     pmm_free_contiguous(sl->ep0.phys, 1);
+    k_memset(sl, 0, sizeof *sl);
+}
+
 // --- interrupts -------------------------------------------------------
 
 // Acknowledging an xHCI interrupt is harder than virtio's single
@@ -919,9 +1014,23 @@ static void note_port_change(void) {
         uint32_t sc = mr32(g_hc.op, XHCI_PORTSC(p));
         uint32_t ack = sc & XHCI_PORTSC_RW1C;
         if (ack) portsc_write(p, 0, ack);
-        g_hc.ports[p].connected = (sc & XHCI_PORTSC_CCS) ? 1 : 0;
+
+        uint8_t was = g_hc.ports[p].connected;
+        uint8_t now = (sc & XHCI_PORTSC_CCS) ? 1 : 0;
+        g_hc.ports[p].connected = now;
         g_hc.ports[p].enabled   = (sc & XHCI_PORTSC_PED) ? 1 : 0;
         g_hc.ports[p].speed     = (uint8_t)XHCI_PORTSC_SPEED(sc);
+
+        // Hot-plug is DEFERRED, not done here: this runs inside the
+        // event drain, and enumeration is synchronous control transfers
+        // that would deadlock on the single-consumer guard. A plug
+        // while the machine is busy still lands, because the pending
+        // bit survives until the poll gets to it.
+        if (now && !was) g_hc.attach_pending |= (1u << p);
+        if (!now && was) {
+            g_hc.detach_pending |= (1u << p);
+            g_hc.attach_pending &= ~(1u << p);   // it left before we got there
+        }
     }
 }
 
@@ -976,6 +1085,14 @@ void xhci_service(void) {
                 if (!e) g_hc.xfer_orphan++;
                 else if (code != XHCI_CC_SUCCESS && code != XHCI_CC_SHORT_PACKET) {
                     g_hc.xfer_bad++; g_hc.last_bad_code = code;
+                    // These four HALT the endpoint: it will ignore its
+                    // doorbell until Reset Endpoint. Marked here, fixed
+                    // in xhci_deferred_work() -- commands cannot be
+                    // issued from inside this drain.
+                    if (code == XHCI_CC_STALL || code == XHCI_CC_BABBLE ||
+                        code == XHCI_CC_USB_TRANSACTION_ERR ||
+                        code == XHCI_CC_DATA_BUFFER_ERROR)
+                        e->halted = 1;
                 } else g_hc.xfer_ok++;
                 if (e && (code == XHCI_CC_SUCCESS || code == XHCI_CC_SHORT_PACKET)) {
                     uint32_t idx = (uint32_t)((src - e->ring.phys) /
@@ -1019,10 +1136,22 @@ static void xhci_irq_handler(uint64_t *regs) {
     usb_hid_service_all();
 }
 
-// The polled fallback, used only when the controller has no usable IRQ
-// line. Same shape as virtio_input.c's: an interrupt-driven source
-// leaves poll NULL, so the two can never both run.
-static void xhci_poll_source(void) { xhci_service(); usb_hid_service_all(); }
+// The controller's poll, registered ALWAYS -- alongside the IRQ, not
+// instead of it. This deliberately breaks with virtio_input.c's
+// either/or, because on real hardware the BIOS-reported INTx line can
+// be plausible and dead (a stale PIRQ value on a PCH routing through
+// the IOAPIC), and a driver that trusts it has a mouse that is silently
+// and permanently deaf with no fallback. The single-consumer guards in
+// xhci_service() and usb_hid_service_all() are what make the double
+// drain safe; when the IRQ is live the poll almost always finds the
+// ring already empty. Deferred work (hot-plug, halt recovery) lives
+// here in any case: it issues commands and cannot run from the handler.
+static void xhci_poll_source(void) {
+    xhci_service();
+    usb_hid_service_all();
+    usb_hub_service();
+    xhci_deferred_work();
+}
 
 static struct input_source g_hc_source;
 
@@ -1073,19 +1202,106 @@ static void reset_port(uint32_t p) {
     while (pit_ticks() - start < 2) { }   // 2 ticks = 20 ms, comfortably over
 }
 
-static void scan_ports(void) {
-    for (uint32_t p = 0; p < g_hc.max_ports && p < XHCI_MAX_PORTS; p++) {
+// Reset then enumerate one root port, with ONE retry through a fresh
+// reset. A real low/full-speed device is entitled to fumble its first
+// descriptor read (Linux retries and re-resets for the same reason),
+// and a failed attempt disables its slot, so the retry starts from
+// nothing rather than from a device stuck mid-enumeration.
+static void attach_root_port(uint32_t p) {
+    for (int attempt = 0; attempt < 2; attempt++) {
         reset_port(p);
         uint32_t sc = mr32(g_hc.op, XHCI_PORTSC(p));
         g_hc.ports[p].connected = (sc & XHCI_PORTSC_CCS) ? 1 : 0;
         g_hc.ports[p].enabled   = (sc & XHCI_PORTSC_PED) ? 1 : 0;
         g_hc.ports[p].speed     = (uint8_t)XHCI_PORTSC_SPEED(sc);
-        if (!g_hc.ports[p].connected) continue;
-        klog_printf("usb: port %u: connected, %s, %s\n", p + 1,
-                    speed_name(g_hc.ports[p].speed),
-                    g_hc.ports[p].enabled ? "enabled" : "not enabled");
-        if (g_hc.ports[p].enabled)
-            usb_enumerate_port((uint8_t)(p + 1), g_hc.ports[p].speed);
+        if (!g_hc.ports[p].connected) return;
+        if (attempt == 0)
+            klog_printf("usb: port %u: connected, %s, %s\n", p + 1,
+                        speed_name(g_hc.ports[p].speed),
+                        g_hc.ports[p].enabled ? "enabled" : "not enabled");
+        if (!g_hc.ports[p].enabled) return;
+        if (usb_enumerate_port((uint8_t)(p + 1), g_hc.ports[p].speed) >= 0)
+            return;
+        klog_printf("usb: port %u: enumeration failed%s\n", p + 1,
+                    attempt ? "" : " -- resetting and retrying");
+    }
+}
+
+// On a controller with Port Power Control, ports come out of reset
+// UNPOWERED: CCS never rises on a port nobody powered, so a connected
+// mouse reads as an empty port with nothing logged anywhere. QEMU
+// reports PPC=0, which is how this stayed unwritten for the driver's
+// whole QEMU life.
+static void power_ports(void) {
+    if (!g_hc.ppc) return;
+    int powered = 0;
+    for (uint32_t p = 0; p < g_hc.max_ports && p < XHCI_MAX_PORTS; p++) {
+        if (mr32(g_hc.op, XHCI_PORTSC(p)) & XHCI_PORTSC_PP) continue;
+        portsc_write(p, XHCI_PORTSC_PP, 0);
+        powered = 1;
+    }
+    if (!powered) return;
+    klog_printf("usb: ports powered on (PPC)\n");
+    // Power-good plus the USB2 attach debounce, before the scan reads
+    // CCS. A minimum, like reset_port()'s recovery wait.
+    uint64_t start = pit_ticks();
+    while (pit_ticks() - start < 10) { }   // 10 ticks = 100 ms
+}
+
+static void scan_ports(void) {
+    for (uint32_t p = 0; p < g_hc.max_ports && p < XHCI_MAX_PORTS; p++)
+        attach_root_port(p);
+}
+
+void xhci_deferred_work(void) {
+    if (!g_hc.present || !g_hc.running) return;
+
+    for (uint32_t p = 0; p < g_hc.max_ports && p < XHCI_MAX_PORTS; p++) {
+        if (g_hc.detach_pending & (1u << p)) {
+            g_hc.detach_pending &= ~(1u << p);
+            klog_printf("usb: port %u: device removed\n", p + 1);
+            usb_detach_root_port((uint8_t)(p + 1));
+        }
+        if (g_hc.attach_pending & (1u << p)) {
+            g_hc.attach_pending &= ~(1u << p);
+            // The bring-up ITSELF raises a connect change for a device
+            // that was there all along, before scan_ports() has
+            // recorded anything -- and acting on that re-resets a
+            // working port, which kills its endpoints (measured: the
+            // boot keyboard went deaf for half a second and dropped
+            // the first keystrokes). A port that already has an
+            // enumerated device is not a plug.
+            if (usb_root_port_slot((uint8_t)(p + 1))) continue;
+            // The USB2 attach debounce (TATTDB): a plug is a mechanical
+            // event, and enumerating mid-bounce is what the retry would
+            // otherwise spend itself on.
+            uint64_t start = pit_ticks();
+            while (pit_ticks() - start < 10) { }   // 100 ms
+            attach_root_port(p);
+        }
+    }
+
+    for (int i = 0; i < MAX_EPS; i++) {
+        struct xhci_ep *e = &g_eps[i];
+        if (!e->in_use || !e->halted) continue;
+        if (e->recover_tries > 4) continue;   // gave up; logged below once
+        e->recover_tries++;
+        int rc = recover_halted(e->slot, dci_of(e->ep_addr), &e->ring);
+        if (rc == 0) {
+            // Everything in flight was abandoned by the dequeue move,
+            // so rebuild the posted set from scratch. Queued-but-unread
+            // reports are dropped with it: they are stale by the width
+            // of an error anyway.
+            e->next_take = 0;
+            for (int b = 0; b < EP_DEPTH; b++) { e->ready[b] = 0; e->ready_len[b] = 0; }
+            e->halted = 0;
+            for (uint8_t b = 0; b < EP_DEPTH; b++) ep_post(e, b);
+            klog_printf("usb: slot %u ep 0x%x recovered from halt\n",
+                        e->slot, e->ep_addr);
+        } else if (e->recover_tries > 4) {
+            klog_printf("usb: slot %u ep 0x%x halt recovery failed (%s) -- giving up\n",
+                        e->slot, e->ep_addr, xhci_completion_name((uint32_t)-rc));
+        }
     }
 }
 
@@ -1152,6 +1368,7 @@ void usb_init(void) {
     g_hc.max_intrs = XHCI_HCS1_MAXINTRS(hcs1);
     g_hc.max_ports = XHCI_HCS1_MAXPORTS(hcs1);
     g_hc.ac64      = (uint8_t)XHCI_HCC1_AC64(hcc1);
+    g_hc.ppc       = (uint8_t)XHCI_HCC1_PPC(hcc1);
 
     // CSZ decides whether a context structure is 32 or 64 bytes. QEMU
     // says 32 and much real hardware says 64; reading it wrong makes
@@ -1216,7 +1433,10 @@ void usb_init(void) {
 
     g_hc_source.name = "usb-xhci";
     g_hc_source.caps = 0;              // the controller reports no events itself
-    g_hc_source.poll = g_hc.irq ? 0 : xhci_poll_source;
+    // Poll ALWAYS, IRQ or not -- see xhci_poll_source()'s comment. The
+    // per-HID sources still leave poll NULL when the IRQ is live; their
+    // decode rides this one.
+    g_hc_source.poll = xhci_poll_source;
     g_hc_source.irq  = g_hc.irq;
     input_register_source(&g_hc_source);
 
@@ -1246,6 +1466,7 @@ void usb_init(void) {
                 g_hc.irq ? "interrupt-driven" : "polled");
 
     usb_query_init();
+    power_ports();
     scan_ports();
 }
 
@@ -1282,17 +1503,20 @@ void usb_dump(void) {
                 mr32(g_hc.rt, XHCI_IR0 + XHCI_ERDP));
     klog_printf("usb: cmd ring 0x%llx enq %u cyc %u\n",
                 (unsigned long long)g_hc.cmd.phys, g_hc.cmd.enqueue, g_hc.cmd.cycle);
-    klog_printf("usb: xfer ok %u bad %u (last cc %u \"%s\") orphan %u\n",
+    klog_printf("usb: xfer ok %u bad %u (last cc %u \"%s\") orphan %u, "
+                "%u ep recover(ies)\n",
                 g_hc.xfer_ok, g_hc.xfer_bad, g_hc.last_bad_code,
-                xhci_completion_name(g_hc.last_bad_code), g_hc.xfer_orphan);
+                xhci_completion_name(g_hc.last_bad_code), g_hc.xfer_orphan,
+                g_hc.ep_recoveries);
     for (int i = 0; i < MAX_EPS; i++) {
         struct xhci_ep *e = &g_eps[i];
         if (!e->in_use) continue;
         uint32_t rmask = 0;
         for (int b = 0; b < EP_DEPTH; b++) if (e->ready[b]) rmask |= (1u << b);
-        klog_printf("usb: ep slot %u addr 0x%x next_take %u ready 0x%x enq %u cyc %u\n",
+        klog_printf("usb: ep slot %u addr 0x%x next_take %u ready 0x%x enq %u cyc %u%s\n",
                     e->slot, e->ep_addr, e->next_take, rmask,
-                    e->ring.enqueue, e->ring.cycle);
+                    e->ring.enqueue, e->ring.cycle,
+                    e->halted ? " HALTED" : "");
     }
     klog_printf("usb: evt ring 0x%llx deq %u ccs %u, %u event(s), %u irq(s)\n",
                 (unsigned long long)g_hc.evt.phys, g_hc.evt.dequeue, g_hc.evt.ccs,

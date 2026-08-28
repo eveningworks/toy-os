@@ -665,7 +665,10 @@ run on, not by order.
 - [ ] **NEXT** Confirm the xHCI BIOS handoff on the laptop it was written for, then delete the bug entry
 - [ ] **NEXT** `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR, not a 64 KiB guess
 - [ ] USB mass storage (bulk-only transport) -- the first non-disk-bus storage backend
-- [ ] Hub support (devices behind a hub, not just root ports)
+- [x] ~~Hub support (devices behind a hub, not just root ports)~~ DONE 2026-08-28 -- USB2 only; the TT path is hardware-only
+- [x] ~~Hot-plug: a device plugged in after boot enumerates, an unplugged one is torn down~~ DONE 2026-08-28
+- [x] ~~Composite devices: every boot interface binds, not just the first~~ DONE 2026-08-28
+- [x] ~~Bare-metal hardening: port power, enumeration retry, halt recovery, poll beside the IRQ~~ DONE 2026-08-28 -- all hardware-only paths
 - [ ] Full HID report-descriptor parsing, for a device that is not boot-protocol
 
 ### Networking

@@ -31,9 +31,15 @@
 // more than 31 buffers, so both halves are combined here.
 #define XHCI_HCS2_SPB_MAX(v)   ((((v) >> 21) & 0x1Fu) << 5 | (((v) >> 27) & 0x1Fu))
 
-// HCCPARAMS1: AC64 [0], CSZ [2], xECP [31:16] in DWORDS from BAR0.
+// HCCPARAMS1: AC64 [0], PPC [3], CSZ [2], xECP [31:16] in DWORDS from BAR0.
 #define XHCI_HCC1_AC64(v)      ((v) & 1u)
 #define XHCI_HCC1_CSZ(v)       (((v) >> 2) & 1u)   // 1 => 64-byte contexts
+// PPC = Port Power Control. When 1, PORTSC.PP is a real switch and the
+// ports come out of reset UNPOWERED -- CCS never asserts on a port
+// nobody powered, so a connected mouse reads as an empty port. QEMU
+// reports 0, which is why this bit went unparsed for the driver's whole
+// QEMU life and only matters on hardware.
+#define XHCI_HCC1_PPC(v)       (((v) >> 3) & 1u)
 #define XHCI_HCC1_XECP(v)      (((v) >> 16) & 0xFFFFu)
 
 // --- operational registers (BAR0 + CAPLENGTH) ------------------------
@@ -138,6 +144,8 @@
 #define XHCI_TRB_ADDRESS_DEVICE     11
 #define XHCI_TRB_CONFIGURE_ENDPOINT 12
 #define XHCI_TRB_EVALUATE_CONTEXT   13
+#define XHCI_TRB_RESET_ENDPOINT     14
+#define XHCI_TRB_SET_TR_DEQUEUE     16
 #define XHCI_TRB_NOOP_CMD           23
 // Event ring TRB types
 #define XHCI_TRB_TRANSFER_EVENT     32
