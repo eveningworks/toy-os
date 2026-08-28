@@ -252,7 +252,15 @@ trips them before it knows to look anything up.
   varies with load. Do not use it on a window you expect to animate. The
   sibling trap: **a poll whose exit condition is weaker than what the
   code after it needs is a flake** -- one tool waited for the first of N
-  layout lines and then required all N.
+  layout lines and then required all N. **AND SETTLED IS NOT CAUGHT UP:
+  a frame is evidence about the FRAMEBUFFER, never about the machine.**
+  Two identical reads of a console that has not repainted yet are as
+  identical as any other, so a stale photograph reads as "nothing is
+  happening" -- which was reported twice in one session as the guest
+  being wedged, while the serial console was answering `sh kstack slots`
+  and naming the process as alive and blocked exactly as intended. Ask
+  the serial console BEFORE writing "hung", and wait on what it says
+  rather than on pixels.
 - **Verify GUI changes by reading PIXEL VALUES, not by looking at the
   screenshot** (`tools/pixel_probe.py`). A hover state that moved the
   background by two units out of 255 looked perfectly plausible in a

@@ -1982,3 +1982,52 @@ going to create, is a loop with no exit.
 finds them; killing the PARENT shell ends the task, and the harness then
 reports it. A leaked sleeper costs nothing in CPU and everything in the
 user's ability to see what is actually running.
+
+## 2026-08-28 -- a settled frame said the machine was wedged, twice
+
+Testing whether `printf("prompt: ")` + `scanf()` shows its prompt meant
+photographing the ring-0 console while a program sat blocked on a read.
+Three screenshots in a row led to a wrong conclusion, and the third one
+led to publishing it.
+
+**"Settled" said nothing about whether the guest had caught up.** The
+entry above ("Settled is not the same as UPDATED") is about a CLIENT the
+compositor has not painted yet. It applies just as hard with no
+compositor in play: `stable_pixels()` polls twelve times at 0.15s, so a
+console that has not yet repainted is two identical reads like any other,
+and the capture is a settled photograph of the past. Two consecutive
+captures 2s apart were byte-identical (`md5sum` on the PNGs), which read
+as "nothing is happening" and was really "nothing has happened YET".
+
+**From that I concluded the machine had hung, and said so.** The screen
+showed a typed command with no output, so I reported the guest wedged.
+It was not: the serial console answered `sh kstack slots` immediately and
+showed the program alive and BLOCKED on its read, exactly as intended. A
+frame is evidence about the framebuffer, never about the machine. **The
+discriminating check costs one command** -- ask the serial console
+something, since it is a separate path that does not care what the screen
+is doing -- and it should come BEFORE any sentence containing "wedged",
+"hung" or "frozen".
+
+**The same mistake a second time, in the opposite direction.** Having
+been bitten once, I then declared a bare `sum` at the `#` prompt "stuck
+on the blocking read" -- again from a settled frame. A screenshot taken
+3s later showed `Give me two numbers: Sum is: 5 + 6 = 11`: it had worked
+the first time. The correction is not "wait longer". It is that the
+ring-0 console has an observable and I was not using it: the serial
+console's own reply to `sh kstack slots` says whether a process still
+exists and what state it is in, which is the fact the check was actually
+about.
+
+**And the reflex that started it: I typed `spawn /bin/sum` for a program
+that needs no `spawn`.** I had copied the shape from `stdin_test.py`,
+which spawns `/bin/tosh` -- a program that must outlive the shell. `sum`
+does not, and a bare name runs it correctly. The cost was not the extra
+word: `spawn` returns immediately, so the shell prompt came back and
+raced my typed input, and one run's numbers went to the shell as
+`Unknown command: 3` instead of to the program. **A pattern copied from a
+tool carries that tool's reasons.** CLAUDE.md already states this shape
+for widget ops tables -- "fill a new widget's table against
+`uui_widget.h`, never against the widget you copied, a copied table
+inherits its gaps" -- and it is the same failure with a harness instead
+of a struct. Ask what the original needed the line FOR before keeping it.
