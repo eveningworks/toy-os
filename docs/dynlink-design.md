@@ -5,7 +5,20 @@ A staged plan, in the shape `docs/libc-design.md` and
 `docs/roadmap.md` has carried since Phase 4 -- **what would it take to
 have shared libraries here, and is it worth it?**
 
-**Status: in progress.** Stages 0 and 1 are BUILT.
+**Status: in progress.** Stages 0-3 are BUILT; what remains is
+Stage 4 (`dlopen`) and the measured case for lazy binding.
+Stage 3 (2026-08-28): tolibc ships as `/lib/libc.so` and EVERY `/bin`
+and GUI program links it (init, toywm and `/tests` stay static --
+`docs/decisions.md`'s "userland is dynamically linked" entry has the
+whole account, including the three bugs the flip surfaced and the
+kernel image cache that makes frame sharing real).
+Stage 2 (2026-08-28): `/lib/ld-toy.so` exists and works --
+`userland/ldso/`, ~400 lines, freestanding; `/tests/dyn_test` proves
+every relocation class including a library calling back into the
+executable. One deliberate deviation from the plan below: the loader
+is a fixed-base ET_EXEC, not ET_DYN, so the kernel never learned
+ET_DYN at all -- `docs/decisions.md`'s loader entry has the reasoning
+(it deletes the rtld self-relocation bootstrap).
 Stage 1 (2026-08-28): the whole userland compiles `-fpie
 -mcmodel=small` AT THE SAME BASE -- the measurement went the good way:
 PIE code is RIP-relative, so the 2 GiB constraint is on the image's
@@ -141,7 +154,11 @@ still passes, with nothing dynamic yet. **That is the point of doing it
 as its own stage** -- if PIC breaks something, it is much easier to see
 before a loader exists than after.
 
-### Stage 2 -- `ET_DYN` and a loader that runs first
+### Stage 2 -- `ET_DYN` and a loader that runs first -- BUILT 2026-08-28
+
+Built as designed except where `docs/decisions.md`'s "fixed-base
+loader" entry says otherwise: the kernel learned only PT_INTERP, the
+loader is fixed-base, ET_DYN exists only in ring 3 (libraries).
 
 Teach `elf_load()` about `PT_DYNAMIC` and `PT_INTERP`, and make the
 kernel map the interpreter and enter IT rather than the program. The
@@ -161,7 +178,7 @@ rather than the kind this project usually refuses.
 Verifiable alone: one trivial `.so` with one function, called from one
 program.
 
-### Stage 3 -- shared libc
+### Stage 3 -- shared libc -- BUILT 2026-08-28
 
 Build `libc.so` and link programs against it. The payoff, such as it is.
 

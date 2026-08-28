@@ -176,6 +176,7 @@ DISK_IMG = disk.img
 # memcpy), so an FP-enabled kernel would need an FXSAVE on every
 # interrupt vector rather than only where the scheduler swaps processes.
 USERLAND_CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-protector-guard=global -fpie \
+                   -mno-direct-extern-access \
                    -mno-red-zone -mcmodel=small -ftls-model=local-exec \
                    -Wall -Wextra -Wframe-larger-than=2048 -O2 -g -c $(LIBC_INCLUDES) $(API_INCLUDES) -Iuserland \
                    -ffunction-sections -fdata-sections -MMD -MP \
@@ -354,7 +355,7 @@ ASM_OBJECTS = $(patsubst %.asm, $(BUILD)/%.o, $(ASM_SOURCES))
 version:
 	@sh tools/gen_version.sh
 
-all: version $(KERNEL) $(USERLAND_ELVES)
+all: version $(KERNEL) $(USERLAND_ELVES) $(LDSO) $(DYNLIBS) $(LIBC_SO)
 
 help:
 	@echo "toy-os -- available targets:"
@@ -708,6 +709,133 @@ uextra = $(patsubst %,$(BUILD)/userland/%.o,$(EXTRA_OBJS_$(notdir $(1))))
 # per-target variable, which is the whole point here.
 .SECONDEXPANSION:
 
+# --- the shared C library (dynlink Stage 3) --------------------------
+#
+# The SAME sources as libc.a, compiled a second time with -fpic into
+# build/userland-pic/ (the geom.c compiled-twice pattern, one axis
+# over) -- minus pthread.c, whose `__thread g_self` is TLS a library
+# may not carry here: it lands in LIBC_NONSHARED instead, glibc's own
+# libc_nonshared.a shape, statically linked into every DYNAMIC program
+# that references it. errno needs no such trick -- g_errno lives in
+# rt/sys.o, which is static in every binary, and libc.so reaches it
+# through the exe's exported __errno_location.
+LIBC_PIC_CFLAGS = $(subst -fpie,-fpic,$(USERLAND_CFLAGS))
+LIBC_PIC_SHARED_CFLAGS = $(subst -fpie,-fpic,$(SHARED_CFLAGS))
+
+LIBC_PIC_OBJS = $(patsubst userland/%.c,$(BUILD)/userland-pic/%.o,$(filter-out userland/libc/pthread.c,$(LIBC_SRCS))) \
+                $(patsubst userland/%.S,$(BUILD)/userland-pic/%.o,$(LIBC_ASM)) \
+                $(BUILD)/userland-pic/shared/string.o \
+                $(BUILD)/userland-pic/shared/knum.o \
+                $(BUILD)/userland-pic/shared/kpath.o \
+                $(BUILD)/userland-pic/shared/kfmt.o \
+                $(BUILD)/userland-pic/shared/heap_core.o \
+                $(BUILD)/userland-pic/shared/caltime.o \
+                $(BUILD)/userland-pic/shared/ksignal.o \
+                $(BUILD)/userland-pic/shared/kfmt_cases.o
+
+LIBC_NONSHARED = $(BUILD)/userland/libc_nonshared.a
+
+$(BUILD)/userland-pic/%.o: userland/%.c | version
+	@mkdir -p $(dir $@)
+	$(CC) $(LIBC_PIC_CFLAGS) $< -o $@
+
+$(BUILD)/userland-pic/%.o: userland/%.S | version
+	@mkdir -p $(dir $@)
+	$(CC) $(LIBC_PIC_CFLAGS) $< -o $@
+
+$(BUILD)/userland-pic/shared/%.o: kernel/lib/%.c | version
+	@mkdir -p $(dir $@)
+	$(CC) $(LIBC_PIC_SHARED_CFLAGS) -Iapps $< -o $@
+
+$(BUILD)/userland-pic/shared/%.o: apps/%.c | version
+	@mkdir -p $(dir $@)
+	$(CC) $(LIBC_PIC_SHARED_CFLAGS) -Iapps $< -o $@
+
+LIBC_SO = $(BUILD)/lib/libc.so
+$(LIBC_SO): $(LIBC_PIC_OBJS)
+	@mkdir -p $(dir $@)
+	$(LD) -shared --hash-style=sysv -z max-page-size=4096 -soname libc.so -o $@ $(LIBC_PIC_OBJS)
+
+$(LIBC_NONSHARED): $(BUILD)/userland/libc/pthread.o
+	@mkdir -p $(dir $@)
+	rm -f $@
+	$(AR) rcs $@ $^
+
+# One link line for every DYNAMIC executable. --gc-sections is safe
+# here ONLY because --export-dynamic makes exported symbols gc roots
+# (measured: every one of libc.so's imports survives) -- binding is
+# eager, so a dropped sys_* would kill the program at LAUNCH, not at
+# the missing call. No -n: it would force a static link.
+DYN_LINK = $(LD) --gc-sections -T userland/rt/link-dyn.ld -nostdlib \
+           --dynamic-linker=/lib/ld-toy.so --export-dynamic \
+           --hash-style=sysv -z nocopyreloc
+
+# The Stage-3 proof: a binary whose WHOLE libc is /lib/libc.so -- no
+# libc.a on this line at all.
+$(BUILD)/userland/tests/dynlibc_test.elf: $(BUILD)/userland/tests/dynlibc_test.o $(USERLAND_RT) userland/rt/link-dyn.ld $(LIBUAPP) $(LIBC_NONSHARED) $(LIBC_SO) $(LDSO)
+	$(DYN_LINK) -o $@ $(BUILD)/userland/rt/crt0.o $< $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(BUILD)/userland/rt/tls.o $(LIBUAPP) $(LIBC_NONSHARED) $(LIBC_SO)
+
+# EVERY /bin AND GUI PROGRAM LINKS libc.so (the user's 2026-08-28
+# call, docs/decisions.md): both are only ever started through
+# SYS_SPAWN -- a bare name at either shell spawns -- so nothing loses
+# the legacy `run`, which refuses dynamic by design. /tests stays
+# static because usertest_run drives it THROUGH `run` for the exit
+# codes. These two patterns beat the generic static rule below by
+# stem length (make picks the most specific match).
+#
+# TWO EXCEPTIONS, static on purpose:
+#   init   -- pid 1; the machine must reach a shell with /lib broken
+#             or missing, and init is what starts every service.
+#   (toywm is outside USERLAND_PROGRAM_DIRS and stays static by
+#    construction -- same reasoning: the desktop is what a rescue
+#    happens on.)
+$(BUILD)/userland/bin/%.elf: $(BUILD)/userland/bin/%.o $(USERLAND_RT) userland/rt/link-dyn.ld $(LIBUAPP) $(LIBC_NONSHARED) $(LIBC_SO) $(LDSO) $$(call uextra,$$*)
+	$(DYN_LINK) -o $@ $(BUILD)/userland/rt/crt0.o $< $(call uextra,$*) $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(BUILD)/userland/rt/tls.o $(LIBUAPP) $(LIBC_NONSHARED) $(LIBC_SO)
+
+$(BUILD)/userland/gui/%.elf: $(BUILD)/userland/gui/%.o $(USERLAND_RT) userland/rt/link-dyn.ld $(LIBUAPP) $(LIBC_NONSHARED) $(LIBC_SO) $(LDSO) $$(call uextra,$$*)
+	$(DYN_LINK) -o $@ $(BUILD)/userland/rt/crt0.o $< $(call uextra,$*) $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(BUILD)/userland/rt/tls.o $(LIBUAPP) $(LIBC_NONSHARED) $(LIBC_SO)
+
+$(BUILD)/userland/bin/init.elf: $(BUILD)/userland/bin/init.o $(USERLAND_RT) userland/rt/link.ld $(LIBUAPP) $(LIBC)
+	$(LD) -n --gc-sections -T userland/rt/link.ld -nostdlib -o $@ $(BUILD)/userland/rt/crt0.o $< $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(BUILD)/userland/rt/tls.o $(LIBUAPP) $(LIBC)
+
+# --- dynamic linking (dynlink Stage 2, docs/dynlink-design.md) -------
+#
+# /lib/ld-toy.so is a fixed-base ET_EXEC at ELF_LDSO_BASE (its link.ld
+# and kernel/include/kernel/elf.h must agree), freestanding except for
+# stack_chk.o -- which is freestanding too. It is NOT a program in
+# USERLAND_PROGRAM_DIRS: it seeds to /lib, not /bin.
+#
+# A shared library compiles -fpic (not the executables' -fpie -- fpie
+# objects may not enter a shared object) and links with
+# --hash-style=sysv (the loader's symbol lookup is sysv-hash only) and
+# -z max-page-size=4096 (the loader maps segments file-backed, and a
+# 2 MiB-aligned .so's offsets are not page-congruent under 4 KiB
+# pages -- ld-toy refuses such a file by name).
+LDSO    = $(BUILD)/lib/ld-toy.so
+DYNLIBS = $(BUILD)/lib/libhello.so
+
+$(BUILD)/userland/dynlib/%.o: USERLAND_CFLAGS := $(subst -fpie,-fpic,$(USERLAND_CFLAGS))
+
+$(LDSO): $(BUILD)/userland/ldso/entry.o $(BUILD)/userland/ldso/ldso.o $(BUILD)/userland/rt/stack_chk.o userland/ldso/link.ld
+	@mkdir -p $(dir $@)
+	$(LD) -n --gc-sections -T userland/ldso/link.ld -nostdlib -o $@ $(BUILD)/userland/ldso/entry.o $(BUILD)/userland/ldso/ldso.o $(BUILD)/userland/rt/stack_chk.o
+
+$(BUILD)/lib/libhello.so: $(BUILD)/userland/dynlib/hello_dl.o
+	@mkdir -p $(dir $@)
+	$(LD) -shared --hash-style=sysv -z max-page-size=4096 -soname libhello.so -o $@ $<
+
+# The one test with its own link line: a DYNAMIC executable.
+# link-dyn.ld adds the .interp/.dynamic/GOT/PLT homes the static script
+# has no segments for; --export-dynamic is what lets the library call
+# back into the program (the shape a shared libc needs for the exe's
+# __errno_location); --hash-style=sysv because the loader resolves
+# against the EXECUTABLE's hash table too; -z nocopyreloc because ld
+# otherwise turns a lib-data reference into an R_X86_64_COPY the
+# loader deliberately does not implement (the GOT indirection -fpie
+# already pays for is strictly better).
+$(BUILD)/userland/tests/dyn_test.elf: $(BUILD)/userland/tests/dyn_test.o $(USERLAND_RT) userland/rt/link-dyn.ld $(LIBUAPP) $(LIBC) $(DYNLIBS) $(LDSO)
+	$(LD) --gc-sections -T userland/rt/link-dyn.ld -nostdlib --dynamic-linker=/lib/ld-toy.so --export-dynamic --hash-style=sysv -z nocopyreloc -o $@ $(BUILD)/userland/rt/crt0.o $< $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(BUILD)/userland/rt/tls.o $(BUILD)/lib/libhello.so $(LIBUAPP) $(LIBC)
+
 # --gc-sections drops every section nothing reaches, which is what
 # makes linking against one archive cheap: `hello` references nothing in
 # libuapp.a and gains nothing from it. The archive goes LAST -- a
@@ -882,8 +1010,12 @@ $(DISK_IMG):
 # (keyboard_layout.c) keeps the keyboard working regardless. Delete
 # $(SEED_DIR)/sync/etc/kbs and re-run `make iso` to force a fresh
 # regenerate once xkbcli is installed.
-seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL)
+seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO)
 	mkdir -p $(SEED_DIR)/sync/bin $(SEED_DIR)/sync/tests
+	# The dynamic loader and the shared libraries -- /lib is theirs
+	# (docs/filesystem-layout.md).
+	mkdir -p $(SEED_DIR)/sync/lib
+	cp $(LDSO) $(DYNLIBS) $(LIBC_SO) $(SEED_DIR)/sync/lib/
 	# Destination comes from the SOURCE DIRECTORY, not from a list:
 	# build/userland/{gui,bin}/x.elf -> /bin/x, build/userland/tests/x.elf
 	# -> /tests/x, with $(call seed_name,...) applying the three renames.

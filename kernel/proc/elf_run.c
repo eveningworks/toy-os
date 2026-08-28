@@ -48,6 +48,7 @@
 int elf_build_argv_on_stack(uint64_t stack_phys, uint64_t stack_vaddr,
                              const char *path, const char *args,
                              const char *env,
+                             const uint64_t (*auxv)[2], int auxc,
                              uint64_t *out_argc, uint64_t *out_argv,
                              uint64_t *out_user_rsp) {
     uint8_t *page = (uint8_t *)(uintptr_t)stack_phys;
@@ -132,9 +133,10 @@ int elf_build_argv_on_stack(uint64_t stack_phys, uint64_t stack_vaddr,
     //                     NULL              (envp terminator)
     //
     // This is the standard layout a real crt0 expects, and userland/
-    // crt0.asm is what reads it. There is deliberately no auxv after
-    // the envp terminator: nothing here consumes one, and inventing
-    // entries nobody reads is how an ABI accumulates fiction.
+    // crt0.asm is what reads it. An auxv (abi/auxv.h) follows the envp
+    // terminator ONLY when the caller passed one -- i.e. only for a
+    // dynamic executable, whose interpreter is the one consumer. A
+    // static program's stack is byte-identical to what it always was.
     //
     // **RSP is 16-byte ALIGNED at entry**, per SysV. That is a change,
     // and the previous convention is worth recording because it looked
@@ -154,9 +156,11 @@ int elf_build_argv_on_stack(uint64_t stack_phys, uint64_t stack_vaddr,
     // makes no assumption about a pushed return address and realigns
     // before calling main. So the entry point moving into crt0.asm is
     // exactly what makes the standard 16-alignment correct here.
+    if (!auxv) auxc = 0;
     size_t block_bytes = 8                              // argc
                         + (size_t)(argc + 1) * 8        // argv[] + NULL
-                        + (size_t)(envc + 1) * 8;       // envp[] + NULL
+                        + (size_t)(envc + 1) * 8        // envp[] + NULL
+                        + (auxc ? (size_t)(auxc + 1) * 16 : 0); // auxv + AT_NULL
     if (block_bytes + 16 > offset) return 0; // no room for the block plus alignment slack
     offset -= block_bytes;
     offset &= ~(size_t)15; // SysV: 16-aligned AT ENTRY
@@ -167,6 +171,15 @@ int elf_build_argv_on_stack(uint64_t stack_phys, uint64_t stack_vaddr,
     blk[1 + argc] = 0; // argv terminator
     for (int i = 0; i < envc; i++) blk[2 + argc + i] = env_vaddr[i];
     blk[2 + argc + envc] = 0; // envp terminator
+    if (auxc) {
+        uint64_t *av = blk + 3 + argc + envc;
+        for (int i = 0; i < auxc; i++) {
+            av[2 * i]     = auxv[i][0];
+            av[2 * i + 1] = auxv[i][1];
+        }
+        av[2 * auxc] = 0; // AT_NULL
+        av[2 * auxc + 1] = 0;
+    }
 
     *out_argc = (uint64_t)argc;
     *out_argv = stack_vaddr + offset + 8; // &argv[0], for callers that want it
@@ -216,7 +229,7 @@ int elf_run_from_fs(const char *path, const char *args) {
     // `size` comes from fs_read() above and used to be discarded here;
     // it is what bounds every offset in the file. On failure the address
     // space is destroyed rather than leaked -- see elf.h.
-    if (!elf_load(elf_phys, size, as, &entry, &image_end)) {
+    if (!elf_load(elf_phys, size, as, &entry, &image_end, 0)) {
         vga_write("run: "); vga_write(path); vga_write(" isn't a valid ELF64 executable\n");
         vmm_destroy_address_space(as);
         return -1;
@@ -249,7 +262,7 @@ int elf_run_from_fs(const char *path, const char *args) {
     syscall_reset_mm(as, image_end);
 
     uint64_t argc = 0, argv = 0, user_rsp = 0;
-    if (!elf_build_argv_on_stack(stack_phys, UADDR_STACK_VADDR, path, args, 0,
+    if (!elf_build_argv_on_stack(stack_phys, UADDR_STACK_VADDR, path, args, 0, 0, 0,
                                   &argc, &argv, &user_rsp)) {
         vga_write("run: arguments too long for ");
         vga_write(path);

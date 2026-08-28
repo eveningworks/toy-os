@@ -21,7 +21,8 @@
 #include "clocksource.h" // clocksource_now_ns() -- SYS_MONOTONIC_NS
 #include "uaddr.h"
 #include "string.h"
-#include "strace.h"     // strace_arm_for_current() -- SYS_SPAWN's SPAWN_TRACE
+#include "strace.h"
+#include "tty.h"      // tty_set_fg_pgid -- SPAWN_FOREGROUND     // strace_arm_for_current() -- SYS_SPAWN's SPAWN_TRACE
 #include <stddef.h>
 
 // The demand-paged memory of the LEGACY single process
@@ -594,9 +595,17 @@ int sys_spawn(struct syscall_ctx *c) {
             // else's spawn can collect it. The disarm covers the spawn
             // having failed before an address space existed.
             if (msg.flags & SPAWN_TRACE) strace_arm_for_current();
-            int pid = scheduler_spawn_group(path, args, stdout_desc, env, msg.pgid);
+            int pid = scheduler_spawn_group(path, args, stdout_desc, env, msg.pgid,
+                                             c->pml4);
             strace_disarm();
             if (pid > 0) spawn_rc = pid;
+            // SPAWN_FOREGROUND: the child's group in front of OUR fd 0,
+            // before the child can possibly read -- it is this syscall
+            // that creates it, so there is no window. Failure is a
+            // no-op by contract (not a terminal, not the owner): the
+            // after-the-fact tcsetpgrp this replaces behaved the same.
+            if (pid > 0 && (msg.flags & SPAWN_FOREGROUND))
+                tty_set_fg_pgid(fd_tty(pml4, 0), scheduler_pgid(pid));
         }
     }
     if (envbuf) kfree(envbuf);

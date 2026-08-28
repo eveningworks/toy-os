@@ -361,8 +361,13 @@ int scheduler_spawn_env(const char *path, const char *args, int pipe_idx,
 // setpgid(); with no fork here there is no second side, so the window
 // would be unfixable rather than merely awkward. posix_spawn's
 // POSIX_SPAWN_SETPGROUP is the same answer.
+// `parent_pml4` names whose 0/1/2 the child inherits -- SYS_SPAWN
+// passes its caller's, a kernel-side caller passes 0 and the child
+// gets the standard three. NAMED rather than read off CR3, because a
+// kernel-context caller runs with whatever address space the scheduler
+// last loaded (see spawn_from_fs()'s comment for the bug that was).
 int scheduler_spawn_group(const char *path, const char *args, int pipe_idx,
-                           const char *env, int pgid);
+                           const char *env, int pgid, uint64_t parent_pml4);
 
 
 // Whether `pid` names a live or reaped-pending process started by

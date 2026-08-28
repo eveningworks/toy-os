@@ -538,6 +538,50 @@ this the obvious way), not from how much history it accumulated.
   so a full table refuses whole. **`/bin/pmap` prints it all** through
   `QUERY_PROCMAP` (image/heap/stack synthesized beside the regions),
   and the sizes it prints are reservations, not residency.
+- **A DYNAMIC EXECUTABLE IS ENTERED THROUGH `/lib/ld-toy.so`, AND THE
+  KERNEL NEVER LEARNS ET_DYN.** `spawn` sees `PT_INTERP`, loads the
+  interpreter as a SECOND fixed-base image (`ELF_LDSO_BASE`,
+  `kernel/include/kernel/elf.h` and `userland/ldso/link.ld` must
+  agree) and enters it with a minimal auxv (`abi/auxv.h`); the loader
+  maps every `DT_NEEDED` library with mmap, applies relocations
+  eagerly, and jumps to `AT_ENTRY`. Five things to know. **The legacy
+  `run` loader REFUSES a dynamic binary by name** ("use spawn") -- it
+  cannot load a second image. **A library must link `--hash-style=sysv
+  -z max-page-size=4096 -fpic**, and a dynamic executable
+  `--hash-style=sysv -z nocopyreloc --export-dynamic` with
+  `link-dyn.ld` -- the Makefile's dynlink rules carry the reasons, and
+  the loader refuses a non-congruent .so by name. **The loader is
+  freestanding**: tolibc is what it loads and libsys's errno is
+  `__thread`, so it carries private syscall stubs -- nothing in
+  `userland/ldso/` may include a header that drags either in. **A
+  `DT_NEEDED` name resolves against `/lib` and nowhere else** -- no
+  search path, no rpath. **Symbols resolve exe-first**, which is what
+  lets a library call back into the program (`--export-dynamic`'s
+  whole point, and the shape a shared libc's `__errno_location` call
+  needs).
+- **EVERY `/bin` AND GUI PROGRAM LINKS `/lib/libc.so`; init, toywm AND
+  `/tests` ARE STATIC; AND THE `#` SHELL'S BARE NAME SPAWNS.** The
+  static set is a rescue-and-harness contract: init boots a machine
+  with `/lib` missing, a rescue happens on the desktop, and
+  `usertest_run.py` drives `/tests` through `run` -- the legacy
+  blocking loader, which refuses `PT_INTERP` by name and stays that
+  way on purpose. A bare name at the `#` prompt is spawn-and-wait now
+  (`shell_exec_name()`), which is what lets a dynamic `cat` work
+  there. Four things to know. **A foreground job's terminal handoff
+  rides ON the spawn** -- `SPAWN_FOREGROUND` (musl's
+  POSIX_SPAWN_TCSETPGROUP); a tcsetpgrp after the spawn has a race the
+  child can win, and it presented as the fullscreen editor stopped by
+  its own SIGTTIN with its UI already drawn. **`fd_inherit()`'s parent
+  is NAMED, never read off CR3** -- a kernel-context caller runs with
+  whatever address space the scheduler last loaded, and its child once
+  inherited a Terminal window's pty because of it. **`/lib` pages come
+  from a kernel image cache** (`kernel/mm/mmap.c`): read-only pages
+  are mapped BORROWED into every process (one frame of libc text,
+  total), writable pages are memcpy'd from it, and the cache never
+  invalidates because `/lib` is immutable within a boot -- do not put
+  a mutable file's pages in it. **pthread is `libc_nonshared.a`**
+  (glibc's shape): its `__thread g_self` is TLS a library may not
+  carry here, where errno is libsys's and needs nothing.
 - **The kernel heap has a debug mode, and it is a RUNTIME toggle**
   (`heap debug on|off`, `heap check`; `heap_set_debug()` from a test).
   Blocks allocated while it is on get a red-zone each side and are

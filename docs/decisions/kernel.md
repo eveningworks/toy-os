@@ -5018,3 +5018,95 @@ two calls (`munmap` then `MAP_FIXED`), which is race-free in a
 single-threaded loader running before `main`. If a real port ever
 needs POSIX's semantics, widen it then; a refusal can be widened,
 a silent unmap cannot be taken back.
+
+## The dynamic loader is a fixed-base ET_EXEC, and the kernel never learns ET_DYN
+
+Dynlink Stage 2 (2026-08-28). Linux's split is copied exactly one
+level up from where Linux draws it: the kernel maps the executable,
+sees `PT_INTERP`, maps the interpreter and enters it -- but toy-os's
+interpreter is an ordinary fixed-base `ET_EXEC` linked at
+`ELF_LDSO_BASE` (0x8010000000, 256 MiB above the image base), so the
+SAME `elf_load()` loads both images and the kernel contains no ET_DYN
+mapping, no base-choosing and no relocation code at all. Shared
+LIBRARIES are ET_DYN, and the loader maps them itself with Stage-0
+`mmap` -- reserve a span, `munmap`, carve segments in with `MAP_FIXED`.
+
+Why not a relocatable loader like `ld.so`: a loader that relocates
+ITSELF runs code whose own globals are wrong until it finishes -- the
+classic rtld bootstrap, a class of bug that presents as a crash before
+main with no output. A fixed base deletes it for the price of one
+reserved range, which `spawn` guards (an executable reaching
+0x8010000000 is refused by name -- none comes within two orders of
+magnitude). The a.out `ld.so` was fixed-base for the same reason.
+
+Three constraints the build carries so the loader can stay ~400 lines:
+
+- **`--hash-style=sysv`** on libraries AND dynamic executables -- the
+  loader's only symbol lookup is the sysv hash, and the exe must be
+  lookupable too (a library resolving `dyn_test_callback`, later the
+  exe's `__errno_location`, searches the exe FIRST).
+- **`-z max-page-size=4096`** on libraries -- segments are mapped
+  file-backed, and a 2 MiB-aligned .so's offsets are not congruent to
+  its vaddrs under 4 KiB pages. The loader refuses such a file by name
+  rather than copying it in.
+- **`-mno-direct-extern-access` + `-z nocopyreloc`** -- GCC's -fpie
+  otherwise accesses extern data directly and leans on R_X86_64_COPY,
+  which this loader deliberately does not implement: the GOT
+  indirection is strictly better and the linker relaxes it back to a
+  direct `lea` in static links, so static binaries pay nothing.
+
+The auxv is minimal on purpose (AT_PHDR/AT_PHENT/AT_PHNUM/AT_ENTRY,
+abi/auxv.h): only a dynamic executable gets one, and a static
+program's stack is byte-identical to what it always was. AT_PHDR
+points into the mapped image -- link-dyn.ld's first segment carries
+FILEHDR PHDRS -- so the kernel copies nothing.
+
+## The userland is dynamically linked, and the three bugs that cost the afternoon
+
+Dynlink Stage 3 (2026-08-28, the maintainer's call): every `/bin` and
+GUI program links `/lib/libc.so`. What stays static, and why: **init**
+(pid 1 -- the machine must reach a shell with `/lib` broken or
+missing), **toywm** (a rescue happens on the desktop), and **`/tests`**
+(the harness drives it through `run`, whose exit banner is its entire
+assertion -- and `run` IS the legacy loader, which refuses `PT_INTERP`
+by design). tolibc's `pthread.c` sits in `libc_nonshared.a` -- glibc's
+own shape -- because its `__thread g_self` is TLS a library here may
+not carry; `errno` needs no such trick, because `g_errno` lives in
+libsys (static in every binary) and libc.so imports the executable's
+`__errno_location`.
+
+Flipping ~45 binaries surfaced three real defects, each worth its
+lesson:
+
+**The kernel shell's bare name spawns now, and fd inheritance names
+its parent.** The `#` console ran `/bin` through the legacy loader, so
+the flip broke every `cat` the harness typed. Bare names became
+spawn-and-wait (gui3.c's hlt loop; `run` keeps the legacy loader on
+purpose) -- which exposed that `fd_inherit()` read its parent off
+CR3: a kernel-context caller runs with whatever address space the
+scheduler last loaded, so `ps` typed at the console printed into a
+Terminal window. The parent is an explicit argument now; SYS_SPAWN
+passes its caller's pml4, kernel callers pass 0.
+
+**A foreground job's terminal handoff rides on the spawn
+(`SPAWN_FOREGROUND`).** tosh called `tcsetpgrp()` after `sys_spawn()`
+returned, and the child's first read could beat it -- a whole
+timeslice, once dynamic spawns got heavy enough to end the shell's
+slice inside the syscall. The child then stopped on its own SIGTTIN
+having already drawn its screen, which read as "the editor is broken"
+(`[4.22] SIGTTIN fg=4` / `[4.24] tcsetpgrp fg=6` in the log was the
+whole diagnosis). POSIX shells close this from the child's side
+between fork and exec; a spawn ABI has no child side, so the kernel
+does that half when asked -- musl added POSIX_SPAWN_TCSETPGROUP for
+exactly this hole in posix_spawn.
+
+**`/lib` pages are served from a kernel image cache, shared when
+read-only.** Without it every dynamic process re-read libc.so from
+disk page by page, each fault a preempt-disabled device poll -- the
+whole machine stuttered a little per spawn, and marginal GUI checks
+flaked under load. One cache keyed by (path, offset), `/lib` only
+(immutable within a boot, so never-invalidated is honest): a
+read-only page is mapped BORROWED into every process -- the design's
+frame sharing, one frame of libc text total -- and a writable page
+(GOT, data) is a memcpy instead of a disk read. Bounded by the size
+of /lib; nothing evicts.

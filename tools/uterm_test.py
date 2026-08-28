@@ -624,7 +624,11 @@ def check_tabs(dbg, qmp, tmp, res):
     type_line(dbg, "cd /bin")
     time.sleep(1.0)
     dbg.settle()
-    titles = [l for l in dbg.logs("uterm: tab", clear=False) if "title" in l]
+    # A log line can arrive GLUED to a console echo on the serial
+    # stream ('gui state --jsuterm: tab 1 title /bin'), which breaks a
+    # positional split silently -- reparse each line from its marker.
+    titles = [l[l.index("uterm: tab"):]
+              for l in dbg.logs("uterm: tab", clear=False) if "title" in l]
     res.check("t3. the shell's OSC title reached its tab",
               any(l.rstrip().endswith("/bin") for l in titles),
               f"titles seen: {titles[-3:]}")

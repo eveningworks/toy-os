@@ -93,6 +93,7 @@
 #include "vmm.h"
 #include "pmm.h"
 #include "elf.h"
+#include "auxv.h" // the dynamic handoff, see spawn_from_fs()
 #include "elf_run.h"
 #include "process.h" // process_context_is_armed() -- see kernel_slot_runnable()
 #include "win_events.h" // win_events_reset() at spawn -- see scheduler_spawn()
@@ -818,7 +819,8 @@ static void switch_to_kernel(void) {
 // `args` too long to fit the one stack page, or the same allocation
 // failures every other ELF-loading path already handles the same way).
 static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
-                          const char *env, int want_pgid) {
+                          const char *env, int want_pgid,
+                          uint64_t parent_pml4) {
     int slot = -1;
     for (int i = 0; i < MAX_PROCS; i++) {
         if (procs[i].state == SCHED_UNUSED) { slot = i; break; }
@@ -840,14 +842,57 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
     strace_claim(as);
 
     uint64_t entry = 0, image_end = 0;
+    struct elf_dyn_info dyn;
     // On failure the address space is destroyed rather than leaked --
     // it owns whatever elf_load() mapped before giving up, and every
     // failure path below this point owes the same cleanup. This used to
     // be a bare `return -1`, leaking the PML4, every page table under
     // it and every segment frame.
-    if (!elf_load(elf_phys, size, as, &entry, &image_end)) {
+    if (!elf_load(elf_phys, size, as, &entry, &image_end, &dyn)) {
         vmm_destroy_address_space(as);
         return -1;
+    }
+
+    // A DYNAMIC executable: load the interpreter it names as a second
+    // image and enter THAT (Linux's split -- the kernel's part in
+    // dynamic linking ends here; /lib/ld-toy.so finishes the job in
+    // ring 3 and jumps to the auxv's AT_ENTRY). The interpreter is a
+    // fixed-base ET_EXEC at ELF_LDSO_BASE, so the same elf_load() and
+    // the same bounds serve both images; the guard is the executable
+    // growing up into it, which no real program here approaches.
+    //
+    // NOTE the second fs_read() FREES the first one's buffer, so the
+    // exe's `data` is dead past this point -- everything the process
+    // needs from it (segments, phdrs) is already IN the address space.
+    uint64_t auxv[4][2];
+    int auxc = 0;
+    if (dyn.interp[0]) {
+        if (image_end > ELF_LDSO_BASE) {
+            klog_printf("spawn: %s reaches %#lx, into the interpreter -- refused\n",
+                        path, image_end);
+            vmm_destroy_address_space(as);
+            return -1;
+        }
+        uint32_t isize = 0;
+        const char *idata = fs_read(dyn.interp, &isize);
+        if (!idata) {
+            klog_printf("spawn: interpreter %s missing\n", dyn.interp);
+            vmm_destroy_address_space(as);
+            return -1;
+        }
+        uint64_t ientry = 0, iend = 0;
+        if (!elf_load((uint64_t)(uintptr_t)idata, isize, as, &ientry, &iend, 0)) {
+            klog_printf("spawn: interpreter %s did not load\n", dyn.interp);
+            vmm_destroy_address_space(as);
+            return -1;
+        }
+        if (iend > image_end) image_end = iend; // the heap starts after BOTH
+
+        auxv[auxc][0] = AT_PHDR;  auxv[auxc][1] = ELF_IMAGE_BASE + dyn.phoff; auxc++;
+        auxv[auxc][0] = AT_PHENT; auxv[auxc][1] = 56;         auxc++;
+        auxv[auxc][0] = AT_PHNUM; auxv[auxc][1] = dyn.phnum;  auxc++;
+        auxv[auxc][0] = AT_ENTRY; auxv[auxc][1] = entry;      auxc++;
+        entry = ientry;
     }
 
     // The TOP page is where argv is laid out and where RSP starts; the
@@ -873,6 +918,7 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
 
     uint64_t argc = 0, argv = 0, user_rsp = 0;
     if (!elf_build_argv_on_stack(stack_phys, UADDR_STACK_VADDR, path, args, env,
+                                  auxc ? auxv : 0, auxc,
                                   &argc, &argv, &user_rsp)) {
         vmm_destroy_address_space(as);
         return -1;
@@ -932,11 +978,15 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
     // scheduler instead reintroduced the special case at the one site
     // that mattered.
     //
-    // The kernel context has no user address space, so vmm_current_pml4()
-    // is the kernel's own there and fd_inherit() finds no table for it --
-    // which is the right answer: a kernel-spawned process gets the
-    // standard three rather than somebody else's descriptors.
-    fd_inherit(as, vmm_current_pml4());
+    // The parent is NAMED, never read off CR3. vmm_current_pml4() was
+    // the parent here, and it was wrong in exactly one situation that
+    // took an afternoon to find: a KERNEL-context caller (the shell's
+    // bare-name spawn) runs with whatever address space the scheduler
+    // last loaded, so the child inherited some arbitrary interrupted
+    // process's terminal -- `ps` typed at the console printed into a
+    // Terminal window. SYS_SPAWN passes its caller's pml4; a kernel
+    // caller passes 0 and its child gets the standard three.
+    fd_inherit(as, parent_pml4);
     if (stdout_desc >= 0) {
         // SYS_SPAWN's explicit stdout override, which predates
         // inheritance and stays as the one-call shortcut. Applied
@@ -1944,13 +1994,14 @@ int scheduler_spawn_env(const char *path, const char *args, int pipe_idx,
                          const char *env) {
     // 0 = inherit the spawner's group, which is what every kernel-side
     // caller wants: init's services and the demo's counters belong with
-    // whatever started them.
-    return scheduler_spawn_group(path, args, pipe_idx, env, 0);
+    // whatever started them. Parent 0 too: a kernel-side caller's child
+    // gets the standard three fds (see spawn_from_fs()'s fd_inherit).
+    return scheduler_spawn_group(path, args, pipe_idx, env, 0, 0);
 }
 
 int scheduler_spawn_group(const char *path, const char *args, int pipe_idx,
-                           const char *env, int pgid) {
-    int slot = spawn_from_fs(path, args, pipe_idx, env, pgid);
+                           const char *env, int pgid, uint64_t parent_pml4) {
+    int slot = spawn_from_fs(path, args, pipe_idx, env, pgid, parent_pml4);
     if (slot < 0) return 0;
 
     // Clear any events left over from the previous tenant of this slot.
@@ -2441,8 +2492,8 @@ enum sched_poll_result scheduler_poll(int pid, int *out_exit_code) {
 }
 
 void scheduler_demo_run(void) {
-    int a = spawn_from_fs("/bin/counter_a", NULL, -1, 0, 0);
-    int b = spawn_from_fs("/bin/counter_b", NULL, -1, 0, 0);
+    int a = spawn_from_fs("/bin/counter_a", NULL, -1, 0, 0, 0);
+    int b = spawn_from_fs("/bin/counter_b", NULL, -1, 0, 0, 0);
     if (a < 0 || b < 0) {
         vga_write("schedtest: failed to spawn one or both counter processes --\n");
         vga_write("were /bin/counter_a and /bin/counter_b seeded onto disk.img?\n");

@@ -59,6 +59,7 @@ int elf_run_from_fs(const char *path, const char *args);
 int elf_build_argv_on_stack(uint64_t stack_phys, uint64_t stack_vaddr,
                              const char *path, const char *args,
                              const char *env,
+                             const uint64_t (*auxv)[2], int auxc,
                              uint64_t *out_argc, uint64_t *out_argv,
                              uint64_t *out_user_rsp);
 

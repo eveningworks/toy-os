@@ -27,6 +27,7 @@
 // on a stock disk, and a warning on every boot for a directory you
 // haven't created yet would be noise, not information.
 #include "shell.h"
+#include "scheduler.h" // the bare-name path spawns now -- see shell_exec_name()
 #include "shell_internal.h"
 #include "apps.h"
 
@@ -154,7 +155,32 @@ int shell_exec_name(const char *name, const char *args, int report) {
     char bin_path[FS_PATH_MAX];
     if (!shell_path_find(name, bin_path)) return 0;
 
-    int exit_code = elf_run_from_fs(bin_path, args);
+    // TWO LOADERS, chosen by the form the user typed. A BARE NAME is
+    // spawned as a real scheduled process and waited on -- which is
+    // what lets it be a DYNAMIC executable (the legacy loader refuses
+    // PT_INTERP, and every /bin program links /lib/libc.so now).
+    // `run` (report=1) KEEPS the legacy blocking loader on purpose:
+    // it is the explicit, demonstrative form, the harness parses its
+    // exit banner, and the static /tests binaries are exactly what it
+    // still loads. The wait loop is gui3.c's: hlt, because the timer
+    // is what schedules the process being waited for.
+    int exit_code;
+    if (report) {
+        exit_code = elf_run_from_fs(bin_path, args);
+    } else {
+        int pid = scheduler_spawn(bin_path, args);
+        if (pid <= 0) {
+            vga_write(name);
+            vga_write(": could not start (spawn failed)\n");
+            return 1;
+        }
+        int code = -1;
+        while (scheduler_poll(pid, &code) == SCHED_POLL_RUNNING) {
+            scheduler_idle();
+            __asm__ volatile ("hlt");
+        }
+        exit_code = code;
+    }
     vga_set_color(shell_fg, VGA_BLACK);
 
     // SILENT ON SUCCESS WHEN THE NAME WAS TYPED BARE. The banner below

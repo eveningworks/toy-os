@@ -1,6 +1,7 @@
 // A minimal ELF64 loader: PT_LOAD segments only, no relocations, no
 // dynamic linking, no section/symbol-table parsing. See elf.h.
 #include "elf.h"
+#include "string.h"
 #include "vmm.h"
 #include "pmm.h"
 #include "uaddr.h" // where a segment is and is not allowed to land
@@ -74,8 +75,8 @@ struct elf64_phdr {
 // it would leave its process no heap at all -- sbrk would refuse every
 // call -- which is a useless binary rather than an unsafe one, and it
 // is the file's own doing.
-#define ELF_IMAGE_BASE 0x8000000000ULL
-#define ELF_IMAGE_END  UADDR_GUARD_BASE
+// ELF_IMAGE_BASE/ELF_IMAGE_END live in elf.h now -- spawn needs the
+// base for AT_PHDR.
 
 // a + b, refusing on unsigned overflow. Every bound below is computed
 // from two file-controlled 64-bit values, so a wrapped sum would pass a
@@ -177,8 +178,15 @@ static int segment_ok(const struct elf64_phdr *ph, uint64_t elf_size) {
 }
 
 int elf_load(uint64_t elf_phys_addr, uint64_t elf_size, uint64_t pml4_phys,
-             uint64_t *out_entry, uint64_t *out_image_end) {
+             uint64_t *out_entry, uint64_t *out_image_end,
+             struct elf_dyn_info *out_dyn) {
     uint8_t *base = (uint8_t *)(uintptr_t)elf_phys_addr;
+
+    if (out_dyn) {
+        out_dyn->interp[0] = 0;
+        out_dyn->phoff = 0;
+        out_dyn->phnum = 0;
+    }
 
     // Before the header is READ, not after -- dereferencing eh on a
     // shorter buffer is itself the bug.
@@ -214,15 +222,29 @@ int elf_load(uint64_t elf_phys_addr, uint64_t elf_size, uint64_t pml4_phys,
     for (uint16_t i = 0; i < eh->e_phnum; i++) {
         const struct elf64_phdr *ph = &phdrs[i];
 
-        // A dynamic executable names its interpreter here. Nothing in
-        // this kernel loads one, and silently ignoring the header
-        // produces a process that jumps to an entry point expecting an
-        // interpreter that never ran -- a crash with no explanation.
-        // Milestone 35 is where this becomes supported rather than
-        // refused.
+        // A dynamic executable names its interpreter here. With no
+        // out_dyn the caller cannot load one, and silently ignoring
+        // the header produces a process that jumps to an entry point
+        // expecting an interpreter that never ran -- so it stays a
+        // refusal there (the legacy `run` loader, and the interpreter
+        // load itself). The path must be inside the file and
+        // NUL-terminated; anything else is a malformed file.
         if (ph->p_type == PT_INTERP) {
-            klog_write("elf: refused -- dynamic executable (PT_INTERP), no interpreter support\n");
-            return 0;
+            uint64_t iend;
+            if (!out_dyn) {
+                klog_write("elf: refused -- dynamic executable (PT_INTERP), use spawn\n");
+                return 0;
+            }
+            if (ph->p_filesz == 0 ||
+                ph->p_filesz > sizeof out_dyn->interp ||
+                !add_ok(ph->p_offset, ph->p_filesz, &iend) ||
+                iend > elf_size ||
+                base[ph->p_offset + ph->p_filesz - 1] != '\0') {
+                klog_write("elf: refused -- bad PT_INTERP path\n");
+                return 0;
+            }
+            k_memcpy(out_dyn->interp, base + ph->p_offset, ph->p_filesz);
+            continue;
         }
 
         if (ph->p_type != PT_LOAD) continue;
@@ -266,5 +288,9 @@ int elf_load(uint64_t elf_phys_addr, uint64_t elf_size, uint64_t pml4_phys,
 
     *out_entry = eh->e_entry;
     if (out_image_end) *out_image_end = image_end;
+    if (out_dyn) {
+        out_dyn->phoff = eh->e_phoff;
+        out_dyn->phnum = eh->e_phnum;
+    }
     return 1;
 }

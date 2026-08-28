@@ -173,6 +173,15 @@ TESTS = [
     # `run` is the legacy loader, which has none.
     ("mmap_test", None,
      ["mmap_test: all checks passed"], ["FAIL"]),
+    # The first DYNAMIC executable: /lib/ld-toy.so loads libhello.so,
+    # applies every relocation class, and jumps to the real entry.
+    # Spawned twice over: dynamic needs PT_INTERP, which the legacy
+    # `run` loader refuses by design.
+    ("dyn_test", None,
+     ["dyn_test: all checks passed"], ["FAIL"]),
+    # tolibc AS the shared library: no libc.a in the binary at all.
+    ("dynlibc_test", None,
+     ["dynlibc_test: all checks passed"], ["FAIL"]),
     ("fsgen_test", 0,
      ["fsgen_test: all checks passed"], ["FAIL"]),
     # lseek/fstat/O_APPEND. Its pattern is POSITION-DERIVED, so a seek

@@ -417,7 +417,13 @@ static int run_external(struct tosh *sh, const char *path, const char *args,
     //
     // PGID_NEW: the child leads a group of its own, so Ctrl-C can be
     // pointed at it without also naming this shell.
-    int pid = sys_spawn_group(path, args, -1, environ, PGID_NEW);
+    // A FOREGROUND job's terminal handoff rides ON the spawn
+    // (SPAWN_FOREGROUND): a tcsetpgrp after it has a race the child
+    // can win -- its first read beat the call by a whole timeslice
+    // once spawns got slower, and the job stopped on its own SIGTTIN
+    // looking exactly like a broken program. See abi/syscall_abi.h.
+    int pid = sys_spawn_flags(path, args, -1, environ, PGID_NEW,
+                              background ? 0 : SPAWN_FOREGROUND);
     if (pid < 0) return -1;
     int pgid = sys_getpgid(pid);
 
@@ -431,7 +437,6 @@ static int run_external(struct tosh *sh, const char *path, const char *args,
         return 0;
     }
 
-    job_foreground(pgid);
     return job_wait(sh, pgid, &pid, 1, label);
 }
 
@@ -853,14 +858,16 @@ static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
 
         // -1 = inherit the fds we just set. The GROUP is explicit: the
         // first stage leads, the rest join it.
-        st[i].pid = sys_spawn_group(path, args, -1, environ,
-                                     job_pgid > 0 ? job_pgid : PGID_NEW);
-        if (st[i].pid > 0 && job_pgid <= 0) {
+        // The FIRST stage leads the group and -- unless backgrounded --
+        // takes the terminal atomically with its creation
+        // (SPAWN_FOREGROUND, see the simple command above); the rest
+        // join a group that is already in front.
+        st[i].pid = sys_spawn_flags(path, args, -1, environ,
+                                     job_pgid > 0 ? job_pgid : PGID_NEW,
+                                     job_pgid > 0 || background
+                                         ? 0 : SPAWN_FOREGROUND);
+        if (st[i].pid > 0 && job_pgid <= 0)
             job_pgid = sys_getpgid(st[i].pid);
-            // A BACKGROUND PIPELINE IS STILL ONE GROUP -- it just is not
-            // the foreground one. Skipping this is the entire difference.
-            if (!background) job_foreground(job_pgid);
-        }
 
         if (saved_in  >= 0) { sys_dup2(saved_in, 0);  sys_close(saved_in); }
         if (saved_out >= 0) { sys_dup2(saved_out, 1); sys_close(saved_out); }

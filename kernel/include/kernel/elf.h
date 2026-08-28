@@ -2,6 +2,7 @@
 #define ELF_H
 
 #include <stdint.h>
+#include "uaddr.h" // ELF_IMAGE_END is the guard base
 
 // Loads a static, non-PIE ELF64 executable already present in physical
 // memory (e.g. a Multiboot2 module -- see multiboot_get_module()) into
@@ -50,7 +51,36 @@
 // arms no heap. Deriving it here rather than fixing it in the map is
 // what removed the ceiling on how big a ring-3 image may be; see
 // elf.c's ELF_IMAGE_END and kernel/uaddr.h.
+// What a DYNAMIC executable declares, reported rather than acted on --
+// the kernel's whole part in dynamic linking is loading the named
+// interpreter as a second image and entering it (Linux's split; the
+// rest is /lib/ld-toy.so's job in ring 3). `interp[0] == 0` means the
+// file was static. phoff/phnum are what the interpreter needs to find
+// PT_DYNAMIC, passed on the stack as auxv (abi/auxv.h).
+struct elf_dyn_info {
+    char     interp[64]; // PT_INTERP's path; FS_PATH_MAX-sized
+    uint64_t phoff;
+    uint16_t phnum;
+};
+
+// `out_dyn` may be NULL, and that is a POLICY, not a shortcut: a NULL
+// keeps the old behaviour -- a PT_INTERP file is REFUSED -- which is
+// what the legacy `run` loader must do (it cannot load a second image)
+// and what the interpreter load itself passes (an interpreter with an
+// interpreter is refused by construction, not by a depth counter).
 int elf_load(uint64_t elf_phys_addr, uint64_t elf_size, uint64_t pml4_phys,
-             uint64_t *out_entry, uint64_t *out_image_end);
+             uint64_t *out_entry, uint64_t *out_image_end,
+             struct elf_dyn_info *out_dyn);
+
+// The window a ring-3 image may occupy. The END is uaddr.h's guard
+// base, so the image can never grow into the stack's reservation.
+#define ELF_IMAGE_BASE 0x8000000000ULL
+#define ELF_IMAGE_END  UADDR_GUARD_BASE
+
+// Where /lib/ld-toy.so is linked (userland/ldso/link.ld must agree) --
+// inside the image window, 256 MiB above ELF_IMAGE_BASE, so the SAME
+// elf_load() bounds serve both images and the kernel never learns
+// ET_DYN. An executable big enough to reach it is refused at spawn.
+#define ELF_LDSO_BASE 0x8010000000ULL
 
 #endif

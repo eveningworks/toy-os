@@ -260,13 +260,13 @@ everything libc-shaped is waiting on it. Full plan and staging:
 
 Staged in `docs/dynlink-design.md`, including the case against.
 
-- [ ] A shared-object (`.so`-style) file format
-- [ ] A userspace dynamic linker
-- [ ] Shared libc (once Runtime + interop's real C library exists)
+- [x] ~~A shared-object (`.so`-style) file format~~ DONE 2026-08-28 -- ELF ET_DYN, sysv hash, 4 KiB max-page-size
+- [x] ~~A userspace dynamic linker~~ DONE 2026-08-28 -- `/lib/ld-toy.so`, `userland/ldso/`
+- [x] ~~Shared libc~~ DONE 2026-08-28 -- `/lib/libc.so`; every /bin and GUI program links it
 - [ ] Lazy symbol binding (PLT/GOT-style)
 - [x] ~~Position-independent code in the userland build~~ DONE 2026-08-28 -- `-fpie -mcmodel=small`, same base; see `docs/dynlink-design.md`
-- [ ] Relocation processing at load time
-- [ ] A symbol table and resolution order across multiple objects
+- [x] ~~Relocation processing at load time~~ DONE 2026-08-28 -- eager; RELATIVE/GLOB_DAT/JUMP_SLOT/64
+- [x] ~~A symbol table and resolution order across multiple objects~~ DONE 2026-08-28 -- exe first, then libraries in load order
 - [ ] `dlopen`/`dlsym`-style runtime loading, or an explicit decision not to have it
 - [ ] Shared text pages across processes using the same library, which is most of the point
 - [ ] Versioning, or a written decision to ignore it while there's one consumer of every library

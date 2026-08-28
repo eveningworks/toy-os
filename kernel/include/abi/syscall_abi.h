@@ -647,8 +647,21 @@ struct spawn_msg {
 // posix_spawn's flags word is the same shape, for the same reason.
 #define SPAWN_TRACE 1
 
+// The child's process group goes IN FRONT of the caller's terminal (fd
+// 0), atomically with its creation -- for a shell starting a
+// foreground job. A tcsetpgrp() AFTER the spawn has fork's race
+// without fork's fix: the child's first read can beat it (a whole
+// timeslice, when the spawn itself ends the caller's), and the child
+// is then stopped by its own SIGTTIN with everything looking correct.
+// POSIX's shells close this from the child's side between fork and
+// exec; a spawn ABI cannot, so the flag is the kernel doing the
+// child-side half -- musl's POSIX_SPAWN_TCSETPGROUP, same reasoning.
+// A no-op when fd 0 is not a terminal the caller owns, exactly as the
+// after-the-fact tcsetpgrp was.
+#define SPAWN_FOREGROUND 2
+
 // Every flag this kernel knows. Anything outside it is -EINVAL.
-#define SPAWN_FLAGS_ALL (SPAWN_TRACE)
+#define SPAWN_FLAGS_ALL (SPAWN_TRACE | SPAWN_FOREGROUND)
 
 // The most an environment blob may be, including its terminator. It has
 // to fit the child's single argv/env stack page alongside the strings

@@ -209,6 +209,52 @@ out:
     return 0;
 }
 
+// --- the /lib image cache --------------------------------------------
+//
+// Every dynamic process faults the same libc.so pages in, and without
+// this each fault was a preempt-disabled disk read PER PROCESS -- the
+// whole machine stalled a little for every page of every spawn, which
+// surfaced as GUI tests flaking under load. One cache, keyed by
+// (path, offset), filled on first touch systemwide:
+//
+//   - a READ-ONLY page (text, rodata) is mapped BORROWED into every
+//     process -- one frame total, the design's frame sharing;
+//   - a WRITABLE page (data, GOT) is COPIED from the cache -- private
+//     by definition, but a memcpy instead of a disk read.
+//
+// /lib ONLY, by policy: its contents are immutable within a boot (the
+// build seeds them), which is what makes "never invalidated, never
+// evicted" honest rather than a leak -- the cache is bounded by the
+// size of /lib itself. An ordinary file-backed mmap stays uncached,
+// because a file a process can rewrite must not serve stale pages.
+#define IMGCACHE_MAX 512 // frames -- 2 MiB, several /lib's worth
+
+struct imgcache_ent {
+    char     path[64];
+    uint64_t off;
+    uint64_t frame;
+};
+static struct imgcache_ent g_imgcache[IMGCACHE_MAX];
+static int g_imgcache_n;
+
+static uint64_t imgcache_get(const char *path, uint64_t off) {
+    for (int i = 0; i < g_imgcache_n; i++) {
+        if (g_imgcache[i].off == off && !k_strcmp(g_imgcache[i].path, path))
+            return g_imgcache[i].frame;
+    }
+    if (g_imgcache_n >= IMGCACHE_MAX) return 0; // full: caller reads the disk
+
+    uint64_t frame = pmm_alloc_frame();
+    if (!frame) return 0;
+    for (int i = 0; i < 4096; i++) ((uint8_t *)(uintptr_t)frame)[i] = 0;
+    fs_read_range(path, off, (void *)(uintptr_t)frame, 4096);
+    struct imgcache_ent *e = &g_imgcache[g_imgcache_n++];
+    k_strcpy(e->path, path);
+    e->off = off;
+    e->frame = frame;
+    return frame;
+}
+
 int mmap_fault_in(struct sched_mm *mm, uint64_t pml4_phys, uint64_t vaddr) {
     uint64_t page = vaddr & ~0xFFFULL;
     struct mmap_region *r = region_of(mm, page);
@@ -245,8 +291,23 @@ int mmap_fault_in(struct sched_mm *mm, uint64_t pml4_phys, uint64_t vaddr) {
             pmm_free_frame(frame);
             return 0;
         }
-        fs_read_range(r->path, r->file_off + (page - r->base),
-                      (void *)(uintptr_t)frame, 4096);
+        uint64_t off = r->file_off + (page - r->base);
+        uint64_t cached = k_strncmp(r->path, "/lib/", 5) == 0
+                              ? imgcache_get(r->path, off) : 0;
+        if (cached && !(r->prot & SYS_PROT_WRITE)) {
+            // Shared: every process maps the SAME frame, read-only.
+            pmm_free_frame(frame);
+            if (!vmm_map_user_borrowed(pml4_phys, page, cached,
+                                       0, (r->prot & SYS_PROT_EXEC) != 0,
+                                       0 /* VMM_MT_NORMAL */))
+                return 0;
+            return 1;
+        }
+        if (cached) {
+            k_memcpy((void *)(uintptr_t)frame, (void *)(uintptr_t)cached, 4096);
+        } else {
+            fs_read_range(r->path, off, (void *)(uintptr_t)frame, 4096);
+        }
     }
 
     if (!vmm_map_user_page_flags(pml4_phys, page, frame,

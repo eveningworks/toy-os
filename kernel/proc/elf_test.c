@@ -145,7 +145,7 @@ static int try_load_end(uint64_t *out_entry, uint64_t *out_end) {
     if (!as) return -1; // no memory to test with; distinct from a refusal
 
     uint64_t entry = 0, image_end = 0;
-    int rc = elf_load((uint64_t)(uintptr_t)g_elf, ELF_LEN, as, &entry, &image_end);
+    int rc = elf_load((uint64_t)(uintptr_t)g_elf, ELF_LEN, as, &entry, &image_end, 0);
     if (out_entry) *out_entry = entry;
     if (out_end) *out_end = image_end;
 
@@ -193,7 +193,7 @@ KTEST("elf", "a buffer shorter than the header is refused") {
     uint64_t entry = 0;
     // 16 bytes: enough for the magic, not for the header the loader
     // would otherwise dereference.
-    int rc = elf_load((uint64_t)(uintptr_t)g_elf, 16, as, &entry, 0);
+    int rc = elf_load((uint64_t)(uintptr_t)g_elf, 16, as, &entry, 0, 0);
     vmm_destroy_address_space(as);
     KTEST_ASSERT_EQ(rc, 0);
 }
@@ -366,7 +366,7 @@ KTEST("elf", "a refused file leaks no frames") {
 
     uint64_t before = pmm_free_frames();
     uint64_t entry = 0;
-    int rc = elf_load((uint64_t)(uintptr_t)g_elf, ELF_LEN, as, &entry, 0);
+    int rc = elf_load((uint64_t)(uintptr_t)g_elf, ELF_LEN, as, &entry, 0, 0);
     uint64_t after = pmm_free_frames();
 
     vmm_destroy_address_space(as);
