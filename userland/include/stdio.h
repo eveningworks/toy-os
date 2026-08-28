@@ -9,12 +9,14 @@
 // `#include <stdio.h>`. See <string.h>'s header comment for the shared
 // rationale -- this is its other half, and the two were built together.
 //
-// THE CONVERSION SET IS kfmt's, NOT A FULL printf's: %d %u %x %s %c %%,
-// an optional zero-pad width, `%Ns`/`%-Ns` column padding for strings,
-// and the l/ll/z length modifiers. There is no %f (Stage 4 of
-// docs/libc-design.md), no %p, no precision and no `*` width. An
-// unrecognised conversion is emitted literally and consumes no
-// argument, so a typo shows up in the output rather than
+// THE CONVERSION SET IS kfmt's, NOT A FULL printf's -- but it is most
+// of one now: %d %i %u %o %x %X %c %s %p %%, plus %f %e %g (%F %E %G),
+// which are RING 3 ONLY and so are usable here. C's flags (- + space #
+// 0), width (digits or `*`), precision (.N or .*, honoured by the
+// integer and float conversions and ignored by %s) and the l/ll/z/h/hh
+// length modifiers are all parsed. Missing: %n, %a and the wide-char
+// conversions. An unrecognised conversion is emitted literally and
+// consumes no argument, so a typo shows up in the output rather than
 // desynchronising every argument after it. Read kfmt.h before assuming
 // a conversion exists.
 //

@@ -23,38 +23,53 @@
 // whole point of the toolkit is that there is one implementation of
 // "integer to digits" in the tree.
 //
-// Deliberately NOT a full printf. Supported conversions:
+// Deliberately NOT a full printf, though the gap is narrow now.
+// Supported conversions:
 //
-//   %d %i signed decimal   %u  unsigned decimal    %x  lowercase hex
+//   %d %i signed decimal    %u  unsigned decimal
+//   %x %X hex, lower/upper  %o  octal
+//   %p  a pointer, as "0x" + lowercase hex; NULL prints as "(nil)"
 //   %s  const char * (NULL prints as "(null)")
 //   %f %e %g (and %F %E %G) -- RING 3 ONLY, see k_fmt_float() below;
 //              in the kernel these emit literally, since there is no
 //              floating point there at all
-//   %c  char                %%  a literal '%'
+//   %c  char                 %%  a literal '%'
 //
-// with an optional width between the '%' and the conversion, C's rules:
+// NOT here: %n, %a, and the wide-char conversions (%lc, %ls).
+//
+// Between the '%' and the conversion, C's own grammar, all of it parsed:
+//
+//   flags      - + space # 0
+//   width      digits, or `*` to take it from an int argument -- and a
+//              NEGATIVE `*` width left-justifies, as C says
+//   precision  .N or .*, honoured by the INTEGER and FLOAT conversions
+//   length     l/ll/z widen the argument to 64 bits; h/hh are parsed
+//              and ignored, since default promotion has already widened
+//              anything narrower than an int
+//
 // `%5u` pads with SPACES, `%05u` with zeroes, `%-5u` left-justifies.
 // (It zero-padded every width until tolibc needed columns -- `%5d`
-// printing 00042 is not what C means and not what a table wants.) Plus
-// the `l`/`ll`/`z` length modifiers for 64-bit arguments (`%lx`,
-// `%zu`). Standard printf argument rules apply --
-// `%x` is an `unsigned int`, `%lx` is 64-bit -- which is not pedantry:
-// varargs are only promoted as far as `int`, so reading a plain `int`
-// as 64-bit would pick up whatever was in the top half of the
-// register. Following the standard rules is also what keeps the
-// `format(printf, ...)` attributes below meaningful, so GCC's -Wformat
-// catches a mismatched argument at the call site instead of it becoming
-// a garbage value at runtime.
+// printing 00042 is not what C means and not what a table wants.)
 //
-// There is no `%p` and no `*` width. A `.N` PRECISION is parsed and is
-// honoured only by the float conversions -- on `%s` C's precision
-// truncates, and truncating a string is the one thing these formatters
-// are not allowed to do (see the width note below). Width on `%s`
-// pads (and `%-Ns` left-justifies); a string longer than its field
-// pushes the column rather than being truncated.
+// PRECISION IS IGNORED BY `%s`, which is the difference between the two
+// operations rather than an inconsistency: on an integer it only ever
+// ADDS leading zeros, while on a string it TRUNCATES, and truncating a
+// value is the one thing these formatters are not allowed to do. Width
+// on `%s` pads (and `%-Ns` left-justifies); a string longer than its
+// field pushes the column instead.
+//
+// Standard printf argument rules apply -- `%x` is an `unsigned int`,
+// `%lx` is 64-bit -- which is not pedantry: varargs are only promoted
+// as far as `int`, so reading a plain `int` as 64-bit would pick up
+// whatever was in the top half of the register. Following the standard
+// rules is also what keeps the `format(printf, ...)` attributes below
+// meaningful, so GCC's -Wformat catches a mismatched argument at the
+// call site instead of it becoming a garbage value at runtime.
+//
 // Anything unrecognised is emitted literally and consumes no argument,
 // so a typo shows up in the output instead of silently eating the rest
 // of the format string and desynchronising every argument after it.
+// kfmt_cases.h is the exhaustive table that keeps this list honest.
 
 // FLOATING POINT: kfmt.c CANNOT DO IT, and each build links one of two
 // implementations of this.

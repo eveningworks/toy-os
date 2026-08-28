@@ -227,7 +227,7 @@ this the obvious way), not from how much history it accumulated.
   directly when you need a fixed-width number -- kfmt's printf has
   zero-pad widths for numbers and `%Ns`/`%-Ns` column padding for
   STRINGS (a value longer than its field pushes the column rather than
-  being truncated), but no `*` width.
+  being truncated), and a `*` width taken from an argument.
   **`<ctype.h>`, `<assert.h>`, `<setjmp.h>`, `<dirent.h>`, `<unistd.h>`
   and `<errno.h>` exist too**, with `strtol`/`qsort`/`bsearch`/`realloc`
   in `<stdlib.h>`. Two things to know: **`qsort` IS NOT STABLE** and
