@@ -17,6 +17,8 @@
 #include "pmm.h"
 #include "heap.h"
 #include "pci.h"
+#include "sound.h" // ac97_init(), and the class it registers into
+#include "sound_config.h"
 #include "virtio_blk.h"
 #include "ahci.h"
 #include "vmsvga.h"
@@ -280,6 +282,10 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // idt_init() for interrupts and a ticking PIT, and pci_init() --
     // all of which BOOT_REQUIRE() checks rather than assumes.
     usb_init();
+
+    // Audio, after pci_init() like every PCI-scanning driver. Finding
+    // no controller is the common case and not an error.
+    ac97_init();
     klog_write("toy-os: kernel heap initialized\n");
 
     // No self-tests run here any more. pmm/heap/json/tfs each used to be
@@ -303,6 +309,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     font_config_init(); // loads the persisted font size, if any -- see kernel/lib/font_config.c
     cursor_config_init(); // console cursor style, same /etc plumbing as the font size
     mouse_config_init();  // pointer speed and acceleration
+    sound_config_init();  // output volume, onto whatever ac97_init() found
     keyboard_config_init(); // loads the persisted keyboard layout, if any -- see kernel/lib/keyboard_config.c
     target_init(); // what this machine is for -- read BEFORE init is spawned below, since init asks for it first thing
     vga_reflow(); // apply it to the console's cell layout (no-op if nothing was persisted)

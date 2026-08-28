@@ -17,6 +17,7 @@
 #include "vmm.h"
 #include "scheduler.h"
 #include "strace.h"
+#include "sound.h"
 #include "klog.h"
 #include <stddef.h>
 
@@ -40,6 +41,7 @@ static void release_process_state(uint64_t pml4_phys) {
     fd_release_all(pml4_phys);
     proc_syscall_release(pml4_phys);
     win_syscall_release(pml4_phys);
+    sound_process_gone(pml4_phys);
 }
 
 void syscall_process_exit_cleanup(uint64_t pml4_phys) {

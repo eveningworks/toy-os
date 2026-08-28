@@ -1511,6 +1511,22 @@ window without going through it will find its layout polls timing out.
   seconds, and a benchmark run beside eleven other VMs measures
   contention. `blank_window_test.py` covers "it draws" in the gate,
   since that one opens every app in the registry.
+- **`audio_test.py`** -- AC'97 and the PCM stream, judged on the HOST:
+  the guest plays two seconds of A440 (`/tests/tone`) and QEMU's wav
+  audiodev (`vm.py --audio-wav`) records what the DEVICE emitted to a
+  host file, where the frequency is measured by zero-crossing count --
+  an oracle sharing no code with the driver, the core or the tone
+  generator. Three failure modes fail three different checks: a dead
+  DMA engine records silence, a wrong rate the wrong pitch, and a
+  broken consumed-chunk zeroing more than 2s of tone (the app's own
+  STOP bounds that leak, so the `sound` KTEST is the first-line guard
+  -- it reddened under the positive control before the recording did).
+  **Measure within BURSTS**: under TCG the guest falls behind wall
+  clock and QEMU pads the recording with host-side silence, so the
+  file's timeline says nothing about the guest. The ac97 KTESTs run
+  un-skipped only here, which makes "0 skipped" the load-bearing
+  assertion (the ahci lesson). On demand, not in the gate: it boots
+  its own guest with extra hardware.
 - **`ahci_test.py`** -- boots with the filesystem on a **SATA drive
   behind an ICH9 host bus adapter**, which is the only thing here that
   reaches `kernel/drivers/ahci.c` at all. Several boots, on demand.

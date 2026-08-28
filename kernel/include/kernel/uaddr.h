@@ -192,6 +192,14 @@
 // 32 GiB of address space. A reservation like the heap and stack:
 // pages arrive on touch, so the size costs nothing and bounds only how
 // much a process may MAP, not what the machine must have.
+// The PCM stream's shared ring: a control page and SND_RING_BYTES of
+// samples, mapped BORROWED into whichever process holds the stream
+// open. The VALUE lives in abi/sound_abi.h (the app computes with it,
+// like GUI_FB_VADDR); this alias keeps the address-space map readable
+// in one file. Sits in the gap between the last window region and the
+// mmap arena.
+#define UADDR_SND_BASE   SND_MAP_VADDR
+
 #define UADDR_MMAP_BASE  0x9000000000ULL
 #define UADDR_MMAP_LIMIT 0x9800000000ULL
 

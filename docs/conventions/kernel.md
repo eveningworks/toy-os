@@ -1529,3 +1529,44 @@ legacy-support capability — so `legsup_off` stays 0, `legacy_handoff()`
 returns immediately, and every test here exercises the no-BIOS case
 only. `usbtrace` on the boot line prints a line per bring-up step, which
 is how the machine that does have one was diagnosed.
+
+## THERE IS A SOUND CLASS, ITS STREAM IS EXCLUSIVE, AND THE RING IS SHARED MEMORY.
+
+`kernel/drivers/sound/` -- the registry shape `display_driver` and
+`block_device` already have: `sound.c` is the core (the stream, its
+policy, the syscalls), `ac97.c` the first `struct sound_device`, and a
+later HDA or USB-audio card is a second implementer, not a second
+mechanism. Five things to know:
+
+- **One stream, exclusive, and the kernel NEVER mixes.** A second
+  `SYS_SND_OPEN` is `-EBUSY`. Every modern OS keeps mixing in
+  userspace (PulseAudio/PipeWire, Windows' audio engine); if toy-os
+  ever wants two apps audible at once, that is a userspace sound
+  daemon's job, not a kernel loop.
+- **The data plane is a MAPPED RING, not a write() call** --
+  `abi/sound_abi.h`: a control page plus 64 KiB of samples at
+  `SND_MAP_VADDR`, ALSA's mmap mode in miniature. The kernel publishes
+  `hw_pos` on every completion interrupt; the app writes ahead of it;
+  steady-state playback costs ZERO syscalls.
+- **A CONSUMED CHUNK IS ZEROED BY THE KERNEL before `hw_pos` moves
+  past it** -- the one rule that makes the ring abandonable: the
+  engine loops forever once started, so a stalled or dead app plays
+  SILENCE (zero is silence in signed PCM), never its last second on
+  repeat. The `sound` KTEST is the guard; disabling the memset was the
+  positive control that proved the whole test stack could go red.
+- **The stream follows its owner out** (`sound_process_gone()`, beside
+  the fd/window releases) and the frames are the CORE's, mapped
+  borrowed -- process teardown walks past them.
+- **`volume` is a registered setting** (`kernel/lib/sound_config.c`),
+  applied through the device's own attenuators -- a System Settings
+  Sound row and `config set volume 40` with no UI code, the same move
+  the scroll knobs made.
+
+**Testing it is a HOST-side job**: QEMU's wav audiodev records what
+the device played (`vm.py --audio-wav`), and `tools/audio_test.py`
+measures the frequency there. **Under TCG the recording arrives as
+correct-pitch BURSTS padded with host-side silence** -- the guest
+falls behind wall clock, not behind its own sample clock -- so
+measure within bursts and total the tone, never trust the file's
+timeline. The ac97 KTESTs skip on every boot but audio_test's, which
+is why its "0 skipped" assertion is load-bearing (the ahci lesson).

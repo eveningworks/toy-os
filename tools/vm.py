@@ -261,6 +261,13 @@ def cmd_start(args):
         cmd += ["-device", "virtio-keyboard-pci",
                 "-device", "virtio-mouse-pci",
                 "-device", "virtio-tablet-pci"]
+    # An AC97 controller whose output QEMU RECORDS to a host wav file --
+    # the oracle tools/audio_test.py measures a played tone in. Off by
+    # default: attaching audio hardware changes the PCI layout under
+    # every existing test for a device none of them drive.
+    if getattr(args, "audio_wav", None):
+        cmd += ["-audiodev", f"wav,id=snd0,path={args.audio_wav}",
+                "-device", "AC97,audiodev=snd0"]
     # An xHCI controller plus USB HID devices, off by default for the
     # same reason --virtio-input is: every existing test was written
     # against the PS/2 pair. `--usb xhci` attaches a keyboard, which
@@ -554,6 +561,8 @@ def main():
                     help="attach PATH as a virtio-blk disk. Off by default; with it "
                          "the guest gets a second disk on virtio-blk-pci, which is "
                          "what exercises the virtio transport and virtqueue.")
+    ap.add_argument("--audio-wav", default=None, metavar="PATH",
+                    help="attach an AC97 whose output records to this host wav")
     ap.add_argument("--virtio-input", action="store_true",
                     help="attach virtio keyboard/mouse/tablet devices. Off by "
                          "default; with it the guest has BOTH these and the PS/2 "

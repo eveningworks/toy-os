@@ -611,6 +611,9 @@ int sys_win_present(void) { return (int)err(syscall0(SYS_WIN_PRESENT)); }
 
 // --- processes and pipes ----------------------------------------------
 
+int sys_snd_open(void) { return (int)err(syscall0(SYS_SND_OPEN)); }
+int sys_snd_ctl(int op) { return (int)err(syscall1(SYS_SND_CTL, (uint64_t)(int64_t)op)); }
+
 int sys_pipe(int fds[2]) {
     return (int)err(syscall1(SYS_PIPE, (uint64_t)(uintptr_t)fds));
 }

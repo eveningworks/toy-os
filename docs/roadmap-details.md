@@ -1698,8 +1698,13 @@ multi-session project with its own milestones, not a single build bump.
 
 ### Sound
 
-New milestone, lightly scoped. No audio subsystem exists today. A first
-rough breakdown, cheapest-to-hardest:
+BUILT through the PCM path, 2026-08-29: `kernel/drivers/sound/` holds
+the class registry (`sound.c`, one exclusive stream, the shared ring of
+`abi/sound_abi.h`) and the AC'97 driver; `/tests/tone` plays A440 and
+`tools/audio_test.py` measures it in a host-side recording. Left: the
+WAV player app and a mixer UI (the `volume` setting already gives
+System Settings a Sound row). The original breakdown, kept for the
+items still open:
 
 - ~~PC speaker beep~~ -- done, see the commit that added it:
   `kernel/drivers/speaker.c`'s `speaker_beep(freq_hz, duration_ms)`

@@ -596,6 +596,7 @@ whenever a headline here tells you something you did not already know.
 - **A THREAD IS A SLOT WHOSE `tgid` NAMES SOMEBODY ELSE** -- Linux's shape, not NT's: no thread object, no second scheduler entity. The GROUP owns the address space, the fd table (keyed by CR3, so shared for free), the heap, the cwd, the parent link and the process group; the SLOT owns the kernel stack, FP state, trapframe, signal dispositions and thread pointer. **The process dies as a whole** (`exit_group`; a tid is not separately killable), **a thread is not a child** (`waitpid` never returns one), and **the stack is RING 3's** -- `SYS_THREAD_CREATE` allocates nothing, so a thread stack has no guard page and a DETACHED thread's stack is never reclaimed. `scheduler_current_pid()` is the THREAD; `scheduler_current_tgid()` is the PROCESS, and a caller has to know which it means.
 - **RING-3 `malloc` TAKES A LOCK; THE KERNEL'S DOES NOT** -- `heap_core.c` is compiled into both rings and has ONE free list, and `heap_os_lock()` is a real lock in ring 3 (threads are preempted mid-walk) and a no-op in the kernel (nothing preempts kernel code mid-`kmalloc`). The kernel's half stops being a no-op at SMP, where it is split #1. **The race is real by inspection and was NOT reproducible** -- three controls with the lock removed, up to 8000 allocations over a fully-walked list, found nothing; the window is a few instructions against a 100 Hz tick on one core. And `malloc` is not async-signal-safe: the lock is not recursive, so a handler that allocates while its own thread holds it now HANGS rather than corrupts.
 - **THE THREAD POINTER IS FS.base, AND THE SCHEDULER RELOADS IT** -- `iretq` leaves the hidden segment bases alone, so without a reload on every switch every thread reads the last-scheduled thread's `__thread` storage, silently. The kernel owns ONE number (`SYS_SET_TLS`, `arch_prctl(ARCH_SET_FS)`'s job); the layout behind it is `userland/rt/tls.c`'s. The LEGACY loader has one too, in the kernel context's own slot -- refusing there kills every ring-3 program in `crt0`, because errno is `__thread` now.
+- **THERE IS A SOUND CLASS, ITS STREAM IS EXCLUSIVE, AND THE RING IS SHARED MEMORY** -- `kernel/drivers/sound/` (`sound.c` core + `ac97.c`, the registry shape again); the data plane is a mapped ring at `SND_MAP_VADDR` (`abi/sound_abi.h`) with ZERO syscalls in steady state; a consumed chunk is ZEROED by the kernel so an abandoned ring plays silence, never a loop; the kernel NEVER mixes (a second open is -EBUSY); `volume` is a registered setting. Tested host-side (`tools/audio_test.py`) -- under TCG the recording is correct-pitch BURSTS padded with host silence, so measure within bursts.
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
 
 ### GUI, Toykit and the desktop
@@ -1207,6 +1208,11 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
 - **Run on demand, not in the gate** -- `doom_test.py` (DOOM runs, draws,
   animates and takes input; SKIPS cleanly when no IWAD has been fetched,
   which is why it is not in the suite),
+  `audio_test.py` (**AC97 and the PCM ring, judged on the HOST** -- QEMU
+  records what the device played to a wav; the tone's frequency and its
+  TOTAL duration are measured there, so a dead DMA engine, a wrong rate
+  and a broken consumed-chunk zeroing each fail a different check; the
+  ac97 KTESTs run un-skipped only here),
   `cursor_ibeam_test.py` (**named pointer shapes: the I-beam, the busy
   pointer, and the clamp** -- all four ways a shape gets named, each
   with a control point beside it; the shapes are told apart by where

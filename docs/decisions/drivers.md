@@ -1330,3 +1330,45 @@ first keystrokes -- caught by usb_test's wrap phase and predates.py);
 and a failed enumeration must disable its slot, or a retry burns a
 fresh slot per attempt (slots 2 and 3 leaked in one boot log before
 the failure paths called `xhci_disable_slot()`).
+
+
+## Sound: one exclusive stream over a shared ring, and the kernel never mixes
+
+The audio subsystem's three calls, made before the first driver landed
+(the AC'97 is the first `struct sound_device`; HDA and USB audio are
+later implementers of the same registry, the display/block/clocksource
+shape again).
+
+**Exclusive, no kernel mixer.** A second `SYS_SND_OPEN` is refused
+with -EBUSY, the compositor-role pattern. Every modern OS keeps mixing
+OUT of the kernel -- ALSA's dmix is a library, PulseAudio/PipeWire and
+Windows' audio engine are userspace -- because mixing drags resampling
+and format policy in with it. If two audible apps ever matter here,
+the answer is a userspace sound daemon owning the one stream.
+
+**A mapped ring, not a write() call.** The app asked for the
+lower-latency shape and it costs less than it looks: a control page
+plus 64 KiB of samples mapped at a fixed address (`SND_MAP_VADDR`,
+the window-buffer idiom), the kernel publishing the hardware position
+per completion interrupt -- ALSA's mmap mode in miniature. Steady
+state costs ZERO syscalls, where an OSS-style write() pays one per
+chunk plus a copy. The buffer is physically contiguous so the AC'97's
+descriptor list points straight into it: the app's samples DMA out
+with no copy anywhere in the path.
+
+**A consumed chunk is zeroed before hw_pos moves past it.** The
+engine loops the ring forever once started (LVI kept one behind CIV),
+which is what makes underrun handling free -- zero IS silence in
+signed PCM -- and what makes the ring safe to abandon: a stalled or
+killed app degrades to silence instead of looping its last 341ms.
+That one rule replaced an underrun-detection path, an app write
+cursor the kernel would have to trust, and a stop-on-starvation
+state machine. The `sound` KTEST asserts the zeroing walk; disabling
+the memset was the positive control, and it reddened the KTEST before
+the host-side recording noticed -- the unit guard is the sharp one.
+
+**The volume is a setting, not a syscall.** `kernel/lib/sound_config.c`
+registers `volume` (0-100) beside the pointer knobs; the registry
+gives it the System Settings row, `config set volume 40`, /etc
+persistence and range enforcement, and the driver contributes one
+`set_volume` op mapping percent onto its attenuators.

@@ -611,7 +611,7 @@ run on, not by order.
 
 - [ ] e1000 ethernet
 - [ ] RTL8139
-- [ ] AC97 audio
+- [x] ~~AC97 audio~~ DONE 2026-08-29
 - [ ] Intel HDA
 - [ ] UHCI/EHCI/XHCI USB
 - [ ] QXL
@@ -687,10 +687,10 @@ run on, not by order.
 ### Sound
 
 - [x] ~~PC speaker beep (simplest possible output)~~ done
-- [ ] AC97 or HDA PCI audio device driver
-- [ ] A basic mixer/volume syscall surface
-- [ ] A sound-producing test app
-- [ ] A PCM playback path (buffer submission + completion IRQ)
+- [x] ~~AC97 or HDA PCI audio device driver~~ DONE 2026-08-29 -- `kernel/drivers/sound/ac97.c`
+- [x] ~~A basic mixer/volume syscall surface~~ DONE as the `volume` SETTING (no syscall needed; System Settings row for free)
+- [x] ~~A sound-producing test app~~ DONE -- `/tests/tone`, judged by `tools/audio_test.py`'s host-side recording
+- [x] ~~A PCM playback path (buffer submission + completion IRQ)~~ DONE -- the shared ring (`abi/sound_abi.h`)
 - [ ] A WAV player app
 - [ ] Volume mixer UI, persisted to `/etc`
 

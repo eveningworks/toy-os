@@ -400,7 +400,7 @@ help:
 	@echo "   Which driver actually claimed the display: type lsdev at the serial"
 	@echo "   debug console. lspci only says the device is on the bus."
 	@echo ""
-	@echo "   make run AUDIO=1          PC speaker wired to sound (AUDIODEV=alsa etc.)"
+	@echo "   make run AUDIO=1          PC speaker + AC97 wired to sound (AUDIODEV=alsa etc.)"
 	@echo "   make run WINDOW=full      start full-screen -- no decorations, so a guest"
 	@echo "                             mode as big as the monitor is pixel-exact AND fits"
 	@echo "   make run WINDOW=fit       a resizable window the guest is SCALED into (gtk)."
@@ -1503,7 +1503,7 @@ QEMU_USB = $(if $(filter xhci xhci+mouse xhci+hub,$(USB_KIND)),\
 # this was confirmed with; AUDIODEV= overrides it for an alsa/coreaudio
 # host (`qemu-system-x86_64 -audiodev help` lists them).
 AUDIODEV ?= pa
-QEMU_AUDIO = $(if $(AUDIO),-audiodev $(AUDIODEV)$(COMMA)id=snd0 -machine pcspk-audiodev=snd0,)
+QEMU_AUDIO = $(if $(AUDIO),-audiodev $(AUDIODEV)$(COMMA)id=snd0 -machine pcspk-audiodev=snd0 -device AC97$(COMMA)audiodev=snd0,)
 
 QEMU_EXTRA =
 

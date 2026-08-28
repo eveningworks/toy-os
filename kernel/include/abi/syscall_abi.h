@@ -1625,6 +1625,22 @@ struct sys_stat {
                       // mapping is private, and writes never reach the
                       // file.
 
+#define SYS_SND_OPEN 80 // No arguments. Claims the machine's ONE PCM
+                         // playback stream (exclusive -- -EBUSY while
+                         // another process holds it; -ENODEV with no
+                         // sound hardware) and maps the control page +
+                         // sample ring at UADDR_SND_BASE. See
+                         // abi/sound_abi.h for the ring contract; the
+                         // format is fixed 48kHz s16le stereo. Returns
+                         // 0, or -errno.
+#define SYS_SND_CTL 81  // RDI = a SND_CTL_* op (abi/sound_abi.h):
+                         // START begins playback at the ring's start,
+                         // STOP halts the engine (ring stays mapped),
+                         // CLOSE stops, unmaps and releases the
+                         // stream. Owner only (-EPERM). Returns 0, or
+                         // -errno. The stream is also released when
+                         // its owner dies, like fds and windows.
+
 #define SYS_MUNMAP 79 // RDI = addr, RSI = length (both page-aligned).
                       // Unmaps [addr, addr+len) and frees the frames
                       // behind any pages that were touched. The range
