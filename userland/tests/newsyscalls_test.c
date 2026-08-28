@@ -102,8 +102,8 @@ int main(void) {
         int ok = (fd >= 0);
         if (ok) sys_close((int)fd);
 
-        int64_t unlinked = ok ? sys_unlink(TESTFILE) : 0;
-        ok = ok && (unlinked == 1);
+        int64_t unlinked = ok ? sys_unlink(TESTFILE) : -1;
+        ok = ok && (unlinked == 0);
 
         // Reading it back should now fail (open without O_CREAT on a
         // gone file) -- proves the delete was real, not just a
@@ -206,7 +206,7 @@ int main(void) {
         // (there's no way to know what time it'll be when this runs) --
         // same "structurally plausible" bar file_test.c's byte-compare
         // holds real data to, just shaped for a clock instead of a file.
-        int ok = (got == 1) && t.hour < 24 && t.minute < 60 && t.second < 60 &&
+        int ok = (got == 0) && t.hour < 24 && t.minute < 60 && t.second < 60 &&
                   t.month >= 1 && t.month <= 12 && t.day >= 1 && t.day <= 31;
         if (ok) {
             put("  OK: ");

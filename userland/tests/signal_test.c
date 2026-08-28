@@ -111,7 +111,7 @@ static const char *poke_args(int pid, int sig) {
 static int wait_until_blocked(int pid) {
     struct proc_info info;
     for (int spin = 0; spin < 20000; spin++) {
-        for (int i = 0; sys_proc_info(i, &info); i++) {
+        for (int i = 0; sys_proc_info(i, &info) == 0; i++) {
             if (info.pid != pid) continue;
             if (info.state == PROC_STATE_BLOCKED) return 1;
             break;
@@ -216,7 +216,7 @@ int main(void) {
         checkf("two children can share one group", sys_getpgid(b) == pg,
                sys_getpgid(b), pg);
         // A NEGATIVE pid is the group, POSIX's spelling.
-        check("kill(-pgid) reports success", sys_kill(-pg, SIGTERM) > 0, 0);
+        check("kill(-pgid) reports success", sys_kill(-pg, SIGTERM) == 0, 0);
 
         int ca = -1, cb = -1;
         sys_waitpid(a, &ca);
@@ -238,7 +238,7 @@ int main(void) {
     // blocked on the console would be woken by any keystroke and the
     // check would pass for the wrong reason.
     int fds[2];
-    if (sys_pipe(fds) == 1) {
+    if (sys_pipe(fds) == 0) {
         int saved = sys_dup(0);
         sys_dup2(fds[0], 0);
         int reader = sys_spawn_group("/tests/catin", 0, -1, 0, PGID_NEW);
@@ -374,7 +374,7 @@ int main(void) {
     // evidence that the read was genuinely interrupted.
     for (int restart = 1; restart >= 0; restart--) {
         int rfd[2];
-        if (sys_pipe(rfd) != 1) {
+        if (sys_pipe(rfd) != 0) {
             check("could get a pipe for the restart check", 0, "no pipes");
             break;
         }
@@ -471,9 +471,9 @@ int main(void) {
 
     // --- signalling something that is not there ---------------------------
     check("a signal to a pid that does not exist is refused",
-          sys_kill(4000, SIGTERM) <= 0, 0);
-    check("a group with no members is refused", sys_kill(-4000, SIGTERM) <= 0, 0);
-    check("a number that is not a signal is refused", sys_kill(me, 99) <= 0, 0);
+          sys_kill(4000, SIGTERM) != 0, 0);
+    check("a group with no members is refused", sys_kill(-4000, SIGTERM) != 0, 0);
+    check("a number that is not a signal is refused", sys_kill(me, 99) != 0, 0);
 
     char sum[96];
     snprintf(sum, sizeof sum, "signal: %s\n", fails ? "FAILURES" : "all checks passed");

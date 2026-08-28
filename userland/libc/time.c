@@ -15,12 +15,10 @@
 
 time_t time(time_t *t) {
     struct rtc_time now;
-    // sys_gettime() reports 0 on failure rather than a negative code
-    // (abi/syscall_abi.h's polarity note), so a zeroed struct is the
-    // failure and year 0 is what it would convert to. Report the epoch
-    // 0 instead: a caller comparing against a file timestamp gets an
+    // A failed read, or an RTC that answered year 0, reports the epoch
+    // 0: a caller comparing against a file timestamp gets an
     // obviously-wrong small number rather than a plausible ancient date.
-    if (!sys_gettime(&now) || now.year == 0) {
+    if (sys_gettime(&now) != 0 || now.year == 0) {
         if (t) *t = 0;
         return 0;
     }
@@ -227,7 +225,7 @@ clock_t clock(void) {
     if (me < 0) return (clock_t)-1;   // no scheduler slot: C's "unavailable"
     struct proc_info pi;
     for (int i = 0; i < SYS_PROC_MAX; i++) {
-        if (sys_proc_info(i, &pi) && pi.pid == me)
+        if (sys_proc_info(i, &pi) == 0 && pi.pid == me)
             return (clock_t)(pi.cpu_ns / 1000u);   // CLOCKS_PER_SEC is 1e6
     }
     return (clock_t)-1;

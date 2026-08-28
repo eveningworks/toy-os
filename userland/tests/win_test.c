@@ -42,7 +42,7 @@ int main(void) {
     req.y = 150;
 
     int64_t ok = sys_call(SYS_WIN_CREATE, (uint64_t)(uintptr_t)&req, 0, 0);
-    if (!ok) sys_exit(1);
+    if (ok != 0) sys_exit(1);
 
     volatile uint32_t *buf = (volatile uint32_t *)(uintptr_t)WIN_BUF_VADDR;
 

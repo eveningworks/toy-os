@@ -41,7 +41,7 @@ int main(void) {
     put("pipefull_test: a full pipe blocks its writer\n");
 
     int fds[2];
-    if (sys_pipe(fds) != 1) { put("  FAIL could not create a pipe\n"); return 1; }
+    if (sys_pipe(fds) != 0) { put("  FAIL could not create a pipe\n"); return 1; }
 
     // The CHILD drains; this process writes. That way the writer is the
     // one that must block, which is the property under test -- and the

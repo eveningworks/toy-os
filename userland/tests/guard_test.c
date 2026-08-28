@@ -135,10 +135,10 @@ int main(void) {
     check(info != (struct proc_info *)-1, "sbrk handed back a fresh page");
     if (info != (struct proc_info *)-1) {
         int got = sys_proc_info(0, info);
-        check(got != 0, "a syscall can write into an untouched sbrk page");
+        check(got == 0, "a syscall can write into an untouched sbrk page");
         // And it wrote something real, not zeros a blank page would
         // also show: slot 0 is init on any boot that has one.
-        check(got != 0 && info->pid != 0,
+        check(got == 0 && info->pid != 0,
               "and what it wrote is the real process table");
     }
 

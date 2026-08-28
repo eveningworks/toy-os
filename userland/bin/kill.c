@@ -32,7 +32,7 @@
 static void name_of(int pid, char *out, unsigned long cap) {
     struct proc_info info;
     out[0] = '\0';
-    for (int i = 0; sys_proc_info(i, &info); i++) {
+    for (int i = 0; sys_proc_info(i, &info) == 0; i++) {
         if (info.pid == pid) { strlcpy(out, info.name, cap); return; }
     }
 }
@@ -95,10 +95,7 @@ int main(int argc, char **argv) {
         else        name[0] = '\0';
 
         char line[160];
-        // SYS_KILL's failure value is 0 rather than a negative errno
-        // (see abi/syscall_abi.h on why flipping those is its own
-        // change), so there is no code to report -- say what it means.
-        if (sys_kill(group ? -pid : pid, sig) <= 0) {
+        if (sys_kill(group ? -pid : pid, sig) != 0) {
             snprintf(line, sizeof line, "kill: no %s %d\n",
                      group ? "such process group" : "process with pid", pid);
             sys_print(line);

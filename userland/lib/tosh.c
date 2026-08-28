@@ -811,7 +811,7 @@ static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
         prev_read = -1;
         if (i < n - 1) {
             int fds[2];
-            if (sys_pipe(fds) != 1) { emit(sh, "tosh: out of pipes\n"); return -1; }
+            if (sys_pipe(fds) != 0) { emit(sh, "tosh: out of pipes\n"); return -1; }
             st[i].out_fd = fds[1];
             prev_read = fds[0];
         }

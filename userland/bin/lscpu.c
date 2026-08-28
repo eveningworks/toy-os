@@ -80,7 +80,7 @@ int main(void) {
 }
 
 int main_lscpu(void) {
-    if (sys_call(SYS_CPU_INFO, (uint64_t)(uintptr_t)&g_ci, 0, 0) != 1) {
+    if (sys_call(SYS_CPU_INFO, (uint64_t)(uintptr_t)&g_ci, 0, 0) != 0) {
         put("lscpu: SYS_CPU_INFO failed\n");
         return 1;
     }

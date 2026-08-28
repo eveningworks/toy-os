@@ -188,7 +188,7 @@ static void refresh(void) {
     int n = 0;
     for (int i = 0; i < SYS_PROC_MAX && n < SYS_PROC_MAX; i++) {
         struct proc_info info;
-        if (!sys_proc_info(i, &info)) continue;
+        if (sys_proc_info(i, &info) != 0) continue;
         if (info.pid == 0) continue; // empty slot -- skip, do not stop
 
         struct row *r = &g_rows[n++];

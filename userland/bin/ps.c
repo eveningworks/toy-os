@@ -136,7 +136,7 @@ static int snapshot(struct proc_info *out, int cap, int with_threads) {
     int n = 0;
     struct proc_info info;
     for (int i = 0; i < SYS_PROC_MAX && n < cap; i++) {
-        if (!sys_proc_info(i, &info)) continue;
+        if (sys_proc_info(i, &info) != 0) continue;
         if (info.pid == 0) continue; // empty slot -- skip, never stop
         // HIDDEN BY DEFAULT, as in every Unix ps: a program's threads
         // are an implementation detail of that program, and a listing

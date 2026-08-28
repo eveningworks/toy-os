@@ -32,7 +32,7 @@ static int contains(const char *hay, int hay_len, const char *needle) {
 
 int main(void) {
     int fds[2];
-    if (sys_pipe(fds) != 1) return 1;
+    if (sys_pipe(fds) != 0) return 1;
 
     int pid = sys_spawn(CHILD, 0, fds[1]);
     if (pid < 0) return 2;

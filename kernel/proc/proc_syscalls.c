@@ -52,14 +52,17 @@ SYSCALL_HANDLER sys_do_proc_info(uint64_t *regs, uint64_t rdi, uint64_t rsi) {
     struct proc_info info;
     if (!vmm_validate_user_range(pml4, rsi, sizeof info)) {
         klog_write("syscall: proc_info() rejected -- invalid user pointer\n");
-        regs[14] = 0;
+        regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else if (!scheduler_proc_info((int)rdi, &info)) {
-        regs[14] = 0; // bad index
+        // -EINVAL for a bad index -- which is also every enumerator's
+        // TERMINATOR, so a caller loops on `== 0` now and still skips
+        // empty slots (pid 0) itself: an empty slot is a SUCCESS.
+        regs[14] = (uint64_t)(int64_t)-EINVAL;
     } else {
         // Filled in a KERNEL struct and copied out, never written
         // through the user pointer (vmm.h).
         vmm_copy_to_user(pml4, rsi, &info, sizeof info); // validated above
-        regs[14] = 1;
+        regs[14] = 0;
     }
 }
 
@@ -450,11 +453,10 @@ int sys_kill(struct syscall_ctx *c) {
                     target < 0 ? -target : target,
                     signal_name(sig), scheduler_current_pid());
     }
-    // 1/0, not a count and not an errno: SYS_KILL's failure value has
-    // always been 0, and a negative code is TRUTHY -- flipping it would
-    // silently turn every `if (!sys_kill(...))` caller inside out. See
-    // abi/errno.h's note on the calls deliberately not converted.
-    c->regs[14] = (uint64_t)(reached ? 1 : 0);
+    // 0 success / -ESRCH: converted with every caller in one commit
+    // (docs/errno-design.md's leftover bucket). ESRCH covers both an
+    // absent pid and an empty group, which is POSIX's answer too.
+    c->regs[14] = reached ? 0 : (uint64_t)(int64_t)-ESRCH;
     return 0;
 }
 

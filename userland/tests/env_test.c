@@ -126,7 +126,7 @@ int main(void) {
     check(setenv("TOYOS_SECRET", "passed-down", 1) == 0, "set a variable for the child");
 
     int p[2];
-    if (sys_pipe(p) <= 0) {
+    if (sys_pipe(p) != 0) {
         check(0, "could not make a pipe");
     } else {
         int pid = sys_spawn("/tests/env_child", "TOYOS_SECRET", p[1]);

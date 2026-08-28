@@ -143,7 +143,7 @@ int main(void) {
               a.ino == b.ino, "both names are one inode");
         // Deleting one name must leave the other's DATA intact -- the
         // property that makes it a hardlink rather than a copy.
-        check(sys_unlink("renamed") != 0, "unlink one of the two names");
+        check(sys_unlink("renamed") == 0, "unlink one of the two names");
         check(sys_stat("linked", &b) == 0 && b.size == 9, "the other name still has the data");
     } else {
         check_errno(sys_errno(), EPERM, "link refused: this format has no hardlinks");

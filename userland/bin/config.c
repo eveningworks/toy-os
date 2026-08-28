@@ -666,12 +666,7 @@ static int cmd_unregister(const char *name) {
         putline("config: a name must be a plain word");
         return 1;
     }
-    // sys_unlink() returns 1 on SUCCESS, not 0 -- this kernel's syscall
-    // return conventions are per-call and documented per-call in
-    // abi/syscall_abi.h; assuming the C `0 == ok` idiom here inverted
-    // the check and made a successful unregister report failure while
-    // having actually deleted the descriptor.
-    if (!sys_unlink(dpath)) {
+    if (sys_unlink(dpath) != 0) {
         char line[200];
         snprintf(line, sizeof line,
                  "config: '%s' has no descriptor in /etc/config.d "

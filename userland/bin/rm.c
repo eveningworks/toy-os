@@ -26,13 +26,12 @@ static char g_dirs[RM_MAX_DIRS][RM_PATH_MAX];
 static int g_dir_count;
 
 static void fail(const char *path) {
-    // SYS_UNLINK is one of the syscalls whose failure value is 0 rather
-    // than a negative errno (see abi/syscall_abi.h on why flipping those
-    // is its own change), so there is no code to report -- say what it
-    // means instead of inventing one.
+    // The reason, since the polarity flip gave unlink one to report.
     sys_print("rm: ");
     sys_print(path);
-    sys_print(": no such file, or a non-empty directory\n");
+    sys_print(": ");
+    sys_print(sys_strerror(sys_errno()));
+    sys_print("\n");
 }
 
 static int remove_tree(const char *root) {
@@ -72,7 +71,7 @@ static int remove_tree(const char *root) {
                     continue;
                 }
                 strlcpy(g_dirs[g_dir_count++], p, RM_PATH_MAX);
-            } else if (!sys_unlink(p)) {
+            } else if (sys_unlink(p) != 0) {
                 fail(p);
                 failed = 1;
             }
@@ -81,7 +80,7 @@ static int remove_tree(const char *root) {
 
     // Deepest first -- see the file header.
     for (int i = g_dir_count - 1; i >= 0; i--) {
-        if (!sys_unlink(g_dirs[i])) { fail(g_dirs[i]); failed = 1; }
+        if (sys_unlink(g_dirs[i]) != 0) { fail(g_dirs[i]); failed = 1; }
     }
     return !failed;
 }
@@ -106,7 +105,7 @@ int main(int argc, char **argv) {
                 continue;
             }
         }
-        if (!sys_unlink(argv[i])) { fail(argv[i]); failed = 1; }
+        if (sys_unlink(argv[i]) != 0) { fail(argv[i]); failed = 1; }
     }
     return failed;
 }

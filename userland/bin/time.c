@@ -41,7 +41,7 @@ int main(int argc, char **argv) {
     (void)argc; (void)argv;
 
     struct rtc_time t;
-    if (!sys_gettime(&t)) {
+    if (sys_gettime(&t) != 0) {
         cmd_fail("time", 0);
         return 1;
     }

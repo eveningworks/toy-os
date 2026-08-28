@@ -168,18 +168,23 @@ int sys_open(struct syscall_ctx *c) {
 int sys_unlink(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
     char name[FS_PATH_MAX];
-    if (resolve_user_path(pml4, c->a0, name)) {
-        // 0, NOT -EFAULT. This call reports success as 1 and failure as
-        // 0 -- the opposite polarity to everything error codes were
-        // added for -- so a negative code here would be TRUTHY and every
-        // `if (!sys_unlink(p))` caller would read a failure as success.
-        // Flipping it is a caller-visible change and belongs in its own
-        // commit; see docs/roadmap.md's item on the boolean-returning
-        // syscalls, which still cannot say why they refused.
+    int err = resolve_user_path(pml4, c->a0, name);
+    if (err) {
+        // 0 success / -errno failure since the polarity flip -- the
+        // last of the boolean-returning syscalls converted, with every
+        // caller in the same commit (docs/errno-design.md).
         klog_write("syscall: unlink() rejected -- invalid path pointer\n");
-        c->regs[14] = 0;
+        c->regs[14] = (uint64_t)(int64_t)err;
+    } else if (!fs_exists(name)) {
+        klog_write("syscall: unlink() rejected -- no such file\n");
+        c->regs[14] = (uint64_t)(int64_t)-ENOENT;
+    } else if (!fs_delete(name)) {
+        // Exists and still refused: a non-empty directory is the usual
+        // cause, and fs_delete() does not say which it was.
+        klog_write("syscall: unlink() failed\n");
+        c->regs[14] = (uint64_t)(int64_t)-EIO;
     } else {
-        c->regs[14] = (uint64_t)fs_delete(name);
+        c->regs[14] = 0;
     }
     return 0;
 }

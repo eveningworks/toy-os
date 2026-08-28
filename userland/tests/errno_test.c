@@ -169,6 +169,25 @@ int main(void) {
     sys_close(sys_dup(1));
     check(sys_errno() == before, "a successful call does NOT clear sys_errno()");
 
+    // --- the flipped bucket: the calls whose failure was 0 -------------
+    // Converted in one commit with every caller (docs/errno-design.md's
+    // leftover). 0 is success now, and the refusals carry reasons.
+    check(sys_unlink("/definitely/not/here.txt") == -1 && sys_errno() == ENOENT,
+          "unlink() of a missing file is -1 ENOENT");
+    check(sys_kill(4000, SIGTERM) == -1 && sys_errno() == ESRCH,
+          "kill() of a missing pid is -1 ESRCH");
+    check(sys_proc_info(SYS_PROC_MAX + 5, &(struct proc_info){0}) == -1 &&
+          sys_errno() == EINVAL,
+          "proc_info() past the table is -1 EINVAL (the enumeration terminator)");
+    check(sys_proc_info(0, &(struct proc_info){0}) == 0,
+          "proc_info(0) succeeds -- slot 0 is init on any boot with one");
+    struct rtc_time t;
+    check(sys_gettime(&t) == 0, "gettime() succeeds with 0 now");
+    int pfd[2];
+    check(sys_pipe(pfd) == 0, "pipe() succeeds with 0 now");
+    sys_close(pfd[0]);
+    sys_close(pfd[1]);
+
     sys_unlink(PROBE);
 
     put("errno_test: ");

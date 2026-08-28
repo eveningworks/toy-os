@@ -53,13 +53,10 @@
 // success (POSIX's rule), so a stale value from an earlier failure is
 // still sitting here after a hundred successful calls.
 //
-// WHICH CALLS SET IT: every wrapper below whose failure value is -1.
-// The ones that do NOT are the ones where -1 is not a failure --
-// sys_read_key() and sys_gui_poll_key() return -1 for "no key waiting"
-// -- and the handful whose failure value is 0 rather than -1
-// (sys_unlink, sys_kill, sys_gettime, sys_proc_info, sys_win_create),
-// which cannot carry a negative code without a caller-visible flip and
-// so still cannot say why. sys_sbrk() is the exception in the other
+// WHICH CALLS SET IT: every wrapper below whose failure value is -1 --
+// which since the polarity flip is ALL of them except the ones where
+// -1 is not a failure: sys_read_key() and sys_gui_poll_key() return -1
+// for "no key waiting". sys_sbrk() is the exception in the other
 // direction: it keeps returning (void *)-1 and sets this to ENOMEM.
 int sys_errno(void);
 
@@ -326,7 +323,8 @@ int sys_getrandom(void *buf, unsigned long n);
 // Reports on process-table SLOT `index` (0 .. SYS_PROC_MAX-1), not on a
 // pid -- so a caller can walk the table without knowing which pids
 // exist. An empty slot is a SUCCESSFUL call reporting pid 0: skip it,
-// do not stop. Returns 1 on success, 0 for a bad index or pointer.
+// do not stop. Returns 0 on success, -1 (with sys_errno()) for a bad
+// index -- which is what terminates an enumeration -- or pointer.
 int sys_proc_info(int index, struct proc_info *out);
 
 // The settings and config-file registries (abi/setting_abi.h). ONE call
@@ -598,7 +596,7 @@ int sys_win_present(void);
 // --- processes and pipes ----------------------------------------------
 
 // Creates a pipe. fds[0] is the read end, fds[1] the write end.
-// Returns 1, or -1.
+// Returns 0, or -1 with sys_errno().
 int sys_pipe(int fds[2]);
 
 // Runs `path` as a new process. `args` is whitespace-separated

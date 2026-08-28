@@ -230,7 +230,7 @@ everything libc-shaped is waiting on it. Full plan and staging:
 - [x] ~~Stage 3: the process, window and system handlers~~ done
 - [x] ~~Stage 4: the callers that were guessing -- `find_program()` treats every failure as "not found"~~ done
 - [x] ~~`strerror()` in ring 3, once the numbers exist~~ done -- `sys_strerror()`, with the C name forwarding to it
-- [ ] The syscalls whose failure value is 0 still cannot say why -- flipping their polarity is caller-visible
+- [x] ~~The syscalls whose failure value is 0 still cannot say why~~ FLIPPED 2026-08-29, every caller in the same commit
 - [ ] `find_program()`'s own EMFILE branch is verified by inspection: nothing can leak fds from the shell to test it
 
 ### Runtime + interop
@@ -311,8 +311,8 @@ Staged in `docs/dynlink-design.md`, including the case against.
 - [ ] ~~An `errno`-style return convention~~ moved up to its own section (errno-design.md); it needs none of this milestone's prerequisites
 - [x] ~~The three syscalls stdio needs: `lseek`, `fstat` on an fd, `O_APPEND`~~ DONE -- `/tests/seek_test`
 - [x] ~~A per-process cwd~~ DONE 2026-08-19 -- `SYS_CHDIR`/`SYS_GETCWD`
-- [x] ~~`crt0` + a real `_start`, replacing each binary's hand-written syscall stubs~~ done long since -- `userland/rt/crt0.asm`, linked into every program
-- [x] ~~Prove it: build and run a real ported program nobody here wrote~~ DONE twice -- cJSON 1.7.19, then Doom (libc-design.md stages 6 and 8)
+- [x] ~~`crt0` + a real `_start`, replacing each binary's hand-written syscall stubs~~ done long since -- `userland/rt/crt0.asm`
+- [x] ~~Prove it: build and run a real ported program nobody here wrote~~ DONE twice -- cJSON, then Doom (libc-design.md)
 - [ ] Decide, in writing, what is deliberately NOT pursued
 
 ## Tracks -- no dependency on the phases above

@@ -51,14 +51,20 @@ away at the ABI. The log lines are all still there -- a human reading
 
 ## What was deliberately left out
 
-- **The syscalls whose failure value is 0**, not -1: `unlink`, `kill`,
-  `gettime`, `proc_info`, `win_create`, `set_color` and friends. A
-  negative code is TRUTHY, so returning one from these would make every
-  `if (!sys_unlink(p))` caller read a failure as SUCCESS -- silently,
-  and at every call site at once. Flipping their polarity is a
-  caller-visible change and belongs in its own commit; `docs/roadmap.md`
-  carries it as an item, and `sys_unlink()`'s handler carries the
-  comment.
+- ~~**The syscalls whose failure value is 0**~~ -- FLIPPED, in the
+  one-commit form this entry prescribed: `unlink`, `kill`, `gettime`,
+  `proc_info`, `win_create` and `gui_init` return 0 on success and
+  `-errno` on failure now, the five stragglers whose SUCCESS was a
+  magic 1 (`set_color`, `pci_info`, `cpu_info`, `win_present`, `pipe`)
+  return 0 too, and every caller changed in the same commit -- because
+  a negative code is TRUTHY, so a staged flip would have read failures
+  as successes at whichever sites lagged. Three things the flip fixed
+  for free: tolibc's `unlink()`/`kill()`/`pipe()` had been quietly
+  POSIX-INVERTED (returning 1 on success), and `/bin/service`'s three
+  `sys_kill(...) < 0` doorbell checks had been dead code. The one
+  subtlety: `proc_info`'s -EINVAL for a bad index is every
+  enumerator's TERMINATOR, and an EMPTY slot stays a SUCCESS -- each
+  walk loops on `== 0` and still skips pid 0 itself.
 - **`sbrk`.** It hands back a POINTER, and `(void *)-1` is the value
   `heap_os.c`, `ugfx.c` and the WM already test against -- a small
   negative code there would be a plausible and wrong address. It keeps

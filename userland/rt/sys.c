@@ -284,7 +284,7 @@ int sys_dup2(int oldfd, int newfd) {
 }
 
 int sys_unlink(const char *path) {
-    return (int)syscall1(SYS_UNLINK, (uint64_t)(uintptr_t)path);
+    return (int)err(syscall1(SYS_UNLINK, (uint64_t)(uintptr_t)path));
 }
 
 int sys_listdir(const char *path, struct sys_dirent *out, int max) {
@@ -452,7 +452,7 @@ int64_t sys_eprint(const char *s) {
 int sys_read_key(void) { return (int)syscall0(SYS_READ_KEY); }
 
 int sys_gettime(struct rtc_time *out) {
-    return (int)syscall1(SYS_GETTIME, (uint64_t)(uintptr_t)out);
+    return (int)err(syscall1(SYS_GETTIME, (uint64_t)(uintptr_t)out));
 }
 
 // --- memory ----------------------------------------------------------
@@ -538,8 +538,8 @@ int sys_getrandom(void *buf, unsigned long n) {
 }
 
 int sys_proc_info(int index, struct proc_info *out) {
-    return (int)syscall2(SYS_PROC_INFO, (uint64_t)(int64_t)index,
-                          (uint64_t)(uintptr_t)out);
+    return (int)err(syscall2(SYS_PROC_INFO, (uint64_t)(int64_t)index,
+                              (uint64_t)(uintptr_t)out));
 }
 
 int sys_setting(struct setting_msg *msg) {
@@ -586,9 +586,9 @@ int sys_poweroff(int reboot) {
     return (int)err(syscall1(SYS_POWEROFF, (uint64_t)reboot));
 }
 
-int sys_kill(int pid, int exit_code) {
-    return (int)syscall2(SYS_KILL, (uint64_t)(int64_t)pid,
-                          (uint64_t)(int64_t)exit_code);
+int sys_kill(int pid, int sig) {
+    return (int)err(syscall2(SYS_KILL, (uint64_t)(int64_t)pid,
+                              (uint64_t)(int64_t)sig));
 }
 
 int sys_set_color(int fg, int bg) {
@@ -598,13 +598,13 @@ int sys_set_color(int fg, int bg) {
 // --- the older, modal GUI syscalls -----------------------------------
 
 int sys_gui_init(struct gui_info *out) {
-    return (int)syscall1(SYS_GUI_INIT, (uint64_t)(uintptr_t)out);
+    return (int)err(syscall1(SYS_GUI_INIT, (uint64_t)(uintptr_t)out));
 }
 
 int sys_gui_poll_key(void) { return (int)syscall0(SYS_GUI_POLL_KEY); }
 
 int sys_win_create(struct win_request *req) {
-    return (int)syscall1(SYS_WIN_CREATE, (uint64_t)(uintptr_t)req);
+    return (int)err(syscall1(SYS_WIN_CREATE, (uint64_t)(uintptr_t)req));
 }
 
 int sys_win_present(void) { return (int)err(syscall0(SYS_WIN_PRESENT)); }

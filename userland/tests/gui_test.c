@@ -31,7 +31,7 @@ static void fill_screen(volatile uint32_t *fb, const struct gui_info *info, uint
 int main(void) {
     struct gui_info info;
     int64_t ok = sys_call(SYS_GUI_INIT, (uint64_t)(uintptr_t)&info, 0, 0);
-    if (!ok) sys_exit(1);
+    if (ok != 0) sys_exit(1);
 
     volatile uint32_t *fb = (volatile uint32_t *)(uintptr_t)GUI_FB_VADDR;
 

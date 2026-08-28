@@ -67,7 +67,7 @@
 static int find_self(struct proc_info *out) {
     for (int i = 0; i < SYS_PROC_MAX; i++) {
         struct proc_info info;
-        if (!sys_proc_info(i, &info)) continue;
+        if (sys_proc_info(i, &info) != 0) continue;
         if (info.pid == 0) continue;            // empty slot: skip, don't stop
         if (info.state != PROC_STATE_RUNNING) continue;
         *out = info;
@@ -95,7 +95,7 @@ int main(void) {
     }
 
     struct proc_info now;
-    if (!sys_proc_info(slot, &now) || now.pid != me.pid) {
+    if (sys_proc_info(slot, &now) != 0 || now.pid != me.pid) {
         sys_eprint("cputime_test: FAIL -- my slot changed under me\n");
         return 1;
     }

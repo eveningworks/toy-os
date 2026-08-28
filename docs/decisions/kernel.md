@@ -3145,14 +3145,17 @@ The consequence for `strace`: it does not decode a pointer-returning
 syscall's -1, because -1 is EPERM's value and naming it would print a
 reason sbrk never gave.
 
-**Why the boolean syscalls were left alone.** `unlink`, `kill`,
-`gettime`, `proc_info`, `win_create` and friends report failure as **0**,
-not -1. A negative code is TRUTHY, so returning one from those would
-make every `if (!sys_unlink(p))` caller read a failure as SUCCESS --
-silently, everywhere, at once. Their polarity flip is caller-visible and
-belongs in its own change; the roadmap carries it. This is the same rule
-the plan set for itself: this change alters only what a syscall
-REPORTS, never what it does.
+**Why the boolean syscalls were left alone -- and then flipped in one
+commit.** `unlink`, `kill`, `gettime`, `proc_info`, `win_create` and
+friends reported failure as **0**, not -1. A negative code is TRUTHY,
+so converting them piecemeal would have made `if (!sys_unlink(p))`
+callers read failures as SUCCESS -- silently, everywhere, at once. So
+they were skipped by the original conversion and flipped later as one
+atomic change: kernel handlers, the libsys wrappers, and every ring-3
+caller together (docs/errno-design.md's leftover section records what
+the flip found, including tolibc wrappers that had been quietly
+POSIX-inverted). This is the same rule the plan set for itself: alter
+only what a syscall REPORTS, never what it does.
 
 ## Why service ordering is `After=`/`Before=` and not a priority number
 

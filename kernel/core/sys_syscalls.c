@@ -83,12 +83,12 @@ int sys_gettime(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
     if (!vmm_validate_user_range(pml4, c->a0, sizeof(struct rtc_time))) {
         klog_write("syscall: gettime() rejected -- invalid pointer\n");
-        c->regs[14] = 0;
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         struct rtc_time t;
         rtc_read_local(&t);
         vmm_copy_to_user(pml4, c->a0, &t, sizeof t); // range validated just above
-        c->regs[14] = 1;
+        c->regs[14] = 0;
     }
     return 0;
 }
@@ -107,7 +107,7 @@ int sys_pci_info(struct syscall_ctx *c) {
         c->regs[14] = (uint64_t)(int64_t)(dev ? -EFAULT : -EINVAL);
     } else {
         vmm_copy_to_user(pml4, c->a1, dev, sizeof *dev); // range validated just above
-        c->regs[14] = 1;
+        c->regs[14] = 0;
     }
     return 0;
 }
@@ -121,7 +121,7 @@ int sys_cpu_info(struct syscall_ctx *c) {
         struct cpu_info ci;
         cpu_info_get(&ci);
         vmm_copy_to_user(pml4, c->a0, &ci, sizeof ci); // range validated just above
-        c->regs[14] = 1;
+        c->regs[14] = 0;
     }
     return 0;
 }
@@ -332,7 +332,7 @@ int sys_set_color(struct syscall_ctx *c) {
         c->regs[14] = (uint64_t)(int64_t)-EINVAL;
     } else {
         vga_set_color((enum vga_color)c->a0, (enum vga_color)c->a1);
-        c->regs[14] = 1;
+        c->regs[14] = 0;
     }
     return 0;
 }

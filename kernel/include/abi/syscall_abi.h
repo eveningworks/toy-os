@@ -27,13 +27,12 @@
 //   - Code poking the RAW interface -- the /tests diagnostics, which
 //     exist to do exactly that -- sees the code, not -1. A raw test
 //     asserting `== -1` is asserting EPERM, since EPERM is 1.
-//   - The calls documented as returning 0 ON FAILURE (SYS_UNLINK,
-//     SYS_KILL, SYS_GETTIME, SYS_PROC_INFO, SYS_WIN_CREATE) were
-//     deliberately NOT converted: a negative code is TRUTHY, so
-//     returning one would make every `if (!sys_unlink(p))` caller read a
-//     failure as success. A call whose SUCCESS is 1 and whose failure
-//     was -1 (SYS_SET_COLOR) was converted like any other -- it is the
-//     failure value, not the success value, that decides.
+//   - The calls that once returned 0 ON FAILURE (SYS_UNLINK, SYS_KILL,
+//     SYS_GETTIME, SYS_PROC_INFO, SYS_WIN_CREATE, SYS_GUI_INIT) were
+//     FLIPPED in one commit with every caller: 0 is success and a
+//     negative code the reason, like everything else. The stragglers
+//     whose SUCCESS was a magic 1 (SYS_SET_COLOR, SYS_PCI_INFO,
+//     SYS_CPU_INFO, SYS_WIN_PRESENT, SYS_PIPE) return 0 now too.
 //     See docs/errno-design.md.
 //
 // Stated once here rather than edited into two dozen comments that would
@@ -122,9 +121,9 @@
 #define SYS_GUI_INIT     3 // RDI = pointer to a `struct gui_info` (out).
                             // Maps the real linear framebuffer directly
                             // into the caller's address space at
-                            // GUI_FB_VADDR. Returns 1 (RAX) on success,
-                            // 0 on failure (bad pointer, no framebuffer,
-                            // or a mapping ran out of memory).
+                            // GUI_FB_VADDR. Returns 0 (RAX) on success;
+                            // -EFAULT for a bad pointer, -ENOMEM when a
+                            // mapping ran out of memory.
 #define SYS_GUI_POLL_KEY 4 // No arguments. Returns (RAX, sign-extended)
                             // a queued key same as keyboard_getchar()
                             // would, or -1 if none is waiting yet --
@@ -200,16 +199,16 @@ struct win_request {
                            // (in/out). Allocates + maps a private,
                            // zeroed w*h*4-byte pixel buffer at
                            // WIN_BUF_VADDR; also records x/y for
-                           // SYS_WIN_PRESENT to use. Returns 1 (RAX) on
-                           // success, 0 on failure (bad pointer, size
-                           // zero or over WIN_MAX_W/H, or out of
-                           // physical memory).
+                           // SYS_WIN_PRESENT to use. Returns 0 (RAX) on
+                           // success; -EFAULT for a bad pointer, -EINVAL
+                           // for a size of zero or over WIN_MAX_W/H,
+                           // -ENOMEM when out of physical memory.
 #define SYS_WIN_PRESENT 8 // No arguments. Composites the buffer from
                            // SYS_WIN_CREATE onto the real screen at the
                            // position given there, kernel-drawn title
-                           // bar + close button included. Returns 1
-                           // (RAX), or -1 if the calling process never
-                           // called SYS_WIN_CREATE.
+                           // bar + close button included. Returns 0
+                           // (RAX), or -EPERM if the calling process
+                           // never called SYS_WIN_CREATE.
 
 // Real file I/O against the in-memory filesystem (fs.c) -- the piece a
 // future libc's fopen()/fread()/fwrite() would sit on top of (see the
@@ -294,10 +293,11 @@ struct win_request {
 #define SYS_UNLINK 12 // RDI = pointer to a NUL-terminated path (same
                        // length limit as SYS_OPEN). Wraps fs_delete()
                        // (fs.c) -- deletes a file, or an empty
-                       // directory. Returns 1 (RAX) on success, 0 on
-                       // failure (bad pointer, doesn't exist, or a
-                       // non-empty directory -- fs_delete() doesn't do
-                       // recursive delete).
+                       // directory. Returns 0 (RAX) on success; -EFAULT
+                       // for a bad pointer, -ENOENT when it doesn't
+                       // exist, -EIO when it exists and was still
+                       // refused (a non-empty directory -- fs_delete()
+                       // doesn't do recursive delete).
 
 // A directory entry as filled in by SYS_LISTDIR below -- deliberately
 // reuses FS_PATH_MAX for `name` even though a single path component is
@@ -381,8 +381,8 @@ struct sys_dirent {
                         // timer.h). Wraps rtc_read_local() (tz.c) --
                         // the same timezone-adjusted wall-clock time the
                         // shell's `time` command and the taskbar clock
-                        // show, not raw UTC hardware time. Returns 1
-                        // (RAX) on success, 0 on a bad pointer.
+                        // show, not raw UTC hardware time. Returns 0
+                        // (RAX) on success, -EFAULT on a bad pointer.
 
 #define SYS_YIELD 15 // No arguments. Cooperatively gives up the rest of
                       // this process's timeslice to the next
@@ -453,9 +453,9 @@ struct sys_dirent {
 #define SYS_PCI_INFO  20 // RDI = device index (0 .. SYS_PCI_COUNT's
                           // result - 1), RSI = pointer to a
                           // `struct pci_device` (out, see pci.h).
-                          // Returns 1 (RAX) on success, -1 for an
-                          // out-of-range index or an invalid output
-                          // pointer. Wraps pci_device_at().
+                          // Returns 0 (RAX) on success, -EINVAL for an
+                          // out-of-range index, -EFAULT for an invalid
+                          // output pointer. Wraps pci_device_at().
 
 // Added for /bin/ls's `--color=auto`-by-default output (userland/ls.c)
 // -- the first syscall letting a ring-3 process affect its own console
@@ -470,12 +470,12 @@ struct sys_dirent {
 // fallback color.
 #define SYS_SET_COLOR 21 // RDI = foreground vga_color, RSI = background
                           // vga_color. Wraps vga_set_color() directly.
-                          // Returns 1 (RAX) on success, -1 if either
+                          // Returns 0 (RAX) on success, -EINVAL if either
                           // value is outside 0-15 (VGA_BLACK..VGA_WHITE).
 
 #define SYS_CPU_INFO 22 // RDI = pointer to a `struct cpu_info` (out, see
-                         // api/cpuinfo.h). Returns 1 (RAX), or -1 if the
-                         // pointer isn't a writable user range.
+                         // api/cpuinfo.h). Returns 0 (RAX), or -EFAULT
+                         // if the pointer isn't a writable user range.
                          //
                          // Note what this syscall is FOR, because half
                          // of what it returns needs no kernel at all:
@@ -572,8 +572,9 @@ struct sys_dirent {
                             // enters the WM's window list at all.
 
 #define SYS_PIPE    26 // RDI = pointer to int[2] (out): [0] = read fd,
-                        // [1] = write fd. Returns 1, or -1 (bad
-                        // pointer, or no free pipe).
+                        // [1] = write fd. Returns 0; -EFAULT for a bad
+                        // pointer, -ENFILE/-EMFILE for a full pipe or
+                        // descriptor table.
 
 #define SYS_SPAWN 27 // RDI = pointer to a `struct spawn_msg` (below).
                       // Returns the child's pid, or a negative errno.
@@ -743,8 +744,11 @@ struct spawn_msg {
 
 #define SYS_PROC_INFO 30 // RDI = process-table slot index, RSI = pointer
                           // to a `struct proc_info` (out, see
-                          // abi/proc_info.h). Returns 1 on success, 0
-                          // for a bad index or pointer.
+                          // abi/proc_info.h). Returns 0 on success;
+                          // -EINVAL for a bad index (every enumerator's
+                          // terminator), -EFAULT for a bad pointer. An
+                          // EMPTY slot (pid 0) is a SUCCESS -- callers
+                          // skip it themselves.
                           //
                           // Indexed by SLOT, not by pid, so a caller can
                           // walk the whole table without knowing which
@@ -762,13 +766,14 @@ struct spawn_msg {
                           // operation and says so.
 
 #define SYS_KILL      31 // RDI = pid, RSI = SIGNAL number (abi/signal_abi.h).
-                          // Returns 1 if the signal was delivered, 0 if
-                          // there was no such process or the number is
-                          // not a signal.
+                          // Returns 0 if the signal was delivered,
+                          // -ESRCH if there was no such process (or the
+                          // group was empty, or the number is not a
+                          // signal).
                           //
                           // **RDI < 0 NAMES A PROCESS GROUP**, POSIX's
                           // rule: `kill(-pgid, sig)` signals every live
-                          // member of that group and returns 1 if it
+                          // member of that group and succeeds if it
                           // reached at least one. Pids are 1-based, so a
                           // negative number cannot collide with one.
                           //

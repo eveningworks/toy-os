@@ -1104,7 +1104,7 @@ int sys_pipe(struct syscall_ctx *c) {
         } else {
             int out[2] = { rfd, wfd };
             vmm_copy_to_user(pml4, c->a0, out, sizeof out); // range validated above
-            c->regs[14] = 1;
+            c->regs[14] = 0;
         }
     }
     return 0;

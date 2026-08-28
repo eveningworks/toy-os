@@ -123,7 +123,7 @@ int sys_gui_init(struct syscall_ctx *c) {
 
     if (!vmm_validate_user_range(pml4, c->a0, sizeof(struct gui_info))) {
         klog_write("syscall: gui_init() rejected -- invalid info pointer\n");
-        c->regs[14] = 0;
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         struct gui_info info;
         info.width = (uint32_t)gfx_width();
@@ -145,7 +145,7 @@ int sys_gui_init(struct syscall_ctx *c) {
         }
         klog_write(ok ? "syscall: gui_init() mapped the framebuffer\n"
                          : "syscall: gui_init() failed to map the framebuffer\n");
-        c->regs[14] = (uint64_t)ok;
+        c->regs[14] = ok ? 0 : (uint64_t)(int64_t)-ENOMEM;
     }
     return 0;
 }
@@ -182,7 +182,7 @@ int sys_win_create(struct syscall_ctx *c) {
 
     if (!vmm_validate_user_range(pml4, c->a0, sizeof(struct win_request))) {
         klog_write("syscall: win_create() rejected -- invalid request pointer\n");
-        c->regs[14] = 0;
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         struct win_request req;
         vmm_copy_from_user(pml4, &req, c->a0, sizeof req); // range validated just above
@@ -190,7 +190,7 @@ int sys_win_create(struct syscall_ctx *c) {
 
         if (bad_size) {
             klog_write("syscall: win_create() rejected -- bad size\n");
-            c->regs[14] = 0;
+            c->regs[14] = (uint64_t)(int64_t)-EINVAL;
         } else {
             uint64_t size = (uint64_t)req.w * 4 * req.h;
             uint32_t pages_needed = (uint32_t)((size + 4095) / 4096);
@@ -212,7 +212,7 @@ int sys_win_create(struct syscall_ctx *c) {
             if (!ok) {
                 for (uint32_t j = 0; j < i; j++) pmm_free_frame(g_win_frames[j]);
                 klog_write("syscall: win_create() rejected -- out of physical memory\n");
-                c->regs[14] = 0;
+                c->regs[14] = (uint64_t)(int64_t)-ENOMEM;
             } else {
                 g_win_pml4 = pml4;
                 g_win_pages = pages_needed;
@@ -225,7 +225,7 @@ int sys_win_create(struct syscall_ctx *c) {
                 req.pitch = g_win_pitch;
                 req.bpp = 32;
                 vmm_copy_to_user(pml4, c->a0, &req, sizeof req);
-                c->regs[14] = 1;
+                c->regs[14] = 0;
             }
         }
     }
@@ -238,7 +238,7 @@ int sys_win_present(struct syscall_ctx *c) {
         c->regs[14] = (uint64_t)(int64_t)-EPERM; // not this process's window
     } else {
         win_present();
-        c->regs[14] = 1;
+        c->regs[14] = 0;
     }
     return 0;
 }

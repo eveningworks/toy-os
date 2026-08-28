@@ -161,13 +161,8 @@ int main(void) {
     check(sys_lseek(1, 0, SYS_SEEK_CUR) == -1 && sys_errno() == ESPIPE,
           "so seeking it is ESPIPE");
 
-    // sys_pipe() returns 1 on success, not 0 -- see rt/sys.h. Getting
-    // that backwards made this whole section report "could not make a
-    // pipe" against a perfectly working kernel, which is this repo's
-    // standing "suspect your own test first" lesson arriving on
-    // schedule.
     int p[2];
-    if (sys_pipe(p) > 0) {
+    if (sys_pipe(p) == 0) {
         check(sys_fstat(p[0], &st) == 0, "fstat on a pipe");
         check((st.flags & (SYS_STAT_TTY | SYS_STAT_SEEKABLE)) == 0,
               "which is neither a terminal nor seekable");

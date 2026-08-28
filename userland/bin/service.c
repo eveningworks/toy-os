@@ -132,7 +132,7 @@ static void print_line(const char *line) {
 // this file's header.
 static int init_pid(void) {
     struct proc_info info;
-    for (int i = 0; sys_proc_info(i, &info); i++) {
+    for (int i = 0; sys_proc_info(i, &info) == 0; i++) {
         if (info.pid > 0 && info.ppid == 0 && strcmp(info.name, "init") == 0)
             return info.pid;
     }

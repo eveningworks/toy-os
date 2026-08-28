@@ -249,7 +249,7 @@ int main(void) {
     if (count > MAX_DEVS) count = MAX_DEVS; // more than this and names are the least of it
 
     for (int64_t i = 0; i < count; i++) {
-        if (sys_pci_info((int)i, &g_dev[g_count]) == 1) g_count++;
+        if (sys_pci_info((int)i, &g_dev[g_count]) == 0) g_count++;
     }
 
     load_names();

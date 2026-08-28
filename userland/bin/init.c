@@ -766,7 +766,7 @@ static void poll_readiness(void) {
 
     struct proc_info pi;
     for (int slot = 0; slot < SYS_PROC_MAX; slot++) {
-        if (!sys_proc_info(slot, &pi) || pi.pid == 0 || !pi.ready) continue;
+        if (sys_proc_info(slot, &pi) != 0 || pi.pid == 0 || !pi.ready) continue;
         for (int i = 0; i < g_svc_count; i++) {
             struct service *s = &g_svc[i];
             if (s->pid != pi.pid || s->ready) continue;
