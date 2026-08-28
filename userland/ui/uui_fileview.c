@@ -778,7 +778,11 @@ static void ic_drag_end(struct uui_fileview *fv) {
 
 static int ic_wheel(struct uui_fileview *fv, int notches) {
     int before = fv->icon_top;
-    fv->icon_top += notches;
+    // MINUS, like every scrolling widget here: positive notches mean
+    // the wheel rolled AWAY (mouse.c negates the raw byte), which
+    // scrolls the view UP. This shipped as += and read exactly like an
+    // inverted mouse.
+    fv->icon_top -= notches;
     ic_clamp(fv);
     return fv->icon_top != before;
 }

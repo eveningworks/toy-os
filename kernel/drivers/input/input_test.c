@@ -270,3 +270,28 @@ KTEST("input", "a keycode goes to the layout unchanged, whichever driver reporte
     // bounds, which is what stops the loop above walking off the end.
     KTEST_ASSERT_EQ((int)keyboard_layout_translate(60000, 0, 0), 0);
 }
+
+KTEST("input", "the scroll settings transform the wheel where it is consumed") {
+    int save_step = mouse_scroll_step();
+    int save_inv = mouse_scroll_invert();
+
+    // Preemption off: win_input_poll() consumes the same delta from
+    // scheduler_idle(), i.e. potentially between the feed and the read.
+    scheduler_preempt_disable();
+    (void)mouse_get_wheel_delta(); // drain whatever the desktop had coming
+
+    mouse_set_scroll_step(3);
+    mouse_set_scroll_invert(1);
+    mouse_feed_wheel(2);
+    KTEST_ASSERT_EQ(mouse_get_wheel_delta(), -6);
+
+    // Defaults again: a multiplier must not compound across reads.
+    mouse_set_scroll_step(1);
+    mouse_set_scroll_invert(0);
+    mouse_feed_wheel(-1);
+    KTEST_ASSERT_EQ(mouse_get_wheel_delta(), -1);
+
+    mouse_set_scroll_step(save_step);
+    mouse_set_scroll_invert(save_inv);
+    scheduler_preempt_enable();
+}

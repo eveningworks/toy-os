@@ -34,6 +34,15 @@
 #define MOUSE_CONFIG_FILE "/etc/toyos.conf"
 #define MOUSE_SPEED_KEY "mouse_speed"
 #define MOUSE_ACCEL_KEY "mouse_accel"
+#define SCROLL_STEP_KEY "scroll_step"
+#define SCROLL_DIR_KEY  "scroll_dir"
+
+// The wheel's multiplier: 1 is one notch per notch. 5 is the useful
+// ceiling -- past it a single click of the wheel jumps a whole page in
+// a three-line-per-notch terminal.
+#define SCROLL_STEP_MIN     1
+#define SCROLL_STEP_MAX     5
+#define SCROLL_STEP_DEFAULT 1
 
 // The names and what they mean, in one table each, so the choice
 // enumerator, the parser and the getter cannot drift.
@@ -78,8 +87,18 @@ static const struct named_level ACCELS[] = {
 };
 #define ACCEL_COUNT ((int)(sizeof ACCELS / sizeof ACCELS[0]))
 
+// Direction is an ENUM, not a bool the registry has not got:
+// "inverted" is macOS's natural scrolling under the name Windows and
+// KDE give it, and a name beats remembering which way `1` points.
+static const struct named_level SCROLL_DIRS[] = {
+    { "normal",   0 },
+    { "inverted", 1 },
+};
+#define SCROLL_DIR_COUNT ((int)(sizeof SCROLL_DIRS / sizeof SCROLL_DIRS[0]))
+
 static int g_speed_pct = SPEED_DEFAULT;
 static int g_accel_index = 0; // "off"
+static int g_scroll_dir_index = 0; // "normal"
 
 // A percentage into what mouse.c wants: a numerator over
 // MOUSE_SPEED_UNIT, so 100% is exactly the unit.
@@ -121,6 +140,15 @@ void mouse_config_init(void) {
     if (etc_config_get(MOUSE_CONFIG_FILE, MOUSE_ACCEL_KEY, value, sizeof value)) {
         int i = find_level(ACCELS, ACCEL_COUNT, value);
         if (i >= 0) { g_accel_index = i; mouse_set_accel_threshold(ACCELS[i].value); }
+    }
+    if (etc_config_get(MOUSE_CONFIG_FILE, SCROLL_STEP_KEY, value, sizeof value)) {
+        int step = parse_speed(value); // a plain number; the legacy names miss
+        if (step >= SCROLL_STEP_MIN && step <= SCROLL_STEP_MAX)
+            mouse_set_scroll_step(step);
+    }
+    if (etc_config_get(MOUSE_CONFIG_FILE, SCROLL_DIR_KEY, value, sizeof value)) {
+        int i = find_level(SCROLL_DIRS, SCROLL_DIR_COUNT, value);
+        if (i >= 0) { g_scroll_dir_index = i; mouse_set_scroll_invert(SCROLL_DIRS[i].value); }
     }
 }
 
@@ -169,6 +197,39 @@ static int accel_apply(const char *value) {
                ? SETTING_SAVED : SETTING_UNSAVED;
 }
 
+static void scroll_step_get(char *out, uint32_t out_size) {
+    k_snprintf(out, out_size, "%d", mouse_scroll_step());
+}
+
+static int scroll_step_apply(const char *value) {
+    int step = parse_speed(value);
+    if (step < SCROLL_STEP_MIN || step > SCROLL_STEP_MAX) return SETTING_INVALID;
+    mouse_set_scroll_step(step);
+    char buf[16];
+    k_snprintf(buf, sizeof buf, "%d", step);
+    return etc_config_set(MOUSE_CONFIG_FILE, SCROLL_STEP_KEY, buf)
+               ? SETTING_SAVED : SETTING_UNSAVED;
+}
+
+static int scroll_dir_choice(int index, char *out, uint32_t out_size) {
+    if (index < 0 || index >= SCROLL_DIR_COUNT) return 0;
+    k_strlcpy(out, SCROLL_DIRS[index].name, out_size);
+    return 1;
+}
+
+static void scroll_dir_get(char *out, uint32_t out_size) {
+    k_strlcpy(out, SCROLL_DIRS[g_scroll_dir_index].name, out_size);
+}
+
+static int scroll_dir_apply(const char *value) {
+    int i = find_level(SCROLL_DIRS, SCROLL_DIR_COUNT, value);
+    if (i < 0) return SETTING_INVALID;
+    g_scroll_dir_index = i;
+    mouse_set_scroll_invert(SCROLL_DIRS[i].value);
+    return etc_config_set(MOUSE_CONFIG_FILE, SCROLL_DIR_KEY, SCROLL_DIRS[i].name)
+               ? SETTING_SAVED : SETTING_UNSAVED;
+}
+
 // BOTH declare group "Mouse", and so do the two cursor settings -- which
 // is the whole point of groups: one page carrying every knob that is
 // about the pointer, rather than four pages a user has to find.
@@ -199,7 +260,36 @@ static const struct setting g_accel_setting = {
     .apply  = accel_apply,
 };
 
+static const struct setting g_scroll_step_setting = {
+    .name   = SCROLL_STEP_KEY,
+    .label  = "Scroll speed",
+    .type   = SETTING_TYPE_INT,
+    .file   = MOUSE_CONFIG_FILE,
+    .category = "Input",
+    .group  = "Mouse",
+    .min    = SCROLL_STEP_MIN,
+    .max    = SCROLL_STEP_MAX,
+    .step   = 1,
+    .unit   = "x",
+    .get    = scroll_step_get,
+    .apply  = scroll_step_apply,
+};
+
+static const struct setting g_scroll_dir_setting = {
+    .name   = SCROLL_DIR_KEY,
+    .label  = "Scroll direction",
+    .type   = SETTING_TYPE_ENUM,
+    .file   = MOUSE_CONFIG_FILE,
+    .category = "Input",
+    .group  = "Mouse",
+    .choice = scroll_dir_choice,
+    .get    = scroll_dir_get,
+    .apply  = scroll_dir_apply,
+};
+
 void mouse_config_setting_register(void) {
     setting_register(&g_speed_setting);
     setting_register(&g_accel_setting);
+    setting_register(&g_scroll_step_setting);
+    setting_register(&g_scroll_dir_setting);
 }

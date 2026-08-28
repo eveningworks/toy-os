@@ -91,7 +91,7 @@ def settle(qmp, tmp, box, timeout_s=25.0):
     return False
 
 
-def region_hashes(qmp, tmp, boxes):
+def region_hashes(qmp, tmp, boxes, interval_s=None):
     """One md5 per box per capture, as {name: [hash, ...]}."""
     from PIL import Image
     out = {name: [] for name in boxes}
@@ -100,7 +100,7 @@ def region_hashes(qmp, tmp, boxes):
         im = Image.open(path).convert("RGB")
         for name, box in boxes.items():
             out[name].append(hashlib.md5(im.crop(box).tobytes()).hexdigest()[:10])
-        time.sleep(INTERVAL_S)
+        time.sleep(interval_s if interval_s is not None else INTERVAL_S)
     return out
 
 
@@ -161,7 +161,18 @@ def run(dbg, qmp, tmp, res):
 
     # The control. If this one fails, the two above prove NOTHING -- a
     # harness handing back one cached frame would pass them both.
+    #
+    # RETRIED OVER A LONGER WINDOW before failing: under the full
+    # suite's parallelism a starved guest can genuinely not repaint the
+    # once-a-second clock inside SAMPLES x INTERVAL_S (~3s) -- measured
+    # twice in one day as the suite's only red check, passing solo both
+    # times. A truly frozen capture pipeline still fails the slow pass.
     clock = sorted(set(seen["the taskbar clock"]))
+    if len(clock) <= 1:
+        slow = region_hashes(qmp, tmp,
+                              {"the taskbar clock": boxes["the taskbar clock"]},
+                              interval_s=1.2)
+        clock = sorted(set(slow["the taskbar clock"]))
     res.check("the taskbar clock DOES change (proves motion is visible)",
               len(clock) > 1,
               f"{len(clock)} distinct in {SAMPLES}")

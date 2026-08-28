@@ -247,10 +247,22 @@ void mouse_feed_buttons(uint8_t mask) { mouse_buttons = mask & 0x07; }
 
 void mouse_feed_wheel(int notches) { wheel_delta += notches; }
 
+// See api/mouse.h: applied at the CONSUMING read, the one point every
+// wheel source and consumer share -- transforming at feed time would
+// re-multiply whatever accumulated between reads of the setting.
+static int scroll_step = 1;
+static int scroll_invert = 0;
+
+void mouse_set_scroll_step(int step)  { scroll_step = step >= 1 ? step : 1; }
+void mouse_set_scroll_invert(int on)  { scroll_invert = on ? 1 : 0; }
+int  mouse_scroll_step(void)          { return scroll_step; }
+int  mouse_scroll_invert(void)        { return scroll_invert; }
+
 int mouse_get_wheel_delta(void) {
     int d = wheel_delta;
     wheel_delta = 0;
-    return d;
+    d *= scroll_step;
+    return scroll_invert ? -d : d;
 }
 
 // The bounds the pointer is currently clamped to. NOT necessarily the

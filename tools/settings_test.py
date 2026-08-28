@@ -629,6 +629,25 @@ def main():
     # it is checked by the staged value moving rather than assumed.
     check("the speed control is a spinbox", speed_ctl["kind"] == "spin",
           f"kind={speed_ctl['kind']}")
+
+    # SCROLLED INTO VIEW FIRST, like the slider flow below: the Mouse
+    # group grew the two scroll-wheel settings (mouse.scroll_*), which
+    # pushed this control below the fold at the default window size --
+    # where a click at its reported rect lands on whatever the scroll
+    # view left there instead (it staged the TIMEZONE, one page up).
+    page_h = win["content"]["h"]
+    for _ in range(4):
+        if speed_ctl["y"] + speed_ctl["h"] < page_h - 30:
+            break
+        mark_sv = len(drain(dbg))
+        dbg.warp_cursor(qmp, cx + speed_ctl["x"] + 10, cy + page_h // 2)
+        for _ in range(3):
+            dbg.send("gui wheel -1")
+        dbg.settle()
+        time.sleep(0.4)
+        fresh = controls(dbg, mark_sv)
+        speed_ctl = fresh.get("system.mouse_speed") or speed_ctl
+
     click_y = speed_ctl["y"] + speed_ctl["h"] // 4
     click(speed_ctl["x"] + speed_ctl["w"] - 7, click_y)
     # ASSERTED ON A LOGGED FACT, not on the status bar's pixels: the

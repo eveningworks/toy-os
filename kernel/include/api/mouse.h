@@ -16,6 +16,14 @@ void mouse_set_speed(int numerator);
 // packet has its excess doubled. 0 turns it off, which is the default
 // and what this driver did before the setting existed.
 void mouse_set_accel_threshold(int threshold);
+
+// The wheel's two knobs, applied where the delta is CONSUMED
+// (mouse_get_wheel_delta), so every source -- PS/2's 4th byte,
+// virtio-input's REL_WHEEL -- and every consumer see one behaviour.
+void mouse_set_scroll_step(int step);     // notches multiplier, >= 1
+void mouse_set_scroll_invert(int on);
+int  mouse_scroll_step(void);
+int  mouse_scroll_invert(void);
 void mouse_set_bounds(int width, int height);
 // Called by i8042_poll() with one byte already read from the shared
 // PS/2 data port. Don't call this from an IRQ handler directly.

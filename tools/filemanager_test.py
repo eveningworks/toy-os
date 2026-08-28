@@ -940,6 +940,34 @@ def run(dbg, qmp, tmp, res):
                   chroma(cell_rect(2)) > 40 and chroma(cell_rect(3)) < 10,
                   f"chroma jpg={chroma(cell_rect(2))} txt={chroma(cell_rect(3))}")
 
+        # The wheel: down scrolls DOWN (this shipped inverted once), and
+        # the universal scroll_dir setting flips it for every app at the
+        # kernel's single consuming point. The observable is the grid's
+        # first cell riding up (cellgrid y falls) as the view scrolls.
+        for i in range(14):
+            dbg.send(f"sh touch {SRC}/pad{i:02}.txt")
+        wait_listing(dbg, SRC, lambda names: "pad13" in [n.split(".")[0] for n in names])
+        lay = wait_layout(dbg, win, lambda l: l.rows.get(0, 0) >= 17) or lay
+        px0, py0, pw0, ph0 = lay.pane[0]
+        dbg.warp_cursor(qmp, ox + px0 + pw0 // 2, oy + py0 + ph0 // 2)
+        y_before = lay.cellgrid[0][1]
+        qmp.wheel("down", 2)
+        lay = wait_layout(dbg, win, lambda l: 0 in l.cellgrid and
+                           l.cellgrid[0][1] != y_before) or lay
+        res.check("wheel down scrolls the grid down",
+                  0 in lay.cellgrid and lay.cellgrid[0][1] < y_before,
+                  f"cell y {y_before} -> {lay.cellgrid.get(0)}")
+
+        dbg.send("sh config set scroll_dir inverted")
+        y_now = lay.cellgrid[0][1]
+        qmp.wheel("down", 2)
+        lay = wait_layout(dbg, win, lambda l: 0 in l.cellgrid and
+                           l.cellgrid[0][1] != y_now) or lay
+        res.check("scroll_dir=inverted flips it, from the one kernel knob",
+                  0 in lay.cellgrid and lay.cellgrid[0][1] > y_now,
+                  f"cell y {y_now} -> {lay.cellgrid.get(0)}")
+        dbg.send("sh config set scroll_dir normal")
+
     # --- 16. associations: /bin/open and the override file --------------
     # The File Manager resolves through lib/uopen now, so an override
     # set at a PROMPT changes what a double click here opens.
@@ -960,7 +988,16 @@ def run(dbg, qmp, tmp, res):
             time.sleep(0.3)
         return titles
 
-    dbg.send("sh spawn /bin/open -s .txt imgview")
+    def spawn_out(cmd):
+        """A spawned child's output can drain AFTER the prompt returns
+        -- the serial read races the child's stdout. Read the command's
+        response AND a cheap follow-up, and search both."""
+        first = dbg.send(cmd) or ""
+        time.sleep(0.4)
+        second = dbg.send("sh pwd") or ""
+        return first + "\n" + second
+
+    spawn_out("sh spawn /bin/open -s .txt imgview")
     dbg.key("0x72")  # 'r' seeks readme.txt
     lay = wait_layout(dbg, win, lambda l: l.selected == "readme.txt")
     titles = open_selected_and_wait("Image")
@@ -968,17 +1005,24 @@ def run(dbg, qmp, tmp, res):
               any("Image" in t for t in titles), f"windows {titles}")
     close_others()
 
-    out = dbg.send("sh spawn /bin/open -l") or ""
+    # Retried: a reap or exit line landing on the serial console can
+    # split the child's line mid-characters; a quiet retry arrives whole.
+    out = ""
+    for _ in range(3):
+        out = spawn_out("sh spawn /bin/open -l")
+        if ".txt=imgview" in out:
+            break
+        time.sleep(0.5)
     res.check("open -l lists the override", ".txt=imgview" in out, repr(out[:160]))
 
-    dbg.send("sh spawn /bin/open -s .txt -")
+    spawn_out("sh spawn /bin/open -s .txt -")
     titles = open_selected_and_wait("readme.txt")
     res.check("clearing it (-s .txt -) hands the type back to the declaration",
               any("readme.txt" in t and "Image" not in t for t in titles),
               f"windows {titles}")
     close_others()
 
-    out = dbg.send(f"sh spawn /bin/open {SRC}/game.qoi.nope") or ""
+    out = spawn_out(f"sh spawn /bin/open {SRC}/game.qoi.nope")
     res.check("open refuses a type nothing claims, by name",
               "nothing opens" in out, repr(out[:160]))
     dbg.send("sh rm /etc/mimeapps.conf")
