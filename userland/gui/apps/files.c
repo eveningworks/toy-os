@@ -53,6 +53,7 @@
 #define ID_LEFT  1
 #define ID_RIGHT 2
 #define ID_TREE  3
+#define ID_MENU  4
 
 // Each pane's directory, remembered across runs. The per-app
 // `/etc/<app>.conf` convention has existed since desktop.conf and had
@@ -301,7 +302,30 @@ static const struct uui_menu_item menu_items[] = {
     UUI_SUBMENU("Go",   go_items),
 };
 
+// Details/Icons tick as a pair (the ACTIVE pane's current mode) and the
+// two toggles tick when their thing is SHOWN -- so "Second pane" is
+// checked in the default two-pane state, not when the option was used.
+static unsigned menu_item_flags(int code) {
+    switch (code) {
+    case CMD_VIEW_DETAILS:
+        return g_pane[g_active].mode == UUI_FILEVIEW_DETAILS ? UUI_MI_CHECKED : 0;
+    case CMD_VIEW_ICONS:
+        return g_pane[g_active].mode == UUI_FILEVIEW_ICONS ? UUI_MI_CHECKED : 0;
+    case CMD_VIEW_PANES:
+        return g_single ? 0 : UUI_MI_CHECKED;
+    case CMD_VIEW_TREE:
+        return g_tree_on ? UUI_MI_CHECKED : 0;
+    default:
+        return 0;
+    }
+}
+
+// THE MENU BAR IS ROUTED, not hand-dispatched: this app has routed
+// widgets, and the router runs before on_press -- hand-routing the
+// popup made a click on a View item ALSO select the folder-tree row
+// under it (CLAUDE.md's exact rule; the tree made it visible).
 static struct uui_item g_widgets[] = {
+    { &uui_menubar_ops,  &g_menu,    0, 0, ID_MENU },
     { &uui_fileview_ops, &g_pane[0], 0, 0, ID_LEFT },
     { &uui_fileview_ops, &g_pane[1], 0, 0, ID_RIGHT },
     { &uui_button_ops,   &g_keys[0], 0, 0, CMD_COPY },
@@ -311,6 +335,8 @@ static struct uui_item g_widgets[] = {
     { &uui_button_ops,   &g_keys[4], 0, 0, CMD_DELETE },
     { &uui_tree_ops,     &g_tree,    0, 0, ID_TREE },
 };
+#define WIDGET_PANE0 1
+#define WIDGET_PANE1 2
 #define WIDGET_TREE ((int)(sizeof g_widgets / sizeof g_widgets[0]) - 1)
 
 static void set_note(const char *s) { strlcpy(g_stat_note, s, sizeof g_stat_note); }
@@ -752,8 +778,8 @@ static void layout_all(int cw, int ch) {
 
     // Visibility is decided beside the geometry: the router skips a
     // hidden item, so a hidden pane cannot be clicked either.
-    g_widgets[0].hidden = g_single && g_active != 0;
-    g_widgets[1].hidden = g_single && g_active != 1;
+    g_widgets[WIDGET_PANE0].hidden = g_single && g_active != 0;
+    g_widgets[WIDGET_PANE1].hidden = g_single && g_active != 1;
     g_widgets[WIDGET_TREE].hidden = !g_tree_on;
 
     int n = (int)(sizeof g_keys / sizeof g_keys[0]);
@@ -840,6 +866,11 @@ static void log_layout(void) {
     }
     const char *sel = uui_fileview_selected_name(active());
     uapp_logf_layout("files: layout active %d\n", g_active);
+    if (uui_menubar_is_open(&g_menu)) {
+        int mx, my, mw, mh;
+        if (uui_menubar_popup_rect(&g_menu, 0, &mx, &my, &mw, &mh))
+            uapp_logf_layout("files: layout menu %d %d %d %d\n", mx, my, mw, mh);
+    }
     uapp_logf_layout("files: layout view %d %d single %d tree %d %d\n",
           (int)g_pane[0].mode, (int)g_pane[1].mode, g_single, g_tree_on,
           g_tree_on ? g_tree_count : 0);
@@ -862,7 +893,6 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     (void)a;
     layout_all(d->surface->w, d->surface->h);
     ugfx_fill_rect(d->surface, 0, 0, d->surface->w, d->surface->h, UTHEME_PANEL_BG);
-    uui_menubar_draw(d->surface, &g_menu);
     draw_pane_headers(d->surface);
     uui_statusbar_draw(d->surface, &g_status);
     log_layout();
@@ -879,13 +909,26 @@ static void on_draw_over(struct uapp *a, struct uapp_draw *d) {
     ugfx_draw_rect(d->surface, x, y, w, h, UTHEME_ACCENT);
     ugfx_draw_rect(d->surface, x + 1, y + 1, w - 2, h - 2, UTHEME_ACCENT);
 
-    uui_menubar_draw_popup(d->surface, &g_menu);
     draw_modal(d->surface);
 }
 
 // --- input --------------------------------------------------------------
 
 static void on_widget(struct uapp *a, int id, int reason) {
+    // The modal owns the window: a routed widget can still be clicked
+    // under it, and acting on that could open a second modal over the
+    // first. The menu's parked code is TAKEN so it cannot replay later.
+    if (g_modal != MODAL_NONE) {
+        if (id == ID_MENU) (void)uui_menubar_take_code(&g_menu);
+        return;
+    }
+    if (id == ID_MENU) {
+        // The commit is PARKED in the widget (ui/uui_menubar.h): the
+        // ops release slot can only say "changed", not which item.
+        int code = uui_menubar_take_code(&g_menu);
+        if (code >= 0) do_command(a, code);
+        return;
+    }
     if (reason != UUI_REASON_RELEASE) return;
 
     if (id == ID_LEFT || id == ID_RIGHT) {
@@ -909,24 +952,6 @@ static void on_widget(struct uapp *a, int id, int reason) {
         return;
     }
     do_command(a, id); // the function-key buttons carry their command as their id
-}
-
-static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
-    (void)buttons;
-    if (g_modal != MODAL_NONE) return; // modal: the panes are not clickable
-    if (uui_menubar_press(&g_menu, x, y)) uapp_redraw(a);
-}
-
-static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
-    (void)buttons;
-    if (uui_menubar_motion(&g_menu, x, y)) uapp_redraw(a);
-}
-
-static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
-    (void)buttons;
-    int code = uui_menubar_release(&g_menu, x, y);
-    if (code > 0) do_command(a, code);
-    else if (code == 0 && !uui_menubar_is_open(&g_menu)) uapp_redraw(a);
 }
 
 static void on_key(struct uapp *a, int key, unsigned mods) {
@@ -1065,6 +1090,7 @@ int main(int argc, char **argv) {
 
     uui_menubar_init(&g_menu, menu_items,
                       (int)(sizeof menu_items / sizeof menu_items[0]));
+    g_menu.item_flags = menu_item_flags;
     uui_statusbar_init(&g_status);
     g_status.panes[0].text = g_stat_dir;
     g_status.panes[0].chars = 0;
@@ -1138,9 +1164,6 @@ int main(int argc, char **argv) {
         .on_draw      = on_draw,
         .on_draw_over = on_draw_over,
         .on_widget    = on_widget,
-        .on_press     = on_press,
-        .on_motion    = on_motion,
-        .on_release   = on_release,
         .on_key       = on_key,
         .on_tick      = on_tick,
         .on_resize    = on_resize,

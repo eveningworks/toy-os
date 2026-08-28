@@ -96,6 +96,7 @@ class Layout:
         self.marked = (0, 0)
         self.view = None      # [mode0, mode1, single, tree_on, tree_nodes]
         self.treebox = None   # [x, y, w, h, row_h, selected_id]
+        self.menu = None      # open level-0 popup [x, y, w, h]
         self.active = None
         self.selected = None
         self.modal = None
@@ -123,6 +124,8 @@ class Layout:
                              int(p[6]), int(p[7])]
             elif p[0] == "treebox" and len(p) >= 7:
                 self.treebox = [int(v) for v in p[1:7]]
+            elif p[0] == "menu" and len(p) >= 5:
+                self.menu = [int(v) for v in p[1:5]]
 
     def complete(self):
         return 0 in self.pane and 1 in self.pane and self.active is not None
@@ -242,6 +245,22 @@ def band_drag(dbg, qmp, x0, y0, x1, y1, steps=4):
                          y0 + (y1 - y0) * i // steps)
     qmp.mouse_up()
     time.sleep(0.3)
+
+
+def gutter_ink(png, menu_rect, ox, oy):
+    """Dark pixels in the popup's tick GUTTER (the two-character column
+    left of the labels, uui_menubar.c's gutter()). Labels start after
+    it, so the only ink here is UUI_MI_CHECKED's tick."""
+    from PIL import Image
+    im = Image.open(png).convert("RGB")
+    mx, my, mw, mh = menu_rect
+    n = 0
+    for yy in range(oy + my + 2, oy + my + mh - 2):
+        for xx in range(ox + mx + 4, ox + mx + 18):
+            r, g, b = im.getpixel((xx, yy))
+            if r + g + b < 300:
+                n += 1
+    return n
 
 
 def ink_count(png, rect, rgb, tol=14):
@@ -631,6 +650,82 @@ def run(dbg, qmp, tmp, res):
     res.check("the view choices persist in /etc/files.conf",
               "left_view=icons" in conf and "tree=1" in conf and "panes=2" in conf,
               f"conf: {conf!r}")
+
+    # --- 12. the View menu ticks its active options ---------------------
+    # State right now: left pane icons, two panes, tree on -- three of
+    # the four View items are checked. The FILE menu is the control (no
+    # checkable item in it), and toggling the tree off must take exactly
+    # its tick away.
+    # Park the cursor far from where the popups drop: its sprite's dark
+    # outline reads as tick ink if it is left over the gutter (it was,
+    # from the expander click -- 18 phantom pixels).
+    qx2, qy2, qw2, qh2 = lay.pane[1] if 1 in lay.pane else lay.pane[0]
+    dbg.warp_cursor(qmp, ox + qx2 + qw2 - 20, oy + qy2 + qh2 - 20)
+
+    dbg.key(K_F10)  # File menu opens
+    lay = wait_layout(dbg, win, lambda l: l.menu is not None)
+    n_file = -1
+    if lay and lay.menu:
+        png = os.path.join(tmp, "fm_menu_file.png")
+        qmp.stable_pixels(png)
+        n_file = gutter_ink(png, lay.menu, ox, oy)
+    res.check("control: the File menu's tick gutter is empty",
+              n_file == 0, f"gutter ink={n_file}")
+
+    dbg.key(K_RIGHT)  # View menu
+    time.sleep(0.4)
+    lay = wait_layout(dbg, win, lambda l: l.menu is not None)
+    n_on = -1
+    if lay and lay.menu:
+        png = os.path.join(tmp, "fm_menu_view_on.png")
+        qmp.stable_pixels(png)
+        n_on = gutter_ink(png, lay.menu, ox, oy)
+    res.check("the View menu draws ticks on its active options",
+              n_on > 0, f"gutter ink={n_on}")
+
+    # A menu click must NOT fall through to the folder tree under the
+    # popup (the hand-routed-menubar bug, found by the maintainer: a
+    # click on a View item also selected the tree row beneath it). The
+    # View popup overlaps the tree column, so click its first row --
+    # "Details", a harmless commit -- and require the tree's selection
+    # and the pane's directory to stay put while the commit LANDS.
+    if lay and lay.menu and lay.treebox:
+        dir_before = lay.dir.get(0)
+        sel_before = lay.treebox[5]
+        mx, my = lay.menu[0], lay.menu[1]
+        qmp.click_at(ox + mx + 20, oy + my + 10)
+        lay = wait_layout(dbg, win, lambda l: l.view and l.view[0] == 1)
+        res.check("a click on a menu item commits it and does NOT reach the tree",
+                  lay is not None and lay.view and lay.view[0] == 1 and
+                  lay.dir.get(0) == dir_before and
+                  (lay.treebox is None or lay.treebox[5] == sel_before),
+                  f"view={lay and lay.view} dir={lay and lay.dir.get(0)} "
+                  f"tree sel {sel_before} -> {lay and lay.treebox and lay.treebox[5]}")
+    else:
+        res.check("a click on a menu item commits it and does NOT reach the tree",
+                  False, "no menu/tree geometry to aim with")
+
+    # The commit above CLOSED the menu, so the toggle is a full pick.
+    menu_pick(dbg, K_RIGHT, K_DOWN, K_DOWN, K_DOWN, K_ENTER)  # tree off
+    lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 0)
+    res.check("(the tree toggle landed)", lay is not None and lay.view and
+              lay.view[3] == 0, f"view={lay and lay.view}")
+    dbg.warp_cursor(qmp, ox + qx2 + qw2 - 20, oy + qy2 + qh2 - 20)
+    dbg.key(K_F10)
+    time.sleep(0.2)
+    dbg.key(K_RIGHT)
+    time.sleep(0.4)
+    lay = wait_layout(dbg, win, lambda l: l.menu is not None)
+    n_off = -1
+    if lay and lay.menu:
+        png = os.path.join(tmp, "fm_menu_view_off.png")
+        qmp.stable_pixels(png)
+        n_off = gutter_ink(png, lay.menu, ox, oy)
+    res.check("turning the folder tree off takes its tick away, keeping the others",
+              0 < n_off < n_on, f"gutter ink {n_on} -> {n_off}")
+    dbg.key(K_ESC)
+    dbg.key(K_ESC)
+
     dbg.send(f"sh rm {FILES_CONF}")
 
     teardown_fixture(dbg)
