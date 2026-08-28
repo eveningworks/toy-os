@@ -1544,30 +1544,13 @@ now be in one address space.
 
 ### Confirm the xHCI BIOS handoff on the laptop it was written for
 
-`legacy_handoff()` is built and **cannot be exercised here**: QEMU
-advertises no USB Legacy Support capability, so `legsup_off` stays 0 and
-the whole path is dead in every test in this repo. `usb_test.py` passing
-17/17 proves only that bring-up still works on a controller with nothing
-to hand off.
-
-The evidence it is RIGHT is one boot log showing `bios-owned=1` and a
-freeze whose position moved when unrelated logging changed the timing --
-a CPU in SMM, not a driver bug. The evidence it WORKS does not exist.
-
-What to look for, booting with neither `nousb` nor `usbtrace`:
-
-    usb: BIOS owns the controller -- requesting handoff
-    usb: legacy handoff done (legsup 0x..., os-owned=1)
-    usb: running, interrupt-driven
-
-Then an external USB mouse should work -- the user-visible test, and
-what `nousb` currently costs. If it still hangs, `usbtrace` prints a
-line per step and the new `requesting handoff` / `did not release` lines
-say whether the BIOS answered at all.
-
-**Delete `docs/bugs.md`'s entry when this passes.** A fixed bug is
-deleted rather than struck through, and until a boot on that machine
-says so it is diagnosed, not fixed.
+**CONFIRMED 2026-08-28**, on the machine itself (Intel `8086:9cb1`,
+Wildcat Point-LP): the live ISO boots past USB bring-up and an external
+Logitech wireless receiver works -- which exercises the handoff, the
+composite multi-interface binding and the hardware-only bring-up paths
+(port power, 64-byte contexts, scratchpad allocation) in one boot. The
+bug entry is deleted per docs/bugs.md's rule; `git log` has its history,
+and `docs/decisions/drivers.md`'s handoff entry carries the reasoning.
 
 ### `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR
 
@@ -3149,60 +3132,6 @@ process using the image [disk.img]?`.
 
 `python3 tools/flake_hunt.py ktest -n 10` is the loop for measuring any
 change to it, and it scores these runs as `error` rather than `pass`.
-
-### xHCI bring-up HANGS one real laptop
-
-Reported 2026-08-27 from a legacy-BIOS boot of the live ISO on an Intel
-laptop. The boot stops dead during USB bring-up and never reaches a
-prompt, so nothing after `usb_init()` runs.
-
-**The last output on screen**, in order:
-
-```
-usb: xHCI controller 8086:9cb1 at 00:14.0, BAR0 0xf7100000
-usb:  xECP 2 supported-protocol USB 2.0, ports 1..11
-usb:  xECP 2 supported-protocol USB 3.0, ports 12..15
-usb:  xECP 193
-usb:
-```
-
-**What that rules out.** `reset_controller()` runs BEFORE `walk_xecp()`
-and prints on failure, so the reset completed. The walk terminated on
-its own -- id 193 is in the xHCI spec's vendor-defined range (192-255),
-not garbage, and the walk is bounded at 64 hops anyway. So the hang is
-after the walk: `mw32(CONFIG)`, `setup_rings()`, or the log line
-following them. The trailing bare `usb: ` is unexplained and is the
-thing to chase first, since `klog_printf()` formats into a buffer before
-writing and should not be able to emit a partial line.
-
-**CAUSE ESTABLISHED 2026-08-27** (this section's earlier text chased
-two suspects; a later `usbtrace` boot settled it). The chain on this
-machine continues past where the original walk stopped, and hop 3 is
-`xECP 1 usb-legacy-support (bios-owned=1)`: the BIOS owned the
-controller, every register write trapped into SMM, and the freeze moved
-when unrelated logging changed the timing -- a CPU in SMM that never
-came back. The fix is `legacy_handoff()` plus moving the capability
-walk BEFORE the reset; `docs/decisions/drivers.md` has the full entry.
-The scratchpad lead was real as a coverage gap (that branch still first
-runs on hardware) but was not the cause.
-
-**Getting past it:** `nousb` on the boot line (`docs/boot-flags.md`).
-
-**What confirms it**, on the machine, booting with `usbtrace`:
-
-```
-usb: BIOS owns the controller -- requesting handoff
-usb: legacy handoff done (legsup 0x..., os-owned=1)
-usb: running, interrupt-driven
-```
-
-then `usb: port N: connected, ...` and `bound as usb-mouse` for an
-external mouse -- which is the user-visible test, and what `nousb`
-currently costs. Since 2026-08-28 the same boot also exercises port
-power (this PCH likely reports PPC=1), and a mouse that enumerates but
-does not move should be taken to the `usb` debug-console dump: `xfer
-ok/bad`, `irqs_seen` and a `HALTED` mark tell "no interrupts" apart
-from "endpoint halted" from "reports arriving undecoded".
 
 ### A filesystem write during the desktop's STARTUP wedges the compositor
 

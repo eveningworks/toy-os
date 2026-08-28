@@ -24,7 +24,6 @@ FIRST, and this is what to do first among things that are all
 buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
-- [ ] Confirm the xHCI BIOS handoff on the laptop it was written for, then delete the bug entry  *(USB)*
 - [ ] `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR, not a 64 KiB guess  *(USB)*
 - [ ] The ring-3 WM busy-waits instead of sleeping -- built on branch `wm-wait-ready`, PARKED: it regresses `uterm`  *(Known limitations and papercuts (unscheduled))*
 - [ ] System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons  *(Known limitations and papercuts (unscheduled))*
@@ -661,8 +660,8 @@ run on, not by order.
 - [x] ~~Keyboard integration~~
 - [x] ~~Mouse integration~~
 - [x] ~~PS/2 coexistence -- there is no handoff to do; the input core is a multi-source registry and both paths run at once~~
-- [x] ~~The xHCI USB Legacy Support handoff (xECP id 1)~~ BUILT 2026-08-27 -- unconfirmed on hardware; see `docs/bugs.md`
-- [ ] **NEXT** Confirm the xHCI BIOS handoff on the laptop it was written for, then delete the bug entry
+- [x] ~~The xHCI USB Legacy Support handoff (xECP id 1)~~ DONE -- confirmed on the laptop 2026-08-28
+- [x] ~~Confirm the xHCI BIOS handoff on the laptop it was written for~~ DONE 2026-08-28 -- a wireless mouse works on the machine
 - [ ] **NEXT** `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR, not a 64 KiB guess
 - [ ] USB mass storage (bulk-only transport) -- the first non-disk-bus storage backend
 - [x] ~~Hub support (devices behind a hub, not just root ports)~~ DONE 2026-08-28 -- USB2 only; the TT path is hardware-only

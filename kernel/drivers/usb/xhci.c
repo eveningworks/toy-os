@@ -1310,7 +1310,8 @@ void xhci_deferred_work(void) {
 // `nousb` on the boot line skips the controller entirely, matched as a
 // whole word -- the same shape as `noahci` and `novirtio`, and here for
 // the same reason: a machine this driver hangs is a machine with no way
-// to reach a prompt and say so. See docs/bugs.md.
+// to reach a prompt and say so (one did, until the BIOS handoff --
+// docs/decisions/drivers.md).
 static int usb_disabled(void) {
     const char *cmdline = multiboot_cmdline();
     if (!cmdline) return 0;

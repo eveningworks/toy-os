@@ -1276,8 +1276,9 @@ handoff.
 **It is untestable here and that is stated rather than hidden.** QEMU
 advertises no legacy-support capability, so `legsup_off` stays 0 and the
 whole path is dead in every test in this repo. `usb_test.py` proves only
-that bring-up still works on a controller with nothing to hand off. The
-evidence for the path itself is one machine's boot log.
+that bring-up still works on a controller with nothing to hand off.
+**CONFIRMED on the machine 2026-08-28**: the same laptop boots past
+bring-up and an external wireless mouse works.
 
 The general lesson is the one this repo keeps meeting: **"the emulator
 does not have it" is a reason the code is untested, never a reason the
