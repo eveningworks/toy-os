@@ -467,6 +467,22 @@ void wm_client_send_resize(struct window *win, int w, int h);
 // the work AFTER the frame's `hlt`, which is what makes "nothing logged
 // during a visible freeze" a real answer (the stall is below us) rather
 // than a missing measurement.
+// wm_hwcursor.c -- the hardware cursor plane (WIN_REQ_FB_CURSOR).
+// sync() per resolved shape: 1 = the plane shows the pointer and the
+// software sprite must not draw; 0 = software's turn (no plane, a
+// shape the plane cannot hold, or the request failed). invalidate()
+// after a theme or size change; active() is what the last sync said.
+int  wm_hwcursor_available(void);
+int  wm_hwcursor_sync(enum wm_cursor_kind kind);
+int  wm_hwcursor_active(void);
+void wm_hwcursor_invalidate(void);
+
+// wm_render.c: the built-in arrow's coverage masks, for the plane --
+// the only built-in shape that exists as masks rather than draw calls.
+void wm_builtin_arrow_masks(const unsigned char **outline,
+                             const unsigned char **fill,
+                             int *w, int *h, int *stride);
+
 void wmwd_frame_begin(void);
 void wmwd_phase(const char *name);
 void wmwd_frame_end(void);

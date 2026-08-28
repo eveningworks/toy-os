@@ -672,6 +672,8 @@ static void cmd_state(struct dbg_out *o, int json) {
                      dragging, resizing, content_pressed);
         dbg_out_printf(o, "\"redraw_pending\":%s,\"pending\":%d,",
                      redraw_pending ? "true" : "false", wm_debug_input_pending());
+        dbg_out_printf(o, "\"hwcursor\":%s,",
+                     wm_hwcursor_active() ? "true" : "false");
         // Always 0, and kept in the grammar on purpose. It reported
         // wm.c's pending_proc -- the process a WINDOW was waiting on --
         // which only window_start_process() ever set, and nothing has

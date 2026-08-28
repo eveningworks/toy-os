@@ -281,6 +281,9 @@ static void adopt_settings(void) {
         k_strlcpy(g_theme, val, sizeof g_theme);
         cursor_theme_load(g_theme);
     }
+    // The plane's sprite is built FROM these shapes at this scale --
+    // whatever it shows is stale the moment either changed.
+    wm_hwcursor_invalidate();
 }
 
 void cursor_theme_poll(void) {

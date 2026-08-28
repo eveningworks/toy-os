@@ -787,6 +787,26 @@ struct win_event {
 #define WIN_CURSOR_WAIT    2 // busy: this window is working, wait for it
 #define WIN_CURSOR_COUNT   3
 
+#define WIN_REQ_FB_CURSOR  25 // COMPOSITOR ONLY. The hardware cursor
+                           // plane (virtio-gpu's cursorq, vmsvga's
+                           // FIFO cursor). a: a WIN_FB_CURSOR_* op.
+                           // DEFINE: the sprite's pixels are straight
+                           // ARGB, b/c = user pointer low/high 32 bits
+                           // (the request fields are int32_t and a
+                           // ring-3 address is not), d packs the
+                           // geometry as (w<<24)|(h<<16)|(hotx<<8)|hoty
+                           // -- each fits in 8 bits because the plane
+                           // is 64x64. QUERY returns 1 when a plane
+                           // exists; HIDE/SHOW flip it, and SHOW also
+                           // ARMS the kernel to move the plane from
+                           // win_input.c on every pointer event -- the
+                           // zero-syscall path that makes motion cost
+                           // the compositor nothing at all.
+#define WIN_FB_CURSOR_HIDE   0
+#define WIN_FB_CURSOR_SHOW   1
+#define WIN_FB_CURSOR_DEFINE 2
+#define WIN_FB_CURSOR_QUERY  3
+
 #define WIN_REQ_CURSOR     24 // `window`: which one; a: a WIN_CURSOR_*.
                            // Honoured only inside that window's content
                            // area, so a client that never resets cannot

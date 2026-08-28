@@ -85,6 +85,13 @@ void win_input_poll(void) {
     uint8_t buttons = 0;
     mouse_get_state(&x, &y, &buttons);
     if (x != g_last_x || y != g_last_y || buttons != g_last_buttons) {
+        // The hardware cursor plane rides HERE, not on a request: the
+        // screen coordinates are already in hand, so pointer motion
+        // costs the compositor zero syscalls and the plane moves even
+        // before the WM's event loop wakes (win_proto.h's
+        // WIN_REQ_FB_CURSOR arms this).
+        if (win_server_hw_cursor_armed() && (x != g_last_x || y != g_last_y))
+            gfx_hw_cursor_move(x, y);
         g_last_x = x;
         g_last_y = y;
         g_last_buttons = buttons;

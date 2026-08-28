@@ -162,6 +162,39 @@ def run(dbg, qmp, tmp, res):
     res.check("hiding it is accepted too", "hidden" in out,
               out.strip().splitlines()[-1] if out.strip() else "no output")
 
+    # --- the COMPOSITOR rides the plane now (WIN_REQ_FB_CURSOR) -------
+    #
+    # The ring-3 WM defines its sprite over the plane and draws no
+    # software cursor at all, and the kernel moves the plane from
+    # win_input.c on every pointer event. The oracle is the same one as
+    # above, applied to the real pointer: two frames around a pure
+    # pointer MOVE must differ in NOTHING but the taskbar clock --
+    # a software sprite would repaint both the old and new positions.
+    # (`hwcursor demo` above stole the plane's sprite; the WM takes it
+    # back on its next shape change, forced here by re-entering a
+    # region -- simplest is one more warp, which re-syncs on draw.)
+    st = dbg.json("gui state --json")
+    res.check("the compositor reports the hardware cursor in use",
+              st.get("hwcursor") is True, f"hwcursor={st.get('hwcursor')}")
+
+    dbg.warp_cursor(qmp, 400, 300)
+    time.sleep(0.6)
+    mv_a = f"{tmp}/vgpu-move-a.png"
+    qmp.stable_pixels(mv_a)
+    dbg.warp_cursor(qmp, 700, 420)
+    time.sleep(0.6)
+    mv_b = f"{tmp}/vgpu-move-b.png"
+    qmp.stable_pixels(mv_b)
+    ia = Image.open(mv_a).convert("RGB")
+    ib = Image.open(mv_b).convert("RGB")
+    w, h = ia.size
+    # Crop the taskbar off: its clock legitimately ticks between frames.
+    ca = ia.crop((0, 0, w, h - 24)).tobytes()
+    cb = ib.crop((0, 0, w, h - 24)).tobytes()
+    res.check("a pointer move repaints NOTHING (the plane carries the cursor)",
+              ca == cb,
+              "framebuffer changed on pure motion -- software sprite still drawing?")
+
 
 def compare_against_vga_std(n, tmp, res, reference_png):
     """Boot the SAME image on `-vga std` and require the same pixels.
@@ -190,6 +223,11 @@ def compare_against_vga_std(n, tmp, res, reference_png):
         if dbg is None:
             res.check("a -vga std reference boot came up", False)
             return
+        # The other half of the plane check above: on an adapter with no
+        # plane the compositor must be back on the software sprite.
+        st = dbg.json("gui state --json")
+        res.check("on -vga std the compositor is on the software sprite",
+                  st.get("hwcursor") is False, f"hwcursor={st.get('hwcursor')}")
         dbg.close()
         ref = f"{tmp}/vgpu-std.png"
         qmp = QMPSession(port=4445 + n)

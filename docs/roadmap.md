@@ -597,7 +597,7 @@ run on, not by order.
 - [ ] A live bug to fix when the hardware path is reachable
 - [x] ~~virtio transport: PCI capability parsing, virtqueue (descriptor table / avail / used rings)~~
 - [x] ~~`virtio-gpu`: resource create/attach, set_scanout, transfer + flush, and the CURSOR queue~~
-- [ ] The compositor should use the hardware cursor plane instead of a software sprite
+- [x] ~~The compositor should use the hardware cursor plane instead of a software sprite~~ DONE 2026-08-29 (WIN_REQ_FB_CURSOR)
 - [ ] Runtime mode switching: a display driver can set a mode after boot
 - [ ] Initcall levels: drivers declare a boot slot instead of being called by name from `kernel_main()`
 - [ ] `virtio-net`: a NIC on the same transport, likely easier than e1000 once virtqueues exist

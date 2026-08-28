@@ -5181,3 +5181,58 @@ dangling override FALLS THROUGH to the declarations, because a stale
 choice must degrade to the default, not to an unopenable type.
 `/bin/open` is the second caller that earned the library, and its
 `-s`/`-l` verbs are what make the file manageable without an editor.
+
+## The hardware cursor: the kernel moves it, the compositor shapes it
+
+The plane the M41 migration measured away (see the entry above on the
+ring-3 migration) is consumed now: `wm_hwcursor.c` defines the sprite
+over `WIN_REQ_FB_CURSOR` and the software sprite stands down. Three
+calls were real forks.
+
+**The kernel moves the plane; the compositor never sends a position.**
+`win_input.c` calls `gfx_hw_cursor_move()` at the exact line it already
+holds screen coordinates for the compositor's mouse event -- so pointer
+motion costs ZERO syscalls, and the plane moves even before the WM's
+event loop wakes. The alternative (everything through the request, one
+syscall per motion at compositor cadence) was cleaner layering and
+strictly worse at the one thing a pointer must be, which is immediate.
+On QEMU + virtio-gpu the host renders the plane as the actual host
+pointer, so motion is host-latency and crossing the window edge has
+nothing to hand over -- the seamlessness this was built for.
+
+**The handover is per SHAPE, not per boot.** `wm_hwcursor_sync(kind)`
+answers for the shape being resolved this frame: a themed shape that
+fits the plane's fixed 64x64 rides it; `cursor_size=huge` (3x scale can
+exceed 64px) and the built-in resize/text/wait shapes (draw calls, not
+masks) fall back to the software sprite for exactly as long as they are
+the resolved shape. The sprite bookkeeping stands down BY THE SAME
+ANSWER -- `draw_cursor_at()` skips save-under and draw, the damage adds
+no cursor rect, and the prev box records zero size -- because the
+roadmap's own warning was that this bookkeeping "has to be disabled
+cleanly rather than bypassed" (a stranded-sprite bug lived there).
+
+**The sprite is the theme's masks, composited once.** cursor_theme.h
+promised the mask pair to a hardware plane when it was written; the
+compositor folds outline-under-fill into straight ARGB per shape
+change, instead of per pixel per frame. The plane belongs to the ROLE:
+`win_server_set_compositor()` hides and disarms it wherever the role
+dies, beside the framebuffer grant's revoke.
+
+The trap that cost the debugging round: `vmm_copy_from_user()` returns
+1 ON SUCCESS (vmm.h's convention), not 0 -- the DEFINE handler read it
+errno-style and refused every valid sprite. Read the ABI comment of any
+call you swap in; this entry is that rule's newest receipt.
+
+## Scroll direction and speed are one kernel knob, not per-app options
+
+`mouse.scroll_dir` (normal/inverted) and `mouse.scroll_step` (1..5x)
+are registered settings applied in `mouse_get_wheel_delta()` -- the one
+point every wheel source (PS/2's 4th byte, virtio-input's REL_WHEEL)
+and every consumer share. Applied at the CONSUMING read rather than at
+feed time, so a multiplier cannot re-scale notches that accumulated
+between reads of the setting. Registering them beside the pointer's
+speed/accel is what puts them on System Settings' Mouse group with no
+UI code at all -- the settings registry's whole point. Per-app scroll
+options were not considered seriously: an inverted wheel is a fact
+about the MOUSE, and every desktop (macOS natural scrolling, Windows,
+KDE) keys it system-wide.

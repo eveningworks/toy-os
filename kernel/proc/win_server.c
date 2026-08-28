@@ -23,6 +23,8 @@
 
 #include "scheduler.h" // SCHED_MAX_PROCS, scheduler_exec_path() -- see app_path
 #include "fs.h"       // FS_PATH_MAX, the size of that path
+#include "mouse.h"    // mouse_get_state() -- park the plane where the pointer is
+#include "heap.h"     // kmalloc/kfree -- the DEFINE sprite bounce buffer
 
 #define WIN_SERVER_MAX_PIDS SCHED_MAX_PROCS
 
@@ -157,6 +159,13 @@ struct client_window {
 // windows, and where those mappings go. See win_server.h -- the address
 // space is captured here rather than looked up per call.
 static int g_comp_pid = 0;
+
+// See win_proto.h's WIN_REQ_FB_CURSOR. Belongs to the ROLE, like the
+// framebuffer grant: cleared in win_server_set_compositor(), the one
+// place the role changes hands or dies.
+static int g_hw_cursor_armed = 0;
+
+int win_server_hw_cursor_armed(void) { return g_hw_cursor_armed; }
 static uint64_t g_comp_pml4 = 0;
 
 // [pid - 1][window id]. A flat table rather than a list: WIN_CLIENT_MAX
@@ -1092,6 +1101,58 @@ int win_server_request(int pid, struct win_request_msg *req) {
         if (pid != g_comp_pid || !g_comp_pid) return -1;
         return win_surface_present(pid, req->a, req->b, req->c, req->d) ? 0 : -1;
     }
+    // The hardware cursor plane, same role gate. See win_proto.h for
+    // the op encoding; the MOVE half deliberately has no request at
+    // all -- win_input.c moves the plane where it already holds the
+    // screen coordinates, so pointer motion costs zero syscalls.
+    if (req->type == WIN_REQ_FB_CURSOR) {
+        if (pid != g_comp_pid || !g_comp_pid) return -1;
+        switch (req->a) {
+        case WIN_FB_CURSOR_QUERY:
+            return gfx_hw_cursor_available() ? 1 : 0;
+        case WIN_FB_CURSOR_HIDE:
+            g_hw_cursor_armed = 0;
+            gfx_hw_cursor_show(0);
+            return 0;
+        case WIN_FB_CURSOR_SHOW: {
+            if (!gfx_hw_cursor_available()) return -1;
+            gfx_hw_cursor_show(1);
+            // Armed LAST, and the plane is put where the pointer
+            // already is -- waiting for the next event would show the
+            // sprite at its previous position for one human-visible
+            // moment.
+            int mx, my;
+            mouse_get_state(&mx, &my, 0);
+            gfx_hw_cursor_move(mx, my);
+            g_hw_cursor_armed = 1;
+            return 0;
+        }
+        case WIN_FB_CURSOR_DEFINE: {
+            if (!gfx_hw_cursor_available()) return -1;
+            int w     = (int)(((uint32_t)req->d >> 24) & 0xFF);
+            int h     = (int)(((uint32_t)req->d >> 16) & 0xFF);
+            int hot_x = (int)(((uint32_t)req->d >> 8) & 0xFF);
+            int hot_y = (int)((uint32_t)req->d & 0xFF);
+            if (w < 1 || h < 1 || w > 64 || h > 64) return -1;
+            if (hot_x >= w || hot_y >= h) return -1;
+            uint64_t uaddr = (uint32_t)req->b |
+                              ((uint64_t)(uint32_t)req->c << 32);
+            uint32_t *px = kmalloc((size_t)w * h * 4);
+            if (!px) return -1;
+            // 1 on success -- vmm.h's convention, not errno's.
+            if (!vmm_copy_from_user(vmm_current_pml4(), px, uaddr,
+                                     (uint64_t)w * h * 4)) {
+                kfree(px);
+                return -1;
+            }
+            int ok = gfx_hw_cursor_define(px, w, h, hot_x, hot_y);
+            kfree(px);
+            return ok ? 0 : -1;
+        }
+        default:
+            return -1;
+        }
+    }
 
     // A window server is EITHER a registered ring-0 presentation layer
     // or a registered ring-3 compositor. This used to demand the first,
@@ -1533,6 +1594,13 @@ int win_server_set_compositor(int pid, uint64_t pml4) {
         // grant needs revoking, and there is no second bookkeeping to
         // fall out of step with it.
         win_surface_revoke(g_comp_pid);
+        // The plane goes with the grant: a dead compositor must not
+        // leave its sprite parked on screen, moving with a pointer
+        // nothing is watching.
+        if (g_hw_cursor_armed) {
+            g_hw_cursor_armed = 0;
+            gfx_hw_cursor_show(0);
+        }
     }
 
     // Was the role HELD, and is it being given up entirely? Only that

@@ -171,6 +171,11 @@ int win_server_active(void);
 // finally ran with one registered.
 int win_server_any(void);
 
+// Is the hardware cursor plane armed (compositor sent
+// WIN_FB_CURSOR_SHOW)? Asked by win_input.c on every pointer event --
+// the one caller the arm exists for.
+int win_server_hw_cursor_armed(void);
+
 // Broadcasts WIN_EV_FONT to every window: the active face or size has
 // changed and every client's cached metrics are stale. Called from
 // font_config.c, which is the one place a font change is applied for the

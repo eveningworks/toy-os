@@ -325,6 +325,16 @@ static const unsigned char cursor_fill_alpha[CURSOR_SPRITE_H][CURSOR_SPRITE_W] =
     {0,0,0,0,0,0,0,0,0,0,0,0,0},
 };
 
+void wm_builtin_arrow_masks(const unsigned char **outline,
+                             const unsigned char **fill,
+                             int *w, int *h, int *stride) {
+    *outline = &cursor_outline_alpha[0][0];
+    *fill = &cursor_fill_alpha[0][0];
+    *w = CURSOR_SPRITE_W;
+    *h = CURSOR_SPRITE_H;
+    *stride = CURSOR_SPRITE_W;
+}
+
 static void draw_cursor_normal(int x, int y) {
     uint32_t fill = UTHEME_WHITE, outline = ugfx_rgb(0, 0, 0);
     // Outline first, fill on top -- matches how the two masks were
@@ -657,21 +667,19 @@ static void save_cursor_under(int x, int y, enum wm_cursor_kind kind) {
     cursor_under_valid = 1;
 }
 
-// --- no hardware cursor here, and that is a decision --------------------
+// --- the hardware cursor is BACK, and per shape ------------------------
 //
-// The ring-0 WM had a hardware-cursor path: when the adapter owned a
-// cursor plane the WM drew none at all -- no sprite, no saved pixels, no
-// damage. It is GONE from the ring-3 compositor rather than ported,
-// because M41's R3 measured the capability away: DISPLAY_CAP_CURSOR is
-// declared by one driver (vmsvga), which disables it by default because
-// a hardware cursor over a RELATIVE PS/2 mouse makes the pointer jump.
-// So it is unreachable on every configuration this OS boots, and a TWP
-// path to reach it would have been a protocol surface for a capability
-// nothing enables. It returns with virtio-input's absolute pointer in
-// Milestone 27a, where it can actually be switched on.
+// The plane the M41 migration measured away returned with virtio-gpu's
+// cursorq (wm_hwcursor.c, WIN_REQ_FB_CURSOR): draw_cursor_at() asks
+// wm_hwcursor_sync() first, and when the plane shows the pointer the
+// software sprite below draws NOTHING -- no saved pixels, no damage, a
+// zero-length prev box. The handover is per SHAPE, not per boot: a
+// shape the plane cannot hold (cursor_size=huge past 64px, a built-in
+// resize arrow that exists only as draw calls) falls back to the
+// sprite for exactly as long as it is the resolved shape.
 //
-// The software sprite below needs nothing from the kernel: it draws into
-// the framebuffer the compositor was already granted (R1). See
+// The software sprite still needs nothing from the kernel: it draws
+// into the framebuffer the compositor was already granted (R1). See
 // docs/decisions.md.
 
 // The outline a client-window resize drag is proposing. Drawn instead
@@ -699,6 +707,13 @@ static int drawn_cursor_kind = -1;
 static void draw_cursor_at(int x, int y) {
     draw_resize_outline();
     enum wm_cursor_kind kind = resolve_cursor_kind(x, y);
+    if (wm_hwcursor_sync(kind)) {
+        // The plane shows the pointer: nothing saved, nothing drawn.
+        // drawn_cursor_kind still tracks, so a shape change is still
+        // what re-renders (wm_cursor_shape_changed()).
+        drawn_cursor_kind = (int)kind;
+        return;
+    }
     save_cursor_under(x, y, kind);
     draw_cursor(x, y, kind);
     drawn_cursor_kind = (int)kind;
@@ -1303,6 +1318,11 @@ static void damage_cursor(int mx, int my) {
         wm_damage_rect(prev_cursor_box_x - 1, prev_cursor_box_y - 1,
                         prev_cursor_box_w + 2, prev_cursor_box_h + 2);
     }
+    // With the plane showing the pointer nothing is about to be drawn,
+    // so only the ERASE half above applies -- it still fires once on
+    // the frame the software sprite hands over, which is what removes
+    // its last-drawn pixels.
+    if (wm_hwcursor_active()) return;
     int ox, oy, w, h;
     cursor_rect(resolve_cursor_kind(mx, my), mx, my, &ox, &oy, &w, &h);
     wm_damage_rect(ox - 1, oy - 1, w + 2, h + 2);
@@ -1496,15 +1516,28 @@ void wm_render_frame(int mx, int my) {
     // what left a second cursor behind.
     prev_cursor_x = mx;
     prev_cursor_y = my;
-    cursor_rect(resolve_cursor_kind(mx, my), mx, my,
-                 &prev_cursor_box_x, &prev_cursor_box_y,
-                 &prev_cursor_box_w, &prev_cursor_box_h);
+    if (wm_hwcursor_active()) {
+        // NOTHING was drawn, and the record must say so: a stale box
+        // here is a damage rect for a sprite that is not there --
+        // harmless -- but a box recorded while the plane later hands
+        // BACK to software would erase pixels software never drew.
+        prev_cursor_box_w = prev_cursor_box_h = 0;
+    } else {
+        cursor_rect(resolve_cursor_kind(mx, my), mx, my,
+                     &prev_cursor_box_x, &prev_cursor_box_y,
+                     &prev_cursor_box_w, &prev_cursor_box_h);
+    }
 
     ugfx_screen_present(&g_wm_screen);
     damage_reset();
 }
 
 void wm_render_cursor_move(int mx, int my) {
+    // With the plane showing the pointer a pure motion frame touches
+    // no framebuffer pixels at all -- unless a software sprite is
+    // still on screen from before the handover, whose restore is the
+    // one write worth presenting.
+    int had_sprite = cursor_under_valid;
     restore_cursor_under();
     draw_cursor_at(mx, my);
 
@@ -1528,9 +1561,14 @@ void wm_render_cursor_move(int mx, int my) {
     // interaction happened to be running.
     prev_cursor_x = mx;
     prev_cursor_y = my;
-    cursor_rect(resolve_cursor_kind(mx, my), mx, my,
-                 &prev_cursor_box_x, &prev_cursor_box_y,
-                 &prev_cursor_box_w, &prev_cursor_box_h);
+    if (wm_hwcursor_active()) {
+        prev_cursor_box_w = prev_cursor_box_h = 0;
+        if (!had_sprite) return; // nothing written: nothing to present
+    } else {
+        cursor_rect(resolve_cursor_kind(mx, my), mx, my,
+                     &prev_cursor_box_x, &prev_cursor_box_y,
+                     &prev_cursor_box_w, &prev_cursor_box_h);
+    }
 
     ugfx_screen_present(&g_wm_screen);
 }

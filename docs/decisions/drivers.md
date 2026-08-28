@@ -627,7 +627,7 @@ by what QEMU happens to be showing. `GET_DISPLAY_INFO`'s preferred rect
 is the last resort instead. QEMU resizes its window to whatever scanout
 the guest sets, so honouring the flag costs nothing.
 
-**The cursor plane is real and has no consumer yet.** virtio-gpu's
+**The cursor plane is real and (since 2026-08-29) the compositor is its consumer** -- see `docs/decisions/gui.md`'s hardware-cursor entry for the protocol and the handover rules. The paragraph below records the state it was built into. virtio-gpu's
 second queue carries `UPDATE_CURSOR`/`MOVE_CURSOR`, and this driver
 implements them -- but the ring-3 compositor draws a software sprite, so
 `gfx_hw_cursor_*()` had ZERO callers and had had none since vmsvga

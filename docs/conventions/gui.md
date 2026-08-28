@@ -921,6 +921,22 @@ this the obvious way), not from how much history it accumulated.
   stale-sprite bug this file's comments record paying for twice. The
   previous box is STORED rather than recomputed, because the shape under
   the old position may not be the shape there now.
+- **THE POINTER RIDES THE HARDWARE CURSOR PLANE WHEN THE DRIVER HAS
+  ONE, AND THE HANDOVER IS PER SHAPE** -- `userland/wm/wm_hwcursor.c`
+  over `WIN_REQ_FB_CURSOR` (compositor-gated, beside the framebuffer
+  grant): the WM defines the theme's masks as a 64x64 ARGB sprite on
+  shape changes, the KERNEL moves the plane from `win_input.c` on every
+  pointer event (zero syscalls per motion), and QEMU renders it as the
+  real host pointer -- which is what makes leaving the window seamless
+  under `-vga virtio`. A shape the plane cannot hold
+  (`cursor_size=huge` past 64px, a built-in resize/text/wait shape,
+  no plane on this driver) falls back to the software sprite, and the
+  sprite's save-under/damage bookkeeping stands down by the same
+  per-shape answer (`wm_hwcursor_sync()`). **A hardware cursor is
+  INVISIBLE to `screendump`** -- a test asserting its pixels appear is
+  asserting it failed (`tools/virtio_gpu_test.py`'s oracle: a pure
+  pointer move repaints NOTHING). The plane belongs to the ROLE and is
+  hidden wherever the compositor role dies. See `docs/decisions.md`.
 - **A compositor's view of a dead window is POISONED, not unmapped**
   (`comp_poison()` in `kernel/proc/win_server.c`). The invariant: while
   a compositor is registered, a window buffer's slot in its address

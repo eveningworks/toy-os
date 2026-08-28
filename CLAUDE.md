@@ -657,6 +657,7 @@ whenever a headline here tells you something you did not already know.
 - **EVERY CLIENT IS PINGED ON A CADENCE** -- `WM_PING_INTERVAL_DEFAULT` beside `WM_PING_TIMEOUT_DEFAULT`, levers `gui pingtimeout`/`gui pinginterval`. `wm_client_ping()` used to have ONE caller (the close path), so `(Not Responding)` could only appear while closing. A hung window nobody is closing still raises no DIALOG -- that stays gated on `close_asked_tick`.
 - **The cursor's shapes are DATA FILES, and a theme is a directory.**
 - **The cursor's drawn extent is DERIVED, not a constant.**
+- **THE POINTER RIDES THE HARDWARE CURSOR PLANE WHEN THE DRIVER HAS ONE** -- `wm_hwcursor.c` + `WIN_REQ_FB_CURSOR`; the KERNEL moves the plane per pointer event (zero syscalls), the handover to the software sprite is PER SHAPE (huge sizes and built-in non-arrow shapes fall back), and a hardware cursor is INVISIBLE to `screendump` -- asserting its pixels is asserting it failed.
 - **A compositor's view of a dead window is POISONED, not unmapped**
 - **A ring-3 compositor delivers events through TWP, not by calling the kernel.**
 - **`SYS_FS_GENERATION` is how ring 3 asks "has the filesystem changed?"**
