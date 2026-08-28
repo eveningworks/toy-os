@@ -782,9 +782,20 @@ void uui_fileview_set_geometry(struct uui_fileview *fv, int x, int y, int w, int
     uui_table_set_rows(&fv->table, uui_fileview_row_count(fv));
 }
 
+void uui_fileview_set_active_mark(struct uui_fileview *fv, int on, uint32_t color) {
+    fv->active_mark = on ? 1 : 0;
+    fv->active_mark_color = color;
+}
+
 void uui_fileview_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
-    if (fv->mode == UUI_FILEVIEW_ICONS) { ic_draw(s, fv); return; }
-    uui_table_draw(s, &fv->table);
+    if (fv->mode == UUI_FILEVIEW_ICONS) ic_draw(s, fv);
+    else uui_table_draw(s, &fv->table);
+    if (fv->active_mark) {
+        const struct uui_table *t = &fv->table;
+        ugfx_draw_rect(s, t->x, t->y, t->w, t->h, fv->active_mark_color);
+        ugfx_draw_rect(s, t->x + 1, t->y + 1, t->w - 2, t->h - 2,
+                        fv->active_mark_color);
+    }
 }
 
 void uui_fileview_natural_size(const struct uui_fileview *fv, int *out_w, int *out_h) {

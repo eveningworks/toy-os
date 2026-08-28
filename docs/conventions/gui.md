@@ -1444,6 +1444,14 @@ real scanout hardware does. Do not write a pixel assertion for one.
     arrangement `uui_listbox` and `uui_table` have, because the WM's
     file picker is a screen-absolute modal the toolkit router never
     sees.
+  - **`uui_fileview_set_active_mark()` draws the active-pane border
+    from INSIDE the widget's own draw** -- the File Manager drew it
+    from `on_draw_over`, which runs after the router's overlay pass, so
+    the accent outline painted straight across an open menu.
+    `on_draw_over` is for what belongs ABOVE popups (the modal);
+    anything that must sit under them has to be drawn in the widget
+    pass. Dolphin's split view marks its active pane inside the view
+    for the same reason.
   - **`UUI_FILEVIEW_ICONS` is the first NON-TABLE mode** (list and
     details are both column sets on `uui_table`; icons is LVS_ICON to
     their LVS_REPORT/LIST): the grid draws, hit-tests, scrolls and
@@ -1534,9 +1542,14 @@ real scanout hardware does. Do not write a pixel assertion for one.
   to CLEAR a highlight; a container with a `hit` clips its children, and
   a subtree the cursor is outside of gets a point no widget can contain
   rather than being skipped, or a row stays lit after the pointer has
-  gone; and an OPEN OVERLAY gets the real point first and is skipped in
-  the walk, since hearing the move twice would light a row and clear it
-  again. See `docs/decisions.md`.
+  gone; and an OPEN OVERLAY OWNS THE POINTER OUTRIGHT -- it alone gets
+  the real point, and everything else is told "nowhere" while it is
+  open. That last rule hardened: the overlay used to merely come FIRST,
+  with the walk still handing everyone the real point, so icons lit up
+  under an open menu and the highlight showed past the popup's edge
+  (every desktop's popup grab forbids exactly this). "Nowhere" rather
+  than skipping the walk, so a highlight lit before the popup opened
+  still clears. See `docs/decisions.md`.
 - **AN OPEN POPUP TAKES THE KEY BEFORE THE FOCUS RING DOES, AND A
   KEY-DRIVEN CHANGE IS REPORTED LIKE A CLICK.**
   `uui_router_overlay_key()` is the keyboard's half of `overlay_active`

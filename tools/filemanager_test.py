@@ -94,9 +94,11 @@ class Layout:
         self.dir = {}
         self.rows = {}
         self.marked = (0, 0)
+        self.hover = None     # (pane0 hovered row, pane1 hovered row)
         self.view = None      # [mode0, mode1, single, tree_on, tree_nodes]
         self.treebox = None   # [x, y, w, h, row_h, selected_id]
         self.menu = None      # open level-0 popup [x, y, w, h]
+        self.menuhot = None   # (open depth, level-0 hot row)
         self.toolbar = None   # the strip [x, y, w, h]
         self.tbitems = {}     # item index -> [x, y, w, h]
         self.active = None
@@ -122,6 +124,8 @@ class Layout:
                 self.modal = int(p[1])
             elif p[0] == "marked" and len(p) >= 3:
                 self.marked = (int(p[1]), int(p[2]))
+            elif p[0] == "hover" and len(p) >= 3:
+                self.hover = (int(p[1]), int(p[2]))
             elif p[0] == "view" and len(p) >= 8:
                 # "view <mode0> <mode1> single <s> tree <t> <nodes>"
                 self.view = [int(p[1]), int(p[2]), int(p[4]),
@@ -130,6 +134,8 @@ class Layout:
                 self.treebox = [int(v) for v in p[1:7]]
             elif p[0] == "menu" and len(p) >= 5:
                 self.menu = [int(v) for v in p[1:5]]
+            elif p[0] == "menuhot" and len(p) >= 3:
+                self.menuhot = (int(p[1]), int(p[2]))
             elif p[0] == "toolbar" and len(p) >= 5:
                 self.toolbar = [int(v) for v in p[1:5]]
             elif p[0] == "tbitem" and len(p) >= 6:
@@ -236,6 +242,14 @@ def menu_pick(dbg, *steps):
         dbg.key(k)
         time.sleep(0.12)
     time.sleep(0.3)
+
+
+def sure_click(dbg, qmp, x, y):
+    """warp_cursor + click: closed-loop, where click_at()'s open-loop
+    goto can land a long accelerated journey somewhere else entirely
+    and silently desync its own position tracking."""
+    dbg.warp_cursor(qmp, x, y)
+    qmp.click()
 
 
 def band_drag(dbg, qmp, x0, y0, x1, y1, steps=4):
@@ -599,7 +613,7 @@ def run(dbg, qmp, tmp, res):
     lay = wait_layout(dbg, win, lambda l: l.marked[0] == 6)
     res.check("a rubber-band sweep marks every swept icon",
               lay is not None and lay.marked[0] == 6, f"marked={lay and lay.marked}")
-    qmp.click_at(x0, y0)
+    sure_click(dbg, qmp, x0, y0)
     lay = wait_layout(dbg, win, lambda l: l.marked[0] == 0)
     res.check("a click on empty space unmarks everything",
               lay is not None and lay.marked[0] == 0, f"marked={lay and lay.marked}")
@@ -635,17 +649,17 @@ def run(dbg, qmp, tmp, res):
         # triangle at x ~ pad + indent) relists and GROWS the node
         # count without navigating anywhere new.
         n_before = lay.view[4]
-        qmp.click_at(ox + tx + tw // 2, oy + ty + trh + trh // 2)
+        sure_click(dbg, qmp, ox + tx + tw // 2, oy + ty + trh + trh // 2)
         lay = wait_layout(dbg, win, lambda l: l.dir.get(0) not in (SRC, None))
         res.check("clicking a tree row navigates the active pane",
                   lay is not None and lay.dir.get(0) not in (SRC, None),
                   f"dir={lay and lay.dir}")
-        qmp.click_at(ox + tx + 20, oy + ty + trh + trh // 2)
+        sure_click(dbg, qmp, ox + tx + 20, oy + ty + trh + trh // 2)
         lay = wait_layout(dbg, win, lambda l: l.view and l.view[4] > n_before)
         res.check("clicking its expander lazily lists the directory's children",
                   lay is not None and lay.view and lay.view[4] > n_before,
                   f"nodes {n_before} -> {lay and lay.view and lay.view[4]}")
-        qmp.click_at(ox + tx + 20, oy + ty + trh + trh // 2)
+        sure_click(dbg, qmp, ox + tx + 20, oy + ty + trh + trh // 2)
         lay = wait_layout(dbg, win, lambda l: l.view and l.view[4] == n_before)
         res.check("clicking it again collapses back to the open set",
                   lay is not None and lay.view and lay.view[4] == n_before,
@@ -691,17 +705,50 @@ def run(dbg, qmp, tmp, res):
     res.check("the View menu draws ticks on its active options",
               n_on > 0, f"gutter ink={n_on}")
 
+    # An open popup owns the POINTER, not just the click: hovering a
+    # menu row over the icons grid must light no cell beneath (the
+    # highlight was visible past the popup's edge), and the active
+    # pane's accent outline must stay UNDER the popup -- it used to be
+    # drawn from on_draw_over, which runs after the overlay pass, so
+    # two accent lines crossed the menu. Both found by the maintainer
+    # in one screenshot.
+    menu_rect = lay.menu if lay else None
+    tree_rect = lay.treebox if lay else None
+    if menu_rect:
+        mx, my, mw, mh = menu_rect
+        # Warping over a row moves the menu's hot row, which is logged
+        # (menuhot) -- the pane hover staying put must not be proven by
+        # silence, since the dedup logs nothing for an unchanged frame.
+        dbg.warp_cursor(qmp, ox + mx + mw // 2, oy + my + mh * 3 // 4)
+        lay = wait_layout(dbg, win,
+                           lambda l: l.menuhot is not None and l.menuhot[0] > 0
+                           and l.hover is not None)
+        res.check("hovering a menu row lights nothing under the popup",
+                  lay is not None and lay.hover == (-1, -1),
+                  f"hover={lay and lay.hover} menuhot={lay and lay.menuhot}")
+        png = os.path.join(tmp, "fm_menu_over_pane.png")
+        qmp.stable_pixels(png)
+        accent = (70, 110, 160)  # utheme.c's accent, the outline's ink
+        inside = ink_count(png, (ox + mx + 2, oy + my + 2, mw - 4, mh - 4),
+                            accent, tol=8)
+        outside = ink_count(png, (ox, oy, win["content"]["w"],
+                                   win["content"]["h"]), accent, tol=8)
+        res.check("the active-pane outline stays under the popup",
+                  inside == 0 and outside > 0,
+                  f"accent inside popup={inside}, in window={outside}")
+
     # A menu click must NOT fall through to the folder tree under the
     # popup (the hand-routed-menubar bug, found by the maintainer: a
     # click on a View item also selected the tree row beneath it). The
     # View popup overlaps the tree column, so click its first row --
     # "Details", a harmless commit -- and require the tree's selection
     # and the pane's directory to stay put while the commit LANDS.
-    if lay and lay.menu and lay.treebox:
-        dir_before = lay.dir.get(0)
-        sel_before = lay.treebox[5]
-        mx, my = lay.menu[0], lay.menu[1]
-        qmp.click_at(ox + mx + 20, oy + my + 10)
+    if menu_rect and tree_rect:
+        lay2 = wait_layout(dbg, win, lambda l: True) or lay
+        dir_before = lay2.dir.get(0) if lay2 else None
+        sel_before = tree_rect[5]
+        mx, my = menu_rect[0], menu_rect[1]
+        sure_click(dbg, qmp, ox + mx + 20, oy + my + 10)
         lay = wait_layout(dbg, win, lambda l: l.view and l.view[0] == 1)
         res.check("a click on a menu item commits it and does NOT reach the tree",
                   lay is not None and lay.view and lay.view[0] == 1 and
@@ -712,6 +759,8 @@ def run(dbg, qmp, tmp, res):
     else:
         res.check("a click on a menu item commits it and does NOT reach the tree",
                   False, "no menu/tree geometry to aim with")
+        dbg.key(K_ESC)
+        dbg.key(K_ESC)
 
     # The commit above CLOSED the menu, so the toggle is a full pick.
     menu_pick(dbg, K_RIGHT, K_DOWN, K_DOWN, K_DOWN, K_ENTER)  # tree off
@@ -754,18 +803,18 @@ def run(dbg, qmp, tmp, res):
     # lands on nothing.
     dir_now = lay.dir.get(0)
     parent = "/" if dir_now.count("/") <= 1 else dir_now.rsplit("/", 1)[0]
-    qmp.click_at(*tb_centre(0))
+    sure_click(dbg, qmp, *tb_centre(0))
     lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == parent)
     res.check("the Up button climbs to the parent directory",
               lay is not None and lay.dir.get(0) == parent,
               f"dir {dir_now} -> {lay and lay.dir.get(0)} (wanted {parent})")
     while lay and lay.dir.get(0) not in (None, "/"):
-        qmp.click_at(*tb_centre(0))
+        sure_click(dbg, qmp, *tb_centre(0))
         nxt = wait_layout(dbg, win, lambda l: l.dir.get(0) != lay.dir.get(0), timeout=5)
         if nxt is None or nxt.dir.get(0) == lay.dir.get(0):
             break
         lay = nxt
-    qmp.click_at(*tb_centre(0))  # at "/": disabled, must do nothing
+    sure_click(dbg, qmp, *tb_centre(0))  # at "/": disabled, must do nothing
     time.sleep(0.8)
     lay = wait_layout(dbg, win, lambda l: True) or lay
     res.check("at the root the Up button is disabled and does nothing",
@@ -774,7 +823,7 @@ def run(dbg, qmp, tmp, res):
     # The Folder-tree button toggles the same state the menu ticks, and
     # LATCHES: its background moves to the pressed wash while a sibling
     # stays put (half the assertion is the neighbour, CLAUDE.md).
-    qmp.click_at(*tb_centre(7))
+    sure_click(dbg, qmp, *tb_centre(7))
     lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 1)
     res.check("the Folder-tree button toggles the tree on",
               lay is not None and lay.view and lay.view[3] == 1, f"view={lay and lay.view}")
@@ -793,7 +842,7 @@ def run(dbg, qmp, tmp, res):
     res.check("the latched button's background differs from its resting sibling's",
               p7 != p1, f"tree btn {p7} vs refresh btn {p1}")
 
-    qmp.click_at(*tb_centre(7))
+    sure_click(dbg, qmp, *tb_centre(7))
     lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 0)
     res.check("clicking it again toggles the tree off",
               lay is not None and lay.view and lay.view[3] == 0, f"view={lay and lay.view}")

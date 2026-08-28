@@ -812,6 +812,13 @@ static void layout_all(int cw, int ch) {
     g_widgets[WIDGET_PANE1].hidden = g_single && g_active != 1;
     g_widgets[WIDGET_TREE].hidden = !g_tree_on;
 
+    // The ACTIVE pane's outline, drawn by the widget itself so it stays
+    // under a menu popup -- see uui_fileview.h's active_mark. With two
+    // identical panes and no other mark, "which one does F5 copy FROM"
+    // is unanswerable, and a wrong guess deletes the wrong file.
+    for (int i = 0; i < 2; i++)
+        uui_fileview_set_active_mark(&g_pane[i], i == g_active, UTHEME_ACCENT);
+
     int n = (int)(sizeof g_keys / sizeof g_keys[0]);
     int gap = utheme_gap();
     int bw = (cw - gap * (n + 1)) / n;
@@ -905,6 +912,12 @@ static void log_layout(void) {
         if (uui_menubar_popup_rect(&g_menu, 0, &mx, &my, &mw, &mh))
             uapp_logf_layout("files: layout menu %d %d %d %d\n", mx, my, mw, mh);
     }
+    // Depth and the top popup's hot row: the one logged fact that CHANGES
+    // as the pointer crosses an open menu. Without it a hover test's
+    // frames are identical, the dedup drops them, and "nothing arrived"
+    // reads as a wedge.
+    uapp_logf_layout("files: layout menuhot %d %d\n", g_menu.depth,
+          g_menu.depth > 0 ? g_menu.level[0].hot : -1);
     uapp_logf_layout("files: layout view %d %d single %d tree %d %d\n",
           (int)g_pane[0].mode, (int)g_pane[1].mode, g_single, g_tree_on,
           g_tree_on ? g_tree_count : 0);
@@ -917,6 +930,8 @@ static void log_layout(void) {
     uapp_logf_layout("files: layout modal %d\n", (int)g_modal);
     uapp_logf_layout("files: layout marked %d %d\n", uui_fileview_mark_count(&g_pane[0]),
           uui_fileview_mark_count(&g_pane[1]));
+    uapp_logf_layout("files: layout hover %d %d\n", g_pane[0].table.hovered,
+          g_pane[1].table.hovered);
     uapp_logf_layout("files: layout job %d %d\n", g_job_at, g_job_count);
     for (int i = 0; i < (int)(sizeof g_keys / sizeof g_keys[0]); i++)
         uapp_logf_layout("files: layout key %d %d %d %d %d\n", i, g_keys[i].x, g_keys[i].y,
@@ -934,15 +949,10 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
 
 static void on_draw_over(struct uapp *a, struct uapp_draw *d) {
     (void)a;
-    // The ACTIVE pane is outlined, because with two identical panes and
-    // no other mark, "which one does F5 copy FROM" is unanswerable --
-    // every commander marks it, and a wrong guess here deletes the wrong
-    // file.
-    int x, y, w, h;
-    uui_fileview_ops.bounds(active(), &x, &y, &w, &h);
-    ugfx_draw_rect(d->surface, x, y, w, h, UTHEME_ACCENT);
-    ugfx_draw_rect(d->surface, x + 1, y + 1, w - 2, h - 2, UTHEME_ACCENT);
-
+    // ONLY the modal may live here: on_draw_over runs after the
+    // router's overlay pass, so anything drawn from it sits on top of
+    // an open menu. The active-pane outline moved into the widget for
+    // exactly that reason (uui_fileview.h's active_mark).
     draw_modal(d->surface);
 }
 

@@ -122,6 +122,15 @@ struct uui_fileview {
     int icon_top;            // first visible grid ROW; OWNED
     struct rubberband band;  // empty-space drag -> marks; OWNED
 
+    // A 2px border in `active_mark_color`, drawn by the WIDGET as the
+    // last step of its own draw -- which is what keeps it under a menu
+    // popup. It lived in the File Manager's on_draw_over, which runs
+    // AFTER the router's overlay pass, so the active-pane outline
+    // painted straight across an open menu. Dolphin's split view marks
+    // its active pane inside the view for the same z-order reason.
+    int active_mark;
+    uint32_t active_mark_color;
+
     // --- what the app hears about. All optional. --------------------
     //
     // A DIRECTORY IS THE WIDGET'S BUSINESS AND A FILE IS THE APP'S:
@@ -141,6 +150,8 @@ void uui_fileview_init(struct uui_fileview *fv, int x, int y, int w, int h,
                         struct sys_dirent *storage, int cap);
 
 void uui_fileview_set_mode(struct uui_fileview *fv, enum uui_fileview_mode mode);
+// See `active_mark` above. `on` 0 turns it off; the colour is kept.
+void uui_fileview_set_active_mark(struct uui_fileview *fv, int on, uint32_t color);
 // See `navigable` above. Takes effect on the next reload.
 void uui_fileview_set_navigable(struct uui_fileview *fv, int navigable);
 

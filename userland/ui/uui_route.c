@@ -178,8 +178,15 @@ int uui_router_motion(struct uui_router *r, int cx, int cy, unsigned buttons,
         id = ov->id;
     }
 
+    // AN OPEN POPUP OWNS THE POINTER: everyone else is told "nowhere",
+    // never the real point. Press already stops at the overlay owner;
+    // motion walking on with real coordinates lit up icons UNDER an
+    // open menu -- visible past the popup's edge, and every desktop's
+    // grab forbids it. "Nowhere" rather than skipping, so a highlight
+    // lit before the popup opened still clears.
+    int wx = ov ? UUI_NOWHERE : cx, wy = ov ? UUI_NOWHERE : cy;
     for (int i = 0; i < r->count; i++)
-        if (motion_item(&r->items[i], cx, cy, buttons, ov, &id)) changed = 1;
+        if (motion_item(&r->items[i], wx, wy, buttons, ov, &id)) changed = 1;
 
     if (out_changed) *out_changed = changed;
     return id;
