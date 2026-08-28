@@ -1267,3 +1267,43 @@ follows against libjpeg: **when implementing something that has a
 specification, find an independent implementation and disagree with it
 on purpose.** Every difference is then either a bug or a documented
 decision, and there is no third category.
+
+## tolibc stays; porting musl was sized and declined
+
+Asked and answered 2026-08-28, right after dynamic linking landed:
+should `/lib/libc.so` be musl instead of tolibc? No -- and the reasons
+are structural, not sentimental, so a future session should re-litigate
+only if one of them changes.
+
+**musl is Linux-only by construction.** Unlike newlib it has no OS
+porting layer; its internals call Linux syscalls directly at hundreds
+of sites. "Port musl" therefore means "make this kernel speak enough
+of Linux's syscall ABI", and the missing pieces are each a real kernel
+project: `fork`+`execve` (musl's `system`/`popen`/`posix_spawn` bottom
+out in them; this kernel is deliberately spawn-shaped and has no COW),
+`futex` (every musl lock -- pthreads, malloc, stdio -- sits on it;
+wait-channels here are kernel-internal), the `*at` family (no dirfd
+concept exists), `ioctl` (deliberately dedicated `tc*` syscalls
+instead), and a real `struct stat` (deliberately absent -- TFS3 lacks
+the fields, and invented zeroes make ported code take wrong branches).
+Summed, that is larger than the whole dynamic-linking milestone was.
+
+**And it would cost the compiled-both-rings design.** `kfmt`,
+`klineedit`, `heap_core` and `completion` are one source serving ring 0
+and ring 3, with shared case tables asserting both builds; errno and
+TLS integrate with libsys; strace's decode matches what userland
+actually calls. musl can participate in none of that -- the swap
+deletes the property that both shells agree what Ctrl-A does because
+they run the same lines.
+
+**What IS taken from musl**: individual implementations, with
+attribution -- math corner cases, printf edge behaviour, test vectors.
+tolibc's bar is already "complete rather than second-caller"; filling
+it with battle-tested code keeps everything above.
+
+**When to revisit**: if running unmodified Linux binaries ever becomes
+a goal in itself, the prerequisite chain is futex -> per-frame
+refcounts -> COW fork -> execve -> the `*at`/stat/ioctl surface -- each
+worth building on its own merits or not at all -- and at the end of it
+a musl port is nearly mechanical. That would be a Linux-compat
+milestone, not a libc swap.

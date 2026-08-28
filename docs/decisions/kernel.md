@@ -1186,8 +1186,9 @@ linked into the ring-3 binary. `kernel/lib/string.c` and `knum.c` ride
 the same path.
 
 Why a second compile rather than reusing the object: the kernel builds
-with `-mcmodel=kernel` and a ring-3 ELF with `-mcmodel=large`, linking
-at `VMM_USER_BASE`. The objects are not interchangeable, so rebuilding
+with `-mcmodel=kernel` and a ring-3 ELF with a user code model
+(`-mcmodel=large` then, `-fpie -mcmodel=small` since dynlink Stage 1),
+linking at `VMM_USER_BASE`. The objects are not interchangeable, so rebuilding
 is the only way to share the SOURCE — and sharing the source is the
 whole point. A bug fixed in the engine fixes both copies of the app,
 because there is only one engine. Two hand-synced copies of arithmetic
@@ -1437,7 +1438,7 @@ drawn honestly rather than a defect to paper over.
 [Calculator's engine](#calculators-engine-is-shared-source-compiled-twice-not-copied),
 and worth restating because this is now the established pattern rather
 than a one-off: the objects genuinely cannot be shared (`-mcmodel=kernel`
-vs `-mcmodel=large`), but the SOURCE can, and a second hand-written copy
+vs the user model -- `-fpie -mcmodel=small` today), but the SOURCE can, and a second hand-written copy
 of a rasteriser would drift from the first. When it drifted, the symptom
 would be a ring-3 app drawing a slightly different circle from the
 kernel -- a rendering difference with no obvious cause and no failing
@@ -4851,8 +4852,13 @@ under the offsets reading it, and nothing fails loudly.
 of a declared object cannot be null, so `for (i = 0; i < (size_t)__tls_filesz; i++)`
 compiles bottom-tested and a `filesz` of 0 counts to 2^64. It was a page
 fault in every ring-3 program, a few thousand bytes past the buffer, on
-the first build that had TLS in it. `linker_value()` launders the number
-through an empty `asm` and emits no instruction.
+the first build that had TLS in it. `linker_value()` laundered the number
+through an empty `asm` and emitted no instruction -- until dynlink
+Stage 1 (2026-08-28) retired the whole mechanism: `-fpie` cannot reach
+an *ABS* symbol RIP-relatively at all, so the geometry became three
+QUADs `link.ld` writes into `.rodata` (`__rt_tlsdesc`), read as an
+ordinary struct. A bound loaded from memory is data GCC believes, so
+the laundering went with the symbols.
 
 ## A service is controlled by a file and a doorbell, and init cannot be killed by a signal it has not caught
 

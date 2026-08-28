@@ -2031,3 +2031,21 @@ for widget ops tables -- "fill a new widget's table against
 `uui_widget.h`, never against the widget you copied, a copied table
 inherits its gaps" -- and it is the same failure with a harness instead
 of a struct. Ask what the original needed the line FOR before keeping it.
+
+## A serial log line can arrive GLUED to a console echo (2026-08-28)
+
+`uterm_test`'s t4 failed with the evidence in hand: `titles seen:
+['gui state --jsuterm: tab 1 title /bin']` -- the app's log line
+arrived concatenated to the debug console's own command echo, so a
+positional `l.split()[2]` parsed the echo, not the line. The title had
+reached the right tab all along. Any parse of a serial-stream line
+must RESLICE from its marker (`l[l.index("uterm: tab"):]`) before
+splitting. Under load this happens often enough to fail a suite run.
+
+Same session, two self-inflicted invalid repros, both already-warned
+shapes: `send_text()` silently drops `/` `.` `_` (typed
+`edit /t.txt`, got `editptye` -- use the debug console's key
+injection), and a REUSED guest poisoned a click-coordinate section (my
+leftover Terminal window shifted every position; the run failed
+window-management checks that were fine). Fresh guest per GUI repro,
+and read the tool's own typing helpers before improvising.

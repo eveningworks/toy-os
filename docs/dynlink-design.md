@@ -6,7 +6,9 @@ A staged plan, in the shape `docs/libc-design.md` and
 have shared libraries here, and is it worth it?**
 
 **Status: in progress.** Stages 0-3 are BUILT; what remains is
-Stage 4 (`dlopen`) and the measured case for lazy binding.
+Stage 4 (`dlopen`) and the measured case for lazy binding. The shared
+library is and stays tolibc -- porting musl was sized and declined the
+day Stage 3 landed (`docs/decisions.md`, "tolibc stays").
 Stage 3 (2026-08-28): tolibc ships as `/lib/libc.so` and EVERY `/bin`
 and GUI program links it (init, toywm and `/tests` stay static --
 `docs/decisions.md`'s "userland is dynamically linked" entry has the

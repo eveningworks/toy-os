@@ -145,13 +145,20 @@ socket by a previous command comes back attached to the next one. Assert
 on the guest's own state -- a file, a `ps` row -- not on how long a
 `send()` took.
 
-**A SPAWNED program's stdout never reaches the serial socket.** It goes
-to the console framebuffer; the legacy `run` loader's output does come
-back. So `sh <prog>` returns text you can assert on and `sh spawn
-/bin/<prog>` returns only the loader's own lines. That decides a test's
-shape: anything printing a table gets run through the legacy loader, and
-anything needing a scheduler slot (i.e. anything that sleeps) gets
-checked through the process table instead. **And fd 2 is the KERNEL
+**An ASYNCHRONOUSLY spawned program's stdout never reaches the serial
+socket.** Output is relayed only while the `sh` command that produced
+it is still running. A bare `sh <prog>` WAITS now -- the kernel
+shell's bare name is spawn-and-wait since the userland went dynamic
+(2026-08-28) -- so it returns text you can assert on, for dynamic and
+static programs alike; `sh run <prog>` does the same through the
+legacy loader (static binaries only -- it refuses `PT_INTERP` by
+name); but `sh spawn /bin/<prog>` returns immediately, and the
+child's later output falls between commands and is dropped. That
+decides a test's shape: anything printing a table is run by bare name
+(or `run`, when it is static and the exit banner is wanted), and
+anything that must OUTLIVE the command -- a sleeper, a service -- is
+`spawn`ed and then checked through the process table or a file it
+writes. **And fd 2 is the KERNEL
 LOG**, so `sys_eprint()` from a ring-3 program reaches `dmesg` even when
 its stdout is a framebuffer nobody can see -- which is the way to
 instrument a spawned program.

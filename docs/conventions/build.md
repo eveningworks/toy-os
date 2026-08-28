@@ -283,9 +283,13 @@ this the obvious way), not from how much history it accumulated.
   else silently shifts every variable under the offsets that read it.
   And **a linker symbol's address is data, which GCC does not believe**:
   the address of a declared object cannot be null, so a loop bounded by
-  one is compiled bottom-tested and a size of 0 counts to 2^64. That was
-  a page fault in every ring-3 program; `linker_value()` launders the
-  number through an empty `asm` and costs no instruction.
+  one is compiled bottom-tested and a size of 0 counts to 2^64 -- a
+  page fault in every ring-3 program, once. The geometry is DATA now
+  (three QUADs `link.ld` writes into `.rodata`, read as an ordinary
+  struct), which retired the old `linker_value()` asm-laundering AND
+  was forced anyway by `-fpie`: RIP-relative addressing cannot name an
+  *ABS* symbol whose "address" is a value like 16. Keep it data; do
+  not reintroduce value-carrying symbols.
 - **RING-3 CODE HAS A FRAME BUDGET, and a link-time bound on the
   image.** `USERLAND_CFLAGS` carries `-Wframe-larger-than=2048` and
   `userland/rt/link.ld` `ASSERT`s that the image stays below

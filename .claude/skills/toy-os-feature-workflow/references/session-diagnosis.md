@@ -1081,3 +1081,36 @@ The bisect that found it in two commands: list the image BEFORE the
 build's last step and AFTER it. The build printed `sync: 218 written, 0
 unchanged` and the tree has exactly 218 files, so the write half was
 provably fine and only what came after could be at fault.
+
+## Three bugs from one flip, and the instrument that ended each theory (2026-08-28)
+
+Making every /bin and GUI program dynamic broke the GUI suite in a
+SMEARED way -- a different subset of uterm checks red each run. Three
+distinct defects were hiding under one symptom, and each fell to a
+different instrument after theorizing had gone nowhere:
+
+- **The moving failure set meant SYSTEMWIDE slowness, not a broken
+  feature.** Every dynamic spawn demand-paged libc.so through the
+  filesystem, each fault a preempt-disabled device poll; marginal
+  checks flaked under load. The fix was the design's own frame sharing
+  (the /lib image cache). When failures WANDER between unrelated
+  checks, stop reading the checks and ask what got slower everywhere.
+- **Two klog timestamps ended three wrong theories about the
+  foreground race**: `[4.22] SIGTTIN fg=4` / `[4.24] tcsetpgrp fg=6`
+  -- the child's first read beat the shell's tcsetpgrp by a whole
+  timeslice, because the heavier spawn syscall now ended the shell's
+  slice. Fixed at the root: `SPAWN_FOREGROUND`, the terminal handoff
+  riding ON the spawn (musl's POSIX_SPAWN_TCSETPGROUP -- POSIX shells
+  close this gap from the child's side between fork and exec, and a
+  spawn ABI has no child side). "Instrument before theorising a third
+  time" is already in this file; it was re-learned at full price.
+- **`ps` typed at the console printed into a Terminal window** --
+  `fd_inherit()` read its parent off CR3, and a kernel-context caller
+  runs with whatever address space the scheduler last loaded. The
+  parent is a named argument now. The misleading-symptom rule
+  (something shared with whatever ran before), CR3 edition.
+
+Two measurements that kept the day honest: `predates.py` proved
+`ansi_cursor_test`'s 5/10 pre-existing (HEAD fails identically -- filed
+in docs/bugs.md, not chased), and the ktest `fsck r.leaked=12` cluster
+was the documented dirty-disk.img fixture (clean-disk cleared it).

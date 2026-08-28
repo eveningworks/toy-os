@@ -55,11 +55,15 @@ already draining.
 
 ## How a command is resolved
 
-Executables run by name, with no prefix: typing `nx_test` searches
+Executables run by name, with no prefix: typing `pmap` searches
 `PATH` (set in `/etc/toyos.conf`, default `/bin;/usr/bin`, searched left
-to right with the first match winning) and runs what it finds. `run
-<name>` still works as the explicit form, going through the same
-resolver. `path` shows the search order.
+to right with the first match winning), SPAWNS what it finds as a real
+scheduled process and waits for it -- which is what lets a `/bin`
+program be a dynamic executable. `run <name>` goes through the same
+resolver but keeps the LEGACY blocking loader, which refuses a dynamic
+binary by name ("use spawn") and still loads the static `/tests`
+diagnostics -- see [commands/run.md](commands/run.md). `path` shows
+the search order.
 
 **Shell builtins win over both** — but the everyday commands are
 no longer builtins. `cat`, `echo`, `rm`, `touch`, `mkdir`, `mv`, `ln`,

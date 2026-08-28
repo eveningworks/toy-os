@@ -10,6 +10,20 @@ C program can be compiled against?**
 program nobody working on this repo wrote -- parses and re-serialises
 JSON on toy-os. What remains is named at the end of this file.
 
+**It is also a SHARED library now** (2026-08-28,
+`docs/dynlink-design.md`): the same sources build `/lib/libc.so` in a
+second `-fpic` compile, and every `/bin` and GUI program links it
+through `/lib/ld-toy.so`. `pthread.c` stays static
+(`libc_nonshared.a`, glibc's shape) because its `__thread` state is
+TLS a library here may not carry. **And it stays tolibc**: replacing
+it with musl was sized and declined -- musl is Linux-only by
+construction, and the port is really a Linux-syscall-compat project
+(`fork`/`execve`, `futex`, `*at`, `ioctl`, `stat`) that would also
+cost the compiled-both-rings design. `docs/decisions.md`'s "tolibc
+stays" entry is the full account, including what IS taken from musl
+(individual implementations, with attribution) and the one goal that
+would reopen the question.
+
 **It is called `tolibc`**, formed the way `tosh` was (toy-os + `sh`;
 toy-os + `libc`). It sits beside Toykit, and `userland/libc/README.md`
 is its own front page. The archive stays `libc.a`, because a linker

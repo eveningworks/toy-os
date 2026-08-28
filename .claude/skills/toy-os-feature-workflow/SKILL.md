@@ -954,6 +954,36 @@ Where the project stands after it:
 The lessons are in `references/session-testing.md` and
 `session-design.md` under the same date.
 
+**2026-08-28 (dynamic linking, Stages 0-3, in four commits). Read this
+before anything mmap-, loader- or libc-shaped.**
+
+Where the project stands after it:
+
+- **`mmap`/`munmap` exist** -- a region list in `struct sched_mm`, an
+  arena above the window regions, file-backed demand paging, `pmap`
+  over `QUERY_PROCMAP`. A file-backed fault-in REFUSES inside an FS_OP.
+- **The userland is PIC at the same base** (`-fpie -mcmodel=small`);
+  the TLS geometry is DATA in `.rodata` (`__rt_tlsdesc`), not *ABS*
+  symbols, and `linker_value()` is gone.
+- **Dynamic linking works end to end**: `PT_INTERP` makes spawn load
+  `/lib/ld-toy.so` (a fixed-base ET_EXEC -- the kernel never learned
+  ET_DYN) and enter it with a minimal auxv; the loader mmaps DT_NEEDED
+  libraries from /lib, relocates eagerly, resolves exe-first.
+- **tolibc ships as `/lib/libc.so` and every /bin and GUI program
+  links it.** Static by contract: init, toywm, /tests, ld-toy itself.
+  pthread is `libc_nonshared.a`. musl was sized and DECLINED
+  (`docs/decisions.md`, "tolibc stays").
+- **The `#` shell's bare name SPAWNS AND WAITS now; `run` keeps the
+  legacy loader** and refuses dynamic binaries by name -- the harness
+  still drives static /tests through it for the exit banner.
+- **Three flip bugs, all fixed and written up**: the /lib image cache
+  (per-spawn page faults through the FS made the whole machine
+  stutter), `SPAWN_FOREGROUND` (the tcsetpgrp-after-spawn race), and
+  `fd_inherit()` taking a NAMED parent instead of CR3.
+
+The lessons are in `references/session-design.md`,
+`session-diagnosis.md` and `session-testing.md` under the same date.
+
 **2026-08-18 (init stage 2: a boot target, services, supervision). THE
 THEME OF THIS SESSION IS THAT AUTOMATING A LIFECYCLE REMOVES INTERLOCKS
 NOBODY KNEW THEY DEPENDED ON.** Read that first; it caused four of the

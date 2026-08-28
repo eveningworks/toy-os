@@ -1934,3 +1934,38 @@ change the device resolves and the volume reads, so the refusal looks
 like the new code failing rather than an old rule holding. **When a
 change makes something newly reachable, check which OLD refusals now
 appear for the first time** -- and say which ones are deliberate.
+
+## Dynamic linking landed in one day, and the plan's escape hatches were where the work went (2026-08-28)
+
+Dynlink Stages 0-3 (`docs/dynlink-design.md`): `mmap` with file-backed
+demand paging, `-fpie` userland at the same base, `/lib/ld-toy.so`, and
+tolibc as `/lib/libc.so` linked by every `/bin` and GUI program. The
+design calls that made it tractable, each recorded in
+`docs/decisions.md`:
+
+- **The loader is a fixed-base ET_EXEC, not ET_DYN.** The kernel never
+  learned ET_DYN at all, and the loader never relocates itself -- the
+  rtld bootstrap, the nastiest bug surface in the whole plan, was
+  deleted by one linker-script address. When a plan has a stage whose
+  bugs "present as a crash before main with no output", look for the
+  version of it that cannot have that stage.
+- **The measurement went the good way in Stage 1**: `-fpie
+  -mcmodel=small` links fine at 0x8000000000, because PIE code is
+  RIP-relative and the model's 2 GiB constraint is on the image's SPAN,
+  not its placement. The whole address map stayed put. Measure before
+  moving a map.
+- **TLS in libraries was dodged, not solved**: errno lives in libsys
+  (static everywhere) and libc.so imports the exe's
+  `__errno_location`; pthread.c sits in `libc_nonshared.a` (glibc's
+  own shape). The full static-TLS-layout machinery stayed unbuilt
+  because nothing needed it.
+- **The scope questions were asked with numbers** (libc.so 359 KB, the
+  `run`-loader constraint) and the user picked bigger than the
+  recommendation both times -- everything spawnable went dynamic. The
+  static set that survived is a CONTRACT, not leftovers: init (boots
+  with /lib broken), toywm (rescue happens on the desktop), /tests
+  (the harness drives `run`, whose exit banner is its assertion).
+- **musl was sized and declined** the same day
+  (`docs/decisions.md`, "tolibc stays"): Linux-only by construction,
+  so the port is really fork+futex+`*at`+ioctl+stat -- a Linux-compat
+  milestone, not a libc swap.

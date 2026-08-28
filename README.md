@@ -150,7 +150,10 @@ production software. What that means concretely:
 **Works today** — booting on real hardware and QEMU, the shell and its
 line editor, both filesystems with `fsck` and live reformatting, the
 window manager and its apps, fonts loaded and rasterized from disk at
-runtime, ring-3 processes with pipes and `spawn`/`waitpid`, a TTY layer
+runtime, ring-3 processes with pipes and `spawn`/`waitpid`, `mmap` with
+file-backed demand paging, dynamic linking — tolibc ships as
+`/lib/libc.so` and every `/bin` and GUI program links it through
+`/lib/ld-toy.so` — a TTY layer
 with pseudo-terminals — so `Ctrl-C` interrupts a job, `Ctrl-Z` suspends
 one, and a full-screen editor runs in a Terminal window — and the full
 test suite: a few hundred in-kernel tests, the ring-3 diagnostics, and
@@ -183,11 +186,25 @@ resumes as one process group. The same code serves the physical console
 and a Terminal window, which is the test of whether the TTY layer is
 real.
 
+**The userland is dynamically linked** (2026-08-28,
+[docs/dynlink-design.md](docs/dynlink-design.md)): `mmap`/`munmap`
+landed first — a per-process region list, its own arena, file-backed
+demand paging, `pmap` to see it — then the whole userland went
+position-independent at the same base, and then `/lib/ld-toy.so`: the
+kernel loads a dynamic executable's interpreter and enters *it*
+(Linux's split — the kernel never learns ET_DYN), and the loader maps
+`DT_NEEDED` libraries with mmap, relocates eagerly and jumps to the
+real entry. tolibc ships as `/lib/libc.so`; every `/bin` and GUI
+program links it, while init, toywm and `/tests` stay static so a
+machine with a broken `/lib` still boots to something that can fix it.
+Read-only library pages are served from a kernel image cache and
+shared — one frame of libc text, machine-wide.
+
 **Known gaps** — USB is xHCI with a HID boot keyboard and mouse; there
 are no hubs, no mass storage and no HID report-descriptor parsing. No
-networking and no SMP. Demand
-paging covers the heap and the user stack, but there is no region list,
-so no `mmap` yet. No shared libraries, and no privilege model: there are
+networking and no SMP. Dynamic linking is eager-binding with no
+`dlopen` yet, `mmap` has no `MAP_SHARED` and no `mprotect`, and there
+is no `fork`. No privilege model: there are
 no user accounts and no permission checks, so anything ring 3 can ask
 for, any process can ask for. [docs/roadmap.md](docs/roadmap.md) tracks
 all of it, including a candid known-issues list.
@@ -537,7 +554,13 @@ window agree about what `ESC[4;12H` means. Adding a program is a
 ([docs/libc-design.md](docs/libc-design.md)) — stdio, math, time,
 dirent, setjmp and scanf — which is the one part of this tree that aims
 to be COMPLETE rather than minimal, because its audience is code that
-has not been written yet.
+has not been written yet. It is also a **shared library**: the same
+sources build `/lib/libc.so` (a second `-fpic` compile, the
+compiled-twice pattern one axis over), `/lib/ld-toy.so` loads it into
+every `/bin` and GUI program, and it stays *ours* on purpose — porting
+musl was sized and declined, because musl is Linux-only by
+construction and the port is really a Linux-syscall-compat project
+(see `docs/decisions.md`).
 
 **Syscalls.** One table maps each number to its handler, and the handlers
 live with the subsystem that owns them — the shape Linux and NT both
@@ -547,7 +570,7 @@ dispatch cannot disagree about which syscalls exist.
 **Introspection.** Kernel state reaches ring 3 through one self-describing
 registry rather than a `/proc` filesystem: a subsystem registers a
 provider for a fact, and a command formats it — `ps`, `df`, `lsblk`, `lspci`,
-`lsusb`, `lscpu`, `meminfo`, `kstack`, `tty`, `kbd`. Answering *"what did the
+`lsusb`, `lscpu`, `meminfo`, `pmap`, `kstack`, `tty`, `kbd`. Answering *"what did the
 machine actually do?"* is treated as a first-class job, distinct from a
 test asserting it did the right thing: `strace` decodes a syscall per
 line, `meminfo audit` compares every live address space against the
@@ -588,8 +611,11 @@ apps/           kernel-space programs: the shell, the demo, tab completion.
                 No GUI lives here any more.
 
 userland/       ring-3 programs, split by ROLE:
-  rt/           crt0, libsys, the signal trampoline, linker script
-  libc/         tolibc -- the C library, aiming to be COMPLETE
+  rt/           crt0, libsys, the signal trampoline, linker scripts
+  libc/         tolibc -- the C library, aiming to be COMPLETE;
+                also built -fpic into /lib/libc.so
+  ldso/         /lib/ld-toy.so -- the dynamic loader, freestanding
+  dynlib/       shared-library sources (the Stage-2 proof lib)
   ui/           Toykit -- the toolkit clients program against
   lib/          non-UI libraries: the tosh shell, images, history
   wm/           the window manager, itself a ring-3 program

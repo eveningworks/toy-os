@@ -10,7 +10,13 @@ typed syscall layer.
 a C library's archive has one conventional name, a linker expects to
 find it under that name, and a ported build system that says `-lc`
 should not have to know what this one is called. The NAME is for people;
-the FILENAME is for tools.
+the FILENAME is for tools. **The shared form follows the same rule**:
+the same sources build `/lib/libc.so` (a second `-fpic` compile --
+minus `pthread.c`, which stays static in `libc_nonshared.a` because
+its `__thread` state is TLS a library here may not carry), and every
+`/bin` and GUI program links it through `/lib/ld-toy.so`. See
+`docs/dynlink-design.md`, and `docs/decisions.md`'s "tolibc stays" for
+why this is tolibc and not musl.
 
 ## What is here
 

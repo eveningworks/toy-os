@@ -428,6 +428,20 @@ provider: a fact that already lives in kernel memory does not need the
 "every read hits the device" discipline, and paying it anyway would be a
 cache nobody asked for.
 
+### The process map -- DONE 2026-08-28
+
+`QUERY_PROCMAP` (`kernel/mm/procmap_query.c`), with `/bin/pmap` over
+it: one record per MAPPING of every live process -- the image, heap and
+stack synthesized beside the `mmap` regions, so a reader gets the whole
+address space from one class.
+
+One FLAT list over every process rather than a per-pid class, because a
+list provider's index has nowhere to carry a second selector
+(`QUERY_FONTGLYPH` hit the same wall); the pid rides in the record and
+the client filters. Every `bytes` field is a RESERVATION, not
+residency -- reservations are the number this class exists to make
+visible, and `ps` already carries the resident side.
+
 ## Open questions
 
 1. **Does a class get to be variable-length?** `dmesg` is a buffer, not
