@@ -189,3 +189,11 @@ either still parses the ring-0 output or runs on an image that has no
   assertion, not a command-name one.
 
 Reproduce: `make clean-disk && make iso && python3 tools/ondemand_sweep.py --logs DIR`.
+
+- **`ansi_cursor_test.py`** — 5 of 10 checks fail on the physical
+  console (blank-column and cursor-up assertions), every run. Measured
+  PRE-EXISTING against the pre-dynlink HEAD with `predates.py`
+  (2026-08-28, both fail identically), so it is console/ANSI rot or
+  harness rot, not the dynamic-userland change; cause not established.
+
+Reproduce: `python3 tools/ansi_cursor_test.py` (boots its own guest).
