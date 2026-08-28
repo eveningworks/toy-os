@@ -87,13 +87,18 @@
 
 #define SHELL "/bin/tosh"
 
-// The screen. A fixed grid rather than a resizable one: a window can be
-// made large, and 200x60 cells is 36 KiB against a ring-3 heap --
-// cheaper than the arithmetic of growing it, and it bounds what a
-// program can ask for. What actually varies is g_rows/g_cols, derived
-// from the window and told to every child through SYS_TCSETWINSZ.
-#define VT_ROWS 60
-#define VT_COLS 200
+// The screen. The grid GROWS to fit the window rather than being a
+// fixed 200x60: the display ceiling is 1920x1080 (WIN_CLIENT_MAX_W/H)
+// and a maximized terminal there wants ~240x67 cells, so the old fixed
+// cap left a dead band below the last row and to the right of the last
+// column, silently. xterm reallocates on resize and CROPS (no reflow);
+// so does this. What bounds it now is the WINDOW, which the compositor
+// already clamps -- a program still cannot ask for an unbounded grid.
+//
+// ONE ALLOCATED GEOMETRY FOR EVERY SESSION (g_cap_rows x g_cap_cols):
+// there is one window, so every tab is the same size, and capacity only
+// ever grows -- shrinking the window narrows g_rows/g_cols and leaves
+// the buffers alone, exactly as the fixed grid did.
 #define SB_ROWS 240   // scrollback lines kept above the screen
 
 // **EIGHT, AND THE REASON IS MEMORY RATHER THAN TASTE.** A session is
@@ -120,8 +125,12 @@ struct session {
     volatile int eof;
     int index;                  // its slot, and what a post carries
 
-    struct cell grid[VT_ROWS][VT_COLS];
-    struct cell sb[SB_ROWS][VT_COLS];
+    // Heap-backed, g_cap_rows/g_cap_cols geometry, allocated at first
+    // use and REALLOCATED by grow_caps() when the window outgrows them.
+    // session_start() zeroes the whole struct on slot reuse, so it
+    // saves and restores these three pointers around the wipe.
+    struct cell *grid;          // g_cap_rows x g_cap_cols
+    struct cell *sb;            // SB_ROWS   x g_cap_cols
     int sb_count;               // lines of scrollback held
     int sb_view;                // how far back the reader has scrolled
 
@@ -138,7 +147,7 @@ struct session {
     // **SCROLLBACK IS NOT SAVED, DELIBERATELY.** On a real terminal the
     // alternate screen has no scrollback at all -- that is why you
     // cannot scroll back through a `less` session.
-    struct cell saved[VT_ROWS][VT_COLS];
+    struct cell *saved;         // g_cap_rows x g_cap_cols
     int alt;
     int saved_cr, saved_cc;
 
@@ -271,6 +280,12 @@ static struct uui_item g_widgets[] = {
 static struct uapp *g_app;
 static int g_rows = 24, g_cols = 80;  // one window, so one size for all
 
+// The ALLOCATED geometry every session's buffers share, and the draw
+// scratch sized to it. Grows in grow_caps(), never shrinks.
+static int g_cap_rows, g_cap_cols;
+static char *g_runbuf;   // draw_run's text scratch, g_cap_cols + 1
+static char *g_rowbuf;   // draw_row's run scratch,  g_cap_cols + 1
+
 // The 16 ANSI colours as RGB. The parser resolves a sequence to an
 // `enum vga_color`, which is an INDEX -- turning an index into light is
 // the display's business, and the kernel console does exactly the same
@@ -292,8 +307,82 @@ static struct session *active(void) {
 
 // --- the screen -------------------------------------------------------
 
+// Row accessors: the buffers are flat, strided by the ALLOCATED width,
+// which is what lets one realloc change the geometry without touching
+// any of the code below.
+static struct cell *grid_row(struct session *s, int r) {
+    return s->grid + (size_t)r * g_cap_cols;
+}
+static struct cell *sb_row(struct session *s, int r) {
+    return s->sb + (size_t)r * g_cap_cols;
+}
+static struct cell *saved_row(struct session *s, int r) {
+    return s->saved + (size_t)r * g_cap_cols;
+}
+
+static struct cell *cells_new(int rows, int cols) {
+    size_t n = (size_t)rows * (size_t)cols;
+    struct cell *p = (struct cell *)malloc(n * sizeof *p);
+    if (!p) return 0;
+    for (size_t i = 0; i < n; i++) {
+        p[i].ch = ' '; p[i].fg = VT_FG; p[i].bg = VT_BG;
+    }
+    return p;
+}
+
+// Grows the shared geometry to hold rows x cols, migrating EVERY live
+// session's buffers (a crop-preserving copy -- xterm's behaviour; there
+// is no reflow). Two passes on purpose: allocate everything first, then
+// swap, so a failed malloc leaves no session with a stride the globals
+// do not describe. Returns 0 on failure with everything as it was --
+// the caller then clamps to the old capacity, which is exactly the old
+// fixed-grid behaviour.
+static int grow_caps(int rows, int cols) {
+    if (rows <= g_cap_rows && cols <= g_cap_cols) return 1;
+    int nr = rows > g_cap_rows ? rows : g_cap_rows;
+    int nc = cols > g_cap_cols ? cols : g_cap_cols;
+
+    struct cell *ng[MAX_TABS] = {0}, *nb[MAX_TABS] = {0}, *nv[MAX_TABS] = {0};
+    char *rb = (char *)malloc((size_t)nc + 1);
+    char *ob = (char *)malloc((size_t)nc + 1);
+    int ok = rb && ob;
+    for (int i = 0; ok && i < MAX_TABS; i++) {
+        struct session *s = g_slot[i];
+        if (!s || !s->grid) continue;
+        ng[i] = cells_new(nr, nc);
+        nb[i] = cells_new(SB_ROWS, nc);
+        nv[i] = cells_new(nr, nc);
+        if (!ng[i] || !nb[i] || !nv[i]) ok = 0;
+    }
+    if (!ok) {
+        for (int i = 0; i < MAX_TABS; i++) { free(ng[i]); free(nb[i]); free(nv[i]); }
+        free(rb); free(ob);
+        return 0;
+    }
+
+    for (int i = 0; i < MAX_TABS; i++) {
+        struct session *s = g_slot[i];
+        if (!s || !s->grid) continue;
+        for (int r = 0; r < g_cap_rows; r++)
+            for (int c = 0; c < g_cap_cols; c++) {
+                ng[i][(size_t)r * nc + c] = grid_row(s, r)[c];
+                nv[i][(size_t)r * nc + c] = saved_row(s, r)[c];
+            }
+        for (int r = 0; r < SB_ROWS; r++)
+            for (int c = 0; c < g_cap_cols; c++)
+                nb[i][(size_t)r * nc + c] = sb_row(s, r)[c];
+        free(s->grid); free(s->sb); free(s->saved);
+        s->grid = ng[i]; s->sb = nb[i]; s->saved = nv[i];
+    }
+    free(g_runbuf); g_runbuf = rb;
+    free(g_rowbuf); g_rowbuf = ob;
+    g_cap_rows = nr;
+    g_cap_cols = nc;
+    return 1;
+}
+
 static void row_clear(struct cell *row, int from) {
-    for (int c = from; c < VT_COLS; c++) {
+    for (int c = from; c < g_cap_cols; c++) {
         row[c].ch = ' ';
         row[c].fg = VT_FG;
         row[c].bg = VT_BG;
@@ -301,7 +390,7 @@ static void row_clear(struct cell *row, int from) {
 }
 
 static void vt_reset_screen(struct session *s) {
-    for (int r = 0; r < VT_ROWS; r++) row_clear(s->grid[r], 0);
+    for (int r = 0; r < g_cap_rows; r++) row_clear(grid_row(s, r), 0);
     s->cr = s->cc = 0;
 }
 
@@ -309,17 +398,16 @@ static void vt_reset_screen(struct session *s) {
 // STREAM STILL EXISTS -- and it is the right place: scrollback is a
 // record of what went past, while the screen is a thing being drawn on.
 static void vt_scroll(struct session *s) {
+    size_t rowbytes = (size_t)g_cap_cols * sizeof(struct cell);
     if (s->sb_count == SB_ROWS) {
-        for (int i = 1; i < SB_ROWS; i++)
-            for (int c = 0; c < VT_COLS; c++) s->sb[i - 1][c] = s->sb[i][c];
+        memmove(sb_row(s, 0), sb_row(s, 1), (size_t)(SB_ROWS - 1) * rowbytes);
         s->sb_count--;
     }
-    for (int c = 0; c < VT_COLS; c++) s->sb[s->sb_count][c] = s->grid[0][c];
+    memcpy(sb_row(s, s->sb_count), grid_row(s, 0), rowbytes);
     s->sb_count++;
 
-    for (int r = 1; r < g_rows; r++)
-        for (int c = 0; c < VT_COLS; c++) s->grid[r - 1][c] = s->grid[r][c];
-    row_clear(s->grid[g_rows - 1], 0);
+    memmove(grid_row(s, 0), grid_row(s, 1), (size_t)(g_rows - 1) * rowbytes);
+    row_clear(grid_row(s, g_rows - 1), 0);
 }
 
 static void vt_newline(struct session *s) {
@@ -339,9 +427,10 @@ static void vt_putc_raw(struct session *s, char c) {
     if ((unsigned char)c < 32) return; // anything else unprintable is dropped
 
     if (s->cc >= g_cols) { s->cc = 0; vt_newline(s); }
-    s->grid[s->cr][s->cc].ch = c;
-    s->grid[s->cr][s->cc].fg = (uint8_t)s->vt.fg;
-    s->grid[s->cr][s->cc].bg = (uint8_t)s->vt.bg;
+    struct cell *cell = &grid_row(s, s->cr)[s->cc];
+    cell->ch = c;
+    cell->fg = (uint8_t)s->vt.fg;
+    cell->bg = (uint8_t)s->vt.bg;
     s->cc++;
 }
 
@@ -366,39 +455,41 @@ static void vt_ctrl(struct session *s) {
     case ANSI_OP_COLUMN:  s->cc = s->vt.a - 1; break;
     case ANSI_OP_ROW:     s->cr = s->vt.a - 1; break;
     case ANSI_OP_ERASE_LINE:
-        if (s->vt.a == 0) row_clear(s->grid[s->cr], s->cc);
+        if (s->vt.a == 0) row_clear(grid_row(s, s->cr), s->cc);
         else if (s->vt.a == 1)
-            for (int c = 0; c <= s->cc && c < VT_COLS; c++) s->grid[s->cr][c].ch = ' ';
-        else row_clear(s->grid[s->cr], 0);
+            for (int c = 0; c <= s->cc && c < g_cap_cols; c++)
+                grid_row(s, s->cr)[c].ch = ' ';
+        else row_clear(grid_row(s, s->cr), 0);
         break;
     case ANSI_OP_ERASE_DISPLAY:
         if (s->vt.a == 0) {
-            row_clear(s->grid[s->cr], s->cc);
-            for (int r = s->cr + 1; r < g_rows; r++) row_clear(s->grid[r], 0);
+            row_clear(grid_row(s, s->cr), s->cc);
+            for (int r = s->cr + 1; r < g_rows; r++) row_clear(grid_row(s, r), 0);
         } else if (s->vt.a == 1) {
-            for (int r = 0; r < s->cr; r++) row_clear(s->grid[r], 0);
-            for (int c = 0; c <= s->cc && c < VT_COLS; c++) s->grid[s->cr][c].ch = ' ';
+            for (int r = 0; r < s->cr; r++) row_clear(grid_row(s, r), 0);
+            for (int c = 0; c <= s->cc && c < g_cap_cols; c++)
+                grid_row(s, s->cr)[c].ch = ' ';
         } else {
-            for (int r = 0; r < g_rows; r++) row_clear(s->grid[r], 0);
+            for (int r = 0; r < g_rows; r++) row_clear(grid_row(s, r), 0);
         }
         break;
     case ANSI_OP_ALT_ON:
         // Idempotent: a program that switches twice must not overwrite
         // the screen it saved the first time with the alternate one.
         if (!s->alt) {
-            for (int r = 0; r < VT_ROWS; r++)
-                for (int c = 0; c < VT_COLS; c++) s->saved[r][c] = s->grid[r][c];
+            memcpy(s->saved, s->grid,
+                   (size_t)g_cap_rows * g_cap_cols * sizeof(struct cell));
             s->saved_cr = s->cr;
             s->saved_cc = s->cc;
             s->alt = 1;
         }
-        for (int r = 0; r < g_rows; r++) row_clear(s->grid[r], 0);
+        for (int r = 0; r < g_rows; r++) row_clear(grid_row(s, r), 0);
         s->cr = s->cc = 0;
         break;
     case ANSI_OP_ALT_OFF:
         if (s->alt) {
-            for (int r = 0; r < VT_ROWS; r++)
-                for (int c = 0; c < VT_COLS; c++) s->grid[r][c] = s->saved[r][c];
+            memcpy(s->grid, s->saved,
+                   (size_t)g_cap_rows * g_cap_cols * sizeof(struct cell));
             s->cr = s->saved_cr;
             s->cc = s->saved_cc;
             s->alt = 0;
@@ -575,9 +666,25 @@ static int session_start(int slot) {
         g_slot[slot] = s;
     }
     // Zeroed whether it is new or reused -- a recycled session must not
-    // inherit the last shell's screen.
+    // inherit the last shell's screen. The cell buffers are heap-backed
+    // now, so their pointers are carried across the wipe (the CONTENT
+    // is cleared by vt_reset_screen below, and scrollback by sb_count
+    // going to 0).
+    struct cell *keep_grid = s->grid, *keep_sb = s->sb, *keep_saved = s->saved;
     char *raw = (char *)s;
     for (unsigned i = 0; i < sizeof *s; i++) raw[i] = 0;
+    s->grid = keep_grid; s->sb = keep_sb; s->saved = keep_saved;
+    if (!grow_caps(g_rows, g_cols)) return 0;   // first call sizes the caps
+    if (!s->grid) {
+        s->grid  = cells_new(g_cap_rows, g_cap_cols);
+        s->sb    = cells_new(SB_ROWS, g_cap_cols);
+        s->saved = cells_new(g_cap_rows, g_cap_cols);
+        if (!s->grid || !s->sb || !s->saved) {
+            free(s->grid); free(s->sb); free(s->saved);
+            s->grid = 0; s->sb = 0; s->saved = 0;
+            return 0;
+        }
+    }
     s->index = slot;
     s->master = -1;
     s->cursor_shown = 1;
@@ -719,8 +826,8 @@ static int chrome_h(void) {
 
 static void draw_run(struct ugfx_surface *s, int x, int y,
                      const char *text, int n, uint8_t fg, uint8_t bg) {
-    if (n <= 0) return;
-    char buf[VT_COLS + 1];
+    if (n <= 0 || !g_runbuf) return;
+    char *buf = g_runbuf;
     for (int i = 0; i < n; i++) buf[i] = text[i];
     buf[n] = '\0';
 
@@ -747,8 +854,8 @@ static void draw_row(struct ugfx_surface *s, const struct cell *row, int y) {
         while (j < g_cols && row[j].fg == row[i].fg && row[j].bg == row[i].bg) j++;
         int blank = 1;
         for (int k = i; k < j; k++) if (row[k].ch != ' ') { blank = 0; break; }
-        if (!(blank && row[i].bg == VT_BG)) {
-            char run[VT_COLS];
+        if (!(blank && row[i].bg == VT_BG) && g_rowbuf) {
+            char *run = g_rowbuf;
             for (int k = i; k < j; k++) run[k - i] = row[k].ch;
             draw_run(s, MARGIN + i * cw, y, run, j - i, row[i].fg, row[i].bg);
         }
@@ -777,9 +884,9 @@ static void draw(struct ugfx_surface *s, int focused) {
         if (back > 0) {
             int idx = ses->sb_count - back;
             if (idx < 0) continue;        // before the oldest line we kept
-            row = ses->sb[idx];
+            row = sb_row(ses, idx);
         } else {
-            row = ses->grid[-back];
+            row = grid_row(ses, -back);
         }
         draw_row(s, row, top + MARGIN + r * ch);
     }
@@ -1004,8 +1111,12 @@ static void size_changed(int w, int h) {
     int cols = (w - 2 * MARGIN) / cw;
     if (rows < 2) rows = 2;
     if (cols < 8) cols = 8;
-    if (rows > VT_ROWS) rows = VT_ROWS;
-    if (cols > VT_COLS) cols = VT_COLS;
+    // Grow the buffers to fit; on a failed malloc keep the old
+    // capacity and clamp, which is the old fixed-grid behaviour.
+    if (!grow_caps(rows, cols)) {
+        if (rows > g_cap_rows) rows = g_cap_rows;
+        if (cols > g_cap_cols) cols = g_cap_cols;
+    }
     if (rows == g_rows && cols == g_cols) return;
 
     g_rows = rows;

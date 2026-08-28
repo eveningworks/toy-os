@@ -4839,9 +4839,13 @@ app that wants one inherits the arithmetic, the hit-testing and the
 press/release discipline. The widget deliberately knows nothing about
 what a tab contains.
 
-**A SESSION IS 220 KiB and the cap is eight.** Grid, scrollback and
-saved screen at 200x60 cells are what dominate; eight bounds the window
-under two megabytes. Slots are allocated on demand and REUSED rather
+**A SESSION IS A FEW HUNDRED KiB and the cap is eight.** Grid,
+scrollback and saved screen are what dominate; the grid GROWS to fit
+the window since 2026-08-28 (a fixed 200x60 left a maximized 1080p
+terminal with a dead band below row 60 and right of column 200), so the
+bound is now the window itself, which the compositor clamps to
+WIN_CLIENT_MAX. Eight sessions at a full 1920x1080 grid stay around two
+megabytes. Slots are allocated on demand and REUSED rather
 than freed, so opening and closing tabs all day does not churn the heap
 — and a slot is only reusable once its reader thread has set `done`,
 because handing a live thread's ring to a new tab would be two producers
