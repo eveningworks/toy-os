@@ -692,6 +692,7 @@ run on, not by order.
 - [x] ~~A sound-producing test app~~ DONE -- `/tests/tone`, judged by `tools/audio_test.py`'s host-side recording
 - [x] ~~A PCM playback path (buffer submission + completion IRQ)~~ DONE -- the shared ring (`abi/sound_abi.h`)
 - [ ] A WAV player app
+- [ ] Doom sound: `i_sound.c` over the PCM ring, with Doom doing its own effect mixing in userspace
 - [ ] Volume mixer UI, persisted to `/etc`
 
 ### ACPI + real power/timer

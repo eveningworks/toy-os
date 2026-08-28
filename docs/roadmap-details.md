@@ -2111,8 +2111,9 @@ for integers, so `"STCFN%.3d"` of 33 gave `STCFN33` and the game died on
 a lump that does not exist. That formatter is compiled into both rings
 and had tests; the tests encoded the bug. See `docs/decisions.md`.
 
-**What is deliberately not there:** sound (there is no audio driver;
-`i_sound.c` resolves to silence on its own), mouse look (Doom aims with
+**What is deliberately not there:** sound (`i_sound.c` resolves to
+silence on its own -- an audio driver EXISTS now, and wiring Doom to
+the PCM ring is its own roadmap item under Sound), mouse look (Doom aims with
 relative motion and a windowed client gets position, which would need a
 pointer grab TWS does not have), and resizing.
 
