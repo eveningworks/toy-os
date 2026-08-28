@@ -153,10 +153,12 @@ DISK_IMG = disk.img
 # -- plain freestanding binaries, no
 # kernel-specific flags like -mcmodel=kernel needed since these run in
 # ordinary ring-3 user space, not as part of the kernel image.
-# -mcmodel=large IS needed though: these link at VMM_USER_BASE
-# (512GiB), and the default code model can't reach a global (e.g. a
-# string literal) from that address with a 32-bit relocation -- the
-# linker fails with "relocation truncated to fit" without this.
+# -fpie -mcmodel=small, NOT -mcmodel=large: PIE code reaches every
+# global RIP-relatively, so the 2 GiB constraint is on the image's SPAN,
+# not its placement -- the binaries still link at VMM_USER_BASE
+# (512GiB) and nothing in the address map moved (dynlink Stage 1).
+# The one thing that could not survive the switch was the *ABS* TLS
+# geometry symbols; they are data now (userland/rt/link.ld's QUADs).
 # Same stack-canary flags as CFLAGS above, and the same reasoning --
 # see that comment. Every userland ELF needs userland/rt/stack_chk.c's
 # __stack_chk_guard/__stack_chk_fail linked in (see USERLAND_RT below)
@@ -173,16 +175,16 @@ DISK_IMG = disk.img
 # with SSE on, GCC emits XMM in ordinary code (struct copies, inlined
 # memcpy), so an FP-enabled kernel would need an FXSAVE on every
 # interrupt vector rather than only where the scheduler swaps processes.
-USERLAND_CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie \
-                   -mno-red-zone -mcmodel=large -ftls-model=local-exec \
+USERLAND_CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-protector-guard=global -fpie \
+                   -mno-red-zone -mcmodel=small -ftls-model=local-exec \
                    -Wall -Wextra -Wframe-larger-than=2048 -O2 -g -c $(LIBC_INCLUDES) $(API_INCLUDES) -Iuserland \
                    -ffunction-sections -fdata-sections -MMD -MP \
                    -fno-tree-loop-distribute-patterns
 # -ftls-model=local-exec: a `__thread` variable is reached as a fixed
-# offset from %fs and nothing else. The other three models exist for
-# code that might end up in a shared library, which nothing here can be
-# -- and both of the dynamic ones need a __tls_get_addr() and a GOT
-# this build has no linker to fill in. See userland/rt/tls.c.
+# offset from %fs and nothing else. Right for EXECUTABLES; objects
+# destined for a shared library (dynlink Stage 3) compile separately
+# with initial-exec, because local-exec assumes the block the linker
+# itself laid out. See userland/rt/tls.c.
 #
 # -Wframe-larger-than for RING 3, which had none while the kernel side
 # has had one since kernel stacks got guard pages. The reason is the

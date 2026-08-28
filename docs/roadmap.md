@@ -264,7 +264,7 @@ Staged in `docs/dynlink-design.md`, including the case against.
 - [ ] A userspace dynamic linker
 - [ ] Shared libc (once Runtime + interop's real C library exists)
 - [ ] Lazy symbol binding (PLT/GOT-style)
-- [ ] Position-independent code in the userland build (`-fPIC`), which the Makefile explicitly disables today
+- [x] ~~Position-independent code in the userland build~~ DONE 2026-08-28 -- `-fpie -mcmodel=small`, same base; see `docs/dynlink-design.md`
 - [ ] Relocation processing at load time
 - [ ] A symbol table and resolution order across multiple objects
 - [ ] `dlopen`/`dlsym`-style runtime loading, or an explicit decision not to have it

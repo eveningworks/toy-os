@@ -5,7 +5,13 @@ A staged plan, in the shape `docs/libc-design.md` and
 `docs/roadmap.md` has carried since Phase 4 -- **what would it take to
 have shared libraries here, and is it worth it?**
 
-**Status: in progress.** Stage 0 (`mmap`) is BUILT -- 2026-08-28,
+**Status: in progress.** Stages 0 and 1 are BUILT.
+Stage 1 (2026-08-28): the whole userland compiles `-fpie
+-mcmodel=small` AT THE SAME BASE -- the measurement went the good way:
+PIE code is RIP-relative, so the 2 GiB constraint is on the image's
+span, not its placement, and `uaddr.h`'s map did not move. The one
+casualty was the *ABS* TLS geometry symbols, which are data now
+(link.ld QUADs). Stage 0 (`mmap`) -- 2026-08-28,
 `kernel/mm/mmap.c`, file-backed and demand-paged, with `/bin/pmap` over
 QUERY_PROCMAP; the design calls it forced are in `docs/decisions.md`
 (the kernel file's mmap entry). The name and home are settled: the
@@ -55,14 +61,13 @@ with the costs visible rather than by drift.
 
 Checked against the tree, not assumed.
 
-- **Every userland binary is `ET_EXEC` at a fixed address.**
-  `userland/rt/link.ld` places them at `0x8000000000` and asserts they
-  stay under `UADDR_HEAP_BASE`. `elf_load()` handles `PT_LOAD` and
-  nothing else -- no `PT_DYNAMIC`, no interpreter, no relocations.
-- **The build explicitly disables PIC.** `USERLAND_CFLAGS` carries
-  `-fno-pic -fno-pie` and `-mcmodel=large`. The large code model is
-  there because the load address is high; it and PIC interact, and that
-  interaction is the first thing Stage 1 has to settle.
+- **Every userland binary is `ET_EXEC` at a fixed address** (compiled
+  PIC since Stage 1, still linked at `0x8000000000`). `elf_load()`
+  handles `PT_LOAD` and nothing else -- no `PT_DYNAMIC`, no
+  interpreter, no relocations.
+- ~~The build explicitly disables PIC.~~ Stage 1 landed 2026-08-28:
+  `-fpie -mcmodel=small`, same base, whole suite green (preflight and
+  all of `gui_regress`).
 - **THE PROJECT ALREADY DOES RELOCATION, for a different reason.** The
   KERNEL relocates itself at boot: `tools/genrelocs.py` extracts every
   absolute reference from a `--emit-relocs` link and
@@ -119,13 +124,17 @@ Verifiable alone: a ring-3 test that maps a file, reads it through the
 mapping, and unmaps it -- with `meminfo audit` clean afterwards, since
 mapping a file is exactly where a frame's ownership gets miscounted.
 
-### Stage 1 -- position-independent userland
+### Stage 1 -- position-independent userland -- BUILT 2026-08-28
 
-Turn on `-fPIC` and settle its interaction with `-mcmodel=large`. The
-likely answer is to drop to `-mcmodel=medium` or `small` and move the
-userland load address down, which touches `uaddr.h`'s map -- read
-`docs/conventions/kernel.md`'s note on that map first, since a region's
-END is what the next thing must clear.
+Turn on PIC and settle its interaction with `-mcmodel=large`. The
+answer, measured: `-fpie -mcmodel=small` at the SAME base -- PIE code
+is RIP-relative, so the model's 2 GiB constraint is on the image's
+span, not its placement, and the address map did not move. Executables
+are `-fpie` (library objects will be `-fpic` when Stage 3 builds them
+-- fpie code may not enter a shared object). The only casualty was the
+*ABS* TLS geometry symbols, unreachable RIP-relatively; they became
+data (`link.ld`'s `__rt_tlsdesc` QUADs), which also retired tls.c's
+`linker_value()` laundering.
 
 Verifiable alone: the whole existing userland builds and every test
 still passes, with nothing dynamic yet. **That is the point of doing it

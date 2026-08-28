@@ -45,7 +45,20 @@ SECTIONS
        entry point rather than as a linker error. */
     .text : { *(.text .text.*) } :text
     . = ALIGN(4096);
-    .rodata : { *(.rodata*) } :rodata
+    .rodata : {
+        *(.rodata*)
+        /* The TLS geometry, as DATA (read by userland/rt/tls.c). These
+           used to be *ABS* symbols whose ADDRESS was the value, which
+           -fpie cannot reach: RIP-relative addressing can only name
+           something inside the image, and a value like 16 is not.
+           SIZEOF/ALIGNOF are evaluated after layout, so the forward
+           references to .tdata/.tbss below are fine. */
+        . = ALIGN(8);
+        __rt_tlsdesc = .;
+        QUAD(SIZEOF(.tdata));                          /* filesz */
+        QUAD(SIZEOF(.tdata) + SIZEOF(.tbss));          /* memsz  */
+        QUAD(MAX(ALIGNOF(.tdata), ALIGNOF(.tbss)));    /* align  */
+    } :rodata
     . = ALIGN(4096);
     /* THREAD-LOCAL STORAGE, and the order matters: .tdata's initialised
        bytes are the template every thread's block is copied from, and
@@ -57,18 +70,14 @@ SECTIONS
     .data : { *(.data .data.*) } :data
     .bss : { *(COMMON) *(.bss .bss.*) } :data
 
-    /* What userland/rt/tls.c needs to build a block: where the template
-       is, how much of it to copy, and how much to zero after it. The
-       ADDRESS of each symbol is the value -- there is nothing at it. */
+    /* Where the TLS template lives; its geometry is __rt_tlsdesc's
+       QUADs in .rodata above. THE ALIGNMENT THERE IS PART OF THE
+       ADDRESS ARITHMETIC, not a performance hint: the linker resolves
+       each `%fs:offset` against the block size ROUNDED UP TO IT, so a
+       runtime that rounds to anything else places the .tdata template
+       where nothing reads it. MAX because either section may be the
+       empty one. */
     PROVIDE_HIDDEN(__tls_template = ADDR(.tdata));
-    PROVIDE_HIDDEN(__tls_filesz   = SIZEOF(.tdata));
-    PROVIDE_HIDDEN(__tls_memsz    = SIZEOF(.tdata) + SIZEOF(.tbss));
-    /* THE ALIGNMENT IS PART OF THE ADDRESS ARITHMETIC, not a
-       performance hint: the linker resolves each `%fs:offset` against
-       the block size ROUNDED UP TO IT, so a runtime that rounds to
-       anything else places the .tdata template where nothing reads it.
-       MAX because either section may be the empty one. */
-    PROVIDE_HIDDEN(__tls_align    = MAX(ALIGNOF(.tdata), ALIGNOF(.tbss)));
 
     /* NO CEILING HERE ANY MORE, and that is the point.
 

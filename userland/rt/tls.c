@@ -28,34 +28,28 @@
 #include "rt/sys.h"
 #include <stdint.h>
 
-// From userland/rt/link.ld. The ADDRESS of each is the value.
+// From userland/rt/link.ld: the template's address, and its geometry
+// as DATA -- link.ld writes three QUADs into .rodata. They were *ABS*
+// symbols whose address was the value, until -fpie: RIP-relative
+// addressing can only name something inside the image, so a value like
+// 16 stopped linking. Values read from memory are also bounds GCC
+// believes, which retired the linker_value() laundering that used to
+// live here (a loop bounded by a symbol's "address" was compiled
+// bottom-tested, and a 0 counted to 2^64).
 extern char __tls_template[];
-extern char __tls_filesz[];
-extern char __tls_memsz[];
-extern char __tls_align[];
+struct rt_tlsdesc { uint64_t filesz, memsz, align; };
+extern const struct rt_tlsdesc __rt_tlsdesc;
 
 #define TLS_MAX_ALIGN 16 // what an allocation here is guaranteed to give
 #define TCB_SIZE      64 // tp[0] is the self pointer; the rest is headroom
-
-// A LINKER SYMBOL'S ADDRESS IS A NUMBER, AND GCC DOES NOT BELIEVE THAT.
-// The address of a declared object cannot be null, so a loop bounded by
-// one of these is compiled BOTTOM-TESTED -- and a `filesz` of 0 then
-// counts to 2^64, which is a page fault in every ring-3 program a few
-// thousand bytes past the buffer. The empty asm makes the value opaque
-// again and costs no instruction.
-static uint64_t linker_value(const char *sym) {
-    uint64_t v = (uint64_t)(uintptr_t)sym;
-    __asm__ ("" : "+r"(v));
-    return v;
-}
 
 // THE SIZE THE LINKER USED, which is the size the block must be: every
 // `%fs:offset` in the program was resolved against `memsz` rounded up
 // to the segment's own alignment, so rounding to anything else here
 // silently shifts the whole block under the offsets that read it.
 static uint64_t tls_block_size(void) {
-    uint64_t memsz = linker_value(__tls_memsz);
-    uint64_t align = linker_value(__tls_align);
+    uint64_t memsz = __rt_tlsdesc.memsz;
+    uint64_t align = __rt_tlsdesc.align;
     if (align < 1) align = 1;
     return (memsz + align - 1) & ~(align - 1);
 }
@@ -67,7 +61,7 @@ void *rt_tls_install(void *mem) {
     char *base = (char *)mem;
     char *tp   = base + block;
 
-    uint64_t filesz = linker_value(__tls_filesz);
+    uint64_t filesz = __rt_tlsdesc.filesz;
     for (uint64_t i = 0; i < filesz; i++) base[i] = __tls_template[i];
     for (uint64_t i = filesz; i < block; i++) base[i] = 0;
     for (int i = 0; i < TCB_SIZE; i++) tp[i] = 0;
@@ -87,7 +81,7 @@ void *rt_tls_install(void *mem) {
 static char g_main_tls[TLS_STATIC_MAX + TCB_SIZE] __attribute__((aligned(TLS_MAX_ALIGN)));
 
 void __rt_tls_init(void) {
-    if (linker_value(__tls_align) > TLS_MAX_ALIGN) {
+    if (__rt_tlsdesc.align > TLS_MAX_ALIGN) {
         static const char msg[] =
             "rt: this program's thread-local storage is aligned past 16\n";
         sys_write(2, msg, sizeof msg - 1);
