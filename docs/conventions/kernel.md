@@ -507,8 +507,37 @@ this the obvious way), not from how much history it accumulated.
   that sbrk is bounded against it (it had NO ceiling, and a big enough
   request mapped pages over the live stack with nothing faulting or
   logged) and that a fault there is reported as `Stack overflow` rather
-  than as an anonymous #PF. Adding an mmap or ASLR replaces this
-  header rather than adding beside it; see `docs/decisions.md`.
+  than as an anonymous #PF. mmap landed BESIDE this map, in its own
+  arena above the window regions, precisely so nothing here moved;
+  ASLR is still the change that replaces the header rather than adding
+  to it. See `docs/decisions.md`.
+- **`SYS_MMAP` IS A REGION LIST, ITS ARENA IS ITS OWN RANGE, AND A
+  FILE-BACKED FAULT-IN REFUSES INSIDE AN `FS_OP`.** `kernel/mm/mmap.c`;
+  the metadata is `struct sched_mm`'s fixed 16-slot array (lives and
+  dies with the slot -- nothing to leak), the mappings live in
+  `UADDR_MMAP_BASE..LIMIT` above every window region (nothing in the
+  existing map moved), and every mapping is a RESERVATION faulted in
+  through `uheap_fault()`'s arena branch, exactly as the heap and stack
+  are. Frames are ordinary OWNED user pages, so teardown frees them
+  with the address space and `SYS_MUNMAP` (`vmm_release_user_page()`)
+  is the only hand-freeing path. Six things to know. **A file-backed
+  fault-in refuses while `scheduler_preempt_depth() > 0`** -- reading
+  the backing file from inside an FS_OP would re-enter the backend's
+  scratch state, the recursion the guard cannot see; no such path
+  exists today (backends touch only kernel buffers, and syscalls fault
+  user ranges in BEFORE FS_OP), and the refusal is what keeps that an
+  invariant rather than an accident. **A file region is remembered by
+  ABSOLUTE PATH, not by pinning the fd** (an fd is table state and the
+  fault can arrive after close); the cost is that a deleted backing
+  file makes the next untouched page's fault fatal, said in the log.
+  **Pages are snapshots**: what the file held at first touch, never
+  updated, and MAP_SHARED is refused. **MAP_FIXED refuses overlap with
+  -EEXIST where POSIX replaces** -- replace is munmap-then-map, two
+  calls a caller can say on purpose. **A munmap range must lie within
+  ONE region**, and a middle split takes a free slot BEFORE unmapping
+  so a full table refuses whole. **`/bin/pmap` prints it all** through
+  `QUERY_PROCMAP` (image/heap/stack synthesized beside the regions),
+  and the sizes it prints are reservations, not residency.
 - **The kernel heap has a debug mode, and it is a RUNTIME toggle**
   (`heap debug on|off`, `heap check`; `heap_set_debug()` from a test).
   Blocks allocated while it is on get a red-zone each side and are

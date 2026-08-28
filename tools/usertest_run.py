@@ -166,6 +166,13 @@ TESTS = [
     # independent path from the allocator's own bookkeeping.
     ("malloc_test", 0,
      ["malloc_test: all checks passed"], ["FAIL"]),
+    # mmap/munmap: the arena, file backing, MAP_FIXED, the split, and
+    # the 16-region table bound. Address-derived patterns (memtest.c's
+    # reason); the fault-fatal cases are deliberately absent here.
+    # Spawned: SYS_MMAP needs a scheduler slot to own the mappings, and
+    # `run` is the legacy loader, which has none.
+    ("mmap_test", None,
+     ["mmap_test: all checks passed"], ["FAIL"]),
     ("fsgen_test", 0,
      ["fsgen_test: all checks passed"], ["FAIL"]),
     # lseek/fstat/O_APPEND. Its pattern is POSITION-DERIVED, so a seek

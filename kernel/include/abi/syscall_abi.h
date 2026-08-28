@@ -1591,6 +1591,30 @@ struct sys_stat {
                        // in the ABI and hiding it behind a generic name
                        // would make it look portable.
 
+#define SYS_MMAP 78   // RDI = pointer to a `struct mmap_msg` (below).
+                      // Returns the mapping's address -- page-aligned,
+                      // inside the mmap arena -- or -ERRNO. A struct
+                      // because the call needs six arguments and this
+                      // ABI carries three, same as SYS_THREAD_CREATE.
+                      //
+                      // The mapping is a RESERVATION, like SYS_SBRK's:
+                      // no frame moves until a page is touched. A
+                      // file-backed page is read from the file at
+                      // first touch; what the file held AT THAT MOMENT
+                      // is what the page gets, and a later write to
+                      // the file does not update pages already faulted
+                      // in. MAP_SHARED is refused (-EINVAL) -- every
+                      // mapping is private, and writes never reach the
+                      // file.
+
+#define SYS_MUNMAP 79 // RDI = addr, RSI = length (both page-aligned).
+                      // Unmaps [addr, addr+len) and frees the frames
+                      // behind any pages that were touched. The range
+                      // must lie within ONE mapping (POSIX allows
+                      // spanning several; this does not, yet) -- it
+                      // may trim an edge or split the middle. Returns
+                      // 0 or -ERRNO.
+
 // What SYS_THREAD_CREATE takes. A struct because the call needs five
 // arguments and this ABI carries three -- the same thing SYS_SPAWN did
 // when an environment arrived.
@@ -1609,6 +1633,38 @@ struct thread_create_msg {
 struct openpty_msg {
     int32_t master_fd;
     int32_t slave_fd;
+};
+
+// What SYS_MMAP takes. The values are Linux's on purpose -- a libc
+// wrapper passes POSIX's constants straight through, and a ported
+// program's `mmap(NULL, n, PROT_READ | PROT_WRITE, MAP_PRIVATE |
+// MAP_ANONYMOUS, -1, 0)` means here what it means there.
+#define SYS_PROT_READ  0x1
+#define SYS_PROT_WRITE 0x2
+#define SYS_PROT_EXEC  0x4
+
+#define SYS_MAP_PRIVATE   0x02
+#define SYS_MAP_FIXED     0x10 // `addr` is a demand, not a hint; it must
+                               // be page-aligned and inside the arena,
+                               // and the range must be FREE -- overlap
+                               // is -EEXIST where POSIX silently
+                               // replaces. Deliberate: replace is
+                               // munmap-then-map, and a caller that
+                               // wants it (the dynamic loader carving
+                               // segments out of a reservation) can
+                               // say so in two calls, where a typo'd
+                               // addr silently unmapping live pages
+                               // cannot be taken back.
+#define SYS_MAP_ANONYMOUS 0x20 // zero-filled; `fd` and `offset` ignored
+
+struct mmap_msg {
+    uint64_t addr;   // 0 = kernel picks; else a hint (FIXED: a demand)
+    uint64_t length; // bytes; rounded up to whole pages
+    int32_t  prot;   // SYS_PROT_* -- PROT_READ is required
+    int32_t  flags;  // SYS_MAP_* -- MAP_PRIVATE is required
+    int32_t  fd;     // an open file, or -1 with MAP_ANONYMOUS
+    int32_t  reserved;
+    uint64_t offset; // into the file; page-aligned
 };
 
 // The longest single SYS_SLEEP, one hour. Not a security limit: it

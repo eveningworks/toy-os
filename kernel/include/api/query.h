@@ -204,6 +204,7 @@ void ahci_query_init(void);
 
 // kernel/proc/'s providers for kernel stacks and per-syscall depth.
 void kstack_query_init(void);
+void procmap_query_init(void); // kernel/mm/procmap_query.c -- QUERY_PROCMAP
 
 // kernel/proc/'s provider for the physical console -- its owner, its
 // foreground group, and whether a compositor holds the keyboard. Reads

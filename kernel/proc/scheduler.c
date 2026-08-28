@@ -421,6 +421,9 @@ struct sched_process {
 // spells its size as a literal. This is what stops the two drifting.
 _Static_assert(sizeof(((struct sched_cwd *)0)->path) == FS_PATH_MAX,
                "struct sched_cwd::path must match FS_PATH_MAX");
+_Static_assert(sizeof(((struct mmap_region *)0)->path) == FS_PATH_MAX,
+               "mmap_region.path must hold any fs path -- same 64 the "
+               "sched_cwd assert above pins, for the same reason");
 
 static struct sched_process procs[MAX_PROCS];
 
@@ -989,6 +992,10 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
     procs[slot].mm.heap_base   = heap_base;
     procs[slot].mm.brk         = heap_base;
     procs[slot].mm.stack_bottom = UADDR_STACK_INIT_BOTTOM;
+    // A recycled slot still holds the previous owner's mmap regions;
+    // the frames behind them are long freed, so a stale entry would
+    // answer a wild pointer with a read of some unrelated file.
+    k_memset(procs[slot].mm.regions, 0, sizeof procs[slot].mm.regions);
     // INHERITED, unlike the name and the CPU time above: the cwd is the
     // one piece of a parent's state a child is supposed to start with,
     // which is what makes `mkdir docs` from a shell standing in /tmp
@@ -1154,6 +1161,8 @@ void scheduler_yield(uint64_t *regs) { scheduler_rotate(regs); }
 static int g_preempt_depth;
 
 void scheduler_preempt_disable(void) { g_preempt_depth++; }
+
+int scheduler_preempt_depth(void) { return g_preempt_depth; }
 
 void scheduler_preempt_enable(void) {
     if (g_preempt_depth > 0) g_preempt_depth--;
@@ -1729,7 +1738,7 @@ int scheduler_thread_create(uint64_t entry, uint64_t user_rsp, uint64_t arg,
     // leader (scheduler_current_mm/_cwd). Zeroed rather than copied, so
     // a reader that forgets gets an obvious 0 instead of a second copy
     // that drifts.
-    procs[slot].mm = (struct sched_mm){ 0, 0, 0 };
+    k_memset(&procs[slot].mm, 0, sizeof procs[slot].mm);
     procs[slot].cwd.path[0] = '\0';
     win_events_reset(slot + 1); // the previous tenant's, see spawn
     procs[slot].state = SCHED_READY;
@@ -1909,6 +1918,15 @@ struct sched_mm *scheduler_mm_for_pml4(uint64_t pml4_phys) {
         if (procs[i].pml4_phys == pml4_phys) return &procs[i].mm;
     }
     return 0;
+}
+
+struct sched_mm *scheduler_mm_for_pid(int pid) {
+    int slot = pid - 1;
+    if (slot < 0 || slot >= MAX_PROCS) return 0;
+    if (procs[slot].state == SCHED_UNUSED || procs[slot].state == SCHED_ZOMBIE)
+        return 0;
+    if (is_thread(slot)) return 0;
+    return &procs[slot].mm;
 }
 
 int scheduler_spawn(const char *path, const char *args) {

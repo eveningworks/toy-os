@@ -286,6 +286,16 @@ int sys_gettime(struct rtc_time *out);
 // pointer to that many fresh zeroed bytes), or (void *)-1 on failure.
 void *sys_sbrk(int64_t increment);
 
+// SYS_MMAP / SYS_MUNMAP, the raw shape. tolibc's <sys/mman.h> is the
+// POSIX face over these; the arguments here ARE POSIX's, packed into
+// abi/syscall_abi.h's struct mmap_msg at the call. Failure is
+// (void *)-1 -- MAP_FAILED, mmap's own contract, the same reasoning as
+// sys_sbrk() above -- with the reason in sys_errno(). sys_munmap()
+// follows the ordinary 0/-1 rule.
+void *sys_mmap(void *addr, uint64_t length, int prot, int flags,
+               int fd, uint64_t offset);
+int sys_munmap(void *addr, uint64_t length);
+
 // --- sockets ---------------------------------------------------------
 //
 // There is no NIC driver or protocol stack yet, so send/recv always

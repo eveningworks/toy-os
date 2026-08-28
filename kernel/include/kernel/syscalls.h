@@ -219,6 +219,8 @@ int sys_sync(struct syscall_ctx *c);
 int sys_exit(struct syscall_ctx *c);
 int sys_yield(struct syscall_ctx *c);
 int sys_sbrk(struct syscall_ctx *c);
+int sys_mmap(struct syscall_ctx *c);   // kernel/mm/mmap.c
+int sys_munmap(struct syscall_ctx *c); // kernel/mm/mmap.c
 int sys_spawn(struct syscall_ctx *c);
 int sys_waitpid(struct syscall_ctx *c);
 int sys_kill(struct syscall_ctx *c);

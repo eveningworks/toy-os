@@ -5,8 +5,12 @@ A staged plan, in the shape `docs/libc-design.md` and
 `docs/roadmap.md` has carried since Phase 4 -- **what would it take to
 have shared libraries here, and is it worth it?**
 
-**Status: designed, not built.** Nothing here exists. Each stage below
-ships on its own and is verifiable on its own.
+**Status: in progress.** Stage 0 (`mmap`) is BUILT -- 2026-08-28,
+`kernel/mm/mmap.c`, file-backed and demand-paged, with `/bin/pmap` over
+QUERY_PROCMAP; the design calls it forced are in `docs/decisions.md`
+(the kernel file's mmap entry). The name and home are settled: the
+library is `/lib/libc.so`, the loader `/lib/ld-toy.so`. Each stage
+below ships on its own and is verifiable on its own.
 
 **The precondition cleared.** This milestone was deliberately placed
 after "a real C library", because a shared libc is the main reason to
@@ -65,10 +69,10 @@ Checked against the tree, not assumed.
   `kernel/arch/x86_64/reloc.c` patches them for KASLR. That is the same
   arithmetic a dynamic loader does, already written, already tested, and
   proof the concept is understood here.
-- **There is no `mmap`.** This is the real blocker and it is not
-  specific to dynamic linking: `free()` cannot return memory for the
-  same reason, and `docs/libc-design.md` records it as a standing
-  limitation. `SYS_SBRK` grows one region and never shrinks.
+- ~~There is no `mmap`.~~ Stage 0 landed 2026-08-28. What is still
+  true: `free()` does not yet return memory -- the allocator
+  (`heap_core.c`, shared with ring 0) still draws from sbrk alone, and
+  moving it onto mmap is its own change with its own measurement.
 - **Frames CAN already be shared between address spaces.**
   `vmm_map_user_borrowed()` maps a frame a process does not own -- which
   is exactly what several processes sharing one copy of libc needs, and

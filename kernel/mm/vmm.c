@@ -240,6 +240,40 @@ int vmm_unmap_user_page(uint64_t pml4_phys, uint64_t vaddr) {
     return 1;
 }
 
+// vmm_unmap_user_page() plus the disposal the caller usually wants:
+// the frame goes back to pmm unless the PTE says PAGE_BORROWED, the
+// same rule the teardown walk applies. Exists for SYS_MUNMAP, where
+// "clear the mapping" and "free the frame" done as two calls would
+// need the caller to re-derive the borrowed bit this walk already has
+// in hand. Returns 1 if a mapping was removed, 0 if nothing was there.
+int vmm_release_user_page(uint64_t pml4_phys, uint64_t vaddr) {
+    int pml4_index = (int)((vaddr >> 39) & 0x1FF);
+    int pdpt_index = (int)((vaddr >> 30) & 0x1FF);
+    int pd_index   = (int)((vaddr >> 21) & 0x1FF);
+    int pt_index   = (int)((vaddr >> 12) & 0x1FF);
+
+    uint64_t *pml4 = table_at(pml4_phys);
+    if (!(pml4[pml4_index] & PAGE_PRESENT)) return 0;
+    uint64_t *pdpt = table_at(pml4[pml4_index] & ADDR_MASK);
+    if (!(pdpt[pdpt_index] & PAGE_PRESENT)) return 0;
+    uint64_t *pd = table_at(pdpt[pdpt_index] & ADDR_MASK);
+    if (!(pd[pd_index] & PAGE_PRESENT)) return 0;
+    uint64_t *pt = table_at(pd[pd_index] & ADDR_MASK);
+    uint64_t pte = pt[pt_index];
+    if (!(pte & PAGE_PRESENT)) return 0;
+
+    pt[pt_index] = 0;
+    {
+        int i = acct_slot(pml4_phys, 0);
+        if (i >= 0 && g_acct[i].pages) g_acct[i].pages--;
+    }
+    if (vmm_current_pml4() == pml4_phys) {
+        __asm__ volatile ("invlpg (%0)" : : "r"(vaddr) : "memory");
+    }
+    if (!(pte & PAGE_BORROWED)) pmm_free_frame(pte & ADDR_MASK);
+    return 1;
+}
+
 void vmm_switch_address_space(uint64_t pml4_phys) {
     __asm__ volatile ("mov %0, %%cr3" : : "r"(pml4_phys) : "memory");
 }

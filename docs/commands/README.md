@@ -93,6 +93,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`lsusb`](lsusb.md)
 - [`meminfo`](meminfo.md)
 - [`parttable`](parttable.md)
+- [`pmap`](pmap.md)
 - [`ps`](ps.md)
 - [`time`](time.md)
 - [`timezone`](timezone.md)

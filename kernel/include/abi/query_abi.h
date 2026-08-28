@@ -295,6 +295,14 @@ _Static_assert(sizeof(struct query_fontglyph) <= 256,
 // LIST. See block.h's device table and `/bin/lsblk`.
 #define QUERY_BLKDEV 20
 
+// One record per MAPPING of every live process: the image, the heap,
+// the stack, and each SYS_MMAP region. LIST. `bytes` is the
+// RESERVATION -- pages arrive on touch, so residency is a different
+// (and unasked) question. /bin/pmap filters by pid client-side; the
+// kernel enumerates everything because a list provider's index has
+// nowhere to carry a second selector (QUERY_FONTGLYPH's reasoning).
+#define QUERY_PROCMAP 21
+
 #define QUERY_KLOG_DATA 232
 
 struct query_klog {
@@ -719,6 +727,25 @@ struct query_kbdtap {
     // key this layout does not map all produce nothing.
     uint64_t produced;   // how many of the two below are meaningful
     uint64_t produced_code[QUERY_KBDTAP_PRODUCED_MAX];
+};
+
+
+// --- QUERY_PROCMAP records -------------------------------------------
+
+#define QUERY_PROCMAP_IMAGE 1
+#define QUERY_PROCMAP_HEAP  2
+#define QUERY_PROCMAP_STACK 3
+#define QUERY_PROCMAP_ANON  4 // SYS_MMAP, MAP_ANONYMOUS
+#define QUERY_PROCMAP_FILE  5 // SYS_MMAP, file-backed
+
+struct query_procmap {
+    uint64_t pid;
+    uint64_t kind;     // QUERY_PROCMAP_*
+    uint64_t base;     // first virtual address
+    uint64_t bytes;    // the reservation's span, not residency
+    uint64_t prot;     // SYS_PROT_* for the mmap kinds, else 0
+    uint64_t file_off; // QUERY_PROCMAP_FILE only
+    char     path[64]; // likewise; FS_PATH_MAX's 64, not the field-name 48
 };
 
 #endif // ABI_QUERY_ABI_H

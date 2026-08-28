@@ -469,6 +469,21 @@ void *sys_sbrk(int64_t increment) {
     return (void *)(uintptr_t)r;
 }
 
+void *sys_mmap(void *addr, uint64_t length, int prot, int flags,
+               int fd, uint64_t offset) {
+    struct mmap_msg m = {
+        .addr = (uint64_t)(uintptr_t)addr, .length = length,
+        .prot = prot, .flags = flags, .fd = fd, .offset = offset,
+    };
+    int64_t r = syscall1(SYS_MMAP, (uint64_t)(uintptr_t)&m);
+    if (is_err(r)) { g_errno = (int)-r; return (void *)-1; }
+    return (void *)(uintptr_t)r;
+}
+
+int sys_munmap(void *addr, uint64_t length) {
+    return (int)err(syscall2(SYS_MUNMAP, (uint64_t)(uintptr_t)addr, length));
+}
+
 // --- windowing -------------------------------------------------------
 
 int sys_win_request(struct win_request_msg *req) {

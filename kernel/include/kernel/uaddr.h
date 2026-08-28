@@ -58,8 +58,10 @@
 //
 // Every value here is per-address-space, and each process's address
 // space is private, so the fixed addresses cannot collide between
-// processes. They are fixed at all only because there is no mmap and no
-// ASLR yet; when either lands, this header is what they replace.
+// processes. They are fixed at all only because there is no ASLR yet;
+// when it lands, this header is what it replaces. mmap exists now and
+// lives in its own arena (UADDR_MMAP_BASE below), above every window
+// region, so nothing in the map above moved for it.
 
 // TOP page; the stack grows DOWN.
 //
@@ -175,6 +177,29 @@
 // stack's reservation moves the heap's ceiling with it instead of
 // quietly opening a gap.
 #define UADDR_HEAP_LIMIT    UADDR_GUARD_BASE
+
+// --- the mmap arena ---------------------------------------------------
+//
+// Where SYS_MMAP places mappings: its own range, ABOVE everything else
+// a process has -- the image/heap/stack below 0x8080000000, the window
+// regions (abi/win_proto.h) up through WIN_FB_VADDR at 0x8500000000.
+// A separate range rather than holes in the existing map because every
+// region below is either per-process-movable (heap_base, stack_bottom)
+// or DERIVED (the window regions' spans multiply out to gigabytes), and
+// carving between them is how the compositor's back buffer got landed
+// on twice -- see WIN_COMPOSITOR_BASE's comment.
+//
+// 32 GiB of address space. A reservation like the heap and stack:
+// pages arrive on touch, so the size costs nothing and bounds only how
+// much a process may MAP, not what the machine must have.
+#define UADDR_MMAP_BASE  0x9000000000ULL
+#define UADDR_MMAP_LIMIT 0x9800000000ULL
+
+// Is this address inside the mmap arena -- mapped or not? The envelope
+// check the fault path asks before consulting the region list.
+static inline int uaddr_is_mmap_range(uint64_t addr) {
+    return addr >= UADDR_MMAP_BASE && addr < UADDR_MMAP_LIMIT;
+}
 
 // True if a faulting address lies in the guard region -- i.e. this
 // fault is a stack overflow rather than a wild pointer. Takes the raw

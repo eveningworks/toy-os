@@ -37,6 +37,10 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     // and the reason a handler reports "I parked" separately from its
     // return value, since no 64-bit value is free to mean anything else.
     [SYS_SBRK]          = { "sbrk",          sys_sbrk,          { A_INT }, R_HEX },
+    // mmap returns a pointer too, so R_HEX; its errors are the small
+    // negatives every libc wrapper already tests for.
+    [SYS_MMAP]          = { "mmap",          sys_mmap,          { A_HEX }, R_HEX },
+    [SYS_MUNMAP]        = { "munmap",        sys_munmap,        { A_HEX, A_INT } },
     [SYS_WIN_CREATE]    = { "win_create",    sys_win_create,    { A_HEX } },
     [SYS_WIN_PRESENT]   = { "win_present",   sys_win_present,   { A_END } },
     // read()'s buffer isn't filled until the handler runs, and the

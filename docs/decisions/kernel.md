@@ -4961,3 +4961,60 @@ pid 1 that segfaults should die and say so, not loop.
 gains a second implementation, re-read every guard named after the
 first. The invariant was tested -- `tools/init_test.py` had a `kill 1`
 check -- but it asserted `1 in ps`, and a zombie passes that.
+
+## mmap is a fixed region list, its files are remembered by path, and MAP_FIXED refuses overlap
+
+`SYS_MMAP` (`kernel/mm/mmap.c`, 2026-08-28) is Stage 0 of
+`docs/dynlink-design.md`, built the way it is for four reasons a future
+session will want re-litigated.
+
+**The metadata is a fixed 16-slot array embedded in `struct sched_mm`,
+not an allocated list.** An allocated list needs a teardown path, and
+this kernel has TWO of those (exit and kill) with a history of one
+forgetting what the other freed. Embedded metadata dies with the slot
+by construction, and the frames behind the mappings are ordinary owned
+user pages the address-space walk already frees. Sixteen regions is
+plenty for the dynamic loader this exists for (an executable's
+libraries are a handful of segments each); raising it is one constant.
+
+**The arena is its own range (`UADDR_MMAP_BASE`, 32 GiB above the
+window regions), not holes carved between existing regions.** Every
+region below is either per-process-movable (`heap_base`,
+`stack_bottom`) or derived and gigabytes wide (the window strides), and
+carving between them is how the compositor's back buffer got landed on
+twice before. Address space is free; a separate range means nothing in
+the existing map moved and the fault classifier tells the two apart
+with one range check.
+
+**A file-backed region remembers its file by absolute path, not by
+pinning the open file.** POSIX says the mapping survives `close(fd)`,
+so the fd cannot be the record. Linux pins the `struct file`; this
+kernel's nearest equivalent would be holding an `open_file` slot
+hostage to a mapping, invisible to the process's own fd table, for as
+long as the region lives -- a lifetime bug shaped exactly like the ones
+the fd refcounting was built to end. A path re-resolved per fault costs
+a lookup and has one honest failure: a backing file deleted or renamed
+makes the next untouched page's fault fatal (logged by name). A page
+cache would be the real fix, and is the roadmap's item, not this one's.
+
+**A file-backed fault-in refuses while `scheduler_preempt_depth() > 0`
+rather than making the filesystem re-entrant.** The fault path reads
+the backing file, and if that ever runs inside an `FS_OP` it re-enters
+the backend's module-level scratch buffers -- the recursion the
+preemption guard exists around but cannot itself see. No such path
+exists today: backends touch only kernel buffers, and every syscall
+faults its user ranges in (validation and the copy helpers' hook)
+before the backend is called. The refusal turns "no such path exists"
+from an accident of current call orders into an enforced invariant: a
+future path that violates it gets a named log line and a dead process,
+not silent scratch-buffer corruption on a preempted boot in three.
+
+**MAP_FIXED refuses overlap with -EEXIST where POSIX silently
+replaces.** Replace-on-overlap is what makes Linux's `mmap` able to
+unmap live memory as a side effect of a typo'd address. The one caller
+that wants replacement here -- the dynamic loader carving segment
+mappings out of a reservation it made moments earlier -- can say so in
+two calls (`munmap` then `MAP_FIXED`), which is race-free in a
+single-threaded loader running before `main`. If a real port ever
+needs POSIX's semantics, widen it then; a refusal can be widened,
+a silent unmap cannot be taken back.

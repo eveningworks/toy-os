@@ -98,6 +98,13 @@ int vmm_map_user_borrowed(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
 
 int vmm_unmap_user_page(uint64_t pml4_phys, uint64_t vaddr);
 
+// Unmap AND dispose: the frame is freed to pmm unless the mapping was
+// borrowed (then it is somebody else's, exactly as in teardown). For
+// SYS_MUNMAP; anything that owns its frame through another allocator
+// (pmm_free_contiguous) must keep using vmm_unmap_user_page() and free
+// for itself. Returns 1 if a mapping was removed, 0 if none was there.
+int vmm_release_user_page(uint64_t pml4_phys, uint64_t vaddr);
+
 // What one address space's user mappings look like to the physical
 // allocator. `dangling` is the one that is a BUG: a present mapping
 // pointing at a frame pmm considers free, i.e. memory the allocator may

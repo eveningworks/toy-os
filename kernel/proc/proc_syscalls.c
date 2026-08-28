@@ -7,6 +7,7 @@
 #include "errno.h"
 #include "klog.h"
 #include "kfmt.h"      // klog_printf
+#include "mmap.h"      // mmap_fault_in -- the arena's slice of uheap_fault()
 #include "vmm.h"
 #include "pmm.h"
 #include "scheduler.h"
@@ -348,6 +349,10 @@ static int uheap_fault(uint64_t pml4_phys, uint64_t vaddr) {
         if (!grow_stack(hp, pml4_phys, page)) return 0;
         return 1;
     }
+
+    // --- the mmap arena ------------------------------------------------
+    if (uaddr_is_mmap_range(vaddr))
+        return mmap_fault_in(hp, pml4_phys, vaddr);
 
     // --- the heap, growing UP ------------------------------------------
     //

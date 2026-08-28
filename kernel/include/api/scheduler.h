@@ -190,6 +190,31 @@ int scheduler_exec_path(int pid, char *out, unsigned cap);
 // Still a struct handed out by pointer rather than a get/set pair,
 // because there are two owners of one representation (a scheduler slot
 // and the legacy loader's single slot) and they must not drift.
+// One SYS_MMAP mapping. base == 0 marks a free slot, which a real
+// mapping can never use (the arena starts at UADDR_MMAP_BASE).
+//
+// A file-backed region remembers its file by ABSOLUTE PATH, not by fd:
+// the fault that reads a page can arrive long after the fd was closed
+// (POSIX allows exactly that), and an fd is per-process table state
+// where a path is not. The cost, stated: renaming or deleting the file
+// makes the next untouched page's fault-in fail, which kills the
+// process -- Linux keeps the struct file pinned instead, and a page
+// cache would be this kernel's version of that answer.
+struct mmap_region {
+    uint64_t base;     // page-aligned, inside the mmap arena; 0 = free
+    uint64_t npages;
+    uint8_t  prot;     // SYS_PROT_* bits
+    uint8_t  kind;     // MMAP_KIND_*
+    char     path[64]; // absolute; FS_PATH_MAX, asserted in scheduler.c
+    uint64_t file_off; // file offset backing `base`
+};
+#define MMAP_KIND_ANON 0
+#define MMAP_KIND_FILE 1
+
+// Per address space, not per slot: a thread resolves to its group's
+// sched_mm the same way the heap does, so the group shares one list.
+#define MMAP_MAX_REGIONS 16
+
 struct sched_mm {
     // The page after this process's loaded image ends -- where its heap
     // starts, and the floor sbrk may never return below. Per process
@@ -203,6 +228,12 @@ struct sched_mm {
     // Lowest MAPPED stack page. Moves DOWN as the stack grows, never
     // past UADDR_STACK_FLOOR.
     uint64_t stack_bottom;
+
+    // SYS_MMAP's mappings, kernel/mm/mmap.c's to manage. Embedded
+    // rather than allocated so a slot's teardown cannot leak them --
+    // the frames behind them are freed by the address-space walk, and
+    // this metadata dies with the slot.
+    struct mmap_region regions[MMAP_MAX_REGIONS];
 };
 
 // A process's CURRENT DIRECTORY -- a normalized absolute path, exactly
@@ -256,6 +287,11 @@ void scheduler_set_kernel_cwd(const char *path);
 // assumption -- true today for the copy helpers, and not a thing to
 // rely on in a fault handler.
 struct sched_mm *scheduler_mm_for_pml4(uint64_t pml4_phys);
+
+// The same map by PID -- NULL for a dead, unused or thread slot (a
+// thread's memory is its group's; ask with the leader's pid). For
+// readers outside the fault path: QUERY_PROCMAP walks it.
+struct sched_mm *scheduler_mm_for_pid(int pid);
 
 // The memory map of the process currently on the CPU, or NULL when the kernel
 // context is running (current_index == -1) -- which is the legacy
@@ -934,5 +970,13 @@ void scheduler_idle(void);
 // failure ones.
 void scheduler_preempt_disable(void);
 void scheduler_preempt_enable(void);
+
+// How deep the disable nesting currently is. 0 means preemption is on.
+// Exists for one caller: a file-backed mmap fault-in must REFUSE while
+// any FS_OP guard is held (kernel/mm/mmap.c), because reading the
+// backing file from inside a backend call would re-enter the
+// filesystem's module-level scratch state -- the recursion the guard
+// itself cannot see.
+int scheduler_preempt_depth(void);
 
 #endif

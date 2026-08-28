@@ -147,13 +147,13 @@ is the bookkeeping that makes any other kind of mapping possible.
 
 - [x] ~~Page-fault-driven mapping (allocate on first touch, not up front)~~ DONE 2026-08-18
 - [x] ~~A page-fault handler that tells a legitimately-unmapped address from a real fault~~ DONE 2026-08-18
-- [ ] A per-process list of mapped REGIONS with attributes (base, length, protection, backing)
-- [ ] `mmap(MAP_ANONYMOUS)` and `munmap` over it
-- [ ] The fault handler consults the region list instead of one range
-- [ ] A `pmap`-style command showing one process's mappings
+- [x] ~~A per-process list of mapped REGIONS with attributes~~ DONE 2026-08-28 -- `struct sched_mm.regions`
+- [x] ~~`mmap(MAP_ANONYMOUS)` and `munmap` over it~~ DONE 2026-08-28 -- SYS_MMAP/SYS_MUNMAP, `kernel/mm/mmap.c`
+- [x] ~~The fault handler consults the region list instead of one range~~ DONE 2026-08-28 -- `uheap_fault()`'s arena branch
+- [x] ~~A `pmap`-style command showing one process's mappings~~ DONE 2026-08-28 -- `/bin/pmap`, over QUERY_PROCMAP
 - [ ] Accounting: resident vs. mapped, visible in Task Manager
 - [ ] Lazy zero-filling: one shared zero page mapped read-only until first write
-- [ ] File-backed `mmap` -- note the fault path meets a filesystem that is NOT re-entrant
+- [x] ~~File-backed `mmap`~~ DONE 2026-08-28 -- the fault-in REFUSES inside an FS_OP; see `docs/decisions.md`
 - [ ] Shared read-only text pages between instances of the same binary
 - [ ] A per-frame reference count
 - [ ] `MAP_SHARED` memory between two processes
@@ -252,7 +252,7 @@ everything libc-shaped is waiting on it. Full plan and staging:
 - [ ] A thread stack with a guard page, which needs an `mprotect`-shaped syscall
 - [ ] Signal dispositions shared by a thread group, as POSIX has them -- per thread here, inherited at create
 - [ ] GCC's default (`%fs:0x28`) stack-protector guard in ring 3, now that TLS exists
-- [ ] `mmap`-style anonymous memory for userspace
+- [x] ~~`mmap`-style anonymous memory for userspace~~ DONE 2026-08-28 -- see Phase 2's demand-paging items
 - [ ] Time syscalls (a monotonic clock and wall-clock read)
 - [ ] A consistent `errno`-style error convention
 
