@@ -149,6 +149,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`schedtest`](schedtest.md)
 - [`steptest`](steptest.md)
 - [`stress`](stress.md)
+- [`sum`](sum.md)
 
 ### Diagnostics
 

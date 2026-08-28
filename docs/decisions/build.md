@@ -1110,6 +1110,48 @@ behaviour (`%.3d` of 5 is `"5"`) now asserts `"005"` and explains why it
 changed. **This is the case for building somebody else's program**: the
 formatter had tests, the tests passed, and the tests encoded the bug.
 
+## Reading a terminal flushes `stdout` first, and only `stdout`
+
+`printf("Give me two numbers: "); scanf("%d %d", ...)` -- the shape of
+every "enter a value" program ever written -- printed nothing until the
+program exited. `stdout` is line-buffered on a terminal, the prompt has
+no newline, and `refill()` in `userland/libc/stdio.c` went straight to
+`sys_read`. So the screen stayed blank while the program blocked, and
+the prompt and the answer appeared together at `exit()`, on one line.
+
+It was reported as a difference from Linux and Windows, where the same
+source is correct, and the report was right. C11 7.21.3p3 lists this
+among the moments a line-buffered stream transmits: "when input is
+requested on an unbuffered stream, or when input is requested on a
+line-buffered stream that requires the transmission of characters from
+the host environment". glibc implements it in `_IO_new_file_underflow`
+and MSVC's CRT does the equivalent. toy-os was the outlier, and
+`fflush(stdout)` after every prompt is a workaround for a libc gap
+rather than the idiom C asks for.
+
+`flush_stdout_for_read()` now runs before any read that can block --
+`refill()`, and the unbuffered path of `fgetc()`.
+
+**`stdout` alone, not every line-buffered stream.** glibc HAS the
+general form (`_IO_flush_all_linebuffered`) and ships the narrow one,
+because the case being served is a prompt and a prompt goes to
+`stdout`; the general form walks the whole stream table on every
+refill to serve something nothing has ever wanted. Copy the shape,
+not the size.
+
+**Gated on the INPUT stream, not the output one.** The flush fires only
+when the stream being read is line-buffered or unbuffered -- i.e. a
+terminal. Reading a file flushes nothing, which is both what glibc does
+and what stops a program that pipes input through a filter paying a
+syscall per buffer. It is cheap when it does fire: `flush_write()`
+returns immediately on an empty buffer, so the common case is one
+compare.
+
+**Where it is NOT placed, and why.** Not at the top of `fgetc()`: a byte
+already sitting in the stream's buffer is not a read, and flushing there
+would run the check for every character of a `getchar()` loop rather
+than once per refill.
+
 ## printf's unknown-conversion path is a bug amplifier, so the case table is exhaustive rather than interesting
 
 `kernel/lib/kfmt.c` is the kernel's formatter and, compiled a second

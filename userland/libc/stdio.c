@@ -132,6 +132,24 @@ static int flush_write(FILE *f) {
     return write_all(f, f->buf, n);
 }
 
+// INPUT ON A TERMINAL FLUSHES stdout FIRST, which is what makes a
+// prompt with no '\n' appear before the reader blocks on the answer.
+// C11 7.21.3p3 lists this among the moments a line-buffered stream
+// transmits, and both glibc (_IO_new_file_underflow) and MSVC do it;
+// without it `printf("Give me a number: "); scanf(...)` reads from a
+// blank screen and prints the prompt afterwards, at exit.
+//
+// stdout ALONE, not every line-buffered stream. glibc has the general
+// form (_IO_flush_all_linebuffered) and ships this fast path instead,
+// because the case it serves is a prompt and prompts go to stdout; the
+// general form costs a walk of the whole stream table on every refill.
+// Gated on the INPUT stream being line-buffered or unbuffered -- i.e. a
+// terminal -- so reading a file does not flush anything, and cheap when
+// it does fire, since flush_write() returns at once on an empty buffer.
+static void flush_stdout_for_read(FILE *f) {
+    if (f->mode == _IOLBF || unbuffered(f)) flush_write(&g_std[1]);
+}
+
 int fflush(FILE *f) {
     if (f) return flush_write(f) < 0 ? EOF : 0;
     // NULL means every stream, and one failure must not stop the rest
@@ -201,6 +219,7 @@ int puts(const char *s) {
 static int refill(FILE *f) {
     if (!(f->flags & F_READ)) return -1;
     decide_buffering(f);
+    flush_stdout_for_read(f);
     f->pos = f->end = 0;
     if (!f->buf) return -1;
     int64_t n = sys_read(f->fd, f->buf, f->bufsz);
@@ -215,6 +234,10 @@ int fgetc(FILE *f) {
     if (f->ungetn > 0) return (int)f->ungetbuf[--f->ungetn];
     decide_buffering(f);
     if (unbuffered(f)) {
+        // Here rather than at the top: a byte already in the buffer is
+        // not a read, and flushing per character would be a syscall's
+        // worth of compare for every getchar() in a loop.
+        flush_stdout_for_read(f);
         unsigned char ch;
         int64_t n = sys_read(f->fd, &ch, 1);
         if (n < 0) { f->flags |= F_ERR; return EOF; }
