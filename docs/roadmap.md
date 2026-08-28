@@ -236,7 +236,7 @@ everything libc-shaped is waiting on it. Full plan and staging:
 ### Runtime + interop
 
 - [ ] Inter-process IPC (message passing)
-- [ ] A real C library -- staged in `docs/libc-design.md`; stages 0-5 done, the proof (a real port) left
+- [x] ~~A real C library -- staged in `docs/libc-design.md`~~ BUILT, all stages -- the proof ran twice (cJSON, then Doom)
 - [x] ~~FAT16/FAT32 driver -- `/boot` readable from inside toy-os~~ done -- FAT32 only, read-write; see the FAT32 section
 - [ ] `g_next_kernel_rsp` reentrancy fixed properly
 - [ ] `wintest` made non-modal
@@ -311,8 +311,8 @@ Staged in `docs/dynlink-design.md`, including the case against.
 - [ ] ~~An `errno`-style return convention~~ moved up to its own section (errno-design.md); it needs none of this milestone's prerequisites
 - [x] ~~The three syscalls stdio needs: `lseek`, `fstat` on an fd, `O_APPEND`~~ DONE -- `/tests/seek_test`
 - [x] ~~A per-process cwd~~ DONE 2026-08-19 -- `SYS_CHDIR`/`SYS_GETCWD`
-- [ ] `crt0` + a real `_start`, replacing each binary's hand-written syscall stubs
-- [ ] Prove it: build and run a real ported program nobody here wrote
+- [x] ~~`crt0` + a real `_start`, replacing each binary's hand-written syscall stubs~~ done long since -- `userland/rt/crt0.asm`, linked into every program
+- [x] ~~Prove it: build and run a real ported program nobody here wrote~~ DONE twice -- cJSON 1.7.19, then Doom (libc-design.md stages 6 and 8)
 - [ ] Decide, in writing, what is deliberately NOT pursued
 
 ## Tracks -- no dependency on the phases above
