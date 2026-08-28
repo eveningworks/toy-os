@@ -97,6 +97,8 @@ class Layout:
         self.view = None      # [mode0, mode1, single, tree_on, tree_nodes]
         self.treebox = None   # [x, y, w, h, row_h, selected_id]
         self.menu = None      # open level-0 popup [x, y, w, h]
+        self.toolbar = None   # the strip [x, y, w, h]
+        self.tbitems = {}     # item index -> [x, y, w, h]
         self.active = None
         self.selected = None
         self.modal = None
@@ -104,6 +106,8 @@ class Layout:
             if "files: layout " not in line:
                 continue
             p = line.split("files: layout ", 1)[1].split()
+            if not p:
+                continue
             if p[0] == "pane" and len(p) >= 6:
                 self.pane[int(p[1])] = tuple(int(v) for v in p[2:6])
             elif p[0] == "dir" and len(p) >= 3:
@@ -126,6 +130,10 @@ class Layout:
                 self.treebox = [int(v) for v in p[1:7]]
             elif p[0] == "menu" and len(p) >= 5:
                 self.menu = [int(v) for v in p[1:5]]
+            elif p[0] == "toolbar" and len(p) >= 5:
+                self.toolbar = [int(v) for v in p[1:5]]
+            elif p[0] == "tbitem" and len(p) >= 6:
+                self.tbitems[int(p[1])] = [int(v) for v in p[2:6]]
 
     def complete(self):
         return 0 in self.pane and 1 in self.pane and self.active is not None
@@ -725,6 +733,90 @@ def run(dbg, qmp, tmp, res):
               0 < n_off < n_on, f"gutter ink {n_on} -> {n_off}")
     dbg.key(K_ESC)
     dbg.key(K_ESC)
+
+
+    # --- 13. the toolbar ------------------------------------------------
+    # Same commands, same item_flags as the menus: Up/Refresh, then the
+    # four View toggles drawn LATCHED when their thing is on.
+    res.check("the toolbar reports its strip and eight items",
+              lay is not None and lay.toolbar is not None and len(lay.tbitems) == 8,
+              f"toolbar={lay and lay.toolbar} items={lay and sorted(lay.tbitems)}")
+    if not (lay and lay.toolbar and len(lay.tbitems) == 8):
+        dbg.send(f"sh rm {FILES_CONF}")
+        teardown_fixture(dbg)
+        return
+
+    def tb_centre(i):
+        x, y, w, h = lay.tbitems[i]
+        return (ox + x + w // 2, oy + y + h // 2)
+
+    # Up climbs to the parent; at the root it is DISABLED and the click
+    # lands on nothing.
+    dir_now = lay.dir.get(0)
+    parent = "/" if dir_now.count("/") <= 1 else dir_now.rsplit("/", 1)[0]
+    qmp.click_at(*tb_centre(0))
+    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == parent)
+    res.check("the Up button climbs to the parent directory",
+              lay is not None and lay.dir.get(0) == parent,
+              f"dir {dir_now} -> {lay and lay.dir.get(0)} (wanted {parent})")
+    while lay and lay.dir.get(0) not in (None, "/"):
+        qmp.click_at(*tb_centre(0))
+        nxt = wait_layout(dbg, win, lambda l: l.dir.get(0) != lay.dir.get(0), timeout=5)
+        if nxt is None or nxt.dir.get(0) == lay.dir.get(0):
+            break
+        lay = nxt
+    qmp.click_at(*tb_centre(0))  # at "/": disabled, must do nothing
+    time.sleep(0.8)
+    lay = wait_layout(dbg, win, lambda l: True) or lay
+    res.check("at the root the Up button is disabled and does nothing",
+              lay is not None and lay.dir.get(0) == "/", f"dir={lay and lay.dir.get(0)}")
+
+    # The Folder-tree button toggles the same state the menu ticks, and
+    # LATCHES: its background moves to the pressed wash while a sibling
+    # stays put (half the assertion is the neighbour, CLAUDE.md).
+    qmp.click_at(*tb_centre(7))
+    lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 1)
+    res.check("the Folder-tree button toggles the tree on",
+              lay is not None and lay.view and lay.view[3] == 1, f"view={lay and lay.view}")
+
+    park = (ox + lay.pane[1][0] + lay.pane[1][2] - 20,
+            oy + lay.pane[1][1] + lay.pane[1][3] - 20)
+    dbg.warp_cursor(qmp, *park)
+    png_on = os.path.join(tmp, "fm_tb_latched.png")
+    qmp.stable_pixels(png_on)
+    from PIL import Image
+    im = Image.open(png_on).convert("RGB")
+    tx7, ty7 = lay.tbitems[7][0] + 2, lay.tbitems[7][1] + 2
+    tx1, ty1 = lay.tbitems[1][0] + 2, lay.tbitems[1][1] + 2
+    p7 = im.getpixel((ox + tx7, oy + ty7))
+    p1 = im.getpixel((ox + tx1, oy + ty1))
+    res.check("the latched button's background differs from its resting sibling's",
+              p7 != p1, f"tree btn {p7} vs refresh btn {p1}")
+
+    qmp.click_at(*tb_centre(7))
+    lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 0)
+    res.check("clicking it again toggles the tree off",
+              lay is not None and lay.view and lay.view[3] == 0, f"view={lay and lay.view}")
+
+    # The tooltip: park elsewhere (no cream in the strip's shadow), then
+    # hover Refresh past the delay -- it rides the app's tick, so give it
+    # delay + one tick. The tip's cream (255, 252, 220) is a colour
+    # nothing else in this window draws.
+    dbg.warp_cursor(qmp, *park)
+    time.sleep(0.6)
+    bx, by, bw, bh = lay.tbitems[1]
+    tip_rect = (ox + bx, oy + by + bh, 120, 30)
+    png0 = os.path.join(tmp, "fm_tip_before.png")
+    qmp.stable_pixels(png0)
+    n_before = ink_count(png0, tip_rect, (255, 252, 220), tol=6)
+    dbg.warp_cursor(qmp, ox + bx + bw // 2, oy + by + bh // 2)
+    time.sleep(1.4)
+    png1 = os.path.join(tmp, "fm_tip_after.png")
+    qmp.stable_pixels(png1)
+    n_after = ink_count(png1, tip_rect, (255, 252, 220), tol=6)
+    res.check("hovering a button shows its tooltip, and only then",
+              n_before == 0 and n_after > 20, f"cream {n_before} -> {n_after}")
+    dbg.warp_cursor(qmp, *park)
 
     dbg.send(f"sh rm {FILES_CONF}")
 

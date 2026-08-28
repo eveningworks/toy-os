@@ -5095,3 +5095,27 @@ by path and re-selects after `set_nodes_keep()`. The widget keeps only
 the scroll position across the swap -- dropping it flung the view back
 to the root on every expand, which is why `set_nodes_keep()` exists
 rather than apps poking `t->top`.
+
+## The toolbar asks the menu bar's own item_flags, and tooltips ride the tick
+
+`uui_toolbar` has no checked/enabled state of its own: an item carries
+the CODE its menu item commits, and the widget asks the same
+`item_flags(int code)` callback `uui_menubar` does. The alternative --
+per-item state setters, Win32's TB_CHECKBUTTON -- was rejected because
+it is exactly the two-sources drift the menu bar's own "state is asked
+for, not stored" rule exists to prevent: a View toggle would have a
+menu tick and a toolbar latch that some code path forgets to move
+together. Qt solved this by making both controls host one QAction;
+with no action object here, one callback keyed by code is the same
+guarantee. The File Manager passes literally the same function to
+both.
+
+**Tooltips ride the app's tick.** A tooltip appears a moment after the
+pointer STOPS, and no input event announces "time passed" -- something
+must re-evaluate on a cadence, and a Toykit widget cannot repaint its
+window. Rather than give the toolkit a timer service for one feature,
+`uui_toolbar_tick()` is called from the app's existing `on_tick` and
+returns "repaint needed". The stated cost: tooltip latency is the
+app's tick granularity (the File Manager's 500ms tick puts a tip at
+0.5-1s), and an app with no tick gets no tooltips -- its buttons still
+work, so the degradation is the feature, not the control.

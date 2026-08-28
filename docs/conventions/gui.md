@@ -1493,7 +1493,10 @@ real scanout hardware does. Do not write a pixel assertion for one.
     lazy `uui_tree` column on the left whose rows navigate the active
     pane, with only user-expanded directories ever listed. All four
     choices persist in `/etc/files.conf`
-    (`left_view`/`right_view`/`panes`/`tree`).
+    (`left_view`/`right_view`/`panes`/`tree`). The menu ticks its
+    active options (`item_flags`), and a `uui_toolbar` under the bar
+    presents Up/Refresh plus the four toggles through the same
+    callback -- Up is greyed at the root.
   - **Refresh is `SYS_FS_GENERATION` polled in the tick**, the desktop's
     idiom -- one integer compare, no disk I/O, and a copy finishing in
     another process appears with nobody pressing anything. **An app that
@@ -1720,6 +1723,26 @@ chrome is a row of the product), and F10 REVEALS a hidden bar as well as
 opening it, so the toggle is never a one-way door. Konsole's own
 Ctrl+Shift+M is unavailable here: Ctrl folds `M` to 0x0D, so the binding
 would be indistinguishable from Shift+Enter (`api/keyboard.h`).
+
+## A TOOLBAR PRESENTS THE MENU'S COMMANDS, AND ONE `item_flags` ANSWERS FOR BOTH.
+
+`userland/ui/uui_toolbar.h`. An item is an icon name, a tooltip and a
+CODE -- the same code its menu item commits -- and enabled/latched
+state is asked through the SAME `item_flags(int code)` callback the
+menu bar uses, so a latched button and a ticked menu item cannot
+disagree (Qt hosts one QAction in both places; this is that shape
+without the object -- see `docs/decisions.md`). A checked item draws
+PRESSED-IN via `uui_state_bg()`, the latched look every desktop gives
+a view toggle; a disabled one takes no hover and no click.
+
+**Tooltips ride the app's tick.** Hover records when it started,
+`uui_toolbar_tick()` called from `on_tick` says when to repaint, and
+the tip draws from `draw_overlay`, slid inward at the surface's edges.
+An app that never ticks gets working buttons and no tooltips. Commits
+are PARKED (`uui_toolbar_take_code()`), the menu bar's arrangement and
+for the same reason -- the ops `release` slot can only say "changed".
+First caller: the File Manager (Up/Refresh and the four View toggles,
+with Up greyed at the root through the same flags callback).
 
 ## A TAB IS A SESSION, AND `uui_tabs` IS THE STRIP.
 

@@ -257,6 +257,69 @@ def icon_file():
     return im
 
 
+
+# --- toolbar glyphs ----------------------------------------------------
+#
+# Dark ink, no plate: these sit on the toolbar's near-white chrome, the
+# opposite situation from the desktop's white-on-wallpaper app icons.
+# Bold strokes, because they are drawn at ~20px from this 64px master.
+
+TB_INK = (55, 60, 72, 255)
+
+
+def _tb():
+    im = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    return im, ImageDraw.Draw(im)
+
+
+def icon_tb_up():
+    im, d = _tb()
+    d.polygon([(32, 8), (54, 32), (40, 32), (40, 54), (24, 54), (24, 32), (10, 32)],
+              fill=TB_INK)
+    return im
+
+
+def icon_tb_refresh():
+    im, d = _tb()
+    d.arc([10, 10, 54, 54], start=30, end=300, fill=TB_INK, width=8)
+    d.polygon([(56, 24), (40, 28), (52, 42)], fill=TB_INK)
+    return im
+
+
+def icon_tb_details():
+    im, d = _tb()
+    for i, yy in enumerate((12, 27, 42)):
+        d.rectangle([8, yy, 16, yy + 8], fill=TB_INK)
+        d.rectangle([22, yy, 56, yy + 8], fill=TB_INK)
+    return im
+
+
+def icon_tb_icons():
+    im, d = _tb()
+    for yy in (8, 34):
+        for xx in (8, 34):
+            d.rectangle([xx, yy, xx + 22, yy + 22], fill=TB_INK)
+    return im
+
+
+def icon_tb_panes():
+    im, d = _tb()
+    d.rectangle([6, 10, 58, 54], outline=TB_INK, width=6)
+    d.rectangle([29, 10, 35, 54], fill=TB_INK)
+    return im
+
+
+def icon_tb_tree():
+    im, d = _tb()
+    d.rectangle([8, 8, 26, 20], fill=TB_INK)
+    d.rectangle([28, 26, 46, 38], fill=TB_INK)
+    d.rectangle([28, 44, 46, 56], fill=TB_INK)
+    d.rectangle([14, 20, 20, 52], fill=TB_INK)
+    d.rectangle([14, 29, 28, 35], fill=TB_INK)
+    d.rectangle([14, 47, 28, 53], fill=TB_INK)
+    return im
+
+
 def icon_start():
     """The Start button's mark -- NOT an app icon, and deliberately not
     shaped like a UI convention either.
@@ -378,6 +441,12 @@ ICONS = {
     "files": icon_files,
     "folder": icon_folder,
     "file": icon_file,
+    "tb-up": icon_tb_up,
+    "tb-refresh": icon_tb_refresh,
+    "tb-details": icon_tb_details,
+    "tb-icons": icon_tb_icons,
+    "tb-panes": icon_tb_panes,
+    "tb-tree": icon_tb_tree,
     "diskmark": icon_diskmark,
 }
 

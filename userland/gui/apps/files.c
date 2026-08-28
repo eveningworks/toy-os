@@ -39,6 +39,7 @@
 #include "ui/uui.h"
 #include "ui/uui_fileview.h"
 #include "ui/uui_tree.h"
+#include "ui/uui_toolbar.h"
 #include "lib/dirsort.h"
 #include "ui/uapp.h"
 #include "ui/ulog.h"
@@ -54,6 +55,7 @@
 #define ID_RIGHT 2
 #define ID_TREE  3
 #define ID_MENU  4
+#define ID_TOOLBAR 5
 
 // Each pane's directory, remembered across runs. The per-app
 // `/etc/<app>.conf` convention has existed since desktop.conf and had
@@ -69,6 +71,7 @@ enum {
     CMD_COPY = 1, CMD_MOVE, CMD_MKDIR, CMD_RENAME, CMD_DELETE,
     CMD_REFRESH, CMD_SWAP, CMD_EXIT,
     CMD_VIEW_DETAILS, CMD_VIEW_ICONS, CMD_VIEW_PANES, CMD_VIEW_TREE,
+    CMD_UP,
 };
 
 // The listings. 256 entries x 80 bytes = 20 KB per pane, which is why
@@ -105,6 +108,7 @@ static int g_tree_open_count;
 static struct sys_dirent g_tree_scratch[SYS_LISTDIR_MAX];
 
 static struct uui_menubar g_menu;
+static struct uui_toolbar g_toolbar;
 static struct uui_statusbar g_status;
 static struct uui_button g_keys[5];
 
@@ -292,8 +296,23 @@ static const struct uui_menu_item view_items[] = {
 };
 
 static const struct uui_menu_item go_items[] = {
+    UUI_MENU("Up",             CMD_UP,      "Backspace"),
     UUI_MENU("Other pane",     CMD_SWAP,    "Tab"),
     UUI_MENU("Refresh",        CMD_REFRESH, "Ctrl+R"),
+};
+
+// The toolbar presents the commands the BOTTOM key row does not --
+// navigation and the View toggles. Same codes, same item_flags, so a
+// latched button and a ticked menu item cannot disagree.
+static const struct uui_toolbar_item toolbar_items[] = {
+    { "tb-up",      "Up",          CMD_UP },
+    { "tb-refresh", "Refresh",     CMD_REFRESH },
+    UUI_TOOLBAR_SEP,
+    { "tb-details", "Details",     CMD_VIEW_DETAILS },
+    { "tb-icons",   "Icons",       CMD_VIEW_ICONS },
+    UUI_TOOLBAR_SEP,
+    { "tb-panes",   "Second pane", CMD_VIEW_PANES },
+    { "tb-tree",    "Folder tree", CMD_VIEW_TREE },
 };
 
 static const struct uui_menu_item menu_items[] = {
@@ -307,6 +326,10 @@ static const struct uui_menu_item menu_items[] = {
 // checked in the default two-pane state, not when the option was used.
 static unsigned menu_item_flags(int code) {
     switch (code) {
+    case CMD_UP: {
+        const char *d = uui_fileview_dir(&g_pane[g_active]);
+        return (d[0] == '/' && d[1] == '\0') ? UUI_MI_DISABLED : 0;
+    }
     case CMD_VIEW_DETAILS:
         return g_pane[g_active].mode == UUI_FILEVIEW_DETAILS ? UUI_MI_CHECKED : 0;
     case CMD_VIEW_ICONS:
@@ -326,6 +349,7 @@ static unsigned menu_item_flags(int code) {
 // under it (CLAUDE.md's exact rule; the tree made it visible).
 static struct uui_item g_widgets[] = {
     { &uui_menubar_ops,  &g_menu,    0, 0, ID_MENU },
+    { &uui_toolbar_ops,  &g_toolbar, 0, 0, ID_TOOLBAR },
     { &uui_fileview_ops, &g_pane[0], 0, 0, ID_LEFT },
     { &uui_fileview_ops, &g_pane[1], 0, 0, ID_RIGHT },
     { &uui_button_ops,   &g_keys[0], 0, 0, CMD_COPY },
@@ -335,8 +359,8 @@ static struct uui_item g_widgets[] = {
     { &uui_button_ops,   &g_keys[4], 0, 0, CMD_DELETE },
     { &uui_tree_ops,     &g_tree,    0, 0, ID_TREE },
 };
-#define WIDGET_PANE0 1
-#define WIDGET_PANE1 2
+#define WIDGET_PANE0 2
+#define WIDGET_PANE1 3
 #define WIDGET_TREE ((int)(sizeof g_widgets / sizeof g_widgets[0]) - 1)
 
 static void set_note(const char *s) { strlcpy(g_stat_note, s, sizeof g_stat_note); }
@@ -657,6 +681,9 @@ static void do_command(struct uapp *a, int code) {
         open_prompt(CMD_RENAME, "Rename", name);
         break;
     }
+    case CMD_UP:
+        uui_fileview_up(active());
+        break;
     case CMD_REFRESH:
         uui_fileview_reload(&g_pane[0]);
         uui_fileview_reload(&g_pane[1]);
@@ -733,6 +760,7 @@ static int modal_key(struct uapp *a, int key) {
 // --- layout and drawing ------------------------------------------------
 
 static int menubar_h(void) { int h; uui_menubar_natural_size(&g_menu, 0, &h); return h; }
+static int toolbar_h(void) { int h; uui_toolbar_natural_size(&g_toolbar, 0, &h); return h; }
 static int statusbar_h(void) { int h; uui_statusbar_natural_size(&g_status, 0, &h); return h; }
 static int keyrow_h(void) { return utheme_control_h() + utheme_gap(); }
 
@@ -742,15 +770,17 @@ static int keyrow_h(void) { return utheme_control_h() + utheme_gap(); }
 static int panehdr_h(void) { return ugfx_char_h() + utheme_gap(); }
 
 static void layout_all(int cw, int ch) {
-    int mb = menubar_h(), sb = statusbar_h(), kr = keyrow_h();
+    int mb = menubar_h(), tb = toolbar_h(), sb = statusbar_h(), kr = keyrow_h();
 
     uui_menubar_set_geometry(&g_menu, 0, 0, cw, mb);
     uui_menubar_set_bounds(&g_menu, 0, 0, cw, ch);
+    uui_toolbar_ops.set_geometry(&g_toolbar, 0, mb, cw, tb);
     uui_statusbar_set_geometry(&g_status, 0, ch - sb, cw, sb);
 
+    int top = mb + tb;
     int hdr = panehdr_h();
-    int panes_y = mb + hdr;
-    int panes_h = ch - mb - sb - kr - hdr;
+    int panes_y = top + hdr;
+    int panes_h = ch - top - sb - kr - hdr;
     if (panes_h < 1) panes_h = 1;
 
     // The tree column sits left of the panes and spans their headers
@@ -759,7 +789,7 @@ static void layout_all(int cw, int ch) {
     if (g_tree_on) {
         int tw = ugfx_char_w() * 18;
         if (tw > cw / 3) tw = cw / 3;
-        uui_tree_ops.set_geometry(&g_tree, 0, mb, tw, ch - mb - sb - kr);
+        uui_tree_ops.set_geometry(&g_tree, 0, top, tw, ch - top - sb - kr);
         tx = tw;
     }
     int pw = cw - tx;
@@ -866,6 +896,10 @@ static void log_layout(void) {
     }
     const char *sel = uui_fileview_selected_name(active());
     uapp_logf_layout("files: layout active %d\n", g_active);
+    uui_toolbar_ops.bounds(&g_toolbar, &x, &y, &w, &h);
+    uapp_logf_layout("files: layout toolbar %d %d %d %d\n", x, y, w, h);
+    for (int i = 0; uui_toolbar_item_rect(&g_toolbar, i, &x, &y, &w, &h); i++)
+        uapp_logf_layout("files: layout tbitem %d %d %d %d %d\n", i, x, y, w, h);
     if (uui_menubar_is_open(&g_menu)) {
         int mx, my, mw, mh;
         if (uui_menubar_popup_rect(&g_menu, 0, &mx, &my, &mw, &mh))
@@ -920,12 +954,18 @@ static void on_widget(struct uapp *a, int id, int reason) {
     // first. The menu's parked code is TAKEN so it cannot replay later.
     if (g_modal != MODAL_NONE) {
         if (id == ID_MENU) (void)uui_menubar_take_code(&g_menu);
+        if (id == ID_TOOLBAR) (void)uui_toolbar_take_code(&g_toolbar);
         return;
     }
     if (id == ID_MENU) {
         // The commit is PARKED in the widget (ui/uui_menubar.h): the
         // ops release slot can only say "changed", not which item.
         int code = uui_menubar_take_code(&g_menu);
+        if (code >= 0) do_command(a, code);
+        return;
+    }
+    if (id == ID_TOOLBAR) {
+        int code = uui_toolbar_take_code(&g_toolbar);
         if (code >= 0) do_command(a, code);
         return;
     }
@@ -988,6 +1028,7 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
 static int on_tick(struct uapp *a) {
     (void)a;
     int changed = poll_job();
+    if (uui_toolbar_tick(&g_toolbar)) changed = 1;
 
     // Not under a rubber band: a reload clears the marks the band is
     // mid-way through choosing (the desktop's desktop_drag_active() rule).
@@ -1091,6 +1132,9 @@ int main(int argc, char **argv) {
     uui_menubar_init(&g_menu, menu_items,
                       (int)(sizeof menu_items / sizeof menu_items[0]));
     g_menu.item_flags = menu_item_flags;
+    uui_toolbar_init(&g_toolbar, toolbar_items,
+                      (int)(sizeof toolbar_items / sizeof toolbar_items[0]));
+    g_toolbar.item_flags = menu_item_flags; // ONE state source -- see uui_toolbar.h
     uui_statusbar_init(&g_status);
     g_status.panes[0].text = g_stat_dir;
     g_status.panes[0].chars = 0;
