@@ -1056,11 +1056,15 @@ Not MSI-X: MSI is a memory write to a Local APIC, and this kernel is
 
 ## THE KERNEL STORES NO ENVIRONMENT, AND `SYS_SPAWN` TAKES A STRUCT
 
-`SYS_SPAWN`'s argument is now `RDI = &struct spawn_msg`
-(`abi/syscall_abi.h`): path, args, env, stdout_fd, and a `reserved`
-field that MUST be zero. It outgrew three registers when the
-environment arrived, and became a struct rather than a second syscall
-number so there stays one spawn with one shape.
+`SYS_SPAWN`'s argument is `RDI = &struct spawn_msg`
+(`abi/syscall_abi.h`): path, args, env, `stdout_fd`, `stdin_fd`, `pgid`
+and `flags`. It outgrew three registers when the environment arrived,
+and became a struct rather than a second syscall number so there stays
+one spawn with one shape -- which is what has since absorbed the
+process group, the flag word and the second stream with no new syscall.
+The `reserved`-must-be-zero field this section used to describe is
+gone: `pgid` took its place, so the old check became a range check on a
+real value.
 
 **The environment is passed EXPLICITLY on every spawn and the kernel
 keeps none of it.** That is `execve()`, and libsys's `sys_spawn()` --
@@ -1083,6 +1087,39 @@ Three things follow that are easy to trip over:
 
 `init` seeds `PATH=/bin` and `HOME=/`, and being pid 1 is what makes
 that the whole system's environment.
+
+## A SPAWN NAMES THE CHILD'S fd 0 AND fd 1, AND A SOCKET IS ACCEPTED ON BOTH
+
+`struct spawn_msg`'s `stdin_fd`/`stdout_fd` are a pipe end or a
+CONNECTED SOCKET this process owns, or -1 to leave what inheritance
+gave. Both are installed after `fd_inherit()`, so they win. In ring 3
+the entry point is `sys_spawn_opts()` with a `struct sys_spawn_opts` --
+the header's own note said the next capability had to go in a struct
+rather than a seventh parameter, and this is it; every older
+`sys_spawn*()` signature is unchanged and built on top.
+
+**NAMED IN THE SPAWN RATHER THAN `dup2`'d BEFORE IT, because there is
+no fork here to redirect inside.** Unix inetd does the `dup2` in the
+child between `fork()` and `exec()`; a spawn returns a process that is
+already running, so a parent doing it beforehand has to point its own
+fd 0/1 at the connection and put them back -- and anything it prints in
+between goes to the client. `posix_spawn`'s `file_actions` is the same
+answer to the same problem.
+
+**fd 2 is deliberately NOT redirectable this way.** It stays the kernel
+log, so a spawned handler's diagnostics reach `dmesg` rather than the
+client.
+
+**An fd of the wrong kind is REFUSED (-EBADF), not ignored** -- a child
+silently starting with the console on fd 0 is the failure nobody
+notices. `spawn_std_desc()` in `kernel/proc/proc_syscalls.c` is the one
+place that decides.
+
+`/bin/inetd` is what this exists for: a connection per child process,
+which makes a handler an ordinary FILTER (`inetd -p 7 /bin/cat` is an
+echo server) and gives every connection its own reader, so no
+connection's retransmission timers are left to the idle loop.
+`/bin/httpd -1` serves one connection on fd 0/1 and exits.
 
 ## A SIGNAL SETS A BIT; THE KERNEL ACTS ON IT WHEN IT IS SAFE TO.
 

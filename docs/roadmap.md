@@ -25,7 +25,7 @@ buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
 - [ ] `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR, not a 64 KiB guess  *(USB)*
-- [ ] **A connection per child process** -- inetd's model: the socket on fd 0/1, and a spawned handler  *(Networking)*
+- [ ] Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today  *(Networking)*
 - [ ] The ring-3 WM busy-waits instead of sleeping -- built on branch `wm-wait-ready`, PARKED: it regresses `uterm`  *(Known limitations and papercuts (unscheduled))*
 - [ ] System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons  *(Known limitations and papercuts (unscheduled))*
 <!-- END next-up -->
@@ -688,8 +688,8 @@ run on, not by order.
 - [x] ~~**A blocking receive**~~ DONE 2026-08-29 -- one wait channel, woken from the driver's ISR; the deadline lives on the socket
 - [x] ~~**TCP**~~ DONE 2026-08-29 -- client side: active open, in-order stream, retransmission, orderly close
 - [x] ~~**A passive open: listen and accept**, so something can connect TO toy-os~~ DONE 2026-08-29 -- `/bin/httpd` serves the filesystem
-- [ ] **A connection per child process** -- inetd's model: the socket on fd 0/1, and a spawned handler **NEXT**
-- [ ] Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today
+- [x] ~~**A connection per child process**~~ DONE 2026-08-29 -- `/bin/inetd`; the spawn NAMES fd 0/1, so `inetd -p 7 /bin/cat` echoes
+- [ ] **NEXT** Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today
 - [ ] An RTT estimate, and Nagle -- the retransmit timeout is a fixed floor with backoff
 - [ ] Run `dhcp` at boot -- blocked on the desktop-startup write bug in `docs/bugs.md`, not on effort
 - [ ] Renew the lease before it expires -- `/bin/dhcp` asks once and exits

@@ -490,6 +490,18 @@ static size_t copy_env_from_user(uint64_t pml4, uint64_t uptr, char *out, size_t
     return 0; // ran past the cap without finding the end
 }
 
+// One of the child's standard streams, resolved to a description index
+// the spawn can install. `want` is the pipe end that direction accepts;
+// a connected SOCKET is accepted for either, which is what lets a
+// handler spawned per connection be an ordinary filter. Returns -1 for
+// anything else, including an fd this process does not hold.
+static int spawn_std_desc(uint64_t pml4, int fd, enum fd_kind want) {
+    struct open_file *f = fd_get(pml4, fd);
+    if (!f) return -1;
+    if (f->kind != want && f->kind != FD_KIND_SOCKET) return -1;
+    return fd_desc_index(pml4, fd);
+}
+
 int sys_spawn(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
     int64_t spawn_rc = -ENOENT; // no such program, unless something below says otherwise
@@ -559,24 +571,29 @@ int sys_spawn(struct syscall_ctx *c) {
         const char *args = 0;
         if (msg.args && vmm_copy_string_from_user(pml4, argbuf, (uint64_t)(uintptr_t)msg.args, FS_PATH_MAX)) args = argbuf;
 
-        // The child's stdout override, as a DESCRIPTION index rather
-        // than a pipe index: the child's fd 1 will simply name this
-        // same open file, which is the general mechanism now and not a
-        // pipe special case. An fd that isn't this process's own write
-        // end is REFUSED rather than quietly ignored -- spawning with
-        // console output instead would leave the parent blocked on a
-        // pipe nothing will ever write to.
-        int stdout_desc = -1;
+        // The child's stdin/stdout overrides, as DESCRIPTION indices
+        // rather than pipe indices: the child's fd will simply name the
+        // same open file, which is the general mechanism and not a pipe
+        // special case. An fd that isn't one of the kinds below is
+        // REFUSED rather than quietly ignored -- spawning with console
+        // output instead would leave the parent blocked on a pipe
+        // nothing will ever write to.
+        int stdout_desc = -1, stdin_desc = -1;
         int ok = 1;
-        int64_t wfd = msg.stdout_fd;
-        if (wfd >= 0) {
-            struct open_file *f = fd_get(pml4, (int)wfd);
-            if (!f || f->kind != FD_KIND_PIPE_W) {
-                klog_write("syscall: spawn() rejected -- stdout fd isn't this process's pipe write end\n");
+        if (msg.stdout_fd >= 0) {
+            stdout_desc = spawn_std_desc(pml4, (int)msg.stdout_fd, FD_KIND_PIPE_W);
+            if (stdout_desc < 0) {
+                klog_write("syscall: spawn() rejected -- stdout fd isn't this process's pipe write end or socket\n");
                 spawn_rc = -EBADF;
                 ok = 0;
-            } else {
-                stdout_desc = fd_desc_index(pml4, (int)wfd);
+            }
+        }
+        if (ok && msg.stdin_fd >= 0) {
+            stdin_desc = spawn_std_desc(pml4, (int)msg.stdin_fd, FD_KIND_PIPE_R);
+            if (stdin_desc < 0) {
+                klog_write("syscall: spawn() rejected -- stdin fd isn't this process's pipe read end or socket\n");
+                spawn_rc = -EBADF;
+                ok = 0;
             }
         }
         if (ok) {
@@ -597,8 +614,8 @@ int sys_spawn(struct syscall_ctx *c) {
             // else's spawn can collect it. The disarm covers the spawn
             // having failed before an address space existed.
             if (msg.flags & SPAWN_TRACE) strace_arm_for_current();
-            int pid = scheduler_spawn_group(path, args, stdout_desc, env, msg.pgid,
-                                             c->pml4);
+            int pid = scheduler_spawn_group(path, args, stdout_desc, stdin_desc,
+                                             env, msg.pgid, c->pml4);
             strace_disarm();
             if (pid > 0) spawn_rc = pid;
             // SPAWN_FOREGROUND: the child's group in front of OUR fd 0,

@@ -651,7 +651,8 @@ struct sys_dirent {
                       // so nothing above it changed.
 
 // What SYS_SPAWN takes. `path` and `args` are what they always were;
-// `stdout_fd` is a pipe write end this process owns, or -1.
+// `stdin_fd`/`stdout_fd` are a pipe end or a connected SOCKET this
+// process owns, or -1.
 //
 // **`env` IS PASSED EXPLICITLY AND THE KERNEL STORES NONE OF IT.** It
 // is a NUL-separated run of "KEY=VALUE" strings ending in an empty one
@@ -671,7 +672,18 @@ struct spawn_msg {
     const char *path;
     const char *args;      // whitespace-separated, or NULL
     const char *env;       // "K=V\0K=V\0\0", or NULL
-    int32_t stdout_fd;     // a pipe write end this process owns, or -1
+    int32_t stdout_fd;     // a pipe write end or socket, or -1
+    // The child's fd 0, same rule as `stdout_fd` above. A SOCKET is
+    // accepted on both because that is what a connection per child
+    // needs: inetd's handler is an ordinary filter reading fd 0 and
+    // writing fd 1, and only 0/1/2 cross a spawn.
+    //
+    // NAMED HERE RATHER THAN dup2'd BEFORE THE SPAWN, because a spawn
+    // ABI has no child-side window to redirect in -- the parent would
+    // have to point its OWN fd 0/1 at the connection and put them back
+    // afterwards, so anything it printed in between would go to the
+    // client. posix_spawn has file_actions for the same reason.
+    int32_t stdin_fd;
     // The process GROUP to start the child in, or 0 to inherit the
     // caller's -- which is what every existing caller passed, since this
     // field was `reserved` and had to be 0.

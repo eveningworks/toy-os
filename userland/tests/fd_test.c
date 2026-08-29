@@ -132,6 +132,57 @@ int main(void) {
         put(msg);
     }
 
+    // --- a spawn can NAME the child's fd 0, not just its fd 1 --------
+    //
+    // The filter shape, with pipes standing in for the connection inetd
+    // hands a handler: /bin/cat copies fd 0 to fd 1 and is told nothing
+    // else, so bytes coming out the far pipe can only mean both ends
+    // were installed. Same kernel path a socket takes.
+    int pa[2], pb[2];
+    check(sys_pipe(pa) == 0 && sys_pipe(pb) == 0, "two pipes for the filter");
+
+    struct sys_spawn_opts o;
+    sys_spawn_opts_init(&o);
+    o.stdin_fd = pa[0];
+    o.stdout_fd = pb[1];
+    int fpid = sys_spawn_opts("/bin/cat", &o);
+    check(fpid > 0, "spawn with stdin_fd and stdout_fd named");
+
+    // OURS GO NOW, BOTH OF THEM. The child holds its own references;
+    // keeping the write end of the far pipe would mean this process is
+    // also a writer of the pipe it is reading, and EOF never arrives.
+    sys_close(pa[0]);
+    sys_close(pb[1]);
+    sys_write(pa[1], "filter\n", 7);
+    sys_close(pa[1]);              // EOF, so cat stops rather than parks
+
+    char fbuf[64];
+    int fn = 0;
+    for (;;) {
+        int64_t got = sys_read(pb[0], fbuf + fn, (uint64_t)(int)(sizeof fbuf - 1 - (size_t)fn));
+        if (got <= 0) break;
+        fn += (int)got;
+    }
+    fbuf[fn] = '\0';
+    sys_close(pb[0]);
+    if (fpid > 0) sys_waitpid(fpid, &code);
+    check(fn == 7 && !strcmp(fbuf, "filter\n"),
+          "the child read fd 0 and wrote fd 1 -- a plain filter");
+    if (fn != 7 || strcmp(fbuf, "filter\n")) {
+        snprintf(msg, sizeof msg, "       (got %d bytes: \"%s\")\n", fn, fbuf);
+        put(msg);
+    }
+
+    // A REFUSAL IS NOT A SILENT FALLBACK. An fd that is neither the
+    // right pipe end nor a socket must fail the spawn, or the child
+    // starts with the console on fd 0 and the parent never learns.
+    int plain = sys_open(child_path, 0);
+    sys_spawn_opts_init(&o);
+    o.stdin_fd = plain;
+    check(sys_spawn_opts("/bin/hello", &o) < 0,
+          "a spawn naming a plain file as stdin is refused");
+    sys_close(plain);
+
     if (g_fail == 0) put("fd_test: all checks passed\n");
     return g_fail;
 }

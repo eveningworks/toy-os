@@ -2546,7 +2546,7 @@ window without going through it will find its layout polls timing out.
   dependency the machine might not have is a check that silently stops
   running.
 
-  Nine phases. The e1000 (the card QEMU's default machine has always
+  The e1000 (the card QEMU's default machine has always
   had, so it needs no flag); **virtio-net, which is the only thing here
   that reaches `kernel/drivers/virtio/virtio_net.c`**; two cards at
   once, moved onto DIFFERENT subnets so that "the traffic left through
@@ -2580,6 +2580,29 @@ window without going through it will find its layout polls timing out.
   for a real three-way handshake plus TCP checksums recomputed here over
   the pseudo-header -- the same trap UDP has, made worse by TCP having
   no length field of its own.
+
+  **The last phase is `inetd`**, and it carries the two checks the
+  serial server cannot pass. `/bin/cat` is run as an echo server --
+  it copies fd 0 to fd 1 and knows nothing about sockets, so bytes
+  coming back are the only available proof that the accepted connection
+  really landed on the child's standard streams. Then a client connects
+  and **says nothing**, which parks a one-at-a-time server in `read()`
+  forever, and a second client is required to get a complete response.
+  "Both were answered eventually" is what a serial server passes, so the
+  first connection is left hanging on purpose rather than closed. The
+  control was run: against plain `httpd` the second request times out.
+  A third check asks for **ten connections in a row, each compared
+  against the staged bytes** -- a server that answers three and wedges
+  passes both of the others.
+
+  **It also found a harness bug that had been reading as an OS limit.**
+  Nothing here drained the serial socket while a server held the
+  console, so the guest filled COM1's buffer and stalled in its own
+  write -- which looks exactly like a server exhausting sockets after N
+  connections, and was diagnosed that way first. Phase 11 had been
+  passing with four connections of margin, so one extra log line per
+  request was enough to turn it red. `Shell.drain_start()` is the fix,
+  the same thing `usb_test.py` does while it types.
 
   It found four real defects while being written: the ARP storm above; a
   sequence number burned by every retried send, so a capture showed a

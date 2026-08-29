@@ -6,7 +6,7 @@
 
 ## Synopsis
 
-    httpd [-p <port>] [<root>]
+    httpd [-p <port>] [-1] [<root>]
 
 ## Description
 
@@ -18,20 +18,29 @@ browser on another machine can read the OS's disk.
 (default 80). A request for a directory returns a page of links, so the
 whole tree is browsable from the top.
 
-**One connection at a time**, deliberately: accept, serve, close, accept
-again. That is what the stack can honestly promise, because a
-connection's retransmission timers are driven by the process reading it
-(`docs/conventions/kernel.md`'s TCP entry). A second client waits in the
-backlog rather than being refused.
+**On its own it is one connection at a time**: accept, serve, close,
+accept again. A second client waits in the backlog rather than being
+refused. This is the readable mode and it needs nothing else running.
+
+**`-1` serves ONE connection already on fd 0 and fd 1, then exits** —
+which is how an inetd service is written. Run it as
+
+    inetd -p 80 /bin/httpd -1 /
+
+and each client gets its own process, so a slow one no longer holds the
+server. It binds nothing in this mode; exiting is what closes the
+connection. Note that `-1` **must not print to stdout**, because fd 1 is
+the client — the per-request log is suppressed there rather than landing
+in the middle of a response body.
 
 Ctrl-C stops it.
 
 ## What it is not
 
-**Not concurrent.** A slow client holds the server. Handing each
-connection to a spawned child with the socket on fd 0 and 1 — inetd's
-model, and the one this kernel can express, since only 0/1/2 are
-inherited — is a roadmap item rather than a limitation of `listen`.
+**Not concurrent on its own.** A slow client holds the serial server.
+Concurrency comes from running it under `inetd` with `-1`, which hands
+each connection to its own process — the one shape this kernel can
+express, since only 0/1/2 are inherited across a spawn.
 
 **GET only.** Anything else is `400`. No POST, no PUT, no CGI.
 
@@ -50,10 +59,12 @@ by anyone you would not hand the disk to.
 
     $ httpd -p 8080 /etc
     httpd: serving /etc on port 8080 -- Ctrl-C to stop
-    httpd: 10.0.2.2:41234 GET /etc/resolv.conf
+    httpd: 10.0.2.2:41234 connected
+    httpd: GET /etc/resolv.conf
 
-One line per request, with the client's address, so a server nobody is
-reaching looks different from one answering the wrong thing.
+The client's address and the path it asked for, so a server nobody is
+reaching looks different from one answering the wrong thing. Under `-1`
+neither line is printed, since fd 1 is the client.
 
 Status codes it produces: `200`, `400` (not a GET), `403` (a path
 leaving the root, or a file it cannot open), `404`.
@@ -70,6 +81,7 @@ or, headless, `python3 tools/vm.py --hostfwd tcp::8080-:80 start`. Then
 
 ## See also
 
-`wget` for the client side, `ifconfig` for the address it is serving on,
+`inetd` for running it once per connection, `wget` for the client side,
+`ifconfig` for the address it is serving on,
 and `docs/conventions/kernel.md`'s TCP entry for what the stack under it
 does and does not do.

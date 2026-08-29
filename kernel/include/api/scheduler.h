@@ -366,8 +366,12 @@ int scheduler_spawn_env(const char *path, const char *args, int pipe_idx,
 // gets the standard three. NAMED rather than read off CR3, because a
 // kernel-context caller runs with whatever address space the scheduler
 // last loaded (see spawn_from_fs()'s comment for the bug that was).
+// `stdin_desc` is the same shape as `pipe_idx` (which is really the
+// child's fd 1): a description index to install, or -1 to leave what
+// inheritance gave it. Both are applied AFTER fd_inherit(), so they win.
 int scheduler_spawn_group(const char *path, const char *args, int pipe_idx,
-                           const char *env, int pgid, uint64_t parent_pml4);
+                           int stdin_desc, const char *env, int pgid,
+                           uint64_t parent_pml4);
 
 
 // Whether `pid` names a live or reaped-pending process started by

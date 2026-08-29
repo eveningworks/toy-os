@@ -73,6 +73,13 @@ THE PHASES, and what a broken build would still pass
      connectivity. The capture is then checked for a genuine three-way
      handshake and for TCP checksums recomputed here, which is the same
      pseudo-header trap UDP has.
+ 12. inetd -- a CONNECTION PER CHILD PROCESS. Two checks the serial
+     server cannot pass: /bin/cat run as an echo server (it copies fd 0
+     to fd 1 and knows nothing about sockets, so bytes coming back are
+     proof the connection landed on the child's standard streams), and
+     a client that connects and SAYS NOTHING failing to block the next
+     one. "Both were answered eventually" is what a one-at-a-time
+     server passes, so the first connection is left hanging on purpose.
 
     python3 tools/net_test.py
     echo $?
@@ -86,6 +93,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -185,7 +193,43 @@ class Shell:
                 break
         return out.decode("utf-8", "replace")
 
+    def drain_start(self):
+        """Keep reading the console in the background.
+
+        AN UNDRAINED COM1 STALLS THE WHOLE GUEST. The serial port's
+        buffer is finite, so a guest printing a line per request into a
+        socket nobody is reading blocks in its own write -- and that
+        reads exactly like a server dying after N connections, which is
+        how it was first diagnosed here (the serial `httpd` appeared to
+        exhaust something after four). `usb_test.py` drains for the same
+        reason while it types.
+
+        Only needed while a long-running program holds the console;
+        run() reads its own output."""
+        self._stop = threading.Event()
+
+        def pump():
+            while not self._stop.is_set():
+                try:
+                    self.s.settimeout(0.5)
+                    if not self.s.recv(65536):
+                        return
+                except Exception:
+                    pass
+
+        self._pump = threading.Thread(target=pump, daemon=True)
+        self._pump.start()
+
+    def drain_stop(self):
+        if getattr(self, "_stop", None) is None:
+            return
+        self._stop.set()
+        self._pump.join(timeout=2.0)
+        self._stop = None
+        self.s.settimeout(self.timeout)
+
     def close(self):
+        self.drain_stop()
         try:
             self.s.close()
         except Exception:
@@ -859,6 +903,20 @@ SERVER_FILE = "httpd_probe.txt"
 SERVER_TEXT = "served from inside toy-os\n" * 3
 
 
+def _stage_probe(disk, tmp):
+    """Write the file the guest will serve into the image, from here."""
+    subprocess.run([sys.executable, os.path.join(HERE, "tfs3_writer.py"),
+                    "mkdir", disk, "/tmp", *_volume_args(disk)],
+                   cwd=ROOT, capture_output=True)
+    probe = os.path.join(tmp, SERVER_FILE)
+    with open(probe, "w") as f:
+        f.write(SERVER_TEXT)
+    return subprocess.run([sys.executable, os.path.join(HERE, "tfs3_writer.py"),
+                           "write", disk, probe, "/tmp/" + SERVER_FILE,
+                           *_volume_args(disk)],
+                          cwd=ROOT, capture_output=True, text=True)
+
+
 def phase_server(r, disk, tmp):
     """The guest as the SERVER: the host connects IN.
 
@@ -873,17 +931,7 @@ def phase_server(r, disk, tmp):
     rather than merely arriving."""
     import http.client
 
-    # The file the guest will serve, written into the image from here.
-    subprocess.run([sys.executable, os.path.join(HERE, "tfs3_writer.py"),
-                    "mkdir", disk, "/tmp", *_volume_args(disk)],
-                   cwd=ROOT, capture_output=True)
-    probe = os.path.join(tmp, SERVER_FILE)
-    with open(probe, "w") as f:
-        f.write(SERVER_TEXT)
-    w = subprocess.run([sys.executable, os.path.join(HERE, "tfs3_writer.py"),
-                        "write", disk, probe, "/tmp/" + SERVER_FILE,
-                        *_volume_args(disk)],
-                       cwd=ROOT, capture_output=True, text=True)
+    w = _stage_probe(disk, tmp)
     if w.returncode != 0:
         r.check("[server] the probe file could be staged", False,
                 (w.stdout + w.stderr)[-300:])
@@ -895,6 +943,7 @@ def phase_server(r, disk, tmp):
         # httpd holds the console, so the command is sent and not waited
         # for -- the assertion is what answers on the socket, not what
         # the shell prints.
+        sh.drain_start()
         sh.s.sendall(b"sh httpd /tmp\n")
         time.sleep(3.0)
 
@@ -960,6 +1009,138 @@ def phase_server(r, disk, tmp):
         sh.close()
 
 
+INETD_PORT = 18090
+
+
+def phase_inetd(r, disk, tmp):
+    """A connection per child process -- inetd's model.
+
+    TWO CHECKS THE SERIAL SERVER CANNOT PASS, which is the whole point
+    of the phase:
+
+    1. `/bin/cat` AS AN ECHO SERVER. cat knows nothing about sockets --
+       it copies fd 0 to fd 1 -- so bytes coming back at all is proof
+       the accepted connection really landed on the child's standard
+       streams. Nothing else in this file can demonstrate that.
+
+    2. A SILENT CLIENT DOES NOT BLOCK THE NEXT ONE. Connection A is
+       opened and never says anything, so a one-connection-at-a-time
+       server is parked in read() on it forever. Connection B is then
+       required to get a complete response. "Both were answered
+       eventually" is what a serial server passes, so the first
+       connection is deliberately left hanging rather than closed."""
+    import http.client
+
+    # ITS OWN FIXTURE, not phase 11's. The phases share one disk image,
+    # so inheriting the staged file would make this pass or fail on
+    # whether that phase ran -- and `-k`-style single-phase runs are
+    # exactly when a test needs to stand alone.
+    _stage_probe(disk, tmp)
+
+    extra = f",hostfwd=tcp::{INETD_PORT}-:80"
+
+    # --- 1. the filter: inetd -p 80 /bin/cat ---------------------------
+    sh, pidfile = launch(disk, tmp, "inetd-cat", "e1000", None, netdev_extra=extra)
+    try:
+        sh.drain_start()
+        sh.s.sendall(b"sh inetd -p 80 /bin/cat\n")
+        time.sleep(3.0)
+        echoed = b""
+        try:
+            c = socket.create_connection(("127.0.0.1", INETD_PORT), timeout=15)
+            c.sendall(b"filter\n")
+            c.settimeout(10)
+            echoed = c.recv(64)
+            c.close()
+        except Exception as e:
+            echoed = f"<{e}>".encode()
+        r.check("[inetd] /bin/cat serves as an echo server -- the socket "
+                "really is the child's fd 0 and fd 1",
+                echoed == b"filter\n", repr(echoed)[:200])
+    finally:
+        kill(pidfile)
+        sh.close()
+
+    # --- 2. concurrency: inetd -p 80 /bin/httpd -1 /tmp ----------------
+    sh, pidfile = launch(disk, tmp, "inetd-httpd", "e1000", None, netdev_extra=extra)
+    hanging = None
+    try:
+        sh.drain_start()
+        sh.s.sendall(b"sh inetd -p 80 /bin/httpd -1 /tmp\n")
+        time.sleep(3.0)
+
+        # A works normally: the spawned handler serves a real request.
+        status, body = 0, ""
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", INETD_PORT, timeout=15)
+            conn.request("GET", "/" + SERVER_FILE)
+            resp = conn.getresponse()
+            status = resp.status
+            body = resp.read().decode("utf-8", "replace")
+            conn.close()
+        except Exception as e:
+            body = f"<{e}>"
+        r.check("[inetd] a spawned httpd serves a request on fd 0/1",
+                status == 200 and body == SERVER_TEXT,
+                f"status {status}, body {body!r}"[:300])
+
+        # THE DISCRIMINATING ONE. Open a connection and say nothing, so
+        # its handler is parked in read(). A serial server stops here.
+        hanging = socket.create_connection(("127.0.0.1", INETD_PORT), timeout=15)
+        time.sleep(1.0)
+
+        second = 0
+        second_body = ""
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", INETD_PORT, timeout=15)
+            conn.request("GET", "/" + SERVER_FILE)
+            resp = conn.getresponse()
+            second = resp.status
+            second_body = resp.read().decode("utf-8", "replace")
+            conn.close()
+        except Exception as e:
+            second_body = f"<{e}>"
+        r.check("[inetd] a client that says nothing does not block the next one",
+                second == 200 and second_body == SERVER_TEXT,
+                f"status {second}, body {second_body!r}"[:300])
+
+        hanging.close()
+        hanging = None
+
+        # ENDURANCE, which is what "lifts httpd off one-at-a-time"
+        # actually means: a server that answers three requests and
+        # wedges passes every check above. Ten in a row, each compared
+        # against the staged bytes, because a truncated body is the
+        # failure a status code cannot show.
+        good = 0
+        detail = ""
+        for n in range(10):
+            try:
+                conn = http.client.HTTPConnection("127.0.0.1", INETD_PORT, timeout=15)
+                conn.request("GET", "/" + SERVER_FILE)
+                resp = conn.getresponse()
+                body = resp.read().decode("utf-8", "replace")
+                conn.close()
+                if resp.status == 200 and body == SERVER_TEXT:
+                    good += 1
+                else:
+                    detail = f"request {n + 1}: status {resp.status}, body {body!r}"[:200]
+                    break
+            except Exception as e:
+                detail = f"request {n + 1}: {type(e).__name__}: {e}"
+                break
+        r.check("[inetd] ten connections in a row, each served whole",
+                good == 10, detail or f"{good}/10")
+    finally:
+        if hanging is not None:
+            try:
+                hanging.close()
+            except Exception:
+                pass
+        kill(pidfile)
+        sh.close()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -997,6 +1178,8 @@ def main():
         phase_tcp(r, disk, tmp)
         print("Phase 11: the guest as a SERVER, with the host connecting in")
         phase_server(r, disk, tmp)
+        print("Phase 12: inetd -- a connection per child process")
+        phase_inetd(r, disk, tmp)
     finally:
         if not args.keep:
             shutil.rmtree(tmp, ignore_errors=True)

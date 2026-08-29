@@ -605,6 +605,7 @@ whenever a headline here tells you something you did not already know.
 - **The kernel RELOCATES ITSELF at boot -- it is not running where it was linked.**
 - **A BLOCKED PROCESS WAITS ON A CHANNEL, AND A CHANNEL IS AN ADDRESS.**
 - **THE KERNEL STORES NO ENVIRONMENT, AND `SYS_SPAWN` TAKES A STRUCT**
+- **A SPAWN NAMES THE CHILD'S fd 0 AND fd 1, AND A SOCKET IS ACCEPTED ON BOTH** -- `stdin_fd` beside `stdout_fd` on `struct spawn_msg`, installed after `fd_inherit()` so they win; `sys_spawn_opts()` is ring 3's entry point, a struct because the header said the next capability could not be a seventh parameter. NAMED IN THE SPAWN rather than `dup2`'d before it: with no fork there is no child-side window, so a parent would have to point its OWN 0/1 at the connection and put them back, and anything printed in between goes to the client (posix_spawn's `file_actions`, same reason). fd 2 stays the kernel log on purpose. A wrong-kind fd is -EBADF, never ignored. `/bin/inetd` is the caller: a connection per child, which makes a handler an ordinary FILTER (`inetd -p 7 /bin/cat` echoes) and gives every connection its own reader.
 - **A SIGNAL SETS A BIT; THE KERNEL ACTS ON IT WHEN IT IS SAFE TO.** -- except STOP/CONTINUE, which act at SEND time and never touch the pending set; STOPPED is a FLAG beside the state, and a test that reads the flag cannot see the bug. **`pending` is not `deliverable`**, and confusing them swallows a handler's own `SYS_SIGRETURN`.
 - **A HANDLER IS RING-3 CODE, AND THE KERNEL BORROWS ITS STACK TO CALL IT.** -- the restorer comes from ring 3 (`SA_RESTORER`, not a vDSO), it must not touch the stack, a signal is blocked inside its own handler, and a fault with no handler still prints the full report.
 - **A CHILD'S DEATH RAISES SIGCHLD, AND THE NOTIFICATION HAS ONE HOME.** -- `notify_parent()`, called by BOTH deaths (exit and kill); exit only, never a stop or a continue; and it costs a parent with no handler one compare.
@@ -1352,12 +1353,15 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   SLIRP answers the pings and shares no code with the guest, and every
   frame is dumped to a pcap and decoded here with the IPv4 and ICMP
   checksums RECOMPUTED, because SLIRP can be lenient where a decoder
-  cannot. Nine phases; the load-bearing ones are virtio-net, the only
+  cannot. The load-bearing phases are virtio-net, the only
   path to `virtio_net.c`; TWO CARDS ON TWO SUBNETS, where the assertion
   is which device's counters moved rather than that a ping worked; a
   REAL PYTHON SOCKET on the host as the far end of a UDP round trip;
-  and DHCP on 192.168.76.0/24, since on the default network a working
-  client and the hardcoded 10.0.2.15 are indistinguishable. Its
+  DHCP on 192.168.76.0/24, since on the default network a working
+  client and the hardcoded 10.0.2.15 are indistinguishable; and
+  **`inetd`**, where a client that connects and SAYS NOTHING must not
+  block the next one -- "both were answered eventually" is what a
+  one-at-a-time server passes, so the first is left hanging. Its
   ARP-rate phase is a regression test with a measurement behind it:
   104 frames for two pings before rate limiting, 5 after. DNS SKIPS on
   a host that cannot resolve),

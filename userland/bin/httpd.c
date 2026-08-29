@@ -4,14 +4,15 @@
 // this proves something can reach IN. A browser on the host sees the
 // OS's disk.
 //
-// ONE CONNECTION AT A TIME, deliberately. accept, serve, close, accept
-// again -- which is what the stack can honestly promise, because a
-// connection's retransmission timers are driven by the process reading
-// it (kernel/net/tcp.c). A second client waits in the backlog rather
-// than being refused. Handing each connection to a spawned child, with
-// the socket on fd 0 and 1, is the shape this kernel could support
-// later (only 0/1/2 are inherited, which is exactly what inetd needs)
-// and is not what this does.
+// TWO MODES. On its own it is one connection at a time -- accept, serve,
+// close, accept again. Under `-1` it serves ONE connection already on fd
+// 0 and fd 1 and exits, which is how an inetd service is written: run it
+// as `inetd -p 80 /bin/httpd -1 /` and each client gets its own process.
+// The serial mode stays because it is the readable one and needs nothing
+// else running.
+//
+// `-1` MUST NOT PRINT TO STDOUT: fd 1 is the client, so the accept log
+// would land in the middle of the response body.
 //
 // HTTP/1.0 AND `Connection: close`: the response ends when the socket
 // does, so there is no keep-alive state and no chunked encoding. The
@@ -26,6 +27,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+#define USAGE        "httpd [-p <port>] [-1] [<root>]"
 #define DEFAULT_PORT 80
 #define REQ_MAX      1024
 #define CHUNK        1024
@@ -150,15 +152,44 @@ static int path_is_safe(const char *p) {
     return 1;
 }
 
+// One request, one response. `in` and `out` are the same socket in the
+// serial mode and fds 0 and 1 under `-1`; keeping them apart is what
+// makes the handler an ordinary filter rather than a socket program.
+//
+// `peer` is the client to name in the log line, or NULL for no line --
+// which is what `-1` passes, because fd 1 there is the client.
+static void serve_connection(int in, int out, const char *root, const char *peer) {
+    char req_path[192], full[256];
+    int rc = read_request(in, req_path, sizeof req_path);
+    if (rc <= 0) {
+        if (rc < 0) serve_error(out, "400 Bad Request", "Only GET is served here.");
+        return;
+    }
+    if (!path_is_safe(req_path)) {
+        serve_error(out, "403 Forbidden", "That path leaves the served root.");
+        return;
+    }
+    int slash = root[strlen(root) - 1] == '/';
+    snprintf(full, sizeof full, "%s%s", root,
+             slash && req_path[0] == '/' ? req_path + 1 : req_path);
+    if (peer) printf("httpd: %s GET %s\n", peer, full);
+    serve_file(out, full);
+}
+
 int main(int argc, char **argv) {
-    int port = DEFAULT_PORT;
+    int port = DEFAULT_PORT, oneshot = 0;
     const char *root = "/";
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-p") && i + 1 < argc) port = atoi(argv[++i]);
-        else if (argv[i][0] == '-') { cmd_usage("httpd [-p <port>] [<root>]"); return 1; }
+        else if (!strcmp(argv[i], "-1")) oneshot = 1;
+        else if (argv[i][0] == '-') { cmd_usage(USAGE); return 1; }
         else root = argv[i];
     }
-    if (port <= 0 || port > 65535) { cmd_usage("httpd [-p <port>] [<root>]"); return 1; }
+    if (port <= 0 || port > 65535) { cmd_usage(USAGE); return 1; }
+
+    // Already connected: the socket is fd 0 and fd 1, nothing to bind,
+    // and the exit is what closes the connection.
+    if (oneshot) { serve_connection(0, 1, root, 0); return 0; }
 
     int lis = sys_socket(NET_ABI_AF_INET, NET_ABI_SOCK_STREAM, NET_ABI_IPPROTO_TCP);
     if (lis < 0) { cmd_fail("httpd", "socket"); return 1; }
@@ -177,22 +208,17 @@ int main(int argc, char **argv) {
             break;
         }
 
-        char req_path[192], full[256];
-        int rc = read_request(c, req_path, sizeof req_path);
-        if (rc <= 0) {
-            if (rc < 0) serve_error(c, "400 Bad Request", "Only GET is served here.");
-        } else if (!path_is_safe(req_path)) {
-            serve_error(c, "403 Forbidden", "That path leaves the served root.");
-        } else {
-            int slash = root[strlen(root) - 1] == '/';
-            snprintf(full, sizeof full, "%s%s", root,
-                     slash && req_path[0] == '/' ? req_path + 1 : req_path);
-            if (ACCEPT_LOG)
-                printf("httpd: %u.%u.%u.%u:%u GET %s\n",
-                       (peer >> 24) & 0xFF, (peer >> 16) & 0xFF,
-                       (peer >> 8) & 0xFF, peer & 0xFF, peer_port, full);
-            serve_file(c, full);
-        }
+        // ONE LINE PER REQUEST, and that is a budget rather than a
+        // preference: fd 1 here is the console, whose sink is a serial
+        // port with a finite buffer, and a reader that is not draining
+        // it stalls the whole guest. A second line per connection cost
+        // this server a quarter of the requests it could answer before
+        // an undrained harness wedged it.
+        char peerbuf[32];
+        snprintf(peerbuf, sizeof peerbuf, "%u.%u.%u.%u:%u",
+                 (peer >> 24) & 0xFF, (peer >> 16) & 0xFF,
+                 (peer >> 8) & 0xFF, peer & 0xFF, peer_port);
+        serve_connection(c, c, root, ACCEPT_LOG ? peerbuf : 0);
         sys_close(c);
     }
 

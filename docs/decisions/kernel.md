@@ -5422,6 +5422,49 @@ counts blocks that are finished and unaccepted. Adding a separate queue
 would mean holding half-open connections more cheaply — which is what
 SYN cookies are for, and which matters when somebody is attacking you.
 
+## A connection per child, and why the spawn names fd 0 rather than dup2
+
+`/bin/inetd` accepts on a port and gives each connection its own
+process, with the socket on fd 0 and fd 1. It is the one concurrency
+this kernel can express without `fork`, and it works because only 0/1/2
+cross a spawn.
+
+**The obvious design does not work here, and the roadmap predicted the
+wrong one.** Unix inetd `dup2`s the connection onto 0 and 1 *in the
+child*, between `fork()` and `exec()`. There is no such window in a
+spawn ABI: the process is already running when the call returns. A
+parent doing it beforehand would have to point its OWN fd 0 and 1 at the
+connection and put them back afterwards, so anything it printed in
+between — a log line, a diagnostic — would go to the client instead.
+`struct spawn_msg` gained a `stdin_fd` instead, beside the `stdout_fd`
+it already had, and both accept a connected socket. That is
+`posix_spawn`'s `file_actions` at the size this kernel needs it.
+
+**fd 2 is deliberately not redirected.** It stays the kernel log, so a
+handler's diagnostics reach `dmesg` and never reach the client. The
+asymmetry is the useful part rather than an omission.
+
+**The point is not concurrency, it is that a handler is an ordinary
+filter.** `/bin/cat` copies fd 0 to fd 1 and knows nothing about
+sockets, so `inetd -p 7 /bin/cat` is a real echo server. That is what
+makes this worth building over teaching `httpd` to spawn copies of
+itself: the mechanism has more than one user the day it lands.
+
+**And it closes a real gap, not only a performance one.** A
+connection's retransmission timers are driven by the process blocked
+reading it, so a server holding several connections and reading one
+leaves the rest to the idle loop — the honest limitation the serial
+`httpd` was written around. One process per connection means none is
+unattended.
+
+**At the child cap, inetd stops accepting rather than refusing.** The
+connection waits in the backlog and, past that, the SYN is dropped and
+the client's own retransmission covers it — the same trade the backlog
+itself already makes, and for the same reason: a refusal turns a
+momentary burst into a hard failure. The cap's maximum is arithmetic
+rather than policy, since `SOCK_MAX` and `TCP_MAX_CONNS` are 8 apiece
+and a listener costs one of each.
+
 **A RST is now validated before it is believed.** It must acknowledge
 our SYN in SYN_SENT, and afterwards sit exactly at `rcv_nxt`. The
 previous code accepted any reset naming the right ports, which is the

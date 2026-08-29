@@ -820,7 +820,7 @@ static void switch_to_kernel(void) {
 // `args` too long to fit the one stack page, or the same allocation
 // failures every other ELF-loading path already handles the same way).
 static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
-                          const char *env, int want_pgid,
+                          int stdin_desc, const char *env, int want_pgid,
                           uint64_t parent_pml4) {
     int slot = -1;
     for (int i = 0; i < MAX_PROCS; i++) {
@@ -989,11 +989,12 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
     // caller passes 0 and its child gets the standard three.
     fd_inherit(as, parent_pml4);
     if (stdout_desc >= 0) {
-        // SYS_SPAWN's explicit stdout override, which predates
-        // inheritance and stays as the one-call shortcut. Applied
-        // AFTER inheriting, so it wins.
+        // SYS_SPAWN's explicit stream overrides, which predate
+        // inheritance and stay as the one-call shortcut. Applied
+        // AFTER inheriting, so they win.
         fd_set_desc(as, FD_STDOUT, stdout_desc);
     }
+    if (stdin_desc >= 0) fd_set_desc(as, FD_STDIN, stdin_desc);
     // The CALLER is the parent. 0 when the kernel context spawned this
     // -- scheduler_current_pid() returns 0 there, which is exactly the
     // "no parent" value, so this needs no special case.
@@ -2034,12 +2035,14 @@ int scheduler_spawn_env(const char *path, const char *args, int pipe_idx,
     // caller wants: init's services and the demo's counters belong with
     // whatever started them. Parent 0 too: a kernel-side caller's child
     // gets the standard three fds (see spawn_from_fs()'s fd_inherit).
-    return scheduler_spawn_group(path, args, pipe_idx, env, 0, 0);
+    return scheduler_spawn_group(path, args, pipe_idx, -1, env, 0, 0);
 }
 
 int scheduler_spawn_group(const char *path, const char *args, int pipe_idx,
-                           const char *env, int pgid, uint64_t parent_pml4) {
-    int slot = spawn_from_fs(path, args, pipe_idx, env, pgid, parent_pml4);
+                           int stdin_desc, const char *env, int pgid,
+                           uint64_t parent_pml4) {
+    int slot = spawn_from_fs(path, args, pipe_idx, stdin_desc, env, pgid,
+                              parent_pml4);
     if (slot < 0) return 0;
 
     // Clear any events left over from the previous tenant of this slot.
@@ -2531,8 +2534,8 @@ enum sched_poll_result scheduler_poll(int pid, int *out_exit_code) {
 }
 
 void scheduler_demo_run(void) {
-    int a = spawn_from_fs("/bin/counter_a", NULL, -1, 0, 0, 0);
-    int b = spawn_from_fs("/bin/counter_b", NULL, -1, 0, 0, 0);
+    int a = spawn_from_fs("/bin/counter_a", NULL, -1, -1, 0, 0, 0);
+    int b = spawn_from_fs("/bin/counter_b", NULL, -1, -1, 0, 0, 0);
     if (a < 0 || b < 0) {
         vga_write("schedtest: failed to spawn one or both counter processes --\n");
         vga_write("were /bin/counter_a and /bin/counter_b seeded onto disk.img?\n");

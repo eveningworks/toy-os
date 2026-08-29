@@ -682,6 +682,28 @@ int sys_spawn_group(const char *path, const char *args, int stdout_fd,
 int sys_spawn_flags(const char *path, const char *args, int stdout_fd,
                      char **env, int pgid, unsigned flags);
 
+// Everything a spawn can be told, as a struct -- which is what the note
+// above said the next capability had to be, and `stdin_fd` is it. Zero
+// the struct and set what you need; `stdin_fd`/`stdout_fd` are -1 for
+// "leave it", so sys_spawn_opts_init() is not optional bookkeeping.
+//
+// A connected SOCKET is accepted on both, which is the point: it is how
+// a handler spawned per connection reads and writes the client as an
+// ordinary filter (userland/bin/inetd.c).
+struct sys_spawn_opts {
+    const char *args;   // whitespace-separated, or NULL
+    char      **env;    // NULL for an empty environment, not for `environ`
+    int         stdin_fd;   // pipe read end or socket, or -1
+    int         stdout_fd;  // pipe write end or socket, or -1
+    int         pgid;       // 0 inherits, PGID_NEW leads a new group
+    unsigned    flags;      // SPAWN_* (abi/syscall_abi.h)
+};
+
+// The -1s that a zeroed struct would get wrong. Call it, then override.
+void sys_spawn_opts_init(struct sys_spawn_opts *o);
+
+int sys_spawn_opts(const char *path, const struct sys_spawn_opts *o);
+
 // BLOCKS until `pid` exits, then reaps it. Writes the exit code to
 // `*out_code` if non-NULL. Returns the pid, or -1.
 //

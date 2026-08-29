@@ -726,19 +726,40 @@ int sys_spawn_group(const char *path, const char *args, int stdout_fd,
 
 int sys_spawn_flags(const char *path, const char *args, int stdout_fd,
                      char **env, int pgid, unsigned flags) {
-    if (!flatten_env(env)) { g_errno = E2BIG; return -1; }
+    struct sys_spawn_opts o;
+    sys_spawn_opts_init(&o);
+    o.args = args;
+    o.env = env;
+    o.stdout_fd = stdout_fd;
+    o.pgid = pgid;
+    o.flags = flags;
+    return sys_spawn_opts(path, &o);
+}
+
+void sys_spawn_opts_init(struct sys_spawn_opts *o) {
+    o->args = 0;
+    o->env = 0;
+    o->stdin_fd = -1;
+    o->stdout_fd = -1;
+    o->pgid = 0;
+    o->flags = 0;
+}
+
+int sys_spawn_opts(const char *path, const struct sys_spawn_opts *o) {
+    if (!flatten_env(o->env)) { g_errno = E2BIG; return -1; }
     struct spawn_msg msg;
     msg.path = path;
-    msg.args = args;
+    msg.args = o->args;
     // An EMPTY environment is still an environment: the blob is the
     // single terminating NUL, and the child gets envp[0] == NULL rather
     // than no envp at all. Passing NULL here would be "no environment",
     // which is what a kernel-side spawner means and not what a program
     // with an empty one means.
     msg.env = g_envblob;
-    msg.stdout_fd = stdout_fd;
-    msg.pgid = pgid;
-    msg.flags = flags;
+    msg.stdout_fd = o->stdout_fd;
+    msg.stdin_fd = o->stdin_fd;
+    msg.pgid = o->pgid;
+    msg.flags = o->flags;
     return (int)err(syscall1(SYS_SPAWN, (uint64_t)(uintptr_t)&msg));
 }
 
