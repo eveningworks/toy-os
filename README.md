@@ -106,24 +106,44 @@ QEMU, and it does not stop at "hello world from the kernel":
   a process, and killing the desktop is survivable. Pictures are ring-3 too: a
   **baseline JPEG decoder** in the toolkit's library gives the desktop a
   real wallpaper and an Image Viewer, with no image parser anywhere in
-  the kernel. There is a game, too: **Minesweeper**, which is where the
+  the kernel. There are games, too: **Minesweeper**, which is where the
   desktop learned to give a right-click to the application under the
-  cursor instead of keeping it for the window menu. And there is a
+  cursor instead of keeping it for the window menu — and **it runs
+  DOOM**, with sound and music, in a window on the desktop like any
+  other app. And there is a
   **Disk Mark** — a CrystalDiskMark-shaped storage benchmark, four
   profiles across sequential and random 4K, which is how you find out
   what the AHCI, virtio and IDE paths actually cost on this machine. It
   does no I/O itself: `/bin/diskbench` does the work and the window
   polls it, so a pass that takes minutes cannot freeze the GUI — and the
-  same numbers are available from a shell. Its tiles say `SEQ1K` and
-  `Q1T1` rather than borrowing CDM's headings, because both of those are
-  real limits here: a syscall carries 1 KiB (`SYS_WRITE_MAX`) and there
-  is no asynchronous block I/O to give a queue depth any meaning. And there is a
+  same numbers are available from a shell. Its tiles say `SEQ` and
+  `Q1T1` rather than borrowing CDM's `SEQ1M`, because the request size
+  is whatever `SYS_WRITE_MAX` currently is — 64 KiB — and there is no
+  asynchronous block I/O to give a queue depth any meaning. Leaving the
+  number out of the heading is why raising that cap did not make the
+  label a lie. And there is a
   **File Manager** — two directory panes side by side, in the Norton
   Commander tradition rather than Explorer's, because copying between
   two visible directories needs neither a clipboard nor drag-and-drop
   and this system has neither yet. Its file operations are spawned
   `/bin/cp` and `/bin/rm` children, so there is one implementation of
   what copying means and it works at a shell prompt too.
+- **Sound, and the kernel does not mix it** — an AC'97 driver behind a
+  `sound_device` registry, and a PCM stream that is a **mapped ring**
+  rather than a `write()` call: the app writes samples ahead of the
+  hardware and the kernel publishes the play position, so steady-state
+  playback costs **zero syscalls**. A consumed chunk is zeroed before
+  the position moves past it, which is what makes an abandoned stream
+  play silence instead of looping. Everything above that line is ring-3
+  (`userland/lib/usnd.h`): the file formats, the rate and channel
+  conversion, and a voice mixer with stereo gains. There is an **Audio
+  Player**, `/bin/aplay` for a shell, sound effects in Minesweeper, and
+  DOOM's effects and **OPL music** — the music synthesised by Chocolate
+  Doom's own emulated Yamaha chip reading the WAD's GENMIDI instrument
+  bank, because doomgeneric turns out to *be* Chocolate Doom with the
+  sound removed. The stream is exclusive and nothing mixes across
+  processes yet; that wants a sound daemon, and the sink interface it
+  would plug into is already there.
 - **Its own test suite** — `make test` boots the OS headless, runs
   in-kernel tests including deliberate fault injection, and exits
   non-zero on failure. A separate GUI suite drives the desktop over a
@@ -551,6 +571,29 @@ between a check that finds real bugs and one that reports twenty-two
 imaginary ones. Apps declare a layout rather than coordinates, and a page
 too big for its window scrolls.
 
+**Sound.** An AC'97 driver behind a `sound_device` registry, and a PCM
+stream that is a **mapped ring** rather than a `write()` call — a control
+page plus 64 KiB of samples at a fixed address, the app writing ahead of
+the hardware and the kernel publishing the play position on each
+completion interrupt. Steady state costs **zero syscalls**, and the
+buffer is physically contiguous so the card's descriptors point straight
+into it. A consumed chunk is **zeroed before the position passes it**,
+which is the one rule that makes underruns free: zero is silence in
+signed PCM, so a stalled or killed app degrades to quiet instead of
+looping its last third of a second. The kernel stops there — it never
+mixes, exactly as ALSA's dmix, PulseAudio and Windows' audio engine
+never do it in kernel space. Above the line, `userland/lib/usnd.h` is a
+codec table (WAV today; the rate, channel and width conversion happens
+once, in the library, never in a codec), a sixteen-voice mixer with
+stereo gains, and a sink interface a future sound daemon becomes a second
+row of. Its callers: an **Audio Player**, `/bin/aplay`, Minesweeper's
+effects, and **DOOM** — whose sound effects are WAD lumps decoded into
+voices, and whose **music is OPL synthesis**, Chocolate Doom's own
+emulated Yamaha chip driven by the WAD's GENMIDI instrument bank. All of
+it is judged on the host: QEMU records what the *device* emitted and the
+tests measure that, so a 44.1 kHz file played at the wrong pitch, a dead
+DMA engine and a broken zeroing each fail a different check.
+
 **Userland.** Every ring-3 program is just a `main()`: crt0 provides
 `_start` over the standard SysV stack layout, and libsys gives one typed
 wrapper per syscall. The shared kernel toolkit is compiled a second time
@@ -632,7 +675,8 @@ userland/       ring-3 programs, split by ROLE:
   bin/          command-line tools -> seeded to /bin
   tests/        single-mechanism diagnostics -> seeded to /tests
   ports/        vendored third-party source, kept separate on purpose
-  doom/         our backend for it, deliberately OUTSIDE ports/
+  backends/     OUR side of a vendored port (backends/doom/),
+                deliberately outside ports/
 
 seed/, data/    what gets mirrored onto disk.img at build time
 tools/          build, test and delivery tooling (see Development)

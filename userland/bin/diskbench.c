@@ -14,7 +14,7 @@
 // WHAT THE LABELS MEAN, AND WHY THEY ARE NOT CDM's. Two things this OS
 // cannot deliver are stated rather than implied:
 //
-//   * **1 KiB per syscall.** SYS_WRITE_MAX is 1024 bytes
+//   * **64 KiB per syscall.** SYS_WRITE_MAX is 65536 bytes
 //     (abi/syscall_abi.h) -- an artefact of the bounce buffer the
 //     syscall copies through -- and libsys loops to complete a larger
 //     buffer. So a "1 MiB transfer" is 1024 syscalls and the disk never

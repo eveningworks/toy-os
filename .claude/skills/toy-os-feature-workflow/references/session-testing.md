@@ -2049,3 +2049,49 @@ injection), and a REUSED guest poisoned a click-coordinate section (my
 leftover Terminal window shifted every position; the run failed
 window-management checks that were fine). Fresh guest per GUI repro,
 and read the tool's own typing helpers before improvising.
+
+**2026-08-29 (audio: testing something whose output is a WAVEFORM).**
+
+- **ISOLATE THE PATHS; DO NOT COMPARE A MIXTURE AGAINST A PART.** The
+  first Doom audio test played the game normally and then with
+  `-nomusic`, requiring window COVERAGE to collapse. Measured: 86% with
+  both against 69% with effects alone -- a 17-point gap, because Doom's
+  attract demo is almost continuously noisy. Far too weak a thing to
+  hang a verdict on. The rewrite boots twice and isolates each path
+  (`-nosfx`, then `-nomusic`); ANY signal in each run is conclusive on
+  its own, because nothing else can be making it. **Two silences that
+  should not be silent beat one difference of degree.**
+- **THAT NEEDED A LEVER, AND ADDING IT WAS PART OF THE TEST WORK.**
+  `-nosfx`/`-nomusic` only reach Doom because the app forwards its
+  argv, which it did not before. When a test cannot separate two
+  things, ask what small product change would let it.
+- **CALIBRATE A THRESHOLD ON THE SIGNAL IT MEASURES.** "Peak > 4000"
+  was set from the effects' level (~19000) and failed music, which
+  peaks at 1735 -- 21 dB quieter, and correctly so. Two different
+  signals want two different bars.
+- **AND THAT FAILING THRESHOLD WAS A REAL FINDING.** Music being 21 dB
+  under the effects meant it was inaudible under gunfire. The fix was a
+  product change (a fixed gain on the music source), not a looser
+  check. A threshold that fails is worth understanding before it is
+  moved.
+- **THE RECORDING'S FIRST SECONDS ARE NOT THE PROGRAM RUNNING.** WAD
+  loading and 56 sound conversions are silent, and counting them
+  dropped a healthy run to 80%. Measure the TAIL.
+- **QEMU PADS A LAGGING GUEST WITH HOST-SIDE SILENCE**, so coverage
+  tops out near 88% on a healthy build and 100% is not the bar. The
+  same trap `audio_test.py` already documents, met again from a new
+  direction.
+- **USE `port_guard.port_is_free`, NOT A HAND-ROLLED WAIT.** A stopped
+  VM does not release its QMP port instantly. A connect-based wait
+  reports "free" while the port is in TIME_WAIT -- and port_guard
+  checks by BIND with SO_REUSEADDR deliberately unset, so the next
+  launch is refused anyway. One whole run lost to rederiving a
+  predicate the repo already exports.
+- **A CHECK THAT PASSES WHEN THE RUN DID NOT HAPPEN IS WORSE THAN A
+  FAILURE.** "The music module did NOT come up" is trivially true of a
+  guest that never booted, and it printed `ok` on a run whose VM was
+  refused. Guard the phase: if the boot failed, FAIL the phase rather
+  than evaluating checks whose subject does not exist.
+- **DO NOT REBUILD WHILE A TEST IS RUNNING.** A `make all` mid-run made
+  `build/userland` newer than `build/.seeded`, and `iso_guard` refused
+  the second boot. It was right to; the lesson is to let a run finish.

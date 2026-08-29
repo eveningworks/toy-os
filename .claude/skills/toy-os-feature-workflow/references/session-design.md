@@ -1969,3 +1969,65 @@ design calls that made it tractable, each recorded in
   (`docs/decisions.md`, "tolibc stays"): Linux-only by construction,
   so the port is really fork+futex+`*at`+ioctl+stat -- a Linux-compat
   milestone, not a libc swap.
+
+**2026-08-29 (a sound stack, and Doom's audio). Read this before
+adding a subsystem that a vendored port also wants to use.**
+
+- **THE LIBRARY CAME BEFORE ITS FIRST APP, AND THAT WAS THE RIGHT
+  ORDER.** The kernel had a PCM ring and exactly one client
+  (`/tests/tone`), which generates its own samples and knows the ring's
+  layout. Playing a FILE meant a parser, rate conversion and a refill
+  loop, and every app that wanted a sound would have grown its own. So
+  `userland/lib/usnd.h` was written first and the WAV player, `aplay`,
+  Minesweeper and Doom are all callers. The test of whether that was
+  right: Doom needed panning, handles and a push source added, and NOT
+  one line of mixing.
+- **THE PUBLIC HEADER NAMES NO KERNEL ABI, ON PURPOSE.** `usnd.h`
+  mentions no ring, no `hw_pos`, no `SND_*`. An app says "play this
+  file". That is what makes a future sound daemon a second row in
+  `usnd_sink.h`'s table rather than an app migration -- the move
+  `libasound` made when PulseAudio arrived. Cost: one indirection.
+  Worth asking of any library over a fixed-shape kernel ABI.
+- **"NO HARDWARE" IS THE COMMON CASE, so make it ordinary rather than
+  an error.** The default boot has no AC97 and the stream is exclusive,
+  so `-ENODEV` and `-EBUSY` are both routine. Every caller ignores the
+  result and plays into silence; the GUI player opens, lists files and
+  says `no sound device` in its status bar. The bug this avoids is an
+  app that refuses to start on the machine most people run.
+
+- **A VENDORED PORT'S MISSING HALF MAY BE THE SAME PROJECT'S CODE.**
+  doomgeneric IS Chocolate Doom with the platform layer and sound
+  removed -- 24 files carry Simon Howard's copyright, and
+  `sound_module_t`, `music_module_t` and the GENMIDI handling are all
+  its design. "Add music to Doom" was therefore not "write an OPL
+  synth" but "put back the files that were removed". **Before writing a
+  subsystem for a vendored port, check what upstream's upstream
+  already ships against those exact headers.**
+- **PICK THE VENDOR VERSION BY MEASUREMENT.** `chocolate-doom-2.1.0`
+  was chosen because at that tag `memio.c` is byte-identical to the
+  copy already here and `i_sound.h` differs ONLY by the declarations
+  doomgeneric appended -- so the module structs match and the files
+  compile against headers already in the tree. 2.3.0's `i_sound.h`
+  differs by 46 lines. A `git clone --filter=blob:none` plus a
+  difflib count over four files decided it in two minutes; guessing
+  would have bought a shim layer.
+- **THREE SHIMS BEAT ONE PATCH.** Turning on `FEATURE_SOUND` made the
+  vendored code reach for `SDL_mixer.h` (included, never used), `SDL.h`
+  (byte swaps and a mutex/cond pair) and an `opl_sdl_driver` symbol.
+  All three were answered from OUR side -- an empty header, a real
+  pthread-backed shim, and a link-time symbol substitution -- so not
+  one vendored byte changed. `-D__DJGPP__` would have silenced two of
+  them and was refused: it changes real behaviour in five other files.
+  **The flag went on the COMPILER LINE, never into `doomfeatures.h`.**
+- **A DIRECTORY AT THE ROOT SHOULD NAME A ROLE.** `userland/doom/` sat
+  beside `rt/`, `libc/`, `gui/` and `bin/` without being any of them,
+  and moved to `userland/backends/doom/` -- our side of a vendored
+  port. Not under `ports/` (which means third-party, and whose every
+  subdirectory `check_licenses.py` reads as one) and not under `lib/`
+  (archived into `libuapp.a`, where GPL objects must never reach).
+- **AND A ROADMAP LINE CAN DESCRIBE THE WRONG DESIGN.** The item said
+  "Doom doing its own effect mixing in userspace" -- written before
+  `usnd` existed, and describing PrBoom+'s shape. What fitted was
+  Chocolate Doom's: map Doom's channels onto the mixer's, with
+  `s_sound.c` keeping the policy it already had. Re-read the item
+  against the code before building to it.

@@ -125,13 +125,13 @@ and job control is what a terminal on that TTY makes possible.
 - [ ] **`#!` handling**, which is the loader's job, not the shell's: `elf_load()` rejects a non-ELF file
 - [x] ~~`|` pipes between two commands~~ DONE 2026-08-19 -- N stages, not two
 - [ ] Quoting/escaping, `&&`/`||`/`;`, globbing, aliases, `$?`/`$1`, and a history buffer
-- [ ] Line editing
+- [x] ~~Line editing~~ DONE -- `kernel/lib/klineedit.c`, compiled twice so both rings edit with the same code
 - [x] ~~`>`/`<`/`>>` redirection~~ DONE 2026-08-19 -- in `/bin/tosh` and the GUI Terminal
 - [x] ~~`Ctrl-Z`, `jobs` and `fg`~~ DONE 2026-08-22 -- a job table in the shell, over a STOPPED process in the kernel
 - [x] ~~Background jobs (`&`) and `bg`~~ DONE 2026-08-22 -- with `SIGTTIN`, so a background reader stops instead of stealing keys
 - [x] ~~Tab completion (commands, then paths)~~ done
 - [ ] Globbing (`*`, `?`) expanded by the shell, not each command
-- [ ] Environment variables + `export`
+- [ ] An `export` builtin -- the environment itself is done (a `SYS_SPAWN` blob, `getenv`/`setenv`, `/tests/env_test`); no shell can SET one
 - [ ] `&&`, `||`, `;` command sequencing
 - [ ] Quoting/escaping (`"..."`, `'...'`, `\`) -- the parser splits on spaces today, so no argument can contain one
 - [ ] Shell scripts, including `#!` handling in `run`
@@ -157,7 +157,7 @@ is the bookkeeping that makes any other kind of mapping possible.
 - [ ] A per-frame reference count
 - [ ] `MAP_SHARED` memory between two processes
 - [ ] Copy-on-write, shared between this and `fork()`
-- [ ] Guard pages around each stack, so overflow faults precisely instead of corrupting a neighbour
+- [ ] Guard pages around USER and THREAD stacks -- kernel stacks have them; a thread stack is ring 3's own allocation and has none
 - [x] ~~A frame-size bound for ring 3~~ DONE 2026-08-18
 - [x] ~~A check on the ~1 MiB between a ring-3 image and its heap~~ DONE 2026-08-18
 
@@ -193,13 +193,13 @@ only expensive part of it.
 - [ ] AVX/XSAVE support
 - [ ] `fork()`-style address-space duplication (copy-on-write)
 - [ ] `exec()`-style in-place process replacement
-- [ ] `wait()`/exit-status reporting for a parent process
-- [ ] Real PID allocation beyond the scheduler's fixed 4-slot table
+- [x] ~~`wait()`/exit-status reporting for a parent process~~ DONE -- `SYS_WAITPID` takes an out-parameter for the exit code
+- [ ] Real PID allocation rather than a fixed table -- `SCHED_MAX_PROCS` is 64, not the 4 this line claimed for a long time
 - [x] ~~Larger/growable user stack~~ DONE 2026-08-23 -- 8 MiB reserved, grown on fault; four pages is the starting working set
 - [ ] Copy-on-write page-fault handler -- the piece `fork()` above needs to not copy the whole address space eagerly
-- [ ] `argv`/`envp` passed to a new process (today's ELF entry takes nothing)
-- [ ] Zombie reaping + parent PID tracking
-- [ ] `brk`-style growable per-process heap (`SYS_SBRK` exists but the mapping behind it is fixed)
+- [x] ~~`argv`/`envp` passed to a new process~~ DONE -- `SYS_SPAWN` takes both (an env BLOB), and crt0 lands on an argc/argv stack
+- [x] ~~Zombie reaping + parent PID tracking~~ DONE -- `ppid`, reparenting to init, and `waitpid(-1)`
+- [x] ~~`brk`-style growable per-process heap~~ DONE -- `SYS_SBRK` reserves and `uheap_fault()` maps on touch; the heap is per process
 
 ### Multi-user & file permissions
 
@@ -255,8 +255,8 @@ everything libc-shaped is waiting on it. Full plan and staging:
 - [ ] Signal dispositions shared by a thread group, as POSIX has them -- per thread here, inherited at create
 - [ ] GCC's default (`%fs:0x28`) stack-protector guard in ring 3, now that TLS exists
 - [x] ~~`mmap`-style anonymous memory for userspace~~ DONE 2026-08-28 -- see Phase 2's demand-paging items
-- [ ] Time syscalls (a monotonic clock and wall-clock read)
-- [ ] A consistent `errno`-style error convention
+- [x] ~~Time syscalls (a monotonic clock and wall-clock read)~~ DONE -- `sys_monotonic_ns()` for intervals, `sys_gettime()` for wall clock
+- [x] ~~A consistent `errno`-style error convention~~ DONE -- it became its own milestone, "Error codes: a failed syscall says WHY"
 
 ### Dynamic linking / shared libraries
 
@@ -311,7 +311,7 @@ Staged in `docs/dynlink-design.md`, including the case against.
 - [x] ~~Pick the target: our own POSIX-shaped libc, or Linux syscall-ABI emulation~~ -- our own, see `docs/libc-design.md`
 - [x] ~~Enable SSE (CR4.OSFXSR) and save FPU/SSE state per process~~ -- eager FXSAVE/FXRSTOR, `/tests/fpu_race` proves it
 - [ ] `time_t`: epoch seconds and a UTC offset stored alongside, next to today's broken-down local `struct rtc_time`
-- [ ] ~~An `errno`-style return convention~~ moved up to its own section (errno-design.md); it needs none of this milestone's prerequisites
+- [x] ~~An `errno`-style return convention~~ moved up to its own section (errno-design.md), and done there
 - [x] ~~The three syscalls stdio needs: `lseek`, `fstat` on an fd, `O_APPEND`~~ DONE -- `/tests/seek_test`
 - [x] ~~A per-process cwd~~ DONE 2026-08-19 -- `SYS_CHDIR`/`SYS_GETCWD`
 - [x] ~~`crt0` + a real `_start`, replacing each binary's hand-written syscall stubs~~ done long since -- `userland/rt/crt0.asm`
@@ -531,7 +531,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~`gfx_text_width()` that measures rather than multiplies~~ DONE 2026-08-20
 - [x] ~~Multiple faces live at once, selected per widget~~ DONE 2026-08-21 -- two tiers, and a widget takes a `struct ugfx_font *`
 - [ ] Only `uui_label` takes a font so far -- every other widget draws in whatever is current
-- [ ] A numeric setting gets a spinbox but no SLIDER -- `uui_slider` is enum-only, so there is no drag for a range
+- [ ] A numeric setting gets a spinbox but no SLIDER -- `uui_scale` exists now; System Settings does not offer it as a `Widget=`
 - [x] ~~A `/usr/share/fonts` convention and a command to list what loaded~~ DONE 2026-08-20 -- `fontface`
 - [x] ~~Keep the baked font as the guaranteed fallback, so the console works with no disk font~~ DONE 2026-08-20
 - [ ] Move the SESSION font's parsing out of ring 0 -- Windows 10's `fontdrvhost`; an app already rasterizes its own

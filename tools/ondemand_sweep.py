@@ -114,6 +114,12 @@ TOOLS = [
     # --- on demand for their own reasons ------------------------------
     ("doom",        "doom_test.py",            "DOOM runs, draws and takes input",   True,
      ("iwad", "no IWAD fetched -- see tools/fetch_wad.py"),                                   True),
+    # Boots its OWN guests (twice, with an AC97 attached), so wants_vm is
+    # False -- handing it one would leave it attached to a machine with
+    # no sound hardware, which is the "green line that means nothing"
+    # this file's header warns about.
+    ("doom_sound",  "doom_sound_test.py",      "DOOM's effects and OPL music",       False,
+     ("iwad", "no IWAD fetched -- see tools/fetch_wad.py"),                                   False),
 ]
 
 # Deliberately NOT here, each for a stated reason:

@@ -5,7 +5,8 @@
 // that prints. The first version ran the passes inside on_tick, sliced
 // across frames, and it was wrong in a way worth recording: the slice
 // was bounded in time but the UNIT was not, and one "1 MiB transfer" is
-// 1024 syscalls (SYS_WRITE_MAX is 1 KiB), which on a 256 MiB file runs
+// 1024 syscalls (SYS_WRITE_MAX was 1 KiB then; it is 64 KiB now),
+// which on a 256 MiB file runs
 // for many seconds. The compositor pings every client on a cadence, so
 // the window sat there reading "Disk Mark (Not Responding)" for the
 // length of a pass. Bounding a loop is useless when one turn of it is
@@ -17,10 +18,11 @@
 // copying. The GUI cannot stall now however slow a device is, and the
 // measurement stops being distorted by the tick cadence.
 //
-// THE LABELS SAY WHAT THIS OS ACTUALLY DOES. `SEQ1K`, not CDM's SEQ1M,
-// because the syscall boundary caps a request at 1 KiB and a bigger
-// number in the heading would be exactly the decorative label the
-// Q1T1 footer exists to avoid. See userland/bin/diskbench.c.
+// THE LABELS SAY WHAT THIS OS ACTUALLY DOES. Plain `SEQ`, not CDM's
+// `SEQ1M`, because the request size is whatever SYS_WRITE_MAX is and a
+// number baked into the heading would be exactly the decorative label
+// the Q1T1 footer exists to avoid -- it was 1 KiB, it is 64 KiB now,
+// and the heading did not have to change. See userland/bin/diskbench.c.
 #include <stdint.h>
 #include "rt/sys.h"
 #include "syscall_abi.h"   // SYS_WRITE_MAX -- named in the footer

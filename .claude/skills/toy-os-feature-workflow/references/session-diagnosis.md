@@ -1114,3 +1114,35 @@ Two measurements that kept the day honest: `predates.py` proved
 `ansi_cursor_test`'s 5/10 pre-existing (HEAD fails identically -- filed
 in docs/bugs.md, not chased), and the ktest `fsck r.leaked=12` cluster
 was the documented dirty-disk.img fixture (clean-disk cleared it).
+
+**2026-08-29 (three audio bugs, and where each was actually found).**
+
+- **A DEADLOCK CAN LIVE IN CODE YOU DID NOT WRITE AND DID NOT CALL.**
+  Doom's window opened stuck on its pre-WAD title, with `doom: sound on`
+  logged and no music line. Cause: `opl.c`'s `InitDriver` calls
+  `OPL_Detect()`, which calls `OPL_Delay()`, which schedules a callback
+  and BLOCKS on a condition variable -- and callbacks only fire from the
+  render path. SDL's audio thread was already running by then; ours did
+  not exist yet. **When porting a subsystem, ask what the platform layer
+  you are replacing was doing BEFORE init was called.**
+- **THE SYMPTOM NAMED THE WRONG SUBSYSTEM.** "No window" and "no cache
+  line" looked like the sound module failing, and the sound module had
+  logged success. The failing call was two layers down in vendored code.
+  Reading the init path in call order found it; guessing did not.
+- **A PRECACHE LOOP MUST TOLERATE ENTRIES THAT DO NOT EXIST.** `S_Init`
+  precaches over the WHOLE of `S_sfx[]`, including a dummy with an empty
+  name, and `W_GetNumForName` calls `I_Error` on a miss -- killing the
+  game before its window opened. `W_CheckNumForName` is the one to use.
+  The general shape: a table you are handed may have padding entries.
+- **A CFLAGS CHANGE INVALIDATES NOTHING, AND THE FAILURE IS SILENT.**
+  Defining `FEATURE_SOUND` relinked a stale `i_sound.o`, so the module
+  list stayed empty and `nm -u` showed no reference to the module the
+  flag was supposed to enable. `rm -rf build/<subtree>` was the fix.
+  CLAUDE.md documents this exactly; it still cost a diagnosis round.
+  **After a flags change, check the OBJECT, not just the build result.**
+- **REVIEW FOUND THE FOURTH ONE, AND REVIEW IS ALLOWED TO.** Doom's
+  `S_Shutdown` calls `I_ShutdownSound()` then `I_ShutdownMusic()`, so
+  the first would free the mixer and join its worker while the OPL
+  thread was still feeding it. Reference-counted `usnd_init`/`_shutdown`
+  fixed it. Reachable through Doom's own Quit, never observed, and said
+  so plainly in the commit rather than claiming a crash was seen.
