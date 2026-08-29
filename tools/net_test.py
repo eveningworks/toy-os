@@ -42,6 +42,24 @@ THE PHASES, and what a broken build would still pass
      frames on the wire before kernel/net/arp.c rate-limited requests
      (measured, which is how it was found); this fails if that
      regresses.
+  6. UDP, with a REAL PYTHON SOCKET on the host as the far end. The
+     guest sends a datagram and the host receives it, echoes it, and the
+     guest reads the echo -- a round trip through SLIRP where neither
+     end shares a line of code with the other. The pcap check here is
+     the UDP checksum, which covers a pseudo-header that is not on the
+     wire: a stack that omits it agrees with itself perfectly and is
+     rejected by everything else.
+  7. ICMP port unreachable, judged from the capture: nothing is bound,
+     so the guest must answer type 3 code 3 rather than dropping in
+     silence.
+  8. DHCP on a NON-DEFAULT SLIRP subnet. This is the load-bearing DHCP
+     check: on the default network a working client and a hardcoded
+     10.0.2.15 are indistinguishable, so the guest is booted on
+     192.168.76.0/24 where only a real lease can produce the address.
+  9. DNS, through SLIRP's forwarder to the host's own resolver. SKIPS
+     when the host cannot resolve -- an offline machine is not a bug in
+     this OS -- but the "no nameserver configured" path is checked
+     unconditionally, because that one needs nothing but the guest.
 
     python3 tools/net_test.py
     echo $?
@@ -265,12 +283,12 @@ def decode(frames):
 
 # --- the guest --------------------------------------------------------
 
-def nic_args(kind, pcap):
+def nic_args(kind, pcap, extra=""):
     dump = f" -object filter-dump,id=fd0,netdev=n0,file={pcap}" if pcap else ""
     if kind == "none":
         return " -nic none"
     if kind == "e1000":
-        return f" -netdev user,id=n0 -device e1000,netdev=n0{dump}"
+        return f" -netdev user,id=n0{extra} -device e1000,netdev=n0{dump}"
     if kind == "virtio":
         return f" -netdev user,id=n0 -device virtio-net-pci,netdev=n0,disable-legacy=on{dump}"
     if kind == "both":
@@ -279,7 +297,7 @@ def nic_args(kind, pcap):
     raise ValueError(kind)
 
 
-def launch(disk, tmp, tag, kind, pcap=None):
+def launch(disk, tmp, tag, kind, pcap=None, netdev_extra=""):
     serial = os.path.abspath(os.path.join(tmp, f"net_{tag}.log"))
     sock = os.path.abspath(os.path.join(tmp, f"net_{tag}.serial"))
     pidfile = os.path.abspath(os.path.join(tmp, f"net_{tag}.pid"))
@@ -290,7 +308,7 @@ def launch(disk, tmp, tag, kind, pcap=None):
         install_grub.boot_medium(disk, None), os.path.join(ROOT, "toy-os.iso")))
     cmd = (f"qemu-system-x86_64 {boot}"
            f" -drive file={disk},format=raw,if=ide,discard=unmap"
-           f"{nic_args(kind, pcap)}"
+           f"{nic_args(kind, pcap, netdev_extra)}"
            f" -m 1024 -display none -no-reboot"
            f" -serial unix:{sock},server,nowait"
            f" -daemonize -pidfile {pidfile}")
@@ -463,6 +481,236 @@ def phase_arp_rate(r, disk, tmp):
         sh.close()
 
 
+UDP_ECHO_PORT = 19999
+
+
+def udp_echo_server(port, deadline_s=45.0):
+    """A real host socket, as the far end of the guest's datagram.
+
+    SLIRP maps traffic the guest sends to 10.0.2.2 onto the host's
+    loopback, so this needs no port forwarding -- and it is an oracle in
+    the strong sense: a wrong UDP checksum, a wrong length or a wrong
+    pseudo-header means SLIRP never hands the datagram over and this
+    receives nothing at all."""
+    import threading
+    got = {}
+
+    def run():
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("127.0.0.1", port))
+        except OSError as e:
+            got["error"] = str(e)
+            return
+        sock.settimeout(deadline_s)
+        try:
+            data, addr = sock.recvfrom(2048)
+            got["data"] = data
+            got["from"] = addr
+            sock.sendto(b"pong:" + data, addr)
+            got["replied"] = True
+        except socket.timeout:
+            got["error"] = "timed out"
+        finally:
+            sock.close()
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    time.sleep(0.3)   # bound before the guest is told to send
+    return t, got
+
+
+def udp_checksum_ok(frame):
+    """Recompute a captured datagram's UDP checksum, pseudo-header and
+    all. Independent of the guest by construction."""
+    ihl = (frame[14] & 0x0F) * 4
+    udp = frame[14 + ihl:]
+    length = struct.unpack(">H", udp[4:6])[0]
+    udp = udp[:length]
+    if struct.unpack(">H", udp[6:8])[0] == 0:
+        return True    # "not computed" is legal in IPv4
+    pseudo = frame[26:34] + b"\x00\x11" + struct.pack(">H", length)
+    return checksum(pseudo + udp) == 0
+
+
+def phase_udp(r, disk, tmp):
+    pcap = os.path.abspath(os.path.join(tmp, "net_udp.pcap"))
+    sh, pidfile = launch(disk, tmp, "udp", "e1000", pcap)
+    try:
+        out = sh.run("udp_test")
+        r.check("[udp] the socket API's own checks pass in the guest",
+                "0 failed" in out, out.strip()[-500:])
+
+        _, got = udp_echo_server(UDP_ECHO_PORT)
+        payload = "toyos-udp-payload"
+        out = sh.run(f"udp_test {GATEWAY} {UDP_ECHO_PORT} {payload}", timeout=40.0)
+
+        # Give the host thread a moment to record the reply it sent.
+        for _ in range(40):
+            if "data" in got or "error" in got:
+                break
+            time.sleep(0.25)
+
+        r.check("[udp] a real socket ON THE HOST received the guest's datagram",
+                got.get("data") == payload.encode(),
+                f"host got {got.get('data')!r}, error {got.get('error')!r}")
+        # NOT checked at the host socket: SLIRP is a NAT and rewrites
+        # the source port, so what a host socket sees is SLIRP's port
+        # and never the guest's. The guest's own port is in the capture
+        # below, which is the only place it survives.
+        r.check("[udp] and the guest read the reply back",
+                f"pong:{payload}" in out, out.strip()[-400:])
+    finally:
+        kill(pidfile)
+        sh.close()
+        time.sleep(1.0)
+
+    frames = read_pcap(pcap)
+    udps = [f for f in frames
+            if len(f) >= 34 and struct.unpack(">H", f[12:14])[0] == 0x0800 and f[23] == 17]
+    r.check("[udp] datagrams reached the wire", len(udps) >= 1, f"{len(udps)} UDP frames")
+    # The guest's OWN source port, before SLIRP translates it. An
+    # unbound sender must have been given one from the ephemeral range;
+    # a stack that sent from port 0 would still round-trip through a NAT
+    # and pass every check above.
+    # OUTBOUND frames only: a capture holds both directions, and the
+    # replies come from the port the host was listening on.
+    sports = []
+    for f in udps:
+        if struct.unpack(">I", f[26:30])[0] != ipv4(GUEST_IP):
+            continue
+        ihl = (f[14] & 0x0F) * 4
+        sports.append(struct.unpack(">H", f[14 + ihl:14 + ihl + 2])[0])
+    r.check("[udp] the guest sent from an ephemeral port",
+            bool(sports) and all(49152 <= p <= 65535 for p in sports), str(sports))
+    # THE LOAD-BEARING CHECK: the pseudo-header is not in the packet, so
+    # only an implementation that reconstructs it correctly passes.
+    r.check("[udp] every datagram carries a valid checksum over the pseudo-header",
+            all(udp_checksum_ok(f) for f in udps), f"{len(udps)} checked")
+
+
+def phase_port_unreachable(r, disk, tmp):
+    pcap = os.path.abspath(os.path.join(tmp, "net_unreach.pcap"))
+    # hostfwd is what lets the HOST start the conversation: it maps a
+    # host port onto a guest port, which is the only way to make a
+    # datagram ARRIVE at a port the guest has nothing bound to.
+    extra = f",hostfwd=udp::{UDP_ECHO_PORT + 1}-:{UDP_ECHO_PORT + 1}"
+    sh, pidfile = launch(disk, tmp, "unreach", "e1000", pcap, netdev_extra=extra)
+    try:
+        sh.run("ifconfig")   # settle; nothing is bound to that port
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        for _ in range(3):
+            sock.sendto(b"nobody-is-listening", ("127.0.0.1", UDP_ECHO_PORT + 1))
+            time.sleep(0.3)
+        sock.close()
+        time.sleep(1.5)
+        sh.run("ifconfig")   # a command, so the guest's idle loop runs
+    finally:
+        kill(pidfile)
+        sh.close()
+        time.sleep(1.0)
+
+    frames = read_pcap(pcap)
+    unreachable = []
+    for f in frames:
+        if len(f) < 34 or struct.unpack(">H", f[12:14])[0] != 0x0800 or f[23] != 1:
+            continue
+        ihl = (f[14] & 0x0F) * 4
+        icmp = f[14 + ihl:]
+        if len(icmp) >= 2 and icmp[0] == 3 and icmp[1] == 3:
+            unreachable.append(icmp)
+    r.check("[unreach] the guest answers an unbound port with ICMP type 3 code 3",
+            len(unreachable) >= 1, f"{len(unreachable)} reports in {len(frames)} frames")
+    # The report is only useful if it quotes enough for the sender to
+    # match it: the IP header plus the first 8 bytes after it.
+    r.check("[unreach] and quotes the offending datagram's header",
+            all(len(i) >= 8 + 20 + 8 for i in unreachable),
+            str([len(i) for i in unreachable]))
+
+
+def phase_dhcp(r, disk, tmp):
+    """A NON-DEFAULT SLIRP subnet, which is the whole point.
+
+    On QEMU's default network a working DHCP client and a hardcoded
+    10.0.2.15 produce the same `ifconfig` output, so this boots on
+    192.168.76.0/24 where the address can only have come from a lease."""
+    extra = ",net=192.168.76.0/24,host=192.168.76.2,dhcpstart=192.168.76.20"
+    sh, pidfile = launch(disk, tmp, "dhcp", "e1000", None, netdev_extra=extra)
+    try:
+        before = sh.run("ifconfig")
+        r.check("[dhcp] before the lease the guest has the built-in default",
+                "10.0.2.15" in before, before.strip()[-300:])
+
+        out = sh.run("dhcp", timeout=40.0)
+        r.check("[dhcp] the client gets a lease from the server on this segment",
+                "192.168.76." in out, out.strip()[-400:])
+        r.check("[dhcp] and a nameserver with it",
+                "nameserver 192.168.76." in out, out.strip()[-400:])
+
+        after = sh.run("ifconfig")
+        r.check("[dhcp] the address is applied to the device",
+                "192.168.76." in after and "10.0.2.15" not in after, after.strip()[-400:])
+        r.check("[dhcp] with the gateway this network actually has",
+                "192.168.76.2" in after, after.strip()[-400:])
+
+        # The lease is only real if it works: a client that applied a
+        # plausible address to the wrong device would pass everything
+        # above and fail this.
+        ping = sh.run("ping -c 2 192.168.76.2", timeout=40.0)
+        r.check("[dhcp] and the gateway answers on the leased address",
+                "0% packet loss" in ping, ping.strip()[-400:])
+    finally:
+        kill(pidfile)
+        sh.close()
+
+
+def host_can_resolve():
+    try:
+        socket.setdefaulttimeout(4)
+        socket.gethostbyname("example.com")
+        return True
+    except Exception:
+        return False
+
+
+def phase_dns(r, disk, tmp):
+    sh, pidfile = launch(disk, tmp, "dns", "e1000")
+    try:
+        # The deterministic half first: with no resolver configured the
+        # failure must NAME what is missing. This needs no network at
+        # all, so it runs on an offline machine too.
+        sh.run("rm /etc/resolv.conf")
+        out = sh.run("host example.com", timeout=30.0)
+        r.check("[dns] with no nameserver configured, host says so",
+                "no nameserver" in out, out.strip()[-300:])
+
+        out = sh.run("dhcp", timeout=40.0)
+        r.check("[dns] dhcp writes the resolver it was given",
+                "/etc/resolv.conf" in out, out.strip()[-300:])
+
+        if not host_can_resolve():
+            print("  SKIP  [dns] the host cannot resolve; skipping the live lookups")
+            return
+
+        out = sh.run("host example.com", timeout=40.0)
+        r.check("[dns] a name resolves through SLIRP's forwarder",
+                "has address" in out, out.strip()[-300:])
+
+        # A name that does not exist must be told apart from a server
+        # that did not answer -- different codes, different fixes.
+        out = sh.run("host no-such-host.invalid", timeout=40.0)
+        r.check("[dns] a nonexistent name is reported as not found",
+                "not found" in out, out.strip()[-300:])
+
+        out = sh.run("ping -c 2 example.com", timeout=60.0)
+        r.check("[dns] ping resolves a name and reaches it",
+                "0% packet loss" in out, out.strip()[-400:])
+    finally:
+        kill(pidfile)
+        sh.close()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -488,6 +736,14 @@ def main():
         phase_no_nic(r, disk, tmp)
         print("Phase 5: the ARP retransmit rate")
         phase_arp_rate(r, disk, tmp)
+        print("Phase 6: UDP, with a real host socket at the far end")
+        phase_udp(r, disk, tmp)
+        print("Phase 7: ICMP port unreachable")
+        phase_port_unreachable(r, disk, tmp)
+        print("Phase 8: DHCP, on a subnet the default cannot produce")
+        phase_dhcp(r, disk, tmp)
+        print("Phase 9: DNS")
+        phase_dns(r, disk, tmp)
     finally:
         if not args.keep:
             shutil.rmtree(tmp, ignore_errors=True)

@@ -1643,3 +1643,68 @@ driver never learns what a packet means.
   ever booted had an unclaimed NIC on the bus. `NET=e1000|virtio|both|
   none` (and `vm.py --net`) names what was already implicit and makes
   the other three expressible.
+
+
+## UDP IS A PORT DEMUX, DHCP AND DNS ARE RING-3 PROGRAMS, AND A NAME IS RESOLVED BY A LIBRARY
+
+The transport layer is `kernel/net/udp.c` and everything built on it is
+a `/bin` program. That split is the same one the compositor made: the
+kernel owns the mechanism (ports, checksums, demultiplexing) and ring 3
+owns the policy (which offer to take, which server to ask, what to do
+with the answer).
+
+- **THE UDP CHECKSUM COVERS A HEADER THAT IS NOT ON THE WIRE.** The
+  pseudo-header -- source, destination, protocol, UDP length -- is
+  reconstructed by both ends and appears in no packet. That is the one
+  part of UDP easy to get wrong in a way that still works locally: a
+  stack that omits it agrees with itself perfectly and is rejected by
+  everything else. `tools/net_test.py` recomputes it on the host for
+  exactly that reason, and `net_checksum_two()` exists so the
+  pseudo-header need not be memcpy'd in front of every datagram.
+- **A ZERO CHECKSUM MEANS "NOT COMPUTED" AND MUST BE ACCEPTED** (legal
+  in IPv4, illegal in IPv6; SLIRP sends it). Transmitting zero is never
+  done -- a genuine all-ones sum is written as 0xFFFF, because 0 is the
+  one value the field cannot carry.
+- **A DATAGRAM FOR AN UNBOUND PORT IS ANSWERED WITH ICMP TYPE 3 CODE
+  3**, quoting the offending IP header plus 8 bytes so the sender can
+  match the report to its socket. Never for a broadcast (every host on
+  the segment would answer one datagram) and never for a datagram whose
+  checksum failed (the port it names cannot be trusted). Both exclusions
+  are tested, because a stack that reported unconditionally would pass
+  the positive check alone.
+- **BINDING TAKES A DEVICE AS WELL AS A PORT** -- Linux's
+  `SO_BINDTODEVICE`, and not decoration: a DHCP client must broadcast
+  from 0.0.0.0 out of a NAMED card before any card has an address to
+  route by. A socket bound to one device does not hear another's
+  traffic, which is what keeps two clients on two cards from answering
+  each other's offers.
+- **A BROADCAST IS THE ONE THING AN UNADDRESSED DEVICE MAY SEND**, with
+  0.0.0.0 as its source and no ARP at all. That is not a special case
+  bolted on for DHCP -- it is the literal state a client is in before it
+  has a lease, and `ipv4_output()` says so where it happens.
+- **AN UNBOUND SENDER IS GIVEN AN EPHEMERAL PORT ON ITS FIRST SEND**,
+  from IANA's 49152-65535 (Linux uses 32768-60999; nothing here wants
+  the wider range). That is what lets a client never call bind at all,
+  and it is why the DNS and DHCP clients are as short as they are.
+- **DHCP AND DNS ARE `/bin` PROGRAMS, AND THE RESOLVER IS A LIBRARY.**
+  `/bin/dhcp` applies its lease through `SYS_NET_CONFIG` -- the same
+  call `ifconfig` uses, so there is no privileged path a person could
+  not take by hand. Resolution is `userland/lib/uresolv.c`, shared by
+  `/bin/host` and `/bin/ping`, so a name means the same thing in both.
+- **`/etc/resolv.conf` HAS UNIX'S NAME AND THIS REPO'S FORMAT**
+  (`nameserver=10.0.2.3`, read by the shared `etc_config` parser). One
+  config parser, not two: a second one for a single field is the drift
+  nobody looks for.
+- **A DNS REPLY IS ATTACKER-SHAPED DATA WITH POINTERS IN IT.** A name
+  may end in a pointer to an earlier offset, which lets a reply point a
+  name at itself; every walk in `uresolv.c` carries a jump budget and
+  every read is bounded by the message length. And EVERY answer is
+  examined rather than only the first, because a CNAME answers with the
+  alias record *and* the address record -- a parser that reads answer 0
+  fails on exactly the names most common on the real internet.
+- **THE LEASE IS NOT RENEWED AND `dhcp` DOES NOT RUN AT BOOT.** Both are
+  real limitations rather than oversights, and the second has a specific
+  blocker worth knowing: a filesystem write during the desktop's startup
+  wedges the compositor (`docs/bugs.md`), and `/bin/dhcp` writes
+  `/etc/resolv.conf`. The kernel's boot-time defaults stay until
+  something runs the client.

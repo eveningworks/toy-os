@@ -598,6 +598,7 @@ whenever a headline here tells you something you did not already know.
 - **THE THREAD POINTER IS FS.base, AND THE SCHEDULER RELOADS IT** -- `iretq` leaves the hidden segment bases alone, so without a reload on every switch every thread reads the last-scheduled thread's `__thread` storage, silently. The kernel owns ONE number (`SYS_SET_TLS`, `arch_prctl(ARCH_SET_FS)`'s job); the layout behind it is `userland/rt/tls.c`'s. The LEGACY loader has one too, in the kernel context's own slot -- refusing there kills every ring-3 program in `crt0`, because errno is `__thread` now.
 - **THERE IS A SOUND CLASS, ITS STREAM IS EXCLUSIVE, AND THE RING IS SHARED MEMORY** -- `kernel/drivers/sound/` (`sound.c` core + `ac97.c`, the registry shape again); the data plane is a mapped ring at `SND_MAP_VADDR` (`abi/sound_abi.h`) with ZERO syscalls in steady state; a consumed chunk is ZEROED by the kernel so an abandoned ring plays silence, never a loop; the kernel NEVER mixes (a second open is -EBUSY); `volume` is a registered setting. Tested host-side (`tools/audio_test.py`) -- under TCG the recording is correct-pitch BURSTS padded with host silence, so measure within bursts.
 - **THERE IS A NETWORK DEVICE CLASS, THE STACK IS IN THE KERNEL, AND THE RECEIVE PATH IS SPLIT ACROSS AN INTERRUPT** -- `kernel/drivers/net/` is hardware and `kernel/net/` is protocol (Linux's `drivers/net/` vs `net/`); `struct net_device` is PLURAL by construction, with per-device addresses and a two-rule route, unlike `block_device`'s singular active device. A driver's ISR only memcpys into a static queue (`net_rx()`); ARP/IP/ICMP run from `net_poll()` in `scheduler_idle()`, because `kmalloc` is not interrupt-safe here and the filesystem is not re-entrant. An UNRESOLVED address is a cache entry, which is what rate-limits requests -- two pings at an unanswered address put 104 frames on the wire before that landed. NO fragmentation, in either direction. A socket is a PING socket, not a raw one (the kernel owns the ICMP header), because a raw socket is what `CAP_NET_RAW` gates and this kernel has no privilege model. Addresses are HOST byte order everywhere above the wire. The e1000 needed no flag -- QEMU's default machine has always had one -- and `NET=e1000|virtio|both|none` names what was implicit.
+- **UDP IS A PORT DEMUX, DHCP AND DNS ARE RING-3 PROGRAMS, AND A NAME IS RESOLVED BY A LIBRARY** -- `kernel/net/udp.c` owns ports and checksums; everything above is a `/bin` program, the same mechanism/policy split the compositor made. The UDP checksum covers a PSEUDO-HEADER that is on no wire, which is the one part easy to get wrong in a way that still works locally (a stack omitting it agrees with itself and is rejected by everything else), so `tools/net_test.py` recomputes it on the host. A zero checksum means NOT COMPUTED and must be accepted; 0xFFFF is how a real all-ones sum is written. An unbound port is answered with ICMP type 3 code 3 -- never for a broadcast, never for a datagram whose checksum failed. BIND TAKES A DEVICE (`SO_BINDTODEVICE`), because a DHCP client broadcasts from 0.0.0.0 out of a NAMED card before any card has an address. An unbound sender gets an ephemeral port on first send (IANA's 49152-65535). `/etc/resolv.conf` has Unix's NAME and this repo's `key=value` FORMAT. A DNS reply is attacker-shaped data with pointers that can loop, so every walk carries a jump budget, and EVERY answer is examined because a CNAME answers with two records. The lease is NOT renewed and `dhcp` does NOT run at boot -- the second is blocked on the desktop-startup write bug in `docs/bugs.md`.
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
 
 ### GUI, Toykit and the desktop
@@ -1331,12 +1332,16 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   SLIRP answers the pings and shares no code with the guest, and every
   frame is dumped to a pcap and decoded here with the IPv4 and ICMP
   checksums RECOMPUTED, because SLIRP can be lenient where a decoder
-  cannot. Five phases; the load-bearing ones are virtio-net, the only
-  path to `virtio_net.c`, and TWO CARDS ON TWO SUBNETS, where the
-  assertion is which device's counters moved rather than that a ping
-  worked. Its ARP-rate phase is a regression test with a measurement
-  behind it: 104 frames for two pings before rate limiting, 5 after),
-    `multidisk_test.py` (**two disks on two different drivers, which is the
+  cannot. Nine phases; the load-bearing ones are virtio-net, the only
+  path to `virtio_net.c`; TWO CARDS ON TWO SUBNETS, where the assertion
+  is which device's counters moved rather than that a ping worked; a
+  REAL PYTHON SOCKET on the host as the far end of a UDP round trip;
+  and DHCP on 192.168.76.0/24, since on the default network a working
+  client and the hardcoded 10.0.2.15 are indistinguishable. Its
+  ARP-rate phase is a regression test with a measurement behind it:
+  104 frames for two pings before rate limiting, 5 after. DNS SKIPS on
+  a host that cannot resolve),
+  `multidisk_test.py` (**two disks on two different drivers, which is the
   configuration no other test here boots** -- every one attaches exactly
   one, and that is the shape the enumerate-everything bug needed. Asserts
   both are named, that `root=` picks the boot disk over the precedence,

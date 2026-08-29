@@ -25,7 +25,7 @@ buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
 - [ ] `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR, not a 64 KiB guess  *(USB)*
-- [ ] **UDP**, which is what DHCP and DNS both need first  *(Networking)*
+- [ ] **A blocking receive** -- `SYS_RECVFROM` never blocks, so every caller polls; TCP and ICMP error reporting both wait on this  *(Networking)*
 - [ ] The ring-3 WM busy-waits instead of sleeping -- built on branch `wm-wait-ready`, PARKED: it regresses `uterm`  *(Known limitations and papercuts (unscheduled))*
 - [ ] System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons  *(Known limitations and papercuts (unscheduled))*
 <!-- END next-up -->
@@ -681,15 +681,19 @@ run on, not by order.
 - [x] ~~Ring-3-readable millisecond-ish clock~~ done -- `SYS_MONOTONIC_NS`, nanoseconds since boot, monotonic; `/bin/uptime` reads it
 - [x] ~~Sleep/delay primitive (timeouts, retransmission)~~ DONE 2026-08-18 -- `SYS_SLEEP`; `beep` still busy-waits and is a papercut
 - [x] ~~Ethernet/ARP/IP stack~~ DONE 2026-08-29 -- `kernel/net/`; UDP is the next layer and is not built
-- [ ] **UDP**, which is what DHCP and DNS both need first **NEXT**
-- [ ] TCP -- the socket syscalls are wired for ICMP; a stream socket needs a blocking receive
+- [x] ~~**UDP**, which DHCP and DNS both needed first~~ DONE 2026-08-29 -- ports, the pseudo-header checksum, ICMP port unreachable
 - [x] ~~ICMP echo + a `ping` command -- the smallest end-to-end proof the stack works~~ DONE 2026-08-29
-- [ ] DHCP client -- the boot-time addresses are QEMU's user-networking defaults until this exists
-- [ ] A blocking receive -- `SYS_RECVFROM` never blocks, so every caller polls
+- [x] ~~DHCP client~~ DONE 2026-08-29 -- `/bin/dhcp`, a ring-3 program applying its lease through `SYS_NET_CONFIG`
+- [x] ~~DNS resolver~~ DONE 2026-08-29 -- `userland/lib/uresolv.c`, `/bin/host`, and `ping` by name
+- [ ] **A blocking receive** -- `SYS_RECVFROM` never blocks, so every caller polls; TCP and ICMP error reporting both wait on this **NEXT**
+- [ ] TCP -- the socket syscalls are wired for two datagram protocols; a stream socket needs the blocking receive above
+- [ ] Run `dhcp` at boot -- blocked on the desktop-startup write bug in `docs/bugs.md`, not on effort
+- [ ] Renew the lease before it expires -- `/bin/dhcp` asks once and exits
+- [ ] An ICMP error reaching the socket that caused it -- reports are sent, and an arriving one is dropped for want of an error queue
 - [ ] An `arp` command -- the cache is diagnosable only from inside the kernel today
 - [ ] A routing table -- routing is "my subnet, or the gateway", per device
-- [ ] DNS resolver
-- [ ] An HTTP client (`wget`-shaped), the first thing that makes the stack useful rather than demonstrable
+- [ ] `/etc/hosts`, and a resolver cache -- every lookup goes to the wire
+- [ ] An HTTP client (`wget`-shaped), the first thing that makes the stack useful rather than demonstrable -- needs TCP
 - [x] ~~A second NIC driver, to prove the interface isn't shaped around the first~~ DONE 2026-08-29 -- both landed together
 
 ### Sound

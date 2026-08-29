@@ -300,15 +300,18 @@ int sys_munmap(void *addr, uint64_t length);
 // fail -- deliberately, see syscall_abi.h. The fd namespace and the ABI
 // are real, which is the point of them existing this early.
 
-// AF_INET/SOCK_DGRAM/IPPROTO_ICMP is the supported combination
+// AF_INET/SOCK_DGRAM with IPPROTO_ICMP or IPPROTO_UDP is the supported combination
 // (abi/net_abi.h). Addresses are HOST byte order throughout -- there is
 // no htonl() to forget here.
 int sys_socket(int domain, int type, int protocol);
 int64_t sys_send(int fd, const void *buf, size_t len);   // no peer: -EINVAL
 int64_t sys_recv(int fd, void *buf, size_t len);         // no peer: -EINVAL
-int64_t sys_sendto(int fd, const void *buf, size_t len, uint32_t dst_ip);
+int64_t sys_sendto(int fd, const void *buf, size_t len, uint32_t dst_ip, uint16_t dst_port);
 // NEVER BLOCKS: 0 means nothing has arrived yet, not end-of-stream.
-int64_t sys_recvfrom(int fd, void *buf, size_t cap, uint32_t *out_src);
+int64_t sys_recvfrom(int fd, void *buf, size_t cap, uint32_t *out_src, uint16_t *out_port);
+// A local port (0 picks an ephemeral one), optionally on ONE device --
+// SO_BINDTODEVICE, which is what a DHCP client needs. Returns the port.
+int sys_bind(int fd, uint32_t addr, uint16_t port, const char *dev);
 // A zero field is left alone, so one address can be changed on its own.
 int sys_net_config(const char *dev, uint32_t ip, uint32_t netmask, uint32_t gateway);
 

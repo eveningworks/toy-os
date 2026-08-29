@@ -107,6 +107,12 @@ void fd_desc_unref(int di) {
     // waited for forever; pty.c owns that rule, here as for a pipe.
     case FD_KIND_TTY_MASTER: pty_close_master(f->pty.idx); break;
     case FD_KIND_TTY_SLAVE:  pty_close_slave(f->pty.idx);  break;
+    // A socket holds a table entry, a bound port and a queue. Without
+    // this it leaks all three: the table is eight entries wide, so two
+    // runs of a program that opens four sockets leave the third unable
+    // to open ANY -- which presents as the socket call failing rather
+    // than as anything to do with closing.
+    case FD_KIND_SOCKET: net_sock_close(f->socket.idx); break;
     default: break; // a file needs nothing: fs.c holds no per-open state
     }
     f->kind = FD_KIND_FILE;
@@ -1106,7 +1112,7 @@ int sys_sendto(struct syscall_ctx *c) {
     }
 
     net_poll();   // answer anything outstanding first, so ARP resolves
-    int rc = net_sock_sendto(sock, m.addr, payload, m.len);
+    int rc = net_sock_sendto(sock, m.addr, m.port, payload, m.len);
     if (m.len) kfree(payload);
     c->regs[14] = (uint64_t)(int64_t)rc;
     return 0;
@@ -1132,9 +1138,11 @@ int sys_recvfrom(struct syscall_ctx *c) {
     uint8_t *payload = kmalloc(m.len ? m.len : 1);
     if (!payload) { c->regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
     uint32_t src = 0;
-    int rc = net_sock_recvfrom(sock, payload, m.len, &src);
+    uint16_t port = 0;
+    int rc = net_sock_recvfrom(sock, payload, m.len, &src, &port);
     if (rc > 0) {
         m.addr = src;
+        m.port = port;
         m.len = (uint32_t)rc;
         if (vmm_copy_to_user(c->pml4, m.buf, payload, (uint64_t)rc) < 0 ||
             vmm_copy_to_user(c->pml4, c->a1, &m, sizeof m) < 0) {
@@ -1145,6 +1153,20 @@ int sys_recvfrom(struct syscall_ctx *c) {
     }
     kfree(payload);
     c->regs[14] = (uint64_t)(int64_t)rc;
+    return 0;
+}
+
+int sys_bind(struct syscall_ctx *c) {
+    int sock = sock_of_fd(c, (int)c->a0);
+    if (sock < 0) { c->regs[14] = (uint64_t)(int64_t)-EBADF; return 0; }
+
+    struct net_msg m;
+    if (vmm_copy_from_user(c->pml4, &m, c->a1, sizeof m) < 0) {
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+    m.dev[sizeof m.dev - 1] = 0;
+    c->regs[14] = (uint64_t)(int64_t)net_sock_bind(sock, m.addr, m.port, m.dev);
     return 0;
 }
 

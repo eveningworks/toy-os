@@ -17,9 +17,10 @@ addresses.
 Every NIC driver runs at boot and registers what it finds into the
 device table (`kernel/include/kernel/netdev.h`), named `net0`, `net1` in
 registration order. **Only the first device gets an address
-automatically** — QEMU's user-networking defaults, because nothing here
-speaks DHCP yet — so a second card shows as unconfigured until this
-command gives it something.
+automatically** — QEMU's user-networking defaults, which are a
+placeholder for a lease rather than a claim about the network — so a
+second card shows as unconfigured until `dhcp` or this command gives it
+something.
 
 A field left out is left alone rather than cleared, so
 `ifconfig net0 10.0.2.20` moves an address without restating the netmask.
@@ -61,5 +62,6 @@ failed.
 
 ## See also
 
-`ping` for whether any of it works, `lspci` for what is on the bus, and
+`ping` for whether any of it works, `dhcp` for getting an address from
+the network instead of by hand, `lspci` for what is on the bus, and
 `docs/conventions/kernel.md`'s networking entry for the layering.

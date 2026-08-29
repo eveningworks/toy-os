@@ -1413,6 +1413,18 @@ window without going through it will find its layout polls timing out.
   capture pipeline can see motion at all (without it, a harness handing
   back one cached frame would report a beautifully steady desktop). In
   `gui_regress.py`.
+
+  **It was the only tool that did not wait for the desktop**, and that
+  cost a real investigation: it connected and asked `gui state --json`
+  straight away, so a boot that had not finished starting `toywm`
+  failed it two seconds in with `no window manager running`. Measured
+  with `predates.py` at **1 run in 6 on HEAD and 3 in 6 on a busier
+  tree** -- pre-existing, and at those counts the two rates are not
+  distinguishable, which is exactly why the fix is the poll rather than
+  an argument about whose change it was. It calls `wait_for_desktop()`
+  now (6 of 6 after), and deliberately NOT `enter_gui()`: that also
+  turns on the per-frame layout log, and a tool measuring what an idle
+  desktop does is the last one that should be given more to log.
 - **`icons_test.py`** -- application icons from a `.qoi` file to the
   screen (9 checks), with the host as the oracle again: Pillow decodes
   the same file, scales it the same way, composites it over the sampled
@@ -2513,7 +2525,7 @@ window without going through it will find its layout polls timing out.
   dependency the machine might not have is a check that silently stops
   running.
 
-  Five phases. The e1000 (the card QEMU's default machine has always
+  Nine phases. The e1000 (the card QEMU's default machine has always
   had, so it needs no flag); **virtio-net, which is the only thing here
   that reaches `kernel/drivers/virtio/virtio_net.c`**; two cards at
   once, moved onto DIFFERENT subnets so that "the traffic left through
@@ -2524,9 +2536,28 @@ window without going through it will find its layout polls timing out.
   it -- two pings at an unanswered address put **104 frames** on the
   wire before `kernel/net/arp.c` rate-limited requests, and 5 after.
 
-  It found two real defects while being written: the ARP storm above,
-  and a sequence number burned by every retried send, so a capture
-  showed a ping starting at 4. Boots four guests against a COPY of
+  Then the four that came with UDP. **A real Python socket on the host**
+  receives the guest's datagram, echoes it, and the guest reads the echo
+  -- a round trip where neither end shares a line with the other; the
+  capture is then checked for a valid UDP checksum, which covers a
+  pseudo-header that is on no wire and is the one thing a stack can get
+  wrong while agreeing with itself perfectly. **ICMP port unreachable**,
+  judged from the capture after the HOST sends to a port nothing is
+  bound to (`hostfwd`, the only way to make a datagram arrive at the
+  guest). **DHCP on 192.168.76.0/24**, which is the load-bearing DHCP
+  check: on QEMU's default network a working client and the hardcoded
+  10.0.2.15 are indistinguishable. And **DNS**, which SKIPS when the
+  host itself cannot resolve -- an offline machine is not a bug in this
+  OS -- while still checking the "no nameserver configured" path, which
+  needs nothing but the guest.
+
+  It found four real defects while being written: the ARP storm above; a
+  sequence number burned by every retried send, so a capture showed a
+  ping starting at 4; sockets never released on close, so the third run
+  of a program opening four of them could open none; and one in the
+  harness worth knowing, since it looked like a guest bug -- SLIRP is a
+  NAT and rewrites the source port, so the guest's own ephemeral port is
+  visible only in the capture. Boots eight guests against a COPY of
   `disk.img`; on demand, not in any gate.
 
 - **`partition_test.py`** -- boots toy-os with its filesystem **inside**

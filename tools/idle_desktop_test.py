@@ -50,7 +50,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gui_debug import DebugConsole          # noqa: E402
+from gui_debug import DebugConsole, wait_for_desktop  # noqa: E402
 from qmp_test import QMPSession             # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
@@ -184,6 +184,17 @@ def main():
     ap.add_argument("--qmp-port", type=int, default=4445)
     ap.add_argument("--tmp", default="/tmp")
     args = ap.parse_args()
+
+    # WAIT FOR THE DESKTOP BEFORE ASKING IT ANYTHING. This tool was the
+    # only one that connected and queried straight away -- every other
+    # goes through enter_gui(), which polls. init starts the desktop at
+    # boot, so it is usually up before a tool connects, and "usually" is
+    # what a flake is made of: `gui state --json` answered "no window
+    # manager running" 1 run in 6 at HEAD and 3 in 6 on a busier tree,
+    # two seconds in. It does NOT use enter_gui(), which also turns on
+    # the per-frame layout log -- this tool measures what an IDLE
+    # desktop does, and giving it more to log is the last thing it wants.
+    wait_for_desktop(args.sock)
 
     qmp = QMPSession(port=args.qmp_port)
     dbg = DebugConsole(args.sock)

@@ -39,17 +39,42 @@ _Static_assert(sizeof(struct ipv4_header) == 20, "IPv4 header is 20 bytes on the
 static uint8_t g_datagram[NET_MTU];
 static uint16_t g_next_id = 1;
 
-uint16_t net_checksum(const void *data, uint32_t len) {
-    const uint8_t *p = data;
-    uint32_t sum = 0;
+// The running sum, without the final complement, so two buffers can be
+// summed as if concatenated. Splitting them is only correct when the
+// first has an EVEN length -- an odd one would put the second buffer's
+// first byte in the wrong half of a 16-bit word -- which is why the
+// only caller passes a 12-byte pseudo-header.
+static uint32_t sum16(const uint8_t *p, uint32_t len, uint32_t sum) {
     while (len > 1) { sum += (uint32_t)((p[0] << 8) | p[1]); p += 2; len -= 2; }
     if (len) sum += (uint32_t)(p[0] << 8);          // odd trailing byte, high half
+    return sum;
+}
+
+static uint16_t fold(uint32_t sum) {
     while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
     return (uint16_t)(~sum & 0xFFFF);
 }
 
+uint16_t net_checksum(const void *data, uint32_t len) {
+    return fold(sum16(data, len, 0));
+}
+
+uint16_t net_checksum_two(const void *a, uint32_t a_len,
+                          const void *b, uint32_t b_len) {
+    return fold(sum16(b, b_len, sum16(a, a_len, 0)));
+}
+
 struct net_device *ipv4_route(uint32_t dst, uint32_t *out_next_hop) {
     if (!dst) return 0;
+
+    // A broadcast is not routed, it is put on a wire. The first
+    // registered device is the only sensible default, and a caller that
+    // means a particular card names it (udp_output's `dev`), which is
+    // how a DHCP client reaches the segment it is asking on.
+    if (dst == IP_BROADCAST) {
+        if (out_next_hop) *out_next_hop = IP_BROADCAST;
+        return net_device_at(0);
+    }
     for (int i = 0; i < net_device_count(); i++) {
         struct net_device *d = net_device_at(i);
         if (!d->ip || !d->netmask) continue;
@@ -85,27 +110,50 @@ void ipv4_input(struct net_device *dev, const uint8_t *pkt, uint32_t len) {
     if ((frag & IP_FLAG_MF) || (frag & IP_FRAG_MASK)) return;  // see the file comment
 
     uint32_t dst = net_ntohl(h.dst);
-    if (dst != dev->ip && dst != 0xFFFFFFFFu) return;
+    // Our own address, or a broadcast. A device with NO address still
+    // accepts broadcasts, which is the only way a DHCP offer can reach
+    // the client that asked for one.
+    if (dst != IP_BROADCAST && (!dev->ip || dst != dev->ip)) return;
 
     uint32_t src = net_ntohl(h.src);
     const uint8_t *payload = pkt + ihl;
     uint32_t plen = total - ihl;
 
-    if (h.proto == IP_PROTO_ICMP) icmp_input(dev, src, payload, plen);
+    if (h.proto == IP_PROTO_ICMP) {
+        icmp_input(dev, src, payload, plen);
+    } else if (h.proto == IP_PROTO_UDP) {
+        if (udp_input(dev, src, dst, payload, plen)) return;
+        // Nobody was listening. Say so rather than dropping in silence:
+        // a client talking to the wrong port otherwise waits out its
+        // whole timeout, which is the case where the diagnosis matters
+        // most. NEVER for a broadcast -- answering one would have every
+        // host on the segment reply to a datagram sent to all of them.
+        if (dst != IP_BROADCAST && dst == dev->ip)
+            icmp_send_port_unreachable(dev, src, pkt, total);
+    }
 }
 
 int ipv4_output(struct net_device *dev, uint32_t dst_ip, uint8_t proto,
                 const void *payload, uint32_t len) {
     uint32_t next_hop = dst_ip;
     if (!dev) dev = ipv4_route(dst_ip, &next_hop);
-    else if ((dev->ip & dev->netmask) != (dst_ip & dev->netmask)) next_hop = dev->gateway;
+    else if (dst_ip != IP_BROADCAST &&
+             (dev->ip & dev->netmask) != (dst_ip & dev->netmask)) next_hop = dev->gateway;
 
-    if (!dev || !dev->ip) return -ENODEV;
+    if (!dev) return -ENODEV;
+    // A BROADCAST IS THE ONE THING AN UNADDRESSED DEVICE MAY SEND, and
+    // its source address is then 0.0.0.0 -- which is not a mistake but
+    // the literal state a DHCP client is in until it has a lease.
+    if (!dev->ip && dst_ip != IP_BROADCAST) return -ENODEV;
     if (!next_hop) return -ENODEV;
     if (len + sizeof(struct ipv4_header) > dev->mtu) return -EINVAL;
 
     uint8_t mac[NET_MAC_LEN];
-    if (!arp_resolve(dev, next_hop, mac)) return -EAGAIN;  // request sent; retry
+    if (dst_ip == IP_BROADCAST) {
+        k_memcpy(mac, ETH_BROADCAST, NET_MAC_LEN);   // nothing to resolve
+    } else if (!arp_resolve(dev, next_hop, mac)) {
+        return -EAGAIN;  // request sent; retry
+    }
 
     struct ipv4_header *h = (struct ipv4_header *)g_datagram;
     h->version_ihl = 0x45;

@@ -25,11 +25,11 @@ anything replied, 1 if nothing did.**
 
 ## What it is not
 
-**Not a name resolver.** There is no DNS in this OS yet, so the argument
-must be a dotted quad. A name is refused by saying so rather than by
-reporting an invalid argument, because "there is no resolver yet" is the
-fact a reader needs and "invalid address" sends them to check their
-typing.
+**Not itself a resolver.** A name is accepted and resolved through
+`userland/lib/uresolv.c`, the same library `host` uses, so the two
+cannot disagree about what a name means. What that costs is one DNS
+round trip before the first echo, and a different failure to report
+when the name is the problem rather than the network.
 
 **Not a flood or a latency benchmark.** There is no `-f`, no `-i`, and
 no `-s`. The reply is waited for in 10 ms polls (the socket does not
@@ -42,6 +42,15 @@ arbitrary ICMP type, which on Linux is what `CAP_NET_RAW` gates and this
 kernel has no privilege model to gate with.
 
 ## Output
+
+    $ ping -c 2 example.com
+    ping: example.com is 172.66.147.243
+    PING example.com: 56 data bytes
+    56 bytes from 172.66.147.243: icmp_seq=1 time=20.000 ms
+
+The resolved address is printed before the first request, so a reply
+from an unexpected host is attributable. With an address there is no
+lookup and no such line:
 
     PING 10.0.2.2: 56 data bytes
     56 bytes from 10.0.2.2: icmp_seq=1 time=0.000 ms
@@ -62,5 +71,6 @@ rather than a timeout, because those are different problems:
 ## See also
 
 `ifconfig` for the addresses this uses and the counters that say whether
-frames moved at all, and `docs/conventions/kernel.md`'s networking entry
-for how the layers below fit together.
+frames moved at all, `host` for resolution on its own, `dhcp` for where
+the nameserver comes from, and `docs/conventions/kernel.md`'s networking
+entry for how the layers below fit together.

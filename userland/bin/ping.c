@@ -21,6 +21,7 @@
 #include "rt/sys.h"
 #include <stdio.h>
 #include "lib/cmd.h"
+#include "lib/uresolv.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -62,14 +63,23 @@ int main(int argc, char **argv) {
     }
     if (!target) { cmd_usage("ping [-c count] <address>"); return 1; }
 
+    // A name is resolved through the same library `host` uses, so the
+    // two cannot disagree about what a name means.
     uint32_t dst = 0;
     if (!parse_ip(target, &dst)) {
-        // No DNS yet, so a name is not something this can look up --
-        // and saying that is more useful than "invalid argument".
-        sys_print("ping: not an address (there is no resolver yet): ");
-        sys_print(target);
-        sys_print("\n");
-        return 1;
+        int rc = uresolv_lookup(target, 0, &dst);
+        if (rc < 0) {
+            if (rc == -ENODEV)
+                printf("ping: no nameserver configured -- run `dhcp`, or set one in %s\n",
+                       URESOLV_CONF);
+            else if (rc == -ENOENT)
+                printf("ping: %s not found\n", target);
+            else
+                printf("ping: cannot resolve %s (%s)\n", target, strerror(-rc));
+            return 1;
+        }
+        printf("ping: %s is %u.%u.%u.%u\n", target,
+               (dst >> 24) & 0xFF, (dst >> 16) & 0xFF, (dst >> 8) & 0xFF, dst & 0xFF);
     }
 
     int fd = sys_socket(NET_ABI_AF_INET, NET_ABI_SOCK_DGRAM, NET_ABI_IPPROTO_ICMP);
@@ -92,7 +102,7 @@ int main(int argc, char **argv) {
         // rather than a lost packet.
         int64_t rc = -1;
         for (int waited = 0; waited < REPLY_WAIT_MS; waited += POLL_MS) {
-            rc = sys_sendto(fd, payload, sizeof payload, dst);
+            rc = sys_sendto(fd, payload, sizeof payload, dst, 0);
             if (rc >= 0 || sys_errno() != EAGAIN) break;
             sys_sleep_ms(POLL_MS);
         }
@@ -116,7 +126,7 @@ int main(int argc, char **argv) {
         for (int waited = 0; waited < REPLY_WAIT_MS; waited += POLL_MS) {
             uint8_t buf[PAYLOAD_BYTES + 16];
             uint32_t src = 0;
-            int64_t n = sys_recvfrom(fd, buf, sizeof buf, &src);
+            int64_t n = sys_recvfrom(fd, buf, sizeof buf, &src, 0);
             if (n > 0) {
                 uint64_t us = (sys_monotonic_ns() - start) / 1000;
                 snprintf(line, sizeof line,

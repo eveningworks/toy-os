@@ -109,7 +109,7 @@ int main(void) {
     // zero rather than an error. A caller that treats 0 as failure will
     // give up on the first poll of every ping it ever sends.
     uint32_t src = 0;
-    int64_t idle = sys_recvfrom((int)sfd, buf, sizeof(buf), &src);
+    int64_t idle = sys_recvfrom((int)sfd, buf, sizeof(buf), &src, 0);
     if (idle != 0) {
         ok = ok && fail("sockettest: recvfrom() on an idle socket should return 0\n");
     } else {

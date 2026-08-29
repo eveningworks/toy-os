@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "netdev.h"
+#include "net_abi.h"   // the ephemeral range, and the syscall structs
 
 // The protocol stack: Ethernet, ARP, IPv4, ICMP. It sits ABOVE the
 // net_device class and never touches hardware -- one layer per file in
@@ -71,6 +72,13 @@ void arp_cache_flush(void);
 // --- IPv4 (ipv4.c) ----------------------------------------------------
 
 #define IP_PROTO_ICMP 1
+#define IP_PROTO_UDP  17
+
+// The IPv4 broadcast address, which routing and ARP both special-case:
+// it is delivered to the Ethernet broadcast address with no resolution,
+// and it is the only destination a device with NO address of its own
+// may send to -- which is exactly the state a DHCP client starts in.
+#define IP_BROADCAST 0xFFFFFFFFu
 
 void ipv4_input(struct net_device *dev, const uint8_t *pkt, uint32_t len);
 
@@ -87,12 +95,43 @@ struct net_device *ipv4_route(uint32_t dst, uint32_t *out_next_hop);
 // The one's-complement sum every header here carries.
 uint16_t net_checksum(const void *data, uint32_t len);
 
+// The same sum over two buffers, as if they were concatenated. UDP
+// needs it: its checksum covers a 12-byte PSEUDO-HEADER that appears
+// nowhere in the packet, and copying the datagram just to prepend it
+// would be a memcpy per datagram to avoid one function.
+uint16_t net_checksum_two(const void *a, uint32_t a_len,
+                          const void *b, uint32_t b_len);
+
 // --- ICMP (icmp.c) ----------------------------------------------------
 
 #define ICMP_ECHO_REPLY   0
 #define ICMP_ECHO_REQUEST 8
 
 void icmp_input(struct net_device *dev, uint32_t src_ip, const uint8_t *pkt, uint32_t len);
+
+// "Nothing is listening on that port" -- type 3 code 3. Takes the WHOLE
+// offending IPv4 datagram, because what it must quote back is that
+// header plus the first 8 bytes after it, and only a caller holding the
+// header knows how long it was.
+void icmp_send_port_unreachable(struct net_device *dev, uint32_t src_ip,
+                                const uint8_t *ip_datagram, uint32_t ip_len);
+
+// --- UDP (udp.c) ------------------------------------------------------
+
+// One datagram's payload, the IP and UDP headers taken off the MTU.
+#define NET_UDP_MAX 1472
+
+// Returns 1 when a socket took the datagram and 0 when no port
+// matched. The CALLER answers the miss, because the port-unreachable
+// report has to quote the IPv4 header and this layer never saw it.
+int udp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
+              const uint8_t *pkt, uint32_t len);
+
+// `dev` NULL routes by destination; naming one sends out that card
+// regardless, which is what a broadcast from an unaddressed device
+// needs. Returns 0, or a negative errno (-EAGAIN while ARP resolves).
+int udp_output(struct net_device *dev, uint32_t dst_ip, uint16_t dst_port,
+               uint16_t src_port, const void *payload, uint32_t len);
 
 // --- sockets (socket.c) ----------------------------------------------
 //
@@ -103,14 +142,32 @@ void icmp_input(struct net_device *dev, uint32_t src_ip, const uint8_t *pkt, uin
 #define NET_AF_INET     2
 #define NET_SOCK_DGRAM  2
 
+// Ephemeral ports live in abi/net_abi.h: a caller sees the number
+// SYS_BIND hands back, so the range is part of the contract.
+
 int net_sock_open(int domain, int type, int protocol);   // >= 0, or -errno
 void net_sock_close(int sock);
-int net_sock_sendto(int sock, uint32_t dst_ip, const void *buf, uint32_t len);
+
+// Give the socket a local port, a local address and optionally ONE
+// device (Linux's SO_BINDTODEVICE, which is what a DHCP client needs:
+// it must broadcast out of a named card before any card has an
+// address). A port of 0 asks the kernel to pick an ephemeral one; a
+// NULL or empty `dev` means any. -EADDRINUSE if the port is taken.
+int net_sock_bind(int sock, uint32_t addr, uint16_t port, const char *dev);
+
+int net_sock_sendto(int sock, uint32_t dst_ip, uint16_t dst_port,
+                    const void *buf, uint32_t len);
 // Returns bytes copied, 0 when nothing has arrived (never blocks), or
-// -errno. `out_src` is the sender's address.
-int net_sock_recvfrom(int sock, void *buf, uint32_t cap, uint32_t *out_src);
+// -errno. `out_src`/`out_port` are the sender's.
+int net_sock_recvfrom(int sock, void *buf, uint32_t cap,
+                      uint32_t *out_src, uint16_t *out_port);
 
 // ICMP delivers an echo reply here; returns 1 if a socket wanted it.
 int net_sock_deliver(uint8_t proto, uint32_t src_ip, const uint8_t *data, uint32_t len);
+
+// UDP delivers here. Returns 1 if a socket took it, 0 if no port
+// matched -- which is what makes the port-unreachable reply possible.
+int net_sock_deliver_udp(struct net_device *dev, uint32_t src_ip, uint16_t src_port,
+                         uint16_t dst_port, const uint8_t *data, uint32_t len);
 
 #endif

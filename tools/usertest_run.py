@@ -73,6 +73,13 @@ VM = os.path.join(REPO, "tools", "vm.py")
 TESTS = [
     ("libc_test", 0,
      ["libc_test: all checks passed"], ["FAIL"]),
+    # The UDP socket API, with no network at all: binding, the ephemeral
+    # range, a port refused twice, and what each protocol will not
+    # accept. What it CANNOT cover is a datagram reaching anything --
+    # that needs a host at the far end, which is tools/net_test.py's
+    # phase 6. Given three arguments it becomes that client instead.
+    ("udp_test", 0,
+     ["0 failed"], ["FAIL"]),
     # Tab completion's engine, built for ring 3. The KTESTs cover the
     # same source through the KERNEL shell's environment and would pass
     # whether or not a byte of it linked into libuapp.a -- this is the

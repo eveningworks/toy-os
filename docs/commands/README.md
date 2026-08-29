@@ -160,6 +160,8 @@ a command), and the `gui3`/`nano` aliases.
 
 ### Networking
 
+- [`dhcp`](dhcp.md)
+- [`host`](host.md)
 - [`ifconfig`](ifconfig.md)
 - [`ping`](ping.md)
 

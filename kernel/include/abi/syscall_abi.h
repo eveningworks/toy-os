@@ -443,6 +443,17 @@ struct sys_dirent {
                        // SYS_SLEEP between tries. Blocking needs a
                        // wait channel per socket, which is a roadmap
                        // item rather than an oversight.
+#define SYS_BIND   85 // RDI = fd, RSI = a `struct net_msg *`: `addr` is
+                       // the local address (0 for any), `port` the
+                       // local port (0 asks the kernel to pick an
+                       // ephemeral one), `dev` an optional device name
+                       // to bind to -- Linux's SO_BINDTODEVICE, here
+                       // because a DHCP client must broadcast out of a
+                       // NAMED card before any card has an address.
+                       // Returns the port actually bound, or -errno:
+                       // -EBUSY if it is taken, -EINVAL on an ICMP
+                       // socket (whose demux key is an identifier the
+                       // kernel owns, so there is nothing to bind).
 #define SYS_NET_CONFIG 84 // RDI = a `struct net_ifconfig *`: which
                        // device, and the addresses to give it. A zero
                        // field is left alone. Returns 0, or -ENODEV

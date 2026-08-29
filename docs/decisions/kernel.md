@@ -5182,3 +5182,67 @@ A `uint32_t` is the same type in either order, so a missed conversion
 compiles perfectly and produces a packet nobody answers. Converting only
 at the wire edge (`kernel/net/`) leaves exactly one place where the
 mistake can be made, and `/bin/ping` never calls `htonl` at all.
+
+## UDP's port demux is the kernel's; DHCP and DNS are not
+
+**Where the line falls.** `kernel/net/udp.c` is ports, checksums and
+demultiplexing — mechanism that every consumer needs and that only the
+place holding the socket table can provide. Everything above it is a
+ring-3 program: `/bin/dhcp` runs the lease exchange, `/bin/host` and
+`userland/lib/uresolv.c` resolve names. That is the same split the
+compositor made, and the test for it is whether the decision is a
+POLICY: which offer to accept, how long to wait for one, which server to
+ask, what to write where. None of those get better for being in ring 0,
+and each of them is a state machine talking to whoever answered a
+broadcast first — which is not something to run with the whole address
+space mapped.
+
+The concrete evidence that the line is in the right place: `/bin/dhcp`
+applies its result through `SYS_NET_CONFIG`, the same call `ifconfig`
+uses. There is no privileged path in the DHCP client that a person could
+not take by hand, which means the client cannot do anything wrong that
+`ifconfig` could not also do.
+
+**Why bind takes a device.** `SYS_BIND`'s `struct net_msg` carries a
+device name, which looks like over-generality until you write a DHCP
+client: it must send from 0.0.0.0 to 255.255.255.255 out of a
+*particular* interface, before any interface has an address for routing
+to work from. Linux has the same thing (`SO_BINDTODEVICE`) and dhclient
+is the canonical user. The alternative — picking the first device — is
+wrong the moment a machine has two cards, and wrong silently.
+
+**Why a ping socket is still not a raw socket, now that UDP exists.** It
+would have been easy to let ICMP sockets carry their own headers once
+there was a second protocol to be consistent with. The reason not to is
+unchanged and is about this kernel specifically: a raw socket lets any
+process emit any ICMP type, Linux gates that behind `CAP_NET_RAW`, and
+toy-os has no privilege model to gate with. UDP does not raise the same
+question, because a UDP payload is the application's by definition.
+
+**Why the port-unreachable report is sent but not received.** Sending it
+is ~20 lines and turns a peer's silent timeout into an immediate answer.
+Acting on one that ARRIVES needs somewhere to put it — an error queue on
+the socket, which POSIX exposes as an error return on the next call, and
+which needs a socket that can fail asynchronously. That is the same
+missing machinery a blocking receive needs, so the two arrive together
+or not at all. Dropping incoming reports is recorded in `icmp.c` where
+it happens rather than left to be discovered.
+
+## `/etc/resolv.conf`: Unix's name, this repo's format
+
+The file that names the DNS server is at the path every Unix uses, and
+its contents are `nameserver=10.0.2.3` rather than `nameserver 10.0.2.3`
+— this repo's `key=value`, read by the `etc_config` parser that is
+compiled into both rings.
+
+The argument for the traditional format is compatibility, and there is
+nothing here to be compatible with: no ported resolver reads this file,
+and the one that does (`userland/lib/uresolv.c`) is ours. The argument
+against writing a second parser is the one CLAUDE.md already makes about
+config files generally — two `name=value` implementations drift, and the
+drift surfaces as the system and `config` disagreeing about what a file
+says, which is the shape of bug nobody looks for. A one-field format
+would be twenty lines of parser to save a reader one unfamiliar
+character.
+
+The path is Unix's because that is where a person will look.

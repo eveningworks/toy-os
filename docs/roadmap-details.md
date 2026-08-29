@@ -2580,13 +2580,23 @@ Listed with the honest reason each is or isn't attractive.
 
 - [x] ~~ICMP echo + a `ping` command~~ -- `/bin/ping` and `/bin/ifconfig`. The proof is `tools/net_test.py`, whose oracles are both on the HOST: SLIRP answers the echoes and shares no code with the guest, and every frame is dumped to a pcap and decoded with the IPv4 and ICMP checksums recomputed there.
 
-- [ ] **UDP** -- the next layer, and the one both remaining protocols need: DHCP is UDP and so is DNS. A datagram socket already exists; what it needs is a second protocol behind `net_sock_open()` and a port demux, which the ICMP identifier stands in for today.
+- [x] ~~**UDP**~~ -- ports, the pseudo-header checksum, an ephemeral range for unbound senders, and ICMP port unreachable for a datagram nobody wanted. The checksum is the part worth knowing about: it covers a 12-byte pseudo-header that appears in no packet, so a stack that omits it agrees with itself perfectly and is rejected by everything else -- which is why `tools/net_test.py` recomputes it on the host rather than trusting a round trip.
 
-- [ ] TCP -- the socket syscalls carry ICMP now, so the ABI is settled. What a stream socket needs beyond the state machine is a BLOCKING receive, which is its own item below.
+- [x] ~~DHCP client~~ -- `/bin/dhcp`, a ring-3 program: DISCOVER/OFFER/REQUEST/ACK, applied through `SYS_NET_CONFIG` (the same call `ifconfig` uses, so it holds no privilege a person does not). It needed two things from the layers below: a socket bound to a DEVICE rather than just a port (Linux's `SO_BINDTODEVICE`, because the client broadcasts before any card has an address), and a broadcast path that works from an unaddressed device with 0.0.0.0 as its source. **The proof is a guest booted on 192.168.76.0/24** -- on QEMU's default network a working client and the hardcoded 10.0.2.15 are indistinguishable.
 
-- [ ] DHCP client -- until this exists, `net_autoconfig()` gives the first device QEMU's user-networking addresses (10.0.2.15/24 via 10.0.2.2) and says so in the boot log. That is a placeholder with a real cost: it is wrong on any machine that is not QEMU, and `ifconfig` is the only way to correct it.
+- [x] ~~DNS resolver~~ -- `userland/lib/uresolv.c`, shared by `/bin/host` and `/bin/ping`, with the server read from `/etc/resolv.conf` (Unix's path, this repo's `key=value`). The parser is the interesting half: a DNS name can end in a POINTER to an earlier offset, which lets a reply point a name at itself, so every walk carries a jump budget; and every answer is examined rather than the first, because a CNAME answers with the alias record *and* the address record.
 
-- [ ] A blocking receive -- `SYS_RECVFROM` returns 0 for "nothing yet" and every caller polls with `SYS_SLEEP`. The scheduler has wait channels (an address), so the missing half is the WAKEUP: the receive path runs from `scheduler_idle()`, so a process blocked on a socket must not be the thing stopping the idle loop from running. That is a real question about where `net_poll()` belongs, deferred rather than guessed at.
+- [ ] **A blocking receive** -- `SYS_RECVFROM` returns 0 for "nothing yet" and every caller polls with `SYS_SLEEP`. The scheduler has wait channels (an address), so the missing half is the WAKEUP: the receive path runs from `scheduler_idle()`, so a process blocked on a socket must not be the thing stopping the idle loop from running. That is a real question about where `net_poll()` belongs, deferred rather than guessed at. **Two other items wait on it**: TCP, and an ICMP error reaching the socket that caused it.
+
+- [ ] TCP -- the socket syscalls carry two datagram protocols now, so the ABI is settled. What a stream socket needs beyond the state machine is the blocking receive above.
+
+- [ ] Run `dhcp` at boot -- the obvious next step, and it is blocked on a measured bug rather than on effort: a filesystem write during the desktop's STARTUP wedges the compositor (`docs/bugs.md`, 3 runs in 3), and `/bin/dhcp` writes `/etc/resolv.conf`. Until that is understood, the kernel's boot-time defaults stay and the client is something you run.
+
+- [ ] Renew the lease -- `/bin/dhcp` asks once and exits. A lease that expires under a long-running machine leaves it using an address the server has since given away. Renewal at T1 needs a daemon, and a daemon needs a reason to exist beyond one timer.
+
+- [ ] An ICMP error reaching the socket that caused it -- reports are SENT (`icmp_send_port_unreachable`), and one that arrives is dropped, because a socket has nowhere to put an asynchronous failure. An error queue is the same missing machinery the blocking receive needs, so the two arrive together or not at all.
+
+- [ ] `/etc/hosts`, and a resolver cache -- every lookup goes to the wire, every time. Honest at this scale, and the first thing to revisit if anything ever resolves in a loop.
 
 - [ ] An `arp` command -- `arp_cache_at()` exists for the KTESTs and nothing exposes it to ring 3, so a resolution failure is diagnosable only by inference from `ifconfig`'s counters.
 

@@ -517,16 +517,27 @@ int sys_socket(int domain, int type, int protocol) {
                              (uint64_t)(int64_t)type, (uint64_t)(int64_t)protocol));
 }
 
-int64_t sys_sendto(int fd, const void *buf, size_t len, uint32_t dst_ip) {
-    struct net_msg m = { .buf = (uint64_t)(uintptr_t)buf, .len = (uint32_t)len, .addr = dst_ip };
+int64_t sys_sendto(int fd, const void *buf, size_t len, uint32_t dst_ip, uint16_t dst_port) {
+    struct net_msg m = { .buf = (uint64_t)(uintptr_t)buf, .len = (uint32_t)len,
+                         .addr = dst_ip, .port = dst_port, .pad = 0, .dev = {0} };
     return err(syscall2(SYS_SENDTO, (uint64_t)fd, (uint64_t)(uintptr_t)&m));
 }
 
-int64_t sys_recvfrom(int fd, void *buf, size_t cap, uint32_t *out_src) {
-    struct net_msg m = { .buf = (uint64_t)(uintptr_t)buf, .len = (uint32_t)cap, .addr = 0 };
+int64_t sys_recvfrom(int fd, void *buf, size_t cap, uint32_t *out_src, uint16_t *out_port) {
+    struct net_msg m = { .buf = (uint64_t)(uintptr_t)buf, .len = (uint32_t)cap,
+                         .addr = 0, .port = 0, .pad = 0, .dev = {0} };
     int64_t rc = err(syscall2(SYS_RECVFROM, (uint64_t)fd, (uint64_t)(uintptr_t)&m));
-    if (rc > 0 && out_src) *out_src = m.addr;
+    if (rc > 0) {
+        if (out_src) *out_src = m.addr;
+        if (out_port) *out_port = m.port;
+    }
     return rc;
+}
+
+int sys_bind(int fd, uint32_t addr, uint16_t port, const char *dev) {
+    struct net_msg m = { .buf = 0, .len = 0, .addr = addr, .port = port, .pad = 0, .dev = {0} };
+    for (unsigned i = 0; dev && dev[i] && i < sizeof m.dev - 1; i++) m.dev[i] = dev[i];
+    return (int)err(syscall2(SYS_BIND, (uint64_t)fd, (uint64_t)(uintptr_t)&m));
 }
 
 int sys_net_config(const char *dev, uint32_t ip, uint32_t netmask, uint32_t gateway) {

@@ -25,6 +25,54 @@
 // 1 KiB and these are close enough to it to be worth not testing.
 static uint8_t g_frame[NET_FRAME_MAX];
 
+// WHAT WAS SENT, not merely that something was. The transmit op is a
+// function pointer, so a test can borrow it, run one frame in, and read
+// the bytes the stack built -- which is the difference between a real
+// assertion and one an unrelated ARP request can satisfy. It could, and
+// did: "an echo request is answered" passed for a while on the ARP
+// request the reply was waiting for, and never checked the reply at all.
+static uint8_t g_sent[NET_FRAME_MAX];
+static uint32_t g_sent_len;
+static int g_sent_count;
+static int (*g_real_transmit)(struct net_device *, const void *, uint32_t);
+
+static int capture_transmit(struct net_device *dev, const void *frame, uint32_t len) {
+    (void)dev;
+    if (len > sizeof g_sent) len = sizeof g_sent;
+    k_memcpy(g_sent, frame, len);
+    g_sent_len = len;
+    g_sent_count++;
+    return 0;   // never touches the hardware
+}
+
+static void capture_begin(struct net_device *dev) {
+    g_real_transmit = dev->transmit;
+    dev->transmit = capture_transmit;
+    g_sent_len = 0;
+    g_sent_count = 0;
+}
+
+// ALWAYS restore, on every exit from a test -- a KTEST_ASSERT returns
+// early, so a test that captures must not assert before restoring or
+// the device is left pointing at this file for the rest of the boot.
+static void capture_end(struct net_device *dev) {
+    if (g_real_transmit) dev->transmit = g_real_transmit;
+    g_real_transmit = 0;
+}
+
+// The captured frame's ethertype, and a pointer past the IP header.
+static uint16_t sent_ethertype(void) {
+    return g_sent_len >= ETH_HDR_LEN ? net_ntohs(*(const uint16_t *)(g_sent + 12)) : 0;
+}
+static uint8_t sent_ip_proto(void) {
+    return g_sent_len >= ETH_HDR_LEN + 20 ? g_sent[ETH_HDR_LEN + 9] : 0;
+}
+static const uint8_t *sent_transport(void) {
+    if (g_sent_len < ETH_HDR_LEN + 20) return 0;
+    uint32_t ihl = (uint32_t)(g_sent[ETH_HDR_LEN] & 0x0F) * 4;
+    return g_sent_len >= ETH_HDR_LEN + ihl ? g_sent + ETH_HDR_LEN + ihl : 0;
+}
+
 static struct net_device *addressed_device(void) {
     for (int i = 0; i < net_device_count(); i++) {
         struct net_device *d = net_device_at(i);
@@ -43,7 +91,16 @@ static uint32_t eth_frame(struct net_device *dev, const uint8_t *dst, uint16_t t
     return ETH_HDR_LEN;
 }
 
-// An ARP request from 10.99.99.99 asking who has `target`.
+// The sender every fixture below uses: ON THIS DEVICE'S OWN SUBNET.
+// An off-subnet sender routes replies via the gateway, so what the test
+// would observe is an ARP request for the gateway rather than the reply
+// it meant to check -- which is exactly how the echo test came to pass
+// without ever exercising an echo reply.
+static uint32_t peer_ip(struct net_device *dev) {
+    return (dev->ip & dev->netmask) | 99;
+}
+
+// An ARP request from that peer asking who has `target`.
 static uint32_t arp_request(struct net_device *dev, uint32_t target, const uint8_t *dst) {
     uint32_t n = eth_frame(dev, dst, ETH_TYPE_ARP);
     uint8_t *p = g_frame + n;
@@ -52,7 +109,7 @@ static uint32_t arp_request(struct net_device *dev, uint32_t target, const uint8
     p[4] = NET_MAC_LEN; p[5] = 4;
     p[6] = 0; p[7] = 1;                     // request
     k_memcpy(p + 8, g_frame + 6, NET_MAC_LEN);
-    uint32_t sender_ip = NET_IPV4(10, 99, 99, 99);
+    uint32_t sender_ip = peer_ip(dev);
     p[14] = (uint8_t)(sender_ip >> 24); p[15] = (uint8_t)(sender_ip >> 16);
     p[16] = (uint8_t)(sender_ip >> 8);  p[17] = (uint8_t)sender_ip;
     k_memset(p + 18, 0, NET_MAC_LEN);
@@ -77,7 +134,7 @@ static uint32_t icmp_echo(struct net_device *dev, uint32_t dst_ip,
     ip[6] = (uint8_t)(frag >> 8); ip[7] = (uint8_t)frag;
     ip[8] = 64;
     ip[9] = IP_PROTO_ICMP;
-    uint32_t src = NET_IPV4(10, 99, 99, 99);
+    uint32_t src = peer_ip(dev);
     ip[12] = (uint8_t)(src >> 24); ip[13] = (uint8_t)(src >> 16);
     ip[14] = (uint8_t)(src >> 8);  ip[15] = (uint8_t)src;
     ip[16] = (uint8_t)(dst_ip >> 24); ip[17] = (uint8_t)(dst_ip >> 16);
@@ -96,6 +153,56 @@ static uint32_t icmp_echo(struct net_device *dev, uint32_t dst_ip,
     icmp[2] = (uint8_t)(csum >> 8); icmp[3] = (uint8_t)csum;
 
     return n + 20 + icmp_len;
+}
+
+
+// An IPv4 + UDP datagram to `dst_ip`:`dport`. `corrupt` breaks the UDP
+// checksum and `zero_sum` writes the "not computed" value, so one
+// builder serves the accept case and both of its negatives.
+static uint32_t udp_frame(struct net_device *dev, uint32_t dst_ip, uint16_t dport,
+                          int corrupt, int zero_sum, const uint8_t *dst_mac) {
+    uint32_t n = eth_frame(dev, dst_mac, ETH_TYPE_IPV4);
+    uint8_t *ip = g_frame + n;
+    const uint32_t payload = 8;
+    const uint32_t udp_len = 8 + payload;
+    uint32_t src = peer_ip(dev);
+
+    k_memset(ip, 0, 20);
+    ip[0] = 0x45;
+    ip[2] = (uint8_t)((20 + udp_len) >> 8); ip[3] = (uint8_t)(20 + udp_len);
+    ip[8] = 64;
+    ip[9] = IP_PROTO_UDP;
+    ip[12] = (uint8_t)(src >> 24); ip[13] = (uint8_t)(src >> 16);
+    ip[14] = (uint8_t)(src >> 8);  ip[15] = (uint8_t)src;
+    ip[16] = (uint8_t)(dst_ip >> 24); ip[17] = (uint8_t)(dst_ip >> 16);
+    ip[18] = (uint8_t)(dst_ip >> 8);  ip[19] = (uint8_t)dst_ip;
+    uint16_t sum = net_checksum(ip, 20);
+    ip[10] = (uint8_t)(sum >> 8); ip[11] = (uint8_t)sum;
+
+    uint8_t *udp = ip + 20;
+    udp[0] = 0xC0; udp[1] = 0x00;                                 // source port 49152
+    udp[2] = (uint8_t)(dport >> 8); udp[3] = (uint8_t)dport;
+    udp[4] = (uint8_t)(udp_len >> 8); udp[5] = (uint8_t)udp_len;
+    udp[6] = udp[7] = 0;
+    for (uint32_t i = 0; i < payload; i++) udp[8 + i] = (uint8_t)(0xA0 + i);
+
+    if (!zero_sum) {
+        // The pseudo-header the checksum covers and the wire does not.
+        uint8_t pseudo[12];
+        pseudo[0] = (uint8_t)(src >> 24); pseudo[1] = (uint8_t)(src >> 16);
+        pseudo[2] = (uint8_t)(src >> 8);  pseudo[3] = (uint8_t)src;
+        pseudo[4] = (uint8_t)(dst_ip >> 24); pseudo[5] = (uint8_t)(dst_ip >> 16);
+        pseudo[6] = (uint8_t)(dst_ip >> 8);  pseudo[7] = (uint8_t)dst_ip;
+        pseudo[8] = 0;
+        pseudo[9] = IP_PROTO_UDP;
+        pseudo[10] = (uint8_t)(udp_len >> 8);
+        pseudo[11] = (uint8_t)udp_len;
+        uint16_t c = net_checksum_two(pseudo, sizeof pseudo, udp, udp_len);
+        if (!c) c = 0xFFFF;
+        udp[6] = (uint8_t)(c >> 8); udp[7] = (uint8_t)c;
+        if (corrupt) udp[7] ^= 0xFF;
+    }
+    return n + 20 + udp_len;
 }
 
 KTEST("net", "a correct header sums to zero and a corrupted one does not") {
@@ -126,17 +233,28 @@ KTEST("net", "an ARP request for our address is answered, and one for another is
     struct net_device *dev = addressed_device();
     if (!dev) KTEST_SKIP("no network device with an address");
 
-    uint64_t before = dev->tx_packets;
+    capture_begin(dev);
     uint32_t len = arp_request(dev, dev->ip, 0);
     eth_input(dev, g_frame, len);
-    KTEST_ASSERT_EQ(dev->tx_packets, before + 1);
+    int answered = g_sent_count;
+    uint16_t type = sent_ethertype();
+    // ARP opcode 2 is a REPLY. A stack that sent a second REQUEST here
+    // would move the same counter.
+    uint16_t op = g_sent_len >= ETH_HDR_LEN + 8
+                  ? net_ntohs(*(const uint16_t *)(g_sent + ETH_HDR_LEN + 6)) : 0;
 
     // The same request for an address that is not ours. A stack that
     // answers this claims somebody else's address on the wire.
-    before = dev->tx_packets;
-    len = arp_request(dev, NET_IPV4(10, 99, 99, 98), 0);
+    g_sent_count = 0;
+    len = arp_request(dev, peer_ip(dev) - 1, 0);
     eth_input(dev, g_frame, len);
-    KTEST_ASSERT_EQ(dev->tx_packets, before);
+    int wrongly_answered = g_sent_count;
+    capture_end(dev);
+
+    KTEST_ASSERT_EQ(answered, 1);
+    KTEST_ASSERT_EQ(type, ETH_TYPE_ARP);
+    KTEST_ASSERT_EQ(op, 2);
+    KTEST_ASSERT_EQ(wrongly_answered, 0);
 }
 
 KTEST("net", "a frame addressed to another MAC is ignored") {
@@ -150,7 +268,7 @@ KTEST("net", "a frame addressed to another MAC is ignored") {
     KTEST_ASSERT_EQ(dev->tx_packets, before);
 }
 
-KTEST("net", "an echo request is answered") {
+KTEST("net", "an echo request is answered with an echo REPLY") {
     struct net_device *dev = addressed_device();
     if (!dev) KTEST_SKIP("no network device with an address");
 
@@ -160,10 +278,25 @@ KTEST("net", "an echo request is answered") {
     uint32_t len = arp_request(dev, dev->ip, 0);
     eth_input(dev, g_frame, len);
 
-    uint64_t before = dev->tx_packets;
+    capture_begin(dev);
     len = icmp_echo(dev, dev->ip, 0, 0);
     eth_input(dev, g_frame, len);
-    KTEST_ASSERT_EQ(dev->tx_packets, before + 1);
+    int sent = g_sent_count;
+    uint16_t type = sent_ethertype();
+    uint8_t proto = sent_ip_proto();
+    const uint8_t *icmp = sent_transport();
+    uint8_t icmp_type = icmp ? icmp[0] : 0xFF;
+    uint16_t seq = icmp ? net_ntohs(*(const uint16_t *)(icmp + 6)) : 0;
+    capture_end(dev);
+
+    KTEST_ASSERT_EQ(sent, 1);
+    KTEST_ASSERT_EQ(type, ETH_TYPE_IPV4);
+    KTEST_ASSERT_EQ(proto, IP_PROTO_ICMP);
+    KTEST_ASSERT_EQ(icmp_type, ICMP_ECHO_REPLY);
+    // The sequence must come back UNCHANGED, or a sender cannot match
+    // the reply to what it sent -- and a stack that rebuilt the message
+    // instead of editing it would fail exactly here.
+    KTEST_ASSERT_EQ(seq, 1);
 }
 
 KTEST("net", "a fragment, a bad checksum and somebody else's address are all dropped") {
@@ -173,27 +306,33 @@ KTEST("net", "a fragment, a bad checksum and somebody else's address are all dro
     uint32_t len = arp_request(dev, dev->ip, 0);
     eth_input(dev, g_frame, len);   // same precondition as above
 
+    capture_begin(dev);
     // More-fragments set. Reassembly is deliberately not implemented
     // (kernel/net/ipv4.c), so this must be dropped rather than treated
     // as a whole datagram that happens to parse.
-    uint64_t before = dev->tx_packets;
     len = icmp_echo(dev, dev->ip, 0x2000, 0);
     eth_input(dev, g_frame, len);
-    KTEST_ASSERT_EQ(dev->tx_packets, before);
+    int mf = g_sent_count;
 
     // A non-zero fragment offset, which is the other half of the same
     // rule and would pass a check that only looked at the MF bit.
     len = icmp_echo(dev, dev->ip, 0x0001, 0);
     eth_input(dev, g_frame, len);
-    KTEST_ASSERT_EQ(dev->tx_packets, before);
+    int offset = g_sent_count;
 
     len = icmp_echo(dev, dev->ip, 0, 1);   // corrupted header checksum
     eth_input(dev, g_frame, len);
-    KTEST_ASSERT_EQ(dev->tx_packets, before);
+    int bad_sum = g_sent_count;
 
-    len = icmp_echo(dev, NET_IPV4(10, 99, 99, 98), 0, 0);  // not our address
+    len = icmp_echo(dev, peer_ip(dev) - 1, 0, 0);  // not our address
     eth_input(dev, g_frame, len);
-    KTEST_ASSERT_EQ(dev->tx_packets, before);
+    int not_ours = g_sent_count;
+    capture_end(dev);
+
+    KTEST_ASSERT_EQ(mf, 0);
+    KTEST_ASSERT_EQ(offset, 0);
+    KTEST_ASSERT_EQ(bad_sum, 0);
+    KTEST_ASSERT_EQ(not_ours, 0);
 }
 
 KTEST("net", "routing picks an on-link device over a gateway") {
@@ -228,7 +367,139 @@ KTEST("net", "a socket refuses everything but the one supported protocol") {
     KTEST_ASSERT(s >= 0);
     // An idle socket reports nothing rather than an error, which is
     // what every caller polls on.
-    KTEST_ASSERT_EQ(net_sock_recvfrom(s, g_frame, sizeof g_frame, 0), 0);
+    KTEST_ASSERT_EQ(net_sock_recvfrom(s, g_frame, sizeof g_frame, 0, 0), 0);
     net_sock_close(s);
-    KTEST_ASSERT(net_sock_recvfrom(s, g_frame, sizeof g_frame, 0) < 0);  // closed
+    KTEST_ASSERT(net_sock_recvfrom(s, g_frame, sizeof g_frame, 0, 0) < 0);  // closed
+}
+
+
+KTEST("net", "a UDP datagram reaches the socket bound to its port") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+
+    int sock = net_sock_open(NET_AF_INET, NET_SOCK_DGRAM, IP_PROTO_UDP);
+    KTEST_ASSERT(sock >= 0);
+    KTEST_ASSERT_EQ(net_sock_bind(sock, 0, 7777, 0), 7777);
+
+    capture_begin(dev);
+    uint32_t len = udp_frame(dev, dev->ip, 7777, 0, 0, 0);
+    eth_input(dev, g_frame, len);
+    int sent = g_sent_count;
+    capture_end(dev);
+
+    uint8_t buf[32];
+    uint32_t src = 0;
+    uint16_t port = 0;
+    int got = net_sock_recvfrom(sock, buf, sizeof buf, &src, &port);
+    KTEST_ASSERT_EQ(got, 8);
+    KTEST_ASSERT_EQ(src, peer_ip(dev));
+    KTEST_ASSERT_EQ(port, 49152);          // the source port the frame carried
+    KTEST_ASSERT_EQ(buf[0], 0xA0);
+    // A delivered datagram is answered by the SOCKET, so nothing is
+    // transmitted -- an unreachable report here would mean the demux
+    // ran and the delivery did not.
+    KTEST_ASSERT_EQ(sent, 0);
+
+    net_sock_close(sock);
+}
+
+KTEST("net", "a datagram for an unbound port is answered with ICMP, and a corrupt one is not") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+
+    // The sender must be resolvable or the report is deferred behind an
+    // ARP nothing here will answer -- a precondition, not an assumption.
+    uint32_t len = arp_request(dev, dev->ip, 0);
+    eth_input(dev, g_frame, len);
+
+    capture_begin(dev);
+    len = udp_frame(dev, dev->ip, 7778, 0, 0, 0);   // nothing bound to 7778
+    eth_input(dev, g_frame, len);
+    int sent = g_sent_count;
+    uint8_t proto = sent_ip_proto();
+    const uint8_t *icmp = sent_transport();
+    uint8_t itype = icmp ? icmp[0] : 0xFF;
+    uint8_t icode = icmp ? icmp[1] : 0xFF;
+    // The report must QUOTE the datagram it is about: the offending IP
+    // header, then its first 8 bytes -- which for UDP is the whole
+    // header, and is what lets the sender match the report to a socket.
+    uint16_t quoted_dport = icmp ? net_ntohs(*(const uint16_t *)(icmp + 8 + 20 + 2)) : 0;
+
+    // A CORRUPT datagram names a port that cannot be trusted, so it is
+    // dropped rather than reported -- otherwise a flipped bit turns
+    // into a report sent about a port nobody asked for.
+    g_sent_count = 0;
+    len = udp_frame(dev, dev->ip, 7778, 1, 0, 0);
+    eth_input(dev, g_frame, len);
+    int after_corrupt = g_sent_count;
+
+    // A BROADCAST is never answered either: every host on the segment
+    // would reply to a datagram addressed to all of them.
+    g_sent_count = 0;
+    len = udp_frame(dev, IP_BROADCAST, 7778, 0, 0, ETH_BROADCAST);
+    eth_input(dev, g_frame, len);
+    int after_broadcast = g_sent_count;
+    capture_end(dev);
+
+    KTEST_ASSERT_EQ(sent, 1);
+    KTEST_ASSERT_EQ(proto, IP_PROTO_ICMP);
+    KTEST_ASSERT_EQ(itype, 3);              // destination unreachable
+    KTEST_ASSERT_EQ(icode, 3);              // port
+    KTEST_ASSERT_EQ(quoted_dport, 7778);
+    KTEST_ASSERT_EQ(after_corrupt, 0);
+    KTEST_ASSERT_EQ(after_broadcast, 0);
+}
+
+KTEST("net", "a zero UDP checksum means not computed, and is accepted") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+
+    int sock = net_sock_open(NET_AF_INET, NET_SOCK_DGRAM, IP_PROTO_UDP);
+    KTEST_ASSERT(sock >= 0);
+    KTEST_ASSERT_EQ(net_sock_bind(sock, 0, 7779, 0), 7779);
+
+    uint32_t len = udp_frame(dev, dev->ip, 7779, 0, 1, 0);
+    eth_input(dev, g_frame, len);
+    KTEST_ASSERT_EQ(net_sock_recvfrom(sock, g_frame, sizeof g_frame, 0, 0), 8);
+
+    net_sock_close(sock);
+}
+
+KTEST("net", "binding: a named port, a taken one, and the ephemeral range") {
+    int a = net_sock_open(NET_AF_INET, NET_SOCK_DGRAM, IP_PROTO_UDP);
+    int b = net_sock_open(NET_AF_INET, NET_SOCK_DGRAM, IP_PROTO_UDP);
+    KTEST_ASSERT(a >= 0 && b >= 0);
+
+    KTEST_ASSERT_EQ(net_sock_bind(a, 0, 7780, 0), 7780);
+    KTEST_ASSERT(net_sock_bind(b, 0, 7780, 0) < 0);          // taken
+
+    int eph = net_sock_bind(b, 0, 0, 0);
+    KTEST_ASSERT(eph >= NET_PORT_EPHEMERAL_LO && eph <= NET_PORT_EPHEMERAL_HI);
+    KTEST_ASSERT(eph != 7780);
+
+    KTEST_ASSERT(net_sock_bind(b, 0, 0, "net99") < 0);       // no such device
+
+    // An ICMP socket has no port to bind: its key is the identifier the
+    // kernel assigned. Refusing beats accepting and ignoring, which
+    // would leave a caller believing it had reserved something.
+    int icmp = net_sock_open(NET_AF_INET, NET_SOCK_DGRAM, IP_PROTO_ICMP);
+    KTEST_ASSERT(net_sock_bind(icmp, 0, 7781, 0) < 0);
+
+    net_sock_close(a);
+    net_sock_close(b);
+    net_sock_close(icmp);
+}
+
+KTEST("net", "a closed socket releases its port") {
+    // The leak this guards was real and presented far from its cause:
+    // sockets were never returned to the table on close, so the THIRD
+    // run of a program opening four of them could not open any, and the
+    // symptom was socket() failing rather than anything about closing.
+    int a = net_sock_open(NET_AF_INET, NET_SOCK_DGRAM, IP_PROTO_UDP);
+    KTEST_ASSERT_EQ(net_sock_bind(a, 0, 7782, 0), 7782);
+    net_sock_close(a);
+
+    int b = net_sock_open(NET_AF_INET, NET_SOCK_DGRAM, IP_PROTO_UDP);
+    KTEST_ASSERT_EQ(net_sock_bind(b, 0, 7782, 0), 7782);
+    net_sock_close(b);
 }

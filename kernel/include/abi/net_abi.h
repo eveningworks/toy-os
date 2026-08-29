@@ -16,13 +16,22 @@
 #define NET_ABI_AF_INET      2
 #define NET_ABI_SOCK_DGRAM   2
 #define NET_ABI_IPPROTO_ICMP 1
+#define NET_ABI_IPPROTO_UDP  17
 
 #define NET_ABI_NAME_MAX 8   // "net0" -- matches NET_NAME_MAX
 
 // The largest datagram either direction. One IPv4 datagram inside a
-// 1500-byte MTU, minus the IP and ICMP headers -- a bigger one would
-// need fragmentation, which kernel/net/ipv4.c does not do.
+// 1500-byte MTU, minus the IP and transport headers -- a bigger one
+// would need fragmentation, which kernel/net/ipv4.c does not do. Both
+// transports have an 8-byte header, so one number serves both.
 #define SYS_NET_MSG_MAX 1472
+
+// Ephemeral ports -- what SYS_BIND allocates when asked for port 0.
+// IANA's range; Linux uses 32768-60999 and nothing here wants the
+// wider one. In the ABI because a caller can SEE the number it was
+// given, so it is part of the contract rather than an internal choice.
+#define NET_PORT_EPHEMERAL_LO 49152
+#define NET_PORT_EPHEMERAL_HI 65535
 
 // SYS_SENDTO and SYS_RECVFROM both take one of these by pointer.
 //
@@ -32,9 +41,20 @@
 // address and the buffer in one object, so a receive reports WHO sent
 // the datagram without a second out-parameter.
 struct net_msg {
-    uint64_t buf;   // the payload (ICMP's header is the kernel's)
+    uint64_t buf;   // the payload (the transport header is the kernel's)
     uint32_t len;   // in: bytes to send, or the buffer's capacity
     uint32_t addr;  // in: the destination. out: the sender.
+    uint16_t port;  // UDP: in the destination port, out the sender's.
+                    // Ignored for ICMP, whose demux key is an
+                    // identifier the kernel owns.
+    uint16_t pad;   // explicit, so the struct's size is not a
+                    // compiler's opinion about alignment
+    // SYS_BIND ONLY, and empty means "any device". Binding a socket to
+    // one card is Linux's SO_BINDTODEVICE, and it is here for the
+    // reason dhclient uses it: a DHCP client must broadcast from
+    // 0.0.0.0 out of a NAMED interface, before any interface has an
+    // address to route by.
+    char dev[NET_ABI_NAME_MAX];
 };
 
 // SYS_NET_CONFIG's argument. A zero field is LEFT ALONE rather than
