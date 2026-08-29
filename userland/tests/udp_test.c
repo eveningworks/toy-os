@@ -15,6 +15,13 @@
 #include <string.h>
 #include <stdlib.h>
 
+// A SPAWNED test reports through a file, not stdout: a spawned
+// process's console output arrives while the harness is between
+// commands, where it is dropped (tools/usertest_run.py). It is spawned
+// rather than `run` because two of its checks are about BLOCKING, and
+// the legacy loader has no scheduler slot to block on.
+#define VERDICT_PATH "/tmp/udp_test.out"
+
 #define REPLY_WAIT_MS 3000
 #define POLL_MS       10
 
@@ -78,20 +85,55 @@ static int local_checks(void) {
 
     check(sys_sendto(fd, "x", 1, 0x0A000202u, 0) < 0, "a send with no destination port fails");
 
+    // A BOUNDED wait on a socket nothing will ever send to: it must
+    // come back 0 after the timeout rather than -EAGAIN (a datagram
+    // socket has no end-of-stream for a zero to be confused with) and
+    // rather than never.
     uint32_t src = 0;
     uint16_t sport = 0;
-    check(sys_recvfrom(fd, 0, 0, &src, &sport) == 0,
-          "an idle socket reports nothing rather than an error");
+    uint64_t before = sys_monotonic_ns();
+    check(sys_recvfrom(fd, 0, 0, &src, &sport, 60) == 0,
+          "a timed receive with nothing to receive returns 0");
+    uint64_t waited_ms = (sys_monotonic_ns() - before) / 1000000ull;
+    // It must actually WAIT. A kernel that returned 0 immediately would
+    // pass the check above and turn every client's timeout into a spin.
+    check(waited_ms >= 40, "and it really waited for the timeout");
+
+    check(sys_set_nonblock(fd, 1) == 0, "a socket can be made non-blocking");
+    check(sys_recvfrom(fd, 0, 0, &src, &sport, 0) == 0,
+          "a non-blocking receive returns 0 without waiting");
 
     sys_close(fd);
-    check(sys_recvfrom(fd, 0, 0, &src, &sport) < 0, "a closed socket is a bad fd");
+    check(sys_recvfrom(fd, 0, 0, &src, &sport, 10) < 0, "a closed socket is a bad fd");
+
+    // A DESCRIPTION MUST NOT INHERIT THE LAST ONE'S FLAGS. The fd table
+    // is a pool, and `nonblock` used to survive a close: a program that
+    // had set it handed the flag to the NEXT program's socket, whose
+    // blocking receive then returned 0 at once and lost every reply.
+    // It reproduced only after something unrelated had run, which is
+    // why the check is here rather than left to be noticed.
+    int fresh = sys_socket(NET_ABI_AF_INET, NET_ABI_SOCK_DGRAM, NET_ABI_IPPROTO_UDP);
+    uint64_t t0 = sys_monotonic_ns();
+    sys_recvfrom(fresh, 0, 0, &src, &sport, 60);
+    check((sys_monotonic_ns() - t0) / 1000000ull >= 40,
+          "a reused descriptor does not inherit a non-blocking flag");
+    sys_close(fresh);
+
     return failures ? 1 : 0;
 }
 
 int main(int argc, char **argv) {
     if (argc < 4) {
         int rc = local_checks();
-        printf("udp_test: %d checks, %d failed\n", checks, failures);
+        char verdict[80];
+        snprintf(verdict, sizeof verdict, "udp_test: %d checks, %d failed\n",
+                 checks, failures);
+        printf("%s", verdict);
+        int fd = sys_open(VERDICT_PATH, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
+        if (fd >= 0) {
+            sys_write(fd, verdict, strlen(verdict));
+            sys_close(fd);
+        }
         return rc;
     }
 
@@ -119,19 +161,16 @@ int main(int argc, char **argv) {
     printf("udp_test: sent %lld bytes to %s:%d\n", (long long)rc, argv[1], port);
 
     char buf[512];
-    for (int waited = 0; waited < REPLY_WAIT_MS; waited += POLL_MS) {
-        uint32_t src = 0;
-        uint16_t sport = 0;
-        int64_t n = sys_recvfrom(fd, buf, sizeof buf - 1, &src, &sport);
-        if (n > 0) {
-            buf[n] = 0;
-            printf("udp_test: got %lld bytes from %u.%u.%u.%u:%u: %s\n",
-                   (long long)n, (src >> 24) & 0xFF, (src >> 16) & 0xFF,
-                   (src >> 8) & 0xFF, src & 0xFF, sport, buf);
-            sys_close(fd);
-            return 0;
-        }
-        sys_sleep_ms(POLL_MS);
+    uint32_t src = 0;
+    uint16_t sport = 0;
+    int64_t n = sys_recvfrom(fd, buf, sizeof buf - 1, &src, &sport, REPLY_WAIT_MS);
+    if (n > 0) {
+        buf[n] = 0;
+        printf("udp_test: got %lld bytes from %u.%u.%u.%u:%u: %s\n",
+               (long long)n, (src >> 24) & 0xFF, (src >> 16) & 0xFF,
+               (src >> 8) & 0xFF, src & 0xFF, sport, buf);
+        sys_close(fd);
+        return 0;
     }
     printf("udp_test: no reply\n");
     sys_close(fd);

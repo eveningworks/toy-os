@@ -126,22 +126,27 @@ int uresolv_lookup(const char *name, uint32_t server, uint32_t *out_ip) {
     }
     if (rc < 0) { sys_close(fd); return -EAGAIN; }
 
+    // Blocking, on what is LEFT of the budget each time round: a reply
+    // that is not ours must not extend the deadline.
     uint32_t len = 0;
-    for (int waited = 0; waited < WAIT_MS; waited += POLL_MS) {
+    uint64_t deadline = sys_monotonic_ns() + (uint64_t)WAIT_MS * 1000000ull;
+    for (;;) {
+        uint64_t now = sys_monotonic_ns();
+        if (now >= deadline) break;
+        unsigned left = (unsigned)((deadline - now) / 1000000ull);
+
         uint32_t src = 0;
         uint16_t port = 0;
-        int64_t got = sys_recvfrom(fd, reply, sizeof reply, &src, &port);
-        if (got > 0) {
-            // Ours, and from the server we asked. A reply carrying
-            // somebody else's id is not an error, it is somebody else's.
-            if (got >= 12 && reply[0] == (uint8_t)(id >> 8) &&
-                reply[1] == (uint8_t)id && src == server) {
-                len = (uint32_t)got;
-                break;
-            }
-            continue;
+        int64_t got = sys_recvfrom(fd, reply, sizeof reply, &src, &port, left ? left : 1);
+        if (got <= 0) break;
+
+        // Ours, and from the server we asked. A reply carrying somebody
+        // else's id is not an error, it is somebody else's.
+        if (got >= 12 && reply[0] == (uint8_t)(id >> 8) &&
+            reply[1] == (uint8_t)id && src == server) {
+            len = (uint32_t)got;
+            break;
         }
-        sys_sleep_ms(POLL_MS);
     }
     sys_close(fd);
     if (!len) return -EAGAIN;

@@ -94,6 +94,16 @@ void net_rx(struct net_device *dev, const void *frame, uint32_t len);
 // in one place. Drivers do NOT call each other's transmit op.
 int net_tx(struct net_device *dev, const void *frame, uint32_t len);
 
+// THE CHANNEL A BLOCKED READER PARKS ON, and there is exactly one for
+// the whole stack rather than one per socket. The waker is net_rx(),
+// which runs in a driver's INTERRUPT and has not parsed anything -- it
+// cannot know which socket the frame is for, so it wakes everybody and
+// each woken reader runs the stack itself and looks again. With eight
+// sockets that costs a spurious wake or two; what it buys is that
+// protocol code still never runs at interrupt time, which is the
+// property this whole receive path is built around.
+const void *net_wait_chan(void);
+
 // Run the stack over everything net_rx() has queued, and poll any
 // device that has no interrupt. Called from scheduler_idle() and from
 // the socket syscalls -- anywhere EXCEPT an interrupt handler.

@@ -473,6 +473,11 @@ const void *scheduler_wait_chan_pid(int pid);
 #define SCHED_WAIT_TIMER 4 // a deadline this process asked to sleep until
 #define SCHED_WAIT_KEY   5 // a keystroke on a terminal this process reads
 #define SCHED_WAIT_THREAD 7 // a thread of this process, being joined
+#define SCHED_WAIT_NET   8 // a datagram on a socket this process reads.
+                           // ONE channel for the whole stack, not one
+                           // per socket: the waker is a driver's
+                           // interrupt, which has parsed nothing and
+                           // cannot know whose frame it is.
 #define SCHED_WAIT_TTY   6 // room in, or bytes out of, a terminal's
                            // OUTPUT side -- a pty master waiting for its
                            // shell to print, or a shell waiting for a
@@ -849,6 +854,22 @@ int scheduler_reparent(int pid, int new_ppid);
 int scheduler_max_procs(void);
 
 int scheduler_block_current(uint64_t *regs, const void *chan, int reason);
+
+// The same, BOUNDED: released by scheduler_wake() naming `chan`, or by
+// the timer once `wake_at_ns` passes, whichever happens first. A
+// deadline of 0 means no deadline and is exactly scheduler_block_current().
+//
+// A timed-out waiter is handed SYS_RETRY rather than a result, because
+// only its handler knows whether an empty queue at the deadline is a
+// timeout or a spurious wake -- so the call re-runs and decides. (A
+// SYS_SLEEP sleeper still gets 0: it asked for exactly this.)
+//
+// Linux's schedule_timeout() is the same primitive. It exists here
+// because a blocking receive on a datagram that may never arrive is a
+// hang without it, and "sleep for a while" was the only timed wait the
+// kernel had.
+int scheduler_block_current_until(uint64_t *regs, const void *chan, int reason,
+                                  uint64_t wake_at_ns);
 
 // Wakes every process blocked on `chan`, handing each `value` as its
 // blocking syscall's return value. Returns the number woken; 0 just

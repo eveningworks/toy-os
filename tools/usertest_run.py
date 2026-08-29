@@ -78,7 +78,15 @@ TESTS = [
     # accept. What it CANNOT cover is a datagram reaching anything --
     # that needs a host at the far end, which is tools/net_test.py's
     # phase 6. Given three arguments it becomes that client instead.
-    ("udp_test", 0,
+    #
+    # SPAWNED (exit code None), because two of its checks are about
+    # BLOCKING: a receive that must really wait out its timeout, and a
+    # reused descriptor that must not have inherited a non-blocking
+    # flag. The legacy `run` loader has no scheduler slot, so it cannot
+    # block at all -- the kernel correctly gives it the non-blocking
+    # answer, and both checks measure nothing there. Same reason
+    # cputime_test is spawned.
+    ("udp_test", None,
      ["0 failed"], ["FAIL"]),
     # Tab completion's engine, built for ring 3. The KTESTs cover the
     # same source through the KERNEL shell's environment and would pass

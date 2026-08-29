@@ -18,6 +18,8 @@
 #include "netdev.h"
 #include "net.h"
 #include "klog.h"
+#include "scheduler.h"   // scheduler_wake() -- interrupt-safe, by contract
+#include "syscall_abi.h" // SYS_RETRY
 #include "kfmt.h"   // klog_printf
 #include "string.h"
 #include "errno.h"
@@ -34,6 +36,11 @@ struct rx_slot {
 };
 
 static struct rx_slot g_rxq[NET_RX_QUEUE];
+
+// The address IS the channel (api/scheduler.h). A byte of its own
+// rather than reusing the queue's, so the channel keeps meaning
+// "something arrived" if the queue is ever replaced.
+static const char g_net_chan;
 static volatile uint32_t g_rx_head;  // consumer
 static volatile uint32_t g_rx_tail;  // producer (interrupt context)
 
@@ -55,6 +62,8 @@ int net_register(struct net_device *dev) {
                 dev->mac[3], dev->mac[4], dev->mac[5], dev->mtu);
     return 1;
 }
+
+const void *net_wait_chan(void) { return &g_net_chan; }
 
 int net_device_count(void) { return g_count; }
 
@@ -92,6 +101,19 @@ void net_rx(struct net_device *dev, const void *frame, uint32_t len) {
 
     dev->rx_packets++;
     dev->rx_bytes += len;
+
+    // WAKE HERE, IN THE INTERRUPT, and do nothing else. A reader parked
+    // on an empty socket has no other way to learn that a frame exists:
+    // net_poll() runs from scheduler_idle(), which is not reached while
+    // anything else is runnable, so without this a receive could sleep
+    // through a packet that had already arrived. The woken process runs
+    // the stack in its OWN context (sys_recvfrom calls net_poll first),
+    // which is what keeps protocol code out of here.
+    //
+    // scheduler_wake() is safe from an interrupt handler by contract --
+    // it only flips state and writes an already-saved trapframe. Nothing
+    // else in this function may grow to be less careful.
+    scheduler_wake(net_wait_chan(), SYS_RETRY);
 }
 
 int net_tx(struct net_device *dev, const void *frame, uint32_t len) {

@@ -27,6 +27,7 @@
 #include "net.h"     // the socket layer behind SYS_SOCKET and friends
 #include "netdev.h"  // net_poll(), and the device SYS_NET_CONFIG names
 #include "net_abi.h" // struct net_msg / struct net_ifconfig
+#include "clocksource.h" // a receive deadline is real time
 #include "string.h"
 #include <stddef.h>
 
@@ -78,6 +79,17 @@ static uint64_t g_console_owner_pml4;
 int fd_desc_alloc(enum fd_kind kind, int aux_idx) {
     for (int i = 0; i < FD_DESC_MAX; i++) {
         if (fd_desc[i].refs) continue;
+
+        // A FRESH DESCRIPTION CARRIES NOTHING FROM THE LAST ONE. These
+        // slots are a pool, and every field left set is inherited by
+        // whatever reuses the slot -- which for `nonblock` meant a
+        // program that had set it on a socket handed the flag to the
+        // next program's socket, so a blocking receive returned 0 at
+        // once and every reply looked lost. It reproduced as `host`
+        // failing only AFTER something unrelated had run, which is the
+        // worst shape a bug can have.
+        k_memset(&fd_desc[i], 0, sizeof fd_desc[i]);
+
         fd_desc[i].refs = 1;
         fd_desc[i].kind = kind;
         if (kind == FD_KIND_PIPE_R || kind == FD_KIND_PIPE_W)
@@ -1130,9 +1142,10 @@ int sys_recvfrom(struct syscall_ctx *c) {
     if (m.len > SYS_NET_MSG_MAX) m.len = SYS_NET_MSG_MAX;
 
     // Run the stack before looking: a reply that arrived while this
-    // process was not scheduled is sitting in the receive queue, and
-    // without this the first recvfrom after a sendto would always
-    // report nothing on an otherwise idle machine.
+    // process was not scheduled is sitting in the receive queue, and a
+    // process woken by net_rx() is here precisely to do this -- the
+    // interrupt only queued a frame and woke everybody, so the parsing
+    // happens HERE, in a process context, and not in the driver's ISR.
     net_poll();
 
     uint8_t *payload = kmalloc(m.len ? m.len : 1);
@@ -1140,6 +1153,47 @@ int sys_recvfrom(struct syscall_ctx *c) {
     uint32_t src = 0;
     uint16_t port = 0;
     int rc = net_sock_recvfrom(sock, payload, m.len, &src, &port);
+
+    if (rc == 0) {
+        struct open_file *f = fd_get(c->pml4, (int)c->a0);
+        if (f && f->nonblock) {
+            kfree(payload);
+            net_sock_set_deadline(sock, 0);
+            c->regs[14] = 0;
+            return 0;
+        }
+
+        // THE DEADLINE IS THE SOCKET'S, NOT THIS FRAME'S. A blocking
+        // syscall here is RE-RUN rather than resumed (SYS_RETRY, and a
+        // signal rewinds it), so a deadline computed from `timeout_ms`
+        // on every entry would restart the clock on every wake and a
+        // repeatedly-woken receive would never time out.
+        uint64_t deadline = net_sock_deadline(sock);
+        uint64_t now = clocksource_now_ns();
+        if (!deadline && m.timeout_ms) {
+            deadline = now + (uint64_t)m.timeout_ms * 1000000ull;
+            net_sock_set_deadline(sock, deadline);
+        }
+
+        if (deadline && now >= deadline) {
+            kfree(payload);
+            net_sock_set_deadline(sock, 0);
+            c->regs[14] = 0;   // waited as asked, and nothing came
+            return 0;
+        }
+
+        kfree(payload);
+        if (scheduler_block_current_until(c->regs, net_wait_chan(),
+                                          SCHED_WAIT_NET, deadline))
+            return 1;   // parked: do NOT write a return value
+
+        // No scheduler slot -- the legacy loader. It cannot block, so
+        // it gets the old non-blocking answer rather than a hang.
+        net_sock_set_deadline(sock, 0);
+        c->regs[14] = 0;
+        return 0;
+    }
+
     if (rc > 0) {
         m.addr = src;
         m.port = port;
@@ -1147,11 +1201,13 @@ int sys_recvfrom(struct syscall_ctx *c) {
         if (vmm_copy_to_user(c->pml4, m.buf, payload, (uint64_t)rc) < 0 ||
             vmm_copy_to_user(c->pml4, c->a1, &m, sizeof m) < 0) {
             kfree(payload);
+            net_sock_set_deadline(sock, 0);
             c->regs[14] = (uint64_t)(int64_t)-EFAULT;
             return 0;
         }
     }
     kfree(payload);
+    net_sock_set_deadline(sock, 0);   // this wait is over, however it ended
     c->regs[14] = (uint64_t)(int64_t)rc;
     return 0;
 }

@@ -1702,6 +1702,45 @@ with the answer).
   examined rather than only the first, because a CNAME answers with the
   alias record *and* the address record -- a parser that reads answer 0
   fails on exactly the names most common on the real internet.
+- **A RECEIVE BLOCKS, AND ONE CHANNEL SERVES THE WHOLE STACK.** A
+  reader parks on `net_wait_chan()`; the waker is `net_rx()`, in a
+  driver's INTERRUPT, which has parsed nothing and cannot know whose
+  frame it is -- so it wakes everybody and each woken reader runs
+  `net_poll()` ITSELF and looks again. That is what keeps protocol code
+  out of interrupt context while still bounding receive latency: the
+  stack otherwise runs only from `scheduler_idle()`, which is not
+  reached while anything else is runnable, so a reader could sleep
+  through a packet that had already arrived.
+- **EVERY BLOCK SETS ITS DEADLINE, INCLUDING THE UNBOUNDED ONES.**
+  `block_common()` writes `wake_at_ns` on every park, 0 for "no
+  deadline". That is not tidiness: slots are RECYCLED, so an inherited
+  deadline in the past makes `scheduler_wake_timers()` release a process
+  the instant it parks, and once that loop stopped filtering on
+  `SCHED_CHAN_TIMER` every blocking wait on the machine became a spin.
+  It presented as the ENTIRE GUI suite failing at once, which is at
+  least an honest symptom -- the same mistake in a rarer path would not
+  have been.
+- **THE DEADLINE LIVES ON THE SOCKET, NOT IN THE HANDLER.** A blocking
+  syscall here is RE-RUN rather than resumed (`SYS_RETRY`, and a signal
+  rewinds it), so a deadline recomputed from `timeout_ms` on each entry
+  would restart the clock on every wake and a busy network would make a
+  bounded wait unbounded. `scheduler_block_current_until()` is the
+  general primitive -- Linux's `schedule_timeout()` -- and
+  `scheduler_wake_timers()` now acts on ANY blocked process with a
+  deadline rather than only on `SCHED_CHAN_TIMER` sleepers.
+- **A TIMED-OUT RECEIVE RETURNS 0, NOT -EAGAIN.** POSIX's `SO_RCVTIMEO`
+  fails with EAGAIN; here a datagram socket has no end-of-stream for a
+  zero to be confused with, and every call site already tests `n > 0`.
+  The timeout is on the CALL rather than the socket because this kernel
+  has no `setsockopt` and adding one for a single option is worse --
+  `recvmmsg(2)` takes a timeout argument for the same reason.
+- **A FRESH fd DESCRIPTION CARRIES NOTHING FROM THE LAST ONE.**
+  `fd_desc_alloc()` zeroes the slot. It did not, and `nonblock` survived
+  a close: a program that set it handed the flag to the NEXT program's
+  socket, whose blocking receive returned 0 at once and lost every
+  reply. It reproduced only AFTER something unrelated had run -- the
+  worst shape a bug can have -- and `/tests/udp_test` now checks the
+  exact sequence.
 - **THE LEASE IS NOT RENEWED AND `dhcp` DOES NOT RUN AT BOOT.** Both are
   real limitations rather than oversights, and the second has a specific
   blocker worth knowing: a filesystem write during the desktop's startup

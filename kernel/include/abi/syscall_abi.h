@@ -436,13 +436,19 @@ struct sys_dirent {
                        // the wire: a RETRY, not a failure. -ENODEV
                        // means no device has an address.
 #define SYS_RECVFROM 83 // RDI = fd, RSI = a `struct net_msg *`: `buf`
-                       // and `len` say where to put it, `addr` is
-                       // written with the SENDER's address. NEVER
-                       // BLOCKS -- returns the byte count, or 0 when
-                       // nothing has arrived, so a caller polls with
-                       // SYS_SLEEP between tries. Blocking needs a
-                       // wait channel per socket, which is a roadmap
-                       // item rather than an oversight.
+                       // and `len` say where to put it, `addr` and
+                       // `port` are written with the SENDER's.
+                       // BLOCKS until a datagram arrives.
+                       // `timeout_ms` is a ceiling (0 waits forever),
+                       // and 0 comes back when it expires -- not
+                       // -EAGAIN, since a datagram socket has no
+                       // end-of-stream a zero could be confused with.
+                       // Returns SYS_RETRY when woken, so the CALLER
+                       // re-runs it (libsys loops); the deadline lives
+                       // on the socket, so a re-run does not restart
+                       // the clock. Interruptible: a signal rewinds
+                       // the call. SYS_SET_NONBLOCK restores the old
+                       // poll-and-return-0 behaviour.
 #define SYS_BIND   85 // RDI = fd, RSI = a `struct net_msg *`: `addr` is
                        // the local address (0 for any), `port` the
                        // local port (0 asks the kernel to pick an

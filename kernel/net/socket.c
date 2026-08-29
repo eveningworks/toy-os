@@ -43,6 +43,7 @@ struct socket {
     uint8_t proto;          // IP_PROTO_ICMP or IP_PROTO_UDP
     uint16_t id;            // ICMP: the echo identifier
     uint16_t seq;           // ICMP: the last sequence actually sent
+    uint64_t deadline_ns;   // a blocked receive's ceiling; 0 = none
     uint32_t local_addr;    // UDP: 0 means any
     uint16_t local_port;    // UDP: 0 means unbound
     char dev[NET_NAME_MAX]; // bound device, empty for any
@@ -212,6 +213,16 @@ int net_sock_recvfrom(int sock, void *buf, uint32_t cap,
     if (out_port) *out_port = m->port;
     s->head = (s->head + 1) % SOCK_QUEUE;
     return (int)n;
+}
+
+uint64_t net_sock_deadline(int sock) {
+    struct socket *s = sock_at(sock);
+    return s ? s->deadline_ns : 0;
+}
+
+void net_sock_set_deadline(int sock, uint64_t ns) {
+    struct socket *s = sock_at(sock);
+    if (s) s->deadline_ns = ns;
 }
 
 int net_sock_deliver(uint8_t proto, uint32_t src_ip, const uint8_t *data, uint32_t len) {

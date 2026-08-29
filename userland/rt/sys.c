@@ -519,14 +519,28 @@ int sys_socket(int domain, int type, int protocol) {
 
 int64_t sys_sendto(int fd, const void *buf, size_t len, uint32_t dst_ip, uint16_t dst_port) {
     struct net_msg m = { .buf = (uint64_t)(uintptr_t)buf, .len = (uint32_t)len,
-                         .addr = dst_ip, .port = dst_port, .pad = 0, .dev = {0} };
+                         .addr = dst_ip, .port = dst_port, .pad = 0,
+                         .timeout_ms = 0, .dev = {0} };
     return err(syscall2(SYS_SENDTO, (uint64_t)fd, (uint64_t)(uintptr_t)&m));
 }
 
-int64_t sys_recvfrom(int fd, void *buf, size_t cap, uint32_t *out_src, uint16_t *out_port) {
+int64_t sys_recvfrom(int fd, void *buf, size_t cap, uint32_t *out_src,
+                     uint16_t *out_port, unsigned timeout_ms) {
     struct net_msg m = { .buf = (uint64_t)(uintptr_t)buf, .len = (uint32_t)cap,
-                         .addr = 0, .port = 0, .pad = 0, .dev = {0} };
-    int64_t rc = err(syscall2(SYS_RECVFROM, (uint64_t)fd, (uint64_t)(uintptr_t)&m));
+                         .addr = 0, .port = 0, .pad = 0,
+                         .timeout_ms = timeout_ms, .dev = {0} };
+    // SYS_RETRY means "you were woken, ask again" -- from a frame
+    // arriving, or from the deadline passing. Each pass re-runs the
+    // whole call, which is why the DEADLINE lives on the socket rather
+    // than being recomputed from `timeout_ms` here: otherwise every
+    // wake would restart the clock and a busy network would make a
+    // bounded wait unbounded. -EINTR is NOT retried: a signal is an
+    // answer a caller may want to act on.
+    int64_t r;
+    do {
+        r = syscall2(SYS_RECVFROM, (uint64_t)fd, (uint64_t)(uintptr_t)&m);
+    } while (r == SYS_RETRY);
+    int64_t rc = err(r);
     if (rc > 0) {
         if (out_src) *out_src = m.addr;
         if (out_port) *out_port = m.port;
@@ -535,7 +549,8 @@ int64_t sys_recvfrom(int fd, void *buf, size_t cap, uint32_t *out_src, uint16_t 
 }
 
 int sys_bind(int fd, uint32_t addr, uint16_t port, const char *dev) {
-    struct net_msg m = { .buf = 0, .len = 0, .addr = addr, .port = port, .pad = 0, .dev = {0} };
+    struct net_msg m = { .buf = 0, .len = 0, .addr = addr, .port = port,
+                         .pad = 0, .timeout_ms = 0, .dev = {0} };
     for (unsigned i = 0; dev && dev[i] && i < sizeof m.dev - 1; i++) m.dev[i] = dev[i];
     return (int)err(syscall2(SYS_BIND, (uint64_t)fd, (uint64_t)(uintptr_t)&m));
 }

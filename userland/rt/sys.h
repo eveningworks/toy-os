@@ -307,8 +307,15 @@ int sys_socket(int domain, int type, int protocol);
 int64_t sys_send(int fd, const void *buf, size_t len);   // no peer: -EINVAL
 int64_t sys_recv(int fd, void *buf, size_t len);         // no peer: -EINVAL
 int64_t sys_sendto(int fd, const void *buf, size_t len, uint32_t dst_ip, uint16_t dst_port);
-// NEVER BLOCKS: 0 means nothing has arrived yet, not end-of-stream.
-int64_t sys_recvfrom(int fd, void *buf, size_t cap, uint32_t *out_src, uint16_t *out_port);
+// BLOCKS until a datagram arrives. `timeout_ms` of 0 waits forever;
+// otherwise it is a ceiling, and 0 comes back when it expires -- NOT
+// -EAGAIN, because a datagram socket has no end-of-stream for a zero
+// to be confused with, and every call site already tests `n > 0`.
+// Interruptible: a signal rewinds the call, so Ctrl-C reaches a
+// program parked here. sys_set_nonblock() restores the old
+// poll-and-return-0 behaviour for a caller that wants it.
+int64_t sys_recvfrom(int fd, void *buf, size_t cap, uint32_t *out_src,
+                     uint16_t *out_port, unsigned timeout_ms);
 // A local port (0 picks an ephemeral one), optionally on ONE device --
 // SO_BINDTODEVICE, which is what a DHCP client needs. Returns the port.
 int sys_bind(int fd, uint32_t addr, uint16_t port, const char *dev);

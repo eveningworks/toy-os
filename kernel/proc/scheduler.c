@@ -1078,6 +1078,7 @@ static uint32_t reported_wait_reason(int reason) {
     case SCHED_WAIT_KEY:   return PROC_WAIT_KEY;
     case SCHED_WAIT_TTY:   return PROC_WAIT_TTY;
     case SCHED_WAIT_THREAD: return PROC_WAIT_THREAD;
+    case SCHED_WAIT_NET:   return PROC_WAIT_NET;
     default:               return PROC_WAIT_NONE;
     }
 }
@@ -1455,11 +1456,13 @@ const char *sched_wait_reason_name(int reason) {
     case SCHED_WAIT_KEY:   return "key";
     case SCHED_WAIT_TTY:   return "tty";
     case SCHED_WAIT_THREAD: return "join";
+    case SCHED_WAIT_NET:   return "net";
     default:               return "?";
     }
 }
 
-int scheduler_block_current(uint64_t *regs, const void *chan, int reason) {
+static int block_common(uint64_t *regs, const void *chan, int reason,
+                        uint64_t wake_at_ns) {
     if (current_index < 0) return 0;
 
     // NOTE there is deliberately NO "refuse to park a process with a
@@ -1485,6 +1488,14 @@ int scheduler_block_current(uint64_t *regs, const void *chan, int reason) {
     fpu_save(procs[idx].fpu);
     procs[idx].state = SCHED_BLOCKED;
     procs[idx].wait_chan = chan;
+    // SET UNCONDITIONALLY, and 0 for an unbounded wait. It has to be
+    // written on EVERY block rather than only where a deadline is
+    // wanted: slots are recycled, so an inherited deadline in the past
+    // makes wake_timers() release the process the instant it parks --
+    // which, once that loop stopped filtering on SCHED_CHAN_TIMER,
+    // turned every blocking wait on the machine into a spin. That is
+    // what it did: the whole GUI suite failed at once.
+    procs[idx].wake_at_ns = wake_at_ns;
     procs[idx].wait_reason = reason;
     current_index = -1;
 
@@ -1503,10 +1514,17 @@ int scheduler_block_current(uint64_t *regs, const void *chan, int reason) {
 // process parked on a reason at once, which is right for "a pipe has
 // data" and wrong for "it is 09:00" -- two sleepers almost never share
 // an instant.
+int scheduler_block_current(uint64_t *regs, const void *chan, int reason) {
+    return block_common(regs, chan, reason, 0);
+}
+
 int scheduler_sleep_current(uint64_t *regs, uint64_t wake_at_ns) {
-    if (current_index < 0) return 0;
-    procs[current_index].wake_at_ns = wake_at_ns;
-    return scheduler_block_current(regs, SCHED_CHAN_TIMER, SCHED_WAIT_TIMER);
+    return block_common(regs, SCHED_CHAN_TIMER, SCHED_WAIT_TIMER, wake_at_ns);
+}
+
+int scheduler_block_current_until(uint64_t *regs, const void *chan, int reason,
+                                  uint64_t wake_at_ns) {
+    return block_common(regs, chan, reason, wake_at_ns);
 }
 
 // The deadline-aware counterpart of scheduler_wake(), called once per
@@ -1525,11 +1543,25 @@ int scheduler_wake_timers(uint64_t now_ns) {
     int woken = 0;
     for (int i = 0; i < MAX_PROCS; i++) {
         if (procs[i].state != SCHED_BLOCKED) continue;
-        if (procs[i].wait_chan != SCHED_CHAN_TIMER) continue;
+        // A DEADLINE, NOT A CHANNEL, is what this loop acts on. It used
+        // to require SCHED_CHAN_TIMER, which made "sleep for a while"
+        // the only timed wait the kernel had; a bounded wait on an
+        // EVENT -- a datagram that may never arrive -- is the other
+        // one, and it is what stops a blocking receive being a hang.
+        // Linux's schedule_timeout() is the same primitive: a wait
+        // queue and a deadline, either of which may fire first.
+        if (!procs[i].wake_at_ns) continue;   // parked with no deadline
         if (procs[i].wake_at_ns > now_ns) continue;
 
         uint64_t *tf = (uint64_t *)(uintptr_t)procs[i].kernel_rsp;
-        tf[TF_RAX] = 0; // slept as asked -- SYS_SLEEP returns 0
+        // SYS_SLEEP asked for exactly this and returns 0. Anything else
+        // was waiting for an EVENT that did not come, so its handler
+        // has to look again and decide -- it is the only code that
+        // knows whether an empty queue at the deadline is a timeout or
+        // a spurious wake.
+        tf[TF_RAX] = procs[i].wait_chan == SCHED_CHAN_TIMER
+                     ? 0 : (uint64_t)(int64_t)SYS_RETRY;
+        procs[i].wake_at_ns = 0;
         procs[i].state = SCHED_READY;
         woken++;
     }
@@ -1560,6 +1592,11 @@ int scheduler_wake(const void *chan, int64_t value) {
         // process and answering its syscall the same act.
         uint64_t *tf = (uint64_t *)(uintptr_t)procs[i].kernel_rsp;
         tf[TF_RAX] = (uint64_t)value;
+        // The wait is over, so its deadline is too. Leaving it set
+        // would have the next timer tick "release" a process that is
+        // already running -- overwriting the RAX of whatever syscall it
+        // had reached by then.
+        procs[i].wake_at_ns = 0;
         procs[i].state = SCHED_READY;
         woken++;
     }
@@ -2394,6 +2431,7 @@ int scheduler_signal_raise(int pid, int sig) {
         else                       tf[TF_RAX] = (uint64_t)(int64_t)-EINTR;
         p->state = SCHED_READY;
         p->wait_chan = 0;
+        p->wake_at_ns = 0;   // the wait is over; see scheduler_wake()
     }
     return 1;
 }

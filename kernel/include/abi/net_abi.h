@@ -49,6 +49,17 @@ struct net_msg {
                     // identifier the kernel owns.
     uint16_t pad;   // explicit, so the struct's size is not a
                     // compiler's opinion about alignment
+
+    // SYS_RECVFROM ONLY. How long to wait for a datagram: 0 blocks
+    // until one arrives (or a signal interrupts), and any other value
+    // is a ceiling in milliseconds after which the call returns 0.
+    //
+    // ON THE CALL rather than on the socket, because this kernel has no
+    // setsockopt and adding one for a single option is worse than the
+    // divergence. recvmmsg(2) takes a timeout argument for the same
+    // reason. The wait is ALSO interruptible: a signal rewinds the
+    // syscall, so Ctrl-C reaches a program parked in a receive.
+    uint32_t timeout_ms;
     // SYS_BIND ONLY, and empty means "any device". Binding a socket to
     // one card is Linux's SO_BINDTODEVICE, and it is here for the
     // reason dhclient uses it: a DHCP client must broadcast from

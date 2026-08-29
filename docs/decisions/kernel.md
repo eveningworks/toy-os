@@ -5246,3 +5246,86 @@ would be twenty lines of parser to save a reader one unfamiliar
 character.
 
 The path is Unix's because that is where a person will look.
+
+## A blocking receive: one wait channel, and the deadline on the socket
+
+**Where the stack runs while a reader sleeps.** `net_poll()` runs from
+`scheduler_idle()`, which is only reached when nothing else is runnable
+— so a process blocked in a receive could sleep through a packet that
+had already arrived, on any machine with something else to do. Three
+options were weighed. Running `net_poll()` from the timer tick is
+Linux's softirq, approximately, and bounds latency at 10 ms; the cost is
+that ARP replies, echo responses and driver MMIO writes all happen in
+interrupt context, which is a much larger claim to keep true. Leaving it
+in the idle loop and waking only on delivery is the smallest change and
+makes receive latency depend on what else is running, which is exactly
+the kind of thing that presents as a flaky network.
+
+What was built is the third: **the driver's ISR wakes, and the woken
+reader runs the stack itself.** `net_rx()` already runs in the
+interrupt and already does nothing but copy a frame into a queue; it now
+also calls `scheduler_wake()`, which is documented as interrupt-safe
+because it only flips state and writes an already-saved trapframe. The
+woken process re-enters `sys_recvfrom`, which calls `net_poll()` at its
+top — so the parsing happens in a process context, and the property the
+whole receive path was built around survives.
+
+**One channel for the whole stack, not one per socket.** The waker has
+parsed nothing: it holds an Ethernet frame and cannot know which socket
+it is for without doing the work that must not happen there. So every
+blocked reader is woken and each looks again. With eight sockets that
+costs a spurious wake or two, and the alternative is either parsing in
+the ISR or a second mechanism to carry "which socket" out of it.
+
+**Why the deadline lives on the socket.** A blocking syscall here is
+RE-RUN rather than resumed — `SYS_RETRY` sends the caller back through
+libsys's retry loop, and a signal rewinds the instruction so the call
+re-enters from the start. A deadline computed from `timeout_ms` on each
+entry would therefore restart on every wake, and a socket on a busy
+network would never time out at all. Storing an absolute deadline on the
+socket also gives the behaviour Linux's `restart_block` provides: an
+interrupted wait resumes against the time it had left, not the time it
+originally asked for.
+
+**Why a timeout returns 0 rather than -EAGAIN.** POSIX's `SO_RCVTIMEO`
+fails the call with EAGAIN. Here a datagram socket has no end-of-stream,
+so 0 is unambiguous — and every call site was already written as
+`n > 0`, so the divergence costs nothing and removes an errno check from
+each of them. The timeout is on the CALL rather than on the socket
+because this kernel has no `setsockopt`, and inventing one for a single
+option is a worse trade than the divergence; `recvmmsg(2)` takes a
+timeout argument for the same reason.
+
+**A general primitive has to be general in both directions.** Widening
+`scheduler_wake_timers()` from "sleepers on SCHED_CHAN_TIMER" to "anyone
+with a deadline" made a field that had been written by exactly one
+caller readable by all of them -- and slots are recycled, so a stale
+`wake_at_ns` from a previous tenant became a deadline in the past. Every
+blocking wait on the machine then returned instantly, and the whole GUI
+suite failed at once. The fix is that every park writes the field, 0
+included: an initialiser that sets "the fields this caller needs" is the
+same shape as the fd bug below, and both were found the same day.
+
+## A pooled fd description must be zeroed, not partially initialised
+
+`fd_desc_alloc()` set the fields the new descriptor needed and left the
+rest as the previous owner had them. `nonblock` therefore survived a
+close: a program that set it on a socket handed the flag to whatever
+reused the slot, so the NEXT program's blocking receive returned 0
+immediately and lost every reply.
+
+It is worth recording because of how it presented rather than what it
+was. `host` and `ping` failed **only after something unrelated had
+run** — a fresh boot was always fine, and so was any single command.
+The failing pair was `udp_test` (whose checks deliberately set
+non-blocking) followed by anything that received a datagram, which
+reads as "DNS is broken" and sends you into the resolver. Two theories
+were wrong before instrumenting: a lost wakeup, and a checksum rejecting
+the reply. What settled it was the observation that the frame ARRIVED
+(the device counter moved) while the socket never saw it, and that a
+fresh boot could not reproduce.
+
+The fix is to zero the whole slot at allocation rather than to clear the
+one field, because the bug is the pattern and not the field: any future
+per-description flag would inherit exactly the same way, and the next
+one might not have a symptom this loud.

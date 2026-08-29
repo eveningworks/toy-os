@@ -105,11 +105,11 @@ int main(void) {
         say("sockettest: read() on a socket fd correctly rejected\n");
     }
 
-    // Step 5: an idle socket has nothing to report, and says so with a
-    // zero rather than an error. A caller that treats 0 as failure will
-    // give up on the first poll of every ping it ever sends.
+    // Step 5: a bounded wait on a socket nothing is sending to returns
+    // 0 rather than an error. A caller that treats 0 as failure gives
+    // up on the first timeout of every ping it ever sends.
     uint32_t src = 0;
-    int64_t idle = sys_recvfrom((int)sfd, buf, sizeof(buf), &src, 0);
+    int64_t idle = sys_recvfrom((int)sfd, buf, sizeof(buf), &src, 0, 20);
     if (idle != 0) {
         ok = ok && fail("sockettest: recvfrom() on an idle socket should return 0\n");
     } else {

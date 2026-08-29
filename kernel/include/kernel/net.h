@@ -157,10 +157,21 @@ int net_sock_bind(int sock, uint32_t addr, uint16_t port, const char *dev);
 
 int net_sock_sendto(int sock, uint32_t dst_ip, uint16_t dst_port,
                     const void *buf, uint32_t len);
-// Returns bytes copied, 0 when nothing has arrived (never blocks), or
-// -errno. `out_src`/`out_port` are the sender's.
+// Returns bytes copied, 0 when nothing is queued, or -errno.
+// `out_src`/`out_port` are the sender's. THIS CALL NEVER BLOCKS -- the
+// waiting is the syscall layer's, because only it holds the trapframe a
+// block needs. See sys_recvfrom().
 int net_sock_recvfrom(int sock, void *buf, uint32_t cap,
                       uint32_t *out_src, uint16_t *out_port);
+
+// The absolute deadline a blocked receive on this socket is working to,
+// in clocksource_now_ns() terms; 0 when none is set. It lives on the
+// SOCKET rather than in the handler because a blocking syscall is
+// RE-RUN when it wakes (SYS_RETRY, and a signal rewinds it too) -- a
+// deadline held in a local would restart on every wake, so a receive
+// interrupted repeatedly would never time out.
+uint64_t net_sock_deadline(int sock);
+void net_sock_set_deadline(int sock, uint64_t ns);
 
 // ICMP delivers an echo reply here; returns 1 if a socket wanted it.
 int net_sock_deliver(uint8_t proto, uint32_t src_ip, const uint8_t *data, uint32_t len);

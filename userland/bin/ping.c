@@ -121,27 +121,26 @@ int main(int argc, char **argv) {
         }
         sent++;
 
+        // ONE BLOCKING CALL, not a poll loop: the socket sleeps until
+        // the reply arrives or the budget expires, so the time reported
+        // is the round trip rather than a multiple of a poll interval.
+        // Under an emulator that is often still 0.000 ms -- QEMU tends
+        // to deliver the reply inside the sending syscall -- and that
+        // number is now honest rather than an artefact of polling.
         uint64_t start = sys_monotonic_ns();
-        int got = 0;
-        for (int waited = 0; waited < REPLY_WAIT_MS; waited += POLL_MS) {
-            uint8_t buf[PAYLOAD_BYTES + 16];
-            uint32_t src = 0;
-            int64_t n = sys_recvfrom(fd, buf, sizeof buf, &src, 0);
-            if (n > 0) {
-                uint64_t us = (sys_monotonic_ns() - start) / 1000;
-                snprintf(line, sizeof line,
-                         "%lld bytes from %u.%u.%u.%u: icmp_seq=%d time=%llu.%03llu ms\n",
-                         (long long)n, (src >> 24) & 0xFF, (src >> 16) & 0xFF,
-                         (src >> 8) & 0xFF, src & 0xFF, seq,
-                         (unsigned long long)(us / 1000), (unsigned long long)(us % 1000));
-                sys_print(line);
-                received++;
-                got = 1;
-                break;
-            }
-            sys_sleep_ms(POLL_MS);
-        }
-        if (!got) {
+        uint8_t buf[PAYLOAD_BYTES + 16];
+        uint32_t src = 0;
+        int64_t n = sys_recvfrom(fd, buf, sizeof buf, &src, 0, REPLY_WAIT_MS);
+        if (n > 0) {
+            uint64_t us = (sys_monotonic_ns() - start) / 1000;
+            snprintf(line, sizeof line,
+                     "%lld bytes from %u.%u.%u.%u: icmp_seq=%d time=%llu.%03llu ms\n",
+                     (long long)n, (src >> 24) & 0xFF, (src >> 16) & 0xFF,
+                     (src >> 8) & 0xFF, src & 0xFF, seq,
+                     (unsigned long long)(us / 1000), (unsigned long long)(us % 1000));
+            sys_print(line);
+            received++;
+        } else {
             snprintf(line, sizeof line, "no reply from %s: icmp_seq=%d\n", target, seq);
             sys_print(line);
         }

@@ -169,22 +169,29 @@ static int exchange(int fd, struct dhcp_msg *out, uint32_t out_len,
     }
     if (rc < 0) return 0;
 
-    for (int waited = 0; waited < WAIT_MS; waited += POLL_MS) {
+    // A blocking receive, but still a LOOP: a broadcast port hears
+    // every client on the segment, so a datagram that is not ours is
+    // ignored and the wait continues on what is LEFT of the budget --
+    // recomputed each time, or somebody else's traffic would extend our
+    // deadline indefinitely.
+    uint64_t deadline = sys_monotonic_ns() + (uint64_t)WAIT_MS * 1000000ull;
+    for (;;) {
+        uint64_t now = sys_monotonic_ns();
+        if (now >= deadline) return 0;
+        unsigned left = (unsigned)((deadline - now) / 1000000ull);
+
         uint32_t src = 0;
         uint16_t port = 0;
-        int64_t n = sys_recvfrom(fd, in, sizeof *in, &src, &port);
-        if (n > 0) {
-            uint32_t len = (uint32_t)n;
-            if (in->op == OP_REPLY && !memcmp(in->xid, xid, 4) &&
-                get32(in->magic) == DHCP_MAGIC) {
-                const uint8_t *v = 0;
-                if (option_get(in, len, OPT_MSG_TYPE, &v) >= 1 && *v == want) return (int)len;
-            }
-            continue;   // somebody else's traffic; keep waiting
+        int64_t n = sys_recvfrom(fd, in, sizeof *in, &src, &port, left ? left : 1);
+        if (n <= 0) return 0;   // the budget expired
+
+        uint32_t len = (uint32_t)n;
+        if (in->op == OP_REPLY && !memcmp(in->xid, xid, 4) &&
+            get32(in->magic) == DHCP_MAGIC) {
+            const uint8_t *v = 0;
+            if (option_get(in, len, OPT_MSG_TYPE, &v) >= 1 && *v == want) return (int)len;
         }
-        sys_sleep_ms(POLL_MS);
     }
-    return 0;
 }
 
 int main(int argc, char **argv) {

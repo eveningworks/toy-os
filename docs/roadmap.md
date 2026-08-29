@@ -25,7 +25,7 @@ buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
 - [ ] `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR, not a 64 KiB guess  *(USB)*
-- [ ] **A blocking receive** -- `SYS_RECVFROM` never blocks, so every caller polls; TCP and ICMP error reporting both wait on this  *(Networking)*
+- [ ] **TCP** -- the socket syscalls carry two datagram protocols and a blocking receive now; what is left is the state machine  *(Networking)*
 - [ ] The ring-3 WM busy-waits instead of sleeping -- built on branch `wm-wait-ready`, PARKED: it regresses `uterm`  *(Known limitations and papercuts (unscheduled))*
 - [ ] System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons  *(Known limitations and papercuts (unscheduled))*
 <!-- END next-up -->
@@ -685,8 +685,8 @@ run on, not by order.
 - [x] ~~ICMP echo + a `ping` command -- the smallest end-to-end proof the stack works~~ DONE 2026-08-29
 - [x] ~~DHCP client~~ DONE 2026-08-29 -- `/bin/dhcp`, a ring-3 program applying its lease through `SYS_NET_CONFIG`
 - [x] ~~DNS resolver~~ DONE 2026-08-29 -- `userland/lib/uresolv.c`, `/bin/host`, and `ping` by name
-- [ ] **A blocking receive** -- `SYS_RECVFROM` never blocks, so every caller polls; TCP and ICMP error reporting both wait on this **NEXT**
-- [ ] TCP -- the socket syscalls are wired for two datagram protocols; a stream socket needs the blocking receive above
+- [x] ~~**A blocking receive**~~ DONE 2026-08-29 -- one wait channel, woken from the driver's ISR; the deadline lives on the socket
+- [ ] **TCP** -- the socket syscalls carry two datagram protocols and a blocking receive now; what is left is the state machine **NEXT**
 - [ ] Run `dhcp` at boot -- blocked on the desktop-startup write bug in `docs/bugs.md`, not on effort
 - [ ] Renew the lease before it expires -- `/bin/dhcp` asks once and exits
 - [ ] An ICMP error reaching the socket that caused it -- reports are sent, and an arriving one is dropped for want of an error queue
