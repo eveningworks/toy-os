@@ -285,14 +285,14 @@ void kernel_main(uint64_t multiboot_info_addr) {
     usb_init();
 
     // Networking: the device core first (it owns the table the drivers
-    // register into), then each NIC, then the addresses. Both drivers
+    // register into), then each NIC. NO ADDRESSES -- a card comes up
+    // with none and `/bin/dhcp` gives it one, as on Linux. Both drivers
     // are called unconditionally -- the disk layer's lesson, where a
     // short circuit meant a machine's second controller did not exist
     // (see CLAUDE.md's every-disk-driver-runs rule).
     net_init();
     e1000_init();
     net_virtio_init();
-    net_autoconfig();
 
     // Audio, after pci_init() like every PCI-scanning driver. Finding
     // no controller is the common case and not an error.

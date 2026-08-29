@@ -8,6 +8,17 @@
 // same call `ifconfig` uses, so there is no privileged path here that
 // a person could not take by hand.
 //
+// NO SERVER IS NOT A FAILURE: a device nobody offers a lease to claims
+// a link-local address instead (RFC 3927, Windows' APIPA), so a machine
+// on a segment with no DHCP server can still talk to its neighbours.
+// The kernel invents no address at all now -- this program is where one
+// comes from.
+//
+// WITH NO ARGUMENT IT CONFIGURES EVERY DEVICE THAT HAS NO ADDRESS,
+// which is what dhclient does when no interface is named. Naming one
+// takes that device whatever state it is in, which is how a card is
+// re-leased by hand.
+//
 // THE LEASE IS NOT RENEWED. A real client keeps a timer and renews at
 // T1 (half the lease); this asks once and applies what it gets. That is
 // a real limitation rather than a simplification: a lease that expires
@@ -59,6 +70,19 @@
 #define POLL_MS 10
 
 #define RESOLV_CONF "/etc/resolv.conf"
+
+// RFC 3927 link-local, the fallback when nothing answers a DISCOVER.
+// The usable range excludes the first and last /24, which the RFC
+// reserves; the counts and the spacing are its own (PROBE_NUM,
+// MAX_CONFLICTS, ANNOUNCE_NUM).
+#define LL_FIRST      0xA9FE0100u     // 169.254.1.0
+#define LL_COUNT      65024u          // ... through 169.254.254.255
+#define LL_MASK       0xFFFF0000u
+#define LL_TRIES      10
+#define LL_PROBES     3
+#define LL_PROBE_MS   1000
+#define LL_ANNOUNCE   2
+#define LL_ANNOUNCE_MS 2000
 
 // The fixed part of a BOOTP message, which DHCP is options bolted onto.
 // Every multi-byte field is big-endian on the wire; the helpers below
@@ -194,37 +218,88 @@ static int exchange(int fd, struct dhcp_msg *out, uint32_t out_len,
     }
 }
 
-int main(int argc, char **argv) {
-    if (argc > 2) {
-        cmd_usage("dhcp [<device>]");
+// --- link-local ------------------------------------------------------
+
+// A candidate address for this card. RFC 3927 asks for a pseudo-random
+// choice SEEDED FROM THE HARDWARE ADDRESS, so a machine tends to pick
+// the same address across reboots and its neighbours' caches stay true;
+// `attempt` reseeds it after a collision. FNV-1a because it is four
+// lines and this is not a security decision.
+static uint32_t ll_candidate(const uint8_t *mac, int attempt) {
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < 6; i++) { h ^= mac[i]; h *= 16777619u; }
+    h ^= (uint32_t)attempt; h *= 16777619u;
+    return LL_FIRST + (h % LL_COUNT);
+}
+
+// Is `ip` already somebody's? 1 yes, 0 no, -1 could not ask.
+//
+// One probe more than the RFC's three, because the syscall is
+// edge-triggered: a reply is visible only to the call AFTER the one
+// that provoked it, so the last iteration is a read. The extra frame is
+// a probe like the others.
+static int ll_taken(const char *dev, uint32_t ip) {
+    for (int i = 0; i <= LL_PROBES; i++) {
+        int r = sys_net_arp_probe(dev, ip);
+        if (r != 0) return r > 0 ? 1 : -1;
+        if (i < LL_PROBES) sys_sleep_ms(LL_PROBE_MS);
+    }
+    return 0;
+}
+
+// Claim an address nobody answers for. Returns 1 on success.
+static int link_local(const char *dev, const uint8_t *mac) {
+    for (int attempt = 0; attempt < LL_TRIES; attempt++) {
+        uint32_t ip = ll_candidate(mac, attempt);
+        int taken = ll_taken(dev, ip);
+        // A REFUSAL IS NOT A COLLISION. Trying the next candidate after
+        // one would spend ten more rounds of probes learning the same
+        // thing and then report a full range instead of a dead device.
+        if (taken < 0) { cmd_fail("dhcp", dev); return 0; }
+        if (taken) continue;
+
+        // No gateway: a link-local address routes to its own segment
+        // and nowhere else, which is the whole of what it promises.
+        if (sys_net_config(dev, ip, LL_MASK, 0) < 0) {
+            cmd_fail("dhcp", dev);
+            return 0;
+        }
+
+        char a[20];
+        ip_str(a, ip);
+        printf("dhcp: %s: %s netmask 255.255.0.0 link-local, no gateway\n", dev, a);
+
+        // ANNOUNCE, so a neighbour that cached nothing during the
+        // probes learns the address now. The request carries our new
+        // address as its sender, which is what makes it an
+        // announcement rather than another probe.
+        for (int i = 0; i < LL_ANNOUNCE; i++) {
+            sys_net_arp_probe(dev, ip);
+            if (i + 1 < LL_ANNOUNCE) sys_sleep_ms(LL_ANNOUNCE_MS);
+        }
         return 1;
     }
+    printf("dhcp: %s: no free link-local address after %d tries\n", dev, LL_TRIES);
+    return 0;
+}
 
-    // Which card, and its MAC. Both come from the same record, so there
-    // is no window where the name and the hardware address disagree.
-    struct query_netdev dev;
-    int found = 0;
-    for (unsigned i = 0; ; i++) {
-        if (sys_query_record(QUERY_NETDEV, i, &dev, sizeof dev) < (int)sizeof dev) break;
-        if (argc == 1 || !strcmp(dev.name, argv[1])) { found = 1; break; }
-    }
-    if (!found) {
-        printf("dhcp: no such device%s%s\n", argc > 1 ? ": " : "", argc > 1 ? argv[1] : "");
-        return 1;
-    }
+// --- one device ------------------------------------------------------
 
+// Returns 1 if the device ends up with an address, by lease or by
+// claim.
+static int configure(const struct query_netdev *dev) {
     uint8_t mac[6];
-    for (int i = 0; i < 6; i++) mac[i] = (uint8_t)(dev.mac >> (i * 8));
+    for (int i = 0; i < 6; i++) mac[i] = (uint8_t)(dev->mac >> (i * 8));
 
     int fd = sys_socket(NET_ABI_AF_INET, NET_ABI_SOCK_DGRAM, NET_ABI_IPPROTO_UDP);
-    if (fd < 0) { cmd_fail("dhcp", "socket"); return 1; }
+    if (fd < 0) { cmd_fail("dhcp", "socket"); return 0; }
     // Bound to the CARD as well as the port: a second interface's
     // server must not answer this one's request, which is the whole
     // reason SO_BINDTODEVICE exists on Linux and why bind takes a name.
-    if (sys_bind(fd, 0, DHCP_CLIENT_PORT, dev.name) < 0) {
+    if (sys_bind(fd, 0, DHCP_CLIENT_PORT, dev->name) < 0) {
         cmd_fail("dhcp", "bind");
         sys_close(fd);
-        return 1;
+        return 0;
     }
 
     uint8_t xid[4];
@@ -240,9 +315,9 @@ int main(int argc, char **argv) {
     build(&out, mac, xid, MSG_DISCOVER, 0, 0, &out_len);
     int len = exchange(fd, &out, out_len, xid, MSG_OFFER, &in);
     if (!len) {
-        printf("dhcp: no offer on %s\n", dev.name);
         sys_close(fd);
-        return 1;
+        printf("dhcp: no offer on %s\n", dev->name);
+        return link_local(dev->name, mac);
     }
 
     struct lease l = {0};
@@ -257,12 +332,12 @@ int main(int argc, char **argv) {
     // considers free to hand to somebody else.
     build(&out, mac, xid, MSG_REQUEST, l.ip, l.server, &out_len);
     len = exchange(fd, &out, out_len, xid, MSG_ACK, &in);
+    sys_close(fd);
     if (!len) {
-        printf("dhcp: %s offered %u.%u.%u.%u and did not acknowledge it\n",
-               dev.name, (l.ip >> 24) & 0xFF, (l.ip >> 16) & 0xFF,
-               (l.ip >> 8) & 0xFF, l.ip & 0xFF);
-        sys_close(fd);
-        return 1;
+        char a[20];
+        ip_str(a, l.ip);
+        printf("dhcp: %s offered %s and did not acknowledge it\n", dev->name, a);
+        return link_local(dev->name, mac);
     }
     // The ACK is authoritative, not the offer: a server may acknowledge
     // something other than what it offered.
@@ -271,16 +346,15 @@ int main(int argc, char **argv) {
     if (option_ip(&in, (uint32_t)len, OPT_ROUTER)) l.router = option_ip(&in, (uint32_t)len, OPT_ROUTER);
     if (option_ip(&in, (uint32_t)len, OPT_DNS)) l.dns = option_ip(&in, (uint32_t)len, OPT_DNS);
     l.seconds = option_ip(&in, (uint32_t)len, OPT_LEASE_TIME);
-    sys_close(fd);
 
-    if (sys_net_config(dev.name, l.ip, l.mask, l.router) < 0) {
-        cmd_fail("dhcp", dev.name);
-        return 1;
+    if (sys_net_config(dev->name, l.ip, l.mask, l.router) < 0) {
+        cmd_fail("dhcp", dev->name);
+        return 0;
     }
 
     char a[20], m[20], g[20], d[20];
     ip_str(a, l.ip); ip_str(m, l.mask); ip_str(g, l.router); ip_str(d, l.dns);
-    printf("dhcp: %s: %s netmask %s gateway %s\n", dev.name, a, m, g);
+    printf("dhcp: %s: %s netmask %s gateway %s\n", dev->name, a, m, g);
 
     if (l.dns) {
         // The FILE is Unix's name and the FORMAT is this repo's
@@ -292,5 +366,37 @@ int main(int argc, char **argv) {
             printf("dhcp: could not write %s\n", RESOLV_CONF);
     }
     if (l.seconds) printf("dhcp: lease %u seconds (not renewed -- see the manual)\n", l.seconds);
-    return 0;
+    return 1;
+}
+
+int main(int argc, char **argv) {
+    if (argc > 2) {
+        cmd_usage("dhcp [<device>]");
+        return 1;
+    }
+
+    int tried = 0, done = 0;
+    for (unsigned i = 0; ; i++) {
+        struct query_netdev dev;
+        if (sys_query_record(QUERY_NETDEV, i, &dev, sizeof dev) < (int)sizeof dev) break;
+
+        if (argc == 2) {
+            if (strcmp(dev.name, argv[1])) continue;
+        } else if (dev.ip) {
+            // Said out loud rather than skipped silently: on a boot
+            // where one card is already configured this is the whole
+            // difference between "nothing to do" and "nothing worked".
+            printf("dhcp: %s already has an address -- leaving it\n", dev.name);
+            continue;
+        }
+        tried++;
+        done += configure(&dev);
+    }
+
+    if (!tried) {
+        if (argc == 2) printf("dhcp: no such device: %s\n", argv[1]);
+        else           printf("dhcp: no device without an address\n");
+        return 1;
+    }
+    return done == tried ? 0 : 1;
 }

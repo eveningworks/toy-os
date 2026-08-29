@@ -30,14 +30,22 @@ A line reads:
 
     # NAME             STATE       PID  FAILS  READY    EXEC
     toywm              running       2      0  yes      /bin/wm/system/toywm
+    dhcp               done          0      0  -        /bin/dhcp
 
 `STATE` is one word for why the service is where it is: `running`,
 `stopped` (somebody asked for it to be down), `exited` (it returned 0
 and its policy says that means stop), `crash-loop` (given up on),
 `disabled` (its descriptor is gone), `waiting` (a restart backoff is
 running, or something it is ordered after is not ready yet), `done` (a
-`Restart=no` service that has had its one run), `no-exec` (a descriptor
-with no `Exec=`), or `starting`.
+`Restart=no` service that has had its one run and returned 0), `failed`
+(the same, but it returned something else), `no-exec` (a descriptor with
+no `Exec=`), or `starting`.
+
+`done` and `failed` are a pair for the same reason systemd shows a
+one-shot's exit status: a service with nothing left to supervise is
+down either way, and the exit code is the only thing that says whether
+it did its job. `service` is how a machine answers "did I get an
+address at boot?".
 
 `READY` is `-` for a service that never announces anything, and
 `yes`/`no`/`timeout` for one whose descriptor says `Ready=notify`.

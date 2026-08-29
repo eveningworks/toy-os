@@ -85,4 +85,12 @@ struct net_ifconfig {
     uint32_t gateway;
 };
 
+// SYS_NET_ARP_PROBE's argument: which device to ask on, and the address
+// to ask about. `ip` is host byte order like every address above the
+// wire here.
+struct net_arp_probe {
+    char name[NET_ABI_NAME_MAX];
+    uint32_t ip;
+};
+
 #endif

@@ -115,10 +115,6 @@ void net_init(void);      // the core: the table and the queue
 void e1000_init(void);
 void net_virtio_init(void);
 
-// Give the first device an address if nothing else has. Called from
-// kernel_main() after the drivers have probed; see net.c for why the
-// values are what they are and why only one device gets them.
-void net_autoconfig(void);
 
 // QUERY_NETDEV's provider (`ifconfig` reads the table through it).
 void net_query_init(void);

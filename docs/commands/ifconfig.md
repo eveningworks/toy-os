@@ -16,11 +16,9 @@ addresses.
 
 Every NIC driver runs at boot and registers what it finds into the
 device table (`kernel/include/kernel/netdev.h`), named `net0`, `net1` in
-registration order. **Only the first device gets an address
-automatically** — QEMU's user-networking defaults, which are a
-placeholder for a lease rather than a claim about the network — so a
-second card shows as unconfigured until `dhcp` or this command gives it
-something.
+registration order. **No device gets an address from the kernel** — one
+comes from `/bin/dhcp`, which init runs at boot and which takes every
+card that has none, or from this command.
 
 A field left out is left alone rather than cleared, so
 `ifconfig net0 10.0.2.20` moves an address without restating the netmask.
@@ -55,6 +53,11 @@ flag. They are the *core's*, not the driver's, so "received" means
 listening to a network it cannot answer on, and one whose `rx_dropped`
 climbs alongside `rx` is being handed frames faster than the stack
 drains them. Neither is visible from `ping` alone.
+
+A card with no address prints `inet (unconfigured)`, which is what
+every card looks like until `/bin/dhcp` has run — nothing assigns an
+address at boot, so on a freshly booted machine this is a state to wait
+through rather than a fault.
 
 A machine with no card prints `no network devices` rather than nothing
 at all — a real supported state, and it should not read like the command

@@ -199,6 +199,10 @@ struct service {
     unsigned long long due_ms;  // when it may next be started
     int  fast_failures;
     int  started_once;
+    // What the last run RETURNED, which is the only thing that tells a
+    // one-shot that did its job from one that could not: both are down
+    // for good, and `Restart=no` never records a failure anywhere else.
+    int  last_exit;
     char after[SVC_DEPS_MAX];   // names that must be spawned before this
     char before[SVC_DEPS_MAX];  // names this must be spawned before
     int  seen;         // survived the last scan
@@ -625,6 +629,7 @@ static void service_failed(struct service *s) {
 
 static void start_service(struct service *s) {
     s->started_once = 1;
+    s->last_exit = 0;
 
     int pid = sys_spawn(s->exec, 0, -1);
     if (pid > 0) {
@@ -646,8 +651,11 @@ static void start_service(struct service *s) {
 
     // A spawn that fails is a fast failure like any other -- it is the
     // shape a missing or unseeded binary takes, and without counting it
-    // a bad Exec= path retries forever.
+    // a bad Exec= path retries forever. It is also an EXIT for status
+    // purposes: a one-shot that never ran is not `done`, and nothing
+    // else would set the code, since no child exists to report one.
     s->fast_failures++;
+    s->last_exit = -1;
     snprintf(g_msg, sizeof g_msg, "init: %s failed to start (%s)\n",
              s->name, s->exec);
     sys_eprint(g_msg);
@@ -663,6 +671,7 @@ static int service_exited(int pid, int code) {
 
         unsigned long long ran = now_ms() - s->started_ms;
         s->pid = 0;
+        s->last_exit = code;
 
         snprintf(g_msg, sizeof g_msg,
                  "init: %s (pid %d) exited with code %d after %u ms\n",
@@ -924,7 +933,8 @@ static const char *svc_state(const struct service *s) {
     if (s->gave_up)                                   return "crash-loop";
     if (!s->exec[0])                                  return "no-exec";
     if (s->stopped)                                   return "exited";
-    if (s->restart == SVC_RESTART_NO && s->started_once) return "done";
+    if (s->restart == SVC_RESTART_NO && s->started_once)
+        return s->last_exit == 0 ? "done" : "failed";
     if (s->due_ms > now_ms())                         return "waiting";
     return "starting";
 }

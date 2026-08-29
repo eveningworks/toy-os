@@ -11,7 +11,7 @@ so there is no second format to maintain.
 |---|---|---|
 | `Name` | yes | What init calls it in the log. Not the filename. |
 | `Description` | no | A sentence for a human. `service status <name>` prints it. |
-| `Exec` | yes | An absolute path to a `/bin` binary. No arguments, no shell -- `SYS_SPAWN` takes a path. |
+| `Exec` | yes | An absolute path to a `/bin` binary. No arguments and no shell -- init passes none, though `SYS_SPAWN` itself takes an argument string and nothing has needed one here yet. |
 | `Target` | no | `text`, `graphical`, or absent. Absent means **every** target. |
 | `Restart` | no | `on-failure` (default), `always`, or `no`. |
 | `After` | no | Space-separated service **names** that must be started first. |
@@ -27,6 +27,14 @@ and under `always` init put it straight back and the menu item silently
 did nothing. `always` restarts it either way; `no` never does (it still
 gets its ONE start -- the key says what happens when it EXITS, not
 whether it runs).
+
+**`Restart=no` IS THE ONE-SHOT**, systemd's `Type=oneshot`: something
+that does a job and is finished, like `/bin/dhcp` asking for an address.
+`service` reports it as `done` or `failed` by its exit code, because a
+one-shot is down either way and the code is the only thing left that
+says whether it worked. Nothing is ordered after a one-shot yet -- and
+`After=` on one would mean "after it was SPAWNED" unless it also
+declares `Ready=notify`, which a program that exits cannot use.
 
 A restart waits a backoff that doubles from 0 ms to a cap, and a service
 that keeps dying QUICKLY is declared a crash loop and left down with a

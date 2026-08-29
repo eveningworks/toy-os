@@ -5534,3 +5534,60 @@ current at the tick and something always is. Absolute figures from
 `idle_cpu.py` are mostly TCG and mostly the host's load at the time --
 an earlier pair on this same change read 42% of a core against 37-38%,
 and neither number is comparable with these. Quote the DIFFERENCE.
+
+## The kernel invents no address, and a link-local claim is ring-3 policy
+
+`net_autoconfig()` used to give the first card 10.0.2.15/24 via 10.0.2.2
+at boot, QEMU's user-networking defaults, and its own comment called
+itself "a placeholder for DHCP, which is where an address is supposed to
+come from". It is gone. A card comes up unconfigured and `/bin/dhcp` --
+run at boot as init's `dhcp` one-shot -- is the only thing here that
+assigns an address.
+
+**Why not keep it as a fallback**, which is the cheaper option and the
+one that breaks nothing: because the address it invents is a routable
+address belonging to somebody else's network. On QEMU it is right by
+construction; on real hardware, or on any segment that is not SLIRP's,
+a machine whose DHCP exchange failed would silently claim 10.0.2.15 and
+answer ARP for it. Linux's kernel assigns no address at all (bar `ip=`
+for an NFS root); Windows assigns none and falls back to APIPA. Neither
+invents one that only makes sense on one emulator, and the placeholder
+had already outlived the thing it was standing in for.
+
+**What replaces it is RFC 3927 link-local**, the same answer Windows
+reached: a device nobody offers a lease to claims 169.254.x.y/16 with no
+gateway. That keeps the property the hardcode was protecting -- a
+machine on a segment with no server can still talk to its neighbours --
+without asserting anything about a network this OS has not been told
+about.
+
+**The split is the one the DHCP client already made.** Choosing an
+address, probing it, deciding how many times and how long to wait, and
+what to do about a collision are all policy, and policy is `/bin/dhcp`'s.
+The kernel supplies exactly the thing ring 3 cannot do for itself:
+`SYS_NET_ARP_PROBE` puts one ARP request on the wire and says whether a
+reply has been cached for it. It does not block, so the answer is only
+ever "not yet" and the caller asks again -- which is what makes the
+probe COUNT and the probe SPACING ring 3's, rather than constants
+compiled into a kernel that would then own an RFC.
+
+That syscall is almost free because `arp_resolve()` was already the
+probe: it broadcasts a request whose sender field is the device's own
+address, which is 0.0.0.0 on a device that has none, and that is exactly
+RFC 3927's ARP Probe. Applying the address and asking once more sends
+the same frame with the new address as its sender, which is exactly the
+RFC's ARP Announcement. One mechanism spells both because the difference
+between them is which address the device holds at the time.
+
+**What this does NOT do is defend the address.** The RFC asks a host to
+keep watching for a conflicting ARP afterwards; `arp_input()` learns
+from a conflicting frame without noticing that it conflicts, and there
+is no channel to report one on. That is a roadmap item, and it needs the
+same missing machinery an ICMP error queue does.
+
+**The cost paid for all of this is that the network comes up after the
+console does.** The kernel used to have an address before the first
+process ran; now a lease lands about a second into the boot. Anything
+that pings a freshly booted guest has to wait for it -- `tools/net_test.py`
+polls, and a phase that did not was failing as `no such device`, which
+looks nothing like what it is.

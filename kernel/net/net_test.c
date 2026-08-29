@@ -21,6 +21,7 @@
 #include "string.h"
 #include "errno.h"
 #include "ktest.h"
+#include "kfmt.h"   // klog_printf, for the line the fallback prints
 
 // Frames live here rather than on the stack: the ring-0 frame budget is
 // 1 KiB and these are close enough to it to be worth not testing.
@@ -74,12 +75,26 @@ static const uint8_t *sent_transport(void) {
     return g_sent_len >= ETH_HDR_LEN + ihl ? g_sent + ETH_HDR_LEN + ihl : 0;
 }
 
+// A device with an address, ADDRESSING ONE IF NOBODY HAS.
+//
+// Fourteen tests below need a device holding an address, and the kernel
+// stopped guaranteeing one when `/bin/dhcp` took the job: a lease now
+// arrives a moment after userland starts, so inheriting it would make
+// this file's coverage depend on which finished first, and a skip says
+// so only in a count nobody reads. The address stays -- there is no
+// teardown here, and it is the one QEMU's user networking hands out.
 static struct net_device *addressed_device(void) {
     for (int i = 0; i < net_device_count(); i++) {
         struct net_device *d = net_device_at(i);
         if (d && d->ip) return d;
     }
-    return 0;
+    struct net_device *d = net_device_count() ? net_device_at(0) : 0;
+    if (!d) return 0;
+    d->ip      = NET_IPV4(10, 0, 2, 15);
+    d->netmask = NET_IPV4(255, 255, 255, 0);
+    d->gateway = NET_IPV4(10, 0, 2, 2);
+    klog_printf("net: ktest addressed %s -- no lease had arrived\n", d->name);
+    return d;
 }
 
 // The 14-byte header, addressed to `dev` unless `dst` says otherwise.

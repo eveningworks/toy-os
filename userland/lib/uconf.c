@@ -62,6 +62,13 @@ int uconf_set(const char *path, const char *key, const char *value) {
     uint32_t n = etc_config_buf_set(in.data, in.size, key, value, out, sizeof out);
     if (n == 0) return 0;
 
+    // A WRITE THAT CHANGES NOTHING IS NOT PERFORMED, which is what
+    // `config` already does for a setting. It stopped being free when
+    // /bin/dhcp started running at boot: the nameserver is usually the
+    // one already on disk, and every write here is a real filesystem
+    // transaction.
+    if (in.valid && in.size == n && !memcmp(in.data, out, n)) return 1;
+
     int fd = sys_open(path, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
     if (fd < 0) return 0;
     int64_t w = sys_write(fd, out, n);

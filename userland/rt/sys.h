@@ -334,6 +334,15 @@ int sys_bind(int fd, uint32_t addr, uint16_t port, const char *dev);
 // A zero field is left alone, so one address can be changed on its own.
 int sys_net_config(const char *dev, uint32_t ip, uint32_t netmask, uint32_t gateway);
 
+// Does anybody answer for `ip` on `dev`? 1 yes, 0 not yet, -1 with
+// sys_errno(). NON-BLOCKING: it puts one ARP request on the wire (at
+// most one a second) and reports whether a reply has come back YET, so
+// a caller asks repeatedly. That split is deliberate -- RFC 3927's
+// probe count and spacing are policy, and policy lives here rather than
+// in the kernel. On a device with no address the frame is an ARP Probe;
+// on one that has an address it is an ARP Announcement.
+int sys_net_arp_probe(const char *dev, uint32_t ip);
+
 // --- machine info ----------------------------------------------------
 
 int sys_pci_count(void);

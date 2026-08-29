@@ -1541,20 +1541,28 @@ QEMU_USB = $(if $(filter xhci xhci+mouse xhci+hub,$(USB_KIND)),\
 # machine and makes the other three values expressible.
 #
 # `NET=both` is the multi-NIC configuration, and it is the shape no other
-# test here boots -- the same reason tools/multidisk_test.py exists. Only
-# the first device gets an address (kernel/drivers/net/net.c), so the
-# second one is the "registered but unconfigured" case.
+# test here boots -- the same reason tools/multidisk_test.py exists. Both
+# cards are leased an address by /bin/dhcp at boot, each from its own
+# SLIRP network.
 #
-# The guest is always 10.0.2.15, the gateway and DNS 10.0.2.2 and
-# 10.0.2.3; SLIRP answers ICMP to the gateway itself, which is what
-# `ping 10.0.2.2` proves. Commas are $(COMMA) for the reason QEMU_USB
-# documents above.
+# `NET=quiet` IS A SEGMENT WITH NOBODY ON IT -- a socket netdev listening
+# for a peer that never connects. It is the one network SLIRP cannot be,
+# because SLIRP always answers DHCP, and it is therefore the only way to
+# SEE the link-local fallback (RFC 3927) that /bin/dhcp reaches for when
+# nothing offers a lease. `NET=none` is a different thing: no card at all.
+#
+# On a SLIRP network the guest is leased 10.0.2.15, the gateway and DNS
+# are 10.0.2.2 and 10.0.2.3; SLIRP answers ICMP to the gateway itself,
+# which is what `ping 10.0.2.2` proves. Commas are $(COMMA) for the
+# reason QEMU_USB documents above.
 NET_KIND = $(if $(NET),$(NET),e1000)
 QEMU_NET = $(if $(filter none,$(NET_KIND)),-nic none,\
+             $(if $(filter quiet,$(NET_KIND)),\
+               -netdev socket$(COMMA)id=n0$(COMMA)listen=127.0.0.1:14899 -device e1000$(COMMA)netdev=n0,\
              $(if $(filter e1000 both,$(NET_KIND)),\
                -netdev user$(COMMA)id=n0 -device e1000$(COMMA)netdev=n0,)\
              $(if $(filter virtio both,$(NET_KIND)),\
-               -netdev user$(COMMA)id=n1 -device virtio-net-pci$(COMMA)netdev=n1$(COMMA)disable-legacy=on,))
+               -netdev user$(COMMA)id=n1 -device virtio-net-pci$(COMMA)netdev=n1$(COMMA)disable-legacy=on,)))
 
 # QEMU has had no default audio backend since 5.x, and -machine
 # pcspk-audiodev is what routes the emulated i8254 speaker to it.

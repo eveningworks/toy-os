@@ -495,6 +495,20 @@ struct sys_dirent {
                        // privilege model -- see docs/roadmap.md's
                        // multi-user track, which is where one goes.
 
+#define SYS_NET_ARP_PROBE 90 // RDI = a `struct net_arp_probe *`: does
+                       // anybody on this device's segment answer for
+                       // this address? Returns 1 if a reply is already
+                       // cached, 0 if not (a request went out), or
+                       // -ENODEV / -EFAULT / -EINVAL.
+                       //
+                       // NON-BLOCKING, so the answer is only ever "not
+                       // yet" and the caller asks again -- which is
+                       // what keeps RFC 3927's probe count and spacing
+                       // in ring 3 (`/bin/dhcp`). The frame is an ARP
+                       // Probe from a device with no address (sender
+                       // 0.0.0.0) and an Announcement from one that has
+                       // it.
+
 // The first syscalls added specifically so a real disk-hosted ELF64
 // binary (not just a kernel-space shell built-in) can do something
 // other than file I/O -- see docs/roadmap.md's real-disk-hosted-ELF-

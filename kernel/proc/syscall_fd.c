@@ -1463,6 +1463,39 @@ int sys_net_config(struct syscall_ctx *c) {
     return 0;
 }
 
+// Has anybody claimed this address? The mechanism half of RFC 3927's
+// duplicate-address detection: one ARP request, and whether a reply has
+// come back for it yet.
+//
+// arp_resolve() IS the probe -- it broadcasts a request whose sender
+// field is the device's own address, which is 0.0.0.0 on a device that
+// has none, and rate-limits itself to one frame a second. A caller
+// therefore gets RFC 3927's probe spacing by asking three times a
+// second apart, and its announcement by asking once more after the
+// address has been applied.
+int sys_net_arp_probe(struct syscall_ctx *c) {
+    struct net_arp_probe req;
+    if (vmm_copy_from_user(c->pml4, &req, c->a0, sizeof req) < 0) {
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+    req.name[sizeof req.name - 1] = 0;
+    if (!req.ip) { c->regs[14] = (uint64_t)(int64_t)-EINVAL; return 0; }
+
+    struct net_device *d = net_device_by_name(req.name);
+    if (!d) { c->regs[14] = (uint64_t)(int64_t)-ENODEV; return 0; }
+
+    // Drain what has arrived before answering, the same thing a woken
+    // socket reader does: the stack otherwise runs only from
+    // scheduler_idle(), so a reply sitting in the receive queue would
+    // be reported as silence.
+    net_poll();
+
+    uint8_t mac[NET_MAC_LEN];
+    c->regs[14] = (uint64_t)(int64_t)(arp_resolve(d, req.ip, mac) ? 1 : 0);
+    return 0;
+}
+
 int sys_pipe(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
     if (!vmm_validate_user_range(pml4, c->a0, sizeof(int) * 2)) {

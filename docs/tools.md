@@ -2585,13 +2585,28 @@ window without going through it will find its layout polls timing out.
   judged from the capture after the HOST sends to a port nothing is
   bound to (`hostfwd`, the only way to make a datagram arrive at the
   guest). **DHCP on 192.168.76.0/24**, which is the load-bearing DHCP
-  check: on QEMU's default network a working client and the hardcoded
-  10.0.2.15 are indistinguishable. And **DNS**, which SKIPS when the
+  check: on QEMU's default network a real lease and a hardcoded
+  10.0.2.15 are indistinguishable. Nobody types anything -- init runs
+  the client -- so this is also the check that a machine configures its
+  own network at boot.
+
+  **Phase 9 is LINK-LOCAL**, on the one segment SLIRP cannot be: a
+  socket netdev whose only peer is the test itself, so nothing answers
+  DHCP. Two boots, because the question worth asking is not "did it pick
+  an address" but "does it give one up when somebody already has it" --
+  the first boot claims one unopposed, the second is ANSWERED for that
+  exact address by `LinkPeer` and must end up somewhere else. The peer
+  is the oracle as well as the neighbour: the ARP probes (sender
+  0.0.0.0) and the announcements (sender = the claimed address) are read
+  off the wire on the host. Predicting the address here instead would be
+  checking this OS's arithmetic against a copy of itself.
+
+  And **DNS**, which SKIPS when the
   host itself cannot resolve -- an offline machine is not a bug in this
   OS -- while still checking the "no nameserver configured" path, which
   needs nothing but the guest.
 
-  **Phase 10 is TCP**, against python's own `http.server` on the host --
+  **Phase 11 is TCP**, against python's own `http.server` on the host --
   local rather than a site on the internet, because the suite must not
   depend on this machine having connectivity (the DNS phase, which
   genuinely does, SKIPS instead). An independent server will not
@@ -2618,7 +2633,7 @@ window without going through it will find its layout polls timing out.
   Nothing here drained the serial socket while a server held the
   console, so the guest filled COM1's buffer and stalled in its own
   write -- which looks exactly like a server exhausting sockets after N
-  connections, and was diagnosed that way first. Phase 11 had been
+  connections, and was diagnosed that way first. The server phase had been
   passing with four connections of margin, so one extra log line per
   request was enough to turn it red. `Shell.drain_start()` is the fix,
   the same thing `usb_test.py` does while it types.
@@ -2629,7 +2644,7 @@ window without going through it will find its layout polls timing out.
   of a program opening four of them could open none; and one in the
   harness worth knowing, since it looked like a guest bug -- SLIRP is a
   NAT and rewrites the source port, so the guest's own ephemeral port is
-  visible only in the capture. Boots eight guests against a COPY of
+  visible only in the capture. Boots ten guests against a COPY of
   `disk.img`; on demand, not in any gate.
 
 - **`partition_test.py`** -- boots toy-os with its filesystem **inside**

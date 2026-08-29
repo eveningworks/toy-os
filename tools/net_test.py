@@ -32,10 +32,10 @@ THE PHASES, and what a broken build would still pass
      assertions; a stack that only worked on one driver passes phase 1
      and fails this.
   3. Two cards at once, which is the shape the device table exists for.
-     Only the first is addressed at boot; the second is configured by
-     hand onto a DIFFERENT subnet, and the assertion is that traffic
-     then leaves through it -- per-device counters, not "a ping worked",
-     which a single-homed stack would also satisfy.
+     Each is leased an address by its OWN server on its own subnet, and
+     is then moved by hand so that traffic must leave through the card
+     that owns the destination -- per-device counters, not "a ping
+     worked", which a single-homed stack would also satisfy.
   4. No card at all (`-nic none`). `ping` must report and exit, not
      hang: a machine with no network is an ordinary state.
   5. The ARP retransmit rate. Pinging an address nobody answers put 104
@@ -52,28 +52,37 @@ THE PHASES, and what a broken build would still pass
   7. ICMP port unreachable, judged from the capture: nothing is bound,
      so the guest must answer type 3 code 3 rather than dropping in
      silence.
-  8. DHCP on a NON-DEFAULT SLIRP subnet. This is the load-bearing DHCP
-     check: on the default network a working client and a hardcoded
-     10.0.2.15 are indistinguishable, so the guest is booted on
-     192.168.76.0/24 where only a real lease can produce the address.
-  9. DNS, through SLIRP's forwarder to the host's own resolver. SKIPS
+  8. DHCP on a NON-DEFAULT SLIRP subnet, WITH NOBODY TYPING ANYTHING.
+     Nothing invents an address any more -- init's one-shot runs the
+     client -- so this is also the check that a machine configures its
+     own network at boot; 192.168.76.0/24 is what makes the address
+     unforgeable, since on the default network a real lease and a
+     hardcoded 10.0.2.15 look identical.
+  9. LINK-LOCAL (RFC 3927), on a socket netdev whose only peer is this
+     test -- the one segment SLIRP cannot be, because SLIRP always
+     answers DHCP. Two boots: the first claims an address unopposed,
+     and the second is ANSWERED for that exact address and must end up
+     somewhere else. The probes and announcements are read off the wire
+     here, on the host. Predicting the address instead would be
+     checking this OS's arithmetic against a copy of itself.
+ 10. DNS, through SLIRP's forwarder to the host's own resolver. SKIPS
      when the host cannot resolve -- an offline machine is not a bug in
      this OS -- but the "no nameserver configured" path is checked
      unconditionally, because that one needs nothing but the guest.
- 11. The guest as a SERVER: /bin/httpd serves a file the host staged
+ 12. The guest as a SERVER: /bin/httpd serves a file the host staged
      into the image, and the host fetches it back with python's own
      http.client and compares it byte for byte. Needs a port forward --
      SLIRP is a NAT, so this is the one direction that does not work
      without one. Its load-bearing check is the SECOND request: a
      listener consumed by its first connection passes everything else.
- 10. TCP, against a REAL HTTP SERVER on the host -- python's own
+ 11. TCP, against a REAL HTTP SERVER on the host -- python's own
      http.server, which shares no code with this OS and will simply not
      answer a malformed handshake. Deliberately local rather than a site
      on the internet: the suite must not depend on this machine having
      connectivity. The capture is then checked for a genuine three-way
      handshake and for TCP checksums recomputed here, which is the same
      pseudo-header trap UDP has.
- 12. inetd -- a CONNECTION PER CHILD PROCESS. Two checks the serial
+ 13. inetd -- a CONNECTION PER CHILD PROCESS. Two checks the serial
      server cannot pass: /bin/cat run as an echo server (it copies fd 0
      to fd 1 and knows nothing about sockets, so bytes coming back are
      proof the connection landed on the child's standard streams), and
@@ -340,21 +349,34 @@ def decode(frames):
 
 # --- the guest --------------------------------------------------------
 
-def nic_args(kind, pcap, extra=""):
+def nic_args(kind, pcap, extra="", quiet_port=None):
     dump = f" -object filter-dump,id=fd0,netdev=n0,file={pcap}" if pcap else ""
     if kind == "none":
         return " -nic none"
+    if kind == "quiet":
+        # A SEGMENT WITH NOBODY ON IT, which SLIRP can never be -- it
+        # always answers DHCP. A socket netdev listening with no peer
+        # is a link whose frames go nowhere; LinkPeer below is what
+        # connects to it when the test wants to answer something.
+        return (f" -netdev socket,id=n0,listen=127.0.0.1:{quiet_port}"
+                f" -device e1000,netdev=n0{dump}")
     if kind == "e1000":
         return f" -netdev user,id=n0{extra} -device e1000,netdev=n0{dump}"
     if kind == "virtio":
         return f" -netdev user,id=n0 -device virtio-net-pci,netdev=n0,disable-legacy=on{dump}"
     if kind == "both":
+        # THE SECOND CARD IS ON ITS OWN SUBNET. Both used to be on
+        # SLIRP's default, which was invisible while only the first
+        # card was addressed and became a real ambiguity the moment
+        # /bin/dhcp started leasing both: two cards holding 10.0.2.15
+        # cannot show which one a reply reached.
         return (f" -netdev user,id=n0 -device e1000,netdev=n0{dump}"
-                f" -netdev user,id=n1 -device virtio-net-pci,netdev=n1,disable-legacy=on")
+                f" -netdev user,id=n1,net=192.168.77.0/24,host=192.168.77.2"
+                f" -device virtio-net-pci,netdev=n1,disable-legacy=on")
     raise ValueError(kind)
 
 
-def launch(disk, tmp, tag, kind, pcap=None, netdev_extra=""):
+def launch(disk, tmp, tag, kind, pcap=None, netdev_extra="", quiet_port=None):
     serial = os.path.abspath(os.path.join(tmp, f"net_{tag}.log"))
     sock = os.path.abspath(os.path.join(tmp, f"net_{tag}.serial"))
     pidfile = os.path.abspath(os.path.join(tmp, f"net_{tag}.pid"))
@@ -365,7 +387,7 @@ def launch(disk, tmp, tag, kind, pcap=None, netdev_extra=""):
         install_grub.boot_medium(disk, None), os.path.join(ROOT, "toy-os.iso")))
     cmd = (f"qemu-system-x86_64 {boot}"
            f" -drive file={disk},format=raw,if=ide,discard=unmap"
-           f"{nic_args(kind, pcap, netdev_extra)}"
+           f"{nic_args(kind, pcap, netdev_extra, quiet_port)}"
            f" -m 1024 -display none -no-reboot"
            f" -serial unix:{sock},server,nowait"
            f" -daemonize -pidfile {pidfile}")
@@ -386,9 +408,169 @@ def launch(disk, tmp, tag, kind, pcap=None, netdev_extra=""):
                 # run and its own temp directory.
                 kill(pidfile)
                 raise RuntimeError(f"guest {tag} never reached a debug prompt")
+            # THE NETWORK COMES UP AFTER THE PROMPT DOES. Nothing
+            # assigns an address at boot any more -- init's `dhcp`
+            # one-shot leases one about a second in -- so a phase that
+            # pings immediately is driving an unconfigured machine and
+            # fails as `no such device`, which looks nothing like what
+            # it is. `none` has no card and `quiet` has no server; both
+            # are phases about exactly that, and wait for themselves.
+            if kind in ("e1000", "virtio", "both"):
+                wait_configured(sh)
             return sh, pidfile
         time.sleep(0.4)
     raise RuntimeError(f"guest {tag} never opened its serial socket")
+
+
+# THE ADDRESS ARRIVES AFTER THE PROMPT DOES. Nothing assigns one at
+# boot any more -- init's `dhcp` one-shot does, and a DISCOVER/OFFER/
+# REQUEST/ACK exchange lands about a second after the debug console is
+# up. So poll for exactly what the caller is about to assert on rather
+# than reading ifconfig once and calling a race a bug.
+def wait_for_addr(sh, needle, timeout=40.0):
+    deadline = time.time() + timeout
+    out = ""
+    while time.time() < deadline:
+        out = sh.run("ifconfig")
+        if needle in out:
+            return out
+        time.sleep(0.5)
+    return out
+
+
+def service_status(sh, timeout=30.0):
+    """init's service table, asked for until it arrives.
+
+    THE FIRST READER PAYS FOR THE FILE. init publishes /tmp/init.status
+    only once somebody rings its doorbell, so the first `service` run on
+    a machine rings, waits, and often finishes after the console's read
+    window has closed -- its output then turns up in front of the NEXT
+    command, which reads exactly like the command having printed
+    nothing. Asking again is what a person does, and it is deterministic
+    in a way a longer single read is not."""
+    deadline = time.time() + timeout
+    out = ""
+    while time.time() < deadline:
+        out = sh.run("sh spawn /bin/service", timeout=20.0)
+        if "NAME" in out and "EXEC" in out:
+            return out
+        time.sleep(0.5)
+    return out
+
+
+def wait_service_settled(sh, name, timeout=40.0):
+    """The table, once `name` has stopped being `running`.
+
+    A one-shot is still a running process while it works, and the
+    link-local path works for nine seconds -- four waiting for an offer
+    that never comes, three probing, two announcing -- with the address
+    applied before the last of that. So `ifconfig` answering is not the
+    client having finished, and a status read then says `running`,
+    which is true and not what the check is about."""
+    deadline = time.time() + timeout
+    out = ""
+    while time.time() < deadline:
+        out = service_status(sh)
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[0] == name and parts[1] != "running":
+                return out
+        time.sleep(1.0)
+    return out
+
+
+def wait_configured(sh, timeout=40.0):
+    """Every card that is going to get an address has one."""
+    deadline = time.time() + timeout
+    out = ""
+    while time.time() < deadline:
+        out = sh.run("ifconfig")
+        if "netmask" in out and "(unconfigured)" not in out:
+            return out
+        time.sleep(0.5)
+    return out
+
+
+class LinkPeer:
+    """The other end of a `quiet` segment: QEMU's socket netdev, which
+    is raw Ethernet frames behind a four-byte big-endian length.
+
+    It exists to be the NEIGHBOUR a link-local claim has to check for.
+    Recording the frames makes it the oracle too -- the ARP probes and
+    announcements are read here, on the host, by code that shares
+    nothing with the guest."""
+
+    def __init__(self, port, answer_for=None, mac=b"\x52\x54\x00\xaa\xbb\xcc"):
+        self.port = port
+        self.answer_for = answer_for   # a 4-byte address to claim, or None
+        self.mac = mac
+        self.frames = []
+        self.answered = 0
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        # STARTED BEFORE QEMU IS. The guest asks for an address within a
+        # second of boot, and a peer that connects after that has
+        # nothing to answer -- the frames are simply dropped.
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        self._thread.join(timeout=3)
+
+    def arps(self):
+        """(op, sender, target) for every ARP frame the guest sent."""
+        out = []
+        for f in self.frames:
+            if len(f) >= 42 and struct.unpack(">H", f[12:14])[0] == 0x0806:
+                out.append((struct.unpack(">H", f[20:22])[0], f[28:32], f[38:42]))
+        return out
+
+    def _reply(self, sock, frame):
+        guest_mac = frame[22:28]
+        r = (guest_mac + self.mac + b"\x08\x06"
+             + struct.pack(">HHBBH", 1, 0x0800, 6, 4, 2)
+             + self.mac + self.answer_for + guest_mac + frame[28:32])
+        r += b"\x00" * (60 - len(r))
+        sock.sendall(struct.pack(">I", len(r)) + r)
+        self.answered += 1
+
+    def _run(self):
+        sock = None
+        deadline = time.time() + BOOT_TIMEOUT_S
+        while time.time() < deadline and not self._stop.is_set():
+            try:
+                sock = socket.create_connection(("127.0.0.1", self.port), timeout=1)
+                break
+            except OSError:
+                time.sleep(0.05)
+        if sock is None:
+            return
+        sock.settimeout(0.5)
+        buf = b""
+        while not self._stop.is_set():
+            try:
+                chunk = sock.recv(65536)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            if not chunk:
+                break
+            buf += chunk
+            while len(buf) >= 4:
+                n = struct.unpack(">I", buf[:4])[0]
+                if len(buf) < 4 + n:
+                    break
+                frame, buf = buf[4:4 + n], buf[4 + n:]
+                self.frames.append(frame)
+                if (self.answer_for and len(frame) >= 42
+                        and struct.unpack(">H", frame[12:14])[0] == 0x0806
+                        and struct.unpack(">H", frame[20:22])[0] == 1
+                        and frame[38:42] == self.answer_for):
+                    self._reply(sock, frame)
+        sock.close()
 
 
 def kill(pidfile):
@@ -419,10 +601,10 @@ def phase_one_nic(r, disk, tmp, kind, driver):
     pcap = os.path.abspath(os.path.join(tmp, f"net_{kind}.pcap"))
     sh, pidfile = launch(disk, tmp, kind, kind, pcap)
     try:
-        cfg = sh.run("ifconfig")
+        cfg = wait_for_addr(sh, GUEST_IP)
         r.check(f"[{kind}] the card is registered as net0 and named {driver}",
                 "net0:" in cfg and driver in cfg, cfg.strip()[-300:])
-        r.check(f"[{kind}] it came up with the user-networking address",
+        r.check(f"[{kind}] it is leased the user-networking address at boot",
                 GUEST_IP in cfg, cfg.strip()[-300:])
 
         out = sh.run(f"ping -c 3 {GATEWAY}", timeout=40.0)
@@ -466,14 +648,20 @@ def phase_one_nic(r, disk, tmp, kind, driver):
 def phase_two_nics(r, disk, tmp):
     sh, pidfile = launch(disk, tmp, "both", "both")
     try:
-        cfg = sh.run("ifconfig")
+        cfg = wait_for_addr(sh, "192.168.77.")
         r.check("[both] both cards are registered, on both drivers",
                 "net0:" in cfg and "net1:" in cfg and "e1000" in cfg and "virtio-net" in cfg,
                 cfg.strip()[-400:])
-        # Only the first gets an address: two cards on one address is
-        # worse than one card with none (kernel/drivers/net/net.c).
-        r.check("[both] only the first card is addressed",
-                cfg.count("(unconfigured)") == 1, cfg.strip()[-400:])
+        # EVERY card without an address is leased one, which is what a
+        # bare `dhcp` means (dhclient's behaviour with no interface
+        # named). The two servers are on different subnets, so this
+        # also says each card was answered by ITS OWN -- a client that
+        # ignored the device it bound to would put one subnet's address
+        # on both.
+        r.check("[both] both cards are leased an address, each by its own server",
+                cfg.count("(unconfigured)") == 0
+                and GUEST_IP in cfg and "192.168.77." in cfg,
+                cfg.strip()[-400:])
 
         # Move the e1000 to a subnet nothing answers on, and put the
         # user-network address on the virtio card instead. A stack that
@@ -510,6 +698,15 @@ def phase_no_nic(r, disk, tmp):
         r.check("[none] ping reports and exits instead of hanging",
                 "100% packet loss" in out or "failed" in out or "no ARP reply" in out,
                 out.strip()[-300:])
+
+        # THE FAILING SIDE OF THE ONE-SHOT. A machine with no card is
+        # the one boot where the client can do nothing at all, and
+        # `failed` rather than `done` is what makes `service` able to
+        # answer "did this machine get an address?" -- a status word
+        # that said `done` either way would answer nothing.
+        status = wait_service_settled(sh, "dhcp")
+        r.check("[none] init reports the address one-shot as failed",
+                "dhcp" in status and "failed" in status, status.strip()[-400:])
     finally:
         kill(pidfile)
         sh.close()
@@ -701,27 +898,47 @@ def phase_port_unreachable(r, disk, tmp):
 def phase_dhcp(r, disk, tmp):
     """A NON-DEFAULT SLIRP subnet, which is the whole point.
 
-    On QEMU's default network a working DHCP client and a hardcoded
-    10.0.2.15 produce the same `ifconfig` output, so this boots on
-    192.168.76.0/24 where the address can only have come from a lease."""
+    Nothing invents an address here any more, so a lease is the only
+    way this guest can have one -- but on QEMU's default network the
+    lease IS 10.0.2.15, which is also what a stack with a hardcoded
+    address would show. Booting on 192.168.76.0/24 is what makes the
+    address unforgeable evidence of a real exchange."""
     extra = ",net=192.168.76.0/24,host=192.168.76.2,dhcpstart=192.168.76.20"
     sh, pidfile = launch(disk, tmp, "dhcp", "e1000", None, netdev_extra=extra)
     try:
-        before = sh.run("ifconfig")
-        r.check("[dhcp] before the lease the guest has the built-in default",
-                "10.0.2.15" in before, before.strip()[-300:])
+        # NOBODY TYPED ANYTHING. init's one-shot ran the client, so the
+        # address, the netmask and the gateway are all a boot-time
+        # exchange with a server on a subnet this OS knows nothing about.
+        boot = wait_for_addr(sh, "192.168.76.")
+        r.check("[dhcp] the machine is leased an address at boot, unprompted",
+                "192.168.76." in boot, boot.strip()[-400:])
+        r.check("[dhcp] with the gateway this network actually has",
+                "192.168.76.2" in boot, boot.strip()[-400:])
+        r.check("[dhcp] and no address the kernel could have invented",
+                "10.0.2.15" not in boot, boot.strip()[-400:])
 
-        out = sh.run("dhcp", timeout=40.0)
-        r.check("[dhcp] the client gets a lease from the server on this segment",
+        status = wait_service_settled(sh, "dhcp")
+        r.check("[dhcp] init reports the one-shot as done rather than running",
+                "dhcp" in status and "done" in status, status.strip()[-400:])
+
+        # A NAMED DEVICE IS RE-LEASED WHATEVER STATE IT IS IN; a bare
+        # run leaves a card that already has an address alone. The two
+        # spellings are the difference between "configure this machine"
+        # and "configure this card", and only the second can be a
+        # re-lease.
+        out = sh.run("dhcp net0", timeout=40.0)
+        r.check("[dhcp] a named device is re-leased on demand",
                 "192.168.76." in out, out.strip()[-400:])
         r.check("[dhcp] and a nameserver with it",
                 "nameserver 192.168.76." in out, out.strip()[-400:])
 
+        out = sh.run("dhcp", timeout=40.0)
+        r.check("[dhcp] a bare run leaves an already-addressed card alone",
+                "already has an address" in out, out.strip()[-400:])
+
         after = sh.run("ifconfig")
         r.check("[dhcp] the address is applied to the device",
                 "192.168.76." in after and "10.0.2.15" not in after, after.strip()[-400:])
-        r.check("[dhcp] with the gateway this network actually has",
-                "192.168.76.2" in after, after.strip()[-400:])
 
         # The lease is only real if it works: a client that applied a
         # plausible address to the wrong device would pass everything
@@ -732,6 +949,105 @@ def phase_dhcp(r, disk, tmp):
     finally:
         kill(pidfile)
         sh.close()
+
+
+LINKLOCAL_PORT = 14877
+
+
+def ll_address(cfg):
+    """The 169.254 address `ifconfig` reports, or None."""
+    for word in cfg.replace("\n", " ").split():
+        if word.startswith("169.254."):
+            parts = word.split(".")
+            if len(parts) == 4 and all(x.isdigit() for x in parts):
+                return word
+    return None
+
+
+def phase_linklocal(r, disk, tmp):
+    """RFC 3927, ON A SEGMENT WITH NOBODY ON IT.
+
+    SLIRP cannot be this network -- it always answers DHCP -- so the
+    guest is put on a socket netdev whose only peer is this test. Two
+    boots, because the load-bearing question is not "did it pick an
+    address" but "does it give one up when somebody already has it":
+    the first boot claims an address unopposed, and the second one is
+    answered for exactly that address and must end up somewhere else.
+    Predicting the address on the host instead would be checking this
+    OS's arithmetic against a copy of itself."""
+    peer = LinkPeer(LINKLOCAL_PORT)
+    peer.start()
+    sh, pidfile = launch(disk, tmp, "linklocal", "quiet", quiet_port=LINKLOCAL_PORT)
+    try:
+        cfg = wait_for_addr(sh, "169.254.", timeout=60.0)
+        claimed = ll_address(cfg)
+        r.check("[link-local] with no server answering, the guest claims 169.254/16",
+                claimed is not None, cfg.strip()[-400:])
+        r.check("[link-local] with the /16 the RFC gives it and no gateway",
+                "255.255.0.0" in cfg and "gateway -" in cfg, cfg.strip()[-400:])
+
+        # A CLAIM IS A SUCCESS. Reported as `done` rather than `failed`
+        # is what says a machine with no DHCP server is a configured
+        # machine and not a broken one.
+        status = wait_service_settled(sh, "dhcp", timeout=60.0)
+        r.check("[link-local] init reports the one-shot as done, not failed",
+                "dhcp" in status and "done" in status, status.strip()[-400:])
+
+        # THE SECOND ANNOUNCEMENT LANDS TWO SECONDS AFTER THE ADDRESS
+        # DOES, so reading the wire the moment ifconfig answers sees
+        # one of them -- a poll whose exit condition is weaker than
+        # what follows it, which is this repo's own flake shape.
+        want = bytes(int(x) for x in claimed.split(".")) if claimed else None
+        deadline = time.time() + 15.0
+        while want and time.time() < deadline:
+            if len([a for a in peer.arps() if a[0] == 1 and a[1] == want]) >= 2:
+                break
+            time.sleep(0.5)
+
+        arps = peer.arps()
+        probes = [a for a in arps if a[0] == 1 and a[1] == b"\x00\x00\x00\x00"]
+        r.check("[link-local] it probed first, with sender 0.0.0.0 as a probe must",
+                len(probes) >= 3, f"{len(probes)} probes of {len(arps)} ARP frames")
+        if want:
+            r.check("[link-local] every probe asked about the address it took",
+                    probes and all(a[2] == want for a in probes),
+                    str([".".join(str(b) for b in a[2]) for a in probes]))
+            # The announcement is the same frame with OUR address as the
+            # sender -- which is what tells a neighbour the address moved
+            # rather than asking whether it is free.
+            announces = [a for a in arps if a[0] == 1 and a[1] == want]
+            r.check("[link-local] and announced it afterwards, as the sender",
+                    len(announces) >= 2, f"{len(announces)} announcements")
+    finally:
+        kill(pidfile)
+        sh.close()
+        peer.stop()
+
+    if not claimed:
+        print("  SKIP  [link-local] no address was claimed; skipping the conflict boot")
+        return
+
+    # THE SAME MACHINE, ON A SEGMENT WHERE THAT ADDRESS IS TAKEN.
+    taken = bytes(int(x) for x in claimed.split("."))
+    peer = LinkPeer(LINKLOCAL_PORT + 1, answer_for=taken)
+    peer.start()
+    sh, pidfile = launch(disk, tmp, "linklocal_conflict", "quiet",
+                         quiet_port=LINKLOCAL_PORT + 1)
+    try:
+        cfg = wait_for_addr(sh, "169.254.", timeout=90.0)
+        second = ll_address(cfg)
+        r.check("[link-local] a neighbour answering for the address is heard",
+                peer.answered > 0, f"{peer.answered} replies sent")
+        r.check("[link-local] and the guest claims a DIFFERENT one",
+                second is not None and second != claimed,
+                f"unopposed {claimed}, opposed {second}")
+        r.check("[link-local] still inside the range the RFC reserves",
+                second is not None and second.startswith("169.254.")
+                and second != claimed, str(second))
+    finally:
+        kill(pidfile)
+        sh.close()
+        peer.stop()
 
 
 def host_can_resolve():
@@ -754,7 +1070,9 @@ def phase_dns(r, disk, tmp):
         r.check("[dns] with no nameserver configured, host says so",
                 "no nameserver" in out, out.strip()[-300:])
 
-        out = sh.run("dhcp", timeout=40.0)
+        # NAMED, because the boot-time one-shot has already addressed
+        # this card and a bare run would leave it alone.
+        out = sh.run("dhcp net0", timeout=40.0)
         r.check("[dns] dhcp writes the resolver it was given",
                 "/etc/resolv.conf" in out, out.strip()[-300:])
 
@@ -1172,13 +1490,15 @@ def main():
         phase_port_unreachable(r, disk, tmp)
         print("Phase 8: DHCP, on a subnet the default cannot produce")
         phase_dhcp(r, disk, tmp)
-        print("Phase 9: DNS")
+        print("Phase 9: link-local, on a segment with no server")
+        phase_linklocal(r, disk, tmp)
+        print("Phase 10: DNS")
         phase_dns(r, disk, tmp)
-        print("Phase 10: TCP, against a real HTTP server on the host")
+        print("Phase 11: TCP, against a real HTTP server on the host")
         phase_tcp(r, disk, tmp)
-        print("Phase 11: the guest as a SERVER, with the host connecting in")
+        print("Phase 12: the guest as a SERVER, with the host connecting in")
         phase_server(r, disk, tmp)
-        print("Phase 12: inetd -- a connection per child process")
+        print("Phase 13: inetd -- a connection per child process")
         phase_inetd(r, disk, tmp)
     finally:
         if not args.keep:

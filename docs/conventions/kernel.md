@@ -1716,16 +1716,17 @@ driver never learns what a packet means.
   `sockaddr_in`. A `uint32_t` IP is the same type in both orders, so a
   missed swap is invisible to the compiler; keeping the conversion in
   one place is what makes it findable.
-- **THE FIRST DEVICE IS GIVEN QEMU'S USER-NETWORKING ADDRESSES AT BOOT**
-  (10.0.2.15/24 via 10.0.2.2), and only the first -- two cards on one
-  address is worse than one card with none. It is a placeholder for
-  DHCP, which is where an address is supposed to come from.
+- **NO DEVICE IS GIVEN AN ADDRESS AT BOOT.** A card comes up
+  unconfigured and `/bin/dhcp` -- init's one-shot -- is where an address
+  comes from; see the link-local entry below.
 - **THE e1000 NEEDED NO FLAG AND THAT IS WHY IT WAS FIRST.** QEMU's
   default `pc` machine attaches an 8086:100E with user networking when
   no `-net`/`-netdev` option is given, so every guest this project has
   ever booted had an unclaimed NIC on the bus. `NET=e1000|virtio|both|
   none` (and `vm.py --net`) names what was already implicit and makes
-  the other three expressible.
+  the other three expressible. `NET=quiet` is a fifth: a socket netdev
+  with no peer, which is a segment where nothing answers -- the only way
+  to reach the link-local path, since SLIRP always answers DHCP.
 
 
 ## UDP IS A PORT DEMUX, DHCP AND DNS ARE RING-3 PROGRAMS, AND A NAME IS RESOLVED BY A LIBRARY
@@ -1824,13 +1825,54 @@ with the answer).
   reply. It reproduced only AFTER something unrelated had run -- the
   worst shape a bug can have -- and `/tests/udp_test` now checks the
   exact sequence.
-- **THE LEASE IS NOT RENEWED AND `dhcp` DOES NOT RUN AT BOOT.** Both are
-  real limitations rather than oversights. The second USED to have a
-  blocker -- a filesystem write during the desktop's startup appeared to
-  wedge the compositor, and `/bin/dhcp` writes `/etc/resolv.conf` -- and
-  that blocker is gone: the stall was `serial_putc()` waiting on a
-  stalled COM1 consumer, with the write only supplying the log volume.
-  The kernel's boot-time defaults stay until something runs the client.
+- **THE LEASE IS NOT RENEWED.** A real limitation rather than an
+  oversight: renewal at T1 needs a daemon, and a daemon needs a reason
+  to exist beyond one timer.
+
+## NOTHING INVENTS AN ADDRESS: A CARD COMES UP UNCONFIGURED, `/bin/dhcp` RUNS AT BOOT, AND NO SERVER MEANS LINK-LOCAL
+
+`net_autoconfig()` is gone. It gave the first card 10.0.2.15/24 via
+10.0.2.2 at boot -- QEMU's user-networking defaults -- and its own
+comment called itself a placeholder for DHCP. `docs/decisions.md` has
+why it went; the rule is that the kernel assigns nothing and one ring-3
+program is where an address comes from, as on Linux.
+
+- **IT RUNS AT BOOT AS A ONE-SHOT.** `data/etc/services.d/dhcp`,
+  `Restart=no`, no `Target=` (the network is not the desktop's). That
+  key is systemd's `Type=oneshot` and init already had every piece of
+  it: a `done` state, and a readiness barrier that releases for a
+  service which has had its single run. What was missing was the exit
+  CODE -- a one-shot that failed reported `done` like one that worked,
+  so `service` could not answer "did this machine get an address?".
+  It reports `failed` now.
+- **A BARE `dhcp` TAKES EVERY CARD WITHOUT AN ADDRESS**, which is
+  dhclient's rule when no interface is named, and says so about the ones
+  it leaves alone. Naming a device takes it whatever state it is in,
+  which is how a card is re-leased by hand -- and the only spelling that
+  can be, now that a boot has already addressed it.
+- **NOTHING ANSWERING IS NOT A FAILURE: RFC 3927 LINK-LOCAL.**
+  169.254.x.y/16, no gateway, the candidate derived from the MAC so it
+  is stable across reboots. Three ARP probes a second apart, up to ten
+  candidates, then two announcements. Windows calls this APIPA and
+  reaches for it in the same place.
+- **`SYS_NET_ARP_PROBE` IS THE WHOLE KERNEL HALF, AND IT DOES NOT
+  BLOCK.** `arp_resolve()` was already the probe: it broadcasts a
+  request whose sender is the device's own address, which is 0.0.0.0 on
+  an unconfigured device -- exactly an ARP Probe -- and asking again
+  after the address is applied sends the same frame with the new address
+  as its sender, which is exactly an ARP Announcement. The syscall sends
+  one request and says whether a reply is cached YET, so the probe count
+  and spacing stay in ring 3 rather than compiling an RFC into the
+  kernel.
+- **THE ADDRESS NOW ARRIVES AFTER THE CONSOLE PROMPT DOES**, about a
+  second into the boot. Anything that pings a freshly booted guest has
+  to WAIT for it: `tools/net_test.py`'s `launch()` polls, and the phases
+  that did not were failing as `no such device`, which looks nothing
+  like what it is.
+- **A LINK-LOCAL ADDRESS IS CLAIMED AND NEVER DEFENDED.** The RFC asks a
+  host to keep watching for a conflicting ARP afterwards; `arp_input()`
+  learns from a conflicting frame without noticing that it conflicts,
+  and there is no channel to report one on. Roadmap.
 
 ## TCP IS CLIENT-SIDE, IN-ORDER ONLY, AND ITS TIMERS RIDE THE BLOCKING RECEIVE
 
