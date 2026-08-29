@@ -5,6 +5,12 @@ void serial_init(void);
 void serial_write(const char *s);
 void serial_putc(char c);
 
+// Output is QUEUED, not waited on -- see serial.c's trap comment. These
+// two move the backlog: the timer calls serial_tx_poll() so it drains
+// with nothing printing, and serial_write() flushes each line.
+void serial_tx_poll(void);
+void serial_flush(void);
+
 // Wires up COM1's IRQ4 for RX (see serial_try_getc() below) -- MUST be
 // called after idt_init(), never from/before serial_init() itself; see
 // serial.c's own comment on why the ordering matters.

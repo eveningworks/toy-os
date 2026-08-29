@@ -26,6 +26,7 @@ buildable now. Something that MISBEHAVES is not here -- that is
 
 - [ ] `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR, not a 64 KiB guess  *(USB)*
 - [ ] Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today  *(Networking)*
+- [ ] Run `dhcp` at boot -- unblocked: the startup stall was COM1 backpressure, not the write  *(Networking)*
 - [ ] The ring-3 WM busy-waits instead of sleeping -- built on branch `wm-wait-ready`, PARKED: it regresses `uterm`  *(Known limitations and papercuts (unscheduled))*
 - [ ] System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons  *(Known limitations and papercuts (unscheduled))*
 <!-- END next-up -->
@@ -691,7 +692,7 @@ run on, not by order.
 - [x] ~~**A connection per child process**~~ DONE 2026-08-29 -- `/bin/inetd`; the spawn NAMES fd 0/1, so `inetd -p 7 /bin/cat` echoes
 - [ ] **NEXT** Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today
 - [ ] An RTT estimate, and Nagle -- the retransmit timeout is a fixed floor with backoff
-- [ ] Run `dhcp` at boot -- blocked on the desktop-startup write bug in `docs/bugs.md`, not on effort
+- [ ] **NEXT** Run `dhcp` at boot -- unblocked: the startup stall was COM1 backpressure, not the write
 - [ ] Renew the lease before it expires -- `/bin/dhcp` asks once and exits
 - [ ] An ICMP error reaching the socket that caused it -- reports are sent, and an arriving one is dropped for want of an error queue
 - [ ] An `arp` command -- the cache is diagnosable only from inside the kernel today

@@ -2602,7 +2602,7 @@ Listed with the honest reason each is or isn't attractive.
 
 - [ ] An RTT estimate, and Nagle -- the retransmit timeout is a fixed 200 ms floor with exponential backoff, and every write goes out at once.
 
-- [ ] Run `dhcp` at boot -- the obvious next step, and it is blocked on a measured bug rather than on effort: a filesystem write during the desktop's STARTUP wedges the compositor (`docs/bugs.md`, 3 runs in 3), and `/bin/dhcp` writes `/etc/resolv.conf`. Until that is understood, the kernel's boot-time defaults stay and the client is something you run.
+- [ ] Run `dhcp` at boot -- the obvious next step, and NO LONGER BLOCKED. It was held back because a filesystem write during the desktop's startup appeared to stall the compositor and `/bin/dhcp` writes `/etc/resolv.conf`; that stall turned out to be `serial_putc()` waiting unbounded on a THRE bit a stalled COM1 consumer never sets, with the write only supplying the log volume. What remains is the ordinary design: where the descriptor lives, what `Restart=` means for a client that asks once and exits, and what a boot with no DHCP server should cost.
 
 - [ ] Renew the lease -- `/bin/dhcp` asks once and exits. A lease that expires under a long-running machine leaves it using an address the server has since given away. Renewal at T1 needs a daemon, and a daemon needs a reason to exist beyond one timer.
 
@@ -3214,80 +3214,6 @@ process using the image [disk.img]?`.
 
 `python3 tools/flake_hunt.py ktest -n 10` is the loop for measuring any
 change to it, and it scores these runs as `error` rather than `pass`.
-
-### A filesystem write during the desktop's STARTUP stalls the clock
-
-Found on 2026-08-27 while adding `/bin/service`: init began writing a
-~120-byte status file to `/tmp` at about 0.8 s, and `idle_desktop_test`
-went red on its CLOCK CONTROL -- the check that exists to prove motion
-is visible at all.
-
-**Reproduced 2026-08-29, ~1 run in 2**, by restoring init's
-unconditional `write_status()` (the original trigger) on a disk made
-fresh with `make clean` FOLLOWED BY `make clean-disk`. Both are needed:
-`seed/sync/` is build staging that `clean-disk` does not touch, so a
-service descriptor deleted from `data/` keeps being seeded onto a
-"fresh" image until `make clean` -- which silently invalidated the first
-three reproduction attempts here.
-
-**WHAT THIS IS NOT. The old headline said the compositor wedges and
-"presents nothing at all, cursor included". That is wrong, and so are
-three more of its claims.** Each was ruled out by measurement against a
-HEALTHY boot with the same counters -- a number with no control means
-nothing, and two of these looked damning until the control was run:
-
-- **Not the timer.** Ticks advance at 100/s during the stall, anchored
-  against host wall clock.
-- **Not the PIC.** `imr=e8 isr=00 irr=00`: the timer is unmasked,
-  nothing is in service, nothing is pending.
-- **Not the scheduler.** It picks `toywm` ~100 times a second
-  throughout, and ring-3 interrupt entries continue at ~2400/s -- the
-  same rate as a healthy boot.
-- **Not `toywm` being starved or stopped.** `ps` reports it `ready`,
-  and `scheduler_proc_info()` would report STOPPED if the flag were
-  set. **Its CPU reads 0.20 on a healthy boot too**, so the old entry's
-  "CPU still advancing" is not a distinguishing symptom either way.
-- **Not the WM's frame loop.** It runs at ~100 fps for the whole stall,
-  reaching every phase, with `sys_ticks()` advancing correctly inside
-  it. Renders fire once a second with the correct damage rect
-  (`0,698 1280x22`, the taskbar strip).
-
-**What is actually observed** is that the clock TEXT does not change for
-about three seconds -- so the strip is redrawn with identical pixels and
-the screen is genuinely static, which is what the control correctly
-reports. Everything below the WM is healthy while it happens.
-
-**What is NOT established** is why. Every manual probe -- ticks, the
-RTC, the screen -- lands one to two seconds after the test finishes, by
-which time the machine has recovered and reads perfectly normal. Catching
-the mechanism needs instrumentation that survives the window rather than
-a query afterwards, and the klog ring wraps under any probe verbose
-enough to see it: a file-backed serial log is the way in.
-
-**Two hazards this cost time to learn**, worth knowing before the next
-attempt. The klog ring is small enough that a probe printing more than
-about a line a second destroys the evidence it is gathering -- several
-conclusions here were drawn from a truncated tail and had to be
-withdrawn. And a rate-limited probe (`n <= 6`) looks exactly like a loop
-that stopped; make every probe in a comparison use the SAME limiter, or
-the difference you measure is your own instrument.
-
-The `open() rejected -- file not found` burst that accompanies it is
-`fs_read()`'s nested-read refusal, which is indistinguishable from a
-missing file at the call site (CLAUDE.md says so). It is a real
-consequence of the write and is not, on its own, the stall.
-
-**init works around it rather than standing on it**: the status file is
-published only once somebody has rung the doorbell, and only on a pass
-where nothing is pending. That is right on its own terms (see
-`docs/decisions.md`), and it is not a fix -- it is why `dhcp` still
-cannot run at boot.
-
-Repro: `make clean && make clean-disk && make iso`, restore init's
-unconditional `write_status()`, then
-`python3 tools/idle_desktop_test.py --sock .vm.serial --qmp-port 4445`
-against a guest started with `tools/vm.py`, which leaves the guest alive
-afterwards -- unlike `gui_regress.py -k idle`, which tears it down.
 
 ### `gui_regress.py`'s `uterm` fails its two `edit` checks under full parallel load
 

@@ -326,10 +326,13 @@ this the obvious way), not from how much history it accumulated.
     before it spawns anything -- `/tmp` is not emptied at boot here, so
     a request left by a machine that lost power would be obeyed and last
     boot's status read as this boot's. Ordering them ahead of the first
-    spawn is deliberate: **a filesystem write once the desktop is
-    STARTING UP wedges the compositor** (`docs/bugs.md`), which is the
-    other half of why the status is published on demand rather than at
-    boot.
+    spawn was ALSO believed to matter because a write during the
+    desktop's startup appeared to wedge the compositor; that was wrong --
+    the stall was `serial_putc()` waiting on a stalled COM1 consumer (see
+    this file's entry on queued log output). The remaining reason to
+    publish on demand stands on its own: there is no tmpfs here, so a
+    status rewritten every pass is a real disk transaction per pass on an
+    idle machine.
   - **A DESCRIPTOR MUST APPEAR WHOLE**: init rescans on ANY filesystem
     change, so a file built line by line in `/etc/services.d` can be
     read half-written -- and a half-written `After=` names a service not
@@ -975,6 +978,49 @@ needs a scheduler slot** and refuses the legacy `run` loader by name:
 there, `SYS_SLEEP` is refused AND the monotonic clock never advances, so
 a poll loop spins against a deadline that cannot arrive and takes the
 machine with it.
+
+## KERNEL LOG OUTPUT IS QUEUED, NEVER WAITED ON -- A STALLED COM1 CONSUMER MUST NOT STOP THE MACHINE
+
+`serial_putc()` was `while (!transmit_empty()); outb(COM1, c);` -- an
+unbounded wait on a bit the UART sets only while its consumer keeps up.
+**QEMU's socket chardev stops setting it when an attached peer stops
+draining**, so the kernel spun there indefinitely **with interrupts still
+enabled**: ticks advanced, the PIC was clean, and the scheduler went on
+picking the compositor while nothing ran. A klog burst inside an
+`FS_OP()` spun holding the preemption guard, which is what made it total
+rather than merely slow.
+
+**That is why the symptom pointed everywhere except the cause.** It was
+filed for two days as "a filesystem write during the desktop's startup
+stalls the clock", and four mechanisms were ruled out by measurement --
+the timer, the PIC, the scheduler, the WM's frame loop -- because all
+four really were healthy. The filesystem write never did anything except
+supply the log volume.
+
+So output goes into a ring and is pushed whenever the line will take it:
+from `serial_putc()` itself, from `serial_flush()` at the end of each
+`serial_write()`, and from the timer tick, so a backlog still moves when
+nothing is printing. Only a full ring loses a byte.
+
+**LOSING BYTES IS NOT A FREE CHOICE HERE, WHICH IS WHY THIS IS NOT
+LINUX'S SHAPE.** Linux's 8250 console bounds the wait in
+`wait_for_xmitr()` and then DROPS, which is right for a console nobody
+parses. Five GUI tools here read kernel log lines as their oracle
+(`settings`, `screen`, `imgview`, `player`, `files`), and a
+bounded-then-drop version of this fix passed the stall repro 6 runs in 6
+while turning all five red -- `KeyError` on a layout key that never
+arrived. Queue, do not drop.
+
+**`tx_stalled` is a latch, not a timeout policy**: it only stops
+`serial_flush()` spinning once per line against a consumer that has gone
+away, and it lifts itself the moment the ring drains, so nothing has to
+notice the reader coming back.
+
+The regression test is `tools/serial_backpressure_test.py`, and its
+fixture is a client that attaches and never reads. **Do not make it
+drain** -- being deaf is the whole experiment, and `-serial file:` never
+applies backpressure at all, which is why every `gui_regress` tool that
+uses one is blind to this.
 
 ## A GUEST SPIN-WAIT NEEDS `cpu_relax()`, AND UNDER KVM THAT IS NOT AN OPTIMISATION
 
@@ -1779,11 +1825,12 @@ with the answer).
   worst shape a bug can have -- and `/tests/udp_test` now checks the
   exact sequence.
 - **THE LEASE IS NOT RENEWED AND `dhcp` DOES NOT RUN AT BOOT.** Both are
-  real limitations rather than oversights, and the second has a specific
-  blocker worth knowing: a filesystem write during the desktop's startup
-  wedges the compositor (`docs/bugs.md`), and `/bin/dhcp` writes
-  `/etc/resolv.conf`. The kernel's boot-time defaults stay until
-  something runs the client.
+  real limitations rather than oversights. The second USED to have a
+  blocker -- a filesystem write during the desktop's startup appeared to
+  wedge the compositor, and `/bin/dhcp` writes `/etc/resolv.conf` -- and
+  that blocker is gone: the stall was `serial_putc()` waiting on a
+  stalled COM1 consumer, with the write only supplying the log volume.
+  The kernel's boot-time defaults stay until something runs the client.
 
 ## TCP IS CLIENT-SIDE, IN-ORDER ONLY, AND ITS TIMERS RIDE THE BLOCKING RECEIVE
 

@@ -1446,6 +1446,25 @@ window without going through it will find its layout polls timing out.
   now (6 of 6 after), and deliberately NOT `enter_gui()`: that also
   turns on the per-frame layout log, and a tool measuring what an idle
   desktop does is the last one that should be given more to log.
+- **`serial_backpressure_test.py`** -- a COM1 consumer that stops
+  reading must not stop the MACHINE. It attaches a client to the serial
+  socket, goes deliberately deaf, asks the guest for several KB
+  (`sh dmesg`), and requires the taskbar clock to keep ticking. Written
+  after the entry `docs/bugs.md` carried as "a filesystem write during
+  the desktop's STARTUP stalls the clock", which was neither the
+  filesystem's fault nor the compositor's: `serial_putc()` waited
+  unbounded on a THRE bit that QEMU's socket chardev stops setting when
+  its peer stops draining, so the kernel spun there **with interrupts
+  still on** -- ticks advancing, PIC clean, scheduler still picking the
+  compositor, nothing running. The write only supplied the log volume.
+  **Two things to know before editing it.** Its positive control is in
+  the docstring and fires on exactly one check (1 distinct image in 8
+  against 4-5), which is what makes it a test rather than a
+  demonstration. And **do not make it drain the socket to "fix" a
+  failure** -- being deaf IS the fixture, and a drainer makes it pass
+  against a kernel that still hangs. Run on demand; it needs a guest
+  started by `vm.py` (a socket serial, not `-serial file:`, which never
+  applies backpressure and so cannot see this at all).
 - **`icons_test.py`** -- application icons from a `.qoi` file to the
   screen (9 checks), with the host as the oracle again: Pillow decodes
   the same file, scales it the same way, composites it over the sampled

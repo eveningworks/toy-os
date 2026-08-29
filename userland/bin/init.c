@@ -951,13 +951,10 @@ static const char *svc_ready(const struct service *s) {
 //   and a status nobody has asked for is one nobody reads.
 //
 //   `settled` -- never while a service is in a restart backoff or has
-//   yet to announce itself. That is the honest description of the file
-//   (it says where things CAME TO REST) and it is also what keeps init
-//   from writing during a desktop's startup, which WEDGES THE
-//   COMPOSITOR: a filesystem write between roughly 0.4 s and 1.5 s of
-//   boot leaves it presenting nothing at all, cursor included. That is
-//   a compositor bug, filed in docs/bugs.md with its reproduction; this
-//   avoids standing on it, and the deferral is right on its own terms.
+//   yet to announce itself. That is the honest description of the file:
+//   it says where things CAME TO REST. It was ALSO believed to dodge a
+//   compositor that a startup write wedged; there was no such bug --
+//   the stall was serial_putc() waiting on a stalled COM1 consumer.
 //
 // WRITTEN ONLY WHEN IT CHANGED, once both gates are open: the loop runs
 // on every child exit and every doorbell, and a service manager that

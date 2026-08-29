@@ -59,9 +59,11 @@ was watching: there is no tmpfs here, so every write is a real disk
 transaction. Once a reader has asked, init keeps the file current — but
 only on a pass where nothing is pending, so a service in a restart
 backoff or one that has yet to announce itself delays the update rather
-than being reported mid-flight. That deferral is also load-bearing for a
-reason that is not about tidiness: a filesystem write while the desktop
-is starting up wedges the compositor (`docs/bugs.md`).
+than being reported mid-flight. That deferral was also believed to be
+load-bearing against a filesystem write wedging the compositor during
+startup; it is not -- that stall was `serial_putc()` waiting on a
+stalled COM1 consumer, and the write only supplied the log volume. The
+disk-traffic reason above is the whole of it.
 
 **The write half is a file plus a doorbell.** `start` and `stop` append
 a line to `/tmp/init.ctl` and then send `SIGHUP` to init, which is what

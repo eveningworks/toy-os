@@ -66,7 +66,6 @@ it has exonerated one this session and convicted another.
 
 ## Reproducible
 
-- [ ] A filesystem write during the desktop's STARTUP stalls the taskbar clock for ~3 s -- `tools/idle_desktop_test.py`'s clock CONTROL sees 1 distinct frame in 8 captures a third of a second apart. Reproduced 2026-08-29 at ~1 run in 2 by restoring init's unconditional status write on a genuinely fresh disk. **The "wedges the compositor" headline this entry used to carry is WRONG, and four of its claims are disproved by measurement** -- see `docs/roadmap-details.md` for what was ruled out and how. What is NOT established is why the clock text stops changing for those ~3 s; every manual probe lands after it has recovered
 - [ ] A process spawned from the RING-0 debug console leaks an unreapable zombie -- `spawn` is `/bin/spawn` now and runs under the legacy loader, which has no scheduler slot, so `SYS_SPAWN` records its child's ppid as 0. Nothing waits for it and no parent death can reparent it, so the slot is held until reboot. `/bin/spawn`'s own header still claims "the child is reparented to init when this exits". The obvious fix -- parent it to init -- would BREAK `strace` at a `#` prompt, which finds its child precisely because both are pid 0; what it really needs is the legacy loader having an identity
 - [ ] `tools/terminal_probe.py`: leaving the alternate screen does not take the pager's status bar with it -- measured PRE-EXISTING against d5400cb, where the same probe scored 20/23 against 22/23 after the tabs rewrite
 
@@ -136,6 +135,18 @@ before hunting the next one.
   its `resizable` HINT, which arrives over TWP afterwards -- a poll
   weaker than what follows it, which is this repo's own documented flake
   shape. It now polls for the hint.
+
+**2026-08-29: a MECHANISM for this class now exists, and it is NOT
+established that it was this one.** `serial_putc()` waited unbounded on
+a THRE bit that QEMU's socket chardev stops setting when an attached
+peer stops draining, so a guest whose console was attached but idle
+stopped dead while its log had nowhere to go -- which is the shape of
+every tool here (each holds a `DebugConsole` and then does QMP work).
+That is fixed; output is queued now. **Three full-suite runs were clean
+afterwards, which at these counts distinguishes nothing** -- 3 clean is
+what a 40% rate produces about a fifth of the time. What would settle it
+is `flake_hunt.py` over the full suite, which this entry already asked
+for.
 
 Neither was a new defect: both were fixed-sleep assumptions that a
 busier machine invalidated. **When a tool in this class fails, read its

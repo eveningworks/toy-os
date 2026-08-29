@@ -2,6 +2,7 @@
 #include "io.h"
 #include "irq.h"
 #include "pic.h"
+#include "barrier.h" // cpu_relax
 
 #define COM1 0x3F8
 #define COM1_IRQ 4 // the fixed legacy IRQ line for COM1 (COM2 shares IRQ3) -- see docs/decisions.md
@@ -89,11 +90,86 @@ static int transmit_empty(void) {
     return inb(COM1 + 5) & 0x20;
 }
 
+// THE TRAP: a UART whose consumer has stopped reading never raises THRE
+// again -- QEMU's socket chardev does exactly that when an attached peer
+// stops draining -- so waiting for it unbounded stops the machine with
+// interrupts still ON: ticks advance and the scheduler looks healthy
+// while nothing runs, and a klog burst inside an FS_OP spins there
+// holding the preemption guard. Output is therefore QUEUED rather than
+// waited on, the way a real tty driver does it, and pushed whenever the
+// line will take it -- here, and from the timer tick, so a consumer that
+// comes back finds its backlog intact. Only a full ring loses a byte,
+// which the harness cannot afford: five GUI tools read kernel log lines
+// as their oracle.
+#define SERIAL_TX_CAP  4096
+#define SERIAL_TX_SPIN 20000 // bounded flush; a stalled line latches out
+
+static volatile uint8_t tx_buf[SERIAL_TX_CAP];
+static volatile uint16_t tx_head, tx_tail;
+static volatile uint32_t tx_dropped; // read it in GDB; nothing exports it
+static volatile int tx_stalled;
+
+static uint64_t irq_save(void) {
+    uint64_t f;
+    __asm__ volatile ("pushfq; popq %0; cli" : "=r"(f) :: "memory");
+    return f;
+}
+
+static void irq_restore(uint64_t f) {
+    __asm__ volatile ("pushq %0; popfq" :: "r"(f) : "memory", "cc");
+}
+
+// Hand the UART as much of the backlog as it will take. Callers hold
+// interrupts off, because the timer tick pushes from the same ring.
+static void tx_push(void) {
+    while (tx_head != tx_tail && transmit_empty()) {
+        outb(COM1, tx_buf[tx_tail]);
+        tx_tail = (uint16_t)((tx_tail + 1u) % SERIAL_TX_CAP);
+    }
+    if (tx_head == tx_tail) tx_stalled = 0;
+}
+
 void serial_putc(char c) {
-    while (!transmit_empty());
-    outb(COM1, c);
+    uint64_t f = irq_save();
+    tx_push(); // backlog first, or this byte would overtake it
+    if (tx_head == tx_tail && transmit_empty()) {
+        outb(COM1, (uint8_t)c);
+    } else {
+        uint16_t next = (uint16_t)((tx_head + 1u) % SERIAL_TX_CAP);
+        if (next != tx_tail) {
+            tx_buf[tx_head] = (uint8_t)c;
+            tx_head = next;
+        } else {
+            tx_dropped++;
+        }
+    }
+    irq_restore(f);
+}
+
+// Drains what it can and gives up rather than waiting for a consumer
+// that may never return -- a panic still gets its line out while the
+// line is alive, and costs nothing once `tx_stalled` has latched.
+void serial_flush(void) {
+    if (tx_stalled) return;
+    for (uint32_t i = 0; i < SERIAL_TX_SPIN; i++) {
+        uint64_t f = irq_save();
+        tx_push();
+        int done = (tx_head == tx_tail);
+        irq_restore(f);
+        if (done) return;
+        cpu_relax();
+    }
+    tx_stalled = 1;
+}
+
+// The timer's call, so a backlog still moves when nothing is printing.
+void serial_tx_poll(void) {
+    uint64_t f = irq_save();
+    tx_push();
+    irq_restore(f);
 }
 
 void serial_write(const char *s) {
     while (*s) serial_putc(*s++);
+    serial_flush();
 }

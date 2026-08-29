@@ -1,5 +1,6 @@
 #include "timer.h"
 #include "io.h"
+#include "serial.h"
 
 #define PIT_CHANNEL0 0x40
 #define PIT_COMMAND  0x43
@@ -16,6 +17,7 @@ void pit_init(uint32_t frequency_hz) {
 
 void pit_handle_irq(void) {
     ticks++;
+    serial_tx_poll(); // a queued log line still moves with nothing printing
 }
 
 uint64_t pit_ticks(void) {
