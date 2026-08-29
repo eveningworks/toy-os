@@ -5,7 +5,7 @@ project's conventions** -- its value is precisely that nobody working on
 toy-os wrote it. An edit here is a divergence from upstream that
 somebody has to carry forever; if something needs changing, the answer
 is almost always to change the C library, the toolkit, or the backend in
-`userland/doom/` instead.
+`userland/backends/doom/` instead.
 
 **TWO UPSTREAMS LIVE HERE, and the second is not a different project.**
 doomgeneric IS Chocolate Doom with its platform layer and sound removed
@@ -31,7 +31,7 @@ they are the rest of this port, taken from where it came from.
   -- again VERBATIM. Same GPL-2.0, same aggregation.
 - **NOT taken**: `opl/`'s platform drivers (`opl_sdl.c`, `opl_linux.c`,
   `opl_win32.c`, `opl_obsd.c`, `ioperm_sys.c`) and `i_sdlsound.c`. Ours
-  replace them, from `userland/doom/`.
+  replace them, from `userland/backends/doom/`.
 - **Licence**: **GPL-2.0**, and this is the one directory in toy-os that
   is not MIT. See "Licensing" below -- it matters, and it is why this is
   linked into exactly one binary.
@@ -54,7 +54,7 @@ the stack, floating point, the window protocol and the input path.
 
 Upstream ships a backend per platform (`doomgeneric_sdl.c`,
 `_xlib.c`, `_win.c`, and others) and sound/music modules for SDL and
-Allegro. None are here: ours is `userland/doom/dg_toyos.c`, which is
+Allegro. None are here: ours is `userland/backends/doom/dg_toyos.c`, which is
 ours and lives outside this directory precisely so that the boundary
 between vendored and written-here is a directory boundary.
 
@@ -63,7 +63,7 @@ dispatcher. Upstream leaves `FEATURE_SOUND` undefined, so its module
 list is empty and it resolves to silence; toy-os defines the flag on the
 COMPILER COMMAND LINE (see the Makefile) rather than editing
 `doomfeatures.h`, and supplies `DG_sound_module` and `DG_music_module`
-from `userland/doom/`.
+from `userland/backends/doom/`.
 
 ## The three shims, and why none of them is a patch
 
@@ -72,14 +72,14 @@ Each is answered from OUR side of the boundary, so not one byte here
 changed:
 
 - **`SDL_mixer.h`** -- `i_sound.c` includes it under `FEATURE_SOUND` and
-  never uses a symbol from it. `userland/doom/compat/SDL_mixer.h` is
+  never uses a symbol from it. `userland/backends/doom/compat/SDL_mixer.h` is
   empty, and says so.
 - **`SDL.h`** -- `opl.c` and `midifile.c` want big-endian byte swaps and
-  a mutex/condition pair. `userland/doom/compat/SDL.h` maps those onto
+  a mutex/condition pair. `userland/backends/doom/compat/SDL.h` maps those onto
   `__builtin_bswap` and pthreads, so they genuinely work rather than
   being stubbed.
 - **`opl_sdl_driver`** -- `opl.c`'s driver list names that symbol
-  unconditionally, so `userland/doom/opl_toyos.c` exports it. A
+  unconditionally, so `userland/backends/doom/opl_toyos.c` exports it. A
   link-time substitution; the driver's own `name` field says `toyos`.
 
 The alternative to all three was editing vendored files, which this

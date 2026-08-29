@@ -1483,7 +1483,7 @@ the compiler command line, not by editing `doomfeatures.h` -- makes the
 code reach for what the SDL port had:
 
   - `SDL_mixer.h`, included by `i_sound.c` and never used. An empty
-    header in `userland/doom/compat/`.
+    header in `userland/backends/doom/compat/`.
   - `SDL.h`, for big-endian byte swaps and a mutex/condition pair.
     Mapped onto `__builtin_bswap` and pthreads, so `OPL_Delay()` really
     blocks rather than being stubbed.

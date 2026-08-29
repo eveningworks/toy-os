@@ -1545,7 +1545,7 @@ window without going through it will find its layout polls timing out.
   contention. `blank_window_test.py` covers "it draws" in the gate,
   since that one opens every app in the registry.
 - **`doom_sound_test.py`** -- **DOOM's effects and music, judged on the
-  HOST**, and the only thing that exercises `userland/doom/dg_sound.c`,
+  HOST**, and the only thing that exercises `userland/backends/doom/dg_sound.c`,
   `dg_music.c` and `opl_toyos.c` at all. On demand twice over: it needs
   an IWAD (not in the repository) and boots its own AC97 guest, and it
   SKIPS cleanly without a WAD.

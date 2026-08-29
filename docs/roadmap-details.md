@@ -2087,7 +2087,7 @@ Stretch: port a small classic game (e.g. Doom) -- **DONE 2026-08-23.**
 `/bin/wm/apps/doom`, an ordinary ring-3 `uapp` client at 640x400
 (doomgeneric's own 2x scale of Doom's 320x200), measured at ~34 fps
 against Doom's own 35Hz target under TCG. `userland/ports/doom/` is
-doomgeneric byte for byte; `userland/doom/` is the backend.
+doomgeneric byte for byte; `userland/backends/doom/` is the backend.
 
 **WHAT IT ACTUALLY NEEDED, measured rather than assumed.** Three things
 were built for it in advance and only one was required:

@@ -10,7 +10,7 @@
 //
 // It lives on OUR side of the boundary, not in userland/ports/doom/, so
 // the vendored files stay byte for byte upstream (see that directory's
-// README). Only files compiled with -Iuserland/doom/compat can see it.
+// README). Only files compiled with -Iuserland/backends/doom/compat can see it.
 
 #include <stdint.h>
 #include <stdlib.h>

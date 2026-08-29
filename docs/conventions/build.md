@@ -25,7 +25,15 @@ this the obvious way), not from how much history it accumulated.
   `lib/` (userland libraries that aren't UI -- `tosh`, and the
   toy-os-internal headers that are not part of the libc's public
   surface), `gui/` (windowed apps), `bin/` (command-line programs),
-  `tests/` (single-mechanism diagnostics). **There are TWO archives**:
+  `tests/` (single-mechanism diagnostics), `backends/` (OUR side of a
+  vendored port -- `backends/doom/` holds the DG_* platform layer, the
+  sound and music modules and the OPL driver that adapt
+  `ports/doom/` to this system). **`backends/` is deliberately not
+  under `ports/`**: that directory means third-party, and
+  `tools/check_licenses.py` reads every subdirectory of it as a
+  vendored port needing its own licence file. Nor is it under `lib/`,
+  which is archived into `libuapp.a` -- Doom's objects are GPL and must
+  reach exactly one binary. **There are TWO archives**:
   `libc.a` (a `/bin` program needs only this) and `libuapp.a` (Toykit,
   for a GUI app), linked in that order because Toykit calls the C
   library and not the other way round. **The first three produce

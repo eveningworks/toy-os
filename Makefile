@@ -647,7 +647,7 @@ toywm: $(BUILD)/userland/wm/main.elf
 # --- DOOM ------------------------------------------------------------
 #
 # userland/ports/doom/ is doomgeneric, vendored byte for byte (see its
-# README). userland/doom/ is OURS: the five DG_* platform functions and
+# README). userland/backends/doom/ is OURS: the five DG_* platform
 # the key translation, kept outside the vendored directory so the
 # boundary between third-party and written-here is a directory boundary.
 #
@@ -663,7 +663,7 @@ DOOM_PORT_OBJS = $(patsubst userland/%.c,%,$(DOOM_PORT_SRCS))
 # OUR backend is discovered the same way, so adding a piece of it (the
 # sound module, the OPL driver) is a .c file and nothing else -- the
 # rule the rest of userland/ already follows.
-DOOM_BACKEND_SRCS = $(shell find userland/doom -name '*.c' 2>/dev/null | sort)
+DOOM_BACKEND_SRCS = $(shell find userland/backends/doom -name '*.c' 2>/dev/null | sort)
 DOOM_BACKEND_OBJS = $(patsubst userland/%.c,%,$(DOOM_BACKEND_SRCS))
 EXTRA_OBJS_doom = $(DOOM_BACKEND_OBJS) $(DOOM_PORT_OBJS)
 
@@ -683,7 +683,7 @@ EXTRA_OBJS_doom = $(DOOM_BACKEND_OBJS) $(DOOM_PORT_OBJS)
 DOOM_CFLAGS = $(subst -Wframe-larger-than=2048,-Wframe-larger-than=16384,\
                  $(subst -Wextra,,$(subst -Wall,-w,$(USERLAND_CFLAGS)))) \
                -Iuserland/ports/doom -Iuserland/ports/doom/opl \
-               -Iuserland/doom/compat \
+               -Iuserland/backends/doom/compat \
                -DDOOMGENERIC_RESX=640 -DDOOMGENERIC_RESY=400 -DFEATURE_SOUND
 
 # More specific than the generic userland rule below it, so make prefers
@@ -708,8 +708,9 @@ $(BUILD)/userland/ports/doom/%.o: userland/ports/doom/%.c | version
 # than in doomfeatures.h because that header is vendored: upstream ships
 # it with the flag commented out, and editing it would be a divergence
 # somebody has to carry forever (see that directory's README).
-$(BUILD)/userland/doom/%.o: USERLAND_CFLAGS += -Iuserland/ports/doom \
+$(BUILD)/userland/backends/doom/%.o: USERLAND_CFLAGS += -Iuserland/ports/doom \
                                      -Iuserland/ports/doom/opl \
+                                     -Iuserland/backends/doom/compat \
                                      -DDOOMGENERIC_RESX=640 -DDOOMGENERIC_RESY=400 \
                                      -DFEATURE_SOUND
 

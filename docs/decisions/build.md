@@ -990,7 +990,7 @@ promise. `userland/ports/doom/README.md` says so where somebody editing
 it will look.
 
 **Our backend lives OUTSIDE the vendored directory**, in
-`userland/doom/`, so the boundary between third-party and written-here
+`userland/backends/doom/`, so the boundary between third-party and written-here
 is a directory boundary rather than a convention. It implements the five
 `DG_*` functions and nothing else.
 
@@ -1014,7 +1014,7 @@ that was willing to grow for it.
 `api/keyboard.h` and doomgeneric's `doomkeys.h` both define `KEY_F2`,
 `KEY_F3`, `KEY_F4` and `KEY_F10`, with different values, and neither is
 ours to rename. So the app (`userland/gui/apps/doom.c`) includes one and
-the backend (`userland/doom/dg_toyos.c`) includes the other, and they
+the backend (`userland/backends/doom/dg_toyos.c`) includes the other, and they
 meet through `dg_toyos.h`, which includes neither.
 
 That header carries toy-os's codes written out as `TOYKEY_*` literals --

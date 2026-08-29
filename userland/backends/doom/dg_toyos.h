@@ -14,7 +14,7 @@
 //
 //     userland/gui/apps/doom.c   toy-os side: api/keyboard.h, uapp,
 //                                 ugfx. NEVER includes doomkeys.h.
-//     userland/doom/dg_toyos.c   doom side: doomkeys.h, doomgeneric.h.
+//     userland/backends/doom/dg_toyos.c   doom side: doomkeys.h, doomgeneric.h.
 //                                 NEVER includes api/keyboard.h.
 //
 // This header includes NEITHER, so both can include it. The `TOYKEY_*`

@@ -3,7 +3,7 @@
 // **THE TOY-OS SIDE OF THE SEAM.** This file includes `api/keyboard.h`
 // and NEVER doomgeneric's `doomkeys.h` -- both define `KEY_F2`,
 // `KEY_F3`, `KEY_F4` and `KEY_F10` with different values, and neither is
-// ours to rename. `userland/doom/dg_toyos.h` is the header they meet
+// ours to rename. `userland/backends/doom/dg_toyos.h` is the header they meet
 // through; the static assertions below are what stop its copied
 // constants drifting from the real ones, and they live here because this
 // is the file that can see both without a collision.
@@ -35,7 +35,7 @@
 #include "ui/ugfx.h"
 #include "ui/ulog.h"
 #include "win_proto.h"  // WIN_CLIENT_MAX_W -- the scratch row's bound
-#include "doom/dg_toyos.h"
+#include "backends/doom/dg_toyos.h"
 
 // THE COPIES IN dg_toyos.h, CHECKED AGAINST THE REAL THING. A drift in
 // either direction is a build error rather than a key that quietly stops
