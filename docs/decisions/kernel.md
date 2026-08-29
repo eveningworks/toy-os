@@ -5382,3 +5382,49 @@ failed with `-ENOSPC` while the six before it passed, because each had
 left a block behind. The tests now complete the close — the fake peer
 acknowledges the FIN and sends its own — which is both a better test and
 what stopped them leaking.
+
+## The passive open, and why the server is one connection at a time
+
+`listen()`/`accept()` complete the shape: `wget` proved this OS can
+reach out, `/bin/httpd` proves something can reach in.
+
+**Accept returns a NEW socket**, as POSIX says, because a listener and a
+connection are different objects with different states — and because
+the four-tuple demultiplex needs the connection to exist separately
+from the port it arrived on. The listener is untouched by a connection
+it produces, which is asserted behaviourally in the KTESTs (a second
+client connects and is accepted) rather than by reading a state
+variable: "it still works" is the property, and the variable is only
+evidence for it.
+
+**The server handles one connection at a time**, and that is a real
+constraint rather than laziness. A connection's retransmission timers
+are driven by the process reading it, so a design where several
+connections are open and only one is being read would leave the others'
+timers to the idle loop. The alternative this kernel could express is
+inetd's: `dup2` the connection onto fds 0 and 1 and spawn a handler,
+which works precisely because only 0/1/2 are inherited across
+`SYS_SPAWN`. That would make a handler an ordinary filter — `cat` could
+be a service — and it is a roadmap item rather than something
+listen/accept is missing.
+
+**A full backlog drops the SYN rather than answering with a RST.** That
+is Linux's default (`tcp_abort_on_overflow=0`) and the reasoning is
+about what a client experiences: a drop lets its own SYN retransmission
+succeed a moment later, where a reset turns a momentary burst into a
+hard failure. The cost is that a client talking to a permanently
+saturated server waits out its connect timeout instead of being told,
+which is the trade every stack makes the same way.
+
+**The backlog is not a queue of its own.** A connection whose handshake
+finished needs a full connection block regardless, so `TCP_BACKLOG`
+counts blocks that are finished and unaccepted. Adding a separate queue
+would mean holding half-open connections more cheaply — which is what
+SYN cookies are for, and which matters when somebody is attacking you.
+
+**A RST is now validated before it is believed.** It must acknowledge
+our SYN in SYN_SENT, and afterwards sit exactly at `rcv_nxt`. The
+previous code accepted any reset naming the right ports, which is the
+blind-reset attack RFC 5961 exists for — cheap to close, and the reason
+it was noticed at all is that a test needed a deterministic way to tear
+a connection down and the obvious one worked far too easily.

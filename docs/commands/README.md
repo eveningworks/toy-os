@@ -162,6 +162,7 @@ a command), and the `gui3`/`nano` aliases.
 
 - [`dhcp`](dhcp.md)
 - [`host`](host.md)
+- [`httpd`](httpd.md)
 - [`ifconfig`](ifconfig.md)
 - [`ping`](ping.md)
 - [`wget`](wget.md)

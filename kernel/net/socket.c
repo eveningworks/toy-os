@@ -85,10 +85,15 @@ static int queue_push(struct socket *s, uint32_t src, uint16_t port,
     return 1;
 }
 
-static int port_taken(uint16_t port, int except) {
+// A port is taken per PROTOCOL: UDP 80 and TCP 80 are different ports,
+// as they are everywhere. An ICMP socket has no port at all and is
+// skipped rather than compared.
+static int port_taken(uint8_t proto, uint16_t port, int except) {
     for (int i = 0; i < SOCK_MAX; i++) {
         if (i == except || !g_socks[i].in_use) continue;
-        if (g_socks[i].proto == IP_PROTO_UDP && g_socks[i].local_port == port) return 1;
+        if (g_socks[i].proto != proto) continue;
+        if (g_socks[i].proto == IP_PROTO_ICMP) continue;
+        if (g_socks[i].local_port == port) return 1;
     }
     return 0;
 }
@@ -97,12 +102,12 @@ static int port_taken(uint16_t port, int except) {
 // rather than random: this kernel's randomness is a boot-time question
 // (krandom's quality varies), and a predictable local port is not a
 // vulnerability in a stack with no TCP sequence numbers to guess.
-static uint16_t ephemeral_port(int except) {
+static uint16_t ephemeral_port(uint8_t proto, int except) {
     for (int tries = 0; tries <= NET_PORT_EPHEMERAL_HI - NET_PORT_EPHEMERAL_LO; tries++) {
         uint16_t port = g_next_ephemeral;
         g_next_ephemeral = (g_next_ephemeral >= NET_PORT_EPHEMERAL_HI)
                            ? NET_PORT_EPHEMERAL_LO : (uint16_t)(g_next_ephemeral + 1);
-        if (!port_taken(port, except)) return port;
+        if (!port_taken(proto, port, except)) return port;
     }
     return 0;
 }
@@ -152,7 +157,7 @@ int net_sock_connect(int sock, uint32_t ip, uint16_t port) {
     if (!ip || !port) return -EINVAL;
 
     if (!s->local_port) {
-        s->local_port = ephemeral_port(sock);
+        s->local_port = ephemeral_port(s->proto, sock);
         if (!s->local_port) return -ENOSPC;
     }
     int idx = tcp_open(s->local_port);
@@ -172,6 +177,57 @@ int net_sock_connect_state(int sock) {
     int err = tcp_error(s->tcp);
     if (err) return err;
     return tcp_state(s->tcp) == TCP_STATE_ESTABLISHED ? 0 : -EAGAIN;
+}
+
+int net_sock_listen(int sock) {
+    struct socket *s = sock_at(sock);
+    if (!s) return -EBADF;
+    if (s->proto != IP_PROTO_TCP) return -EINVAL;
+    if (s->tcp >= 0) return -EBUSY;
+    // A listener must have been BOUND: a port the kernel picked is one
+    // no client could know to connect to.
+    if (!s->local_port) return -EINVAL;
+
+    int idx = tcp_open(s->local_port);
+    if (idx < 0) return idx;
+    int rc = tcp_listen(idx);
+    if (rc < 0) { tcp_release(idx); return rc; }
+    s->tcp = idx;
+    return 0;
+}
+
+// A finished connection, wrapped in a socket of its own -- which is
+// what accept() means and why it returns a NEW descriptor. -EAGAIN
+// while none is waiting.
+int net_sock_accept(int sock) {
+    struct socket *s = sock_at(sock);
+    if (!s) return -EBADF;
+    if (s->tcp < 0) return -EINVAL;
+
+    int conn = tcp_accept(s->tcp);
+    if (conn < 0) return conn;
+
+    for (int i = 0; i < SOCK_MAX; i++) {
+        if (g_socks[i].in_use) continue;
+        k_memset(&g_socks[i], 0, sizeof g_socks[i]);
+        g_socks[i].in_use = 1;
+        g_socks[i].proto = IP_PROTO_TCP;
+        g_socks[i].id = (uint16_t)(SOCK_ID_BASE + i);
+        g_socks[i].local_port = s->local_port;
+        g_socks[i].tcp = conn;
+        return i;
+    }
+    // No socket to put it in. The connection is handshaken and the peer
+    // believes it is open, so it is CLOSED properly rather than
+    // dropped -- otherwise the client waits out its own timeout on a
+    // connection this machine has silently forgotten.
+    tcp_close(conn);
+    return -ENOSPC;
+}
+
+void net_sock_peer(int sock, uint32_t *out_ip, uint16_t *out_port) {
+    struct socket *s = sock_at(sock);
+    if (s && s->tcp >= 0) tcp_peer(s->tcp, out_ip, out_port);
 }
 
 int net_sock_stream_send(int sock, const void *buf, uint32_t len) {
@@ -194,15 +250,17 @@ int net_sock_bind(int sock, uint32_t addr, uint16_t port, const char *dev) {
     // An ICMP socket has no port to bind: its demux key is the
     // identifier, which the kernel assigned when the socket was
     // opened. Refusing is better than accepting and ignoring, which
-    // would leave a caller believing it had reserved something.
-    if (s->proto != IP_PROTO_UDP) return -EINVAL;
+    // would leave a caller believing it had reserved something. UDP and
+    // TCP both bind -- a TCP listener MUST, since a port the kernel
+    // picked is one no client could know to connect to.
+    if (s->proto != IP_PROTO_UDP && s->proto != IP_PROTO_TCP) return -EINVAL;
 
     if (dev && dev[0] && !net_device_by_name(dev)) return -ENODEV;
 
     if (port) {
-        if (port_taken(port, sock)) return -EBUSY;
+        if (port_taken(s->proto, port, sock)) return -EBUSY;
     } else {
-        port = ephemeral_port(sock);
+        port = ephemeral_port(s->proto, sock);
         if (!port) return -ENOSPC;
     }
 
@@ -253,7 +311,7 @@ int net_sock_sendto(int sock, uint32_t dst_ip, uint16_t dst_port,
     // DHCP and DNS clients short. A server binds explicitly because it
     // needs a port somebody else already knows.
     if (!s->local_port) {
-        s->local_port = ephemeral_port(sock);
+        s->local_port = ephemeral_port(s->proto, sock);
         if (!s->local_port) return -ENOSPC;
     }
 

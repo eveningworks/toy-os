@@ -146,12 +146,26 @@ int udp_output(struct net_device *dev, uint32_t dst_ip, uint16_t dst_port,
 #define TCP_STATE_FIN_WAIT_2  4
 #define TCP_STATE_CLOSE_WAIT  5
 #define TCP_STATE_LAST_ACK    6
+#define TCP_STATE_LISTEN      7
+#define TCP_STATE_SYN_RCVD    8
 
 int  tcp_open(uint16_t local_port);      // a connection block, or -errno
 void tcp_release(int idx);
 int  tcp_state(int idx);
 int  tcp_error(int idx);   // -ECONNREFUSED / -ECONNRESET, or 0
 int  tcp_connect(int idx, uint32_t ip, uint16_t port);   // starts the handshake
+
+// The passive open. tcp_listen() turns a block into a listener; an
+// arriving SYN gets a block of its own, and tcp_accept() hands over the
+// first one that finished its handshake (or -EAGAIN while none has).
+// How many finished-but-unaccepted connections a listener may hold.
+// Exposed because it is a property a caller (and a test) can observe:
+// the next client is dropped, not refused.
+#define TCP_BACKLOG 2
+
+int  tcp_listen(int idx);
+int  tcp_accept(int idx);
+void tcp_peer(int idx, uint32_t *out_ip, uint16_t *out_port);
 // Bytes accepted into the send buffer, or -errno (-EAGAIN when it is
 // full). Nothing here blocks; the syscall layer does the waiting.
 int  tcp_send(int idx, const void *buf, uint32_t len);
@@ -201,6 +215,9 @@ int net_sock_bind(int sock, uint32_t addr, uint16_t port, const char *dev);
 int net_sock_is_stream(int sock);
 int net_sock_connect(int sock, uint32_t ip, uint16_t port);
 int net_sock_connect_state(int sock);   // 0, -EAGAIN, or the failure
+int net_sock_listen(int sock);          // the socket must be bound first
+int net_sock_accept(int sock);          // a NEW socket index, or -EAGAIN
+void net_sock_peer(int sock, uint32_t *out_ip, uint16_t *out_port);
 int net_sock_stream_send(int sock, const void *buf, uint32_t len);
 int net_sock_stream_recv(int sock, void *buf, uint32_t cap);
 

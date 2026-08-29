@@ -321,6 +321,13 @@ int64_t sys_recvfrom(int fd, void *buf, size_t cap, uint32_t *out_src,
 // write() work on the fd, as POSIX guarantees -- so code taking a
 // descriptor can be handed one.
 int sys_connect(int fd, uint32_t ip, uint16_t port, unsigned timeout_ms);
+// Make a BOUND stream socket a listener. There is no backlog argument:
+// the depth is the stack's, because each queued connection costs a
+// whole connection block.
+int sys_listen(int fd);
+// Wait for a client and return a NEW fd for its connection, with the
+// peer's address written back. Blocks; `timeout_ms` of 0 waits forever.
+int sys_accept(int fd, uint32_t *out_ip, uint16_t *out_port, unsigned timeout_ms);
 // A local port (0 picks an ephemeral one), optionally on ONE device --
 // SO_BINDTODEVICE, which is what a DHCP client needs. Returns the port.
 int sys_bind(int fd, uint32_t addr, uint16_t port, const char *dev);

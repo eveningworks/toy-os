@@ -449,6 +449,21 @@ struct sys_dirent {
                        // the clock. Interruptible: a signal rewinds
                        // the call. SYS_SET_NONBLOCK restores the old
                        // poll-and-return-0 behaviour.
+#define SYS_LISTEN 87  // RDI = fd. Makes a BOUND stream socket a
+                       // listener. Returns 0, or -EINVAL if it was
+                       // never bound -- a port the kernel picked is one
+                       // no client could know to connect to. There is
+                       // no backlog argument: the depth is the stack's
+                       // (kernel/net/tcp.c), because each queued
+                       // connection costs a whole connection block.
+#define SYS_ACCEPT 88  // RDI = fd (a listener), RSI = a
+                       // `struct net_msg *` or 0. BLOCKS until a
+                       // client completes its handshake; `timeout_ms`
+                       // bounds the wait and 0 waits forever. Returns
+                       // a NEW fd for the connection, with the peer's
+                       // address and port written into the struct.
+                       // -EAGAIN on a non-blocking socket with nobody
+                       // waiting.
 #define SYS_CONNECT 86 // RDI = fd, RSI = a `struct net_msg *`: `addr` and
                        // `port` are the peer's. BLOCKS until the
                        // handshake completes, `timeout_ms` bounds it

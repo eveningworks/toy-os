@@ -565,6 +565,25 @@ int sys_connect(int fd, uint32_t ip, uint16_t port, unsigned timeout_ms) {
     return (int)err(r);
 }
 
+int sys_listen(int fd) {
+    return (int)err(syscall1(SYS_LISTEN, (uint64_t)fd));
+}
+
+int sys_accept(int fd, uint32_t *out_ip, uint16_t *out_port, unsigned timeout_ms) {
+    struct net_msg m = { .buf = 0, .len = 0, .addr = 0, .port = 0,
+                         .pad = 0, .timeout_ms = timeout_ms, .dev = {0} };
+    int64_t r;
+    do {
+        r = syscall2(SYS_ACCEPT, (uint64_t)fd, (uint64_t)(uintptr_t)&m);
+    } while (r == SYS_RETRY);
+    int rc = (int)err(r);
+    if (rc >= 0) {
+        if (out_ip) *out_ip = m.addr;
+        if (out_port) *out_port = m.port;
+    }
+    return rc;
+}
+
 int sys_bind(int fd, uint32_t addr, uint16_t port, const char *dev) {
     struct net_msg m = { .buf = 0, .len = 0, .addr = addr, .port = port,
                          .pad = 0, .timeout_ms = 0, .dev = {0} };

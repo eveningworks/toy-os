@@ -60,6 +60,12 @@ THE PHASES, and what a broken build would still pass
      when the host cannot resolve -- an offline machine is not a bug in
      this OS -- but the "no nameserver configured" path is checked
      unconditionally, because that one needs nothing but the guest.
+ 11. The guest as a SERVER: /bin/httpd serves a file the host staged
+     into the image, and the host fetches it back with python's own
+     http.client and compares it byte for byte. Needs a port forward --
+     SLIRP is a NAT, so this is the one direction that does not work
+     without one. Its load-bearing check is the SECOND request: a
+     listener consumed by its first connection passes everything else.
  10. TCP, against a REAL HTTP SERVER on the host -- python's own
      http.server, which shares no code with this OS and will simply not
      answer a malformed handshake. Deliberately local rather than a site
@@ -838,6 +844,122 @@ def phase_tcp(r, disk, tmp):
             all(x["ok"] for x in segs), f"{len(segs)} checked")
 
 
+def _volume_args(disk):
+    """Where the TFS3 volume sits in the image. Asked rather than
+    assumed: hardcoding LBA 2048 is the pointer-somebody-must-maintain
+    shape, and "partition 1" is wrong too -- volume_of() finds it by
+    looking. (ls_test.py stages its fixture the same way.)"""
+    import mkpart_test
+    base, sectors = mkpart_test.volume_of(disk)
+    return ["--at-lba", str(base), "--sectors", str(sectors)] if base else []
+
+
+SERVER_PORT = 18089
+SERVER_FILE = "httpd_probe.txt"
+SERVER_TEXT = "served from inside toy-os\n" * 3
+
+
+def phase_server(r, disk, tmp):
+    """The guest as the SERVER: the host connects IN.
+
+    This is the one phase that needs a port forward. SLIRP is a NAT, so
+    everything else in this file works with no configuration and nothing
+    can start a conversation WITH the guest without hostfwd.
+
+    The oracle is curl-free on purpose -- python's own http.client, so
+    the check does not depend on a binary this machine may not have --
+    and the body is compared against the file as STAGED FROM THE HOST,
+    which is the only way to know the bytes survived the round trip
+    rather than merely arriving."""
+    import http.client
+
+    # The file the guest will serve, written into the image from here.
+    subprocess.run([sys.executable, os.path.join(HERE, "tfs3_writer.py"),
+                    "mkdir", disk, "/tmp", *_volume_args(disk)],
+                   cwd=ROOT, capture_output=True)
+    probe = os.path.join(tmp, SERVER_FILE)
+    with open(probe, "w") as f:
+        f.write(SERVER_TEXT)
+    w = subprocess.run([sys.executable, os.path.join(HERE, "tfs3_writer.py"),
+                        "write", disk, probe, "/tmp/" + SERVER_FILE,
+                        *_volume_args(disk)],
+                       cwd=ROOT, capture_output=True, text=True)
+    if w.returncode != 0:
+        r.check("[server] the probe file could be staged", False,
+                (w.stdout + w.stderr)[-300:])
+        return
+
+    extra = f",hostfwd=tcp::{SERVER_PORT}-:80"
+    sh, pidfile = launch(disk, tmp, "server", "e1000", None, netdev_extra=extra)
+    try:
+        # httpd holds the console, so the command is sent and not waited
+        # for -- the assertion is what answers on the socket, not what
+        # the shell prints.
+        sh.s.sendall(b"sh httpd /tmp\n")
+        time.sleep(3.0)
+
+        body, status, listing = None, 0, ""
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", SERVER_PORT, timeout=15)
+            conn.request("GET", "/" + SERVER_FILE)
+            resp = conn.getresponse()
+            status = resp.status
+            body = resp.read().decode("utf-8", "replace")
+            conn.close()
+        except Exception as e:
+            body = f"<{e}>"
+
+        r.check("[server] the host connected to a server INSIDE the guest",
+                status == 200, f"status {status}, body {body!r}")
+        # Byte for byte against what the host wrote into the image: a
+        # response that arrives truncated or re-ordered fails here and
+        # passes every check that only asks whether something came back.
+        r.check("[server] and got the file back exactly as staged",
+                body == SERVER_TEXT, repr(body)[:300])
+
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", SERVER_PORT, timeout=15)
+            conn.request("GET", "/")
+            resp = conn.getresponse()
+            listing = resp.read().decode("utf-8", "replace")
+            conn.close()
+        except Exception as e:
+            listing = f"<{e}>"
+        r.check("[server] a directory is served as a listing",
+                SERVER_FILE in listing, listing[:300])
+
+        # A SECOND request proves the server went back to accepting --
+        # a listener consumed by its first connection passes everything
+        # above.
+        second = 0
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", SERVER_PORT, timeout=15)
+            conn.request("GET", "/" + SERVER_FILE)
+            second = conn.getresponse().status
+            conn.close()
+        except Exception:
+            pass
+        r.check("[server] and it serves a second client after the first",
+                second == 200, f"status {second}")
+
+        # A path leaving the root is refused rather than resolved.
+        forbidden = 0
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", SERVER_PORT, timeout=15)
+            conn.putrequest("GET", "/../etc/toyos.conf", skip_host=True,
+                            skip_accept_encoding=True)
+            conn.endheaders()
+            forbidden = conn.getresponse().status
+            conn.close()
+        except Exception:
+            pass
+        r.check("[server] a path leaving the served root is refused",
+                forbidden == 403, f"status {forbidden}")
+    finally:
+        kill(pidfile)
+        sh.close()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -873,6 +995,8 @@ def main():
         phase_dns(r, disk, tmp)
         print("Phase 10: TCP, against a real HTTP server on the host")
         phase_tcp(r, disk, tmp)
+        print("Phase 11: the guest as a SERVER, with the host connecting in")
+        phase_server(r, disk, tmp)
     finally:
         if not args.keep:
             shutil.rmtree(tmp, ignore_errors=True)

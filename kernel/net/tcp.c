@@ -1,10 +1,7 @@
 // TCP, client side: an active open, an in-order byte stream, and
 // retransmission. What a socket needs to fetch something.
 //
-// WHAT THIS DELIBERATELY IS NOT. No LISTEN and no accept -- a passive
-// open needs a backlog and sockets the kernel creates rather than a
-// caller, which is a second design and not half of this one. No
-// out-of-order reassembly: a segment that is not at rcv_nxt is DROPPED
+// WHAT THIS DELIBERATELY IS NOT. No out-of-order reassembly: a segment that is not at rcv_nxt is DROPPED
 // and the peer retransmits it, which is legal, costs throughput on a
 // lossy path, and removes the hole list that is most of a real
 // receive queue. No window scaling, no SACK, no timestamps, no Nagle
@@ -26,7 +23,12 @@
 #include "string.h"
 #include "errno.h"
 
-#define TCP_MAX_CONNS 4
+// One listener plus several live connections, and each block carries
+// 12 KiB of buffers -- so this number is 96 KiB of .bss, not a free
+// choice. Four was enough for a client and is not enough for a server
+// that must hold a listener and the connection it is serving while a
+// second waits in the backlog.
+#define TCP_MAX_CONNS 8
 #define TCP_SND_BUF   4096
 #define TCP_RCV_BUF   8192
 // Conservative for a 1500-byte MTU: 1500 - 20 (IP) - 20 (TCP) = 1460,
@@ -43,6 +45,8 @@
 // one for two minutes because a peer went away would exhaust the pool
 // long before it protected anything.
 #define TCP_LINGER_MS 2000
+
+// TCP_BACKLOG is in net.h: it is a property a caller can observe.
 
 // Flags, in the order the wire has them.
 #define TH_FIN 0x01
@@ -67,6 +71,11 @@ _Static_assert(sizeof(struct tcp_header) == 20, "TCP header is 20 bytes on the w
 struct tcp_conn {
     uint8_t in_use;
     uint8_t state;         // TCP_STATE_*
+    // A connection a LISTENER produced and nobody has accepted yet. It
+    // is a full connection -- handshaken, buffering whatever the client
+    // sent -- with no socket in front of it, so tcp_release() is what
+    // happens if the listener closes before accepting it.
+    uint8_t pending;
     uint32_t remote_ip;
     uint16_t remote_port, local_port;
 
@@ -156,6 +165,7 @@ static int send_segment(struct tcp_conn *c, uint8_t flags, uint32_t seq,
 static void arm_timer(struct tcp_conn *c) {
     int outstanding = (c->snd_nxt != c->snd_una) ||
                       c->state == TCP_STATE_SYN_SENT ||
+                      c->state == TCP_STATE_SYN_RCVD ||
                       c->state == TCP_STATE_FIN_WAIT_1 ||
                       c->state == TCP_STATE_LAST_ACK;
     if (!outstanding) {
@@ -234,6 +244,12 @@ int tcp_state(int idx) {
 // Why a connection is not usable, or 0 while it still might be. The
 // handshake's own result: a caller polls this rather than tcp_state(),
 // because CLOSED is both "not started" and "refused".
+void tcp_peer(int idx, uint32_t *out_ip, uint16_t *out_port) {
+    if (idx < 0 || idx >= TCP_MAX_CONNS || !g_conns[idx].in_use) return;
+    if (out_ip) *out_ip = g_conns[idx].remote_ip;
+    if (out_port) *out_port = g_conns[idx].remote_port;
+}
+
 int tcp_error(int idx) {
     if (idx < 0 || idx >= TCP_MAX_CONNS || !g_conns[idx].in_use) return -EBADF;
     if (g_conns[idx].refused) return -ECONNREFUSED;
@@ -269,6 +285,33 @@ int tcp_connect(int idx, uint32_t ip, uint16_t port) {
     }
     arm_timer(c);
     return 0;
+}
+
+int tcp_listen(int idx) {
+    if (idx < 0 || idx >= TCP_MAX_CONNS || !g_conns[idx].in_use) return -EBADF;
+    struct tcp_conn *c = &g_conns[idx];
+    if (c->state != TCP_STATE_CLOSED) return -EBUSY;
+    if (!c->local_port) return -EINVAL;      // nothing to listen ON
+    c->state = TCP_STATE_LISTEN;
+    return 0;
+}
+
+// The first finished connection this listener produced, or -EAGAIN.
+// The caller wraps it in a socket of its own; from here on the two
+// blocks are unrelated.
+int tcp_accept(int idx) {
+    if (idx < 0 || idx >= TCP_MAX_CONNS || !g_conns[idx].in_use) return -EBADF;
+    if (g_conns[idx].state != TCP_STATE_LISTEN) return -EINVAL;
+
+    for (int i = 0; i < TCP_MAX_CONNS; i++) {
+        struct tcp_conn *k = &g_conns[i];
+        if (!k->in_use || !k->pending) continue;
+        if (k->local_port != g_conns[idx].local_port) continue;
+        if (k->state != TCP_STATE_ESTABLISHED && k->state != TCP_STATE_CLOSE_WAIT) continue;
+        k->pending = 0;      // it has an owner now
+        return i;
+    }
+    return -EAGAIN;
 }
 
 int tcp_send(int idx, const void *buf, uint32_t len) {
@@ -390,6 +433,9 @@ void tcp_tick(void) {
         case TCP_STATE_SYN_SENT:
             send_segment(c, TH_SYN, c->iss, 0, 0);
             break;
+        case TCP_STATE_SYN_RCVD:
+            send_segment(c, TH_SYN | TH_ACK, c->iss, 0, 0);
+            break;
         case TCP_STATE_ESTABLISHED:
         case TCP_STATE_CLOSE_WAIT: {
             uint32_t in_flight = c->snd_nxt - c->snd_una;
@@ -408,14 +454,73 @@ void tcp_tick(void) {
 
 // --- receive ----------------------------------------------------------
 
+// THE FOUR-TUPLE FIRST, THE LISTENER ONLY IF NOTHING MATCHED. That
+// order is the whole demultiplexing rule: a listener and the
+// connections it produced all share a local port, so a lookup that
+// checked the listener first would hand every segment of every live
+// connection to it.
 static struct tcp_conn *find_conn(uint32_t src_ip, uint16_t src_port, uint16_t dst_port) {
     for (int i = 0; i < TCP_MAX_CONNS; i++) {
         struct tcp_conn *c = &g_conns[i];
         if (!c->in_use || c->state == TCP_STATE_CLOSED) continue;
+        if (c->state == TCP_STATE_LISTEN) continue;
         if (c->local_port == dst_port && c->remote_port == src_port &&
             c->remote_ip == src_ip) return c;
     }
     return 0;
+}
+
+static struct tcp_conn *find_listener(uint16_t dst_port) {
+    for (int i = 0; i < TCP_MAX_CONNS; i++) {
+        struct tcp_conn *c = &g_conns[i];
+        if (c->in_use && c->state == TCP_STATE_LISTEN && c->local_port == dst_port)
+            return c;
+    }
+    return 0;
+}
+
+// How many connections a listener has produced that nobody has accepted
+// yet. This IS the backlog: there is no separate queue, because a
+// half-finished connection needs a full block anyway.
+static int backlog_depth(uint16_t port) {
+    int n = 0;
+    for (int i = 0; i < TCP_MAX_CONNS; i++) {
+        struct tcp_conn *c = &g_conns[i];
+        if (c->in_use && c->pending && c->local_port == port) n++;
+    }
+    return n;
+}
+
+// A SYN for a listening port: give it a block of its own and answer.
+// The listener is untouched -- it goes on listening, and this block
+// carries the connection from here.
+static void passive_open(struct tcp_conn *lis, uint32_t src_ip, uint16_t src_port,
+                         uint32_t seq, uint16_t window) {
+    if (backlog_depth(lis->local_port) >= TCP_BACKLOG) {
+        // FULL: say nothing. The client's own SYN retransmission brings
+        // it back when a slot frees, so a brief burst succeeds slightly
+        // later instead of failing -- Linux's default, and the reason
+        // it is a drop rather than a RST.
+        return;
+    }
+    int idx = tcp_open(lis->local_port);
+    if (idx < 0) return;    // no block: the same silence, for the same reason
+
+    struct tcp_conn *c = &g_conns[idx];
+    c->pending = 1;
+    c->remote_ip = src_ip;
+    c->remote_port = src_port;
+    c->irs = seq;
+    c->rcv_nxt = seq + 1;
+    c->iss = (g_isn_counter += 0x01000193u) + (uint32_t)clocksource_now_ns();
+    c->snd_una = c->iss;
+    c->snd_nxt = c->iss + 1;    // our SYN takes a sequence number
+    c->snd_wnd = window ? window : TCP_MSS;
+    c->state = TCP_STATE_SYN_RCVD;
+    c->rto_ms = TCP_RTO_MIN_MS;
+
+    send_segment(c, TH_SYN | TH_ACK, c->iss, 0, 0);
+    arm_timer(c);
 }
 
 int tcp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
@@ -430,19 +535,39 @@ int tcp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
     if (doff < sizeof h || doff > len) return 1;
 
     uint16_t sport = net_ntohs(h.src_port), dport = net_ntohs(h.dst_port);
+    uint32_t seq_in = net_ntohl(h.seq);
     struct tcp_conn *c = find_conn(src_ip, sport, dport);
-    if (!c) return 0;   // no connection: the caller may answer with RST
+    if (!c) {
+        // Nothing matched the four-tuple. A bare SYN for a listening
+        // port opens a connection; anything else is a segment for a
+        // conversation this stack is not having.
+        struct tcp_conn *lis = find_listener(dport);
+        if (lis && (h.flags & TH_SYN) && !(h.flags & TH_ACK)) {
+            passive_open(lis, src_ip, sport, seq_in, net_ntohs(h.window));
+            return 1;
+        }
+        return 0;
+    }
 
-    uint32_t seq = net_ntohl(h.seq), ack = net_ntohl(h.ack);
+    uint32_t seq = seq_in, ack = net_ntohl(h.ack);
     const uint8_t *data = pkt + doff;
     uint32_t data_len = len - doff;
 
     if (h.flags & TH_RST) {
-        // A RST answering a SYN is the one error message everybody
-        // knows: nothing is listening there. Anything later is an
-        // abort, and a caller acts on the two differently -- one says
-        // try a different port, the other says try again.
-        if (c->state == TCP_STATE_SYN_SENT) c->refused = 1;
+        // A RST IS VALIDATED BEFORE IT IS BELIEVED. Accepting any reset
+        // that names the right ports lets anyone who can guess a
+        // connection tear it down -- the blind-reset attack RFC 5961
+        // exists for. In SYN_SENT the reset must acknowledge our SYN;
+        // afterwards it must sit exactly where the next byte was
+        // expected. (RFC 5961 accepts a window and challenges the rest;
+        // that needs a challenge-ACK rate limit, which is a mechanism
+        // this stack has no other use for.)
+        if (c->state == TCP_STATE_SYN_SENT) {
+            if (!(h.flags & TH_ACK) || ack != c->snd_nxt) return 1;
+            c->refused = 1;
+        } else if (seq_in != c->rcv_nxt) {
+            return 1;
+        }
         c->reset = 1;
         c->state = TCP_STATE_CLOSED;
         c->rto_at_ns = 0;
@@ -464,6 +589,22 @@ int tcp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
         send_segment(c, TH_ACK, c->snd_nxt, 0, 0);
         arm_timer(c);
         return 1;
+    }
+
+    if (c->state == TCP_STATE_SYN_RCVD) {
+        // The third leg. Anything else at this point -- including a
+        // retransmitted SYN, which arrives when our SYN+ACK was lost --
+        // leaves the connection where it is for the timer to retry.
+        if ((h.flags & TH_ACK) && ack == c->snd_nxt) {
+            c->snd_una = ack;
+            c->snd_wnd = net_ntohs(h.window);
+            c->state = TCP_STATE_ESTABLISHED;
+            c->rto_at_ns = 0;
+            c->retries = 0;
+            c->rto_ms = TCP_RTO_MIN_MS;
+        } else if (!(h.flags & TH_ACK)) {
+            return 1;
+        }
     }
 
     if (h.flags & TH_ACK) {

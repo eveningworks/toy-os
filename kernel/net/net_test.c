@@ -733,8 +733,11 @@ KTEST("tcp", "a FIN ends the stream, and a read reports it as 0 rather than an e
     // stream in this system already tests for. An error here would make
     // a normal close look like a failure.
     KTEST_ASSERT_EQ(net_sock_stream_recv(p.sock, buf, sizeof buf), 0);
-    KTEST_ASSERT_EQ(tcp_state(0) == TCP_STATE_CLOSE_WAIT ||
-                    tcp_state(0) == TCP_STATE_CLOSED, 1);
+    // Deliberately no check of the connection's STATE here. End-of-
+    // stream is the property, the state is only evidence for it, and
+    // reading it needs a connection INDEX -- which an earlier version
+    // of this test guessed as 0 and got wrong the moment another test
+    // held that block.
     finish_close(dev, &p);
 }
 
@@ -770,4 +773,184 @@ KTEST("tcp", "a stream socket refuses the wrong protocol, and a datagram refuses
     KTEST_ASSERT(net_sock_connect(udp, NET_IPV4(10, 0, 2, 2), 80) < 0);
     KTEST_ASSERT(!net_sock_is_stream(udp));
     net_sock_close(udp);
+}
+
+
+// A client's side of a passive open: SYN in, read the SYN+ACK, ACK it.
+// Does NOT accept -- the caller decides when, which is what lets the
+// backlog test fill the queue without needing a socket per connection.
+// Returns 1, or 0 having already failed the test.
+static int handshake_from_outside(struct net_device *dev, struct ktest_ctx *ctx,
+                                  uint16_t client_port, uint32_t *out_client_seq) {
+    uint32_t peer_seq = 0x60000000u + client_port;
+
+    capture_begin(dev);
+    uint32_t len = tcp_frame(dev, client_port, 8081, 0x02 /* SYN */, peer_seq, 0, 0, 0);
+    eth_input(dev, g_frame, len);
+    uint8_t flags = sent_tcp_flags();
+    uint32_t their_seq = sent_tcp_seq();
+    uint32_t their_ack = sent_tcp_ack();
+    capture_end(dev);
+
+    if (flags != 0x12) {          // SYN|ACK
+        ktest_fail_eq(ctx, "synack flags", flags, 0x12, __FILE__, __LINE__);
+        return 0;
+    }
+    if (their_ack != peer_seq + 1) {
+        ktest_fail_eq(ctx, "synack ack", (int64_t)their_ack,
+                      (int64_t)(peer_seq + 1), __FILE__, __LINE__);
+        return 0;
+    }
+
+    len = tcp_frame(dev, client_port, 8081, 0x10 /* ACK */,
+                    peer_seq + 1, their_seq + 1, 0, 0);
+    eth_input(dev, g_frame, len);
+    if (out_client_seq) *out_client_seq = peer_seq + 1;
+    return 1;
+}
+
+// Tear a connection down deterministically: a VALID reset from the
+// peer (the sequence must be where the next byte was expected, or it is
+// ignored -- see tcp.c) drives it to CLOSED, and tcp_tick() then
+// reclaims the block. Without this a test leaves an orphan lingering
+// for two seconds, and eleven tests in a few milliseconds exhaust the
+// pool -- which is how this was found, with a later test reporting
+// -ENOSPC from listen().
+static void abort_from_peer(struct net_device *dev, uint16_t client_port,
+                            uint16_t local_port, uint32_t seq) {
+    uint32_t len = tcp_frame(dev, client_port, local_port, 0x04 /* RST */,
+                             seq, 0, 0, 0);
+    eth_input(dev, g_frame, len);
+    tcp_tick();
+}
+
+KTEST("tcp", "listen refuses an unbound socket, and accepts a bound one") {
+    int s = net_sock_open(NET_AF_INET, NET_SOCK_DGRAM, IP_PROTO_UDP);
+    KTEST_ASSERT(net_sock_listen(s) < 0);          // not a stream
+    net_sock_close(s);
+
+    s = net_sock_open(NET_AF_INET, NET_SOCK_STREAM, IP_PROTO_TCP);
+    KTEST_ASSERT(s >= 0);
+    // A port the kernel picked is one no client could know to connect
+    // to, so an unbound listener is refused rather than given one.
+    KTEST_ASSERT(net_sock_listen(s) < 0);
+    KTEST_ASSERT_EQ(net_sock_bind(s, 0, 8081, 0), 8081);
+    KTEST_ASSERT_EQ(net_sock_listen(s), 0);
+    KTEST_ASSERT_EQ(net_sock_accept(s), -EAGAIN);  // nobody has connected
+    net_sock_close(s);
+}
+
+KTEST("tcp", "a half-open connection is not offered to accept") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+    uint32_t len = arp_request(dev, dev->ip, 0);
+    eth_input(dev, g_frame, len);
+
+    int lis = net_sock_open(NET_AF_INET, NET_SOCK_STREAM, IP_PROTO_TCP);
+    KTEST_ASSERT_EQ(net_sock_bind(lis, 0, 8081, 0), 8081);
+    KTEST_ASSERT_EQ(net_sock_listen(lis), 0);
+
+    // A SYN, answered with SYN+ACK, and NOTHING MORE. The handshake is
+    // two thirds done; handing this to accept() would hand over a
+    // connection the client has not confirmed.
+    capture_begin(dev);
+    len = tcp_frame(dev, 40009, 8081, 0x02, 0x61000000u, 0, 0, 0);
+    eth_input(dev, g_frame, len);
+    uint8_t flags = sent_tcp_flags();
+    capture_end(dev);
+
+    KTEST_ASSERT_EQ(flags, 0x12);
+    KTEST_ASSERT_EQ(net_sock_accept(lis), -EAGAIN);
+
+    abort_from_peer(dev, 40009, 8081, 0x61000001u);
+    net_sock_close(lis);
+    tcp_tick();
+}
+
+KTEST("tcp", "a passive open completes, and the listener keeps listening") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+    uint32_t len = arp_request(dev, dev->ip, 0);
+    eth_input(dev, g_frame, len);
+
+    int lis = net_sock_open(NET_AF_INET, NET_SOCK_STREAM, IP_PROTO_TCP);
+    KTEST_ASSERT_EQ(net_sock_bind(lis, 0, 8081, 0), 8081);
+    KTEST_ASSERT_EQ(net_sock_listen(lis), 0);
+
+    uint32_t client_seq = 0;
+    if (!handshake_from_outside(dev, ctx, 40001, &client_seq)) { net_sock_close(lis); return; }
+    int conn = net_sock_accept(lis);
+    KTEST_ASSERT(conn >= 0);
+    KTEST_ASSERT(conn != lis);      // accept() returns a SEPARATE socket
+
+    uint32_t peer_out = 0;
+    uint16_t port_out = 0;
+    net_sock_peer(conn, &peer_out, &port_out);
+    KTEST_ASSERT_EQ(peer_out, peer_ip(dev));
+    KTEST_ASSERT_EQ(port_out, 40001);
+
+    // Data goes to the ACCEPTED socket, never to the listener.
+    len = tcp_frame(dev, 40001, 8081, 0x18, client_seq, 0, 6, 0);
+    eth_input(dev, g_frame, len);
+    uint8_t buf[16];
+    KTEST_ASSERT_EQ(net_sock_stream_recv(conn, buf, sizeof buf), 6);
+    KTEST_ASSERT_EQ(buf[0], 'A');
+
+    // AND THE LISTENER IS STILL LISTENING. Asserted behaviourally --
+    // a second client connects and is accepted -- rather than by
+    // reading a state variable, because "it still works" is the
+    // property and the variable is only evidence for it.
+    uint32_t seq2 = 0;
+    if (!handshake_from_outside(dev, ctx, 40002, &seq2)) { net_sock_close(lis); return; }
+    int conn2 = net_sock_accept(lis);
+    KTEST_ASSERT(conn2 >= 0);
+    KTEST_ASSERT(conn2 != conn);
+
+    net_sock_close(conn);
+    net_sock_close(conn2);
+    abort_from_peer(dev, 40001, 8081, client_seq + 6);
+    abort_from_peer(dev, 40002, 8081, seq2);
+    net_sock_close(lis);
+    tcp_tick();
+}
+
+KTEST("tcp", "a full backlog drops the SYN rather than refusing it") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+    uint32_t len = arp_request(dev, dev->ip, 0);
+    eth_input(dev, g_frame, len);
+
+    int lis = net_sock_open(NET_AF_INET, NET_SOCK_STREAM, IP_PROTO_TCP);
+    KTEST_ASSERT_EQ(net_sock_bind(lis, 0, 8081, 0), 8081);
+    KTEST_ASSERT_EQ(net_sock_listen(lis), 0);
+
+    // Fill it: handshakes completed and left UNACCEPTED, which is what
+    // a backlog holds.
+    for (uint16_t i = 0; i < TCP_BACKLOG; i++) {
+        uint32_t seq = 0;
+        if (!handshake_from_outside(dev, ctx, (uint16_t)(41000 + i), &seq)) {
+            net_sock_close(lis);
+            return;
+        }
+    }
+
+    // One more must be met with SILENCE. A RST here would turn a
+    // momentary burst into a hard failure for the client, where a drop
+    // lets its own SYN retransmission succeed a moment later.
+    capture_begin(dev);
+    len = tcp_frame(dev, 42000, 8081, 0x02, 0x70000000u, 0, 0, 0);
+    eth_input(dev, g_frame, len);
+    int answered = g_sent_count;
+    capture_end(dev);
+    KTEST_ASSERT_EQ(answered, 0);
+
+    // Drain what the backlog held, so the pool is not left full.
+    for (uint16_t i = 0; i < TCP_BACKLOG; i++) {
+        int c2 = net_sock_accept(lis);
+        if (c2 >= 0) net_sock_close(c2);
+        abort_from_peer(dev, (uint16_t)(41000 + i), 8081,
+                        0x60000001u + (uint32_t)(41000 + i));
+    }
+    net_sock_close(lis);
+    tcp_tick();
 }

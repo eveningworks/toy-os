@@ -1753,9 +1753,28 @@ with the answer).
 `kernel/net/tcp.c`. An active open, a byte stream, retransmission, and
 an orderly close — what a client needs and no more.
 
-- **THERE IS NO LISTEN AND NO ACCEPT.** A passive open needs a backlog
-  and sockets the kernel creates rather than a caller, which is a second
-  design and not half of this one.
+- **A PASSIVE OPEN EXISTS, AND ACCEPT RETURNS A NEW SOCKET.** `listen()`
+  needs a BOUND socket -- a port the kernel picked is one no client
+  could know to connect to. An arriving SYN gets a connection block of
+  its own and is answered with SYN+ACK; the listener is untouched and
+  goes on listening. **A half-open connection is never offered to
+  `accept()`**: until the third leg arrives it is a connection the
+  client has not confirmed.
+- **THE FOUR-TUPLE IS MATCHED FIRST AND THE LISTENER ONLY IF NOTHING
+  DID.** A listener and every connection it produced share a local port,
+  so a lookup that checked the listener first would hand it every
+  segment of every live connection. That ordering IS the demultiplexing
+  rule.
+- **A FULL BACKLOG DROPS THE SYN.** Silence, not a RST: the client's own
+  SYN retransmission brings it back when a slot frees, so a momentary
+  burst succeeds slightly later instead of failing (Linux's default).
+  The backlog is not a separate queue -- a finished connection needs a
+  whole block anyway, so `TCP_BACKLOG` counts unaccepted ones.
+- **A RST IS VALIDATED BEFORE IT IS BELIEVED.** In SYN_SENT it must
+  acknowledge our SYN; afterwards its sequence must be exactly where the
+  next byte was expected. Accepting any reset that names the right ports
+  is the blind-reset attack RFC 5961 exists for, and the check is two
+  comparisons.
 - **THE TIMERS RIDE THE BLOCKING RECEIVE.** There is no softirq and no
   kernel thread, so nothing services a connection on its own. A blocked
   reader parks until `net_wait_deadline()` — its own timeout, or TCP's

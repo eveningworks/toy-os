@@ -305,11 +305,19 @@ def cmd_start(args):
     # guest no card at all, which is what makes "no device" a testable
     # state rather than an assumption.
     net = getattr(args, "net", "e1000") or "e1000"
+    # A HOST PORT ONTO A GUEST PORT, which is the only way anything can
+    # start a conversation WITH the guest: SLIRP is a NAT, so outbound
+    # works with no configuration and inbound needs this. Required by
+    # anything testing a server in the guest, and by the ICMP
+    # port-unreachable check, which needs a datagram to ARRIVE.
+    # QEMU spells it `hostfwd=SPEC`; the flag takes the SPEC alone so a
+    # caller writes what the QEMU documentation calls it.
+    fwd = "".join(",hostfwd=" + f for f in (getattr(args, "hostfwd", None) or []))
     if net == "none":
         cmd += ["-nic", "none"]
     else:
         if net in ("e1000", "both"):
-            cmd += ["-netdev", "user,id=n0", "-device", "e1000,netdev=n0"]
+            cmd += ["-netdev", f"user,id=n0{fwd}", "-device", "e1000,netdev=n0"]
         if net in ("virtio", "both"):
             cmd += ["-netdev", "user,id=n1",
                     "-device", "virtio-net-pci,netdev=n1,disable-legacy=on"]
@@ -582,6 +590,10 @@ def main():
                          "what exercises the virtio transport and virtqueue.")
     ap.add_argument("--audio-wav", default=None, metavar="PATH",
                     help="attach an AC97 whose output records to this host wav")
+    ap.add_argument("--hostfwd", action="append", metavar="SPEC",
+                    help="a QEMU hostfwd rule, e.g. tcp::8080-:80 -- repeatable. "
+                         "The only way to reach a server INSIDE the guest, since "
+                         "SLIRP is a NAT")
     ap.add_argument("--net", choices=("e1000", "virtio", "both", "none"), default="e1000",
                     help="which NIC to attach. e1000 is what QEMU already did "
                          "implicitly; virtio reaches the virtio-net driver; both "

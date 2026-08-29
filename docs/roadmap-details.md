@@ -2594,6 +2594,14 @@ Listed with the honest reason each is or isn't attractive.
 
   It found one design bug worth recording: a closed socket's connection block outlives the socket, because the peer is still owed a FIN. With nothing to reclaim it, four dead connections held the whole pool until reboot -- the seventh KTEST got `-ENOSPC`. An orphan is now released at CLOSED or after a 2 s linger.
 
+- [x] ~~**A passive open: listen and accept**~~ -- `SYS_LISTEN`/`SYS_ACCEPT` and `/bin/httpd`, which serves this machine's own filesystem to a browser on the host. `accept()` returns a NEW socket, a half-open connection is never offered to it, and a full backlog DROPS the SYN rather than answering with a RST (Linux's default: the client's own retransmission succeeds a moment later). It also closed a real weakness found while writing the tests -- a RST was believed without validating its sequence, which is the blind-reset attack RFC 5961 exists for.
+
+- [ ] **A connection per child process** -- inetd's model, and the one concurrency this kernel can express without `fork`: `dup2` the connection onto fds 0 and 1 and spawn a handler, which works precisely because only 0/1/2 are inherited across `SYS_SPAWN`. It would make a handler an ordinary filter -- `cat` could be a service -- and it is what lifts `/bin/httpd` off one-connection-at-a-time.
+
+- [ ] Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked, so the peer resends it. Correct and slow on a path that reorders; a hole list is what it would take.
+
+- [ ] An RTT estimate, and Nagle -- the retransmit timeout is a fixed 200 ms floor with exponential backoff, and every write goes out at once.
+
 - [ ] Run `dhcp` at boot -- the obvious next step, and it is blocked on a measured bug rather than on effort: a filesystem write during the desktop's STARTUP wedges the compositor (`docs/bugs.md`, 3 runs in 3), and `/bin/dhcp` writes `/etc/resolv.conf`. Until that is understood, the kernel's boot-time defaults stay and the client is something you run.
 
 - [ ] Renew the lease -- `/bin/dhcp` asks once and exits. A lease that expires under a long-running machine leaves it using an address the server has since given away. Renewal at T1 needs a daemon, and a daemon needs a reason to exist beyond one timer.

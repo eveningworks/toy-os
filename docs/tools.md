@@ -29,7 +29,10 @@ xHCI controller and USB HID devices, off by default because attaching a
 `usb-kbd` takes the keyboard AWAY from PS/2 — see `docs/testing.md`;
 `--net e1000|virtio|both|none` chooses the NIC, where `e1000` is what
 QEMU already attached implicitly to every guest ever launched here and
-`virtio` is the only way to reach `virtio_net.c`).
+`virtio` is the only way to reach `virtio_net.c`; `--hostfwd tcp::8080-:80`
+maps a host port onto a guest one, which is the ONLY way anything can
+start a conversation WITH the guest -- SLIRP is a NAT, so outbound needs
+no configuration and inbound needs this).
 
 The rest, added once the build/test/delivery loop had enough repeated
 manual steps to be worth automating:

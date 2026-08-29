@@ -1369,6 +1369,77 @@ int sys_connect(struct syscall_ctx *c) {
     return 0;
 }
 
+int sys_listen(struct syscall_ctx *c) {
+    int sock = sock_of_fd(c, (int)c->a0);
+    if (sock < 0) { c->regs[14] = (uint64_t)(int64_t)-EBADF; return 0; }
+    c->regs[14] = (uint64_t)(int64_t)net_sock_listen(sock);
+    return 0;
+}
+
+int sys_accept(struct syscall_ctx *c) {
+    int sock = sock_of_fd(c, (int)c->a0);
+    if (sock < 0) { c->regs[14] = (uint64_t)(int64_t)-EBADF; return 0; }
+
+    struct net_msg m;
+    k_memset(&m, 0, sizeof m);
+    if (c->a1 && vmm_copy_from_user(c->pml4, &m, c->a1, sizeof m) < 0) {
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+
+    // The stack runs first for the same reason a receive runs it: the
+    // handshake that finished while this process was parked completes
+    // HERE, in a process context, not in the driver's interrupt.
+    net_poll();
+    int conn = net_sock_accept(sock);
+
+    if (conn == -EAGAIN) {
+        struct open_file *f = fd_get(c->pml4, (int)c->a0);
+        if (f && f->nonblock) { c->regs[14] = (uint64_t)(int64_t)-EAGAIN; return 0; }
+
+        uint64_t deadline = net_sock_deadline(sock);
+        uint64_t now = clocksource_now_ns();
+        if (!deadline && m.timeout_ms) {
+            deadline = now + (uint64_t)m.timeout_ms * 1000000ull;
+            net_sock_set_deadline(sock, deadline);
+        }
+        if (deadline && now >= deadline) {
+            net_sock_set_deadline(sock, 0);
+            c->regs[14] = (uint64_t)(int64_t)-EAGAIN;
+            return 0;
+        }
+        // A LISTENER BLOCKED HERE IS WHAT DRIVES EVERY CONNECTION IT
+        // MADE. net_wait_deadline() folds in TCP's next retransmit, so
+        // a server waiting for its next client still wakes in time to
+        // retransmit for the one it is already serving.
+        if (scheduler_block_current_until(c->regs, net_wait_chan(),
+                                          SCHED_WAIT_NET, net_wait_deadline(deadline)))
+            return 1;
+        net_sock_set_deadline(sock, 0);
+        c->regs[14] = (uint64_t)(int64_t)-EAGAIN;
+        return 0;
+    }
+    net_sock_set_deadline(sock, 0);
+    if (conn < 0) { c->regs[14] = (uint64_t)(int64_t)conn; return 0; }
+
+    int di = fd_desc_alloc(FD_KIND_SOCKET, -1);
+    int fd = di >= 0 ? fd_install(c->pml4, di) : -1;
+    if (fd < 0) {
+        if (di >= 0) fd_desc_unref(di);
+        net_sock_close(conn);
+        c->regs[14] = (uint64_t)(int64_t)-EMFILE;
+        return 0;
+    }
+    fd_desc[di].socket.idx = conn;
+
+    if (c->a1) {
+        net_sock_peer(conn, &m.addr, &m.port);
+        (void)vmm_copy_to_user(c->pml4, c->a1, &m, sizeof m);
+    }
+    c->regs[14] = (uint64_t)fd;
+    return 0;
+}
+
 int sys_net_config(struct syscall_ctx *c) {
     struct net_ifconfig req;
     if (vmm_copy_from_user(c->pml4, &req, c->a0, sizeof req) < 0) {
