@@ -2095,3 +2095,49 @@ and read the tool's own typing helpers before improvising.
 - **DO NOT REBUILD WHILE A TEST IS RUNNING.** A `make all` mid-run made
   `build/userland` newer than `build/.seeded`, and `iso_guard` refused
   the second boot. It was right to; the lesson is to let a run finish.
+
+**2026-08-29 (networking, and a fresh disk that was not fresh).**
+
+- **A "FRESH" DISK IS TWO COMMANDS, AND ONE OF THEM IS `make clean`.**
+  `seed/sync/` is build staging that `make clean-disk` does NOT touch,
+  so a file deleted from `data/` keeps being staged onto the next image.
+  Three reproduction attempts here ran against a machine with two
+  service descriptors I had already removed, starting programs I was not
+  expecting. The pair is `make clean` (wipes staging) THEN
+  `make clean-disk` (wipes the image). Confirm with what the guest
+  actually runs -- `ls /etc/services.d` -- not with what `data/` holds.
+- **THE HOST IS THE ORACLE FOR ANYTHING THAT LEAVES THE MACHINE.** For
+  the network stack that meant three independent checks, each catching
+  what the others could not: QEMU's SLIRP ANSWERING (a wrong checksum is
+  simply never replied to), a REAL PYTHON SOCKET or `http.server` at the
+  far end (bytes compared against what the host sent), and a PCAP
+  decoded host-side with the checksums RECOMPUTED. The third is the one
+  that catches a pseudo-header a lenient peer would tolerate -- a stack
+  that omits it agrees with itself perfectly.
+- **PREFER A SERVER ON LOOPBACK TO A SITE ON THE INTERNET.** The suite
+  must not depend on the machine having connectivity, and testing that
+  leaves the machine has to be DISCLOSED in the commit (see
+  `.claude/skills/network-egress-disclosure/`). `net_test.py` fetches
+  from a local `http.server` and SKIPS its DNS checks when the host
+  cannot resolve.
+- **A TEST THAT DOES NOT WAIT FOR THE DESKTOP IS A FLAKE WITH A DATE ON
+  IT.** `idle_desktop_test.py` was the only GUI tool that connected and
+  queried immediately instead of going through `enter_gui()`; it failed
+  1 run in 6 at HEAD and 3 in 6 on a busier tree. `predates.py` measured
+  both, which is what turned "is this mine?" into a number rather than
+  an argument -- and at those counts the two rates are not
+  distinguishable, which is exactly why the fix was the poll rather than
+  a claim about whose change it was. It calls `wait_for_desktop()` now,
+  deliberately NOT `enter_gui()`: that also turns on the per-frame
+  layout log, and a tool measuring an IDLE desktop is the last one that
+  should be given more to log.
+- **A SPAWNED `/tests` PROGRAM REPORTS THROUGH A FILE, NOT STDOUT**, and
+  which of the two it is decides whether its checks can measure
+  anything. `usertest_run.py` drives tests with the legacy `run` loader,
+  which has NO SCHEDULER SLOT -- so a test whose checks are about
+  BLOCKING (a receive that must really wait out its timeout) measures
+  nothing there: the kernel correctly gives a slotless caller the
+  non-blocking answer. Register it with an exit code of `None` to have
+  it SPAWNED instead, and have it write its verdict to
+  `/tmp/<name>.out`, because a spawned process's console output arrives
+  while the harness is between commands and is dropped.

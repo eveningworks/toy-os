@@ -1421,7 +1421,14 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
 - **How big is it** -- `loc.py` (source lines with generated files,
   comments and blanks excluded; add anything a `gen_*` writes into the
   tree to its `GENERATED` list, or the count silently inflates).
-- **Diagnose** -- `panic_resolve.py` (name every address in a panic),
+- **Diagnose** -- `panic_resolve.py` (name every address in a panic, from
+  DWARF so it answers with a file and LINE -- **including a RING-3
+  address**, with `--elf <the .elf> --delta 0`; never hand-roll `nm`,
+  which named the wrong function and cost an hour),
+  `QMPSession.hmp()` (**the QEMU monitor -- the one oracle the guest
+  cannot fake**: `info registers` for CPL/RIP/HLT, `info pic` for the
+  interrupt controller. Ask it BEFORE trusting anything the guest says
+  about itself, and sample a distribution rather than one reading),
   `regex_hostcheck.py` (**tolibc's `<regex.h>` against GLIBC's**, over the
   same case table `/tests/regex_test` runs -- an oracle that shares no
   code catches the failure a self-test cannot, which is an EXPECTATION

@@ -254,6 +254,38 @@ class QMPSession:
         line, _, self._buf = self._buf.partition(b"\n")
         return json.loads(line)
 
+    def hmp(self, command):
+        """Run a QEMU MONITOR command and return its text.
+
+        THE ONE ORACLE THE GUEST CANNOT FAKE. Everything else here asks
+        the guest about itself -- the debug console, `ps`, a screendump
+        of what the guest drew. This asks the EMULATOR, so it stays
+        truthful when the guest is confused, wedged, or lying because
+        the code doing the reporting is the code under suspicion.
+
+        The three that earn their place, from an investigation into a
+        desktop that appeared to freeze:
+
+          info registers  -- CPL, RIP and RFLAGS. `HLT=1` with `IF` set
+                             means halted waiting for an interrupt that
+                             is not coming; a CPL of 0 or 3 says which
+                             ring is actually executing, which no
+                             in-guest probe can tell you about itself.
+          info pic        -- the 8259s and the IOAPIC: `imr` (masked),
+                             `isr` (in service), `irr` (pending). An
+                             unacked IRQ shows up here and nowhere else.
+          info pci        -- what is actually on the bus, before any
+                             guest driver has had an opinion about it.
+
+        Sampling is not free of bias: this stops the vCPU to read it, so
+        a guest that is halted 99% of the time reads as halted every
+        time. Take a distribution, not one sample, and pair it with a
+        counter inside the guest.
+        """
+        r = self._cmd({"execute": "human-monitor-command",
+                       "arguments": {"command-line": command}})
+        return r.get("return", "") if isinstance(r, dict) else str(r)
+
     def _cmd(self, obj):
         self._sock.sendall((json.dumps(obj) + "\n").encode())
         return self._recv_json()

@@ -2031,3 +2031,62 @@ adding a subsystem that a vendored port also wants to use.**
   Chocolate Doom's: map Doom's channels onto the mixer's, with
   `s_sound.c` keeping the policy it already had. Re-read the item
   against the code before building to it.
+
+**2026-08-29 (the network stack, in four commits). Read this before
+anything socket-, driver- or protocol-shaped.**
+
+Where the project stands after it:
+
+- **THERE IS A NETWORK, IN BOTH DIRECTIONS.** `kernel/drivers/net/` is
+  hardware and `kernel/net/` is protocol -- Linux's `drivers/net/` vs
+  `net/`. Two NIC drivers (e1000 and virtio-net) behind a `net_device`
+  registry, ARP/IPv4/ICMP, UDP, TCP client AND server, DHCP, DNS, and
+  five programs: `ping`, `ifconfig`, `dhcp`, `host`, `wget`, `httpd`.
+- **`struct net_device` IS PLURAL BY CONSTRUCTION**, unlike
+  `block_device`'s singular active device: per-device addresses, a
+  two-rule route, and every entry point taking a device pointer. The
+  one-card case pays a pointer it does not need; that is the price of
+  not re-cutting every signature later, and it was paid deliberately.
+- **A DRIVER'S ISR ONLY COPIES.** `net_rx()` memcpys into a static
+  queue and wakes one channel; the protocols run from `net_poll()` in
+  process context. `kmalloc` is not interrupt-safe here and the
+  filesystem is not re-entrant, so parsing in an ISR is not merely rude.
+- **THE TIMERS RIDE THE BLOCKING RECEIVE**, because this kernel has no
+  softirq and no kernel threads. A blocked reader parks until its own
+  timeout OR TCP's next retransmit, wakes, runs `tcp_tick()`, and parks
+  again. The honest gap is stated where it happens: a connection nobody
+  reads has nobody to wake it.
+
+**THREE BUGS, AND ALL THREE WERE PARTIALLY-INITIALISED RECYCLED STATE.**
+Worth reading together, because the shape repeats and the third was
+found only because the first two had taught it:
+
+- `fd_desc_alloc()` set the fields the new descriptor needed and left
+  the rest. `nonblock` therefore SURVIVED A CLOSE and was inherited by
+  the next program's socket, whose blocking receive returned 0 at once
+  and lost every reply. It reproduced ONLY after something unrelated had
+  run -- a fresh boot was always fine -- which reads as "DNS is broken"
+  and sends you into the resolver. Two theories were wrong first; what
+  settled it was that the frame ARRIVED (the device counter moved) while
+  the socket never saw it.
+- Widening `scheduler_wake_timers()` from "sleepers on the timer
+  channel" to "anyone with a deadline" made a field written by exactly
+  one caller readable by all of them -- and slots are recycled, so a
+  stale `wake_at_ns` became a deadline in the PAST. Every blocking wait
+  on the machine returned instantly and the whole GUI suite failed at
+  once. Every park writes the field now, `0` included.
+- A closed TCP socket's connection block outlives the socket (the peer
+  is owed a FIN), and nothing reclaimed it, so four dead connections
+  held the pool until reboot. Found by the seventh KTEST returning
+  `-ENOSPC` while six passed.
+
+**The rule that falls out: an initialiser that sets "the fields this
+caller needs" is a bug waiting for a second caller.** Zero the whole
+object, or write every field on every path.
+
+**Two design calls worth not re-litigating** (both in
+`docs/decisions/kernel.md` in full): the stack is IN THE KERNEL because
+sockets would otherwise become IPC to a daemon and this OS has no IPC
+that can carry them; and an ICMP socket is a PING socket rather than a
+raw one, because a raw socket is what `CAP_NET_RAW` gates on Linux and
+this kernel has no privilege model to gate with.

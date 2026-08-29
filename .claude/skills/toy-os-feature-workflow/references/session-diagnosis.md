@@ -1146,3 +1146,64 @@ was the documented dirty-disk.img fixture (clean-disk cleared it).
   thread was still feeding it. Reference-counted `usnd_init`/`_shutdown`
   fixed it. Reachable through Doom's own Quit, never observed, and said
   so plainly in the commit rather than claiming a crash was seen.
+
+**2026-08-29 (the compositor "wedge" that was not one). THE THEME IS
+THAT EVERY WRONG ANSWER CAME FROM AN INSTRUMENT, NOT FROM THE SYSTEM.**
+Four hypotheses were formed and withdrawn -- the timer had stopped, the
+scheduler was starving the process, the frame loop had stopped, the
+process was parked in a thread call -- and each was killed by a cheap
+measurement that should have come first. What follows is the order to do
+it in next time.
+
+- **RESOLVE AN ADDRESS WITH `panic_resolve.py`, NEVER WITH `nm` BY
+  HAND.** A hand-rolled "nearest symbol below" over `nm` output named
+  `sys_thread_detach`, and the WM does not call it -- an hour went into
+  reconciling that. The real answer was `sys_yield` at
+  `userland/rt/sys.c:217`, the loop top, which would have said "the WM
+  is healthy" immediately. The tool reads DWARF and gives file and LINE,
+  it takes `--elf` for a RING-3 binary and `--delta 0` for one (userland
+  is not relocated), and for the kernel `--delta` is the
+  `kernel relocated +0x...` value in `dmesg`. `nm`'s nearest-below is
+  wrong whenever the target sits in a function whose symbol was folded
+  or reordered.
+- **A NUMBER WITHOUT A CONTROL MEANS NOTHING, AND TWO OF THEM LOOKED
+  DAMNING.** `toywm` showing a flat `0.20` of CPU while apparently stuck
+  reads as a starved process -- until a HEALTHY boot shows exactly
+  `0.20` too. Same for a ring-3 interrupt rate of ~2400/s. Before
+  drawing anything from a counter, run the identical probe on a working
+  boot; here that turned two "findings" into noise.
+- **A PROBE THAT OUTRUNS THE KLOG RING DESTROYS ITS OWN EVIDENCE.** The
+  ring holds a few hundred lines. A probe printing twice a second wraps
+  it in seconds, and reading the surviving tail says "the system stopped
+  doing X" when X never stopped -- that is exactly where "the timer
+  stopped" and "the frame loop stopped" came from. Keep instrumentation
+  under about a line a second, or write to a file-backed serial log
+  (`-serial file:`) where nothing is lost.
+- **GIVE EVERY PROBE IN A COMPARISON THE SAME RATE LIMITER.** Half the
+  probes used `n <= 6` and half `n % 300`; the first set stopped
+  printing at iteration 7 and was read as the loop dying at iteration 7.
+  The difference measured was the instrument's.
+- **ASK THE EMULATOR BEFORE ASKING THE GUEST** --
+  `QMPSession.hmp("info registers")` / `("info pic")`. The guest's own
+  reporting is written in the code under suspicion; QEMU's is not.
+  `HLT=1` with `IF` set, `CPL=0`, and a PIC showing `imr` with the timer
+  unmasked and `isr=00` together eliminated the whole interrupt layer in
+  one command. Sample a DISTRIBUTION: reading registers stops the vCPU,
+  so a mostly-idle guest reads as halted every single time.
+- **A FAULT THAT RECOVERS FASTER THAN YOU CAN QUERY CANNOT BE PROBED
+  FROM OUTSIDE.** A `vm.py exec` round trip is one to two seconds; the
+  stall was about three. Every manual sample of ticks, the RTC and the
+  screen landed after recovery and read perfectly normal. Anything
+  shorter than a few seconds needs in-guest instrumentation that
+  survives the window, not a query afterwards.
+- **`flake_hunt.py` ALREADY IS THE REPEAT-UNTIL-IT-FAILS LOOP.** It runs
+  a GUI tool N times, reports the RATE and names the failing checks, and
+  keeps the logs with `--keep`. That loop was hand-rolled here at least
+  four times, badly. Reach for it the moment the question is "how often,
+  and which check".
+- **AND THE REPRODUCTION HAS TO BE THE REAL TRIGGER.** Three attempts
+  used a service that wrote a file "early", and none reproduced, because
+  the write landed at 1.3 s -- after the first composited frame. The
+  original trigger (init's own unconditional status write) reproduced at
+  ~1 in 2 immediately. When a bug names its trigger, restore THAT, do
+  not build something of the same shape.

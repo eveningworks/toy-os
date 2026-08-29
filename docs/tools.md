@@ -988,7 +988,25 @@ window without going through it will find its layout polls timing out.
   be quietly wrong**: resolving against a different build gives
   confident, plausible, wrong names -- verified, the address that was
   `try_merge_next` in one report is `rtc_read_local` a few commits
-  later. `--elf` points it at a userland ELF for a ring-3 crash.
+  later. `--elf` points it at a userland ELF for a ring-3 crash, and
+  `--delta 0` goes with it -- userland is not relocated, so a live
+  ring-3 RIP (from `kstack slots`, say) has no delta in the text for it
+  to find. **Reach for this instead of `nm`**: a hand-rolled
+  nearest-symbol-below over `nm` output named `sys_thread_detach` for an
+  address that DWARF resolves to `sys_yield` at `rt/sys.c:217`, and an
+  hour went into reconciling a function the program never calls.
+- **`qmp_test.py`'s `QMPSession.hmp(cmd)`** -- run a QEMU MONITOR
+  command and get its text. **The one oracle the guest cannot fake**:
+  every other probe here asks the guest about itself, in code that is
+  usually the code under suspicion. `info registers` gives CPL, RIP and
+  `HLT` (halted with interrupts enabled means an interrupt that is not
+  coming, and CPL says which ring is really executing); `info pic` gives
+  the 8259s' `imr`/`isr`/`irr`, where an unacked IRQ is visible and
+  nowhere else; `info pci` says what is on the bus before a driver has
+  an opinion. Together the first two eliminated the entire interrupt
+  layer of the compositor-stall investigation in one command.
+  **Sample a distribution, never one reading** -- it stops the vCPU, so
+  a mostly-idle guest reads as halted every single time.
 - **`gen_syms.py`** -- bakes the kernel's function symbol table into the
   image so a panic can name the function instead of printing an address
   nobody can resolve (the kernel relocates itself, so a raw RIP is
