@@ -239,6 +239,24 @@ trips them before it knows to look anything up.
   assume the thing it is testing** -- reaching a known start position by
   scrolling, in order to test scrolling, proves nothing. The general
   form: ask what a broken version would still pass.
+- **A PROBE THAT OUTRUNS THE LOG DESTROYS THE EVIDENCE IT GATHERS, AND A
+  RATE-LIMITED PROBE LOOKS EXACTLY LIKE A LOOP THAT STOPPED.** The klog
+  ring holds a few hundred lines, so anything printing more than about a
+  line a second leaves only a truncated tail -- and a tail read as a
+  whole says the system stopped doing the thing it was still doing. Two
+  wrong root causes came out of that in one session ("the timer stopped",
+  "the frame loop stopped"), both withdrawn by a control. When
+  instrumenting: keep it under a line a second, give EVERY probe in a
+  comparison the SAME limiter (an `n <= 6` cap on one and `n % 300` on
+  another is a difference you measured in your own instrument), and for
+  anything verbose use a file-backed serial log instead of the ring.
+- **`seed/sync/` KEEPS WHAT YOU DELETE FROM `data/`, and `make
+  clean-disk` does not touch it.** Removing a file from `data/` leaves
+  the copy in staging, which is then seeded onto the next "fresh" disk --
+  so a deleted service descriptor keeps starting, and a reproduction runs
+  against a machine you did not configure. The pair is `make clean`
+  (wipes staging) THEN `make clean-disk` (wipes the image); either alone
+  leaves the old file in place.
 - **A positive control can turn nothing red because the test's DATA
   never reached the code under test.** The truncate tests wrote 16 KB,
   which fits TFS3's twelve DIRECT pointers, so disabling the

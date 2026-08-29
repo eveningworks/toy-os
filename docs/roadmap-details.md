@@ -3215,53 +3215,79 @@ process using the image [disk.img]?`.
 `python3 tools/flake_hunt.py ktest -n 10` is the loop for measuring any
 change to it, and it scores these runs as `error` rather than `pass`.
 
-### A filesystem write during the desktop's STARTUP wedges the compositor
+### A filesystem write during the desktop's STARTUP stalls the clock
 
 Found on 2026-08-27 while adding `/bin/service`: init began writing a
 ~120-byte status file to `/tmp` at about 0.8 s, and `idle_desktop_test`
 went red on its CLOCK CONTROL -- the check that exists to prove motion
 is visible at all.
 
-**What the wedge looks like.** The compositor presents NOTHING. The
-taskbar clock stops, and an injected mouse move does not move the cursor
-on screen either, so it is not a clock bug. Everything else looks
-healthy: `ps` shows `toywm` in `ready` with its CPU still advancing,
-`gui state --json` keeps answering with `redraw_pending` false and no
-damage (it reads kernel-side records, so it answers whatever the client
-is doing), the kernel log is silent, and `uptime` proves the timer tick
-is fine. It recovers on its own -- the same VM was ticking again about
-40 s later -- and what shakes it loose was not established.
+**Reproduced 2026-08-29, ~1 run in 2**, by restoring init's
+unconditional `write_status()` (the original trigger) on a disk made
+fresh with `make clean` FOLLOWED BY `make clean-disk`. Both are needed:
+`seed/sync/` is build staging that `clean-disk` does not touch, so a
+service descriptor deleted from `data/` keeps being seeded onto a
+"fresh" image until `make clean` -- which silently invalidated the first
+three reproduction attempts here.
 
-**Measured**, with one write at ~0.8 s: 3 runs in 3 wedged, and 0 in 3
-with that write removed. A `touch` issued from the debug console at
-~1.5 s does NOT wedge it, on this commit or on `85f3850`, so the window
-is roughly the first second -- while the desktop is still building its
-first composited frame.
+**WHAT THIS IS NOT. The old headline said the compositor wedges and
+"presents nothing at all, cursor included". That is wrong, and so are
+three more of its claims.** Each was ruled out by measurement against a
+HEALTHY boot with the same counters -- a number with no control means
+nothing, and two of these looked damning until the control was run:
 
-**A partial finding, and it was NOT kept.** `poll_desktop_entries()` in
-`userland/wm/wm.c` defers a reload for three reasons and not for "the
-desktop has not drawn yet", so the write's `sys_fs_generation()` bump
-made it re-read all fifteen `.desktop` files mid-startup. Guarding that
-until the first composited frame took the failure from 1 distinct clock
-frame in 8 to 2 in 8 -- better and still wedged, so the reload is part
-of this and not the whole of it. The guard was reverted rather than
-shipped as a half-fix in a file this change does not otherwise touch.
+- **Not the timer.** Ticks advance at 100/s during the stall, anchored
+  against host wall clock.
+- **Not the PIC.** `imr=e8 isr=00 irr=00`: the timer is unmasked,
+  nothing is in service, nothing is pending.
+- **Not the scheduler.** It picks `toywm` ~100 times a second
+  throughout, and ring-3 interrupt entries continue at ~2400/s -- the
+  same rate as a healthy boot.
+- **Not `toywm` being starved or stopped.** `ps` reports it `ready`,
+  and `scheduler_proc_info()` would report STOPPED if the flag were
+  set. **Its CPU reads 0.20 on a healthy boot too**, so the old entry's
+  "CPU still advancing" is not a distinguishing symptom either way.
+- **Not the WM's frame loop.** It runs at ~100 fps for the whole stall,
+  reaching every phase, with `sys_ticks()` advancing correctly inside
+  it. Renders fire once a second with the correct damage rect
+  (`0,698 1280x22`, the taskbar strip).
 
-Also unexplained, and noted in case it is the same thing: the boot log
-carries a burst of ~14 `syscall: open() rejected -- file not found`
-lines immediately after that reload.
+**What is actually observed** is that the clock TEXT does not change for
+about three seconds -- so the strip is redrawn with identical pixels and
+the screen is genuinely static, which is what the control correctly
+reports. Everything below the WM is healthy while it happens.
+
+**What is NOT established** is why. Every manual probe -- ticks, the
+RTC, the screen -- lands one to two seconds after the test finishes, by
+which time the machine has recovered and reads perfectly normal. Catching
+the mechanism needs instrumentation that survives the window rather than
+a query afterwards, and the klog ring wraps under any probe verbose
+enough to see it: a file-backed serial log is the way in.
+
+**Two hazards this cost time to learn**, worth knowing before the next
+attempt. The klog ring is small enough that a probe printing more than
+about a line a second destroys the evidence it is gathering -- several
+conclusions here were drawn from a truncated tail and had to be
+withdrawn. And a rate-limited probe (`n <= 6`) looks exactly like a loop
+that stopped; make every probe in a comparison use the SAME limiter, or
+the difference you measure is your own instrument.
+
+The `open() rejected -- file not found` burst that accompanies it is
+`fs_read()`'s nested-read refusal, which is indistinguishable from a
+missing file at the call site (CLAUDE.md says so). It is a real
+consequence of the write and is not, on its own, the stall.
 
 **init works around it rather than standing on it**: the status file is
 published only once somebody has rung the doorbell, and only on a pass
-where nothing is pending, so no write lands while a service is starting
-up. That is right on its own terms (see `docs/decisions.md`), and it is
-not a fix -- anything else writing to the filesystem in that window will
-still wedge the desktop.
+where nothing is pending. That is right on its own terms (see
+`docs/decisions.md`), and it is not a fix -- it is why `dhcp` still
+cannot run at boot.
 
-Repro: boot a fresh copy of `disk.img`, get any process to write a file
-within the first second, then sample the taskbar clock for ~3 s.
-`python3 tools/gui_regress.py -k idle` is the packaged version once a
-trigger is in place.
+Repro: `make clean && make clean-disk && make iso`, restore init's
+unconditional `write_status()`, then
+`python3 tools/idle_desktop_test.py --sock .vm.serial --qmp-port 4445`
+against a guest started with `tools/vm.py`, which leaves the guest alive
+afterwards -- unlike `gui_regress.py -k idle`, which tears it down.
 
 ### `gui_regress.py`'s `uterm` fails its two `edit` checks under full parallel load
 
