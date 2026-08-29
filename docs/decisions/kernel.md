@@ -5119,3 +5119,66 @@ read-only page is mapped BORROWED into every process -- the design's
 frame sharing, one frame of libc text total -- and a writable page
 (GOT, data) is a memcpy instead of a disk read. Bounded by the size
 of /lib; nothing evicts.
+
+## The network stack is in the kernel, and a socket is a ping socket
+
+**Where it runs.** ARP/IPv4/ICMP are ring-0 code reached through the
+`SYS_SOCKET` fds that had been scaffolding since long before any driver
+existed. That is Linux's and NT's shape. The alternative considered was
+a supervised ring-3 `netd` with the kernel owning only a packet
+interface -- a shared-memory rx/tx ring, which is exactly what
+`sound_device` already does -- and it fits the direction this project
+has been moving (the compositor is a process; the kernel contains no
+applications). It was declined for one concrete reason and one general
+one. Concretely, **sockets would become IPC to a service, and this OS
+has no IPC that can carry them**: there are no unix sockets, `PIPE_MAX`
+is 8 kernel-wide and a pipe carries no credentials, which is the same
+wall `SYS_NOTIFY_READY` hit. Generally, it would strand the fd namespace
+that already works -- `SYS_CLOSE` and process-exit cleanup have handled
+socket fds for free since the scaffolding landed, because neither ever
+looked at file-specific state.
+
+The honest cost is that protocol parsing of hostile input runs in ring
+0. That is the same call this kernel already made for TrueType fonts,
+and it is bounded the same way: every read is length-checked against the
+frame, a fragment is refused rather than reassembled, and nothing in the
+receive path allocates.
+
+**Why a ping socket and not a raw socket.** `AF_INET` + `SOCK_DGRAM` +
+`IPPROTO_ICMP` is the whole supported set, and the kernel builds the
+ICMP header: an application sends a payload and receives a payload. This
+is Linux's ping socket (its `IPPROTO_ICMP` datagram socket), not
+`SOCK_RAW`. The reason is not tidiness. A raw socket lets any process
+emit any ICMP type it likes -- forged unreachables, redirects -- and
+Linux gates that behind `CAP_NET_RAW`. **toy-os has no privilege model
+at all**, so the only gate available is not offering the primitive; a
+raw socket can arrive with the uid that would police it. The identifier
+field is the demux key, which is what it is for, and is why two `ping`s
+can run at once without reading each other's replies.
+
+**Why the receive path is split across the interrupt.** `net_rx()` does
+nothing but copy a frame into a static queue; the protocols run from
+`net_poll()`, called from `scheduler_idle()` and from the socket
+syscalls. Linux does the same thing (`netif_rx`, then a softirq), for
+throughput reasons. Here the reason is correctness: `kmalloc` is not
+interrupt-safe, the filesystem is not re-entrant, and `klog` is not
+either -- so an ISR that parsed a packet would be reachable from every
+one of those. The queue costs a memcpy per frame and buys the driver its
+DMA buffer back immediately.
+
+**Why `SYS_RECVFROM` does not block.** A blocking receive needs a wait
+channel per socket, which the scheduler supports (`SCHED_CHAN_*` is an
+address) but which also needs a wakeup from the receive path -- and the
+receive path currently runs from the idle loop, so a process blocked on
+a socket would have to not be the thing preventing the idle loop from
+running. That is a real design question about where `net_poll()` belongs
+once something can wait on it, and it is deferred rather than guessed
+at. Returning 0 for "nothing yet" is unambiguous because a datagram
+socket has no end-of-stream to confuse it with.
+
+**Why addresses are host byte order across the whole API.** POSIX puts a
+big-endian address in `sockaddr_in` and expects every caller to know it.
+A `uint32_t` is the same type in either order, so a missed conversion
+compiles perfectly and produces a packet nobody answers. Converting only
+at the wire edge (`kernel/net/`) leaves exactly one place where the
+mistake can be made, and `/bin/ping` never calls `htonl` at all.

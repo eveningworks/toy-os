@@ -158,6 +158,11 @@ a command), and the `gui3`/`nano` aliases.
 
 - [`diskbench`](diskbench.md)
 
+### Networking
+
+- [`ifconfig`](ifconfig.md)
+- [`ping`](ping.md)
+
 ### Storage
 
 - [`mkpart`](mkpart.md)

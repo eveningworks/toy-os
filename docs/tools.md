@@ -26,7 +26,10 @@ and `-v` prints the WHOLE transcript, boot messages included), `vm.py`
 (start a headless VM and run shell commands against it, getting text
 back, `--virtio-disk` likewise; `--usb xhci|xhci+mouse` attaches an
 xHCI controller and USB HID devices, off by default because attaching a
-`usb-kbd` takes the keyboard AWAY from PS/2 — see `docs/testing.md`).
+`usb-kbd` takes the keyboard AWAY from PS/2 — see `docs/testing.md`;
+`--net e1000|virtio|both|none` chooses the NIC, where `e1000` is what
+QEMU already attached implicitly to every guest ever launched here and
+`virtio` is the only way to reach `virtio_net.c`).
 
 The rest, added once the build/test/delivery loop had enough repeated
 manual steps to be worth automating:
@@ -2492,6 +2495,39 @@ window without going through it will find its layout polls timing out.
   It builds its own boot image per phase (`make iso KCMDLINE=...`, then
   a copy), so **it rewrites `disk.img`'s GRUB line** and puts it back at
   the end. On demand, not in any gate.
+
+- **`net_test.py`** -- the network stack end to end, on both NICs, with
+  the verdict taken on the HOST. The KTESTs in `kernel/net/net_test.c`
+  drive the protocols through `eth_input()` and need no network at all,
+  which is what makes them fast and what makes them silent about
+  whether a frame ever reached a wire.
+
+  **Two independent oracles, and neither shares a line with the guest.**
+  QEMU's user-mode network (SLIRP) answers the pings, so a wrong ARP, a
+  wrong checksum or a wrong destination is simply never replied to. And
+  every frame is dumped to a pcap (`-object filter-dump`) and decoded
+  here, with the IPv4 and ICMP checksums RECOMPUTED from the bytes on
+  the wire -- the same call `regex_hostcheck.py` and `fat32_test.py`
+  make, because SLIRP can be lenient about something a decoder cannot.
+  The decoder is thirty hand-written lines rather than scapy: a
+  dependency the machine might not have is a check that silently stops
+  running.
+
+  Five phases. The e1000 (the card QEMU's default machine has always
+  had, so it needs no flag); **virtio-net, which is the only thing here
+  that reaches `kernel/drivers/virtio/virtio_net.c`**; two cards at
+  once, moved onto DIFFERENT subnets so that "the traffic left through
+  the card that owns the subnet, and not the other one" is a per-device
+  counter rather than "a ping worked"; a machine with `-nic none`, where
+  the assertion is that `ping` reports instead of hanging; and the ARP
+  retransmit rate, which is a regression test with a measurement behind
+  it -- two pings at an unanswered address put **104 frames** on the
+  wire before `kernel/net/arp.c` rate-limited requests, and 5 after.
+
+  It found two real defects while being written: the ARP storm above,
+  and a sequence number burned by every retried send, so a capture
+  showed a ping starting at 4. Boots four guests against a COPY of
+  `disk.img`; on demand, not in any gate.
 
 - **`partition_test.py`** -- boots toy-os with its filesystem **inside**
   an MBR or GPT partition. The only thing that exercises `vfs.c`'s

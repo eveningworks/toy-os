@@ -294,6 +294,25 @@ def cmd_start(args):
             cmd += ["-device", "usb-kbd,id=usbkbd,bus=xhci.0"]
             if usb == "xhci+mouse":
                 cmd += ["-device", "usb-mouse,id=usbmouse,bus=xhci.0"]
+    # WHICH NIC, and why the default is spelled out rather than left
+    # implicit. QEMU's default pc machine already attaches an e1000 with
+    # user-mode networking when no -net/-netdev option is given -- every
+    # guest this harness has ever launched had one -- so `e1000` here is
+    # what was already happening, named. `virtio` swaps it for
+    # virtio-net-pci, which is the ONLY way to reach
+    # kernel/drivers/virtio/virtio_net.c; `both` attaches one of each,
+    # the multi-NIC shape nothing else here boots; `none` gives the
+    # guest no card at all, which is what makes "no device" a testable
+    # state rather than an assumption.
+    net = getattr(args, "net", "e1000") or "e1000"
+    if net == "none":
+        cmd += ["-nic", "none"]
+    else:
+        if net in ("e1000", "both"):
+            cmd += ["-netdev", "user,id=n0", "-device", "e1000,netdev=n0"]
+        if net in ("virtio", "both"):
+            cmd += ["-netdev", "user,id=n1",
+                    "-device", "virtio-net-pci,netdev=n1,disable-legacy=on"]
     cmd += [
         # A VNC head rather than -display none: input routing needs a
         # display head to exist even when nothing connects to it (see
@@ -563,6 +582,10 @@ def main():
                          "what exercises the virtio transport and virtqueue.")
     ap.add_argument("--audio-wav", default=None, metavar="PATH",
                     help="attach an AC97 whose output records to this host wav")
+    ap.add_argument("--net", choices=("e1000", "virtio", "both", "none"), default="e1000",
+                    help="which NIC to attach. e1000 is what QEMU already did "
+                         "implicitly; virtio reaches the virtio-net driver; both "
+                         "is the multi-NIC case; none means no card at all")
     ap.add_argument("--virtio-input", action="store_true",
                     help="attach virtio keyboard/mouse/tablet devices. Off by "
                          "default; with it the guest has BOTH these and the PS/2 "

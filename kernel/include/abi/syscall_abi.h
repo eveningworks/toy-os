@@ -396,41 +396,60 @@ struct sys_dirent {
                       // there's nothing else to yield to, so it's
                       // always a no-op there. Always returns 0 (RAX).
 
-// Socket-fd scaffolding -- see kernel/proc/syscall.c's `struct open_file`
-// and docs/decisions.md for the fuller reasoning. There's no NIC driver
-// or protocol stack yet (see README.md's "Basic TCP/IP networking" --
-// PCI enumeration, IRQ registration, and contiguous memory are done;
-// this is the fd/syscall layer, still ahead of the driver itself), so
-// SYS_SEND/SYS_RECV below always fail with -1 for now -- deliberately,
-// not a bug. What this DOES get you: a real fd namespace shared between
-// files and sockets (SYS_CLOSE, and process exit cleanup, already work
-// on a socket fd for free, since neither ever looked at file-specific
-// state to begin with), and an ABI that's already settled by the time a
-// real transport exists, instead of needing a breaking change then.
-#define SYS_SOCKET 16 // RDI = domain, RSI = type -- both reserved for
-                       // future use (AF_INET/SOCK_STREAM, say) and must
-                       // be passed as 0 for now; a nonzero value is
-                       // rejected (-1) rather than silently ignored, so
-                       // a caller relying on a real value being honored
-                       // later fails loudly today instead of quietly
-                       // once a real domain/type distinction exists.
-                       // On success, allocates a socket-kind fd (same
-                       // table, same fd namespace as SYS_OPEN's file
-                       // fds -- see SYS_SOCKET's kernel-side comment)
-                       // and returns it (RAX); -1 if the fd table is
-                       // full. SYS_READ/SYS_WRITE reject a socket fd
-                       // (-1, "bad fd") -- SYS_SEND/SYS_RECV below are
-                       // the only way to use one.
-#define SYS_SEND   17 // RDI = fd (from SYS_SOCKET), RSI = buffer
-                       // pointer, RDX = length. Always returns -1 for
-                       // now -- there's no transport to send through
-                       // yet (see this section's top comment) -- once a
-                       // NIC driver exists this becomes the real send
-                       // path; the ABI (which register holds what)
-                       // isn't expected to change when that happens.
-#define SYS_RECV   18 // RDI = fd (from SYS_SOCKET), RSI = buffer
-                       // pointer, RDX = length. Always returns -1, same
-                       // reasoning as SYS_SEND above.
+// Sockets. There IS a transport now (kernel/net/) -- these were
+// scaffolding over an empty fd kind for a long time, and the ABI they
+// settled on then is the one still here, which is what that
+// scaffolding was for.
+//
+// ONE PROTOCOL TODAY: AF_INET + SOCK_DGRAM + IPPROTO_ICMP, i.e. what
+// `ping` needs. The kernel owns the ICMP header (type, code, checksum
+// and the identifier that demultiplexes replies); a caller sends and
+// receives PAYLOAD. That is Linux's ping-socket shape rather than a
+// raw socket, and it is not politeness: a raw socket lets a process
+// emit any ICMP type it likes, which Linux gates behind CAP_NET_RAW
+// and this kernel has no privilege model to gate with.
+#define SYS_SOCKET 16 // RDI = domain (AF_INET = 2), RSI = type
+                       // (SOCK_DGRAM = 2), RDX = protocol (IPPROTO_ICMP
+                       // = 1). Anything else is -EINVAL rather than
+                       // silently ignored. On success, allocates a
+                       // socket-kind fd (same table, same fd namespace
+                       // as SYS_OPEN's file fds) and returns it (RAX);
+                       // -EMFILE if the fd table is full, -ENOSPC if
+                       // the kernel's socket table is. SYS_READ/
+                       // SYS_WRITE reject a socket fd (-EBADF).
+#define SYS_SEND   17 // RDI = fd, RSI = buffer, RDX = length. A
+                       // datagram socket has no peer until one is
+                       // named, and nothing here names one, so this is
+                       // -EDESTADDRREQ's situation with no such code
+                       // defined: -EINVAL. Use SYS_SENDTO.
+#define SYS_RECV   18 // RDI = fd, RSI = buffer, RDX = length. Same:
+                       // use SYS_RECVFROM, which also reports WHO
+                       // sent it -- which for ICMP is the whole point.
+#define SYS_SENDTO 82 // RDI = fd, RSI = a `struct net_msg *`
+                       // (abi/net_abi.h): payload, length, and the
+                       // destination IPv4 address in HOST byte order.
+                       // A struct because the table carries three
+                       // arguments and this needs four -- SYS_MKPART's
+                       // call. Returns the byte count sent, or -errno.
+                       // -EAGAIN means the next hop's MAC is not
+                       // cached yet and the ARP request is already on
+                       // the wire: a RETRY, not a failure. -ENODEV
+                       // means no device has an address.
+#define SYS_RECVFROM 83 // RDI = fd, RSI = a `struct net_msg *`: `buf`
+                       // and `len` say where to put it, `addr` is
+                       // written with the SENDER's address. NEVER
+                       // BLOCKS -- returns the byte count, or 0 when
+                       // nothing has arrived, so a caller polls with
+                       // SYS_SLEEP between tries. Blocking needs a
+                       // wait channel per socket, which is a roadmap
+                       // item rather than an oversight.
+#define SYS_NET_CONFIG 84 // RDI = a `struct net_ifconfig *`: which
+                       // device, and the addresses to give it. A zero
+                       // field is left alone. Returns 0, or -ENODEV
+                       // for a name no device answers to. There is no
+                       // privilege check because this kernel has no
+                       // privilege model -- see docs/roadmap.md's
+                       // multi-user track, which is where one goes.
 
 // The first syscalls added specifically so a real disk-hosted ELF64
 // binary (not just a kernel-space shell built-in) can do something

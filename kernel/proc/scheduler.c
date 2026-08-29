@@ -100,6 +100,7 @@
 #include "win_server.h"
 #include "syscall.h" // syscall_process_kill_cleanup()
 #include "win_input.h" // raw input to a ring-3 compositor // win_server_client_gone() -- see scheduler_on_exit()
+#include "netdev.h"    // net_poll() -- the idle half of the receive path
 #include "pipe.h"      // pipe_close_writer() when a piped child exits
 #include "kstack.h"    // the guard page, canary and poison fill
 #include "kfmt.h"      // klog_printf, vga_printf
@@ -2555,4 +2556,10 @@ void scheduler_idle(void) {
     // there, so a machine nobody is touching ends up with its writes on
     // the platter rather than waiting for the next barrier.
     atac_idle();
+    // Received frames, and the protocols above them. The NIC's own
+    // interrupt only queues a frame (kernel/drivers/net/net.c); this is
+    // where ARP gets answered and an echo request becomes a reply, so a
+    // machine with nothing to do still behaves like a host on the
+    // network. Costs one compare when no card is registered.
+    net_poll();
 }

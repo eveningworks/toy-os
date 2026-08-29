@@ -2570,9 +2570,27 @@ Listed with the honest reason each is or isn't attractive.
 
 ## Networking
 
-**Needs:** a NIC driver, i.e. virtio, and a real GPU driver's virtio-net.
+**Needs:** nothing for the next item -- the stack, both NIC drivers and `ping` are built.
 
 **Items, in full.**
+
+- [x] ~~NIC driver~~ -- the roadmap said "rtl8139 first", which predated anyone measuring what the emulator offers. QEMU's default `pc` machine has always attached an **e1000 with user-mode networking** when no `-net` option is given, so every guest this project ever booted had an unclaimed NIC on the bus; that made it the card a driver can assume. **virtio-net landed in the same change**, because an interface with one implementer gets shaped around that implementer and the previous four registries here all had to be re-cut for exactly that reason -- see `docs/decisions/drivers.md`.
+
+- [x] ~~Ethernet/ARP/IP stack~~ -- `kernel/net/`, in the kernel rather than a ring-3 service: sockets would otherwise become IPC to a daemon and this OS has no IPC that can carry them (no unix sockets, `PIPE_MAX` is 8 kernel-wide, a pipe carries no credentials). NO fragmentation in either direction; routing is two rules per device. `docs/decisions/kernel.md` has the full argument including the case against.
+
+- [x] ~~ICMP echo + a `ping` command~~ -- `/bin/ping` and `/bin/ifconfig`. The proof is `tools/net_test.py`, whose oracles are both on the HOST: SLIRP answers the echoes and shares no code with the guest, and every frame is dumped to a pcap and decoded with the IPv4 and ICMP checksums recomputed there.
+
+- [ ] **UDP** -- the next layer, and the one both remaining protocols need: DHCP is UDP and so is DNS. A datagram socket already exists; what it needs is a second protocol behind `net_sock_open()` and a port demux, which the ICMP identifier stands in for today.
+
+- [ ] TCP -- the socket syscalls carry ICMP now, so the ABI is settled. What a stream socket needs beyond the state machine is a BLOCKING receive, which is its own item below.
+
+- [ ] DHCP client -- until this exists, `net_autoconfig()` gives the first device QEMU's user-networking addresses (10.0.2.15/24 via 10.0.2.2) and says so in the boot log. That is a placeholder with a real cost: it is wrong on any machine that is not QEMU, and `ifconfig` is the only way to correct it.
+
+- [ ] A blocking receive -- `SYS_RECVFROM` returns 0 for "nothing yet" and every caller polls with `SYS_SLEEP`. The scheduler has wait channels (an address), so the missing half is the WAKEUP: the receive path runs from `scheduler_idle()`, so a process blocked on a socket must not be the thing stopping the idle loop from running. That is a real question about where `net_poll()` belongs, deferred rather than guessed at.
+
+- [ ] An `arp` command -- `arp_cache_at()` exists for the KTESTs and nothing exposes it to ring 3, so a resolution failure is diagnosable only by inference from `ifconfig`'s counters.
+
+- [ ] A routing table -- today `ipv4_route()` is "an address in a device's own subnet goes to it, anything else to that device's gateway". Multi-homing works (`tools/net_test.py` proves traffic follows the subnet), but a second route to the same subnet, or a metric, has nowhere to live.
 
 - [x] ~~Ring-3-readable millisecond-ish clock~~ -- `SYS_MONOTONIC_NS` (nanoseconds since boot, monotonic) answers this; when this was written the only ring-3 time source was `SYS_GETTIME`, wall-clock and second-resolution. Monotonic time is an INTERFACE and wall clock is not one of its implementations -- see CLAUDE.md.
 

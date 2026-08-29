@@ -56,7 +56,7 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_LISTDIR]       = { "listdir",       sys_listdir,       { A_PATH, A_HEX, A_INT } },
     [SYS_GETTIME]       = { "gettime",       sys_gettime,       { A_HEX } },
     [SYS_YIELD]         = { "yield",         sys_yield,         { A_END } },
-    [SYS_SOCKET]        = { "socket",        sys_socket,        { A_INT, A_INT } },
+    [SYS_SOCKET]        = { "socket",        sys_socket,        { A_INT, A_INT, A_INT } },
     [SYS_SEND]          = { "send",          sys_send,          { A_FD, A_BUF, A_INT } },
     [SYS_RECV]          = { "recv",          sys_recv,          { A_FD, A_HEX, A_INT } },
     [SYS_PCI_COUNT]     = { "pci_count",     sys_pci_count,     { A_END } },
@@ -134,6 +134,9 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_THREAD_DETACH] = { "thread_detach", sys_thread_detach, { A_INT } },
     [SYS_GETTID]        = { "gettid",        sys_gettid,        { A_END } },
     [SYS_SET_TLS]       = { "set_tls",       sys_set_tls,       { A_HEX } },
+    [SYS_SENDTO]        = { "sendto",        sys_sendto,        { A_FD, A_HEX } },
+    [SYS_RECVFROM]      = { "recvfrom",      sys_recvfrom,      { A_FD, A_HEX } },
+    [SYS_NET_CONFIG]    = { "net_config",    sys_net_config,    { A_HEX } },
 };
 
 #define SYSCALL_TABLE_COUNT (sizeof SYSCALL_TABLE / sizeof SYSCALL_TABLE[0])

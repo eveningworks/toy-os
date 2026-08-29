@@ -1524,3 +1524,46 @@ precaches over the WHOLE of `S_sfx[]`, including a dummy entry with an
 empty name, and `W_GetNumForName` calls `I_Error` on a miss -- so the
 precache loop must use `W_CheckNumForName` or the game dies before its
 window opens.
+
+## The first NIC is the e1000, and the second one landed with it
+
+The roadmap said "NIC driver (rtl8139 first)", which was written before
+anyone measured what the emulator actually offers. QEMU's default `pc`
+machine attaches an **e1000 (8086:100E) with user-mode networking
+whenever no `-net`/`-netdev` option is given** -- confirmed with `info
+pci` on a bare `qemu-system-x86_64` -- so every guest this project has
+ever booted, including every test in the suite, has had an unclaimed NIC
+sitting on the bus. That makes the e1000 the one card a driver can
+assume: no flag, no new run-target axis, and every existing tool's guest
+gains a network the day the driver exists.
+
+**Both drivers landed together rather than one then the other**, which
+is the opposite of how the disk drivers arrived. The reason is the
+lesson `multidisk_test.py` was written for: an interface with one
+implementer gets shaped around that implementer, silently, and nothing
+notices until the second one arrives. `struct net_device` is the fifth
+registry here (`display_driver`, `block_device`, `clocksource`,
+`sound_device`), and the previous four all took their shape from one
+driver and had to be re-cut. Writing virtio-net in the same change cost
+about two hundred lines, because `virtio_pci.c` and `virtqueue.c`
+already existed -- far less than re-cutting the class later.
+
+The split follows the storage precedent exactly: the transport-side
+driver is `kernel/drivers/virtio/virtio_net.c` (queues, the 12-byte
+header, the ISR) and the class adapter is
+`kernel/drivers/net/net_virtio.c`, the same pair as `virtio_blk.c` +
+`block_virtio.c`. The adapter is the only file that knows both sides are
+the same card, which is what lets `virtio_net.c` include no networking
+header at all.
+
+**No offloads are negotiated, deliberately.** Checksum offload and GSO
+are what virtio-net is good at, and each one changes what the stack
+above is handed -- a frame whose checksum is not filled in yet, or one
+larger than the MTU. Neither is a saving worth having before there is a
+TCP to be fast at.
+
+**The header is always 12 bytes**, because `virtio_begin()` requires
+`VIRTIO_F_VERSION_1` and `num_buffers` is unconditional there. In legacy
+virtio it is 10 unless `VIRTIO_NET_F_MRG_RXBUF` was negotiated, and
+getting it wrong shows up as every received frame being two bytes
+shifted -- which parses as garbage rather than failing.

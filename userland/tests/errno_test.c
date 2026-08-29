@@ -20,6 +20,7 @@
 // Prints one line per check and exits with the number of FAILURES.
 #include <stdint.h>
 #include "rt/sys.h"
+#include "net_abi.h"
 #include <string.h>
 
 static int g_fail;
@@ -135,17 +136,20 @@ int main(void) {
     check(sys_getrandom(buf, 1000000) < 0, "getrandom() over the maximum fails");
     check_errno(sys_errno(), EINVAL, "getrandom() with too large a count");
 
-    check(sys_socket(1, 0) < 0, "socket() with a nonzero domain fails");
-    check_errno(sys_errno(), EINVAL, "socket() with a reserved argument set");
+    check(sys_socket(1, NET_ABI_SOCK_DGRAM, NET_ABI_IPPROTO_ICMP) < 0,
+          "socket() with an unsupported address family fails");
+    check_errno(sys_errno(), EINVAL, "socket() with a family that is not AF_INET");
 
-    // --- ENOSYS: the fd is fine, the call is not built ----------------
+    // --- EINVAL: the fd is fine, the ARGUMENTS are not ----------------
     // Distinct from the EBADF above on purpose: a caller told EBADF
     // would go looking at its own descriptor, which is not the problem.
-    fd = sys_socket(0, 0);
-    check(fd >= 0, "socket() with reserved arguments zero succeeds");
+    // send() on a datagram socket cannot know where to send -- nothing
+    // names a peer -- so it is the call that is wrong, not the fd.
+    fd = sys_socket(NET_ABI_AF_INET, NET_ABI_SOCK_DGRAM, NET_ABI_IPPROTO_ICMP);
+    check(fd >= 0, "socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP) succeeds");
     if (fd >= 0) {
-        check(sys_send(fd, "x", 1) < 0, "send() on a real socket fails");
-        check_errno(sys_errno(), ENOSYS, "send() with no transport behind it");
+        check(sys_send(fd, "x", 1) < 0, "send() on a peerless socket fails");
+        check_errno(sys_errno(), EINVAL, "send() with no peer named");
         sys_close(fd);
     }
 

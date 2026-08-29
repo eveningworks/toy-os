@@ -24,6 +24,9 @@
 #include "pty.h" // a pty end is an fd kind
 #include "tty.h" // terminals -- fd 0 is one, and so is a pty end
 #include "fs.h"
+#include "net.h"     // the socket layer behind SYS_SOCKET and friends
+#include "netdev.h"  // net_poll(), and the device SYS_NET_CONFIG names
+#include "net_abi.h" // struct net_msg / struct net_ifconfig
 #include "string.h"
 #include <stddef.h>
 
@@ -1023,60 +1026,150 @@ int sys_dup2(struct syscall_ctx *c) {
 }
 
 int sys_socket(struct syscall_ctx *c) {
-    // See syscall_abi.h's SYS_SOCKET doc comment -- domain/type are
-    // reserved for future use and must be 0 for now, rejected
-    // otherwise so a caller relying on a real value being honored
-    // fails loudly today rather than silently once one exists.
+    // AF_INET + SOCK_DGRAM + IPPROTO_ICMP is the whole supported set --
+    // see abi/syscall_abi.h for why it is a ping socket rather than a
+    // raw one. net_sock_open() decides; this only plumbs an fd onto it,
+    // so a second protocol is a change there and not here.
     uint64_t pml4 = c->pml4;
-    uint64_t domain = c->a0;
-    uint64_t type = c->a1;
-    if (domain != 0 || type != 0) {
-        klog_write("syscall: socket() rejected -- nonzero domain/type (not supported yet)\n");
-        c->regs[14] = (uint64_t)(int64_t)-EINVAL;
-    } else {
-        int di = fd_desc_alloc(FD_KIND_SOCKET, -1);
-        int fd = di >= 0 ? fd_install(pml4, di) : -1;
-        if (fd < 0) {
-            if (di >= 0) fd_desc_unref(di);
-            klog_write("syscall: socket() rejected -- fd table full\n");
-            c->regs[14] = (uint64_t)(int64_t)-EMFILE;
-        } else {
-            c->regs[14] = (uint64_t)fd;
-        }
+    int sock = net_sock_open((int)c->a0, (int)c->a1, (int)c->a2);
+    if (sock < 0) {
+        c->regs[14] = (uint64_t)(int64_t)sock;
+        return 0;
     }
+
+    int di = fd_desc_alloc(FD_KIND_SOCKET, -1);
+    int fd = di >= 0 ? fd_install(pml4, di) : -1;
+    if (fd < 0) {
+        if (di >= 0) fd_desc_unref(di);
+        net_sock_close(sock);
+        klog_write("syscall: socket() rejected -- fd table full\n");
+        c->regs[14] = (uint64_t)(int64_t)-EMFILE;
+        return 0;
+    }
+    fd_desc[di].socket.idx = sock;
+    c->regs[14] = (uint64_t)fd;
     return 0;
 }
 
-// Both share one body -- same fd validation, same "no transport yet"
-// outcome (see syscall_abi.h). Doesn't touch the caller's buffer at all
-// (nothing is actually sent/received), so unlike SYS_WRITE/SYS_READ
-// there's no buffer pointer to validate here -- only the fd itself.
-// The direction is a PARAMETER rather than a re-test of the syscall
-// number: with a table there is one entry per number, so a handler that
-// asks which one it is has lost information the table already had.
+// The socket table index behind an fd, or -1. Every call below starts
+// here, so "is this fd a socket" is asked in one place.
+static int sock_of_fd(struct syscall_ctx *c, int fd) {
+    struct open_file *f = fd_get(c->pml4, fd);
+    if (!f || f->kind != FD_KIND_SOCKET) return -1;
+    return f->socket.idx;
+}
+
+// SYS_SEND/SYS_RECV. A datagram socket has no peer until something
+// names one, and nothing here does -- so these cannot say where to
+// send or who sent it. EINVAL rather than ENOSYS: the call exists and
+// the arguments are the problem (POSIX would say EDESTADDRREQ, which
+// this kernel does not define -- see abi/errno.h's rule on adding one).
 static int send_recv(struct syscall_ctx *c, int is_send) {
-    uint64_t pml4 = c->pml4;
-    int fd = (int)c->a0;
-    struct open_file *f = fd_get(pml4, fd);
-    if (!f || f->kind != FD_KIND_SOCKET) {
+    if (sock_of_fd(c, (int)c->a0) < 0) {
         klog_write(is_send ? "syscall: send() rejected -- bad fd\n"
-                                    : "syscall: recv() rejected -- bad fd\n");
+                           : "syscall: recv() rejected -- bad fd\n");
         c->regs[14] = (uint64_t)(int64_t)-EBADF;
     } else {
-        // A REAL socket fd, and no transport behind it. ENOSYS rather
-        // than EBADF: the fd is fine and the caller did nothing wrong,
-        // the call simply is not implemented -- which is a different
-        // thing to tell a caller, and telling them apart is the point
-        // of having codes at all. See syscall_abi.h.
-        klog_write(is_send ? "syscall: send() -- no transport yet, failing\n"
-                                    : "syscall: recv() -- no transport yet, failing\n");
-        c->regs[14] = (uint64_t)(int64_t)-ENOSYS;
+        klog_write(is_send ? "syscall: send() rejected -- no peer; use sendto()\n"
+                           : "syscall: recv() rejected -- no peer; use recvfrom()\n");
+        c->regs[14] = (uint64_t)(int64_t)-EINVAL;
     }
     return 0;
 }
 
 int sys_send(struct syscall_ctx *c) { return send_recv(c, 1); }
 int sys_recv(struct syscall_ctx *c) { return send_recv(c, 0); }
+
+int sys_sendto(struct syscall_ctx *c) {
+    int sock = sock_of_fd(c, (int)c->a0);
+    if (sock < 0) { c->regs[14] = (uint64_t)(int64_t)-EBADF; return 0; }
+
+    struct net_msg m;
+    if (vmm_copy_from_user(c->pml4, &m, c->a1, sizeof m) < 0) {
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+    if (m.len > SYS_NET_MSG_MAX) { c->regs[14] = (uint64_t)(int64_t)-EINVAL; return 0; }
+
+    // Bounce through the kernel's own buffer: the stack builds a frame
+    // around this and hands the result to a driver, so a user page that
+    // could be unmapped mid-transmit must not be the thing being sent.
+    // From the heap and at the EXACT size -- bounce_alloc() shrinks on
+    // a fragmented heap, which is right for a byte stream and wrong for
+    // a datagram, where a short buffer is a different message.
+    uint8_t *payload = m.len ? kmalloc(m.len) : (uint8_t *)"";
+    if (!payload) { c->regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
+    if (m.len && vmm_copy_from_user(c->pml4, payload, m.buf, m.len) < 0) {
+        kfree(payload);
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+
+    net_poll();   // answer anything outstanding first, so ARP resolves
+    int rc = net_sock_sendto(sock, m.addr, payload, m.len);
+    if (m.len) kfree(payload);
+    c->regs[14] = (uint64_t)(int64_t)rc;
+    return 0;
+}
+
+int sys_recvfrom(struct syscall_ctx *c) {
+    int sock = sock_of_fd(c, (int)c->a0);
+    if (sock < 0) { c->regs[14] = (uint64_t)(int64_t)-EBADF; return 0; }
+
+    struct net_msg m;
+    if (vmm_copy_from_user(c->pml4, &m, c->a1, sizeof m) < 0) {
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+    if (m.len > SYS_NET_MSG_MAX) m.len = SYS_NET_MSG_MAX;
+
+    // Run the stack before looking: a reply that arrived while this
+    // process was not scheduled is sitting in the receive queue, and
+    // without this the first recvfrom after a sendto would always
+    // report nothing on an otherwise idle machine.
+    net_poll();
+
+    uint8_t *payload = kmalloc(m.len ? m.len : 1);
+    if (!payload) { c->regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
+    uint32_t src = 0;
+    int rc = net_sock_recvfrom(sock, payload, m.len, &src);
+    if (rc > 0) {
+        m.addr = src;
+        m.len = (uint32_t)rc;
+        if (vmm_copy_to_user(c->pml4, m.buf, payload, (uint64_t)rc) < 0 ||
+            vmm_copy_to_user(c->pml4, c->a1, &m, sizeof m) < 0) {
+            kfree(payload);
+            c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+            return 0;
+        }
+    }
+    kfree(payload);
+    c->regs[14] = (uint64_t)(int64_t)rc;
+    return 0;
+}
+
+int sys_net_config(struct syscall_ctx *c) {
+    struct net_ifconfig req;
+    if (vmm_copy_from_user(c->pml4, &req, c->a0, sizeof req) < 0) {
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+    req.name[sizeof req.name - 1] = 0;
+
+    struct net_device *d = net_device_by_name(req.name);
+    if (!d) { c->regs[14] = (uint64_t)(int64_t)-ENODEV; return 0; }
+
+    if (req.ip) d->ip = req.ip;
+    if (req.netmask) d->netmask = req.netmask;
+    if (req.gateway) d->gateway = req.gateway;
+
+    // The cache is keyed by (device, IP) and every entry on this device
+    // was learned under the OLD address; keeping them would answer for
+    // a subnet this card has just left.
+    arp_cache_flush();
+    c->regs[14] = 0;
+    return 0;
+}
 
 int sys_pipe(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;

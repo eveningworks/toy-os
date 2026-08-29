@@ -151,11 +151,14 @@ signals, threads and job control; `mmap` with file-backed demand
 paging; dynamic linking, with tolibc shipped as `/lib/libc.so`; a TTY
 layer with pseudo-terminals, so `Ctrl-C` interrupts a job and a
 full-screen editor runs in a Terminal window; sound, including DOOM
-with music. And the test suite: a few hundred in-kernel tests, the
+with music; networking, on two NIC drivers, as far as a `ping` the host
+answers. And the test suite: a few hundred in-kernel tests, the
 ring-3 diagnostics, and the GUI tools `gui_regress.py` runs as one
 table.
 
-**Known gaps** — no networking and no SMP. USB is xHCI with a HID boot
+**Known gaps** — no SMP. Networking stops at ICMP: there is no UDP, no
+TCP, no DHCP and no DNS, so an address is configured by hand and `ping`
+is the only thing that speaks. USB is xHCI with a HID boot
 keyboard and mouse, hubs and hot-plug, but no mass storage and no HID
 report-descriptor parsing. Dynamic linking is eager-binding with no
 `dlopen`; `mmap` has no `MAP_SHARED` and no `mprotect`; there is no

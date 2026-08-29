@@ -597,6 +597,7 @@ whenever a headline here tells you something you did not already know.
 - **RING-3 `malloc` TAKES A LOCK; THE KERNEL'S DOES NOT** -- `heap_core.c` is compiled into both rings and has ONE free list, and `heap_os_lock()` is a real lock in ring 3 (threads are preempted mid-walk) and a no-op in the kernel (nothing preempts kernel code mid-`kmalloc`). The kernel's half stops being a no-op at SMP, where it is split #1. **The race is real by inspection and was NOT reproducible** -- three controls with the lock removed, up to 8000 allocations over a fully-walked list, found nothing; the window is a few instructions against a 100 Hz tick on one core. And `malloc` is not async-signal-safe: the lock is not recursive, so a handler that allocates while its own thread holds it now HANGS rather than corrupts.
 - **THE THREAD POINTER IS FS.base, AND THE SCHEDULER RELOADS IT** -- `iretq` leaves the hidden segment bases alone, so without a reload on every switch every thread reads the last-scheduled thread's `__thread` storage, silently. The kernel owns ONE number (`SYS_SET_TLS`, `arch_prctl(ARCH_SET_FS)`'s job); the layout behind it is `userland/rt/tls.c`'s. The LEGACY loader has one too, in the kernel context's own slot -- refusing there kills every ring-3 program in `crt0`, because errno is `__thread` now.
 - **THERE IS A SOUND CLASS, ITS STREAM IS EXCLUSIVE, AND THE RING IS SHARED MEMORY** -- `kernel/drivers/sound/` (`sound.c` core + `ac97.c`, the registry shape again); the data plane is a mapped ring at `SND_MAP_VADDR` (`abi/sound_abi.h`) with ZERO syscalls in steady state; a consumed chunk is ZEROED by the kernel so an abandoned ring plays silence, never a loop; the kernel NEVER mixes (a second open is -EBUSY); `volume` is a registered setting. Tested host-side (`tools/audio_test.py`) -- under TCG the recording is correct-pitch BURSTS padded with host silence, so measure within bursts.
+- **THERE IS A NETWORK DEVICE CLASS, THE STACK IS IN THE KERNEL, AND THE RECEIVE PATH IS SPLIT ACROSS AN INTERRUPT** -- `kernel/drivers/net/` is hardware and `kernel/net/` is protocol (Linux's `drivers/net/` vs `net/`); `struct net_device` is PLURAL by construction, with per-device addresses and a two-rule route, unlike `block_device`'s singular active device. A driver's ISR only memcpys into a static queue (`net_rx()`); ARP/IP/ICMP run from `net_poll()` in `scheduler_idle()`, because `kmalloc` is not interrupt-safe here and the filesystem is not re-entrant. An UNRESOLVED address is a cache entry, which is what rate-limits requests -- two pings at an unanswered address put 104 frames on the wire before that landed. NO fragmentation, in either direction. A socket is a PING socket, not a raw one (the kernel owns the ICMP header), because a raw socket is what `CAP_NET_RAW` gates and this kernel has no privilege model. Addresses are HOST byte order everywhere above the wire. The e1000 needed no flag -- QEMU's default machine has always had one -- and `NET=e1000|virtio|both|none` names what was implicit.
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
 
 ### GUI, Toykit and the desktop
@@ -1326,7 +1327,16 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   real chain walk, a 185 KiB BINARY extracted on the host and compared
   byte for byte, and `fsck.fat`'s verdict. Boots twice against a COPY of
   `disk.img`; SKIPS without `mtools`),
-  `multidisk_test.py` (**two disks on two different drivers, which is the
+  `net_test.py` (**the network stack on BOTH NICs, judged on the HOST** --
+  SLIRP answers the pings and shares no code with the guest, and every
+  frame is dumped to a pcap and decoded here with the IPv4 and ICMP
+  checksums RECOMPUTED, because SLIRP can be lenient where a decoder
+  cannot. Five phases; the load-bearing ones are virtio-net, the only
+  path to `virtio_net.c`, and TWO CARDS ON TWO SUBNETS, where the
+  assertion is which device's counters moved rather than that a ping
+  worked. Its ARP-rate phase is a regression test with a measurement
+  behind it: 104 frames for two pings before rate limiting, 5 after),
+    `multidisk_test.py` (**two disks on two different drivers, which is the
   configuration no other test here boots** -- every one attaches exactly
   one, and that is the shape the enumerate-everything bug needed. Asserts
   both are named, that `root=` picks the boot disk over the precedence,

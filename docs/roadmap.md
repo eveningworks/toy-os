@@ -25,6 +25,7 @@ buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
 - [ ] `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR, not a 64 KiB guess  *(USB)*
+- [ ] **UDP**, which is what DHCP and DNS both need first  *(Networking)*
 - [ ] The ring-3 WM busy-waits instead of sleeping -- built on branch `wm-wait-ready`, PARKED: it regresses `uterm`  *(Known limitations and papercuts (unscheduled))*
 - [ ] System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons  *(Known limitations and papercuts (unscheduled))*
 <!-- END next-up -->
@@ -674,18 +675,22 @@ run on, not by order.
 - [ ] Full HID report-descriptor parsing, for a device that is not boot-protocol
 
 ### Networking
-**Needs:** a NIC driver, i.e. virtio, and a real GPU driver's virtio-net.
+**Needs:** nothing for the next item -- the stack, both NIC drivers and `ping` are built.
 
-- [ ] NIC driver (rtl8139 first)
+- [x] ~~NIC driver~~ DONE 2026-08-29 -- e1000 AND virtio-net together, behind a `net_device` registry
 - [x] ~~Ring-3-readable millisecond-ish clock~~ done -- `SYS_MONOTONIC_NS`, nanoseconds since boot, monotonic; `/bin/uptime` reads it
 - [x] ~~Sleep/delay primitive (timeouts, retransmission)~~ DONE 2026-08-18 -- `SYS_SLEEP`; `beep` still busy-waits and is a papercut
-- [ ] Ethernet/ARP/IP/UDP stack
-- [ ] TCP + wire up the existing socket syscalls
-- [ ] ICMP echo + a `ping` command -- the smallest end-to-end proof the stack works
-- [ ] DHCP client
+- [x] ~~Ethernet/ARP/IP stack~~ DONE 2026-08-29 -- `kernel/net/`; UDP is the next layer and is not built
+- [ ] **UDP**, which is what DHCP and DNS both need first **NEXT**
+- [ ] TCP -- the socket syscalls are wired for ICMP; a stream socket needs a blocking receive
+- [x] ~~ICMP echo + a `ping` command -- the smallest end-to-end proof the stack works~~ DONE 2026-08-29
+- [ ] DHCP client -- the boot-time addresses are QEMU's user-networking defaults until this exists
+- [ ] A blocking receive -- `SYS_RECVFROM` never blocks, so every caller polls
+- [ ] An `arp` command -- the cache is diagnosable only from inside the kernel today
+- [ ] A routing table -- routing is "my subnet, or the gateway", per device
 - [ ] DNS resolver
 - [ ] An HTTP client (`wget`-shaped), the first thing that makes the stack useful rather than demonstrable
-- [ ] A second NIC driver (e1000) to prove the driver interface isn't shaped around rtl8139
+- [x] ~~A second NIC driver, to prove the interface isn't shaped around the first~~ DONE 2026-08-29 -- both landed together
 
 ### Sound
 

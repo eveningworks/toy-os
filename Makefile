@@ -1531,6 +1531,31 @@ QEMU_USB = $(if $(filter xhci xhci+mouse xhci+hub,$(USB_KIND)),\
              -device usb-kbd$(COMMA)id=usbkbd$(COMMA)bus=xhci.0$(COMMA)port=1.1 \
              -device usb-mouse$(COMMA)id=usbmouse$(COMMA)bus=xhci.0$(COMMA)port=1.2,)
 
+# Networking. A NIC and a user-mode (SLIRP) network behind it.
+#
+# `NET=e1000` IS WHAT QEMU ALREADY DID IMPLICITLY -- the default pc
+# machine attaches an 8086:100E with user networking when no -net/-netdev
+# option is given, which is why the e1000 driver needs no flag and why
+# every guest in the suite has had an unclaimed NIC on the bus for as
+# long as this project has existed. Naming it changes nothing about the
+# machine and makes the other three values expressible.
+#
+# `NET=both` is the multi-NIC configuration, and it is the shape no other
+# test here boots -- the same reason tools/multidisk_test.py exists. Only
+# the first device gets an address (kernel/drivers/net/net.c), so the
+# second one is the "registered but unconfigured" case.
+#
+# The guest is always 10.0.2.15, the gateway and DNS 10.0.2.2 and
+# 10.0.2.3; SLIRP answers ICMP to the gateway itself, which is what
+# `ping 10.0.2.2` proves. Commas are $(COMMA) for the reason QEMU_USB
+# documents above.
+NET_KIND = $(if $(NET),$(NET),e1000)
+QEMU_NET = $(if $(filter none,$(NET_KIND)),-nic none,\
+             $(if $(filter e1000 both,$(NET_KIND)),\
+               -netdev user$(COMMA)id=n0 -device e1000$(COMMA)netdev=n0,)\
+             $(if $(filter virtio both,$(NET_KIND)),\
+               -netdev user$(COMMA)id=n1 -device virtio-net-pci$(COMMA)netdev=n1$(COMMA)disable-legacy=on,))
+
 # QEMU has had no default audio backend since 5.x, and -machine
 # pcspk-audiodev is what routes the emulated i8254 speaker to it.
 # Without both, `beep` runs correctly and is simply silent. `pa` is what
@@ -1569,7 +1594,7 @@ QEMU_BOOT = $(if $(filter disk,$(BOOT_MEDIUM)),-boot order=c,-boot order=d -cdro
 QEMU_RUN = qemu-system-x86_64 $(QEMU_BOOT) $(QEMU_ACCEL) $(QEMU_DISK) \
 	  $(QEMU_INPUT) $(QEMU_USB) \
 	  -serial stdio -vga $(QEMU_VGA) -display $(QEMU_DISPLAY) $(QEMU_FULLSCREEN) -m $(MEM) \
-	  $(QEMU_AUDIO) $(QEMU_EXTRA)
+	  $(QEMU_AUDIO) $(QEMU_NET) $(QEMU_EXTRA)
 
 run: $(RUN_PREREQ)
 	$(QEMU_RUN)

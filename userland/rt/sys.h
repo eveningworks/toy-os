@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "partition_abi.h" // struct mkpart_request, for sys_mkpart()
 #include "mount_abi.h"     // struct mount_request, for sys_mount()
+#include "net_abi.h"       // struct net_msg / struct net_ifconfig, for the socket calls
 #include <stddef.h>
 #include "syscall_abi.h"
 #include "errno.h"   // sys_errno()'s values
@@ -299,9 +300,17 @@ int sys_munmap(void *addr, uint64_t length);
 // fail -- deliberately, see syscall_abi.h. The fd namespace and the ABI
 // are real, which is the point of them existing this early.
 
-int sys_socket(int domain, int type);
-int64_t sys_send(int fd, const void *buf, size_t len);
-int64_t sys_recv(int fd, void *buf, size_t len);
+// AF_INET/SOCK_DGRAM/IPPROTO_ICMP is the supported combination
+// (abi/net_abi.h). Addresses are HOST byte order throughout -- there is
+// no htonl() to forget here.
+int sys_socket(int domain, int type, int protocol);
+int64_t sys_send(int fd, const void *buf, size_t len);   // no peer: -EINVAL
+int64_t sys_recv(int fd, void *buf, size_t len);         // no peer: -EINVAL
+int64_t sys_sendto(int fd, const void *buf, size_t len, uint32_t dst_ip);
+// NEVER BLOCKS: 0 means nothing has arrived yet, not end-of-stream.
+int64_t sys_recvfrom(int fd, void *buf, size_t cap, uint32_t *out_src);
+// A zero field is left alone, so one address can be changed on its own.
+int sys_net_config(const char *dev, uint32_t ip, uint32_t netmask, uint32_t gateway);
 
 // --- machine info ----------------------------------------------------
 

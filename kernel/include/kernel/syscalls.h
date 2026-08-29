@@ -114,7 +114,7 @@ struct open_file {
             uint8_t append; // SYS_O_APPEND: every write goes to the end
         } file;
         struct {
-            int unused_placeholder; // no real socket state yet -- see SYS_SOCKET's doc comment
+            int idx; // index into kernel/net/socket.c's table
         } socket;
         struct {
             int idx; // index into pipe.c's table
@@ -191,6 +191,9 @@ int sys_dup2(struct syscall_ctx *c);
 int sys_socket(struct syscall_ctx *c);
 int sys_send(struct syscall_ctx *c);
 int sys_recv(struct syscall_ctx *c);
+int sys_sendto(struct syscall_ctx *c);
+int sys_recvfrom(struct syscall_ctx *c);
+int sys_net_config(struct syscall_ctx *c);
 int sys_pipe(struct syscall_ctx *c);
 
 // kernel/fs/fs_syscalls.c -- the path-keyed filesystem calls

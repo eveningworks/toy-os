@@ -1570,3 +1570,76 @@ falls behind wall clock, not behind its own sample clock -- so
 measure within bursts and total the tone, never trust the file's
 timeline. The ac97 KTESTs skip on every boot but audio_test's, which
 is why its "0 skipped" assertion is load-bearing (the ahci lesson).
+
+## THERE IS A NETWORK DEVICE CLASS, THE STACK IS IN THE KERNEL, AND THE RECEIVE PATH IS SPLIT ACROSS AN INTERRUPT
+
+`kernel/drivers/net/` is the hardware side and `kernel/net/` is the
+protocol side -- Linux's `drivers/net/` vs `net/` split, adapted to this
+repo's existing two-layer driver shape (`drivers/ahci.c` +
+`drivers/block/block_ahci.c`, so `drivers/virtio/virtio_net.c` +
+`drivers/net/net_virtio.c`). The stack never learns what a NIC is; a
+driver never learns what a packet means.
+
+- **`struct net_device` IS PLURAL BY CONSTRUCTION, unlike
+  `block_device`'s singular active device.** Every entry point takes a
+  `struct net_device *` and the L3 configuration is PER DEVICE, so two
+  cards on two subnets is the shape it is built for. `ipv4_route()` is
+  two rules -- an address inside a device's own subnet goes straight to
+  it, anything else goes to that device's gateway -- and the first
+  device whose subnet contains the destination wins. The one-card case
+  therefore carries a device pointer it could have done without; that is
+  the price of not revisiting every signature later, and it was paid
+  deliberately.
+- **A DRIVER'S INTERRUPT DOES NOTHING BUT COPY.** `net_rx()` is
+  interrupt-safe because it only memcpys a frame into a static queue and
+  bumps an index; `net_poll()` runs Ethernet/ARP/IP/ICMP from
+  `scheduler_idle()` and from the socket syscalls. That is Linux's
+  `netif_rx`/NAPI split, and this kernel needs it for a sharper reason
+  than Linux does -- `kmalloc` here is not interrupt-safe and the
+  filesystem is not re-entrant, so parsing a packet in an ISR is not
+  merely rude. `net_poll()` carries a re-entrancy guard for the same
+  reason `atac_idle()` does: a ring-3 process is preemptible inside a
+  syscall, and two consumers on one head index hand the same frame to
+  the stack twice.
+- **A DEVICE WITH NO USABLE IRQ LINE SETS `poll` INSTEAD**, drained from
+  `net_poll()` -- `input_source.poll`'s shape, and the reason a card the
+  chipset routed nowhere still receives.
+- **AN UNRESOLVED ADDRESS IS AN ARP CACHE ENTRY, and that is what rate
+  limits the requests.** Without it every caller retry emits a fresh
+  broadcast: `ping` polling every 10 ms for a second put ONE HUNDRED AND
+  FOUR frames on the wire for two pings (measured, which is how it was
+  found). Linux calls the same state INCOMPLETE and retransmits about
+  once a second. `tools/net_test.py`'s last phase is the regression
+  test.
+- **NO FRAGMENTATION, IN EITHER DIRECTION.** A datagram with MF set or a
+  non-zero offset is DROPPED, and nothing here emits one. Reassembly
+  needs a timer, a hole list and a memory budget an attacker chooses,
+  which is a subsystem rather than a branch.
+- **A SOCKET IS A PING SOCKET, NOT A RAW ONE.** `AF_INET` +
+  `SOCK_DGRAM` + `IPPROTO_ICMP` is the whole supported set, and THE
+  KERNEL OWNS THE ICMP HEADER -- an app sends and receives payload. That
+  is Linux's ping-socket shape, and the reason for it here is that a raw
+  socket lets a process emit any ICMP type it likes, which Linux gates
+  behind `CAP_NET_RAW` and this kernel has no privilege model to gate
+  with. The ICMP identifier is the demux key, so two `ping`s can run at
+  once without reading each other's replies.
+- **`SYS_SENDTO`/`SYS_RECVFROM` TAKE A STRUCT** (`abi/net_abi.h`),
+  because the syscall table carries three arguments and these need four
+  -- `SYS_MKPART`'s call. **`SYS_RECVFROM` NEVER BLOCKS**: 0 means
+  "nothing yet", not end-of-stream, and a caller polls with `SYS_SLEEP`.
+  Blocking needs a wait channel per socket, which is a roadmap item.
+- **EVERY IPv4 ADDRESS IN THIS API IS HOST BYTE ORDER**, converted only
+  at the wire edge -- a deliberate divergence from POSIX's
+  `sockaddr_in`. A `uint32_t` IP is the same type in both orders, so a
+  missed swap is invisible to the compiler; keeping the conversion in
+  one place is what makes it findable.
+- **THE FIRST DEVICE IS GIVEN QEMU'S USER-NETWORKING ADDRESSES AT BOOT**
+  (10.0.2.15/24 via 10.0.2.2), and only the first -- two cards on one
+  address is worse than one card with none. It is a placeholder for
+  DHCP, which is where an address is supposed to come from.
+- **THE e1000 NEEDED NO FLAG AND THAT IS WHY IT WAS FIRST.** QEMU's
+  default `pc` machine attaches an 8086:100E with user networking when
+  no `-net`/`-netdev` option is given, so every guest this project has
+  ever booted had an unclaimed NIC on the bus. `NET=e1000|virtio|both|
+  none` (and `vm.py --net`) names what was already implicit and makes
+  the other three expressible.

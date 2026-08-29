@@ -128,6 +128,9 @@ static const struct { int code; const char *msg; } g_errmsg[] = {
     { ENAMETOOLONG, "path too long" },
     { ENOTSUP, "not a single value" },
     { ENOSYS, "not implemented" },
+    { EAGAIN, "try again" },
+    { EBUSY,  "device or resource busy" },
+    { EINTR,  "interrupted by a signal" },
 };
 
 const char *sys_strerror(int e) {
@@ -509,8 +512,31 @@ int sys_wait_event(struct win_event *out) {
 
 // --- sockets ---------------------------------------------------------
 
-int sys_socket(int domain, int type) {
-    return (int)err(syscall2(SYS_SOCKET, (uint64_t)(int64_t)domain, (uint64_t)(int64_t)type));
+int sys_socket(int domain, int type, int protocol) {
+    return (int)err(syscall3(SYS_SOCKET, (uint64_t)(int64_t)domain,
+                             (uint64_t)(int64_t)type, (uint64_t)(int64_t)protocol));
+}
+
+int64_t sys_sendto(int fd, const void *buf, size_t len, uint32_t dst_ip) {
+    struct net_msg m = { .buf = (uint64_t)(uintptr_t)buf, .len = (uint32_t)len, .addr = dst_ip };
+    return err(syscall2(SYS_SENDTO, (uint64_t)fd, (uint64_t)(uintptr_t)&m));
+}
+
+int64_t sys_recvfrom(int fd, void *buf, size_t cap, uint32_t *out_src) {
+    struct net_msg m = { .buf = (uint64_t)(uintptr_t)buf, .len = (uint32_t)cap, .addr = 0 };
+    int64_t rc = err(syscall2(SYS_RECVFROM, (uint64_t)fd, (uint64_t)(uintptr_t)&m));
+    if (rc > 0 && out_src) *out_src = m.addr;
+    return rc;
+}
+
+int sys_net_config(const char *dev, uint32_t ip, uint32_t netmask, uint32_t gateway) {
+    struct net_ifconfig req;
+    for (unsigned i = 0; i < sizeof req.name; i++) req.name[i] = 0;
+    for (unsigned i = 0; dev && dev[i] && i < sizeof req.name - 1; i++) req.name[i] = dev[i];
+    req.ip = ip;
+    req.netmask = netmask;
+    req.gateway = gateway;
+    return (int)err(syscall1(SYS_NET_CONFIG, (uint64_t)(uintptr_t)&req));
 }
 
 int64_t sys_send(int fd, const void *buf, size_t len) {

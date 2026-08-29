@@ -18,6 +18,7 @@
 #include "heap.h"
 #include "pci.h"
 #include "sound.h" // ac97_init(), and the class it registers into
+#include "netdev.h" // net_init()/e1000_init()/net_virtio_init() -- the network device class
 #include "sound_config.h"
 #include "virtio_blk.h"
 #include "ahci.h"
@@ -283,6 +284,16 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // all of which BOOT_REQUIRE() checks rather than assumes.
     usb_init();
 
+    // Networking: the device core first (it owns the table the drivers
+    // register into), then each NIC, then the addresses. Both drivers
+    // are called unconditionally -- the disk layer's lesson, where a
+    // short circuit meant a machine's second controller did not exist
+    // (see CLAUDE.md's every-disk-driver-runs rule).
+    net_init();
+    e1000_init();
+    net_virtio_init();
+    net_autoconfig();
+
     // Audio, after pci_init() like every PCI-scanning driver. Finding
     // no controller is the common case and not an error.
     ac97_init();
@@ -328,6 +339,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     krandom_query_init();
     partition_query_init();
     block_query_init();
+    net_query_init();
     heap_query_init();
     ata_query_init();
     ahci_query_init();

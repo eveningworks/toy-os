@@ -303,6 +303,10 @@ _Static_assert(sizeof(struct query_fontglyph) <= 256,
 // nowhere to carry a second selector (QUERY_FONTGLYPH's reasoning).
 #define QUERY_PROCMAP 21
 
+// The network devices: one record per registered NIC, with its
+// addresses and counters. LIST. What `/bin/ifconfig` reads.
+#define QUERY_NETDEV 22
+
 #define QUERY_KLOG_DATA 232
 
 struct query_klog {
@@ -457,6 +461,25 @@ struct query_blkdev {
     uint64_t base_lba;  // where it starts on its parent; 0 for a disk
     uint64_t is_root;   // 1 if this is the device the root is mounted from
     uint64_t persistent;// 0 for a RAM-backed live image
+};
+
+// QUERY_NETDEV's record -- one registered network device.
+//
+// The counters are the CORE's, not the driver's, so "received" means
+// "reached the stack" rather than "the hardware saw something". A card
+// whose rx_packets climbs while rx_dropped climbs with it is being
+// handed frames faster than net_poll() drains them, which is a
+// different fault from a silent one.
+struct query_netdev {
+    char name[16];       // "net0"
+    char driver[16];     // "e1000", "virtio-net"
+    uint64_t mac;        // six bytes, low-order first (mac[0] is bits 0-7)
+    uint64_t ip;         // host byte order; 0 means unconfigured
+    uint64_t netmask;
+    uint64_t gateway;
+    uint64_t mtu;
+    uint64_t rx_packets, rx_bytes, rx_dropped;
+    uint64_t tx_packets, tx_bytes, tx_dropped;
 };
 
 // QUERY_PARTTABLE's record -- the table, not its entries.

@@ -191,6 +191,21 @@ whole virtio path works. (`VIRTIO=1` also does it, along with the GPU
 and input -- it is the switch over every device class, not a disk
 flag.)
 
+**Networking: `NET=e1000|virtio|both|none`, and the default is what was
+already happening.** QEMU's default `pc` machine attaches an e1000 with
+user-mode networking whenever no `-net`/`-netdev` option is given, so
+every guest booted here has had an unclaimed NIC on the bus since long
+before there was a driver -- `NET=e1000` names that rather than changing
+it. `NET=virtio` is the only way to reach
+`kernel/drivers/virtio/virtio_net.c`; `NET=both` is the two-card shape
+nothing else boots; `NET=none` is a machine with no card, which is what
+makes "no network device" a tested state rather than an assumption. The
+guest is 10.0.2.15, the gateway 10.0.2.2, and **SLIRP answers ICMP to
+the gateway itself**, which is what `ping 10.0.2.2` proves.
+`tools/net_test.py` drives all four, and takes its verdict from the host
+-- SLIRP's replies, plus a pcap decoded there with the checksums
+recomputed.
+
 **TESTING ON AHCI.** `make run DISK=ahci` hangs `disk.img` off an ICH9
 host bus adapter instead of the legacy IDE controller, and
 `vm.py --disk-kind ahci` / `launch_qemu_cmd(disk_kind="ahci")` are the
