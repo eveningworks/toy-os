@@ -2824,3 +2824,33 @@ to. Arch package names; all are in the official repos.
 
 Deliberately NOT used: `gcovr`/`lcov` (coverage needs runtime support a
 freestanding kernel does not have) and `valgrind` (same reason).
+
+## `tools/idle_cpu.py` -- how much CPU does toy-os burn doing NOTHING?
+
+Boots a VM, lets the desktop settle, and measures the **host's** CPU
+time for the QEMU process over a window in which nothing is sent to the
+guest. Also reports what `ps` says `toywm`'s state is, once, before the
+window opens.
+
+    python3 tools/idle_cpu.py                # 30 s window
+    python3 tools/idle_cpu.py --window 60    # longer, less noise
+
+**WHY THE HOST'S CLOCK AND NOT THE GUEST'S.** The guest cannot answer
+this. `ps` bills whichever process was current at each timer tick, and
+on a machine where something is always runnable that measures who got
+scheduled rather than work done -- parking the compositor changed its
+reported CPU by ZERO while moving its state from `ready` to
+`block(event)`. The host's view of the emulator sits outside that
+accounting entirely.
+
+**QUOTE DIFFERENCES, NEVER THE ABSOLUTE NUMBER.** A large part of the
+reading is TCG itself: translating the guest's 100 Hz tick costs host
+cycles no guest change can remove. Worse, it tracks the host's own load
+at the time -- the compositor's wait measured 42% of a core against
+37-38% on 2026-08-27 and 0.76 s against 0.57 s per 30 s on 2026-08-29,
+and only the ratios are comparable. Run it twice against the same host
+with one thing changed, and take three samples an arm: the pairs above
+are tight enough to separate only because they were.
+
+**Do not run it beside anything else.** A second guest or a build
+competing for cores lands directly in the number.

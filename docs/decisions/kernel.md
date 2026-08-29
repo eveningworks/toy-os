@@ -5471,3 +5471,66 @@ previous code accepted any reset naming the right ports, which is the
 blind-reset attack RFC 5961 exists for — cheap to close, and the reason
 it was noticed at all is that a test needed a deterministic way to tear
 a connection down and the obvious one worked far too easily.
+
+## The compositor's wait reports READINESS, and does not deliver
+
+`SYS_WAIT_READY(ms)` parks a process until its event queue is non-empty
+or a deadline passes, and hands back nothing. The obvious call to build
+was a timed `SYS_WAIT_EVENT` -- the same signature as the existing one
+plus a timeout, returning the event. It would have been wrong, and
+silently.
+
+**A compositor drains its own queue.** `userland/wm/wm_rawin.c` loops on
+`sys_poll_event()` and dispatches every type: raw input it keeps, client
+requests it hands to `wm_client.c`, anything it does not recognise it
+drops on purpose. A wait that returned one event would have taken that
+event OUT of the queue, so the drain that follows would never see it --
+one event lost per wait, and the ones lost would be whichever arrived
+while the compositor was idle. That is invisible in every test that
+drives the desktop, because driving it means the queue is never empty.
+
+So this is `poll()` beside `read()`, and `/tests/waitready_test`'s
+load-bearing check is that a `sys_poll_event()` after the wait still
+returns the event.
+
+**The wait needs BOTH kinds of wake source.** Input and client requests
+arrive as events. The tray clock, the client pings, the `/etc`
+generation polls and -- the load-bearing one -- its clients'
+`WIN_REQ_TIMER` timers do not, because the compositor is the thing
+serving them. Blocking on events alone stops the clock and starves every
+client timer; waiting on a deadline alone is the poll this replaced.
+
+**A 0 return deliberately does not say WHICH happened.** Woken-by-event
+and timed-out lead to the same next action -- drain, re-check deadlines,
+loop -- so the distinction has no correct use, and a caller that
+branched on it would be wrong the first time both happened at once.
+
+**THE KERNEL HALF ALREADY EXISTED, AND THAT IS WHERE THE TRAP IS.**
+`scheduler_block_current_until()` (Linux's `schedule_timeout()`) landed
+with the blocking socket receive, not with this. Its deadline wake does
+NOT write 0: `scheduler_wake_timers()` writes 0 only for a
+`SCHED_CHAN_TIMER` sleeper and `SYS_RETRY` for anything else, because a
+socket handler woken at its deadline has to look again and decide
+whether an empty queue is a timeout or a spurious wake. `SYS_WAIT_READY`
+parks on the EVENT channel, so its timeout arrives as `SYS_RETRY` --
+which is outside the errno range, so `err()` passes it through
+untouched and ring 3 sees `-4095` where the ABI promised 0.
+
+`sys_wait_ready()` folds it, and must NOT loop on it the way
+`sys_read()`/`sys_write()` do: looping on a sentinel that means "call
+again" would turn a bounded wait into one that never ends. The general
+shape is worth the entry -- **a sentinel whose meaning depends on which
+channel a process parked on is one a second caller on a different
+channel will read wrong**, and it fails as a wrong return value rather
+than as a crash.
+
+**WHAT IT MEASURED.** Host CPU of the QEMU process over 30 s with
+nothing touching the guest, three samples each: **0.78/0.73/0.78 s
+before, 0.56/0.58/0.58 s after** -- about a quarter less, with the
+ranges not overlapping. The guest's own accounting shows NOTHING; `ps`
+reports the same CPU seconds either way and the only column that moves
+is the state, `ready` to `block(event)`, because `ps` bills whoever was
+current at the tick and something always is. Absolute figures from
+`idle_cpu.py` are mostly TCG and mostly the host's load at the time --
+an earlier pair on this same change read 42% of a core against 37-38%,
+and neither number is comparable with these. Quote the DIFFERENCE.

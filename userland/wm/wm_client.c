@@ -399,6 +399,22 @@ static void on_window_timer(int pid, uint32_t id, unsigned ms) {
 // timer -- and there the second form quietly builds a queue of overdue
 // firings that all arrive at once the moment it catches up, which is
 // the opposite of what a client asking to be woken less often wanted.
+// The earliest client timer deadline, in ticks, or 0 if no window has
+// one armed. The frame loop's wait must not outlast this, or a client
+// that asked to be woken every 16 ms would be woken on the compositor's
+// housekeeping cadence instead -- which is the timer service quietly
+// becoming slower than the timers it serves.
+uint64_t wm_client_next_timer_due(void) {
+    uint64_t soonest = 0;
+    for (int i = 0; i < window_count; i++) {
+        struct window *win = &windows[i];
+        if (!win->open || !win->timer_ticks) continue;
+        if (!wm_client_is_client_window(win)) continue;
+        if (!soonest || win->timer_due < soonest) soonest = win->timer_due;
+    }
+    return soonest;
+}
+
 void wm_client_check_timers(void) {
     uint64_t now = sys_ticks();
     for (int i = 0; i < window_count; i++) {

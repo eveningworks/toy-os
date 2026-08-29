@@ -782,6 +782,11 @@ int sys_poll_event(struct win_event *out);
 // that finds nothing parks the process again in the kernel, using no
 // timeslices at all. Returns 1 on success, or -1 if the kernel refused
 // (a caller with no event queue -- see syscall_abi.h).
+// Blocks until this process has an event queued or `timeout_ms` passes,
+// consuming nothing. 1 = an event is waiting, 0 = neither known nor an
+// error. For a caller that drains its own queue; see SYS_WAIT_READY.
+int sys_wait_ready(uint32_t timeout_ms);
+
 int sys_wait_event(struct win_event *out);
 
 #endif

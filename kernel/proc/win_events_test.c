@@ -18,6 +18,7 @@
 #include "fs.h"
 
 #define EVENT_PATH "/tests/event_test"
+#define READY_PATH "/tests/waitready_test"
 #define TIMEOUT_TICKS 500 // ~5s; a blocked-forever process must fail, not hang
 
 static struct win_event key_event(int code) {
@@ -129,6 +130,43 @@ KTEST("win_events", "a ring-3 process blocks in SYS_WAIT_EVENT and is woken") {
 
     KTEST_ASSERT(exited);
     KTEST_ASSERT_EQ(exit_code, WANT); // it received every event, and only those
+}
+
+// SYS_WAIT_READY, the timed wait a compositor needs. Four properties,
+// and the third is the one the whole call exists for: it must not
+// CONSUME the event it waited for, or the caller that drains its own
+// queue (userland/wm/wm_rawin.c) silently loses one per wait.
+//
+// The helper reports a BITMASK of its own sub-checks, so a failure names
+// which property broke rather than just "one of the four".
+KTEST("win_events", "SYS_WAIT_READY times out, wakes early, and consumes nothing") {
+    if (!fs_exists(READY_PATH)) KTEST_SKIP("no " READY_PATH " on this boot");
+
+    int pid = scheduler_spawn(READY_PATH, 0);
+    KTEST_ASSERT(pid != 0);
+
+    // Its first sub-check is a 100 ms wait on an EMPTY queue, so the
+    // push below must not land during it -- 40 ticks leaves 30 of slack
+    // for the spawn and the ELF load on top of that 10.
+    uint64_t start = pit_ticks();
+    while (pit_ticks() - start < 40) { }
+
+    // Still parked in the second wait, not exited: a wait_ready that
+    // never blocked at all would have run to the end by now.
+    int exit_code = -1;
+    KTEST_ASSERT(scheduler_poll(pid, &exit_code) == SCHED_POLL_RUNNING);
+
+    struct win_event ev = key_event('z');
+    KTEST_ASSERT(win_events_push(pid, &ev));
+
+    int exited = 0;
+    start = pit_ticks();
+    while (pit_ticks() - start < TIMEOUT_TICKS) {
+        if (scheduler_poll(pid, &exit_code) == SCHED_POLL_EXITED) { exited = 1; break; }
+    }
+
+    KTEST_ASSERT(exited);
+    KTEST_ASSERT_EQ(exit_code, 0xF); // a bitmask, so a failure names WHICH property
 }
 
 // win_server.c's refusal paths, which are its access-control story and

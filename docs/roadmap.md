@@ -27,7 +27,6 @@ buildable now. Something that MISBEHAVES is not here -- that is
 - [ ] `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR, not a 64 KiB guess  *(USB)*
 - [ ] Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today  *(Networking)*
 - [ ] Run `dhcp` at boot -- unblocked: the startup stall was COM1 backpressure, not the write  *(Networking)*
-- [ ] The ring-3 WM busy-waits instead of sleeping -- built on branch `wm-wait-ready`, PARKED: it regresses `uterm`  *(Known limitations and papercuts (unscheduled))*
 - [ ] System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons  *(Known limitations and papercuts (unscheduled))*
 <!-- END next-up -->
 
@@ -882,7 +881,7 @@ this to be better?".
 - [ ] A ramfs root is EMPTY -- no `/bin`, so a diskless boot has a filesystem and no programs
 - [ ] The shell's command dispatch is a long `if/else` chain, and the fix is not the obvious one
 - [ ] Settings: a ring-3 settings daemon (stage 2)
-- [ ] **NEXT** The ring-3 WM busy-waits instead of sleeping -- built on branch `wm-wait-ready`, PARKED: it regresses `uterm`
+- [x] ~~The ring-3 WM busy-waits instead of sleeping~~ DONE 2026-08-29 -- `SYS_WAIT_READY`, a wait with a deadline that consumes nothing
 - [ ] Minesweeper keeps no best times, and there is no `uui_grid` widget until a second grid-shaped app wants one
 - [ ] The kernel ships ~62 KB of `.eh_frame` unwind tables nothing can ever read
 - [ ] The in-kernel test suite is ~30% of `.text` and ships in release images

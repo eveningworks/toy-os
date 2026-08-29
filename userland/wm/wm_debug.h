@@ -120,6 +120,10 @@ int wm_debug_dispatch(char *line);
 // events to drain would be waiting on the loop it is currently
 // blocking. (The same trap that made a lazy CPU-clock calibration hang
 // inside a syscall; see api/cpuinfo.h.)
+// Nonzero while any injected input is still queued. The frame loop asks
+// before deciding whether it may block -- see wm_debug_work_pending().
+int wm_debug_work_pending(void);
+
 int wm_debug_next_input(int *out_x, int *out_y, uint8_t *out_buttons);
 
 // Same idea for keys: returns the next injected key code, or 0 if none.

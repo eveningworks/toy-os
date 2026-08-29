@@ -501,6 +501,22 @@ int sys_poll_event(struct win_event *out) {
     return (int)err(syscall1(SYS_POLL_EVENT, (uint64_t)(uintptr_t)out));
 }
 
+int sys_wait_ready(uint32_t timeout_ms) {
+    // NO retry loop, unlike sys_wait_event() below: a 0 here is an
+    // answer ("not known ready"), not a "call again". Looping on it
+    // would turn a timeout into a wait that never ends.
+    //
+    // The DEADLINE wake and the EVENT wake arrive as different numbers
+    // -- scheduler_wake_timers() writes SYS_RETRY for a park that was
+    // not SCHED_CHAN_TIMER, while win_events_push() wakes with 0 -- and
+    // this call's contract is that the caller cannot tell them apart.
+    // So fold them here rather than leaking a sentinel that means "call
+    // again" to a caller that must not.
+    int64_t r = syscall1(SYS_WAIT_READY, timeout_ms);
+    if (r == SYS_RETRY) return 0;
+    return (int)err(r);
+}
+
 int sys_wait_event(struct win_event *out) {
     int64_t r;
     // The kernel's documented retry contract, honoured here once rather

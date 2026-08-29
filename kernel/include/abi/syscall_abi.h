@@ -610,6 +610,41 @@ struct sys_dirent {
                            // via scheduler_block_current(), so a
                            // waiting client uses no timeslices at all.
 
+#define SYS_WAIT_READY 89 // RDI = a timeout in MILLISECONDS. Parks the
+                           // caller until its event queue is non-empty
+                           // or that long has passed, whichever comes
+                           // first, and CONSUMES NOTHING. Returns 1 if
+                           // an event was already queued (it does not
+                           // block then), 0 otherwise; -EPERM from a
+                           // caller with no queue, the same refusal
+                           // SYS_WAIT_EVENT gives and for the same
+                           // reason.
+                           //
+                           // READINESS, NOT DELIVERY -- this is `poll()`
+                           // and SYS_WAIT_EVENT is `read()`. A caller
+                           // that drains its own queue cannot use the
+                           // delivering call to wait: the event it
+                           // returned has left the queue, so the drain
+                           // that follows never sees it and one event
+                           // per wait is silently lost. A compositor is
+                           // exactly that caller (userland/wm/wm_rawin.c
+                           // owns the queue and dispatches every type),
+                           // which is why the wait it needed is this one.
+                           //
+                           // A 0 DOES NOT DISTINGUISH "TIMED OUT" from
+                           // "woken by an event", and must not: the
+                           // caller drains and re-checks its deadlines
+                           // either way, so the distinction has no
+                           // correct use and a caller branching on it
+                           // would be wrong the first time both
+                           // happened at once.
+                           //
+                           // A timeout of 0 does not block at all. The
+                           // maximum is SYS_SLEEP_MAX_MS, CLAMPED rather
+                           // than refused -- a caller computing a
+                           // deadline from "nothing is due" wants a long
+                           // wait, not an error.
+
 #define SYS_WIN_REQUEST 25 // RDI = pointer to a `struct win_request_msg`
                             // (in/out -- WIN_REQ_CREATE writes the new
                             // window id back into `window`). Returns 1

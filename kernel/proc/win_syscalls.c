@@ -17,6 +17,7 @@
 #include "win_events.h"
 #include "win_server.h"
 #include "win_transport.h"
+#include "clocksource.h" // clocksource_now_ns() -- the timed wait's deadline
 #include <stddef.h>
 
 // SYS_WIN_* state -- like the heap above, single-window/single-process
@@ -401,6 +402,33 @@ static int event_get(struct syscall_ctx *c, int blocking) {
 
 int sys_poll_event(struct syscall_ctx *c) { return event_get(c, 0); }
 int sys_wait_event(struct syscall_ctx *c) { return event_get(c, 1); }
+
+// Readiness with a deadline, consuming nothing -- see SYS_WAIT_READY.
+// The queue test and the park are atomic with respect to an IRQ pushing
+// an event, because this whole handler runs with interrupts off; that is
+// the same lost-wakeup argument event_get() makes, and it is the reason
+// the check cannot be hoisted into a helper that returns first.
+int sys_wait_ready(struct syscall_ctx *c) {
+    int pid = scheduler_current_tgid();
+    if (pid == 0) {
+        klog_write("syscall: wait_ready() rejected -- caller has no event queue\n");
+        c->regs[14] = (uint64_t)(int64_t)-EPERM;
+        return 0;
+    }
+    if (win_events_pending(pid)) { c->regs[14] = 1; return 0; }
+
+    uint64_t ms = c->a0;
+    if (!ms) { c->regs[14] = 0; return 0; }
+    if (ms > SYS_SLEEP_MAX_MS) ms = SYS_SLEEP_MAX_MS;
+
+    uint64_t deadline = clocksource_now_ns() + ms * 1000000ull;
+    if (!scheduler_block_current_until(c->regs, win_events_wait_chan(pid),
+                                       SCHED_WAIT_EVENT, deadline)) {
+        c->regs[14] = (uint64_t)(int64_t)-EPERM;
+        return 0;
+    }
+    return 1; // parked -- the waker writes the return value, as in event_get()
+}
 
 // The legacy single-window state, for the same reason
 // proc_syscall_release() exists: it is a global here, not a mapping, so

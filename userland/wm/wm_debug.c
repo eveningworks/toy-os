@@ -39,6 +39,17 @@ static int g_keys_head = 0, g_keys_tail = 0;
 static int g_wheel[KEY_INJECT_MAX];
 static int g_wheel_head = 0, g_wheel_tail = 0;
 
+// Anything queued from the debug console that the frame loop consumes
+// ONE OF PER ITERATION. The loop blocks between frames now, and an
+// injected press whose release is still in the queue would wait for a
+// wake that is never coming -- the queue is ring-3 memory the kernel
+// knows nothing about, so pushing to it wakes nobody.
+int wm_debug_work_pending(void) {
+    return g_inject_head != g_inject_tail ||
+           g_keys_head   != g_keys_tail   ||
+           g_wheel_head  != g_wheel_tail;
+}
+
 static int inject_push(int x, int y, uint8_t buttons) {
     int next = (g_inject_tail + 1) % INJECT_MAX;
     if (next == g_inject_head) return 0; // full

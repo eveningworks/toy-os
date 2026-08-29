@@ -1898,3 +1898,31 @@ an orderly close — what a client needs and no more.
   TIMESTAMPS, AND NO RTT ESTIMATE** — a fixed 200 ms floor with
   exponential backoff. Every one of those is a throughput optimisation,
   and this stack has no throughput problem to solve yet.
+
+## A WAIT CAN CARRY A DEADLINE, AND READINESS IS NOT DELIVERY.
+
+`SYS_WAIT_READY(ms)` parks the caller until its event queue is
+non-empty or `ms` has passed, whichever is first, and **consumes
+nothing**. 1 means an event was already queued (it did not block), 0
+means neither -- and 0 deliberately does not distinguish "timed out"
+from "woken by an event", because the caller drains and re-checks
+either way.
+
+**Use it when you own the queue; use `SYS_WAIT_EVENT` when you want an
+event.** This is `poll()` beside `read()`. The compositor is the caller
+that needed the first: `wm_rawin.c` drains and dispatches every event
+type itself, so a wait that RETURNED one would hide it from the drain --
+one lost per wait, and only ever while the desktop was idle, which is
+the one state no test drives.
+
+**THE TRAP IS THE RETURN VALUE, NOT THE WAIT.** The kernel half
+(`scheduler_block_current_until()`) is shared with the blocking socket
+receive, and `scheduler_wake_timers()` writes 0 for a deadline wake only
+on `SCHED_CHAN_TIMER` -- everything else gets `SYS_RETRY`, so a socket
+handler re-runs and looks again. `SYS_WAIT_READY` parks on the EVENT
+channel and therefore times out with `SYS_RETRY`, which is outside the
+errno range and so survives `err()` untouched: ring 3 saw `-4095` where
+the ABI said 0. `sys_wait_ready()` folds it, and must NOT loop on it --
+looping on "call again" makes a bounded wait unbounded. **Adding a
+third kind of timed wait means asking which of those two the wake
+writes.**

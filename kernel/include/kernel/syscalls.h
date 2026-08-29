@@ -278,6 +278,7 @@ int sys_win_create(struct syscall_ctx *c);
 int sys_win_present(struct syscall_ctx *c);
 int sys_poll_event(struct syscall_ctx *c);
 int sys_wait_event(struct syscall_ctx *c);
+int sys_wait_ready(struct syscall_ctx *c);
 int sys_win_request(struct syscall_ctx *c);
 int sys_win_debug(struct syscall_ctx *c);
 

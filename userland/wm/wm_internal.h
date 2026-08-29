@@ -264,6 +264,20 @@ extern int wm_ping_timeout_ticks;
 // interval + timeout, since a window is only asked once the previous
 // answer has landed.
 #define WM_PING_INTERVAL_DEFAULT 200
+
+// How long the frame loop is willing to sleep with nothing else due, in
+// milliseconds. This is the cadence of everything the compositor owes
+// that NOBODY SENDS IT AN EVENT FOR: the tray clock, the client pings,
+// the /etc generation polls, the Start menu's click flash, reaping a
+// launched process.
+//
+// 100 ms rather than a frame time because none of that is animation --
+// the clock renders whole seconds, the pings are on a 2 s cadence, and a
+// generation poll is one integer compare. Anything that IS animation
+// arrives as an event (input) or as a client timer, and the wait is
+// clamped to the nearer of those.
+#define WM_IDLE_WAIT_MS 100
+
 extern int wm_ping_interval_ticks;
 
 void wm_client_ping(struct window *win);
@@ -283,6 +297,10 @@ int wm_launched_max(void);
 // timer (TWP's WIN_REQ_TIMER) has come due, which is what lets a client
 // animate or refresh on a schedule while BLOCKING in between instead of
 // polling.
+// The earliest armed client timer, in ticks, or 0 for none -- the frame
+// loop's wait is clamped to it. See wm_client_next_timer_due().
+uint64_t wm_client_next_timer_due(void);
+
 void wm_client_check_timers(void);
 
 // Once per frame. Returns the index of a window that has just gone

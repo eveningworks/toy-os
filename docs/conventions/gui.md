@@ -2017,3 +2017,37 @@ one of them would rename the tab. The title itself is TRUNCATED at
 `ANSI_OSC_MAX` rather than refused -- the one place this parser guesses,
 and deliberately, since a title is decoration and losing its tail beats
 losing the whole thing.
+
+## THE COMPOSITOR SLEEPS BETWEEN FRAMES, AND TWO THINGS MUST DEFEAT THE WAIT.
+
+`wm.c`'s frame loop no longer calls `sys_yield()` -- that returned
+immediately, so an idle desktop ran a full frame's polling every tick.
+It waits on `sys_wait_ready()` now, with a deadline of whichever is
+nearer: the earliest armed client timer (`wm_client_next_timer_due()`),
+or `WM_IDLE_WAIT_MS`.
+
+**`WM_IDLE_WAIT_MS` is the cadence of everything nobody sends an event
+for** -- the tray clock, the client pings, the `/etc` generation polls,
+the Start-menu click flash, reaping a launched process. 100 ms, because
+none of that is animation: the clock renders whole seconds and a
+generation poll is one integer compare. Anything that IS animation
+arrives as input or as a client timer, and the wait is clamped to it.
+
+**TWO THINGS MUST MAKE THE WAIT ZERO, and the kernel can see neither.**
+Injected input from the debug console (`gui click`, `gui drag`) lives in
+ring-3 memory, so pushing to it wakes nobody -- and the loop consumes
+ONE per iteration on purpose, so a press would block with its release
+still queued and every GUI tool would hang. `wm_debug_work_pending()` is
+the guard. And a repaint already owed should not wait, which is also
+what keeps the first frame prompt.
+
+The corollary for anything added to the loop: **work that must happen on
+a cadence is now bounded by that wait, not by the tick.** A new poll
+needing to be faster than 100 ms has to say so -- by clamping the
+deadline the way the client timers do, not by assuming the loop spins.
+
+**Measured, host CPU over 30 s untouched, three samples each: 0.76 s ->
+0.57 s, about a quarter.** The GUEST cannot see it -- `ps` reports the
+same CPU seconds and only the STATE moves, `ready` to `block(event)`.
+`tools/idle_cpu.py` is the instrument, and only its DIFFERENCES mean
+anything.
