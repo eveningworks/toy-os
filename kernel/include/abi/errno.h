@@ -130,6 +130,22 @@
                    // must report it rather than hang (<pthread.h>), and
                    // a userland-only code still belongs in this table
                    // because there is one errno space, not two
+#define EPIPE  32  // the writing end of a stream is gone -- a pipe whose
+                   // reader closed, or a socket this process has already
+                   // shut down. Distinct from EBADF: the descriptor is
+                   // fine, the CONVERSATION is over.
+#define ECONNRESET 104 // the peer aborted the connection, or stopped
+                   // answering long enough that the stack gave up. A
+                   // caller that would retry a timeout usually should
+                   // NOT retry this.
+#define ECONNREFUSED 111 // nothing is listening on that port. The most
+                   // useful message a network stack produces, and the
+                   // reason it is separate from ECONNRESET: one means
+                   // "try a different port", the other "try again".
+#define ENOTCONN 107 // the socket is not connected, so there is no
+                   // stream to read or write. Distinct from EBADF for
+                   // the same reason EPIPE is.
+
 #define ENOSYS 38  // the call exists and does nothing yet
 #define ENOTSUP 95 // the thing exists but does not support being asked
                    // THIS way -- a query class that is a LIST has no

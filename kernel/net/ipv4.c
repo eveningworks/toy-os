@@ -121,6 +121,14 @@ void ipv4_input(struct net_device *dev, const uint8_t *pkt, uint32_t len) {
 
     if (h.proto == IP_PROTO_ICMP) {
         icmp_input(dev, src, payload, plen);
+    } else if (h.proto == IP_PROTO_TCP) {
+        // A segment for no connection is DROPPED rather than answered
+        // with a RST. A RST needs the segment's own sequence numbers
+        // reflected correctly, and getting that wrong is worse than
+        // staying quiet: this stack makes only outbound connections, so
+        // the only unmatched segments it sees are late ones from a
+        // connection it has already forgotten.
+        (void)tcp_input(dev, src, dst, payload, plen);
     } else if (h.proto == IP_PROTO_UDP) {
         if (udp_input(dev, src, dst, payload, plen)) return;
         // Nobody was listening. Say so rather than dropping in silence:

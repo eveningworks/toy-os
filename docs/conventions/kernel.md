@@ -1747,3 +1747,51 @@ with the answer).
   wedges the compositor (`docs/bugs.md`), and `/bin/dhcp` writes
   `/etc/resolv.conf`. The kernel's boot-time defaults stay until
   something runs the client.
+
+## TCP IS CLIENT-SIDE, IN-ORDER ONLY, AND ITS TIMERS RIDE THE BLOCKING RECEIVE
+
+`kernel/net/tcp.c`. An active open, a byte stream, retransmission, and
+an orderly close — what a client needs and no more.
+
+- **THERE IS NO LISTEN AND NO ACCEPT.** A passive open needs a backlog
+  and sockets the kernel creates rather than a caller, which is a second
+  design and not half of this one.
+- **THE TIMERS RIDE THE BLOCKING RECEIVE.** There is no softirq and no
+  kernel thread, so nothing services a connection on its own. A blocked
+  reader parks until `net_wait_deadline()` — its own timeout, or TCP's
+  next retransmit, whichever is sooner — wakes, runs `tcp_tick()` inside
+  `net_poll()`, and parks again. **The honest gap: a connection nobody
+  is reading has nobody to wake it**, so its retransmits wait for the
+  idle loop. Survivable for a client, and exactly what a server could
+  not do.
+- **IN ORDER ONLY: a segment that is not at `rcv_nxt` is DROPPED and
+  re-acked**, so the peer sends it again. No hole list, no reassembly
+  queue; the cost is a retransmit on a path that reorders. The
+  acknowledgement must still name `rcv_nxt` — that is what makes the
+  peer resend the missing piece rather than assume it landed.
+- **SEQUENCE COMPARISON IS MODULAR.** `seq_lt()` is a signed difference,
+  never a plain `<`: the space wraps, and getting this wrong works
+  perfectly until a connection crosses 2^32.
+- **A FIN GOES AFTER THE DATA, NEVER BEFORE.** `maybe_send_fin()` waits
+  until everything queued is in flight; a FIN sent early ends the stream
+  at the wrong place.
+- **THE CONNECTION BLOCK OUTLIVES THE SOCKET, AND SOMETHING MUST
+  RECLAIM IT.** `close()` still owes the peer a FIN, so the block is
+  marked an ORPHAN and released when it reaches CLOSED **or when its
+  linger expires** (2 s, not the minutes a real TIME_WAIT takes — there
+  are four blocks, and holding one for two minutes because a peer went
+  away would exhaust the pool). Without the linger, four dead
+  connections hold the pool until reboot; that is how it was found, with
+  the seventh KTEST getting -ENOSPC.
+- **A RST ANSWERING A SYN IS `ECONNREFUSED`, ANYTHING LATER IS
+  `ECONNRESET`.** One says try a different port, the other says try
+  again, and a caller acts on them differently — which is the whole
+  reason `errno.h` gained both.
+- **A CONNECTED STREAM IS A STREAM: `read()` and `write()` work on it**,
+  as POSIX guarantees, so code written against descriptors can be handed
+  a socket. A DATAGRAM socket still refuses both, because a read that
+  cannot say who sent it is not a datagram interface.
+- **NO NAGLE, NO DELAYED ACK, NO WINDOW SCALING, NO SACK, NO
+  TIMESTAMPS, AND NO RTT ESTIMATE** — a fixed 200 ms floor with
+  exponential backoff. Every one of those is a throughput optimisation,
+  and this stack has no throughput problem to solve yet.

@@ -164,6 +164,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`host`](host.md)
 - [`ifconfig`](ifconfig.md)
 - [`ping`](ping.md)
+- [`wget`](wget.md)
 
 ### Storage
 

@@ -19,6 +19,7 @@
 #include "net.h"
 #include "netdev.h"
 #include "string.h"
+#include "errno.h"
 #include "ktest.h"
 
 // Frames live here rather than on the stack: the ring-0 frame budget is
@@ -203,6 +204,78 @@ static uint32_t udp_frame(struct net_device *dev, uint32_t dst_ip, uint16_t dpor
         if (corrupt) udp[7] ^= 0xFF;
     }
     return n + 20 + udp_len;
+}
+
+
+// An IPv4 + TCP segment from the peer. `flags` is the TCP flag byte;
+// `seq`/`ack` are absolute; `payload_len` bytes of pattern follow.
+static uint32_t tcp_frame(struct net_device *dev, uint16_t sport, uint16_t dport,
+                          uint8_t flags, uint32_t seq, uint32_t ack,
+                          uint32_t payload_len, int corrupt) {
+    uint32_t n = eth_frame(dev, 0, ETH_TYPE_IPV4);
+    uint8_t *ip = g_frame + n;
+    uint32_t tcp_len = 20 + payload_len;
+    uint32_t src = peer_ip(dev);
+
+    k_memset(ip, 0, 20);
+    ip[0] = 0x45;
+    ip[2] = (uint8_t)((20 + tcp_len) >> 8); ip[3] = (uint8_t)(20 + tcp_len);
+    ip[8] = 64;
+    ip[9] = IP_PROTO_TCP;
+    ip[12] = (uint8_t)(src >> 24); ip[13] = (uint8_t)(src >> 16);
+    ip[14] = (uint8_t)(src >> 8);  ip[15] = (uint8_t)src;
+    ip[16] = (uint8_t)(dev->ip >> 24); ip[17] = (uint8_t)(dev->ip >> 16);
+    ip[18] = (uint8_t)(dev->ip >> 8);  ip[19] = (uint8_t)dev->ip;
+    uint16_t sum = net_checksum(ip, 20);
+    ip[10] = (uint8_t)(sum >> 8); ip[11] = (uint8_t)sum;
+
+    uint8_t *tcp = ip + 20;
+    k_memset(tcp, 0, 20);
+    tcp[0] = (uint8_t)(sport >> 8); tcp[1] = (uint8_t)sport;
+    tcp[2] = (uint8_t)(dport >> 8); tcp[3] = (uint8_t)dport;
+    tcp[4] = (uint8_t)(seq >> 24); tcp[5] = (uint8_t)(seq >> 16);
+    tcp[6] = (uint8_t)(seq >> 8);  tcp[7] = (uint8_t)seq;
+    tcp[8] = (uint8_t)(ack >> 24); tcp[9] = (uint8_t)(ack >> 16);
+    tcp[10] = (uint8_t)(ack >> 8); tcp[11] = (uint8_t)ack;
+    tcp[12] = 5 << 4;
+    tcp[13] = flags;
+    tcp[14] = 0x20; tcp[15] = 0x00;      // a 8192-byte window
+    for (uint32_t i = 0; i < payload_len; i++) tcp[20 + i] = (uint8_t)('A' + (i % 26));
+
+    uint8_t pseudo[12];
+    pseudo[0] = (uint8_t)(src >> 24); pseudo[1] = (uint8_t)(src >> 16);
+    pseudo[2] = (uint8_t)(src >> 8);  pseudo[3] = (uint8_t)src;
+    pseudo[4] = (uint8_t)(dev->ip >> 24); pseudo[5] = (uint8_t)(dev->ip >> 16);
+    pseudo[6] = (uint8_t)(dev->ip >> 8);  pseudo[7] = (uint8_t)dev->ip;
+    pseudo[8] = 0;
+    pseudo[9] = IP_PROTO_TCP;
+    pseudo[10] = (uint8_t)(tcp_len >> 8);
+    pseudo[11] = (uint8_t)tcp_len;
+    uint16_t c = net_checksum_two(pseudo, sizeof pseudo, tcp, tcp_len);
+    if (!c) c = 0xFFFF;
+    tcp[16] = (uint8_t)(c >> 8); tcp[17] = (uint8_t)c;
+    if (corrupt) tcp[17] ^= 0xFF;
+
+    return n + 20 + tcp_len;
+}
+
+// The captured segment's flag byte and sequence, for asserting on what
+// the state machine actually put on the wire.
+static uint8_t sent_tcp_flags(void) {
+    const uint8_t *t = sent_transport();
+    return t ? t[13] : 0;
+}
+static uint32_t sent_tcp_seq(void) {
+    const uint8_t *t = sent_transport();
+    return t ? net_ntohl(*(const uint32_t *)(t + 4)) : 0;
+}
+static uint32_t sent_tcp_ack(void) {
+    const uint8_t *t = sent_transport();
+    return t ? net_ntohl(*(const uint32_t *)(t + 8)) : 0;
+}
+static uint16_t sent_tcp_sport(void) {
+    const uint8_t *t = sent_transport();
+    return t ? net_ntohs(*(const uint16_t *)t) : 0;
 }
 
 KTEST("net", "a correct header sums to zero and a corrupted one does not") {
@@ -502,4 +575,199 @@ KTEST("net", "a closed socket releases its port") {
     int b = net_sock_open(NET_AF_INET, NET_SOCK_DGRAM, IP_PROTO_UDP);
     KTEST_ASSERT_EQ(net_sock_bind(b, 0, 7782, 0), 7782);
     net_sock_close(b);
+}
+
+
+// A connection driven to ESTABLISHED, with the peer's view of it. The
+// handshake is the precondition for every test below, so it is one
+// helper rather than four copies -- and it ASSERTS its own steps, so a
+// failure lands on the handshake rather than on whatever came after.
+struct fake_peer { int sock; uint16_t our_port; uint32_t our_seq, peer_seq; };
+
+static int establish(struct net_device *dev, struct fake_peer *p, struct ktest_ctx *ctx) {
+    // The peer must be resolvable, or the SYN never leaves.
+    uint32_t len = arp_request(dev, dev->ip, 0);
+    eth_input(dev, g_frame, len);
+
+    p->sock = net_sock_open(NET_AF_INET, NET_SOCK_STREAM, IP_PROTO_TCP);
+    if (p->sock < 0) { ktest_fail(ctx, "net_sock_open", __FILE__, __LINE__); return 0; }
+
+    capture_begin(dev);
+    int rc = net_sock_connect(p->sock, peer_ip(dev), 8080);
+    uint8_t flags = sent_tcp_flags();
+    p->our_seq = sent_tcp_seq() + 1;      // the SYN takes one
+    p->our_port = sent_tcp_sport();
+    capture_end(dev);
+
+    if (rc < 0) { ktest_fail_eq(ctx, "connect rc", rc, 0, __FILE__, __LINE__); return 0; }
+    if (flags != 0x02) {        // SYN alone
+        ktest_fail_eq(ctx, "syn flags", flags, 0x02, __FILE__, __LINE__);
+        return 0;
+    }
+
+    p->peer_seq = 0x50000000u;
+    capture_begin(dev);
+    len = tcp_frame(dev, 8080, p->our_port, 0x12 /* SYN|ACK */,
+                    p->peer_seq, p->our_seq, 0, 0);
+    eth_input(dev, g_frame, len);
+    uint8_t ackf = sent_tcp_flags();
+    uint32_t acked = sent_tcp_ack();
+    capture_end(dev);
+    p->peer_seq++;
+
+    if (ackf != 0x10 || acked != p->peer_seq) {
+        ktest_fail(ctx, "the SYN+ACK is acknowledged", __FILE__, __LINE__);
+        return 0;
+    }
+    return 1;
+}
+
+// Close the socket AND let the peer acknowledge the FIN, so the
+// connection block is reclaimed rather than left lingering. Seven tests
+// against a four-block pool exhaust it otherwise -- which is how the
+// orphan reclaim came to be written.
+static void finish_close(struct net_device *dev, struct fake_peer *p) {
+    net_sock_close(p->sock);
+    // ACK **AND FIN**: acknowledging our FIN alone leaves the
+    // connection in FIN_WAIT_2 waiting for the peer's, which is
+    // correct and is not closed. The peer has to say it is done too.
+    uint32_t len = tcp_frame(dev, 8080, p->our_port, 0x11 /* ACK|FIN */,
+                             p->peer_seq, p->our_seq + 1, 0, 0);
+    eth_input(dev, g_frame, len);
+    tcp_tick();
+}
+
+KTEST("tcp", "an active open completes and reaches ESTABLISHED") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+
+    struct fake_peer p;
+    if (!establish(dev, &p, ctx)) return;
+    KTEST_ASSERT_EQ(net_sock_connect_state(p.sock), 0);
+    finish_close(dev, &p);
+}
+
+KTEST("tcp", "data arrives in order, is acknowledged, and reads back") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+
+    struct fake_peer p;
+    if (!establish(dev, &p, ctx)) return;
+
+    capture_begin(dev);
+    uint32_t len = tcp_frame(dev, 8080, p.our_port, 0x18 /* ACK|PSH */,
+                             p.peer_seq, p.our_seq, 10, 0);
+    eth_input(dev, g_frame, len);
+    uint32_t acked = sent_tcp_ack();
+    capture_end(dev);
+
+    // The acknowledgement must cover the data, or the peer sends it again.
+    KTEST_ASSERT_EQ(acked, p.peer_seq + 10);
+
+    uint8_t buf[32];
+    int got = net_sock_stream_recv(p.sock, buf, sizeof buf);
+    KTEST_ASSERT_EQ(got, 10);
+    KTEST_ASSERT_EQ(buf[0], 'A');
+    KTEST_ASSERT_EQ(buf[9], 'J');
+    finish_close(dev, &p);
+}
+
+KTEST("tcp", "an out-of-order segment is dropped and re-acked, not delivered") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+
+    struct fake_peer p;
+    if (!establish(dev, &p, ctx)) return;
+
+    // A segment 100 bytes PAST what is expected. Reassembly is
+    // deliberately not implemented, so this must not be delivered --
+    // and the acknowledgement must still name rcv_nxt, which is what
+    // makes the peer retransmit the piece that is missing.
+    capture_begin(dev);
+    uint32_t len = tcp_frame(dev, 8080, p.our_port, 0x18,
+                             p.peer_seq + 100, p.our_seq, 10, 0);
+    eth_input(dev, g_frame, len);
+    uint32_t acked = sent_tcp_ack();
+    capture_end(dev);
+
+    KTEST_ASSERT_EQ(acked, p.peer_seq);
+    uint8_t buf[32];
+    KTEST_ASSERT_EQ(net_sock_stream_recv(p.sock, buf, sizeof buf), -EAGAIN);
+    finish_close(dev, &p);
+}
+
+KTEST("tcp", "a corrupted segment is dropped entirely") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+
+    struct fake_peer p;
+    if (!establish(dev, &p, ctx)) return;
+
+    capture_begin(dev);
+    uint32_t len = tcp_frame(dev, 8080, p.our_port, 0x18, p.peer_seq, p.our_seq, 10, 1);
+    eth_input(dev, g_frame, len);
+    int sent = g_sent_count;
+    capture_end(dev);
+
+    // Not even an ACK: the segment's sequence numbers cannot be trusted.
+    KTEST_ASSERT_EQ(sent, 0);
+    uint8_t buf[32];
+    KTEST_ASSERT_EQ(net_sock_stream_recv(p.sock, buf, sizeof buf), -EAGAIN);
+    finish_close(dev, &p);
+}
+
+KTEST("tcp", "a FIN ends the stream, and a read reports it as 0 rather than an error") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+
+    struct fake_peer p;
+    if (!establish(dev, &p, ctx)) return;
+
+    uint32_t len = tcp_frame(dev, 8080, p.our_port, 0x11 /* ACK|FIN */,
+                             p.peer_seq, p.our_seq, 0, 0);
+    eth_input(dev, g_frame, len);
+    p.peer_seq++;              // a FIN takes a sequence number
+
+    uint8_t buf[32];
+    // END OF STREAM IS 0, which is what every reader of every other
+    // stream in this system already tests for. An error here would make
+    // a normal close look like a failure.
+    KTEST_ASSERT_EQ(net_sock_stream_recv(p.sock, buf, sizeof buf), 0);
+    KTEST_ASSERT_EQ(tcp_state(0) == TCP_STATE_CLOSE_WAIT ||
+                    tcp_state(0) == TCP_STATE_CLOSED, 1);
+    finish_close(dev, &p);
+}
+
+KTEST("tcp", "a RST answering the SYN is refused, not merely reset") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+
+    uint32_t len = arp_request(dev, dev->ip, 0);
+    eth_input(dev, g_frame, len);
+
+    int sock = net_sock_open(NET_AF_INET, NET_SOCK_STREAM, IP_PROTO_TCP);
+    KTEST_ASSERT(sock >= 0);
+
+    capture_begin(dev);
+    net_sock_connect(sock, peer_ip(dev), 9999);
+    uint16_t port = sent_tcp_sport();
+    uint32_t seq = sent_tcp_seq() + 1;
+    capture_end(dev);
+
+    len = tcp_frame(dev, 9999, port, 0x14 /* ACK|RST */, 0, seq, 0, 0);
+    eth_input(dev, g_frame, len);
+
+    // The distinction the caller acts on: "nothing is listening there"
+    // sends you to check the port, "reset" sends you to try again.
+    KTEST_ASSERT_EQ(net_sock_connect_state(sock), -ECONNREFUSED);
+    net_sock_close(sock);
+}
+
+KTEST("tcp", "a stream socket refuses the wrong protocol, and a datagram refuses connect") {
+    KTEST_ASSERT(net_sock_open(NET_AF_INET, NET_SOCK_STREAM, IP_PROTO_UDP) < 0);
+    int udp = net_sock_open(NET_AF_INET, NET_SOCK_DGRAM, IP_PROTO_UDP);
+    KTEST_ASSERT(udp >= 0);
+    KTEST_ASSERT(net_sock_connect(udp, NET_IPV4(10, 0, 2, 2), 80) < 0);
+    KTEST_ASSERT(!net_sock_is_stream(udp));
+    net_sock_close(udp);
 }

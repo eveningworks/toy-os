@@ -72,6 +72,7 @@ void arp_cache_flush(void);
 // --- IPv4 (ipv4.c) ----------------------------------------------------
 
 #define IP_PROTO_ICMP 1
+#define IP_PROTO_TCP  6
 #define IP_PROTO_UDP  17
 
 // The IPv4 broadcast address, which routing and ARP both special-case:
@@ -133,6 +134,44 @@ int udp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
 int udp_output(struct net_device *dev, uint32_t dst_ip, uint16_t dst_port,
                uint16_t src_port, const void *payload, uint32_t len);
 
+// --- TCP (tcp.c) ------------------------------------------------------
+//
+// Client side only: an active open, an in-order byte stream, and
+// retransmission. See tcp.c for what it deliberately is not.
+
+#define TCP_STATE_CLOSED      0
+#define TCP_STATE_SYN_SENT    1
+#define TCP_STATE_ESTABLISHED 2
+#define TCP_STATE_FIN_WAIT_1  3
+#define TCP_STATE_FIN_WAIT_2  4
+#define TCP_STATE_CLOSE_WAIT  5
+#define TCP_STATE_LAST_ACK    6
+
+int  tcp_open(uint16_t local_port);      // a connection block, or -errno
+void tcp_release(int idx);
+int  tcp_state(int idx);
+int  tcp_error(int idx);   // -ECONNREFUSED / -ECONNRESET, or 0
+int  tcp_connect(int idx, uint32_t ip, uint16_t port);   // starts the handshake
+// Bytes accepted into the send buffer, or -errno (-EAGAIN when it is
+// full). Nothing here blocks; the syscall layer does the waiting.
+int  tcp_send(int idx, const void *buf, uint32_t len);
+// Bytes taken, 0 at END OF STREAM (the peer sent FIN), or -errno --
+// -EAGAIN meaning "nothing yet", which is what a caller waits on.
+int  tcp_recv(int idx, void *buf, uint32_t cap);
+void tcp_close(int idx);
+
+// Retransmission and anything ARP deferred. Called from net_poll().
+void tcp_tick(void);
+
+// The earliest retransmit deadline across all connections, so a blocked
+// reader can park until then -- which is what drives TCP's timers in a
+// kernel with no softirq. 0 when nothing is outstanding.
+uint64_t tcp_next_deadline(void);
+
+// Returns 1 if a connection took the segment, 0 if none matched.
+int tcp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
+              const uint8_t *pkt, uint32_t len);
+
 // --- sockets (socket.c) ----------------------------------------------
 //
 // The kernel half of SYS_SOCKET/SYS_SENDTO/SYS_RECVFROM. A socket here
@@ -141,6 +180,7 @@ int udp_output(struct net_device *dev, uint32_t dst_ip, uint16_t dst_port,
 
 #define NET_AF_INET     2
 #define NET_SOCK_DGRAM  2
+#define NET_SOCK_STREAM 1
 
 // Ephemeral ports live in abi/net_abi.h: a caller sees the number
 // SYS_BIND hands back, so the range is part of the contract.
@@ -154,6 +194,15 @@ void net_sock_close(int sock);
 // address). A port of 0 asks the kernel to pick an ephemeral one; a
 // NULL or empty `dev` means any. -EADDRINUSE if the port is taken.
 int net_sock_bind(int sock, uint32_t addr, uint16_t port, const char *dev);
+
+// Stream sockets. connect() STARTS the handshake and returns at once;
+// net_sock_connect_state() says where it got to, so the waiting is the
+// syscall layer's as it is for a receive.
+int net_sock_is_stream(int sock);
+int net_sock_connect(int sock, uint32_t ip, uint16_t port);
+int net_sock_connect_state(int sock);   // 0, -EAGAIN, or the failure
+int net_sock_stream_send(int sock, const void *buf, uint32_t len);
+int net_sock_stream_recv(int sock, void *buf, uint32_t cap);
 
 int net_sock_sendto(int sock, uint32_t dst_ip, uint16_t dst_port,
                     const void *buf, uint32_t len);
@@ -172,6 +221,13 @@ int net_sock_recvfrom(int sock, void *buf, uint32_t cap,
 // interrupted repeatedly would never time out.
 uint64_t net_sock_deadline(int sock);
 void net_sock_set_deadline(int sock, uint64_t ns);
+
+// The instant a blocked wait should actually be released: the caller's
+// own deadline, or TCP's next retransmit, whichever is SOONER. This is
+// what makes "the timers ride the receive" true -- a process waiting
+// for data wakes in time to retransmit, does it inside net_poll(), and
+// parks again.
+uint64_t net_wait_deadline(uint64_t caller_deadline);
 
 // ICMP delivers an echo reply here; returns 1 if a socket wanted it.
 int net_sock_deliver(uint8_t proto, uint32_t src_ip, const uint8_t *data, uint32_t len);

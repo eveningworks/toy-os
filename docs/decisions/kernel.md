@@ -5329,3 +5329,56 @@ The fix is to zero the whole slot at allocation rather than to clear the
 one field, because the bug is the pattern and not the field: any future
 per-description flag would inherit exactly the same way, and the next
 one might not have a symptom this loud.
+
+## TCP's timers ride the blocking receive
+
+A TCP connection needs a clock: retransmission is the whole difference
+between TCP and a datagram with sequence numbers. This kernel has no
+softirq, no timer wheel and no kernel threads, so there was no obvious
+place to put one.
+
+Three options were weighed. **A periodic tick from the timer IRQ** is
+BSD's `tcp_slowtimo`/`tcp_fasttimo` and is correct regardless of what
+any process is doing — but retransmitting means building a segment and
+handing it to a driver, so the whole stack would run in interrupt
+context, which is exactly the property the receive path was designed to
+avoid. **A kernel timer process** would put the work in a normal
+context, at the cost of adding a scheduled entity that exists only to
+tick, in a kernel that has deliberately avoided kernel threads.
+
+What was built is the third: **the process waiting for data is the one
+that drives the connection.** A blocked reader parks until
+`net_wait_deadline()` — its own timeout, or the earliest retransmit
+across all connections, whichever comes first — wakes, runs `tcp_tick()`
+inside `net_poll()`, and parks again. It reuses the bounded wait added
+for the blocking receive, costs nothing when nothing is outstanding, and
+keeps every line of TCP in process context.
+
+**The gap this leaves is real and is stated where it happens: a
+connection nobody is reading has nobody to wake it**, so its retransmits
+wait for the idle loop. For a client that is survivable — a client is by
+definition waiting for its response. It is exactly what a server could
+not do, which is the same boundary that made listen/accept a separate
+piece of work rather than half of this one.
+
+## A connection block outlives its socket
+
+`close()` on a TCP socket cannot free the connection: the peer is still
+owed a FIN, and the FIN is still owed an acknowledgement. So the block
+is marked an ORPHAN and the stack keeps driving it after the application
+has gone.
+
+Something then has to reclaim it, and "when it reaches CLOSED" is not
+enough — a peer that vanished never acknowledges anything. Real stacks
+hold the block through TIME_WAIT for two maximum segment lifetimes
+(minutes) so a delayed duplicate cannot be mistaken for part of a new
+connection. That is the right answer for a host with thousands of
+connection blocks and the wrong one here: there are four, and holding
+one for two minutes because a peer went away would exhaust the pool long
+before it protected anything. The linger is 2 seconds.
+
+It was found the way these things usually are: the seventh TCP KTEST
+failed with `-ENOSPC` while the six before it passed, because each had
+left a block behind. The tests now complete the close — the fake peer
+acknowledges the FIN and sends its own — which is both a better test and
+what stopped them leaking.

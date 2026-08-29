@@ -45,6 +45,11 @@
 // loops a write to completion and a short read is Unix's rule
 // everywhere. A fragmented heap therefore costs throughput rather than
 // turning a write into -ENOMEM.
+// Defined below, beside the other socket handlers; declared here
+// because SYS_READ reaches it too -- a connected stream is a stream.
+static int stream_read(struct syscall_ctx *c, int sock, uint64_t ubuf,
+                       uint32_t cap, uint32_t timeout_ms, int nonblock);
+
 static void *bounce_alloc(uint64_t *len) {
     uint64_t want = *len ? *len : 1;
     for (;;) {
@@ -805,6 +810,29 @@ int sys_write(struct syscall_ctx *c) {
     case FD_KIND_KLOG:
         sys_do_write_console(c->regs, pml4, f->kind, buf_ptr, len);
         break;
+    case FD_KIND_SOCKET: {
+        // The write half of the same rule as read(). It does NOT park:
+        // the send buffer takes what it can and reports the count, and
+        // a short write is a stream's own convention -- libsys loops.
+        if (!net_sock_is_stream(f->socket.idx)) {
+            klog_write("syscall: write() rejected -- a datagram socket needs sendto()\n");
+            c->regs[14] = (uint64_t)(int64_t)-EBADF;
+            break;
+        }
+        uint64_t n = len;
+        char *kbuf = bounce_alloc(&n);
+        if (!kbuf) { c->regs[14] = (uint64_t)(int64_t)-ENOMEM; break; }
+        if (vmm_copy_from_user(pml4, kbuf, buf_ptr, n) < 0) {
+            kfree(kbuf);
+            c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+            break;
+        }
+        int rc = net_sock_stream_send(f->socket.idx, kbuf, (uint32_t)n);
+        kfree(kbuf);
+        net_poll();   // put it on the wire before returning
+        c->regs[14] = (uint64_t)(int64_t)rc;
+        break;
+    }
     case FD_KIND_PIPE_W:
         // The one write that can PARK its caller, so its return value
         // is this function's -- exactly as the pipe read is.
@@ -872,6 +900,20 @@ int sys_read(struct syscall_ctx *c) {
     case FD_KIND_TTY_SLAVE:
         // What was typed at it -- whole lines in canonical mode.
         return sys_do_read_pty_slave(c->regs, pml4, f->pty.idx, buf_ptr, len, f->nonblock);
+
+    case FD_KIND_SOCKET:
+        // A CONNECTED STREAM IS A STREAM. POSIX guarantees read() and
+        // write() work on one, and honouring that is what lets code
+        // written against descriptors -- a pager, a copy loop, anything
+        // taking an fd -- use a socket without knowing it has one. A
+        // DATAGRAM socket still refuses: a read that cannot say who
+        // sent it is not a datagram interface.
+        if (!net_sock_is_stream(f->socket.idx)) {
+            klog_write("syscall: read() rejected -- a datagram socket needs recvfrom()\n");
+            c->regs[14] = (uint64_t)(int64_t)-EBADF;
+            return 0;
+        }
+        return stream_read(c, f->socket.idx, buf_ptr, (uint32_t)len, 0, f->nonblock);
 
     case FD_KIND_PIPE_R:
         // Reads from the pipe, and BLOCKS when it is empty with a
@@ -1130,6 +1172,53 @@ int sys_sendto(struct syscall_ctx *c) {
     return 0;
 }
 
+// A STREAM READ, shared by SYS_READ and SYS_RECVFROM so a connected
+// socket behaves the same whichever the caller reaches for. Returns 1
+// when it parked the caller, 0 when it wrote a result.
+//
+// The park's deadline is net_wait_deadline(): the caller's own timeout
+// OR TCP's next retransmit, whichever is sooner. That is what drives
+// this stack's timers -- the process waiting for data is the one that
+// wakes up in time to retransmit, and it does the work in net_poll()
+// on its way back in.
+static int stream_read(struct syscall_ctx *c, int sock, uint64_t ubuf,
+                       uint32_t cap, uint32_t timeout_ms, int nonblock) {
+    if (cap > SYS_NET_MSG_MAX) cap = SYS_NET_MSG_MAX;
+    net_poll();
+
+    uint8_t *kbuf = kmalloc(cap ? cap : 1);
+    if (!kbuf) { c->regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
+    int rc = net_sock_stream_recv(sock, kbuf, cap);
+
+    if (rc == -EAGAIN && !nonblock) {
+        kfree(kbuf);
+        uint64_t deadline = net_sock_deadline(sock);
+        uint64_t now = clocksource_now_ns();
+        if (!deadline && timeout_ms) {
+            deadline = now + (uint64_t)timeout_ms * 1000000ull;
+            net_sock_set_deadline(sock, deadline);
+        }
+        if (deadline && now >= deadline) {
+            net_sock_set_deadline(sock, 0);
+            c->regs[14] = 0;              // waited as asked, nothing came
+            return 0;
+        }
+        if (scheduler_block_current_until(c->regs, net_wait_chan(),
+                                          SCHED_WAIT_NET, net_wait_deadline(deadline)))
+            return 1;
+        net_sock_set_deadline(sock, 0);
+        c->regs[14] = 0;                  // no slot: cannot wait
+        return 0;
+    }
+
+    if (rc == -EAGAIN) rc = 0;            // non-blocking: nothing yet
+    if (rc > 0 && vmm_copy_to_user(c->pml4, ubuf, kbuf, (uint64_t)rc) < 0) rc = -EFAULT;
+    kfree(kbuf);
+    net_sock_set_deadline(sock, 0);
+    c->regs[14] = (uint64_t)(int64_t)rc;
+    return 0;
+}
+
 int sys_recvfrom(struct syscall_ctx *c) {
     int sock = sock_of_fd(c, (int)c->a0);
     if (sock < 0) { c->regs[14] = (uint64_t)(int64_t)-EBADF; return 0; }
@@ -1140,6 +1229,11 @@ int sys_recvfrom(struct syscall_ctx *c) {
         return 0;
     }
     if (m.len > SYS_NET_MSG_MAX) m.len = SYS_NET_MSG_MAX;
+
+    if (net_sock_is_stream(sock)) {
+        struct open_file *sf = fd_get(c->pml4, (int)c->a0);
+        return stream_read(c, sock, m.buf, m.len, m.timeout_ms, sf && sf->nonblock);
+    }
 
     // Run the stack before looking: a reply that arrived while this
     // process was not scheduled is sitting in the receive queue, and a
@@ -1223,6 +1317,55 @@ int sys_bind(struct syscall_ctx *c) {
     }
     m.dev[sizeof m.dev - 1] = 0;
     c->regs[14] = (uint64_t)(int64_t)net_sock_bind(sock, m.addr, m.port, m.dev);
+    return 0;
+}
+
+int sys_connect(struct syscall_ctx *c) {
+    int sock = sock_of_fd(c, (int)c->a0);
+    if (sock < 0) { c->regs[14] = (uint64_t)(int64_t)-EBADF; return 0; }
+
+    struct net_msg m;
+    if (vmm_copy_from_user(c->pml4, &m, c->a1, sizeof m) < 0) {
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+
+    net_poll();
+    int state = net_sock_connect_state(sock);
+    if (state == -ENOTCONN) {
+        // Not started yet: this is the first entry. Every later entry
+        // is a RE-RUN after a wake, which must not start a second
+        // handshake -- so the decision is made from the connection's
+        // own state rather than from a flag this handler would have to
+        // keep across a park.
+        int rc = net_sock_connect(sock, m.addr, m.port);
+        if (rc < 0) { c->regs[14] = (uint64_t)(int64_t)rc; return 0; }
+        state = -EAGAIN;
+    }
+    if (state != -EAGAIN) {
+        net_sock_set_deadline(sock, 0);
+        c->regs[14] = (uint64_t)(int64_t)state;   // 0, or why it failed
+        return 0;
+    }
+
+    uint64_t deadline = net_sock_deadline(sock);
+    uint64_t now = clocksource_now_ns();
+    if (!deadline) {
+        uint32_t ms = m.timeout_ms ? m.timeout_ms : SYS_NET_CONNECT_MS;
+        deadline = now + (uint64_t)ms * 1000000ull;
+        net_sock_set_deadline(sock, deadline);
+    }
+    if (now >= deadline) {
+        net_sock_set_deadline(sock, 0);
+        c->regs[14] = (uint64_t)(int64_t)-ECONNRESET;   // nobody answered
+        return 0;
+    }
+    if (scheduler_block_current_until(c->regs, net_wait_chan(),
+                                      SCHED_WAIT_NET, net_wait_deadline(deadline)))
+        return 1;
+
+    net_sock_set_deadline(sock, 0);
+    c->regs[14] = (uint64_t)(int64_t)-EAGAIN;   // no slot: cannot wait
     return 0;
 }
 

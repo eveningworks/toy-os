@@ -138,6 +138,7 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_RECVFROM]      = { "recvfrom",      sys_recvfrom,      { A_FD, A_HEX } },
     [SYS_NET_CONFIG]    = { "net_config",    sys_net_config,    { A_HEX } },
     [SYS_BIND]          = { "bind",          sys_bind,          { A_FD, A_HEX } },
+    [SYS_CONNECT]       = { "connect",       sys_connect,       { A_FD, A_HEX } },
 };
 
 #define SYSCALL_TABLE_COUNT (sizeof SYSCALL_TABLE / sizeof SYSCALL_TABLE[0])

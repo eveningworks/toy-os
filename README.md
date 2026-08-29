@@ -151,14 +151,14 @@ signals, threads and job control; `mmap` with file-backed demand
 paging; dynamic linking, with tolibc shipped as `/lib/libc.so`; a TTY
 layer with pseudo-terminals, so `Ctrl-C` interrupts a job and a
 full-screen editor runs in a Terminal window; sound, including DOOM
-with music; networking, on two NIC drivers -- UDP, DHCP and DNS, so
-`ping example.com` resolves a real name and reaches it. And the test
-suite: a few hundred in-kernel tests, the
+with music; networking, on two NIC drivers -- UDP, TCP, DHCP and DNS,
+so `wget http://example.com/` fetches a real page off the real
+internet. And the test suite: a few hundred in-kernel tests, the
 ring-3 diagnostics, and the GUI tools `gui_regress.py` runs as one
 table.
 
-**Known gaps** — no SMP. Networking stops below TCP: datagrams work and
-streams do not, so there is no HTTP client, no sockets that block, and
+**Known gaps** — no SMP. Networking is client-side only: TCP has no
+listen/accept, so nothing can connect TO toy-os, and there is no TLS.
 `dhcp` does not renew its lease or run at boot. USB is xHCI with a HID boot
 keyboard and mouse, hubs and hot-plug, but no mass storage and no HID
 report-descriptor parsing. Dynamic linking is eager-binding with no

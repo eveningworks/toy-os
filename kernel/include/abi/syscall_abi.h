@@ -449,6 +449,18 @@ struct sys_dirent {
                        // the clock. Interruptible: a signal rewinds
                        // the call. SYS_SET_NONBLOCK restores the old
                        // poll-and-return-0 behaviour.
+#define SYS_CONNECT 86 // RDI = fd, RSI = a `struct net_msg *`: `addr` and
+                       // `port` are the peer's. BLOCKS until the
+                       // handshake completes, `timeout_ms` bounds it
+                       // (0 uses a default), and 0 comes back on
+                       // success. -ECONNREFUSED when a RST answered the
+                       // SYN, -ECONNRESET when nobody answered at all,
+                       // -ETIMEDOUT is deliberately NOT distinguished
+                       // from the latter. Stream sockets only.
+                       //
+                       // Once connected, SYS_READ and SYS_WRITE work on
+                       // the fd, which is what POSIX guarantees and what
+                       // lets code written against descriptors use one.
 #define SYS_BIND   85 // RDI = fd, RSI = a `struct net_msg *`: `addr` is
                        // the local address (0 for any), `port` the
                        // local port (0 asks the kernel to pick an

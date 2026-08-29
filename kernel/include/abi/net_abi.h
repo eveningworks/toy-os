@@ -17,6 +17,8 @@
 #define NET_ABI_SOCK_DGRAM   2
 #define NET_ABI_IPPROTO_ICMP 1
 #define NET_ABI_IPPROTO_UDP  17
+#define NET_ABI_SOCK_STREAM  1
+#define NET_ABI_IPPROTO_TCP  6
 
 #define NET_ABI_NAME_MAX 8   // "net0" -- matches NET_NAME_MAX
 
@@ -30,6 +32,10 @@
 // IANA's range; Linux uses 32768-60999 and nothing here wants the
 // wider one. In the ABI because a caller can SEE the number it was
 // given, so it is part of the contract rather than an internal choice.
+// How long SYS_CONNECT waits when the caller names no timeout. Six
+// retransmits of a SYN at a doubling 200 ms floor is about this.
+#define SYS_NET_CONNECT_MS 10000
+
 #define NET_PORT_EPHEMERAL_LO 49152
 #define NET_PORT_EPHEMERAL_HI 65535
 

@@ -194,6 +194,7 @@ int sys_recv(struct syscall_ctx *c);
 int sys_sendto(struct syscall_ctx *c);
 int sys_recvfrom(struct syscall_ctx *c);
 int sys_bind(struct syscall_ctx *c);
+int sys_connect(struct syscall_ctx *c);
 int sys_net_config(struct syscall_ctx *c);
 int sys_pipe(struct syscall_ctx *c);
 

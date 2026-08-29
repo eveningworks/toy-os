@@ -60,6 +60,13 @@ THE PHASES, and what a broken build would still pass
      when the host cannot resolve -- an offline machine is not a bug in
      this OS -- but the "no nameserver configured" path is checked
      unconditionally, because that one needs nothing but the guest.
+ 10. TCP, against a REAL HTTP SERVER on the host -- python's own
+     http.server, which shares no code with this OS and will simply not
+     answer a malformed handshake. Deliberately local rather than a site
+     on the internet: the suite must not depend on this machine having
+     connectivity. The capture is then checked for a genuine three-way
+     handshake and for TCP checksums recomputed here, which is the same
+     pseudo-header trap UDP has.
 
     python3 tools/net_test.py
     echo $?
@@ -521,6 +528,18 @@ def udp_echo_server(port, deadline_s=45.0):
     return t, got
 
 
+def tcp_checksum_ok(frame):
+    """Recompute a captured segment's TCP checksum, pseudo-header and
+    all. TCP has no length field of its own, so the covered length comes
+    from the IP total length minus the header -- which is exactly the
+    step an implementation can get wrong while agreeing with itself."""
+    ihl = (frame[14] & 0x0F) * 4
+    total = struct.unpack(">H", frame[16:18])[0]
+    seg = frame[14 + ihl:14 + total]
+    pseudo = frame[26:34] + b"\x00\x06" + struct.pack(">H", len(seg))
+    return checksum(pseudo + seg) == 0
+
+
 def udp_checksum_ok(frame):
     """Recompute a captured datagram's UDP checksum, pseudo-header and
     all. Independent of the guest by construction."""
@@ -711,6 +730,114 @@ def phase_dns(r, disk, tmp):
         sh.close()
 
 
+HTTP_PORT = 18088
+HTTP_BODY = b"toy-os fetched this\n" * 4
+
+
+def http_server(port, deadline_s=60.0):
+    """A real HTTP server on the host, as the far end of the guest's
+    connection. Python's own http.server: an independent implementation
+    that will not complete a handshake this OS gets wrong, and will not
+    answer a request it cannot parse."""
+    import http.server
+    import socketserver
+    import threading
+
+    state = {"served": 0}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.0"
+
+        def do_GET(self):
+            state["served"] += 1
+            state["path"] = self.path
+            state["agent"] = self.headers.get("User-Agent", "")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(HTTP_BODY)))
+            self.end_headers()
+            self.wfile.write(HTTP_BODY)
+
+        def log_message(self, *a):
+            pass
+
+    socketserver.TCPServer.allow_reuse_address = True
+    srv = socketserver.TCPServer(("127.0.0.1", port), Handler)
+    srv.timeout = deadline_s
+    t = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.2},
+                         daemon=True)
+    t.start()
+    return srv, state
+
+
+def phase_tcp(r, disk, tmp):
+    pcap = os.path.abspath(os.path.join(tmp, "net_tcp.pcap"))
+    srv, state = http_server(HTTP_PORT)
+    sh, pidfile = launch(disk, tmp, "tcp", "e1000", pcap)
+    try:
+        out = sh.run(f"wget http://{GATEWAY}:{HTTP_PORT}/toyos", timeout=60.0)
+        r.check("[tcp] the guest fetched the page",
+                "toy-os fetched this" in out, out.strip()[-400:])
+        # THE HOST'S VIEW, which a guest agreeing with itself cannot fake:
+        # python parsed a real request off a real connection.
+        r.check("[tcp] a real HTTP server on the host served the request",
+                state.get("served", 0) >= 1, str(state))
+        r.check("[tcp] and saw the path and agent the guest sent",
+                state.get("path") == "/toyos" and "toy-os" in state.get("agent", ""),
+                str(state))
+
+        # -O writes it to the guest's own filesystem, read back with a
+        # different program -- so "the bytes arrived" is checked through
+        # something that never touched the socket.
+        sh.run(f"wget -O /tmp/fetched.txt http://{GATEWAY}:{HTTP_PORT}/f", timeout=60.0)
+        out = sh.run("cat /tmp/fetched.txt")
+        r.check("[tcp] a fetched body lands on disk intact",
+                out.count("toy-os fetched this") >= 4, out.strip()[-300:])
+
+        # Nothing listens on port 9. A RST must become "refused" rather
+        # than a timeout -- different codes, different fixes.
+        out = sh.run(f"wget http://{GATEWAY}:9/nope", timeout=40.0)
+        r.check("[tcp] a refused connection says so, and does not hang",
+                "refused" in out, out.strip()[-300:])
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        kill(pidfile)
+        sh.close()
+        time.sleep(1.0)
+
+    frames = read_pcap(pcap)
+    segs = []
+    for f in frames:
+        if len(f) < 34 or struct.unpack(">H", f[12:14])[0] != 0x0800 or f[23] != 6:
+            continue
+        ihl = (f[14] & 0x0F) * 4
+        tcp = f[14 + ihl:]
+        total = struct.unpack(">H", f[16:18])[0]
+        tcp = tcp[:total - ihl]
+        segs.append({
+            "src": struct.unpack(">I", f[26:30])[0],
+            "flags": tcp[13],
+            "ok": tcp_checksum_ok(f),
+        })
+
+    ours = [x for x in segs if x["src"] == ipv4(GUEST_IP)]
+    r.check("[tcp] segments reached the wire", len(ours) >= 3, f"{len(segs)} TCP frames")
+    # A real handshake: our SYN, their SYN+ACK, our ACK. A stack that
+    # merely emitted something would pass the fetch check if the server
+    # were forgiving; python is not, but the capture says it outright.
+    r.check("[tcp] the guest sent a bare SYN and later a FIN",
+            any(x["flags"] == 0x02 for x in ours) and
+            any(x["flags"] & 0x01 for x in ours),
+            str(sorted({x["flags"] for x in ours})))
+    r.check("[tcp] the peer answered SYN+ACK",
+            any(x["src"] != ipv4(GUEST_IP) and x["flags"] == 0x12 for x in segs),
+            str(sorted({x["flags"] for x in segs if x["src"] != ipv4(GUEST_IP)})))
+    # Same pseudo-header trap as UDP, recomputed here.
+    r.check("[tcp] every segment carries a valid checksum over the pseudo-header",
+            all(x["ok"] for x in segs), f"{len(segs)} checked")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -744,6 +871,8 @@ def main():
         phase_dhcp(r, disk, tmp)
         print("Phase 9: DNS")
         phase_dns(r, disk, tmp)
+        print("Phase 10: TCP, against a real HTTP server on the host")
+        phase_tcp(r, disk, tmp)
     finally:
         if not args.keep:
             shutil.rmtree(tmp, ignore_errors=True)

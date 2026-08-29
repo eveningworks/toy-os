@@ -16,7 +16,7 @@
 // costs a memcpy per frame and buys the driver its DMA buffer back
 // immediately, which is what stops a slow consumer stalling the ring.
 #include "netdev.h"
-#include "net.h"
+#include "net.h"   // eth_input(), tcp_tick()
 #include "klog.h"
 #include "scheduler.h"   // scheduler_wake() -- interrupt-safe, by contract
 #include "syscall_abi.h" // SYS_RETRY
@@ -138,6 +138,11 @@ void net_poll(void) {
 
     for (int i = 0; i < g_count; i++)
         if (g_devs[i]->poll) g_devs[i]->poll(g_devs[i]);
+
+    // Retransmission and any segment ARP deferred. BEFORE the drain, so
+    // a process woken by its own retransmit deadline does the work it
+    // woke up for even when no frame arrived.
+    tcp_tick();
 
     while (g_rx_head != g_rx_tail) {
         struct rx_slot *s = &g_rxq[g_rx_head];

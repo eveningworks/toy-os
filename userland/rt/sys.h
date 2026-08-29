@@ -316,6 +316,11 @@ int64_t sys_sendto(int fd, const void *buf, size_t len, uint32_t dst_ip, uint16_
 // poll-and-return-0 behaviour for a caller that wants it.
 int64_t sys_recvfrom(int fd, void *buf, size_t cap, uint32_t *out_src,
                      uint16_t *out_port, unsigned timeout_ms);
+// Connect a STREAM socket. Blocks until the handshake finishes;
+// `timeout_ms` of 0 uses the kernel's default. Afterwards read() and
+// write() work on the fd, as POSIX guarantees -- so code taking a
+// descriptor can be handed one.
+int sys_connect(int fd, uint32_t ip, uint16_t port, unsigned timeout_ms);
 // A local port (0 picks an ephemeral one), optionally on ONE device --
 // SO_BINDTODEVICE, which is what a DHCP client needs. Returns the port.
 int sys_bind(int fd, uint32_t addr, uint16_t port, const char *dev);

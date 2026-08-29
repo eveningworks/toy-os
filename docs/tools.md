@@ -2551,6 +2551,15 @@ window without going through it will find its layout polls timing out.
   OS -- while still checking the "no nameserver configured" path, which
   needs nothing but the guest.
 
+  **Phase 10 is TCP**, against python's own `http.server` on the host --
+  local rather than a site on the internet, because the suite must not
+  depend on this machine having connectivity (the DNS phase, which
+  genuinely does, SKIPS instead). An independent server will not
+  complete a handshake the guest gets wrong, and the capture is checked
+  for a real three-way handshake plus TCP checksums recomputed here over
+  the pseudo-header -- the same trap UDP has, made worse by TCP having
+  no length field of its own.
+
   It found four real defects while being written: the ARP storm above; a
   sequence number burned by every retried send, so a capture showed a
   ping starting at 4; sockets never released on close, so the third run

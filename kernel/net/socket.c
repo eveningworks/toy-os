@@ -43,6 +43,7 @@ struct socket {
     uint8_t proto;          // IP_PROTO_ICMP or IP_PROTO_UDP
     uint16_t id;            // ICMP: the echo identifier
     uint16_t seq;           // ICMP: the last sequence actually sent
+    int tcp;                // a stream socket's connection block, else -1
     uint64_t deadline_ns;   // a blocked receive's ceiling; 0 = none
     uint32_t local_addr;    // UDP: 0 means any
     uint16_t local_port;    // UDP: 0 means unbound
@@ -107,8 +108,14 @@ static uint16_t ephemeral_port(int except) {
 }
 
 int net_sock_open(int domain, int type, int protocol) {
-    if (domain != NET_AF_INET || type != NET_SOCK_DGRAM) return -EINVAL;
-    if (protocol != IP_PROTO_ICMP && protocol != IP_PROTO_UDP) return -EINVAL;
+    if (domain != NET_AF_INET) return -EINVAL;
+    if (type == NET_SOCK_DGRAM) {
+        if (protocol != IP_PROTO_ICMP && protocol != IP_PROTO_UDP) return -EINVAL;
+    } else if (type == NET_SOCK_STREAM) {
+        if (protocol != IP_PROTO_TCP) return -EINVAL;
+    } else {
+        return -EINVAL;
+    }
 
     for (int i = 0; i < SOCK_MAX; i++) {
         if (g_socks[i].in_use) continue;
@@ -116,6 +123,7 @@ int net_sock_open(int domain, int type, int protocol) {
         g_socks[i].in_use = 1;
         g_socks[i].proto = (uint8_t)protocol;
         g_socks[i].id = (uint16_t)(SOCK_ID_BASE + i);
+        g_socks[i].tcp = -1;
         return i;
     }
     return -ENOSPC;
@@ -123,7 +131,61 @@ int net_sock_open(int domain, int type, int protocol) {
 
 void net_sock_close(int sock) {
     if (sock < 0 || sock >= SOCK_MAX) return;
+    // A stream is CLOSED, not abandoned: the peer is owed a FIN, and
+    // tcp_close() keeps the connection block alive long enough to send
+    // it and see it acknowledged.
+    if (g_socks[sock].tcp >= 0) tcp_close(g_socks[sock].tcp);
     k_memset(&g_socks[sock], 0, sizeof g_socks[sock]);
+    g_socks[sock].tcp = -1;
+}
+
+int net_sock_is_stream(int sock) {
+    struct socket *s = sock_at(sock);
+    return s && s->proto == IP_PROTO_TCP;
+}
+
+int net_sock_connect(int sock, uint32_t ip, uint16_t port) {
+    struct socket *s = sock_at(sock);
+    if (!s) return -EBADF;
+    if (s->proto != IP_PROTO_TCP) return -EINVAL;
+    if (s->tcp >= 0) return -EBUSY;
+    if (!ip || !port) return -EINVAL;
+
+    if (!s->local_port) {
+        s->local_port = ephemeral_port(sock);
+        if (!s->local_port) return -ENOSPC;
+    }
+    int idx = tcp_open(s->local_port);
+    if (idx < 0) return idx;
+    int rc = tcp_connect(idx, ip, port);
+    if (rc < 0) { tcp_release(idx); return rc; }
+    s->tcp = idx;
+    return 0;
+}
+
+// Where the handshake has got to: 0 established, -EAGAIN still trying,
+// or the error that ended it.
+int net_sock_connect_state(int sock) {
+    struct socket *s = sock_at(sock);
+    if (!s) return -EBADF;
+    if (s->tcp < 0) return -ENOTCONN;
+    int err = tcp_error(s->tcp);
+    if (err) return err;
+    return tcp_state(s->tcp) == TCP_STATE_ESTABLISHED ? 0 : -EAGAIN;
+}
+
+int net_sock_stream_send(int sock, const void *buf, uint32_t len) {
+    struct socket *s = sock_at(sock);
+    if (!s) return -EBADF;
+    if (s->tcp < 0) return -ENOTCONN;
+    return tcp_send(s->tcp, buf, len);
+}
+
+int net_sock_stream_recv(int sock, void *buf, uint32_t cap) {
+    struct socket *s = sock_at(sock);
+    if (!s) return -EBADF;
+    if (s->tcp < 0) return -ENOTCONN;
+    return tcp_recv(s->tcp, buf, cap);
 }
 
 int net_sock_bind(int sock, uint32_t addr, uint16_t port, const char *dev) {
@@ -213,6 +275,13 @@ int net_sock_recvfrom(int sock, void *buf, uint32_t cap,
     if (out_port) *out_port = m->port;
     s->head = (s->head + 1) % SOCK_QUEUE;
     return (int)n;
+}
+
+uint64_t net_wait_deadline(uint64_t caller_deadline) {
+    uint64_t tcp = tcp_next_deadline();
+    if (!tcp) return caller_deadline;
+    if (!caller_deadline) return tcp;
+    return tcp < caller_deadline ? tcp : caller_deadline;
 }
 
 uint64_t net_sock_deadline(int sock) {

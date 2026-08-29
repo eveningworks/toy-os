@@ -25,7 +25,7 @@ buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
 - [ ] `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR, not a 64 KiB guess  *(USB)*
-- [ ] **TCP** -- the socket syscalls carry two datagram protocols and a blocking receive now; what is left is the state machine  *(Networking)*
+- [ ] **A passive open: listen and accept**, so something can connect TO toy-os  *(Networking)*
 - [ ] The ring-3 WM busy-waits instead of sleeping -- built on branch `wm-wait-ready`, PARKED: it regresses `uterm`  *(Known limitations and papercuts (unscheduled))*
 - [ ] System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons  *(Known limitations and papercuts (unscheduled))*
 <!-- END next-up -->
@@ -686,14 +686,17 @@ run on, not by order.
 - [x] ~~DHCP client~~ DONE 2026-08-29 -- `/bin/dhcp`, a ring-3 program applying its lease through `SYS_NET_CONFIG`
 - [x] ~~DNS resolver~~ DONE 2026-08-29 -- `userland/lib/uresolv.c`, `/bin/host`, and `ping` by name
 - [x] ~~**A blocking receive**~~ DONE 2026-08-29 -- one wait channel, woken from the driver's ISR; the deadline lives on the socket
-- [ ] **TCP** -- the socket syscalls carry two datagram protocols and a blocking receive now; what is left is the state machine **NEXT**
+- [x] ~~**TCP**~~ DONE 2026-08-29 -- client side: active open, in-order stream, retransmission, orderly close
+- [ ] **A passive open: listen and accept**, so something can connect TO toy-os **NEXT**
+- [ ] Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today
+- [ ] An RTT estimate, and Nagle -- the retransmit timeout is a fixed floor with backoff
 - [ ] Run `dhcp` at boot -- blocked on the desktop-startup write bug in `docs/bugs.md`, not on effort
 - [ ] Renew the lease before it expires -- `/bin/dhcp` asks once and exits
 - [ ] An ICMP error reaching the socket that caused it -- reports are sent, and an arriving one is dropped for want of an error queue
 - [ ] An `arp` command -- the cache is diagnosable only from inside the kernel today
 - [ ] A routing table -- routing is "my subnet, or the gateway", per device
 - [ ] `/etc/hosts`, and a resolver cache -- every lookup goes to the wire
-- [ ] An HTTP client (`wget`-shaped), the first thing that makes the stack useful rather than demonstrable -- needs TCP
+- [x] ~~An HTTP client (`wget`-shaped), the first thing that makes the stack useful rather than demonstrable~~ DONE 2026-08-29
 - [x] ~~A second NIC driver, to prove the interface isn't shaped around the first~~ DONE 2026-08-29 -- both landed together
 
 ### Sound

@@ -131,6 +131,10 @@ static const struct { int code; const char *msg; } g_errmsg[] = {
     { EAGAIN, "try again" },
     { EBUSY,  "device or resource busy" },
     { EINTR,  "interrupted by a signal" },
+    { EPIPE,  "the other end is gone" },
+    { ECONNRESET,   "connection reset by peer" },
+    { ECONNREFUSED, "connection refused" },
+    { ENOTCONN,     "not connected" },
 };
 
 const char *sys_strerror(int e) {
@@ -546,6 +550,19 @@ int64_t sys_recvfrom(int fd, void *buf, size_t cap, uint32_t *out_src,
         if (out_port) *out_port = m.port;
     }
     return rc;
+}
+
+int sys_connect(int fd, uint32_t ip, uint16_t port, unsigned timeout_ms) {
+    struct net_msg m = { .buf = 0, .len = 0, .addr = ip, .port = port,
+                         .pad = 0, .timeout_ms = timeout_ms, .dev = {0} };
+    int64_t r;
+    // Same retry contract as the receive: SYS_RETRY means "you were
+    // woken, ask again", and the handler decides from the connection's
+    // own state rather than restarting the handshake.
+    do {
+        r = syscall2(SYS_CONNECT, (uint64_t)fd, (uint64_t)(uintptr_t)&m);
+    } while (r == SYS_RETRY);
+    return (int)err(r);
 }
 
 int sys_bind(int fd, uint32_t addr, uint16_t port, const char *dev) {

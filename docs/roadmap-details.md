@@ -2588,7 +2588,11 @@ Listed with the honest reason each is or isn't attractive.
 
 - [x] ~~**A blocking receive**~~ -- the wakeup question is answered by having the driver's ISR wake ONE channel for the whole stack and the woken reader run `net_poll()` itself, so protocol code still never runs in interrupt context. `scheduler_block_current_until()` is the new general primitive (Linux's `schedule_timeout()`), and the deadline lives on the SOCKET because a blocking syscall here is re-run rather than resumed. Four clients lost their poll loops. It also exposed a pre-existing bug worth knowing: `fd_desc_alloc()` did not zero the slot, so `nonblock` survived a close and was inherited by the next program's socket -- see `docs/decisions/kernel.md`.
 
-- [ ] **TCP** -- the ABI is settled and the blocking receive is built, so what is left is the state machine itself: the handshake, sequence and acknowledgement numbers, retransmission with a timer, and a receive that reassembles a STREAM rather than handing back whole datagrams. An HTTP client is the thing that would prove it.
+- [x] ~~**TCP**~~ -- client side. `kernel/net/tcp.c`: an active open, an in-order byte stream, retransmission with exponential backoff, and an orderly close. `/bin/wget` is the proof, and `tools/net_test.py`'s tenth phase fetches from python's own `http.server` on the host -- an implementation that will not complete a handshake this OS gets wrong.
+
+  Three things it deliberately does not do, each recorded where it happens: no listen/accept, no out-of-order reassembly (a segment past `rcv_nxt` is dropped and re-acked, so the peer resends it), and no RTT estimate. The timers ride the blocking receive, which is what a kernel with no softirq and no kernel threads has available -- and the honest gap is that a connection nobody is reading has nobody to wake it.
+
+  It found one design bug worth recording: a closed socket's connection block outlives the socket, because the peer is still owed a FIN. With nothing to reclaim it, four dead connections held the whole pool until reboot -- the seventh KTEST got `-ENOSPC`. An orphan is now released at CLOSED or after a 2 s linger.
 
 - [ ] Run `dhcp` at boot -- the obvious next step, and it is blocked on a measured bug rather than on effort: a filesystem write during the desktop's STARTUP wedges the compositor (`docs/bugs.md`, 3 runs in 3), and `/bin/dhcp` writes `/etc/resolv.conf`. Until that is understood, the kernel's boot-time defaults stay and the client is something you run.
 
