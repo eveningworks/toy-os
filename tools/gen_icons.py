@@ -127,6 +127,17 @@ def icon_imgview():
     return im
 
 
+def icon_player():
+    # A speaker cone with two waves -- what the app DOES, and it reads at
+    # 16px where a musical note's stem does not.
+    im, d = tile((90, 130, 185))
+    d.rectangle([16, 26, 24, 38], fill=WHITE)                     # the box
+    d.polygon([(24, 26), (34, 16), (34, 48), (24, 38)], fill=WHITE)  # the cone
+    d.arc([32, 20, 46, 44], start=-60, end=60, fill=INK, width=3)
+    d.arc([36, 14, 54, 50], start=-60, end=60, fill=INK, width=3)
+    return im
+
+
 def icon_about():
     im, d = tile((70, 150, 190))
     d.ellipse([16, 16, 48, 48], outline=WHITE, width=4)
@@ -432,6 +443,7 @@ ICONS = {
     "settings": icon_settings,
     "taskmgr": icon_taskmgr,
     "imgview": icon_imgview,
+    "player": icon_player,
     "about": icon_about,
     "shapes": icon_shapes,
     "fontdemo": icon_fontdemo,

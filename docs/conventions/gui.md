@@ -486,6 +486,35 @@ this the obvious way), not from how much history it accumulated.
   exist. A drag tracks x ONLY (leaving the track vertically must not
   cancel it) and `press` returns non-zero on any hit, because the router
   takes its pointer grab only when press does.
+
+- **A DRAG NEEDS THE BUTTON STILL DOWN, AND THE POINTER GRAB IS NOT
+  THAT FACT.** A widget holds the grab from its `press` to its
+  `release`, so a `dragging` flag only says the press was yours -- a
+  motion can arrive inside that window with nothing held, and a handler
+  that treats it as a drag moves the value to wherever the pointer is.
+  Test the `buttons` mask (`0x1` is primary, `abi/win_proto.h`), which
+  is what `uui_button` has always done. It cost a real check: a click on
+  the right of a volume scale set it to 100 on the press and a
+  button-up motion dragged it back to 0 before the release arrived, so
+  every click after the first reported 0 and the GEOMETRY looked wrong.
+  `uui_slider` had the identical shape and nothing drove it that way.
+
+- **`uui_scale` IS FOR A CONTINUOUS NUMBER; `uui_slider` IS FOR AN
+  ORDERED ENUM.** GTK's split -- `GtkScale` is a value on a range, and a
+  widget for named levels is a different control. `uui_slider`'s value is
+  an INDEX and it draws a tick per stop, which is exactly wrong for a
+  three-minute song; `uui_meter` is a READING and has no `hit`. So a
+  position bar, a volume control or a percentage takes
+  `userland/ui/uui_scale.h`. **It carries NO LABEL** -- the readout is
+  text the app already formats, and reserving a row for it would make the
+  widget's height depend on which strings are set, which is the trap
+  `uui_meter` documents. **A drag reports EVERY motion and the app
+  decides what that means**: volume acts on `UUI_REASON_MOTION` and
+  follows the thumb live, a seek acts on `UUI_REASON_RELEASE` because
+  re-seeking a decoder per pixel is work nobody asked for. Clicking the
+  track JUMPS there, as on every scale outside a Win32 trackbar. Sizes
+  are font-derived, so the thumb is a text row tall rather than ten
+  pixels forever.
 - **A CONTROL BELOW THE FOLD IS UNREACHABLE, not merely hard to hit.**
   A scroll view with a `hit` clips its children from ROUTING, so a press
   never reaches a child outside the viewport -- correct, and the reason
@@ -1192,6 +1221,29 @@ real scanout hardware does. Do not write a pixel assertion for one.
   refuses (progressive JPEG, CMYK, 12-bit), `-EINVAL` is a broken one,
   and `uimg_last_error()` carries the sentence. Formats are identified by
   PROBING magic bytes, not by extension.
+
+- **AUDIO IS DECODED AND MIXED IN RING 3, AND `lib/usnd.h` HAS THREE
+  SEAMS.** The kernel gives out ONE exclusive PCM stream and never mixes,
+  so formats, rate conversion and playing several sounds at once are all
+  this library's -- the same call `uimg.h` makes about images, and what
+  ALSA's dmix, PulseAudio, PipeWire and Windows' audio engine all do.
+  The seams: a **codec table** (`probe/open/read/seek/close`, WAV today,
+  MP3 a file and a row), a **sink** (`usnd_sink.h`, where mixed samples
+  go -- the exclusive device today, a sound daemon as a second row), and
+  **voices** (an eight-voice per-process mixer; with a daemon it becomes
+  the app's submix). **A CODEC NEVER RESAMPLES** -- it reports its file's
+  native rate and yields s16 frames in it, and the library converts once,
+  where every real system puts that stage. **Nothing in the public
+  header names the ring, `hw_pos` or `SND_*`**, which is the whole reason
+  a daemon can arrive without touching an app. **No hardware is not an
+  error**: `usnd_init()` returning -ENODEV (no card) or -EBUSY (another
+  process holds the stream) is ordinary, and an app that wants sound if
+  it can get it ignores the result and plays into silence -- the default
+  boot has no AC97 at all. Errors follow `uimg.h`'s split, `-ENOTSUP`
+  for a good file this build refuses (a float WAV) against `-EINVAL` for
+  a broken one, with the sentence in `usnd_last_error()`. **Long
+  playback is a WORKER THREAD's**, not an `on_tick`'s: a missed refill is
+  audible and the ring is only 341 ms deep.
 
 - **`uui_image` IS THE ONLY WIDGET THAT OWNS MEMORY, AND IT MUST BE
   RELEASED.** It borrows the `struct uimg` (the app decodes and owns

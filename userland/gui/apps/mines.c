@@ -40,6 +40,7 @@
 #include "rt/sys.h"
 #include "ui/ugfx.h"
 #include "ui/uui.h"
+#include "lib/usnd.h"
 #include "ui/uapp.h"
 #include "ui/utheme.h"
 
@@ -217,11 +218,54 @@ static void log_state(const char *what) {
           g_flags, g_revealed, g_boom, g_elapsed);
 }
 
+// --- sound ------------------------------------------------------------
+//
+// The mixer's second real caller (lib/usnd.h): four clips, fired off
+// and overlapping, with no stream involved. A game is why the library
+// mixes at all -- a click landing while the previous one is still
+// ringing is normal, and one voice would cut it.
+//
+// **NO SOUND IS NOT AN ERROR.** The default boot has no AC97 and the
+// stream is exclusive, so `usnd_init()` failing (-ENODEV, or -EBUSY
+// while the Audio Player has it) leaves every clip unloaded and every
+// play a no-op. The game is unchanged; it is just quiet.
+#define SFX_DIR "/usr/share/sounds/"
+
+enum { SFX_CLICK, SFX_FLAG, SFX_BOOM, SFX_WIN, SFX_COUNT };
+
+static struct usnd_clip g_sfx[SFX_COUNT];
+static int g_have_sound;
+
+static void sound_init(void) {
+    static const char *const files[SFX_COUNT] = {
+        SFX_DIR "click.wav", SFX_DIR "flag.wav",
+        SFX_DIR "boom.wav",  SFX_DIR "win.wav",
+    };
+    if (usnd_init() != 0) { ulogf("mines: no sound -- %s\n", usnd_last_error()); return; }
+    g_have_sound = 1;
+    for (int i = 0; i < SFX_COUNT; i++)
+        if (usnd_clip_load(files[i], &g_sfx[i]) != 0)
+            ulogf("mines: %s -- %s\n", files[i], usnd_last_error());
+}
+
+static void sound_free(void) {
+    if (!g_have_sound) return;
+    for (int i = 0; i < SFX_COUNT; i++) usnd_clip_free(&g_sfx[i]);
+    usnd_shutdown();
+}
+
+// Gains are per effect and deliberately not equal: a reveal happens
+// dozens of times a game and a mine happens once.
+static void sfx(int which, int gain) {
+    if (g_have_sound) usnd_clip_play(&g_sfx[which], gain);
+}
+
 static void end_lost(int at) {
     g_phase = PHASE_LOST;
     g_boom = at;
     for (int i = 0; i < cell_count(); i++)
         if (g_mine[i] && g_st[i] != ST_FLAGGED) g_st[i] = ST_REVEALED;
+    sfx(SFX_BOOM, 256);
     log_state("lost");
 }
 
@@ -233,6 +277,7 @@ static void check_won(void) {
     // reading 000 is half of what winning looks like.
     for (int i = 0; i < cell_count(); i++)
         if (g_mine[i] && g_st[i] != ST_FLAGGED) { g_st[i] = ST_FLAGGED; g_flags++; }
+    sfx(SFX_WIN, 224);
     log_state("won");
 }
 
@@ -291,6 +336,7 @@ static void toggle_flag(int i) {
     if (g_st[i] == ST_REVEALED) return;
     if (g_st[i] == ST_FLAGGED) { g_st[i] = ST_COVERED; g_flags--; }
     else                       { g_st[i] = ST_FLAGGED; g_flags++; }
+    sfx(SFX_FLAG, 160);
 }
 
 // --- geometry, all font-derived --------------------------------------
@@ -674,8 +720,13 @@ static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
     if (armed < 0) { uapp_redraw(a); return; }
     if (cell_at(a, x, y) != armed) { uapp_redraw(a); return; } // dragged off
 
+    int before = g_revealed;
     if (g_st[armed] == ST_REVEALED) chord(armed);
     else                            dig(armed);
+    // ONE click per user action, not one per cascaded cell -- a first
+    // click opening forty cells would fire forty voices into eight.
+    // Losing and winning have their own sound and are not also a click.
+    if (g_phase == PHASE_PLAY && g_revealed != before) sfx(SFX_CLICK, 200);
     log_state("dig");
     uapp_redraw(a);
 }
@@ -758,5 +809,8 @@ int main(void) {
         .on_tick      = on_tick,
         .on_resize    = on_resize,
     };
-    return uapp_run(&desc);
+    sound_init();
+    int rc = uapp_run(&desc);
+    sound_free();
+    return rc;
 }

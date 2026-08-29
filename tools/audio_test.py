@@ -14,6 +14,15 @@ cannot fake: a dead DMA engine records silence, a wrong rate records
 the wrong pitch, and a broken consumed-chunk zeroing records the tone
 looping into the tail instead of going quiet.
 
+TWO BOOTS, each with its OWN recording, because one wav file cannot
+hold two tones and be measured by frequency. The first plays
+/tests/tone (the raw ring, no file involved); the second plays
+/tests/sine1k.wav through /bin/aplay, which is the whole of
+userland/lib/usnd.h -- the WAV parser, the 44.1 -> 48 kHz resampler,
+the mixer and the sink. That second one is the sharper check: the
+fixture is 44.1 kHz, so a build that did not resample at all would play
+it 8.8% sharp (1088 Hz), which the tolerance here is set to catch.
+
     python3 tools/audio_test.py [--instance N] [--keep]
 
 On demand, not in the gate: it boots its own guest with extra hardware.
@@ -129,16 +138,23 @@ def main():
     res = Result()
     tmp = tempfile.mkdtemp(prefix="audio_test_")
     wav_path = os.path.join(tmp, "out.wav")
+    wav2_path = os.path.join(tmp, "out_wavplay.wav")
     img = os.path.join(tmp, "disk.img")
     subprocess.run(["cp", "--reflink=auto", "--sparse=always", "disk.img", img],
                    cwd=REPO, check=True)
 
-    subprocess.run([sys.executable, os.path.join(HERE, "vm.py"),
-                    "--instance", str(n), "stop"], capture_output=True)
-    boot = subprocess.run([sys.executable, os.path.join(HERE, "vm.py"),
-                           "--instance", str(n), "--disk", img,
-                           "--audio-wav", wav_path, "start"], cwd=REPO)
-    if boot.returncode != 0:
+    def boot(recording):
+        subprocess.run([sys.executable, os.path.join(HERE, "vm.py"),
+                        "--instance", str(n), "stop"], capture_output=True)
+        return subprocess.run([sys.executable, os.path.join(HERE, "vm.py"),
+                               "--instance", str(n), "--disk", img,
+                               "--audio-wav", recording, "start"], cwd=REPO)
+
+    def halt():
+        subprocess.run([sys.executable, os.path.join(HERE, "vm.py"),
+                        "--instance", str(n), "stop"], capture_output=True)
+
+    if boot(wav_path).returncode != 0:
         res.check("the guest booted with an AC97 attached", False)
         return 1
 
@@ -176,8 +192,40 @@ def main():
                   "played 440Hz" in out, out.strip()[-120:])
         dbg.close()
     finally:
-        subprocess.run([sys.executable, os.path.join(HERE, "vm.py"),
-                        "--instance", str(n), "stop"], capture_output=True)
+        halt()
+
+    # --- second boot: a WAV FILE through the whole library ---------------
+    #
+    # Its own recording, because frequency is how this is judged and one
+    # file cannot carry two tones. /tests/sine1k.wav is 44.1 kHz stereo,
+    # so this exercises the parser, the resampler, the mixer and the sink
+    # in one go -- and the pitch is what catches a resampler that is not
+    # running at all.
+    aplay_out = ""
+    if boot(wav2_path).returncode != 0:
+        res.check("the guest rebooted for the WAV phase", False)
+    else:
+        try:
+            dbg = wait_serial(sock)
+            if res.check("the serial console answers (WAV phase)", dbg is not None):
+                info = dbg.send("sh aplay -i /tests/sine1k.wav") or ""
+                res.check("aplay reads the WAV header",
+                          "wav" in info and "44100" in info,
+                          info.strip()[-120:])
+                # Bare name at a `#` prompt spawns AND waits, so this
+                # returns once the file has played and drained. The
+                # console's own timeout is raised for it: 1.5s of audio
+                # is several wall seconds of TCG.
+                was = dbg.timeout
+                dbg.timeout = 90
+                aplay_out = dbg.send("sh aplay /tests/sine1k.wav") or ""
+                dbg.timeout = was
+                res.check("aplay ran to completion",
+                          "sine1k" in aplay_out and "44100" in aplay_out,
+                          aplay_out.strip()[-120:])
+                dbg.close()
+        finally:
+            halt()
 
     # --- the host-side oracle ------------------------------------------
     rate, secs, hz, tone_peak, tone_secs = measure(wav_path)
@@ -194,8 +242,21 @@ def main():
     res.check("...and every sample came out exactly ONCE (no ring loop)",
               1.6 < tone_secs < 2.3, f"{tone_secs:.2f}s of tone for 2s generated")
 
+    rate2, secs2, hz2, peak2, tone2 = measure(wav2_path)
+    res.check("the WAV file reached the device",
+              tone2 >= 0.5 and peak2 > 4000,
+              f"{secs2:.1f}s recorded, {tone2:.2f}s of tone, peak {peak2}")
+    # THE LOAD-BEARING CHECK. The fixture is 44.1 kHz and the device is
+    # 48 kHz, so a build that skipped resampling plays it at
+    # 1000 * 48000/44100 = 1088 Hz. 3% (30 Hz) accepts the interpolator's
+    # own error and rejects that.
+    res.check("...at the right PITCH, so the 44.1 -> 48 kHz resampler ran",
+              abs(hz2 - 1000.0) < 30, f"measured {hz2:.1f}Hz, wanted 1000")
+    res.check("...for its whole length, so nothing was cut or looped",
+              1.2 < tone2 < 1.9, f"{tone2:.2f}s of tone for 1.5s of file")
+
     if args.keep:
-        print(f"  recording kept: {wav_path}")
+        print(f"  recordings kept: {wav_path}, {wav2_path}")
 
     print(f"\naudio_test: {len(res.passes)} passed, {len(res.fails)} failed")
     for f in res.fails:

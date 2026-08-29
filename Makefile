@@ -1100,6 +1100,18 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO)
 	# the directory rather than holding a list.
 	mkdir -p $(SEED_DIR)/sync/usr/share/wallpapers
 	cp data/wallpapers/*.jpg $(SEED_DIR)/sync/usr/share/wallpapers/
+	# Sounds -- one WAV per effect, named by filename without the
+	# extension (the same rule as a wallpaper or a font face). Generated
+	# by tools/gen_audio.py into data/usr/share/sounds/ and tracked, so a
+	# checkout has sound without regenerating anything. Every file is in
+	# a DIFFERENT format on purpose -- see that script's header.
+	mkdir -p $(SEED_DIR)/sync/usr/share/sounds
+	cp data/usr/share/sounds/*.wav $(SEED_DIR)/sync/usr/share/sounds/
+	# The audio FIXTURE, beside /tests/sample.txt and for the same
+	# reason: a steady 1 kHz tone at 44.1 kHz is what tools/audio_test.py
+	# measures on the host, and the shipped sounds are musical rather
+	# than measurable.
+	cp data/tests/sine1k.wav $(SEED_DIR)/sync/tests/sine1k.wav
 	# Application icons -- one QOI per icon NAME, which is what a
 	# .desktop entry's Icon= key names (freedesktop's rule, and the same
 	# filename-is-the-name rule fonts and cursor themes follow here).

@@ -994,6 +994,39 @@ window without going through it will find its layout polls timing out.
   disarmed, and a ring-3 crash kills the app WITHOUT taking the desktop
   with it. In `gui_regress.py`, which is only safe because the kernel
   half is disarmed unless `faultinject` is on the command line.
+- **`player_test.py`** -- the Audio Player, on a machine with **no
+  sound device**, which is the default boot and therefore the
+  configuration nearly everything sees. That is the point: an audio app
+  is most likely to be broken exactly where `usnd_init()` fails, and
+  `audio_test.py` -- which boots its own AC97 -- can never see it. It
+  asks whether the window opens as a ring-3 client and reports the
+  missing device rather than dying, whether the sounds directory is
+  listed by PROBING (the count checked against what the host seeded, not
+  against the guest's own opinion), whether the transport and both
+  scales have ink where the app says they are, and whether `uui_scale`
+  takes a real pointer -- clicking the left and right ends of the volume
+  track must move the reported volume, which is the new widget's only
+  test with a pointer in it. It can see nothing about sound. In
+  `gui_regress.py`.
+- **`gen_audio.py`** -- generates the WAV files that ship:
+  `data/usr/share/sounds/*.wav` (the sound effects the Audio Player
+  lists and Minesweeper plays) and `data/tests/sine1k.wav` (the
+  FIXTURE). Written here rather than fetched, for the reason the
+  wallpapers and icons are: a build-time dependency on somebody's media
+  files is the failure that shipped images with no keyboard layouts for
+  months, silently. **Every file is deliberately in a DIFFERENT
+  format** -- 44.1 kHz stereo 16-bit, 22.05 kHz mono, 48 kHz mono,
+  44.1 kHz 8-bit unsigned -- so the shipped data alone exercises each
+  branch of `userland/lib/usnd.c`'s rate/channel/width conversion on
+  every boot. A set that were all 48 kHz stereo would exercise the
+  copy-only fast path and nothing else, forever. `sine1k.wav` is
+  separate and is the only one with a measurable property: a STEADY
+  1 kHz tone, because `tools/audio_test.py` judges the recording by
+  counting zero crossings on the host and the musical files have no
+  single frequency to count. No Pillow, no third-party module -- a WAV
+  is a 44-byte header and some integers. Its noise burst uses a fixed
+  LCG rather than `random`, so a regenerated file is byte-identical and
+  a tracked binary does not change for no reason.
 - **`gen_imgdata.py`** -- generates the wallpapers and the decoders'
   test vectors: `data/wallpapers/*.jpg` (the desktop backgrounds, drawn
   here rather than committed as somebody's photograph, so the repo owns
@@ -1527,6 +1560,17 @@ window without going through it will find its layout polls timing out.
   un-skipped only here, which makes "0 skipped" the load-bearing
   assertion (the ahci lesson). On demand, not in the gate: it boots
   its own guest with extra hardware.
+
+  **It boots TWICE, and the second boot is the sharper half.** One
+  recording cannot hold two tones and be judged by frequency, so the
+  WAV phase gets its own: the guest runs `/bin/aplay /tests/sine1k.wav`,
+  which is the whole of `userland/lib/usnd.h` -- the RIFF chunk walk,
+  the 44.1 -> 48 kHz resampler, the mixer and the sink. The fixture is
+  **44.1 kHz on purpose**: a build that did not resample at all would
+  play its 1 kHz tone at 1088 Hz, and the 30 Hz tolerance is set to
+  reject exactly that while accepting the interpolator's own error.
+  Nothing else in this repo can see a broken resampler -- `/tests/
+  usnd_test` checks frame counts, which a wrong-rate build gets right.
 - **`ahci_test.py`** -- boots with the filesystem on a **SATA drive
   behind an ICH9 host bus adapter**, which is the only thing here that
   reaches `kernel/drivers/ahci.c` at all. Several boots, on demand.

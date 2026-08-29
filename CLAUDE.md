@@ -629,6 +629,8 @@ whenever a headline here tells you something you did not already know.
 - **A `uui_scrollview` NOTICES when its content's item list changes**
 - **`uui_spinbox` IS FOR A NUMBER; `uui_slider` IS FOR AN ORDERED ENUM.**
 - **`uui_slider` is for an ORDERED enum**
+- **A DRAG NEEDS THE BUTTON STILL DOWN, AND THE POINTER GRAB IS NOT THAT FACT** -- a `dragging` flag only says the press was yours; test the `buttons` mask (`0x1` primary), as `uui_button` always has, or a button-up motion inside the grab moves the value to wherever the pointer is.
+- **`uui_scale` IS FOR A CONTINUOUS NUMBER; `uui_slider` IS FOR AN ORDERED ENUM** -- GTK's split; it carries no label (the readout is the app's), a drag reports EVERY motion so volume can act live and a seek on release, and a click on the track jumps rather than pages.
 - **A CONTROL BELOW THE FOLD IS UNREACHABLE, not merely hard to hit.**
 - **`on_draw` RUNS BEFORE THE WIDGETS; `on_draw_over` RUNS AFTER.**
 - **`uui_meter` IS THE READING WIDGET, AND IT RESERVES EVERY ROW IT COULD USE** -- a caption, a big number in its own font, a unit, a detail line, a bar; no `hit`, because a reading is not a control. Its height must NOT depend on which strings are set: a meter's content is a value that CHANGES, and counting the non-NULL ones drew Disk Mark's tiles straight through their own borders.
@@ -682,6 +684,7 @@ whenever a headline here tells you something you did not already know.
 - **THE TOOLKIT OWNS THE KEYBOARD FOCUS RING: set `uapp_desc.focus`.**
 - **A WIDGET REPORTS ITS RECT THROUGH THE `bounds` OP; a test-facing geometry log is `uapp_log_layout(a, prefix)`.**
 - **AN IMAGE IS DECODED IN RING 3, AND `lib/uimg.h`'s CODEC TABLE IS THE EXTENSION POINT** -- never add an image parser to the kernel, and `-ENOTSUP` (a file this build refuses) is not `-EINVAL` (a broken one). Two codecs: JPEG for photographs, QOI for anything needing ALPHA.
+- **AUDIO IS DECODED AND MIXED IN RING 3, AND `lib/usnd.h` HAS THREE SEAMS** -- a CODEC TABLE (WAV today, MP3 a file and a row), a SINK (`usnd_sink.h`: the kernel's exclusive stream today, a sound daemon as a second row) and VOICES (an eight-voice per-process mixer). A codec NEVER resamples; the library converts once. Nothing in the public header names the ring, `hw_pos` or `SND_*`, which is what lets a daemon arrive without touching an app. No hardware is NOT an error -- `-ENODEV` and `-EBUSY` are ordinary, and the default boot has no AC97. Long playback is a WORKER THREAD's, never an `on_tick`'s.
 - **AN ICON IS A NAME, NOT A PATH, AND IT IS COMPOSITED** -- `Icon=notepad` resolves to `/usr/share/icons/notepad.qoi` through `icon_get()`, which CACHES the decoded and scaled result; blit it with `ugfx_blit_alpha()`, never `ugfx_blit()`, or its transparent corners land as black.
 - **A WINDOW'S TITLE BAR CARRIES ITS APP ICON, AND `title_icon()` ANSWERS FOR BOTH DRAWING AND CLICKING** -- resolved from the window's own `app_id` (the client never supplies artwork, as on Wayland); no decode means no rect, so there is never a clickable square with nothing in it; clicking it opens the window menu through the same `wm_open_window_menu()` the right-click uses.
 - **TEXT ON A WALLPAPER IS `ugfx_draw_string_shadowed()`, NEVER A GUESSED `bg`** -- `UGFX_TRANSPARENT` blends against what is really on the surface (the one path that reads back), and the shadow's shade is DERIVED from the ink's luminance, because no single ink is legible on every photograph.
@@ -1199,7 +1202,10 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   four modifier keys -- its load-bearing check holds a key DOWN with
   `QMPSession.key_down()`, which `send-key` cannot do),
   `winclient_test.py`, `imgview_test.py`, `icons_test.py`,
-  `mines_test.py`, `filemanager_test.py` (**the File Manager, and every
+  `mines_test.py`, `player_test.py` (**the Audio Player on a machine
+  with NO sound device** -- the default boot, and the one configuration
+  `audio_test.py` can never see, since it boots its own AC97; also the
+  only pointer-driven test of `uui_scale`), `filemanager_test.py` (**the File Manager, and every
   file operation asserted through `ls` rather than through the app**),
   `calendar_test.py` (**the tray clock's calendar popup** -- its grid is
   checked against the HOST's `datetime`, which shares no code with the
@@ -1208,11 +1214,15 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
 - **Run on demand, not in the gate** -- `doom_test.py` (DOOM runs, draws,
   animates and takes input; SKIPS cleanly when no IWAD has been fetched,
   which is why it is not in the suite),
-  `audio_test.py` (**AC97 and the PCM ring, judged on the HOST** -- QEMU
-  records what the device played to a wav; the tone's frequency and its
-  TOTAL duration are measured there, so a dead DMA engine, a wrong rate
-  and a broken consumed-chunk zeroing each fail a different check; the
-  ac97 KTESTs run un-skipped only here),
+  `audio_test.py` (**AC97, the PCM ring AND a WAV file, judged on the
+  HOST** -- QEMU records what the device played to a wav; the tone's
+  frequency and its TOTAL duration are measured there, so a dead DMA
+  engine, a wrong rate and a broken consumed-chunk zeroing each fail a
+  different check; the ac97 KTESTs run un-skipped only here. It boots
+  TWICE, because one recording cannot hold two tones: the second plays
+  `/tests/sine1k.wav` through `/bin/aplay`, and since that fixture is
+  **44.1 kHz** a build that skipped resampling plays it 8.8% sharp --
+  the only check in the repo that can see that),
   `cursor_ibeam_test.py` (**named pointer shapes: the I-beam, the busy
   pointer, and the clamp** -- all four ways a shape gets named, each
   with a control point beside it; the shapes are told apart by where
@@ -1385,6 +1395,9 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   layouts from XKB data), `gen_cursors.py` (cursor themes),
   `gen_imgdata.py` (the wallpapers, and the image decoders' test vectors
   -- whose reference pixels are PILLOW's, not this decoder's),
+  `gen_audio.py` (the shipped WAVs and the audio fixture -- each in a
+  DIFFERENT format on purpose, so the data exercises every conversion
+  branch),
   `gen_icons.py` (the app icons, drawn here and encoded by Pillow so no
   QOI writer in this repo can agree with a bug in its reader),
   `genrelocs.py` (the kernel's own relocation table), `gen_syms.py` (the

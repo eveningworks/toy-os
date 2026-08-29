@@ -236,6 +236,9 @@ everything libc-shaped is waiting on it. Full plan and staging:
 ### Runtime + interop
 
 - [ ] Inter-process IPC (message passing)
+- [ ] Connect-by-name endpoints, generalising TWP's compositor role -- the missing primitive is rendezvous, not shared memory
+- [ ] AF_UNIX sockets, the portable spelling of the same thing -- what ported software expects
+- [ ] Raise `PIPE_MAX` above its kernel-wide 8, which bounds how many clients any daemon can have
 - [x] ~~A real C library -- staged in `docs/libc-design.md`~~ BUILT, all stages -- the proof ran twice (cJSON, then Doom)
 - [x] ~~FAT16/FAT32 driver -- `/boot` readable from inside toy-os~~ done -- FAT32 only, read-write; see the FAT32 section
 - [ ] `g_next_kernel_rsp` reentrancy fixed properly
@@ -691,7 +694,9 @@ run on, not by order.
 - [x] ~~A basic mixer/volume syscall surface~~ DONE as the `volume` SETTING (no syscall needed; System Settings row for free)
 - [x] ~~A sound-producing test app~~ DONE -- `/tests/tone`, judged by `tools/audio_test.py`'s host-side recording
 - [x] ~~A PCM playback path (buffer submission + completion IRQ)~~ DONE -- the shared ring (`abi/sound_abi.h`)
-- [ ] A WAV player app
+- [x] ~~A WAV player app~~ DONE 2026-08-29 -- `/bin/wm/apps/player` and `/bin/aplay`, over `userland/lib/usnd.h`
+- [ ] A system-wide sound daemon, so two programs can be audible at once -- `usnd_sink.h`'s second row
+- [ ] A second codec (MP3 or Vorbis) -- a file and a row in `usnd.c`'s table, which is what the table is for
 - [ ] Doom sound: `i_sound.c` over the PCM ring, with Doom doing its own effect mixing in userspace
 - [ ] Volume mixer UI, persisted to `/etc`
 

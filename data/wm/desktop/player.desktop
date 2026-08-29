@@ -1,0 +1,6 @@
+# Audio Player -- see this directory's README.md for the format.
+Name=Audio Player
+Exec=/bin/wm/apps/player
+Category=apps
+Icon=player
+Handles=.wav

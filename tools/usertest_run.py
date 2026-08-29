@@ -101,6 +101,16 @@ TESTS = [
     # still passes. The fixture is stored in reverse for that reason.
     ("typeahead_test", 0,
      ["typeahead_test: 0 failure(s)"], ["FAIL"]),
+    # The audio decode path -- the half of lib/usnd.h that needs no
+    # sound card. Playback is judged on the HOST instead
+    # (tools/audio_test.py records what the device emitted), so these
+    # two cover the library between them. Its fixtures are built byte by
+    # byte rather than read from /usr/share/sounds: that is the only way
+    # to construct a chunk between `fmt ` and `data`, a data chunk that
+    # lies about its length, and a float WAV that must be refused as
+    # UNPLAYABLE rather than as broken.
+    ("usnd_test", 0,
+     ["usnd_test: 0 failure(s)"], ["FAIL"]),
     # Error codes reaching ring 3. Its load-bearing check is that a full
     # descriptor table and a missing file are DIFFERENT answers, which
     # needs a process that has really run out of fds -- see the file.

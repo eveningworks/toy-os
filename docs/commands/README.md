@@ -116,6 +116,7 @@ a command), and the `gui3`/`nano` aliases.
 
 ### Appearance and the console
 
+- [`aplay`](aplay.md)
 - [`beep`](beep.md)
 - [`clear`](clear.md)
 - [`color`](color.md)

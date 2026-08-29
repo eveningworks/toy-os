@@ -216,10 +216,14 @@ static int sl_press(void *w, int cx, int cy) {
     return uui_slider_press(w, cx, cy);
 }
 static int sl_motion(void *w, int cx, int cy, unsigned buttons) {
-    (void)buttons;
     struct uui_slider *s = w;
     if (s->disabled) return 0;
-    if (s->dragging) return uui_slider_drag(s, cx, cy);
+    // The button must still be DOWN -- `dragging` alone is not enough,
+    // because the grab outlives any one motion and a button-up motion
+    // inside it would move the value to wherever the pointer is. Found
+    // on uui_scale, which has the identical shape; 0x1 is the primary
+    // button (abi/win_proto.h).
+    if (s->dragging && (buttons & 0x1)) return uui_slider_drag(s, cx, cy);
     return uui_slider_hover(s, cx, cy);
 }
 static int sl_release(void *w, int cx, int cy) {

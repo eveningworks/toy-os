@@ -5236,3 +5236,50 @@ UI code at all -- the settings registry's whole point. Per-app scroll
 options were not considered seriously: an inverted wheel is a fact
 about the MOUSE, and every desktop (macOS natural scrolling, Windows,
 KDE) keys it system-wide.
+
+
+## uui_scale is continuous; uui_slider is a discrete enum
+
+Two value controls, and the split is GTK's: `GtkScale` is a number on a
+range, and a widget for an ordered enum is a different control. It was
+forced by the Audio Player needing a position bar and a volume control
+and finding nothing in Toykit that fitted -- `uui_slider`'s value is an
+INDEX into a caller's option array and it draws a tick per stop, which
+is exactly wrong for a three-minute song, and `uui_meter` is a reading
+with no `hit` at all.
+
+**Two real callers in the change that added it**, which is this
+project's bar for an abstraction rather than a plausible third one
+later; the future volume-mixer UI and a copy-progress bar are the ones
+after that.
+
+**It carries no label**, unlike `uui_slider`, which draws the selected
+option's name. A scale's readout is text the app already knows how to
+format ("1:23 / 3:45", "60%") and where it belongs differs per app, so
+it goes in a `uui_label` beside. That also sidesteps the trap
+`uui_meter` documents: a widget whose height depends on which strings
+happen to be set changes size as its value changes.
+
+**Dragging reports every motion, and the app chooses what that means.**
+Volume acts on `UUI_REASON_MOTION` and follows the thumb live; a seek
+acts on `UUI_REASON_RELEASE`, because re-seeking a decoder per pixel is
+work nobody asked for. A control that only reported the release could
+not do the first, and one that only reported motion would make the seek
+bar thrash -- so the widget reports both and stays out of it.
+
+A click anywhere on the track JUMPS there rather than paging towards it.
+That is what every scale outside a Win32 trackbar does, and paging needs
+a second concept (the page size) to mean anything.
+
+**A DRAG NEEDS THE BUTTON STILL DOWN, AND THE POINTER GRAB IS NOT THAT
+FACT.** A widget holds the grab from its press to its release, so
+"`dragging` is set" only means the press was ours -- a motion can arrive
+inside that window with nothing held, and a handler that treats it as a
+drag moves the value to wherever the pointer is. It cost a real check:
+a click on the right of a volume scale set it to 100 on the press and a
+button-up motion dragged it back to 0 before the release arrived, so
+every click after the first read as 0 and the geometry looked wrong.
+The fix is one mask test -- `uui_button` had consulted `buttons` all
+along, for exactly this. `uui_slider` had the identical shape and was
+fixed in the same change, unprompted by any failure: nothing drives a
+settings slider that way, which is why it survived.

@@ -2580,6 +2580,32 @@ Listed with the honest reason each is or isn't attractive.
 
 ## Sound
 
+**A system-wide sound daemon.** The kernel hands out one exclusive PCM
+stream and never mixes, so today exactly one program is audible at a
+time -- the Audio Player, or Minesweeper, or `aplay`, and the second one
+to ask gets -EBUSY and plays silently. `userland/lib/usnd_sink.h` is the
+seam a daemon arrives through: a second row in that table, tried before
+the device, with the device as the fallback. No app changes, which is
+the move `libasound` made when PulseAudio appeared.
+
+**Needs:** connect-by-name IPC (see Runtime + interop). Pipes here are
+INHERITED, not connected, so a client the daemon did not spawn has no
+way to reach it -- that rendezvous is the missing primitive, and
+`PIPE_MAX` being 8 kernel-wide is a number to raise beside it.
+
+**It does NOT need shared memory.** 48 kHz stereo s16 is 192 KB/s; at
+2 KiB chunks that is ~94 messages a second per client against a
+`SYS_WRITE_MAX` of 64 KiB, and two copies plus a scheduling hop are
+nothing against a 341 ms ring. A shared-memory ring per client is what
+PipeWire needs for a 2 ms target, and toy-os has no such target.
+
+**A second codec.** `usnd.c`'s table is one row today. MP3 or Vorbis is
+a `.c` file and a row: the codec reports its file's native rate and
+hands out s16 frames in it, and the library's conversion stage -- which
+already resamples 8, 22.05 and 44.1 kHz material -- does the rest. What
+a new codec must NOT do is resample; that is the split the table exists
+to keep.
+
 ## Layer 5 -- System services and policy
 
 The first layer that is POLICY rather than mechanism, and the first that

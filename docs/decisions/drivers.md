@@ -1372,3 +1372,71 @@ registers `volume` (0-100) beside the pointer knobs; the registry
 gives it the System Settings row, `config set volume 40`, /etc
 persistence and range enforcement, and the driver contributes one
 `set_volume` op mapping percent onto its attenuators.
+
+
+## usnd: audio files are decoded and mixed in ring 3, behind a sink
+
+The kernel's contract stops at "one exclusive stream of 48 kHz stereo
+s16". Everything a person would call playing a file -- the formats, the
+rate conversion, several sounds at once -- is `userland/lib/usnd.h`, in
+the process that wants the sound. The argument is the one `uimg.h`
+already makes about images: ALSA's dmix is a library, PulseAudio,
+PipeWire and Windows' audio engine are userspace, and mixing drags
+resampling and format policy with it. A malformed WAV can at worst take
+down the one process that opened it.
+
+**Three seams, and each is a thing that does not exist yet.**
+
+*The codec table.* A `struct usnd_codec` row -- probe, open, read,
+seek, close -- the registry shape `display_driver`, `block_device` and
+`uimg_codec` already use. WAV is the one row. **A codec never
+resamples**: it reports its file's native rate and channel count and
+yields s16 frames in it, and the library converts once, in one place.
+That is where PulseAudio, PipeWire and CoreAudio all put resampling,
+and it is what makes MP3 a file and a row rather than a second decoder
+with its own opinion about the device.
+
+*The sink.* Where mixed samples GO (`usnd_sink.h`), and the reason no
+part of the public header mentions the ring, `hw_pos` or `SND_*`. An app
+says "play this file", never "write here", so a sound daemon can become
+a second row -- tried first, the device as the fallback -- with no app
+changing. `libasound` made exactly this move when PulseAudio appeared,
+and PipeWire kept both.
+
+**What a daemon needs is RENDEZVOUS, not shared memory.** 192 KB/s in
+2 KiB chunks is ~94 messages a second against a 64 KiB `SYS_WRITE_MAX`;
+two copies and a scheduling hop are free against a 341 ms ring, and a
+shared-memory ring per client is what a 2 ms latency target needs, which
+this is not. What is genuinely missing is that pipes here are INHERITED
+rather than connected: a client the daemon did not spawn cannot reach
+it. TWP already solves that for the compositor, by role; generalising
+its registry to named endpoints is the smaller move, and AF_UNIX is the
+portable spelling of the same thing.
+
+*The voices.* An eight-voice mixer per process, because a game's effects
+overlap and one voice would cut them. With a daemon it becomes the app's
+submix -- a PulseAudio sink input -- and the daemon sums across apps;
+the code does not change either way.
+
+**A worker thread, not an `on_tick`.** Every real system pumps audio
+from a dedicated thread (WASAPI's, CoreAudio's IOProc) because a missed
+refill is audible. Slicing across a GUI client's tick would work until a
+repaint or a directory read ran long, and 341 ms is not much slack. The
+thread touches only the voice table and the sink, which is what
+`ui/uapp.h`'s worker rule already requires.
+
+**An idle mixer PINS its cursor rather than writing silence.** Three
+options and only one is right. Not writing at all leaves the write
+cursor where the hardware left it, so the next sound starts a whole ring
+late. Writing silence keeps the cursor moving but makes "how much is
+queued" meaningless -- and the position readout is computed from exactly
+that, so it would run BACKWARDS while paused. So the worker stops
+writing, lets the tail drain, and then flushes each pass to hold the
+cursor one chunk behind the hardware.
+
+**A refusal is not a corruption.** `-EINVAL` means the bytes are broken,
+`-ENOTSUP` means a good file this build will not play (a float WAV --
+there is no floating point in this project, in either ring), and
+`usnd_last_error()` carries the sentence. `uimg.h`'s split, for the same
+reason: an app that says "this build cannot play that" is telling the
+truth, and one that says "corrupt file" is not.
