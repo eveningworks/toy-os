@@ -23,8 +23,8 @@
 </p>
 
 <p align="center">
-  <img src="screenshots/readme/desktop.png" alt="toy-os desktop: window manager with the Terminal app open" width="49%">
-  <img src="screenshots/readme/shell.png" alt="toy-os shell: about, ls, df and the in-kernel test suite" width="49%">
+  <img src="screenshots/readme/desktop.png" alt="toy-os desktop: Image Viewer, Notepad, Minesweeper, the Audio Player and DOOM open at once" width="49%">
+  <img src="screenshots/readme/shell.png" alt="toy-os kernel shell: about, df and the in-kernel test suite" width="49%">
 </p>
 
 ---
@@ -64,70 +64,46 @@ QEMU, and it does not stop at "hello world from the kernel":
 - **A real terminal layer** — a terminal is an object with a line
   discipline, a `termios`, an owner and a foreground process group, so
   the physical console and a Terminal window are two clients of one
-  implementation. `/bin/tosh` runs on a pty in a window, which makes the
-  shell in it a real process; `Ctrl-C`, `Ctrl-Z`, pipes, redirection and
-  job control are the same code in both places, and a full-screen editor
-  runs in either. **Terminal has tabs** — each one its own pty, shell,
-  scrollback and title, read by its own thread, with the shell naming
-  its tab through an OSC escape.
+  implementation. `/bin/tosh` runs on a pty in a window, so the shell in
+  it is a real process, and `Ctrl-C`, pipes, redirection and job control
+  are the same code in both places. Terminal has **tabs**, each its own
+  pty, shell, scrollback and title.
 - **A real filesystem, in a real partition, on a disk it boots itself**
-  — TFS3: block groups, real inodes, hardlinks, journal transactions,
-  superblock backups and an `fsck`. It journals metadata, so files
-  survive a power cut. The VFS picks a backend by superblock probe, and
-  boot scans the disk's MBR/GPT table for a partition to mount from --
-  **the stock `disk.img` is a GPT with GRUB in a BIOS boot partition,
-  the kernel in a FAT32 `/boot`, and TFS3 in the rest**, the way an
-  installed OS looks. QEMU boots the disk, not a CD. (`/boot` is FAT32
-  because GRUB cannot read TFS3 -- the same reason UEFI's ESP is FAT.)
-  `mkpart` writes a table, `parttable` reads one, and `fsformat`
-  reformats the mounted volume -- and refuses to be aimed at the
-  bootloader.
-- **Every disk driver enumerates, and the root is a separate choice** —
-  all of them run at boot and each registers what it finds into a device
-  table (`ata0`, `ahci0`, `virtio0`, `ram0`; partitions `ata0p3`), which
-  `lsblk` prints. What carries the root comes from `root=` on the boot
-  line, else driver precedence — Linux's split, and NT's. Before this a
-  machine with a virtio disk never ran the AHCI driver at all, so its
-  SATA drive did not exist.
-- **Two filesystems at once, and one of them is the boot volume** — a
-  mount table keyed by path prefix, so TFS3 serves `/` and a FAT32
-  driver serves `/boot`, read-only, which is the partition GRUB and the
-  kernel image actually live in. `mount`/`umount` attach anything else
-  (`mount -t ramfs none /mnt` is a scratch filesystem in RAM), `df`
-  reports every mount, and a write to a read-only mount is refused
-  rather than quietly dropped.
+  — TFS3: block groups, inodes, hardlinks, journalled metadata (so
+  files survive a power cut), superblock backups and an `fsck`. The VFS
+  picks a backend by superblock probe and boot scans the MBR/GPT table
+  for a partition to mount. **The stock `disk.img` is a GPT with GRUB
+  in a BIOS boot partition, the kernel in a FAT32 `/boot`, and TFS3 in
+  the rest** — the way an installed OS looks, and QEMU boots the disk,
+  not a CD. (`/boot` is FAT32 because GRUB cannot read TFS3, the same
+  reason UEFI's ESP is FAT.)
+- **Two filesystems at once** — a mount table keyed by path prefix, so
+  TFS3 serves `/` and FAT32 serves `/boot` read-only. `mount`/`umount`
+  attach anything else (`mount -t ramfs none /mnt` is a RAM scratch
+  filesystem), `df` reports every mount, and a write to a read-only
+  mount is refused rather than quietly dropped. Every disk driver
+  enumerates into one device table (`ata0`, `ahci0`, `virtio0`;
+  partitions `ata0p3`), and `root=` on the boot line picks what carries
+  the root — Linux's split, and NT's.
 - **A real GUI, and it is not in the kernel** — the window manager is
   itself a **ring-3 process**: movable, resizable windows, a taskbar, a
-  Start menu built from `.desktop` files (picked up live), and a desktop
-  of draggable icons with rubber-band selection. Apps are ordinary ring-3
-  processes too, owning their windows over **TWP**, the Toy Window
-  Protocol, served by **TWS** and programmed against with **Toykit**. The
-  kernel keeps the framebuffer and the protocol; everything above them is
-  a process, and killing the desktop is survivable. Pictures are ring-3 too: a
-  **baseline JPEG decoder** in the toolkit's library gives the desktop a
-  real wallpaper and an Image Viewer, with no image parser anywhere in
-  the kernel. There are games, too: **Minesweeper**, which is where the
-  desktop learned to give a right-click to the application under the
-  cursor instead of keeping it for the window menu — and **it runs
-  DOOM**, with sound and music, in a window on the desktop like any
-  other app. And there is a
-  **Disk Mark** — a CrystalDiskMark-shaped storage benchmark, four
-  profiles across sequential and random 4K, which is how you find out
-  what the AHCI, virtio and IDE paths actually cost on this machine. It
-  does no I/O itself: `/bin/diskbench` does the work and the window
-  polls it, so a pass that takes minutes cannot freeze the GUI — and the
-  same numbers are available from a shell. Its tiles say `SEQ` and
-  `Q1T1` rather than borrowing CDM's `SEQ1M`, because the request size
-  is whatever `SYS_WRITE_MAX` currently is — 64 KiB — and there is no
-  asynchronous block I/O to give a queue depth any meaning. Leaving the
-  number out of the heading is why raising that cap did not make the
-  label a lie. And there is a
-  **File Manager** — two directory panes side by side, in the Norton
-  Commander tradition rather than Explorer's, because copying between
-  two visible directories needs neither a clipboard nor drag-and-drop
-  and this system has neither yet. Its file operations are spawned
-  `/bin/cp` and `/bin/rm` children, so there is one implementation of
-  what copying means and it works at a shell prompt too.
+  Start menu built from `.desktop` files, and a desktop of draggable
+  icons with rubber-band selection. Apps are ordinary ring-3 processes
+  too, owning their windows over **TWP**, the Toy Window Protocol,
+  served by **TWS** and programmed against with **Toykit**. The kernel
+  keeps the framebuffer and the protocol; everything above them is a
+  process, and killing the desktop is survivable. Pictures are ring-3
+  as well — a **baseline JPEG decoder** in the toolkit gives the desktop
+  a real wallpaper and an Image Viewer, with no image parser anywhere in
+  the kernel. The apps include a **File Manager** (two panes, Norton
+  Commander rather than Explorer, because copying between two visible
+  directories needs neither a clipboard nor drag-and-drop and this
+  system has neither), **Disk Mark** (a CrystalDiskMark-shaped
+  benchmark whose work is a spawned `/bin/diskbench`, so a pass that
+  takes minutes cannot freeze the GUI), **Minesweeper** — which is
+  where the desktop learned to give a right-click to the application
+  under the cursor instead of keeping it for the window menu — and
+  **DOOM**, with sound and music, in a window like any other app.
 - **Sound, and the kernel does not mix it** — an AC'97 driver behind a
   `sound_device` registry, and a PCM stream that is a **mapped ring**
   rather than a `write()` call: the app writes samples ahead of the
@@ -165,71 +141,30 @@ behind the design is in [docs/decisions.md](docs/decisions.md), and
 ## Project status
 
 **Version 0.3.0-dev.** A hobby project under active development, not
-production software. What that means concretely:
+production software.
 
-**Works today** — booting on real hardware and QEMU, the shell and its
-line editor, both filesystems with `fsck` and live reformatting, the
-window manager and its apps, fonts loaded and rasterized from disk at
-runtime, ring-3 processes with pipes and `spawn`/`waitpid`, `mmap` with
-file-backed demand paging, dynamic linking — tolibc ships as
-`/lib/libc.so` and every `/bin` and GUI program links it through
-`/lib/ld-toy.so` — a TTY layer
-with pseudo-terminals — so `Ctrl-C` interrupts a job, `Ctrl-Z` suspends
-one, and a full-screen editor runs in a Terminal window — and the full
-test suite: a few hundred in-kernel tests, the ring-3 diagnostics, and
-the GUI tools `gui_regress.py` runs as one table.
+**Works today** — booting on real hardware and QEMU; the shell and its
+line editor; both filesystems with `fsck` and live reformatting; the
+ring-3 window manager and its apps; fonts loaded and rasterized from
+disk at runtime; ring-3 processes with pipes, `spawn`/`waitpid`,
+signals, threads and job control; `mmap` with file-backed demand
+paging; dynamic linking, with tolibc shipped as `/lib/libc.so`; a TTY
+layer with pseudo-terminals, so `Ctrl-C` interrupts a job and a
+full-screen editor runs in a Terminal window; sound, including DOOM
+with music. And the test suite: a few hundred in-kernel tests, the
+ring-3 diagnostics, and the GUI tools `gui_regress.py` runs as one
+table.
 
-**[Milestone 41](docs/wm-ring3-design.md) is complete** (2026-08-18):
-the window manager is an ordinary ring-3 process. `gui` spawns
-`/bin/wm/system/toywm`, which claims the compositor role, is granted the
-real framebuffer, composites the desktop and serves every client through
-the window protocol. The ring-0 window manager and its widget set are
-deleted — about 10,400 lines — so there is one implementation again.
-Killing the desktop is survivable: the kernel revokes the grant, asks
-client windows to close and restores the text console.
-
-**[init](docs/init-design.md) holds pid 1 and starts the desktop**
-(2026-08-18): `system.default_target` (`text`/`graphical`) says what the
-machine is for, `/etc/services.d` says what to start, and init restarts a
-service that dies — with a backoff, a give-up so a crash loop cannot spin
-the machine, and `Restart=on-failure` semantics so a clean exit (the Start
-menu's *Exit to shell*) means what it says. `target=text` on the GRUB line overrides the target for
-one boot without rewriting the file. Both of the things listed here as
-in progress have since landed: the console is a TTY object, and a `text`
-boot reaches a ring-3 shell with the kernel's own standing down.
-
-**Job control works** (2026-08-22): `Ctrl-Z` suspends the foreground
-job, `jobs`/`fg`/`bg` manage it, `&` backgrounds one, and a background
-job that reads the terminal is stopped by `SIGTTIN` rather than
-competing with the shell for the keyboard. A pipeline suspends and
-resumes as one process group. The same code serves the physical console
-and a Terminal window, which is the test of whether the TTY layer is
-real.
-
-**The userland is dynamically linked** (2026-08-28,
-[docs/dynlink-design.md](docs/dynlink-design.md)): `mmap`/`munmap`
-landed first — a per-process region list, its own arena, file-backed
-demand paging, `pmap` to see it — then the whole userland went
-position-independent at the same base, and then `/lib/ld-toy.so`: the
-kernel loads a dynamic executable's interpreter and enters *it*
-(Linux's split — the kernel never learns ET_DYN), and the loader maps
-`DT_NEEDED` libraries with mmap, relocates eagerly and jumps to the
-real entry. tolibc ships as `/lib/libc.so`; every `/bin` and GUI
-program links it, while init, toywm and `/tests` stay static so a
-machine with a broken `/lib` still boots to something that can fix it.
-Read-only library pages are served from a kernel image cache and
-shared — one frame of libc text, machine-wide.
-
-**Known gaps** — USB is xHCI with a HID boot keyboard and mouse, USB2
-hubs and hot-plug; there is no mass storage, no USB3-hub support and no
-HID report-descriptor parsing (a mouse whose HID interface does not
-declare the boot subclass enumerates and does nothing). No
-networking and no SMP. Dynamic linking is eager-binding with no
-`dlopen` yet, `mmap` has no `MAP_SHARED` and no `mprotect`, and there
-is no `fork`. No privilege model: there are
-no user accounts and no permission checks, so anything ring 3 can ask
-for, any process can ask for. [docs/roadmap.md](docs/roadmap.md) tracks
-all of it, including a candid known-issues list.
+**Known gaps** — no networking and no SMP. USB is xHCI with a HID boot
+keyboard and mouse, hubs and hot-plug, but no mass storage and no HID
+report-descriptor parsing. Dynamic linking is eager-binding with no
+`dlopen`; `mmap` has no `MAP_SHARED` and no `mprotect`; there is no
+`fork`. Sound is one exclusive stream, so two programs cannot both be
+audible. **No privilege model**: no user accounts and no permission
+checks, so anything ring 3 can ask for, any process can ask for.
+[docs/roadmap.md](docs/roadmap.md) tracks all of it, with a candid
+known-issues list; `git log` and [docs/decisions.md](docs/decisions.md)
+carry how each piece arrived and why.
 
 ## Quick start
 
@@ -366,40 +301,31 @@ make test       # boot headless, run the in-kernel test suite
 make verify     # full gate: clean build + iso + boot test + test suite
 ```
 
-There is **one run target**, and everything that would otherwise be its
-own is a variable on it — so any combination works without a target per
-combination:
+There is **one run target**; everything else is a variable on it, so
+any combination works without a target per combination. Each device
+class picks its implementation **by name** — `VIRTIO=1` just sets all
+three at once, and a per-class value overrides it, so `VIRTIO=1
+VGA=std` is legal. A name rather than a boolean because a boolean
+cannot express a third one, and NVMe is on the roadmap. `make help`
+lists every axis.
 
 ```bash
-make run KVM=1        # KVM-accelerated instead of emulated (needs /dev/kvm)
-make run VIRTIO=1     # virtio for EVERY device class: disk, GPU and input
-make run WINDOW=full  # full-screen -- fits a guest mode as big as the monitor
-make run WINDOW=fit   # a resizable window the guest is SCALED into
-make run NOGRAPHIC=1  # serial console only -- use this over SSH
-make run MENU=1       # show GRUB's boot menu instead of booting straight through
-make run AUDIO=1      # PC speaker wired to sound, so `beep` is audible
-make run MEM=512      # a smaller machine
-make run LIVE=1       # the Live CD, with no disk attached
-make run DEMO=1       # the scripted tour
-make run KVM=1 VIRTIO=1   # ...or any mix
+make run KVM=1          # KVM instead of emulation (needs /dev/kvm)
+make run VIRTIO=1       # virtio for every device class: disk, GPU, input
+make run DISK=virtio    # ...or one class at a time: virtio-blk, no IDE
+make run DISK=ahci      #    a SATA drive behind an ICH9 HBA
+make run VGA=virtio     #    the virtio-gpu driver
+make run VGA=vmware     #    the adapter with a hardware cursor
+make run INPUT=virtio   #    virtio keyboard, mouse and tablet
+make run AUDIO=1        # an AC97 -- needed for any sound at all
+make run WINDOW=full    # full-screen, pixel-exact, no decorations
+make run WINDOW=fit     # a resizable window the guest is SCALED into
+make run NOGRAPHIC=1    # serial console only -- use this over SSH
+make run MENU=1         # show GRUB's menu instead of booting through
+make run MEM=512        # a smaller machine
+make run LIVE=1         # the Live CD, no disk attached
+make run DEMO=1         # the scripted tour
 ```
-
-**Each device class picks its implementation by name**, and `VIRTIO=1`
-is simply the switch that sets all three at once. A per-class value
-overrides it, so `VIRTIO=1 VGA=std` is a legal thing to ask for:
-
-```bash
-make run DISK=virtio        # virtio-blk, and NO IDE controller at all
-make run DISK=ahci          # a SATA drive behind an ICH9 host bus adapter
-make run VGA=virtio         # the virtio-gpu driver
-make run VGA=vmware         # the adapter with a hardware cursor
-make run INPUT=virtio       # virtio keyboard, mouse and tablet
-```
-
-A *name* rather than a boolean because a boolean cannot express a third
-one, and this machine is going to grow them — NVMe is on the roadmap,
-and an `NVME=1` beside a `VIRTIO=1` would immediately raise "what does
-setting both mean?". `make help` lists every axis.
 
 <details>
 <summary>Troubleshooting</summary>
@@ -410,9 +336,9 @@ setting both mean?". `make help` lists every axis.
 | `grub-mkrescue` fails on *"cannot find `xorriso`"* or mtools | Install `xorriso` **and** `mtools`; it needs both even for a BIOS-only image. |
 | ISO builds but QEMU says *"no bootable device"* | The BIOS modules package is missing — `grub-pc-bin` (Debian), `grub2-pc-modules` (Fedora), `grub2-i386-pc` (openSUSE), `grub-bios` (Alpine). |
 | No window appears (e.g. over SSH) | `make run NOGRAPHIC=1`. |
-| The QEMU window runs off the right/bottom of the screen | Do the arithmetic first: the window is the guest mode **plus** a title bar (~28px) and it has to share the screen with your panel (~44px), so `video=1920x1080` needs ~1152px of height on a 1080px screen and cannot fit *as a window* however it is placed. Three ways out, and they are different trades: `make run WINDOW=full` keeps every pixel exact and drops the decorations; a slightly shorter guest mode (`video=1920x1000`) stays windowed **and** pixel-exact — any height works, the mode does not have to be a standard one; `make run WINDOW=fit` keeps 1080 and scales it into a resizable GTK window, at the cost of a blurred font. Placement is your window manager's, not QEMU's — `-display sdl` has no position option at all, so a compositor that cascades new windows will drop it part-way down the screen whatever its size. |
-| The mouse doesn't move in QEMU | Don't add `-device usb-tablet`/`usb-mouse` by hand — QEMU routes pointer motion to a USB device once one is attached, and a run set up for PS/2 then gets none. There *is* a USB HID driver: reach it with `make run USB=xhci+mouse`, which attaches the controller too. |
-| Everything is very slow | `make run` emulates the CPU; `make run KVM=1` runs it natively. That only helps compute-bound code — *ATA* disk I/O measures ~1.9× **slower** under KVM, since each port-I/O instruction becomes a VM exit. That penalty is ATA's, not KVM's: `make run KVM=1 DISK=virtio` puts the disk on virtio-blk and measures ~10× ATA's write throughput, because a virtqueue barely touches port I/O at all. |
+| The QEMU window runs off the screen | The window is the guest mode plus a title bar, sharing the screen with your panel, so `video=1920x1080` cannot fit *as a window* on a 1080px screen. Three trades: `WINDOW=full` (pixel-exact, no decorations), a shorter guest mode like `video=1920x1000` (windowed **and** pixel-exact — it need not be a standard mode), or `WINDOW=fit` (scaled into a resizable window, blurred font). Placement is your WM's; `-display sdl` has no position option. |
+| The mouse doesn't move in QEMU | Don't add `-device usb-tablet`/`usb-mouse` by hand: QEMU routes pointer motion to a USB device once one is attached, and a PS/2 run then gets none. For the USB HID driver use `make run USB=xhci+mouse`. |
+| Everything is very slow | `make run KVM=1` runs the CPU natively. That helps compute-bound code only — *ATA* disk I/O is ~1.9× **slower** under KVM, since every port-I/O instruction becomes a VM exit. That is ATA's penalty, not KVM's: `KVM=1 DISK=virtio` measures ~10× ATA's write throughput. |
 | Drawing is slow on real hardware but fine in QEMU | Reproduce it with `make run KVM=1`. Plain `make run` **ignores guest memory types entirely**, so a write-combined framebuffer behaves like cached RAM and a whole class of graphics bug is invisible. `gfxbench` reports which mechanisms are live. |
 | `disk.img` is 9 GB | It's a *sparse* file — it costs only what is actually written. `make clean-disk` wipes it. |
 
@@ -436,57 +362,50 @@ what you can pass on the GRUB command line.
 
 ## Highlights
 
-**Boot and hardware.** Multiboot2 via GRUB2, with the 32→64-bit long-mode
-transition done by hand. Linear RGB framebuffer falling back to 80×25 VGA
-text. PS/2 keyboard and mouse sharing the 8042 through one dispatcher,
-with keyboard layouts as *data files* generated from Linux's own XKB data
-rather than a compiled-in table. PIT, CMOS RTC, PC speaker, MBR/GPT
-partition parsing, three disk drivers — legacy IDE with a Bus-Master DMA
-path and a PIO fallback, **AHCI** driving a SATA drive off a mapped BAR5
-with a per-page PRDT and interrupt-driven completion, and virtio-blk —
-behind one `block_device` registry that the filesystems above never look
-through, and a **virtio** stack: PCI capability walking and
-64-bit BAR decoding underneath a shared modern-virtio transport, with
-`virtio-blk` on top of it as the preferred disk, `virtio-rng` feeding
-the kernel's entropy pool (a QEMU guest usually has no RDSEED/RDRAND,
-and the jitter fallback is weakest under emulation), and **`virtio-gpu`
-as a real display driver** — resource, scanout, transfer-and-flush and
-its own cursor queue, programming the mode itself so `video=1920x1080`
-is honoured rather than left to whatever GRUB negotiated, and
-**`virtio-input`** (keyboard, mouse and tablet) feeding an **input core**
-whose canonical event is evdev-shaped, so PS/2, virtio and USB HID are
-all sources in one registry — with an opt-in
-diagnostic log (`kernel.kbdtap`, off by default) that `kbd` prints as
-all four encodings of a keypress at once — scancode, keycode, character,
-modifiers — which is how a key that works on one keyboard and not
-another stops being a mystery — and the first virtio
-devices here to complete on a real interrupt rather than a poll. One
-transport, so the next device (net) is a driver rather than a
-bring-up project — and it is about **10× ATA's write throughput under
-KVM**, because a virtqueue is shared memory with one doorbell where ATA
-is dense with port I/O and every one of those is a VM exit.
+**Boot and hardware.** Multiboot2 via GRUB2, with the 32→64-bit
+long-mode transition done by hand. Linear RGB framebuffer falling back
+to 80×25 VGA text. PS/2 keyboard and mouse sharing the 8042 through one
+dispatcher, with keyboard layouts as *data files* generated from Linux's
+own XKB data. PIT, CMOS RTC, PC speaker, MBR/GPT partition parsing.
 
-**USB**, because a machine built since roughly Skylake has no PS/2 port
-at all and QEMU is the only reason that has not bitten yet: an **xHCI**
-host controller driver — command ring, event ring, doorbells, per-device
-contexts — with device enumeration on top of it and a **HID
-boot-protocol keyboard and mouse** that register with the same input
-core PS/2 and virtio use, so they need no layout table of their own. A
-**composite device binds every boot interface** (a wireless receiver is
-a keyboard and a mouse on one plug), **USB2 hubs** work — route
-strings, per-port power and reset, TT fields for a low-speed mouse
-behind a high-speed hub — and **hot-plug** does too: plug in after
-boot and it enumerates, unplug and it is torn down, input source and
-all. Interrupt-driven on legacy INTx with an always-on polled backup,
-because this kernel has no Local APIC and therefore no MSI — and a
-BIOS-reported INTx line can be plausible and dead;
-`/bin/lsusb` names what is attached, from the USB
-ID database and from the device's own string descriptors under `-v`,
-which is a thing PCI devices cannot tell you. xHCI only, deliberately:
-UHCI and OHCI are a quarter of the code and run on nothing made this
-decade. Reach it with `make run USB=xhci+mouse` — attaching a USB
-keyboard takes the keyboard *away* from PS/2, which is exactly what
-makes its test suite self-controlling.
+Three disk drivers behind one `block_device` registry the filesystems
+never look through: legacy IDE with Bus-Master DMA and a PIO fallback,
+**AHCI** off a mapped BAR5 with a per-page PRDT and interrupt-driven
+completion, and virtio-blk. The **virtio** stack underneath is PCI
+capability walking and 64-bit BAR decoding under a shared modern
+transport — `virtio-blk` as the preferred disk (~**10× ATA's write
+throughput under KVM**, because a virtqueue is shared memory with one
+doorbell where ATA is dense with port I/O and every one of those is a VM
+exit), `virtio-rng` feeding the entropy pool, **`virtio-gpu` as a real
+display driver** (resource, scanout, transfer-and-flush, its own cursor
+queue, and it programs the mode itself so `video=1920x1080` is honoured
+rather than left to GRUB), and **`virtio-input`**. One transport, so the
+next device is a driver rather than a bring-up project.
+
+Keyboards, mice and tablets from PS/2, virtio and USB all feed one
+**input core** whose canonical event is evdev-shaped. Its diagnostic
+(`kernel.kbdtap`, off by default) is what `kbd` prints as all four
+encodings of one keypress — scancode, keycode, character, modifiers —
+which is how a key that works on one keyboard and not another stops
+being a mystery.
+
+**USB**, because nothing built since roughly Skylake has a PS/2 port and
+QEMU is the only reason that has not bitten yet. An **xHCI** driver —
+command ring, event ring, doorbells, per-device contexts — with
+enumeration on top and a **HID boot-protocol keyboard and mouse** that
+register with the same input core, so they need no layout table of their
+own. A **composite device binds every boot interface** (a wireless
+receiver is a keyboard and a mouse on one plug), **USB2 hubs** work
+(route strings, per-port power and reset, TT fields for a low-speed
+mouse behind a high-speed hub), and **hot-plug** does too. Interrupt-
+driven on legacy INTx with an always-on polled backup, because this
+kernel has no Local APIC and therefore no MSI — and a BIOS-reported INTx
+line can be plausible and dead. `/bin/lsusb` names what is attached,
+from the ID database and the device's own string descriptors under `-v`.
+xHCI only, deliberately: UHCI and OHCI are a quarter of the code and run
+on nothing made this decade. `make run USB=xhci+mouse` reaches it —
+attaching a USB keyboard takes the keyboard *away* from PS/2, which is
+what makes its test suite self-controlling.
 
 **Memory hardening.** NX and W^X from each ELF segment's real `p_flags`,
 and the kernel's own identity map is W^X too — `.text` is the only
@@ -518,58 +437,49 @@ ramfs is the third, in the kernel heap, and is what a diskless boot gets
 for a root. A mount table resolves a path to a backend by longest prefix
 at a component boundary, so all three can be mounted at once.
 
-**Graphics and GUI.** Real fonts, two ways: eight sizes of JetBrains Mono
-baked to bitmaps at build time as the guaranteed fallback, and a
+**Graphics and GUI.** Real fonts, two ways: eight sizes of JetBrains
+Mono baked to bitmaps at build time as the guaranteed fallback, and a
 fixed-point TrueType rasterizer that loads a `.ttf` from
-`/usr/share/fonts` at runtime — so any size works, not just a baked one,
-and a proportional face gets genuine per-glyph advance widths and real
-kerning from the font's own tables. A face is a *family*: bold is a
-second file loaded alongside the regular one, or — where a family has no
-bold — synthesized by thickening the regular outlines, which is what GDI
-does. Because the whole UI is font-*derived*, changing the face or the
-size reflows everything rather than clipping it, live, without
-restarting anything.
+`/usr/share/fonts` at runtime — so any size works, and a proportional
+face gets genuine per-glyph advances and real kerning. A face is a
+*family*: bold is a second file, or synthesized by thickening the
+regular outlines where a family has none, which is what GDI does.
+Because the whole UI is font-*derived*, changing the face or size
+reflows everything, live, without restarting anything.
 
-Fonts come in **two tiers**. The session font is the desktop's face, in
-both weights, rasterized once in the kernel and mapped read-only into
-every window — so all text on screen matches the desktop's setting by
-construction rather than by each app being careful. An app that needs
-something that font cannot express — a different face, a heading at
-twice the body size — rasterizes it *itself*, in ring 3, using the same
-rasterizer, into its own memory; that is what every Wayland client does.
-The honest limit: a loaded face is rasterized into the same 101-glyph
-set the baked one carries — ASCII plus six Nordic letters — so its other
-few thousand glyphs are parsed and unreachable until UTF-8 lands, and
-kerning is read from the legacy `kern` table only, so a face that keeps
-its kerning in GPOS renders unkerned.
+Fonts come in **two tiers**. The session font is rasterized once in the
+kernel and mapped read-only into every window, so all text matches the
+desktop's setting by construction rather than by each app being
+careful. An app needing something that font cannot express rasterizes
+it *itself*, in ring 3, with the same rasterizer — what every Wayland
+client does. The honest limit: a loaded face is rasterized into the
+same 101-glyph set the baked one carries, so its other few thousand
+glyphs are parsed and unreachable until UTF-8 lands, and kerning comes
+from the legacy `kern` table only.
 
-**Images are decoded in ring 3, by a library, and the kernel never sees
-one.** A baseline JPEG decoder (`userland/lib/uimg_jpeg.c`) sits behind
-a codec table keyed on magic bytes, so a second format is a row and a
-file rather than a branch; it does the whole job in fixed point, since
-there is no floating point in either ring, and upsamples chroma with
-libjpeg's triangle filter so the output matches what any other viewer
-shows. Files it cannot handle — progressive, arithmetic-coded, 12-bit,
-CMYK — are refused *by name*, which is a different answer from "corrupt"
-and reads as one. That is the opposite of the call made for fonts, which
-are parsed in ring 0 because the console needs glyphs before any process
-exists; nothing in ring 0 needs a picture. What proves it works is
-libjpeg itself: the same source file is compiled on the host and
-compared against libjpeg over a couple of hundred generated images, nine
-committed vectors run the same comparison in ring 3, and a GUI tool
-checks the framebuffer against libjpeg's decode of the wallpaper pixel
-for pixel.
+**Images are decoded in ring 3, and the kernel never sees one.** A
+baseline JPEG decoder sits behind a codec table keyed on magic bytes,
+so a second format is a row and a file rather than a branch. All fixed
+point, since there is no floating point in either ring. Files it cannot
+handle — progressive, arithmetic-coded, 12-bit, CMYK — are refused *by
+name*, which is a different answer from "corrupt" and reads as one.
+That is the opposite of the call made for fonts, which are parsed in
+ring 0 because the console needs glyphs before any process exists;
+nothing in ring 0 needs a picture. What proves it works is libjpeg
+itself: the same source file is compiled on the host and compared
+against libjpeg over a couple of hundred images, and a GUI tool checks
+the framebuffer against libjpeg's decode of the wallpaper pixel for
+pixel.
 
-Double-buffered rendering with damage-region clipping, and a
-compositor whose damage invariant is enforced by a verification mode
-that re-renders each frame unrestricted and reports any pixel that
-changed without being declared — over the chrome, desktop, taskbar,
-menus and cursor it draws itself. A *client's* content is another
-process's memory with no buffer-release handshake to hold it still, so
-those pixels are masked out rather than judged, which is the difference
-between a check that finds real bugs and one that reports twenty-two
-imaginary ones. Apps declare a layout rather than coordinates, and a page
-too big for its window scrolls.
+Double-buffered rendering with damage-region clipping, and a compositor
+whose damage invariant is enforced by a verification mode that
+re-renders each frame unrestricted and reports any pixel that changed
+without being declared. A *client's* content is another process's
+memory with no buffer-release handshake to hold it still, so those
+pixels are masked out rather than judged — the difference between a
+check that finds real bugs and one that reports twenty-two imaginary
+ones. Apps declare a layout rather than coordinates, and a page too big
+for its window scrolls.
 
 **Sound.** An AC'97 driver behind a `sound_device` registry, and a PCM
 stream that is a **mapped ring** rather than a `write()` call — a control
