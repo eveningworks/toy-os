@@ -94,6 +94,19 @@ TOOLS = [
     ("grep",        "grep_test.py",            "/bin/grep through a real shell",     True,  None,                   True),
     ("ansi",        "ansi_cursor_test.py",     "ANSI cursor movement, as pixels",    True,  None,                   False),
 
+    # --- networking ---------------------------------------------------
+    # The longest tool here by far -- ten guests, each booted against a
+    # COPY of disk.img -- and the only coverage of the boot-time address
+    # path, since nothing in any gate boots a machine and looks at what
+    # it configured itself with.
+    ("net",         "net_test.py",             "the stack on both NICs, and DHCP",   True,  None,                   False),
+
+    # --- sound --------------------------------------------------------
+    # Boots its own guests with an AC97 and a wav audiodev, twice. It is
+    # the only run in which the ac97 KTESTs do not skip, which is why
+    # its own report treats "0 skipped" as an assertion.
+    ("audio",       "audio_test.py",           "AC97, the PCM ring and a WAV file",  True,  None,                   False),
+
     # --- input --------------------------------------------------------
     ("kbd",         "kbd_test.py",             "`kbd`'s four columns, both drivers", True,  None,                   False),
     ("kbd_paths",   "keyboard_paths_test.py",  "PS/2 and virtio-input agree",        True,  None,                   False),
@@ -108,8 +121,21 @@ TOOLS = [
      ("kcmdline", "needs an ISO built with KCMDLINE=\"video=1920x1080\""),                   False),
     ("taskbar",     "taskbar_test.py",         "taskbar overflow and grouping",      True,  None,                   True),
 
+    # ATTACHES to a running vm.py guest (its usage says to start one
+    # first), so wants_vm -- without it, it dies on a missing
+    # .vm.serial, which is the sweep's fault and not the tool's.
+    ("cursor_ibeam", "cursor_ibeam_test.py",   "named pointer shapes and the clamp", True,  None,                  True),
+
     # --- init ---------------------------------------------------------
     ("init",        "init_test.py",            "init and service supervision",       True,  None,                   False),
+
+    # --- the kernel's own output --------------------------------------
+    # A COM1 consumer that stops reading must not stop the machine. Its
+    # fixture is a reader that goes deaf, so it needs its own boot and
+    # its own serial socket.
+    ("backpressure", "serial_backpressure_test.py", "a stalled COM1 must not hang the guest", True, None,           True),
+    # LAST, and see DIRTIES_IMAGE below.
+    ("console_bleed", "console_bleed_test.py",  "the console must not paint over the desktop", True, None,          True),
 
     # --- on demand for their own reasons ------------------------------
     ("doom",        "doom_test.py",            "DOOM runs, draws and takes input",   True,
@@ -121,6 +147,18 @@ TOOLS = [
     ("doom_sound",  "doom_sound_test.py",      "DOOM's effects and OPL music",       False,
      ("iwad", "no IWAD fetched -- see tools/fetch_wad.py"),                                   False),
 ]
+
+# TOOLS THAT LEAVE disk.img CHANGED, run LAST for that reason.
+#
+# `console_bleed` deletes /etc/services.d/toywm and cannot put it back
+# -- there is nothing in the guest to copy it from -- so the image has
+# no autostarted desktop until the next `make iso`. Any tool running
+# after it boots into a machine it did not configure, which is this
+# file's own "green line that means nothing" hazard pointed at itself.
+# The sweep says so at the end rather than running `make iso` on
+# somebody's behalf: re-seeding the image is not a thing a test runner
+# should do unasked.
+DIRTIES_IMAGE = {"console_bleed"}
 
 # Deliberately NOT here, each for a stated reason:
 #   demo_test.py   -- a showpiece; CLAUDE.md says on demand ONLY, never
@@ -268,6 +306,10 @@ def main():
     print(f"ondemand_sweep: {len(runnable)} tool(s) to run, "
           f"{len(results)} skipped up front\n")
 
+    # A tool that changes disk.img runs after everything else, or the
+    # tools behind it boot a machine it reconfigured -- see
+    # DIRTIES_IMAGE.
+    runnable.sort(key=lambda e: e[0] in DIRTIES_IMAGE)
     serial = [e for e in runnable if e[3]]
     parallel = [e for e in runnable if not e[3]]
 
@@ -288,6 +330,10 @@ def main():
     nfail = sum(1 for r in results if r[1] == "fail")
     nskip = sum(1 for r in results if r[1] == "skip")
     print(f"\nondemand_sweep: {npass} pass, {nfail} fail, {nskip} skip")
+    dirtied = sorted(r[0] for r in results if r[0] in DIRTIES_IMAGE and r[1] != "skip")
+    if dirtied:
+        print(f"\ndisk.img was changed by: {', '.join(dirtied)}"
+              "\n  Run `make iso` before anything else boots it.")
     if nfail:
         print("\nFAILED:")
         for r in results:

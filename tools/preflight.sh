@@ -168,6 +168,9 @@ python3 tools/check_key_routing.py || fail "key routing check"
 step "check_tool_commands.py (a tool driving a command that no longer exists)"
 python3 tools/check_tool_commands.py || fail "tool command check"
 
+step "check_tool_coverage.py (a test tool no runner runs)"
+python3 tools/check_tool_coverage.py || fail "tool coverage check"
+
 step "check_licenses.py (a vendored port or font missing from LICENSE)"
 python3 tools/check_licenses.py || fail "license inventory check"
 

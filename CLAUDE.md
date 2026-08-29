@@ -1183,16 +1183,24 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   procedure as a script, including the `-u` and the recover-by-SHA that
   the prose version gets wrong.
 - **Has the on-demand half rotted?** -- `ondemand_sweep.py` runs the
-  ~22 tools neither `preflight.sh` nor `gui_regress.py` covers. TWO WERE
+  ~30 tools neither `preflight.sh` nor `gui_regress.py` covers. TWO WERE
   FOUND RED BY ACCIDENT in one session after rotting for an unknown
-  period. A SKIP is counted apart from a PASS. Never a gate.
+  period, and FIVE MORE were found missing from the sweep itself --
+  adding a tool to `tools/` does not add it here, and nothing checks
+  that it did. A SKIP is counted apart from a PASS; a tool that changes
+  `disk.img` runs LAST (`DIRTIES_IMAGE`) and the run says so. Never a
+  gate.
 - **Verify before delivering** -- `preflight.sh` (**stop your `vm.py`
   guest first -- it refuses to start while one holds disk.img's write
   lock**; the gate: clean build +
   iso + `check_deps.py` + `check_layout.py` + `check_dispatch.py` +
   `check_widget_ops.py` + `check_key_routing.py` +
   `boot_smoke_test.py` + `ktest_run.py` + `usertest_run.py`),
-  `check_docs.py`, `check_licenses.py` (**every vendored port and shipped font is named in `LICENSE`** -- `userland/ports/doom/` is GPL-2-OR-LATER inside an MIT repo and was not mentioned there at all, and the font inventory said two when there were five), `check_tool_commands.py` (**every guest command a
+  `check_docs.py`, `check_licenses.py` (**every vendored port and shipped font is named in `LICENSE`** -- `userland/ports/doom/` is GPL-2-OR-LATER inside an MIT repo and was not mentioned there at all, and the font inventory said two when there were five), `check_tool_coverage.py` (**every test tool is named by a
+  RUNNER** -- a tool no runner names is run when somebody types it,
+  which is never; five were found orphaned at once, one of them red and
+  pre-existing. Waive with a reason in its `EXEMPT`),
+  `check_tool_commands.py` (**every guest command a
   tool drives still EXISTS** -- it found `kvm_soak.py` driving `delete`,
   which is `rm` now, so its cleanup had been a no-op and it had been
   littering `disk.img`. It cannot see a command whose OUTPUT changed,
@@ -1368,10 +1376,13 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   path to `virtio_net.c`; TWO CARDS ON TWO SUBNETS, where the assertion
   is which device's counters moved rather than that a ping worked; a
   REAL PYTHON SOCKET on the host as the far end of a UDP round trip;
-  DHCP on 192.168.76.0/24, since on the default network a working
-  client and the hardcoded 10.0.2.15 are indistinguishable; and
-  **`inetd`**, where a client that connects and SAYS NOTHING must not
-  block the next one -- "both were answered eventually" is what a
+  DHCP on 192.168.76.0/24 WITH NOBODY TYPING ANYTHING, since on the
+  default network a real lease and an invented 10.0.2.15 are
+  indistinguishable; LINK-LOCAL on a socket netdev whose only peer is
+  the test, the one segment SLIRP cannot be, where a SECOND boot is
+  answered for the address the first one claimed and must move off it;
+  and **`inetd`**, where a client that connects and SAYS NOTHING must
+  not block the next one -- "both were answered eventually" is what a
   one-at-a-time server passes, so the first is left hanging. Its
   ARP-rate phase is a regression test with a measurement behind it:
   104 frames for two pings before rate limiting, 5 after. DNS SKIPS on
@@ -1852,6 +1863,14 @@ helper script, a test harness) belongs in `tools/`, not left as a
 scratch/one-off -- see `## tools/` above for the bar ("does this fix a
 rederive-from-scratch cost"). Update the files that describe `tools/`
 (this file at minimum) to match when something's added there.
+
+**AND A NEW TEST TOOL MUST BE NAMED BY A RUNNER** -- `preflight.sh`,
+`gui_regress.py` or `ondemand_sweep.py`, or the sweep's
+deliberate-exclusions list with a reason. A tool no runner names is
+run when somebody types it, which is never: five were found outside
+every runner at once, one of them red and pre-existing since before
+it was last touched. Nothing enforces this; the audit is to enumerate
+`tools/*_test.py` and subtract what each runner names.
 
 The files are already on the real checkout -- there is nothing to
 "deliver". Commit with plain `git`, and push verified work.

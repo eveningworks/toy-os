@@ -2141,3 +2141,69 @@ and read the tool's own typing helpers before improvising.
   it SPAWNED instead, and have it write its verdict to
   `/tmp/<name>.out`, because a spawned process's console output arrives
   while the harness is between commands and is dropped.
+
+**2026-08-29 (moving a guarantee out of the kernel: what it does to
+every test that inherited it).** The kernel stopped assigning a boot-time
+IP so `/bin/dhcp` could. Nothing about the stack changed, and twenty
+checks across two suites went red or went quiet.
+
+- **WHEN A PRECONDITION MOVES FROM RING 0 TO RING 3, IT STOPS BEING
+  INSTANT.** The address used to exist before the first process ran; it
+  now lands about a second after the debug prompt. Six `net_test.py`
+  phases pinged immediately and failed as `no such device` -- which
+  looks like a routing bug and is a race. The fix belongs in the
+  LAUNCHER, not in each phase: `launch()` polls until every card that
+  will get an address has one. Ask, of anything a change makes
+  asynchronous, which tests were relying on it being synchronous.
+- **AND A KTEST THAT INHERITED THAT PRECONDITION SILENTLY LOSES
+  COVERAGE.** `addressed_device()` returned the first device holding an
+  address, and fourteen KTESTs skipped without one. They still passed --
+  the lease happened to arrive before `ktest` ran -- so nothing failed,
+  and the whole file's coverage had quietly become a race. A skip
+  reports only as a count nobody reads. The helper establishes the
+  precondition itself now, which is this repo's own rule arriving from a
+  new direction: **a test must not inherit a precondition somebody else
+  is now responsible for.** Found by asking what used to guarantee it,
+  not by a failure.
+- **THE POSITIVE CONTROL FOR THAT IS ONE LINE**: `if (0 && d && d->ip)`
+  forces the fallback, and the run then shows the fallback's own log
+  line and 13 net tests passing with 0 skipped through it. Without it
+  "green" would only have said the fast path still worked.
+- **BUILD THE FIXTURE THE EMULATOR CANNOT BE.** Link-local only happens
+  where nothing answers DHCP, and SLIRP always answers. `-netdev
+  socket,listen=127.0.0.1:PORT` with no peer is a segment with nobody on
+  it; connecting a Python socket to it makes the test a NEIGHBOUR as
+  well as an observer, since QEMU's socket netdev is raw Ethernet behind
+  a four-byte big-endian length. That one fixture supplied the negative
+  case, the ARP frames as evidence, and the conflicting host.
+- **DO NOT PREDICT WHAT THE CODE WILL CHOOSE -- MAKE IT CHOOSE TWICE.**
+  Checking duplicate-address detection needs a taken address. Computing
+  the guest's candidate on the host would be checking its arithmetic
+  against a copy of itself. Two boots instead: one unopposed to learn
+  the address, one where the host answers for exactly that address, and
+  the assertion is that the second differs from the first. It moved from
+  `.205.161` to `.200.14`.
+- **A ONE-SHOT IS STILL `running` WHILE IT WORKS.** The link-local path
+  applies the address and then announces for two more seconds, so
+  `ifconfig` answering is not the client having finished, and a status
+  read there says `running` -- true, and not what the check was about.
+  Poll for the service to leave `running` before asserting what it
+  settled as.
+- **`AF_UNIX path too long` IS 107 BYTES AND IT FAILS AS "never reached
+  a debug prompt".** A scratch directory deep enough to exceed it made
+  `Shell(sock)` raise `OSError` inside a retry loop that swallowed it.
+  One socket name a single character longer than another was the whole
+  difference. Keep guest serial sockets under a short path.
+- **THE FIRST `service` RUN ON A MACHINE FINISHES AFTER THE CONSOLE'S
+  READ WINDOW.** init publishes `/tmp/init.status` only when a doorbell
+  asks, so the first reader rings, waits, and its output turns up in
+  front of the NEXT command -- which reads exactly like the command
+  having printed nothing. Ask again; do not lengthen one read.
+- **A HARNESS CAN ENCODE A VERB THE GUEST DOES NOT HAVE.** `Shell.run()`
+  in two tools exempted `spawn ` from its `sh ` prefix, and the debug
+  console has no `spawn` -- its verbs are edit/gui/help/ktest/lsdev/
+  lsfs/meminfo/nano/polled/schedtest/sh/usb. Every such call had been
+  answering `unknown command: spawn` into whatever check read it. The
+  same class as a tool driving a command that moved to `/bin`, which is
+  what `check_tool_commands.py` exists for -- and it cannot see this
+  one, because the command it names is real, just not there.

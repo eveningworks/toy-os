@@ -407,6 +407,13 @@ to this file too).
      `tools/`, not left as scratch -- see CLAUDE.md's `## tools/`
      section for the bar, and update CLAUDE.md's own `tools/` listing
      (and any other doc that describes it) to match if you add one.
+   - **AND A NEW TEST TOOL MUST BE NAMED BY A RUNNER, or nothing ever
+     runs it again.** `preflight.sh`, `gui_regress.py` or
+     `ondemand_sweep.py` -- one of the three, or the sweep's
+     deliberate-exclusions list WITH a reason. Nothing checks this:
+     five tools were found outside every runner in one sweep audit,
+     one of them red and pre-existing, and the way to find them is to
+     enumerate `tools/*_test.py` and subtract what each runner names.
    - **No git tag for a routine change.** Tags (`v<version>`) only
      happen when actually cutting a release via
      `tools/set_version.sh <version>` -- that's a separate judgment

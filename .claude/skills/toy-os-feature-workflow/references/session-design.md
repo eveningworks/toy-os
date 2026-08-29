@@ -2090,3 +2090,54 @@ sockets would otherwise become IPC to a daemon and this OS has no IPC
 that can carry them; and an ICMP socket is a PING socket rather than a
 raw one, because a raw socket is what `CAP_NET_RAW` gates on Linux and
 this kernel has no privilege model to gate with.
+
+**2026-08-29 (running the DHCP client at boot: three "open design
+questions" that had already been answered in the tree).** The roadmap
+item said what remained was "where the descriptor lives, what `Restart=`
+means for a client that asks once and exits, and what a boot with no
+DHCP server should cost". Half an hour of reading answered all three
+without a design decision being needed.
+
+- **THE MECHANISM WAS ALREADY THERE, UNDER ANOTHER NAME.** init's
+  `Restart=no` IS systemd's `Type=oneshot`: it already had a `done`
+  state, already refused to restart, and `svc_gates_dependents()`
+  already released the readiness barrier for "a one-shot that has had
+  its single run". Nothing needed building. **Before designing a
+  concept, grep for the one already implementing it** -- the item had
+  been open for a week describing work that did not exist.
+- **AND SO WAS THE SYSCALL'S HARD PART.** Link-local needs RFC 3927's
+  ARP Probe: a request whose sender is `0.0.0.0`. `arp_resolve()` had
+  been sending exactly that for months, because it fills the sender
+  field from the device's own address and an unconfigured device's is
+  zero. Asking again after the address is applied sends the same frame
+  with the new address as sender, which is the RFC's ARP Announcement.
+  One existing code path spells both, and the new syscall is a copy-in,
+  a drain and a call. **Read what the existing call already puts on the
+  wire before adding one that puts something similar there.**
+- **THE SPLIT THAT DECIDED THE SYSCALL'S SHAPE: it does not block.** It
+  sends one request and reports whether a reply is cached YET. That is
+  what keeps the probe COUNT and the probe SPACING in ring 3 -- a
+  blocking "is this address free, wait N seconds" call would have
+  compiled an RFC into the kernel, and the next RFC would need another
+  one. Same mechanism/policy line the DHCP client itself is on.
+- **A STATUS WORD THAT CANNOT FAIL ANSWERS NOTHING.** A `Restart=no`
+  service reported `done` whether it had done its job or died trying, so
+  `service` could not answer "did this machine get an address?". init
+  records the exit code now and reports `done` or `failed`. The same
+  hole was in the spawn-failure path: a one-shot whose binary does not
+  exist never produces a child to report a code, so it read as `done`
+  while nothing had run. **Wherever a state is derived, ask which two
+  situations it collapses.**
+- **REMOVING A PLACEHOLDER REMOVES A GUARANTEE NOBODY WROTE DOWN.**
+  `net_autoconfig()`'s own comment called itself a stand-in for DHCP,
+  and deleting it was the point of the change -- but "there is an
+  address before the first process runs" was load-bearing for six test
+  phases and fourteen KTESTs. The deletion is right (Linux's kernel
+  assigns none; the address it invented belongs to one emulator's
+  network) and the cost is real and belongs in the commit.
+- **A DOC'S STATED REASON CAN BE WRONG WHILE ITS RULE IS RIGHT.**
+  `services.d/README.md` said `Exec=` takes no arguments because
+  "`SYS_SPAWN` takes a path". The syscall takes an argument string;
+  init simply passes none. The rule stands, the justification was
+  false, and a future session reading it would have designed around a
+  limit that does not exist.

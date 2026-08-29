@@ -186,7 +186,14 @@ class Shell:
         self.s.settimeout(self.timeout)
 
     def run(self, cmd, timeout=None):
-        if not cmd.startswith(("sh ", "spawn ")) and cmd:
+        # `sh ` unless it is already there. NOT a `spawn ` exemption:
+        # the debug console's verbs are edit/gui/help/ktest/lsdev/lsfs/
+        # meminfo/nano/polled/schedtest/sh/usb, and `spawn` is not among
+        # them -- it is a /bin program the kernel shell runs, so it
+        # needs the prefix like everything else. Exempting it sent
+        # `spawn ...` straight to the console, which answered `unknown
+        # command: spawn` into whatever check was reading.
+        if not cmd.startswith("sh ") and cmd:
             cmd = "sh " + cmd
         self.s.sendall((cmd + "\n").encode())
         out, deadline = b"", time.time() + (timeout or self.timeout)
@@ -451,7 +458,7 @@ def service_status(sh, timeout=30.0):
     deadline = time.time() + timeout
     out = ""
     while time.time() < deadline:
-        out = sh.run("sh spawn /bin/service", timeout=20.0)
+        out = sh.run("spawn /bin/service", timeout=20.0)
         if "NAME" in out and "EXEC" in out:
             return out
         time.sleep(0.5)

@@ -93,7 +93,14 @@ class Shell:
         # its own command set is kernel introspection, and `df`/`dmesg`
         # are programs. Prefixing here rather than at every call site,
         # the same thing vm.py's exec does.
-        if not cmd.startswith(("sh ", "spawn ")) and cmd:
+        # `sh ` unless it is already there. NOT a `spawn ` exemption:
+        # the debug console's verbs are edit/gui/help/ktest/lsdev/lsfs/
+        # meminfo/nano/polled/schedtest/sh/usb, and `spawn` is not among
+        # them -- it is a /bin program the kernel shell runs, so it
+        # needs the prefix like everything else. Exempting it sent
+        # `spawn ...` straight to the console, which answered `unknown
+        # command: spawn` into whatever check was reading.
+        if not cmd.startswith("sh ") and cmd:
             cmd = "sh " + cmd
         self.s.sendall((cmd + "\n").encode())
         out, deadline = b"", time.time() + self.timeout

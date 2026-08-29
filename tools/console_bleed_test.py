@@ -28,7 +28,8 @@ idle_desktop_test.py exists: a harness returning one cached frame
 reports a beautifully clean desktop. So a real window is opened
 afterwards and the screen MUST change.
 
-Usage (this tool boots and drives its own guest):
+Usage (it ATTACHES to a running guest -- start one first):
+    python3 tools/vm.py start
     python3 tools/console_bleed_test.py
 """
 

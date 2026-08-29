@@ -2411,7 +2411,7 @@ window without going through it will find its layout polls timing out.
   human reading the vendored license file, which is why the entries in
   `LICENSE` quote the version language rather than paraphrasing it.
 
-- **`ondemand_sweep.py`** -- runs the ~22 test tools that **neither**
+- **`ondemand_sweep.py`** -- runs the ~30 test tools that **neither**
   `preflight.sh` nor `gui_regress.py` covers, and reports which have
   rotted.
 
@@ -2436,12 +2436,30 @@ window without going through it will find its layout polls timing out.
   guess: nearly all of these take the shared VM slot, the physical
   console, or boot their own machine. This is not `gui_regress`.
 
+  **A TOOL THAT CHANGES `disk.img` RUNS LAST** (`DIRTIES_IMAGE`).
+  `console_bleed_test.py` deletes `/etc/services.d/toywm` and cannot put
+  it back -- there is nothing in the guest to copy it from -- so every
+  tool after it would boot a machine it did not configure, which is this
+  file's own "a green line that means nothing" hazard pointed at itself.
+  The sweep says at the end that `make iso` is needed rather than
+  re-seeding the image on somebody's behalf.
+
   NEVER A GATE. Several need hardware, Docker or a fetched IWAD, and a
   check that cannot pass on a clean checkout is one people learn to
   ignore. Run it before a release, or when you want to know whether the
   on-demand half of this directory still works. `demo_test.py` is
   deliberately excluded even from here -- CLAUDE.md says on demand
-  ONLY.
+  ONLY; `mkpart_test.py` is excluded because despite the name it is a
+  WRITER that takes a disk-image argument, so running it bare is an
+  argparse error rather than a result.
+
+  **Five tools were missing from it for an unknown period** and were
+  found the same way its own first run found two red ones -- by
+  enumerating `tools/*_test.py` and subtracting what each runner names:
+  `net_test.py`, `audio_test.py`, `cursor_ibeam_test.py`,
+  `serial_backpressure_test.py` and `console_bleed_test.py`. Adding a
+  tool to `tools/` does not add it here, and nothing checks that it
+  did.
 
 - **`predates.py`** -- answers "did this failure exist before my
   changes?" by measuring rather than guessing: stashes the tree,
@@ -2493,6 +2511,36 @@ window without going through it will find its layout polls timing out.
   which is the rot that actually bit `fs_switch_test` -- the name `df`
   stayed valid the whole time. `ondemand_sweep.py` catches that by
   running things; this is the cheap subset that costs a second.
+
+- **`check_tool_coverage.py`** -- static check that every
+  `tools/*_test.py` is named by a runner: `preflight.sh`,
+  `gui_regress.py`, or `ondemand_sweep.py`'s `TOOLS` table.
+
+  **The gap is measured, not theoretical.** `ondemand_sweep.py` exists
+  because tools rot when nothing runs them -- and then FIVE were found
+  outside the sweep itself (`net_test.py`, `audio_test.py`,
+  `cursor_ibeam_test.py`, `serial_backpressure_test.py`,
+  `console_bleed_test.py`), one of them failing a check that measured
+  PRE-EXISTING against the commit before it was found. Adding a tool to
+  `tools/` adds it to nothing that runs it, and nothing noticed. Same
+  shape as `check_dispatch.py` and `check_widget_ops.py`: the repo had
+  the right pattern and no check that it was being followed.
+
+  **It matches by FILENAME only**, deliberately. Counting a bare stem
+  as well would let any quoted word in any runner stand for coverage --
+  a precondition wrong in the permissive direction, which manufactures
+  coverage that does not exist and makes silence meaningless. That is
+  the same mistake `ondemand_sweep.py`'s own `hires` precondition
+  documents.
+
+  **Its limits, stated because an oversold check is worse than none:**
+  it does not check that the runner can actually RUN the tool (the
+  sweep's `wants_vm` column is a real thing to get wrong, and getting
+  it wrong makes a tool fail on a missing socket rather than on its own
+  subject -- three of the five needed it), nor that the tool passes.
+  Green means "nothing is orphaned". Waive with a reason in `EXEMPT`;
+  three are (`demo_test.py`, `mkpart_test.py`, and `qmp_test.py`, a
+  library with an unfortunate name).
 
 - **`regex_hostcheck.py`** -- compiles `userland/tests/regex_cases.h`
   twice, once against the real `userland/libc/regex.c` and once against
