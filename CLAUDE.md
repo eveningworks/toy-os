@@ -1683,7 +1683,7 @@ a milestone's title must match in both files. A **Needs:** line appears
 at most once per milestone and only where the dependency is real and not
 obvious. When you tick an item, keep it to one line too.
 
-## The session workflow skill lives IN this repo
+## Two skills live IN this repo
 
 `.claude/skills/toy-os-feature-workflow/` -- the end-to-end playbook a
 session follows (research first, offer real choices, build and test with
@@ -1691,6 +1691,11 @@ proof, write the docs, ship). It used to live in `~/.claude/skills/`,
 outside version control, which meant ~1,750 lines of accumulated project
 knowledge had no history, no diff review and no backup. It is tracked
 here now for the same reason everything else is.
+
+`.claude/skills/network-egress-disclosure/` -- the second, and much
+shorter: what a commit must disclose when testing reached a host outside
+this machine. It is indexed above in "Delivering changes" as well,
+because a skill nobody invokes is a rule nobody follows.
 
 **`SKILL.md` is the PLAYBOOK; the accumulated lessons live in
 `references/`.** Everything a session learned the hard way was inline
@@ -1740,6 +1745,21 @@ This is the same instinct as the file list and the layer diagram below,
 pointed at the person rather than at the code: the file list says what
 changed, the diagram says what the system now looks like, and this says
 what is different when you boot it.
+
+**AND IF TESTING LEFT THIS MACHINE, THE COMMIT NAMES EVERY EXTERNAL
+HOST IT REACHED** (standing project instruction, 2026-08-29). Network
+testing here can reach real hosts through QEMU's user-mode networking,
+from the maintainer's address and connection -- so a commit whose
+testing sent a packet outside the local machine ends with an
+`External hosts contacted during testing:` block listing each host, its
+resolved ADDRESSES, the protocol, and what did it. Say `none (SLIRP and
+localhost only)` when that is the answer. **SLIRP's 10.0.2.3 is a
+FORWARDER, not a resolver**: a DNS lookup through it leaves the machine
+even though the address looks local. Prefer a server on loopback so the
+disclosure stays short and the suite never depends on connectivity --
+`tools/net_test.py` fetches from a local `http.server` and SKIPS its DNS
+checks offline. Full rule and format:
+`.claude/skills/network-egress-disclosure/`.
 
 List every file added or edited in the final response, as a compact
 list (standing project instruction) -- always, regardless of mode.
