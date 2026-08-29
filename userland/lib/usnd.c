@@ -258,3 +258,112 @@ int usnd_seek(struct usnd_stream *s, uint64_t device_frame) {
     s->out_pos = device_frame;
     return 0;
 }
+
+// --- an in-memory source ----------------------------------------------
+//
+// A codec whose "file" is a buffer the caller already holds, so that
+// samples from anywhere -- a WAD lump, a synthesiser -- go through the
+// SAME conversion stage as a file does, rather than growing a second
+// resampler beside it.
+//
+// **IT IS DELIBERATELY NOT A ROW IN g_codecs.** That table is what
+// usnd_probe() walks, and this claims no bytes on disk; putting it
+// there would offer it to every probe for nothing. The kernel makes the
+// same call about ramfs and its backend registry, for the same reason:
+// a registry is a list of things every consumer of it will act on.
+
+struct memsrc {
+    const int16_t *data;
+    uint64_t frames, pos;
+    int channels;
+};
+
+static int mem_probe(const uint8_t *d, size_t n) { (void)d; (void)n; return 0; }
+
+static long mem_read(struct usnd_stream *s, int16_t *dst, long frames) {
+    struct memsrc *m = s->priv;
+    if (m->pos >= m->frames) return 0;
+    if ((uint64_t)frames > m->frames - m->pos) frames = (long)(m->frames - m->pos);
+    memcpy(dst, m->data + m->pos * (uint64_t)m->channels,
+           (size_t)frames * m->channels * sizeof(int16_t));
+    m->pos += (uint64_t)frames;
+    return frames;
+}
+
+static int mem_seek(struct usnd_stream *s, uint64_t frame) {
+    struct memsrc *m = s->priv;
+    m->pos = frame > m->frames ? m->frames : frame;
+    return 0;
+}
+
+static void mem_close(struct usnd_stream *s) { free(s->priv); s->priv = 0; }
+
+static const struct usnd_codec mem_codec = {
+    .name = "pcm", .probe = mem_probe, .open = 0,
+    .read = mem_read, .seek = mem_seek, .close = mem_close,
+};
+
+// --- clips ------------------------------------------------------------
+
+int usnd_clip_drain(struct usnd_stream *s, struct usnd_clip *c) {
+    memset(c, 0, sizeof *c);
+
+    uint64_t total = usnd_stream_frames(s);
+    if (!total || total > USND_CLIP_MAX_FRAMES) {
+        usnd_fail(total ? "too long to load as a clip" : "clip has no samples");
+        return total ? -ENOTSUP : -EINVAL;
+    }
+    int16_t *pcm = malloc((size_t)total * USND_CHANNELS * sizeof(int16_t));
+    if (!pcm) { usnd_fail("out of memory"); return -ENOMEM; }
+
+    // Reads until the decoder stops rather than trusting the estimate:
+    // the conversion can land a frame either side of it, and never past
+    // the buffer.
+    uint64_t got = 0;
+    while (got < total) {
+        long n = usnd_read(s, pcm + got * USND_CHANNELS, (long)(total - got));
+        if (n <= 0) break;
+        got += (uint64_t)n;
+    }
+    if (!got) { free(pcm); usnd_fail("clip decoded to nothing"); return -EINVAL; }
+    c->pcm = pcm;
+    c->frames = got;
+    return 0;
+}
+
+int usnd_clip_from_pcm(const int16_t *data, uint64_t frames, uint32_t rate,
+                       int channels, struct usnd_clip *c) {
+    memset(c, 0, sizeof *c);
+    if (!data || !frames || (channels != 1 && channels != 2)) {
+        usnd_fail("only mono and stereo PCM is supported");
+        return -EINVAL;
+    }
+    if (rate < 4000 || rate > 192000) {
+        usnd_fail("sample rate is out of range");
+        return -ENOTSUP;
+    }
+
+    struct usnd_stream s;
+    memset(&s, 0, sizeof s);
+    s.fd = -1;                       // nothing to close
+    s.codec = &mem_codec;
+    s.fmt.rate = rate;
+    s.fmt.channels = (uint16_t)channels;
+    s.fmt.bits = 16;
+    s.frames = frames;
+    s.step = (uint32_t)(((uint64_t)rate << 16) / USND_RATE);
+    s.src_cap = SRC_FRAMES;
+    s.src = malloc((size_t)s.src_cap * channels * sizeof(int16_t));
+    struct memsrc *m = malloc(sizeof *m);
+    if (!s.src || !m) {
+        free(s.src); free(m);
+        usnd_fail("out of memory");
+        return -ENOMEM;
+    }
+    m->data = data; m->frames = frames; m->pos = 0; m->channels = channels;
+    s.priv = m;
+
+    int rc = usnd_clip_drain(&s, c);
+    usnd_close(&s);
+    return rc;
+}

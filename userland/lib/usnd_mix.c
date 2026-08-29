@@ -42,7 +42,11 @@
 struct voice {
     const int16_t *pcm;     // caller-owned clip samples, device format
     uint64_t frames, pos;
-    int gain;
+    int gain_l, gain_r;
+    // Bumped every time the slot is handed out. A handle carries it, so
+    // a caller holding one for a sound that has since finished cannot
+    // steer whatever landed in the slot afterwards.
+    unsigned gen;
     int active;
 };
 
@@ -57,6 +61,14 @@ static struct voice g_voices[USND_VOICES];
 static struct usnd_stream g_st;
 static int g_st_open, g_st_paused, g_st_done;
 
+// The caller-fed source. A plain SPSC ring: the producer writes at
+// `head`, the mixer reads at `tail`, and neither ever writes the
+// other's index.
+static int16_t *g_push;
+static long g_push_head, g_push_tail;
+static int g_push_on;
+static int g_push_gain = 256;
+
 // .bss, not stack: the ring-3 frame budget is 2 KiB and these are 20.
 static int32_t g_acc[MIX_FRAMES * USND_CHANNELS];
 static int16_t g_scratch[MIX_FRAMES * USND_CHANNELS];
@@ -64,10 +76,13 @@ static int16_t g_out[MIX_FRAMES * USND_CHANNELS];
 
 // --- mixing -----------------------------------------------------------
 
-static void add_voice(const int16_t *src, long frames, int gain) {
-    long n = frames * USND_CHANNELS;
-    for (long i = 0; i < n; i++)
-        g_acc[i] += ((int32_t)src[i] * gain) >> 8;
+// PER CHANNEL, because panning is a different gain left and right --
+// which is the whole of what a game means by "the sound is over there".
+static void add_voice(const int16_t *src, long frames, int gain_l, int gain_r) {
+    for (long f = 0; f < frames; f++) {
+        g_acc[f * 2]     += ((int32_t)src[f * 2]     * gain_l) >> 8;
+        g_acc[f * 2 + 1] += ((int32_t)src[f * 2 + 1] * gain_r) >> 8;
+    }
 }
 
 // Sums every active voice into `g_out`. Always produces `frames` frames;
@@ -78,7 +93,7 @@ static void mix(long frames) {
     if (g_st_open && !g_st_paused && !g_st_done) {
         long n = usnd_read(&g_st, g_scratch, frames);
         if (n <= 0) g_st_done = 1;
-        else add_voice(g_scratch, n, GAIN_UNITY);
+        else add_voice(g_scratch, n, GAIN_UNITY, GAIN_UNITY);
     }
 
     for (int v = 0; v < USND_VOICES; v++) {
@@ -86,9 +101,27 @@ static void mix(long frames) {
         if (!vo->active) continue;
         long n = frames;
         if ((uint64_t)n > vo->frames - vo->pos) n = (long)(vo->frames - vo->pos);
-        add_voice(vo->pcm + vo->pos * USND_CHANNELS, n, vo->gain);
+        add_voice(vo->pcm + vo->pos * USND_CHANNELS, n, vo->gain_l, vo->gain_r);
         vo->pos += (uint64_t)n;
         if (vo->pos >= vo->frames) vo->active = 0;
+    }
+
+    // The pushed source. An UNDERRUN IS SILENCE, not a stall: a
+    // synthesiser that fell behind should leave a gap and carry on,
+    // never make the mixer wait on it.
+    if (g_push_on && g_push) {
+        long want = frames;
+        while (want > 0) {
+            long avail = g_push_head - g_push_tail;
+            if (avail <= 0) break;
+            long idx = g_push_tail % USND_PUSH_FRAMES;
+            long run = USND_PUSH_FRAMES - idx;      // to the ring's end
+            if (run > avail) run = avail;
+            if (run > want) run = want;
+            add_voice(g_push + idx * USND_CHANNELS, run, g_push_gain, g_push_gain);
+            g_push_tail += run;
+            want -= run;
+        }
     }
 
     // Master gain, then SATURATE. Wrapping a sum that overshoots is the
@@ -107,6 +140,11 @@ static int voices_active(void) {
     if (g_st_open && !g_st_paused && !g_st_done) return 1;
     for (int v = 0; v < USND_VOICES; v++)
         if (g_voices[v].active) return 1;
+    // An OPEN pushed source counts even with nothing queued: a
+    // synthesiser between notes is still playing, and letting the mixer
+    // idle-pin its cursor here would cost a ring of latency the moment
+    // the next sample arrived.
+    if (g_push_on) return 1;
     return 0;
 }
 
@@ -142,8 +180,16 @@ static void *worker_main(void *arg) {
 
 // --- lifecycle --------------------------------------------------------
 
+// HOW MANY SUBSYSTEMS HAVE OPENED THE LIBRARY. Doom is the reason:
+// its effects and its music initialise and shut down INDEPENDENTLY
+// (I_ShutdownSound and I_ShutdownMusic are separate calls in separate
+// places), so whichever tore down first would free the mixer, join its
+// worker and close the sink while the other was still feeding it. A
+// count rather than a flag, so the last one out does the teardown.
+static int g_users;
+
 int usnd_init(void) {
-    if (g_ready) return 0;
+    if (g_ready) { g_users++; return 0; }
 
     // One row today. A daemon sink goes FIRST in this list, with the
     // device as the fallback -- an app that got the daemon and an app
@@ -166,17 +212,20 @@ int usnd_init(void) {
         return -ENOMEM;
     }
     g_ready = 1;
+    g_users = 1;
     return 0;
 }
 
 void usnd_shutdown(void) {
     if (!g_ready) return;
+    if (--g_users > 0) return;   // somebody else is still playing
     g_quit = 1;
     pthread_join(g_worker, 0);   // joined, not detached: the sink closes after
     pthread_mutex_lock(&g_lock);
     if (g_st_open) { usnd_close(&g_st); g_st_open = 0; }
     memset(g_voices, 0, sizeof g_voices);
     pthread_mutex_unlock(&g_lock);
+    usnd_push_close();
     g_sink->close();
     g_sink = 0;
     g_ready = 0;
@@ -190,36 +239,12 @@ const char *usnd_sink_name(void) { return g_sink ? g_sink->name : "none"; }
 
 int usnd_clip_load(const char *path, struct usnd_clip *c) {
     memset(c, 0, sizeof *c);
-
     struct usnd_stream s;
     int rc = usnd_open(path, &s);
     if (rc != 0) return rc;
-
-    uint64_t total = usnd_stream_frames(&s);
-    if (!total || total > USND_CLIP_MAX_FRAMES) {
-        usnd_close(&s);
-        usnd_fail(total ? "too long to load as a clip" : "clip has no samples");
-        return total ? -ENOTSUP : -EINVAL;
-    }
-
-    int16_t *pcm = malloc((size_t)total * USND_CHANNELS * sizeof(int16_t));
-    if (!pcm) { usnd_close(&s); usnd_fail("out of memory"); return -ENOMEM; }
-
-    // The conversion can land a frame either side of the estimate, so
-    // the loop reads until the decoder stops rather than trusting the
-    // count -- and never past the buffer.
-    uint64_t got = 0;
-    while (got < total) {
-        long n = usnd_read(&s, pcm + got * USND_CHANNELS, (long)(total - got));
-        if (n <= 0) break;
-        got += (uint64_t)n;
-    }
+    rc = usnd_clip_drain(&s, c);
     usnd_close(&s);
-
-    if (!got) { free(pcm); usnd_fail("clip decoded to nothing"); return -EINVAL; }
-    c->pcm = pcm;
-    c->frames = got;
-    return 0;
+    return rc;
 }
 
 void usnd_clip_free(struct usnd_clip *c) {
@@ -237,24 +262,138 @@ void usnd_clip_free(struct usnd_clip *c) {
     memset(c, 0, sizeof *c);
 }
 
-int usnd_clip_play(const struct usnd_clip *c, int gain) {
-    if (!g_ready || !c->pcm || !c->frames) return -1;
-    if (gain < 0) gain = 0;
+// A handle is (generation << 8) | (slot + 1), so 0 is never a valid
+// one and a wrapped generation cannot collide with a live slot for
+// 2^23 reuses. Packed into an int because a handle is a token to hand
+// back, not a struct to copy around.
+#define VOICE_SLOT(h) (((h) & 0xFF) - 1)
+#define VOICE_GEN(h)  ((unsigned)(h) >> 8)
+#define VOICE_HANDLE(slot, gen) (int)((((unsigned)(gen) & 0x7FFFFFu) << 8) | ((unsigned)(slot) + 1))
+
+// The live voice a handle names, or NULL. Call with the lock held.
+static struct voice *voice_of(usnd_voice_t v) {
+    if (v == USND_VOICE_NONE) return 0;
+    int slot = VOICE_SLOT(v);
+    if (slot < 0 || slot >= USND_VOICES) return 0;
+    struct voice *vo = &g_voices[slot];
+    if (!vo->active || vo->gen != VOICE_GEN(v)) return 0;
+    return vo;
+}
+
+static int clamp_gain(int g) { return g < 0 ? 0 : (g > 1024 ? 1024 : g); }
+
+usnd_voice_t usnd_voice_play(const struct usnd_clip *c, int gain_l, int gain_r) {
+    if (!g_ready || !c->pcm || !c->frames) return USND_VOICE_NONE;
 
     pthread_mutex_lock(&g_lock);
     int slot = -1;
     for (int v = 0; v < USND_VOICES; v++)
         if (!g_voices[v].active) { slot = v; break; }
+    usnd_voice_t h = USND_VOICE_NONE;
     if (slot >= 0) {
-        g_voices[slot].pcm = c->pcm;
-        g_voices[slot].frames = c->frames;
-        g_voices[slot].pos = 0;
-        g_voices[slot].gain = gain;
-        g_voices[slot].active = 1;
+        struct voice *vo = &g_voices[slot];
+        vo->pcm = c->pcm;
+        vo->frames = c->frames;
+        vo->pos = 0;
+        vo->gain_l = clamp_gain(gain_l);
+        vo->gain_r = clamp_gain(gain_r);
+        vo->gen = (vo->gen + 1) & 0x7FFFFFu;
+        vo->active = 1;
+        h = VOICE_HANDLE(slot, vo->gen);
     }
     pthread_mutex_unlock(&g_lock);
-    return slot >= 0 ? 0 : -1;
+    return h;
 }
+
+int usnd_voice_set_gain(usnd_voice_t v, int gain_l, int gain_r) {
+    if (!g_ready) return 0;
+    pthread_mutex_lock(&g_lock);
+    struct voice *vo = voice_of(v);
+    if (vo) {
+        vo->gain_l = clamp_gain(gain_l);
+        vo->gain_r = clamp_gain(gain_r);
+    }
+    pthread_mutex_unlock(&g_lock);
+    return vo != 0;
+}
+
+void usnd_voice_stop(usnd_voice_t v) {
+    if (!g_ready) return;
+    pthread_mutex_lock(&g_lock);
+    struct voice *vo = voice_of(v);
+    if (vo) vo->active = 0;
+    pthread_mutex_unlock(&g_lock);
+}
+
+int usnd_voice_active(usnd_voice_t v) {
+    if (!g_ready) return 0;
+    pthread_mutex_lock(&g_lock);
+    int live = voice_of(v) != 0;
+    pthread_mutex_unlock(&g_lock);
+    return live;
+}
+
+int usnd_clip_play(const struct usnd_clip *c, int gain) {
+    return usnd_voice_play(c, gain, gain) == USND_VOICE_NONE ? -1 : 0;
+}
+
+// --- the pushed source ------------------------------------------------
+
+int usnd_push_open(void) {
+    if (g_push_on) return -EBUSY;
+    int16_t *buf = malloc((size_t)USND_PUSH_FRAMES * USND_CHANNELS * sizeof(int16_t));
+    if (!buf) { usnd_fail("out of memory"); return -ENOMEM; }
+    pthread_mutex_lock(&g_lock);
+    g_push = buf;
+    g_push_head = g_push_tail = 0;
+    g_push_on = 1;
+    pthread_mutex_unlock(&g_lock);
+    return 0;
+}
+
+void usnd_push_close(void) {
+    if (!g_push_on) return;
+    pthread_mutex_lock(&g_lock);
+    g_push_on = 0;
+    int16_t *buf = g_push;
+    g_push = 0;
+    pthread_mutex_unlock(&g_lock);
+    // Freed OUTSIDE the lock, but only after the mixer can no longer
+    // see the pointer -- g_push_on and g_push are both cleared under it.
+    free(buf);
+}
+
+long usnd_push_space(void) {
+    if (!g_push_on) return 0;
+    pthread_mutex_lock(&g_lock);
+    long used = g_push_head - g_push_tail;
+    pthread_mutex_unlock(&g_lock);
+    long space = USND_PUSH_FRAMES - used;
+    return space > 0 ? space : 0;
+}
+
+long usnd_push(const int16_t *pcm, long frames) {
+    if (!g_push_on || frames <= 0) return 0;
+    pthread_mutex_lock(&g_lock);
+    long n = 0;
+    while (n < frames) {
+        long used = g_push_head - g_push_tail;
+        long space = USND_PUSH_FRAMES - used;
+        if (space <= 0) break;
+        long idx = g_push_head % USND_PUSH_FRAMES;
+        long run = USND_PUSH_FRAMES - idx;
+        if (run > space) run = space;
+        if (run > frames - n) run = frames - n;
+        memcpy(g_push + idx * USND_CHANNELS, pcm + n * USND_CHANNELS,
+               (size_t)run * USND_CHANNELS * sizeof(int16_t));
+        g_push_head += run;
+        n += run;
+    }
+    pthread_mutex_unlock(&g_lock);
+    return n;
+}
+
+void usnd_push_set_gain(int gain) { g_push_gain = clamp_gain(gain); }
 
 // --- the streaming voice ----------------------------------------------
 

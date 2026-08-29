@@ -161,10 +161,11 @@ extern const struct usnd_codec usnd_codec_wav;
 // call these from callbacks without a dropout when a repaint is slow
 // (ui/uapp.h's worker-thread rule).
 
-// VOICE 0 IS THE STREAMING ONE -- usnd_play()'s file. The rest are
-// clips. Eight is what a game's overlapping effects need and is one
-// 2 KiB scratch buffer's worth of mixing per chunk.
-#define USND_VOICES 8
+// Clip voices, beside the streaming one and the pushed one. Sixteen
+// because Doom asks for eight effect channels and a game should not be
+// competing with the app's own sounds for them; the cost is sixteen
+// pointer walks per mixing pass, not sixteen buffers.
+#define USND_VOICES 16
 
 // Opens the sink and starts the worker. 0 on success; a negative errno
 // otherwise, and -ENODEV (no hardware) and -EBUSY (another process
@@ -189,12 +190,78 @@ struct usnd_clip {
 int  usnd_clip_load(const char *path, struct usnd_clip *c);
 void usnd_clip_free(struct usnd_clip *c);
 
+// A clip built from samples the caller already has, rather than from a
+// file. `data` is `frames` frames of interleaved s16 at `rate` and
+// `channels`, and is converted to the device format and COPIED -- the
+// caller's buffer is free immediately after.
+//
+// This exists because a sound is not always a file: Doom's effects are
+// DMX lumps inside a WAD. That format gets no codec-table row, because
+// a row is for something a caller might meet on disk and probe for, and
+// nothing outside a WAD is ever DMX.
+int  usnd_clip_from_pcm(const int16_t *data, uint64_t frames,
+                        uint32_t rate, int channels, struct usnd_clip *c);
+
 // Starts `c` on a free voice. `gain` is 0..256 (256 = unity), applied
 // on top of the master volume. Returns 0, or -1 when every voice is
-// busy -- which is not an error: dropping the quietest new sound is
-// what every game audio engine does when it runs out of channels.
+// busy -- which is not an error: dropping the newest sound is what
+// every game audio engine does when it runs out of channels.
 // The clip must outlive the sound; usnd_clip_free() stops it first.
 int  usnd_clip_play(const struct usnd_clip *c, int gain);
+
+// --- voices you can steer ---------------------------------------------
+//
+// The same thing with a HANDLE, for a caller that has to change a sound
+// after starting it: a monster that moves while it growls, a chainsaw
+// that stops when you let go. Doom's `I_UpdateSoundParams` and
+// `I_StopSound` are the reason this exists, and it is the shape
+// SDL_mixer's channels plus Mix_SetPanning have -- which is what
+// Chocolate Doom drives.
+//
+// **A HANDLE CARRIES A GENERATION, so a stale one is inert rather than
+// wrong.** Voice slots are recycled; without the counter, holding a
+// handle to a finished sound would let a caller change the volume of
+// whatever sound landed in that slot next, which is a bug that only
+// shows up when the mixer is busy.
+typedef int usnd_voice_t;
+#define USND_VOICE_NONE 0
+
+// Stereo gains, 0..256 each. Returns a handle, or USND_VOICE_NONE when
+// every voice is busy.
+usnd_voice_t usnd_voice_play(const struct usnd_clip *c, int gain_l, int gain_r);
+
+// Both are no-ops on a handle whose sound has finished or been replaced.
+// _set_gain returns 1 if it reached a live voice.
+int  usnd_voice_set_gain(usnd_voice_t v, int gain_l, int gain_r);
+void usnd_voice_stop(usnd_voice_t v);
+int  usnd_voice_active(usnd_voice_t v);
+
+// --- a stream the CALLER feeds ----------------------------------------
+//
+// For audio with no file behind it: a synthesiser. Doom's music is OPL
+// register writes rendered to PCM on demand, so there is nothing to
+// open and nothing to seek -- the producer hands over samples as it
+// makes them and this queues them for the mixer.
+//
+// Exclusive within the process, like the streaming voice. Feed it from
+// ONE place: it is a single-producer queue, and the mixer is the
+// consumer.
+#define USND_PUSH_FRAMES 8192   // ~170 ms of slack at USND_RATE
+
+int  usnd_push_open(void);
+void usnd_push_close(void);
+
+// How many frames it will take right now. A producer asks this first
+// rather than pushing blindly, because a full queue drops the excess.
+long usnd_push_space(void);
+
+// Queues up to `frames` frames of interleaved stereo s16 at USND_RATE.
+// Returns the number ACCEPTED, which may be short. Never blocks.
+long usnd_push(const int16_t *pcm, long frames);
+
+// This source's own gain, 0..256, on top of the master volume -- what a
+// game's separate music-volume slider sets.
+void usnd_push_set_gain(int gain);
 
 // The streaming voice. usnd_play() replaces whatever was playing.
 int  usnd_play(const char *path);

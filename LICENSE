@@ -67,6 +67,15 @@ directory.
                           your option) any later version. Full text:
                           userland/ports/doom/LICENSE.
 
+                          The music files in that directory
+                          (i_oplmusic.c, midifile.c/.h, mus2mid.c and
+                          opl/) come from Chocolate Doom
+                          (chocolate-doom-2.1.0), which doomgeneric is
+                          itself derived from, under the same licence.
+                          opl/dbopl.c is DOSBox's OPL emulator, also
+                          GPL-2.0-or-later. See that directory's
+                          README.md.
+
         WHAT THIS MEANS IN PRACTICE. The GPL is a license on
         DISTRIBUTION, and this directory is an aggregation: it builds
         into one binary (/bin/doom) that nothing else in the system

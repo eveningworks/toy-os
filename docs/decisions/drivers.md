@@ -1440,3 +1440,87 @@ there is no floating point in this project, in either ring), and
 `usnd_last_error()` carries the sentence. `uimg.h`'s split, for the same
 reason: an app that says "this build cannot play that" is telling the
 truth, and one that says "corrupt file" is not.
+
+
+## Doom's audio: the rest of the port, not a rewrite
+
+**doomgeneric IS Chocolate Doom with the platform layer and sound
+removed**, which is the fact the whole design turns on. 24 files in
+`userland/ports/doom/` carry Simon Howard's copyright; `sound_module_t`,
+`music_module_t`, the GENMIDI handling and `mus2mid.h` (shipped without
+its `.c`) are all Chocolate Doom's. So "add sound to Doom" was never a
+question of writing an audio engine -- it was a question of putting back
+files that were removed, and writing the small part that was genuinely
+SDL's.
+
+**Switching to a different port was considered and refused.** It would
+have cost `dg_toyos.c`, the app, the `TOYKEY_*` static asserts that keep
+`api/keyboard.h` and `doomkeys.h` apart, the build integration and
+`doom_test.py` -- all shaped around the DG_* API -- to solve a problem
+smaller than the rewrite, and it reverses this file's own entry on
+vendoring doomgeneric.
+
+**The version was chosen by MEASUREMENT.** `chocolate-doom-2.1.0` is the
+tag at which `memio.c` is byte-identical to doomgeneric's copy and
+`i_sound.h` differs only by the declarations doomgeneric appended --
+so `sound_module_t` and `music_module_t` match exactly and
+`i_oplmusic.c` compiles against the headers already here. Later tags
+drift (2.3.0's `i_sound.h` differs by 46 lines). Guessing a version
+would have produced a shim layer instead of a drop-in.
+
+**Effects map onto usnd voices; there is no second mixer.** `s_sound.c`
+already does distance attenuation, channel allocation and stealing, and
+hands `I_StartSound` a channel, a volume and a separation -- so the
+backend is a mapping and nothing else, which is why `dg_sound.c`
+contains no DSP. That is also what Chocolate Doom does (SDL_mixer
+channels plus `Mix_SetPanning`); the roadmap's old wording, "Doom doing
+its own effect mixing in userspace", described PrBoom+'s shape and was
+written before `usnd` existed.
+
+**THREE SHIMS, ALL ON OUR SIDE, BECAUSE PATCHING VENDORED CODE IS THE
+THING THE DIRECTORY EXISTS TO PREVENT.** Enabling `FEATURE_SOUND` -- on
+the compiler command line, not by editing `doomfeatures.h` -- makes the
+code reach for what the SDL port had:
+
+  - `SDL_mixer.h`, included by `i_sound.c` and never used. An empty
+    header in `userland/doom/compat/`.
+  - `SDL.h`, for big-endian byte swaps and a mutex/condition pair.
+    Mapped onto `__builtin_bswap` and pthreads, so `OPL_Delay()` really
+    blocks rather than being stubbed.
+  - `opl_sdl_driver`, named unconditionally by `opl.c`'s driver list.
+    `opl_toyos.c` exports that symbol; the driver's own `name` says
+    `toyos`, so only the C symbol is borrowed.
+
+`-D__DJGPP__` would have suppressed the first two and was rejected: it
+changes real behaviour in five other files (`i_swap.h`'s byte swapping,
+`i_endoom.c`, `i_system.c`'s exit path).
+
+**THE OPL RENDER THREAD IS NOT AN OPTIMISATION -- INIT DEADLOCKS WITHOUT
+IT.** `opl.c`'s `InitDriver` calls `OPL_Detect()`, which calls
+`OPL_Delay()`, which schedules a callback and blocks on a condition
+variable until it fires -- and callbacks only fire from the render path,
+which advances the clock. SDL got away with pumping from Doom's own loop
+because its audio thread was already running by the time init ran; here
+nothing was, so the game hung inside `I_InitMusic` with its window stuck
+on the pre-WAD title. The driver starts its own thread instead, which
+also decouples the tempo from Doom's frame rate -- worth having on an
+emulator whose speed varies. **The OPL clock is SAMPLES PRODUCED, never
+wall time**, for the same reason.
+
+**The music carries a fixed 3x gain, because the two paths are not
+level with each other.** Measured on the attract demo with each path
+isolated: music alone peaked at 1735, effects alone at about 19000 --
+roughly 21 dB apart, which leaves the music inaudible under gunfire.
+Doom's own music and sfx sliders set the level WITHIN each path; the
+level BETWEEN them is a property of how OPL synthesis compares to
+full-scale sampled effects, and is therefore ours. Nothing can clip:
+`usnd`'s mixer saturates rather than wrapping.
+
+**Effects are precached at startup, unlike Chocolate Doom**, which
+decodes on first use unless libsamplerate is on. About 11 MB for the
+full set, flat and predictable, against a hitch the first time each
+sound is heard. The trap that cost a debugging round: `S_Init`
+precaches over the WHOLE of `S_sfx[]`, including a dummy entry with an
+empty name, and `W_GetNumForName` calls `I_Error` on a miss -- so the
+precache loop must use `W_CheckNumForName` or the game dies before its
+window opens.

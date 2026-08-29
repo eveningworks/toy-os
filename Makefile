@@ -660,7 +660,12 @@ toywm: $(BUILD)/userland/wm/main.elf
 # getting it wrong is a link error either way.
 DOOM_PORT_SRCS = $(shell find userland/ports/doom -name '*.c' 2>/dev/null | sort)
 DOOM_PORT_OBJS = $(patsubst userland/%.c,%,$(DOOM_PORT_SRCS))
-EXTRA_OBJS_doom = doom/dg_toyos $(DOOM_PORT_OBJS)
+# OUR backend is discovered the same way, so adding a piece of it (the
+# sound module, the OPL driver) is a .c file and nothing else -- the
+# rule the rest of userland/ already follows.
+DOOM_BACKEND_SRCS = $(shell find userland/doom -name '*.c' 2>/dev/null | sort)
+DOOM_BACKEND_OBJS = $(patsubst userland/%.c,%,$(DOOM_BACKEND_SRCS))
+EXTRA_OBJS_doom = $(DOOM_BACKEND_OBJS) $(DOOM_PORT_OBJS)
 
 # VENDORED CODE IS COMPILED WITH ITS WARNINGS OFF, on purpose.
 #
@@ -677,10 +682,19 @@ EXTRA_OBJS_doom = doom/dg_toyos $(DOOM_PORT_OBJS)
 # -w, because -w would silence this too.
 DOOM_CFLAGS = $(subst -Wframe-larger-than=2048,-Wframe-larger-than=16384,\
                  $(subst -Wextra,,$(subst -Wall,-w,$(USERLAND_CFLAGS)))) \
-               -Iuserland/ports/doom -DDOOMGENERIC_RESX=640 -DDOOMGENERIC_RESY=400
+               -Iuserland/ports/doom -Iuserland/ports/doom/opl \
+               -Iuserland/doom/compat \
+               -DDOOMGENERIC_RESX=640 -DDOOMGENERIC_RESY=400 -DFEATURE_SOUND
 
 # More specific than the generic userland rule below it, so make prefers
 # it: a pattern rule with a shorter stem wins.
+# midifile.c reaches SDL_SwapBE16/32 through i_swap.h, which upstream
+# Chocolate Doom routes to SDL's endian header and doomgeneric's copy
+# does not. FORCE-INCLUDED rather than patched, because i_swap.h is
+# vendored -- and scoped to the one object that needs it rather than
+# pushed through all eighty.
+$(BUILD)/userland/ports/doom/midifile.o: DOOM_CFLAGS += -include SDL.h
+
 $(BUILD)/userland/ports/doom/%.o: userland/ports/doom/%.c | version
 	@mkdir -p $(dir $@)
 	$(CC) $(DOOM_CFLAGS) $< -o $@
@@ -689,8 +703,15 @@ $(BUILD)/userland/ports/doom/%.o: userland/ports/doom/%.c | version
 # is ours, so it keeps every warning. Scoped to this one object with a
 # target-specific variable, exactly as calculator.o gets -Iapps, so no
 # other userland program gains the ability to include doom's headers.
-$(BUILD)/userland/doom/dg_toyos.o: USERLAND_CFLAGS += -Iuserland/ports/doom \
-                                     -DDOOMGENERIC_RESX=640 -DDOOMGENERIC_RESY=400
+# A PATTERN-specific variable, so every file of the backend gets it and
+# adding one needs no Makefile edit. FEATURE_SOUND is defined HERE rather
+# than in doomfeatures.h because that header is vendored: upstream ships
+# it with the flag commented out, and editing it would be a divergence
+# somebody has to carry forever (see that directory's README).
+$(BUILD)/userland/doom/%.o: USERLAND_CFLAGS += -Iuserland/ports/doom \
+                                     -Iuserland/ports/doom/opl \
+                                     -DDOOMGENERIC_RESX=640 -DDOOMGENERIC_RESY=400 \
+                                     -DFEATURE_SOUND
 
 # THE ONE VENDORED PROGRAM. cjson_test is ours; userland/ports/cjson/ is
 # upstream's source byte for byte (see its README), and it is linked in

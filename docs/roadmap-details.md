@@ -2599,6 +2599,16 @@ way to reach it -- that rendezvous is the missing primitive, and
 nothing against a 341 ms ring. A shared-memory ring per client is what
 PipeWire needs for a 2 ms target, and toy-os has no such target.
 
+**Doom's sound was NOT what this file used to say it would be.** The
+item read "with Doom doing its own effect mixing in userspace", which
+was written before `usnd` existed and describes PrBoom+'s shape. What
+landed instead maps Doom's eight channels onto `usnd` voices with a
+stereo gain each -- which is what Chocolate Doom actually does, via
+SDL_mixer channels and `Mix_SetPanning`, and which needed no second
+mixer. The policy was never the backend's anyway: `s_sound.c` does the
+attenuation and the channel stealing and hands `I_StartSound` a volume
+and a separation.
+
 **A second codec.** `usnd.c`'s table is one row today. MP3 or Vorbis is
 a `.c` file and a row: the codec reports its file's native rate and
 hands out s16 frames in it, and the library's conversion stage -- which

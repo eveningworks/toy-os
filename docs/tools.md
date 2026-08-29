@@ -1544,6 +1544,26 @@ window without going through it will find its layout polls timing out.
   seconds, and a benchmark run beside eleven other VMs measures
   contention. `blank_window_test.py` covers "it draws" in the gate,
   since that one opens every app in the registry.
+- **`doom_sound_test.py`** -- **DOOM's effects and music, judged on the
+  HOST**, and the only thing that exercises `userland/doom/dg_sound.c`,
+  `dg_music.c` and `opl_toyos.c` at all. On demand twice over: it needs
+  an IWAD (not in the repository) and boots its own AC97 guest, and it
+  SKIPS cleanly without a WAD.
+
+  **Its load-bearing check is the PAIR OF BOOTS, not either one.** Doom
+  has two independent audio paths and one recording cannot separate
+  them -- music-only and effects-only builds both make noise. So it
+  plays the attract demo normally and then again with `-nomusic`, and
+  requires COVERAGE to collapse: OPL music is continuous, so run 1
+  fills nearly every 50 ms window, while run 2 is the same gunshots
+  with silence between them. If music were dead, run 1 would already be
+  bursty; if effects were dead, run 2 would be silent. Neither failure
+  can satisfy both. `-nomusic` reaching the game is why
+  `userland/gui/apps/doom.c` forwards its argv.
+
+  What it cannot see: whether the music is the RIGHT music. Nothing
+  checks pitch or melody against the WAD's MIDI, so a wrong instrument
+  bank or a transposed OPL passes.
 - **`audio_test.py`** -- AC'97 and the PCM stream, judged on the HOST:
   the guest plays two seconds of A440 (`/tests/tone`) and QEMU's wav
   audiodev (`vm.py --audio-wav`) records what the DEVICE emitted to a

@@ -697,7 +697,7 @@ run on, not by order.
 - [x] ~~A WAV player app~~ DONE 2026-08-29 -- `/bin/wm/apps/player` and `/bin/aplay`, over `userland/lib/usnd.h`
 - [ ] A system-wide sound daemon, so two programs can be audible at once -- `usnd_sink.h`'s second row
 - [ ] A second codec (MP3 or Vorbis) -- a file and a row in `usnd.c`'s table, which is what the table is for
-- [ ] Doom sound: `i_sound.c` over the PCM ring, with Doom doing its own effect mixing in userspace
+- [x] ~~Doom sound and music~~ DONE 2026-08-29 -- effects on `usnd` voices, music on Chocolate Doom's own OPL emulation
 - [ ] Volume mixer UI, persisted to `/etc`
 
 ### ACPI + real power/timer

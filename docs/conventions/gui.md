@@ -1465,6 +1465,46 @@ real scanout hardware does. Do not write a pixel assertion for one.
   **what the port actually needed was measured**: key releases were
   required, while the image ceiling (0.72 MiB of 1) and the growable
   stack (it fits in four pages) were not. See `docs/decisions.md`.
+- **DOOM'S SOUND IS THE REST OF THE PORT, NOT A REWRITE.** doomgeneric
+  IS Chocolate Doom with the platform layer and sound removed -- 24
+  files carry Simon Howard's copyright, and `sound_module_t`,
+  `music_module_t` and the GENMIDI handling are all Chocolate Doom's
+  design. So the music files were taken back from
+  `chocolate-doom-2.1.0`, a tag chosen by MEASUREMENT rather than guess:
+  there `memio.c` is byte-identical and `i_sound.h` differs only by the
+  declarations doomgeneric appended, so the module structs match and
+  `i_oplmusic.c` compiles against the headers already present. Later
+  tags drift.
+
+  **`FEATURE_SOUND` IS DEFINED ON THE COMPILER LINE, never in the
+  vendored `doomfeatures.h`**, and the three things that flag then
+  reaches for are answered from `userland/doom/`: an empty
+  `compat/SDL_mixer.h` (included and never used), a `compat/SDL.h` that
+  maps byte swaps and a mutex/condition pair onto `__builtin_bswap` and
+  pthreads, and `opl_toyos.c` exporting `opl_sdl_driver` because
+  `opl.c`'s driver list names that symbol unconditionally. Not one
+  vendored byte changed. `-D__DJGPP__` would have suppressed two of the
+  three and was refused -- it changes real behaviour in five other
+  files.
+
+  **THE OPL RENDER THREAD IS LOAD-BEARING, NOT AN OPTIMISATION.**
+  `opl.c`'s `InitDriver` calls `OPL_Detect()`, which calls
+  `OPL_Delay()`, which blocks on a callback that only fires from the
+  render path. SDL's audio thread was already running by then; here
+  nothing is, so without a thread turning the clock `I_InitMusic`
+  deadlocks and the window sticks on the pre-WAD title with sound
+  reported as up. It also keeps the tempo off Doom's frame rate: **the
+  OPL clock is SAMPLES PRODUCED, never wall time.**
+
+  **Effects map onto `usnd` voices and the backend does no mixing** --
+  `s_sound.c` has already done the attenuation and the channel
+  stealing and hands `I_StartSound` a volume and a separation, so
+  `dg_sound.c` turns that pair into a stereo gain and stops. And the
+  precache loop must use `W_CheckNumForName`: `S_Init` precaches over
+  the whole of `S_sfx[]` including a nameless dummy entry, and
+  `W_GetNumForName` calls `I_Error` on a miss, which kills the game
+  before its window opens.
+
 - **MINESWEEPER IS THE FIRST GAME, AND IT IS AN ORDINARY CLIENT**
   (`userland/gui/apps/mines.c`, `/bin/wm/apps/mines`). It draws its own
   board rather than introducing a `uui_grid`, because one grid-shaped

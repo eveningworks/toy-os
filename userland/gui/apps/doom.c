@@ -91,6 +91,13 @@ _Static_assert(TOYKEY_ALTGR       == KEY_ALTGR,       "TOYKEY_ALTGR drifted");
 // Doom then makes `.savegame/<iwad>/` underneath, which is upstream's
 // structure and not ours to tidy -- docs/filesystem-layout.md documents
 // it as what it is.
+// Doom's argv cap. Three for `-iwad <path>` plus room for a handful of
+// switches; a longer command line is truncated rather than refused,
+// because the useful ones are one or two words.
+#define DOOM_MAXARGS 16
+static int g_argc;
+static char **g_argv;
+
 #define SAVE_DIR "/var/games/doom"
 
 struct doom_state {
@@ -340,18 +347,33 @@ static void on_open(struct uapp *a) {
 
     // argv, as Doom expects it. `-iwad <path>` rather than letting
     // d_iwad.c search: see WAD_PATH above.
+    //
+    // ANYTHING THIS PROGRAM WAS GIVEN IS APPENDED, so Doom's own
+    // switches work: `gui spawn /bin/wm/apps/doom -nomusic`, `-nosfx`,
+    // `-warp 1 3`. That is what lets a test drive the two audio
+    // subsystems apart -- with music off the recording goes from
+    // continuous to bursts, which no single boot can show.
     static char arg0[] = "doom";
     static char arg1[] = "-iwad";
     static char arg2[] = WAD_PATH;
-    static char *argv[] = { arg0, arg1, arg2, 0 };
+    static char *argv[DOOM_MAXARGS];
+    int n = 0;
+    argv[n++] = arg0;
+    argv[n++] = arg1;
+    argv[n++] = arg2;
+    for (int i = 1; i < g_argc && n < DOOM_MAXARGS - 1; i++) argv[n++] = g_argv[i];
+    argv[n] = 0;
 
-    ulogf("doom: starting with %s", WAD_PATH);
-    dg_start(3, argv);
+    ulogf("doom: starting with %s (%d arg(s))", WAD_PATH, n - 3);
+    dg_start(n, argv);
     st->started = 1;
     ulog("doom: ready");
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    g_argc = argc;
+    g_argv = argv;
+
     struct uapp_desc desc = {
         .title  = "DOOM",
         .app_id = "doom",
