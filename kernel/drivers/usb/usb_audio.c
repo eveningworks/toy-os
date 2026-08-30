@@ -36,6 +36,7 @@
 #include "kfmt.h"
 #include "string.h"
 #include "ktest.h"
+#include "barrier.h"   // cpu_relax() in the drain poll
 
 // Audio class codes (USB Device Class Definition for Audio Devices 1.0).
 #define AUDIO_CLASS            1
@@ -83,6 +84,10 @@ struct audio_dev {
     uint64_t pkt_phys;
     uint8_t  packets;        // how many actually fit
     uint8_t  next_slot;      // the packet slot the next completion refills
+    // TDs posted and not yet completed. Written by the event drain, so
+    // volatile -- audio_stop() waits on it, and the wait is what keeps
+    // a dropped alternate from stalling everything still in flight.
+    volatile uint8_t inflight;
 
     const uint8_t *ring;     // the sound core's, read-only to us
     uint32_t copy_pos;       // ring offset of the next packet to copy
@@ -202,6 +207,13 @@ int usb_audio_parse(const uint8_t *cfg, uint32_t total,
 
 // --- the packet pump --------------------------------------------------
 
+static int set_interface(uint8_t slot, uint8_t ifnum, uint8_t alt) {
+    uint8_t setup[8] = { TYPE_OUT_STD_IF, REQ_SET_INTERFACE, alt, 0,
+                         ifnum, 0, 0, 0 };
+    return xhci_control(slot, setup, 0, 0, 0);
+}
+
+
 static void copy_one_packet(struct audio_dev *a, uint8_t slot) {
     uint8_t *dst = a->pkt + (uint32_t)slot * a->s.mps;
     uint32_t n = a->s.mps;
@@ -233,12 +245,15 @@ static void audio_packet_done(void *ctx, uint32_t bytes) {
         sound_period_done(chunk);
     }
 
+    if (a->inflight) a->inflight--;
     if (!a->running) return;
     uint8_t slot = a->next_slot;
     a->next_slot = (uint8_t)((slot + 1) % a->packets);
     copy_one_packet(a, slot);
-    xhci_isoch_post(a->slot, a->s.ep,
-                    a->pkt_phys + (uint64_t)slot * a->s.mps, a->s.mps, 1);
+    if (xhci_isoch_post(a->slot, a->s.ep,
+                        a->pkt_phys + (uint64_t)slot * a->s.mps,
+                        a->s.mps, 1) == 0)
+        a->inflight++;
 }
 
 static int audio_start(void) {
@@ -246,10 +261,26 @@ static int audio_start(void) {
     if (!a->in_use || !a->ring) return -1;
     if (a->running) return 0;
 
+    // THE ALTERNATE SETTING FOLLOWS THE STREAM, not the bind. Alt 0 is
+    // the "idle, no bandwidth" setting every UAC device carries, and
+    // sitting in alt 1 while playing nothing is not merely untidy: the
+    // device's output is LIVE the whole time, which on QEMU means it
+    // holds an open voice on its audiodev and the AC'97 sharing that
+    // audiodev never gets clocked -- the guest then blocks forever on a
+    // hardware position that cannot advance. Measured: with both cards
+    // on one audiodev, choosing the AC'97 played nothing until this
+    // driver started standing down.
+    if (set_interface(a->slot, a->s.ifnum, a->s.alt) < 0) {
+        klog_printf("usb-audio: could not claim interface %u alt %u\n",
+                    a->s.ifnum, a->s.alt);
+        return -1;
+    }
+
     a->copy_pos = 0;
     a->play_pos = 0;
     a->reported = 0;
     a->next_slot = 0;
+    a->inflight = 0;
     a->running = 1;
 
     // Every packet posted before the first doorbell matters: an
@@ -263,17 +294,46 @@ static int audio_start(void) {
             a->running = 0;
             return -1;
         }
+        a->inflight++;
     }
     return 0;
 }
 
 static void audio_stop(void) {
+    struct audio_dev *a = &g_audio;
     // Nothing is cancelled: the TDs already posted play out over the
     // next few milliseconds and the ring then goes quiet on its own.
     // Stopping an isochronous endpoint properly means Stop Endpoint
     // plus Set TR Dequeue, which buys 16 ms of latency and a command
     // pair that can fail while the device is already unplugged.
-    g_audio.running = 0;
+    if (!a->running) return;
+    a->running = 0;
+    // Guarded on `in_use` because the DETACH path stops the device
+    // after the hardware has gone, and a control transfer to a device
+    // that is not there is two million polls of nothing.
+    if (!a->in_use) return;
+
+    // DRAIN BEFORE DROPPING THE ALTERNATE. The TDs already posted are
+    // for an endpoint alt 0 does not have, so standing down while they
+    // are outstanding STALLS every one of them -- measured at 32 bad
+    // transfers per switch, which is exactly the packets in flight.
+    //
+    // POLLED, NOT WAITED ON, and that is not a preference: this is
+    // reached from process teardown with INTERRUPTS OFF, where nothing
+    // decrements the counter and the PIT does not advance either -- a
+    // first version waited on `pit_ticks()` and hung the machine solid
+    // (RFL with IF clear, spinning in ring 0). Draining the event ring
+    // by hand is what makes the wait independent of both. The backstop
+    // is the driver's usual one, for a controller that has stopped
+    // completing anything at all.
+    uint32_t spins = 0;
+    while (a->inflight && spins++ < XHCI_POLL_BACKSTOP) {
+        xhci_service();
+        cpu_relax();
+    }
+
+    // Back to the zero-bandwidth alternate -- see audio_start().
+    set_interface(a->slot, a->s.ifnum, 0);
 }
 
 // --- volume -----------------------------------------------------------
@@ -335,12 +395,6 @@ static void audio_set_volume(int pct) {
 
 // --- binding ----------------------------------------------------------
 
-static int set_interface(uint8_t slot, uint8_t ifnum, uint8_t alt) {
-    uint8_t setup[8] = { TYPE_OUT_STD_IF, REQ_SET_INTERFACE, alt, 0,
-                         ifnum, 0, 0, 0 };
-    return xhci_control(slot, setup, 0, 0, 0);
-}
-
 int usb_audio_bind(struct usb_device_info *info, const uint8_t *cfg,
                    uint32_t total) {
     if (!info || g_audio.in_use) return 0;
@@ -393,6 +447,12 @@ int usb_audio_bind(struct usb_device_info *info, const uint8_t *cfg,
     }
 
     a->in_use = 1;   // published before any control transfer can be answered
+
+    // Configured, and immediately IDLE. The endpoint stays configured
+    // in the controller either way; what alt 0 releases is the DEVICE's
+    // side of it, which is what stops a bound-but-silent card from
+    // holding output open for the whole session.
+    set_interface(info->slot, s.ifnum, 0);
 
     if (s.has_volume) {
         a->vol_min = read_db(AUDIO_REQ_GET_MIN, 0);
