@@ -563,14 +563,14 @@ whenever a headline here tells you something you did not already know.
 
 - **Monotonic time is an INTERFACE, and wall clock is not one of its implementations.**
 - **The kernel's idle work has ONE owner: `scheduler_idle()`**
-- **EVERY KEY REPORTS SOMETHING, AND THE KEYPAD REPORTS CHARACTERS** -- Insert, Menu, the locks, Pause, Print Screen and the keypad used to produce nothing at all; the function row is complete F1-F12; the keypad emits its keycaps' characters rather than new codes; NumLock's off-state is deliberately not modelled; Pause has no release; the fake shifts around Print Screen are dropped.
-- **THE BIOS OWNS THE xHCI UNTIL YOU ASK FOR IT, AND THE ASK COMES BEFORE THE RESET** -- `legacy_handoff()` sets the OS-owned semaphore, waits for the BIOS's to clear (forcing it on timeout, as Linux does) and then DISABLES EVERY SMI SOURCE, which is the half that actually protects the driver. The capability walk runs before `reset_controller()` for this reason: a handoff after the first register write is not a handoff. Skipping it because QEMU has no such capability left one laptop hanging mid-log-line at a point that MOVED when unrelated logging changed the timing -- a CPU in SMM that never came back. **The whole path is dead under QEMU**, so nothing here tests it -- confirmed on the machine itself 2026-08-28. `usbtrace` prints a line per bring-up step.
-- **USB IS xHCI ONLY, ITS PORTS WAIT ON PED RATHER THAN PRC, AND EVERY DMA OBJECT IS ITS OWN FRAME** -- `kernel/drivers/usb/`; no HCD ops table (one implementer); PORTSC is seven RW1C bits plus a write-1-to-DISABLE one; an interrupt ack writes back ONE bit, never the register; a context entry is 32 or 64 bytes and nothing may assume; `input_report_rel()` wants UP-positive dy, so HID negates. Enumeration records EVERY interface and HID binds every boot one (a receiver's mouse half died first); hot-plug and halt recovery are DEFERRED work (a command inside the event drain deadlocks, a deferred attach must skip an occupied port, a failed enumeration disables its slot); the controller's poll runs BESIDE its IRQ on purpose (a BIOS-reported INTx line can be plausible and dead); ports are POWERED before scanning when `HCCPARAMS1.PPC` says so (QEMU says never, hardware often); hubs are USB2 only and a child's speed is not its root port's. `USB=xhci` is off by default because attaching a `usb-kbd` takes the keyboard away from PS/2.
+- **EVERY KEY REPORTS SOMETHING, AND THE KEYPAD REPORTS CHARACTERS**
+- **THE BIOS OWNS THE xHCI UNTIL YOU ASK FOR IT, AND THE ASK COMES BEFORE THE RESET**
+- **USB IS xHCI ONLY, ITS PORTS WAIT ON PED RATHER THAN PRC, AND EVERY DMA OBJECT IS ITS OWN FRAME**
 - **INPUT DEVICES REGISTER WITH THE INPUT CORE, and the canonical event is evdev -- including `/etc/kbs`, so only the PS/2 driver ever sees a scancode**
-- **`kbd` PRINTS EVERY STAGE OF A KEYPRESS, AND ITS KERNEL LOG IS OFF BY DEFAULT** -- all four encodings on one line (PS/2 scancode, evdev keycode, character, modifiers), from a ring the driver fills. **`kernel.kbdtap` is OFF unless a human turns it on, and turning it off WIPES the ring**, because a buffer of the last ~128 keystrokes is a keylogger and `SYS_QUERY` has no privilege check; `kbd`'s live mode arms it for its own duration and disarms on every way out. Keyboard only; the tool never reads a keyboard, which is what lets it run in a Terminal window without stealing a key from the desktop.
-- **KERNEL LOG OUTPUT IS QUEUED, NEVER WAITED ON -- A STALLED COM1 CONSUMER MUST NOT STOP THE MACHINE** -- `serial_putc()` waited unbounded on a THRE bit that QEMU's socket chardev stops setting when its peer stops draining, so the kernel spun there WITH INTERRUPTS ON: ticks advancing, PIC clean, scheduler still picking the compositor, nothing running (and a klog burst inside an `FS_OP()` spun holding the preemption guard). It was filed for two days as a filesystem write stalling the desktop; the write only supplied the log VOLUME. Output now goes into a ring pushed from `serial_putc()`, `serial_flush()` and the timer tick. **Queue, do not drop** -- Linux's 8250 console drops and is right to, but five GUI tools here read kernel log lines as their oracle, and a bounded-then-drop version passed the stall repro 6 in 6 while turning all five red. `tools/serial_backpressure_test.py` is the regression test and its fixture is a reader that never reads; `-serial file:` cannot see this class at all.
-- **A GUEST SPIN-WAIT NEEDS `cpu_relax()` (`pause`), AND UNDER KVM THAT IS NOT AN OPTIMISATION** -- KVM's Pause-Loop Exiting triggers on that instruction, so a spin without one keeps its whole timeslice and STARVES THE HOST THREAD IT IS WAITING FOR. It hung virtio-blk's first FLUSH of every run under KVM+SDL while reads and writes worked. Only the VIRTQUEUE is exposed: `chain_done()` reads plain guest RAM, while `ata.c`/`ahci.c` poll MMIO and always trap. A TCG-only suite cannot see this class. **EARN IT, don't do it unconditionally**: pausing from the first iteration is free on an idle host and cost a THIRD of write throughput on a busy one, because yielding means waiting for a real reschedule -- spin tight first, back off only once the wait is clearly long.
-- **VIRTIO INTERRUPTS ARE OPT-IN, a forgotten ISR read hangs the machine, and ENABLING IS THE LAST STEP** -- `virtio_intx_line()` then `virtio_intx_enable()`, publish first and enable last; a device that can interrupt before its handler can see it hangs the machine exactly as a forgotten ISR read does, and only under KVM.
+- **`kbd` PRINTS EVERY STAGE OF A KEYPRESS, AND ITS KERNEL LOG IS OFF BY DEFAULT**
+- **KERNEL LOG OUTPUT IS QUEUED, NEVER WAITED ON -- A STALLED COM1 CONSUMER MUST NOT STOP THE MACHINE**
+- **A GUEST SPIN-WAIT NEEDS `cpu_relax()` (`pause`), AND UNDER KVM THAT IS NOT AN OPTIMISATION**
+- **VIRTIO INTERRUPTS ARE OPT-IN, a forgotten ISR read hangs the machine, and ENABLING IS THE LAST STEP**
 - **USING A SUBSYSTEM BEFORE ITS init() IS A PANIC, not a soft failure**
 - **A panic NAMES THE FUNCTION**
 - **A kernel panic prints enough to diagnose from a pasted log**
@@ -584,9 +584,9 @@ whenever a headline here tells you something you did not already know.
 - **THERE IS A PROCESS TREE: `ppid`, reparenting, and `waitpid(-1)`.**
 - **THERE IS AN INIT, IT HOLDS PID 1, AND IT CANNOT BE KILLED.**
 - **INIT STARTS AND SUPERVISES THE DESKTOP, and the desktop is a SERVICE.**
-- **A SERVICE CAN SAY IT IS READY, AND `After=` THEN MEANS "USABLE" RATHER THAN "SPAWNED".** -- `SYS_NOTIFY_READY` sets a bit the kernel does nothing with; `Ready=notify` in a descriptor makes init wait for it. A syscall rather than a socket or a pipe because neither ports (no unix sockets; `PIPE_MAX` is 8 kernel-wide and a pipe carries no credentials). The barrier ALWAYS expires -- `ReadyTimeout=`, then init says so and starts the dependents anyway.
-- **A SERVICE IS CONTROLLED BY A FILE PLUS A DOORBELL, AND `/bin/service` IS THE LEVER** -- `list`/`status` read `/tmp/init.status` (init is the only thing that can say a service is down ON PURPOSE), which is PUBLISHED ON DEMAND and only on a SETTLED pass, partly because **a filesystem write while the desktop is STARTING UP wedges the compositor** (`docs/bugs.md`); `start`/`stop` append to `/tmp/init.ctl` and send `SIGHUP`, runit's `supervise/control` plus SysV's `kill -HUP 1`. The signal cannot be the message and the file cannot be the signal. **`sys_waitpid()` RETRIES `-EINTR`** -- `sys_waitpid_intr()` is the wait a doorbell can reach. An admin stop is its own flag and outranks `Restart=always`; `stop` and DELETING the descriptor stay different requests. A descriptor must APPEAR WHOLE (`mv` it in), or a rescan reads it half-written and the ordering key is silently ignored.
-- **INIT CANNOT BE KILLED BY A SIGNAL IT HAS NOT CAUGHT, and the guard is in `do_default_action()`, not only `scheduler_kill()`** -- Linux's `SIGNAL_UNKILLABLE`. Signals added a SECOND termination path that takes SYS_EXIT's route when the victim is the running process, so `kill 1` killed init for months while a `kill 1` check asserted `1 in ps`, which a ZOMBIE passes. init still CATCHES what it handles, and a FAULT still kills it (`signal_deliver_fault()` never reaches the default action).
+- **A SERVICE CAN SAY IT IS READY, AND `After=` THEN MEANS "USABLE" RATHER THAN "SPAWNED".**
+- **A SERVICE IS CONTROLLED BY A FILE PLUS A DOORBELL, AND `/bin/service` IS THE LEVER**
+- **INIT CANNOT BE KILLED BY A SIGNAL IT HAS NOT CAUGHT, and the guard is in `do_default_action()`, not only `scheduler_kill()`**
 - **`SYS_SLEEP` exists, and a caller with no scheduler slot gets -1.**
 - **`ps` is a REAL `/bin` PROGRAM, not a builtin**
 - **A PROCESS'S MEMORY IS FREED WHEN IT DIES, NOT WHEN IT IS REAPED -- and killing needs a DIFFERENT entry point from exiting.**
@@ -596,33 +596,33 @@ whenever a headline here tells you something you did not already know.
 - **`SYS_SBRK` RESERVES; THE PAGE ARRIVES ON TOUCH.**
 - **THE RING-3 MAP IS SIZED FOR 4K, and a region's END is what the next thing must clear.**
 - **`SYS_SBRK` is PER PROCESS.**
-- **A RING-3 IMAGE HAS NO SIZE LIMIT, BECAUSE THE HEAP STARTS WHERE IT ENDS.** -- derived per process from `elf_load()`'s `out_image_end` (Linux's `set_brk()`), which deleted `link.ld`'s 1 MiB `ASSERT`; the end is the MAXIMUM over segments, not the last one's.
-- **THE USER STACK IS RESERVED AND GROWN ON FAULT, and the GAP is what keeps that safe.** -- 8 MiB reserved, four pages mapped, the rest through the heap's own fault hook; a fault more than `UADDR_STACK_GROW_GAP` below the bottom is refused, and that gap plus `-Wframe-larger-than=2048` are one guarantee, not two. Bound anything against `UADDR_STACK_FLOOR`, never the moving bottom.
-- **The ring-3 address-space map is `kernel/include/kernel/uaddr.h`, stated once.** -- except the two boundaries that are per process (`heap_base`, `stack_bottom`), which live in `struct sched_mm`.
-- **`SYS_MMAP` IS A REGION LIST, ITS ARENA IS ITS OWN RANGE, AND A FILE-BACKED FAULT-IN REFUSES INSIDE AN `FS_OP`** -- `kernel/mm/mmap.c`; reservations demand-paged through `uheap_fault()`'s arena branch, frames owned so teardown is free; a file region is remembered by ABSOLUTE PATH (a snapshot per page, never updated; MAP_SHARED refused), MAP_FIXED refuses overlap with -EEXIST, a munmap range stays within one region, and `/bin/pmap` prints it all via `QUERY_PROCMAP` -- reservations, not residency.
-- **A DYNAMIC EXECUTABLE IS ENTERED THROUGH `/lib/ld-toy.so`, AND THE KERNEL NEVER LEARNS ET_DYN** -- `PT_INTERP` makes `spawn` load the loader as a second fixed-base image (`ELF_LDSO_BASE`) and enter it with a minimal auxv; the loader mmaps `DT_NEEDED` libraries from `/lib` (nowhere else), relocates eagerly, resolves exe-first, and jumps to `AT_ENTRY`; the legacy `run` refuses dynamic binaries by name; libraries build `-fpic --hash-style=sysv -z max-page-size=4096`, dynamic executables with `link-dyn.ld`.
-- **EVERY `/bin` AND GUI PROGRAM LINKS `/lib/libc.so`; init, toywm AND `/tests` ARE STATIC; AND THE `#` SHELL'S BARE NAME SPAWNS** -- `run` keeps the legacy loader (refuses dynamic; the harness parses its exit banner); a foreground job's terminal handoff rides ON the spawn (`SPAWN_FOREGROUND` -- a tcsetpgrp after it races the child's first read); `fd_inherit()`'s parent is NAMED, never read off CR3; `/lib` pages come from a never-invalidated kernel image cache, read-only ones mapped BORROWED into every process; pthread is `libc_nonshared.a`.
+- **A RING-3 IMAGE HAS NO SIZE LIMIT, BECAUSE THE HEAP STARTS WHERE IT ENDS.**
+- **THE USER STACK IS RESERVED AND GROWN ON FAULT, and the GAP is what keeps that safe.**
+- **The ring-3 address-space map is `kernel/include/kernel/uaddr.h`, stated once.**
+- **`SYS_MMAP` IS A REGION LIST, ITS ARENA IS ITS OWN RANGE, AND A FILE-BACKED FAULT-IN REFUSES INSIDE AN `FS_OP`**
+- **A DYNAMIC EXECUTABLE IS ENTERED THROUGH `/lib/ld-toy.so`, AND THE KERNEL NEVER LEARNS ET_DYN**
+- **EVERY `/bin` AND GUI PROGRAM LINKS `/lib/libc.so`; init, toywm AND `/tests` ARE STATIC; AND THE `#` SHELL'S BARE NAME SPAWNS**
 - **The kernel heap has a debug mode, and it is a RUNTIME toggle**
 - **The kernel RELOCATES ITSELF at boot -- it is not running where it was linked.**
 - **A BLOCKED PROCESS WAITS ON A CHANNEL, AND A CHANNEL IS AN ADDRESS.**
 - **THE KERNEL STORES NO ENVIRONMENT, AND `SYS_SPAWN` TAKES A STRUCT**
-- **A SPAWN NAMES THE CHILD'S fd 0 AND fd 1, AND A SOCKET IS ACCEPTED ON BOTH** -- `stdin_fd` beside `stdout_fd` on `struct spawn_msg`, installed after `fd_inherit()` so they win; `sys_spawn_opts()` is ring 3's entry point, a struct because the header said the next capability could not be a seventh parameter. NAMED IN THE SPAWN rather than `dup2`'d before it: with no fork there is no child-side window, so a parent would have to point its OWN 0/1 at the connection and put them back, and anything printed in between goes to the client (posix_spawn's `file_actions`, same reason). fd 2 stays the kernel log on purpose. A wrong-kind fd is -EBADF, never ignored. `/bin/inetd` is the caller: a connection per child, which makes a handler an ordinary FILTER (`inetd -p 7 /bin/cat` echoes) and gives every connection its own reader.
-- **A SIGNAL SETS A BIT; THE KERNEL ACTS ON IT WHEN IT IS SAFE TO.** -- except STOP/CONTINUE, which act at SEND time and never touch the pending set; STOPPED is a FLAG beside the state, and a test that reads the flag cannot see the bug. **`pending` is not `deliverable`**, and confusing them swallows a handler's own `SYS_SIGRETURN`.
-- **A HANDLER IS RING-3 CODE, AND THE KERNEL BORROWS ITS STACK TO CALL IT.** -- the restorer comes from ring 3 (`SA_RESTORER`, not a vDSO), it must not touch the stack, a signal is blocked inside its own handler, and a fault with no handler still prints the full report.
-- **A CHILD'S DEATH RAISES SIGCHLD, AND THE NOTIFICATION HAS ONE HOME.** -- `notify_parent()`, called by BOTH deaths (exit and kill); exit only, never a stop or a continue; and it costs a parent with no handler one compare.
+- **A SPAWN NAMES THE CHILD'S fd 0 AND fd 1, AND A SOCKET IS ACCEPTED ON BOTH**
+- **A SIGNAL SETS A BIT; THE KERNEL ACTS ON IT WHEN IT IS SAFE TO.**
+- **A HANDLER IS RING-3 CODE, AND THE KERNEL BORROWS ITS STACK TO CALL IT.**
+- **A CHILD'S DEATH RAISES SIGCHLD, AND THE NOTIFICATION HAS ONE HOME.**
 - **A PROCESS GROUP IS AN INT, AND SPAWN TAKES IT.**
 - **THE CONSOLE HAS AN OWNER AND A FOREGROUND GROUP, AND THE INTR KEY IS TEMPORARY WHERE IT IS.**
-- **A TRACER NAMES ITS CHILD AT THE SPAWN, AND THE TRACE GOES TO ITS TERMINAL.** -- `SPAWN_TRACE` on `SYS_SPAWN`, an unknown spawn flag is `-EINVAL`, and the sink is the tracer's fd 1 (fd 2 here is the KERNEL LOG, not a second terminal stream).
-- **A THREAD IS A SLOT WHOSE `tgid` NAMES SOMEBODY ELSE** -- Linux's shape, not NT's: no thread object, no second scheduler entity. The GROUP owns the address space, the fd table (keyed by CR3, so shared for free), the heap, the cwd, the parent link and the process group; the SLOT owns the kernel stack, FP state, trapframe, signal dispositions and thread pointer. **The process dies as a whole** (`exit_group`; a tid is not separately killable), **a thread is not a child** (`waitpid` never returns one), and **the stack is RING 3's** -- `SYS_THREAD_CREATE` allocates nothing, so a thread stack has no guard page and a DETACHED thread's stack is never reclaimed. `scheduler_current_pid()` is the THREAD; `scheduler_current_tgid()` is the PROCESS, and a caller has to know which it means.
-- **RING-3 `malloc` TAKES A LOCK; THE KERNEL'S DOES NOT** -- `heap_core.c` is compiled into both rings and has ONE free list, and `heap_os_lock()` is a real lock in ring 3 (threads are preempted mid-walk) and a no-op in the kernel (nothing preempts kernel code mid-`kmalloc`). The kernel's half stops being a no-op at SMP, where it is split #1. **The race is real by inspection and was NOT reproducible** -- three controls with the lock removed, up to 8000 allocations over a fully-walked list, found nothing; the window is a few instructions against a 100 Hz tick on one core. And `malloc` is not async-signal-safe: the lock is not recursive, so a handler that allocates while its own thread holds it now HANGS rather than corrupts.
-- **THE THREAD POINTER IS FS.base, AND THE SCHEDULER RELOADS IT** -- `iretq` leaves the hidden segment bases alone, so without a reload on every switch every thread reads the last-scheduled thread's `__thread` storage, silently. The kernel owns ONE number (`SYS_SET_TLS`, `arch_prctl(ARCH_SET_FS)`'s job); the layout behind it is `userland/rt/tls.c`'s. The LEGACY loader has one too, in the kernel context's own slot -- refusing there kills every ring-3 program in `crt0`, because errno is `__thread` now.
-- **THERE IS A SOUND CLASS, ITS STREAM IS EXCLUSIVE, AND THE RING IS SHARED MEMORY** -- `kernel/drivers/sound/` (`sound.c` core + `ac97.c`, the registry shape again); the data plane is a mapped ring at `SND_MAP_VADDR` (`abi/sound_abi.h`) with ZERO syscalls in steady state; a consumed chunk is ZEROED by the kernel so an abandoned ring plays silence, never a loop; the kernel NEVER mixes (a second open is -EBUSY); `volume` is a registered setting. Tested host-side (`tools/audio_test.py`) -- under TCG the recording is correct-pitch BURSTS padded with host silence, so measure within bursts.
-- **THERE IS A NETWORK DEVICE CLASS, THE STACK IS IN THE KERNEL, AND THE RECEIVE PATH IS SPLIT ACROSS AN INTERRUPT** -- `kernel/drivers/net/` is hardware and `kernel/net/` is protocol (Linux's `drivers/net/` vs `net/`); `struct net_device` is PLURAL by construction, with per-device addresses and a two-rule route, unlike `block_device`'s singular active device. A driver's ISR only memcpys into a static queue (`net_rx()`); ARP/IP/ICMP run from `net_poll()` in `scheduler_idle()`, because `kmalloc` is not interrupt-safe here and the filesystem is not re-entrant. An UNRESOLVED address is a cache entry, which is what rate-limits requests -- two pings at an unanswered address put 104 frames on the wire before that landed. NO fragmentation, in either direction. A socket is a PING socket, not a raw one (the kernel owns the ICMP header), because a raw socket is what `CAP_NET_RAW` gates and this kernel has no privilege model. Addresses are HOST byte order everywhere above the wire. The e1000 needed no flag -- QEMU's default machine has always had one -- and `NET=e1000|virtio|both|none|quiet` names what was implicit -- `quiet` being a socket netdev with no peer, the one segment SLIRP cannot be and the only way to see the link-local fallback.
-- **TCP IS CLIENT-SIDE, IN-ORDER ONLY, AND ITS TIMERS RIDE THE BLOCKING RECEIVE** -- `kernel/net/tcp.c`: an active open, a byte stream, retransmission, an orderly close. **A PASSIVE OPEN EXISTS**: `listen()` needs a BOUND socket, an arriving SYN gets its own block while the listener goes on listening, a half-open connection is never offered to `accept()`, and a full backlog DROPS the SYN (silence, not a RST -- the client's own retransmission succeeds a moment later). The FOUR-TUPLE is matched before the listener, which is the demultiplexing rule: they share a local port. A RST is VALIDATED (it must ack our SYN in SYN_SENT, else sit exactly at `rcv_nxt`) -- accepting any reset naming the right ports is the blind-reset attack. Nothing services a connection on its own -- a blocked reader parks until `net_wait_deadline()` (its own timeout or TCP's next retransmit, whichever is sooner), wakes, runs `tcp_tick()` inside `net_poll()`, and parks again; **the honest gap is that a connection nobody reads has nobody to wake it**. A segment not at `rcv_nxt` is DROPPED and re-acked -- no hole list -- and the ACK must still name `rcv_nxt`. Sequence comparison is MODULAR (a signed difference; a plain `<` works until 2^32). A FIN goes AFTER the data. **The connection block outlives the socket**: close marks it an ORPHAN, released at CLOSED or after a 2 s linger, because four blocks held by dead peers exhaust the pool. A RST answering a SYN is `ECONNREFUSED`, anything later `ECONNRESET`. **A connected stream takes `read()`/`write()`** (POSIX's guarantee, so fd-shaped code works); a datagram socket refuses both. No Nagle, no delayed ACK, no SACK, no RTT estimate.
-- **A SOCKET RECEIVE BLOCKS, ONE CHANNEL SERVES THE WHOLE STACK, AND THE DEADLINE LIVES ON THE SOCKET** -- a reader parks on `net_wait_chan()` and the waker is `net_rx()` in a driver's INTERRUPT, which has parsed nothing and so wakes EVERYBODY; each woken reader runs `net_poll()` itself and looks again, which keeps protocol code out of interrupt context while still bounding latency (the stack otherwise runs only from `scheduler_idle()`, unreachable while anything else is runnable). `scheduler_block_current_until()` is the general bounded wait (Linux's `schedule_timeout()`), and `scheduler_wake_timers()` now releases ANY blocked process with a deadline, not just `SCHED_CHAN_TIMER` sleepers. A blocking syscall is RE-RUN, not resumed (`SYS_RETRY`, and a signal rewinds it), so the deadline is the SOCKET's -- recomputing it per entry would make a bounded wait unbounded. A timeout returns **0, not -EAGAIN** (a datagram socket has no end-of-stream to confuse it with). And **`fd_desc_alloc()` zeroes the slot**: `nonblock` used to survive a close and was inherited by the next program's socket, which lost every reply and reproduced only after something unrelated had run.
-- **UDP IS A PORT DEMUX, DHCP AND DNS ARE RING-3 PROGRAMS, AND A NAME IS RESOLVED BY A LIBRARY** -- `kernel/net/udp.c` owns ports and checksums; everything above is a `/bin` program, the same mechanism/policy split the compositor made. The UDP checksum covers a PSEUDO-HEADER that is on no wire, which is the one part easy to get wrong in a way that still works locally (a stack omitting it agrees with itself and is rejected by everything else), so `tools/net_test.py` recomputes it on the host. A zero checksum means NOT COMPUTED and must be accepted; 0xFFFF is how a real all-ones sum is written. An unbound port is answered with ICMP type 3 code 3 -- never for a broadcast, never for a datagram whose checksum failed. BIND TAKES A DEVICE (`SO_BINDTODEVICE`), because a DHCP client broadcasts from 0.0.0.0 out of a NAMED card before any card has an address. An unbound sender gets an ephemeral port on first send (IANA's 49152-65535). `/etc/resolv.conf` has Unix's NAME and this repo's `key=value` FORMAT. A DNS reply is attacker-shaped data with pointers that can loop, so every walk carries a jump budget, and EVERY answer is examined because a CNAME answers with two records. The lease is NOT renewed.
-- **NOTHING INVENTS AN ADDRESS: A CARD COMES UP UNCONFIGURED, `/bin/dhcp` RUNS AT BOOT, AND NO SERVER MEANS LINK-LOCAL** -- `net_autoconfig()`'s hardcoded 10.0.2.15 is GONE (a routable address belonging to somebody else's network, right only on SLIRP; Linux's kernel assigns none either). init runs the client as a `Restart=no` ONE-SHOT, which is systemd's `Type=oneshot` and which `service` reports as `done` or `failed` by its exit code. A bare `dhcp` takes EVERY card without an address (dhclient's rule); naming one re-leases it. Nothing answering is not a failure: RFC 3927 link-local, MAC-derived so it is stable across reboots, three probes a second apart then two announcements -- and `SYS_NET_ARP_PROBE` is the whole kernel half, because `arp_resolve()` already sends a probe (sender 0.0.0.0 on an unconfigured device) and an announcement (sender = the new address) from one code path. It does NOT block, so the counts and the spacing stay ring 3's. **THE ADDRESS NOW ARRIVES AFTER THE CONSOLE PROMPT DOES** -- about a second in -- so anything pinging a freshly booted guest must WAIT for it, or it fails as `no such device`. Not defended after the claim, and the lease is not renewed.
-- **A WAIT CAN CARRY A DEADLINE, AND READINESS IS NOT DELIVERY** -- `SYS_WAIT_READY(ms)` parks until the caller's event queue is non-empty or the deadline passes and CONSUMES NOTHING (`poll()` beside `read()`); the compositor drains its own queue, so a wait that RETURNED an event would hide one from the drain every time, and only while idle. A 0 does not say which of the two happened. **The trap is the RETURN VALUE**: the kernel half is shared with the blocking socket receive, and `scheduler_wake_timers()` writes 0 only for `SCHED_CHAN_TIMER` and `SYS_RETRY` for every other channel -- which is outside the errno range, so it reaches ring 3 untouched.
+- **A TRACER NAMES ITS CHILD AT THE SPAWN, AND THE TRACE GOES TO ITS TERMINAL.**
+- **A THREAD IS A SLOT WHOSE `tgid` NAMES SOMEBODY ELSE**
+- **RING-3 `malloc` TAKES A LOCK; THE KERNEL'S DOES NOT**
+- **THE THREAD POINTER IS FS.base, AND THE SCHEDULER RELOADS IT**
+- **THERE IS A SOUND CLASS, ITS STREAM IS EXCLUSIVE, AND THE RING IS SHARED MEMORY**
+- **THERE IS A NETWORK DEVICE CLASS, THE STACK IS IN THE KERNEL, AND THE RECEIVE PATH IS SPLIT ACROSS AN INTERRUPT**
+- **TCP IS CLIENT-SIDE, IN-ORDER ONLY, AND ITS TIMERS RIDE THE BLOCKING RECEIVE**
+- **A SOCKET RECEIVE BLOCKS, ONE CHANNEL SERVES THE WHOLE STACK, AND THE DEADLINE LIVES ON THE SOCKET**
+- **UDP IS A PORT DEMUX, DHCP AND DNS ARE RING-3 PROGRAMS, AND A NAME IS RESOLVED BY A LIBRARY**
+- **NOTHING INVENTS AN ADDRESS: A CARD COMES UP UNCONFIGURED, `/bin/dhcp` RUNS AT BOOT, AND NO SERVER MEANS LINK-LOCAL**
+- **A WAIT CAN CARRY A DEADLINE, AND READINESS IS NOT DELIVERY**
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
 
 ### GUI, Toykit and the desktop
@@ -631,7 +631,7 @@ whenever a headline here tells you something you did not already know.
 
 - **MEASURE TEXT, NEVER MULTIPLY: `gfx_char_advance()` / `ugfx_char_advance()`.**
 - **A LOADED FACE STILL ONLY DRAWS 101 GLYPHS.**
-- **`font glyph <char>` SHOWS WHAT WILL ACTUALLY BE DRAWN, AND IT READS BOTH SIDES.** -- `/bin/font`: one glyph's coverage map, line box and ink, from ring 0 (`QUERY_FONTGLYPH`) and from a client's own atlas mapping, compared by hash. `ink NONE` is the point; `peak` is the harder half (a glyph can have ink and be far too faint). The client half needs a compositor AND a scheduled process. A codepoint (`0x20`) is accepted because a space cannot be typed as an argument.
+- **`font glyph <char>` SHOWS WHAT WILL ACTUALLY BE DRAWN, AND IT READS BOTH SIDES.**
 - **A FONT IS A HANDLE IN RING 3 AND A CONTEXT FLAG IN RING 0.**
 - **THERE ARE TWO FONT TIERS, AND THE SHARED ONE CANNOT GROW TO COVER THE OTHER.**
 - **BOLD IS A WEIGHT OF A FAMILY, AND A FAMILY IS A FILENAME RULE.**
@@ -641,31 +641,31 @@ whenever a headline here tells you something you did not already know.
 - **`WIN_CLIENT_MAX_W/H` TRACKS THE DISPLAY CEILING, AND A SCREEN BIGGER THAN IT BREAKS MAXIMIZE SILENTLY.**
 - **A DESKTOP-SIZED WINDOW IS "MAXIMIZED", AND THERE IS NO FULLSCREEN STATE.**
 - **`-vga virtio` IS A REAL DISPLAY DRIVER, and nothing else boots it**
-- **`apps/ui/` IS GONE, and the GUI toolkit is `userland/ui/`** -- the kernel image contains no widget code at all.
+- **`apps/ui/` IS GONE, and the GUI toolkit is `userland/ui/`**
 - **Ring-3 GUI apps are written against Toykit's `uapp`, and a new one is a `.c` file in `userland/gui/` with NO Makefile edit.**
-- **A TOOLBAR IS `uui_toolbar`, AND ITS STATE CALLBACK IS THE MENU BAR'S** -- items carry the menu's own command codes, `item_flags(code)` answers for tick and latch alike, tooltips ride the app's `on_tick` (`uui_toolbar_tick()`), and commits are parked (`uui_toolbar_take_code()`).
-- **A MENU BAR IN AN APP WITH ROUTED WIDGETS MUST BE `uui_menubar_ops`, NOT HAND-ROUTED** -- the router runs before an app's `on_press`, so a hand-routed popup's first row is also a click on the widget under it; the ops table declares `overlay_active` (offered every press first, no hit test) and paints from `draw_overlay` (after every widget's `draw`). A commit is PARKED and taken with `uui_menubar_take_code()` from `on_widget`, because the ops `release` slot has nowhere to return a code. Keys stay the app's -- there is no `key` slot -- and **F10 REVEALS a hidden bar as well as opening it**, since Konsole's Ctrl+Shift+M folds to Shift+Enter here.
-- **A TAB IS A SESSION, AND `uui_tabs` IS THE STRIP** -- its own pty, shell, grid, scrollback, alternate screen and title; Konsole's model, because only the app can give a tab a terminal's state. The CALLER owns the tab array and a label must outlive the widget. **The SELECTED tab is a LIGHT LIFT with an accent bar on TOP** -- the theme's field colour against CONTROL-coloured resting tabs, a thirty-unit lift; the accent was on the BOTTOM edge (least contrast there, against a black page) and the lift was twenty, which shipped and was reported as hard to see. **Tabs are NUMBERED past one** (`numbered`, Konsole's `%n: %d`) -- terminal labels collide, since every tab in one directory reports the same title. **A NEW TAB IS APPENDED and the strip's order is NOT slot order** -- slots are recycled, so a slot-ordered strip appends only until a middle tab is closed and then drops the next new tab into the hole; the SELECTION follows the slot rather than the index for the same reason. A default title is `Shell` with no number, since the strip numbers by position and a slot is recycled. Filling it with the PAGE's colour (Windows Terminal's merged tab) was built and REJECTED -- against near-white chrome a black page makes the selected tab a black block. **The `+` is `show_new`/`on_new`, pinned at the RIGHT END**, and its width comes out of the strip BEFORE the tabs share what is left. **One tab still shows the strip**, deliberately unlike Konsole, because the strip carries the `+`. **Each session has a READER THREAD** that touches only its SPSC ring and calls `uapp_post()`; `tick_ms`/`on_tick` are GONE, and a full ring makes the reader wait rather than drop. Bindings are Konsole's: Ctrl+Shift+T/W, Ctrl+PgUp/PgDn -- and a Ctrl+Shift+letter is matched as the CONTROL CODE plus the Shift bit, because the letter is already folded by the time an app sees it.
-- **A TITLE COMES FROM THE SHELL, AS AN OSC** -- `ESC]0;text BEL` -> `ANSI_OSC` (`api/ansi.h`), and `/bin/tosh` emits one per DIRECTORY CHANGE, never per prompt (`prompt()` runs several times a repaint). A consumer may ignore it and the physical console does. An OSC with no `;` is DROPPED rather than guessed at; an unimplemented code is swallowed, not reported, or every hyperlink would rename a tab; the title TRUNCATES at `ANSI_OSC_MAX`.
-- **TERMINAL IS A TERMINAL EMULATOR, NOT A SHELL WITH A WINDOW** -- it runs `/bin/tosh` on a pty, so the shell in a window is a real process and `Ctrl-C` there is the same code as the console's.
-- **THE TERMINAL'S SCREEN IS A GRID, AND THE ANSI PARSER IS THE KERNEL'S COMPILED TWICE** -- `/bin/edit` runs in a window because a full-screen program can address a grid; `kernel/lib/ansi.c` answers for both terminals.
+- **A TOOLBAR IS `uui_toolbar`, AND ITS STATE CALLBACK IS THE MENU BAR'S**
+- **A MENU BAR IN AN APP WITH ROUTED WIDGETS MUST BE `uui_menubar_ops`, NOT HAND-ROUTED**
+- **A TAB IS A SESSION, AND `uui_tabs` IS THE STRIP**
+- **A TITLE COMES FROM THE SHELL, AS AN OSC**
+- **TERMINAL IS A TERMINAL EMULATOR, NOT A SHELL WITH A WINDOW**
+- **THE TERMINAL'S SCREEN IS A GRID, AND THE ANSI PARSER IS THE KERNEL'S COMPILED TWICE**
 - **An app with a cadence sets `tick_ms` and BLOCKS between frames.**
 - **An app refuses its OWN second copy -- the launcher never does.**
 - **`uui_table` sorts on a header click, and an app supplies only a COMPARATOR.**
 - **A `uui_scrollview` NOTICES when its content's item list changes**
 - **`uui_spinbox` IS FOR A NUMBER; `uui_slider` IS FOR AN ORDERED ENUM.**
 - **`uui_slider` is for an ORDERED enum**
-- **A DRAG NEEDS THE BUTTON STILL DOWN, AND THE POINTER GRAB IS NOT THAT FACT** -- a `dragging` flag only says the press was yours; test the `buttons` mask (`0x1` primary), as `uui_button` always has, or a button-up motion inside the grab moves the value to wherever the pointer is.
-- **`uui_scale` IS FOR A CONTINUOUS NUMBER; `uui_slider` IS FOR AN ORDERED ENUM** -- GTK's split; it carries no label (the readout is the app's), a drag reports EVERY motion so volume can act live and a seek on release, and a click on the track jumps rather than pages.
+- **A DRAG NEEDS THE BUTTON STILL DOWN, AND THE POINTER GRAB IS NOT THAT FACT**
+- **`uui_scale` IS FOR A CONTINUOUS NUMBER; `uui_slider` IS FOR AN ORDERED ENUM**
 - **A CONTROL BELOW THE FOLD IS UNREACHABLE, not merely hard to hit.**
 - **`on_draw` RUNS BEFORE THE WIDGETS; `on_draw_over` RUNS AFTER.**
-- **`uui_meter` IS THE READING WIDGET, AND IT RESERVES EVERY ROW IT COULD USE** -- a caption, a big number in its own font, a unit, a detail line, a bar; no `hit`, because a reading is not a control. Its height must NOT depend on which strings are set: a meter's content is a value that CHANGES, and counting the non-NULL ones drew Disk Mark's tiles straight through their own borders.
-- **LONG WORK BELONGS IN A CHILD PROCESS, NOT IN A GUI CLIENT'S EVENT LOOP** -- slicing across `on_tick` is NOT enough, because a slice is bounded only between UNITS and one unit can be unbounded (a 1 MiB transfer is 1024 syscalls: `SYS_WRITE_MAX` is 1 KiB). Spawn a `/bin` program and poll it, the File Manager's `/bin/cp` pattern. **A polled report is a SNAPSHOT, not a log** -- `sys_read` carries 1 KiB, so appended results land past where a poller reads. **The poll is itself I/O**: ~500 ms, not an animation cadence. `uapp_busy_begin()` is for work that is slow and SHORT.
-- **A WIDGET ARRAY IS DECLARED TWICE: `uapp_desc.layout` SIZES AND DRAWS, `uapp_desc.widgets` GETS INPUT** -- declaring only the first is a window that renders perfectly and cannot be clicked, silently. And **a lone routed button reports through `on_widget` with the ITEM's id**, not `on_action`, which `uapp.c` fires only from `uapp_desc.buttons` (a `uui_button_group` -- which is why Calculator looks like the opposite example).
+- **`uui_meter` IS THE READING WIDGET, AND IT RESERVES EVERY ROW IT COULD USE**
+- **LONG WORK BELONGS IN A CHILD PROCESS, NOT IN A GUI CLIENT'S EVENT LOOP**
+- **A WIDGET ARRAY IS DECLARED TWICE: `uapp_desc.layout` SIZES AND DRAWS, `uapp_desc.widgets` GETS INPUT**
 - **`uui_label` WRAPS ONLY IF ASKED, AND THE CALLER RESERVES THE ROWS.**
 - **`uui_label` is the caption widget**
 - **`uui_sidebar` IS THE NAVIGATION WIDGET; `uui_tree` MODELS CONTAINMENT.**
-- **`uui_tree` models containment** -- and `UUI_TREE_CLOSED`/`OPEN` on a node's `kind` plus `uui_tree_set_on_toggle()` make a LAZY tree: children absent until the app rebuilds the array (`uui_tree_set_nodes_keep()`), the bitmap and its 64-node cap applying only to derived nodes.
+- **`uui_tree` models containment**
 - **A SETTING DECLARES ITS CATEGORY, and the sidebar is generated from it.**
 - **Control Panel is now SYSTEM SETTINGS**
 - **`uui_table` is the multi-column widget**
@@ -680,13 +680,13 @@ whenever a headline here tells you something you did not already know.
 - **The TASKBAR'S LAYOUT IS ONE FUNCTION, and past a floor it groups by app**
 - **The WM has a SLOW-FRAME WATCHDOG**
 - **There is a Crash Test app**
-- **THE KERNEL CONSOLE STOPS PRESENTING WHILE A COMPOSITOR OWNS THE SCREEN** -- `vga_present()` no-ops on `win_server_any()` and `vga_resume()` repaints on the way out (Linux's `KD_GRAPHICS`); otherwise any ring-3 process writing to fd 1 blits the whole text console over the desktop. **`vga_present_force()` is the override and a PANIC is its caller** -- guarding the routine path alone hides every panic under a running desktop. The console keeps DRAWING, so the text survives to be repainted.
-- **A CLIENT NAMES ITS POINTER SHAPE, AND THE COMPOSITOR CLAMPS IT TO THE CONTENT AREA** -- `WIN_REQ_CURSOR` carries a `WIN_CURSOR_*` (`DEFAULT`/`TEXT`/`WAIT`), Wayland's `cursor-shape-v1`; the list a client may name excludes the resize shapes because the frame is not its; the clamp is what stops a wedged client stranding an I-beam over the desktop; a widget declares it through `uui_widget_ops.cursor` and `uapp_set_cursor()` fills the gaps (Notepad's document, the Terminal's grid).
-- **THE BUSY POINTER HAS TWO SOURCES** -- `uapp_busy_begin()`/`_end()` for work that is slow on purpose (the toolkit remembers what to restore; does NOT nest), and the COMPOSITOR raising it for a window that stopped answering, which OUTRANKS whatever that window last named because a wedged client cannot name anything. `/tests/hangclient`'s `b` key is busy-and-alive, which is what keeps the two testable apart.
-- **EVERY CLIENT IS PINGED ON A CADENCE** -- `WM_PING_INTERVAL_DEFAULT` beside `WM_PING_TIMEOUT_DEFAULT`, levers `gui pingtimeout`/`gui pinginterval`. `wm_client_ping()` used to have ONE caller (the close path), so `(Not Responding)` could only appear while closing. A hung window nobody is closing still raises no DIALOG -- that stays gated on `close_asked_tick`.
+- **THE KERNEL CONSOLE STOPS PRESENTING WHILE A COMPOSITOR OWNS THE SCREEN**
+- **A CLIENT NAMES ITS POINTER SHAPE, AND THE COMPOSITOR CLAMPS IT TO THE CONTENT AREA**
+- **THE BUSY POINTER HAS TWO SOURCES**
+- **EVERY CLIENT IS PINGED ON A CADENCE**
 - **The cursor's shapes are DATA FILES, and a theme is a directory.**
 - **The cursor's drawn extent is DERIVED, not a constant.**
-- **THE POINTER RIDES THE HARDWARE CURSOR PLANE WHEN THE DRIVER HAS ONE** -- `wm_hwcursor.c` + `WIN_REQ_FB_CURSOR`; the KERNEL moves the plane per pointer event (zero syscalls), the handover to the software sprite is PER SHAPE (huge sizes and built-in non-arrow shapes fall back), and a hardware cursor is INVISIBLE to `screendump` -- asserting its pixels is asserting it failed.
+- **THE POINTER RIDES THE HARDWARE CURSOR PLANE WHEN THE DRIVER HAS ONE**
 - **A compositor's view of a dead window is POISONED, not unmapped**
 - **A ring-3 compositor delivers events through TWP, not by calling the kernel.**
 - **`SYS_FS_GENERATION` is how ring 3 asks "has the filesystem changed?"**
@@ -705,31 +705,43 @@ whenever a headline here tells you something you did not already know.
 - **A client that needs raw input without a desktop cannot be driven by keystrokes**
 - **Four things a ring-0 component loses the moment it becomes a process:**
 - **COLOURS COME FROM THE THEME, SIZES FROM ITS METRICS -- neither is hardcoded.**
-- **A WORKER THREAD MAY TOUCH NOTHING IN TOYKIT EXCEPT `uapp_post()`** -- the widget tree, the canvas and the window buffer are plain memory the main thread may be reading; every real toolkit has this rule (AppKit and Qt widgets are main-thread-only, GTK the same) and none enforce it. A worker computes into memory it owns and posts TWO NUMBERS; `uapp_desc.on_user` runs on the MAIN thread. A client may post only to ITSELF and only `WIN_EV_USER`, which is what keeps "a client cannot synthesise input" true of its own queue. **This does not replace the `/bin` child-process pattern** -- a thread is for work whose RESULT must live in the app's own memory (a decoded image), not for work a `/bin` program could do better.
+- **A WORKER THREAD MAY TOUCH NOTHING IN TOYKIT EXCEPT `uapp_post()`**
 - **AN APP LOGS THROUGH `ulog()`/`ulogf()`, not a hand-rolled `logf_`.**
 - **THE TOOLKIT OWNS THE KEYBOARD FOCUS RING: set `uapp_desc.focus`.**
 - **A WIDGET REPORTS ITS RECT THROUGH THE `bounds` OP; a test-facing geometry log is `uapp_log_layout(a, prefix)`.**
-- **AN IMAGE IS DECODED IN RING 3, AND `lib/uimg.h`'s CODEC TABLE IS THE EXTENSION POINT** -- never add an image parser to the kernel, and `-ENOTSUP` (a file this build refuses) is not `-EINVAL` (a broken one). Two codecs: JPEG for photographs, QOI for anything needing ALPHA.
-- **AUDIO IS DECODED AND MIXED IN RING 3, AND `lib/usnd.h` HAS THREE SEAMS** -- a CODEC TABLE (WAV today, MP3 a file and a row), a SINK (`usnd_sink.h`: the kernel's exclusive stream today, a sound daemon as a second row) and VOICES (an eight-voice per-process mixer). A codec NEVER resamples; the library converts once. Nothing in the public header names the ring, `hw_pos` or `SND_*`, which is what lets a daemon arrive without touching an app. No hardware is NOT an error -- `-ENODEV` and `-EBUSY` are ordinary, and the default boot has no AC97. Long playback is a WORKER THREAD's, never an `on_tick`'s.
-- **AN ICON IS A NAME, NOT A PATH, AND IT IS COMPOSITED** -- `Icon=notepad` resolves to `/usr/share/icons/notepad.qoi` through `icon_get()`, which CACHES the decoded and scaled result; blit it with `ugfx_blit_alpha()`, never `ugfx_blit()`, or its transparent corners land as black.
-- **A WINDOW'S TITLE BAR CARRIES ITS APP ICON, AND `title_icon()` ANSWERS FOR BOTH DRAWING AND CLICKING** -- resolved from the window's own `app_id` (the client never supplies artwork, as on Wayland); no decode means no rect, so there is never a clickable square with nothing in it; clicking it opens the window menu through the same `wm_open_window_menu()` the right-click uses.
-- **TEXT ON A WALLPAPER IS `ugfx_draw_string_shadowed()`, NEVER A GUESSED `bg`** -- `UGFX_TRANSPARENT` blends against what is really on the surface (the one path that reads back), and the shadow's shade is DERIVED from the ink's luminance, because no single ink is legible on every photograph.
+- **AN IMAGE IS DECODED IN RING 3, AND `lib/uimg.h`'s CODEC TABLE IS THE EXTENSION POINT**
+- **AUDIO IS DECODED AND MIXED IN RING 3, AND `lib/usnd.h` HAS THREE SEAMS**
+- **AN ICON IS A NAME, NOT A PATH, AND IT IS COMPOSITED**
+- **A WINDOW'S TITLE BAR CARRIES ITS APP ICON, AND `title_icon()` ANSWERS FOR BOTH DRAWING AND CLICKING**
+- **TEXT ON A WALLPAPER IS `ugfx_draw_string_shadowed()`, NEVER A GUESSED `bg`**
 - **`uui_image` IS THE ONLY WIDGET THAT OWNS MEMORY, AND IT MUST BE RELEASED.**
-- **THE WALLPAPER IS A REGISTERED SETTING, AND ITS VALUE IS A NAME** -- `desktop.wallpaper`, a filename stem under `/usr/share/wallpapers` or `none`; a GUI test measuring ink over the desktop must turn it off first.
-- **THE START BUTTON'S APPEARANCE IS A REGISTERED SETTING** -- `desktop.start_button` = `text` | `icon` | `both` (XFCE Whisker's three-way), default `text` so the strip's geometry is unchanged; `start_mark()` in `wm_render.c` is the ONE decision the width, the drawing and `gui taskbar --json` all ask, or a missing `start.qoi` yields an icon-width button with a text label in it.
+- **THE WALLPAPER IS A REGISTERED SETTING, AND ITS VALUE IS A NAME**
+- **THE START BUTTON'S APPEARANCE IS A REGISTERED SETTING**
+- **THE COMPOSITOR SLEEPS BETWEEN FRAMES, AND TWO THINGS MUST DEFEAT THE WAIT**
+- **THE TRAY CLOCK OPENS A CALENDAR, AND THE PANEL OWNS IT**
+- **THE WEEK'S FIRST COLUMN IS A REGISTERED SETTING: `desktop.week_start` = `monday` | `sunday`**
+- **A KEY RELEASE IS `WIN_EV_KEY_UP`, AND THE FOUR MODIFIER KEYS ARE KEYS**
+- **A SECONDARY CLICK IS THE CLIENT'S INSIDE ITS CONTENT AREA, AND THE WM'S EVERYWHERE ELSE**
+- **DOOM IS A VENDORED PORT IN `userland/ports/doom/`, LINKED INTO ONE BINARY**
+- **DOOM'S SOUND IS THE REST OF THE PORT, NOT A REWRITE -- AND THE THREE SHIMS ARE ON OUR SIDE**
+- **MINESWEEPER IS THE FIRST GAME, AND IT IS AN ORDINARY CLIENT**
+- **A DIRECTORY LISTING IS A WIDGET, `uui_fileview`, AND FOUR THINGS SHOULD BE DRAWING ONE**
+- **THE FILE MANAGER IS A TWO-PANE COMMANDER, NOT AN EXPLORER**
+- **WHAT OPENS A FILE TYPE IS DECLARED BY THE APP THAT OPENS IT (`Handles=`), AND `/etc/mimeapps.conf` OUTRANKS IT**
+- **A TITLE-BAR BUTTON IS A DISC, AND EVERY GLYPH CENTRES ON THE SAME PIXEL AS IT.**
+- **AN ICON COLUMN IN A SIDEBAR IS PER SIDEBAR, NOT PER ROW**
+- **A MOVE EVENT REACHES EVERY WIDGET AT EVERY DEPTH NOW, AND HOVER BELOW TWO CONTAINERS WAS DEAD UNTIL IT DID.**
+- **AN OPEN POPUP TAKES THE KEY, AND A KEY-DRIVEN CHANGE IS REPORTED LIKE A CLICK.**
+- **TYPING IN A LIST SEEKS, AND ONE SEARCH SERVES BOTH WIDGETS.**
+- **A TABLE DECLARES WHICH COLUMN A LETTER MATCHES: `uui_table_set_seek_col()`**
+- **A WIDGET THAT TAKES KEYS STILL GETS NONE UNTIL THE APP ROUTES THEM**
+- **A FOCUS INDICATOR IS `uui_focus_ring()`, IN THE THEME'S ACCENT, AND THE WIDGET PASSES THE RECT**
+- **A SETTING WHOSE CHOICES ARE DATA NAMES THEM ITSELF: `choice_label`, tried after `/etc/settings.d` and before the raw value.**
+- **THE ICON CACHE IS THE TOOLKIT'S NOW (`userland/lib/icon_cache.h`), AND A SIDEBAR HEADING CAN CARRY AN ICON.**
+- **A WINDOW HAS TWO BUFFERS, AND THE COMPOSITOR NEVER READS THE ONE BEING DRAWN.**
+- **THE LAYOUT LOG IS OFF UNLESS A TEST TURNS IT ON, AND DEDUPED WHEN IT IS.**
+- **THE TERMINAL SCROLLS BY WHEEL AS WELL AS BY KEY, AND BOTH MOVE THE SAME STATE.**
 
-- **THE COMPOSITOR SLEEPS BETWEEN FRAMES, AND TWO THINGS MUST DEFEAT THE WAIT** -- `wm.c` waits on `sys_wait_ready()` with a deadline of the nearer of the earliest armed client timer and `WM_IDLE_WAIT_MS` (100 ms, the cadence of the clock, the pings, the `/etc` polls, the Start-menu flash, reaping); `sys_yield()` returned immediately, so an idle desktop polled every tick. **Injected debug input and an already-owed repaint make the wait ZERO** -- the injection queue is ring-3 memory the kernel cannot see, and the loop takes one event per iteration, so a press would block with its release still queued. Work added to the loop is bounded by that wait, not by the tick. Measured 0.76 s -> 0.57 s of host CPU per 30 s idle.
-- **THE TRAY CLOCK OPENS A CALENDAR, AND THE PANEL OWNS IT** -- `userland/wm/calendar_popup.c`, a month grid anchored above the clock with `<`/`>` paging and today in the accent, where Windows/GNOME/Plasma/XFCE all put it; days are not clickable, the panel is always six week rows tall, a dismissing click on the TASKBAR falls through (the Start button acts on it) while one anywhere else is swallowed, and the clock's own rect comes from `tray_clock_rect()` rather than from "the right end of the strip".
-- **THE WEEK'S FIRST COLUMN IS A REGISTERED SETTING: `desktop.week_start` = `monday` | `sunday`** -- persist-only in `/etc/desktop.conf` like the wallpaper and the Start button, adopted on the WM's generation poll; a tool that changes it must set it back.
-
-- **A KEY RELEASE IS `WIN_EV_KEY_UP`, AND THE FOUR MODIFIER KEYS ARE KEYS** -- `uapp_desc.on_key_up`, a separate type and callback so a press-only app is unchanged; releases ride a parallel transition queue because a terminal is a byte stream and a release is not a byte; `KEY_SHIFT`/`KEY_CTRL`/`KEY_ALT`/`KEY_ALTGR` exist only there; a release carries what the PRESS produced (first press wins, so autorepeat cannot strand it); an unmatched release is legal; and `wm_rawin.c`'s key slot became a QUEUE, because a dropped release is a key held forever.
-- **A SECONDARY CLICK IS THE CLIENT'S INSIDE ITS CONTENT AREA, AND THE WM'S EVERYWHERE ELSE** -- right-click reaches a ring-3 app as button bit `0x2`, the frame/title bar/taskbar keep the window menu (Windows/X11/Wayland's split); Toykit activates widgets on `0x1` alone while `on_press` sees every button.
-- **DOOM IS A VENDORED PORT IN `userland/ports/doom/`, LINKED INTO ONE BINARY** -- doomgeneric byte for byte (GPL-2 in an MIT repo, so an aggregation, and the per-binary `EXTRA_OBJS_doom` is what makes "nothing else depends on it" a build property); OUR backend is `userland/backends/doom/`, outside the vendored directory on purpose; the vendored tree compiles with warnings OFF but the frame-size warning ON; and `api/keyboard.h` and `doomkeys.h` CANNOT share a translation unit (both define `KEY_F2`/`F3`/`F4`/`F10` differently), which is why `dg_toyos.h` carries `TOYKEY_*` copies that `doom.c` static-asserts against the real macros. **The IWAD is NOT in the repo** -- `tools/fetch_wad.py`.
-- **DOOM'S SOUND IS THE REST OF THE PORT, NOT A REWRITE -- AND THE THREE SHIMS ARE ON OUR SIDE** -- doomgeneric IS Chocolate Doom with sound removed, so the music files came back from `chocolate-doom-2.1.0` (a tag chosen by MEASUREMENT: `memio.c` byte-identical, `i_sound.h` differing only by doomgeneric's appended declarations). `FEATURE_SOUND` is defined on the COMPILER LINE, never in the vendored `doomfeatures.h`; the `SDL_mixer.h`/`SDL.h`/`opl_sdl_driver` shims all live in `userland/backends/doom/`. Effects map onto `usnd` voices with a stereo gain (Chocolate's own shape -- `s_sound.c` already decided the volume and separation, so the backend does no mixing). **THE OPL RENDER THREAD IS LOAD-BEARING**: `OPL_Detect()` blocks on a callback that only fires from the render path, so without a thread already turning the clock, `I_InitMusic` DEADLOCKS and the window sticks on the pre-WAD title. And the precache loop must use `W_CheckNumForName` -- `S_Init` precaches over the whole of `S_sfx[]` including a nameless dummy, and `W_GetNumForName` calls `I_Error` on a miss.
-- **MINESWEEPER IS THE FIRST GAME, AND IT IS AN ORDINARY CLIENT** -- `userland/gui/apps/mines.c`; it draws its own board rather than adding a `uui_grid` widget for one caller, its board palette is content and not theme, and flagging commits on PRESS.
-- **A DIRECTORY LISTING IS A WIDGET, `uui_fileview`, AND FOUR THINGS SHOULD BE DRAWING ONE** -- it composes `uui_table`; the CALLER owns the 20 KB entry array; filtering is a callback (Image Viewer probes magic bytes); `..` and directories lead under every sort; a MARK names a row so every reload clears the marks; Image Viewer is converted and the WM's file picker and Notepad's dialog are NOT yet. **`UUI_FILEVIEW_ICONS` is the first non-table mode** -- its grid runs on `icon_grid.h` + `icon_get()` while selection/marks/sort stay the table's state, and dragging empty space sweeps a rubber band whose selection IS the marks (`rubberband.h`'s second caller); a timed reload must skip while `uui_fileview_band_active()`. A THUMBNAIL is a lookup the app answers (`uui_fileview_set_thumb()`) -- the File Manager decodes lazily on its tick, never in the draw.
-- **THE FILE MANAGER IS A TWO-PANE COMMANDER, NOT AN EXPLORER** -- `userland/gui/apps/files.c`; copy and move between two visible directories need neither the clipboard nor drag-and-drop, and this system has neither. File operations are CHILD PROCESSES (`/bin/cp`, `/bin/rm`) reaped with `sys_waitpid_nohang()`, marked files run through a QUEUE, each pane carries its own path strip, and the pair is remembered in `/etc/files.conf`. The View menu sets Details/Icons PER PANE, collapses to a single pane, and shows a lazy `uui_tree` folder column -- all persisted in the same file.
-- **WHAT OPENS A FILE TYPE IS DECLARED BY THE APP THAT OPENS IT (`Handles=`), AND `/etc/mimeapps.conf` OUTRANKS IT** -- resolved by `userland/lib/uopen.c` with NO daemon; `/bin/open` speaks the same resolver and manages the override file (`-l`/`-s`); matched whole and case-insensitively including the dot; the handler is spawned and NOT waited for, and Notepad takes a path in `argv[1]` because of it; a directory opens the File Manager.
 ### Storage, the filesystem, and /etc
 
 `docs/conventions/storage.md`
@@ -741,69 +753,56 @@ whenever a headline here tells you something you did not already know.
 - **THERE ARE THREE WORDS FOR SYSTEM STATE AND THEY ARE FIXED: FACT, SETTING, TUNABLE.**
 - **Setting a setting to the value it already has does NOTHING**
 - **`etc_config.c` is SPLIT: the parser is shared, the file I/O is kernel-only.**
-- **EVERY DISK DRIVER RUNS, AND THE ROOT IS A SEPARATE CHOICE** -- all three inits are called unconditionally and each registers what it finds into **block.h's device table** (`ata0`, `ahci0`, `virtio0`, `ram0`; partitions `ata0p3`, numbered by the PARTITION TABLE so they match `parttable`). The root comes from `root=` on the boot line, else registration order. It was `if (!blk_virtio_init() && !blk_ahci_init()) blk_ata_init();` -- a short circuit, so a virtio machine never ran the AHCI driver and its SATA disk did not EXIST, and a live boot skipped disk init entirely so a live session could not see the machine's own drives. **Every test here boots ONE disk, which is the one shape where the bug cannot show.** Three traps: a device created but never made active must still be TRACKED (`blk_track()`, or `/boot`'s partition has no name and cannot be mounted); every disk's partitions are named, not just the root's (`partition_read_table_of()`); and a second volume of one format still will not mount, which is `fs_ops.max_mounts` and not this. `/bin/lsblk` shows the table.
-- **THE DISK PRECEDENCE IS VIRTIO-BLK, THEN AHCI, THEN ATA, and each rung has a boot word that steps down to the next** -- decided in ONE line in `kernel/fs/mount.c`; `novirtio` and `noahci` are what keep the lower rungs reachable. `noahci` is NOT a driver kill switch: only `blk_ahci_init()` reads it.
-- **AHCI ENUMERATES EVERY PORT AND DRIVES ONE, AND SAYS SO** -- `kernel/drivers/ahci.c`; NCQ and 64-bit addressing are REPORTED, not used (what NCQ needs is an asynchronous block interface, not more AHCI code); NO sector cache, unlike ATA, which is what makes `BLK_CAP_FLUSH` a real FLUSH CACHE EXT. Start the engine only after `PxCLB`/`PxFB` are set and unmask INTx only after the handler is registered; acknowledge **port first, then the HBA**; `CFL` is the FIS length in DWORDS (five), not the 64-byte slot. The PRDT is one entry per 4 KiB page, and `tools/ahci_test.py` is the only thing that runs any of it.
-- **ALL THREE DISKS DISCARD, AND THE CAPABILITY IS THE DEVICE'S ANSWER RATHER THAN ITS FEATURE BIT** -- a virtio device may negotiate DISCARD and advertise a `max_discard_sectors` of ZERO (QEMU does, without `discard=unmap`), so `block_virtio.c` declares `BLK_CAP_TRIM` from the MAXIMUM and `block_ahci.c` from IDENTIFY word 169. **A TRIM that acknowledges and discards nothing is invisible from inside the guest**, so the KTESTs cover REFUSALS only and the real oracle is the HOST: write 40 MiB, delete it, require the sparse image's allocated size back at baseline. **`notrim` turns discards off for EVERY backend**, gated once in `blk_trim_supported()` -- a diagnostic A/B, since a flush after a hole-punch is far slower on some hosts than others.
+- **EVERY DISK DRIVER RUNS, AND THE ROOT IS A SEPARATE CHOICE**
+- **THE DISK PRECEDENCE IS VIRTIO-BLK, THEN AHCI, THEN ATA, and each rung has a boot word that steps down to the next**
+- **AHCI ENUMERATES EVERY PORT AND DRIVES ONE, AND SAYS SO**
+- **ALL THREE DISKS DISCARD, AND THE CAPABILITY IS THE DEVICE'S ANSWER RATHER THAN ITS FEATURE BIT**
 - **VIRTIO-BLK IS THE PREFERRED DISK; ATA IS THE LEGACY PATH.**
 - **A filesystem talks to a `block_device`, not to a disk.**
 - **TFS3's last block group may be PARTIAL**
 - **A new TFS3 operation must COUNT ITS JOURNAL CREDITS, and the count is the design.**
 - **Shrinking a file, or anything else that stops referencing a block, commits the pointer change BEFORE freeing the bit.**
-- **THE STOCK `disk.img` IS PARTITIONED AND BOOTABLE, AND ONLY A BLANK IMAGE GETS THAT** -- a GPT holding a BIOS boot partition (GRUB's `core.img`), a FAT32 `/boot` and TFS3, in that order. `seed_disk.py` asks `mkpart_test.py`'s `volume_of()` what shape an image already is and KEEPS it, so an existing checkout is untouched until `make clean-disk`. **There is no flat option any more** -- `--flat` is gone and the kernel refuses a whole-disk volume, so even the live ISO's RAM image carries a table. **A host tool that reaches into the filesystem must ask `volume_of()`** and pass `--at-lba`/`--sectors` to `tfs3_writer.py` -- hardcoding 2048 is the pointer-somebody-must-maintain shape, and "partition 1" is now WRONG as well (`volume_of()` finds the TFS3 volume by looking). `try_partitions()` mounts the FIRST partition a backend claims, minus the firmware's; that stops being unambiguous when FAT32 lands (`root=` is the roadmap item).
-- **REMOVING A FILESYSTEM BACKEND SILENTLY REFORMATS EVERY DISK IN THAT FORMAT** -- the probe treats a disk no backend claims as "readable but unclaimed", which is the blank-disk case, which FORMATS. TFS2's removal needed a recognise-and-refuse guard for exactly this; the guard was then removed on the maintainer's word that no such disks exist, so **a TFS2 disk booted today IS reformatted**. Make that call deliberately for the next format: the guard is ~15 lines and the failure is unrecoverable. `struct fs_ops` stays a registry with one row because FAT32 is next.
+- **THE STOCK `disk.img` IS PARTITIONED AND BOOTABLE, AND ONLY A BLANK IMAGE GETS THAT**
+- **REMOVING A FILESYSTEM BACKEND SILENTLY REFORMATS EVERY DISK IN THAT FORMAT**
 - **`/etc` on the persistent filesystem is the config-file convention.**
-- **A PARTITION IS A BLOCK DEVICE, AND THE FILESYSTEM NEVER LEARNS ITS OFFSET** -- `block_part.c` wraps a parent and shifts every LBA (Linux's `bd_start_sect`, Windows' `partmgr`); the active device stays SINGULAR; `blk_read_sectors()` is the VOLUME and `blk_disk_read_sectors()` is the DISK, so a table parser must use the latter; capabilities are inherited and TRIM is CLAMPED; and a backend declares `fs_ops.volume_relative`, the guard that stops the scan offering a partition to a backend that ignores the block layer (TFS2 declared 0; FAT32 will declare 1).
-- **A DRIVE'S ROOT IS A PARTITION, OR IT IS RAMFS -- AND NOTHING IS AUTO-FORMATTED** -- `probe_and_mount()` (`kernel/fs/vfs.c`) is a table of situations: a live module, a claimable partition, a table with nothing claimable, NO TABLE, no disk. The last three all end in **ramfs** (`kernel/fs/ramfs.c`), a real filesystem in the kernel heap. A whole-disk volume is REFUSED by name, told what to run (`make clean-disk && make iso`, or `mkpart`/`fsformat`), and left untouched -- Windows will not boot one either, and no Linux installer has produced one in twenty years. The old blank-disk auto-format is GONE with it: there is nowhere left for it to write, so "an unrecognised disk is not an invitation" is true by construction rather than by a branch remembering it. **`docs/rootfs-design.md` is the full account.**
-- **RAMFS IS NOT IN `g_backends`, AND PUTTING IT THERE WOULD DESTROY A DISK** -- that table is the ON-DISK registry, and `fs_format_backend()` wipes every OTHER backend's signatures before formatting with the named one. `fsformat ramfs confirm` would therefore erase TFS3's superblock from a working disk and then fail its own persistence check. It is reached through its own pointer. **A registry is not a neutral place to put something** -- it is a list of things every consumer of that registry will act on.
-- **`init()` IS THREE-VALUED: 1 persistent, 0 mounted-but-not, -1 COULD NOT MOUNT** -- the same shape `probe()` uses. Before -1 existed, TFS3 (which has no RAM-only mode) returned 0 for failure and `vfs.c` read it as "mounted, not persistent", announcing `tfs3 (RAM-only)` over a machine where every `fs_*` call failed. A backend that cannot mount now leaves NO active backend and says so.
-- **RAMFS HAS A BUDGET, HALF OF FREE MEMORY AT MOUNT** -- tmpfs's own default, and not optional: this kernel has no OOM killer, and ramfs draws from the same frames as the allocator everything else depends on. Over it, an allocating write fails exactly as a full disk does. File data is CHUNKED (4 KiB) because `heap_os_alloc()` asks `pmm_alloc_contiguous()`, so one buffer per file would fail on a fragmented machine while `meminfo` still showed memory free.
-- **A PARTITIONED DISK IS NEVER AUTO-FORMATTED, AND THE FIRST PARTITION THAT IS OURS IS LEFT ACTIVE** -- a flat format SURVIVES a GPT (TFS3 reserves volume blocks 0-7), so claiming an unclaimed partitioned disk would lay a whole-disk volume across every partition's data while `parttable` kept printing the table correctly. `fsformat` formats the ACTIVE device, which is what makes `mkpart` -> reboot -> `fsformat` land inside a partition. **"Ours" excludes the FIRMWARE's** -- `vfs.c`'s scan skips a GPT BIOS-boot or ESP partition (`partition_is_firmware()`), so no backend probes one and the fallback cannot aim `fsformat` at the 1 MiB partition holding GRUB; `partition_test.py`'s last phase asserts the partition NUMBER left active on a table with no filesystem in it, the only state where that choice is visible.
-- **WRITING A TABLE IS A SYSCALL THAT TAKES A TABLE, NOT A SECTOR** -- `SYS_MKPART` takes a `struct mkpart_request` and the kernel encodes it, because this kernel has no privilege model to gate a write-any-sector primitive with (Linux's `BLKPG` shape). `MKPART_CONFIRM` is a SPEED BUMP, not a permission check. GPT is written backup-first and protective-MBR-last; nothing is remounted.
-- **A ROOT IS ONE FILESYSTEM, BUT A PATH TREE IS SEVERAL: THERE IS A MOUNT TABLE** -- `kernel/fs/mount.c` holds it and the boot policy, `kernel/fs/vfs.c` resolves a path to a mount and forwards. FIVE RULES (`kernel/mount.h`): longest prefix wins **at a component boundary** (`/boot` never claims `/bootloader`, which is why `under()` is not a `k_strncmp`); the backend is handed a **root-relative** path and never learns where it is mounted; mounting over a non-empty directory **allows and hides** it (Unix) and the point must already exist as a directory (Linux); an op naming TWO paths (`rename`, `link`) across mounts is **refused**, Unix's EXDEV; and `..` cannot escape a mount root **for free**, because every path is normalized before it arrives. `mount`/`umount` are `/bin` programs and the source is a PARTITION NUMBER -- this OS has no `/dev`.
-- **A BACKEND DECLARES HOW MANY TIMES IT MAY BE MOUNTED, and every one says ONE** -- `fs_ops.max_mounts`. Not decoration: without it `mount 3 /mnt` on a second TFS3 partition succeeds, repoints one set of module-level statics, and the ROOT starts reading the other volume with no error anywhere. Raising it needs per-instance state AND an opaque handle threaded through every op (Linux's `super_block`), and buys nothing until something wants two volumes of one format.
-- **A PROBE MUST NOT DISTURB A MOUNT, and that contract was only ever honoured by accident** -- `fs_ops.probe()` has always said "no side effects beyond the read", and both backends record the device they are handed. Mounting `/boot` probes every backend against the ESP, so a TFS3 serving `/` was repointed at partition 2: `df` kept reporting the right numbers off the cached superblock while every path lookup failed, and **the root went silently empty**. Both backends save and restore their volume around a probe; `mount.c` also declines to probe a backend already at its limit. The general shape: when you make something happen at a SECOND time, re-read what it promised.
-- **`fs_ops.init()` TAKES A DEVICE, and `blk_active()` is not it** -- with two mounts there is no single active device a backend could correctly assume, and one that assumed anyway reads the WRONG VOLUME and reports no error. Linux's `super_block->s_bdev`. A backend reads through `blkdev_*` (same fault-injection hooks); `blk_part_create()` makes a partition device WITHOUT making it active, and the same window asked for twice returns the same device, so pointer identity answers "is this volume already mounted?".
-- **FAT32 IS A GENERIC DRIVER AND KNOWS NOTHING ABOUT BOOTLOADERS** -- `kernel/fs/fat32.c` mentions none; the read-only-by-default policy is in `mount_boot_auto()`, which is Linux's split (`fs/fat/` is generic, the ESP is an ordinary mount). NOT FAT12/16 (a different root layout and FAT width -- a non-FAT32 volume is refused by name), NOT 4096-byte sectors, NOT Unicode (non-ASCII in a long name becomes `?` on read and is REFUSED on create), and NOT journalled because FAT is not. **The LFN set is stored in REVERSE** -- highest index first, carrying `0x40` -- and writing it forwards produces a name every other driver reads backwards; that shipped for one build, and a short name cannot show it. Growing flushes the FAT chain BEFORE the size; shrinking reverses it. It accepts a cluster count below FAT32's 65525 floor on purpose (that threshold is for a driver telling FAT12/16/32 apart; this one discriminates on the BPB's FAT32-only fields), which is what lets a 512 KiB KTEST volume exist.
-- **`/boot` IS READABLE FROM INSIDE toy-os NOW, AND IT IS THE ESP** -- mounted read-only at boot. What is inside it is the ESP's OWN layout: `install_grub.py` writes `boot/kernel.bin` and `boot/grub/` so one `grub.cfg` serves the ISO and the disk with identical paths, so the running kernel is at **`/boot/boot/kernel.bin`**. That nesting is the volume as it really is, the same way a Linux ESP at `/boot/efi` shows `/boot/efi/EFI/...`.
-- **TOY-OS BOOTS FROM ITS OWN DISK, AND `/boot` IS FAT32 BECAUSE GRUB CANNOT READ TFS3** -- `tools/install_grub.py` writes `boot.img`, `core.img` and `/boot/kernel.bin` onto `disk.img` at every `make iso`; an ordinary run is `-boot order=c` with no `-cdrom` at all. The ISO stays a boot medium (live, demo, a release), so this is a CHOICE, not a replacement.
-- **NEVER LEAVE THE BOOT ORDER OUT OF A QEMU LINE, AND ASK `boot_medium()` WHICH ONE** -- `0x55AA` at LBA 0 is all SeaBIOS checks, so with no order it boots ANY partitioned disk and, if nothing installed GRUB on that one, jumps into the table and hangs with **no serial output at all** -- indistinguishable from a kernel that died before its first print. The medium is DERIVED from the image (`install_grub.boot_medium()`, asked by `QEMU_RUN`, `vm.py`, `launch_qemu_cmd()`, `boot_smoke_test.py`, `serial_console.py`), so an image predating this layout still boots the ISO; `BOOT=disk|cd` and `--boot` override. A tool that builds its OWN image (`partition_test.py`, `virtio_boot_test.py`, `run_release.sh`) hardcodes `order=d`, because nothing put a bootloader on it.
+- **A PARTITION IS A BLOCK DEVICE, AND THE FILESYSTEM NEVER LEARNS ITS OFFSET**
+- **A DRIVE'S ROOT IS A PARTITION, OR IT IS RAMFS -- AND NOTHING IS AUTO-FORMATTED**
+- **RAMFS IS NOT IN `g_backends`, AND PUTTING IT THERE WOULD DESTROY A DISK**
+- **`init()` IS THREE-VALUED: 1 persistent, 0 mounted-but-not, -1 COULD NOT MOUNT**
+- **RAMFS HAS A BUDGET, HALF OF FREE MEMORY AT MOUNT**
+- **A PARTITIONED DISK IS NEVER AUTO-FORMATTED, AND THE FIRST PARTITION THAT IS OURS IS LEFT ACTIVE**
+- **WRITING A TABLE IS A SYSCALL THAT TAKES A TABLE, NOT A SECTOR**
+- **A ROOT IS ONE FILESYSTEM, BUT A PATH TREE IS SEVERAL: THERE IS A MOUNT TABLE**
+- **A BACKEND DECLARES HOW MANY TIMES IT MAY BE MOUNTED, and every one says ONE**
+- **A PROBE MUST NOT DISTURB A MOUNT, and that contract was only ever honoured by accident**
+- **`fs_ops.init()` TAKES A DEVICE, and `blk_active()` is not it**
+- **FAT32 IS A GENERIC DRIVER AND KNOWS NOTHING ABOUT BOOTLOADERS**
+- **`/boot` IS READABLE FROM INSIDE toy-os NOW, AND IT IS THE ESP**
+- **TOY-OS BOOTS FROM ITS OWN DISK, AND `/boot` IS FAT32 BECAUSE GRUB CANNOT READ TFS3**
+- **NEVER LEAVE THE BOOT ORDER OUT OF A QEMU LINE, AND ASK `boot_medium()` WHICH ONE**
 
 ### The shell, the console, and line editing
 
 `docs/conventions/shell.md`
 
 - **EVERY COMMAND HAS A PAGE IN `docs/commands/`, AND THE BUILD CHECKS IT.**
-- **AN EVERYDAY COMMAND IS A `/bin` PROGRAM, NOT A BUILTIN, AND THE KERNEL'S OWN COPIES LIVE BEHIND ONE NAME: `rescue`.** -- and `rescue` is the commands you would need to put `/bin` BACK, not everything ring 0 happens to be able to do: `strace` moved out to `/bin` and did not go there.
+- **AN EVERYDAY COMMAND IS A `/bin` PROGRAM, NOT A BUILTIN, AND THE KERNEL'S OWN COPIES LIVE BEHIND ONE NAME: `rescue`.**
 - **A PROGRAM STARTED BY A BARE NAME PRINTS NOTHING EXTRA WHEN IT SUCCEEDS -- AND `run <name>` STILL DOES.**
-- **TAB COMPLETION IS ONE ENGINE COMPILED TWICE, AND A RING SUPPLIES A `struct completion_env`** -- `kernel/lib/completion.c` into the kernel and into `libuapp.a`, like `klineedit.c`; it is FREESTANDING and touches no filesystem (ring 0 has `fs_list()`, ring 3 has `sys_listdir()`), so a kernel include here silently takes completion away from ring 3. `apps/shell_complete.c` and `userland/lib/ucomplete.c` are the two envs and are deliberately NOT parity. An argument completer returns a `completion_domain`, which is what makes `cd`'s directories-only a domain rather than a filter in every caller. `/tests/complete_test` exists because a KTEST cannot see the ring-3 LINK.
+- **TAB COMPLETION IS ONE ENGINE COMPILED TWICE, AND A RING SUPPLIES A `struct completion_env`**
 - **TAB COMPLETION IN COMMAND POSITION IS BUILTINS PLUS ALL OF `PATH`, DEDUPLICATED AND SORTED, WITH NO DIRECTORIES.**
-- **`/bin/tosh -c <command>` RUNS ONE LINE AND EXITS** -- the non-interactive shell `system()` needed; it returns before any interactive setup and must NOT touch the terminal, since a `system()` caller may have inherited somebody else's.
-- **`#` IS RING 0 AND `$` IS RING 3, AND THE PROMPT IS WHERE THAT LIVES** -- all three shells show the cwd, so the last character is the difference; `Ctrl-C` works only at a `$`.
-- **A BUILTIN MUST NOT SHADOW A `/bin` PROGRAM THAT DOES MORE** -- `/bin/tosh` has six (`cd`, `pwd`, `help`, `jobs`, `fg`, `bg`) and each has to be one; `cat`, `ls` and `echo` were the same mistake three times. The test is "could a program do this better", and a builtin passes it by touching the SHELL's own state -- writing it (`cd`) or reading it (`fg`).
+- **`/bin/tosh -c <command>` RUNS ONE LINE AND EXITS**
+- **`#` IS RING 0 AND `$` IS RING 3, AND THE PROMPT IS WHERE THAT LIVES**
+- **A BUILTIN MUST NOT SHADOW A `/bin` PROGRAM THAT DOES MORE**
 - **A WRAPPER BUILTIN IS ONE COMMAND WITH TWO HALVES IN TWO RINGS, AND THE RING-3 HALF WILL BE WRONG.**
 - **A COMMAND WITH A READ HALF AND A WRITE HALF MOVES AS ONE PIECE OR NOT AT ALL.**
 - **COLOUR IS AN ESCAPE SEQUENCE, NOT A SYSCALL.**
-- **`edit` IS A `/bin` PROGRAM, AND THE KERNEL DRAWS NOTHING** -- it renders with ANSI on fd 1 over a raw fd 0, its model is `utext` (shared with Notepad), and moving it emptied `apps/ui/`.
-- **`cp` EXISTS NOW, AND COPYING IS A PROGRAM RATHER THAN A SYSCALL** -- `/bin/cp [-r]`, spawned by the GUI file manager rather than reimplemented in it; `rm` grew `-r` in the same change; both walk breadth-first over an explicit QUEUE because one listing is 20 KB against a 2 KiB frame budget, and `rm -r` removes the collected directories in REVERSE (deepest-first, a post-order walk with no recursion).
-- **Ctrl-L CLEARS IN BOTH SHELLS NOW, AND THE COMMENT THAT STOPPED IT WAS TRUE WHEN IT WAS WRITTEN.** -- `/bin/tosh` printed a newline because "there is no terminal under this yet", which the TTY layer made false and nothing noticed. The general trap: a comment stating a FACT about the rest of the system outlives that fact silently.
-- **A TITLE-BAR BUTTON IS A DISC, AND EVERY GLYPH CENTRES ON THE SAME PIXEL AS IT.** -- close is grey until hovered; a filled circle needs an AA outline over it or its cardinal spurs read as a COG; **a disc centres on a PIXEL and a rectangle on a SPAN**, so draw glyphs from `cx-h` to `cx+h` inclusive (odd, always centred) rather than at `(size-w)/2`.
-- **AN ICON COLUMN IN A SIDEBAR IS PER SIDEBAR, NOT PER ROW** -- indenting only the rows that have an icon puts headings further right than their own children. The gutter must also count towards `natural_size`, or the longest label clips.
-- **A MOVE EVENT REACHES EVERY WIDGET AT EVERY DEPTH NOW, AND HOVER BELOW TWO CONTAINERS WAS DEAD UNTIL IT DID.** -- `uui_router_motion()` walked ONE level while press and wheel recursed; System Settings nests four deep, so no hover in it could light up, including a dropdown popup's rows. A clipped subtree the cursor has LEFT is told a point no widget can contain (so a stale highlight clears), and an OPEN OVERLAY OWNS THE POINTER -- it alone gets the real point and every other widget is told "nowhere", or icons light up under an open menu.
-- **AN OPEN POPUP TAKES THE KEY, AND A KEY-DRIVEN CHANGE IS REPORTED LIKE A CLICK.** -- `uui_router_overlay_key()` is `overlay_active`'s keyboard half, which is what makes typing into a dropdown work in an app with no focus ring; `uui_focus_key()` reports `UUI_REASON_KEY` by the router's id, since a focused control's keyboard change used to be silently dropped by Apply.
-- **TYPING IN A LIST SEEKS, AND ONE SEARCH SERVES BOTH WIDGETS.** -- `userland/ui/uui_seek.c`, called by `uui_listbox_key()` and `uui_table_key()`; keys within a second build a prefix, the same letter again CYCLES and never expires; matched against the DISPLAY name as a prefix. A closed dropdown takes letters (unlike the wheel, which it ignores).
-- **A TABLE DECLARES WHICH COLUMN A LETTER MATCHES: `uui_table_set_seek_col()`** -- GtkTreeView's `search-column`, not Win32's always-column-0, because column 0 is the name in a file listing and the PID in Task Manager. Defaults to 0 rather than off (a wrong column announces itself; ignoring letters does not). The search walks VIEW positions and converts back, or cycling moves the selection somewhere the user is not looking; and `uui_table_set_rows()` must NOT reset the prefix, since Task Manager calls it every refresh.
-- **A WIDGET THAT TAKES KEYS STILL GETS NONE UNTIL THE APP ROUTES THEM** -- `uapp.c` offers a key to `uapp_desc.focus` and then to `uapp_desc.on_key`, so an app declaring NEITHER reaches no widget's `key` op and nothing says so; Task Manager's table had arrows, paging and type-ahead dead for months behind a suite that drives every check by MOUSE. A focus ring is the toolkit's idiom but adds a Tab stop no widget draws yet; forwarding from `on_key` is what the File Manager and Task Manager do. When a widget gains a key handler, grep for the app's routing.
-- **A FOCUS INDICATOR IS `uui_focus_ring()`, IN THE THEME'S ACCENT, AND THE WIDGET PASSES THE RECT** -- one helper in `uui_primitives.c`, drawn by every widget that accepts focus; the ACCENT rather than a wash of the control's own colour, because focus and hover are different questions and `utheme.h` has named the role since it was written. A list rings the focused ROW and falls back to the BOX when the selection is scrolled off (an indicator that vanishes is the bug), a slider rings its thumb. **A SELECTION IS NOT AN INDICATOR** -- `uui_listbox` assumed it was, in a comment, and two lists side by side then say nothing about which one is listening.
-- **A SETTING WHOSE CHOICES ARE DATA NAMES THEM ITSELF: `choice_label`, tried after `/etc/settings.d` and before the raw value.** -- `Choice.<value>=` lines cannot cover a COMPUTED list (`/etc/timezones`, the keyboard layouts) without regenerating the file whenever the data changes. `/etc/timezones` grew a fourth field for it; a three-field row still loads and falls back by name, which is what makes an existing disk show "Los Angeles" without being rewritten. The VALUE stays the identity.
-- **THE ICON CACHE IS THE TOOLKIT'S NOW (`userland/lib/icon_cache.h`), AND A SIDEBAR HEADING CAN CARRY AN ICON.** -- moved out of `userland/wm/` when `uui_sidebar` needed it; an icon is a NAME, headings only, size font-derived. A missing file means a plain row, never an error.
-- **A WINDOW HAS TWO BUFFERS, AND THE COMPOSITOR NEVER READS THE ONE BEING DRAWN.** -- `WIN_REQ_PRESENT` flips and returns the new front; both buffers stay mapped in both address spaces at `base` and `base + WIN_BUFFER_HALF`, so a flip is a number rather than a remap. A failed second allocation is a SINGLE-BUFFERED window, not a refused one. Tested as memory (a marker invisible until presented), never as a flicker.
-- **THE LAYOUT LOG IS OFF UNLESS A TEST TURNS IT ON, AND DEDUPED WHEN IT IS.** -- `desktop.layout_log`, off by default like `kernel.kbdtap`. Nine apps wrote ~20 geometry lines a FRAME to the kernel log, which made `dmesg` unreadable with any window open and made `dmesg -w` a feedback loop. Read once at first use (`enter_gui()` turns it on for every tool); deduped per FRAME, not per line, because what repeats is the whole block.
-- **THE TERMINAL SCROLLS BY WHEEL AS WELL AS BY KEY, AND BOTH MOVE THE SAME STATE.** -- `on_wheel` was a toolkit slot the app never implemented; three lines a notch, clamped both ends.
-- **THERE IS AN ALTERNATE SCREEN, AND IT IS WHY A PAGER LEAVES NO WRECKAGE.** -- `ESC[?1049h`/`l`; the GUI Terminal saves its grid and cursor and restores them, so `less` quits to exactly the prompt it started from. 1049 only; a consumer may ignore it and the console does; scrollback is deliberately not saved.
-- **`dmesg` IS A `/bin` PROGRAM, AND THE LOG LEAVES THE KERNEL THROUGH `QUERY_KLOG`.** -- byte slices, not lines, each carrying its ABSOLUTE offset since boot so a reader can see the ring moved under it. Pagination is gone (`dmesg | less`); the ring-0 copy is `rescue dmesg`.
-- **A JOB IS A PROCESS GROUP, AND THE JOB TABLE IS THE SHELL'S** -- `Ctrl-Z`, `jobs` and `fg`; the kernel knows about groups and nothing about jobs. `[1]+ Done` is printed at a PROMPT, and a `SIGCHLD` handler with NO `SA_RESTART` is what produces one when nobody is typing.
-- **A TERMINAL IS AN OBJECT, AND THE CONSOLE IS `tty0`** -- `kernel/tty/` holds the line discipline, and `Ctrl-C` on the physical keyboard and in a window are one implementation. INTR left the keyboard driver; `SCHED_CHAN_KEY` is gone.
+- **`edit` IS A `/bin` PROGRAM, AND THE KERNEL DRAWS NOTHING**
+- **`cp` EXISTS NOW, AND COPYING IS A PROGRAM RATHER THAN A SYSCALL**
+- **Ctrl-L CLEARS IN BOTH SHELLS NOW, AND THE COMMENT THAT STOPPED IT WAS TRUE WHEN IT WAS WRITTEN.**
+- **THERE IS AN ALTERNATE SCREEN, AND IT IS WHY A PAGER LEAVES NO WRECKAGE.**
+- **`dmesg` IS A `/bin` PROGRAM, AND THE LOG LEAVES THE KERNEL THROUGH `QUERY_KLOG`.**
+- **A JOB IS A PROCESS GROUP, AND THE JOB TABLE IS THE SHELL'S**
+- **A TERMINAL IS AN OBJECT, AND THE CONSOLE IS `tty0`**
 - **A `text` BOOT REACHES A RING-3 SHELL, AND THE KERNEL SHELL STANDS DOWN FOR IT.**
 - **RING 3 CAN READ THE CONSOLE -- fd 0, and it BLOCKS.**
 - **A QMP TEST THAT TYPES PUNCTUATION MUST PIN THE GUEST'S KEYBOARD LAYOUT.**
@@ -813,18 +812,18 @@ whenever a headline here tells you something you did not already know.
 
 `docs/conventions/build.md`
 
-- **mtools DOES NOT READ stdin -- IT OPENS `/dev/tty`, so a CAPTURED PROMPT HANGS FOREVER** -- any `mcopy`/`mmd`/`mformat` under `capture_output=True` needs `start_new_session=True` (NOT just `stdin=DEVNULL`) plus a timeout, or `make iso` stops dead with no output at all and `make clean-disk` looks like the cure. Measured: a hung `mmd` had fd 4 on `/dev/tty`.
+- **mtools DOES NOT READ stdin -- IT OPENS `/dev/tty`, so a CAPTURED PROMPT HANGS FOREVER**
 - **THE C LIBRARY IS CALLED `tolibc`, and its bar for adding a function is the OPPOSITE of everything else here -- it aims to be COMPLETE.**
-- **REGEX IS `<regex.h>` IN tolibc, AND IT IS AN NFA** -- `regcomp`/`regexec`, a Thompson NFA with no input that makes it slow (`(a*)*b` is linear here and exponential in a backtracker). NO BACK-REFERENCES, which is what an NFA cannot do and what `regcomp()` refuses by name. Program jumps are RELATIVE, which is what makes `{n,m}` a memcpy rather than a jump-target rewrite. **`/bin/grep` speaks ERE and has no `-E`** -- POSIX's BRE is compatibility baggage, and `regcomp()` implements BRE anyway. **`tosh` splits on `|` before anything else and has NO QUOTING**, so a pattern containing one cannot be typed.
-- **WHEN IMPLEMENTING A SPEC, DISAGREE WITH AN INDEPENDENT IMPLEMENTATION ON PURPOSE** -- `tools/regex_hostcheck.py` runs the regex case table against GLIBC, `tools/uimg_hostcheck.py` runs the JPEG decoder against libjpeg, and `tools/fat32_test.py` reads what the guest wrote back with **mtools** and audits the volume with **fsck.fat**. A self-test cannot catch an EXPECTATION being wrong, because the same person wrote both halves. Every difference is then a bug or a documented decision, with no third category. The storage one shows what a strong check looks like: not "the file reads back" (which a privately-wrong format passes, reading its own bytes) but a 185 KiB BINARY extracted on the host and compared byte for byte.
-- **`tolibc` GREW A SECOND PORT'S WORTH OF FUNCTIONS, AND ONE OF THEM WAS A BUG** -- Doom needed `remove()`/`rename()` (both previously listed as deliberately absent), `mkdir()` with a new `<sys/stat.h>` that deliberately has NO `stat()`, `access()` (only `F_OK` can mean anything), and `system()` (which needed `tosh -c`). The bug: `kfmt.c` ignored `printf` precision on integers, so `"%.3d"` of 33 gave `33` and Doom asked its WAD for a lump that does not exist -- in a file compiled into both rings, whose tests asserted the old behaviour.
-- **`SYS_WRITE_MAX` IS A THROUGHPUT CONSTANT, NOT JUST A BUFFER SIZE, AND IT IS 64 KiB** -- every `fs_write*()` is one TFS3 transaction and `txn_commit()` ends with TWO barriers, so the cap sets how many device flushes a megabyte of ring-3 writing costs (2048/MiB at 1 KiB, against 2/MiB for ring-0 `stress`). Raising it measured 3.4 -> 114.3 MB/s sequential write. The REMAINING gap is architectural -- Linux does not flush on write at all. **Raising it nearly deadlocked pipes**: `pipe_write()` parks a writer that does not fit, safe only while 1024 < `PIPE_BUF_SIZE`, so `sys_do_write_pipe()` clamps explicitly now.
-- **`sys_write()` COMPLETES THE WHOLE BUFFER, because the kernel caps one write at `SYS_WRITE_MAX` (1024) and a short write loses data SILENTLY.** -- libsys returned the short count and dropped the rest, so every caller ignoring the count truncated at 1 KB. `less` looked like a pager bug for two rounds because of it. Asking for 2000 bytes means 2000 bytes.
-- **AN UNRECOGNISED printf CONVERSION DESYNCHRONISES EVERY ARGUMENT AFTER IT, AND `kfmt_cases.h` IS THE TABLE THAT STOPS A FOURTH ONE.** -- `kfmt.c` is tolibc's `printf`; an unknown conversion prints its letters and consumes NOTHING, so a missing feature corrupts output far away from itself. Three have shipped (`%.3d`, `%X`, then `%p`/`%o`/`%+d`/`%hd` by audit). Every conversion and flag C defines has a case, run from BOTH rings.
-- **THE POSIX HALF OF `tolibc` IS HEADERS OVER SYSCALLS THAT ALREADY EXIST** -- `<signal.h>`, `<sys/wait.h>`, `<termios.h>`, `<fcntl.h>`, `<strings.h>`, `getopt()`; the kernel-facing action struct is `struct k_sigaction` and POSIX's is converted at the call (glibc's split), and anything that cannot be honoured is REFUSED rather than ignored (a non-empty `sa_mask` is `EINVAL`; `VMIN`/`VTIME` are undefined on purpose).
-- **`userland/` is split by ROLE, and the build derives things from it -- adding a program is a `.c` file and nothing else.** `backends/` is OUR side of a vendored port (`backends/doom/`), kept out of `ports/` (which means third-party, and whose every subdirectory `check_licenses.py` reads as one) and out of `lib/` (archived into `libuapp.a`, where GPL objects must never reach).
+- **REGEX IS `<regex.h>` IN tolibc, AND IT IS AN NFA**
+- **WHEN IMPLEMENTING A SPEC, DISAGREE WITH AN INDEPENDENT IMPLEMENTATION ON PURPOSE**
+- **`tolibc` GREW A SECOND PORT'S WORTH OF FUNCTIONS, AND ONE OF THEM WAS A BUG**
+- **`SYS_WRITE_MAX` IS A THROUGHPUT CONSTANT, NOT JUST A BUFFER SIZE, AND IT IS 64 KiB**
+- **`sys_write()` COMPLETES THE WHOLE BUFFER, because the kernel caps one write at `SYS_WRITE_MAX` (1024) and a short write loses data SILENTLY.**
+- **AN UNRECOGNISED printf CONVERSION DESYNCHRONISES EVERY ARGUMENT AFTER IT, AND `kfmt_cases.h` IS THE TABLE THAT STOPS A FOURTH ONE.**
+- **THE POSIX HALF OF `tolibc` IS HEADERS OVER SYSCALLS THAT ALREADY EXIST**
+- **`userland/` is split by ROLE, and the build derives things from it -- adding a program is a `.c` file and nothing else.**
 - **In ring 3 the toolkit is reachable under the C names -- don't hand-roll a `my_strlen` or a digit loop there either.**
-- **EVERY RING-3 PROGRAM CARRIES A TLS BLOCK, AND `crt0` INSTALLS IT BEFORE `main()`** -- `.tdata`/`.tbss` from `userland/rt/link.ld`, laid out by `userland/rt/tls.c` with `%fs` pointing at the block's END (the psABI's variant II, so a `__thread` variable is at a NEGATIVE offset). `-ftls-model=local-exec`, because every other model wants a dynamic linker. Two traps: the block must be rounded to the SEGMENT's alignment, not a convenient one; and **the TLS geometry is DATA (`link.ld`'s `__rt_tlsdesc` QUADs), not value-carrying linker symbols** -- an *ABS* symbol is unreachable RIP-relatively under `-fpie`, and a loop bounded by a symbol's "address" is compiled bottom-tested (a size of 0 once counted to 2^64). Do not reintroduce either.
+- **EVERY RING-3 PROGRAM CARRIES A TLS BLOCK, AND `crt0` INSTALLS IT BEFORE `main()`**
 - **RING-3 CODE HAS A FRAME BUDGET, and a link-time bound on the image.**
 - **Every ring-3 program is just a `main()`.**
 - **`linker.ld` decides kernel memory PERMISSIONS, not just placement.**
@@ -1172,317 +1171,95 @@ opening it:
 
 Dev/build helper scripts, not compiled or shipped as part of the OS.
 **`docs/tools.md` is the full reference** -- what each one does, why it
-exists, and the traps it encodes. This is the index; read that file
-before reaching for anything here you have not used recently, and add to
-it (not to a one-off script) when something would save a future session
-real time. The bar is "does this fix a rederive-from-scratch cost".
+exists, and the traps it encodes. **This is only the index: it says
+which tool answers which question, and nothing about how.** Read that
+file before reaching for anything here you have not used recently, and
+add to it (not to a one-off script) when something would save a future
+session real time. The bar is "does this fix a rederive-from-scratch
+cost".
 
-- **Is it MINE, or was it already broken?** -- `predates.py "<command>"`
-  stashes, rebuilds HEAD, runs it, restores and compares. CLAUDE.md's
-  own rule is that "it predates me" is a MEASUREMENT; this is that
-  procedure as a script, including the `-u` and the recover-by-SHA that
-  the prose version gets wrong.
-- **Has the on-demand half rotted?** -- `ondemand_sweep.py` runs the
-  ~30 tools neither `preflight.sh` nor `gui_regress.py` covers. TWO WERE
-  FOUND RED BY ACCIDENT in one session after rotting for an unknown
-  period, and FIVE MORE were found missing from the sweep itself --
-  adding a tool to `tools/` does not add it here, and nothing checks
-  that it did. A SKIP is counted apart from a PASS; a tool that changes
-  `disk.img` runs LAST (`DIRTIES_IMAGE`) and the run says so. Never a
-  gate.
-- **Verify before delivering** -- `preflight.sh` (**stop your `vm.py`
-  guest first -- it refuses to start while one holds disk.img's write
-  lock**; the gate: clean build +
-  iso + `check_deps.py` + `check_layout.py` + `check_dispatch.py` +
-  `check_widget_ops.py` + `check_key_routing.py` +
-  `boot_smoke_test.py` + `ktest_run.py` + `usertest_run.py`),
-  `check_docs.py`, `check_licenses.py` (**every vendored port and shipped font is named in `LICENSE`** -- `userland/ports/doom/` is GPL-2-OR-LATER inside an MIT repo and was not mentioned there at all, and the font inventory said two when there were five), `check_tool_coverage.py` (**every test tool is named by a
-  RUNNER** -- a tool no runner names is run when somebody types it,
-  which is never; five were found orphaned at once, one of them red and
-  pre-existing. Waive with a reason in its `EXEMPT`),
-  `check_tool_commands.py` (**every guest command a
-  tool drives still EXISTS** -- it found `kvm_soak.py` driving `delete`,
-  which is `rm` now, so its cleanup had been a no-op and it had been
-  littering `disk.img`. It cannot see a command whose OUTPUT changed,
-  which is the rot that actually bit `fs_switch_test`; that is
-  `ondemand_sweep.py`'s job).
+- **Is it MINE, or was it already broken?** -- `predates.py
+  "<command>"`. "It predates me" is a MEASUREMENT, and this is that
+  procedure as a script.
+- **Is it safe to commit?** -- `preflight.sh`. **Stop your `vm.py`
+  guest first** -- it refuses to start while one holds `disk.img`'s
+  write lock. Static checks, run by it or beside it: `check_deps.py`,
+  `check_layout.py`, `check_dispatch.py`, `check_widget_ops.py`,
+  `check_key_routing.py`, `check_docs.py`, `check_licenses.py`,
+  `check_tool_coverage.py`, `check_tool_commands.py`.
+- **Has the on-demand half rotted?** -- `ondemand_sweep.py`, the ~30
+  tools neither `preflight.sh` nor `gui_regress.py` covers. **Adding a
+  tool to `tools/` does not add it here**, and a tool no runner names is
+  run when somebody types it, which is never. Never a gate itself.
 - **Drive a VM** -- `vm.py` (text in, text out: the fastest path for
-  anything that is not about pixels; **`vm.py spawn <path>` runs a
-  spawned test and prints the file it writes**, replacing the
-  spawn/sleep/cat dance), `qmp_test.py` (QMP GUI helpers),
+  anything that is not about pixels), `qmp_test.py` (QMP GUI helpers),
   `gui_debug.py` (ask the WM what it is doing), `gui_flow.py`,
-  `shell_flow.py`, `serial_console.py` (COM1 as a socket: text in, text
-  out, and it does not care who owns the keyboard), `serial_capture.py`
-  (read a guest that is DYING),
-  `watch_vm.sh` (view-only VNC onto a headless run), `run_release.sh`.
+  `shell_flow.py`, `serial_console.py` (COM1 as a socket, and it does
+  not care who owns the keyboard), `serial_capture.py` (read a guest
+  that is DYING), `watch_vm.sh` (view-only VNC), `run_release.sh`.
 - **Test runners** -- `boot_smoke_test.py` (does it boot),
   `ktest_run.py` (`make test`), `usertest_run.py` (the `/tests` ELFs),
   `faulttest_run.py` (the ones that fault ON PURPOSE),
-  `gui_regress.py` (every GUI tool, ~300 checks, ~1.5 min),
-  `flake_hunt.py` (is it intermittent, and at what RATE),
-  `damage_sweep.py` / `damage_hunt.py` (the damage invariant).
+  `gui_regress.py` (every GUI tool, ~300 checks), `flake_hunt.py` (is
+  it intermittent, and at what RATE), `damage_sweep.py` /
+  `damage_hunt.py` (the damage invariant).
 - **GUI tools**, all run by `gui_regress.py` -- `blank_window_test.py`,
-  `calculator_client_test.py`, `compositor_test.py`,
-  `compositor_death_test.py`, `settings_test.py`, `crashtest_test.py`,
-  `font_test.py`,
+  `calculator_client_test.py`, `calendar_test.py`,
+  `compositor_test.py`, `compositor_death_test.py`, `crashtest_test.py`,
   `cursor_theme_test.py`, `desktop_entries_test.py`, `dialog_test.py`,
-  `forcequit_test.py`, `gfxdemo_test.py`, `idle_desktop_test.py`,
-  `menubar_test.py`, `notepad_client_test.py`, `sched_gui_test.py`,
-  `screen_surface_test.py`, `scrollbar_test.py`,
-  `single_instance_test.py`, `taskmgr_test.py` (**the table widget, and
-  the only checks in the suite that use the KEYBOARD there** -- every
-  other one drives by mouse, which is how the table's whole key handler
-  stayed dead and unnoticed), `uapp_test.py`,
-  `uiclient_test.py`, `uidemo_test.py`, `uterm_test.py`,
-  `keyup_test.py` (key RELEASES reaching a ring-3 client, including the
-  four modifier keys -- its load-bearing check holds a key DOWN with
-  `QMPSession.key_down()`, which `send-key` cannot do),
-  `winclient_test.py`, `imgview_test.py`, `icons_test.py`,
-  `mines_test.py`, `player_test.py` (**the Audio Player on a machine
-  with NO sound device** -- the default boot, and the one configuration
-  `audio_test.py` can never see, since it boots its own AC97; also the
-  only pointer-driven test of `uui_scale`), `filemanager_test.py` (**the File Manager, and every
-  file operation asserted through `ls` rather than through the app**),
-  `calendar_test.py` (**the tray clock's calendar popup** -- its grid is
-  checked against the HOST's `datetime`, which shares no code with the
-  guest's `cal_days_from_civil()`, and every open/close check is paired
-  with the panel's own pixels so "flagged open" cannot pass for "drawn").
-- **Run on demand, not in the gate** -- `doom_test.py` (DOOM runs, draws,
-  animates and takes input; SKIPS cleanly when no IWAD has been fetched,
-  which is why it is not in the suite),
-  `doom_sound_test.py` (**DOOM's effects and music, judged on the
-  HOST** -- the only thing that reaches `userland/backends/doom/dg_sound.c`,
-  `dg_music.c` or `opl_toyos.c`. Its load-bearing check is the PAIR of
-  boots: normally, then `-nomusic`, requiring window COVERAGE to
-  collapse from near-total to bursty. One recording cannot tell the two
-  audio paths apart; two can. SKIPS without an IWAD),
-  `audio_test.py` (**AC97, the PCM ring AND a WAV file, judged on the
-  HOST** -- QEMU records what the device played to a wav; the tone's
-  frequency and its TOTAL duration are measured there, so a dead DMA
-  engine, a wrong rate and a broken consumed-chunk zeroing each fail a
-  different check; the ac97 KTESTs run un-skipped only here. It boots
-  TWICE, because one recording cannot hold two tones: the second plays
-  `/tests/sine1k.wav` through `/bin/aplay`, and since that fixture is
-  **44.1 kHz** a build that skipped resampling plays it 8.8% sharp --
-  the only check in the repo that can see that),
-  `cursor_ibeam_test.py` (**named pointer shapes: the I-beam, the busy
-  pointer, and the clamp** -- all four ways a shape gets named, each
-  with a control point beside it; the shapes are told apart by where
-  they sit RELATIVE TO THE HOTSPOT, so a MISSING sprite fails every test
-  rather than one. Two load-bearing checks: the title bar plus a window
-  dragged UNDER the taskbar for the clamp, and a wedged window NOBODY
-  ASKED TO CLOSE, which is the ping cadence's test as much as the
-  cursor's),
-  `console_bleed_test.py` (**the kernel console must not paint over the
-  desktop, and must not lose the text either** -- a noisy program's fd 1
-  reaches the framebuffer console, which used to blit its whole buffer
-  over the screen; both halves are checked, since a fix that just stopped
-  the console DRAWING would pass one and fail the other. DELETES
-  `/etc/services.d/toywm` and does not restore it -- `make iso` re-seeds
-  it),
-  `serial_backpressure_test.py` (**a COM1 consumer that stops reading
-  must not stop the MACHINE** -- it attaches to the serial socket, goes
-  deaf, asks for several KB and requires the taskbar clock to keep
-  ticking. Being deaf IS the fixture: draining it to "fix" a failure
-  makes it pass against a kernel that hangs, and `-serial file:` never
-  applies backpressure at all),
-  `ansi_cursor_test.py` (ANSI
-  cursor movement and erasing, as PIXELS -- it kills the desktop first,
-  since the console is what it photographs), `init_test.py` (init and
-  service supervision), `console_shell_test.py` (a `text` boot reaching a ring-3
-  prompt with the kernel shell stood down; boots twice and rewrites
-  `/etc`),
-  `terminal_probe.py` (**the GUI Terminal: editing keys, paging,
-  scrolling, clearing** -- the keymap half asserts through the
-  FILESYSTEM, since a keystroke that worked leaves different bytes on
-  disk; the pixel half reports the PERCENTAGE of the content area that
-  moved, because the caret blinks and "changed" is not a measurement.
-  Encodes five harness traps that cost five invalid runs),
-  `usb_test.py` (**an xHCI controller, HID keyboard and mouse, hot-plug
-  and a hub** -- five phases; hot-plug rides QMP `device_add`, and the
-  hub phase drives both HID devices through a `usb-hub`, the
-  route-string path --
-  its control is free and worth knowing: attaching `usb-kbd` makes QEMU
-  route keystrokes to THAT device, so on a build whose USB driver is
-  dead the guest receives nothing at all, from USB or PS/2. Measured
-  before the driver was written. Its load-bearing check is the RING
-  WRAP: a driver that ignores the event ring's cycle bit works for
-  exactly one lap -- 256 TRBs, about 128 keystrokes -- so it types 25
-  files and asserts the LAST one. Also drains the serial socket as it
-  types, because an undrained COM1 stalls the whole guest and reads
-  exactly like a driver dying after N keys),
-  `kbd_test.py` (**`kbd`'s four columns, on both input drivers** -- the
-  load-bearing half is the SECOND boot: the same keys must give the same
-  keycode and the same character on `INPUT=virtio` with the scancode
-  column BLANK, which nothing that is not really reading each stage can
-  fake),
-  `grep_test.py` (**`/bin/grep` through a real ring-3 shell** -- the
-  engine is covered three other ways, so what this adds is the half that
-  is not regex: reading stdin from a PIPE, the flags and the exit
-  status. The pipe is unreachable from the kernel debug console, which
-  splits on spaces and hands `|` to the program as an argument),
-  `keyboard_paths_test.py` (**the same keys do the same thing on
-  PS/2 and on virtio-input** -- boots both, types `_` and `|`, and asserts
-  through the FILESYSTEM rather than the screen, because `_` draws
-  nothing on the ring-0 console and a screenshot cannot tell that from a
-  lost keystroke), `ctrlc_test.py` (**Ctrl-C interrupting a real job**, through
-  the real keyboard on a `text` boot: a spinning job dies, a two-stage
-  PIPELINE dies as a unit, the shell survives, and at an empty prompt the
-  key is still a keystroke that cancels the line),
-  `jobs_test.py` (**job control** -- its sibling, same shape, same `text`
-  boot: a job SURVIVES and stops accruing CPU, `jobs` names it,
-  `fg`/`bg` resume it, `&` backgrounds one, a pipeline suspends as ONE
-  group, and a background READER is stopped rather than served. Three
-  discriminating checks: the Ctrl-C after `fg`, which catches a resume
-  that forgot the terminal; the command typed after `cat &`, which
-  catches keystroke theft; and a short `&` job reaped with NO KEYSTROKE
-  SENT, which is what `SIGCHLD` bought and which every other check here
-  would pass without),
-  `stdin_test.py`
-  (blocking fd 0 and `/bin/tosh`, which
-  needs the physical console and so takes the desktop down first),
-  `qemu_matrix.py` (the suite against SEVERAL QEMU
-  versions in Docker -- **the bug class one QEMU cannot show you**: a
-  virtio-blk defect was invisible on 11.1 and reproduced every time on
-  8.2.2, which is what GitHub's runner has, because the host decides
-  which clocksource the kernel picks. Faster and more controllable than
-  finding it through CI),
-  `kvm_soak.py` (the timing bugs TCG cannot show),
-  `ls_test.py` (`/bin/ls`'s flags, ordering and the listing cap -- it
-  stages a 300-entry directory from the HOST, since the cap is
-  unreachable by typing `touch`),
-  `hires_test.py` (a desktop above 1280x720, and whether a client window
-  can actually FILL it -- the `WIN_CLIENT_MAX_W/H` vs `DISPLAY_MAX_W/H`
-  pair; needs an ISO built with `KCMDLINE="video=1920x1080"`, since at
-  the default mode every check in it passes vacuously),
-  `taskbar_test.py` (opens enough windows to overflow the taskbar and
-  asserts the strip never reaches the tray -- shrink, then grouping by
-  application; slow, since every window is a real process),
-  `mem_stress.py`, `frame_balance.py` (does teardown balance),
-  `fat32_test.py` (**FAT32 and the mount table against an INDEPENDENT
-  implementation** -- `mtools` reads back what the guest wrote and
-  `fsck.fat` audits the volume, neither sharing a line with
-  `kernel/fs/fat32.c`; the same call `regex_hostcheck.py` and
-  `uimg_hostcheck.py` made. Its load-bearing checks are the ones a
-  broken driver would still pass: GRUB's own `grub.cfg` read through a
-  real chain walk, a 185 KiB BINARY extracted on the host and compared
-  byte for byte, and `fsck.fat`'s verdict. Boots twice against a COPY of
-  `disk.img`; SKIPS without `mtools`),
-  `net_test.py` (**the network stack on BOTH NICs, judged on the HOST** --
-  SLIRP answers the pings and shares no code with the guest, and every
-  frame is dumped to a pcap and decoded here with the IPv4 and ICMP
-  checksums RECOMPUTED, because SLIRP can be lenient where a decoder
-  cannot. The load-bearing phases are virtio-net, the only
-  path to `virtio_net.c`; TWO CARDS ON TWO SUBNETS, where the assertion
-  is which device's counters moved rather than that a ping worked; a
-  REAL PYTHON SOCKET on the host as the far end of a UDP round trip;
-  DHCP on 192.168.76.0/24 WITH NOBODY TYPING ANYTHING, since on the
-  default network a real lease and an invented 10.0.2.15 are
-  indistinguishable; LINK-LOCAL on a socket netdev whose only peer is
-  the test, the one segment SLIRP cannot be, where a SECOND boot is
-  answered for the address the first one claimed and must move off it;
-  and **`inetd`**, where a client that connects and SAYS NOTHING must
-  not block the next one -- "both were answered eventually" is what a
-  one-at-a-time server passes, so the first is left hanging. Its
-  ARP-rate phase is a regression test with a measurement behind it:
-  104 frames for two pings before rate limiting, 5 after. DNS SKIPS on
-  a host that cannot resolve),
-  `multidisk_test.py` (**two disks on two different drivers, which is the
-  configuration no other test here boots** -- every one attaches exactly
-  one, and that is the shape the enumerate-everything bug needed. Asserts
-  both are named, that `root=` picks the boot disk over the precedence,
-  and that an unknown `root=` reports rather than hangs),
-  `partition_test.py` (**toy-os booting with its filesystem INSIDE an
-  MBR or GPT partition** -- the only thing that exercises `vfs.c`'s
-  boot-time scan and `block_part.c`'s window. Its load-bearing check is
-  `df`: a kernel ignoring partitions still BOOTS, just RAM-only, so
-  "it booted" proves nothing, while "the mounted volume is 256 MiB and
-  the image is 2 GiB" only a correct window can produce. Reboots, and
-  finishes by driving `/bin/mkpart` in the guest),
-  `diskmark_test.py` (**the Disk Mark GUI benchmark** -- its
-  load-bearing check is the NUMBERS, since a build whose arithmetic
-  truncated to zero still logged "all four passes complete"; the title
-  bar is its CONTROL and immediately caught the client missing the
-  compositor's pings, i.e. running the whole benchmark as
-  `(Not Responding)`),
-  `ahci_test.py` (**toy-os booting with its filesystem on a SATA drive
-  behind an AHCI HBA** -- the only thing that reaches
-  `kernel/drivers/ahci.c`, since every `ahci` KTEST skips on a machine
-  with no controller. Its load-bearing check is therefore **`0
-  skipped`**, not "the tests passed". Also reboots to prove the write
-  landed, compares the guest's read of `/boot` against **mtools** on the
-  host, and rewrites the image's `grub.cfg` to test the `noahci`
-  precedence rung),
-  `virtio_boot_test.py` (TFS3 mounting off virtio-blk on a
-  machine with NO IDE controller, written and read back across a
-  REBOOT), `virtio_gpu_test.py` (the GPU -- the ONLY thing here that
-  boots `-vga virtio`, so it is also what stops the driver's KTESTs
-  skipping on every run; its pixel-format oracle is a second boot on
-  `-vga std`), `virtio_input_test.py` (keyboard, mouse and
-  TABLET on virtio -- `vm.py --virtio-input`; it is the only thing that
-  attaches them, and it asserts the shared-IRQ case `irq.c`'s handler
-  chain exists for), `live_boot_test.py`, `fs_switch_test.py`, `tfs3_v1_test.py`,
-  `mkpart_test.py`, `demo_test.py`.
+  `filemanager_test.py`, `font_test.py`, `forcequit_test.py`,
+  `gfxdemo_test.py`, `icons_test.py`, `idle_desktop_test.py`,
+  `imgview_test.py`, `keyup_test.py`, `menubar_test.py`,
+  `mines_test.py`, `notepad_client_test.py`, `player_test.py`,
+  `sched_gui_test.py`, `screen_surface_test.py`, `scrollbar_test.py`,
+  `settings_test.py`, `single_instance_test.py`, `taskmgr_test.py`,
+  `uapp_test.py`, `uiclient_test.py`, `uidemo_test.py`,
+  `uterm_test.py`, `winclient_test.py`.
+- **Run on demand, not in the gate** -- `ahci_test.py`,
+  `ansi_cursor_test.py`, `audio_test.py`, `console_bleed_test.py`,
+  `console_shell_test.py`, `ctrlc_test.py`, `cursor_ibeam_test.py`,
+  `demo_test.py`, `diskmark_test.py`, `doom_test.py`,
+  `doom_sound_test.py`, `fat32_test.py`, `frame_balance.py`,
+  `fs_switch_test.py`, `grep_test.py`, `hires_test.py`,
+  `init_test.py`, `jobs_test.py`, `kbd_test.py`,
+  `keyboard_paths_test.py`, `kvm_soak.py`, `live_boot_test.py`,
+  `ls_test.py`, `mem_stress.py`, `mkpart_test.py`,
+  `multidisk_test.py`, `net_test.py`, `partition_test.py`,
+  `qemu_matrix.py`, `serial_backpressure_test.py`, `stdin_test.py`,
+  `taskbar_test.py`, `terminal_probe.py`, `tfs3_v1_test.py`,
+  `usb_test.py`, `virtio_boot_test.py`, `virtio_gpu_test.py`,
+  `virtio_input_test.py`.
 - **Disk images, from the host** -- `seed_disk.py` (the format-aware
-  front end `make iso` calls; **`--partition gpt|mbr` builds a
-  PARTITIONED, BOOTABLE image** -- a BIOS boot partition, a FAT32
-  `/boot` and the filesystem -- instead of a flat volume at LBA 0),
-  `install_grub.py` (**puts GRUB and the kernel ON `disk.img`**:
-  `boot.img` at LBA 0, `core.img` embedded in the BIOS boot partition,
-  `/boot/kernel.bin` and `/boot/grub` written into the FAT32 one with
-  `mtools`. Also `boot_medium()`, the ONE answer to "does this image
-  boot itself, or does it need the ISO?", which every launcher here
-  asks), `tfs3_writer.py` (**every
-  subcommand takes `--at-lba`/`--sectors`**, the host-side twin of the
-  kernel's volume seam -- that is what lets one image hold a table AND
-  a filesystem in a partition), `mkpart_test.py` (**`--layout
-  SIZE[:KIND][,...]` writes a REAL, usable table**, aligned and with
-  GPT's backup structures, where the default writes a synthetic one for
-  the parser to chew on; `:bios`/`:esp` name a firmware partition type,
-  and `volume_of()` finds the TFS3 volume by LOOKING rather than
-  answering "partition 1"),
-  `fetch_wad.py` (puts a Doom IWAD where `make iso` will seed it -- the
-  WAD is deliberately NOT in the repository; `--from` takes one you
-  already own).
-- **Does it actually idle?** -- `idle_cpu.py` measures the HOST's CPU time for the QEMU process over a window nobody touches the guest, because the GUEST cannot see it: `ps` bills whoever was current at the tick. Quote DIFFERENCES only -- the absolute figure is mostly TCG and mostly the host's load at the time.
-- **How big is it** -- `loc.py` (source lines with generated files,
-  comments and blanks excluded; add anything a `gen_*` writes into the
-  tree to its `GENERATED` list, or the count silently inflates).
-- **Diagnose** -- `panic_resolve.py` (name every address in a panic, from
-  DWARF so it answers with a file and LINE -- **including a RING-3
-  address**, with `--elf <the .elf> --delta 0`; never hand-roll `nm`,
-  which named the wrong function and cost an hour),
+  front end `make iso` calls), `install_grub.py` (puts GRUB and the
+  kernel ON `disk.img`; also `boot_medium()`, the ONE answer to "does
+  this image boot itself, or does it need the ISO?"), `tfs3_writer.py`
+  (**every subcommand takes `--at-lba`/`--sectors`**, the host-side
+  twin of the kernel's volume seam), `mkpart_test.py` (also
+  `volume_of()`, which finds the TFS3 volume by LOOKING rather than
+  answering "partition 1" -- **a host tool reaching into the filesystem
+  must ask it**), `fetch_wad.py` (the Doom IWAD is deliberately NOT in
+  the repository).
+- **Diagnose** -- `panic_resolve.py` (names every address in a panic
+  from DWARF, ring 3 included; **never hand-roll `nm`**),
   `QMPSession.hmp()` (**the QEMU monitor -- the one oracle the guest
-  cannot fake**: `info registers` for CPL/RIP/HLT, `info pic` for the
-  interrupt controller. Ask it BEFORE trusting anything the guest says
-  about itself, and sample a distribution rather than one reading),
-  `regex_hostcheck.py` (**tolibc's `<regex.h>` against GLIBC's**, over the
-  same case table `/tests/regex_test` runs -- an oracle that shares no
-  code catches the failure a self-test cannot, which is an EXPECTATION
-  being wrong. Every remaining difference is listed with its reason in
-  `KNOWN_DIVERGENCES`; an unexplained one fails),
-  `uimg_hostcheck.py` (the JPEG decoder against libjpeg on the HOST,
-  over a couple of hundred generated images -- the breadth
-  `/tests/uimg_test` cannot carry),
-  `pixel_probe.py` (read exact pixel values -- how a GUI change is
-  verified), `screenshot_diff.py`, `iso_guard.py`.
-- **Generated data and the build** -- `gen_version.sh` / `set_version.sh`
-  (versioning), `genfont.py` / `genttf.py`, `gen_kbs.py` (keyboard
-  layouts from XKB data), `gen_cursors.py` (cursor themes),
-  `gen_imgdata.py` (the wallpapers, and the image decoders' test vectors
-  -- whose reference pixels are PILLOW's, not this decoder's),
-  `gen_audio.py` (the shipped WAVs and the audio fixture -- each in a
-  DIFFERENT format on purpose, so the data exercises every conversion
-  branch),
-  `gen_icons.py` (the app icons, drawn here and encoded by Pillow so no
-  QOI writer in this repo can agree with a bug in its reader),
-  `genrelocs.py` (the kernel's own relocation table), `gen_syms.py` (the
-  panic symbol table), `gen_decisions_index.py`, `gen_commands_index.py`,
-  `gen_next_up.py` (the roadmap's "Next up" section, from the `**NEXT**`
-  markers on the items themselves).
+  cannot fake**; ask it BEFORE trusting anything the guest says about
+  itself), `regex_hostcheck.py` and `uimg_hostcheck.py` (this repo's
+  implementations against GLIBC and libjpeg -- an oracle sharing no
+  code is what catches an EXPECTATION being wrong), `pixel_probe.py`
+  (read exact pixel values -- how a GUI change is verified),
+  `screenshot_diff.py`, `iso_guard.py`.
+- **Measure** -- `idle_cpu.py` (the HOST's CPU time over an idle
+  window, because the guest cannot see it; quote DIFFERENCES only),
+  `loc.py` (**add anything a `gen_*` writes into the tree to its
+  `GENERATED` list**, or the count silently inflates).
+- **Generated data and the build** -- `gen_version.sh` /
+  `set_version.sh`, `genfont.py` / `genttf.py`, `gen_kbs.py`,
+  `gen_cursors.py`, `gen_imgdata.py`, `gen_audio.py`, `gen_icons.py`,
+  `genrelocs.py`, `gen_syms.py`, `gen_decisions_index.py`,
+  `gen_commands_index.py`, `gen_next_up.py`.
 - **The repo itself** -- `backup_repo.sh` (run it before ANY change to
-  the repo's identity or history -- a mirror clone is not a backup here,
-  release assets live only on GitHub).
+  the repo's identity or history -- a mirror clone is not a backup
+  here, release assets live only on GitHub).
 
 **HOST TOOLS THIS REPO EXPECTS, none required to build it** --
 `docs/tools.md`'s "Host tools this repo expects" has the full entry for
@@ -1509,7 +1286,7 @@ to plain `gcc`), so a checkout without it is unaffected. It matters on
 the GATE, which always starts with `make clean` -- measured 2.37s ->
 0.40s for a full rebuild.
 
-Five standing rules that are cheaper to know than to rediscover:
+Standing rules that are cheaper to know than to rediscover:
 
 - **WHAT THE USER SAYS, AND WHAT IT MEANS.** Three checks, three
   phrasings, and they are easy to confuse because two of them mention

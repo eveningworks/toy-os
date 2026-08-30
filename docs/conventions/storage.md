@@ -398,6 +398,24 @@ tfs3 (RAM-only)` over a machine where `write` failed, `ls` failed and
 `g_mounted` was 0. A backend that cannot mount now leaves NO active
 backend and says exactly that.
 
+## REMOVING A FILESYSTEM BACKEND SILENTLY REFORMATS EVERY DISK IN THAT FORMAT
+
+The probe treats a disk no backend claims as "readable but unclaimed",
+which is the blank-disk case, which FORMATS. So deleting a backend from
+`g_backends` does not make its disks unreadable -- it makes them
+**blank**, and the next boot writes over them.
+
+TFS2's removal needed a recognise-and-refuse guard for exactly this: a
+stub that claims the signature and declines to mount, so the disk is
+never mistaken for empty. The guard was then removed on the
+maintainer's word that no such disks exist, so **a TFS2 disk booted
+today IS reformatted.**
+
+Make that call deliberately for the next format rather than inheriting
+it. The guard is ~15 lines and the failure it prevents is
+unrecoverable. `struct fs_ops` stays a registry with one row on disk
+because FAT32 is next.
+
 ## A PARTITIONED DISK IS NEVER AUTO-FORMATTED, AND THE FIRST PARTITION THAT IS OURS IS LEFT ACTIVE
 
 Boot treats an unclaimed readable disk as blank and formats it. Once a
