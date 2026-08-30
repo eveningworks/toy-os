@@ -14,13 +14,12 @@
 // Nothing is carried, so nothing needs a carrier. The keymap is theirs
 // too (F5/F6/F7/F8, Tab, Enter, Backspace), which is free familiarity.
 //
-// THE FILE OPERATIONS ARE CHILD PROCESSES, not loops in this window.
-// F5 spawns /bin/cp and F8 spawns /bin/rm, and on_tick() reaps them
-// with sys_waitpid_nohang(). There is one implementation of what
-// copying means, it is testable as text at a shell prompt, and a copy
-// that fails cannot take the window with it. The cost, stated rather
-// than discovered: no byte-level progress, because a child reports an
-// exit code and not a percentage.
+// THE FILE OPERATIONS RUN HERE, over lib/ufileop.h -- which /bin/cp,
+// /bin/mv and /bin/rm are front ends over too, so there is still one
+// implementation of what copying means and it is still testable as text
+// at a prompt (tools/fileop_test.py). They used to be spawned children;
+// what that could never do is report progress, be cancelled, or ask
+// anything when a destination already exists.
 //
 // The panes are uui_fileview (ui/uui_fileview.h), which is where the
 // listing, the ordering, ".." and descend-on-activate live -- shared

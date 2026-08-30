@@ -5457,3 +5457,48 @@ The cost of not routing them centrally: every app that wants clipboard
 keys binds them itself, and two apps could disagree about what Ctrl+C
 means. That is what the Terminal needs in order to differ, so it is the
 feature and not the bug.
+
+
+## File operations moved into the process, and what that cost
+
+The File Manager spawned `/bin/cp` and `/bin/rm` and reaped them on its
+tick. That bought three things, and it is worth being precise about
+which of them survived the change:
+
+- **One implementation of copying.** KEPT, by a different route: the
+  copy loop and the tree walk moved to `userland/lib/ufileop.h`, and the
+  three shell programs became front ends over it. `tools/fileop_test.py`
+  is what makes that claim checkable from a prompt.
+- **A failed copy cannot take the window down.** LOST. A bug in the copy
+  loop now faults the File Manager instead of one child process. What
+  replaces it is that the same code runs as `/bin/cp` under a test, and
+  that the loop is small and does one thing.
+- **No byte-level progress**, which was the stated cost of spawning.
+  GONE, and that is the gain: a child reports an exit code, so a
+  progress bar and a cancel were impossible. So was asking anything --
+  a spawned `cp` has no way to say "this file exists, what now?".
+
+**How much to share is the interesting part.** Windows shares the
+PRIMITIVE and not the policy: `CopyFileEx` in kernel32 is common, and
+Explorer's `IFileOperation`, `robocopy` and `cmd`'s `copy` are three
+separate engines above it. Linux shares nothing -- coreutils' `copy.c`,
+GIO's `g_file_copy` and KIO's file worker are three unrelated
+implementations of copying a file, present on one machine at once.
+
+This shares more than Windows does: the primitive AND the tree walk,
+with policy as callbacks. The reason is that Windows' split is paid for
+by compatibility -- `robocopy` cannot change what `copy` does -- and
+there is no such constraint here, so a second walk would be pure cost.
+Linux's three are not a design at all; they are what happens when three
+projects each need a copy and none can depend on the others.
+
+**The state is the caller's**, which is `ttf.h`'s arrangement and for
+`tfs3.c`'s reason: a GUI runs this on a worker thread while its main
+thread lists directories, and file-scope scratch shared between them is
+the re-entrancy bug this codebase keeps rediscovering. `struct ufileop`
+is ~30 KB, so it lives at file scope in each caller, never on a frame.
+
+**A cancelled copy deletes its partial file.** Half a file under the
+right name is worse than no file, because nothing downstream can tell
+the difference -- and the next thing to read it would get a truncated
+document with no indication anything went wrong.

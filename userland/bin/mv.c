@@ -1,21 +1,29 @@
-// mv -- rename, or move between directories. One SYS_RENAME.
+// mv -- rename, or move between directories.
 //
-// The one refusal worth knowing about is not this program's: moving a
-// DIRECTORY across parents needs five journal credits, and a v1 TFS3
-// image has four slots, so that single case is refused on an old volume
-// while every other move works (fs.h, and CLAUDE.md's journal-credits
-// rule). It arrives here as EIO.
+// A FRONT END over lib/ufileop.h. It was one SYS_RENAME; the engine
+// adds the fallback that matters -- a rename across parents needs five
+// journal credits and a v1 TFS3 image has four slots (fs.h), so that
+// one case failed with EIO and now copies and deletes instead.
 #include "rt/sys.h"
 #include "lib/cmd.h"
+#include "lib/ufileop.h"
+
+static struct ufileop g_op;
+
+static void on_error(void *ctx, const char *path, int err) {
+    (void)ctx;
+    sys_print("mv: ");
+    sys_print(path);
+    sys_print(": ");
+    sys_print(sys_strerror(err));
+    sys_print("\n");
+}
 
 int main(int argc, char **argv) {
     if (argc != 3) {
         cmd_usage("mv <source> <dest>");
         return 1;
     }
-    if (sys_rename(argv[1], argv[2]) < 0) {
-        cmd_fail("mv", argv[1]);
-        return 1;
-    }
-    return 0;
+    struct ufileop_policy policy = { .on_error = on_error };
+    return ufileop_move(argv[1], argv[2], &g_op, &policy) == UFILEOP_OK ? 0 : 1;
 }

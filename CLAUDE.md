@@ -1227,7 +1227,7 @@ cost".
   `ansi_cursor_test.py`, `audio_test.py`, `console_bleed_test.py`,
   `console_shell_test.py`, `ctrlc_test.py`, `cursor_ibeam_test.py`,
   `demo_test.py`, `diskmark_test.py`, `doom_test.py`,
-  `doom_sound_test.py`, `fat32_test.py`, `frame_balance.py`,
+  `doom_sound_test.py`, `fat32_test.py`, `fileop_test.py`, `frame_balance.py`,
   `fs_switch_test.py`, `grep_test.py`, `hires_test.py`,
   `init_test.py`, `jobs_test.py`, `kbd_test.py`,
   `keyboard_paths_test.py`, `kvm_soak.py`, `live_boot_test.py`,

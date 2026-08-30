@@ -81,6 +81,7 @@ TOOLS = [
     ("ahci",        "ahci_test.py",            "TFS3 on a SATA drive behind an HBA",  True,  None,                   False),
     ("diskmark",    "diskmark_test.py",        "the Disk Mark GUI benchmark",        True,  None,                   True),
     ("ls",          "ls_test.py",              "/bin/ls flags and the listing cap",  True,  None,                   False),
+    ("fileop",      "fileop_test.py",          "lib/ufileop through cp/mv/rm",       True,  None,                   False),
 
     # --- shell, console, terminal ------------------------------------
     ("console",     "console_shell_test.py",   "a text boot reaching a ring-3 shell", True, None,                   False),

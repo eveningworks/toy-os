@@ -1702,12 +1702,18 @@ real scanout hardware does. Do not write a pixel assertion for one.
   one program's parts. The units are LISTED in `EXTRA_OBJS_files`, not
   wildcarded, so a stray `.c` fails to link rather than being absorbed.
   Then:
-  - **File operations are CHILD PROCESSES.** F5 spawns `/bin/cp`, F8
-    spawns `/bin/rm`, and `on_tick` reaps them with
-    `sys_waitpid_nohang()`. One implementation of copying, testable as
-    text at a prompt, and a failed copy cannot take the window down. The
-    cost, stated rather than discovered: **no byte-level progress**,
-    because a child reports an exit code and not a percentage.
+  - **File operations run IN PROCESS, over `userland/lib/ufileop.h`**,
+    which owns the copy loop and the tree walk and takes POLICY as
+    callbacks. They were spawned `/bin/cp` and `/bin/rm` children; the
+    three shell programs are front ends over the same engine now, which
+    is what keeps "one implementation, testable as text at a prompt"
+    true (`tools/fileop_test.py`). What the change bought is what a
+    child could never do: byte-level progress, a cancel, and asking
+    anything at all when a destination exists. What it cost is that a
+    bug in the copy loop faults the window instead of one child --
+    stated rather than glossed. **The state is the CALLER'S** (`struct
+    ufileop`, ~30 KB, file scope), the `ttf.h` arrangement, because a
+    worker thread and the main thread must not share scratch.
   - **Marked files run through a QUEUE, one child at a time**, so the
     status line can say "Copy 3/7" and name the one that failed.
   - **Each pane carries its OWN path strip**, because one status line

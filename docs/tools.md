@@ -2471,6 +2471,15 @@ window without going through it will find its layout polls timing out.
   tool to `tools/` does not add it here, and nothing checks that it
   did.
 
+- **`fileop_test.py`** -- `lib/ufileop` through `/bin/cp`, `/bin/mv` and
+  `/bin/rm`. The copy loop and the tree walk are ONE implementation
+  shared by those three and by the File Manager, and this is what keeps
+  "testable as text at a prompt" true after the GUI stopped spawning
+  children. Asserts on the listing read back with `ls` -- a different
+  reader from the program that did the work. Its positive control is the
+  deepest-first unlink ordering: reverse it and `rm -r` leaves every
+  directory behind, which is the one check that reddens.
+
 - **`predates.py`** -- answers "did this failure exist before my
   changes?" by measuring rather than guessing: stashes the tree,
   rebuilds at HEAD, runs the command you name, restores, and prints
