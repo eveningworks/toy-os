@@ -26,59 +26,30 @@
 // listing, the ordering, ".." and descend-on-activate live -- shared
 // with Image Viewer, Notepad's dialog and the WM's file picker, so this
 // app contains no directory-reading code at all.
-#include <stdint.h>
+//
+// THIS FILE IS THE APP: the menus, the commands, the input, main(). The
+// rest of it is in userland/fm/, split by concern -- see fm_internal.h,
+// which names what is where. It is not a library and the units are not
+// modules; it is one event loop and one pile of state, filed so that
+// finding a part of it is quick. `userland/wm/` is arranged the same
+// way and for the same reason.
+#include "fm/fm_internal.h"
 #include <string.h>
-#include <strings.h>  // strncasecmp -- an extension is not case-sensitive
 #include <stdio.h>
 #include <stdlib.h>   // atoi -- the saved divider positions
-#include "rt/sys.h"
 #include "kpath.h"
-#include "lib/human.h"
 #include "lib/uconf.h"
-#include "etc_config.h"
-#include "ui/ugfx.h"
-#include "ui/uui.h"
-#include "ui/uui_fileview.h"
-#include "ui/uui_tree.h"
-#include "ui/uui_toolbar.h"
-#include "ui/uui_splitter.h"
-#include "lib/uimg.h"
+#include "lib/human.h"
 #include "lib/uopen.h"
-#include "lib/dirsort.h"
-#include "ui/uapp.h"
+#include "ui/uui.h"
 #include "ui/ulog.h"
-#include "ui/utheme.h"
 #include "keyboard.h"
 
 #define WIN_W 720
 #define WIN_H 440
-#define PATH_MAX_LEN 64          // FS_PATH_MAX
-#define PANE_FILES  SYS_LISTDIR_MAX
 
-#define ID_LEFT  1
-#define ID_RIGHT 2
-#define ID_TREE  3
-#define ID_MENU  4
-#define ID_TOOLBAR 5
-#define ID_TREE_SPLIT 6
-#define ID_PANE_SPLIT 7
-#define ID_CTX   8
-
-// Each pane's directory, remembered across runs. The per-app
-// `/etc/<app>.conf` convention has existed since desktop.conf and had
-// exactly one user; this is the second.
-#define FILES_CONF "/etc/files.conf"
-
-enum {
-    CMD_COPY = 1, CMD_MOVE, CMD_MKDIR, CMD_RENAME, CMD_DELETE,
-    CMD_REFRESH, CMD_SWAP, CMD_EXIT,
-    CMD_VIEW_DETAILS, CMD_VIEW_ICONS, CMD_VIEW_PANES, CMD_VIEW_TREE,
-    CMD_UP, CMD_OPEN, CMD_PROPERTIES,
-};
-
-// The Properties window is a PROCESS, not a dialog in this one. See
-// userland/gui/apps/properties.c.
-#define PROPERTIES_EXEC "/bin/wm/apps/properties"
+// Each pane's directory is remembered across runs in FILES_CONF -- the
+// per-app `/etc/<app>.conf` convention, whose second user this was.
 
 // The listings. 256 entries x 80 bytes = 20 KB per pane, which is why
 // these are file-scope: a ring-3 frame is capped at 2 KiB
@@ -86,8 +57,8 @@ enum {
 static struct sys_dirent g_left_entries[PANE_FILES];
 static struct sys_dirent g_right_entries[PANE_FILES];
 
-static struct uui_fileview g_pane[2];
-static int g_active;            // 0 = left, 1 = right
+struct uui_fileview g_pane[2];
+int g_active;            // 0 = left, 1 = right
 
 // The two dividers. Both are persisted as a FRACTION rather than a
 // pixel column (ui/uui_splitter.h), so a window opened wider than the
@@ -99,37 +70,20 @@ static int g_active;            // 0 = left, 1 = right
 #define TREE_SPLIT_DEFAULT 160
 #define PANE_SPLIT_DEFAULT (UUI_SPLIT_SCALE / 2)
 
-static struct uui_splitter g_tree_split;   // tree | panes
-static struct uui_splitter g_pane_split;   // left | right
+struct uui_splitter g_tree_split;   // tree | panes
+struct uui_splitter g_pane_split;   // left | right
 
 // View options, all persisted in FILES_CONF. `g_single` shows only the
 // ACTIVE pane (Tab still swaps which one that is, and F5/F6 still act
 // toward the hidden one's directory -- the pane keeps existing, it just
 // is not shown). The commander shape stays the default.
-static int g_single;
-static int g_tree_on;
+int g_single;
+int g_tree_on;
 
-// --- the directory tree -----------------------------------------------
-//
-// A LAZY uui_tree (UUI_TREE_CLOSED/OPEN): only the directories the user
-// has expanded are listed at all, so the node array is a view of the
-// open set, rebuilt on every toggle. The app owns which PATHS are open
-// -- paths, not node indices, because a rebuild renumbers every slot.
-#define TREE_MAX 96
-#define TREE_OPEN_MAX 24
-
-static struct uui_tree g_tree;
-static struct uui_tree_node g_tree_nodes[TREE_MAX];
-static char g_tree_path[TREE_MAX][PATH_MAX_LEN];
-static int g_tree_count;
-static char g_tree_open[TREE_OPEN_MAX][PATH_MAX_LEN];
-static int g_tree_open_count;
-static struct sys_dirent g_tree_scratch[SYS_LISTDIR_MAX];
-
-static struct uui_menubar g_menu;
-static struct uui_menubar g_ctx;   // the context menu -- no bar of its own
-static struct uui_toolbar g_toolbar;
-static struct uui_statusbar g_status;
+struct uui_menubar g_menu;
+struct uui_menubar g_ctx;   // the context menu -- no bar of its own
+struct uui_toolbar g_toolbar;
+struct uui_statusbar g_status;
 
 // A secondary press ARMS; the release OPENS. Not a preference: the
 // router delivers a release for every button, so a menu opened on the
@@ -138,142 +92,9 @@ static struct uui_statusbar g_status;
 static int g_ctx_armed;
 static int g_ctx_x, g_ctx_y;
 
-static char g_stat_dir[PATH_MAX_LEN + 8];
-static char g_stat_items[48];
-static char g_stat_note[64];
-
-// --- the job queue ----------------------------------------------------
-//
-// ONE CHILD AT A TIME, over a QUEUE. Marking a set of files means an
-// operation is N operations, and running them concurrently would need N
-// pids, N exit codes and a way to say which one failed -- with one
-// status line to say it in. Sequential is also what a person expects
-// from a progress that counts "3 of 7".
-//
-// THE PATHS ARE SNAPSHOT WHEN THE QUEUE IS BUILT, not read from the
-// marks as it runs. Marks name ROWS, every reload clears them
-// (ui/uui_fileview.h says why), and this app reloads whenever
-// SYS_FS_GENERATION moves -- which a copy in progress makes it do. A
-// queue reading marks as it went would lose them halfway through its
-// own work.
-#define JOB_MAX 64
-
-static int g_job_pid = -1;
-static char g_job_what[32];
-static char g_job_path[JOB_MAX][PATH_MAX_LEN];
-static int g_job_isdir[JOB_MAX];
-static int g_job_count, g_job_at;
-static int g_job_op;
-static char g_job_dest[PATH_MAX_LEN];
-static int g_job_failures;
-
-
-// --- thumbnails ---------------------------------------------------------
-//
-// The icons view asks uui_fileview's thumb callback per visible cell,
-// and that callback must be a LOOKUP (uui_fileview.h says why). The
-// decode happens HERE, on the tick, at most a couple per pass -- the
-// lazy shape every desktop thumbnailer has, minus the daemon: a folder
-// of photos populates over a few ticks instead of freezing the window
-// for as many full JPEG decodes as it has files.
-//
-// Keyed by PATH + MTIME + SIZE-ON-DISK, so a rewritten file re-decodes
-// and a renamed one simply misses. LRU over a fixed table, icon_cache's
-// arrangement; ~4 KB of pixels per ready entry at the default font.
-#define THUMB_MAX 48
-#define THUMB_PER_TICK 2
-
-enum thumb_state { THUMB_EMPTY = 0, THUMB_PENDING, THUMB_READY, THUMB_NOT_IMAGE };
-
-struct thumb {
-    char path[PATH_MAX_LEN];
-    struct rtc_time mtime;
-    uint32_t fsize;
-    unsigned long long used;  // LRU clock; also "most recently WANTED"
-    int px;
-    enum thumb_state state;
-    struct uimg im;           // valid when READY
-};
-
-static struct thumb g_thumbs[THUMB_MAX];
-static unsigned long long g_thumb_clock;
-
-static struct thumb *thumb_slot(const char *path) {
-    struct thumb *lru = &g_thumbs[0];
-    for (int i = 0; i < THUMB_MAX; i++) {
-        if (g_thumbs[i].state != THUMB_EMPTY &&
-            strcmp(g_thumbs[i].path, path) == 0)
-            return &g_thumbs[i];
-        if (g_thumbs[i].used < lru->used) lru = &g_thumbs[i];
-    }
-    uimg_free(&lru->im); // safe on a never-decoded image (uimg.h)
-    memset(lru, 0, sizeof *lru);
-    strlcpy(lru->path, path, sizeof lru->path);
-    return lru;
-}
-
-// The fileview's callback: a lookup that may ENQUEUE, never a decode.
-static const struct uimg *pane_thumb(void *ctx, const char *dir,
-                                      const struct sys_dirent *e, int px) {
-    (void)ctx;
-    char path[PATH_MAX_LEN];
-    if (!k_path_join(dir, e->name, path, sizeof path)) return 0;
-
-    struct thumb *t = thumb_slot(path);
-    t->used = ++g_thumb_clock;
-
-    int stale = t->state == THUMB_EMPTY || t->px != px ||
-                 t->fsize != e->size ||
-                 memcmp(&t->mtime, &e->modified, sizeof t->mtime) != 0;
-    if (stale) {
-        t->mtime = e->modified;
-        t->fsize = e->size;
-        t->px = px;
-        uimg_free(&t->im);
-        t->state = THUMB_PENDING;
-    }
-    return t->state == THUMB_READY ? &t->im : 0;
-}
-
-// Decode the most recently WANTED pending entries -- "wanted" is the
-// LRU clock the lookup stamps, so what is on screen populates first.
-// Returns 1 if anything became ready (the caller repaints).
-static int thumb_tick(void) {
-    int changed = 0;
-    for (int n = 0; n < THUMB_PER_TICK; n++) {
-        struct thumb *pick = 0;
-        for (int i = 0; i < THUMB_MAX; i++)
-            if (g_thumbs[i].state == THUMB_PENDING &&
-                (!pick || g_thumbs[i].used > pick->used))
-                pick = &g_thumbs[i];
-        if (!pick) break;
-
-        // Sniff before loading: uimg_load() reads the WHOLE file, and
-        // most files in a directory are not images.
-        uint8_t head[16];
-        FILE *f = fopen(pick->path, "rb");
-        size_t got = f ? fread(head, 1, sizeof head, f) : 0;
-        if (f) fclose(f);
-        if (got < 4 || !uimg_probe(head, got)) {
-            pick->state = THUMB_NOT_IMAGE;
-            continue;
-        }
-
-        struct uimg full;
-        if (uimg_load(pick->path, &full) != 0) {
-            pick->state = THUMB_NOT_IMAGE; // broken or refused: the icon
-            continue;
-        }
-        int tw, th;
-        uimg_fit_size(full.w, full.h, pick->px, pick->px, UIMG_FIT_CONTAIN,
-                       &tw, &th);
-        int rc = uimg_scale(&full, tw, th, &pick->im);
-        uimg_free(&full);
-        pick->state = rc == 0 ? THUMB_READY : THUMB_NOT_IMAGE;
-        if (rc == 0) changed = 1;
-    }
-    return changed;
-}
+char g_stat_dir[PATH_MAX_LEN + 8];
+char g_stat_items[48];
+char g_stat_note[64];
 
 // --- live refresh -------------------------------------------------------
 //
@@ -281,135 +102,10 @@ static int thumb_tick(void) {
 // and no disk I/O. A copy finishing in another process shows up here
 // without anyone pressing anything, which is the whole reason this app
 // does not have to be told when its own child is done either.
-static unsigned long long g_seen_generation;
+unsigned long long g_seen_generation;
 
-static struct uui_fileview *active(void)  { return &g_pane[g_active]; }
-static struct uui_fileview *other(void)   { return &g_pane[!g_active]; }
-
-// The open set speaks PATHS. "/" is put in it at startup.
-static int tree_is_open(const char *path) {
-    for (int i = 0; i < g_tree_open_count; i++)
-        if (strcmp(g_tree_open[i], path) == 0) return 1;
-    return 0;
-}
-
-// Closing a directory also closes everything UNDER it: a reopened
-// parent showing grandchildren the user never re-expanded would mean
-// the open set held paths the tree no longer shows.
-static void tree_set_open(const char *path, int open) {
-    if (open) {
-        if (tree_is_open(path)) return;
-        if (g_tree_open_count >= TREE_OPEN_MAX) return;
-        strlcpy(g_tree_open[g_tree_open_count++], path, PATH_MAX_LEN);
-        return;
-    }
-    int len = (int)strlen(path);
-    int at_root = (len == 1 && path[0] == '/');
-    int kept = 0;
-    for (int i = 0; i < g_tree_open_count; i++) {
-        const char *q = g_tree_open[i];
-        int under = strncmp(q, path, (size_t)len) == 0 &&
-                     (at_root || q[len] == '/' || q[len] == '\0');
-        if (under) continue;
-        if (kept != i) strlcpy(g_tree_open[kept], q, PATH_MAX_LEN);
-        kept++;
-    }
-    g_tree_open_count = kept;
-}
-
-static int tree_find_path(const char *path) {
-    for (int i = 0; i < g_tree_count; i++)
-        if (strcmp(g_tree_path[i], path) == 0) return i;
-    return -1;
-}
-
-static void tree_select_path(const char *path) {
-    int i = tree_find_path(path);
-    if (i >= 0) uui_tree_select_id(&g_tree, i);
-}
-
-// Rebuild the node array from the open set. Each open directory's
-// subdirectories are INSERTED right after it and the scan continues
-// forward, which reaches them in DFS (display) order with no recursion
-// and ONE scratch listing -- a recursive walk needs a listing per
-// level, which the 2 KiB ring-3 frame budget cannot hold.
-static void tree_rebuild(void) {
-    // The selection survives by PATH: ids are slots and slots move.
-    char sel[PATH_MAX_LEN];
-    sel[0] = '\0';
-    int id = uui_tree_selected_id(&g_tree);
-    if (id >= 0 && id < g_tree_count) strlcpy(sel, g_tree_path[id], sizeof sel);
-
-    strlcpy(g_tree_path[0], "/", PATH_MAX_LEN);
-    g_tree_nodes[0].depth = 0;
-    g_tree_nodes[0].kind = tree_is_open("/") ? UUI_TREE_OPEN : UUI_TREE_CLOSED;
-    g_tree_count = 1;
-
-    for (int i = 0; i < g_tree_count; i++) {
-        if (g_tree_nodes[i].kind != UUI_TREE_OPEN) continue;
-        int n = sys_listdir(g_tree_path[i], g_tree_scratch, SYS_LISTDIR_MAX);
-        if (n < 0) continue;
-
-        // Directories only, joinable only (a path past FS_PATH_MAX is
-        // skipped, not truncated), in name order.
-        int nd = 0;
-        char probe[PATH_MAX_LEN];
-        for (int j = 0; j < n; j++) {
-            if (!g_tree_scratch[j].is_dir) continue;
-            if (!k_path_join(g_tree_path[i], g_tree_scratch[j].name, probe,
-                              sizeof probe)) continue;
-            if (nd != j) g_tree_scratch[nd] = g_tree_scratch[j];
-            nd++;
-        }
-        dirsort(g_tree_scratch, nd, DIRSORT_NAME, 0);
-        int room = TREE_MAX - g_tree_count;
-        if (nd > room) nd = room; // a full tree stops growing, silently
-
-        if (nd <= 0) continue;
-        memmove(&g_tree_nodes[i + 1 + nd], &g_tree_nodes[i + 1],
-                (size_t)(g_tree_count - i - 1) * sizeof g_tree_nodes[0]);
-        memmove(&g_tree_path[i + 1 + nd], &g_tree_path[i + 1],
-                (size_t)(g_tree_count - i - 1) * sizeof g_tree_path[0]);
-        for (int j = 0; j < nd; j++) {
-            char *dst = g_tree_path[i + 1 + j];
-            k_path_join(g_tree_path[i], g_tree_scratch[j].name, dst, PATH_MAX_LEN);
-            g_tree_nodes[i + 1 + j].depth = g_tree_nodes[i].depth + 1;
-            g_tree_nodes[i + 1 + j].kind =
-                tree_is_open(dst) ? UUI_TREE_OPEN : UUI_TREE_CLOSED;
-        }
-        g_tree_count += nd;
-    }
-
-    // Labels point INTO g_tree_path (static, so they outlive the
-    // widget); ids are slots, valid until the next rebuild.
-    for (int i = 0; i < g_tree_count; i++) {
-        g_tree_nodes[i].id = i;
-        g_tree_nodes[i].label = i == 0 ? "/" : k_path_basename(g_tree_path[i]);
-    }
-    uui_tree_set_nodes_keep(&g_tree, g_tree_nodes, g_tree_count);
-    if (sel[0]) tree_select_path(sel);
-}
-
-static void tree_toggle(void *ctx, int id, int expand) {
-    (void)ctx;
-    if (id < 0 || id >= g_tree_count) return;
-    tree_set_open(g_tree_path[id], expand);
-    tree_rebuild();
-}
-
-// --- the modal ---------------------------------------------------------
-//
-// Its own, in this window, exactly as Notepad's dialog is: a client
-// cannot open a WM-level dialog (there is no such request), and a file
-// manager that deleted without asking would be the one app here that
-// does something irreversible on a single keystroke.
-enum modal_kind { MODAL_NONE, MODAL_CONFIRM, MODAL_PROMPT };
-
-static enum modal_kind g_modal;
-static char g_modal_title[64];
-static char g_modal_body[PATH_MAX_LEN + 32];
-static struct uui_textbox g_modal_field;
-static int g_modal_cmd;          // what to do when it commits
+struct uui_fileview *active(void)  { return &g_pane[g_active]; }
+struct uui_fileview *other(void)   { return &g_pane[!g_active]; }
 
 static const struct uui_menu_item file_items[] = {
     UUI_MENU("Open",           CMD_OPEN,    "Enter"),
@@ -522,7 +218,7 @@ static unsigned menu_item_flags(int code) {
 // widgets, and the router runs before on_press -- hand-routing the
 // popup made a click on a View item ALSO select the folder-tree row
 // under it (CLAUDE.md's exact rule; the tree made it visible).
-static struct uui_item g_widgets[] = {
+struct uui_item g_widgets[] = {
     { .ops = &uui_menubar_ops, .widget = &g_menu, .id = ID_MENU },
     { .ops = &uui_toolbar_ops, .widget = &g_toolbar, .id = ID_TOOLBAR },
     { .ops = &uui_fileview_ops, .widget = &g_pane[0], .id = ID_LEFT },
@@ -534,26 +230,18 @@ static struct uui_item g_widgets[] = {
     // draw order, and its popup covers whatever is under it.
     { .ops = &uui_menubar_ops, .widget = &g_ctx, .id = ID_CTX },
 };
-#define WIDGET_PANE0 2
-#define WIDGET_PANE1 3
-#define WIDGET_TREE (WIDGET_TREE_SPLIT - 1)
-#define WIDGET_TREE_SPLIT ((int)(sizeof g_widgets / sizeof g_widgets[0]) - 3)
-#define WIDGET_PANE_SPLIT ((int)(sizeof g_widgets / sizeof g_widgets[0]) - 2)
+// The header's WIDGET_* indices count from this, so the array's length
+// is stated once and derived everywhere.
+const int g_widget_count = (int)(sizeof g_widgets / sizeof g_widgets[0]);
 
-// What a pane or the tree must keep however hard the divider is
-// dragged. Font-derived: eight columns is about the least in which a
-// filename is still a filename, not a pixel count that stops meaning
-// anything at another font size.
-static int min_col_w(void) { return ugfx_char_w() * 8; }
-
-static void set_note(const char *s) { strlcpy(g_stat_note, s, sizeof g_stat_note); }
+void set_note(const char *s) { strlcpy(g_stat_note, s, sizeof g_stat_note); }
 
 // A divider's position, written when the drag ENDS rather than per
 // motion: a drag is hundreds of events and every one of them would be a
 // whole-file rewrite. The generation is adopted for the same reason
 // on_pane_dir() adopts it -- this app watches the filesystem, and
 // without it every save reads back as somebody else changing the disk.
-static void save_split(const char *key, const struct uui_splitter *sp) {
+void save_split(const char *key, const struct uui_splitter *sp) {
     char v[12];
     snprintf(v, sizeof v, "%d", uui_splitter_frac(sp));
     uconf_set(FILES_CONF, key, v);
@@ -562,7 +250,7 @@ static void save_split(const char *key, const struct uui_splitter *sp) {
 
 // --- status -----------------------------------------------------------
 
-static void refresh_status(void) {
+void refresh_status(void) {
     struct uui_fileview *fv = active();
     snprintf(g_stat_dir, sizeof g_stat_dir, "%s%s",
               uui_fileview_dir(fv), g_active ? "  [right]" : "  [left]");
@@ -579,241 +267,7 @@ static void refresh_status(void) {
                   total, uui_fileview_truncated(fv) ? " (more)" : "");
 }
 
-// --- jobs -------------------------------------------------------------
-//
-// sys_spawn() takes ONE whitespace-separated argument string, so a path
-// containing a space cannot be passed. FS_PATH_MAX paths here are made
-// by this OS's own tools and do not contain one, but that is a limit of
-// the spawn ABI rather than a property of the filesystem -- worth
-// knowing before someone adds a rename that can produce one.
-static int spawn_job(const char *program, const char *args) {
-    int pid = sys_spawn(program, args, -1);
-    if (pid < 0) {
-        ulogf("files: spawn %s %s FAILED\n", program, args);
-        return 0;
-    }
-    g_job_pid = pid;
-    ulogf("files: %s %s (pid %d)\n", program, args, pid);
-    return 1;
-}
-
-static void job_progress(void) {
-    if (g_job_count > 1)
-        snprintf(g_stat_note, sizeof g_stat_note, "%s %d/%d...", g_job_what,
-                  g_job_at + 1, g_job_count);
-    else
-        snprintf(g_stat_note, sizeof g_stat_note, "%s...", g_job_what);
-}
-
-// Starts the queue's next item, or finishes the run. Returns 1 while
-// work remains.
-static int start_next_job(void) {
-    if (g_job_at >= g_job_count) {
-        snprintf(g_stat_note, sizeof g_stat_note, "%s %s", g_job_what,
-                  g_job_failures ? "FAILED" : "done");
-        g_job_count = g_job_at = 0;
-        return 0;
-    }
-
-    const char *src = g_job_path[g_job_at];
-    int is_dir = g_job_isdir[g_job_at];
-    char args[PATH_MAX_LEN * 2 + 8];
-    const char *program = "/bin/cp";
-
-    switch (g_job_op) {
-    case CMD_COPY:
-        // -r for a directory: cp REFUSES one without it, and asking
-        // "did you mean the folder?" about something the user selected
-        // and pressed Copy on is a question with one answer.
-        program = "/bin/cp";
-        snprintf(args, sizeof args, "%s%s %s", is_dir ? "-r " : "", src, g_job_dest);
-        break;
-    case CMD_MOVE: {
-        // MOVE IS A RENAME, and only because there is one filesystem.
-        // The day a second is mounted this has to become
-        // copy-then-delete when the two differ, exactly as mv does.
-        char dst[PATH_MAX_LEN];
-        program = "/bin/mv";
-        if (!k_path_join(g_job_dest, k_path_basename(src), dst, sizeof dst)) {
-            g_job_failures++;
-            g_job_at++;
-            return start_next_job();
-        }
-        snprintf(args, sizeof args, "%s %s", src, dst);
-        break;
-    }
-    case CMD_DELETE:
-        program = "/bin/rm";
-        snprintf(args, sizeof args, "%s%s", is_dir ? "-r " : "", src);
-        break;
-    default:
-        g_job_count = g_job_at = 0;
-        return 0;
-    }
-
-    if (!spawn_job(program, args)) {
-        g_job_failures++;
-        g_job_at++;
-        return start_next_job();
-    }
-    job_progress();
-    return 1;
-}
-
-// Fills the queue from the marks, or from the selection when nothing is
-// marked -- "act on the selection when no set exists" is what every
-// commander does, and it is why marking can stay optional.
-static int queue_from_selection(int op, const char *what) {
-    if (g_job_count > 0) { set_note("busy"); return 0; }
-
-    struct uui_fileview *fv = active();
-    g_job_count = g_job_at = g_job_failures = 0;
-    g_job_op = op;
-    strlcpy(g_job_what, what, sizeof g_job_what);
-    strlcpy(g_job_dest, uui_fileview_dir(other()), sizeof g_job_dest);
-
-    int marks = uui_fileview_mark_count(fv);
-    if (marks > 0) {
-        for (int i = 0; i < marks && g_job_count < JOB_MAX; i++) {
-            if (!uui_fileview_marked_path(fv, i, g_job_path[g_job_count],
-                                           PATH_MAX_LEN)) continue;
-            g_job_isdir[g_job_count] = uui_fileview_marked_is_dir(fv, i);
-            g_job_count++;
-        }
-        if (marks > JOB_MAX)
-            ulogf("files: %d marked, queue holds %d\n", marks, JOB_MAX);
-    } else if (uui_fileview_selected_path(fv, g_job_path[0], PATH_MAX_LEN)) {
-        g_job_isdir[0] = uui_fileview_selected_is_dir(fv);
-        g_job_count = 1;
-    }
-
-    if (g_job_count == 0) { set_note("nothing selected"); return 0; }
-    return 1;
-}
-
-// Reaps a finished child and starts the next. Returns 1 if anything
-// changed on screen.
-static int poll_job(void) {
-    if (g_job_pid <= 0) return 0;
-
-    int code = 0;
-    int r = sys_waitpid_nohang(g_job_pid, &code);
-    if (r == 0) return 0; // still running -- the whole point of nohang
-
-    g_job_pid = -1;
-    if (r < 0 || code != 0) {
-        g_job_failures++;
-        ulogf("files: %s of %s failed rc=%d code=%d\n", g_job_what,
-              g_job_path[g_job_at], r, code);
-    }
-    g_job_at++;
-    start_next_job();
-
-    // Both panes: a copy changes the destination, a move changes both.
-    uui_fileview_reload(&g_pane[0]);
-    uui_fileview_reload(&g_pane[1]);
-    refresh_status();
-    return 1;
-}
-
-// --- commands ---------------------------------------------------------
-
-static void open_prompt(int cmd, const char *title, const char *initial) {
-    g_modal = MODAL_PROMPT;
-    g_modal_cmd = cmd;
-    strlcpy(g_modal_title, title, sizeof g_modal_title);
-    g_modal_body[0] = '\0';
-    uui_textbox_init(&g_modal_field, initial ? initial : "");
-    uui_textbox_set_active(&g_modal_field, 1);
-}
-
-static void open_confirm(int cmd, const char *title, const char *body) {
-    g_modal = MODAL_CONFIRM;
-    g_modal_cmd = cmd;
-    strlcpy(g_modal_title, title, sizeof g_modal_title);
-    strlcpy(g_modal_body, body, sizeof g_modal_body);
-}
-
-// How many files an operation would act on, and what to call them.
-static int operand_count(void) {
-    int marks = uui_fileview_mark_count(active());
-    if (marks > 0) return marks;
-    return uui_fileview_selected_name(active()) ? 1 : 0;
-}
-
-static void do_copy(void) {
-    if (queue_from_selection(CMD_COPY, "Copy")) start_next_job();
-}
-
-static void do_move(void) {
-    if (queue_from_selection(CMD_MOVE, "Move")) start_next_job();
-}
-
-static void do_delete(void) {
-    int n = operand_count();
-    if (n == 0) { set_note("nothing selected"); return; }
-
-    char body[PATH_MAX_LEN + 48];
-    if (n == 1) {
-        const char *name = uui_fileview_selected_name(active());
-        int marks = uui_fileview_mark_count(active());
-        char one[PATH_MAX_LEN];
-        if (marks == 1) {
-            uui_fileview_marked_path(active(), 0, one, sizeof one);
-            name = k_path_basename(one);
-        }
-        snprintf(body, sizeof body, "Delete %s?", name ? name : "");
-    } else {
-        snprintf(body, sizeof body, "Delete %d marked items?", n);
-    }
-    open_confirm(CMD_DELETE, "Delete", body);
-}
-
-static void commit_delete(void) {
-    if (queue_from_selection(CMD_DELETE, "Delete")) start_next_job();
-}
-
-static void commit_mkdir(const char *name) {
-    char path[PATH_MAX_LEN];
-    ulogf("files: mkdir %s in %s\n", name, uui_fileview_dir(active()));
-    if (!name[0]) return;
-    if (!k_path_join(uui_fileview_dir(active()), name, path, sizeof path)) {
-        set_note("path too long");
-        return;
-    }
-    // Straight to the syscall: mkdir is one call that cannot block, so
-    // spawning /bin/mkdir would buy the process isolation a long copy
-    // needs and nothing else.
-    if (sys_mkdir(path) < 0) {
-        snprintf(g_stat_note, sizeof g_stat_note, "could not create %s", name);
-    } else {
-        set_note("created");
-        uui_fileview_reload(active());
-        uui_fileview_select_name(active(), name);
-    }
-    refresh_status();
-}
-
-static void commit_rename(const char *name) {
-    char from[PATH_MAX_LEN], to[PATH_MAX_LEN];
-    ulogf("files: rename to %s in %s\n", name, uui_fileview_dir(active()));
-    if (!name[0]) return;
-    if (!uui_fileview_selected_path(active(), from, sizeof from)) return;
-    if (!k_path_join(uui_fileview_dir(active()), name, to, sizeof to)) {
-        set_note("path too long");
-        return;
-    }
-    if (sys_rename(from, to) < 0) {
-        snprintf(g_stat_note, sizeof g_stat_note, "could not rename to %s", name);
-    } else {
-        set_note("renamed");
-        uui_fileview_reload(active());
-        uui_fileview_select_name(active(), name);
-    }
-    refresh_status();
-}
-
-static void do_command(struct uapp *a, int code) {
+void do_command(struct uapp *a, int code) {
     switch (code) {
     case CMD_COPY:   do_copy(); break;
     case CMD_MOVE:   do_move(); break;
@@ -894,266 +348,6 @@ static void do_command(struct uapp *a, int code) {
     uapp_redraw(a);
 }
 
-// --- the modal's own input --------------------------------------------
-
-static int modal_key(struct uapp *a, int key) {
-    if (g_modal == MODAL_NONE) return 0;
-
-    if (key == 0x1B) { g_modal = MODAL_NONE; set_note("cancelled"); uapp_redraw(a); return 1; }
-
-    if (key == '\n' || key == '\r') {
-        enum modal_kind kind = g_modal;
-        int cmd = g_modal_cmd;
-        char text[UUI_TEXTBOX_MAX];
-        strlcpy(text, uui_textbox_text(&g_modal_field), sizeof text);
-        // Closed BEFORE the action runs: an action that opens another
-        // modal (or logs) must not find this one still up.
-        g_modal = MODAL_NONE;
-        if (kind == MODAL_CONFIRM) {
-            if (cmd == CMD_DELETE) commit_delete();
-        } else {
-            if (cmd == CMD_MKDIR) commit_mkdir(text);
-            else if (cmd == CMD_RENAME) commit_rename(text);
-        }
-        uapp_redraw(a);
-        return 1;
-    }
-
-    if (g_modal == MODAL_PROMPT && uui_textbox_key(&g_modal_field, key)) uapp_redraw(a);
-    return 1; // modal: swallow everything else
-}
-
-// --- layout and drawing ------------------------------------------------
-
-static int menubar_h(void) { int h; uui_menubar_natural_size(&g_menu, 0, &h); return h; }
-static int toolbar_h(void) { int h; uui_toolbar_natural_size(&g_toolbar, 0, &h); return h; }
-static int statusbar_h(void) { int h; uui_statusbar_natural_size(&g_status, 0, &h); return h; }
-
-// Each pane carries its OWN path above it. One shared status line
-// cannot say where two panes are, and "which directory does F5 copy
-// into" is a question the window has to answer without being asked.
-static int panehdr_h(void) { return ugfx_char_h() + utheme_gap(); }
-
-static void layout_all(int cw, int ch) {
-    int mb = menubar_h(), tb = toolbar_h(), sb = statusbar_h();
-
-    uui_menubar_set_geometry(&g_menu, 0, 0, cw, mb);
-    uui_menubar_set_bounds(&g_menu, 0, 0, cw, ch);
-    // The context menu has no strip of its own; only its popup bounds
-    // matter, and they are the whole content area.
-    uui_menubar_set_geometry(&g_ctx, 0, 0, 0, 0);
-    uui_menubar_set_bounds(&g_ctx, 0, 0, cw, ch);
-    uui_toolbar_ops.set_geometry(&g_toolbar, 0, mb, cw, tb);
-    uui_statusbar_set_geometry(&g_status, 0, ch - sb, cw, sb);
-
-    int top = mb + tb;
-    int hdr = panehdr_h();
-    int panes_y = top + hdr;
-    int panes_h = ch - top - sb - hdr;
-    if (panes_h < 1) panes_h = 1;
-
-    // Both dividers span the body: from under the toolbar to above the
-    // key row, so each one separates the pane HEADERS as well as the
-    // listings and there is no stub of undivided strip at the top.
-    int body_h = ch - top - sb;
-    int split_w = uui_splitter_thickness();
-    int minw = min_col_w();
-
-    // The tree column sits left of the panes and spans their headers
-    // too -- it has no path strip of its own.
-    int tx = 0;
-    if (g_tree_on) {
-        // Its divider must leave room for BOTH panes, not one: the
-        // shown-panes count is what the tree is competing with.
-        uui_splitter_set_track(&g_tree_split, 0, cw, minw,
-                                (g_single ? 1 : 2) * minw + split_w);
-        int tw = uui_splitter_before(&g_tree_split);
-        uui_tree_ops.set_geometry(&g_tree, 0, top, tw, body_h);
-        uui_splitter_set_geometry(&g_tree_split, uui_splitter_pos(&g_tree_split),
-                                   top, split_w, body_h);
-        tx = tw + split_w;
-    }
-    int pw = cw - tx;
-
-    if (g_single) {
-        // Both panes get the full rect; only the active one is SHOWN.
-        // The hidden one keeps sane geometry so nothing draws from junk
-        // the frame it comes back.
-        uui_fileview_set_geometry(&g_pane[0], tx, panes_y, pw, panes_h);
-        uui_fileview_set_geometry(&g_pane[1], tx, panes_y, pw, panes_h);
-    } else {
-        uui_splitter_set_track(&g_pane_split, tx, cw, minw, minw);
-        int px = uui_splitter_pos(&g_pane_split);
-        uui_fileview_set_geometry(&g_pane[0], tx, panes_y,
-                                   uui_splitter_before(&g_pane_split), panes_h);
-        uui_splitter_set_geometry(&g_pane_split, px, top, split_w, body_h);
-        uui_fileview_set_geometry(&g_pane[1], px + split_w, panes_y,
-                                   cw - px - split_w, panes_h);
-    }
-
-    // Visibility is decided beside the geometry: the router skips a
-    // hidden item, so a hidden pane cannot be clicked either.
-    g_widgets[WIDGET_PANE0].hidden = g_single && g_active != 0;
-    g_widgets[WIDGET_PANE1].hidden = g_single && g_active != 1;
-    g_widgets[WIDGET_TREE].hidden = !g_tree_on;
-    g_widgets[WIDGET_TREE_SPLIT].hidden = !g_tree_on;
-    g_widgets[WIDGET_PANE_SPLIT].hidden = g_single;
-
-    // The ACTIVE pane's outline, drawn by the widget itself so it stays
-    // under a menu popup -- see uui_fileview.h's active_mark. With two
-    // identical panes and no other mark, "which one does F5 copy FROM"
-    // is unanswerable, and a wrong guess deletes the wrong file.
-    for (int i = 0; i < 2; i++)
-        uui_fileview_set_active_mark(&g_pane[i], i == g_active, UTHEME_ACCENT);
-
-}
-
-// The modal's box, centred. Derived, never constant: every size here
-// comes from the font (docs/gui-guidelines.md).
-static void modal_rect(int cw, int ch, int *x, int *y, int *w, int *h) {
-    int pad = utheme_pad();
-    int lines = (g_modal == MODAL_PROMPT) ? 3 : 3;
-    *w = cw * 3 / 4;
-    *h = pad * 2 + lines * (ugfx_char_h() + utheme_gap()) + utheme_control_h();
-    *x = (cw - *w) / 2;
-    *y = (ch - *h) / 2;
-}
-
-static void draw_modal(struct ugfx_surface *s) {
-    if (g_modal == MODAL_NONE) return;
-
-    int x, y, w, h;
-    modal_rect(s->w, s->h, &x, &y, &w, &h);
-    int pad = utheme_pad(), lh = ugfx_char_h() + utheme_gap();
-
-    ugfx_fill_rect(s, x, y, w, h, UTHEME_PANEL_BG);
-    ugfx_draw_rect(s, x, y, w, h, UTHEME_BORDER);
-    ugfx_draw_string_clipped(s, x + pad, y + pad, w - pad * 2, g_modal_title,
-                              UTHEME_TEXT, UTHEME_PANEL_BG);
-
-    if (g_modal == MODAL_CONFIRM) {
-        ugfx_draw_string_clipped(s, x + pad, y + pad + lh, w - pad * 2, g_modal_body,
-                                  UTHEME_TEXT, UTHEME_PANEL_BG);
-        ugfx_draw_string_clipped(s, x + pad, y + pad + lh * 2, w - pad * 2,
-                                  "Enter = yes, Esc = no", UTHEME_TEXT, UTHEME_PANEL_BG);
-    } else {
-        uui_textbox_set_geometry(&g_modal_field, x + pad, y + pad + lh,
-                                  w - pad * 2, utheme_control_h());
-        uui_textbox_draw(s, &g_modal_field);
-        ugfx_draw_string_clipped(s, x + pad, y + pad + lh + utheme_control_h() + utheme_gap(),
-                                  w - pad * 2, "Enter = ok, Esc = cancel",
-                                  UTHEME_TEXT, UTHEME_PANEL_BG);
-    }
-}
-
-// The path strip above each pane. The ACTIVE one is drawn in the accent
-// colour, which is the same thing the outline says and deliberately so:
-// the mark that answers "which pane" should be readable at a glance and
-// from the text you are already looking at.
-static void draw_pane_headers(struct ugfx_surface *s) {
-    int hdr = panehdr_h();
-    for (int i = 0; i < 2; i++) {
-        if (g_single && i != g_active) continue;
-        int x, y, w, h;
-        uui_fileview_ops.bounds(&g_pane[i], &x, &y, &w, &h);
-        (void)h;
-        int active_pane = (i == g_active);
-        uint32_t bg = active_pane ? UTHEME_ACCENT : UTHEME_PANEL_BG;
-        uint32_t fg = active_pane ? UTHEME_ACCENT_TEXT : UTHEME_TEXT;
-        ugfx_fill_rect(s, x, y - hdr, w, hdr, bg);
-        // Clipped, always: a path is longer than a half-window
-        // routinely, and ugfx_draw_string() does not clip
-        // (docs/gui-guidelines.md's oldest trap).
-        ugfx_draw_string_clipped(s, x + utheme_gap(), y - hdr + utheme_gap() / 2,
-                                  w - utheme_gap() * 2, uui_fileview_dir(&g_pane[i]),
-                                  fg, bg);
-    }
-}
-
-// docs/gui-guidelines.md: a GUI test asks the app where things are
-// rather than re-deriving geometry in Python. The grammar is notepad's
-// and imgview's, deliberately -- one parser in tools/.
-static void log_layout(void) {
-    int x, y, w, h;
-    for (int i = 0; i < 2; i++) {
-        uui_fileview_ops.bounds(&g_pane[i], &x, &y, &w, &h);
-        uapp_logf_layout("files: layout pane %d %d %d %d %d\n", i, x, y, w, h);
-        uapp_logf_layout("files: layout dir %d %s\n", i, uui_fileview_dir(&g_pane[i]));
-        uapp_logf_layout("files: layout rows %d %d\n", i, uui_fileview_row_count(&g_pane[i]));
-    }
-    const char *sel = uui_fileview_selected_name(active());
-    uapp_logf_layout("files: layout active %d\n", g_active);
-    uui_toolbar_ops.bounds(&g_toolbar, &x, &y, &w, &h);
-    uapp_logf_layout("files: layout toolbar %d %d %d %d\n", x, y, w, h);
-    for (int i = 0; uui_toolbar_item_rect(&g_toolbar, i, &x, &y, &w, &h); i++)
-        uapp_logf_layout("files: layout tbitem %d %d %d %d %d\n", i, x, y, w, h);
-    if (uui_menubar_is_open(&g_menu)) {
-        int mx, my, mw, mh;
-        if (uui_menubar_popup_rect(&g_menu, 0, &mx, &my, &mw, &mh))
-            uapp_logf_layout("files: layout menu %d %d %d %d\n", mx, my, mw, mh);
-    }
-    // Depth and the top popup's hot row: the one logged fact that CHANGES
-    // as the pointer crosses an open menu. Without it a hover test's
-    // frames are identical, the dedup drops them, and "nothing arrived"
-    // reads as a wedge.
-    uapp_logf_layout("files: layout menuhot %d %d\n", g_menu.depth,
-          g_menu.depth > 0 ? g_menu.level[0].hot : -1);
-    uapp_logf_layout("files: layout split %d %d\n",
-          uui_splitter_frac(&g_tree_split), uui_splitter_frac(&g_pane_split));
-    for (int i = 0; i < 2; i++) {
-        const struct uui_splitter *sp = i ? &g_pane_split : &g_tree_split;
-        uui_splitter_ops.bounds(sp, &x, &y, &w, &h);
-        uapp_logf_layout("files: layout splitbox %d %d %d %d %d\n", i, x, y, w, h);
-    }
-    uapp_logf_layout("files: layout view %d %d single %d tree %d %d\n",
-          (int)g_pane[0].mode, (int)g_pane[1].mode, g_single, g_tree_on,
-          g_tree_on ? g_tree_count : 0);
-    if (g_tree_on) {
-        uui_tree_ops.bounds(&g_tree, &x, &y, &w, &h);
-        uapp_logf_layout("files: layout treebox %d %d %d %d %d %d\n", x, y, w, h,
-              uui_tree_row_h(&g_tree), uui_tree_selected_id(&g_tree));
-    }
-    uapp_logf_layout("files: layout selected %s\n", sel ? sel : "-");
-    uapp_logf_layout("files: layout modal %d\n", (int)g_modal);
-    uapp_logf_layout("files: layout marked %d %d\n", uui_fileview_mark_count(&g_pane[0]),
-          uui_fileview_mark_count(&g_pane[1]));
-    uapp_logf_layout("files: layout hover %d %d\n", g_pane[0].table.hovered,
-          g_pane[1].table.hovered);
-    for (int i = 0; i < 2; i++) {
-        int cx, cy, cw2, ch2;
-        if (!uui_fileview_cell_rect(&g_pane[i], 0, &cx, &cy, &cw2, &ch2))
-            continue;
-        int cols = 1, xx, yy, ww, hh;
-        while (uui_fileview_cell_rect(&g_pane[i], cols, &xx, &yy, &ww, &hh) &&
-                yy == cy)
-            cols++;
-        uapp_logf_layout("files: layout cellgrid %d %d %d %d %d %d\n", i,
-              cx, cy, cw2, ch2, cols);
-    }
-    uapp_logf_layout("files: layout job %d %d\n", g_job_at, g_job_count);
-    uapp_logf_layout("files: layout ctx %d\n", uui_menubar_is_open(&g_ctx));
-    if (uui_menubar_popup_rect(&g_ctx, 0, &x, &y, &w, &h))
-        uapp_logf_layout("files: layout ctxbox %d %d %d %d\n", x, y, w, h);
-}
-
-static void on_draw(struct uapp *a, struct uapp_draw *d) {
-    (void)a;
-    layout_all(d->surface->w, d->surface->h);
-    ugfx_fill_rect(d->surface, 0, 0, d->surface->w, d->surface->h, UTHEME_PANEL_BG);
-    draw_pane_headers(d->surface);
-    uui_statusbar_draw(d->surface, &g_status);
-    log_layout();
-}
-
-static void on_draw_over(struct uapp *a, struct uapp_draw *d) {
-    (void)a;
-    // ONLY the modal may live here: on_draw_over runs after the
-    // router's overlay pass, so anything drawn from it sits on top of
-    // an open menu. The active-pane outline moved into the widget for
-    // exactly that reason (uui_fileview.h's active_mark).
-    draw_modal(d->surface);
-}
-
 // --- input --------------------------------------------------------------
 
 static void on_widget(struct uapp *a, int id, int reason) {
@@ -1216,15 +410,6 @@ static void on_widget(struct uapp *a, int id, int reason) {
         return;
     }
     do_command(a, id); // the function-key buttons carry their command as their id
-}
-
-// Which VISIBLE pane holds this point, or -1.
-static int pane_at(int x, int y) {
-    for (int i = 0; i < 2; i++) {
-        if (g_widgets[i ? WIDGET_PANE1 : WIDGET_PANE0].hidden) continue;
-        if (uui_fileview_hit(&g_pane[i], x, y)) return i;
-    }
-    return -1;
 }
 
 // A SECONDARY CLICK ARMS THE CONTEXT MENU. It opens on the release --
@@ -1481,10 +666,7 @@ int main(int argc, char **argv) {
     if (uconf_get(FILES_CONF, "pane_split", opt, sizeof opt))
         uui_splitter_set_frac(&g_pane_split, atoi(opt));
 
-    uui_tree_init(&g_tree, 0, 0, 100, 100, g_tree_nodes, 0);
-    uui_tree_set_on_toggle(&g_tree, tree_toggle, 0);
-    strlcpy(g_tree_open[0], "/", PATH_MAX_LEN);
-    g_tree_open_count = 1;
+    tree_init();
 
     uui_fileview_set_dir(&g_pane[0], left);
     uui_fileview_set_dir(&g_pane[1], right);

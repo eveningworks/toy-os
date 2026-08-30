@@ -1660,14 +1660,24 @@ real scanout hardware does. Do not write a pixel assertion for one.
     is in progress: a reload clears the very marks the band is choosing
     (the desktop's `desktop_drag_active()` rule).
 - **THE FILE MANAGER IS A TWO-PANE COMMANDER, NOT AN EXPLORER**
-  (`userland/gui/apps/files.c`, `/bin/wm/apps/files`). Explorer's two
+  (`userland/gui/apps/files.c` plus `userland/fm/`, `/bin/wm/apps/files`).
+  Explorer's two
   primary verbs are copy/paste and drag-onto-a-window, and this system
   has neither a clipboard nor drag-and-drop -- both are their own
   roadmap milestone. Norton Commander's answer, kept by Midnight
   Commander, Total Commander and Krusader for forty years, needs
   neither: with two directories on screen the source is the active pane
   and the destination is the other one, so nothing is carried and
-  nothing needs a carrier. Nine things to know:
+  nothing needs a carrier. Ten things to know, the first being where
+  they are: **the app is SIX translation units** -- `files.c` is the
+  menus, the commands, input and `main()`; `userland/fm/` holds the view,
+  the job queue, the tree, the thumbnails and the modal, sharing state
+  directly through `fm_internal.h`. That directory is outside
+  `USERLAND_PROGRAM_DIRS` for the reason `userland/wm/` is: those turn
+  every `.c` into its own ELF, which is right for a program and wrong for
+  one program's parts. The units are LISTED in `EXTRA_OBJS_files`, not
+  wildcarded, so a stray `.c` fails to link rather than being absorbed.
+  Then:
   - **File operations are CHILD PROCESSES.** F5 spawns `/bin/cp`, F8
     spawns `/bin/rm`, and `on_tick` reaps them with
     `sys_waitpid_nohang()`. One implementation of copying, testable as
