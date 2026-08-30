@@ -50,6 +50,7 @@
 #define ID_PANE_SPLIT 7
 #define ID_CTX   8
 #define ID_DIALOG 9
+#define ID_CANCEL 10
 
 // The commands, shared by the menu bar, the toolbar, the context menu
 // and the function keys -- one code per act, so those four cannot
@@ -76,6 +77,7 @@ struct uui_dialog;
 extern struct uui_dialog g_dialog;
 extern struct uui_toolbar g_toolbar;
 extern struct uui_statusbar g_status;
+extern struct uui_button g_cancel_btn;
 extern char g_stat_dir[PATH_MAX_LEN + 8];
 extern char g_stat_items[48];
 extern char g_stat_note[64];
@@ -90,16 +92,20 @@ extern unsigned long long g_seen_generation;
 // indices are here because the layout hides panes and the input code
 // hit-tests them, and both need to name the same slots.
 extern struct uui_item g_widgets[];
-#define WIDGET_PANE0 2
-#define WIDGET_PANE1 3
-#define WIDGET_TREE       (WIDGET_TREE_SPLIT - 1)
-#define WIDGET_TREE_SPLIT (g_widget_count - 3)
-#define WIDGET_PANE_SPLIT (g_widget_count - 2)
 extern const int g_widget_count;
+
+// BY ID, NEVER BY POSITION. These were `g_widget_count - 3` and friends,
+// which is a number a different file has to keep true (CLAUDE.md):
+// appending one widget to the array silently shifted all three, so
+// hiding the tree hid the tree SPLITTER and hiding the pane splitter hid
+// the CONTEXT MENU -- a right-click that stopped working in single-pane
+// view, and a tree drawn over the menu bar. An id is a name.
+struct uui_item *widget_by_id(int id);
 
 struct uui_fileview *active(void);
 struct uui_fileview *other(void);
 void set_note(const char *s);
+void refresh_dim(void);
 void refresh_status(void);
 void do_command(struct uapp *a, int code);
 

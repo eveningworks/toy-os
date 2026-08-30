@@ -40,7 +40,22 @@ void layout_all(int cw, int ch) {
     uui_menubar_set_bounds(&g_ctx, 0, 0, cw, ch);
     uui_dialog_set_bounds(&g_dialog, 0, 0, cw, ch);
     uui_toolbar_ops.set_geometry(&g_toolbar, 0, mb, cw, tb);
-    uui_statusbar_set_geometry(&g_status, 0, ch - sb, cw, sb);
+    // CANCEL SITS ON THE STATUS BAR, at its right end, and exists only
+    // while an operation runs -- see g_cancel_btn's own note.
+    int running = fm_job_running();
+    widget_by_id(ID_CANCEL)->hidden = !running;
+    if (running) {
+        int bw, bh;
+        uui_button_natural_size(&g_cancel_btn, &bw, &bh);
+        if (bh > sb) bh = sb;
+        uui_button_set_geometry(&g_cancel_btn, cw - bw - 2, ch - sb + (sb - bh) / 2,
+                                 bw, bh);
+        // The status bar stops short of it, or the last pane's text
+        // draws straight under the button.
+        uui_statusbar_set_geometry(&g_status, 0, ch - sb, cw - bw - 4, sb);
+    } else {
+        uui_statusbar_set_geometry(&g_status, 0, ch - sb, cw, sb);
+    }
 
     int top = mb + tb;
     int hdr = panehdr_h();
@@ -89,11 +104,11 @@ void layout_all(int cw, int ch) {
 
     // Visibility is decided beside the geometry: the router skips a
     // hidden item, so a hidden pane cannot be clicked either.
-    g_widgets[WIDGET_PANE0].hidden = g_single && g_active != 0;
-    g_widgets[WIDGET_PANE1].hidden = g_single && g_active != 1;
-    g_widgets[WIDGET_TREE].hidden = !g_tree_on;
-    g_widgets[WIDGET_TREE_SPLIT].hidden = !g_tree_on;
-    g_widgets[WIDGET_PANE_SPLIT].hidden = g_single;
+    widget_by_id(ID_LEFT)->hidden  = g_single && g_active != 0;
+    widget_by_id(ID_RIGHT)->hidden = g_single && g_active != 1;
+    widget_by_id(ID_TREE)->hidden = !g_tree_on;
+    widget_by_id(ID_TREE_SPLIT)->hidden = !g_tree_on;
+    widget_by_id(ID_PANE_SPLIT)->hidden = g_single;
 
     // The ACTIVE pane's outline, drawn by the widget itself so it stays
     // under a menu popup -- see uui_fileview.h's active_mark. With two
@@ -178,8 +193,33 @@ void log_layout(void) {
     }
     uapp_logf_layout("files: layout selected %s\n", sel ? sel : "-");
     uapp_logf_layout("files: layout modal %d\n", (int)g_modal);
+    // WHERE ROW 0 ACTUALLY STARTS, per pane. A test that derives it as
+    // "pane top + n * row height" is off by the column header and lands
+    // on the row above -- silently, since a neighbouring row is a
+    // perfectly plausible thing to have clicked.
+    for (int i = 0; i < 2; i++)
+        uapp_logf_layout("files: layout rowy %d %d\n", i,
+                          g_pane[i].table.y + uui_table_header_h(&g_pane[i].table));
+
+    // The DIMMED count per pane -- a staged cut, which is otherwise only
+    // visible as a shade of grey no test can assert on.
+    uapp_logf_layout("files: layout dim %d %d\n", g_pane[0].dim_count,
+                      g_pane[1].dim_count);
+    // ...and whether the Cancel button is up, which is exactly "is an
+    // operation running" as far as anything on screen is concerned.
+    uapp_logf_layout("files: layout cancel %d\n",
+                      widget_by_id(ID_CANCEL)->hidden ? 0 : 1);
     uapp_logf_layout("files: layout marked %d %d\n", uui_fileview_mark_count(&g_pane[0]),
           uui_fileview_mark_count(&g_pane[1]));
+    // ...and the hovered row as a VIEW position too. `hover` above is a
+    // SOURCE row, which a test cannot turn back into a screen row -- so
+    // aiming the pointer at "the third row down" had no way to confirm
+    // it got there, and an 18px row plus pointer acceleration means it
+    // often did not.
+    for (int i = 0; i < 2; i++)
+        uapp_logf_layout("files: layout hoverv %d %d\n", i,
+                          uui_table_view_row(&g_pane[i].table,
+                                              g_pane[i].table.hovered));
     uapp_logf_layout("files: layout hover %d %d\n", g_pane[0].table.hovered,
           g_pane[1].table.hovered);
     for (int i = 0; i < 2; i++) {
@@ -213,6 +253,7 @@ void on_draw(struct uapp *a, struct uapp_draw *d) {
     ugfx_fill_rect(d->surface, 0, 0, d->surface->w, d->surface->h, UTHEME_PANEL_BG);
     draw_pane_headers(d->surface);
     uui_statusbar_draw(d->surface, &g_status);
+    if (!widget_by_id(ID_CANCEL)->hidden) uui_button_draw_one(d->surface, &g_cancel_btn);
     log_layout();
 }
 
@@ -228,7 +269,7 @@ void on_draw_over(struct uapp *a, struct uapp_draw *d) {
 // Which VISIBLE pane holds this point, or -1.
 int pane_at(int x, int y) {
     for (int i = 0; i < 2; i++) {
-        if (g_widgets[i ? WIDGET_PANE1 : WIDGET_PANE0].hidden) continue;
+        if (widget_by_id(i ? ID_RIGHT : ID_LEFT)->hidden) continue;
         if (uui_fileview_hit(&g_pane[i], x, y)) return i;
     }
     return -1;

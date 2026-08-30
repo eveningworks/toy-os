@@ -27,6 +27,14 @@ THE RULES, and each names the failure it prevents:
      what it cannot measure.
   2. A table with `press` must have `release`. Otherwise the app is
      never told the widget was used.
+  4. A widget-array INDEX must not be derived from the array's own
+     length (`(g_widget_count - 3)`) or from another such index. That
+     shipped on 2026-08-30: appending one widget to the File Manager's
+     array shifted three macros at once, so hiding the tree hid the tree
+     SPLITTER and hiding the pane splitter hid the CONTEXT MENU -- a
+     right-click that stopped working in single-pane view, and a tree
+     drawn over the menu bar. It is the same "prefer facts that cannot
+     go stale" rule CLAUDE.md states; look the widget up by its id.
   3. A table with `key` must have `accepts_focus`. The focus ring SKIPS
      a widget that refuses focus (uui_focus.c), so a widget that takes
      keys but never says whether it wants them is relying on the
@@ -85,6 +93,33 @@ def check_file(path):
     return [(path, *p) for p in problems]
 
 
+# `#define NAME (<something> - <n>)` where <something> is a count or
+# another index macro. A widget array's own length is the usual source;
+# `WIDGET_TREE (WIDGET_TREE_SPLIT - 1)` is the chained form, which is
+# just as fragile because its base is.
+DERIVED_INDEX = re.compile(
+    r"^\s*#define\s+(\w*WIDGET\w*|\w*_IDX\w*)\s*\(\s*"
+    r"(\w*count\w*|\w*COUNT\w*|\w*WIDGET\w*|\w*_IDX\w*)\s*[-+]",
+    re.IGNORECASE)
+
+
+def check_derived_indices(root):
+    """Widget-array indices derived from the array's LENGTH. See rule 4."""
+    out = []
+    for path in sorted(root.rglob("*.h")) + sorted(root.rglob("*.c")):
+        try:
+            text = path.read_text()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if "widget-ops-ok" in text:
+            continue
+        for n, line in enumerate(text.split("\n"), 1):
+            m = DERIVED_INDEX.match(line)
+            if m:
+                out.append((path, n, m.group(1), m.group(2)))
+    return out
+
+
 def main():
     if not UI_DIR.is_dir():
         print(f"check_widget_ops: no {UI_DIR}", file=sys.stderr)
@@ -94,10 +129,27 @@ def main():
     for path in files:
         found.extend(check_file(path))
 
-    if not found:
+    derived = check_derived_indices(UI_DIR.parent)
+
+    if not found and not derived:
         print(f"check_widget_ops: ok -- every ops table in {len(files)} "
-              f"file(s) fills the slots it needs")
+              f"file(s) fills the slots it needs, and no widget index is "
+              f"derived from an array length")
         return 0
+
+    if derived:
+        print(f"check_widget_ops: FAIL -- {len(derived)} widget index/indices "
+              f"derived from a length\n")
+        for path, line, name, base in derived:
+            rel = path.relative_to(UI_DIR.parent.parent)
+            print(f"  {rel}:{line}: {name} is derived from {base}")
+            print("      Appending one widget to the array shifts it "
+                  "silently.")
+            print("      Look the widget up by its id instead, or waive it in")
+            print("      this file with a `widget-ops-ok: <reason>` comment.")
+        if not found:
+            return 1
+        print()
 
     print(f"check_widget_ops: FAIL -- {len(found)} missing slot(s)\n")
     for path, table, slot, why in found:

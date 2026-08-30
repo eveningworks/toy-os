@@ -261,6 +261,20 @@ manual steps to be worth automating:
   around it -- settled captures, and a REST frame with the pointer
   parked somewhere real, since the cursor sprite is part of the screen.
 
+  **`warp_confirmed(qmp, x, y, check)` confirms a DIFFERENT claim**, and
+  the difference matters: `warp_cursor` proves the pointer is where you
+  aimed, not that where you aimed is what you meant. A list row is one
+  line tall, so a y computed from a stale origin, a scrolled view or a
+  column header lands on a NEIGHBOURING row -- perfectly plausible, so
+  the failure reads as "the click did nothing" instead of "the click hit
+  the wrong thing". `check` is a callable returning truthy when the app
+  itself reports the intended target under the pointer (its hovered row,
+  its hot button); it re-warps until that holds. Assert on the return
+  value, or a miss passes silently. Poll it with `layout_now()` rather
+  than a wait-for-change helper: a layout block is emitted only when it
+  CHANGES, so a warp that lands where the pointer already was logs
+  nothing at all.
+
   **`changed_rows(rest, hover, box)` is the band form**, for a control
   whose rows have no reported geometry -- a dropdown popup, a listbox.
   It compares mean brightness per pixel row, so text contributes to both
@@ -2793,6 +2807,14 @@ window without going through it will find its layout polls timing out.
   when `uui_layout_run()` has no early exit at all. Waive in place with
   a `widget-ops-ok: <reason>` comment, the same mechanism
   `check_dispatch.py` uses. In `preflight.sh`.
+
+  **It also refuses a widget index derived from the array's own
+  LENGTH** -- `#define WIDGET_TREE_SPLIT (g_widget_count - 3)`, and the
+  chained `(WIDGET_TREE_SPLIT - 1)` form. Appending one widget shifted
+  three of those at once in the File Manager, so hiding the tree hid the
+  tree splitter and hiding the pane splitter hid the CONTEXT MENU: a
+  right-click that stopped working in single-pane view, diagnosed from a
+  screenshot rather than from any test. Look the widget up by its id.
 - **`check_key_routing.py`** -- its sibling, and the inverse question:
   `check_widget_ops.py` catches an ops slot nobody filled, this catches
   a filled slot nobody can REACH. An app whose `struct uapp_desc` names

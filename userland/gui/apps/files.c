@@ -42,6 +42,7 @@
 #include "lib/uopen.h"
 #include "lib/uclip.h"
 #include "ui/uui.h"
+#include "ui/utheme.h"
 #include "ui/uui_dialog.h"
 #include "lib/ufileop.h"
 #include "ui/ulog.h"
@@ -86,6 +87,12 @@ struct uui_menubar g_menu;
 struct uui_menubar g_ctx;   // the context menu -- no bar of its own
 struct uui_toolbar g_toolbar;
 struct uui_statusbar g_status;
+
+// CANCEL, and it exists only while an operation is running. Hidden the
+// rest of the time rather than disabled: a permanently greyed button in
+// the status bar is chrome that never does anything, and Explorer's
+// stop button appears with the progress it stops.
+struct uui_button g_cancel_btn;
 
 // A secondary press ARMS; the release OPENS. Not a preference: the
 // router delivers a release for every button, so a menu opened on the
@@ -271,6 +278,7 @@ struct uui_item g_widgets[] = {
     { .ops = &uui_tree_ops, .widget = &g_tree, .id = ID_TREE },
     { .ops = &uui_splitter_ops, .widget = &g_tree_split, .id = ID_TREE_SPLIT },
     { .ops = &uui_splitter_ops, .widget = &g_pane_split, .id = ID_PANE_SPLIT },
+    { .ops = &uui_button_ops, .widget = &g_cancel_btn, .id = ID_CANCEL, .hidden = 1 },
     // LAST, so it is hit-tested FIRST: input order is the reverse of
     // draw order, and its popup covers whatever is under it.
     { .ops = &uui_menubar_ops, .widget = &g_ctx, .id = ID_CTX },
@@ -278,9 +286,18 @@ struct uui_item g_widgets[] = {
     // anything else, and it draws over everything.
     { .ops = &uui_dialog_ops, .widget = &g_dialog, .id = ID_DIALOG },
 };
-// The header's WIDGET_* indices count from this, so the array's length
-// is stated once and derived everywhere.
 const int g_widget_count = (int)(sizeof g_widgets / sizeof g_widgets[0]);
+
+// A widget by its ID. Linear over a dozen entries, called a handful of
+// times per layout -- and it cannot go stale when the array grows,
+// which the position-derived indices it replaced could and did.
+struct uui_item *widget_by_id(int id) {
+    for (int i = 0; i < g_widget_count; i++)
+        if (g_widgets[i].id == id) return &g_widgets[i];
+    // Never NULL for a compiled-in id; returning slot 0 rather than
+    // faulting keeps a typo a visual bug instead of a crash.
+    return &g_widgets[0];
+}
 
 void set_note(const char *s) { strlcpy(g_stat_note, s, sizeof g_stat_note); }
 
@@ -473,6 +490,12 @@ static void on_widget(struct uapp *a, int id, int reason) {
         uapp_redraw(a);
         return;
     }
+    if (id == ID_CANCEL) {
+        fm_job_cancel();
+        set_note("cancelling");
+        uapp_redraw(a);
+        return;
+    }
     do_command(a, id); // the function-key buttons carry their command as their id
 }
 
@@ -521,6 +544,19 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
         return;
     }
     if (modal_key(a, key)) return;
+
+    // ESC STOPS A RUNNING OPERATION, and only then -- asked AFTER the
+    // dialog and the prompts above, so an Esc meant for one of those
+    // still closes it rather than killing the copy behind it. The
+    // popups below are asked after, which costs nothing: a menu cannot
+    // be open while a job runs without the same Esc being wanted here
+    // first, and Explorer's stop button and Esc do the same one thing.
+    if (key == 0x1B && fm_job_running()) {
+        fm_job_cancel();
+        set_note("cancelling");
+        uapp_redraw(a);
+        return;
+    }
 
     int code = 0;
     // AN OPEN POPUP TAKES THE KEY, wherever the app thinks it is
@@ -649,6 +685,7 @@ static void on_pane_open(void *ctx, const char *path) {
 // which the WIDGET does not know about.
 static void on_pane_dir(void *ctx, const char *dir) {
     int i = (int)(intptr_t)ctx;
+    refresh_dim();   // the reload cleared the bits; see refresh_dim()
     // Written on every change rather than at exit, because a window
     // manager can Force Quit this process and an exit-time save is a
     // save that does not happen. Two keys, so the whole document is
@@ -758,9 +795,38 @@ static int on_user(struct uapp *a, int a0, int a1) {
 }
 
 // The clipboard changed -- ours or anyone's.
+// A PENDING CUT IS DRAWN FADED, which is what Explorer and Dolphin both
+// do and the only thing on screen that says a cut is staged at all.
+//
+// Applied BY NAME, every time: the clipboard holds paths and a pane
+// holds rows, and a row index does not survive a reload (see
+// ui/uui_fileview.h). Only a CUT dims -- a copy takes nothing away, so
+// fading its source would say something untrue.
+void refresh_dim(void) {
+    for (int i = 0; i < 2; i++) uui_fileview_clear_dimmed(&g_pane[i]);
+    if (g_clip_op != UCLIP_CUT) return;
+
+    struct uclip c;
+    uclip_load(&c);
+    if (uclip_op(&c) != UCLIP_CUT) return;
+
+    for (int n = 0; n < uclip_count(&c); n++) {
+        const char *path = uclip_path(&c, n);
+        if (!path) break;
+        char dir[PATH_MAX_LEN];
+        k_path_dirname(path, dir, sizeof dir);
+        for (int i = 0; i < 2; i++) {
+            if (strcmp(uui_fileview_dir(&g_pane[i]), dir) != 0) continue;
+            int row = uui_fileview_row_of(&g_pane[i], k_path_basename(path));
+            if (row >= 0) uui_fileview_set_dimmed(&g_pane[i], row, 1);
+        }
+    }
+}
+
 static void on_clipboard(struct uapp *a, int op, unsigned serial) {
     (void)serial;
     g_clip_op = op;
+    refresh_dim();
     uapp_redraw(a);   // Paste greys and ungreys with it
 }
 
@@ -797,6 +863,8 @@ int main(int argc, char **argv) {
     uui_toolbar_init(&g_toolbar, toolbar_items,
                       (int)(sizeof toolbar_items / sizeof toolbar_items[0]));
     g_toolbar.item_flags = menu_item_flags; // ONE state source -- see uui_toolbar.h
+    uui_button_init(&g_cancel_btn, 0, 0, 0, 0, "Cancel",
+                     UTHEME_BUTTON_BG, UTHEME_TEXT, ID_CANCEL);
     uui_statusbar_init(&g_status);
     g_status.panes[0].text = g_stat_dir;
     g_status.panes[0].chars = 0;
