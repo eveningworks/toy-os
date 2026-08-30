@@ -2196,3 +2196,57 @@ deadline the way the client timers do, not by assuming the loop spins.
 same CPU seconds and only the STATE moves, `ready` to `block(event)`.
 `tools/idle_cpu.py` is the instrument, and only its DIFFERENCES mean
 anything.
+
+## `uui_dialog` IS THE MODAL QUESTION, AND IT SWALLOWS EVERY KEY WHILE IT IS UP.
+
+A title, up to six rows of text and up to six buttons, centred in the
+bounds the app hands it. It draws through `draw_overlay` and declares
+`overlay_active`, so it lands on top of the app's widgets without the
+app ordering anything, and `uui_dialog_take_code()` hands back the
+button's code once.
+
+Four things to know:
+
+- **Its `key` op returns 1 for EVERY key**, not just the ones it uses.
+  Behind a File Manager dialog is a listing where a letter seeks and
+  Enter descends, so a keystroke let through is a modal that is not one.
+- **It commits on RELEASE, and only on the button the press armed** --
+  this GUI's rule for every control, `docs/gui-guidelines.md`.
+- **A press ANYWHERE is consumed, including outside the box**, and a
+  click outside does NOT dismiss. These ask questions whose default
+  answer is not obvious, and a stray click is not an answer.
+- **`rows` are caller-owned pointers** and must outlive the dialog being
+  up; point them at the app's own buffers.
+
+Its buttons are equal-width, sized to the widest label and then CLAMPED
+so the row fits the box -- the row is right-aligned, so an unclamped
+sixth button pushes the FIRST one off the left edge and it draws as a
+fragment of its own label.
+
+## A LONG FILE OPERATION RUNS ON A WORKER THREAD, AND ITS QUESTIONS COME BACK AS POSTS.
+
+`userland/fm/fm_jobs.c` drives `lib/ufileop.h` on a `pthread`, because
+the alternatives both fail: a loop on the event loop freezes the window
+(this file's long-work rule), and a spawned `/bin/cp` cannot report
+progress, be cancelled, or be asked anything.
+
+**The worker touches NOTHING in Toykit.** It writes progress into a
+block under `g_lock` and calls `uapp_post()`; every widget, every draw
+and every decision happens on the main thread. A conflict is posted the
+same way and the worker then BLOCKS until the main thread answers.
+
+**The wait is `sys_sleep_ms(30)`, not a condition variable**, because
+`pthread_cond_wait` in `userland/libc/pthread.c` spins on `sys_yield()`
+-- a worker parked on one burns a core for as long as a person takes to
+read a dialog.
+
+**A no-answer sentinel of `-1` is TRUTHY**, so `while (!answer)` falls
+through instantly and the copy proceeds while the question is still on
+screen. Write `< 0`.
+
+**A test must not count keystrokes to reach a button.** The app reports
+`layout dialog <open> <hot>` for exactly that: stepping one arrow at a
+time and confirming `hot` each time is the difference between testing
+the dialog and testing keystroke delivery -- one dropped arrow otherwise
+commits the button beside the intended one, which passes as the wrong
+behaviour rather than failing.

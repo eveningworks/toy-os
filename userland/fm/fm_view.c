@@ -3,6 +3,7 @@
 // One of the File Manager's units -- see fm_internal.h for what is
 // where and why these share their state directly.
 #include "fm_internal.h"
+#include "ui/uui_dialog.h"
 #include "ui/utheme.h"
 #include "ui/ulog.h"
 #include "lib/human.h"
@@ -37,6 +38,7 @@ void layout_all(int cw, int ch) {
     // matter, and they are the whole content area.
     uui_menubar_set_geometry(&g_ctx, 0, 0, 0, 0);
     uui_menubar_set_bounds(&g_ctx, 0, 0, cw, ch);
+    uui_dialog_set_bounds(&g_dialog, 0, 0, cw, ch);
     uui_toolbar_ops.set_geometry(&g_toolbar, 0, mb, cw, tb);
     uui_statusbar_set_geometry(&g_status, 0, ch - sb, cw, sb);
 
@@ -139,6 +141,11 @@ void log_layout(void) {
     }
     const char *sel = uui_fileview_selected_name(active());
     uapp_logf_layout("files: layout active %d\n", g_active);
+    // THE ROW HEIGHT, because a test aiming at "row 2" otherwise
+    // guesses it -- and a guess that is a few pixels out lands on empty
+    // space below the last row, which selects nothing and reads exactly
+    // like a broken click.
+    uapp_logf_layout("files: layout rowh %d\n", uui_table_row_h(&g_pane[0].table));
     uui_toolbar_ops.bounds(&g_toolbar, &x, &y, &w, &h);
     uapp_logf_layout("files: layout toolbar %d %d %d %d\n", x, y, w, h);
     for (int i = 0; uui_toolbar_item_rect(&g_toolbar, i, &x, &y, &w, &h); i++)
@@ -188,6 +195,14 @@ void log_layout(void) {
     }
     uapp_logf_layout("files: layout job %d %d\n", g_job_at, g_job_count);
     uapp_logf_layout("files: layout ctx %d\n", uui_menubar_is_open(&g_ctx));
+    // Whether the conflict dialog is UP. A test that sleeps and then
+    // types is a test whose keys go to the listing when the dialog is
+    // half a second late -- and Enter on a listing descends.
+    // ...and WHICH BUTTON a Return would commit. A test that counts
+    // arrow presses is measuring its own keystroke delivery, not the
+    // dialog (four sent, three arrived, and "Rename" read as broken).
+    uapp_logf_layout("files: layout dialog %d %d\n",
+                      uui_dialog_is_open(&g_dialog), g_dialog.hot);
     if (uui_menubar_popup_rect(&g_ctx, 0, &x, &y, &w, &h))
         uapp_logf_layout("files: layout ctxbox %d %d %d %d\n", x, y, w, h);
 }

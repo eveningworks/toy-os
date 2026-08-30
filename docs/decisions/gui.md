@@ -5502,3 +5502,69 @@ is ~30 KB, so it lives at file scope in each caller, never on a frame.
 right name is worse than no file, because nothing downstream can tell
 the difference -- and the next thing to read it would get a truncated
 document with no indication anything went wrong.
+
+## A conflict is a question the worker asks and the event loop answers
+
+Copying happens on a worker thread (`userland/fm/fm_jobs.c`), and the
+thread that draws is the one that must answer -- so "this file exists,
+what now?" crosses between them twice: the worker posts the question and
+BLOCKS, the main loop opens `uui_dialog`, and the button's code goes back
+to the worker as a decision.
+
+**Every desktop does the copy off its UI thread and blocks the worker on
+the answer.** Explorer's `IFileOperation` raises a modal and its copy
+engine waits; Nautilus (GIO) does the same through `g_file_copy`'s
+`GFileProgressCallback`; KIO's file worker is a separate PROCESS and
+still blocks on a reply from the job's UI. The alternative -- deciding
+without asking -- is what `/bin/cp` does, and it is why the GUI could not
+use it.
+
+**The handshake is two ints and a sleep, not a condition variable.**
+`pthread_cond_wait` in `userland/libc/pthread.c` spins on `sys_yield()`,
+so a worker parked on one burns a core for as long as the person takes
+to read the dialog. The worker polls `sys_sleep_ms(30)` instead. That is
+the wrong primitive in general and the right one here; when the
+condition variable learns to block, this is one of the call sites to
+revisit.
+
+**Apply-to-all is per DECISION, not global.** Overwrite-all and skip-all
+are different answers to the same question, so one sticky flag holding
+"the last thing you said" is what every one of the systems above stores,
+and `g_apply_all` is that.
+
+**A cancel is a flag the worker reads without the lock**, because it
+only ever goes 0 -> 1 and a torn read of that has no wrong value. The
+lock covers the progress block, which the worker writes and the draw
+reads.
+
+## Why the conflict is a dialog when Properties is a process
+
+`Properties is a process, not a dialog` argues for a separate window
+wherever the thing being shown is a view of its own. The conflict
+question is the opposite case, and the line between them is worth
+stating because both are "a small box with buttons".
+
+**A dialog is right when the answer BLOCKS work that is already
+running.** The copy is mid-file with a worker parked on the reply, so
+the question has to be in the window whose operation it belongs to, on
+top, taking every key, and gone the moment it is answered. A process
+would give it a taskbar button, a focus of its own and a lifetime the
+copy does not control -- and a person could close it, leaving a thread
+waiting for a window that no longer exists.
+
+**A process is right when the thing shown OUTLIVES the action that
+opened it.** Properties can stay open beside the file manager, be
+compared with another Properties, and survive the app being closed.
+
+Windows draws the same line: `IFileOperation`'s conflict sheet is a
+modal owned by the copy, while the properties sheet is a shell window.
+KDE differs and pays for it -- KIO's job dialogs are separate windows,
+which is why a stalled copy in Dolphin can leave a dialog with no
+obvious parent.
+
+**Hence `uui_dialog` is a WIDGET, not a window.** It occupies no space
+in a layout (`natural_size` is zero), draws through `draw_overlay` and
+declares `overlay_active`, so an app gets a modal by adding one entry to
+its widget list and nothing else -- the same shape `uui_menubar`'s popup
+already had, generalised because the File Manager was about to grow a
+second one-off box.

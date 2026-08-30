@@ -42,6 +42,8 @@
 #include "lib/uopen.h"
 #include "lib/uclip.h"
 #include "ui/uui.h"
+#include "ui/uui_dialog.h"
+#include "lib/ufileop.h"
 #include "ui/ulog.h"
 #include "keyboard.h"
 
@@ -109,6 +111,28 @@ unsigned long long g_seen_generation;
 // per item per frame to answer "is Paste greyed" would be absurd. Kept
 // current by on_clipboard(), which is why the event exists.
 static int g_clip_op = UCLIP_NONE;
+
+// --- the conflict dialog ----------------------------------------------
+//
+// Raised when the worker finds a destination that exists. The rows
+// point at these buffers, which is why they are file-scope and not on a
+// frame: uui_dialog does not own its text (ui/uui_dialog.h).
+struct uui_dialog g_dialog;
+static char g_dlg_rows[3][PATH_MAX_LEN + 40];
+static const char *g_dlg_row_ptr[3] = { g_dlg_rows[0], g_dlg_rows[1], g_dlg_rows[2] };
+static char g_dlg_rename[PATH_MAX_LEN];
+
+// APPLY-TO-ALL. Without it a paste of two hundred files asks two
+// hundred times, which is the difference between a dialog and an
+// obstacle. Remembered for one operation and cleared when it ends.
+static int g_apply_all = -1;
+
+static void answer_conflict(int code);   // defined with the dialog
+
+enum {
+    DLG_OVERWRITE = 1, DLG_OVERWRITE_ALL, DLG_SKIP, DLG_SKIP_ALL,
+    DLG_RENAME, DLG_RENAME_ALL, DLG_CANCEL,
+};
 
 struct uui_fileview *active(void)  { return &g_pane[g_active]; }
 struct uui_fileview *other(void)   { return &g_pane[!g_active]; }
@@ -250,6 +274,9 @@ struct uui_item g_widgets[] = {
     // LAST, so it is hit-tested FIRST: input order is the reverse of
     // draw order, and its popup covers whatever is under it.
     { .ops = &uui_menubar_ops, .widget = &g_ctx, .id = ID_CTX },
+    // LAST OF ALL: a modal has to be offered every press before
+    // anything else, and it draws over everything.
+    { .ops = &uui_dialog_ops, .widget = &g_dialog, .id = ID_DIALOG },
 };
 // The header's WIDGET_* indices count from this, so the array's length
 // is stated once and derived everywhere.
@@ -272,6 +299,13 @@ void save_split(const char *key, const struct uui_splitter *sp) {
 // --- status -----------------------------------------------------------
 
 void refresh_status(void) {
+    // WHILE A JOB RUNS the note is the job -- "Copy 3/7  notes.txt  62%"
+    // -- which is the thing a spawned child could never report, and the
+    // reason the operation moved in here.
+    if (fm_job_running()) {
+        fm_job_status(g_stat_note, sizeof g_stat_note);
+    }
+
     struct uui_fileview *fv = active();
     snprintf(g_stat_dir, sizeof g_stat_dir, "%s%s",
               uui_fileview_dir(fv), g_active ? "  [right]" : "  [left]");
@@ -396,6 +430,12 @@ static void on_widget(struct uapp *a, int id, int reason) {
         if (code >= 0) do_command(a, code);
         return;
     }
+    if (id == ID_DIALOG) {
+        int code = uui_dialog_take_code(&g_dialog);
+        if (code > 0) answer_conflict(code);
+        uapp_redraw(a);
+        return;
+    }
     if (id == ID_CTX) {
         int code = uui_menubar_take_code(&g_ctx);
         if (code >= 0) do_command(a, code);
@@ -471,6 +511,15 @@ static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
 }
 
 static void on_key(struct uapp *a, int key, unsigned mods) {
+    // THE DIALOG FIRST, and it consumes every key: behind it is a
+    // listing where a letter seeks and Delete deletes.
+    if (uui_dialog_is_open(&g_dialog)) {
+        uui_dialog_key(&g_dialog, key);
+        int code = uui_dialog_take_code(&g_dialog);
+        if (code > 0) answer_conflict(code);
+        uapp_redraw(a);
+        return;
+    }
     if (modal_key(a, key)) return;
 
     int code = 0;
@@ -630,6 +679,84 @@ static void on_pane_dir(void *ctx, const char *dir) {
     refresh_status();
 }
 
+// One file's facts for the dialog, so Overwrite is an informed choice
+// rather than a guess -- which is exactly what Windows and KDE both put
+// in this dialog and why.
+static void describe(char *out, int cap, const char *label, const char *path) {
+    struct sys_stat st;
+    if (sys_stat(path, &st) != 0) { snprintf(out, (size_t)cap, "%s: gone", label); return; }
+    char human[24];
+    human_size(human, sizeof human, st.size);
+    snprintf(out, (size_t)cap, "%s  %s  %04u-%02u-%02u %02u:%02u", label, human,
+              st.modified.year, st.modified.month, st.modified.day,
+              st.modified.hour, st.modified.minute);
+}
+
+// Answers the worker, and remembers the answer when it was an
+// apply-to-all.
+static void answer_conflict(int code) {
+    const char *src = fm_conflict_src(), *dst = fm_conflict_dst();
+    switch (code) {
+    case DLG_OVERWRITE_ALL: g_apply_all = DLG_OVERWRITE; /* fall through */
+    case DLG_OVERWRITE:     fm_conflict_answer(UFILEOP_OVERWRITE, 0); break;
+    case DLG_SKIP_ALL:      g_apply_all = DLG_SKIP; /* fall through */
+    case DLG_SKIP:          fm_conflict_answer(UFILEOP_SKIP, 0); break;
+    case DLG_RENAME_ALL:    g_apply_all = DLG_RENAME; /* fall through */
+    case DLG_RENAME: {
+        char dir[PATH_MAX_LEN];
+        k_path_dirname(dst, dir, sizeof dir);
+        // "notes.txt" -> "notes (1).txt", the number before the
+        // extension so the copy still opens with the same app.
+        int ok = ufileop_unique_name(dir, k_path_basename(src), g_dlg_rename,
+                                      sizeof g_dlg_rename);
+        if (ok)
+            fm_conflict_answer(UFILEOP_RENAME, g_dlg_rename);
+        else
+            fm_conflict_answer(UFILEOP_SKIP, 0);
+        break;
+    }
+    default:                fm_conflict_answer(UFILEOP_CANCEL, 0); break;
+    }
+}
+
+static void raise_conflict(struct uapp *a) {
+    // ANSWERED WITHOUT ASKING when an apply-to-all is standing. The
+    // dialog is not even built, which is the point of the checkbox
+    // every real file manager has.
+    if (g_apply_all > 0) { answer_conflict(g_apply_all); return; }
+
+    const char *src = fm_conflict_src(), *dst = fm_conflict_dst();
+    snprintf(g_dlg_rows[0], sizeof g_dlg_rows[0], "%s already exists.",
+              k_path_basename(dst));
+    describe(g_dlg_rows[1], sizeof g_dlg_rows[1], "Existing:", dst);
+    describe(g_dlg_rows[2], sizeof g_dlg_rows[2], "New:     ", src);
+
+    static const struct uui_dialog_button btns[] = {
+        { "Overwrite",     DLG_OVERWRITE },
+        { "Overwrite all", DLG_OVERWRITE_ALL },
+        { "Skip",          DLG_SKIP },
+        { "Skip all",      DLG_SKIP_ALL },
+        { "Rename",        DLG_RENAME },
+        { "Cancel",        DLG_CANCEL },
+    };
+    uui_dialog_open(&g_dialog, "File already exists", g_dlg_row_ptr, 3,
+                     btns, (int)(sizeof btns / sizeof btns[0]),
+                     0, DLG_CANCEL);
+    uapp_redraw(a);
+}
+
+// The worker posted. Both cases run HERE, on the main thread.
+static int on_user(struct uapp *a, int a0, int a1) {
+    (void)a1;
+    if (a0 == POST_CONFLICT) { raise_conflict(a); return 1; }
+    if (a0 == POST_DONE) {
+        g_apply_all = -1;       // one operation, one memory
+        fm_job_finished();
+        return 1;
+    }
+    return 0;
+}
+
 // The clipboard changed -- ours or anyone's.
 static void on_clipboard(struct uapp *a, int op, unsigned serial) {
     (void)serial;
@@ -756,6 +883,7 @@ int main(int argc, char **argv) {
         .on_tick      = on_tick,
         .on_resize    = on_resize,
         .on_clipboard = on_clipboard,
+        .on_user      = on_user,
     };
     return uapp_run(&desc);
 }

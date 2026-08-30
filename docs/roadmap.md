@@ -581,6 +581,8 @@ The desktop is in ring 3 already. These are what it still lacks.
 
 - [x] ~~Real RING-3 filesystem API surface (list/stat/create/delete/seek)~~ done -- every one of those is a syscall now
 - [x] ~~File manager app~~ DONE 2026-08-23 -- two panes, marks, and file operations as spawned children
+- [x] ~~File operations in-process, with a conflict dialog~~ DONE 2026-08-30 -- `lib/ufileop.h` on a worker thread
+- [ ] Cancel the running file operation from the status line -- `fm_job_cancel()` exists, nothing clicks it
 - [ ] Move Notepad's dialog and the WM's file picker onto `uui_fileview`
 - [x] ~~Desktop calendar widget~~ DONE 2026-08-24 -- a panel popup on the tray clock, not an app
 - [x] ~~Control panel with pluggable applets~~ done

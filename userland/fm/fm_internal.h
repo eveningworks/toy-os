@@ -49,6 +49,7 @@
 #define ID_TREE_SPLIT 6
 #define ID_PANE_SPLIT 7
 #define ID_CTX   8
+#define ID_DIALOG 9
 
 // The commands, shared by the menu bar, the toolbar, the context menu
 // and the function keys -- one code per act, so those four cannot
@@ -71,6 +72,8 @@ extern int g_single;             // one pane shown, not two
 extern int g_tree_on;
 extern struct uui_menubar g_menu;
 extern struct uui_menubar g_ctx; // the context menu -- no bar of its own
+struct uui_dialog;
+extern struct uui_dialog g_dialog;
 extern struct uui_toolbar g_toolbar;
 extern struct uui_statusbar g_status;
 extern char g_stat_dir[PATH_MAX_LEN + 8];
@@ -142,6 +145,24 @@ void commit_delete(void);
 void commit_mkdir(const char *name);
 void commit_rename(const char *name);
 int  poll_job(void);
+
+// --- the worker, and the question it can ask --------------------------
+//
+// The operation runs on a THREAD (fm_jobs.c). It touches nothing in
+// Toykit: it records what it is doing and posts, and every decision is
+// made here on the main thread.
+#define POST_DONE     1
+#define POST_CONFLICT 2
+
+int  fm_job_running(void);
+void fm_job_cancel(void);
+void fm_job_status(char *out, int cap);
+void fm_job_finished(void);
+
+int         fm_conflict_pending(void);
+const char *fm_conflict_src(void);
+const char *fm_conflict_dst(void);
+void        fm_conflict_answer(int decision, const char *rename);
 
 // The clipboard's three verbs. A CUT MOVES NOTHING until the paste.
 void clip_copy(void);

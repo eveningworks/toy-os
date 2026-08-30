@@ -64,6 +64,7 @@ PROPERTIES_EXEC = "/bin/wm/apps/properties"
 FILES_EXEC = "/bin/wm/apps/files"
 # Ctrl+<letter> arrives as the control code (api/keyboard.h).
 K_CTRL_C, K_CTRL_X, K_CTRL_V, K_TAB = "0x03", "0x18", "0x16", "0x09"
+K_ENTER = "0x0d"
 
 # `gui key` takes a character or a code (userland/wm/wm_debug.c), which
 # is why nothing here depends on the guest's keyboard layout -- the trap
@@ -103,6 +104,9 @@ class Layout:
         self.treebox = None   # [x, y, w, h, row_h, selected_id]
         self.split = None     # (tree fraction, pane fraction), per mille
         self.splitbox = {}    # 0 = tree divider, 1 = pane divider -> [x,y,w,h]
+        self.rowh = None      # a pane's row height
+        self.dialog = None    # is the conflict dialog up?
+        self.dlghot = None    # ...and which button a Return would commit
         self.ctx = None       # is the context menu open?
         self.ctxbox = None    # its popup [x, y, w, h]
         self.menu = None      # open level-0 popup [x, y, w, h]
@@ -154,6 +158,12 @@ class Layout:
                          int(p[6]), int(p[7])]
         elif p[0] == "treebox" and len(p) >= 7:
             self.treebox = [int(v) for v in p[1:7]]
+        elif p[0] == "rowh" and len(p) >= 2:
+            self.rowh = int(p[1])
+        elif p[0] == "dialog" and len(p) >= 2:
+            self.dialog = int(p[1])
+            if len(p) >= 3:
+                self.dlghot = int(p[2])
         elif p[0] == "ctx" and len(p) >= 2:
             self.ctx = int(p[1])
         elif p[0] == "ctxbox" and len(p) >= 5:
@@ -211,9 +221,16 @@ def listing(dbg, path):
         line = line.strip()
         # The kernel narrates every ring-3 load on the same console
         # ("elf_run: ...", "syscall: ..."), and the console can echo the
-        # command itself -- anything with a colon or a space is not a
-        # filename here.
-        if not line or ":" in line or " " in line or line.startswith("---"):
+        # command itself.
+        if not line or ":" in line or line.startswith("---"):
+            continue
+        # A NAME MAY CONTAIN A SPACE. Rejecting every line with one also
+        # rejected "one (1).txt" -- the file Rename creates -- so the
+        # conflict check read a working rename as a rename that never
+        # happened. What the noise actually carries is a PATH: both the
+        # echoed command and the kernel's narration hold a "/" that is
+        # not the trailing one `ls` puts on a directory.
+        if "/" in line.rstrip("/"):
             continue
         names.append(line.rstrip("/"))
     return names
@@ -228,10 +245,17 @@ def listing(dbg, path):
 # already reported exactly what was asked for. Accumulating costs
 # nothing, because Layout() already keeps only the last complete frame.
 _LAST_BUF = []
+_ALL_BUF = []
 
 
 def _collect(dbg, buf):
-    buf.extend(dbg.logs("files:", clear=True))
+    fresh = dbg.logs("files:", clear=True)
+    buf.extend(fresh)
+    # `_LAST_BUF` is whichever poll ran last, so a line the app logged
+    # during an EARLIER wait is gone by the time a check fails -- which
+    # reads as an app that logged nothing at all. `_ALL_BUF` is the whole
+    # transcript, and it is what a failure detail should quote.
+    _ALL_BUF.extend(fresh)
     _LAST_BUF[:] = buf
     return buf
 
@@ -281,6 +305,16 @@ def wait_listing(dbg, path, pred, timeout=25.0):
             return names
         time.sleep(0.5)
     return names
+
+
+def size_of(dbg, directory, name):
+    """One file's size, from `ls -l` on its DIRECTORY -- pointing ls at a
+    file does not describe that file."""
+    for line in (dbg.send(f"sh ls -l {directory}") or "").splitlines():
+        parts = line.split()
+        if len(parts) >= 5 and parts[0] == "-" and parts[-1] == name:
+            return int(parts[1])
+    return -1
 
 
 def menu_pick(dbg, *steps):
@@ -1048,9 +1082,12 @@ def run(dbg, qmp, tmp, res):
     dbg.key(K_ESC)
     lay = wait_layout(dbg, win, lambda l: l.modal == 0) or lay
 
-    # Delete needs something selected, or it complains instead of asking.
-    sure_click(dbg, qmp, *lay.pane_centre(0))
-    lay = wait_layout(dbg, win, lambda l: True) or lay
+    # Delete needs something selected. SEEKED, not clicked: the pane's
+    # centre is below the last row in a short directory, so the click
+    # selected nothing and Delete correctly said so -- which reads as a
+    # broken toolbar button.
+    dbg.key("0x62")                          # 'b' seeks bin/
+    lay = wait_layout(dbg, win, lambda l: l.selected not in (None, "-")) or lay
     sure_click(dbg, qmp, *tb_centre(7))          # Delete
     lay = wait_layout(dbg, win, lambda l: l.modal not in (None, 0)) or lay
     res.check("the toolbar's Delete opens the same confirm F8 does",
@@ -1068,7 +1105,7 @@ def run(dbg, qmp, tmp, res):
     # file.
     lay = wait_layout(dbg, win, lambda l: 0 in l.pane and l.rows.get(0, 0) > 2) or lay
     px, py, pw, _ = lay.pane[0]
-    row_h = lay.treebox[4] if lay.treebox else 16
+    row_h = lay.rowh or (lay.treebox[4] if lay.treebox else 16)
     # Row 2 of the listing: past "..", and not whatever is selected now.
     target = (ox + px + pw // 2, oy + py + row_h * 2 + row_h // 2)
     before_sel = lay.selected
@@ -1266,6 +1303,146 @@ def run(dbg, qmp, tmp, res):
     res.check("a cut is spent by its paste -- a second one does nothing",
               names(f"{CLIP}/dst") == ["one.conf"] and names(CLIP) == ["dst"],
               f"dst={names(f'{CLIP}/dst')} src={names(CLIP)}")
+
+    dbg.send(f"sh rm -r {CLIP}")
+
+    # --- 14c. the conflict dialog ---------------------------------------
+    #
+    # A paste onto a name that exists must ASK, and must not touch the
+    # destination until it is answered -- the half a naive implementation
+    # gets wrong, and which this one did: the worker read the no-answer
+    # sentinel as a decision and overwrote the file while the dialog was
+    # still on screen. Each answer is checked by what is on disk after
+    # it, read with `ls`.
+    # Overwrite, Overwrite all, Skip, Skip all, Rename, Cancel.
+    DLG_BUTTONS = 6
+    steps = []
+
+    def setup_conflict(dst_bytes):
+        # EACH STEP CONFIRMED BEFORE THE NEXT. `sh <cmd>` spawns a child
+        # and the prompt can come back before it has finished, so two
+        # copies issued back to back can leave the second undone -- which
+        # here meant no destination file, so no conflict, so no dialog,
+        # and a check that read as "the app never asks".
+        dbg.send(f"sh rm -r {CLIP}")
+        dbg.send(f"sh mkdir {CLIP}")
+        dbg.send(f"sh mkdir {CLIP}/dst")
+        wait_listing(dbg, CLIP, lambda n: "dst" in n)
+        dbg.send(f"sh cp /etc/timezones {CLIP}/one.txt")
+        got = wait_listing(dbg, CLIP, lambda n: "one.txt" in n)
+        res.check("(the conflict fixture's source exists)", "one.txt" in got, f"{CLIP}={got}")
+        dbg.send(f"sh cp {dst_bytes} {CLIP}/dst/one.txt")
+        got = wait_listing(dbg, f"{CLIP}/dst", lambda n: "one.txt" in n)
+        res.check("(...and so does the name it will collide with)",
+                  "one.txt" in got, f"{CLIP}/dst={got}")
+        for w2 in sorted(dbg.windows(), key=lambda w2: -w2["z"]):
+            if w2["title"] == TITLE:
+                dbg.send(f"gui close {w2['z']}")
+                time.sleep(0.4)
+        dbg.send(f"gui spawn {FILES_EXEC} {CLIP} {CLIP}/dst")
+        w = None
+        deadline = time.time() + 15.0
+        while time.time() < deadline and not w:
+            w = dbg.window(TITLE)
+            if not w:
+                time.sleep(0.3)
+        # EVERY STEP WAITS ON WHAT IT NEEDS. A sleep here is a key sent
+        # into a window that has not finished opening, and the symptom is
+        # a paste that never happened with nothing to say why.
+        # EACH WAIT RECORDED. When the dialog does not appear, the useful
+        # question is which of these five steps was the one that did not
+        # happen -- and a bare `wait_layout` answers it by returning the
+        # last frame either way.
+        steps.clear()
+
+        def step(name, pred, timeout=12.0):
+            got = wait_layout(dbg, w, pred, timeout=timeout)
+            steps.append(f"{name}={'ok' if got and pred(got) else 'NO'}")
+            return got
+
+        step("listed", lambda l: l.dir.get(0) == CLIP and l.rows.get(0, 0) > 1)
+        dbg.key("0x6f")                       # 'o' seeks one.txt
+        step("seek", lambda l: l.selected == "one.txt")
+        dbg.key(K_CTRL_C)
+        step("copied", lambda l: l.ctx == 0)   # a frame after the copy
+        dbg.key(K_TAB)                        # the destination pane
+        step("tab", lambda l: l.active == 1)
+        dbg.key(K_CTRL_V)
+        # WAITED FOR, not slept for: the keys below answer the dialog,
+        # and a dialog half a second late means they answer the LISTING
+        # instead -- where Enter descends into a directory.
+        # RETURNED, not re-polled. The app is idle with the dialog up,
+        # so it logs no further frames -- a second wait for `dialog == 1`
+        # in the caller times out and falls back to the PREVIOUS
+        # section's layout, which is how a working dialog read as absent.
+        return w, step("dialog", lambda l: l.dialog == 1)
+
+    def pick_button(win, lay0, index):
+        """Arrow to button `index` and commit it. ONE PRESS AT A TIME,
+        each confirmed against the app's own `dlghot`: four Rights sent
+        in a row measure keystroke delivery, and a single dropped arrow
+        commits the button BESIDE the intended one -- which is a passing
+        test of the wrong behaviour, not a failing one. A press that
+        does not land leaves `hot` where it was, so the loop repeats it."""
+        hot = lay0.dlghot if lay0 and lay0.dlghot is not None else 0
+        for _ in range(16):
+            if hot == index:
+                break
+            want = (hot + 1) % DLG_BUTTONS
+            dbg.key(K_RIGHT)
+            got = wait_layout(dbg, win, lambda l, w=want: l.dlghot == w,
+                              timeout=4.0)
+            if got and got.dlghot is not None:
+                hot = got.dlghot
+        dbg.key(K_ENTER)
+        return hot
+
+    win, lay = setup_conflict("/etc/resolv.conf")
+    # FROM `_LAST_BUF`, NOT FROM A FRESH `dbg.logs()`: every poll here
+    # collects with `clear=True`, so by the time a check fails the app's
+    # own lines have already been drained -- an empty read then looks
+    # like an app that logged nothing.
+    trace = [ln.strip() for ln in _ALL_BUF
+             if "layout" not in ln and "files:" in ln][-6:]
+    wins = len([w2 for w2 in dbg.windows() if w2["title"] == TITLE])
+    res.check("the paste ASKS rather than overwriting",
+              lay is not None and lay.dialog == 1,
+              f"dialog={lay and lay.dialog} dirs={lay and lay.dir} "
+              f"sel={lay and lay.selected} rows={lay and lay.rows} "
+              f"wins={wins} steps={steps} trace={trace}")
+    res.check("a paste onto an existing name RAISES the dialog and waits",
+              names(f"{CLIP}/dst") == ["one.txt"] and
+              size_of(dbg, f"{CLIP}/dst", "one.txt") == size_of(dbg, "/etc", "resolv.conf"),
+              "the destination must be untouched while the question is open")
+
+    # Rename -> "one (1).txt", the number before the extension.
+    picked = pick_button(win, lay, 4)
+    got = wait_listing(dbg, f"{CLIP}/dst", lambda n: len(n) > 1)
+    res.check("Rename keeps both, numbering before the extension",
+              sorted(got) == ["one (1).txt", "one.txt"],
+              f"dst={sorted(got)} committed button {picked} "
+              f"trace={[l.strip() for l in dbg.logs('files: conflict')][-3:]}")
+
+    # Skip leaves the destination exactly as it was.
+    win, lay = setup_conflict("/etc/resolv.conf")
+    was = size_of(dbg, f"{CLIP}/dst", "one.txt")
+    pick_button(win, lay, 2)                  # ...to Skip
+    time.sleep(2.0)
+    res.check("Skip leaves the destination untouched",
+              names(f"{CLIP}/dst") == ["one.txt"] and
+              size_of(dbg, f"{CLIP}/dst", "one.txt") == was,
+              f"dst={names(f'{CLIP}/dst')} size {was} -> "
+              f"{size_of(dbg, f'{CLIP}/dst', 'one.txt')}")
+
+    # Overwrite replaces the CONTENT -- by size, since a copy that made
+    # an empty file passes any check that only looks at the listing.
+    win, lay = setup_conflict("/etc/resolv.conf")
+    src_size = size_of(dbg, CLIP, "one.txt")
+    pick_button(win, lay, 0)                  # Overwrite is the default
+    time.sleep(2.5)
+    res.check("Overwrite replaces the destination's CONTENT",
+              size_of(dbg, f"{CLIP}/dst", "one.txt") == src_size,
+              f"dst is {size_of(dbg, f'{CLIP}/dst', 'one.txt')}B, source is {src_size}B")
 
     dbg.send(f"sh rm -r {CLIP}")
 
