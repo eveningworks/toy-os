@@ -22,6 +22,8 @@
 #include "klog.h"
 #include "display.h"  // lsdev names the active display driver
 #include "usb.h"      // lsdev names the USB controller; `usb` dumps its rings
+#include "lapic.h"    // lsdev reports the LAPIC and its MSI vectors
+#include "idt.h"      // idt_spurious_count()
 #include "sound.h"    // lsdev names the sound devices and which is active
 #include "input.h"    // ...and every registered input source
 #include "virtio_input.h" // ...and whether virtio input is actually delivering
@@ -197,6 +199,18 @@ static void dbg_cmd_lsdev(void) {
         klog_write("Display: none claimed\r\n");
     }
 
+    // The Local APIC, when there is one. Reported beside the USB
+    // controller because that is the device using its vectors, and
+    // because "is this machine on MSI or on pins?" has no other answer
+    // from outside the kernel.
+    {
+        char apic[96];
+        if (lapic_summary(apic, sizeof apic))
+            klog_printf("LAPIC: %s, %u spurious\r\n", apic, idt_spurious_count());
+        else
+            klog_write("LAPIC: not enabled -- every device is on the 8259 PIC\r\n");
+    }
+
     char usbline[96];
     if (usb_controller_summary(usbline, sizeof usbline))
         klog_printf("USB: %s\r\n", usbline);
@@ -228,7 +242,10 @@ static void dbg_cmd_lsdev(void) {
         // and polled looks identical to one that is claimed and
         // interrupt-driven until you ask.
         char how[16];
-        if (src->irq) k_snprintf(how, sizeof how, "irq %u", (unsigned)src->irq);
+        if (src->msi_vector)
+            k_snprintf(how, sizeof how, "msi %u", (unsigned)src->msi_vector);
+        else if (src->irq)
+            k_snprintf(how, sizeof how, "irq %u", (unsigned)src->irq);
         else k_strlcpy(how, "polled", sizeof how);
         klog_printf("  %s%s%s%s%s  [%s]\r\n", src->name,
                      (src->caps & INPUT_CAP_KEYS)  ? "  keys" : "",

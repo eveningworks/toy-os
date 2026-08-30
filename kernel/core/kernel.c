@@ -32,6 +32,7 @@
 #include "timer.h"
 #include "font_config.h"
 #include "setting.h"
+#include "lapic.h"  // lapic_init() -- the LAPIC, and the vectors MSI uses
 #include "acpi.h"   // acpi_init() -- the firmware tables, and what poweroff needs from them
 #include "query.h"   // the fact registry -- query_init() and the core's providers
 #include "mm_audit.h" // mm_audit_query_init() -- QUERY_MMAUDIT
@@ -185,6 +186,13 @@ void kernel_main(uint64_t multiboot_info_addr) {
 
     idt_init();
     klog_write("toy-os: IDT/PIC/PIT initialized, interrupts enabled\n");
+
+    // The Local APIC, in virtual wire mode so the 8259 keeps delivering
+    // every legacy line. AFTER idt_init(), because the spurious vector
+    // needs a gate before anything can be delivered to it, and before
+    // any PCI driver looks for an MSI vector to claim. A machine with no
+    // APIC, or one booted with `nomsi`, simply stays on the PIC.
+    lapic_init();
 
     // Monotonic time, on the PIT to begin with. Before anything wants a
     // timestamp and before cpu_info_init() below, which calibrates the

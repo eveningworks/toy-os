@@ -113,6 +113,14 @@ TOOLS = [
     # assertion rather than a guess.
     ("usb_audio",   "usb_audio_test.py",       "USB audio: isoch OUT, and which card plays", True, None,             False),
 
+    # --- interrupts ---------------------------------------------------
+    # The only run in which anything reaches the Local APIC. Its own
+    # guest, with USB hardware, because the load-bearing check is that
+    # moving a mouse delivers interrupts on a vector -- which nothing
+    # else here would notice the absence of, since every control
+    # transfer polls.
+    ("msi",         "msi_test.py",             "the LAPIC, and the xHCI on an MSI-X vector", True, None,              False),
+
     # --- input --------------------------------------------------------
     ("kbd",         "kbd_test.py",             "`kbd`'s four columns, both drivers", True,  None,                   False),
     ("kbd_paths",   "keyboard_paths_test.py",  "PS/2 and virtio-input agree",        True,  None,                   False),

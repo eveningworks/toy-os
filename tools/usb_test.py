@@ -148,8 +148,19 @@ def phase_keyboard(instance, kvm=False):
         lsdev = d.send("lsdev") or ""
         check("lsdev lists a usb-keyboard input source",
               "usb-keyboard" in lsdev)
+        # EITHER WAY OF BEING INTERRUPT-DRIVEN COUNTS, and the point of
+        # the check is the third state: `[polled]`, which is what a
+        # controller with no usable interrupt falls back to. It reads
+        # `[msi N]` on a machine whose LAPIC came up (the default now)
+        # and `[irq N]` on one booted with `nomsi` or without an APIC --
+        # asserting the line form alone failed the day the xHCI moved to
+        # a vector, on a controller that had become MORE
+        # interrupt-driven, not less.
+        flat = lsdev.replace("\t", " ")
         check("the controller is interrupt-driven, not polled",
-              "usb-xhci  [irq" in lsdev.replace("\t", " "))
+              "usb-xhci  [irq" in flat or "usb-xhci  [msi" in flat,
+              next((ln.strip() for ln in flat.splitlines()
+                    if "usb-xhci" in ln), "no usb-xhci line"))
         check("PS/2 is still registered beside it",
               "ps2-keyboard" in lsdev and "ps2-mouse" in lsdev)
 

@@ -236,6 +236,15 @@ void pci_config_write16(const struct pci_device *dev, uint8_t offset, uint16_t v
     config_write16(dev->bus, dev->device, dev->function, offset, value);
 }
 
+void pci_config_write32(const struct pci_device *dev, uint8_t offset, uint32_t value) {
+    if (!dev) return;
+    // The native width of the mechanism -- no read-modify-write needed,
+    // unlike the 16-bit form above.
+    outl(PCI_CONFIG_ADDRESS,
+         config_address(dev->bus, dev->device, dev->function, offset));
+    outl(PCI_CONFIG_DATA, value);
+}
+
 // A device with no capability list reports so in Status (offset 0x06)
 // bit 4. Walking one anyway would read whatever offset 0x34 happens to
 // hold, which on such a device is not a pointer to anything.

@@ -835,6 +835,46 @@ from PS/2** because QEMU routes keystrokes to it -- which is why the
 axis is off by default, and what makes `tools/usb_test.py`
 self-controlling.
 
+## THERE IS A LOCAL APIC NOW, AND A DEVICE MAY BE ON A VECTOR INSTEAD OF A LINE
+
+`kernel/arch/x86_64/lapic.c` enables the Local APIC; `pci_msi.c`
+programs a device's MSI or MSI-X capability to deliver on one of its
+vectors. The xHCI is the first (and so far only) device to take one.
+Five things to know:
+
+- **ENABLING THE LAPIC MOVES THE 8259's WIRE, and that is the one way
+  to break the machine here.** Before it is enabled the PIC drives the
+  CPU's INTR pin directly; after, INTR is the LAPIC's and the PIC
+  reaches the CPU only through LINT0. `lapic_init()` programs LINT0 for
+  ExtINT and LINT1 for NMI -- "virtual wire mode" -- before it returns.
+  Get that wrong and the timer, the keyboard and the disk stop at once,
+  which does not look like an APIC bug, it looks like a hang on the
+  first tick.
+- **MSI-X FIRST, THEN MSI, THEN THE PIN.** The order Linux's
+  `pci_alloc_irq_vectors()` uses, and not academic: QEMU's `qemu-xhci`
+  offers MSI-X and NO MSI at all, so a driver that only knew MSI would
+  silently stay on its line on the default machine.
+- **AN MSI VECTOR IS NOT AN IRQ NUMBER**, and `struct input_source` has
+  a separate field for it. Reusing `irq` made every HID device on an MSI
+  controller report itself POLLED (`irq == 0` already means that) and
+  install a poll thunk it did not need.
+- **DISABLING INTx IS NOT OPTIONAL.** A device with MSI enabled must not
+  also assert its pin; the bit that stops it is in the command register,
+  not the capability, and a device left free to assert a line whose
+  handler has moved to a vector is exactly the storm `irq.c` warns
+  about, on a line nobody is listening to.
+- **`nomsi` KEEPS THE WHOLE THING OFF**, which is the fallback a CPU
+  with no APIC takes anyway and therefore has to keep working. The EOI
+  goes to the LAPIC for a vector and to the 8259 for a line -- sending
+  either to the wrong one retires somebody else's interrupt.
+
+**Testing it is about DELIVERY, not configuration.** Every control
+transfer in the xHCI driver polls the event ring, so a controller whose
+interrupts go nowhere still enumerates, registers its devices and logs
+"running". `tools/msi_test.py` moves the mouse and requires the
+interrupt count and the decoded-report count to rise together, which is
+the only thing here an interrupt is load-bearing for.
+
 ## USB AUDIO IS A SOUND DEVICE ON AN ISOCHRONOUS ENDPOINT, AND THE FORMAT IS NOT NEGOTIATED
 
 `kernel/drivers/usb/usb_audio.c` binds a USB Audio Class **1.0**

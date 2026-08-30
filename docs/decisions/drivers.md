@@ -1379,6 +1379,69 @@ persistence and range enforcement, and the driver contributes one
 `set_volume` op mapping percent onto its attenuators.
 
 
+## The Local APIC, and one device off the shared pin
+
+The 8259 PIC gave this kernel sixteen level-triggered lines that
+devices share, and every consequence of that has been paid for at least
+once: a "was it mine?" read in every handler on a line, a boot hang
+when virtio-input asserted a line nothing was reading yet, and -- the
+question that started this -- an xHCI and an AC'97 both landing on
+IRQ 11 because that is what the BIOS wrote in config byte 0x3C. The
+Local APIC is enabled now and the xHCI delivers through an MSI-X vector
+instead.
+
+**Why this could not have been done earlier, stated because `virtio.h`
+has carried the sentence for a year: an MSI is a memory write to
+0xFEE00000, and until something enables the Local APIC there is nothing
+at that address to receive it.** The PCI half -- find the capability,
+write an address and a vector, set the enable bit -- is thirty lines.
+The LAPIC is the dependency, and it is why "just use MSI" was never a
+small change.
+
+**Virtual wire mode is the whole risk.** Enabling the LAPIC takes the
+CPU's INTR pin away from the 8259, which then reaches the CPU only
+through the LAPIC's LINT0 input. Programmed for ExtINT, every legacy
+line keeps working exactly as before; left masked, the timer, the
+keyboard and the disk stop together on the first tick, and the symptom
+is a machine that hangs during boot with no clue as to why. That single
+register write is the difference, and it is why `lapic_init()` does it
+before it returns rather than leaving it to a later stage.
+
+**MSI-X before MSI, which is not the order the names suggest.** Linux's
+`pci_alloc_irq_vectors()` tries MSI-X, then MSI, then INTx, and the
+reason showed up immediately here: QEMU's `qemu-xhci` advertises MSI-X
+and no MSI at all, so an implementation that only knew MSI worked when
+forced with `msi=on` and quietly stayed on its pin on the default
+machine. MSI-X is also the only form with a future here -- its table
+gives one address and data pair PER ENTRY, which is what a multi-queue
+device (NVMe, virtio-net with several queues) needs and what MSI, with
+one shared pair and a power-of-two vector block, cannot express.
+
+**What was deliberately NOT done.** No I/O APIC: the legacy lines still
+go through the 8259, which is fine because virtual wire keeps them
+working and nothing else wants a vector yet. No per-queue vectors: the
+xHCI has sixteen interrupters and this uses one, because one device
+with one queue is what proves the mechanism. And nothing here starts
+another processor -- `docs/smp-design.md` still owns that, and the
+LAPIC arriving does not change its staging.
+
+**The escape hatch is a boot flag, and it is the same argument `nopat`
+and `novirtio` make.** `nomsi` keeps the LAPIC off entirely, which is
+also the path a CPU with no APIC takes -- so the fallback is not a
+theory, it is a configuration that has to keep working and can be
+booted on demand. Measured: with `nomsi` the controller is back on
+IRQ 11 and USB input still works.
+
+**And the test had to be about DELIVERY.** Configuration proves
+nothing, because every control transfer in the xHCI driver polls the
+event ring: a controller whose interrupts vanish still enumerates its
+devices, registers them with the input core and logs "running". The
+only thing an interrupt is load-bearing for is an asynchronous HID
+report, so `tools/msi_test.py` moves the mouse and requires both the
+interrupt count and the decoded-report count to rise. With INTx
+disabled by the MSI-X programming, an interrupt that arrives can only
+have come from the vector.
+
 ## USB audio: one more sound device, and the three things that were not obvious
 
 The AC'97 was written as "the first `struct sound_device`", and a USB

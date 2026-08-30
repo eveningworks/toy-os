@@ -1714,6 +1714,20 @@ window without going through it will find its layout polls timing out.
   get`, since boot chatter mentions `ac97` too and a substring match
   passed on a guest whose setting had not been restored at all. On
   demand, not in the gate: it boots its own guest with extra hardware.
+- **`msi_test.py`** -- the Local APIC, and the xHCI delivering through
+  MSI-X instead of its shared pin. **Its load-bearing check is that
+  interrupts ARRIVE, and enumeration cannot show that**: every control
+  transfer in the xHCI driver polls the event ring, so a controller
+  whose interrupts go nowhere still finds its devices, registers them
+  and logs "running" -- the whole boot looks perfect. Only an
+  asynchronous HID report needs a real interrupt, so the tool moves the
+  mouse and requires the controller's interrupt count AND its decoded
+  reports to rise; with INTx disabled by the MSI-X programming, an
+  interrupt that arrives can only have come from the vector. **Its
+  control is a boot flag** -- `make iso KCMDLINE="nomsi"` puts the
+  machine back on the 8259 -- and it is documented in the tool rather
+  than run by it, since baking a flag rewrites the shared media
+  (`ahci_test.py` makes the same call about `noahci`). On demand.
 - **`ahci_test.py`** -- boots with the filesystem on a **SATA drive
   behind an ICH9 host bus adapter**, which is the only thing here that
   reaches `kernel/drivers/ahci.c` at all. Several boots, on demand.

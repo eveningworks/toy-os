@@ -348,7 +348,11 @@ int usb_hid_bind(struct usb_device_info *info) {
         // rides the controller's own always-on poll; a polled one gets
         // its thunk, indexed by the slot it landed in.
         d->src.irq  = usb_controller_irq();
-        d->src.poll = d->src.irq ? 0 : POLLS[d - g_hid];
+        d->src.msi_vector = usb_controller_msi_vector();
+        // Interrupt-driven if the controller is, WHICHEVER way it is
+        // signalled -- reading `irq` alone made every HID device on an
+        // MSI controller install a poll thunk and report itself polled.
+        d->src.poll = (d->src.irq || d->src.msi_vector) ? 0 : POLLS[d - g_hid];
 
         d->in_use = 1;          // published before the source can be polled
         input_register_source(&d->src);

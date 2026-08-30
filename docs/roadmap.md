@@ -612,7 +612,9 @@ run on, not by order.
 - [x] ~~`virtio-blk`: a block device that isn't ATA~~
 - [x] ~~`virtio-rng`: entropy, registered as a krandom source~~
 - [x] ~~`virtio-input`: keyboard/mouse/tablet that isn't PS/2, on an input core with a source registry~~
-- [ ] A Local APIC, and MSI-X interrupts on top of it
+- [x] ~~A Local APIC, and MSI-X interrupts on top of it~~ DONE 2026-08-30 -- the xHCI is on a vector; `nomsi` falls back to the PIC
+- [ ] An I/O APIC, so the legacy lines stop going through the 8259 as well
+- [ ] MSI-X vectors per QUEUE rather than one per device -- what multi-queue virtio and NVMe want
 - [ ] Re-key `/etc/kbs` layouts to evdev keycodes, removing the input core's translation table
 
 ### other emulated hardware worth claiming
@@ -652,7 +654,7 @@ run on, not by order.
 - [ ] I/O submission/completion queues
 - [ ] Backend parity with `ata.c` and the AHCI/SATA driver
 - [ ] Doorbell registers and the queue-wrap arithmetic they need
-- [ ] MSI/MSI-X interrupts -- NVMe doesn't use legacy pin-based IRQs
+- [x] ~~MSI/MSI-X interrupts -- NVMe doesn't use legacy pin-based IRQs~~ DONE 2026-08-30 -- `pci_msi.c`, proven on the xHCI
 - [ ] Namespace enumeration (an NVMe disk can present several)
 - [ ] Multiple queue pairs, and whether to bother before SMP exists
 - [ ] The 4KB-sector question: NVMe devices commonly aren't 512-byte

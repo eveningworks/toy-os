@@ -20,6 +20,7 @@
 #include "xhci_regs.h"
 #include "xhci_ring.h"
 #include "pci.h"
+#include "lapic.h"
 #include "pci_internal.h"
 #include "pmm.h"
 #include "irq.h"
@@ -67,7 +68,13 @@ struct xhci_hc {
     uint8_t  ac64;
     uint32_t page_size;
 
-    uint8_t  irq;            // 0 when polled
+    uint8_t  irq;            // INTx line, 0 when polled or on MSI
+    // The MSI vector, or 0 when this controller is on a pin. The two are
+    // mutually exclusive by construction -- pci_msi_enable() disables
+    // INTx -- and `irq` is what lsdev and the HID sources mirror, so it
+    // is left 0 rather than made to mean two things.
+    uint8_t  msi_vector;
+    uint8_t  msix;           // 1 when that vector came from MSI-X, not MSI
     uint8_t  ppc;            // HCCPARAMS1.PPC: ports need PORTSC.PP set
     uint8_t  present;
     uint8_t  running;
@@ -1548,8 +1555,32 @@ void usb_init(void) {
     // docs/conventions/kernel.md, and it exists because getting it
     // backwards hung this guest 3 boots in 3 under KVM and never once
     // under TCG.
+    // MSI FIRST, THE PIN AS A FALLBACK. This controller is the one
+    // device here that gains most from it: its INTx line is whatever
+    // the BIOS wrote into config byte 0x3C, routinely shared (an AC'97
+    // and this controller both land on IRQ 11 on QEMU's pc machine),
+    // and level-triggered, so the "was it mine?" read runs on every
+    // interrupt anything on that line raises. An MSI belongs to one
+    // device and cannot be shared at all.
+    //
+    // Falling back is the ordinary path, not an error: no LAPIC (an
+    // older CPU, or `nomsi` on the GRUB line) and no MSI capability
+    // both mean the pin, exactly as before.
     uint8_t line = d->interrupt_line;
-    if (line == 0xFF || line == 0 || line >= 16) {
+    g_hc.msi_vector = lapic_alloc_vector(xhci_irq_handler);
+    if (g_hc.msi_vector) {
+        // MSI-X FIRST, then MSI -- the order Linux's
+        // pci_alloc_irq_vectors() tries, and for the same reason: MSI-X
+        // is what a PCIe device actually offers (QEMU's qemu-xhci has
+        // MSI-X and no MSI at all), and it is the only form that could
+        // later give this controller's other interrupters a vector each.
+        if (pci_msix_enable(d, g_hc.msi_vector))      g_hc.msix = 1;
+        else if (!pci_msi_enable(d, g_hc.msi_vector)) g_hc.msi_vector = 0;
+    }
+
+    if (g_hc.msi_vector) {
+        g_hc.irq = 0;   // nothing on a line any more
+    } else if (line == 0xFF || line == 0 || line >= 16) {
         klog_printf("usb: no usable INTx line (pin reports %u) -- polling\n", line);
         g_hc.irq = 0;
     } else {
@@ -1566,6 +1597,7 @@ void usb_init(void) {
     // decode rides this one.
     g_hc_source.poll = xhci_poll_source;
     g_hc_source.irq  = g_hc.irq;
+    g_hc_source.msi_vector = g_hc.msi_vector;
     input_register_source(&g_hc_source);
 
     // Run before arming, so a device already attached raises its port
@@ -1582,16 +1614,27 @@ void usb_init(void) {
     g_hc.running = 1;
 
     // --- and enable last ----------------------------------------------
-    if (g_hc.irq) {
+    //
+    // The interrupter is armed the same way either way: what differs is
+    // only how the controller signals. pci_msi_enable() has already
+    // disabled the pin for the MSI case, which is why the INTx clear
+    // below belongs to the line case alone.
+    if (g_hc.irq || g_hc.msi_vector) {
         mw32(g_hc.rt, XHCI_IR0 + XHCI_IMAN,
              mr32(g_hc.rt, XHCI_IR0 + XHCI_IMAN) | XHCI_IMAN_IE);
         mw32(g_hc.op, XHCI_USBCMD, mr32(g_hc.op, XHCI_USBCMD) | XHCI_CMD_INTE);
+    }
+    if (g_hc.irq) {
         pci_command_update(d, 0, PCI_CMD_INTX_DISABLE);   // the commit point
         pic_clear_mask(g_hc.irq);
     }
 
-    klog_printf("usb: running, %s\n",
-                g_hc.irq ? "interrupt-driven" : "polled");
+    if (g_hc.msi_vector)
+        klog_printf("usb: running, %s on vector %u\n",
+                    g_hc.msix ? "MSI-X" : "MSI", g_hc.msi_vector);
+    else
+        klog_printf("usb: running, %s\n",
+                    g_hc.irq ? "interrupt-driven" : "polled");
 
     usb_query_init();
     power_ports();
@@ -1602,6 +1645,7 @@ void usb_init(void) {
 
 int usb_controller_present(void) { return g_hc.present; }
 uint8_t usb_controller_irq(void) { return g_hc.irq; }
+uint8_t usb_controller_msi_vector(void) { return g_hc.msi_vector; }
 
 int usb_controller_summary(char *buf, uint32_t cap) {
     if (!g_hc.present || !buf || !cap) return 0;
@@ -1609,8 +1653,10 @@ int usb_controller_summary(char *buf, uint32_t cap) {
                g_hc.pci->vendor_id, g_hc.pci->device_id,
                g_hc.pci->bus, g_hc.pci->device, g_hc.pci->function,
                g_hc.max_ports,
-               g_hc.running ? (g_hc.irq ? "running" : "running (polled)")
-                            : "not running");
+               !g_hc.running ? "not running"
+                 : g_hc.msi_vector ? (g_hc.msix ? "running (MSI-X)" : "running (MSI)")
+                 : g_hc.irq        ? "running"
+                                   : "running (polled)");
     return 1;
 }
 

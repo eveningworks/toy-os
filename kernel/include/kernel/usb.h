@@ -166,6 +166,13 @@ void usb_hub_forget(uint8_t slot);
 // for the controller that actually fields its interrupts.
 uint8_t usb_controller_irq(void);
 
+// ...or the MSI/MSI-X vector, when the controller is not on a line at
+// all. A HID source mirrors whichever is set, so `lsdev` reports the
+// device the same way it reports the controller that fields its
+// interrupts -- and so a driver does not install a poll thunk for a
+// controller that is perfectly capable of interrupting.
+uint8_t usb_controller_msi_vector(void);
+
 uint32_t usb_events_seen(void);
 uint32_t usb_irqs_seen(void);
 

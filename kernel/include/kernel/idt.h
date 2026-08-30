@@ -49,4 +49,8 @@ int isr_in_progress(void);
 // the (now unreachable) decrements that should have run.
 void isr_reset_depth(void);
 
+// Spurious LAPIC interrupts seen since boot -- reported by `lsdev`
+// beside the controller. See idt.c.
+uint32_t idt_spurious_count(void);
+
 #endif

@@ -69,12 +69,22 @@ ISR_ERR   29
 ISR_ERR   30
 ISR_NOERR 31
 
-; IRQs remapped to 32-47
+; IRQs remapped to 32-47, then the MSI vectors at 48-63 (lapic.h's
+; LAPIC_VECTOR_BASE..LAST). One stub apiece either way -- the vector
+; number is what tells isr_dispatch() which controller to acknowledge,
+; so the two ranges must not overlap and this %rep is where that is
+; decided.
 %assign i 32
-%rep 16
+%rep 32
 ISR_NOERR i
 %assign i i+1
 %endrep
+
+; The LAPIC's spurious vector (lapic.h's LAPIC_SPURIOUS_VECTOR). It
+; needs a gate for the same reason every vector does -- one delivered
+; with no descriptor behind it is a #GP, and the spurious one arrives
+; precisely when something has already gone slightly wrong.
+ISR_NOERR 255
 
 ; Syscall entry: software interrupt (int 0x80), raised deliberately by
 ; ring-3 code, not a hardware IRQ -- its IDT gate gets DPL=3 (see

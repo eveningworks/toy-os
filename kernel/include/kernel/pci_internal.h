@@ -43,6 +43,11 @@ uint32_t pci_config_read32(const struct pci_device *dev, uint8_t offset);
 // writes the containing dword, so neighbouring registers are undisturbed.
 void pci_config_write16(const struct pci_device *dev, uint8_t offset, uint16_t value);
 
+// The mechanism's NATIVE width, needed by MSI: a message address is a
+// 32-bit register and writing it as two halves would leave the device
+// briefly pointed at a spliced address.
+void pci_config_write32(const struct pci_device *dev, uint8_t offset, uint32_t value);
+
 // --- the capability list ---------------------------------------------
 //
 // A PCI device advertises optional features as a singly-linked list
@@ -109,5 +114,26 @@ uint64_t pci_bar_mem_addr(const struct pci_device *dev, int index);
 // and shared, so a device left free to assert it with nothing installed
 // to acknowledge it holds the line down for every other device on it.
 uint16_t pci_command_update(const struct pci_device *dev, uint16_t set, uint16_t clear);
+
+// --- MSI (kernel/drivers/pci_msi.c) -----------------------------------
+//
+// Points the device's MSI capability at `vector` on this CPU's LAPIC
+// and disables its INTx pin. Returns 1 when the device took it, 0 when
+// it has no MSI capability or there is no LAPIC to deliver to -- both
+// of which are ordinary answers, and the caller's cue to stay on its
+// line. `vector` comes from lapic_alloc_vector().
+int pci_msi_enable(const struct pci_device *dev, uint8_t vector);
+
+// Does the device advertise MSI at all? For reporting, and for a
+// driver that wants to say WHY it is still on a pin.
+int pci_msi_capable(const struct pci_device *dev);
+
+// MSI-X: the same, with the message table in a BAR instead of in config
+// space. PREFER THIS ONE -- it is what a PCIe device actually offers
+// (QEMU's own xHCI has MSI-X and no MSI), and it is the only form that
+// could later give a multi-queue device a vector per queue. One entry
+// is programmed; the rest of the table stays masked.
+int pci_msix_enable(const struct pci_device *dev, uint8_t vector);
+int pci_msix_capable(const struct pci_device *dev);
 
 #endif

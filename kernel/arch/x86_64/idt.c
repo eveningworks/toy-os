@@ -4,6 +4,7 @@
 #include "kfmt.h"
 #include "pic.h"
 #include "irq.h"
+#include "lapic.h"
 #include "keyboard.h"
 #include "i8042.h"
 #include "timer.h"
@@ -57,6 +58,13 @@ extern void isr32(void); extern void isr33(void); extern void isr34(void); exter
 extern void isr36(void); extern void isr37(void); extern void isr38(void); extern void isr39(void);
 extern void isr40(void); extern void isr41(void); extern void isr42(void); extern void isr43(void);
 extern void isr44(void); extern void isr45(void); extern void isr46(void); extern void isr47(void);
+// The MSI vectors (kernel/lapic.h's LAPIC_VECTOR_BASE..LAST) and the
+// LAPIC's spurious vector.
+extern void isr48(void); extern void isr49(void); extern void isr50(void); extern void isr51(void);
+extern void isr52(void); extern void isr53(void); extern void isr54(void); extern void isr55(void);
+extern void isr56(void); extern void isr57(void); extern void isr58(void); extern void isr59(void);
+extern void isr60(void); extern void isr61(void); extern void isr62(void); extern void isr63(void);
+extern void isr255(void);
 
 // Syscall entry (int 0x80) -- see isr.asm's comment there for why it's
 // separate from the vectors 0-47 above.
@@ -73,13 +81,15 @@ void idt_set_gate(uint8_t vector, void (*handler)(void), uint8_t ist, uint8_t ty
     idt[vector].zero = 0;
 }
 
-static void (*const isr_table[48])(void) = {
+static void (*const isr_table[64])(void) = {
     isr0, isr1, isr2, isr3, isr4, isr5, isr6, isr7,
     isr8, isr9, isr10, isr11, isr12, isr13, isr14, isr15,
     isr16, isr17, isr18, isr19, isr20, isr21, isr22, isr23,
     isr24, isr25, isr26, isr27, isr28, isr29, isr30, isr31,
     isr32, isr33, isr34, isr35, isr36, isr37, isr38, isr39,
     isr40, isr41, isr42, isr43, isr44, isr45, isr46, isr47,
+    isr48, isr49, isr50, isr51, isr52, isr53, isr54, isr55,
+    isr56, isr57, isr58, isr59, isr60, isr61, isr62, isr63,
 };
 
 static const char *exception_names[32] = {
@@ -129,9 +139,14 @@ static void mouse_irq_handler(uint64_t *regs) {
 }
 
 void idt_init(void) {
-    for (int i = 0; i < 48; i++) {
+    for (int i = 0; i < 64; i++) {
         idt_set_gate(i, isr_table[i], 0, 0x8E); // present, ring0, 64-bit interrupt gate
     }
+
+    // The LAPIC's spurious vector. Installed whether or not the LAPIC is
+    // ever enabled: a gate costs nothing and a vector delivered without
+    // one is a #GP on top of whatever already went wrong.
+    idt_set_gate(LAPIC_SPURIOUS_VECTOR, isr255, 0, 0x8E);
 
     // The DOUBLE FAULT gate runs on IST slot 1 (gdt.c's df_stack). It
     // is the ONLY gate that needs one, and it needs it for one reason:
@@ -174,6 +189,13 @@ void idt_init(void) {
 // (process.c's longjmp-style process teardown) where a decrement below
 // never runs and this needs forcing back to 0 from outside.
 static volatile int g_isr_depth = 0;
+
+// Spurious LAPIC interrupts. A handful over a boot is normal (a masked
+// line racing an in-flight delivery); a rising count is a real symptom,
+// which is why it is counted rather than ignored silently.
+static volatile uint32_t g_spurious = 0;
+
+uint32_t idt_spurious_count(void) { return g_spurious; }
 
 // WHICH SIGNAL AN EXCEPTION IS, or 0 for one no program may catch.
 //
@@ -336,6 +358,16 @@ void isr_dispatch(uint64_t *regs) {
         // still calls scheduler_tick(), just from inside its own
         // registered handler now rather than as a separate line here.
         irq_dispatch((uint8_t)(vector - 32), regs);
+    } else if (vector >= LAPIC_VECTOR_BASE && vector <= LAPIC_VECTOR_LAST) {
+        // AN MSI. Acknowledged to the LAPIC, never to the 8259 -- a PIC
+        // EOI here would clear an in-service bit belonging to whichever
+        // line happened to be live, and the LAPIC's would stay set.
+        lapic_dispatch_vector((uint8_t)vector, regs);
+    } else if (vector == LAPIC_SPURIOUS_VECTOR) {
+        // BY ARCHITECTURE, NO EOI. The LAPIC did not set an in-service
+        // bit for a spurious interrupt, so acknowledging one would
+        // retire somebody else's.
+        g_spurious++;
     } else if (vector == 128) {
         // A PENDING SIGNAL BEATS THE SYSCALL, and this is not an
         // optimisation -- it is what makes interrupting a blocked

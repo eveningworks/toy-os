@@ -62,6 +62,14 @@ struct input_source {
     // log line, which is unreadable by the time anything asks: the klog
     // is a ring buffer and a desktop rolls it over in seconds.
     uint8_t irq;
+
+    // ...or the MSI/MSI-X VECTOR it is delivered on, when it is not on a
+    // line at all. Its own field rather than reusing `irq` because the
+    // two are different namespaces -- vector 48 and IRQ 48 are not the
+    // same thing -- and because `irq == 0` already means "polled", which
+    // an MSI-driven device very much is not. lsdev prints whichever is
+    // set.
+    uint8_t msi_vector;
 };
 
 void input_register_source(const struct input_source *src);

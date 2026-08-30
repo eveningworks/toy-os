@@ -620,6 +620,7 @@ whenever a headline here tells you something you did not already know.
 - **RING-3 `malloc` TAKES A LOCK; THE KERNEL'S DOES NOT**
 - **THE THREAD POINTER IS FS.base, AND THE SCHEDULER RELOADS IT**
 - **THERE IS A SOUND CLASS, ITS STREAM IS EXCLUSIVE, AND THE RING IS SHARED MEMORY**
+- **THERE IS A LOCAL APIC NOW, AND A DEVICE MAY BE ON A VECTOR INSTEAD OF A LINE**
 - **USB AUDIO IS A SOUND DEVICE ON AN ISOCHRONOUS ENDPOINT, AND THE FORMAT IS NOT NEGOTIATED**
 - **AN ISOCHRONOUS ENDPOINT DOES NOT HALT, AND ITS RING RUNNING DRY IS NORMAL**
 - **THERE IS A NETWORK DEVICE CLASS, THE STACK IS IN THE KERNEL, AND THE RECEIVE PATH IS SPLIT ACROSS AN INTERRUPT**
@@ -1248,7 +1249,7 @@ cost".
   `ls_test.py`, `mem_stress.py`, `mkpart_test.py`,
   `multidisk_test.py`, `net_test.py`, `partition_test.py`,
   `poweroff_test.py`, `qemu_matrix.py`, `serial_backpressure_test.py`, `stdin_test.py`,
-  `taskbar_test.py`, `terminal_probe.py`, `tfs3_v1_test.py`,
+  `msi_test.py`, `taskbar_test.py`, `terminal_probe.py`, `tfs3_v1_test.py`,
   `usb_audio_test.py`, `usb_test.py`, `virtio_boot_test.py`,
   `virtio_gpu_test.py`, `virtio_input_test.py`.
 - **Disk images, from the host** -- `seed_disk.py` (the format-aware
