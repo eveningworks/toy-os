@@ -835,6 +835,60 @@ from PS/2** because QEMU routes keystrokes to it -- which is why the
 axis is off by default, and what makes `tools/usb_test.py`
 self-controlling.
 
+## USB AUDIO IS A SOUND DEVICE ON AN ISOCHRONOUS ENDPOINT, AND THE FORMAT IS NOT NEGOTIATED
+
+`kernel/drivers/usb/usb_audio.c` binds a USB Audio Class **1.0**
+playback interface and registers a `struct sound_device` -- the second
+implementer of that registry, exactly as its class comment predicted.
+Five things to know:
+
+- **UAC1, not 2.** Class 1.0 is what a device speaks to work everywhere
+  without a driver, and it is what QEMU's `usb-audio` emulates -- which
+  is the only way any of this is tested. UAC2's high-speed rates and
+  clock-source topology buy nothing at one fixed format.
+- **The format is REFUSED, never resampled.** `abi/sound_abi.h` fixes
+  the stream at 48 kHz stereo s16le; a device advertising anything else
+  is left unbound, because resampling belongs in `userland/lib/usnd.h`
+  where it already exists. At 48 kHz that is 192 bytes every 1 ms frame,
+  and the endpoint is SYNCHRONOUS -- locked to the bus's own SOF clock,
+  so there is no drift to correct and no feedback endpoint to build.
+- **THE ENDPOINT LIVES IN AN ALTERNATE SETTING**, which is why
+  `usb_enum.c`'s interface walk cannot see it: an AudioStreaming
+  interface's alt 0 carries NO endpoints by design (it is the
+  "idle, no bandwidth" setting), so the driver parses the raw
+  configuration itself and issues SET_INTERFACE before configuring
+  anything.
+- **A FEATURE-UNIT REQUEST GOES TO THE AUDIOCONTROL INTERFACE**, never
+  to the streaming one -- wIndex is `(unit << 8) | ac_ifnum`. Getting
+  that wrong is not a refusal you can see: the device fails the
+  transfer, and (before the control path learned to notice) that
+  presented as a two-million-poll hang per request with ep0 left
+  halted.
+- **The samples are COPIED into a frame of the driver's own**, unlike
+  the AC'97's descriptors which point straight into the core's ring.
+  192 divides neither the 64 KiB ring nor its 2 KiB chunks, and an xHCI
+  TRB may not cross a 64 KiB boundary -- so a zero-copy packet needs
+  chained split TRBs at two kinds of edge. Linux's snd-usb-audio copies
+  for the same reason.
+
+## AN ISOCHRONOUS ENDPOINT DOES NOT HALT, AND ITS RING RUNNING DRY IS NORMAL
+
+`xhci_add_isoch_out()` / `xhci_isoch_post()`. Three things that are not
+true of the interrupt endpoints beside them:
+
+- **Ring Underrun and Missed Service are NOT errors.** They carry no
+  TRB pointer (the endpoint is named by the event itself), and treating
+  them as transfer failures resets a stream that merely stuttered --
+  turning a glitch into silence. CErr is 0 on the endpoint context for
+  the same reason: an isochronous transfer is never retried.
+- **SIA, not a Frame ID.** Every TD is posted Start-Isoch-ASAP; the
+  alternative is tracking the controller's frame counter and predicting
+  an interval ahead, which buys nothing for a continuous stream.
+- **The completion callback runs INSIDE the event drain**, so a driver
+  may refill and re-post from it and must do nothing else -- posting
+  touches only its own transfer ring and a doorbell, never the event
+  ring the drain owns.
+
 ## INPUT DEVICES REGISTER WITH THE INPUT CORE, and the canonical event is evdev
 
 `kernel/include/kernel/input.h`. A device driver does not touch the
@@ -1644,10 +1698,29 @@ mechanism. Five things to know:
   applied through the device's own attenuators -- a System Settings
   Sound row and `config set volume 40` with no UI code, the same move
   the scroll knobs made.
+- **SEVERAL DEVICES MAY BE REGISTERED; exactly one is ACTIVE.** With no
+  choice made the FIRST device discovered wins and a later plug does not
+  disturb it; `audio_device` (the second registered setting) outranks
+  discovery order and is STICKY -- it survives that card being
+  unplugged and takes effect again when it returns. `lsdev` marks the
+  active one, which is the only way to tell a machine with two working
+  cards from one with two cards where the wrong one is selected.
+- **A DEVICE CAN GO AWAY UNDER A RUNNING STREAM**, which an AC'97
+  cannot: `sound_unregister()` stops the engine and publishes
+  `device_gone` in the control page, so an app can tell "somebody
+  stopped me" from "the hardware is gone" -- the difference between
+  resuming and reopening. The stream then falls back to another
+  registered device for the next open, rather than the machine going
+  mute.
 
 **Testing it is a HOST-side job**: QEMU's wav audiodev records what
 the device played (`vm.py --audio-wav`), and `tools/audio_test.py`
-measures the frequency there. **Under TCG the recording arrives as
+measures the frequency there. **With two cards, give each its own
+recording** (`vm.py --audio both --audio-wav A --audio-wav2 B`): on one
+audiodev the file holds their MIX, so "the tone is in the file" cannot
+say which device played it, and device selection is untestable. That
+pair is what `tools/usb_audio_test.py` asserts on -- and its positive
+control put 4 s in one file and 0 s in the other. **Under TCG the recording arrives as
 correct-pitch BURSTS padded with host-side silence** -- the guest
 falls behind wall clock, not behind its own sample clock -- so
 measure within bursts and total the tone, never trust the file's

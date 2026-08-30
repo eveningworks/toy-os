@@ -106,8 +106,9 @@ QEMU, and it does not stop at "hello world from the kernel":
   where the desktop learned to give a right-click to the application
   under the cursor instead of keeping it for the window menu — and
   **DOOM**, with sound and music, in a window like any other app.
-- **Sound, and the kernel does not mix it** — an AC'97 driver behind a
-  `sound_device` registry, and a PCM stream that is a **mapped ring**
+- **Sound, and the kernel does not mix it** — an AC'97 **and a USB
+  audio** driver behind a `sound_device` registry, and a PCM stream that
+  is a **mapped ring**
   rather than a `write()` call: the app writes samples ahead of the
   hardware and the kernel publishes the play position, so steady-state
   playback costs **zero syscalls**. A consumed chunk is zeroed before
@@ -119,9 +120,13 @@ QEMU, and it does not stop at "hello world from the kernel":
   DOOM's effects and **OPL music** — the music synthesised by Chocolate
   Doom's own emulated Yamaha chip reading the WAD's GENMIDI instrument
   bank, because doomgeneric turns out to *be* Chocolate Doom with the
-  sound removed. The stream is exclusive and nothing mixes across
-  processes yet; that wants a sound daemon, and the sink interface it
-  would plug into is already there.
+  sound removed. Two cards can be present at once: the **tray's volume
+  flyout** has a slider, a mute button and the output-device list, the
+  mouse wheel over its icon moves the level, and unplugging a USB card
+  mid-playback tells the app rather than going quietly silent. The
+  stream is exclusive and nothing mixes across processes yet; that
+  wants a sound daemon, and the sink interface it would plug into is
+  already there.
 - **Its own test suite** — `make test` boots the OS headless, runs
   in-kernel tests including deliberate fault injection, and exits
   non-zero on failure. A separate GUI suite drives the desktop over a
@@ -325,6 +330,8 @@ make run VGA=virtio     #    the virtio-gpu driver
 make run VGA=vmware     #    the adapter with a hardware cursor
 make run INPUT=virtio   #    virtio keyboard, mouse and tablet
 make run AUDIO=1        # an AC97 -- needed for any sound at all
+make run AUDIO=usb      # ...or a USB audio card, on an xHCI controller
+make run AUDIO=both     #    both, so the device picker has something to pick
 make run WINDOW=full    # full-screen, pixel-exact, no decorations
 make run WINDOW=fit     # a resizable window the guest is SCALED into
 make run NOGRAPHIC=1    # serial console only -- use this over SSH
@@ -505,7 +512,8 @@ check that finds real bugs and one that reports twenty-two imaginary
 ones. Apps declare a layout rather than coordinates, and a page too big
 for its window scrolls.
 
-**Sound.** An AC'97 driver behind a `sound_device` registry, and a PCM
+**Sound.** An AC'97 and a USB Audio Class 1.0 driver behind a
+`sound_device` registry, and a PCM
 stream that is a **mapped ring** rather than a `write()` call — a control
 page plus 64 KiB of samples at a fixed address, the app writing ahead of
 the hardware and the kernel publishing the play position on each
@@ -516,7 +524,16 @@ which is the one rule that makes underruns free: zero is silence in
 signed PCM, so a stalled or killed app degrades to quiet instead of
 looping its last third of a second. The kernel stops there — it never
 mixes, exactly as ALSA's dmix, PulseAudio and Windows' audio engine
-never do it in kernel space. Above the line, `userland/lib/usnd.h` is a
+never do it in kernel space. **A USB card is the second implementer of
+that registry**, on an isochronous OUT endpoint the xHCI driver grew
+for it — the format is refused rather than resampled (48 kHz stereo
+s16, which is what the ABI fixes), the samples are copied into the
+driver's own packet frame because 192 bytes per USB frame divides
+neither the ring nor its chunks, and unplugging it mid-playback
+publishes `device_gone` so an app can tell that from being stopped.
+Which card plays is the first one discovered until somebody chooses in
+the tray's volume flyout, and that choice persists. Above the line,
+`userland/lib/usnd.h` is a
 codec table (WAV today; the rate, channel and width conversion happens
 once, in the library, never in a codec), a sixteen-voice mixer with
 stereo gains, and a sink interface a future sound daemon becomes a second

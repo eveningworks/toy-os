@@ -30,6 +30,7 @@
 #include "start_menu.h"
 #include "context_menu.h"
 #include "calendar_popup.h"
+#include "volume_popup.h"
 #include "confirm_dialog.h"
 #include "file_picker.h"
 #include "desktop.h"
@@ -757,6 +758,7 @@ void wm_run(void) {
 
     wm_render_reset(); // first frame must be a full repaint -- see wm_render.c
     tray_init();
+    volume_tray_init();   // the tray's second item, after the clock takes slot 0
 
     // Announced once per run of this loop. Reset here rather than
     // declared static-and-forgotten, because `gui` can re-enter it:
@@ -875,6 +877,7 @@ void wm_run(void) {
         wmwd_phase("startbutton");
         taskbar_poll_config();
         calendar_poll_config(); // `desktop.week_start`, same generation poll
+        volume_poll_config();   // the level and the device list, and the debounced write
 
         // Drain everything the kernel has queued for us, then read the
         // position out of it. One pump per frame, fully draining -- see
@@ -1029,6 +1032,10 @@ void wm_run(void) {
         // while their dialog is closed.
         confirm_dialog_update_press(mx, my, buttons);
         file_picker_update_press(mx, my, buttons);
+        // The volume slider tracks the pointer the same way, for the
+        // same reason: a control that only sees the button-down edge
+        // cannot be dragged.
+        if (volume_update_press(mx, my, buttons)) redraw_pending = 1;
         if (!(buttons & 0x1)) {
             if (confirm_dialog_update_hover(mx, my)) redraw_pending = 1;
             if (file_picker_update_hover(mx, my)) redraw_pending = 1;
@@ -1050,6 +1057,7 @@ void wm_run(void) {
         if (this_second != last_second) {
             last_second = this_second;
             tray_update_clock(); // also sets redraw_pending + damages the taskbar strip
+            volume_tray_update(); // the speaker icon follows the level
         }
 
         // Esc used to always exit the window manager here -- replaced by
@@ -1073,6 +1081,12 @@ void wm_run(void) {
         if (wheel == 0) wheel = wm_debug_next_wheel(); // `gui wheel`, same
                                                         // second-place rule as
                                                         // the injected key above
+
+        // THE TRAY TAKES THE WHEEL FIRST, and only over its own item or
+        // its open panel -- which is where KDE, GNOME and Windows all
+        // put volume-by-wheel. Anywhere else it falls through to the
+        // focused window, so a scrollable app is unaffected.
+        if (wheel != 0 && volume_handle_wheel(mx, my, wheel)) wheel = 0;
 
         if (key != -1 || wheel != 0) {
             // A modal file picker (e.g. Notepad's Save As...) captures

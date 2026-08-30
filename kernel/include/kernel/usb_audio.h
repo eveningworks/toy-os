@@ -1,0 +1,57 @@
+#ifndef USB_AUDIO_H
+#define USB_AUDIO_H
+
+#include <stdint.h>
+
+// USB Audio Class 1.0 playback -- see kernel/drivers/usb/usb_audio.c
+// for what it binds and what it deliberately refuses.
+
+struct usb_device_info;
+
+// One playback stream, as the configuration descriptor describes it.
+// `alt` is the load-bearing field: an AudioStreaming interface's alt 0
+// carries NO endpoint by design (it is the "idle, no bandwidth"
+// setting), so the endpoint below only exists after a SET_INTERFACE to
+// this alternate.
+struct usb_audio_stream {
+    uint8_t  ifnum;
+    uint8_t  alt;
+    uint8_t  ep;           // bEndpointAddress -- isochronous OUT
+    uint16_t mps;          // bytes per service interval, not a ceiling
+    uint8_t  interval;     // bInterval
+    // A feature-unit request is addressed to the AUDIO CONTROL
+    // interface, never to the streaming one -- wIndex is
+    // (unit << 8) | ac_ifnum. Getting that wrong is not a refusal you
+    // can see: the device simply fails the transfer.
+    uint8_t  ac_ifnum;
+    uint8_t  feature_unit; // the AudioControl unit volume is set on, 0 if none
+    uint8_t  has_volume;
+    uint8_t  has_mute;
+};
+
+// Finds a stream at abi/sound_abi.h's fixed format (48 kHz stereo s16)
+// in a configuration descriptor. Returns 1 and fills `out`, or 0 --
+// which is also the answer for a malformed descriptor, refused rather
+// than walked past. Exported for the KTESTs, which is the only way this
+// is checked on a machine with no USB audio attached.
+int usb_audio_parse(const uint8_t *cfg, uint32_t total,
+                    struct usb_audio_stream *out);
+
+// Binds an enumerated audio device: SET_INTERFACE to the streaming
+// alternate, configure the isochronous endpoint, register a
+// `sound_device`. `cfg`/`total` is the configuration descriptor
+// enumeration already read -- passed in because the class-specific
+// descriptors (the format, the feature unit) live between the standard
+// ones and usb_enum.c's interface walk does not keep them. Returns 1
+// when it took the device.
+int usb_audio_bind(struct usb_device_info *info, const uint8_t *cfg,
+                   uint32_t total);
+
+// Releases the device on `slot`, if it is the bound one. The sound core
+// publishes `device_gone` to whoever held the stream.
+void usb_audio_unbind(uint8_t slot);
+
+// Is a USB audio device bound? The KTESTs' skip condition.
+int usb_audio_bound(void);
+
+#endif

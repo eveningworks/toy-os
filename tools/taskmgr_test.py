@@ -71,6 +71,7 @@ VICTIM = "/bin/wm/demos/uidemo"   # something to list and then kill
 
 # `gui key` takes a character or a code (userland/wm/wm_debug.c).
 K_DOWN = "0x92"
+K_UP = "0x91"   # keyboard.h's KEY_ARROW_UP
 
 checks = []
 
@@ -457,14 +458,27 @@ def main():
     # table's entire key handler dead. Type-ahead shipped "working" on
     # that basis.
     #
-    # The selection is on the victim's row here, so Down moves off it
-    # and the letter must bring it back. `u` is uidemo's initial and
+    # The selection is on the victim's row here, so an arrow moves off
+    # it and the letter must bring it back. `u` is uidemo's initial and
     # nothing else in the table starts with one.
+    #
+    # WHICH ARROW DEPENDS ON WHERE THE VICTIM LANDED, and hardcoding
+    # Down is a check that passes for a reason it does not state.
+    # uui_table_key() reports nothing when the selection CANNOT move, so
+    # Down on the last row logs nothing and reads exactly like a dead key
+    # handler -- and whether the victim is last is a function of the pids
+    # this boot happened to hand out. Measured: a guest that reaped
+    # /bin/dhcp before Task Manager launched gave it pid 2 instead of 5,
+    # which put the victim last and reddened both checks below with
+    # nothing wrong in the guest.
+    at_end = (victim_row == len(pids) - 1)
     dbg.logs()
-    dbg.key(K_DOWN)
+    dbg.key(K_UP if at_end else K_DOWN)
     moved = wait_log(dbg, "taskmgr: selected pid ", timeout=2.0)
     check("an arrow key reaches the table at all", bool(moved),
-          "no `selected pid` line -- no key reaches the widget")
+          f"no `selected pid` line -- no key reaches the widget "
+          f"(row {victim_row} of {len(pids)}, sent "
+          f"{'Up' if at_end else 'Down'})")
 
     dbg.logs()
     dbg.key("u")

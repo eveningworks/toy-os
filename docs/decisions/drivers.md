@@ -1379,6 +1379,102 @@ persistence and range enforcement, and the driver contributes one
 `set_volume` op mapping percent onto its attenuators.
 
 
+## USB audio: one more sound device, and the three things that were not obvious
+
+The AC'97 was written as "the first `struct sound_device`", and a USB
+card was the test of whether that claim was true. Mostly it was -- the
+class driver registers and the ABI did not move -- but three things had
+to change, and the reasons are worth keeping.
+
+**Isochronous transfers, which the xHCI driver did not have.** USB
+Audio Class streaming is isochronous only: there is no bulk fallback,
+so this was not optional. What is different from the interrupt
+endpoints already there is not the TRB type but the ERROR MODEL. An
+isochronous endpoint does not halt, is never retried (CErr is 0), and
+its ring running dry produces a Ring Underrun event carrying no TRB
+pointer at all -- normal life for a stream between tracks. The first
+version treated those as transfer errors, which would reset a stream
+that had merely stuttered; Linux's xhci-hcd makes the same distinction,
+and the reason it matters here is that a reset turns a glitch into
+permanent silence. Scheduling uses Start-Isoch-ASAP on every TD rather
+than computed Frame IDs: the alternative is tracking the controller's
+frame counter and predicting one interval ahead, which buys nothing for
+a stream that is simply continuous. **This is the one part that is
+QEMU-tested and not hardware-tested**, and a real controller that
+insists on Frame IDs is where it would show.
+
+**The format is refused rather than negotiated.** `abi/sound_abi.h`
+fixes 48 kHz stereo s16, and QEMU's device offers exactly that -- but
+the driver checks rather than assuming, and leaves a device offering
+anything else unbound. Resampling already exists one layer up
+(`userland/lib/usnd.h`), and putting a second copy in the kernel to
+accommodate a 44.1 kHz headset would be the wrong half of the system
+growing the capability. A machine with such a headset gets a logged
+refusal, which is a worse outcome than resampling and a much better one
+than a resampler nobody tests.
+
+**The samples are copied, and the class comment already allowed for
+it.** `kernel/sound.h` said a card that cannot scatter-gather over one
+buffer "copies in ITS half; the ABI does not move" -- this is that
+card. 192 bytes per frame divides neither the 64 KiB ring nor its 2 KiB
+chunks, and an xHCI TRB may not cross a 64 KiB boundary, so a zero-copy
+packet needs chained split TRBs at two kinds of edge. Linux's
+snd-usb-audio copies into per-URB buffers for the same reason. The cost
+is 192 KB/s of memcpy, which is nothing; the benefit is that the
+isochronous ring never has to reason about the sound core's geometry.
+
+**And one bug that was not about audio at all.** The volume control
+looked impossible for an afternoon: every class control transfer timed
+out after two million polls. Two causes, stacked. A feature-unit
+request is addressed to the AUDIOCONTROL interface, and the driver was
+sending the STREAMING one -- so the device failed the transfer. But the
+reason that presented as a HANG rather than an error is that
+`xhci_control()` armed its waiter on the Status Stage TRB alone, and a
+control transfer that fails is reported against the stage that failed
+(the Data Stage), whose event named a TRB nobody was waiting for. The
+Status Stage then never executed, ep0 stayed halted, and every
+subsequent request to that device timed out too. The waiter matches any
+TRB in the slot's ep0 ring now, and the recovery set is every code that
+halts an endpoint rather than STALL alone. That bug was reachable by
+any device that refuses any request -- it had simply never been reached,
+because QEMU's other devices refuse nothing.
+
+## Sound device selection: the first one discovered, until somebody chooses
+
+With two cards in a machine the question "which one plays?" has to have
+an answer, and the honest options were: the first discovered, the most
+recently plugged, or a stored choice.
+
+**The rule is: the first device discovered, and a choice outranks it.**
+`audio_device` (a registered setting, so it gets `/etc` persistence, a
+System Settings row and `config set` for free) holds `auto` or a device
+name. A pick is STICKY -- it survives that card being unplugged and
+takes effect again when it comes back -- which is why an absent name
+falls through to auto rather than being rewritten to whatever is left.
+
+The rejected alternative was "the most recently plugged device wins
+while the stream is idle", which is what PipeWire and Windows both do:
+plug in a headset, hear it in the headset. It was rejected because it
+makes the default answer depend on enumeration order at boot -- the
+same machine picks differently depending on whether USB or PCI is
+scanned first -- and because a plug silently moving audio away from
+where it was playing is the behaviour people turn off first in the
+systems that have it. Discovery order is at least stable and
+inspectable (`lsdev` marks the active device), and choosing takes one
+click in the tray flyout.
+
+**A registration never steals a stream that is open.** The app holding
+it asked for a device that still works, and switching under it would
+drop audio mid-word for a plug it never saw.
+
+**Losing the active device is a state an AC'97 cannot reach**, so the
+ABI grew one field for it: `device_gone` in the control page, published
+beside `running: 0`. Without it an app cannot tell "somebody stopped
+me" from "the hardware is gone", which is the difference between
+resuming and reopening -- and the consumed-chunk zeroing means both
+sound identical (silence). The stream then falls back to another
+registered device for the NEXT open rather than the machine going mute.
+
 ## usnd: audio files are decoded and mixed in ring 3, behind a sink
 
 The kernel's contract stops at "one exclusive stream of 48 kHz stereo

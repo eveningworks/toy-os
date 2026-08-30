@@ -10,6 +10,8 @@
 #include "wm_internal.h"
 #include "rt/sys.h"
 #include "wm_tray.h"
+#include "wm_taskbar.h"     // taskbar_icon_size()
+#include "lib/icon_cache.h"
 #include "kapi.h"
 
 #define TRAY_MAX_ITEMS 6
@@ -17,6 +19,12 @@
 struct tray_item {
     int active;
     char text[TRAY_TEXT_MAX];
+    // An ICON item instead of a text one: the name of an icon file
+    // (icon_cache.h's rule -- a name, never a path), or NULL. Its width
+    // is the icon's, so the right-to-left walk below needs no other
+    // change. Only the panel's own items use this; an app still
+    // registers text, which is all wm.h offers.
+    const char *icon;
 };
 
 static struct tray_item tray_items[TRAY_MAX_ITEMS];
@@ -58,10 +66,28 @@ static void tray_copy_text(char *dst, const char *src) {
     dst[i] = '\0';
 }
 
+// An ICON item, registered by the panel rather than by an app. Its
+// slot is drawn from the same array and walked by the same loop -- the
+// only difference is what fills its box.
+int tray_register_icon(const char *icon) {
+    int id = tray_register("");
+    if (id >= 0) tray_items[id].icon = icon;
+    return id;
+}
+
+void tray_set_icon(int tray_id, const char *icon) {
+    if (tray_id < 0 || tray_id >= TRAY_MAX_ITEMS) return;
+    if (!tray_items[tray_id].active) return;
+    if (tray_items[tray_id].icon == icon) return;   // nothing to repaint
+    tray_items[tray_id].icon = icon;
+    tray_damage();
+}
+
 int tray_register(const char *initial_text) {
     for (int i = 0; i < TRAY_MAX_ITEMS; i++) {
         if (tray_items[i].active) continue;
         tray_items[i].active = 1;
+        tray_items[i].icon = 0;
         tray_copy_text(tray_items[i].text, initial_text);
         tray_damage();
         return i;
@@ -118,9 +144,18 @@ void tray_update_clock(void) {
 static int tray_walk(int want, int *out_x, int *out_w,
                      void (*visit)(int id, int x, int w, void *ctx), void *ctx) {
     int cx = screen_w - 16;
+    // THE CLOCK IS ALWAYS RIGHTMOST, whatever slot it holds. It used to
+    // be leftmost by accident -- it takes slot 0 and the walk runs from
+    // the highest slot down -- so the first item registered after it
+    // (the volume icon) landed between the clock and the screen edge,
+    // which is the one position no desktop puts a tray icon in. Windows,
+    // KDE and GNOME all pin the clock to the end of the strip.
+    for (int pass = 0; pass < 2; pass++)
     for (int i = TRAY_MAX_ITEMS - 1; i >= 0; i--) {
         if (!tray_items[i].active) continue;
-        int text_w = (int)k_strlen(tray_items[i].text) * ugfx_char_w();
+        if ((pass == 0) != (i == clock_tray_id)) continue;
+        int text_w = tray_items[i].icon ? taskbar_icon_size()
+                                       : (int)k_strlen(tray_items[i].text) * ugfx_char_w();
         cx -= text_w;
         // The item's BOX, not its text: the fill draw_tray() paints
         // starts 4px left of the glyphs and runs 4px past them, and a
@@ -141,6 +176,19 @@ int tray_left(void) { return tray_walk(-1, 0, 0, 0, 0); }
 // item 0 and therefore leftmost TODAY, and an app registering a tray
 // item does not change where the clock is drawn but would change any
 // guess phrased that way.
+int tray_item_rect(int tray_id, int *out_x, int *out_y, int *out_w, int *out_h) {
+    if (tray_id < 0 || tray_id >= TRAY_MAX_ITEMS || !tray_items[tray_id].active)
+        return 0;
+    int x = 0, w = 0;
+    tray_walk(tray_id, &x, &w, 0, 0);
+    if (w <= 0) return 0;
+    if (out_x) *out_x = x;
+    if (out_y) *out_y = screen_h - taskbar_h;
+    if (out_w) *out_w = w;
+    if (out_h) *out_h = taskbar_h;
+    return 1;
+}
+
 int tray_clock_rect(int *out_x, int *out_y, int *out_w, int *out_h) {
     if (clock_tray_id < 0) return 0;
     int x = 0, w = 0;
@@ -157,8 +205,18 @@ struct tray_draw_ctx { int taskbar_y; uint32_t bg; uint32_t fg; };
 
 static void tray_draw_item(int id, int x, int w, void *vctx) {
     struct tray_draw_ctx *c = (struct tray_draw_ctx *)vctx;
-    int text_y = c->taskbar_y + (taskbar_h - ugfx_char_h()) / 2;
     ugfx_fill_rect(wm_surface(), x - 4, c->taskbar_y, w + 8, taskbar_h, c->bg);
+    if (tray_items[id].icon) {
+        const struct uimg *ico = icon_get(tray_items[id].icon, w);
+        // No letter-tile fallback here, unlike an app icon: a tray item
+        // with no file draws NOTHING rather than a lone initial, which
+        // would read as a control the panel invented.
+        if (ico)
+            ugfx_blit_alpha(wm_surface(), x, c->taskbar_y + (taskbar_h - ico->h) / 2,
+                            ico->w, ico->h, ico->px, ico->w);
+        return;
+    }
+    int text_y = c->taskbar_y + (taskbar_h - ugfx_char_h()) / 2;
     ugfx_draw_string(wm_surface(), x, text_y, tray_items[id].text, c->fg, c->bg);
 }
 

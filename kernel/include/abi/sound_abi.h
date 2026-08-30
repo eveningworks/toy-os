@@ -53,6 +53,13 @@ struct snd_ctl_page {
     // ever a multiple of SND_CHUNK_BYTES. Volatile to the app.
     uint32_t hw_pos;
     uint32_t running;    // 1 between SND_CTL_START and _STOP
+    // THE DEVICE WENT AWAY UNDER THE STREAM -- a USB card unplugged
+    // mid-playback. `running` drops to 0 at the same moment, so an app
+    // that only watches that degrades to the stalled case (silence);
+    // this is how it tells "somebody stopped me" from "the hardware is
+    // gone", which is the difference between resuming and reopening.
+    // Cleared by the next SYS_SND_OPEN.
+    uint32_t device_gone;
 };
 
 // SYS_SND_CTL ops (RDI).

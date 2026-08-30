@@ -3991,6 +3991,50 @@ would have to be recomputed on every wallpaper change and every window
 move behind it. A shadow is a fixed cost that works on any backdrop
 without knowing anything about it.
 
+## The volume flyout is the panel's too, and it owns no audio state
+
+Clicking the tray's speaker icon opens a slider, a mute toggle and the
+output-device list, drawn by the window manager
+(`userland/wm/volume_popup.c`) beside the calendar. The same argument
+the calendar entry below makes applies -- adjusting the volume should
+not cost a process spawn, a title bar and a taskbar button -- with one
+honest difference worth recording, because it is the opposite of what
+the real systems do.
+
+**In Windows and KDE the audio applet is a separate process from the
+shell.** Plasma's is a plasmoid, Windows' flyout is part of the shell
+but the mixer behind it is not, and both can be replaced without
+touching the panel. Here it is in the compositor. The reason is that
+the tray API carries text and nothing else: an applet process would
+need the tray to grow icons, a click callback back to the app, and a
+positioning protocol for a panel-anchored window -- a `wm.h` ABI change
+and a supervised process, to host one slider. That is the larger change
+by a wide margin, and none of the flexibility it buys is wanted yet. If
+a second applet ever appears, that is the moment to build the protocol
+rather than a second special case.
+
+**What keeps it honest is that it owns no audio state at all.** It
+reads and writes two registered settings, `system.volume` and
+`system.audio_device`, and its device rows ARE that setting's choice
+list -- so a card plugged in after boot turns up as a row without this
+file learning what a card is, and System Settings shows the same two
+controls with no code shared between them. The popup is a VIEW.
+
+**Two consequences that took a decision each.** The setting write
+validates, applies and persists in one call, which is right for a
+`config set` and wrong for a dragged slider -- a hundred `/etc` writes.
+So the level is applied to the popup's own state immediately and the
+write is debounced (~250 ms after the last movement, and immediately on
+release). The alternative, an apply-without-persist path in the
+registry, would be a second way for a setting to change and a new way
+for the live value and the file to disagree; the debounce is entirely
+inside the popup. And **mute is a level of zero rather than a second
+piece of state**, for the same reason: the registry holds one number,
+and a persisted mute flag beside it would be a second thing that can
+disagree with the first. The cost is stated rather than hidden -- the
+pre-mute level lives only in the popup, so a reboot while muted comes
+back at zero.
+
 ## The calendar belongs to the panel, not to an application
 
 Clicking the taskbar clock opens a month grid the window manager draws

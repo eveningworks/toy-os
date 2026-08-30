@@ -4,6 +4,7 @@
 #include "lib/icon_cache.h"
 #include "wm_tray.h"
 #include "calendar_popup.h"
+#include "volume_popup.h"
 #include "wm_debug.h"
 #include "start_menu.h"
 #include "context_menu.h"
@@ -585,6 +586,62 @@ static void cmd_taskbar(struct dbg_out *o, int json) {
     }
 }
 
+// The tray's volume flyout: the panel, its controls' centres and the
+// device rows -- from the SAME volume_geometry() the drawing and the
+// hit-testing use, so a test clicking a reported centre clicks what was
+// drawn there.
+//
+// The device LABELS are reported because they are what a person reads
+// and what the kernel's `audio_device` choice list computed; a test
+// asserting on them is asserting the whole path from the registered
+// driver to the row.
+static void cmd_volume(struct dbg_out *o, int json) {
+    struct volume_geom g;
+    volume_geometry(&g);
+
+    if (json) {
+        dbg_out_printf(o, "{\"open\":%s,\"level\":%d,\"muted\":%s,",
+                     volume_open ? "true" : "false", g.level,
+                     g.muted ? "true" : "false");
+        dbg_out_printf(o, "\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,", g.x, g.y, g.w, g.h);
+        dbg_out_printf(o, "\"tray\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"cx\":%d,\"cy\":%d},",
+                     g.tray_x, g.tray_y, g.tray_w, g.tray_h,
+                     g.tray_x + g.tray_w / 2, g.tray_y + g.tray_h / 2);
+        dbg_out_printf(o, "\"mute\":{\"cx\":%d,\"cy\":%d},",
+                     g.mute_x + g.mute_w / 2, g.mute_y + g.mute_h / 2);
+        dbg_out_printf(o, "\"slider\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"cy\":%d},",
+                     g.slider_x, g.slider_y, g.slider_w, g.slider_h,
+                     g.slider_y + g.slider_h / 2);
+        dbg_out_printf(o, "\"selected\":%d,\"devices\":[", g.selected_row);
+        for (int i = 0; i < g.rows; i++) {
+            char value[32], label[48];
+            if (!volume_row(i, value, sizeof value, label, sizeof label)) break;
+            dbg_out_printf(o, "%s{\"value\":\"%s\",\"label\":\"%s\","
+                         "\"cx\":%d,\"cy\":%d}", i ? "," : "", value, label,
+                         g.x + g.w / 2, g.list_y + i * g.row_h + g.row_h / 2);
+        }
+        dbg_out_write(o, "]}\r\n");
+        return;
+    }
+
+    dbg_out_printf(o, "volume: %s  level=%d%s  x=%d y=%d w=%d h=%d\r\n",
+                 volume_open ? "open" : "closed", g.level,
+                 g.muted ? " muted" : "", g.x, g.y, g.w, g.h);
+    dbg_out_printf(o, "  tray x=%d y=%d w=%d h=%d centre=(%d,%d)\r\n",
+                 g.tray_x, g.tray_y, g.tray_w, g.tray_h,
+                 g.tray_x + g.tray_w / 2, g.tray_y + g.tray_h / 2);
+    dbg_out_printf(o, "  mute=(%d,%d) slider x=%d y=%d w=%d\r\n",
+                 g.mute_x + g.mute_w / 2, g.mute_y + g.mute_h / 2,
+                 g.slider_x, g.slider_y, g.slider_w);
+    for (int i = 0; i < g.rows; i++) {
+        char value[32], label[48];
+        if (!volume_row(i, value, sizeof value, label, sizeof label)) break;
+        dbg_out_printf(o, "  %s %-12s \"%s\" centre=(%d,%d)\r\n",
+                     i == g.selected_row ? "*" : " ", value, label,
+                     g.x + g.w / 2, g.list_y + i * g.row_h + g.row_h / 2);
+    }
+}
+
 // The tray clock's calendar popup: the panel's rect, its `<`/`>`
 // centres, and the grid -- from the SAME calendar_geometry() the
 // drawing and the hit-testing use, so a test clicking a reported centre
@@ -678,10 +735,11 @@ static void cmd_state(struct dbg_out *o, int json) {
         dbg_out_printf(o, "\"overlays\":{\"start_menu\":%s,\"context_menu\":%s,",
                      start_menu_open ? "true" : "false",
                      context_menu_open ? "true" : "false");
-        dbg_out_printf(o, "\"file_picker\":%s,\"confirm_dialog\":%s,\"calendar\":%s},",
+        dbg_out_printf(o, "\"file_picker\":%s,\"confirm_dialog\":%s,\"calendar\":%s,\"volume\":%s},",
                      file_picker_open ? "true" : "false",
                      confirm_dialog_open ? "true" : "false",
-                     calendar_open ? "true" : "false");
+                     calendar_open ? "true" : "false",
+                     volume_open ? "true" : "false");
         dbg_out_printf(o, "\"dragging\":%d,\"resizing\":%d,\"content_pressed\":%d,",
                      dragging, resizing, content_pressed);
         dbg_out_printf(o, "\"redraw_pending\":%s,\"pending\":%d,",
@@ -726,9 +784,9 @@ static void cmd_state(struct dbg_out *o, int json) {
     dbg_out_printf(o, "screen %dx%d, taskbar %dpx\r\n", screen_w, screen_h, taskbar_h);
     dbg_out_printf(o, "cursor (%d,%d) buttons=0x%x shape=%d\r\n", cx, cy,
                  (unsigned)buttons, (int)wm_cursor_kind_at(cx, cy));
-    dbg_out_printf(o, "overlays: start_menu=%d context_menu=%d file_picker=%d confirm=%d calendar=%d\r\n",
+    dbg_out_printf(o, "overlays: start_menu=%d context_menu=%d file_picker=%d confirm=%d calendar=%d volume=%d\r\n",
                  start_menu_open, context_menu_open, file_picker_open, confirm_dialog_open,
-                 calendar_open);
+                 calendar_open, volume_open);
     dbg_out_printf(o, "dragging=%d resizing=%d content_pressed=%d redraw_pending=%d\r\n",
                  dragging, resizing, content_pressed, redraw_pending);
     dbg_out_printf(o, "injected events pending: %d\r\n", wm_debug_input_pending());
@@ -971,6 +1029,7 @@ static void usage(struct dbg_out *o) {
     dbg_out_write(o, "  spawn PATH            run a ring-3 binary directly -- no Terminal needed\r\n");
     dbg_out_write(o, "  taskbar [--json]      start button + per-window button rects\r\n");
     dbg_out_write(o, "  calendar [--json]     the clock's calendar popup: panel, grid, today\r\n");
+    dbg_out_write(o, "  volume [--json]       the tray volume flyout: level, slider, devices\r\n");
     dbg_out_write(o, "  state [--json]        overlays, cursor, armed state, damage rect\r\n");
     dbg_out_write(o, "  compositor [--json]   the registered compositor pid, its queue depth\r\n");
     dbg_out_write(o, "                        and how much input it has dropped\r\n");
@@ -1024,6 +1083,7 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
     if (k_strcmp(sub, "dialog") == 0)       { cmd_dialog(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "taskbar") == 0)      { cmd_taskbar(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "calendar") == 0)     { cmd_calendar(o, wants_json(p)); return 1; }
+    if (k_strcmp(sub, "volume") == 0)       { cmd_volume(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "state") == 0)        { cmd_state(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "compositor") == 0)   { cmd_compositor(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "icons") == 0)        { cmd_icons(o, wants_json(p)); return 1; }

@@ -22,6 +22,7 @@
 #include "klog.h"
 #include "display.h"  // lsdev names the active display driver
 #include "usb.h"      // lsdev names the USB controller; `usb` dumps its rings
+#include "sound.h"    // lsdev names the sound devices and which is active
 #include "input.h"    // ...and every registered input source
 #include "virtio_input.h" // ...and whether virtio input is actually delivering
 #include "win_transport.h" // `gui` travels as a protocol message now
@@ -201,6 +202,20 @@ static void dbg_cmd_lsdev(void) {
         klog_printf("USB: %s\r\n", usbline);
     else
         klog_write("USB: no controller\r\n");
+
+    // The ACTIVE marker is the load-bearing half: a machine with two
+    // cards looks identical to one with two working cards until you ask
+    // which of them the next SYS_SND_OPEN would reach.
+    int nsnd = sound_device_count();
+    if (nsnd == 0) {
+        klog_write("Sound: no device\r\n");
+    } else {
+        klog_printf("Sound (%d, preference %s):\r\n", nsnd, sound_preference());
+        for (int i = 0; i < nsnd; i++)
+            klog_printf("  %s%s  \"%s\"\r\n", sound_device_name(i),
+                        sound_device_is_active(i) ? "  [active]" : "",
+                        sound_device_label(i));
+    }
 
     int ns = input_source_count();
     klog_printf("Input sources (%d):\r\n", ns);

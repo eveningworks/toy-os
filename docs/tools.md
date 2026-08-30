@@ -1550,6 +1550,23 @@ window without going through it will find its layout polls timing out.
   one check, ignoring the setting reddens three, and removing the year
   wrap reddens two -- each on the right assertion and nothing else. In
   `gui_regress.py`.
+- **`volume_test.py`** -- the taskbar's volume flyout: the slider, mute,
+  the wheel and the output-device list. **The slider's real assertion is
+  `config get volume`, not the popup's own reading**: the write is
+  DEBOUNCED, so a build that moved the number on screen and never
+  flushed it would pass every check phrased against the popup. **The
+  wheel check has a negative half** -- a notch over the tray icon moves
+  the level, the same notch over the desktop must NOT, which is what
+  fails if the handler forgets to ask where the pointer is and then eats
+  every scroll in every app. The pointer is WARPED
+  (`DebugConsole.warp_cursor`), never `gui move`: an injected position
+  survives one `wm_run()` iteration and the wheel would arrive with the
+  cursor back where it was. Open/close is paired with the panel's own
+  pixels, same reason as the calendar's. `gui_regress.py` boots it with
+  `--audio both` (see `EXTRA_VM_ARGS`), because the device rows are
+  empty and unwritable on a machine with no sound card -- it says so and
+  skips them rather than failing, so the rows going missing on a machine
+  that HAS a card still reads as a failure.
 - **`filemanager_test.py`** -- the File Manager: two panes, marking, and
   real file operations. **The result of every operation is checked
   through `ls`, not through the app** -- the manager is the thing under
@@ -1679,6 +1696,24 @@ window without going through it will find its layout polls timing out.
   reject exactly that while accepting the interpolator's own error.
   Nothing else in this repo can see a broken resampler -- `/tests/
   usnd_test` checks frame counts, which a wrong-rate build gets right.
+- **`usb_audio_test.py`** -- USB Audio Class 1.0 playback, on the same
+  host-side oracle `audio_test.py` uses, pointed at a different bus. The
+  guest plays A440 through an isochronous OUT endpoint and QEMU's wav
+  audiodev records what the DEVICE emitted; a configured endpoint that
+  never gets a packet records silence, a wrong packet size records the
+  wrong pitch. **Three boots, and the middle one is why `vm.py` grew a
+  second recording.** With `--audio both` each card writes its OWN wav
+  file, so "the tone is in the USB file and not the AC97 one" is an
+  assertion -- on one audiodev the file holds their mix and device
+  selection is untestable. Its positive control (making `sound_select()`
+  ignore the name) put **4.05 s at 436 Hz in the USB file and 0.00 s in
+  the AC97 one**, which is exactly the signature a working selection
+  cannot produce. It also unplugs the device mid-run (`device_del`),
+  which is a state no PCI card can reach, and checks that the choice
+  came back from `/etc` on a reboot -- from the FIRST LINE of `config
+  get`, since boot chatter mentions `ac97` too and a substring match
+  passed on a guest whose setting had not been restored at all. On
+  demand, not in the gate: it boots its own guest with extra hardware.
 - **`ahci_test.py`** -- boots with the filesystem on a **SATA drive
   behind an ICH9 host bus adapter**, which is the only thing here that
   reaches `kernel/drivers/ahci.c` at all. Several boots, on demand.

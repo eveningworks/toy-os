@@ -272,13 +272,6 @@ def cmd_start(args):
         cmd += ["-device", "virtio-keyboard-pci",
                 "-device", "virtio-mouse-pci",
                 "-device", "virtio-tablet-pci"]
-    # An AC97 controller whose output QEMU RECORDS to a host wav file --
-    # the oracle tools/audio_test.py measures a played tone in. Off by
-    # default: attaching audio hardware changes the PCI layout under
-    # every existing test for a device none of them drive.
-    if getattr(args, "audio_wav", None):
-        cmd += ["-audiodev", f"wav,id=snd0,path={args.audio_wav}",
-                "-device", "AC97,audiodev=snd0"]
     # An xHCI controller plus USB HID devices, off by default for the
     # same reason --virtio-input is: every existing test was written
     # against the PS/2 pair. `--usb xhci` attaches a keyboard, which
@@ -292,7 +285,19 @@ def cmd_start(args):
     # Devices are given ids so a test can aim `input-send-event` at one
     # by name rather than relying on which handler QEMU picked.
     usb = getattr(args, "usb", "none") or "none"
-    if usb != "none":
+    # A USB audio device needs a controller whether or not a HID one was
+    # asked for -- deriving it here rather than making the caller pass
+    # two flags that must agree, which is a rule nothing could enforce.
+    # Sound hardware is attached when a recording is asked for, or when
+    # --audio names a card explicitly. Left implicit, a guest with no
+    # --audio-wav gets no card at all -- which is what every existing
+    # test was written against, and what player_test.py's whole premise
+    # is (an Audio Player on a machine with NO sound device).
+    audio = getattr(args, "audio", None)
+    if audio is None:
+        audio = "ac97" if getattr(args, "audio_wav", None) else "none"
+    wants_usb_audio = audio in ("usb", "both")
+    if usb != "none" or wants_usb_audio:
         cmd += ["-device", "qemu-xhci,id=xhci"]
         if usb == "xhci+hub":
             # The keyboard AND mouse both sit BEHIND a usb-hub (QEMU's
@@ -301,10 +306,40 @@ def cmd_start(args):
             cmd += ["-device", "usb-hub,id=usbhub,port=1,bus=xhci.0",
                     "-device", "usb-kbd,id=usbkbd,bus=xhci.0,port=1.1",
                     "-device", "usb-mouse,id=usbmouse,bus=xhci.0,port=1.2"]
-        else:
+        elif usb != "none":
             cmd += ["-device", "usb-kbd,id=usbkbd,bus=xhci.0"]
             if usb == "xhci+mouse":
                 cmd += ["-device", "usb-mouse,id=usbmouse,bus=xhci.0"]
+
+    # A sound card whose output QEMU RECORDS to a host wav file -- the
+    # oracle tools/audio_test.py and tools/usb_audio_test.py measure a
+    # played tone in. Off by default: attaching audio hardware changes
+    # the PCI layout under every existing test for a device none of
+    # them drive.
+    #
+    # WHICH CARD is a separate axis from the recording, because the
+    # interesting question for USB audio is which device the guest chose
+    # -- and `both` is the only way to ask it, since a machine with one
+    # card cannot get that wrong.
+    if audio != "none":
+        # `none` is a real backend: it clocks the device without writing
+        # anything, which is what a test that only cares that the guest
+        # SEES a card wants. A wav path swaps it for the recorder.
+        cmd += ["-audiodev", (f"wav,id=snd0,path={args.audio_wav}"
+                              if getattr(args, "audio_wav", None)
+                              else "none,id=snd0")]
+        # A SECOND recording, and it is what makes device selection
+        # testable at all: with both cards on one audiodev the wav holds
+        # their MIX, so "the tone is in the file" cannot say which
+        # device played it. One file each turns that into an assertion.
+        usb_dev = "usb-audio,id=usbaud,bus=xhci.0,audiodev=snd0"
+        if audio == "both" and getattr(args, "audio_wav2", None):
+            cmd += ["-audiodev", f"wav,id=snd1,path={args.audio_wav2}"]
+            usb_dev = "usb-audio,id=usbaud,bus=xhci.0,audiodev=snd1"
+        if audio in ("ac97", "both"):
+            cmd += ["-device", "AC97,audiodev=snd0"]
+        if audio in ("usb", "both"):
+            cmd += ["-device", usb_dev]
     # WHICH NIC, and why the default is spelled out rather than left
     # implicit. QEMU's default pc machine already attaches an e1000 with
     # user-mode networking when no -net/-netdev option is given -- every
@@ -625,6 +660,22 @@ def main():
                          "behind a usb-hub (the route-string path). A named "
                          "value rather than a boolean because the mouse changes "
                          "QMP pointer routing once the guest driver polls it.")
+    ap.add_argument("--audio-wav2", default=None, metavar="PATH",
+                    help="with --audio both, record the USB device to its OWN "
+                         "file (--audio-wav then holds the AC97's). Without "
+                         "it both cards share one recording, which cannot say "
+                         "which of them played.")
+    ap.add_argument("--audio", choices=("ac97", "usb", "both", "none"),
+                    default=None,
+                    help="which sound card to attach; also what --audio-wav "
+                         "records from. Defaults to `ac97` WITH --audio-wav "
+                         "and `none` without it, so a guest that asked for "
+                         "neither keeps the no-sound-hardware machine every "
+                         "existing test was written against. `usb` "
+                         "attaches QEMU's usb-audio (adding an xHCI "
+                         "controller if --usb did not), `both` attaches one "
+                         "of each, which is the only way to test WHICH device "
+                         "the guest picked. Ignored without --audio-wav.")
     ap.add_argument("--vga", default="std",
                     help="QEMU -vga adapter (std, vmware, ...). All three of std, "
                          "vmware and virtio have a modesetting driver now (std "

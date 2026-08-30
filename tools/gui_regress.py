@@ -138,6 +138,7 @@ TOOLS = [
     ("player", "player_test.py", "the Audio Player on a machine with NO sound device"),
     ("calendar", "calendar_test.py", "the tray clock's calendar popup, and week_start"),
     ("mines", "mines_test.py", "Minesweeper, and a secondary click reaching a client"),
+    ("volume", "volume_test.py", "the tray volume flyout: slider, mute, wheel, devices"),
     ("files", "filemanager_test.py", "the File Manager: two panes, marks, and real file operations"),
 ]
 
@@ -153,6 +154,20 @@ TOOLS = [
 # finishes early), while assuming a new tool is quick would risk making
 # it the straggler everything else waits behind -- which is the exact
 # problem this table exists to fix.
+# Extra `vm.py` flags for the few tools whose machine has to differ from
+# the default one. Deliberately a small dict rather than a field on
+# every row: the default -- no sound card, PS/2 input, one IDE disk -- is
+# what nearly every tool wants and what an unusual one should have to
+# state.
+EXTRA_VM_ARGS = {
+    # The volume flyout's device list is empty on a machine with no
+    # sound hardware, so its device rows would be untestable exactly
+    # where they matter. `both` gives it an AC'97 and a USB card with no
+    # recording attached. player_test.py deliberately keeps the default,
+    # since a machine with NO device is its premise.
+    "volume": ["--audio", "both"],
+}
+
 COST_S = {
     # Re-measured 2026-08-18, against the ring-3 desktop (which is the
     # only desktop now). Three of these moved a long way when their
@@ -268,6 +283,7 @@ def run_one(name, script, disk_src, timeout, keep_logs, slot, kvm=False):
         # reported that at once before this existed, and the actual
         # reason was one line on vm.py's stderr that nobody read.
         boot = subprocess.run([sys.executable, vm] + inst + kvm_args +
+                              EXTRA_VM_ARGS.get(name, []) +
                               ["--disk", img, "start"],
                               cwd=REPO, capture_output=True, text=True,
                               timeout=120)

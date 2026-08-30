@@ -331,6 +331,41 @@ def icon_tb_tree():
     return im
 
 
+# The tray's volume item. Three states, because a speaker glyph with no
+# waves reads as "no sound" and one with waves reads as "sound" -- which
+# is the whole information a tray icon carries at a glance. Drawn in the
+# toolbar ink, since the tray sits on the same panel the toolbars do.
+
+
+def _speaker(d):
+    """The cone and box, shared by all three states."""
+    d.rectangle([10, 26, 20, 38], fill=TB_INK)
+    d.polygon([(20, 26), (34, 12), (34, 52), (20, 38)], fill=TB_INK)
+
+
+def icon_tray_volume_high():
+    im, d = _tb()
+    _speaker(d)
+    d.arc([28, 16, 48, 48], start=300, end=60, fill=TB_INK, width=5)
+    d.arc([32, 6, 60, 58], start=300, end=60, fill=TB_INK, width=5)
+    return im
+
+
+def icon_tray_volume_low():
+    im, d = _tb()
+    _speaker(d)
+    d.arc([28, 16, 48, 48], start=300, end=60, fill=TB_INK, width=5)
+    return im
+
+
+def icon_tray_volume_muted():
+    im, d = _tb()
+    _speaker(d)
+    d.line([(40, 22), (58, 42)], fill=TB_INK, width=5)
+    d.line([(58, 22), (40, 42)], fill=TB_INK, width=5)
+    return im
+
+
 # The five file verbs. Copy/Move are a PAIR and read as one: two sheets
 # for copy, one sheet plus an arrow for move -- which is what Explorer's
 # ribbon and every commander's F5/F6 have always drawn.
@@ -530,6 +565,9 @@ ICONS = {
     "tb-delete": icon_tb_delete,
     "properties": icon_properties,
     "diskmark": icon_diskmark,
+    "tray-volume-high": icon_tray_volume_high,
+    "tray-volume-low": icon_tray_volume_low,
+    "tray-volume-muted": icon_tray_volume_muted,
 }
 
 # Crash Test deliberately gets NO icon file. It is the one entry that

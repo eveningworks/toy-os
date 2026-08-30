@@ -671,6 +671,7 @@ run on, not by order.
 - [x] ~~The xHCI USB Legacy Support handoff (xECP id 1)~~ DONE -- confirmed on the laptop 2026-08-28
 - [x] ~~Confirm the xHCI BIOS handoff on the laptop it was written for~~ DONE 2026-08-28 -- a wireless mouse works on the machine
 - [ ] **NEXT** `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR, not a 64 KiB guess
+- [x] ~~USB audio (isochronous OUT, UAC1)~~ DONE 2026-08-30 -- `kernel/drivers/usb/usb_audio.c`; SIA scheduling is QEMU-tested only
 - [ ] USB mass storage (bulk-only transport) -- the first non-disk-bus storage backend
 - [x] ~~Hub support (devices behind a hub, not just root ports)~~ DONE 2026-08-28 -- USB2 only; the TT path is hardware-only
 - [x] ~~Hot-plug: a device plugged in after boot enumerates, an unplugged one is torn down~~ DONE 2026-08-28
@@ -714,10 +715,13 @@ run on, not by order.
 - [x] ~~A sound-producing test app~~ DONE -- `/tests/tone`, judged by `tools/audio_test.py`'s host-side recording
 - [x] ~~A PCM playback path (buffer submission + completion IRQ)~~ DONE -- the shared ring (`abi/sound_abi.h`)
 - [x] ~~A WAV player app~~ DONE 2026-08-29 -- `/bin/wm/apps/player` and `/bin/aplay`, over `userland/lib/usnd.h`
+- [x] ~~A second sound device, to prove the class is not shaped around the first~~ DONE 2026-08-30 -- USB audio
+- [x] ~~Choosing between sound devices, and surviving one being unplugged~~ DONE 2026-08-30 -- `audio_device`, and `device_gone`
 - [ ] A system-wide sound daemon, so two programs can be audible at once -- `usnd_sink.h`'s second row
 - [ ] A second codec (MP3 or Vorbis) -- a file and a row in `usnd.c`'s table, which is what the table is for
 - [x] ~~Doom sound and music~~ DONE 2026-08-29 -- effects on `usnd` voices, music on Chocolate Doom's own OPL emulation
-- [ ] Volume mixer UI, persisted to `/etc`
+- [x] ~~Volume mixer UI, persisted to `/etc`~~ DONE 2026-08-30 -- the tray flyout: slider, mute, device list, wheel
+- [ ] A per-application volume, which needs the sound daemon first -- the flyout has one slider because there is one stream
 
 ### ACPI + real power/timer
 

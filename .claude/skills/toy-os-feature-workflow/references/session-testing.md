@@ -2234,3 +2234,30 @@ checks across two suites went red or went quiet.
   last check printed is the whole diagnosis. **Re-check that guard's
   margin whenever the slowest tool grows**; it is sized against `files`,
   which is several times the next one.
+- **AN ASSERTION CAN DEPEND ON A FACT NOBODY DECIDED -- AND THE PID
+  TABLE IS ONE.** `taskmgr_test` pressed Down and required the table to
+  report a new selection. `uui_table_key()` reports nothing when the
+  selection CANNOT move, so Down on the LAST row logs nothing and reads
+  exactly like a dead key handler -- the very bug that check exists to
+  catch. Whether the victim was last depended on which pid Task Manager
+  happened to get, and a change elsewhere in the kernel shifted that: a
+  guest that reaped `/bin/dhcp` before the app launched handed it pid 2
+  instead of 5, which put the victim last. Two checks went red with
+  nothing wrong in the guest, in a change that had not touched key
+  routing at all.
+
+  Three things this cost, worth knowing before spending them again.
+  `tools/predates.py` said **YOURS** -- correctly, since the change DID
+  cause the red -- which reads as "you broke the feature" and is not the
+  same sentence. Reverting the whole GUI half still failed, which is
+  what finally pointed away from the code under suspicion. And the
+  answer was in a DIFF OF THE TWO LOGS, not in the code: 5 rows
+  `[1,3,4,5]` against 4 rows `[1,2,3,4]` named the cause in one line
+  after an hour of bisecting had not.
+
+  **So: when a check goes red in a change that cannot plausibly reach
+  it, diff the passing and failing RUNS before bisecting the tree.**
+  And when writing a check that drives a widget, ask what state would
+  make the action a no-op -- an arrow at the end of a list, a Back
+  button on the first page -- because the widget reports nothing in
+  exactly that case and the test cannot tell it from broken.

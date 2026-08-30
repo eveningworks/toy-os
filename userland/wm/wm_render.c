@@ -10,6 +10,7 @@
 #include "start_menu.h"
 #include "context_menu.h"
 #include "calendar_popup.h"
+#include "volume_popup.h"
 #include "confirm_dialog.h"
 #include "file_picker.h"
 #include "desktop.h"
@@ -1221,6 +1222,7 @@ static void render_scene(int mx, int my, int has_damage) {
     if (start_menu_open) start_menu_draw(mx, my);
     context_menu_draw(mx, my); // independent of start_menu_open -- the two are mutually exclusive (see wm_input.c)
     calendar_draw(mx, my); // the tray clock's popup -- same mutual exclusion, checked inside
+    volume_draw(mx, my);   // the tray volume item's popup, same contract
     file_picker_draw(); // an app-opened modal (e.g. Notepad's Save As...) -- drawn above ordinary chrome/menus
     confirm_dialog_draw(); // drawn last (topmost, short of the cursor) -- the most modal overlay in the WM
 

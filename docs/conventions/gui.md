@@ -1396,6 +1396,41 @@ real scanout hardware does. Do not write a pixel assertion for one.
   tool that changes it must set it back**, since `make iso` re-seeds
   `disk.img` by sync and a written setting outlives the run.
 
+- **THE TRAY HAS A VOLUME FLYOUT, AND THE PANEL OWNS IT TOO --
+  `userland/wm/volume_popup.c`.** A speaker icon left of the clock opens
+  a panel with a level slider, a mute toggle and the output devices;
+  the WHEEL over the icon moves the level by 5 without opening
+  anything. That is Windows 11's flyout, Plasma's audio applet and
+  GNOME's quick settings, wheel included. Six things to know.
+  **It knows nothing about audio**: it reads and writes `system.volume`
+  and `system.audio_device` over `SYS_SETTING`, and its device rows ARE
+  that setting's CHOICE list -- so a card plugged in after boot appears
+  as a row with no code here learning what a card is. **The write is
+  DEBOUNCED** (~250 ms after the last movement, and immediately on
+  release), because a setting write validates, applies AND persists --
+  one `/etc` write per call, so a dragged slider without it is a
+  hundred of them. **MUTE IS A LEVEL OF ZERO**, not a second piece of
+  state: the registry holds one number, and the pre-mute level is
+  remembered in the popup, so unmuting works within a session and a
+  reboot while muted comes back at zero. **The wheel is SCOPED to the
+  tray item and the open panel** -- taken anywhere else it would eat
+  every scroll in every app, which is the half `volume_test.py` asserts
+  negatively. **The slider is dragged through
+  `volume_update_press()`**, called every tick like the dialogs', since
+  a control that only sees the button-down edge cannot follow the
+  pointer. And **`volume_geometry()` is the one answer** drawing,
+  hit-testing and `gui volume --json` all ask.
+- **THE CLOCK IS ALWAYS THE RIGHTMOST TRAY ITEM, whatever slot it
+  holds.** It takes slot 0 and the strip is walked from the highest slot
+  down, so before this the first item registered after it landed between
+  the clock and the screen edge -- the one position no desktop puts a
+  tray icon in. **A tray item may be an ICON now**
+  (`tray_register_icon()`), sized from `taskbar_icon_size()` and drawn
+  from the same right-to-left walk; an icon with no file draws NOTHING
+  rather than the letter tile an app icon falls back to, which would
+  read as a control the panel invented. `tray_item_rect()` gives any
+  item's box from that same walk, so a click cannot be told a different
+  position from the one it was drawn at.
 - **THE TRAY CLOCK OPENS A CALENDAR, AND THE PANEL OWNS IT --
   `userland/wm/calendar_popup.c`, not an app.** Clicking the clock opens
   a month grid anchored above it, today in the theme's ACCENT, `<` / `>`

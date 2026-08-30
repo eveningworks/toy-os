@@ -265,7 +265,10 @@ trips them before it knows to look anything up.
   size/shape actually reaches the branch.
 - **A screendump compared against another screendump must be a SETTLED
   frame** -- `QMPSession.stable_pixels()` (two identical consecutive
-  reads). A client that has drawn into its buffer, and even logged that
+  reads). **And so must one compared against ITSELF**: `mines_test`
+  read a cell face and the backdrop beside it out of one raw grab, and
+  a capture landing mid-paint reads the backdrop in both places --
+  which is exactly what that check calls "not painted". A client that has drawn into its buffer, and even logged that
   it did, has not necessarily been composited yet, and that process hop
   varies with load. Do not use it on a window you expect to animate. The
   sibling trap: **a poll whose exit condition is weaker than what the
@@ -617,6 +620,8 @@ whenever a headline here tells you something you did not already know.
 - **RING-3 `malloc` TAKES A LOCK; THE KERNEL'S DOES NOT**
 - **THE THREAD POINTER IS FS.base, AND THE SCHEDULER RELOADS IT**
 - **THERE IS A SOUND CLASS, ITS STREAM IS EXCLUSIVE, AND THE RING IS SHARED MEMORY**
+- **USB AUDIO IS A SOUND DEVICE ON AN ISOCHRONOUS ENDPOINT, AND THE FORMAT IS NOT NEGOTIATED**
+- **AN ISOCHRONOUS ENDPOINT DOES NOT HALT, AND ITS RING RUNNING DRY IS NORMAL**
 - **THERE IS A NETWORK DEVICE CLASS, THE STACK IS IN THE KERNEL, AND THE RECEIVE PATH IS SPLIT ACROSS AN INTERRUPT**
 - **TCP IS CLIENT-SIDE, IN-ORDER ONLY, AND ITS TIMERS RIDE THE BLOCKING RECEIVE**
 - **A SOCKET RECEIVE BLOCKS, ONE CHANNEL SERVES THE WHOLE STACK, AND THE DEADLINE LIVES ON THE SOCKET**
@@ -725,6 +730,8 @@ whenever a headline here tells you something you did not already know.
 - **THE WALLPAPER IS A REGISTERED SETTING, AND ITS VALUE IS A NAME**
 - **THE START BUTTON'S APPEARANCE IS A REGISTERED SETTING**
 - **THE COMPOSITOR SLEEPS BETWEEN FRAMES, AND TWO THINGS MUST DEFEAT THE WAIT**
+- **THE TRAY HAS A VOLUME FLYOUT, AND THE PANEL OWNS IT TOO**
+- **THE CLOCK IS ALWAYS THE RIGHTMOST TRAY ITEM, whatever slot it holds**
 - **THE TRAY CLOCK OPENS A CALENDAR, AND THE PANEL OWNS IT**
 - **THE WEEK'S FIRST COLUMN IS A REGISTERED SETTING: `desktop.week_start` = `monday` | `sunday`**
 - **A KEY RELEASE IS `WIN_EV_KEY_UP`, AND THE FOUR MODIFIER KEYS ARE KEYS**
@@ -1228,7 +1235,7 @@ cost".
   `sched_gui_test.py`, `screen_surface_test.py`, `scrollbar_test.py`,
   `settings_test.py`, `single_instance_test.py`, `taskmgr_test.py`,
   `uapp_test.py`, `uiclient_test.py`, `uidemo_test.py`,
-  `uterm_test.py`, `winclient_test.py`.
+  `uterm_test.py`, `volume_test.py`, `winclient_test.py`.
 - **Run on demand, not in the gate** -- `ahci_test.py`,
   `ansi_cursor_test.py`, `audio_test.py`, `console_bleed_test.py`,
   `console_shell_test.py`, `ctrlc_test.py`, `cursor_ibeam_test.py`,
@@ -1241,8 +1248,8 @@ cost".
   `multidisk_test.py`, `net_test.py`, `partition_test.py`,
   `poweroff_test.py`, `qemu_matrix.py`, `serial_backpressure_test.py`, `stdin_test.py`,
   `taskbar_test.py`, `terminal_probe.py`, `tfs3_v1_test.py`,
-  `usb_test.py`, `virtio_boot_test.py`, `virtio_gpu_test.py`,
-  `virtio_input_test.py`.
+  `usb_audio_test.py`, `usb_test.py`, `virtio_boot_test.py`,
+  `virtio_gpu_test.py`, `virtio_input_test.py`.
 - **Disk images, from the host** -- `seed_disk.py` (the format-aware
   front end `make iso` calls), `install_grub.py` (puts GRUB and the
   kernel ON `disk.img`; also `boot_medium()`, the ONE answer to "does

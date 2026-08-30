@@ -400,7 +400,7 @@ help:
 	@echo "   Which driver actually claimed the display: type lsdev at the serial"
 	@echo "   debug console. lspci only says the device is on the bus."
 	@echo ""
-	@echo "   make run AUDIO=1          PC speaker + AC97 wired to sound (AUDIODEV=alsa etc.)"
+	@echo "   make run AUDIO=1|usb|both PC speaker + a sound card (AUDIODEV=alsa etc.)"
 	@echo "   make run WINDOW=full      start full-screen -- no decorations, so a guest"
 	@echo "                             mode as big as the monitor is pixel-exact AND fits"
 	@echo "   make run WINDOW=fit       a resizable window the guest is SCALED into (gtk)."
@@ -616,6 +616,7 @@ EXTRA_OBJS_gfxdemo    =
 EXTRA_OBJS_toywm      = wm/wm wm/wm_rawin wm/wm_render wm/wm_input wm/wm_client \
                         wm/wm_debug wm/wm_tray wm/wm_taskbar wm/wm_watchdog \
                         wm/desktop wm/start_menu wm/context_menu wm/calendar_popup \
+                        wm/volume_popup \
                         wm/confirm_dialog wm/file_picker wm/cursor_theme \
                         wm/gui_apps wm/wm_log wm/wm_fs wm/wm_conf \
                         wm/wm_hwcursor
@@ -1578,7 +1579,20 @@ QEMU_NET = $(if $(filter none,$(NET_KIND)),-nic none,\
 # this was confirmed with; AUDIODEV= overrides it for an alsa/coreaudio
 # host (`qemu-system-x86_64 -audiodev help` lists them).
 AUDIODEV ?= pa
-QEMU_AUDIO = $(if $(AUDIO),-audiodev $(AUDIODEV)$(COMMA)id=snd0 -machine pcspk-audiodev=snd0 -device AC97$(COMMA)audiodev=snd0,)
+# A NAME rather than a boolean, for the reason DISK/VGA/INPUT are:
+# `AUDIO=usb` is a third value. `AUDIO=1` still means the AC'97, so
+# every existing invocation is unchanged.
+AUDIO_KIND = $(if $(filter usb both,$(AUDIO)),$(AUDIO),$(if $(AUDIO),ac97,none))
+# USB audio needs a controller. Derived rather than made the caller's
+# problem -- and skipped when USB= already attached one, since a second
+# `-device qemu-xhci,id=xhci` is a duplicate-id error, not a second bus.
+# $(strip): the value carries the WHITESPACE that lines this up, and an
+# expansion that is only spaces is still non-empty to $(if) -- make
+# strips a condition's literal whitespace, never its expansion's.
+# Without it the controller is attached twice and QEMU refuses the
+# duplicate id.
+AUDIO_XHCI = $(strip $(if $(filter usb both,$(AUDIO_KIND)),$(if $(filter xhci xhci+mouse xhci+hub,$(USB_KIND)),,yes),))
+QEMU_AUDIO = $(if $(filter-out none,$(AUDIO_KIND)),               -audiodev $(AUDIODEV)$(COMMA)id=snd0 -machine pcspk-audiodev=snd0                $(if $(AUDIO_XHCI),-device qemu-xhci$(COMMA)id=xhci,)               $(if $(filter ac97 both,$(AUDIO_KIND)),                 -device AC97$(COMMA)audiodev=snd0,)               $(if $(filter usb both,$(AUDIO_KIND)),                 -device usb-audio$(COMMA)id=usbaud$(COMMA)bus=xhci.0$(COMMA)audiodev=snd0,),)
 
 QEMU_EXTRA =
 

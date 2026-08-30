@@ -107,6 +107,11 @@ TOOLS = [
     # the only run in which the ac97 KTESTs do not skip, which is why
     # its own report treats "0 skipped" as an assertion.
     ("audio",       "audio_test.py",           "AC97, the PCM ring and a WAV file",  True,  None,                   False),
+    # Three guests, and the only run in which anything reaches an
+    # isochronous endpoint. Its middle phase gives each card its own wav
+    # recording, which is the only way "which device played" is an
+    # assertion rather than a guess.
+    ("usb_audio",   "usb_audio_test.py",       "USB audio: isoch OUT, and which card plays", True, None,             False),
 
     # --- input --------------------------------------------------------
     ("kbd",         "kbd_test.py",             "`kbd`'s four columns, both drivers", True,  None,                   False),

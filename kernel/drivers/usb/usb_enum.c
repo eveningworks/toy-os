@@ -15,6 +15,7 @@
 #include "usb.h"
 #include "xhci.h"
 #include "usb_hid.h"
+#include "usb_audio.h"
 #include "xhci_regs.h"
 #include "klog.h"
 #include "kfmt.h"
@@ -32,6 +33,7 @@
 
 #define USB_CLASS_HID   3
 #define USB_CLASS_HUB   9
+#define USB_CLASS_AUDIO 1
 
 // bmRequestType
 #define DIR_IN          0x80
@@ -270,6 +272,12 @@ int usb_enumerate_device(uint8_t root_port, uint8_t parent_port,
     if (d->dev_class == USB_CLASS_HUB ||
         (d->if_count && d->ifs[0].if_class == USB_CLASS_HUB))
         usb_hub_bind(d);
+    else if (d->if_count && d->ifs[0].if_class == USB_CLASS_AUDIO)
+        // The raw configuration goes with it: an audio device's format
+        // and its volume control are CLASS-SPECIFIC descriptors sitting
+        // between the standard ones, and the interface walk above keeps
+        // neither. g_desc_buf is still the one just read.
+        usb_audio_bind(d, g_desc_buf, total);
     else
         usb_hid_bind(d);
     return (int)(d - g_devs);
@@ -300,6 +308,7 @@ void usb_detach_slot(uint8_t slot) {
             usb_detach_slot(g_devs[i].slot);
 
     usb_hid_unbind(slot);
+    usb_audio_unbind(slot);
     usb_hub_forget(slot);
     xhci_disable_slot(slot);
     klog_printf("usb: %04x:%04x \"%s\" detached\n",

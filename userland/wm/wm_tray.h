@@ -16,6 +16,22 @@
 // hooks wm.c and wm_render.c call directly, same "not a real module
 // boundary, just organized by concern" spirit as start_menu.h.
 
+// Registers an ICON item -- the panel's own, not an app's (wm.h offers
+// text items only). `icon` is an icon NAME kept by the caller, so it
+// must be a string literal or other static storage. Returns a handle,
+// or -1 when the tray is full.
+int tray_register_icon(const char *icon);
+
+// Swaps an icon item's picture -- the volume item's speaker changing
+// with the level. A no-op when the name is unchanged, so this may be
+// called every frame without repainting the taskbar.
+void tray_set_icon(int tray_id, const char *icon);
+
+// Any item's box in the taskbar strip, from the SAME right-to-left walk
+// that draws it -- so a click cannot be told a different position from
+// the one the item was drawn at. 0 when there is no such item.
+int tray_item_rect(int tray_id, int *out_x, int *out_y, int *out_w, int *out_h);
+
 // Registers the built-in clock as tray item 0 -- call once from
 // wm_run()'s setup, before entering the main loop.
 void tray_init(void);

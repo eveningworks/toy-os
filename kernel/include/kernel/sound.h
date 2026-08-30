@@ -18,8 +18,16 @@
 // zero copies anywhere. A later card that cannot scatter-gather over
 // one buffer copies in ITS half; the ABI does not move.
 
+// A device's `name` is its stable id -- what `audio_device` persists
+// and what a test greps for. Its `label` is what a person reads.
+#define SOUND_NAME_MAX 16
+
 struct sound_device {
     const char *name;
+
+    // Human-facing, e.g. "QEMU USB Audio". NULL falls back to `name`,
+    // so a driver with nothing better to say need not invent one.
+    const char *label;
 
     // Start/stop the engine over the ring `sound_register()` supplied.
     // start() begins at the ring's first chunk.
@@ -33,9 +41,46 @@ struct sound_device {
 // A driver that found its hardware registers here, handing the core
 // nothing -- the core hands IT the ring: `ring` is SND_RING_BYTES of
 // physically contiguous, kernel-mapped memory the driver must point
-// its descriptors at. First registration wins (one active device).
-// Returns 1, or 0 when a device already holds the slot.
+// its descriptors at. Returns 1, or 0 when the table is full.
+//
+// SEVERAL DEVICES MAY BE REGISTERED; exactly one is ACTIVE, and only
+// the active one is ever started. With no choice made the FIRST device
+// discovered is the active one and a later plug does not disturb it; a
+// choice (`audio_device`) outranks discovery order and is sticky --
+// it survives that card being unplugged and takes effect again when it
+// returns. See docs/decisions.md.
 int sound_register(const struct sound_device *dev, void *ring, uint64_t ring_phys);
+
+// The device is GONE -- a USB card unplugged. If it was the active
+// one, the stream stops and `device_gone` is published to whoever holds
+// it (abi/sound_abi.h); another registered device then becomes active
+// for the next open. Unknown devices are ignored, so a driver may call
+// this unconditionally on teardown.
+void sound_unregister(const struct sound_device *dev);
+
+// The registered devices, in registration order, and which of them is
+// active. `sound_device_label()` never returns NULL -- it falls back to
+// the name. These back `lsdev` and the `audio_device` setting's choice
+// list -- which is how the desktop's volume popup gets its rows, since
+// a setting's choices already travel to ring 3. Nothing else should be
+// enumerating drivers.
+int sound_device_count(void);
+const char *sound_device_name(int index);
+const char *sound_device_label(int index);
+int sound_device_is_active(int index);
+
+// The active device's name, or "" when there is none.
+const char *sound_active_name(void);
+
+// Choose the output device by name, or "auto" to let the newest
+// registration win. Returns 1 when the preference was accepted --
+// INCLUDING a name no device currently carries, which is not an error:
+// the setting outlives the device, and unplugging a chosen card must
+// not silently rewrite the choice. Returns 0 only for a NULL name.
+int sound_select(const char *name);
+
+// The current preference -- "auto", or the chosen device's name.
+const char *sound_preference(void);
 
 // The driver's completion interrupt calls this with the byte offset of
 // the chunk the hardware is NOW playing. The core zeroes everything

@@ -122,6 +122,14 @@ struct xhci_completion {
     uint32_t code;          // completion code
     uint32_t residual;      // bytes NOT transferred
     uint8_t  slot;
+    // THE WHOLE TD, not just the TRB carrying IOC. A control transfer
+    // that FAILS is reported against the stage that failed -- the Data
+    // Stage, commonly -- and the Status Stage TRB this waiter was
+    // armed on is then never executed at all. Waiting for it alone is
+    // a 2-million-poll hang per refused request, and a permanently
+    // halted endpoint after it. Zeroed when the wait completes, so a
+    // late event cannot be mistaken for the NEXT transfer's.
+    uint64_t ring_lo, ring_hi;
 };
 static volatile struct xhci_completion g_cmd_done;
 static volatile struct xhci_completion g_xfer_done;
@@ -761,6 +769,9 @@ int xhci_control(uint8_t slot, const uint8_t setup[8],
     // IN when there was no data at all. It carries IOC, so it is the
     // TRB whose Transfer Event the waiter matches on.
     g_xfer_done.done = 0;
+    g_xfer_done.ring_lo = sl->ep0.phys;
+    g_xfer_done.ring_hi = sl->ep0.phys +
+                          (uint64_t)sl->ep0.count * sizeof(struct xhci_trb);
     uint64_t status_trb = xhci_ring_push(&sl->ep0, 0, 0,
                               XHCI_TRB_SET_TYPE(XHCI_TRB_STATUS_STAGE) |
                               ((len && in) ? 0 : (1u << 16)) | XHCI_TRB_IOC);
@@ -768,15 +779,24 @@ int xhci_control(uint8_t slot, const uint8_t setup[8],
 
     ring_doorbell(slot, dci_of(0));
 
-    if (wait_completion(&g_xfer_done, "control transfer") < 0) return -1;
+    if (wait_completion(&g_xfer_done, "control transfer") < 0) {
+        g_xfer_done.ring_lo = g_xfer_done.ring_hi = 0;
+        return -1;
+    }
     if (g_xfer_done.code != XHCI_CC_SUCCESS &&
         g_xfer_done.code != XHCI_CC_SHORT_PACKET) {
         // A STALL is a legitimate answer to a request the device does
-        // not support (SET_IDLE, commonly) -- but it also HALTS ep0, so
-        // without this the next control transfer to the device fails
-        // too and one refused request kills the whole enumeration.
-        // Invisible on QEMU, whose devices never halt the endpoint.
-        if (g_xfer_done.code == XHCI_CC_STALL)
+        // not support (SET_IDLE, commonly; a class request addressed to
+        // an entity it does not have) -- and every code here HALTS ep0,
+        // so without the reset the next control transfer to the device
+        // fails too and one refused request kills the whole
+        // enumeration. QEMU reaches this through the transaction-error
+        // path rather than STALL, which is why the set is not just the
+        // one code.
+        if (g_xfer_done.code == XHCI_CC_STALL ||
+            g_xfer_done.code == XHCI_CC_BABBLE ||
+            g_xfer_done.code == XHCI_CC_USB_TRANSACTION_ERR ||
+            g_xfer_done.code == XHCI_CC_DATA_BUFFER_ERROR)
             recover_halted(slot, 1, &sl->ep0);
         return -(int)g_xfer_done.code;
     }
@@ -819,6 +839,14 @@ struct xhci_ep {
     // dispatch, recovered by xhci_deferred_work().
     volatile uint8_t halted;
     uint8_t  recover_tries;
+
+    // ISOCHRONOUS OUT. Nothing above is used by one: the driver owns
+    // the buffer (there is no `buf` to allocate) and takes its
+    // completions through the callback rather than by polling ready[].
+    uint8_t  is_iso;
+    void   (*iso_done)(void *ctx, uint32_t bytes);
+    void    *iso_ctx;
+    volatile uint32_t iso_underruns;
 };
 
 // HID interfaces (a composite receiver is two on one device) plus one
@@ -843,6 +871,17 @@ static struct xhci_ep *ep_owning(uint64_t trb_phys) {
         uint64_t hi = lo + (uint64_t)e->ring.count * sizeof(struct xhci_trb);
         if (trb_phys >= lo && trb_phys < hi) return e;
     }
+    return 0;
+}
+
+// The endpoint an event names when it carries no TRB pointer -- a ring
+// underrun does that, and it is an isochronous endpoint's normal way of
+// saying "you gave me nothing to send".
+static struct xhci_ep *ep_by_dci(uint8_t slot, uint32_t dci) {
+    for (int i = 0; i < MAX_EPS; i++)
+        if (g_eps[i].in_use && g_eps[i].slot == slot &&
+            dci_of(g_eps[i].ep_addr) == dci)
+            return &g_eps[i];
     return 0;
 }
 
@@ -874,25 +913,24 @@ static uint32_t interval_field(uint8_t speed, uint8_t b_interval) {
     return log2 + 3;   // frames -> 125 us units
 }
 
-int xhci_add_interrupt_in(uint8_t slot, uint8_t ep_addr, uint16_t mps,
-                          uint8_t interval) {
-    if (!slot || slot > XHCI_MAX_SLOTS || !g_slots[slot].in_use) return -1;
-    if (mps == 0 || mps > EP_SLOT_SIZE) return -1;
-
+// The half both endpoint types share: claim a slot, build the input
+// context and issue Configure Endpoint. `ep_type` is the xHCI code (1
+// Isoch OUT, 7 Interrupt IN); `cerr` is 3 for an endpoint that retries
+// and 0 for one that cannot, which is every isochronous endpoint.
+static struct xhci_ep *ep_configure(uint8_t slot, uint8_t ep_addr, uint16_t mps,
+                                    uint8_t interval, uint32_t ep_type,
+                                    uint32_t cerr, int *out_cc) {
+    *out_cc = 0;
     struct xhci_ep *e = 0;
     for (int i = 0; i < MAX_EPS; i++) if (!g_eps[i].in_use) { e = &g_eps[i]; break; }
-    if (!e) return -1;
+    if (!e) return 0;
 
-    uint64_t ring_phys = 0, buf_phys = 0;
+    uint64_t ring_phys = 0;
     void *seg = alloc_frame(&ring_phys);
-    void *buf = alloc_frame(&buf_phys);
-    if (!seg || !buf) return -1;
+    if (!seg) return 0;
 
+    k_memset(e, 0, sizeof *e);
     e->slot = slot; e->ep_addr = ep_addr; e->mps = mps;
-    e->buf = (uint8_t *)buf; e->buf_phys = buf_phys;
-    e->next_take = 0;
-    e->halted = 0; e->recover_tries = 0;
-    for (int i = 0; i < EP_DEPTH; i++) { e->ready[i] = 0; e->ready_len[i] = 0; }
     xhci_ring_init(&e->ring, seg, ring_phys, TRBS_PER_RING, 0);
 
     struct xhci_slot *sl = &g_slots[slot];
@@ -913,11 +951,12 @@ int xhci_add_interrupt_in(uint8_t slot, uint8_t ep_addr, uint16_t mps,
     // conversion is per-speed.
     volatile uint32_t *ep = ctx_at(sl->in_ctx, 1 + dci);
     ep[0] = interval_field(sl->speed, interval) << 16;
-    ep[1] = (3u << 1) |                       // CErr = 3
-            (7u << 3) |                       // EP type 7 = Interrupt IN
-            ((uint32_t)mps << 16);
+    ep[1] = (cerr << 1) | (ep_type << 3) | ((uint32_t)mps << 16);
     ep[2] = (uint32_t)(ring_phys & 0xFFFFFFFFu) | 1u;   // DCS = 1
     ep[3] = (uint32_t)(ring_phys >> 32);
+    // Max ESIT Payload is what the endpoint moves per service interval,
+    // and the controller reserves BANDWIDTH from it -- an isochronous
+    // endpoint that leaves it at zero is scheduled for nothing.
     ep[4] = (uint32_t)mps | ((uint32_t)mps << 16);      // avg TRB len, max ESIT
 
     e->in_use = 1;   // published before the endpoint can complete anything
@@ -929,11 +968,69 @@ int xhci_add_interrupt_in(uint8_t slot, uint8_t ep_addr, uint16_t mps,
         klog_printf("usb: configure endpoint 0x%x (slot %u) failed: %s\n",
                     ep_addr, slot, xhci_completion_name((uint32_t)cc));
         e->in_use = 0;
-        return -cc;
+        *out_cc = cc;
+        return 0;
     }
+    return e;
+}
+
+int xhci_add_interrupt_in(uint8_t slot, uint8_t ep_addr, uint16_t mps,
+                          uint8_t interval) {
+    if (!slot || slot > XHCI_MAX_SLOTS || !g_slots[slot].in_use) return -1;
+    if (mps == 0 || mps > EP_SLOT_SIZE) return -1;
+
+    uint64_t buf_phys = 0;
+    void *buf = alloc_frame(&buf_phys);
+    if (!buf) return -1;
+
+    int cc = 0;
+    struct xhci_ep *e = ep_configure(slot, ep_addr, mps, interval, 7, 3, &cc);
+    if (!e) return cc ? -cc : -1;
+    e->buf = (uint8_t *)buf;
+    e->buf_phys = buf_phys;
 
     for (uint8_t i = 0; i < EP_DEPTH; i++) ep_post(e, i);
     return 0;
+}
+
+int xhci_add_isoch_out(uint8_t slot, uint8_t ep_addr, uint16_t mps,
+                       uint8_t interval, void (*done)(void *ctx, uint32_t bytes),
+                       void *ctx) {
+    if (!slot || slot > XHCI_MAX_SLOTS || !g_slots[slot].in_use) return -1;
+    if (mps == 0 || (ep_addr & 0x80)) return -1;   // OUT endpoints only
+
+    int cc = 0;
+    // CErr = 0: an isochronous transfer is not retried, and the spec
+    // has the controller ignore the field on such an endpoint anyway.
+    struct xhci_ep *e = ep_configure(slot, ep_addr, mps, interval, 1, 0, &cc);
+    if (!e) return cc ? -cc : -1;
+    e->is_iso   = 1;
+    e->iso_done = done;
+    e->iso_ctx  = ctx;
+    // Nothing is posted here: an isochronous ring with no TDs is idle,
+    // not broken, and the stream's first packet is the driver's to
+    // decide the timing of.
+    return 0;
+}
+
+int xhci_isoch_post(uint8_t slot, uint8_t ep_addr, uint64_t buf_phys,
+                    uint32_t len, int ioc) {
+    struct xhci_ep *e = ep_find(slot, ep_addr);
+    if (!e || !e->is_iso) return -1;
+
+    // SIA rather than a Frame ID: the alternative is tracking the
+    // controller's own frame counter and predicting one interval ahead,
+    // which buys nothing for a stream that is simply continuous.
+    xhci_ring_push(&e->ring, buf_phys, len & 0x1FFFFu,
+                   XHCI_TRB_SET_TYPE(XHCI_TRB_ISOCH) | XHCI_TRB_SIA |
+                   (ioc ? XHCI_TRB_IOC : 0));
+    ring_doorbell(e->slot, dci_of(e->ep_addr));
+    return 0;
+}
+
+uint32_t xhci_isoch_underruns(uint8_t slot, uint8_t ep_addr) {
+    struct xhci_ep *e = ep_find(slot, ep_addr);
+    return e ? e->iso_underruns : 0;
 }
 
 int xhci_take_report(uint8_t slot, uint8_t ep_addr, void *buf, uint32_t cap) {
@@ -973,7 +1070,9 @@ void xhci_disable_slot(uint8_t slot) {
         if (!e->in_use || e->slot != slot) continue;
         e->in_use = 0;   // unpublished before its memory goes away
         pmm_free_contiguous(e->ring.phys, 1);
-        pmm_free_contiguous(e->buf_phys, 1);
+        // An isochronous endpoint has no buffer of ours -- the driver
+        // owns it. Freeing "frame zero" would hand real memory back.
+        if (e->buf_phys) pmm_free_contiguous(e->buf_phys, 1);
     }
 
     g_hc.dcbaa[slot] = 0;
@@ -1075,11 +1174,25 @@ void xhci_service(void) {
             // A Transfer Event names the TRB that finished. Control
             // transfers wait on their Status Stage TRB; interrupt
             // endpoints are matched by the HID layer, which lands next.
-            if (src == g_xfer_done.trb) {
+            if (src == g_xfer_done.trb ||
+                (!g_xfer_done.done && g_xfer_done.ring_hi &&
+                 src >= g_xfer_done.ring_lo && src < g_xfer_done.ring_hi)) {
                 g_xfer_done.code     = code;
                 g_xfer_done.residual = ev.status & 0xFFFFFFu;
                 g_xfer_done.slot     = (uint8_t)((ev.control >> 24) & 0xFFu);
+                g_xfer_done.ring_lo  = 0;
+                g_xfer_done.ring_hi  = 0;
                 g_xfer_done.done     = 1;
+            } else if (code == XHCI_CC_RING_UNDERRUN ||
+                       code == XHCI_CC_RING_OVERRUN) {
+                // No TRB pointer on these -- the endpoint is named by
+                // the event itself. An isochronous stream that has
+                // stopped being fed says exactly this, once, and it is
+                // not an error to recover from.
+                struct xhci_ep *e = ep_by_dci((uint8_t)((ev.control >> 24) & 0xFFu),
+                                              (ev.control >> 16) & 0x1Fu);
+                if (e) e->iso_underruns++;
+                else   g_hc.xfer_orphan++;
             } else {
                 struct xhci_ep *e = ep_owning(src);
                 if (!e) g_hc.xfer_orphan++;
@@ -1089,12 +1202,26 @@ void xhci_service(void) {
                     // doorbell until Reset Endpoint. Marked here, fixed
                     // in xhci_deferred_work() -- commands cannot be
                     // issued from inside this drain.
-                    if (code == XHCI_CC_STALL || code == XHCI_CC_BABBLE ||
-                        code == XHCI_CC_USB_TRANSACTION_ERR ||
-                        code == XHCI_CC_DATA_BUFFER_ERROR)
+                    //
+                    // An ISOCHRONOUS endpoint is exempt: it does not
+                    // halt, and a missed interval is a dropped packet
+                    // rather than a stream to reset. Resetting one on a
+                    // stutter is how a glitch becomes silence.
+                    if (!e->is_iso &&
+                        (code == XHCI_CC_STALL || code == XHCI_CC_BABBLE ||
+                         code == XHCI_CC_USB_TRANSACTION_ERR ||
+                         code == XHCI_CC_DATA_BUFFER_ERROR))
                         e->halted = 1;
                 } else g_hc.xfer_ok++;
-                if (e && (code == XHCI_CC_SUCCESS || code == XHCI_CC_SHORT_PACKET)) {
+                if (e && e->is_iso) {
+                    // The driver refills and re-posts from here, inside
+                    // the drain. That is safe because posting touches
+                    // only its own transfer ring and a doorbell -- never
+                    // the event ring this loop owns.
+                    uint32_t resid = ev.status & 0xFFFFFFu;
+                    uint32_t got = resid <= e->mps ? e->mps - resid : 0;
+                    if (e->iso_done) e->iso_done(e->iso_ctx, got);
+                } else if (e && (code == XHCI_CC_SUCCESS || code == XHCI_CC_SHORT_PACKET)) {
                     uint32_t idx = (uint32_t)((src - e->ring.phys) /
                                               sizeof(struct xhci_trb));
                     if (idx < TRBS_PER_RING) {

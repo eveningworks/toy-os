@@ -305,6 +305,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // Audio, after pci_init() like every PCI-scanning driver. Finding
     // no controller is the common case and not an error.
     ac97_init();
+
     klog_write("toy-os: kernel heap initialized\n");
 
     // No self-tests run here any more. pmm/heap/json/tfs each used to be

@@ -208,10 +208,20 @@ def run(dbg, qmp, tmp, res):
     # the board. Control point included, per docs/gui-guidelines.md.
     from PIL import Image
     shot = os.path.abspath(os.path.join(tmp, "mines_board.png"))
-    qmp.screenshot(shot)
+    bx, by, bw, bh = lay.board
+    # SETTLED, not a raw grab. A capture landing mid-paint reads the
+    # backdrop where the board is about to be, which is precisely what
+    # this check calls "not painted" -- it failed once in a full
+    # gui_regress run and passed 3 of 3 alone, the signature of the
+    # timing this repo's stable_pixels() exists for. Every other pixel
+    # check in this file already goes through it. The box is the board
+    # plus a margin, so the control point below comes out of the SAME
+    # settled frame; the whole screen would never settle, because the
+    # taskbar clock ticks.
+    qmp.stable_pixels(shot, (lay.ox + bx - 8, lay.oy + by,
+                             lay.ox + bx + bw, lay.oy + by + bh))
     with Image.open(shot) as im:
         px = im.convert("RGB")
-        bx, by, bw, bh = lay.board
         cover = px.getpixel((lay.ox + bx + 4, lay.oy + by + 4))
         # Just outside the board's left edge: window background.
         backdrop = px.getpixel((lay.ox + bx - 4, lay.oy + by + 4))

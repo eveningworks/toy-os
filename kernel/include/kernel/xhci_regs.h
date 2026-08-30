@@ -128,6 +128,13 @@
 #define XHCI_TRB_IDT        (1u << 6)   // Immediate Data
 #define XHCI_TRB_TC         (1u << 1)   // Toggle Cycle (Link TRBs only)
 
+// Isoch TRBs only: Start Isoch ASAP. With it set the controller
+// schedules the TD in the earliest interval it can and the Frame ID
+// field (bits 30:20) is ignored -- which is what lets this driver hand
+// over a stream of packets without computing frame numbers against a
+// clock it does not read. See xhci_isoch_post().
+#define XHCI_TRB_SIA        (1u << 31)
+
 #define XHCI_TRB_TYPE_SHIFT 10
 #define XHCI_TRB_TYPE(v)    (((v) >> XHCI_TRB_TYPE_SHIFT) & 0x3Fu)
 #define XHCI_TRB_SET_TYPE(t) ((uint32_t)(t) << XHCI_TRB_TYPE_SHIFT)
@@ -137,6 +144,7 @@
 #define XHCI_TRB_SETUP_STAGE        2
 #define XHCI_TRB_DATA_STAGE         3
 #define XHCI_TRB_STATUS_STAGE       4
+#define XHCI_TRB_ISOCH              5
 #define XHCI_TRB_LINK               6
 // Command ring TRB types
 #define XHCI_TRB_ENABLE_SLOT        9
@@ -163,6 +171,14 @@
 #define XHCI_CC_TRB_ERROR           5
 #define XHCI_CC_STALL               6
 #define XHCI_CC_SHORT_PACKET        13
+// The three an isochronous endpoint produces in normal life: the ring
+// ran dry (nothing to send this interval), the controller could not
+// keep up, or a service interval was skipped. NONE of them halt the
+// endpoint, and treating them as transfer errors is how a stream that
+// merely stuttered gets torn down.
+#define XHCI_CC_RING_UNDERRUN       14
+#define XHCI_CC_RING_OVERRUN        15
+#define XHCI_CC_MISSED_SERVICE      23
 
 // --- extended capabilities (xECP) ------------------------------------
 #define XHCI_XECP_ID(v)     ((v) & 0xFFu)

@@ -89,6 +89,37 @@ int xhci_control(uint8_t slot, const uint8_t setup[8],
 int xhci_add_interrupt_in(uint8_t slot, uint8_t ep_addr, uint16_t mps,
                           uint8_t interval);
 
+// Adds one isochronous OUT endpoint to a configured device and starts
+// its transfer ring, via a Configure Endpoint command. `mps` is the
+// endpoint's wMaxPacketSize -- for an isochronous endpoint that is the
+// bytes it carries EVERY service interval, not a ceiling.
+//
+// `done` is called once per completed TD group, FROM THE EVENT DRAIN
+// (so from interrupt context), with the bytes the controller reported.
+// A driver's callback may call xhci_isoch_post() and nothing else here.
+// Returns 0, or a negative completion code.
+int xhci_add_isoch_out(uint8_t slot, uint8_t ep_addr, uint16_t mps,
+                       uint8_t interval, void (*done)(void *ctx, uint32_t bytes),
+                       void *ctx);
+
+// Queues ONE isochronous TD -- one packet, one service interval -- from
+// `buf_phys`. `ioc` asks for a completion event; a group of TDs
+// normally carries it on the last one only, since an isochronous
+// endpoint completes them in order and an error reports itself
+// regardless. Returns 0, or -1 when there is no such endpoint.
+//
+// The buffer must not cross a 64 KiB boundary: xHCI splits a TRB there
+// and this posts one TRB per TD. A 192-byte packet inside one frame
+// cannot, which is why the audio driver keeps its packets in a frame of
+// its own rather than pointing into the sound core's 64 KiB ring.
+int xhci_isoch_post(uint8_t slot, uint8_t ep_addr, uint64_t buf_phys,
+                    uint32_t len, int ioc);
+
+// Ring underruns seen on that endpoint -- the stream ran dry. A
+// diagnostic counter, so a test can tell "it never played" from "it
+// played and stuttered".
+uint32_t xhci_isoch_underruns(uint8_t slot, uint8_t ep_addr);
+
 // Takes the next completed report from that endpoint, if one has
 // arrived, copying at most `cap` bytes. Returns the byte count, or 0
 // when nothing is pending. Re-posts the TRB, so no caller has to think
