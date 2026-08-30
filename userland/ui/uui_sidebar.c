@@ -399,7 +399,10 @@ static void draw_op(struct ugfx_surface *surf, const void *w) {
 static int hit_op(const void *w, int cx, int cy) {
     return uui_sidebar_hit((const struct uui_sidebar *)w, cx, cy) >= 0;
 }
-static int press_op(void *w, int cx, int cy) { return uui_sidebar_press(w, cx, cy); }
+static int press_op(void *w, int cx, int cy, unsigned mods) {
+    (void)mods;
+    return uui_sidebar_press(w, cx, cy);
+}
 static int motion_op(void *w, int cx, int cy, unsigned buttons) {
     return uui_sidebar_motion(w, cx, cy, buttons);
 }

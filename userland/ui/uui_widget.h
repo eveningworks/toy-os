@@ -69,7 +69,10 @@ struct uui_widget_ops {
     // the POINTER GRAB: every motion and the release go to that widget
     // wherever the cursor then goes, which is what makes a drag work
     // without any app tracking whether a button is down.
-    int (*press)(void *w, int cx, int cy);
+    // `mods` is the KEY_MOD_* bits held at the press -- already split
+    // out of the event by uapp.c, so a widget never sees the button
+    // bits. Ctrl+click and Shift+click are what it is for.
+    int (*press)(void *w, int cx, int cy, unsigned mods);
     int (*motion)(void *w, int cx, int cy, unsigned buttons);
     int (*release)(void *w, int cx, int cy);
     int (*wheel)(void *w, int notches);

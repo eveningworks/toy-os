@@ -680,7 +680,8 @@ static int ops_hit(const void *w, int cx, int cy) {
     return uui_menubar_hit((const struct uui_menubar *)w, cx, cy);
 }
 
-static int ops_press(void *w, int cx, int cy) {
+static int ops_press(void *w, int cx, int cy, unsigned mods) {
+    (void)mods;
     return uui_menubar_press((struct uui_menubar *)w, cx, cy);
 }
 

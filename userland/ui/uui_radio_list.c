@@ -130,7 +130,8 @@ static int rl_ops_hit(const void *w, int cx, int cy) {
 // choosing, but remember what it was. Nothing is committed here -- the
 // app is not told until release, which is what lets a press dragged off
 // the list change nothing.
-static int rl_ops_press(void *w, int cx, int cy) {
+static int rl_ops_press(void *w, int cx, int cy, unsigned mods) {
+    (void)mods;
     struct uui_radio_list *l = (struct uui_radio_list *)w;
     if (l->disabled) return 0;
     int idx = uui_radio_list_hit(l, cx, cy);

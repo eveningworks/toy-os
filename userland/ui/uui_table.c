@@ -34,6 +34,7 @@ void uui_table_init(struct uui_table *t, int x, int y, int w, int h,
     // says nothing about sorting behaves exactly as it did before.
     t->compare = 0;
     t->tint = 0;
+    t->fade = 0;
     t->sort_col = UUI_TABLE_UNSORTED;
     t->sort_dir = 1;
     t->order_rows = 0;
@@ -154,6 +155,10 @@ int uui_table_view_row(const struct uui_table *t, int source_row) {
 void uui_table_set_compare(struct uui_table *t, uui_table_cmp_fn compare) {
     t->compare = compare;
     order_rebuild(t);
+}
+
+void uui_table_set_fade(struct uui_table *t, uui_table_fade_fn fade) {
+    t->fade = fade;
 }
 
 void uui_table_set_tint(struct uui_table *t, uui_table_tint_fn tint) {
@@ -339,6 +344,11 @@ void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
         if (idx == t->selected) { rbg = t->sel_bg; rfg = t->sel_fg; }
         else if (idx == t->hovered) { rbg = uui_state_bg(t->bg, UUI_STATE_HOVER); }
         else if (tint) { rbg = tint; }
+
+        // HALFWAY TO THE BACKGROUND, which is what a cut looks like on
+        // every desktop. Applied after the state colours so a faded row
+        // that is also selected fades from the SELECTION's text colour.
+        if (t->fade && t->fade(t->ctx, idx)) rfg = ugfx_blend(rfg, rbg, 128);
 
         if (rbg != t->bg) ugfx_fill_rect(s, t->x, ry, t->w - bar, rh, rbg);
         for (int c = 0; c < t->col_count; c++) draw_cell(s, t, c, idx, ry, rfg, rbg);
@@ -647,7 +657,8 @@ static void tb_ops_set_focused(void *w, int focused) {
     ((struct uui_table *)w)->focused = focused;
 }
 
-static int tb_ops_press(void *w, int cx, int cy) {
+static int tb_ops_press(void *w, int cx, int cy, unsigned mods) {
+    (void)mods;
     struct uui_table *t = (struct uui_table *)w;
     // The scrollbar outranks the rows: uui_table_hit() excludes the bar
     // column, so a press there has to be offered to the bar first or it

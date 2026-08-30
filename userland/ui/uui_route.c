@@ -35,7 +35,7 @@ static int container_admits(struct uui_item *it, int cx, int cy) {
 
 // Deliver a press to one item; returns the consuming item, or NULL.
 static struct uui_item *press_item(struct uui_item *it, int cx, int cy,
-                                   int *changed) {
+                                   unsigned mods, int *changed) {
     if (it->hidden) return NULL;   // hidden is hidden from the mouse too
     int n = 0;
     struct uui_item *sub = nested(it, &n);
@@ -43,7 +43,7 @@ static struct uui_item *press_item(struct uui_item *it, int cx, int cy,
         if (!container_admits(it, cx, cy)) return NULL;
         // Back to front within the nested container too.
         for (int i = n - 1; i >= 0; i--) {
-            struct uui_item *hit = press_item(&sub[i], cx, cy, changed);
+            struct uui_item *hit = press_item(&sub[i], cx, cy, mods, changed);
             if (hit) return hit;
         }
         // No child took it -- fall through to the container's OWN press.
@@ -55,7 +55,7 @@ static struct uui_item *press_item(struct uui_item *it, int cx, int cy,
     // popup is drawn outside its own rect (see uui_route.h).
     int overlay = it->ops->overlay_active && it->ops->overlay_active(it->widget);
     if (!overlay && it->ops->hit && !it->ops->hit(it->widget, cx, cy)) return NULL;
-    if (!it->ops->press(it->widget, cx, cy)) return NULL;
+    if (!it->ops->press(it->widget, cx, cy, mods)) return NULL;
     *changed = 1;
     return it;
 }
@@ -80,19 +80,20 @@ static struct uui_item *overlay_owner(struct uui_item *items, int count) {
     return NULL;
 }
 
-int uui_router_press(struct uui_router *r, int cx, int cy, int *out_changed) {
+int uui_router_press(struct uui_router *r, int cx, int cy, unsigned mods,
+                      int *out_changed) {
     int changed = 0;
     struct uui_item *taken = NULL;
 
     struct uui_item *ov = overlay_owner(r->items, r->count);
-    if (ov && ov->ops->press && ov->ops->press(ov->widget, cx, cy)) {
+    if (ov && ov->ops->press && ov->ops->press(ov->widget, cx, cy, mods)) {
         changed = 1;
         taken = ov;
     }
 
     if (!taken) {
         for (int i = r->count - 1; i >= 0 && !taken; i--) {
-            taken = press_item(&r->items[i], cx, cy, &changed);
+            taken = press_item(&r->items[i], cx, cy, mods, &changed);
         }
     }
 

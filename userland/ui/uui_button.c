@@ -75,7 +75,8 @@ static void btn_draw(struct ugfx_surface *s, const void *w) {
 // Arm on press, commit on release, and a press dragged off commits
 // nothing -- docs/gui-guidelines.md's rule, implemented the same way the
 // group implements it rather than a second time with different edges.
-static int btn_press(void *w, int cx, int cy) {
+static int btn_press(void *w, int cx, int cy, unsigned mods) {
+    (void)mods;
     struct uui_button *b = (struct uui_button *)w;
     if (b->disabled) return 0;
     int hit = uui_hit(b->x, b->y, b->w, b->h, cx, cy);

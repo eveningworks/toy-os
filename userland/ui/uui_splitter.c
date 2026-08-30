@@ -211,7 +211,7 @@ static void sp_draw(struct ugfx_surface *s, const void *w) {
 static int sp_hit(const void *w, int cx, int cy) {
     return uui_splitter_hit((const struct uui_splitter *)w, cx, cy);
 }
-static int sp_press(void *w, int cx, int cy) { return uui_splitter_press(w, cx, cy); }
+static int sp_press(void *w, int cx, int cy, unsigned mods) { return uui_splitter_press(w, cx, cy); }
 static int sp_motion(void *w, int cx, int cy, unsigned buttons) {
     struct uui_splitter *sp = w;
     // A DRAG NEEDS THE BUTTON STILL DOWN: the grab lasts from press to

@@ -110,7 +110,8 @@ static int cb_ops_hit(const void *w, int cx, int cy) {
     return uui_checkbox_hit((const struct uui_checkbox *)w, cx, cy);
 }
 
-static int cb_ops_press(void *w, int cx, int cy) {
+static int cb_ops_press(void *w, int cx, int cy, unsigned mods) {
+    (void)mods;
     (void)cx; (void)cy;
     struct uui_checkbox *cb = (struct uui_checkbox *)w;
     if (cb->disabled) return 0;

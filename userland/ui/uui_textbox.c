@@ -233,7 +233,8 @@ const struct uui_widget_ops uui_textbox_focus_ops = {
 // nothing and you had to walk there. The character index comes from the
 // same horizontal-window arithmetic draw() uses (see caret_index()), so
 // clicking a glyph puts the caret at that glyph rather than near it.
-static int tb_ops_press(void *w, int cx, int cy) {
+static int tb_ops_press(void *w, int cx, int cy, unsigned mods) {
+    (void)mods;
     (void)cy;
     struct uui_textbox *f = (struct uui_textbox *)w;
     // Places the caret AND collapses any selection, which is what a

@@ -202,7 +202,7 @@ static void sc_bounds(const void *w, int *x, int *y, int *out_w, int *out_h) {
 static int sc_hit(const void *w, int cx, int cy) {
     return uui_scale_hit((const struct uui_scale *)w, cx, cy);
 }
-static int sc_press(void *w, int cx, int cy) { return uui_scale_press(w, cx, cy); }
+static int sc_press(void *w, int cx, int cy, unsigned mods) { return uui_scale_press(w, cx, cy); }
 static int sc_motion(void *w, int cx, int cy, unsigned buttons) {
     struct uui_scale *s = w;
     // A DRAG NEEDS THE BUTTON STILL DOWN. `dragging` alone is not

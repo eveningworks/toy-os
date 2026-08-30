@@ -287,7 +287,8 @@ static int hit_op(const void *w, int cx, int cy) {
 // EVERY interactive slot checks `disabled` -- a spinbox is reachable by
 // wheel and by keyboard as well as by pointer, so guarding the press
 // alone would leave two live ways in.
-static int press_op(void *w, int cx, int cy) {
+static int press_op(void *w, int cx, int cy, unsigned mods) {
+    (void)mods;
     if (((struct uui_spinbox *)w)->disabled) return 0;
     return uui_spinbox_press(w, cx, cy);
 }

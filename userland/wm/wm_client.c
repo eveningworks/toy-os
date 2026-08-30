@@ -15,6 +15,7 @@
 // produced desktop.c/start_menu.c/file_picker.c. See wm.c's top
 // comment.
 #include "wm_internal.h"
+#include "wm_rawin.h"
 #include "wm_debug.h" // the diagnostic channel's WM end, below
 #include "win_server.h"
 #include "kapi.h"
@@ -774,7 +775,11 @@ void wm_client_send_mouse(struct window *win, int type, int x, int y, unsigned b
     // re-derive the same subtraction.
     ev.a = x - window_content_x(win);
     ev.b = y - window_content_y(win);
-    ev.mods = buttons;
+    // The buttons in the low byte, the LIVE keyboard modifiers in the
+    // next one -- see WIN_MOUSE_MODS_SHIFT. Read here rather than passed
+    // in because every caller would otherwise read the same global.
+    ev.mods = WIN_MOUSE_BUTTONS(buttons) |
+              ((unsigned)wm_rawin_mods_now() << WIN_MOUSE_MODS_SHIFT);
     win_events_push(win->client_pid, &ev);
 }
 

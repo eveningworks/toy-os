@@ -205,7 +205,8 @@ static int dd_ops_overlay(const void *w) {
     return ((const struct uui_dropdown *)w)->open;
 }
 
-static int dd_ops_press(void *w, int cx, int cy) {
+static int dd_ops_press(void *w, int cx, int cy, unsigned mods) {
+    (void)mods;
     struct uui_dropdown *d = (struct uui_dropdown *)w;
     if (d->disabled) return 0;
     return uui_dropdown_click(d, cx, cy);

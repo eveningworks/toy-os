@@ -109,7 +109,8 @@ static int bg_ops_hit(const void *w, int cx, int cy) {
     return 0;
 }
 
-static int bg_ops_press(void *w, int cx, int cy) {
+static int bg_ops_press(void *w, int cx, int cy, unsigned mods) {
+    (void)mods;
     struct uui_button_group *g = (struct uui_button_group *)w;
     uui_button_group_press(g, cx, cy);
     // Consumed whether or not a button lit up: the press landed inside

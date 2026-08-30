@@ -209,7 +209,8 @@ static int tv_ops_hit(const void *w, int cx, int cy) {
     return uui_textview_hit((const struct uui_textview *)w, cx, cy);
 }
 
-static int tv_ops_press(void *w, int cx, int cy) {
+static int tv_ops_press(void *w, int cx, int cy, unsigned mods) {
+    (void)mods;
     struct uui_textview *tv = (struct uui_textview *)w;
     if (uui_textview_drag_start(tv, cx, cy)) return 1;
     return uui_textview_click(tv, cx, cy);

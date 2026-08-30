@@ -233,7 +233,8 @@ static int dlg_hit(const void *w, int cx, int cy) {
     const struct uui_dialog *d = w;
     return d->open && uui_hit(d->x, d->y, d->w, d->h, cx, cy);
 }
-static int dlg_press(void *w, int cx, int cy) {
+static int dlg_press(void *w, int cx, int cy, unsigned mods) {
+    (void)mods;
     struct uui_dialog *d = w;
     if (!d->open) return 0;
     d->pressed = button_at(d, cx, cy);

@@ -341,7 +341,8 @@ static int ops_hit(const void *w, int cx, int cy) {
     return tab_at(t, cx, cy, 0) >= 0 || hit_new(t, cx, cy);
 }
 
-static int ops_press(void *w, int cx, int cy) {
+static int ops_press(void *w, int cx, int cy, unsigned mods) {
+    (void)mods;
     struct uui_tabs *t = (struct uui_tabs *)w;
     if (hit_new(t, cx, cy)) { t->pressed_new = 1; return 1; }
     int on_close = 0;

@@ -219,6 +219,40 @@ int uui_fileview_marked_is_dir(const struct uui_fileview *fv, int n) {
     return e ? (int)e->is_dir : 0;
 }
 
+void uui_fileview_set_dimmed(struct uui_fileview *fv, int row, int on) {
+    if (row < 0 || row >= (int)(sizeof fv->dimmed * 8)) return;
+    uint32_t bit = 1u << (row & 31);
+    int was = (fv->dimmed[row >> 5] & bit) != 0;
+    if (was == !!on) return;
+    if (on) { fv->dimmed[row >> 5] |= bit;  fv->dim_count++; }
+    else    { fv->dimmed[row >> 5] &= ~bit; fv->dim_count--; }
+}
+
+int uui_fileview_is_dimmed(const struct uui_fileview *fv, int row) {
+    if (row < 0 || row >= (int)(sizeof fv->dimmed * 8)) return 0;
+    return (fv->dimmed[row >> 5] & (1u << (row & 31))) != 0;
+}
+
+void uui_fileview_clear_dimmed(struct uui_fileview *fv) {
+    for (int i = 0; i < (int)(sizeof fv->dimmed / sizeof fv->dimmed[0]); i++)
+        fv->dimmed[i] = 0;
+    fv->dim_count = 0;
+}
+
+int uui_fileview_row_of(const struct uui_fileview *fv, const char *name) {
+    if (!name) return -1;
+    for (int r = 0; r < uui_fileview_row_count(fv); r++) {
+        const struct sys_dirent *e = fv_entry(fv, r);
+        if (e && strcmp(e->name, name) == 0) return r;
+    }
+    return -1;
+}
+
+// Faded rows -- see uui_table_fade_fn.
+static int fv_fade(void *ctx, int row) {
+    return uui_fileview_is_dimmed((const struct uui_fileview *)ctx, row);
+}
+
 // The marked rows' own background. Selection and hover outrank it (see
 // uui_table.h): a mark says what an operation will act on, and it must
 // not hide where the keyboard is.
@@ -232,6 +266,7 @@ static uint32_t fv_tint(void *ctx, int row) {
 void uui_fileview_init(struct uui_fileview *fv, int x, int y, int w, int h,
                         struct sys_dirent *storage, int cap) {
     memset(fv, 0, sizeof *fv);
+    fv->anchor = -1;
     fv->entries = storage;
     fv->cap = cap;
     fv->last_click_row = -1;
@@ -244,6 +279,7 @@ void uui_fileview_init(struct uui_fileview *fv, int x, int y, int w, int h,
                     fv_cols_details, 3, fv_cell, fv);
     uui_table_set_compare(&fv->table, fv_compare);
     uui_table_set_tint(&fv->table, fv_tint);
+    uui_table_set_fade(&fv->table, fv_fade);
     // Marked rows read as marked on this near-white theme by being
     // WARMER, not lighter -- the same reasoning ui_state_bg() applies
     // to hover (docs/gui-guidelines.md).
@@ -311,6 +347,8 @@ int uui_fileview_reload(struct uui_fileview *fv) {
     fv->truncated = 0;
     fv->failed = 0;
     uui_fileview_clear_marks(fv); // see uui_fileview.h -- a mark names a ROW
+    uui_fileview_clear_dimmed(fv); // ...and so do the dim bits and the anchor
+    fv->anchor = -1;
     rb_clear(&fv->band);           // its selection is those rows
     fv->has_up = fv->navigable && !fv_at_root(fv);
 
@@ -702,7 +740,9 @@ static int ic_hover(struct uui_fileview *fv, int cx, int cy) {
     return 1;
 }
 
-static int ic_press(struct uui_fileview *fv, int cx, int cy) {
+static int fv_apply_mods(struct uui_fileview *fv, int row, unsigned mods);
+
+static int ic_press(struct uui_fileview *fv, int cx, int cy, unsigned mods) {
     struct uui_table *t = &fv->table;
     if (!uui_hit(t->x, t->y, t->w, t->h, cx, cy)) return 0;
 
@@ -729,13 +769,24 @@ static int ic_press(struct uui_fileview *fv, int cx, int cy) {
     if (view < 0) {
         // Empty space: maybe a band, maybe a deselecting click --
         // rb_end() tells them apart, so nothing is decided here.
-        rb_begin(&fv->band, cx, cy, RB_REPLACE);
+        // Ctrl or Shift makes the band ADD to what is already marked,
+        // which is what the desktop's icons already do (desktop.c) and
+        // what both KDE and Windows do on the same gesture.
+        rb_begin(&fv->band, cx, cy,
+                 (mods & (KEY_MOD_CTRL | KEY_MOD_SHIFT)) ? RB_ADD : RB_REPLACE);
         return 1;
     }
 
     int src = uui_table_source_row(t, view);
     int changed = (t->selected != src);
     t->selected = src;
+
+    fv_apply_mods(fv, src, mods);
+    if (mods & (KEY_MOD_CTRL | KEY_MOD_SHIFT)) {
+        if (changed) fv_report_select(fv);
+        fv->last_click_row = -1;
+        return 1;
+    }
 
     unsigned long now = sys_ticks();
     int is_double = (src == fv->last_click_row &&
@@ -853,7 +904,50 @@ int uui_fileview_hover(struct uui_fileview *fv, int cx, int cy) {
     return uui_table_hover(&fv->table, cx, cy);
 }
 
-int uui_fileview_press(struct uui_fileview *fv, int cx, int cy) {
+// THE SELECTION AND THE MARKED SET ARE ONE THING, which is Explorer's
+// and Dolphin's model: a plain click replaces the set, Ctrl toggles one
+// row, Shift takes the range from the anchor. `row` is a SOURCE row;
+// the range is walked in VIEW order, because what a person means by
+// "everything between these two" is what they can see, not what the
+// unsorted array happens to hold.
+//
+// Returns 1 if anything changed. The ".." row is never markable -- it
+// is not a file, and an operation over a set containing it would act on
+// the parent directory.
+static int fv_apply_mods(struct uui_fileview *fv, int row, unsigned mods) {
+    if (fv_is_up_row(fv, row)) { fv->anchor = -1; return 0; }
+
+    if (mods & KEY_MOD_CTRL) {
+        uui_fileview_toggle_mark(fv, row);
+        fv->anchor = row;
+        return 1;
+    }
+
+    if ((mods & KEY_MOD_SHIFT) && fv->anchor >= 0) {
+        int a = uui_table_view_row(&fv->table, fv->anchor);
+        int b = uui_table_view_row(&fv->table, row);
+        if (a < 0 || b < 0) return 0;
+        if (a > b) { int t = a; a = b; b = t; }
+        // REPLACED, not added to: Shift means "this range", so dragging
+        // the far end back in has to un-mark what it passed over.
+        uui_fileview_clear_marks(fv);
+        for (int view = a; view <= b; view++) {
+            int src = uui_table_source_row(&fv->table, view);
+            if (src >= 0 && !fv_is_up_row(fv, src))
+                uui_fileview_toggle_mark(fv, src);
+        }
+        return 1;   // the anchor STAYS: a second Shift-click re-ranges
+    }
+
+    // Plain: the set becomes this one row, and this is where a range
+    // will start from.
+    int had = fv->mark_count > 0;
+    uui_fileview_clear_marks(fv);
+    fv->anchor = row;
+    return had;
+}
+
+int uui_fileview_press(struct uui_fileview *fv, int cx, int cy, unsigned mods) {
     // A PRESS ANYWHERE INSIDE IS CONSUMED, even on the empty space below
     // the last row. Returning 0 there does two things a caller cannot
     // work around: the router does not take the pointer grab, so no
@@ -861,7 +955,7 @@ int uui_fileview_press(struct uui_fileview *fv, int cx, int cy) {
     // (ui/uui_route.c) -- which is how clicking the blank part of a file
     // manager pane failed to make that pane the active one, while
     // clicking a row worked.
-    if (fv->mode == UUI_FILEVIEW_ICONS) return ic_press(fv, cx, cy);
+    if (fv->mode == UUI_FILEVIEW_ICONS) return ic_press(fv, cx, cy, mods);
 
     int inside = uui_hit(fv->table.x, fv->table.y, fv->table.w, fv->table.h, cx, cy);
 
@@ -870,6 +964,16 @@ int uui_fileview_press(struct uui_fileview *fv, int cx, int cy) {
     int row = uui_table_hit(&fv->table, cx, cy);
     int changed = uui_table_click(&fv->table, cx, cy);
     if (row < 0) return changed || inside;
+
+    // The modifiers act on the SET; the click still moves the cursor.
+    // Ctrl+click deliberately does NOT count toward a double click --
+    // toggling a row twice is not an "open".
+    int set_changed = fv_apply_mods(fv, row, mods);
+    if (mods & (KEY_MOD_CTRL | KEY_MOD_SHIFT)) {
+        if (changed) fv_report_select(fv);
+        fv->last_click_row = -1;
+        return set_changed || changed || inside;
+    }
 
     unsigned long now = sys_ticks();
     int is_double = (row == fv->last_click_row &&
@@ -881,7 +985,7 @@ int uui_fileview_press(struct uui_fileview *fv, int cx, int cy) {
 
     if (is_double) return uui_fileview_activate(fv) || changed;
     if (changed) fv_report_select(fv);
-    return changed || inside;
+    return set_changed || changed || inside;
 }
 
 int uui_fileview_select_at(struct uui_fileview *fv, int cx, int cy) {
@@ -889,7 +993,19 @@ int uui_fileview_select_at(struct uui_fileview *fv, int cx, int cy) {
     int row = (fv->mode == UUI_FILEVIEW_ICONS)
                   ? uui_table_source_row(t, ic_hit_view(fv, cx, cy))
                   : uui_table_hit(t, cx, cy);
-    if (row < 0 || row == t->selected) return 0;
+    if (row < 0) return 0;
+
+    // A SECONDARY CLICK INSIDE THE SET KEEPS IT. This is the one place
+    // a click does not replace the marks, and every file manager does
+    // the same: right-clicking one of five selected files must offer to
+    // act on the five, not silently drop four. Outside the set it
+    // replaces, which is the plain-click rule.
+    if (!uui_fileview_is_marked(fv, row)) {
+        uui_fileview_clear_marks(fv);
+        fv->anchor = row;
+    }
+
+    if (row == t->selected) return 0;
     t->selected = row;
     fv_report_select(fv);
     return 1;
@@ -975,8 +1091,8 @@ static void fv_ops_set_focused(void *w, int focused) {
     ((struct uui_fileview *)w)->table.focused = focused;
 }
 
-static int fv_ops_press(void *w, int cx, int cy) {
-    return uui_fileview_press((struct uui_fileview *)w, cx, cy);
+static int fv_ops_press(void *w, int cx, int cy, unsigned mods) {
+    return uui_fileview_press((struct uui_fileview *)w, cx, cy, mods);
 }
 
 static int fv_ops_motion(void *w, int cx, int cy, unsigned buttons) {

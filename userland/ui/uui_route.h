@@ -77,7 +77,10 @@ void uui_router_init(struct uui_router *r, struct uui_item *items, int count);
 // consumed it, or if the consumer has no id), and sets *out_changed to
 // 1 if anything asked for a repaint. The id is what an app switches on;
 // see uapp_desc.on_widget().
-int uui_router_press(struct uui_router *r, int cx, int cy, int *out_changed);
+// `mods` is the KEY_MOD_* bits held at the press -- the button bits
+// are already gone (uapp.c splits the event; see WIN_MOUSE_MODS).
+int uui_router_press(struct uui_router *r, int cx, int cy, unsigned mods,
+                      int *out_changed);
 int uui_router_motion(struct uui_router *r, int cx, int cy, unsigned buttons,
                        int *out_changed);
 int uui_router_release(struct uui_router *r, int cx, int cy, int *out_changed);

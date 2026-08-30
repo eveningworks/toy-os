@@ -477,7 +477,10 @@ static void tree_draw_op(struct ugfx_surface *s, const void *w) {
 static int tree_hit_op(const void *w, int cx, int cy) {
     return uui_tree_hit((const struct uui_tree *)w, cx, cy) >= 0;
 }
-static int tree_press_op(void *w, int cx, int cy) { return uui_tree_press(w, cx, cy); }
+static int tree_press_op(void *w, int cx, int cy, unsigned mods) {
+    (void)mods;
+    return uui_tree_press(w, cx, cy);
+}
 static int tree_motion_op(void *w, int cx, int cy, unsigned buttons) {
     (void)buttons;
     struct uui_tree *t = w;

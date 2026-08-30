@@ -324,7 +324,8 @@ const struct uui_widget_ops uui_listbox_focus_ops = {
 // selects a row, and the pointer GRAB keeps that drag alive when the
 // cursor leaves the control. This is what the app-side forwarding this
 // widget used to require became.
-static int lb_ops_press(void *w, int cx, int cy) {
+static int lb_ops_press(void *w, int cx, int cy, unsigned mods) {
+    (void)mods;
     struct uui_listbox *lb = (struct uui_listbox *)w;
     // The scrollbar outranks the rows: uui_listbox_hit() excludes the
     // bar column, so a press there has to be offered to the bar first

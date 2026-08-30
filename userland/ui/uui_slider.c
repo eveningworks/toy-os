@@ -211,7 +211,8 @@ static void sl_draw(struct ugfx_surface *surf, const void *w) {
 static int sl_hit(const void *w, int cx, int cy) {
     return uui_slider_hit((const struct uui_slider *)w, cx, cy);
 }
-static int sl_press(void *w, int cx, int cy) {
+static int sl_press(void *w, int cx, int cy, unsigned mods) {
+    (void)mods;
     if (((struct uui_slider *)w)->disabled) return 0;
     return uui_slider_press(w, cx, cy);
 }

@@ -82,6 +82,12 @@ typedef int (*uui_table_cmp_fn)(void *ctx, int row_a, int row_b, int col);
 // tinting a stopped process would be the second.
 typedef uint32_t (*uui_table_tint_fn)(void *ctx, int row);
 
+// FADED text on one row, for a row that is present but pending -- a
+// file staged by a cut is Explorer's and Dolphin's case, and both fade
+// the label rather than tinting the row, because a tint is already
+// "marked" here. Returns 1 to fade. NULL = no row ever faded.
+typedef int (*uui_table_fade_fn)(void *ctx, int row);
+
 // The permutation is a fixed array because Toykit has no allocator.
 // Past this many rows the table shows the first UUI_TABLE_MAX_ROWS in
 // sorted order and the rest unsorted after them, rather than silently
@@ -118,6 +124,7 @@ struct uui_table {
     // by supplying a comparator.
     uui_table_cmp_fn compare;
     uui_table_tint_fn tint;  // NULL = no row ever tinted
+    uui_table_fade_fn fade;  // NULL = no row ever faded
     int sort_col;   // UUI_TABLE_UNSORTED, or a column index
     int sort_dir;   // 1 ascending, -1 descending
 
@@ -180,6 +187,8 @@ void uui_table_set_compare(struct uui_table *t, uui_table_cmp_fn compare);
 
 // See uui_table_tint_fn. NULL turns it off again.
 void uui_table_set_tint(struct uui_table *t, uui_table_tint_fn tint);
+// See uui_table_fade_fn. NULL turns it off again.
+void uui_table_set_fade(struct uui_table *t, uui_table_fade_fn fade);
 
 // Shows or hides the header row. On by default; a table with it off
 // still sorts if it has a comparator, it just has nothing to click.

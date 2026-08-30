@@ -181,7 +181,8 @@ static int tb_hit_op(const void *w, int cx, int cy) {
     return uui_hit(t->x, t->y, t->w, t->h, cx, cy);
 }
 
-static int tb_press_op(void *w, int cx, int cy) {
+static int tb_press_op(void *w, int cx, int cy, unsigned mods) {
+    (void)mods;
     struct uui_toolbar *t = w;
     t->armed = uui_toolbar_hit_item(t, cx, cy);
     return 1; // inside the strip: always consumed (and takes the grab)

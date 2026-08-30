@@ -272,7 +272,8 @@ static int bar_press(struct uui_scrollview *sv, int cx, int cy) {
 
 // Reached only when no CHILD took the press (uui_route.c falls through
 // to the container), so this is the scrollbar's and nothing else's.
-static int sv_press(void *w, int cx, int cy) {
+static int sv_press(void *w, int cx, int cy, unsigned mods) {
+    (void)mods;
     struct uui_scrollview *sv = w;
     if (!sv_hit(sv, cx, cy)) return 0;
     if (on_bar(sv, cx)) return bar_press(sv, cx, cy);

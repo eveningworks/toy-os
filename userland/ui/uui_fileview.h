@@ -129,6 +129,19 @@ struct uui_fileview {
     int mark_count;
     uint32_t mark_bg;
 
+    // WHERE A SHIFT-RANGE STARTS. A source row, or -1. Set by a plain
+    // or Ctrl click and by Insert/Space, exactly as Explorer, Dolphin
+    // and every list view since the Finder: Shift extends from the last
+    // row you touched WITHOUT Shift, not from the selection's edge.
+    int anchor;
+
+    // DIMMED rows -- present but pending, which is what a cut looks
+    // like. A separate bitmap from `marks` because the two are
+    // independent: a staged file can also be marked. Same lifetime rule
+    // as the marks, and for the same reason -- see the note above.
+    uint32_t dimmed[(SYS_LISTDIR_MAX + 1 + 31) / 32];
+    int dim_count;
+
     // Double-click state, in sys_ticks(). OWNED.
     int last_click_row;
     unsigned long last_click_tick;
@@ -224,6 +237,19 @@ void uui_fileview_clear_marks(struct uui_fileview *fv);
 int  uui_fileview_marked_path(const struct uui_fileview *fv, int n, char *out, int cap);
 int  uui_fileview_marked_is_dir(const struct uui_fileview *fv, int n);
 
+// --- dimmed rows; see the struct ------------------------------------
+//
+// CLEARED BY EVERY RELOAD, like the marks. An app that dims a set held
+// somewhere else (the clipboard, say) re-applies it from the on_dir
+// callback, by NAME -- a row index does not survive a re-read.
+void uui_fileview_set_dimmed(struct uui_fileview *fv, int row, int on);
+int  uui_fileview_is_dimmed(const struct uui_fileview *fv, int row);
+void uui_fileview_clear_dimmed(struct uui_fileview *fv);
+
+// The row a given name is on, or -1. What an app dimming a set of paths
+// walks, since it holds names and this holds rows.
+int  uui_fileview_row_of(const struct uui_fileview *fv, const char *name);
+
 // A rubber-band drag is in progress (icons mode). A caller that reloads
 // on a timer must skip the reload while this is set: a reload clears the
 // marks the band is mid-way through choosing (the desktop's
@@ -252,7 +278,11 @@ int  uui_fileview_hit(const struct uui_fileview *fv, int cx, int cy);
 int  uui_fileview_hover(struct uui_fileview *fv, int cx, int cy);
 // A press: selects, and ACTIVATES on a double click. Returns 1 if
 // anything changed (so the caller repaints).
-int  uui_fileview_press(struct uui_fileview *fv, int cx, int cy);
+// `mods` is the KEY_MOD_* bits held. Ctrl toggles the row's mark and
+// moves the anchor; Shift marks the range from the anchor; neither
+// clears the set, and a PLAIN click does -- the selection and the
+// marked set are one thing here, as in Explorer and Dolphin.
+int  uui_fileview_press(struct uui_fileview *fv, int cx, int cy, unsigned mods);
 
 // Selects whatever row is at (cx, cy), and NOTHING else -- no double
 // click, no rubber band, no scrollbar. What a SECONDARY click needs: a

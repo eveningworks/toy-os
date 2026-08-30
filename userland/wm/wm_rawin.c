@@ -53,6 +53,7 @@
 #include "wm/wm_rawin.h"
 #include "rt/sys.h"
 #include "win_proto.h"
+#include "keyboard.h"   // KEY_SHIFT / KEY_MOD_* -- the four modifier keys
 
 // The pointer, as the last WIN_EV_RAW_MOUSE left it. Seeded to the
 // screen's centre the way mouse_init() used to, so the first frame has a
@@ -96,7 +97,31 @@ static void key_push(int code, uint8_t mods, int down) {
     g_keys[g_key_head].mods = mods;
     g_keys[g_key_head].down = (uint8_t)(down ? 1 : 0);
     g_key_head = next;
-    g_key_mods = mods;
+
+    // WHAT IS HELD NOW, tracked from the MODIFIER KEYS' OWN transitions
+    // rather than from the `mods` word riding on somebody else's key.
+    // That word is sampled at scancode-processing time (api/keyboard.h)
+    // and describes the key it came with; for a bare Shift held down
+    // with nothing else pressed it is the only report there will be, and
+    // trusting it left Shift+click reading as a plain click while
+    // Ctrl+click worked. Left and right are one key here, as everywhere
+    // else in this driver.
+    uint8_t bit = 0;
+    switch (code) {
+    case KEY_SHIFT: bit = KEY_MOD_SHIFT; break;
+    case KEY_CTRL:  bit = KEY_MOD_CTRL;  break;
+    case KEY_ALT:   bit = KEY_MOD_ALT;   break;
+    case KEY_ALTGR: bit = KEY_MOD_ALTGR; break;
+    default: break;
+    }
+    if (bit) {
+        if (down) g_key_mods |= bit;
+        else      g_key_mods &= (uint8_t)~bit;
+    } else {
+        // An ordinary key: its own sampled word is authoritative, and
+        // is what re-syncs this if a modifier's release was ever missed.
+        g_key_mods = mods;
+    }
 }
 
 void wm_rawin_init(int screen_w, int screen_h) {

@@ -57,7 +57,30 @@
                             // focus -- and passes every button through
                             // to uapp_desc.on_press, because only the
                             // app knows what a right-click means to it.
+                            //
+                            // AND THE KEYBOARD MODIFIERS RIDE ALONG,
+                            // shifted up by WIN_MOUSE_MODS_SHIFT. A
+                            // click carries none of its own otherwise,
+                            // and Ctrl+click / Shift+click are the
+                            // multi-select idiom every desktop uses --
+                            // so a client that had to reconstruct the
+                            // modifier state from key events would be a
+                            // third place for it to drift, and would be
+                            // wrong the moment the window lost focus
+                            // mid-chord. X11 puts both in one `state`
+                            // word and Win32 puts MK_CONTROL beside the
+                            // button flags in `wParam`; Wayland is the
+                            // outlier that makes the client track it.
+                            // Use WIN_MOUSE_BUTTONS()/WIN_MOUSE_MODS().
 #define WIN_EV_MOUSE_UP   4 // a, b: position; mods: button bits
+// Splitting a mouse event's `mods`. The low byte is the BUTTON mask
+// (0x1 primary, 0x2 secondary, 0x4 middle); the next byte is the
+// KEY_MOD_* bits held at the time. Both are bytes because both already
+// were -- this widens no field and no struct.
+#define WIN_MOUSE_MODS_SHIFT 8
+#define WIN_MOUSE_BUTTONS(m) ((unsigned)(m) & 0xFFu)
+#define WIN_MOUSE_MODS(m)    (((unsigned)(m) >> WIN_MOUSE_MODS_SHIFT) & 0xFFu)
+
 #define WIN_EV_CLOSE      5 // the server wants this window gone
 #define WIN_EV_RESIZE     6 // a, b: PROPOSED content size -- a configure,
                             // not a command. See below.
