@@ -540,7 +540,11 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
         // on_press still fires for EVERY button, because the app is the
         // only thing that can know what a secondary click means to it
         // (Minesweeper flags a cell; Calculator ignores it).
-        int primary = (ev->mods & 0x1) != 0;
+        // The event's `mods` is TWO fields (WIN_MOUSE_MODS_SHIFT): the
+        // buttons now down, and the keyboard modifiers held.
+        unsigned btns = WIN_MOUSE_BUTTONS(ev->mods);
+        unsigned kmods = WIN_MOUSE_MODS(ev->mods);
+        int primary = (btns & 0x1) != 0;
         if (primary) {
             // Routed FIRST, so a widget that wants this press gets it and
             // takes the pointer grab. The app's on_press still runs: an app
@@ -548,7 +552,8 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
             // or may want to log one they took.
             int changed = 0;
             int id = a->router.count
-                         ? uui_router_press(&a->router, ev->a, ev->b, &changed) : 0;
+                         ? uui_router_press(&a->router, ev->a, ev->b, kmods,
+                                            &changed) : 0;
             if (changed) a->dirty = 1;
             if (id && d->on_widget) d->on_widget(a, id, UUI_REASON_PRESS);
             // Keyboard focus follows the click, after the widgets have had

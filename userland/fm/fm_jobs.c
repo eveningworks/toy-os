@@ -154,7 +154,7 @@ void clip_paste(void) {
     // cut-paste for the reason that matters: the files are no longer
     // where the clipboard says they are, so a second paste would fail
     // on every one of them.
-    if (op == UCLIP_CUT) (void)uclip_clear();
+    if (op == UCLIP_CUT) { (void)uclip_clear(); refresh_dim(); }
     start_job();
 }
 
@@ -360,6 +360,7 @@ void fm_job_finished(void) {
     g_job_count = g_job_at = 0;
     uui_fileview_reload(&g_pane[0]);
     uui_fileview_reload(&g_pane[1]);
+    refresh_dim();   // a reload drops the dim bits; see refresh_dim()
     refresh_status();
 }
 

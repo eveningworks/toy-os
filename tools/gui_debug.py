@@ -396,6 +396,33 @@ class DebugConsole:
             qmp.pos[0], qmp.pos[1] = cx, cy
         return self.cursor()
 
+    def warp_confirmed(self, qmp, x, y, check, tries=6, settle=0.25):
+        """Warp to (x, y) and confirm the APP agrees what is under it.
+
+        warp_cursor() above confirms the cursor's POSITION, which is a
+        different claim: it proves the pointer is where you aimed, not
+        that where you aimed is what you meant. A list row is one line
+        tall, so a y computed from a stale origin, a scrolled view or a
+        column header lands on a neighbouring row -- perfectly plausible,
+        and the reason the failure reads as "the click did nothing"
+        rather than "the click hit the wrong thing".
+
+        `check` is a callable returning truthy when the app REPORTS the
+        intended target under the pointer (its hovered row, its hot
+        button). Returns True once it does, False if it never did -- and
+        a caller that ignores the return value is back to guessing, so
+        assert on it.
+
+        Costs one extra layout read per try, which is cheaper than one
+        wrong-row failure is to diagnose.
+        """
+        for _ in range(tries):
+            self.warp_cursor(qmp, x, y)
+            time.sleep(settle)
+            if check():
+                return True
+        return False
+
     def hover_frames(self, qmp, tmp, rest_at, hover_at, prefix="hover"):
         """Two SETTLED frames of the same screen: pointer parked away
         from the control, then on it. Returns (rest_png, hover_png).

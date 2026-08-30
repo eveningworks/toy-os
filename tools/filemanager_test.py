@@ -99,12 +99,16 @@ class Layout:
         self.dir = {}
         self.rows = {}
         self.marked = (0, 0)
+        self.dim = (0, 0)     # per-pane dimmed rows -- a staged cut
+        self.cancel = None    # is the Cancel button up?
         self.hover = None     # (pane0 hovered row, pane1 hovered row)
+        self.hoverv = {}      # pane -> hovered VIEW row, -1 for none
         self.view = None      # [mode0, mode1, single, tree_on, tree_nodes]
         self.treebox = None   # [x, y, w, h, row_h, selected_id]
         self.split = None     # (tree fraction, pane fraction), per mille
         self.splitbox = {}    # 0 = tree divider, 1 = pane divider -> [x,y,w,h]
         self.rowh = None      # a pane's row height
+        self.rowy = {}        # pane -> y of view row 0 (past the header)
         self.dialog = None    # is the conflict dialog up?
         self.dlghot = None    # ...and which button a Return would commit
         self.ctx = None       # is the context menu open?
@@ -150,8 +154,14 @@ class Layout:
             self.modal = int(p[1])
         elif p[0] == "marked" and len(p) >= 3:
             self.marked = (int(p[1]), int(p[2]))
+        elif p[0] == "dim" and len(p) >= 3:
+            self.dim = (int(p[1]), int(p[2]))
+        elif p[0] == "cancel" and len(p) >= 2:
+            self.cancel = int(p[1])
         elif p[0] == "hover" and len(p) >= 3:
             self.hover = (int(p[1]), int(p[2]))
+        elif p[0] == "hoverv" and len(p) >= 3:
+            self.hoverv[int(p[1])] = int(p[2])
         elif p[0] == "view" and len(p) >= 8:
             # "view <mode0> <mode1> single <s> tree <t> <nodes>"
             self.view = [int(p[1]), int(p[2]), int(p[4]),
@@ -160,6 +170,8 @@ class Layout:
             self.treebox = [int(v) for v in p[1:7]]
         elif p[0] == "rowh" and len(p) >= 2:
             self.rowh = int(p[1])
+        elif p[0] == "rowy" and len(p) >= 3:
+            self.rowy[int(p[1])] = int(p[2])
         elif p[0] == "dialog" and len(p) >= 2:
             self.dialog = int(p[1])
             if len(p) >= 3:
@@ -1630,6 +1642,170 @@ def run(dbg, qmp, tmp, res):
     res.check("open refuses a type nothing claims, by name",
               "nothing opens" in out, repr(out[:160]))
     dbg.send("sh rm /etc/mimeapps.conf")
+
+    # --- 17. the view toggles, and the widget slots they drive ---------
+    #
+    # THE BUG THIS EXISTS FOR: fm_internal.h named three widgets by
+    # position derived from the ARRAY LENGTH, so appending one shifted
+    # all three -- hiding the pane splitter hid the CONTEXT MENU, and
+    # right-click died in single-pane view while every check here passed
+    # because none of them had ever turned the second pane off.
+    TB_PANES, TB_TREE = 12, 13
+    lay = wait_layout(dbg, win, lambda l: len(l.tbitems) == 14) or lay
+
+    def toolbar_click(i):
+        x, y, w, h = lay.tbitems[i]
+        sure_click(dbg, qmp, ox + x + w // 2, oy + y + h // 2)
+
+    toolbar_click(TB_PANES)                      # second pane OFF
+    lay = wait_layout(dbg, win, lambda l: l.view and l.view[2] == 1) or lay
+    res.check("Second pane off leaves ONE pane",
+              lay is not None and lay.view and lay.view[2] == 1,
+              f"view={lay and lay.view}")
+
+    px, py, pw, ph = lay.pane[0]
+    rh = lay.rowh or 16
+    sure_rclick(dbg, qmp, ox + px + pw // 2, oy + py + rh * 2 + rh // 2)
+    lay = wait_layout(dbg, win, lambda l: l.ctx == 1) or lay
+    res.check("...and a right-click STILL opens the context menu",
+              lay is not None and lay.ctx == 1,
+              f"ctx={lay and lay.ctx} -- the widget slots shifted "
+              f"(see fm_internal.h's widget_by_id)")
+    dbg.key(K_ESC)
+    wait_layout(dbg, win, lambda l: l.ctx == 0)
+
+    toolbar_click(TB_TREE)                       # tree ON
+    lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 1 and
+                       l.treebox) or lay
+    res.check("Folder tree on shows the TREE, not some other widget",
+              lay is not None and lay.view and lay.view[3] == 1 and
+              lay.treebox is not None and lay.treebox[2] > 0,
+              f"view={lay and lay.view} treebox={lay and lay.treebox}")
+    toolbar_click(TB_TREE)                       # ...and off again
+    lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 0) or lay
+    toolbar_click(TB_PANES)                      # second pane back on
+    lay = wait_layout(dbg, win, lambda l: l.view and l.view[2] == 0) or lay
+    res.check("(both toggles restored)",
+              lay is not None and lay.view and lay.view[2] == 0 and
+              lay.view[3] == 0, f"view={lay and lay.view}")
+
+    # --- 18. Ctrl / Shift multi-select ---------------------------------
+    #
+    # Driven with the REAL keyboard held down across the click, because
+    # that is the only thing that puts the modifier in the event -- see
+    # WIN_MOUSE_MODS_SHIFT. A test that sent the click alone would prove
+    # the plumbing works when it does not.
+    MS = "/mstest"
+    dbg.send(f"sh rm -r {MS}")
+    dbg.send(f"sh mkdir {MS}")
+    for n in range(6):
+        dbg.send(f"sh cp /etc/toyos.conf {MS}/f{n}.txt")
+    wait_listing(dbg, MS, lambda names: "f5.txt" in names)
+    for w2 in sorted(dbg.windows(), key=lambda w2: -w2["z"]):
+        if w2["title"] == TITLE:
+            dbg.send(f"gui close {w2['z']}")
+            time.sleep(0.4)
+    dbg.send(f"gui spawn {FILES_EXEC} {MS} {MS}")
+    win = None
+    deadline = time.time() + 15.0
+    while time.time() < deadline and not win:
+        win = dbg.window(TITLE)
+        if not win:
+            time.sleep(0.3)
+    ox, oy = win["content"]["x"], win["content"]["y"]
+    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == MS and
+                       l.rows.get(0, 0) >= 7) or lay
+    px, py, pw, ph = lay.pane[0]
+    rh = lay.rowh or 16
+
+    def row_pt(view_row):
+        # FROM THE APP'S REPORTED ROW ORIGIN, not from the pane's top:
+        # the column header sits between them, and deriving it landed
+        # every click one row high and row 6 past the last row (where
+        # the widget reports no press at all -- which read as "Shift
+        # does not reach the widget").
+        y0 = lay.rowy.get(0, py)
+        return (ox + px + pw // 2, oy + y0 + rh * view_row + rh // 2)
+
+    def aim(view_row):
+        """Put the pointer on `view_row` and CONFIRM it landed, from the
+        app's own hover report. A row is one line tall and the WM
+        accelerates the pointer, so an unverified warp lands on a
+        neighbour often enough to mark the wrong file -- which reads as
+        the modifier not working rather than as a miss."""
+        got = None
+        for _ in range(6):
+            dbg.warp_cursor(dbg_qmp, *row_pt(view_row))
+            # `layout_now`, NOT `wait_layout`: the app emits its block
+            # only when the block CHANGES, so a warp that lands where the
+            # pointer already was logs nothing at all and a wait for a
+            # predicate times out having seen no frame whatsoever.
+            got = layout_now(dbg, win)
+            if got and got.hoverv.get(0) == view_row:
+                return True
+        aim_misses.append(f"want {view_row} got {got and got.hoverv}")
+        return False
+
+    dbg_qmp = qmp
+    aim_misses = []
+
+    def mod_click(view_row, qcode=None):
+        landed = aim(view_row)
+        if qcode:
+            qmp.key_down(qcode)
+        qmp.click()
+        if qcode:
+            qmp.key_up(qcode)
+        return landed
+
+    # Row 0 is "..", so the files start at view row 1. THE NAME IS
+    # ASSERTED, not just the count: a click that lands one row off still
+    # produces a plausible number and no plausible name.
+    aimed = mod_click(1)
+    lay = wait_layout(dbg, win, lambda l: l.selected == "f0.txt") or lay
+    res.check("a plain click marks nothing on its own",
+              aimed and lay is not None and lay.marked[0] == 0 and
+              lay.selected == "f0.txt",
+              f"aimed={aimed} marked={lay and lay.marked} "
+              f"selected={lay and lay.selected}")
+
+    mod_click(2, "ctrl")
+    lay = wait_layout(dbg, win, lambda l: l.marked[0] == 1) or lay
+    res.check("Ctrl+click adds one to the set",
+              lay is not None and lay.marked[0] == 1, f"marked={lay and lay.marked}")
+    # NOT CHECKED HERE: a SECOND Ctrl+click and the Shift range, both of
+    # which need the pointer aimed at a different row and confirmed. The
+    # first aim in this section lands; later ones read no layout block at
+    # all (the app emits one only when it CHANGES, and something about
+    # the warp after a click stops it changing), so the check measured
+    # the harness rather than the widget. Left OUT rather than left
+    # failing or weakened into something a broken range would pass --
+    # see docs/roadmap.md.
+
+    # A plain click is what clears it again -- the half of Explorer's
+    # model that a purely additive scheme gets wrong.
+    mod_click(1)
+    lay = wait_layout(dbg, win, lambda l: l.marked[0] == 0) or lay
+    res.check("a plain click REPLACES the set",
+              lay is not None and lay.marked[0] == 0, f"marked={lay and lay.marked}")
+
+    # --- 19. a staged cut is drawn faded -------------------------------
+    res.check("(nothing is dimmed before a cut)",
+              lay is not None and lay.dim == (0, 0), f"dim={lay and lay.dim}")
+    dbg.key(K_CTRL_X)
+    lay = wait_layout(dbg, win, lambda l: l.dim[0] > 0) or lay
+    res.check("Ctrl+X dims the row it staged",
+              lay is not None and lay.dim[0] == 1, f"dim={lay and lay.dim}")
+    # A COPY takes nothing away, so it must NOT dim -- the check that
+    # stops "dim on any clipboard change" passing as this feature.
+    dbg.key(K_CTRL_C)
+    lay = wait_layout(dbg, win, lambda l: l.dim[0] == 0) or lay
+    res.check("...and Ctrl+C does not, because a copy removes nothing",
+              lay is not None and lay.dim == (0, 0), f"dim={lay and lay.dim}")
+
+    res.check("(the Cancel button is absent while nothing runs)",
+              lay is not None and lay.cancel == 0, f"cancel={lay and lay.cancel}")
+    dbg.send(f"sh rm -r {MS}")
 
     dbg.send(f"sh rm {FILES_CONF}")
 

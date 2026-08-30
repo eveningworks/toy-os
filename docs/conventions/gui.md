@@ -2250,3 +2250,56 @@ time and confirming `hot` each time is the difference between testing
 the dialog and testing keystroke delivery -- one dropped arrow otherwise
 commits the button beside the intended one, which passes as the wrong
 behaviour rather than failing.
+
+## A WIDGET IS NAMED BY ITS ID, NEVER BY ITS POSITION IN THE ARRAY.
+
+`g_widgets[]` is an app's widget list and `uui_item.id` is what names an
+entry. An index derived from the array's LENGTH -- `(g_widget_count -
+3)` -- is a number a different file has to keep true, which is the shape
+CLAUDE.md's "prefer facts that cannot go stale" rule exists to stop.
+
+It shipped in the File Manager: appending `uui_dialog` shifted three
+macros at once, so hiding the tree hid the tree SPLITTER, and hiding the
+pane splitter hid the CONTEXT MENU. The visible results were a tree
+drawn over the menu bar and a right-click that did nothing in
+single-pane view -- neither of them anywhere near the array.
+
+**`tools/check_widget_ops.py` fails the build on it now**, chained forms
+included, waivable with `widget-ops-ok: <reason>`. The replacement is a
+linear `widget_by_id()` over a dozen entries.
+
+## A TEST MUST NOT DERIVE GEOMETRY THE APP ALREADY KNOWS.
+
+A row's origin, the row under the pointer, whether a button is up: the
+app has each of these exactly, and a test that recomputes one is
+measuring its own arithmetic. The File Manager reports `layout rowy`
+(where row 0 starts, past the column header), `layout hoverv` (the
+hovered row as a VIEW position, since `hover` is a source row a test
+cannot map back), `layout dim` and `layout cancel` for this reason.
+
+**The failure is quiet, which is why it earns a rule.** "Pane top plus
+n rows" is off by the header and lands on the neighbouring row -- a
+perfectly plausible thing to have clicked, so the test reports the
+feature as broken rather than the aim as missed. That cost four full
+runs in one session.
+
+Two things follow. **Confirm the aim, don't just take it** --
+`DebugConsole.warp_confirmed()` re-warps until the app agrees what is
+under the pointer, and `warp_cursor()` alone is not that (it confirms
+the POSITION, a different claim). And **poll with `layout_now()`, not
+`wait_layout()`, when nothing needs to change**: the block is emitted
+only when it CHANGES, so waiting on a predicate after a no-op warp sees
+no frame at all and times out.
+
+## A PERSISTED VIEW STATE IS INHERITED BY EVERY LATER RUN.
+
+Anything an app writes to its `/etc/<app>.conf` -- the File Manager's
+pane count, tree visibility and view mode -- is state the next boot
+starts in, so a test that never sets it only ever exercises one value.
+The whole GUI suite was green while right-click was dead in single-pane
+view, because no check had ever turned the second pane off.
+
+**Visit each value of every persisted toggle**, and restore what you
+changed: a test that leaves the app in single-pane mode hands the next
+section a layout it did not expect. That is also why `make clean-disk`
+can "fix" a bug -- it resets the config, not the code.
