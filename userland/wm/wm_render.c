@@ -556,8 +556,16 @@ static enum wm_cursor_kind client_cursor_at(int mx, int my) {
         // is wedged -- so this is the case only the compositor can
         // report, and it must override a stale TEXT.
         if (w->not_responding) return WM_CURSOR_WAIT;
-        if (w->client_cursor == WIN_CURSOR_TEXT) return WM_CURSOR_TEXT;
-        if (w->client_cursor == WIN_CURSOR_WAIT) return WM_CURSOR_WAIT;
+        switch (w->client_cursor) {
+        case WIN_CURSOR_TEXT:     return WM_CURSOR_TEXT;
+        case WIN_CURSOR_WAIT:     return WM_CURSOR_WAIT;
+        // The theme's own resize shapes, which the frame already draws
+        // for its edges -- a client with a splitter in it asks for the
+        // same one rather than for a second drawing of the same idea.
+        case WIN_CURSOR_RESIZE_H: return WM_CURSOR_H;
+        case WIN_CURSOR_RESIZE_V: return WM_CURSOR_V;
+        default: break;
+        }
         break;
     }
     return WM_CURSOR_NORMAL;
@@ -577,6 +585,10 @@ static enum wm_cursor_kind resolve_cursor_kind(int mx, int my) {
     // Frame first: a resize edge is geometry the compositor owns, and
     // wins over anything the client inside asked for.
     return client_cursor_at(mx, my);
+}
+
+enum wm_cursor_kind wm_cursor_kind_at(int mx, int my) {
+    return resolve_cursor_kind(mx, my);
 }
 
 // ---- cursor sprite save/restore ----

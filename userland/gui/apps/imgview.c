@@ -108,8 +108,8 @@ static const struct uui_menu_item menu_items[] = {
 };
 
 static struct uui_item g_widgets[] = {
-    { &uui_fileview_ops, &g_list, 0, 0, ID_LIST },
-    { &uui_image_ops,   &g_view,  0, 0, ID_IMAGE },
+    { .ops = &uui_fileview_ops, .widget = &g_list, .id = ID_LIST },
+    { .ops = &uui_image_ops, .widget = &g_view, .id = ID_IMAGE },
 };
 
 // --- loading ----------------------------------------------------------

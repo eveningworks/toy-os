@@ -145,6 +145,18 @@ struct uui_item {
     // user pointer stapled to every widget struct. Same shape as
     // uui_menubar's item ids.
     int id;
+
+    // PINS the item's extent along the container's stacking axis,
+    // overriding what its natural_size asked for. 0 -- the default --
+    // means "ask the widget", which is what every item did before a
+    // divider needed to move one. CSS's flex-basis and QSplitter's
+    // setSizes(): the size is the CONTAINER'S to decide once something
+    // outside the widget owns it, and a widget-by-widget "set my width"
+    // would be that answer written once per widget type.
+    //
+    // Ignored by UUI_GRID, whose cells are uniform by definition, and
+    // LAST in this struct because apps initialise it positionally.
+    int main_size;
 };
 
 // Stretch to the container's cross-axis size instead of taking the

@@ -550,7 +550,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Desktop icons are a letter in a tile~~ DONE 2026-08-23 -- real artwork, composited, on the desktop, the Start menu and the taskbar
 - [ ] Per-size icon art (freedesktop's `16x16/`, `48x48/`), if one 64px master ever looks mushy at menu-row size
 - [ ] A switchable icon theme, the way cursor themes switch -- needs a second set of artwork first
-- [ ] Per-icon context menus (Rename/Properties)
+- [ ] Per-icon context menus (Rename/Properties) -- the popup and the Properties window exist; the desktop has yet to call them
 - [ ] Full dirty-rect compositor
 - [x] ~~Taskbar notification area (tray)~~ done
 - [ ] Alt+Tab window switching

@@ -779,13 +779,18 @@ struct win_event {
 // --- the cursor a client wants under the pointer -----------------------
 //
 // The client NAMES a shape, the compositor draws it: Wayland's
-// cursor-shape-v1, Win32's SetCursor. Shorter than the theme's six
-// shapes on purpose -- the resize cursors are the frame's, which a
-// client does not own.
-#define WIN_CURSOR_DEFAULT 0
-#define WIN_CURSOR_TEXT    1 // I-beam: an insertion point lives here
-#define WIN_CURSOR_WAIT    2 // busy: this window is working, wait for it
-#define WIN_CURSOR_COUNT   3
+// cursor-shape-v1, Win32's SetCursor.
+//
+// THE RESIZE SHAPES ARE THE FRAME'S *AND* A CLIENT'S. They were the
+// frame's alone until a client had a divider of its own to drag
+// (ui/uui_splitter.h); the compositor still wins wherever the two
+// overlap, because a window edge is geometry it owns.
+#define WIN_CURSOR_DEFAULT  0
+#define WIN_CURSOR_TEXT     1 // I-beam: an insertion point lives here
+#define WIN_CURSOR_WAIT     2 // busy: this window is working, wait for it
+#define WIN_CURSOR_RESIZE_H 3 // a divider that moves left/right
+#define WIN_CURSOR_RESIZE_V 4 // a divider that moves up/down
+#define WIN_CURSOR_COUNT    5
 
 #define WIN_REQ_FB_CURSOR  25 // COMPOSITOR ONLY. The hardware cursor
                            // plane (virtio-gpu's cursorq, vmsvga's

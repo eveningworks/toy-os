@@ -98,7 +98,9 @@ QEMU, and it does not stop at "hello world from the kernel":
   the kernel. The apps include a **File Manager** (two panes, Norton
   Commander rather than Explorer, because copying between two visible
   directories needs neither a clipboard nor drag-and-drop and this
-  system has neither), **Disk Mark** (a CrystalDiskMark-shaped
+  system has neither; its dividers drag, it has a context menu, and
+  **Properties** is a separate process so that totalling a folder
+  cannot freeze it), **Disk Mark** (a CrystalDiskMark-shaped
   benchmark whose work is a spawned `/bin/diskbench`, so a pass that
   takes minutes cannot freeze the GUI), **Minesweeper** — which is
   where the desktop learned to give a right-click to the application

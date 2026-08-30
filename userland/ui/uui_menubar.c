@@ -171,6 +171,30 @@ static void open_root(struct uui_menubar *m, int index) {
     m->depth = 1;
 }
 
+// See the header: a context menu is level 0 with no title behind it, so
+// `open_root` stays -1 and every path that walks the bar's titles finds
+// nothing to walk.
+void uui_menubar_open_at(struct uui_menubar *m, const struct uui_menu_item *items,
+                          int count, int x, int y) {
+    m->open_root = -1;
+    m->depth = 0;
+    if (!items || count <= 0) return;
+
+    int w, h;
+    level_size(items, count, &w, &h);
+
+    int px, py;
+    place(m, x, y, 1, 1, w, h, 0, &px, &py); // a 1x1 anchor: the cursor
+
+    m->level[0].items = items;
+    m->level[0].count = count;
+    m->level[0].x = px; m->level[0].y = py;
+    m->level[0].w = w;  m->level[0].h = h;
+    m->level[0].hot = -1;
+    m->level[0].parent = -1;
+    m->depth = 1;
+}
+
 // Opens level `lvl + 1` from row `index` of level `lvl`.
 static void open_sub(struct uui_menubar *m, int lvl, int index) {
     if (lvl + 1 >= UUI_MENU_MAX_DEPTH) return;

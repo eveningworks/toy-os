@@ -355,6 +355,17 @@ class DebugConsole:
         c = self.state()["cursor"]
         return (c["x"], c["y"])
 
+    # WM_CURSOR_* (userland/wm/wm_internal.h): 0 normal, 1 resize-h,
+    # 2 resize-v, 3 diagonal, 4 text, 5 wait.
+    CURSOR_NORMAL, CURSOR_H, CURSOR_V, CURSOR_DIAG, CURSOR_TEXT, CURSOR_WAIT = range(6)
+
+    def cursor_shape(self):
+        """The shape the compositor would DRAW under the pointer right
+        now -- the frame's edge rules and the client's WIN_REQ_CURSOR
+        already resolved against each other. The alternative is
+        recognising a 15x21 sprite in a screenshot."""
+        return self.state()["cursor"].get("shape", 0)
+
     def warp_cursor(self, qmp, x, y, tries=8, tol=1):
         """Move the REAL cursor to (x, y) and confirm it arrived.
 
@@ -549,8 +560,11 @@ class DebugConsole:
         self.settle(SETTLE_S * 2)  # a drag queues ~11 events, not 4
         return self.events()
 
-    def key(self, k, settle=True):
-        self.send(f"gui key {k}")
+    def key(self, k, settle=True, mods=""):
+        # `mods` is the wm_debug.c word list -- "ctrl", "shift ctrl".
+        # It sets the KEY_MOD_* bits the WM delivers ALONGSIDE the key
+        # and does not re-encode it, which is what a real keyboard does.
+        self.send(f"gui key {k} {mods}".rstrip())
         if not settle:
             return []
         self.settle()

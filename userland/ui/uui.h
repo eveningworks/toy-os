@@ -56,6 +56,7 @@
 #include "ui/uui_image.h"
 #include "ui/uui_menubar.h"
 #include "ui/uui_statusbar.h"
+#include "ui/uui_splitter.h"
 #include "ui/uui_focus.h"
 #include "ui/uui_route.h"
 

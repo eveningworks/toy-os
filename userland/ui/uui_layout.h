@@ -55,6 +55,14 @@ struct uui_layout {
     int x, y, w, h;
 };
 
+// The spacing this container actually used -- what `margin`/`gap` were
+// set to, or the font-derived default when they were left alone. For an
+// app that has to place something in the container's coordinates (a
+// splitter deriving its travel from the room its two neighbours share);
+// re-deriving the defaults in the app is a second copy of them.
+int uui_layout_margin(const struct uui_layout *l);
+int uui_layout_gap(const struct uui_layout *l);
+
 // The preferred minimum for the whole container, children included.
 // This is what a window is sized from -- see uapp's `layout` field.
 void uui_layout_natural_size(const struct uui_layout *l, int *out_w, int *out_h);

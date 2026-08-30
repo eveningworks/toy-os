@@ -33,6 +33,7 @@
 #include "ui/uui.h"
 #include "ui/uui_layout.h"
 #include "ui/uui_sidebar.h"
+#include "ui/uui_splitter.h"
 #include "ui/uui_label.h"
 #include "ui/uui_radio_list.h"
 #include "ui/uui_dropdown.h"
@@ -45,6 +46,8 @@
 #include "ui/uui_statusbar.h"
 #include "ui/uui_scrollview.h"
 #include "ui/utheme.h"
+#include "lib/uconf.h"   // the sidebar width, remembered
+#include <stdlib.h>       // atoi
 #include "setting_abi.h"
 #include "cpuinfo.h"
 #include "version.h"
@@ -66,7 +69,7 @@
 // struct slot's `kind`.
 enum { CTRL_RADIO = 0, CTRL_COMBO, CTRL_SLIDER, CTRL_SPIN };
 
-enum { ID_TREE = 1, ID_BODY, ID_PAGE, ID_ADVANCED, ID_BUTTONS, ID_STATUS,
+enum { ID_TREE = 1, ID_SIDE_SPLIT, ID_BODY, ID_PAGE, ID_ADVANCED, ID_BUTTONS, ID_STATUS,
        ID_CONTROL_BASE = 100 }; // + slot, so a control names its own row
 
 // NON-ZERO on purpose: uui_button_group_take_activated() returns 0 for
@@ -873,8 +876,18 @@ static struct uui_focusable FOCUS[PAGE_MAX];
 static int FOCUS_COUNT;
 static struct uui_focus PAGE_FOCUS;
 
-static struct uui_item ITEMS_BODY[2];
+static struct uui_item ITEMS_BODY[3];
 static struct uui_layout BODY_LAYOUT;
+
+// The sidebar's width is the user's, dragged. Persisted in this app's
+// own /etc/<app_id>.conf -- the desktop's and File Manager's convention
+// -- and NOT as a registered setting: it is this window's furniture,
+// and this is the app that would then have to list it among the
+// settings.
+#define SETTINGS_CONF "/etc/settings.conf"
+#define SIDE_SPLIT_DEFAULT 200
+
+static struct uui_splitter g_side_split;
 static struct uui_item ITEMS[3];
 static struct uui_layout LAYOUT;
 
@@ -1013,6 +1026,41 @@ static void navigate(int node_id) {
     }
 }
 
+// The sidebar's width, re-derived from the divider whenever the body
+// could have moved. The track leaves out the layout's own margins and
+// the two gaps it puts around the band -- those pixels belong to
+// neither child, and counting them would offset every drag by one gap.
+// The geometry a test asserts on. Emitted whenever the layout MOVES,
+// not only at open: a tool re-reading this after dragging something
+// would otherwise be handed the opening snapshot and conclude nothing
+// moved -- a test reading the same state twice and calling it a
+// measurement.
+static void log_geometry(void) {
+    ulogf("settings: layout tree %d %d %d %d\n",
+          g_tree.x, g_tree.y, g_tree.w, g_tree.h);
+    ulogf("settings: layout page %d %d %d %d\n",
+          PAGE_SCROLL.x, PAGE_SCROLL.y, PAGE_SCROLL.w, PAGE_SCROLL.h);
+    ulogf("settings: layout split %d %d %d %d %d\n", g_side_split.x, g_side_split.y,
+          g_side_split.w, g_side_split.h, uui_splitter_frac(&g_side_split));
+}
+
+static void apply_split(struct uapp *a) {
+    int m = uui_layout_margin(&BODY_LAYOUT), g = uui_layout_gap(&BODY_LAYOUT);
+    int lo = BODY_LAYOUT.x + m;
+    int hi = lo + BODY_LAYOUT.w - 2 * m - 2 * g;
+    uui_splitter_set_track(&g_side_split, lo, hi,
+                            ugfx_char_w() * 10, ugfx_char_w() * 24);
+    ITEMS_BODY[0].main_size = uui_splitter_before(&g_side_split);
+    uui_layout_run(&LAYOUT, 0, 0, uapp_width(a), uapp_height(a));
+    log_geometry();
+}
+
+static void save_split(void) {
+    char v[12];
+    snprintf(v, sizeof v, "%d", uui_splitter_frac(&g_side_split));
+    uconf_set(SETTINGS_CONF, "sidebar", v);
+}
+
 static void on_widget(struct uapp *a, int id, int reason) {
     // COMMIT ON RELEASE, docs/gui-guidelines.md's rule for every control
     // here -- and this file used to discard `reason` entirely. The
@@ -1056,6 +1104,13 @@ static void on_widget(struct uapp *a, int id, int reason) {
     }
 
     switch (id) {
+    case ID_SIDE_SPLIT:
+        // Live: the layout re-runs on every motion, so the sidebar
+        // follows the handle rather than jumping on release.
+        apply_split(a);
+        if (reason == UUI_REASON_RELEASE) save_split();
+        uapp_redraw(a);
+        return;
     case ID_TREE: {
         // The tree hands back the APP's id, not a row -- rows move as
         // categories collapse, ids do not.
@@ -1270,8 +1325,19 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     }
 }
 
+// The divider is a FRACTION, so the sidebar keeps its share of a window
+// that got wider -- which means re-deriving the pin whenever the room
+// changes. A font change changes it too: every natural size is measured
+// from the cell.
+static void on_resize(struct uapp *a, int w, int h) {
+    (void)w; (void)h;
+    apply_split(a);
+}
+
+static void on_font(struct uapp *a) { apply_split(a); }
+
 static void on_open(struct uapp *a) {
-    (void)a;
+    apply_split(a);
     // The lines tools/ asserts on. Kept in the app rather than derived
     // from a screenshot because a layout is a fact, and a number a test
     // can read beats a picture it has to interpret.
@@ -1279,10 +1345,7 @@ static void on_open(struct uapp *a) {
     ulogf("settings: categories %d\n", g_cat_count);
     ulogf("settings: groups %d\n", g_group_count);
     ulogf("settings: nodes %d\n", g_node_count);
-    ulogf("settings: layout tree %d %d %d %d\n",
-          g_tree.x, g_tree.y, g_tree.w, g_tree.h);
-    ulogf("settings: layout page %d %d %d %d\n",
-          PAGE_SCROLL.x, PAGE_SCROLL.y, PAGE_SCROLL.w, PAGE_SCROLL.h);
+    log_geometry();
     // The button group holds its buttons' geometry, not its own -- so
     // report the first button's, which is what a test clicks anyway.
     ulogf("settings: layout buttons %d %d %d %d\n",
@@ -1456,11 +1519,13 @@ int main(void) {
 
     ITEMS_BODY[0] = (struct uui_item){ .ops = &uui_sidebar_ops, .widget = &g_tree,
                                         .id = ID_TREE, .flags = UUI_FILL_H };
-    ITEMS_BODY[1] = (struct uui_item){ .ops = &uui_scrollview_ops, .widget = &PAGE_SCROLL,
+    ITEMS_BODY[1] = (struct uui_item){ .ops = &uui_splitter_ops, .widget = &g_side_split,
+                                        .id = ID_SIDE_SPLIT, .flags = UUI_FILL_H };
+    ITEMS_BODY[2] = (struct uui_item){ .ops = &uui_scrollview_ops, .widget = &PAGE_SCROLL,
                                         .id = ID_PAGE,
                                         .flags = UUI_FILL_W | UUI_FILL_H };
     BODY_LAYOUT = (struct uui_layout){ .dir = UUI_ROW, .items = ITEMS_BODY,
-                                        .count = 2, .margin = 0 };
+                                        .count = 3, .margin = 0 };
 
     ITEMS[0] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &BODY_LAYOUT,
                                    .id = ID_BODY, .flags = UUI_FILL_W | UUI_FILL_H };
@@ -1468,6 +1533,13 @@ int main(void) {
                                    .id = ID_BUTTONS };
     ITEMS[2] = (struct uui_item){ .ops = &uui_statusbar_ops, .widget = &g_status_bar,
                                    .id = ID_STATUS, .flags = UUI_FILL_W };
+    uui_splitter_init(&g_side_split, 1, SIDE_SPLIT_DEFAULT);
+    {
+        char v[12];
+        if (uconf_get(SETTINGS_CONF, "sidebar", v, sizeof v))
+            uui_splitter_set_frac(&g_side_split, atoi(v));
+    }
+
     LAYOUT = (struct uui_layout){ .dir = UUI_COLUMN, .items = ITEMS,
                                   .count = (int)(sizeof ITEMS / sizeof ITEMS[0]) };
 
@@ -1489,6 +1561,8 @@ int main(void) {
         .on_draw_over = on_draw_over,
         .on_open = on_open,
         .on_size = on_size,
+        .on_resize = on_resize,
+        .on_font = on_font,
     };
     return uapp_run(&desc);
 }

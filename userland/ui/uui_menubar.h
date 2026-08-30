@@ -220,6 +220,35 @@ int uui_menubar_key(struct uui_menubar *m, int key, int *out_code);
 // out of the way.
 void uui_menubar_close(struct uui_menubar *m);
 
+// --- as a CONTEXT MENU -------------------------------------------------
+//
+// Opens a free-floating popup of `items` with its top-left at (x, y),
+// flipped/slid/clamped against the same bounds rect as any other popup.
+// Everything below the bar -- hit-testing, hover, submenus, the
+// keyboard, `item_flags`, the commit -- is the code already here.
+//
+// ONE WIDGET FOR BOTH, because Qt's QMenu and GTK's GtkPopoverMenu are
+// one class serving a bar's dropdown and `exec(pos)` alike, and two
+// implementations of "a menu" drift in exactly the ways a user notices:
+// different padding, a different tick gutter, arrows that work in one
+// and not the other.
+//
+// **USE A SEPARATE INSTANCE, initialised with `count == 0`.** A context
+// menu has no bar strip, and sharing one instance with a real menu bar
+// would mean Left/Right walking out of the context menu into the bar's
+// titles. With no titles there is nothing to walk to and the arrows
+// correctly do nothing.
+//
+// **OPEN IT ON THE SECONDARY RELEASE, NOT THE PRESS** -- Win32's
+// WM_RBUTTONUP, and here it is not a preference: `uui_router_release()`
+// runs for EVERY button, so a menu opened during the press would be
+// handed that same gesture's release and commit whichever row landed
+// under the cursor. The menu bar's open-on-press exception
+// (docs/gui-guidelines.md) is about the PRIMARY button and does not
+// carry over.
+void uui_menubar_open_at(struct uui_menubar *m, const struct uui_menu_item *items,
+                          int count, int x, int y);
+
 // --- geometry, for tests and for an app that reports its layout --------
 //
 // docs/gui-guidelines.md: a GUI test asks the app where things are.

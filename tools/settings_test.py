@@ -326,6 +326,62 @@ def main():
           len([r for r in rows if r["depth"] == 0]) >= 3,
           f"{len([r for r in rows if r['depth'] == 0])} headings")
 
+    # --- THE SIDEBAR'S WIDTH IS DRAGGABLE ----------------------------
+    #
+    # The same uui_splitter the File Manager's dividers are, placed in a
+    # uui_layout row -- so this is the check that the LAYOUT-PLACED case
+    # works, where files.c exercises the hand-computed one. The page is
+    # the neighbour that must move with it (CLAUDE.md: half the
+    # assertion is what did NOT stay put).
+    check("the body has a divider between the sidebar and the page",
+          "split" in geo and geo["split"][0] >= tx + tw,
+          f"split={geo.get('split')} tree={geo.get('tree')}")
+    if "split" in geo:
+        sx, sy, sw, sh = geo["split"]
+        dbg.warp_cursor(qmp, cx + sx + sw // 2, cy + sy + sh // 2)
+        qmp.mouse_down()
+        time.sleep(0.2)
+        for i in (1, 2, 3, 4):
+            dbg.warp_cursor(qmp, cx + sx + sw // 2 + 15 * i, cy + sy + sh // 2)
+        qmp.mouse_up()
+        time.sleep(0.6)
+        geo2 = layout(dbg)
+        t2 = geo2.get("tree", (0, 0, 0, 0))
+        p2 = geo2.get("page", (0, 0, 0, 0))
+        check("dragging it widens the sidebar and narrows the page",
+              t2[2] > tw + 20 and p2[2] < pw0 - 20,
+              f"tree w {tw} -> {t2[2]}, page w {pw0} -> {p2[2]}")
+        # SAMPLED WHILE THE POINTER IS ON THE BAND, with the sidebar as
+        # the control -- the first version of this check read the shape
+        # after the drag had already parked the cursor 60px away, and a
+        # correct resize cursor reported as absent.
+        # OFF THE BAND FIRST, then onto it. A drag ends with the pointer
+        # where the band now IS, so warping "to the band" can be a move
+        # of zero pixels -- no motion event, no cursor query, and the
+        # client's last shape stands whatever it was. Coming from
+        # elsewhere guarantees the event this is measuring.
+        s2 = geo2.get("split", (sx, sy, sw, sh))
+        dbg.warp_cursor(qmp, cx + t2[0] + t2[2] // 2, cy + t2[1] + t2[3] // 2)
+        time.sleep(0.4)
+        off_band = dbg.cursor_shape()
+        dbg.warp_cursor(qmp, cx + s2[0] + s2[2] // 2, cy + s2[1] + s2[3] // 2)
+        time.sleep(0.4)
+        on_band = dbg.cursor_shape()
+        check("the pointer over it is the resize cursor, and not beside it",
+              on_band == DebugConsole.CURSOR_H and
+              off_band == DebugConsole.CURSOR_NORMAL,
+              f"on band={on_band} off band={off_band}")
+        # Put it back, or every later check in this tool -- and every
+        # tool after it, since this app WRITES -- sees a narrowed page.
+        dbg.warp_cursor(qmp, cx + s2[0] + s2[2] // 2, cy + s2[1] + s2[3] // 2)
+        qmp.click()
+        time.sleep(0.15)
+        qmp.click()
+        time.sleep(0.6)
+        geo = layout(dbg)
+        tx, ty, tw, th = geo.get("tree", (tx, ty, tw, th))
+        px0, py0, pw0, ph0 = geo.get("page", (px0, py0, pw0, ph0))
+
     def row_named(sub):
         for r in rows:
             if sub.lower() in r["label"].lower():

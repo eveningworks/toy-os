@@ -220,6 +220,16 @@ manual steps to be worth automating:
   what it is drawing, and `enter_gui()` polls the desktop ready instead
   of sleeping.
 
+  **`cursor_shape()` reports what the compositor would DRAW under the
+  pointer** -- `gui state --json`'s `cursor.shape`, a `WM_CURSOR_*`
+  (`userland/wm/wm_internal.h`), with the frame's edge rules and the
+  client's own `WIN_REQ_CURSOR` already resolved against each other.
+  That is the check for a client-side resize cursor: the alternative is
+  recognising a 15x21 sprite in a screenshot, which cannot tell "the
+  client asked for the wrong shape" from "the theme failed to load".
+  `key(k, mods="ctrl")` sets the `KEY_MOD_*` bits delivered ALONGSIDE
+  the key without re-encoding it, which is what a real keyboard does.
+
   **`processes()` gives every process as a dict** (pid, ppid, pgid,
   state, cpu, name), parsed from `/bin/ps` run through the kernel's
   shell -- a different reader from whatever ring-3 shell is under test,

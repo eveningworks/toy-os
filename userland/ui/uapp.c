@@ -202,9 +202,19 @@ static int layout_log_enabled(void) {
 // per frame, and each differs from the line before it, so nothing would
 // ever match. What repeats is the whole block, which is exactly what an
 // idle window emits over and over.
-#define LAYOUT_BLOCK_MAX 768
+//
+// **AN OVERFLOW SAYS SO.** Dropping what does not fit is silent, and
+// what it drops is whatever an app logs LAST -- so a test asserting on
+// those lines reads a working app as broken (it did). The marker's room
+// is reserved so it cannot itself be the line that will not fit, and it
+// goes INSIDE the block so the dedupe covers it: outside, it would
+// print every frame.
+#define LAYOUT_BLOCK_MAX 2048
+#define LAYOUT_BLOCK_MARK "uapp: layout log TRUNCATED -- raise LAYOUT_BLOCK_MAX\n"
+#define LAYOUT_BLOCK_USABLE (LAYOUT_BLOCK_MAX - (int)sizeof(LAYOUT_BLOCK_MARK))
 static char g_block[LAYOUT_BLOCK_MAX];
 static int  g_block_len;
+static int  g_block_over;
 static char g_block_prev[LAYOUT_BLOCK_MAX];
 static int  g_block_prev_len;
 
@@ -225,14 +235,20 @@ void uapp_logf_layout(const char *fmt, ...) {
 
 void uapp_log_layout_line(const char *line) {
     if (!layout_log_enabled()) return;
-    for (const char *p = line; *p && g_block_len < LAYOUT_BLOCK_MAX - 1; p++)
+    for (const char *p = line; *p; p++) {
+        if (g_block_len >= LAYOUT_BLOCK_USABLE) { g_block_over = 1; return; }
         g_block[g_block_len++] = *p;
+    }
 }
 
 // Called by the draw path once the app has finished. Emits the block
 // only if it differs from the previous frame's.
 static void layout_log_flush(void) {
-    if (!g_layout_log || !g_block_len) { g_block_len = 0; return; }
+    if (!g_layout_log || !g_block_len) { g_block_len = g_block_over = 0; return; }
+    if (g_block_over) {
+        for (const char *p = LAYOUT_BLOCK_MARK; *p; p++) g_block[g_block_len++] = *p;
+        g_block_over = 0;
+    }
     int same = (g_block_len == g_block_prev_len);
     for (int i = 0; same && i < g_block_len; i++)
         if (g_block[i] != g_block_prev[i]) same = 0;

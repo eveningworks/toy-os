@@ -94,17 +94,17 @@ static const struct uui_menu_item menu_items[] = {
 };
 
 static struct uui_item g_widgets[] = {
-    { &uui_fileview_ops, &g_list, 0, 0, ID_LIST },
-    { &uui_scale_ops,    &g_pos,  0, 0, ID_POS  },
-    { &uui_scale_ops,    &g_vol,  0, 0, ID_VOL  },
-    { &uui_button_ops,   &g_play, 0, 0, ID_PLAY },
-    { &uui_button_ops,   &g_stop, 0, 0, ID_STOP },
-    { &uui_button_ops,   &g_prev, 0, 0, ID_PREV },
-    { &uui_button_ops,   &g_next, 0, 0, ID_NEXT },
-    { &uui_label_ops,    &g_now,  0, 0, 0 },
-    { &uui_label_ops,    &g_fmt,  0, 0, 0 },
-    { &uui_label_ops,    &g_time, 0, 0, 0 },
-    { &uui_label_ops,    &g_vol_lbl, 0, 0, 0 },
+    { .ops = &uui_fileview_ops, .widget = &g_list, .id = ID_LIST },
+    { .ops = &uui_scale_ops, .widget = &g_pos, .id = ID_POS },
+    { .ops = &uui_scale_ops, .widget = &g_vol, .id = ID_VOL },
+    { .ops = &uui_button_ops, .widget = &g_play, .id = ID_PLAY },
+    { .ops = &uui_button_ops, .widget = &g_stop, .id = ID_STOP },
+    { .ops = &uui_button_ops, .widget = &g_prev, .id = ID_PREV },
+    { .ops = &uui_button_ops, .widget = &g_next, .id = ID_NEXT },
+    { .ops = &uui_label_ops, .widget = &g_now },
+    { .ops = &uui_label_ops, .widget = &g_fmt },
+    { .ops = &uui_label_ops, .widget = &g_time },
+    { .ops = &uui_label_ops, .widget = &g_vol_lbl },
 };
 
 // --- the listing ------------------------------------------------------

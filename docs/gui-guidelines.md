@@ -392,6 +392,19 @@ identically:
 - **Separators and disabled rows are skipped by the arrows** and commit
   nothing when released on.
 
+**A CONTEXT MENU IS THE SAME WIDGET AND OPENS ON THE SECONDARY
+RELEASE.** `uui_menubar_open_at()` puts a free-floating popup at a
+point, so an app does not draw its own menu (Qt's QMenu and GTK's
+GtkPopoverMenu are one class serving both, and two implementations drift
+in the ways a user notices). The exception above does NOT carry over to
+it: `uui_router_release()` runs for every button while only the PRESS is
+filtered to the primary one, so a menu opened during the secondary press
+is handed that gesture's own release and commits whichever row was under
+the cursor. Arm on the press, open on the release -- Win32's
+WM_RBUTTONUP. And **the press should select what it points at first**
+(`uui_fileview_select_at()`): a menu that acts on some other row is how
+a file manager deletes the wrong file.
+
 **Per-item state is asked for, never stored in the menu.** The tree is
 `const`; an app sets `item_flags` and the widget queries it per item on
 every draw and hit test. There is deliberately no "refresh the menu"

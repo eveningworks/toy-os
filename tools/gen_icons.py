@@ -331,6 +331,70 @@ def icon_tb_tree():
     return im
 
 
+# The five file verbs. Copy/Move are a PAIR and read as one: two sheets
+# for copy, one sheet plus an arrow for move -- which is what Explorer's
+# ribbon and every commander's F5/F6 have always drawn.
+
+
+def _sheet(d, x, y, w, h):
+    d.rectangle([x, y, x + w, y + h], outline=TB_INK, width=4)
+
+
+def icon_tb_copy():
+    im, d = _tb()
+    _sheet(d, 6, 6, 30, 38)
+    _sheet(d, 26, 20, 30, 38)
+    return im
+
+
+def icon_tb_move():
+    im, d = _tb()
+    _sheet(d, 4, 12, 26, 40)
+    d.rectangle([34, 28, 50, 36], fill=TB_INK)
+    d.polygon([(60, 32), (46, 22), (46, 42)], fill=TB_INK)
+    return im
+
+
+def icon_tb_mkdir():
+    im, d = _tb()
+    d.polygon([(6, 52), (6, 14), (24, 14), (30, 22), (50, 22), (50, 52)],
+              fill=TB_INK)
+    # The "new" plus, drawn in the hole so it reads at 20px.
+    d.rectangle([42, 34, 62, 42], fill=TB_INK)
+    d.rectangle([48, 28, 56, 48], fill=TB_INK)
+    return im
+
+
+def icon_tb_rename():
+    im, d = _tb()
+    _sheet(d, 6, 8, 30, 44)
+    # A pencil across it: rename is an EDIT, not a move.
+    d.line([(26, 52), (58, 20)], fill=TB_INK, width=8)
+    d.polygon([(60, 12), (62, 26), (48, 24)], fill=TB_INK)
+    return im
+
+
+def icon_tb_delete():
+    im, d = _tb()
+    d.rectangle([18, 6, 46, 14], fill=TB_INK)      # the lid
+    d.rectangle([8, 16, 56, 24], fill=TB_INK)
+    d.polygon([(14, 26), (50, 26), (46, 58), (18, 58)], outline=TB_INK, width=4)
+    d.rectangle([26, 32, 32, 52], fill=TB_INK)
+    d.rectangle([38, 32, 44, 52], fill=TB_INK)
+    return im
+
+
+def icon_properties():
+    """The Properties window's own icon: a sheet with an information
+    mark. Not a `tb-` glyph -- it names a WINDOW, so it is drawn like
+    the other app icons, on a plate."""
+    im, d = tile((92, 104, 126))
+    d.rectangle([16, 12, 44, 52], fill=(250, 250, 252, 255))
+    d.ellipse([26, 18, 34, 26], fill=(92, 104, 126, 255))
+    d.rectangle([27, 30, 33, 46], fill=(92, 104, 126, 255))
+    return im
+
+
 def icon_start():
     """The Start button's mark -- NOT an app icon, and deliberately not
     shaped like a UI convention either.
@@ -459,6 +523,12 @@ ICONS = {
     "tb-icons": icon_tb_icons,
     "tb-panes": icon_tb_panes,
     "tb-tree": icon_tb_tree,
+    "tb-copy": icon_tb_copy,
+    "tb-move": icon_tb_move,
+    "tb-mkdir": icon_tb_mkdir,
+    "tb-rename": icon_tb_rename,
+    "tb-delete": icon_tb_delete,
+    "properties": icon_properties,
     "diskmark": icon_diskmark,
 }
 

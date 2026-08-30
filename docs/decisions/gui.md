@@ -5283,3 +5283,111 @@ The fix is one mask test -- `uui_button` had consulted `buttons` all
 along, for exactly this. `uui_slider` had the identical shape and was
 fixed in the same change, unprompted by any failure: nothing drives a
 settings slider that way, which is why it survived.
+
+
+## A splitter owns a FRACTION, and the size it decides is pinned on the layout ITEM
+
+`uui_splitter` could have owned a pixel column. It owns per mille of the
+travel instead, and the app supplies the track on every layout pass.
+
+The pixel version is simpler and wrong in a way that only shows up
+later: a divider dragged in a 700-pixel window and then reopened
+maximised leaves one side at the width it had when the window was small,
+and the same value means something different after a font-size change or
+on a different screen. Qt's `QSplitter` stores absolute sizes and then
+spends `setStretchFactor` and a resize handler putting the proportion
+back; a fraction is that behaviour with nothing to remember. It also
+makes persistence trivial -- the number written to `/etc/files.conf` is
+the number the widget holds.
+
+**The drag is a DELTA from the press, never the pointer's absolute
+position.** That is what lets one widget serve File Manager's
+hand-computed rects and System Settings' `uui_layout` row: the layout
+inserts a gap on each side of the band, so an absolute mapping from
+pointer to fraction would be off by one gap in one of the two callers
+and correct in the other -- the shape of bug that gets blamed on the
+app. A delta is immune to every offset between the track's origin and
+where the band actually ended up.
+
+**The size goes on `uui_item.main_size`, not on the widget beside it.**
+A divider's whole job is to own a size the widget next to it would
+otherwise choose, and there were two ways to say that: a `set_width()`
+on `uui_sidebar` -- then on `uui_tree`, then on `uui_listbox`, once per
+widget type that ever sits beside a divider -- or one field on the thing
+a container already consults. CSS calls it `flex-basis` and QSplitter
+calls it `setSizes()`, and both put it on the CONTAINER's view of the
+child for the same reason.
+
+The cost, paid immediately: `struct uui_item` is initialised
+POSITIONALLY by six apps, so the field had to go last, and adding it
+mid-struct silently renumbered every one of them into setting the wrong
+member. The compiler's only complaint was
+`-Wmissing-field-initializers`, which is not the error that deserves.
+Those arrays are designated-initialiser now, which is the actual fix --
+the next field added to `uui_item` will not have to be careful.
+
+## The resize cursors stopped being the frame's alone
+
+`abi/win_proto.h` capped the client-facing cursor set at three shapes
+and said why: "the resize cursors are the frame's, which a client does
+not own". That was true while the only thing being resized was a window,
+and it stopped being true the moment a client had a divider of its own
+to drag.
+
+Wayland made the same move in the other direction and is the check on
+this one: `cursor-shape-v1` enumerates `ew-resize`, `ns-resize`,
+`col-resize` and `row-resize` for clients precisely because a toolkit's
+splitter has to name them, while the compositor still draws its own for
+a window edge. `WIN_CURSOR_RESIZE_H`/`_RESIZE_V` are that, and
+`resolve_cursor_kind()` keeps the frame's answer first, so hovering a
+window edge shows the edge's cursor even if the client under it asked
+for something else.
+
+It cost two defines and one `switch` arm. The shapes had been on disk in
+every cursor theme since themes existed (`data/cursors/*/resize-h`), and
+the compositor was already resolving them for its own frame -- so what
+was missing was a NAME a client could say, not a capability.
+
+The testing half is worth recording because it decided the shape of the
+check: `gui state --json` reports the RESOLVED shape now
+(`cursor.shape`), so a test asks the compositor what it would draw
+rather than trying to recognise a 15x21 sprite in a screenshot. A pixel
+check would have been possible and would have proven less -- it could
+not tell "the client asked for the wrong shape" from "the theme failed
+to load".
+
+## Properties is a process, not a dialog
+
+Every other modal in the File Manager is drawn in its own window --
+Rename, New folder, the delete confirmation -- so Properties being a
+separate program is the odd one out and needs a reason.
+
+There are three, and the first is the real one. **A folder's size is a
+recursive walk**, and an event loop that is walking a directory tree is
+an event loop that is not answering. The alternatives were a walk
+spread across the File Manager's own tick (which makes every listing
+redraw compete with a background job the user cannot see or stop) or a
+modal that blocks until it finishes (which is the freeze, with a
+different name). A child process has its own tick and its own event
+loop, and closing its window ends the walk.
+
+Second, **a Properties window you can leave open beside the listing is
+more useful than one that blocks it** -- which is why Explorer's and
+Dolphin's are both real windows, and why comparing two files means
+opening two of them (so it is deliberately NOT single-instance).
+
+Third, **anything that can name a path can open one**. The File Manager
+is the first caller; the desktop's own icons are the obvious second, and
+they get it for the cost of a `sys_spawn`.
+
+What it gives up is the toolkit: a separate binary cannot share the
+File Manager's selection, so it takes a path and stats it itself, and a
+file deleted while its Properties window is open shows what was true
+when it opened. That is the same staleness every real properties dialog
+has and it is not worth a watch.
+
+**The queue is fixed and a full one is reported.** A walk that cannot
+reach everything says "at least 4.2 MB" rather than printing the partial
+total as if it were the answer -- the same rule this codebase applies to
+a formatter that will not fit and a parser that cannot be sure. A floor
+presented as a total is a wrong answer wearing a right answer's clothes.

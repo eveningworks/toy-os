@@ -515,6 +515,79 @@ this the obvious way), not from how much history it accumulated.
   track JUMPS there, as on every scale outside a Win32 trackbar. Sizes
   are font-derived, so the thumb is a text row tall rather than ten
   pixels forever.
+- **ONE MENU WIDGET SERVES A BAR AND A CONTEXT MENU:
+  `uui_menubar_open_at()`.** A free-floating popup at (x, y), placed by
+  the same flip/slide/clamp arithmetic a dropdown uses and driven by the
+  same hit-testing, hover, submenus, `item_flags` and keyboard. Qt's
+  QMenu and GTK's GtkPopoverMenu are one class serving both, and the
+  reason is what a user notices when they are two: different padding, a
+  different tick gutter, arrows that work in one and not the other.
+
+  Two rules. **USE A SEPARATE INSTANCE, initialised with `count == 0`**
+  -- a context menu has no bar strip, and sharing one instance with a
+  real menu bar would let Left/Right walk out of the popup into the
+  bar's titles; with no titles there is nothing to walk to. And **OPEN
+  IT ON THE SECONDARY RELEASE, NOT THE PRESS**, which is Win32's
+  WM_RBUTTONUP and here is not a preference: `uui_router_release()` runs
+  for EVERY button (only the PRESS is filtered to the primary one), so a
+  menu opened during the press is handed that same gesture's release and
+  commits whichever row landed under the cursor. The menu bar's
+  open-on-press exception in `docs/gui-guidelines.md` is about the
+  primary button and does not carry over.
+
+- **`uui_splitter` IS THE DRAGGABLE DIVIDER, AND IT OWNS A FRACTION
+  RATHER THAN A PIXEL COLUMN.** Qt's `QSplitter`, GTK's `GtkPaned`,
+  Explorer's navigation-pane divider. The value is per mille of the
+  travel (`UUI_SPLIT_SCALE`), which is what makes a window that got
+  wider keep the proportion the user chose instead of stranding one side
+  at the width it had when the window was small -- and what makes the
+  saved value survive a font change and a different screen. The APP
+  supplies the track (`uui_splitter_set_track`) on every layout pass,
+  because only the app knows what the two children are and what is left
+  after the chrome; the widget answers `pos`/`before`/`after` from one
+  piece of arithmetic, so a caller using two of them cannot disagree
+  with itself.
+
+  Four things to know. **A DRAG IS A DELTA FROM THE PRESS, never the
+  pointer's absolute position** -- the handle then follows the pointer
+  exactly whatever margins and gaps sit between the track's origin and
+  the band, which is what lets one widget serve File Manager's
+  hand-computed rects and System Settings' `uui_layout` row (where the
+  layout inserts a gap on each side of the band, and an absolute mapping
+  would offset every drag by one gap). **THE MINIMA ARE THE WIDGET'S,
+  not the app's to re-check**: a pane dragged to nothing leaves no
+  handle to drag back. **A DOUBLE CLICK RESETS IT** to `def_frac`, KDE's
+  escape hatch from a bad drag. And **the band is the HIT ZONE and is
+  wider than the line drawn in it** -- a one-pixel target is not a
+  target, which is why every real splitter's handle is a few pixels of
+  otherwise empty strip.
+
+- **A LAYOUT CHILD'S SIZE CAN BE PINNED FROM OUTSIDE: `uui_item.main_size`.**
+  Non-zero overrides what that child's `natural_size` asked for, along
+  the container's stacking axis only -- CSS's `flex-basis`, QSplitter's
+  `setSizes()`. It exists because a divider's whole job is to own a
+  size the widget beside it would otherwise choose, and the alternative
+  -- a `set_width()` on `uui_sidebar`, then on `uui_tree`, then on
+  `uui_listbox` -- is that one answer written once per widget type.
+  **It is the LAST field in `struct uui_item` on purpose**: six apps
+  initialise that struct positionally, so a field inserted in the middle
+  silently renumbers every one of them (and the compiler only says
+  `-Wmissing-field-initializers`, which is not the error it deserves).
+  Those arrays are designated-initialiser now, which is the real fix.
+
+- **A CLIENT MAY ASK FOR A RESIZE CURSOR NOW:
+  `WIN_CURSOR_RESIZE_H`/`_RESIZE_V`.** They were the frame's alone --
+  `abi/win_proto.h` said so -- until a client had a divider of its own to
+  drag, which is exactly why Wayland's `cursor-shape-v1` exposes
+  `col-resize`/`ew-resize` to clients. The shapes were already on disk in
+  every cursor theme (`data/cursors/*/resize-h`), so this cost two
+  defines and a `switch` arm in `wm_render.c`'s `client_cursor_at()`.
+  **The compositor still wins wherever the two overlap**: a window edge
+  is geometry it owns, and `resolve_cursor_kind()` asks the frame first.
+  A test reads the resolved shape from `gui state --json`'s
+  `cursor.shape` (`DebugConsole.cursor_shape()`) rather than trying to
+  recognise a 15x21 sprite in a screenshot.
+
 - **A CONTROL BELOW THE FOLD IS UNREACHABLE, not merely hard to hit.**
   A scroll view with a `hit` clips its children from ROUTING, so a press
   never reaches a child outside the viewport -- correct, and the reason
@@ -1594,7 +1667,7 @@ real scanout hardware does. Do not write a pixel assertion for one.
   Commander, Total Commander and Krusader for forty years, needs
   neither: with two directories on screen the source is the active pane
   and the destination is the other one, so nothing is carried and
-  nothing needs a carrier. Six things to know:
+  nothing needs a carrier. Nine things to know:
   - **File operations are CHILD PROCESSES.** F5 spawns `/bin/cp`, F8
     spawns `/bin/rm`, and `on_tick` reaps them with
     `sys_waitpid_nohang()`. One implementation of copying, testable as
@@ -1624,6 +1697,38 @@ real scanout hardware does. Do not write a pixel assertion for one.
     active options (`item_flags`), and a `uui_toolbar` under the bar
     presents Up/Refresh plus the four toggles through the same
     callback -- Up is greyed at the root.
+  - **THE FIVE VERBS ARE ON THE TOOLBAR, and the bottom key row is
+    gone.** Copy/Move/New folder/Rename/Delete were a row of buttons
+    across the bottom -- Norton's function-key bar, which every
+    commander since has kept -- and they moved up beside Up/Refresh
+    because the same five commands were already in the File menu and on
+    F5-F8, so the row was a THIRD copy costing a whole row of pane
+    height. **The keys are untouched** and the status bar still names
+    them, which is the half of the commander habit worth keeping; what
+    went is the strip, not the bindings.
+  - **A SECONDARY CLICK INSIDE A PANE OPENS A CONTEXT MENU**, and it
+    SELECTS the row it was pointed at first -- Explorer's and Dolphin's
+    rule, and here it is a safety property: a menu acting on a row other
+    than the one under the pointer deletes the wrong file
+    (`uui_fileview_select_at()` exists for exactly this, and never
+    activates, so a second right-click cannot count as a double click).
+    The menu is a second `uui_menubar` with no bar of its own, opened
+    with `uui_menubar_open_at()`; a click on the chrome opens nothing.
+  - **PROPERTIES IS A PROCESS, `/bin/wm/apps/properties`**, spawned with
+    the path -- Explorer's and Dolphin's arrangement, and not a modal in
+    this window for three reasons: a folder's total size is a RECURSIVE
+    WALK no event loop should be doing, a Properties window you can
+    leave open beside the listing is more useful than one that blocks
+    it, and anything that can name a path can open one. It reports name,
+    type (`"TXT file"`, Windows' wording, derived from the extension --
+    there is no magic-number sniffing here), location, size, what opens
+    it, both timestamps and the inode; a FOLDER gets a recursive count
+    instead, walked a few directories per tick so the numbers climb
+    while you watch. **The queue is fixed and a full one is REPORTED**
+    ("at least 4.2 MB"), because a floor presented as a total is a wrong
+    answer wearing a right answer's clothes. It is NOT single-instance:
+    two files have two sets of properties, and comparing them is why you
+    open the second.
   - **Refresh is `SYS_FS_GENERATION` polled in the tick**, the desktop's
     idiom -- one integer compare, no disk I/O, and a copy finishing in
     another process appears with nobody pressing anything. **An app that

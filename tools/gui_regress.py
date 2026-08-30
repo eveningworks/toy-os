@@ -362,10 +362,14 @@ def main():
                     help="run only these tools (repeatable); matches on the short name")
     ap.add_argument("--disk", default="disk.img",
                     help="image to copy for each run (default: disk.img)")
-    ap.add_argument("--timeout", type=int, default=180,
-                    help="per-tool timeout in seconds (default: 180). The slowest "
-                         "real tool is ~41s; 180 keeps a wide margin while bounding "
-                         "a hung guest to minutes, not the old 10.")
+    ap.add_argument("--timeout", type=int, default=360,
+                    help="per-tool timeout in seconds (default: 360). This is a "
+                         "HANG GUARD, not a budget: it wants a wide margin over "
+                         "the slowest real tool, which is `files` at ~3.5min (85 "
+                         "checks, and it drives real file operations through "
+                         "spawned children). It was 180 while the ceiling was "
+                         "~41s; a guard with no margin fails healthy runs, which "
+                         "is worse than no guard.")
     ap.add_argument("--logs", metavar="DIR",
                     help="write each tool's full output to DIR/<name>.log")
     ap.add_argument("--list", action="store_true", help="list the tools and exit")

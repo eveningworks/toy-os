@@ -60,6 +60,7 @@ SPAWN_PATH = "/bin/wm/apps/files"
 SRC = "/fmtest"
 DST = "/fmdest"
 FILES_CONF = "/etc/files.conf"
+PROPERTIES_EXEC = "/bin/wm/apps/properties"
 
 # `gui key` takes a character or a code (userland/wm/wm_debug.c), which
 # is why nothing here depends on the guest's keyboard layout -- the trap
@@ -97,6 +98,10 @@ class Layout:
         self.hover = None     # (pane0 hovered row, pane1 hovered row)
         self.view = None      # [mode0, mode1, single, tree_on, tree_nodes]
         self.treebox = None   # [x, y, w, h, row_h, selected_id]
+        self.split = None     # (tree fraction, pane fraction), per mille
+        self.splitbox = {}    # 0 = tree divider, 1 = pane divider -> [x,y,w,h]
+        self.ctx = None       # is the context menu open?
+        self.ctxbox = None    # its popup [x, y, w, h]
         self.menu = None      # open level-0 popup [x, y, w, h]
         self.menuhot = None   # (open depth, level-0 hot row)
         self.cellgrid = {}    # pane -> [x0, y0, cell_w, cell_h, cols]
@@ -111,44 +116,70 @@ class Layout:
             p = line.split("files: layout ", 1)[1].split()
             if not p:
                 continue
-            if p[0] == "pane" and len(p) >= 6:
-                self.pane[int(p[1])] = tuple(int(v) for v in p[2:6])
-            elif p[0] == "dir" and len(p) >= 3:
-                self.dir[int(p[1])] = p[2]
-            elif p[0] == "rows" and len(p) >= 3:
-                self.rows[int(p[1])] = int(p[2])
-            elif p[0] == "active" and len(p) >= 2:
-                self.active = int(p[1])
-            elif p[0] == "selected" and len(p) >= 2:
-                self.selected = p[1]
-            elif p[0] == "modal" and len(p) >= 2:
-                self.modal = int(p[1])
-            elif p[0] == "marked" and len(p) >= 3:
-                self.marked = (int(p[1]), int(p[2]))
-            elif p[0] == "hover" and len(p) >= 3:
-                self.hover = (int(p[1]), int(p[2]))
-            elif p[0] == "view" and len(p) >= 8:
-                # "view <mode0> <mode1> single <s> tree <t> <nodes>"
-                self.view = [int(p[1]), int(p[2]), int(p[4]),
-                             int(p[6]), int(p[7])]
-            elif p[0] == "treebox" and len(p) >= 7:
-                self.treebox = [int(v) for v in p[1:7]]
-            elif p[0] == "menu" and len(p) >= 5:
-                self.menu = [int(v) for v in p[1:5]]
-            elif p[0] == "menuhot" and len(p) >= 3:
-                self.menuhot = (int(p[1]), int(p[2]))
-            elif p[0] == "cellgrid" and len(p) >= 7:
-                self.cellgrid[int(p[1])] = [int(v) for v in p[2:7]]
-            elif p[0] == "toolbar" and len(p) >= 5:
-                self.toolbar = [int(v) for v in p[1:5]]
-            elif p[0] == "tbitem" and len(p) >= 6:
-                self.tbitems[int(p[1])] = [int(v) for v in p[2:6]]
+            try:
+                self._field(p)
+            except ValueError:
+                # A TORN LINE, NOT A BROKEN APP. The app's klog and the
+                # serial console's own echo share one stream, so a
+                # command sent while the app is drawing can land in the
+                # middle of a report line -- and an unguarded int() then
+                # takes the whole tool down with a traceback that names
+                # the parser rather than the race. Skipping costs one
+                # frame; the next report is along in milliseconds.
+                continue
+
+    def _field(self, p):
+        if p[0] == "pane" and len(p) >= 6:
+            self.pane[int(p[1])] = tuple(int(v) for v in p[2:6])
+        elif p[0] == "dir" and len(p) >= 3:
+            self.dir[int(p[1])] = p[2]
+        elif p[0] == "rows" and len(p) >= 3:
+            self.rows[int(p[1])] = int(p[2])
+        elif p[0] == "active" and len(p) >= 2:
+            self.active = int(p[1])
+        elif p[0] == "selected" and len(p) >= 2:
+            self.selected = p[1]
+        elif p[0] == "modal" and len(p) >= 2:
+            self.modal = int(p[1])
+        elif p[0] == "marked" and len(p) >= 3:
+            self.marked = (int(p[1]), int(p[2]))
+        elif p[0] == "hover" and len(p) >= 3:
+            self.hover = (int(p[1]), int(p[2]))
+        elif p[0] == "view" and len(p) >= 8:
+            # "view <mode0> <mode1> single <s> tree <t> <nodes>"
+            self.view = [int(p[1]), int(p[2]), int(p[4]),
+                         int(p[6]), int(p[7])]
+        elif p[0] == "treebox" and len(p) >= 7:
+            self.treebox = [int(v) for v in p[1:7]]
+        elif p[0] == "ctx" and len(p) >= 2:
+            self.ctx = int(p[1])
+        elif p[0] == "ctxbox" and len(p) >= 5:
+            self.ctxbox = [int(v) for v in p[1:5]]
+        elif p[0] == "split" and len(p) >= 3:
+            self.split = (int(p[1]), int(p[2]))
+        elif p[0] == "splitbox" and len(p) >= 6:
+            self.splitbox[int(p[1])] = [int(v) for v in p[2:6]]
+        elif p[0] == "menu" and len(p) >= 5:
+            self.menu = [int(v) for v in p[1:5]]
+        elif p[0] == "menuhot" and len(p) >= 3:
+            self.menuhot = (int(p[1]), int(p[2]))
+        elif p[0] == "cellgrid" and len(p) >= 7:
+            self.cellgrid[int(p[1])] = [int(v) for v in p[2:7]]
+        elif p[0] == "toolbar" and len(p) >= 5:
+            self.toolbar = [int(v) for v in p[1:5]]
+        elif p[0] == "tbitem" and len(p) >= 6:
+            self.tbitems[int(p[1])] = [int(v) for v in p[2:6]]
 
     def complete(self):
         return 0 in self.pane and 1 in self.pane and self.active is not None
 
     def pane_centre(self, i):
         x, y, w, h = self.pane[i]
+        return (self.ox + x + w // 2, self.oy + y + h // 2)
+
+    def split_point(self, i):
+        """A pixel in the middle of divider i's band (0 = tree, 1 = panes)."""
+        x, y, w, h = self.splitbox[i]
         return (self.ox + x + w // 2, self.oy + y + h // 2)
 
     def header_point(self, i):
@@ -185,20 +216,35 @@ def listing(dbg, path):
     return names
 
 
+# A POLL MUST ACCUMULATE, NOT RE-READ. The app emits its report as ONE
+# BLOCK and only when the block CHANGES (uapp.c's layout_log_flush), so
+# an idle window emits nothing at all -- and a serial read that lands
+# mid-block hands back a frame missing everything after the split. Parse
+# each read on its own and that frame is the only one you will ever get:
+# the poll then spins until it times out while the app sits there having
+# already reported exactly what was asked for. Accumulating costs
+# nothing, because Layout() already keeps only the last complete frame.
+_LAST_BUF = []
+
+
+def _collect(dbg, buf):
+    buf.extend(dbg.logs("files:", clear=True))
+    _LAST_BUF[:] = buf
+    return buf
+
+
 def layout_now(dbg, win, tries=25):
     """The app's CURRENT layout report, polled rather than slept for."""
+    buf = []
     for _ in range(tries):
         # NOT cleared first: the app draws when something happens, so
         # the report we want may already be in the buffer -- an
         # unconditional clear here threw away the only frame the app had
         # logged and reported a working window as silent.
-        lines = dbg.logs("files:", clear=True)
-        if not lines:
-            time.sleep(0.2)
-            continue
-        lay = Layout(win["content"], lines)
-        if lay.complete():
-            return lay
+        if _collect(dbg, buf):
+            lay = Layout(win["content"], buf)
+            if lay.complete():
+                return lay
         time.sleep(0.2)
     return None
 
@@ -208,10 +254,10 @@ def wait_layout(dbg, win, pred, timeout=12.0):
     OBSERVABLE rather than on a fixed sleep (CLAUDE.md)."""
     deadline = time.time() + timeout
     last = None
+    buf = []
     while time.time() < deadline:
-        lines = dbg.logs("files:", clear=True)
-        if lines:
-            lay = Layout(win["content"], lines)
+        if _collect(dbg, buf):
+            lay = Layout(win["content"], buf)
             if lay.complete():
                 last = lay
                 if pred(lay):
@@ -253,6 +299,16 @@ def sure_click(dbg, qmp, x, y):
     and silently desync its own position tracking."""
     dbg.warp_cursor(qmp, x, y)
     qmp.click()
+
+
+def sure_rclick(dbg, qmp, x, y):
+    """A SECONDARY click with a confirmed cursor, the mirror of
+    sure_click(). Right-click is what opens a context menu, and the app
+    reads the position off the event -- so landing somewhere else opens
+    the menu on the wrong row, which reads as the menu being wrong."""
+    dbg.warp_cursor(qmp, x, y)
+    qmp.click(button="right")
+    time.sleep(0.3)
 
 
 def band_drag(dbg, qmp, x0, y0, x1, y1, steps=4):
@@ -517,7 +573,7 @@ def run(dbg, qmp, tmp, res):
     # The window's TITLE is the assertion, not its existence: Notepad
     # titles itself after the file it holds, so a launch that ignored the
     # path would show "untitled" and pass a "did a window appear" check.
-    deadline = time.time() + 15.0
+    deadline = time.time() + 8.0
     titles = []
     while time.time() < deadline:
         titles = [w["title"] for w in dbg.windows()]
@@ -668,6 +724,108 @@ def run(dbg, qmp, tmp, res):
                   lay is not None and lay.view and lay.view[4] == n_before,
                   f"nodes -> {lay and lay.view and lay.view[4]}")
 
+    # --- 11b. the resizable dividers ------------------------------------
+    # Tree on, two panes: all three columns and both dividers are up.
+    # A broken splitter still lets everything else here pass, so every
+    # check below names a NEIGHBOUR that must not move -- half the
+    # assertion (CLAUDE.md).
+    lay = wait_layout(dbg, win, lambda l: len(l.splitbox) == 2) or lay
+    ok_geom = False
+    if lay and len(lay.splitbox) == 2 and lay.treebox:
+        tb = lay.treebox
+        s0, s1 = lay.splitbox[0], lay.splitbox[1]
+        ok_geom = (tb[0] + tb[2] == s0[0] and
+                   lay.pane[0][0] == s0[0] + s0[2] and
+                   lay.pane[0][0] + lay.pane[0][2] == s1[0] and
+                   lay.pane[1][0] == s1[0] + s1[2])
+    res.check("both dividers sit exactly between the columns they divide",
+              ok_geom, f"tree={lay and lay.treebox} splits={lay and lay.splitbox} "
+                       f"panes={lay and lay.pane}")
+
+    if ok_geom:
+        # 1. Dragging the PANE divider right widens the left pane and
+        #    narrows the right one, and leaves the tree alone.
+        tw_before = lay.treebox[2]
+        w0, w1 = lay.pane[0][2], lay.pane[1][2]
+        sx, sy = lay.split_point(1)
+        band_drag(dbg, qmp, sx, sy, sx + 60, sy)
+        lay = wait_layout(dbg, win, lambda l: 0 in l.pane and l.pane[0][2] != w0) or lay
+        res.check("dragging the pane divider right widens the left pane, "
+                  "narrows the right, and leaves the tree put",
+                  lay.pane[0][2] > w0 + 30 and lay.pane[1][2] < w1 - 30 and
+                  lay.treebox and lay.treebox[2] == tw_before,
+                  f"panes {w0}/{w1} -> {lay.pane[0][2]}/{lay.pane[1][2]}, "
+                  f"tree {tw_before} -> {lay.treebox and lay.treebox[2]}")
+
+        # 2. The TREE divider moves the tree and BOTH panes, together.
+        tw = lay.treebox[2]
+        px0 = lay.pane[0][0]
+        sx, sy = lay.split_point(0)
+        band_drag(dbg, qmp, sx, sy, sx + 50, sy)
+        lay = wait_layout(dbg, win,
+                           lambda l: l.treebox and l.treebox[2] != tw) or lay
+        res.check("dragging the tree divider widens the tree and moves the panes over",
+                  lay.treebox[2] > tw + 20 and lay.pane[0][0] > px0 + 20,
+                  f"tree {tw} -> {lay.treebox[2]}, pane0 x {px0} -> {lay.pane[0][0]}")
+
+        # 3. THE MINIMUM HOLDS. Dragged far past its own left edge, the
+        #    left pane keeps a usable width instead of collapsing to
+        #    nothing with no handle left to drag back.
+        sx, sy = lay.split_point(1)
+        band_drag(dbg, qmp, sx, sy, sx - 900, sy, steps=6)
+        lay = wait_layout(dbg, win, lambda l: 0 in l.pane) or lay
+        res.check("a divider dragged off the edge stops at the pane minimum",
+                  lay.pane[0][2] >= 8 and lay.pane[0][2] < 120,
+                  f"left pane clamped to {lay.pane[0][2]}px")
+
+        # 4. Double click puts it back to the middle -- and the tree
+        #    divider, which was NOT double-clicked, must stay where it
+        #    was dragged.
+        tw = lay.treebox[2]
+        sx, sy = lay.split_point(1)
+        dbg.warp_cursor(qmp, sx, sy)
+        qmp.click()
+        time.sleep(0.15)
+        qmp.click()
+        lay = wait_layout(dbg, win,
+                           lambda l: l.split and abs(l.split[1] - 500) < 3) or lay
+        res.check("double-clicking a divider resets only that one",
+                  lay.split and abs(lay.split[1] - 500) < 3 and
+                  lay.treebox and lay.treebox[2] == tw,
+                  f"split={lay.split} tree {tw} -> {lay.treebox and lay.treebox[2]}")
+
+        # 5. The keyboard: Ctrl+Right nudges the pane divider one column.
+        frac = lay.split[1]
+        w0 = lay.pane[0][2]
+        dbg.key(K_RIGHT, mods="ctrl")
+        lay = wait_layout(dbg, win, lambda l: l.split and l.split[1] != frac) or lay
+        res.check("Ctrl+Right nudges the pane divider without the mouse",
+                  lay.split and lay.split[1] > frac and lay.pane[0][2] > w0,
+                  f"frac {frac} -> {lay.split and lay.split[1]}, "
+                  f"pane0 {w0} -> {lay.pane[0][2]}")
+
+        # 6. The pointer over the band is the RESIZE cursor -- the
+        #    WIN_CURSOR_RESIZE_H the client asked for, resolved by the
+        #    compositor. The control is a point inside the pane, which
+        #    must stay the plain arrow.
+        sx, sy = lay.split_point(1)
+        dbg.warp_cursor(qmp, sx, sy)
+        time.sleep(0.3)
+        on_band = dbg.cursor_shape()
+        px, py = lay.pane_centre(1)
+        dbg.warp_cursor(qmp, px, py)
+        time.sleep(0.3)
+        off_band = dbg.cursor_shape()
+        res.check("the pointer over a divider is the resize cursor, and not beside it",
+                  on_band == DebugConsole.CURSOR_H and
+                  off_band == DebugConsole.CURSOR_NORMAL,
+                  f"on band={on_band} off band={off_band}")
+
+        # 7. Both positions are remembered, as fractions.
+        conf = dbg.send(f"sh cat {FILES_CONF}") or ""
+        res.check("both divider positions persist in /etc/files.conf",
+                  "pane_split=" in conf and "tree_split=" in conf, f"conf: {conf!r}")
+
     # The choices persist -- and are then RESET, because a leftover
     # icons/tree state changes what every later run of this tool sees
     # (CLAUDE.md: a test that applies a setting changes the machine).
@@ -790,10 +948,13 @@ def run(dbg, qmp, tmp, res):
     # --- 13. the toolbar ------------------------------------------------
     # Same commands, same item_flags as the menus: Up/Refresh, then the
     # four View toggles drawn LATCHED when their thing is on.
-    res.check("the toolbar reports its strip and eight items",
-              lay is not None and lay.toolbar is not None and len(lay.tbitems) == 8,
+    # Fourteen: Up, Refresh, sep, the five VERBS that used to be a
+    # button row across the bottom, sep, Details, Icons, sep, Second
+    # pane, Folder tree. Separators are indexed too.
+    res.check("the toolbar reports its strip and all fourteen items",
+              lay is not None and lay.toolbar is not None and len(lay.tbitems) == 14,
               f"toolbar={lay and lay.toolbar} items={lay and sorted(lay.tbitems)}")
-    if not (lay and lay.toolbar and len(lay.tbitems) == 8):
+    if not (lay and lay.toolbar and len(lay.tbitems) == 14):
         dbg.send(f"sh rm {FILES_CONF}")
         teardown_fixture(dbg)
         return
@@ -826,7 +987,7 @@ def run(dbg, qmp, tmp, res):
     # The Folder-tree button toggles the same state the menu ticks, and
     # LATCHES: its background moves to the pressed wash while a sibling
     # stays put (half the assertion is the neighbour, CLAUDE.md).
-    sure_click(dbg, qmp, *tb_centre(7))
+    sure_click(dbg, qmp, *tb_centre(13))
     lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 1)
     res.check("the Folder-tree button toggles the tree on",
               lay is not None and lay.view and lay.view[3] == 1, f"view={lay and lay.view}")
@@ -838,14 +999,14 @@ def run(dbg, qmp, tmp, res):
     qmp.stable_pixels(png_on)
     from PIL import Image
     im = Image.open(png_on).convert("RGB")
-    tx7, ty7 = lay.tbitems[7][0] + 2, lay.tbitems[7][1] + 2
+    tx7, ty7 = lay.tbitems[13][0] + 2, lay.tbitems[13][1] + 2
     tx1, ty1 = lay.tbitems[1][0] + 2, lay.tbitems[1][1] + 2
     p7 = im.getpixel((ox + tx7, oy + ty7))
     p1 = im.getpixel((ox + tx1, oy + ty1))
     res.check("the latched button's background differs from its resting sibling's",
               p7 != p1, f"tree btn {p7} vs refresh btn {p1}")
 
-    sure_click(dbg, qmp, *tb_centre(7))
+    sure_click(dbg, qmp, *tb_centre(13))
     lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 0)
     res.check("clicking it again toggles the tree off",
               lay is not None and lay.view and lay.view[3] == 0, f"view={lay and lay.view}")
@@ -870,6 +1031,160 @@ def run(dbg, qmp, tmp, res):
               n_before == 0 and n_after > 20, f"cream {n_before} -> {n_after}")
     dbg.warp_cursor(qmp, *park)
 
+
+    # --- 13b. the verbs moved to the toolbar ----------------------------
+    # They were five buttons across the bottom. The proof they really
+    # moved is not that the strip has more items -- it is that the
+    # commands WORK from up here: New folder must open the same prompt
+    # F7 opens, and Delete the same confirm F8 opens.
+    lay = wait_layout(dbg, win, lambda l: len(l.tbitems) == 14) or lay
+    sure_click(dbg, qmp, *tb_centre(5))          # New folder
+    lay = wait_layout(dbg, win, lambda l: l.modal not in (None, 0)) or lay
+    res.check("the toolbar's New folder opens the same prompt F7 does",
+              lay.modal not in (None, 0), f"modal={lay and lay.modal}")
+    dbg.key(K_ESC)
+    lay = wait_layout(dbg, win, lambda l: l.modal == 0) or lay
+
+    # Delete needs something selected, or it complains instead of asking.
+    sure_click(dbg, qmp, *lay.pane_centre(0))
+    lay = wait_layout(dbg, win, lambda l: True) or lay
+    sure_click(dbg, qmp, *tb_centre(7))          # Delete
+    lay = wait_layout(dbg, win, lambda l: l.modal not in (None, 0)) or lay
+    res.check("the toolbar's Delete opens the same confirm F8 does",
+              lay.modal not in (None, 0), f"modal={lay and lay.modal}")
+    dbg.key(K_ESC)
+    lay = wait_layout(dbg, win, lambda l: l.modal == 0) or lay
+    res.check("(Esc dismissed it without deleting anything)",
+              lay is not None and lay.modal == 0, f"modal={lay and lay.modal}")
+
+    # --- 14. the context menu, and Properties ---------------------------
+    # A SECONDARY click inside a pane. Two things a broken version would
+    # still pass if they were not both asserted: that the menu opened at
+    # all, and that it opened on the row that was pointed AT -- a menu
+    # acting on some other row is how a file manager deletes the wrong
+    # file.
+    lay = wait_layout(dbg, win, lambda l: 0 in l.pane and l.rows.get(0, 0) > 2) or lay
+    px, py, pw, _ = lay.pane[0]
+    row_h = lay.treebox[4] if lay.treebox else 16
+    # Row 2 of the listing: past "..", and not whatever is selected now.
+    target = (ox + px + pw // 2, oy + py + row_h * 2 + row_h // 2)
+    before_sel = lay.selected
+    sure_rclick(dbg, qmp, *target)
+    lay = wait_layout(dbg, win, lambda l: l.ctx == 1 and l.ctxbox) or lay
+    tail = [ln.strip() for ln in _LAST_BUF][-14:]
+    res.check("a right-click inside a pane opens a context menu",
+              lay.ctx == 1 and lay.ctxbox is not None,
+              f"ctx={lay and lay.ctx} box={lay and lay.ctxbox} tail={tail}")
+    res.check("...and it selects the row it was pointed at first",
+              lay.selected not in (None, "-") and lay.selected != before_sel,
+              f"selected {before_sel} -> {lay and lay.selected}")
+
+    # The popup is placed AT the cursor, not at some fixed corner.
+    ok_place = False
+    if lay.ctxbox:
+        cbx, cby, cbw, cbh = lay.ctxbox
+        ok_place = (abs((ox + cbx) - target[0]) <= 6 and
+                    (oy + cby) >= target[1] - 2 and cbw > 0 and cbh > 0)
+    res.check("the popup opens at the pointer",
+              ok_place, f"box={lay and lay.ctxbox} click={target} origin={(ox, oy)}")
+
+    # Esc closes it, and closing must not commit anything -- the same
+    # rule every menu here follows.
+    dir_before = lay.dir.get(0)
+    dbg.key(K_ESC)
+    lay = wait_layout(dbg, win, lambda l: l.ctx == 0) or lay
+    res.check("Esc closes the context menu without committing",
+              lay.ctx == 0 and lay.dir.get(0) == dir_before,
+              f"ctx={lay and lay.ctx} dir={lay and lay.dir.get(0)}")
+
+    # Properties: the LAST row of the popup, and it opens a WINDOW.
+    sel_name = None
+    sure_rclick(dbg, qmp, *target)
+    lay = wait_layout(dbg, win, lambda l: l.ctx == 1 and l.ctxbox) or lay
+    sel_name = lay.selected
+    dbg.logs("properties:", clear=True)
+    if lay.ctxbox:
+        cbx, cby, cbw, cbh = lay.ctxbox
+        # The bottom row of the popup. Two pixels in from the border, so
+        # a row height this test does not know cannot put it on the edge.
+        sure_click(dbg, qmp, ox + cbx + cbw // 2, oy + cby + cbh - 4)
+    deadline = time.time() + 8.0
+    titles = []
+    while time.time() < deadline:
+        titles = [w2["title"] for w2 in dbg.windows()]
+        if any("Properties" in t for t in titles):
+            break
+        time.sleep(0.3)
+    res.check("Properties opens a window of its own, named for the file",
+              any("Properties" in t for t in titles) and
+              any(sel_name and sel_name in t for t in titles),
+              f"selected={sel_name} windows={titles}")
+
+    # WHAT IT SAYS, read from the app's own report rather than from
+    # pixels. A window that opens and shows nothing would pass the check
+    # above on its own.
+    rows = {}
+    deadline = time.time() + 10.0
+    while time.time() < deadline:
+        for ln in dbg.logs("properties: row", clear=True):
+            body = ln.split("properties: row ", 1)[1].strip()
+            if "=" in body:
+                k, v = body.split("=", 1)
+                rows[k] = v
+        if "Inode" in rows:
+            break
+        time.sleep(0.4)
+    res.check("Properties reports name, type, location, size and both times",
+              all(k in rows for k in ("Name", "Type", "Location", "Size",
+                                       "Created", "Modified", "Inode")),
+              f"rows={rows}")
+    res.check("...with the name it was opened for, and a size in bytes",
+              rows.get("Name") == sel_name and "bytes" in rows.get("Size", ""),
+              f"Name={rows.get('Name')!r} (wanted {sel_name!r}) Size={rows.get('Size')!r}")
+
+    for w2 in sorted(dbg.windows(), key=lambda w2: -w2["z"]):
+        if "Properties" in w2["title"]:
+            dbg.send(f"gui close {w2['z']}")
+            time.sleep(0.3)
+
+    # A FOLDER counts what is in it -- the recursive walk, which is the
+    # reason this is a process and not a modal.
+    dbg.send(f"sh mkdir {SRC}/sub")
+    dbg.send(f"sh cp /etc/toyos.conf {SRC}/sub/one.conf")
+    wait_listing(dbg, f"{SRC}/sub", lambda names: "one.conf" in names)
+    dbg.logs("properties:", clear=True)
+    dbg.send(f"gui spawn {PROPERTIES_EXEC} {SRC}")
+    folder = {}
+    deadline = time.time() + 10.0
+    while time.time() < deadline:
+        for ln in dbg.logs("properties: row", clear=True):
+            body = ln.split("properties: row ", 1)[1].strip()
+            if "=" in body:
+                k, v = body.split("=", 1)
+                folder[k] = v
+        if folder.get("Contains") and "counting" not in folder.get("Contains", ""):
+            break
+        time.sleep(0.5)
+    res.check("a folder's Properties totals its contents recursively",
+              folder.get("Type") == "Folder" and
+              "file" in folder.get("Contains", "") and
+              "folder" in folder.get("Contains", ""),
+              f"Type={folder.get('Type')!r} Contains={folder.get('Contains')!r} "
+              f"Size={folder.get('Size')!r}")
+    for w2 in sorted(dbg.windows(), key=lambda w2: -w2["z"]):
+        if "Properties" in w2["title"]:
+            dbg.send(f"gui close {w2['z']}")
+            time.sleep(0.3)
+
+    # NOTHING LEFT OPEN. An open popup swallows every key, so a context
+    # menu still up here makes the sections below type into it -- which
+    # is how the type-ahead that navigates to the image fixture landed
+    # in /tests and reported the icons view as broken.
+    dbg.key(K_ESC)
+    lay = wait_layout(dbg, win, lambda l: l.ctx == 0) or lay
+    res.check("nothing is left open for the sections after this one",
+              lay is not None and lay.ctx == 0 and lay.modal == 0,
+              f"ctx={lay and lay.ctx} modal={lay and lay.modal}")
 
     # --- 15. thumbnails in the icons view -------------------------------
     # A QOI and a JPEG show their own pixels; a text file keeps the
@@ -944,10 +1259,18 @@ def run(dbg, qmp, tmp, res):
         # the universal scroll_dir setting flips it for every app at the
         # kernel's single consuming point. The observable is the grid's
         # first cell riding up (cellgrid y falls) as the view scrolls.
-        for i in range(14):
+        # ENOUGH TO OVERFLOW THE PANE, with room to spare. Fourteen was
+        # exactly the old pane's capacity, so the day the bottom key row
+        # was removed -- giving the panes that row of height back -- the
+        # grid fitted, nothing scrolled, and a working wheel read as
+        # dead. The precondition is asserted below rather than assumed.
+        for i in range(22):
             dbg.send(f"sh touch {SRC}/pad{i:02}.txt")
-        wait_listing(dbg, SRC, lambda names: "pad13" in [n.split(".")[0] for n in names])
-        lay = wait_layout(dbg, win, lambda l: l.rows.get(0, 0) >= 17) or lay
+        wait_listing(dbg, SRC, lambda names: "pad21" in [n.split(".")[0] for n in names])
+        lay = wait_layout(dbg, win, lambda l: l.rows.get(0, 0) >= 25) or lay
+        res.check("the icons grid has more rows than the pane can show",
+                  lay.rows.get(0, 0) >= 25 and 0 in lay.cellgrid,
+                  f"rows={lay.rows.get(0)} grid={lay.cellgrid.get(0)}")
         px0, py0, pw0, ph0 = lay.pane[0]
         dbg.warp_cursor(qmp, ox + px0 + pw0 // 2, oy + py0 + ph0 // 2)
         y_before = lay.cellgrid[0][1]

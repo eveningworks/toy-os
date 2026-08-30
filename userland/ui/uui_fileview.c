@@ -884,6 +884,17 @@ int uui_fileview_press(struct uui_fileview *fv, int cx, int cy) {
     return changed || inside;
 }
 
+int uui_fileview_select_at(struct uui_fileview *fv, int cx, int cy) {
+    struct uui_table *t = &fv->table;
+    int row = (fv->mode == UUI_FILEVIEW_ICONS)
+                  ? uui_table_source_row(t, ic_hit_view(fv, cx, cy))
+                  : uui_table_hit(t, cx, cy);
+    if (row < 0 || row == t->selected) return 0;
+    t->selected = row;
+    fv_report_select(fv);
+    return 1;
+}
+
 int uui_fileview_drag(struct uui_fileview *fv, int cx, int cy) {
     if (fv->mode == UUI_FILEVIEW_ICONS) return ic_drag(fv, cx, cy);
     return uui_table_drag(&fv->table, cx, cy);

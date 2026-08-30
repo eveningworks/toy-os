@@ -670,8 +670,11 @@ static void cmd_state(struct dbg_out *o, int json) {
         dbg_out_printf(o, "\"windows\":%d,\"front_pid\":%d,",
                      window_count,
                      window_count > 0 ? windows[window_count - 1].client_pid : -1);
-        dbg_out_printf(o, "\"cursor\":{\"x\":%d,\"y\":%d,\"buttons\":%u},",
-                     cx, cy, (unsigned)buttons);
+        // `shape` is the resolved WM_CURSOR_* (wm_internal.h), which is
+        // how a test checks what a client asked for without having to
+        // recognise a sprite in a screenshot.
+        dbg_out_printf(o, "\"cursor\":{\"x\":%d,\"y\":%d,\"buttons\":%u,\"shape\":%d},",
+                     cx, cy, (unsigned)buttons, (int)wm_cursor_kind_at(cx, cy));
         dbg_out_printf(o, "\"overlays\":{\"start_menu\":%s,\"context_menu\":%s,",
                      start_menu_open ? "true" : "false",
                      context_menu_open ? "true" : "false");
@@ -721,7 +724,8 @@ static void cmd_state(struct dbg_out *o, int json) {
     }
 
     dbg_out_printf(o, "screen %dx%d, taskbar %dpx\r\n", screen_w, screen_h, taskbar_h);
-    dbg_out_printf(o, "cursor (%d,%d) buttons=0x%x\r\n", cx, cy, (unsigned)buttons);
+    dbg_out_printf(o, "cursor (%d,%d) buttons=0x%x shape=%d\r\n", cx, cy,
+                 (unsigned)buttons, (int)wm_cursor_kind_at(cx, cy));
     dbg_out_printf(o, "overlays: start_menu=%d context_menu=%d file_picker=%d confirm=%d calendar=%d\r\n",
                  start_menu_open, context_menu_open, file_picker_open, confirm_dialog_open,
                  calendar_open);

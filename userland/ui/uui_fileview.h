@@ -253,6 +253,14 @@ int  uui_fileview_hover(struct uui_fileview *fv, int cx, int cy);
 // A press: selects, and ACTIVATES on a double click. Returns 1 if
 // anything changed (so the caller repaints).
 int  uui_fileview_press(struct uui_fileview *fv, int cx, int cy);
+
+// Selects whatever row is at (cx, cy), and NOTHING else -- no double
+// click, no rubber band, no scrollbar. What a SECONDARY click needs: a
+// context menu acts on the selection, so right-clicking a row the user
+// has not selected must move the selection there first (Explorer's and
+// Dolphin's rule) without any chance of a second right-click counting
+// as a double and opening the file. Returns 1 if the selection moved.
+int  uui_fileview_select_at(struct uui_fileview *fv, int cx, int cy);
 int  uui_fileview_drag(struct uui_fileview *fv, int cx, int cy);
 void uui_fileview_drag_end(struct uui_fileview *fv);
 int  uui_fileview_wheel(struct uui_fileview *fv, int notches);

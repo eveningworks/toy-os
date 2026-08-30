@@ -645,6 +645,7 @@ whenever a headline here tells you something you did not already know.
 - **Ring-3 GUI apps are written against Toykit's `uapp`, and a new one is a `.c` file in `userland/gui/` with NO Makefile edit.**
 - **A TOOLBAR IS `uui_toolbar`, AND ITS STATE CALLBACK IS THE MENU BAR'S**
 - **A MENU BAR IN AN APP WITH ROUTED WIDGETS MUST BE `uui_menubar_ops`, NOT HAND-ROUTED**
+- **ONE MENU WIDGET SERVES A BAR AND A CONTEXT MENU: `uui_menubar_open_at()`, opened on the secondary RELEASE**
 - **A TAB IS A SESSION, AND `uui_tabs` IS THE STRIP**
 - **A TITLE COMES FROM THE SHELL, AS AN OSC**
 - **TERMINAL IS A TERMINAL EMULATOR, NOT A SHELL WITH A WINDOW**
@@ -657,6 +658,9 @@ whenever a headline here tells you something you did not already know.
 - **`uui_slider` is for an ORDERED enum**
 - **A DRAG NEEDS THE BUTTON STILL DOWN, AND THE POINTER GRAB IS NOT THAT FACT**
 - **`uui_scale` IS FOR A CONTINUOUS NUMBER; `uui_slider` IS FOR AN ORDERED ENUM**
+- **`uui_splitter` IS THE DRAGGABLE DIVIDER, AND IT OWNS A FRACTION RATHER THAN A PIXEL COLUMN**
+- **A LAYOUT CHILD'S SIZE CAN BE PINNED FROM OUTSIDE: `uui_item.main_size` (LAST in the struct -- apps initialise it positionally)**
+- **A CLIENT MAY ASK FOR A RESIZE CURSOR NOW: `WIN_CURSOR_RESIZE_H`/`_RESIZE_V`, and the compositor still wins on a window edge**
 - **A CONTROL BELOW THE FOLD IS UNREACHABLE, not merely hard to hit.**
 - **`on_draw` RUNS BEFORE THE WIDGETS; `on_draw_over` RUNS AFTER.**
 - **`uui_meter` IS THE READING WIDGET, AND IT RESERVES EVERY ROW IT COULD USE**
@@ -727,6 +731,8 @@ whenever a headline here tells you something you did not already know.
 - **MINESWEEPER IS THE FIRST GAME, AND IT IS AN ORDINARY CLIENT**
 - **A DIRECTORY LISTING IS A WIDGET, `uui_fileview`, AND FOUR THINGS SHOULD BE DRAWING ONE**
 - **THE FILE MANAGER IS A TWO-PANE COMMANDER, NOT AN EXPLORER**
+- **THE FILE MANAGER'S FIVE VERBS ARE ON THE TOOLBAR NOW, and a secondary click opens a context menu that SELECTS what it points at**
+- **PROPERTIES IS A PROCESS, `/bin/wm/apps/properties`, and a folder's total is walked a few directories per tick**
 - **WHAT OPENS A FILE TYPE IS DECLARED BY THE APP THAT OPENS IT (`Handles=`), AND `/etc/mimeapps.conf` OUTRANKS IT**
 - **A TITLE-BAR BUTTON IS A DISC, AND EVERY GLYPH CENTRES ON THE SAME PIXEL AS IT.**
 - **AN ICON COLUMN IN A SIDEBAR IS PER SIDEBAR, NOT PER ROW**
@@ -1333,10 +1339,12 @@ Standing rules that are cheaper to know than to rediscover:
   second QEMU -- is `qemu_matrix.py` now.
 - **`gui_regress.py` is the standard check** after touching
   `userland/`, or anything the WM draws -- always with `--logs DIR`. It
-  is ~56s; **its wall clock is bounded by the SLOWEST SINGLE TOOL and by
-  the sum over the job count, whichever is larger** (~408 tool-seconds
-  over ~25 tools, `notepad` ~41s the ceiling), so on any fan-out here
-  look at the maximum, not just the total. The slow tools WAIT on real
+  **its wall clock is bounded by the SLOWEST SINGLE TOOL and by
+  the sum over the job count, whichever is larger**, so on any fan-out
+  here look at the maximum, not just the total -- and the maximum is now
+  `files` at ~3.5 minutes, several times the next tool, because it drives
+  real file operations through spawned children. The per-tool timeout is
+  a HANG GUARD sized against that maximum, not a budget. The slow tools WAIT on real
   timeouts no guest CPU shortens; the levers that worked were cutting
   those floors and making every tool wait on an OBSERVABLE rather than a
   fixed sleep -- `enter_gui()` (in `gui_debug.py`) polls the desktop

@@ -377,6 +377,12 @@ enum wm_cursor_kind { WM_CURSOR_NORMAL, WM_CURSOR_H, WM_CURSOR_V, WM_CURSOR_DIAG
 // edge(s) matched (both set means the corner). Defined in wm_input.c.
 int wm_find_resize_zone(int mx, int my, int *out_right, int *out_bottom);
 
+// The shape that would be DRAWN at (mx, my) right now -- frame, client
+// and overlay rules all applied. For `gui state`, so a test can ask what
+// a client's WIN_REQ_CURSOR actually resolved to instead of trying to
+// recognise a 15x21 sprite in a screenshot.
+enum wm_cursor_kind wm_cursor_kind_at(int mx, int my);
+
 // wm_input.c's entry points, called from wm.c's wm_run() loop.
 void wm_handle_left_click(int mx, int my);
 void wm_update_drag_resize(int mx, int my, uint8_t buttons);
