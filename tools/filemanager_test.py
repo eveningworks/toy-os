@@ -61,6 +61,9 @@ SRC = "/fmtest"
 DST = "/fmdest"
 FILES_CONF = "/etc/files.conf"
 PROPERTIES_EXEC = "/bin/wm/apps/properties"
+FILES_EXEC = "/bin/wm/apps/files"
+# Ctrl+<letter> arrives as the control code (api/keyboard.h).
+K_CTRL_C, K_CTRL_X, K_CTRL_V, K_TAB = "0x03", "0x18", "0x16", "0x09"
 
 # `gui key` takes a character or a code (userland/wm/wm_debug.c), which
 # is why nothing here depends on the guest's keyboard layout -- the trap
@@ -1185,6 +1188,107 @@ def run(dbg, qmp, tmp, res):
     res.check("nothing is left open for the sections after this one",
               lay is not None and lay.ctx == 0 and lay.modal == 0,
               f"ctx={lay and lay.ctx} modal={lay and lay.modal}")
+
+    # --- 14b. the clipboard: Ctrl+C / Ctrl+X / Ctrl+V -------------------
+    #
+    # Driven by KEYS and checked with `ls` -- a different reader from the
+    # app that did the work, so a broken copy cannot make the two agree.
+    # The cut is the one worth care: it must move NOTHING until the
+    # paste, which is the half of Explorer's behaviour a naive
+    # implementation gets wrong by moving on Ctrl+X.
+    CLIP = "/cliptest"
+    dbg.send(f"sh rm -r {CLIP}")
+    dbg.send(f"sh mkdir {CLIP}")
+    dbg.send(f"sh mkdir {CLIP}/dst")
+    dbg.send(f"sh cp /etc/timezones {CLIP}/one.conf")
+    wait_listing(dbg, CLIP, lambda names: "one.conf" in names)
+
+    def names(path):
+        return sorted(listing(dbg, path))
+
+    # Both panes where the test needs them, by relaunching the app with
+    # its two directories as arguments -- an argument is a statement
+    # about that launch and does not disturb the saved pair.
+    for w2 in sorted(dbg.windows(), key=lambda w2: -w2["z"]):
+        if w2["title"] == TITLE:
+            dbg.send(f"gui close {w2['z']}")
+            time.sleep(0.4)
+    dbg.send(f"gui spawn {FILES_EXEC} {CLIP} {CLIP}/dst")
+    win = None
+    deadline = time.time() + 15.0
+    while time.time() < deadline and not win:
+        win = dbg.window(TITLE)
+        if not win:
+            time.sleep(0.3)
+    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == CLIP) or lay
+    res.check("(the panes reopened on the clipboard fixture)",
+              lay is not None and lay.dir.get(0) == CLIP and
+              lay.dir.get(1) == f"{CLIP}/dst", f"dirs={lay and lay.dir}")
+
+    dbg.key("0x6f")                                  # 'o' seeks one.conf
+    lay = wait_layout(dbg, win, lambda l: l.selected == "one.conf") or lay
+    dbg.key(K_CTRL_C)
+    dbg.key(K_TAB)
+    lay = wait_layout(dbg, win, lambda l: l.active == 1) or lay
+    dbg.key(K_CTRL_V)
+    got = wait_listing(dbg, f"{CLIP}/dst", lambda n: "one.conf" in n)
+    res.check("Ctrl+C then Ctrl+V copies into the ACTIVE pane",
+              "one.conf" in got, f"dst={got}")
+    res.check("...and a copy leaves the original where it was",
+              "one.conf" in names(CLIP), f"src={names(CLIP)}")
+
+    # The cut. Back to the left pane, cut, and check NOTHING moved yet.
+    dbg.send(f"sh rm {CLIP}/dst/one.conf")
+    wait_listing(dbg, f"{CLIP}/dst", lambda n: "one.conf" not in n)
+    dbg.key(K_TAB)
+    lay = wait_layout(dbg, win, lambda l: l.active == 0) or lay
+    dbg.key("0x6f")
+    lay = wait_layout(dbg, win, lambda l: l.selected == "one.conf") or lay
+    dbg.key(K_CTRL_X)
+    time.sleep(1.0)
+    res.check("Ctrl+X moves NOTHING until the paste",
+              "one.conf" in names(CLIP) and "one.conf" not in names(f"{CLIP}/dst"),
+              f"src={names(CLIP)} dst={names(f'{CLIP}/dst')}")
+
+    dbg.key(K_TAB)
+    lay = wait_layout(dbg, win, lambda l: l.active == 1) or lay
+    dbg.key(K_CTRL_V)
+    got = wait_listing(dbg, f"{CLIP}/dst", lambda n: "one.conf" in n)
+    res.check("...and the paste then MOVES it, source and all",
+              "one.conf" in got and "one.conf" not in names(CLIP),
+              f"dst={got} src={names(CLIP)}")
+
+    # A cut is SPENT by its paste: the files are no longer where the
+    # clipboard says they are, so a second paste must do nothing rather
+    # than fail on every entry.
+    dbg.key(K_CTRL_V)
+    time.sleep(1.5)
+    res.check("a cut is spent by its paste -- a second one does nothing",
+              names(f"{CLIP}/dst") == ["one.conf"] and names(CLIP) == ["dst"],
+              f"dst={names(f'{CLIP}/dst')} src={names(CLIP)}")
+
+    dbg.send(f"sh rm -r {CLIP}")
+
+    # HANDED BACK AS IT WAS FOUND. This section relaunched the app on its
+    # own two directories and left the RIGHT pane active; the sections
+    # below navigate by type-ahead from the root and act on the active
+    # pane, so leaving either changed makes them fail as if the app were
+    # broken (it did -- View->Icons landed on the wrong pane).
+    for w2 in sorted(dbg.windows(), key=lambda w2: -w2["z"]):
+        if w2["title"] == TITLE:
+            dbg.send(f"gui close {w2['z']}")
+            time.sleep(0.4)
+    dbg.send(f"gui spawn {FILES_EXEC} / /")
+    win = None
+    deadline = time.time() + 15.0
+    while time.time() < deadline and not win:
+        win = dbg.window(TITLE)
+        if not win:
+            time.sleep(0.3)
+    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == "/" and l.active == 0) or lay
+    res.check("(the app is back at the root with the left pane active)",
+              lay is not None and lay.dir.get(0) == "/" and lay.active == 0,
+              f"dirs={lay and lay.dir} active={lay and lay.active}")
 
     # --- 15. thumbnails in the icons view -------------------------------
     # A QOI and a JPEG show their own pixels; a text file keeps the

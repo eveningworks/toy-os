@@ -694,6 +694,10 @@ int sys_win_debug(struct win_debug_msg *msg) {
     return (int)err(syscall1(SYS_WIN_DEBUG, (uint64_t)(uintptr_t)msg));
 }
 
+int sys_win_clip(struct win_clip_msg *msg) {
+    return (int)err(syscall1(SYS_WIN_CLIP, (uint64_t)(uintptr_t)msg));
+}
+
 int sys_poweroff(int reboot) {
     return (int)err(syscall1(SYS_POWEROFF, (uint64_t)reboot));
 }

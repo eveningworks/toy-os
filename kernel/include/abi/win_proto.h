@@ -142,6 +142,15 @@
 // produce no character and so have never produced an ordinary key event
 // at all. Nothing else changes: a modifier still rides with the key it
 // modified, and an app that only reads `mods` is unaffected.
+#define WIN_EV_CLIPBOARD 31 // a: the new WIN_CLIP_OP_*, b: the serial.
+                            // THE CLIPBOARD WAS REPLACED, by anyone --
+                            // broadcast so a client drawing a pending
+                            // cut as dimmed rows stops the moment
+                            // somebody else copies. The payload is
+                            // deliberately NOT here: a client that wants
+                            // it asks (WIN_REQ_CLIP_GET), and most never
+                            // do -- which is also why there is no count.
+
 #define WIN_EV_USER      30 // a, b: whatever the CLIENT put there. The
                             // only event a client can put on its OWN
                             // queue (WIN_REQ_EVENT_PUSH with a target of
@@ -791,6 +800,65 @@ struct win_event {
 #define WIN_CURSOR_RESIZE_H 3 // a divider that moves left/right
 #define WIN_CURSOR_RESIZE_V 4 // a divider that moves up/down
 #define WIN_CURSOR_COUNT    5
+
+// --- the clipboard ----------------------------------------------------
+//
+// ONE BUFFER, HELD BY THE SERVER, holding what was last copied or cut.
+// `WIN_REQ_CLIP_SET` replaces it, `WIN_REQ_CLIP_GET` reads it back, and
+// both carry `struct win_clip_msg` through SYS_WIN_CLIP rather than
+// widening `struct win_request_msg` -- the same rule the diagnostic
+// channel follows, and for the same reason: this payload is a kilobyte
+// and WIN_REQ_PRESENT is on the hot path.
+//
+// **THE SERVER COPIES THE DATA; IT DOES NOT ASK THE SOURCE FOR IT.**
+// That is the opposite of what X11 selections and Wayland's
+// `wl_data_source` do -- there the source app stays alive and serves the
+// bytes on demand, which is exactly why closing an app loses your
+// clipboard and why every desktop ships a clipboard manager to paper
+// over it. At this scale the payload is a kilobyte of paths, so copying
+// it is cheaper than the machinery for not copying it, and the data
+// then survives the source exiting AND the compositor being killed.
+// See docs/decisions.md.
+//
+// FILES, NOT TEXT, for now: the payload is a packed list of paths, the
+// shape `text/uri-list` has on a real desktop. A text clipboard is the
+// same buffer with a different `kind` when something needs one.
+#define WIN_REQ_CLIP_SET   26 // Replace the clipboard. Returns 0 if the
+                           // payload does not fit -- a REFUSAL, never a
+                           // truncation: half a cut set pasted is files
+                           // silently left behind.
+#define WIN_REQ_CLIP_GET   27 // Read it. `count` 0 means empty, which is
+                           // not an error.
+
+#define WIN_CLIP_OP_NONE 0 // nothing has been copied or cut
+#define WIN_CLIP_OP_COPY 1
+#define WIN_CLIP_OP_CUT  2 // a MOVE that has not happened yet -- the cut
+                           // acts on the paste, as in Explorer and
+                           // Dolphin, so the files are still where they
+                           // were until then.
+
+#define WIN_CLIP_BYTES 1024 // the packed payload's cap
+#define WIN_CLIP_MAX   64   // and how many entries it may name
+
+struct win_clip_msg {
+    uint32_t type;   // WIN_REQ_CLIP_SET / WIN_REQ_CLIP_GET
+    uint32_t op;     // WIN_CLIP_OP_*
+    uint32_t count;  // entries packed into `data`
+    uint32_t len;    // bytes of `data` in use, the NULs included
+
+    // BUMPED ON EVERY SET, and never reused. A client that has drawn a
+    // cut as dimmed rows needs to know when somebody else replaced the
+    // clipboard underneath it, and comparing the payload to decide that
+    // is both slower and wrong (copying the same file twice is a real
+    // change to the cut/copy mode).
+    uint32_t serial;
+    uint32_t reserved; // must be 0; keeps the struct 8-byte aligned
+
+    // `count` NUL-terminated strings, packed end to end. Absolute paths
+    // for the file kinds; the same field carries text when a text
+    // clipboard lands.
+    char data[WIN_CLIP_BYTES];
+};
 
 #define WIN_REQ_FB_CURSOR  25 // COMPOSITOR ONLY. The hardware cursor
                            // plane (virtio-gpu's cursorq, vmsvga's

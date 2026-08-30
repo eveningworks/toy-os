@@ -160,6 +160,23 @@ struct client_window {
 // space is captured here rather than looked up per call.
 static int g_comp_pid = 0;
 
+// --- the clipboard ---------------------------------------------------
+//
+// One buffer for the whole system, holding a COPY of what was last put
+// on it (abi/win_proto.h says why a copy and not a promise from the
+// source). It is the server's rather than the compositor's so that it
+// survives the compositor being killed -- which is a thing that happens
+// here on purpose, and a clipboard that a Force Quit could empty would
+// be a poor one.
+static struct {
+    uint32_t op;      // WIN_CLIP_OP_*
+    uint32_t count;
+    uint32_t len;     // bytes of `data` in use, NULs included
+    uint32_t serial;  // bumped per SET, never reused
+    char data[WIN_CLIP_BYTES];
+} g_clip;
+
+
 // See win_proto.h's WIN_REQ_FB_CURSOR. Belongs to the ROLE, like the
 // framebuffer grant: cleared in win_server_set_compositor(), the one
 // place the role changes hands or dies.
@@ -966,6 +983,61 @@ static int debug_via_compositor(const char *line, char *out, int cap) {
     return n;
 }
 
+// The clipboard, set and read. ANY client may do either: a clipboard
+// whose reads were privileged would be one nothing could paste from,
+// and every windowing system takes the same view.
+//
+// **SPLIT INTO A HEADER AND A BUFFER, on purpose.** The obvious shape
+// -- one `struct win_clip_msg` copied in, acted on, copied back, as
+// SYS_WIN_DEBUG does -- puts a kilobyte on the kernel stack, and
+// `-Wframe-larger-than=1024` says no. A static scratch buffer would be
+// worse: a ring-3 process is preemptible inside a syscall, so two
+// clients would overwrite each other's payload, which is the exact
+// re-entrancy bug tfs3.c carries a preemption guard for. So the caller
+// copies the payload straight in and out of the one buffer that has to
+// exist anyway, and only the 24-byte header rides the stack.
+void win_server_clip_get(uint32_t *op, uint32_t *count, uint32_t *len,
+                          uint32_t *serial) {
+    if (op) *op = g_clip.op;
+    if (count) *count = g_clip.count;
+    if (len) *len = g_clip.len;
+    if (serial) *serial = g_clip.serial;
+}
+
+char *win_server_clip_buf(void) { return g_clip.data; }
+
+// Checked BEFORE the caller copies anything in, so a refusal cannot
+// leave half a payload in the buffer.
+int win_server_clip_would_fit(uint32_t op, uint32_t count, uint32_t len) {
+    if (len > WIN_CLIP_BYTES || count > WIN_CLIP_MAX) {
+        // REFUSED, not truncated. Half a cut set pasted is files
+        // silently left behind -- the same rule as a formatter that
+        // will not fit writing nothing.
+        klog_write("win: clipboard SET refused -- payload too large\n");
+        return 0;
+    }
+    return op == WIN_CLIP_OP_NONE || op == WIN_CLIP_OP_COPY ||
+           op == WIN_CLIP_OP_CUT;
+}
+
+// Called once the payload is in the buffer. Returns the new serial.
+uint32_t win_server_clip_commit(uint32_t op, uint32_t count, uint32_t len) {
+    g_clip.op = op;
+    g_clip.count = count;
+    g_clip.len = len;
+    // Bumped per SET and never reused: it is how a client notices that
+    // somebody else replaced the clipboard under it. Comparing payloads
+    // would be slower and wrong -- copying the same file twice is a
+    // real change to the cut/copy mode.
+    g_clip.serial++;
+
+    // Every client hears, so a File Manager showing a pending cut stops
+    // showing it the moment another one copies.
+    win_server_broadcast(WIN_EV_CLIPBOARD, (int32_t)op,
+                          (int32_t)g_clip.serial, 0);
+    return g_clip.serial;
+}
+
 int win_server_debug(int pid, struct win_debug_msg *msg) {
     (void)pid; // the console is the only client; kept for the ops shape
     if (!msg) return 0;
@@ -1450,18 +1522,18 @@ int win_server_request(int pid, struct win_request_msg *req) {
     }
 }
 
-// Tells every window the font moved. See WIN_EV_FONT in
-// abi/win_proto.h for why this is a notification rather than the server
-// doing anything about it, and font_config.c for the one place that
-// calls it.
-void win_server_font_changed(void) {
-    // THE COMPOSITOR FIRST, AND SEPARATELY -- it is not in windows[][].
-    // It owns no window of its own (it draws the screen), so a broadcast
-    // that only walked the window table reached every client and missed
-    // the one process that draws the chrome, the taskbar and the icons.
-    // That is exactly how the first version of this looked like the
-    // event was never delivered at all.
-    tell_compositor(WIN_EV_FONT, 0, 0, 0, 0);
+// One event to EVERY window, and to the compositor.
+//
+// THE COMPOSITOR FIRST, AND SEPARATELY -- it is not in windows[][]. It
+// owns no window of its own (it draws the screen), so a broadcast that
+// only walked the window table reached every client and missed the one
+// process that draws the chrome, the taskbar and the icons. That is
+// exactly how the font broadcast first looked like it was never
+// delivered at all.
+void win_server_broadcast(uint32_t type, int32_t a, int32_t b, uint32_t mods) {
+    // The compositor's own copy names its window as 0 -- it has none,
+    // which is the whole point of telling it separately.
+    tell_compositor(type, 0, 0, b, mods);
 
     for (int p = 0; p < WIN_SERVER_MAX_PIDS; p++) {
         for (int i = 0; i < WIN_CLIENT_MAX; i++) {
@@ -1469,11 +1541,22 @@ void win_server_font_changed(void) {
             if (!cw->used) continue;
             struct win_event ev;
             k_memset(&ev, 0, sizeof ev);
-            ev.type = WIN_EV_FONT;
+            ev.type = type;
             ev.window = cw->id;
+            ev.a = a;
+            ev.b = b;
+            ev.mods = mods;
             win_events_push(cw->pid, &ev);
         }
     }
+}
+
+// Tells every window the font moved. See WIN_EV_FONT in
+// abi/win_proto.h for why this is a notification rather than the server
+// doing anything about it, and font_config.c for the one place that
+// calls it.
+void win_server_font_changed(void) {
+    win_server_broadcast(WIN_EV_FONT, 0, 0, 0);
 }
 
 void win_server_client_gone(int pid) {

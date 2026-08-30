@@ -3,6 +3,7 @@
 // One of the File Manager's units -- see fm_internal.h for what is
 // where and why these share their state directly.
 #include "fm_internal.h"
+#include "lib/uclip.h"
 #include "ui/ulog.h"
 #include "kpath.h"
 #include <string.h>
@@ -143,6 +144,91 @@ static int queue_from_selection(int op, const char *what) {
 
     if (g_job_count == 0) { set_note("nothing selected"); return 0; }
     return 1;
+}
+
+// --- the clipboard ----------------------------------------------------
+//
+// Ctrl+C and Ctrl+X put the marked set (or the selection) on the system
+// clipboard; Ctrl+V acts on it. A CUT MOVES NOTHING until the paste --
+// Explorer's and Dolphin's rule, and the reason the files are still
+// where they were until then.
+//
+// This does NOT replace F5/F6. The commander's two-pane copy needs no
+// carrier at all and stays the faster gesture; the clipboard is what
+// lets a copy cross a navigation, which is the thing two panes cannot
+// do.
+static int clip_put(int op, const char *what) {
+    struct uui_fileview *fv = active();
+    struct uclip c;
+    uclip_begin(&c, op);
+
+    int marks = uui_fileview_mark_count(fv);
+    char path[PATH_MAX_LEN];
+    int n = 0, refused = 0;
+    if (marks > 0) {
+        for (int i = 0; i < marks; i++) {
+            if (!uui_fileview_marked_path(fv, i, path, sizeof path)) continue;
+            if (!uclip_add(&c, path)) { refused = 1; break; }
+            n++;
+        }
+    } else if (uui_fileview_selected_path(fv, path, sizeof path)) {
+        if (uclip_add(&c, path)) n = 1; else refused = 1;
+    }
+
+    if (n == 0) { set_note("nothing selected"); return 0; }
+    // A REFUSAL IS SAID OUT LOUD and puts nothing on the clipboard: a
+    // partial cut set pasted is files silently left behind.
+    if (refused || !uclip_commit(&c)) {
+        set_note("too many to copy at once");
+        ulogf("files: clipboard refused %d entries\n", n);
+        return 0;
+    }
+    snprintf(g_stat_note, sizeof g_stat_note, "%s %d item%s", what, n,
+              n == 1 ? "" : "s");
+    return 1;
+}
+
+void clip_copy(void) { clip_put(UCLIP_COPY, "Copied"); }
+void clip_cut(void)  { clip_put(UCLIP_CUT, "Cut"); }
+
+// The paste. The destination is the ACTIVE pane's directory -- where you
+// are -- which is both Explorer's rule and the commander's.
+void clip_paste(void) {
+    if (g_job_count > 0) { set_note("busy"); return; }
+
+    struct uclip c;
+    uclip_load(&c);
+    int op = uclip_op(&c), n = uclip_count(&c);
+    if (op == UCLIP_NONE || n == 0) { set_note("clipboard is empty"); return; }
+
+    g_job_count = g_job_at = g_job_failures = 0;
+    g_job_op = (op == UCLIP_CUT) ? CMD_MOVE : CMD_COPY;
+    strlcpy(g_job_what, op == UCLIP_CUT ? "Move" : "Copy", sizeof g_job_what);
+    strlcpy(g_job_dest, uui_fileview_dir(active()), sizeof g_job_dest);
+
+    for (int i = 0; i < n && g_job_count < JOB_MAX; i++) {
+        const char *src = uclip_path(&c, i);
+        if (!src) break;
+        // PASTING INTO THE DIRECTORY A FILE IS ALREADY IN would ask
+        // /bin/cp to copy a file onto itself. Skipped rather than
+        // refused: pasting a mixed set where one happens to be here
+        // should still move the rest.
+        char dir[PATH_MAX_LEN];
+        k_path_dirname(src, dir, sizeof dir);
+        if (strcmp(dir, g_job_dest) == 0) continue;
+        strlcpy(g_job_path[g_job_count], src, PATH_MAX_LEN);
+        g_job_isdir[g_job_count] = 0;   // /bin/cp -r decides; see start_next_job
+        g_job_count++;
+    }
+
+    if (g_job_count == 0) { set_note("already here"); return; }
+
+    // A CUT IS SPENT BY ITS PASTE. Explorer clears the clipboard after a
+    // cut-paste for the reason that matters: the files are no longer
+    // where the clipboard says they are, so a second paste would fail
+    // on every one of them.
+    if (op == UCLIP_CUT) (void)uclip_clear();
+    start_next_job();
 }
 
 // Reaps a finished child and starts the next. Returns 1 if anything

@@ -237,6 +237,14 @@ struct uapp_desc {
     // never heard of fonts still behaves correctly when one changes).
     void (*on_font)(struct uapp *a);
 
+    // THE CLIPBOARD WAS REPLACED, by this app or any other (`op` is a
+    // WIN_CLIP_OP_*, `serial` changes on every set). Same deal as
+    // on_font: an app that has never heard of it behaves correctly
+    // anyway, and one that draws a pending cut needs to stop drawing it
+    // the moment somebody else copies. The payload is NOT here -- ask
+    // with lib/uclip.h if you want it, which most apps never will.
+    void (*on_clipboard)(struct uapp *a, int op, unsigned serial);
+
     void (*on_key)(struct uapp *a, int key, unsigned mods);
 
     // A key came UP. `key` is the code its PRESS produced, so a client

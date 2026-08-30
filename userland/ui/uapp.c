@@ -430,6 +430,11 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
         a->dirty = 1;
         break;
 
+    case WIN_EV_CLIPBOARD:
+        // A NOTIFICATION, not the data. An app that cares asks.
+        if (d->on_clipboard) d->on_clipboard(a, ev->a, (unsigned)ev->b);
+        break;
+
     case WIN_EV_CLOSE:
         // The default ACCEPTS. An app that wants to refuse says so;
         // an app that has never heard of closing still closes.

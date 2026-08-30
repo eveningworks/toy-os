@@ -5391,3 +5391,69 @@ reach everything says "at least 4.2 MB" rather than printing the partial
 total as if it were the answer -- the same rule this codebase applies to
 a formatter that will not fit and a parser that cannot be sure. A floor
 presented as a total is a wrong answer wearing a right answer's clothes.
+
+
+## The clipboard is a copy the server holds, not a promise from the source
+
+X11 selections and Wayland's `wl_data_source` both work the same way:
+the source application keeps the data and serves it on demand when
+somebody pastes. That is why closing the app you copied from loses your
+clipboard, and why every desktop ships a clipboard manager whose entire
+job is to paste-and-re-copy in the background to work around it.
+
+toy-os copies instead. `WIN_REQ_CLIP_SET` hands the server a kilobyte
+and the server keeps it; the source may exit immediately and the paste
+still works.
+
+The trade is real and it is the right way round at this scale. Serving
+on demand exists because X11 clipboards can hold a bitmap and nobody
+wants a copy of it in the server, plus it lets the source offer several
+TYPES and the paster pick one. Here the payload is a list of paths --
+about a kilobyte at the cap -- so the copy is cheaper than the
+machinery for avoiding it, and the type negotiation would be a protocol
+for one type.
+
+**It is the SERVER's and not the compositor's**, which is the second
+half of the decision. The compositor is a process that gets killed on
+purpose here -- `compositor_death_test.py` exists -- and a clipboard a
+Force Quit could empty would be a poor one. It lives in `win_server.c`
+beside the other per-client protocol state the server already holds (a
+window's title, its cursor shape, its hints), because that is what it
+is: bytes held on behalf of clients, with no interpretation.
+
+**The payload is split from the header in the syscall, and that is not
+style.** One `struct win_clip_msg` copied in, acted on and copied back
+-- the shape `SYS_WIN_DEBUG` uses -- puts 1048 bytes on the kernel
+stack, and `-Wframe-larger-than=1024` refuses it. A static scratch
+buffer would be worse than the warning it silenced: a ring-3 process is
+preemptible inside a syscall, so two clients pasting at once would
+overwrite each other's payload, which is precisely the re-entrancy bug
+`tfs3.c` carries a preemption guard for. So only the 24-byte header
+rides the stack and the payload is copied straight into the one buffer
+that has to exist anyway.
+
+**A refusal, never a truncation.** A `SET` larger than the cap puts
+nothing on the clipboard and returns 0. Half a cut set pasted is files
+silently left behind in the source directory, which is the same failure
+mode this codebase's formatter and parser rules exist to prevent.
+
+## Ctrl+C is not the window manager's to route
+
+The roadmap said the standard keybindings should be "routed through the
+WM". They are not, and the reason is one key: `Ctrl+C` is INTR in a
+terminal. A compositor that intercepted it globally would take
+interrupt away from the GUI Terminal, which is a real regression traded
+for a convenience.
+
+So the clipboard keys are ordinary keys that the focused client
+interprets: the File Manager reads `0x03`/`0x18`/`0x16` as copy, cut and
+paste, and the Terminal keeps `0x03` as INTR. Windows takes the same
+view -- copy/paste keys are per-application there too, and Windows
+Terminal specifically resolves the collision itself by copying when
+there is a selection and interrupting when there is not, which is a
+choice only the terminal can make.
+
+The cost of not routing them centrally: every app that wants clipboard
+keys binds them itself, and two apps could disagree about what Ctrl+C
+means. That is what the Terminal needs in order to differ, so it is the
+feature and not the bug.

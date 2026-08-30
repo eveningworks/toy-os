@@ -343,6 +343,52 @@ int sys_win_debug(struct syscall_ctx *c) {
     return 0;
 }
 
+// The clipboard. The message is a kilobyte, so the HEADER rides the
+// stack and the payload is copied straight in and out of the server's
+// own buffer -- see win_server_clip_get() for why neither a stack copy
+// nor a static scratch buffer would do.
+#define CLIP_HDR_BYTES ((uint64_t)__builtin_offsetof(struct win_clip_msg, data))
+
+int sys_win_clip(struct syscall_ctx *c) {
+    uint64_t pml4 = c->pml4;
+    int pid = scheduler_current_tgid(); // the process -- see sys_win_request()
+    if (!vmm_validate_user_range(pml4, c->a0, sizeof(struct win_clip_msg))) {
+        klog_write("syscall: win_clip() rejected -- invalid user pointer\n");
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+    if (pid == 0) {
+        c->regs[14] = (uint64_t)(int64_t)-EPERM;
+        return 0;
+    }
+
+    struct { uint32_t type, op, count, len, serial, reserved; } hdr;
+    vmm_copy_from_user(pml4, &hdr, c->a0, sizeof hdr);
+
+    int rc = 0;
+    if (hdr.type == WIN_REQ_CLIP_GET) {
+        win_server_clip_get(&hdr.op, &hdr.count, &hdr.len, &hdr.serial);
+        hdr.reserved = 0;
+        vmm_copy_to_user(pml4, c->a0, &hdr, sizeof hdr);
+        if (hdr.len)
+            vmm_copy_to_user(pml4, c->a0 + CLIP_HDR_BYTES,
+                              win_server_clip_buf(), hdr.len);
+        rc = 1;
+    } else if (hdr.type == WIN_REQ_CLIP_SET) {
+        // Validated BEFORE anything is copied, so a refusal cannot
+        // leave half a payload in the buffer.
+        if (win_server_clip_would_fit(hdr.op, hdr.count, hdr.len)) {
+            vmm_copy_from_user(pml4, win_server_clip_buf(),
+                                c->a0 + CLIP_HDR_BYTES, hdr.len);
+            hdr.serial = win_server_clip_commit(hdr.op, hdr.count, hdr.len);
+            vmm_copy_to_user(pml4, c->a0, &hdr, sizeof hdr);
+            rc = 1;
+        }
+    }
+    c->regs[14] = (uint64_t)(int64_t)rc;
+    return 0;
+}
+
 // SYS_POLL_EVENT and SYS_WAIT_EVENT share everything except what
 // happens when the queue is empty, so they share a body rather than
 // duplicating the validation and the copy-out. Whether to block is a

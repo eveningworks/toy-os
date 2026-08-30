@@ -41,6 +41,7 @@
 #include "lib/uconf.h"
 #include "lib/human.h"
 #include "lib/uopen.h"
+#include "lib/uclip.h"
 #include "ui/uui.h"
 #include "ui/ulog.h"
 #include "keyboard.h"
@@ -104,12 +105,22 @@ char g_stat_note[64];
 // does not have to be told when its own child is done either.
 unsigned long long g_seen_generation;
 
+// WHAT IS ON THE CLIPBOARD, cached. The menus ask per item on every
+// draw and hit test (`item_flags` is a query, by design), and a syscall
+// per item per frame to answer "is Paste greyed" would be absurd. Kept
+// current by on_clipboard(), which is why the event exists.
+static int g_clip_op = UCLIP_NONE;
+
 struct uui_fileview *active(void)  { return &g_pane[g_active]; }
 struct uui_fileview *other(void)   { return &g_pane[!g_active]; }
 
 static const struct uui_menu_item file_items[] = {
     UUI_MENU("Open",           CMD_OPEN,    "Enter"),
     UUI_MENU("Properties",     CMD_PROPERTIES, 0),
+    UUI_MENU_SEP,
+    UUI_MENU("Cut",            CMD_CLIP_CUT,   "Ctrl+X"),
+    UUI_MENU("Copy to clipboard", CMD_CLIP_COPY, "Ctrl+C"),
+    UUI_MENU("Paste",          CMD_CLIP_PASTE, "Ctrl+V"),
     UUI_MENU_SEP,
     UUI_MENU("Copy",           CMD_COPY,    "F5"),
     UUI_MENU("Move",           CMD_MOVE,    "F6"),
@@ -168,8 +179,12 @@ static const struct uui_toolbar_item toolbar_items[] = {
 static const struct uui_menu_item ctx_items[] = {
     UUI_MENU("Open",        CMD_OPEN,     "Enter"),
     UUI_MENU_SEP,
-    UUI_MENU("Copy",        CMD_COPY,     "F5"),
-    UUI_MENU("Move",        CMD_MOVE,     "F6"),
+    UUI_MENU("Cut",         CMD_CLIP_CUT,   "Ctrl+X"),
+    UUI_MENU("Copy",        CMD_CLIP_COPY,  "Ctrl+C"),
+    UUI_MENU("Paste",       CMD_CLIP_PASTE, "Ctrl+V"),
+    UUI_MENU_SEP,
+    UUI_MENU("Copy to other pane", CMD_COPY, "F5"),
+    UUI_MENU("Move to other pane", CMD_MOVE, "F6"),
     UUI_MENU("Rename",      CMD_RENAME,   "F2"),
     UUI_MENU("Delete",      CMD_DELETE,   "F8"),
     UUI_MENU_SEP,
@@ -201,6 +216,13 @@ static unsigned menu_item_flags(int code) {
     case CMD_PROPERTIES:
     case CMD_RENAME:
         return uui_fileview_selected_name(&g_pane[g_active]) ? 0 : UUI_MI_DISABLED;
+    case CMD_CLIP_COPY:
+    case CMD_CLIP_CUT:
+        return operand_count() > 0 ? 0 : UUI_MI_DISABLED;
+    case CMD_CLIP_PASTE:
+        // Greyed when there is nothing to paste, which is what tells a
+        // user the Ctrl+C in the other window did not take.
+        return g_clip_op != UCLIP_NONE ? 0 : UUI_MI_DISABLED;
     case CMD_VIEW_DETAILS:
         return g_pane[g_active].mode == UUI_FILEVIEW_DETAILS ? UUI_MI_CHECKED : 0;
     case CMD_VIEW_ICONS:
@@ -282,6 +304,9 @@ void do_command(struct uapp *a, int code) {
     case CMD_UP:
         uui_fileview_up(active());
         break;
+    case CMD_CLIP_COPY:  clip_copy();  break;
+    case CMD_CLIP_CUT:   clip_cut();   break;
+    case CMD_CLIP_PASTE: clip_paste(); break;
     case CMD_OPEN:
         // The same act as Enter or a double click, so a directory
         // descends and a file goes to whatever /etc/mimeapps.conf and
@@ -476,6 +501,16 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     }
     if (key == 0x12 && (mods & KEY_MOD_CTRL)) { do_command(a, CMD_REFRESH); return; } // Ctrl-R
 
+    // THE CLIPBOARD KEYS. Ctrl+<letter> arrives as the control code, not
+    // as a letter plus a modifier bit (api/keyboard.h), so these are
+    // matched as codes -- 0x03/0x18/0x16 ARE Ctrl-C/X/V. Ctrl+C is an
+    // ordinary key here and the WM routes nothing: a terminal needs it
+    // for INTR, and a compositor that took it globally would have taken
+    // that away.
+    if (key == 0x03) { do_command(a, CMD_CLIP_COPY);  return; } // Ctrl-C
+    if (key == 0x18) { do_command(a, CMD_CLIP_CUT);   return; } // Ctrl-X
+    if (key == 0x16) { do_command(a, CMD_CLIP_PASTE); return; } // Ctrl-V
+
     // MOVING A DIVIDER FROM THE KEYBOARD. GtkPaned focuses its handle
     // and takes the arrows from there; this app cannot, because Tab is
     // the commander's pane swap and there is no focus ring to put a
@@ -596,6 +631,13 @@ static void on_pane_dir(void *ctx, const char *dir) {
     refresh_status();
 }
 
+// The clipboard changed -- ours or anyone's.
+static void on_clipboard(struct uapp *a, int op, unsigned serial) {
+    (void)serial;
+    g_clip_op = op;
+    uapp_redraw(a);   // Paste greys and ungreys with it
+}
+
 static void on_open(struct uapp *a) {
     layout_all(uapp_width(a), uapp_height(a));
     refresh_status();
@@ -678,6 +720,14 @@ int main(int argc, char **argv) {
         tree_rebuild();
         tree_select_path(uui_fileview_dir(active()));
     }
+    // ASKED ONCE AT STARTUP: the broadcast only fires on a CHANGE, so an
+    // app that opens after somebody else copied would show Paste greyed
+    // until the next one.
+    {
+        struct uclip c;
+        uclip_load(&c);
+        g_clip_op = uclip_op(&c);
+    }
     set_note("F5 copy  F6 move  F7 new  F8 delete");
 
     // One line, once: which directories this instance opened with and
@@ -706,6 +756,7 @@ int main(int argc, char **argv) {
         .on_key       = on_key,
         .on_tick      = on_tick,
         .on_resize    = on_resize,
+        .on_clipboard = on_clipboard,
     };
     return uapp_run(&desc);
 }

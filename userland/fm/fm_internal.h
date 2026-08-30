@@ -58,6 +58,7 @@ enum {
     CMD_REFRESH, CMD_SWAP, CMD_EXIT,
     CMD_VIEW_DETAILS, CMD_VIEW_ICONS, CMD_VIEW_PANES, CMD_VIEW_TREE,
     CMD_UP, CMD_OPEN, CMD_PROPERTIES,
+    CMD_CLIP_COPY, CMD_CLIP_CUT, CMD_CLIP_PASTE,
 };
 
 // --- the app's own state (files.c) -----------------------------------
@@ -141,6 +142,11 @@ void commit_delete(void);
 void commit_mkdir(const char *name);
 void commit_rename(const char *name);
 int  poll_job(void);
+
+// The clipboard's three verbs. A CUT MOVES NOTHING until the paste.
+void clip_copy(void);
+void clip_cut(void);
+void clip_paste(void);
 
 // --- the modal (fm_modal.c) ------------------------------------------
 

@@ -212,6 +212,18 @@ int win_server_request(int pid, struct win_request_msg *req);
 // Returns 1 on success, 0 if no presentation layer is registered or it
 // offers no debug_command.
 int win_server_debug(int pid, struct win_debug_msg *msg);
+// The clipboard, as a header plus the buffer itself -- see the
+// definition for why it is not one message struct.
+void win_server_clip_get(uint32_t *op, uint32_t *count, uint32_t *len,
+                          uint32_t *serial);
+char *win_server_clip_buf(void);
+int win_server_clip_would_fit(uint32_t op, uint32_t count, uint32_t len);
+uint32_t win_server_clip_commit(uint32_t op, uint32_t count, uint32_t len);
+
+// One event to every window AND to the compositor -- see the definition
+// for why the compositor needs saying separately.
+void win_server_broadcast(uint32_t type, int32_t a, int32_t b,
+                           uint32_t mods);
 
 // Destroys every window `pid` still owns, freeing and unmapping their
 // buffers. Called from process teardown -- a dead client's windows must
