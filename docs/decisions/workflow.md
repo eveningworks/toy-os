@@ -71,3 +71,58 @@ physical core), which only bites a host with more than 24 threads. So the
 "look at the max, never the sum" rule is really "cut the max FIRST, then
 the sum begins to matter": the two passes complemented each other rather
 than one superseding the other.
+
+## No per-file licence headers, and the MIT notice lives in one place
+
+Source files here carry no licence header -- not the MIT boilerplate,
+not an SPDX tag. `LICENSE` at the root is the whole statement, and
+`tools/check_licenses.py` makes the third-party inventory in it a build
+property. Asked and decided 2026-08-30; written down because it is a
+question that gets asked again.
+
+**The legal part is not the interesting part.** MIT requires the notice
+to accompany "copies or substantial portions of the Software", and a
+`LICENSE` file shipped with the source does that. Per-file headers are
+not required by the licence and never have been.
+
+**What real projects do.** Linux carried full boilerplate for 25 years,
+accumulated around 700 inconsistent variants of it, and in 2017-18
+REPLACED all of it with SPDX one-liners across ~60,000 files -- the
+argument being that machine-readable beats human-readable and that
+boilerplate had stopped being maintainable. FreeBSD ran the same
+migration; LLVM cut its header to two lines and a tag; wlroots and KWin
+are SPDX-only. musl went the other way and has no per-file notice at
+all, one `COPYRIGHT` file and nothing else. Nobody who has revisited
+this recently chose full boilerplate.
+
+**Why this repo lands on musl's answer rather than Linux's.** The case
+for SPDX tags is real and was weighed: this is a mixed-licence tree
+(MIT here, GPL-2.0-or-later in `userland/ports/doom/`, OFL and Bitstream
+Vera fonts), and a tag is the only thing that makes that boundary
+visible at the FILE rather than only from `LICENSE`. What decided it
+against is scale and audience. Linux's problem was tens of thousands of
+files, hundreds of contributors and downstream vendors running
+compliance scanners; this is one maintainer and a repository nobody
+ships a derivative product from. 800 tag lines would be bought with no
+present buyer, and the one scenario they solve -- somebody lifting a
+single file out of the tree -- is better served by the file's own
+top-of-file comment naming the project, which every non-trivial file
+here already has.
+
+**Two things that were ruled out separately, and would stay ruled out
+if this is revisited.** A per-file COPYRIGHT LINE is a year and a holder
+written into 800 places that somebody must keep true, which is the exact
+shape this project deletes everywhere else -- and it is where the
+maintainer's real name would eventually leak, against the standing
+privacy convention (see this file on the history rewrite). And
+**`userland/ports/` must not be tagged at all**: `doomgeneric.c` carries
+no header upstream, and adding a licence identifier to third-party code
+without verifying it per file is worse than leaving the directory's own
+`LICENSE` to do the job it already does correctly.
+
+**What would change the answer**: a second contributor whose
+contributions are under different terms, a downstream that runs a
+compliance scanner, or files being copied out of here often enough for
+it to be a real event rather than a hypothetical. Any of those makes
+SPDX tags worth the eight hundred lines -- and it is SPDX tags, not
+boilerplate, that they would be worth.
