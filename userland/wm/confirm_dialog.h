@@ -94,6 +94,10 @@ void confirm_dialog_update_press(int mx, int my, uint8_t buttons);
 // Hover, delivered while nothing is held. Returns 1 if the highlight
 // changed and a repaint is needed -- the same contract gui_apps.h's
 // on_hover has, for the same "don't repaint every tick" reason.
-int confirm_dialog_update_hover(int mx, int my);
+// The overlay registry's hover and damage ops -- see wm_overlay.h.
+// `hover_at` returns a token (which button, 1-based; 0 for none) and
+// adopts it, since the buttons draw from their own `hovered` flag.
+int confirm_dialog_hover_at(int mx, int my);
+void confirm_dialog_damage(void);
 
 #endif

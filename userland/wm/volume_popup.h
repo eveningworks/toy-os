@@ -62,11 +62,17 @@ void volume_draw(int mx, int my);
 // calendar_handle_click() already follows.
 int volume_handle_click(int mx, int my);
 
+// The overlay registry's hover and damage ops -- see wm_overlay.h,
+// which carries the reason a popup that does NOT provide them has an
+// invisible hover rather than merely a slow one.
+int volume_hover_at(int mx, int my);
+void volume_damage(void);
+
 // Live press tracking, every tick, so the slider can be DRAGGED --
 // the same shape confirm_dialog_update_press() uses and for the same
 // reason: a control that only sees the button-down edge cannot follow
 // the pointer. Returns 1 when the level changed (i.e. redraw).
-int volume_update_press(int mx, int my, uint8_t buttons);
+void volume_update_press(int mx, int my, uint8_t buttons);
 
 // A wheel notch at (mx, my). Consumed -- and the volume stepped by
 // VOLUME_STEP -- only when the pointer is over the tray item or over

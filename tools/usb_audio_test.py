@@ -204,6 +204,51 @@ def phase_two_cards(g, res, ac97_wav, usb_wav):
         g.stop()
 
 
+def phase_switch_mid_stream(g, res, ac97_wav, usb_wav):
+    """Choosing a device WHILE a stream is running moves the audio.
+
+    THE FAILURE THIS EXISTS FOR is silence that never ends, and it is
+    invisible to every check that opens a stream after choosing: ring 3
+    starts the engine once and never again (usnd_sink_dev.c), so a
+    switch that stopped the old card and left the new one idle muted the
+    app for the life of its stream -- reported from a real session, with
+    the Audio Player, which holds its sink open across tracks.
+
+    The measurement is the split: the tone must appear on the FIRST
+    card up to the switch and on the SECOND card after it. Its control
+    (dropping the resume from activate()) puts 1.20 s on the USB card
+    and 0.00 s on the AC97 one, which is the bug exactly.
+    """
+    print("\nphase 4: switching devices while the stream is running")
+    if not res.check("the guest boots for the mid-stream switch",
+                     g.start("both", ac97_wav, usb_wav)):
+        return
+    try:
+        dbg = wait_serial(g.sock())
+        if not res.check("the serial console answers (mid-stream)",
+                         dbg is not None):
+            return
+        dbg.send("sh config set audio_device auto")
+        dbg.send("sh rm /tmp/tone_done")
+        dbg.send("sh spawn /tests/tone")
+        # Far enough in that the first card is demonstrably playing, and
+        # early enough that the tone is still going. Under TCG the
+        # guest runs slower than wall clock, so 2 s of audio takes
+        # several wall seconds and this lands comfortably inside it.
+        time.sleep(1.2)
+        dbg.send("sh config set audio_device ac97")
+        out = ""
+        deadline = time.time() + 90
+        while "played 440Hz" not in out and time.time() < deadline:
+            time.sleep(1.5)
+            out = dbg.send("sh cat /tmp/tone_done") or ""
+        res.check("the tone ran to completion across the switch",
+                  "played 440Hz" in out, out.strip()[-60:])
+        dbg.close()
+    finally:
+        g.stop()
+
+
 def phase_persisted(g, res, wav, usb_wav):
     print("\nphase 3: the choice survives a reboot")
     if not res.check("the guest reboots with both cards",
@@ -246,6 +291,8 @@ def main():
     usb_wav = os.path.join(tmp, "two_usb.wav")
     boot3_a = os.path.join(tmp, "boot3_ac97.wav")
     boot3_u = os.path.join(tmp, "boot3_usb.wav")
+    mid_a = os.path.join(tmp, "mid_ac97.wav")
+    mid_u = os.path.join(tmp, "mid_usb.wav")
     img = os.path.join(tmp, "disk.img")
     subprocess.run(["cp", "--reflink=auto", "--sparse=always", "disk.img", img],
                    cwd=REPO, check=True)
@@ -254,6 +301,7 @@ def main():
     phase_usb_only(g, res, usb_only)
     phase_two_cards(g, res, ac97_wav, usb_wav)
     phase_persisted(g, res, boot3_a, boot3_u)
+    phase_switch_mid_stream(g, res, mid_a, mid_u)
 
     # --- the host-side oracle -------------------------------------------
     print("\nthe recordings, measured on the host")
@@ -281,6 +329,20 @@ def main():
     res.check("...and choosing the other one MOVED the audio to it",
               1.6 < tone_a < 2.3 and abs(hz_a - 440.0) < 22,
               f"ac97 file: {tone_a:.2f}s at {hz_a:.1f}Hz, peak {peak_a}")
+
+    _, _, hz_mu, _, tone_mu = measure(mid_u)
+    _, _, hz_ma, _, tone_ma = measure(mid_a)
+    # THE SPLIT. Both halves matter: the first card must have been
+    # playing (or the switch proved nothing) and the second must pick it
+    # up (which is what the bug got wrong). Their SUM is not asserted --
+    # the moment of the switch is wall-clock, and TCG's is elastic.
+    res.check("a switch mid-stream leaves the first card playing up to it",
+              tone_mu >= 0.4 and abs(hz_mu - 440.0) < 22,
+              f"usb file: {tone_mu:.2f}s at {hz_mu:.1f}Hz")
+    res.check("...and the stream CONTINUES on the newly chosen card",
+              tone_ma >= 0.2 and abs(hz_ma - 440.0) < 22,
+              f"ac97 file: {tone_ma:.2f}s at {hz_ma:.1f}Hz "
+              f"(0.00s is the bug: the app is never told to restart)")
 
     if args.keep:
         print(f"  recordings kept in {tmp}")

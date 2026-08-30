@@ -98,7 +98,9 @@ void file_picker_update_press(int mx, int my, uint8_t buttons);
 
 // Hover for those buttons, while nothing is held. Returns 1 if the
 // highlight changed and a repaint is needed.
-int file_picker_update_hover(int mx, int my);
+// The overlay registry's hover and damage ops -- see wm_overlay.h.
+int file_picker_hover_at(int mx, int my);
+void file_picker_damage(void);
 
 // Handles one key while the picker is open: routed to the filename
 // field if it's active (typing, backspace, arrow keys -- same

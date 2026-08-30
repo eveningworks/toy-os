@@ -55,7 +55,10 @@ void start_menu_draw(int mx, int my);
 // having damaged the menu's own rect -- so a mouse move inside one row
 // costs nothing and one across rows repaints the menu rather than the
 // screen. Call once a frame; a no-op while the menu is closed.
-int start_menu_update_hover(int mx, int my);
+// The overlay registry's hover op -- see wm_overlay.h. Returns the
+// hovered row + 1 (0 for none) and adopts it; the core compares it and
+// calls start_menu_damage().
+int start_menu_hover_at(int mx, int my);
 
 // Damages the rect the menu occupies, whether or not it is open --
 // which is what makes "the rows it just vacated" declarable by the code

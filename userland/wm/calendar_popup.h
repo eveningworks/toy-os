@@ -48,6 +48,12 @@ void calendar_poll_config(void);
 // Draws the panel, using the live cursor for the `<`/`>` hover -- a
 // no-op when closed, same "caller may still check, this just draws"
 // contract as start_menu_draw()/context_menu_draw().
+// The overlay registry's hover and damage ops -- see wm_overlay.h.
+// These are what retired this popup's full-screen repaint per mouse
+// move: 1 = `<`, 2 = `>`, 3 = the title, 0 = none.
+int calendar_hover_at(int mx, int my);
+void calendar_damage(void);
+
 void calendar_draw(int mx, int my);
 
 // Handles a left click at (mx, my) while the popup is open: pages the

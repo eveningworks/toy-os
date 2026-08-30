@@ -60,6 +60,12 @@ void context_menu_draw(int mx, int my);
 // landed outside the menu. Returns 1 if the menu was open (whether or
 // not the click hit a row) so wm_input.c knows to stop right there;
 // returns 0 if it wasn't open at all.
+// The overlay registry's hover and damage ops -- see wm_overlay.h.
+// Before these existed the hovered row was derived inside the draw and
+// no move repainted it.
+int context_menu_hover_at(int mx, int my);
+void context_menu_damage(void);
+
 int context_menu_handle_click(int mx, int my);
 
 // The open menu's geometry, for the debug console (`gui ctxmenu`) and

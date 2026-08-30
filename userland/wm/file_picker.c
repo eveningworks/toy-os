@@ -537,7 +537,14 @@ void file_picker_update_press(int mx, int my, uint8_t buttons) {
     else fp_cancel();
 }
 
-int file_picker_update_hover(int mx, int my) {
+// The registry's two ops (wm_overlay.h) -- see confirm_dialog.c for why
+// `hover_at` adopts as well as reports.
+int file_picker_hover_at(int mx, int my) {
     if (!file_picker_open) return 0;
-    return uui_button_group_hover(&g_group, mx, my);
+    uui_button_group_hover(&g_group, mx, my);
+    for (int i = 0; i < g_group.count; i++)
+        if (g_group.buttons[i].hovered) return i + 1;
+    return 0;
 }
+
+void file_picker_damage(void) { redraw_pending = 1; }

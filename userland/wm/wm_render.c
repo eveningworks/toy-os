@@ -11,6 +11,7 @@
 #include "context_menu.h"
 #include "calendar_popup.h"
 #include "volume_popup.h"
+#include "wm_overlay.h"
 #include "confirm_dialog.h"
 #include "file_picker.h"
 #include "desktop.h"
@@ -1219,12 +1220,11 @@ static void render_scene(int mx, int my, int has_damage) {
     }
 
     draw_taskbar();
-    if (start_menu_open) start_menu_draw(mx, my);
-    context_menu_draw(mx, my); // independent of start_menu_open -- the two are mutually exclusive (see wm_input.c)
-    calendar_draw(mx, my); // the tray clock's popup -- same mutual exclusion, checked inside
-    volume_draw(mx, my);   // the tray volume item's popup, same contract
-    file_picker_draw(); // an app-opened modal (e.g. Notepad's Save As...) -- drawn above ordinary chrome/menus
-    confirm_dialog_draw(); // drawn last (topmost, short of the cursor) -- the most modal overlay in the WM
+    // Every open overlay, LEAST modal first, from the one table that
+    // also decides who gets a click (wm_overlay.h). The order used to
+    // be spelled out here and again, backwards, in wm_input.c -- two
+    // lists that had to agree and nothing that made them.
+    wm_overlay_draw(mx, my);
 
     // The cursor is always drawn full/unclipped, regardless of the scene
     // damage rect above -- it doesn't track its own screen position

@@ -78,17 +78,19 @@ void start_menu_damage(void) {
 
 // Returns 1 when the hovered row CHANGED, having damaged the menu.
 // A no-op with the menu closed, so the caller needs no guard.
-int start_menu_update_hover(int mx, int my) {
+// The registry's hover op (wm_overlay.h): which row, as a token. It
+// ADOPTS the row as well as reporting it, because the draw reads
+// `hover_index`; the core owns the compare-and-damage that used to live
+// here, and in three other overlays in three slightly different forms.
+int start_menu_hover_at(int mx, int my) {
     if (!start_menu_open) { hover_index = -1; return 0; }
     int menu_x, menu_y, menu_w, item_h, total_items;
     start_menu_geometry(&menu_x, &menu_y, &menu_w, &item_h, &total_items);
     int row = -1;
     if (uui_hit(menu_x, menu_y, menu_w, item_h * total_items, mx, my))
         row = (my - menu_y) / item_h;
-    if (row == hover_index) return 0;
     hover_index = row;
-    start_menu_damage();
-    return 1;
+    return row + 1;   // 0 is "none", so rows start at 1
 }
 static uint64_t flash_until = 0;
 #define START_MENU_FLASH_TICKS 10 // ~100ms at the PIT's 100Hz -- long enough to register as a deliberate flash

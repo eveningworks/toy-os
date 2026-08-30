@@ -49,6 +49,16 @@ static int  g_dev_selected;            // which row carries the tick
 static uint32_t g_seen_generation;
 static int g_dragging;                 // the slider has the pointer
 
+// WHICH control the pointer is over, so a move that changes nothing
+// costs nothing: 0 none, 1 the mute button, 2 the slider, 3 + n a
+// device row. Compared rather than re-derived in the draw -- see
+// volume_hover_at() and wm_overlay.h.
+#define HOVER_NONE   0
+#define HOVER_MUTE   1
+#define HOVER_SLIDER 2
+#define HOVER_ROW0   3
+static int g_hover = HOVER_NONE;
+
 // --- the settings behind it -------------------------------------------
 
 static void msg_clear(struct setting_msg *m) {
@@ -229,6 +239,40 @@ int volume_row(int index, char *value, uint32_t value_size,
 
 // --- state ------------------------------------------------------------
 
+void volume_damage(void) {
+    struct volume_geom g;
+    volume_geometry(&g);
+    wm_damage_rect(g.x, g.y, g.w, g.h);
+    redraw_pending = 1;
+}
+
+// Which control (mx, my) is over. The slider's band is deliberately
+// taller than the track, matching what volume_handle_click() accepts --
+// a hover that lights up somewhere a click would not land is worse than
+// no hover at all.
+static int hover_at(const struct volume_geom *g, int mx, int my) {
+    if (!uui_hit(g->x, g->y, g->w, g->h, mx, my)) return HOVER_NONE;
+    if (uui_hit(g->mute_x, g->mute_y, g->mute_w, g->mute_h, mx, my))
+        return HOVER_MUTE;
+    if (uui_hit(g->slider_x - 4, g->y, g->slider_w + 8, g->mute_h + 8, mx, my))
+        return HOVER_SLIDER;
+    for (int i = 0; i < g->rows; i++)
+        if (uui_hit(g->list_x, g->list_y + i * g->row_h,
+                    g->w - (g->list_x - g->x) * 2, g->row_h, mx, my))
+            return HOVER_ROW0 + i;
+    return HOVER_NONE;
+}
+
+// The registry's hover op (wm_overlay.h): a token, adopted so the draw
+// can read it. The core owns the compare and the damage.
+int volume_hover_at(int mx, int my) {
+    if (!volume_open) { g_hover = HOVER_NONE; return 0; }
+    struct volume_geom g;
+    volume_geometry(&g);
+    g_hover = hover_at(&g, mx, my);
+    return g_hover;
+}
+
 void volume_open_now(void) {
     if (start_menu_open) { start_menu_open = 0; start_menu_damage(); }
     calendar_close();
@@ -236,14 +280,19 @@ void volume_open_now(void) {
     reload_level();
     reload_devices();
     volume_open = 1;
-    redraw_pending = 1;
+    g_hover = HOVER_NONE;
+    volume_damage();
 }
 
 void volume_close(void) {
     if (!volume_open) return;
+    // Damaged BEFORE the flag drops, or the rect is computed for a
+    // panel the frame is no longer drawing and what it covered stays on
+    // screen.
+    volume_damage();
     volume_open = 0;
     g_dragging = 0;
-    redraw_pending = 1;
+    g_hover = HOVER_NONE;
 }
 
 // Applies a level to the popup's own state. The SETTING is written by
@@ -258,7 +307,8 @@ static void set_level(int pct, int commit_now) {
     g_pending_at = sys_monotonic_ns();
     if (commit_now) g_pending_at = 0;
     volume_tray_update();
-    redraw_pending = 1;
+    if (volume_open) volume_damage();
+    else redraw_pending = 1;   // the tray item is all that shows the level
 }
 
 void volume_poll_config(void) {
@@ -352,23 +402,22 @@ int volume_handle_click(int mx, int my) {
     return 1;   // a click inside the panel never falls through
 }
 
-int volume_update_press(int mx, int my, uint8_t buttons) {
+void volume_update_press(int mx, int my, uint8_t buttons) {
     (void)my;
-    if (!g_dragging) return 0;
+    if (!g_dragging) return;
     if (!(buttons & 0x1)) {
         g_dragging = 0;
         // Committed here rather than on the next timer: releasing the
         // slider is the moment the user means, and waiting out the
         // debounce for it would be a quarter second of the old volume.
         if (g_pending) g_pending_at = 0;
-        return 0;
+        return;
     }
     struct volume_geom g;
     volume_geometry(&g);
     int want = level_from_x(&g, mx);
-    if (want == g_level) return 0;
-    set_level(want, 0);
-    return 1;
+    if (want == g_level) return;
+    set_level(want, 0);   // damages the panel itself
 }
 
 int volume_handle_wheel(int mx, int my, int notches) {
@@ -389,6 +438,13 @@ void volume_draw(int mx, int my) {
 
     struct volume_geom g;
     volume_geometry(&g);
+    // The TRACKED hover, not one derived from (mx, my) here: the two
+    // would agree, but only this one has damaged the panel when it
+    // changed, and a highlight nothing repainted is a highlight nobody
+    // sees. The parameters stay for the signature every popup here
+    // shares.
+    (void)mx; (void)my;
+    int hover = g_hover;
 
     uint32_t bg = UTHEME_PANEL_BG, border = UTHEME_BORDER, fg = UTHEME_TEXT;
     uint32_t accent = UTHEME_ACCENT;
@@ -400,7 +456,7 @@ void volume_draw(int mx, int my) {
     ugfx_fill_rect(wm_surface(), g.x, g.y, g.w, g.h, bg);
 
     // --- the mute button ---------------------------------------------
-    int over_mute = uui_hit(g.mute_x, g.mute_y, g.mute_w, g.mute_h, mx, my);
+    int over_mute = (hover == HOVER_MUTE);
     if (over_mute)
         ugfx_fill_rect(wm_surface(), g.mute_x, g.mute_y, g.mute_w, g.mute_h,
                        hover_bg);
@@ -437,7 +493,7 @@ void volume_draw(int mx, int my) {
     for (int i = 0; i < g.rows; i++) {
         int ry = g.list_y + i * g.row_h;
         int rw = g.w - (g.list_x - g.x) * 2;
-        int over = uui_hit(g.list_x, ry, rw, g.row_h, mx, my);
+        int over = (hover == HOVER_ROW0 + i);
         uint32_t row_bg = bg, row_fg = fg;
         if (i == g.selected_row) { row_bg = accent; row_fg = UTHEME_ACCENT_TEXT; }
         else if (over)           { row_bg = hover_bg; }

@@ -97,6 +97,21 @@ void context_menu_draw(int mx, int my) {
     ugfx_draw_rect(wm_surface(), g_x, g_y, g_w, h, border);
 }
 
+// The registry's two ops (wm_overlay.h). Until this existed the
+// context menu's hovered row was derived from the live pointer inside
+// its draw and NOTHING repainted on a move -- so the highlight only
+// appeared when some other overlay or the clock asked for a frame.
+int context_menu_hover_at(int mx, int my) {
+    if (!context_menu_open) return 0;
+    return hot_row(mx, my) + 1;   // -1 becomes 0, "none"
+}
+
+void context_menu_damage(void) {
+    if (!context_menu_open) return;
+    wm_damage_rect(g_x, g_y, g_w, g_item_h * g_count);
+    redraw_pending = 1;
+}
+
 int context_menu_handle_click(int mx, int my) {
     if (!context_menu_open) return 0;
 

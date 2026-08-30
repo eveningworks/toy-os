@@ -131,9 +131,22 @@ void confirm_dialog_update_press(int mx, int my, uint8_t buttons) {
     else                 { if (g_on_no) g_on_no(); }
 }
 
-int confirm_dialog_update_hover(int mx, int my) {
+// The registry's two ops (wm_overlay.h). `hover_at` ADOPTS the hover as
+// well as reporting it -- the buttons draw from their own `hovered`
+// flag -- and returns a token the core compares.
+int confirm_dialog_hover_at(int mx, int my) {
     if (!confirm_dialog_open) return 0;
-    return uui_button_group_hover(&g_group, mx, my);
+    uui_button_group_hover(&g_group, mx, my);
+    for (int i = 0; i < g_group.count; i++)
+        if (g_group.buttons[i].hovered) return i + 1;
+    return 0;
+}
+
+void confirm_dialog_damage(void) {
+    // A full repaint, as this dialog has always taken: its rect is not
+    // reported as damage anywhere (see wm_render.c), and inventing one
+    // here would be a second source of truth for where it is.
+    redraw_pending = 1;
 }
 
 

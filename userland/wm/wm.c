@@ -31,6 +31,7 @@
 #include "context_menu.h"
 #include "calendar_popup.h"
 #include "volume_popup.h"
+#include "wm_overlay.h"
 #include "confirm_dialog.h"
 #include "file_picker.h"
 #include "desktop.h"
@@ -1005,10 +1006,13 @@ void wm_run(void) {
         // The calendar still forces one -- it derives its `<`/`>` hover
         // the old way, and doing to it what was done to the menu is the
         // same three steps (docs/roadmap.md).
-        if (mouse_moved) {
-            if (start_menu_update_hover(mx, my)) redraw_pending = 1;
-            if (calendar_open) redraw_pending = 1;
-        }
+        // EVERY OVERLAY'S HOVER, from one table (wm_overlay.h). This
+        // used to name three of the six popups here and two more forty
+        // lines down, each with its own idea of when to damage -- and
+        // whichever one was forgotten had an invisible hover rather
+        // than a slow one, because a move alone takes the cursor-only
+        // path below and never repaints the scene.
+        if (mouse_moved) wm_overlay_hover(mx, my, buttons);
 
         // Closes the Start menu once a just-clicked row's brief flash
         // has shown long enough -- independent of clicks/movement, so
@@ -1030,16 +1034,14 @@ void wm_run(void) {
         // release, so they need the live cursor every tick, not just the
         // button-down edge wm_handle_left_click() sees. Both are no-ops
         // while their dialog is closed.
-        confirm_dialog_update_press(mx, my, buttons);
-        file_picker_update_press(mx, my, buttons);
-        // The volume slider tracks the pointer the same way, for the
-        // same reason: a control that only sees the button-down edge
-        // cannot be dragged.
-        if (volume_update_press(mx, my, buttons)) redraw_pending = 1;
-        if (!(buttons & 0x1)) {
-            if (confirm_dialog_update_hover(mx, my)) redraw_pending = 1;
-            if (file_picker_update_hover(mx, my)) redraw_pending = 1;
-        }
+        // Live press tracking for whichever overlays have a draggable
+        // control -- a slider, a button that arms on press. They need
+        // the cursor every tick, not just the button-down edge
+        // wm_handle_left_click() sees. The hover half of what used to
+        // be here moved into wm_overlay_hover() above, which applies
+        // the "nothing re-hovers under a held button" rule for all six
+        // rather than for these two.
+        wm_overlay_press(mx, my, buttons);
 
         // Content hover, on the same only-when-the-mouse-moved cheap
         // path as the title-bar hover above. It also has to run once

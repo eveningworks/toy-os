@@ -1396,6 +1396,28 @@ real scanout hardware does. Do not write a pixel assertion for one.
   tool that changes it must set it back**, since `make iso` re-seeds
   `disk.img` by sync and a written setting outlives the run.
 
+- **AN OVERLAY IS A ROW IN A TABLE, AND THE TABLE DRIVES DRAWING,
+  CLICKS AND HOVER -- `userland/wm/wm_overlay.h`.** The Start menu, the
+  context menu, the calendar, the volume flyout, the file picker and
+  the confirm dialog are six rows in modality order; drawing walks it
+  BACKWARDS, so the row that gets the first click is painted last and
+  lands on top. **The hover op is the reason it exists.** An overlay
+  supplies `hover_at(mx, my)` returning an OPAQUE TOKEN for whichever
+  control the pointer is over, plus `damage()`; the core compares the
+  token against the last one and damages on a change, which is the
+  whole mechanism and used to be written out four different ways.
+  Three things to know. **Forgetting to join the table is LOUD**, and
+  that is why the table carries `draw` and `handle_click` as well: an
+  overlay left out of it never appears and cannot be clicked, where a
+  hover-only registry would still fail the silent way. **A hover
+  derived from `(mx, my)` inside a draw is INVISIBLE, not slow** -- a
+  mouse move alone takes the compositor's cursor-only path, so such a
+  highlight is painted only when something else asks for a frame, which
+  on an idle desktop is the clock, once a second; the volume flyout
+  shipped that way for a day and the context menu had been that way
+  since it was written. And **nothing re-hovers while the primary
+  button is down**, stated once in the core rather than guarded per
+  overlay, so a dragged slider or an armed button keeps its highlight.
 - **THE TRAY HAS A VOLUME FLYOUT, AND THE PANEL OWNS IT TOO --
   `userland/wm/volume_popup.c`.** A speaker icon left of the clock opens
   a panel with a level slider, a mute toggle and the output devices;

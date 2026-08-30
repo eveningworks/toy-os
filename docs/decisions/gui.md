@@ -3991,6 +3991,59 @@ would have to be recomputed on every wallpaper change and every window
 move behind it. A shadow is a fixed cost that works on any backdrop
 without knowing anything about it.
 
+## The overlays became a table, because the hover half kept being forgotten
+
+Six popups the panel draws itself -- the Start menu, the context menu,
+the calendar, the volume flyout, the file picker, the confirm dialog --
+were each wired into the frame loop by hand. The click order lived in
+`wm_input.c`, the draw order lived backwards in `wm_render.c`, and the
+hover was wherever each one's author had put it. They are a registry
+now (`userland/wm/wm_overlay.h`), the same move `display_driver`,
+`block_device` and `sound_device` already made.
+
+**The hover is what forced it, because forgetting it fails silently.**
+A mouse move alone takes the compositor's cursor-only path -- no scene
+repaint -- so a highlight derived from the live pointer inside a draw is
+painted only when something ELSE asks for a frame. On an idle desktop
+that is the clock, once a second. Of the six, two tracked a hovered
+element and damaged their own rect, two more did the same from a
+different call site under a different condition, one forced a
+FULL-SCREEN repaint per move, and one did nothing at all -- and that
+last one looked exactly like the sixth, which was simply never wired
+up. Four arrangements for one behaviour is the shape this project
+converts to a table on sight; what made it urgent is that the wrong
+answer is invisible rather than wrong-looking.
+
+**The table drives drawing and clicks TOO, and that is the load-bearing
+part.** A hover-only registry would have left forgetting to join it
+failing the same silent way -- the problem restated one level up. With
+all three verbs on the same row, an overlay left out of the table never
+appears on screen and cannot be clicked, which nobody ships. That is
+the difference between a convention and a mechanism.
+
+**What real systems do, and why this is not that.** In Wayland the
+compositor sends `wl_pointer.enter`/`leave`/`motion` to whatever
+surface is under the pointer: being a surface IS the registration, and
+there is nothing to forget. KWin and Mutter get the same property from
+hit-testing a scene graph. The honest comparison for what toy-os had is
+X11, where a window receives `EnterNotify` only if it selected that
+event in its mask -- and "forgot to select the event" is a classic X
+bug, which is precisely what happened here. The panel's popups are not
+surfaces (they are drawn straight into the compositor's own buffer), so
+there is no scene graph for hover to fall out of; the table is the
+smallest thing that gives the same guarantee. **If these popups ever
+become real toolkit surfaces, this table is what they replace** -- the
+toolkit already routes motion to widgets at every depth.
+
+**Two details worth stating.** `hover_at()` returns an OPAQUE TOKEN
+rather than a rect or a widget: any two controls must differ, the same
+control must repeat, and 0 is none -- which lets one comparison in the
+core serve a menu row, a slider, a `<` button and a dialog button with
+no shared vocabulary between them. And **nothing re-hovers while the
+primary button is down**, moved out of the two dialogs that had that
+rule and applied to all six: a control being dragged or armed must not
+hand its highlight to whatever the pointer passes over.
+
 ## The volume flyout is the panel's too, and it owns no audio state
 
 Clicking the tray's speaker icon opens a slider, a mute toggle and the

@@ -221,6 +221,29 @@ static void draw_centred(int x, int y, int w, const char *s, uint32_t fg, uint32
     ugfx_draw_string_clipped(wm_surface(), tx, y, x + w - tx, s, fg, bg);
 }
 
+// The registry's two ops (wm_overlay.h). The calendar used to force a
+// FULL-SCREEN repaint on every mouse move while it was open -- the
+// arrangement the Start menu was rewritten out of, measured at 60 ms a
+// move on a 1280x720 TCG guest -- because its `<`/`>` hover was derived
+// from the live pointer inside the draw and nothing tracked it. This is
+// the three steps docs/roadmap.md asked for.
+int calendar_hover_at(int mx, int my) {
+    if (!calendar_open) return 0;
+    struct calendar_geom g;
+    calendar_geometry(&g);
+    if (uui_hit(g.prev_x, g.prev_y, g.prev_w, g.prev_h, mx, my)) return 1;
+    if (uui_hit(g.next_x, g.next_y, g.next_w, g.next_h, mx, my)) return 2;
+    if (uui_hit(g.title_x, g.title_y, g.title_w, g.title_h, mx, my)) return 3;
+    return 0;
+}
+
+void calendar_damage(void) {
+    struct calendar_geom g;
+    calendar_geometry(&g);
+    wm_damage_rect(g.x, g.y, g.w, g.h);
+    redraw_pending = 1;
+}
+
 void calendar_draw(int mx, int my) {
     if (!calendar_open) return;
 

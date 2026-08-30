@@ -5,6 +5,7 @@
 #include "wm_tray.h"
 #include "calendar_popup.h"
 #include "volume_popup.h"
+#include "wm_overlay.h"
 #include "wm_debug.h"
 #include "start_menu.h"
 #include "context_menu.h"
@@ -784,6 +785,8 @@ static void cmd_state(struct dbg_out *o, int json) {
     dbg_out_printf(o, "screen %dx%d, taskbar %dpx\r\n", screen_w, screen_h, taskbar_h);
     dbg_out_printf(o, "cursor (%d,%d) buttons=0x%x shape=%d\r\n", cx, cy,
                  (unsigned)buttons, (int)wm_cursor_kind_at(cx, cy));
+    dbg_out_printf(o, "overlays: topmost=%s\r\n",
+                 wm_overlay_topmost() ? wm_overlay_topmost() : "none");
     dbg_out_printf(o, "overlays: start_menu=%d context_menu=%d file_picker=%d confirm=%d calendar=%d volume=%d\r\n",
                  start_menu_open, context_menu_open, file_picker_open, confirm_dialog_open,
                  calendar_open, volume_open);

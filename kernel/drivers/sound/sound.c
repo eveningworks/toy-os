@@ -65,6 +65,14 @@ static int resolve_pref(void) {
 static void activate(int idx) {
     if (idx == g_active) return;
     const struct sound_device *old = active();
+    // A RUNNING STREAM MOVES TO THE NEW CARD. Stopping the old one and
+    // leaving the new one idle is silence that never ends: ring 3
+    // starts the engine ONCE and never again (userland/lib/
+    // usnd_sink_dev.c says so in as many words), so nothing on that
+    // side will ever ask for a start the switch did not perform. The
+    // Audio Player holds its sink open across tracks, so choosing a
+    // different device mid-session muted it permanently.
+    int was_running = (g_ctl && g_ctl->running);
     if (old) old->stop();
     g_active = idx;
     const struct sound_device *dev = active();
@@ -72,6 +80,17 @@ static void activate(int idx) {
     // it to whatever the new hardware powered up with would be a
     // surprise nobody asked for.
     if (dev && dev->set_volume) dev->set_volume(g_volume);
+    if (dev && was_running) {
+        // START resumes from the ring's first chunk, so the hardware is
+        // briefly behind the writer and replays up to a ring's worth of
+        // already-played samples before catching up. That is a glitch
+        // measured in milliseconds; the alternative is the silence
+        // above. The app is not told, because nothing about its ring
+        // changed -- it keeps writing where it was.
+        g_ctl->hw_pos = 0;
+        g_last_pos = 0;
+        if (dev->start() != 0) g_ctl->running = 0;
+    }
 }
 
 void *sound_ring_alloc(uint64_t *out_phys) {
@@ -117,6 +136,7 @@ void sound_unregister(const struct sound_device *dev) {
     if (idx < 0) return;
 
     int was_active = (idx == g_active);
+    int was_running = (was_active && g_ctl && g_ctl->running);
     if (was_active) {
         // Stop through the DEVICE rather than through activate(): the
         // hardware is gone, and the stream's owner has to be told
@@ -133,7 +153,16 @@ void sound_unregister(const struct sound_device *dev) {
     g_dev_count--;
     if (g_active > idx) g_active--;
     klog_printf("sound: %s removed\n", dev->name);
-    if (was_active) activate(resolve_pref());
+    if (was_active) {
+        // `running` was cleared above, so activate() would not resume
+        // on the fallback card -- restored here so it does. The stream
+        // moving is what stops an unplug from muting an app forever;
+        // `device_gone` stays set, so one that cares can still tell
+        // that its hardware changed underneath it.
+        if (g_ctl && was_running) g_ctl->running = 1;
+        activate(resolve_pref());
+        if (g_ctl && was_running && g_active < 0) g_ctl->running = 0;
+    }
 }
 
 int sound_device_count(void) { return g_dev_count; }
@@ -403,14 +432,26 @@ KTEST("sound", "losing the active device publishes device_gone") {
     char saved_pref[SOUND_NAME_MAX];
     k_strlcpy(saved_pref, sound_preference(), sizeof saved_pref);
 
+    int others = sound_device_count();   // what is left after the unplug
     sound_select("ktest-a");   // chosen, so it is the active one
     sound_register(&g_ktest_a, 0, 0);
     g_ctl->device_gone = 0;
     g_ctl->running = 1;              // as SND_CTL_START would leave it
     sound_unregister(&g_ktest_a);
+
+    // GONE is always published -- it is how an app tells "the hardware
+    // left" from "somebody stopped me", and both otherwise sound
+    // identical (silence).
     KTEST_ASSERT_EQ(g_ctl->device_gone, 1u);
-    KTEST_ASSERT_EQ(g_ctl->running, 0u);
+    // RUNNING depends on whether there was anywhere to go. A machine
+    // with another card keeps playing on it, because ring 3 starts the
+    // engine once and never again -- leaving it stopped is silence for
+    // the life of the stream. With no card left there is nothing to
+    // resume onto, and the app is told by both fields at once.
+    KTEST_ASSERT_EQ(g_ctl->running, others ? 1u : 0u);
+    KTEST_ASSERT_EQ(sound_present(), others ? 1 : 0);
 
     g_ctl->device_gone = 0;
+    g_ctl->running = 0;
     sound_select(saved_pref);
 }

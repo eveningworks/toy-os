@@ -8,11 +8,15 @@
 // why an idle sink needs no silence written into it and why a starved
 // one plays quiet rather than looping.
 //
-// **THE ENGINE IS STARTED ONCE AND NEVER STOPPED** until close.
-// SND_CTL_START resumes from ring offset 0, so a stop/start pair would
-// have to reset the write cursor in step with it; leaving the engine
-// running costs one interrupt per chunk over a ring the kernel is
-// already zeroing, and silence is what an idle ring holds.
+// **THE ENGINE IS STARTED ONCE AND NEVER STOPPED** until close, and
+// restarted only when the KERNEL says it stopped (`running` in the
+// control page). SND_CTL_START resumes from ring offset 0, so a
+// stop/start pair would have to reset the write cursor in step with it;
+// leaving the engine running costs one interrupt per chunk over a ring
+// the kernel is already zeroing, and silence is what an idle ring
+// holds. The one thing that must NOT be assumed is that it is still
+// running because we started it: the device can change underneath a
+// live stream (kernel/sound.h).
 #include <string.h>
 #include "lib/usnd.h"
 #include "lib/usnd_sink.h"
@@ -72,7 +76,15 @@ static long dev_write(const int16_t *pcm, long frames) {
 
     // Started after the first write, never before: the ring is primed
     // by then, so the hardware does not begin by racing the writer.
-    if (!g_running) {
+    //
+    // THE CONTROL PAGE OUTRANKS OUR OWN FLAG. The kernel clears
+    // `running` when the device this stream was opened on goes away,
+    // and a sink that only trusted `g_running` would then write into a
+    // ring nobody plays, forever, with no error anywhere -- which is
+    // exactly how choosing a different output device muted the Audio
+    // Player. Asking again costs one syscall per write only while the
+    // engine is actually stopped.
+    if (!g_running || !g_ctl->running) {
         if (sys_snd_ctl(SND_CTL_START) == 0) g_running = 1;
     }
     return frames;

@@ -7,6 +7,7 @@
 #include "context_menu.h"
 #include "calendar_popup.h"
 #include "volume_popup.h"
+#include "wm_overlay.h"
 #include "wm_taskbar.h"
 #include "wm_tray.h"
 #include "confirm_dialog.h"
@@ -66,19 +67,14 @@ int wm_find_resize_zone(int mx, int my, int *out_right, int *out_bottom) {
 static void wm_open_window_menu(int idx, int mx, int my);
 
 void wm_handle_left_click(int mx, int my) {
-    if (confirm_dialog_handle_click(mx, my)) return; // most modal -- checked first, see confirm_dialog.h
-    if (file_picker_handle_click(mx, my)) return; // also modal (an app-opened dialog, e.g. Notepad's Save As...) -- see file_picker.h
-    if (context_menu_handle_click(mx, my)) return;
-    if (start_menu_handle_click(mx, my)) return;
-    // Asked BEFORE the taskbar, which is what makes a second click on
-    // the clock close the popup instead of reopening it: the click is
-    // outside the panel, so this closes and stops, and the tray
-    // hit-test below never runs. See calendar_popup.c's own comment.
-    if (calendar_handle_click(mx, my)) return;
-    // The volume flyout, on the same terms: asked BEFORE the taskbar so
-    // a second click on its tray icon closes it, and its own tray
-    // hit-test lives inside rather than being repeated here.
-    if (volume_handle_click(mx, my)) return;
+    // EVERY OVERLAY FIRST, most modal first, from the table in
+    // wm_overlay.h -- a modal dialog takes a click before a menu does,
+    // and both take one before a window. The two tray popups are asked
+    // BEFORE the taskbar below, which is what makes a second click on
+    // the clock or the speaker CLOSE the popup instead of reopening it:
+    // the click is outside the panel, so the popup closes and stops,
+    // and the tray hit-test never runs.
+    if (wm_overlay_click(mx, my)) return;
 
     if (my >= screen_h - taskbar_h) {
         int ty = screen_h - taskbar_h;
