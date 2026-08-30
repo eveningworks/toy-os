@@ -30,6 +30,9 @@
 #       step it would have been run once by hand and never again.
 #   4. git status --short -- just informational: lists what's dirty so
 #      you can eyeball it against the file list you are about to report.
+#   5. background wait loops -- also informational. A backgrounded poll
+#      on an artifact that never appears (`until [ -s out.log ]`) cannot
+#      exit, and nothing else in a session ever mentions it again.
 #
 # The closing message warns if `git config user.name` is unset, since a
 # commit would then either fail or carry the wrong identity -- this repo
@@ -197,6 +200,46 @@ python3 tools/usertest_run.py || fail "ring-3 userland tests"
 
 step "git status --short (informational -- compare against your delivery file list)"
 git status --short || true
+
+# LINGERING WAIT LOOPS. A session that backgrounds a poll on an artifact
+# which never comes to exist leaves a shell spinning until the session
+# ends -- `until [ -s out.log ]` cannot tell "not yet" from "never", and
+# a superseded run's log is never. Five were found six hours old in one
+# session, and only because someone asked what was running.
+#
+# Informational, never a failure: an interactive session legitimately
+# has shells of its own, and this cannot tell them apart. It only says
+# what is there, which is the part nobody thinks to look at.
+step "background wait loops (informational -- close what is no longer needed)"
+# EXCLUDING THIS SCRIPT'S OWN ANCESTRY. The match is over command
+# LINES, so a shell whose command merely CONTAINS the words -- this
+# comment being written, for instance -- looks exactly like a loop
+# running them. The invoking shell is never the leak, so drop it and
+# everything above it.
+mine=""
+pid=$$
+while [ -n "$pid" ] && [ "$pid" != "1" ] && [ "$pid" != "0" ]; do
+    mine="$mine $pid"
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+done
+# shellcheck disable=SC2009  # pgrep cannot match the loop's shape, and
+# the elapsed time is half the answer -- a waiter minutes old is normal,
+# one hours old is the leak.
+waiters=$(ps -eo pid,etime,args 2>/dev/null \
+          | grep -E '(until|while) *\[' | grep -v grep \
+          | while read -r wpid rest; do
+                case " $mine " in *" $wpid "*) continue ;; esac
+                echo "$wpid $rest"
+            done || true)
+if [ -n "$waiters" ]; then
+    printf '  %s\n' "$waiters"
+    echo "  ^ each of these is polling for something. If the run it waits"
+    echo "    on is finished or superseded, kill it -- and prefer the"
+    echo "    background job's OWN completion signal over a waiter beside"
+    echo "    it, which is redundant even when it works (CLAUDE.md)."
+else
+    echo "  none"
+fi
 
 echo
 echo "preflight: PASS -- build, iso, boot smoke test, ktest and the"

@@ -1664,5 +1664,26 @@ every runner at once, one of them red and pre-existing since before
 it was last touched. Nothing enforces this; the audit is to enumerate
 `tools/*_test.py` and subtract what each runner names.
 
+**AND AT EVERY COMMIT, SWEEP THE BACKGROUND SHELLS** (standing project
+instruction, 2026-08-30). A session backgrounds runs constantly and
+sometimes puts a WAITER beside one; a waiter polling for an artifact
+that never comes to exist -- a superseded run's log, a job that wrote
+nothing -- can never exit, and nothing mentions it again. Five were
+found spinning six hours into one session, only because the maintainer
+asked what was running.
+
+So a commit is the checkpoint: **list what is still running, and close
+what the finished work no longer needs.** `ps aux | grep "[z]sh -c
+source"` names every shell the session holds, and `preflight.sh` prints
+any `until`/`while` poll among them with its elapsed time -- minutes is
+normal, hours is the leak. Kill by PID.
+
+Two things make this rare rather than routine. **A backgrounded
+command's own completion notification IS the signal**, so a waiter
+beside it is redundant even when it works -- do not write one. And when
+a wait genuinely is needed, wait on an artifact that MUST come to
+exist, having first asked what makes it true and whether that can still
+happen.
+
 The files are already on the real checkout -- there is nothing to
 "deliver". Commit with plain `git`, and push verified work.

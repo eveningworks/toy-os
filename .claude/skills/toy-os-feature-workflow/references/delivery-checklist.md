@@ -247,3 +247,24 @@ them has its own checks:
   `abi/syscall_abi.h`, a handler, a typed wrapper in `sys.h`/`sys.c`,
   a `strace.c` table entry, and a KTEST. Missing the strace entry is
   the one people forget.
+
+## Before you commit: close what is still running
+
+- **List the session's shells and kill the ones the finished work no
+  longer needs.** `ps aux | grep "[z]sh -c source"`; `preflight.sh`
+  prints any `until`/`while` poll among them with its elapsed time.
+  Minutes is a live run, hours is a leak.
+- **The leak has one shape**: a waiter polling for an artifact that will
+  never appear -- a superseded run's log, a job that finished writing
+  nothing. `until [ -s out.log ]` cannot tell "not yet" from "never", so
+  it spins until the session ends and nothing mentions it again. Five
+  did exactly that in one session; they surfaced because the maintainer
+  asked what was running, not because anything reported them.
+- **Prefer not writing one at all.** A backgrounded command's own
+  completion notification is already the signal, so a waiter beside it
+  adds nothing but a way to leak. When a wait genuinely is needed, ask
+  what makes its condition true and whether that can still happen.
+- Also confirm no QEMU of yours is left: `ps aux | grep qemu-system`,
+  and kill only the PID your own launch wrote to its `-pidfile` -- never
+  by pattern, which cannot tell your headless launch from the
+  maintainer's `make run` window.

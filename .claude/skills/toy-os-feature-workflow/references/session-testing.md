@@ -2207,3 +2207,30 @@ checks across two suites went red or went quiet.
   same class as a tool driving a command that moved to `/bin`, which is
   what `check_tool_commands.py` exists for -- and it cannot see this
   one, because the command it names is real, just not there.
+- **A WAIT LOOP ON A FILE THAT NEVER APPEARS RUNS UNTIL THE SESSION
+  ENDS, AND `until [ -s … ]` CANNOT TELL "not yet" FROM "never".**
+  Five of them were left spinning for six hours on
+  `scratchpad/fm5/files.log` -- a run that was superseded before it
+  wrote anything, so the directory existed and the log did not. They
+  surfaced only because the maintainer asked what the running tasks
+  were.
+
+  CLAUDE.md already states this rule, in these words, and it was read
+  and then broken anyway. So the mechanical version: **before writing
+  the condition, ask what makes it true and whether that can still
+  happen** -- a superseded run's artifact cannot. And note the loops
+  were REDUNDANT even when they worked: the background command's own
+  completion notification is the signal, so a waiter beside it adds
+  nothing but a way to leak.
+
+  The check costs one command: `ps aux | grep "[z]sh -c source"` names
+  every shell the session still holds, and any `until`/`while` among
+  them is one that should already have exited.
+- **A TIMED-OUT TOOL THAT PRINTS NOTHING IS THE WORST FAILURE A GUARD
+  CAN HAVE.** `gui_regress.py` reported the bare word TIMEOUT, so a
+  `files` that had merely GROWN past its 360s hang guard read as a hang
+  with zero checks and no clue where -- indistinguishable from a crash
+  on line one. It kept the tool's partial output afterwards, and the
+  last check printed is the whole diagnosis. **Re-check that guard's
+  margin whenever the slowest tool grows**; it is sized against `files`,
+  which is several times the next one.
