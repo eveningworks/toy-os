@@ -282,8 +282,25 @@ def run_one(name, script, disk_src, timeout, keep_logs, slot, kvm=False):
                            timeout=timeout)
         out = r.stdout + r.stderr
         rc = r.returncode
-    except subprocess.TimeoutExpired:
-        out, rc = f"TIMEOUT after {timeout}s", 124
+    except subprocess.TimeoutExpired as e:
+        # KEEP WHAT IT MANAGED TO SAY. A timed-out tool used to report
+        # the bare word TIMEOUT, so a run that hit the guard showed zero
+        # checks and no hint of WHERE -- indistinguishable from a tool
+        # that crashed on line one, and the reason a `files` that merely
+        # grew past the guard read as a hang. The partial output names
+        # the last check that passed, which is the whole diagnosis.
+        partial = ""
+        for chunk in (e.stdout, e.stderr):
+            if not chunk:
+                continue
+            partial += chunk if isinstance(chunk, str) else chunk.decode(
+                "utf-8", errors="replace")
+        tail = partial.strip().splitlines()[-25:]
+        out = (f"TIMEOUT after {timeout}s -- raise --timeout if the tool "
+               f"merely grew; the last checks it printed were:\n"
+               + "\n".join(tail) if tail else f"TIMEOUT after {timeout}s "
+               f"with NO output at all (it hung before its first check)")
+        rc = 124
     finally:
         subprocess.run([sys.executable, vm] + inst + ["stop"], cwd=REPO,
                        capture_output=True)
@@ -362,12 +379,17 @@ def main():
                     help="run only these tools (repeatable); matches on the short name")
     ap.add_argument("--disk", default="disk.img",
                     help="image to copy for each run (default: disk.img)")
-    ap.add_argument("--timeout", type=int, default=360,
-                    help="per-tool timeout in seconds (default: 360). This is a "
+    ap.add_argument("--timeout", type=int, default=600,
+                    help="per-tool timeout in seconds (default: 600). This is a "
                          "HANG GUARD, not a budget: it wants a wide margin over "
-                         "the slowest real tool, which is `files` at ~3.5min (85 "
-                         "checks, and it drives real file operations through "
-                         "spawned children). It was 180 while the ceiling was "
+                         "the slowest real tool, which is `files` at ~5min (it "
+                         "drives real file operations through spawned children "
+                         "and waits on each). At 360 it began failing HEALTHY "
+                         "runs as that tool grew -- and a timed-out tool prints "
+                         "NOTHING, so the symptom was zero checks and no clue "
+                         "which one hung, the worst possible failure for a "
+                         "guard. Re-check the margin whenever `files` grows. "
+                         "It was 180 while the ceiling was "
                          "~41s; a guard with no margin fails healthy runs, which "
                          "is worse than no guard.")
     ap.add_argument("--logs", metavar="DIR",
