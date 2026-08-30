@@ -24,6 +24,7 @@ FIRST, and this is what to do first among things that are all
 buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
+- [ ] A WM-owned clipboard buffer, FILES first (`WIN_REQ_CLIP_SET`/`GET`, a uri-list-shaped payload) --  *(GUI clipboard + drag-and-drop)*
 - [ ] `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR, not a 64 KiB guess  *(USB)*
 - [ ] Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today  *(Networking)*
 - [ ] System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons  *(Known limitations and papercuts (unscheduled))*
@@ -567,13 +568,13 @@ The desktop is in ring 3 already. These are what it still lacks.
 
 ### GUI clipboard + drag-and-drop
 
-- [ ] System clipboard (copy/paste text)
-- [ ] Paste into Notepad/Terminal
+- [ ] A WM-owned clipboard buffer, FILES first (`WIN_REQ_CLIP_SET`/`GET`, a uri-list-shaped payload) -- **NEXT**
+- [ ] Ctrl+C/Ctrl+X/Ctrl+V in the File Manager over it; a cut stages and only moves on paste, drawn dimmed until then
+- [ ] System clipboard for TEXT, and paste into Notepad/Terminal
 - [ ] Drag-and-drop between windows
 - [ ] Drag a file from the file manager (see Desktop productivity apps) into Notepad
 - [ ] Typed clipboard formats (text vs. image), not just a text buffer
 - [ ] A clipboard history ring
-- [ ] Standard keybindings (Ctrl+C/X/V) routed through the WM
 
 ### Desktop productivity apps
 **Needs:** Runtime + interop (allocator, file I/O), A layout engine for the GUI (layout) and Runtime font loading & text metrics (fonts).
