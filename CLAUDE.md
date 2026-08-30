@@ -1449,12 +1449,13 @@ detail there, and keep the pointer here to a line. What each file is:
 - **`docs/smp-design.md`** -- more than one core: ACPI/MADT, the Local
   APIC, bringing up application processors, a real spinlock and ONE
   kernel lock first (Linux 2.0's move), then splitting it in measured
-  order. Designed, not built. **Read it before adding a module-level
-  buffer to anything a syscall reaches**, and note the two findings that
-  change the scoping: the RSDP is already in hand (a multiboot2 tag
-  `multiboot.c` already walks, so no AML interpreter is needed), and the
-  BKL is the thing that makes SMP shippable before the locking audit is
-  done. It carries the measurement of what is single-core in the tree
+  order. **Stage 1 is BUILT** -- `kernel/acpi/` walks the tables and the
+  MADT, and `QUERY_CPUS` lists the processors with `online: no` against
+  every one -- and everything from the Local APIC onwards is designed
+  and not built. **Read it before adding a module-level buffer to
+  anything a syscall reaches**, and note the finding that still shapes
+  the rest: the BKL is what makes SMP shippable before the locking audit
+  is done. It carries the measurement of what is single-core in the tree
   today, and the honest case AGAINST.
 - **`docs/rootfs-design.md`** -- what the root filesystem is allowed to
   be: a PARTITION on a drive, or RAM. Designed, not built. **Read it

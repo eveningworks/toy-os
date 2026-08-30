@@ -1547,6 +1547,14 @@ deliberately not done -- it is a guess rather than a discovery, and the
 machine it fails on is the one that is hardest to debug.) It also needs
 its MMIO range mapped uncached, which the PAT work already provides.
 
+**That blocker is GONE as of 2026-08-30.** `kernel/acpi/` walks the
+tables and `acpi_find_table("HPET")` answers; `/bin/acpi` lists the
+table on any QEMU machine here. What is left is a driver: read the
+32 bytes the HPET table carries (base address, the counter's minimum
+tick, the block id), map them uncached, work out the period from the
+capability register and call `clocksource_register()`. Nothing else in
+the tree is in its way.
+
 **Its real value here is REACHABILITY, not resolution.** The TSC
 clocksource cannot be exercised under plain QEMU at all: TCG does not
 implement `invtsc` (it warns and clears the bit) and KVM withholds it
@@ -1577,10 +1585,14 @@ then TLB shootdown, then splitting the lock in measured order. It also
 carries the measurement of what in the tree is single-core today, and
 the honest case AGAINST doing this at all.
 
-**The two findings that change how it is scoped.** The RSDP is already
-in hand -- GRUB passes it in a multiboot2 tag that `kernel/core/multiboot.c`
-already walks -- so discovering cores needs no AML interpreter and is
-much smaller than "ACPI table parsing" suggests. And the BKL is not a
+**Stage 1 is DONE (2026-08-30)** -- `kernel/acpi/` walks the tables and
+the MADT, `QUERY_CPUS` lists the processors, and `/bin/lscpu` counts
+them. It landed because SHUTDOWN needed the FADT, not because SMP was
+started; nothing runs on the other cores and every entry reports
+`online: no`. The prediction that made it look cheap held exactly: no
+AML interpreter, four files.
+
+**The finding that still shapes the rest** is the BKL. It is not a
 mistake to avoid: it is what makes SMP shippable before the locking
 audit is finished, which is exactly the position Linux 2.0 was in and
 exactly the position this kernel is in now.
@@ -3488,7 +3500,7 @@ refer to them by number.
 
 - [ ] **A `sched` KTEST fails under KVM, and only under KVM.** `sched_test.c:133`'s `scheduler_poll(pid, &code) == SCHED_POLL_RUNNING` -- the "a scheduled process survives a legacy process running alongside" case. Reproduce: `python3 tools/vm.py --kvm start` then `vm.py exec "ktest sched"`. Confirmed PRE-EXISTING (2026-08-17) by stashing all local work and rebuilding: it fails identically on the committed tree, and passes every time under TCG. Almost certainly timing -- the whole suite runs in 0.9s under KVM against 4.7s under TCG, so the spawned process has already exited by the time the poll asks whether it is still running. The fix is probably to assert the process reached a terminal state rather than that it is RUNNING at one instant, but that has not been established.
 
-- [ ] **On a machine with no invariant TSC, CPU percentages round to 0% for sub-tick work.** Accounting measures real elapsed time now (`kernel/clocksource.h`), but it can only be as fine as the live clocksource -- and where the TSC is unusable that is the 100Hz PIT, so anything finishing inside 10ms bills 0. Reproduce with `notsc` on the GRUB command line, or just boot under plain QEMU, which cannot offer an invariant TSC at all. Not a bug and not fixable in software: the honest fix is another clocksource with real resolution, which is what makes HPET (ACPI + real power/timer) worth more here than its rating suggests -- it works under plain TCG, where the TSC does not.
+- [ ] **On a machine with no invariant TSC, CPU percentages round to 0% for sub-tick work.** Accounting measures real elapsed time now (`kernel/clocksource.h`), but it can only be as fine as the live clocksource -- and where the TSC is unusable that is the 100Hz PIT, so anything finishing inside 10ms bills 0. Reproduce with `notsc` on the GRUB command line, or just boot under plain QEMU, which cannot offer an invariant TSC at all. Not a bug and not fixable in software: the honest fix is another clocksource with real resolution, which is what makes HPET (ACPI + real power/timer) worth more here than its rating suggests -- it works under plain TCG, where the TSC does not. Its discovery blocker went away on 2026-08-30; what remains is the driver.
 
 - [ ] **`gfxbench`'s numbers are only meaningful under KVM or on real hardware.** Plain QEMU's TCG ignores guest memory types entirely, so a write-combined framebuffer behaves exactly like a cached one and the tool reports an implausible ~17 GB/s. This is not a bug to fix -- it is a permanent property of the emulator, recorded here because it has now cost two sessions. Use `make run KVM=1` / `python3 tools/vm.py --kvm run "gfxbench 20"` for any framebuffer performance question, and treat a TCG number as evidence of nothing. `gfxbench` prints the live write-combining mechanism and whether the console is buffered beside its timings for exactly this reason. (The 2026-08-16 write-combining fix itself is SETTLED: confirmed on the maintainer's ASUS Zenbook UX305FA -- the GUI and the Shapes demo both run well now. The console-scroll regression that same change introduced is fixed and documented in `docs/decisions.md`.) **The console fix is now confirmed ON METAL too** (2026-08-16, same Zenbook, live ISO): `gfxbench 20` reports **1.8 ms** per scrolled text line against the 178.5 ms measured before it, with the console self-reporting as `buffered`. Note the bare-metal figure is ~3.6x the 0.5 ms measured under `--kvm`, and that gap is EXPECTED rather than a shortfall -- KVM honours guest memory types but its framebuffer is still host RAM, while a real one is a PCIe-attached surface where even a write-combined store is a bus transaction. So a KVM timing is the right tool for "did this get better" and the wrong one for "how fast is it"; do not quote a KVM number as a hardware target, which this file previously came close to doing.
 
@@ -3513,7 +3525,7 @@ refer to them by number.
 
 - [ ] The vmsvga HARDWARE cursor is off by default because it fights the relative PS/2 mouse (QEMU warps the host pointer). The display driver itself works. The configuration where a hardware cursor genuinely works is virtio-gpu + virtio-input below.
 
-- [x] **Time sources -- DONE (2026-08-17).** `kernel/clocksource.h` registers PIT (rating 110) and TSC (300), and CPU accounting bills measured nanoseconds against whichever is live. See `docs/decisions.md`. The two pieces NOT done are both scheduled under ACPI + real power/timer, which is where they belong -- **HPET as a third clocksource** (it needs ACPI's HPET table to discover the base address) and the **`clock_event_device` half**, since timer EVENTS are still a fixed 100Hz PIT with no tickless idle. See that milestone's Details for why HPET matters more than its middle rating suggests. The original survey text follows.
+- [x] **Time sources -- DONE (2026-08-17).** `kernel/clocksource.h` registers PIT (rating 110) and TSC (300), and CPU accounting bills measured nanoseconds against whichever is live. See `docs/decisions.md`. The two pieces NOT done are both scheduled under ACPI + real power/timer, which is where they belong -- **HPET as a third clocksource** (it needed ACPI's HPET table to discover the base address; that table is found as of 2026-08-30, so only the driver is left) and the **`clock_event_device` half**, since timer EVENTS are still a fixed 100Hz PIT with no tickless idle. See that milestone's Details for why HPET matters more than its middle rating suggests. The original survey text follows.
 
 - [ ] **~~Time sources -- the strongest candidate~~ (superseded above).** The tree names concrete clocks directly: `pit_ticks()` (monotonic 100Hz, the scheduler's billing unit and `SYS_TICKS`) and the TSC (calibrated in `cpuinfo`, used by `gfxbench` and the relocation path). Three call conventions, no abstraction. ACPI + real power/timer (ACPI + real power/timer) brings HPET and TSC-deadline, which is the real trigger; a Linux-style `clocksource` (monotonic, resolution, "is it reliable across sleep") is the natural shape.
 
@@ -3712,8 +3724,14 @@ so no "was it me?" ISR read, and one vector PER VIRTQUEUE rather than
 one per device); more than 16 interrupt vectors; a per-CPU timer better
 than the PIT; and it is the prerequisite for SMP, which is the real
 reason to want it. What it costs: enabling the LAPIC, moving IRQ routing
-to the I/O APIC (which needs ACPI table parsing, or the MP tables), and
-keeping the PIC path working for a machine that has no APIC.
+to the I/O APIC, and keeping the PIC path working for a machine that
+has no APIC. **The ACPI half of that is already paid** (2026-08-30):
+the MADT is parsed, the Local APIC address is known including the
+type-5 override, and the I/O APIC count is reported. What the MADT walk
+does NOT yet read is the type-2 interrupt source overrides, which is
+what says an ISA IRQ number is not the GSI -- a loop body in
+`acpi_madt_init()`, and the thing that makes this work on real hardware
+rather than only on QEMU's default machine.
 
 Worth doing before a NIC, since a busy network device is where per-queue
 interrupts start to matter. Not worth doing for input, which is why INTx

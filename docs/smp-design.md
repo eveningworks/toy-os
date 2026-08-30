@@ -1,9 +1,19 @@
 # SMP: more than one core, staged
 
-**Status: DESIGNED, NOT BUILT (2026-08-26).** Nothing in this document
-exists in the tree. It is written to be executed in order, each stage
-shippable and testable on its own, with the honest case against at the
-end.
+**Status: STAGE 1 IS BUILT (2026-08-30); STAGES 2-7 ARE DESIGNED, NOT
+BUILT.** The ACPI table walk and the MADT's processor list exist --
+`kernel/acpi/`, read by `/bin/acpi` and by `/bin/lscpu`'s "Logical CPUs"
+line -- and nothing acts on them: this kernel still schedules on one
+core, and every entry reports `online: no`. Everything from the Local
+APIC onwards is unwritten. The document is still meant to be executed in
+order, each stage shippable and testable on its own, with the honest
+case against at the end.
+
+**Stage 1 landed for a different reason than SMP**, which is worth
+knowing before reading it as progress: shutdown needed the FADT, so the
+table walk had to exist, and parsing the MADT beside it cost one file.
+That is the whole of it. The hard part of this document begins at
+stage 2.
 
 **Read this before touching `kernel/arch/x86_64/irq.c`, the scheduler's
 `current_index`, or anything that adds a module-level buffer to a
@@ -79,15 +89,16 @@ counted in the tree on 2026-08-26.
 | filesystem | `tfs3.c` parses through module-level scratch (`g_blk`, `g_ptr_blk`, `g_bbm`, the journal image) | two cores in `fs_read()` overwrite each other's block. This is the bug the preemption guard already exists for, minus the guard |
 | kernel heap | one free list (`g_head`/`g_tail` in `heap_core.c`) | two concurrent `kmalloc`s corrupt the list |
 | console | `vga.c`'s cursor and back buffer | interleaved output, and a torn present |
-| ACPI | none at all | there is no way to find out how many cores exist |
+| ACPI | tables and the MADT (`kernel/acpi/`, 2026-08-30) | this row is now DONE -- the core count is a fact, and `/bin/acpi` prints it |
 
-**The RSDP is already reachable**, which shortens stage 1 considerably:
+**The RSDP is already reachable**, which is what made stage 1 cheap:
 GRUB passes it in multiboot2 tags 14/15, and `kernel/core/multiboot.c`
-already walks that list for the framebuffer, the command line, the
+already walked that list for the framebuffer, the command line, the
 memory map and the modules. Finding the MADT needs no AML interpreter --
 the tables that matter here are fixed-layout structures, and the
 interpreter is only needed for the parts of ACPI this project has said
-it does not want.
+it does not want. That prediction held: `kernel/acpi/` is four files
+and no interpreter.
 
 ## The staging
 
@@ -95,20 +106,39 @@ Each stage boots and is testable on its own. Stages 1-3 change no
 behaviour at all -- they add facts and then add cores that do nothing --
 which is what makes them safe to land separately.
 
-### Stage 1 -- ACPI tables, read-only
+### Stage 1 -- ACPI tables, read-only -- DONE 2026-08-30
 
 Find the RSDP from the multiboot2 tag, validate its checksum, walk the
 XSDT (or RSDT on an older table), and expose the MADT. Nothing acts on
-it yet.
+it.
 
-Ship it as a fact and a command: `QUERY_CPUS`, and `cpuinfo` printing
-one line per Local APIC entry -- APIC id, enabled, online (always "no"
-at this stage). That makes the whole stage verifiable from a shell and
-gives the later stages a display surface for free.
+**What shipped**, and where it differs from the sketch above. The RSDP
+is found from tag 15, then tag 14, then by scanning the EBDA and the
+BIOS ROM area -- the scan was not planned and exists because "no tag"
+and "no ACPI" are otherwise the same answer and want opposite responses.
+It is a fact and a command as intended, but three classes rather than
+one: `QUERY_CPUS` for the processors, plus `QUERY_ACPI` and
+`QUERY_ACPI_TABLE`, because poweroff needed the FADT read anyway and the
+numbers it depends on had to be visible when a shutdown fails. The
+command is `/bin/acpi`, not `cpuinfo`; `lscpu` grew the one line that
+counts cores, since CPUID describes only the core executing it.
 
-**What this must NOT become:** an ACPI subsystem. The FADT and HPET
-tables are separate roadmap items; AML is not wanted at all. Parse the
-MADT and stop.
+The FADT came in too, which the note below said to avoid. That was not
+scope creep in this direction -- shutdown needed it (`docs/decisions.md`,
+"ACPI stops at the tables"), and the table walk it needed is this stage.
+**HPET is still untouched**: its table is listed now and nothing reads
+it, which is exactly where that roadmap item wanted to start.
+
+**What this must NOT become:** an ACPI subsystem. AML is not wanted at
+all -- the DSDT's `_S5_` byte scan is the single, argued exception, and
+anything requiring AML to be EVALUATED (battery, thermal, S3, GPEs) is
+out. Parse fixed-layout tables and stop.
+
+**Two things stage 2 inherits.** The MADT walk already reads the type-5
+Local APIC address override, so `acpi_get_state()->lapic_phys` is the
+right address rather than the 32-bit field's. It does NOT yet read the
+type-2 interrupt source overrides, which stage 2's own trap note is
+about -- that is a loop body in `acpi_madt_init()`, not new machinery.
 
 ### Stage 2 -- the Local APIC, still one core
 

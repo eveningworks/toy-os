@@ -62,9 +62,14 @@ actually runs on (QEMU's default chipset, or ordinary real hardware
 without a deeply nested bridge topology) -- the only real cost is
 wasted probe reads on buses/slots nothing lives at, which is cheap.
 Also chose legacy CF8/CFC access over the newer memory-mapped ECAM
-mechanism, since ECAM needs ACPI/MCFG table parsing just to find its
-base address and CF8/CFC is universally supported including by QEMU's
-emulated chipset. BARs are decoded (I/O-vs-memory, base address) but
+mechanism, since CF8/CFC is universally supported including by QEMU's
+emulated chipset. **The original reason has since expired** and the
+decision has not: that argument was "ECAM needs ACPI/MCFG table parsing
+just to find its base address", and `kernel/acpi/` now parses tables and
+lists MCFG where the chipset has one (q35 does; i440fx does not). What
+is left is the argument that still holds -- CF8/CFC works on every
+machine including the ones with no MCFG, and ECAM buys extended config
+space, which nothing here reads. BARs are decoded (I/O-vs-memory, base address) but
 NOT size-probed (the write-0xFFFFFFFF-and-read-back trick) -- that's
 deferred to whichever future driver actually needs to map a BAR, since
 it means temporarily disabling the device's decode and isn't needed
