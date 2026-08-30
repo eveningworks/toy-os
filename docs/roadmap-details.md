@@ -1145,6 +1145,24 @@ is a two-pane COMMANDER rather than an Explorer, because copy and move
 between two visible directories need neither the clipboard nor
 drag-and-drop, and this system has neither.
 
+**The folder tree following the active pane was built and REVERTED**
+(2026-08-30), and the reason is the design, not the code. Following
+means expanding every ancestor of wherever the pane is; the existing
+tree also lets you COLLAPSE a branch by hand and expects it to stay
+collapsed. Those two are in direct conflict the moment you collapse a
+branch you are standing in -- and the tree's own tests assert the
+collapse half, so the follow turned two passing checks red.
+
+KDE's Folders panel resolves it by moving the SELECTION up to the
+branch you collapsed rather than undoing the collapse, and that rule is
+the missing piece. The reverted attempt otherwise settled four
+questions worth keeping: follow always (Dolphin's behaviour; Explorer
+hides the same thing behind "Expand to open folder", off by default),
+auto-expanded ancestors STAY open, the node and open-path arrays grow on
+demand rather than at fixed caps of 96/24, and the tree expands to the
+restored directory at startup rather than sitting collapsed at `/`
+contradicting the pane before the window is touched.
+
 Nothing is left of this entry: the icon view landed 2026-08-28 as
 `UUI_FILEVIEW_ICONS` (a mode of `uui_fileview`, not a new widget),
 reusing `api/icon_grid.h` for cell geometry and giving
@@ -1177,21 +1195,42 @@ GUI wrapper around logic that's already implemented and tested.
 
 ### GUI clipboard + drag-and-drop
 
-New milestone, lightly scoped. Placed after Desktop productivity apps since a file
-manager gives drag-and-drop its most natural first real use (dragging a
-file onto Notepad). A first rough breakdown:
+The clipboard half is BUILT, and it landed differently from the sketch
+this section opened with -- worth stating, because the sketch is what a
+reader would otherwise plan the rest against.
 
-- System clipboard -- a small kernel-space buffer (`apps/wm/`-level, not
-  per-app) plain text lives in until something pastes it; Ctrl+C/Ctrl+V
-  wired into whichever widget currently has focus.
-- Paste into Notepad/Terminal -- the first two real consumers, both
-  already text-input-capable via `ui_textbox`/`text_scrollback`.
-- Drag-and-drop between windows -- extends `wm_input.c`'s existing
-  mouse-drag handling (already used for window moves/resizes) with a
-  "carrying a payload" state.
-- Drag a file from the file manager into Notepad -- the first real
-  cross-app use of the mechanism above, once Desktop productivity apps's file manager
-  exists.
+**It holds FILES, not text, and the SERVER holds it.** The sketch said a
+kernel-space buffer of plain text pasted by whichever widget has focus.
+What the File Manager actually needed first was a set of PATHS, and the
+buffer lives in the window server so a copy survives its source being
+Force Quit -- which is the whole reason X11's selection-owner model is
+considered a mistake and why Wayland's `wl_data_device` has the
+compositor hold the data. `WIN_REQ_CLIP_SET`/`_GET`, `lib/uclip.h`, and
+`WIN_EV_CLIPBOARD` to say it changed. Text is still unbuilt and is a
+second FORMAT on the same buffer, not a second buffer.
+
+**Ctrl+C/X/V are the APP's keys, not the WM's.** Ctrl+C is INTR in a
+terminal, so a compositor that grabbed it would break the shell; every
+desktop leaves these to the focused client for the same reason.
+
+What remains, and what each needs:
+
+- **Text on the clipboard**, and paste into Notepad/Terminal. Typed
+  formats first (`text` vs `files`), since a paste has to know what it
+  is getting.
+- **Drag-and-drop within one window** -- the honest first step, and
+  bigger than it looks. `uui_fileview` already owns press-and-move on
+  empty space for the rubber band, so a drag on a ROW has to be told
+  apart from a band on empty space; then a drop target that highlights,
+  and a move-vs-copy rule (Windows: move within a volume, copy across;
+  KDE asks with a menu). Testing it needs a click aimed at a chosen row,
+  which the harness cannot yet do reliably -- see the Shift+click item.
+- **Drag-and-drop BETWEEN windows** -- extends the above with a WM-level
+  "carrying a payload" state, since the pointer leaves the source
+  client's content area and the target must learn what is being offered
+  before the release. This is where the clipboard's typed formats get
+  reused rather than a second mechanism invented.
+- **A clipboard history ring**, once there is more than one format.
 
 ### Runtime + interop
 

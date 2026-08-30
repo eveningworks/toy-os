@@ -569,7 +569,8 @@ The desktop is in ring 3 already. These are what it still lacks.
 
 - [x] ~~A clipboard buffer, FILES first (`WIN_REQ_CLIP_SET`/`GET`)~~ DONE 2026-08-30 -- the SERVER's, so it survives a Force Quit
 - [x] ~~Ctrl+C/Ctrl+X/Ctrl+V in the File Manager over it; a cut stages and only moves on paste~~ DONE 2026-08-30
-- [ ] Draw a pending cut as DIMMED rows -- the clipboard knows, `uui_fileview` has no per-row dim state yet
+- [x] ~~Draw a pending cut as DIMMED rows~~ DONE 2026-08-30 -- a dim bitmap on `uui_fileview`, applied by NAME on every reload
+- [x] ~~Ctrl+click and Shift+click multi-select~~ DONE 2026-08-30 -- the modifiers ride in the mouse event (`WIN_MOUSE_MODS_SHIFT`)
 - [ ] System clipboard for TEXT, and paste into Notepad/Terminal
 - [ ] Drag-and-drop between windows
 - [ ] Drag a file from the file manager (see Desktop productivity apps) into Notepad
@@ -583,6 +584,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~File manager app~~ DONE 2026-08-23 -- two panes, marks, and file operations as spawned children
 - [x] ~~File operations in-process, with a conflict dialog~~ DONE 2026-08-30 -- `lib/ufileop.h` on a worker thread
 - [ ] An automated check for Shift+click's range -- aiming a click at a chosen list row is not reliable yet (`filemanager_test.py`'s `aim`)
+- [ ] The folder tree follows the active pane -- built and REVERTED: it fights a branch the user collapsed while standing in it
 - [ ] Move Notepad's dialog and the WM's file picker onto `uui_fileview`
 - [x] ~~Desktop calendar widget~~ DONE 2026-08-24 -- a panel popup on the tray clock, not an app
 - [x] ~~Control panel with pluggable applets~~ done
