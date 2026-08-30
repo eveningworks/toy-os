@@ -61,6 +61,9 @@ enum kfmt_arg {
     // the string field for the tail because the struct already has one;
     // a third numeric field for a single case would be worse.
     KFMT_ARG_STAR_INT_STR,
+    // A width/precision, a STRING, and an int after it -- `%.*s` eats
+    // two, and what follows has to land on the third.
+    KFMT_ARG_STAR_STR_INT,
 };
 
 struct kfmt_case {

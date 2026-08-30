@@ -70,9 +70,10 @@ static void put_str(struct out *o, const char *s) {
 //
 // **IT CAN ONLY ADD DIGITS, NEVER REMOVE THEM**, which is what makes
 // honouring it consistent with this file's rule that a formatter must
-// not silently change a value. Precision on `%s` truncates and is still
-// ignored for exactly that reason (see the %s case below); precision on
-// an integer is the opposite operation and is safe.
+// not silently change a value. On `%s` it means the opposite -- a
+// MAXIMUM -- and is honoured there too: the caller asking for `%.*s` is
+// naming the length it wants, so dropping it is the silent change, not
+// the truncation.
 //
 // C also says the '0' FLAG IS IGNORED when a precision is given -- so
 // `%08.3d` of 42 is "     042", not "00000042". Getting that wrong is
@@ -357,13 +358,20 @@ static void vformat(struct out *o, const char *fmt, va_list ap) {
         case 's': {
             const char *s = va_arg(ap, const char *);
             if (!s) s = "(null)";
-            size_t len = k_strlen(s);
-            // A string LONGER than its field is not truncated -- it
-            // pushes the column instead. Truncating would silently
-            // change the value, which is the one thing this toolkit's
-            // formatters are not allowed to do (see kfmt.h).
+            // A WIDTH and a PRECISION are opposite instructions here.
+            // A string longer than its WIDTH is not truncated -- it
+            // pushes the column instead, because a width the caller did
+            // not size is not permission to change the value. A
+            // PRECISION is the caller naming a maximum outright, which
+            // is the whole `%.*s` idiom; ignoring it renders a
+            // different string than was asked for ("one.txt (1).txt"
+            // where a rename wanted "one (1).txt"). Scanned bounded: C
+            // does not require the string to be terminated within it.
+            size_t len = 0;
+            if (has_prec) { while (len < prec && s[len]) len++; }
+            else          { len = k_strlen(s); }
             if (!left) { for (size_t i = len; i < width; i++) put(o, ' '); }
-            put_str(o, s);
+            for (size_t i = 0; i < len; i++) put(o, s[i]);
             if (left) { for (size_t i = len; i < width; i++) put(o, ' '); }
             break;
         }

@@ -135,6 +135,22 @@ const struct kfmt_case kfmt_cases[] = {
     // exactly the way the thing it tests is wrong.
     { "%*d/%s",  KFMT_ARG_STAR_INT_STR, 3, 5, "tail", "  5/tail" },
 
+    // --- precision on %s: a MAXIMUM, and the point of `%.*s` ----------
+    // Parsed and then discarded for a long time, so a rename asking for
+    // the stem of "one.txt" got the whole name back and produced
+    // "one.txt (1).txt".
+    { "[%.*s]",  KFMT_ARG_STAR_STR, 3, 0, "one.txt", "[one]" },
+    { "[%.5s]",  KFMT_ARG_STR, 0, 0, "abcdefg", "[abcde]" },
+    // A precision LONGER than the string is not padding.
+    { "[%.9s]",  KFMT_ARG_STR, 0, 0, "abc", "[abc]" },
+    // Width and precision together: cut to 3, then pad to 8.
+    { "[%8.3s]", KFMT_ARG_STR, 0, 0, "abcdef", "[     abc]" },
+    { "[%-8.3s]", KFMT_ARG_STR, 0, 0, "abcdef", "[abc     ]" },
+    // A precision of zero prints nothing, which is not the same as none.
+    { "[%.0s]",  KFMT_ARG_STR, 0, 0, "abc", "[]" },
+    // ...and the two arguments it ate leave the next one where it was.
+    { "%.*s/%d", KFMT_ARG_STAR_STR_INT, 3, 7, "one.txt", "one/7" },
+
     // --- the real line that exposed all this -------------------------
     { "U+%04X slot %d", KFMT_ARG_INT_INT, 0x67, 71, 0, "U+0067 slot 71" },
 };
@@ -188,6 +204,9 @@ int kfmt_case_run(const struct kfmt_case *c, char *out, int cap) {
         break;
     case KFMT_ARG_STAR_INT_STR:
         k_snprintf(out, (size_t)cap, c->fmt, (int)c->a, (int)c->b, c->s);
+        break;
+    case KFMT_ARG_STAR_STR_INT:
+        k_snprintf(out, (size_t)cap, c->fmt, (int)c->a, c->s, (int)c->b);
         break;
     }
     return k_strcmp(out, c->want) == 0;

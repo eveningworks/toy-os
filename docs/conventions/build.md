@@ -190,7 +190,13 @@ this the obvious way), not from how much history it accumulated.
   integer conversions: `"%.3d"` of 33 gave `33`, so Doom asked its WAD
   for a lump that does not exist. That file is compiled into both rings,
   and its own tests asserted the old behaviour -- see
-  `docs/decisions.md`.
+  `docs/decisions.md`. **The same gap on `%s` outlived it**, deliberately
+  and for a stated reason (truncating changes a value) that was the wrong
+  reading: a precision on `%s` is the CALLER naming a maximum, which is
+  the whole `%.*s` idiom, so dropping it renders a different string than
+  was asked for. It surfaced as a File Manager rename producing
+  `one.txt (1).txt`. Both are now in `kfmt_cases.h`, which is where a
+  third one goes.
 - **WHEN IMPLEMENTING A SPEC, DISAGREE WITH AN INDEPENDENT
   IMPLEMENTATION ON PURPOSE.** A self-test cannot catch an EXPECTATION
   being wrong, because the same person wrote the code and the
