@@ -38,6 +38,13 @@
 
 #define BOOT_SUB_PCI  (1u << 0)   // pci_init() -- the enumerated device table
 #define BOOT_SUB_PMM  (1u << 1)   // pmm_init() -- the physical frame allocator
+#define BOOT_SUB_ACPI (1u << 2)   // acpi_init() -- the firmware's description tables
+
+// ACPI is here rather than left to answer NULL because "no table by
+// that name" and "the walk has not run yet" are the same answer from
+// acpi_find_table(), and they want opposite responses: a machine with
+// no ACPI is a supported state, a caller that asked too early is a bug
+// in the boot sequence.
 
 // THERE IS DELIBERATELY NO BOOT_SUB_HEAP, for two reasons that both
 // matter. `kernel/lib/heap_core.c` is COMPILED TWICE -- once into the

@@ -264,3 +264,37 @@ int multiboot_get_module(int index, struct multiboot_module_info *out) {
     }
     return 0;
 }
+
+// Tags 14 (ACPI 1.0 RSDP) and 15 (ACPI 2.0+ RSDP). Tag 15 wins when
+// both are present: it carries the XSDT, and a v1 RSDP beside it
+// describes the same tables through 32-bit pointers.
+const void *multiboot_acpi_rsdp(uint32_t *out_bytes) {
+    if (mb_info_addr == 0) return 0;
+
+    uint8_t *base = (uint8_t *)(uintptr_t)mb_info_addr;
+    uint32_t total_size = *(uint32_t *)base;
+    uint8_t *ptr = base + 8;
+    uint8_t *end = base + total_size;
+
+    const void *old = 0;
+    uint32_t old_bytes = 0;
+
+    while (ptr < end) {
+        struct mb_tag *tag = (struct mb_tag *)ptr;
+        if (tag->type == 0) break;
+
+        if (tag->type == 15) {
+            if (out_bytes) *out_bytes = tag->size - 8;
+            return (const void *)(tag + 1);
+        }
+        if (tag->type == 14 && !old) {
+            old = (const void *)(tag + 1);
+            old_bytes = tag->size - 8;
+        }
+
+        ptr += (tag->size + 7) & ~7u;
+    }
+
+    if (old && out_bytes) *out_bytes = old_bytes;
+    return old;
+}

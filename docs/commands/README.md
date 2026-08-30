@@ -81,6 +81,7 @@ a command), and the `gui3`/`nano` aliases.
 ### System information
 
 - [`about`](about.md)
+- [`acpi`](acpi.md)
 - [`ahci`](ahci.md)
 - [`ata`](ata.md)
 - [`dmesg`](dmesg.md)

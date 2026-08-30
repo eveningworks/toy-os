@@ -15,10 +15,8 @@
 // per docs/roadmap.md's shutdown item -- that entry's own design notes
 // called for exactly this (a Yes/No confirm, built as a reusable piece,
 // not one-off code in wm.c). Second caller, same file: "Shutdown",
-// added once system_poweroff() (kernel/core/power.c, the QEMU/Bochs
-// ACPI I/O-port trick -- see power.h) gave it something real to
-// confirm into. A real ACPI-parsed poweroff is still docs/roadmap.md's
-// separate, not-yet-built item.
+// added once system_poweroff() (kernel/core/power.c) gave it something
+// real to confirm into.
 //
 // Deliberately minimal, same philosophy as every popup in this
 // codebase: one message, two buttons, and modal -- unlike a context

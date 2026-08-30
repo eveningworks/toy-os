@@ -32,6 +32,7 @@
 #include "timer.h"
 #include "font_config.h"
 #include "setting.h"
+#include "acpi.h"   // acpi_init() -- the firmware tables, and what poweroff needs from them
 #include "query.h"   // the fact registry -- query_init() and the core's providers
 #include "mm_audit.h" // mm_audit_query_init() -- QUERY_MMAUDIT
 #include "cursor_config.h"
@@ -127,6 +128,13 @@ void kernel_main(uint64_t multiboot_info_addr) {
     klog_printf("toy-os: SMEP %s, SMAP %s\n",
                  (prot & PAGING_SMEP_ON) ? "on" : "unavailable",
                  (prot & PAGING_SMAP_ON) ? "on" : "unavailable");
+
+    // The firmware's description tables, before any driver: nothing here
+    // touches a device, and what it finds is what system_poweroff() and
+    // system_reboot() need in order to stop this machine properly rather
+    // than through the QEMU-shaped shortcuts they used to take. Needs
+    // only boot.asm's identity map and the multiboot info block.
+    acpi_init();
 
     // Before any device driver: PCI enumeration is what a driver probes
     // against. Safe this early -- pci.c is a port-I/O scan into a static

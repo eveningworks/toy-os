@@ -1968,3 +1968,54 @@ the ABI said 0. `sys_wait_ready()` folds it, and must NOT loop on it --
 looping on "call again" makes a bounded wait unbounded. **Adding a
 third kind of timed wait means asking which of those two the wake
 writes.**
+
+## THE MACHINE STOPS THROUGH ITS OWN ACPI TABLES, AND EVERY FALLBACK BELOW THAT LOGS A LINE
+
+`kernel/acpi/` finds the RSDP (multiboot2 tag 15, then 14, then a scan
+of the EBDA and the BIOS ROM area), walks the RSDT or XSDT, checksums
+every table and drops the ones that fail, and decodes the FADT, the
+DSDT's `_S5_` object and the MADT. `/bin/acpi` prints all of it;
+`QUERY_ACPI`, `QUERY_ACPI_TABLE` and `QUERY_CPUS` are how it reads it.
+
+**`system_poweroff()` and `system_reboot()` are LADDERS, and the rung
+that ran is only visible in the log.** Poweroff: the parsed S5 write,
+then QEMU/Bochs's fixed `outw(0x604, 0x2000)`, then a halt with a
+message. Reboot: the FADT's reset register, then the 8042 pulse, then a
+halt. Every rung ends with the machine stopped, so **the observable
+outcome cannot tell you which one did it** -- which is why each prints
+its own klog line and why `tools/poweroff_test.py` asserts on
+`acpi: S5 via` being present *and* `falling back to the QEMU/Bochs`
+being absent. A test that asserts "the machine stopped" passes with the
+whole ACPI path deleted.
+
+**THIS IS NOT AN ACPI SUBSYSTEM AND MUST NOT GROW INTO ONE.** There is
+no AML interpreter, and the `_S5_` byte scan is the single deliberate
+exception, allowed because a `Name` holding a `Package` of constants is
+data with a fixed grammar. Anything needing AML *evaluated* -- battery,
+thermal zones, S3, GPEs -- is not here and is not nearly here. See
+`docs/decisions.md`.
+
+**The scan REFUSES rather than guesses**, and a refusal is a supported
+outcome: `ACPI_F_S5` stays clear, `/bin/acpi` says `poweroff: no`, and
+the ladder falls through. Accepting a shape it does not understand would
+mean writing a real sleep request built from whatever bytes followed.
+
+**Three traps if you edit this.** Every FADT field is read at a FIXED
+OFFSET into a table whose length varies by revision (116 bytes on
+i440fx, 244 on q35), so reads go through `fadt_u32()`/`fadt_gas()`,
+which check the length -- a direct struct dereference walks into the
+next table and finds plausible numbers. Tables are read through
+boot.asm's identity map of the low 4 GiB and an address above that is
+REFUSED rather than mapped, because `acpi_init()` runs before there is
+anything to map with. And `acpi_find_table()` before `acpi_init()` is a
+PANIC (`BOOT_SUB_ACPI`), not a NULL, because "no such table" and "the
+walk has not run" are otherwise the same answer and want opposite
+responses.
+
+**The MADT is `docs/smp-design.md`'s Stage 1 and nothing more.** The
+processor list exists, `lscpu` counts it (CPUID cannot -- it describes
+the core executing the instruction), and every entry reports
+`online: no` because this kernel schedules on one core. **Testing the
+table walk needs two chipsets**: `vm.py --machine q35` is the only way
+here to reach an XSDT-capable machine with a real reset register, and
+q35 has no legacy IDE, so it implies `--disk-kind ahci`.

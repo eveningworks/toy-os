@@ -1518,12 +1518,22 @@ generation number -- before snapshots land, not after.
 
 ### ACPI + real power/timer
 
-ACPI table parsing (RSDP/MADT/FADT) -- also unlocks a real software
-poweroff (today's `system_poweroff()` only does the QEMU/Bochs
-`outw(0x604, 0x2000)` I/O-port trick with a halt-and-message fallback,
-deliberately the "works today in this exact dev/test setup" option, not a
-real ACPI-based one) and is the prerequisite for discovering other CPU
-cores (SMP).
+**Table parsing, poweroff and reset are DONE (2026-08-30).**
+`kernel/acpi/` finds the RSDP (multiboot2 tag 14/15, with a BIOS-area
+scan as the fallback), walks the RSDT or XSDT, and decodes the FADT, the
+DSDT's `_S5_` object and the MADT. `system_poweroff()` now writes the
+sleep type this machine's own firmware named, to the port its own FADT
+named, which is what makes shutdown work on VirtualBox and real
+hardware rather than only on QEMU; `system_reboot()` tries the FADT's
+reset register before the 8042 pulse. `/bin/acpi` prints all of it and
+`tools/poweroff_test.py` asserts that the log line naming the parsed
+path is the one that ran. The MADT half is `docs/smp-design.md`'s
+Stage 1, so the processor list exists and nothing is started on it.
+
+What is NOT done here is everything that needs an AML interpreter
+(battery, thermal, S3) -- see `docs/decisions.md` on why the `_S5_`
+byte scan is the one deliberate exception -- plus HPET, whose table is
+now found and whose registration is described below.
 
 **HPET as a clocksource, which is now a small job.** The registry
 landed 2026-08-17 (`kernel/include/kernel/clocksource.h`), so adding

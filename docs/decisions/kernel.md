@@ -5591,3 +5591,75 @@ process ran; now a lease lands about a second into the boot. Anything
 that pings a freshly booted guest has to wait for it -- `tools/net_test.py`
 polls, and a phase that did not was failing as `no such device`, which
 looks nothing like what it is.
+
+## ACPI stops at the tables, and `_S5_` is the one deliberate exception
+
+`kernel/acpi/` finds the RSDP, walks the RSDT or XSDT, and decodes the
+FADT and the MADT. It also byte-scans the DSDT for one AML object. That
+combination looks inconsistent, and the inconsistency is the decision.
+
+**What real systems do.** Linux and Windows both carry a full AML
+interpreter -- ACPICA and the NT AML engine -- and *evaluate* `\_S5` to
+get the sleep type before writing PM1a_CNT. Neither hardcodes a port or
+a value; both derive everything from the FADT. ACPICA is around 100,000
+lines and implements a bytecode virtual machine with its own object
+model, namespace, mutexes and operation regions, because AML methods can
+touch PCI config space and the embedded controller and call each other.
+That is the price of the general answer, and it buys battery status,
+thermal zones, S3, hotplug and GPE dispatch.
+
+**toy-os wants exactly one thing out of AML.** The FADT gives the port
+to write and every bit of the sleep register's layout; the only fact it
+does not carry is the three-bit sleep type for S5, and that lives in a
+`Name (\_S5, Package (...) {...})` object in the DSDT. That object's
+grammar is fixed -- a NameOp, a PackageOp, a PkgLength, an element
+count, then constants -- and decoding it is sixty lines with no
+namespace, no evaluation and no side effects, because a Name is data.
+
+So the boundary is: **anything that is a fixed-layout structure gets
+parsed; anything that requires EVALUATING AML does not exist here.**
+Battery, thermal and S3 all fall on the far side, which is why they are
+still roadmap items rather than "nearly done now that ACPI is in".
+
+**Why not skip AML entirely and assume a sleep type.** This was the
+cheaper option and it is what makes the difference between working and
+not working on the hardware that motivated the change. QEMU's `_S5_`
+says 0, so `outw(0x604, 0x2000)` -- the old hardcode -- is accidentally
+correct there; VirtualBox and most real firmware say something else, and
+writing the wrong sleep type to a real PM1 control register is a request
+to enter a state that is not S5. "Assume 5, it is the common value" has
+the same shape as the hardcode it would replace: right until the machine
+where it is not, which is the machine that is hardest to debug.
+
+**The scan REFUSES rather than guesses**, which is this repo's parser
+rule and matters more here than usual. It accepts a `_S5_` introduced by
+NameOp (directly or behind a root or parent prefix) whose package
+elements are ZeroOp, OneOp or a byte constant, and nothing else -- not a
+DWordPrefix, not the four letters appearing inside a string. A refusal
+leaves ACPI_F_S5 clear, `/bin/acpi` prints `poweroff: no`, and
+`system_poweroff()` falls through to the legacy write and then to a halt.
+An acceptance that guessed would write a real sleep request built out of
+whatever bytes happened to follow.
+
+**Why the fallbacks stayed.** `system_poweroff()` tries ACPI, then the
+0x604 shortcut, then halts; `system_reboot()` tries the FADT's reset
+register, then the 8042 pulse, then halts. Each rung covers a machine
+the one above it does not, and the ordering is "what the firmware asked
+for" before "what usually works". The cost is that the observable
+outcome is the same at every rung -- the machine stops -- so which rung
+ran is only visible in the log, which is why each one prints a line and
+why `tools/poweroff_test.py` asserts on those lines rather than on the
+machine stopping.
+
+**The MADT is here for a different reason** -- it is
+`docs/smp-design.md`'s Stage 1, which wanted the table walk anyway.
+Parsing it alongside the FADT costs one file and makes `lscpu` able to
+count cores at all, which CPUID cannot do. Nothing is started on them,
+and the list says `online: no` for every entry so that it reads as a
+fact rather than a claim.
+
+**One thing the tables are NOT used for yet: HPET.** Its table is found
+and listed now, and registering it as a third clocksource is the item
+that was waiting on exactly this. It was deliberately not done in the
+same change: it is a clocksource question, not a power question, and
+bundling it would have made the poweroff fix untestable on its own.

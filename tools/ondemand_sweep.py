@@ -127,6 +127,11 @@ TOOLS = [
     # .vm.serial, which is the sweep's fault and not the tool's.
     ("cursor_ibeam", "cursor_ibeam_test.py",   "named pointer shapes and the clamp", True,  None,                  True),
 
+    # --- power --------------------------------------------------------
+    # Ends three guests by stopping the machine, and boots one on q35 --
+    # the only chipset here with an ACPI reset register.
+    ("poweroff",    "poweroff_test.py",        "ACPI poweroff and reset, from the tables", True, None,             False),
+
     # --- init ---------------------------------------------------------
     ("init",        "init_test.py",            "init and service supervision",       True,  None,                   False),
 

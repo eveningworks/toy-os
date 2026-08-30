@@ -117,6 +117,31 @@ int main_lscpu(void) {
     put_label("Max CPUID leaf"); put("0x"); put_hex(g_ci.max_leaf, 8);
     put("  extended 0x"); put_hex(g_ci.max_ext_leaf, 8); put("\n");
 
+    // ---- what the firmware says exists ---------------------------------
+    //
+    // CPUID describes THE CORE THIS CODE IS RUNNING ON and cannot count
+    // the others; the ACPI MADT is the only thing that can, which is
+    // why this comes from a different source than everything above.
+    // `online` is always no -- this kernel schedules on one core.
+    {
+        int cores = 0, enabled = 0;
+        for (unsigned i = 0; ; i++) {
+            struct query_cpu c;
+            if (sys_query_record(QUERY_CPUS, i, &c, sizeof c) < (int)sizeof c) break;
+            cores++;
+            if (c.flags & 1u) enabled++; // ACPI_CPU_ENABLED
+        }
+        put_label("Logical CPUs");
+        if (cores == 0) {
+            put("1  (no ACPI MADT -- nothing counted the others)\n");
+        } else {
+            put_udec((uint32_t)cores);
+            put("  (");
+            put_udec((uint32_t)enabled);
+            put(" enabled by firmware, 1 online -- this kernel is single-core)\n");
+        }
+    }
+
     // ---- caches --------------------------------------------------------
     put("\nCaches:\n");
     if (g_ci.cache_count == 0) {

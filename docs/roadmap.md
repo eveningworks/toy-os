@@ -721,14 +721,14 @@ run on, not by order.
 
 ### ACPI + real power/timer
 
-- [ ] ACPI table parsing (RSDP/MADT/FADT/HPET)
-- [ ] Real ACPI-based poweroff
-- [ ] HPET as a third clocksource
+- [x] ~~ACPI table parsing (RSDP/MADT/FADT)~~ DONE 2026-08-30 -- `kernel/acpi/`, read by `/bin/acpi`
+- [x] ~~Real ACPI-based poweroff~~ DONE 2026-08-30 -- the sleep type comes from the DSDT's `_S5_`, the port from the FADT
+- [x] ~~ACPI reboot~~ DONE 2026-08-30 -- the FADT's reset register, with the 8042 pulse still the fallback
+- [ ] HPET as a third clocksource -- its table is found now, nothing reads it yet
 - [ ] APIC + a `clock_event_device` split, replacing the fixed-100Hz PIT interrupt
 - [ ] Battery + AC adapter status
 - [ ] Thermal zone reporting
 - [ ] S3 suspend/resume
-- [ ] ACPI reboot (today's `reboot` uses the 8042 pulse)
 
 ### UEFI boot
 

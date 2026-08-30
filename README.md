@@ -414,6 +414,23 @@ on nothing made this decade. `make run USB=xhci+mouse` reaches it —
 attaching a USB keyboard takes the keyboard *away* from PS/2, which is
 what makes its test suite self-controlling.
 
+**ACPI, as far as the tables and no further.** The RSDP comes from the
+multiboot2 tag (with a BIOS-area scan behind it), the RSDT or XSDT is
+walked and every table checksummed, and the FADT and MADT are decoded —
+so **the machine powers off through its own firmware's numbers**: the
+sleep type from the DSDT's `_S5_` object, the port from its own FADT,
+which is what makes shutdown work on VirtualBox and real hardware
+instead of only under QEMU, where the old hardcoded `outw(0x604,
+0x2000)` was accidentally correct. `reboot` tries the FADT's reset
+register before the 8042 pulse. Both are ladders with a halt at the
+bottom, and each rung logs which one ran — the machine stops either way,
+so the log is the only thing that can tell you. There is **no AML
+interpreter**, and `_S5_` is the one deliberate exception: a `Name`
+holding a `Package` of constants is data with a fixed grammar, and the
+scan refuses any shape it does not recognise rather than guessing at a
+sleep type. `/bin/acpi` prints the lot; the MADT half is SMP's first
+stage, so the processor list exists and every core reports `online: no`.
+
 **Memory hardening.** NX and W^X from each ELF segment's real `p_flags`,
 and the kernel's own identity map is W^X too — `.text` is the only
 executable range and is read-only, with CR0.WP set so ring 0 honours it.
@@ -539,7 +556,7 @@ dispatch cannot disagree about which syscalls exist.
 **Introspection.** Kernel state reaches ring 3 through one self-describing
 registry rather than a `/proc` filesystem: a subsystem registers a
 provider for a fact, and a command formats it — `ps`, `df`, `lsblk`, `lspci`,
-`lsusb`, `lscpu`, `meminfo`, `pmap`, `kstack`, `tty`, `kbd`. Answering *"what did the
+`lsusb`, `lscpu`, `acpi`, `meminfo`, `pmap`, `kstack`, `tty`, `kbd`. Answering *"what did the
 machine actually do?"* is treated as a first-class job, distinct from a
 test asserting it did the right thing: `strace` decodes a syscall per
 line, `meminfo audit` compares every live address space against the

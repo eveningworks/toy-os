@@ -442,6 +442,35 @@ the client filters. Every `bytes` field is a RESERVATION, not
 residency -- reservations are the number this class exists to make
 visible, and `ps` already carries the resident side.
 
+### The ACPI tables and the processor list -- DONE 2026-08-30
+
+Three classes at once, which is unusual here and is the shape the data
+already had. `QUERY_ACPI` (scalar) is what the firmware said, decoded:
+the RSDP's provenance, the PM1a port an S5 write goes to, the sleep type
+the DSDT's `_S5_` named, and the flags saying which of those were
+established. `QUERY_ACPI_TABLE` is a row per table found and checksummed.
+`QUERY_CPUS` is a row per processor the MADT lists. `/bin/acpi` reads all
+three; `/bin/lscpu` reads the third for its "Logical CPUs" line, because
+CPUID describes the core running the instruction and cannot count the
+others.
+
+**The scalar/list split is `QUERY_PARTTABLE`/`QUERY_PARTITION`'s again**,
+and here it earns itself twice: zero tables and zero processors mean
+different things ("no ACPI at all" versus "ACPI but no MADT"), and the
+scalar is the only one of the three that can say which.
+
+**Named fields on the scalar, none on the lists**, per the registry's
+own rule -- and the scalar's fields are the reason `config get
+acpi.slp_typ_a` answers at all, which is the cheapest way to ask why a
+shutdown did not take.
+
+**Nothing here is recomputed.** Every field was decoded once at
+`acpi_init()` and is copied out of one struct, unlike `QUERY_PARTITION`,
+which hits the platter per call. That is legitimate because the tables
+are firmware data that cannot change while the machine runs -- worth
+saying because the "every read is fresh" discipline is otherwise this
+registry's default.
+
 ## Open questions
 
 1. **Does a class get to be variable-length?** `dmesg` is a buffer, not

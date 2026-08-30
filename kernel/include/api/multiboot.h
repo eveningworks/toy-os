@@ -27,6 +27,19 @@ void multiboot_mmap_foreach(void (*cb)(const struct multiboot_mmap_region *regio
 // expecting an empty string. First user: `nokaslr` (see reloc.h).
 const char *multiboot_cmdline(void);
 
+// The ACPI Root System Description Pointer, as GRUB found it: tag 15
+// (ACPI 2.0+, has an XSDT) if present, else tag 14 (ACPI 1.0, RSDT
+// only). Returns 0 when neither tag is there, which is the answer on a
+// machine with no ACPI at all -- and also on a bootloader that does not
+// pass it, which is why kernel/acpi/acpi.c falls back to scanning the
+// BIOS area rather than treating 0 as "no ACPI".
+//
+// The RSDP is COPIED INTO the tag by GRUB, so this points into the
+// multiboot info block (which pmm_init() reserves), not at firmware
+// memory. *out_bytes is the tag's payload size: 20 for a v1 RSDP, 36
+// for v2.
+const void *multiboot_acpi_rsdp(uint32_t *out_bytes);
+
 struct multiboot_module_info {
     uint64_t start; // physical address (inclusive)
     uint64_t end;   // physical address (exclusive)

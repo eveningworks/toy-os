@@ -623,6 +623,7 @@ whenever a headline here tells you something you did not already know.
 - **UDP IS A PORT DEMUX, DHCP AND DNS ARE RING-3 PROGRAMS, AND A NAME IS RESOLVED BY A LIBRARY**
 - **NOTHING INVENTS AN ADDRESS: A CARD COMES UP UNCONFIGURED, `/bin/dhcp` RUNS AT BOOT, AND NO SERVER MEANS LINK-LOCAL**
 - **A WAIT CAN CARRY A DEADLINE, AND READINESS IS NOT DELIVERY**
+- **THE MACHINE STOPS THROUGH ITS OWN ACPI TABLES, AND EVERY FALLBACK BELOW THAT LOGS A LINE**
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
 
 ### GUI, Toykit and the desktop
@@ -1238,7 +1239,7 @@ cost".
   `keyboard_paths_test.py`, `kvm_soak.py`, `live_boot_test.py`,
   `ls_test.py`, `mem_stress.py`, `mkpart_test.py`,
   `multidisk_test.py`, `net_test.py`, `partition_test.py`,
-  `qemu_matrix.py`, `serial_backpressure_test.py`, `stdin_test.py`,
+  `poweroff_test.py`, `qemu_matrix.py`, `serial_backpressure_test.py`, `stdin_test.py`,
   `taskbar_test.py`, `terminal_probe.py`, `tfs3_v1_test.py`,
   `usb_test.py`, `virtio_boot_test.py`, `virtio_gpu_test.py`,
   `virtio_input_test.py`.

@@ -303,6 +303,29 @@ _Static_assert(sizeof(struct query_fontglyph) <= 256,
 // nowhere to carry a second selector (QUERY_FONTGLYPH's reasoning).
 #define QUERY_PROCMAP 21
 
+// WHAT THE ACPI TABLES SAID, decoded. SCALAR. Read by /bin/acpi, and
+// the reason it is a fact rather than a setting: nothing here is
+// stored, it is what the firmware handed this boot.
+//
+// The fields worth knowing about are the ones a failed shutdown needs:
+// `pm1a_cnt` (the port the S5 write goes to), `slp_typ_a` (the value
+// the DSDT's `_S5_` object named), and `flags` -- ACPI_F_S5 absent
+// means the machine cannot be powered off through ACPI at all and the
+// legacy path is what will run.
+#define QUERY_ACPI 23
+
+// One record per ACPI table this boot found and checksummed. LIST -- a
+// machine with no ACPI has zero records, which is a successful answer.
+// The split from QUERY_ACPI is the same one QUERY_PARTTABLE/
+// QUERY_PARTITION already makes: one thing with one set of numbers,
+// and rows.
+#define QUERY_ACPI_TABLE 24
+
+// One record per logical processor the MADT lists. LIST. NOTHING IS
+// RUNNING ON THEM -- this kernel is single-core, and the list is the
+// first stage of docs/smp-design.md rather than evidence of the rest.
+#define QUERY_CPUS 25
+
 // The network devices: one record per registered NIC, with its
 // addresses and counters. LIST. What `/bin/ifconfig` reads.
 #define QUERY_NETDEV 22
@@ -769,6 +792,52 @@ struct query_procmap {
     uint64_t prot;     // SYS_PROT_* for the mmap kinds, else 0
     uint64_t file_off; // QUERY_PROCMAP_FILE only
     char     path[64]; // likewise; FS_PATH_MAX's 64, not the field-name 48
+};
+
+
+// --- QUERY_ACPI / QUERY_ACPI_TABLE / QUERY_CPUS records ---------------
+
+// EVERY FIELD IS u64 because every NAMED field must be (api/query.h),
+// and a struct where some fields are addressable by name and others
+// are not is a distinction nobody can see from `config get acpi.<tab>`.
+struct query_acpi {
+    uint64_t flags;          // ACPI_F_* (kernel/acpi.h) -- the kernel-side names
+    uint64_t rsdp_source;    // ACPI_RSDP_*: 0 none, 1 multiboot2 tag, 2 BIOS scan
+    uint64_t rsdp_revision;  // 0 for ACPI 1.0, 2 for 2.0+
+    uint64_t table_count;
+    uint64_t rsdt_phys;      // the RSDT or XSDT actually walked
+    uint64_t dsdt_phys;
+    uint64_t pm1a_cnt;       // I/O ports; 0 on a hardware-reduced platform
+    uint64_t pm1b_cnt;
+    uint64_t smi_cmd;
+    uint64_t acpi_enable;    // the byte written to smi_cmd to enter ACPI mode
+    uint64_t slp_typ_a;      // from `_S5_`; meaningless unless the S5 flag is set
+    uint64_t slp_typ_b;
+    uint64_t reset_space;    // 0 system memory, 1 system I/O
+    uint64_t reset_addr;
+    uint64_t reset_value;
+    uint64_t sleep_control_space;
+    uint64_t sleep_control_addr;
+    uint64_t lapic_phys;
+    uint64_t ioapic_count;
+    uint64_t cpu_count;
+};
+
+struct query_acpi_table {
+    uint64_t address;
+    uint64_t length;
+    uint64_t revision;
+    // NUL-terminated here, unlike in the table itself, where all three
+    // are fixed-width and a full-length value has no terminator.
+    char     signature[8];
+    char     oem_id[8];
+    char     oem_table_id[12];
+};
+
+struct query_cpu {
+    uint64_t acpi_id;
+    uint64_t apic_id;
+    uint64_t flags;   // ACPI_CPU_* (kernel/acpi.h)
 };
 
 #endif // ABI_QUERY_ABI_H

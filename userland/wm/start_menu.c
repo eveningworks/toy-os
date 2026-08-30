@@ -31,15 +31,11 @@ static void action_exit_to_shell(void) {
     confirm_dialog_open_with("Exit to shell? Unsaved changes will be lost.", do_exit_to_shell, 0);
 }
 
-// Shutdown -- docs/roadmap.md's own design notes settled the shape
-// ahead of time: a Yes/No confirm first (confirm_dialog.h, same as
-// Exit to shell above), then a real poweroff. system_poweroff()
-// (kernel/core/power.c) is the QEMU/Bochs ACPI I/O-port trick, not a
-// real parsed-ACPI shutdown (see power.h) -- that's still
-// docs/roadmap.md's ACPI table parsing item, not done. Unlike
-// do_exit_to_shell(), system_poweroff() never returns (it halts either
-// way, see its own comment), so there's no wm_exit_requested-style flag
-// to set here -- the callback just calls it directly.
+// Shutdown -- a Yes/No confirm first (confirm_dialog.h, same as Exit to
+// shell above), then a real poweroff through the machine's own ACPI
+// tables (kernel/acpi/). Unlike do_exit_to_shell(), system_poweroff()
+// never returns -- it halts if nothing stopped the machine -- so there
+// is no wm_exit_requested-style flag to set here.
 static void do_shutdown(void) { sys_poweroff(0); }
 static void action_shutdown(void) {
     confirm_dialog_open_with("Shut down? Unsaved changes will be lost.", do_shutdown, 0);

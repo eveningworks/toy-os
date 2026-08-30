@@ -319,6 +319,15 @@ manual steps to be worth automating:
   later, on something unrelated. `DebugConsole.open_app()` RAISES on
   that now, quoting the guest's own list -- one line instead of a
   debugging round.
+- **`vm.py --machine <type>`** -- the QEMU CHIPSET, default i440fx
+  because that is what every existing test was written against.
+  `--machine q35` is the only way to reach an ACPI 2.0-era machine here:
+  i440fx presents a revision-0 RSDP, an RSDT, a 116-byte FADT and NO
+  reset register, while q35 presents a 244-byte revision-3 FADT with a
+  real reset register at port 0xcf9 and an MCFG beside it -- so the two
+  exercise different halves of `kernel/acpi/`. **q35 has no legacy IDE
+  at all**, so it implies `--disk-kind ahci` rather than silently
+  booting a machine with no disk, which would read as a kernel bug.
 - **`vm.py spawn <path> [args]`** -- spawns a guest program and prints
   the FILE it writes its report to, waiting until that file stops
   changing. It replaces a three-command dance that was hand-rolled four
@@ -1711,6 +1720,36 @@ window without going through it will find its layout polls timing out.
   reboots perfectly, because TFS3's 4 KiB blocks are one PRD entry. It
   is a good demonstration of why the check is written as a comparison
   against single-sector reads rather than as "the data came back".
+- **`poweroff_test.py`** -- proves the machine stops through **its own
+  ACPI tables** rather than a hardcoded port, on two chipsets.
+  It boots its own guests and deliberately ends three of them.
+
+  **"Did it shut down" is exactly the assertion a broken version
+  passes.** The old implementation wrote `outw(0x604, 0x2000)`, and
+  QEMU's own FADT happens to name port 0x604 and sleep type 0 -- so the
+  hardcode and a correct table walk stop the guest identically. What
+  separates them is the kernel log: `acpi: S5 via PM1a ...` is printed
+  by the path that read the FADT and the DSDT's `_S5_`, and
+  `power: falling back to the QEMU/Bochs PM1a_CNT port trick` only when
+  that path declined. The check is the first line's presence AND the
+  second's absence, plus the QEMU process really exiting -- which is a
+  fact about the host that the guest cannot fake.
+
+  **Two chipsets, because one is not a sample.** i440fx (the default)
+  presents a revision-0 RSDP, an RSDT, a 116-byte FADT and NO reset
+  register; `-machine q35` presents a 244-byte revision-3 FADT with a
+  real reset register at port 0xcf9 and an MCFG beside it. The reset
+  half can only be tested on the second, and its assertion is that the
+  machine COMES BACK (two "debug console ready" lines on one QEMU
+  process), not merely that the process ended.
+
+  Its positive control is to make `acpi_poweroff()` return 0 at its
+  first line: the two log lines swap over, the guest still powers off,
+  and exactly the two discriminating checks go red. What it cannot
+  cover is VirtualBox and real hardware, which is what motivated the
+  feature -- what is testable here is that the numbers come from the
+  tables rather than from a constant, which is the property those
+  platforms need.
 - **`virtio_boot_test.py`** -- boots with **no IDE controller at all**
   and the filesystem on virtio-blk, then writes a file, REBOOTS, and
   reads it back (6 checks). Builds its own QEMU; on demand, not in the

@@ -193,6 +193,17 @@ def cmd_start(args):
         *install_grub.qemu_boot_args(medium, args.iso),
         "-m", str(getattr(args, "mem", 0) or 2048),
     ]
+    # THE CHIPSET. Default (i440fx) unless asked, because that is what
+    # every existing test was written against. `--machine q35` is the
+    # only way to reach an ACPI 2.0 machine here: i440fx presents a
+    # revision-0 RSDP with an RSDT and no reset register, q35 presents a
+    # revision-2 RSDP with an XSDT and a real one, so the two exercise
+    # different halves of kernel/acpi/. q35 has NO legacy IDE, so it
+    # implies --disk-kind ahci rather than silently booting no disk.
+    if getattr(args, "machine", None):
+        cmd += ["-machine", args.machine]
+        if args.machine.startswith("q35"):
+            args.disk_kind = "ahci"
     # THE BOOT DISK, and which controller it hangs off. `--disk-kind
     # ahci` is the only way anything here reaches kernel/drivers/ahci.c,
     # the same reason --vga virtio and --virtio-input exist; the
@@ -581,6 +592,9 @@ def main():
                     help="guest RAM in MiB (default 2048). Smaller makes "
                           "memory exhaustion reachable -- see tools/mem_stress.py")
     ap.add_argument("--timeout", type=float, default=30.0)
+    ap.add_argument("--machine", default=None, metavar="TYPE",
+                    help="QEMU machine type (e.g. q35). q35 implies --disk-kind ahci; "
+                         "it is the ACPI 2.0 / XSDT / reset-register machine.")
     ap.add_argument("--disk-kind", choices=("ide", "ahci"), default="ide",
                     help="which controller --disk hangs off; ahci is an ICH9 HBA "
                          "and is what exercises kernel/drivers/ahci.c")
