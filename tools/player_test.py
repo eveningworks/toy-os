@@ -53,12 +53,14 @@ from gui_debug import DebugConsole, enter_gui        # noqa: E402
 from qmp_test import QMPSession                      # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
+MUSIC_DIR = "/usr/share/music"
 SOUND_DIR = "/usr/share/sounds"
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # The host knows how many WAVs were seeded, so the guest's listing is
 # checked against something that is not the guest's own opinion.
 HOST_SOUNDS = os.path.join(REPO, "data", "usr", "share", "sounds")
+HOST_MUSIC = os.path.join(REPO, "data", "usr", "share", "music")
 
 
 class Result:
@@ -200,10 +202,16 @@ def run(dbg, qmp, tmp, res):
               f"state {lay.state} -- playing should be 0 with no hardware")
 
     # --- 2. the listing is by PROBE, not by extension ------------------
-    want = len([f for f in os.listdir(HOST_SOUNDS) if f.endswith(".wav")])
-    res.check("every seeded sound is listed",
-              lay.has("list") and want > 0,
-              f"host has {want} wav(s) in data/usr/share/sounds")
+    #
+    # The app now opens on /usr/share/music, so what it lists is MP3s --
+    # and it lists them because usnd_probe() recognises the bytes, not
+    # because anything matched ".mp3". That is the property worth
+    # asserting: an extension filter would have needed editing to show
+    # them at all.
+    want = len([f for f in os.listdir(HOST_MUSIC) if f.endswith(".mp3")])
+    res.check("the music directory has something in it (host side)", want > 0,
+              f"data/usr/share/music holds {want} mp3(s)")
+    res.check("the player lists it", lay.has("list"), "no list widget reported")
 
     # --- 3. the controls are DRAWN, not merely present -----------------
     im = shot(qmp, tmp, "player.png")
@@ -259,9 +267,16 @@ def run(dbg, qmp, tmp, res):
     logs = poll_logs(dbg)
     parsed = [l for l in logs if "player: playing" in l or "player: refused" in l]
     res.check("selecting a file reaches the decoder",
-              any("PCM" in l or "no audio" in l or "wav" in l for l in parsed)
+              any("PCM" in l or "no audio" in l or "wav" in l or "mp3" in l
+                  for l in parsed)
               or any("player:" in l for l in logs),
               f"log lines: {parsed[-3:]}")
+    # ...and specifically an MP3, since that is what the default directory
+    # now holds. A decoder that refused the file would still have produced
+    # a log line above, so this names the format rather than trusting that.
+    res.check("...and the file it decoded was an MP3",
+              any("mp3" in l.lower() or "Layer III" in l for l in logs),
+              f"log lines: {[l for l in logs if 'player:' in l][-3:]}")
 
     dbg.send("gui close Audio Player")
 

@@ -14,6 +14,7 @@
 // data chunk that lies about its length, a float WAV.
 #include "rt/sys.h"
 #include "lib/usnd.h"
+#include "lib/usnd_internal.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -259,6 +260,64 @@ static void check_refusals(void) {
     check("probe rejects other bytes", !usnd_probe("not audio at all", 16), "probe said yes");
 }
 
+// --- MP3 -------------------------------------------------------------
+//
+// The fixture here is READ rather than built, which is the opposite of
+// every WAV case above and deliberate: an MP3 cannot be written by hand,
+// and /tests/sine1k.mp3 is a steady 1 kHz tone whose decoded shape is
+// therefore known without a reference decoder. The exhaustive comparison
+// against ffmpeg lives on the host (tools/usnd_hostcheck.py); what only
+// this side can prove is that the decoder works in RING 3 -- against the
+// real filesystem, the real heap, and a 2 KiB frame budget.
+static void check_mp3(void) {
+    check("the Huffman tables are complete prefix codes",
+          usnd_mp3_selftest() == 0, "usnd_mp3_selftest() refused");
+
+    struct usnd_info in;
+    int rc = usnd_load_info("/tests/sine1k.mp3", &in);
+    check("an MP3 is recognised", rc == 0, usnd_last_error());
+    if (rc != 0) return;
+    eq("the MP3's rate", in.fmt.rate, 44100);
+    eq("the MP3's channel count", in.fmt.channels, 1);
+    check("the codec names itself mp3", strcmp(in.format, "mp3") == 0, in.format);
+
+    struct usnd_clip clip;
+    rc = usnd_clip_load("/tests/sine1k.mp3", &clip);
+    check("an MP3 decodes to a clip", rc == 0, usnd_last_error());
+    if (rc != 0) return;
+
+    // 1.5 s at 44.1 kHz, resampled to the device's 48 kHz and upmixed to
+    // stereo. Allow a frame either way: an MP3 carries whole 1152-sample
+    // frames, so the length is quantised rather than exact.
+    uint64_t want = 1500 * 48;
+    check("the clip is about 1.5 seconds",
+          clip.frames > want - 2400 && clip.frames < want + 2400, "wrong length");
+
+    // ONE STEADY FREQUENCY is the whole point of this fixture: count zero
+    // crossings over the middle, away from the encoder's ramp at each end.
+    long lo = (long)(clip.frames / 4), hi = (long)(clip.frames * 3 / 4);
+    long crossings = 0, peak = 0;
+    for (long i = lo + 1; i < hi; i++) {
+        int a = clip.pcm[(i - 1) * 2], b = clip.pcm[i * 2];
+        if ((a < 0) != (b < 0)) crossings++;
+        if (b > peak) peak = b;
+        if (-b > peak) peak = -b;
+    }
+    long hz = crossings * 48000 / (2 * (hi - lo - 1));
+    check("the decoded tone is 1 kHz", hz > 980 && hz < 1020, "wrong frequency");
+    check("the decoded tone has real amplitude", peak > 8000, "too quiet");
+
+    // Both channels, because a mono MP3 reaches the mixer through the
+    // same upmix a mono WAV does and a decoder that filled only the left
+    // would still pass every check above.
+    long diff = 0;
+    for (long i = lo; i < hi; i += 97)
+        if (clip.pcm[i * 2] != clip.pcm[i * 2 + 1]) diff++;
+    eq("the mono upmix filled both channels", diff, 0);
+
+    usnd_clip_free(&clip);
+}
+
 int main(void) {
     check_header();
     check_chunk_walk();
@@ -269,6 +328,7 @@ int main(void) {
     check_resample();
     check_seek();
     check_refusals();
+    check_mp3();
 
     sys_unlink(FIX);
     printf("usnd_test: %d failure(s)\n", g_fails);

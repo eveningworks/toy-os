@@ -724,6 +724,7 @@ whenever a headline here tells you something you did not already know.
 - **A WIDGET REPORTS ITS RECT THROUGH THE `bounds` OP; a test-facing geometry log is `uapp_log_layout(a, prefix)`.**
 - **AN IMAGE IS DECODED IN RING 3, AND `lib/uimg.h`'s CODEC TABLE IS THE EXTENSION POINT**
 - **AUDIO IS DECODED AND MIXED IN RING 3, AND `lib/usnd.h` HAS THREE SEAMS**
+- **MP3 IS THE CODEC TABLE'S SECOND ROW, AND ITS TABLES CARRY THEIR OWN PROOF**
 - **AN ICON IS A NAME, NOT A PATH, AND IT IS COMPOSITED**
 - **A WINDOW'S TITLE BAR CARRIES ITS APP ICON, AND `title_icon()` ANSWERS FOR BOTH DRAWING AND CLICKING**
 - **TEXT ON A WALLPAPER IS `ugfx_draw_string_shadowed()`, NEVER A GUESSED `bg`**
@@ -1266,9 +1267,11 @@ cost".
   from DWARF, ring 3 included; **never hand-roll `nm`**),
   `QMPSession.hmp()` (**the QEMU monitor -- the one oracle the guest
   cannot fake**; ask it BEFORE trusting anything the guest says about
-  itself), `regex_hostcheck.py` and `uimg_hostcheck.py` (this repo's
-  implementations against GLIBC and libjpeg -- an oracle sharing no
-  code is what catches an EXPECTATION being wrong), `pixel_probe.py`
+  itself), `regex_hostcheck.py`, `uimg_hostcheck.py` and
+  `usnd_hostcheck.py` (this repo's implementations against GLIBC,
+  libjpeg and ffmpeg -- an oracle sharing no code is what catches an
+  EXPECTATION being wrong; the MP3 one carries a
+  `--positive-control` that must go red), `pixel_probe.py`
   (read exact pixel values -- how a GUI change is verified),
   `screenshot_diff.py`, `iso_guard.py`.
 - **Measure** -- `idle_cpu.py` (the HOST's CPU time over an idle
@@ -1277,7 +1280,8 @@ cost".
   `GENERATED` list**, or the count silently inflates).
 - **Generated data and the build** -- `gen_version.sh` /
   `set_version.sh`, `genfont.py` / `genttf.py`, `gen_kbs.py`,
-  `gen_cursors.py`, `gen_imgdata.py`, `gen_audio.py`, `gen_icons.py`,
+  `gen_cursors.py`, `gen_imgdata.py`, `gen_audio.py`, `gen_music.py`,
+  `gen_icons.py`,
   `genrelocs.py`, `gen_syms.py`, `gen_decisions_index.py`,
   `gen_commands_index.py`, `gen_next_up.py`.
 - **The repo itself** -- `backup_repo.sh` (run it before ANY change to

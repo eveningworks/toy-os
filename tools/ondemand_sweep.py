@@ -35,6 +35,7 @@ import argparse
 import concurrent.futures as cf
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -63,6 +64,11 @@ REPO = os.path.dirname(HERE)
 # depends on the order the list happens to be in.
 TOOLS = [
     # name          script                     what it covers                        serial  needs                  wants_vm
+    # --- host-side decoder oracles ----------------------------------
+    # No guest at all: the same .c compiled with the host gcc, judged by
+    # a decoder that shares no code with it.
+    ("usnd_host",   "usnd_hostcheck.py",       "the MP3 decoder against ffmpeg",     False,
+     ("host_audio", "needs gcc, lame and ffmpeg on PATH"),                                   False),
     # --- storage and boot -------------------------------------------
     ("partition",   "partition_test.py",       "mounting from an MBR/GPT partition", True,  None,                   False),
     ("fs_switch",   "fs_switch_test.py",       "format, remount, reboot persistence", True, None,                   False),
@@ -207,6 +213,13 @@ def precondition_met(kind):
             if any(f.lower().endswith(".wad") for f in files):
                 return True, ""
         return False, why
+    if key == "host_audio":
+        # A HOST-side check rather than a guest one: it compiles the
+        # decoder with the host gcc and compares against ffmpeg, so what
+        # it needs is tools, not a VM. Missing them is a skip -- the gate
+        # must not start requiring lame and ffmpeg on every checkout,
+        # the same rule that keeps Docker out of preflight.
+        return all(shutil.which(t) for t in ("gcc", "lame", "ffmpeg")), why
     if key == "live_iso":
         # A separate ISO that `make iso` does not build. Missing it is a
         # precondition, not a failure -- reporting it as red would train

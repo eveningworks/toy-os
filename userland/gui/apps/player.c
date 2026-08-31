@@ -13,8 +13,8 @@
 // of the library existing (see usnd.h for the three seams).
 //
 // It is handed a directory or a file on the command line -- `Handles=`
-// in its .desktop entry points .wav here, so the File Manager opens one
-// with it -- and defaults to /usr/share/sounds.
+// in its .desktop entry points .wav and .mp3 here, so the File Manager
+// opens either with it -- and defaults to /usr/share/music.
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
@@ -36,7 +36,11 @@
 #define PATH_MAX_LEN 64          // FS_PATH_MAX
 #define MAX_FILES 64
 #define SIDEBAR_CHARS 18
-#define DEFAULT_DIR "/usr/share/sounds"
+// MUSIC, not the sound effects. /usr/share/sounds holds the short
+// clips apps fire (a click, a chime); this app is what a person opens
+// to listen to something, and that is /usr/share/music. Both are still
+// reachable through Open -- the default is about which one you land on.
+#define DEFAULT_DIR "/usr/share/music"
 
 #define ID_LIST  1
 #define ID_POS   2
@@ -169,6 +173,10 @@ static void play_selected(void) {
         return;
     }
     snprintf(g_fmt_txt, sizeof g_fmt_txt, "%s, %s", in.format, in.detail);
+    // Logged on IDENTIFICATION rather than on playback, because a machine
+    // with no audio device returns below and would otherwise report
+    // nothing at all -- which is exactly the machine the GUI test runs on.
+    ulogf("player: opened %s -- %s, %s\n", path, in.format, in.detail);
 
     if (!g_have_sound) {
         snprintf(g_now_txt, sizeof g_now_txt, "%s", name ? name : "?");

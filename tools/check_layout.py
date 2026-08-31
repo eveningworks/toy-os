@@ -208,6 +208,7 @@ SEED_SOURCES = {
     "usr/wm/desktop":    "data/wm/desktop",
     "usr/wm/startup":    "data/wm/startup",
     "usr/share/icons":   "data/icons",
+    "usr/share/music":   "data/usr/share/music",
     "usr/share/fonts":   "data/fonts",
     "usr/share/wallpapers": "data/wallpapers",
     "usr/share/cursors": "data/cursors",

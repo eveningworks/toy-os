@@ -4,8 +4,9 @@
 // them differently: a file that is not RIFF/WAVE at all is -EINVAL,
 // while IEEE float samples and every compressed WAVE_FORMAT (ADPCM,
 // mu-law) are -ENOTSUP -- a good file this build will not play. Float
-// is refused rather than converted because there is no floating point
-// in this project, in either ring.
+// samples are refused because nothing has needed them, NOT because this
+// ring lacks floating point: it has it (kernel/arch/x86_64/fpu.c enables
+// SSE per process) and usnd_mp3.c's filterbank is built on it.
 //
 // Chunks are WALKED, never assumed: `fmt ` is not required to come
 // first and `data` is routinely followed by LIST/INFO metadata. A

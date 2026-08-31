@@ -18,8 +18,12 @@
 // throws little away.
 #define SRC_FRAMES 512
 
+// Order is PROBE order, and WAV goes first because its magic is four
+// bytes at offset 0 while MP3's is a sync pattern that a stray 0xFF can
+// imitate -- the cheaper, stricter test should get the first look.
 static const struct usnd_codec *const g_codecs[] = {
     &usnd_codec_wav,
+    &usnd_codec_mp3,
 };
 #define CODEC_COUNT ((int)(sizeof g_codecs / sizeof g_codecs[0]))
 

@@ -1319,6 +1319,33 @@ real scanout hardware does. Do not write a pixel assertion for one.
   and `uimg_last_error()` carries the sentence. Formats are identified by
   PROBING magic bytes, not by extension.
 
+- **MP3 IS THE CODEC TABLE'S SECOND ROW, AND ITS TABLES CARRY THEIR OWN
+  PROOF**
+
+  `userland/lib/usnd_mp3.c` is MPEG-1 Layer III, written here rather than
+  vendored -- the same call `uimg_jpeg.c` made against libjpeg. Adding it
+  was a file and a row in `usnd.c`'s `g_codecs[]`, which is what that
+  table exists for.
+
+  Three things to know before editing it. **The data is separate from the
+  logic** (`usnd_mp3_tables.h`), because only three tables have no
+  generating formula -- the Huffman codes, the 512-tap synthesis window
+  and the scalefactor band edges. Everything else a decoder needs IS
+  derivable and is derived at runtime; adding a table for something
+  computable is the wrong instinct here. **`usnd_mp3_selftest()` proves
+  the Huffman tables structurally** -- every one a complete prefix code,
+  Kraft sum exactly 1 over exactly `dim*dim` pairs, no audio required --
+  and it exists because a hand-written table failed it during
+  development, which is how that approach was abandoned. And **it
+  REFUSES rather than guesses**: Layer I/II, MPEG-2/2.5, free-format and
+  intensity stereo are `-ENOTSUP`, the same distinction the JPEG decoder
+  draws on a progressive image.
+
+  Verify a change with `tools/usnd_hostcheck.py` (against ffmpeg, with a
+  `--positive-control` that must go red), never by listening. Measured
+  agreement is ~1.6e-6 -- one LSB in 32768 -- so a real break is never
+  subtle.
+
 - **AUDIO IS DECODED AND MIXED IN RING 3, AND `lib/usnd.h` HAS THREE
   SEAMS.** The kernel gives out ONE exclusive PCM stream and never mixes,
   so formats, rate conversion and playing several sounds at once are all

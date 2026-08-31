@@ -152,6 +152,7 @@ void usnd_close(struct usnd_stream *s);
 
 // The codec table. Adding MP3 is one .c file and one row in usnd.c.
 extern const struct usnd_codec usnd_codec_wav;
+extern const struct usnd_codec usnd_codec_mp3;
 
 // --- playback ---------------------------------------------------------
 //

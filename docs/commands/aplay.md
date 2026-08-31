@@ -10,9 +10,15 @@
 
 ## Description
 
-Play an audio file, or say what one contains. WAV is the only format
-today; the codec table it goes through (`userland/lib/usnd.h`) is what
-makes a second one a file and a row rather than a second mechanism.
+Play an audio file, or say what one contains. WAV and MP3 today, and the
+second one arrived exactly as the codec table (`userland/lib/usnd.h`)
+promised it would: a file and a row, not a second mechanism.
+
+The MP3 side is MPEG-1 Layer III only. Layer I/II, the half-rate
+MPEG-2/2.5 sample rates, free-format and intensity stereo are refused by
+name rather than played wrongly — a good file this build will not play
+reads differently from a broken one, which is what the library's
+three-way refusal exists for.
 
 It always prints what the file is before doing anything with it — the
 codec's name, the encoding, the rate and the duration — so a refusal

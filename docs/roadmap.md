@@ -720,10 +720,13 @@ run on, not by order.
 - [x] ~~A second sound device, to prove the class is not shaped around the first~~ DONE 2026-08-30 -- USB audio
 - [x] ~~Choosing between sound devices, and surviving one being unplugged~~ DONE 2026-08-30 -- `audio_device`, and `device_gone`
 - [ ] A system-wide sound daemon, so two programs can be audible at once -- `usnd_sink.h`'s second row
-- [ ] A second codec (MP3 or Vorbis) -- a file and a row in `usnd.c`'s table, which is what the table is for
+- [x] ~~A second codec (MP3 or Vorbis) -- a file and a row in `usnd.c`'s table~~ DONE 2026-08-31 -- MPEG-1 Layer III, written here
 - [x] ~~Doom sound and music~~ DONE 2026-08-29 -- effects on `usnd` voices, music on Chocolate Doom's own OPL emulation
 - [x] ~~Volume mixer UI, persisted to `/etc`~~ DONE 2026-08-30 -- the tray flyout: slider, mute, device list, wheel
 - [ ] A per-application volume, which needs the sound daemon first -- the flyout has one slider because there is one stream
+- [ ] MPEG-2/2.5 Layer III (the half-rate sample rates), and Layer I/II -- refused with -ENOTSUP today
+- [ ] Intensity stereo in the MP3 decoder -- refused, because nothing available encodes it to test against
+- [ ] An MP3 seek index, so seeking lands exactly rather than by average frame size
 
 ### ACPI + real power/timer
 

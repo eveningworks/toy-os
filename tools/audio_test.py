@@ -139,6 +139,7 @@ def main():
     tmp = tempfile.mkdtemp(prefix="audio_test_")
     wav_path = os.path.join(tmp, "out.wav")
     wav2_path = os.path.join(tmp, "out_wavplay.wav")
+    wav3_path = os.path.join(tmp, "out_mp3play.wav")
     img = os.path.join(tmp, "disk.img")
     subprocess.run(["cp", "--reflink=auto", "--sparse=always", "disk.img", img],
                    cwd=REPO, check=True)
@@ -227,6 +228,41 @@ def main():
         finally:
             halt()
 
+    # --- third boot: the same tone as an MP3 ----------------------------
+    #
+    # THE POINT IS THAT THE ORACLE CANNOT TELL THE TWO APART. /tests/
+    # sine1k.mp3 is the same 1 kHz tone as the WAV above, so the host
+    # measures it the same way and the decoder has to produce the same
+    # pitch through a completely different path -- Huffman, requantiser,
+    # IMDCT and filterbank instead of a header and a memcpy. A frequency
+    # check is also the one assertion a plausible-but-wrong decoder
+    # cannot pass: garbage has no pitch.
+    mp3_out = ""
+    if boot(wav3_path).returncode != 0:
+        res.check("the guest rebooted for the MP3 phase", False)
+    else:
+        try:
+            dbg = wait_serial(sock)
+            if res.check("the serial console answers (MP3 phase)", dbg is not None):
+                info = dbg.send("sh aplay -i /tests/sine1k.mp3") or ""
+                # `aplay -i` prints the codec's own `detail` line, which for
+                # MP3 names the layer and bitrate rather than the rate (the
+                # WAV check above matches on 44100 because a WAV's detail
+                # does carry it). Matching the wrong field here reported a
+                # working decoder as broken.
+                res.check("aplay reads the MP3 header",
+                          "mp3" in info and "Layer III" in info,
+                          info.strip()[-120:])
+                was = dbg.timeout
+                dbg.timeout = 120      # decoding costs more than parsing
+                mp3_out = dbg.send("sh aplay /tests/sine1k.mp3") or ""
+                dbg.timeout = was
+                res.check("aplay played the MP3 to completion",
+                          "sine1k" in mp3_out, mp3_out.strip()[-120:])
+                dbg.close()
+        finally:
+            halt()
+
     # --- the host-side oracle ------------------------------------------
     rate, secs, hz, tone_peak, tone_secs = measure(wav_path)
     res.check("the host recording contains real signal",
@@ -255,8 +291,19 @@ def main():
     res.check("...for its whole length, so nothing was cut or looped",
               1.2 < tone2 < 1.9, f"{tone2:.2f}s of tone for 1.5s of file")
 
+    rate3, secs3, hz3, peak3, tone3 = measure(wav3_path)
+    res.check("the MP3 reached the device",
+              tone3 >= 0.5 and peak3 > 4000,
+              f"{secs3:.1f}s recorded, {tone3:.2f}s of tone, peak {peak3}")
+    # Same bar as the WAV: the file is 44.1 kHz and the device is 48 kHz,
+    # so this catches a missing resample as well as a broken decode.
+    res.check("...at 1 kHz, so the MP3 decoder produced the right pitch",
+              abs(hz3 - 1000.0) < 30, f"measured {hz3:.1f}Hz, wanted 1000")
+    res.check("...for its whole length",
+              1.2 < tone3 < 1.9, f"{tone3:.2f}s of tone for 1.5s of file")
+
     if args.keep:
-        print(f"  recordings kept: {wav_path}, {wav2_path}")
+        print(f"  recordings kept: {wav_path}, {wav2_path}, {wav3_path}")
 
     print(f"\naudio_test: {len(res.passes)} passed, {len(res.fails)} failed")
     for f in res.fails:

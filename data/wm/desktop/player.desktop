@@ -3,4 +3,4 @@ Name=Audio Player
 Exec=/bin/wm/apps/player
 Category=apps
 Icon=player
-Handles=.wav
+Handles=.wav .mp3

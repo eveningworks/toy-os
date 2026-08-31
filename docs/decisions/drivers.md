@@ -1538,6 +1538,57 @@ resuming and reopening -- and the consumed-chunk zeroing means both
 sound identical (silence). The stream then falls back to another
 registered device for the NEXT open rather than the machine going mute.
 
+## The MP3 decoder is ours, and only three of its tables came from anywhere else
+
+The codec table's second row is MPEG-1 Layer III, `userland/lib/usnd_mp3.c`.
+Writing one rather than vendoring minimp3 (CC0) is the same call
+`uimg_jpeg.c` made against libjpeg, for the same reason: a decoder is
+the part of this system most worth having written, it parses hostile
+input in ring 3 where a mistake kills one process, and an implementation
+nobody here understands is one nobody here can fix.
+
+**What could not be written is DATA, and it is separated from the logic
+for exactly that reason** (`usnd_mp3_tables.h`). Three tables have no
+generating formula -- the Huffman codes, the 512-tap synthesis window,
+and the scalefactor band edges. They are the standard's, recovered from
+public-domain sources (minimp3, CC0; pdmp3, Unlicense) and cross-checked
+against each other: all fifteen Huffman tables agree entry for entry
+between two implementations that share no code. Everything a decoder
+needs that IS derivable is derived at runtime instead of frozen here --
+the alias coefficients from `ci[]`, the intensity ratios from
+`tan(i*pi/12)`, the IMDCT windows from `sin()`. A table is what you
+write when there is no formula, not a place to cache one.
+
+**The Huffman tables carry their own proof.** Every one must be a
+complete prefix code: Kraft's sum exactly 1 over exactly `dim*dim`
+pairs. `usnd_mp3_selftest()` checks it in integer arithmetic, needs no
+audio, and runs in both the guest test and the host harness. That check
+earned its place before it ever shipped -- an early hand-written table 7
+failed it, which is how the transcription approach was abandoned in
+favour of recovering the data.
+
+*Floating point.* The filterbank is float, which is available in ring 3
+and nowhere else here (`kernel/arch/x86_64/fpu.c` enables SSE with an
+eager per-process FXSAVE; the kernel is `-mno-sse`). `usnd_wav.c` used
+to say this project had no floating point in either ring; that was
+already wrong when it was written and is corrected.
+
+*What it refuses, and why refusing is the honest answer.* Layer I/II,
+MPEG-2/2.5, free-format and intensity stereo are `-ENOTSUP` -- a good
+file this build will not play, which is the distinction `usnd.h`'s
+three-way errno split exists for and the same call the JPEG decoder
+makes on a progressive image. Intensity stereo is refused rather than
+implemented because nothing available encodes it, and shipping an
+untested path that silently produces wrong audio is worse than a
+refusal that names itself.
+
+*Seeking is approximate and says so.* A Layer III frame's main data does
+not start in that frame -- `main_data_begin` points backwards up to 511
+bytes into a bit reservoir -- so a frame cannot be decoded in isolation
+and a seek cannot land exactly without an index. It jumps by the average
+frame size and lets the reservoir refill, which is what every player does
+with a file that has no seek table.
+
 ## usnd: audio files are decoded and mixed in ring 3, behind a sink
 
 The kernel's contract stops at "one exclusive stream of 48 kHz stereo

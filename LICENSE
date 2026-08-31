@@ -103,6 +103,26 @@ directory.
 
 Third-party data
 
+userland/lib/usnd_mp3_tables.h holds three tables defined by ISO/IEC
+11172-3 for MPEG-1 Audio Layer III: the Huffman codeword tables, the
+512-tap polyphase synthesis window, and the scalefactor band edges.
+None of them has a generating formula, so they were taken rather than
+written. They were recovered from two public-domain implementations --
+minimp3 (https://github.com/lieff/minimp3, CC0 1.0 Universal) and PDMP3
+(https://github.com/technosaurus/PDMP3, the Unlicense) -- and
+cross-checked against each other: all fifteen Huffman tables agree
+entry for entry between the two, and each is independently verified to
+be a complete prefix code.
+
+NOTHING IS LEGALLY OWED FOR THIS. CC0 and the Unlicense are public
+domain dedications: no attribution, no notice, no share-alike, and the
+result is simply MIT like the rest of this repository. It is recorded
+here anyway, because the point of this file is that a reader can learn
+where material in the tree came from -- which is the same reason
+tools/check_licenses.py exists. The decoder itself
+(userland/lib/usnd_mp3.c) is original work under the MIT License above;
+what was taken is the standard's data, not anyone's code.
+
 seed/sync/usr/share/hwdata/pci.ids (seeded onto the disk image as
 /usr/share/hwdata/pci.ids, and read by /bin/lspci) is a verbatim copy
 of the PCI ID Database maintained by the PCI ID Project at

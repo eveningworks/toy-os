@@ -1128,6 +1128,45 @@ window without going through it will find its layout polls timing out.
   real photograph; `--tolerance` tightens the bar. Not in any gate: it
   needs Pillow, and `/tests/uimg_test` is the version that runs in the
   guest.
+- **`usnd_hostcheck.py`** -- the same `userland/lib/usnd_mp3.c`, compiled
+  with the host gcc and run against eight lame-encoded files (CBR and
+  VBR, mono/stereo/joint stereo, 32 to 320 kbps), every sample compared
+  against ffmpeg's decode. Same split as `uimg_hostcheck.py` and for the
+  same reason: a guest test carries the vectors somebody committed, and
+  a decoder's bugs live in the combinations. **The source it encodes
+  carries deliberate clicks**, because a transient is what makes an
+  encoder emit SHORT BLOCKS -- three IMDCTs, subblock gains and the
+  reorder, which a tone-only fixture leaves entirely untested.
+
+  Two things it taught, both about the harness rather than the decoder.
+  **The tolerance was 10 000x too loose**: it was set to 0.02 by eye,
+  and `--positive-control` then showed a deliberately broken decoder
+  passing two of eight checks under it. Measured agreement is ~1.6e-6
+  (one LSB in 32768, which is all ISO/IEC 11172-4 requires -- a
+  compliant decoder is defined by error bound, not bit-equality), so the
+  default is 1e-3. And **the lag is not always a whole frame**: a file
+  with a LAME/Xing tag makes ffmpeg drop the encoder delay, 1105 samples
+  rather than a multiple of 1152, so a frame-stepped alignment reported
+  the shipped song as badly broken. It searches every sample now.
+
+  `--positive-control` builds the decoder with two Huffman tables
+  swapped and REQUIRES every check to go red -- shaped to defeat the
+  structural check on purpose, since swapping two codewords of equal
+  length leaves the code complete and prefix-free. Not in any gate: it
+  needs `lame` and `ffmpeg`.
+- **`gen_music.py`** -- generates the MP3s that ship, into
+  `data/usr/share/music/` and `data/tests/`. Same call `gen_audio.py`
+  made for the WAVs: written rather than fetched, because a build-time
+  dependency on somebody else's media is the failure that shipped images
+  with no keyboard layouts for months. The output is tracked, so a clean
+  checkout has music, and it is ours, so `LICENSE` needs no entry for it.
+  **The encode is as much the point as the tune**: `first-boot.mp3` is
+  joint stereo VBR with an ID3v2 tag (mid/side frames, a Xing header,
+  and a few KiB to skip before the first sync word), while
+  `data/tests/sine1k.mp3` is mono CBR with no tag at all -- and it is a
+  steady 1 kHz tone because `audio_test.py` judges playback by counting
+  zero crossings in QEMU's own recording, which music cannot be judged
+  by. Needs `lame`; nothing in the build runs it.
 - **`gen_cursors.py`** -- generates the shipped cursor themes into
   `data/cursors/`, which the Makefile's `seed` target stages onto the
   image. **Into `data/`, NOT `seed/sync/`** -- that tree is gitignored
