@@ -96,6 +96,18 @@ struct blk_entry {
     char name[BLK_NAME_MAX];
 };
 
+// Forgets a device's NAME, so a re-read of a disk's partition table can
+// hand the same name to a different window. Returns 0 for a device that
+// is not there, or that is the ACTIVE device or the disk under it --
+// forgetting either would leave the running volume unnameable.
+//
+// THE CALLER OWNS THE HARDER QUESTION. This cannot see the mount table,
+// so it cannot know whether something is mounted from `dev`; releasing a
+// window a mount still points at would leave that mount holding a slot
+// somebody else can reuse. mount.c's rescan is the one caller and it
+// checks.
+int blk_untrack(const struct block_device *dev);
+
 // How many devices are registered, and the i'th of them. NULL past the
 // end, so a caller can walk without asking the count first.
 int blk_device_count(void);
@@ -243,6 +255,12 @@ int blk_part_register(const struct block_device *parent,
 const struct block_device *blk_part_create(const struct block_device *parent,
                                            uint32_t base_lba, uint32_t sectors,
                                            int index);
+
+// Releases a partition window: frees its slot and forgets its name, so
+// the next scan of that disk can hand the name to a different window.
+// Returns 0 for a device that is not a window, or that blk_untrack()
+// refused. Same caller obligation as blk_untrack().
+int blk_part_release(const struct block_device *dev);
 
 // If `dev` is a partition window, the device it sits on and where it
 // starts there; NULL if it is not one. Lets a caller holding any

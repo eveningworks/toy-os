@@ -81,6 +81,20 @@ int blk_track(const struct block_device *dev,
     return table_add(dev, parent ? parent : dev, base_lba) != NULL;
 }
 
+int blk_untrack(const struct block_device *dev) {
+    if (!dev || dev == g_dev || dev == g_whole) return 0;
+    for (int i = 0; i < g_count; i++) {
+        if (g_table[i].dev != dev) continue;
+        // Compacted rather than tombstoned, so blk_device_at() stays a
+        // plain walk and a name is never answered from a dead row. The
+        // entries are values, and nothing holds an index across a call.
+        for (int j = i; j < g_count - 1; j++) g_table[j] = g_table[j + 1];
+        g_count--;
+        return 1;
+    }
+    return 0;
+}
+
 int blk_device_count(void) { return g_count; }
 
 const struct blk_entry *blk_device_at(int i) {

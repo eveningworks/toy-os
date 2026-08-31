@@ -507,6 +507,36 @@ const struct block_device *mount_partition_device(int number) {
 // A disk with no table, or one whose entries are unusable, simply
 // contributes nothing. That is not an error: a blank drive is a
 // perfectly ordinary thing to have plugged in.
+// Is anything mounted from this device? A window a mount still points at
+// must not be released -- the mount would be left holding a slot
+// somebody else can reuse.
+static int device_is_mounted(const struct block_device *dev) {
+    for (int i = 0; i < MOUNT_MAX; i++)
+        if (g_mounts[i].used && g_mounts[i].dev == dev) return 1;
+    return 0;
+}
+
+// Drop this disk's existing windows, so the scan below NAMES the new
+// ones instead of appending them beside the old.
+//
+// WITHOUT THIS A RE-READ IS ADDITIVE AND THE OLD NAME WINS.
+// blk_part_create() reuses a slot only when the base AND the size match,
+// so a partition that CHANGED SIZE gets a second slot with the same name
+// -- and blk_device_by_name() answers with the first, which is the stale
+// one. `install` onto a disk that already had a table then formatted the
+// OLD window: a 119 GB partition with a 441 MB filesystem in it, on a
+// machine that booted perfectly and used 0.4% of its disk. Linux's
+// BLKRRPART deletes and re-adds partition devices for the same reason.
+static void forget_windows_of(const struct block_device *disk) {
+    // Downward, because releasing compacts the table under us.
+    for (int i = blk_device_count() - 1; i >= 0; i--) {
+        const struct blk_entry *e = blk_device_at(i);
+        if (!e || e->parent != disk || e->dev == disk) continue;
+        if (device_is_mounted(e->dev)) continue;
+        blk_part_release(e->dev);
+    }
+}
+
 int mount_rescan_disk(const struct block_device *disk) {
     if (!disk) return 0;
     // STATIC, not a stack local: struct partition_table is ~1.5 KB
@@ -516,6 +546,8 @@ int mount_rescan_disk(const struct block_device *disk) {
     static struct partition_table tbl;
     if (!partition_read_table_of(disk, &tbl)) return 0;
     if (tbl.kind == PART_TABLE_NONE || tbl.entry_count == 0) return 0;
+
+    forget_windows_of(disk);
 
     int named = 0;
     for (int n = 0; n < tbl.entry_count; n++) {

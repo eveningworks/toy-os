@@ -155,11 +155,16 @@ void mount_boot_auto(void);
 // filesystem in use, which is why sys_mkpart() only does it for a disk
 // nothing is mounted from.
 //
-// The windows are ADDED, never removed: `blk_part_create()` hands back
-// the same device for the same window, so re-running this after a table
-// change leaves the OLD windows named as well. Harmless for the
-// installer's case (a disk that had no table) and worth knowing before
-// repartitioning a disk twice in one boot.
+// IT REPLACES this disk's windows rather than adding to them: any that
+// nothing is mounted from are released first. Adding was the original
+// behaviour and it was wrong in a way that booted -- a partition that
+// changed SIZE got a second window with the same name, and the stale one
+// answered `blk_device_by_name()`, so `install` formatted the old window
+// and left a 119 GB partition holding a 441 MB filesystem.
+//
+// A window something IS mounted from is kept, and then the table has a
+// name that no longer describes what is on the disk -- which is why
+// sys_mkpart() only rescans a disk nothing is mounted from.
 int mount_rescan_disk(const struct block_device *disk);
 
 // Re-run the boot probe after a format wrote a new filesystem.

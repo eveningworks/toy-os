@@ -9,13 +9,24 @@ installed one. Without that second phase the first proves very little: a
 guest with the ISO still in the drive boots the ISO's kernel and can
 mount the target's root, which reads exactly like a successful install.
 
-BOTH MEDIA, because they are different code paths and the LIVE one is
-how a real machine gets toy-os:
+THREE RUNS, because they are different code paths:
 
-  disk  the system on a disk, installing onto another disk.
-  live  toy-os-live.iso, whose root is a RAM image with no /boot at all
-        -- which is why the install payload lives in /install rather than
-        being read out of /boot. Needs `make live-iso`.
+  disk   the system on a disk, installing onto another disk.
+  live   toy-os-live.iso, whose root is a RAM image with no /boot at all
+         -- which is why the install payload lives in /install rather
+         than being read out of /boot. Needs `make live-iso`.
+  grown  a live install onto a disk that ALREADY has a table describing a
+         SMALLER layout -- a small image dd'd onto a big disk. The
+         partition table is rewritten correctly and the windows the
+         previous table named are stale, and until the rescan learned to
+         RELEASE them, `mkfs` formatted the old one: a 119 GB partition
+         holding a 441 MB filesystem, on a machine that booted perfectly
+         and used 0.4% of its disk.
+
+THE FILESYSTEM MUST FILL ITS PARTITION, and that is checked on every run
+rather than only the grown one -- it is the assertion the bug above
+walked straight through, because everything else about that install was
+right.
 
 THE DISK ARRANGEMENT IS THE POINT for the first, and it is not the
 obvious one. The target has to be a disk the running system does NOT boot
@@ -34,7 +45,9 @@ every headless test here.
 """
 
 import argparse
+import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -50,7 +63,19 @@ VM = [sys.executable, os.path.join(HERE, "vm.py")]
 # room to spare, small enough that a sparse file costs nothing.
 TARGET_MB = 512
 
+# What a "grown" run expands the target to before reinstalling -- the
+# shape of a small image dd'd onto a big disk, which is how the
+# maintainer's laptop got there.
+GROWN_MB = 4096
+
 LIVE_ISO = "toy-os-live.iso"
+
+# TFS3 puts T3_BPG (32768) blocks of T3_BLOCK (4096) in a group, so a
+# group is 128 MiB. The mount line names the group count, which is the
+# only report of the FILESYSTEM's size in a boot log -- the other size
+# there is the PARTITION's, and the whole point of this check is that the
+# two can disagree.
+TFS3_GROUP_BYTES = 32768 * 4096
 
 
 class Checks:
@@ -71,13 +96,13 @@ class Checks:
 def vm(args, media, *cmds, timeout=600):
     """Run vm.py with this run's disks, returning its stdout."""
     base = VM + ["--instance", str(args.instance), "--disk", args.target]
-    if media == "live":
+    if media in ("live", "grown"):
         # The ISO is the system; the only drive is the blank target.
         base += ["--iso", LIVE_ISO, "--boot", "cd"]
     else:
         base += ["--virtio-disk", args.system]
     env = dict(os.environ)
-    if media == "live":
+    if media in ("live", "grown"):
         # iso_guard only knows how to judge toy-os.iso; the live one is
         # built by its own target and legitimately lags.
         env["TOYOS_ALLOW_STALE_ISO"] = "1"
@@ -134,6 +159,22 @@ def run_media(args, c, media):
     with open(args.target, "wb") as f:
         f.truncate(TARGET_MB * 1024 * 1024)
 
+    if media == "grown":
+        # Install once at the small size to get a REAL table, then grow
+        # the file -- which is what dd'ing a small image onto a big disk
+        # leaves behind: a disk reporting its full size whose GPT still
+        # describes the smaller layout.
+        print(f"install_test: {media} -- seeding a smaller install first")
+        if "ready" not in vm(args, "live", "start", timeout=400):
+            return add("the seeding guest came up", False)
+        seed_out = vm(args, "live", "--timeout", "400", "exec",
+                      "install --disk ata0 confirm", timeout=900)
+        vm(args, "live", "stop", timeout=120)
+        if not add("a smaller install lands first", "install: done." in seed_out):
+            return False
+        with open(args.target, "r+b") as f:
+            f.truncate(GROWN_MB * 1024 * 1024)
+
     print(f"install_test: {media} -- installing onto a blank disk")
     out = vm(args, media, "start", timeout=400)
     if "ready" not in out:
@@ -141,13 +182,18 @@ def run_media(args, c, media):
         return add("the guest came up", False)
     try:
         seen = vm(args, media, "exec", "lsblk")
-        if media == "live":
-            # Its root is a RAM image, so the blank IDE disk is the only
-            # thing on the machine that could be a target.
+        if media in ("live", "grown"):
+            # Its root is a RAM image, so the IDE disk is the only thing
+            # on the machine that could be a target.
             add("the live root is RAM and the target is a plain disk",
                 "ram0" in seen and "ata0" in seen)
             add("the payload rode along in /install",
                 "kernel.bin" in vm(args, media, "exec", "ls /install"))
+        if media == "grown":
+            # The fixture: the disk is big and its table still is not.
+            add("the target's old table describes a SMALLER layout",
+                "ata0p3" in seen and "445.9M" in seen,
+                "stale p3 named before the install")
         else:
             add("the blank target is a disk the system did not boot from",
                 "ata0" in seen and "virtio0p3" in seen)
@@ -191,11 +237,29 @@ def run_media(args, c, media):
     # size, so a machine that came up on the wrong volume says so in a
     # number. It also proves the 4.7 MB kernel round-tripped through the
     # host writer's double-indirect map -- GRUB executed it.
-    want = TARGET_MB * 1024 * 1024 // 512 - 135168 - 33   # GPT keeps the last 33
+    size_mb = GROWN_MB if media == "grown" else TARGET_MB
+    want = size_mb * 1024 * 1024 // 512 - 135168 - 33   # GPT keeps the last 33
     add("its root partition is the target's size, not the source's",
         f"{want} sectors" in boot, f"{want} sectors")
     add("/boot is the ESP this install wrote",
         "fat32 mounted at /boot on ata0p2" in boot)
+
+    # THE FILESYSTEM FILLS ITS PARTITION. Two different numbers in the
+    # boot log: the partition's sectors, and TFS3's group count -- and a
+    # stale partition window makes them disagree while everything else
+    # still looks right.
+    part = re.search(r"mounting tfs3 from partition 3 \(LBA \d+, (\d+) sectors\)", boot)
+    groups = re.search(r"tfs3: mounted \(v\d+, (\d+) groups", boot)
+    if part and groups:
+        want_groups = math.ceil(int(part.group(1)) * 512 / TFS3_GROUP_BYTES)
+        got = int(groups.group(1))
+        # Within one: the metadata a format reserves can cost the last
+        # group, and that is not what this is looking for.
+        add("the filesystem fills its partition",
+            got >= want_groups - 1,
+            f"{got} groups, partition wants ~{want_groups}")
+    else:
+        add("the filesystem fills its partition", False, "no mount line in the log")
     add("init reaches its target and the desktop starts",
         "init: target" in boot and "toywm" in boot)
     if not all(ok for _, ok, _ in c.rows[-5:]):
@@ -208,8 +272,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--instance", default="auto")
-    ap.add_argument("--media", choices=("disk", "live", "both"), default="both",
-                    help="which medium to install FROM (default both)")
+    ap.add_argument("--media", choices=("disk", "live", "grown", "all"), default="all",
+                    help="which run to make (default all three)")
     ap.add_argument("--keep", action="store_true",
                     help="leave the images behind for inspection")
     ap.add_argument("--scratch", default="/tmp/toyos-install-test")
@@ -220,8 +284,8 @@ def main():
                          "been seen to fail.")
     args = ap.parse_args()
 
-    media = ("disk", "live") if args.media == "both" else (args.media,)
-    if "live" in media and not os.path.exists(os.path.join(ROOT, LIVE_ISO)):
+    media = ("disk", "live", "grown") if args.media == "all" else (args.media,)
+    if ("live" in media or "grown" in media) and not os.path.exists(os.path.join(ROOT, LIVE_ISO)):
         print(f"install_test: no {LIVE_ISO} -- run `make live-iso` "
               "(or pass --media disk)")
         return 1

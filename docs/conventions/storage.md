@@ -551,8 +551,17 @@ Two things follow, both of them Linux's rules:
   making the caller reboot. This is what lets one program partition,
   format and mount a target.
 
-The rescan ADDS windows and never removes one, so repartitioning the
-same disk twice in a boot leaves the old windows named as well.
+**THE RESCAN REPLACES A DISK'S WINDOWS, and adding was wrong in a way
+that booted.** `blk_part_create()` reuses a slot only when the base AND
+the size match, so a partition that CHANGED SIZE got a second window with
+the same name -- and `blk_device_by_name()` answers with the first, the
+stale one. `install` onto a disk that already had a table therefore
+formatted the OLD window: a 119 GB partition holding a 441 MB filesystem,
+on a machine that booted perfectly and used 0.4% of its disk. Found on
+real hardware, not in QEMU, because every test reinstalled onto a disk
+whose existing layout already matched the new one. `mount_rescan_disk()`
+releases the unmounted windows first now -- Linux's BLKRRPART deletes and
+re-adds partition devices for the same reason.
 
 ## WRITING A TABLE IS A SYSCALL THAT TAKES A TABLE, NOT A SECTOR
 

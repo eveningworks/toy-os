@@ -2133,6 +2133,19 @@ truncated at 256 entries with no way to page, so copying GRUB's
 305-file module directory came back short; `SYS_LISTDIR_AT` is the
 offset the ABI comment had already named as the fix.
 
+**A fourth, and it needed real hardware.** The partition re-read after
+`mkpart` ADDED windows rather than replacing them, which is invisible
+when the old and new layouts match -- and every test reinstalled onto a
+disk whose layout already did. A 512 MB image `dd`'d onto a 119 GB disk
+does not: the old `p3` was 445.9 MB, the new one 119.1 GB, so the re-read
+made a SECOND window with the same name and `blk_device_by_name()`
+answered with the stale first. The install wrote a correct GPT, a correct
+bootloader and a correct ESP, and formatted the wrong window -- a machine
+that boots fine on 0.4% of its disk. **The lesson is about the fixture,
+not the code:** the reinstall test used a copy of `disk.img`, whose
+partition was already the size the new table would give it, so the one
+thing that could differ never did.
+
 **And a third, found by `/install` itself.** `tools/tfs3_writer.py` --
 the host-side seeding tool, a SECOND implementation of TFS3's on-disk
 format -- wrote direct + single-indirect only, ~4.05 MB, with its own

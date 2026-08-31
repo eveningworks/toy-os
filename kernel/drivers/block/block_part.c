@@ -131,6 +131,19 @@ static const struct {
     PART_OPS(4), PART_OPS(5), PART_OPS(6), PART_OPS(7),
 };
 
+int blk_part_release(const struct block_device *dev) {
+    for (int i = 0; i < PART_SLOTS; i++) {
+        if (!g_slots[i].used || &g_slots[i].dev != dev) continue;
+        if (!blk_untrack(dev)) return 0;   // in use, or not named
+        g_slots[i].used = 0;
+        g_slots[i].parent = NULL;
+        g_slots[i].base = g_slots[i].sectors = 0;
+        g_slots[i].name[0] = '\0';
+        return 1;
+    }
+    return 0;
+}
+
 const struct block_device *blk_part_create(const struct block_device *parent,
                                            uint32_t base_lba, uint32_t sectors,
                                            int index) {
