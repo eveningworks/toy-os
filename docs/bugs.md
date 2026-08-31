@@ -57,6 +57,8 @@ it has exonerated one this session and convicted another.
 
 ## Seen once, cause never established
 
+- [ ] `tools/poweroff_test.py` reported 18/20 once, on the first run after the GPE mask/clear/restore change, and did not reproduce in 3 runs immediately after on the same build. WHICH TWO CHECKS FAILED WAS NOT CAPTURED -- the run was grepped down to its summary line, which is the mistake to avoid repeating (`tee` the whole output when a session is doing many runs)
+
 - [ ] `stress 200` failed with "couldn't create test file" on the first command after a boot that had just replayed a journal transaction, then the identical command passed moments later -- virtio-blk, KVM
 
 - [ ] A GUI client read a session-font glyph cell as entirely BLANK once, after many font-face switches in one long-lived VM -- Font Demo reported `session-descender g regular -1` (its "no ink at all" value) for `liberation-sans` while the kernel had logged that atlas building 101/101 glyphs. Did not reproduce: 6 consecutive face switches on a fresh boot, and a clean boot on the same face, were all correct. The session had also been changing font SIZE, so a refused `font_face_build()` (the atlas cache is bounded at 16 entries / 4 MiB and REFUSES rather than evicting) is a plausible mechanism and is NOT established -- the refusal is logged, and that log was not captured before the VM was destroyed

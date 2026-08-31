@@ -350,17 +350,31 @@ static int gpes_left_alone(void) {
     return 1;
 }
 
-// EVERY GENERAL PURPOSE EVENT, DISABLED AND CLEARED. A GPE block is
-// [STS][EN] like PM1's, each half GPEx_BLK_LEN/2 bytes; the enables go
-// to 0 so nothing may wake us, then the statuses are write-1-to-cleared
-// so nothing already pending does. Linux's acpi_hw_disable_all_gpes()
-// runs before every sleep for exactly this reason, and on a laptop the
-// candidates are the lid switch, the embedded controller and USB.
+// EVERY GENERAL PURPOSE EVENT, CLEARED -- AND THE ENABLES PUT BACK. A
+// GPE block is [STS][EN] like PM1's, each half GPEx_BLK_LEN/2 bytes.
+// What must not survive into S5 is a PENDING status: on a laptop the
+// candidates are the lid switch, the embedded controller and USB, and
+// one of them latched is a machine that goes down and comes straight
+// back up. Each byte is masked, cleared and UNMASKED in turn, so the
+// window in which an event could re-latch unseen is one byte wide.
+//
+// THE RESTORE IS THE HALF THAT IS EASY TO MISS. Linux disables every
+// GPE, clears the statuses, then re-enables the WAKE-CAPABLE ones --
+// which it knows from each device's `_PRW` object. There is no AML
+// interpreter here to evaluate one, so this puts back what the firmware
+// had enabled: a superset of the wake set, and the alternative is
+// leaving the POWER BUTTON's own GPE masked. Measured on the machine
+// this was written for: masking everything shut it down and then took
+// TWO presses of the power button to start it again.
 static void gpe_block_off(uint32_t base, uint8_t len) {
     if (!base || len < 2) return;
     uint8_t half = (uint8_t)(len / 2);
-    for (uint8_t i = 0; i < half; i++) outb((uint16_t)(base + half + i), 0x00);
-    for (uint8_t i = 0; i < half; i++) outb((uint16_t)(base + i), 0xFF);
+    for (uint8_t i = 0; i < half; i++) {
+        uint8_t en = inb((uint16_t)(base + half + i));
+        outb((uint16_t)(base + half + i), 0x00);   // mask these eight
+        outb((uint16_t)(base + i), 0xFF);          // clear them, write-1-to-clear
+        outb((uint16_t)(base + half + i), en);     // and back: a wake source stays one
+    }
 }
 
 // Preserves everything in PM1_CNT that is not the sleep request -- a

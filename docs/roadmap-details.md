@@ -3829,20 +3829,27 @@ was the reported repro. Kept because the shape is worth remembering.
 **The symptom.** Selecting Shutdown rebooted the laptop, repeatedly.
 Linux Mint shut the same machine down, so the hardware reached S5 fine.
 
-**Two defects, fixed together, and which one actually bit is not yet
-established** -- `nogpe` is the one-boot A/B that answers it. Neither was
-reachable by any test here, because a QEMU guest has no pending wake
-event to come back up on:
+**Two defects were fixed together, and the GPE one is what bit** --
+measured with `nogpe`, which skips the GPE disable and keeps the
+`PM1_STS` clear: with it the machine reboots, without it the machine
+stops. Neither defect was reachable by any test here, because a QEMU
+guest has no pending wake event to come back up on:
 
 1. Nothing cleared `PM1_STS` before the `SLP_EN` write --
    `PM1a_EVT_BLK` was never parsed, only `PM1a_CNT_BLK`.
-2. Nothing disabled the GPE blocks, which were never parsed either. The
+2. Nothing cleared the GPE blocks, which were never parsed either. The
    laptop's `GPE0_BLK` is 32 bytes: **128 general purpose events**, among
-   them its lid, its embedded controller and USB.
+   them its lid, its embedded controller and USB. **The enables must be
+   put BACK after the clear** -- the first version masked them all and
+   left them masked, and the machine then took two presses of the power
+   button to start again, because one of those events IS the power
+   button.
 
 Either one leaves the machine entering S5 with a wake pending, which is
 a machine that comes straight back up. Linux clears both in
-`acpi_hw_legacy_sleep()` / `acpi_hw_disable_all_gpes()`.
+`acpi_hw_legacy_sleep()` / `acpi_hw_disable_all_gpes()`. **The second is
+the one this machine needed**; the first is kept because the spec
+requires it and it costs two `outw`s. See `docs/decisions.md`.
 
 **What the machine reported**, with `acpidebug` on the GRUB line:
 `S5 type 7 to PM1a 0x1804`, `ACPI mode ON` (so the SMI handover at port

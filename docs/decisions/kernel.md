@@ -5592,6 +5592,65 @@ that pings a freshly booted guest has to wait for it -- `tools/net_test.py`
 polls, and a phase that did not was failing as `no such device`, which
 looks nothing like what it is.
 
+## S5 is not one write: the wake sources have to be turned off first
+
+**Measured on hardware, 2026-08-31.** An ASUS notebook running the live
+image rebooted instead of powering off, every time, and Linux Mint shut
+the same machine down. Two things were missing, both of which Linux does
+before every sleep and neither of which any test here can reach -- a
+QEMU guest has no pending wake event to come back up on:
+
+- `PM1_STS` was never cleared. `PM1a_EVT_BLK` was not even parsed, only
+  `PM1a_CNT_BLK`; the wake-status bits live in the former.
+- The GPE blocks were never parsed either, so nothing disabled them.
+
+**Which one bit is known, because it was measured rather than reasoned
+about.** The `nogpe` boot flag skips the GPE disable and keeps the
+`PM1_STS` clear; with it the machine reboots, without it the machine
+stops. **The GPE disable is the fix.** That laptop's `GPE0_BLK` is 32
+bytes -- 128 general purpose events, among them its lid, its embedded
+controller and USB -- and one of them was armed and pending. Clearing
+`PM1_STS` alone was NOT sufficient. Whether it is needed at all was not
+tested and is kept regardless: the spec requires it, Linux does it, and
+the cost is two `outw`s.
+
+**AND THE ENABLES HAVE TO GO BACK, which the first version got wrong.**
+Masking every GPE and leaving it masked shut the machine down and then
+took **two presses of the power button** to start it again -- the second
+symptom of one mistake, reported by the same person on the same machine.
+Linux disables every GPE, clears the statuses, and then re-enables the
+WAKE-CAPABLE ones, which it knows from each device's `_PRW` object.
+There is no AML interpreter here to evaluate one, so what goes back is
+what the firmware had enabled: a superset of the wake set, and the
+alternative is leaving the power button's own GPE masked. The residual
+risk is stated rather than hidden -- a GPE that is not wake-capable
+stays enabled here where Linux would have left it off, so if immediate
+wake ever returns, the next step is a `_PRW`-derived wake set, which
+needs AML this kernel does not have.
+
+**Why a flag rather than a bisect.** Both fixes landed together, so a
+machine that stops is consistent with either, and the machine in
+question is not one any harness here can drive. `nogpe` turns the
+attribution into one boot -- the argument `nopat`, `notsc` and
+`novirtio` already make, and the reason those exist.
+
+**And why `acpidebug` exists at all: the failure destroys its own
+evidence.** A machine that reboots takes the log with it, a live image
+has no disk to keep one on, and the console is gone after the reset. So
+the flag prints the plan on screen and pauses ten seconds. Its limit is
+worth knowing: shutting down from the DESKTOP leaves the compositor
+owning the screen, so the text is invisible and only the pause is
+observable -- reading it needs a shutdown from the text target.
+
+**The theory this disproved.** `acpi` reported `ACPI mode: no` on that
+machine, which made the firmware handing over in legacy mode look like
+the cause: writing `SLP_EN` to `PM1a_CNT` outside ACPI mode is trapped
+to an SMI on many chipsets, and what the handler does is its own
+business. `acpidebug` printed `ACPI mode ON` -- the SMI handover at port
+0xb2 works, and `acpi` says `no` at boot only because
+`enable_acpi_mode()` does not run until the poweroff attempt. A cheap
+check retired a plausible mechanism that would have cost a day.
+
 ## ACPI stops at the tables, and `_S5_` is the one deliberate exception
 
 `kernel/acpi/` finds the RSDP, walks the RSDT or XSDT, and decodes the

@@ -2170,7 +2170,21 @@ firmware never named -- guessing at hardware, which nothing else here
 is allowed to do. A machine whose own tables named a path and did not
 stop is HALTED now.
 
-**CLEAR THE WAKE-STATUS BITS BEFORE THE SLEEP WRITE.** `PM1_STS` is the
+**TURN THE WAKE SOURCES OFF BEFORE THE SLEEP WRITE -- BOTH KINDS.**
+Measured on hardware: a notebook rebooted instead of powering off, and
+what fixed it was clearing the **GPE blocks** (`gpe_block_off()`). That
+machine's `GPE0_BLK` is 32 bytes -- 128 events, among them its lid, its
+embedded controller and USB. The `nogpe` boot flag is the one-boot A/B
+that established it; `docs/decisions.md` has the measurement.
+
+**THE ENABLES GO BACK AFTERWARDS.** Each byte is masked, its statuses
+write-1-to-cleared, and the enable byte RESTORED -- because Linux
+re-enables the wake-capable GPEs after `acpi_hw_disable_all_gpes()`,
+from a `_PRW` object no AML interpreter here can evaluate, and leaving
+everything masked masks the POWER BUTTON's own GPE. Measured: the
+machine then shuts down and takes TWO presses to start again.
+
+**AND CLEAR THE WAKE-STATUS BITS TOO.** `PM1_STS` is the
 FIRST HALF of the PM1 EVENT block (`PM1a_EVT_BLK`, a different FADT
 field from `PM1a_CNT_BLK`) and its bits are write-1-to-clear.
 `pm1_clear_status()` writes 0xFFFF to it, and the hardware-reduced path
@@ -2178,8 +2192,10 @@ clears `WAK_STS` in `SLEEP_STATUS_REG` the same way. Skipping it does
 not fail visibly: the machine enters S5 with a wake already pending --
 the power-button press that asked for the shutdown, among others -- and
 comes straight back up, which reads as **"it restarts instead of
-shutting down, forever"**. Linux clears it in `acpi_hw_legacy_sleep()`.
-**No test here can catch this**: a guest has no pending wake event, so
+shutting down, forever"**. Linux clears it in `acpi_hw_legacy_sleep()`. On the machine above
+this alone was NOT sufficient, and it is kept anyway: the spec requires
+it and it costs two `outw`s.
+**No test here can catch either of these**: a guest has no pending wake event, so
 the clear changes nothing in QEMU. What `poweroff_test.py` can assert,
 and does, is that the EVENT block was parsed and written.
 
