@@ -47,6 +47,7 @@
 // an adapter that transmits perfectly while appearing to be on a dead
 // network. Linux's cdc_ether sends it at open for the same reason.
 #define REQ_SET_ETH_FILTER   0x43
+#define ETH_FILTER_PROMISCUOUS 0x01
 #define ETH_FILTER_DIRECTED  0x04
 #define ETH_FILTER_BROADCAST 0x08
 #define ETH_FILTER_MULTICAST 0x10
@@ -361,11 +362,14 @@ int usb_net_bind(struct usb_device_info *info, const uint8_t *cfg,
     // TOLD WHAT TO PASS UP, before anything is posted to receive it.
     // A failure here is logged and not fatal: some adapters manage
     // without, and an interface that transmits is still worth having.
-    if (set_packet_filter(info->slot, e.ctrl_ifnum,
-                          ETH_FILTER_DIRECTED | ETH_FILTER_BROADCAST |
-                          ETH_FILTER_MULTICAST) < 0)
-        klog_printf("usb-net: slot %u: the packet filter was refused -- "
-                    "this adapter may receive nothing\n", info->slot);
+    // PROMISCUOUS included while the receive path is being proven: it is
+    // the difference between "the device is filtering us out" and "the
+    // transfers are not completing", and those are the two candidates.
+    uint16_t want = ETH_FILTER_PROMISCUOUS | ETH_FILTER_DIRECTED |
+                    ETH_FILTER_BROADCAST | ETH_FILTER_MULTICAST;
+    int fr = set_packet_filter(info->slot, e.ctrl_ifnum, want);
+    klog_printf("usb-net: slot %u: packet filter 0x%x on if %u -> %d\n",
+                info->slot, want, e.ctrl_ifnum, fr);
 
     d->in_use = 1;                 // published before a completion can arrive
     d->dev.driver = "cdc-ecm";

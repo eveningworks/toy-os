@@ -1764,8 +1764,27 @@ void usb_dump(void) {
         if (!e->in_use) continue;
         uint32_t rmask = 0;
         for (int b = 0; b < EP_DEPTH; b++) if (e->ready[b]) rmask |= (1u << b);
-        klog_printf("usb: ep slot %u addr 0x%x next_take %u ready 0x%x enq %u cyc %u%s\n",
-                    e->slot, e->ep_addr, e->next_take, rmask,
+        // THE ENDPOINT'S OWN STATE, out of the DEVICE context the
+        // controller writes -- not our idea of it. The difference
+        // matters: a ring with TRBs on it and no completions is either
+        // an endpoint that is not Running or a device with nothing to
+        // send, and only this tells them apart.
+        const char *st = "?";
+        struct xhci_slot *sl = &g_slots[e->slot];
+        if (sl->out_ctx) {
+            volatile uint32_t *ep = ctx_at(sl->out_ctx, dci_of(e->ep_addr));
+            switch (ep[0] & 7u) {  // dispatch-ok: the five EP states
+                case 0: st = "disabled"; break;
+                case 1: st = "running";  break;
+                case 2: st = "halted";   break;
+                case 3: st = "stopped";  break;
+                case 4: st = "error";    break;
+                default: break;
+            }
+        }
+        klog_printf("usb: ep slot %u addr 0x%x %s next_take %u ready 0x%x "
+                    "enq %u cyc %u%s\n",
+                    e->slot, e->ep_addr, st, e->next_take, rmask,
                     e->ring.enqueue, e->ring.cycle,
                     e->halted ? " HALTED" : "");
     }

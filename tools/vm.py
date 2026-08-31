@@ -321,11 +321,20 @@ def cmd_start(args):
     # host's own driver to let go -- QEMU detaches it through libusb,
     # and the device stops working on the host until the guest exits.
     for i, spec in enumerate(host_devs):
+        # An optional @PORT pins which root port it lands on, and that is
+        # a DIAGNOSTIC rather than a preference: qemu-xhci's ports 1-4 are
+        # USB 3 and 5-8 are USB 2, so `@5` runs a SuperSpeed device at
+        # high speed instead -- which is how "is this a SuperSpeed
+        # problem?" gets answered in one boot.
+        spec, _, port = spec.partition("@")
         vid, _, pid = spec.partition(":")
         if not pid:
-            raise SystemExit(f"vm: --usb-host wants VID:PID, got {spec!r}")
-        cmd += ["-device", f"usb-host,id=usbhost{i},bus=xhci.0,"
-                           f"vendorid=0x{vid},productid=0x{pid}"]
+            raise SystemExit(f"vm: --usb-host wants VID:PID[@PORT], got {spec!r}")
+        dev = (f"usb-host,id=usbhost{i},bus=xhci.0,"
+               f"vendorid=0x{vid},productid=0x{pid}")
+        if port:
+            dev += f",port={port}"
+        cmd += ["-device", dev]
 
     # A sound card whose output QEMU RECORDS to a host wav file -- the
     # oracle tools/audio_test.py and tools/usb_audio_test.py measure a
