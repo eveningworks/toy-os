@@ -363,6 +363,7 @@ help:
 	@echo "  iso            Build toy-os.iso, a bootable GRUB ISO (implies all)"
 	@echo "  run            Boot toy-os in QEMU with an SDL window (the DISK, once"
 	@echo "                 it carries GRUB; BOOT=cd for the ISO -- implies iso)"
+	@echo "  usb-image      Build toyos-usb.img -- compact, self-booting, for dd to a USB stick"
 	@echo "  live-iso       Build toy-os-live.iso -- carries a filesystem image, boots with NO disk"
 	@echo "  demo-iso       Build toy-os-demo.iso -- boots straight into a scripted tour"
 	@echo ""
@@ -423,7 +424,7 @@ help:
 	@echo "                 'target remote localhost:1234', then continue"
 	@echo "  test           Run the in-kernel test suite (ktest) and exit non-zero on failure"
 	@echo "  verify         Full pre-delivery check: clean build + iso + boot test + ktest"
-	@echo "  clean          Remove build outputs (build/, ELFs, toy-os.iso) -- leaves disk.img alone"
+	@echo "  clean          Remove build outputs (build/, ELFs, the ISOs and toyos-usb.img) -- leaves disk.img alone"
 	@echo "  clean-disk     Wipe disk.img -- the filesystem AND the bootloader on it;"
 	@echo "                 the next make iso rebuilds both. Use with care"
 	@echo "  version        Regenerate kernel/include/api/version.h (runs automatically as part of all/iso)"
@@ -1325,6 +1326,38 @@ iso: version $(KERNEL) $(USERLAND_ELVES) seed
 # leave a stale module behind in the ordinary one.
 LIVE_ISO = toy-os-live.iso
 
+# A COMPACT, SELF-BOOTING IMAGE, for writing to a USB stick.
+#
+# WHY NOT JUST dd disk.img. That image is 9 GB because it is a
+# development scratch disk and sparseness makes the size free -- but a
+# stick is written byte for byte, so dd'ing it means 9 GB over USB for
+# ~50 MB of content. This is the same thing at a size that writes in
+# seconds. USB_SIZE overrides it; the root filesystem takes whatever is
+# left after the 1 MiB BIOS boot partition and the 64 MiB ESP.
+#
+# BIOS (i386-pc) ONLY, like disk.img, because tools/install_grub.py
+# installs one loader -- so a machine booting this must have CSM/legacy
+# boot enabled. That is not a limitation of the stick; it is the same
+# one every `make run BOOT=disk` has, which is also why this path is the
+# most exercised one in the repo.
+USB_IMG  = toyos-usb.img
+USB_SIZE = 512M
+
+usb-image: version $(KERNEL) $(USERLAND_ELVES) seed
+	rm -f $(USB_IMG)
+	truncate -s $(USB_SIZE) $(USB_IMG)
+	python3 tools/seed_disk.py $(USB_IMG) $(SEED_DIR)
+	sed -e 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' -e 's|@KCMDLINE@|$(KCMDLINE)|' \
+	    grub.cfg > $(BUILD)/grub-usb.cfg
+	python3 tools/install_grub.py $(USB_IMG) --kernel $(KERNEL) \
+	    --grub-cfg $(BUILD)/grub-usb.cfg
+	@echo ""
+	@echo "  $(USB_IMG) is ready and boots itself (BIOS/CSM, not UEFI)."
+	@echo "  Find the stick with 'lsblk' and CHECK THE SIZE, then:"
+	@echo "      sudo dd if=$(USB_IMG) of=/dev/sdX bs=4M status=progress conv=fsync"
+	@echo "  /dev/sdX is the WHOLE DEVICE, not a partition (no digit)."
+	@echo ""
+
 live-iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG)
 	rm -rf iso-live
 	mkdir -p iso-live/boot/grub
@@ -1777,7 +1810,7 @@ clean:
 	# other build product. This used to name 21 $(FOO_ELF) variables by
 	# hand -- they built into the source tree next to their .c files and
 	# needed a .gitignore entry to stay out of the repo.
-	rm -rf $(BUILD) $(ISO) $(LIVE_ISO) $(DEMO_ISO) iso/boot/kernel.bin iso/boot/live.img iso-live iso-demo $(SEED_DIR)/sync
+	rm -rf $(BUILD) $(ISO) $(LIVE_ISO) $(DEMO_ISO) $(USB_IMG) iso/boot/kernel.bin iso/boot/live.img iso-live iso-demo $(SEED_DIR)/sync
 	# Deliberately NOT touching $(DISK_IMG) here -- see its comment above.
 	# Use `make clean-disk` to explicitly wipe the persistent filesystem.
 

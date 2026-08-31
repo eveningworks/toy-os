@@ -927,6 +927,7 @@ make verify # the full pre-delivery gate: clean build + iso + boot test + ktest
             # (same as tools/preflight.sh, which also summarises `git status`)
 make run    # boots in QEMU with an SDL window (the user's machine, not headless)
 make live-iso   # toy-os-live.iso -- carries a TFS3 image as a GRUB module
+make usb-image  # toyos-usb.img -- compact and self-booting, to dd to a USB stick
 make demo-iso   # toy-os-demo.iso -- boots straight into a scripted tour
 make debug  # boots frozen (-s -S) for real GDB debugging -- see below
 ```
