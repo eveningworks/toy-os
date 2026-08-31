@@ -21,7 +21,8 @@
 #include "serial.h"
 #include "klog.h"
 #include "display.h"  // lsdev names the active display driver
-#include "usb.h"      // lsdev names the USB controller; `usb` dumps its rings
+#include "usb.h"
+#include "aml.h"      // the ACPI namespace, for `aml`
 #include "lapic.h"    // lsdev reports the LAPIC and its MSI vectors
 #include "idt.h"      // idt_spurious_count()
 #include "sound.h"    // lsdev names the sound devices and which is active
@@ -50,6 +51,7 @@ static void dbg_cmd_help(void) {
     klog_write("  meminfo     - physical frame + kernel heap usage\r\n");
     klog_write("  lsdev       - enumerated PCI devices\r\n");
     klog_write("  usb         - xHCI registers, rings and root ports\r\n");
+    klog_write("  aml         - the ACPI namespace (declarations, not methods)\r\n");
     klog_write("  lsfs [path] - list a filesystem directory (default /)\r\n");
     klog_write("  ktest [suite] - run the in-kernel test suite\r\n");
     klog_write("  sh <command>  - run any shell command, output back here\r\n");
@@ -357,6 +359,7 @@ static void dbg_dispatch(char *line) {
     else if (k_strcmp(line, "lsdev") == 0) dbg_cmd_lsdev();
     else if (k_strcmp(line, "lsfs") == 0) dbg_cmd_lsfs(arg);
     else if (k_strcmp(line, "usb") == 0) usb_dump();
+    else if (k_strcmp(line, "aml") == 0) aml_dump();
     else if (k_strcmp(line, "ktest") == 0) dbg_cmd_ktest(arg);
     else if (k_strcmp(line, "sh") == 0) dbg_cmd_sh((char *)arg);
     else {

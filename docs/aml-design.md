@@ -1,9 +1,11 @@
 # AML: a namespace this kernel can walk, staged
 
-**Status: STAGE 0 IS BUILT (2026-08-31); STAGES 1-3 ARE DESIGNED, NOT
-BUILT.** `acpi --dump` and `tools/acpi_dump.py` exist and a real table
-can be captured and checksum-verified. No AML is parsed by anything yet
-beyond the `_S5_` scan that predates this document.
+**Status: STAGES 0 AND 1 ARE BUILT (2026-08-31); STAGES 2-3 ARE
+DESIGNED, NOT BUILT.** A table can be captured and checksum-verified
+(`acpi --dump`, `tools/acpi_dump.py`), and `kernel/acpi/aml.c` walks the
+DSDT and SSDTs into a namespace of declarations -- 336 nodes and 53
+devices on QEMU's DSDT, with nothing refused. Nothing is executed and no
+value is decoded yet.
 
 **This reverses a decision.** `docs/decisions.md` says ACPI here "stops
 at the tables" and "must not grow into" a subsystem, with the `_S5_`
@@ -62,7 +64,7 @@ unique and at the root. It is the right shape for exactly one object.
 
 Each stage ships and is testable on its own.
 
-### Stage 0 -- `acpi --dump <TABLE>`, and a fixture
+### Stage 0 -- `acpi --dump <TABLE>`, and a fixture  *(BUILT)*
 
 Hex-dump a named ACPI table from inside toy-os, the way `lsusb -D`
 dumps a USB configuration. Same argument, and it is the same argument
@@ -87,7 +89,7 @@ the GPE numbers it derived. QEMU's 8,605-byte DSDT is the development
 fixture for the WALK; the laptop is the oracle for the WAKE SET, and it
 answers in one line instead of 100 KB of hex.
 
-### Stage 1 -- the namespace walk, declarations only
+### Stage 1 -- the namespace walk, declarations only  *(BUILT)*
 
 Parse a table's AML term list into a tree. The grammar that must be
 understood:
@@ -99,9 +101,22 @@ understood:
   `DefThermalZone` (5B 85), `DefProcessor` (5B 83, deprecated but
   present on older firmware).
 - **`DefName` (08)**, which binds a name to a DataObject.
-- **Everything else**, which is SKIPPED BY ITS PkgLength -- Methods
-  included. This is the whole trick: a Method's body is opaque, and a
-  walk that does not execute does not need to understand it.
+- **`DefMethod` (14)**, whose PkgLength is what lets its body be skipped
+  entirely. That is the trick that keeps this a walk: a Method's body is
+  opaque, and a parser that does not execute need not understand it.
+- **The rest of what legally appears in a scope**, each of which needs
+  its own length rule. **This is where the first draft of this document
+  was WRONG**: it said "skipped by its PkgLength", and several of these
+  do not have one. `DefOpRegion` (5B 80) is `NameString`, a space byte,
+  then two TermArgs; `DefMutex` (5B 01), `DefEvent` (5B 02),
+  `DefExternal` (15) and `DefAlias` (06) are a NameString plus a fixed
+  trailer. Only the Field forms (5B 81/86/87) carry a PkgLength.
+  Measured on QEMU's own DSDT, which has seven OperationRegions in its
+  root scope, so this is not a corner case -- it is the second thing the
+  parser meets.
+- **Anything else: REFUSE.** Stop the walk and count it, rather than
+  guess a length. The result is a partial namespace, which is a
+  different answer from a wrong one.
 
 The output is a tree of `(parent, 4-char segment, kind, offset)`. No
 values are decoded at this stage beyond recording where the object's
