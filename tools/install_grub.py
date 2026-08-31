@@ -348,6 +348,56 @@ def has_boot_partition(disk):
     return bios is not None and esp is not None
 
 
+# THE PAYLOAD toy-os NEEDS TO INSTALL ITSELF, staged into the root
+# filesystem as ordinary files.
+#
+# WHY IT IS NOT `/boot`. On a disk boot, `/boot` is the ESP and already
+# holds the kernel and grub.cfg -- but a LIVE boot has no ESP at all
+# (GRUB loads the kernel and a filesystem image into RAM, and after that
+# nothing drives the medium; there is no USB mass-storage driver here).
+# Installing from live media is the path a real machine uses, so the
+# payload travels in the root, where every toy-os filesystem carries it
+# and `/bin/install` reads ONE path on every medium.
+#
+# WHAT IS NOT IN IT: GRUB's module directory, 305 files and ~4 MB.
+# `core.img` already contains every module grub.cfg's `insmod` asks for,
+# so a target installed without them boots; what it cannot do is have a
+# HOST `grub-install` run against it later without re-copying them.
+#
+# THE PREFIX IS FIXED HERE, and it is what makes the layout in
+# `/bin/install` a constraint rather than a preference: core.img carries
+# `(hd0,gpt2)/boot/grub` baked in, so the ESP must be partition 2 on
+# whatever this ends up installed onto.
+PAYLOAD_PREFIX = "(hd0,gpt2)/boot/grub"
+
+
+def stage_payload(outdir, kernel, grub_cfg, verbose=True):
+    mkimage = _tool("grub-mkimage", "grub2-mkimage")
+    mods = module_dir()
+    if not mkimage or not mods:
+        # A checkout without GRUB's BIOS target still builds and still
+        # boots; what it cannot do is produce media that installs itself.
+        # Said rather than failed, the same call `install(optional=True)`
+        # makes one function down.
+        print("install_grub: no grub-mkimage or i386-pc modules -- "
+              f"{outdir} not staged, so this build cannot install itself")
+        return False
+
+    os.makedirs(outdir, exist_ok=True)
+    core = os.path.join(outdir, "core.img")
+    _run([mkimage, "-O", "i386-pc", "-d", mods, "-p", PAYLOAD_PREFIX,
+          "-o", core, *CORE_MODULES])
+    shutil.copyfile(os.path.join(mods, "boot.img"), os.path.join(outdir, "boot.img"))
+    shutil.copyfile(kernel, os.path.join(outdir, "kernel.bin"))
+    shutil.copyfile(grub_cfg, os.path.join(outdir, "grub.cfg"))
+    if verbose:
+        total = sum(os.path.getsize(os.path.join(outdir, f))
+                    for f in os.listdir(outdir))
+        print(f"install_grub: staged the install payload into {outdir} "
+              f"({total // 1024} KiB, prefix {PAYLOAD_PREFIX})")
+    return True
+
+
 def install(disk, kernel, grub_cfg, verbose=True, optional=False):
     mkimage = _tool("grub-mkimage", "grub2-mkimage")
     if not mkimage:
@@ -468,9 +518,14 @@ def _is_gpt(disk):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("disk")
+    ap.add_argument("disk", nargs="?",
+                    help="the image to install onto; omitted with --stage-payload")
     ap.add_argument("--kernel", help="the kernel to install at /boot/kernel.bin")
     ap.add_argument("--grub-cfg", help="the grub.cfg to install at /boot/grub/grub.cfg")
+    ap.add_argument("--stage-payload", metavar="DIR",
+                    help="write the four files /bin/install needs (kernel.bin, "
+                         "grub.cfg, boot.img, core.img) into DIR instead of "
+                         "installing onto a disk")
     ap.add_argument("--check", action="store_true",
                     help="print whether this image is bootable, and exit non-zero if not")
     ap.add_argument("--optional", action="store_true",
@@ -479,6 +534,13 @@ def main():
                          "passes, so a pre-existing disk.img keeps working")
     ap.add_argument("-q", "--quiet", action="store_true")
     args = ap.parse_args()
+
+    if args.stage_payload:
+        if not args.kernel or not args.grub_cfg:
+            sys.exit("install_grub: --stage-payload needs --kernel and --grub-cfg")
+        stage_payload(args.stage_payload, args.kernel, args.grub_cfg,
+                      verbose=not args.quiet)
+        return
 
     if args.check:
         ok = is_bootable(args.disk)

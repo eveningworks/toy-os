@@ -31,6 +31,7 @@
 #include "partition_abi.h"
 #include "mount_abi.h"
 #include "query_abi.h"
+#include "errno.h"      // EEXIST -- an existing directory is not a failure
 #include "lib/cmd.h"
 #include "lib/ufileop.h"
 #include "lib/human.h"
@@ -47,13 +48,22 @@
 
 #define TARGET_ROOT "/mnt"
 #define TARGET_BOOT "/mnt/boot"
-#define GRUB_DIR    "/boot/boot/grub/i386-pc"
 
-// WHAT IS NOT COPIED. `/boot` is a mount point for the SOURCE's ESP and
-// is copied separately (into the target's, which is a different volume);
-// `/mnt` is where the target itself is mounted, so copying it would copy
-// the target into itself; `/tmp` is scratch by definition. Each is
-// recreated empty on the target, because a mount point has to exist.
+// THE PAYLOAD, and it is in the ROOT rather than in /boot on purpose.
+// A LIVE boot has no /boot at all -- GRUB loads the kernel and a
+// filesystem image into RAM, and nothing drives the medium afterwards
+// (there is no USB mass-storage driver) -- and installing from live
+// media is how a real machine gets toy-os. Every toy-os filesystem
+// carries this directory, so there is ONE path here rather than one per
+// boot kind. Staged by tools/install_grub.py --stage-payload.
+#define PAYLOAD "/install"
+
+// WHAT IS NOT COPIED. `/boot` is a mount point -- for the source's ESP on
+// a disk boot, and for nothing at all on a live one -- and the target's
+// is written from PAYLOAD instead; `/mnt` is where the target itself is
+// mounted, so copying it would copy the target into itself; `/tmp` is
+// scratch by definition. Each is recreated empty on the target, because
+// a mount point has to exist.
 static const char *const SKIP[] = { "boot", "mnt", "tmp" };
 
 // ~30 KB, and a ring-3 frame holds 2 KiB -- file scope, like every other
@@ -215,18 +225,53 @@ static int copy_system(void) {
     return ok;
 }
 
-// The ESP's contents: the kernel, grub.cfg and the modules, which on
-// this disk all live under one directory. Copied AFTER the target's ESP
-// is mounted, and separately from the root, because it is a different
-// volume on both sides.
+// The target's ESP: the kernel and grub.cfg, at the paths GRUB's own
+// prefix names. Written from PAYLOAD rather than copied from `/boot`,
+// which does not exist on a live boot.
+//
+// GRUB's MODULE DIRECTORY IS NOT COPIED. `core.img` already carries
+// every module grub.cfg's `insmod` asks for, so the target boots without
+// it; what that target cannot do is have a HOST `grub-install` run
+// against it later without re-copying them.
 static int copy_boot(void) {
-    struct sys_stat st;
-    if (sys_stat("/boot/boot", &st) < 0 || !st.is_dir) {
-        cmd_fail("install", "/boot/boot");
+    if (sys_mkdir(TARGET_BOOT "/boot") < 0 && sys_errno() != EEXIST) {
+        cmd_fail("install", TARGET_BOOT "/boot");
         return 0;
     }
-    printf("  /boot/boot\n");
-    return ufileop_copy("/boot/boot", TARGET_BOOT "/boot", &g_op, &COPY_POLICY) == UFILEOP_OK;
+    if (sys_mkdir(TARGET_BOOT "/boot/grub") < 0 && sys_errno() != EEXIST) {
+        cmd_fail("install", TARGET_BOOT "/boot/grub");
+        return 0;
+    }
+    static const char *const FILES[][2] = {
+        { PAYLOAD "/kernel.bin", TARGET_BOOT "/boot/kernel.bin" },
+        { PAYLOAD "/grub.cfg",   TARGET_BOOT "/boot/grub/grub.cfg" },
+    };
+    for (unsigned i = 0; i < sizeof FILES / sizeof FILES[0]; i++) {
+        printf("  %s\n", FILES[i][0]);
+        if (ufileop_copy(FILES[i][0], FILES[i][1], &g_op, &COPY_POLICY) != UFILEOP_OK)
+            return 0;
+    }
+    return 1;
+}
+
+// Is this filesystem one that can install itself? A build made without
+// GRUB's BIOS target stages no payload -- it boots perfectly and cannot
+// do this, which is worth saying before erasing a disk rather than after
+// the copy.
+static int payload_present(void) {
+    static const char *const NEED[] = {
+        PAYLOAD "/kernel.bin", PAYLOAD "/grub.cfg",
+        PAYLOAD "/boot.img",   PAYLOAD "/core.img",
+    };
+    struct sys_stat st;
+    for (unsigned i = 0; i < sizeof NEED / sizeof NEED[0]; i++) {
+        if (sys_stat(NEED[i], &st) < 0 || st.is_dir || st.size == 0) {
+            printf("install: %s is missing -- this system carries no install "
+                   "payload and cannot install itself.\n", NEED[i]);
+            return 0;
+        }
+    }
+    return 1;
 }
 
 static int write_bootloader(const char *disk) {
@@ -235,10 +280,10 @@ static int write_bootloader(const char *disk) {
     snprintf(req.device, sizeof req.device, "%s", disk);
 
     uint64_t boot_size = 0, core_size = 0;
-    void *boot = slurp(GRUB_DIR "/boot.img", &boot_size);
-    if (!boot) { cmd_fail("install", GRUB_DIR "/boot.img"); return 0; }
-    void *core = slurp(GRUB_DIR "/core.img", &core_size);
-    if (!core) { free(boot); cmd_fail("install", GRUB_DIR "/core.img"); return 0; }
+    void *boot = slurp(PAYLOAD "/boot.img", &boot_size);
+    if (!boot) { cmd_fail("install", PAYLOAD "/boot.img"); return 0; }
+    void *core = slurp(PAYLOAD "/core.img", &core_size);
+    if (!core) { free(boot); cmd_fail("install", PAYLOAD "/core.img"); return 0; }
 
     req.boot_img = (uint64_t)(uintptr_t)boot;
     req.boot_size = boot_size;
@@ -275,6 +320,8 @@ int main(int argc, char **argv) {
                "\"over myself\" that ends with a working machine.\n");
         return 1;
     }
+
+    if (!payload_present()) return 1;
 
     uint64_t sectors = disk_sectors(disk);
     if (!sectors) {
@@ -315,7 +362,7 @@ int main(int argc, char **argv) {
 
     step("copying the system");
     int ok = copy_system();
-    step("copying /boot");
+    step("writing the target's /boot");
     if (ok) ok = copy_boot();
 
     // UNMOUNT BEFORE THE BOOTLOADER, for two reasons. The ESP's

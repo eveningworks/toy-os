@@ -462,6 +462,16 @@ Four things:
   installer generate a fresh core image per target; toy-os has no
   `grub-mkimage`, so it reproduces the layout the image it copies
   expects.
+- **THE PAYLOAD IS `/install`, IN THE ROOT, NOT `/boot`.** `kernel.bin`,
+  `grub.cfg`, `boot.img`, `core.img` -- staged by `tools/install_grub.py
+  --stage-payload` into every toy-os filesystem. A LIVE boot has no
+  `/boot` at all (GRUB loads the kernel and a filesystem image into RAM
+  and nothing drives the medium afterwards -- there is no USB
+  mass-storage driver), and installing from live media is how a real
+  machine gets toy-os. One path on every medium beats one path per boot
+  kind, which is the shape that rots. GRUB's 305-file module directory
+  is NOT in it: `core.img` already carries every module `grub.cfg`
+  insmods.
 - **`SYS_INSTALL_BOOT` IS HANDED THE BYTES AND KNOWS NOTHING ABOUT
   GRUB.** It applies the two patches that depend on WHERE the images
   land -- the core image's LBA at 0x5c of the boot sector, and the block
@@ -477,10 +487,30 @@ Four things:
   is also the refusal the kernel makes for a disk in use, taken rather
   than talked past.
 
-`tools/install_test.py` boots the installed disk with NOTHING ELSE
-ATTACHED, because a guest with the ISO still in the drive boots the ISO's
-kernel and mounts the target's root, which reads exactly like a
-successful install.
+`tools/install_test.py` runs BOTH media and boots each installed disk
+with NOTHING ELSE ATTACHED, because a guest with the ISO still in the
+drive boots the ISO's kernel and mounts the target's root, which reads
+exactly like a successful install.
+
+## `tools/tfs3_writer.py` WRITES THE WHOLE BLOCK MAP NOW, AND THE CAP IT HAD WAS A SECOND IMPLEMENTATION DRIFTING
+
+TFS3 grows a file's block map through direct -> single -> double ->
+triple indirect automatically, and always has (`kernel/fs/tfs3.c`'s
+`block_of()` and `map_get_or_alloc_tables()`). The HOST seeding tool is
+a separate implementation of the same on-disk format, and it stopped at
+single-indirect -- ~4.05 MB -- with its own docstring calling that "a
+deliberate cap".
+
+It was, right up until something staged got big: `/install/kernel.bin` is
+~4.7 MB, so a live image could not carry the payload it installs from.
+**Adding one level would have moved the cliff to 4 GiB rather than
+removing it**, so all three are there now, behind one recursive
+walker/builder pair. The triple level is UNEXERCISED and says so where
+it is defined.
+
+**The general shape:** a second implementation of a format is only as
+complete as the biggest thing anyone has fed it, and nothing tells you
+which part is missing until something does.
 
 ## A DIRECTORY BIGGER THAN ONE LISTING NEEDS `SYS_LISTDIR_AT`
 

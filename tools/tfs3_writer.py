@@ -19,8 +19,10 @@ Commands:
   sync   <img> <seed-dir>          mirror a seed tree (once/ + sync/)
   trim   <img>                     punch holes through free blocks
 
-Write scope is direct + single-indirect blocks per file (12 + 1024
-blocks = ~4.05 MB), a deliberate cap -- see
+Write scope is the WHOLE block map -- direct, single, double and triple
+indirect, the levels kernel/fs/tfs3.c grows automatically. It stopped at
+single-indirect (~4.05 MB) until /install/kernel.bin met that ceiling;
+see
 docs/decisions.md for why; the seeding path never needs more.
 
 Bit order in bitmaps: bit i of a group's bitmap is byte[i >> 3],
@@ -109,7 +111,26 @@ TYPE_FILE = 0
 TYPE_DIR = 1
 TYPE_SYMLINK = 2
 
-MAX_WRITE_BLOCKS = 12 + BLOCK // 4  # direct + one single-indirect block
+PTRS_PER_BLOCK = BLOCK // 4        # 1024
+
+# THE WHOLE BLOCK MAP: 12 direct, then single, double and triple
+# indirect -- the levels kernel/fs/tfs3.c has always grown automatically
+# as a file gets bigger.
+#
+# This tool stopped at SINGLE for a long time, described in its own
+# docstring as "a deliberate cap". That was true right up until something
+# it staged got big: /install/kernel.bin is ~4.7 MB against a
+# single-indirect ceiling of ~4.05 MB, so a live image could not carry
+# the payload it installs from. Adding one level would have moved the
+# cliff to 4 GiB rather than removed it -- the same mistake with a longer
+# fuse -- so all three are here.
+#
+# THE TRIPLE LEVEL IS UNEXERCISED: it starts past 4 GiB and nothing this
+# tool stages is close. It shares one recursive walker with the other
+# two, so what is untested is the arithmetic that selects it, not the
+# table code underneath.
+INDIRECT_SPANS = [PTRS_PER_BLOCK ** d for d in (1, 2, 3)]
+MAX_WRITE_BLOCKS = 12 + sum(INDIRECT_SPANS)
 
 
 def fnv1a(data: bytes) -> int:
@@ -401,7 +422,7 @@ class Tfs3Image:
         self.inode_bit(ino, 0)
         self.bump_gdt(ino // self.sb["ipg"], dinodes=1)
 
-    # -- file block maps (direct + single indirect only, see docstring) --
+    # -- file block maps (the whole map: direct + all three indirects) --
 
     def file_blocks(self, node):
         """Every data block number of a file/dir, in order."""
@@ -409,15 +430,38 @@ class Tfs3Image:
         out = []
         for i in range(min(nblocks, 12)):
             out.append(node["ptrs"][i])
-        if nblocks > 12:
-            single = node["ptrs"][12]
-            if single == 0:
-                raise SystemExit("file needs a single-indirect block it doesn't have")
-            table = self.read_block(single)
-            for i in range(nblocks - 12):
-                out.append(struct.unpack_from("<I", table, i * 4)[0])
+        # ptrs[12] is single-indirect, [13] double, [14] triple -- one
+        # more table level each, the layout kernel/fs/tfs3.c reads.
+        left = nblocks - 12
+        for slot, span in enumerate(INDIRECT_SPANS, start=12):
+            if left <= 0:
+                break
+            top = node["ptrs"][slot]
+            if top == 0:
+                raise SystemExit(f"file needs indirect block {slot} and has none")
+            take = min(left, span)
+            out.extend(self.walk_table(top, slot - 11, take))
+            left -= take
         if any(p == 0 for p in out):
             raise SystemExit("sparse files are outside this tool's write scope")
+        return out
+
+    def walk_table(self, blk, depth, count):
+        """The first `count` data blocks under an indirect table `depth`
+        levels deep -- depth 1 being a table of data blocks."""
+        table = self.read_block(blk)
+        if depth == 1:
+            return [struct.unpack_from("<I", table, i * 4)[0] for i in range(count)]
+        span = PTRS_PER_BLOCK ** (depth - 1)
+        out, i = [], 0
+        while count > 0:
+            nxt = struct.unpack_from("<I", table, i * 4)[0]
+            if nxt == 0:
+                raise SystemExit("an indirect table has a hole")
+            take = min(count, span)
+            out.extend(self.walk_table(nxt, depth - 1, take))
+            count -= take
+            i += 1
         return out
 
     def read_file_data(self, ino):
@@ -734,6 +778,23 @@ def split_parent(path):
     return (parent or "/"), name
 
 
+def build_table(img, blocks, depth, pg):
+    """Write an indirect table tree `depth` levels deep over `blocks` and
+    return its top block -- the mirror of Tfs3Image.walk_table()."""
+    top = img.alloc_block(prefer_group=pg)
+    buf = bytearray(BLOCK)
+    if depth == 1:
+        for i, blk in enumerate(blocks):
+            struct.pack_into("<I", buf, i * 4, blk)
+    else:
+        span = PTRS_PER_BLOCK ** (depth - 1)
+        for i in range(0, len(blocks), span):
+            child = build_table(img, blocks[i:i + span], depth - 1, pg)
+            struct.pack_into("<I", buf, (i // span) * 4, child)
+    img.write_block(top, bytes(buf))
+    return top
+
+
 def write_file(img, data, dst):
     parent_path, name = split_parent(dst)
     parent = img.lookup(parent_path)
@@ -746,7 +807,7 @@ def write_file(img, data, dst):
     nblocks = (len(data) + BLOCK - 1) // BLOCK
     if nblocks > MAX_WRITE_BLOCKS:
         raise SystemExit(f"{dst}: {len(data)} bytes needs {nblocks} blocks, over "
-                         f"this tool's direct+single-indirect cap ({MAX_WRITE_BLOCKS})")
+                         f"what TFS3's block map can address ({MAX_WRITE_BLOCKS})")
     pg = parent // img.sb["ipg"]
     ino = img.alloc_inode(prefer_group=pg)
     blocks = [img.alloc_block(prefer_group=pg) for _ in range(nblocks)]
@@ -756,13 +817,12 @@ def write_file(img, data, dst):
     ptrs = [0] * 15
     for i in range(min(nblocks, 12)):
         ptrs[i] = blocks[i]
-    if nblocks > 12:
-        single = img.alloc_block(prefer_group=pg)
-        table = bytearray(BLOCK)
-        for i, blk in enumerate(blocks[12:]):
-            struct.pack_into("<I", table, i * 4, blk)
-        img.write_block(single, bytes(table))
-        ptrs[12] = single
+    rest = blocks[12:]
+    for slot, span in enumerate(INDIRECT_SPANS, start=12):
+        if not rest:
+            break
+        ptrs[slot] = build_table(img, rest[:span], slot - 11, pg)
+        rest = rest[span:]
     now = local_epoch()
     img.write_inode(ino, pack_inode(TYPE_FILE, 1, len(data), now, now, ptrs))
     img.dir_insert(parent, name, ino)

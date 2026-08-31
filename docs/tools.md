@@ -2521,8 +2521,18 @@ window without going through it will find its layout polls timing out.
   `--smash-superblock`, `--stage-journal[-torn]` -- known damage for
   fsck/backup/journal-replay testing, same reasoning as
   tfs2_writer's). Spec: `docs/tfs3-spec.md`; the kernel backend
-  (`kernel/fs/tfs3.c`) is kept in lockstep and the same bar applies
-  as tfs2_writer's: direct+single-indirect write scope only.
+  (`kernel/fs/tfs3.c`) is kept in lockstep.
+
+  **IT WRITES THE WHOLE BLOCK MAP** -- direct, single, double and triple
+  indirect. It stopped at single-indirect (~4.05 MB) until 2026-08-31,
+  described in its own docstring as "a deliberate cap", which it was
+  right up until `/install/kernel.bin` (~4.7 MB) meant a live image could
+  not carry the payload it installs from. Adding one level would have
+  moved the cliff to 4 GiB rather than removing it, so all three went in,
+  behind one recursive walker/builder pair. **The triple level is
+  UNEXERCISED** -- it starts past 4 GiB -- and says so where it is
+  defined. The general shape is worth keeping: a second implementation of
+  a format is only as complete as the biggest thing anyone has fed it.
   **`format --fs-version {1,2}`** picks the on-disk layout: v2 (32
   journal slots, GDT at 42, group 0 at 58) is the default and what a
   fresh image gets; v1 (four slots, GDT at 14, group 0 at 30) exists so
@@ -2609,6 +2619,15 @@ window without going through it will find its layout polls timing out.
   `/boot`, UEFI's FAT32 ESP, Windows' System Reserved) -- see
   `docs/decisions.md`.
 
+  **`--stage-payload <dir>`** writes the four files `/bin/install` needs
+  -- `kernel.bin`, `grub.cfg`, `boot.img`, `core.img` -- into a directory
+  instead of onto a disk. The build points it at `seed/sync/install`, so
+  every toy-os filesystem carries `/install` and can install itself. The
+  `core.img` it makes has `(hd0,gpt2)/boot/grub` baked in, which is what
+  makes the ESP-is-partition-2 layout a constraint rather than a
+  preference. A checkout without GRUB's BIOS target stages nothing and
+  says so; that build boots, it just cannot install itself.
+
   **`--check`** answers "is this image bootable" for a script;
   **`boot_medium(disk)`** is the same question as a function and is what
   the Makefile, `vm.py`, `qmp_test.py`, `boot_smoke_test.py` and
@@ -2657,10 +2676,17 @@ window without going through it will find its layout polls timing out.
   this tool run against a stock `make iso` with no `KCMDLINE` (compare
   `hires_test.py`, which does need one).
 
-  `--positive-control` zeroes the installed boot sector before phase 2,
-  so its five checks must go RED; a clean run proves nothing until that
-  has been seen. On demand only (`ondemand_sweep.py` names it) -- it
-  boots two guests and takes a couple of minutes.
+  **It runs BOTH media** (`--media disk|live|both`, default both), because
+  they are different code paths and the live one is how a real machine
+  gets toy-os: `toy-os-live.iso`'s root is a RAM image with no `/boot` at
+  all, which is why the install payload lives in `/install`. The live
+  half needs `make live-iso` and is skipped with a message when the ISO
+  is absent.
+
+  `--positive-control` zeroes each installed boot sector before its boot
+  phase, so those checks must go RED; a clean run proves nothing until
+  that has been seen. On demand only (`ondemand_sweep.py` names it) -- it
+  boots four guests and takes a few minutes.
 - **`mkpart_test.py`** -- writes a synthetic legacy MBR or GPT partition
   table onto a disk image, for testing `kernel/drivers/partition.c`'s
   parser (`parttable` shell command). Its mount-preserving guarantee

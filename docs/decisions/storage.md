@@ -2084,13 +2084,34 @@ it two files of the wrong kind produces a disk that does not boot rather
 than an error, and that is the right trade: checking would mean carrying
 a second implementation of somebody else's format in ring 0.
 
-**Where the images come from.** `tools/install_grub.py` stages `boot.img`
-and `core.img` into the ESP as ordinary files, which is where
-`grub-install` puts them on a real system too. Ring 3 reads them and
-hands over the bytes. The alternative -- having the kernel read them off
-the running disk's own LBA 0 and BIOS boot partition -- needs no files
-and was rejected for two reasons: it is guessing, and it cannot work
-from a live ISO.
+**Where the images come from, and why `/install` is in the root.** The
+first version read them out of `/boot`, where `tools/install_grub.py`
+stages them beside the kernel -- which is where `grub-install` puts them
+on a real system, and which works perfectly on a disk boot and not at all
+on a live one. **A live session has no `/boot`:** GRUB loads the kernel
+and a filesystem image into RAM, and after that nothing drives the
+medium, because toy-os has no USB mass-storage driver. `/boot` is an
+empty mount point and the ESP does not exist.
+
+That matters because **installing from live media is how a real machine
+gets toy-os** -- it is the only arrangement where the target disk is not
+also the one being run from. So the payload is `/install` in the ROOT:
+`kernel.bin`, `grub.cfg`, `boot.img`, `core.img`, staged into the seed
+tree so that every toy-os filesystem carries it and `/bin/install` reads
+ONE path on every medium. The alternative -- read `/boot` when it is
+there, fall back otherwise -- is two code paths where one gets tested and
+the other is found broken later, which this project has been bitten by
+enough times to have a rule about it.
+
+The cost is a second copy of the kernel in every root image (~4.7 MB) and
+the drift it invites, since a running system now has `/boot/boot/
+kernel.bin` and `/install/kernel.bin` and nothing keeps them equal after
+a hand edit. Both come from one build at seed time, and updating a kernel
+in place is not a thing toy-os can do yet anyway (roadmap).
+
+The kernel reading the images off the running disk's own LBA 0 and BIOS
+boot partition was the third option: no files at all. Rejected because it
+is guessing, and because it cannot work from a live ISO either.
 
 **The layout is a constraint and is stated as one.** `core.img` carries
 its prefix baked in at `grub-mkimage` time, so the copy this installs
@@ -2112,6 +2133,20 @@ truncated at 256 entries with no way to page, so copying GRUB's
 305-file module directory came back short; `SYS_LISTDIR_AT` is the
 offset the ABI comment had already named as the fix.
 
+**And a third, found by `/install` itself.** `tools/tfs3_writer.py` --
+the host-side seeding tool, a SECOND implementation of TFS3's on-disk
+format -- wrote direct + single-indirect only, ~4.05 MB, with its own
+docstring calling that "a deliberate cap". The kernel has grown block
+maps through all three indirect levels automatically since TFS3 landed;
+the host tool had simply never been handed anything big. `kernel.bin` is
+4.7 MB, so a live image could not carry the payload it installs from.
+Fixing it to double-indirect alone would have moved the cliff to 4 GiB
+rather than removing it, so all three levels went in behind one recursive
+walker/builder pair -- with the triple level marked UNEXERCISED, because
+it is.
+
 **The general shape, which this project keeps rediscovering:** a
 capability nothing exercised was broken in a way no test could see,
-because every test used the sizes that happened to work.
+because every test used the sizes that happened to work. A second
+implementation of a format is only as complete as the biggest thing
+anyone has fed it.

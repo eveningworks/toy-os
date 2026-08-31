@@ -25,6 +25,10 @@ the same syscall that command uses:
 | copy | `ufileop`, the library `cp -r` and the File Manager share |
 | bootloader | `SYS_INSTALL_BOOT` — the boot sector and GRUB's core image |
 
+The four files it writes onto the target's boot partitions come from
+**`/install`** — `kernel.bin`, `grub.cfg`, `boot.img`, `core.img` — which every
+toy-os filesystem carries.
+
 Nothing here is a special path into the kernel. An installer that needed one
 would be an installer whose steps could not be checked by hand — every one of
 these can be typed at a shell and watched.
@@ -37,6 +41,19 @@ The layout it writes:
 | `p2` | `--esp` (64 MiB) | ESP, FAT32 | the kernel, `grub.cfg`, GRUB's modules |
 | `p3` | the rest | TFS3 | the root |
 
+## Installing from live media
+
+**This is the path a real machine uses**, and it is why `/install` exists. Write
+`toy-os-live.iso` to a stick or a CD, boot it, and the root is a filesystem
+image GRUB loaded into RAM — the machine's own disks are enumerated but nothing
+is mounted from them, so `install --disk <name>` can erase and rewrite the one
+you point it at.
+
+`/boot` is **empty** in a live session: there is no ESP, because nothing drives
+the boot medium once GRUB has loaded the kernel and the image (toy-os has no
+USB mass-storage driver). That is exactly why the payload travels in the root
+rather than being read out of `/boot` — one path on every medium.
+
 ## What it deliberately does not do
 
 - **It does not install onto the disk this machine is running from,** and
@@ -48,6 +65,10 @@ The layout it writes:
 - **It does not resize or preserve anything on the target.** The whole disk
   becomes the layout above.
 - **It does not generate a new `core.img`.** See the trap.
+- **It does not copy GRUB's module directory** (305 files, ~4 MB). `core.img`
+  already contains every module `grub.cfg`'s `insmod` asks for, so the target
+  boots without it; what that target cannot do is have a *host* `grub-install`
+  run against it later without re-copying them.
 
 ## The trap
 
@@ -60,8 +81,8 @@ reproduces the layout that the image it copies expects. Changing the partition
 order here without rebuilding `core.img` produces a disk that reaches GRUB and
 stops at a rescue prompt.
 
-**`grub.cfg` is copied verbatim, so any `KCMDLINE` baked into this build is
-baked into the target too.** A system built with `make iso
+**`/install/grub.cfg` is written verbatim, so any `KCMDLINE` baked into this
+build is baked into the target too.** A system built with `make iso
 KCMDLINE="root=ata0p3"` installs a target that also insists on `ata0p3` — which
 is right if the target's root really is its third partition (it is) and wrong
 the moment that disk is attached as something other than `ata0`.
@@ -73,6 +94,9 @@ model.
 ## Limits
 
 - **The target must be a whole disk**, not a partition.
+- **A build made without GRUB's BIOS target carries no `/install`**, and says so
+  before erasing anything. Such a build boots perfectly; it just cannot install
+  itself.
 - **`/tmp` is not copied**, and `/boot` and `/mnt` are recreated as empty mount
   points rather than copied as directories — `/boot` because it is the
   *source's* ESP and goes to the target's separately, `/mnt` because it is
@@ -87,7 +111,8 @@ model.
     install --disk virtio0 confirm     # ~30 seconds
     poweroff
 
-Then boot that disk on its own.
+Then boot that disk on its own. From live media it is the same three lines,
+with the machine's own disk as the target.
 
 ## See also
 
