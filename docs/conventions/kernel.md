@@ -2330,3 +2330,36 @@ the core executing the instruction), and every entry reports
 table walk needs two chipsets**: `vm.py --machine q35` is the only way
 here to reach an XSDT-capable machine with a real reset register, and
 q35 has no legacy IDE, so it implies `--disk-kind ahci`.
+
+## A MACHINE IS REACHABLE OVER THE NETWORK NOW, AND BOTH SERVICES SHIP DISABLED
+
+`/bin/telnetd` (a shell on a pty, run per connection by `inetd`) and
+`/bin/tftpd` (RFC 1350 file transfer, both directions) exist so the
+BARE-METAL machine can be worked on -- half of `docs/bugs.md` is
+hardware-only and needed somebody sitting at it. `tools/remote.py` is the
+host side. Six things:
+
+- **THE PTY IS THE POINT.** Handing a socket straight to `/bin/tosh`
+  works and gives the shell no controlling terminal -- no Ctrl-C, no job
+  control, no window size. `telnetd` allocates one and puts the shell on
+  it, the same arrangement `userland/gui/apps/terminal.c` uses, so the
+  shell cannot tell a network session from a local one.
+- **A BARE `\n` MUST BECOME CR LF ON THE WAY OUT**, because
+  `abi/tty_abi.h` has `lflag` only -- there is no `oflag`, so no
+  `ONLCR` to turn on, and every program here writes bare `\n`.
+- **THE LINE EDITOR REPAINTS FROM COLUMN 0 ON EVERY KEYSTROKE**, so a
+  client that STRIPS carriage returns concatenates forty partial
+  repaints into one line of garbage. `\r` is a SEEK and has to be
+  replayed as one; `tools/remote.py` does.
+- **A SERVICE CAN SHIP TURNED OFF**, which is what
+  `/usr/share/services` is: descriptors init never reads, copied into
+  `/etc/services.d` by `service enable`. systemd's `/lib` vs `/etc`
+  split. Both of these ship there, because each hands the network a
+  machine with no users and no passwords.
+- **`Exec=` TAKES NO ARGUMENTS; `Args=` DOES.** The descriptor format
+  had no way to say them until `inetd -p 23 /bin/telnetd` needed one.
+- **TFTP'S REPLY COMES FROM A NEW PORT, AND A STATEFUL FIREWALL EATS
+  IT.** That is what `nf_conntrack_tftp` exists for. Measured here: the
+  ACKs left the guest and never arrived, and `curl` failed identically.
+  `tftpd -1` answers from the request port instead, one transfer at a
+  time, and is what the shipped descriptor uses.

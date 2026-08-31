@@ -271,6 +271,94 @@ static int cmd_status(const char *name) {
     return 0;
 }
 
+// --- enable and disable: the descriptor, not the process ---------------
+//
+// ENABLE IS A COPY AND DISABLE IS A DELETE, because that is already what
+// init means by them. init scans /etc/services.d and restarts what it
+// finds there; /usr/share/services is a directory it never reads. So a
+// descriptor's PRESENCE is the enabled state, and there is no third
+// place for an `Enabled=` key to disagree with.
+//
+// This is systemd's split -- enable/disable act on the unit file,
+// start/stop act on the process -- and the pairs are deliberately not
+// interchangeable: `service stop` is undone by a reboot, `service
+// disable` is not.
+#define AVAIL_DIR "/usr/share/services/"
+#define ENABLED_DIR "/etc/services.d/"
+
+static int copy_file(const char *from, const char *to) {
+    int in = sys_open(from, 0);
+    if (in < 0) return 0;
+    int out = sys_open(to, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
+    if (out < 0) { sys_close(in); return 0; }
+    static char buf[512];
+    int ok = 1;
+    for (;;) {
+        int64_t n = sys_read(in, buf, sizeof buf);
+        if (n < 0) { ok = 0; break; }
+        if (n == 0) break;
+        if (sys_write(out, buf, (size_t)n) != n) { ok = 0; break; }
+    }
+    sys_close(in);
+    sys_close(out);
+    return ok;
+}
+
+static void ring_init(void) {
+    int pid = init_pid();
+    if (pid > 0) sys_kill(pid, SIGHUP);
+}
+
+static int cmd_enable(const char *name) {
+    char from[96], to[96], tmp[96], msg[192];
+    snprintf(from, sizeof from, "%s%s", AVAIL_DIR, name);
+    snprintf(to, sizeof to, "%s%s", ENABLED_DIR, name);
+    // WRITTEN ELSEWHERE AND MOVED IN, because init rescans
+    // /etc/services.d on ANY filesystem change and a descriptor built up
+    // by a write loop can be read half-finished. A partial one is not an
+    // error it would report -- it is a service with no Exec=, or with an
+    // ordering key it correctly ignores, so it starts wrongly and
+    // nothing looks broken. data/etc/services.d/README.md says to do
+    // exactly this; writing in place got the half-read on the first try.
+    snprintf(tmp, sizeof tmp, "/tmp/.svc-%s", name);
+    if (!copy_file(from, tmp) || sys_rename(tmp, to) < 0) {
+        sys_unlink(tmp);
+        snprintf(msg, sizeof msg,
+                 "service: no available service called %s (look in %s)\n",
+                 name, AVAIL_DIR);
+        sys_print(msg);
+        return 1;
+    }
+    // init rescans on its next WAKE, which on an idle machine is up to
+    // 250 ms away and with a service running is whenever a child exits.
+    // The doorbell is what makes `enable` take effect now rather than
+    // eventually -- the same HUP `service reload` sends.
+    ring_init();
+    snprintf(msg, sizeof msg, "service: enabled %s\n", name);
+    sys_print(msg);
+    return 0;
+}
+
+static int cmd_disable(const char *name) {
+    char to[96], msg[192];
+    snprintf(to, sizeof to, "%s%s", ENABLED_DIR, name);
+    if (sys_unlink(to) < 0) {
+        snprintf(msg, sizeof msg, "service: %s is not enabled\n", name);
+        sys_print(msg);
+        return 1;
+    }
+    ring_init();
+    // DISABLE DOES NOT STOP IT, which is init's own rule: removing a
+    // descriptor makes init stop RESTARTING the service and leaves the
+    // running copy alone. Said here because the alternative reading is
+    // the obvious one.
+    snprintf(msg, sizeof msg,
+             "service: disabled %s -- a running copy keeps running until "
+             "it is stopped\n", name);
+    sys_print(msg);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2 || strcmp(argv[1], "list") == 0) return cmd_list();
 
@@ -292,15 +380,19 @@ int main(int argc, char **argv) {
     }
 
     if (argc < 3) {
-        cmd_usage("service [list] | status <name> | start <name> | stop <name> | reload");
+        cmd_usage("service [list] | status <name> | start <name> | stop <name> | "
+                  "enable <name> | disable <name> | reload");
         return 1;
     }
 
     if (strcmp(argv[1], "status") == 0) return cmd_status(argv[2]);
+    if (strcmp(argv[1], "enable") == 0)  return cmd_enable(argv[2]);
+    if (strcmp(argv[1], "disable") == 0) return cmd_disable(argv[2]);
 
     int start = strcmp(argv[1], "start") == 0;
     if (!start && strcmp(argv[1], "stop") != 0) {
-        cmd_usage("service [list] | status <name> | start <name> | stop <name> | reload");
+        cmd_usage("service [list] | status <name> | start <name> | stop <name> | "
+                  "enable <name> | disable <name> | reload");
         return 1;
     }
 

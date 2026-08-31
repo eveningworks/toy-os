@@ -1186,6 +1186,15 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO)
 	    if [ "$$(basename $$f)" != "README.md" ]; then \
 	        cp $$f $(SEED_DIR)/sync/etc/services.d/; fi; \
 	done
+	# AVAILABLE services, which init never reads: /usr/share/services is
+	# the descriptor a `service enable` copies into /etc/services.d. The
+	# split is systemd's /lib vs /etc, and it is what lets a service ship
+	# turned OFF rather than not ship at all.
+	mkdir -p $(SEED_DIR)/sync/usr/share/services
+	@for f in data/usr/share/services/*; do \
+	    if [ "$$(basename $$f)" != "README.md" ]; then \
+	        cp $$f $(SEED_DIR)/sync/usr/share/services/; fi; \
+	done
 	# The human-facing text for each setting -- descriptions, choice
 	# display names and presentation hints, one file per setting (see
 	# data/etc/settings.d/README.md). Same rule again: every file but

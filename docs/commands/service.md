@@ -6,7 +6,8 @@
 
 ## Synopsis
 
-    service [list] | status <name> | start <name> | stop <name> | reload
+    service [list] | status <name> | start <name> | stop <name> | 
+                  enable <name> | disable <name> | reload
 
 ## Description
 
@@ -51,6 +52,36 @@ address at boot?".
 `yes`/`no`/`timeout` for one whose descriptor says `Ready=notify`.
 `FAILS` is the consecutive fast-failure count the crash-loop give-up
 counts up.
+
+## `enable` and `disable` act on the DESCRIPTOR, `start` and `stop` on the process
+
+`/usr/share/services` holds the service descriptors that EXIST;
+`/etc/services.d` holds the ones that are turned ON, and init only ever
+reads the second. So enabling is a copy and disabling is a delete, and
+there is no `Enabled=` key anywhere to disagree with the filesystem:
+
+    service enable telnetd
+    service disable telnetd
+
+This is systemd's split, and the two pairs are deliberately not
+interchangeable. **A `stop` is undone by a reboot; a `disable` is not.**
+And `disable` does not stop a running copy — init stops *restarting* it,
+which is what "I no longer want this service" actually means; killing a
+process because somebody edited a file in `/etc` would be a surprise.
+To take one away now, do both:
+
+    service disable telnetd
+    service stop telnetd
+
+`enable` rings init's doorbell (the same `SIGHUP` as `reload`), so the
+service starts immediately rather than whenever init next wakes. It
+writes the descriptor to a temporary path and moves it into place,
+because init rescans on any filesystem change and a file written in
+place can be read half-finished.
+
+**Two services ship available and disabled**: `telnetd` and `tftpd`.
+Read their pages before enabling either — each hands the network a
+machine that has no users and no passwords.
 
 ## How it reaches init
 

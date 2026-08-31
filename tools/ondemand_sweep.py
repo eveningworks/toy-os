@@ -107,6 +107,11 @@ TOOLS = [
     # path, since nothing in any gate boots a machine and looks at what
     # it configured itself with.
     ("net",         "net_test.py",             "the stack on both NICs, and DHCP",   True,  None,                   False),
+    # The remote-access pair, which is the only way to work on the
+    # bare-metal laptop at all. Enables services that ship DISABLED and
+    # leaves them enabled on disk.img -- run `make clean-disk && make
+    # iso` after it if that matters.
+    ("remote",      "remote_test.py",          "telnetd, tftpd and tools/remote.py end to end", True, None,           False),
 
     # --- sound --------------------------------------------------------
     # Boots its own guests with an AC97 and a wav audiodev, twice. It is

@@ -167,6 +167,8 @@ a command), and the `gui3`/`nano` aliases.
 - [`ifconfig`](ifconfig.md)
 - [`inetd`](inetd.md)
 - [`ping`](ping.md)
+- [`telnetd`](telnetd.md)
+- [`tftpd`](tftpd.md)
 - [`wget`](wget.md)
 
 ### Storage

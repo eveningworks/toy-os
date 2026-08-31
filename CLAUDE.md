@@ -635,6 +635,7 @@ whenever a headline here tells you something you did not already know.
 - **A WAIT CAN CARRY A DEADLINE, AND READINESS IS NOT DELIVERY**
 - **THE MACHINE STOPS THROUGH ITS OWN ACPI TABLES, AND EVERY FALLBACK BELOW THAT LOGS A LINE**
 - **TURN THE WAKE SOURCES OFF BEFORE THE SLEEP WRITE, OR S5 IS A REBOOT -- THE GPE BLOCKS AS WELL AS PM1_STS**
+- **A MACHINE IS REACHABLE OVER THE NETWORK NOW, AND BOTH SERVICES SHIP DISABLED**
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
 
 ### GUI, Toykit and the desktop
@@ -1232,6 +1233,11 @@ cost".
   tools neither `preflight.sh` nor `gui_regress.py` covers. **Adding a
   tool to `tools/` does not add it here**, and a tool no runner names is
   run when somebody types it, which is never. Never a gate itself.
+- **Drive the BARE-METAL machine** -- `remote.py` (`exec` runs commands
+  and returns text, `put`/`get` move files, `shell` is interactive).
+  `vm.py` cannot reach it: that drives a QEMU guest through its serial
+  debug console and the laptop has no serial console attached. Needs
+  `service enable telnetd` / `tftpd` on the target, both shipped OFF.
 - **Drive a VM** -- `vm.py` (text in, text out: the fastest path for
   anything that is not about pixels; `--usb-host VID:PID` passes a REAL
   USB device through, which is the only way to reach a driver path no
@@ -1268,7 +1274,7 @@ cost".
   `keyboard_paths_test.py`, `kvm_soak.py`, `live_boot_test.py`,
   `ls_test.py`, `mem_stress.py`, `mkpart_test.py`,
   `multidisk_test.py`, `net_test.py`, `partition_test.py`,
-  `poweroff_test.py`, `qemu_matrix.py`, `serial_backpressure_test.py`, `stdin_test.py`,
+  `poweroff_test.py`, `qemu_matrix.py`, `remote_test.py`, `serial_backpressure_test.py`, `stdin_test.py`,
   `msi_test.py`, `taskbar_test.py`, `terminal_probe.py`, `tfs3_v1_test.py`,
   `usb_audio_test.py`, `usb_test.py`, `virtio_boot_test.py`,
   `virtio_gpu_test.py`, `virtio_input_test.py`.

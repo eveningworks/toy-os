@@ -305,6 +305,65 @@ manual steps to be worth automating:
   sprite's own pixels answer the question), and make sure the hovered
   row is not the SELECTED one, since selection correctly outranks hover
   and hovering the current value measures nothing.
+- **`remote_test.py`** -- `telnetd`, `tftpd` and `remote.py` end to end
+  against a QEMU guest, seven checks. On demand: it boots its own guest
+  and ENABLES services that ship disabled, so it leaves `disk.img` with
+  a network shell turned on -- `make clean-disk && make iso` afterwards
+  if that matters.
+
+  Three of its checks exist because of a specific way this can pass
+  while broken. It asserts a command's OUTPUT and that the command LINE
+  is absent, because a broken framer returns the echo and looks fine.
+  Its round-trip content is address-derived rather than uniform, since
+  a run of identical bytes cannot tell a working block walk from one
+  that repeats a block. And one file is an exact multiple of 512 bytes,
+  the case needing a final zero-length DATA packet that a hand-written
+  TFTP nearly always gets wrong.
+
+  It also encodes init's rule that **an admin `stop` outranks
+  `Restart=`**: the test disables and stops both services to establish
+  its own precondition, and `enable` alone does not bring them back.
+  Getting that wrong reported both services `running` while nothing
+  answered the network.
+
+- **`remote.py`** -- drive a toy-os machine over the NETWORK: run
+  commands, push and pull files, or open an interactive session.
+
+      python3 tools/remote.py --host 192.168.200.104 exec "lsusb" "dmesg"
+      python3 tools/remote.py --host 192.168.200.104 put build/userland/bin/ls /bin/ls
+      python3 tools/remote.py --host 192.168.200.104 get /tmp/crash.log ./crash.log
+      python3 tools/remote.py --host 192.168.200.104 shell      # Ctrl-] quits
+
+  **This is the tool for the BARE-METAL laptop**, which `vm.py` cannot
+  reach: `vm.py` drives a QEMU guest through its serial debug console,
+  and the laptop has no serial console attached. It is where half of
+  `docs/bugs.md` lives -- a USB mouse that will not bind, a power button
+  that needs two presses, a garbled product string -- and until this
+  existed, investigating any of them meant sitting at the machine. The
+  guest side is `/bin/telnetd` and `/bin/tftpd`, both shipped DISABLED
+  (`service enable telnetd`).
+
+  **One tool rather than "use telnet, then use curl"**, because the two
+  halves are always used together and each has a trap that reads as the
+  guest being broken: the telnet negotiation has to be answered before
+  a command can be sent, and TFTP's reply-from-a-new-port is dropped by
+  a stateful firewall (see `docs/commands/tftpd.md`).
+
+  **`exec` frames on a RENDERED LINE, not a substring**, and that is the
+  part worth knowing before changing it. It sends a marker `echo` after
+  each command and reads until a rendered line equals the marker. Two
+  reasons: the shell echoes what it is sent, so matching raw bytes would
+  stop at the marker's own echoed command line, before the command it is
+  framing has run; and the shared line editor repaints the whole line
+  from column 0 on every keystroke, so `\r` must be replayed as a SEEK
+  rather than stripped -- stripping it concatenates forty partial
+  repaints into one line of garbage. A timeout RAISES rather than
+  returning what it has, because a partial answer that looks like a
+  whole one is the failure this exists to avoid.
+
+  Not a terminal emulator: a full-screen program (`edit`, `less`) is not
+  usable through `exec`. Use `shell` for those.
+
 - **`gui_flow.py`** -- named, composable QMP click-flows on top of
   `qmp_test.py`'s `QMPSession` (`GuiFlow` class: `enter_gui()`,
   `open_app(name)`, `run_system_action(label)`, `screenshot_named()`),

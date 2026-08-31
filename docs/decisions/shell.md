@@ -1145,3 +1145,64 @@ cannot query the console width. `tosh` can — `SYS_TCGETWINSZ` — so it
 fits the columns to the window, and a resized Terminal relists at the
 new width. Making them identical would have meant making the one that
 can measure behave like the one that cannot.
+
+## Remote access is telnet and TFTP, in an OS with no users
+
+`/bin/telnetd` and `/bin/tftpd` put a shell and a file transfer on the
+network. Both protocols are museum pieces with no encryption and no
+authentication, and this OS has neither users nor passwords to
+authenticate against — so a connection is a shell with the run of the
+machine, and anybody who can reach port 69 can replace any file.
+
+**Why that is the right trade here, and where the line is.** The reason
+these exist is that half the entries in `docs/bugs.md` are bare-metal
+only — a USB mouse that will not bind, a power button that needs two
+presses, a garbled product string — and the only way to investigate one
+was a serial cable and somebody sitting at the machine. A lab machine on
+a segment you own, reachable over the network, is a normal arrangement:
+console servers and network switches still speak exactly this protocol
+for exactly this reason. What makes it defensible is that it is OFF by
+default and turning it on is a deliberate act (`service enable telnetd`),
+not that the protocol is safe. It is not, and the docs say so in the
+places somebody would look.
+
+**SSH was not the alternative.** TLS and a key exchange are a project on
+their own — a bignum library, a cipher, a random source with a stronger
+guarantee than `krandom.h` offers — and none of that is the thing being
+bought here. The honest sequencing is: reach the machine now with
+something small enough to be obviously correct, and if this ever needs
+to cross a network the maintainer does not own, tunnel it rather than
+reimplement SSH badly.
+
+**Why a service that ships DISABLED needed a new directory.** Until this,
+a service either had a descriptor in `/etc/services.d` (and ran) or did
+not exist. There was no way to ship one turned off, and the two obvious
+alternatives were both worse: an `Enabled=` key inside the descriptor
+puts the enabled state in two places that can disagree with each other,
+and shipping nothing at all means the descriptor is written from memory
+by whoever wants it. `/usr/share/services` is the third answer and it is
+systemd's — `/lib/systemd/system` for what exists, `/etc/systemd/system`
+for what is on — with `service enable` as the copy. The filesystem stays
+the single source of truth about what init will start.
+
+**`Exec=` versus `Args=`.** The descriptor format deliberately had no
+arguments; its README said "nothing has needed one here yet". `inetd -p
+23 /bin/telnetd` is the first that genuinely does, and the alternative —
+a `telnetd` that listens for itself — would have duplicated everything
+`inetd` already does correctly (accept, per-connection process, child
+cap, reaping, the socket on fd 0/1). One key was cheaper than one
+listener.
+
+**Why `tftpd` grew a non-standard `-1`.** RFC 1350 answers each transfer
+from a fresh ephemeral port, the TID, and that is the default. It is also
+why TFTP famously does not cross a firewall: the reply arrives from a
+port the client never sent to, so a stateful filter sees a new inbound
+flow rather than a reply and drops it — Linux ships `nf_conntrack_tftp`
+for no other purpose. That was measured here rather than assumed: the
+guest's `tx` counter climbed by exactly the retry count while nothing
+reached a client one hop away, and `curl` failed identically, which is
+what ruled out this code. `-1` answers from the request socket, so the
+reply matches the tuple the client sent to. It serializes transfers,
+which is why it is not the default — and it is what the shipped service
+uses, because the alternative is asking every user to load a kernel
+module on their own machine first.

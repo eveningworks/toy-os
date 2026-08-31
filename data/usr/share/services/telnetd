@@ -1,0 +1,16 @@
+# A shell over the network. SHIPPED DISABLED -- see docs/commands/telnetd.md.
+#
+# This directory is AVAILABLE services, not enabled ones (systemd's
+# /lib vs /etc split). init never reads it:
+#
+#     service enable telnetd     # copies it into /etc/services.d
+#     service disable telnetd
+#
+# Telnet has no encryption and no authentication and this OS has no
+# users, so a connection is a shell with the run of the machine. Do not
+# enable it on a network you do not own.
+Name=telnetd
+Description=A shell over the network (telnet, port 23)
+Exec=/bin/inetd
+Args=-p 23 /bin/telnetd
+Restart=always

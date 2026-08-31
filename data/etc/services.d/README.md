@@ -11,7 +11,8 @@ so there is no second format to maintain.
 |---|---|---|
 | `Name` | yes | What init calls it in the log. Not the filename. |
 | `Description` | no | A sentence for a human. `service status <name>` prints it. |
-| `Exec` | yes | An absolute path to a `/bin` binary. No arguments and no shell -- init passes none, though `SYS_SPAWN` itself takes an argument string and nothing has needed one here yet. |
+| `Exec` | yes | An absolute path to a `/bin` binary. No shell, and no arguments -- those are `Args=`. |
+| `Args` | no | Whitespace-separated arguments, passed as `SYS_SPAWN`'s argument string. There is no shell, so no quoting, no globbing and no redirection: the words are the words. `inetd -p 23 /bin/telnetd` is the first service that genuinely needed one. |
 | `Target` | no | `text`, `graphical`, or absent. Absent means **every** target. |
 | `Restart` | no | `on-failure` (default), `always`, or `no`. |
 | `After` | no | Space-separated service **names** that must be started first. |
@@ -177,6 +178,28 @@ and by a reboot, while a deleted descriptor means init stops restarting
 it and nothing brings it back until the file does. An admin stop
 outranks `Restart=` entirely -- it has to, because the service dies with
 `128 + SIGTERM`, which every policy here reads as a failure.
+
+## `/usr/share/services` is what is AVAILABLE
+
+init scans THIS directory and never looks at `/usr/share/services`, so a
+descriptor sitting there does nothing at all. That is the split systemd
+draws between `/lib/systemd/system` (what exists) and
+`/etc/systemd/system` (what is turned on), and it is what lets a service
+SHIP TURNED OFF rather than not ship:
+
+    service enable telnetd     # copies the descriptor in here
+    service disable telnetd    # removes it again
+
+`telnetd` and `tftpd` are both shipped that way, because each of them
+hands the network a machine with no users and no passwords. A service
+that would be dangerous to start by default and useless to leave out is
+exactly the case this directory exists for.
+
+**`enable` writes elsewhere and moves the file in**, for the reason the
+next-but-one section gives: a descriptor built up by a write loop can be
+read half-finished, and a half-read one is not an error init reports --
+it is a service with no `Exec=`. Writing straight into this directory
+got that on the first try.
 
 ## Removing a descriptor DISABLES the service
 

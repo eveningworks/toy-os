@@ -116,6 +116,7 @@
 #define SVC_MAX        16
 #define SVC_NAME_MAX   24
 #define SVC_EXEC_MAX   64
+#define SVC_ARGS_MAX   64
 // After= and Before= are stored as the raw space-separated text and
 // resolved to indices only once the WHOLE directory has been scanned --
 // a descriptor may name a service whose file has not been read yet, so
@@ -193,6 +194,11 @@ static const int SVC_BACKOFF_MS[] = { 0, 250, 500, 1000, 2000 };
 struct service {
     char name[SVC_NAME_MAX];
     char exec[SVC_EXEC_MAX];
+    // Whitespace-separated arguments, as SYS_SPAWN has always taken --
+    // the descriptor format simply had no way to say them, so a service
+    // that needed one had to be a program with the arguments baked in.
+    // `inetd -p 23 /bin/telnetd` is the first that genuinely does.
+    char args[SVC_ARGS_MAX];
     int  restart;      // SVC_RESTART_*
     int  pid;          // 0 when not running
     unsigned long long started_ms;
@@ -378,6 +384,11 @@ static void load_service(const char *file) {
         logf1("init: %s has no Exec=, will not start it\n", file);
         return;
     }
+
+    // Absent is an empty argument string, not a missing one: a service
+    // with no arguments is the common case and says nothing.
+    if (!etc_config_buf_get(&g_cfg, "Args", s->args, sizeof s->args))
+        s->args[0] = '\0';
 
     // Absent means unconstrained, which is the common case and must
     // stay the terse one. Cleared rather than left alone, so removing
@@ -631,7 +642,7 @@ static void start_service(struct service *s) {
     s->started_once = 1;
     s->last_exit = 0;
 
-    int pid = sys_spawn(s->exec, 0, -1);
+    int pid = sys_spawn(s->exec, s->args[0] ? s->args : 0, -1);
     if (pid > 0) {
         s->pid = pid;
         s->started_ms = now_ms();

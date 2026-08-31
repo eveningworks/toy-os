@@ -1,0 +1,19 @@
+# File transfer over the network. SHIPPED DISABLED -- see
+# docs/commands/tftpd.md, and telnetd beside this file for what this
+# directory is and how to enable something in it.
+#
+# The same warning, slightly sharper: TFTP has no authentication either
+# and this one WRITES. `-r /` serves the whole filesystem, which is what
+# makes /bin updatable; narrow it if one directory is enough.
+#
+# `-1` answers from port 69 instead of a fresh port per transfer. That
+# deviates from RFC 1350 and serializes transfers, and it is the default
+# HERE because a stateful firewall on the other end drops the standard
+# reply -- measured, not assumed. Drop it if the client's host has
+# nf_conntrack_tftp loaded.
+Name=tftpd
+Description=File transfer over the network (TFTP, port 69)
+Exec=/bin/tftpd
+Args=-r / -1
+Restart=always
+Ready=notify
