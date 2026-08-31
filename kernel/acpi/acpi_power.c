@@ -350,42 +350,35 @@ static int gpes_left_alone(void) {
     return 1;
 }
 
-// EVERY GENERAL PURPOSE EVENT, QUIESCED -- AND THE QUIET ONES REARMED.
+// EVERY GENERAL PURPOSE EVENT, DISABLED AND CLEARED, AND LEFT THAT WAY.
 // A GPE block is [STS][EN] like PM1's, each half GPEx_BLK_LEN/2 bytes.
 //
-// THE PROBLEM HAS TWO HALVES AND EACH FIX BREAKS THE OTHER, which is
-// why this is not simply "disable" or simply "clear". Measured on the
-// machine it was written for:
+// THREE VERSIONS OF THIS SHIPPED, and the two cleverer ones were wrong.
+// Measured on the machine it was written for, whose GPE0_BLK is 32 bytes
+// -- 128 events, among them its lid, its embedded controller and USB:
 //
-//   disable every GPE and leave it so -- the machine powers off, and
-//     takes TWO presses of the power button to start again, because one
-//     of those events IS the power button.
-//   clear the statuses and restore every enable -- the power button is
-//     fine and the machine REBOOTS, because a level-triggered source
-//     (an embedded controller's is) re-latches the instant it is
-//     cleared, and a set status with a set enable is a wake.
+//   disable every GPE and leave it so -- the machine POWERS OFF, and
+//     takes two presses of the power button to start again.
+//   clear the statuses and restore every enable -- it REBOOTS.
+//   clear, read the status back, and rearm only the bits that stayed
+//     quiet -- it REBOOTS, and nothing had re-latched to be masked.
 //
-// So the enables are decided by MEASUREMENT rather than by guessing:
-// mask, clear, READ THE STATUS BACK, and rearm only the bits that
-// stayed quiet. A source still asserting says so by re-latching within
-// those few port cycles, and stays masked; a silent one is rearmed and
-// can still wake the machine. That is `_PRW`'s answer approximated by
-// observation, and `docs/aml-design.md` stages the real one.
+// The third result is the informative one: the source that wakes this
+// machine is NOT ASSERTING when the sleep is prepared, so no measurement
+// taken at one instant can find it. It fires during or after the
+// transition. Distinguishing "a legitimate wake source" from "one that
+// will bounce us" is what `_PRW` is for, and reading `_PRW` needs the
+// namespace walk `docs/aml-design.md` stages.
 //
-// The failure mode degrades to the version that worked: if every bit
-// re-latches, nothing is rearmed and this is the plain disable.
-static void gpe_block_off(uint32_t base, uint8_t len, uint32_t *out_stuck) {
+// So this is the version that works, with the cost stated: the power
+// button's own GPE is masked with everything else, and on that laptop
+// starting it again takes two presses. A machine that turns off and is
+// awkward to turn on beats one that will not turn off.
+static void gpe_block_off(uint32_t base, uint8_t len) {
     if (!base || len < 2) return;
     uint8_t half = (uint8_t)(len / 2);
-    for (uint8_t i = 0; i < half; i++) {
-        uint16_t sts = (uint16_t)(base + i), en = (uint16_t)(base + half + i);
-        uint8_t was = inb(en);
-        outb(en, 0x00);
-        outb(sts, 0xFF);
-        uint8_t relatched = inb(sts);      // still asserted -> still a wake
-        outb(en, (uint8_t)(was & ~relatched));
-        if (relatched && out_stuck) *out_stuck |= (uint32_t)relatched << (i * 8 % 32);
-    }
+    for (uint8_t i = 0; i < half; i++) outb((uint16_t)(base + half + i), 0x00);
+    for (uint8_t i = 0; i < half; i++) outb((uint16_t)(base + i), 0xFF);
 }
 
 // Preserves everything in PM1_CNT that is not the sleep request -- a
@@ -395,8 +388,12 @@ static void gpe_block_off(uint32_t base, uint8_t len, uint32_t *out_stuck) {
 static void pm1_sleep_write(uint16_t port, uint8_t typ) {
     uint16_t v = inw(port);
     v = (uint16_t)(v & ~(PM1_CNT_SLP_TYP_MASK | PM1_CNT_SLP_EN));
-    v = (uint16_t)(v | ((uint32_t)typ << PM1_CNT_SLP_TYP_SHIFT) | PM1_CNT_SLP_EN);
+    v = (uint16_t)(v | ((uint32_t)typ << PM1_CNT_SLP_TYP_SHIFT));
+    // TWO WRITES, as acpi_hw_legacy_sleep() does: the sleep TYPE first
+    // and the enable second. One write carrying both is what this used
+    // to do and what some chipsets are documented not to accept.
     outw(port, v);
+    outw(port, (uint16_t)(v | PM1_CNT_SLP_EN));
 }
 
 int acpi_poweroff_known(void) {
@@ -425,8 +422,7 @@ static void debug_pause(const struct acpi_state *s) {
                s->smi_cmd, s->acpi_enable);
     vga_printf("acpi: pm1_sts 0x%x  gpe0 0x%x/%u  gpe1 0x%x/%u\n",
                s->pm1a_evt, s->gpe0_blk, s->gpe0_len, s->gpe1_blk, s->gpe1_len);
-    vga_printf("acpi: GPE enables are rearmed only where the status stays\n"
-               "acpi:   clear -- a re-latching source is left masked.\n");
+    vga_printf("acpi: GPE blocks disabled and cleared, and left masked.\n");
     vga_printf("acpi: pausing ~10s so this can be read...\n");
     vga_present();
     // Port-I/O delay, not the PIT: this is reached with interrupts off
@@ -439,7 +435,6 @@ int acpi_poweroff(void) {
     if (!(s->flags & ACPI_F_S5)) return 0;
 
     enable_acpi_mode(s);
-    debug_pause(s);
 
     if (s->flags & ACPI_F_HW_REDUCED) {
         if (!gas_usable(&s->sleep_control)) return 0;
@@ -447,21 +442,22 @@ int acpi_poweroff(void) {
         // write-1-to-clear the same way.
         if (gas_usable(&s->sleep_status))
             gas_write8(&s->sleep_status, SLP_STS_WAK);
+        debug_pause(s);
         klog_printf("acpi: S5 via SLEEP_CONTROL_REG, type %d\n", (int)s->slp_typ_a);
         gas_write8(&s->sleep_control,
                    (uint8_t)(((s->slp_typ_a & 7) << SLP_CTL_TYP_SHIFT) | SLP_CTL_SLP_EN));
     } else {
         if (!s->pm1a_cnt) return 0;
         if (!gpes_left_alone()) {
-            uint32_t stuck = 0;
-            gpe_block_off(s->gpe0_blk, s->gpe0_len, &stuck);
-            gpe_block_off(s->gpe1_blk, s->gpe1_len, &stuck);
-            // Named, because which sources would not go quiet is the
-            // whole diagnosis if this machine still will not stop.
-            if (stuck) klog_printf("acpi: GPE status re-latched: 0x%x "
-                                   "(left masked)\n", stuck);
+            gpe_block_off(s->gpe0_blk, s->gpe0_len);
+            gpe_block_off(s->gpe1_blk, s->gpe1_len);
         }
         pm1_clear_status(s);
+        // LAST, so that one photograph of a machine about to reboot
+        // shows everything that was done to it. It used to run before
+        // the quiesce, and the screen then said nothing about the part
+        // under suspicion.
+        debug_pause(s);
         klog_printf("acpi: S5 via PM1a 0x%x type %d%s, status cleared at 0x%x\n",
                     s->pm1a_cnt, (int)s->slp_typ_a,
                     s->pm1b_cnt ? " (and PM1b)" : "", s->pm1a_evt);

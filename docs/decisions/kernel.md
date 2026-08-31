@@ -5630,14 +5630,31 @@ with a set enable is a wake. So the two obvious fixes each break what
 the other fixes, and there is no correct middle by guesswork. That is
 exactly the problem `_PRW` exists to solve.
 
-**The middle by MEASUREMENT, which is what shipped:** mask, clear, read
-the status BACK, and rearm only the bits that stayed quiet. A source
-still asserting identifies itself; a silent one is safe to leave armed,
-and the power button is silent until it is pressed. The failure mode
-degrades to the plain disable -- if every bit re-latches, nothing is
-rearmed. It is an approximation of `_PRW` by observation and it is
-labelled as one: `docs/aml-design.md` stages the real answer, and this
-episode is why that document exists.
+**The middle by MEASUREMENT was tried and it failed, which is the most
+useful result of the three.** Mask, clear, read the status back, rearm
+only the bits that stayed quiet: the machine rebooted, and NOTHING had
+re-latched to be masked. So the source that wakes it is not asserting
+when the sleep is prepared -- it fires during or after the transition,
+and no measurement taken at one instant can find it.
+
+**What shipped is therefore the first version: disable everything and
+leave it masked**, with the cost recorded rather than hidden (the power
+button's GPE is masked with the rest, and that laptop then takes two
+presses to start -- `docs/bugs.md`). A machine that turns off and is
+awkward to turn on beats one that will not turn off.
+
+**And that makes `_PRW` load-bearing rather than a refinement.**
+Distinguishing "a legitimate wake source" from "one that will bounce us"
+is exactly what it is for, and there is now evidence that nothing
+cheaper substitutes: three attempts, two of them cleverer than the one
+that works. `docs/aml-design.md` stages it, and this episode is why that
+document exists.
+
+**One thing that was missing throughout and is now fixed regardless:
+the sleep write is TWO writes**, the sleep type first and the enable
+second, as `acpi_hw_legacy_sleep()` does. One write carrying both is
+what this used to do and what some chipsets are documented not to
+accept. It did not fix this machine; it is correct anyway.
 
 **Why a flag rather than a bisect.** Both fixes landed together, so a
 machine that stops is consistent with either, and the machine in

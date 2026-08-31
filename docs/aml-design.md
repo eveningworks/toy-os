@@ -133,13 +133,15 @@ from absent and must not be conflated with it.
 
 ### Stage 3 -- `_PRW`, and the wake set
 
-**This stage is now the actual fix, not a refinement.** What shipped
-without it approximates the wake set by measurement -- rearm the GPEs
-whose status stays clear -- because the two guessable answers each break
-what the other fixes (see `docs/decisions.md`). That approximation can
-be wrong in both directions: a source that is quiet at sleep time but
-wakes later stays armed when `_PRW` would have said it is not a wake
-source, and a wake source that happens to be asserting gets masked.
+**This stage is the actual fix, and there is now evidence that nothing
+cheaper substitutes.** Three versions were measured on the machine that
+needs it (`docs/decisions.md`): disable everything and it powers off but
+takes two presses of the power button; restore the enables and it
+reboots; rearm only the GPEs whose status stays clear and it ALSO
+reboots, with nothing having re-latched. That last result is why this
+stage is load-bearing -- **the waking source is not asserting when the
+sleep is prepared**, so no measurement taken at one instant can find it.
+Only a declared wake set can.
 
 With stages 1 and 2, the wake set is a search: every Device with a
 `_PRW` child, whose package's first element is an integer, contributes

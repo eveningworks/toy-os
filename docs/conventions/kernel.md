@@ -2177,21 +2177,21 @@ machine's `GPE0_BLK` is 32 bytes -- 128 events, among them its lid, its
 embedded controller and USB. The `nogpe` boot flag is the one-boot A/B
 that established it; `docs/decisions.md` has the measurement.
 
-**AND THE QUIET ONES ARE REARMED, DECIDED BY MEASUREMENT.** The problem
-has two halves and each obvious fix breaks the other, both measured on
-the same machine: disable every GPE and leave it so, and the machine
-powers off but takes TWO presses of the power button to start again --
-one of those events IS the power button. Clear the statuses and restore
-every enable, and the button is fine and the machine REBOOTS, because a
-level-triggered source (an embedded controller's is) re-latches the
-instant it is cleared, and a set status with a set enable is a wake.
+**AND THEY STAY MASKED, WHICH COSTS THE POWER BUTTON.** Three versions
+were measured on the machine that needed this: disabling everything
+powers it off (and it then takes TWO presses to start, because one of
+those events IS the power button); restoring every enable makes it
+REBOOT; rearming only the bits whose status stays clear ALSO makes it
+reboot, with nothing having re-latched. That third result is the
+informative one -- **the source that wakes it is not asserting when the
+sleep is prepared**, so no single-instant measurement can find it, and
+only `_PRW` separates a real wake source from one that will bounce the
+machine. `docs/aml-design.md` stages that; `docs/bugs.md` carries the
+two-press cost until it lands.
 
-So `gpe_block_off()` masks, clears, **reads the status back**, and
-rearms only the bits that stayed quiet. A source still asserting says so
-by re-latching within those few port cycles. That approximates what
-Linux gets from `_PRW` -- which needs AML this kernel does not have, and
-`docs/aml-design.md` stages the real answer. Its failure mode degrades
-to the plain disable: if every bit re-latches, nothing is rearmed.
+**The sleep write is TWO writes**, the type first and the enable second,
+as `acpi_hw_legacy_sleep()` does -- some chipsets are documented not to
+accept one write carrying both.
 
 **AND CLEAR THE WAKE-STATUS BITS TOO.** `PM1_STS` is the
 FIRST HALF of the PM1 EVENT block (`PM1a_EVT_BLK`, a different FADT
