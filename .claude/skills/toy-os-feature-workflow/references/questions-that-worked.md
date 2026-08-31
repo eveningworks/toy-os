@@ -440,3 +440,35 @@ specifically because of it.
   and here is the specific option we are taking and why" is the answer;
   "it is fine, Linux ships it" is not.
 
+
+## Going back when your own recommendation turns out to be wrong (2026-08-31)
+
+Asked which of three ways to source the MP3 Huffman tables, the user
+picked the one marked "(Recommended)" -- writing them out by hand rather
+than taking the data from a public-domain decoder. That recommendation
+was mine and it was optimistic: the first table big enough to be hard
+(table 7, 36 entries) failed its completeness check, and roughly 1300
+entries remained across four 16x16 tables.
+
+**The useful move was to stop and re-ask with the measurement, not to
+grind.** The second question carried the evidence -- which table failed,
+what the check can and cannot localise ("a table is wrong" but not
+"which entry"), and that the licensing tradeoff they had actually been
+weighing was unchanged. They switched immediately, and the work took
+about twenty minutes instead of an unknown number of hours.
+
+Two things that made it land rather than read as backtracking:
+
+- **The new fact was quantified**, not a feeling. "Table 7 fails Kraft,
+  ~1300 entries remain, and the check cannot tell me which entry is
+  wrong" is a different message from "this is turning out to be hard".
+- **It named my own error explicitly** -- the estimate behind the
+  recommendation was mine, and the user had partly chosen on the
+  strength of it. CLAUDE.md's rule is to check the claim attached to an
+  option, not just the options; this was that rule failing first and
+  being repaired second.
+
+The general shape: **when a choice the user already made turns out to
+rest on something you got wrong, re-ask once, with the number.** Do not
+silently switch (they chose), and do not keep going because they chose
+(they chose on your evidence).

@@ -115,8 +115,12 @@ QEMU, and it does not stop at "hello world from the kernel":
   the position moves past it, which is what makes an abandoned stream
   play silence instead of looping. Everything above that line is ring-3
   (`userland/lib/usnd.h`): the file formats, the rate and channel
-  conversion, and a voice mixer with stereo gains. There is an **Audio
-  Player**, `/bin/aplay` for a shell, sound effects in Minesweeper, and
+  conversion, and a voice mixer with stereo gains. WAV and **MP3** —
+  the MPEG-1 Layer III decoder is written here, not vendored, and agrees
+  with ffmpeg to one part in 32768 across CBR, VBR, mono, stereo and
+  joint stereo. There is an **Audio Player** (which ships with a track
+  to play, synthesised by `tools/gen_music.py`), `/bin/aplay` for a
+  shell, sound effects in Minesweeper, and
   DOOM's effects and **OPL music** — the music synthesised by Chocolate
   Doom's own emulated Yamaha chip reading the WAD's GENMIDI instrument
   bank, because doomgeneric turns out to *be* Chocolate Doom with the

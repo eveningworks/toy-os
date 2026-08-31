@@ -1292,7 +1292,8 @@ cost".
 - **Generated data and the build** -- `gen_version.sh` /
   `set_version.sh`, `genfont.py` / `genttf.py`, `gen_kbs.py`,
   `gen_cursors.py`, `gen_imgdata.py`, `gen_audio.py`, `gen_music.py`,
-  `gen_icons.py`,
+  `gen_mp3_tables.py` (**verifies two independent sources agree before
+  it writes**), `gen_icons.py`,
   `genrelocs.py`, `gen_syms.py`, `gen_decisions_index.py`,
   `gen_commands_index.py`, `gen_next_up.py`.
 - **The repo itself** -- `backup_repo.sh` (run it before ANY change to

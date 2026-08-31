@@ -624,9 +624,15 @@ rewrite invalidates every SHA, and this repo has done one).
 
 **Two process notes, both mine and both worth avoiding:**
 
-- **A docs edit that replaces a slice by index can silently delete or
+- **AN edit that replaces a slice by index can silently delete or
   duplicate its neighbours, and it will do it three times before you
-  learn.** Mine did: three roadmap entries vanished in one commit
+  learn.** This was written about DOCS and applies just as much to
+  CODE: on 2026-08-31 a slice replacement in `tools/iso_guard.py`
+  removed `BYPASS_ENV`, `ARTIFACT_PAIRS` and `UNSEEDED` along with the
+  block it meant to replace. That one failed loudly (NameError) rather
+  than silently, which was luck rather than a property of the method --
+  the fix is `git checkout` the file and redo it with ANCHORED
+  replacements. Mine did: three roadmap entries vanished in one commit
   (including a plan the user had asked for), an entry was duplicated in
   another, and then `s[:start] + new + s[end:]` on CLAUDE.md re-appended
   2,673 lines because the END anchor occurred EARLIER in the file than

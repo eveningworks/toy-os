@@ -1182,6 +1182,29 @@ window without going through it will find its layout polls timing out.
   structural check on purpose, since swapping two codewords of equal
   length leaves the code complete and prefix-free. Not in any gate: it
   needs `lame` and `ffmpeg`.
+- **`gen_mp3_tables.py`** -- regenerates
+  `userland/lib/usnd_mp3_tables.h`, the three Layer III tables that have
+  no generating formula (the Huffman codes, the 512-tap synthesis window,
+  the scalefactor band edges). It exists so that data which was TAKEN can
+  be CHECKED: without it the header is 473 lines nobody can audit without
+  redoing the work, and `loc.py` counts it as code somebody wrote.
+
+  **It verifies far more than it copies.** Two public-domain
+  implementations store the Huffman tables in two completely different
+  packed formats; this walks BOTH back to the standard's plain (length,
+  codeword) per (x, y) form and refuses to write unless they agree entry
+  for entry -- 1378 entries across 15 tables -- with every table also
+  required to be a complete prefix code. Both checks earned their place:
+  an early hand-written table 7 failed the Kraft check, which is how
+  transcribing from memory was abandoned, and a first version of the
+  pdmp3 walk dropped that format's `>= 250` long-jump escape, which
+  surfaced as table 24 disagreeing in 63 of 256 entries -- the walker was
+  wrong, not the data, and only having two sources made that visible.
+
+  `--check` verifies without writing (useful for asking whether the
+  committed header still matches its sources); `--from DIR` uses local
+  copies instead of downloading. Not run by the build and not in any
+  gate: it needs the network, and the header it writes is committed.
 - **`gen_music.py`** -- generates the MP3s that ship, into
   `data/usr/share/music/` and `data/tests/`. Same call `gen_audio.py`
   made for the WAVs: written rather than fetched, because a build-time

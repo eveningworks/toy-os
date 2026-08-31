@@ -107,7 +107,11 @@ userland/lib/usnd_mp3_tables.h holds three tables defined by ISO/IEC
 11172-3 for MPEG-1 Audio Layer III: the Huffman codeword tables, the
 512-tap polyphase synthesis window, and the scalefactor band edges.
 None of them has a generating formula, so they were taken rather than
-written. They were recovered from two public-domain implementations --
+written. tools/gen_mp3_tables.py is how they were recovered, and re-running it
+reproduces the header byte for byte: it walks both sources back to the
+standard's own form and refuses to write anything unless they agree
+entry for entry. They were recovered from two public-domain
+implementations --
 minimp3 (https://github.com/lieff/minimp3, CC0 1.0 Universal) and PDMP3
 (https://github.com/technosaurus/PDMP3, the Unlicense) -- and
 cross-checked against each other: all fifteen Huffman tables agree

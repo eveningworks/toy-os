@@ -40,6 +40,9 @@ GENERATED = {
     "kernel/include/api/version.h",     # tools/gen_version.sh
     "kernel/include/api/build_date.h",  # tools/gen_version.sh
     "userland/tests/uimg_vectors.h",    # tools/gen_imgdata.py -- decoder vectors
+    "userland/lib/usnd_mp3_tables.h",   # tools/gen_mp3_tables.py -- ISO's
+                                        # Layer III tables, recovered and
+                                        # cross-checked rather than written
 }
 
 SKIP_DIRS = {"build", ".git", "iso", "data"}

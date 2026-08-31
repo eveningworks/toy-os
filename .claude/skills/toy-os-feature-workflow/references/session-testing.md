@@ -2261,3 +2261,52 @@ checks across two suites went red or went quiet.
   make the action a no-op -- an arrow at the end of a list, a Back
   button on the first page -- because the widget reports nothing in
   exactly that case and the test cannot tell it from broken.
+
+**2026-08-31 (the MP3 host harness). THE THEME IS THAT THE POSITIVE
+CONTROL FOUND TWO FAULTS IN THE HARNESS AND ZERO IN THE CODE -- and
+both faults had been reporting a broken decoder as fine.**
+
+The suite was eight lame-encoded files compared against ffmpeg. It went
+green. Then the control ran, and neither of these would have been found
+any other way:
+
+- **A TOLERANCE PICKED BY EYE WAS 10 000x TOO LOOSE.** I set 0.02 RMS
+  because it "sounded about right" for a lossy codec. Measured agreement
+  turned out to be 1.6e-6 -- one LSB in 32768 -- so the bar sat four
+  orders of magnitude above the noise floor. `--positive-control` (two
+  Huffman tables swapped) showed a deliberately broken decoder PASSING
+  two of the eight checks under it. The repo already says a threshold
+  picked without a control is a guess; this is what the guess costs.
+  Calibrate from the measured clean value, not from intuition about the
+  domain.
+- **THE REPORT'S PRECISION IS PART OF THE TEST.** Printing `rms 0.00000`
+  to five decimals made a 2.4x change in the metric invisible: my first
+  control nudged a window coefficient, the number did not visibly move,
+  and I briefly concluded the harness was not comparing at all. It was;
+  the DISPLAY was lossy. Scientific notation plus the WORST SINGLE
+  SAMPLE beside the mean made every later control legible. A mean over
+  260 000 samples hides exactly the small systematic error a weak
+  control produces.
+- **AN ORACLE'S ALIGNMENT ASSUMPTION CAN CONDEMN CORRECT CODE.** The
+  comparison searched for the best lag in whole frames (1152 samples),
+  which is right for a bare stream. A file carrying a LAME/Xing gapless
+  tag makes ffmpeg drop the ENCODER DELAY -- 1105 samples, not a
+  multiple of anything -- so the shipped song reported RMS 1.8e-1 and
+  looked badly broken while being bit-accurate. Searching every sample
+  found lag 1105 and RMS 1.4e-6. When an oracle disagrees only on ONE
+  input, suspect what is special about that input before the code.
+- **SHAPE THE CONTROL TO DEFEAT THE CHECK YOU ARE NOT TESTING.** The
+  cheap structural check (Kraft: is every table a complete prefix code?)
+  catches a corrupted codeword instantly. That makes it useless as a
+  control for the expensive check, because it fires first. Swapping two
+  codewords of EQUAL LENGTH leaves the code complete and prefix-free, so
+  the structural check still passes and only the ffmpeg comparison can
+  see it. A control the cheap gate catches proves nothing about the
+  expensive one.
+- **A GENERATOR FOR TAKEN DATA IS A TEST, NOT A CONVENIENCE.**
+  `tools/gen_mp3_tables.py` re-derives the committed tables from two
+  independent public-domain sources and REFUSES TO WRITE unless they
+  agree entry for entry. That turns "these 473 lines came from
+  somewhere and are probably right" into something re-runnable, and it
+  keeps `loc.py` honest about what was actually written here. Any data
+  the repo takes rather than writes deserves the same treatment.

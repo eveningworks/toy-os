@@ -1207,3 +1207,68 @@ it in next time.
   original trigger (init's own unconditional status write) reproduced at
   ~1 in 2 immediately. When a bug names its trigger, restore THAT, do
   not build something of the same shape.
+
+**2026-08-31 (writing an MP3 decoder). THE THEME IS THAT FOUR SEPARATE
+THINGS "EXPLAINED" THE BUG BEFORE THE REAL ONE, AND THREE OF THEM WERE
+MY OWN INSTRUMENTS.** The bug was one line; finding it cost most of a
+day, almost entirely spent on evidence that was not evidence.
+
+The actual defect, for context: the Huffman decode tree marked a leaf in
+BOTH CHILDREN of the node the codeword path ended at, so the walk only
+saw it after descending one level further. Every symbol consumed one
+extra bit. That decodes to plausible small numbers rather than to an
+error, which is why nothing upstream noticed.
+
+- **AN ORACLE THAT ADAPTS TO ITS INPUT CANNOT VALIDATE THAT INPUT.** The
+  decoder's own bit accounting looked perfect -- granule after granule
+  landed "1 bit over budget", which reads like exactness. It was
+  meaningless: the count1 region decodes UNTIL the bit budget is spent,
+  so it fills to whatever number you give it. Any budget, right or
+  wrong, produces a granule that lands on it. I treated that as
+  confirmation for hours. Before believing a check, ask what it would do
+  if the value under test were wrong -- if the answer is "the same
+  thing", it is not a check.
+- **`grep -l` MATCHES COMMENTS, AND A COMMENT CAN SAY THE OPPOSITE OF
+  THE CODE.** I grepped for `float` in `uimg_jpeg.c`, got a hit, and
+  told the user ring-3 floating point was already in use there. The hit
+  was a comment saying this build has NO floating point to fold
+  constants from. The conclusion happened to be right for other reasons
+  (`fpu.c`, `/tests/fpu_test`, tolibc's `math.c`), but the evidence was
+  backwards. Look at what a hit actually IS before citing it.
+- **A PATTERN THAT FITS PERFECTLY IS STILL WORTHLESS IF THE TWO SIDES
+  ARE NOT THE SAME THING.** I compared my decoder's side-info dump for
+  frame ~20 against pdmp3's for frame 2 and found an exact five-bit
+  shift: their table_select[0] was my [1], their [1] was my [2], their
+  [2] was the bits after mine. That is a compelling story, and it was
+  coincidence -- different frames. The fix was to make both sides dump
+  the SAME granules, which took one edit and immediately showed the side
+  info matching field for field.
+- **MY OWN SHELL PIPELINE KILLED THE PROCESS AND I READ IT AS A BUG.**
+  `./probe file 2>&1 >out.raw | head -2` closes the pipe after two
+  lines; the next stderr write takes SIGPIPE and the process dies. I
+  measured "only 3069 frames decoded" and started hunting a VBR frame-
+  iteration bug that did not exist. Suspect the harness first -- and
+  `head` on a pipe is a harness.
+- **A SECOND INDEPENDENT SOURCE IS WORTH MORE THAN ANY AMOUNT OF
+  REASONING ABOUT ONE.** The tables came from minimp3; walking pdmp3's
+  completely different format and comparing entry for entry is what
+  finally proved the data right and moved suspicion to the code. It also
+  caught the reverse: table 24 "disagreed" in 63 of 256 entries because
+  my pdmp3 walker ignored that format's `>= 250` long-jump escape. The
+  disagreement was my second reader, not the data -- which is exactly
+  what a second reader is for.
+- **A STRUCTURAL INVARIANT YOU CAN CHECK WITHOUT A REFERENCE IS WORTH
+  BUILDING EARLY.** Every MP3 Huffman table must be a complete prefix
+  code (Kraft sum exactly 1). That is checkable with no oracle at all,
+  it killed the transcribe-from-memory approach within minutes of the
+  first big table, and it now ships as `usnd_mp3_selftest()`. Ask what
+  property the data must have on its own, before asking what it should
+  equal.
+- **AND THE SLICE-EDIT HAZARD APPLIES TO CODE, NOT JUST DOCS.**
+  CLAUDE.md records that replacing a docs slice by index deletes its
+  neighbours; I did it to `tools/iso_guard.py` and removed `BYPASS_ENV`,
+  `ARTIFACT_PAIRS` and `UNSEEDED` along with the block I meant to
+  replace. It failed loudly (NameError) rather than silently, which was
+  luck. `git checkout` the file and redo the edit with ANCHORED
+  replacements -- never `s[:i] + new + s[j:]` across code you have not
+  re-read.
