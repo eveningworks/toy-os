@@ -686,6 +686,10 @@ int sys_mount(const struct mount_request *req) {
     return (int)err(syscall1(SYS_MOUNT, (uint64_t)(uintptr_t)req));
 }
 
+int sys_mkfs(const struct mkfs_request *req) {
+    return (int)err(syscall1(SYS_MKFS, (uint64_t)(uintptr_t)req));
+}
+
 int sys_umount(const char *point) {
     return (int)err(syscall1(SYS_UMOUNT, (uint64_t)(uintptr_t)point));
 }

@@ -44,4 +44,28 @@ struct mount_request {
     uint32_t reserved;
 };
 
+// --- SYS_MKFS ---------------------------------------------------------
+//
+// WHY THIS IS NOT `fsformat` WITH AN ARGUMENT. fs_format_backend() --
+// the ring-0 `fsformat` command -- reformats the volume this machine is
+// RUNNING FROM, unmounting everything first and re-probing after. That
+// is a different operation from "put a filesystem on that other
+// partition", which is what an installer wants and which must not
+// disturb the running system at all.
+//
+// The device is named the same way mount_request.source names one, so
+// there is one spelling of "which volume" across the ABI.
+struct mkfs_request {
+    char source[MOUNT_SOURCE_MAX];  // "ahci0p3" -- a partition, never a disk
+    char fstype[MOUNT_FSTYPE_MAX];  // "tfs3", "fat32" -- never probed
+    uint32_t flags;                 // MKFS_CONFIRM
+    uint32_t reserved;
+};
+
+// The caller states that it knows this destroys whatever is on the
+// volume. Same stand-in as MKPART_CONFIRM, and the same caveat: it is a
+// speed bump, not a permission check, because this OS has no privilege
+// model to make it one.
+#define MKFS_CONFIRM 0x1
+
 #endif

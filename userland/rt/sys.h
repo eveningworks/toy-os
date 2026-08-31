@@ -600,6 +600,13 @@ int sys_mkpart(const struct mkpart_request *req);
 // NOT DESTRUCTIVE: nothing is formatted or overwritten, which is why
 // there is no confirm flag of the kind SYS_MKPART needs.
 int sys_mount(const struct mount_request *req);
+
+// Writes an empty filesystem onto ONE partition. DESTRUCTIVE, so the
+// request carries MKFS_CONFIRM and the kernel refuses without it -- the
+// same shape SYS_MKPART uses, and the same caveat: a speed bump, not a
+// permission check. Refuses a volume something is mounted from; use
+// `fsformat` for the running root, which is a different operation.
+int sys_mkfs(const struct mkfs_request *req);
 int sys_umount(const char *point);
 
 // Powers the machine off (`reboot` = 0) or restarts it (1). DOES NOT

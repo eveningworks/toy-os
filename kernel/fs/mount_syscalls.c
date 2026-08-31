@@ -70,6 +70,72 @@ static int source_device(const char *src, const struct block_device **out) {
     return *out != NULL;
 }
 
+// SYS_MKFS -- put an empty filesystem on ONE partition.
+//
+// The installer's operation, and the reason it is not `fsformat` with an
+// argument: fsformat reformats the volume this machine is RUNNING FROM,
+// unmounting everything and re-probing after. Writing a filesystem onto
+// some OTHER partition must disturb nothing at all, so a target that is
+// mounted is REFUSED rather than unmounted for the caller.
+int sys_mkfs(struct syscall_ctx *c) {
+    struct mkfs_request req;
+    if (!vmm_copy_from_user(c->pml4, &req, c->a0, sizeof(req))) {
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+    // Untrusted, exactly as sys_mount() says below: a field without a
+    // NUL would run every k_str* off the end of the copy.
+    req.source[MOUNT_SOURCE_MAX - 1] = '\0';
+    req.fstype[MOUNT_FSTYPE_MAX - 1] = '\0';
+
+    if (!(req.flags & MKFS_CONFIRM)) {
+        klog_write("mkfs: refused without MKFS_CONFIRM\n");
+        c->regs[14] = (uint64_t)(int64_t)-EPERM;
+        return 0;
+    }
+
+    // A VOLUME, NEVER "whatever is active". An empty source means
+    // nothing here -- there is no filesystem to format without one --
+    // so it is an error rather than a fallback to the boot disk.
+    const struct block_device *dev = NULL;
+    if (!req.source[0] || !source_device(req.source, &dev) || !dev) {
+        klog_printf("mkfs: no partition named \"%s\"\n", req.source);
+        c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+        return 0;
+    }
+
+    const struct fs_ops *target = mount_backend_named(req.fstype);
+
+    // BUSY COVERS TWO CASES, and the second is the surprising one: a
+    // backend keeps its volume in module-level state (see
+    // fs_format_device), so formatting a second TFS3 partition while a
+    // TFS3 root is mounted repoints the backend under the running
+    // system. Both are -EBUSY rather than one being -EIO, because the
+    // caller's move is the same for both -- do it from a live boot.
+    for (int i = 0; i < mount_count(); i++) {
+        const struct mount *m = mount_at(i);
+        if (!m || !m->used) continue;
+        if (m->dev) {   // any volume-backed mount -- see fs_format_device
+            c->regs[14] = (uint64_t)(int64_t)-EBUSY;
+            return 0;
+        }
+    }
+
+    if (!target) {
+        klog_printf("mkfs: no filesystem type \"%s\"\n", req.fstype);
+        c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+        return 0;
+    }
+
+    if (!fs_format_device(dev, req.fstype)) {
+        c->regs[14] = (uint64_t)(int64_t)-EIO;
+        return 0;
+    }
+    klog_printf("mkfs: %s formatted as %s\n", req.source, req.fstype);
+    c->regs[14] = 0;
+    return 0;
+}
+
 int sys_mount(struct syscall_ctx *c) {
     struct mount_request req;
     if (!vmm_copy_from_user(c->pml4, &req, c->a0, sizeof(req))) {

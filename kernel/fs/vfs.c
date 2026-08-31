@@ -135,6 +135,48 @@ int fs_has(uint32_t cap) {
     return (fs_capabilities() & cap) == cap;
 }
 
+// See fs.h. The whole of the difference from fs_format_backend() below
+// is that this one disturbs NOTHING: no unmount, no re-probe, no change
+// to what is mounted where. A target that would need any of that is
+// refused instead, because an installer handed the running root is an
+// installer being asked to saw off its own branch.
+int fs_format_device(const struct block_device *dev, const char *fstype) {
+    if (!dev || !fstype || !fstype[0]) return 0;
+    const struct fs_ops *target = mount_backend_named(fstype);
+    if (!target || !target->format) return 0;
+
+    // REFUSED WHILE ANY VOLUME-BACKED FILESYSTEM IS MOUNTED, which is
+    // stricter than it looks and is the honest bound on this operation.
+    //
+    // A backend keeps its volume in MODULE-LEVEL state, and TWO paths
+    // here repoint it at `dev`: tfs3_format() opens with
+    // set_flat_volume(dev), and mount_wipe_others() calls wipe(dev) on
+    // EVERY OTHER backend. So formatting any device, as any type,
+    // repoints whatever is mounted -- a `mkfs -t fat32` crashed a live
+    // boot whose root was TFS3, because the wipe went through tfs3.
+    //
+    // Both were measured, each after a `mkfs` that crashed and took
+    // /bin with it. Refusing is the only correct answer until a backend
+    // can hold per-volume state; fs_format_backend() escapes it only by
+    // unmounting the world first, which an installer must not do to the
+    // system it is running from. A mount with no device (ramfs) does not
+    // count -- that is the boot an installer wants.
+    for (int i = 0; i < mount_count(); i++) {
+        const struct mount *m = mount_at(i);
+        if (!m || !m->used || !m->dev) continue;
+        klog_printf("mkfs: %s is mounted at %s -- formatting anything now "
+                    "would repoint its backend; boot with no disk mounted\n",
+                    blk_device_name(m->dev), m->point);
+        return 0;
+    }
+
+    // The wipefs rule, same as below and for the same reason: another
+    // backend's leftover signature outlives a format and the next probe
+    // mounts the corpse.
+    mount_wipe_others(target, dev);
+    return target->format(dev) ? 1 : 0;
+}
+
 int fs_format_backend(const char *name) {
     const struct fs_ops *target = mount_backend_named(name);
     if (!target) return 0;

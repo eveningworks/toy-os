@@ -348,6 +348,17 @@ uint64_t fs_generation(void);
 // convention: it yanks the filesystem out from under any open state.
 int fs_format_backend(const char *name);
 
+// Put an empty filesystem of type `fstype` on ONE device -- the
+// installer's mkfs, and deliberately not fs_format_backend() above.
+// That one reformats the volume this machine is RUNNING FROM and
+// unmounts and re-probes the world to do it; this one disturbs nothing
+// and REFUSES a device something is mounted from, because an installer
+// handed the running root is one being asked to saw off its own branch.
+// Returns 1, or 0 for an unknown fstype, a mounted target, or a format
+// that failed.
+struct block_device;
+int fs_format_device(const struct block_device *dev, const char *fstype);
+
 // 1 if the active backend found (or formatted) a usable disk via
 // ata.c, so every fs_touch()/fs_write()/fs_mkdir()/fs_delete() above is
 // being persisted to it and files survive a reboot; 0 if no disk was

@@ -509,6 +509,28 @@ struct sys_dirent {
                        // 0.0.0.0) and an Announcement from one that has
                        // it.
 
+#define SYS_MKFS 92 // RDI = pointer to a `struct mkfs_request`
+                    // (abi/mount_abi.h). Writes an empty filesystem of
+                    // the named type onto the named PARTITION. Returns
+                    // 0, or a negative errno: -EINVAL for an unknown
+                    // fstype or a source naming no partition, -EPERM
+                    // without MKFS_CONFIRM, -EBUSY if anything is
+                    // mounted from that volume, -EIO if the format
+                    // failed, -ENODEV with no such device.
+                    //
+                    // REFUSES A MOUNTED VOLUME rather than unmounting
+                    // it. `fsformat` reformats the RUNNING root and
+                    // does the unmount-and-reprobe dance for it; this
+                    // is the installer's operation, and a target it has
+                    // to unmount first is a target it should not have
+                    // been given.
+                    //
+                    // It wipes other backends' signatures first
+                    // (mount_wipe_others), because formatting a TFS3
+                    // volume as something else once left TFS3's backup
+                    // superblocks intact and the next probe mounted the
+                    // corpse.
+
 #define SYS_WIN_CLIP 91 // RDI = pointer to a `struct win_clip_msg`
                        // (abi/win_proto.h), in and out. Returns 1, or 0
                        // when a SET does not fit.
