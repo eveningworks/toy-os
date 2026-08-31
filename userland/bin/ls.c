@@ -46,6 +46,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "lib/dirsort.h"
+#include "kpath.h"    // k_path_basename, for a path that names a file
 
 // The output flags, gathered so the recursion below can pass one thing.
 struct opts {
@@ -157,15 +158,41 @@ static void queue_push(const char *dir, const char *name) {
 
 // Lists one directory. Returns 0 on success, 1 if the path could not be
 // read at all.
+// A PATH THAT IS A FILE IS NOT AN ERROR, it is a listing of one. Real
+// ls stats a non-directory argument and prints that single entry, and
+// this did not: sys_listdir() answers -ENOTDIR for a file, which came
+// out as `ls: cannot access '/bin/ls': not a directory` -- for a file
+// that plainly exists. Found on the bare-metal laptop while checking
+// the size of a binary that had just been copied there, where the one
+// command anybody reaches for reported the file missing.
+//
+// Synthesised into a dirent so there is ONE printing path: the columns,
+// the sort, the colouring and -l all keep working without knowing that
+// this entry did not come from a directory read.
+static int stat_one(const char *path, struct sys_dirent *out) {
+    struct sys_stat st;
+    if (sys_stat(path, &st) < 0) return 0;
+    memset(out, 0, sizeof *out);
+    strlcpy(out->name, k_path_basename(path), sizeof out->name);
+    out->size = (uint32_t)st.size;
+    out->is_dir = st.is_dir;
+    out->modified = st.modified;
+    return 1;
+}
+
 static int list_one(const struct opts *o, const char *path, int with_header) {
     int64_t count = sys_listdir(path, g_entries, SYS_LISTDIR_MAX);
     if (count < 0) {
-        put("ls: cannot access '");
-        put(path);
-        put("': ");
-        put(strerror(sys_errno()));
-        put("\n");
-        return 1;
+        if (stat_one(path, &g_entries[0])) {
+            count = 1;
+        } else {
+            put("ls: cannot access '");
+            put(path);
+            put("': ");
+            put(strerror(sys_errno()));
+            put("\n");
+            return 1;
+        }
     }
 
     if (with_header) { put("\n"); put(path); put(":\n"); }
