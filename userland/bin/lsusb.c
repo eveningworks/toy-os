@@ -183,7 +183,7 @@ static void load_names(void) {
 // the interesting half of a device no driver here binds is exactly the
 // class-specific descriptors nothing looked at -- and because a hex
 // dump pastes straight into a KTEST fixture, which is the only way a
-// device nobody owns is ever tested against (usb_audio.c's fixture is
+// device nobody owns is ever tested against (sound_usb.c's fixture is
 // QEMU's, captured the same way).
 //
 // The decode below is a SUMMARY, not a full one: enough to answer "why

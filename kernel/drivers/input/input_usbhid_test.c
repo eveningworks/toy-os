@@ -1,6 +1,6 @@
 // KTESTs for the HID boot-protocol decoding.
 //
-// These need no controller and no device: usb_hid.c's two differs take
+// These need no controller and no device: input_usbhid.c's two differs take
 // their state as a parameter precisely so a test can drive them
 // directly. That matters because the differs are where the bugs are and
 // the half hardware cannot help with -- a real keyboard will not

@@ -675,13 +675,13 @@ run on, not by order.
 - [x] ~~The xHCI USB Legacy Support handoff (xECP id 1)~~ DONE -- confirmed on the laptop 2026-08-28
 - [x] ~~Confirm the xHCI BIOS handoff on the laptop it was written for~~ DONE 2026-08-28 -- a wireless mouse works on the machine
 - [ ] **NEXT** `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR, not a 64 KiB guess
-- [x] ~~USB audio (isochronous OUT, UAC1)~~ DONE 2026-08-30 -- `kernel/drivers/usb/usb_audio.c`; SIA scheduling is QEMU-tested only
+- [x] ~~USB audio (isochronous OUT, UAC1)~~ DONE 2026-08-30 -- `kernel/drivers/sound/sound_usb.c`; SIA scheduling is QEMU-tested only
 - [x] ~~UAC2 playback: a set rate, 24-bit samples, 125 us intervals~~ DONE 2026-08-31 -- proven on a Sound BlasterX G6
 - [x] ~~An AML namespace walk, Method bodies skipped~~ DONE 2026-08-31 -- `kernel/acpi/aml.c`, stage 1 of `docs/aml-design.md`
-- [x] ~~An RTL8153 vendor driver for USB Ethernet~~ DONE 2026-08-31 -- `usb_r8153.c`; DHCP, ICMP and 730 KB of HTTP on a TP-Link UE300
+- [x] ~~An RTL8153 vendor driver for USB Ethernet~~ DONE 2026-08-31 -- `net_usb_r8153.c`; DHCP, ICMP and 730 KB of HTTP on a TP-Link UE300
 - [ ] **NEXT** `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`
 - [ ] **NEXT** The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN
-- [x] ~~USB Ethernet (CDC-ECM), and the BULK transfer type it needed~~ DONE 2026-08-31 -- `usb_net.c`; RX untested, see `docs/bugs.md`
+- [x] ~~USB Ethernet (CDC-ECM), and the BULK transfer type it needed~~ DONE 2026-08-31 -- `net_usb_ecm.c`; RX untested, see `docs/bugs.md`
 - [ ] USB mass storage (bulk-only transport) -- the first non-disk-bus storage backend
 - [x] ~~Hub support (devices behind a hub, not just root ports)~~ DONE 2026-08-28 -- USB2 only; the TT path is hardware-only
 - [x] ~~Hot-plug: a device plugged in after boot enumerates, an unplugged one is torn down~~ DONE 2026-08-28

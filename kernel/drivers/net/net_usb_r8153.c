@@ -1,7 +1,7 @@
 // RTL8152/RTL8153 USB Ethernet, the VENDOR protocol -- the adapter's
 // first configuration, the one every other OS actually binds.
 //
-// WHY THIS EXISTS BESIDE usb_net.c. The TP-Link UE300 this was written
+// WHY THIS EXISTS BESIDE net_usb_ecm.c. The TP-Link UE300 this was written
 // for offers CDC-ECM as its SECOND configuration and receives nothing
 // there; Linux's own cdc_ether receives nothing there either, which is
 // what says the fault is the adapter's ECM and not either driver

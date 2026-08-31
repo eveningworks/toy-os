@@ -3870,7 +3870,7 @@ written a sleep type the firmware never named.
 
 ## An RTL8153 vendor driver for USB Ethernet
 
-**BUILT 2026-08-31** -- `kernel/drivers/usb/usb_r8153.c`. What is left
+**BUILT 2026-08-31** -- `kernel/drivers/net/net_usb_r8153.c`. What is left
 here is what a later session would otherwise re-derive: what was
 measured, and what was not.
 

@@ -10,7 +10,7 @@
 // This is a plain header with one implementation behind it, NOT an ops
 // table -- see usb.h for why there is no HCD abstraction. What makes
 // this seam worth having anyway is that it already has two real callers
-// (the keyboard and the mouse in usb_hid.c, both reached through
+// (the keyboard and the mouse in input_usbhid.c, both reached through
 // usb_enum.c) rather than one plausible future one.
 //
 // Below this line: rings, doorbells, contexts, completion codes.
@@ -27,7 +27,7 @@
 // virtqueue.c's poll loop carries the full argument.
 #define XHCI_POLL_BACKSTOP 2000000u
 
-// --- what usb_enum.c and usb_hid.c call ------------------------------
+// --- what usb_enum.c and input_usbhid.c call ------------------------------
 
 // Enable Slot, then Address Device, for a device on root port
 // `root_port` (1-based) at `speed`, reached through `route` (the xHCI

@@ -30,7 +30,7 @@ xHCI controller and USB HID devices, off by default because attaching a
 `--usb-host VID:PID` passes a REAL device off the host's bus through to
 the guest, which is the only way to reach a driver path no emulated
 device has — QEMU's `usb-audio` is UAC1 at one format, so every UAC2
-path in `usb_audio.c` is unreachable without it; it needs write access
+path in `sound_usb.c` is unreachable without it; it needs write access
 to the device's `/dev/bus/usb/BBB/DDD` node (`root:root 0664` normally,
 so `sudo chmod o+rw` on it, which a replug resets) and it TAKES THE
 DEVICE AWAY from the host until the guest exits;

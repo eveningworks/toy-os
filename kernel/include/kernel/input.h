@@ -111,7 +111,7 @@ void input_report_key(uint16_t keycode, int down);
 // what most device protocols report. mouse_feed_rel() ends in
 // `mouse_y -= dy` because it was written against a PS/2 mouse. evdev's
 // REL_Y and a HID boot mouse both make positive mean DOWN the screen,
-// so both virtio_input.c and usb_hid.c negate on the way in. This was
+// so both virtio_input.c and input_usbhid.c negate on the way in. This was
 // stated nowhere until a driver got it wrong, and the only way to find
 // it was reading mouse.c -- so it is stated here now.
 void input_report_rel(int dx, int dy);

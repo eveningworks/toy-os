@@ -6,7 +6,7 @@
 // keyboard and left the mouse silently dead. QEMU has no stock
 // composite HID device, so the only way to cover that shape headlessly
 // is to feed the walk the descriptor bytes directly, the same call
-// usb_hid_test.c makes for the differs.
+// input_usbhid_test.c makes for the differs.
 #include "usb.h"
 #include "ktest.h"
 #include "string.h"

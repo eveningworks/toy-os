@@ -607,8 +607,10 @@ kernel/
   lib/          services with no hardware of their own: the shared
                 toolkit (strings, numbers, formatting, paths, line
                 editing), JSON, klog, /etc config, entropy, tunables
-  drivers/      one piece of hardware each, plus the registries a new
-                one plugs into (display, block, input)
+  drivers/      one piece of hardware each, in the directory of the
+                REGISTRY it plugs into rather than the bus it sits on:
+                block/, display/, net/, sound/, input/, plus the shared
+                buses virtio/ and usb/ (see kernel/README.md)
   test/         the KTEST harness itself
   include/      split by audience and ENFORCED by include paths: api/
                 (what apps may use), abi/ (the kernel<->userland

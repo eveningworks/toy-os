@@ -381,11 +381,16 @@ this the obvious way), not from how much history it accumulated.
   `core/` (bring-up and whole-machine concerns), `mm/`, `proc/`, `fs/`,
   `drivers/` (one piece of hardware each), `lib/` (services with no
   hardware of their own). `kernel/README.md` has the "does it belong
-  here?" test per directory. Two lines worth holding: nothing outside
+  here?" test per directory. Three lines worth holding: nothing outside
   `arch/` should contain `inb`/`outb`, inline assembly or a
-  control-register access; and a filesystem backend goes in `fs/`, not
+  control-register access; a filesystem backend goes in `fs/`, not
   `drivers/` -- the block device is the driver, the filesystem on top
-  of it isn't.
+  of it isn't; and **inside `drivers/` a driver goes with the CLASS
+  REGISTRY it plugs into, not the bus it sits on**, so a USB Ethernet
+  adapter is in `net/` and a USB DAC in `sound/`, leaving `usb/` as the
+  controller, enumeration and hub. That is Linux's arrangement
+  (`drivers/net/usb/`, `sound/usb/`) and the opposite of FreeBSD's
+  (`sys/dev/usb/net/`); `docs/decisions.md` has why.
 - **`kernel/include/api/version.h` is GENERATED, not hand-edited** --
   `tools/gen_version.sh` regenerates it from `VERSION` (repo root) as
   the first step of `make all`/`make iso`. Never edit `version.h`

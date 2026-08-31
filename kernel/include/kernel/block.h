@@ -192,7 +192,7 @@ int blk_virtio_init(void);
 int blk_ahci_init(void);
 
 // Registers a RAM-backed device over [base, base + bytes). For a live
-// image handed over by the bootloader; see kernel/drivers/block/ram.c.
+// image handed over by the bootloader; see kernel/drivers/block/block_ram.c.
 int blk_ram_register(uint64_t base, uint64_t bytes);
 
 // ---- partitions ----------------------------------------------------

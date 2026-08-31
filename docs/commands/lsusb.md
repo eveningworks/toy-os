@@ -40,7 +40,7 @@ That is the flag to reach for when a device is listed with `, no driver`
 and you want to know why. A class driver refuses a device by walking
 descriptors nothing else keeps, so the bytes are the only account of it;
 they also paste straight into a KTEST fixture, which is how a device
-nobody here owns gets tested at all (`usb_audio.c`'s fixture is QEMU's,
+nobody here owns gets tested at all (`sound_usb.c`'s fixture is QEMU's,
 captured exactly this way).
 
 `, no driver` after the speed means the device was enumerated and

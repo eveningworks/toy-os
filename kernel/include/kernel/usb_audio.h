@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 // USB Audio Class 1.0 and 2.0 playback -- see
-// kernel/drivers/usb/usb_audio.c for what it binds and what it
+// kernel/drivers/sound/sound_usb.c for what it binds and what it
 // deliberately refuses.
 
 struct usb_device_info;

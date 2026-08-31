@@ -4,14 +4,14 @@
 // THIS IS NO LONGER THE DRIVER FOR AN RTL8153. The adapter this was
 // written for -- a TP-Link UE300 -- offers Realtek's own protocol first
 // and CDC-ECM second, and its ECM configuration receives nothing, as
-// Linux's cdc_ether confirms by failing identically. usb_r8153.c binds
+// Linux's cdc_ether confirms by failing identically. net_usb_r8153.c binds
 // the vendor configuration now, and usb_enum.c hands such a device
 // there instead. What is left here is the STANDARD path, for an adapter
 // whose ECM works -- which is still the one worth having, because it is
 // a class driver rather than a per-chip register map.
 //
 // THREE THINGS LIVE IN CLASS-SPECIFIC DESCRIPTORS, which is why this
-// takes the raw configuration the way usb_audio.c does: the MAC address
+// takes the raw configuration the way sound_usb.c does: the MAC address
 // (as a STRING index -- twelve hex characters, and the only place the
 // address is written down), the DATA interface's number (in the Union
 // functional descriptor), and the maximum segment size.

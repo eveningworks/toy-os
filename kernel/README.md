@@ -11,25 +11,49 @@ question to answer when adding one.
 | `mm/` | Physical frames, address spaces, the kernel heap's platform half (`heap_os.c`; the allocator itself is `lib/heap_core.c`, shared with ring 3) | Is it about memory? |
 | `proc/` | ELF loading, the syscall table + dispatcher, the fd namespace, processes, the scheduler | Is it about *running* something? |
 | `fs/` | The probe-selecting VFS + two backends (TFS3 default, TFS2 legacy), and the path-keyed syscalls | Is it about files? |
-| `drivers/` | Console, graphics, PS/2, ATA, PCI, virtio, partitions, speaker | Does it talk to a specific piece of hardware? |
+| `drivers/` | Console, graphics, input, storage, network, sound, PCI, virtio, USB, speaker | Does it talk to a specific piece of hardware? |
 | `lib/` | the toolkit (`string.c`, `knum.c`, `kfmt.c` + `kfmt_print.c`, `kpath.c`, `fixed.c`, `geom.c`, `krandom.c`, `heap_core.c`), JSON, klog, debug flags, `/etc` config, timezone/font/keyboard settings | Is it a service with no hardware and no policy of its own? |
 | `include/` | Headers, split by audience | See `include/README.md` |
 
 ## Why this shape
 
-`drivers/` has three subdirectories, and they group by DEVICE FAMILY
-rather than by function: `block/` (the `block_device` registry and its
-implementations -- ATA, RAM, virtio), `display/` (the `display_driver`
-registry, vesafb, vmsvga) and `virtio/` (the shared virtio transport
-and virtqueue, plus the per-device drivers on top of them). A file goes
-in one of those when it is a member of that family, and directly in
-`drivers/` otherwise.
+`drivers/` subdirectories are the CLASS REGISTRIES plus the shared
+BUSES, and a driver goes with the class it registers with rather than
+the bus it sits on.
+
+The registries: `block/` (`block_device` -- ATA, AHCI, RAM, virtio,
+partitions), `display/` (`display_driver` -- vesafb, vmsvga, bochs,
+virtio), `net/` (`net_device` -- e1000, virtio, and both USB
+adapters), `sound/` (`sound_device` -- AC'97 and USB audio) and
+`input/` (`input_source` -- PS/2, and USB HID). The buses: `virtio/`
+(the transport and virtqueue) and `usb/` (the xHCI controller,
+enumeration, and the hub driver that is part of the bus topology). A
+file with no family goes directly in `drivers/`.
+
+**So `usb/` holds the bus and nothing that rides on it** -- which is
+Linux's `drivers/usb/{core,host}`, with `drivers/net/usb/`,
+`sound/usb/` and `drivers/hid/usbhid/` for the devices. FreeBSD files
+the other way round (`sys/dev/usb/net/if_ure.c`); this repo went
+function-first because a class registry is the thing a new driver
+plugs into, so the directory that names it should be the complete list
+of its implementers.
 
 Note `virtio/` and `block/` both hold part of virtio-blk, and that is
 the intended split rather than an accident: `virtio/virtio_blk.c` is
-the DRIVER (the request format, the queue) and
-`block/block_virtio.c` is the ADAPTER that presents it as a
-`block_device`. Same shape as `ata.c` and `block/block_ata.c`.
+the DRIVER (the request format, the queue) and `block/block_virtio.c`
+is the ADAPTER that presents it as a `block_device`. Same shape as
+`ata.c` and `block/block_ata.c`.
+
+**The USB drivers deliberately do NOT split that way.** The adapter
+pattern earns its keep for virtio because `virtio_net.c` has never
+heard of `netdev.h` -- the shim is a real dependency boundary, and 32
+lines. For a USB device the class-specific work (descriptor parsing,
+framing, the MAC, link state) IS the driver, so a shim would state
+nothing the driver does not already know. `net_usb_r8153.c` registers
+its own `net_device` and lives in `net/`; what it still calls by name
+across the bus seam is `xhci_*`, and what `usb_enum.c` calls back is
+its `_bind`/`_unbind` pair, declared in `usb.h` because enumeration is
+the caller.
 
 It was two directories -- `core/` (33 files) and `drivers/` -- until the
 2026-08-13 restructure. `core/` had accumulated five unrelated concerns,

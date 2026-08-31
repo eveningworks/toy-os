@@ -720,10 +720,14 @@ about there being no lock state here. See `docs/decisions.md`.
 
 ## USB IS xHCI ONLY, ITS PORTS WAIT ON PED RATHER THAN PRC, AND EVERY DMA OBJECT IS ITS OWN FRAME
 
-`kernel/drivers/usb/`. One host controller driver (`xhci.c`), the device
-enumeration on it (`usb_enum.c`), a HID boot-protocol class driver
-(`usb_hid.c`) that registers keyboards and mice with the input core like
-any other source, and a USB2 hub class driver (`usb_hub.c`).
+`kernel/drivers/usb/` is the BUS: one host controller driver
+(`xhci.c`), the device enumeration on it (`usb_enum.c`), and a USB2 hub
+class driver (`usb_hub.c`, part of the topology rather than a device on
+it). **Everything that RIDES the bus lives with its class registry** --
+`input/input_usbhid.c`, `sound/sound_usb.c`, `net/net_usb_ecm.c` and
+`net/net_usb_r8153.c` -- and enumeration reaches each through the
+`_bind`/`_unbind` pair `usb.h` declares. See `kernel/README.md` and
+`docs/decisions.md`.
 UHCI/OHCI/EHCI are found by prog_if, named in the log
 and refused: a machine that needs this driver -- one with no PS/2 port,
 which is everything since roughly Skylake -- has xHCI and nothing else.
@@ -823,7 +827,7 @@ constant. Reading it wrong reports no error; the controller simply
 parses garbage.
 
 **`input_report_rel()` WANTS UP-POSITIVE dy**, which is the PS/2 sense
-and the opposite of what HID and evdev both report. `usb_hid.c` and
+and the opposite of what HID and evdev both report. `input_usbhid.c` and
 `virtio_input.c` each negate on the way in. This was written down
 nowhere until a driver got it wrong and a KTEST caught it; `input.h`
 states it now.
@@ -877,7 +881,7 @@ the only thing here an interrupt is load-bearing for.
 
 ## A USB ETHERNET ADAPTER IS A `net_device`, AND ITS CONFIGURATION IS A CHOICE
 
-`kernel/drivers/usb/usb_net.c` binds CDC Ethernet (ECM) and registers a
+`kernel/drivers/net/net_usb_ecm.c` binds CDC Ethernet (ECM) and registers a
 `net_device` -- the third implementer of that registry. Five things:
 
 - **BULK IS THE TRANSFER TYPE THAT WAS MISSING.** `xhci.c` had control,
@@ -908,7 +912,7 @@ the only thing here an interrupt is load-bearing for.
 
 ## A VENDOR CONFIGURATION NEEDS A DRIVER THAT NAMES THE DEVICE, AND AN RTL8153 IS FRAMED RATHER THAN RAW
 
-`kernel/drivers/usb/usb_r8153.c` drives the Realtek RTL8152/8153 in its
+`kernel/drivers/net/net_usb_r8153.c` drives the Realtek RTL8152/8153 in its
 own configuration, because the UE300's standards-based one does not
 receive and neither does Linux's `cdc_ether` there (`docs/bugs.md`).
 Six things:
@@ -962,7 +966,7 @@ check where that registry's init() sits in `kernel_main()`.**
 
 ## USB AUDIO IS A SOUND DEVICE ON AN ISOCHRONOUS ENDPOINT, AND THE FORMAT IS NOT NEGOTIATED
 
-`kernel/drivers/usb/usb_audio.c` binds a USB Audio Class **1.0 or 2.0**
+`kernel/drivers/sound/sound_usb.c` binds a USB Audio Class **1.0 or 2.0**
 playback interface and registers a `struct sound_device` -- the second
 implementer of that registry, exactly as its class comment predicted.
 Five things to know:
@@ -1032,7 +1036,7 @@ else, which is exactly how this shipped wrong and passed every test.
   size its endpoint above the rate -- an asynchronous one does, to leave
   room for a fast frame -- and a driver that sends the maximum every
   interval plays the stream FAST, with nothing reporting an error.
-  `usb_audio.c` derives `pkt_bytes` from the rate and the interval and
+  `sound_usb.c` derives `pkt_bytes` from the rate and the interval and
   uses the endpoint's maximum only to configure the endpoint.
 - **AND wMaxPacketSize IS NOT 16 BITS OF SIZE.** On a high-speed
   endpoint bits 11-12 are ADDITIONAL transactions per interval, so the

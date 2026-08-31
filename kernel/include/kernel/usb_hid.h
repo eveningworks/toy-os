@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "usb.h"
 
-// USB HID, boot protocol. See kernel/drivers/usb/usb_hid.c for why the
+// USB HID, boot protocol. See kernel/drivers/input/input_usbhid.c for why the
 // boot protocol and not report descriptors.
 //
 // THE TWO DIFFERS TAKE THEIR STATE AS A PARAMETER, on purpose. A boot

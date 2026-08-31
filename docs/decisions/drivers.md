@@ -1171,7 +1171,7 @@ here there is no plausible second implementer at all, having just
 refused the only candidates. The in-repo precedent is exact rather than
 analogous: `virtio_pci.c` + `virtqueue.c` are a shared transport with
 four device drivers on top, and there is no `struct virtio_transport`
-vtable -- drivers call `virtqueue_submit()` by name. So `usb_hid.c`
+vtable -- drivers call `virtqueue_submit()` by name. So `input_usbhid.c`
 calls `xhci_control()` by name. What *was* built is `xhci.h`, a plain
 header splitting xHCI mechanics from USB semantics, because that seam
 had two real callers on the day it was written (a keyboard and a mouse)
@@ -1798,7 +1798,7 @@ declines by walking CLASS-SPECIFIC descriptors that nothing else keeps
 -- so a decoded record would have to know, in advance, about every class
 this build does not support. That is the wrong way round. The raw bytes
 also paste straight into a KTEST fixture, which is the only way a device
-nobody here owns is ever tested against: `usb_audio.c`'s fixture is
+nobody here owns is ever tested against: `sound_usb.c`'s fixture is
 QEMU's configuration captured this way, and a hand-written one would
 only ever agree with the parser it was written beside.
 
@@ -1822,7 +1822,7 @@ has the same argument for why this is not `/proc`).
 
 ## UAC2: the rate is a request, and the clock is asked rather than chosen
 
-`usb_audio.c` binds USB Audio Class 2.0 as well as 1.0. The two share
+`sound_usb.c` binds USB Audio Class 2.0 as well as 1.0. The two share
 subtype numbers and agree on almost nothing else, and the differences
 are not cosmetic: a UAC2 `FORMAT_TYPE` carries no channel count and **no
 sample rate at all**, a feature unit's controls are two bits wide rather
@@ -1878,8 +1878,8 @@ sounds like silence rather than like a bug.
 
 ## A per-chip vendor driver, in a kernel whose rule is "a class, not a device"
 
-`usb_net.c` speaks CDC-ECM, the standard, and every other USB driver
-here is a class driver on purpose. `usb_r8153.c` is a per-chip register
+`net_usb_ecm.c` speaks CDC-ECM, the standard, and every other USB driver
+here is a class driver on purpose. `net_usb_r8153.c` is a per-chip register
 map for one Realtek family, which is the opposite. It exists because
 the standard did not work on the hardware.
 
@@ -1928,3 +1928,53 @@ same symptom -- nothing arrives -- and this driver was written against
 hardware that had just spent a day producing exactly that symptom for a
 different reason. It costs throughput and nothing else, and turning it
 on is one line once somebody wants the throughput.
+
+## A driver lives with the class it registers with, not the bus it sits on
+
+`kernel/drivers/` groups by CLASS REGISTRY -- `block/`, `display/`,
+`net/`, `sound/`, `input/` -- with `virtio/` and `usb/` holding the
+shared buses and nothing that rides on them. So USB HID is
+`input/input_usbhid.c`, USB audio is `sound/sound_usb.c`, and both USB
+Ethernet adapters are `net/net_usb_ecm.c` and `net/net_usb_r8153.c`.
+
+**This was the other way round until 2026-08-31**, and the move is
+worth recording because the two obvious references disagree flatly.
+Linux files by function first: `drivers/net/usb/r8152.c`, `sound/usb/`,
+`drivers/hid/usbhid/`, with `drivers/usb/` holding only `core/` and
+`host/`. FreeBSD files by bus first: `sys/dev/usb/net/if_ure.c`,
+`sys/dev/usb/input/` -- and `if_ure.c` is the very file
+`net_usb_r8153.c` was written against, so "follow the reference" argued
+for staying put.
+
+**What decided it is that a class registry is the extension point.**
+`display_driver`, `block_device`, `net_device`, `sound_device` and
+`input_source` are how this kernel is meant to grow, and CLAUDE.md's
+own delivery rule asks a change to draw what a component PLUGS INTO.
+If the directory names the registry, it should be the complete list of
+its implementers -- and it very nearly was: `block/` and `display/`
+listed every one, while `net/` listed two of four and `sound/` one of
+two, with USB the sole exception in both. A tree where "how do I add a
+NIC?" is answered by one directory beats one where the answer is
+"`net/`, and also grep `usb/`".
+
+The bus does not lose anything by it. `usb/` is now the controller,
+enumeration and the hub -- a coherent unit that can be described in a
+sentence, where before it was the bus plus four unrelated devices that
+happened to be on it.
+
+**Symbol names did NOT follow the files.** `usb_hid_bind()`,
+`usb_audio_bind()`, `usb_net_bind()` and `usb_r8153_bind()` keep their
+names, declared in `usb.h`, because they name what the function IS --
+the entry point a USB class driver exposes to enumeration -- and
+enumeration is the caller. Renaming them to match a directory would
+make the seam harder to see, not easier.
+
+**And the USB drivers do not get virtio's adapter split.**
+`virtio/virtio_net.c` plus `net/net_virtio.c` is a real dependency
+boundary: the virtio driver has never heard of `netdev.h`, and the shim
+is 32 lines stating which of its behaviour the class may use. A USB
+class driver has no such seam -- the descriptor parsing, the framing,
+the MAC and the link state ARE the class-specific work -- so a shim
+would restate what the driver already knows. What still crosses the bus
+seam there is a call to `xhci_*` by name, which is the same
+no-vtable-without-a-second-implementer rule `usb.h` already argues.

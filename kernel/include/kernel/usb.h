@@ -6,10 +6,15 @@
 // USB, as the rest of the kernel sees it.
 //
 // WHAT THIS IS. One xHCI host controller driver, the device enumeration
-// on top of it, and a HID boot-protocol class driver that registers
-// keyboards and mice with the input core. Nothing else: no hubs, no
-// mass storage, no HID report-descriptor parsing. See docs/roadmap.md's
+// on top of it, and the hub driver -- the BUS. See docs/roadmap.md's
 // USB section for what is deliberately left out.
+//
+// THE CLASS DRIVERS ARE NOT IN kernel/drivers/usb/. A driver lives with
+// the registry it plugs into, so USB HID is in drivers/input/, USB
+// audio in drivers/sound/, and both Ethernet adapters in drivers/net/
+// (kernel/README.md has the rule). What crosses that seam is declared
+// below: enumeration calls each class driver's _bind/_unbind by name,
+// which is here because enumeration is the caller.
 //
 // WHY xHCI AND ONLY xHCI. UHCI/OHCI/EHCI are perhaps a quarter of the
 // code between them, and they run on no machine made since roughly
@@ -22,7 +27,7 @@
 // anything, and there is no plausible one. The precedent here is exact:
 // virtio_pci.c + virtqueue.c are a shared transport under four device
 // drivers and there is no `struct virtio_transport` vtable either --
-// drivers call virtqueue_submit() by name. So usb_hid.c calls
+// drivers call virtqueue_submit() by name. So input_usbhid.c calls
 // xhci_control() by name. If a second controller ever arrives,
 // converting xhci.h's handful of functions is a mechanical afternoon.
 
@@ -162,7 +167,7 @@ const uint8_t *usb_device_config(int index, uint32_t *len);
 // which is the only place it is written down.
 void usb_read_string(uint8_t slot, uint8_t index, char *out, uint32_t cap);
 
-// --- CDC Ethernet (usb_net.c) -----------------------------------------
+// --- CDC Ethernet (drivers/net/net_usb_ecm.c) -------------------------
 
 // Binds an enumerated CDC-ECM adapter and registers a `net_device`.
 // `cfg`/`total` is the configuration already read, because the MAC, the
@@ -175,7 +180,7 @@ int usb_net_bind(struct usb_device_info *info, const uint8_t *cfg,
 // Releases the device on `slot`, if it is the bound one.
 void usb_net_unbind(uint8_t slot);
 
-// --- RTL8153, the vendor protocol (usb_r8153.c) -----------------------
+// --- RTL8153, the vendor protocol (drivers/net/net_usb_r8153.c) -------
 
 // Is this a device the Realtek driver claims? Asked by enumeration
 // BEFORE a configuration is chosen, because the vendor configuration is

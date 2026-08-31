@@ -209,7 +209,7 @@ void usb_hid_keyboard_diff(uint8_t prev[8], const uint8_t *r, uint32_t len) {
 // has to be flipped here, exactly as virtio_input.c flips it.
 //
 // Writing this the "obvious" way inverts the mouse, and a KTEST catches
-// it (usb_hid_test.c, "mouse dy is not negated" -- named for the wrong
+// it (input_usbhid_test.c, "mouse dy is not negated" -- named for the wrong
 // answer it was written to reject, and it did reject this one).
 void usb_hid_mouse_diff(uint8_t *buttons, const uint8_t *r, uint32_t len) {
     if (len < 3) return;
