@@ -43,6 +43,18 @@ no configuration and inbound needs this).
 
 The rest, added once the build/test/delivery loop had enough repeated
 manual steps to be worth automating:
+- **`acpi_dump.py`** — pulls an ACPI table out of a running guest (via
+  `acpi --dump`) in RANGES and reassembles it, then checks the length the
+  table declares and the ACPI checksum, which every table's bytes sum to
+  zero for. The ranges are not an optimisation: asking for a whole
+  8605-byte DSDT in one command returned 8557 bytes with the missing
+  lines SCATTERED rather than truncated, because that much hex outruns
+  the debug console — the failure mode that looks like success. The
+  checksum is what turns "I got some hex" into "I got the table"; a
+  single flipped byte breaks it. `--print` emits a C array ready to paste
+  into a KTEST, which is the point: `docs/aml-design.md` needs a real
+  DSDT, and a hand-written one would only ever agree with the parser
+  written beside it.
 - **`qemu_matrix.py`** -- runs the kernel test suite against SEVERAL
   QEMU versions in Docker (6.2, 7.2, 8.2 -- the last is what GitHub's
   runner has). Nothing is BUILT in the container: the ISO comes from

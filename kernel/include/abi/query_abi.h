@@ -347,6 +347,18 @@ _Static_assert(sizeof(struct query_fontglyph) <= 256,
 // device nobody has is ever tested against.
 #define QUERY_USBDESC 26
 
+// THE RAW BYTES OF EACH ACPI TABLE, in slices. LIST, the same shape as
+// QUERY_USBDESC and for the same reason: a parser for firmware data has
+// to be tested against real firmware data, and a hand-written fixture
+// only ever agrees with the parser written beside it.
+//
+// ITS OWN ENUMERATION, not QUERY_ACPI_TABLE's. The DSDT is not in the
+// XSDT -- it is reached through the FADT -- so a machine's `acpi` output
+// lists 22 tables and none of them is the one with the AML in it. This
+// class appends it, and every record carries its table's SIGNATURE so a
+// reader never has to correlate two indexes.
+#define QUERY_ACPIDUMP 27
+
 #define QUERY_KLOG_DATA 232
 
 struct query_klog {
@@ -380,6 +392,22 @@ struct query_usbdesc {
 };
 
 _Static_assert(sizeof(struct query_usbdesc) <= 256,
+               "a query record must fit QUERY_RECORD_MAX -- see api/query.h");
+
+// QUERY_ACPIDUMP's record -- one slice of one table.
+#define QUERY_ACPIDUMP_DATA 224
+
+struct query_acpidump {
+    uint64_t table;      // index in this class's own enumeration
+    uint32_t total;      // that table's whole length, header included
+    uint32_t offset;     // byte offset of data[0] within it
+    uint32_t len;        // valid bytes in data[]
+    uint32_t reserved;
+    char     signature[8];   // NUL-terminated, unlike in the table itself
+    uint8_t  data[QUERY_ACPIDUMP_DATA];
+};
+
+_Static_assert(sizeof(struct query_acpidump) <= 256,
                "a query record must fit QUERY_RECORD_MAX -- see api/query.h");
 
 // QUERY_PROVIDERS' record.

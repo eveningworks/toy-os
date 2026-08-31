@@ -48,9 +48,90 @@ static const char *space_name(uint64_t v) {
     return v == 1 ? "port" : v == 0 ? "memory" : "unsupported space";
 }
 
-int main(void) {
+// --- --dump: the raw bytes of one table -------------------------------
+//
+// The same move `lsusb -D` makes, and for the same reason: a parser for
+// firmware data has to be tested against real firmware data, and these
+// bytes paste straight into a KTEST fixture. A real DSDT is tens of
+// kilobytes, so a range is the normal way to ask.
+
+static int hex_arg(const char *s, long *out) {
+    int base = 10, i = 0;
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) { base = 16; i = 2; }
+    long v = 0;
+    if (!s[i]) return 0;
+    for (; s[i]; i++) {
+        int d;
+        if (s[i] >= '0' && s[i] <= '9') d = s[i] - '0';
+        else if (base == 16 && s[i] >= 'a' && s[i] <= 'f') d = s[i] - 'a' + 10;
+        else if (base == 16 && s[i] >= 'A' && s[i] <= 'F') d = s[i] - 'A' + 10;
+        else return 0;
+        if (d >= base) return 0;
+        v = v * base + d;
+    }
+    *out = v;
+    return 1;
+}
+
+static int dump_table(const char *sig, long at, long want) {
+    struct query_acpidump r;
+    char line[128];
+    long total = -1, shown = 0;
+
+    for (int i = 0; ; i++) {
+        if (sys_query_record(QUERY_ACPIDUMP, (unsigned)i, &r, sizeof r)
+            < (int)sizeof r) break;
+        if (strncmp(r.signature, sig, 4) != 0) continue;
+        if (total < 0) {
+            total = (long)r.total;
+            snprintf(line, sizeof line, "%s: %ld bytes\n", r.signature, total);
+            put(line);
+        }
+        for (unsigned k = 0; k < r.len; k++) {
+            long off = (long)r.offset + (long)k;
+            if (off < at) continue;
+            if (want > 0 && off >= at + want) continue;
+            if ((off % 16) == 0) {
+                snprintf(line, sizeof line, "\n  %04lx ", off);
+                put(line);
+            }
+            snprintf(line, sizeof line, " %02x", r.data[k]);
+            put(line);
+            shown++;
+        }
+    }
+    if (total < 0) {
+        snprintf(line, sizeof line, "acpi: no table with signature %s\n", sig);
+        put(line);
+        return 1;
+    }
+    put("\n");
+    if (!shown) put("acpi: that range is past the end of the table\n");
+    return 0;
+}
+
+int main(int argc, char **argv) {
     char line[160];
     struct query_acpi a;
+
+    // --dump takes over entirely: it is a different question from the
+    // summary, and mixing them would make the output unpasteable.
+    if (argc > 1 && !strcmp(argv[1], "--dump")) {
+        long at = 0, want = 0;
+        if (argc < 3) { cmd_usage("acpi [--dump <SIG> [--at N] [--len N]]"); return 1; }
+        for (int i = 3; i < argc; i++) {
+            if (!strcmp(argv[i], "--at") && i + 1 < argc) {
+                if (!hex_arg(argv[++i], &at)) { cmd_usage("acpi [--dump <SIG> [--at N] [--len N]]"); return 1; }
+            } else if (!strcmp(argv[i], "--len") && i + 1 < argc) {
+                if (!hex_arg(argv[++i], &want)) { cmd_usage("acpi [--dump <SIG> [--at N] [--len N]]"); return 1; }
+            } else {
+                cmd_usage("acpi [--dump <SIG> [--at N] [--len N]]");
+                return 1;
+            }
+        }
+        return dump_table(argv[2], at, want);
+    }
+    if (argc > 1) { cmd_usage("acpi [--dump <SIG> [--at N] [--len N]]"); return 1; }
 
     if (sys_query_record(QUERY_ACPI, 0, &a, sizeof a) < (int)sizeof a) {
         cmd_fail("acpi", 0);

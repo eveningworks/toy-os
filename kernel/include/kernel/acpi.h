@@ -68,6 +68,12 @@ void acpi_init(void);
 int acpi_table_count(void);
 const struct acpi_sdt_header *acpi_table_at(int index);
 
+// The same tables PLUS the DSDT, which is not in the RSDT/XSDT at all
+// -- the FADT points at it, so a machine listing 22 tables lists none of
+// the ones carrying AML. What QUERY_ACPIDUMP enumerates.
+int acpi_dumpable_count(void);
+const struct acpi_sdt_header *acpi_dumpable_at(int index);
+
 // The first table with this 4-character signature ("FACP", "APIC",
 // "HPET"), or NULL. The signature is NOT NUL-terminated in the table,
 // so this compares four bytes.

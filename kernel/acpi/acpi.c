@@ -128,6 +128,29 @@ const struct acpi_sdt_header *acpi_table_at(int index) {
     return g_tables[index];
 }
 
+// The DSDT, if the FADT named one this walk could read. Its own entry
+// point because it is not in the RSDT/XSDT -- see acpi.h.
+static const struct acpi_sdt_header *dsdt_header(void) {
+    if (!g_state.dsdt_phys ||
+        !acpi_phys_readable(g_state.dsdt_phys, sizeof(struct acpi_sdt_header)))
+        return 0;
+    const struct acpi_sdt_header *h = acpi_phys(g_state.dsdt_phys);
+    if (h->length <= sizeof *h ||
+        !acpi_phys_readable(g_state.dsdt_phys, h->length))
+        return 0;
+    return h;
+}
+
+int acpi_dumpable_count(void) {
+    return (int)g_state.table_count + (dsdt_header() ? 1 : 0);
+}
+
+const struct acpi_sdt_header *acpi_dumpable_at(int index) {
+    if (index >= 0 && index < (int)g_state.table_count) return g_tables[index];
+    if (index == (int)g_state.table_count) return dsdt_header();
+    return 0;
+}
+
 const struct acpi_sdt_header *acpi_find_table(const char *sig) {
     BOOT_REQUIRE(BOOT_SUB_ACPI);
     for (uint32_t i = 0; i < g_state.table_count; i++)

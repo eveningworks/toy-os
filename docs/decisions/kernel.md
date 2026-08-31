@@ -5680,6 +5680,29 @@ parsed; anything that requires EVALUATING AML does not exist here.**
 Battery, thermal and S3 all fall on the far side, which is why they are
 still roadmap items rather than "nearly done now that ACPI is in".
 
+**THIS BOUNDARY WAS MOVED ON 2026-08-31, and the old line was drawn in
+the wrong place.** A laptop needed its GPE wake set to stay powered off,
+and that set is written down as a `_PRW` object per device. `_PRW` is a
+`Name` holding a constant `Package` -- data with a fixed grammar,
+exactly like `_S5_` -- so it falls on the NEAR side of the boundary as
+stated, while this entry's own list of far-side things named "GPEs". The
+list was imprecise: what GPE *dispatch* needs is evaluation; what a wake
+SET needs is a walk.
+
+The decision now is that toy-os gets a NAMESPACE WALK -- declarations
+parsed, every Method body skipped by its PkgLength, nothing executed --
+and still no interpreter. `docs/aml-design.md` stages it and carries the
+honest case against, including the part that has not changed: the
+things a person actually wants from ACPI on a laptop are all Methods,
+so a walk lands one wake set and stops at the same wall one level
+further in.
+
+**Why a walk rather than a second byte scan.** `acpi_scan_s5()` is a
+signature hunt with no notion of scope, which works because `_S5_` is
+unique and at the root. `_PRW` is neither: it appears once per
+wake-capable device. A second scan would be the third copy of a pattern
+that wants to be a parser, and each copy works by luck.
+
 **Why not skip AML entirely and assume a sleep type.** This was the
 cheaper option and it is what makes the difference between working and
 not working on the hardware that motivated the change. QEMU's `_S5_`

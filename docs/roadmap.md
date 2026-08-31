@@ -676,6 +676,7 @@ run on, not by order.
 - [ ] **NEXT** `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR, not a 64 KiB guess
 - [x] ~~USB audio (isochronous OUT, UAC1)~~ DONE 2026-08-30 -- `kernel/drivers/usb/usb_audio.c`; SIA scheduling is QEMU-tested only
 - [x] ~~UAC2 playback: a set rate, 24-bit samples, 125 us intervals~~ DONE 2026-08-31 -- proven on a Sound BlasterX G6
+- [ ] An AML namespace walk: declarations parsed, Method bodies skipped -- `docs/aml-design.md` stages it, stage 0 is done
 - [ ] **NEXT** The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN
 - [ ] USB mass storage (bulk-only transport) -- the first non-disk-bus storage backend
 - [x] ~~Hub support (devices behind a hub, not just root ports)~~ DONE 2026-08-28 -- USB2 only; the TT path is hardware-only

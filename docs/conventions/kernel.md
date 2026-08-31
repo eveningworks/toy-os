@@ -2199,12 +2199,14 @@ it and it costs two `outw`s.
 the clear changes nothing in QEMU. What `poweroff_test.py` can assert,
 and does, is that the EVENT block was parsed and written.
 
-**THIS IS NOT AN ACPI SUBSYSTEM AND MUST NOT GROW INTO ONE.** There is
-no AML interpreter, and the `_S5_` byte scan is the single deliberate
-exception, allowed because a `Name` holding a `Package` of constants is
-data with a fixed grammar. Anything needing AML *evaluated* -- battery,
-thermal zones, S3, GPEs -- is not here and is not nearly here. See
-`docs/decisions.md`.
+**THERE IS NO AML INTERPRETER, AND THE LINE IS EXECUTION.** The `_S5_`
+byte scan is allowed because a `Name` holding a `Package` of constants
+is data with a fixed grammar. Anything needing AML *evaluated* --
+battery, thermal zones, S3, GPE dispatch -- is not here and is not
+nearly here. A namespace WALK (declarations parsed, Method bodies
+skipped by their length) is planned and not built: `docs/aml-design.md`
+stages it, and `docs/decisions.md` records why that boundary moved and
+where the old wording was imprecise.
 
 **The scan REFUSES rather than guesses**, and a refusal is a supported
 outcome: `ACPI_F_S5` stays clear, `/bin/acpi` says `poweroff: no`, and

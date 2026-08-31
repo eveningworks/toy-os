@@ -6,7 +6,7 @@
 
 ## Synopsis
 
-    acpi
+    acpi [--dump <SIG> [--at N] [--len N]]
 
 ## Description
 
@@ -25,6 +25,30 @@ than from CPUID: CPUID describes the core running the instruction and
 cannot count the others. Every core reports `online: no`, because this
 kernel schedules on one — see `docs/smp-design.md` for the stages that
 would change that.
+
+## `--dump`: the raw bytes of one table
+
+`acpi --dump DSDT --at 0x1200 --len 256` hex-dumps a range of a table by
+its four-character signature. `--at` and `--len` take decimal or `0x`
+hex; without them you get the whole table, which for a real DSDT is tens
+of kilobytes.
+
+It exists for the same reason `lsusb -D` does: **a parser for firmware
+data has to be tested against real firmware data**, and a hand-written
+fixture only ever agrees with the parser written beside it. These bytes
+paste into a KTEST.
+
+**`--dump` sees the DSDT; the table list above does not.** The DSDT is
+not in the RSDT or XSDT — the FADT points at it — so a machine that
+lists 22 tables lists none of the ones carrying AML. This flag has its
+own enumeration with the DSDT appended, and every record carries its
+signature.
+
+**Do not ask for a whole big table through the debug console.** That
+much hex outruns it and lines go missing, scattered rather than
+truncated, which reads as a successful dump. `tools/acpi_dump.py` reads
+it in ranges and verifies the ACPI checksum, which is the check that
+catches exactly that.
 
 ## What it does not do
 

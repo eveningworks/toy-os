@@ -1281,6 +1281,8 @@ cost".
   the repository).
 - **Diagnose** -- `panic_resolve.py` (names every address in a panic
   from DWARF, ring 3 included; **never hand-roll `nm`**),
+  `acpi_dump.py` (a whole ACPI table out of a guest, checksum-verified
+  -- ranged because a big table's hex OUTRUNS the debug console),
   `QMPSession.hmp()` (**the QEMU monitor -- the one oracle the guest
   cannot fake**; ask it BEFORE trusting anything the guest says about
   itself), `regex_hostcheck.py`, `uimg_hostcheck.py` and
