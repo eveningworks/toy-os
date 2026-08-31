@@ -1128,6 +1128,34 @@ window without going through it will find its layout polls timing out.
   real photograph; `--tolerance` tightens the bar. Not in any gate: it
   needs Pillow, and `/tests/uimg_test` is the version that runs in the
   guest.
+- **`fetch_extras.py`** -- the registry of optional, differently-licensed
+  material, and the licence acceptance in front of it. `make iso
+  EXTRAS=1` runs it; nothing else does, so an ordinary build reaches no
+  network and an ordinary image carries nothing but ours.
+
+  **The distinction it is built around is that fetching is not
+  distributing.** Downloading a file onto your own machine makes you the
+  recipient, and nothing third-party enters this repository -- which is
+  why the Doom IWAD is fetched rather than committed. What collapses that
+  is publishing a BUILT ARTIFACT: an ISO carrying a fetched WAD, uploaded
+  as a release asset, is you distributing the WAD. So an EXTRAS build
+  writes `/usr/share/licenses/extras.txt` INTO the image, saying what is
+  in there and that publishing it distributes those things -- the one
+  note still attached when somebody decides whether to upload it.
+
+  Acceptance is remembered in `.extras-accepted` at the repo root
+  (gitignored), keyed by item name AND a hash of the licence summary, so
+  a new extra or a changed licence asks again: agreeing to id's shareware
+  terms must not silently agree to whatever is added next. It is at the
+  ROOT rather than under `build/` because `make clean` wipes that and
+  `preflight.sh` starts with one. **A non-tty is REFUSED, never
+  prompted** -- a captured build has nothing to answer with and a prompt
+  there hangs forever, which is the mtools trap from a different
+  direction; `LICENSE=agree` (or `TOYOS_LICENSE=agree`) is how CI says
+  yes. `--list` shows what exists and what is present.
+
+  It is a registry rather than a script per item, the same shape
+  `display_driver` and `block_device` use: the tenth extra is a row.
 - **`usnd_hostcheck.py`** -- the same `userland/lib/usnd_mp3.c`, compiled
   with the host gcc and run against eight lame-encoded files (CBR and
   VBR, mono/stereo/joint stereo, 32 to 320 kbps), every sample compared

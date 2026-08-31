@@ -986,6 +986,17 @@ QEMU -- into BOTH media, since one repo-root `grub.cfg` is generated
 into the ISO tree and into `disk.img`'s FAT32 `/boot/grub`. **Check a change here with `make -n run <FLAGS>`**, which prints
 the command line without running it.
 
+**`EXTRAS=1` IS THE ONLY THING THAT MAKES A BUILD REACH THE NETWORK, AND
+AN EXTRAS IMAGE IS NOT YOURS TO PUBLISH.** `make iso EXTRAS=1` runs
+`tools/fetch_extras.py`, which fetches the optional differently-licensed
+material (today: the Doom shareware IWAD) after showing its licence.
+`LICENSE=agree` answers for CI; a build with no terminal is REFUSED
+rather than prompted, because a prompt there hangs forever. The
+acceptance is remembered per item in `.extras-accepted`, keyed by a hash
+of the licence, so a new extra asks again. **Fetching is not
+distributing -- publishing the resulting ISO is**, which is why such an
+image carries `/usr/share/licenses/extras.txt` saying what is inside it.
+
 **Boot flags can be baked into the media** rather than typed into the
 GRUB menu each boot: `make iso KCMDLINE="video=1920x1080 nokaslr"` (also
 `live-iso`/`demo-iso`) -- into the ISO and into `disk.img`'s

@@ -129,3 +129,8 @@ ci-virtio.img
 # GitHub rejects outright (it did).
 /partition_boot*.img
 /partition_boot_qemu.log
+
+# Written by tools/fetch_extras.py: what you agreed to, and what an
+# EXTRAS build put in the image. Neither is source.
+/.extras-accepted
+/data/usr/share/licenses/

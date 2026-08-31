@@ -69,6 +69,51 @@ NOT flag `Milestone N` in prose: those are historical, the roadmap's
 details file ends with a legend for resolving them, and the noise would
 be what stopped anyone running it.
 
+## Third-party extras are FETCHED, opt-in, and the image says it carries them
+
+`make iso EXTRAS=1` fetches optional material that is not ours -- today
+just the Doom shareware IWAD. Off by default, so no ordinary build
+reaches the network and no ordinary image carries anything but our own
+work and the two hardware ID databases `LICENSE` already names.
+
+**The reasoning is that fetching is not distributing.** Copyright governs
+copying and distribution; a script that downloads a file onto the
+maintainer's machine makes them the recipient, and nothing third-party
+enters this repository or its history. That is why `fetch_wad.py` exists
+at all and why `docs/filesystem-layout.md` marks `/usr/share/doom` as
+fetched rather than built.
+
+**What defeats that argument is publishing a built artifact**, and this
+repo does cut GitHub Releases with assets. An ISO carrying a fetched WAD,
+uploaded, is us distributing the WAD -- the fetch/ship distinction buys
+nothing at that moment. So an EXTRAS build writes
+`/usr/share/licenses/extras.txt` INSIDE the image, naming what is in
+there and saying that publishing it distributes those things. Inside the
+image because that is the only note still attached to it when somebody
+decides whether to upload; a warning printed during the build is gone.
+
+*A variable, not a target.* `EXTRAS=1` is an axis on `iso` the way
+`VIRTIO=1` is an axis on `run`, and `fetch_extras.py` is a registry with
+a row per item rather than a script per item. Both for the reason the
+Makefile's own comment gives: a name per combination multiplies exactly
+as fast as a recipe per combination.
+
+*Acceptance is remembered, per item, keyed by the licence.* The prompt
+shows what the licence permits and records the answer in
+`.extras-accepted` -- keyed by item name AND a hash of the licence
+summary, so a NEW extra, or a changed licence, asks again. Agreeing to
+id's 1990s shareware terms must not silently agree to whatever gets added
+next year. The file is at the repo root rather than under `build/`,
+because `make clean` wipes that and `preflight.sh` opens with one: an
+acceptance re-asked after every clean build is an acceptance nobody
+reads.
+
+*A non-tty is refused, never prompted.* A captured or CI build has
+nothing to answer with, and `input()` there waits forever -- the same
+shape as the mtools trap this repo already records (mtools opens
+`/dev/tty`, so a captured prompt hangs). Such a build stops and names the
+flag: `LICENSE=agree`, or `TOYOS_LICENSE=agree` in the environment.
+
 ## The demo ISO is a separate image, and its tour is a file on it
 
 Asked for a way to show the system on a laptop with nobody typing.
