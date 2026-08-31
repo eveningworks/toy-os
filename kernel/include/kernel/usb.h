@@ -27,7 +27,7 @@
 // converting xhci.h's handful of functions is a mechanical afternoon.
 
 #define USB_MAX_DEVICES   8
-#define USB_MAX_INTERFACES 4   // per device; a Unifying receiver has 3
+#define USB_MAX_INTERFACES 8   // per device; a Sound Blaster G6 has 5
 
 // One interface out of a configuration descriptor, with its first
 // interrupt-IN endpoint (ep 0 when it has none). A composite device --

@@ -91,14 +91,16 @@ KTEST("usb-enum", "a malformed descriptor is refused, not guessed at") {
 }
 
 KTEST("usb-enum", "interfaces past the cap are counted and dropped whole") {
-    // Five interfaces against a cap of four: the count stops at the
-    // cap, and no endpoint from the dropped fifth bleeds into the
-    // fourth's record.
-    uint8_t many[9 + 5 * 16];
+    // One MORE interface than the cap, whatever the cap is: the count
+    // stops there, and no endpoint from the dropped last one bleeds
+    // into the previous record. Derived rather than written out,
+    // because a literal drifts the day the cap moves -- which it did.
+    const uint8_t count = USB_MAX_INTERFACES + 1;
+    uint8_t many[9 + (USB_MAX_INTERFACES + 1) * 16];
     uint32_t o = 0;
-    const uint8_t cfg9[] = { 9, 2, 0, 0, 5, 1, 0, 0xA0, 49 };
+    const uint8_t cfg9[] = { 9, 2, 0, 0, count, 1, 0, 0xA0, 49 };
     k_memcpy(many + o, cfg9, 9); o += 9;
-    for (uint8_t i = 0; i < 5; i++) {
+    for (uint8_t i = 0; i < count; i++) {
         const uint8_t ifd[] = { 9, 4, i, 0, 1, 3, 1, 2, 0 };
         k_memcpy(many + o, ifd, 9); o += 9;
         const uint8_t epd[] = { 7, 5, (uint8_t)(0x81 + i), 3, 8, 0, 8 };

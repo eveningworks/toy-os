@@ -297,7 +297,8 @@ def cmd_start(args):
     if audio is None:
         audio = "ac97" if getattr(args, "audio_wav", None) else "none"
     wants_usb_audio = audio in ("usb", "both")
-    if usb != "none" or wants_usb_audio:
+    host_devs = getattr(args, "usb_host", None) or []
+    if usb != "none" or wants_usb_audio or host_devs:
         cmd += ["-device", "qemu-xhci,id=xhci"]
         if usb == "xhci+hub":
             # The keyboard AND mouse both sit BEHIND a usb-hub (QEMU's
@@ -310,6 +311,21 @@ def cmd_start(args):
             cmd += ["-device", "usb-kbd,id=usbkbd,bus=xhci.0"]
             if usb == "xhci+mouse":
                 cmd += ["-device", "usb-mouse,id=usbmouse,bus=xhci.0"]
+
+    # A REAL device off the host's bus. The only way to exercise a
+    # driver against hardware nobody can emulate -- QEMU's usb-audio is
+    # UAC1 at one format, so every UAC2 path here is unreachable
+    # without this. Two things it needs that nothing else does: write
+    # access to /dev/bus/usb/BBB/DDD (root:root 0664 by default, so
+    # `sudo chmod o+rw` on the node, which a replug resets), and the
+    # host's own driver to let go -- QEMU detaches it through libusb,
+    # and the device stops working on the host until the guest exits.
+    for i, spec in enumerate(host_devs):
+        vid, _, pid = spec.partition(":")
+        if not pid:
+            raise SystemExit(f"vm: --usb-host wants VID:PID, got {spec!r}")
+        cmd += ["-device", f"usb-host,id=usbhost{i},bus=xhci.0,"
+                           f"vendorid=0x{vid},productid=0x{pid}"]
 
     # A sound card whose output QEMU RECORDS to a host wav file -- the
     # oracle tools/audio_test.py and tools/usb_audio_test.py measure a
@@ -660,6 +676,12 @@ def main():
                          "behind a usb-hub (the route-string path). A named "
                          "value rather than a boolean because the mouse changes "
                          "QMP pointer routing once the guest driver polls it.")
+    ap.add_argument("--usb-host", action="append", metavar="VID:PID",
+                    help="pass a REAL USB device through to the guest, by id "
+                         "(e.g. 041e:3256). Adds an xHCI controller if --usb "
+                         "did not. Needs write access to the device's "
+                         "/dev/bus/usb node, and TAKES THE DEVICE AWAY from "
+                         "the host for the life of the guest. Repeatable.")
     ap.add_argument("--audio-wav2", default=None, metavar="PATH",
                     help="with --audio both, record the USB device to its OWN "
                          "file (--audio-wav then holds the AC97's). Without "

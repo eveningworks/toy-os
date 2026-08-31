@@ -621,7 +621,7 @@ whenever a headline here tells you something you did not already know.
 - **THE THREAD POINTER IS FS.base, AND THE SCHEDULER RELOADS IT**
 - **THERE IS A SOUND CLASS, ITS STREAM IS EXCLUSIVE, AND THE RING IS SHARED MEMORY**
 - **THERE IS A LOCAL APIC NOW, AND A DEVICE MAY BE ON A VECTOR INSTEAD OF A LINE**
-- **USB AUDIO IS A SOUND DEVICE ON AN ISOCHRONOUS ENDPOINT, AND THE FORMAT IS NOT NEGOTIATED**
+- **USB AUDIO IS A SOUND DEVICE ON AN ISOCHRONOUS ENDPOINT, UAC1 OR UAC2, AND THE FORMAT IS NOT NEGOTIATED (BUT A UAC2 RATE IS SET)**
 - **AN ISOCHRONOUS PACKET IS THE RATE'S SHARE OF ONE SERVICE INTERVAL, NOT wMaxPacketSize**
 - **AN ISOCHRONOUS ENDPOINT DOES NOT HALT, AND ITS RING RUNNING DRY IS NORMAL**
 - **THERE IS A NETWORK DEVICE CLASS, THE STACK IS IN THE KERNEL, AND THE RECEIVE PATH IS SPLIT ACROSS AN INTERRUPT**
@@ -1228,7 +1228,9 @@ cost".
   tool to `tools/` does not add it here**, and a tool no runner names is
   run when somebody types it, which is never. Never a gate itself.
 - **Drive a VM** -- `vm.py` (text in, text out: the fastest path for
-  anything that is not about pixels), `qmp_test.py` (QMP GUI helpers),
+  anything that is not about pixels; `--usb-host VID:PID` passes a REAL
+  USB device through, which is the only way to reach a driver path no
+  emulated device has), `qmp_test.py` (QMP GUI helpers),
   `gui_debug.py` (ask the WM what it is doing), `gui_flow.py`,
   `shell_flow.py`, `serial_console.py` (COM1 as a socket, and it does
   not care who owns the keyboard), `serial_capture.py` (read a guest

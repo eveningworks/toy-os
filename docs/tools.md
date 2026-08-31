@@ -27,6 +27,13 @@ and `-v` prints the WHOLE transcript, boot messages included), `vm.py`
 back, `--virtio-disk` likewise; `--usb xhci|xhci+mouse` attaches an
 xHCI controller and USB HID devices, off by default because attaching a
 `usb-kbd` takes the keyboard AWAY from PS/2 — see `docs/testing.md`;
+`--usb-host VID:PID` passes a REAL device off the host's bus through to
+the guest, which is the only way to reach a driver path no emulated
+device has — QEMU's `usb-audio` is UAC1 at one format, so every UAC2
+path in `usb_audio.c` is unreachable without it; it needs write access
+to the device's `/dev/bus/usb/BBB/DDD` node (`root:root 0664` normally,
+so `sudo chmod o+rw` on it, which a replug resets) and it TAKES THE
+DEVICE AWAY from the host until the guest exits;
 `--net e1000|virtio|both|none` chooses the NIC, where `e1000` is what
 QEMU already attached implicitly to every guest ever launched here and
 `virtio` is the only way to reach `virtio_net.c`; `--hostfwd tcp::8080-:80`

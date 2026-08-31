@@ -1819,3 +1819,59 @@ the device something new, no string descriptors beyond the two
 enumeration already read, and no second configuration. Those all want a
 device-file interface, which wants a mount table (`docs/query-design.md`
 has the same argument for why this is not `/proc`).
+
+## UAC2: the rate is a request, and the clock is asked rather than chosen
+
+`usb_audio.c` binds USB Audio Class 2.0 as well as 1.0. The two share
+subtype numbers and agree on almost nothing else, and the differences
+are not cosmetic: a UAC2 `FORMAT_TYPE` carries no channel count and **no
+sample rate at all**, a feature unit's controls are two bits wide rather
+than one, and the request encoding is different — UAC1 puts the
+direction in the request code (`SET_CUR` 0x01, `GET_CUR` 0x81), UAC2 has
+one `CUR` code and puts the direction in `bmRequestType`. A UAC1 request
+sent to a UAC2 device is a request number it does not implement, so it
+stalls, and nothing prints.
+
+**The rate is therefore SET, and that request is the negotiation.** It
+goes to a Clock Source entity, so binding one of these devices is the
+first thing in this driver that writes to a device in order to decide
+whether it can use it — which is why `set_clock_rate()` runs at BIND
+and a refusal means not bound, rather than a discovery made later when
+somebody presses play.
+
+**Which clock is ASKED, not chosen.** The entity the streaming
+interface's input terminal names may be a clock SELECTOR rather than a
+source. The obvious implementation picks a source and sets the rate on
+it; the reason this one issues a `GET_CUR` on the selector first is that
+on the device it was written against — a Sound BlasterX G6 — the
+selector is a front-panel mode: "DSP Clock" and "Stereo Direct". Picking
+one at bind would silently override what the owner set on the hardware.
+Measured: the device came up on Stereo Direct and the driver set the
+rate there.
+
+**The feature unit follows the speaker.** That device has EIGHT feature
+units — one per input, one per path — and taking the first would put the
+system volume slider on a microphone. The playback one is found by
+walking to the output terminal whose type is not USB streaming and
+taking its `bSourceID`. The same walk is correct for UAC1, where it
+happens to pick what "the first one" would have.
+
+**What is NOT built: the feedback endpoint.** The G6's OUT endpoint is
+ASYNCHRONOUS and carries a feedback IN endpoint beside it, whose 16.16
+value says how many samples per microframe the device's own clock
+actually wants. Nothing here reads it — `xhci.c` has no isochronous IN —
+so the host sends the nominal six frames every 125 us and the device's
+buffer walks against its crystal at roughly 50 ppm, which is a click
+every few minutes once its ~10 ms of lock delay is used up. Staged
+deliberately: it is the difference between hearing the device and
+hearing it indefinitely, the first is what proves every other piece, and
+`docs/roadmap.md` carries the second.
+
+**Why the sample width is converted rather than negotiated.** The G6
+offers 24-bit and 32-bit and no 16-bit at all, so "refuse anything that
+is not `sound_abi.h`'s format" would have refused it outright. Widening
+the ABI is a real project (rate and format negotiation through the ring,
+`usnd` and every app); shifting an s16 sample into the top of a 3- or
+4-byte subslot is one function. The trap that earns its comment is the
+direction: into the BOTTOM of the subslot is a 256x attenuation, which
+sounds like silence rather than like a bug.

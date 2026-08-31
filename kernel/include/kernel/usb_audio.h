@@ -3,10 +3,17 @@
 
 #include <stdint.h>
 
-// USB Audio Class 1.0 playback -- see kernel/drivers/usb/usb_audio.c
-// for what it binds and what it deliberately refuses.
+// USB Audio Class 1.0 and 2.0 playback -- see
+// kernel/drivers/usb/usb_audio.c for what it binds and what it
+// deliberately refuses.
 
 struct usb_device_info;
+
+// A clock selector's input pins. Four is what the one device this was
+// written against has two of; a selector with more is used up to here
+// and its later pins are unreachable, which costs a clock nobody
+// selected rather than the stream.
+#define USB_AUDIO_MAX_CLOCK_PINS 4
 
 // One playback stream, as the configuration descriptor describes it.
 // `alt` is the load-bearing field: an AudioStreaming interface's alt 0
@@ -27,6 +34,28 @@ struct usb_audio_stream {
     uint8_t  feature_unit; // the AudioControl unit volume is set on, 0 if none
     uint8_t  has_volume;
     uint8_t  has_mute;
+
+    // UAC2. The version changes the LAYOUT of almost every descriptor
+    // above and the ENCODING of every request below -- UAC1 puts the
+    // direction in the request code (SET_CUR 0x01, GET_CUR 0x81) and
+    // UAC2 puts it in bmRequestType with one CUR code. A driver that
+    // gets this wrong does not fail visibly; the device stalls.
+    uint8_t  uac2;
+    uint8_t  subslot;      // BYTES per sample on the wire: 2, 3 or 4
+    uint8_t  bits;         // bBitResolution, <= subslot * 8
+    uint8_t  terminal_link; // the AS interface's bTerminalLink
+
+    // THE RATE IS NOT IN A UAC2 DESCRIPTOR. It lives in a Clock Source
+    // entity and is SET by a class request, so binding one of these
+    // devices is the first thing here that has to write to a device
+    // rather than read it. `clock_id` is the entity the streaming
+    // interface's input terminal names -- which may be a SELECTOR, in
+    // which case its current pin is asked for and `clock_pins` maps
+    // that 1-based answer back to a source.
+    uint8_t  clock_id;
+    uint8_t  clock_is_selector;
+    uint8_t  clock_pin_count;
+    uint8_t  clock_pins[USB_AUDIO_MAX_CLOCK_PINS];
 };
 
 // One AudioStreaming alternate setting the walk saw, whether or not it

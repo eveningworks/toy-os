@@ -877,21 +877,34 @@ the only thing here an interrupt is load-bearing for.
 
 ## USB AUDIO IS A SOUND DEVICE ON AN ISOCHRONOUS ENDPOINT, AND THE FORMAT IS NOT NEGOTIATED
 
-`kernel/drivers/usb/usb_audio.c` binds a USB Audio Class **1.0**
+`kernel/drivers/usb/usb_audio.c` binds a USB Audio Class **1.0 or 2.0**
 playback interface and registers a `struct sound_device` -- the second
 implementer of that registry, exactly as its class comment predicted.
 Five things to know:
 
-- **UAC1, not 2.** Class 1.0 is what a device speaks to work everywhere
-  without a driver, and it is what QEMU's `usb-audio` emulates -- which
-  is the only way any of this is tested. UAC2's high-speed rates and
-  clock-source topology buy nothing at one fixed format.
+- **UAC1 AND UAC2, and the version changes almost everything.** The two
+  share subtype numbers and agree on little else: a UAC2 FORMAT_TYPE
+  carries no channel count and NO RATE (`bSubslotSize` and
+  `bBitResolution` are the whole descriptor), a feature unit's controls
+  are two bits wide rather than one, and the request encoding differs --
+  UAC1 puts the direction in the code (`SET_CUR` 0x01, `GET_CUR` 0x81)
+  while UAC2 has one `CUR` code and puts it in `bmRequestType`. A UAC1
+  request sent to a UAC2 device stalls; nothing prints.
 - **The format is REFUSED, never resampled.** `abi/sound_abi.h` fixes
   the stream at 48 kHz stereo s16le; a device advertising anything else
   is left unbound, because resampling belongs in `userland/lib/usnd.h`
   where it already exists. The endpoint is driven SYNCHRONOUSLY, off the
   bus's own SOF clock, so there is no drift to correct and no feedback
   endpoint to build.
+- **A UAC2 RATE IS SET, NOT READ.** Nothing in a UAC2 descriptor states
+  a sample rate: it lives in a Clock Source entity, and `SET_CUR` on
+  `CS_SAM_FREQ` IS the negotiation -- which is why `set_clock_rate()`
+  runs at BIND and a device that refuses it is not bound. The entity to
+  address is the one the streaming interface's input terminal names,
+  and it may be a clock SELECTOR, whose current pin is ASKED for rather
+  than chosen: on the device this was written against the selector is a
+  front-panel mode (a DSP path and a direct path), and picking one at
+  bind would silently override what the owner set on the hardware.
 - **A REFUSAL NAMES WHAT WAS OFFERED.** `usb_audio_parse()` fills a
   `struct usb_audio_report` on every walk -- the UAC version from
   bcdADC, and every AudioStreaming alternate with its channels, bits,
@@ -911,6 +924,13 @@ Five things to know:
   transfer, and (before the control path learned to notice) that
   presented as a two-million-poll hang per request with ep0 left
   halted.
+- **THE RING IS s16 AND THE WIRE MAY NOT BE.** A device wider than 16
+  bits gets each sample shifted into the TOP of its subslot by
+  `write_sample()` -- into the bottom is a 256x attenuation, which
+  sounds like silence rather than like a bug. One packet therefore has
+  THREE sizes that must not be confused: `frames` (the rate's share of
+  one service interval), `ring_bytes` (what that costs in the s16 ring)
+  and `wire_bytes` (what it costs on the wire).
 - **The samples are COPIED into a frame of the driver's own**, unlike
   the AC'97's descriptors which point straight into the core's ring.
   192 divides neither the 64 KiB ring nor its 2 KiB chunks, and an xHCI
@@ -940,6 +960,16 @@ else, which is exactly how this shipped wrong and passed every test.
   at the wrong rate, again with nothing to report. `interval_us()` is
   the conversion, and `xhci.c`'s `interval_field()` is its twin for the
   endpoint context.
+- **AND ONE INTERRUPT PER MILLISECOND, NOT PER PACKET.** A 125 us
+  endpoint completes 8000 packets a second; IOC is set on every
+  `group`-th TD so the event rate stays at 1000, which is the shape
+  Linux's snd-usb-audio uses its multi-packet URBs for. The completion
+  then advances the ring by a whole group.
+
+The worked example, measured on a Sound BlasterX G6: `bInterval 1` at
+high speed is 125 us, 48 kHz is 6 frames of that, 24-bit stereo makes
+36 bytes on the wire -- against a `wMaxPacketSize` of 294, which is that
+endpoint sized for 384 kHz plus a frame of headroom.
 
 ## AN ISOCHRONOUS ENDPOINT DOES NOT HALT, AND ITS RING RUNNING DRY IS NORMAL
 
