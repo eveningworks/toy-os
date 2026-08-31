@@ -443,6 +443,62 @@ destructive pointed at a partition where it is unrecoverable. Real
 installers make exactly this distinction: an ESP is never offered as a
 root filesystem target.
 
+## THERE IS AN INSTALLER, AND IT IS FIVE ORDINARY OPERATIONS
+
+`/bin/install --disk <name> confirm` partitions, formats, mounts, copies
+and writes a bootloader -- each through the syscall the matching command
+already uses (`SYS_MKPART`, `SYS_MKFS`, `SYS_MOUNT`, `ufileop`,
+`SYS_INSTALL_BOOT`). Nothing in it is a special path into the kernel,
+which is deliberate: every step can be typed at a shell and watched.
+
+Four things:
+
+- **IT REFUSES THE DISK THE MACHINE IS RUNNING FROM.** There is no
+  reading of "reinstall over myself" that ends with a working machine.
+- **THE LAYOUT IS A CONSTRAINT, NOT A PREFERENCE.** `core.img` carries
+  its prefix baked in at the host's `grub-mkimage` time --
+  `(hd0,gpt2)/boot/grub` -- so the copy it installs only finds its config
+  if the ESP is PARTITION 2 on the target too. Anaconda and the Debian
+  installer generate a fresh core image per target; toy-os has no
+  `grub-mkimage`, so it reproduces the layout the image it copies
+  expects.
+- **`SYS_INSTALL_BOOT` IS HANDED THE BYTES AND KNOWS NOTHING ABOUT
+  GRUB.** It applies the two patches that depend on WHERE the images
+  land -- the core image's LBA at 0x5c of the boot sector, and the block
+  list at 0x1f4/0x1fc of the core image's first sector -- keeps the
+  disk's own bytes at 0x1b8-0x200, and writes the boot sector LAST. Where
+  the core image goes is the KERNEL's answer, read from the target's own
+  table, for the reason `SYS_MKPART` takes a table rather than a sector.
+  `tools/install_grub.py` stages `boot.img` and `core.img` into the ESP
+  so ring 3 has files to read; there is no raw-sector-read syscall and
+  there should not be one.
+- **IT UNMOUNTS BEFORE WRITING THE BOOTLOADER**, which flushes the ESP's
+  write-back cache before the disk is told to boot from it -- and which
+  is also the refusal the kernel makes for a disk in use, taken rather
+  than talked past.
+
+`tools/install_test.py` boots the installed disk with NOTHING ELSE
+ATTACHED, because a guest with the ISO still in the drive boots the ISO's
+kernel and mounts the target's root, which reads exactly like a
+successful install.
+
+## A DIRECTORY BIGGER THAN ONE LISTING NEEDS `SYS_LISTDIR_AT`
+
+`SYS_LISTDIR_MAX` caps ONE call, and until `SYS_LISTDIR_AT` a directory
+bigger than it could not be read at all -- GRUB's module directory is 305
+files against a cap of 256, which is what stopped the installer copying
+`/boot`. The offset makes the cap a BATCH SIZE: call with `start = 0`,
+then `start += the count returned`, until fewer than `max` come back.
+
+Linux puts that position on the directory stream instead; toy-os has no
+directory handle, so it is an argument -- and a fourth argument means a
+request struct, which is what `SYS_MKPART` and `SYS_SPAWN` already do.
+
+**`ufileop` pages; `/bin/ls` still does not**, and the difference is
+real rather than an oversight: `cp` streams a directory and `ls` SORTS
+it, so paging `ls` means holding every entry at once. It reports the
+truncation instead. Roadmap.
+
 ## `mkpart` CAN WRITE ANY DISK, AND A DISK NOTHING IS MOUNTED FROM IS RE-READ AT ONCE
 
 `struct mkpart_request` carries a `device` name (empty = the boot disk,

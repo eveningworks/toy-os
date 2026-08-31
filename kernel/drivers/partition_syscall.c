@@ -36,39 +36,53 @@ static int disk_is_in_use(const struct block_device *disk) {
     return 0;
 }
 
+// Hand-serialized little-endian, the same convention partition.c uses:
+// this kernel builds on-disk structures byte by byte rather than casting
+// a struct over them.
+static void wr16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
+static void wr64(uint8_t *p, uint64_t v) {
+    for (int i = 0; i < 8; i++) p[i] = (uint8_t)(v >> (i * 8));
+}
+
+// WHICH DISK. Empty names the boot disk, which is all these syscalls
+// could reach before; a name must resolve to a WHOLE DISK, because both
+// operations write structures that describe a whole one. Sets the
+// caller's errno and returns NULL on a refusal.
+static const struct block_device *resolve_disk(const char *name, struct syscall_ctx *c) {
+    const struct block_device *disk;
+    if (name[0]) {
+        const struct blk_entry *e = blk_device_by_name(name);
+        if (!e) {
+            klog_printf("partition: no such device \"%s\"\n", name);
+            c->regs[14] = (uint64_t)(int64_t)-ENODEV;
+            return NULL;
+        }
+        if (e->parent != e->dev) {
+            klog_printf("partition: \"%s\" is a partition, not a disk -- refused\n", name);
+            c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+            return NULL;
+        }
+        disk = e->dev;
+    } else {
+        disk = blk_whole_disk();
+    }
+    if (!disk || blkdev_sector_count(disk) == 0) {
+        c->regs[14] = (uint64_t)(int64_t)-ENODEV;
+        return NULL;
+    }
+    return disk;
+}
+
 int sys_mkpart(struct syscall_ctx *c) {
     struct mkpart_request req;
     if (!vmm_copy_from_user(c->pml4, &req, c->a0, sizeof(req))) {
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
         return 0;
     }
-
-    // WHICH DISK. Empty names the boot disk, which is all this syscall
-    // could reach before; a name must resolve to a WHOLE DISK, because
-    // a table written inside a partition describes windows into itself.
-    const struct block_device *disk = NULL;
     req.device[sizeof(req.device) - 1] = '\0';
-    if (req.device[0]) {
-        const struct blk_entry *e = blk_device_by_name(req.device);
-        if (!e) {
-            klog_printf("mkpart: no such device \"%s\"\n", req.device);
-            c->regs[14] = (uint64_t)(int64_t)-ENODEV;
-            return 0;
-        }
-        if (e->parent != e->dev) {
-            klog_printf("mkpart: \"%s\" is a partition, not a disk -- refused\n", req.device);
-            c->regs[14] = (uint64_t)(int64_t)-EINVAL;
-            return 0;
-        }
-        disk = e->dev;
-    } else {
-        disk = blk_whole_disk();
-    }
 
-    if (!disk || blkdev_sector_count(disk) == 0) {
-        c->regs[14] = (uint64_t)(int64_t)-ENODEV;
-        return 0;
-    }
+    const struct block_device *disk = resolve_disk(req.device, c);
+    if (!disk) return 0;   // resolve_disk() set the errno
 
     // THE SPEED BUMP, AND WHAT IT IS NOT. There is no privilege model
     // in this kernel, so this cannot be a permission check -- any
@@ -121,11 +135,21 @@ int sys_mkpart(struct syscall_ctx *c) {
             return 0;
         }
 
+        // The role decides the GPT type GUID and, where MBR has an
+        // equivalent, the type byte. An unknown role is refused rather
+        // than quietly becoming data: a partition typed wrongly is one
+        // the boot scan will offer as a root.
+        if (!partition_type_guid((enum partition_role)src->role, dst->gpt_type_guid)) {
+            c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+            return 0;
+        }
+        if (src->role == MKPART_ROLE_ESP && !src->mbr_type) dst->mbr_type = 0xEF;
+
         dst->gpt_lba_start = src->start_lba;
         dst->gpt_lba_end = src->start_lba + src->sectors - 1; // GPT's end is INCLUSIVE
         dst->mbr_lba_start = (uint32_t)src->start_lba;
         dst->mbr_num_sectors = (uint32_t)src->sectors;
-        dst->mbr_type = src->mbr_type;
+        if (src->mbr_type) dst->mbr_type = src->mbr_type;
 
         // An MBR field is 32 bits. Refuse rather than truncate -- a
         // truncated start LBA is a partition somewhere else entirely.
@@ -178,6 +202,156 @@ int sys_mkpart(struct syscall_ctx *c) {
                     blk_device_name(disk), named);
     }
 
+    c->regs[14] = 0;
+    return 0;
+}
+
+// ---- SYS_INSTALL_BOOT ------------------------------------------------
+
+// 512, and it is the BLOCK layer's sector rather than the partition
+// code's -- every offset patched below is defined against a 512-byte
+// boot sector by the BIOS, not by anything this kernel chose.
+#define BOOT_SECTOR_SIZE INSTALL_BOOT_SECTOR_BYTES
+
+// Where a core image goes on this disk: the BIOS boot partition, which
+// is a partition with no filesystem in it that exists for exactly this.
+// Returns 0 when the disk has none, which is the honest answer for a
+// disk nobody partitioned for booting -- guessing at the MBR gap
+// instead would write into whatever a foreign table put there.
+static int bios_boot_window(const struct block_device *disk,
+                            uint32_t *out_lba, uint32_t *out_sectors) {
+    // STATIC, not a stack local: struct partition_table is ~1.5 KB
+    // against a 1 KB kernel frame budget. Safe for the same reason the
+    // table write below is -- the preemption guard is taken around it.
+    static struct partition_table tbl;
+    if (!partition_read_table_of(disk, &tbl)) return 0;
+    if (tbl.kind != PART_TABLE_GPT) return 0;   // MBR has no BIOS boot type
+
+    uint8_t want[16];
+    if (!partition_type_guid(PART_ROLE_BIOS_BOOT, want)) return 0;
+
+    for (int i = 0; i < tbl.entry_count; i++) {
+        const struct partition_entry *pe = &tbl.entries[i];
+        if (k_memcmp(pe->gpt_type_guid, want, 16) != 0) continue;
+        if (pe->gpt_lba_end < pe->gpt_lba_start) return 0;
+        uint64_t n = pe->gpt_lba_end - pe->gpt_lba_start + 1;  // GPT's end is INCLUSIVE
+        if (pe->gpt_lba_start > 0xFFFFFFFFull || n > 0xFFFFFFFFull) return 0;
+        *out_lba = (uint32_t)pe->gpt_lba_start;
+        *out_sectors = (uint32_t)n;
+        return 1;
+    }
+    return 0;
+}
+
+int sys_install_boot(struct syscall_ctx *c) {
+    struct install_boot_request req;
+    if (!vmm_copy_from_user(c->pml4, &req, c->a0, sizeof(req))) {
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+    req.device[sizeof(req.device) - 1] = '\0';
+
+    const struct block_device *disk = resolve_disk(req.device, c);
+    if (!disk) return 0;   // resolve_disk() set the errno
+
+    if (disk_is_in_use(disk) && !(req.flags & INSTALL_BOOT_CONFIRM)) {
+        klog_printf("install_boot: refused -- %s is in use and INSTALL_BOOT_CONFIRM was not set\n",
+                    blk_device_name(disk));
+        c->regs[14] = (uint64_t)(int64_t)-EPERM;
+        return 0;
+    }
+
+    // EXACTLY one sector. A boot sector is not a file that can be short:
+    // 511 bytes would leave the last byte of the 0x55AA signature
+    // whatever was there before.
+    if (req.boot_size != INSTALL_BOOT_SECTOR_BYTES) {
+        klog_printf("install_boot: refused -- boot image is %u bytes, not %u\n",
+                    (unsigned)req.boot_size, INSTALL_BOOT_SECTOR_BYTES);
+        c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+        return 0;
+    }
+
+    uint32_t core_lba = 0, core_room = 0;
+    if (!bios_boot_window(disk, &core_lba, &core_room)) {
+        klog_printf("install_boot: %s has no BIOS boot partition\n", blk_device_name(disk));
+        c->regs[14] = (uint64_t)(int64_t)-ENODEV;
+        return 0;
+    }
+
+    uint64_t core_sectors = (req.core_size + BOOT_SECTOR_SIZE - 1) / BOOT_SECTOR_SIZE;
+    // At least two: the first sector is the one the boot sector loads,
+    // and the block list it carries describes the REST. A one-sector
+    // core image has no rest and its patched count would be zero.
+    if (core_sectors < 2 || core_sectors > core_room) {
+        klog_printf("install_boot: refused -- core image is %u sector(s), room for %u\n",
+                    (unsigned)core_sectors, core_room);
+        c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+        return 0;
+    }
+
+    // STATIC for the same frame-budget reason as the table above, and
+    // safe for the same one: the preemption guard is held across the
+    // whole write.
+    static uint8_t boot[BOOT_SECTOR_SIZE];
+    static uint8_t sec[BOOT_SECTOR_SIZE];
+
+    scheduler_preempt_disable();
+    int ok = 1;
+
+    if (!vmm_copy_from_user(c->pml4, boot, req.boot_img, INSTALL_BOOT_SECTOR_BYTES)) {
+        scheduler_preempt_enable();
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+
+    // THE DISK'S OWN BYTES SURVIVE. 0x1b8-0x200 is the disk signature
+    // and the partition table; a boot sector written over them boots and
+    // describes an empty disk.
+    if (!blkdev_read_sectors(disk, 0, 1, sec)) {
+        klog_write("install_boot: could not read the target's boot sector\n");
+        scheduler_preempt_enable();
+        c->regs[14] = (uint64_t)(int64_t)-EIO;
+        return 0;
+    }
+    k_memcpy(boot + 0x1B8, sec + 0x1B8, BOOT_SECTOR_SIZE - 0x1B8);
+    // ...and where to find the core image.
+    wr64(boot + 0x5C, core_lba);
+
+    // The core image, a sector at a time -- it is tens of KiB and this
+    // is a 16 KiB kernel stack. The block list patch lands in the FIRST
+    // sector, so it is applied as that sector goes past.
+    for (uint64_t i = 0; i < core_sectors && ok; i++) {
+        uint32_t want = BOOT_SECTOR_SIZE;
+        uint64_t left = req.core_size - i * BOOT_SECTOR_SIZE;
+        if (left < want) { k_memset(sec, 0, BOOT_SECTOR_SIZE); want = (uint32_t)left; }
+        if (!vmm_copy_from_user(c->pml4, sec, req.core_img + i * BOOT_SECTOR_SIZE, want)) {
+            scheduler_preempt_enable();
+            c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+            return 0;
+        }
+        if (i == 0) {
+            wr64(sec + 0x1F4, core_lba + 1);              // where the rest is...
+            wr16(sec + 0x1FC, (uint16_t)(core_sectors - 1)); // ...and how much
+        }
+        if (!blkdev_write_sectors(disk, core_lba + (uint32_t)i, 1, sec)) ok = 0;
+    }
+
+    // THE BOOT SECTOR LAST. A power cut partway then leaves a disk whose
+    // old boot sector is intact rather than one pointing at a core image
+    // that was never finished -- the same publish-last discipline
+    // partition_write_table() follows with the protective MBR.
+    if (ok && !blkdev_write_sectors(disk, 0, 1, boot)) ok = 0;
+    if (ok) blkdev_flush(disk);
+
+    scheduler_preempt_enable();
+
+    if (!ok) {
+        klog_write("install_boot: write failed\n");
+        c->regs[14] = (uint64_t)(int64_t)-EIO;
+        return 0;
+    }
+    klog_printf("install_boot: %s -- boot sector written, core image at LBA %u (%u sectors)\n",
+                blk_device_name(disk), core_lba, (unsigned)core_sectors);
     c->regs[14] = 0;
     return 0;
 }

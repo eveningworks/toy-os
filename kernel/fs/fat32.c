@@ -1295,9 +1295,7 @@ static int fat32_format(const struct block_device *dev) {
     uint32_t nfats = 2;
 
     // Solve for the FAT size: every cluster needs four bytes, and the
-    // FATs themselves take sectors away from the data area. One pass of
-    // fixed-point iteration converges because the FAT is small relative
-    // to the volume; a second pass proves it.
+    // FATs themselves take sectors away from the data area.
     uint32_t fatsz = 1;
     for (int pass = 0; pass < 8; pass++) {
         uint32_t data = total - reserved - nfats * fatsz;
@@ -1306,6 +1304,29 @@ static int fat32_format(const struct block_device *dev) {
         if (need == fatsz) break;
         fatsz = need;
     }
+
+    // THE ITERATION ABOVE DOES NOT ALWAYS CONVERGE, AND FALLING OUT OF
+    // IT LEAVES A VOLUME THIS DRIVER'S OWN PROBE REFUSES. It can
+    // oscillate between two adjacent sizes -- a bigger FAT leaves fewer
+    // clusters, which needs a smaller FAT, which leaves more -- and the
+    // loop then ends on whichever it happened to be holding, which is
+    // the SMALLER one half the time. A FAT one sector short describes
+    // eight bytes fewer than the layout's cluster count, so parse_bpb()
+    // rejects it: a 64 MiB volume formatted and then unmountable, which
+    // is what an installer's ESP is.
+    //
+    // The invariant is one-directional, so enforce it directly rather
+    // than hoping for a fixed point: the FAT must describe every cluster
+    // the resulting layout has. Growing it only ever removes clusters,
+    // so this terminates.
+    for (int pass = 0; pass < 4; pass++) {
+        uint32_t first = reserved + nfats * fatsz;
+        if (first + spc > total) break;   // caught by the check below
+        uint32_t cl = (total - first) / spc;
+        if ((uint64_t)(cl + 2) * 4 <= (uint64_t)fatsz * SECTOR) break;
+        fatsz++;
+    }
+
     uint32_t first_data = reserved + nfats * fatsz;
     if (first_data + spc > total) {
         klog_write("fat32: volume too small for a FAT32 layout\n");

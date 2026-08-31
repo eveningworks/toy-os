@@ -39,6 +39,8 @@ static uint64_t g_listdir_out = 0;
 static uint64_t g_listdir_pml4 = 0;
 static uint32_t g_listdir_max = 0;
 static uint32_t g_listdir_count = 0;
+static uint32_t g_listdir_start = 0;  // SYS_LISTDIR_AT's offset
+static uint32_t g_listdir_seen = 0;   // entries the walk has passed, skipped or not
 // Holds the (already-validated, NUL-terminated) directory path for the
 // call in progress -- needed alongside `name` to build each entry's own
 // full path for the fs_stat() call below (fs_list()'s callback only
@@ -46,6 +48,10 @@ static uint32_t g_listdir_count = 0;
 static char g_listdir_dir_path[FS_PATH_MAX];
 
 static void listdir_collect(const char *name, uint32_t size, int is_dir) {
+    // SKIP the first `g_listdir_start` entries -- this is SYS_LISTDIR_AT's
+    // offset, applied here because fs_list() has no cursor of its own and
+    // walking to it is what a backend does anyway.
+    if (g_listdir_seen++ < g_listdir_start) return;
     if (g_listdir_count >= g_listdir_max) return;
     struct sys_dirent entry;
     struct sys_dirent *e = &entry;
@@ -189,14 +195,18 @@ int sys_unlink(struct syscall_ctx *c) {
     return 0;
 }
 
-int sys_listdir(struct syscall_ctx *c) {
+// SYS_LISTDIR and SYS_LISTDIR_AT are one function: the second is the
+// first with an offset, and duplicating the validation, the timestamp
+// lookup and the empty-vs-missing disambiguation would be two copies of
+// the subtle half.
+static int listdir_common(struct syscall_ctx *c, uint64_t path_ptr,
+                          uint64_t out, uint32_t max, uint32_t start) {
     uint64_t pml4 = c->pml4;
-    uint32_t max = (uint32_t)c->a2;
     if (max > SYS_LISTDIR_MAX) max = SYS_LISTDIR_MAX;
 
     char path[FS_PATH_MAX];
-    if (!vmm_validate_user_range(pml4, c->a1, (uint64_t)max * sizeof(struct sys_dirent)) ||
-        resolve_user_path(pml4, c->a0, path)) {
+    if (!vmm_validate_user_range(pml4, out, (uint64_t)max * sizeof(struct sys_dirent)) ||
+        resolve_user_path(pml4, path_ptr, path)) {
         klog_write("syscall: listdir() rejected -- invalid pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
@@ -207,10 +217,12 @@ int sys_listdir(struct syscall_ctx *c) {
         // SYS_LISTDIR_MAX of them is far too much to bounce through
         // an 8 KiB kernel stack. The range is validated up front so
         // each per-entry copy is a walk, not a second check.
-        g_listdir_out = c->a1;
+        g_listdir_out = out;
         g_listdir_pml4 = pml4;
         g_listdir_max = max;
         g_listdir_count = 0;
+        g_listdir_seen = 0;
+        g_listdir_start = start;
         k_strcpy(g_listdir_dir_path, path); // see listdir_collect()'s per-entry fs_stat()
         fs_list(path, listdir_collect);
         c->regs[14] = g_listdir_count;
@@ -232,12 +244,29 @@ int sys_listdir(struct syscall_ctx *c) {
         // Only on the zero path, so an ordinary listing pays nothing:
         // the two probes are directory walks, and a non-empty result has
         // already proved the directory exists by producing its children.
-        if (g_listdir_count == 0) {
+        // ...but only for the FIRST page. A later page legitimately
+        // comes back empty -- that is how a caller learns it has read
+        // the whole directory -- and reporting ENOENT for it would turn
+        // the end of a listing into a missing directory.
+        if (g_listdir_count == 0 && start == 0) {
             if (!fs_exists(path))      c->regs[14] = (uint64_t)(int64_t)-ENOENT;
             else if (!fs_is_dir(path)) c->regs[14] = (uint64_t)(int64_t)-ENOTDIR;
         }
     }
     return 0;
+}
+
+int sys_listdir(struct syscall_ctx *c) {
+    return listdir_common(c, c->a0, c->a1, (uint32_t)c->a2, 0);
+}
+
+int sys_listdir_at(struct syscall_ctx *c) {
+    struct listdir_request req;
+    if (!vmm_copy_from_user(c->pml4, &req, c->a0, sizeof req)) {
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+    return listdir_common(c, req.path, req.entries, req.max, req.start);
 }
 
 int sys_fs_generation(struct syscall_ctx *c) {

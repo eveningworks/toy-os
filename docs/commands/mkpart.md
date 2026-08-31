@@ -11,6 +11,8 @@
       --gpt          write a GPT (default)
       --mbr          write a legacy MBR -- at most 4 partitions
       <size>         one partition of that size; `rest` takes what is left
+      bios:|esp:     prefix a size to type it -- a BIOS boot partition for
+                     GRUB's core.img, or an ESP holding the kernel (/boot)
       confirm        required -- this destroys the disk's current contents
 
 ## Description
@@ -30,6 +32,14 @@ is what lands, which is the only layout predictable from a command line. A bare
 number is **sectors**; a `K`/`M`/`G` suffix is bytes, rounded **down** to a
 whole sector. Exactly one partition may be `rest`, which takes everything left
 after the sized ones.
+
+**Typing a partition.** A size may carry a `bios:` or `esp:` prefix, which
+writes the GPT type GUID the boot scan recognises — a BIOS boot partition
+(`21686148-…`, where GRUB's `core.img` goes, no filesystem in it) or an EFI
+System Partition (`C12A7328-…`, which boot mounts at `/boot`). A **role** rather
+than a raw GUID because a caller stating sixteen bytes can state any sixteen,
+and the scan's "this is the firmware's, never a root" test only works when what
+`mkpart` writes is something it recognises. Everything else is basic data.
 
 A GPT gets the full standard geometry: a protective MBR at LBA 0, a primary
 header at LBA 1, 128 entry slots across LBAs 2–33, and a backup header and

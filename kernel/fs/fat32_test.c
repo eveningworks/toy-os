@@ -44,18 +44,23 @@
 
 static uint8_t *g_img;
 
-static uint32_t img_sector_count(void) { return TEST_SECTORS; }
+// The volume's SIZE, so a test can format a smaller one out of the same
+// buffer. Geometry is a function of it, and one size in about sixty
+// used to produce a volume this driver could not mount.
+static uint32_t g_img_sectors = TEST_SECTORS;
+
+static uint32_t img_sector_count(void) { return g_img_sectors; }
 
 static int img_read(uint32_t lba, int count, void *buf) {
     if (!g_img || count <= 0) return 0;
-    if ((uint64_t)lba + (uint64_t)count > TEST_SECTORS) return 0;
+    if ((uint64_t)lba + (uint64_t)count > g_img_sectors) return 0;
     k_memcpy(buf, g_img + (uint64_t)lba * 512, (uint32_t)count * 512);
     return 1;
 }
 
 static int img_write(uint32_t lba, int count, const void *buf) {
     if (!g_img || count <= 0) return 0;
-    if ((uint64_t)lba + (uint64_t)count > TEST_SECTORS) return 0;
+    if ((uint64_t)lba + (uint64_t)count > g_img_sectors) return 0;
     k_memcpy(g_img + (uint64_t)lba * 512, buf, (uint32_t)count * 512);
     return 1;
 }
@@ -120,10 +125,12 @@ static const struct fs_ops *F(void) { return &fat32_ops; }
 // which volume a call means. This also retired what restore() used to
 // have to do -- driving the backend directly no longer repoints the
 // machine's real /boot at a RAM image, because it is not the same state.
+static uint32_t g_first_bad;   // the size that failed, so a failure NAMES it
 static struct fs_scratch g_sc;
 static int g_have_sc;
 
 static int fresh(void) {
+    g_img_sectors = TEST_SECTORS;
     if (!g_img) g_img = kmalloc(TEST_BYTES);
     if (!g_img) return 0;
     k_memset(g_img, 0, TEST_BYTES);
@@ -174,6 +181,37 @@ KTEST("fat32", "a probe recognises what format() wrote, and refuses a blank volu
     KTEST_ASSERT(F()->wipe(&IMG_DEV));
     KTEST_ASSERT_EQ(F()->probe(&IMG_DEV), 0);
     restore();
+}
+
+// A VOLUME format() WRITES MUST BE ONE probe() ACCEPTS, at EVERY size.
+// The FAT-size solver oscillated between two adjacent values for about
+// one size in sixty and fell out on the smaller, leaving a FAT eight
+// bytes short of the cluster count the layout implies -- a 64 MiB ESP
+// formatted and then unmountable, found by an installer rather than by
+// this file, whose only volume was 512 KiB.
+KTEST("fat32", "every volume size format() accepts is one probe() accepts") {
+    if (!g_img) g_img = kmalloc(TEST_BYTES);
+    if (!g_img) { KTEST_SKIP("could not allocate a 512 KiB test volume"); }
+
+    struct fs_scratch sc;
+    if (!mount_scratch_begin(F(), &sc)) { KTEST_SKIP("could not allocate a backend state"); }
+
+    // Every size in the range, not a sampled one: the failures are two
+    // adjacent sizes every ~130, so a stride would step over them.
+    int checked = 0, bad = 0;
+    for (uint32_t n = 128; n <= TEST_SECTORS; n++) {
+        g_img_sectors = n;
+        k_memset(g_img, 0, (uint32_t)n * 512);
+        if (!F()->format(&IMG_DEV)) continue;   // "too small" is a legitimate refusal
+        checked++;
+        if (F()->probe(&IMG_DEV) != 1) { bad++; if (bad == 1) g_first_bad = n; }
+    }
+    g_img_sectors = TEST_SECTORS;
+    mount_scratch_end(&sc);
+
+    KTEST_ASSERT(checked > 800);   // the fixture reached the code
+    KTEST_ASSERT_EQ(bad, 0);
+    KTEST_ASSERT_EQ((int)g_first_bad, 0);
 }
 
 KTEST("fat32", "a short-named file is written, read back and deleted") {

@@ -7,16 +7,11 @@
 // everything, formats, and re-probes the world. This one writes a
 // filesystem onto some OTHER partition and disturbs nothing.
 //
-// AND IT CANNOT ACTUALLY RUN YET. A backend keeps its volume in
-// module-level state, so formatting ANY device repoints whatever is
-// mounted -- both through the target's own format() and through
-// mount_wipe_others(), which wipes every OTHER backend against the same
-// device. Measured twice, each time as a crash that took /bin with it.
-// So the kernel refuses while any disk-backed filesystem is mounted,
-// and no boot mode today leaves them all unmounted. What ships here is
-// the syscall, the checks and the refusal; making it USEFUL needs
-// per-volume state in the backends, which docs/bugs.md records as the
-// installer's real prerequisite.
+// It used to be unable to run at all: a backend kept its volume in
+// module-level state, so formatting ANY device repointed whatever was
+// mounted -- twice a crash that took /bin with it. format() and wipe()
+// run on a scratch state now (fs_ops.h), and `/bin/install` is the
+// caller this exists for.
 //
 // `confirm` IS A WORD YOU TYPE, not a flag, following `fsformat tfs3
 // confirm` and SYS_MKPART's MKPART_CONFIRM. There is no privilege model

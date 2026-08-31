@@ -164,26 +164,32 @@ static int copy_tree(struct ufileop *s, const struct ufileop_policy *p,
         strlcpy(ddir, s->qdst[s->qhead], sizeof ddir);
         s->qhead++;
 
-        int n = sys_listdir(sdir, s->entries, SYS_LISTDIR_MAX);
-        if (n < 0) { report(s, p, sdir, sys_errno()); continue; }
-        if (n >= SYS_LISTDIR_MAX) report(s, p, sdir, ENOSPC);
+        // PAGED. SYS_LISTDIR_MAX caps one call, not a directory, and a
+        // tree with a bigger directory in it used to come back short --
+        // GRUB's 305 modules against a cap of 256 is what found it.
+        for (int page = 0; !s->cancelled; page += SYS_LISTDIR_MAX) {
+            int n = sys_listdir_at(sdir, s->entries, SYS_LISTDIR_MAX, page);
+            if (n < 0) { report(s, p, sdir, sys_errno()); break; }
+            if (n == 0) break;
 
-        for (int i = 0; i < n && !s->cancelled; i++) {
-            char sp[UFILEOP_PATH_MAX], dp[UFILEOP_PATH_MAX];
-            if (!k_path_join(sdir, s->entries[i].name, sp, sizeof sp) ||
-                !k_path_join(ddir, s->entries[i].name, dp, sizeof dp)) {
-                report(s, p, s->entries[i].name, ENAMETOOLONG);
-                continue;
-            }
-            if (s->entries[i].is_dir) {
-                if (sys_mkdir(dp) < 0 && sys_errno() != EEXIST) {
-                    report(s, p, dp, sys_errno());
+            for (int i = 0; i < n && !s->cancelled; i++) {
+                char sp[UFILEOP_PATH_MAX], dp[UFILEOP_PATH_MAX];
+                if (!k_path_join(sdir, s->entries[i].name, sp, sizeof sp) ||
+                    !k_path_join(ddir, s->entries[i].name, dp, sizeof dp)) {
+                    report(s, p, s->entries[i].name, ENAMETOOLONG);
                     continue;
                 }
-                queue_push(s, p, sp, dp);
-            } else {
-                copy_one(s, p, sp, dp);
+                if (s->entries[i].is_dir) {
+                    if (sys_mkdir(dp) < 0 && sys_errno() != EEXIST) {
+                        report(s, p, dp, sys_errno());
+                        continue;
+                    }
+                    queue_push(s, p, sp, dp);
+                } else {
+                    copy_one(s, p, sp, dp);
+                }
             }
+            if (n < SYS_LISTDIR_MAX) break;
         }
     }
     return 1;
@@ -201,22 +207,25 @@ static int remove_tree(struct ufileop *s, const struct ufileop_policy *p,
         char dir[UFILEOP_PATH_MAX];
         strlcpy(dir, s->qsrc[read], sizeof dir);
 
-        int n = sys_listdir(dir, s->entries, SYS_LISTDIR_MAX);
-        if (n < 0) { report(s, p, dir, sys_errno()); continue; }
-        if (n >= SYS_LISTDIR_MAX) report(s, p, dir, ENOSPC);
+        for (int page = 0; !s->cancelled; page += SYS_LISTDIR_MAX) {
+            int n = sys_listdir_at(dir, s->entries, SYS_LISTDIR_MAX, page);
+            if (n < 0) { report(s, p, dir, sys_errno()); break; }
+            if (n == 0) break;
 
-        for (int i = 0; i < n && !s->cancelled; i++) {
-            char path[UFILEOP_PATH_MAX];
-            if (!k_path_join(dir, s->entries[i].name, path, sizeof path)) {
-                report(s, p, s->entries[i].name, ENAMETOOLONG);
-                continue;
+            for (int i = 0; i < n && !s->cancelled; i++) {
+                char path[UFILEOP_PATH_MAX];
+                if (!k_path_join(dir, s->entries[i].name, path, sizeof path)) {
+                    report(s, p, s->entries[i].name, ENAMETOOLONG);
+                    continue;
+                }
+                if (s->entries[i].is_dir) {
+                    queue_push(s, p, path, "");
+                } else {
+                    if (sys_unlink(path) != 0) report(s, p, path, sys_errno());
+                    if (!progress(s, p, path, 1, 1)) return 1;
+                }
             }
-            if (s->entries[i].is_dir) {
-                queue_push(s, p, path, "");
-            } else {
-                if (sys_unlink(path) != 0) report(s, p, path, sys_errno());
-                if (!progress(s, p, path, 1, 1)) return 1;
-            }
+            if (n < SYS_LISTDIR_MAX) break;
         }
     }
 

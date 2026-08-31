@@ -29,6 +29,28 @@
 // bound by what we would have written.
 #define PART_WRITE_MAX_ENTRIES 4
 
+// WHAT A PARTITION IS FOR, as far as this kernel is willing to name it.
+// Three, because three is what a bootable toy-os disk has: GRUB's
+// core.img in a BIOS boot partition, the kernel and grub.cfg in an ESP,
+// and the root filesystem in a data partition.
+//
+// A ROLE rather than a raw GUID on purpose. A caller stating sixteen
+// bytes can state any sixteen; a caller stating a role can only ask for
+// something this kernel already knows how to recognise, which is what
+// makes `partition_is_firmware()` and the boot scan keep agreeing with
+// what `mkpart` writes. MBR gets the nearest equivalent type byte, and
+// has no BIOS boot type at all -- there, core.img goes in the gap.
+enum partition_role {
+    PART_ROLE_DATA = 0,
+    PART_ROLE_BIOS_BOOT,
+    PART_ROLE_ESP,
+};
+
+// The GPT type GUID for a role. Returns 0 for a role this does not
+// know, which is what stops a bad value becoming an all-zero type --
+// the encoding for an UNUSED slot.
+int partition_type_guid(enum partition_role role, uint8_t out[16]);
+
 enum partition_table_kind {
     PART_TABLE_NONE, // no 0x55AA signature at LBA 0 -- a flat whole-disk volume
     PART_TABLE_MBR,  // legacy MBR, no protective 0xEE entry

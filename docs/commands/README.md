@@ -173,6 +173,7 @@ a command), and the `gui3`/`nano` aliases.
 
 ### Storage
 
+- [`install`](install.md)
 - [`mkfs`](mkfs.md)
 - [`mkpart`](mkpart.md)
 - [`mount`](mount.md)

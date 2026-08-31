@@ -498,7 +498,7 @@ static __attribute__((noinline)) uint32_t write_gpt_entries(const struct block_d
             const struct partition_entry *pe = &in->entries[idx];
             uint8_t *e = sec + i * GPT_ENTRY_SIZE;
 
-            k_memcpy(e, GPT_TYPE_BASIC_DATA, 16);
+            k_memcpy(e, pe->gpt_type_guid, 16);
             k_memcpy(e + 16, pe->gpt_unique_guid, 16);
             write_le64(e + 32, pe->gpt_lba_start);
             write_le64(e + 40, pe->gpt_lba_end);
@@ -625,7 +625,21 @@ int partition_write_table(const struct partition_table *in) {
 void partition_fill_defaults(struct partition_table *t) {
     for (int i = 0; i < t->entry_count; i++) {
         guid_generate(t->entries[i].gpt_unique_guid);
-        k_memcpy(t->entries[i].gpt_type_guid, GPT_TYPE_BASIC_DATA, 16);
+        // An all-zero type GUID is "unset", which is also what an unused
+        // GPT slot looks like -- so filling it in here is what lets a
+        // caller state a type without knowing sixteen bytes of it.
+        int unset = 1;
+        for (int b = 0; b < 16; b++) if (t->entries[i].gpt_type_guid[b]) { unset = 0; break; }
+        if (unset) k_memcpy(t->entries[i].gpt_type_guid, GPT_TYPE_BASIC_DATA, 16);
         if (!t->entries[i].mbr_type) t->entries[i].mbr_type = 0x83;
     }
+}
+
+int partition_type_guid(enum partition_role role, uint8_t out[16]) {
+    switch (role) {
+    case PART_ROLE_DATA:      k_memcpy(out, GPT_TYPE_BASIC_DATA, 16); return 1;
+    case PART_ROLE_BIOS_BOOT: k_memcpy(out, GPT_TYPE_BIOS_BOOT, 16); return 1;
+    case PART_ROLE_ESP:       k_memcpy(out, GPT_TYPE_ESP, 16); return 1;
+    }
+    return 0;
 }

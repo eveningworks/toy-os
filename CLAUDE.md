@@ -802,6 +802,8 @@ whenever a headline here tells you something you did not already know.
 - **`init()` IS THREE-VALUED: 1 persistent, 0 mounted-but-not, -1 COULD NOT MOUNT**
 - **RAMFS HAS A BUDGET, HALF OF FREE MEMORY AT MOUNT**
 - **A PARTITIONED DISK IS NEVER AUTO-FORMATTED, AND THE FIRST PARTITION THAT IS OURS IS LEFT ACTIVE**
+- **THERE IS AN INSTALLER, AND IT IS FIVE ORDINARY OPERATIONS**
+- **A DIRECTORY BIGGER THAN ONE LISTING NEEDS `SYS_LISTDIR_AT`**
 - **`mkpart` CAN WRITE ANY DISK, AND A DISK NOTHING IS MOUNTED FROM IS RE-READ AT ONCE**
 - **WRITING A TABLE IS A SYSCALL THAT TAKES A TABLE, NOT A SECTOR**
 - **A ROOT IS ONE FILESYSTEM, BUT A PATH TREE IS SEVERAL: THERE IS A MOUNT TABLE**
@@ -1274,7 +1276,7 @@ cost".
   `demo_test.py`, `diskmark_test.py`, `doom_test.py`,
   `doom_sound_test.py`, `fat32_test.py`, `fileop_test.py`, `frame_balance.py`,
   `fs_switch_test.py`, `grep_test.py`, `hires_test.py`,
-  `init_test.py`, `jobs_test.py`, `kbd_test.py`,
+  `init_test.py`, `install_test.py`, `jobs_test.py`, `kbd_test.py`,
   `keyboard_paths_test.py`, `kvm_soak.py`, `live_boot_test.py`,
   `ls_test.py`, `mem_stress.py`, `mkpart_test.py`,
   `multidisk_test.py`, `net_test.py`, `partition_test.py`,

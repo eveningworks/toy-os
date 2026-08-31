@@ -299,6 +299,16 @@ int sys_listdir(const char *path, struct sys_dirent *out, int max) {
                               (uint64_t)(uintptr_t)out, (uint64_t)(int64_t)max));
 }
 
+int sys_listdir_at(const char *path, struct sys_dirent *out, int max, int start) {
+    struct listdir_request req = {
+        .path = (uint64_t)(uintptr_t)path,
+        .entries = (uint64_t)(uintptr_t)out,
+        .max = (uint32_t)max,
+        .start = (uint32_t)start,
+    };
+    return (int)err(syscall1(SYS_LISTDIR_AT, (uint64_t)(uintptr_t)&req));
+}
+
 int sys_chdir(const char *path) {
     return (int)err(syscall1(SYS_CHDIR, (uint64_t)(uintptr_t)path));
 }
@@ -688,6 +698,10 @@ int sys_mount(const struct mount_request *req) {
 
 int sys_mkfs(const struct mkfs_request *req) {
     return (int)err(syscall1(SYS_MKFS, (uint64_t)(uintptr_t)req));
+}
+
+int sys_install_boot(const struct install_boot_request *req) {
+    return (int)err(syscall1(SYS_INSTALL_BOOT, (uint64_t)(uintptr_t)req));
 }
 
 int sys_umount(const char *point) {

@@ -2640,6 +2640,27 @@ window without going through it will find its layout polls timing out.
   Run it after touching anything in `kernel/fs/`; it exercises the
   probe/format/remount/reboot cycle no KTEST can (the suite runs
   inside one booted kernel).
+- **`install_test.py`** -- does toy-os install itself onto another disk,
+  and does that disk then BOOT? Two phases, and the second is the one
+  that matters: it boots the installed image with **nothing else
+  attached** and asserts the machine that comes up is that one -- by its
+  root partition's sector count, which is the source's size otherwise.
+  Without that, a guest with the ISO still in the drive boots the ISO's
+  kernel and mounts the target's root, which reads exactly like a
+  successful install.
+
+  **The disk arrangement is the point, and it is inverted from the way it
+  reads: the SYSTEM goes on virtio and the blank TARGET on IDE.** Disk
+  precedence is virtio-blk, then AHCI, then ATA, so a blank virtio disk
+  beside an IDE root outranks it, the root scan finds no filesystem, and
+  the guest comes up on ramfs with no `/bin`. Inverting it is what lets
+  this tool run against a stock `make iso` with no `KCMDLINE` (compare
+  `hires_test.py`, which does need one).
+
+  `--positive-control` zeroes the installed boot sector before phase 2,
+  so its five checks must go RED; a clean run proves nothing until that
+  has been seen. On demand only (`ondemand_sweep.py` names it) -- it
+  boots two guests and takes a couple of minutes.
 - **`mkpart_test.py`** -- writes a synthetic legacy MBR or GPT partition
   table onto a disk image, for testing `kernel/drivers/partition.c`'s
   parser (`parttable` shell command). Its mount-preserving guarantee

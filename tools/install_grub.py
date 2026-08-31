@@ -438,6 +438,20 @@ def install(disk, kernel, grub_cfg, verbose=True, optional=False):
         f.seek(bios[1] * SECTOR)
         f.write(core)
 
+    # ---- 3. the two images, as FILES in the ESP ---------------------
+    #
+    # So that toy-os can install itself. `/bin/install` cannot read raw
+    # sectors -- there is no syscall for it, deliberately -- so the only
+    # way it can put a bootloader on a target disk is to be handed the
+    # bytes, and the only place it can get them is a file. This is where
+    # grub-install puts them on a real system too.
+    #
+    # UNPATCHED, both of them: the two patches depend on where the
+    # images land, which is the target's business and not this one's.
+    # SYS_INSTALL_BOOT applies them.
+    mcopy_into(disk, esp, [os.path.join(mods, "boot.img"), core_path],
+               "::/boot/grub/i386-pc/")
+
     if verbose:
         where = f"partition {bios[0]}" if bios[0] else "the MBR gap"
         print(f"install_grub: {disk} -- core.img in {where} at LBA {bios[1]} ({nsec} sectors), "

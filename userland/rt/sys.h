@@ -108,6 +108,13 @@ int     sys_dup2(int oldfd, int newfd); // newfd names it too; returns newfd
 int     sys_unlink(const char *path);
 int     sys_listdir(const char *path, struct sys_dirent *out, int max);
 
+// The same, starting at the `start`'th entry. SYS_LISTDIR_MAX caps ONE
+// call, so a directory bigger than it needs paging: call with start = 0,
+// then start += the count returned, until it returns fewer than `max`.
+// A directory being WRITTEN while it is paged can repeat or skip an
+// entry -- readdir()'s hazard, and the same answer.
+int     sys_listdir_at(const char *path, struct sys_dirent *out, int max, int start);
+
 // THE CURRENT DIRECTORY IS THE KERNEL'S, and every path above resolves
 // against it -- so a relative path means the same thing here as at any
 // shell, and a spawned child starts where its parent was standing. It
@@ -607,6 +614,15 @@ int sys_mount(const struct mount_request *req);
 // permission check. Refuses a volume something is mounted from; use
 // `fsformat` for the running root, which is a different operation.
 int sys_mkfs(const struct mkfs_request *req);
+
+// Makes a disk BOOT: the boot sector at LBA 0, and the core image into
+// that disk's BIOS boot partition, with the two patches that depend on
+// where they landed. DESTRUCTIVE, so the request carries
+// INSTALL_BOOT_CONFIRM for a disk in use -- the same shape and the same
+// caveat as SYS_MKPART. The kernel knows nothing about GRUB: it is
+// handed the bytes, and where the core image goes comes from the
+// target's own partition table.
+int sys_install_boot(const struct install_boot_request *req);
 int sys_umount(const char *point);
 
 // Powers the machine off (`reboot` = 0) or restarts it (1). DOES NOT

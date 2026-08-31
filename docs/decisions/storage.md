@@ -2050,3 +2050,68 @@ around `tfs3_format()`/`tfs3_wipe()`; `fat32_probe()`'s save/restore of
 machine's own `/boot` back afterwards. All three were one mechanism —
 protecting a single shared instance from a second user — and all three
 stop existing once there can be two.
+
+## The installer is five ordinary operations, and the kernel never learns what a bootloader is
+
+toy-os can install itself now (`/bin/install`). The question worth
+recording is what the KERNEL had to grow for that, because the obvious
+answer -- an install syscall -- is the wrong one.
+
+**What real installers do.** Anaconda, the Debian installer and Windows
+setup are all ordinary userland programs driving ordinary primitives:
+partition an disk, make a filesystem, mount it, copy files, run
+`grub-install`. None of them has a kernel interface of its own. The one
+place they need privilege is writing raw sectors, and on Linux that is
+just `open("/dev/sda", O_WRONLY)` gated by uid 0.
+
+**toy-os cannot copy that last part, and that is what shaped this.**
+There is no privilege model here, so a general write-any-sector syscall
+would be a way for any process to destroy any filesystem for the
+convenience of one rare command -- the reasoning `SYS_MKPART` already
+carries. So the bootloader step is `SYS_INSTALL_BOOT`: a specific,
+checkable operation that takes two IMAGES and a disk, and derives WHERE
+they go from the target's own partition table. A caller cannot point a
+core image at a filesystem, because it never names an LBA.
+
+**The kernel still knows nothing about GRUB.** It never parses either
+image. What it does is apply the two patches that depend on where the
+bytes landed -- the core image's LBA at offset 0x5c of the boot sector,
+and the block list at 0x1f4/0x1fc of the core image's first sector --
+preserve the disk's own partition table at 0x1b8-0x200, and write the
+boot sector LAST so a power cut leaves the old one intact. Those are
+facts about placement, which is the half only the kernel knows. Handing
+it two files of the wrong kind produces a disk that does not boot rather
+than an error, and that is the right trade: checking would mean carrying
+a second implementation of somebody else's format in ring 0.
+
+**Where the images come from.** `tools/install_grub.py` stages `boot.img`
+and `core.img` into the ESP as ordinary files, which is where
+`grub-install` puts them on a real system too. Ring 3 reads them and
+hands over the bytes. The alternative -- having the kernel read them off
+the running disk's own LBA 0 and BIOS boot partition -- needs no files
+and was rejected for two reasons: it is guessing, and it cannot work
+from a live ISO.
+
+**The layout is a constraint and is stated as one.** `core.img` carries
+its prefix baked in at `grub-mkimage` time, so the copy this installs
+only finds its config if the ESP is partition 2 on the target as well.
+Real installers generate a fresh core image per target; toy-os has no
+`grub-mkimage`, so it reproduces the layout the image it copies expects.
+Said out loud in `/bin/install`'s own comment and in its page, because
+a session reordering those partitions would get a disk that reaches GRUB
+and stops at a rescue prompt with nothing explaining why.
+
+**Two things had to change underneath, and both were pre-existing
+defects nothing had reached.** `fat32_format()`'s FAT-size solver could
+OSCILLATE between two adjacent sizes and fall out on the smaller,
+leaving a FAT eight bytes short of the cluster count its own layout
+implies -- a volume this driver formats and then refuses to mount, for
+about one size in sixty, found by a 64 MiB ESP rather than by
+`fat32_test.c`, whose only volume was 512 KiB. And `SYS_LISTDIR`
+truncated at 256 entries with no way to page, so copying GRUB's
+305-file module directory came back short; `SYS_LISTDIR_AT` is the
+offset the ABI comment had already named as the fix.
+
+**The general shape, which this project keeps rediscovering:** a
+capability nothing exercised was broken in a way no test could see,
+because every test used the sizes that happened to work.

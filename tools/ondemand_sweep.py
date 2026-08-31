@@ -72,6 +72,10 @@ TOOLS = [
     # --- storage and boot -------------------------------------------
     ("partition",   "partition_test.py",       "mounting from an MBR/GPT partition", True,  None,                   False),
     ("fs_switch",   "fs_switch_test.py",       "format, remount, reboot persistence", True, None,                   False),
+    # Two guests: one to install from, then the installed disk booted
+    # alone. It makes its own images and never touches disk.img, so
+    # wants_vm is False.
+    ("install",     "install_test.py",         "self-hosted install, then boot it",  False, None,                   False),
     ("tfs3_v1",     "tfs3_v1_test.py",         "the older TFS3 on-disk version",     True,  None,                   False),
     # FAT32 and the mount table, cross-checked on the HOST with mtools
     # and fsck.fat. It launches its own guest against a COPY of

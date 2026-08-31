@@ -684,7 +684,7 @@ run on, not by order.
 - [x] ~~USB Ethernet (CDC-ECM), and the BULK transfer type it needed~~ DONE 2026-08-31 -- `net_usb_ecm.c`; RX untested, see `docs/bugs.md`
 - [x] ~~Remote access: a shell and file transfer over the network~~ DONE 2026-08-31 -- `telnetd`, `tftpd`, `tools/remote.py`
 - [x] ~~Per-volume state in filesystem backends~~ done -- `struct t3_state`/`fat32_state`/`ramfs_state`, switched at `FS_OP`
-- [ ] A self-hosted installer: partition, format, copy the running system, write the bootloader
+- [x] ~~A self-hosted installer: partition, format, copy the running system, write the bootloader~~ done -- `/bin/install`
 - [ ] USB mass storage (bulk-only transport) -- the first non-disk-bus storage backend
 - [x] ~~Hub support (devices behind a hub, not just root ports)~~ DONE 2026-08-28 -- USB2 only; the TT path is hardware-only
 - [x] ~~Hot-plug: a device plugged in after boot enumerates, an unplugged one is torn down~~ DONE 2026-08-28
@@ -897,11 +897,12 @@ this to be better?".
 
 - [ ] Four overlays still opt out of damage tracking -- see `docs/roadmap-details.md`
 - [ ] `damage_sweep.py`'s random walk can open Notepad's file picker by chance -- harmless, but confusing in a state dump
-- [ ] `SYS_LISTDIR` still truncates at 256 entries, and TFS3 has no such cap -- the fix is an offset argument
+- [x] ~~`SYS_LISTDIR` truncates at 256 entries and TFS3 has no such cap~~ done -- `SYS_LISTDIR_AT` pages
+- [ ] `/bin/ls` still reports truncation rather than paging -- it SORTS a listing, so paging means holding it all
 - [ ] Nothing detects an ordinary memory LEAK, in either allocator
 - [ ] The ESP's own layout puts the kernel at `/boot/boot/kernel.bin`, because one `grub.cfg` serves the ISO and the disk
 - [ ] `/boot` is mounted read-only and there is no `/etc/fstab` to say otherwise -- the policy is `mount_boot_auto()`
-- [ ] toy-os cannot update its own kernel yet: the write works, but nothing reinstalls GRUB or verifies the image
+- [ ] toy-os cannot update its own kernel in place: `SYS_INSTALL_BOOT` rewrites a bootloader, nothing verifies a new kernel image
 - [ ] A FAT32 `disk_usage()` scans the whole FAT the first time anything asks, inside the VFS preemption guard
 - [ ] `blk_part_create()`'s pool needs one thunk set per slot, because a `block_device` op takes no context argument
 - [ ] A ramfs root is EMPTY -- no `/bin`, so a diskless boot has a filesystem and no programs

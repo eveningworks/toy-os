@@ -43,6 +43,8 @@ static const char *USAGE =
     "  --gpt          write a GPT (default)\n"
     "  --mbr          write a legacy MBR -- at most 4 partitions\n"
     "  <size>         one partition of that size; `rest` takes what is left\n"
+    "  bios:|esp:     prefix a size to type it -- a BIOS boot partition for\n"
+    "                 GRUB's core.img, or an ESP holding the kernel (/boot)\n"
     "  confirm        required -- this destroys the disk's current contents";
 
 // Parses "512M", "2G", "204800" (bare = sectors) into sectors.
@@ -118,6 +120,8 @@ int main(int argc, char **argv) {
 
     int confirmed = 0;
     uint64_t sizes[MKPART_MAX_ENTRIES];
+    uint8_t roles[MKPART_MAX_ENTRIES];
+    memset(roles, MKPART_ROLE_DATA, sizeof roles);
     int rest_at = -1; // index of the `rest` partition, if any
     unsigned n = 0;
 
@@ -132,6 +136,14 @@ int main(int argc, char **argv) {
             cmd_fail("mkpart", "at most 4 partitions");
             return 1;
         }
+        // `bios:1M`, `esp:64M`. A prefix rather than a flag because the
+        // type belongs to ONE partition and a flag would have to say
+        // which.
+        uint8_t role = MKPART_ROLE_DATA;
+        if (strncmp(a, "bios:", 5) == 0) { role = MKPART_ROLE_BIOS_BOOT; a += 5; }
+        else if (strncmp(a, "esp:", 4) == 0) { role = MKPART_ROLE_ESP; a += 4; }
+        roles[n] = role;
+
         if (strcmp(a, "rest") == 0) {
             if (rest_at >= 0) {
                 cmd_fail("mkpart", "only one partition can be `rest`");
@@ -195,7 +207,10 @@ int main(int argc, char **argv) {
     for (unsigned i = 0; i < n; i++) {
         req.entries[i].start_lba = at;
         req.entries[i].sectors = sizes[i];
-        snprintf(req.entries[i].name, sizeof req.entries[i].name, "toyos%u", i + 1);
+        req.entries[i].role = roles[i];
+        snprintf(req.entries[i].name, sizeof req.entries[i].name, "%s",
+                 roles[i] == MKPART_ROLE_BIOS_BOOT ? "BIOS boot" :
+                 roles[i] == MKPART_ROLE_ESP ? "EFI System" : "toyos");
         at += sizes[i];
     }
     req.count = n;
@@ -214,9 +229,11 @@ int main(int argc, char **argv) {
     printf("%s partition table written:\n", req.kind == MKPART_KIND_GPT ? "GPT" : "MBR");
     for (unsigned i = 0; i < n; i++) {
         human_size(size, sizeof size, req.entries[i].sectors * SECTOR_BYTES);
-        printf("  %u  LBA %llu  %llu sectors  %s\n", i + 1,
+        printf("  %u  LBA %llu  %llu sectors  %-7s %s\n", i + 1,
                (unsigned long long)req.entries[i].start_lba,
-               (unsigned long long)req.entries[i].sectors, size);
+               (unsigned long long)req.entries[i].sectors, size,
+               roles[i] == MKPART_ROLE_BIOS_BOOT ? "BIOS boot" :
+               roles[i] == MKPART_ROLE_ESP ? "EFI System" : "data");
     }
     if (disk_name) {
         // The kernel re-read the table because nothing is mounted from

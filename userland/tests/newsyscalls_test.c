@@ -16,6 +16,13 @@
 #include "rt/sys.h"
 #include "timer.h" // struct rtc_time, shared with the kernel's SYS_GETTIME handler
 
+// This test links no libc (it is one of the static /tests), so the one
+// string comparison it needs is here.
+static int same_name(const char *a, const char *b) {
+    while (*a && *a == *b) { a++; b++; }
+    return *a == *b;
+}
+
 
 
 
@@ -142,6 +149,47 @@ int main(void) {
         } else {
             put("  FAIL: listdir() returned an error\n");
             all_ok = 0; phase_failed("listdir");
+        }
+    }
+
+    // --- Phase 2a: SYS_LISTDIR_AT pages -------------------------------
+    //
+    // The offset is what makes SYS_LISTDIR_MAX a batch size rather than
+    // a ceiling: without it, a directory bigger than the cap could not
+    // be read at all, which is what stopped the installer copying GRUB's
+    // 305-file module directory. Driven with a batch of ONE rather than
+    // 256 files, because the property is the offset and a fixture that
+    // needs 257 files to prove it is a fixture nobody runs.
+    put("newsyscalls_test: listdir paging phase\n");
+    {
+        static struct sys_dirent one[1];
+        static struct sys_dirent all[SYS_LISTDIR_MAX];
+        int64_t total = sys_listdir("/etc", all, SYS_LISTDIR_MAX);
+        int ok = (total > 1);   // /etc has several files by boot time
+        if (!ok) put("  SKIP: /etc has too few entries to page\n");
+
+        // One at a time must visit every entry, in the same order, and
+        // then stop -- a page past the end is 0, not an error, or the
+        // end of a listing would read as a missing directory.
+        for (int64_t i = 0; ok && i < total; i++) {
+            int64_t n = sys_listdir_at("/etc", one, 1, (int)i);
+            if (n != 1 || !same_name(one[0].name, all[i].name)) {
+                put("  FAIL: page ");
+                put_udec((uint32_t)i, 0);
+                put(" did not match the whole listing\n");
+                ok = 0;
+            }
+        }
+        if (ok && sys_listdir_at("/etc", one, 1, (int)total) != 0) {
+            put("  FAIL: a page past the end was not empty\n");
+            ok = 0;
+        }
+        if (ok) {
+            put("  OK: paged /etc one entry at a time, ");
+            put_udec((uint32_t)total, 0);
+            put(" of them, in order\n");
+        } else if (total > 1) {
+            all_ok = 0; phase_failed("listdir paging");
         }
     }
 

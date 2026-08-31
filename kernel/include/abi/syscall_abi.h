@@ -348,11 +348,24 @@ struct sys_dirent {
                             // point rather than a guarantee -- the real
                             // fix is an offset argument so a caller can
                             // page through, which changes this call's
-                            // ABI and is a roadmap item. What changed
-                            // here is that a caller can now DETECT it:
-                            // a full array means "there may be more",
-                            // and /bin/ls says so instead of stopping
-                            // quietly.
+                            // ABI. SYS_LISTDIR_AT is that offset, and
+                            // this cap is now a BATCH SIZE rather than a
+                            // ceiling: a caller that pages through reads
+                            // every entry however many there are.
+                            // A caller that does not page can still
+                            // DETECT the cut -- a full array means
+                            // "there may be more", which is what
+                            // /bin/ls said before it learned to page.
+
+// SYS_LISTDIR_AT's request. A struct because this call needs FOUR
+// arguments and `int 0x80` carries three -- the same answer SYS_MKPART
+// and SYS_SPAWN already give.
+struct listdir_request {
+    uint64_t path;      // user pointer to a NUL-terminated path
+    uint64_t entries;   // user pointer to an array of struct sys_dirent
+    uint32_t max;       // capacity, clamped to SYS_LISTDIR_MAX
+    uint32_t start;     // how many entries to SKIP first
+};
 
 #define SYS_LISTDIR 13 // RDI = pointer to a NUL-terminated directory
                         // path (same length limit as SYS_OPEN), RSI =
@@ -508,6 +521,59 @@ struct sys_dirent {
                        // Probe from a device with no address (sender
                        // 0.0.0.0) and an Announcement from one that has
                        // it.
+
+#define SYS_LISTDIR_AT 94 // RDI = pointer to a `struct listdir_request`.
+                          // SYS_LISTDIR with an OFFSET: fills the array
+                          // from the `start`'th entry of the directory
+                          // rather than the first. Returns how many were
+                          // filled, or the same negative errnos
+                          // SYS_LISTDIR does.
+                          //
+                          // WHY: SYS_LISTDIR_MAX caps ONE call, and a
+                          // directory bigger than it could not be read
+                          // at all -- GRUB's module directory is 305
+                          // files against a cap of 256, which stopped
+                          // the installer copying /boot. Paging is what
+                          // Linux does through the directory stream's
+                          // own position; toy-os has no directory
+                          // handle, so the position is an argument.
+                          //
+                          // THE ORDER MUST BE STABLE ACROSS CALLS, and
+                          // it is only as stable as the backend's own
+                          // walk -- a directory being written while it
+                          // is paged can repeat or skip an entry. Same
+                          // hazard readdir() has, and the same answer:
+                          // do not do that.
+
+#define SYS_INSTALL_BOOT 93 // RDI = pointer to a `struct install_boot_request`
+                           // (abi/partition_abi.h). Writes a BIOS
+                           // bootloader onto a disk: the 512-byte boot
+                           // sector at LBA 0, and the core image into
+                           // that disk's BIOS boot partition. Returns 0,
+                           // or a negative errno: -EINVAL for a boot
+                           // sector that is not 512 bytes or a core
+                           // image that does not fit, -ENODEV for no
+                           // such disk or no BIOS boot partition on it,
+                           // -EPERM without INSTALL_BOOT_CONFIRM on a
+                           // disk in use, -EFAULT for a bad pointer,
+                           // -EIO if a write failed.
+                           //
+                           // TWO IMAGES IN, NOT A PATH. The kernel does
+                           // not know what a bootloader is and should
+                           // not learn: it is handed the bytes, applies
+                           // the two patches that depend on WHERE they
+                           // land (which is the half only the kernel
+                           // knows), and writes them. `/bin/install`
+                           // reads them out of /boot.
+                           //
+                           // WHERE core.img GOES IS THE KERNEL'S ANSWER,
+                           // not the caller's -- it reads the target's
+                           // partition table and finds the BIOS boot
+                           // partition. The same reasoning as SYS_MKPART
+                           // taking a table rather than a sector: a
+                           // caller naming an LBA can name any LBA, and
+                           // "which sector is safe" is exactly what the
+                           // table answers.
 
 #define SYS_MKFS 92 // RDI = pointer to a `struct mkfs_request`
                     // (abi/mount_abi.h). Writes an empty filesystem of
