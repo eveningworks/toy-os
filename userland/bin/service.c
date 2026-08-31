@@ -217,10 +217,33 @@ static void settle_and_report(const char *name, const char *from) {
     else sys_print("service: init published no status for it\n");
 }
 
+// WHY THE STATUS CAN BE ABSENT WITH INIT PERFECTLY HEALTHY, and why
+// saying so matters. init publishes on demand and only when the machine
+// has SETTLED (see init.c's write_status): nothing is written until
+// somebody rings the doorbell, and nothing is written while a service is
+// still starting or in a restart backoff. read_status() rings and waits,
+// so reaching here means the wait expired -- which on a freshly booted
+// machine is "not yet", not "init is broken".
+//
+// The old message asked "is init running?" for both cases. On a laptop
+// booted from a fresh install that sent the maintainer looking for a
+// dead init while init was pid 1 and the desktop was running.
+static void explain_no_status(void) {
+    if (init_pid() <= 0) {
+        sys_print("service: init is not running -- nothing supervises "
+                  "services on this machine\n");
+        return;
+    }
+    sys_print("service: init is running but has not published a status "
+              "yet.\nIt publishes when the machine has settled, so a "
+              "service still starting\nor in a restart backoff holds it "
+              "back -- try again in a moment.\n");
+}
+
 static int cmd_list(void) {
     const char *status = read_status();
     if (!status) {
-        sys_print("service: no " STATUS_PATH " -- is init running?\n");
+        explain_no_status();
         return 1;
     }
     sys_print(status);
@@ -256,7 +279,7 @@ static void print_description(const char *name) {
 static int cmd_status(const char *name) {
     const char *status = read_status();
     if (!status) {
-        sys_print("service: no " STATUS_PATH " -- is init running?\n");
+        explain_no_status();
         return 1;
     }
     const char *line = status_line(status, name);

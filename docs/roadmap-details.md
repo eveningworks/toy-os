@@ -3898,9 +3898,10 @@ stream is a bulk transfer completing.
 - **Anything but a 5C20 stepping.** The version check REFUSES an
   RTL8153B, an RTL8156 and an RTL8152: those want a different init
   sequence and there is nothing here to test one against.
-- **SuperSpeed.** Tested at high speed only -- the adapter is on a
-  USB-2 root hub on the development machine. `--usb-host 2357:0601@1`
-  pins it to a USB 3 port if that becomes the question.
+- ~~**SuperSpeed.**~~ PROVEN 2026-08-31 on the bare-metal laptop, where
+  the adapter sits on a USB 3 root port: `port 13: connected,
+  super-speed`, bound with `1024 B/packet` (against 512 at high speed),
+  link up at 1000M, DHCP and sustained traffic all fine.
 - **Hot unplug of a bound adapter**, and the throughput ceiling: 3.9
   MB/s is what one HTTP fetch did, not a measured limit.
 
