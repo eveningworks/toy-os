@@ -37,7 +37,7 @@
 #include "heap.h"
 #include "string.h"
 #include "kfmt.h"   // k_snprintf
-#include "mount.h"  // restore() puts the machine's own /boot back
+#include "mount.h"  // mount_scratch_begin/end -- every test owns its own state
 
 #define TEST_SECTORS 1024u          // 512 KiB
 #define TEST_BYTES   (TEST_SECTORS * 512u)
@@ -77,32 +77,72 @@ static const struct block_device IMG_DEV = {
     .trim = 0,
 };
 
+// A SECOND image, for the two-volumes-at-once test. A separate device
+// rather than a second window on the first: two mounts of one volume is
+// a different (and refused) thing from two volumes.
+static uint8_t *g_img2;
+
+static uint32_t img2_sector_count(void) { return TEST_SECTORS; }
+
+static int img2_read(uint32_t lba, int count, void *buf) {
+    if (!g_img2 || count <= 0) return 0;
+    if ((uint64_t)lba + (uint64_t)count > TEST_SECTORS) return 0;
+    k_memcpy(buf, g_img2 + (uint64_t)lba * 512, (uint32_t)count * 512);
+    return 1;
+}
+
+static int img2_write(uint32_t lba, int count, const void *buf) {
+    if (!g_img2 || count <= 0) return 0;
+    if ((uint64_t)lba + (uint64_t)count > TEST_SECTORS) return 0;
+    k_memcpy(g_img2 + (uint64_t)lba * 512, buf, (uint32_t)count * 512);
+    return 1;
+}
+
+static const struct block_device IMG2_DEV = {
+    .name = "fattest2",
+    .sector_count = img2_sector_count,
+    .read_sectors = img2_read,
+    .write_sectors = img2_write,
+    .max_sectors_per_xfer = img_max_xfer,
+    .persistent = 0,
+    .caps = 0,
+    .flush = 0,
+    .trim = 0,
+};
+
 static const struct fs_ops *F(void) { return &fat32_ops; }
 
 // A fresh, formatted, mounted volume. Returns 0 if the image could not
 // be allocated, which is a SKIP rather than a failure -- a fragmented
 // heap is not a bug in this filesystem.
+// EVERY TEST BELOW RUNS ON ITS OWN STATE, which is what a backend call
+// outside vfs.c has to do now: fs_ops.h's state_activate is what says
+// which volume a call means. This also retired what restore() used to
+// have to do -- driving the backend directly no longer repoints the
+// machine's real /boot at a RAM image, because it is not the same state.
+static struct fs_scratch g_sc;
+static int g_have_sc;
+
 static int fresh(void) {
     if (!g_img) g_img = kmalloc(TEST_BYTES);
     if (!g_img) return 0;
     k_memset(g_img, 0, TEST_BYTES);
-    if (!F()->format(&IMG_DEV)) return 0;
-    return F()->init(&IMG_DEV) == 1;
+    if (g_have_sc) { mount_scratch_end(&g_sc); g_have_sc = 0; }
+    if (!mount_scratch_begin(F(), &g_sc)) return 0;
+    g_have_sc = 1;
+    if (!F()->format(&IMG_DEV) || F()->init(&IMG_DEV) != 1) {
+        mount_scratch_end(&g_sc);
+        g_have_sc = 0;
+        return 0;
+    }
+    return 1;
 }
 
-// Puts the machine's own filesystem back. The backend is single-mount
-// (fs_ops.max_mounts), so a test that leaves it pointed at the RAM
-// image leaves the REAL /boot broken -- which would surface much later,
-// in some other tool, as a filesystem that is suddenly empty.
 static void restore(void) {
+    if (!g_have_sc) return;
     if (F()->umount) F()->umount(&IMG_DEV);
-    for (int i = 0; i < mount_count(); i++) {
-        const struct mount *m = mount_at(i);
-        if (m && m->fs == &fat32_ops) {
-            F()->init(m->dev);
-            return;
-        }
-    }
+    mount_scratch_end(&g_sc);
+    g_have_sc = 0;
 }
 
 KTEST("fat32", "formats a volume, mounts it, and the root is an empty directory") {
@@ -325,13 +365,68 @@ KTEST("fat32", "probing a second volume does not disturb the mounted one") {
     if (!fresh()) { KTEST_SKIP("could not allocate a 512 KiB test volume"); }
     KTEST_ASSERT(F()->write("/mounted.txt", "still here", 0));
 
-    // The real disk's own device is the honest second volume: whatever
-    // is active, it is not this RAM image.
+    // A PROBE RUNS ON A SCRATCH STATE. That is mount.c's rule now
+    // rather than a save/restore inside fat32_probe(), so this drives
+    // it the way mount.c does: a second state, a probe on it, then back.
     const struct block_device *elsewhere = blk_active();
-    if (elsewhere && elsewhere != &IMG_DEV) F()->probe(elsewhere);
+    if (elsewhere && elsewhere != &IMG_DEV) {
+        struct fs_scratch sc;
+        if (mount_scratch_begin(F(), &sc)) {
+            F()->probe(elsewhere);
+            mount_scratch_end(&sc);   // puts this test's volume back
+        }
+    }
 
     // The mount is untouched.
     KTEST_ASSERT(F()->exists("/mounted.txt"));
     KTEST_ASSERT_EQ((int)F()->size("/mounted.txt"), 10);
+    restore();
+}
+
+// TWO VOLUMES AT ONCE, which is what an installer needs and what
+// max_mounts refused until per-mount state existed: the running
+// system's ESP at /boot, and the target's. Driven at the backend here
+// because a KTEST cannot conjure a second FAT partition; mount_test.c
+// asserts the same property through the mount table.
+KTEST("fat32", "two volumes are mounted at once and neither sees the other") {
+    if (!fresh()) { KTEST_SKIP("could not allocate a 512 KiB test volume"); }
+    void *first = g_sc.st;
+    KTEST_ASSERT(F()->write("/first.txt", "volume one", 0));
+
+    uint8_t *img2 = kmalloc(TEST_BYTES);
+    if (!img2) { restore(); KTEST_SKIP("could not allocate a second test volume"); }
+    k_memset(img2, 0, TEST_BYTES);
+    g_img2 = img2;
+
+    struct fs_scratch sc2;
+    if (!mount_scratch_begin(F(), &sc2)) {
+        kfree(img2); g_img2 = 0; restore();
+        KTEST_SKIP("could not allocate a second backend state");
+    }
+    void *second = sc2.st;
+    int ok = F()->format(&IMG2_DEV) && F()->init(&IMG2_DEV) == 1 &&
+             F()->write("/second.txt", "volume two, which is longer", 0);
+    KTEST_ASSERT(ok);
+
+    // Each state sees only its own volume, and switching between them
+    // is one call -- alternate, so a stale pointer cannot pass.
+    F()->state_activate(first);
+    KTEST_ASSERT(F()->exists("/first.txt"));
+    KTEST_ASSERT(!F()->exists("/second.txt"));
+    F()->state_activate(second);
+    KTEST_ASSERT(F()->exists("/second.txt"));
+    KTEST_ASSERT(!F()->exists("/first.txt"));
+    F()->state_activate(first);
+    KTEST_ASSERT_EQ((int)F()->size("/first.txt"), 10);
+    F()->state_activate(second);
+    KTEST_ASSERT_EQ((int)F()->size("/second.txt"), 27);
+
+    F()->state_activate(second);
+    if (F()->umount) F()->umount(&IMG2_DEV);
+    mount_scratch_end(&sc2);
+    kfree(img2);
+    g_img2 = 0;
+
+    F()->state_activate(first);
     restore();
 }

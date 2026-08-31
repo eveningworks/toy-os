@@ -51,6 +51,7 @@
 #include "fs.h"
 #include "fs_ops.h"
 #include "fat32.h"
+#include "mount.h" // MOUNT_MAX -- the mount limit this backend declares
 #include "block.h"
 #include "string.h"
 #include "klog.h"
@@ -95,12 +96,13 @@
 
 // ---- state ----------------------------------------------------------
 //
-// ONE MOUNT (fs_ops.max_mounts = 1). The scratch sectors below are why:
-// they are module-level, so a second mount would share them. Each has a
-// SINGLE purpose, deliberately -- one general-purpose scratch shared
+// PER MOUNT, in struct fat32_state, reached through `S` -- the mount the
+// current call belongs to (fs_ops.h's state_alloc/state_free/
+// state_activate). The scratch sectors below are the exception and each
+// has a SINGLE purpose, deliberately: one general-purpose scratch shared
 // between a directory walk and the FAT lookup that walk makes would
-// corrupt the walk halfway through, which is the exact shape of the
-// bug tfs3.c's g_blk/g_ptr_blk split exists to prevent.
+// corrupt the walk halfway through, which is the exact shape of the bug
+// tfs3.c's g_blk/g_ptr_blk split exists to prevent.
 
 struct fat_vol {
     const struct block_device *dev;
@@ -118,17 +120,26 @@ struct fat_vol {
     uint32_t free_count;        // FSInfo's free count; 0xFFFFFFFF = unknown
 };
 
-static struct fat_vol g_v;
+struct fat32_state {
+    struct fat_vol v;
 
-static uint8_t g_fatsec[SECTOR];   // the cached FAT sector
-static uint32_t g_fatsec_lba;      // which one, 0 = nothing cached
-static int g_fatsec_dirty;
+    // The cached FAT sector. IN HERE rather than beside the scratch
+    // because it can be DIRTY across calls, and a dirty sector written
+    // back to whichever volume happens to be current is corruption.
+    uint8_t fatsec[SECTOR];
+    uint32_t fatsec_lba;        // which one, 0 = nothing cached
+    int fatsec_dirty;
 
+    void *read_buf;             // whole-file read staging, see fat32_read()
+};
+
+static struct fat32_state *S;   // NULL between calls -- see fs_ops.h
+
+// Per CALL, not per volume: nothing here outlives one backend call, and
+// the filesystem is one global critical section (vfs.c's FS_OP).
 static uint8_t g_dirsec[SECTOR];   // a directory sector during a walk
 static uint8_t g_datasec[SECTOR];  // file data for a partial-sector read/write
 static uint8_t g_tmpsec[SECTOR];   // probe, format, FSInfo -- never held across a walk
-
-static void *g_read_buf;           // whole-file read staging, see fat32_read()
 
 // ---- little-endian accessors ----------------------------------------
 
@@ -145,21 +156,21 @@ static void wr32(uint8_t *p, uint32_t v) {
 // ---- volume I/O ------------------------------------------------------
 
 static int vol_read(uint32_t lba, int count, void *buf) {
-    if ((uint64_t)lba + (uint64_t)count > (uint64_t)g_v.total_sectors) return 0;
-    return blkdev_read_sectors(g_v.dev, lba, count, buf);
+    if ((uint64_t)lba + (uint64_t)count > (uint64_t)S->v.total_sectors) return 0;
+    return blkdev_read_sectors(S->v.dev, lba, count, buf);
 }
 
 static int vol_write(uint32_t lba, int count, const void *buf) {
-    if ((uint64_t)lba + (uint64_t)count > (uint64_t)g_v.total_sectors) return 0;
-    return blkdev_write_sectors(g_v.dev, lba, count, buf);
+    if ((uint64_t)lba + (uint64_t)count > (uint64_t)S->v.total_sectors) return 0;
+    return blkdev_write_sectors(S->v.dev, lba, count, buf);
 }
 
 static uint32_t cluster_first_sector(uint32_t clus) {
-    return g_v.first_data_sector + (clus - 2) * g_v.sectors_per_cluster;
+    return S->v.first_data_sector + (clus - 2) * S->v.sectors_per_cluster;
 }
 
 static int cluster_valid(uint32_t clus) {
-    return clus >= 2 && clus < g_v.cluster_count + 2;
+    return clus >= 2 && clus < S->v.cluster_count + 2;
 }
 
 // ---- the FAT ---------------------------------------------------------
@@ -172,25 +183,25 @@ static int cluster_valid(uint32_t clus) {
 static int fat_load(uint32_t lba);
 
 static int fat_flush(void) {
-    if (!g_fatsec_dirty || !g_fatsec_lba) return 1;
+    if (!S->fatsec_dirty || !S->fatsec_lba) return 1;
     // EVERY COPY OF THE FAT, not just the first. mkfs writes two by
     // default and a repair tool compares them; leaving the second stale
     // is a filesystem that fsck calls corrupt and other drivers may
     // read from instead.
     int ok = 1;
-    for (uint32_t i = 0; i < g_v.num_fats; i++) {
-        uint32_t lba = g_fatsec_lba + i * g_v.fat_sectors;
-        if (!vol_write(lba, 1, g_fatsec)) ok = 0;
+    for (uint32_t i = 0; i < S->v.num_fats; i++) {
+        uint32_t lba = S->fatsec_lba + i * S->v.fat_sectors;
+        if (!vol_write(lba, 1, S->fatsec)) ok = 0;
     }
-    g_fatsec_dirty = 0;
+    S->fatsec_dirty = 0;
     return ok;
 }
 
 static int fat_load(uint32_t lba) {
-    if (g_fatsec_lba == lba) return 1;
+    if (S->fatsec_lba == lba) return 1;
     if (!fat_flush()) return 0;
-    if (!vol_read(lba, 1, g_fatsec)) { g_fatsec_lba = 0; return 0; }
-    g_fatsec_lba = lba;
+    if (!vol_read(lba, 1, S->fatsec)) { S->fatsec_lba = 0; return 0; }
+    S->fatsec_lba = lba;
     return 1;
 }
 
@@ -198,9 +209,9 @@ static int fat_load(uint32_t lba) {
 // FAT -- fat_flush() adds the per-copy stride, so the cache key is the
 // same whichever copy is being written.
 static int fat_locate(uint32_t clus, uint32_t *out_lba, uint32_t *out_off) {
-    if (clus > g_v.cluster_count + 1) return 0;
+    if (clus > S->v.cluster_count + 1) return 0;
     uint32_t byte = clus * 4;
-    *out_lba = g_v.reserved + byte / SECTOR;
+    *out_lba = S->v.reserved + byte / SECTOR;
     *out_off = byte % SECTOR;
     return 1;
 }
@@ -209,7 +220,7 @@ static int fat_get(uint32_t clus, uint32_t *out) {
     uint32_t lba, off;
     if (!fat_locate(clus, &lba, &off)) return 0;
     if (!fat_load(lba)) return 0;
-    *out = rd32(g_fatsec + off) & FAT_MASK;
+    *out = rd32(S->fatsec + off) & FAT_MASK;
     return 1;
 }
 
@@ -220,9 +231,9 @@ static int fat_set(uint32_t clus, uint32_t val) {
     uint32_t lba, off;
     if (!fat_locate(clus, &lba, &off)) return 0;
     if (!fat_load(lba)) return 0;
-    uint32_t old = rd32(g_fatsec + off);
-    wr32(g_fatsec + off, (old & 0xF0000000u) | (val & FAT_MASK));
-    g_fatsec_dirty = 1;
+    uint32_t old = rd32(S->fatsec + off);
+    wr32(S->fatsec + off, (old & 0xF0000000u) | (val & FAT_MASK));
+    S->fatsec_dirty = 1;
     return 1;
 }
 
@@ -239,26 +250,26 @@ static int fat_is_eoc(uint32_t v) { return v >= FAT_EOC_MIN; }
 // number it read off a hint would be worse than reading nothing.
 
 static void fsinfo_load(void) {
-    g_v.free_hint = 0xFFFFFFFFu;
-    g_v.free_count = 0xFFFFFFFFu;
-    if (!g_v.fsinfo_sector) return;
-    if (!vol_read(g_v.fsinfo_sector, 1, g_tmpsec)) return;
+    S->v.free_hint = 0xFFFFFFFFu;
+    S->v.free_count = 0xFFFFFFFFu;
+    if (!S->v.fsinfo_sector) return;
+    if (!vol_read(S->v.fsinfo_sector, 1, g_tmpsec)) return;
     if (rd32(g_tmpsec) != 0x41615252u) return;          // "RRaA"
     if (rd32(g_tmpsec + 484) != 0x61417272u) return;    // "rrAa"
     if (rd16(g_tmpsec + 510) != 0xAA55) return;
     uint32_t free_count = rd32(g_tmpsec + 488);
     uint32_t next_free = rd32(g_tmpsec + 492);
-    if (next_free >= 2 && next_free < g_v.cluster_count + 2) g_v.free_hint = next_free;
-    if (free_count <= g_v.cluster_count) g_v.free_count = free_count;
+    if (next_free >= 2 && next_free < S->v.cluster_count + 2) S->v.free_hint = next_free;
+    if (free_count <= S->v.cluster_count) S->v.free_count = free_count;
 }
 
 static void fsinfo_store(void) {
-    if (!g_v.fsinfo_sector) return;
-    if (!vol_read(g_v.fsinfo_sector, 1, g_tmpsec)) return;
+    if (!S->v.fsinfo_sector) return;
+    if (!vol_read(S->v.fsinfo_sector, 1, g_tmpsec)) return;
     if (rd32(g_tmpsec) != 0x41615252u) return;
-    wr32(g_tmpsec + 488, g_v.free_count);
-    wr32(g_tmpsec + 492, g_v.free_hint);
-    vol_write(g_v.fsinfo_sector, 1, g_tmpsec);
+    wr32(g_tmpsec + 488, S->v.free_count);
+    wr32(g_tmpsec + 492, S->v.free_hint);
+    vol_write(S->v.fsinfo_sector, 1, g_tmpsec);
 }
 
 // Every mutating operation ends here: the FAT cache is written back,
@@ -268,7 +279,7 @@ static void fsinfo_store(void) {
 static int fat_sync(void) {
     int ok = fat_flush();
     fsinfo_store();
-    if (!blkdev_flush(g_v.dev)) ok = 0;
+    if (!blkdev_flush(S->v.dev)) ok = 0;
     return ok;
 }
 
@@ -301,8 +312,8 @@ static uint32_t chain_nth(uint32_t start, uint32_t n) {
 // every allocation. The hint is advisory (see fsinfo_load), so a wrong
 // one costs a longer search and never a wrong answer.
 static uint32_t cluster_alloc(uint32_t prev) {
-    uint32_t total = g_v.cluster_count;
-    uint32_t start = (g_v.free_hint >= 2 && g_v.free_hint < total + 2) ? g_v.free_hint : 2;
+    uint32_t total = S->v.cluster_count;
+    uint32_t start = (S->v.free_hint >= 2 && S->v.free_hint < total + 2) ? S->v.free_hint : 2;
     for (uint32_t i = 0; i < total; i++) {
         uint32_t c = start + i;
         if (c >= total + 2) c -= total; // wrap, staying in [2, total+2)
@@ -311,8 +322,8 @@ static uint32_t cluster_alloc(uint32_t prev) {
         if (v != FAT_FREE) continue;
         if (!fat_set(c, FAT_EOC)) return 0;
         if (cluster_valid(prev) && !fat_set(prev, c)) return 0;
-        g_v.free_hint = (c + 1 < total + 2) ? c + 1 : 2;
-        if (g_v.free_count != 0xFFFFFFFFu && g_v.free_count) g_v.free_count--;
+        S->v.free_hint = (c + 1 < total + 2) ? c + 1 : 2;
+        if (S->v.free_count != 0xFFFFFFFFu && S->v.free_count) S->v.free_count--;
         return c;
     }
     return 0;
@@ -321,7 +332,7 @@ static uint32_t cluster_alloc(uint32_t prev) {
 static int cluster_zero(uint32_t clus) {
     k_memset(g_datasec, 0, SECTOR);
     uint32_t base = cluster_first_sector(clus);
-    for (uint32_t i = 0; i < g_v.sectors_per_cluster; i++) {
+    for (uint32_t i = 0; i < S->v.sectors_per_cluster; i++) {
         if (!vol_write(base + i, 1, g_datasec)) return 0;
     }
     return 1;
@@ -334,13 +345,13 @@ static int cluster_zero(uint32_t clus) {
 static int chain_free(uint32_t start) {
     if (!cluster_valid(start)) return 1;
     uint32_t c = start;
-    uint32_t guard = g_v.cluster_count + 2;
+    uint32_t guard = S->v.cluster_count + 2;
     while (cluster_valid(c) && guard--) {
         uint32_t next;
         if (!chain_next(c, &next)) return 0;
         if (!fat_set(c, FAT_FREE)) return 0;
-        if (g_v.free_count != 0xFFFFFFFFu) g_v.free_count++;
-        if (g_v.free_hint > c) g_v.free_hint = c;
+        if (S->v.free_count != 0xFFFFFFFFu) S->v.free_count++;
+        if (S->v.free_hint > c) S->v.free_hint = c;
         c = next;
     }
     return 1;
@@ -527,7 +538,7 @@ static void walk_begin(struct dirwalk *w, uint32_t start_cluster) {
 // Returns 0 at the end of the chain.
 static int walk_load(struct dirwalk *w) {
     if (w->done || !cluster_valid(w->cluster)) return 0;
-    if (w->sec_in_clus >= g_v.sectors_per_cluster) {
+    if (w->sec_in_clus >= S->v.sectors_per_cluster) {
         uint32_t next;
         if (!chain_next(w->cluster, &next) || !cluster_valid(next)) { w->done = 1; return 0; }
         w->cluster = next;
@@ -657,7 +668,7 @@ static int dir_find(uint32_t dir_cluster, const char *name, struct dirent_info *
 static int resolve_parent(const char *path, uint32_t *out_dir, const char **out_leaf) {
     if (!path || path[0] != '/') return 0;
     const char *p = path + 1;
-    uint32_t dir = g_v.root_cluster;
+    uint32_t dir = S->v.root_cluster;
 
     for (;;) {
         const char *slash = k_strchr(p, '/');
@@ -673,7 +684,7 @@ static int resolve_parent(const char *path, uint32_t *out_dir, const char **out_
         // A subdirectory whose first cluster is 0 is `..` pointing at
         // the root, which FAT encodes as 0 rather than as the root's
         // real cluster number.
-        dir = e.cluster ? e.cluster : g_v.root_cluster;
+        dir = e.cluster ? e.cluster : S->v.root_cluster;
         p = slash + 1;
     }
     *out_dir = dir;
@@ -686,7 +697,7 @@ static int resolve_parent(const char *path, uint32_t *out_dir, const char **out_
 static int lookup(const char *path, struct dirent_info *out) {
     uint32_t dir;
     const char *leaf;
-    if (!g_v.mounted) return 0;
+    if (!S->v.mounted) return 0;
     if (!path || k_strcmp(path, "/") == 0) return 0;
     if (!resolve_parent(path, &dir, &leaf)) return 0;
     if (leaf[0] == '\0' || k_strlen(leaf) > FAT_NAME_MAX) return 0;
@@ -749,9 +760,9 @@ static int dir_step(uint32_t *sector, uint32_t *off) {
     *off = 0;
     // Recovering the cluster from the sector is exact, because a
     // cluster IS a run of contiguous sectors.
-    uint32_t clus = (*sector - g_v.first_data_sector) / g_v.sectors_per_cluster + 2;
-    uint32_t sec_in = (*sector - g_v.first_data_sector) % g_v.sectors_per_cluster;
-    if (sec_in + 1 < g_v.sectors_per_cluster) { (*sector)++; return 1; }
+    uint32_t clus = (*sector - S->v.first_data_sector) / S->v.sectors_per_cluster + 2;
+    uint32_t sec_in = (*sector - S->v.first_data_sector) % S->v.sectors_per_cluster;
+    if (sec_in + 1 < S->v.sectors_per_cluster) { (*sector)++; return 1; }
     uint32_t next;
     if (!chain_next(clus, &next) || !cluster_valid(next)) return 0;
     *sector = cluster_first_sector(next);
@@ -802,10 +813,10 @@ static int dir_find_run(uint32_t dir_cluster, int need, uint32_t *out_sector, ui
     uint32_t clus = dir_cluster;
     uint32_t run_sector = 0, run_off = 0;
     int run = 0;
-    uint32_t guard = g_v.cluster_count + 2;
+    uint32_t guard = S->v.cluster_count + 2;
 
     for (;;) {
-        for (uint32_t s = 0; s < g_v.sectors_per_cluster; s++) {
+        for (uint32_t s = 0; s < S->v.sectors_per_cluster; s++) {
             uint32_t lba = cluster_first_sector(clus) + s;
             if (!vol_read(lba, 1, g_dirsec)) return 0;
             for (uint32_t o = 0; o < SECTOR; o += DIRENT_SIZE) {
@@ -1033,7 +1044,7 @@ static int dir_create(uint32_t dir_cluster, const char *name, uint8_t attr,
         dotdot[0] = '.'; dotdot[1] = '.';
         dotdot[11] = ATTR_DIRECTORY;
         wr16(dotdot + 22, time); wr16(dotdot + 24, date);
-        ent_set_cluster(dotdot, dir_cluster == g_v.root_cluster ? 0 : dir_cluster);
+        ent_set_cluster(dotdot, dir_cluster == S->v.root_cluster ? 0 : dir_cluster);
         if (!vol_write(cluster_first_sector(first), 1, g_tmpsec)) return 0;
     }
 
@@ -1064,7 +1075,7 @@ static uint32_t chain_read(uint32_t start, uint32_t size, uint64_t offset,
     if (offset + len > size) len = (uint32_t)(size - offset);
     if (!len) return 0;
 
-    uint32_t cluster_bytes = g_v.sectors_per_cluster * SECTOR;
+    uint32_t cluster_bytes = S->v.sectors_per_cluster * SECTOR;
     uint32_t got = 0;
     uint8_t *dst = buf;
 
@@ -1104,7 +1115,7 @@ static uint32_t chain_read(uint32_t start, uint32_t size, uint64_t offset,
 // `*io_start` is the file's first cluster and is UPDATED when a file
 // that had none gets its first. Returns 1 on success.
 static int chain_write(uint32_t *io_start, uint64_t offset, const void *buf, uint32_t len) {
-    uint32_t cluster_bytes = g_v.sectors_per_cluster * SECTOR;
+    uint32_t cluster_bytes = S->v.sectors_per_cluster * SECTOR;
     const uint8_t *src = buf;
     uint32_t done = 0;
 
@@ -1167,13 +1178,13 @@ static int chain_write(uint32_t *io_start, uint64_t offset, const void *buf, uin
 // ---- fs_ops: identity ----------------------------------------------------
 
 // Reads a BPB and decides whether it is a FAT32 this driver can serve.
-// Fills g_v on success -- probe() and init() both need every field, and
+// Fills S->v on success -- probe() and init() both need every field, and
 // deriving them twice is how the two answers drift apart.
 static int parse_bpb(const struct block_device *dev) {
-    k_memset(&g_v, 0, sizeof g_v);
-    g_v.dev = dev;
-    g_v.total_sectors = blkdev_sector_count(dev); // provisional, for vol_read's bound
-    if (g_v.total_sectors < 8) return 0;
+    k_memset(&S->v, 0, sizeof S->v);
+    S->v.dev = dev;
+    S->v.total_sectors = blkdev_sector_count(dev); // provisional, for vol_read's bound
+    if (S->v.total_sectors < 8) return 0;
     if (!blkdev_read_sectors(dev, 0, 1, g_tmpsec)) return -1;
 
     if (rd16(g_tmpsec + 510) != 0xAA55) return 0;
@@ -1219,32 +1230,25 @@ static int parse_bpb(const struct block_device *dev) {
     if ((uint64_t)(clusters + 2) * 4 > (uint64_t)fatsz32 * SECTOR) return 0;
     if (root_clus < 2 || root_clus >= clusters + 2) return 0;
 
-    g_v.sectors_per_cluster = spc;
-    g_v.reserved = reserved;
-    g_v.num_fats = nfats;
-    g_v.fat_sectors = fatsz32;
-    g_v.total_sectors = tot32;
-    g_v.root_cluster = root_clus;
-    g_v.first_data_sector = first_data;
-    g_v.cluster_count = clusters;
-    g_v.fsinfo_sector = (fsinfo && fsinfo < reserved) ? fsinfo : 0;
+    S->v.sectors_per_cluster = spc;
+    S->v.reserved = reserved;
+    S->v.num_fats = nfats;
+    S->v.fat_sectors = fatsz32;
+    S->v.total_sectors = tot32;
+    S->v.root_cluster = root_clus;
+    S->v.first_data_sector = first_data;
+    S->v.cluster_count = clusters;
+    S->v.fsinfo_sector = (fsinfo && fsinfo < reserved) ? fsinfo : 0;
     return 1;
 }
 
-// A PROBE MUST NOT DISTURB A MOUNT. parse_bpb() fills g_v, which IS the
-// mounted volume, so probing a second device while mounted would
-// repoint this driver at it -- the bug TFS3 shipped for one boot when
-// mounting /boot probed the ESP against an already-mounted root. Saved
-// and restored for the same reason it is there.
+// A PROBE MUST NOT DISTURB A MOUNT -- parse_bpb() fills S->v, which IS
+// the mounted volume. It cannot any more: mount.c hands a probe a
+// SCRATCH state, so what this fills belongs to nobody.
 static int fat32_probe(const struct block_device *dev) {
     if (!dev) return 0;
-    struct fat_vol saved = g_v;
     int r = parse_bpb(dev);
-    if (saved.mounted) {
-        g_v = saved;
-    } else {
-        g_v.mounted = 0; // init() re-parses from scratch either way
-    }
+    S->v.mounted = 0; // init() re-parses from scratch either way
     return r;
 }
 
@@ -1393,10 +1397,10 @@ static int fat32_format(const struct block_device *dev) {
 }
 
 static int fat32_init(const struct block_device *dev) {
-    g_v.mounted = 0;
-    g_fatsec_lba = 0;
-    g_fatsec_dirty = 0;
-    if (g_read_buf) { kfree(g_read_buf); g_read_buf = 0; }
+    S->v.mounted = 0;
+    S->fatsec_lba = 0;
+    S->fatsec_dirty = 0;
+    if (S->read_buf) { kfree(S->read_buf); S->read_buf = 0; }
 
     if (!dev) {
         // FAT32 has no RAM-only mode -- that is ramfs's job. -1, not 0:
@@ -1411,10 +1415,10 @@ static int fat32_init(const struct block_device *dev) {
         return -1;
     }
     fsinfo_load();
-    g_v.mounted = 1;
+    S->v.mounted = 1;
     klog_printf("fat32: %u clusters of %u bytes, root at cluster %u\n",
-                g_v.cluster_count, g_v.sectors_per_cluster * SECTOR,
-                g_v.root_cluster);
+                S->v.cluster_count, S->v.sectors_per_cluster * SECTOR,
+                S->v.root_cluster);
     // 1: everything written here goes to the device. Whether the DEVICE
     // survives a power cycle is the block layer's answer, which the
     // mount records separately.
@@ -1423,24 +1427,24 @@ static int fat32_init(const struct block_device *dev) {
 
 static void fat32_umount(const struct block_device *dev) {
     (void)dev;
-    if (g_v.mounted) fat_sync();
-    if (g_read_buf) { kfree(g_read_buf); g_read_buf = 0; }
-    g_fatsec_lba = 0;
-    g_fatsec_dirty = 0;
-    g_v.mounted = 0;
+    if (S->v.mounted) fat_sync();
+    if (S->read_buf) { kfree(S->read_buf); S->read_buf = 0; }
+    S->fatsec_lba = 0;
+    S->fatsec_dirty = 0;
+    S->v.mounted = 0;
 }
 
 // ---- fs_ops: reading -----------------------------------------------------
 
 static int fat32_exists(const char *path) {
-    if (!g_v.mounted) return 0;
+    if (!S->v.mounted) return 0;
     if (path && k_strcmp(path, "/") == 0) return 1;
     struct dirent_info e;
     return lookup(path, &e);
 }
 
 static int fat32_is_dir(const char *path) {
-    if (!g_v.mounted) return 0;
+    if (!S->v.mounted) return 0;
     if (path && k_strcmp(path, "/") == 0) return 1;
     struct dirent_info e;
     if (!lookup(path, &e)) return 0;
@@ -1471,10 +1475,10 @@ static const char *fat32_read(const char *path, uint32_t *out_size) {
     if (!lookup(path, &e)) return 0;
     if (e.attr & ATTR_DIRECTORY) return 0;
 
-    if (g_read_buf) { kfree(g_read_buf); g_read_buf = 0; }
-    g_read_buf = kmalloc((size_t)e.size + 1);
-    if (!g_read_buf) return 0;
-    uint8_t *dst = g_read_buf;
+    if (S->read_buf) { kfree(S->read_buf); S->read_buf = 0; }
+    S->read_buf = kmalloc((size_t)e.size + 1);
+    if (!S->read_buf) return 0;
+    uint8_t *dst = S->read_buf;
 
     uint32_t got = 0;
     while (got < e.size) {
@@ -1484,19 +1488,19 @@ static const char *fat32_read(const char *path, uint32_t *out_size) {
     }
     dst[got] = '\0';
     if (out_size) *out_size = got;
-    return (const char *)g_read_buf;
+    return (const char *)S->read_buf;
 }
 
 static void fat32_list(const char *dir_path, void (*cb)(const char *, uint32_t, int)) {
-    if (!g_v.mounted || !cb) return;
+    if (!S->v.mounted || !cb) return;
     uint32_t dir;
     if (dir_path && k_strcmp(dir_path, "/") == 0) {
-        dir = g_v.root_cluster;
+        dir = S->v.root_cluster;
     } else {
         struct dirent_info e;
         if (!lookup(dir_path, &e)) return;
         if (!(e.attr & ATTR_DIRECTORY)) return;
-        dir = e.cluster ? e.cluster : g_v.root_cluster;
+        dir = e.cluster ? e.cluster : S->v.root_cluster;
     }
     struct dirwalk w;
     walk_begin(&w, dir);
@@ -1523,7 +1527,7 @@ static int fat32_stat(const char *path, struct fs_stat_info *out) {
 // ---- fs_ops: writing -----------------------------------------------------
 
 static int fat32_touch(const char *path) {
-    if (!g_v.mounted) return 0;
+    if (!S->v.mounted) return 0;
     uint32_t dir;
     const char *leaf;
     if (!resolve_parent(path, &dir, &leaf) || !leaf[0]) return 0;
@@ -1541,7 +1545,7 @@ static int fat32_touch(const char *path) {
 }
 
 static int fat32_mkdir(const char *path) {
-    if (!g_v.mounted) return 0;
+    if (!S->v.mounted) return 0;
     uint32_t dir;
     const char *leaf;
     if (!resolve_parent(path, &dir, &leaf) || !leaf[0]) return 0;
@@ -1552,7 +1556,7 @@ static int fat32_mkdir(const char *path) {
 }
 
 static int fat32_write_range(const char *path, uint64_t offset, const void *buf, uint32_t len) {
-    if (!g_v.mounted) return 0;
+    if (!S->v.mounted) return 0;
     struct dirent_info e;
     if (!lookup(path, &e)) {
         if (!fat32_touch(path)) return 0;
@@ -1578,7 +1582,7 @@ static int fat32_write_range(const char *path, uint64_t offset, const void *buf,
 }
 
 static int fat32_write(const char *path, const char *data, int append) {
-    if (!g_v.mounted) return 0;
+    if (!S->v.mounted) return 0;
     uint32_t len = data ? (uint32_t)k_strlen(data) : 0;
     struct dirent_info e;
     if (!lookup(path, &e)) {
@@ -1602,13 +1606,13 @@ static int fat32_write(const char *path, const char *data, int append) {
 }
 
 static int fat32_truncate(const char *path, uint64_t size) {
-    if (!g_v.mounted) return 0;
+    if (!S->v.mounted) return 0;
     struct dirent_info e;
     if (!lookup(path, &e)) return 0;
     if (e.attr & ATTR_DIRECTORY) return 0;
     if (size > 0xFFFFFFFFull) return 0;
 
-    uint32_t cluster_bytes = g_v.sectors_per_cluster * SECTOR;
+    uint32_t cluster_bytes = S->v.sectors_per_cluster * SECTOR;
 
     if (size > e.size) {
         // GROWING BY TRUNCATE ZEROES THE GAP, same rule as a write past
@@ -1631,7 +1635,7 @@ static int fat32_truncate(const char *path, uint64_t size) {
                 if (!chain_next(last, &next)) return 0;
                 if (!cluster_valid(next)) break;
                 last = next;
-                if (++have > g_v.cluster_count) return 0;
+                if (++have > S->v.cluster_count) return 0;
             }
             while (have < want) {
                 uint32_t c = cluster_alloc(last);
@@ -1673,14 +1677,14 @@ static int fat32_truncate(const char *path, uint64_t size) {
 }
 
 static int fat32_del(const char *path) {
-    if (!g_v.mounted) return 0;
+    if (!S->v.mounted) return 0;
     struct dirent_info e;
     if (!lookup(path, &e)) return 0;
 
     if (e.attr & ATTR_DIRECTORY) {
         // A NON-EMPTY DIRECTORY IS REFUSED, which is fs.h's contract and
         // what every other backend here does. `rm -r` is a program.
-        uint32_t dir = e.cluster ? e.cluster : g_v.root_cluster;
+        uint32_t dir = e.cluster ? e.cluster : S->v.root_cluster;
         struct dirwalk w;
         walk_begin(&w, dir);
         struct dirent_info child;
@@ -1695,7 +1699,7 @@ static int fat32_del(const char *path) {
 }
 
 static int fat32_rename(const char *oldpath, const char *newpath) {
-    if (!g_v.mounted) return 0;
+    if (!S->v.mounted) return 0;
     struct dirent_info src;
     if (!lookup(oldpath, &src)) return 0;
 
@@ -1731,7 +1735,7 @@ static int fat32_rename(const char *oldpath, const char *newpath) {
         if (vol_read(cluster_first_sector(src.cluster), 1, g_tmpsec)) {
             uint8_t *dd = g_tmpsec + DIRENT_SIZE;
             if (dd[0] == '.' && dd[1] == '.') {
-                ent_set_cluster(dd, newdir == g_v.root_cluster ? 0 : newdir);
+                ent_set_cluster(dd, newdir == S->v.root_cluster ? 0 : newdir);
                 vol_write(cluster_first_sector(src.cluster), 1, g_tmpsec);
             }
         }
@@ -1792,22 +1796,22 @@ static int fat32_read_range_step(void *handle, uint32_t *out_total) {
 // fsinfo_load) -- `df` printing a number another OS left stale would be
 // worse than the scan's cost, which is one pass over the FAT.
 static int fat32_disk_usage(uint64_t *out_used, uint64_t *out_total) {
-    if (!g_v.mounted) return 0;
-    uint64_t cluster_bytes = (uint64_t)g_v.sectors_per_cluster * SECTOR;
-    uint64_t total = (uint64_t)g_v.cluster_count * cluster_bytes;
+    if (!S->v.mounted) return 0;
+    uint64_t cluster_bytes = (uint64_t)S->v.sectors_per_cluster * SECTOR;
+    uint64_t total = (uint64_t)S->v.cluster_count * cluster_bytes;
 
-    if (g_v.free_count == 0xFFFFFFFFu) {
+    if (S->v.free_count == 0xFFFFFFFFu) {
         uint32_t free = 0;
-        for (uint32_t c = 2; c < g_v.cluster_count + 2; c++) {
+        for (uint32_t c = 2; c < S->v.cluster_count + 2; c++) {
             uint32_t v;
             if (!fat_get(c, &v)) return 0;
             if (v == FAT_FREE) free++;
         }
-        g_v.free_count = free;
+        S->v.free_count = free;
         fsinfo_store();
     }
     if (out_total) *out_total = total;
-    if (out_used) *out_used = total - (uint64_t)g_v.free_count * cluster_bytes;
+    if (out_used) *out_used = total - (uint64_t)S->v.free_count * cluster_bytes;
     return 1;
 }
 
@@ -1818,7 +1822,7 @@ static int fat32_disk_usage(uint64_t *out_used, uint64_t *out_total) {
 // the pair of things a driver can be sure about: that the FAT copies
 // agree, and that no cluster is claimed by two chains.
 static int fat32_check(int repair, struct fs_check_result *out) {
-    if (!g_v.mounted) return 0;
+    if (!S->v.mounted) return 0;
     if (out) k_memset(out, 0, sizeof *out);
     if (repair) {
         klog_write("fat32: repair is not implemented -- reporting only\n");
@@ -1827,13 +1831,13 @@ static int fat32_check(int repair, struct fs_check_result *out) {
     // Every cluster referenced by exactly the chains that reach it. A
     // cross-linked FAT is the corruption that loses data silently, and
     // it is detectable with one bitmap and one pass.
-    uint32_t nbytes = (g_v.cluster_count + 2 + 7) / 8;
+    uint32_t nbytes = (S->v.cluster_count + 2 + 7) / 8;
     uint8_t *seen = kmalloc(nbytes);
     if (!seen) return 0;
     k_memset(seen, 0, nbytes);
 
     int problems = 0, crosslinked = 0, out_of_volume = 0;
-    for (uint32_t c = 2; c < g_v.cluster_count + 2; c++) {
+    for (uint32_t c = 2; c < S->v.cluster_count + 2; c++) {
         uint32_t v;
         if (!fat_get(c, &v)) { problems++; break; }
         if (v == FAT_FREE || v == FAT_BAD || fat_is_eoc(v)) continue;
@@ -1858,11 +1862,34 @@ static int fat32_check(int repair, struct fs_check_result *out) {
     // because a FAT scan of this depth cannot know them and a number
     // guessed here would be read as measured.
     if (out) {
-        out->blocks_referenced = g_v.cluster_count - (g_v.free_count == 0xFFFFFFFFu ? 0 : g_v.free_count);
+        out->blocks_referenced = S->v.cluster_count - (S->v.free_count == 0xFFFFFFFFu ? 0 : S->v.free_count);
         out->double_allocated = (uint32_t)crosslinked;
         out->out_of_range = (uint32_t)out_of_volume;
     }
     return problems == 0;
+}
+
+// ---- per-mount state ------------------------------------------------
+
+static void *fat32_state_alloc(void) {
+    struct fat32_state *st = kmalloc(sizeof *st);
+    if (!st) return NULL;
+    k_memset(st, 0, sizeof *st);
+    return st;
+}
+
+static void *fat32_state_activate(void *st) {
+    void *prev = S;
+    S = st;
+    return prev;
+}
+
+static void fat32_state_free(void *st) {
+    if (!st) return;
+    void *prev = fat32_state_activate(st);
+    if (S->read_buf) { kfree(S->read_buf); S->read_buf = 0; }
+    fat32_state_activate((prev == st) ? NULL : prev);
+    kfree(st);
 }
 
 const struct fs_ops fat32_ops = {
@@ -1874,9 +1901,13 @@ const struct fs_ops fat32_ops = {
     // what NOT declaring FS_CAP_EPOCH_TIME means.
     .caps = 0,
     .volume_relative = 1, // every access goes through blkdev_* on the device it was handed
-    // ONCE: the FAT sector cache, the directory scratch and the whole
-    // -file read buffer are module-level. See fs_ops.h's max_mounts.
-    .max_mounts = 1,
+    // MORE THAN ONCE: the volume, the FAT sector cache and the read
+    // buffer are per mount (struct fat32_state). An installer needs two
+    // -- the running system's ESP at /boot, and the target's.
+    .max_mounts = MOUNT_MAX,
+    .state_alloc = fat32_state_alloc,
+    .state_free = fat32_state_free,
+    .state_activate = fat32_state_activate,
     .probe = fat32_probe,
     .wipe = fat32_wipe,
     .format = fat32_format,

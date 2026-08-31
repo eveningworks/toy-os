@@ -81,31 +81,49 @@ struct fs_ops {
     int volume_relative;
 
     // HOW MANY TIMES THIS BACKEND MAY BE MOUNTED AT ONCE. 1 for a
-    // backend whose state is module-level statics; more when each mount
-    // gets its own instance.
+    // backend whose volume state is a single set of module-level
+    // statics; more when each mount gets its own.
     //
     // This is declared rather than discovered because the failure is
     // silent: a second mount of a single-instance backend does not
-    // crash, it quietly re-points the one set of statics, so the FIRST
-    // mount starts reading the second one's volume. TFS3 declares 1 --
-    // its superblock, group descriptors, bitmaps, journal buffers and
-    // block scratch are all statics, and so are FAT32's FAT cache and
-    // directory scratch. EVERY BACKEND DECLARES 1 TODAY.
+    // crash, it quietly re-points one set of statics, so the FIRST
+    // mount starts reading the second one's volume.
     //
-    // THE FIELD IS STILL NOT DECORATION: without it, `mount 3 /mnt` on
-    // a second TFS3 partition succeeds, re-points one set of statics,
-    // and the ROOT starts reading the other volume -- a data-loss bug
-    // with no error anywhere. With it, that command is refused by name.
-    //
-    // Raising it above 1 needs more than per-instance state: every op
-    // below takes a PATH and no handle, so a backend has no way to tell
-    // which of its mounts a call belongs to. The shape that fixes it is
-    // init() returning an opaque handle that every op then takes --
-    // Linux's `super_block` -- and that is the remaining work on
-    // docs/roadmap.md's "Real mount points". It buys nothing until a
-    // backend's state is per-instance, which is why it is not done
-    // here.
+    // The way past 1 is the three ops below -- the mount table owns a
+    // state object per mount and makes it CURRENT around every call.
+    // A backend that declares max_mounts > 1 without them is refused
+    // at mount time (mount.c's caps_are_honest()).
     int max_mounts;
+
+    // ---- per-mount state ---------------------------------------
+    //
+    // Allocate, make current, free. A backend keeps its volume state
+    // in one heap struct reached through a `static struct X_state *S`,
+    // and these three are how the VFS says which mount a call belongs
+    // to. Linux hands `struct super_block *` to every op instead; this
+    // sets it at the chokepoint rather than threading it through
+    // twenty signatures, which it can do because the filesystem is
+    // already one global critical section (vfs.c's FS_OP preemption
+    // guard). THAT is the assumption to re-read on the day toy-os has
+    // a second core -- see docs/smp-design.md.
+    //
+    // All three or none, checked at mount time.
+    //
+    // `state_activate` RETURNS WHAT WAS CURRENT, so a caller restores
+    // rather than clearing. That is what makes the pair nest: an
+    // fs_list() callback that calls fs_* runs a second enter/leave
+    // inside the walk, and clearing instead of restoring left the outer
+    // walk with no state at all (a GP fault the moment init read a
+    // directory). The OUTERMOST leave still restores NULL, so a backend
+    // reached with no activate at all faults on a NULL deref -- a panic
+    // naming the line -- instead of writing one volume onto another.
+    //
+    // THE TRAP: nothing checks that a state struct is COMPLETE. A
+    // per-volume field left outside it is shared by every mount, and
+    // the symptom is cross-volume corruption with no error anywhere.
+    void *(*state_alloc)(void);
+    void (*state_free)(void *st);
+    void *(*state_activate)(void *st);
 
     // Detection only -- read this backend's superblock location and
     // judge it. NEVER formats, never mounts, NO SIDE EFFECTS BEYOND THE

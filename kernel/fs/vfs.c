@@ -60,16 +60,20 @@
 // internal state for the whole call. Note it does not make a LIST
 // CALLBACK safe to call fs_* from -- that is direct recursion, not
 // preemption, and the depth counter cannot see the difference.
-#define FS_OP(expr) ({                     \
+#define FS_OP(m, expr) ({                  \
     scheduler_preempt_disable();           \
+    void *_fs_prev = mount_enter(m);       \
     __auto_type _fs_r = (expr);            \
+    mount_leave(m, _fs_prev);              \
     scheduler_preempt_enable();            \
     _fs_r;                                 \
 })
 
-#define FS_OP_VOID(stmt) do {              \
+#define FS_OP_VOID(m, stmt) do {           \
     scheduler_preempt_disable();           \
+    void *_fs_prev = mount_enter(m);       \
     stmt;                                  \
+    mount_leave(m, _fs_prev);              \
     scheduler_preempt_enable();            \
 } while (0)
 
@@ -145,11 +149,10 @@ int fs_format_device(const struct block_device *dev, const char *fstype) {
     const struct fs_ops *target = mount_backend_named(fstype);
     if (!target || !target->format) return 0;
 
-    // ONLY THE TARGET ITSELF, now that format() and wipe() restore this
-    // backend's volume state on every path (tfs3.c's struct t3_saved).
-    // Before that they repointed the globals at `dev` and left them
-    // there, so formatting a SECOND disk made the mounted root read the
-    // wrong volume -- measured as two crashes that took /bin with them,
+    // ONLY THE TARGET ITSELF: format() and wipe() run on a SCRATCH
+    // state below, so there is no mounted volume for them to repoint.
+    // Before per-mount state they wrote into the one set of globals a
+    // mounted root was reading -- two crashes that took /bin with them,
     // one of them with a FAT32 target, because mount_wipe_others() runs
     // every OTHER backend's wipe against the same device.
     for (int i = 0; i < mount_count(); i++) {
@@ -164,7 +167,12 @@ int fs_format_device(const struct block_device *dev, const char *fstype) {
     // backend's leftover signature outlives a format and the next probe
     // mounts the corpse.
     mount_wipe_others(target, dev);
-    return target->format(dev) ? 1 : 0;
+
+    struct fs_scratch sc;
+    if (!mount_scratch_begin(target, &sc)) return 0;
+    int ok = target->format(dev) ? 1 : 0;
+    mount_scratch_end(&sc);
+    return ok;
 }
 
 int fs_format_backend(const char *name) {
@@ -192,7 +200,12 @@ int fs_format_backend(const char *name) {
     // a TFS3 disk as TFS2 left TFS3's backups intact, and the probe
     // mounted the corpse.
     mount_wipe_others(target, dev);
-    if (!target->format(dev)) return 0;
+
+    struct fs_scratch sc;
+    if (!mount_scratch_begin(target, &sc)) return 0;
+    int formatted = target->format(dev);
+    mount_scratch_end(&sc);
+    if (!formatted) return 0;
 
     // Remount through the same probe path a boot takes -- the freshly
     // written superblock is what should claim the disk.
@@ -266,19 +279,19 @@ static inline int bumped(int ok) {
 int fs_touch(const char *path) {
     struct resolved r;
     if (!resolve(path, &r) || !writable(&r, "touch", path)) return 0;
-    return bumped(FS_OP(r.m->fs->touch(r.sub)));
+    return bumped(FS_OP(r.m, r.m->fs->touch(r.sub)));
 }
 
 int fs_write(const char *path, const char *data, int append) {
     struct resolved r;
     if (!resolve(path, &r) || !writable(&r, "write", path)) return 0;
-    return bumped(FS_OP(r.m->fs->write(r.sub, data, append)));
+    return bumped(FS_OP(r.m, r.m->fs->write(r.sub, data, append)));
 }
 
 int fs_mkdir(const char *path) {
     struct resolved r;
     if (!resolve(path, &r) || !writable(&r, "mkdir", path)) return 0;
-    return bumped(FS_OP(r.m->fs->mkdir(r.sub)));
+    return bumped(FS_OP(r.m, r.m->fs->mkdir(r.sub)));
 }
 
 int fs_delete(const char *path) {
@@ -295,7 +308,7 @@ int fs_delete(const char *path) {
             return 0;
         }
     }
-    return bumped(FS_OP(r.m->fs->del(r.sub)));
+    return bumped(FS_OP(r.m, r.m->fs->del(r.sub)));
 }
 
 // A whole-file read is NOT re-entrant, and this refuses the second one
@@ -341,7 +354,7 @@ const char *fs_read(const char *path, uint32_t *out_size) {
         return 0;
     }
     g_read_in_flight = 1;
-    const char *res = FS_OP(r.m->fs->read(r.sub, out_size));
+    const char *res = FS_OP(r.m, r.m->fs->read(r.sub, out_size));
     g_read_in_flight = 0;
     return res;
 }
@@ -354,7 +367,7 @@ uint32_t fs_read_into(const char *path, void *buf, uint32_t cap) {
     struct resolved r;
     if (!resolve(path, &r)) return 0;
 
-    uint64_t size = FS_OP(r.m->fs->size(r.sub));
+    uint64_t size = FS_OP(r.m, r.m->fs->size(r.sub));
     // Room for the NUL as well, so a text caller can scan the result as
     // a string without a separate length check at every step.
     if (size == 0 || size + 1 > (uint64_t)cap) return 0;
@@ -364,7 +377,7 @@ uint32_t fs_read_into(const char *path, void *buf, uint32_t cap) {
     // whole file is how a truncated parse gets in.
     uint32_t got = 0;
     while (got < (uint32_t)size) {
-        uint32_t n = FS_OP(r.m->fs->read_range(r.sub, got, dst + got, (uint32_t)size - got));
+        uint32_t n = FS_OP(r.m, r.m->fs->read_range(r.sub, got, dst + got, (uint32_t)size - got));
         if (n == 0) return 0; // EOF-before-size or a real failure; either way, refuse
         got += n;
     }
@@ -375,19 +388,19 @@ uint32_t fs_read_into(const char *path, void *buf, uint32_t cap) {
 uint64_t fs_size(const char *path) {
     struct resolved r;
     if (!resolve(path, &r)) return 0;
-    return FS_OP(r.m->fs->size(r.sub));
+    return FS_OP(r.m, r.m->fs->size(r.sub));
 }
 
 uint32_t fs_read_range(const char *path, uint64_t offset, void *buf, uint32_t len) {
     struct resolved r;
     if (!resolve(path, &r)) return 0;
-    return FS_OP(r.m->fs->read_range(r.sub, offset, buf, len));
+    return FS_OP(r.m, r.m->fs->read_range(r.sub, offset, buf, len));
 }
 
 int fs_write_range(const char *path, uint64_t offset, const void *buf, uint32_t len) {
     struct resolved r;
     if (!resolve(path, &r) || !writable(&r, "write", path)) return 0;
-    return bumped(FS_OP(r.m->fs->write_range(r.sub, offset, buf, len)));
+    return bumped(FS_OP(r.m, r.m->fs->write_range(r.sub, offset, buf, len)));
 }
 
 // A STEP CARRIES NO PATH, so it cannot be resolved. The handle came
@@ -400,16 +413,16 @@ int fs_write_range(const char *path, uint64_t offset, const void *buf, uint32_t 
 // terminal result clears the slot, so a second step finds no backend
 // and fails cleanly rather than handing a freed pointer to a driver.
 struct step_handle {
-    const struct fs_ops *fs;
+    const struct mount *m;   // NULL = free slot, and = "already finished"
     void *inner;
 };
 
 static struct step_handle g_steps[8];
 
-static void *step_wrap(const struct fs_ops *fs, void *inner) {
+static void *step_wrap(const struct mount *m, void *inner) {
     if (!inner) return 0;
     for (unsigned i = 0; i < sizeof g_steps / sizeof g_steps[0]; i++) {
-        if (!g_steps[i].fs) { g_steps[i].fs = fs; g_steps[i].inner = inner; return &g_steps[i]; }
+        if (!g_steps[i].m) { g_steps[i].m = m; g_steps[i].inner = inner; return &g_steps[i]; }
     }
     return 0; // more streams in flight than slots -- refused, not misrouted
 }
@@ -417,7 +430,7 @@ static void *step_wrap(const struct fs_ops *fs, void *inner) {
 void *fs_write_range_begin(const char *path, uint64_t offset, const void *buf, uint32_t len) {
     struct resolved r;
     if (!resolve(path, &r) || !writable(&r, "write", path)) return 0;
-    return step_wrap(r.m->fs, FS_OP(r.m->fs->write_range_begin(r.sub, offset, buf, len)));
+    return step_wrap(r.m, FS_OP(r.m, r.m->fs->write_range_begin(r.sub, offset, buf, len)));
 }
 
 enum fs_step_result fs_write_range_step(void *handle) {
@@ -429,9 +442,9 @@ enum fs_step_result fs_write_range_step(void *handle) {
     // of this file.
     if (!handle) return FS_STEP_FAILED;
     struct step_handle *h = handle;
-    if (!h->fs) return FS_STEP_FAILED;
-    enum fs_step_result r = (enum fs_step_result)FS_OP(h->fs->write_range_step(h->inner));
-    if (r == FS_STEP_DONE || r == FS_STEP_FAILED) { h->fs = 0; h->inner = 0; }
+    if (!h->m) return FS_STEP_FAILED;
+    enum fs_step_result r = (enum fs_step_result)FS_OP(h->m, h->m->fs->write_range_step(h->inner));
+    if (r == FS_STEP_DONE || r == FS_STEP_FAILED) { h->m = 0; h->inner = 0; }
     // Bump once, on completion -- not per step. A streamed write is one
     // change to the filesystem however many slices it took, and bumping
     // per step would wake a watcher repeatedly through a single save.
@@ -444,7 +457,7 @@ enum fs_step_result fs_write_range_step(void *handle) {
 void *fs_read_range_begin(const char *path, uint64_t offset, void *buf, uint32_t len) {
     struct resolved r;
     if (!resolve(path, &r)) return 0;
-    return step_wrap(r.m->fs, FS_OP(r.m->fs->read_range_begin(r.sub, offset, buf, len)));
+    return step_wrap(r.m, FS_OP(r.m, r.m->fs->read_range_begin(r.sub, offset, buf, len)));
 }
 
 enum fs_step_result fs_read_range_step(void *handle, uint32_t *out_total) {
@@ -455,9 +468,9 @@ enum fs_step_result fs_read_range_step(void *handle, uint32_t *out_total) {
         return FS_STEP_FAILED;
     }
     struct step_handle *h = handle;
-    if (!h->fs) { if (out_total) *out_total = 0; return FS_STEP_FAILED; }
-    enum fs_step_result r = (enum fs_step_result)FS_OP(h->fs->read_range_step(h->inner, out_total));
-    if (r == FS_STEP_DONE || r == FS_STEP_FAILED) { h->fs = 0; h->inner = 0; }
+    if (!h->m) { if (out_total) *out_total = 0; return FS_STEP_FAILED; }
+    enum fs_step_result r = (enum fs_step_result)FS_OP(h->m, h->m->fs->read_range_step(h->inner, out_total));
+    if (r == FS_STEP_DONE || r == FS_STEP_FAILED) { h->m = 0; h->inner = 0; }
     return r;
 }
 
@@ -474,25 +487,25 @@ int fs_rename(const char *oldpath, const char *newpath) {
         return 0;
     }
     if (!writable(&a, "rename", oldpath)) return 0;
-    return bumped(FS_OP(a.m->fs->rename(a.sub, b.sub)));
+    return bumped(FS_OP(a.m, a.m->fs->rename(a.sub, b.sub)));
 }
 
 int fs_truncate(const char *path, uint64_t size) {
     struct resolved r;
     if (!resolve(path, &r) || !writable(&r, "truncate", path)) return 0;
-    return bumped(FS_OP(r.m->fs->truncate(r.sub, size)));
+    return bumped(FS_OP(r.m, r.m->fs->truncate(r.sub, size)));
 }
 
 int fs_is_dir(const char *path) {
     struct resolved r;
     if (!resolve(path, &r)) return 0;
-    return FS_OP(r.m->fs->is_dir(r.sub));
+    return FS_OP(r.m, r.m->fs->is_dir(r.sub));
 }
 
 int fs_exists(const char *path) {
     struct resolved r;
     if (!resolve(path, &r)) return 0;
-    return FS_OP(r.m->fs->exists(r.sub));
+    return FS_OP(r.m, r.m->fs->exists(r.sub));
 }
 
 void fs_list(const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir)) {
@@ -503,13 +516,13 @@ void fs_list(const char *dir_path, void (*cb)(const char *name, uint32_t size, i
     // what it is handed (every caller here) is fine; one that called
     // back into fs_* would be re-entering the backend directly, which
     // no amount of preemption control can make safe.
-    FS_OP_VOID(r.m->fs->list(r.sub, cb));
+    FS_OP_VOID(r.m, r.m->fs->list(r.sub, cb));
 }
 
 int fs_stat(const char *path, struct fs_stat_info *out) {
     struct resolved r;
     if (!resolve(path, &r)) return 0;
-    return FS_OP(r.m->fs->stat(r.sub, out));
+    return FS_OP(r.m, r.m->fs->stat(r.sub, out));
 }
 
 // THE ROOT's usage. `df` reports every mount by walking the mount table
@@ -518,7 +531,7 @@ int fs_stat(const char *path, struct fs_stat_info *out) {
 int fs_disk_usage(uint64_t *out_used_bytes, uint64_t *out_total_bytes) {
     const struct mount *m = mount_root();
     if (!m) return 0;
-    return FS_OP(m->fs->disk_usage(out_used_bytes, out_total_bytes));
+    return FS_OP(m, m->fs->disk_usage(out_used_bytes, out_total_bytes));
 }
 
 // Per-mount usage, guarded. See api/fs.h -- the point of this function
@@ -528,14 +541,14 @@ int fs_disk_usage(uint64_t *out_used_bytes, uint64_t *out_total_bytes) {
 int fs_mount_usage(const void *mount, uint64_t *out_used_bytes, uint64_t *out_total_bytes) {
     const struct mount *m = mount;
     if (!m || !m->fs) return 0;
-    return FS_OP(m->fs->disk_usage(out_used_bytes, out_total_bytes));
+    return FS_OP(m, m->fs->disk_usage(out_used_bytes, out_total_bytes));
 }
 
 int fs_check(int repair, struct fs_check_result *out) {
     const struct mount *m = mount_root();
     if (!m) return 0;
     if (repair && (m->flags & MNT_RDONLY)) return 0;
-    return FS_OP(m->fs->check(repair, out));
+    return FS_OP(m, m->fs->check(repair, out));
 }
 
 int fs_link(const char *existing, const char *newpath) {
@@ -546,5 +559,5 @@ int fs_link(const char *existing, const char *newpath) {
     // Optional op -- the caps bit and this NULL check are the same
     // fact, and caps_are_honest() made sure they can't disagree.
     if (!a.m->fs->link) return 0;
-    return bumped(FS_OP(a.m->fs->link(a.sub, b.sub)));
+    return bumped(FS_OP(a.m, a.m->fs->link(a.sub, b.sub)));
 }

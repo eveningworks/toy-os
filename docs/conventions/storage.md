@@ -573,16 +573,53 @@ because getting any of them wrong is silent:
    is a property to keep, not a check to add.
 
 **A BACKEND DECLARES HOW MANY TIMES IT MAY BE MOUNTED**
-(`fs_ops.max_mounts`), and every one today declares 1 — TFS3, FAT32 and
-ramfs all keep their state in module-level statics. The field is not
-decoration: without it `mount 3 /mnt` on a second TFS3 partition
-succeeds, repoints one set of statics, and the ROOT starts reading the
-other volume, with no error anywhere. Raising it above 1 needs more than
-per-instance state: every op takes a PATH and no handle, so a backend
-cannot tell which of its mounts a call belongs to. The shape that fixes
-that is `init()` returning an opaque handle every op then takes — Linux's
-`super_block` — and it buys nothing until a backend's state is
-per-instance.
+(`fs_ops.max_mounts`), and all three declare `MOUNT_MAX` now. The field
+is not decoration: a backend without per-mount state that declared 2
+would let `mount 3 /mnt` on a second TFS3 partition repoint one set of
+statics, and the ROOT would start reading the other volume with no error
+anywhere. `mount.c`'s `caps_are_honest()` refuses `max_mounts > 1`
+without the three state ops for exactly that reason.
+
+## A BACKEND'S VOLUME STATE IS PER MOUNT, AND THE VFS SAYS WHICH MOUNT A CALL MEANS
+
+Every per-volume field lives in one heap struct — `struct t3_state`,
+`fat32_state`, `ramfs_state` — reached through a `static ... *S`, and
+`fs_ops` carries three ops to manage it: `state_alloc`, `state_free`,
+and `state_activate`, which makes a state current **and returns
+whatever was**. `mount_add()` allocates one per mount and `vfs.c`'s
+`FS_OP` brackets every backend call with `mount_enter`/`mount_leave`.
+
+**Linux hands `struct super_block *` to every op instead.** toy-os sets
+it at the chokepoint rather than threading it through twenty
+signatures, and it can only do that because the filesystem is already
+ONE GLOBAL CRITICAL SECTION — `FS_OP` holds `scheduler_preempt_disable()`
+across the call. **That is the assumption to re-read on the day this
+kernel has a second core** (`docs/smp-design.md`): a single current
+state would then serialise the whole filesystem, and the handle-on-every-
+op shape is what replaces it. The roadmap carries it as the remaining
+item, not as a defect.
+
+Four things to know:
+
+- **`state_activate` RESTORES, it does not clear.** The first version
+  cleared to NULL after every call, and the machine panicked the moment
+  init read a directory: `listdir_collect()` calls `fs_stat()` from
+  inside an `fs_list()` callback, so a whole enter/leave runs *inside*
+  the walk and left the outer one with no state. Returning the previous
+  state is what makes the pair nest.
+- **The OUTERMOST leave still restores NULL**, deliberately. A backend
+  reached with no enter at all then faults on a NULL deref — a panic
+  naming the line — instead of writing one volume's metadata onto
+  another.
+- **Nothing checks that a state struct is COMPLETE.** A per-volume field
+  left outside it is shared by every mount, and the symptom is
+  cross-volume corruption with no error anywhere. The scratch that
+  deliberately stays global says so where it is declared (tfs3's 128 KiB
+  of journal staging, fat32's three sector buffers) — per CALL, and one
+  call cannot span two mounts.
+- **A backend call from OUTSIDE `vfs.c` must bring its own state.** That
+  is what `mount_scratch_begin()`/`_end()` are for, and every KTEST that
+  drives a backend directly uses them.
 
 ## A PROBE MUST NOT DISTURB A MOUNT, AND THAT ONLY BECAME TRUE WHEN IT MATTERED
 
@@ -596,9 +633,10 @@ Mount points made it false the same day. Mounting `/boot` probes every
 backend against the ESP, so a TFS3 already serving `/` was repointed at
 partition 2: `df` still reported the right numbers (they come from the
 cached superblock) and every path lookup failed, so the root went
-**silently empty**. Both backends save and restore their volume state
-around a probe now, and `mount.c` additionally declines to probe a
-backend that is already at its mount limit.
+**silently empty**. A probe runs on a SCRATCH state now
+(`mount_scratch_begin()`), so what it fills belongs to nobody and there
+is nothing of anybody's to restore; `mount.c` additionally declines to
+probe a backend that is already at its mount limit.
 
 **The general shape, which is this repo's recurring one:** a contract
 that nothing enforced was being honoured by accident, and the accident
@@ -728,13 +766,14 @@ ONE named partition. Four things:
   right for "wipe this machine" and wrong for "put a filesystem on that
   other partition". An installer must not do the first to the system it
   is running from.
-- **A BACKEND KEEPS ITS VOLUME IN MODULE-LEVEL STATE, so `format()` and
-  `wipe()` MUST SAVE AND RESTORE IT.** `tfs3_format()` opens with
-  `set_flat_volume(dev)`; `mount_wipe_others()` calls `wipe(dev)` on
-  every OTHER backend, so the damage arrives through tfs3 even when the
-  target is FAT32. Before `struct t3_saved` this crashed twice, each
-  time taking `/bin` with it. A new backend that formats without
-  restoring will do the same, and nothing will catch it at build time.
+- **`format()` AND `wipe()` RUN ON A SCRATCH STATE.** Both repoint a
+  backend at the device they are handed, and `mount_wipe_others()` calls
+  `wipe(dev)` on every OTHER backend -- so the damage used to arrive
+  through tfs3 even when the target was FAT32, crashing twice and taking
+  `/bin` with it each time. Their callers now bracket them with
+  `mount_scratch_begin()`/`_end()`, so there is no mounted volume to
+  repoint. A backend that reaches its own state some other way will
+  still do the old damage, and nothing catches that at build time.
 - **THE TARGET MAY NOT BE MOUNTED, and that rule is permanent** --
   unlike the one above, it is not something a backend can fix.
 - **`confirm` IS A WORD YOU TYPE.** There is no privilege model to gate
@@ -742,9 +781,9 @@ ONE named partition. Four things:
   person asking spells it out -- as `fsformat` and `mkpart` already do.
   A speed bump, not a permission check.
 
-**AND A BACKEND CAN STILL ONLY BE MOUNTED ONCE** (`fs_ops.max_mounts`
-is 1 everywhere), which is the same module-level state seen from the
-other end -- so a target can be formatted but not yet mounted to copy
-anything onto. `docs/bugs.md` tracks that as the installer's remaining
-prerequisite. `mount` distinguishes it from "nothing recognises this
-volume", because saying the wrong one costs an hour.
+**A TARGET CAN BE MOUNTED NOW TOO** -- `fs_ops.max_mounts` is
+`MOUNT_MAX` on all three backends since per-mount state landed, so an
+installer can format a volume and then mount it to copy the system
+across. `mount` still distinguishes "already at its mount limit" from
+"nothing recognises this volume", because saying the wrong one costs an
+hour.

@@ -1299,28 +1299,37 @@ rules are in `kernel/mount.h` and the reasoning is in
 `docs/decisions/storage.md`. TFS3 serves `/`, FAT32 serves `/boot`
 (read-only by default), and `mount -t ramfs none /mnt` is a third.
 
-**The suggested first proof was a second TFS3 image at `/mnt`, and that
-is the one item still open** -- for the reason this entry predicted.
-Several `tfs3.c` statics (the superblock, the group descriptors, both
-bitmaps, the journal buffers, the block scratch) are per-*backend* state
-that a second instance would need its own copy of, and so are FAT32's FAT
-cache and directory scratch. Every backend declares
-`fs_ops.max_mounts = 1` and the table refuses a second mount BY NAME,
-which turns what would have been a silent data-loss bug (one set of
-statics repointed, the first mount reading the second's volume) into a
-refusal.
+**The suggested first proof was a second TFS3 image at `/mnt`, and it is
+DONE (2026-08-31).** The prediction in this entry was right about the
+problem and wrong about the fix. It was right that several `tfs3.c`
+statics (the superblock, the group descriptors, both bitmaps, the name
+and pointer caches) are per-*volume* state a second instance needs its
+own copy of, and so are FAT32's FAT sector cache and read buffer. It was
+wrong that raising `max_mounts` needs a handle on every op.
 
-What replaced it as the isolating proof is **ramfs at `/mnt`**: a third
-backend with no volume at all, mounted and unmounted by
-`kernel/fs/mount_test.c` on every ktest run, exercising the same
-dispatch with none of FAT32's code in the path.
+What it needs is per-mount state plus somewhere to say which mount a
+call means, and this kernel already has the second half: every backend
+call goes through `vfs.c`'s `FS_OP`, which holds a preemption guard
+across it. So the state moved into a `struct t3_state`/`fat32_state`/
+`ramfs_state` reached through a `static ... *S`, and the mount table
+sets `S` around every call (`fs_ops.state_alloc`/`_activate`/`_free`).
+Twenty signatures unchanged; all three backends declare `MOUNT_MAX`.
 
-Raising `max_mounts` needs more than per-instance state. Every op in
-`struct fs_ops` takes a PATH and no handle, so a backend cannot tell
-which of its mounts a call belongs to; the shape that fixes it is
-`init()` returning an opaque handle that every op then takes -- Linux's
-`super_block`. It buys nothing until a backend's state is per-instance,
-which is why it was not done at the same time.
+`state_activate` RETURNS the previous state rather than being paired
+with a clear, and that is not a refinement -- clearing panicked the
+machine the first time init read a directory. `listdir_collect()` calls
+`fs_stat()` from inside an `fs_list()` callback, so a whole enter/leave
+runs *inside* the walk; restoring is what makes that nest.
+
+The remaining item is the one Linux actually does: a handle on every op
+instead of a current-state pointer. It buys nothing until toy-os has a
+second core, at which point a single current state serialises the whole
+filesystem -- see `docs/smp-design.md`.
+
+What replaced the second TFS3 image as the isolating proof along the
+way was **ramfs at `/mnt`**, and it is still what `kernel/fs/
+mount_test.c` drives: two ramfs mounts, different files, different
+sizes, neither visible from the other.
 
 What DID have to change, and was not predicted here: `probe()`,
 `format()`, `wipe()` and `init()` take a `struct block_device *` now

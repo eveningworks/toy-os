@@ -11,7 +11,7 @@
 // green, not because the boundaries are architectural.
 //
 // Everything on disk is VOLUME-relative: block b lives at sector
-// g_vol.base_lba + b * T3_SPB, and this file only touches the disk
+// S->vol.base_lba + b * T3_SPB, and this file only touches the disk
 // through vol_read()/vol_write(). The volume is {0, blk_sector_count()}
 // and STAYS that way even inside a partition, because the
 // probe loop hands in a partition's extent instead and nothing here
@@ -20,6 +20,7 @@
 #include "fs.h"
 #include "fs_ops.h"
 #include "tfs3.h"
+#include "mount.h" // MOUNT_MAX -- the mount limit this backend declares
 #include "string.h"
 #include "block.h" // TFS3 talks to a BLOCK DEVICE, not to a disk --
                     // that is what lets a live image mount from RAM
@@ -124,86 +125,102 @@ struct t3_vol {
 
 struct t3_gd { uint32_t free_blocks, free_inodes; };
 
-static struct t3_vol g_vol;
-static int g_mounted = 0;
-
-static struct {
-    uint8_t version;
-    uint8_t flags;
-    uint32_t total_blocks;
-    uint32_t bpg, ipg, gc;
-} g_sb;
-
-// The active format version's geometry, set by set_geometry_version()
-// before anything reads a structure whose position depends on it. All
-// four are constants per version (see the T3_V1_*/T3_V2_* sets above);
-// they live in variables only because two versions are mountable.
-static uint32_t g_group0 = T3_V1_GROUP0;
-static uint32_t g_gdt_block = T3_V1_GDT;
-static uint32_t g_jdata_block = T3_V1_JDATA;
-static uint32_t g_jslots = T3_V1_JSLOTS;
-
-static uint32_t g_itb;        // inode-table blocks per group
-static int g_mounted_from_backup = 0; // primary superblock was bad at mount; fsck repair restores it
-static uint32_t g_meta_off;   // first data-ish block offset within a group (2 [+cksum] + itb)
-static struct t3_gd *g_gd = 0; // free-count caches, g_sb.gc entries
-
-// ---- pointing this backend at a FOREIGN volume, briefly ------------------
+// ---- PER-MOUNT STATE -----------------------------------------------
 //
-// format() and wipe() are handed a device and both begin by repointing
-// the globals above at it -- which is fine when the caller is
-// fs_format_backend() (it has already unmounted the world) and
-// catastrophic when it is `mkfs` on a SECOND disk: the mounted root
-// starts reading the wrong volume mid-flight. That is not theoretical.
-// It crashed twice, each time taking /bin with it, and once with a
-// FAT32 target -- because mount_wipe_others() runs every OTHER backend's
-// wipe against the same device, so the corruption arrives through tfs3
-// whatever is being formatted.
+// Everything that describes ONE VOLUME lives in here, and the backend
+// reaches it through `S` -- the mount the current call belongs to. The
+// mount table allocates one per mount and makes it current before every
+// call (fs_ops.h's state_alloc/state_free/state_activate); Linux passes
+// a `struct super_block *` to every op instead, and this sets it at the
+// chokepoint rather than threading it through twenty signatures.
 //
-// So both entry points save this state and put it back. g_gd is
-// deliberately NOT in here: it is allocated at mount and freed at
-// unmount, and neither format() nor wipe() touches it -- capturing the
-// pointer would be the one way to turn this into a double free.
-struct t3_saved {
+// WHAT MUST STAY TRUE: a per-volume field belongs IN here. One left
+// outside is shared by every mount, and the symptom is one filesystem's
+// metadata written onto another with no error anywhere. The scratch
+// below is the deliberate exception, and says why.
+#define T3_MAX_GROUPS (T3_GDT_BLOCKS * T3_BLOCK / 16u)
+#define T3_NCACHE 16
+#define T3_NCACHE_NAME 48
+
+struct t3_state {
     struct t3_vol vol;
-    __typeof__(g_sb) sb;
-    uint32_t group0, gdt_block, jdata_block, jslots, itb, meta_off;
-    int mounted, mounted_from_backup;
+    int mounted;
+
+    struct {
+        uint8_t version;
+        uint8_t flags;
+        uint32_t total_blocks;
+        uint32_t bpg, ipg, gc;
+    } sb;
+
+    // The active format version's geometry, set by
+    // set_geometry_version() before anything reads a structure whose
+    // position depends on it. All four are constants per version (see
+    // the T3_V1_*/T3_V2_* sets above); they are variables only because
+    // two versions are mountable. state_alloc() seeds them with v1's.
+    uint32_t group0, gdt_block, jdata_block, jslots;
+
+    uint32_t itb;              // inode-table blocks per group
+    int mounted_from_backup;   // primary superblock was bad at mount; fsck repair restores it
+    uint32_t meta_off;         // first data-ish block offset within a group (2 [+cksum] + itb)
+    struct t3_gd *gd;          // free-count caches, sb.gc entries
+
+    // In-RAM copies of every group's block/inode bitmap (sb.gc * 4 KiB
+    // each -- ~284 KiB per cache on the 9 GiB image, the same order as
+    // TFS2's static full-disk bitmap). RAM is the authority during
+    // operation; changed blocks are written through, UNJOURNALED, with
+    // the set-before-use / clear-after-persist ordering that makes a
+    // crash cost a leak, never a double allocation -- TFS2's exact
+    // discipline, inherited deliberately (see the journal section).
+    uint8_t *bbm;
+    uint8_t *ibm;
+    uint32_t *rotor;           // per-group scan start (ext2's trick)
+
+    // Dirty tracking for the write-through: one bit per group, per cache.
+    uint8_t bbm_dirty[T3_MAX_GROUPS / 8];
+    uint8_t ibm_dirty[T3_MAX_GROUPS / 8];
+    uint8_t gdt_dirty[T3_MAX_GROUPS / 8];
+
+    uint32_t jrn_seq;          // this volume's journal sequence number
+
+    // Tiny name-lookup cache (dir ino + name -> child ino): path walks
+    // are the hot loop, and every component is otherwise a dirent scan.
+    // Invalidated wholesale on any mutation -- cheap and obviously
+    // correct; per-directory invalidation is a later refinement if it
+    // ever shows up in profiles.
+    struct {
+        uint64_t dir, ino;
+        uint8_t len;
+        char name[T3_NCACHE_NAME];
+    } ncache[T3_NCACHE];
+    int ncache_next;
+
+    // One-deep cache of the last-level pointer block being filled, so a
+    // long sequential write patches it in RAM and writes it once per
+    // 1024 data blocks instead of read-modify-writing 4 KiB per block.
+    struct {
+        uint32_t blk;   // 0 = empty
+        int dirty;
+        uint8_t buf[T3_BLOCK];
+    } pcache;
+
+    void *read_buf;            // tfs_read()-style whole-file buffer, freed on next call
 };
 
-static void t3_save(struct t3_saved *s) {
-    s->vol = g_vol; s->sb = g_sb;
-    s->group0 = g_group0; s->gdt_block = g_gdt_block;
-    s->jdata_block = g_jdata_block; s->jslots = g_jslots;
-    s->itb = g_itb; s->meta_off = g_meta_off;
-    s->mounted = g_mounted; s->mounted_from_backup = g_mounted_from_backup;
-}
+// THE CURRENT MOUNT'S STATE, and NULL between calls on purpose: the VFS
+// deactivates after every one, so a backend entered without an activate
+// faults on a NULL deref -- a panic naming the line -- rather than
+// writing this volume's metadata onto whichever one ran last.
+static struct t3_state *S;
 
-static void t3_restore(const struct t3_saved *s) {
-    g_vol = s->vol; g_sb = s->sb;
-    g_group0 = s->group0; g_gdt_block = s->gdt_block;
-    g_jdata_block = s->jdata_block; g_jslots = s->jslots;
-    g_itb = s->itb; g_meta_off = s->meta_off;
-    g_mounted = s->mounted; g_mounted_from_backup = s->mounted_from_backup;
-}
-
-// In-RAM copies of every group's block/inode bitmap (g_sb.gc * 4 KiB
-// each -- ~284 KiB per cache on the 9 GiB image, the same order as
-// TFS2's static full-disk bitmap). RAM is the authority during
-// operation; changed blocks are written through, UNJOURNALED, with
-// the set-before-use / clear-after-persist ordering that makes a
-// crash cost a leak, never a double allocation -- TFS2's exact
-// discipline, inherited deliberately (see the journal section).
-static uint8_t *g_bbm = 0;
-static uint8_t *g_ibm = 0;
-static uint32_t *g_rotor = 0; // per-group scan start (ext2's trick)
-
-// Dirty tracking for the write-through: one bit per group, per cache.
-#define T3_MAX_GROUPS (T3_GDT_BLOCKS * T3_BLOCK / 16u)
-static uint8_t g_bbm_dirty[T3_MAX_GROUPS / 8];
-static uint8_t g_ibm_dirty[T3_MAX_GROUPS / 8];
-static uint8_t g_gdt_dirty[T3_MAX_GROUPS / 8];
-
+// ---- scratch that is NOT per mount ---------------------------------
+//
+// Per CALL, not per volume: the filesystem is one global critical
+// section (vfs.c's FS_OP preemption guard) and a transaction begins and
+// commits inside one op, so no second mount can be between them. Keeping
+// the 128 KiB of journal staging out of the state is what makes a mount
+// cost ~7 KiB instead of ~135 KiB.
+//
 // Journal transaction staging -- sized for the LARGEST geometry (128
 // KiB of .bss); a v1 mount simply never uses slots past the fourth.
 // See the design doc's journal section and txn_commit() below.
@@ -211,33 +228,16 @@ static uint8_t g_txn_img[T3_JSLOTS_MAX][T3_BLOCK];
 static uint32_t g_txn_target[T3_JSLOTS_MAX];
 static int g_txn_count = 0;
 static int g_txn_credits = 0; // what txn_begin() promised; see txn_stage()
-static uint32_t g_jrn_seq = 0;
-
-// Tiny name-lookup cache (dir ino + name -> child ino): path walks
-// are the hot loop, and every component is otherwise a dirent scan.
-// Invalidated wholesale on any mutation -- cheap and obviously
-// correct; per-directory invalidation is a later refinement if it
-// ever shows up in profiles.
-#define T3_NCACHE 16
-#define T3_NCACHE_NAME 48
-static struct {
-    uint64_t dir, ino;
-    uint8_t len;
-    char name[T3_NCACHE_NAME];
-} g_ncache[T3_NCACHE];
-static int g_ncache_next = 0;
 
 static void ncache_flush(void) {
-    for (int i = 0; i < T3_NCACHE; i++) g_ncache[i].dir = 0;
-    g_ncache_next = 0;
+    for (int i = 0; i < T3_NCACHE; i++) S->ncache[i].dir = 0;
+    S->ncache_next = 0;
 }
 
 // One block of scratch for everything on this (single-threaded)
 // kernel -- same convention as TFS2's g_io_scratch.
 static uint8_t g_blk[T3_BLOCK];
 static uint8_t g_ptr_blk[T3_BLOCK]; // indirect-pointer scratch, kept separate from data
-
-static void *g_read_buf = 0; // tfs_read()-style whole-file buffer, freed on next call
 
 // ---- little-endian field access (hand-serialized on disk) ---------------
 
@@ -255,13 +255,13 @@ static void wr16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v
 // ---- volume I/O ----------------------------------------------------------
 
 static int vol_read_sectors(uint32_t lba, int count, void *buf) {
-    if (lba + (uint32_t)count > g_vol.sector_count) return 0;
-    return blkdev_read_sectors(g_vol.dev, g_vol.base_lba + lba, count, buf);
+    if (lba + (uint32_t)count > S->vol.sector_count) return 0;
+    return blkdev_read_sectors(S->vol.dev, S->vol.base_lba + lba, count, buf);
 }
 
 static int vol_write_sectors(uint32_t lba, int count, const void *buf) {
-    if (lba + (uint32_t)count > g_vol.sector_count) return 0;
-    return blkdev_write_sectors(g_vol.dev, g_vol.base_lba + lba, count, buf);
+    if (lba + (uint32_t)count > S->vol.sector_count) return 0;
+    return blkdev_write_sectors(S->vol.dev, S->vol.base_lba + lba, count, buf);
 }
 
 static int read_block(uint32_t blk, void *buf) {
@@ -276,9 +276,9 @@ static int write_block(uint32_t blk, const void *buf) {
 // with no offset of our own -- the partition window, if there is one,
 // lives in the device (block_part.c) and TFS3 never learns of it.
 static void set_flat_volume(const struct block_device *dev) {
-    g_vol.dev = dev;
-    g_vol.base_lba = 0;
-    g_vol.sector_count = blkdev_sector_count(dev);
+    S->vol.dev = dev;
+    S->vol.base_lba = 0;
+    S->vol.sector_count = blkdev_sector_count(dev);
 }
 
 // ---- superblock ----------------------------------------------------------
@@ -288,13 +288,13 @@ static void set_flat_volume(const struct block_device *dev) {
 // future format is refused rather than misread.
 static int set_geometry_version(uint32_t v) {
     if (v == 1) {
-        g_group0 = T3_V1_GROUP0; g_gdt_block = T3_V1_GDT;
-        g_jdata_block = T3_V1_JDATA; g_jslots = T3_V1_JSLOTS;
+        S->group0 = T3_V1_GROUP0; S->gdt_block = T3_V1_GDT;
+        S->jdata_block = T3_V1_JDATA; S->jslots = T3_V1_JSLOTS;
         return 1;
     }
     if (v == 2) {
-        g_group0 = T3_V2_GROUP0; g_gdt_block = T3_V2_GDT;
-        g_jdata_block = T3_V2_JDATA; g_jslots = T3_V2_JSLOTS;
+        S->group0 = T3_V2_GROUP0; S->gdt_block = T3_V2_GDT;
+        S->jdata_block = T3_V2_JDATA; S->jslots = T3_V2_JSLOTS;
         return 1;
     }
     return 0;
@@ -307,7 +307,7 @@ static uint32_t group0_for_version(uint32_t v) {
     return v == 1 ? T3_V1_GROUP0 : T3_V2_GROUP0;
 }
 
-// Parses+validates one superblock sector into g_sb, and (on success)
+// Parses+validates one superblock sector into S->sb, and (on success)
 // switches the geometry globals to its version. Returns 1 valid.
 //
 // The offsets at 28/32/36 are the version's own constants written down
@@ -331,17 +331,17 @@ static int parse_superblock(const uint8_t *sec) {
             rd32(sec + 36) != T3_V2_GDT) return 0;
     }
     if (gc == 0 || ipg == 0 || ipg > T3_BPG) return 0;
-    if ((uint64_t)total_blocks * T3_SPB > (uint64_t)g_vol.sector_count) return 0; // claims more volume than exists
+    if ((uint64_t)total_blocks * T3_SPB > (uint64_t)S->vol.sector_count) return 0; // claims more volume than exists
     // The LAST group may be partial (see group_span()), so the volume
     // has to contain every group's START, not every group's full extent.
     if (group0 + (uint64_t)(gc - 1) * bpg >= total_blocks) return 0;
     if (!set_geometry_version(version)) return 0;
-    g_sb.version = (uint8_t)version;
-    g_sb.flags = sec[5];
-    g_sb.total_blocks = total_blocks;
-    g_sb.bpg = bpg;
-    g_sb.ipg = ipg;
-    g_sb.gc = gc;
+    S->sb.version = (uint8_t)version;
+    S->sb.flags = sec[5];
+    S->sb.total_blocks = total_blocks;
+    S->sb.bpg = bpg;
+    S->sb.ipg = ipg;
+    S->sb.gc = gc;
     return 1;
 }
 
@@ -357,7 +357,7 @@ static int backup_groups(uint32_t gc, uint32_t out[2]) {
 // Reads and validates the superblock, primary first, backups second
 // (their positions derive from the VOLUME size alone -- the whole
 // reason the descriptor table is a fixed 16 blocks). Returns 1
-// mounted-ready (g_sb filled), 0 no valid superblock anywhere, -1
+// mounted-ready (S->sb filled), 0 no valid superblock anywhere, -1
 // primary unreadable (refuse -- never treat a failing disk as blank).
 static int load_superblock(int loud) {
     uint8_t sec[ATA_SECTOR_SIZE];
@@ -366,7 +366,7 @@ static int load_superblock(int loud) {
         got = vol_read_sectors(T3_SB_BLOCK * T3_SPB, 1, sec);
     }
     if (!got) return -1;
-    if (parse_superblock(sec)) { g_mounted_from_backup = 0; return 1; }
+    if (parse_superblock(sec)) { S->mounted_from_backup = 0; return 1; }
 
     // Primary readable but invalid -- try the backups, derived from
     // the volume size (see docs/tfs3-spec.md "Superblock backups").
@@ -375,7 +375,7 @@ static int load_superblock(int loud) {
     // there are only two, both compile-time constants, and a backup
     // that parses under the wrong one is rejected by
     // parse_superblock()'s own group0 check.
-    uint32_t vol_blocks = g_vol.sector_count / T3_SPB;
+    uint32_t vol_blocks = S->vol.sector_count / T3_SPB;
     for (uint32_t v = T3_VERSION; v >= T3_VERSION_MIN; v--) {
         uint32_t group0 = group0_for_version(v);
         if (vol_blocks <= group0) continue;
@@ -390,8 +390,8 @@ static int load_superblock(int loud) {
             if (gspan > T3_BPG) gspan = T3_BPG;
             uint32_t blk = gbase + gspan - 1;
             if (!vol_read_sectors(blk * T3_SPB, 1, sec)) continue;
-            if (parse_superblock(sec) && g_sb.version == v) {
-                g_mounted_from_backup = 1;
+            if (parse_superblock(sec) && S->sb.version == v) {
+                S->mounted_from_backup = 1;
                 if (loud) {
                     klog_write("tfs3: primary superblock invalid -- mounted from the backup in group ");
                     klog_write_dec(groups[i]);
@@ -404,7 +404,7 @@ static int load_superblock(int loud) {
     return 0;
 }
 
-// Serialize g_sb and write it to the primary AND every backup slot --
+// Serialize S->sb and write it to the primary AND every backup slot --
 // fsck repair's restore path, and never called at mount.
 // Forward-declared: used by the superblock writer just below, defined
 // with the geometry helpers where it belongs. See group_span() for what
@@ -414,21 +414,21 @@ static uint32_t group_backup_block(uint32_t g);
 static int write_superblock_everywhere(void) {
     k_memset(g_blk, 0, T3_BLOCK);
     g_blk[0] = 'T'; g_blk[1] = 'F'; g_blk[2] = 'S'; g_blk[3] = '3';
-    g_blk[4] = g_sb.version; g_blk[5] = g_sb.flags;
-    wr32(g_blk + 8, g_sb.total_blocks);
-    wr32(g_blk + 12, g_sb.bpg);
-    wr32(g_blk + 16, g_sb.ipg);
-    wr32(g_blk + 20, g_sb.gc);
-    wr32(g_blk + 24, g_group0);
-    if (g_sb.version >= 2) {
-        wr32(g_blk + 28, g_jdata_block);
-        wr32(g_blk + 32, g_jslots);
-        wr32(g_blk + 36, g_gdt_block);
+    g_blk[4] = S->sb.version; g_blk[5] = S->sb.flags;
+    wr32(g_blk + 8, S->sb.total_blocks);
+    wr32(g_blk + 12, S->sb.bpg);
+    wr32(g_blk + 16, S->sb.ipg);
+    wr32(g_blk + 20, S->sb.gc);
+    wr32(g_blk + 24, S->group0);
+    if (S->sb.version >= 2) {
+        wr32(g_blk + 28, S->jdata_block);
+        wr32(g_blk + 32, S->jslots);
+        wr32(g_blk + 36, S->gdt_block);
     }
     wr32(g_blk + 44, k_fnv1a(g_blk, 44));
     int ok = write_block(T3_SB_BLOCK, g_blk);
     uint32_t groups[2];
-    int n = backup_groups(g_sb.gc, groups);
+    int n = backup_groups(S->sb.gc, groups);
     for (int i = 0; i < n; i++) {
         uint32_t blk = group_backup_block(groups[i]);
         if (blk && !write_block(blk, g_blk)) ok = 0;
@@ -442,7 +442,7 @@ static uint32_t group_backup_block(uint32_t g);
 
 // ---- group / inode geometry ----------------------------------------------
 
-static uint32_t group_base(uint32_t g) { return g_group0 + g * T3_BPG; }
+static uint32_t group_base(uint32_t g) { return S->group0 + g * T3_BPG; }
 
 // How many blocks group `g` ACTUALLY has.
 //
@@ -460,8 +460,8 @@ static uint32_t group_base(uint32_t g) { return g_group0 + g * T3_BPG; }
 // caller that means "the STRIDE between groups" still says T3_BPG.
 static uint32_t group_span(uint32_t g) {
     uint32_t base = group_base(g);
-    if (base >= g_sb.total_blocks) return 0;
-    uint32_t rest = g_sb.total_blocks - base;
+    if (base >= S->sb.total_blocks) return 0;
+    uint32_t rest = S->sb.total_blocks - base;
     return rest < T3_BPG ? rest : T3_BPG;
 }
 
@@ -477,20 +477,20 @@ static uint32_t cksum_table_blocks(void) {
     // Feature bit 0: per-group data-block checksum table (format-time
     // choice; algorithm deferred to Milestone 16). We don't verify it
     // yet, but the geometry must account for the region either way.
-    return (g_sb.flags & 1u) ? (T3_BPG * 4u + T3_BLOCK - 1) / T3_BLOCK : 0;
+    return (S->sb.flags & 1u) ? (T3_BPG * 4u + T3_BLOCK - 1) / T3_BLOCK : 0;
 }
 
 static void derive_geometry(void) {
-    g_itb = g_sb.ipg * T3_INODE_SIZE / T3_BLOCK;
-    g_meta_off = 2 + cksum_table_blocks() + g_itb;
+    S->itb = S->sb.ipg * T3_INODE_SIZE / T3_BLOCK;
+    S->meta_off = 2 + cksum_table_blocks() + S->itb;
 }
 
 // Sector (volume-relative LBA) holding inode `ino`, plus its offset
 // within that sector.
 static int inode_pos(uint64_t ino, uint32_t *out_lba, uint32_t *out_off) {
-    uint32_t g = (uint32_t)(ino / g_sb.ipg);
-    uint32_t idx = (uint32_t)(ino % g_sb.ipg);
-    if (g >= g_sb.gc) return 0;
+    uint32_t g = (uint32_t)(ino / S->sb.ipg);
+    uint32_t idx = (uint32_t)(ino % S->sb.ipg);
+    if (g >= S->sb.gc) return 0;
     uint32_t table = group_base(g) + 2 + cksum_table_blocks();
     *out_lba = table * T3_SPB + idx / T3_INODES_PER_SECTOR;
     *out_off = (idx % T3_INODES_PER_SECTOR) * T3_INODE_SIZE;
@@ -567,9 +567,9 @@ static uint64_t dir_lookup(uint64_t dir_ino, const struct t3_inode *dir,
                            const char *name, uint32_t name_len) {
     if (dir_ino && name_len < T3_NCACHE_NAME) {
         for (int i = 0; i < T3_NCACHE; i++) {
-            if (g_ncache[i].dir == dir_ino && g_ncache[i].len == name_len &&
-                k_memcmp(g_ncache[i].name, name, name_len) == 0) {
-                return g_ncache[i].ino;
+            if (S->ncache[i].dir == dir_ino && S->ncache[i].len == name_len &&
+                k_memcmp(S->ncache[i].name, name, name_len) == 0) {
+                return S->ncache[i].ino;
             }
         }
     }
@@ -586,12 +586,12 @@ static uint64_t dir_lookup(uint64_t dir_ino, const struct t3_inode *dir,
             if (e_ino != 0 && nl == name_len &&
                 k_memcmp(g_blk + off + 7, name, name_len) == 0) {
                 if (dir_ino && name_len < T3_NCACHE_NAME) {
-                    int s = g_ncache_next;
-                    g_ncache_next = (g_ncache_next + 1) % T3_NCACHE;
-                    g_ncache[s].dir = dir_ino;
-                    g_ncache[s].ino = e_ino;
-                    g_ncache[s].len = (uint8_t)name_len;
-                    k_memcpy(g_ncache[s].name, name, name_len);
+                    int s = S->ncache_next;
+                    S->ncache_next = (S->ncache_next + 1) % T3_NCACHE;
+                    S->ncache[s].dir = dir_ino;
+                    S->ncache[s].ino = e_ino;
+                    S->ncache[s].len = (uint8_t)name_len;
+                    k_memcpy(S->ncache[s].name, name, name_len);
                 }
                 return e_ino;
             }
@@ -635,7 +635,7 @@ static int normalize(const char *path, char *out /* T3_PATH_BUF */) {
 // resolve() + normalize() in one, the common op prologue.
 static int lookup(const char *path, uint64_t *out_ino, struct t3_inode *out_node) {
     char norm[T3_PATH_BUF];
-    if (!g_mounted || !normalize(path, norm)) return 0;
+    if (!S->mounted || !normalize(path, norm)) return 0;
     uint64_t ino;
     if (!resolve(norm, &ino)) return 0;
     if (out_ino) *out_ino = ino;
@@ -649,17 +649,17 @@ static void mark_dirty(uint8_t *set, uint32_t g) { set[g >> 3] |= (uint8_t)(1u <
 static int test_dirty(const uint8_t *set, uint32_t g) { return (set[g >> 3] >> (g & 7)) & 1; }
 static void clear_dirty(uint8_t *set, uint32_t g) { set[g >> 3] &= (uint8_t)~(1u << (g & 7)); }
 
-static int bbm_test(uint32_t g, uint32_t i) { return (g_bbm[g * T3_BLOCK + (i >> 3)] >> (i & 7)) & 1; }
+static int bbm_test(uint32_t g, uint32_t i) { return (S->bbm[g * T3_BLOCK + (i >> 3)] >> (i & 7)) & 1; }
 static void bbm_set(uint32_t g, uint32_t i, int v) {
-    uint8_t *b = &g_bbm[g * T3_BLOCK + (i >> 3)];
+    uint8_t *b = &S->bbm[g * T3_BLOCK + (i >> 3)];
     if (v) *b |= (uint8_t)(1u << (i & 7)); else *b &= (uint8_t)~(1u << (i & 7));
-    mark_dirty(g_bbm_dirty, g);
+    mark_dirty(S->bbm_dirty, g);
 }
-static int ibm_test(uint32_t g, uint32_t i) { return (g_ibm[g * T3_BLOCK + (i >> 3)] >> (i & 7)) & 1; }
+static int ibm_test(uint32_t g, uint32_t i) { return (S->ibm[g * T3_BLOCK + (i >> 3)] >> (i & 7)) & 1; }
 static void ibm_set(uint32_t g, uint32_t i, int v) {
-    uint8_t *b = &g_ibm[g * T3_BLOCK + (i >> 3)];
+    uint8_t *b = &S->ibm[g * T3_BLOCK + (i >> 3)];
     if (v) *b |= (uint8_t)(1u << (i & 7)); else *b &= (uint8_t)~(1u << (i & 7));
-    mark_dirty(g_ibm_dirty, g);
+    mark_dirty(S->ibm_dirty, g);
 }
 
 static void alog_push(uint32_t blk); // rollback log, defined below with its story
@@ -667,7 +667,7 @@ static void alog_push(uint32_t blk); // rollback log, defined below with its sto
 // Highest usable data offset within group g (backup regions excluded).
 static uint32_t group_data_end(uint32_t g) {
     uint32_t groups[2];
-    int n = backup_groups(g_sb.gc, groups);
+    int n = backup_groups(S->sb.gc, groups);
     uint32_t span = group_span(g);
     for (int i = 0; i < n; i++) {
         if (groups[i] == g) {
@@ -679,14 +679,14 @@ static uint32_t group_data_end(uint32_t g) {
 
 // Try to allocate one specific block (the adjacent-first fast path).
 static int alloc_block_at(uint32_t blk) {
-    if (blk < g_group0 + g_meta_off) return 0;
-    uint32_t g = (blk - g_group0) / T3_BPG;
-    uint32_t i = (blk - g_group0) % T3_BPG;
-    if (g >= g_sb.gc || i < g_meta_off || i >= group_data_end(g)) return 0;
+    if (blk < S->group0 + S->meta_off) return 0;
+    uint32_t g = (blk - S->group0) / T3_BPG;
+    uint32_t i = (blk - S->group0) % T3_BPG;
+    if (g >= S->sb.gc || i < S->meta_off || i >= group_data_end(g)) return 0;
     if (bbm_test(g, i)) return 0;
     bbm_set(g, i, 1);
-    g_gd[g].free_blocks--;
-    mark_dirty(g_gdt_dirty, g);
+    S->gd[g].free_blocks--;
+    mark_dirty(S->gdt_dirty, g);
     alog_push(blk);
     return 1;
 }
@@ -696,21 +696,21 @@ static int alloc_block_at(uint32_t blk) {
 // other group. Returns the block number or 0.
 static uint32_t alloc_block(uint32_t prefer_group, uint32_t adjacent_to) {
     if (adjacent_to && alloc_block_at(adjacent_to + 1)) return adjacent_to + 1;
-    if (prefer_group >= g_sb.gc) prefer_group = 0;
-    for (uint32_t n = 0; n < g_sb.gc; n++) {
-        uint32_t g = (prefer_group + n) % g_sb.gc;
-        if (g_gd[g].free_blocks == 0) continue;
+    if (prefer_group >= S->sb.gc) prefer_group = 0;
+    for (uint32_t n = 0; n < S->sb.gc; n++) {
+        uint32_t g = (prefer_group + n) % S->sb.gc;
+        if (S->gd[g].free_blocks == 0) continue;
         uint32_t end = group_data_end(g);
-        uint32_t start = g_rotor[g];
-        if (start < g_meta_off || start >= end) start = g_meta_off;
-        for (uint32_t k = 0; k < end - g_meta_off; k++) {
+        uint32_t start = S->rotor[g];
+        if (start < S->meta_off || start >= end) start = S->meta_off;
+        for (uint32_t k = 0; k < end - S->meta_off; k++) {
             uint32_t i = start + k;
-            if (i >= end) i = g_meta_off + (i - end);
+            if (i >= end) i = S->meta_off + (i - end);
             if (!bbm_test(g, i)) {
                 bbm_set(g, i, 1);
-                g_gd[g].free_blocks--;
-                mark_dirty(g_gdt_dirty, g);
-                g_rotor[g] = i + 1;
+                S->gd[g].free_blocks--;
+                mark_dirty(S->gdt_dirty, g);
+                S->rotor[g] = i + 1;
                 alog_push(group_base(g) + i);
                 return group_base(g) + i;
             }
@@ -720,27 +720,27 @@ static uint32_t alloc_block(uint32_t prefer_group, uint32_t adjacent_to) {
 }
 
 static void free_block_bit(uint32_t blk) {
-    uint32_t g = (blk - g_group0) / T3_BPG;
-    uint32_t i = (blk - g_group0) % T3_BPG;
-    if (g >= g_sb.gc) return;
+    uint32_t g = (blk - S->group0) / T3_BPG;
+    uint32_t i = (blk - S->group0) % T3_BPG;
+    if (g >= S->sb.gc) return;
     if (!bbm_test(g, i)) return; // double-free guard -- fsck's problem, not a crash
     bbm_set(g, i, 0);
-    g_gd[g].free_blocks++;
-    mark_dirty(g_gdt_dirty, g);
-    if (g_rotor[g] > i) g_rotor[g] = i;
+    S->gd[g].free_blocks++;
+    mark_dirty(S->gdt_dirty, g);
+    if (S->rotor[g] > i) S->rotor[g] = i;
 }
 
 static uint64_t alloc_inode(uint32_t prefer_group) {
-    if (prefer_group >= g_sb.gc) prefer_group = 0;
-    for (uint32_t n = 0; n < g_sb.gc; n++) {
-        uint32_t g = (prefer_group + n) % g_sb.gc;
-        if (g_gd[g].free_inodes == 0) continue;
-        for (uint32_t i = 0; i < g_sb.ipg; i++) {
+    if (prefer_group >= S->sb.gc) prefer_group = 0;
+    for (uint32_t n = 0; n < S->sb.gc; n++) {
+        uint32_t g = (prefer_group + n) % S->sb.gc;
+        if (S->gd[g].free_inodes == 0) continue;
+        for (uint32_t i = 0; i < S->sb.ipg; i++) {
             if (!ibm_test(g, i)) {
                 ibm_set(g, i, 1);
-                g_gd[g].free_inodes--;
-                mark_dirty(g_gdt_dirty, g);
-                return (uint64_t)g * g_sb.ipg + i;
+                S->gd[g].free_inodes--;
+                mark_dirty(S->gdt_dirty, g);
+                return (uint64_t)g * S->sb.ipg + i;
             }
         }
     }
@@ -748,12 +748,12 @@ static uint64_t alloc_inode(uint32_t prefer_group) {
 }
 
 static void free_inode_bit(uint64_t ino) {
-    uint32_t g = (uint32_t)(ino / g_sb.ipg);
-    uint32_t i = (uint32_t)(ino % g_sb.ipg);
-    if (g >= g_sb.gc || !ibm_test(g, i)) return;
+    uint32_t g = (uint32_t)(ino / S->sb.ipg);
+    uint32_t i = (uint32_t)(ino % S->sb.ipg);
+    if (g >= S->sb.gc || !ibm_test(g, i)) return;
     ibm_set(g, i, 0);
-    g_gd[g].free_inodes++;
-    mark_dirty(g_gdt_dirty, g);
+    S->gd[g].free_inodes++;
+    mark_dirty(S->gdt_dirty, g);
 }
 
 // Write every dirty bitmap block and GDT block through to disk.
@@ -764,14 +764,14 @@ static void free_inode_bit(uint64_t ino) {
 // TFS2's exact metadata-ordering rule, see docs/decisions.md.
 static int flush_alloc_state(void) {
     int ok = 1;
-    for (uint32_t g = 0; g < g_sb.gc; g++) {
-        if (test_dirty(g_bbm_dirty, g)) {
-            if (!write_block(group_base(g), g_bbm + g * T3_BLOCK)) ok = 0;
-            clear_dirty(g_bbm_dirty, g);
+    for (uint32_t g = 0; g < S->sb.gc; g++) {
+        if (test_dirty(S->bbm_dirty, g)) {
+            if (!write_block(group_base(g), S->bbm + g * T3_BLOCK)) ok = 0;
+            clear_dirty(S->bbm_dirty, g);
         }
-        if (test_dirty(g_ibm_dirty, g)) {
-            if (!write_block(group_base(g) + 1, g_ibm + g * T3_BLOCK)) ok = 0;
-            clear_dirty(g_ibm_dirty, g);
+        if (test_dirty(S->ibm_dirty, g)) {
+            if (!write_block(group_base(g) + 1, S->ibm + g * T3_BLOCK)) ok = 0;
+            clear_dirty(S->ibm_dirty, g);
         }
     }
     // GDT blocks: rebuild each dirty block from the RAM free counts.
@@ -781,20 +781,20 @@ static int flush_alloc_state(void) {
         int dirty = 0;
         for (uint32_t i = 0; i < T3_BLOCK / 16 && !dirty; i++) {
             uint32_t g = tb * (T3_BLOCK / 16) + i;
-            if (g < g_sb.gc && test_dirty(g_gdt_dirty, g)) dirty = 1;
+            if (g < S->sb.gc && test_dirty(S->gdt_dirty, g)) dirty = 1;
         }
         if (!dirty) continue;
         k_memset(g_blk, 0, T3_BLOCK);
         for (uint32_t i = 0; i < T3_BLOCK / 16; i++) {
             uint32_t g = tb * (T3_BLOCK / 16) + i;
-            if (g >= g_sb.gc) break;
+            if (g >= S->sb.gc) break;
             uint8_t *e = g_blk + i * 16;
-            wr32(e, g_gd[g].free_blocks);
-            wr32(e + 4, g_gd[g].free_inodes);
+            wr32(e, S->gd[g].free_blocks);
+            wr32(e + 4, S->gd[g].free_inodes);
             wr32(e + 12, k_fnv1a(e, 12));
-            clear_dirty(g_gdt_dirty, g);
+            clear_dirty(S->gdt_dirty, g);
         }
-        if (!write_block(g_gdt_block + tb, g_blk)) ok = 0;
+        if (!write_block(S->gdt_block + tb, g_blk)) ok = 0;
     }
     return ok;
 }
@@ -865,8 +865,8 @@ static void alog_rollback(void) {
 // free_block(): the block is free either way, a refused TRIM must not
 // fail the delete. Called with a sorted-ish run start/count.
 static void trim_run(uint32_t first_blk, uint32_t count) {
-    if (!count || !blkdev_trim_supported(g_vol.dev)) return;
-    blkdev_trim(g_vol.dev, g_vol.base_lba + first_blk * T3_SPB, count * T3_SPB);
+    if (!count || !blkdev_trim_supported(S->vol.dev)) return;
+    blkdev_trim(S->vol.dev, S->vol.base_lba + first_blk * T3_SPB, count * T3_SPB);
 }
 
 // ---- journal: one fixed-size multi-block transaction ---------------------
@@ -900,7 +900,7 @@ static void txn_reset(void) { g_txn_count = 0; g_txn_credits = 0; }
 static int txn_begin(int credits) {
     g_txn_count = 0;
     g_txn_credits = 0;
-    if (credits <= 0 || credits > (int)g_jslots) return 0;
+    if (credits <= 0 || credits > (int)S->jslots) return 0;
     g_txn_credits = credits;
     return 1;
 }
@@ -916,7 +916,7 @@ static uint8_t *txn_stage(uint32_t blk) {
     // Past the reservation is a bug in the CALLER's credit count, not
     // a runtime condition -- but refusing here keeps it a failed
     // operation rather than a torn one.
-    if (g_txn_count >= g_txn_credits || g_txn_count >= (int)g_jslots) return 0;
+    if (g_txn_count >= g_txn_credits || g_txn_count >= (int)S->jslots) return 0;
     if (!read_block(blk, g_txn_img[g_txn_count])) return 0;
     g_txn_target[g_txn_count] = blk;
     return g_txn_img[g_txn_count++];
@@ -942,12 +942,12 @@ static uint32_t jh_cksum_off(uint32_t version) {
 
 static int write_journal_header(int commit) {
     uint8_t sec[ATA_SECTOR_SIZE];
-    uint32_t slots = jh_slots_off(g_sb.version), ck = jh_cksum_off(g_sb.version);
+    uint32_t slots = jh_slots_off(S->sb.version), ck = jh_cksum_off(S->sb.version);
     k_memset(sec, 0, sizeof(sec));
     sec[0] = 'J'; sec[1] = 'R'; sec[2] = 'N'; sec[3] = '3';
     sec[4] = (uint8_t)commit;
     sec[5] = (uint8_t)g_txn_count;
-    wr32(sec + 8, g_jrn_seq);
+    wr32(sec + 8, S->jrn_seq);
     for (int i = 0; i < g_txn_count; i++) {
         wr32(sec + slots + (uint32_t)i * 8, g_txn_target[i]);
         wr32(sec + slots + (uint32_t)i * 8 + 4, k_fnv1a(g_txn_img[i], T3_BLOCK));
@@ -958,9 +958,9 @@ static int write_journal_header(int commit) {
 
 static int txn_commit(void) {
     if (g_txn_count == 0) return 1;
-    g_jrn_seq++;
+    S->jrn_seq++;
     for (int i = 0; i < g_txn_count; i++) {
-        if (!write_block(g_jdata_block + (uint32_t)i, g_txn_img[i])) { txn_reset(); return 0; }
+        if (!write_block(S->jdata_block + (uint32_t)i, g_txn_img[i])) { txn_reset(); return 0; }
     }
     if (!write_journal_header(1)) { txn_reset(); return 0; }
 
@@ -969,10 +969,10 @@ static int txn_commit(void) {
     // if the flush cannot say that, the targets below must NOT be
     // overwritten: a half-written target with no durable journal behind
     // it is unrecoverable, while abandoning the transaction here costs
-    // nothing that was not already lost. blkdev_flush(g_vol.dev) returned void until
+    // nothing that was not already lost. blkdev_flush(S->vol.dev) returned void until
     // a write-back cache went in underneath (ata_cache.h) -- that is
     // where a deferred write's failure now surfaces.
-    if (!blkdev_flush(g_vol.dev)) {
+    if (!blkdev_flush(S->vol.dev)) {
         klog_write("tfs3: journal barrier failed -- transaction abandoned, "
                    "targets untouched\n");
         txn_reset();
@@ -989,7 +989,7 @@ static int txn_commit(void) {
     // work that never reached the disk. A failure here takes the same
     // path a failed target write does -- leave the header committed and
     // let replay finish the job next boot.
-    if (!blkdev_flush(g_vol.dev)) ok = 0;
+    if (!blkdev_flush(S->vol.dev)) ok = 0;
     if (ok) {
         int saved = g_txn_count;
         g_txn_count = 0;
@@ -1008,23 +1008,23 @@ static void replay_journal(void) {
     uint8_t sec[ATA_SECTOR_SIZE];
     if (!vol_read_sectors(T3_JH_BLOCK * T3_SPB, 1, sec)) return;
     if (!(sec[0] == 'J' && sec[1] == 'R' && sec[2] == 'N' && sec[3] == '3')) return;
-    uint32_t slots = jh_slots_off(g_sb.version), ck = jh_cksum_off(g_sb.version);
+    uint32_t slots = jh_slots_off(S->sb.version), ck = jh_cksum_off(S->sb.version);
     if (k_fnv1a(sec, ck) != rd32(sec + ck)) return; // torn header = no transaction
-    g_jrn_seq = rd32(sec + 8);
+    S->jrn_seq = rd32(sec + 8);
     if (!sec[4]) return; // not committed
     uint32_t count = sec[5];
-    if (count == 0 || count > g_jslots) count = 0;
+    if (count == 0 || count > S->jslots) count = 0;
 
     int all_ok = (count > 0);
     for (uint32_t i = 0; i < count && all_ok; i++) {
-        if (!read_block(g_jdata_block + i, g_txn_img[i])) all_ok = 0;
+        if (!read_block(S->jdata_block + i, g_txn_img[i])) all_ok = 0;
         else if (k_fnv1a(g_txn_img[i], T3_BLOCK) != rd32(sec + slots + i * 8 + 4)) all_ok = 0;
     }
     if (all_ok) {
         for (uint32_t i = 0; i < count && all_ok; i++) {
             if (!write_block(rd32(sec + slots + i * 8), g_txn_img[i])) all_ok = 0;
         }
-        if (all_ok && !blkdev_flush(g_vol.dev)) {
+        if (all_ok && !blkdev_flush(S->vol.dev)) {
             // Same rule as txn_commit()'s barrier 2: if the replayed
             // targets are not durable, do NOT clear the committed flag
             // below -- the next boot must replay them again.
@@ -1085,33 +1085,25 @@ static uint64_t now_epoch(void) {
 
 // ---- block-map allocation (write side) ------------------------------------
 
-// One-deep cache of the last-level pointer block being filled, so a
-// long sequential write patches it in RAM and writes it once per
-// 1024 data blocks instead of read-modify-writing 4 KiB per block.
-static struct {
-    uint32_t blk;   // 0 = empty
-    int dirty;
-    uint8_t buf[T3_BLOCK];
-} g_pcache;
 
 static int pcache_flush(void) {
-    if (g_pcache.blk && g_pcache.dirty) {
-        if (!write_block(g_pcache.blk, g_pcache.buf)) return 0;
-        g_pcache.dirty = 0;
+    if (S->pcache.blk && S->pcache.dirty) {
+        if (!write_block(S->pcache.blk, S->pcache.buf)) return 0;
+        S->pcache.dirty = 0;
     }
     return 1;
 }
 
 static int pcache_load(uint32_t blk, int fresh) {
-    if (g_pcache.blk == blk) return 1;
+    if (S->pcache.blk == blk) return 1;
     if (!pcache_flush()) return 0;
-    g_pcache.blk = blk;
-    g_pcache.dirty = 0;
-    if (fresh) { k_memset(g_pcache.buf, 0, T3_BLOCK); g_pcache.dirty = 1; return 1; }
-    return read_block(blk, g_pcache.buf);
+    S->pcache.blk = blk;
+    S->pcache.dirty = 0;
+    if (fresh) { k_memset(S->pcache.buf, 0, T3_BLOCK); S->pcache.dirty = 1; return 1; }
+    return read_block(blk, S->pcache.buf);
 }
 
-static void pcache_drop(void) { g_pcache.blk = 0; g_pcache.dirty = 0; }
+static void pcache_drop(void) { S->pcache.blk = 0; S->pcache.dirty = 0; }
 
 // Allocate (if needed) and return the pointer-table slot chain for
 // file-block `idx`, allocating intermediate pointer blocks as it
@@ -1150,7 +1142,7 @@ static int map_get_or_alloc_tables(struct t3_inode *node, uint32_t idx,
         if (!pcache_load(table, fresh)) return 0;
         *out_leaf_blk = table;
         *out_leaf_slot = rem;
-        *out_existing = rd32(g_pcache.buf + rem * 4);
+        *out_existing = rd32(S->pcache.buf + rem * 4);
         return 1;
     }
 
@@ -1183,7 +1175,7 @@ static int map_get_or_alloc_tables(struct t3_inode *node, uint32_t idx,
     if (!pcache_load(table, fresh)) return 0;
     *out_leaf_blk = table;
     *out_leaf_slot = rem;
-    *out_existing = rd32(g_pcache.buf + rem * 4);
+    *out_existing = rd32(S->pcache.buf + rem * 4);
     return 1;
 }
 
@@ -1192,8 +1184,8 @@ static void map_set_block(struct t3_inode *node, uint32_t leaf_blk,
     if (!leaf_blk) {
         node->ptrs[leaf_slot] = data_blk; // direct
     } else {
-        wr32(g_pcache.buf + leaf_slot * 4, data_blk);
-        g_pcache.dirty = 1;
+        wr32(S->pcache.buf + leaf_slot * 4, data_blk);
+        S->pcache.dirty = 1;
     }
 }
 
@@ -1207,7 +1199,7 @@ static void map_set_block(struct t3_inode *node, uint32_t leaf_blk,
 static int do_write_inner(uint64_t ino, struct t3_inode *node, uint64_t offset,
                           const void *buf, uint32_t len) {
     const uint8_t *src = (const uint8_t *)buf;
-    uint32_t prefer_group = (uint32_t)(ino / g_sb.ipg);
+    uint32_t prefer_group = (uint32_t)(ino / S->sb.ipg);
     uint32_t last_alloc = 0;
     uint32_t total = 0;
 
@@ -1246,7 +1238,7 @@ static int do_write_inner(uint64_t ino, struct t3_inode *node, uint64_t offset,
             // One transfer must fit the ATA path's per-command cap
             // (128 sectors on DMA, 8 on PIO -- ask, don't assume,
             // same rule TFS2's batching follows).
-            uint32_t cap = (uint32_t)blkdev_max_sectors_per_xfer(g_vol.dev) / T3_SPB;
+            uint32_t cap = (uint32_t)blkdev_max_sectors_per_xfer(S->vol.dev) / T3_SPB;
             if (cap < 1) cap = 1;
             if (want > cap) want = cap;
             while (run < want) {
@@ -1571,7 +1563,7 @@ static int dirent_insert(uint64_t dir_ino, struct t3_inode *dir,
     // slack if the caller's transaction never lands.
     if (nblocks >= 12 + T3_PTRS_PER_BLOCK) return 0; // dirs stop at single-indirect scale
     if (g_txn_count != 0) return 0; // grow needs its own txn; callers stage after insert only
-    uint32_t prefer_group = (uint32_t)(dir_ino / g_sb.ipg);
+    uint32_t prefer_group = (uint32_t)(dir_ino / S->sb.ipg);
     uint32_t newblk = alloc_block(prefer_group, 0);
     if (!newblk) return 0;
     k_memset(g_blk, 0, T3_BLOCK);
@@ -1695,7 +1687,7 @@ static int split_parent(const char *norm, uint64_t *out_parent,
 // A PROBE MUST NOT DISTURB A MOUNT, and this one used to. fs_ops.h has
 // always said "detection only, no side effects beyond the read", and
 // that was true in effect while probing only ever happened BEFORE
-// anything was mounted -- set_flat_volume() writes g_vol, which is the
+// anything was mounted -- set_flat_volume() writes S->vol, which is the
 // mounted volume.
 //
 // Real mount points made it false the same day: mounting /boot probes
@@ -1707,10 +1699,10 @@ static int split_parent(const char *norm, uint64_t *out_parent,
 // tested.
 static int tfs3_probe(const struct block_device *dev) {
     if (!dev) return 0;
-    struct t3_vol saved = g_vol;
+    struct t3_vol saved = S->vol;
     set_flat_volume(dev);
     int r = load_superblock(0);
-    if (g_mounted) g_vol = saved;
+    if (S->mounted) S->vol = saved;
     return r;
 }
 
@@ -1724,7 +1716,7 @@ static int tfs3_wipe_inner(const struct block_device *dev) {
     uint8_t zero[ATA_SECTOR_SIZE];
     k_memset(zero, 0, sizeof(zero));
     int ok = vol_write_sectors(T3_SB_BLOCK * T3_SPB, 1, zero);
-    uint32_t vol_blocks = g_vol.sector_count / T3_SPB;
+    uint32_t vol_blocks = S->vol.sector_count / T3_SPB;
     // EVERY version's backup positions, not just the mounted one's --
     // the disk being wiped may have been written by either, and this
     // runs before (or instead of) a mount, so there is nothing to ask.
@@ -1757,9 +1749,9 @@ static int tfs3_format_inner(const struct block_device *dev) {
 
     // A fresh filesystem is always the newest version.
     set_geometry_version(T3_VERSION);
-    g_sb.version = T3_VERSION;
+    S->sb.version = T3_VERSION;
 
-    uint32_t vol_blocks = g_vol.sector_count / T3_SPB;
+    uint32_t vol_blocks = S->vol.sector_count / T3_SPB;
     // The floor is the METADATA, not a whole group. A group needs its
     // two bitmaps, its inode table and somewhere to put the root
     // directory; beyond that a PARTIAL last group is fine, exactly as
@@ -1767,12 +1759,12 @@ static int tfs3_format_inner(const struct block_device *dev) {
     // instead of a 129 MiB one. (`meta` is computed just below, so this
     // checks the generous version of the same thing: one group's
     // metadata cannot exceed a few hundred blocks.)
-    if (vol_blocks <= g_group0 + T3_MIN_GROUP_BLOCKS) {
+    if (vol_blocks <= S->group0 + T3_MIN_GROUP_BLOCKS) {
         klog_write("tfs3: volume too small even for one partial group -- not formatting\n");
         return 0;
     }
     // CEILING: a volume that ends mid-group still has that group.
-    uint32_t gc = (vol_blocks - g_group0 + T3_BPG - 1) / T3_BPG;
+    uint32_t gc = (vol_blocks - S->group0 + T3_BPG - 1) / T3_BPG;
     if (gc > T3_GDT_BLOCKS * T3_BLOCK / 16) gc = T3_GDT_BLOCKS * T3_BLOCK / 16;
     uint32_t ipg = T3_BPG * T3_BLOCK / T3_BYTES_PER_INODE;
     if (ipg > T3_BPG) ipg = T3_BPG;
@@ -1781,15 +1773,15 @@ static int tfs3_format_inner(const struct block_device *dev) {
     uint32_t meta = 2 + itb; // no checksum-table feature at format time (flags = 0)
 
     // Publish the geometry BEFORE anything uses it. group_span() and
-    // everything built on it read g_sb, and during a format that still
+    // everything built on it read S->sb, and during a format that still
     // held the PREVIOUS volume's numbers (or zeros on a fresh boot) --
     // so every group's span came out wrong and the format failed with
     // no clue as to why. The superblock image below is written from
     // these same values, so there is one source rather than two.
-    g_sb.total_blocks = vol_blocks;
-    g_sb.bpg = T3_BPG;
-    g_sb.ipg = ipg;
-    g_sb.gc = gc;
+    S->sb.total_blocks = vol_blocks;
+    S->sb.bpg = T3_BPG;
+    S->sb.ipg = ipg;
+    S->sb.gc = gc;
 
     uint32_t groups[2];
     int nb = backup_groups(gc, groups);
@@ -1810,10 +1802,10 @@ static int tfs3_format_inner(const struct block_device *dev) {
     wr32(sb + 12, T3_BPG);
     wr32(sb + 16, ipg);
     wr32(sb + 20, gc);
-    wr32(sb + 24, g_group0);
-    wr32(sb + 28, g_jdata_block);
-    wr32(sb + 32, g_jslots);
-    wr32(sb + 36, g_gdt_block);
+    wr32(sb + 24, S->group0);
+    wr32(sb + 28, S->jdata_block);
+    wr32(sb + 32, S->jslots);
+    wr32(sb + 36, S->gdt_block);
     wr32(sb + 44, k_fnv1a(sb, 44));
 
     k_memset(g_blk, 0, T3_BLOCK);
@@ -1850,14 +1842,14 @@ static int tfs3_format_inner(const struct block_device *dev) {
     wr32(g_blk + jh_cksum_off(T3_VERSION), k_fnv1a(g_blk, jh_cksum_off(T3_VERSION)));
     if (!write_block(T3_JH_BLOCK, g_blk)) return 0;
     k_memset(g_blk, 0, T3_BLOCK);
-    for (uint32_t i = 0; i < g_jslots; i++) {
-        if (!write_block(g_jdata_block + i, g_blk)) return 0;
+    for (uint32_t i = 0; i < S->jslots; i++) {
+        if (!write_block(S->jdata_block + i, g_blk)) return 0;
     }
 
     // Group descriptor table: free-count caches, checksummed each.
     // Built one block at a time (a full table is 64 KiB, bigger than
     // any scratch this kernel keeps around).
-    uint32_t root_block = g_group0 + meta; // first data block of group 0
+    uint32_t root_block = S->group0 + meta; // first data block of group 0
     for (uint32_t tb = 0; tb < T3_GDT_BLOCKS; tb++) {
         k_memset(g_blk, 0, T3_BLOCK);
         for (uint32_t i = 0; i < T3_BLOCK / 16; i++) {
@@ -1866,7 +1858,7 @@ static int tfs3_format_inner(const struct block_device *dev) {
             // The last group's span, not T3_BPG -- a partial group has
             // fewer free blocks and the GDT cache is what the allocator
             // trusts.
-            uint32_t gbase = g_group0 + g * T3_BPG;
+            uint32_t gbase = S->group0 + g * T3_BPG;
             uint32_t gspan = vol_blocks - gbase;
             if (gspan > T3_BPG) gspan = T3_BPG;
             uint32_t free_b = gspan > meta ? gspan - meta : 0;
@@ -1880,10 +1872,10 @@ static int tfs3_format_inner(const struct block_device *dev) {
             wr32(e + 4, free_i);
             wr32(e + 12, k_fnv1a(e, 12));
         }
-        if (!write_block(g_gdt_block + tb, g_blk)) return 0;
+        if (!write_block(S->gdt_block + tb, g_blk)) return 0;
         // Backup GDT snapshots get the identical block.
         for (int j = 0; j < nb; j++) {
-            uint32_t gbase = g_group0 + groups[j] * T3_BPG;
+            uint32_t gbase = S->group0 + groups[j] * T3_BPG;
             uint32_t gspan = vol_blocks - gbase;
             if (gspan > T3_BPG) gspan = T3_BPG;
             uint32_t tail = gbase + gspan - 1;
@@ -1937,7 +1929,7 @@ static int tfs3_format_inner(const struct block_device *dev) {
     // Root inode (ino 1, group 0) + its dirent block (. and ..).
     {
         uint8_t sec[ATA_SECTOR_SIZE];
-        uint32_t table_lba = (g_group0 + 2) * T3_SPB;
+        uint32_t table_lba = (S->group0 + 2) * T3_SPB;
         if (!vol_read_sectors(table_lba, 1, sec)) return 0;
         uint8_t *p = sec + T3_INO_ROOT * T3_INODE_SIZE;
         k_memset(p, 0, T3_INODE_SIZE);
@@ -1965,16 +1957,16 @@ static int tfs3_format_inner(const struct block_device *dev) {
     k_memcpy(g_blk, sb, ATA_SECTOR_SIZE);
     for (int j = 0; j < nb; j++) {
         // The group's REAL last block. A partial last group ends before
-        // g_group0 + (g+1)*T3_BPG, and writing the backup superblock
+        // S->group0 + (g+1)*T3_BPG, and writing the backup superblock
         // past the end of the volume failed the entire format with
         // nothing anywhere to say why.
-        uint32_t gbase = g_group0 + groups[j] * T3_BPG;
+        uint32_t gbase = S->group0 + groups[j] * T3_BPG;
         uint32_t gspan = vol_blocks - gbase;
         if (gspan > T3_BPG) gspan = T3_BPG;
         if (!write_block(gbase + gspan - 1, g_blk)) return 0;
     }
 
-    blkdev_flush(g_vol.dev); // one barrier so the whole format is durable before init() re-reads it
+    blkdev_flush(S->vol.dev); // one barrier so the whole format is durable before init() re-reads it
     klog_write("tfs3: formatted a fresh tfs3 filesystem (");
     klog_write_dec(gc); klog_write(" groups, ");
     klog_write_dec(ipg); klog_write(" inodes/group)\n");
@@ -1982,17 +1974,17 @@ static int tfs3_format_inner(const struct block_device *dev) {
 }
 
 static void unmount_state(void) {
-    if (g_gd) { kfree(g_gd); g_gd = 0; }
-    if (g_bbm) { kfree(g_bbm); g_bbm = 0; }
-    if (g_ibm) { kfree(g_ibm); g_ibm = 0; }
-    if (g_rotor) { kfree(g_rotor); g_rotor = 0; }
+    if (S->gd) { kfree(S->gd); S->gd = 0; }
+    if (S->bbm) { kfree(S->bbm); S->bbm = 0; }
+    if (S->ibm) { kfree(S->ibm); S->ibm = 0; }
+    if (S->rotor) { kfree(S->rotor); S->rotor = 0; }
     ncache_flush();
     pcache_drop();
     txn_reset();
 }
 
 static int tfs3_init(const struct block_device *dev) {
-    g_mounted = 0;
+    S->mounted = 0;
     unmount_state();
     if (!dev) {
         // tfs3 has no RAM-only mode of its own -- that is ramfs's job
@@ -2003,7 +1995,7 @@ static int tfs3_init(const struct block_device *dev) {
         // -1, not 0: 0 would mean "mounted, but not persistent", which
         // is exactly the fiction this return value was carrying before
         // ramfs existed -- vfs.c reported an active backend while
-        // g_mounted stayed 0 and every fs_* call failed. See fs_ops.h.
+        // S->mounted stayed 0 and every fs_* call failed. See fs_ops.h.
         klog_write("tfs3: no disk -- cannot mount\n");
         return -1;
     }
@@ -2012,7 +2004,7 @@ static int tfs3_init(const struct block_device *dev) {
         klog_write("tfs3: no valid superblock (primary or backup) -- not mounted\n");
         return -1;
     }
-    if (g_sb.flags != 0) {
+    if (S->sb.flags != 0) {
         // Feature bits this kernel doesn't implement yet (e.g. the
         // per-block checksum table's write half). Refusing beats
         // mounting read-write and silently rotting the feature's
@@ -2024,29 +2016,29 @@ static int tfs3_init(const struct block_device *dev) {
     derive_geometry();
     replay_journal(); // before anything reads the structures a crash may have half-written
 
-    g_gd = kmalloc(sizeof(struct t3_gd) * g_sb.gc);
-    g_bbm = kmalloc((size_t)g_sb.gc * T3_BLOCK);
-    g_ibm = kmalloc((size_t)g_sb.gc * T3_BLOCK);
-    g_rotor = kmalloc(sizeof(uint32_t) * g_sb.gc);
-    if (!g_gd || !g_bbm || !g_ibm || !g_rotor) { unmount_state(); return -1; }
-    k_memset(g_bbm_dirty, 0, sizeof(g_bbm_dirty));
-    k_memset(g_ibm_dirty, 0, sizeof(g_ibm_dirty));
-    k_memset(g_gdt_dirty, 0, sizeof(g_gdt_dirty));
-    for (uint32_t g = 0; g < g_sb.gc; g++) {
-        g_rotor[g] = g_meta_off;
-        if (!read_block(group_base(g), g_bbm + (size_t)g * T3_BLOCK) ||
-            !read_block(group_base(g) + 1, g_ibm + (size_t)g * T3_BLOCK)) {
+    S->gd = kmalloc(sizeof(struct t3_gd) * S->sb.gc);
+    S->bbm = kmalloc((size_t)S->sb.gc * T3_BLOCK);
+    S->ibm = kmalloc((size_t)S->sb.gc * T3_BLOCK);
+    S->rotor = kmalloc(sizeof(uint32_t) * S->sb.gc);
+    if (!S->gd || !S->bbm || !S->ibm || !S->rotor) { unmount_state(); return -1; }
+    k_memset(S->bbm_dirty, 0, sizeof(S->bbm_dirty));
+    k_memset(S->ibm_dirty, 0, sizeof(S->ibm_dirty));
+    k_memset(S->gdt_dirty, 0, sizeof(S->gdt_dirty));
+    for (uint32_t g = 0; g < S->sb.gc; g++) {
+        S->rotor[g] = S->meta_off;
+        if (!read_block(group_base(g), S->bbm + (size_t)g * T3_BLOCK) ||
+            !read_block(group_base(g) + 1, S->ibm + (size_t)g * T3_BLOCK)) {
             klog_write("tfs3: bitmap read failed -- not mounted\n");
             unmount_state();
             return -1;
         }
     }
     uint32_t bad_gd = 0;
-    for (uint32_t tb = 0; tb <= (g_sb.gc - 1) / (T3_BLOCK / 16); tb++) {
-        if (!read_block(g_gdt_block + tb, g_blk)) { kfree(g_gd); g_gd = 0; return -1; }
+    for (uint32_t tb = 0; tb <= (S->sb.gc - 1) / (T3_BLOCK / 16); tb++) {
+        if (!read_block(S->gdt_block + tb, g_blk)) { kfree(S->gd); S->gd = 0; return -1; }
         for (uint32_t i = 0; i < T3_BLOCK / 16; i++) {
             uint32_t g = tb * (T3_BLOCK / 16) + i;
-            if (g >= g_sb.gc) break;
+            if (g >= S->sb.gc) break;
             const uint8_t *e = g_blk + i * 16;
             if (k_fnv1a(e, 12) != rd32(e + 12)) {
                 // A descriptor is a cache -- a bad one doesn't block
@@ -2063,11 +2055,11 @@ static int tfs3_init(const struct block_device *dev) {
                     klog_write("tfs3: ...more group descriptors failed -- run fsck\n");
                 }
                 bad_gd++;
-                g_gd[g].free_blocks = 0;
-                g_gd[g].free_inodes = 0;
+                S->gd[g].free_blocks = 0;
+                S->gd[g].free_inodes = 0;
             } else {
-                g_gd[g].free_blocks = rd32(e);
-                g_gd[g].free_inodes = rd32(e + 4);
+                S->gd[g].free_blocks = rd32(e);
+                S->gd[g].free_inodes = rd32(e + 4);
             }
         }
     }
@@ -2080,12 +2072,12 @@ static int tfs3_init(const struct block_device *dev) {
         return -1;
     }
 
-    g_mounted = 1;
+    S->mounted = 1;
     klog_write("tfs3: mounted (v");
-    klog_write_dec(g_sb.version); klog_write(", ");
-    klog_write_dec(g_sb.gc); klog_write(" groups, ");
-    klog_write_dec(g_sb.ipg); klog_write(" inodes/group, ");
-    klog_write_dec(g_jslots); klog_write(" journal slots)\n");
+    klog_write_dec(S->sb.version); klog_write(", ");
+    klog_write_dec(S->sb.gc); klog_write(" groups, ");
+    klog_write_dec(S->sb.ipg); klog_write(" inodes/group, ");
+    klog_write_dec(S->jslots); klog_write(" journal slots)\n");
     return 1;
 }
 
@@ -2125,16 +2117,16 @@ static const char *tfs3_read(const char *path, uint32_t *out_size) {
     if (node.size > 0xFFFFFFFFu - 1) return 0; // whole-buffer call -- use fs_read_range()
     uint32_t size = (uint32_t)node.size;
 
-    if (g_read_buf) { kfree(g_read_buf); g_read_buf = 0; }
-    g_read_buf = kmalloc((size_t)size + 1);
-    if (!g_read_buf) return 0;
-    if (size > 0 && read_range_impl(&node, 0, g_read_buf, size) != size) {
-        kfree(g_read_buf); g_read_buf = 0;
+    if (S->read_buf) { kfree(S->read_buf); S->read_buf = 0; }
+    S->read_buf = kmalloc((size_t)size + 1);
+    if (!S->read_buf) return 0;
+    if (size > 0 && read_range_impl(&node, 0, S->read_buf, size) != size) {
+        kfree(S->read_buf); S->read_buf = 0;
         return 0;
     }
-    ((uint8_t *)g_read_buf)[size] = 0;
+    ((uint8_t *)S->read_buf)[size] = 0;
     if (out_size) *out_size = size;
-    return (const char *)g_read_buf;
+    return (const char *)S->read_buf;
 }
 
 static uint64_t tfs3_size(const char *path) {
@@ -2202,7 +2194,7 @@ static int tfs3_read_range_step(void *handle, uint32_t *out_total) {
 
 static int tfs3_is_dir(const char *path) {
     char norm[T3_PATH_BUF];
-    if (!g_mounted || !normalize(path, norm)) return 0;
+    if (!S->mounted || !normalize(path, norm)) return 0;
     if (k_strcmp(norm, "/") == 0) return 1;
     struct t3_inode node;
     if (!lookup(path, 0, &node)) return 0;
@@ -2211,7 +2203,7 @@ static int tfs3_is_dir(const char *path) {
 
 static int tfs3_exists(const char *path) {
     char norm[T3_PATH_BUF];
-    if (!g_mounted || !normalize(path, norm)) return 0;
+    if (!S->mounted || !normalize(path, norm)) return 0;
     if (k_strcmp(norm, "/") == 0) return 1;
     uint64_t ino;
     return resolve(norm, &ino) ? 1 : 0;
@@ -2220,7 +2212,7 @@ static int tfs3_exists(const char *path) {
 static void tfs3_list(const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir)) {
     struct t3_inode dir;
     char norm[T3_PATH_BUF];
-    if (!g_mounted || !normalize(dir_path, norm)) return;
+    if (!S->mounted || !normalize(dir_path, norm)) return;
     uint64_t ino = T3_INO_ROOT;
     if (k_strcmp(norm, "/") != 0 && !resolve(norm, &ino)) return;
     if (!read_inode(ino, &dir) || dir.type != T3_TYPE_DIR) return;
@@ -2261,7 +2253,7 @@ static void tfs3_list(const char *dir_path, void (*cb)(const char *name, uint32_
 
 static int tfs3_stat(const char *path, struct fs_stat_info *out) {
     char norm[T3_PATH_BUF];
-    if (!g_mounted || !normalize(path, norm)) return 0;
+    if (!S->mounted || !normalize(path, norm)) return 0;
     if (k_strcmp(norm, "/") == 0) return 0; // root has no entry
     uint64_t ino;
     struct t3_inode node;
@@ -2275,24 +2267,24 @@ static int tfs3_stat(const char *path, struct fs_stat_info *out) {
 }
 
 static int tfs3_disk_usage(uint64_t *out_used, uint64_t *out_total) {
-    if (!g_mounted) {
+    if (!S->mounted) {
         if (out_used) *out_used = 0;
         if (out_total) *out_total = 0;
         return 1;
     }
     // Same contract as fs.h: usable data space only, metadata excluded.
     uint32_t groups[2];
-    int nb = backup_groups(g_sb.gc, groups);
+    int nb = backup_groups(S->sb.gc, groups);
     uint64_t total_data = 0, free_data = 0;
-    for (uint32_t g = 0; g < g_sb.gc; g++) {
+    for (uint32_t g = 0; g < S->sb.gc; g++) {
         // The group's REAL extent -- the last one may be partial, and
         // using T3_BPG here made `df` report a 16 MiB volume as 127 MB.
         // A size that lies is worse than no size at all.
         uint32_t span = group_span(g);
-        uint32_t data = span > g_meta_off ? span - g_meta_off : 0;
+        uint32_t data = span > S->meta_off ? span - S->meta_off : 0;
         for (int j = 0; j < nb; j++) if (groups[j] == g) data -= T3_BACKUP_BLOCKS;
         total_data += data;
-        free_data += g_gd[g].free_blocks;
+        free_data += S->gd[g].free_blocks;
     }
     if (out_total) *out_total = total_data * T3_BLOCK;
     if (out_used) *out_used = (total_data - free_data) * T3_BLOCK;
@@ -2318,7 +2310,7 @@ static int create_entry(const char *path, uint8_t type, uint64_t *out_ino) {
 
 static int create_entry_inner(const char *path, uint8_t type, uint64_t *out_ino) {
     char norm[T3_PATH_BUF];
-    if (!g_mounted || !normalize(path, norm)) return 0;
+    if (!S->mounted || !normalize(path, norm)) return 0;
     uint64_t existing;
     if (resolve(norm, &existing)) return 0; // caller decides what exists means
     uint64_t parent_ino;
@@ -2327,7 +2319,7 @@ static int create_entry_inner(const char *path, uint8_t type, uint64_t *out_ino)
     struct t3_inode parent;
     if (!read_inode(parent_ino, &parent) || parent.type != T3_TYPE_DIR) return 0;
 
-    uint32_t prefer_group = (uint32_t)(parent_ino / g_sb.ipg);
+    uint32_t prefer_group = (uint32_t)(parent_ino / S->sb.ipg);
     uint64_t ino = alloc_inode(prefer_group);
     if (!ino) return 0;
     // Block allocations below roll back via the alloc log (armed by
@@ -2375,7 +2367,7 @@ static int create_entry_inner(const char *path, uint8_t type, uint64_t *out_ino)
 
 static int tfs3_touch(const char *path) {
     char norm[T3_PATH_BUF];
-    if (!g_mounted || !normalize(path, norm)) return 0;
+    if (!S->mounted || !normalize(path, norm)) return 0;
     uint64_t ino;
     struct t3_inode node;
     if (resolve(norm, &ino)) {
@@ -2390,7 +2382,7 @@ static int tfs3_touch(const char *path) {
 
 static int tfs3_mkdir(const char *path) {
     char norm[T3_PATH_BUF];
-    if (!g_mounted || !normalize(path, norm)) return 0;
+    if (!S->mounted || !normalize(path, norm)) return 0;
     uint64_t ino;
     if (resolve(norm, &ino)) return 0; // exists (file OR dir) -- refuse
     return create_entry(path, T3_TYPE_DIR, 0);
@@ -2398,7 +2390,7 @@ static int tfs3_mkdir(const char *path) {
 
 static int tfs3_write_range(const char *path, uint64_t offset, const void *buf, uint32_t len) {
     char norm[T3_PATH_BUF];
-    if (!g_mounted || !normalize(path, norm)) return 0;
+    if (!S->mounted || !normalize(path, norm)) return 0;
     uint64_t ino;
     struct t3_inode node;
     if (!resolve(norm, &ino)) {
@@ -2411,7 +2403,7 @@ static int tfs3_write_range(const char *path, uint64_t offset, const void *buf, 
 
 static int tfs3_write(const char *path, const char *data, int append) {
     char norm[T3_PATH_BUF];
-    if (!g_mounted || !normalize(path, norm)) return 0;
+    if (!S->mounted || !normalize(path, norm)) return 0;
     uint64_t ino;
     struct t3_inode node;
     if (!resolve(norm, &ino)) {
@@ -2445,7 +2437,7 @@ static int tfs3_write(const char *path, const char *data, int append) {
 
 static int tfs3_delete(const char *path) {
     char norm[T3_PATH_BUF];
-    if (!g_mounted || !normalize(path, norm)) return 0;
+    if (!S->mounted || !normalize(path, norm)) return 0;
     if (k_strcmp(norm, "/") == 0) return 0;
     uint64_t ino;
     struct t3_inode node;
@@ -2521,7 +2513,7 @@ static int tfs3_delete(const char *path) {
 // filesystem for the same reason (see the design doc).
 static int tfs3_link(const char *existing, const char *newpath) {
     char norm[T3_PATH_BUF], newnorm[T3_PATH_BUF];
-    if (!g_mounted || !normalize(existing, norm) || !normalize(newpath, newnorm)) return 0;
+    if (!S->mounted || !normalize(existing, norm) || !normalize(newpath, newnorm)) return 0;
     uint64_t ino, clash;
     struct t3_inode node;
     if (!resolve(norm, &ino) || !read_inode(ino, &node)) return 0;
@@ -2600,7 +2592,7 @@ static int path_is_within(const char *parent, const char *child) {
 // with a message, instead of failing halfway.
 static int tfs3_rename(const char *oldpath, const char *newpath) {
     char oldn[T3_PATH_BUF], newn[T3_PATH_BUF];
-    if (!g_mounted || !normalize(oldpath, oldn) || !normalize(newpath, newn)) return 0;
+    if (!S->mounted || !normalize(oldpath, oldn) || !normalize(newpath, newn)) return 0;
     if (k_strcmp(oldn, "/") == 0 || k_strcmp(newn, "/") == 0) return 0;
     if (k_strcmp(oldn, newn) == 0) return 1; // renaming to itself changes nothing
 
@@ -2624,7 +2616,7 @@ static int tfs3_rename(const char *oldpath, const char *newpath) {
     int is_dir = (node.type == T3_TYPE_DIR);
     int credits = same_parent ? 3 : 4;
     if (is_dir && !same_parent) credits++; // the ".." fixup block
-    if (credits > (int)g_jslots) {
+    if (credits > (int)S->jslots) {
         klog_write("tfs3: this volume's journal is too small to move a directory "
                    "between parents (v1 format) -- reformat with `fsformat tfs3 confirm`\n");
         return 0;
@@ -2677,7 +2669,7 @@ static int tfs3_rename(const char *oldpath, const char *newpath) {
 // fsck reclaims, never a live file pointing at freed space.
 static int tfs3_truncate(const char *path, uint64_t size) {
     char norm[T3_PATH_BUF];
-    if (!g_mounted || !normalize(path, norm)) return 0;
+    if (!S->mounted || !normalize(path, norm)) return 0;
     uint64_t ino;
     struct t3_inode node;
     if (!resolve(norm, &ino) || !read_inode(ino, &node)) return 0;
@@ -2726,7 +2718,7 @@ struct t3_write_step {
 
 static void *tfs3_write_range_begin(const char *path, uint64_t offset, const void *buf, uint32_t len) {
     char norm[T3_PATH_BUF];
-    if (!g_mounted || !normalize(path, norm)) return 0;
+    if (!S->mounted || !normalize(path, norm)) return 0;
     uint64_t ino;
     if (!resolve(norm, &ino)) {
         if (!create_entry(path, T3_TYPE_FILE, &ino)) return 0;
@@ -2758,7 +2750,7 @@ static int tfs3_write_range_step(void *handle) {
         uint32_t chunk = T3_BLOCK - within;
         if (chunk > st->len - st->total) chunk = st->len - st->total;
 
-        uint32_t prefer_group = (uint32_t)(st->ino / g_sb.ipg);
+        uint32_t prefer_group = (uint32_t)(st->ino / S->sb.ipg);
         uint32_t leaf_blk, leaf_slot, existing;
         if (!map_get_or_alloc_tables(&st->node, bi, prefer_group, &leaf_blk, &leaf_slot, &existing)) {
             pcache_drop(); alog_rollback(); kfree(st); return 2 /* FS_STEP_FAILED */;
@@ -2830,11 +2822,11 @@ struct t3_fsck {
 };
 
 static int fsck_block_ok(uint32_t blk) {
-    if (blk < g_group0 + g_meta_off) return 0;
-    uint32_t g = (blk - g_group0) / T3_BPG;
-    uint32_t i = (blk - g_group0) % T3_BPG;
-    if (g >= g_sb.gc) return 0;
-    if (i < g_meta_off || i >= group_data_end(g)) return 0;
+    if (blk < S->group0 + S->meta_off) return 0;
+    uint32_t g = (blk - S->group0) / T3_BPG;
+    uint32_t i = (blk - S->group0) % T3_BPG;
+    if (g >= S->sb.gc) return 0;
+    if (i < S->meta_off || i >= group_data_end(g)) return 0;
     return 1;
 }
 
@@ -2842,7 +2834,7 @@ static int fsck_block_ok(uint32_t blk) {
 // Returns 1 if the block is usable (in range, first reference).
 static int fsck_mark_block(struct t3_fsck *fk, uint32_t blk) {
     if (!fsck_block_ok(blk)) { fk->r->out_of_range++; return 0; }
-    uint32_t idx = blk - g_group0;
+    uint32_t idx = blk - S->group0;
     uint32_t g = idx / T3_BPG, i = idx % T3_BPG;
     uint8_t *b = &fk->breach[(size_t)g * T3_BLOCK + (i >> 3)];
     if (*b & (1u << (i & 7))) { fk->r->double_allocated++; return 0; }
@@ -2900,14 +2892,14 @@ static void fsck_walk_inode_blocks(struct t3_fsck *fk, uint64_t ino, struct t3_i
 }
 
 static void fsck_mark_ino(struct t3_fsck *fk, uint64_t ino) {
-    uint32_t g = (uint32_t)(ino / g_sb.ipg), i = (uint32_t)(ino % g_sb.ipg);
-    if (g >= g_sb.gc) return;
+    uint32_t g = (uint32_t)(ino / S->sb.ipg), i = (uint32_t)(ino % S->sb.ipg);
+    if (g >= S->sb.gc) return;
     fk->ireach[(size_t)g * T3_BLOCK + (i >> 3)] |= (uint8_t)(1u << (i & 7));
 }
 
 static int fsck_ino_reached(struct t3_fsck *fk, uint64_t ino) {
-    uint32_t g = (uint32_t)(ino / g_sb.ipg), i = (uint32_t)(ino % g_sb.ipg);
-    if (g >= g_sb.gc) return 1;
+    uint32_t g = (uint32_t)(ino / S->sb.ipg), i = (uint32_t)(ino % S->sb.ipg);
+    if (g >= S->sb.gc) return 1;
     return (fk->ireach[(size_t)g * T3_BLOCK + (i >> 3)] >> (i & 7)) & 1;
 }
 
@@ -2945,7 +2937,7 @@ static void fsck_walk_dir(struct t3_fsck *fk, uint64_t dir_ino, uint64_t parent_
                 int is_dot = (nl == 1 && dirblk[off + 7] == '.');
                 int is_dotdot = (nl == 2 && dirblk[off + 7] == '.' && dirblk[off + 8] == '.');
                 uint64_t child = e_ino;
-                if (child < (uint64_t)g_sb.gc * g_sb.ipg) {
+                if (child < (uint64_t)S->sb.gc * S->sb.ipg) {
                     uint8_t *nc = &fk->names[child];
                     if (*nc < 255) (*nc)++;
                 }
@@ -2985,14 +2977,14 @@ static int tfs3_check(int repair, struct fs_check_result *out) {
     struct fs_check_result local;
     struct fs_check_result *r = out ? out : &local;
     k_memset(r, 0, sizeof(*r));
-    if (!g_mounted) return 0;
+    if (!S->mounted) return 0;
 
     struct t3_fsck fk;
     k_memset(&fk, 0, sizeof(fk));
     fk.r = r;
     fk.repair = repair;
-    size_t bmbytes = (size_t)g_sb.gc * T3_BLOCK;
-    uint64_t total_inodes = (uint64_t)g_sb.gc * g_sb.ipg;
+    size_t bmbytes = (size_t)S->sb.gc * T3_BLOCK;
+    uint64_t total_inodes = (uint64_t)S->sb.gc * S->sb.ipg;
     fk.breach = kmalloc(bmbytes);
     fk.ireach = kmalloc(bmbytes);
     fk.names = kmalloc((size_t)total_inodes);
@@ -3013,13 +3005,13 @@ static int tfs3_check(int repair, struct fs_check_result *out) {
     // Reconcile blocks: reach map vs allocation bitmap, per group.
     // Metadata and backup regions are allocated-by-design and outside
     // the reach map, so only the data area is compared.
-    for (uint32_t g = 0; g < g_sb.gc; g++) {
+    for (uint32_t g = 0; g < S->sb.gc; g++) {
         uint32_t end = group_data_end(g);
         uint32_t free_b = 0;
         uint32_t leak_run_start = 0, leak_run_len = 0;
         for (uint32_t i = 0; i < T3_BPG; i++) {
             int alloc = bbm_test(g, i);
-            if (i < g_meta_off || i >= end) continue; // format-owned
+            if (i < S->meta_off || i >= end) continue; // format-owned
             int reach = (fk.breach[(size_t)g * T3_BLOCK + (i >> 3)] >> (i & 7)) & 1;
             if (alloc && !reach) {
                 r->leaked++;
@@ -3040,8 +3032,8 @@ static int tfs3_check(int repair, struct fs_check_result *out) {
 
         // Inode bitmap + free counts: reconcile, repair-only writes.
         uint32_t free_i = 0;
-        for (uint32_t i = 0; i < g_sb.ipg; i++) {
-            uint64_t ino = (uint64_t)g * g_sb.ipg + i;
+        for (uint32_t i = 0; i < S->sb.ipg; i++) {
+            uint64_t ino = (uint64_t)g * S->sb.ipg + i;
             int alloc = ibm_test(g, i);
             int reach = (fk.ireach[(size_t)g * T3_BLOCK + (i >> 3)] >> (i & 7)) & 1;
             if (g == 0 && i == 0) { free_i += !alloc; continue; } // ino 0 reserved
@@ -3062,11 +3054,11 @@ static int tfs3_check(int repair, struct fs_check_result *out) {
             if (!ibm_test(g, i)) free_i++;
         }
 
-        if (g_gd[g].free_blocks != free_b || g_gd[g].free_inodes != free_i) {
+        if (S->gd[g].free_blocks != free_b || S->gd[g].free_inodes != free_i) {
             if (repair) {
-                g_gd[g].free_blocks = free_b;
-                g_gd[g].free_inodes = free_i;
-                mark_dirty(g_gdt_dirty, g);
+                S->gd[g].free_blocks = free_b;
+                S->gd[g].free_inodes = free_i;
+                mark_dirty(S->gdt_dirty, g);
             }
         }
     }
@@ -3107,10 +3099,10 @@ static int tfs3_check(int repair, struct fs_check_result *out) {
         // A primary superblock that failed at mount (we're running
         // from a backup) gets rewritten now, deliberately here and
         // never automatically at mount -- see the design doc.
-        if (g_mounted_from_backup) {
+        if (S->mounted_from_backup) {
             if (write_superblock_everywhere()) {
                 klog_write("tfs3 fsck: primary superblock restored from the mounted backup\n");
-                g_mounted_from_backup = 0;
+                S->mounted_from_backup = 0;
             }
         }
     }
@@ -3121,27 +3113,41 @@ static int tfs3_check(int repair, struct fs_check_result *out) {
     return 1;
 }
 
-// The two entry points that may be handed a FOREIGN device. See
-// struct t3_saved: they restore this backend's own volume state on
-// EVERY path, which is why the bodies are wrapped rather than edited --
-// tfs3_format_inner() has seven early returns and one missed restore
-// would be the corruption this exists to prevent.
-static int tfs3_wipe(const struct block_device *dev) {
-    struct t3_saved saved;
-    t3_save(&saved);
-    int r = tfs3_wipe_inner(dev);
-    t3_restore(&saved);
-    return r;
+// ---- per-mount state: allocate, activate, free ----------------------
+//
+// format() and wipe() are handed a device and repoint this state at it.
+// That used to be catastrophic -- `mkfs` on a second disk made the
+// mounted root read the wrong volume, twice taking /bin with it -- and
+// is now merely local: the mount table hands those two a SCRATCH state,
+// so there is nothing of anybody's to restore.
+static void *tfs3_state_alloc(void) {
+    struct t3_state *st = kmalloc(sizeof *st);
+    if (!st) return NULL;
+    k_memset(st, 0, sizeof *st);
+    // v1's geometry, which is what the declarations used to carry: a
+    // mount overwrites all four in set_geometry_version(), and a probe
+    // reads them before it knows the version.
+    st->group0 = T3_V1_GROUP0;
+    st->gdt_block = T3_V1_GDT;
+    st->jdata_block = T3_V1_JDATA;
+    st->jslots = T3_V1_JSLOTS;
+    return st;
 }
 
-static int tfs3_format(const struct block_device *dev) {
-    struct t3_saved saved;
-    t3_save(&saved);
-    int r = tfs3_format_inner(dev);
-    t3_restore(&saved);
-    return r;
+static void *tfs3_state_activate(void *st) {
+    void *prev = S;
+    S = st;
+    return prev;
 }
 
+static void tfs3_state_free(void *st) {
+    if (!st) return;
+    void *prev = tfs3_state_activate(st);
+    unmount_state();          // the caches hanging off it, and the read buffer
+    if (S->read_buf) { kfree(S->read_buf); S->read_buf = 0; }
+    tfs3_state_activate((prev == st) ? NULL : prev);
+    kfree(st);
+}
 
 const struct fs_ops tfs3_ops = {
     .name = "tfs3",
@@ -3151,16 +3157,17 @@ const struct fs_ops tfs3_ops = {
     // see fs.h's FS_CAP_* comment on exactly this distinction.
     .caps = FS_CAP_INODES | FS_CAP_HARDLINKS | FS_CAP_SYMLINKS | FS_CAP_EPOCH_TIME,
     .volume_relative = 1, // all I/O is volume-relative through vol_read/vol_write -- mountable from a partition
-    // ONCE. The superblock, group descriptors, both bitmaps, the
-    // journal staging buffers and the block scratch are all
-    // module-level statics, so a second mount would re-point one set of
-    // them and leave the first mount reading the second's volume --
-    // silently. Making them per-instance is its own project; see
-    // docs/roadmap.md's "Real mount points".
-    .max_mounts = 1,
+    // MORE THAN ONCE, because every per-volume field is in struct
+    // t3_state and the VFS makes one current per call. Two is what an
+    // installer needs (its own root, plus the target it is writing);
+    // the ceiling is the mount table's, not this backend's.
+    .max_mounts = MOUNT_MAX,
+    .state_alloc = tfs3_state_alloc,
+    .state_free = tfs3_state_free,
+    .state_activate = tfs3_state_activate,
     .probe = tfs3_probe,
-    .wipe = tfs3_wipe,
-    .format = tfs3_format,
+    .wipe = tfs3_wipe_inner,
+    .format = tfs3_format_inner,
     .init = tfs3_init,
     .touch = tfs3_touch,
     .write = tfs3_write,

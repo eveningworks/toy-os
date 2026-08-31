@@ -54,6 +54,7 @@
 #include "fs_ops.h"
 #include "block.h" // struct block_device -- the ops signatures take one
 #include "ramfs.h"
+#include "mount.h" // MOUNT_MAX -- the mount limit this backend declares
 #include "heap.h"
 #include "klog.h"
 #include "kfmt.h"
@@ -84,7 +85,7 @@
 
 struct rnode {
     char name[RAMFS_NAME_MAX];
-    int32_t parent;         // index into g_nodes; -1 only for the root
+    int32_t parent;         // index into S->nodes; -1 only for the root
     uint8_t is_dir;
     uint64_t size;          // bytes; a directory's stays 0
     uint64_t created;
@@ -93,16 +94,23 @@ struct rnode {
     uint32_t chunk_cap;     // entries in chunks[], not bytes
 };
 
-static struct rnode *g_nodes[RAMFS_MAX_NODES];
-static int g_mounted = 0;
-static uint64_t g_budget = 0;   // bytes ramfs may hold, decided at mount
-static uint64_t g_used = 0;     // bytes it currently holds
+// PER MOUNT, in struct ramfs_state, reached through `S` -- the mount the
+// current call belongs to (fs_ops.h). nodes[] IS the filesystem, so a
+// second ramfs mount is simply a second tree.
+struct ramfs_state {
+    struct rnode *nodes[RAMFS_MAX_NODES];
+    int mounted;
+    uint64_t budget;   // bytes ramfs may hold, decided at mount
+    uint64_t used;     // bytes it currently holds
 
-// The whole-file staging buffer read() hands back a pointer into --
-// the same contract tfs3.c's read() has, and the same hazard: it is
-// freed on the next call. fs.h's own comment tells kernel-side callers
-// to prefer fs_read_into(); nothing changes here.
-static void *g_read_buf = 0;
+    // The whole-file staging buffer read() hands back a pointer into --
+    // the same contract tfs3.c's read() has, and the same hazard: it is
+    // freed on the next call. fs.h's own comment tells kernel-side
+    // callers to prefer fs_read_into(); nothing changes here.
+    void *read_buf;
+};
+
+static struct ramfs_state *S;   // NULL between calls -- see fs_ops.h
 
 // ---- time -----------------------------------------------------------
 
@@ -110,12 +118,12 @@ static void *g_read_buf = 0;
 // the test seam overrides the budget after init() and must not leave a
 // log claiming the default.
 static void ramfs_log_budget(const char *why) {
-    if (g_budget >= 1024 * 1024)
+    if (S->budget >= 1024 * 1024)
         klog_printf("ramfs: mounted, budget %u MiB (%s)\n",
-                    (unsigned)(g_budget / (1024 * 1024)), why);
+                    (unsigned)(S->budget / (1024 * 1024)), why);
     else
         klog_printf("ramfs: mounted, budget %u KiB (%s)\n",
-                    (unsigned)(g_budget / 1024), why);
+                    (unsigned)(S->budget / 1024), why);
 }
 
 static uint64_t now_epoch(void) {
@@ -127,13 +135,13 @@ static uint64_t now_epoch(void) {
 // ---- the budget -----------------------------------------------------
 
 static int budget_take(uint64_t bytes) {
-    if (g_used + bytes > g_budget) return 0;
-    g_used += bytes;
+    if (S->used + bytes > S->budget) return 0;
+    S->used += bytes;
     return 1;
 }
 
 static void budget_give(uint64_t bytes) {
-    g_used = (g_used >= bytes) ? g_used - bytes : 0;
+    S->used = (S->used >= bytes) ? S->used - bytes : 0;
 }
 
 // ---- nodes ----------------------------------------------------------
@@ -153,18 +161,18 @@ static void free_chunks(struct rnode *n) {
 }
 
 static void node_free(int idx) {
-    struct rnode *n = g_nodes[idx];
+    struct rnode *n = S->nodes[idx];
     if (!n) return;
     free_chunks(n);
     kfree(n);
-    g_nodes[idx] = 0;
+    S->nodes[idx] = 0;
     budget_give(sizeof(struct rnode));
 }
 
 static int node_alloc(const char *name, int parent, int is_dir) {
     if (!budget_take(sizeof(struct rnode))) return -1;
     for (int i = 0; i < RAMFS_MAX_NODES; i++) {
-        if (g_nodes[i]) continue;
+        if (S->nodes[i]) continue;
         struct rnode *n = kmalloc(sizeof(struct rnode));
         if (!n) { budget_give(sizeof(struct rnode)); return -1; }
         k_memset(n, 0, sizeof *n);
@@ -172,7 +180,7 @@ static int node_alloc(const char *name, int parent, int is_dir) {
         n->parent = (int32_t)parent;
         n->is_dir = (uint8_t)(is_dir != 0);
         n->created = n->modified = now_epoch();
-        g_nodes[i] = n;
+        S->nodes[i] = n;
         return i;
     }
     budget_give(sizeof(struct rnode));
@@ -195,7 +203,7 @@ static int name_matches(const struct rnode *n, const char *seg, int len) {
 
 static int find_child(int parent, const char *seg, int len) {
     for (int i = 0; i < RAMFS_MAX_NODES; i++) {
-        struct rnode *n = g_nodes[i];
+        struct rnode *n = S->nodes[i];
         if (!n || n->parent != parent) continue;
         if (name_matches(n, seg, len)) return i;
     }
@@ -239,7 +247,7 @@ static int walk(const char *path, int stop_before_last,
         }
         int next = find_child(cur, seg, len);
         if (next < 0) return -1;
-        if (!last && !g_nodes[next]->is_dir) return -1; // a file used as a directory
+        if (!last && !S->nodes[next]->is_dir) return -1; // a file used as a directory
         cur = next;
         if (*p == '/') {
             p++;
@@ -266,7 +274,7 @@ static int resolve_new(const char *path, int *out_parent,
                        const char **out_leaf, int *out_len) {
     const char *leaf; int len;
     int parent = walk(path, 1, &leaf, &len);
-    if (parent < 0 || !g_nodes[parent] || !g_nodes[parent]->is_dir) return 0;
+    if (parent < 0 || !S->nodes[parent] || !S->nodes[parent]->is_dir) return 0;
     *out_parent = parent;
     *out_leaf = leaf;
     *out_len = len;
@@ -275,7 +283,7 @@ static int resolve_new(const char *path, int *out_parent,
 
 static int has_children(int idx) {
     for (int i = 0; i < RAMFS_MAX_NODES; i++)
-        if (g_nodes[i] && g_nodes[i]->parent == idx) return 1;
+        if (S->nodes[i] && S->nodes[i]->parent == idx) return 1;
     return 0;
 }
 
@@ -378,9 +386,9 @@ static int ramfs_wipe(const struct block_device *dev) {
 
 static void drop_everything(void) {
     for (int i = 1; i < RAMFS_MAX_NODES; i++) node_free(i);
-    if (g_nodes[0]) node_free(0);
-    if (g_read_buf) { kfree(g_read_buf); g_read_buf = 0; }
-    g_used = 0;
+    if (S->nodes[0]) node_free(0);
+    if (S->read_buf) { kfree(S->read_buf); S->read_buf = 0; }
+    S->used = 0;
 }
 
 static int ramfs_format(const struct block_device *dev) {
@@ -398,22 +406,22 @@ static int ramfs_init(const struct block_device *dev) {
     // compile time so `make run MEM=512` and a 4 GiB machine both get
     // something sensible, and so the number in `df` means something.
     uint64_t free_bytes = pmm_free_frames() * 4096ull;
-    g_budget = free_bytes / 2;
+    S->budget = free_bytes / 2;
 
     // The root. If this fails the machine has no filesystem at all,
     // which is exactly what ramfs exists to prevent -- so it is the one
     // allocation whose failure is worth a loud line.
-    g_nodes[0] = kmalloc(sizeof(struct rnode));
-    if (!g_nodes[0]) {
+    S->nodes[0] = kmalloc(sizeof(struct rnode));
+    if (!S->nodes[0]) {
         klog_write("ramfs: cannot allocate a root directory -- not mounted\n");
         return -1;
     }
-    k_memset(g_nodes[0], 0, sizeof(struct rnode));
-    g_nodes[0]->parent = -1;
-    g_nodes[0]->is_dir = 1;
-    g_nodes[0]->created = g_nodes[0]->modified = now_epoch();
-    g_used = sizeof(struct rnode);
-    g_mounted = 1;
+    k_memset(S->nodes[0], 0, sizeof(struct rnode));
+    S->nodes[0]->parent = -1;
+    S->nodes[0]->is_dir = 1;
+    S->nodes[0]->created = S->nodes[0]->modified = now_epoch();
+    S->used = sizeof(struct rnode);
+    S->mounted = 1;
 
     ramfs_log_budget("half of free memory");
     // 0, NOT 1: mounted, and never persistent. fs_is_persistent()
@@ -423,11 +431,11 @@ static int ramfs_init(const struct block_device *dev) {
 }
 
 static int ramfs_touch(const char *path) {
-    if (!g_mounted) return 0;
+    if (!S->mounted) return 0;
     int existing = find(path);
     if (existing >= 0) {
-        if (g_nodes[existing]->is_dir) return 0;
-        g_nodes[existing]->modified = now_epoch();
+        if (S->nodes[existing]->is_dir) return 0;
+        S->nodes[existing]->modified = now_epoch();
         return 1;
     }
     int parent; const char *leaf; int len;
@@ -439,7 +447,7 @@ static int ramfs_touch(const char *path) {
 }
 
 static int ramfs_mkdir(const char *path) {
-    if (!g_mounted) return 0;
+    if (!S->mounted) return 0;
     if (find(path) >= 0) return 0;
     int parent; const char *leaf; int len;
     if (!resolve_new(path, &parent, &leaf, &len)) return 0;
@@ -450,14 +458,14 @@ static int ramfs_mkdir(const char *path) {
 }
 
 static int ramfs_write(const char *path, const char *data, int append) {
-    if (!g_mounted || !data) return 0;
+    if (!S->mounted || !data) return 0;
     int idx = find(path);
     if (idx < 0) {
         if (!ramfs_touch(path)) return 0;
         idx = find(path);
         if (idx < 0) return 0;
     }
-    struct rnode *n = g_nodes[idx];
+    struct rnode *n = S->nodes[idx];
     if (n->is_dir) return 0;
     uint32_t len = (uint32_t)k_strlen(data);
     if (!append) {
@@ -469,59 +477,59 @@ static int ramfs_write(const char *path, const char *data, int append) {
 }
 
 static int ramfs_del(const char *path) {
-    if (!g_mounted) return 0;
+    if (!S->mounted) return 0;
     int idx = find(path);
     if (idx <= 0) return 0;                  // no such thing, or the root
-    if (g_nodes[idx]->is_dir && has_children(idx)) return 0;
+    if (S->nodes[idx]->is_dir && has_children(idx)) return 0;
     node_free(idx);
     return 1;
 }
 
 static const char *ramfs_read(const char *path, uint32_t *out_size) {
     if (out_size) *out_size = 0;
-    if (!g_mounted) return 0;
+    if (!S->mounted) return 0;
     int idx = find(path);
-    if (idx < 0 || g_nodes[idx]->is_dir) return 0;
-    struct rnode *n = g_nodes[idx];
+    if (idx < 0 || S->nodes[idx]->is_dir) return 0;
+    struct rnode *n = S->nodes[idx];
     if (n->size > 0xFFFFFFFFull) return 0;
 
-    if (g_read_buf) { kfree(g_read_buf); g_read_buf = 0; }
-    g_read_buf = kmalloc((size_t)n->size + 1);
-    if (!g_read_buf) return 0;
-    if (n->size && read_at(n, 0, g_read_buf, (uint32_t)n->size) != n->size) {
-        kfree(g_read_buf); g_read_buf = 0;
+    if (S->read_buf) { kfree(S->read_buf); S->read_buf = 0; }
+    S->read_buf = kmalloc((size_t)n->size + 1);
+    if (!S->read_buf) return 0;
+    if (n->size && read_at(n, 0, S->read_buf, (uint32_t)n->size) != n->size) {
+        kfree(S->read_buf); S->read_buf = 0;
         return 0;
     }
-    ((uint8_t *)g_read_buf)[n->size] = 0;
+    ((uint8_t *)S->read_buf)[n->size] = 0;
     if (out_size) *out_size = (uint32_t)n->size;
-    return (const char *)g_read_buf;
+    return (const char *)S->read_buf;
 }
 
 static uint64_t ramfs_size(const char *path) {
-    if (!g_mounted) return 0;
+    if (!S->mounted) return 0;
     int idx = find(path);
-    if (idx < 0 || g_nodes[idx]->is_dir) return 0;
-    return g_nodes[idx]->size;
+    if (idx < 0 || S->nodes[idx]->is_dir) return 0;
+    return S->nodes[idx]->size;
 }
 
 static uint32_t ramfs_read_range(const char *path, uint64_t offset, void *buf, uint32_t len) {
-    if (!g_mounted || !buf || !len) return 0;
+    if (!S->mounted || !buf || !len) return 0;
     int idx = find(path);
-    if (idx < 0 || g_nodes[idx]->is_dir) return 0;
-    return read_at(g_nodes[idx], offset, buf, len);
+    if (idx < 0 || S->nodes[idx]->is_dir) return 0;
+    return read_at(S->nodes[idx], offset, buf, len);
 }
 
 static int ramfs_write_range(const char *path, uint64_t offset, const void *buf, uint32_t len) {
-    if (!g_mounted || !buf) return 0;
+    if (!S->mounted || !buf) return 0;
     int idx = find(path);
     if (idx < 0) {
         if (!ramfs_touch(path)) return 0;
         idx = find(path);
         if (idx < 0) return 0;
     }
-    if (g_nodes[idx]->is_dir) return 0;
+    if (S->nodes[idx]->is_dir) return 0;
     if (len == 0) return 1;
-    return write_at(g_nodes[idx], offset, buf, len);
+    return write_at(S->nodes[idx], offset, buf, len);
 }
 
 // The steppable pairs. They exist so a caller can avoid BLOCKING on
@@ -570,7 +578,7 @@ static int ramfs_read_range_step(void *handle, uint32_t *out_total) {
 }
 
 static int ramfs_rename(const char *oldpath, const char *newpath) {
-    if (!g_mounted) return 0;
+    if (!S->mounted) return 0;
     int idx = find(oldpath);
     if (idx <= 0) return 0;                   // nothing there, or the root
     if (find(newpath) >= 0) return 0;         // destination taken
@@ -581,10 +589,10 @@ static int ramfs_rename(const char *oldpath, const char *newpath) {
     // A directory may not be moved inside itself -- that detaches the
     // subtree from the root and makes the tree a forest, which nothing
     // below would ever notice.
-    for (int p = parent; p >= 0; p = g_nodes[p]->parent)
+    for (int p = parent; p >= 0; p = S->nodes[p]->parent)
         if (p == idx) return 0;
 
-    struct rnode *n = g_nodes[idx];
+    struct rnode *n = S->nodes[idx];
     k_memcpy(n->name, leaf, (size_t)len);
     n->name[len] = 0;
     n->parent = (int32_t)parent;
@@ -593,10 +601,10 @@ static int ramfs_rename(const char *oldpath, const char *newpath) {
 }
 
 static int ramfs_truncate(const char *path, uint64_t size) {
-    if (!g_mounted) return 0;
+    if (!S->mounted) return 0;
     int idx = find(path);
-    if (idx < 0 || g_nodes[idx]->is_dir) return 0;
-    struct rnode *n = g_nodes[idx];
+    if (idx < 0 || S->nodes[idx]->is_dir) return 0;
+    struct rnode *n = S->nodes[idx];
     if (size == n->size) return 1;
 
     if (size < n->size) {
@@ -624,23 +632,23 @@ static int ramfs_truncate(const char *path, uint64_t size) {
 }
 
 static int ramfs_is_dir(const char *path) {
-    if (!g_mounted) return 0;
+    if (!S->mounted) return 0;
     int idx = find(path);
-    return idx >= 0 && g_nodes[idx]->is_dir;
+    return idx >= 0 && S->nodes[idx]->is_dir;
 }
 
 static int ramfs_exists(const char *path) {
-    if (!g_mounted) return 0;
+    if (!S->mounted) return 0;
     return find(path) >= 0;
 }
 
 static void ramfs_list(const char *dir_path, void (*cb)(const char *, uint32_t, int)) {
-    if (!g_mounted || !cb) return;
+    if (!S->mounted || !cb) return;
     int dir = find(dir_path);
-    if (dir < 0 || !g_nodes[dir]->is_dir) return;
+    if (dir < 0 || !S->nodes[dir]->is_dir) return;
     int emitted = 0;
     for (int i = 0; i < RAMFS_MAX_NODES && emitted < FS_MAX_FILES; i++) {
-        struct rnode *n = g_nodes[i];
+        struct rnode *n = S->nodes[i];
         if (!n || n->parent != dir) continue;
         cb(n->name, (uint32_t)n->size, n->is_dir);
         emitted++;
@@ -648,7 +656,7 @@ static void ramfs_list(const char *dir_path, void (*cb)(const char *, uint32_t, 
 }
 
 static int ramfs_stat(const char *path, struct fs_stat_info *out) {
-    if (!g_mounted || !out) return 0;
+    if (!S->mounted || !out) return 0;
     int idx = find(path);
     if (idx < 0) return 0;
     // The node index IS the inode number: stable for the life of the
@@ -656,21 +664,21 @@ static int ramfs_stat(const char *path, struct fs_stat_info *out) {
     // synthetic in the sense FS_CAP_INODES means (nothing on a disk
     // carries it), which is why that bit stays clear.
     out->ino = (uint64_t)idx;
-    out->created = g_nodes[idx]->created;
-    out->modified = g_nodes[idx]->modified;
+    out->created = S->nodes[idx]->created;
+    out->modified = S->nodes[idx]->modified;
     return 1;
 }
 
 static int ramfs_disk_usage(uint64_t *out_used, uint64_t *out_total) {
-    if (!g_mounted) return 0;
-    if (out_used) *out_used = g_used;
-    if (out_total) *out_total = g_budget;
+    if (!S->mounted) return 0;
+    if (out_used) *out_used = S->used;
+    if (out_total) *out_total = S->budget;
     return 1;
 }
 
 static int ramfs_check(int repair, struct fs_check_result *out) {
     (void)repair;
-    if (!g_mounted || !out) return 0;
+    if (!S->mounted || !out) return 0;
     k_memset(out, 0, sizeof *out);
     // A filesystem with no on-disk representation cannot be corrupt in
     // the sense fsck means: there is no bitmap to disagree with a
@@ -678,12 +686,37 @@ static int ramfs_check(int repair, struct fs_check_result *out) {
     // than a filesystem one. What IS worth reporting is the shape of
     // what is here, so `fsck` says something true instead of nothing.
     for (int i = 0; i < RAMFS_MAX_NODES; i++) {
-        if (!g_nodes[i]) continue;
+        if (!S->nodes[i]) continue;
         out->records_used++;
-        for (uint32_t c = 0; c < g_nodes[i]->chunk_cap; c++)
-            if (g_nodes[i]->chunks[c]) out->blocks_referenced++;
+        for (uint32_t c = 0; c < S->nodes[i]->chunk_cap; c++)
+            if (S->nodes[i]->chunks[c]) out->blocks_referenced++;
     }
     return 1;
+}
+
+// ---- per-mount state ------------------------------------------------
+
+static void *ramfs_state_alloc(void) {
+    struct ramfs_state *st = kmalloc(sizeof *st);
+    if (!st) return NULL;
+    k_memset(st, 0, sizeof *st);
+    return st;
+}
+
+static void *ramfs_state_activate(void *st) {
+    void *prev = S;
+    S = st;
+    return prev;
+}
+
+static void ramfs_state_free(void *st) {
+    if (!st) return;
+    void *prev = ramfs_state_activate(st);
+    drop_everything();                 // every node, and the chunks under it
+    node_free(0);
+    if (S->read_buf) { kfree(S->read_buf); S->read_buf = 0; }
+    ramfs_state_activate((prev == st) ? NULL : prev);
+    kfree(st);
 }
 
 const struct fs_ops ramfs_ops = {
@@ -697,12 +730,15 @@ const struct fs_ops ramfs_ops = {
     // does not go through the block layer at all, so try_partitions()
     // must never offer it a partition. See fs_ops.h.
     .volume_relative = 0,
-    // ONCE, and here that is a property of the node table rather than a
-    // limitation to fix later: g_nodes[] IS the filesystem. A second
-    // ramfs mount would be a second tree, which needs the state to be
-    // per-instance -- worth doing when something wants two scratch
-    // filesystems, and not before.
-    .max_mounts = 1,
+    // MORE THAN ONCE: nodes[] is per mount now, so a second ramfs is
+    // simply a second tree. Each one takes its own budget at mount --
+    // half of what was free THEN -- so two of them can between them
+    // promise more than the machine has; the allocator refusing is what
+    // stops that, not the budget.
+    .max_mounts = MOUNT_MAX,
+    .state_alloc = ramfs_state_alloc,
+    .state_free = ramfs_state_free,
+    .state_activate = ramfs_state_activate,
     .probe = ramfs_probe,
     .wipe = ramfs_wipe,
     .format = ramfs_format,
@@ -736,19 +772,29 @@ const struct fs_ops ramfs_ops = {
 // cannot simply mount ramfs and swap the active backend out from under
 // the rest of the suite. They drive these directly instead, which is
 // the same shape partition_test.c uses for the block device.
+// THE TEST SEAM OWNS A STATE, because a KTEST drives this backend
+// directly and fs_ops.h's contract is that no state is current between
+// calls. One at a time, which is all a KTEST needs; mount_test.c is
+// where two ramfs mounts at once are asserted.
+static void *g_test_state;
+
 int ramfs_test_mount(uint64_t budget_bytes) {
-    int r = ramfs_init(NULL);
-    if (r < 0) return 0;
+    ramfs_test_unmount();
+    g_test_state = ramfs_state_alloc();
+    if (!g_test_state) return 0;
+    ramfs_state_activate(g_test_state);
+    if (ramfs_init(NULL) < 0) { ramfs_test_unmount(); return 0; }
     if (budget_bytes) {
-        g_budget = budget_bytes;
+        S->budget = budget_bytes;
         ramfs_log_budget("test override");
     }
     return 1;
 }
 
 void ramfs_test_unmount(void) {
-    drop_everything();
-    g_mounted = 0;
+    if (!g_test_state) return;
+    ramfs_state_free(g_test_state);
+    g_test_state = 0;
 }
 
-uint64_t ramfs_test_used(void) { return g_used; }
+uint64_t ramfs_test_used(void) { return S->used; }

@@ -61,7 +61,41 @@ struct mount {
     const struct block_device *dev; // NULL for a backend with no volume (ramfs)
     unsigned flags;                 // MNT_*
     int persistent;
+
+    // This mount's backend state (fs_ops.h's state_alloc), or NULL for
+    // a backend that declares none. It is what makes two mounts of one
+    // backend two filesystems rather than one read twice.
+    void *state;
 };
+
+// ---- making a mount's backend state current -------------------------
+//
+// EVERY backend call runs between these two. mount_enter() points the
+// backend at this mount and hands back what was current; mount_leave()
+// puts that back. RESTORE, not clear -- they NEST, because an fs_list()
+// callback that calls fs_* runs a whole enter/leave inside the walk.
+// At the outermost level the previous state is NULL, so a backend
+// reached with no enter at all still faults rather than reading
+// whichever volume ran last.
+//
+// Both are cheap (one indirect store) and both are safe on a backend
+// with no state ops.
+void *mount_enter(const struct mount *m);
+void mount_leave(const struct mount *m, void *prev);
+
+// A SCRATCH state, for an operation on a volume nothing has mounted:
+// probe, format, wipe. Returns 0 only when the backend could not
+// allocate one. This is what lets `mkfs` point a backend at a foreign
+// device without a mounted one noticing -- there is no longer anybody's
+// state to disturb, so there is nothing to save and restore.
+struct fs_scratch {
+    const struct fs_ops *fs;
+    void *st;
+    void *prev;
+};
+
+int mount_scratch_begin(const struct fs_ops *fs, struct fs_scratch *sc);
+void mount_scratch_end(struct fs_scratch *sc);
 
 // Which mount answers for `path`, and what the backend should be
 // handed. `out_sub` must be at least FS_PATH_MAX bytes; it receives the

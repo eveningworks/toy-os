@@ -365,7 +365,7 @@ No dependency on the phases above; ordered among themselves.
 - [x] ~~A mount table (path prefix -> backend), replacing vfs.c's single `g_fs`~~ done -- `kernel/fs/mount.c`
 - [x] ~~Path resolution that picks a backend per-path~~ done -- longest prefix, at a component boundary
 - [x] ~~`mount`/`umount` shell commands~~ done -- `/bin` programs, over `SYS_MOUNT`/`SYS_UMOUNT`
-- [ ] Mount a second TFS3 image alongside the first -- needs per-instance backend state and a per-mount handle on every op
+- [x] ~~Mount a second TFS3 image alongside the first~~ done -- per-mount state, `fs_ops.state_alloc`/`_activate`/`_free`
 - [x] ~~Mount a FAT volume read-only (needs Runtime + interop's FAT driver)~~ done -- the ESP at `/boot`, read-only by default
 - [x] ~~Decide the lookup rule up front, including what shadowing means~~ done -- five rules, `kernel/mount.h`
 - [x] ~~Mounting over a non-empty directory -- allow and hide, or refuse~~ done -- allow and hide, Unix's rule
@@ -374,8 +374,8 @@ No dependency on the phases above; ordered among themselves.
 - [x] ~~`df` reporting per-mount rather than one global figure~~ done -- `QUERY_FSINFO` is a vector, root first
 - [x] ~~Path resolution that can't escape a mount via `..` at its root~~ done -- for free: paths are normalized before they arrive
 - [x] ~~A tmpfs/RAM-disk backend as the cheapest possible second mount to test against~~ done -- `mount -t ramfs none /mnt`
-- [ ] Raise `fs_ops.max_mounts` above 1 -- every backend keeps its state in module-level statics, and no op carries a handle
-- [ ] `fs_ops` ops take an opaque per-mount handle from `init()`, Linux's `super_block` -- the prerequisite for the two items above
+- [x] ~~Raise `fs_ops.max_mounts` above 1~~ done -- all three backends declare `MOUNT_MAX`
+- [ ] `fs_ops` ops take a per-mount handle instead of the VFS setting a current state -- what SMP needs, and nothing before it
 - [x] ~~`mount` cannot name a device on a disk that is not the boot disk~~ DONE 2026-08-27 -- a source may be a device name (`lsblk`)
 - [ ] Nothing remounts in place: changing a mount's flags is `umount` then `mount`, and there is no `mount -o remount`
 - [ ] `MOUNT_MAX` is 6 and `PART_SLOTS` is 8, both compile-time
@@ -683,7 +683,7 @@ run on, not by order.
 - [ ] **NEXT** The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN
 - [x] ~~USB Ethernet (CDC-ECM), and the BULK transfer type it needed~~ DONE 2026-08-31 -- `net_usb_ecm.c`; RX untested, see `docs/bugs.md`
 - [x] ~~Remote access: a shell and file transfer over the network~~ DONE 2026-08-31 -- `telnetd`, `tftpd`, `tools/remote.py`
-- [ ] Per-volume state in filesystem backends -- the prerequisite for an installer, see `docs/bugs.md`
+- [x] ~~Per-volume state in filesystem backends~~ done -- `struct t3_state`/`fat32_state`/`ramfs_state`, switched at `FS_OP`
 - [ ] A self-hosted installer: partition, format, copy the running system, write the bootloader
 - [ ] USB mass storage (bulk-only transport) -- the first non-disk-bus storage backend
 - [x] ~~Hub support (devices behind a hub, not just root ports)~~ DONE 2026-08-28 -- USB2 only; the TT path is hardware-only

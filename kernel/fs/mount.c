@@ -117,6 +117,36 @@ const struct mount *mount_resolve(const char *path, char *out_sub, int sub_cap) 
 
 // ---- mounting ------------------------------------------------------
 
+// ---- per-mount backend state ---------------------------------------
+
+void *mount_enter(const struct mount *m) {
+    if (m && m->fs->state_activate) return m->fs->state_activate(m->state);
+    return NULL;
+}
+
+void mount_leave(const struct mount *m, void *prev) {
+    if (m && m->fs->state_activate) m->fs->state_activate(prev);
+}
+
+int mount_scratch_begin(const struct fs_ops *fs, struct fs_scratch *sc) {
+    sc->fs = fs;
+    sc->st = NULL;
+    sc->prev = NULL;
+    if (!fs->state_alloc) return 1;   // a backend with no state needs none
+    void *st = fs->state_alloc();
+    if (!st) return 0;
+    sc->prev = fs->state_activate(st);
+    sc->st = st;
+    return 1;
+}
+
+void mount_scratch_end(struct fs_scratch *sc) {
+    if (!sc->fs->state_activate) return;
+    sc->fs->state_activate(sc->prev);
+    if (sc->st) sc->fs->state_free(sc->st);
+    sc->st = NULL;
+}
+
 // Is a backend already mounted somewhere, and how many times? A
 // backend whose state is module-level statics may be mounted once
 // (fs_ops.max_mounts) -- and the failure of ignoring that is silent
@@ -154,6 +184,15 @@ static int caps_are_honest(const struct fs_ops *fs) {
     // fs_has(); a real op behind an undeclared cap is a feature callers
     // can never find. display.c's rule, verbatim.
     if (((fs->caps & FS_CAP_HARDLINKS) != 0) != (fs->link != 0)) return 0;
+    // The three per-mount state ops are one fact stated three times.
+    // Two of three is the shape that mounts and then frees a state
+    // nothing ever made current.
+    int st_ops = (fs->state_alloc != 0) + (fs->state_free != 0) + (fs->state_activate != 0);
+    if (st_ops != 0 && st_ops != 3) return 0;
+    // And a backend cannot promise a second mount without them: its
+    // volume would be one set of statics read by two mounts, which is
+    // the silent corruption max_mounts exists to refuse.
+    if (fs->max_mounts > 1 && st_ops != 3) return 0;
     return 1;
 }
 
@@ -231,7 +270,11 @@ int mount_add(const struct block_device *dev, const char *fstype,
             }
             if (!chosen) { *why = "no such filesystem type"; return 0; }
             if (!dev) { *why = "that filesystem needs a volume"; return 0; }
-            if (chosen->probe(dev) != 1) { *why = "no such filesystem on that volume"; return 0; }
+            struct fs_scratch sc;
+            if (!mount_scratch_begin(chosen, &sc)) { *why = "out of memory"; return 0; }
+            int claimed = chosen->probe(dev);
+            mount_scratch_end(&sc);
+            if (claimed != 1) { *why = "no such filesystem on that volume"; return 0; }
         }
     } else {
         if (!dev) { *why = "no volume, and no filesystem type named"; return 0; }
@@ -242,7 +285,11 @@ int mount_add(const struct block_device *dev, const char *fstype,
             // mounted anyway, and probing it is what turned a
             // side-effect in one probe into a silently empty root.
             if (mounts_of(fs) >= fs->max_mounts) { at_limit = fs; continue; }
-            if (fs->probe(dev) == 1) { chosen = fs; break; }
+            struct fs_scratch sc;
+            if (!mount_scratch_begin(fs, &sc)) continue;
+            int claimed = fs->probe(dev);
+            mount_scratch_end(&sc);
+            if (claimed == 1) { chosen = fs; break; }
         }
         // A BACKEND SKIPPED FOR ITS LIMIT IS A DIFFERENT ANSWER FROM
         // "nothing recognises this". Saying the first when the second
@@ -265,9 +312,22 @@ int mount_add(const struct block_device *dev, const char *fstype,
         return 0;
     }
 
-    int r = chosen->init(dev);
-    if (r < 0) { *why = "the filesystem would not mount"; return 0; }
+    void *state = NULL;
+    if (chosen->state_alloc) {
+        state = chosen->state_alloc();
+        if (!state) { *why = "out of memory"; return 0; }
+    }
 
+    void *prev = chosen->state_activate ? chosen->state_activate(state) : NULL;
+    int r = chosen->init(dev);
+    if (chosen->state_activate) chosen->state_activate(prev);
+    if (r < 0) {
+        if (state) chosen->state_free(state);
+        *why = "the filesystem would not mount";
+        return 0;
+    }
+
+    slot->state = state;
     record(slot, chosen, dev, point, flags, r);
     return 1;
 }
@@ -311,7 +371,13 @@ int mount_remove(const char *point, const char **why) {
     // surfaces at the flush, and after this the volume has no owner to
     // report it to.
     if (m->dev) blkdev_flush(m->dev);
+    void *prev = mount_enter(m);
     if (m->fs->umount) m->fs->umount(m->dev);
+    mount_leave(m, prev);
+    // AFTER umount(), which is the last thing that may write: state_free
+    // drops the caches this mount is holding, and a sync into a freed
+    // state is the one ordering that does not survive being got wrong.
+    if (m->state) m->fs->state_free(m->state);
 
     klog_printf("fs: %s unmounted from %s\n", m->fs->name, m->point);
     k_memset(m, 0, sizeof *m);
@@ -605,7 +671,11 @@ static int try_partitions(void) {
             if (!fs->volume_relative) continue;
             if (!caps_are_honest(fs)) continue;
             if (mounts_of(fs) >= fs->max_mounts) continue;
-            if (fs->probe(dev) == 1) {
+            struct fs_scratch sc;
+            if (!mount_scratch_begin(fs, &sc)) continue;
+            int claimed = fs->probe(dev);
+            mount_scratch_end(&sc);
+            if (claimed == 1) {
                 klog_printf("fs: mounting %s from partition %d (LBA %u, %u sectors)\n",
                             fs->name, i + 1, base, count);
                 const char *why;
@@ -821,7 +891,15 @@ const struct fs_ops *mount_backend_named(const char *name) {
 
 int mount_wipe_others(const struct fs_ops *target, const struct block_device *dev) {
     for (int i = 0; i < FS_BACKEND_COUNT; i++) {
-        if (g_backends[i] != target) g_backends[i]->wipe(dev);
+        if (g_backends[i] == target) continue;
+        // On a SCRATCH state: wipe() repoints a backend at `dev`, and
+        // this runs it against every backend but the target -- which is
+        // how a mounted TFS3 root twice ended up reading a FAT32 disk
+        // being formatted, taking /bin with it.
+        struct fs_scratch sc;
+        if (!mount_scratch_begin(g_backends[i], &sc)) continue;
+        g_backends[i]->wipe(dev);
+        mount_scratch_end(&sc);
     }
     return 1;
 }

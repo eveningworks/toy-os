@@ -31,6 +31,10 @@ static const struct fs_ops *R(void) { return &ramfs_ops; }
 KTEST("ramfs", "mounts, and reports itself as NOT persistent") {
     // init() returning 0 is the whole point: mounted (not -1), and
     // never persistent (not 1). vfs.c turns that into what `df` says.
+    // Through the test seam, which owns the state init() fills -- a
+    // backend reached with none faults (fs_ops.h).
+    KTEST_ASSERT(ramfs_test_mount(TEST_BUDGET));
+    KTEST_ASSERT(R()->is_dir("/"));
     KTEST_ASSERT_EQ(R()->init(NULL), 0);
     KTEST_ASSERT(R()->is_dir("/"));
     ramfs_test_unmount();

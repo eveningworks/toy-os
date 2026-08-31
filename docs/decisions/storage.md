@@ -1986,9 +1986,67 @@ and were skipped, so it lines up with `parttable`. Numbering by slot
 order instead made the root partition `ata0p1` — a name that agreed with
 nothing a person could see, and that `root=ata0p3` would have missed.
 
-**What is deliberately still refused.** A second volume of the same
-format does not mount: `fs_ops.max_mounts` is 1 for every backend, and
-raising it needs per-instance state behind an opaque handle threaded
-through every op (Linux's `super_block`). Enumeration does not change
-that and was not meant to. It changes whether the device can be NAMED
-and reached at all, which was the actual blocker.
+**What this deliberately did NOT fix.** A second volume of the same
+format still did not mount at the time — `fs_ops.max_mounts` was 1 for
+every backend. Enumeration was never meant to change that; it changed
+whether the device could be NAMED and reached at all, which was the
+actual blocker. Per-mount state came later; see the entry below.
+
+## A backend's volume state is per mount, and the VFS makes one current instead of every op taking a handle
+
+An installer has to MOUNT its target to copy files onto it, and it
+could not: `fs_ops.max_mounts` was 1 for every backend, because each
+kept its volume in module-level statics. A second mount would have
+repointed one set of them and left the FIRST mount reading the second's
+volume — silently, which is why the table refused it by name.
+
+**What real systems do.** Linux puts every per-mount fact in
+`struct super_block` (`s_bdev`, `s_fs_info`) and passes it to every
+operation; a Windows filesystem driver keeps a per-volume control block
+and the IRP names it. Neither swaps a global, and the reason is SMP: one
+current state would serialise the whole filesystem across cores.
+
+**Why toy-os does swap one.** This filesystem is ALREADY one global
+critical section. `vfs.c`'s `FS_OP` wraps every backend call in
+`scheduler_preempt_disable()`/`_enable()`, because the backends are not
+re-entrant — that guard has been there since the WM started reporting
+files that plainly exist as missing. So the thing Linux's design buys
+(two cores inside two filesystems at once) is not available here for
+unrelated reasons, and the thing it costs (a handle threaded through
+twenty op signatures, in three backends totalling ~5,800 lines) is
+real. Setting a current state at the chokepoint gets the capability for
+three new function pointers and no signature changes.
+
+The cost is stated rather than glossed: **this is the assumption to
+re-read on the day toy-os has a second core** (`docs/smp-design.md`).
+The handle-on-every-op shape is what replaces it, and the roadmap
+carries it as the remaining item.
+
+**Why the state moved into a struct rather than being saved and
+restored.** The alternative was to leave the statics alone and have each
+mount carry a saved copy, memcpy'd in and out when the current mount
+changed — a much smaller diff, and the shape `struct t3_saved` already
+had for `format()`/`wipe()`. It was rejected on one property: the field
+list is maintained by hand, so a new static forgotten is silent
+cross-volume corruption, and nothing catches it. A struct does not
+remove that hazard (a new field can still be declared outside it) but it
+makes the right place obvious rather than remembered, and it costs
+nothing per call instead of ~2.8 KB per alternation.
+
+**`state_activate` returns the previous state, and that is not a
+refinement.** The first version cleared to NULL after every call, on
+the reasoning that a backend reached without an activate should fault
+loudly rather than write to whichever volume ran last. The machine
+panicked with a GP fault the first time init read a directory:
+`listdir_collect()` calls `fs_stat()` from inside an `fs_list()`
+callback, so a whole enter/leave runs INSIDE the walk and cleared the
+state out from under it. Restoring makes the pair nest, and the
+outermost restore is still NULL — so the fault-loudly property survives
+for the case it was actually for.
+
+**What it deleted.** `struct t3_saved` and its save/restore wrappers
+around `tfs3_format()`/`tfs3_wipe()`; `fat32_probe()`'s save/restore of
+`g_v`; and the rule that a KTEST driving a backend directly must put the
+machine's own `/boot` back afterwards. All three were one mechanism —
+protecting a single shared instance from a second user — and all three
+stop existing once there can be two.
