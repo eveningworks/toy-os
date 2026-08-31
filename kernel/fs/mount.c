@@ -220,6 +220,7 @@ int mount_add(const struct block_device *dev, const char *fstype,
     // what makes `mount ramfs /mnt` a scratch filesystem rather than a
     // thing that happens to a disk.
     const struct fs_ops *chosen = NULL;
+    const struct fs_ops *at_limit = NULL;   // skipped for its mount limit
     if (fstype && fstype[0]) {
         if (k_strcmp(fstype, g_ram_backend->name) == 0) {
             chosen = g_ram_backend;
@@ -240,8 +241,20 @@ int mount_add(const struct block_device *dev, const char *fstype,
             // A BACKEND AT ITS MOUNT LIMIT IS NOT ASKED. It could not be
             // mounted anyway, and probing it is what turned a
             // side-effect in one probe into a silently empty root.
-            if (mounts_of(fs) >= fs->max_mounts) continue;
+            if (mounts_of(fs) >= fs->max_mounts) { at_limit = fs; continue; }
             if (fs->probe(dev) == 1) { chosen = fs; break; }
+        }
+        // A BACKEND SKIPPED FOR ITS LIMIT IS A DIFFERENT ANSWER FROM
+        // "nothing recognises this". Saying the first when the second
+        // was true sent a session hunting a bad format for a volume that
+        // was perfectly good -- the backend was simply already mounted.
+        // We cannot know it WOULD have claimed the volume without
+        // probing it, which is exactly what the skip exists to avoid, so
+        // the message says both halves rather than guessing.
+        if (!chosen && at_limit) {
+            *why = "nothing else recognises it, and the filesystem that might "
+                   "is already mounted (one at a time)";
+            return 0;
         }
         if (!chosen) { *why = "nothing recognises the filesystem on that volume"; return 0; }
     }

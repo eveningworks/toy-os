@@ -115,7 +115,7 @@ int sys_mkfs(struct syscall_ctx *c) {
     for (int i = 0; i < mount_count(); i++) {
         const struct mount *m = mount_at(i);
         if (!m || !m->used) continue;
-        if (m->dev) {   // any volume-backed mount -- see fs_format_device
+        if (m->dev == dev) {   // the target itself -- see fs_format_device
             c->regs[14] = (uint64_t)(int64_t)-EBUSY;
             return 0;
         }

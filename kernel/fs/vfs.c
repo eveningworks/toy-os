@@ -145,28 +145,18 @@ int fs_format_device(const struct block_device *dev, const char *fstype) {
     const struct fs_ops *target = mount_backend_named(fstype);
     if (!target || !target->format) return 0;
 
-    // REFUSED WHILE ANY VOLUME-BACKED FILESYSTEM IS MOUNTED, which is
-    // stricter than it looks and is the honest bound on this operation.
-    //
-    // A backend keeps its volume in MODULE-LEVEL state, and TWO paths
-    // here repoint it at `dev`: tfs3_format() opens with
-    // set_flat_volume(dev), and mount_wipe_others() calls wipe(dev) on
-    // EVERY OTHER backend. So formatting any device, as any type,
-    // repoints whatever is mounted -- a `mkfs -t fat32` crashed a live
-    // boot whose root was TFS3, because the wipe went through tfs3.
-    //
-    // Both were measured, each after a `mkfs` that crashed and took
-    // /bin with it. Refusing is the only correct answer until a backend
-    // can hold per-volume state; fs_format_backend() escapes it only by
-    // unmounting the world first, which an installer must not do to the
-    // system it is running from. A mount with no device (ramfs) does not
-    // count -- that is the boot an installer wants.
+    // ONLY THE TARGET ITSELF, now that format() and wipe() restore this
+    // backend's volume state on every path (tfs3.c's struct t3_saved).
+    // Before that they repointed the globals at `dev` and left them
+    // there, so formatting a SECOND disk made the mounted root read the
+    // wrong volume -- measured as two crashes that took /bin with them,
+    // one of them with a FAT32 target, because mount_wipe_others() runs
+    // every OTHER backend's wipe against the same device.
     for (int i = 0; i < mount_count(); i++) {
         const struct mount *m = mount_at(i);
-        if (!m || !m->used || !m->dev) continue;
-        klog_printf("mkfs: %s is mounted at %s -- formatting anything now "
-                    "would repoint its backend; boot with no disk mounted\n",
-                    blk_device_name(m->dev), m->point);
+        if (!m || !m->used || m->dev != dev) continue;
+        klog_printf("mkfs: %s is mounted at %s -- refused\n",
+                    blk_device_name(dev), m->point);
         return 0;
     }
 

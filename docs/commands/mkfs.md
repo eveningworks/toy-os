@@ -29,29 +29,24 @@ shape for "wipe this machine" and the wrong shape for "put a filesystem
 on that other partition", which is what an installer wants and which
 must disturb nothing.
 
-## It cannot actually run yet, and that is the interesting part
+## What it can and cannot do
 
-**Every backend keeps its volume in module-level state.** `tfs3_format()`
-begins with `set_flat_volume(dev)` and then writes `g_sb`, `g_vol` and
-the geometry; `mount_wipe_others()` calls `wipe(dev)` on every *other*
-backend, which reaches the same globals through tfs3 even when the
-target is FAT32.
+**Formatting a second volume works.** It did not until 2026-08-31: every
+backend keeps its volume in module-level state, and both `tfs3_format()`
+and `mount_wipe_others()` repointed it at the target, so the mounted root
+began reading the wrong disk. That crashed twice, each time taking `/bin`
+with it — once with a FAT32 target, because the wipe reaches tfs3's
+globals whatever is being formatted. `format()` and `wipe()` now save and
+restore that state on every path (`tfs3.c`'s `struct t3_saved`).
 
-So formatting **any** device, as **any** type, repoints whatever is
-mounted, and the running root starts reading the wrong disk. That was
-measured twice — each time as a crash that took `/bin` with it, once
-formatting TFS3 and once FAT32, both with a TFS3 root.
+**Mounting a second volume of the same type still does not**, and that is
+the remaining half of the same problem: `fs_ops.max_mounts` is 1. So you
+can format an install target but not yet copy anything onto it. The fix
+for both is per-volume state — an instance handle rather than globals —
+and `docs/bugs.md` tracks it as the installer's prerequisite.
 
-The kernel therefore refuses while any **disk-backed** filesystem is
-mounted. A `ramfs` mount does not count, because it has no volume — but
-no boot mode today reaches that state: even the live image's root is
-TFS3 on a RAM disk.
-
-What ships is the syscall, the checks and the refusal, which turns a
-root-destroying crash into a message. Making it *useful* needs
-per-volume state in the backends — an instance handle rather than
-globals — and `docs/bugs.md` records that as the installer's real
-prerequisite.
+The kernel still refuses to format a volume that is **itself** mounted,
+which is a different and permanent rule.
 
 ## Exit status
 

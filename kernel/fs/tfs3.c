@@ -148,6 +148,45 @@ static int g_mounted_from_backup = 0; // primary superblock was bad at mount; fs
 static uint32_t g_meta_off;   // first data-ish block offset within a group (2 [+cksum] + itb)
 static struct t3_gd *g_gd = 0; // free-count caches, g_sb.gc entries
 
+// ---- pointing this backend at a FOREIGN volume, briefly ------------------
+//
+// format() and wipe() are handed a device and both begin by repointing
+// the globals above at it -- which is fine when the caller is
+// fs_format_backend() (it has already unmounted the world) and
+// catastrophic when it is `mkfs` on a SECOND disk: the mounted root
+// starts reading the wrong volume mid-flight. That is not theoretical.
+// It crashed twice, each time taking /bin with it, and once with a
+// FAT32 target -- because mount_wipe_others() runs every OTHER backend's
+// wipe against the same device, so the corruption arrives through tfs3
+// whatever is being formatted.
+//
+// So both entry points save this state and put it back. g_gd is
+// deliberately NOT in here: it is allocated at mount and freed at
+// unmount, and neither format() nor wipe() touches it -- capturing the
+// pointer would be the one way to turn this into a double free.
+struct t3_saved {
+    struct t3_vol vol;
+    __typeof__(g_sb) sb;
+    uint32_t group0, gdt_block, jdata_block, jslots, itb, meta_off;
+    int mounted, mounted_from_backup;
+};
+
+static void t3_save(struct t3_saved *s) {
+    s->vol = g_vol; s->sb = g_sb;
+    s->group0 = g_group0; s->gdt_block = g_gdt_block;
+    s->jdata_block = g_jdata_block; s->jslots = g_jslots;
+    s->itb = g_itb; s->meta_off = g_meta_off;
+    s->mounted = g_mounted; s->mounted_from_backup = g_mounted_from_backup;
+}
+
+static void t3_restore(const struct t3_saved *s) {
+    g_vol = s->vol; g_sb = s->sb;
+    g_group0 = s->group0; g_gdt_block = s->gdt_block;
+    g_jdata_block = s->jdata_block; g_jslots = s->jslots;
+    g_itb = s->itb; g_meta_off = s->meta_off;
+    g_mounted = s->mounted; g_mounted_from_backup = s->mounted_from_backup;
+}
+
 // In-RAM copies of every group's block/inode bitmap (g_sb.gc * 4 KiB
 // each -- ~284 KiB per cache on the 9 GiB image, the same order as
 // TFS2's static full-disk bitmap). RAM is the authority during
@@ -1679,7 +1718,7 @@ static int tfs3_probe(const struct block_device *dev) {
 // sector AND both backups (positions derive from the volume size, the
 // same way load_superblock()'s fallback finds them). See fs_ops.h's
 // wipe contract for the mounted-a-corpse story that made this an op.
-static int tfs3_wipe(const struct block_device *dev) {
+static int tfs3_wipe_inner(const struct block_device *dev) {
     if (!dev) return 1;
     set_flat_volume(dev);
     uint8_t zero[ATA_SECTOR_SIZE];
@@ -1712,7 +1751,7 @@ static int tfs3_wipe(const struct block_device *dev) {
 
 // Kernel-side format, kept in lockstep with tfs3_writer.py's
 // cmd_format() -- one description of the layout, two writers of it.
-static int tfs3_format(const struct block_device *dev) {
+static int tfs3_format_inner(const struct block_device *dev) {
     if (!dev) return 0;
     set_flat_volume(dev);
 
@@ -3081,6 +3120,28 @@ static int tfs3_check(int repair, struct fs_check_result *out) {
     kfree(fk.names);
     return 1;
 }
+
+// The two entry points that may be handed a FOREIGN device. See
+// struct t3_saved: they restore this backend's own volume state on
+// EVERY path, which is why the bodies are wrapped rather than edited --
+// tfs3_format_inner() has seven early returns and one missed restore
+// would be the corruption this exists to prevent.
+static int tfs3_wipe(const struct block_device *dev) {
+    struct t3_saved saved;
+    t3_save(&saved);
+    int r = tfs3_wipe_inner(dev);
+    t3_restore(&saved);
+    return r;
+}
+
+static int tfs3_format(const struct block_device *dev) {
+    struct t3_saved saved;
+    t3_save(&saved);
+    int r = tfs3_format_inner(dev);
+    t3_restore(&saved);
+    return r;
+}
+
 
 const struct fs_ops tfs3_ops = {
     .name = "tfs3",
