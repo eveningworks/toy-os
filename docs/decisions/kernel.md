@@ -5614,7 +5614,7 @@ controller and USB -- and one of them was armed and pending. Clearing
 tested and is kept regardless: the spec requires it, Linux does it, and
 the cost is two `outw`s.
 
-**AND THE ENABLES HAVE TO GO BACK, which the first version got wrong.**
+**AND THE ENABLES ARE A DILEMMA, WHICH TOOK THREE TRIES.**
 Masking every GPE and leaving it masked shut the machine down and then
 took **two presses of the power button** to start it again -- the second
 symptom of one mistake, reported by the same person on the same machine.
@@ -5622,11 +5622,22 @@ Linux disables every GPE, clears the statuses, and then re-enables the
 WAKE-CAPABLE ones, which it knows from each device's `_PRW` object.
 There is no AML interpreter here to evaluate one, so what goes back is
 what the firmware had enabled: a superset of the wake set, and the
-alternative is leaving the power button's own GPE masked. The residual
-risk is stated rather than hidden -- a GPE that is not wake-capable
-stays enabled here where Linux would have left it off, so if immediate
-wake ever returns, the next step is a `_PRW`-derived wake set, which
-needs AML this kernel does not have.
+alternative is leaving the power button's own GPE masked. **And restoring them all brought the reboot straight back**, which is
+the finding that matters: clearing a status does nothing if the source
+is still ASSERTING it. A level-triggered GPE -- an embedded
+controller's is -- re-latches within a few port cycles, and a set status
+with a set enable is a wake. So the two obvious fixes each break what
+the other fixes, and there is no correct middle by guesswork. That is
+exactly the problem `_PRW` exists to solve.
+
+**The middle by MEASUREMENT, which is what shipped:** mask, clear, read
+the status BACK, and rearm only the bits that stayed quiet. A source
+still asserting identifies itself; a silent one is safe to leave armed,
+and the power button is silent until it is pressed. The failure mode
+degrades to the plain disable -- if every bit re-latches, nothing is
+rearmed. It is an approximation of `_PRW` by observation and it is
+labelled as one: `docs/aml-design.md` stages the real answer, and this
+episode is why that document exists.
 
 **Why a flag rather than a bisect.** Both fixes landed together, so a
 machine that stops is consistent with either, and the machine in

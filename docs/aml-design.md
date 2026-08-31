@@ -79,6 +79,14 @@ flag in `/bin/acpi`. A real DSDT is ~28 KB, so it needs a range
 **Payoff on its own:** every future ACPI question stops costing a round
 trip through a second operating system.
 
+**And a measurement that changes what stage 3 needs: the laptop's DSDT
+is 103,006 bytes.** At 512 bytes a command that is 201 commands typed by
+hand, so TRANSFERRING it is not the plan. The plan is that the parser
+runs ON that machine and reports what it found -- `acpi --prw` listing
+the GPE numbers it derived. QEMU's 8,605-byte DSDT is the development
+fixture for the WALK; the laptop is the oracle for the WAKE SET, and it
+answers in one line instead of 100 KB of hex.
+
 ### Stage 1 -- the namespace walk, declarations only
 
 Parse a table's AML term list into a tree. The grammar that must be
@@ -124,6 +132,14 @@ recorded as PRESENT WITH AN UNREAD VALUE, which is a different answer
 from absent and must not be conflated with it.
 
 ### Stage 3 -- `_PRW`, and the wake set
+
+**This stage is now the actual fix, not a refinement.** What shipped
+without it approximates the wake set by measurement -- rearm the GPEs
+whose status stays clear -- because the two guessable answers each break
+what the other fixes (see `docs/decisions.md`). That approximation can
+be wrong in both directions: a source that is quiet at sleep time but
+wakes later stays armed when `_PRW` would have said it is not a wake
+source, and a wake source that happens to be asserting gets masked.
 
 With stages 1 and 2, the wake set is a search: every Device with a
 `_PRW` child, whose package's first element is an integer, contributes

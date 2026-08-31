@@ -50,6 +50,12 @@ truncated, which reads as a successful dump. `tools/acpi_dump.py` reads
 it in ranges and verifies the ACPI checksum, which is the check that
 catches exactly that.
 
+**A real DSDT can be very large** — 103,006 bytes on the laptop this was
+written for, against QEMU's 8,605 — so dumping one by hand is not the
+way to move it. Where a whole table is genuinely needed, drive it with
+`tools/acpi_dump.py`; where the QUESTION is what the table says, it is
+usually cheaper to make the kernel answer it.
+
 ## What it does not do
 
 **It does not interpret AML.** There is no AML interpreter in this OS

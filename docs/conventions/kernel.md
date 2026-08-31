@@ -2177,12 +2177,21 @@ machine's `GPE0_BLK` is 32 bytes -- 128 events, among them its lid, its
 embedded controller and USB. The `nogpe` boot flag is the one-boot A/B
 that established it; `docs/decisions.md` has the measurement.
 
-**THE ENABLES GO BACK AFTERWARDS.** Each byte is masked, its statuses
-write-1-to-cleared, and the enable byte RESTORED -- because Linux
-re-enables the wake-capable GPEs after `acpi_hw_disable_all_gpes()`,
-from a `_PRW` object no AML interpreter here can evaluate, and leaving
-everything masked masks the POWER BUTTON's own GPE. Measured: the
-machine then shuts down and takes TWO presses to start again.
+**AND THE QUIET ONES ARE REARMED, DECIDED BY MEASUREMENT.** The problem
+has two halves and each obvious fix breaks the other, both measured on
+the same machine: disable every GPE and leave it so, and the machine
+powers off but takes TWO presses of the power button to start again --
+one of those events IS the power button. Clear the statuses and restore
+every enable, and the button is fine and the machine REBOOTS, because a
+level-triggered source (an embedded controller's is) re-latches the
+instant it is cleared, and a set status with a set enable is a wake.
+
+So `gpe_block_off()` masks, clears, **reads the status back**, and
+rearms only the bits that stayed quiet. A source still asserting says so
+by re-latching within those few port cycles. That approximates what
+Linux gets from `_PRW` -- which needs AML this kernel does not have, and
+`docs/aml-design.md` stages the real answer. Its failure mode degrades
+to the plain disable: if every bit re-latches, nothing is rearmed.
 
 **AND CLEAR THE WAKE-STATUS BITS TOO.** `PM1_STS` is the
 FIRST HALF of the PM1 EVENT block (`PM1a_EVT_BLK`, a different FADT
