@@ -25,6 +25,7 @@ buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
 - [ ] `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR, not a 64 KiB guess  *(USB)*
+- [ ] An RTL8153 vendor driver for USB Ethernet -- the adapter's CDC-ECM configuration does not receive, and neither does Linux's  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
 - [ ] Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today  *(Networking)*
@@ -678,6 +679,7 @@ run on, not by order.
 - [x] ~~USB audio (isochronous OUT, UAC1)~~ DONE 2026-08-30 -- `kernel/drivers/usb/usb_audio.c`; SIA scheduling is QEMU-tested only
 - [x] ~~UAC2 playback: a set rate, 24-bit samples, 125 us intervals~~ DONE 2026-08-31 -- proven on a Sound BlasterX G6
 - [x] ~~An AML namespace walk, Method bodies skipped~~ DONE 2026-08-31 -- `kernel/acpi/aml.c`, stage 1 of `docs/aml-design.md`
+- [ ] **NEXT** An RTL8153 vendor driver for USB Ethernet -- the adapter's CDC-ECM configuration does not receive, and neither does Linux's
 - [ ] **NEXT** `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`
 - [ ] **NEXT** The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN
 - [x] ~~USB Ethernet (CDC-ECM), and the BULK transfer type it needed~~ DONE 2026-08-31 -- `usb_net.c`; RX untested, see `docs/bugs.md`
