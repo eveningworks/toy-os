@@ -11,6 +11,9 @@
 #include "acpi_internal.h"
 #include "io.h"
 #include "klog.h"
+#include "vga.h"        // `acpidebug` prints where a reboot cannot erase it
+#include "multiboot.h"  // ...and the boot word that turns it on
+#include "string.h"
 #include "kfmt.h" // klog_printf
 #include "string.h"
 
@@ -22,14 +25,20 @@
 #define FADT_PM1B_EVT_BLK   60
 #define FADT_PM1A_CNT_BLK   64
 #define FADT_PM1B_CNT_BLK   68
+#define FADT_GPE0_BLK       80
+#define FADT_GPE1_BLK       84
 #define FADT_PM1_EVT_LEN    88
 #define FADT_PM1_CNT_LEN    89
+#define FADT_GPE0_BLK_LEN   92
+#define FADT_GPE1_BLK_LEN   93
 #define FADT_FLAGS         112
 #define FADT_RESET_REG     116
 #define FADT_RESET_VALUE   128
 #define FADT_X_DSDT        140
 #define FADT_X_PM1A_EVT    148
 #define FADT_X_PM1B_EVT    160
+#define FADT_X_GPE0_BLK    220
+#define FADT_X_GPE1_BLK    232
 #define FADT_X_PM1A_CNT    172
 #define FADT_X_PM1B_CNT    184
 #define FADT_SLEEP_CONTROL 244
@@ -237,14 +246,24 @@ void acpi_fadt_init(void) {
     s->pm1b_evt = (g.space_id == ACPI_GAS_IO && g.address)
                     ? (uint32_t)g.address : fadt_u32(FADT_PM1B_EVT_BLK);
     s->pm1_evt_len = fadt_u8(FADT_PM1_EVT_LEN);
+    fadt_gas(FADT_X_GPE0_BLK, &g);
+    s->gpe0_blk = (g.space_id == ACPI_GAS_IO && g.address)
+                    ? (uint32_t)g.address : fadt_u32(FADT_GPE0_BLK);
+    fadt_gas(FADT_X_GPE1_BLK, &g);
+    s->gpe1_blk = (g.space_id == ACPI_GAS_IO && g.address)
+                    ? (uint32_t)g.address : fadt_u32(FADT_GPE1_BLK);
+    s->gpe0_len = fadt_u8(FADT_GPE0_BLK_LEN);
+    s->gpe1_len = fadt_u8(FADT_GPE1_BLK_LEN);
 
     if (s->pm1a_cnt && (inw((uint16_t)s->pm1a_cnt) & PM1_CNT_SCI_EN))
         s->flags |= ACPI_F_ENABLED;
 
     find_s5(s);
 
-    klog_printf("acpi: FADT pm1a_evt=0x%x pm1b_evt=0x%x len=%u\n",
-                s->pm1a_evt, s->pm1b_evt, s->pm1_evt_len);
+    klog_printf("acpi: FADT pm1a_evt=0x%x pm1b_evt=0x%x len=%u "
+                "gpe0=0x%x/%u gpe1=0x%x/%u\n",
+                s->pm1a_evt, s->pm1b_evt, s->pm1_evt_len,
+                s->gpe0_blk, s->gpe0_len, s->gpe1_blk, s->gpe1_len);
     klog_printf("acpi: FADT pm1a=0x%x pm1b=0x%x smi=0x%x%s%s\n",
                 s->pm1a_cnt, s->pm1b_cnt, s->smi_cmd,
                 (s->flags & ACPI_F_HW_REDUCED) ? " hardware-reduced" : "",
@@ -316,6 +335,19 @@ static void pm1_clear_status(const struct acpi_state *s) {
     if (s->pm1b_evt) outw((uint16_t)s->pm1b_evt, 0xFFFF);
 }
 
+// EVERY GENERAL PURPOSE EVENT, DISABLED AND CLEARED. A GPE block is
+// [STS][EN] like PM1's, each half GPEx_BLK_LEN/2 bytes; the enables go
+// to 0 so nothing may wake us, then the statuses are write-1-to-cleared
+// so nothing already pending does. Linux's acpi_hw_disable_all_gpes()
+// runs before every sleep for exactly this reason, and on a laptop the
+// candidates are the lid switch, the embedded controller and USB.
+static void gpe_block_off(uint32_t base, uint8_t len) {
+    if (!base || len < 2) return;
+    uint8_t half = (uint8_t)(len / 2);
+    for (uint8_t i = 0; i < half; i++) outb((uint16_t)(base + half + i), 0x00);
+    for (uint8_t i = 0; i < half; i++) outb((uint16_t)(base + i), 0xFF);
+}
+
 // Preserves everything in PM1_CNT that is not the sleep request -- a
 // blind write would clear SCI_EN, which is a different instruction to
 // the chipset than "go to S5". (The wake-status bits are NOT here:
@@ -334,11 +366,38 @@ int acpi_poweroff_known(void) {
                                           : (s->pm1a_cnt != 0);
 }
 
+// `acpidebug`: say what is about to be written, ON THE SCREEN, and wait.
+//
+// A machine that reboots instead of stopping takes the evidence with it
+// -- the klog lines describing the attempt are gone before anyone can
+// read them, and a live image has no disk to keep them on. So this
+// prints the decision where a camera can reach it and holds for about
+// ten seconds. Off unless the boot word is present, because a shutdown
+// that pauses is a worse shutdown.
+static void debug_pause(const struct acpi_state *s) {
+    const char *cmdline = multiboot_cmdline();
+    if (!cmdline || !k_strstr(cmdline, "acpidebug")) return;
+
+    vga_printf("\nacpi: about to write S5 type %d to PM1a 0x%x\n",
+               (int)s->slp_typ_a, s->pm1a_cnt);
+    vga_printf("acpi: ACPI mode %s, smi 0x%x enable 0x%x\n",
+               (s->flags & ACPI_F_ENABLED) ? "ON" : "OFF (SCI_EN never came up)",
+               s->smi_cmd, s->acpi_enable);
+    vga_printf("acpi: pm1_sts 0x%x  gpe0 0x%x/%u  gpe1 0x%x/%u\n",
+               s->pm1a_evt, s->gpe0_blk, s->gpe0_len, s->gpe1_blk, s->gpe1_len);
+    vga_printf("acpi: pausing ~10s so this can be read...\n");
+    vga_present();
+    // Port-I/O delay, not the PIT: this is reached with interrupts off
+    // on some paths, where no tick ever advances.
+    for (uint32_t i = 0; i < 10000000; i++) io_wait();
+}
+
 int acpi_poweroff(void) {
     struct acpi_state *s = acpi_state_mut();
     if (!(s->flags & ACPI_F_S5)) return 0;
 
     enable_acpi_mode(s);
+    debug_pause(s);
 
     if (s->flags & ACPI_F_HW_REDUCED) {
         if (!gas_usable(&s->sleep_control)) return 0;
@@ -351,6 +410,8 @@ int acpi_poweroff(void) {
                    (uint8_t)(((s->slp_typ_a & 7) << SLP_CTL_TYP_SHIFT) | SLP_CTL_SLP_EN));
     } else {
         if (!s->pm1a_cnt) return 0;
+        gpe_block_off(s->gpe0_blk, s->gpe0_len);
+        gpe_block_off(s->gpe1_blk, s->gpe1_len);
         pm1_clear_status(s);
         klog_printf("acpi: S5 via PM1a 0x%x type %d%s, status cleared at 0x%x\n",
                     s->pm1a_cnt, (int)s->slp_typ_a,

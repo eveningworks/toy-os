@@ -102,6 +102,12 @@ struct acpi_state {
     uint32_t pm1a_evt;
     uint32_t pm1b_evt;
     uint8_t  pm1_evt_len;  // the WHOLE block; PM1_STS is the low half
+    // The GENERAL PURPOSE EVENT blocks, same [STS][EN] shape. A laptop
+    // has GPEs for its lid, its embedded controller, USB and the power
+    // button; one of them enabled and pending is a wake, so S5 means
+    // turning all of them off first.
+    uint32_t gpe0_blk, gpe1_blk;
+    uint8_t  gpe0_len, gpe1_len;
     uint32_t smi_cmd;
     uint8_t  acpi_enable;  // the value written to smi_cmd to enter ACPI mode
     uint8_t  slp_typ_a;    // from `_S5_`; meaningless unless ACPI_F_S5

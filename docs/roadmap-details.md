@@ -3844,11 +3844,25 @@ spec requires it. That is a real defect and is fixed; whether it is THIS
 defect is unconfirmed, because the only machine that shows the symptom
 is not one any test here can drive.
 
-**What would confirm it.** On the laptop, before shutting down:
-`dmesg | grep acpi` names the ports and the sleep type the tables gave,
-and `acpi` reports whether poweroff is available at all. If the machine
-still restarts, those two outputs say which path ran and are the next
-thing to look at.
+**What the laptop said** (2026-08-31, on a build predating the fix):
+`FADT pm1a=0x1804 pm1b=0x0 smi=0xb2`, `_S5_ sleep types a=7 b=0`, 22
+tables via XSDT, 4 processors -- and **`ACPI mode: no`**, so the
+firmware handed the machine over in legacy mode. Poweroff and reset are
+both reported available (S5 type 7 to 0x1804; reset 0x6 to 0xcf9).
+
+**Second candidate, also shipped and also unconfirmed:** the GPE blocks
+were never parsed either, so nothing disabled them before S5. A laptop's
+general purpose events are its lid, its EC, USB and the power button,
+and one of them enabled and pending is a wake -- the same shape as the
+PM1_STS defect. Linux calls `acpi_hw_disable_all_gpes()` before every
+sleep.
+
+**What would confirm either.** Boot with **`acpidebug`** on the GRUB
+line: it prints the sleep type, the port, whether ACPI mode actually
+came up, and the blocks being cleared, then pauses ~10 s -- which exists
+because the reboot otherwise takes the evidence with it. Run
+`reboot --poweroff` from the text shell, not the desktop's menu, so the
+kernel console is the thing presenting.
 
 **Found in the same path and separately fixed** (not this bug): the
 poweroff fallback wrote `outw(0x604, 0x2000)` whenever ACPI declined for
