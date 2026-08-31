@@ -68,6 +68,12 @@ static int is_skipped(const char *name) {
 
 static void step(const char *what) { printf("install: %s\n", what); }
 
+// cmd_fail() appends the errno the last failing syscall left, which is
+// the right thing when one did and NOISE when none did -- a disk name
+// that does not exist reported as "no such disk: out of range". This is
+// for the refusals this program makes on its own.
+static void refuse(const char *why) { printf("install: %s\n", why); }
+
 // The disk the ROOT is on, by name -- what this refuses to install onto.
 // QUERY_BLKDEV flags the root's own device, which is a partition, so the
 // answer is that entry's parent.
@@ -127,8 +133,7 @@ static int partition(const char *disk, uint64_t sectors, uint64_t esp_mib) {
     // GPT keeps its backup header and entry array in the last 33.
     uint64_t usable = sectors - FIRST_LBA - 33;
     if (usable <= BIOS_BOOT_SECTORS + esp) {
-        cmd_fail("install", "the disk is too small for a 1 MiB boot partition, "
-                            "the ESP and a root");
+        refuse("the disk is too small for a 1 MiB boot partition, the ESP and a root");
         return 0;
     }
 
@@ -187,7 +192,7 @@ static const struct ufileop_policy COPY_POLICY = {
 // because "/" contains the target.
 static int copy_system(void) {
     struct sys_dirent *ents = malloc(sizeof(struct sys_dirent) * SYS_LISTDIR_MAX);
-    if (!ents) { cmd_fail("install", "out of memory"); return 0; }
+    if (!ents) { refuse("out of memory"); return 0; }
     int n = sys_listdir("/", ents, SYS_LISTDIR_MAX);
     if (n < 0) { free(ents); cmd_fail("install", "/"); return 0; }
 
@@ -260,7 +265,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     if (!disk) { cmd_usage(USAGE); return 1; }
-    if (esp_mib < 8) { cmd_fail("install", "--esp must be at least 8 MiB"); return 1; }
+    if (esp_mib < 8) { refuse("--esp must be at least 8 MiB"); return 1; }
 
     char mine[16] = "";
     root_disk(mine, sizeof mine);
@@ -272,7 +277,10 @@ int main(int argc, char **argv) {
     }
 
     uint64_t sectors = disk_sectors(disk);
-    if (!sectors) { cmd_fail("install", "no such disk"); return 1; }
+    if (!sectors) {
+        printf("install: %s: no such disk (a WHOLE disk, as `lsblk` names it)\n", disk);
+        return 1;
+    }
 
     char size[16];
     human_size(size, sizeof size, sectors * SECTOR_BYTES);
