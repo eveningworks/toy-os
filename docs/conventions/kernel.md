@@ -875,6 +875,49 @@ interrupts go nowhere still enumerates, registers its devices and logs
 interrupt count and the decoded-report count to rise together, which is
 the only thing here an interrupt is load-bearing for.
 
+## A USB ETHERNET ADAPTER IS A `net_device`, AND ITS CONFIGURATION IS A CHOICE
+
+`kernel/drivers/usb/usb_net.c` binds CDC Ethernet (ECM) and registers a
+`net_device` -- the third implementer of that registry. Five things:
+
+- **BULK IS THE TRANSFER TYPE THAT WAS MISSING.** `xhci.c` had control,
+  interrupt and isochronous; `xhci_add_bulk()`/`xhci_bulk_post()` are
+  ep_type 2 and 6 through the same `ep_configure()`. **The DRIVER owns
+  the buffers**, as with isochronous and unlike interrupt: an Ethernet
+  frame is 1514 bytes and the interrupt path's slices are 64.
+- **THE CONFIGURATION IS CHOSEN, NOT ASSUMED.** A device may offer
+  several, and the useful one need not be first: a TP-Link UE300 offers
+  Realtek's vendor protocol as configuration 1 and standard CDC-ECM as
+  2, so taking the first leaves an ordinary Ethernet adapter unusable.
+  `pick_configuration()` is BIASED TOWARDS 0 -- a first configuration
+  that is already driveable is kept -- because the cost of being wrong
+  is a device that used to work and stops.
+- **THE MAC ADDRESS IS A STRING.** `iMACAddress` in the ECM functional
+  descriptor is an index to a twelve-character hex STRING, and it is the
+  only place the address is written down. An adapter whose string will
+  not parse is REFUSED: giving the stack an address the hardware does
+  not have is worse than having no adapter.
+- **SetEthernetPacketFilter IS NOT OPTIONAL IN PRACTICE.** The device
+  decides what to pass up, and one never told delivers nothing -- which
+  presents as an adapter that transmits perfectly on a dead network.
+- **LINK STATE COMES FROM THE DEVICE**, over the control interface's
+  interrupt endpoint, and `net_device.link_known` is a THIRD value: a
+  card with no way to ask is not a card whose cable is unplugged, so
+  `ifconfig` prints no link line at all rather than guessing "down".
+
+## A DEVICE CANNOT REGISTER BEFORE ITS CORE'S init(), AND NOW IT IS TOLD SO
+
+`net_init()` zeroes the device table, and it used to run AFTER
+`usb_init()` -- so a USB Ethernet adapter enumerating first registered
+into a table that was then wiped. The machine had one fewer interface
+and NOTHING SAID SO: the driver's own log line had already printed.
+
+The order is fixed, and `net_register()` REFUSES with a log line before
+`net_init()` has run, because CLAUDE.md's rule is that using a subsystem
+before its init is a hard failure -- and a silent one is worse than a
+panic. **When adding a bus that can register into a class registry,
+check where that registry's init() sits in `kernel_main()`.**
+
 ## USB AUDIO IS A SOUND DEVICE ON AN ISOCHRONOUS ENDPOINT, AND THE FORMAT IS NOT NEGOTIATED
 
 `kernel/drivers/usb/usb_audio.c` binds a USB Audio Class **1.0 or 2.0**

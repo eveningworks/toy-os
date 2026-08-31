@@ -564,6 +564,14 @@ struct query_netdev {
     uint64_t mtu;
     uint64_t rx_packets, rx_bytes, rx_dropped;
     uint64_t tx_packets, tx_bytes, tx_dropped;
+    // LINK STATE, three-valued. `link_known` 0 means the driver has no
+    // way to ask -- which is not the same as "down", and `ifconfig` says
+    // nothing rather than guessing. `link_bps` is what the WIRE
+    // negotiated, so a gigabit adapter on a USB 2 port still says
+    // 1000000000.
+    uint64_t link_known;
+    uint64_t link_up;
+    uint64_t link_bps;
 };
 
 // QUERY_PARTTABLE's record -- the table, not its entries.

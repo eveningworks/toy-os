@@ -293,6 +293,14 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // console consume them without knowing which bus they arrived on.
     virtio_input_init();
 
+    // The network device core BEFORE the buses that can register into
+    // it. It owns the table, and its init() ZEROES that table -- so a
+    // USB Ethernet adapter enumerating first registered into a table
+    // that was then wiped, and the machine had one fewer interface with
+    // nothing reported. That is CLAUDE.md's using-a-subsystem-before-
+    // its-init rule, and net_register() refuses loudly now as well.
+    net_init();
+
     // USB last of the input paths, and deliberately so: PS/2 registered
     // first, so it stays input source 0 and `lsdev`'s ordering does not
     // shift under the tests. Needs pmm_init() for its DMA frames,
@@ -300,13 +308,11 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // all of which BOOT_REQUIRE() checks rather than assumes.
     usb_init();
 
-    // Networking: the device core first (it owns the table the drivers
-    // register into), then each NIC. NO ADDRESSES -- a card comes up
-    // with none and `/bin/dhcp` gives it one, as on Linux. Both drivers
-    // are called unconditionally -- the disk layer's lesson, where a
-    // short circuit meant a machine's second controller did not exist
-    // (see CLAUDE.md's every-disk-driver-runs rule).
-    net_init();
+    // The NICs. NO ADDRESSES -- a card comes up with none and
+    // `/bin/dhcp` gives it one, as on Linux. Both drivers are called
+    // unconditionally -- the disk layer's lesson, where a short circuit
+    // meant a machine's second controller did not exist (see CLAUDE.md's
+    // every-disk-driver-runs rule).
     e1000_init();
     net_virtio_init();
 

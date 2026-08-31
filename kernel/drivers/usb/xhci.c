@@ -847,6 +847,17 @@ struct xhci_ep {
     volatile uint8_t halted;
     uint8_t  recover_tries;
 
+    // BULK, either direction. Like the isochronous case and unlike the
+    // interrupt one, THE DRIVER OWNS THE BUFFERS -- an Ethernet frame is
+    // 1514 bytes and the interrupt path's slices are 64, so there is no
+    // shared geometry to borrow. Completion is a callback carrying the
+    // byte count and the buffer that was posted.
+    uint8_t  is_bulk;
+    void (*bulk_done)(void *ctx, uint64_t phys, uint32_t bytes, int ok);
+    void    *bulk_ctx;
+    uint64_t buf_of_trb_phys[TRBS_PER_RING];  // which buffer a TRB carried
+    uint32_t bulk_len_of_trb[TRBS_PER_RING];  // ...and how much was asked for
+
     // ISOCHRONOUS OUT. Nothing above is used by one: the driver owns
     // the buffer (there is no `buf` to allocate) and takes its
     // completions through the callback rather than by polling ready[].
@@ -1018,6 +1029,60 @@ int xhci_add_isoch_out(uint8_t slot, uint8_t ep_addr, uint16_t mps,
     // not broken, and the stream's first packet is the driver's to
     // decide the timing of.
     return 0;
+}
+
+// A BULK endpoint, either direction. The xHCI endpoint type is the only
+// thing that differs from an interrupt one -- 2 for OUT, 6 for IN -- so
+// this is `ep_configure()` with a different code and a callback instead
+// of the shared report buffers.
+//
+// CErr = 3, unlike the isochronous case: a bulk transfer IS retried, and
+// a bulk endpoint DOES halt on a stall, which is what makes the existing
+// halt recovery apply to it unchanged.
+int xhci_add_bulk(uint8_t slot, uint8_t ep_addr, uint16_t mps,
+                  void (*done)(void *ctx, uint64_t phys, uint32_t bytes, int ok),
+                  void *ctx) {
+    if (!slot || slot > XHCI_MAX_SLOTS || !g_slots[slot].in_use) return -1;
+    if (mps == 0) return -1;
+
+    int cc = 0;
+    uint32_t type = (ep_addr & 0x80) ? 6u : 2u;
+    // bInterval is meaningless for bulk -- the controller moves data
+    // whenever there is bandwidth -- and 0 is what the spec wants.
+    struct xhci_ep *e = ep_configure(slot, ep_addr, mps, 0, type, 3, &cc);
+    if (!e) return cc ? -cc : -1;
+    e->is_bulk   = 1;
+    e->bulk_done = done;
+    e->bulk_ctx  = ctx;
+    return 0;
+}
+
+// Queue one buffer. Returns 0 when the TRB went on the ring; the
+// callback runs later, from the event drain.
+int xhci_bulk_post(uint8_t slot, uint8_t ep_addr, uint64_t buf_phys,
+                   uint32_t len) {
+    struct xhci_ep *e = ep_find(slot, ep_addr);
+    if (!e || !e->is_bulk || len > 0x1FFFFu) return -1;
+    if (e->halted) return -1;
+
+    uint64_t at = xhci_ring_push(&e->ring, buf_phys, len,
+                                 XHCI_TRB_SET_TYPE(XHCI_TRB_NORMAL) |
+                                 XHCI_TRB_IOC | XHCI_TRB_ISP);
+    uint32_t idx = (uint32_t)((at - e->ring.phys) / sizeof(struct xhci_trb));
+    if (idx < TRBS_PER_RING) {
+        e->buf_of_trb_phys[idx] = buf_phys;
+        e->bulk_len_of_trb[idx] = len;
+    }
+    ring_doorbell(e->slot, dci_of(e->ep_addr));
+    return 0;
+}
+
+// Is this endpoint wedged? A bulk endpoint halts on a stall like an
+// interrupt one, and xhci_deferred_work() recovers it -- a caller that
+// stopped getting completions should ask rather than assume.
+int xhci_bulk_halted(uint8_t slot, uint8_t ep_addr) {
+    struct xhci_ep *e = ep_find(slot, ep_addr);
+    return e ? e->halted : 0;
 }
 
 int xhci_isoch_post(uint8_t slot, uint8_t ep_addr, uint64_t buf_phys,
@@ -1220,7 +1285,19 @@ void xhci_service(void) {
                          code == XHCI_CC_DATA_BUFFER_ERROR))
                         e->halted = 1;
                 } else g_hc.xfer_ok++;
-                if (e && e->is_iso) {
+                if (e && e->is_bulk) {
+                    // The buffer is named by the TRB that carried it, so
+                    // a driver with several in flight knows WHICH one
+                    // came back -- a receive ring is exactly that.
+                    uint32_t idx = (uint32_t)((src - e->ring.phys) /
+                                              sizeof(struct xhci_trb));
+                    uint64_t phys = idx < TRBS_PER_RING ? e->buf_of_trb_phys[idx] : 0;
+                    uint32_t want = idx < TRBS_PER_RING ? e->bulk_len_of_trb[idx] : 0;
+                    uint32_t resid = ev.status & 0xFFFFFFu;
+                    uint32_t got = resid <= want ? want - resid : 0;
+                    int ok = (code == XHCI_CC_SUCCESS || code == XHCI_CC_SHORT_PACKET);
+                    if (e->bulk_done) e->bulk_done(e->bulk_ctx, phys, got, ok);
+                } else if (e && e->is_iso) {
                     // The driver refills and re-posts from here, inside
                     // the drain. That is safe because posting touches
                     // only its own transfer ring and a doorbell -- never

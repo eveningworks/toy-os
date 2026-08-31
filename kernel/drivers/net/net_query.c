@@ -35,6 +35,9 @@ static int netdev_fill(int index, void *out) {
     q->tx_packets = d->tx_packets;
     q->tx_bytes = d->tx_bytes;
     q->tx_dropped = d->tx_dropped;
+    q->link_known = d->link_known;
+    q->link_up    = d->link_up;
+    q->link_bps   = d->link_bps;
     return 1;
 }
 

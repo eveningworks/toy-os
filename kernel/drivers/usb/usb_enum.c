@@ -32,6 +32,7 @@
 #define DESC_INTERFACE  4
 #define DESC_ENDPOINT   5
 
+#define USB_CLASS_CDC   2
 #define USB_CLASS_HID   3
 #define USB_CLASS_HUB   9
 #define USB_CLASS_AUDIO 1
@@ -87,7 +88,7 @@ static int set_configuration(uint8_t slot, uint8_t value) {
 // is better than a silently shorter name. (Contrast fat32.c, where a
 // non-ASCII long name is REFUSED on create -- there the string is an
 // identity that has to round-trip, and here it is a caption.)
-static void read_string(uint8_t slot, uint8_t index, char *out, uint32_t cap) {
+void usb_read_string(uint8_t slot, uint8_t index, char *out, uint32_t cap) {
     out[0] = 0;
     if (!index || cap < 2) return;
 
@@ -164,6 +165,71 @@ int usb_parse_config_interfaces(const uint8_t *cfg, uint32_t total,
     return count;
 }
 
+// Reads configuration `index` whole into g_desc_buf. Two requests: nine
+// bytes for wTotalLength, then the rest. Clamped to the staging buffer,
+// so a device claiming more than 4 KiB is refused rather than allowed to
+// overrun.
+static int read_configuration(uint8_t slot, uint8_t index,
+                              uint32_t *out_total, uint8_t *out_value) {
+    int got = get_descriptor(slot, DESC_CONFIG, index, 0, g_desc_buf, 9);
+    if (got < 9) return 0;
+    uint32_t total = (uint32_t)(g_desc_buf[2] | ((uint32_t)g_desc_buf[3] << 8));
+    if (total < 9 || total > sizeof g_desc_buf) return 0;
+    if (out_value) *out_value = g_desc_buf[5];
+    got = get_descriptor(slot, DESC_CONFIG, index, 0, g_desc_buf, (uint16_t)total);
+    if (got < (int)total) total = (uint32_t)(got < 0 ? 0 : got);
+    if (out_total) *out_total = total;
+    return total >= 9;
+}
+
+// Does this configuration hold an interface a driver here could take?
+static int configuration_is_driveable(const uint8_t *cfg, uint32_t total) {
+    for (uint32_t o = 0; o + 2 <= total; ) {
+        uint32_t blen = cfg[o];
+        if (blen < 2 || o + blen > total) return 0;
+        if (cfg[o + 1] == DESC_INTERFACE && blen >= 9) {
+            uint8_t cls = cfg[o + 5];
+            if (cls == USB_CLASS_HID || cls == USB_CLASS_HUB ||
+                cls == USB_CLASS_AUDIO || cls == USB_CLASS_CDC)
+                return 1;
+        }
+        o += blen;
+    }
+    return 0;
+}
+
+// WHICH CONFIGURATION. Index 0 unless a LATER one holds a class this
+// build can actually drive and index 0 does not -- which is not a
+// preference but the only way to reach some devices at all: a TP-Link
+// UE300 offers a vendor-specific configuration FIRST and standard
+// CDC-ECM second, so taking the first leaves a perfectly ordinary
+// Ethernet adapter unusable.
+//
+// BIASED TOWARDS 0 ON PURPOSE. Every device this kernel handled before
+// had exactly one configuration, and a device whose first configuration
+// is already driveable keeps it -- so this cannot change what a
+// keyboard, a mouse, a hub or a sound card does. The cost of being
+// wrong here is a device that used to work and stops, which is why the
+// rule is "only when index 0 offers nothing".
+static uint8_t pick_configuration(uint8_t slot, uint8_t configs,
+                                  uint8_t port) {
+    if (configs <= 1) return 0;
+
+    uint32_t total = 0;
+    if (read_configuration(slot, 0, &total, 0) &&
+        configuration_is_driveable(g_desc_buf, total))
+        return 0;
+
+    for (uint8_t i = 1; i < configs && i < 8; i++) {
+        if (!read_configuration(slot, i, &total, 0)) continue;
+        if (!configuration_is_driveable(g_desc_buf, total)) continue;
+        klog_printf("usb: port %u: %u configurations, choosing %u "
+                    "(the first this build can drive)\n", port, configs, i);
+        return i;
+    }
+    return 0;
+}
+
 static struct usb_device_info *dev_alloc(void) {
     for (int i = 0; i < USB_MAX_DEVICES; i++)
         if (!g_devs[i].in_use) return &g_devs[i];
@@ -226,18 +292,17 @@ int usb_enumerate_device(uint8_t root_port, uint8_t parent_port,
     // the whole thing. Clamped to the staging buffer -- a device
     // claiming more than 4 KiB of descriptors is refused rather than
     // allowed to overrun.
-    got = get_descriptor((uint8_t)slot, DESC_CONFIG, 0, 0, g_desc_buf, 9);
-    if (got < 9) { xhci_disable_slot((uint8_t)slot); return -1; }
-    uint32_t total = (uint32_t)(g_desc_buf[2] | ((uint32_t)g_desc_buf[3] << 8));
-    uint8_t  cfg_value = g_desc_buf[5];
-    if (total < 9 || total > sizeof g_desc_buf) {
-        klog_printf("usb: port %u: config descriptor claims %u bytes\n",
-                    parent_port, total);
+    uint8_t configs = g_desc_buf[17];      // bNumConfigurations
+    uint8_t pick = pick_configuration((uint8_t)slot, configs, parent_port);
+
+    uint32_t total = 0;
+    uint8_t cfg_value = 0;
+    if (!read_configuration((uint8_t)slot, pick, &total, &cfg_value)) {
+        klog_printf("usb: port %u: configuration %u unreadable\n",
+                    parent_port, pick);
         xhci_disable_slot((uint8_t)slot);
         return -1;
     }
-    got = get_descriptor((uint8_t)slot, DESC_CONFIG, 0, 0, g_desc_buf, (uint16_t)total);
-    if (got < (int)total) total = (uint32_t)(got < 0 ? 0 : got);
 
     // Kept, not just walked -- see usb.h's `cfg`. A frame we cannot get
     // costs the dump and nothing else, so this never fails enumeration.
@@ -248,8 +313,8 @@ int usb_enumerate_device(uint8_t root_port, uint8_t parent_port,
         k_memcpy(d->cfg, g_desc_buf, d->cfg_len);
     }
 
-    read_string((uint8_t)slot, i_manuf, d->manufacturer, sizeof d->manufacturer);
-    read_string((uint8_t)slot, i_prod,  d->product,      sizeof d->product);
+    usb_read_string((uint8_t)slot, i_manuf, d->manufacturer, sizeof d->manufacturer);
+    usb_read_string((uint8_t)slot, i_prod,  d->product,      sizeof d->product);
 
     if (set_configuration((uint8_t)slot, cfg_value) < 0) {
         klog_printf("usb: port %u: set configuration failed\n", parent_port);
@@ -291,6 +356,13 @@ int usb_enumerate_device(uint8_t root_port, uint8_t parent_port,
         usb_hub_bind(d);
     } else {
         for (int i = 0; i < d->if_count; i++) {
+            if (d->ifs[i].if_class != USB_CLASS_CDC) continue;
+            // CDC is a family; only the Ethernet model is driven here.
+            if (d->ifs[i].if_subclass != 0x06) continue;
+            usb_net_bind(d, g_desc_buf, total);
+            break;
+        }
+        for (int i = 0; i < d->if_count; i++) {
             if (d->ifs[i].if_class != USB_CLASS_AUDIO) continue;
             // The raw configuration goes with it: an audio device's
             // format and its volume control are CLASS-SPECIFIC
@@ -331,6 +403,7 @@ void usb_detach_slot(uint8_t slot) {
 
     usb_hid_unbind(slot);
     usb_audio_unbind(slot);
+    usb_net_unbind(slot);
     usb_hub_forget(slot);
     xhci_disable_slot(slot);
     if (d->cfg_phys) pmm_free_contiguous(d->cfg_phys, 1);

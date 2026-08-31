@@ -78,6 +78,29 @@ static int show(void) {
             snprintf(line, sizeof line, "    inet (unconfigured)\n");
         sys_print(line);
 
+        // LINK, and only when the driver can actually answer. A card
+        // with no way to ask is not a card whose cable is unplugged, so
+        // the line is ABSENT rather than saying "down" -- the same
+        // three-valued honesty `poweroff: no` uses in /bin/acpi.
+        if (d.link_known) {
+            char speed[32];
+            if (!d.link_up)
+                snprintf(speed, sizeof speed, "down");
+            else if (d.link_bps >= 1000000000ULL)
+                snprintf(speed, sizeof speed, "up, %llu Gb/s",
+                         (unsigned long long)(d.link_bps / 1000000000ULL));
+            else if (d.link_bps >= 1000000ULL)
+                snprintf(speed, sizeof speed, "up, %llu Mb/s",
+                         (unsigned long long)(d.link_bps / 1000000ULL));
+            else if (d.link_bps)
+                snprintf(speed, sizeof speed, "up, %llu bit/s",
+                         (unsigned long long)d.link_bps);
+            else
+                snprintf(speed, sizeof speed, "up");
+            snprintf(line, sizeof line, "    link %s\n", speed);
+            sys_print(line);
+        }
+
         snprintf(line, sizeof line,
                  "    rx %llu packets, %llu bytes, %llu dropped\n"
                  "    tx %llu packets, %llu bytes, %llu dropped\n",

@@ -98,6 +98,29 @@ int xhci_add_interrupt_in(uint8_t slot, uint8_t ep_addr, uint16_t mps,
 // (so from interrupt context), with the bytes the controller reported.
 // A driver's callback may call xhci_isoch_post() and nothing else here.
 // Returns 0, or a negative completion code.
+// --- bulk endpoints ---------------------------------------------------
+//
+// THE DRIVER OWNS THE BUFFERS, as with isochronous and unlike interrupt:
+// an Ethernet frame is 1514 bytes and the interrupt path's slices are
+// 64, so there is no shared geometry worth borrowing. Post a buffer,
+// get it back through the callback with the byte count.
+//
+// `done` runs FROM THE EVENT DRAIN. It may post again -- that touches
+// only its own transfer ring and a doorbell -- and must not do anything
+// that issues a COMMAND, which the drain cannot re-enter.
+int xhci_add_bulk(uint8_t slot, uint8_t ep_addr, uint16_t mps,
+                  void (*done)(void *ctx, uint64_t phys, uint32_t bytes, int ok),
+                  void *ctx);
+
+// Queue one buffer on a bulk endpoint. Direction is the endpoint's.
+int xhci_bulk_post(uint8_t slot, uint8_t ep_addr, uint64_t buf_phys,
+                   uint32_t len);
+
+// A bulk endpoint HALTS on a stall, unlike an isochronous one, and
+// xhci_deferred_work() recovers it. A driver whose completions stopped
+// should ask this rather than assume the device went away.
+int xhci_bulk_halted(uint8_t slot, uint8_t ep_addr);
+
 int xhci_add_isoch_out(uint8_t slot, uint8_t ep_addr, uint16_t mps,
                        uint8_t interval, void (*done)(void *ctx, uint32_t bytes),
                        void *ctx);

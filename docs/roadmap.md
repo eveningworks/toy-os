@@ -680,6 +680,7 @@ run on, not by order.
 - [x] ~~An AML namespace walk, Method bodies skipped~~ DONE 2026-08-31 -- `kernel/acpi/aml.c`, stage 1 of `docs/aml-design.md`
 - [ ] **NEXT** `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`
 - [ ] **NEXT** The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN
+- [x] ~~USB Ethernet (CDC-ECM), and the BULK transfer type it needed~~ DONE 2026-08-31 -- `usb_net.c`; RX untested, see `docs/bugs.md`
 - [ ] USB mass storage (bulk-only transport) -- the first non-disk-bus storage backend
 - [x] ~~Hub support (devices behind a hub, not just root ports)~~ DONE 2026-08-28 -- USB2 only; the TT path is hardware-only
 - [x] ~~Hot-plug: a device plugged in after boot enumerates, an unplugged one is torn down~~ DONE 2026-08-28

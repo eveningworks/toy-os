@@ -156,6 +156,25 @@ int usb_parse_config_interfaces(const uint8_t *cfg, uint32_t total,
 // 0. `*len` is its length. Read by the QUERY_USBDESC provider.
 const uint8_t *usb_device_config(int index, uint32_t *len);
 
+// One of the device's string descriptors, as ASCII. Exported because a
+// class driver can need one the enumeration had no reason to keep -- a
+// CDC-ECM adapter's MAC address is a STRING, twelve hex characters,
+// which is the only place it is written down.
+void usb_read_string(uint8_t slot, uint8_t index, char *out, uint32_t cap);
+
+// --- CDC Ethernet (usb_net.c) -----------------------------------------
+
+// Binds an enumerated CDC-ECM adapter and registers a `net_device`.
+// `cfg`/`total` is the configuration already read, because the MAC, the
+// data interface and the segment size all live in CLASS-SPECIFIC
+// descriptors the interface walk does not keep -- the same reason
+// usb_audio_bind() takes them. Returns 1 when it took the device.
+int usb_net_bind(struct usb_device_info *info, const uint8_t *cfg,
+                 uint32_t total);
+
+// Releases the device on `slot`, if it is the bound one.
+void usb_net_unbind(uint8_t slot);
+
 // --- hubs (usb_hub.c) -------------------------------------------------
 
 // Binds an enumerated hub: reads its hub descriptor, powers its ports,

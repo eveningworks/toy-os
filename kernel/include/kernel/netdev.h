@@ -35,6 +35,15 @@ struct net_device {
     uint8_t mac[NET_MAC_LEN];
     uint32_t mtu;             // 0 at registration means NET_MTU
 
+    // LINK STATE, when the driver can know it. `link_known` is the
+    // third answer: a card with no way to ask is not a card whose cable
+    // is unplugged, and `ifconfig` must not claim otherwise. Bits per
+    // second because that is what the wire negotiated, not what the bus
+    // could carry -- a gigabit adapter on USB 2 still says 1000000000.
+    uint8_t  link_known;
+    uint8_t  link_up;
+    uint32_t link_bps;
+
     // --- driver ops ---------------------------------------------------
 
     // Put ONE complete Ethernet frame (destination MAC first, no FCS --

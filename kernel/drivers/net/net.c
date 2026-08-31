@@ -44,8 +44,22 @@ static const char g_net_chan;
 static volatile uint32_t g_rx_head;  // consumer
 static volatile uint32_t g_rx_tail;  // producer (interrupt context)
 
+// Set by net_init(). The table below is only meaningful after it.
+static int g_inited;
+
 int net_register(struct net_device *dev) {
     if (!dev || !dev->transmit) return 0;
+    // REFUSED, LOUDLY, rather than accepted into a table net_init() is
+    // about to zero. A USB Ethernet adapter enumerating before the core
+    // did exactly that: it registered, said so, and then did not exist.
+    // CLAUDE.md's rule is that using a subsystem before its init() is a
+    // hard failure, and a silent one is worse than a panic.
+    if (!g_inited) {
+        klog_printf("net: %s registered BEFORE net_init() -- refused; "
+                    "fix the order in kernel_main()\n",
+                    dev->driver ? dev->driver : "a device");
+        return 0;
+    }
     if (g_count >= NET_MAX_DEVS) {
         klog_printf("net: no room for another device (max %d)\n", NET_MAX_DEVS);
         return 0;
@@ -156,4 +170,5 @@ void net_poll(void) {
 void net_init(void) {
     g_count = 0;
     g_rx_head = g_rx_tail = 0;
+    g_inited = 1;
 }
