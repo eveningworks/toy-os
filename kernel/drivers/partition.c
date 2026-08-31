@@ -369,8 +369,9 @@ static void reserved_span(enum partition_table_kind kind, uint32_t disk_sectors,
 //
 // `*why` is set to a short reason for the caller to log. Returns 1 if
 // the table is safe to write.
-int partition_validate(const struct partition_table *in, const char **why) {
-    uint32_t disk = blk_disk_sector_count();
+int partition_validate_on(const struct block_device *dev,
+                          const struct partition_table *in, const char **why) {
+    uint32_t disk = blkdev_sector_count(dev);
     if (!disk) { *why = "no disk"; return 0; }
 
     if (in->kind != PART_TABLE_MBR && in->kind != PART_TABLE_GPT) {
@@ -440,9 +441,10 @@ int partition_validate(const struct partition_table *in, const char **why) {
 // table is not a licence to zero a sector this code does not own, and
 // a disk written elsewhere may well have boot code in it.
 // tools/mkpart_test.py does the same.
-static __attribute__((noinline)) int write_mbr(const struct partition_table *in, int protective) {
+static __attribute__((noinline)) int write_mbr(const struct block_device *dev,
+                                               const struct partition_table *in, int protective) {
     uint8_t sec[PART_SECTOR_SIZE];
-    if (!blk_disk_read_sectors(0, 1, sec)) k_memset(sec, 0, sizeof(sec));
+    if (!blkdev_read_sectors(dev, 0, 1, sec)) k_memset(sec, 0, sizeof(sec));
 
     k_memset(sec + MBR_ENTRY_TABLE_OFFSET, 0, MBR_ENTRY_SIZE * MBR_ENTRY_COUNT);
 
@@ -452,7 +454,7 @@ static __attribute__((noinline)) int write_mbr(const struct partition_table *in,
         // treat this disk as unpartitioned". Clamped to 0xFFFFFFFF
         // because that is all an MBR field can hold, which is exactly
         // why GPT exists.
-        uint64_t n = (uint64_t)blk_disk_sector_count() - 1;
+        uint64_t n = (uint64_t)blkdev_sector_count(dev) - 1;
         if (n > 0xFFFFFFFFull) n = 0xFFFFFFFFull;
         uint8_t *e = sec + MBR_ENTRY_TABLE_OFFSET;
         e[4] = MBR_TYPE_GPT_PROTECTIVE;
@@ -472,7 +474,7 @@ static __attribute__((noinline)) int write_mbr(const struct partition_table *in,
 
     sec[MBR_SIGNATURE_OFFSET] = 0x55;
     sec[MBR_SIGNATURE_OFFSET + 1] = 0xAA;
-    return blk_disk_write_sectors(0, 1, sec);
+    return blkdev_write_sectors(dev, 0, 1, sec);
 }
 
 // Writes the 32-sector entry array at `lba` and returns its CRC32 --
@@ -480,7 +482,8 @@ static __attribute__((noinline)) int write_mbr(const struct partition_table *in,
 // 16 KiB and a kernel stack is 16 KiB. Returns 0 on a write failure,
 // which is indistinguishable from a legitimate CRC of 0; `*ok` carries
 // the real answer.
-static __attribute__((noinline)) uint32_t write_gpt_entries(const struct partition_table *in,
+static __attribute__((noinline)) uint32_t write_gpt_entries(const struct block_device *dev,
+                                                            const struct partition_table *in,
                                                             uint32_t lba, int *ok) {
     uint32_t crc = 0xFFFFFFFF;
     *ok = 1;
@@ -514,7 +517,7 @@ static __attribute__((noinline)) uint32_t write_gpt_entries(const struct partiti
         }
 
         crc = crc32_update(crc, sec, PART_SECTOR_SIZE);
-        if (!blk_disk_write_sectors(lba + (uint32_t)s, 1, sec)) { *ok = 0; return 0; }
+        if (!blkdev_write_sectors(dev, lba + (uint32_t)s, 1, sec)) { *ok = 0; return 0; }
     }
     return ~crc;
 }
@@ -524,7 +527,8 @@ static __attribute__((noinline)) uint32_t write_gpt_entries(const struct partiti
 // and backup headers differ in exactly those three fields plus their
 // own CRC, which is why this is one function called twice rather than
 // two nearly-identical ones.
-static __attribute__((noinline)) int write_gpt_header(uint32_t self, uint32_t other,
+static __attribute__((noinline)) int write_gpt_header(const struct block_device *dev,
+                                                      uint32_t self, uint32_t other,
                                                       uint32_t entry_lba, uint32_t entries_crc,
                                                       const uint8_t *disk_guid, uint32_t disk_sectors) {
     uint8_t sec[PART_SECTOR_SIZE];
@@ -545,21 +549,22 @@ static __attribute__((noinline)) int write_gpt_header(uint32_t self, uint32_t ot
     write_le32(sec + 88, entries_crc);
 
     write_le32(sec + 16, crc32(sec, GPT_HEADER_SIZE));
-    return blk_disk_write_sectors(self, 1, sec);
+    return blkdev_write_sectors(dev, self, 1, sec);
 }
 
-int partition_write_table(const struct partition_table *in) {
+int partition_write_table_of(const struct block_device *dev, const struct partition_table *in) {
     const char *why = "";
-    if (!partition_validate(in, &why)) {
+    if (!dev) { klog_write("partition: refusing to write -- no such disk\n"); return 0; }
+    if (!partition_validate_on(dev, in, &why)) {
         klog_printf("partition: refusing to write -- %s\n", why);
         return 0;
     }
 
-    uint32_t disk = blk_disk_sector_count();
+    uint32_t disk = blkdev_sector_count(dev);
 
     if (in->kind == PART_TABLE_MBR) {
-        if (!write_mbr(in, 0)) { klog_write("partition: MBR write failed\n"); return 0; }
-        blk_flush();
+        if (!write_mbr(dev, in, 0)) { klog_write("partition: MBR write failed\n"); return 0; }
+        blkdev_flush(dev);
         return 1;
     }
 
@@ -576,9 +581,9 @@ int partition_write_table(const struct partition_table *in) {
     guid_generate(disk_guid);
 
     int ok = 0;
-    uint32_t crc_backup = write_gpt_entries(in, backup_entries, &ok);
+    uint32_t crc_backup = write_gpt_entries(dev, in, backup_entries, &ok);
     if (!ok) { klog_write("partition: GPT backup entry array write failed\n"); return 0; }
-    uint32_t crc_primary = write_gpt_entries(in, GPT_PRIMARY_ENTRY_LBA, &ok);
+    uint32_t crc_primary = write_gpt_entries(dev, in, GPT_PRIMARY_ENTRY_LBA, &ok);
     if (!ok) { klog_write("partition: GPT entry array write failed\n"); return 0; }
     // Same bytes, so the two CRCs must agree. If they ever did not, one
     // of the two arrays did not land the way it was built, and writing
@@ -589,18 +594,28 @@ int partition_write_table(const struct partition_table *in) {
         return 0;
     }
 
-    if (!write_gpt_header(backup_hdr, GPT_HEADER_LBA, backup_entries, crc_primary, disk_guid, disk)) {
+    if (!write_gpt_header(dev, backup_hdr, GPT_HEADER_LBA, backup_entries, crc_primary, disk_guid, disk)) {
         klog_write("partition: GPT backup header write failed\n");
         return 0;
     }
-    if (!write_gpt_header(GPT_HEADER_LBA, backup_hdr, GPT_PRIMARY_ENTRY_LBA, crc_primary, disk_guid, disk)) {
+    if (!write_gpt_header(dev, GPT_HEADER_LBA, backup_hdr, GPT_PRIMARY_ENTRY_LBA, crc_primary, disk_guid, disk)) {
         klog_write("partition: GPT header write failed\n");
         return 0;
     }
-    if (!write_mbr(in, 1)) { klog_write("partition: protective MBR write failed\n"); return 0; }
+    if (!write_mbr(dev, in, 1)) { klog_write("partition: protective MBR write failed\n"); return 0; }
 
-    blk_flush();
+    blkdev_flush(dev);
     return 1;
+}
+
+// THE BOOT DISK, which is what every caller meant before a table could
+// be written anywhere else.
+int partition_validate(const struct partition_table *in, const char **why) {
+    return partition_validate_on(blk_whole_disk(), in, why);
+}
+
+int partition_write_table(const struct partition_table *in) {
+    return partition_write_table_of(blk_whole_disk(), in);
 }
 
 // Fills in the fields a caller should not have to invent: a fresh

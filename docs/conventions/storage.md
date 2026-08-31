@@ -443,6 +443,31 @@ destructive pointed at a partition where it is unrecoverable. Real
 installers make exactly this distinction: an ESP is never offered as a
 root filesystem target.
 
+## `mkpart` CAN WRITE ANY DISK, AND A DISK NOTHING IS MOUNTED FROM IS RE-READ AT ONCE
+
+`struct mkpart_request` carries a `device` name (empty = the boot disk,
+so a caller that predates the field is unchanged) and
+`partition_write_table_of()` takes the disk. A **partition** name is
+refused: a table written inside a partition describes windows into
+itself.
+
+Two things follow, both of them Linux's rules:
+
+- **`confirm` is demanded for a disk in USE** -- the boot disk, or one
+  carrying a mount -- and not for a second disk nothing is running from.
+  Making somebody type it for a disk the command is not touching is how
+  the word stops meaning anything, and a zeroed request names no disk,
+  which is the boot disk, so the accident it exists for is still covered.
+- **The table is RE-READ on a disk nothing is mounted from**
+  (`mount_rescan_disk()`, Linux's `BLKRRPART`), so `<disk>p<n>` become
+  devices immediately. A busy disk still waits for the next boot,
+  because handing out windows over a filesystem in use is worse than
+  making the caller reboot. This is what lets one program partition,
+  format and mount a target.
+
+The rescan ADDS windows and never removes one, so repartitioning the
+same disk twice in a boot leaves the old windows named as well.
+
 ## WRITING A TABLE IS A SYSCALL THAT TAKES A TABLE, NOT A SECTOR
 
 `SYS_MKPART` takes a `struct mkpart_request` (`abi/partition_abi.h`) and

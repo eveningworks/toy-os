@@ -507,6 +507,25 @@ const struct block_device *mount_partition_device(int number) {
 // A disk with no table, or one whose entries are unusable, simply
 // contributes nothing. That is not an error: a blank drive is a
 // perfectly ordinary thing to have plugged in.
+int mount_rescan_disk(const struct block_device *disk) {
+    if (!disk) return 0;
+    // STATIC, not a stack local: struct partition_table is ~1.5 KB
+    // against a 1 KB kernel frame budget, the same call g_tbl and
+    // partition_query.c both make. Separate from g_tbl, which caches
+    // the ROOT's table.
+    static struct partition_table tbl;
+    if (!partition_read_table_of(disk, &tbl)) return 0;
+    if (tbl.kind == PART_TABLE_NONE || tbl.entry_count == 0) return 0;
+
+    int named = 0;
+    for (int n = 0; n < tbl.entry_count; n++) {
+        uint32_t base, count;
+        if (!entry_window_of(&tbl, &tbl.entries[n], &base, &count)) continue;
+        if (blk_part_create(disk, base, count, n + 1)) named++;
+    }
+    return named;
+}
+
 static void name_all_partitions(void) {
     // Snapshot the count: creating windows APPENDS to the table, and a
     // loop over a growing table would walk into the partitions it just
@@ -515,20 +534,7 @@ static void name_all_partitions(void) {
     for (int i = 0; i < disks; i++) {
         const struct blk_entry *e = blk_device_at(i);
         if (!e || e->dev != e->parent) continue;   // a partition, not a disk
-
-        // STATIC, not a stack local: struct partition_table is ~1.5 KB
-        // against a 1 KB kernel frame budget, the same call g_tbl and
-        // partition_query.c both make. Reused per disk, and separate
-        // from g_tbl, which caches the ROOT's table.
-        static struct partition_table tbl;
-        if (!partition_read_table_of(e->dev, &tbl)) continue;
-        if (tbl.kind == PART_TABLE_NONE || tbl.entry_count == 0) continue;
-
-        for (int n = 0; n < tbl.entry_count; n++) {
-            uint32_t base, count;
-            if (!entry_window_of(&tbl, &tbl.entries[n], &base, &count)) continue;
-            blk_part_create(e->dev, base, count, n + 1);
-        }
+        mount_rescan_disk(e->dev);
     }
 }
 

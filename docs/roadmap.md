@@ -382,7 +382,7 @@ No dependency on the phases above; ordered among themselves.
 - [ ] A mount point deeper than one already mounted works, but nothing tests a three-level nest
 - [ ] `fs_read()`'s nested-read refusal is ONE flag for every mount, so two reads on different filesystems still refuse
 - [ ] `fs_check`/`fsck` only ever check the ROOT -- there is no way to fsck `/boot`
-- [ ] `mkpart` and `parttable` still mean `blk_active()`'s disk, which a second mount makes ambiguous
+- [ ] `parttable` still reads `blk_active()`'s disk only -- `mkpart --disk` writes any of them
 
 ### FAT32
 

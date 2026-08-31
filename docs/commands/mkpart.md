@@ -6,7 +6,8 @@
 
 ## Synopsis
 
-    mkpart [--mbr|--gpt] <size>[K|M|G]|rest [<size>|rest ...] confirm
+    mkpart [--disk <name>] [--mbr|--gpt] <size>[K|M|G]|rest [<size>|rest ...] confirm
+      --disk <name>  which disk (`lsblk`); default is the one this machine booted
       --gpt          write a GPT (default)
       --mbr          write a legacy MBR -- at most 4 partitions
       <size>         one partition of that size; `rest` takes what is left
@@ -14,8 +15,14 @@
 
 ## Description
 
-`/bin/mkpart` writes a partition table to the disk. It is the write half of
+`/bin/mkpart` writes a partition table to a disk. It is the write half of
 `parttable`, which reads one.
+
+**Which disk.** With no `--disk`, the one this machine booted from — which is
+all this command could reach at all until 2026-08-31, and is why the default is
+that rather than "the first one". `--disk` takes a name `lsblk` prints
+(`ata1`, `virtio0`); a **partition** name is refused, because a table written
+inside a partition describes windows into itself.
 
 Sizes are laid out end to end from LBA 2048 (the 1 MiB alignment every modern
 tool uses), in the order given, with no gaps and no reordering — what you type
@@ -33,11 +40,16 @@ editor on another system can add to a table this wrote.
 ## What it deliberately does not do
 
 - **It does not format anything.** A partition is a range of sectors; putting a
-  filesystem in one is `fsformat`. Two verbs because they are two decisions,
+  filesystem in one is `mkfs` (a named partition) or `fsformat` (the volume this
+  machine is running from). Separate verbs because they are separate decisions,
   the same split as `fdisk` and `mkfs`.
-- **It does not remount, and nothing about the running system changes.** The
-  new table takes effect at the **next boot**. Linux is the same — the kernel
-  refuses to re-read a table on a busy disk.
+- **It does not remount a disk the machine is running from.** On the boot disk,
+  or any disk something is mounted from, the new table takes effect at the
+  **next boot** — Linux is the same, and its kernel likewise refuses to re-read
+  a table on a busy disk. On a disk nothing is mounted from, the kernel *does*
+  re-read it, so `<disk>p<n>` become devices immediately (Linux's `BLKRRPART`).
+  That is what lets one program partition, format and mount a target without a
+  reboot in between.
 - **There is no interactive mode.** `fdisk`'s prompt-driven editor is a lot of
   program for a machine with one disk, and a command line can be read back
   later and driven by a test.
@@ -57,7 +69,13 @@ the table's own reserved sectors.
 
 ## The trap
 
-**`confirm` is a speed bump, not a permission check.** toy-os has no privilege
+**`confirm` is only demanded for a disk in USE.** The word is required when the
+target is the boot disk or carries a mount, and not when it is a second disk
+nothing is running from — making somebody type it for a disk the command is not
+touching is how the word stops meaning anything. A zeroed request names no
+disk, which is the boot disk, so the accident case is still covered.
+
+**And `confirm` is a speed bump, not a permission check.** toy-os has no privilege
 model — there is no uid, and `SYS_QUERY` has none either — so any process can
 set the flag that `confirm` sets. What it stops is the accident, not the
 attacker. If uids ever arrive, `sys_mkpart()` in
@@ -79,10 +97,17 @@ candidate.
 
 ## Typical use
 
-    mkpart --gpt 64M rest confirm     # two partitions
+    mkpart --gpt 64M rest confirm     # two partitions, on the boot disk
     reboot
     fsformat tfs3 confirm             # a filesystem in the active partition
     df                                # reports the PARTITION's size, not the disk's
+
+A second disk needs no reboot, because nothing is mounted from it:
+
+    lsblk                             # find its name
+    mkpart --disk ata1 --gpt 64M rest confirm
+    mkfs ata1p2 confirm               # ata1p1/ata1p2 exist already
+    mount ata1p2 /mnt
 
 ## See also
 

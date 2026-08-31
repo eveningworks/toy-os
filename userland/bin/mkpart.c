@@ -38,7 +38,8 @@
 #define GPT_FIRST_USABLE 2048  // ...comfortably past LBA 33 as well
 
 static const char *USAGE =
-    "mkpart [--mbr|--gpt] <size>[K|M|G]|rest [<size>|rest ...] confirm\n"
+    "mkpart [--disk <name>] [--mbr|--gpt] <size>[K|M|G]|rest [<size>|rest ...] confirm\n"
+    "  --disk <name>  which disk (`lsblk`); default is the one this machine booted\n"
     "  --gpt          write a GPT (default)\n"
     "  --mbr          write a legacy MBR -- at most 4 partitions\n"
     "  <size>         one partition of that size; `rest` takes what is left\n"
@@ -73,24 +74,47 @@ static uint64_t parse_size(const char *s, uint64_t *out) {
     return *out != 0;
 }
 
+// How many sectors a disk has, so `rest` and the bounds checks mean
+// something before the syscall refuses them. The BOOT disk's comes from
+// QUERY_PARTTABLE, which carries it (kernel/drivers/partition_query.c);
+// a named one comes from QUERY_BLKDEV, which is the only place another
+// disk's size is reported. Returns 0 for a name that is not a whole
+// disk, which the syscall would refuse anyway.
+static uint64_t disk_sectors_of(const char *name) {
+    if (!name) {
+        struct query_parttable t;
+        if (sys_query_record(QUERY_PARTTABLE, 0, &t, sizeof t) < (int)sizeof t) return 0;
+        return t.disk_sectors;
+    }
+    struct query_blkdev b;
+    for (int i = 0; sys_query_record(QUERY_BLKDEV, i, &b, sizeof b) >= (int)sizeof b; i++) {
+        if (strcmp(b.name, name) != 0) continue;
+        if (b.parent[0]) return 0; // a partition, not a disk
+        return b.sectors;
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
     struct mkpart_request req;
     memset(&req, 0, sizeof req);
     req.kind = MKPART_KIND_GPT;
 
-    // How many sectors the disk has, so `rest` and the bounds checks
-    // mean something before the syscall refuses them. QUERY_PARTTABLE
-    // carries it -- see kernel/drivers/partition_query.c.
-    struct query_parttable t;
-    if (sys_query_record(QUERY_PARTTABLE, 0, &t, sizeof t) < (int)sizeof t) {
-        cmd_fail("mkpart", "cannot read the disk's geometry");
-        return 1;
+    // --disk has to be read BEFORE the geometry, because the geometry
+    // is that disk's.
+    const char *disk_name = NULL;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--disk") != 0) continue;
+        if (i + 1 >= argc) { cmd_fail("mkpart", "--disk needs a device name"); return 1; }
+        disk_name = argv[i + 1];
     }
-    uint64_t disk = t.disk_sectors;
+
+    uint64_t disk = disk_sectors_of(disk_name);
     if (disk == 0) {
-        cmd_fail("mkpart", "no disk");
+        cmd_fail("mkpart", disk_name ? "no such disk" : "no disk");
         return 1;
     }
+    if (disk_name) snprintf(req.device, sizeof req.device, "%s", disk_name);
 
     int confirmed = 0;
     uint64_t sizes[MKPART_MAX_ENTRIES];
@@ -99,6 +123,7 @@ int main(int argc, char **argv) {
 
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
+        if (strcmp(a, "--disk") == 0) { i++; continue; }  // read above, with its value
         if (strcmp(a, "--gpt") == 0) { req.kind = MKPART_KIND_GPT; continue; }
         if (strcmp(a, "--mbr") == 0) { req.kind = MKPART_KIND_MBR; continue; }
         if (strcmp(a, "confirm") == 0) { confirmed = 1; continue; }
@@ -193,7 +218,14 @@ int main(int argc, char **argv) {
                (unsigned long long)req.entries[i].start_lba,
                (unsigned long long)req.entries[i].sectors, size);
     }
-    printf("Reboot for this to take effect, then `fsformat tfs3 confirm` to put a\n"
-           "filesystem in the first partition.\n");
+    if (disk_name) {
+        // The kernel re-read the table because nothing is mounted from
+        // it, so the windows are already devices.
+        printf("%sp1.. are ready now -- `mkfs %sp1 confirm` to put a filesystem in one.\n",
+               disk_name, disk_name);
+    } else {
+        printf("Reboot for this to take effect, then `fsformat tfs3 confirm` to put a\n"
+               "filesystem in the first partition.\n");
+    }
     return 0;
 }

@@ -62,11 +62,29 @@ struct mkpart_entry {
     char pad[3];
 };
 
+// A device name as `lsblk` prints it (`ata0`, `virtio1`), matching
+// BLK_NAME_MAX. Long enough for "virtio0p15" so one constant serves
+// both, even though only a WHOLE DISK is legal here.
+#define MKPART_DEVICE_MAX 16
+
 struct mkpart_request {
     uint32_t kind;                    // MKPART_KIND_*
     uint32_t count;                   // 1..MKPART_MAX_ENTRIES
     uint32_t flags;                   // MKPART_*
     uint32_t reserved;
+
+    // WHICH DISK. Empty means the boot disk, which is what this syscall
+    // could only ever write before -- so a caller that predates the
+    // field keeps working, and a zeroed request still cannot reach some
+    // other machine's disk by accident.
+    //
+    // A WHOLE DISK ONLY. Naming a partition (`ata0p3`) is refused:
+    // writing a table inside a partition produces one describing
+    // windows into itself, and there is no reading of that which is
+    // what anybody meant.
+    char device[MKPART_DEVICE_MAX];
+    char pad2[4];
+
     struct mkpart_entry entries[MKPART_MAX_ENTRIES];
 };
 

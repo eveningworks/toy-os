@@ -134,4 +134,15 @@ void partition_fill_defaults(struct partition_table *t);
 // is logged either way.
 int partition_write_table(const struct partition_table *in);
 
+// The same, on a NAMED disk. `dev` must be a WHOLE DISK -- a partition
+// device would put a table inside a partition, describing windows into
+// itself. This is what an installer writes its target's table with, and
+// what SYS_MKPART's `device` field reaches; the two calls above are the
+// boot disk's, which is what every caller meant before a table could be
+// written anywhere else.
+int partition_write_table_of(const struct block_device *dev,
+                             const struct partition_table *in);
+int partition_validate_on(const struct block_device *dev,
+                          const struct partition_table *in, const char **why);
+
 #endif

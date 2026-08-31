@@ -147,6 +147,21 @@ void mount_boot_root(void);
 // backend claims it, or `/boot` does not exist.
 void mount_boot_auto(void);
 
+// Re-read one disk's partition table and NAME the windows it describes,
+// so `<disk>p<n>` becomes a device something can format and mount.
+// Returns how many were named. Linux's BLKRRPART, and the same rule
+// applies: the CALLER decides whether the disk is busy -- rescanning a
+// disk the machine is running from would hand out windows over a
+// filesystem in use, which is why sys_mkpart() only does it for a disk
+// nothing is mounted from.
+//
+// The windows are ADDED, never removed: `blk_part_create()` hands back
+// the same device for the same window, so re-running this after a table
+// change leaves the OLD windows named as well. Harmless for the
+// installer's case (a disk that had no table) and worth knowing before
+// repartitioning a disk twice in one boot.
+int mount_rescan_disk(const struct block_device *disk);
+
 // Re-run the boot probe after a format wrote a new filesystem.
 // Returns 1 if `expect` ended up as the root backend. Drops every
 // mount first: a reformat invalidates the root, and anything mounted

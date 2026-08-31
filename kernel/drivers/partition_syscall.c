@@ -19,7 +19,22 @@
 #include "kfmt.h"
 #include "string.h"
 #include "vmm.h"
+#include "mount.h"     // disk_is_in_use() asks the mount table
 #include "scheduler.h" // the preemption guard around the write
+
+// Is this disk one the machine is RUNNING FROM? True when it is the
+// boot disk, or when any mount sits on it or on a partition of it.
+// mount->dev is a partition device, so the parent is what to compare.
+static int disk_is_in_use(const struct block_device *disk) {
+    if (disk == blk_whole_disk() && fs_is_persistent()) return 1;
+    for (int i = 0; i < mount_count(); i++) {
+        const struct mount *m = mount_at(i);
+        if (!m || !m->used || !m->dev) continue;
+        const struct blk_entry *e = blk_device_by_name(blk_device_name(m->dev));
+        if (e && (e->parent == disk || e->dev == disk)) return 1;
+    }
+    return 0;
+}
 
 int sys_mkpart(struct syscall_ctx *c) {
     struct mkpart_request req;
@@ -28,7 +43,29 @@ int sys_mkpart(struct syscall_ctx *c) {
         return 0;
     }
 
-    if (!blk_present() || blk_disk_sector_count() == 0) {
+    // WHICH DISK. Empty names the boot disk, which is all this syscall
+    // could reach before; a name must resolve to a WHOLE DISK, because
+    // a table written inside a partition describes windows into itself.
+    const struct block_device *disk = NULL;
+    req.device[sizeof(req.device) - 1] = '\0';
+    if (req.device[0]) {
+        const struct blk_entry *e = blk_device_by_name(req.device);
+        if (!e) {
+            klog_printf("mkpart: no such device \"%s\"\n", req.device);
+            c->regs[14] = (uint64_t)(int64_t)-ENODEV;
+            return 0;
+        }
+        if (e->parent != e->dev) {
+            klog_printf("mkpart: \"%s\" is a partition, not a disk -- refused\n", req.device);
+            c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+            return 0;
+        }
+        disk = e->dev;
+    } else {
+        disk = blk_whole_disk();
+    }
+
+    if (!disk || blkdev_sector_count(disk) == 0) {
         c->regs[14] = (uint64_t)(int64_t)-ENODEV;
         return 0;
     }
@@ -41,8 +78,15 @@ int sys_mkpart(struct syscall_ctx *c) {
     // abi/partition_abi.h says the same thing out loud so that a
     // future session adding uids knows this is the place to put a real
     // check.
-    if (fs_is_persistent() && !(req.flags & MKPART_CONFIRM)) {
-        klog_write("mkpart: refused -- a persistent filesystem is mounted and MKPART_CONFIRM was not set\n");
+    // ...and it asks about THIS disk, not "is anything mounted": with a
+    // device field, repartitioning an empty second disk while the root
+    // is mounted elsewhere is the installer's ordinary case, and making
+    // it type `confirm` for a disk it is not touching teaches the word
+    // to mean nothing. The boot disk still needs it whether or not
+    // anything is mounted from it.
+    if (disk_is_in_use(disk) && !(req.flags & MKPART_CONFIRM)) {
+        klog_printf("mkpart: refused -- %s is in use and MKPART_CONFIRM was not set\n",
+                    blk_device_name(disk));
         c->regs[14] = (uint64_t)(int64_t)-EPERM;
         return 0;
     }
@@ -99,7 +143,7 @@ int sys_mkpart(struct syscall_ctx *c) {
     }
 
     const char *why = "";
-    if (!partition_validate(&tbl, &why)) {
+    if (!partition_validate_on(disk, &tbl, &why)) {
         klog_printf("mkpart: refused -- %s\n", why);
         c->regs[14] = (uint64_t)(int64_t)-EINVAL;
         return 0;
@@ -114,9 +158,26 @@ int sys_mkpart(struct syscall_ctx *c) {
     // driver's buffers mid-table-write. Cheaper to hold it than to
     // reason about which half of a GPT write is safe to be preempted in.
     scheduler_preempt_disable();
-    int ok = partition_write_table(&tbl);
+    int ok = partition_write_table_of(disk, &tbl);
     scheduler_preempt_enable();
 
-    c->regs[14] = ok ? 0 : (uint64_t)(int64_t)-EIO;
+    if (!ok) {
+        c->regs[14] = (uint64_t)(int64_t)-EIO;
+        return 0;
+    }
+
+    // RE-READ THE TABLE, but only on a disk nothing is running from --
+    // Linux's rule for BLKRRPART, and for its reason: handing out
+    // windows over a filesystem in use is worse than making the caller
+    // reboot. So the boot disk still takes effect at the next boot,
+    // and an installer's target gets its `<disk>p<n>` devices at once,
+    // which is what lets one program partition, format and mount.
+    if (!disk_is_in_use(disk)) {
+        int named = mount_rescan_disk(disk);
+        klog_printf("mkpart: %s re-read -- %d partition(s) named\n",
+                    blk_device_name(disk), named);
+    }
+
+    c->regs[14] = 0;
     return 0;
 }
