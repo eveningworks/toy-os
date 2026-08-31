@@ -717,3 +717,34 @@ the filesystem" means the name resolved and the window was read, where
 an unknown name is refused by name.
 
 `/bin/lsblk` is how a person sees any of this.
+
+## FORMATTING A VOLUME IS `SYS_MKFS`, AND A BACKEND MUST PUT ITS OWN VOLUME STATE BACK
+
+`mkfs [-t <type>] <partition> confirm` writes an empty filesystem onto
+ONE named partition. Four things:
+
+- **IT IS NOT `fsformat`.** That reformats the volume this machine is
+  RUNNING FROM -- it unmounts everything, formats, re-probes -- which is
+  right for "wipe this machine" and wrong for "put a filesystem on that
+  other partition". An installer must not do the first to the system it
+  is running from.
+- **A BACKEND KEEPS ITS VOLUME IN MODULE-LEVEL STATE, so `format()` and
+  `wipe()` MUST SAVE AND RESTORE IT.** `tfs3_format()` opens with
+  `set_flat_volume(dev)`; `mount_wipe_others()` calls `wipe(dev)` on
+  every OTHER backend, so the damage arrives through tfs3 even when the
+  target is FAT32. Before `struct t3_saved` this crashed twice, each
+  time taking `/bin` with it. A new backend that formats without
+  restoring will do the same, and nothing will catch it at build time.
+- **THE TARGET MAY NOT BE MOUNTED, and that rule is permanent** --
+  unlike the one above, it is not something a backend can fix.
+- **`confirm` IS A WORD YOU TYPE.** There is no privilege model to gate
+  a destructive storage operation with, so the stand-in is that the
+  person asking spells it out -- as `fsformat` and `mkpart` already do.
+  A speed bump, not a permission check.
+
+**AND A BACKEND CAN STILL ONLY BE MOUNTED ONCE** (`fs_ops.max_mounts`
+is 1 everywhere), which is the same module-level state seen from the
+other end -- so a target can be formatted but not yet mounted to copy
+anything onto. `docs/bugs.md` tracks that as the installer's remaining
+prerequisite. `mount` distinguishes it from "nothing recognises this
+volume", because saying the wrong one costs an hour.

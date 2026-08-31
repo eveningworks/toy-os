@@ -804,6 +804,7 @@ whenever a headline here tells you something you did not already know.
 - **A PARTITIONED DISK IS NEVER AUTO-FORMATTED, AND THE FIRST PARTITION THAT IS OURS IS LEFT ACTIVE**
 - **WRITING A TABLE IS A SYSCALL THAT TAKES A TABLE, NOT A SECTOR**
 - **A ROOT IS ONE FILESYSTEM, BUT A PATH TREE IS SEVERAL: THERE IS A MOUNT TABLE**
+- **FORMATTING A VOLUME IS `SYS_MKFS`, AND A BACKEND MUST PUT ITS OWN VOLUME STATE BACK**
 - **A BACKEND DECLARES HOW MANY TIMES IT MAY BE MOUNTED, and every one says ONE**
 - **A PROBE MUST NOT DISTURB A MOUNT, and that contract was only ever honoured by accident**
 - **`fs_ops.init()` TAKES A DEVICE, and `blk_active()` is not it**
