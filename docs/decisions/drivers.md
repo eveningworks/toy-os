@@ -1875,3 +1875,56 @@ the ABI is a real project (rate and format negotiation through the ring,
 4-byte subslot is one function. The trap that earns its comment is the
 direction: into the BOTTOM of the subslot is a 256x attenuation, which
 sounds like silence rather than like a bug.
+
+## A per-chip vendor driver, in a kernel whose rule is "a class, not a device"
+
+`usb_net.c` speaks CDC-ECM, the standard, and every other USB driver
+here is a class driver on purpose. `usb_r8153.c` is a per-chip register
+map for one Realtek family, which is the opposite. It exists because
+the standard did not work on the hardware.
+
+**The measurement that decided it.** The TP-Link UE300 offers Realtek's
+protocol as configuration 1 and CDC-ECM as configuration 2. In
+configuration 2, on a live segment, toy-os received zero frames -- and
+so did Linux's own `cdc_ether`, at SuperSpeed and again at high speed
+(`docs/bugs.md`). An oracle sharing none of this code failed
+identically, which is what turned "our driver is broken" into "this
+adapter's ECM is a compatibility checkbox its maker never exercised":
+Linux always binds `r8152` to configuration 1, so nothing selects
+configuration 2 in normal use.
+
+So the choice was not "standard versus vendor". It was "a vendor driver
+or no working USB Ethernet at all on the only adapter this project has".
+That is the same argument that gets a vendor driver into any real OS,
+and it is worth writing down because the general rule -- prefer a class
+-- is right and would otherwise have been applied to a case it does not
+fit. The class driver STAYS, for an adapter whose ECM works.
+
+**Why the vendor configuration is gated on an id table.** Class 0xFF
+describes nothing at all, so "a vendor interface is driveable" would
+have made enumeration pick the vendor configuration of every device that
+has one and then write to its registers. `usb_r8153_claims()` is the
+gate: a device nobody names keeps configuration 0 and whatever class
+driver can take it. This is why the id table lives in the DRIVER and is
+asked by enumeration, rather than enumeration carrying a list.
+
+**Why BSD rather than Linux.** Both describe this chip. `r8152.c` is
+GPL-2.0 and transcribing it into an MIT repository would relicense the
+result; FreeBSD's `ure(4)` is BSD-2-clause, which is compatible if the
+notice travels with what was adapted. Register addresses, bit names and
+descriptor layouts are facts about the silicon and carry no notice --
+the ORDER of the initialisation sequence, and the reasoning about which
+writes it needs, are what was taken, and `LICENSE` carries Kevin Lo's
+notice for them. The practical rule for a future session: a datasheet
+fact is free, somebody's code is not, and "I only read it for reference"
+is not a distinction a licence makes.
+
+**Why receive aggregation is OFF, where ure(4) turns it on.** The device
+can pack several frames into one bulk transfer, and the receive path
+walks a packed transfer correctly (`usb_r8153_rx_step`, with KTESTs that
+feed it two frames neither of which is 8-aligned). It is still disabled,
+because with it on a bug in the walk and a dead receive path produce the
+same symptom -- nothing arrives -- and this driver was written against
+hardware that had just spent a day producing exactly that symptom for a
+different reason. It costs throughput and nothing else, and turning it
+on is one line once somebody wants the throughput.

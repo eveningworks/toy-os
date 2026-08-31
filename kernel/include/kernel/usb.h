@@ -175,6 +175,34 @@ int usb_net_bind(struct usb_device_info *info, const uint8_t *cfg,
 // Releases the device on `slot`, if it is the bound one.
 void usb_net_unbind(uint8_t slot);
 
+// --- RTL8153, the vendor protocol (usb_r8153.c) -----------------------
+
+// Is this a device the Realtek driver claims? Asked by enumeration
+// BEFORE a configuration is chosen, because the vendor configuration is
+// only driveable when this says so -- a vendor-specific interface says
+// nothing about what is behind it.
+int usb_r8153_claims(uint16_t vid, uint16_t pid);
+
+// Binds the vendor configuration of an RTL8152/8153 and registers a
+// `net_device`. Takes the raw configuration for the same reason
+// usb_net_bind() does. Returns 1 when it took the device.
+int usb_r8153_bind(struct usb_device_info *info, const uint8_t *cfg,
+                   uint32_t total);
+
+void usb_r8153_unbind(uint8_t slot);
+
+// The framing, exported for the KTESTs -- a bulk transfer is not a
+// frame here, and this is the part that can be tested without the
+// hardware. `usb_r8153_rx_step` walks ONE frame out of a completed
+// receive transfer: it returns the bytes that frame occupies
+// (descriptor, payload and padding) or 0 to stop, and names the frame
+// through *out_off/*out_len, with *out_len 0 for one to drop.
+uint32_t usb_r8153_rx_step(const uint8_t *buf, uint32_t avail,
+                           uint32_t *out_off, uint32_t *out_len);
+
+// The 8-byte transmit descriptor a frame of `len` bytes is sent behind.
+void usb_r8153_tx_desc(uint8_t out[8], uint32_t len);
+
 // --- hubs (usb_hub.c) -------------------------------------------------
 
 // Binds an enumerated hub: reads its hub descriptor, powers its ports,

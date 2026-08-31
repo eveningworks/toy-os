@@ -886,12 +886,13 @@ the only thing here an interrupt is load-bearing for.
   the buffers**, as with isochronous and unlike interrupt: an Ethernet
   frame is 1514 bytes and the interrupt path's slices are 64.
 - **THE CONFIGURATION IS CHOSEN, NOT ASSUMED.** A device may offer
-  several, and the useful one need not be first: a TP-Link UE300 offers
-  Realtek's vendor protocol as configuration 1 and standard CDC-ECM as
-  2, so taking the first leaves an ordinary Ethernet adapter unusable.
-  `pick_configuration()` is BIASED TOWARDS 0 -- a first configuration
-  that is already driveable is kept -- because the cost of being wrong
-  is a device that used to work and stops.
+  several, and the useful one need not be first.
+  `pick_configuration()` takes index 0 unless a LATER one holds a class
+  this build can drive and 0 does not, and it is BIASED TOWARDS 0 --
+  a first configuration that is already driveable is kept -- because the
+  cost of being wrong is a device that used to work and stops. (This is
+  what used to route a UE300 to its ECM configuration. It routes it to
+  the vendor one now; see the next section.)
 - **THE MAC ADDRESS IS A STRING.** `iMACAddress` in the ECM functional
   descriptor is an index to a twelve-character hex STRING, and it is the
   only place the address is written down. An adapter whose string will
@@ -904,6 +905,47 @@ the only thing here an interrupt is load-bearing for.
   interrupt endpoint, and `net_device.link_known` is a THIRD value: a
   card with no way to ask is not a card whose cable is unplugged, so
   `ifconfig` prints no link line at all rather than guessing "down".
+
+## A VENDOR CONFIGURATION NEEDS A DRIVER THAT NAMES THE DEVICE, AND AN RTL8153 IS FRAMED RATHER THAN RAW
+
+`kernel/drivers/usb/usb_r8153.c` drives the Realtek RTL8152/8153 in its
+own configuration, because the UE300's standards-based one does not
+receive and neither does Linux's `cdc_ether` there (`docs/bugs.md`).
+Six things:
+
+- **CLASS 0xFF DESCRIBES NOTHING, so an id table is the gate.** A
+  vendor-specific interface counts as driveable only when
+  `usb_r8153_claims(vid, pid)` says a driver knows what is behind it.
+  Treating class 0xFF as driveable in general would claim the vendor
+  configuration of every device that has one, and then write to its
+  registers.
+- **THE REGISTERS ARE CONTROL TRANSFERS, four bytes at a time behind a
+  byte-enable mask.** The chip is on the far side of USB; there is no
+  MMIO window. A narrower register is read as the aligned dword it sits
+  in and shifted out, and written with a mask naming the bytes to keep
+  -- get the shift and the mask out of step and the right value lands in
+  the wrong half, which reads back perfectly and does nothing.
+- **READ `PLA_IDR` BEFORE WRITING ANYTHING.** The failure mode is a
+  device that enumerates, accepts every request and silently does
+  nothing, so the register layer is proven against an address known
+  independently before any framing code is worth writing. That
+  checkpoint is what made this driver work on the first boot.
+- **A BULK TRANSFER IS NOT A FRAME.** Transmit prepends an 8-byte
+  descriptor; receive returns a 24-byte descriptor per frame, padded to
+  8, and the reported length INCLUDES the Ethernet CRC. Several frames
+  may be packed into one transfer, so the receive path WALKS
+  (`usb_r8153_rx_step`, KTESTed) -- aggregation is switched off here
+  anyway, because with it on a bug in the walk and a dead receive path
+  look the same.
+- **A TRANSFER THAT IS AN EXACT MULTIPLE OF wMaxPacketSize NEEDS A
+  ZERO-LENGTH PACKET after it**, or the device waits for the rest of a
+  frame it already has. FreeBSD spells this `force_short_xfer`; here it
+  is a second, zero-length TRB.
+- **THE REFERENCE IS BSD, NOT LINUX.** toy-os is MIT, `r8152.c` is
+  GPL-2.0, and `ure(4)` is BSD-2-clause. Register addresses and
+  descriptor layouts are facts about the device; an init SEQUENCE
+  adapted from someone's driver carries their notice, which is in
+  `LICENSE`.
 
 ## A DEVICE CANNOT REGISTER BEFORE ITS CORE'S init(), AND NOW IT IS TOLD SO
 

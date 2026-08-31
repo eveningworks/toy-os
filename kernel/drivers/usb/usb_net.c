@@ -1,14 +1,14 @@
 // CDC Ethernet (ECM): a USB adapter that carries raw Ethernet frames on
 // two bulk endpoints, registered as a `struct net_device` like any card.
 //
-// WHY ECM AND NOT THE VENDOR PROTOCOL. The adapter this was written for
-// -- a TP-Link UE300, an RTL8153 -- offers TWO configurations: Realtek's
-// own register protocol first, and standard CDC-ECM second. Linux binds
-// the first because `r8152` gets offloads and gigabit tuning out of it.
-// This binds the second, because ECM's data path is "a bulk transfer IS
-// a frame" and a vendor driver would be a per-chip register map for a
-// device this OS is not trying to make fast. usb_enum.c's configuration
-// choice is what makes the second one reachable at all.
+// THIS IS NO LONGER THE DRIVER FOR AN RTL8153. The adapter this was
+// written for -- a TP-Link UE300 -- offers Realtek's own protocol first
+// and CDC-ECM second, and its ECM configuration receives nothing, as
+// Linux's cdc_ether confirms by failing identically. usb_r8153.c binds
+// the vendor configuration now, and usb_enum.c hands such a device
+// there instead. What is left here is the STANDARD path, for an adapter
+// whose ECM works -- which is still the one worth having, because it is
+// a class driver rather than a per-chip register map.
 //
 // THREE THINGS LIVE IN CLASS-SPECIFIC DESCRIPTORS, which is why this
 // takes the raw configuration the way usb_audio.c does: the MAC address

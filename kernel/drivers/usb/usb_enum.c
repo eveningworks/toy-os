@@ -36,6 +36,7 @@
 #define USB_CLASS_HID   3
 #define USB_CLASS_HUB   9
 #define USB_CLASS_AUDIO 1
+#define USB_CLASS_VENDOR 0xFF
 
 // bmRequestType
 #define DIR_IN          0x80
@@ -183,7 +184,13 @@ static int read_configuration(uint8_t slot, uint8_t index,
 }
 
 // Does this configuration hold an interface a driver here could take?
-static int configuration_is_driveable(const uint8_t *cfg, uint32_t total) {
+//
+// A VENDOR-SPECIFIC interface counts only when a driver has said, BY
+// DEVICE ID, that it knows what is behind it -- class 0xFF describes
+// nothing, so treating it as driveable in general would claim the
+// vendor configuration of every device that has one.
+static int configuration_is_driveable(const uint8_t *cfg, uint32_t total,
+                                      uint16_t vid, uint16_t pid) {
     for (uint32_t o = 0; o + 2 <= total; ) {
         uint32_t blen = cfg[o];
         if (blen < 2 || o + blen > total) return 0;
@@ -191,6 +198,8 @@ static int configuration_is_driveable(const uint8_t *cfg, uint32_t total) {
             uint8_t cls = cfg[o + 5];
             if (cls == USB_CLASS_HID || cls == USB_CLASS_HUB ||
                 cls == USB_CLASS_AUDIO || cls == USB_CLASS_CDC)
+                return 1;
+            if (cls == USB_CLASS_VENDOR && usb_r8153_claims(vid, pid))
                 return 1;
         }
         o += blen;
@@ -212,17 +221,17 @@ static int configuration_is_driveable(const uint8_t *cfg, uint32_t total) {
 // wrong here is a device that used to work and stops, which is why the
 // rule is "only when index 0 offers nothing".
 static uint8_t pick_configuration(uint8_t slot, uint8_t configs,
-                                  uint8_t port) {
+                                  uint8_t port, uint16_t vid, uint16_t pid) {
     if (configs <= 1) return 0;
 
     uint32_t total = 0;
     if (read_configuration(slot, 0, &total, 0) &&
-        configuration_is_driveable(g_desc_buf, total))
+        configuration_is_driveable(g_desc_buf, total, vid, pid))
         return 0;
 
     for (uint8_t i = 1; i < configs && i < 8; i++) {
         if (!read_configuration(slot, i, &total, 0)) continue;
-        if (!configuration_is_driveable(g_desc_buf, total)) continue;
+        if (!configuration_is_driveable(g_desc_buf, total, vid, pid)) continue;
         klog_printf("usb: port %u: %u configurations, choosing %u "
                     "(the first this build can drive)\n", port, configs, i);
         return i;
@@ -293,7 +302,8 @@ int usb_enumerate_device(uint8_t root_port, uint8_t parent_port,
     // claiming more than 4 KiB of descriptors is refused rather than
     // allowed to overrun.
     uint8_t configs = g_desc_buf[17];      // bNumConfigurations
-    uint8_t pick = pick_configuration((uint8_t)slot, configs, parent_port);
+    uint8_t pick = pick_configuration((uint8_t)slot, configs, parent_port,
+                                      d->vendor_id, d->product_id);
 
     uint32_t total = 0;
     uint8_t cfg_value = 0;
@@ -355,6 +365,14 @@ int usb_enumerate_device(uint8_t root_port, uint8_t parent_port,
         (d->if_count && d->ifs[0].if_class == USB_CLASS_HUB)) {
         usb_hub_bind(d);
     } else {
+        // The vendor driver first: a device it claims is in its vendor
+        // configuration BECAUSE this driver exists (see
+        // configuration_is_driveable), so nothing else is offered it.
+        for (int i = 0; i < d->if_count; i++) {
+            if (d->ifs[i].if_class != USB_CLASS_VENDOR) continue;
+            if (!usb_r8153_bind(d, g_desc_buf, total)) continue;
+            break;
+        }
         for (int i = 0; i < d->if_count; i++) {
             if (d->ifs[i].if_class != USB_CLASS_CDC) continue;
             // CDC is a family; only the Ethernet model is driven here.
@@ -404,6 +422,7 @@ void usb_detach_slot(uint8_t slot) {
     usb_hid_unbind(slot);
     usb_audio_unbind(slot);
     usb_net_unbind(slot);
+    usb_r8153_unbind(slot);
     usb_hub_forget(slot);
     xhci_disable_slot(slot);
     if (d->cfg_phys) pmm_free_contiguous(d->cfg_phys, 1);

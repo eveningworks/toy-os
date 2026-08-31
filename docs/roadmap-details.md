@@ -3870,58 +3870,43 @@ written a sleep type the firmware never named.
 
 ## An RTL8153 vendor driver for USB Ethernet
 
-**Why, in one line:** the standards-based path is finished and does not
-work on the hardware available -- `usb_net.c` speaks CDC-ECM correctly
-and the adapter's ECM configuration receives nothing, which Linux's own
-`cdc_ether` confirms by failing identically (`docs/bugs.md`).
+**BUILT 2026-08-31** -- `kernel/drivers/usb/usb_r8153.c`. What is left
+here is what a later session would otherwise re-derive: what was
+measured, and what was not.
 
-**The hardware.** A TP-Link UE300 (`2357:0601`, Realtek RTL8153), which
-the maintainer can plug into the DEVELOPMENT machine and pass through:
+**The hardware.** A TP-Link UE300 (`2357:0601`, RTL8153, chip version
+0x5c20), passed through to a guest:
 
     sudo chmod o+rw /dev/bus/usb/BBB/DDD      # the maintainer runs this
     python3 tools/vm.py --usb-host 2357:0601 start
 
-It offers TWO configurations -- vendor-specific first, CDC-ECM second --
-and `usb_enum.c` currently picks ECM because that is the class it can
-drive. A vendor driver claims configuration 1 instead, and the choice
-logic already prefers "the first configuration this build can drive", so
-teaching it about the vendor interface is where the selection changes.
+**What was proven, on the maintainer's own segment.** `PLA_IDR` read
+back `b4:b0:24:86:bd:3a` -- the checkpoint that says the register layer
+is honest, and without which nothing after it would have been. Then a
+real DHCP lease, ICMP 3/3 to the gateway, an HTTP response fetched from
+it, and 730,605 bytes served OUT of the guest by `/bin/httpd` and
+verified byte-for-byte against the source file at ~3.9 MB/s (31
+Mbit/s) -- which exercises the receive path too, since every ACK in that
+stream is a bulk transfer completing.
 
-**THE FIRST CHECKPOINT, before any framing work.** Read `PLA_IDR`
-(0xc000, six bytes, MCU type PLA) over a vendor control transfer. It
-must come back **b4:b0:24:86:bd:3a** -- a MAC already known
-independently, from the ECM string descriptor and from the host. If that
-reads back, the register layer is right and everything after it is
-honest work; if it does not, nothing else is worth writing. This exists
-because the failure mode here is a device that enumerates, accepts every
-request and silently does nothing, which cost an hour on 2026-08-31.
+**What is NOT proven.**
 
-**What the driver needs**, in order:
+- **Aggregation.** `USB_USB_CTRL`'s `RX_AGG_DISABLE` is SET, where
+  ure(4) clears it, so the device sends one frame per transfer. The
+  walk handles a packed transfer and its KTESTs feed it one, but no
+  device has produced one here.
+- **Anything but a 5C20 stepping.** The version check REFUSES an
+  RTL8153B, an RTL8156 and an RTL8152: those want a different init
+  sequence and there is nothing here to test one against.
+- **SuperSpeed.** Tested at high speed only -- the adapter is on a
+  USB-2 root hub on the development machine. `--usb-host 2357:0601@1`
+  pins it to a USB 3 port if that becomes the question.
+- **Hot unplug of a bound adapter**, and the throughput ceiling: 3.9
+  MB/s is what one HTTP fetch did, not a measured limit.
 
-1. Register access: vendor control transfers, `bRequest` 5, request type
-   0x40/0xC0, `wValue` = register, `wIndex` = MCU type (PLA 0x0100, USB
-   0x0000) with a byte-enable mask.
-2. Reset and the RTL8153 init sequence -- ~250 lines of exact register
-   writes with waits.
-3. `PLA_RCR` for the receive filter, `PLA_RMS` for the frame size,
-   `PLA_CR` to enable Tx and Rx.
-4. **Framing, which is the real difference from ECM.** A bulk transfer
-   is NOT a frame: TX prepends an 8-byte descriptor, RX returns a
-   24-byte descriptor plus the frame, 8-byte aligned, and SEVERAL frames
-   may be aggregated in one transfer -- so the receive path walks them.
-
-**The licence constraint is not optional.** toy-os is MIT. Linux's
-`r8152.c` is GPL-2.0 and must not be transcribed. The reference is
-FreeBSD/OpenBSD's `ure(4)` (`sys/dev/usb/net/if_ure.c` and
-`if_urereg.h`), BSD-2-clause, Kevin Lo -- compatible, provided the
-notice travels with anything adapted and is added to `LICENSE` beside
-the other vendored material. Register addresses and descriptor layouts
-are FACTS about the device and carry no notice; code adapted from theirs
-does.
-
-**What is already built and proven underneath:** bulk endpoints
-(`xhci_add_bulk`/`xhci_bulk_post`, transmit demonstrably works),
-configuration selection, and the `net_device` registration path. The
-endpoint-state line in the `usb` debug command reads the controller's
-own device context, which is what tells "running with TRBs queued and no
-completions" from "halted".
+**The licence constraint, for whoever extends this.** toy-os is MIT.
+Linux's `r8152.c` is GPL-2.0 and must not be transcribed. The reference
+is FreeBSD's `ure(4)` (`sys/dev/usb/net/if_ure.c`, `if_urereg.h`),
+BSD-2-clause, Kevin Lo, and its notice is in `LICENSE`. Register
+addresses and descriptor layouts are FACTS about the device and carry no
+notice; code adapted from theirs does.
