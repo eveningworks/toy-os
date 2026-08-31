@@ -335,6 +335,21 @@ static void pm1_clear_status(const struct acpi_state *s) {
     if (s->pm1b_evt) outw((uint16_t)s->pm1b_evt, 0xFFFF);
 }
 
+// `nogpe`: leave the GPE blocks alone. The A/B for "which fix was it?"
+// -- clearing PM1_STS and disabling the GPEs both landed for one
+// symptom, and a machine that now stops is consistent with either.
+// Announced ON THE SCREEN because a machine that reboots cannot show a
+// log, and a diagnostic whose effect nobody can confirm is worse than
+// none. Same family as `nopat` and `notsc`: an answer in one boot
+// instead of a bisect.
+static int gpes_left_alone(void) {
+    const char *cmdline = multiboot_cmdline();
+    if (!cmdline || !k_strstr(cmdline, "nogpe")) return 0;
+    vga_printf("acpi: GPE blocks left alone (nogpe)\n");
+    klog_write("acpi: GPE blocks left alone (nogpe)\n");
+    return 1;
+}
+
 // EVERY GENERAL PURPOSE EVENT, DISABLED AND CLEARED. A GPE block is
 // [STS][EN] like PM1's, each half GPEx_BLK_LEN/2 bytes; the enables go
 // to 0 so nothing may wake us, then the statuses are write-1-to-cleared
@@ -410,8 +425,10 @@ int acpi_poweroff(void) {
                    (uint8_t)(((s->slp_typ_a & 7) << SLP_CTL_TYP_SHIFT) | SLP_CTL_SLP_EN));
     } else {
         if (!s->pm1a_cnt) return 0;
-        gpe_block_off(s->gpe0_blk, s->gpe0_len);
-        gpe_block_off(s->gpe1_blk, s->gpe1_len);
+        if (!gpes_left_alone()) {
+            gpe_block_off(s->gpe0_blk, s->gpe0_len);
+            gpe_block_off(s->gpe1_blk, s->gpe1_len);
+        }
         pm1_clear_status(s);
         klog_printf("acpi: S5 via PM1a 0x%x type %d%s, status cleared at 0x%x\n",
                     s->pm1a_cnt, (int)s->slp_typ_a,

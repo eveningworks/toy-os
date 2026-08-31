@@ -3820,53 +3820,43 @@ for. DOOM's output goes to the console like any other program's and is
 readable after `Exit to shell`. `Terminal=` is for programs whose
 INTERFACE is a terminal, which is a different thing.
 
-## Poweroff on the bare-metal laptop RESTARTS the machine instead of stopping it, repeatedly
+## ~~Poweroff on the bare-metal laptop restarted the machine instead of stopping it~~
 
-**Reported** 2026-08-31, booting the live image on the maintainer's test
-laptop. Selecting Shutdown from the desktop's menu reboots the machine
-instead of powering it off, and it keeps rebooting. Shutting down from
-Linux Mint on the same machine works, so the hardware reaches S5 fine.
+FIXED 2026-08-31, confirmed on the machine that showed it -- both from
+`reboot --poweroff` at the shell and from the desktop's Start menu, which
+was the reported repro. Kept because the shape is worth remembering.
 
-**Reproduction** (bare metal only -- no QEMU guest shows this):
+**The symptom.** Selecting Shutdown rebooted the laptop, repeatedly.
+Linux Mint shut the same machine down, so the hardware reached S5 fine.
 
-1. Boot `toy-os-live.iso` on the laptop.
-2. Start menu -> Shutdown.
-3. The machine restarts rather than powering off, and does so again on
-   the next attempt.
+**Two defects, fixed together, and which one actually bit is not yet
+established** -- `nogpe` is the one-boot A/B that answers it. Neither was
+reachable by any test here, because a QEMU guest has no pending wake
+event to come back up on:
 
-**What is known.** Nothing cleared the PM1 wake-status bits before the
-`SLP_EN` write: `acpi_power.c` parsed `PM1a_CNT` and never
-`PM1a_EVT_BLK`, whose first half is `PM1_STS`. Entering S5 with a wake
-event still pending -- the power-button press that asked for the
-shutdown, among others -- is a machine that goes down and comes straight
-back up. Linux clears `WAK_STS` in `acpi_hw_legacy_sleep()` and the ACPI
-spec requires it. That is a real defect and is fixed; whether it is THIS
-defect is unconfirmed, because the only machine that shows the symptom
-is not one any test here can drive.
+1. Nothing cleared `PM1_STS` before the `SLP_EN` write --
+   `PM1a_EVT_BLK` was never parsed, only `PM1a_CNT_BLK`.
+2. Nothing disabled the GPE blocks, which were never parsed either. The
+   laptop's `GPE0_BLK` is 32 bytes: **128 general purpose events**, among
+   them its lid, its embedded controller and USB.
 
-**What the laptop said** (2026-08-31, on a build predating the fix):
-`FADT pm1a=0x1804 pm1b=0x0 smi=0xb2`, `_S5_ sleep types a=7 b=0`, 22
-tables via XSDT, 4 processors -- and **`ACPI mode: no`**, so the
-firmware handed the machine over in legacy mode. Poweroff and reset are
-both reported available (S5 type 7 to 0x1804; reset 0x6 to 0xcf9).
+Either one leaves the machine entering S5 with a wake pending, which is
+a machine that comes straight back up. Linux clears both in
+`acpi_hw_legacy_sleep()` / `acpi_hw_disable_all_gpes()`.
 
-**Second candidate, also shipped and also unconfirmed:** the GPE blocks
-were never parsed either, so nothing disabled them before S5. A laptop's
-general purpose events are its lid, its EC, USB and the power button,
-and one of them enabled and pending is a wake -- the same shape as the
-PM1_STS defect. Linux calls `acpi_hw_disable_all_gpes()` before every
-sleep.
+**What the machine reported**, with `acpidebug` on the GRUB line:
+`S5 type 7 to PM1a 0x1804`, `ACPI mode ON` (so the SMI handover at port
+0xb2 works, and the legacy-mode-traps-to-SMI theory was wrong),
+`pm1_sts 0x1800`, `gpe0 0x1880/32`.
 
-**What would confirm either.** Boot with **`acpidebug`** on the GRUB
-line: it prints the sleep type, the port, whether ACPI mode actually
-came up, and the blocks being cleared, then pauses ~10 s -- which exists
-because the reboot otherwise takes the evidence with it. Run
-`reboot --poweroff` from the text shell, not the desktop's menu, so the
-kernel console is the thing presenting.
+**The two flags this left behind**, both in `docs/boot-flags.md`:
+`acpidebug` prints the plan on screen and pauses, because a machine that
+reboots takes the log with it and a live image has no disk to keep one
+on; `nogpe` skips the GPE disable, which is the one-boot A/B that tells
+the two fixes apart.
 
-**Found in the same path and separately fixed** (not this bug): the
-poweroff fallback wrote `outw(0x604, 0x2000)` whenever ACPI declined for
-any reason. On QEMU 0x604 is the FADT's own `PM1a_CNT`, which is why it
-worked; on real hardware it is a live chipset port being written a sleep
-type the firmware never named. It now runs only when the tables named no
-poweroff path at all.
+**A third defect found in the same path** and not this bug: the poweroff
+ladder fell through to `outw(0x604, 0x2000)` whenever ACPI declined for
+any reason. On QEMU 0x604 is its own FADT's `PM1a_CNT`, which is why it
+looked harmless; on real hardware it is a live chipset port being
+written a sleep type the firmware never named.
