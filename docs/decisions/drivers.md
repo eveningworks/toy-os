@@ -1782,3 +1782,40 @@ TCP to be fast at.
 virtio it is 10 unless `VIRTIO_NET_F_MRG_RXBUF` was negotiated, and
 getting it wrong shows up as every received frame being two bytes
 shifted -- which parses as garbage rather than failing.
+
+## A device's configuration descriptor is KEPT, and reported RAW
+
+`lsusb -D` prints the bytes a USB device sent about itself, out of a
+copy the kernel keeps (one DMA frame per device, freed on detach) and
+through `QUERY_USBDESC` -- a LIST whose records are 232-byte slices,
+because `QUERY_RECORD_MAX` is 256 and `api/query.h` already says a class
+needing more is a list of smaller records.
+
+**Why raw rather than a decoded record**, which was the obvious
+alternative and is what every other provider here does. The devices that
+need explaining are exactly the ones no driver bound, and a driver
+declines by walking CLASS-SPECIFIC descriptors that nothing else keeps
+-- so a decoded record would have to know, in advance, about every class
+this build does not support. That is the wrong way round. The raw bytes
+also paste straight into a KTEST fixture, which is the only way a device
+nobody here owns is ever tested against: `usb_audio.c`'s fixture is
+QEMU's configuration captured this way, and a hand-written one would
+only ever agree with the parser it was written beside.
+
+The decode is in **ring 3**, in `/bin/lsusb`, for the reason the kernel
+keeps no formatting: it is presentation, it is not needed to bind
+anything, and a class the kernel does not implement can gain a decode
+without touching the kernel.
+
+**Why keep it rather than re-read it on demand.** A control transfer
+from a query provider is possible -- the volume path already does one
+from a syscall -- but it makes reading a fact depend on a device still
+being present and still answering, and `lsusb`'s own page promises it
+cannot hang on a misbehaving device. A frame per device is 4 KiB of a
+budget nothing else is competing for.
+
+**What this is not.** It is not `/dev/bus/usb`: there is no way to ask
+the device something new, no string descriptors beyond the two
+enumeration already read, and no second configuration. Those all want a
+device-file interface, which wants a mount table (`docs/query-design.md`
+has the same argument for why this is not `/proc`).

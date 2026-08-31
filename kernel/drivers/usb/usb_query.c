@@ -49,6 +49,78 @@ static int usb_q_fill(int index, void *out) {
     return 1;
 }
 
+// --- QUERY_USBDESC: the raw configuration descriptors, in slices ------
+//
+// One record per QUERY_USBDESC_DATA bytes of one device's kept
+// configuration, walked device by device. The index is a position in
+// the CONCATENATION of every device's slices, because a list provider's
+// index has nowhere to carry a second selector (QUERY_FONTGLYPH's
+// reasoning, and QUERY_PROCMAP's) -- so /bin/lsusb groups by the
+// `slot` field the record carries.
+
+static uint32_t slices_of(uint32_t len) {
+    return (len + QUERY_USBDESC_DATA - 1) / QUERY_USBDESC_DATA;
+}
+
+// Resolves a flat record index to (device, slice), or -1. Shared by
+// count and fill so the two cannot disagree about the ordering.
+static int locate(int index, int *out_dev, uint32_t *out_slice) {
+    int n = usb_device_count();
+    for (int i = 0; i < n; i++) {
+        uint32_t len = 0;
+        if (!usb_device_config(i, &len) || !len) continue;
+        uint32_t slices = slices_of(len);
+        if ((uint32_t)index < slices) {
+            *out_dev = i;
+            *out_slice = (uint32_t)index;
+            return 0;
+        }
+        index -= (int)slices;
+    }
+    return -1;
+}
+
+static int usbdesc_q_count(void) {
+    int total = 0, n = usb_device_count();
+    for (int i = 0; i < n; i++) {
+        uint32_t len = 0;
+        if (usb_device_config(i, &len) && len) total += (int)slices_of(len);
+    }
+    return total;
+}
+
+static int usbdesc_q_fill(int index, void *out) {
+    int dev = 0;
+    uint32_t slice = 0;
+    if (index < 0 || locate(index, &dev, &slice) < 0) return 0;
+
+    uint32_t len = 0;
+    const uint8_t *cfg = usb_device_config(dev, &len);
+    const struct usb_device_info *d = usb_device_at(dev);
+    if (!cfg || !d) return 0;
+
+    struct query_usbdesc *q = out;
+    k_memset(q, 0, sizeof *q);
+    q->slot   = d->slot;
+    q->total  = len;
+    q->offset = slice * QUERY_USBDESC_DATA;
+    q->len    = len - q->offset;
+    if (q->len > QUERY_USBDESC_DATA) q->len = QUERY_USBDESC_DATA;
+    k_memcpy(q->data, cfg + q->offset, q->len);
+    return 1;
+}
+
+static const struct query_provider usbdesc_provider = {
+    .cls = QUERY_USBDESC,
+    .name = "usbdesc",
+    .record_size = sizeof(struct query_usbdesc),
+    .flags = QUERY_F_LIST,
+    .count = usbdesc_q_count,
+    .fill = usbdesc_q_fill,
+    .fields = 0,
+    .field_count = 0,
+};
+
 // No named fields: a LIST is not addressable as a flat name, for the
 // reason partition_query.c gives -- an index baked into a name means a
 // different record a moment later.
@@ -63,4 +135,7 @@ static const struct query_provider usb_provider = {
     .field_count = 0,
 };
 
-void usb_query_init(void) { query_register(&usb_provider); }
+void usb_query_init(void) {
+    query_register(&usb_provider);
+    query_register(&usbdesc_provider);
+}

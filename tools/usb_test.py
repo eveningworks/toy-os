@@ -186,6 +186,18 @@ def phase_keyboard(instance, kvm=False):
               "usb_one.txt" in names,
               "" if "usb_one.txt" in names else f"saw {sorted(n for n in names.split() if n.endswith('.txt'))}")
 
+        # The descriptor dump, on a device whose class this build DOES
+        # bind -- so the flag is exercised on the ordinary path and not
+        # only when something has gone wrong.
+        desc = d.send("sh lsusb -D") or ""
+        check("lsusb -D dumps the configuration descriptor",
+              "Configuration descriptor," in desc and "    0000  09 02" in desc,
+              next((ln.strip() for ln in desc.splitlines()
+                    if "Configuration descriptor," in ln), "no dump"))
+        check("...and decodes the HID interface and its endpoint",
+              "class 03 Human Interface Device" in desc and
+              "interrupt IN" in desc)
+
         dump2 = d.send("usb") or ""
         check("reports were decoded, not merely received",
               " 0 report(s) decoded" not in dump2, dump2.split("report(s)")[0][-12:].strip())

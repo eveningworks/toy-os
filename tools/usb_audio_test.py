@@ -121,6 +121,13 @@ def phase_usb_only(g, res, wav):
                   "control transfer timed out" not in dmesg)
         res.check("...and the feature unit answered, so volume exists",
                   ", volume" in dmesg)
+        # The packet size is the RATE's share of one service interval,
+        # not the endpoint's maximum -- equal here, and only equal
+        # because QEMU sizes the endpoint exactly.
+        res.check("...at 192 bytes per interval",
+                  "192 B/interval" in dmesg,
+                  next((ln.strip() for ln in dmesg.splitlines()
+                        if "bound as usb-audio" in ln), "no bind line"))
 
         # The KTESTs that skip on every other boot. "0 skipped" is the
         # load-bearing half (the ahci_test lesson): the usb-audio suite
@@ -131,6 +138,28 @@ def phase_usb_only(g, res, wav):
             res.check(f"ktest {suite} passes with 0 skipped",
                       "PASSED" in kt and ", 0 skipped" in kt,
                       kt.splitlines()[-1].strip() if kt.strip() else "no output")
+
+        # `lsusb -D` on the one device whose descriptors this repo has a
+        # byte-exact copy of. The UAC version is the load-bearing line:
+        # it is what a refusal on unknown hardware has to be able to
+        # say, and a decode that gets it wrong says it confidently.
+        desc = dbg.send("sh lsusb -D") or ""
+        res.check("lsusb -D dumps the configuration descriptor",
+                  "Configuration descriptor," in desc and "09 02 71 00" in desc,
+                  next((ln.strip() for ln in desc.splitlines()
+                        if "Configuration descriptor," in ln), "no dump"))
+        res.check("...and names the audio class version",
+                  "AC HEADER, UAC 1.00" in desc)
+        res.check("...and decodes the alt-1 format and endpoint",
+                  "2 channel(s), 2 byte(s)/sample, 16 bit, rates 48000" in desc and
+                  "isochronous OUT" in desc)
+        # The bug this replaced: a HID-only helper applied to every
+        # class reported an audio device's subclass 1 (AudioControl) as
+        # the HID boot protocol.
+        res.check("...and an audio interface is not called a HID boot subclass",
+                  "Class 01 Audio, Boot" not in desc,
+                  next((ln.strip() for ln in desc.splitlines()
+                        if "Class 01" in ln), "no class line"))
 
         lsdev = dbg.send("lsdev") or ""
         res.check("lsdev names it as the active sound device",
@@ -258,12 +287,19 @@ def phase_persisted(g, res, wav, usb_wav):
         dbg = wait_serial(g.sock())
         if not res.check("the serial console answers (reboot)", dbg is not None):
             return
-        # The FIRST LINE, not a substring of everything the console has
-        # said: boot chatter mentions ac97 too, so `"ac97" in reply`
-        # passed on a guest whose setting had not been restored at all.
+        # A WHOLE LINE EQUAL TO the name, not a substring of everything
+        # the console has said: boot chatter mentions ac97 too, so
+        # `"ac97" in reply` passed on a guest whose setting had not been
+        # restored at all. Not the FIRST line either -- `wait_serial()`
+        # returns the moment the console answers, so a boot log line can
+        # still land between the echo and the reply, which failed this
+        # check on a guest that had restored the setting perfectly
+        # (measured 3 runs in 5). No chatter line is exactly a device
+        # name, so equality keeps the strength and drops the ordering.
         reply = (dbg.send("sh config get audio_device") or "").strip()
-        got = next((ln.strip() for ln in reply.splitlines() if ln.strip()), "")
-        res.check("the chosen device came back from /etc", got == "ac97", repr(got))
+        lines = [ln.strip() for ln in reply.splitlines() if ln.strip()]
+        res.check("the chosen device came back from /etc", "ac97" in lines,
+                  repr(lines[:3]))
         lsdev = dbg.send("lsdev") or ""
         res.check("...and it is the active one on this boot",
                   "ac97  [active]" in lsdev,

@@ -20,6 +20,7 @@
 #include "klog.h"
 #include "kfmt.h"
 #include "string.h"
+#include "pmm.h"
 
 // --- standard requests ------------------------------------------------
 #define REQ_GET_DESCRIPTOR   6
@@ -238,11 +239,22 @@ int usb_enumerate_device(uint8_t root_port, uint8_t parent_port,
     got = get_descriptor((uint8_t)slot, DESC_CONFIG, 0, 0, g_desc_buf, (uint16_t)total);
     if (got < (int)total) total = (uint32_t)(got < 0 ? 0 : got);
 
+    // Kept, not just walked -- see usb.h's `cfg`. A frame we cannot get
+    // costs the dump and nothing else, so this never fails enumeration.
+    d->cfg_phys = pmm_alloc_contiguous(1);
+    if (d->cfg_phys) {
+        d->cfg = (uint8_t *)(uintptr_t)d->cfg_phys;   // identity-mapped
+        d->cfg_len = total > 4096 ? 4096 : total;
+        k_memcpy(d->cfg, g_desc_buf, d->cfg_len);
+    }
+
     read_string((uint8_t)slot, i_manuf, d->manufacturer, sizeof d->manufacturer);
     read_string((uint8_t)slot, i_prod,  d->product,      sizeof d->product);
 
     if (set_configuration((uint8_t)slot, cfg_value) < 0) {
         klog_printf("usb: port %u: set configuration failed\n", parent_port);
+        if (d->cfg_phys) pmm_free_contiguous(d->cfg_phys, 1);
+        d->cfg = 0; d->cfg_phys = 0; d->cfg_len = 0;
         xhci_disable_slot((uint8_t)slot);
         return -1;
     }
@@ -269,17 +281,27 @@ int usb_enumerate_device(uint8_t root_port, uint8_t parent_port,
     // Binding is the class drivers' decision, not enumeration's: a
     // device this build has no driver for stays in the table and is
     // reported by lsusb, it just does nothing.
+    //
+    // ANY interface, not interface 0. A composite device is entitled to
+    // put its HID controls first and its audio second, and a dispatch
+    // on ifs[0] alone never offers such a device to the audio driver at
+    // all -- and offers a DAC with buttons to only one of the two.
     if (d->dev_class == USB_CLASS_HUB ||
-        (d->if_count && d->ifs[0].if_class == USB_CLASS_HUB))
+        (d->if_count && d->ifs[0].if_class == USB_CLASS_HUB)) {
         usb_hub_bind(d);
-    else if (d->if_count && d->ifs[0].if_class == USB_CLASS_AUDIO)
-        // The raw configuration goes with it: an audio device's format
-        // and its volume control are CLASS-SPECIFIC descriptors sitting
-        // between the standard ones, and the interface walk above keeps
-        // neither. g_desc_buf is still the one just read.
-        usb_audio_bind(d, g_desc_buf, total);
-    else
-        usb_hid_bind(d);
+    } else {
+        for (int i = 0; i < d->if_count; i++) {
+            if (d->ifs[i].if_class != USB_CLASS_AUDIO) continue;
+            // The raw configuration goes with it: an audio device's
+            // format and its volume control are CLASS-SPECIFIC
+            // descriptors sitting between the standard ones, and the
+            // interface walk above keeps neither. g_desc_buf is still
+            // the one just read.
+            usb_audio_bind(d, g_desc_buf, total);
+            break;
+        }
+        usb_hid_bind(d);   // no-op on a device with no HID boot interface
+    }
     return (int)(d - g_devs);
 }
 
@@ -311,6 +333,8 @@ void usb_detach_slot(uint8_t slot) {
     usb_audio_unbind(slot);
     usb_hub_forget(slot);
     xhci_disable_slot(slot);
+    if (d->cfg_phys) pmm_free_contiguous(d->cfg_phys, 1);
+    d->cfg = 0; d->cfg_phys = 0; d->cfg_len = 0;
     klog_printf("usb: %04x:%04x \"%s\" detached\n",
                 d->vendor_id, d->product_id,
                 d->product[0] ? d->product : "");
@@ -337,6 +361,12 @@ void usb_detach_root_port(uint8_t root_port) {
 // a detach leaves no hole visible from outside, so QUERY_USB's
 // count/fill pair stays consistent.
 int usb_device_count(void) { return g_dev_count; }
+
+const uint8_t *usb_device_config(int index, uint32_t *len) {
+    const struct usb_device_info *d = usb_device_at(index);
+    if (len) *len = d ? d->cfg_len : 0;
+    return d ? d->cfg : 0;
+}
 
 const struct usb_device_info *usb_device_at(int index) {
     if (index < 0) return 0;

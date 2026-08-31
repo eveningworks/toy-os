@@ -81,6 +81,15 @@ struct usb_device_info {
     // hid_ep for the tests that predate composite support.
     uint8_t  bound;
     uint8_t  hid_ep;
+
+    // THE CONFIGURATION DESCRIPTOR, KEPT. One DMA frame per device,
+    // freed on detach. It is here because the interesting half of a
+    // device this build cannot bind is the class-specific descriptors
+    // no driver walked -- `lsusb -D` prints them, and they are what a
+    // KTEST fixture is made of.
+    uint8_t *cfg;
+    uint64_t cfg_phys;
+    uint32_t cfg_len;
 };
 
 // Finds and brings up an xHCI controller, enumerates what is attached,
@@ -142,6 +151,10 @@ void usb_detach_slot(uint8_t slot);
 // descriptor that is malformed (refused, never guessed at).
 int usb_parse_config_interfaces(const uint8_t *cfg, uint32_t total,
                                 struct usb_interface_info *out, int max);
+
+// The kept configuration descriptor of `index` in the device table, or
+// 0. `*len` is its length. Read by the QUERY_USBDESC provider.
+const uint8_t *usb_device_config(int index, uint32_t *len);
 
 // --- hubs (usb_hub.c) -------------------------------------------------
 

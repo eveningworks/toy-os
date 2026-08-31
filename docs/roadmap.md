@@ -25,6 +25,7 @@ buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
 - [ ] `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR, not a 64 KiB guess  *(USB)*
+- [ ] USB audio on a device that is not QEMU's: UAC2 (the rate lives in a clock source), 24-bit formats, sub-millisecond intervals  *(USB)*
 - [ ] Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today  *(Networking)*
 - [ ] System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons  *(Known limitations and papercuts (unscheduled))*
 <!-- END next-up -->
@@ -674,6 +675,7 @@ run on, not by order.
 - [x] ~~Confirm the xHCI BIOS handoff on the laptop it was written for~~ DONE 2026-08-28 -- a wireless mouse works on the machine
 - [ ] **NEXT** `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR, not a 64 KiB guess
 - [x] ~~USB audio (isochronous OUT, UAC1)~~ DONE 2026-08-30 -- `kernel/drivers/usb/usb_audio.c`; SIA scheduling is QEMU-tested only
+- [ ] **NEXT** USB audio on a device that is not QEMU's: UAC2 (the rate lives in a clock source), 24-bit formats, sub-millisecond intervals
 - [ ] USB mass storage (bulk-only transport) -- the first non-disk-bus storage backend
 - [x] ~~Hub support (devices behind a hub, not just root ports)~~ DONE 2026-08-28 -- USB2 only; the TT path is hardware-only
 - [x] ~~Hot-plug: a device plugged in after boot enumerates, an unplugged one is torn down~~ DONE 2026-08-28

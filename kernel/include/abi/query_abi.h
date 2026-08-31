@@ -330,6 +330,23 @@ _Static_assert(sizeof(struct query_fontglyph) <= 256,
 // addresses and counters. LIST. What `/bin/ifconfig` reads.
 #define QUERY_NETDEV 22
 
+// THE RAW CONFIGURATION DESCRIPTOR of each enumerated USB device, in
+// slices. LIST -- one record per QUERY_USBDESC_DATA bytes of one
+// device, tagged with the slot it came from and the offset within it.
+//
+// A LIST OF SLICES rather than one record because a configuration runs
+// to hundreds of bytes and QUERY_RECORD_MAX is 256 (api/query.h, which
+// says a class needing more is a list of smaller records). Same shape
+// as QUERY_KLOG, and for the same reason.
+//
+// WHY THE RAW BYTES AND NOT A DECODED RECORD. This is what a device
+// that no driver here binds has to say for itself -- the class-specific
+// descriptors a class driver refused to walk are exactly the ones a
+// decoded record would have had to know about in advance. The bytes
+// also paste straight into a KTEST fixture, which is the only way a
+// device nobody has is ever tested against.
+#define QUERY_USBDESC 26
+
 #define QUERY_KLOG_DATA 232
 
 struct query_klog {
@@ -347,6 +364,22 @@ struct query_klog {
 };
 
 _Static_assert(sizeof(struct query_klog) <= 256,
+               "a query record must fit QUERY_RECORD_MAX -- see api/query.h");
+
+// QUERY_USBDESC's record -- one slice of one device's configuration.
+// Bytes of descriptor per record; the header above it makes 256.
+#define QUERY_USBDESC_DATA 232
+
+struct query_usbdesc {
+    uint64_t slot;       // xHCI slot id -- which device this slice is from
+    uint32_t total;      // wTotalLength of that device's whole configuration
+    uint32_t offset;     // byte offset of data[0] within it
+    uint32_t len;        // valid bytes in data[]
+    uint32_t reserved;
+    uint8_t  data[QUERY_USBDESC_DATA];
+};
+
+_Static_assert(sizeof(struct query_usbdesc) <= 256,
                "a query record must fit QUERY_RECORD_MAX -- see api/query.h");
 
 // QUERY_PROVIDERS' record.

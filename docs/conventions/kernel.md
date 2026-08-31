@@ -889,9 +889,16 @@ Five things to know:
 - **The format is REFUSED, never resampled.** `abi/sound_abi.h` fixes
   the stream at 48 kHz stereo s16le; a device advertising anything else
   is left unbound, because resampling belongs in `userland/lib/usnd.h`
-  where it already exists. At 48 kHz that is 192 bytes every 1 ms frame,
-  and the endpoint is SYNCHRONOUS -- locked to the bus's own SOF clock,
-  so there is no drift to correct and no feedback endpoint to build.
+  where it already exists. The endpoint is driven SYNCHRONOUSLY, off the
+  bus's own SOF clock, so there is no drift to correct and no feedback
+  endpoint to build.
+- **A REFUSAL NAMES WHAT WAS OFFERED.** `usb_audio_parse()` fills a
+  `struct usb_audio_report` on every walk -- the UAC version from
+  bcdADC, and every AudioStreaming alternate with its channels, bits,
+  rate, endpoint and interval -- and the bind logs all of it before
+  declining. "No 48 kHz stereo s16 stream" is not actionable on a
+  machine nobody here owns; the version and the alternates are. The
+  same bytes are readable with `lsusb -D`.
 - **THE ENDPOINT LIVES IN AN ALTERNATE SETTING**, which is why
   `usb_enum.c`'s interface walk cannot see it: an AudioStreaming
   interface's alt 0 carries NO endpoints by design (it is the
@@ -910,6 +917,29 @@ Five things to know:
   TRB may not cross a 64 KiB boundary -- so a zero-copy packet needs
   chained split TRBs at two kinds of edge. Linux's snd-usb-audio copies
   for the same reason.
+
+## AN ISOCHRONOUS PACKET IS THE RATE'S SHARE OF ONE SERVICE INTERVAL, NOT wMaxPacketSize
+
+Two numbers that are equal on QEMU's `usb-audio` and on very little
+else, which is exactly how this shipped wrong and passed every test.
+
+- **wMaxPacketSize is a CEILING, not the amount to send.** A device may
+  size its endpoint above the rate -- an asynchronous one does, to leave
+  room for a fast frame -- and a driver that sends the maximum every
+  interval plays the stream FAST, with nothing reporting an error.
+  `usb_audio.c` derives `pkt_bytes` from the rate and the interval and
+  uses the endpoint's maximum only to configure the endpoint.
+- **AND wMaxPacketSize IS NOT 16 BITS OF SIZE.** On a high-speed
+  endpoint bits 11-12 are ADDITIONAL transactions per interval, so the
+  raw word taken as a size is a packet up to three times too big handed
+  to the controller. Mask to the low 11 bits; `xhci.c` does not program
+  Mult, so an endpoint that needs it is refused rather than under-driven.
+- **THE INTERVAL IS PER-SPEED.** High and super speed carry an EXPONENT
+  of 125 us microframes in bInterval; full and low speed carry a count
+  of 1 ms frames. Reading one as the other is off by eight -- a stream
+  at the wrong rate, again with nothing to report. `interval_us()` is
+  the conversion, and `xhci.c`'s `interval_field()` is its twin for the
+  endpoint context.
 
 ## AN ISOCHRONOUS ENDPOINT DOES NOT HALT, AND ITS RING RUNNING DRY IS NORMAL
 

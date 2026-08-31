@@ -29,13 +29,44 @@ struct usb_audio_stream {
     uint8_t  has_mute;
 };
 
+// One AudioStreaming alternate setting the walk saw, whether or not it
+// was usable. This is the REFUSAL's evidence: "no 48 kHz stereo s16
+// stream" says nothing about what the device does offer, and on a
+// machine that is not here the log line is all there is.
+struct usb_audio_alt {
+    uint8_t  ifnum, alt;
+    uint8_t  channels;   // 0 when no Type I format descriptor preceded it
+    uint8_t  bits;
+    uint32_t rate;       // 0 = stated elsewhere (a UAC2 clock source)
+    uint8_t  ep;         // bEndpointAddress, so 0x81 is an IN endpoint
+    uint8_t  sync;       // bmAttributes' sync type: 0 none .. 3 synchronous
+    uint8_t  interval;   // bInterval, in the endpoint's own units
+    uint8_t  mult;       // transactions per interval; >1 is high-bandwidth
+    uint16_t mps;        // bytes per transaction (wMaxPacketSize's low 11)
+};
+
+#define USB_AUDIO_MAX_ALTS 8
+
+struct usb_audio_report {
+    uint8_t uac_major;   // bcdADC's high byte; 0 when there was no AC header
+    uint8_t uac_minor;
+    uint8_t alt_count;   // rows filled, capped at USB_AUDIO_MAX_ALTS
+    uint8_t alts_seen;   // rows the device actually had, uncapped
+    struct usb_audio_alt alts[USB_AUDIO_MAX_ALTS];
+};
+
 // Finds a stream at abi/sound_abi.h's fixed format (48 kHz stereo s16)
 // in a configuration descriptor. Returns 1 and fills `out`, or 0 --
 // which is also the answer for a malformed descriptor, refused rather
 // than walked past. Exported for the KTESTs, which is the only way this
 // is checked on a machine with no USB audio attached.
+//
+// `rep` is optional and is filled EITHER WAY: a bind that succeeds and
+// one that refuses both walked the same descriptors, and only the
+// refusal has anything to explain.
 int usb_audio_parse(const uint8_t *cfg, uint32_t total,
-                    struct usb_audio_stream *out);
+                    struct usb_audio_stream *out,
+                    struct usb_audio_report *rep);
 
 // Binds an enumerated audio device: SET_INTERFACE to the streaming
 // alternate, configure the isochronous endpoint, register a

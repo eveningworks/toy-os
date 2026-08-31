@@ -14,9 +14,11 @@
 // s16le; a UAC1 device advertising exactly that is bound and one
 // advertising anything else is REFUSED rather than resampled, because
 // resampling belongs in userland/lib/usnd.h where it already exists.
-// At 48 kHz that is 192 bytes every 1 ms frame -- and the endpoint is
-// SYNCHRONOUS, locked to the bus's own 1 kHz SOF clock, so there is no
-// drift to correct and no feedback endpoint to implement.
+// A packet is the rate's share of ONE SERVICE INTERVAL, derived from
+// the endpoint's own bInterval -- 192 bytes per millisecond at 48 kHz.
+// The endpoint is driven synchronously, off the bus's own SOF clock,
+// so there is no drift to correct and no feedback endpoint to
+// implement.
 //
 // THE SAMPLES ARE COPIED, unlike the AC'97's descriptor list which
 // points straight into the core's ring. 192 divides neither the 64 KiB
@@ -48,6 +50,7 @@
 #define DESC_INTERFACE         0x04
 #define DESC_ENDPOINT          0x05
 
+#define AC_HEADER              0x01
 #define AC_FEATURE_UNIT        0x06
 #define AS_FORMAT_TYPE         0x02
 #define FORMAT_TYPE_I          0x01
@@ -69,10 +72,13 @@
 #define TYPE_IN_CLASS_IF       0xA1   // device->host, class, interface
 #define TYPE_OUT_STD_IF        0x01   // host->device, standard, interface
 
-// Packets kept posted. Sixteen is 16 ms of audio in flight -- enough
+// Audio kept posted, in MICROSECONDS rather than in packets: enough
 // that a busy moment cannot starve the endpoint, short enough that
-// stopping does not leave a long tail playing.
-#define AUDIO_PACKETS 16
+// stopping does not leave a long tail playing. A packet is one service
+// interval, so at the usual 1 ms this is the sixteen it has always
+// been -- and on a 125 us endpoint it stays 16 ms instead of becoming 2.
+#define AUDIO_INFLIGHT_US 16000
+#define AUDIO_PACKETS_MAX 128
 
 struct audio_dev {
     uint8_t  in_use;
@@ -80,7 +86,14 @@ struct audio_dev {
     uint8_t  running;
     struct usb_audio_stream s;
 
-    uint8_t *pkt;            // AUDIO_PACKETS x s.mps, one frame
+    // BYTES PER SERVICE INTERVAL, which is NOT the endpoint's maximum:
+    // wMaxPacketSize is a ceiling a device may set above the rate, and
+    // sending that many every interval plays the stream fast. 48000/1000
+    // divides exactly, so there is no fractional accumulator here -- a
+    // rate that did not divide would need one.
+    uint16_t pkt_bytes;
+
+    uint8_t *pkt;            // `packets` x pkt_bytes, one frame
     uint64_t pkt_phys;
     uint8_t  packets;        // how many actually fit
     uint8_t  next_slot;      // the packet slot the next completion refills
@@ -115,7 +128,8 @@ static uint32_t le24(const uint8_t *p) {
 }
 
 // Walks a configuration for a UAC1 playback stream at the ONE format
-// this kernel carries. Returns 1 and fills `out` when it finds one.
+// this kernel carries. Returns 1 and fills `out` when it finds one, and
+// fills `rep` with every AudioStreaming alternate it saw either way.
 //
 // The alternate settings are the point. An AudioStreaming interface
 // always has an alt 0 with NO endpoints -- "idle, using no bandwidth" --
@@ -123,15 +137,18 @@ static uint32_t le24(const uint8_t *p) {
 // interface walk in usb_enum.c (which records alt 0 only) cannot see
 // it and this parse exists.
 int usb_audio_parse(const uint8_t *cfg, uint32_t total,
-                    struct usb_audio_stream *out) {
+                    struct usb_audio_stream *out,
+                    struct usb_audio_report *rep) {
     if (!cfg || !out) return 0;
     k_memset(out, 0, sizeof *out);
+    if (rep) k_memset(rep, 0, sizeof *rep);
 
     uint32_t o = 0;
     int in_streaming = 0;       // inside an AudioStreaming alt setting
+    int in_control = 0;
     int cur_if = -1, cur_alt = -1;
-    uint8_t cand_ep = 0, cand_interval = 0;
-    uint16_t cand_mps = 0;
+    uint8_t cand_channels = 0, cand_bits = 0;
+    uint32_t cand_rate = 0;
     int format_ok = 0;
 
     while (o + 2 <= total) {
@@ -145,9 +162,18 @@ int usb_audio_parse(const uint8_t *cfg, uint32_t total,
             cur_alt = cfg[o + 3];
             in_streaming = (cfg[o + 5] == AUDIO_CLASS &&
                             cfg[o + 6] == AUDIO_SUB_STREAMING);
-            if (cfg[o + 5] == AUDIO_CLASS && cfg[o + 6] == AUDIO_SUB_CONTROL)
-                out->ac_ifnum = cfg[o + 2];
-            cand_ep = 0; cand_mps = 0; cand_interval = 0; format_ok = 0;
+            in_control   = (cfg[o + 5] == AUDIO_CLASS &&
+                            cfg[o + 6] == AUDIO_SUB_CONTROL);
+            if (in_control) out->ac_ifnum = cfg[o + 2];
+            cand_channels = 0; cand_bits = 0; cand_rate = 0; format_ok = 0;
+        } else if (in_control && btype == DESC_CS_INTERFACE && blen >= 5 &&
+                   cfg[o + 2] == AC_HEADER && rep && !rep->uac_major) {
+            // bcdADC, and the one field that says UAC1 from UAC2. The
+            // two share subtype numbers and agree on almost nothing
+            // else, so a refusal that cannot name the version is a
+            // refusal nobody can act on.
+            rep->uac_minor = cfg[o + 3];
+            rep->uac_major = cfg[o + 4];
         } else if (btype == DESC_CS_INTERFACE && blen >= 4 &&
                    cfg[o + 2] == AC_FEATURE_UNIT && blen >= 8 && !out->feature_unit) {
             // bUnitID, then bmaControls[] of bControlSize bytes each.
@@ -164,41 +190,68 @@ int usb_audio_parse(const uint8_t *cfg, uint32_t total,
             }
         } else if (in_streaming && btype == DESC_CS_INTERFACE && blen >= 8 &&
                    cfg[o + 2] == AS_FORMAT_TYPE && cfg[o + 3] == FORMAT_TYPE_I) {
-            uint8_t channels = cfg[o + 4];
-            uint8_t bits     = cfg[o + 6];
+            cand_channels = cfg[o + 4];
+            cand_bits     = cfg[o + 6];
             uint8_t freq_type = cfg[o + 7];
             int rate_ok = 0;
             if (freq_type == 0 && blen >= 14) {
                 // A continuous range: tLowerSamFreq, tUpperSamFreq.
                 rate_ok = (le24(&cfg[o + 8]) <= SND_RATE &&
                            le24(&cfg[o + 11]) >= SND_RATE);
+                cand_rate = rate_ok ? SND_RATE : le24(&cfg[o + 8]);
             } else {
                 for (uint32_t i = 0; i < freq_type; i++) {
                     uint32_t at = o + 8 + i * 3;
                     if (at + 3 > o + blen) break;
-                    if (le24(&cfg[at]) == SND_RATE) { rate_ok = 1; break; }
+                    if (!cand_rate) cand_rate = le24(&cfg[at]);
+                    if (le24(&cfg[at]) == SND_RATE) {
+                        rate_ok = 1;
+                        cand_rate = SND_RATE;
+                        break;
+                    }
                 }
             }
-            format_ok = rate_ok && channels == SND_CHANNELS && bits == 16;
+            format_ok = rate_ok && cand_channels == SND_CHANNELS && cand_bits == 16;
         } else if (in_streaming && btype == DESC_ENDPOINT && blen >= 7) {
             uint8_t addr = cfg[o + 2];
             uint8_t attr = cfg[o + 3];
-            if (!(addr & 0x80) && (attr & 0x03) == 1) {   // isochronous OUT
-                cand_ep       = addr;
-                cand_mps      = (uint16_t)(cfg[o + 4] | ((uint16_t)cfg[o + 5] << 8));
-                cand_interval = cfg[o + 6];
-            }
-        }
+            uint16_t w = (uint16_t)(cfg[o + 4] | ((uint16_t)cfg[o + 5] << 8));
+            // wMaxPacketSize is not a plain number on a high-speed
+            // endpoint: bits 11-12 are ADDITIONAL transactions per
+            // interval, so the whole 16 bits taken as a size is a
+            // packet three times too big offered to the controller.
+            uint16_t mps  = (uint16_t)(w & 0x7FF);
+            uint8_t  mult = (uint8_t)(((w >> 11) & 3) + 1);
+            if ((attr & 0x03) != 1) { o += blen; continue; }   // isochronous only
 
-        // A complete candidate: an alt setting with both the format and
-        // the endpoint. Taken as soon as it is seen, so a device
-        // offering the same format twice binds the first.
-        if (in_streaming && format_ok && cand_ep && !out->ep) {
-            out->ifnum    = (uint8_t)cur_if;
-            out->alt      = (uint8_t)cur_alt;
-            out->ep       = cand_ep;
-            out->mps      = cand_mps;
-            out->interval = cand_interval;
+            if (rep) {
+                rep->alts_seen++;
+                if (rep->alt_count < USB_AUDIO_MAX_ALTS) {
+                    struct usb_audio_alt *a = &rep->alts[rep->alt_count++];
+                    a->ifnum = (uint8_t)cur_if;
+                    a->alt = (uint8_t)cur_alt;
+                    a->channels = cand_channels;
+                    a->bits = cand_bits;
+                    a->rate = cand_rate;
+                    a->ep = addr;
+                    a->sync = (uint8_t)((attr >> 2) & 3);
+                    a->interval = cfg[o + 6];
+                    a->mult = mult;
+                    a->mps = mps;
+                }
+            }
+
+            // A complete candidate: an alt setting with both the format
+            // and an isochronous OUT endpoint we can actually program.
+            // Taken as soon as it is seen, so a device offering the same
+            // format twice binds the first.
+            if (format_ok && !(addr & 0x80) && mult == 1 && !out->ep) {
+                out->ifnum    = (uint8_t)cur_if;
+                out->alt      = (uint8_t)cur_alt;
+                out->ep       = addr;
+                out->mps      = mps;
+                out->interval = cfg[o + 6];
+            }
         }
         o += blen;
     }
@@ -215,8 +268,8 @@ static int set_interface(uint8_t slot, uint8_t ifnum, uint8_t alt) {
 
 
 static void copy_one_packet(struct audio_dev *a, uint8_t slot) {
-    uint8_t *dst = a->pkt + (uint32_t)slot * a->s.mps;
-    uint32_t n = a->s.mps;
+    uint8_t *dst = a->pkt + (uint32_t)slot * a->pkt_bytes;
+    uint32_t n = a->pkt_bytes;
     uint32_t at = a->copy_pos;
     // The ring wraps mid-packet on most laps -- 192 divides neither the
     // ring nor a chunk -- so this is two copies, not one.
@@ -238,7 +291,7 @@ static void audio_packet_done(void *ctx, uint32_t bytes) {
     // The hardware has consumed one packet's worth of the ring. Told to
     // the core only on a CHUNK boundary, which is the only granularity
     // abi/sound_abi.h's zeroing rule is defined at.
-    a->play_pos = (a->play_pos + a->s.mps) % SND_RING_BYTES;
+    a->play_pos = (a->play_pos + a->pkt_bytes) % SND_RING_BYTES;
     uint32_t chunk = (a->play_pos / SND_CHUNK_BYTES) * SND_CHUNK_BYTES;
     if (chunk != a->reported) {
         a->reported = chunk;
@@ -251,8 +304,8 @@ static void audio_packet_done(void *ctx, uint32_t bytes) {
     a->next_slot = (uint8_t)((slot + 1) % a->packets);
     copy_one_packet(a, slot);
     if (xhci_isoch_post(a->slot, a->s.ep,
-                        a->pkt_phys + (uint64_t)slot * a->s.mps,
-                        a->s.mps, 1) == 0)
+                        a->pkt_phys + (uint64_t)slot * a->pkt_bytes,
+                        a->pkt_bytes, 1) == 0)
         a->inflight++;
 }
 
@@ -289,8 +342,8 @@ static int audio_start(void) {
     for (uint8_t i = 0; i < a->packets; i++) {
         copy_one_packet(a, i);
         if (xhci_isoch_post(a->slot, a->s.ep,
-                            a->pkt_phys + (uint64_t)i * a->s.mps,
-                            a->s.mps, 1) < 0) {
+                            a->pkt_phys + (uint64_t)i * a->pkt_bytes,
+                            a->pkt_bytes, 1) < 0) {
             a->running = 0;
             return -1;
         }
@@ -395,19 +448,69 @@ static void audio_set_volume(int pct) {
 
 // --- binding ----------------------------------------------------------
 
+// The service interval an endpoint's bInterval means, in microseconds.
+// High and super speed carry an EXPONENT of 125 us microframes; full
+// and low speed carry a count of 1 ms frames. Reading one as the other
+// is off by a factor of eight, which is a stream at the wrong rate
+// rather than an error anything reports.
+static uint32_t interval_us(uint8_t speed, uint8_t b_interval) {
+    if (speed == XHCI_SPEED_HIGH || speed == XHCI_SPEED_SUPER) {
+        uint32_t e = b_interval ? (uint32_t)b_interval - 1 : 0;
+        if (e > 15) e = 15;
+        return 125u << e;
+    }
+    return 1000u * (b_interval ? b_interval : 1);
+}
+
+// What the device offered, when none of it was usable. The point is
+// that "no 48 kHz stereo s16 stream" is not actionable on a machine
+// nobody here owns -- the version and the alternates are.
+static void log_refusal(uint8_t slot, const struct usb_audio_report *rep) {
+    if (rep->uac_major)
+        klog_printf("usb-audio: slot %u: UAC %u.%02u device offers no %u Hz "
+                    "stereo s16 stream (%u alternate(s)):\n", slot,
+                    rep->uac_major, rep->uac_minor, (unsigned)SND_RATE,
+                    rep->alts_seen);
+    else
+        klog_printf("usb-audio: slot %u: audio device with no class header "
+                    "offers no %u Hz stereo s16 stream (%u alternate(s)):\n",
+                    slot, (unsigned)SND_RATE, rep->alts_seen);
+
+    for (uint8_t i = 0; i < rep->alt_count; i++) {
+        const struct usb_audio_alt *t = &rep->alts[i];
+        klog_printf("usb-audio:   if %u alt %u: %u ch, %u-bit, %u Hz, "
+                    "ep 0x%02x %s sync %u, %u B x%u, bInterval %u\n",
+                    t->ifnum, t->alt, t->channels, t->bits, t->rate,
+                    t->ep, (t->ep & 0x80) ? "IN" : "OUT", t->sync,
+                    t->mps, t->mult, t->interval);
+    }
+    // A UAC2 format descriptor carries no rate at all -- the clock
+    // source does, over a class request this driver does not make.
+    if (rep->uac_major >= 2)
+        klog_write("usb-audio: a UAC2 rate is the clock source's, not the "
+                   "format descriptor's -- 0 Hz above means \"not stated "
+                   "here\", not \"none\"\n");
+}
+
 int usb_audio_bind(struct usb_device_info *info, const uint8_t *cfg,
                    uint32_t total) {
     if (!info || g_audio.in_use) return 0;
 
     struct usb_audio_stream s;
-    if (!usb_audio_parse(cfg, total, &s)) {
-        klog_printf("usb: slot %u: audio device offers no %u Hz stereo s16 "
-                    "stream -- not bound\n", info->slot, (unsigned)SND_RATE);
+    struct usb_audio_report rep;
+    if (!usb_audio_parse(cfg, total, &s, &rep)) {
+        log_refusal(info->slot, &rep);
         return 0;
     }
-    if (s.mps < SND_RATE * SND_FRAME_BYTES / 1000) {
-        klog_printf("usb: slot %u: audio endpoint carries %u bytes/interval, "
-                    "too few for %u Hz\n", info->slot, s.mps, (unsigned)SND_RATE);
+
+    // The rate's share of ONE service interval, which is what actually
+    // goes out per packet -- see audio_dev.pkt_bytes.
+    uint32_t us = interval_us(info->speed, s.interval);
+    uint32_t need = (uint32_t)SND_RATE * SND_FRAME_BYTES / 1000 * us / 1000;
+    if (!need || s.mps < need) {
+        klog_printf("usb-audio: slot %u: endpoint 0x%02x holds %u bytes and "
+                    "%u Hz needs %u every %u us -- not bound\n",
+                    info->slot, s.ep, s.mps, (unsigned)SND_RATE, need, us);
         return 0;
     }
 
@@ -415,8 +518,13 @@ int usb_audio_bind(struct usb_device_info *info, const uint8_t *cfg,
     k_memset(a, 0, sizeof *a);
     a->slot = info->slot;
     a->s = s;
-    a->packets = (uint8_t)(4096 / s.mps);
-    if (a->packets > AUDIO_PACKETS) a->packets = AUDIO_PACKETS;
+    a->pkt_bytes = (uint16_t)need;
+    uint32_t want = AUDIO_INFLIGHT_US / us;
+    uint32_t fits = 4096 / a->pkt_bytes;          // one frame holds them all
+    if (want > fits) want = fits;
+    if (want > AUDIO_PACKETS_MAX) want = AUDIO_PACKETS_MAX;
+    if (want < 2) want = 2;
+    a->packets = (uint8_t)want;
 
     a->ring = sound_ring_alloc(0);
     if (!a->ring) {
@@ -475,8 +583,9 @@ int usb_audio_bind(struct usb_device_info *info, const uint8_t *cfg,
         return 0;
     }
     info->bound = 1;
-    klog_printf("usb: slot %u: bound as usb-audio, ep 0x%x, %u B/interval, "
-                "%u packets%s\n", info->slot, s.ep, s.mps, a->packets,
+    klog_printf("usb: slot %u: bound as usb-audio, ep 0x%x, %u B/interval "
+                "(endpoint holds %u), %u packets%s\n", info->slot, s.ep,
+                a->pkt_bytes, s.mps, a->packets,
                 a->has_volume ? ", volume" : "");
     return 1;
 }
@@ -516,7 +625,8 @@ static const uint8_t QEMU_AUDIO_CFG[] = {
 
 KTEST("usb-audio", "QEMU's descriptors yield the alt-1 isochronous endpoint") {
     struct usb_audio_stream s;
-    KTEST_ASSERT(usb_audio_parse(QEMU_AUDIO_CFG, sizeof QEMU_AUDIO_CFG, &s));
+    struct usb_audio_report rep;
+    KTEST_ASSERT(usb_audio_parse(QEMU_AUDIO_CFG, sizeof QEMU_AUDIO_CFG, &s, &rep));
     KTEST_ASSERT_EQ(s.ifnum, 1);
     KTEST_ASSERT_EQ(s.alt, 1);          // NOT alt 0, which has no endpoint
     KTEST_ASSERT_EQ(s.ep, 0x01);        // isochronous OUT
@@ -526,6 +636,17 @@ KTEST("usb-audio", "QEMU's descriptors yield the alt-1 isochronous endpoint") {
     KTEST_ASSERT_EQ(s.feature_unit, 2);
     KTEST_ASSERT_EQ(s.has_volume, 1);
     KTEST_ASSERT_EQ(s.has_mute, 1);
+    // The report is filled on a SUCCESSFUL parse too -- it is the same
+    // walk, and a report only produced on failure could not be checked
+    // by a test on hardware that works.
+    KTEST_ASSERT_EQ(rep.uac_major, 1);
+    KTEST_ASSERT_EQ(rep.uac_minor, 0);
+    KTEST_ASSERT_EQ(rep.alt_count, 1);
+    KTEST_ASSERT_EQ(rep.alts[0].channels, 2);
+    KTEST_ASSERT_EQ(rep.alts[0].bits, 16);
+    KTEST_ASSERT_EQ(rep.alts[0].rate, SND_RATE);
+    KTEST_ASSERT_EQ(rep.alts[0].mult, 1);
+    KTEST_ASSERT_EQ(rep.alts[0].mps, 192);
 }
 
 KTEST("usb-audio", "a device at another rate is refused, not resampled") {
@@ -539,7 +660,7 @@ KTEST("usb-audio", "a device at another rate is refused, not resampled") {
         }
     }
     struct usb_audio_stream s;
-    KTEST_ASSERT_EQ(usb_audio_parse(cfg, sizeof cfg, &s), 0);
+    KTEST_ASSERT_EQ(usb_audio_parse(cfg, sizeof cfg, &s, 0), 0);
 }
 
 KTEST("usb-audio", "a truncated descriptor is refused rather than guessed at") {
@@ -548,5 +669,5 @@ KTEST("usb-audio", "a truncated descriptor is refused rather than guessed at") {
     // broken device gives you and what a walk without bounds follows.
     uint8_t cfg[] = { 0x09, 0x02, 0x71, 0x00, 0x02, 0x01, 0x04, 0xc0, 0x32,
                       0x40, 0x04, 0x00, 0x00 };
-    KTEST_ASSERT_EQ(usb_audio_parse(cfg, sizeof cfg, &s), 0);
+    KTEST_ASSERT_EQ(usb_audio_parse(cfg, sizeof cfg, &s, 0), 0);
 }
