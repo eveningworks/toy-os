@@ -95,6 +95,13 @@ struct acpi_state {
 
     uint32_t pm1a_cnt;     // I/O ports, 0 when hardware-reduced
     uint32_t pm1b_cnt;
+    // The EVENT blocks, whose FIRST HALF is PM1_STS -- the wake-status
+    // bits. They must be cleared before a sleep write or the machine
+    // enters S5 with a wake already pending and comes straight back up,
+    // which reads as "it restarts instead of shutting down".
+    uint32_t pm1a_evt;
+    uint32_t pm1b_evt;
+    uint8_t  pm1_evt_len;  // the WHOLE block; PM1_STS is the low half
     uint32_t smi_cmd;
     uint8_t  acpi_enable;  // the value written to smi_cmd to enter ACPI mode
     uint8_t  slp_typ_a;    // from `_S5_`; meaningless unless ACPI_F_S5
@@ -111,6 +118,11 @@ struct acpi_state {
 };
 
 const struct acpi_state *acpi_get_state(void);
+
+// Did this machine's own tables name a way to power off? The question
+// power.c asks before reaching for a hardcoded port: a machine that
+// named one and did not stop is a machine to HALT, not one to guess at.
+int acpi_poweroff_known(void);
 
 // One logical processor, from the MADT. `apic_id` is what an
 // INIT-SIPI-SIPI would be addressed to; nothing starts one yet.

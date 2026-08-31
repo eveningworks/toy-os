@@ -63,6 +63,13 @@ serial.log
 smoke_serial.log
 smoke_qemu.log
 
+# tools/poweroff_test.py's defaults: a COPY of disk.img it ends by
+# stopping the machine, and the QEMU log beside it. Untracked and in the
+# repo root, so without this every `git status` after a poweroff run
+# shows two files a `git add -A` would happily commit.
+poweroff_test.img
+poweroff_qemu.log
+
 # Python bytecode from tools/*.py
 __pycache__/
 *.pyc

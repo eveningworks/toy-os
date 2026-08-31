@@ -3819,3 +3819,40 @@ front of the user on every launch to show `Z_Init:` lines nobody asked
 for. DOOM's output goes to the console like any other program's and is
 readable after `Exit to shell`. `Terminal=` is for programs whose
 INTERFACE is a terminal, which is a different thing.
+
+## Poweroff on the bare-metal laptop RESTARTS the machine instead of stopping it, repeatedly
+
+**Reported** 2026-08-31, booting the live image on the maintainer's test
+laptop. Selecting Shutdown from the desktop's menu reboots the machine
+instead of powering it off, and it keeps rebooting. Shutting down from
+Linux Mint on the same machine works, so the hardware reaches S5 fine.
+
+**Reproduction** (bare metal only -- no QEMU guest shows this):
+
+1. Boot `toy-os-live.iso` on the laptop.
+2. Start menu -> Shutdown.
+3. The machine restarts rather than powering off, and does so again on
+   the next attempt.
+
+**What is known.** Nothing cleared the PM1 wake-status bits before the
+`SLP_EN` write: `acpi_power.c` parsed `PM1a_CNT` and never
+`PM1a_EVT_BLK`, whose first half is `PM1_STS`. Entering S5 with a wake
+event still pending -- the power-button press that asked for the
+shutdown, among others -- is a machine that goes down and comes straight
+back up. Linux clears `WAK_STS` in `acpi_hw_legacy_sleep()` and the ACPI
+spec requires it. That is a real defect and is fixed; whether it is THIS
+defect is unconfirmed, because the only machine that shows the symptom
+is not one any test here can drive.
+
+**What would confirm it.** On the laptop, before shutting down:
+`dmesg | grep acpi` names the ports and the sleep type the tables gave,
+and `acpi` reports whether poweroff is available at all. If the machine
+still restarts, those two outputs say which path ran and are the next
+thing to look at.
+
+**Found in the same path and separately fixed** (not this bug): the
+poweroff fallback wrote `outw(0x604, 0x2000)` whenever ACPI declined for
+any reason. On QEMU 0x604 is the FADT's own `PM1a_CNT`, which is why it
+worked; on real hardware it is a live chipset port being written a sleep
+type the firmware never named. It now runs only when the tables named no
+poweroff path at all.

@@ -2152,14 +2152,36 @@ DSDT's `_S5_` object and the MADT. `/bin/acpi` prints all of it;
 
 **`system_poweroff()` and `system_reboot()` are LADDERS, and the rung
 that ran is only visible in the log.** Poweroff: the parsed S5 write,
-then QEMU/Bochs's fixed `outw(0x604, 0x2000)`, then a halt with a
-message. Reboot: the FADT's reset register, then the 8042 pulse, then a
-halt. Every rung ends with the machine stopped, so **the observable
-outcome cannot tell you which one did it** -- which is why each prints
-its own klog line and why `tools/poweroff_test.py` asserts on
-`acpi: S5 via` being present *and* `falling back to the QEMU/Bochs`
-being absent. A test that asserts "the machine stopped" passes with the
-whole ACPI path deleted.
+then -- ONLY when the tables named no poweroff path at all --
+QEMU/Bochs's fixed `outw(0x604, 0x2000)`, then a halt with a message.
+Reboot: the FADT's reset register, then the 8042 pulse, then a halt.
+Every rung ends with the machine stopped, so **the observable outcome
+cannot tell you which one did it** -- which is why each prints its own
+klog line and why `tools/poweroff_test.py` asserts on `acpi: S5 via`
+being present *and* the fallback line being absent. A test that asserts
+"the machine stopped" passes with the whole ACPI path deleted.
+
+**THE PORT FALLBACK IS FOR A MACHINE THAT NAMED NOTHING, NOT FOR A
+WRITE THAT DID NOT TAKE.** It used to run whenever `acpi_poweroff()`
+declined for any reason, including after a real `PM1a_CNT` write. On
+QEMU that is harmless because 0x604 IS its FADT's `PM1a_CNT`; on real
+hardware it is a live chipset port being written a sleep type the
+firmware never named -- guessing at hardware, which nothing else here
+is allowed to do. A machine whose own tables named a path and did not
+stop is HALTED now.
+
+**CLEAR THE WAKE-STATUS BITS BEFORE THE SLEEP WRITE.** `PM1_STS` is the
+FIRST HALF of the PM1 EVENT block (`PM1a_EVT_BLK`, a different FADT
+field from `PM1a_CNT_BLK`) and its bits are write-1-to-clear.
+`pm1_clear_status()` writes 0xFFFF to it, and the hardware-reduced path
+clears `WAK_STS` in `SLEEP_STATUS_REG` the same way. Skipping it does
+not fail visibly: the machine enters S5 with a wake already pending --
+the power-button press that asked for the shutdown, among others -- and
+comes straight back up, which reads as **"it restarts instead of
+shutting down, forever"**. Linux clears it in `acpi_hw_legacy_sleep()`.
+**No test here can catch this**: a guest has no pending wake event, so
+the clear changes nothing in QEMU. What `poweroff_test.py` can assert,
+and does, is that the EVENT block was parsed and written.
 
 **THIS IS NOT AN ACPI SUBSYSTEM AND MUST NOT GROW INTO ONE.** There is
 no AML interpreter, and the `_S5_` byte scan is the single deliberate

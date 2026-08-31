@@ -11,11 +11,16 @@ assertion a broken version passes.
 
 What distinguishes them is the KERNEL LOG. `acpi: S5 via PM1a 0x604
 type 0` is printed by the path that read the FADT and the DSDT's `_S5_`;
-`power: falling back to the QEMU/Bochs PM1a_CNT port trick` is printed
+`power: no ACPI poweroff path -- trying the QEMU/Bochs port` is printed
 only when that path declined. Asserting on the first and the ABSENCE of
 the second is the check that fails when the ACPI path breaks -- verified
 by disabling `acpi_poweroff()` and watching exactly those two lines swap
 over, with the guest still stopping.
+
+The third line, `status cleared at 0x...`, says the PM1 EVENT block was
+parsed and the wake-status bits written before the sleep. What this
+CANNOT check is the bug that added it: a guest has no pending wake
+event, so skipping the clear breaks nothing here. See docs/bugs.md.
 
 TWO CHIPSETS, because one is not a sample. i440fx (QEMU's default)
 presents a revision-0 RSDP, an RSDT, a 116-byte FADT and NO reset
@@ -158,7 +163,8 @@ def boot_and_run(iso, disk, machine, qemu_log, command, wait_for, timeout,
 
 
 ACPI_S5 = "acpi: S5 via"
-FALLBACK = "falling back to the QEMU/Bochs"
+FALLBACK = "no ACPI poweroff path -- trying the QEMU/Bochs port"
+STS_CLEARED = "status cleared at 0x"
 
 
 def main():
@@ -228,6 +234,16 @@ def main():
         # two lines say which code did it.
         check(f"{label}: the S5 write came from the parsed tables", ACPI_S5 in t)
         check(f"{label}: the legacy port trick did NOT run", FALLBACK not in t)
+        # THE WAKE-STATUS CLEAR. What QEMU can check is that the PM1
+        # EVENT block was parsed and written -- NOT that skipping it
+        # breaks anything, because a guest has no pending wake event to
+        # come back up on. The bug it exists for is bare-metal only:
+        # entering S5 with a wake pending reads as "it restarts instead
+        # of shutting down". See docs/bugs.md.
+        sts = next((ln for ln in t.splitlines() if STS_CLEARED in ln), "")
+        addr = sts.split(STS_CLEARED)[-1].strip() if sts else ""
+        check(f"{label}: the wake-status bits were cleared first",
+              bool(sts) and addr not in ("0", ""), sts.strip() or "no line")
         check(f"{label}: QEMU exited -- the machine really stopped", exited)
 
     # RESET, which only q35 can exercise here: i440fx's FADT has no

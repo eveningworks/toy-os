@@ -49,10 +49,21 @@ void system_poweroff(void) {
     // would not decode.
     acpi_poweroff();
 
-    // QEMU/Bochs's well-known shortcut, kept as a fallback for the one
-    // case ACPI cannot cover: a guest whose tables did not survive the
-    // walk above but whose chipset still answers this port.
-    klog_write("power: falling back to the QEMU/Bochs PM1a_CNT port trick\n");
+    // QEMU/Bochs's well-known shortcut, and ONLY for a machine whose
+    // tables told us nothing. It used to run whenever acpi_poweroff()
+    // declined, including after a real PM1a write that did not take --
+    // and on real hardware 0x604 is not a known port but a LIVE one,
+    // somewhere in a chipset's PM range. Writing SLP_EN with a sleep
+    // type the firmware never named is the definition of guessing at
+    // hardware, which this project's parsers are not allowed to do.
+    if (acpi_poweroff_known()) {
+        vga_write("\nSystem halted -- ACPI accepted the request and the "
+                  "machine stayed up.\n");
+        klog_write("power: ACPI named a poweroff path and it did not stop the "
+                   "machine -- NOT guessing at another port\n");
+        for (;;) __asm__ volatile ("hlt");
+    }
+    klog_write("power: no ACPI poweroff path -- trying the QEMU/Bochs port\n");
     outw(0x604, 0x2000);
 
     // Still here -- neither path stopped the machine. Same "always end

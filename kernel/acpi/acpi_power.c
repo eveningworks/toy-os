@@ -18,13 +18,18 @@
 // commented so a reader can check one against the spec without counting.
 #define FADT_SMI_CMD        48
 #define FADT_ACPI_ENABLE    52
+#define FADT_PM1A_EVT_BLK   56
+#define FADT_PM1B_EVT_BLK   60
 #define FADT_PM1A_CNT_BLK   64
 #define FADT_PM1B_CNT_BLK   68
+#define FADT_PM1_EVT_LEN    88
 #define FADT_PM1_CNT_LEN    89
 #define FADT_FLAGS         112
 #define FADT_RESET_REG     116
 #define FADT_RESET_VALUE   128
 #define FADT_X_DSDT        140
+#define FADT_X_PM1A_EVT    148
+#define FADT_X_PM1B_EVT    160
 #define FADT_X_PM1A_CNT    172
 #define FADT_X_PM1B_CNT    184
 #define FADT_SLEEP_CONTROL 244
@@ -45,6 +50,7 @@
 // bit 5, in an 8-bit register.
 #define SLP_CTL_TYP_SHIFT 2
 #define SLP_CTL_SLP_EN    (1u << 5)
+#define SLP_STS_WAK       (1u << 7)   // write-1-to-clear, like PM1_STS's
 
 static const uint8_t *g_fadt;
 static uint32_t g_fadt_len;
@@ -224,12 +230,21 @@ void acpi_fadt_init(void) {
     fadt_gas(FADT_X_PM1B_CNT, &g);
     s->pm1b_cnt = (g.space_id == ACPI_GAS_IO && g.address)
                     ? (uint32_t)g.address : fadt_u32(FADT_PM1B_CNT_BLK);
+    fadt_gas(FADT_X_PM1A_EVT, &g);
+    s->pm1a_evt = (g.space_id == ACPI_GAS_IO && g.address)
+                    ? (uint32_t)g.address : fadt_u32(FADT_PM1A_EVT_BLK);
+    fadt_gas(FADT_X_PM1B_EVT, &g);
+    s->pm1b_evt = (g.space_id == ACPI_GAS_IO && g.address)
+                    ? (uint32_t)g.address : fadt_u32(FADT_PM1B_EVT_BLK);
+    s->pm1_evt_len = fadt_u8(FADT_PM1_EVT_LEN);
 
     if (s->pm1a_cnt && (inw((uint16_t)s->pm1a_cnt) & PM1_CNT_SCI_EN))
         s->flags |= ACPI_F_ENABLED;
 
     find_s5(s);
 
+    klog_printf("acpi: FADT pm1a_evt=0x%x pm1b_evt=0x%x len=%u\n",
+                s->pm1a_evt, s->pm1b_evt, s->pm1_evt_len);
     klog_printf("acpi: FADT pm1a=0x%x pm1b=0x%x smi=0x%x%s%s\n",
                 s->pm1a_cnt, s->pm1b_cnt, s->smi_cmd,
                 (s->flags & ACPI_F_HW_REDUCED) ? " hardware-reduced" : "",
@@ -282,14 +297,41 @@ static int gas_usable(const struct acpi_gas *g) {
     return 0; // PCI config space, SMBus, the EC -- no driver for those here
 }
 
-// Preserves everything in PM1_CNT that is not the sleep request. A
-// blind write would clear SCI_EN and the wake-status bits, which is a
-// different instruction to the chipset than "go to S5".
+// EVERY PENDING WAKE EVENT, CLEARED. PM1_STS is the FIRST HALF of the
+// PM1 event block and its bits are write-1-to-clear, so 0xFFFF clears
+// whatever is set -- the power-button press that asked for the shutdown
+// among them.
+//
+// Skipping this does not fail: the machine enters S5 with a wake
+// already pending and comes straight back up, which reads as "it
+// restarts instead of shutting down, forever". Linux clears WAK_STS in
+// acpi_hw_legacy_sleep() for the same reason, and the ACPI spec
+// requires it.
+static void pm1_clear_status(const struct acpi_state *s) {
+    // The block is [STS][EN], each half PM1_EVT_LEN/2 bytes -- a length
+    // the firmware states and which is 4 on essentially everything.
+    uint8_t half = s->pm1_evt_len ? (uint8_t)(s->pm1_evt_len / 2) : 2;
+    if (half < 2) return;
+    if (s->pm1a_evt) outw((uint16_t)s->pm1a_evt, 0xFFFF);
+    if (s->pm1b_evt) outw((uint16_t)s->pm1b_evt, 0xFFFF);
+}
+
+// Preserves everything in PM1_CNT that is not the sleep request -- a
+// blind write would clear SCI_EN, which is a different instruction to
+// the chipset than "go to S5". (The wake-status bits are NOT here:
+// they are in PM1_STS, cleared above.)
 static void pm1_sleep_write(uint16_t port, uint8_t typ) {
     uint16_t v = inw(port);
     v = (uint16_t)(v & ~(PM1_CNT_SLP_TYP_MASK | PM1_CNT_SLP_EN));
     v = (uint16_t)(v | ((uint32_t)typ << PM1_CNT_SLP_TYP_SHIFT) | PM1_CNT_SLP_EN);
     outw(port, v);
+}
+
+int acpi_poweroff_known(void) {
+    const struct acpi_state *s = acpi_get_state();
+    if (!(s->flags & ACPI_F_S5)) return 0;
+    return (s->flags & ACPI_F_HW_REDUCED) ? (s->sleep_control.address != 0)
+                                          : (s->pm1a_cnt != 0);
 }
 
 int acpi_poweroff(void) {
@@ -300,14 +342,19 @@ int acpi_poweroff(void) {
 
     if (s->flags & ACPI_F_HW_REDUCED) {
         if (!gas_usable(&s->sleep_control)) return 0;
+        // WAK_STS, the hardware-reduced twin of PM1_STS's, and
+        // write-1-to-clear the same way.
+        if (gas_usable(&s->sleep_status))
+            gas_write8(&s->sleep_status, SLP_STS_WAK);
         klog_printf("acpi: S5 via SLEEP_CONTROL_REG, type %d\n", (int)s->slp_typ_a);
         gas_write8(&s->sleep_control,
                    (uint8_t)(((s->slp_typ_a & 7) << SLP_CTL_TYP_SHIFT) | SLP_CTL_SLP_EN));
     } else {
         if (!s->pm1a_cnt) return 0;
-        klog_printf("acpi: S5 via PM1a 0x%x type %d%s\n",
+        pm1_clear_status(s);
+        klog_printf("acpi: S5 via PM1a 0x%x type %d%s, status cleared at 0x%x\n",
                     s->pm1a_cnt, (int)s->slp_typ_a,
-                    s->pm1b_cnt ? " (and PM1b)" : "");
+                    s->pm1b_cnt ? " (and PM1b)" : "", s->pm1a_evt);
         pm1_sleep_write((uint16_t)s->pm1a_cnt, s->slp_typ_a);
         if (s->pm1b_cnt) pm1_sleep_write((uint16_t)s->pm1b_cnt, s->slp_typ_b);
     }
