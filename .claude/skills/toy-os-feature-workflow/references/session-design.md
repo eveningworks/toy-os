@@ -1834,7 +1834,11 @@ project stands, so a session does not re-derive it.**
 
 - **THERE IS A USB STACK, AND IT IS xHCI ONLY.** `kernel/drivers/usb/`:
   `xhci.c` (controller), `usb_enum.c` (descriptors and standard
-  requests), `usb_hid.c` (boot keyboard and mouse). UHCI/OHCI/EHCI are
+  requests), and a HID class driver for the boot keyboard and mouse.
+  (That driver was `usb_hid.c` in this directory when this was written;
+  since 2026-08-31 a driver lives with the CLASS REGISTRY it plugs into,
+  so it is `kernel/drivers/input/input_usbhid.c` and `usb/` holds the
+  bus alone -- see `kernel/README.md`.) UHCI/OHCI/EHCI are
   found by prog_if, named in the log and refused -- a machine that needs
   this driver has xHCI and nothing else. `USB=xhci|xhci+mouse` on `make
   run`, `--usb` on `vm.py`, both OFF by default.

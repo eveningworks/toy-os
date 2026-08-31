@@ -103,14 +103,17 @@ directory.
 
 Adapted code
 
-kernel/drivers/usb/usb_r8153.c is original work under the MIT License
-above, written against FreeBSD's ure(4) driver -- sys/dev/usb/net/
-if_ure.c and if_urereg.h -- as its reference. Register addresses,
-bit definitions and descriptor layouts are facts about the Realtek
-RTL8152/RTL8153 hardware and carry no notice; the ORDER of the
-initialisation sequence, and the reasoning about which register writes
-that sequence needs, were taken from ure(4) and are what this notice
-covers. Linux's r8152.c describes the same hardware and is GPL-2.0; it
+The RTL8152/RTL8153 USB Ethernet driver -- named by what it is as well
+as by where it lives, kernel/drivers/net/net_usb_r8153.c, because the
+file has moved once already -- is original work under the MIT License
+above, written against FreeBSD's ure(4) driver (sys/dev/usb/net/if_ure.c
+and if_urereg.h) as its reference.
+
+Register addresses, bit definitions and descriptor layouts are facts
+about the Realtek hardware and carry no notice. What this notice covers
+is the ORDER of the initialisation sequence and the reasoning about
+which register writes that sequence needs, both of which were taken from
+ure(4). Linux's r8152.c describes the same hardware and is GPL-2.0; it
 was deliberately not consulted, because this repository is MIT.
 
 BSD-2-Clause is compatible with the MIT License and requires only that
