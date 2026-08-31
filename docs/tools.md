@@ -2136,6 +2136,21 @@ window without going through it will find its layout polls timing out.
   "the fixture is stale". A warning rather than a refusal because a copy
   is often deliberately old (a fixture staged by `tfs3_writer.py`, an
   image kept for a reproduction); it names the re-copy command.
+
+  **It asks the compiler which artifact a source feeds; it does not
+  guess from the directory.** Pairing by tree is a guess, and it was
+  wrong for `kernel/include/api/build_date.h` -- which sits under
+  `kernel/` and is included only by `userland/wm/desktop.c`, so it never
+  rebuilds the kernel. `gen_version.sh` rewrites that file whenever the
+  DAY changes, so this refused a perfectly current image on the first
+  build after every midnight and then self-healed as soon as anything
+  touched the kernel, which is why it went unnoticed. The `.d` files
+  `-MMD` already writes carry the real answer (and `check_deps.py`
+  proves that tracking is live), so the mapping is read from them. A
+  source no `.d` mentions keeps the directory pairing, which is the
+  conservative fallback -- so this can only ever make the guard quieter
+  about a file the compiler positively placed elsewhere, never about a
+  new one.
 - **`taskmgr_test.py`** -- the ring-3 Task Manager: `uui_table`, resize
   reflow, and ending a process (12 checks). Its resize check asserts the
   table grew by ROUGHLY WHAT THE WINDOW GREW BY, not merely that it

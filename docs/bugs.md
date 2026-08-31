@@ -194,10 +194,14 @@ either still parses the ring-0 output or runs on an image that has no
   **The lesson is the mis-transcribed check name**: a triage entry that
   names the wrong assertion sends the next session at the wrong code.
 
-- **`virtio_input_test.py`** — "a virtio keypress reaches the ring-3
-  desktop (Super opens Start)" fails. **This one is NOT obviously rot**
-  and deserves a look before anything else here: it is an input-path
-  assertion, not a command-name one.
+- **`virtio_input_test.py` PASSES now — 16 of 16, measured 3 runs in 3
+  on 2026-08-31** (369ce06), including the "a virtio keypress reaches
+  the ring-3 desktop (Super opens Start)" check this entry was written
+  about. **Nothing targeted it in between and no cause was ever
+  established**, so this is a measurement rather than a fix: 3 clean
+  runs is what a 1-in-5 flake produces about half the time. It is left
+  here, narrowed, rather than deleted, because deleting it would claim a
+  fix nobody made.
 
 Reproduce: `make clean-disk && make iso && python3 tools/ondemand_sweep.py --logs DIR`.
 

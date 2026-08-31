@@ -104,6 +104,80 @@ DISK_ARTIFACT_PAIRS = (
     ("build/userland", "build/.seeded"),
 )
 
+
+# **WHICH ARTIFACT A SOURCE FEEDS IS ASKED, NOT ASSUMED.**
+#
+# Pairing by DIRECTORY is a guess, and a wrong guess is a false alarm --
+# which the comment above already names as the thing to avoid, because it
+# teaches whoever sees it to set the bypass. The guess WAS wrong, for
+# `kernel/include/api/build_date.h`: it sits under kernel/ and is included
+# by exactly one file, `userland/wm/desktop.c`, so it never rebuilds the
+# kernel. gen_version.sh rewrites it whenever the DAY changes, so this
+# refused a perfectly current image on the first build after every
+# midnight, then self-healed as soon as anything touched the kernel --
+# which is why nobody caught it.
+#
+# The build already knows the answer and writes it down: `-MMD` emits a
+# `.d` beside every object naming the headers that object actually
+# depends on, and `tools/check_deps.py` proves per build directory that
+# the tracking is live. So the mapping is READ from those files rather
+# than kept by hand. A per-file exception list would have fixed
+# build_date.h and left the next generated header to rediscover this.
+#
+# The fallback matters as much as the rule: a source no `.d` mentions --
+# added since the last build, or in a tree never built here -- keeps the
+# directory pairing, which is the conservative answer. This can only make
+# the guard quieter about a file the compiler positively placed elsewhere.
+_DEP_ROOTS = (
+    ("build/kernel.bin", "build/kernel"),
+    ("build/kernel.bin", "build/apps"),
+    ("build/userland", "build/userland"),
+    ("build/userland", "build/userland-pic"),
+)
+
+_DEPS = None
+
+
+def _dep_map(repo: Path):
+    """{repo-relative source -> {artifacts that depend on it}}."""
+    out = {}
+    for artifact, sub in _DEP_ROOTS:
+        root = repo / sub
+        if not root.is_dir():
+            continue
+        for d in root.rglob("*.d"):
+            try:
+                text = d.read_text()
+            except OSError:
+                continue
+            body = text.split(":", 1)[1] if ":" in text else ""
+            for tok in body.replace("\\\n", " ").split():
+                if not tok or tok.endswith(":"):
+                    continue
+                q = Path(tok) if os.path.isabs(tok) else (repo / tok)
+                try:
+                    rel = q.resolve().relative_to(repo).as_posix()
+                except (ValueError, OSError):
+                    continue
+                out.setdefault(rel, set()).add(artifact)
+    return out
+
+
+def _feeds(path: Path, artifact: str, repo: Path):
+    """Does `path` feed `artifact`? True when nothing is known about it."""
+    global _DEPS
+    if _DEPS is None:
+        _DEPS = _dep_map(repo)
+    try:
+        rel = path.relative_to(repo).as_posix()
+    except ValueError:
+        return True
+    known = _DEPS.get(rel)
+    if not known:
+        return True                 # never compiled here: keep the pairing
+    return artifact in known
+
+
 BYPASS_ENV = "TOYOS_ALLOW_STALE_ISO"
 
 
@@ -118,8 +192,13 @@ BYPASS_ENV = "TOYOS_ALLOW_STALE_ISO"
 UNSEEDED = ()
 
 
-def _newest(root: Path, suffixes=None):
-    """(path, mtime) of the newest file under `root`, or (None, 0.0)."""
+def _newest(root: Path, suffixes=None, artifact=None, repo: Path = REPO):
+    """(path, mtime) of the newest file under `root`, or (None, 0.0).
+
+    `artifact` narrows the walk to sources that actually feed it (see
+    _feeds); without it every file counts, which is what the
+    artifact-against-media comparisons want.
+    """
     if root.is_file():
         return root, root.stat().st_mtime
     if not root.is_dir():
@@ -131,6 +210,10 @@ def _newest(root: Path, suffixes=None):
         if suffixes is not None and path.suffix not in suffixes:
             continue
         if any(u in path.as_posix() for u in UNSEEDED):
+            continue
+        # Feeds some other artifact, and the compiler said so -- it is
+        # checked when THAT artifact is checked, not here.
+        if artifact is not None and not _feeds(path, artifact, repo):
             continue
         m = path.stat().st_mtime
         if m > newest_mtime:
@@ -167,7 +250,8 @@ def check_iso_fresh(repo: Path = REPO, iso_name: str = "toy-os.iso",
 
     # 1. Did the BUILD run? Each source tree against its own output.
     for src_dir, out_rel, _kind in SOURCE_TREES:
-        src, src_m = _newest(repo / src_dir, SOURCE_SUFFIXES)
+        src, src_m = _newest(repo / src_dir, SOURCE_SUFFIXES,
+                             artifact=out_rel, repo=repo)
         if src is None:
             continue
         out, out_m = _newest(repo / out_rel)
