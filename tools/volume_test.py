@@ -75,6 +75,45 @@ def panel_box(g):
     return (g["x"], g["y"], g["x"] + g["w"], g["y"] + g["h"])
 
 
+def _ink(im, box):
+    """The background and the pixel furthest from it, summed over RGB.
+
+    Read rather than assumed: a symbolic icon's colour is the panel's
+    `fg` at draw time, so the only way to check it is what landed.
+    """
+    import collections
+    hist = collections.Counter(im.crop(box).convert("RGB").getdata())
+    bg = hist.most_common(1)[0][0]
+    ink = max(hist, key=lambda c: sum(abs(c[i] - bg[i]) for i in range(3)))
+    return bg, ink, sum(abs(ink[i] - bg[i]) for i in range(3))
+
+
+def tray_ink_check(qmp, g, path):
+    try:
+        from PIL import Image
+    except ImportError:
+        check("the tray icon is drawn in the clock's ink", True,
+              "skipped -- no Pillow")
+        return
+    qmp.stable_pixels(path)
+    im = Image.open(path)
+    t = g["tray"]
+    icon_box = (t["x"], t["y"], t["x"] + t["w"], t["y"] + t["h"])
+    # The clock is the tray's rightmost item, so anything to the right
+    # of the volume item and inside the screen is its text.
+    clock_box = (t["x"] + t["w"] + 2, t["y"],
+                 min(im.width, t["x"] + t["w"] + 90), t["y"] + t["h"])
+    ibg, iink, icontrast = _ink(im, icon_box)
+    cbg, cink, ccontrast = _ink(im, clock_box)
+    check("the tray icon is drawn in the clock's ink",
+          iink == cink, f"icon {iink} vs clock {cink}")
+    check("...so it has the clock's contrast against the panel, not a sixth",
+          icontrast >= ccontrast * 0.9,
+          f"icon {icontrast} vs clock {ccontrast} on {ibg}")
+    check("...and the clock is on the same background (the control)",
+          ibg == cbg, f"{ibg} vs {cbg}")
+
+
 def setting(dbg, name):
     reply = (dbg.send(f"sh config get {name}") or "").strip()
     return next((ln.strip() for ln in reply.splitlines() if ln.strip()), "")
@@ -115,6 +154,14 @@ def main():
         return report()
     check("...and the closed popup reports the current level",
           g["level"] == 100 and not g["open"], f'level={g["level"]}')
+
+    # THE TRAY ICON IS DRAWN IN THE CLOCK'S INK, and the clock is the
+    # control -- half the assertion is the neighbour staying put
+    # (CLAUDE.md). This is a pixel check because the failure it exists
+    # for looked perfectly plausible in a screenshot: the icon carried
+    # the toolbar's dark ink onto the near-black taskbar, at 93 of
+    # summed contrast against the clock's 596.
+    tray_ink_check(qmp, g, shot("vol_tray_ink.png"))
 
     box = panel_box(g)
     before = qmp.stable_pixels(shot("vol_before.png"), box=box)

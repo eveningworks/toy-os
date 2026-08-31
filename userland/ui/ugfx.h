@@ -123,6 +123,17 @@ void ugfx_blit(struct ugfx_surface *s, int x, int y, int w, int h,
 void ugfx_blit_alpha(struct ugfx_surface *s, int x, int y, int w, int h,
                       const uint32_t *src, int src_pitch_px);
 
+// The same again, but the source's COLOUR is discarded and only its
+// alpha is used, as coverage for `color`. A SYMBOLIC icon: one that
+// takes the colour of the text beside it instead of carrying its own,
+// which is what GTK's `-symbolic` icons and Windows' MDL2 glyphs are
+// for. The reason it is not a nicety: an icon with its ink baked in is
+// drawn in one panel's colour and is nearly invisible on another --
+// the tray's speaker was toolbar ink on the dark taskbar, at a sixth
+// of the contrast of the clock beside it.
+void ugfx_blit_tinted(struct ugfx_surface *s, int x, int y, int w, int h,
+                       const uint32_t *src, int src_pitch_px, uint32_t color);
+
 // --- damage -----------------------------------------------------------
 
 // The bounding box of everything drawn since the last reset. Returns 0

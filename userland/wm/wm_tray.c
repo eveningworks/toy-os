@@ -10,7 +10,7 @@
 #include "wm_internal.h"
 #include "rt/sys.h"
 #include "wm_tray.h"
-#include "wm_taskbar.h"     // taskbar_icon_size()
+#include "wm_taskbar.h"     // taskbar_h
 #include "lib/icon_cache.h"
 #include "kapi.h"
 
@@ -133,6 +133,15 @@ void tray_update_clock(void) {
     tray_set_text(clock_tray_id, buf);
 }
 
+// The tray's icons run LARGER than a taskbar button's, because a tray
+// icon is the whole item where a button's sits beside a label with the
+// button's padding around it. Font-derived like everything else here
+// (docs/gui-guidelines.md): the taskbar's height is, so this is.
+static int tray_icon_size(void) {
+    int s = taskbar_h - 6;
+    return s < 8 ? 0 : s;
+}
+
 // THE one right-to-left walk. draw_tray(), tray_left() and
 // tray_clock_rect() all used to be separate copies of this loop in
 // spirit -- and the taskbar's own history says what that costs: window
@@ -154,7 +163,7 @@ static int tray_walk(int want, int *out_x, int *out_w,
     for (int i = TRAY_MAX_ITEMS - 1; i >= 0; i--) {
         if (!tray_items[i].active) continue;
         if ((pass == 0) != (i == clock_tray_id)) continue;
-        int text_w = tray_items[i].icon ? taskbar_icon_size()
+        int text_w = tray_items[i].icon ? tray_icon_size()
                                        : (int)k_strlen(tray_items[i].text) * ugfx_char_w();
         cx -= text_w;
         // The item's BOX, not its text: the fill draw_tray() paints
@@ -211,9 +220,14 @@ static void tray_draw_item(int id, int x, int w, void *vctx) {
         // No letter-tile fallback here, unlike an app icon: a tray item
         // with no file draws NOTHING rather than a lone initial, which
         // would read as a control the panel invented.
+        //
+        // SYMBOLIC: drawn in the SAME ink as the clock beside it rather
+        // than in its own, so it follows the panel instead of assuming
+        // one. Every tray item today is the shell's own indicator; an
+        // app-registered icon would have to say it is not symbolic.
         if (ico)
-            ugfx_blit_alpha(wm_surface(), x, c->taskbar_y + (taskbar_h - ico->h) / 2,
-                            ico->w, ico->h, ico->px, ico->w);
+            ugfx_blit_tinted(wm_surface(), x, c->taskbar_y + (taskbar_h - ico->h) / 2,
+                             ico->w, ico->h, ico->px, ico->w, c->fg);
         return;
     }
     int text_y = c->taskbar_y + (taskbar_h - ugfx_char_h()) / 2;

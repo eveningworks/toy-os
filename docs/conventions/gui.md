@@ -1537,6 +1537,23 @@ real scanout hardware does. Do not write a pixel assertion for one.
   `16x16/`, `48x48/`) is the fix if small icons ever look mushy, and it
   changes only the lookup.
 
+- **AN ICON ON A PANEL IS SYMBOLIC: IT TAKES THE PANEL'S INK, NOT ITS
+  OWN.** The tray blits through `ugfx_blit_tinted()` -- the art's alpha
+  as coverage, the panel's `fg` as the colour -- which is what GTK's
+  `-symbolic` icons and Windows' MDL2 glyphs are for. The reason is not
+  tidiness: icon art carries ONE ink, and this desktop has a near-white
+  toolbar and a near-black taskbar, so the same speaker glyph that reads
+  correctly in a popup was toolbar ink on the taskbar at **a sixth of
+  the contrast of the clock beside it** (measured: 93 against 596). One
+  master serves both, tinted in one place and native in the other, which
+  recolouring the art would not have achieved. Every tray item today is
+  the shell's own indicator; an app-registered icon would have to say it
+  is NOT symbolic, since a colourful logo tinted flat is worse than a
+  dark one. **A tray icon is also sized by `tray_icon_size()`, not by
+  `taskbar_icon_size()`** -- a tray icon IS the item, where a taskbar
+  button's sits beside a label inside the button's padding, so the two
+  want different sizes off the same font-derived height.
+
 - **A WINDOW IS MATCHED TO ITS LAUNCHER BY `AppId=`.** The taskbar needs
   an icon for a window it did not launch, and a window only knows the
   `app_id` its client declared -- which is not always the Exec basename
