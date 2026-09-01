@@ -38,6 +38,7 @@
 #include "ktest_run.h"
 #include "shell.h" // shell_dispatch -- `sh` runs the real shell, it doesn't reimplement one
 #include "vga.h"
+#include "kerrno.h" // EBUSY -- the gui channel is one slot
 
 #define DBG_LINE_MAX 128
 #define DBG_PROMPT "\r\ndbg> "
@@ -312,7 +313,15 @@ static void dbg_cmd_gui(const char *args) {
     msg.type = WIN_REQ_DEBUG_CMD;
     k_strlcpy(msg.text, args ? args : "", WIN_DEBUG_CMD_LEN);
 
-    if (!win_transport_debug(WIN_PID_KERNEL, &msg)) {
+    int rc = win_transport_debug(WIN_PID_KERNEL, &msg);
+    if (rc == -EBUSY) {
+        // /bin/guictl issues the same command from ring 3 and the
+        // channel is one slot, so a refusal here means somebody else is
+        // mid-drain -- not a broken desktop.
+        klog_write("gui: busy -- another diagnostic is in flight\r\n");
+        return;
+    }
+    if (!rc) {
         klog_write("gui: no window manager running\r\n");
         return;
     }

@@ -43,6 +43,7 @@
 #include "win_transport.h"
 #include "win_server.h"
 #include "string.h"
+#include "kerrno.h" // EBUSY -- the diagnostic channel is one slot
 
 // A reply of known length and known content. Byte i is derived from i,
 // so a dropped or duplicated byte at a chunk boundary shifts everything
@@ -206,4 +207,97 @@ KTEST("wintransport", "registering a transport with a missing slot is refused") 
     static const struct win_transport BROKEN = { .name = "broken" };
     win_transport_register(&BROKEN);
     KTEST_ASSERT_EQ(k_strcmp(win_transport_name(), "direct"), 0);
+}
+
+// --- one diagnostic at a time ----------------------------------------
+//
+// The reply buffer and its chunk cursor are one slot. That was safe
+// while the serial console was the only client; `/bin/guictl` is a
+// second, so a command arriving mid-drain has to be refused rather than
+// served from the same buffer. These drive win_server_debug() directly
+// -- the transport's entry point passes WIN_PID_KERNEL, and the whole
+// point here is two DIFFERENT callers.
+
+KTEST("wintransport", "a second caller mid-drain is refused, not served") {
+    if (win_server_any()) KTEST_SKIP("a compositor would answer instead");
+
+    const struct win_server_ops *prev = save_ops();
+    win_server_register(&STUB_OPS);
+    g_stub_len = 1200;   // three chunks, so the first caller is still draining
+
+    struct win_debug_msg a;
+    k_memset(&a, 0, sizeof a);
+    a.type = WIN_REQ_DEBUG_CMD;
+    k_strlcpy(a.text, "pattern", WIN_DEBUG_CMD_LEN);
+    KTEST_ASSERT_EQ(win_server_debug(100, &a), 1);
+    KTEST_ASSERT(a.flags & WIN_DEBUG_F_MORE);   // the claim is live
+
+    struct win_debug_msg b;
+    k_memset(&b, 0, sizeof b);
+    b.type = WIN_REQ_DEBUG_CMD;
+    k_strlcpy(b.text, "pattern", WIN_DEBUG_CMD_LEN);
+    KTEST_ASSERT_EQ(win_server_debug(200, &b), -EBUSY);
+
+    // ...and the stranger cannot steal a chunk either: it gets the empty
+    // final chunk, and the owner's next chunk is still the owner's.
+    k_memset(&b, 0, sizeof b);
+    b.type = WIN_REQ_DEBUG_MORE;
+    KTEST_ASSERT_EQ(win_server_debug(200, &b), 1);
+    KTEST_ASSERT_EQ(b.len, (uint32_t)0);
+
+    k_memset(&a, 0, sizeof a);
+    a.type = WIN_REQ_DEBUG_MORE;
+    KTEST_ASSERT_EQ(win_server_debug(100, &a), 1);
+    KTEST_ASSERT_EQ(a.len, (uint32_t)WIN_DEBUG_CHUNK);
+
+    // Drain the rest; the claim lapses with the last chunk.
+    for (int guard = 0; guard < 8 && (a.flags & WIN_DEBUG_F_MORE); guard++) {
+        k_memset(&a, 0, sizeof a);
+        a.type = WIN_REQ_DEBUG_MORE;
+        win_server_debug(100, &a);
+    }
+
+    k_memset(&b, 0, sizeof b);
+    b.type = WIN_REQ_DEBUG_CMD;
+    k_strlcpy(b.text, "pattern", WIN_DEBUG_CMD_LEN);
+    KTEST_ASSERT_EQ(win_server_debug(200, &b), 1);
+
+    // Leave the channel free for whatever runs next.
+    for (int guard = 0; guard < 8 && (b.flags & WIN_DEBUG_F_MORE); guard++) {
+        k_memset(&b, 0, sizeof b);
+        b.type = WIN_REQ_DEBUG_MORE;
+        win_server_debug(200, &b);
+    }
+    g_stub_len = 0;
+    win_server_register(prev);
+}
+
+KTEST("wintransport", "the same caller may issue a second command") {
+    if (win_server_any()) KTEST_SKIP("a compositor would answer instead");
+
+    const struct win_server_ops *prev = save_ops();
+    win_server_register(&STUB_OPS);
+    g_stub_len = 1200;
+
+    struct win_debug_msg m;
+    k_memset(&m, 0, sizeof m);
+    m.type = WIN_REQ_DEBUG_CMD;
+    k_strlcpy(m.text, "pattern", WIN_DEBUG_CMD_LEN);
+    KTEST_ASSERT_EQ(win_server_debug(100, &m), 1);
+
+    // Abandoning a drain and asking again must NOT lock the caller out
+    // of its own channel -- that is the shape that would wedge guictl
+    // after one interrupted command.
+    k_memset(&m, 0, sizeof m);
+    m.type = WIN_REQ_DEBUG_CMD;
+    k_strlcpy(m.text, "pattern", WIN_DEBUG_CMD_LEN);
+    KTEST_ASSERT_EQ(win_server_debug(100, &m), 1);
+
+    for (int guard = 0; guard < 8 && (m.flags & WIN_DEBUG_F_MORE); guard++) {
+        k_memset(&m, 0, sizeof m);
+        m.type = WIN_REQ_DEBUG_MORE;
+        win_server_debug(100, &m);
+    }
+    g_stub_len = 0;
+    win_server_register(prev);
 }

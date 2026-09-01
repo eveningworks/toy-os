@@ -738,6 +738,7 @@ whenever a headline here tells you something you did not already know.
 - **`uui_image` IS THE ONLY WIDGET THAT OWNS MEMORY, AND IT MUST BE RELEASED.**
 - **THE WALLPAPER IS A REGISTERED SETTING, AND ITS VALUE IS A NAME**
 - **THE START BUTTON'S APPEARANCE IS A REGISTERED SETTING**
+- **THE `gui` DIAGNOSTICS ARE REACHABLE FROM RING 3 NOW: `/bin/guictl`**
 - **THE COMPOSITOR SLEEPS BETWEEN FRAMES, AND TWO THINGS MUST DEFEAT THE WAIT**
 - **AN OVERLAY IS A ROW IN A TABLE, AND THE TABLE DRIVES DRAWING, CLICKS AND HOVER**
 - **THE TRAY HAS A VOLUME FLYOUT, AND THE PANEL OWNS IT TOO**
@@ -1278,7 +1279,8 @@ cost".
   `console_shell_test.py`, `ctrlc_test.py`, `cursor_ibeam_test.py`,
   `demo_test.py`, `diskmark_test.py`, `doom_test.py`,
   `doom_sound_test.py`, `fat32_test.py`, `fileop_test.py`, `frame_balance.py`,
-  `fs_switch_test.py`, `grep_test.py`, `hash_hostcheck.py`,
+  `fs_switch_test.py`, `grep_test.py`, `guictl_test.py`,
+  `hash_hostcheck.py`,
   `hires_test.py`,
   `init_test.py`, `install_test.py`, `jobs_test.py`, `kbd_test.py`,
   `keyboard_paths_test.py`, `kvm_soak.py`, `live_boot_test.py`,

@@ -109,6 +109,10 @@ TOOLS = [
     # serial socket -- the sweep's fault, per the note above.
     ("stdin",       "stdin_test.py",           "blocking fd 0 and /bin/tosh",        True,  None,                   True),
     ("terminal",    "terminal_probe.py",       "the GUI Terminal's keys and paging", True,  None,                   True),
+    # ATTACHES to a running guest and needs a desktop up. Its
+    # load-bearing check compares its answer against the SERIAL
+    # console's for the same subcommand.
+    ("guictl",      "guictl_test.py",          "/bin/guictl against the console's `gui`", False, None,                True),
     ("grep",        "grep_test.py",            "/bin/grep through a real shell",     True,  None,                   True),
     ("ansi",        "ansi_cursor_test.py",     "ANSI cursor movement, as pixels",    True,  None,                   False),
 

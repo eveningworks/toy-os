@@ -147,6 +147,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`dmatest`](dmatest.md)
 - [`fputest`](fputest.md)
 - [`gfxbench`](gfxbench.md)
+- [`guictl`](guictl.md)
 - [`ktest`](ktest.md)
 - [`random`](random.md)
 - [`reboot`](reboot.md)

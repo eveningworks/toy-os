@@ -2910,6 +2910,23 @@ window without going through it will find its layout polls timing out.
   ON DEMAND: it needs a host gcc and glibc, and the gate must not start
   requiring either.
 
+- **`guictl_test.py`** -- `/bin/guictl`, the ring-3 front end for the
+  window manager's `gui` diagnostics. ATTACHES to a running `vm.py`
+  guest and needs a desktop up.
+
+  **Its load-bearing check asks the same subcommand twice** -- once
+  through `guictl` (ring 3, `SYS_WIN_DEBUG`, polled) and once through
+  the serial debug console's own `gui` (ring 0, waits in place) -- and
+  requires the two answers to match. A guictl-only check would pass
+  against a program that printed a plausible answer of its own; the
+  console shares no code with it below the window server.
+
+  The second is that an unknown subcommand is REPORTED, which was dead
+  for months: the kernel cleared the incoming flags before reading them,
+  so `WIN_DEBUG_F_UNKNOWN` never arrived and `gui nosuchthing` printed
+  nothing on the serial console either. A check asserting only that
+  known commands answer would not have seen it.
+
 - **`hash_hostcheck.py`** -- compiles `/lib/libhash.so`'s two algorithms
   (`userland/dynlib/uhash.c` plus `kernel/lib/kcrc.c`) with the host gcc
   and judges them against Python's `hashlib` and `zlib`. ~2,150 vectors:

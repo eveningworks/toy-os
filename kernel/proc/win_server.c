@@ -23,6 +23,7 @@
 
 #include "scheduler.h" // SCHED_MAX_PROCS, scheduler_exec_path() -- see app_path
 #include "fs.h"       // FS_PATH_MAX, the size of that path
+#include "kerrno.h"  // EBUSY -- the diagnostic channel is one slot
 #include "mouse.h"    // mouse_get_state() -- park the plane where the pointer is
 #include "heap.h"     // kmalloc/kfree -- the DEFINE sprite bounce buffer
 
@@ -895,6 +896,41 @@ static char g_dbg_reply[WIN_DEBUG_REPLY_MAX];
 static int  g_dbg_len = 0;  // bytes of reply held
 static int  g_dbg_sent = 0; // how many of them have gone out
 
+// ONE DIAGNOSTIC AT A TIME, AND THE SECOND CALLER IS TOLD SO.
+//
+// g_dbg_reply/g_dbg_sent above and the ring-3 leg below are ONE SLOT,
+// which was safe while the serial console was the only client. It is
+// not any more: `/bin/guictl` issues the same WIN_REQ_DEBUG_CMD from
+// ring 3, so two callers can interleave a command with somebody else's
+// chunk drain and read each other's bytes. A command arriving while
+// another is in flight is REFUSED with -EBUSY rather than served --
+// the reject-rather-than-guess rule this file already applies to the
+// clipboard 60 lines down.
+//
+// THE CLAIM EXPIRES, and that is not belt-and-braces. A client killed
+// between its command and its last chunk would otherwise hold the
+// channel until reboot, and a diagnostic nobody can run is a worse
+// failure than one that can be raced. Three seconds; a real drain is
+// milliseconds.
+static int g_dbg_owner;              // 0 = free. WIN_PID_KERNEL is the console
+static uint64_t g_dbg_owner_until;   // pit_ticks() past which the claim lapses
+#define DBG_OWNER_TICKS 300
+
+// A ring-3 caller's command that has been posted to the compositor and
+// not yet answered. It polls with WIN_REQ_DEBUG_MORE and gets
+// WIN_DEBUG_F_PENDING until the answer lands -- see that flag.
+static int g_dbg_awaiting;
+static uint64_t g_dbg_await_until;
+
+// Where a ring-3 compositor's answer lands before it is handed to the
+// waiting caller. Separate from g_dbg_reply, which is the CHUNKING
+// buffer the console reads out of -- writing straight into that would
+// mean the compositor's reply racing the chunk being sent.
+static char g_dbg_ring3[WIN_DEBUG_REPLY_MAX];
+static uint32_t g_dbg_ring3_len;
+static int g_dbg_reply_ready;
+static unsigned g_dbg_reply_flags;
+
 // Fills `msg` with the next chunk of the held reply.
 static void dbg_take_chunk(struct win_debug_msg *msg) {
     int left = g_dbg_len - g_dbg_sent;
@@ -911,25 +947,24 @@ static void dbg_take_chunk(struct win_debug_msg *msg) {
     // exactly fills the buffer is otherwise indistinguishable from a
     // truncated one. See WIN_DEBUG_F_MORE.
     if (g_dbg_sent < g_dbg_len) msg->flags |= WIN_DEBUG_F_MORE;
+    else g_dbg_owner = 0;   // fully drained -- the channel is free again
+
+    // WHAT THE ANSWERING COMPOSITOR SAID ABOUT THE COMMAND, not about
+    // this chunk. g_dbg_reply_flags was accumulated and read by nobody,
+    // so `gui nosuchthing` printed NOTHING from the moment the desktop
+    // became a process -- an unknown subcommand looked exactly like one
+    // that legitimately had no output, which is the distinction
+    // WIN_DEBUG_F_UNKNOWN exists to make.
+    msg->flags |= (g_dbg_reply_flags & WIN_DEBUG_F_UNKNOWN);
 }
+
 
 // --- the ring-3 debug leg (M41) --------------------------------------
 //
 // The command waiting for a ring-3 compositor to run it, and the reply
-// coming back. One slot: `gui` commands are issued one at a time by a
-// console that blocks on each, so a queue would be state with no second
-// user.
+// coming back. One slot, guarded by the claim above.
 static char g_dbg_pending[WIN_DEBUG_CMD_LEN];
 static int g_dbg_pending_valid;
-
-// Where a ring-3 compositor's answer lands before it is handed to the
-// waiting caller. Separate from g_dbg_reply, which is the CHUNKING
-// buffer the console reads out of -- writing straight into that would
-// mean the compositor's reply racing the chunk being sent.
-static char g_dbg_ring3[WIN_DEBUG_REPLY_MAX];
-static uint32_t g_dbg_ring3_len;
-static int g_dbg_reply_ready;
-static unsigned g_dbg_reply_flags;
 
 // How long the console waits for the compositor. Two seconds: long
 // enough that a desktop busy with a slow frame still answers, short
@@ -955,7 +990,9 @@ static unsigned g_dbg_reply_flags;
 // Spinning with them off would deadlock against the very process being
 // waited for -- the failure that looks like a hung machine rather than a
 // slow one.
-static int debug_via_compositor(const char *line, char *out, int cap) {
+// Hands the command to the compositor and returns at once. -1 if there
+// is no compositor to hand it to.
+static int debug_post_to_compositor(const char *line) {
     if (!g_comp_pid) return -1;
 
     k_strlcpy(g_dbg_pending, line, sizeof g_dbg_pending);
@@ -965,6 +1002,28 @@ static int debug_via_compositor(const char *line, char *out, int cap) {
     g_dbg_ring3_len = 0;
 
     tell_compositor(WIN_EV_CLIENT_DEBUG, g_comp_pid, 0, 0, 0);
+    return 0;
+}
+
+// The answer, once it is there. -1 while it is not.
+static int debug_collect(char *out, int cap) {
+    if (!g_dbg_reply_ready) return -1;
+    g_dbg_pending_valid = 0;
+    int n = (int)g_dbg_ring3_len;
+    if (n > cap) n = cap;
+    for (int i = 0; i < n; i++) out[i] = g_dbg_ring3[i];
+    return n;
+}
+
+// THE CONSOLE'S round trip, and ONLY the console's. It waits in place
+// with `sti; hlt`, which is legal here for one reason: the serial debug
+// console is not a scheduled process, so there is no trapframe to
+// corrupt and nothing to switch away from. A SYSCALL may not do this --
+// api/scheduler.h says so in as many words, and handing a ring-3 caller
+// this path faulted inside isr_common on the first try. Ring 3 gets the
+// post/collect pair above and polls from its own side instead.
+static int debug_via_compositor(const char *line, char *out, int cap) {
+    if (debug_post_to_compositor(line) < 0) return -1;
 
     uint64_t deadline = pit_ticks() + DBG_RING3_TIMEOUT_TICKS;
     while (!g_dbg_reply_ready && pit_ticks() < deadline) {
@@ -976,11 +1035,7 @@ static int debug_via_compositor(const char *line, char *out, int cap) {
         klog_write("win: compositor did not answer a gui command in time\n");
         return 0; // empty, and deliberately NOT "unknown" -- see above
     }
-
-    int n = (int)g_dbg_ring3_len;
-    if (n > cap) n = cap;
-    for (int i = 0; i < n; i++) out[i] = g_dbg_ring3[i];
-    return n;
+    return debug_collect(out, cap);
 }
 
 // The clipboard, set and read. ANY client may do either: a clipboard
@@ -1042,10 +1097,58 @@ int win_server_debug(int pid, struct win_debug_msg *msg) {
     (void)pid; // the console is the only client; kept for the ops shape
     if (!msg) return 0;
 
+    // THE INCOMING FLAGS, TAKEN BEFORE THEY ARE CLEARED. `flags` is an
+    // out-parameter on every path but WIN_REQ_DEBUG_REPLY, where it is
+    // the compositor telling us what its answer IS -- and the reset
+    // below ran first, so that handler read zero every time. Two things
+    // were silently lost: WIN_DEBUG_F_UNKNOWN, so `gui nosuchthing`
+    // printed nothing and looked like a command with no output; and
+    // WIN_DEBUG_F_MORE, so g_dbg_reply_ready was set on the FIRST chunk
+    // of a multi-chunk reply. The second has never bitten because the
+    // compositor sends its chunks back to back without yielding -- it
+    // is a race that has not been lost yet, not a race that is absent.
+    unsigned in_flags = msg->flags;
+
     msg->flags = 0;
     msg->reserved = 0;
 
     if (msg->type == WIN_REQ_DEBUG_MORE) {
+        // A stranger asking for more gets the SAME empty final chunk a
+        // client one call too late gets -- not an error and not
+        // somebody else's bytes, so their loop ends instead of
+        // consuming a reply they never asked for.
+        if (g_dbg_owner && pid != g_dbg_owner) {
+            msg->type = WIN_EV_DEBUG_OUT;
+            msg->len = 0;
+            msg->text[0] = '\0';
+            return 1;
+        }
+        // Still waiting on the compositor: say so rather than handing
+        // back an empty final chunk, which the caller cannot tell from
+        // a command that legitimately printed nothing.
+        if (g_dbg_awaiting) {
+            int n = debug_collect(g_dbg_reply, (int)sizeof g_dbg_reply);
+            if (n < 0) {
+                if (pit_ticks() >= g_dbg_await_until) {
+                    klog_write("win: compositor did not answer a gui command in time\n");
+                    g_dbg_awaiting = 0;
+                    g_dbg_pending_valid = 0;
+                    g_dbg_owner = 0;
+                    msg->type = WIN_EV_DEBUG_OUT;
+                    msg->len = 0;
+                    msg->text[0] = '\0';
+                    return 1;
+                }
+                msg->type = WIN_EV_DEBUG_OUT;
+                msg->flags = WIN_DEBUG_F_PENDING;
+                msg->len = 0;
+                msg->text[0] = '\0';
+                return 1;
+            }
+            g_dbg_awaiting = 0;
+            g_dbg_len = n;
+            g_dbg_sent = 0;
+        }
         // No live reply is not an error -- it is an empty final chunk,
         // so a client that asks one time too many terminates cleanly
         // instead of looping.
@@ -1079,15 +1182,21 @@ int win_server_debug(int pid, struct win_debug_msg *msg) {
         if (n > room) n = room;
         for (uint32_t i = 0; i < n; i++) g_dbg_ring3[g_dbg_ring3_len + i] = msg->text[i];
         g_dbg_ring3_len += n;
-        g_dbg_reply_flags |= msg->flags;
-        if (!(msg->flags & WIN_DEBUG_F_MORE)) g_dbg_reply_ready = 1;
+        g_dbg_reply_flags |= in_flags;
+        if (!(in_flags & WIN_DEBUG_F_MORE)) g_dbg_reply_ready = 1;
         return 1;
     }
 
     if (msg->type != WIN_REQ_DEBUG_CMD) return 0;
 
+    if (g_dbg_owner && g_dbg_owner != pid && pit_ticks() < g_dbg_owner_until)
+        return -EBUSY;
+    g_dbg_owner = pid;
+    g_dbg_owner_until = pit_ticks() + DBG_OWNER_TICKS;
+
     g_dbg_len = 0;
     g_dbg_sent = 0;
+    g_dbg_reply_flags = 0;   // a previous command's verdict is not this one's
 
     msg->text[WIN_DEBUG_CMD_LEN - 1] = '\0'; // the command is client data
 
@@ -1097,6 +1206,28 @@ int win_server_debug(int pid, struct win_debug_msg *msg) {
     int n;
     if (g_ops && g_ops->debug_command) {
         n = g_ops->debug_command(msg->text, g_dbg_reply, sizeof g_dbg_reply);
+    } else if (g_comp_pid && pid > 0) {
+        // pid > 0 is A PROCESS. The serial console passes
+        // WIN_PID_KERNEL (-1) and sys_win_debug() refuses 0, so this is
+        // exactly "somebody who can be scheduled" -- tested that way
+        // rather than by including the transport's header, which sits
+        // ABOVE this file.
+        // Post it and hand back PENDING: the wait happens in the
+        // caller's own ring. See WIN_DEBUG_F_PENDING.
+        if (debug_post_to_compositor(msg->text) < 0) {
+            g_dbg_owner = 0;
+            msg->type = WIN_EV_DEBUG_OUT;
+            msg->len = 0;
+            msg->text[0] = '\0';
+            return 0;
+        }
+        g_dbg_awaiting = 1;
+        g_dbg_await_until = pit_ticks() + DBG_RING3_TIMEOUT_TICKS;
+        msg->type = WIN_EV_DEBUG_OUT;
+        msg->flags = WIN_DEBUG_F_PENDING;
+        msg->len = 0;
+        msg->text[0] = '\0';
+        return 1;
     } else if (g_comp_pid) {
         n = debug_via_compositor(msg->text, g_dbg_reply, sizeof g_dbg_reply);
     } else {

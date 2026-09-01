@@ -1026,6 +1026,16 @@ struct win_clip_msg {
                                // indistinguishable from a truncated one
                                // otherwise, which is the trap a
                                // "read until short" convention sets.
+// A RING-3 CALLER IS NEVER MADE TO WAIT IN THE KERNEL. When the
+// answering window manager is itself a ring-3 process, the command is
+// POSTED to it and this flag comes straight back with no reply text:
+// ask again with WIN_REQ_DEBUG_MORE until it clears. The serial console
+// does not see it -- it has no scheduler slot, so it can and does wait
+// in place, which a syscall may not (api/scheduler.h: waiting in place
+// with interrupts on "was tried, and hangs after one event"). Handing a
+// process that same wait is a #GP inside isr_common, measured.
+#define WIN_DEBUG_F_PENDING 0x04 // no answer yet; poll with DEBUG_MORE
+
 #define WIN_DEBUG_F_UNKNOWN 0x02 // the WM did not recognise the
                                // subcommand; `text` holds nothing. Kept
                                // distinct from an empty reply, since a

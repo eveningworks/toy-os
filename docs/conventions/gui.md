@@ -2264,6 +2264,47 @@ one of them would rename the tab. The title itself is TRUNCATED at
 and deliberately, since a title is decoration and losing its tail beats
 losing the whole thing.
 
+## THE `gui` DIAGNOSTICS ARE REACHABLE FROM RING 3 NOW: `/bin/guictl`
+
+The window manager's whole `gui` vocabulary -- `state`, `windows`,
+`compositor`, `taskbar`, `probe`, the input verbs -- used to be
+reachable from ONE place, the serial debug console. A machine with no
+COM port in use could not be asked anything about its desktop.
+`/bin/guictl` sends the same `WIN_REQ_DEBUG_CMD` over `SYS_WIN_DEBUG`,
+which was already ring-3 reachable and already ungated for that request
+type. **It parses nothing**: a subcommand added to
+`userland/wm/wm_debug.c` works there the day it lands.
+
+Three things to know before touching that path.
+
+**A RING-3 CALLER IS NEVER MADE TO WAIT IN THE KERNEL.** When the
+answering window manager is itself a process, the kernel posts the
+command and returns `WIN_DEBUG_F_PENDING` immediately; the caller polls
+with `WIN_REQ_DEBUG_MORE`. The serial console keeps its `sti; hlt` wait
+because it is NOT a scheduled process -- `api/scheduler.h` says a
+blocking syscall "MUST go through" `scheduler_block_current()` rather
+than waiting in place with interrupts on, and "that was tried". Handing
+a process the console's wait faults inside `isr_common`, measured, on
+the first run.
+
+**THE CHANNEL IS ONE SLOT, AND THE SECOND CALLER IS REFUSED.**
+`g_dbg_reply`/`g_dbg_sent` and the ring-3 leg are single -- fine with
+one client, not with two. A command arriving mid-drain gets `-EBUSY`;
+the claim is per-pid and LAPSES after three seconds, because a client
+killed between its command and its last chunk would otherwise hold the
+channel until reboot.
+
+**`flags` IS AN OUT-PARAMETER EXCEPT ON ONE REQUEST, AND THAT COST A
+FEATURE.** `win_server_debug()` clears `msg->flags` at entry, which is
+right for every path but `WIN_REQ_DEBUG_REPLY`, where the compositor is
+telling the kernel what its answer IS. The clear ran first, so that
+handler read zero: `WIN_DEBUG_F_UNKNOWN` was dropped and `gui
+nosuchthing` printed NOTHING from the day the desktop became a process,
+looking exactly like a command with no output. `WIN_DEBUG_F_MORE` was
+dropped with it, so `g_dbg_reply_ready` was set on the FIRST chunk of a
+multi-chunk reply -- a race that had not been lost only because the
+compositor sends its chunks back to back without yielding.
+
 ## THE COMPOSITOR SLEEPS BETWEEN FRAMES, AND TWO THINGS MUST DEFEAT THE WAIT.
 
 `wm.c`'s frame loop no longer calls `sys_yield()` -- that returned

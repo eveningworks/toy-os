@@ -5665,3 +5665,66 @@ declares `overlay_active`, so an app gets a modal by adding one entry to
 its widget list and nothing else -- the same shape `uui_menubar`'s popup
 already had, generalised because the File Manager was about to grow a
 second one-off box.
+
+## The `gui` diagnostics reach ring 3 by POLLING, because a syscall may not wait in place
+
+`/bin/guictl` exists so a machine with no serial console attached -- the
+bare-metal laptop -- can be asked what its desktop is doing. The
+channel it uses was already there: `SYS_WIN_DEBUG` is ring-3 reachable
+(it was added so a ring-3 compositor could ANSWER these), and
+`win_server_debug()` gates only `WIN_REQ_DEBUG_TAKE` and
+`WIN_REQ_DEBUG_REPLY` by pid. Asking was never gated, because there was
+only ever one asker.
+
+**What did NOT work is the obvious thing: letting a process take the
+path the console takes.** `debug_via_compositor()` posts the command and
+then waits with `sti; hlt` until the compositor answers. From the serial
+debug console that is correct and remains so -- the console is not a
+scheduled process, so there is no trapframe to corrupt and nothing to
+switch away from. From a syscall it is a **#GP inside `isr_common`**,
+which is what the first run of `guictl state` produced;
+`api/scheduler.h` had already written the rule down ("a blocking syscall
+MUST go through this rather than waiting in place with interrupts on --
+that was tried, and hangs after one event because `g_next_kernel_rsp`
+isn't reentrant").
+
+Three ways out, and why this one:
+
+- **Block on a wait channel.** Correct, and what `SYS_SLEEP` and the
+  socket receive already do. It needs the syscall handler to own the
+  wait -- `scheduler_block_current_until()` takes the handler's own
+  trapframe -- so `debug_via_compositor()` would have to be split and
+  `sys_win_debug()` restructured around a retry. That is the right
+  shape for something on a hot path. This is a diagnostic issued by
+  hand.
+- **Poll from ring 3.** The kernel posts and returns
+  `WIN_DEBUG_F_PENDING`; the program sleeps 2 ms and asks again. No
+  kernel wait at all, so nothing can be got wrong about reentrancy, and
+  the cost is a syscall every 2 ms for the few milliseconds a `gui
+  state` takes. Chosen.
+- **Refuse ring-3 callers.** Which is where things already were.
+
+**The one-slot channel is refused rather than shared.** `g_dbg_reply`
+and its chunk cursor are single, and the comment above them said so:
+"one slot: `gui` commands are issued one at a time by a console that
+blocks on each, so a queue would be state with no second user." There
+is a second user now, so a command arriving mid-drain gets `-EBUSY` --
+the same reject-rather-than-guess call `fs_read()` makes for a nested
+whole-file read. The claim is per-pid and expires after three seconds,
+because a client killed mid-drain would otherwise hold the channel until
+reboot, and a diagnostic nobody can run is worse than one that can be
+raced.
+
+**And the bug this surfaced, which predates all of it.**
+`win_server_debug()` clears `msg->flags` at entry -- right for every
+request but `WIN_REQ_DEBUG_REPLY`, where `flags` is an INPUT: the
+compositor saying what its answer is. The clear ran first, so the reply
+handler read zero. `WIN_DEBUG_F_UNKNOWN` was discarded, which is why
+`gui nosuchthing` printed nothing on the serial console from the day the
+desktop became a ring-3 process -- an unrecognised command was
+indistinguishable from one that ran and had nothing to say, which is the
+exact distinction that flag exists to make. `WIN_DEBUG_F_MORE` went with
+it, so `g_dbg_reply_ready` was set on the first chunk of a multi-chunk
+reply; that has never produced a wrong answer only because the
+compositor sends its chunks back to back without yielding, which is a
+race not yet lost rather than a race that is not there.
