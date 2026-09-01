@@ -3948,3 +3948,58 @@ What would close it: a pty. `SYS_OPENPTY` exists, so a test could put a
 child on one, read the master, and require the prompt to arrive before
 the child's read returns -- which is the real shape of the property and
 is a test worth having for more than this one flush.
+
+## `/bin`'s output moves from `sys_print` to stdio
+
+**Deferred deliberately on 2026-09-01, with the analysis done.** The
+work is small and the risk is not, so it wants its own change rather
+than riding on another.
+
+`sys_print(s)` is `strlen` plus `write(1, s, n)` (`userland/rt/sys.c`).
+`fputs(s, stdout)` is the same thing under the name every C programmer
+knows, which is what CLAUDE.md's "write C library names" rule asks for.
+
+**The size of it**, measured rather than guessed: 212 `sys_print` calls
+across 34 programs in `userland/bin/` -- 106 passing a string literal,
+97 passing a variable -- plus 283 `snprintf` calls across 44 programs,
+most of them formatting into a buffer that is then printed. That second
+pattern is the interesting one:
+
+    char line[96];
+    snprintf(line, sizeof line, "  inode:    %llu\n", n);
+    sys_print(line);
+
+collapses into one `printf()` **and deletes the scratch buffer**, which
+is a frame-size win as well as a readability one -- `/bin/wget` is
+already over the 2 KiB ring-3 budget.
+
+**WHY IT IS NOT A BLIND SWEEP.** tolibc's stdout is line-buffered on a
+terminal and FULLY buffered otherwise (`userland/libc/stdio.c`'s
+`decide_buffering`). Four consequences, and the last two are why this
+waits:
+
+- On a terminal: identical, since every one of these lines ends in
+  `\n`.
+- Through a pipe: output batches and flushes at `exit()`. That is MORE
+  correct, not less -- coreutils behaves exactly this way -- and it
+  turns hundreds of syscalls into a handful.
+- **A fault before `exit()` loses buffered output.** With `sys_print`
+  it is already on the wire. That matters most for the message printed
+  just before something goes wrong, which is the one worth having.
+- **Ordering against fd 2 changes.** fd 2 is the KERNEL LOG here, not a
+  second terminal stream, so a program's stdout can appear after kernel
+  lines written during it. Several test tools read that shared console.
+
+**The shape to build**, when it is built: convert ordinary output, keep
+`lib/cmd.h`'s `cmd_fail`/`cmd_usage` on the raw unbuffered write with a
+stated reason beside the stream reason already there, and leave
+`userland/gui`, `wm` and `fm` alone -- their 25 calls are diagnostics
+from processes with no terminal on stdout, so stdio's tty detection
+picks full buffering and the readability payoff is not there.
+
+**How to verify it**, and this is the part that makes it a change of its
+own: every tool that parses the serial console has to be re-run, not
+just the build. `preflight.sh`, then `gui_regress.py`, then the
+console-driven half of `ondemand_sweep.py` (`ls`, `grep`, `stdin`,
+`jobs`, `ctrlc`, `console`) -- an ordering change shows up there and
+nowhere else.

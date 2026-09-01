@@ -318,6 +318,7 @@ Staged in `docs/dynlink-design.md`, including the case against.
 - [x] ~~A per-process cwd~~ DONE 2026-08-19 -- `SYS_CHDIR`/`SYS_GETCWD`
 - [x] ~~`crt0` + a real `_start`, replacing each binary's hand-written syscall stubs~~ done long since -- `userland/rt/crt0.asm`
 - [x] ~~Prove it: build and run a real ported program nobody here wrote~~ DONE twice -- cJSON, then Doom (libc-design.md)
+- [ ] `/bin`'s output moves from `sys_print` to stdio -- see `docs/roadmap-details.md`
 - [ ] Decide, in writing, what is deliberately NOT pursued
 
 ## Tracks -- no dependency on the phases above
