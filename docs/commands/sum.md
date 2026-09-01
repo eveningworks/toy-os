@@ -2,39 +2,101 @@
 
 **a `/bin` program.**
 
-**Category:** Developer and diagnostic (`help tests`)
+**Category:** Files and the filesystem
 
 ## Synopsis
 
 ```
-sum
+sum [-a ALGORITHM] [-c LISTFILE] [FILE...]
 ```
 
-Reads two integers from standard input and prints their sum.
+## Description
+
+Prints a checksum or digest of each `FILE`, or of standard input when
+no file is named (or when the file is `-`). `-a` picks the algorithm;
+without it, `crc32`.
 
 ```
-/$ sum
-Give me two numbers: 3 4
-Sum is: 3 + 4 = 7
+/$ sum /bin/hello
+3637643924 119952 /bin/hello
+
+/$ sum -a sha256 /bin/hello
+f40c609d804d317b951ea4f2b2555aa2cce87d532e36ea1ef05ad10a7093aff3  /bin/hello
+
+/$ cat /etc/toyos.conf | sum
+3830823995 73 -
 ```
 
-The two numbers may be separated by any whitespace, a newline included,
-so typing them on separate lines works as well as on one.
+**The algorithms are a table, not a program each.** Today it holds
+`crc32` and `sha256`; `sum -a` with a name it does not know prints the
+list rather than guessing. That is coreutils 9.0's `cksum -a` shape,
+which replaced `md5sum`/`sha1sum`/`sha256sum` for the reason this
+project keeps applying to C: a binary per algorithm multiplies.
 
-Non-numeric input is not rejected: `scanf`'s `%d` assigns nothing and
-the operand keeps its initial zero. That is deliberate for a program
-this small -- the alternative is a retry loop, and a rejected character
-stays in the stream, so the obvious one spins forever (see
-`userland/include/stdio.h`).
+**The line shape is the algorithm's own**, so the host can check this
+OS's work and the other way round:
 
-## Why it exists
+| algorithm | line | what prints it on Linux |
+|---|---|---|
+| `crc32` | `<decimal CRC> <bytes> <name>` | `cksum -a crc32b` |
+| `sha256` | `<hex>  <name>` (two spaces) | `sha256sum` |
 
-As the worked example of an interactive `/bin` program, and as the
-thing that found a real gap: the prompt above has no newline, `stdout`
-is line-buffered on a terminal, and until `refill()` in
-`userland/libc/stdio.c` flushed `stdout` before a blocking read, the
-prompt stayed in the buffer -- so the screen was blank while the
-program waited, and both lines appeared together at exit. C11 7.21.3p3
-lists that flush among the moments a line-buffered stream transmits,
-and glibc and MSVC both do it, which is why the same source behaves
-correctly on Linux and Windows.
+**`-c LISTFILE` verifies instead of printing.** Each line is read in the
+shape above, the named file is re-hashed, and each result is reported:
+
+```
+/$ sum /bin/hello /bin/echo > /tmp/list
+/$ sum -c /tmp/list
+/bin/hello: OK
+/bin/echo: OK
+```
+
+A mismatch prints `<name>: FAILED`, a file that cannot be opened prints
+`<name>: FAILED open or read`, and either makes the exit status 1. Lines
+that are blank or start with `#` are skipped. A line that is not this
+algorithm's shape is counted and reported rather than guessed at -- and
+if no line in the file was usable, that is an error too, not a clean
+run: a manifest in the wrong format would otherwise look exactly like a
+manifest that all passed.
+
+In `crc32`'s shape the **size is half the check**. `-c` compares it as
+well as the CRC, which is why the two-field line is worth keeping.
+
+## The `crc32` here is not `cksum`'s
+
+`sum -a crc32` computes the **reflected IEEE 802.3 / zlib CRC-32**
+(polynomial `0xEDB88320`) -- what zip, gzip, PNG, Ethernet and a GPT
+header all mean by "CRC32". Plain POSIX `cksum` computes a *different*
+CRC-32: unreflected over `0x04C11DB7`, with the length fed in at the
+end. **The two agree on nothing.** Check against `cksum -a crc32b`
+(coreutils 9.6 and later) or `python3 -c 'import zlib'`, not against a
+bare `cksum`.
+
+That choice is deliberate: this is the same function
+`kernel/lib/kcrc.c` computes for GPT headers, so one polynomial serves
+ring 0 and ring 3 and there is no second implementation to drift.
+
+## What it is not
+
+Not a MAC and not a password hash. SHA-256 is here to answer "did these
+bytes survive the trip"; toy-os has no crypto, no key management and no
+constant-time anything, and nothing here should be trusted against an
+adversary who can choose the input.
+
+There is no `-b`/`-t` mode: every file is read as bytes, because this OS
+has no text/binary distinction to have a flag about.
+
+## Where the code lives
+
+The algorithms are **`/lib/libhash.so`** (`userland/dynlib/uhash.c`,
+public header `<uhash.h>`), so `sum` is a thin front end and any other
+program can link the same code -- it is the first shared library here
+that exists to be used rather than to prove the loader works. The CRC
+comes from `kernel/lib/kcrc.c`, compiled a second time `-fpic` into that
+library.
+
+## See also
+
+[`stat`](stat.md) for a file's size and timestamps, [`cat`](cat.md) for
+the bytes themselves, [`cp`](cp.md) for making the copy you are about to
+check.

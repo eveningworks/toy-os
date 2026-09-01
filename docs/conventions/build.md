@@ -434,3 +434,49 @@ this the obvious way), not from how much history it accumulated.
   every claim against the TAG** -- `git ls-tree -r v<x> --name-only` and
   `git show v<x>:<file>` answer it in seconds -- and say plainly what is
   still in progress.
+
+## A SHARED LIBRARY IS `userland/dynlib/` PLUS ONE MAKEFILE LINE, AND A PROGRAM OPTS IN
+
+`/lib/libc.so` is special (every `/bin` and GUI program links it, and it
+is built from libc.a's sources a second time with `-fpic`). **Every
+other shared library is an ordinary one**, and the pattern is now
+established rather than improvised:
+
+1. The implementation goes in **`userland/dynlib/`**. That directory is
+   compiled `-fpic` by a target-specific variable, which is what the
+   linker requires: `-fpie` objects may not enter a shared object.
+2. The public header goes in **`userland/include/`**, so callers write
+   `#include <uhash.h>` and nothing has to be added to any include path.
+   It is not the C library's directory in spirit -- it is the directory
+   every userland program can already reach, which is the point.
+3. The `.so` gets a rule beside `libhello.so`'s and is added to
+   **`DYNLIBS`**, which is what puts it in `/lib` on the disk: the
+   `seed` target copies `$(DYNLIBS)` wholesale, so nothing else needs
+   editing to install it.
+4. A program that wants it declares **`ULIB_SO_<program>`**, the
+   shared-object twin of `EXTRA_OBJS_<program>`. The generic `/bin` and
+   GUI link rules pick it up through `$(call ulibso,$$*)`.
+
+**Link with `--hash-style=sysv` and `-z max-page-size=4096`.** The
+loader's symbol lookup is sysv-hash only, and it maps segments
+file-backed -- a 2 MiB-aligned `.so`'s offsets are not page-congruent
+under 4 KiB pages, and `ld-toy` refuses such a file by name.
+
+**A library may have its own `DT_NEEDED`.** `libhash.so` links
+`$(LIBC_SO)` for `memcpy`/`strcmp`, and `ld-toy` walks the needed table
+breadth-first, so a library's own entries are loaded without the program
+knowing. Confirm it with `readelf -d` on the built object rather than
+from the link line -- that is what says whether the record is actually
+there.
+
+**A `/tests` ELF that checks a shared library must be DYNAMIC**, which
+means its own link rule (`hash_test.elf` has one, as `dyn_test.elf` and
+`dynlibc_test.elf` do) and an exit code of `None` in
+`tools/usertest_run.py`'s table -- the legacy `run` loader refuses a
+dynamic binary, so such a test is spawned. A static test of a `.so`
+proves the algorithms and nothing about the library.
+
+**Do NOT also leave the sources in `userland/lib/`.** That directory is
+globbed wholesale into `libuapp.a`, so a copy there would be linked
+statically into every caller and the `.so` would never be reached --
+with nothing failing, because both copies work.

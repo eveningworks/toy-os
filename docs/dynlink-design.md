@@ -6,9 +6,15 @@ A staged plan, in the shape `docs/libc-design.md` and
 have shared libraries here, and is it worth it?**
 
 **Status: in progress.** Stages 0-3 are BUILT; what remains is
-Stage 4 (`dlopen`) and the measured case for lazy binding. The shared
-library is and stays tolibc -- porting musl was sized and declined the
-day Stage 3 landed (`docs/decisions.md`, "tolibc stays").
+Stage 4 (`dlopen`) and the measured case for lazy binding. The C library
+is and stays tolibc -- porting musl was sized and declined the day
+Stage 3 landed (`docs/decisions.md`, "tolibc stays").
+**There is a second shared library now**: `/lib/libhash.so`
+(`userland/dynlib/uhash.c`), the first one here that exists to be USED
+rather than to prove the loader works, linked by `/bin/sum` and
+`/tests/hash_test`. It exercises a path Stage 3 did not: a library with
+its OWN `DT_NEEDED` on `libc.so`, which the loader already handled.
+`docs/conventions/build.md` has how to add another.
 Stage 3 (2026-08-28): tolibc ships as `/lib/libc.so` and EVERY `/bin`
 and GUI program links it (init, toywm and `/tests` stay static --
 `docs/decisions.md`'s "userland is dynamically linked" entry has the

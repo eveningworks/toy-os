@@ -1157,8 +1157,8 @@ formatter had tests, the tests passed, and the tests encoded the bug.
 
 ## Reading a terminal flushes `stdout` first, and only `stdout`
 
-`printf("Give me two numbers: "); scanf("%d %d", ...)` -- the shape of
-every "enter a value" program ever written -- printed nothing until the
+`printf("Enter a number: "); scanf("%d", ...)` -- the shape of every
+"enter a value" program ever written -- printed nothing until the
 program exited. `stdout` is line-buffered on a terminal, the prompt has
 no newline, and `refill()` in `userland/libc/stdio.c` went straight to
 `sys_read`. So the screen stayed blank while the program blocked, and
@@ -1176,6 +1176,15 @@ rather than the idiom C asks for.
 
 `flush_stdout_for_read()` now runs before any read that can block --
 `refill()`, and the unbuffered path of `fgetc()`.
+
+**NOTHING AUTOMATED COVERS IT, and that is worth saying rather than
+implying.** The demonstrator was `/bin/sum`, which existed as this
+program and became a checksum calculator; `userland/tests/stdio_test.c`
+covers buffering, `ftell` across a boundary and the exit-time flush, but
+not this, because observing it needs a stream whose reader BLOCKS and a
+`stdout` a test can read back -- the console is neither. The
+reproduction is two lines of C at a `$` prompt, and
+`docs/roadmap.md`'s papercut list carries it.
 
 **`stdout` alone, not every line-buffered stream.** glibc HAS the
 general form (`_IO_flush_all_linebuffered`) and ships the narrow one,
@@ -1352,3 +1361,86 @@ refcounts -> COW fork -> execve -> the `*at`/stat/ioctl surface -- each
 worth building on its own merits or not at all -- and at the end of it
 a musl port is nearly mechanical. That would be a Linux-compat
 milestone, not a libc swap.
+
+## A second shared library, and what makes one worth building
+
+`/lib/libhash.so` is the first `.so` here that exists to be USED.
+`libhello.so` was the loader's Stage-2 proof -- one function of every
+relocation shape, a caller that is a test, and nothing else needs it.
+
+**Why a library rather than another member of `libuapp.a`.** Every
+`/bin` and GUI program already links that archive, and `--gc-sections`
+means a program that never calls a hash pays nothing for one sitting in
+it. So the archive was the cheap answer, and it is the wrong one for a
+reason the archive cannot fix: `libuapp.a` is *toy-os's toolkit*, and a
+program built against it takes a private copy of whatever it touched.
+Two programs hashing a file carry two SHA-256s in the image and two in
+memory. A shared object is one of each, and -- the part that actually
+motivated it -- it is a thing a program nobody has written yet can link
+without being added to this repo's build at all.
+
+That is the same audience argument `libc.a` and `libuapp.a` already
+split on, one step further out: the toolkit is for programs in this
+tree, and a `.so` in `/lib` is for programs generally.
+
+**A program names the library, the build does not name every program.**
+`ULIB_SO_<program>` in the Makefile, beside the existing
+`EXTRA_OBJS_<program>`. Adding the library to the generic `/bin` link
+line instead would put a `DT_NEEDED` in all seventy binaries, so every
+one of them would load and relocate a library it never calls -- which
+is exactly the cost the shared object was supposed to remove. Linux's
+answer is the same shape (`-lhash` per target, not a global `LDLIBS`).
+
+**The one thing that had to be checked rather than assumed** was
+whether `ld-toy.so` loads a library's OWN `DT_NEEDED`: `libhash.so`
+needs `memcpy` and `strcmp` from `libc.so`. It does -- the loader walks
+the needed table breadth-first and a library's entries land on the end
+of it -- so this needed no loader change. `readelf -d` on the built
+`.so` is how that was confirmed, not the source.
+
+**The CRC is compiled three ways from one source**, which is the point
+of putting it in `kernel/lib/`: `-mcmodel=kernel` for the GPT code,
+`-fpic` for the shared library, and the host's own gcc for
+`tools/hash_hostcheck.py`. A GPT header's CRC and `sum -a crc32` cannot
+disagree, because there is nothing to disagree with.
+
+## `sum` is a checksum calculator with an algorithm table, and its crc32 is not `cksum`'s
+
+`/bin/sum` used to read two integers from stdin and print their sum --
+the worked example of an interactive program, and the thing that found
+the flush-before-a-blocking-read gap above. The name is the problem:
+`sum(1)` is a checksum in every Unix, so a program called `sum` that
+adds two numbers is a trap, and it hangs a non-interactive session that
+types it expecting a digest.
+
+**The shape is coreutils 9.0's, not 1979's.** GNU shipped
+`md5sum`/`sha1sum`/`sha256sum` for two decades and then consolidated
+them into `cksum -a`; BusyBox leaves `sum` out of its default config
+altogether, and GNU's own manual marks `sum` obsolete and redirects to
+`cksum`. So this is one program over a table
+(`userland/dynlib/uhash.c`), which is the registry pattern this repo
+already applies to `display_driver`, `block_device` and
+`syscall_table.c`. A third algorithm is a row.
+
+**A line's shape is the algorithm's own**, and that is what makes the
+host an oracle: `crc32` prints `cksum`'s `<decimal> <bytes> <name>` and
+`sha256` prints `sha256sum`'s `<hex>  <name>`, two spaces included, so a
+manifest crosses between this OS and a Linux box in either direction.
+The alternative -- one uniform shape for both -- would have been
+simpler to parse and would have thrown that away.
+
+**`crc32` means the zlib/IEEE polynomial, and NOT POSIX `cksum`'s.**
+They are different polynomials over different bit orders and agree on no
+input at all. This one was chosen because the tree already computes it
+for GPT headers, and because it is what zip, gzip, PNG and Ethernet all
+mean by CRC32; the cost is that `cksum` on a Linux box disagrees,
+correctly, and `cksum -a crc32b` is the one that matches. The man page
+says so in its own section rather than in a footnote, because a reader
+who compares against plain `cksum` and finds a mismatch will otherwise
+conclude this OS is broken.
+
+**`-c` refuses a manifest with no usable line** rather than reporting a
+clean run. A file in the wrong format parses as zero checked entries and
+zero failures, which is indistinguishable from everything passing -- the
+same "what would a broken version still pass" question the test
+conventions ask.

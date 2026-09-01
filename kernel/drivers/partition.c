@@ -12,6 +12,7 @@
 #include "partition.h"
 #include "block.h"
 #include "string.h"
+#include "kcrc.h"
 #include "krandom.h" // GUIDs -- see guid_generate()
 #include "klog.h"
 #include "kfmt.h" // klog_printf
@@ -45,30 +46,6 @@ static uint64_t read_le64(const uint8_t *p) {
 
 static void guid_copy(uint8_t *out, const uint8_t *raw) {
     for (int i = 0; i < 16; i++) out[i] = raw[i];
-}
-
-// Standard CRC-32 (IEEE 802.3 / zlib polynomial, 0xEDB88320) -- no
-// precomputed table, just the bit-at-a-time form. GPT headers are
-// small (~92 bytes) and this runs once per `parttable` invocation, so
-// the simpler code is worth more here than the table's speed.
-// The running form. The GPT entry array is 16 KiB -- far too big for a
-// kernel stack -- so the writer builds it one sector at a time and
-// feeds each sector through here, which is the only way to get the
-// array's CRC without ever holding the whole array. `crc` starts at
-// 0xFFFFFFFF and the caller inverts at the end.
-static uint32_t crc32_update(uint32_t crc, const uint8_t *data, uint32_t len) {
-    for (uint32_t i = 0; i < len; i++) {
-        crc ^= data[i];
-        for (int b = 0; b < 8; b++) {
-            uint32_t mask = (uint32_t)(-(int32_t)(crc & 1));
-            crc = (crc >> 1) ^ (0xEDB88320 & mask);
-        }
-    }
-    return crc;
-}
-
-static uint32_t crc32(const uint8_t *data, uint32_t len) {
-    return ~crc32_update(0xFFFFFFFF, data, len);
 }
 
 static void write_le32(uint8_t *p, uint32_t v) {
@@ -212,7 +189,7 @@ static __attribute__((noinline)) int parse_gpt(const struct block_device *dev,
     // stored_crc is already saved above, and nothing below reads those
     // four bytes again. The copy cost 512 bytes of frame for nothing.
     hdr[16] = 0; hdr[17] = 0; hdr[18] = 0; hdr[19] = 0;
-    if (crc32(hdr, header_size) != stored_crc) return 0;
+    if (kcrc32(hdr, header_size) != stored_crc) return 0;
 
     out->kind = PART_TABLE_GPT;
     out->gpt_header_valid = 1;
@@ -485,7 +462,7 @@ static __attribute__((noinline)) int write_mbr(const struct block_device *dev,
 static __attribute__((noinline)) uint32_t write_gpt_entries(const struct block_device *dev,
                                                             const struct partition_table *in,
                                                             uint32_t lba, int *ok) {
-    uint32_t crc = 0xFFFFFFFF;
+    uint32_t crc = KCRC32_INIT;
     *ok = 1;
     for (int s = 0; s < GPT_ENTRY_SECTORS; s++) {
         uint8_t sec[PART_SECTOR_SIZE];
@@ -503,8 +480,9 @@ static __attribute__((noinline)) uint32_t write_gpt_entries(const struct block_d
             write_le64(e + 32, pe->gpt_lba_start);
             write_le64(e + 40, pe->gpt_lba_end);
             // attributes (e + 48) left zero: no required-partition
-            // flag, no legacy-BIOS-bootable flag. Nothing here boots
-            // off a partition -- GRUB boots the ISO.
+            // flag, no legacy-BIOS-bootable flag. A BIOS boot off one
+            // of these reaches GRUB through the MBR gap and the BIOS
+            // boot partition, neither of which reads this field.
 
             // The name, ASCII widened to UTF-16LE. The reverse of
             // gpt_name_to_ascii(); this kernel has no Unicode, so the
@@ -516,10 +494,10 @@ static __attribute__((noinline)) uint32_t write_gpt_entries(const struct block_d
             }
         }
 
-        crc = crc32_update(crc, sec, PART_SECTOR_SIZE);
+        crc = kcrc32_update(crc, sec, PART_SECTOR_SIZE);
         if (!blkdev_write_sectors(dev, lba + (uint32_t)s, 1, sec)) { *ok = 0; return 0; }
     }
-    return ~crc;
+    return KCRC32_FINAL(crc);
 }
 
 // One GPT header. `self` is the LBA it lives at, `other` its twin's,
@@ -548,7 +526,7 @@ static __attribute__((noinline)) int write_gpt_header(const struct block_device 
     write_le32(sec + 84, GPT_ENTRY_SIZE);
     write_le32(sec + 88, entries_crc);
 
-    write_le32(sec + 16, crc32(sec, GPT_HEADER_SIZE));
+    write_le32(sec + 16, kcrc32(sec, GPT_HEADER_SIZE));
     return blkdev_write_sectors(dev, self, 1, sec);
 }
 

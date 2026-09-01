@@ -69,6 +69,10 @@ TOOLS = [
     # a decoder that shares no code with it.
     ("usnd_host",   "usnd_hostcheck.py",       "the MP3 decoder against ffmpeg",     False,
      ("host_audio", "needs gcc, lame and ffmpeg on PATH"),                                   False),
+    # Needs only gcc and the Python standard library -- hashlib and zlib
+    # are the oracle -- so it has no `needs` gate at all.
+    ("hash_host",   "hash_hostcheck.py",       "crc32/sha256 against hashlib and zlib", False,
+     None,                                                                                   False),
     # --- storage and boot -------------------------------------------
     ("partition",   "partition_test.py",       "mounting from an MBR/GPT partition", True,  None,                   False),
     ("fs_switch",   "fs_switch_test.py",       "format, remount, reboot persistence", True, None,                   False),
@@ -92,6 +96,9 @@ TOOLS = [
     ("diskmark",    "diskmark_test.py",        "the Disk Mark GUI benchmark",        True,  None,                   True),
     ("ls",          "ls_test.py",              "/bin/ls flags and the listing cap",  True,  None,                   False),
     ("fileop",      "fileop_test.py",          "lib/ufileop through cp/mv/rm",       True,  None,                   False),
+    # ATTACHES to a running guest: it only types at the debug console and
+    # compares against digests it computes on the host.
+    ("sum",         "sum_test.py",             "/bin/sum and /lib/libhash.so",       False, None,                   True),
 
     # --- shell, console, terminal ------------------------------------
     ("console",     "console_shell_test.py",   "a text boot reaching a ring-3 shell", True, None,                   False),

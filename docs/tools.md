@@ -2910,6 +2910,48 @@ window without going through it will find its layout polls timing out.
   ON DEMAND: it needs a host gcc and glibc, and the gate must not start
   requiring either.
 
+- **`hash_hostcheck.py`** -- compiles `/lib/libhash.so`'s two algorithms
+  (`userland/dynlib/uhash.c` plus `kernel/lib/kcrc.c`) with the host gcc
+  and judges them against Python's `hashlib` and `zlib`. ~2,150 vectors:
+  every size from 0 to 129, the powers-of-two boundaries, and forty
+  random sizes, each fed through in seven different chunk sizes so a
+  block boundary lands INSIDE an `update()` call rather than between
+  two.
+
+  **The oracle is in the standard library**, so unlike the other
+  hostchecks here this needs nothing but gcc -- no Pillow, no ffmpeg.
+
+  `--positive-control` edits a COPY of each source (one wrong rotate in
+  the SHA-256 round, one wrong polynomial bit in the CRC) and requires
+  the sweep to go red; the originals are never touched, which is what
+  keeps the control out of shipped code. Measured: 2,137 of 2,150
+  vectors disagree under it.
+
+  ON DEMAND: it needs a host gcc, and the gate must not start requiring
+  one.
+
+- **`sum_test.py`** -- `/bin/sum` itself, in a guest, against digests
+  computed on the HOST. It ATTACHES to a running `vm.py` guest.
+
+  **The load-bearing check is the cross-ring one**: `/bin/hello` in the
+  guest is `build/userland/bin/hello.elf` on the host byte for byte, so
+  the guest's line must equal what `zlib`/`hashlib` say here. A
+  guest-only comparison would pass just as happily with a consistently
+  wrong implementation on both ends of it.
+
+  `-c` is asserted BOTH ways -- a manifest `sum` wrote must verify, and
+  one carrying a right CRC with a wrong SIZE must fail -- because a
+  verifier that says OK to everything is indistinguishable from a
+  working one on the OK alone. That second case is also what proves the
+  size field in `cksum`'s line is being compared at all.
+
+  **Its fixtures are polled for the LAST TOKEN of the line, not for any
+  content.** The debug console's `spawn` returns as soon as the child
+  starts, and a read landing mid-write returned `3830823995 ` with the
+  rest still to come -- the verify behind it then reported a malformed
+  manifest, which reads exactly like a broken parser. Two checks failed
+  that way on a `sum` that was correct.
+
 - **`grep_test.py`** -- `/bin/grep` driven by typing into a GUI Terminal
   and asserting through the filesystem, reusing `terminal_probe.py`'s
   `Terminal` helper.

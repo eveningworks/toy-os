@@ -94,6 +94,17 @@ TESTS = [
     # link, plus userland/lib/ucomplete.c's own filesystem hooks.
     ("complete_test", 0,
      ["complete_test: 0 failure(s)"], ["FAIL"]),
+    # The checksum table, in the ring its only caller runs in.
+    # tools/hash_hostcheck.py sweeps the same source far harder against
+    # hashlib and zlib, and kernel/lib/kcrc_test.c covers the CRC in ring
+    # 0 -- neither can see whether uhash.c LINKS into libuapp.a, which is
+    # what this is for. Same reason complete_test exists above.
+    # SPAWNED (exit code None): it is a DYNAMIC binary -- the code it
+    # checks is /lib/libhash.so -- and the legacy `run` loader refuses
+    # one by name ("isn't a valid ELF64 executable"). Same reason
+    # dyn_test and dynlibc_test are spawned.
+    ("hash_test", None,
+     ["hash_test: 0 failure(s)"], ["FAIL"]),
     # uui_label's word wrapping. Its load-bearing check is that a word
     # wider than the line is BROKEN rather than refused: refusing it
     # returns the same cursor and loops forever inside a draw call,

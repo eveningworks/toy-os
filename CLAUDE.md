@@ -869,6 +869,7 @@ whenever a headline here tells you something you did not already know.
 - **`kernel/` directories are subsystems, not filing cabinets**
 - **`kernel/include/api/version.h` is GENERATED, not hand-edited**
 - **Versioning is semver + a `-dev` suffix, not a per-change build number.**
+- **A SHARED LIBRARY IS `userland/dynlib/` PLUS ONE MAKEFILE LINE, AND A PROGRAM OPTS IN**
 - **A GitHub Release's notes follow ONE shape, and it is terse.**
 
 ## This checkout, and the repo it pushes to
@@ -1276,13 +1277,15 @@ cost".
   `console_shell_test.py`, `ctrlc_test.py`, `cursor_ibeam_test.py`,
   `demo_test.py`, `diskmark_test.py`, `doom_test.py`,
   `doom_sound_test.py`, `fat32_test.py`, `fileop_test.py`, `frame_balance.py`,
-  `fs_switch_test.py`, `grep_test.py`, `hires_test.py`,
+  `fs_switch_test.py`, `grep_test.py`, `hash_hostcheck.py`,
+  `hires_test.py`,
   `init_test.py`, `install_test.py`, `jobs_test.py`, `kbd_test.py`,
   `keyboard_paths_test.py`, `kvm_soak.py`, `live_boot_test.py`,
   `ls_test.py`, `mem_stress.py`, `mkpart_test.py`,
   `multidisk_test.py`, `net_test.py`, `partition_test.py`,
   `poweroff_test.py`, `qemu_matrix.py`, `remote_test.py`, `serial_backpressure_test.py`, `stdin_test.py`,
-  `msi_test.py`, `taskbar_test.py`, `terminal_probe.py`, `tfs3_v1_test.py`,
+  `msi_test.py`, `sum_test.py`, `taskbar_test.py`,
+  `terminal_probe.py`, `tfs3_v1_test.py`,
   `usb_audio_test.py`, `usb_test.py`, `virtio_boot_test.py`,
   `virtio_gpu_test.py`, `virtio_input_test.py`.
 - **Disk images, from the host** -- `seed_disk.py` (the format-aware
@@ -1301,9 +1304,9 @@ cost".
   -- ranged because a big table's hex OUTRUNS the debug console),
   `QMPSession.hmp()` (**the QEMU monitor -- the one oracle the guest
   cannot fake**; ask it BEFORE trusting anything the guest says about
-  itself), `regex_hostcheck.py`, `uimg_hostcheck.py` and
-  `usnd_hostcheck.py` (this repo's implementations against GLIBC,
-  libjpeg and ffmpeg -- an oracle sharing no code is what catches an
+  itself), `regex_hostcheck.py`, `uimg_hostcheck.py`,
+  `usnd_hostcheck.py` and `hash_hostcheck.py` (this repo's
+  implementations against GLIBC, libjpeg, ffmpeg and hashlib/zlib -- an oracle sharing no code is what catches an
   EXPECTATION being wrong; the MP3 one carries a
   `--positive-control` that must go red), `pixel_probe.py`
   (read exact pixel values -- how a GUI change is verified),

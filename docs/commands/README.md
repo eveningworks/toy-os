@@ -73,6 +73,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`rescue`](rescue.md)
 - [`rm`](rm.md)
 - [`stat`](stat.md)
+- [`sum`](sum.md)
 - [`sync`](sync.md)
 - [`touch`](touch.md)
 - [`truncate`](truncate.md)
@@ -153,7 +154,6 @@ a command), and the `gui3`/`nano` aliases.
 - [`schedtest`](schedtest.md)
 - [`steptest`](steptest.md)
 - [`stress`](stress.md)
-- [`sum`](sum.md)
 
 ### Diagnostics
 

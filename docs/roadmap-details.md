@@ -3920,3 +3920,31 @@ is FreeBSD's `ure(4)` (`sys/dev/usb/net/if_ure.c`, `if_urereg.h`),
 BSD-2-clause, Kevin Lo, and its notice is in `LICENSE`. Register
 addresses and descriptor layouts are FACTS about the device and carry no
 notice; code adapted from theirs does.
+
+## Nothing automated covers stdio's flush-before-a-blocking-read
+
+`flush_stdout_for_read()` in `userland/libc/stdio.c` is what makes
+`printf("Enter a number: "); scanf("%d", ...)` show its prompt before
+the program blocks -- C11 7.21.3p3, and what glibc and MSVC both do.
+`docs/decisions/build.md` has why it exists.
+
+The only demonstrator was `/bin/sum` when that was a two-number scanf
+demo; it is a checksum calculator now. `userland/tests/stdio_test.c`
+covers buffering, `ftell` across a buffer boundary and the exit-time
+flush, and cannot cover this: observing it needs a stream whose reader
+BLOCKS and a `stdout` the test can read back afterwards, and the console
+is neither -- reading it back would mean OCR on a framebuffer.
+
+**The manual reproduction**, at a `$` prompt, is a four-line program:
+
+    #include <stdio.h>
+    int main(void) { int n = 0; printf("Enter a number: ");
+                     scanf("%d", &n); printf("got %d\n", n); return 0; }
+
+Correct: the prompt appears, then the program waits. Broken: a blank
+screen while it waits, and both lines together at exit.
+
+What would close it: a pty. `SYS_OPENPTY` exists, so a test could put a
+child on one, read the master, and require the prompt to arrive before
+the child's read returns -- which is the real shape of the property and
+is a test worth having for more than this one flush.

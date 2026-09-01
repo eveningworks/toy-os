@@ -736,6 +736,14 @@ EXTRA_OBJS_cjson_bench = ports/cjson/cJSON
 # The extras for one binary, as real object paths.
 uextra = $(patsubst %,$(BUILD)/userland/%.o,$(EXTRA_OBJS_$(notdir $(1))))
 
+# SHARED LIBRARIES one binary links, beside the objects above. A .so is
+# not an archive: naming it here puts a DT_NEEDED in that program and
+# nothing in any other, so the code sits in /lib once however many
+# programs use it.
+ULIB_SO_sum = $(BUILD)/lib/libhash.so
+
+ulibso = $(ULIB_SO_$(notdir $(1)))
+
 # .SECONDEXPANSION lets the prerequisite list reference the stem: `$$*`
 # survives make's first expansion (when the rule is read, and the stem
 # isn't known yet) and is expanded a second time per target, once it is.
@@ -823,11 +831,11 @@ $(BUILD)/userland/tests/dynlibc_test.elf: $(BUILD)/userland/tests/dynlibc_test.o
 #   (toywm is outside USERLAND_PROGRAM_DIRS and stays static by
 #    construction -- same reasoning: the desktop is what a rescue
 #    happens on.)
-$(BUILD)/userland/bin/%.elf: $(BUILD)/userland/bin/%.o $(USERLAND_RT) userland/rt/link-dyn.ld $(LIBUAPP) $(LIBC_NONSHARED) $(LIBC_SO) $(LDSO) $$(call uextra,$$*)
-	$(DYN_LINK) -o $@ $(BUILD)/userland/rt/crt0.o $< $(call uextra,$*) $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(BUILD)/userland/rt/tls.o $(LIBUAPP) $(LIBC_NONSHARED) $(LIBC_SO)
+$(BUILD)/userland/bin/%.elf: $(BUILD)/userland/bin/%.o $(USERLAND_RT) userland/rt/link-dyn.ld $(LIBUAPP) $(LIBC_NONSHARED) $(LIBC_SO) $(LDSO) $$(call uextra,$$*) $$(call ulibso,$$*)
+	$(DYN_LINK) -o $@ $(BUILD)/userland/rt/crt0.o $< $(call uextra,$*) $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(BUILD)/userland/rt/tls.o $(call ulibso,$*) $(LIBUAPP) $(LIBC_NONSHARED) $(LIBC_SO)
 
-$(BUILD)/userland/gui/%.elf: $(BUILD)/userland/gui/%.o $(USERLAND_RT) userland/rt/link-dyn.ld $(LIBUAPP) $(LIBC_NONSHARED) $(LIBC_SO) $(LDSO) $$(call uextra,$$*)
-	$(DYN_LINK) -o $@ $(BUILD)/userland/rt/crt0.o $< $(call uextra,$*) $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(BUILD)/userland/rt/tls.o $(LIBUAPP) $(LIBC_NONSHARED) $(LIBC_SO)
+$(BUILD)/userland/gui/%.elf: $(BUILD)/userland/gui/%.o $(USERLAND_RT) userland/rt/link-dyn.ld $(LIBUAPP) $(LIBC_NONSHARED) $(LIBC_SO) $(LDSO) $$(call uextra,$$*) $$(call ulibso,$$*)
+	$(DYN_LINK) -o $@ $(BUILD)/userland/rt/crt0.o $< $(call uextra,$*) $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(BUILD)/userland/rt/tls.o $(call ulibso,$*) $(LIBUAPP) $(LIBC_NONSHARED) $(LIBC_SO)
 
 $(BUILD)/userland/bin/init.elf: $(BUILD)/userland/bin/init.o $(USERLAND_RT) userland/rt/link.ld $(LIBUAPP) $(LIBC)
 	$(LD) -n --gc-sections -T userland/rt/link.ld -nostdlib -o $@ $(BUILD)/userland/rt/crt0.o $< $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(BUILD)/userland/rt/tls.o $(LIBUAPP) $(LIBC)
@@ -846,7 +854,7 @@ $(BUILD)/userland/bin/init.elf: $(BUILD)/userland/bin/init.o $(USERLAND_RT) user
 # 2 MiB-aligned .so's offsets are not page-congruent under 4 KiB
 # pages -- ld-toy refuses such a file by name).
 LDSO    = $(BUILD)/lib/ld-toy.so
-DYNLIBS = $(BUILD)/lib/libhello.so
+DYNLIBS = $(BUILD)/lib/libhello.so $(BUILD)/lib/libhash.so
 
 $(BUILD)/userland/dynlib/%.o: USERLAND_CFLAGS := $(subst -fpie,-fpic,$(USERLAND_CFLAGS))
 
@@ -857,6 +865,17 @@ $(LDSO): $(BUILD)/userland/ldso/entry.o $(BUILD)/userland/ldso/ldso.o $(BUILD)/u
 $(BUILD)/lib/libhello.so: $(BUILD)/userland/dynlib/hello_dl.o
 	@mkdir -p $(dir $@)
 	$(LD) -shared --hash-style=sysv -z max-page-size=4096 -soname libhello.so -o $@ $<
+
+# libhash.so -- the first shared library here that exists to be USED
+# rather than to prove the loader works. kcrc.o comes off the -fpic
+# shared path (the same source the kernel compiles for its GPT headers),
+# so one polynomial serves ring 0 and every ring-3 caller. It links
+# against libc.so for memcpy/strcmp: ld-toy loads a library's own
+# DT_NEEDED breadth-first, so nothing else has to know.
+$(BUILD)/lib/libhash.so: $(BUILD)/userland/dynlib/uhash.o $(BUILD)/userland-pic/shared/kcrc.o $(LIBC_SO)
+	@mkdir -p $(dir $@)
+	$(LD) -shared --hash-style=sysv -z max-page-size=4096 -soname libhash.so -o $@ \
+	      $(BUILD)/userland/dynlib/uhash.o $(BUILD)/userland-pic/shared/kcrc.o $(LIBC_SO)
 
 # The one test with its own link line: a DYNAMIC executable.
 # link-dyn.ld adds the .interp/.dynamic/GOT/PLT homes the static script
@@ -869,6 +888,13 @@ $(BUILD)/lib/libhello.so: $(BUILD)/userland/dynlib/hello_dl.o
 # already pays for is strictly better).
 $(BUILD)/userland/tests/dyn_test.elf: $(BUILD)/userland/tests/dyn_test.o $(USERLAND_RT) userland/rt/link-dyn.ld $(LIBUAPP) $(LIBC) $(DYNLIBS) $(LDSO)
 	$(LD) --gc-sections -T userland/rt/link-dyn.ld -nostdlib --dynamic-linker=/lib/ld-toy.so --export-dynamic --hash-style=sysv -z nocopyreloc -o $@ $(BUILD)/userland/rt/crt0.o $< $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(BUILD)/userland/rt/tls.o $(BUILD)/lib/libhello.so $(LIBUAPP) $(LIBC)
+
+# /tests/hash_test is DYNAMIC, and that is the point of it: the code it
+# checks now lives in /lib/libhash.so, so a static link would prove the
+# algorithms and nothing about the library. Same link line as any /bin
+# program, which is what makes it a fair test of one.
+$(BUILD)/userland/tests/hash_test.elf: $(BUILD)/userland/tests/hash_test.o $(USERLAND_RT) userland/rt/link-dyn.ld $(LIBUAPP) $(LIBC_NONSHARED) $(LIBC_SO) $(BUILD)/lib/libhash.so $(LDSO)
+	$(DYN_LINK) -o $@ $(BUILD)/userland/rt/crt0.o $< $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(BUILD)/userland/rt/tls.o $(BUILD)/lib/libhash.so $(LIBUAPP) $(LIBC_NONSHARED) $(LIBC_SO)
 
 # --gc-sections drops every section nothing reaches, which is what
 # makes linking against one archive cheap: `hello` references nothing in
