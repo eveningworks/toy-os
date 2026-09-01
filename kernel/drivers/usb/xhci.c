@@ -34,6 +34,7 @@
 #include "bootstage.h"
 #include "usb_hid.h"
 #include "multiboot.h" // multiboot_cmdline() -- the `nousb` flag
+#include "driver.h" // DRIVER_REGISTER -- `lsdrv`
 
 // The identity map covers the low 4 GiB and there is no
 // paging_map_kernel_range(), so a BAR above that is unreachable rather
@@ -1535,6 +1536,7 @@ static int usb_disabled(void) {
 }
 
 void usb_init(void) {
+    DRIVER_REGISTER("xhci", "usb");
     BOOT_REQUIRE(BOOT_SUB_PCI);
     BOOT_REQUIRE(BOOT_SUB_PMM);
 

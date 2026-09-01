@@ -31,6 +31,7 @@
 #include "virtio_gpu.h"
 #include "klog.h"
 #include "kfmt.h"
+#include "driver.h" // DRIVER_REGISTER -- `lsdrv -v` names THIS file
 
 static struct display_surface g_surface;
 static int g_active = 0;
@@ -127,7 +128,10 @@ static struct display_driver virtio_gpu_display = {
     .flush = virtio_drv_flush,
 };
 
-void virtio_gpu_display_register(void) { display_register(&virtio_gpu_display); }
+void virtio_gpu_display_register(void) {
+    DRIVER_REGISTER("virtio-gpu", "display");
+    display_register(&virtio_gpu_display);
+}
 
 static void adopt_cursor_plane(void) {
     if (!virtio_gpu_cursor_available()) return;

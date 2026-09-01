@@ -39,6 +39,7 @@
 #include "string.h"
 #include "ktest.h"
 #include "barrier.h"   // cpu_relax() in the drain poll
+#include "driver.h" // driver_bound() -- `lsdrv`
 
 // Audio class codes (USB Device Class Definition for Audio Devices 1.0).
 #define AUDIO_CLASS            1
@@ -886,6 +887,8 @@ int usb_audio_bind(struct usb_device_info *info, const uint8_t *cfg,
         return 0;
     }
     info->bound = 1;
+    DRIVER_REGISTER("usb-audio", "sound");
+    driver_bound("usb-audio", "snd0");
     klog_printf("usb: slot %u: bound as usb-audio, UAC%u, if %u alt %u, "
                 "ep 0x%x %u-bit\n", info->slot, s.uac2 ? 2 : 1,
                 s.ifnum, s.alt, s.ep, s.bits);

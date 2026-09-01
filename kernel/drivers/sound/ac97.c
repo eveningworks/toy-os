@@ -30,6 +30,7 @@
 #include "klog.h"
 #include "ktest.h"
 #include <stdint.h>
+#include "driver.h" // DRIVER_REGISTER -- `lsdrv`
 
 // NAM (mixer) registers.
 #define NAM_RESET      0x00
@@ -121,6 +122,10 @@ static const struct sound_device ac97_dev = {
 };
 
 void ac97_init(void) {
+    // DECLARED BEFORE THE HARDWARE IS LOOKED FOR, so a driver
+    // that finds nothing still appears in `lsdrv` -- "compiled
+    // in but idle" is the answer somebody is looking for.
+    DRIVER_REGISTER("ac97", "sound");
     for (int i = 0; i < pci_device_count(); i++) {
         const struct pci_device *d = pci_device_at(i);
         if (d->class_code == 0x04 && d->subclass == 0x01) { g_pci = d; break; }
@@ -179,6 +184,7 @@ void ac97_init(void) {
     pci_command_update(g_pci, 0, PCI_CMD_INTX_DISABLE);
     pic_clear_mask(line);
 
+    driver_bound("ac97", "snd0");
     if (!sound_register(&ac97_dev, ring, ring_phys)) return;
     klog_printf("ac97: %02x:%02x.%u nam %#x nabm %#x irq %u\n",
                 g_pci->bus, g_pci->device, g_pci->function,

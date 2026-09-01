@@ -8,6 +8,7 @@
 #include "ata.h"
 #include "multiboot.h"
 #include "string.h"
+#include "driver.h" // DRIVER_REGISTER -- `lsdrv`
 
 static uint32_t vblk_sector_count(void) { return virtio_blk_sector_count(); }
 static int vblk_read(uint32_t lba, int count, void *buf) { return virtio_blk_read_sectors(lba, count, buf); }
@@ -56,6 +57,10 @@ static int virtio_disabled(void) {
 }
 
 int blk_virtio_init(void) {
+    // DECLARED BEFORE THE HARDWARE IS LOOKED FOR, so a driver
+    // that finds nothing still appears in `lsdrv` -- "compiled
+    // in but idle" is the answer somebody is looking for.
+    DRIVER_REGISTER("virtio-blk", "block");
     if (!virtio_blk_present()) return 0;
 
     // VIRTIO-BLK IS THE PREFERRED DISK when one is attached; ATA is the
@@ -90,5 +95,6 @@ int blk_virtio_init(void) {
     // "block: <name> active (<n> sectors)" for every device it accepts,
     // and block_ata.c stays quiet for the same reason. A line here made
     // the boot log report virtio-blk twice, which reads as two disks.
+    driver_bound("virtio-blk", VIRTIO_DEV.name);
     return blk_register(&VIRTIO_DEV);
 }

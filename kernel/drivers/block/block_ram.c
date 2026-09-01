@@ -17,6 +17,7 @@
 #include "block.h"
 #include "klog.h"
 #include "string.h"
+#include "driver.h" // DRIVER_REGISTER -- `lsdrv`
 
 #define SECTOR_SIZE 512
 
@@ -73,5 +74,7 @@ int blk_ram_register(uint64_t base, uint64_t bytes) {
     }
     g_base = (uint8_t *)(uintptr_t)base;
     g_sectors = (uint32_t)(bytes / SECTOR_SIZE);
+    DRIVER_REGISTER("ram", "block");
+    driver_bound("ram", RAM_DEV.name);
     return blk_register(&RAM_DEV);
 }

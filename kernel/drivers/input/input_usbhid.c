@@ -24,6 +24,7 @@
 #include "klog.h"
 #include "kfmt.h"
 #include "string.h"
+#include "driver.h" // driver_bound() -- `lsdrv`
 
 // HID class requests, on the INTERFACE.
 #define HID_REQ_SET_IDLE     0x0A
@@ -360,6 +361,8 @@ int usb_hid_bind(struct usb_device_info *info) {
         if (!info->hid_ep) info->hid_ep = ifc->ep;
         info->bound = 1;
         took++;
+        DRIVER_REGISTER("usb-hid", "input");
+        driver_bound("usb-hid", d->name);
         klog_printf("usb: slot %u: bound as %s on endpoint 0x%x\n",
                     info->slot, d->name, ifc->ep);
     }

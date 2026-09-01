@@ -16,6 +16,7 @@
 #include "timer.h"
 #include "klog.h"
 #include "kfmt.h"
+#include "driver.h" // DRIVER_REGISTER -- see clocksource_register()
 
 static const struct clocksource *g_cs;
 static uint64_t g_last_raw;   // last raw value read from g_cs
@@ -52,6 +53,15 @@ void clocksource_calc_mult_shift(uint32_t *mult, uint32_t *shift,
 }
 
 int clocksource_register(const struct clocksource *cs) {
+    // EVERY CLOCKSOURCE IS A DRIVER, and they are the one class whose
+    // members have no init of their own to declare from -- the PIT is
+    // set up by the timer code and the TSC by the arch code. Hooking
+    // the registry means neither can be forgotten; the cost is that
+    // `lsdrv -v` names this file rather than theirs.
+    if (cs && cs->name) {
+        DRIVER_REGISTER(cs->name, "clock");
+        driver_bound(cs->name, "clock0");
+    }
     // The honesty check. A source that cannot be read, cannot wrap, or
     // converts every delta to zero is not a worse clock -- it is a
     // stopped one, and a stopped clock installed over a working one is

@@ -5,6 +5,7 @@
 #include "paging.h"
 #include "multiboot.h" // multiboot_cmdline() -- the video= flag
 #include "string.h"    // k_strstr, k_isdigit
+#include "driver.h" // DRIVER_REGISTER/driver_bound -- which driver owns the screen
 
 // Small and fixed: there are two drivers today and a handful is the
 // realistic ceiling. A linked list would need each driver to carry a
@@ -22,6 +23,10 @@ static const struct display_driver *g_active;
 static int g_wc = PAGING_WC_NONE;
 
 void display_register(const struct display_driver *drv) {
+    // Registration is not driving: every display driver in the build
+    // registers, and display_init() picks one. The bind is recorded
+    // where g_active is set, below.
+    if (drv && drv->name) DRIVER_REGISTER(drv->name, "display");
     if (!drv || g_count >= MAX_DISPLAY_DRIVERS) return;
     g_drivers[g_count++] = drv;
 }
@@ -54,6 +59,7 @@ int display_probe(void) {
         if (!d->probe()) continue;
 
         g_active = d;
+        driver_bound(d->name, "fb0");   // the one actually driving it
         struct display_surface s;
         d->get_surface(&s);
 

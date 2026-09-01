@@ -17,6 +17,7 @@
 #include "klog.h"
 #include "kfmt.h"
 #include "io.h"
+#include "driver.h" // DRIVER_REGISTER -- `lsdrv -v` names THIS file
 
 #define DISPI_IOPORT_INDEX 0x01CE
 #define DISPI_IOPORT_DATA  0x01CF
@@ -237,4 +238,7 @@ static const struct display_driver bochs_driver = {
     .caps = 0,
 };
 
-void bochs_register(void) { display_register(&bochs_driver); }
+void bochs_register(void) {
+    DRIVER_REGISTER("bochs", "display");
+    display_register(&bochs_driver);
+}

@@ -67,6 +67,7 @@ extern char __kimage_start[];
 #include "knum.h"
 #include <stdint.h>
 #include "kversion.h" // kversion_banner(), kversion_query_init() -- QUERY_VERSION
+#include "driver.h"   // driver_query_init() -- QUERY_DRIVER
 
 // Zero-padded 2-digit decimal, for the RTC boot-time log line below.
 // klog_write_dec() (klog.h) deliberately doesn't pad, so this used to
@@ -369,6 +370,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     procmap_query_init();
     krandom_query_init();
     kversion_query_init();
+    driver_query_init();
     partition_query_init();
     block_query_init();
     net_query_init();

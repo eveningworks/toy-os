@@ -14,6 +14,7 @@
 #include "kfmt.h"
 #include "multiboot.h" // the `notsc` boot flag
 #include "string.h"   // k_strstr()
+#include "driver.h" // DRIVER_REGISTER -- `lsdrv`
 
 // CPUID 8000_0007H, EDX bit 8: INVARIANT TSC -- the counter runs at a
 // constant rate regardless of power state and does not stop in deep C
@@ -58,6 +59,10 @@ static int notsc_requested(void) {
 }
 
 void clocksource_init_tsc(void) {
+    // DECLARED BEFORE THE HARDWARE IS LOOKED FOR, so a driver
+    // that finds nothing still appears in `lsdrv` -- "compiled
+    // in but idle" is the answer somebody is looking for.
+    DRIVER_REGISTER("tsc", "clock");
     if (notsc_requested()) {
         klog_write("clocksource: tsc not offered -- notsc on the command line\n");
         return;

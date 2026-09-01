@@ -92,6 +92,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`kstack`](kstack.md)
 - [`lsblk`](lsblk.md)
 - [`lscpu`](lscpu.md)
+- [`lsdrv`](lsdrv.md)
 - [`lspci`](lspci.md)
 - [`lsusb`](lsusb.md)
 - [`meminfo`](meminfo.md)

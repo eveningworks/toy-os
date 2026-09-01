@@ -18,6 +18,7 @@
 #include "display.h"
 #include "multiboot.h"
 #include "klog.h"
+#include "driver.h" // DRIVER_REGISTER -- `lsdrv -v` names THIS file
 
 static struct display_surface g_surface;
 static int g_have;
@@ -49,7 +50,10 @@ static const struct display_driver vesafb_driver = {
     .caps = 0,
 };
 
-void vesafb_register(void) { display_register(&vesafb_driver); }
+void vesafb_register(void) {
+    DRIVER_REGISTER("vesafb", "display");
+    display_register(&vesafb_driver);
+}
 
 int vesafb_available(void) { return g_have; }
 

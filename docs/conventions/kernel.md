@@ -2441,3 +2441,40 @@ a client asks for: a client requesting 8192 that got 8192 would stall
 completely, where one that gets 1428 transfers. **Clamp and say so in
 the reply** -- RFC 2348's OACK names the value actually chosen, which is
 what lets a client find out it did not get what it asked for.
+
+## A DRIVER DECLARES ITSELF, AND NAMES EACH DEVICE AS IT BINDS IT
+
+`api/driver.h`. Two calls, and they answer two different questions:
+
+- `DRIVER_REGISTER("name", "class")` **at the top of the driver's init,
+  BEFORE it looks for hardware.** A driver that finds nothing must still
+  appear -- "compiled in but idle" is the answer somebody is looking
+  for, and it is the one no other listing can give. Putting the call
+  after the presence check makes an absent device look like an absent
+  driver, which was the first version of this and the reason the rule is
+  stated this way.
+- `driver_bound("name", "dev")` where it attaches. Until this existed
+  the fact lived only in a `klog_printf` -- `usb: slot 1: bound as
+  r8153` -- which answers the question once and then scrolls away.
+
+**Use the name the driver's own struct already has.** Inventing a second
+one puts two rows in `lsdrv` for one driver: `vesa` and `vesafb` both
+appeared before the class registry's `drv->name` was used as the single
+source.
+
+**Registering is not driving.** Every display driver registers and one
+drives the screen, so the bind belongs where `g_active` is set, not in
+`display_register()`. The same shape applies to any class that picks a
+winner.
+
+**Where a class has no per-driver file to declare from, hook the
+registry** -- `clocksource_register()` does, because the PIT is set up
+by the timer code and the TSC by the arch code and neither has an init
+of its own. The cost is that `lsdrv -v` then names the registry's file
+rather than the driver's, which is why it is the fallback and not the
+rule.
+
+**Nothing enforces any of this yet.** A driver that declares nothing is
+simply absent from the listing, which is the silent-failure shape this
+project usually answers with a `check_*.py`. It is on the roadmap; until
+then, adding a driver means adding the line.

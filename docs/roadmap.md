@@ -901,6 +901,7 @@ this to be better?".
 - [x] ~~`SYS_LISTDIR` truncates at 256 entries and TFS3 has no such cap~~ done -- `SYS_LISTDIR_AT` pages
 - [ ] `/bin/ls` still reports truncation rather than paging -- it SORTS a listing, so paging means holding it all
 - [ ] Nothing detects an ordinary memory LEAK, in either allocator
+- [ ] Nothing checks that a driver declares itself to the `lsdrv` registry -- one that forgets is invisible
 - [ ] `/bin/wget` builds with an unwaived 3056-byte frame against the 2048 budget -- pre-existing, measured 2026-09-01
 - [ ] Nothing automated covers stdio's flush-before-a-blocking-read -- see `docs/roadmap-details.md`
 - [ ] The ESP's own layout puts the kernel at `/boot/boot/kernel.bin`, because one `grub.cfg` serves the ISO and the disk

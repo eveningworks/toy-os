@@ -4,6 +4,7 @@
 // may use, and under which capability bit.
 #include "block.h"
 #include "ata.h"
+#include "driver.h" // DRIVER_REGISTER -- `lsdrv`
 
 static uint32_t ata_dev_sector_count(void) { return ata_sector_count(); }
 
@@ -45,5 +46,6 @@ void blk_ata_init(void) {
     // booting a live image, or have nothing attached at all. Leaving no
     // device registered is exactly what "RAM-only" means downstream.
     if (!ata_present()) return;
+    driver_bound("ata", ATA_DEV.name);
     blk_register(&ATA_DEV);
 }

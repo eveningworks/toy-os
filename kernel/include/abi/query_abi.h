@@ -371,6 +371,14 @@ _Static_assert(sizeof(struct query_fontglyph) <= 256,
 // prints its version in ONE place and that place is a panic.
 #define QUERY_VERSION 28
 
+// Which drivers this build has, and what each one is driving. LIST.
+//
+// The per-class registries answer "what devices are present", which is
+// a different question: a driver compiled in and bound to nothing
+// appears in none of them, and which driver claimed a given USB device
+// was recorded only in the boot log. See api/driver.h.
+#define QUERY_DRIVER 29
+
 #define QUERY_KLOG_DATA 232
 
 struct query_klog {
@@ -540,6 +548,15 @@ struct query_mmaudit {
 // QUERY_VERSION's record. Fixed char arrays rather than pointers: a
 // query copies a record to ring 3, and a pointer into kernel .rodata is
 // not something ring 3 can follow.
+// QUERY_DRIVER's record. `devices` is space-separated and may be empty,
+// which is a real answer -- "in this build, driving nothing".
+struct query_driver {
+    char name[16];      // "ahci", "r8153"
+    char cls[12];       // "block", "net", "input", ...
+    char file[64];      // the source file it registered from, for -v
+    char devices[64];   // "net0 usb:13", or "" for none
+};
+
 struct query_version {
     char version[16];   // "0.3.0-dev" -- TOYOS_VERSION
     char build_id[24];  // "426601f", or "426601f-dirty", or "unknown"
