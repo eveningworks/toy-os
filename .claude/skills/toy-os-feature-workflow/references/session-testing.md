@@ -2355,3 +2355,38 @@ A poll that waits for "any content" in a file catches it MID-WRITE. One
 read returned `3830823995 ` with the rest of the line still coming, and
 the verify behind it reported a malformed manifest -- indistinguishable
 from a broken parser. Poll for the LAST token of what is being written.
+
+## Sizes as the fixture, and asserting your own precondition (2026-09-01)
+
+**My first test for a block-leak passed WITH the bug present, and the
+reason is this repo's oldest testing trap.** `delete_path()` in
+`tools/tfs3_writer.py` freed a file's data blocks plus the
+single-indirect table, and never the double- or triple-indirect ones. I
+tested an overwrite with a 100 KB file: 25 blocks, single-indirect only,
+so the broken branch was never reached and the test was green. The
+threshold is 12 direct + 1024 single = ~4.05 MB, and the seed tree has
+exactly ONE file past it. Same shape as the 16 KB truncate fixture that
+fit twelve direct pointers.
+
+The fix is to make the SIZES the test: one case per block-map level,
+each reaching one level further than the last. It then reddens on
+exactly the double-indirect case, by exactly 2 blocks, with the two
+levels the code already handled staying green -- which is far better
+evidence than one red line, because it shows the harness can measure
+both outcomes. **When a data structure has levels, tiers or a growth
+path, the fixture has to cross each boundary or the test only covers the
+first one.** Ask which branch each case reaches, not just whether it
+passes.
+
+**And when a harness ENABLES something for a suite, it must assert the
+enabling worked.** `ktest_run.py` stops the desktop so the winshare
+KTESTs can take the compositor role; those tests skip when they cannot.
+A suite that skipped them would then report PASS having tested nothing
+-- so the harness fails the run when the skip reason appears in the
+transcript. That check caught a real race in its own first version
+within one run: the stop was sent before init had read
+`/etc/services.d`, init answered `supervises no service called toywm`,
+and the desktop started anyway, about half the time. Without the
+assertion that would have been an intermittent, silent loss of coverage
+rather than a red run. **The general form: after arranging a
+precondition, assert from the run's own output that it held.**

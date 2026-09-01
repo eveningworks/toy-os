@@ -718,6 +718,38 @@ Five things to know:
 The lock keys report their press and change nothing, which is honest
 about there being no lock state here. See `docs/decisions.md`.
 
+## A DMA TARGET MUST NOT BE ON THE STACK, AND THE FAILURE IS A CORRUPTED SAVED REGISTER SOMEWHERE ELSE
+
+A buffer a device writes into is reached by PHYSICAL address and filled
+by hardware, on hardware's schedule and at hardware's chosen length. A
+stack array as that target is wrong for a reason the size of the array
+does not fix: the length is the DEVICE'S to decide, so a device that
+returns more than it was asked for writes past the array and into the
+frame -- saved registers, the return address, the caller's locals.
+
+**The failure never looks like the bug.** `usb_read_string()` read a
+string descriptor into a 256-byte stack buffer and the language-id list
+into a 4-byte one. Nothing failed there. What failed was two frames up
+and much later: `usb_enumerate_device()` kept its `struct
+usb_device_info *d` in RBX across those calls, the overrun rewrote the
+saved copy, and the next use of `d` was a general protection fault in
+`usb_parse_config_interfaces()` -- a function whose own descriptor walk
+is correctly bounded and which was handed a wild pointer by a caller
+that looked fine. Read the panic as "who corrupted my caller", not as
+"what is wrong here".
+
+**Put it in a static, aligned, sized past the largest request** -- the
+shape `g_desc_buf` already had forty lines above, whose comment states
+this rule. Static rather than heap because this runs at boot and the
+ring-0 frame budget is 1 KiB; and NOT a buffer another live parse is
+holding, which is why the string reads got their own rather than
+borrowing that one.
+
+**QEMU cannot show you this.** No emulated device over-returns, so the
+whole class is invisible to every automated test here, and the only
+oracle is real hardware. That is also why it survived so long: the same
+code enumerated QEMU devices perfectly for months.
+
 ## USB IS xHCI ONLY, ITS PORTS WAIT ON PED RATHER THAN PRC, AND EVERY DMA OBJECT IS ITS OWN FRAME
 
 `kernel/drivers/usb/` is the BUS: one host controller driver

@@ -586,6 +586,7 @@ whenever a headline here tells you something you did not already know.
 - **The kernel's idle work has ONE owner: `scheduler_idle()`**
 - **EVERY KEY REPORTS SOMETHING, AND THE KEYPAD REPORTS CHARACTERS**
 - **THE BIOS OWNS THE xHCI UNTIL YOU ASK FOR IT, AND THE ASK COMES BEFORE THE RESET**
+- **A DMA TARGET MUST NOT BE ON THE STACK, AND THE FAILURE IS A CORRUPTED SAVED REGISTER SOMEWHERE ELSE**
 - **USB IS xHCI ONLY, ITS PORTS WAIT ON PED RATHER THAN PRC, AND EVERY DMA OBJECT IS ITS OWN FRAME**
 - **INPUT DEVICES REGISTER WITH THE INPUT CORE, and the canonical event is evdev -- including `/etc/kbs`, so only the PS/2 driver ever sees a scancode**
 - **`kbd` PRINTS EVERY STAGE OF A KEYPRESS, AND ITS KERNEL LOG IS OFF BY DEFAULT**

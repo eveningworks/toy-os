@@ -55,6 +55,49 @@ RE_ADDR = re.compile(r"0x([0-9a-fA-F]{6,16})")
 # address that was try_merge_next in the reported build is
 # rtc_read_local a few commits later.)
 RE_BUILD = re.compile(r"\(([0-9a-f]{7,12})(-dirty)?\)")
+# `in usb_parse_config_interfaces+0xef` beside `RIP=0x2513743f`. The
+# kernel resolves the faulting symbol itself (ksyms), so the pair is a
+# SECOND source for the relocation delta -- and the only one when the
+# panic was photographed off a screen that had already scrolled the
+# `kernel relocated` line away, which is how a bare-metal panic usually
+# arrives. Derived rather than asked for, because doing it by hand means
+# an nm lookup and a subtraction at exactly the moment nobody wants one.
+RE_SYMOFF = re.compile(r"\bin ([A-Za-z_][A-Za-z0-9_]*)\+0x([0-9a-fA-F]+)")
+RE_RIP = re.compile(r"\bRIP=0x([0-9a-fA-F]+)")
+
+
+def symbol_addr(elf, name):
+    """A symbol's LINK-TIME address, or None. Text symbols only, local
+    ('t') as well as global ('T') -- a static function panics too."""
+    out = subprocess.run(["nm", elf], capture_output=True, text=True)
+    if out.returncode != 0:
+        return None
+    for line in out.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[1] in ("T", "t") and parts[2] == name:
+            return int(parts[0], 16)
+    return None
+
+
+def delta_from_symbol(elf, text):
+    """Recover the relocation delta from the panic's own symbol+offset.
+
+    Returns (delta, explanation) or (None, None).
+    """
+    m_sym = RE_SYMOFF.search(text)
+    m_rip = RE_RIP.search(text)
+    if not (m_sym and m_rip):
+        return None, None
+    link = symbol_addr(elf, m_sym.group(1))
+    if link is None:
+        return None, None
+    off = int(m_sym.group(2), 16)
+    rip = int(m_rip.group(1), 16)
+    delta = rip - (link + off)
+    if delta < 0:
+        return None, None
+    return delta, (f"0x{rip:x} (RIP) - (0x{link:x} {m_sym.group(1)} + "
+                   f"0x{off:x}) = 0x{delta:x}")
 
 
 def addr2line(elf, addrs):
@@ -120,6 +163,10 @@ def main():
         if m:
             delta = int(m.group(1), 16)
 
+    derived = None
+    if delta is None:
+        delta, derived = delta_from_symbol(args.elf, text)
+
     if delta is None:
         print("panic_resolve: no relocation offset found -- treating "
               "addresses as link-time.")
@@ -127,6 +174,11 @@ def main():
               "case), pass --delta or include the boot line that says "
               "`kernel relocated +0x...`.\n")
         delta = 0
+    elif derived:
+        # Say HOW, so a reader can check the arithmetic rather than
+        # trust it -- the wrong delta resolves to confident nonsense.
+        print(f"panic_resolve: relocation delta 0x{delta:x}, derived from "
+              f"the faulting symbol\n  {derived}\n")
     else:
         print(f"panic_resolve: relocation delta 0x{delta:x}\n")
 

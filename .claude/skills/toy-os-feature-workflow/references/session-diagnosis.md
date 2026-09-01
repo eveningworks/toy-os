@@ -1332,3 +1332,57 @@ downstream buffer is slower than none.** A 16-deep TFTP window took
 `SOCK_QUEUE` is 4 and holds three datagrams -- thirteen of every sixteen
 blocks were discarded on arrival. Ask what happens to N+1 before sending
 N of anything.
+
+## A hardware panic, and the two instruments that nearly lied about it (2026-09-01)
+
+A bare-metal GP fault in `usb_parse_config_interfaces`, roughly 3 boots
+in 5, with a dead PS/2 keyboard alongside it. Three things worth
+carrying, none of them about USB.
+
+**A panic names its own symbol, so you never need the relocation line.**
+The kernel prints `in usb_parse_config_interfaces+0xef` beside
+`RIP=0x2513743f`, and it resolved that symbol itself. So the delta is
+`RIP - (nm <symbol> + offset)` -- one subtraction, no boot log. That
+matters because a panic photographed off a screen has scrolled the
+`kernel relocated` line away, which is how a bare-metal panic normally
+arrives. `panic_resolve.py` derives it now and prints the arithmetic; it
+was a hand calculation the day this was learned. Check the BUILD ID
+first either way -- the tool warns, and the warning fired correctly here
+when the tree had moved on by one commit and the symbol had shifted 0x10.
+
+**Read a corrupted pointer as evidence about the CALLER.** `%rbx` held
+`0x42005325b42b54` -- non-canonical, but with `25` in the middle where
+the relocated kernel's addresses start, so a PARTIALLY overwritten
+pointer rather than a wild one. That is a smashed frame, not a bad
+computation, and it says look at who ran before, not at the faulting
+function. The faulting function's own bounds checks were all correct.
+
+**Two instruments failed before the machine did, and both failed
+SILENTLY toward a false negative.**
+
+- `remote.py`'s 15s default timeout cut off a 25s `kbd` recording, and
+  the partial capture -- a header with no rows -- reads exactly like
+  "no keypresses arrived". That was nearly filed as "scancodes never
+  reach the kernel". The rule generalises past this tool: **when a probe
+  has its own duration, the harness timeout must exceed it**, and a
+  truncated capture must not be readable as a result.
+- A wait loop written as `until ! pgrep -f "flake_hunt.py ktest"` can
+  never exit, because the waiting shell's own command line contains the
+  pattern. CLAUDE.md already says this in as many words and it still
+  happened. Wait on an ARTIFACT that cannot match itself.
+
+**And verify the instrument before believing a negative.** Before
+concluding the keyboard was silent, the question worth asking was
+whether `kbd`'s tap is upstream or downstream of the compositor's raw
+input grab -- because downstream, an empty capture would mean nothing at
+all. It is upstream (`kbdtap_key()` runs before any of the ~20 paths
+that can return), which is what made the empty capture admissible.
+
+**The keyboard was a CONSEQUENCE, and the discriminator was free.** The
+trackpad worked and the keyboard did not, on the same i8042 -- so the
+controller was alive and one port was not. A cold boot settled the rest:
+the panic recurred (so not a warm-reset artifact) and the next clean
+boot brought the keyboard back. Recorded as a consequence with the cause
+not separately established, rather than claimed as fixed by the USB
+change. **Ask what ONE cheap comparison separates the candidates** --
+here, does the other device on the same controller still work.

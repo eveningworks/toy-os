@@ -350,6 +350,15 @@ manual steps to be worth automating:
   guest side is `/bin/telnetd` and `/bin/tftpd`, both shipped DISABLED
   (`service enable telnetd`).
 
+  **`--timeout` MUST OUTLAST THE COMMAND, and the default is 15s.** A
+  command that simply runs longer than that raises with the output it
+  has so far -- which reads exactly like the command's RESULT rather
+  than a truncated capture. A `kbd --timeout 25` recording was read as
+  "no keypresses arrived" that way, which is the wrong answer to a
+  question about a dead keyboard. Anything with its own duration
+  (`kbd`, a sleep, a long `sum`) needs `--timeout` set above it; the
+  error message says so now.
+
   **`sync` sends only what differs, and ASKS the machine rather than
   remembering.** It uploads a manifest of `<crc32> <size> <path>` and
   runs `sum -c` over it, so the answer comes from the files that are
@@ -1131,7 +1140,15 @@ window without going through it will find its layout polls timing out.
 - **`panic_resolve.py`** -- paste a panic (from the log, or typed off a
   photograph) and it names every address in it, RIP and stack scan
   alike, annotating the original lines. It finds the relocation delta
-  from the text itself. **It checks the BUILD ID first and refuses to
+  from the text itself -- from the `kernel relocated +0x...` line if the
+  text has one, and **otherwise by DERIVING it from the faulting symbol**:
+  the kernel resolves that symbol itself, so `in foo+0xef` beside
+  `RIP=0x...` is an nm lookup and a subtraction away from the delta. That
+  second path is the one a bare-metal panic usually needs, because a
+  panic photographed off a screen has long since scrolled the relocation
+  line away -- and doing it by hand is an nm lookup at exactly the moment
+  nobody wants one. It PRINTS the arithmetic, so a reader can check it
+  rather than trust it. **It checks the BUILD ID first and refuses to
   be quietly wrong**: resolving against a different build gives
   confident, plausible, wrong names -- verified, the address that was
   `try_merge_next` in one report is `rtc_read_local` a few commits

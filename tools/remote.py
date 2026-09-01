@@ -139,8 +139,15 @@ class Telnet:
             try:
                 chunk = self.s.recv(4096)
             except socket.timeout:
+                # NAME THE FIX. A command that simply runs longer than
+                # this looks identical to a wedged machine, and the
+                # partial output below is then read as the command's
+                # RESULT rather than as a truncated capture -- which is
+                # how a 25s `kbd` recording was read as "no keypresses".
                 raise TimeoutError(
-                    f"no {marker!r} line within {timeout}s; got: "
+                    f"no {marker!r} line within {timeout}s -- if the command "
+                    f"runs longer than that, raise it with --timeout and the "
+                    f"output below is TRUNCATED, not the answer; got: "
                     f"{self.buf[-400:]!r}")
             if not chunk:
                 raise EOFError(f"connection closed; got: {self.buf[-400:]!r}")
