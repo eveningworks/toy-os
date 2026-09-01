@@ -51,16 +51,25 @@
 // tftpd.c carries the same note and solved it the same way.
 //
 // fd 2 IS THE KERNEL LOG here (abi/syscall_abi.h), so a diagnostic
-// written there lands in `dmesg`. But at a prompt that is the wrong
-// place -- the person typing `dhcp net0` wants to see the answer -- so
-// this asks which situation it is in rather than picking one.
+// written there lands in `dmesg`. At a prompt that is the wrong place --
+// the person typing `dhcp net0` wants to see the answer -- so this
+// picks, and WHAT IT PICKS ON IS `-k`, not isatty().
+//
+// isatty(1) was the first version and does not work: init hands a
+// service a console fd 1, so it answers TRUE and the boot's diagnostics
+// went to a screen nothing presents on a graphical boot. Measured -- the
+// laptop's dmesg carried `init: started dhcp` and not one line from dhcp
+// itself. `-k` is the flag that MEANS "I am the resident service", so it
+// is the thing that already knows the answer.
+static int g_to_log;
+
 static void say(const char *fmt, ...) {
     va_list ap;
     char buf[160];
     va_start(ap, fmt);
     vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
-    write(isatty(1) ? 1 : 2, buf, strlen(buf));
+    write(g_to_log ? 2 : 1, buf, strlen(buf));
 }
 
 
@@ -537,7 +546,7 @@ int main(int argc, char **argv) {
     int keep = 0;
     const char *want = 0;
     for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "-k")) keep = 1;
+        if (!strcmp(argv[i], "-k")) keep = g_to_log = 1;
         else if (!strcmp(argv[i], "-1")) keep = 0;   // the default; accepted
         else if (!want && argv[i][0] != '-') want = argv[i];
         else { cmd_usage("dhcp [-k] [<device>]"); return 1; }
