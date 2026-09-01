@@ -28,6 +28,7 @@ buildable now. Something that MISBEHAVES is not here -- that is
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
 - [ ] Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today  *(Networking)*
+- [ ] Run the full gate over the About rewrite and the logo -- only `boot_smoke_test.py` ran on the night they landed  *(Known limitations and papercuts (unscheduled))*
 - [ ] System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons  *(Known limitations and papercuts (unscheduled))*
 <!-- END next-up -->
 
@@ -896,6 +897,8 @@ Things this OS does not do yet, or does in a way worth improving --
 `docs/bugs.md`; the test is "is something broken?", not "would I like
 this to be better?".
 
+- [ ] About shows a processor COUNT, not a model -- `QUERY_CPUS` carries no brand string, so ring 3 cannot ask for one
+- [ ] **NEXT** Run the full gate over the About rewrite and the logo -- only `boot_smoke_test.py` ran on the night they landed
 - [ ] A key event carries the translated code only, not the physical keycode
 
 - [ ] Four overlays still opt out of damage tracking -- see `docs/roadmap-details.md`
