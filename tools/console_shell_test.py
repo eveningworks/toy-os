@@ -69,6 +69,7 @@ Exits 0 if every check passed, 1 otherwise, 2 if it could not run.
 
 import argparse
 import os
+import calendar
 import re
 import subprocess
 import sys
@@ -121,7 +122,7 @@ def root_names(dbg):
     return names
 
 
-def dmesg(dbg, marker=None, tries=8):
+def dmesg(dbg, marker=None, tries=8, cmd="sh dmesg"):
     """The kernel log, read with a generous timeout and RETRIED until a
     marker appears.
 
@@ -137,7 +138,7 @@ def dmesg(dbg, marker=None, tries=8):
         dbg.timeout = 20.0
         out = ""
         for _ in range(tries):
-            out = dbg.send("sh dmesg") or ""
+            out = dbg.send(cmd) or ""
             if marker is None or marker in out:
                 return out
             time.sleep(1.0)
@@ -233,6 +234,7 @@ def main():
               m.group(0) if m else "no 'init: started tosh' line")
         check("the kernel shell stood down",
               "kernel shell standing down" in boot)
+
 
         # POLLED, NOT SAMPLED ONCE. A shell reaches its blocking read a
         # moment after init spawns it, so a single sample taken right
@@ -648,6 +650,50 @@ def main():
         time.sleep(2.0)
         check("a failed redirect does not run the command",
               "redir_never.txt" not in root_names(dbg))
+
+        # --- dmesg -T ---------------------------------------------------
+        #
+        # THE SPAN, NOT A PAIRING. Two dumps of a live log cannot be
+        # lined up: pairing on message text is unsound (the "syscall:
+        # exit()" line repeats dozens of times, so the Nth occurrence in
+        # one matches the 1st in the other -- a 3 s error that was the
+        # harness's own), pairing only on messages unique in both left 3
+        # lines out of 30, and pairing positionally diverges as soon as
+        # the log grows between the two reads. The elapsed time BETWEEN
+        # the first and last line needs none of that, and it is the
+        # quantity `-T` can actually get wrong.
+        #
+        # SPREAD IS LOAD-BEARING. Nearly every BOOT line lands in second
+        # 0, so run at the end of this file, where the log spans the
+        # minute of shell testing above -- a deliberate x3 skew passed
+        # an earlier version of this check because every offset it saw
+        # was 0, which is CLAUDE.md's "the fixture never reached the
+        # branch".
+        #
+        # THROUGH THE HELPER, not a bare send: the log is thousands of
+        # characters and DebugConsole's default read returns a truncated
+        # buffer, which reads as the command being broken.
+        raw = dmesg(dbg)
+        abs_ = dmesg(dbg, cmd="sh dmesg -T")
+
+        secs = [int(m.group(1)) for m in
+                (re.match(r"\[(\d+)\.\d\d\] ", ln.strip()) for ln in raw.splitlines())
+                if m]
+        times = [calendar.timegm(tuple(int(m.group(i)) for i in range(1, 7)) + (0, 0, 0))
+                 for m in (re.match(r"\[(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)\] ",
+                                    ln.strip()) for ln in abs_.splitlines())
+                 if m]
+        check("dmesg -T stamps every line it prints",
+              len(times) >= 10 and len(secs) >= 10,
+              f"{len(secs)} monotonic, {len(times)} absolute")
+        mono_span = (max(secs) - min(secs)) if secs else 0
+        abs_span = (max(times) - min(times)) if times else 0
+        check("...over a log that spans more than one second",
+              mono_span >= 2, f"monotonic span {mono_span}s")
+        # +/-1s: time() and the uptime division both truncate.
+        check("and the elapsed time it reports matches the monotonic one",
+              abs(abs_span - mono_span) <= 1,
+              f"monotonic {mono_span}s vs absolute {abs_span}s")
 
 
     finally:

@@ -6,7 +6,7 @@
 
 ## Synopsis
 
-    dmesg [-n <lines>] [-w|--follow]
+    dmesg [-n <lines>] [-w|--follow] [-T]
 
 ## Description
 
@@ -27,6 +27,43 @@ run this at all still has its log somewhere.
 |---|---|
 | `-n <lines>` | the last `<lines>` lines, rather than the whole ring |
 | `-w`, `--follow` | keep printing as new lines arrive; Ctrl-C to stop |
+| `-T` | absolute times instead of seconds since boot |
+
+## `-T` is derived, and that is worth knowing
+
+    $ dmesg -T -n 3
+    [2026-09-01 14:09:01] usb: slot 2: bound as usb-keyboard on endpoint 0x81
+    [2026-09-01 14:09:01] usb: slot 2: bound as usb-mouse on endpoint 0x82
+    [2026-09-01 14:09:02] dhcp: net0: 192.168.200.107 netmask 255.255.255.0
+
+**Nothing stores a wall clock per line.** `klog_write()` stamps each
+logical line with MONOTONIC time, as *text* — `[5068.88] ` is characters
+in the ring, not a field — so `-T` computes the boot instant once as
+`now − uptime` and adds each line's offset to it. That is exactly what
+Linux's `dmesg -T` does, and it inherits the same caveat, which
+util-linux also documents: **the answer is wrong if the clock moved
+since boot.** A machine whose RTC was wrong until someone set it — a
+dead CMOS battery, say — reports every line shifted by however far the
+clock was out. Nothing here can detect that; only a wall clock recorded
+*at* the line could, and the ring has no room for one.
+
+**The resolution is one second, and the hundredths are dropped
+deliberately.** The origin came from a one-second RTC, so a stamp
+claiming hundredths of a second would be claiming precision the
+derivation does not have. Expect ±1 s against `time`: both `time()` and
+the uptime division truncate.
+
+**A line with no timestamp passes through untouched.** The kernel stamps
+once per *logical* line, so a continuation legitimately has none —
+inventing a time for it would be a fabrication, and this is the command
+whose whole point is not splicing a log together silently.
+
+**If the clock is not set at all**, `-T` says so once and keeps the
+monotonic stamps rather than printing 1970 for every line:
+
+    $ dmesg -T
+    dmesg: the clock is not set -- keeping monotonic times
+    [0.42] init: starting
 
 ## It used to be a builtin, and that was the bug
 

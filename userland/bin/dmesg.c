@@ -31,8 +31,95 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
 
-static void put(const char *s, unsigned n) { write(1, s, n); }
+// --- absolute timestamps (-T) ------------------------------------------
+//
+// THE CONVERSION IS DERIVED, NOT RECORDED, and that is the whole design.
+// The kernel stamps each line with MONOTONIC time as TEXT -- "[5068.88] "
+// is characters in the ring, not a field (see kernel/lib/klog.c) -- so
+// there is no wall clock stored anywhere to print. `-T` computes the
+// boot instant once as `now - uptime` and adds each line's offset to it,
+// which is exactly what Linux's `dmesg -T` does.
+//
+// Its inherited caveat, which util-linux also documents: the answer is
+// WRONG IF THE CLOCK MOVED SINCE BOOT. A machine whose RTC was wrong
+// until someone set it -- a dead CMOS battery, say -- reports every line
+// shifted by however far the clock was out. Nothing here can detect
+// that; only a wall clock recorded AT the line could, and the ring holds
+// no room for one.
+//
+// A LINE FILTER RATHER THAN A REWRITE OF drain(), because the log
+// arrives as byte slices whose boundaries fall wherever the ring's
+// records do -- a line is routinely split across two. Everything that
+// reaches stdout goes through here so the gap notes keep their place in
+// the order.
+#define ABS_LINE_MAX 512
+
+static int g_abs;                  // -T
+static long long g_boot_epoch;     // seconds, or 0 when unknown
+static char g_line[ABS_LINE_MAX];
+static unsigned g_line_len;
+static int g_line_over;            // this line outran the buffer
+
+static void raw(const char *s, unsigned n) { write(1, s, n); }
+
+// Writes one buffered line, replacing a leading "[secs.hh] " with the
+// absolute time it names. A line without that prefix passes untouched --
+// the kernel stamps once per LOGICAL line, so a continuation legitimately
+// has none, and inventing a time for it would be a fabrication.
+static void emit_line(const char *p, unsigned n) {
+    unsigned secs = 0, i = 1;
+    int ok = 0;
+    if (!g_line_over && n > 2 && p[0] == '[') {
+        while (i < n && p[i] >= '0' && p[i] <= '9') { secs = secs * 10 + (unsigned)(p[i] - '0'); i++; }
+        // "[N.hh] " -- the hundredths are dropped on purpose: a whole
+        // second is the resolution an absolute stamp can honestly claim
+        // when its origin was derived from a one-second RTC.
+        if (i > 1 && i + 4 <= n && p[i] == '.' && p[i + 3] == ']' && p[i + 4] == ' ') {
+            i += 5;
+            ok = 1;
+        }
+    }
+    if (!ok) { raw(p, n); return; }
+
+    time_t t = (time_t)(g_boot_epoch + (long long)secs);
+    struct tm tm;
+    char stamp[40];
+    localtime_r(&t, &tm);
+    unsigned len = (unsigned)strftime(stamp, sizeof stamp, "[%Y-%m-%d %H:%M:%S] ", &tm);
+    if (!len) { raw(p, n); return; }
+    raw(stamp, len);
+    raw(p + i, n - i);
+}
+
+static void put(const char *s, unsigned n) {
+    if (!g_abs) { raw(s, n); return; }
+    for (unsigned k = 0; k < n; k++) {
+        if (g_line_len < sizeof g_line) {
+            g_line[g_line_len++] = s[k];
+        } else {
+            // Too long to hold. Emit what is buffered and pass the rest
+            // of the line straight through rather than truncating it --
+            // a half-line is a wrong line, and this file's whole point
+            // is not silently splicing a log.
+            if (!g_line_over) { emit_line(g_line, g_line_len); g_line_len = 0; g_line_over = 1; }
+            raw(&s[k], 1);
+        }
+        if (s[k] == '\n') {
+            if (!g_line_over) emit_line(g_line, g_line_len);
+            g_line_len = 0;
+            g_line_over = 0;
+        }
+    }
+}
+
+// A log that does not end in a newline still has a last line.
+static void put_flush(void) {
+    if (g_abs && g_line_len && !g_line_over) emit_line(g_line, g_line_len);
+    g_line_len = 0;
+}
+
 static void puts_(const char *s) { put(s, (unsigned)strlen(s)); }
 
 // How long --follow waits between polls. The log is not a stream that
@@ -42,6 +129,8 @@ static void puts_(const char *s) { put(s, (unsigned)strlen(s)); }
 // is under what a person notices and over what would show up in a CPU
 // figure.
 #define FOLLOW_POLL_MS 200
+
+#define USAGE "dmesg [-n <lines>] [-w|--follow] [-T]"
 
 // Reads from `from` to the end of the log, writing to stdout. Returns
 // the absolute offset just past the last byte written, or `from` when
@@ -132,15 +221,36 @@ int main(int argc, char **argv) {
                 puts_("dmesg: -n wants a positive line count\n");
                 return 1;
             }
+        } else if (strcmp(argv[i], "-T") == 0) {
+            g_abs = 1;
         } else {
-            cmd_usage("dmesg [-n <lines>] [-w|--follow]");
+            cmd_usage(USAGE);
             return 1;
+        }
+    }
+
+    if (g_abs) {
+        // ONCE, before anything is printed: the boot instant is a
+        // property of this run, and re-deriving it per line would let a
+        // clock that ticks mid-dump disagree with itself.
+        time_t now = time(NULL);
+        if (now <= 0) {
+            // time() reports 0 for a failed read or an RTC answering
+            // year 0. Printing 1970 for every line would be a confident
+            // wrong answer; say so and keep the monotonic stamps, which
+            // are still true.
+            puts_("dmesg: the clock is not set -- keeping monotonic times\n");
+            g_abs = 0;
+        } else {
+            g_boot_epoch = (long long)now -
+                           (long long)(sys_monotonic_ns() / 1000000000ull);
         }
     }
 
     int gaps = 0;
     unsigned long long next = lines ? tail_start(lines) : 0;
     next = drain(next, &gaps);
+    put_flush();
 
     if (!follow) return 0;
 
@@ -153,5 +263,6 @@ int main(int argc, char **argv) {
     for (;;) {
         sys_sleep_ms(FOLLOW_POLL_MS);
         next = drain(next, &gaps);
+        put_flush();
     }
 }
