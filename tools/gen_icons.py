@@ -456,16 +456,52 @@ def icon_start():
     for a filled letter A.
     """
     im = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-    d = ImageDraw.Draw(im)
-    w, h, gap = 22, 20, 5
-    # Two on the bottom, one centred on top -- a stack, which is what
-    # makes it read as bricks rather than as three rectangles.
-    by = 34
-    d.rounded_rectangle([6, by, 6 + w, by + h], radius=4, fill=INK)
-    d.rounded_rectangle([6 + w + gap, by, 6 + w + gap + w, by + h], radius=4, fill=INK)
-    ty = by - h - gap
-    tx = 6 + (w + gap + w - w) // 2
+    brick_stack(ImageDraw.Draw(im), w=22, h=20, gap=5, bottom_y=34, left_x=6)
+    return im
+
+
+def brick_stack(d, w, h, gap, bottom_y, left_x):
+    """Three bricks: two on the bottom, one centred on top.
+
+    ONE IMPLEMENTATION, because two marks draw it -- the Start button
+    (`icon_start`, inked and unplated, recoloured by the panel) and the
+    OS's own logo (`icon_toyos`, on a plate). They are the same identity
+    at two sizes and must not drift into two similar-but-different
+    shapes, which is exactly what a second copy of these six lines
+    would eventually become.
+
+    The stack is what makes it read as bricks rather than as three
+    rectangles, and the gaps are what keep it legible when the taskbar
+    scales it to ~12px -- see icon_start's own note on why this is solid
+    blocks and not outlines.
+    """
+    d.rounded_rectangle([left_x, bottom_y, left_x + w, bottom_y + h],
+                        radius=4, fill=INK)
+    d.rounded_rectangle([left_x + w + gap, bottom_y,
+                         left_x + w + gap + w, bottom_y + h], radius=4, fill=INK)
+    ty = bottom_y - h - gap
+    tx = left_x + (w + gap) // 2
     d.rounded_rectangle([tx, ty, tx + w, ty + h], radius=4, fill=INK)
+
+
+def icon_toyos():
+    """toy-os's own logo: the Start button's mark, on a plate.
+
+    The identity already existed -- `icon_start` chose three stacked
+    bricks over a 2x2 of panes (Windows) and a 3x3 dot grid (GNOME), and
+    the reasoning is in its docstring. A logo drawing something ELSE
+    would give the project two marks, so this is the same shape with the
+    one thing the Start button deliberately has not got: a plate. The
+    button paints its own background in the taskbar's accent, so a plate
+    there would be a rectangle inside a rectangle; here there is nothing
+    behind it.
+
+    Sized in from icon_start's geometry rather than reusing it whole:
+    the plate's own PAD means the button's 22px bricks touch the
+    rounding. Verified at 20px, which is what a menu row gets.
+    """
+    im, d = tile((40, 96, 230))
+    brick_stack(d, w=19, h=17, gap=5, bottom_y=36, left_x=9)
     return im
 
 
@@ -536,6 +572,7 @@ ICONS = {
     "cat-startup": icon_cat_startup,
     "cat-kernel": icon_cat_kernel,
     "start": icon_start,
+    "toyos": icon_toyos,
     "notepad": icon_notepad,
     "terminal": icon_terminal,
     "calculator": icon_calculator,
