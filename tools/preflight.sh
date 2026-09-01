@@ -190,6 +190,13 @@ python3 tools/check_licenses.py || fail "license inventory check"
 step "genttf.py --check (the generated font header matches its generator)"
 python3 tools/genttf.py --check || fail "generated font header check"
 
+# The host-side TFS3 writer is what SEEDS disk.img, so a leak in it
+# corrupts this gate's own fixture -- an overwrite that did not free its
+# double-indirect tables reddened ktest's fsck checks on the second run
+# against one image. Host-only and about a second; no VM, nothing built.
+step "tfs3_writer_test.py (the host seeder returns every block it frees)"
+python3 tools/tfs3_writer_test.py || fail "tfs3_writer overwrite check"
+
 step "boot_smoke_test.py"
 python3 tools/boot_smoke_test.py || fail "boot smoke test"
 

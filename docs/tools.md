@@ -2666,6 +2666,23 @@ window without going through it will find its layout polls timing out.
   partition is reported and skipped rather than being an error, so a
   `disk.img` predating this layout keeps working (booting the ISO).
   It never partitions and never reformats an existing `/boot`.
+- **`tfs3_writer_test.py`** -- does the host seeder's OVERWRITE hand
+  every block back? Host-only, no VM, about a second: it formats a
+  scratch image, writes one file per block-map level (direct,
+  single-indirect, double-indirect), rewrites each with different
+  content of the same size, and asserts the allocation bitmap did not
+  grow. **The sizes ARE the test.** A free path can be right for one
+  level and wrong for the next, and the seed tree has exactly one file
+  over the single-indirect ceiling (`/install/kernel.bin`, ~4.8 MB) --
+  so a leak of its two double-indirect tables sat in the seeding path
+  with every existing test green, reddening `ktest`'s `fsck` checks on
+  any second gate run against one image. Triple-indirect is deliberately
+  NOT covered: it starts past 4 GiB. To watch it go red, restore
+  `delete_path()`'s old `img.free_block(node["ptrs"][12])` in place of
+  the pointer walk -- the double-indirect case fails by exactly 2 and
+  the other two stay green. Run by `preflight.sh`, because a leak here
+  corrupts the gate's own fixture.
+
 - **`tfs3_v1_test.py`** -- **repaired 2026-08-25, it had been 0 of 8**:
   it drove `cat`, `mv` and `dmesg` against an image with no `/bin` on
   it, months after those became `/bin` programs, and its image was flat

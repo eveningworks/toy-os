@@ -857,6 +857,23 @@ def mkdir_path(img, path):
     return ino
 
 
+def free_tree_level(img, table_blk, depth):
+    """Free an indirect TABLE and everything under it -- depth 0 meaning
+    its entries are data blocks. The kernel's free_tree_level()
+    (kernel/fs/tfs3.c), mirrored: a table block is not in file_blocks(),
+    so freeing only the data leaks one block per table."""
+    raw = img.read_block(table_blk)
+    for i in range(PTRS_PER_BLOCK):
+        e = struct.unpack_from("<I", raw, i * 4)[0]
+        if not e:
+            continue
+        if depth == 0:
+            img.free_block(e)
+        else:
+            free_tree_level(img, e, depth - 1)
+    img.free_block(table_blk)
+
+
 def delete_path(img, path):
     parent_path, name = split_parent(path)
     ino = img.lookup(path)
@@ -868,13 +885,18 @@ def delete_path(img, path):
         live = [n for n, _ in img.dirents(ino) if n not in (".", "..")]
         if live:
             raise SystemExit(f"{path}: directory not empty (same refusal as the OS)")
-    blocks = img.file_blocks(node)
     if not img.dir_remove(parent, name):
         raise SystemExit(f"{path}: dirent vanished mid-delete?")
-    for blk in blocks:
-        img.free_block(blk)
-    if node["size"] > 12 * BLOCK:
-        img.free_block(node["ptrs"][12])
+    # Walk the POINTERS rather than file_blocks(), which reports data
+    # blocks only: the single-indirect table was freed by hand here and
+    # the double- and triple-indirect trees were not freed at all, so
+    # every rewrite of a file over ~4.05 MB leaked its tables.
+    for i in range(12):
+        if node["ptrs"][i]:
+            img.free_block(node["ptrs"][i])
+    for slot, depth in ((12, 0), (13, 1), (14, 2)):
+        if node["ptrs"][slot]:
+            free_tree_level(img, node["ptrs"][slot], depth)
     # Kill the inode: zero it (fails checksum by design) and free the bit.
     img.write_inode(ino, b"\x00" * INODE_SIZE)
     img.free_inode(ino)

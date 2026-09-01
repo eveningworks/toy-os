@@ -508,9 +508,21 @@ removing it**, so all three are there now, behind one recursive
 walker/builder pair. The triple level is UNEXERCISED and says so where
 it is defined.
 
+**AND THE FREE PATH HAD THE SAME HOLE, ONE LEVEL DEEPER.**
+`delete_path()` freed `file_blocks()` -- DATA blocks only -- plus
+`ptrs[12]` by hand, so the double- and triple-indirect TABLES were never
+returned. An overwrite is delete-then-write, and exactly one seeded file
+is over the single-indirect ceiling, so every re-seed leaked that file's
+two double-indirect tables and `fsck` counted them. It walks the
+pointers now, mirroring the kernel's `free_tree_level()`.
+
 **The general shape:** a second implementation of a format is only as
 complete as the biggest thing anyone has fed it, and nothing tells you
-which part is missing until something does.
+which part is missing until something does. **Fixing one direction does
+not fix the other** -- the write side grew all three levels and the free
+side kept one, which is invisible until a file crosses the ceiling AND
+is written twice. `tools/tfs3_writer_test.py` now writes one file per
+level and rewrites it, which is the fixture the earlier work lacked.
 
 ## A DIRECTORY BIGGER THAN ONE LISTING NEEDS `SYS_LISTDIR_AT`
 

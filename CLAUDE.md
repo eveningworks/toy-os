@@ -1265,7 +1265,9 @@ cost".
   `check_layout.py`, `check_dispatch.py`, `check_widget_ops.py`,
   `check_key_routing.py`, `check_drivers.py`, `check_docs.py`,
   `check_licenses.py`, `check_config_size.py`,
-  `check_tool_coverage.py`, `check_tool_commands.py`.
+  `check_tool_coverage.py`, `check_tool_commands.py`, and
+  `tfs3_writer_test.py` (the host seeder's overwrite -- a leak there
+  corrupts the gate's own fixture).
 - **Has the on-demand half rotted?** -- `ondemand_sweep.py`, the ~30
   tools neither `preflight.sh` nor `gui_regress.py` covers. **Adding a
   tool to `tools/` does not add it here**, and a tool no runner names is
