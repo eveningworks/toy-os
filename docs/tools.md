@@ -2920,6 +2920,24 @@ window without going through it will find its layout polls timing out.
   the server's own log for `blksize 1428, window 3` rather than
   inferring agreement from the bytes arriving.
 
+- **`check_config_size.py`** -- no shipped `data/etc/**` or
+  `data/usr/share/services/**` file may exceed `ETC_CONFIG_BUF_MAX`.
+  Run by `preflight.sh`.
+
+  **The failure it prevents names the wrong thing.** A config file over
+  the buffer is read SHORT, so the keys past the cut are not seen -- and
+  what init then reports is `dhcp has no Exec=, will not start it`,
+  which reads as a broken service when the truth is a long comment.
+  Comments count toward the budget; that is the whole trap, because the
+  file that fails looks nothing like too much configuration.
+
+  It reads the limit FROM the header rather than repeating it, since a
+  limit copied into a checker drifts from the code it checks. It
+  deliberately does not cover files written at RUNTIME (`resolv.conf`,
+  the settings files) -- those grow as the system runs, and the rewrite
+  path refuses rather than truncating, so they fail safely but only in
+  the moment.
+
 - **`hover_test.py`** -- that a hover change REPAINTS rather than only
   recording damage. Run by `gui_regress.py`.
 

@@ -38,8 +38,31 @@
 #include "lib/cmd.h"
 #include "lib/uconf.h"
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 #include <unistd.h>
+
+// --- where the output goes ---------------------------------------------
+//
+// A SERVICE HAS NO STDOUT ANYBODY READS. init spawns this with fd 1
+// going nowhere, so every printf here reached exactly nothing -- which
+// is how a boot that fell back to link-local left no record of WHY, and
+// why the first diagnosis of it had to be done by adding up timings.
+// tftpd.c carries the same note and solved it the same way.
+//
+// fd 2 IS THE KERNEL LOG here (abi/syscall_abi.h), so a diagnostic
+// written there lands in `dmesg`. But at a prompt that is the wrong
+// place -- the person typing `dhcp net0` wants to see the answer -- so
+// this asks which situation it is in rather than picking one.
+static void say(const char *fmt, ...) {
+    va_list ap;
+    char buf[160];
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    write(isatty(1) ? 1 : 2, buf, strlen(buf));
+}
+
 
 #define DHCP_SERVER_PORT 67
 #define DHCP_CLIENT_PORT 68
@@ -268,7 +291,7 @@ static int link_local(const char *dev, const uint8_t *mac) {
 
         char a[20];
         ip_str(a, ip);
-        printf("dhcp: %s: %s netmask 255.255.0.0 link-local, no gateway\n", dev, a);
+        say("dhcp: %s: %s netmask 255.255.0.0 link-local, no gateway\n", dev, a);
 
         // ANNOUNCE, so a neighbour that cached nothing during the
         // probes learns the address now. The request carries our new
@@ -280,7 +303,7 @@ static int link_local(const char *dev, const uint8_t *mac) {
         }
         return 1;
     }
-    printf("dhcp: %s: no free link-local address after %d tries\n", dev, LL_TRIES);
+    say("dhcp: %s: no free link-local address after %d tries\n", dev, LL_TRIES);
     return 0;
 }
 
@@ -313,14 +336,14 @@ static int wait_for_carrier(const char *name) {
     if (!d.link_known) return 1;   // cannot be asked: proceed, do not stall
     if (d.link_up) return 1;
 
-    printf("dhcp: %s: waiting for carrier...\n", name);
+    say("dhcp: %s: waiting for carrier...\n", name);
     for (int waited = 0; waited < CARRIER_WAIT_MS; waited += CARRIER_POLL_MS) {
         sys_sleep_ms(CARRIER_POLL_MS);
         for (unsigned i = 0; ; i++) {
             if (sys_query_record(QUERY_NETDEV, i, &d, sizeof d) < (int)sizeof d) break;
             if (strcmp(d.name, name)) continue;
             if (d.link_up) {
-                printf("dhcp: %s: link up %uM after %d.%ds\n", name,
+                say("dhcp: %s: link up %uM after %d.%ds\n", name,
                        (unsigned)(d.link_bps / 1000000), waited / 1000,
                        (waited % 1000) / 100);
                 return 1;
@@ -331,7 +354,7 @@ static int wait_for_carrier(const char *name) {
     // Bounded, so an unplugged machine still reaches a usable state --
     // link-local, exactly as before, just after a wait that was worth
     // making.
-    printf("dhcp: %s: no carrier after %ds\n", name, CARRIER_WAIT_MS / 1000);
+    say("dhcp: %s: no carrier after %ds\n", name, CARRIER_WAIT_MS / 1000);
     return 0;
 }
 
@@ -372,7 +395,7 @@ static int configure(const struct query_netdev *dev, struct lease *got) {
     int len = exchange(fd, &out, out_len, xid, MSG_OFFER, &in);
     if (!len) {
         close(fd);
-        printf("dhcp: no offer on %s\n", dev->name);
+        say("dhcp: no offer on %s\n", dev->name);
         return link_local(dev->name, mac);
     }
 
@@ -392,7 +415,7 @@ static int configure(const struct query_netdev *dev, struct lease *got) {
     if (!len) {
         char a[20];
         ip_str(a, l.ip);
-        printf("dhcp: %s offered %s and did not acknowledge it\n", dev->name, a);
+        say("dhcp: %s offered %s and did not acknowledge it\n", dev->name, a);
         return link_local(dev->name, mac);
     }
     // The ACK is authoritative, not the offer: a server may acknowledge
@@ -410,18 +433,18 @@ static int configure(const struct query_netdev *dev, struct lease *got) {
 
     char a[20], m[20], g[20], d[20];
     ip_str(a, l.ip); ip_str(m, l.mask); ip_str(g, l.router); ip_str(d, l.dns);
-    printf("dhcp: %s: %s netmask %s gateway %s\n", dev->name, a, m, g);
+    say("dhcp: %s: %s netmask %s gateway %s\n", dev->name, a, m, g);
 
     if (l.dns) {
         // The FILE is Unix's name and the FORMAT is this repo's
         // `key=value` -- there is one config parser here and a second
         // one for four bytes would be the drift nobody looks for.
         if (uconf_set(RESOLV_CONF, "nameserver", d))
-            printf("dhcp: nameserver %s -> %s\n", d, RESOLV_CONF);
+            say("dhcp: nameserver %s -> %s\n", d, RESOLV_CONF);
         else
-            printf("dhcp: could not write %s\n", RESOLV_CONF);
+            say("dhcp: could not write %s\n", RESOLV_CONF);
     }
-    if (l.seconds) printf("dhcp: lease %u seconds\n", l.seconds);
+    if (l.seconds) say("dhcp: lease %u seconds\n", l.seconds);
     if (got) *got = l;
     return 1;
 }
@@ -442,11 +465,38 @@ static int configure(const struct query_netdev *dev, struct lease *got) {
 static struct lease k_lease;
 static char renew_dev[NET_ABI_NAME_MAX];
 
-static void renew_forever(void) {
+// AS A SERVICE THIS NEVER RETURNS, and that is not a style choice: the
+// descriptor says Restart=always, so a process that exits is restarted,
+// and a restart that finds the card already addressed reports "nothing
+// to do" and exits non-zero -- which init correctly calls a crash loop
+// and gives up on. Measured on the laptop: five restarts in four
+// seconds and then `dhcp is crash-looping, giving up`.
+//
+// So the loop owns both jobs. With a lease it sleeps to T1 and renews;
+// without one it keeps ASKING, because a first attempt failing is the
+// ordinary case rather than the end.
+//
+// THE RETRY IS WHY THE BOOT LEASE WAS STILL BEING MISSED. Waiting for
+// carrier was necessary and not sufficient: the link comes up at 4.43 s
+// and the DISCOVER goes out immediately, but a switch port reports link
+// before it forwards -- MAC learning, and spanning tree if it is
+// enabled. The offer never arrives, and no length of carrier wait fixes
+// that. Real clients retry, so this does.
+#define RETRY_MIN_MS  3000
+#define RETRY_MAX_MS 60000
+
+static void supervise(void) {
+    uint32_t backoff = RETRY_MIN_MS;
     for (;;) {
-        uint32_t half = k_lease.seconds / 2;
-        if (half < 30) half = 30;      // a very short lease must not spin
-        sys_sleep_ms((int)(half * 1000));
+        if (k_lease.seconds) {
+            // Held: sleep to T1 (half the lease, RFC 2131) and renew.
+            uint32_t half = k_lease.seconds / 2;
+            if (half < 30) half = 30;   // a very short lease must not spin
+            sys_sleep_ms((int)(half * 1000));
+        } else {
+            sys_sleep_ms((int)backoff);
+            backoff = backoff * 2 > RETRY_MAX_MS ? RETRY_MAX_MS : backoff * 2;
+        }
 
         struct query_netdev dev;
         int found = 0;
@@ -454,31 +504,43 @@ static void renew_forever(void) {
             if (sys_query_record(QUERY_NETDEV, i, &dev, sizeof dev) < (int)sizeof dev) break;
             if (!strcmp(dev.name, renew_dev)) { found = 1; break; }
         }
-        if (!found) return;            // the card went away
+        if (!found) { sys_sleep_ms(RETRY_MAX_MS); continue; }  // card gone; keep watching
 
         struct lease got = {0};
         if (configure(&dev, &got) && got.seconds) {
+            if (!k_lease.seconds)
+                say("dhcp: %s: got a lease on retry\n", renew_dev);
             k_lease = got;
-        } else {
-            // Keep the old timer and try again sooner rather than
-            // giving up: a server that is briefly unreachable is the
-            // ordinary case, and the address stays valid until expiry.
-            printf("dhcp: %s: renewal failed, retrying\n", renew_dev);
+            backoff = RETRY_MIN_MS;
+        } else if (k_lease.seconds) {
+            // A held lease stays valid until it expires, so a server
+            // that is briefly unreachable is not a reason to drop it --
+            // just to ask again sooner.
+            say("dhcp: %s: renewal failed, retrying\n", renew_dev);
             k_lease.seconds = k_lease.seconds > 120 ? 120 : k_lease.seconds;
         }
     }
 }
 
 int main(int argc, char **argv) {
-    // `-1` IS THE OLD BEHAVIOUR, and it is what a person typing this at
-    // a prompt wants: ask, apply, exit. The service descriptor leaves it
-    // off so the boot-time one stays resident and renews.
-    int oneshot = 0;
+    // ONE-SHOT BY DEFAULT, and staying resident is what has to be asked
+    // for. The other way round was tried and is wrong: `dhcp net0` typed
+    // at a prompt then never returned, because the supervisor below does
+    // not exit. A command that hangs the terminal unless you know a flag
+    // is a worse default than one that needs a flag to do the new thing.
+    //
+    // Deciding it from isatty() was the other candidate -- this file
+    // already uses that to choose where diagnostics go -- and it was
+    // rejected here: getting the LOG destination wrong is cosmetic,
+    // getting this wrong hangs a prompt. The service descriptor says
+    // `-k` and there is nothing to infer.
+    int keep = 0;
     const char *want = 0;
     for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "-1")) oneshot = 1;
+        if (!strcmp(argv[i], "-k")) keep = 1;
+        else if (!strcmp(argv[i], "-1")) keep = 0;   // the default; accepted
         else if (!want && argv[i][0] != '-') want = argv[i];
-        else { cmd_usage("dhcp [-1] [<device>]"); return 1; }
+        else { cmd_usage("dhcp [-k] [<device>]"); return 1; }
     }
 
     int tried = 0, done = 0;
@@ -492,39 +554,36 @@ int main(int argc, char **argv) {
             // Said out loud rather than skipped silently: on a boot
             // where one card is already configured this is the whole
             // difference between "nothing to do" and "nothing worked".
-            printf("dhcp: %s already has an address -- leaving it\n", dev.name);
+            say("dhcp: %s already has an address -- leaving it\n", dev.name);
             continue;
         }
         tried++;
         struct lease got = {0};
-        if (configure(&dev, &got)) {
-            done++;
-            // The FIRST device with a real lease is the one this stays
-            // alive to renew. One renewer for one lease: a second card
-            // would need its own timer, and this machine has never had
-            // two leases at once.
-            if (!renew_dev[0] && got.seconds && got.server) {
-                k_lease = got;
-                strncpy(renew_dev, dev.name, sizeof renew_dev - 1);
-            }
+        if (configure(&dev, &got)) done++;
+        // THE FIRST DEVICE TRIED IS THE ONE SUPERVISED, whether or not
+        // it got a lease -- a card that fell back to link-local is
+        // precisely the one worth asking again. One supervisor for one
+        // card: a second would need its own timer, and no machine here
+        // has ever held two leases at once.
+        if (!renew_dev[0]) {
+            k_lease = got.server ? got : (struct lease){0};
+            strncpy(renew_dev, dev.name, sizeof renew_dev - 1);
         }
     }
 
     if (!tried) {
-        if (want) printf("dhcp: no such device: %s\n", want);
-        else           printf("dhcp: no device without an address\n");
+        if (want) say("dhcp: no such device: %s\n", want);
+        else           say("dhcp: no device without an address\n");
         return 1;
     }
-    if (done != tried) return 1;
-
-    // --- RENEWING (RFC 2131) ------------------------------------------
+    // --- SUPERVISING (RFC 2131's renewal, plus a retry) ---------------
     //
     // Only when asked to: `-1` is the one-shot the boot used to be, and
     // is what a person typing `dhcp net0` at a prompt wants. As a
     // service this stays resident, because a lease that is never renewed
     // silently expires and the machine loses its address at an hour a
     // server chose.
-    if (oneshot || !renew_dev[0]) return 0;
-    renew_forever();
+    if (!keep || !renew_dev[0]) return done == tried ? 0 : 1;
+    supervise();   // never returns
     return 0;
 }

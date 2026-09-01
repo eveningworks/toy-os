@@ -637,7 +637,7 @@ whenever a headline here tells you something you did not already know.
 - **TURN THE WAKE SOURCES OFF BEFORE THE SLEEP WRITE, OR S5 IS A REBOOT -- THE GPE BLOCKS AS WELL AS PM1_STS**
 - **A MACHINE IS REACHABLE OVER THE NETWORK NOW, AND BOTH SERVICES SHIP DISABLED**
 - **A PROGRAM MUST NOT PRINT ITS OWN VERSION AS THE SYSTEM'S: ASK `QUERY_VERSION`**
-- **A NETWORK CLIENT WAITS FOR CARRIER, AND A SERVICE DESCRIPTOR HAS A 512-BYTE BUDGET**
+- **A NETWORK CLIENT WAITS FOR CARRIER, AND A CONFIG FILE MUST FIT THE PARSER'S BUFFER**
 - **A DRIVER DECLARES ITSELF, AND NAMES EACH DEVICE AS IT BINDS IT**
 - **A SEND WINDOW MAY NOT EXCEED THE RECEIVER'S SOCKET QUEUE, OR IT IS SLOWER THAN NO WINDOW**
 - **AN MTU-SIZED DATAGRAM IS THE CEILING, BECAUSE NOTHING FRAGMENTS**
@@ -1244,6 +1244,7 @@ cost".
   write lock. Static checks, run by it or beside it: `check_deps.py`,
   `check_layout.py`, `check_dispatch.py`, `check_widget_ops.py`,
   `check_key_routing.py`, `check_docs.py`, `check_licenses.py`,
+  `check_config_size.py`,
   `check_tool_coverage.py`, `check_tool_commands.py`.
 - **Has the on-demand half rotted?** -- `ondemand_sweep.py`, the ~30
   tools neither `preflight.sh` nor `gui_regress.py` covers. **Adding a

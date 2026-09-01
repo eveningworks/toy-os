@@ -1,6 +1,7 @@
 // uopen -- see lib/uopen.h for the two layers and why there is no
 // daemon. The declaration scan moved here from the File Manager, which
 // was the design doc's "the day a second caller wants one".
+#include <stdlib.h>
 #include "lib/uopen.h"
 #include "lib/uconf.h"
 #include "etc_config.h"
@@ -34,9 +35,14 @@ static int entry_exec(const char *name, char *out, int cap) {
     if (snprintf(entry, sizeof entry, DESKTOP_ENTRY_DIR "/%s.desktop", name)
         >= (int)sizeof entry)
         return 0;
-    struct etc_config_buf cfg;
-    if (!uconf_load(entry, &cfg)) return 0;
-    return etc_config_buf_get(&cfg, "Exec", out, (uint32_t)cap) ? 1 : 0;
+    // Heap: the whole document does not fit a ring-3 frame -- see
+    // uconf.c's note.
+    struct etc_config_buf *cfg = malloc(sizeof *cfg);
+    if (!cfg) return 0;
+    int rc = uconf_load(entry, cfg)
+             && etc_config_buf_get(cfg, "Exec", out, (uint32_t)cap);
+    free(cfg);
+    return rc ? 1 : 0;
 }
 
 // The declaration scan: the first entry whose Handles= claims `ext`.
@@ -50,12 +56,18 @@ static int declared_exec(const char *ext, char *out, int cap) {
             continue;
         // Loaded ONCE and asked twice: etc_config_get() re-reads the
         // whole file per key (CLAUDE.md's 54-reads lesson).
-        struct etc_config_buf cfg;
-        if (!uconf_load(entry, &cfg)) continue;
-        char list[ETC_CONFIG_MAX / 4];
-        if (!etc_config_buf_get(&cfg, "Handles", list, sizeof list)) continue;
-        if (!handles_ext(list, ext)) continue;
-        if (etc_config_buf_get(&cfg, "Exec", out, (uint32_t)cap)) return 1;
+        struct etc_config_buf *cfg = malloc(sizeof *cfg);
+        if (!cfg) continue;
+        // A Handles= list is a handful of extensions, not a document --
+        // it is sized independently of the buffer so raising that one
+        // does not put a KiB of list on this frame.
+        char list[128];
+        int hit = uconf_load(entry, cfg)
+                  && etc_config_buf_get(cfg, "Handles", list, sizeof list)
+                  && handles_ext(list, ext)
+                  && etc_config_buf_get(cfg, "Exec", out, (uint32_t)cap);
+        free(cfg);
+        if (hit) return 1;
     }
     return 0;
 }

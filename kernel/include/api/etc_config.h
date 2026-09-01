@@ -41,7 +41,15 @@ int etc_config_get(const char *path, const char *key, char *out, uint32_t out_si
 // because fs_read() REFUSES a nested whole-file read (it has one shared
 // staging buffer, see vfs.c), so a shared static here would be the same
 // hazard with a new name.
-#define ETC_CONFIG_BUF_MAX 1024
+// 4 KiB. It was 1024, which a hand-authored service descriptor with a
+// real comment on it reaches -- and the failure is a half-parsed file
+// whose missing key reads as a broken service. The buffers that were on
+// RING-3 STACKS moved to the heap first (userland/lib/uconf.c,
+// uopen.c): a multi-KiB local against a 2 KiB frame budget does not
+// merely overflow, it steps over the single guard page below the stack.
+// tools/check_config_size.py fails the build before any of that can
+// happen again.
+#define ETC_CONFIG_BUF_MAX 4096
 
 struct etc_config_buf {
     char data[ETC_CONFIG_BUF_MAX];
@@ -74,7 +82,7 @@ int etc_config_load(const char *path, struct etc_config_buf *buf);
 // actually write". In the header rather than one .c file because the
 // split (parser / file I/O) and the ring-3 side all size buffers by it.
 #ifndef ETC_CONFIG_MAX
-#define ETC_CONFIG_MAX 512
+#define ETC_CONFIG_MAX 4096   // matches ETC_CONFIG_BUF_MAX: ONE ceiling
 #endif
 
 uint32_t etc_config_buf_set(const char *in, uint32_t in_len,

@@ -1,4 +1,5 @@
 // See lib/uconf.h.
+#include <stdlib.h>
 #include "lib/uconf.h"
 #include "rt/sys.h"
 #include <string.h>
@@ -37,45 +38,66 @@ int uconf_load(const char *path, struct etc_config_buf *buf) {
     return 1;
 }
 
+// HEAP, NOT THE STACK, and that is what lets ETC_CONFIG_BUF_MAX be
+// bigger than a frame. A struct etc_config_buf is the whole document,
+// so a local one is a multi-KiB frame against a 2 KiB ring-3 budget --
+// and a frame that large does not merely overflow, it steps over the
+// single guard page below the stack (CLAUDE.md's Stack Clash note).
+// The kernel's half of this rewriter already moved to kmalloc for the
+// same reason; this is the ring-3 half catching up.
+//
+// Not a static, which would be smaller AND wrong: these are library
+// functions with no ownership of the caller's context, and a shared
+// buffer here is the re-entrancy hazard etc_config.h's "the buffer is
+// the caller's" note exists to avoid.
 int uconf_get(const char *path, const char *key, char *out, uint32_t out_size) {
-    struct etc_config_buf buf;
-    if (!uconf_load(path, &buf)) {
-        if (out && out_size) out[0] = '\0';
-        return 0;
-    }
-    return etc_config_buf_get(&buf, key, out, out_size);
+    struct etc_config_buf *buf = malloc(sizeof *buf);
+    if (!buf) { if (out && out_size) out[0] = '\0'; return 0; }
+    int ok = uconf_load(path, buf);
+    int rc = ok ? etc_config_buf_get(buf, key, out, out_size) : 0;
+    if (!ok && out && out_size) out[0] = '\0';
+    free(buf);
+    return rc;
 }
 
 int uconf_set(const char *path, const char *key, const char *value) {
-    struct etc_config_buf in;
-    char out[ETC_CONFIG_MAX];
+    struct etc_config_buf *in = malloc(sizeof *in);
+    char *out = malloc(ETC_CONFIG_MAX);
+    int rc = 0;
+    if (!in || !out) goto done;
 
     // A missing file is not an error: the key is appended to an empty
     // document and the file created. Same behaviour as the kernel's
     // etc_config_set(), because it is the same rewriter underneath.
-    if (!uconf_load(path, &in)) {
-        in.valid = 0;
-        in.size = 0;
-        in.data[0] = '\0';
+    if (!uconf_load(path, in)) {
+        in->valid = 0;
+        in->size = 0;
+        in->data[0] = '\0';
     }
 
-    uint32_t n = etc_config_buf_set(in.data, in.size, key, value, out, sizeof out);
-    if (n == 0) return 0;
+    uint32_t n = etc_config_buf_set(in->data, in->size, key, value,
+                                    out, ETC_CONFIG_MAX);
+    if (n == 0) goto done;
 
     // A WRITE THAT CHANGES NOTHING IS NOT PERFORMED, which is what
     // `config` already does for a setting. It stopped being free when
     // /bin/dhcp started running at boot: the nameserver is usually the
     // one already on disk, and every write here is a real filesystem
     // transaction.
-    if (in.valid && in.size == n && !memcmp(in.data, out, n)) return 1;
+    if (in->valid && in->size == n && !memcmp(in->data, out, n)) { rc = 1; goto done; }
 
     int fd = sys_open(path, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
-    if (fd < 0) return 0;
+    if (fd < 0) goto done;
     int64_t w = sys_write(fd, out, n);
     sys_close(fd);
 
     // A short write is a failed write. A config file half-rewritten is
     // worse than one not rewritten at all -- it parses, with the tail
     // of the document missing.
-    return w == (int64_t)n;
+    rc = (w == (int64_t)n);
+
+done:
+    free(in);
+    free(out);
+    return rc;
 }

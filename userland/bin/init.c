@@ -260,6 +260,15 @@ static void logf1(const char *fmt, const char *a) {
     sys_eprint(g_msg);
 }
 
+// A string and two numbers -- the shape a "this is N, the limit is M"
+// message needs. Its own function rather than a variadic one because
+// init's whole logging surface is three call shapes and a va_list here
+// would be the only one.
+static void logf2(const char *fmt, const char *a, unsigned b, unsigned c) {
+    snprintf(g_msg, sizeof g_msg, fmt, a, b, c);
+    sys_eprint(g_msg);
+}
+
 // --- the boot target -------------------------------------------------
 
 // Asks the kernel's settings registry rather than reading
@@ -313,10 +322,21 @@ static int read_file(const char *path, struct etc_config_buf *buf) {
 
     int64_t n = read(fd, buf->data, sizeof buf->data - 1);
     if (n == (int64_t)(sizeof buf->data - 1)) {
+        // NAME THE SIZE AND THE LIMIT, not just the fact. The old
+        // message said "longer than the config parser's buffer" and the
+        // NEXT line said "has no Exec=" -- and the second is the one a
+        // reader acts on, so a long comment presents as a broken
+        // service. Worse, there are two config constants and the
+        // smaller one is not the one that fires here: an hour went into
+        // trimming a file against the wrong number. The message carries
+        // both figures now so nobody has to go and look.
+        struct sys_stat st;
+        uint64_t actual = sys_stat(path, &st) == 0 ? st.size : 0;
         char extra;
         if (read(fd, &extra, 1) > 0)
-            logf1("init: %s is longer than the config parser's buffer -- "
-                  "its last keys are being ignored\n", path);
+            logf2("init: %s is %u bytes, over the %u-byte config limit -- "
+                  "keys past that are IGNORED\n", path,
+                  (unsigned)actual, (unsigned)(sizeof buf->data - 1));
     }
     close(fd);
     if (n <= 0) return 0;

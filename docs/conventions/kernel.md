@@ -2496,11 +2496,29 @@ the same reason.
 means the question cannot be asked, and waiting for an answer that will
 never come turns a working card into a timeout. Proceed.
 
-**AND EVERY `/etc/services.d/` DESCRIPTOR MUST FIT IN 512 BYTES,
-COMMENTS INCLUDED.** That is `etc_config.c`'s buffer. A longer file has
-its last keys silently ignored -- init reports `<name> has no Exec=,
-will not start it`, which reads as a broken service rather than a long
-comment. It happened while documenting the rule above: the explanation
-went to `docs/commands/dhcp.md` and the descriptor kept three lines and
-a pointer. **Reasoning belongs in the man page; the descriptor is
-configuration.**
+**AND A CONFIG FILE MUST FIT THE PARSER'S BUFFER, COMMENTS INCLUDED.**
+`etc_config.c` reads a whole `name=value` document into a fixed buffer;
+a longer file is read SHORT and its last keys are simply not seen. init
+then reports `<name> has no Exec=, will not start it`, which reads as a
+broken service rather than a long comment.
+
+**THERE ARE TWO CONSTANTS AND THE READ PATH USES THE LARGER ONE.**
+`ETC_CONFIG_BUF_MAX` is what a read fits in; `ETC_CONFIG_MAX` is the
+REWRITE path's working buffer and never fires for a read. They are both
+4096 now, deliberately equal -- they were 1024 and 512, and an hour went
+into trimming a descriptor against the wrong one. If you ever split them
+again, say in both places which is which.
+
+**Raising them meant moving buffers off STACKS first.** A whole document
+is 4 KiB and a ring-3 frame budget is 2, so `uconf.c`, `uopen.c` and
+`gui_apps.c` had to go to the heap or to statics -- a local that large
+does not merely overflow, it steps over the single guard page below the
+stack. `-Wframe-larger-than` caught the one that was missed.
+
+**`tools/check_config_size.py` fails the build** on a shipped
+`data/etc/**` file over the limit, so this is a build error with the
+size in it rather than a boot-time message about a missing key. It
+cannot see files written at RUNTIME; those are refused rather than
+truncated, which fails safely but only in the moment.
+
+**Reasoning belongs in the man page; the descriptor is configuration.**

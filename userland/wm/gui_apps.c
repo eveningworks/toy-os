@@ -139,7 +139,12 @@ static void load_entry(const char *file) {
     // triggers it), and froze the desktop for 2.5s under KVM, where
     // each port-I/O instruction is a VM exit. It measured 40ms under
     // TCG, which is why it went unnoticed: every test here runs TCG.
-    struct etc_config_buf cfg;
+    // STATIC, for the reason the dirent arrays above are: a whole
+    // config document is 4 KiB now and a ring-3 frame budget is 2, so a
+    // local one steps over the guard page rather than merely warning.
+    // Safe here on the same grounds -- the WM is one event loop and
+    // this does not recurse.
+    static struct etc_config_buf cfg;
     if (!wm_conf_load(path, &cfg)) return;
 
     char name[GUI_APP_NAME_MAX], exec[GUI_APP_EXEC_MAX];

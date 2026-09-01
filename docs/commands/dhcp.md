@@ -6,7 +6,7 @@
 
 ## Synopsis
 
-    dhcp [-1] [<device>]
+    dhcp [-k] [<device>]
 
 ## Description
 
@@ -81,8 +81,18 @@ T1, half the lease (RFC 2131). A lease that is never renewed expires at
 an hour the server chose, and the machine loses its address with nothing
 to say why.
 
-`-1` is the old ask-and-apply-and-exit behaviour, and is what you want
-typing this at a prompt — it will not sit there holding the terminal.
+**One-shot is the default**; `-k` is what keeps it resident, and the
+service descriptor passes it. The other way round was tried and was
+wrong: `dhcp net0` typed at a prompt never returned, because the
+supervisor does not exit. A command that holds the terminal unless you
+know a flag is a worse default than one that needs a flag for the new
+behaviour. (`-1` is accepted as a no-op, since it is what the first
+version of this called the default.)
+
+Deciding it from `isatty()` was the other candidate — this program
+already uses that to choose *where diagnostics go* — and was rejected:
+getting the log destination wrong is cosmetic, getting this wrong hangs
+a prompt.
 
 Two honest limits. It does **not** distinguish RENEWING (unicast to the
 leasing server) from REBINDING (broadcast at T2) — it broadcasts
@@ -125,11 +135,32 @@ claim, so neither is the end of the run.
 worked, `host` for what the nameserver is for, and
 `docs/conventions/kernel.md`'s networking entry for the layering.
 
-## The service descriptor has a 512-byte budget
+## Its diagnostics go to the kernel log when it is a service
+
+A service started by init has **no stdout anybody reads**, so every
+`printf` here reached nothing — which is how a boot that fell back to
+link-local left no record of why, and why the first diagnosis of it had
+to be done by adding up timings from `dmesg`. It writes to fd 2 (the
+kernel log) when stdout is not a terminal, and to the terminal when it
+is, so `dmesg` carries the boot story and a prompt still shows you the
+answer.
+
+## The service descriptor has a size budget
 
 `/etc/services.d/dhcp` — like every descriptor — is read through
-`etc_config.c`'s 512-byte buffer, **comments included**. A file over
-that has its last keys silently ignored, and init reports
-`dhcp has no Exec=, will not start it`. That is not hypothetical: it
-happened while writing the comment that used to explain all of the
-above, which is why the reasoning lives on this page instead.
+`etc_config.c`'s buffer, **comments included**, and a file over that has
+its last keys silently ignored. It happened while writing the comment
+that used to explain all of the above, which is why the reasoning lives
+on this page instead.
+
+The limit is `ETC_CONFIG_BUF_MAX`, now **4096**. It was 1024, which a
+descriptor with a real comment on it reaches. Note there are *two*
+config constants and this is not the smaller one — an hour went into
+trimming this file against `ETC_CONFIG_MAX`, which is the **rewrite**
+path's buffer and never fires for a read. They are the same number now,
+and `tools/check_config_size.py` fails the build before either can bite
+again.
+
+**And arguments go in `Args=`, not on `Exec=`.** `Exec=/bin/dhcp -k` is
+reported as `dhcp failed to start`; the key that carries them is
+`Args=`, as `tftpd`'s descriptor has always shown.

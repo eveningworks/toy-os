@@ -1,13 +1,13 @@
 # An address for every card that has none, and it KEEPS it.
 #
-# Waits for carrier before asking, then stays resident and renews at T1.
-# `dhcp -1` is the old ask-and-exit behaviour.
+# `-k` stays resident: waits for carrier, retries a failed DISCOVER and
+# renews at T1. A bare `dhcp` asks once and exits.
 #
-# Restart=always: a service with a timer now, not a job that finishes.
-#
-# THE WHOLE FILE MUST FIT IN 512 BYTES, comments included -- that is
-# etc_config.c's buffer. docs/commands/dhcp.md has the reasoning.
+# Arguments go in Args=, not on Exec=.
+# The whole file must fit in 512 bytes, comments included.
+# See docs/commands/dhcp.md.
 Name=dhcp
 Description=Ask the network for an address, and keep it
 Exec=/bin/dhcp
+Args=-k
 Restart=always
