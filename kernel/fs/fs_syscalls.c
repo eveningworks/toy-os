@@ -96,6 +96,18 @@ static void listdir_collect(const char *name, uint32_t size, int is_dir) {
     g_listdir_count++;
 }
 
+// Resolve the PARENT as its own step before creating anything: Linux's
+// path_parentat() shape, where ENOENT/ENOTDIR come from the walk and
+// ENOSPC from the create. fs.h reports one 0 for all three, so a caller
+// that skips this can only guess -- and open() discarded even the 0.
+static int parent_dir_err(const char *path) {
+    char parent[FS_PATH_MAX];
+    if (!k_path_dirname(path, parent, sizeof parent)) return -ENAMETOOLONG;
+    if (!fs_exists(parent)) return -ENOENT;
+    if (!fs_is_dir(parent)) return -ENOTDIR;
+    return 0;
+}
+
 int sys_open(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
 
@@ -152,9 +164,34 @@ int sys_open(struct syscall_ctx *c) {
                 klog_write("syscall: open() rejected -- fd table full\n");
                 c->regs[14] = (uint64_t)(int64_t)-EMFILE;
             } else {
+                // The descriptor is reserved BEFORE the file work and
+                // put back if that work fails -- Linux's
+                // get_unused_fd_flags()/put_unused_fd() order, so a
+                // refusal here cannot leak the slot it took.
+                int ferr = 0;
+                const char *why = 0;
                 if (want_write) {
-                    if (!exists) fs_touch(name);
-                    if (want_trunc) fs_write(name, "", 0); // 0 = overwrite, not append
+                    if (!exists) {
+                        ferr = parent_dir_err(name);
+                        if (ferr)
+                            why = ferr == -ENOTDIR ? "a path component is not a directory"
+                                : ferr == -ENOENT  ? "no such directory to create it in"
+                                                   : "the path is too long";
+                        else if (!fs_touch(name)) {
+                            ferr = -ENOSPC; why = "the record table is full";
+                        }
+                    }
+                    // 0 = overwrite, not append. Discarding this left an
+                    // fd over a file that still held its old contents.
+                    if (!ferr && want_trunc && !fs_write(name, "", 0)) {
+                        ferr = -EIO; why = "truncate refused";
+                    }
+                }
+                if (ferr) {
+                    fd_close(pml4, fd);
+                    klog_printf("syscall: open() rejected -- %s\n", why);
+                    c->regs[14] = (uint64_t)(int64_t)ferr;
+                    return 0;
                 }
                 k_strcpy(fd_desc[di].file.name, name);
                 fd_desc[di].file.mode = want_write ? FD_MODE_WRITE : FD_MODE_READ;
@@ -347,7 +384,8 @@ int sys_getcwd(struct syscall_ctx *c) {
 // call, map "it returned 0" onto a reason. The reasons are guesses only
 // where fs.h genuinely cannot say more -- fs_mkdir() reports one 0 for
 // "exists", "no parent" and "the disk refused", so the ones this CAN
-// distinguish are checked first rather than collapsed into -EIO.
+// distinguish are checked first (fs_exists(), then parent_dir_err())
+// rather than collapsed into one code.
 int sys_mkdir(struct syscall_ctx *c) {
     char path[FS_PATH_MAX];
     int err = resolve_user_path(c->pml4, c->a0, path);
@@ -357,9 +395,14 @@ int sys_mkdir(struct syscall_ctx *c) {
     } else if (fs_exists(path)) {
         klog_write("syscall: mkdir() rejected -- already exists\n");
         c->regs[14] = (uint64_t)(int64_t)-EEXIST;
+    } else if ((err = parent_dir_err(path)) != 0) {
+        klog_write(err == -ENOTDIR
+                   ? "syscall: mkdir() rejected -- a path component is not a directory\n"
+                   : "syscall: mkdir() rejected -- no such parent directory\n");
+        c->regs[14] = (uint64_t)(int64_t)err;
     } else if (!fs_mkdir(path)) {
-        klog_write("syscall: mkdir() failed\n");
-        c->regs[14] = (uint64_t)(int64_t)-ENOENT; // missing parent is the usual cause
+        klog_write("syscall: mkdir() failed -- the record table is full\n");
+        c->regs[14] = (uint64_t)(int64_t)-ENOSPC;
     } else {
         c->regs[14] = 0;
     }

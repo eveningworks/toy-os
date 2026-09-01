@@ -84,6 +84,34 @@ int main(void) {
     check(fd >= 0, "the probe file opens with a free descriptor table");
     if (fd >= 0) sys_close(fd);
 
+    // --- O_CREAT into a directory that is not there -------------------
+    // The failure this was written for: sys_open() discarded
+    // fs_touch()'s 0, so this returned a working-looking fd and created
+    // nothing -- silent at both the syscall and, through tftpd, the
+    // network. What the positive control actually reddens is the first
+    // check; the third is here for the OTHER failure -- a version that
+    // reports the error and creates the file anyway.
+    fd = sys_open("/definitely/not/here.txt", SYS_O_WRITE | SYS_O_CREAT);
+    check(fd < 0, "open(O_CREAT) into a missing directory fails");
+    check_errno(sys_errno(), ENOENT, "open(O_CREAT) with no parent directory");
+    fd = sys_open("/definitely/not/here.txt", 0);
+    check(fd < 0, "and the file was NOT created");
+    if (fd >= 0) sys_close(fd);
+
+    // A parent that exists and is a FILE. Distinct from ENOENT: one
+    // says the path is absent, the other that it is wrong.
+    fd = sys_open(PROBE "/child.txt", SYS_O_WRITE | SYS_O_CREAT);
+    check(fd < 0, "open(O_CREAT) under a file used as a directory fails");
+    check_errno(sys_errno(), ENOTDIR, "open(O_CREAT) with a file as the parent");
+    if (fd >= 0) sys_close(fd);
+
+    // mkdir() answers the same two, having previously guessed ENOENT
+    // for every refusal.
+    check(sys_mkdir("/definitely/not/here") == -1 && sys_errno() == ENOENT,
+          "mkdir() with no parent directory is -1 ENOENT");
+    check(sys_mkdir(PROBE "/sub") == -1 && sys_errno() == ENOTDIR,
+          "mkdir() under a file is -1 ENOTDIR");
+
     // --- EMFILE: exhaust this process's table for real ------------------
     // FD_MAX is 16 per address space and 0/1/2 are already taken, so
     // this runs out well before the array does. Keeping every fd open is

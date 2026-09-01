@@ -362,9 +362,10 @@ manual steps to be worth automating:
   destination ROOT, not just subdirectories** -- a first sync to a path
   that did not exist wrote every file into nowhere while TFTP reported
   each one as sent, which `/bin` and `/lib` hid by already existing.
-  That second one is a real OS bug as well, and it is in
-  `docs/bugs.md`: `open()` with `O_CREAT` accepts a missing parent
-  directory and reports success.
+  That second one was a real OS bug as well, and it is FIXED: `open()`
+  with `O_CREAT` answers -ENOENT for a missing parent now, so tftpd
+  sends a TFTP error instead of acknowledging a discarded write. `sync`
+  still creates the root, because a correct refusal is not a directory.
 
   **It is a PUSH, and the pull is the better shape** -- see
   `docs/update-design.md`, which argues for a `/bin/update` that fetches

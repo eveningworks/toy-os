@@ -2163,3 +2163,48 @@ capability nothing exercised was broken in a way no test could see,
 because every test used the sizes that happened to work. A second
 implementation of a format is only as complete as the biggest thing
 anyone has fed it.
+
+## The parent directory is resolved as its own step, rather than giving `fs_ops` an errno
+
+`open("/tmp/no/such/probe.txt", O_WRONLY|O_CREAT)` returned a working
+descriptor and created nothing. `sys_open()` called `fs_touch()` and
+threw the answer away; TFS3 had refused correctly all along. `touch`
+exited 0, `tftpd` acknowledged every block, and `tools/remote.py sync`
+reported a whole tree as sent into a directory that did not exist -- the
+failure was silent at the syscall, at the program and at the protocol.
+
+The obvious fix is to make `fs_touch()`/`fs_mkdir()` return a negative
+errno instead of 1/0, since the backends already know exactly why they
+refused. That is the better long-term shape and it was NOT taken here.
+`fs.h`'s 1/0 contract is implemented three times (TFS3, ramfs, FAT32),
+consumed by every `fs_*` caller in the kernel and by `apps/shell_fs.c`
+and `kernel/lib/json.c`, and the diff would be far larger than the
+defect -- a one-site discarded return.
+
+What went in instead is `parent_dir_err()` in `kernel/fs/fs_syscalls.c`:
+`k_path_dirname()` the target, then require the parent to exist and to
+be a directory. It answers `-ENOENT`, `-ENOTDIR`, or 0, and both
+`sys_open()` and `sys_mkdir()` ask it before creating anything.
+
+**This is Linux's shape, not a workaround for not having the other
+one.** `path_parentat()` resolves the parent as a separate step, which
+is precisely why `ENOENT`/`ENOTDIR` come from the walk while `ENOSPC`
+comes from the create -- the split exists in a kernel that could easily
+have threaded one error code through instead. Windows does the same,
+distinguishing `OBJECT_PATH_NOT_FOUND` from `OBJECT_NAME_NOT_FOUND`.
+Splitting the walk from the create is what lets a single 1/0 create
+still yield three honest answers, so `sys_mkdir()` stopped guessing
+`-ENOENT` for a full record table in the same change.
+
+Two things to know if you edit this. The check costs an `fs_exists()`
+plus an `fs_is_dir()` and runs only on the creating path, so an ordinary
+`open()` of an existing file pays nothing. And the descriptor is
+reserved BEFORE the filesystem work and closed again if that work fails
+-- `get_unused_fd_flags()`/`put_unused_fd()`'s order, kept so that a
+full descriptor table is still reported without having created a file
+first, and so a refusal cannot leak the slot it took.
+
+`fs_write()`'s return was discarded on the adjacent line for the same
+reason, which meant an `O_TRUNC` open whose truncate failed handed back
+a descriptor over a file that still held its old contents. That is
+`-EIO` now.

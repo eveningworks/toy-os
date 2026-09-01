@@ -500,9 +500,9 @@ static void save_lease(const char *dev, const uint8_t *mac,
     if (!l->ip || !l->seconds) return;
     char LEASE_FILE[LEASE_MAX];
     lease_path(LEASE_FILE, sizeof LEASE_FILE, dev);
-    // The directory first: `open()` with O_CREAT does NOT create a
-    // missing parent here, and reports success while writing nothing
-    // (docs/bugs.md), so a lease would silently never persist.
+    // The directory first: `open()` with O_CREAT does not create a
+    // missing parent (POSIX), so without this a lease would never
+    // persist -- loudly, as -ENOENT, since the parent check landed.
     // ASKED FIRST rather than created unconditionally: the kernel logs
     // `mkdir() rejected -- already exists`, and on a machine that
     // renews for weeks that is a line of noise per renewal in a ring
