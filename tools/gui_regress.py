@@ -116,6 +116,7 @@ TOOLS = [
     ("uterm", "uterm_test.py", "Terminal + the ring-3 shell"),
     ("uapp", "uapp_test.py", "the TWP resize handshake"),
     ("keyup", "keyup_test.py", "key RELEASES reaching a ring-3 client"),
+    ("hover", "hover_test.py", "a hover change REPAINTS, not just damages"),
     ("scrollbar", "scrollbar_test.py", "scrollbar behaviour, per the guidelines"),
     ("menubar", "menubar_test.py", "menu bar, submenus and the status bar"),
     ("forcequit", "forcequit_test.py", "not-responding detection and force quit"),
@@ -195,6 +196,7 @@ COST_S = {
     "uidemo": 17,
     "blank": 17,
     "uterm": 16,
+    "hover": 5,        # eight injected moves and two counter reads
     "singleinst": 16,  # six launches, each waiting out a client's first frame
     "scrollbar": 15,
     "settings": 20,   # +4 scroll checks, incl. a resize and a wheel

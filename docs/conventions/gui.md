@@ -2305,6 +2305,40 @@ dropped with it, so `g_dbg_reply_ready` was set on the FIRST chunk of a
 multi-chunk reply -- a race that had not been lost only because the
 compositor sends its chunks back to back without yielding.
 
+## DAMAGING A RECT DOES NOT ASK FOR A FRAME -- SET `redraw_pending` TOO
+
+`wm_damage_rect()` accumulates a rectangle and nothing else. It does not
+schedule a repaint, and `wm.c`'s frame loop only calls
+`wm_render_frame()` when `redraw_pending` is set -- a plain mouse move
+otherwise takes the CURSOR-ONLY path, which moves the sprite and
+repaints no scene at all.
+
+So **anything that changes what the screen should show must set
+`redraw_pending`**, not merely damage. Damage says WHERE to repaint;
+`redraw_pending` says WHETHER to.
+
+**The failure is silent and looks like slowness, not breakage.** A
+change that only damages appears on the next frame something ELSE asks
+for -- and on an idle desktop that is the tray clock, once a second. The
+Start menu's hover highlight sat like that: the cursor moved smoothly on
+the cheap path while the highlight arrived up to a second later, which
+reads as "laggy", not as "broken", and no settled screenshot can see it
+because settling outlasts the clock.
+
+**Verify it by counting frames, never by looking.** `gui state` reports
+`scene repaints` -- `wm_render_frame()` calls, excluding the cursor-only
+path -- so a test can ask "did that input repaint anything?" without
+pixels. `tools/hover_test.py` is the guard, and it asserts BOTH
+directions: eight hover changes must repaint, and eight moves over
+nothing must not. Without the second half, a WM that repainted on every
+move would pass.
+
+**The regression to learn from**: e960ad3 moved every overlay's hover
+into one table (`wm_overlay.c`) so that no popup could be forgotten --
+and dropped the `redraw_pending = 1` the per-overlay code had carried,
+while fixing this exact symptom on the volume flyout. `wm_overlay_hover()`
+RETURNS whether the hover changed; the call site ignored it.
+
 ## THE COMPOSITOR SLEEPS BETWEEN FRAMES, AND TWO THINGS MUST DEFEAT THE WAIT.
 
 `wm.c`'s frame loop no longer calls `sys_yield()` -- that returned

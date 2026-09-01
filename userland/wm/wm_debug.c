@@ -793,6 +793,7 @@ static void cmd_state(struct dbg_out *o, int json) {
     dbg_out_printf(o, "dragging=%d resizing=%d content_pressed=%d redraw_pending=%d\r\n",
                  dragging, resizing, content_pressed, redraw_pending);
     dbg_out_printf(o, "injected events pending: %d\r\n", wm_debug_input_pending());
+    dbg_out_printf(o, "scene repaints: %u\r\n", wm_scene_frames());
     dbg_out_write(o, "launched (still running):");
     int any = 0;
     for (int i = 0; i < wm_launched_max(); i++) {

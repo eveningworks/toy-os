@@ -312,6 +312,11 @@ int wm_client_check_liveness(void);
 // means "no damage reported -- full-screen repaint".
 void wm_debug_damage(int *out_x, int *out_y, int *out_w, int *out_h);
 
+// How many SCENE repaints have happened -- wm_render_frame() calls, not
+// the cheap cursor-only path. `gui state` reports it so a test can tell
+// "this input repainted something" from "the pointer sprite moved".
+uint32_t wm_scene_frames(void);
+
 // Damage verification (debug): render every frame twice and report any
 // pixel the damage-limited pass got wrong. See wm_render.c's own
 // comment for the bug class it exists to catch. Off by default.

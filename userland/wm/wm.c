@@ -1012,7 +1012,16 @@ void wm_run(void) {
         // whichever one was forgotten had an invisible hover rather
         // than a slow one, because a move alone takes the cursor-only
         // path below and never repaints the scene.
-        if (mouse_moved) wm_overlay_hover(mx, my, buttons);
+        // AND THE REPAINT IS ASKED FOR, not merely damaged. wm_damage_rect()
+        // records a rectangle; it does not schedule a frame, and a plain
+        // move takes the cursor-only path below -- so a hover change that
+        // only damaged was invisible until something ELSE repainted, which
+        // on an idle desktop is the tray clock, once a second. That is the
+        // "laggy highlight" symptom exactly, and e960ad3 introduced it by
+        // moving each overlay's hover into one table and dropping the
+        // `redraw_pending = 1` the per-overlay code had carried -- while
+        // fixing the same symptom on the volume flyout.
+        if (mouse_moved && wm_overlay_hover(mx, my, buttons)) redraw_pending = 1;
 
         // Closes the Start menu once a just-clicked row's brief flash
         // has shown long enough -- independent of clicks/movement, so

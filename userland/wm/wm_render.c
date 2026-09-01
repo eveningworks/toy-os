@@ -1342,7 +1342,17 @@ static void damage_cursor(int mx, int my) {
     wm_damage_rect(ox - 1, oy - 1, w + 2, h + 2);
 }
 
+// SCENE repaints, as distinct from the cursor-only path beside it in
+// wm.c. It is here so a test can ask "did that input actually repaint
+// anything?" without reading pixels -- the question a hover bug turns
+// on, and one no screenshot answers reliably because the tray clock
+// repaints once a second anyway and hides the difference.
+static uint32_t g_scene_frames;
+
+uint32_t wm_scene_frames(void) { return g_scene_frames; }
+
 void wm_render_frame(int mx, int my) {
+    g_scene_frames++;
     compute_window_damage();
 
     // The FIRST frame of a GUI session is always a full repaint, never

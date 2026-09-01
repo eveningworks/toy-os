@@ -2910,6 +2910,30 @@ window without going through it will find its layout polls timing out.
   ON DEMAND: it needs a host gcc and glibc, and the gate must not start
   requiring either.
 
+- **`hover_test.py`** -- that a hover change REPAINTS rather than only
+  recording damage. Run by `gui_regress.py`.
+
+  **It counts frames, not pixels, and that is the whole point.** The
+  obvious test -- warp the cursor onto a menu row and photograph it --
+  cannot see this bug: the tray clock forces a repaint once a second, so
+  a settled screenshot finds the highlight correctly placed, having
+  arrived up to a second late. That IS the symptom, and settling
+  launders it away. `gui state`'s `scene repaints` counter answers the
+  real question.
+
+  It asserts BOTH directions: eight hover changes must repaint, and
+  eight moves with no overlay open must not -- without the second half a
+  WM that repainted on every move would pass.
+
+  Its moves are INJECTED rather than warped, against CLAUDE.md's usual
+  advice, because it tests whether a change caused a FRAME rather than
+  whether a state survives a capture -- and an injected move is one
+  console round trip against a warp's several hundred milliseconds,
+  which is what keeps the tray clock out of the measurement. The first
+  version's "moving within one row must not repaint" check was wrong for
+  the matching reason: an injected position snaps back to the real
+  pointer next iteration, so each move changed the hover twice.
+
 - **`guictl_test.py`** -- `/bin/guictl`, the ring-3 front end for the
   window manager's `gui` diagnostics. ATTACHES to a running `vm.py`
   guest and needs a desktop up.

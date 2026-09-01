@@ -740,6 +740,7 @@ whenever a headline here tells you something you did not already know.
 - **THE WALLPAPER IS A REGISTERED SETTING, AND ITS VALUE IS A NAME**
 - **THE START BUTTON'S APPEARANCE IS A REGISTERED SETTING**
 - **THE `gui` DIAGNOSTICS ARE REACHABLE FROM RING 3 NOW: `/bin/guictl`**
+- **DAMAGING A RECT DOES NOT ASK FOR A FRAME -- SET `redraw_pending` TOO**
 - **THE COMPOSITOR SLEEPS BETWEEN FRAMES, AND TWO THINGS MUST DEFEAT THE WAIT**
 - **AN OVERLAY IS A ROW IN A TABLE, AND THE TABLE DRIVES DRAWING, CLICKS AND HOVER**
 - **THE TRAY HAS A VOLUME FLYOUT, AND THE PANEL OWNS IT TOO**
@@ -1268,7 +1269,8 @@ cost".
   `compositor_test.py`, `compositor_death_test.py`, `crashtest_test.py`,
   `cursor_theme_test.py`, `desktop_entries_test.py`, `dialog_test.py`,
   `filemanager_test.py`, `font_test.py`, `forcequit_test.py`,
-  `gfxdemo_test.py`, `icons_test.py`, `idle_desktop_test.py`,
+  `gfxdemo_test.py`, `hover_test.py`, `icons_test.py`,
+  `idle_desktop_test.py`,
   `imgview_test.py`, `keyup_test.py`, `menubar_test.py`,
   `mines_test.py`, `notepad_client_test.py`, `player_test.py`,
   `sched_gui_test.py`, `screen_surface_test.py`, `scrollbar_test.py`,
