@@ -46,7 +46,9 @@ import os
 import re
 import socket
 import sys
+import tempfile
 import time
+import zlib
 
 # RFC 854.
 IAC, DONT, DO, WONT, WILL, SB, SE = 255, 254, 253, 252, 251, 250, 240
@@ -182,37 +184,63 @@ def render(text):
     return lines
 
 
-def do_exec(host, port, commands, timeout):
-    t = Telnet(host, port, timeout)
-    rc = 0
-    try:
+class Session:
+    """One shell session, with the marker framing `exec` documents.
+
+    Its own class because `sync` runs dozens of commands and a session
+    per command costs a TCP connect and a settle each time -- which is
+    most of the wall clock when the commands themselves are `sum`.
+    """
+
+    def __init__(self, host, port, timeout):
+        self.t = Telnet(host, port, timeout)
+        self.timeout = timeout
+        self._n = 0
         # Settle: wait for the shell to say something. A prompt is
         # whatever it is -- we never match on it, only on our markers.
         time.sleep(0.4)
         try:
-            t.s.settimeout(2.0)
-            t.buf += t._strip(t.s.recv(4096))
+            self.t.s.settimeout(2.0)
+            self.t.buf += self.t._strip(self.t.s.recv(4096))
         except (socket.timeout, OSError):
             pass
 
-        for i, cmd in enumerate(commands):
-            marker = f"__done{i}__"
-            t.buf = b""
-            t.send_line(cmd)
-            # The marker echo is the frame. `echo` is a /bin program, so
-            # this also proves the shell is still running commands rather
-            # than sitting in one that never returned.
-            t.send_line(f"echo {marker}")
-            lines = t.read_until_line(marker, timeout)
-            # Drop what the shell echoed back at us -- the two command
-            # lines we typed, each with a prompt in front of it -- and
-            # any blank lines those left at the ends.
-            lines = [ln for ln in lines
-                     if not ln.endswith(cmd) and not ln.endswith(f"echo {marker}")]
-            while lines and not lines[0].strip():
-                lines.pop(0)
-            while lines and not lines[-1].strip():
-                lines.pop()
+    def run(self, cmd, timeout=None):
+        """Run one command, returning its output lines."""
+        marker = f"__done{self._n}__"
+        self._n += 1
+        self.t.buf = b""
+        self.t.send_line(cmd)
+        # The marker echo is the frame. `echo` is a /bin program, so
+        # this also proves the shell is still running commands rather
+        # than sitting in one that never returned.
+        self.t.send_line(f"echo {marker}")
+        lines = self.t.read_until_line(marker, timeout or self.timeout)
+        # Drop what the shell echoed back at us -- the two command
+        # lines we typed, each with a prompt in front of it -- and
+        # any blank lines those left at the ends.
+        lines = [ln for ln in lines
+                 if not ln.endswith(cmd) and not ln.endswith(f"echo {marker}")]
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        while lines and not lines[-1].strip():
+            lines.pop()
+        return lines
+
+    def close(self):
+        self.t.close()
+
+
+def do_exec(host, port, commands, timeout):
+    rc = 0
+    try:
+        sess = Session(host, port, timeout)
+    except OSError as e:
+        print(f"remote: {e}", file=sys.stderr)
+        return 1
+    try:
+        for cmd in commands:
+            lines = sess.run(cmd, timeout)
             if len(commands) > 1:
                 print(f"--- {cmd} ---")
             print("\n".join(lines))
@@ -220,7 +248,7 @@ def do_exec(host, port, commands, timeout):
         print(f"remote: {e}", file=sys.stderr)
         rc = 1
     finally:
-        t.close()
+        sess.close()
     return rc
 
 
@@ -310,7 +338,7 @@ def _negotiate(s, host, port, req, timeout):
     raise RuntimeError("no reply to the request")
 
 
-def do_put(host, port, local, remote, timeout):
+def do_put(host, port, local, remote, timeout, quiet=False):
     with open(local, "rb") as f:
         data = f.read()
     s = _tftp_socket(timeout)
@@ -364,7 +392,8 @@ def do_put(host, port, local, remote, timeout):
             sent_bytes = min(acked * blksize, len(data))
     finally:
         s.close()
-    print(f"remote: put {local} -> {remote}, {sent_bytes} bytes")
+    if not quiet:
+        print(f"remote: put {local} -> {remote}, {sent_bytes} bytes")
     return 0
 
 
@@ -428,6 +457,154 @@ def do_get(host, port, remote, local, timeout):
 
 
 
+# --- sync ---------------------------------------------------------------
+#
+# WHY NOT JUST PUSH EVERYTHING. `/bin` is ~24 MB across ~90 files, and
+# TFTP to the laptop runs about 430 KB/s, so a blind push is a couple of
+# minutes every time -- for a change that usually moves three binaries.
+# The pieces to do better already exist: `/bin/sum` (with libhash.so)
+# can hash the machine's own files, so the host can ask what is already
+# right and send only what is not. rsync's idea, minus the rolling
+# checksum, which buys nothing for files this size.
+#
+# CRC32 AND SIZE, NOT SHA-256. This decides whether to re-send a file
+# the developer just built, not whether to trust one -- and crc32 is
+# what the guest computes fastest. The size is carried alongside because
+# crc32 collides readily on adversarial input and essentially never on
+# (crc, size) for two builds of the same program. `sum -a sha256` is
+# there if a reason to distrust it ever turns up.
+#
+# ONE SESSION FOR EVERY QUERY, one TFTP transfer per file that differs.
+# The `sum` calls are batched because a shell line has a length limit
+# and 90 paths do not fit in one.
+
+# THE COMMAND LINE IS 128 BYTES, so the manifest goes over as a FILE.
+# `KLINE_MAX` (kernel/include/api/klineedit.h) bounds a shell line, and
+# a `sum` with a dozen paths runs past it -- the line is TRUNCATED
+# mid-path, so every file after the cut reports "no such file" and looks
+# like it needs sending. The first version batched by path COUNT and
+# re-sent 51 of 86 files on a second run against a machine that was
+# already correct. `sum -c LISTFILE` reads the expected checksums from a
+# file instead, which is one command whatever the tree's size.
+
+SUMS_REMOTE = "/tmp/sync.sums"
+
+
+def _local_manifest(local_dir):
+    """(relative path -> (crc32, size)) for everything under `local_dir`."""
+    out = {}
+    for root, _dirs, files in os.walk(local_dir):
+        for name in sorted(files):
+            full = os.path.join(root, name)
+            if os.path.islink(full):
+                continue
+            rel = os.path.relpath(full, local_dir)
+            data = open(full, "rb").read()
+            out[rel.replace(os.sep, "/")] = (zlib.crc32(data), len(data))
+    return out
+
+
+def _remote_mismatches(sess, host, tftp_port, remote_dir, want, timeout):
+    """Which of `want` the machine does NOT already have, byte for byte.
+
+    Asks the machine rather than trusting a local record of what was
+    sent: a record is a second source of truth, and the case that
+    matters most -- somebody rebuilt and did not deploy -- is exactly
+    when it would be wrong.
+    """
+    base = remote_dir.rstrip("/")
+    lines = "".join(f"{crc} {size} {base}/{rel}\n"
+                    for rel, (crc, size) in sorted(want.items()))
+    tmp = os.path.join(tempfile.gettempdir(), "toyos_sync.sums")
+    with open(tmp, "w") as f:
+        f.write(lines)
+    if do_put(host, tftp_port, tmp, SUMS_REMOTE, timeout, quiet=True):
+        raise RuntimeError("could not send the checksum manifest")
+
+    bad = []
+    for line in sess.run(f"sum -c {SUMS_REMOTE}", timeout):
+        # "<path>: OK", "<path>: FAILED", "<path>: FAILED open or read".
+        # Its own summary lines start with "sum:" and are not results.
+        if line.startswith("sum:") or ": " not in line:
+            continue
+        path, _, verdict = line.rpartition(": ")
+        if verdict.startswith("OK"):
+            continue
+        if path.startswith(base + "/"):
+            bad.append(path[len(base) + 1:])
+    return bad
+
+
+def do_sync(host, telnet_port, tftp_port, local_dir, remote_dir, timeout,
+            dry_run=False):
+    if not os.path.isdir(local_dir):
+        print(f"remote: {local_dir} is not a directory", file=sys.stderr)
+        return 1
+
+    want = _local_manifest(local_dir)
+    if not want:
+        print(f"remote: {local_dir} is empty", file=sys.stderr)
+        return 1
+
+    try:
+        sess = Session(host, telnet_port, timeout)
+    except OSError as e:
+        print(f"remote: {e}", file=sys.stderr)
+        return 1
+
+    try:
+        todo = _remote_mismatches(sess, host, tftp_port, remote_dir, want,
+                                  timeout)
+
+        # Every directory a file needs, THE ROOT INCLUDED, parents
+        # first. `mkdir` on one that exists is harmless, and asking
+        # first would cost a round trip per directory to save nothing.
+        #
+        # The root is the part that was missing: a first sync to a path
+        # that does not exist yet wrote every file into nowhere, and
+        # TFTP reported each one as sent. /bin and /lib already existed,
+        # so only a scratch directory exposed it.
+        base = remote_dir.rstrip("/")
+        dirs = {base}
+        for r in todo:
+            d = os.path.dirname(r)
+            while d:
+                dirs.add(f"{base}/{d}")
+                d = os.path.dirname(d)
+        dirs = sorted(dirs, key=lambda x: x.count("/"))
+        bytes_todo = sum(want[r][1] for r in todo)
+        print(f"remote: {len(want)} file(s), {len(todo)} to send "
+              f"({bytes_todo / 1024.0:.0f} KB)")
+        if dry_run:
+            for r in todo:
+                print(f"  would send {r}")
+            return 0
+        for d in dirs:
+            sess.run(f"mkdir {d}", timeout)
+    except (TimeoutError, EOFError, RuntimeError) as e:
+        print(f"remote: {e}", file=sys.stderr)
+        return 1
+    finally:
+        sess.close()
+
+    sent = 0
+    for r in todo:
+        local = os.path.join(local_dir, r.replace("/", os.sep))
+        remote = f"{remote_dir.rstrip('/')}/{r}"
+        rc = do_put(host, tftp_port, local, remote, timeout)
+        if rc:
+            print(f"remote: FAILED at {r} after {sent} file(s)",
+                  file=sys.stderr)
+            return 1
+        sent += 1
+
+    if not todo:
+        print("remote: already up to date")
+    else:
+        print(f"remote: sent {sent} file(s)")
+    return 0
+
+
 def do_shell(host, port, timeout):
     """A raw interactive session, for a human. Ctrl-] quits."""
     import termios
@@ -478,6 +655,13 @@ def main():
     g.add_argument("remote")
     g.add_argument("local")
 
+    y = sub.add_parser("sync", help="copy a directory tree, skipping what "
+                                    "already matches")
+    y.add_argument("local")
+    y.add_argument("remote")
+    y.add_argument("--dry-run", action="store_true",
+                   help="say what would be sent, send nothing")
+
     sub.add_parser("shell", help="an interactive session (Ctrl-] quits)")
 
     a = ap.parse_args()
@@ -488,6 +672,9 @@ def main():
             return do_put(a.host, a.tftp_port, a.local, a.remote, a.timeout)
         if a.cmd == "get":
             return do_get(a.host, a.tftp_port, a.remote, a.local, a.timeout)
+        if a.cmd == "sync":
+            return do_sync(a.host, a.telnet_port, a.tftp_port,
+                           a.local, a.remote, a.timeout, a.dry_run)
         if a.cmd == "shell":
             return do_shell(a.host, a.telnet_port, a.timeout)
     except (OSError, RuntimeError) as ex:

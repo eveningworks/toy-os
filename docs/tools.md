@@ -333,6 +333,7 @@ manual steps to be worth automating:
       python3 tools/remote.py --host 192.168.200.104 put build/userland/bin/ls /bin/ls
       python3 tools/remote.py --host 192.168.200.104 get /tmp/crash.log ./crash.log
       python3 tools/remote.py --host 192.168.200.104 shell      # Ctrl-] quits
+      python3 tools/remote.py --host 192.168.200.104 sync seed/sync/bin /bin
 
   **This is the tool for the BARE-METAL laptop**, which `vm.py` cannot
   reach: `vm.py` drives a QEMU guest through its serial debug console,
@@ -342,6 +343,34 @@ manual steps to be worth automating:
   existed, investigating any of them meant sitting at the machine. The
   guest side is `/bin/telnetd` and `/bin/tftpd`, both shipped DISABLED
   (`service enable telnetd`).
+
+  **`sync` sends only what differs, and ASKS the machine rather than
+  remembering.** It uploads a manifest of `<crc32> <size> <path>` and
+  runs `sum -c` over it, so the answer comes from the files that are
+  actually there -- a local record of what was last pushed is a second
+  source of truth, and the case that matters most (somebody rebuilt and
+  did not deploy) is exactly when it would be wrong. Measured against
+  the bare-metal laptop: 79 of 86 files, 22.9 MB, 60 s; a second run
+  moves nothing.
+
+  Two traps it encodes, both found by its own positive control. **The
+  manifest goes over as a FILE because a shell line is 128 bytes** --
+  `KLINE_MAX`; the first version batched `sum` by path COUNT, ran past
+  the limit, and the line was TRUNCATED mid-path, so every file after
+  the cut reported "no such file" and was re-sent: 51 of 86 on a second
+  run against a machine that was already correct. And **it creates the
+  destination ROOT, not just subdirectories** -- a first sync to a path
+  that did not exist wrote every file into nowhere while TFTP reported
+  each one as sent, which `/bin` and `/lib` hid by already existing.
+  That second one is a real OS bug as well, and it is in
+  `docs/bugs.md`: `open()` with `O_CREAT` accepts a missing parent
+  directory and reports success.
+
+  **It is a PUSH, and the pull is the better shape** -- see
+  `docs/update-design.md`, which argues for a `/bin/update` that fetches
+  a manifest over HTTP so the machine needs nothing listening at all.
+  `sync` still earns its place for a machine with no network
+  configuration yet, and for a debug loop over one rebuilt binary.
 
   **One tool rather than "use telnet, then use curl"**, because the two
   halves are always used together and each has a trap that reads as the

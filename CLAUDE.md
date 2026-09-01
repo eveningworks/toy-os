@@ -1262,7 +1262,10 @@ cost".
   tool to `tools/` does not add it here**, and a tool no runner names is
   run when somebody types it, which is never. Never a gate itself.
 - **Drive the BARE-METAL machine** -- `remote.py` (`exec` runs commands
-  and returns text, `put`/`get` move files, `shell` is interactive).
+  and returns text, `put`/`get` move files, `sync` copies a whole tree
+  and sends only what differs, `shell` is interactive). **A PUSH needs
+  `telnetd`/`tftpd` listening, which is why `docs/update-design.md`
+  argues for a pull.**
   `vm.py` cannot reach it: that drives a QEMU guest through its serial
   debug console and the laptop has no serial console attached. Needs
   `service enable telnetd` / `tftpd` on the target, both shipped OFF.
@@ -1530,6 +1533,15 @@ detail there, and keep the pointer here to a line. What each file is:
   the rest: the BKL is what makes SMP shippable before the locking audit
   is done. It carries the measurement of what is single-core in the tree
   today, and the honest case AGAINST.
+- **`docs/update-design.md`** -- how a machine should keep ITSELF up to
+  date: an HTTP manifest of files and checksums, and a `/bin/update`
+  that PULLS. Designed, not built. **Read it before doing anything
+  deploy-shaped**, and note the reason it is a pull: a push needs
+  `telnetd`/`tftpd` running, and both ship disabled because neither
+  authenticates. Its three traps are the updater overwriting itself,
+  replacing a binary another process is running (safe TODAY only
+  because `elf_load()` copies rather than demand-pages), and the kernel
+  living on a read-only FAT32 `/boot`.
 - **`docs/rootfs-design.md`** -- what the root filesystem is allowed to
   be: a PARTITION on a drive, or RAM. Designed, not built. **Read it
   before touching `fs_init()`'s mount policy or adding a backend**, and
