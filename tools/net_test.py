@@ -939,6 +939,17 @@ def phase_dhcp(r, disk, tmp):
         r.check("[dhcp] and a nameserver with it",
                 "nameserver 192.168.76." in out, out.strip()[-400:])
 
+        # INIT-REBOOT: the boot lease is on disk by now, so this run
+        # REQUESTS the address it had rather than discovering a fresh
+        # one. Asserted on THIS run's output, not on dmesg -- a client
+        # run from a prompt logs to the terminal, and only the `-k`
+        # service writes to the kernel log. And asserted on the LINE,
+        # not on the address, because SLIRP hands out the same one
+        # either way: an address that did not move is not evidence that
+        # anything remembered it.
+        r.check("[dhcp] a re-lease asks for the address it already had",
+                "asking for 192.168.76." in out, out.strip()[-400:])
+
         out = sh.run("dhcp", timeout=40.0)
         r.check("[dhcp] a bare run leaves an already-addressed card alone",
                 "already has an address" in out, out.strip()[-400:])
@@ -953,6 +964,20 @@ def phase_dhcp(r, disk, tmp):
         ping = sh.run("ping -c 2 192.168.76.2", timeout=40.0)
         r.check("[dhcp] and the gateway answers on the leased address",
                 "0% packet loss" in ping, ping.strip()[-400:])
+
+        # THE LEASE IS REMEMBERED, so the next boot can ask for the same
+        # address instead of taking whatever is free. Asserted on the
+        # FILE rather than on the address, because SLIRP hands out the
+        # same one either way -- an address that did not move is not
+        # evidence that anything remembered it.
+        lease = sh.run("cat /var/dhcp-net0.lease", timeout=20.0)
+        r.check("[dhcp] the lease is written to /var/dhcp-net0.lease",
+                "ip=192.168.76." in lease, lease.strip()[-400:])
+        r.check("[dhcp] and keyed to the card that holds it",
+                "device=net0" in lease and "mac=" in lease,
+                lease.strip()[-400:])
+        r.check("[dhcp] with the server that granted it, for a unicast renewal",
+                "server=192.168.76.2" in lease, lease.strip()[-400:])
     finally:
         kill(pidfile)
         sh.close()

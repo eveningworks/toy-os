@@ -2502,6 +2502,42 @@ that is neither polled nor on an interrupt, or a sound device the core
 cannot start. Each was previously accepted and then silently did
 nothing, which reads as dead hardware.
 
+## A LEASE IS RENEWED, NOT RE-ASKED, AND A SINGLE SLEEP IS SILENTLY CAPPED
+
+Two rules from one bug, and the second is not about networking at all.
+
+**A RENEWAL AND AN ACQUISITION ARE DIFFERENT MESSAGES.** RFC 2131's
+table (4.3.6): RENEWING and REBINDING carry the address in `ciaddr` and
+send NEITHER a server-id NOR a requested-IP option, while SELECTING
+sends both and leaves `ciaddr` zero. Renewing by calling the
+acquisition path sends "I have no address, give me one" -- and a server
+that cannot reuse an outstanding lease answers with a DIFFERENT one.
+That moved the bare-metal laptop's address `.104 -> .105 -> .106` in
+one afternoon, with no reboot. Where it goes matters too: RENEWING is
+UNICAST to the leasing server, REBINDING broadcasts.
+
+**T1 AND T2 ARE THE SERVER'S TO STATE** (options 58 and 59, which a
+client has to ask for in its parameter list). 1/2 and 7/8 are the
+DEFAULTS for when it does not, not the rule.
+
+**MEASURE EVERY DEADLINE FROM THE ACK, NEVER FROM THE LAST ATTEMPT** --
+a retry that also pushes expiry back never expires, which is how a
+machine keeps an address the server has given away. And **derive the
+state from the clock rather than carrying it in a flag**: the first
+version tracked `rebinding` through its branches and could not reach
+it, because a flat 60-second retry sleep steps over T2. Its own
+positive control caught that.
+
+**ONLY EXPIRY SURRENDERS AN ADDRESS.** A failed renewal is a reason to
+ask again sooner, not to fall back to link-local -- doing that threw
+away a lease with 22 hours left on it.
+
+**AND `SYS_SLEEP_MAX_MS` IS ONE HOUR, ENFORCED SILENTLY.** A longer
+`sys_sleep_ms()` returns EARLY rather than failing, so a caller that
+needs a real deadline must loop against `sys_monotonic_ns()` rather
+than trust one call. This is the root of the bug above: T1 of a
+24-hour lease became an hour, and nothing said so.
+
 ## A NETWORK CLIENT WAITS FOR CARRIER, AND A CONFIG FILE MUST FIT THE PARSER'S BUFFER
 
 Two rules from one change, and both bit within an hour of each other.

@@ -76,10 +76,51 @@ A driver that cannot report carrier (`link_known` 0) is **not** treated
 as down: waiting on an answer that will never come would turn a working
 card into a ten-second delay followed by link-local.
 
-**It renews.** Started as a service it stays resident and re-requests at
-T1, half the lease (RFC 2131). A lease that is never renewed expires at
-an hour the server chose, and the machine loses its address with nothing
-to say why.
+**It renews, as RFC 2131's three states.** Started as a service it stays
+resident and walks them:
+
+    BOUND ---T1---> RENEWING ---T2---> REBINDING ---expiry---> INIT
+             unicast to the      broadcast to        give the
+             leasing server      anyone              address up
+
+**T1 and T2 come from the server when it states them** (options 58 and
+59, which this asks for); 50% and 87.5% of the lease are only the
+defaults for when it does not. Every deadline is measured from the ACK,
+never from the last attempt — a retry that also pushed the expiry back
+would never expire, which is how a machine ends up using an address the
+server gave to somebody else.
+
+**The shape of the message is the point, not the timing.** A renewal
+carries the address in `ciaddr` and sends *neither* a server-id nor a
+requested-IP option; an acquisition does the opposite. Get that wrong
+and you have sent "I have no address, give me one" — and a server that
+cannot reuse an outstanding lease answers with a *different* address.
+That is exactly what an earlier version did, and the bare-metal laptop's
+address stepped `.104 → .105 → .106` in one afternoon without rebooting.
+
+**A failed renewal does not surrender the address.** It keeps retrying —
+at half the time remaining to the next milestone, floored at 60 seconds
+— and gives the address up only at expiry. An earlier version fell back
+to link-local at the *first* failure, throwing away a lease with 22
+hours left on it.
+
+**The lease is remembered, in `/var/dhcp-<device>.lease`.** On the next boot the
+client asks for the address it had (INIT-REBOOT: a broadcast REQUEST
+with the old address in the requested-IP option and `ciaddr` still zero)
+rather than discovering a fresh one — so an address survives a reboot as
+well as a renewal. One file per device, because with no argument
+this configures every unaddressed card and only the *first* is
+supervised — a shared file would be owned by whichever card was
+configured last. It is keyed to the device *and* its MAC as well: an
+adapter swapped between boots gets a different binding, and asking for
+the previous card's address earns a NAK at best, which is acted on
+rather than waited out. Only the address is reused;
+the mask, router and DNS always come from the ACK, because values
+remembered from a different network are worse than none.
+
+A lease is state rather than config, so it lives under `/var` — the
+split the FHS makes and `dhclient` follows with
+`/var/lib/dhcp/dhclient.leases`.
 
 **One-shot is the default**; `-k` is what keeps it resident, and the
 service descriptor passes it. The other way round was tried and was
@@ -94,12 +135,11 @@ already uses that to choose *where diagnostics go* — and was rejected:
 getting the log destination wrong is cosmetic, getting this wrong hangs
 a prompt.
 
-Two honest limits. It does **not** distinguish RENEWING (unicast to the
-leasing server) from REBINDING (broadcast at T2) — it broadcasts
-throughout, which the one server on one segment this was built against
-answers identically. And only the **first** device with a real lease is
-renewed; a second card would need its own timer, and no machine here has
-ever held two leases at once.
+Two honest limits. It does **not** request a lease *duration* (option
+51) — the length is whatever the server chooses, and with a correct
+renewal the address is stable at any length. And only the **first**
+device with a real lease is renewed; a second card would need its own
+timer, and no machine here has ever held two leases at once.
 
 **A link-local address is claimed and never defended.** RFC 3927 asks a
 host to keep watching for a conflicting ARP after it has taken an

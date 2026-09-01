@@ -19,12 +19,19 @@
 // takes that device whatever state it is in, which is how a card is
 // re-leased by hand.
 //
-// THE LEASE IS NOT RENEWED. A real client keeps a timer and renews at
-// T1 (half the lease); this asks once and applies what it gets. That is
-// a real limitation rather than a simplification: a lease that expires
-// under a long-running machine leaves it using an address the server
-// has since given away. Renewal needs a daemon, and a daemon needs a
-// reason to exist beyond one timer -- see docs/roadmap.md.
+// THE LEASE IS RENEWED, as RFC 2131's three states rather than by
+// asking again from scratch. At T1 it REQUESTs its own address, UNICAST
+// to the server that granted it, with ciaddr set and neither a
+// server-id nor a requested-IP option; at T2 it broadcasts the same
+// message; only at expiry does it give the address up. The distinction
+// is the whole point -- a broadcast DISCOVER says "I have no address",
+// and a server that cannot reuse an outstanding lease answers it with a
+// DIFFERENT one, which is how this machine's address stepped .104 ->
+// .105 -> .106 in one afternoon without rebooting.
+//
+// THE LEASE IS ALSO REMEMBERED, so a reboot asks for the address it had
+// (INIT-REBOOT: broadcast REQUEST, ciaddr 0, requested-IP set) instead
+// of taking whatever is free.
 //
 // A DISCOVER IS SENT WITH THE BROADCAST FLAG SET, so the reply comes
 // back to 255.255.255.255 rather than to an address this machine does
@@ -92,17 +99,32 @@ static void say(const char *fmt, ...) {
 #define OPT_DNS         6
 #define OPT_REQUESTED   50
 #define OPT_LEASE_TIME  51
+#define OPT_T1          58
+#define OPT_T2          59
 #define OPT_MSG_TYPE    53
 #define OPT_SERVER_ID   54
 #define OPT_PARAM_LIST  55
 #define OPT_END         255
 
 #define FLAG_BROADCAST 0x8000
+#define BCAST 0xFFFFFFFFu
 
 #define WAIT_MS 4000
 #define POLL_MS 10
 
 #define RESOLV_CONF "/etc/resolv.conf"
+
+// A LEASE IS STATE, NOT CONFIG, so it lives under /var rather than /etc
+// -- the split the FHS makes and dhclient follows with
+// `/var/lib/dhcp/dhclient.leases`. Flat rather than nested because
+// creating a missing parent is a per-level mkdir here (see the note in
+// save_lease()), and one supervised card means one file.
+// PER DEVICE, because with no argument this configures every unaddressed
+// card and only the FIRST is supervised: one shared file would be owned
+// by whichever card was configured last, and the supervised card's
+// INIT-REBOOT would then never match.
+#define LEASE_DIR  "/var"
+#define LEASE_MAX  32
 
 // RFC 3927 link-local, the fallback when nothing answers a DISCOVER.
 // The usable range excludes the first and last /24, which the RFC
@@ -179,16 +201,46 @@ static uint32_t option_ip(const struct dhcp_msg *m, uint32_t len, uint8_t want) 
 
 struct lease {
     uint32_t ip, mask, router, dns, server, seconds;
+    // RFC 2131's renewal and rebinding times, in seconds from the ACK.
+    // The SERVER may state them (options 58 and 59) and its numbers win;
+    // 1/2 and 7/8 are only the defaults for when it does not, which is
+    // the part that reads as "the percentages" and is not the rule.
+    uint32_t t1, t2;
 };
 
+// Fills t1/t2 from the server's options, or from the lease length.
+static void lease_timers(struct lease *l, const struct dhcp_msg *m, uint32_t len) {
+    l->t1 = option_ip(m, len, OPT_T1);
+    l->t2 = option_ip(m, len, OPT_T2);
+    if (!l->t1) l->t1 = l->seconds / 2;
+    if (!l->t2) l->t2 = l->seconds - l->seconds / 8;   // 7/8, without overflow
+    // A server that states them inconsistently is not worth honouring
+    // into a state machine that then cannot leave RENEWING.
+    if (l->t2 <= l->t1 || l->t2 > l->seconds) l->t2 = l->seconds - l->seconds / 8;
+    if (l->t1 >= l->t2) l->t1 = l->t2 / 2;
+}
+
+// `ciaddr` is what separates a renewal from an acquisition: RFC 2131's
+// table (4.3.6) says RENEWING and REBINDING carry the address in
+// ciaddr and MUST NOT send a server-id or a requested-IP option, while
+// SELECTING sends both and leaves ciaddr zero. Sending the wrong shape
+// is not a protocol nicety -- a server reading "I have no address"
+// allocates a new one.
+//
+// THE BROADCAST FLAG IS FOR A CLIENT THAT CANNOT YET RECEIVE UNICAST.
+// Once ciaddr is set the interface has that address and the reply can
+// come straight to it, so the flag is cleared -- setting it anyway asks
+// every server on the segment to shout the answer.
 static void build(struct dhcp_msg *m, const uint8_t *mac, const uint8_t *xid,
-                  uint8_t type, uint32_t requested, uint32_t server, uint32_t *out_len) {
+                  uint8_t type, uint32_t requested, uint32_t server,
+                  uint32_t ciaddr, uint32_t *out_len) {
     memset(m, 0, sizeof *m);
     m->op = OP_REQUEST;
     m->htype = HTYPE_ETHERNET;
     m->hlen = 6;
     memcpy(m->xid, xid, 4);
-    m->flags[0] = (uint8_t)(FLAG_BROADCAST >> 8);
+    if (!ciaddr) m->flags[0] = (uint8_t)(FLAG_BROADCAST >> 8);
+    else put32(m->ciaddr, ciaddr);
     memcpy(m->chaddr, mac, 6);
     put32(m->magic, DHCP_MAGIC);
 
@@ -204,10 +256,12 @@ static void build(struct dhcp_msg *m, const uint8_t *mac, const uint8_t *xid,
     }
     // Asking for what we intend to use, which is what a server keys its
     // reply on -- an offer need not carry an option nobody requested.
-    m->options[i++] = OPT_PARAM_LIST; m->options[i++] = 3;
+    m->options[i++] = OPT_PARAM_LIST; m->options[i++] = 5;
     m->options[i++] = OPT_SUBNET_MASK;
     m->options[i++] = OPT_ROUTER;
     m->options[i++] = OPT_DNS;
+    m->options[i++] = OPT_T1;
+    m->options[i++] = OPT_T2;
     m->options[i++] = OPT_END;
 
     *out_len = (uint32_t)(sizeof *m - sizeof m->options) + i;
@@ -216,11 +270,14 @@ static void build(struct dhcp_msg *m, const uint8_t *mac, const uint8_t *xid,
 // Send, then wait for a reply of the expected type carrying our xid.
 // Anything else on the wire is ignored rather than treated as an error:
 // a broadcast port hears every client on the segment.
+// `dest` is 0xFFFFFFFF for everything except a RENEWING request, which
+// goes straight to the server that granted the lease.
 static int exchange(int fd, struct dhcp_msg *out, uint32_t out_len,
-                    const uint8_t *xid, uint8_t want, struct dhcp_msg *in) {
+                    const uint8_t *xid, uint8_t want, struct dhcp_msg *in,
+                    uint32_t dest) {
     int64_t rc = -1;
     for (int waited = 0; waited < WAIT_MS; waited += POLL_MS) {
-        rc = sys_sendto(fd, out, out_len, 0xFFFFFFFFu, DHCP_SERVER_PORT);
+        rc = sys_sendto(fd, out, out_len, dest, DHCP_SERVER_PORT);
         if (rc >= 0 || sys_errno() != EAGAIN) break;
         sys_sleep_ms(POLL_MS);
     }
@@ -246,7 +303,15 @@ static int exchange(int fd, struct dhcp_msg *out, uint32_t out_len,
         if (in->op == OP_REPLY && !memcmp(in->xid, xid, 4) &&
             get32(in->magic) == DHCP_MAGIC) {
             const uint8_t *v = 0;
-            if (option_get(in, len, OPT_MSG_TYPE, &v) >= 1 && *v == want) return (int)len;
+            if (option_get(in, len, OPT_MSG_TYPE, &v) >= 1) {
+                if (*v == want) return (int)len;
+                // A NAK is the server saying "that binding is gone",
+                // which is NOT the same as silence: RFC 2131 4.4.5 sends
+                // the client straight back to INIT rather than letting
+                // it keep the address until expiry. Reported as -1 so
+                // the caller can tell the two apart.
+                if (*v == MSG_NAK) return -1;
+            }
         }
     }
 }
@@ -371,6 +436,153 @@ static int wait_for_carrier(const char *name) {
 
 // Returns 1 if the device ends up with an address, by lease or by
 // claim.
+// --- remembering a lease ----------------------------------------------
+//
+// So a REBOOT asks for the address it had. RFC 2131 calls it
+// INIT-REBOOT: broadcast a REQUEST with ciaddr 0 and the remembered
+// address in the requested-IP option, and a server that still holds
+// that binding ACKs it. Without this every boot is a fresh DISCOVER,
+// which is the other half of why this machine's address kept moving.
+//
+// KEYED TO THE DEVICE AND ITS MAC. An adapter swapped between boots
+// gets a different binding, and asking for the previous card's address
+// earns a NAK at best.
+
+static void lease_path(char *out, uint32_t cap, const char *dev) {
+    snprintf(out, cap, "%s/dhcp-%s.lease", LEASE_DIR, dev);
+}
+
+// Forgets a remembered address that has been refused. Without this a
+// machine moved to another network spends the whole of WAIT_MS on a
+// doomed INIT-REBOOT before every single retry, for the life of the
+// boot.
+static void forget_lease(const char *dev) {
+    char path[LEASE_MAX];
+    lease_path(path, sizeof path, dev);
+    uconf_set(path, "ip", "");
+}
+
+static void save_lease(const char *dev, const uint8_t *mac,
+                       const struct lease *l) {
+    if (!l->ip || !l->seconds) return;
+    char LEASE_FILE[LEASE_MAX];
+    lease_path(LEASE_FILE, sizeof LEASE_FILE, dev);
+    // The directory first: `open()` with O_CREAT does NOT create a
+    // missing parent here, and reports success while writing nothing
+    // (docs/bugs.md), so a mkdir that usually fails harmlessly is
+    // cheaper than a lease that silently never persists.
+    sys_mkdir(LEASE_DIR);
+
+    char v[24];
+    snprintf(v, sizeof v, "%02x:%02x:%02x:%02x:%02x:%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    if (!uconf_set(LEASE_FILE, "mac", v)) return;
+    uconf_set(LEASE_FILE, "device", dev);
+    ip_str(v, l->ip);     uconf_set(LEASE_FILE, "ip", v);
+    ip_str(v, l->server); uconf_set(LEASE_FILE, "server", v);
+    snprintf(v, sizeof v, "%u", l->seconds);
+    uconf_set(LEASE_FILE, "seconds", v);
+}
+
+// The remembered address for this card, or 0. Deliberately returns only
+// the ADDRESS: everything else comes from the ACK, because a mask or a
+// router remembered from a different network is worse than none.
+static uint32_t remembered_ip(const char *dev, const uint8_t *mac) {
+    char LEASE_FILE[LEASE_MAX];
+    lease_path(LEASE_FILE, sizeof LEASE_FILE, dev);
+    char want[24], got[24];
+    snprintf(want, sizeof want, "%02x:%02x:%02x:%02x:%02x:%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    if (!uconf_get(LEASE_FILE, "mac", got, sizeof got)) return 0;
+    if (strcmp(got, want)) return 0;
+    if (!uconf_get(LEASE_FILE, "device", got, sizeof got)) return 0;
+    if (strcmp(got, dev)) return 0;
+    if (!uconf_get(LEASE_FILE, "ip", got, sizeof got)) return 0;
+
+    uint32_t ip = 0, part = 0;
+    int n = 0, seen = 0;
+    for (const char *c = got; ; c++) {
+        // Bounded AS IT ACCUMULATES, not at the delimiter: uconf_get()
+        // truncates into a fixed buffer, so a corrupt file can present a
+        // digit run long enough to overflow -- and an overflow that -O2
+        // is entitled to assume cannot happen takes the range check with
+        // it.
+        if (*c >= '0' && *c <= '9') {
+            part = part * 10 + (uint32_t)(*c - '0');
+            if (part > 255) return 0;
+            seen = 1;
+        }
+        else if (*c == '.' || *c == '\0') {
+            if (!seen || n > 3) return 0;
+            ip = (ip << 8) | part;
+            part = 0; seen = 0; n++;
+            if (!*c) break;
+        } else return 0;
+    }
+    return n == 4 ? ip : 0;
+}
+
+// --- sleeping longer than one syscall can ------------------------------
+//
+// `sys_sleep_ms()` is CLAMPED to SYS_SLEEP_MAX_MS (one hour) and says
+// nothing about it, so a single call asking for T1 of a 24-hour lease
+// returns after an hour and the caller believes its timer fired. That
+// is what turned a twice-a-day renewal into an hourly one. Loop to a
+// deadline instead of trusting one call.
+static void sleep_seconds(uint32_t secs) {
+    uint64_t deadline = sys_monotonic_ns() + (uint64_t)secs * 1000000000ull;
+    for (;;) {
+        uint64_t now = sys_monotonic_ns();
+        if (now >= deadline) return;
+        uint64_t left_ms = (deadline - now) / 1000000ull;
+        if (left_ms > SYS_SLEEP_MAX_MS) left_ms = SYS_SLEEP_MAX_MS;
+        if (!left_ms) return;
+        sys_sleep_ms((int)left_ms);
+    }
+}
+
+// The FILE is Unix's name and the FORMAT is this repo's `key=value` --
+// there is one config parser here and a second one for four bytes would
+// be the drift nobody looks for. Shared, because a RENEWAL can move the
+// nameserver and writing it in only one path meant it never did.
+static void write_resolv(uint32_t dns) {
+    char d[20];
+    ip_str(d, dns);
+    if (uconf_set(RESOLV_CONF, "nameserver", d))
+        say("dhcp: nameserver %s -> %s\n", d, RESOLV_CONF);
+    else
+        say("dhcp: could not write %s\n", RESOLV_CONF);
+}
+
+// Puts a lease on the card and reports it. Shared by every path that
+// obtains one -- INIT-REBOOT, DISCOVER/REQUEST -- so "what applying a
+// lease means" has one definition rather than one per state.
+static int apply(const struct query_netdev *dev, const struct lease *lp,
+                 struct lease *got) {
+    struct lease l = *lp;
+    if (sys_net_config(dev->name, l.ip, l.mask, l.router) < 0) {
+        cmd_fail("dhcp", dev->name);
+        return 0;
+    }
+
+    char a[20], m[20], g[20];
+    ip_str(a, l.ip); ip_str(m, l.mask); ip_str(g, l.router);
+    say("dhcp: %s: %s netmask %s gateway %s\n", dev->name, a, m, g);
+
+    if (l.dns) write_resolv(l.dns);
+    if (l.seconds) say("dhcp: lease %u seconds\n", l.seconds);
+
+    // Persisted HERE because this is the one place a lease becomes the
+    // card's: doing it at each call site meant the boot path -- the
+    // common one -- silently never wrote a lease at all.
+    uint8_t mac[6];
+    for (int i = 0; i < 6; i++) mac[i] = (uint8_t)(dev->mac >> (i * 8));
+    save_lease(dev->name, mac, &l);
+
+    if (got) *got = l;
+    return 1;
+}
+
 static int configure(const struct query_netdev *dev, struct lease *got) {
     uint8_t mac[6];
     for (int i = 0; i < 6; i++) mac[i] = (uint8_t)(dev->mac >> (i * 8));
@@ -400,15 +612,70 @@ static int configure(const struct query_netdev *dev, struct lease *got) {
 
     static struct dhcp_msg out, in;
     uint32_t out_len = 0;
-    build(&out, mac, xid, MSG_DISCOVER, 0, 0, &out_len);
-    int len = exchange(fd, &out, out_len, xid, MSG_OFFER, &in);
-    if (!len) {
+    struct lease l = {0};
+
+    // INIT-REBOOT, when a lease was remembered: broadcast a REQUEST for
+    // the address we had, ciaddr still 0 because we are not using it
+    // yet. A server that still holds the binding ACKs it and the
+    // machine keeps its address across a reboot; one that does not
+    // either NAKs or stays quiet, and the DISCOVER below is the answer
+    // to both. Skipping straight to DISCOVER is what made every boot
+    // take whatever was free.
+    uint32_t known = remembered_ip(dev->name, mac);
+    if (known) {
+        char a[20];
+        ip_str(a, known);
+        say("dhcp: %s: asking for %s again\n", dev->name, a);
+        build(&out, mac, xid, MSG_REQUEST, known, 0, 0, &out_len);
+        int n = exchange(fd, &out, out_len, xid, MSG_ACK, &in, BCAST);
+        if (n > 0) {
+            l.ip = get32(in.yiaddr);
+            l.mask = option_ip(&in, (uint32_t)n, OPT_SUBNET_MASK);
+            l.router = option_ip(&in, (uint32_t)n, OPT_ROUTER);
+            l.dns = option_ip(&in, (uint32_t)n, OPT_DNS);
+            l.server = option_ip(&in, (uint32_t)n, OPT_SERVER_ID);
+            l.seconds = option_ip(&in, (uint32_t)n, OPT_LEASE_TIME);
+            lease_timers(&l, &in, (uint32_t)n);
+        }
+        // THIS PATH MUST NOT BE ABLE TO PRODUCE A WORSE RESULT THAN THE
+        // ONE BELOW IT. The DISCOVER path takes the mask from the OFFER
+        // and only overrides it from the ACK, so it always has one;
+        // there is no OFFER here, and an ACK that omits option 1 would
+        // otherwise configure a 0.0.0.0 netmask with nothing on-link.
+        // Anything short of a complete answer falls through and asks
+        // properly.
+        if (n > 0 && l.ip && l.mask) {
+            close(fd);
+            return apply(dev, &l, got);
+        }
+        if (n < 0) {
+            // NAKed: the server knows this binding and has refused it,
+            // so remembering it costs the full wait on every retry.
+            say("dhcp: %s: %s refused, asking afresh\n", dev->name, a);
+            forget_lease(dev->name);
+        } else {
+            say("dhcp: %s: no usable answer for %s, asking afresh\n",
+                dev->name, a);
+        }
+        memset(&l, 0, sizeof l);
+
+        // A FRESH TRANSACTION NEEDS A FRESH xid. The DISCOVER below is
+        // not part of the exchange above, and a late ACK for the old one
+        // arriving inside the new one's window would match on xid and
+        // type and be taken as its reply. (The DISCOVER and its own
+        // REQUEST DO share an xid -- those are one transaction.)
+        if (sys_getrandom(xid, sizeof xid) != (int64_t)sizeof xid)
+            put32(xid, (uint32_t)sys_monotonic_ns());
+    }
+
+    build(&out, mac, xid, MSG_DISCOVER, 0, 0, 0, &out_len);
+    int len = exchange(fd, &out, out_len, xid, MSG_OFFER, &in, BCAST);
+    if (len <= 0) {
         close(fd);
         say("dhcp: no offer on %s\n", dev->name);
         return link_local(dev->name, mac);
     }
 
-    struct lease l = {0};
     l.ip = get32(in.yiaddr);
     l.mask = option_ip(&in, (uint32_t)len, OPT_SUBNET_MASK);
     l.router = option_ip(&in, (uint32_t)len, OPT_ROUTER);
@@ -418,10 +685,10 @@ static int configure(const struct query_netdev *dev, struct lease *got) {
     // The REQUEST is what makes the offer a lease -- a client that
     // applied the offer without it is using an address the server still
     // considers free to hand to somebody else.
-    build(&out, mac, xid, MSG_REQUEST, l.ip, l.server, &out_len);
-    len = exchange(fd, &out, out_len, xid, MSG_ACK, &in);
+    build(&out, mac, xid, MSG_REQUEST, l.ip, l.server, 0, &out_len);
+    len = exchange(fd, &out, out_len, xid, MSG_ACK, &in, BCAST);
     close(fd);
-    if (!len) {
+    if (len <= 0) {
         char a[20];
         ip_str(a, l.ip);
         say("dhcp: %s offered %s and did not acknowledge it\n", dev->name, a);
@@ -434,28 +701,9 @@ static int configure(const struct query_netdev *dev, struct lease *got) {
     if (option_ip(&in, (uint32_t)len, OPT_ROUTER)) l.router = option_ip(&in, (uint32_t)len, OPT_ROUTER);
     if (option_ip(&in, (uint32_t)len, OPT_DNS)) l.dns = option_ip(&in, (uint32_t)len, OPT_DNS);
     l.seconds = option_ip(&in, (uint32_t)len, OPT_LEASE_TIME);
+    lease_timers(&l, &in, (uint32_t)len);
 
-    if (sys_net_config(dev->name, l.ip, l.mask, l.router) < 0) {
-        cmd_fail("dhcp", dev->name);
-        return 0;
-    }
-
-    char a[20], m[20], g[20], d[20];
-    ip_str(a, l.ip); ip_str(m, l.mask); ip_str(g, l.router); ip_str(d, l.dns);
-    say("dhcp: %s: %s netmask %s gateway %s\n", dev->name, a, m, g);
-
-    if (l.dns) {
-        // The FILE is Unix's name and the FORMAT is this repo's
-        // `key=value` -- there is one config parser here and a second
-        // one for four bytes would be the drift nobody looks for.
-        if (uconf_set(RESOLV_CONF, "nameserver", d))
-            say("dhcp: nameserver %s -> %s\n", d, RESOLV_CONF);
-        else
-            say("dhcp: could not write %s\n", RESOLV_CONF);
-    }
-    if (l.seconds) say("dhcp: lease %u seconds\n", l.seconds);
-    if (got) *got = l;
-    return 1;
+    return apply(dev, &l, got);
 }
 
 // --- renewal ----------------------------------------------------------
@@ -466,13 +714,67 @@ static int configure(const struct query_netdev *dev, struct lease *got) {
 // all the way back to a DISCOVER -- because an address whose lease has
 // run out is not ours any more, whatever the interface still says.
 //
-// NOT A FULL STATE MACHINE. RFC 2131 distinguishes RENEWING (unicast to
-// the server) from REBINDING (broadcast at T2), and this broadcasts
-// throughout: the machine that motivated it has one server on one
-// segment, and a REBIND that reaches the same server is answered the
-// same way. Said here rather than left to be discovered.
 static struct lease k_lease;
 static char renew_dev[NET_ABI_NAME_MAX];
+
+// One RENEWING or REBINDING exchange: a REQUEST carrying ciaddr, to
+// `dest`, expecting an ACK. Returns 1 and refreshes `l` on success.
+//
+// IT DOES NOT TOUCH THE INTERFACE ON FAILURE, which is the bug this
+// replaces: the old path called configure(), and configure() assigns
+// RFC 3927 link-local when nothing answers -- so one unanswered renewal
+// threw away a lease with 22 hours left on it.
+static int renew_once(const struct query_netdev *dev, const uint8_t *mac,
+                      struct lease *l, uint32_t dest) {
+    int fd = sys_socket(NET_ABI_AF_INET, NET_ABI_SOCK_DGRAM, NET_ABI_IPPROTO_UDP);
+    if (fd < 0) return 0;
+    if (sys_bind(fd, 0, DHCP_CLIENT_PORT, dev->name) < 0) { close(fd); return 0; }
+
+    uint8_t xid[4];
+    if (sys_getrandom(xid, sizeof xid) != (int64_t)sizeof xid)
+        put32(xid, (uint32_t)sys_monotonic_ns());
+
+    static struct dhcp_msg out, in;
+    uint32_t out_len = 0;
+    // ciaddr set, no server-id, no requested-IP: RFC 2131's 4.3.6.
+    build(&out, mac, xid, MSG_REQUEST, 0, 0, l->ip, &out_len);
+    int len = exchange(fd, &out, out_len, xid, MSG_ACK, &in, dest);
+    close(fd);
+    if (len < 0) return -1;      // NAK: the binding is gone, stop asking
+    if (!len) return 0;
+    // An ACK naming no address is not one to apply: it would deconfigure
+    // the card and leave every later REQUEST with ciaddr 0, which is a
+    // shape no server grants.
+    if (!get32(in.yiaddr)) return 0;
+
+    // A server may move us; the ACK is authoritative either way.
+    uint32_t was = l->ip, was_mask = l->mask, was_router = l->router;
+    uint32_t was_dns = l->dns;
+    l->ip = get32(in.yiaddr);
+    if (option_ip(&in, (uint32_t)len, OPT_SUBNET_MASK)) l->mask = option_ip(&in, (uint32_t)len, OPT_SUBNET_MASK);
+    if (option_ip(&in, (uint32_t)len, OPT_ROUTER)) l->router = option_ip(&in, (uint32_t)len, OPT_ROUTER);
+    if (option_ip(&in, (uint32_t)len, OPT_DNS)) l->dns = option_ip(&in, (uint32_t)len, OPT_DNS);
+    if (option_ip(&in, (uint32_t)len, OPT_SERVER_ID)) l->server = option_ip(&in, (uint32_t)len, OPT_SERVER_ID);
+    uint32_t secs = option_ip(&in, (uint32_t)len, OPT_LEASE_TIME);
+    if (secs) l->seconds = secs;
+    lease_timers(l, &in, (uint32_t)len);
+
+    // APPLY WHATEVER MOVED, not only the address. A server is entitled
+    // to keep the address and change the gateway or the mask, and
+    // recording that in the struct without pushing it to the card left
+    // the machine on the old values until it rebooted.
+    if (l->ip != was) {
+        char a[20], b[20];
+        ip_str(a, was); ip_str(b, l->ip);
+        say("dhcp: %s: moved from %s to %s\n", dev->name, a, b);
+    }
+    if (l->ip != was || l->mask != was_mask || l->router != was_router) {
+        if (sys_net_config(dev->name, l->ip, l->mask, l->router) < 0)
+            cmd_fail("dhcp", dev->name);
+    }
+    if (l->dns && l->dns != was_dns) write_resolv(l->dns);
+    return 1;
+}
 
 // AS A SERVICE THIS NEVER RETURNS, and that is not a style choice: the
 // descriptor says Restart=always, so a process that exits is restarted,
@@ -481,9 +783,18 @@ static char renew_dev[NET_ABI_NAME_MAX];
 // and gives up on. Measured on the laptop: five restarts in four
 // seconds and then `dhcp is crash-looping, giving up`.
 //
-// So the loop owns both jobs. With a lease it sleeps to T1 and renews;
-// without one it keeps ASKING, because a first attempt failing is the
-// ordinary case rather than the end.
+// So the loop owns both jobs. Without a lease it keeps ASKING, because
+// a first attempt failing is the ordinary case rather than the end.
+// With one it walks RFC 2131's states:
+//
+//     BOUND ---T1---> RENEWING ---T2---> REBINDING ---expiry---> INIT
+//              unicast to the      broadcast to        give the
+//              leasing server      anyone              address up
+//
+// EVERY DEADLINE IS MEASURED FROM THE ACK, not from the last attempt.
+// A retry every 60s that also pushed the expiry back 60s would never
+// expire, which is the failure mode that keeps an address the server
+// has since given to somebody else.
 //
 // THE RETRY IS WHY THE BOOT LEASE WAS STILL BEING MISSED. Waiting for
 // carrier was necessary and not sufficient: the link comes up at 4.43 s
@@ -493,40 +804,107 @@ static char renew_dev[NET_ABI_NAME_MAX];
 // that. Real clients retry, so this does.
 #define RETRY_MIN_MS  3000
 #define RETRY_MAX_MS 60000
+#define RENEW_RETRY_MIN_S 60
 
 static void supervise(void) {
     uint32_t backoff = RETRY_MIN_MS;
+    // OUTSIDE the loop: re-deriving it per iteration meant a card that
+    // briefly left QUERY_NETDEV restarted the lease clock, leaving every
+    // deadline that much late.
+    uint64_t acked = sys_monotonic_ns();
     for (;;) {
-        if (k_lease.seconds) {
-            // Held: sleep to T1 (half the lease, RFC 2131) and renew.
-            uint32_t half = k_lease.seconds / 2;
-            if (half < 30) half = 30;   // a very short lease must not spin
-            sys_sleep_ms((int)(half * 1000));
-        } else {
-            sys_sleep_ms((int)backoff);
-            backoff = backoff * 2 > RETRY_MAX_MS ? RETRY_MAX_MS : backoff * 2;
-        }
-
         struct query_netdev dev;
         int found = 0;
         for (unsigned i = 0; ; i++) {
             if (sys_query_record(QUERY_NETDEV, i, &dev, sizeof dev) < (int)sizeof dev) break;
             if (!strcmp(dev.name, renew_dev)) { found = 1; break; }
         }
-        if (!found) { sys_sleep_ms(RETRY_MAX_MS); continue; }  // card gone; keep watching
+        if (!found) { sleep_seconds(RETRY_MAX_MS / 1000); continue; }  // card gone
 
-        struct lease got = {0};
-        if (configure(&dev, &got) && got.seconds) {
-            if (!k_lease.seconds)
+        uint8_t mac[6];
+        for (int i = 0; i < 6; i++) mac[i] = (uint8_t)(dev.mac >> (i * 8));
+
+        if (!k_lease.seconds) {
+            sys_sleep_ms((int)backoff);
+            backoff = backoff * 2 > RETRY_MAX_MS ? RETRY_MAX_MS : backoff * 2;
+            struct lease got = {0};
+            if (configure(&dev, &got) && got.seconds) {
                 say("dhcp: %s: got a lease on retry\n", renew_dev);
-            k_lease = got;
-            backoff = RETRY_MIN_MS;
-        } else if (k_lease.seconds) {
-            // A held lease stays valid until it expires, so a server
-            // that is briefly unreachable is not a reason to drop it --
-            // just to ask again sooner.
-            say("dhcp: %s: renewal failed, retrying\n", renew_dev);
-            k_lease.seconds = k_lease.seconds > 120 ? 120 : k_lease.seconds;
+                k_lease = got;      // apply() already persisted it
+                acked = sys_monotonic_ns();
+                backoff = RETRY_MIN_MS;
+            }
+            continue;
+        }
+
+        // Held. Every deadline is measured from the ACK that granted
+        // this lease -- never from the last attempt, because a retry
+        // that also pushed expiry back would never expire, and the
+        // machine would keep an address the server has reassigned.
+        //
+        // WHY THE LOOP SAYS WHY IT ENDED. Deriving "it expired" from
+        // having fallen out of the loop was wrong: a renewal that
+        // SUCCEEDS with a shorter lease than the time already elapsed
+        // then read as an expiry, and the recovery path can drop to
+        // link-local -- throwing away the lease that was just renewed.
+        // That is the same mistake as the `rebinding` flag before it:
+        // a fact taken from control flow rather than stated.
+        int expired = 0;
+
+        for (;;) {
+            uint32_t elapsed = (uint32_t)((sys_monotonic_ns() - acked) / 1000000000ull);
+            if (elapsed >= k_lease.seconds) { expired = 1; break; }
+
+            // When to act next: T1 while BOUND; otherwise half the time
+            // remaining to the next milestone, floored at 60 s and never
+            // past the milestone itself (RFC 2131 4.4.5). The clamp is
+            // what makes REBINDING and expiry reachable at all.
+            uint32_t target;
+            if (elapsed < k_lease.t1) {
+                target = k_lease.t1;
+            } else {
+                uint32_t milestone = elapsed < k_lease.t2 ? k_lease.t2 : k_lease.seconds;
+                uint32_t remaining = milestone - elapsed;
+                uint32_t wait = remaining / 2;
+                if (wait < RENEW_RETRY_MIN_S) wait = RENEW_RETRY_MIN_S;
+                if (wait > remaining) wait = remaining;
+                target = elapsed + wait;
+            }
+            sleep_seconds(target - elapsed);
+
+            elapsed = (uint32_t)((sys_monotonic_ns() - acked) / 1000000000ull);
+            if (elapsed >= k_lease.seconds) { expired = 1; break; }
+
+            // RENEWING goes to the server that granted it; REBINDING
+            // asks anyone. The only difference on the wire is where it
+            // is sent -- the message is the same shape.
+            int rebinding = elapsed >= k_lease.t2;
+            uint32_t dest = (!rebinding && k_lease.server) ? k_lease.server : BCAST;
+            int rc = renew_once(&dev, mac, &k_lease, dest);
+            if (rc > 0) {
+                acked = sys_monotonic_ns();   // the NEW lease starts here
+                say("dhcp: %s: renewed, lease %u seconds\n",
+                    renew_dev, k_lease.seconds);
+                save_lease(renew_dev, mac, &k_lease);
+                break;                        // BOUND again, timers restart
+            }
+            if (rc < 0) {
+                // NAKed: the server says this binding is gone, so there
+                // is nothing to wait out.
+                say("dhcp: %s: server refused the lease\n", renew_dev);
+                forget_lease(renew_dev);
+                expired = 1;
+                break;
+            }
+            say("dhcp: %s: %s failed, retrying\n", renew_dev,
+                rebinding ? "rebinding" : "renewal");
+        }
+
+        if (expired) {
+            // The address is not ours any more, whatever the interface
+            // still says -- the one place giving it up is right.
+            say("dhcp: %s: lease expired, starting over\n", renew_dev);
+            k_lease.seconds = 0;
         }
     }
 }

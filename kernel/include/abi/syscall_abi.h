@@ -1934,6 +1934,12 @@ struct mmap_msg {
 // keeps a garbage argument from parking a process for the rest of the
 // boot, which looks exactly like a hang. A caller wanting longer calls
 // it again.
+// A SINGLE SLEEP IS CAPPED, AND THE CAP IS SILENT: a longer request
+// returns early rather than failing, so a caller that needs a real
+// deadline must LOOP against the clock rather than trust one call.
+// `/bin/dhcp` asked for T1 of a 24-hour lease, got an hour, and renewed
+// hourly -- which on a server with a pool moved the machine's address
+// every time.
 #define SYS_SLEEP_MAX_MS 3600000
 
 // The number of process-table slots SYS_PROC_INFO can be asked about.
