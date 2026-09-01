@@ -95,6 +95,23 @@ def main():
         if not guest.wait_for("debug console ready", deadline):
             return fail("the serial debug console never came up", guest.diagnostics())
 
+        # FREE THE COMPOSITOR ROLE BEFORE THE SUITE. It is one global,
+        # and on a graphical boot the ring-3 desktop holds it -- so the
+        # winshare KTESTs refuse to take it (win_server_test.c) and the
+        # gate would lose that coverage. `service stop` rather than
+        # deleting the descriptor: init keeps `admin_stopped` in memory
+        # and the request file is in /tmp, so nothing survives to the
+        # next boot.
+        #
+        # THE WAIT IS THE TRAP: the debug console is up before init has
+        # read /etc/services.d, and a stop sent then is answered
+        # `supervises no service called toywm` while the desktop starts
+        # anyway. A boot with no desktop never prints the line, and the
+        # bounded wait falls through with the role already free.
+        guest.wait_for("toywm is ready", min(deadline, time.time() + 20))
+        guest.send("sh service stop toywm")
+        guest.wait_for("toywm stopped", min(deadline, time.time() + 10))
+
         if not guest.send(f"ktest {args.suite}".strip()):
             return fail("could not send the ktest command", guest.diagnostics())
 
@@ -143,6 +160,16 @@ def main():
                 print(line)
 
     if verdict is True:
+        # A suite that SKIPPED the tests this tool went out of its way to
+        # enable is not a pass, it is a silent loss of coverage -- the
+        # exact shape this whole change exists to stop.
+        if "a compositor holds the role" in transcript:
+            return fail("the compositor role was never freed, so the winshare "
+                        "KTESTs skipped -- `service stop toywm` did not take "
+                        "effect before the suite ran",
+                        [l for l in transcript.splitlines()
+                         if "compositor holds the role" in l or "toywm" in l][:6])
+
         summary = next((l for l in transcript.splitlines() if l.startswith("ktest: PASSED")), "")
         print(f"ktest_run: PASS -- {summary.replace('ktest: PASSED -- ', '')}")
         return 0

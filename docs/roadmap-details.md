@@ -1037,32 +1037,6 @@ Convert Calculator first. Its grid is pure arithmetic today, it's
 `multi_instance` so two windows can be compared side by side, and if the
 engine can't express a uniform button grid it can't express anything.
 
-### `winshare/destroying a window poisons the compositor's mapping` KTEST fails
-
-Measured 2026-08-20, on the commit that added the runtime font
-rasterizer: **1 failure in 18 `tools/ktest_run.py` runs**, against **0 in
-18** on the commit before it (`git stash push -u`, rebuild, count --
-both batches via `tools/flake_hunt.py ktest`, both from a
-`make clean-disk` image).
-
-**That difference does not distinguish the two.** A 1-in-18 rate shows
-zero failures in 18 runs about 40% of the time, so the earlier commit is
-not exonerated by its clean batch and the later one is not convicted by
-its single failure. Recorded with both counts rather than a verdict.
-
-Reproduce with `python3 tools/flake_hunt.py ktest -n 20`; the failing
-check names itself in the summary. No cause was established. Two things
-that would plausibly matter and were not tested: the KTESTs added in
-that commit rasterize several hundred glyphs while a desktop is live,
-which is a real timing perturbation in the area this check measures; and
-the check runs against a compositor whose window is being destroyed, so
-it is sensitive to when the compositor next drains its event queue.
-
-The check itself guards a real invariant with a known history -- a
-revoked compositor mapping must be poisoned rather than left as a hole
-(see `docs/decisions/gui.md`) -- so a failure here is worth taking
-seriously rather than raising the tolerance.
-
 ### Runtime font loading & text metrics
 
 **Most of this shipped on 2026-08-20** -- `kernel/lib/ttf.c` parses and

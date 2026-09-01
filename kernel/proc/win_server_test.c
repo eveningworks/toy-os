@@ -56,11 +56,36 @@
 #include "scheduler.h"
 #include <stddef.h>
 
-// Two synthetic pids, both inside WIN_SERVER_MAX_PIDS. Deliberately not
-// 1: pid 1 is what a real spawned client tends to get, and these tests
-// run in the live kernel where a desktop may be up.
-#define CLIENT_PID 3
-#define COMP_PID   4
+// The pids are CHOSEN AT RUN TIME, not named. Every window-server pid
+// is one a real process can hold -- WIN_SERVER_MAX_PIDS is
+// SCHED_MAX_PROCS -- so there is no synthetic number that is safe, and
+// pid 3 (what this file used to hardcode) is what toywm gets on an
+// ordinary boot: the fixture was creating and destroying windows on the
+// live desktop's own list.
+static int spare_pids(int *client, int *comp) {
+    *client = *comp = 0;
+    for (int p = SCHED_MAX_PROCS - 1; p > 0; p--) {
+        if (scheduler_pid_valid(p)) continue; // valid counts a zombie, which is what we want
+        if (!*client) { *client = p; continue; }
+        *comp = p;
+        return 1;
+    }
+    return 0;
+}
+
+// THE COMPOSITOR ROLE IS ONE GLOBAL, SHARED WITH THE LIVE DESKTOP.
+// Taking it revokes that desktop's framebuffer grant and drops every
+// mapping it holds (win_server_set_compositor()); giving it up asks its
+// clients to close and toywm exits. Neither is undoable by restoring
+// the role afterwards, because the damage is done on the way IN. So
+// these refuse to run while anyone holds it, and tools/ktest_run.py
+// frees the role before the suite -- which is how the gate still
+// exercises them without the default graphical boot destroying itself.
+#define SKIP_IF_ROLE_HELD                                                     \
+    do {                                                                      \
+        if (win_server_compositor_pid())                                      \
+            KTEST_SKIP("a compositor holds the role");                        \
+    } while (0)
 
 #define WIN_W 64
 #define WIN_H 32
@@ -72,22 +97,26 @@ struct fixture {
     uint64_t client_as;
     uint64_t comp_as;
     uint32_t id;
+    int client_pid;
+    int comp_pid;
 };
 
 static int fixture_up(struct fixture *f) {
+    if (!spare_pids(&f->client_pid, &f->comp_pid)) return 0;
     f->client_as = vmm_create_address_space();
     f->comp_as = vmm_create_address_space();
     if (!f->client_as || !f->comp_as) return 0;
-    if (!win_server_create_raw(CLIENT_PID, f->client_as, WIN_W, WIN_H, &f->id)) return 0;
-    if (!win_server_set_compositor(COMP_PID, f->comp_as)) return 0;
+    if (!win_server_create_raw(f->client_pid, f->client_as, WIN_W, WIN_H, &f->id)) return 0;
+    if (!win_server_set_compositor(f->comp_pid, f->comp_as)) return 0;
     return 1;
 }
 
 static void fixture_down(struct fixture *f) {
-    win_server_destroy_raw(CLIENT_PID, f->id);
+    if (f->client_pid) win_server_destroy_raw(f->client_pid, f->id);
     // Clear the registration before the address space goes away, so no
-    // stale pml4 is left registered for the next test (or for the live
-    // desktop, which shares this kernel).
+    // stale pml4 is left registered for the next test. Safe to clear
+    // unconditionally only because SKIP_IF_ROLE_HELD proved the role was
+    // free before the fixture took it.
     win_server_set_compositor(0, 0);
     if (f->client_as) vmm_destroy_address_space(f->client_as);
     if (f->comp_as) vmm_destroy_address_space(f->comp_as);
@@ -95,15 +124,16 @@ static void fixture_down(struct fixture *f) {
 
 KTEST("winshare", "a window maps into the compositor at its derived address") {
     struct fixture f = {0};
+    SKIP_IF_ROLE_HELD;
     if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
 
     uint64_t vaddr = 0;
-    KTEST_ASSERT(win_server_map_to_compositor(COMP_PID, CLIENT_PID, f.id, &vaddr));
+    KTEST_ASSERT(win_server_map_to_compositor(f.comp_pid, f.client_pid, f.id, &vaddr));
     // The address is DERIVED, so the server and the compositor cannot
     // disagree about it -- this asserts the returned value is the one
     // the formula gives rather than something the server chose.
-    KTEST_ASSERT_EQ(vaddr, win_compositor_vaddr(CLIENT_PID, f.id));
-    KTEST_ASSERT(win_server_is_mapped_to_compositor(CLIENT_PID, f.id));
+    KTEST_ASSERT_EQ(vaddr, win_compositor_vaddr(f.client_pid, f.id));
+    KTEST_ASSERT(win_server_is_mapped_to_compositor(f.client_pid, f.id));
     KTEST_ASSERT(vmm_validate_user_range(f.comp_as, vaddr, 4096));
 
     fixture_down(&f);
@@ -111,10 +141,11 @@ KTEST("winshare", "a window maps into the compositor at its derived address") {
 
 KTEST("winshare", "both address spaces see the SAME pixels, not a copy") {
     struct fixture f = {0};
+    SKIP_IF_ROLE_HELD;
     if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
 
     uint64_t cvaddr = 0;
-    KTEST_ASSERT(win_server_map_to_compositor(COMP_PID, CLIENT_PID, f.id, &cvaddr));
+    KTEST_ASSERT(win_server_map_to_compositor(f.comp_pid, f.client_pid, f.id, &cvaddr));
 
     // Write as the CLIENT would (into its own mapping), read as the
     // compositor. A copy would pass a same-value check made any other
@@ -151,10 +182,11 @@ KTEST("winshare", "both address spaces see the SAME pixels, not a copy") {
 // differ, and that is decidable.
 KTEST("winshare", "a present flips the buffer, so the two never collide") {
     struct fixture f = {0};
+    SKIP_IF_ROLE_HELD;
     if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
 
     uint64_t cvaddr = 0;
-    KTEST_ASSERT(win_server_map_to_compositor(COMP_PID, CLIENT_PID, f.id, &cvaddr));
+    KTEST_ASSERT(win_server_map_to_compositor(f.comp_pid, f.client_pid, f.id, &cvaddr));
 
     // A window starts at front 0, so the client draws into buffer 1.
     // Both offsets come from the ABI's own helpers -- if a caller
@@ -185,7 +217,7 @@ KTEST("winshare", "a present flips the buffer, so the two never collide") {
     for (unsigned i = 0; i < sizeof req; i++) ((uint8_t *)&req)[i] = 0;
     req.type = WIN_REQ_PRESENT;
     req.window = f.id;
-    int rc = win_server_request(CLIENT_PID, &req);
+    int rc = win_server_request(f.client_pid, &req);
     // 1 or 2: the new front index, biased so 0 still means refused.
     KTEST_ASSERT(rc > 0);
     int front = rc - 1;
@@ -214,10 +246,11 @@ KTEST("winshare", "a present flips the buffer, so the two never collide") {
 // ever worth having.
 KTEST("winshare", "destroying a window poisons the compositor's mapping") {
     struct fixture f = {0};
+    SKIP_IF_ROLE_HELD;
     if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
 
     uint64_t cvaddr = 0;
-    KTEST_ASSERT(win_server_map_to_compositor(COMP_PID, CLIENT_PID, f.id, &cvaddr));
+    KTEST_ASSERT(win_server_map_to_compositor(f.comp_pid, f.client_pid, f.id, &cvaddr));
     KTEST_ASSERT(vmm_validate_user_range(f.comp_as, cvaddr, 4096));
 
     // A marker the compositor can only still see through the ORIGINAL
@@ -228,7 +261,7 @@ KTEST("winshare", "destroying a window poisons the compositor's mapping") {
     KTEST_ASSERT(vmm_copy_to_user(f.client_as, win_buffer_vaddr(f.id),
                                    &marker, sizeof marker));
 
-    KTEST_ASSERT(win_server_destroy_raw(CLIENT_PID, f.id));
+    KTEST_ASSERT(win_server_destroy_raw(f.client_pid, f.id));
 
     // Ask the PAGE TABLES, not the flag -- the flag is the thing that
     // would be wrong if this were broken. Still mapped (no fault for a
@@ -237,7 +270,7 @@ KTEST("winshare", "destroying a window poisons the compositor's mapping") {
     uint32_t seen = 0xFFFFFFFF;
     KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen, cvaddr, sizeof seen));
     KTEST_ASSERT_EQ(seen, 0);
-    KTEST_ASSERT(!win_server_is_mapped_to_compositor(CLIENT_PID, f.id));
+    KTEST_ASSERT(!win_server_is_mapped_to_compositor(f.client_pid, f.id));
 
     f.id = 0; // already destroyed; don't destroy a live window's slot
     win_server_set_compositor(0, 0);
@@ -247,10 +280,11 @@ KTEST("winshare", "destroying a window poisons the compositor's mapping") {
 
 KTEST("winshare", "a client dying revokes it too") {
     struct fixture f = {0};
+    SKIP_IF_ROLE_HELD;
     if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
 
     uint64_t cvaddr = 0;
-    KTEST_ASSERT(win_server_map_to_compositor(COMP_PID, CLIENT_PID, f.id, &cvaddr));
+    KTEST_ASSERT(win_server_map_to_compositor(f.comp_pid, f.client_pid, f.id, &cvaddr));
 
     // The path a real crash takes, which is NOT the same code as an
     // orderly WIN_REQ_DESTROY -- process teardown calls this directly.
@@ -258,7 +292,7 @@ KTEST("winshare", "a client dying revokes it too") {
     KTEST_ASSERT(vmm_copy_to_user(f.client_as, win_buffer_vaddr(f.id),
                                    &marker, sizeof marker));
 
-    win_server_client_gone(CLIENT_PID);
+    win_server_client_gone(f.client_pid);
 
     // Poisoned, not unmapped -- see the previous test's comment. This is
     // the path a force quit takes, where the compositor is the process
@@ -268,7 +302,7 @@ KTEST("winshare", "a client dying revokes it too") {
     uint32_t seen = 0xFFFFFFFF;
     KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen, cvaddr, sizeof seen));
     KTEST_ASSERT_EQ(seen, 0);
-    KTEST_ASSERT_EQ(win_server_window_count(CLIENT_PID), 0);
+    KTEST_ASSERT_EQ(win_server_window_count(f.client_pid), 0);
 
     f.id = 0;
     win_server_set_compositor(0, 0);
@@ -278,10 +312,11 @@ KTEST("winshare", "a client dying revokes it too") {
 
 KTEST("winshare", "a resize re-points the mapping at the NEW frames") {
     struct fixture f = {0};
+    SKIP_IF_ROLE_HELD;
     if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
 
     uint64_t cvaddr = 0;
-    KTEST_ASSERT(win_server_map_to_compositor(COMP_PID, CLIENT_PID, f.id, &cvaddr));
+    KTEST_ASSERT(win_server_map_to_compositor(f.comp_pid, f.client_pid, f.id, &cvaddr));
 
     // Mark the OLD buffer. After the resize this value must be gone --
     // if it is still readable through the compositor's mapping, the
@@ -293,11 +328,11 @@ KTEST("winshare", "a resize re-points the mapping at the NEW frames") {
     // Not through win_server_request(): that refuses everything when no
     // presentation layer is registered, and a `ktest` run has no
     // desktop. This is the same resize_window() the protocol calls.
-    KTEST_ASSERT(win_server_resize_raw(CLIENT_PID, f.id, WIN_W * 3, WIN_H * 3));
+    KTEST_ASSERT(win_server_resize_raw(f.client_pid, f.id, WIN_W * 3, WIN_H * 3));
 
     // Still mapped, still at the same address -- that is the whole
     // point of deriving it (a compositor is never told pixels moved).
-    KTEST_ASSERT(win_server_is_mapped_to_compositor(CLIENT_PID, f.id));
+    KTEST_ASSERT(win_server_is_mapped_to_compositor(f.client_pid, f.id));
     KTEST_ASSERT(vmm_validate_user_range(f.comp_as, cvaddr, 4096));
 
     // A fresh buffer is zeroed, so the marker cannot survive unless the
@@ -319,6 +354,7 @@ KTEST("winshare", "a resize re-points the mapping at the NEW frames") {
 
 KTEST("winshare", "only the registered compositor may map a window") {
     struct fixture f = {0};
+    SKIP_IF_ROLE_HELD;
     if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
 
     uint64_t vaddr = 0;
@@ -326,34 +362,35 @@ KTEST("winshare", "only the registered compositor may map a window") {
     // pixels. This is the request that must never succeed -- a window
     // buffer is private memory, and mapping it into an arbitrary
     // process is a hole rather than a feature.
-    KTEST_ASSERT(!win_server_map_to_compositor(CLIENT_PID, CLIENT_PID, f.id, &vaddr));
-    KTEST_ASSERT(!win_server_is_mapped_to_compositor(CLIENT_PID, f.id));
+    KTEST_ASSERT(!win_server_map_to_compositor(f.client_pid, f.client_pid, f.id, &vaddr));
+    KTEST_ASSERT(!win_server_is_mapped_to_compositor(f.client_pid, f.id));
 
     // Nor may the compositor map a window that does not exist.
-    KTEST_ASSERT(!win_server_map_to_compositor(COMP_PID, CLIENT_PID, WIN_CLIENT_MAX, &vaddr));
+    KTEST_ASSERT(!win_server_map_to_compositor(f.comp_pid, f.client_pid, WIN_CLIENT_MAX, &vaddr));
     // Nor one belonging to a pid outside the table.
-    KTEST_ASSERT(!win_server_map_to_compositor(COMP_PID, 0, 0, &vaddr));
+    KTEST_ASSERT(!win_server_map_to_compositor(f.comp_pid, 0, 0, &vaddr));
 
     fixture_down(&f);
 }
 
 KTEST("winshare", "clearing the compositor drops its mappings") {
     struct fixture f = {0};
+    SKIP_IF_ROLE_HELD;
     if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
 
     uint64_t cvaddr = 0;
-    KTEST_ASSERT(win_server_map_to_compositor(COMP_PID, CLIENT_PID, f.id, &cvaddr));
+    KTEST_ASSERT(win_server_map_to_compositor(f.comp_pid, f.client_pid, f.id, &cvaddr));
 
     // A compositor exiting is the case this protects: its address space
     // is about to be destroyed, and a mapping flag left set would make
     // the next unmap walk a pml4 that no longer exists.
     KTEST_ASSERT(win_server_set_compositor(0, 0));
-    KTEST_ASSERT(!win_server_is_mapped_to_compositor(CLIENT_PID, f.id));
+    KTEST_ASSERT(!win_server_is_mapped_to_compositor(f.client_pid, f.id));
     KTEST_ASSERT(!vmm_validate_user_range(f.comp_as, cvaddr, 4096));
 
     // And a map request with nobody registered is refused rather than
     // mapping into whatever pml4 was there last.
-    KTEST_ASSERT(!win_server_map_to_compositor(COMP_PID, CLIENT_PID, f.id, &cvaddr));
+    KTEST_ASSERT(!win_server_map_to_compositor(f.comp_pid, f.client_pid, f.id, &cvaddr));
 
     fixture_down(&f);
 }
@@ -371,23 +408,26 @@ KTEST("winshare", "clearing the compositor drops its mappings") {
 
 KTEST("winshare", "WIN_REQ_SET_COMPOSITOR claims and releases the role") {
     struct win_request_msg req = {0};
+    int cpid, other;
+    SKIP_IF_ROLE_HELD;
+    if (!spare_pids(&cpid, &other)) KTEST_SKIP("no unused pids");
 
     // Preemption off for the body -- see the sibling test below
     // ("only the holder may release the compositor role") for the full
     // reasoning. Short version: the compositor role is a single global,
-    // the ring-3 desktop init starts at boot really holds it, and this
-    // test EVICTS it to run. The moment the desktop is scheduled again
-    // it re-claims, so "after releasing, nobody holds it" reads the
-    // desktop's pid rather than 0.
+    // so anything else claiming it mid-body makes "after releasing,
+    // nobody holds it" read somebody else's pid rather than 0. The skip
+    // above means this no longer EVICTS a live desktop to run; it still
+    // has to keep the role to itself while it runs.
     scheduler_preempt_disable();
 
     req.type = WIN_REQ_SET_COMPOSITOR;
     req.a = 1;
-    KTEST_ASSERT_EQ(win_server_request(COMP_PID, &req), 1);
-    KTEST_ASSERT_EQ(win_server_compositor_pid(), COMP_PID);
+    KTEST_ASSERT_EQ(win_server_request(cpid, &req), 1);
+    KTEST_ASSERT_EQ(win_server_compositor_pid(), cpid);
 
     req.a = 0;
-    KTEST_ASSERT_EQ(win_server_request(COMP_PID, &req), 1);
+    KTEST_ASSERT_EQ(win_server_request(cpid, &req), 1);
     KTEST_ASSERT_EQ(win_server_compositor_pid(), 0);
 
     scheduler_preempt_enable();
@@ -395,15 +435,19 @@ KTEST("winshare", "WIN_REQ_SET_COMPOSITOR claims and releases the role") {
 
 KTEST("winshare", "only the holder may release the compositor role") {
     struct win_request_msg req = {0};
+    int cpid, other;
+    SKIP_IF_ROLE_HELD;
+    if (!spare_pids(&cpid, &other)) KTEST_SKIP("no unused pids");
     req.type = WIN_REQ_SET_COMPOSITOR;
 
     // PREEMPTION OFF FOR THE WHOLE BODY, and this is a precondition
-    // rather than tidiness. The compositor role is a single global, and
-    // since init started the desktop at boot there is a REAL compositor
-    // (the ring-3 toywm) running beside this test that re-claims the
-    // role the moment it gets scheduled. So the closing assertion --
-    // "after the holder releases it, nobody holds it" -- was racing the
-    // desktop and reading its pid instead of 0.
+    // rather than tidiness. The compositor role is a single global, so
+    // anything that claims it while this runs makes the closing
+    // assertion -- "after the holder releases it, nobody holds it" --
+    // read that claimant's pid instead of 0. It used to race the live
+    // desktop, which this test EVICTED to run at all; the skip above
+    // ended the eviction, and the race is still worth closing because
+    // the role is still shared.
     //
     // It passed for a long time on timing luck alone. What exposed it
     // was an unrelated change adding PCI KTESTs, whose thousands of
@@ -418,16 +462,16 @@ KTEST("winshare", "only the holder may release the compositor role") {
     scheduler_preempt_disable();
 
     req.a = 1;
-    KTEST_ASSERT_EQ(win_server_request(COMP_PID, &req), 1);
+    KTEST_ASSERT_EQ(win_server_request(cpid, &req), 1);
 
     // Without this check any process could evict the compositor, taking
     // the raw input stream and every buffer mapping down with it -- a
     // denial of service that needs no privilege at all.
     req.a = 0;
-    KTEST_ASSERT_EQ(win_server_request(COMP_PID + 1, &req), 0);
-    KTEST_ASSERT_EQ(win_server_compositor_pid(), COMP_PID);
+    KTEST_ASSERT_EQ(win_server_request(other, &req), 0);
+    KTEST_ASSERT_EQ(win_server_compositor_pid(), cpid);
 
-    KTEST_ASSERT_EQ(win_server_request(COMP_PID, &req), 1);
+    KTEST_ASSERT_EQ(win_server_request(cpid, &req), 1);
     KTEST_ASSERT_EQ(win_server_compositor_pid(), 0);
 
     scheduler_preempt_enable();
@@ -449,16 +493,19 @@ KTEST("winshare", "claiming needs no registered presentation layer") {
     // finally ran with one up.
     if (win_server_any()) KTEST_SKIP("desktop is up -- no !g_ops regime to test");
 
+    int cpid, other;
+    if (!spare_pids(&cpid, &other)) KTEST_SKIP("no unused pids");
+    (void)other;
     struct win_request_msg req = {0};
     req.type = WIN_REQ_PRESENT;
-    KTEST_ASSERT_EQ(win_server_request(COMP_PID, &req), -1); // the control
+    KTEST_ASSERT_EQ(win_server_request(cpid, &req), -1); // the control
 
     req.type = WIN_REQ_SET_COMPOSITOR;
     req.a = 1;
-    KTEST_ASSERT_EQ(win_server_request(COMP_PID, &req), 1);
-    KTEST_ASSERT_EQ(win_server_compositor_pid(), COMP_PID);
+    KTEST_ASSERT_EQ(win_server_request(cpid, &req), 1);
+    KTEST_ASSERT_EQ(win_server_compositor_pid(), cpid);
 
     req.a = 0;
-    KTEST_ASSERT_EQ(win_server_request(COMP_PID, &req), 1);
+    KTEST_ASSERT_EQ(win_server_request(cpid, &req), 1);
 }
 

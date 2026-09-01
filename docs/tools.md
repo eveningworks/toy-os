@@ -22,7 +22,13 @@ non-GUI boot check — see `docs/testing.md`), `gen_version.sh`/`set_version.sh`
 it into an exit code -- what `make test` and CI run; `--virtio-disk
 PATH` attaches a second disk on virtio-blk, which then carries the
 filesystem while the IDE drive stays for the `[ata]`/`[atac]` suites,
-and `-v` prints the WHOLE transcript, boot messages included), `vm.py`
+and `-v` prints the WHOLE transcript, boot messages included. **It
+stops the desktop before the suite** -- `service stop toywm`, after
+waiting for init to report it ready, because the winshare KTESTs need
+the compositor role and refuse to take it from a live desktop; nothing
+about that stop survives to the next boot, and the run FAILS if the
+role was still held when the suite ran, so a silently-skipped suite
+cannot read as a pass), `vm.py`
 (start a headless VM and run shell commands against it, getting text
 back, `--virtio-disk` likewise; `--usb xhci|xhci+mouse` attaches an
 xHCI controller and USB HID devices, off by default because attaching a

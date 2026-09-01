@@ -5728,3 +5728,52 @@ it, so `g_dbg_reply_ready` was set on the first chunk of a multi-chunk
 reply; that has never produced a wrong answer only because the
 compositor sends its chunks back to back without yielding, which is a
 race not yet lost rather than a race that is not there.
+
+## The winshare KTESTs skip while a compositor holds the role, and the harness frees it
+
+These tests need the compositor role, and the role is ONE GLOBAL that
+the ring-3 desktop really holds on a `graphical` boot -- which is the
+default target, so it is held during every ordinary `make test`. Taking
+it is not a read: `win_server_set_compositor()` revokes the outgoing
+compositor's framebuffer grant, drops every mapping it holds and
+disarms the hardware cursor, and giving it up asks that compositor's
+clients to close. The suite was killing the desktop it was running
+under, and the failure surfaced as a DIFFERENT assertion each run --
+whichever test the dying desktop happened to be racing.
+
+**Restoring the role afterwards does not work**, which is the first
+thing anyone proposes. The damage is done on the way IN: by the time a
+test holds the role, the grant is already revoked and the mappings are
+already gone. There is nothing left to put back.
+
+**A safe pid does not exist either.** `WIN_SERVER_MAX_PIDS` is
+`SCHED_MAX_PROCS`, so every window-server pid is one a real process can
+hold -- and pid 3, which the fixture used to hardcode, is exactly what
+`toywm` gets on an ordinary boot. So the fixture was also creating and
+destroying windows on the live desktop's own list. The pids are chosen
+at run time from what the scheduler says is free.
+
+**What was NOT done, and why.** The structural fix is to give
+`win_server.c`'s globals a second instance so the tests never touch the
+live role at all. That is the right shape and it restructures a
+subsystem the desktop depends on, to fix a defect that only affects the
+test suite -- a large blast radius for a small problem. Skipping alone
+was also rejected: the default target is graphical, so the coverage
+would be gone on essentially every run, including the gate.
+
+So it is both halves. The tests refuse to run while anyone holds the
+role, which makes a hand-run `make test` safe instead of destructive;
+and `tools/ktest_run.py` frees the role first with `service stop
+toywm`, so the gate still exercises them. `service stop` rather than
+deleting the descriptor because init keeps `admin_stopped` in memory
+and the request file is in `/tmp` -- nothing survives to the next boot,
+so the next tool inherits no fixture.
+
+**The harness asserts that the precondition actually held.** A suite
+that skipped the tests the harness went out of its way to enable is not
+a pass, and `ktest_run.py` fails the run when the skip reason appears
+in the transcript. That check earned itself immediately: the first
+version sent the stop as soon as the debug console was up, which is
+BEFORE init has read `/etc/services.d`, so init answered `supervises no
+service called toywm` and the desktop started anyway. It won the race
+about half the time. The wait is on init's own readiness line now.
