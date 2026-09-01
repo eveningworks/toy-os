@@ -295,3 +295,42 @@ KTEST("input", "the scroll settings transform the wheel where it is consumed") {
     mouse_set_scroll_invert(save_inv);
     scheduler_preempt_enable();
 }
+
+// --- what the registry will and will not accept -------------------------
+//
+// THESE EXIST BECAUSE A REFUSAL SHIPPED AND KILLED ALL USB INPUT ON REAL
+// HARDWARE. A check refusing a source with no capability bits looked
+// obviously right and contradicted a documented, deliberate use:
+// `xhci.c` registers `usb-xhci` with `caps = 0` whose only job is to be
+// POLLED, and every HID device's decode rides that one poll. Nothing
+// caught it because the default QEMU boot has no xHCI controller, so the
+// path never ran -- `vm.py --usb xhci+mouse` is what exercises it, and
+// nothing in the gate does. These do, in ring 0, on every `make test`.
+
+static void probe_poll(void) { }
+
+KTEST("input", "a source with no capability bits is accepted if it is polled") {
+    // The shape xhci.c registers: it reports no events itself, it exists
+    // to be serviced. A capability set says what a source REPORTS; it
+    // says nothing about whether the source is worth polling.
+    static const struct input_source svc = {
+        .name = "ktest-service", .driver = "ktest", .caps = 0,
+        .poll = probe_poll,
+    };
+    int before = input_source_count();
+    input_register_source(&svc);
+    KTEST_ASSERT_EQ(input_source_count(), before + 1);
+    input_unregister_source(&svc);
+    KTEST_ASSERT_EQ(input_source_count(), before);
+}
+
+KTEST("input", "a source that is neither polled nor on an interrupt is refused") {
+    // The half of the check that IS right: nothing would ever service
+    // it, which is silent and reads exactly like dead hardware.
+    static const struct input_source orphan = {
+        .name = "ktest-orphan", .driver = "ktest", .caps = INPUT_CAP_KEYS,
+    };
+    int before = input_source_count();
+    input_register_source(&orphan);
+    KTEST_ASSERT_EQ(input_source_count(), before);
+}

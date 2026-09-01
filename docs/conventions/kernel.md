@@ -2497,10 +2497,25 @@ driver".
 **A CLASS REGISTRY REFUSES A DEVICE WHOSE CLAIMS AND OPS DISAGREE.**
 `blk_register()` has always refused a `BLK_CAP_FLUSH` with no `flush()`,
 and `display_register()` the same; `input_register_source()` and
-`sound_register()` now do too -- a source with no capability bits, one
-that is neither polled nor on an interrupt, or a sound device the core
-cannot start. Each was previously accepted and then silently did
-nothing, which reads as dead hardware.
+`sound_register()` now do too -- a source that is neither polled nor on
+an interrupt, or a sound device the core cannot start. Each was
+previously accepted and then silently did nothing, which reads as dead
+hardware.
+
+**BUT A CAPABILITY SET IS A CLAIM ABOUT WHAT A SOURCE REPORTS, NOT ABOUT
+WHETHER IT IS WORTH SERVICING, and refusing `caps == 0` broke all USB
+input on real hardware.** `xhci.c` registers `usb-xhci` with `caps = 0`
+deliberately -- the controller reports no events itself, it exists to be
+POLLED, and every HID device's decode rides that one poll. The refusal
+shipped because it was verified only on a default QEMU boot, which has
+NO xHCI controller, so the path never ran: `vm.py --usb xhci+mouse` is
+what exercises it and nothing in the gate does. Two KTESTs in
+`input_test.c` hold the line now, in ring 0 on every `make test`.
+
+**The general rule: before adding a refusal, grep for what already
+relies on being accepted.** A rule that looks obviously right is exactly
+the kind that contradicts a deliberate, documented use somewhere else --
+and this one had a comment at the assignment saying why.
 
 ## A LEASE IS RENEWED, NOT RE-ASKED, AND A SINGLE SLEEP IS SILENTLY CAPPED
 
