@@ -713,7 +713,8 @@ run on, not by order.
 - [x] ~~Run `dhcp` at boot~~ DONE 2026-08-29 -- init's `dhcp` one-shot; the kernel invents no address at all now
 - [x] ~~A link-local address when no server answers~~ DONE 2026-08-29 -- RFC 3927 / APIPA, probed over `SYS_NET_ARP_PROBE`
 - [ ] Defend a link-local address -- it is claimed and then never watched, so a later conflict goes unnoticed
-- [ ] Renew the lease before it expires -- `/bin/dhcp` asks once and exits
+- [x] ~~Renew the lease before it expires~~ DONE 2026-09-01 -- resident, re-requests at T1; `dhcp -1` is the old one-shot
+- [x] ~~Wait for carrier before the boot-time DISCOVER~~ DONE 2026-09-01 -- the boot attempt used to race a USB PHY's 4-6s link
 - [ ] An ICMP error reaching the socket that caused it -- reports are sent, and an arriving one is dropped for want of an error queue
 - [ ] An `arp` command -- the cache is diagnosable only from inside the kernel today
 - [ ] A routing table -- routing is "my subnet, or the gateway", per device

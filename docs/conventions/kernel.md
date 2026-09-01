@@ -2478,3 +2478,29 @@ rule.
 simply absent from the listing, which is the silent-failure shape this
 project usually answers with a `check_*.py`. It is on the roadmap; until
 then, adding a driver means adding the line.
+
+## A NETWORK CLIENT WAITS FOR CARRIER, AND A SERVICE DESCRIPTOR HAS A 512-BYTE BUDGET
+
+Two rules from one change, and both bit within an hour of each other.
+
+**Ask nothing on a dead wire.** `/bin/dhcp` polls `QUERY_NETDEV`'s
+`link_up` before its DISCOVER, because init starts it ~1.5 s into the
+boot and a USB Ethernet PHY does not report link until 4-6 s. Before
+that the wait was ACCIDENTAL -- `sendto()` on a down link returns
+`EAGAIN`, and the retry loop spent the DISCOVER's own four-second budget
+on it -- so the attempt expired at ~5.45 s and the boot lease was a coin
+flip. `systemd-networkd`'s `ConfigureWithoutCarrier` defaults to no for
+the same reason.
+
+**A driver that cannot report carrier is not "down".** `link_known` 0
+means the question cannot be asked, and waiting for an answer that will
+never come turns a working card into a timeout. Proceed.
+
+**AND EVERY `/etc/services.d/` DESCRIPTOR MUST FIT IN 512 BYTES,
+COMMENTS INCLUDED.** That is `etc_config.c`'s buffer. A longer file has
+its last keys silently ignored -- init reports `<name> has no Exec=,
+will not start it`, which reads as a broken service rather than a long
+comment. It happened while documenting the rule above: the explanation
+went to `docs/commands/dhcp.md` and the descriptor kept three lines and
+a pointer. **Reasoning belongs in the man page; the descriptor is
+configuration.**

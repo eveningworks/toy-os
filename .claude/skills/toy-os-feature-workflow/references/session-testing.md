@@ -2310,3 +2310,48 @@ any other way:
   somewhere and are probably right" into something re-runnable, and it
   keeps `loc.py` honest about what was actually written here. Any data
   the repo takes rather than writes deserves the same treatment.
+
+## 2026-09-01 -- when a settled screenshot is the WRONG instrument
+
+`QMPSession.stable_pixels()` and `hover_frames()` exist because a
+capture landing mid-paint fails a comparison with nothing wrong. But
+settling has a cost that took a session to name: **it outlasts anything
+else that repaints.**
+
+The desktop repaints once a second for the tray clock. So a check that
+warps the cursor onto a menu row, settles, and photographs it finds the
+highlight correctly placed -- *having arrived up to a second late*.
+That lateness IS the bug being looked for, and settling launders it
+away. The test that works counts frames (`gui state`'s
+`scene repaints`) and never looks at a pixel.
+
+**The rule: settle when asking WHETHER something is drawn; never when
+asking WHEN.** For latency, find a number.
+
+## A test tool must match the runner's argument shape
+
+`gui_regress.py` passes `--sock` and `--qmp-port`; a new tool taking
+`--instance` fails with `unrecognized arguments` and shows up as a red
+tool that runs correctly by hand. Copy the argparse block from a tool
+the runner already drives (`keyup_test.py`) rather than inventing one.
+
+## An injected pointer position snaps back, so it changes hover TWICE
+
+`gui move X Y` overrides the pointer for ONE `wm_run()` iteration; the
+next reads the real mouse. So an injected move onto a menu row changes
+the hovered row to that row AND THEN back to none. A check written as
+"moving within one row must not repaint" measured the snap-back and
+failed against correct code.
+
+It is still the right tool for asking whether an input causes a FRAME --
+one console round trip (~10 ms) against a warp's several hundred, which
+is what keeps a 1 Hz clock out of a frame-counting measurement. Use
+`hover_frames()` when the STATE must survive a capture; use `gui move`
+when the question is whether something happened at all.
+
+## Ask the fixture for the thing it will actually be checked for
+
+A poll that waits for "any content" in a file catches it MID-WRITE. One
+read returned `3830823995 ` with the rest of the line still coming, and
+the verify behind it reported a malformed manifest -- indistinguishable
+from a broken parser. Poll for the LAST token of what is being written.

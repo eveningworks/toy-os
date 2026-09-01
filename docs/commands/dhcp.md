@@ -6,7 +6,7 @@
 
 ## Synopsis
 
-    dhcp [<device>]
+    dhcp [-1] [<device>]
 
 ## Description
 
@@ -56,11 +56,40 @@ than in the kernel.
 
 ## What it is not
 
-**Not a daemon, and the lease is not renewed.** A real client keeps a
-timer and renews at half the lease; this asks once and applies what it
-gets. That is a genuine limitation: a lease that expires under a
-long-running machine leaves it using an address the server has since
-given away.
+**It waits for carrier before it asks anything.** Up to ten seconds,
+polling `QUERY_NETDEV`'s link state, and only then falling back to
+link-local. That is what every real client does — `systemd-networkd`'s
+`ConfigureWithoutCarrier` defaults to *no*, and dhcpcd will not send on
+a down link either.
+
+It matters here because of when things happen at boot: init starts this
+about **1.5 s** in, and a USB Ethernet PHY does not report link until
+**4–6 s**. Before the carrier watch existed the wait happened *by
+accident* — `sendto()` on a down link returns `EAGAIN`, and the retry
+loop spent the DISCOVER's own four-second budget on it — so the attempt
+expired at about 5.45 s. That is a coin flip against a 4–6 s link, and
+it behaved like one: an address on some boots and link-local on others,
+with `dhcp net0` by hand always working afterwards because by then the
+wire was up.
+
+A driver that cannot report carrier (`link_known` 0) is **not** treated
+as down: waiting on an answer that will never come would turn a working
+card into a ten-second delay followed by link-local.
+
+**It renews.** Started as a service it stays resident and re-requests at
+T1, half the lease (RFC 2131). A lease that is never renewed expires at
+an hour the server chose, and the machine loses its address with nothing
+to say why.
+
+`-1` is the old ask-and-apply-and-exit behaviour, and is what you want
+typing this at a prompt — it will not sit there holding the terminal.
+
+Two honest limits. It does **not** distinguish RENEWING (unicast to the
+leasing server) from REBINDING (broadcast at T2) — it broadcasts
+throughout, which the one server on one segment this was built against
+answers identically. And only the **first** device with a real lease is
+renewed; a second card would need its own timer, and no machine here has
+ever held two leases at once.
 
 **A link-local address is claimed and never defended.** RFC 3927 asks a
 host to keep watching for a conflicting ARP after it has taken an
@@ -71,7 +100,7 @@ the kernel does not report a conflict to anybody.
 
     dhcp: net0: 192.168.76.20 netmask 255.255.255.0 gateway 192.168.76.2
     dhcp: nameserver 192.168.76.3 -> /etc/resolv.conf
-    dhcp: lease 86400 seconds (not renewed -- see the manual)
+    dhcp: lease 86400 seconds
 
 and where nothing answered:
 
@@ -95,3 +124,12 @@ claim, so neither is the end of the run.
 `ifconfig` for what it changed, `service` for whether the boot-time run
 worked, `host` for what the nameserver is for, and
 `docs/conventions/kernel.md`'s networking entry for the layering.
+
+## The service descriptor has a 512-byte budget
+
+`/etc/services.d/dhcp` — like every descriptor — is read through
+`etc_config.c`'s 512-byte buffer, **comments included**. A file over
+that has its last keys silently ignored, and init reports
+`dhcp has no Exec=, will not start it`. That is not hypothetical: it
+happened while writing the comment that used to explain all of the
+above, which is why the reasoning lives on this page instead.

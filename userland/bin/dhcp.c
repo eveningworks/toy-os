@@ -284,13 +284,68 @@ static int link_local(const char *dev, const uint8_t *mac) {
     return 0;
 }
 
+// --- carrier ----------------------------------------------------------
+//
+// WAIT FOR THE WIRE BEFORE ASKING, which is what every real client does
+// -- systemd-networkd's ConfigureWithoutCarrier defaults to no, and
+// dhcpcd will not send on a down link either.
+//
+// Until this existed the wait happened BY ACCIDENT: sendto() on a down
+// link returns EAGAIN and exchange() retried for WAIT_MS, so the
+// DISCOVER budget and the carrier wait were the same four seconds and
+// ate each other. Measured on the bare-metal laptop, init starts this
+// at ~1.45 s and the RTL8153's PHY reports link at 4.4-5.9 s, so the
+// accidental wait expired at ~5.45 s -- a coin flip, which is exactly
+// how it behaved: an address on some boots and link-local on others.
+//
+// A DRIVER THAT CANNOT REPORT CARRIER IS NOT "DOWN". link_known is 0
+// for those, and waiting on an answer that will never come would turn
+// a working card into a ten-second delay and then link-local.
+#define CARRIER_WAIT_MS 10000
+#define CARRIER_POLL_MS 100
+
+static int wait_for_carrier(const char *name) {
+    struct query_netdev d;
+    for (unsigned i = 0; ; i++) {
+        if (sys_query_record(QUERY_NETDEV, i, &d, sizeof d) < (int)sizeof d) return 1;
+        if (!strcmp(d.name, name)) break;
+    }
+    if (!d.link_known) return 1;   // cannot be asked: proceed, do not stall
+    if (d.link_up) return 1;
+
+    printf("dhcp: %s: waiting for carrier...\n", name);
+    for (int waited = 0; waited < CARRIER_WAIT_MS; waited += CARRIER_POLL_MS) {
+        sys_sleep_ms(CARRIER_POLL_MS);
+        for (unsigned i = 0; ; i++) {
+            if (sys_query_record(QUERY_NETDEV, i, &d, sizeof d) < (int)sizeof d) break;
+            if (strcmp(d.name, name)) continue;
+            if (d.link_up) {
+                printf("dhcp: %s: link up %uM after %d.%ds\n", name,
+                       (unsigned)(d.link_bps / 1000000), waited / 1000,
+                       (waited % 1000) / 100);
+                return 1;
+            }
+            break;
+        }
+    }
+    // Bounded, so an unplugged machine still reaches a usable state --
+    // link-local, exactly as before, just after a wait that was worth
+    // making.
+    printf("dhcp: %s: no carrier after %ds\n", name, CARRIER_WAIT_MS / 1000);
+    return 0;
+}
+
 // --- one device ------------------------------------------------------
 
 // Returns 1 if the device ends up with an address, by lease or by
 // claim.
-static int configure(const struct query_netdev *dev) {
+static int configure(const struct query_netdev *dev, struct lease *got) {
     uint8_t mac[6];
     for (int i = 0; i < 6; i++) mac[i] = (uint8_t)(dev->mac >> (i * 8));
+
+    // Before the socket, before the DISCOVER: there is nothing to ask
+    // on a dead wire, and asking anyway is what made this a coin flip.
+    if (!wait_for_carrier(dev->name)) return link_local(dev->name, mac);
 
     int fd = sys_socket(NET_ABI_AF_INET, NET_ABI_SOCK_DGRAM, NET_ABI_IPPROTO_UDP);
     if (fd < 0) { cmd_fail("dhcp", "socket"); return 0; }
@@ -366,14 +421,64 @@ static int configure(const struct query_netdev *dev) {
         else
             printf("dhcp: could not write %s\n", RESOLV_CONF);
     }
-    if (l.seconds) printf("dhcp: lease %u seconds (not renewed -- see the manual)\n", l.seconds);
+    if (l.seconds) printf("dhcp: lease %u seconds\n", l.seconds);
+    if (got) *got = l;
     return 1;
 }
 
+// --- renewal ----------------------------------------------------------
+//
+// RFC 2131's timers: at T1 (half the lease) the client REQUESTs its own
+// address from the server that granted it, and on an ACK the clock
+// starts again. If that fails it keeps trying, and at expiry it falls
+// all the way back to a DISCOVER -- because an address whose lease has
+// run out is not ours any more, whatever the interface still says.
+//
+// NOT A FULL STATE MACHINE. RFC 2131 distinguishes RENEWING (unicast to
+// the server) from REBINDING (broadcast at T2), and this broadcasts
+// throughout: the machine that motivated it has one server on one
+// segment, and a REBIND that reaches the same server is answered the
+// same way. Said here rather than left to be discovered.
+static struct lease k_lease;
+static char renew_dev[NET_ABI_NAME_MAX];
+
+static void renew_forever(void) {
+    for (;;) {
+        uint32_t half = k_lease.seconds / 2;
+        if (half < 30) half = 30;      // a very short lease must not spin
+        sys_sleep_ms((int)(half * 1000));
+
+        struct query_netdev dev;
+        int found = 0;
+        for (unsigned i = 0; ; i++) {
+            if (sys_query_record(QUERY_NETDEV, i, &dev, sizeof dev) < (int)sizeof dev) break;
+            if (!strcmp(dev.name, renew_dev)) { found = 1; break; }
+        }
+        if (!found) return;            // the card went away
+
+        struct lease got = {0};
+        if (configure(&dev, &got) && got.seconds) {
+            k_lease = got;
+        } else {
+            // Keep the old timer and try again sooner rather than
+            // giving up: a server that is briefly unreachable is the
+            // ordinary case, and the address stays valid until expiry.
+            printf("dhcp: %s: renewal failed, retrying\n", renew_dev);
+            k_lease.seconds = k_lease.seconds > 120 ? 120 : k_lease.seconds;
+        }
+    }
+}
+
 int main(int argc, char **argv) {
-    if (argc > 2) {
-        cmd_usage("dhcp [<device>]");
-        return 1;
+    // `-1` IS THE OLD BEHAVIOUR, and it is what a person typing this at
+    // a prompt wants: ask, apply, exit. The service descriptor leaves it
+    // off so the boot-time one stays resident and renews.
+    int oneshot = 0;
+    const char *want = 0;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-1")) oneshot = 1;
+        else if (!want && argv[i][0] != '-') want = argv[i];
+        else { cmd_usage("dhcp [-1] [<device>]"); return 1; }
     }
 
     int tried = 0, done = 0;
@@ -381,8 +486,8 @@ int main(int argc, char **argv) {
         struct query_netdev dev;
         if (sys_query_record(QUERY_NETDEV, i, &dev, sizeof dev) < (int)sizeof dev) break;
 
-        if (argc == 2) {
-            if (strcmp(dev.name, argv[1])) continue;
+        if (want) {
+            if (strcmp(dev.name, want)) continue;
         } else if (dev.ip) {
             // Said out loud rather than skipped silently: on a boot
             // where one card is already configured this is the whole
@@ -391,13 +496,35 @@ int main(int argc, char **argv) {
             continue;
         }
         tried++;
-        done += configure(&dev);
+        struct lease got = {0};
+        if (configure(&dev, &got)) {
+            done++;
+            // The FIRST device with a real lease is the one this stays
+            // alive to renew. One renewer for one lease: a second card
+            // would need its own timer, and this machine has never had
+            // two leases at once.
+            if (!renew_dev[0] && got.seconds && got.server) {
+                k_lease = got;
+                strncpy(renew_dev, dev.name, sizeof renew_dev - 1);
+            }
+        }
     }
 
     if (!tried) {
-        if (argc == 2) printf("dhcp: no such device: %s\n", argv[1]);
+        if (want) printf("dhcp: no such device: %s\n", want);
         else           printf("dhcp: no device without an address\n");
         return 1;
     }
-    return done == tried ? 0 : 1;
+    if (done != tried) return 1;
+
+    // --- RENEWING (RFC 2131) ------------------------------------------
+    //
+    // Only when asked to: `-1` is the one-shot the boot used to be, and
+    // is what a person typing `dhcp net0` at a prompt wants. As a
+    // service this stays resident, because a lease that is never renewed
+    // silently expires and the machine loses its address at an hour a
+    // server chose.
+    if (oneshot || !renew_dev[0]) return 0;
+    renew_forever();
+    return 0;
 }

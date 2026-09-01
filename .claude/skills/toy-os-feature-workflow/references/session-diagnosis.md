@@ -1272,3 +1272,63 @@ error, which is why nothing upstream noticed.
   luck. `git checkout` the file and redo the edit with ANCHORED
   replacements -- never `s[:i] + new + s[j:]` across code you have not
   re-read.
+
+## 2026-09-01 -- four bugs found while building something else, and what found them
+
+None of these were what the session set out to do. Each was found by an
+instrument built for a different purpose, which is the transferable
+part: **the measurement you add to verify a feature is the thing that
+finds the bug next to it.**
+
+**A COUNTER YOU CANNOT READ IS A BUG YOU CANNOT SEE.** The Start menu's
+hover highlight lagged a second. Frames were fast (10-20 ms), input was
+not dropped, and every screenshot showed the highlight in the right
+place -- because the tray clock repaints once a second and a SETTLED
+capture always outlasts that. The bug was that `wm_damage_rect()`
+records a rectangle and does not schedule a frame, so a hover change
+damaged and never repainted. It became visible only after adding
+`scene repaints` to `gui state` and counting. **Before reaching for
+pixels, ask whether the thing you want to know is a NUMBER the system
+could simply report.**
+
+**A FIX FOR A SYMPTOM CAN REINTRODUCE THE SYMPTOM ELSEWHERE.** That
+regression came from a commit whose own message opens "The flyout's
+hover highlight lagged by up to a second" -- it generalised six popups'
+hover into one table and dropped the `redraw_pending = 1` the
+per-overlay code carried. When you unify N call sites, diff what each
+one did, not just what it called.
+
+**`-j` MAKES A PREREQUISITE A RACE.** Every program's embedded version
+was one build stale after a commit: `version` was a prerequisite of
+`all`, and with `-j16` make built it CONCURRENTLY with the object tree.
+The workaround ("run `make iso` twice") had been in `iso_guard.py`'s
+advice for months as if it were a quirk. Generating at Makefile PARSE
+time is the fix. **A generated file that other objects include must
+exist before make evaluates anything, not before it links.**
+
+**A FIELD THAT IS AN OUTPUT ON EVERY PATH BUT ONE.** `win_server_debug()`
+clears `msg->flags` at entry -- right for every request except
+`WIN_REQ_DEBUG_REPLY`, where the compositor is telling the kernel what
+its answer IS. So `gui nosuchthing` printed NOTHING from the day the
+desktop became a process. **When one handler in a dispatch treats a
+field as an input, the shared preamble is where it dies.**
+
+## Measure the SHAPE of a cost before optimising it
+
+`remote.py put` of a 4.7 MB kernel took five minutes. The instinct was
+"the network is slow". Measured: 32 ms per 512-byte block, of which
+**1.8 ms** was the network. The rest was a 10 ms scheduler tick per
+round trip and ~22 ms of filesystem transaction -- three independent
+multipliers, and the protocol was the smallest.
+
+The general move: **take one measurement that separates the layers
+before choosing what to change.** Here it was timing a `get` (guest
+reads) against a `put` (guest writes) -- the difference is the disk, and
+the floor they share is the tick.
+
+And the correction worth keeping: **an optimisation that exceeds a
+downstream buffer is slower than none.** A 16-deep TFTP window took
+611 seconds for 1 MiB against 21 for plain lock-step, because
+`SOCK_QUEUE` is 4 and holds three datagrams -- thirteen of every sixteen
+blocks were discarded on arrival. Ask what happens to N+1 before sending
+N of anything.

@@ -1,21 +1,13 @@
-# An address for every card that has none. Started by init on any
-# target -- the network is not the desktop's.
+# An address for every card that has none, and it KEEPS it.
 #
-# Restart=no makes this a ONE-SHOT: /bin/dhcp asks, applies what it is
-# given and exits, and there is nothing to supervise afterwards. That is
-# systemd's Type=oneshot, and init already reports it as `done` (or
-# `failed`, which is how `service` answers "did this machine get an
-# address?").
+# Waits for carrier before asking, then stays resident and renews at T1.
+# `dhcp -1` is the old ask-and-exit behaviour.
 #
-# NOT RESTARTED WHEN THE LEASE EXPIRES, because nothing here is watching
-# the clock -- see docs/roadmap.md's renewal item. A machine up longer
-# than its lease is using an address the server may have given away.
+# Restart=always: a service with a timer now, not a job that finishes.
 #
-# There is no ordering key: nothing yet needs the network to be up
-# before it starts, and After= would only say when this was SPAWNED.
-#
-# See data/etc/services.d/README.md for the format.
+# THE WHOLE FILE MUST FIT IN 512 BYTES, comments included -- that is
+# etc_config.c's buffer. docs/commands/dhcp.md has the reasoning.
 Name=dhcp
-Description=Ask the network for an address
+Description=Ask the network for an address, and keep it
 Exec=/bin/dhcp
-Restart=no
+Restart=always
