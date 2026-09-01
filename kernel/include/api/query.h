@@ -181,6 +181,10 @@ void fs_query_init(void);
 // SYS_GETRANDOM on purpose -- see the comment in krandom_query.c.
 void krandom_query_init(void);
 
+// QUERY_VERSION -- kernel/core/kversion.c. Declared in kversion.h too,
+// which is what non-query callers include for the banner.
+void kversion_query_init(void);
+
 // kernel/drivers/'s providers for the disk's partition table and its
 // entries. Two classes, because "no partitions" and "no partition
 // table" are different answers a list alone cannot distinguish.

@@ -359,6 +359,18 @@ _Static_assert(sizeof(struct query_fontglyph) <= 256,
 // reader never has to correlate two indexes.
 #define QUERY_ACPIDUMP 27
 
+// What kernel is actually running: its version, the commit it was built
+// from, and when it was compiled. SCALAR.
+//
+// IT EXISTS BECAUSE A PROGRAM CANNOT KNOW THIS. `about` used to print
+// TOYOS_VERSION_FULL from its own build, which is right only while the
+// kernel and userland come from one image -- and wrong the moment a
+// machine is updated over the network a piece at a time. That is not
+// hypothetical: the bare-metal laptop reported 214d29e while running
+// 083cf8e, and nothing on it could say otherwise, because the kernel
+// prints its version in ONE place and that place is a panic.
+#define QUERY_VERSION 28
+
 #define QUERY_KLOG_DATA 232
 
 struct query_klog {
@@ -524,6 +536,15 @@ struct query_mmaudit {
 #define QUERY_RANDOM_JITTER 1 // TSC jitter -- WEAK under an emulator
 #define QUERY_RANDOM_VIRTIO 2 // virtio-rng: the host's entropy
 #define QUERY_RANDOM_HW     3 // RDSEED/RDRAND
+
+// QUERY_VERSION's record. Fixed char arrays rather than pointers: a
+// query copies a record to ring 3, and a pointer into kernel .rodata is
+// not something ring 3 can follow.
+struct query_version {
+    char version[16];   // "0.3.0-dev" -- TOYOS_VERSION
+    char build_id[24];  // "426601f", or "426601f-dirty", or "unknown"
+    char stamp[24];     // "2026-09-01 10:39:12", to the second
+};
 
 struct query_random {
     uint64_t quality;              // QUERY_RANDOM_*, ordered by trust

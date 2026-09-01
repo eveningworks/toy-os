@@ -30,6 +30,8 @@
 # is a non-event.
 /kernel/include/api/version.h
 /kernel/include/api/build_date.h
+# Regenerated on EVERY build, unlike the two above -- see gen_version.sh.
+/kernel/include/api/build_stamp.h
 
 # Persistent disk image (see Makefile's DISK_IMG comment) -- deliberately
 # left alone by `make clean`, it's local dev state, not a repo asset.

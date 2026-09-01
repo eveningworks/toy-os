@@ -66,6 +66,7 @@ extern char __kimage_start[];
 #include "stack_guard.h"  // stack_guard_randomize() -- read its header before moving the call
 #include "knum.h"
 #include <stdint.h>
+#include "kversion.h" // kversion_banner(), kversion_query_init() -- QUERY_VERSION
 
 // Zero-padded 2-digit decimal, for the RTC boot-time log line below.
 // klog_write_dec() (klog.h) deliberately doesn't pad, so this used to
@@ -81,6 +82,13 @@ static void klog_write_dec2(uint8_t n) {
 
 void kernel_main(uint64_t multiboot_info_addr) {
     serial_init();
+    // THE BANNER FIRST, so a captured log identifies its build before
+    // anything else can go wrong -- which is the whole reason Linux
+    // makes linux_banner the first line of dmesg. Until this existed,
+    // the kernel named its build in ONE place and that place was a
+    // panic (idt.c).
+    klog_write(kversion_banner());
+    klog_write("\n");
     klog_write("toy-os: kernel_main reached, initializing...\n");
 
     multiboot_set_info(multiboot_info_addr);
@@ -360,6 +368,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     mm_audit_query_init();
     procmap_query_init();
     krandom_query_init();
+    kversion_query_init();
     partition_query_init();
     block_query_init();
     net_query_init();
