@@ -110,6 +110,7 @@ static void say(const char *fmt, ...) {
 #define BCAST 0xFFFFFFFFu
 
 #define WAIT_MS 4000
+#define RETX_MS 1000   // first retransmit, then doubling -- RFC 2131 4.1
 #define POLL_MS 10
 
 #define RESOLV_CONF "/etc/resolv.conf"
@@ -272,32 +273,64 @@ static void build(struct dhcp_msg *m, const uint8_t *mac, const uint8_t *xid,
 // a broadcast port hears every client on the segment.
 // `dest` is 0xFFFFFFFF for everything except a RENEWING request, which
 // goes straight to the server that granted the lease.
+// Sends once, answering a busy socket. Returns 0 when the datagram
+// could not be handed to the stack at all.
+static int send_once(int fd, struct dhcp_msg *out, uint32_t out_len,
+                     uint32_t dest) {
+    for (int waited = 0; waited < WAIT_MS; waited += POLL_MS) {
+        int64_t rc = sys_sendto(fd, out, out_len, dest, DHCP_SERVER_PORT);
+        if (rc >= 0) return 1;
+        if (sys_errno() != EAGAIN) return 0;
+        sys_sleep_ms(POLL_MS);
+    }
+    return 0;
+}
+
 static int exchange(int fd, struct dhcp_msg *out, uint32_t out_len,
                     const uint8_t *xid, uint8_t want, struct dhcp_msg *in,
                     uint32_t dest) {
-    int64_t rc = -1;
-    for (int waited = 0; waited < WAIT_MS; waited += POLL_MS) {
-        rc = sys_sendto(fd, out, out_len, dest, DHCP_SERVER_PORT);
-        if (rc >= 0 || sys_errno() != EAGAIN) break;
-        sys_sleep_ms(POLL_MS);
-    }
-    if (rc < 0) return 0;
+    // IT RETRANSMITS, which RFC 2131 4.1 requires and the first version
+    // did not do: it sent ONE datagram and then only waited. A lost
+    // request was therefore indistinguishable from "no server", and on
+    // the bare-metal laptop that lost the boot's INIT-REBOOT every time
+    // -- the switch port reports link before it forwards (MAC learning,
+    // and spanning tree if enabled), so the first datagram out of a
+    // freshly-carrier-up interface goes nowhere. The DISCOVER that
+    // followed 4 s later always worked, which is what made this look
+    // like a property of INIT-REBOOT rather than of the wire.
+    //
+    // The BUDGET is unchanged -- three attempts inside the same WAIT_MS
+    // rather than one -- so a network with genuinely no server costs
+    // exactly what it did before.
+    uint64_t deadline = sys_monotonic_ns() + (uint64_t)WAIT_MS * 1000000ull;
+    uint64_t next_send = 0;                 // 0 == send immediately
+    uint32_t backoff_ms = RETX_MS;
 
     // A blocking receive, but still a LOOP: a broadcast port hears
     // every client on the segment, so a datagram that is not ours is
     // ignored and the wait continues on what is LEFT of the budget --
     // recomputed each time, or somebody else's traffic would extend our
     // deadline indefinitely.
-    uint64_t deadline = sys_monotonic_ns() + (uint64_t)WAIT_MS * 1000000ull;
     for (;;) {
         uint64_t now = sys_monotonic_ns();
         if (now >= deadline) return 0;
-        unsigned left = (unsigned)((deadline - now) / 1000000ull);
+
+        if (now >= next_send) {
+            if (!send_once(fd, out, out_len, dest)) return 0;
+            next_send = now + (uint64_t)backoff_ms * 1000000ull;
+            // Doubling, as RFC 2131 asks. No randomisation: that exists
+            // to stop a fleet of clients synchronising after a power
+            // cut, and this is one machine with one interface.
+            backoff_ms *= 2;
+        }
+
+        uint64_t until = next_send < deadline ? next_send : deadline;
+        unsigned left = (unsigned)((until - now) / 1000000ull);
 
         uint32_t src = 0;
         uint16_t port = 0;
         int64_t n = sys_recvfrom(fd, in, sizeof *in, &src, &port, left ? left : 1);
-        if (n <= 0) return 0;   // the budget expired
+        if (n <= 0) continue;   // this slice expired; retransmit or give up
 
         uint32_t len = (uint32_t)n;
         if (in->op == OP_REPLY && !memcmp(in->xid, xid, 4) &&
@@ -469,9 +502,13 @@ static void save_lease(const char *dev, const uint8_t *mac,
     lease_path(LEASE_FILE, sizeof LEASE_FILE, dev);
     // The directory first: `open()` with O_CREAT does NOT create a
     // missing parent here, and reports success while writing nothing
-    // (docs/bugs.md), so a mkdir that usually fails harmlessly is
-    // cheaper than a lease that silently never persists.
-    sys_mkdir(LEASE_DIR);
+    // (docs/bugs.md), so a lease would silently never persist.
+    // ASKED FIRST rather than created unconditionally: the kernel logs
+    // `mkdir() rejected -- already exists`, and on a machine that
+    // renews for weeks that is a line of noise per renewal in a ring
+    // buffer holding a few hundred.
+    struct sys_stat st;
+    if (sys_stat(LEASE_DIR, &st) != 0) sys_mkdir(LEASE_DIR);
 
     char v[24];
     snprintf(v, sizeof v, "%02x:%02x:%02x:%02x:%02x:%02x",

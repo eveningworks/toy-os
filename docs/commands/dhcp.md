@@ -118,6 +118,17 @@ rather than waited out. Only the address is reused;
 the mask, router and DNS always come from the ACK, because values
 remembered from a different network are worse than none.
 
+**Every request is retransmitted** — at 1 s, then 2 s, inside the same
+four-second budget (RFC 2131 §4.1). That is not a refinement: a switch
+port reports link *before* it forwards, so the first datagram out of a
+freshly-carrier-up interface goes nowhere, and a single-shot INIT-REBOOT
+lost the boot lease on real hardware every time. Measured on the
+bare-metal laptop: `asking for 192.168.200.107 again` at 1.46 s then
+`no usable answer` at 5.44 s, against the request now succeeding at
+4.44 s — two hundredths of a second before `net0 link UP` is even
+logged. A network with genuinely no server costs exactly what it did
+before, since the budget is unchanged.
+
 A lease is state rather than config, so it lives under `/var` — the
 split the FHS makes and `dhclient` follows with
 `/var/lib/dhcp/dhclient.leases`.
