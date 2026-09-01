@@ -352,10 +352,33 @@ ASM_OBJECTS = $(patsubst %.asm, $(BUILD)/%.o, $(ASM_SOURCES))
 # VERSION's value actually changed) specifically so this doesn't
 # regress into "every file that includes kapi.h rebuilds on every
 # single build" -- see that script's top comment.
+# AND IT RUNS AT PARSE TIME, which is the only point early enough.
+#
+# As a prerequisite of `all` it was RACING the compilation it was meant
+# to precede: with -j16 make builds `version` and the object tree as
+# independent prerequisites concurrently, so a .o could be compiled
+# against the PREVIOUS version.h. The symptom was that every program's
+# embedded version was one build stale after a commit -- `make iso`
+# twice fixed it, which is why iso_guard.py's advice has always been
+# "run it again and it will be current". A second build should not be
+# part of anyone's mental model.
+#
+# $(shell) here runs while the Makefile is being READ, before make
+# evaluates a single dependency or starts a job, so version.h is already
+# correct when the graph is built. The variable is never used; assigning
+# it is just how a shell command runs at parse time.
+VERSION_GEN := $(shell sh tools/gen_version.sh >/dev/null 2>&1 && echo ok)
+
+# The target stays for `make version` by hand. NOTHING DEPENDS ON IT any
+# more: the parse-time call above has already run by the time any rule is
+# considered, and leaving it as a prerequisite made gen_version.sh run a
+# SECOND time DURING the build -- rewriting build_stamp.h after
+# kernel.bin had linked, so iso_guard.py correctly called the fresh image
+# stale.
 version:
 	@sh tools/gen_version.sh
 
-all: version $(KERNEL) $(USERLAND_ELVES) $(LDSO) $(DYNLIBS) $(LIBC_SO)
+all: $(KERNEL) $(USERLAND_ELVES) $(LDSO) $(DYNLIBS) $(LIBC_SO)
 
 help:
 	@echo "toy-os -- available targets:"
@@ -462,11 +485,11 @@ help:
 FORCE:
 $(BUILD)/kernel/core/kversion.o: FORCE
 
-$(BUILD)/%.o: %.c | version
+$(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(if $(filter apps/%,$<),$(APPS_CFLAGS),$(CFLAGS)) $< -o $@
 
-$(BUILD)/%.o: %.asm | version
+$(BUILD)/%.o: %.asm
 	@mkdir -p $(dir $@)
 	$(ASM) $(ASMFLAGS) $< -o $@
 
@@ -475,7 +498,7 @@ $(BUILD)/%.o: %.asm | version
 # a .c file in userland/gui, userland/bin or userland/tests and nothing
 # else -- the directory says both that it is a program and where it
 # seeds to (see "userland source layout" above).
-$(BUILD)/userland/%.o: userland/%.c | version
+$(BUILD)/userland/%.o: userland/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
@@ -602,7 +625,7 @@ $(LIBUAPP): $(LIBUAPP_OBJS)
 	rm -f $@
 	$(AR) rcs $@ $^
 
-$(BUILD)/userland/%.o: userland/%.S | version
+$(BUILD)/userland/%.o: userland/%.S
 	@mkdir -p $(dir $@)
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
@@ -713,7 +736,7 @@ DOOM_CFLAGS = $(subst -Wframe-larger-than=2048,-Wframe-larger-than=16384,\
 # pushed through all eighty.
 $(BUILD)/userland/ports/doom/midifile.o: DOOM_CFLAGS += -include SDL.h
 
-$(BUILD)/userland/ports/doom/%.o: userland/ports/doom/%.c | version
+$(BUILD)/userland/ports/doom/%.o: userland/ports/doom/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(DOOM_CFLAGS) $< -o $@
 
@@ -793,19 +816,19 @@ LIBC_PIC_OBJS = $(patsubst userland/%.c,$(BUILD)/userland-pic/%.o,$(filter-out u
 
 LIBC_NONSHARED = $(BUILD)/userland/libc_nonshared.a
 
-$(BUILD)/userland-pic/%.o: userland/%.c | version
+$(BUILD)/userland-pic/%.o: userland/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(LIBC_PIC_CFLAGS) $< -o $@
 
-$(BUILD)/userland-pic/%.o: userland/%.S | version
+$(BUILD)/userland-pic/%.o: userland/%.S
 	@mkdir -p $(dir $@)
 	$(CC) $(LIBC_PIC_CFLAGS) $< -o $@
 
-$(BUILD)/userland-pic/shared/%.o: kernel/lib/%.c | version
+$(BUILD)/userland-pic/shared/%.o: kernel/lib/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(LIBC_PIC_SHARED_CFLAGS) -Iapps $< -o $@
 
-$(BUILD)/userland-pic/shared/%.o: apps/%.c | version
+$(BUILD)/userland-pic/shared/%.o: apps/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(LIBC_PIC_SHARED_CFLAGS) -Iapps $< -o $@
 
@@ -951,11 +974,11 @@ $(BUILD)/userland/%.elf: $(BUILD)/userland/%.o $(USERLAND_RT) userland/rt/link.l
 # rather than something the comment above asks for.
 SHARED_CFLAGS = $(subst $(LIBC_INCLUDES),,$(USERLAND_CFLAGS))
 
-$(BUILD)/userland/shared/%.o: kernel/lib/%.c | version
+$(BUILD)/userland/shared/%.o: kernel/lib/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(SHARED_CFLAGS) -Iapps $< -o $@
 
-$(BUILD)/userland/shared/%.o: apps/%.c | version
+$(BUILD)/userland/shared/%.o: apps/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(SHARED_CFLAGS) -Iapps $< -o $@
 

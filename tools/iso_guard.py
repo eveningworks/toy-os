@@ -229,6 +229,22 @@ GENERATED_SOURCES = {
     "kernel/include/api/version.h",   # tools/gen_version.sh, on every git state change
 }
 
+# Files whose mtime carries NO information about whether the image is
+# stale, so comparing them against it can only produce a false alarm.
+#
+# build_stamp.h is written by tools/gen_version.sh at Makefile PARSE
+# time -- so EVERY make invocation rewrites it, `make clean-disk` and
+# `make help` included, and those do not rebuild anything. It cannot
+# indicate a failed build either: the one object that includes it is
+# FORCEd, so any real build relinks the kernel after it.
+#
+# This is not the same as GENERATED_SOURCES above, which still reports
+# (differently worded) because version.h moving CAN mean the image is
+# behind.
+IGNORED_SOURCES = {
+    "kernel/include/api/build_stamp.h",
+}
+
 
 def check_iso_fresh(repo: Path = REPO, iso_name: str = "toy-os.iso",
                     medium: str = "cd"):
@@ -260,6 +276,8 @@ def check_iso_fresh(repo: Path = REPO, iso_name: str = "toy-os.iso",
             continue
         if src_m > out_m:
             rel = src.relative_to(repo)
+            if str(rel) in IGNORED_SOURCES:
+                continue
             # A GENERATED file being newer is the ordinary case, not a
             # failure, and saying "check make iso's output for an error"
             # sends the reader hunting for one that is not there.
