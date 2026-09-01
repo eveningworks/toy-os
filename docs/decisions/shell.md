@@ -1206,3 +1206,49 @@ reply matches the tuple the client sent to. It serializes transfers,
 which is why it is not the default — and it is what the shipped service
 uses, because the alternative is asking every user to load a kernel
 module on their own machine first.
+
+## The line editor takes its memory from the front end
+
+`kline_init_mem(&ed, &mem)` passes an alloc/free pair in, rather than
+`klineedit.c` calling an allocator itself. Worth recording because the
+obvious answer -- "just call malloc" -- is not available, and the
+second-most obvious one is worse.
+
+**IT CANNOT NAME AN ALLOCATOR.** `kernel/lib/klineedit.c` is on the
+shared-source path: compiled once into the kernel and once into
+`libuapp.a`. The Makefile strips the C library from that path's include
+flags deliberately, so `"string.h"` cannot resolve to two different
+files depending on which pass compiled it -- which means the file can
+say neither `kmalloc` nor `malloc`. A `#ifdef` on the ring would be the
+drift that rule exists to prevent.
+
+**A CALLER-SUPPLIED SCRATCH DOES NOT FIT EITHER.** `ttf.h` takes a
+`struct ttf_scratch` for the same reason, and it works there because the
+size is known in advance. A line's is not: the point is that it grows.
+
+So the front end passes its ring's pair, the way `geom.h` takes a plot
+callback -- the seam this codebase already uses when shared source needs
+something only one ring can provide.
+
+**NULL IS SUPPORTED AND COSTS UNDO.** With no allocator the line stops
+at `KLINE_INLINE` and refuses further input, which is exactly what the
+editor did before it could grow. What silently stops is undo: a snapshot
+is sized to the line it holds, and one that cannot be allocated is
+dropped rather than truncated -- restoring half a line over a whole one
+is a wrong line. Stated in the header because it is the one capability
+that disappears without an error.
+
+**THE UNDO STACK WAS THE EXPENSIVE PART, not the line.** Eight snapshots
+each carrying a full copy made the struct `KLINE_MAX x 9`, so raising
+the line length raised the struct ninefold -- which is why it was 128 in
+the first place. Sizing a snapshot to its line is what made the length
+stop being the expensive decision. readline reaches the same place from
+the other direction, with an undo LIST of edit records rather than
+snapshots; records are better still and were not needed once the
+multiplier was gone.
+
+**AND A FRONT END THAT RE-INITS PER LINE MUST `kline_free()` FIRST.**
+`kline_init_mem()` memsets, so it drops the buffer and all eight undo
+pointers without freeing them -- a leak per line, in a shell that never
+exits. Both front ends re-init per line; both were written without the
+free, and a code review found it before either shipped.

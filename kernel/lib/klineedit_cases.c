@@ -28,6 +28,9 @@ static const int k_delete[]      = { 'a','b','c', KEY_HOME, KEY_DELETE };
 static const int k_ctrl_k[]      = { 'a','b','c','d', KEY_HOME, KEY_ARROW_RIGHT, CTRL('k') };
 static const int k_ctrl_d_mid[]  = { 'a','b','c', KEY_HOME, CTRL('d') };
 static const int k_transpose[]   = { 'a','b', CTRL('t') };
+// Alt-T, transpose WORDS -- a different code path from Ctrl-T, and one
+// that had no case at all until it was rewritten as an in-place rotate.
+static const int k_transpose_w[] = { 'o','n','e',' ','t','w','o', ESC, 't' };
 
 #define CASE(n, arr, want_s, want_c) \
     { n, arr, (int)(sizeof(arr) / sizeof((arr)[0])), want_s, want_c }
@@ -52,13 +55,20 @@ const struct kline_case kline_cases[] = {
     // so is asserted in klineedit_test.c instead.
     CASE("Ctrl-D mid-line deletes forward", k_ctrl_d_mid, "bc",       0),
     CASE("Ctrl-T transposes",               k_transpose,  "ba",       2),
+    CASE("Alt-T transposes words",          k_transpose_w, "two one", 7),
 };
 
 const int kline_case_count = (int)(sizeof kline_cases / sizeof kline_cases[0]);
 
 int kline_case_run(const struct kline_case *c, struct kline_edit *e,
-                   char *got, int cap, int *got_cursor) {
-    kline_init(e);
+                   char *got, int cap, int *got_cursor,
+                   const struct kline_mem *mem) {
+    // Freed then re-initialised, so a case that grew the line does not
+    // hand its memory to the next one. The editor may be uninitialised
+    // on the first call, which is why the caller passes `mem` rather
+    // than this reading e->mem out of whatever was on the stack.
+    if (e->cap) kline_free(e);
+    kline_init_mem(e, mem);
     for (int i = 0; i < c->nkeys; i++) kline_key(e, c->keys[i]);
 
     k_strlcpy(got, e->buf, (size_t)cap);

@@ -16,12 +16,19 @@
 // roadmap item rather than a silent omission.
 #include "lib/uhistory.h"
 #include <string.h>
+#include <stdlib.h>
 
 void uhist_init(struct uhistory *h) {
     h->count = 0;
     h->head = 0;
     h->browse = 0;
-    h->pending[0] = '\0';
+    // CLEARED, because uhist_add() free()s the slot it is about to
+    // overwrite: they held inert bytes before and hold pointers now, so
+    // a struct that is not zero-initialised would free a garbage one on
+    // its first add. Today's only caller is a file-scope static, which
+    // is exactly why this would fail silently and at a distance.
+    for (int i = 0; i < UHIST_MAX; i++) h->entries[i] = 0;
+    h->pending = 0;
 }
 
 // Ring index of the entry `back` steps behind the newest (back = 1 is
@@ -34,9 +41,18 @@ static int slot(const struct uhistory *h, int back) {
 
 void uhist_add(struct uhistory *h, const char *line) {
     if (!line || !line[0]) return;
-    if (h->count > 0 && strcmp(h->entries[slot(h, 1)], line) == 0) return;
+    if (h->count > 0 && h->entries[slot(h, 1)] &&
+        strcmp(h->entries[slot(h, 1)], line) == 0) return;
 
-    strlcpy(h->entries[h->head], line, UHIST_LINE_MAX);
+    // Allocated to the line's own length, and the slot's previous
+    // occupant freed. A failure leaves the slot empty rather than
+    // holding a truncated command.
+    size_t n = strlen(line) + 1;
+    char *copy = malloc(n);
+    if (!copy) return;
+    memcpy(copy, line, n);
+    free(h->entries[h->head]);
+    h->entries[h->head] = copy;
     h->head = (h->head + 1) % UHIST_MAX;
     if (h->count < UHIST_MAX) h->count++;
 }
@@ -44,7 +60,13 @@ void uhist_add(struct uhistory *h, const char *line) {
 const char *uhist_prev(struct uhistory *h, const char *current) {
     if (h->browse >= h->count) return 0; // nothing older
     // Save what was being typed, once, on the way out of the live line.
-    if (h->browse == 0) strlcpy(h->pending, current ? current : "", UHIST_LINE_MAX);
+    if (h->browse == 0) {
+        free(h->pending);
+        const char *cur = current ? current : "";
+        size_t n = strlen(cur) + 1;
+        h->pending = malloc(n);
+        if (h->pending) memcpy(h->pending, cur, n);
+    }
     h->browse++;
     return h->entries[slot(h, h->browse)];
 }
@@ -52,13 +74,14 @@ const char *uhist_prev(struct uhistory *h, const char *current) {
 const char *uhist_next(struct uhistory *h) {
     if (h->browse == 0) return 0; // not browsing
     h->browse--;
-    if (h->browse == 0) return h->pending; // back to the live line
+    if (h->browse == 0) return h->pending ? h->pending : ""; // the live line
     return h->entries[slot(h, h->browse)];
 }
 
 void uhist_reset(struct uhistory *h) {
     h->browse = 0;
-    h->pending[0] = '\0';
+    free(h->pending);   // the line the first Up staged, if the user browsed
+    h->pending = 0;
 }
 
 const char *uhist_last(const struct uhistory *h) {

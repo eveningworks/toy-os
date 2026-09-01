@@ -979,8 +979,8 @@ int tosh_run_line(struct tosh *sh, const char *line) {
     // A MUTABLE copy: redirection is stripped off the line in place,
     // and the caller's buffer is not ours to edit (the GUI Terminal
     // hands us its editor's live buffer).
-    char work[TOSH_PATH_MAX];
-    scopy(work, line, TOSH_PATH_MAX);
+    char work[TOSH_CMD_MAX];
+    scopy(work, line, TOSH_CMD_MAX);
 
     // BEFORE the redirection parse, because `&` comes after `> file`
     // and stripping it first is what leaves an ordinary line behind.

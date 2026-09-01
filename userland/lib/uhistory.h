@@ -18,14 +18,20 @@
 //     case KLINE_HISTORY_NEXT:  kline_set(&ed, uhist_next(&h)); break;
 
 #define UHIST_MAX      32   // entries kept; oldest is dropped
-#define UHIST_LINE_MAX 128  // matches KLINE_MAX
 
+// ENTRIES ARE ALLOCATED TO THE LINE THEY HOLD. They were a fixed
+// 32x128 array "matching KLINE_MAX", and when the editor's line stopped
+// being 128 bytes that became the worst kind of limit: a long command
+// would be typed and run correctly, then come back from Up SHORTENED --
+// a different command, silently. An entry that cannot be allocated is
+// NOT stored, which loses a history entry rather than remembering the
+// wrong text.
 struct uhistory {
-    char entries[UHIST_MAX][UHIST_LINE_MAX];
+    char *entries[UHIST_MAX];
     int  count;   // how many are filled, capped at UHIST_MAX
     int  head;    // where the NEXT entry goes (ring index)
     int  browse;  // how far back the user has walked; 0 = not browsing
-    char pending[UHIST_LINE_MAX]; // the line they were typing before browsing
+    char *pending; // the line they were typing before browsing, or NULL
 };
 
 void uhist_init(struct uhistory *h);

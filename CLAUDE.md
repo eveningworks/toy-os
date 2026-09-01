@@ -307,8 +307,15 @@ trips them before it knows to look anything up.
   and the ring-3 GUI Terminal edit with the SAME code as the physical
   shell (buffer/cursor/kill ring/undo/keymap); each front end only
   paints the result. **Don't add an editing key to one front end** --
-  add it to the core's keymap and all three gain it. Four things to
-  know. **A byte off fd 0 is fed in as-is** -- specials arrive as
+  add it to the core's keymap and all three gain it. **THE LINE GROWS,
+  AND THE EDITOR TAKES ITS MEMORY FROM THE FRONT END** -- klineedit.c is
+  on the shared-source path, where the build strips the C library from
+  its include path, so it can name neither `kmalloc` nor `malloc` and a
+  `struct kline_mem` is passed in (`kline_init_mem`). A NULL one is
+  supported and costs UNDO: a snapshot is sized to the line it holds and
+  is dropped rather than truncated. **A front end that re-inits per line
+  must `kline_free()` first**, or it leaks the previous line's buffer
+  and its whole undo stack, every line, forever. Five things to know. **A byte off fd 0 is fed in as-is** -- specials arrive as
   0x91-0xA6, which ARE the `KEY_*` codes `kline_key()` switches on, so a
   translation layer would be a third place to drift; Ctrl/Alt reach apps
   as control codes and an ESC prefix, terminal-style, NOT as `KEY_*`
@@ -848,6 +855,7 @@ whenever a headline here tells you something you did not already know.
 - **TAB COMPLETION IN COMMAND POSITION IS BUILTINS PLUS ALL OF `PATH`, DEDUPLICATED AND SORTED, WITH NO DIRECTORIES.**
 - **`/bin/tosh -c <command>` RUNS ONE LINE AND EXITS**
 - **`#` IS RING 0 AND `$` IS RING 3, AND THE PROMPT IS WHERE THAT LIVES**
+- **A COMMAND LINE IS NOT A PATH, AND SIZING IT LIKE ONE TRUNCATES IT**
 - **A BUILTIN MUST NOT SHADOW A `/bin` PROGRAM THAT DOES MORE**
 - **A WRAPPER BUILTIN IS ONE COMMAND WITH TWO HALVES IN TWO RINGS, AND THE RING-3 HALF WILL BE WRONG.**
 - **A COMMAND WITH A READ HALF AND A WRITE HALF MOVES AS ONE PIECE OR NOT AT ALL.**

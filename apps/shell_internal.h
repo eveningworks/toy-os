@@ -20,14 +20,24 @@
 
 #include "kapi.h"
 
-#define LINE_MAX 128
+// The command line the shell reads, dispatches and remembers. It was
+// 128 and matched the editor's fixed buffer; the editor grows now, so
+// this is what decides how long a command can actually BE -- a line
+// longer than this would be typed, shown, and then run truncated.
+#define LINE_MAX 1024
 #define HISTORY_MAX 8
 
 // Shared shell-wide state -- defined in shell.c, the file that owns
 // the REPL loop and is the only place any of these actually change.
 extern enum vga_color shell_fg;
 extern char cwd[FS_PATH_MAX];
-extern char history[HISTORY_MAX][LINE_MAX];
+// ALLOCATED PER ENTRY, so a long command comes back from Up as the
+// command that was typed. It was a fixed HISTORY_MAX x LINE_MAX array,
+// and once the line editor stopped being bounded at 128 that became the
+// worst kind of limit -- a command that ran correctly and then recalled
+// SHORTER, silently, as a different command. An entry that cannot be
+// allocated is not stored; a slot may therefore be NULL.
+extern char *history[HISTORY_MAX];
 extern int history_count;
 
 // Resolves `input` (absolute if it starts with '/', otherwise relative

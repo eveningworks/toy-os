@@ -1,6 +1,8 @@
 #ifndef KLINEEDIT_CASES_H
 #define KLINEEDIT_CASES_H
 
+#include "klineedit.h"   // struct kline_edit, struct kline_mem
+
 // A table of (key sequence -> resulting line) cases for the editor,
 // COMPILED INTO BOTH RINGS and asserted from both.
 //
@@ -40,7 +42,12 @@ extern const int kline_case_count;
 // Both callers hold one at file scope. It also keeps this helper free
 // of hidden state, so two callers cannot interfere.
 struct kline_edit;
+// `mem` is the ring's allocator (see klineedit.h). It is a PARAMETER
+// because this file is compiled into both rings and can name neither
+// kmalloc() nor malloc(), and because the cases cover undo -- which
+// needs memory, and silently does nothing without it.
 int kline_case_run(const struct kline_case *c, struct kline_edit *e,
-                   char *got, int cap, int *got_cursor);
+                   char *got, int cap, int *got_cursor,
+                   const struct kline_mem *mem);
 
 #endif

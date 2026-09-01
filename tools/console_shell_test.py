@@ -651,6 +651,49 @@ def main():
         check("a failed redirect does not run the command",
               "redir_never.txt" not in root_names(dbg))
 
+        # A LONG COMMAND LINE RUNS WHOLE, which is the property the
+        # editor's growth exists to deliver and the one that was broken
+        # underneath it: tosh_run_line() staged the whole line in a
+        # TOSH_PATH_MAX (64) buffer, so anything past 63 characters was
+        # silently cut. A 200-character line is past the editor's old
+        # 128 inline buffer as well, so this covers both limits at once.
+        #
+        # THE SHORT COMMAND IS THE CONTROL. Without it a failure of the
+        # long one proves nothing -- the first version of this probe had
+        # both fail, which was the harness and not the shell.
+        dbg.send("sh rm /probe_short.txt"); dbg.send("sh rm /probe_long.txt")
+        time.sleep(0.4)
+        type_line(flow, "echo x > /probe_short.txt")
+        time.sleep(1.5)
+        filler = "x" * 140   # past the old 63-byte cut AND the 128-byte inline buffer
+        long_cmd = f"echo {filler} > /probe_long.txt"
+
+        # RETRIED, because typing 160 characters over QMP drops one
+        # occasionally and a dropped SPACE turns this into `echo>
+        # /probe_long.txt` -- an empty file, which is indistinguishable
+        # from the truncation being tested. A dropped keystroke means
+        # the command under test never ran; that is a miss, not a
+        # result, and this file's dmesg() helper retries for the same
+        # reason. Measured 1 run in 4 before this.
+        got = 0
+        for _ in range(3):
+            dbg.send("sh rm /probe_long.txt")
+            time.sleep(0.3)
+            type_line(flow, long_cmd)
+            deadline = time.time() + 25
+            while time.time() < deadline and got != len(filler):
+                out = dbg.send("sh cat /probe_long.txt") or ""
+                got = max((len(w) for ln in out.splitlines() for w in ln.split()
+                           if set(w) == {"x"}), default=0)
+                if got != len(filler):
+                    time.sleep(0.5)
+            if got:
+                break
+
+        check("a long command line runs whole, not cut at 63 characters",
+              got == len(filler),
+              f"longest run of x written: {got}, wanted {len(filler)}")
+
         # --- dmesg -T ---------------------------------------------------
         #
         # THE SPAN, NOT A PAIRING. Two dumps of a live log cannot be

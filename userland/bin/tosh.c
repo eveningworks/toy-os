@@ -29,6 +29,7 @@
 #include "rt/sys.h"
 #include "lib/tosh.h"
 #include <string.h>
+#include <stdlib.h>
 #include "lib/uhistory.h"
 #include "klineedit.h"
 #include "lib/ucomplete.h"
@@ -45,6 +46,16 @@
 static struct tty_termios g_tio_saved;
 
 static struct kline_edit g_ed;
+
+// Ring 3's allocator, for the editor. klineedit.c is compiled into both
+// rings and can name neither malloc() nor kmalloc() (klineedit.h);
+// without this the line stops at 128 characters and undo does nothing.
+static void *ed_alloc(unsigned long n) { return malloc((size_t)n); }
+static void ed_free(void *p) { free(p); }
+// The ceiling is what tosh_run_line() can carry -- it stages the line
+// in a TOSH_CMD_MAX buffer -- so the editor refuses the keystroke that
+// would not survive being run.
+static const struct kline_mem ed_mem = { ed_alloc, ed_free, TOSH_CMD_MAX - 1 };
 static struct uhistory   g_hist;
 static struct tosh       g_sh;
 
@@ -263,7 +274,8 @@ static void fresh_prompt(void) {
     // over it.
     tosh_reap_jobs(&g_sh);
 
-    kline_init(&g_ed);
+    kline_free(&g_ed);          // the previous line's buffer and undo stack
+    kline_init_mem(&g_ed, &ed_mem);
     uhist_reset(&g_hist);
     g_shown = 0;
     redraw();

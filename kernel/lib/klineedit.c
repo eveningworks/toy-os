@@ -38,25 +38,77 @@
 // `struct kline_edit` small enough for both front ends to hold by
 // value.
 #define KILL_RING_SIZE 8
-static char g_kill[KILL_RING_SIZE][KLINE_MAX];
+
+// SHARED BY EVERY EDITOR IN A PROCESS, which is readline's behaviour and
+// the reason a cut in one prompt yanks into the next. Each entry is
+// sized to what was cut: it used to be a fixed KLINE_MAX row, so cutting
+// a line longer than that silently yanked back a SHORTER one -- the
+// truncation this file refuses everywhere else.
+//
+// Each entry remembers the allocator that made it, because the editor
+// that cut it may be gone by the time the ring evicts the entry.
+static struct {
+    char *text;
+    const struct kline_mem *mem;
+} g_kill[KILL_RING_SIZE];
+// ONE ROW PER SLOT, not one shared buffer. A single shared row made
+// every slot alias it, so a second kill overwrote the first and
+// yank-pop rotated back to the same text -- silently turning a ring
+// into a single entry. The rows cost what the old fixed ring cost and
+// are used only when there is no allocator.
+static char g_kill_inline[KILL_RING_SIZE][KLINE_INLINE];
 static int g_kill_count = 0; // entries in use, capped at KILL_RING_SIZE
 static int g_kill_head = 0;  // index of the most recent entry
 static int g_yank_index = 0; // which entry the next yank-pop reaches for
 
-static void kill_push(const char *text, int len) {
-    if (len <= 0) return;
-    g_kill_head = (g_kill_head + 1) % KILL_RING_SIZE;
-    int n = len < KLINE_MAX - 1 ? len : KLINE_MAX - 1;
-    k_memcpy(g_kill[g_kill_head], text, (size_t)n);
-    g_kill[g_kill_head][n] = '\0';
+// Returns 0 when the text could not be stored, which the caller must
+// treat as a reason NOT to delete it: with the snapshot dropped for
+// the same out-of-memory reason, a deletion here is unrecoverable by
+// either route -- silent data loss where a refusal was intended.
+static int kill_push(struct kline_edit *e, const char *text, int len) {
+    if (len <= 0) return 1;
+    int head = (g_kill_head + 1) % KILL_RING_SIZE;
+
+    char *copy = 0;
+    if (e->mem && e->mem->alloc) copy = e->mem->alloc((unsigned long)len + 1);
+    if (copy) {
+        k_memcpy(copy, text, (size_t)len);
+        copy[len] = '\0';
+        if (g_kill[head].text && g_kill[head].mem && g_kill[head].mem->free)
+            g_kill[head].mem->free(g_kill[head].text);
+        g_kill[head].text = copy;
+        g_kill[head].mem = e->mem;
+    } else {
+        // No allocator, or it said no. One shared inline entry rather
+        // than a truncated ring row: a short cut still yanks correctly,
+        // and a long one is not silently shortened into the ring where
+        // it would look like the text that was cut.
+        if (len > KLINE_INLINE - 1) return 0;   // refuse rather than shorten
+        k_memcpy(g_kill_inline[head], text, (size_t)len);
+        g_kill_inline[head][len] = '\0';
+        if (g_kill[head].text && g_kill[head].mem && g_kill[head].mem->free)
+            g_kill[head].mem->free(g_kill[head].text);
+        g_kill[head].text = g_kill_inline[head];
+        g_kill[head].mem = 0;
+    }
+    g_kill_head = head;
     if (g_kill_count < KILL_RING_SIZE) g_kill_count++;
     g_yank_index = g_kill_head;
+    return 1;
 }
 
 static const char *kill_at(int index) {
     if (g_kill_count == 0) return 0;
     int i = ((index % KILL_RING_SIZE) + KILL_RING_SIZE) % KILL_RING_SIZE;
-    return g_kill[i];
+    return g_kill[i].text;
+}
+
+// Reverses buf[a, b) in place. The building block of the rotation
+// transpose-words uses -- see there for why it is a rotate.
+static void reverse_span(char *buf, int a, int b) {
+    for (int i = a, j = b - 1; i < j; i++, j--) {
+        char t = buf[i]; buf[i] = buf[j]; buf[j] = t;
+    }
 }
 
 // ---- word boundaries (see klineedit.h on why there are two kinds) ----
@@ -94,22 +146,68 @@ static void snapshot(struct kline_edit *e) {
     if (e->undo_count == KLINE_UNDO_DEPTH) {
         // Full: drop the oldest so the most RECENT steps survive, which
         // is the useful end of the stack.
+        if (e->undo[0].buf && e->mem && e->mem->free) e->mem->free(e->undo[0].buf);
         for (int i = 1; i < KLINE_UNDO_DEPTH; i++) e->undo[i - 1] = e->undo[i];
         e->undo_count--;
+        e->undo[e->undo_count].buf = 0;
     }
-    k_memcpy(e->undo[e->undo_count].buf, e->buf, (size_t)e->len);
-    e->undo[e->undo_count].buf[e->len] = '\0';
+    // Sized to the line, and DROPPED rather than truncated when it
+    // cannot be had: losing an undo step is a small visible loss, while
+    // restoring half a line over a whole one is a wrong line.
+    char *snap = 0;
+    if (e->mem && e->mem->alloc) snap = e->mem->alloc((unsigned long)e->len + 1);
+    if (!snap) return;
+    k_memcpy(snap, e->buf, (size_t)e->len);
+    snap[e->len] = '\0';
+    e->undo[e->undo_count].buf = snap;
     e->undo[e->undo_count].len = e->len;
     e->undo[e->undo_count].cursor = e->cursor;
     e->undo_count++;
+}
+
+
+// --- the line's memory --------------------------------------------------
+//
+// A line starts in `e->inln` and allocates only when it outgrows it, so
+// an ordinary command costs nothing. Doubling rather than growing by a
+// character: a paste inserts one at a time, and a linear grow would copy
+// the line once per character.
+//
+// A REFUSED GROWTH IS NOT A FAILURE, it is the old behaviour. Every
+// caller of this already handled a full line -- insert_char() has always
+// refused rather than truncated -- so an allocator that says no leaves
+// the editor exactly where it was before allocators existed, which is
+// what makes a NULL `mem` a supported answer rather than a crash.
+static int ensure_cap(struct kline_edit *e, int need) {
+    if (need <= e->cap) return 1;
+    if (!e->mem || !e->mem->alloc) return 0;
+    // Never past what the front end says it can run.
+    if (e->mem->limit && (unsigned long)(need - 1) > e->mem->limit) return 0;
+
+    int want = e->cap ? e->cap : KLINE_INLINE;
+    while (want < need) {
+        if (want > (1 << 20)) return 0;   // a command line, not a document
+        want *= 2;
+    }
+    char *nb = e->mem->alloc((unsigned long)want);
+    if (!nb) return 0;
+
+    k_memcpy(nb, e->buf, (size_t)e->len);
+    nb[e->len] = '\0';
+    if (e->buf != e->inln && e->mem->free) e->mem->free(e->buf);
+    e->buf = nb;
+    e->cap = want;
+    return 1;
 }
 
 static void delete_range(struct kline_edit *e, int start, int end, int save_to_kill) {
     if (start < 0) start = 0;
     if (end > e->len) end = e->len;
     if (start >= end) return;
+    // BEFORE the snapshot and before the delete: text that cannot be
+    // put in the kill ring must not be removed from the line.
+    if (save_to_kill && !kill_push(e, e->buf + start, end - start)) return;
     snapshot(e);
-    if (save_to_kill) kill_push(e->buf + start, end - start);
     k_memmove(e->buf + start, e->buf + end, (size_t)(e->len - end));
     e->len -= (end - start);
     e->buf[e->len] = '\0';
@@ -117,7 +215,9 @@ static void delete_range(struct kline_edit *e, int start, int end, int save_to_k
 }
 
 static void insert_char(struct kline_edit *e, char c) {
-    if (e->len >= KLINE_MAX - 1) return; // full -- refuse rather than truncate elsewhere
+    // Refuse rather than truncate elsewhere, exactly as before -- what
+    // changed is that "full" is now a cap that can move.
+    if (!ensure_cap(e, e->len + 2)) return;
     k_memmove(e->buf + e->cursor + 1, e->buf + e->cursor, (size_t)(e->len - e->cursor));
     e->buf[e->cursor] = c;
     e->len++;
@@ -131,14 +231,38 @@ void kline_insert_str(struct kline_edit *e, const char *s) {
     for (; *s; s++) insert_char(e, *s);
 }
 
-void kline_init(struct kline_edit *e) {
+void kline_init_mem(struct kline_edit *e, const struct kline_mem *mem) {
     k_memset(e, 0, sizeof(*e));
+    e->buf = e->inln;
+    e->cap = KLINE_INLINE;
+    e->buf[0] = '\0';
+    e->mem = mem;
+}
+
+void kline_init(struct kline_edit *e) { kline_init_mem(e, 0); }
+
+void kline_free(struct kline_edit *e) {
+    if (e->mem && e->mem->free) {
+        for (int i = 0; i < e->undo_count; i++)
+            if (e->undo[i].buf) { e->mem->free(e->undo[i].buf); e->undo[i].buf = 0; }
+        if (e->buf && e->buf != e->inln) e->mem->free(e->buf);
+    }
+    // RESET ON EVERY PATH, including the one that frees nothing. Pointing
+    // buf back at the 128-byte inline array while len still says 400
+    // makes the next `buf[len] = 0` write past the struct.
+    e->undo_count = 0;
+    e->buf = e->inln;
+    e->cap = KLINE_INLINE;
+    e->len = e->cursor = 0;
+    e->inln[0] = '\0';
 }
 
 void kline_set(struct kline_edit *e, const char *s) {
     if (!s) s = "";
-    size_t n = k_strlcpy(e->buf, s, KLINE_MAX);
-    e->len = (int)(n < KLINE_MAX ? n : KLINE_MAX - 1);
+    size_t want = k_strlen(s) + 1;
+    if (want > (size_t)e->cap) (void)ensure_cap(e, (int)want);
+    size_t n = k_strlcpy(e->buf, s, (uint32_t)e->cap);
+    e->len = (int)(n < (size_t)e->cap ? n : (size_t)e->cap - 1);
     e->cursor = e->len; // end of line, same as readline's history recall
     e->last_was_yank = 0;
 }
@@ -179,9 +303,16 @@ static void yank(struct kline_edit *e) {
 static void undo(struct kline_edit *e) {
     if (e->undo_count == 0) return;
     e->undo_count--;
-    k_strlcpy(e->buf, e->undo[e->undo_count].buf, KLINE_MAX);
-    e->len = e->undo[e->undo_count].len;
-    e->cursor = e->undo[e->undo_count].cursor;
+    char *snap = e->undo[e->undo_count].buf;
+    int len = e->undo[e->undo_count].len;
+    if (snap && ensure_cap(e, len + 1)) {
+        k_memcpy(e->buf, snap, (size_t)len);
+        e->buf[len] = '\0';
+        e->len = len;
+        e->cursor = e->undo[e->undo_count].cursor;
+    }
+    if (snap && e->mem && e->mem->free) e->mem->free(snap);
+    e->undo[e->undo_count].buf = 0;
 }
 
 // Applies `fn` to each character of the word at/after the cursor and
@@ -239,13 +370,21 @@ static enum kline_action meta_key(struct kline_edit *e, int key) {
         if (start1 >= end1 || start2 >= end2 || end1 > start2) return KLINE_IGNORED;
         // Rebuild the span between the two word starts: second word,
         // the separator that was between them, then the first word.
-        char tmp[KLINE_MAX];
-        int n = 0;
-        for (int i = start2; i < end2 && n < KLINE_MAX - 1; i++) tmp[n++] = e->buf[i];
-        for (int i = end1; i < start2 && n < KLINE_MAX - 1; i++) tmp[n++] = e->buf[i];
-        for (int i = start1; i < end1 && n < KLINE_MAX - 1; i++) tmp[n++] = e->buf[i];
+        // REBUILT IN PLACE THROUGH A ROTATION, not through a staging
+        // buffer. It used to stage into a fixed KLINE_MAX array and cap
+        // each copy at 127, which rewrote only the first 127 bytes of
+        // the span and left the ORIGINAL text in the tail -- a silently
+        // mangled line, and impossible only while a line could not
+        // exceed 128. A rotate needs no second buffer at all.
+        //
+        // The span is [start1, end2): word1, gap, word2 becomes word2,
+        // gap, word1. Three reversals do that in place, which is the
+        // standard rotate and is what makes it length-independent.
         snapshot(e);
-        k_memcpy(e->buf + start1, tmp, (size_t)n);
+        reverse_span(e->buf, start1, end1);   // word1
+        reverse_span(e->buf, start2, end2);   // word2
+        reverse_span(e->buf, end1, start2);   // the gap between them
+        reverse_span(e->buf, start1, end2);   // then the whole span
         e->cursor = end2;
         return KLINE_REDRAW;
     }

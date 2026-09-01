@@ -1942,6 +1942,18 @@ struct mmap_msg {
 // every time.
 #define SYS_SLEEP_MAX_MS 3600000
 
+// The longest ARGUMENT STRING a spawn may carry. It used to be
+// FS_PATH_MAX -- a PATH limit, 64 bytes, applied to something that is
+// not a path -- so every program's arguments were silently cut at 63
+// characters: a long URL to `wget`, a long string to `echo`, a `-o`
+// with a deep destination. Found by asserting on the CONTENT a spawned
+// program wrote rather than on the file appearing, which is the
+// difference between "it ran" and "it ran with what I typed".
+//
+// A separate constant, because a path inside the argument string is
+// still bounded by FS_PATH_MAX where it is used AS a path.
+#define SPAWN_ARGS_MAX 1024
+
 // The number of process-table slots SYS_PROC_INFO can be asked about.
 // Mirrors the kernel's SCHED_MAX_PROCS; a caller loops 0..this-1.
 #define SYS_PROC_MAX 64

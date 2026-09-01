@@ -506,10 +506,20 @@ int sys_spawn(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
     int64_t spawn_rc = -ENOENT; // no such program, unless something below says otherwise
     char path[FS_PATH_MAX];
-    // The argument string gets the same budget as the path: it is
-    // handed to elf_build_argv_on_stack(), which enforces the real
-    // limit (one stack page) and rejects anything longer.
-    char argbuf[FS_PATH_MAX];
+    char *argbuf = 0;
+    // ON THE HEAP, for both of the reasons the environment below is:
+    // SPAWN_ARGS_MAX does not belong on a 16 KiB kernel stack, and a
+    // STATIC buffer would be worse than either. `args` points into it
+    // and is held across the ELF load -- two fs_read()s and per-frame
+    // allocation, none of it under a preemption guard -- so one static
+    // buffer means a second process spawning concurrently overwrites
+    // the first's arguments and its child is launched with them.
+    //
+    // NOTE the copy TRUNCATES rather than rejects:
+    // vmm_copy_string_from_user() terminates at max-1 and returns 1, so
+    // an over-long argument string reaches the child shortened. The
+    // real ceiling elf_build_argv_on_stack() enforces (one stack page)
+    // is never reached, because it only ever sees this copy.
 
     // The message struct, copied whole before anything in it is
     // trusted -- see abi/syscall_abi.h for why spawn outgrew three
@@ -569,7 +579,12 @@ int sys_spawn(struct syscall_ctx *c) {
         spawn_rc = -EFAULT;
     } else {
         const char *args = 0;
-        if (msg.args && vmm_copy_string_from_user(pml4, argbuf, (uint64_t)(uintptr_t)msg.args, FS_PATH_MAX)) args = argbuf;
+        if (msg.args) {
+            argbuf = kmalloc(SPAWN_ARGS_MAX);
+            if (argbuf && vmm_copy_string_from_user(pml4, argbuf,
+                                                    (uint64_t)(uintptr_t)msg.args,
+                                                    SPAWN_ARGS_MAX)) args = argbuf;
+        }
 
         // The child's stdin/stdout overrides, as DESCRIPTION indices
         // rather than pipe indices: the child's fd will simply name the
@@ -628,6 +643,7 @@ int sys_spawn(struct syscall_ctx *c) {
         }
     }
     if (envbuf) kfree(envbuf);
+    if (argbuf) kfree(argbuf);
     c->regs[14] = (uint64_t)(int64_t)spawn_rc;
     return 0;
 }

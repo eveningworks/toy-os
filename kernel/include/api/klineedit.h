@@ -39,12 +39,55 @@
 // rather than a callback, so there is no callback plumbing to get
 // wrong and the tests need no fixtures.
 
-#define KLINE_MAX 128 // matches the shell's LINE_MAX and Terminal's TERM_LINE_MAX
+// The line a `struct kline_edit` holds WITHOUT an allocator, and what
+// this file was bounded by for its whole life. A front end that supplies
+// no memory gets exactly the old behaviour: a line this long, refused
+// rather than truncated at the end.
+#define KLINE_INLINE 128
 
-// How many undo steps a line remembers. Deliberately shallow: this is
-// a command line, not a document, and `struct kline_edit` is held by
-// value by both front ends -- at 8 deep it is already ~1.2KB, which is
-// why both hold it as file-scope state rather than on the stack.
+// Kept as the old name so a caller bounding its own buffer still
+// compiles, and because 128 is still the length below which the editor
+// allocates nothing at all.
+#define KLINE_MAX KLINE_INLINE
+
+// MEMORY THE EDITOR DOES NOT OWN, because it cannot name an allocator.
+// klineedit.c is compiled into BOTH rings and the build takes the C
+// library off its include path deliberately (see the Makefile's
+// SHARED_CFLAGS), so it can say neither `kmalloc` nor `malloc`. The
+// front end passes its ring's pair in, the way geom.h takes a plot
+// callback and ttf.h takes a caller-supplied scratch.
+//
+// NULL IS SUPPORTED AND COSTS UNDO. With no allocator the line stops
+// growing at KLINE_INLINE and further input is refused -- editing,
+// motion, the kill ring for a short cut and every other key still work.
+// What does NOT is UNDO: a snapshot is sized to the line it holds, and
+// one that cannot be allocated is dropped rather than truncated, so a
+// front end that passes NULL gets an editor whose Ctrl-_ does nothing.
+// Said here because it is the one capability that disappears silently;
+// both real front ends pass their ring's allocator.
+struct kline_mem {
+    void *(*alloc)(unsigned long bytes);
+    void  (*free)(void *p);
+
+    // THE LONGEST LINE THE FRONT END CAN ACTUALLY CARRY, or 0 for no
+    // limit. It belongs here rather than in a setter because it must
+    // survive the re-init both front ends do per line.
+    //
+    // A GROWABLE EDITOR IN FRONT OF A FIXED CONSUMER IS WORSE THAN A
+    // FIXED EDITOR. The shell copies the finished line into a buffer of
+    // its own and runs THAT, so an editor willing to grow past it lets
+    // a line be typed and displayed whole and then run short -- silent
+    // truncation, which is the failure this whole seam exists to remove.
+    // Refusing the keystroke instead is visible: the cursor stops.
+    unsigned long limit;
+};
+
+// How many undo steps a line remembers. Deliberately shallow: this is a
+// command line, not a document. It used to be the expensive number --
+// each step carried a FULL copy of the line, so the struct was
+// KLINE_MAX x 9 and raising the line length raised it ninefold. A
+// snapshot is allocated to the length it actually holds now, so depth
+// costs pointers and undo of a short line costs almost nothing.
 #define KLINE_UNDO_DEPTH 8
 
 // What the front end should do about the key it just fed in.
@@ -63,7 +106,11 @@ enum kline_action {
 };
 
 struct kline_edit {
-    char buf[KLINE_MAX];
+    // Points at `inln` until the line outgrows it, and at allocated
+    // memory after. Callers read it as a NUL-terminated string, which is
+    // why every growth path keeps the terminator.
+    char *buf;
+    int cap;    // bytes addressable through buf, terminator included
     int len;
     int cursor; // [0, len] -- "sits just before buf[cursor]"
 
@@ -79,16 +126,33 @@ struct kline_edit {
     int last_was_yank;
     int yank_start, yank_end; // region the last yank inserted, for yank-pop to replace
 
-    // Undo snapshots. Small on purpose: this is a command line, not a
-    // document, and the struct is held by value by both front ends.
+    // Undo snapshots, each sized to the line it holds. A snapshot that
+    // cannot be allocated is DROPPED rather than truncated: losing an
+    // undo step is a small, visible loss, and a half-line restored over
+    // a whole one is a wrong line.
     struct {
-        char buf[KLINE_MAX];
+        char *buf;
         int len, cursor;
     } undo[KLINE_UNDO_DEPTH];
     int undo_count;
+
+    const struct kline_mem *mem;   // NULL: the line stops at KLINE_INLINE
+
+    // LAST, and inline: the common case is a short line, and keeping it
+    // here means an ordinary command allocates nothing at all.
+    char inln[KLINE_INLINE];
 };
 
 void kline_init(struct kline_edit *e);
+
+// Same, but the line may grow past KLINE_INLINE using `mem`, which must
+// outlive `e`. Pass NULL for `mem` and this is kline_init().
+void kline_init_mem(struct kline_edit *e, const struct kline_mem *mem);
+
+// Returns anything the editor grew. Safe on an editor that never grew,
+// and safe to call twice. A front end holding one for the life of the
+// process need not call it; one per session must.
+void kline_free(struct kline_edit *e);
 
 // Replaces the whole line (history recall, reverse search, an external
 // edit) and puts the cursor at the end, like readline does.

@@ -21,12 +21,19 @@
 #include "rt/sys.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "klineedit.h"
 #include "klineedit_cases.h"
 
 static int g_fail;
 
 static void put(const char *s) { sys_write(1, s, strlen(s)); }
+
+// Ring 3's allocator, for the same reason the kernel driver supplies
+// one: the undo cases need memory and are silently skipped without it.
+static void *u_alloc(unsigned long n) { return malloc((size_t)n); }
+static void u_free(void *p) { free(p); }
+static const struct kline_mem u_mem = { u_alloc, u_free, 0 }; // 0: no ceiling
 
 int main(void) {
     put("klineedit_test: the shared line editor, built for ring 3\n");
@@ -41,7 +48,7 @@ int main(void) {
 
     for (int i = 0; i < kline_case_count; i++) {
         int cursor = 0;
-        int ok = kline_case_run(&kline_cases[i], &ed, got, sizeof got, &cursor);
+        int ok = kline_case_run(&kline_cases[i], &ed, got, sizeof got, &cursor, &u_mem);
         if (ok) {
             snprintf(msg, sizeof msg, "  ok   %s\n", kline_cases[i].name);
         } else {

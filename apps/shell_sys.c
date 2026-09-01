@@ -1134,7 +1134,7 @@ void cmd_history(void) {
     for (int i = 0; i < history_count; i++) {
         vga_write_dec((uint32_t)(i + 1));
         vga_write("  ");
-        vga_write(history[i]);
+        vga_write(history[i] ? history[i] : "");
         vga_putc('\n');
     }
 }

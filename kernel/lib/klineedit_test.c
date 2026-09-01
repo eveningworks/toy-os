@@ -10,6 +10,16 @@
 #include "klineedit_cases.h"
 #include "keyboard.h"
 #include "string.h"
+#include "heap.h"   // kmalloc/kfree -- the editor takes its memory from the caller
+
+// The ring-0 allocator, handed to the editor because klineedit.c cannot
+// name one (see klineedit.h). The undo cases need it: a snapshot that
+// cannot be allocated is dropped, so without this they would pass by
+// asserting nothing.
+static void *ktest_alloc(unsigned long n) { return kmalloc((uint32_t)n); }
+static void ktest_free(void *p) { kfree(p); }
+static const struct kline_mem ktest_mem = { ktest_alloc, ktest_free, 0 }; // 0: no ceiling
+
 
 #define CTRL(c) ((c) - 'a' + 1)
 #define ESC 0x1B
@@ -29,7 +39,7 @@ static enum kline_action meta(struct kline_edit *e, int key) {
 
 KTEST("klineedit", "insert at the cursor, not just at the end") {
     struct kline_edit e;
-    kline_init(&e);
+    kline_init_mem(&e, &ktest_mem);
 
     type(&e, "helo");
     KTEST_ASSERT(eq(e.buf, "helo"));
@@ -44,7 +54,7 @@ KTEST("klineedit", "insert at the cursor, not just at the end") {
 
 KTEST("klineedit", "motion: char, line ends, and words") {
     struct kline_edit e;
-    kline_init(&e);
+    kline_init_mem(&e, &ktest_mem);
     type(&e, "cat /etc/toyos.conf");
 
     KTEST_ASSERT_EQ(kline_key(&e, CTRL('a')), KLINE_REDRAW);
@@ -80,12 +90,12 @@ KTEST("klineedit", "Ctrl-W and Alt-Backspace use different word rules") {
     // alphanumeric (backward-kill-word).
     struct kline_edit a, b;
 
-    kline_init(&a);
+    kline_init_mem(&a, &ktest_mem);
     type(&a, "run /bin/ls");
     kline_key(&a, CTRL('w'));
     KTEST_ASSERT(eq(a.buf, "run ")); // the whole path went
 
-    kline_init(&b);
+    kline_init_mem(&b, &ktest_mem);
     type(&b, "run /bin/ls");
     meta(&b, '\b');
     KTEST_ASSERT(eq(b.buf, "run /bin/")); // only "ls" went
@@ -93,7 +103,7 @@ KTEST("klineedit", "Ctrl-W and Alt-Backspace use different word rules") {
 
 KTEST("klineedit", "kill to end, kill to start, and delete-forward") {
     struct kline_edit e;
-    kline_init(&e);
+    kline_init_mem(&e, &ktest_mem);
 
     type(&e, "hello world");
     kline_key(&e, CTRL('a'));
@@ -101,7 +111,7 @@ KTEST("klineedit", "kill to end, kill to start, and delete-forward") {
     kline_key(&e, CTRL('k'));
     KTEST_ASSERT(eq(e.buf, "hello "));
 
-    kline_init(&e);
+    kline_init_mem(&e, &ktest_mem);
     type(&e, "hello world");
     for (int i = 0; i < 5; i++) kline_key(&e, CTRL('b')); // before "world"
     kline_key(&e, CTRL('u')); // backwards only -- NOT the whole line
@@ -116,7 +126,7 @@ KTEST("klineedit", "kill to end, kill to start, and delete-forward") {
 
 KTEST("klineedit", "Ctrl-D means end-of-input only on an empty line") {
     struct kline_edit e;
-    kline_init(&e);
+    kline_init_mem(&e, &ktest_mem);
 
     KTEST_ASSERT_EQ(kline_key(&e, CTRL('d')), KLINE_EOF);
 
@@ -128,7 +138,7 @@ KTEST("klineedit", "Ctrl-D means end-of-input only on an empty line") {
 
 KTEST("klineedit", "kill ring: yank, and yank-pop only after a yank") {
     struct kline_edit e;
-    kline_init(&e);
+    kline_init_mem(&e, &ktest_mem);
 
     type(&e, "alpha beta");
     kline_key(&e, CTRL('w')); // kills "beta"
@@ -149,7 +159,7 @@ KTEST("klineedit", "kill ring: yank, and yank-pop only after a yank") {
 KTEST("klineedit", "case-changing a word, and transpose") {
     struct kline_edit e;
 
-    kline_init(&e);
+    kline_init_mem(&e, &ktest_mem);
     type(&e, "hello world");
     kline_key(&e, CTRL('a'));
     meta(&e, 'u');
@@ -160,7 +170,7 @@ KTEST("klineedit", "case-changing a word, and transpose") {
     meta(&e, 'l');
     KTEST_ASSERT(eq(e.buf, "hello World"));
 
-    kline_init(&e);
+    kline_init_mem(&e, &ktest_mem);
     type(&e, "ab");
     kline_key(&e, CTRL('t'));
     KTEST_ASSERT(eq(e.buf, "ba"));
@@ -168,7 +178,7 @@ KTEST("klineedit", "case-changing a word, and transpose") {
 
 KTEST("klineedit", "undo steps back through edits") {
     struct kline_edit e;
-    kline_init(&e);
+    kline_init_mem(&e, &ktest_mem);
 
     type(&e, "hello world");
     kline_key(&e, CTRL('w')); // "hello "
@@ -186,7 +196,7 @@ KTEST("klineedit", "undo steps back through edits") {
 
 KTEST("klineedit", "the actions a front end has to handle") {
     struct kline_edit e;
-    kline_init(&e);
+    kline_init_mem(&e, &ktest_mem);
 
     KTEST_ASSERT_EQ(kline_key(&e, '\r'), KLINE_ACCEPT);
     KTEST_ASSERT_EQ(kline_key(&e, '\n'), KLINE_ACCEPT);
@@ -203,7 +213,7 @@ KTEST("klineedit", "the actions a front end has to handle") {
 
 KTEST("klineedit", "a lone Esc is swallowed, not treated as a character") {
     struct kline_edit e;
-    kline_init(&e);
+    kline_init_mem(&e, &ktest_mem);
     type(&e, "ab");
 
     // ESC alone changes nothing visible -- it waits for the next key to
@@ -220,7 +230,7 @@ KTEST("klineedit", "a lone Esc is swallowed, not treated as a character") {
 
 KTEST("klineedit", "kline_set replaces the line and parks at the end") {
     struct kline_edit e;
-    kline_init(&e);
+    kline_init_mem(&e, &ktest_mem);
     type(&e, "typed");
 
     kline_set(&e, "recalled from history");
@@ -232,14 +242,69 @@ KTEST("klineedit", "kline_set replaces the line and parks at the end") {
     KTEST_ASSERT_EQ(e.cursor, 0);
 }
 
-KTEST("klineedit", "a full line refuses more input rather than corrupting") {
+KTEST("klineedit", "with no allocator a full line refuses more input") {
+    // The contract for a front end that passes NULL, and what this
+    // editor did for its whole life: stop at the inline buffer and
+    // REFUSE, never truncate somewhere the caller cannot see.
     struct kline_edit e;
     kline_init(&e);
-    for (int i = 0; i < KLINE_MAX + 20; i++) kline_key(&e, 'x');
+    for (int i = 0; i < KLINE_INLINE + 20; i++) kline_key(&e, 'x');
 
-    KTEST_ASSERT_EQ(e.len, KLINE_MAX - 1);
+    KTEST_ASSERT_EQ(e.len, KLINE_INLINE - 1);
     KTEST_ASSERT_EQ(e.buf[e.len], '\0');
     KTEST_ASSERT_EQ(e.cursor, e.len);
+}
+
+KTEST("klineedit", "Alt-T transposes words longer than the inline buffer") {
+    // THE CASE THE OLD IMPLEMENTATION MANGLED. It staged the span in a
+    // fixed 128-byte array and capped each copy at 127, so a span past
+    // that was rewritten only in part and kept the ORIGINAL text in its
+    // tail -- a silently wrong command line. The rotate has no buffer
+    // and no length to cap.
+    struct kline_edit e;
+    kline_init_mem(&e, &ktest_mem);
+    for (int i = 0; i < 100; i++) kline_key(&e, 'a');
+    kline_key(&e, ' ');
+    for (int i = 0; i < 100; i++) kline_key(&e, 'b');
+
+    kline_key(&e, 0x1B); kline_key(&e, 't');   // Alt-T
+
+    KTEST_ASSERT_EQ(e.len, 201);
+    for (int i = 0; i < 100; i++) KTEST_ASSERT_EQ(e.buf[i], 'b');
+    KTEST_ASSERT_EQ(e.buf[100], ' ');
+    for (int i = 101; i < 201; i++) KTEST_ASSERT_EQ(e.buf[i], 'a');
+    KTEST_ASSERT_EQ(e.buf[201], '\0');
+    kline_free(&e);
+}
+
+KTEST("klineedit", "with an allocator the line grows past the inline buffer") {
+    struct kline_edit e;
+    kline_init_mem(&e, &ktest_mem);
+    const int want = KLINE_INLINE * 4 + 7;   // several doublings, not a round one
+    for (int i = 0; i < want; i++) kline_key(&e, 'x');
+
+    KTEST_ASSERT_EQ(e.len, want);
+    KTEST_ASSERT_EQ(e.buf[e.len], '\0');
+    KTEST_ASSERT_EQ(e.cursor, e.len);
+    // It really left the inline buffer, rather than growing a number.
+    KTEST_ASSERT(e.buf != e.inln);
+    KTEST_ASSERT(e.cap > KLINE_INLINE);
+
+    // And every character survived the copies that growth made.
+    for (int i = 0; i < want; i++) KTEST_ASSERT_EQ(e.buf[i], 'x');
+
+    // Undo restores a line longer than the inline buffer -- the case a
+    // fixed-size snapshot could not hold. Ctrl-W rather than a typed
+    // character: typing does not snapshot per key (readline groups it),
+    // so a delete is what actually pushes one.
+    kline_key(&e, CTRL('w'));          // kills the whole run of x's
+    KTEST_ASSERT_EQ(e.len, 0);
+    kline_key(&e, 0x1F);               // Ctrl-_, readline's undo
+    KTEST_ASSERT_EQ(e.len, want);
+    for (int i = 0; i < want; i++) KTEST_ASSERT_EQ(e.buf[i], 'x');
+
+    kline_free(&e);
+    KTEST_ASSERT_EQ(e.cap, KLINE_INLINE);   // back to owning nothing
 }
 
 // The shared case table, asserted in the KERNEL's build of the editor.
@@ -252,7 +317,7 @@ KTEST("klineedit", "the shared case table holds in ring 0") {
     static char got[KLINE_MAX];
     int cursor = 0;
     for (int i = 0; i < kline_case_count; i++) {
-        KTEST_ASSERT(kline_case_run(&kline_cases[i], &e, got, sizeof got, &cursor));
+        KTEST_ASSERT(kline_case_run(&kline_cases[i], &e, got, sizeof got, &cursor, &ktest_mem));
     }
     KTEST_ASSERT(kline_case_count >= 10); // the table is reachable, not empty
 }

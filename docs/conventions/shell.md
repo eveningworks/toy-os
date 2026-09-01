@@ -379,6 +379,41 @@ this the obvious way), not from how much history it accumulated.
   removed unconditionally.
 
 
+## A COMMAND LINE IS NOT A PATH, AND SIZING IT LIKE ONE TRUNCATES IT
+
+Three buffers bounded a command line, each named for something else,
+and each cut it silently:
+
+- `tosh_run_line()` staged the whole line in `char work[TOSH_PATH_MAX]`
+  -- 64 bytes. Anything past 63 characters was cut before the shell
+  even parsed it. `TOSH_CMD_MAX` (1024) is what it uses now.
+- The kernel's `sys_spawn` copied a program's ARGUMENTS with
+  `FS_PATH_MAX`, so every spawned program's arguments were cut at 63
+  characters -- a long URL to `wget`, a long string to `echo`.
+  `SPAWN_ARGS_MAX` (1024) is its own constant now, because a path
+  INSIDE the argument string is still a path and still bounded by
+  `FS_PATH_MAX` where it is used as one.
+- `apps/shell.c`'s `LINE_MAX` was 128, matching the editor's old fixed
+  buffer.
+
+**A PATH LIMIT IS NOT A LENGTH LIMIT.** The shared cause is a constant
+borrowed because it was nearby and roughly the right size. When a buffer
+holds something that is not what its constant is named for, give it its
+own name -- the wrong one reads as deliberate and survives review.
+
+**AND "IT RAN" IS NOT "IT RAN WITH WHAT I TYPED".** The check that found
+the second of these asserted that a long command CREATED ITS FILE, and
+passed while writing 63 of 160 characters into it; only asserting on the
+CONTENT reddened. `tools/console_shell_test.py` checks the content now,
+with a short command beside it as the control.
+
+**RAISING THESE MOVES BUFFERS ONTO STACKS THAT CANNOT HOLD THEM.** A
+kernel stack is 16 KiB with a guard page, so `LINE_MAX` at 1024 turned
+`shell_main()` into an 11 KB frame the moment the history staging buffer
+scaled with it. The shell is not reentrant -- there is one physical
+console -- so those are `static`, which is what `g_ed` already was and
+for the same reason.
+
 ## A BUILTIN MUST NOT SHADOW A `/bin` PROGRAM THAT DOES MORE
 
 **`/bin/tosh` HAS SIX BUILTINS AND EACH ONE HAS TO BE ONE:** `cd`

@@ -21,6 +21,14 @@
 
 #define TOSH_PATH_MAX 64 // FS_PATH_MAX
 
+// THE WHOLE COMMAND LINE, which is not a path and was sized as one.
+// tosh_run_line() staged the line in a TOSH_PATH_MAX buffer, so a
+// command over 63 characters was silently cut -- measured: `echo x >
+// /probe_a.txt` ran and a 70-character line did not. A command line is
+// as long as a person types plus what completion inserts, and paths in
+// it are bounded separately by TOSH_PATH_MAX.
+#define TOSH_CMD_MAX 1024
+
 // Receives output as it is produced -- streamed, not accumulated, so a
 // long-running program's output appears while it runs rather than all
 // at once when it exits.

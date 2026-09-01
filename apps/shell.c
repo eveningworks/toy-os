@@ -52,7 +52,7 @@ char cwd[FS_PATH_MAX] = "/";
 // Declared here (rather than down near shell_read_line, which is what
 // actually fills this in via the up/down arrow keys) so cmd_history()
 // (shell_sys.c) can see it too, via shell_internal.h's extern.
-char history[HISTORY_MAX][LINE_MAX];
+char *history[HISTORY_MAX];
 int history_count = 0; // number of entries stored (caps at HISTORY_MAX)
 
 // Resolves `input` (absolute if it starts with '/', otherwise relative
@@ -263,11 +263,17 @@ int shell_resolve_path(const char *input, char *out) {
 #define HISTORY_FILE "/etc/history"
 
 static void history_save(void) {
-    char buf[HISTORY_MAX * LINE_MAX];
+    // Still a fixed staging buffer, and it now SKIPS an entry that will
+    // not fit rather than the whole save failing -- the file is a
+    // convenience, and a shorter one beats a truncated line in it.
+    // static: 8 KiB does not belong on a 16 KiB kernel stack, and
+    // history_save() is reached only from the single console shell.
+    static char buf[HISTORY_MAX * LINE_MAX];
     size_t pos = 0;
     for (int i = 0; i < history_count; i++) {
+        if (!history[i]) continue;
         size_t len = k_strlen(history[i]);
-        if (pos + len + 1 >= sizeof(buf)) break; // shouldn't happen at HISTORY_MAX=8, but don't overrun if it ever grows
+        if (pos + len + 1 >= sizeof(buf)) continue; // skip one that will not fit; never overrun
         k_memcpy(buf + pos, history[i], len);
         pos += len;
         buf[pos++] = '\n';
@@ -295,9 +301,13 @@ static void history_load(void) {
         pos = (uint32_t)((le < end ? le + 1 : le) - data);
 
         size_t len = (size_t)(le - ls);
-        if (len == 0 || len >= LINE_MAX) continue; // blank line, or too long to have been written by us
-        k_memcpy(history[history_count], ls, len);
-        history[history_count][len] = '\0';
+        if (len == 0) continue;
+        char *copy = kmalloc((uint32_t)len + 1);
+        if (!copy) continue;    // one entry lost, not a truncated one
+        k_memcpy(copy, ls, len);
+        copy[len] = '\0';
+        kfree(history[history_count]);
+        history[history_count] = copy;
         history_count++;
     }
 }
@@ -324,14 +334,22 @@ static void shell_session_init(void) {
 }
 
 static void history_add(const char *line) {
-    if (k_strlen(line) == 0) return;
+    size_t len = k_strlen(line);
+    if (len == 0) return;
+    // Copied first: a failure must leave the ring as it was rather than
+    // having already dropped the oldest entry to make room.
+    char *copy = kmalloc((uint32_t)len + 1);
+    if (!copy) return;
+    k_memcpy(copy, line, len + 1);
+
     if (history_count < HISTORY_MAX) {
-        k_strcpy(history[history_count], line);
+        kfree(history[history_count]);
+        history[history_count] = copy;
         history_count++;
     } else {
-        // drop oldest, shift up
-        for (int i = 1; i < HISTORY_MAX; i++) k_strcpy(history[i - 1], history[i]);
-        k_strcpy(history[HISTORY_MAX - 1], line);
+        kfree(history[0]);
+        for (int i = 1; i < HISTORY_MAX; i++) history[i - 1] = history[i];
+        history[HISTORY_MAX - 1] = copy;
     }
     history_save();
 }
@@ -346,10 +364,21 @@ static void history_add(const char *line) {
 // core deliberately doesn't own -- history, completion, and the screen.
 //
 // `g_ed` is file-scope rather than a local because struct kline_edit
-// carries an undo stack and runs ~1.2KB, more than belongs on the
-// shell's modest stack. shell_read_line() isn't reentrant anyway --
+// carries a 128-byte inline line and an undo stack, more than belongs on
+// the shell's modest stack. shell_read_line() isn't reentrant anyway --
 // there is exactly one physical console.
 static struct kline_edit g_ed;
+
+// The editor takes its memory from here: klineedit.c is compiled into
+// both rings and can name neither kmalloc() nor malloc() (klineedit.h).
+// Without it the line stops at 128 characters and undo does nothing.
+static void *ed_alloc(unsigned long n) { return kmalloc((uint32_t)n); }
+static void ed_free(void *p) { kfree(p); }
+// The ceiling is what shell_main() can actually run: it copies the
+// finished line into a LINE_MAX buffer and dispatches THAT, so an
+// editor willing to grow past it would let a line be typed whole and
+// run short.
+static const struct kline_mem ed_mem = { ed_alloc, ed_free, LINE_MAX - 1 };
 
 // What is currently PAINTED after the prompt, which is not the same as
 // what's in the editor until repaint_line() runs. Both are needed to
@@ -480,11 +509,11 @@ static void shell_complete_line(void) {
 // Returns 1 if the user pressed Enter, which in bash runs the match
 // immediately rather than just recalling it.
 static int reverse_search(void) {
-    char pattern[LINE_MAX];
+    static char pattern[LINE_MAX];   // one physical console; see g_ed
     int plen = 0;
     pattern[0] = '\0';
 
-    char original[LINE_MAX];
+    static char original[LINE_MAX];
     k_strlcpy(original, g_ed.buf, sizeof(original));
 
     int match = -1;               // index into history[], or -1 for none
@@ -503,17 +532,17 @@ static int reverse_search(void) {
         vga_write(pattern);
         vga_write("': ");
         vga_set_color(shell_fg, VGA_BLACK);
-        if (match >= 0) vga_write(history[match]);
+        if (match >= 0 && history[match]) vga_write(history[match]);
 
         int key = keyboard_getchar();
 
         if (key == '\r' || key == '\n') {
-            if (match >= 0) kline_set(&g_ed, history[match]);
+            if (match >= 0 && history[match]) kline_set(&g_ed, history[match]);
             vga_putc('\n');
             return 1; // bash runs it straight away
         }
         if (key == 0x1B) { // Esc -- keep the match, but edit it instead of running
-            if (match >= 0) kline_set(&g_ed, history[match]);
+            if (match >= 0 && history[match]) kline_set(&g_ed, history[match]);
             vga_putc('\n');
             return 0;
         }
@@ -538,7 +567,7 @@ static int reverse_search(void) {
 
         match = -1;
         for (int i = from; i >= 0; i--) {
-            if (k_strstr(history[i], pattern)) { match = i; break; }
+            if (history[i] && k_strstr(history[i], pattern)) { match = i; break; }
         }
     }
 }
@@ -550,17 +579,19 @@ static int reverse_search(void) {
 static void insert_last_arg(void) {
     if (history_count == 0) return;
     const char *prev = history[history_count - 1];
+    if (!prev) return;              // a slot whose entry could not be stored
     const char *last = k_strrchr(prev, ' ');
     kline_insert_str(&g_ed, last ? last + 1 : prev);
 }
 
 static void shell_read_line(char *buf, unsigned int len) {
-    kline_init(&g_ed);
+    kline_free(&g_ed);          // the previous line's buffer and undo stack
+    kline_init_mem(&g_ed, &ed_mem);
     shown_len = 0;
     shown_cursor = 0;
 
     int hist_index = history_count; // one past the newest = "current blank line"
-    char saved_current[LINE_MAX];
+    static char saved_current[LINE_MAX];
     saved_current[0] = '\0';
 
     for (;;) {
@@ -571,7 +602,7 @@ static void shell_read_line(char *buf, unsigned int len) {
         // entirely and just echoes it, so ordinary typing costs exactly
         // what it always did before any of this existed.
         if (IS_PRINTABLE_KEY(c) && g_ed.cursor == g_ed.len &&
-            shown_cursor == shown_len && g_ed.len < KLINE_MAX - 1) {
+            shown_cursor == shown_len && g_ed.len < g_ed.cap - 1) {
             kline_key(&g_ed, c);
             vga_putc((char)c);
             shown_len = g_ed.len;
@@ -593,7 +624,8 @@ static void shell_read_line(char *buf, unsigned int len) {
         case KLINE_CANCEL: // Ctrl-C -- abandon this line, fresh prompt
             park_at_end();
             vga_write("^C\n");
-            kline_init(&g_ed);
+            kline_free(&g_ed);          // the previous line's buffer and undo stack
+            kline_init_mem(&g_ed, &ed_mem);
             hist_index = history_count;
             print_prompt();
             shown_len = 0;
@@ -622,7 +654,7 @@ static void shell_read_line(char *buf, unsigned int len) {
                     k_strlcpy(saved_current, g_ed.buf, sizeof(saved_current));
                 }
                 hist_index--;
-                kline_set(&g_ed, history[hist_index]);
+                kline_set(&g_ed, history[hist_index] ? history[hist_index] : "");
                 repaint_line();
             }
             break;
@@ -631,7 +663,7 @@ static void shell_read_line(char *buf, unsigned int len) {
             if (hist_index < history_count) {
                 hist_index++;
                 kline_set(&g_ed, (hist_index == history_count) ? saved_current
-                                                                : history[hist_index]);
+                                 : (history[hist_index] ? history[hist_index] : ""));
                 repaint_line();
             }
             break;
@@ -661,7 +693,7 @@ static void shell_read_line(char *buf, unsigned int len) {
 }
 
 void shell_main(void) {
-    char line[LINE_MAX];
+    static char line[LINE_MAX];
 
     shell_session_init(); // once per boot; the demo and the serial console reach it first, see its comment
 
