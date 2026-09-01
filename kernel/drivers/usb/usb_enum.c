@@ -95,21 +95,29 @@ void usb_read_string(uint8_t slot, uint8_t index, char *out, uint32_t cap) {
     out[0] = 0;
     if (!index || cap < 2) return;
 
-    // String descriptor 0 is the list of language ids, not a string.
-    uint8_t lang[4];
-    if (get_descriptor(slot, DESC_STRING, 0, 0, lang, sizeof lang) < 4) return;
-    uint16_t langid = (uint16_t)(lang[2] | ((uint16_t)lang[3] << 8));
+    // ONE STATIC BUFFER FOR BOTH READS, never the stack: these are DMA
+    // targets and the rule is stated at g_desc_buf above. A device that
+    // writes more than it was asked for overran the caller's SAVED
+    // REGISTERS, surfacing much later as a GP fault in
+    // usb_parse_config_interfaces with a corrupted `d`. Deliberately not
+    // g_desc_buf, which holds the configuration our caller is about to
+    // parse. Sized well past either request so an over-run stays inside.
+    static uint8_t str_buf[256] __attribute__((aligned(64)));
 
-    uint8_t buf[256];
-    int got = get_descriptor(slot, DESC_STRING, index, langid, buf, sizeof buf);
+    // String descriptor 0 is the list of language ids, not a string.
+    if (get_descriptor(slot, DESC_STRING, 0, 0, str_buf, 4) < 4) return;
+    uint16_t langid = (uint16_t)(str_buf[2] | ((uint16_t)str_buf[3] << 8));
+
+    int got = get_descriptor(slot, DESC_STRING, index, langid,
+                             str_buf, sizeof str_buf);
     if (got < 2) return;
 
-    uint32_t blen = buf[0];
+    uint32_t blen = str_buf[0];
     if (blen < 2 || blen > (uint32_t)got) return;   // the device's own length, checked
 
     uint32_t o = 0;
     for (uint32_t i = 2; i + 1 < blen && o + 1 < cap; i += 2) {
-        uint16_t wc = (uint16_t)(buf[i] | ((uint16_t)buf[i + 1] << 8));
+        uint16_t wc = (uint16_t)(str_buf[i] | ((uint16_t)str_buf[i + 1] << 8));
         out[o++] = (wc && wc < 0x80) ? (char)wc : '?';
     }
     out[o] = 0;
