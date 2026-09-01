@@ -16,8 +16,9 @@
 // reported, the exit code goes non-zero, and the rest still print.
 // coreutils does the same, and it is the difference between `cat a b c`
 // telling you which one is missing and telling you only the first.
-#include "rt/sys.h"
 #include "lib/cmd.h"
+#include <fcntl.h>
+#include <unistd.h>
 
 // One block. Bigger buys little -- the console sink is the slow part --
 // and this is .bss either way.
@@ -30,13 +31,13 @@ static char g_buf[CHUNK];
 // pipe delivers whatever is ready).
 static int copy_out(int fd, const char *name) {
     for (;;) {
-        int64_t n = sys_read(fd, g_buf, sizeof g_buf);
+        int64_t n = read(fd, g_buf, sizeof g_buf);
         if (n == 0) return 0;   // EOF
         if (n < 0) {
             cmd_fail("cat", name);
             return 1;
         }
-        sys_write(1, g_buf, (size_t)n);
+        write(1, g_buf, (size_t)n);
     }
 }
 
@@ -45,15 +46,14 @@ int main(int argc, char **argv) {
 
     int failed = 0;
     for (int i = 1; i < argc; i++) {
-        // Read-only is the default; there is no SYS_O_READ.
-        int fd = sys_open(argv[i], 0);
+        int fd = open(argv[i], O_RDONLY);
         if (fd < 0) {
             cmd_fail("cat", argv[i]);
             failed = 1;
             continue;
         }
         if (copy_out(fd, argv[i])) failed = 1;
-        sys_close(fd);
+        close(fd);
     }
     return failed;
 }

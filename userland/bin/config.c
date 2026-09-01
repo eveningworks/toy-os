@@ -30,6 +30,8 @@
 #include <ctype.h>
 #include <stdio.h>
 #include "setting_abi.h" // enum setting_result, struct setting_msg
+#include <fcntl.h>
+#include <unistd.h>
 
 static void put(const char *s) { sys_print(s); }
 
@@ -75,10 +77,10 @@ static int report(const char *name, const char *value, uint32_t result) {
 #define FILE_MAX 8192
 
 static int read_file(const char *path, char *buf, int cap) {
-    int fd = sys_open(path, 0);
+    int fd = open(path, O_RDONLY);
     if (fd < 0) return -1;
-    int64_t n = sys_read(fd, buf, (size_t)(cap - 1));
-    sys_close(fd);
+    int64_t n = read(fd, buf, (size_t)(cap - 1));
+    close(fd);
     if (n < 0) n = 0;
     buf[n] = '\0';
     return (int)n;
@@ -640,13 +642,13 @@ static int cmd_register(const char *name, const char *path, const char *desc) {
              "Name=%s\nPath=%s\nDescription=%s\n",
              name, name, path, desc ? desc : "");
 
-    int fd = sys_open(dpath, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
+    int fd = open(dpath, O_WRONLY | O_CREAT | O_TRUNC);
     if (fd < 0) {
         putline("config: could not write the descriptor -- does /etc/config.d exist?");
         return 1;
     }
-    int64_t w = sys_write(fd, body, strlen(body));
-    sys_close(fd);
+    int64_t w = write(fd, body, strlen(body));
+    close(fd);
     if (w < 0) { putline("config: writing the descriptor failed"); return 1; }
 
     // The kernel rescans on reload, so do it here rather than leaving
@@ -666,7 +668,7 @@ static int cmd_unregister(const char *name) {
         putline("config: a name must be a plain word");
         return 1;
     }
-    if (sys_unlink(dpath) != 0) {
+    if (unlink(dpath) != 0) {
         char line[200];
         snprintf(line, sizeof line,
                  "config: '%s' has no descriptor in /etc/config.d "

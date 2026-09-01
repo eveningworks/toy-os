@@ -29,6 +29,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 // DIAGNOSTICS GO TO fd 2, NOT stdout. A service is spawned by init with
 // no stdout anybody reads -- the `tftpd: serving ...` line printed at
@@ -41,7 +43,7 @@ static void logf(const char *fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
-    sys_write(2, buf, strlen(buf));
+    write(2, buf, strlen(buf));
 }
 
 #define USAGE "tftpd [-p <port>] [-r <root>] [-1]"
@@ -138,7 +140,7 @@ static int open_tid(void) {
     int fd = sys_socket(NET_ABI_AF_INET, NET_ABI_SOCK_DGRAM, NET_ABI_IPPROTO_UDP);
     if (fd < 0) { logf("tftpd: no TID socket\n"); return -1; }
     int p = sys_bind(fd, 0, 0, 0);
-    if (p < 0) { logf("tftpd: TID bind failed (%d)\n", p); sys_close(fd); return -1; }
+    if (p < 0) { logf("tftpd: TID bind failed (%d)\n", p); close(fd); return -1; }
     return fd;
 }
 
@@ -147,7 +149,7 @@ static int open_tid(void) {
 // transfer and then hear nothing again. That is not hypothetical -- it
 // is what the experiment that established the firewall diagnosis did.
 static void close_tid(int fd) {
-    if (!g_single_port && fd >= 0) sys_close(fd);
+    if (!g_single_port && fd >= 0) close(fd);
 }
 
 // --- WRQ: the client writes a file to us -------------------------------
@@ -156,7 +158,7 @@ static void do_write(uint32_t ip, uint16_t port, const char *path) {
     int tid = open_tid();
     if (tid < 0) return;
 
-    int fd = sys_open(path, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC);
     if (fd < 0) {
         send_error(tid, ip, port, ERR_ACCESS, "cannot create");
         close_tid(tid);
@@ -191,9 +193,9 @@ static void do_write(uint32_t ip, uint16_t port, const char *path) {
             if (b != (uint16_t)(block + 1)) continue;
             block = b;
             uint32_t len = (uint32_t)n - 4;
-            if (len && sys_write(fd, g_rx + 4, len) != (int64_t)len) {
+            if (len && write(fd, g_rx + 4, len) != (int64_t)len) {
                 send_error(tid, ip, port, ERR_FULL, "write failed");
-                sys_close(fd); close_tid(tid);
+                close(fd); close_tid(tid);
                 return;
             }
             total += len;
@@ -212,7 +214,7 @@ static void do_write(uint32_t ip, uint16_t port, const char *path) {
         }
     }
 
-    sys_close(fd);
+    close(fd);
     close_tid(tid);
     logf("tftpd: wrote %s, %llu bytes\n", path, (unsigned long long)total);
 }
@@ -223,7 +225,7 @@ static void do_read(uint32_t ip, uint16_t port, const char *path) {
     int tid = open_tid();
     if (tid < 0) return;
 
-    int fd = sys_open(path, 0);
+    int fd = open(path, O_RDONLY);
     if (fd < 0) {
         send_error(tid, ip, port, ERR_NOTFOUND, "no such file");
         close_tid(tid);
@@ -233,7 +235,7 @@ static void do_read(uint32_t ip, uint16_t port, const char *path) {
     uint16_t block = 0;
     uint64_t total = 0;
     for (;;) {
-        int64_t len = sys_read(fd, g_tx + 4, BLKSIZE);
+        int64_t len = read(fd, g_tx + 4, BLKSIZE);
         if (len < 0) len = 0;
         block++;
         put16(g_tx, OP_DATA);
@@ -256,7 +258,7 @@ static void do_read(uint32_t ip, uint16_t port, const char *path) {
         if (len < BLKSIZE) break;          // the short block ends it
     }
 
-    sys_close(fd);
+    close(fd);
     close_tid(tid);
     logf("tftpd: sent %s, %llu bytes\n", path, (unsigned long long)total);
 }
@@ -300,7 +302,7 @@ int main(int argc, char **argv) {
     int bound = sys_bind(fd, 0, (uint16_t)port, 0);
     if (bound < 0) {
         logf("tftpd: cannot bind port %d (%d)\n", port, bound);
-        sys_close(fd);
+        close(fd);
         return 1;
     }
     g_req_fd = fd;

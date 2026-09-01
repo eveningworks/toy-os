@@ -49,6 +49,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 // Coverage 1..255 onto nine ink levels. A leading '.' for "some ink,
 // barely any" rather than a space, so the difference between a faint
@@ -57,7 +58,7 @@
 static const char RAMP[] = ".:-=+*#%@";
 #define RAMP_LEVELS ((int)(sizeof RAMP - 1))
 
-static void put(const char *s) { sys_write(1, s, (unsigned)strlen(s)); }
+static void put(const char *s) { write(1, s, (unsigned)strlen(s)); }
 
 // --- the kernel's view -----------------------------------------------
 
@@ -231,9 +232,9 @@ static int glyph(int c, int want_kernel, int want_both) {
         // started this program. SYS_WIN_REQUEST refuses a caller with
         // no scheduler slot -- which is every program the kernel
         // shell's legacy `run` loader starts, i.e. anything typed as a
-        // bare name at a `#` prompt. sys_getpid() answers -1 there and
+        // bare name at a `#` prompt. getpid() answers -1 there and
         // is the only way to tell from in here.
-        if (sys_getpid() < 0)
+        if (getpid() < 0)
             put("  client   unavailable -- started by the legacy loader, which has\n"
                 "           no scheduler slot to own a font mapping.\n"
                 "           Try `spawn /bin/font ...`, or run it from a Terminal.\n");

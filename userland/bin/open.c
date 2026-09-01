@@ -6,7 +6,6 @@
 #include "lib/uopen.h"
 #include "lib/uconf.h"
 #include "lib/cmd.h"
-#include "rt/sys.h"
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>

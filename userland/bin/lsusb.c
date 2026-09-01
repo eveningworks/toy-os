@@ -21,6 +21,8 @@
 #include <stdio.h>
 #include <string.h>
 #include "query_abi.h"
+#include <fcntl.h>
+#include <unistd.h>
 
 #define USB_IDS_PATH "/usr/share/hwdata/usb.ids"
 #define MAX_DEVS         8
@@ -144,7 +146,7 @@ static void handle_line(char *line, int *cur_vendor) {
 // peak memory is a few KB however large the database grows. Identical
 // reasoning to lspci.c, which says it at length.
 static void load_names(void) {
-    int64_t fd = sys_open(USB_IDS_PATH, 0);
+    int64_t fd = open(USB_IDS_PATH, O_RDONLY);
     if (fd < 0) {
         fprintf(stderr, "lsusb: %s not found -- showing numeric ids only\n",
                 USB_IDS_PATH);
@@ -155,7 +157,7 @@ static void load_names(void) {
     int cur_vendor = -1, overlong = 0;
 
     for (;;) {
-        int64_t n = sys_read((int)fd, chunk, CHUNK);
+        int64_t n = read((int)fd, chunk, CHUNK);
         if (n <= 0) break;
         for (int64_t i = 0; i < n; i++) {
             char c = chunk[i];
@@ -174,7 +176,7 @@ static void load_names(void) {
         line[line_len] = '\0';
         handle_line(line, &cur_vendor);
     }
-    sys_close((int)fd);
+    close((int)fd);
 }
 
 // --- the raw configuration descriptor (-D) ----------------------------

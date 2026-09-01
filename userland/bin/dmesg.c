@@ -30,8 +30,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
-static void put(const char *s, unsigned n) { sys_write(1, s, n); }
+static void put(const char *s, unsigned n) { write(1, s, n); }
 static void puts_(const char *s) { put(s, (unsigned)strlen(s)); }
 
 // How long --follow waits between polls. The log is not a stream that

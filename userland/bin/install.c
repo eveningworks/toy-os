@@ -35,6 +35,9 @@
 #include "lib/cmd.h"
 #include "lib/ufileop.h"
 #include "lib/human.h"
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #define USAGE \
     "install [--disk <name>] [--esp <MiB>] confirm\n" \
@@ -116,15 +119,15 @@ static void *slurp(const char *path, uint64_t *out_size) {
     if (st.size == 0) return 0;
     uint8_t *buf = malloc((size_t)st.size);
     if (!buf) return 0;
-    int fd = sys_open(path, 0)  /* read-only is the default */;
+    int fd = open(path, O_RDONLY);
     if (fd < 0) { free(buf); return 0; }
     uint64_t got = 0;
     while (got < st.size) {
-        int64_t n = sys_read(fd, buf + got, (size_t)(st.size - got));
+        int64_t n = read(fd, buf + got, (size_t)(st.size - got));
         if (n <= 0) break;
         got += (uint64_t)n;
     }
-    sys_close(fd);
+    close(fd);
     if (got != st.size) { free(buf); return 0; }
     *out_size = got;
     return buf;
@@ -220,7 +223,7 @@ static int copy_system(void) {
     for (unsigned i = 0; i < sizeof SKIP / sizeof SKIP[0]; i++) {
         char dst[64];
         snprintf(dst, sizeof dst, TARGET_ROOT "/%s", SKIP[i]);
-        sys_mkdir(dst);   // already there is not an error
+        mkdir(dst, 0755);   // already there is not an error
     }
     return ok;
 }
@@ -234,11 +237,11 @@ static int copy_system(void) {
 // it; what that target cannot do is have a HOST `grub-install` run
 // against it later without re-copying them.
 static int copy_boot(void) {
-    if (sys_mkdir(TARGET_BOOT "/boot") < 0 && sys_errno() != EEXIST) {
+    if (mkdir(TARGET_BOOT "/boot", 0755) < 0 && sys_errno() != EEXIST) {
         cmd_fail("install", TARGET_BOOT "/boot");
         return 0;
     }
-    if (sys_mkdir(TARGET_BOOT "/boot/grub") < 0 && sys_errno() != EEXIST) {
+    if (mkdir(TARGET_BOOT "/boot/grub", 0755) < 0 && sys_errno() != EEXIST) {
         cmd_fail("install", TARGET_BOOT "/boot/grub");
         return 0;
     }
@@ -357,7 +360,7 @@ int main(int argc, char **argv) {
     // The mount point has to exist on the volume it is mounted onto,
     // which is the target's root -- so this is made after it is mounted,
     // not before.
-    sys_mkdir(TARGET_BOOT);
+    mkdir(TARGET_BOOT, 0755);
     if (!mount_one(p2, TARGET_BOOT)) { sys_umount(TARGET_ROOT); return 1; }
 
     step("copying the system");

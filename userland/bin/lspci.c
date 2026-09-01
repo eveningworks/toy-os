@@ -35,9 +35,11 @@
 #include "knum.h"       // k_htoa -- fixed-width hex, which kfmt has no
                          // conversion for (no `*` width in its printf)
 #include "pci.h" // struct pci_device only -- see this file's top comment
+#include <fcntl.h>
+#include <unistd.h>
 
 static void put(const char *s) {
-    sys_write(1, s, strlen(s));
+    write(1, s, strlen(s));
 }
 
 static void put_udec(uint32_t v) {
@@ -203,7 +205,7 @@ static void handle_line(char *line, int32_t *cur_vendor) {
 // isn't there -- the numeric output below still works, which is the
 // point of keeping the two separable.
 static void load_names(void) {
-    int64_t fd = sys_open(PCI_IDS_PATH, 0);
+    int64_t fd = open(PCI_IDS_PATH, O_RDONLY);
     if (fd < 0) {
         put_err("lspci: " PCI_IDS_PATH " not found -- showing numeric ids only\n");
         return;
@@ -216,7 +218,7 @@ static void load_names(void) {
     int overlong = 0; // dropping the tail of a too-long line, not restarting mid-way
 
     for (;;) {
-        int64_t n = sys_read((int)fd, chunk, CHUNK);
+        int64_t n = read((int)fd, chunk, CHUNK);
         if (n <= 0) break;
         for (int64_t i = 0; i < n; i++) {
             char c = chunk[i];
@@ -237,7 +239,7 @@ static void load_names(void) {
         line[line_len] = '\0';
         handle_line(line, &cur_vendor);
     }
-    sys_close((int)fd);
+    close((int)fd);
 }
 
 int main(void) {

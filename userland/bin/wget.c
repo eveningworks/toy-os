@@ -23,6 +23,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #define BUF 2048
 #define READ_TIMEOUT_MS 8000
@@ -97,7 +99,7 @@ int main(int argc, char **argv) {
     if (fd < 0) { cmd_fail("wget", "socket"); return 1; }
     if (sys_connect(fd, ip, u.port, 0) < 0) {
         cmd_fail("wget", u.host);
-        sys_close(fd);
+        close(fd);
         return 1;
     }
 
@@ -108,15 +110,15 @@ int main(int argc, char **argv) {
     // A stream takes what it can: writing to completion is the caller's
     // job, exactly as it is for a pipe.
     for (int off = 0; off < n; ) {
-        int64_t w = sys_write(fd, req + off, (size_t)(n - off));
-        if (w <= 0) { cmd_fail("wget", "write"); sys_close(fd); return 1; }
+        int64_t w = write(fd, req + off, (size_t)(n - off));
+        if (w <= 0) { cmd_fail("wget", "write"); close(fd); return 1; }
         off += (int)w;
     }
 
     int out = -1;
     if (out_path) {
-        out = sys_open(out_path, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
-        if (out < 0) { cmd_fail("wget", out_path); sys_close(fd); return 1; }
+        out = open(out_path, O_WRONLY | O_CREAT | O_TRUNC);
+        if (out < 0) { cmd_fail("wget", out_path); close(fd); return 1; }
     }
 
     // THE HEADERS ARE SKIPPED BY FINDING THE BLANK LINE, and it may
@@ -129,7 +131,7 @@ int main(int argc, char **argv) {
     int carry_len = 0;
 
     for (;;) {
-        int64_t got = sys_read(fd, buf, sizeof buf);
+        int64_t got = read(fd, buf, sizeof buf);
         if (got <= 0) break;          // 0 is the peer's FIN: the response ended
 
         int start = 0;
@@ -162,12 +164,12 @@ int main(int argc, char **argv) {
         int len = (int)got - start;
         if (len <= 0) continue;
         body_bytes += len;
-        if (out >= 0) sys_write(out, buf + start, (size_t)len);
-        else sys_write(1, buf + start, (size_t)len);
+        if (out >= 0) write(out, buf + start, (size_t)len);
+        else write(1, buf + start, (size_t)len);
     }
 
-    sys_close(fd);
-    if (out >= 0) sys_close(out);
+    close(fd);
+    if (out >= 0) close(out);
 
     if (status && (status < 200 || status >= 300))
         printf("\nwget: server said %d\n", status);

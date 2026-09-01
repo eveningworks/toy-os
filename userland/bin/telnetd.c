@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #define USAGE "telnetd  (run by inetd: inetd -p 23 /bin/telnetd)"
 
@@ -61,7 +62,7 @@ static int g_child = -1;
 static void sock_write(const void *p, uint32_t n) {
     const uint8_t *b = p;
     while (n) {
-        int64_t w = sys_write(g_sock_out, b, n);
+        int64_t w = write(g_sock_out, b, n);
         if (w <= 0) return;
         b += w; n -= (uint32_t)w;
     }
@@ -90,7 +91,7 @@ static void *shell_to_client(void *arg) {
     // thread without being automatic.
     static uint8_t in[BUF], out[BUF * 2];
     for (;;) {
-        int64_t n = sys_read(g_master, in, sizeof in);
+        int64_t n = read(g_master, in, sizeof in);
         if (n <= 0) break;
         uint32_t o = 0;
         for (int64_t i = 0; i < n; i++) {
@@ -103,7 +104,7 @@ static void *shell_to_client(void *arg) {
     }
     // The shell is gone: closing our end is what makes the client's
     // read return, so it sees the session end rather than hanging.
-    sys_close(g_sock_out);
+    close(g_sock_out);
     return 0;
 }
 
@@ -216,17 +217,17 @@ static int start_shell(void) {
     // its stderr reaches the client rather than dmesg. dup2 around the
     // spawn, as terminal.c and tosh's own redirection do: SYS_SPAWN
     // inherits the table, so placing them here places them in the child.
-    int in0 = sys_dup(0), out1 = sys_dup(1), err2 = sys_dup(2);
-    sys_dup2(slave, 0);
-    sys_dup2(slave, 1);
-    sys_dup2(slave, 2);
+    int in0 = dup(0), out1 = dup(1), err2 = dup(2);
+    dup2(slave, 0);
+    dup2(slave, 1);
+    dup2(slave, 2);
     int pid = sys_spawn_group(SHELL, 0, -1, 0, PGID_NEW);
-    if (in0  >= 0) { sys_dup2(in0, 0);  sys_close(in0); }
-    if (out1 >= 0) { sys_dup2(out1, 1); sys_close(out1); }
-    if (err2 >= 0) { sys_dup2(err2, 2); sys_close(err2); }
-    sys_close(slave);          // or the master never sees end-of-file
+    if (in0  >= 0) { dup2(in0, 0);  close(in0); }
+    if (out1 >= 0) { dup2(out1, 1); close(out1); }
+    if (err2 >= 0) { dup2(err2, 2); close(err2); }
+    close(slave);          // or the master never sees end-of-file
 
-    if (pid < 0) { sys_close(g_master); g_master = -1; return -1; }
+    if (pid < 0) { close(g_master); g_master = -1; return -1; }
 
     // The shell's group is the terminal's FOREGROUND group, which is
     // what points a Ctrl-C typed at the far end at the shell's job
@@ -268,10 +269,10 @@ int main(int argc, char **argv) {
     memset(&st, 0, sizeof st);
     static uint8_t in[BUF], out[BUF];   // see shell_to_client()
     for (;;) {
-        int64_t n = sys_read(g_sock_in, in, sizeof in);
+        int64_t n = read(g_sock_in, in, sizeof in);
         if (n <= 0) break;                 // the client hung up
         uint32_t o = client_to_shell(&st, in, (uint32_t)n, out);
-        if (o) sys_write(g_master, out, o);
+        if (o) write(g_master, out, o);
     }
 
     // THE WHOLE GROUP, not the shell's pid: a session that hung up with
@@ -279,6 +280,6 @@ int main(int argc, char **argv) {
     // nothing attached to it. This is the hangup a real telnetd sends.
     sys_kill(-g_child, SIGHUP);
     sys_kill(-g_child, SIGKILL);
-    sys_close(g_master);
+    close(g_master);
     return 0;
 }

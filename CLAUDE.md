@@ -857,6 +857,7 @@ whenever a headline here tells you something you did not already know.
 - **`SYS_WRITE_MAX` IS A THROUGHPUT CONSTANT, NOT JUST A BUFFER SIZE, AND IT IS 64 KiB**
 - **`sys_write()` COMPLETES THE WHOLE BUFFER, because the kernel caps one write at `SYS_WRITE_MAX` (1024) and a short write loses data SILENTLY.**
 - **AN UNRECOGNISED printf CONVERSION DESYNCHRONISES EVERY ARGUMENT AFTER IT, AND `kfmt_cases.h` IS THE TABLE THAT STOPS A FOURTH ONE.**
+- **WRITE C LIBRARY NAMES, AND REACH FOR `sys_*` ONLY WHERE THERE IS NO EQUIVALENT**
 - **THE POSIX HALF OF `tolibc` IS HEADERS OVER SYSCALLS THAT ALREADY EXIST**
 - **`userland/` is split by ROLE, and the build derives things from it -- adding a program is a `.c` file and nothing else.**
 - **In ring 3 the toolkit is reachable under the C names -- don't hand-roll a `my_strlen` or a digit loop there either.**

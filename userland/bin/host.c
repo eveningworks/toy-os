@@ -5,7 +5,6 @@
 // userland/lib/uresolv.c, shared with `ping`, so a name means the same
 // thing in both.
 #include <stdint.h>
-#include "rt/sys.h"
 #include "lib/uresolv.h"
 #include "lib/cmd.h"
 #include <stdio.h>

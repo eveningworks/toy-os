@@ -22,8 +22,8 @@
 #include <string.h>
 #include <regex.h>
 #include <unistd.h>
-#include "rt/sys.h"
 #include "lib/cmd.h"
+#include <fcntl.h>
 
 // A line longer than this is matched in full but reported truncated.
 // Sized against the widest thing this OS produces (a `dmesg` line, a
@@ -54,7 +54,7 @@ static void grep_fd(int fd, const char *name, int show_name) {
     int truncated = 0;
 
     for (;;) {
-        long n = sys_read(fd, buf, sizeof buf);
+        long n = read(fd, buf, sizeof buf);
         // A SHORT READ IS NOT EOF -- it is how a pipe delivers whatever
         // is ready, and treating it as the end would silently drop the
         // rest of `dmesg | grep`. Only 0 ends the stream.
@@ -162,14 +162,14 @@ int main(int argc, char **argv) {
     } else {
         int show_name = (argc - argi) > 1;
         for (; argi < argc; argi++) {
-            int fd = sys_open(argv[argi], 0);
+            int fd = open(argv[argi], O_RDONLY);
             if (fd < 0) {
                 cmd_fail("grep", argv[argi]);
                 had_error = 1;
                 continue;
             }
             grep_fd(fd, argv[argi], show_name);
-            sys_close(fd);
+            close(fd);
         }
     }
 

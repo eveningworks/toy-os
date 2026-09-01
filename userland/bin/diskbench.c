@@ -40,6 +40,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 // WHERE THE REPORT GOES. Default stdout, so a shell run reads normally;
 // `--out FILE` writes it to a file instead.
@@ -67,10 +69,10 @@ static unsigned g_report_len = 0;
 
 static void report_flush(void) {
     if (!g_to_file) return;
-    int fd = sys_open(g_out_path, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
+    int fd = open(g_out_path, O_WRONLY | O_CREAT | O_TRUNC);
     if (fd < 0) return;
-    sys_write(fd, g_report, g_report_len);
-    sys_close(fd);
+    write(fd, g_report, g_report_len);
+    close(fd);
 }
 
 // One line of the snapshot. `sticky` lines (results) accumulate;
@@ -83,7 +85,7 @@ static void emit_ex(int sticky, const char *fmt, va_list ap) {
     int n = vsnprintf(line, sizeof line, fmt, ap);
     if (n <= 0) return;
 
-    if (!g_to_file) { sys_write(1, line, (unsigned)n); return; }
+    if (!g_to_file) { write(1, line, (unsigned)n); return; }
 
     if (sticky && g_sticky_len + (unsigned)n < sizeof g_sticky) {
         for (int i = 0; i < n; i++) g_sticky[g_sticky_len++] = line[i];
@@ -162,12 +164,12 @@ static uint32_t next_rand(void) {
 }
 
 // A short READ is legal and is not an error -- Unix's rule everywhere.
-// sys_write() completes a whole buffer itself; sys_read() may not.
+// write() completes a whole buffer itself; read() may not.
 static int64_t io_full(int fd, void *buf, uint32_t len, int writing) {
     uint32_t done = 0;
     while (done < len) {
-        int64_t n = writing ? sys_write(fd, (uint8_t *)buf + done, len - done)
-                            : sys_read(fd, (uint8_t *)buf + done, len - done);
+        int64_t n = writing ? write(fd, (uint8_t *)buf + done, len - done)
+                            : read(fd, (uint8_t *)buf + done, len - done);
         if (n < 0) return -1;
         if (n == 0) break;
         done += (uint32_t)n;
@@ -207,9 +209,9 @@ static int run_profile(int profile, const char *path, uint64_t total, int first)
     // Only the FIRST pass creates and truncates. A later write pass
     // truncating would leave it writing into a hole rather than over
     // real blocks -- a different measurement wearing the same label.
-    int flags = writing ? SYS_O_WRITE : 0;
-    if (first) flags |= SYS_O_CREAT | SYS_O_TRUNC;
-    int fd = sys_open(path, flags);
+    int flags = writing ? O_WRONLY : 0;
+    if (first) flags |= O_CREAT | O_TRUNC;
+    int fd = open(path, flags);
     if (fd < 0) { fail("could-not-open-the-test-file"); return 0; }
 
     uint64_t moved = 0, ops = 0, elapsed = 0;
@@ -221,19 +223,19 @@ static int run_profile(int profile, const char *path, uint64_t total, int first)
     // pass over 256 MiB is 65536 seeks and minutes of them, and the
     // figure does not get truer for being slower.
     uint64_t want = random ? total / 8 : total;
-    if (random && !blocks) { sys_close(fd); fail("file-too-small-for-random"); return 0; }
+    if (random && !blocks) { close(fd); fail("file-too-small-for-random"); return 0; }
 
     uint64_t began = sys_monotonic_ns();
     while (moved < want) {
         uint32_t unit = random ? RND_BLOCK : SEQ_BLOCK;
         if (random) {
             uint64_t off = (uint64_t)(next_rand() % (uint32_t)blocks) * RND_BLOCK;
-            if (sys_lseek(fd, (long long)off, SYS_SEEK_SET) < 0) {
-                sys_close(fd); fail("seek-failed"); return 0;
+            if (lseek(fd, (long long)off, SYS_SEEK_SET) < 0) {
+                close(fd); fail("seek-failed"); return 0;
             }
         }
         if (io_full(fd, g_buf, unit, writing) != (int64_t)unit) {
-            sys_close(fd); fail("transfer-failed"); return 0;
+            close(fd); fail("transfer-failed"); return 0;
         }
         moved += unit;
         ops++;
@@ -246,7 +248,7 @@ static int run_profile(int profile, const char *path, uint64_t total, int first)
         began = sys_monotonic_ns();
     }
     elapsed += sys_monotonic_ns() - began;
-    sys_close(fd);
+    close(fd);
 
     uint64_t iops = elapsed ? (ops * 1000000000ull) / elapsed : 0;
     uint64_t us = ops ? (elapsed / ops) / 1000ull : 0;
@@ -287,14 +289,14 @@ int main(int argc, char **argv) {
     uint64_t total = (uint64_t)mib * 1024u * 1024u;
     for (int step = 0; step < PROFILES; step++) {
         if (!run_profile(ORDER[step], path, total, step == 0)) {
-            sys_unlink(path);
+            unlink(path);
             return 1;
         }
     }
 
     // SELF-CLEANING, and on the failure path above too: the temp file is
     // the only litter this can leave.
-    sys_unlink(path);
+    unlink(path);
     emit("diskbench: done\n");
     return 0;
 }

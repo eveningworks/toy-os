@@ -96,13 +96,40 @@ class VM:  # noqa: F811 -- shadows the path constant on purpose, see below
         r = subprocess.run(self._cmd(*argv), cwd=REPO, capture_output=True, text=True)
         return r.stdout + r.stderr
 
+    # A kernel or service log line: a lowercase tag, a colon, a space.
+    # A NAMED PREFIX LIST IS NOT ENOUGH and that is what this replaced --
+    # it dropped `elf_run:`, `syscall:` and `vm:`, so `init:`, `wm:`,
+    # `cursor:`, `mouse:` and `tftpd:` arrived as directory ENTRIES and
+    # three checks failed against a perfectly correct `ls`. The boot log
+    # is still streaming when this tool issues its first command, so the
+    # overlap is normal rather than a race worth removing.
+    #
+    # THE COMMAND'S OWN DIAGNOSTICS ARE NOT NOISE. `ls: listing truncated`
+    # and `ls: unknown option` match the same shape, and filtering them
+    # turned three failures into five -- so the tag being run is kept and
+    # every other tag is dropped.
+    #
+    # Safe against a real listing: `ls` prints one bare name per line and
+    # this filesystem's names carry no ": ".
+    NOISE = re.compile(r"^([a-z][a-z0-9_]*): ")
+
     def sh(self, cmd):
         """One shell command's output, with the kernel's own log lines
         dropped -- they share this console (see notepad_client_test.py's
         note on exactly this)."""
         out = self.run("exec", cmd)
-        return [l for l in out.splitlines()
-                if not l.startswith(("elf_run:", "syscall:", "vm:"))]
+        mine = cmd.split()[0] if cmd.split() else ""
+        keep = []
+        for l in out.splitlines():
+            # vm.py echoes the line it typed as `sh <command>` -- not a
+            # log line, and it has no colon, so it needs naming.
+            if l.startswith("sh "):
+                continue
+            m = self.NOISE.match(l)
+            if m and m.group(1) != mine:
+                continue
+            keep.append(l)
+        return keep
 
 
 def stage_fixture(disk):

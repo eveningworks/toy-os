@@ -101,6 +101,34 @@ this the obvious way), not from how much history it accumulated.
   syscall can honour them; `VMIN`/`VTIME` -- a non-canonical read is
   always VMIN=1; `select`/`poll`, locales and threads -- deliberately
   not pursued), never for lack of a caller.
+- **WRITE C LIBRARY NAMES, AND REACH FOR `sys_*` ONLY WHERE THERE IS NO
+  EQUIVALENT** (standing instruction, 2026-09-01). `open`/`read`/`write`/
+  `close`/`lseek`/`unlink`/`rename`/`mkdir`/`chdir`/`getcwd`/`dup`/
+  `dup2`/`pipe`/`getpid` all exist and are what every C programmer
+  already knows; `sys_open` and friends are the layer underneath, not
+  the interface. `userland/bin/` is written this way throughout, and six
+  of its programs now include no toy-os header at all.
+
+  **It costs nothing to mix.** `errno` and `sys_errno()` are the SAME
+  storage (`userland/rt/sys.c`), so `lib/cmd.h`'s `cmd_fail()` reports
+  the right reason whichever spelling opened the file, and the `O_*`
+  names are aliases of the `SYS_O_*` bits rather than a second numbering.
+
+  **What stays `sys_*`, because nothing in POSIX means it**: everything
+  window-, query-, setting-, spawn- and signal-shaped, `sys_stat` (there
+  is deliberately no `stat()` -- `<sys/stat.h>` says why), `sys_listdir`
+  where a program wants the raw array rather than `<dirent.h>`'s `DIR`,
+  and `sys_print`, which `lib/cmd.h` uses on purpose because fd 2 is the
+  kernel log here.
+
+  **Two traps a mechanical rename walks straight into**, both found by
+  the compiler when this conversion was done and neither visible in a
+  diff: **`getcwd()` returns a POINTER** where `sys_getcwd()` returned an
+  int, so a surviving `< 0` test is always false and the fallback it
+  guards never fires; and **POSIX `mkdir()` takes a mode**, so
+  `mkdir(path)` fails to compile rather than silently doing something
+  else. Convert with `-Wall -Wextra` in the loop and read every warning.
+
 - **THE POSIX HALF IS HEADERS OVER SYSCALLS THAT ALREADY EXIST**, and
   the rule that governs it is `docs/libc-design.md`'s: **declare what
   can be honoured, and nothing else.** `<signal.h>`, `<sys/wait.h>`,

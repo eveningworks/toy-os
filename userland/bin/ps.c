@@ -28,8 +28,9 @@
 #include <string.h>
 #include <stdio.h>
 #include "proc_info.h"
+#include <unistd.h>
 
-static void put(const char *s) { sys_write(1, s, strlen(s)); }
+static void put(const char *s) { write(1, s, strlen(s)); }
 
 static const char *state_name(uint32_t s) {
     switch (s) {

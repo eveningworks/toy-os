@@ -39,6 +39,7 @@
 #include "lib/uconf.h"
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #define DHCP_SERVER_PORT 67
 #define DHCP_CLIENT_PORT 68
@@ -298,7 +299,7 @@ static int configure(const struct query_netdev *dev) {
     // reason SO_BINDTODEVICE exists on Linux and why bind takes a name.
     if (sys_bind(fd, 0, DHCP_CLIENT_PORT, dev->name) < 0) {
         cmd_fail("dhcp", "bind");
-        sys_close(fd);
+        close(fd);
         return 0;
     }
 
@@ -315,7 +316,7 @@ static int configure(const struct query_netdev *dev) {
     build(&out, mac, xid, MSG_DISCOVER, 0, 0, &out_len);
     int len = exchange(fd, &out, out_len, xid, MSG_OFFER, &in);
     if (!len) {
-        sys_close(fd);
+        close(fd);
         printf("dhcp: no offer on %s\n", dev->name);
         return link_local(dev->name, mac);
     }
@@ -332,7 +333,7 @@ static int configure(const struct query_netdev *dev) {
     // considers free to hand to somebody else.
     build(&out, mac, xid, MSG_REQUEST, l.ip, l.server, &out_len);
     len = exchange(fd, &out, out_len, xid, MSG_ACK, &in);
-    sys_close(fd);
+    close(fd);
     if (!len) {
         char a[20];
         ip_str(a, l.ip);

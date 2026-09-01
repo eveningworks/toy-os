@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 static const char *kind_name(unsigned long long k) {
     switch (k) {
@@ -50,7 +51,7 @@ static void size_str(char *out, int cap, unsigned long long b) {
 int main(int argc, char **argv) {
     int pid;
     if (argc == 1) {
-        pid = sys_getpid();
+        pid = getpid();
     } else if (argc == 2 && (pid = atoi(argv[1])) > 0) {
         // fine
     } else {

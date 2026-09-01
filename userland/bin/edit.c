@@ -43,6 +43,8 @@
 #include "lib/cmd.h"
 #include <string.h>
 #include <stdio.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 // Static, not local: `struct utext` embeds an 8 KiB buffer, against
 // USERLAND_CFLAGS' -Wframe-larger-than=2048 and a 16 KiB ring-3 stack
@@ -54,7 +56,7 @@ static char g_io[UTEXT_CAP + 1];
 
 static int g_rows = 25, g_cols = 80;
 
-static void put(const char *s) { sys_write(1, s, strlen(s)); }
+static void put(const char *s) { write(1, s, strlen(s)); }
 
 // --- the terminal ----------------------------------------------------
 //
@@ -175,7 +177,7 @@ static void render(const char *path, const char *status) {
             if (line >= first_line + text_rows) break;
             continue;
         }
-        if (visible) sys_write(1, &c, 1);
+        if (visible) write(1, &c, 1);
         if (++col >= text_cols) {
             if (visible) {
                 put("\r\n");
@@ -211,7 +213,7 @@ static void render(const char *path, const char *status) {
              status && status[0] ? "  -- " : "", status ? status : "");
     ansi_at(g_rows - 1, 0);
     ansi("\x1b[7m");
-    for (int i = 0; bar[i] && i < g_cols; i++) sys_write(1, &bar[i], 1);
+    for (int i = 0; bar[i] && i < g_cols; i++) write(1, &bar[i], 1);
     ansi("\x1b[0m\x1b[K");
 
     // The caret sits past the gutter, or the column it reports and the
@@ -223,13 +225,13 @@ static void render(const char *path, const char *status) {
 // --- the file ---------------------------------------------------------
 
 static void load(const char *path) {
-    int fd = sys_open(path, 0);
+    int fd = open(path, O_RDONLY);
     if (fd < 0) return; // a new file: an empty buffer is the right answer
     int64_t n = 0, got;
     while (n < (int64_t)sizeof g_io - 1 &&
-           (got = sys_read(fd, g_io + n, (size_t)(sizeof g_io - 1 - n))) > 0)
+           (got = read(fd, g_io + n, (size_t)(sizeof g_io - 1 - n))) > 0)
         n += got;
-    sys_close(fd);
+    close(fd);
     for (int64_t i = 0; i < n; i++) utext_putc(&g_tb, g_io[i]);
     g_tb.ed.cursor = 0; // land at the start, not the append point
 }
@@ -238,10 +240,10 @@ static int save(const char *path) {
     int n = 0;
     for (int i = 0; i < g_tb.count && n < (int)sizeof g_io - 1; i++)
         g_io[n++] = utext_at(&g_tb, i);
-    int fd = sys_open(path, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC);
     if (fd < 0) return 0;
-    int64_t w = n ? sys_write(fd, g_io, (size_t)n) : 0;
-    sys_close(fd);
+    int64_t w = n ? write(fd, g_io, (size_t)n) : 0;
+    close(fd);
     return w == (int64_t)n;
 }
 
@@ -281,7 +283,7 @@ int main(int argc, char **argv) {
         status[0] = '\0';
 
         char c;
-        if (sys_read(0, &c, 1) <= 0) break; // end of input closes the editor
+        if (read(0, &c, 1) <= 0) break; // end of input closes the editor
         int key = (unsigned char)c;
 
         if (key == KEY_F3 || key == 27) break;      // Esc, or nano's Ctrl+X

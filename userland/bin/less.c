@@ -43,6 +43,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <keyboard.h>  // KEY_* -- specials arrive as these codes
+#include <fcntl.h>
+#include <unistd.h>
 
 // printf() and putchar() deliberately do not exist here (lib/stdio.h
 // explains why: they need a buffered stream layer). A whole screen is
@@ -84,7 +86,7 @@ static void index_lines(void) {
 
 static int read_all(int fd) {
     while (g_len < LESS_MAX_BYTES) {
-        int64_t n = sys_read(fd, g_buf + g_len, (size_t)(LESS_MAX_BYTES - g_len));
+        int64_t n = read(fd, g_buf + g_len, (size_t)(LESS_MAX_BYTES - g_len));
         if (n == SYS_RETRY) continue;   // pipe not ready; ask again
         if (n <= 0) break;              // 0 is EOF on a file or a pipe
         g_len += (int)n;
@@ -94,7 +96,7 @@ static int read_all(int fd) {
 }
 
 // One escape sequence, or any short literal, to stdout.
-static void put(const char *s) { sys_write(1, s, strlen(s)); }
+static void put(const char *s) { write(1, s, strlen(s)); }
 
 // Draws one screenful starting at line `top`, plus a status line.
 static char g_frame[LESS_MAX_BYTES / 8];
@@ -205,7 +207,7 @@ static void draw(int top, int rows, int cols) {
         for (const char *e = off; *e; e++) g_frame[used++] = *e;
     }
 
-    sys_write(1, g_frame, (size_t)used);
+    write(1, g_frame, (size_t)used);
     // Whatever the previous page left below this one. A page shorter
     // than the last (the end of the file) would otherwise show the
     // tail of the old one under it, which reads as text that will not
@@ -237,7 +239,7 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (argc > 1) {
-        fd = sys_open(argv[1], 0)  /* read-only is the default; there is no SYS_O_READ */;
+        fd = open(argv[1], O_RDONLY);
         if (fd < 0) {
             char msg[160];
             snprintf(msg, sizeof msg, "less: cannot open %s: %s\n",
@@ -248,7 +250,7 @@ int main(int argc, char **argv) {
     }
 
     read_all(fd);
-    if (fd > 0) sys_close(fd);
+    if (fd > 0) close(fd);
     index_lines();
 
     if (g_lines == 0) return 0;   // nothing to page
@@ -265,7 +267,7 @@ int main(int argc, char **argv) {
         // sending the output somewhere that is not a screen.
         int off = 0;
         while (off < g_len) {
-            int64_t n = sys_write(1, g_buf + off, (size_t)(g_len - off));
+            int64_t n = write(1, g_buf + off, (size_t)(g_len - off));
             if (n <= 0) break;
             off += (int)n;
         }
@@ -331,7 +333,7 @@ int main(int argc, char **argv) {
         // translation layer here, the same contract the shared line
         // editor relies on.
         unsigned char ch;
-        int64_t n = sys_read(key_fd, &ch, 1);
+        int64_t n = read(key_fd, &ch, 1);
         if (n <= 0) break;   // the terminal went away -- do not spin on it
         int k = ch;
 

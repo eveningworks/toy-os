@@ -76,7 +76,9 @@
 #include <string.h>
 #include "etc_config.h"
 #include "setting_abi.h"
-#include "syscall_abi.h" // struct sys_dirent, SYS_O_*
+#include "syscall_abi.h" // struct sys_dirent
+#include <fcntl.h>
+#include <unistd.h>
 
 #define SERVICES_DIR   "/etc/services.d"
 #define TARGET_SETTING "system.default_target"
@@ -306,17 +308,17 @@ static int read_file(const char *path, struct etc_config_buf *buf) {
     buf->size = 0;
     buf->data[0] = '\0';
 
-    int fd = sys_open(path, 0);
+    int fd = open(path, O_RDONLY);
     if (fd < 0) return 0;
 
-    int64_t n = sys_read(fd, buf->data, sizeof buf->data - 1);
+    int64_t n = read(fd, buf->data, sizeof buf->data - 1);
     if (n == (int64_t)(sizeof buf->data - 1)) {
         char extra;
-        if (sys_read(fd, &extra, 1) > 0)
+        if (read(fd, &extra, 1) > 0)
             logf1("init: %s is longer than the config parser's buffer -- "
                   "its last keys are being ignored\n", path);
     }
-    sys_close(fd);
+    close(fd);
     if (n <= 0) return 0;
 
     buf->data[n] = '\0';
@@ -904,11 +906,11 @@ static void control_stop(const char *name) {
 static char g_ctl[512];
 
 static void apply_control(void) {
-    int fd = sys_open(CONTROL_PATH, 0);
+    int fd = open(CONTROL_PATH, O_RDONLY);
     if (fd < 0) return;                       // a bare `reload`: no file
-    int64_t n = sys_read(fd, g_ctl, sizeof g_ctl - 1);
-    sys_close(fd);
-    sys_unlink(CONTROL_PATH);
+    int64_t n = read(fd, g_ctl, sizeof g_ctl - 1);
+    close(fd);
+    unlink(CONTROL_PATH);
     if (n <= 0) return;
     g_ctl[n] = '\0';
 
@@ -1002,10 +1004,10 @@ static void write_status(int settled) {
                                                        // nothing (kfmt.h)
     if (k_strcmp(g_status, g_status_prev) == 0) return;
 
-    int fd = sys_open(STATUS_PATH, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
+    int fd = open(STATUS_PATH, O_WRONLY | O_CREAT | O_TRUNC);
     if (fd < 0) return;                // no disk, or a full one: not fatal
-    sys_write(fd, g_status, (size_t)n);
-    sys_close(fd);
+    write(fd, g_status, (size_t)n);
+    close(fd);
     k_strlcpy(g_status_prev, g_status, sizeof g_status_prev);
 }
 
@@ -1092,8 +1094,8 @@ int main(void) {
     // writes init makes during startup, and doing them here puts them
     // ahead of the desktop existing at all -- see write_status() on why
     // a write once it is starting up is not harmless.
-    sys_unlink(CONTROL_PATH);
-    sys_unlink(STATUS_PATH);
+    unlink(CONTROL_PATH);
+    unlink(STATUS_PATH);
     load_target();
     g_fs_gen = sys_fs_generation();
     load_services(1);

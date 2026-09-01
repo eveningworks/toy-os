@@ -33,6 +33,7 @@
 #include "klineedit.h"
 #include "lib/ucomplete.h"
 #include "signal_abi.h" // SIGCHLD, struct k_sigaction -- see main()
+#include <unistd.h>
 
 // Static, not local: `struct kline_edit` is ~1.2 KiB and `struct
 // uhistory` ~4 KiB, against USERLAND_CFLAGS' -Wframe-larger-than=2048
@@ -54,10 +55,10 @@ static int g_shown;
 
 static void out_fd1(void *ctx, const char *text, int len) {
     (void)ctx;
-    sys_write(1, text, (size_t)len);
+    write(1, text, (size_t)len);
 }
 
-static void put(const char *s) { sys_write(1, s, (size_t)strlen(s)); }
+static void put(const char *s) { write(1, s, (size_t)strlen(s)); }
 
 // `<cwd>$ `. The `$` is what says RING 3 -- the kernel's own shell shows
 // `<cwd># `, Unix's convention for the privileged one -- and the cwd is
@@ -77,7 +78,7 @@ static char g_prompt[TOSH_PATH_MAX + 4];
 
 static const char *prompt(void) {
     char here[TOSH_PATH_MAX];
-    if (sys_getcwd(here, sizeof here) < 0) { here[0] = '/'; here[1] = '\0'; }
+    if (!getcwd(here, sizeof here)) { here[0] = '/'; here[1] = '\0'; }
     int n = 0;
     for (const char *p = here; *p && n < (int)sizeof g_prompt - 3; p++) g_prompt[n++] = *p;
     g_prompt[n++] = '$';
@@ -105,13 +106,13 @@ static const char *prompt(void) {
 static void redraw(void) {
     put("\r");
     put(prompt());
-    sys_write(1, g_ed.buf, (size_t)g_ed.len);
+    write(1, g_ed.buf, (size_t)g_ed.len);
 
-    for (int i = g_ed.len; i < g_shown; i++) sys_write(1, " ", 1);
+    for (int i = g_ed.len; i < g_shown; i++) write(1, " ", 1);
 
     put("\r");
     put(prompt());
-    sys_write(1, g_ed.buf, (size_t)g_ed.cursor);
+    write(1, g_ed.buf, (size_t)g_ed.cursor);
 
     g_shown = g_ed.len;
 }
@@ -221,7 +222,7 @@ static void complete_line(void) {
 static void end_line(void) {
     put("\r");
     put(prompt());
-    sys_write(1, g_ed.buf, (size_t)g_ed.len);
+    write(1, g_ed.buf, (size_t)g_ed.len);
     put("\n");
     g_shown = 0;
 }
@@ -243,7 +244,7 @@ static char g_titled[TOSH_PATH_MAX];
 
 static void announce_title(void) {
     char here[TOSH_PATH_MAX];
-    if (sys_getcwd(here, sizeof here) < 0) return;
+    if (!getcwd(here, sizeof here)) return;
     if (strcmp(here, g_titled) == 0) return;
     strlcpy(g_titled, here, sizeof g_titled);
 
@@ -360,7 +361,7 @@ int main(int argc, char **argv) {
     // sys_signal() would give (rt/sys.c sets SA_RESTART for every
     // handler it installs, the right default for code that does not
     // want to grow an EINTR loop). Here the interruption IS the message:
-    // it is what turns a shell parked in sys_read() into one that can
+    // it is what turns a shell parked in read() into one that can
     // report a finished background job while nobody is typing.
     //
     // The blocking call that must NOT be interrupted -- waiting on a
@@ -378,7 +379,7 @@ int main(int argc, char **argv) {
 
     // The console is CLAIMED BY READING IT, and the foreground group is
     // set at the same moment (kernel/tty.h) -- so nothing here has to
-    // call tcsetpgrp: the first sys_read(0, ...) below does it, and
+    // call tcsetpgrp: the first read(0, ...) below does it, and
     // job_foreground()/job_done() in the tosh library move it per job.
 
     put("tosh -- the toy-os shell, in ring 3. Ctrl-D to exit.\n");
@@ -419,7 +420,7 @@ int main(int argc, char **argv) {
         // Blocks. The kernel parks this process on SCHED_WAIT_KEY and
         // the keyboard IRQ releases it, so an idle shell costs nothing
         // -- `ps` shows it blocked, not ready.
-        int64_t n = sys_read(0, buf, sizeof buf);
+        int64_t n = read(0, buf, sizeof buf);
 
         // **INTERRUPTED, NOT BROKEN.** A background job finishing is the
         // one thing that reaches this shell while it is parked here with

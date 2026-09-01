@@ -47,6 +47,7 @@
 #include <stdio.h>
 #include "lib/dirsort.h"
 #include "kpath.h"    // k_path_basename, for a path that names a file
+#include <unistd.h>
 
 // The output flags, gathered so the recursion below can pass one thing.
 struct opts {
@@ -59,7 +60,7 @@ struct opts {
     int color;
 };
 
-static void put(const char *s) { sys_write(1, s, strlen(s)); }
+static void put(const char *s) { write(1, s, strlen(s)); }
 
 // ---- colour ----------------------------------------------------------
 //
@@ -262,7 +263,7 @@ int main(int argc, char **argv) {
     // than failing.
     char cwd[LS_PATH_MAX];
     const char *path = "/";
-    if (sys_getcwd(cwd, sizeof cwd) > 0 && cwd[0]) path = cwd;
+    if (getcwd(cwd, sizeof cwd) && cwd[0]) path = cwd;
     int got_path = 0, bad = 0;
 
     for (int i = 1; i < argc; i++) {

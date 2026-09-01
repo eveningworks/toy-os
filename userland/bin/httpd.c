@@ -26,6 +26,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #define USAGE        "httpd [-p <port>] [-1] [<root>]"
 #define DEFAULT_PORT 80
@@ -46,7 +48,7 @@ static const char *content_type(const char *path) {
 
 static void write_all(int fd, const char *buf, int len) {
     for (int off = 0; off < len; ) {
-        int64_t w = sys_write(fd, buf + off, (size_t)(len - off));
+        int64_t w = write(fd, buf + off, (size_t)(len - off));
         if (w <= 0) return;      // the client went away; the caller closes
         off += (int)w;
     }
@@ -101,17 +103,17 @@ static void serve_file(int fd, const char *path) {
     }
     if (st.is_dir) { serve_listing(fd, path); return; }
 
-    int in = sys_open(path, 0)   /* read-only is the default */;
+    int in = open(path, O_RDONLY);
     if (in < 0) { serve_error(fd, "403 Forbidden", "Cannot open that."); return; }
 
     say(fd, "200 OK", content_type(path), (long)st.size);
     static char chunk[CHUNK];
     for (;;) {
-        int64_t got = sys_read(in, chunk, sizeof chunk);
+        int64_t got = read(in, chunk, sizeof chunk);
         if (got <= 0) break;
         write_all(fd, chunk, (int)got);
     }
-    sys_close(in);
+    close(in);
 }
 
 // The request line only: "GET /path HTTP/1.0". Everything up to the
@@ -121,7 +123,7 @@ static int read_request(int fd, char *path, size_t cap) {
     static char req[REQ_MAX];
     int len = 0;
     while (len < (int)sizeof req - 1) {
-        int64_t got = sys_read(fd, req + len, (size_t)((int)sizeof req - 1 - len));
+        int64_t got = read(fd, req + len, (size_t)((int)sizeof req - 1 - len));
         if (got <= 0) break;
         len += (int)got;
         req[len] = 0;
@@ -219,9 +221,9 @@ int main(int argc, char **argv) {
                  (peer >> 24) & 0xFF, (peer >> 16) & 0xFF,
                  (peer >> 8) & 0xFF, peer & 0xFF, peer_port);
         serve_connection(c, c, root, ACCEPT_LOG ? peerbuf : 0);
-        sys_close(c);
+        close(c);
     }
 
-    sys_close(lis);
+    close(lis);
     return 0;
 }

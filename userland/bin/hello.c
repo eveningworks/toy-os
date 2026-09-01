@@ -24,6 +24,7 @@
 // now does what its name says.
 #include <stdint.h>
 #include "rt/sys.h"
+#include <unistd.h>
 
 // Same two inline syscall stubs every other userland program here
 // carries its own copy of -- there's no libc and no shared userland
@@ -45,6 +46,6 @@ static uint64_t my_strlen(const char *s) {
 
 int main(void) {
     const char *msg = "Hello from a real ELF64 binary in ring 3!\n";
-    sys_write(1, msg, my_strlen(msg));
+    write(1, msg, my_strlen(msg));
     sys_exit(0);
 }

@@ -4,9 +4,10 @@
 //
 // Relative paths work because the CWD IS THE KERNEL'S: `mkdir docs` run
 // from /tmp creates /tmp/docs because the kernel joined it, not because
-// a shell rewrote the argument on the way past. See sys.h's sys_chdir().
-#include "rt/sys.h"
+// a shell rewrote the argument on the way past. See sys.h's chdir().
 #include "lib/cmd.h"
+#include <sys/stat.h>
+#include <unistd.h>
 
 int main(int argc, char **argv) {
     if (argc < 2) {
@@ -18,7 +19,7 @@ int main(int argc, char **argv) {
     // behaviour, and the one that makes `mkdir a b c` useful when `b`
     // already exists.
     for (int i = 1; i < argc; i++) {
-        if (sys_mkdir(argv[i]) < 0) {
+        if (mkdir(argv[i], 0755) < 0) {
             cmd_fail("mkdir", argv[i]);
             failed = 1;
         }

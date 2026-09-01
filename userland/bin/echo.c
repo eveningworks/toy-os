@@ -13,6 +13,7 @@
 // split by whoever ran it, so `echo  a   b` prints "a b" -- the same
 // answer every Unix echo gives, since the shell did the splitting.
 #include "rt/sys.h"
+#include <unistd.h>
 
 int main(int argc, char **argv) {
     int first = 1;
@@ -27,9 +28,9 @@ int main(int argc, char **argv) {
     }
 
     for (int i = first; i < argc; i++) {
-        if (i > first) sys_write(1, " ", 1);
+        if (i > first) write(1, " ", 1);
         sys_print(argv[i]);
     }
-    if (newline) sys_write(1, "\n", 1);
+    if (newline) write(1, "\n", 1);
     return 0;
 }

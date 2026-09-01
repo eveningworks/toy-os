@@ -24,6 +24,7 @@
 #include "lib/uresolv.h"
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #define PAYLOAD_BYTES 56      // what every other ping sends
 #define REPLY_WAIT_MS 1000
@@ -147,7 +148,7 @@ int main(int argc, char **argv) {
         if (seq < count) sys_sleep_ms(200);
     }
 
-    sys_close(fd);
+    close(fd);
     snprintf(line, sizeof line, "--- %s ping statistics ---\n"
                                 "%d packets transmitted, %d received, %d%% packet loss\n",
              target, sent, received,

@@ -30,6 +30,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <knum.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #define CHUNK 1024
 static uint8_t g_buf[CHUNK];
@@ -82,17 +84,17 @@ static void name_for(char *out, unsigned long cap, const char *dir, unsigned idx
 }
 
 static int create_one(const char *path, unsigned idx, uint32_t size) {
-    int fd = sys_open(path, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC);
     if (fd < 0) return 0;
     unsigned long off = 0;
     while (off < size) {
         unsigned long n = size - off;
         if (n > CHUNK) n = CHUNK;
         fill(idx, off, n);
-        if (sys_write(fd, g_buf, n) != (int64_t)n) { sys_close(fd); return 0; }
+        if (write(fd, g_buf, n) != (int64_t)n) { close(fd); return 0; }
         off += n;
     }
-    sys_close(fd);
+    close(fd);
     return 1;
 }
 
@@ -103,22 +105,22 @@ static int create_one(const char *path, unsigned idx, uint32_t size) {
 // place, which is what the first version of this did.
 static const char *verify_one(const char *path, unsigned idx, uint32_t size) {
     static char why[96];
-    int fd = sys_open(path, 0);
+    int fd = open(path, O_RDONLY);
     if (fd < 0) return "cannot open it";
     unsigned long off = 0;
     while (off < size) {
         unsigned long want = size - off;
         if (want > CHUNK) want = CHUNK;
-        int64_t got = sys_read(fd, g_buf, want);
+        int64_t got = read(fd, g_buf, want);
         if (got <= 0) {
-            sys_close(fd);
+            close(fd);
             snprintf(why, sizeof why, "short: %lu of %u bytes readable", off, size);
             return why;
         }
         for (int64_t i = 0; i < got; i++) {
             uint8_t want_b = byte_for(idx, off + (unsigned long)i);
             if (g_buf[i] != want_b) {
-                sys_close(fd);
+                close(fd);
                 // The byte it DID hold, and whose it is. A byte that
                 // belongs to another file is the signature of two files
                 // sharing a block, which is the failure this pattern
@@ -131,7 +133,7 @@ static const char *verify_one(const char *path, unsigned idx, uint32_t size) {
         }
         off += (unsigned long)got;
     }
-    sys_close(fd);
+    close(fd);
     return 0; // no reason: it is correct
 }
 

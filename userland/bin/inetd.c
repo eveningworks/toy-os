@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #define USAGE "inetd -p <port> [-c <children>] <program> [args...]"
 
@@ -137,9 +138,9 @@ int main(int argc, char **argv) {
         // child alone -- and keeping it would both stop the client ever
         // seeing a close and exhaust an eight-entry socket table within
         // a handful of requests.
-        sys_close(c);
+        close(c);
     }
 
-    sys_close(lis);
+    close(lis);
     return 0;
 }

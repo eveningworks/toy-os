@@ -38,6 +38,8 @@
 #include <string.h>
 #include "etc_config.h"
 #include "syscall_abi.h"
+#include <fcntl.h>
+#include <unistd.h>
 
 #define CONTROL_PATH "/tmp/init.ctl"
 #define STATUS_PATH  "/tmp/init.status"
@@ -59,10 +61,10 @@ static const char *read_status(void);
 
 // The status file, or 0 if it is not there.
 static const char *read_status_file(void) {
-    int fd = sys_open(STATUS_PATH, 0);
+    int fd = open(STATUS_PATH, O_RDONLY);
     if (fd < 0) return 0;
-    int64_t n = sys_read(fd, g_status, sizeof g_status - 1);
-    sys_close(fd);
+    int64_t n = read(fd, g_status, sizeof g_status - 1);
+    close(fd);
     if (n < 0) return 0;
     g_status[n] = '\0';
     return g_status;
@@ -175,19 +177,19 @@ static int send_request(const char *verb, const char *name) {
         return 0;
     }
 
-    int fd = sys_open(CONTROL_PATH, SYS_O_WRITE | SYS_O_CREAT | SYS_O_APPEND);
+    int fd = open(CONTROL_PATH, O_WRONLY | O_CREAT | O_APPEND);
     if (fd < 0) {
         sys_print("service: could not write " CONTROL_PATH "\n");
         return 0;
     }
     char line[128];
     int n = snprintf(line, sizeof line, "%s %s\n", verb, name);
-    if (n <= 0 || sys_write(fd, line, (size_t)n) != n) {
-        sys_close(fd);
+    if (n <= 0 || write(fd, line, (size_t)n) != n) {
+        close(fd);
         sys_print("service: could not write the request\n");
         return 0;
     }
-    sys_close(fd);
+    close(fd);
 
     // THE SIGNAL IS THE WAKE. Without it the request sits unread until
     // one of init's children happens to exit, which on a machine with a
@@ -258,11 +260,11 @@ static struct etc_config_buf g_cfg;
 static void print_description(const char *name) {
     char path[96];
     snprintf(path, sizeof path, SERVICES_DIR "/%s", name);
-    int fd = sys_open(path, 0);
+    int fd = open(path, O_RDONLY);
     if (fd < 0) return;   // a service whose descriptor is gone, or whose
                           // Name= differs from its filename
-    int64_t n = sys_read(fd, g_cfg.data, sizeof g_cfg.data - 1);
-    sys_close(fd);
+    int64_t n = read(fd, g_cfg.data, sizeof g_cfg.data - 1);
+    close(fd);
     if (n <= 0) return;
     g_cfg.data[n] = '\0';
     g_cfg.size = (uint32_t)n;
@@ -310,20 +312,20 @@ static int cmd_status(const char *name) {
 #define ENABLED_DIR "/etc/services.d/"
 
 static int copy_file(const char *from, const char *to) {
-    int in = sys_open(from, 0);
+    int in = open(from, O_RDONLY);
     if (in < 0) return 0;
-    int out = sys_open(to, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
-    if (out < 0) { sys_close(in); return 0; }
+    int out = open(to, O_WRONLY | O_CREAT | O_TRUNC);
+    if (out < 0) { close(in); return 0; }
     static char buf[512];
     int ok = 1;
     for (;;) {
-        int64_t n = sys_read(in, buf, sizeof buf);
+        int64_t n = read(in, buf, sizeof buf);
         if (n < 0) { ok = 0; break; }
         if (n == 0) break;
-        if (sys_write(out, buf, (size_t)n) != n) { ok = 0; break; }
+        if (write(out, buf, (size_t)n) != n) { ok = 0; break; }
     }
-    sys_close(in);
-    sys_close(out);
+    close(in);
+    close(out);
     return ok;
 }
 
@@ -344,8 +346,8 @@ static int cmd_enable(const char *name) {
     // nothing looks broken. data/etc/services.d/README.md says to do
     // exactly this; writing in place got the half-read on the first try.
     snprintf(tmp, sizeof tmp, "/tmp/.svc-%s", name);
-    if (!copy_file(from, tmp) || sys_rename(tmp, to) < 0) {
-        sys_unlink(tmp);
+    if (!copy_file(from, tmp) || rename(tmp, to) < 0) {
+        unlink(tmp);
         snprintf(msg, sizeof msg,
                  "service: no available service called %s (look in %s)\n",
                  name, AVAIL_DIR);
@@ -365,7 +367,7 @@ static int cmd_enable(const char *name) {
 static int cmd_disable(const char *name) {
     char to[96], msg[192];
     snprintf(to, sizeof to, "%s%s", ENABLED_DIR, name);
-    if (sys_unlink(to) < 0) {
+    if (unlink(to) < 0) {
         snprintf(msg, sizeof msg, "service: %s is not enabled\n", name);
         sys_print(msg);
         return 1;

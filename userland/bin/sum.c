@@ -27,6 +27,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #define USAGE "sum [-a ALGORITHM] [-c LISTFILE] [FILE...]"
 
@@ -50,7 +52,7 @@ static int hash_fd(const struct uhash_alg *alg, int fd, struct result *out) {
     alg->init(&ctx);
     out->bytes = 0;
     for (;;) {
-        int64_t n = sys_read(fd, g_buf, sizeof g_buf);
+        int64_t n = read(fd, g_buf, sizeof g_buf);
         if (n == 0) break;
         if (n < 0) return -1;
         alg->update(&ctx, g_buf, (size_t)n);
@@ -64,10 +66,10 @@ static int hash_fd(const struct uhash_alg *alg, int fd, struct result *out) {
 static int hash_named(const struct uhash_alg *alg, const char *name,
                       struct result *out) {
     if (strcmp(name, "-") == 0) return hash_fd(alg, 0, out);
-    int fd = sys_open(name, 0);
+    int fd = open(name, O_RDONLY);
     if (fd < 0) return -1;
     int rc = hash_fd(alg, fd, out);
-    sys_close(fd);
+    close(fd);
     return rc;
 }
 
