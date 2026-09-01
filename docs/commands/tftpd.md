@@ -60,9 +60,43 @@ protocol rather than an implementation choice — RFC 1350 calls it the
 TID — and answering from port 69 would work once and then collide with
 the next client's request.
 
-Blocks are 512 bytes and each is acknowledged before the next is sent,
-so a transfer is one round trip per block. A lost packet is retried
-five times at a two-second timeout before the transfer is abandoned.
+**Options are negotiated** (RFC 2347): `blksize` up to **1428**
+(RFC 2348), `windowsize` up to **3** (RFC 7440), and `tsize` on a read.
+A client that asks for nothing gets RFC 1350's defaults — 512-byte
+blocks, one round trip each — and still works, which is what keeps a
+boot ROM able to talk to this. The server's log line names what was
+actually agreed:
+
+    tftpd: wrote /bin/ls, 150336 bytes (blksize 1428, window 3)
+
+A lost packet is retried five times at a two-second timeout before the
+transfer is abandoned.
+
+**Why those two numbers**, since neither was chosen for speed:
+
+**1428 is the MTU's**, not a preference. `kernel/net/ipv4.c` does not
+fragment or reassemble — a fragmented datagram is *dropped* — so a
+block that does not fit an Ethernet frame does not transfer slowly, it
+does not transfer at all. `SYS_NET_MSG_MAX` is 1472, making 1468 the
+true ceiling; 1428 is what RFC 2348 names, leaving room for a tunnel in
+the path. A client asking for more is answered with 1428, and the OACK
+says so.
+
+**3 is the RECEIVER'S SOCKET QUEUE.** `kernel/net/socket.c` holds
+`SOCK_QUEUE` (4) datagrams per socket and leaves one slot unused, so
+three arrive and the rest of a window is discarded at the door —
+dropped on arrival, not lost in the network. A window bigger than that
+is *slower than no window at all*: measured, a window of 16 took 611
+seconds for 1 MiB against 21 for plain lockstep, because every round
+trip delivered three blocks and retransmitted thirteen. Raising it
+means raising `SOCK_QUEUE` first.
+
+**Writes are buffered to 64 KiB.** Every `write()` is one complete TFS3
+transaction ending in two barriers, so a block per write made a 4.7 MB
+push over nine thousand of them. Measured on the bare-metal laptop
+before this: 32 ms per 512-byte block, of which ~1.8 ms was the network
+— the rest was a 10 ms scheduler tick per round trip and ~22 ms of
+filesystem. All three are what the numbers above address.
 
 ## What it is not
 
@@ -75,11 +109,6 @@ ships **disabled** for it:
 
 Read `telnetd`'s page on the same subject; the warning is the same one
 and slightly sharper, because this one writes.
-
-**No option extension** (RFC 2347/2348), so there is no `blksize`
-negotiation and blocks are always 512 bytes. A 200 KB binary is
-therefore ~400 round trips and a few seconds. That is the first thing
-to add if the wait becomes annoying.
 
 **`netascii` is accepted and treated as `octet`**, not translated.
 Every caller here is moving a binary, and a silent CRLF rewrite of an

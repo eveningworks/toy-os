@@ -2402,3 +2402,42 @@ of date -- so without the force the stamp compiled in is the PREVIOUS
 build's, and `kernel.bin` ends up older than the header, which
 `tools/iso_guard.py` correctly reports as a stale image. Both symptoms,
 one cause.
+
+## A SEND WINDOW MAY NOT EXCEED THE RECEIVER'S SOCKET QUEUE, OR IT IS SLOWER THAN NO WINDOW
+
+`kernel/net/socket.c` holds `SOCK_QUEUE` datagrams per socket -- four,
+with one slot left unused, so **three**. Anything a sender puts on the
+wire beyond that is discarded AT THE DOOR: not lost in the network, not
+congestion, just dropped because there is nowhere to put it.
+
+So a protocol window is bounded by the receiver's buffer, and a window
+chosen for throughput rather than derived from that buffer makes things
+worse. Measured while adding RFC 7440 windowing to `tftpd`: a window of
+16 took **611 seconds** for 1 MiB against **21** for plain lock-step,
+because every round trip delivered three blocks and retransmitted
+thirteen. The symptom is not "a bit slow" -- it is an order of magnitude
+backwards, and it looks like a network fault rather than a tuning
+mistake.
+
+**Derive the window, or name the constant it depends on.**
+`userland/bin/tftpd.c`'s `WINDOW_MAX` is 3 with a comment naming
+`SOCK_QUEUE`, because a socket's depth is not something ring 3 can ask
+for. If that ever becomes queryable, the constant should be replaced by
+the query rather than raised to match.
+
+**And the same bound applies to anything else that sends a burst** --
+a future NFS, a TCP window, a bulk USB pipe feeding a socket. The
+question to ask before sending N of anything is what happens to N+1.
+
+## AN MTU-SIZED DATAGRAM IS THE CEILING, BECAUSE NOTHING FRAGMENTS
+
+`kernel/net/ipv4.c` neither fragments outbound nor reassembles inbound
+-- a datagram arriving with MF set or a non-zero offset is DROPPED. So
+`SYS_NET_MSG_MAX` (1472 = 1500 - 20 - 8) is a hard limit, not a
+suggestion, and a payload over it does not go slowly, it does not go.
+
+This is why `tftpd` clamps `blksize` to 1428 rather than accepting what
+a client asks for: a client requesting 8192 that got 8192 would stall
+completely, where one that gets 1428 transfers. **Clamp and say so in
+the reply** -- RFC 2348's OACK names the value actually chosen, which is
+what lets a client find out it did not get what it asked for.

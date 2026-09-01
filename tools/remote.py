@@ -57,7 +57,6 @@ DEFAULT_TFTP_PORT = 69
 
 # TFTP, RFC 1350.
 OP_RRQ, OP_WRQ, OP_DATA, OP_ACK, OP_ERROR = 1, 2, 3, 4, 5
-BLKSIZE = 512
 
 
 class Telnet:
@@ -226,6 +225,29 @@ def do_exec(host, port, commands, timeout):
 
 
 # --- TFTP ---------------------------------------------------------------
+#
+# OPTIONS ARE NEGOTIATED (RFC 2347), and the two that matter are
+# `blksize` (RFC 2348) and `windowsize` (RFC 7440). 512-byte lock-step
+# is not slow for the reason it looks slow: measured against the
+# bare-metal laptop, a block cost 32 ms of which ~1.8 ms was the
+# network. The rest was a 10 ms scheduler tick per round trip -- a
+# blocked process runs at the next tick -- plus the server's write.
+#
+# 1428 IS THE CEILING, and it is the guest's, not a convention:
+# kernel/net/ipv4.c does not fragment or reassemble, so a block that
+# does not fit the MTU is DROPPED rather than split. A server that does
+# not answer with an OACK gets the RFC 1350 defaults and everything
+# still works -- which is what makes this safe against a stock tftpd.
+
+OP_OACK = 6
+
+BLKSIZE = 512            # RFC 1350's default, and the fallback
+WANT_BLKSIZE = 1428      # see above
+WANT_WINDOW = 3          # the guest's socket holds 3 datagrams -- see
+                         # userland/bin/tftpd.c's WINDOW_MAX. Asking for
+                         # more is answered with 3 anyway (the OACK says
+                         # what was agreed), so this is belt and braces.
+
 
 def _tftp_socket(timeout):
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -239,96 +261,163 @@ def _tftp_error(pkt):
     return f"tftp error {code}: {msg}"
 
 
+def _request(op, remote, opts):
+    r = bytes([0, op]) + remote.encode() + b"\0octet\0"
+    for k, v in opts.items():
+        r += k.encode() + b"\0" + str(v).encode() + b"\0"
+    return r
+
+
+def _parse_oack(pkt):
+    """The options the SERVER agreed to -- which may be fewer, or
+    smaller, than were asked for. Anything it did not name is not in
+    force, so the default stands (RFC 2347)."""
+    got = {}
+    fields = pkt[2:].split(b"\0")
+    for i in range(0, len(fields) - 1, 2):
+        k = fields[i].decode("utf-8", "replace").lower()
+        v = fields[i + 1].decode("utf-8", "replace")
+        if k:
+            got[k] = v
+    return got
+
+
+def _negotiate(s, host, port, req, timeout):
+    """Sends the request and reads the first reply. Returns
+    (peer, blksize, window, first_pkt) -- first_pkt is None when the
+    server OACKed, and the reply itself when it did not (a server with
+    no option support answers the request directly, and that packet is
+    data we must not drop)."""
+    blksize, window = BLKSIZE, 1
+    for _ in range(5):
+        s.sendto(req, (host, port))
+        try:
+            pkt, addr = s.recvfrom(65536)
+        except socket.timeout:
+            continue
+        if pkt[1] == OP_ERROR:
+            raise RuntimeError(_tftp_error(pkt))
+        if pkt[1] == OP_OACK:
+            got = _parse_oack(pkt)
+            if "blksize" in got:
+                blksize = int(got["blksize"])
+            if "windowsize" in got:
+                window = int(got["windowsize"])
+            return addr, blksize, window, None
+        # No OACK: an option-unaware server. Its reply is already the
+        # first ACK or the first data block.
+        return addr, BLKSIZE, 1, pkt
+    raise RuntimeError("no reply to the request")
+
+
 def do_put(host, port, local, remote, timeout):
     with open(local, "rb") as f:
         data = f.read()
     s = _tftp_socket(timeout)
-    req = bytes([0, OP_WRQ]) + remote.encode() + b"\0octet\0"
-    s.sendto(req, (host, port))
-
-    block = 0
-    sent = 0
-    peer = None
-    # The packet a timeout resends. It is the REQUEST until the server's
-    # first ACK names its TID, and the last data block after that -- kept
-    # in one name so the retry path has nothing to decide.
-    chunk_pkt = None
+    req = _request(OP_WRQ, remote, {"blksize": WANT_BLKSIZE,
+                                    "windowsize": WANT_WINDOW})
     try:
-        while True:
-            for _ in range(5):
-                try:
-                    pkt, addr = s.recvfrom(1024)
-                except socket.timeout:
-                    if peer and chunk_pkt:
-                        s.sendto(chunk_pkt, peer)
-                    else:
-                        s.sendto(req, (host, port))
-                    continue
-                # The server answers from a NEW port (its TID) and every
-                # later packet goes there, not to 69.
-                peer = addr
-                if pkt[1] == OP_ERROR:
-                    raise RuntimeError(_tftp_error(pkt))
-                if pkt[1] == OP_ACK and int.from_bytes(pkt[2:4], "big") == block:
-                    break
-            else:
-                raise RuntimeError(f"no ACK for block {block}")
+        peer, blksize, window, first = _negotiate(s, host, port, req, timeout)
+        if first is not None and not (first[1] == OP_ACK
+                                      and int.from_bytes(first[2:4], "big") == 0):
+            raise RuntimeError("server did not acknowledge the write request")
 
-            if block * BLKSIZE >= len(data) and block:
-                break
-            payload = data[block * BLKSIZE:(block + 1) * BLKSIZE]
-            block += 1
-            chunk_pkt = (bytes([0, OP_DATA]) + block.to_bytes(2, "big")
-                         + payload)
-            s.sendto(chunk_pkt, peer)
-            sent += len(payload)
-            if len(payload) < BLKSIZE:
-                # The short block ends it; its ACK is still owed.
-                try:
-                    pkt, _ = s.recvfrom(1024)
-                    if pkt[1] == OP_ERROR:
-                        raise RuntimeError(_tftp_error(pkt))
-                except socket.timeout:
-                    pass
-                break
+        total = (len(data) + blksize - 1) // blksize
+        if len(data) % blksize == 0:
+            total += 1        # a final short (empty) block ends it
+        acked = 0             # blocks the server has confirmed
+        tries = 0
+        sent_bytes = 0
+
+        while acked < total:
+            # Send one window without waiting -- this is the whole point
+            # of RFC 7440. A 16-deep window is 16 blocks per round trip
+            # rather than one.
+            n = min(window, total - acked)
+            for i in range(n):
+                b = acked + 1 + i
+                payload = data[(b - 1) * blksize: b * blksize]
+                s.sendto(bytes([0, OP_DATA]) + (b & 0xFFFF).to_bytes(2, "big")
+                         + payload, peer)
+            try:
+                pkt, _ = s.recvfrom(65536)
+            except socket.timeout:
+                tries += 1
+                if tries > 5:
+                    raise RuntimeError(f"no ACK after block {acked}")
+                continue
+            if pkt[1] == OP_ERROR:
+                raise RuntimeError(_tftp_error(pkt))
+            if pkt[1] != OP_ACK:
+                continue
+            a = int.from_bytes(pkt[2:4], "big")
+            # A PARTIAL ACK IS THE RECOVERY PATH, not an error: it says
+            # how far the server got, and the next window starts there.
+            want = (acked + n) & 0xFFFF
+            if a == want:
+                acked += n
+            elif ((a - acked) & 0xFFFF) <= n:
+                acked += (a - acked) & 0xFFFF
+            else:
+                continue      # a stale ACK from before this window
+            tries = 0
+            sent_bytes = min(acked * blksize, len(data))
     finally:
         s.close()
-    print(f"remote: put {local} -> {remote}, {sent} bytes")
+    print(f"remote: put {local} -> {remote}, {sent_bytes} bytes")
     return 0
 
 
 def do_get(host, port, remote, local, timeout):
     s = _tftp_socket(timeout)
-    req = bytes([0, OP_RRQ]) + remote.encode() + b"\0octet\0"
-    s.sendto(req, (host, port))
+    req = _request(OP_RRQ, remote, {"blksize": WANT_BLKSIZE,
+                                    "windowsize": WANT_WINDOW,
+                                    "tsize": 0})
     out = bytearray()
-    expect = 1
-    peer = None
-    ack = None          # the last ACK, which is what a timeout resends
     try:
+        peer, blksize, window, first = _negotiate(s, host, port, req, timeout)
+        if first is None:
+            # An OACK is acknowledged with ACK 0 before any data flows.
+            s.sendto(bytes([0, OP_ACK, 0, 0]), peer)
+            pending = None
+        else:
+            pending = first
+
+        expect = 1
+        acked = 0
+        tries = 0
         while True:
-            for _ in range(5):
-                try:
-                    pkt, addr = s.recvfrom(1024)
-                except socket.timeout:
-                    if peer and ack:
-                        s.sendto(ack, peer)
-                    else:
-                        s.sendto(req, (host, port))
-                    continue
-                peer = addr
-                if pkt[1] == OP_ERROR:
-                    raise RuntimeError(_tftp_error(pkt))
-                if pkt[1] == OP_DATA and int.from_bytes(pkt[2:4], "big") == expect:
-                    break
+            if pending is not None:
+                pkt, pending = pending, None
             else:
-                raise RuntimeError(f"no block {expect}")
+                try:
+                    pkt, _ = s.recvfrom(65536)
+                except socket.timeout:
+                    tries += 1
+                    if tries > 5:
+                        raise RuntimeError(f"no block {expect}")
+                    # Tell the server where we got to, so it resumes
+                    # there rather than waiting on an ACK we never sent.
+                    s.sendto(bytes([0, OP_ACK]) + (acked & 0xFFFF).to_bytes(2, "big"),
+                             peer)
+                    continue
+            tries = 0
+            if pkt[1] == OP_ERROR:
+                raise RuntimeError(_tftp_error(pkt))
+            if pkt[1] != OP_DATA:
+                continue
+            b = int.from_bytes(pkt[2:4], "big")
+            if b != (expect & 0xFFFF):
+                continue      # a gap or a duplicate: do not advance
             payload = pkt[4:]
             out += payload
-            ack = bytes([0, OP_ACK]) + expect.to_bytes(2, "big")
-            s.sendto(ack, peer)
             expect += 1
-            if len(payload) < BLKSIZE:
+            final = len(payload) < blksize
+            if final or (expect - 1 - acked) >= window:
+                acked = expect - 1
+                s.sendto(bytes([0, OP_ACK]) + (acked & 0xFFFF).to_bytes(2, "big"),
+                         peer)
+            if final:
                 break
     finally:
         s.close()
@@ -336,6 +425,7 @@ def do_get(host, port, remote, local, timeout):
         f.write(out)
     print(f"remote: get {remote} -> {local}, {len(out)} bytes")
     return 0
+
 
 
 def do_shell(host, port, timeout):

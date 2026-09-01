@@ -2910,6 +2910,16 @@ window without going through it will find its layout polls timing out.
   ON DEMAND: it needs a host gcc and glibc, and the gate must not start
   requiring either.
 
+- **`remote_test.py`** gained TFTP OPTION coverage (2026-09-01): both
+  directions at a negotiated 1428-byte block, and the fallback when a
+  client asks for nothing.
+
+  **The fallback is the half that breaks silently.** A transfer that
+  quietly drops to 512-byte lockstep still succeeds and only looks slow,
+  so a round-trip check cannot see it -- which is why one check reads
+  the server's own log for `blksize 1428, window 3` rather than
+  inferring agreement from the bytes arriving.
+
 - **`hover_test.py`** -- that a hover change REPAINTS rather than only
   recording damage. Run by `gui_regress.py`.
 

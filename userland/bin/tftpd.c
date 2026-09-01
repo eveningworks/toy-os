@@ -15,12 +15,29 @@
 // same standing it has on real lab gear, and the service ships DISABLED
 // for it (/usr/share/services/tftpd).
 //
-// WHAT IS NOT IMPLEMENTED: the option extension (RFC 2347/2348), so
-// blocks are 512 bytes and a transfer is lockstep -- one round trip per
-// block, which is a few seconds for a 200 KB binary and the reason
-// `blksize` exists. `netascii` is accepted as a synonym for `octet`
-// rather than translating: every caller here moves binaries, and a
-// silent CRLF rewrite of an ELF is worse than not supporting a mode.
+// OPTIONS ARE NEGOTIATED (RFC 2347), and two of them matter here.
+//
+// `blksize` (RFC 2348) and `windowsize` (RFC 7440), because 512-byte
+// lock-step is not slow for the reason it looks slow. Measured against
+// the bare-metal laptop: 32 ms per block, of which ~1.8 ms is the
+// network. The rest is a 10 ms scheduler tick per round trip -- a
+// blocked process runs at the next tick, not when the packet lands --
+// and ~22 ms of filesystem transaction, because every block was its own
+// write(). A 4.7 MB kernel took five minutes.
+//
+// So all three are addressed: bigger blocks (2.8x fewer round trips AND
+// writes), a window (one round trip per N blocks instead of per block),
+// and a 64 KiB write buffer (9,272 transactions become ~72).
+//
+// **1428 IS THE CEILING AND IT IS NOT ARBITRARY.** kernel/net/ipv4.c
+// does NOT fragment or reassemble -- a fragmented datagram is DROPPED --
+// so a block that does not fit the MTU does not go slowly, it does not
+// go at all. SYS_NET_MSG_MAX is 1472, so 1468 is the true maximum and
+// 1428 is what RFC 2348 names, leaving room for a tunnel in the path.
+//
+// `netascii` is accepted as a synonym for `octet` rather than
+// translating: every caller here moves binaries, and a silent CRLF
+// rewrite of an ELF is worse than not supporting a mode.
 #include <stdint.h>
 #include <stdarg.h>
 #include "rt/sys.h"
@@ -60,10 +77,43 @@ static void logf(const char *fmt, ...) {
 #define ERR_FULL      3
 #define ERR_ILLEGAL   4
 
-#define BLKSIZE   512
-#define PKT_MAX   (4 + BLKSIZE)
+#define OP_OACK  6
+
+// The default a client that negotiates nothing still gets (RFC 1350),
+// and the most we will agree to. See the file comment for why 1428 and
+// not 1468.
+#define BLKSIZE_DEFAULT 512
+#define BLKSIZE_MAX     1428
+#define BLKSIZE_MIN     8       // RFC 2348's floor
+
+// RFC 7440, AND THE CEILING IS THE RECEIVER'S SOCKET QUEUE, not a
+// number picked for speed.
+//
+// kernel/net/socket.c holds SOCK_QUEUE (4) datagrams per socket and
+// leaves one slot unused, so three arrive and the rest of a window is
+// DROPPED ON ARRIVAL -- not lost in the network, discarded at the door.
+// A window of 16 measured 611 seconds for 1 MiB against 66 for plain
+// lock-step, because every round trip delivered three blocks and
+// retransmitted thirteen. A window larger than the receiver can hold is
+// slower than no window at all.
+//
+// So this is 3, and raising it means raising SOCK_QUEUE first. The
+// number is here rather than derived because a socket's depth is not
+// something ring 3 can ask for; if that changes, these two must move
+// together.
+#define WINDOW_DEFAULT  1
+#define WINDOW_MAX      3
+
+#define PKT_MAX   (4 + BLKSIZE_MAX)
 #define RETRIES   5
 #define TIMEOUT_MS 2000
+
+// WRITES ARE BUFFERED, and that is the larger half of the speedup.
+// Every fs_write is one complete TFS3 transaction ending in two
+// barriers, so a block per write made a 4.7 MB push 9,272 of them.
+// SYS_WRITE_MAX is the size the ABI comment already says a write should
+// be (abi/syscall_abi.h).
+#define WRBUF_MAX 65536
 
 #define PATH_MAX_LEN 128
 
@@ -93,6 +143,34 @@ static int g_req_fd = -1;
 // budget, and a 516-byte packet each way does not fit twice over.
 static uint8_t g_rx[PKT_MAX];
 static uint8_t g_tx[PKT_MAX];
+
+// What this transfer negotiated. Reset per request, because a client
+// that asks for nothing must get RFC 1350's defaults even if the
+// previous one asked for everything.
+static uint32_t g_blksize = BLKSIZE_DEFAULT;
+static uint32_t g_window  = WINDOW_DEFAULT;
+
+// The send window, so a retransmit does not have to seek the file back.
+// WINDOW_MAX * BLKSIZE_MAX is ~23 KB of .bss, which costs nothing in
+// the image and keeps the resend path a memcpy rather than an lseek --
+// the latter being a syscall that can fail halfway through recovering
+// from a failure.
+static uint8_t g_win[WINDOW_MAX][PKT_MAX];
+static uint32_t g_win_len[WINDOW_MAX];
+
+static uint8_t g_wrbuf[WRBUF_MAX];
+static uint32_t g_wrbuf_len;
+
+// Flushes the write buffer. Returns 0 on failure, having reported
+// nothing -- the caller owns the error packet, since only it knows the
+// TID to send it on.
+static int wrbuf_flush(int fd) {
+    if (!g_wrbuf_len) return 1;
+    int64_t n = write(fd, g_wrbuf, g_wrbuf_len);
+    int ok = n == (int64_t)g_wrbuf_len;
+    g_wrbuf_len = 0;
+    return ok;
+}
 
 static void put16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v; }
 static uint16_t get16(const uint8_t *p) { return (uint16_t)((p[0] << 8) | p[1]); }
@@ -154,7 +232,8 @@ static void close_tid(int fd) {
 
 // --- WRQ: the client writes a file to us -------------------------------
 
-static void do_write(uint32_t ip, uint16_t port, const char *path) {
+static void do_write(uint32_t ip, uint16_t port, const char *path,
+                     uint32_t oack_len) {
     int tid = open_tid();
     if (tid < 0) return;
 
@@ -165,63 +244,97 @@ static void do_write(uint32_t ip, uint16_t port, const char *path) {
         return;
     }
 
-    uint16_t block = 0;
+    g_wrbuf_len = 0;
+    uint16_t expect = 1;          // the next block we want
+    uint16_t acked  = 0;          // the last block we have acknowledged
     uint64_t total = 0;
-    for (;;) {
-        // ACK the block just taken (0 acknowledges the request itself),
-        // then wait for the next. The ACK is what a retransmit repeats,
-        // so it is built once and resent unchanged.
-        put16(g_tx, OP_ACK);
-        put16(g_tx + 2, block);
+    int final = 0;
 
-        int done = 0;
-        int got = 0;
-        for (int try = 0; try < RETRIES && !got; try++) {
-            int64_t sr = sys_sendto(tid, g_tx, 4, ip, port);
-            if (sr < 0) logf("tftpd: ACK %u sendto -> %d\n", block, (int)sr);
-            uint32_t src = 0; uint16_t sport = 0;
-            int64_t n = sys_recvfrom(tid, g_rx, sizeof g_rx, &src, &sport,
-                                     TIMEOUT_MS);
-            if (n <= 0) continue;                      // timed out: resend
-            if (src != ip || sport != port) continue;  // a different TID
-            if (n < 4) continue;
-            uint16_t op = get16(g_rx);
-            if (op == OP_ERROR) { done = 1; got = 1; break; }
-            if (op != OP_DATA) continue;
-            uint16_t b = get16(g_rx + 2);
-            if (b == block) continue;      // our ACK was lost; resend it
-            if (b != (uint16_t)(block + 1)) continue;
-            block = b;
-            uint32_t len = (uint32_t)n - 4;
-            if (len && write(fd, g_rx + 4, len) != (int64_t)len) {
+    // THE OACK REPLACES THE FIRST ACK, and only the first (RFC 2347): a
+    // client that negotiated waits for it and answers with DATA 1, so
+    // sending ACK 0 as well would look like a duplicate.
+    uint8_t first[PKT_MAX];
+    uint32_t first_len;
+    if (oack_len) {
+        memcpy(first, g_tx, oack_len);
+        first_len = oack_len;
+    } else {
+        put16(first, OP_ACK);
+        put16(first + 2, 0);
+        first_len = 4;
+    }
+    sys_sendto(tid, first, first_len, ip, port);
+
+    int tries = 0;
+    for (;;) {
+        uint32_t src = 0; uint16_t sport = 0;
+        int64_t n = sys_recvfrom(tid, g_rx, sizeof g_rx, &src, &sport,
+                                 TIMEOUT_MS);
+        if (n <= 0) {
+            // A WINDOW STALLS SILENTLY WHEN A BLOCK IS LOST -- the
+            // sender is waiting for an ACK it will not get, because we
+            // stopped advancing. So a timeout ACKs what we DO have,
+            // which is what tells it where to resume (RFC 7440).
+            if (++tries > RETRIES) break;
+            if (acked == 0 && expect == 1) sys_sendto(tid, first, first_len, ip, port);
+            else { put16(g_tx, OP_ACK); put16(g_tx + 2, acked);
+                   sys_sendto(tid, g_tx, 4, ip, port); }
+            continue;
+        }
+        tries = 0;
+        if (src != ip || sport != port) continue;
+        if (n < 4) continue;
+        uint16_t op = get16(g_rx);
+        if (op == OP_ERROR) break;
+        if (op != OP_DATA) continue;
+
+        uint16_t b = get16(g_rx + 2);
+        if (b != expect) {
+            // Either a duplicate of something we already took, or a
+            // block from beyond a gap. Neither may be written: writing
+            // the second would put it at the wrong offset. Re-ACK so a
+            // sender waiting on a lost ACK moves.
+            if (b <= acked) { put16(g_tx, OP_ACK); put16(g_tx + 2, acked);
+                              sys_sendto(tid, g_tx, 4, ip, port); }
+            continue;
+        }
+
+        uint32_t len = (uint32_t)n - 4;
+        if (len) {
+            if (g_wrbuf_len + len > WRBUF_MAX && !wrbuf_flush(fd)) {
                 send_error(tid, ip, port, ERR_FULL, "write failed");
                 close(fd); close_tid(tid);
                 return;
             }
+            memcpy(g_wrbuf + g_wrbuf_len, g_rx + 4, len);
+            g_wrbuf_len += len;
             total += len;
-            got = 1;
-            // A SHORT BLOCK ENDS THE TRANSFER -- including a zero-length
-            // one, which is how a file that is an exact multiple of 512
-            // is terminated. Its ACK is still owed, so the loop runs
-            // once more before leaving.
-            if (len < BLKSIZE) done = 2;
         }
-        if (!got) break;                   // the client stopped answering
-        if (done) {
-            if (done == 2) { put16(g_tx, OP_ACK); put16(g_tx + 2, block);
-                             sys_sendto(tid, g_tx, 4, ip, port); }
-            break;
+        expect++;
+        if (len < g_blksize) final = 1;   // the short block ends it
+
+        // ACK once per window, and always on the last block.
+        if (final || (uint16_t)(expect - 1 - acked) >= (uint16_t)g_window) {
+            acked = (uint16_t)(expect - 1);
+            put16(g_tx, OP_ACK);
+            put16(g_tx + 2, acked);
+            sys_sendto(tid, g_tx, 4, ip, port);
         }
+        if (final) break;
     }
 
+    int ok = wrbuf_flush(fd);
     close(fd);
     close_tid(tid);
-    logf("tftpd: wrote %s, %llu bytes\n", path, (unsigned long long)total);
+    if (!ok) logf("tftpd: %s: final write failed\n", path);
+    logf("tftpd: wrote %s, %llu bytes (blksize %u, window %u)\n", path,
+         (unsigned long long)total, g_blksize, g_window);
 }
 
 // --- RRQ: the client reads a file from us ------------------------------
 
-static void do_read(uint32_t ip, uint16_t port, const char *path) {
+static void do_read(uint32_t ip, uint16_t port, const char *path,
+                    uint32_t oack_len) {
     int tid = open_tid();
     if (tid < 0) return;
 
@@ -232,35 +345,84 @@ static void do_read(uint32_t ip, uint16_t port, const char *path) {
         return;
     }
 
-    uint16_t block = 0;
-    uint64_t total = 0;
-    for (;;) {
-        int64_t len = read(fd, g_tx + 4, BLKSIZE);
-        if (len < 0) len = 0;
-        block++;
-        put16(g_tx, OP_DATA);
-        put16(g_tx + 2, block);
-
-        int acked = 0;
-        for (int try = 0; try < RETRIES && !acked; try++) {
-            sys_sendto(tid, g_tx, 4 + (uint32_t)len, ip, port);
+    // The OACK is acknowledged by an ACK 0 before any data flows.
+    if (oack_len) {
+        uint8_t oack[PKT_MAX];
+        memcpy(oack, g_tx, oack_len);
+        int ready = 0;
+        for (int try = 0; try < RETRIES && !ready; try++) {
+            sys_sendto(tid, oack, oack_len, ip, port);
             uint32_t src = 0; uint16_t sport = 0;
             int64_t n = sys_recvfrom(tid, g_rx, sizeof g_rx, &src, &sport,
                                      TIMEOUT_MS);
-            if (n <= 0) continue;
-            if (src != ip || sport != port) continue;
-            if (n < 4) continue;
-            if (get16(g_rx) == OP_ERROR) { acked = -1; break; }
-            if (get16(g_rx) == OP_ACK && get16(g_rx + 2) == block) acked = 1;
+            if (n < 4 || src != ip || sport != port) continue;
+            if (get16(g_rx) == OP_ERROR) { close(fd); close_tid(tid); return; }
+            if (get16(g_rx) == OP_ACK && get16(g_rx + 2) == 0) ready = 1;
         }
-        if (acked != 1) break;
-        total += (uint64_t)len;
-        if (len < BLKSIZE) break;          // the short block ends it
+        if (!ready) { close(fd); close_tid(tid); return; }
+    }
+
+    uint16_t base = 1;            // first block of the window in flight
+    uint64_t total = 0;
+    int eof = 0;                  // the short block has been READ
+    uint16_t last = 0;            // ...and it was this one
+    int tries = 0;
+
+    for (;;) {
+        // Fill and send the window. Blocks are kept so a retransmit is a
+        // resend of the same bytes rather than a seek.
+        uint32_t filled = 0;
+        for (uint32_t i = 0; i < g_window && !eof; i++) {
+            int64_t len = read(fd, g_win[i] + 4, g_blksize);
+            if (len < 0) len = 0;
+            uint16_t b = (uint16_t)(base + i);
+            put16(g_win[i], OP_DATA);
+            put16(g_win[i] + 2, b);
+            g_win_len[i] = 4 + (uint32_t)len;
+            filled++;
+            if ((uint32_t)len < g_blksize) { eof = 1; last = b; }
+        }
+        for (uint32_t i = 0; i < filled; i++)
+            sys_sendto(tid, g_win[i], g_win_len[i], ip, port);
+
+        uint32_t src = 0; uint16_t sport = 0;
+        int64_t n = sys_recvfrom(tid, g_rx, sizeof g_rx, &src, &sport,
+                                 TIMEOUT_MS);
+        if (n <= 0) {
+            if (++tries > RETRIES) break;
+            continue;                       // resend the same window
+        }
+        if (src != ip || sport != port) continue;
+        if (n < 4) continue;
+        if (get16(g_rx) == OP_ERROR) break;
+        if (get16(g_rx) != OP_ACK) continue;
+
+        uint16_t a = get16(g_rx + 2);
+        // Anything before the window is a stale ACK; anything past its
+        // end cannot have been received. Both are ignored rather than
+        // trusted -- an out-of-range ACK would otherwise skip data.
+        if ((uint16_t)(a - base) >= filled) continue;
+        tries = 0;
+
+        // Count what this ACK confirms, then start the next window
+        // after it. A partial ACK means blocks were lost: the sender
+        // resumes from there, which is RFC 7440's whole recovery story.
+        uint32_t confirmed = (uint32_t)(a - base) + 1;
+        for (uint32_t i = 0; i < confirmed; i++) total += g_win_len[i] - 4;
+        if (eof && a == last) break;
+        if (confirmed < filled) eof = 0;    // rewind: refill from a+1
+        if (confirmed < filled) {
+            // The file position must go back to where the unacked block
+            // started, since the next window re-reads from there.
+            lseek(fd, (int64_t)total, 0 /* SEEK_SET */);
+        }
+        base = (uint16_t)(a + 1);
     }
 
     close(fd);
     close_tid(tid);
-    logf("tftpd: sent %s, %llu bytes\n", path, (unsigned long long)total);
+    logf("tftpd: sent %s, %llu bytes (blksize %u, window %u)\n", path,
+         (unsigned long long)total, g_blksize, g_window);
 }
 
 // --- the request port --------------------------------------------------
@@ -269,7 +431,7 @@ static void do_read(uint32_t ip, uint16_t port, const char *path) {
 // off the wire, so the terminators are checked rather than assumed: an
 // unterminated name would otherwise be read past the end of the packet.
 static int parse_request(const uint8_t *p, uint32_t n, const char **name,
-                         const char **mode) {
+                         const char **mode, uint32_t *opt_start) {
     if (n < 4) return 0;
     uint32_t i = 2;
     *name = (const char *)p + i;
@@ -279,7 +441,71 @@ static int parse_request(const uint8_t *p, uint32_t n, const char **name,
     if (i >= n) return 0;
     *mode = (const char *)p + i;
     while (i < n && p[i]) i++;
-    return i < n;
+    if (i >= n) return 0;
+    *opt_start = i + 1;   // the first option pair, if there is one
+    return 1;
+}
+
+// RFC 2347: after `name\0mode\0` the request may carry `opt\0value\0`
+// pairs. Sets the negotiated globals and builds the OACK naming ONLY
+// what was accepted -- a server must not acknowledge an option it did
+// not honour, since the client then assumes it is in force.
+//
+// Returns the OACK's length, or 0 when nothing was negotiated (in which
+// case RFC 1350's defaults stand and no OACK is sent at all).
+static uint32_t parse_options(const uint8_t *p, uint32_t n, uint32_t start,
+                              uint64_t fsize, int have_size) {
+    g_blksize = BLKSIZE_DEFAULT;
+    g_window  = WINDOW_DEFAULT;
+
+    uint32_t out = 0;
+    put16(g_tx, OP_OACK);
+    out = 2;
+
+    uint32_t i = start;
+    while (i < n) {
+        const char *opt = (const char *)p + i;
+        while (i < n && p[i]) i++;
+        if (i >= n) break;
+        i++;
+        if (i >= n) break;
+        const char *val = (const char *)p + i;
+        while (i < n && p[i]) i++;
+        if (i >= n) break;
+        i++;
+
+        char ack[24];
+        uint32_t acked = 0;
+        if (!strcmp(opt, "blksize")) {
+            long v = atol(val);
+            if (v < BLKSIZE_MIN) v = BLKSIZE_MIN;
+            if (v > BLKSIZE_MAX) v = BLKSIZE_MAX;   // clamped, and the
+            g_blksize = (uint32_t)v;                // OACK says the real
+            snprintf(ack, sizeof ack, "%u", g_blksize);  // value
+            acked = 1;
+        } else if (!strcmp(opt, "windowsize")) {
+            long v = atol(val);
+            if (v < 1) v = 1;
+            if (v > WINDOW_MAX) v = WINDOW_MAX;
+            g_window = (uint32_t)v;
+            snprintf(ack, sizeof ack, "%u", g_window);
+            acked = 1;
+        } else if (!strcmp(opt, "tsize") && have_size) {
+            // RFC 2349. Answered only for a READ, where the size is
+            // known; a client's WRQ tsize is its own claim and echoing
+            // it back would promise a check this does not make.
+            snprintf(ack, sizeof ack, "%llu", (unsigned long long)fsize);
+            acked = 1;
+        }
+        if (!acked) continue;   // silently unnegotiated, per RFC 2347
+
+        uint32_t ol = (uint32_t)strlen(opt) + 1;
+        uint32_t al = (uint32_t)strlen(ack) + 1;
+        if (out + ol + al > PKT_MAX) continue;
+        memcpy(g_tx + out, opt, ol);  out += ol;
+        memcpy(g_tx + out, ack, al);  out += al;
+    }
+    return out > 2 ? out : 0;
 }
 
 int main(int argc, char **argv) {
@@ -320,7 +546,8 @@ int main(int argc, char **argv) {
              (ip >> 8) & 0xFF, ip & 0xFF, (unsigned)cport, (int)n);
 
         const char *name = 0, *mode = 0;
-        if (!parse_request(g_rx, (uint32_t)n, &name, &mode)) {
+        uint32_t opt_start = 0;
+        if (!parse_request(g_rx, (uint32_t)n, &name, &mode, &opt_start)) {
             send_error(fd, ip, cport, ERR_ILLEGAL, "malformed request");
             continue;
         }
@@ -330,8 +557,21 @@ int main(int argc, char **argv) {
             send_error(fd, ip, cport, ERR_ACCESS, "bad path");
             continue;
         }
-        if (op == OP_WRQ)      do_write(ip, cport, path);
-        else if (op == OP_RRQ) do_read(ip, cport, path);
+
+        // tsize is answerable only for a READ, and only if the file is
+        // there -- so the size is looked up before the options are
+        // parsed rather than promised and then found missing.
+        uint64_t fsize = 0;
+        int have_size = 0;
+        if (op == OP_RRQ) {
+            struct sys_stat st;
+            if (sys_stat(path, &st) == 0) { fsize = st.size; have_size = 1; }
+        }
+        uint32_t oack_len = parse_options(g_rx, (uint32_t)n, opt_start,
+                                          fsize, have_size);
+
+        if (op == OP_WRQ)      do_write(ip, cport, path, oack_len);
+        else if (op == OP_RRQ) do_read(ip, cport, path, oack_len);
         else send_error(fd, ip, cport, ERR_ILLEGAL, "not a request");
     }
 }

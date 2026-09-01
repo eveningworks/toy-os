@@ -21,6 +21,12 @@ WHAT IT CHECKS
      the property the whole feature exists for and the only check here
      that would notice a transfer that is subtly wrong rather than
      absent.
+  6. OPTION NEGOTIATION (RFC 2347/2348/7440) in both directions, and
+     the fallback to RFC 1350's defaults when a client asks for nothing.
+     **The fallback is the half that breaks silently**: a transfer that
+     quietly drops to 512-byte lockstep still succeeds and only looks
+     slow, so the round-trip checks alone cannot see it -- which is why
+     one check reads the server's own log for the negotiated values.
 
 WHY SLIRP IS ENOUGH. TFTP's reply normally comes from a fresh ephemeral
 port, which no NAT forwards back -- but the shipped service runs with
@@ -35,6 +41,10 @@ import os
 import subprocess
 import sys
 import tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import remote as rmod                  # noqa: E402 -- WANT_BLKSIZE/WANT_WINDOW
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -134,6 +144,54 @@ def main():
                     got == data,
                     f"put={p.stdout.strip()} get={g.stdout.strip()} "
                     f"{len(got)} of {size} bytes")
+
+        # 6. OPTION NEGOTIATION (RFC 2347/2348/7440), in BOTH directions
+        #    and including the fallback -- which is the half that can
+        #    break silently, because a transfer that quietly drops to
+        #    512/lockstep still succeeds and only looks slow.
+        #
+        #    The sizes straddle a 1428-byte block so the short final
+        #    block and the exact-multiple case are both exercised at the
+        #    negotiated size, not just at 512.
+        for size in (1428 * 3, 1428 * 3 + 17):
+            src = os.path.join(tmp, f"opt{size}.bin")
+            back = os.path.join(tmp, f"optback{size}.bin")
+            data = bytes(((i * 11 + (i >> 7) * 29) & 0xFF) for i in range(size))
+            with open(src, "wb") as f:
+                f.write(data)
+            remote("put", src, f"/tmp/opt{size}.bin")
+            remote("get", f"/tmp/opt{size}.bin", back)
+            got = open(back, "rb").read() if os.path.exists(back) else b""
+            r.check(f"a {size}-byte file round-trips with options on",
+                    got == data, f"{len(got)} of {size} bytes")
+
+        # THE SERVER MUST SAY WHAT IT AGREED TO, and the log is where it
+        # says it. Without this the checks above pass on a server that
+        # ignored every option -- which is exactly what they did before
+        # the options existed.
+        log = remote("exec", "dmesg").stdout
+        r.check("the server negotiated a big block and a window",
+                "blksize 1428, window 3" in log,
+                [l for l in log.splitlines() if "tftpd: wrote" in l][-3:])
+
+        # AND THE FALLBACK, driven by asking for nothing. A client that
+        # negotiates no options must still work, because that is every
+        # boot ROM and the RFC 1350 default.
+        want_b, want_w = rmod.WANT_BLKSIZE, rmod.WANT_WINDOW
+        try:
+            rmod.WANT_BLKSIZE, rmod.WANT_WINDOW = 512, 1
+            src = os.path.join(tmp, "plain.bin")
+            back = os.path.join(tmp, "plainback.bin")
+            data = bytes(((i * 13) & 0xFF) for i in range(3000))
+            with open(src, "wb") as f:
+                f.write(data)
+            remote("put", src, "/tmp/plain.bin")
+            remote("get", "/tmp/plain.bin", back)
+            got = open(back, "rb").read() if os.path.exists(back) else b""
+            r.check("a client asking for the defaults still round-trips",
+                    got == data, f"{len(got)} of 3000 bytes")
+        finally:
+            rmod.WANT_BLKSIZE, rmod.WANT_WINDOW = want_b, want_w
 
         # 5. THE ONE THAT MATTERS: a binary pushed over the network runs
         #    on the far side.
