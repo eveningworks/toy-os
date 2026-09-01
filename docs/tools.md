@@ -3264,6 +3264,25 @@ window without going through it will find its layout polls timing out.
   <reason>` comment; `diskmark.c` is the one waiver, because an OPEN
   popup takes keys through the overlay path regardless. In
   `preflight.sh`.
+- **`check_drivers.py`** -- refuses a driver that declares itself to
+  nothing. Every `.c` under `kernel/drivers/`, and any file anywhere
+  that calls a device class registry, must carry a `DRIVER_DECLARE(...)`
+  or a `driver-none: <reason>` comment; `*_test.c` is exempt, since a
+  KTEST beside a driver is not a second driver. It exists because THREE
+  drivers were absent from `lsdrv` when it was written -- `i8042` (the
+  PS/2 keyboard and mouse, the input path every default boot uses),
+  `virtio_input.c` and `virtio_rng.c` -- and nothing was looking.
+
+  **The half it CANNOT check is the half that mattered most**, and that
+  is why the declaration moved into the `.drivers` linker section in the
+  same change: `DRIVER_REGISTER` used to be a call inside `init()`, and
+  `e1000_init()` returns at its "no card on this bus" check before
+  reaching it -- so a build containing the driver listed no driver, and
+  no amount of grepping for the call would have said so. Data cannot be
+  skipped by a return. **It strips comments before matching**, which its
+  own positive control needed: `kernel/core/kernel.c` merely NAMES
+  `net_register()` in a comment, and matching that sends the reader at
+  the wrong file. In `preflight.sh`.
 
 
   **A TRAILING `// dispatch-ok:` ON THE SWITCH'S OWN LINE COUNTS.** It

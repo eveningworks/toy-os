@@ -19,7 +19,9 @@
 #include "idt.h"
 #include "barrier.h"
 #include <stddef.h>
-#include "driver.h" // DRIVER_REGISTER -- `lsdrv`
+#include "driver.h" // DRIVER_DECLARE -- `lsdrv`
+
+DRIVER_DECLARE("ahci", "block", "SATA AHCI host controller");
 
 // ---- the register map (AHCI 1.3.1, section 3) ------------------------
 
@@ -521,7 +523,6 @@ static int claim_port(int index) {
 }
 
 void ahci_init(void) {
-    DRIVER_REGISTER("ahci", "block");
     g_pci = find_hba();
     if (!g_pci) return;   // the ordinary case on an IDE or virtio machine
 

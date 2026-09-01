@@ -41,6 +41,8 @@
 #include "kfmt.h"
 #include <stddef.h>
 
+// driver-none: font loading, not a device
+
 #define FONT_DIR "/usr/share/fonts"
 
 // A face file bigger than this is refused rather than loaded. DejaVu

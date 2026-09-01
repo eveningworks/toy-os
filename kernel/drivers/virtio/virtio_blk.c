@@ -23,6 +23,8 @@
 #include "kfmt.h"
 #include "string.h"
 
+// driver-none: the virtio transport half; block_virtio.c declares the driver
+
 #define VIRTIO_BLK_T_IN    0   // read
 #define VIRTIO_BLK_T_OUT   1   // write
 #define VIRTIO_BLK_T_FLUSH 4

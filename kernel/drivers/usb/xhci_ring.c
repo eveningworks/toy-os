@@ -4,6 +4,8 @@
 #include "string.h"
 #include "barrier.h"
 
+// driver-none: the TRB ring inside the xHCI driver
+
 void xhci_ring_init(struct xhci_ring *r, void *base, uint64_t phys,
                     uint32_t count, int is_event) {
     if (!r || !base || count < 1) return;

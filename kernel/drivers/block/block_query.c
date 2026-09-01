@@ -15,6 +15,8 @@
 #include "string.h"
 #include <stddef.h>
 
+// driver-none: a QUERY provider over the block table
+
 static int blkdev_count(void) { return blk_device_count(); }
 
 static int blkdev_fill(int index, void *out) {

@@ -23,6 +23,9 @@
 #include "kfmt.h"   // klog_printf
 #include "string.h"
 #include "errno.h"
+#include "driver.h" // driver_bound() -- `lsdrv`
+
+// driver-none: the net class registry itself
 
 #define NET_RX_QUEUE 32
 
@@ -66,6 +69,7 @@ int net_register(struct net_device *dev) {
     }
     dev->name[0] = 'n'; dev->name[1] = 'e'; dev->name[2] = 't';
     dev->name[3] = (char)('0' + g_count);
+    driver_bound(dev->driver, dev->name);
     dev->name[4] = 0;
     if (!dev->mtu) dev->mtu = NET_MTU;
 

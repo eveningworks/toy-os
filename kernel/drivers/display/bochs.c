@@ -17,7 +17,9 @@
 #include "klog.h"
 #include "kfmt.h"
 #include "io.h"
-#include "driver.h" // DRIVER_REGISTER -- `lsdrv -v` names THIS file
+#include "driver.h" // DRIVER_DECLARE -- `lsdrv -v` names THIS file
+
+DRIVER_DECLARE("bochs", "display", "Bochs/QEMU stdvga, modesetting");
 
 #define DISPI_IOPORT_INDEX 0x01CE
 #define DISPI_IOPORT_DATA  0x01CF
@@ -239,6 +241,5 @@ static const struct display_driver bochs_driver = {
 };
 
 void bochs_register(void) {
-    DRIVER_REGISTER("bochs", "display");
     display_register(&bochs_driver);
 }

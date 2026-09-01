@@ -29,6 +29,11 @@ struct sound_device {
     // so a driver with nothing better to say need not invent one.
     const char *label;
 
+    // The DRIVER behind it -- "ac97", "usb-audio". sound_register()
+    // reports it to `lsdrv`, so a driver that fills this in cannot then
+    // forget to say so.
+    const char *driver;
+
     // Start/stop the engine over the ring `sound_register()` supplied.
     // start() begins at the ring's first chunk.
     int  (*start)(void);

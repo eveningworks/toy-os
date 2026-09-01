@@ -14,6 +14,8 @@
 #include "string.h"
 #include <stddef.h>
 
+// driver-none: a diagnostic tap on the key path
+
 // 256 events -- about 128 keystrokes, since a key that types reports
 // both edges. Enough that the command you TYPE to read the log does not
 // evict what you were looking for, which is the failure a smaller ring

@@ -12,6 +12,8 @@
 #include "io.h"
 #include "timer.h"
 
+// driver-none: the PC speaker: a beep, on no device class
+
 #define PIT_CHANNEL2 0x42
 #define PIT_COMMAND  0x43
 #define PIT_BASE_FREQ 1193182

@@ -4,7 +4,9 @@
 // may use, and under which capability bit.
 #include "block.h"
 #include "ata.h"
-#include "driver.h" // DRIVER_REGISTER -- `lsdrv`
+#include "driver.h" // DRIVER_DECLARE -- `lsdrv`
+
+// driver-none: the block_device shim; ata.c is the driver
 
 static uint32_t ata_dev_sector_count(void) { return ata_sector_count(); }
 
@@ -31,6 +33,7 @@ static int ata_dev_trim(uint32_t lba, uint32_t count) { return ata_trim(lba, cou
 // different questions.
 static const struct block_device ATA_DEV = {
     .name = "ata",
+    .driver = "ata",
     .sector_count = ata_dev_sector_count,
     .read_sectors = ata_dev_read,
     .write_sectors = ata_dev_write,
@@ -46,6 +49,5 @@ void blk_ata_init(void) {
     // booting a live image, or have nothing attached at all. Leaving no
     // device registered is exactly what "RAM-only" means downstream.
     if (!ata_present()) return;
-    driver_bound("ata", ATA_DEV.name);
     blk_register(&ATA_DEV);
 }

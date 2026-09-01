@@ -30,6 +30,9 @@
 #include "klog.h"
 #include "kfmt.h"
 #include "string.h"
+#include "driver.h" // DRIVER_DECLARE -- `lsdrv`
+
+DRIVER_DECLARE("virtio-input", "input", "virtio keyboard, mouse and tablet");
 
 // --- the protocol (spec 5.8) ------------------------------------------
 
@@ -339,6 +342,7 @@ void virtio_input_init(void) {
         if (d->irq) irq_register_handler(d->irq, input_irq_handler);
 
         g_sources[g_count].name = d->name;
+        g_sources[g_count].driver = "virtio-input";
         g_sources[g_count].caps = d->caps;
         g_sources[g_count].poll = d->irq ? 0 : POLLS[g_count];
         g_sources[g_count].irq = d->irq;

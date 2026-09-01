@@ -34,6 +34,9 @@
 #include "random_hw.h"
 #include "klog.h"
 #include "timer.h"
+#include "driver.h" // driver_bound() -- `lsdrv`
+
+// driver-none: the entropy pool; a source declares itself
 
 static uint64_t pool;                  // mixed state, advanced on every draw
 static enum krandom_quality quality = KRANDOM_NONE;
@@ -136,8 +139,10 @@ static void reseed_from_source(void) {
     for (int i = 0; i < 4; i++) pool = mix64(pool ^ v[i]);
 }
 
-void krandom_register_source(krandom_source_fn fill, enum krandom_quality q) {
+void krandom_register_source(const char *driver, krandom_source_fn fill,
+                             enum krandom_quality q) {
     if (!fill) return;
+    driver_bound(driver, "random0");
     source_fill = fill;
     reseed_from_source();
     // Ordered by trust, so this is a genuine comparison rather than an

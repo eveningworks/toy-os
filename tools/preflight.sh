@@ -171,6 +171,9 @@ python3 tools/check_widget_ops.py || fail "widget ops check"
 step "check_key_routing.py (a key-taking widget an app routes no keys to)"
 python3 tools/check_key_routing.py || fail "key routing check"
 
+step "check_drivers.py (a driver that declares itself to nothing)"
+python3 tools/check_drivers.py || fail "driver declaration check"
+
 step "check_tool_commands.py (a tool driving a command that no longer exists)"
 python3 tools/check_tool_commands.py || fail "tool command check"
 

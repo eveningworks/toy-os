@@ -30,6 +30,8 @@
 #include "errno.h"
 #include "driver.h" // driver_bound() -- `lsdrv`
 
+DRIVER_DECLARE("cdc-ecm", "net", "USB CDC Ethernet (ECM)");
+
 #define CDC_CLASS            0x02
 #define CDC_SUB_ECM          0x06
 #define CDC_DATA_CLASS       0x0A
@@ -395,8 +397,6 @@ int usb_net_bind(struct usb_device_info *info, const uint8_t *cfg,
         xhci_bulk_post(info->slot, e.ep_in, d->rx_phys[i], NET_BUF_SIZE);
 
     info->bound = 1;
-    DRIVER_REGISTER("cdc-ecm", "net");
-    driver_bound("cdc-ecm", d->dev.name);
     klog_printf("usb: slot %u: bound as cdc-ecm, if %u alt %u, "
                 "ep in 0x%02x out 0x%02x, %u B/packet, mtu %u\n",
                 info->slot, e.data_ifnum, e.data_alt, e.ep_in, e.ep_out,

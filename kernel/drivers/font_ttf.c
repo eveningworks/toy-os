@@ -4,6 +4,8 @@
 // tools/OFL.txt, not this one, to change the fonts or license text.
 #include "font_ttf.h"
 
+// driver-none: a TrueType parser, not a device
+
 static const unsigned char font_ttf_8[FONT_TTF_GLYPH_COUNT][10][4] = {
     // 32 ' '
     {

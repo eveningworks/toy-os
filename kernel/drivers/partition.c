@@ -17,6 +17,8 @@
 #include "klog.h"
 #include "kfmt.h" // klog_printf
 
+// driver-none: MBR/GPT parsing, on a disk a driver already drives
+
 // Sector size, stated here rather than borrowed from a disk driver.
 // This file used to include ata.h for ATA_SECTOR_SIZE and call
 // ata_read_sector() directly, which predated block.h and meant the

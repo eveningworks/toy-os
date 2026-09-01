@@ -26,6 +26,8 @@
 #include "string.h"
 #include "timer.h"
 
+// driver-none: hub handling inside the xHCI driver
+
 #define USB_HUB_MAX      4
 #define USB_HUB_MAX_PORTS 15   // the route string's port field is 4 bits
 

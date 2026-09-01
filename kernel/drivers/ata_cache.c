@@ -10,6 +10,8 @@
 #include "timer.h" // pit_ticks
 #include <stddef.h>
 
+// driver-none: the write-back cache above the ATA driver
+
 // One line per sector. `lba` is only meaningful while `valid`.
 struct atac_line {
     uint32_t lba;

@@ -26,6 +26,8 @@
 #include "partition.h"
 #include "syscalls.h" // fd_desc[] -- the open-file check in mount_remove()
 
+// driver-none: re-registers a disk a driver already found
+
 // Priority order: first probe() == 1 wins.
 //
 // Order decides which backend is ASKED first, not which one wins: two

@@ -36,6 +36,8 @@
 #include "kfmt.h"
 #include "string.h"
 
+// driver-none: the virtio transport half; display_virtio.c declares the driver
+
 // --- the protocol (spec 5.7.6) ---------------------------------------
 
 #define VIRTIO_GPU_CMD_GET_DISPLAY_INFO      0x0100

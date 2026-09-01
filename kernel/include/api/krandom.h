@@ -73,7 +73,10 @@ typedef int (*krandom_source_fn)(void *buf, size_t n);
 // spin-poll, so krandom_u64() cannot be one. Linux does the same thing
 // (virtio-rng feeds the hwrng framework, which reseeds the CRNG; it is
 // not the per-call source), and the reason is the same.
-void krandom_register_source(krandom_source_fn fill, enum krandom_quality q);
+// `driver` names the driver for `lsdrv` -- the registry records the
+// binding, as every other device class does.
+void krandom_register_source(const char *driver, krandom_source_fn fill,
+                             enum krandom_quality q);
 
 // Which source the values are actually coming from.
 enum krandom_quality krandom_quality(void);

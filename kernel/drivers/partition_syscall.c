@@ -22,6 +22,8 @@
 #include "mount.h"     // disk_is_in_use() asks the mount table
 #include "scheduler.h" // the preemption guard around the write
 
+// driver-none: the syscall half of partition.c
+
 // Is this disk one the machine is RUNNING FROM? True when it is the
 // boot disk, or when any mount sits on it or on a partition of it.
 // mount->dev is a partition device, so the parent is what to compare.

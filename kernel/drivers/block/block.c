@@ -7,6 +7,9 @@
 #include "klog.h"
 #include "kfmt.h" // klog_printf
 #include <stddef.h>
+#include "driver.h" // driver_bound() -- `lsdrv`
+
+// driver-none: the block class registry itself
 
 static const struct block_device *g_dev;
 
@@ -72,6 +75,11 @@ static const struct blk_entry *table_add(const struct block_device *dev,
     e->base_lba = base_lba;
     make_name(e->name, dev, parent, base_lba);
     g_count++;
+    // Here rather than in blk_register_over(), because this is the one
+    // place every device reaches the table -- a partition arrives
+    // through blk_track() and never registers. A partition leaves
+    // `driver` NULL and records nothing: its driver is its disk's.
+    driver_bound(dev->driver, e->name);
     return e;
 }
 

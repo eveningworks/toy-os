@@ -31,7 +31,9 @@
 #include "virtio_gpu.h"
 #include "klog.h"
 #include "kfmt.h"
-#include "driver.h" // DRIVER_REGISTER -- `lsdrv -v` names THIS file
+#include "driver.h" // DRIVER_DECLARE -- `lsdrv -v` names THIS file
+
+DRIVER_DECLARE("virtio-gpu", "display", "virtio GPU, 2D modesetting");
 
 static struct display_surface g_surface;
 static int g_active = 0;
@@ -129,7 +131,6 @@ static struct display_driver virtio_gpu_display = {
 };
 
 void virtio_gpu_display_register(void) {
-    DRIVER_REGISTER("virtio-gpu", "display");
     display_register(&virtio_gpu_display);
 }
 

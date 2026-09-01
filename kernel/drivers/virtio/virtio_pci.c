@@ -12,6 +12,8 @@
 #include "kfmt.h"
 #include "timer.h"
 
+// driver-none: the shared virtio-over-PCI transport
+
 // A window has to live somewhere the kernel can reach. The identity map
 // covers the low 4 GiB and there is no paging_map_kernel_range(), so a
 // BAR above that is unreachable rather than merely awkward -- refuse it

@@ -13,6 +13,8 @@
 #include "string.h"
 #include <stddef.h>
 
+// driver-none: a QUERY provider over the enumerated devices
+
 static uint64_t abi_speed(uint8_t s) {
     switch (s) {  // dispatch-ok: bounded by the xHCI default speed IDs
         case XHCI_SPEED_LOW:   return QUERY_USB_SPEED_LOW;

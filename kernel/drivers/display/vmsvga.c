@@ -10,7 +10,9 @@
 #include "kfmt.h"
 #include "io.h"
 #include "string.h"
-#include "driver.h" // DRIVER_REGISTER -- `lsdrv -v` names THIS file
+#include "driver.h" // DRIVER_DECLARE -- `lsdrv -v` names THIS file
+
+DRIVER_DECLARE("vmsvga", "display", "VMware SVGA II, modesetting");
 
 #define VMSVGA_VENDOR 0x15ad
 #define VMSVGA_DEVICE 0x0405
@@ -394,6 +396,5 @@ void vmsvga_register(void) {
         vmsvga_driver.cursor_move = vmsvga_drv_cursor_move;
         vmsvga_driver.cursor_show = vmsvga_drv_cursor_show;
     }
-    DRIVER_REGISTER("vmsvga", "display");
     display_register(&vmsvga_driver);
 }

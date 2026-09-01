@@ -3,6 +3,9 @@
 #include "keyboard.h"
 #include "mouse.h"
 #include "input.h"
+#include "driver.h" // DRIVER_DECLARE -- `lsdrv`
+
+DRIVER_DECLARE("i8042", "input", "PS/2 keyboard and mouse controller");
 
 #define STATUS_PORT 0x64
 #define DATA_PORT   0x60
@@ -41,12 +44,14 @@ void i8042_poll(void) {
 // what removes it.
 static const struct input_source ps2_keyboard = {
     .name = "ps2-keyboard",
+    .driver = "i8042",
     .caps = INPUT_CAP_KEYS,
     .irq = 1,
 };
 
 static const struct input_source ps2_mouse = {
     .name = "ps2-mouse",
+    .driver = "i8042",
     .caps = INPUT_CAP_REL | INPUT_CAP_WHEEL,
     .irq = 12,
 };

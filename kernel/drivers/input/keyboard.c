@@ -10,6 +10,8 @@
 #include "tty.h" // the console terminal -- keys go to its line discipline
 #include "keyboard_tap.h" // the rolling key log /bin/kbd reads
 
+// driver-none: the keymap and key ring above the input core
+
 #define KBD_DATA_PORT 0x60
 
 // **THE RING USED TO BE HERE AND IS NOW tty0's.** This driver produces

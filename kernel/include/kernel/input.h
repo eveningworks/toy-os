@@ -53,6 +53,12 @@
 // per driver.
 struct input_source {
     const char *name;        // "ps2-keyboard", "virtio-keyboard"
+
+    // The DRIVER behind it -- "i8042", "usb-hid". One driver commonly
+    // presents several sources (a keyboard and a mouse on one i8042),
+    // which is why it is not `name`. input_register_source() reports it
+    // to `lsdrv`.
+    const char *driver;
     uint32_t caps;
     void (*poll)(void);      // may be NULL
 

@@ -17,7 +17,9 @@
 #include "block.h"
 #include "klog.h"
 #include "string.h"
-#include "driver.h" // DRIVER_REGISTER -- `lsdrv`
+#include "driver.h" // DRIVER_DECLARE -- `lsdrv`
+
+DRIVER_DECLARE("ram", "block", "RAM-backed block device");
 
 #define SECTOR_SIZE 512
 
@@ -59,6 +61,7 @@ static int ram_max_xfer(void) { return RAM_MAX_XFER; }
 
 static const struct block_device RAM_DEV = {
     .name = "ram",
+    .driver = "ram",
     .sector_count = ram_sector_count,
     .read_sectors = ram_read,
     .write_sectors = ram_write,
@@ -74,7 +77,5 @@ int blk_ram_register(uint64_t base, uint64_t bytes) {
     }
     g_base = (uint8_t *)(uintptr_t)base;
     g_sectors = (uint32_t)(bytes / SECTOR_SIZE);
-    DRIVER_REGISTER("ram", "block");
-    driver_bound("ram", RAM_DEV.name);
     return blk_register(&RAM_DEV);
 }

@@ -1978,3 +1978,51 @@ the MAC and the link state ARE the class-specific work -- so a shim
 would restate what the driver already knows. What still crosses the bus
 seam there is a call to `xhci_*` by name, which is the same
 no-vtable-without-a-second-implementer rule `usb.h` already argues.
+
+## A driver declaration is DATA in a linker section, not a call in its init
+
+`api/driver.h`'s `DRIVER_DECLARE` puts a `struct driver_decl` into the
+`.drivers` section at file scope. It was `DRIVER_REGISTER("name",
+"class")` -- a call at the top of the driver's `init()` -- and the
+change is worth recording because the first version looked correct and
+its rule was written down.
+
+**The rule was "call it before you look for hardware", and it does not
+survive contact with a probe.** A driver that finds nothing must still
+appear: "compiled in but idle" is the answer no per-class registry can
+give, and it is the reason `lsdrv` exists. `ahci.c`, `xhci.c` and
+`ac97.c` honoured that, the last with a comment saying why. `e1000.c`
+and `vmsvga.c` did not -- `e1000_init()` returns at `if (!pci) return;`
+("the ordinary case on a machine without one") a hundred lines above its
+registration, so every QEMU boot without an e1000 listed no e1000
+driver. The fact `lsdrv` was built to report was wrong in the common
+case, and the listing gave no hint: an absent driver and an absent
+device look identical.
+
+**Nothing static could have caught it.** A checker can see whether a
+file contains the call; it cannot see whether a return above it fires.
+Making the declaration data removes the question rather than policing
+it -- the entry is in the image whether or not a line of the driver ever
+runs. `KTEST()` already does this with `.ktests`, Linux does it with
+initcalls and KUnit, and the reason `ktest.h` gives is the same one:
+a list you maintain by hand is a list that drifts.
+
+**The split that falls out of it.** Presence is static and binding is
+not, so they are recorded by different mechanisms: the section for the
+first, `driver_bound()` from inside the class registry for the second.
+The registry call replaced ten scattered ones, four of which were
+DUPLICATES -- every net driver set `dev->driver` and then called
+`driver_bound()` with the same string literal, two sources of truth for
+one fact. The device struct's field is now the only place a driver
+names itself, which is `blk_register()`'s existing "the registry checks
+what the device claims" instinct applied to identity.
+
+**What is still not enforceable, and what was built instead.** Nothing
+can make a NEW file declare anything -- a file that says nothing
+compiles. So `tools/check_drivers.py` requires every `.c` under
+`kernel/drivers/`, and any file calling a class registry, to carry a
+`DRIVER_DECLARE` or a `driver-none: <reason>` comment. That is Linux's
+split too: `dev->driver` is set by the core during bind and cannot be
+forgotten, while `driver_register()` is an explicit call no mechanism
+forces. The waiver is a comment rather than a macro so that a file whose
+whole point is not being a driver need not include `driver.h` to say so.

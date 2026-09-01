@@ -25,6 +25,8 @@
 #include "gfx.h"
 #include "string.h"
 
+// driver-none: a QUERY provider over the loaded faces
+
 // The set is the same 101 glyphs everywhere -- ASCII 32..126 then six
 // Latin-1 extras. A runtime atlas rasterises exactly that set, which is
 // what makes one index answer for both sources.

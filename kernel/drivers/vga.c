@@ -17,6 +17,8 @@
 #include "string.h"
 #include <stddef.h>
 
+// driver-none: the text console above whatever display.c chose
+
 #define VGA_WIDTH 80
 #define VGA_HEIGHT 25
 #define VGA_MEM ((uint16_t *)0xB8000)

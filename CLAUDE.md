@@ -419,6 +419,17 @@ trips them before it knows to look anything up.
   check in its test drove by MOUSE. The key-capable set is DERIVED from
   `userland/ui/*.c`, so a new widget is covered the day it gains a key
   handler. Waive with `key-routing-ok: <reason>`.
+- **AND `tools/check_drivers.py` FAILS THE BUILD ON A DRIVER THAT
+  DECLARES ITSELF TO NOTHING.** A `.c` under `kernel/drivers/` -- or
+  anywhere calling a class registry -- must carry a `DRIVER_DECLARE`
+  or a `driver-none: <reason>` comment. Three drivers were invisible to
+  `lsdrv` when it was written, one of them `i8042`: the PS/2 keyboard
+  and mouse, the input path every default boot uses. **The declaration
+  is FILE-SCOPE DATA (`.drivers`, the mechanism `KTEST` uses), not a
+  call inside `init()`** -- `e1000`'s call sat after its "no card on
+  this bus" return, so a build containing the driver listed no driver,
+  which no static check could have seen. `*_test.c` is exempt; waive
+  with `driver-none:`.
 - **A DISPATCH CHAIN OVER ~20 BRANCHES SHOULD BE A TABLE, and
   `tools/check_dispatch.py` fails the build when one isn't.** The
   recurring shape here: something dispatches on a kind -- a syscall
@@ -638,7 +649,7 @@ whenever a headline here tells you something you did not already know.
 - **A MACHINE IS REACHABLE OVER THE NETWORK NOW, AND BOTH SERVICES SHIP DISABLED**
 - **A PROGRAM MUST NOT PRINT ITS OWN VERSION AS THE SYSTEM'S: ASK `QUERY_VERSION`**
 - **A NETWORK CLIENT WAITS FOR CARRIER, AND A CONFIG FILE MUST FIT THE PARSER'S BUFFER**
-- **A DRIVER DECLARES ITSELF, AND NAMES EACH DEVICE AS IT BINDS IT**
+- **A DRIVER DECLARES ITSELF AS DATA, AND THE CLASS REGISTRY NAMES EACH DEVICE IT BINDS**
 - **A SEND WINDOW MAY NOT EXCEED THE RECEIVER'S SOCKET QUEUE, OR IT IS SLOWER THAN NO WINDOW**
 - **AN MTU-SIZED DATAGRAM IS THE CEILING, BECAUSE NOTHING FRAGMENTS**
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
@@ -1243,8 +1254,8 @@ cost".
   guest first** -- it refuses to start while one holds `disk.img`'s
   write lock. Static checks, run by it or beside it: `check_deps.py`,
   `check_layout.py`, `check_dispatch.py`, `check_widget_ops.py`,
-  `check_key_routing.py`, `check_docs.py`, `check_licenses.py`,
-  `check_config_size.py`,
+  `check_key_routing.py`, `check_drivers.py`, `check_docs.py`,
+  `check_licenses.py`, `check_config_size.py`,
   `check_tool_coverage.py`, `check_tool_commands.py`.
 - **Has the on-demand half rotted?** -- `ondemand_sweep.py`, the ~30
   tools neither `preflight.sh` nor `gui_regress.py` covers. **Adding a

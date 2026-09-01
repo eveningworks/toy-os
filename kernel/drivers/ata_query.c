@@ -15,6 +15,8 @@
 #include "string.h"
 #include <stddef.h>
 
+// driver-none: a QUERY provider over what ata.c found
+
 static int ata_count(void) { return 1; }
 
 static int ata_fill(int index, void *out) {

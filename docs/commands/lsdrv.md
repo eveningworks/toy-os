@@ -18,16 +18,17 @@ driving.
 ```
 /$ lsdrv
 DRIVER         CLASS    DEVICES
-vesafb         display  fb0
-vmsvga         display  (none)
-pit            clock    clock0
 tsc            clock    (none)
+pit            clock    clock0
 ahci           block    (none)
-xhci           usb      (none)
-usb-hid        input    usb-keyboard usb-mouse
-e1000          net      (none)
-ata            block    ata
+ata            block    ata0
 virtio-blk     block    (none)
+vesafb         display  fb0
+i8042          input    ps2-keyboard ps2-mouse
+usb-hid        input    (none)
+e1000          net      net0
+xhci           usb      (none)
+virtio-rng     rng      (none)
 ```
 
 **It answers a question none of the other listings can.** `lsblk` says
@@ -46,22 +47,24 @@ hardware with an invariant TSC the same build shows `tsc clock clock0`.
 That distinction is the whole point: "absent" and "present but idle" look
 identical from every other command.
 
-**`-v` names the source file** each driver registered from:
+**`-v` names the source file and says what the driver is:**
 
 ```
 /$ lsdrv -v
 DRIVER         CLASS    SOURCE
 vesafb         display  kernel/drivers/display/vesafb.c
-                          fb0
+                        VESA linear framebuffer, mode set by GRUB
+                        devices: fb0
 tsc            clock    kernel/arch/x86_64/clocksource_tsc.c
-                          (none)
+                        invariant TSC, calibrated against the PIT
+                        devices: (none)
 ```
 
 In a hobby OS the question after "which driver is this?" is almost
-always "where is that code?". `modinfo` carries `filename:` for the same
-reason. A driver registered by its class registry rather than from its
-own file names the registry — `pit` reads `kernel/core/clocksource.c`,
-because the PIT has no driver file of its own to declare from.
+always "where is that code?". `modinfo` carries `filename:` and
+`description:` for the same two reasons. A driver that lives in the file
+of its class registry names that file — `pit` reads
+`kernel/core/clocksource.c`, because the PIT source is defined there.
 
 ## The model
 
@@ -81,9 +84,20 @@ wrong; it cannot make a device fail.
 here is compiled into the kernel, which is why "present but idle" needs
 saying at all. `lsmod`'s question does not exist here.
 
-**Not exhaustive by construction.** A driver appears because it declares
-itself. One that forgets is invisible, and nothing yet checks for that —
-`docs/roadmap.md` carries it.
+**Not something a driver can fall out of by accident.** A driver
+declares itself at file scope (`DRIVER_DECLARE`, into the `.drivers`
+linker section), so it is listed because it is in the *image* — not
+because some line of its `init()` was reached. That distinction is not
+theoretical: the declaration used to be a call, and `e1000`'s sat after
+its "no card on this bus" return, so every guest without the card listed
+no e1000 driver at all. `tools/check_drivers.py` fails the build on a
+driver file carrying neither a declaration nor a `driver-none: <reason>`
+comment.
+
+**Still not exhaustive against a driver that binds without declaring.**
+That records the binding under class `?` and logs a line naming the
+driver, rather than dropping the fact — a binding nobody can see is what
+this exists to fix.
 
 ## See also
 

@@ -40,6 +40,9 @@
 #include "klog.h"
 #include "kfmt.h"
 #include "string.h"
+#include "driver.h" // DRIVER_DECLARE -- `lsdrv`
+
+DRIVER_DECLARE("virtio-rng", "rng", "virtio entropy source");
 
 static struct virtio_device g_dev;
 static struct virtqueue g_vq;
@@ -138,7 +141,7 @@ void virtio_rng_init(void) {
         return;
     }
 
-    krandom_register_source(rng_source, KRANDOM_VIRTIO);
+    krandom_register_source("virtio-rng", rng_source, KRANDOM_VIRTIO);
     klog_printf("virtio-rng: entropy source registered (krandom is now %s)\n",
                 krandom_quality_name(krandom_quality()));
 }

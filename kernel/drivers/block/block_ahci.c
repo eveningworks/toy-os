@@ -6,6 +6,8 @@
 #include "multiboot.h"
 #include "string.h"
 
+// driver-none: the block_device shim; ahci.c is the driver
+
 static uint32_t ahci_blk_sector_count(void) { return ahci_sector_count(); }
 static int ahci_blk_read(uint32_t lba, int count, void *buf) { return ahci_read_sectors(lba, count, buf); }
 static int ahci_blk_write(uint32_t lba, int count, const void *buf) { return ahci_write_sectors(lba, count, buf); }
@@ -26,6 +28,7 @@ static int ahci_blk_trim(uint32_t lba, uint32_t count) { return ahci_trim(lba, c
 // would leave the block layer reading a dead frame.
 static struct block_device AHCI_DEV = {
     .name = "ahci",
+    .driver = "ahci",
     .sector_count = ahci_blk_sector_count,
     .read_sectors = ahci_blk_read,
     .write_sectors = ahci_blk_write,

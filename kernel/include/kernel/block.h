@@ -38,6 +38,13 @@
 struct block_device {
     const char *name;   // "ata", "ram" -- what `df` prints
 
+    // The DRIVER behind this device -- "ata", "virtio-blk", "ahci".
+    // Distinct from `name`, which names the device: one driver may
+    // present several. blk_register_over() reports it to `lsdrv`, so a
+    // driver that fills this in cannot then forget to say so. NULL for
+    // a partition, whose driver is the whole disk's.
+    const char *driver;
+
     // Total addressable sectors, 512 bytes each.
     uint32_t (*sector_count)(void);
 

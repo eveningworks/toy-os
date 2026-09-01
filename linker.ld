@@ -81,6 +81,24 @@ SECTIONS
         __ktests_end = .;
     } :rodata
 
+    /* Driver declarations. DRIVER_DECLARE() (kernel/include/api/driver.h)
+       drops one struct driver_decl per driver into .drivers, and the
+       registry walks the array between these two symbols -- so a driver
+       is present in `lsdrv` by existing, not by reaching a call inside
+       its own init(). Same mechanism and same ALIGN(8) reasoning as
+       .ktests above; the entries are `static const`, hence :rodata.
+
+       Above .krelocs for the reason that section's comment gives: every
+       fixup location must sit in a section placed before the table that
+       records it. */
+    . = ALIGN(8);
+    .drivers :
+    {
+        __drivers_start = .;
+        KEEP(*(.drivers))
+        __drivers_end = .;
+    } :rodata
+
     . = ALIGN(4096);
     __kdata_start = .;
 
@@ -95,11 +113,11 @@ SECTIONS
        kernel/arch/x86_64/reloc.c.
 
        Its POSITION is the whole trick. Every fixup location lives in
-       .text/.rodata/.eh_frame/.ktests/.data, all of which are placed
-       above this point -- so adding the table (or changing its size)
-       cannot move a single address the table records, and the entries
-       computed from the pass-1 image stay valid in the pass-2 image
-       that contains them. Moving this section above .data instead
+       .text/.rodata/.eh_frame/.ktests/.drivers/.data, all of which
+       are placed above this point -- so adding the table (or changing
+       its size) cannot move a single address the table records, and
+       the entries computed from the pass-1 image stay valid in the
+       pass-2 image that contains them. Moving this section above .data instead
        makes 8 entries describe the image it displaced, which
        genrelocs.py's --verify catches and reports as exactly that.
 

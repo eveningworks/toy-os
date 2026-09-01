@@ -12,6 +12,9 @@
 #include "kfmt.h"
 #include "klog.h"
 #include "ktest.h"
+#include "driver.h" // driver_bound() -- `lsdrv`
+
+// driver-none: the sound class registry itself
 
 // The registered devices. A LIST rather than the single slot this
 // started as, because a USB card can arrive and leave while the machine
@@ -116,7 +119,18 @@ int sound_register(const struct sound_device *dev, void *ring, uint64_t ring_phy
     if (!dev || g_dev_count >= SND_MAX_DEVICES) return 0;
     for (int i = 0; i < g_dev_count; i++) if (g_devs[i] == dev) return 1;
 
+    // The honesty check block and display already make. A device the
+    // core cannot start or stop is not a worse device -- it is one that
+    // silently plays nothing, and it would still be chosen over a
+    // working one by resolve_pref().
+    if (!dev->name || !dev->start || !dev->stop) {
+        klog_printf("sound: REFUSED %s -- missing start/stop\n",
+                    dev->name ? dev->name : "(unnamed)");
+        return 0;
+    }
+
     g_devs[g_dev_count++] = dev;
+    driver_bound(dev->driver, dev->name);
     klog_printf("sound: %s registered (48kHz s16le stereo, %u KiB ring)\n",
                 dev->name, (unsigned)(SND_RING_BYTES / 1024));
 

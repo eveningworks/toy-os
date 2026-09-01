@@ -9,6 +9,8 @@
 #include "string.h"
 #include <stddef.h>
 
+// driver-none: a QUERY provider over what ahci.c found
+
 static int hba_count(void) { return 1; }
 
 static int hba_fill(int index, void *out) {

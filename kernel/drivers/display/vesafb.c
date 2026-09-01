@@ -18,7 +18,9 @@
 #include "display.h"
 #include "multiboot.h"
 #include "klog.h"
-#include "driver.h" // DRIVER_REGISTER -- `lsdrv -v` names THIS file
+#include "driver.h" // DRIVER_DECLARE -- `lsdrv -v` names THIS file
+
+DRIVER_DECLARE("vesafb", "display", "VESA linear framebuffer, mode set by GRUB");
 
 static struct display_surface g_surface;
 static int g_have;
@@ -51,7 +53,6 @@ static const struct display_driver vesafb_driver = {
 };
 
 void vesafb_register(void) {
-    DRIVER_REGISTER("vesafb", "display");
     display_register(&vesafb_driver);
 }
 

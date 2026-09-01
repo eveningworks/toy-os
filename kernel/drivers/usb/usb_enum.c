@@ -22,6 +22,8 @@
 #include "string.h"
 #include "pmm.h"
 
+// driver-none: enumeration; xhci.c is the driver and the HID/net/audio drivers bind
+
 // --- standard requests ------------------------------------------------
 #define REQ_GET_DESCRIPTOR   6
 #define REQ_SET_CONFIGURATION 9

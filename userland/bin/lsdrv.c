@@ -12,9 +12,14 @@
 // driver with a link per bound device -- and `lspci -k`'s "Kernel driver
 // in use". This is the same fact without the filesystem: QUERY_DRIVER.
 //
-// `-v` prints the SOURCE FILE each driver registered from, which modinfo
-// carries as `filename:` for the same reason. In a hobby OS the question
-// after "which driver is this?" is almost always "where is that code?".
+// `-v` prints the SOURCE FILE each driver declared itself in and its
+// one-line description, which modinfo carries as `filename:` and
+// `description:` for the same reasons. In a hobby OS the question after
+// "which driver is this?" is almost always "where is that code?".
+//
+// A driver appears here whether or not it found hardware -- the
+// declaration is data in the image (`.drivers`), not a call inside an
+// init() that a "no card on this bus" return can skip.
 #include "rt/sys.h"
 #include "lib/cmd.h"
 #include <stdio.h>
@@ -40,10 +45,11 @@ int main(int argc, char **argv) {
         if (verbose) {
             printf("%-14s %-8s %s\n", d.name, d.cls,
                    d.file[0] ? d.file : "(unknown)");
-            // The devices still matter in -v; a second line rather than a
-            // wider table, because a source path is already 30+ columns
-            // and an 80-column console has to fit both.
-            printf("%-14s %-8s   %s\n", "", "",
+            // Continuation lines rather than a wider table: a source
+            // path is already 30+ columns and an 80-column console has
+            // to fit the description and the devices as well.
+            if (d.desc[0]) printf("%24s%s\n", "", d.desc);
+            printf("%24sdevices: %s\n", "",
                    d.devices[0] ? d.devices : "(none)");
         } else {
             printf("%-14s %-8s %s\n", d.name, d.cls,

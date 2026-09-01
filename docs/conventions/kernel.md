@@ -2442,44 +2442,67 @@ completely, where one that gets 1428 transfers. **Clamp and say so in
 the reply** -- RFC 2348's OACK names the value actually chosen, which is
 what lets a client find out it did not get what it asked for.
 
-## A DRIVER DECLARES ITSELF, AND NAMES EACH DEVICE AS IT BINDS IT
+## A DRIVER DECLARES ITSELF AS DATA, AND THE CLASS REGISTRY NAMES EACH DEVICE IT BINDS
 
-`api/driver.h`. Two calls, and they answer two different questions:
+`api/driver.h`. Two halves, recorded differently, and that split is the
+design.
 
-- `DRIVER_REGISTER("name", "class")` **at the top of the driver's init,
-  BEFORE it looks for hardware.** A driver that finds nothing must still
-  appear -- "compiled in but idle" is the answer somebody is looking
-  for, and it is the one no other listing can give. Putting the call
-  after the presence check makes an absent device look like an absent
-  driver, which was the first version of this and the reason the rule is
-  stated this way.
-- `driver_bound("name", "dev")` where it attaches. Until this existed
-  the fact lived only in a `klog_printf` -- `usb: slot 1: bound as
-  r8153` -- which answers the question once and then scrolls away.
+**PRESENCE IS A FILE-SCOPE DECLARATION.**
 
-**Use the name the driver's own struct already has.** Inventing a second
-one puts two rows in `lsdrv` for one driver: `vesa` and `vesafb` both
-appeared before the class registry's `drv->name` was used as the single
-source.
+    DRIVER_DECLARE("ahci", "block", "SATA AHCI host controller");
 
-**Registering is not driving.** Every display driver registers and one
-drives the screen, so the bind belongs where `g_active` is set, not in
-`display_register()`. The same shape applies to any class that picks a
-winner.
+It emits a `struct driver_decl` into the `.drivers` linker section --
+the same mechanism `KTEST()` uses, and Linux's initcalls before it -- so
+a driver is in `lsdrv` because it is in the IMAGE, not because a call
+was reached. It was a call inside `init()` until 2026-09-01, and where
+in the probe somebody put that call decided whether the driver appeared:
+`e1000_init()` returns at its "no card on this bus" check, so a build
+containing the driver listed no driver -- the exact question `lsdrv`
+exists to answer. Nothing static could have caught that; making it data
+removes the question.
 
-**Where a class has no per-driver file to declare from, hook the
-registry** -- `clocksource_register()` does, because the PIT is set up
-by the timer code and the TSC by the arch code and neither has an init
-of its own. The cost is that `lsdrv -v` then names the registry's file
-rather than the driver's, which is why it is the fallback and not the
-rule.
+**BINDING IS THE CLASS REGISTRY'S.** A device struct carries a `driver`
+field (`block_device`, `net_device`, `input_source`, `sound_device`),
+and `blk_register_over()` / `net_register()` / `input_register_source()`
+/ `sound_register()` call `driver_bound()` themselves. A driver that
+fills the field in cannot then forget to say so -- which four net
+drivers were doing TWICE (`dev->driver` plus a `driver_bound()` with the
+same literal, two sources of truth for one fact) and eight others once,
+unevenly.
 
-**Nothing enforces any of this yet.** A driver that declares nothing is
-simply absent from the listing, which is the silent-failure shape this
-project usually answers with a `check_*.py`. It is on the roadmap; until
-then, adding a driver means adding the line.
+Three consequences worth knowing:
 
-## A NETWORK CLIENT WAITS FOR CARRIER, AND A SERVICE DESCRIPTOR HAS A 512-BYTE BUDGET
+- **Record the bind where every device passes.** `blk` does it in
+  `table_add()`, not `blk_register_over()`, because a partition arrives
+  through `blk_track()` and never registers. A partition leaves `driver`
+  NULL and records nothing: its driver is its disk's.
+- **Registering is not driving.** Every display driver registers and one
+  drives the screen, so display and clocksource bind where the winner is
+  chosen, not on the way in. A clocksource that is refused or out-rated
+  drives nothing and now says so.
+- **Use the name the driver's own struct already has.** Inventing a
+  second one puts two rows in `lsdrv` for one driver: `vesa` and
+  `vesafb` both appeared before `drv->name` became the single source.
+
+**`tools/check_drivers.py` FAILS THE BUILD** on a `.c` under
+`kernel/drivers/` -- or anywhere that calls a class registry -- carrying
+neither a `DRIVER_DECLARE` nor a `driver-none: <reason>` comment. It
+exists because three drivers were invisible when it was written, one of
+them `i8042`: the PS/2 keyboard and mouse, the input path every default
+boot uses. `*_test.c` is exempt. Waive with `driver-none:`, the same
+shape as `dispatch-ok:` and `widget-ops-ok:`, and the reason is the
+mechanism -- "the block class registry, not a driver", not "not a
+driver".
+
+**A CLASS REGISTRY REFUSES A DEVICE WHOSE CLAIMS AND OPS DISAGREE.**
+`blk_register()` has always refused a `BLK_CAP_FLUSH` with no `flush()`,
+and `display_register()` the same; `input_register_source()` and
+`sound_register()` now do too -- a source with no capability bits, one
+that is neither polled nor on an interrupt, or a sound device the core
+cannot start. Each was previously accepted and then silently did
+nothing, which reads as dead hardware.
+
+## A NETWORK CLIENT WAITS FOR CARRIER, AND A CONFIG FILE MUST FIT THE PARSER'S BUFFER
 
 Two rules from one change, and both bit within an hour of each other.
 

@@ -33,6 +33,8 @@
 #include "klog.h"
 #include <stddef.h>
 
+// driver-none: partitions of a disk another driver drives
+
 // One per partition that anything holds a device for. Four is MBR's
 // limit and more than this OS's own disk uses (bios, esp, tfs3); the
 // pool is bounded because a `struct block_device` plus its name is

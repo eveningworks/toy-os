@@ -124,7 +124,9 @@ int main(int argc, char **argv) {
     // THE HEADERS ARE SKIPPED BY FINDING THE BLANK LINE, and it may
     // land anywhere -- including split across two reads, which is why
     // the search runs over a small carry rather than over one buffer.
-    char buf[BUF];
+    // static: 2 KiB is most of a ring-3 frame, and this program has
+    // exactly one of it. See userland/rt/link.ld's stack budget.
+    static char buf[BUF];
     int in_body = 0, status = 0;
     long body_bytes = 0;
     char carry[4] = {0};

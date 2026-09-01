@@ -20,6 +20,8 @@
 #include "string.h"
 #include <stddef.h>
 
+// driver-none: a QUERY provider over the partition table
+
 // One scratch table, filled per call. File-scope rather than a local
 // because struct partition_table is well over the kernel's 1 KiB frame
 // budget (PART_MAX_ENTRIES entries, each carrying two GUIDs and a

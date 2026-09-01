@@ -23,7 +23,9 @@
 #include "fault_inject.h"
 #include "ata_cache.h"
 #include <stddef.h>
-#include "driver.h" // DRIVER_REGISTER -- `lsdrv`
+#include "driver.h" // DRIVER_DECLARE -- `lsdrv`
+
+DRIVER_DECLARE("ata", "block", "ATA/IDE disk, PIO and busmaster DMA");
 
 #define ATA_PRIMARY_IO  0x1F0
 #define ATA_PRIMARY_IRQ 14 // the primary IDE channel's fixed legacy IRQ line
@@ -947,7 +949,6 @@ static int pio_write_sectors(uint32_t lba, int count, const void *buf) {
 static void ata_cache_start(void);
 
 void ata_init(void) {
-    DRIVER_REGISTER("ata", "block");
     g_present = 0;
     g_dma_available = 0;
     g_sector_count = 0;

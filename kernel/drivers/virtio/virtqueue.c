@@ -48,6 +48,8 @@
 #include "timer.h"
 #include "clocksource.h"
 
+// driver-none: the shared virtqueue implementation
+
 // The two-path wait budget, taken from ata.c's rather than picked as a
 // round number -- the reasoning there applies unchanged. A wall-clock
 // bound needs pit_ticks() to advance, and it does not inside a syscall,

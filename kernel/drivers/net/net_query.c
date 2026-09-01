@@ -7,6 +7,8 @@
 #include "string.h"
 #include <stddef.h>
 
+// driver-none: a QUERY provider over the net devices
+
 static int netdev_count(void) { return net_device_count(); }
 
 static int netdev_fill(int index, void *out) {

@@ -31,6 +31,8 @@
 #include "errno.h"
 #include "driver.h" // driver_bound() -- `lsdrv`
 
+DRIVER_DECLARE("r8153", "net", "Realtek RTL8153 USB Ethernet");
+
 // --- the register interface -------------------------------------------
 //
 // bRequest 5 both ways; the direction is in bmRequestType. wValue is the
@@ -879,8 +881,6 @@ int usb_r8153_bind(struct usb_device_info *info, const uint8_t *cfg,
         xhci_bulk_post(info->slot, ep_in, d->rx_phys[i], R8153_RX_BUF);
 
     info->bound = 1;
-    DRIVER_REGISTER("r8153", "net");
-    driver_bound("r8153", d->dev.name);
     klog_printf("usb: slot %u: bound as r8153, ep in 0x%02x out 0x%02x, "
                 "%u B/packet\n", info->slot, ep_in, ep_out, mps);
     return 1;

@@ -28,6 +28,8 @@
 #include "errno.h"
 #include "driver.h" // driver_bound() -- `lsdrv`
 
+DRIVER_DECLARE("e1000", "net", "Intel 8254x gigabit Ethernet");
+
 #define E1000_VENDOR 0x8086
 #define E1000_DEV_82540EM 0x100E
 
@@ -306,7 +308,5 @@ void e1000_init(void) {
         klog_write("e1000: no usable interrupt line -- receiving by poll\n");
     }
 
-    DRIVER_REGISTER("e1000", "net");
-    driver_bound("e1000", g_dev.name);
     if (!net_register(&g_dev)) g_present = 0;
 }

@@ -12,6 +12,8 @@
 #include "kfmt.h"   // klog_printf()
 #include <stddef.h>
 
+// driver-none: rasterising onto whatever display.c chose
+
 static uint8_t *fb = 0;
 static uint32_t pitch = 0;
 static int width = 0;

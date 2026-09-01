@@ -2,6 +2,8 @@
 #include "io.h"
 #include "klog.h"
 
+// driver-none: pointer state above the input core
+
 #define CTRL_PORT 0x64
 #define DATA_PORT 0x60
 

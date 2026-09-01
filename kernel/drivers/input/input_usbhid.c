@@ -26,6 +26,8 @@
 #include "string.h"
 #include "driver.h" // driver_bound() -- `lsdrv`
 
+DRIVER_DECLARE("usb-hid", "input", "USB HID keyboards and mice");
+
 // HID class requests, on the INTERFACE.
 #define HID_REQ_SET_IDLE     0x0A
 #define HID_REQ_SET_PROTOCOL 0x0B
@@ -343,6 +345,7 @@ int usb_hid_bind(struct usb_device_info *info) {
         k_snprintf(d->name, sizeof d->name, "usb-%s",
                    d->is_mouse ? "mouse" : "keyboard");
         d->src.name = d->name;
+        d->src.driver = "usb-hid";
         d->src.caps = d->is_mouse ? (INPUT_CAP_REL | INPUT_CAP_WHEEL)
                                   : INPUT_CAP_KEYS;
         // An interrupt-driven source leaves poll NULL -- its decode
@@ -361,8 +364,6 @@ int usb_hid_bind(struct usb_device_info *info) {
         if (!info->hid_ep) info->hid_ep = ifc->ep;
         info->bound = 1;
         took++;
-        DRIVER_REGISTER("usb-hid", "input");
-        driver_bound("usb-hid", d->name);
         klog_printf("usb: slot %u: bound as %s on endpoint 0x%x\n",
                     info->slot, d->name, ifc->ep);
     }

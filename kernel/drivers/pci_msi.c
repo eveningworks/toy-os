@@ -28,6 +28,8 @@
 #include "klog.h"
 #include "kfmt.h"
 
+// driver-none: MSI/MSI-X setup, used by drivers
+
 // Message Control, at capability offset 2.
 #define MSI_CTL              0x02
 #define MSI_CTL_ENABLE       (1u << 0)

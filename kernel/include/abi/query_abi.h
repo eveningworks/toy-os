@@ -553,7 +553,8 @@ struct query_mmaudit {
 struct query_driver {
     char name[16];      // "ahci", "r8153"
     char cls[12];       // "block", "net", "input", ...
-    char file[64];      // the source file it registered from, for -v
+    char file[64];      // the source file it declared itself in, for -v
+    char desc[48];      // one line saying what it is, or "" -- also -v
     char devices[64];   // "net0 usb:13", or "" for none
 };
 

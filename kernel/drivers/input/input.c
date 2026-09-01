@@ -10,6 +10,9 @@
 #include "mouse.h"
 #include "klog.h"
 #include "kfmt.h"
+#include "driver.h" // driver_bound() -- `lsdrv`
+
+// driver-none: the input class registry itself
 
 // Small and fixed, like display.c's driver table: PS/2 keyboard, PS/2
 // mouse, and however many virtio input devices are attached. A linked
@@ -22,7 +25,24 @@ static int g_count;
 
 void input_register_source(const struct input_source *src) {
     if (!src || !src->name || g_count >= MAX_INPUT_SOURCES) return;
+
+    // The honesty check block and display already make: a capability
+    // bit with nothing behind it is a promise the core will act on. A
+    // source with no caps at all reports events nothing can classify,
+    // and one that is neither interrupt-driven nor polled is never
+    // serviced -- both are silent, and both look like dead hardware.
+    if (!src->caps) {
+        klog_printf("input: REFUSED %s -- no capability bits\n", src->name);
+        return;
+    }
+    if (!src->poll && !src->irq && !src->msi_vector) {
+        klog_printf("input: REFUSED %s -- neither polled nor on an "
+                    "interrupt\n", src->name);
+        return;
+    }
+
     g_sources[g_count++] = src;
+    driver_bound(src->driver, src->name);
     klog_printf("input: %s registered (%s%s%s%s)\n", src->name,
                 (src->caps & INPUT_CAP_KEYS)  ? "keys " : "",
                 (src->caps & INPUT_CAP_REL)   ? "rel "  : "",

@@ -26,6 +26,8 @@
 #include "string.h"
 #include "errno.h"
 
+// driver-none: the virtio transport half; net_virtio.c declares the driver
+
 #define VIRTIO_ID_NET      1
 #define VIRTIO_NET_F_MAC   (1ull << 5)
 
