@@ -991,8 +991,12 @@ def check_tab_legibility(dbg, qmp, res):
                             c["y"] + t[1] + t[3])).tobytes()
 
         def fill(t):
-            # The middle of the tab: past the label, short of the close box.
-            return im.getpixel((c["x"] + t[0] + t[2] // 2,
+            # The LEFT PADDING at mid-height: tabs are as wide as their
+            # title now, so the middle of one is inside the label's
+            # glyphs and a sample there reads ink as often as fill. Three
+            # pixels in is past the rounded corner's inset at this row and
+            # short of the first glyph.
+            return im.getpixel((c["x"] + t[0] + 3,
                                 c["y"] + t[1] + t[3] // 2))
 
         # Tabs 0 and 1 are both RESTING and both labelled "/" -- so

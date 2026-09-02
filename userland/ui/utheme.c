@@ -20,6 +20,10 @@ void utheme_default(struct utheme *out) {
     // (icon selection, table rows). A role now, so one place owns it.
     out->accent      = ugfx_rgb(70, 110, 160);
     out->accent_text = ugfx_rgb(255, 255, 255);
+    // Darker than the strip ground (window_bg) as well as the control
+    // face, so a resting tab reads as recessed and the selected one --
+    // field_bg -- as raised out of it by fifty rather than thirty.
+    out->tab_rest    = ugfx_rgb(205, 205, 212);
 }
 
 void utheme_init(void) {

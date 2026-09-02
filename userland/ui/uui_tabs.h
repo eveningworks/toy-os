@@ -21,12 +21,24 @@
 // own title buffers, so a title arriving from the shell (an OSC
 // sequence, api/ansi.h) shows up with nothing copied.
 //
+// **A TAB IS AS WIDE AS ITS TITLE, CAPPED, AND THE TABS PACK LEFT** --
+// Konsole's and Windows Terminal's strip, and Chrome's: the leftover
+// strip stays empty rather than one tab stretching across it. Only
+// when the natural widths no longer fit does the strip fall back to
+// EQUAL SHARES with a floor, which is what keeps every tab reachable.
+//
+// **WIDTHS ARE FROZEN WHILE THE POINTER IS IN THE STRIP** (Chrome's
+// rule), because a title arrives from the shell asynchronously and a
+// tab that resized under a pointer travelling to its close box would
+// move the target. They are recomputed when the pointer leaves, or when
+// the COUNT changes -- a tab opening or closing relays out at once.
+//
 // **THE SELECTED TAB IS A LIGHT FILL WITH AN ACCENT BAR ON TOP**, the
 // way VS Code marks one (`tab.activeBorderTop`): the tab takes the
 // theme's field colour, rounds its top corners, and carries a 2px accent
-// along its TOP edge. Resting tabs are filled with the CONTROL colour --
-// darker than the strip's own ground, so they read as recessed and the
-// selected tab as raised out of them.
+// along its TOP edge. Resting tabs are filled with the theme's TAB_REST
+// colour -- darker than the strip's own ground, so they read as
+// recessed and the selected tab as raised out of them.
 //
 // Both of those are corrections, and the reason is worth keeping: the
 // accent used to sit on the BOTTOM edge, where it is a thin blue line
@@ -45,6 +57,8 @@
 // What the widget needs to know about one tab. Deliberately not a
 // "session" or a "page": this widget draws a strip and reports clicks,
 // and knows nothing about what a tab CONTAINS.
+#define UUI_TABS_FREEZE_MAX 32
+
 struct uui_tab {
     const char *label;  // not owned
     int closable;       // draw a close box and report clicks on it
@@ -86,6 +100,13 @@ struct uui_tabs {
     int pressed_close;
     int pressed_new;
 
+    // The frozen layout (see the header comment): valid while
+    // frozen_n == count and frozen_n > 0. Capped rather than allocated,
+    // because this widget owns no memory; past the cap the strip simply
+    // does not freeze.
+    int frozen_n;
+    int frozen_w[UUI_TABS_FREEZE_MAX];
+
     // What the app is told. Either may be NULL.
     //
     // **`on_close` FIRES ON RELEASE, like every other commit in this
@@ -107,11 +128,11 @@ void uui_tabs_init(struct uui_tabs *t, struct uui_tab *tabs, int count,
 void uui_tabs_set_geometry(struct uui_tabs *t, int x, int y, int w, int h);
 
 // Preferred minimum: one row of text plus font-derived padding, and
-// wide enough for every label at its natural width. A strip narrower
-// than that SHRINKS its tabs rather than overflowing -- a tab that is
-// off the right edge cannot be clicked, which is the failure
-// uui_layout's overflow rule exists to prevent and which a strip can
-// avoid because its items are interchangeable.
+// the sum of every tab's natural (capped) width. A strip narrower than
+// that SHRINKS its tabs to equal shares rather than overflowing -- a
+// tab that is off the right edge cannot be clicked, which is the
+// failure uui_layout's overflow rule exists to prevent and which a
+// strip can avoid because its items are interchangeable.
 void uui_tabs_natural_size(const struct uui_tabs *t, int *out_w, int *out_h);
 
 // The strip's own height, which is what a caller needs to lay the PAGE

@@ -2144,8 +2144,14 @@ nothing copied.
 Three things the widget decides, because getting them wrong is what
 makes a tab strip annoying rather than broken:
 
-- **Equal shares, with a floor.** A tab whose width tracked its title
-  would move its own close box while the pointer travelled to it.
+- **Natural width, capped, packed LEFT; equal shares only once they no
+  longer fit.** Konsole's, Windows Terminal's and Chrome's strip -- one
+  tab does not stretch across the window. The cost of a width that
+  tracks its title is a close box that moves while the pointer travels
+  to it, and Chrome's answer is the one taken: **widths are FROZEN while
+  the pointer is inside the strip** and recomputed when it leaves or the
+  count changes. `UUI_TABS_FREEZE_MAX` caps the table because the widget
+  owns no memory; past it the strip simply does not freeze.
 - **`hit` is a BOOLEAN.** Returning the index would make tab 0 -- the
   one whose index is falsey -- report as not hit, which is CLAUDE.md's
   standing widget trap and would silently make the first tab unclickable.
@@ -2165,18 +2171,21 @@ are looking at.
 **THE SELECTED TAB IS A LIGHT LIFT WITH AN ACCENT BAR ON TOP.** It
 takes the theme's FIELD colour, rounds its top corners and carries a 2px
 accent along its TOP edge, the way VS Code marks one
-(`tab.activeBorderTop`). **Resting tabs are filled with the CONTROL
-colour**, which is darker than the strip's own ground, so the strip
-reads as wells with one tab raised out of them.
+(`tab.activeBorderTop`). **Resting tabs are filled with the theme's
+`tab_rest` colour** (`UTHEME_TAB_REST`), darker than the strip's own
+ground and than the control face, so the strip reads as wells with one
+tab raised out of them.
 
 Both of those are corrections and the reasons are worth keeping. The
 accent sat on the BOTTOM edge, where it is a thin line directly above a
 terminal's black page and has the least contrast of anywhere it could
 be; and resting tabs were left the strip's own colour, so the selected
 one was lifted by TWENTY units out of 255 -- which shipped, and was
-reported as hard to tell apart with three tabs open. Thirty is the
-current lift and `uterm_test`'s c17 has its floor at twenty-five, above
-what was reported, because a check that accepts twenty accepts the bug.
+reported as hard to tell apart with three tabs open. Fifty is the
+current lift (resting tabs took a theme colour of their own on
+2026-09-02, at the maintainer's request for darker resting tabs) and
+`uterm_test`'s c17 has its floor at twenty-five, above what was
+reported, because a check that accepts twenty accepts the bug.
 
 **A NEW TAB IS APPENDED, AND THE STRIP'S ORDER IS NOT SLOT ORDER.**
 Terminal keeps sessions in a fixed array and RECYCLES slots, so a strip

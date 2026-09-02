@@ -5037,8 +5037,25 @@ line there has the least contrast of anywhere it could be. It is on the
 TOP edge now, against the light chrome. And resting tabs were left the
 strip's own colour, which made the selected tab a twenty-unit lift; that
 shipped and was reported as hard to tell apart with three tabs open.
-Resting tabs are the CONTROL colour now — darker than the ground, so
-the strip reads as wells with one tab raised — and the lift is thirty.
+Resting tabs took the CONTROL colour next — darker than the ground, so
+the strip reads as wells with one tab raised — and the lift was thirty.
+It is fifty now: the maintainer asked for darker resting tabs, and they
+got a theme token of their own (`tab_rest`) rather than a darkened
+control colour, because every colour here is the theme's and a dark
+mode needs to set this one independently.
+
+**The tabs pack left at their natural width, and equal shares are the
+fallback rather than the rule** (2026-09-02). The first strip shared
+the whole width equally, GtkNotebook-style, so one tab stretched across
+the window — the maintainer asked for Konsole's shape. The convention's
+reason for equal shares was real: a title arrives from the shell
+asynchronously, and a tab that resized under a pointer heading for its
+close box moves the target. Chrome has the same problem and freezes tab
+widths while the pointer is in the strip, relaying out when it leaves;
+that is what was built. A count change relays out at once, which is
+where this differs from Chrome (whose next close box slides under the
+pointer after a close) — a natural-width strip cannot promise that
+anyway, and the honest behaviour is the immediate one.
 
 **The lesson generalises past this widget.** Twenty units out of 255
 survived a pixel check, a screenshot review and a written claim that it

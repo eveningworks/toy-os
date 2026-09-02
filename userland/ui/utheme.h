@@ -32,6 +32,7 @@ struct utheme {
     uint32_t border;       // window / menu / control border lines
     uint32_t accent;       // selection / highlight / focus / checkmark
     uint32_t accent_text;  // text drawn on `accent`
+    uint32_t tab_rest;     // a resting tab in a strip: a clear step under control_bg
 };
 
 // The live theme. Never NULL: the first read lazily installs the default
@@ -59,6 +60,7 @@ void utheme_default(struct utheme *out);
 #define UTHEME_BORDER     (utheme_current()->border)
 #define UTHEME_ACCENT     (utheme_current()->accent)
 #define UTHEME_ACCENT_TEXT (utheme_current()->accent_text)
+#define UTHEME_TAB_REST   (utheme_current()->tab_rest)
 
 // --- metrics (QStyle), FONT-DERIVED and live -------------------------
 //

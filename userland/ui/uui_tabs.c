@@ -8,6 +8,7 @@
 // raising the desktop font size has to move the strip with it.
 #define TAB_PAD_X   (ugfx_char_w())
 #define TAB_MIN_W   (ugfx_char_w() * 6)
+#define TAB_MAX_W   (ugfx_char_w() * 24)   // Windows Terminal caps a tab about here
 #define CLOSE_W     (ugfx_char_w() * 2)
 #define NEW_W       (ugfx_char_w() * 3)
 
@@ -37,6 +38,7 @@ void uui_tabs_init(struct uui_tabs *t, struct uui_tab *tabs, int count,
     t->pressed = -1;
     t->pressed_close = 0;
     t->pressed_new = 0;
+    t->frozen_n = 0;
     t->on_select = 0;
     t->on_close = 0;
     t->on_new = 0;
@@ -64,27 +66,53 @@ int uui_tabs_new_rect(const struct uui_tabs *t, int *x, int *y, int *w, int *h) 
     return 1;
 }
 
-// The width one tab gets. EQUAL SHARES of the strip, clamped to a floor
-// -- which is what every tabbed terminal does, and the reason is that a
-// tab's width must not jump around as its title changes: a close box
-// that moves while the pointer is travelling to it is unhittable.
+static void number_prefix(const struct uui_tabs *t, int index, char *out,
+                           int cap);
+
+// What tab `i` wants: padding, number, title and close box, capped.
+static int natural_w(const struct uui_tabs *t, int i) {
+    char pre[6];
+    number_prefix(t, i, pre, sizeof pre);
+    int w = 2 * TAB_PAD_X + ugfx_text_width(pre) + ugfx_text_width(t->tabs[i].label);
+    if (t->tabs[i].closable) w += CLOSE_W + TAB_PAD_X;
+    if (w > TAB_MAX_W) w = TAB_MAX_W;
+    if (w < TAB_MIN_W) w = TAB_MIN_W;
+    return w;
+}
+
+// The width tab `i` gets. Natural and packed left while the naturals
+// fit; EQUAL SHARES with a floor once they do not, because a strip of
+// forty tabs cannot show them all and a share keeps each one clickable
+// for longer than a cap does. Below the floor the tabs run off the
+// right edge, and that is the honest failure.
 //
-// Below the floor the tabs are allowed to run off the right edge, and
-// that is the honest failure: a strip of forty tabs cannot show them
-// all, and a caller that allows forty needs a scroll of its own.
-static int tab_width(const struct uui_tabs *t) {
-    if (t->count <= 0) return 0;
-    int w = tabs_area_w(t) / t->count;
+// While frozen (see the header) the answer is the frozen table, which
+// is what keeps a close box still under a pointer heading for it.
+static int tab_width_at(const struct uui_tabs *t, int i) {
+    if (t->count <= 0 || i < 0 || i >= t->count) return 0;
+    if (t->frozen_n == t->count && t->frozen_n > 0) return t->frozen_w[i];
+    int area = tabs_area_w(t), total = 0;
+    for (int k = 0; k < t->count; k++) total += natural_w(t, k);
+    if (total <= area) return natural_w(t, i);
+    int w = area / t->count;
     return w < TAB_MIN_W ? TAB_MIN_W : w;
+}
+
+static void freeze(struct uui_tabs *t) {
+    if (t->count <= 0 || t->count > UUI_TABS_FREEZE_MAX) { t->frozen_n = 0; return; }
+    if (t->frozen_n == t->count) return;
+    for (int i = 0; i < t->count; i++) t->frozen_w[i] = tab_width_at(t, i);
+    t->frozen_n = t->count;
 }
 
 int uui_tabs_rect(const struct uui_tabs *t, int index,
                    int *x, int *y, int *w, int *h) {
     if (index < 0 || index >= t->count) return 0;
-    int tw = tab_width(t);
-    if (x) *x = t->x + index * tw;
+    int tx = t->x;
+    for (int i = 0; i < index; i++) tx += tab_width_at(t, i);
+    if (x) *x = tx;
     if (y) *y = t->y;
-    if (w) *w = tw;
+    if (w) *w = tab_width_at(t, index);
     if (h) *h = t->h;
     return 1;
 }
@@ -97,7 +125,7 @@ static int close_rect(const struct uui_tabs *t, int index,
     if (index < 0 || index >= t->count || !t->tabs[index].closable) return 0;
     int tx, ty, tw, th;
     if (!uui_tabs_rect(t, index, &tx, &ty, &tw, &th)) return 0;
-    if (tw < TAB_MIN_W) return 0;
+    if (tw < TAB_MIN_W) return 0;   // shares below the floor have no room for one
     if (x) *x = tx + tw - CLOSE_W - TAB_PAD_X / 2;
     if (y) *y = ty + (th - CLOSE_W) / 2;
     if (w) *w = CLOSE_W;
@@ -121,17 +149,10 @@ static void number_prefix(const struct uui_tabs *t, int index, char *out,
 }
 
 void uui_tabs_natural_size(const struct uui_tabs *t, int *out_w, int *out_h) {
-    int widest = TAB_MIN_W;
-    char pre[6];
-    for (int i = 0; i < t->count; i++) {
-        number_prefix(t, i, pre, sizeof pre);
-        int need = 2 * TAB_PAD_X + ugfx_text_width(pre)
-                    + ugfx_text_width(t->tabs[i].label);
-        if (t->tabs[i].closable) need += CLOSE_W + TAB_PAD_X;
-        if (need > widest) widest = need;
-    }
-    if (out_w) *out_w = widest * (t->count > 0 ? t->count : 1)
-                        + (t->show_new ? NEW_W : 0);
+    int total = 0;
+    for (int i = 0; i < t->count; i++) total += natural_w(t, i);
+    if (t->count == 0) total = TAB_MIN_W;
+    if (out_w) *out_w = total + (t->show_new ? NEW_W : 0);
     if (out_h) *out_h = uui_tabs_height();
 }
 
@@ -153,10 +174,13 @@ static int tab_at(const struct uui_tabs *t, int cx, int cy, int *on_close) {
     if (on_close) *on_close = 0;
     if (!uui_hit(t->x, t->y, t->w, t->h, cx, cy)) return -1;
     if (hit_new(t, cx, cy)) return -1;   // the "+" is not tab N + 1
-    int tw = tab_width(t);
-    if (tw <= 0) return -1;
-    int idx = (cx - t->x) / tw;
-    if (idx < 0 || idx >= t->count) return -1;
+    int idx = -1;
+    for (int i = 0, tx = t->x; i < t->count; i++) {
+        int tw = tab_width_at(t, i);
+        if (cx >= tx && cx < tx + tw) { idx = i; break; }
+        tx += tw;
+    }
+    if (idx < 0) return -1;
     int bx, by, bw, bh;
     if (on_close && close_rect(t, idx, &bx, &by, &bw, &bh))
         *on_close = uui_hit(bx, by, bw, bh, cx, cy);
@@ -244,12 +268,10 @@ static void draw_one(struct ugfx_surface *s, const struct uui_tabs *t, int i) {
         ugfx_fill_rect(s, x + corner_r(), y, w - 2 * corner_r(), 2,
                         UTHEME_ACCENT);
     } else {
-        // RECESSED, not bare. Leaving these the strip's own colour left
-        // the selected tab lifted by ten units out of 255; the control
-        // colour is darker than the ground, so the strip reads as wells
-        // with one tab raised out of them.
+        // RECESSED, not bare: TAB_REST is darker than the strip ground,
+        // so the strip reads as wells with one tab raised out of them.
         fill_top_rounded(s, x, y, w, h, corner_r(),
-                          uui_state_bg(UTHEME_BUTTON_BG, st));
+                          uui_state_bg(UTHEME_TAB_REST, st));
         // A HAIRLINE, NOT A BORDER. Separators only between two resting
         // tabs: one beside the selected tab would land against that
         // tab's own rounded edge and read as a stray mark.
@@ -363,6 +385,10 @@ static int ops_motion(void *w, int cx, int cy, unsigned buttons) {
     int on_close = 0;
     int i = tab_at(t, cx, cy, &on_close);
     int on_new = hit_new(t, cx, cy);
+    // FREEZE ON ENTRY, THAW ON EXIT. Inside the strip a title change
+    // must not move a close box; outside it nobody is aiming at one.
+    if (uui_hit(t->x, t->y, t->w, t->h, cx, cy)) freeze(t);
+    else t->frozen_n = 0;
     int changed = (i != t->hovered) || (on_close != t->hovered_close)
                   || (on_new != t->hovered_new);
     t->hovered = i;
