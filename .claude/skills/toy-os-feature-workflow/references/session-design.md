@@ -2145,3 +2145,37 @@ without a design decision being needed.
   init simply passes none. The rule stands, the justification was
   false, and a future session reading it would have designed around a
   limit that does not exist.
+
+**2026-09-02 (BAR sizes, About, rounded corners, the crash report, and
+two plans). Read this before touching the PCI enumerator, the window
+frame, or anything that reads a device right after enumeration.**
+
+- **BAR sizes are probed at enumeration, never by a driver** --
+  `pci_bar_mem_size()` reads `struct pci_device.bar_size[]`, filled in
+  `pci_init()` before interrupts and the framebuffer console, with the
+  probe bounded by header type (a bridge's 0x18 is bus numbers) and a
+  host bridge left decoding (Linux's `mmio_always_on`). xHCI, virtio-pci
+  and MSI-X bound their windows by it. `docs/decisions/drivers.md`.
+- **A device's registers can read ZERO right after enumeration.** The
+  RTL8153 answered version 0x0000 and half a MAC at 0.35 s on a cold
+  boot, one boot in three, and the driver took it for an unknown chip.
+  Wait for the chip's own ready bit (`AUTOLOAD_DONE`) before the first
+  read, and retry a zero. Measured on the laptop: 3 binds in 3 after.
+- **Window corners are rounded by blending over the saved backdrop**,
+  because the compositor repaints everything under the damage box back
+  to front -- no shape mask, no hit-test change, and only pixels inside
+  the clip may be touched or a corner drifts each frame. Half the line
+  height, one outline colour (the theme's border) all the way round; a
+  maximized window is square. `docs/decisions/gui.md`.
+- **A crash report is a text header plus the raw stack**, written to
+  `/var/crash` by the fault handler before teardown and refused under
+  an FS_OP; `panic_resolve.py --crash` scans the stack for return
+  addresses. A kernel panic writes nothing there, on purpose. Verified
+  on the laptop across a reboot. `docs/decisions/kernel.md`.
+- **The memory above 4 GiB is a plan, five stages, on the identity map
+  EXTENDED** rather than a higher-half direct map: ~180 sites depend on
+  physical == virtual and user space is already far above the low
+  range. `docs/roadmap-details.md`, "More than 4 GiB of RAM".
+- **A panic store must warm-reset the machine itself**: the maintainer
+  power-cycles after a panic, and a power cycle loses the RAM pstore
+  relies on. The roadmap item carries both halves.

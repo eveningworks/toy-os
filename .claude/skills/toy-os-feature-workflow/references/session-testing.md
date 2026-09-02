@@ -2390,3 +2390,49 @@ and the desktop started anyway, about half the time. Without the
 assertion that would have been an intermittent, silent loss of coverage
 rather than a red run. **The general form: after arranging a
 precondition, assert from the run's own output that it held.**
+
+## The same runner, or it is not a measurement (2026-09-02)
+
+Two `ktest_run.py` runs in a row on the pre-session commit stayed
+clean, while the second `preflight.sh` in a row on today's tree failed
+three `fs` KTESTs on `fsck` leaks -- and that was nearly reported as a
+regression. Two `preflight.sh` runs on the OLD commit reproduced it
+exactly: the ring-3 `/tests` programs preflight runs BETWEEN kernel
+suites leak the blocks. "It predates me" has to be measured with the
+runner that showed the failure, not a cheaper one that shares half of
+its steps. `make clean-disk` before the gate is the workaround; it is
+recorded in `docs/bugs.md`.
+
+## A control that never reached the branch, again (2026-09-02)
+
+Bounding the xHCI capability walk by BAR size, the positive control
+set the bound to 0x100 and then 0x50 and NOTHING changed -- QEMU's
+chain sits at +0x20 and +0x30 and ends on its own before either. The
+control only went red at 0x30, after logging the walk's base. CLAUDE.md
+already says "ask what input actually reaches the branch"; the extra
+lesson is to PRINT the fixture's shape before choosing the control's
+value, not after the control fails.
+
+## A wait that ends on the FIRST required string (2026-09-02)
+
+`faulttest_run.py` ended its read early on `required[0]` and then
+demanded `required[1]`, which had not arrived. The rule "a poll whose
+exit condition is weaker than what the code after it needs is a
+flake" -- caught here by the first entry that required two strings.
+
+## A rounded corner shows what is beneath it (2026-09-02)
+
+Two GUI checks failed after windows gained rounded corners, and
+neither was a bug: one sampled a client's border 2 px from its corner,
+where the frame's outline ring now is; the other compared a window's
+content before and after refocusing while a second window's edge lay
+UNDER its corner. Both tests read the backdrop through the corner.
+Sample an edge's middle, or inset the compared box by a radius.
+
+## The slice trap, third time (2026-09-02)
+
+`s[:i] + new + s[j:]` with `j = s.index(end)` -- searched from the
+start, which landed BEFORE `i` -- duplicated 25 headings in
+`roadmap-details.md`. `check_docs.py` caught it; the fix was
+`s.index(end, i)` plus a line count before and after, which the skill
+already prescribes and I did not do.

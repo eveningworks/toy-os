@@ -1386,3 +1386,23 @@ boot brought the keyboard back. Recorded as a consequence with the cause
 not separately established, rather than claimed as fixed by the USB
 change. **Ask what ONE cheap comparison separates the candidates** --
 here, does the other device on the same controller still work.
+
+## A crash whose address is in the log is a two-minute diagnosis (2026-09-02)
+
+"Maximize the Terminal and open a tab crashes it": reproduced under
+QEMU in one run, `RIP=0x8000004460` in the log, and
+`panic_resolve.py --elf build/userland/gui/apps/terminal.elf` named
+`row_clear()` at once. Reading forty lines around it found the bug.
+The order that worked: reproduce, resolve the address, THEN read code.
+Now that a ring-3 crash leaves `/var/crash/<prog>-<pid>.crash`, the
+same resolution works from a laptop crash after the fact:
+`remote.py get` the file, `panic_resolve.py --crash` it.
+
+## The adapter that came up with "no driver" (2026-09-02)
+
+The maintainer read `ifconfig: no network devices` on the laptop, which
+looked like the known intermittent USB bind bug. The log the maintainer
+saved (`dmesg > /tmp/boot1.txt`, which survives a reboot) said
+`r8153 version 0x0000` -- the driver refused a chip whose firmware had
+not loaded yet. One saved log from the bad boot was worth more than any
+amount of reasoning about the good ones; ask for it first.

@@ -629,3 +629,30 @@ adds a Tab stop nobody can see. For an app with ONE keyboard-hungry
 widget, forwarding from `on_key` is what the File Manager does and what
 Task Manager does now. Ask before assuming the documented idiom is the
 right one for the app in front of you.
+
+## Tabs pack left, and widths freeze under the pointer (2026-09-02)
+
+`uui_tabs` sizes each tab to its title, capped, packed left; equal
+shares only once they no longer fit. A title arriving from the shell
+would move a close box under a pointer heading for it, so widths are
+frozen while the pointer is inside the strip (Chrome's rule) -- a
+fixed table, because the widget owns no memory. Resting tabs took a
+theme token of their own, `tab_rest`, when "darker" was asked for.
+
+## "Subtle" is judged against KDE, not against nothing (2026-09-02)
+
+A corner radius of a third of the line height (5 px) was built as
+"subtle rounded corners" and read as still square; half (8 px, Breeze's
+default) was right. The two-tone bevel read as a Windows 95 panel once
+corners rounded; one hairline in the theme's border colour was right.
+The maintainer's reference for chrome is KDE and Windows 11: when a
+request says "like KDE", copy the measurement, not the adjective.
+
+## A tab opened after a resize crashed the Terminal (2026-09-02)
+
+`session_start()` read a freshly malloc'd struct's buffer pointers
+before zeroing it; after `grow_caps()` had freed the old grids, the new
+struct landed on exactly those bytes, skipped its allocation and wrote
+through garbage -- a GP fault. malloc does not zero, and a "carried
+across the wipe" pattern must set the carried fields on a fresh
+allocation first. `uterm_test` t8-t10 maximize, open a tab, restore.

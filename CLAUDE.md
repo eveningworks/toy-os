@@ -1281,6 +1281,10 @@ cost".
   and sends only what differs, `shell` is interactive). **A PUSH needs
   `telnetd`/`tftpd` listening, which is why `docs/update-design.md`
   argues for a pull.**
+  **Its address is in `local_info.txt` at the repo root -- an UNTRACKED
+  file (excluded through `.git/info/exclude`) that must never be
+  committed; read it rather than guessing.** A file the laptop wrote
+  comes back with `get`, and `/tmp` there survives a reboot.
   `vm.py` cannot reach it: that drives a QEMU guest through its serial
   debug console and the laptop has no serial console attached. Needs
   `service enable telnetd` / `tftpd` on the target, both shipped OFF.
