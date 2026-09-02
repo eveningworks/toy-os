@@ -628,7 +628,7 @@ run on, not by order.
 - [ ] e1000 ethernet
 - [ ] RTL8139
 - [x] ~~AC97 audio~~ DONE 2026-08-29
-- [ ] Intel HDA
+- [x] ~~Intel HDA~~ DONE 2026-09-02 -- `kernel/drivers/sound/hda.c`, on QEMU's `ich9-intel-hda` and the laptop's Conexant CX20751
 - [ ] UHCI/EHCI/XHCI USB
 - [ ] QXL
 - [ ] Cirrus
@@ -741,6 +741,8 @@ run on, not by order.
 - [x] ~~Doom sound and music~~ DONE 2026-08-29 -- effects on `usnd` voices, music on Chocolate Doom's own OPL emulation
 - [x] ~~Volume mixer UI, persisted to `/etc`~~ DONE 2026-08-30 -- the tray flyout: slider, mute, device list, wheel
 - [ ] A per-application volume, which needs the sound daemon first -- the flyout has one slider because there is one stream
+- [ ] HDMI/DisplayPort audio -- the display controller's HDA codec is claimed and left silent; its power well is the GPU's
+- [ ] One volume taper for every card -- `hda.c` and `sound_usb.c` share the 40 dB convention, `ac97.c` is still linear in attenuation steps
 - [ ] MPEG-2/2.5 Layer III (the half-rate sample rates), and Layer I/II -- refused with -ENOTSUP today
 - [ ] Intensity stereo in the MP3 decoder -- refused, because nothing available encodes it to test against
 - [ ] An MP3 seek index, so seeking lands exactly rather than by average frame size

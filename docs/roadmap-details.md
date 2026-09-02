@@ -1761,6 +1761,20 @@ multi-session project with its own milestones, not a single build bump.
 
 ### Sound
 
+**Intel HDA, 2026-09-02.** `kernel/drivers/sound/hda.c` is the third
+`struct sound_device`: the controller half (CORB/RIRB, one output
+stream over the core's ring, MSI first) and a GENERIC codec walk --
+pick the output pin by its default configuration, route it back to a
+DAC through the connection lists, unmute what is on the way, EAPD on
+every pin that has it -- with no vendor quirk table. Proven on QEMU's
+`ich9-intel-hda` + `hda-output` (`tools/audio_test.py --card hda`,
+the same host-side oracle) and on the bare-metal laptop's Conexant
+CX20751 (`14f1:510f`): speakers, and the headphone jack switching
+both ways through unsolicited responses. The laptop's display-audio
+controller (`8086:160c`) is claimed too and its codec answers nothing
+useful without the GPU's power well, which is the HDMI item above.
+`hdadump` on the GRUB line prints the widget graph.
+
 BUILT through the PCM path, 2026-08-29: `kernel/drivers/sound/` holds
 the class registry (`sound.c`, one exclusive stream, the shared ring of
 `abi/sound_abi.h`) and the AC'97 driver; `/tests/tone` plays A440 and

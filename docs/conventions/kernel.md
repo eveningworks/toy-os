@@ -2038,6 +2038,58 @@ measure within bursts and total the tone, never trust the file's
 timeline. The ac97 KTESTs skip on every boot but audio_test's, which
 is why its "0 skipped" assertion is load-bearing (the ahci lesson).
 
+## INTEL HDA IS THE THIRD SOUND DEVICE, ITS CODEC IS ROUTED BY A GENERIC WALK, AND THE VOLUME TAPER IS THE USB DRIVER'S
+
+`kernel/drivers/sound/hda.c` -- the laptop's own sound card. Matched by
+PCI class, so QEMU's `ich9-intel-hda` (`vm.py --audio hda`, `make run
+AUDIO=hda`) and a PCH's controller claim alike. Six things to know:
+
+- **TWO HALVES, AS IN LINUX.** The CONTROLLER (CORB/RIRB command rings,
+  a stream descriptor playing a BDL over the core's ring, MSI first) is
+  the AC'97 driver's shape with a codec bus in front of it. The CODEC is
+  a graph of widgets the driver ROUTES: the output pin is chosen by its
+  default configuration (speaker beats line-out beats headphone), walked
+  back to a DAC through connection lists, and every amplifier on the way
+  is unmuted at its 0 dB step. **There is no vendor quirk table** --
+  Linux's Realtek file is 12k lines of them; this is the generic walk
+  alone, and EAPD is set on every pin that reports it. When a codec
+  needs more, `hdadump` on the GRUB line is the evidence to add one from.
+- **EVERY HDA CONTROLLER IS CLAIMED; ONLY A CODEC WITH AN ANALOG OUTPUT
+  IS REGISTERED.** A laptop has two -- the PCH's and the GPU's
+  display-audio one, whose codec has only digital pins (and, on the
+  test laptop, answers nothing without the GPU's power well). The second
+  is brought up, found wanting, logged, and put back into reset, so
+  `lsdev` never lists a device that plays nothing.
+- **ACKNOWLEDGE RIRBSTS IN THE DRAIN, NOT ONLY IN THE HANDLER.** QEMU's
+  controller stops fetching from the CORB once RINTCNT responses are
+  pending until RINTFL is cleared (real hardware only gates the
+  interrupt on it), so a polled command path that never wrote it got
+  exactly one answer and then silence -- which read as "no codec".
+- **THE COMMAND PATH RUNS WITH INTERRUPTS OFF.** One RIRB, one mailbox,
+  two consumers: a thread (init, a volume change, a KTEST) and the
+  interrupt handler (a jack event, which itself sends verbs). `hda_cmd()`
+  saves flags, sends, drains until its answer, restores -- a codec
+  answers within a frame, so the window is short; and a jack event
+  drained inside somebody else's window is flagged and handled after.
+- **AMPLIFIER CAPABILITIES ARE 6:0 OFFSET, 14:8 STEPS, 22:16 STEP SIZE,
+  31 MUTE.** Reading offset and steps the other way round set "0 dB" to
+  step 3 of 74, and the tone reached the recording at 4% amplitude --
+  found by the host-side oracle, not by any KTEST, since the KTEST
+  compared the amplifier against the driver's own arithmetic.
+- **THE VOLUME TAPER IS `sound_usb.c`'s: 0..100 LINEAR IN dB ACROSS
+  40 dB, 0 IS MUTE.** Linear in amplifier STEPS was the first version,
+  and on the laptop's 74-step, 1 dB amplifier that put 40% at -44 dB --
+  "nothing at all" from the speakers. The setting has to mean the same
+  thing on every card; `ac97.c` still does not follow, and the roadmap
+  says so. On a laptop's speakers the audible range starts around 40%.
+- **HEADPHONES SWITCH THE PINS, NOT THE STREAM.** Plugging in enables
+  the jack's pin and disables the speaker's; both routes share the DAC
+  and the volume, so nothing else moves. The jack reports through an
+  unsolicited response (`GCTL.UNSOL`, `SET_UNSOL_ENABLE` on the pin) and
+  the handler re-reads `GET_PIN_SENSE` rather than trusting the event's
+  payload, which the spec leaves to the vendor. Confirmed both ways on
+  the laptop; QEMU has no jack to test it with.
+
 ## THERE IS A NETWORK DEVICE CLASS, THE STACK IS IN THE KERNEL, AND THE RECEIVE PATH IS SPLIT ACROSS AN INTERRUPT
 
 `kernel/drivers/net/` is the hardware side and `kernel/net/` is the

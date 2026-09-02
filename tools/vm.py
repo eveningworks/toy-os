@@ -363,6 +363,12 @@ def cmd_start(args):
             usb_dev = "usb-audio,id=usbaud,bus=xhci.0,audiodev=snd1"
         if audio in ("ac97", "both"):
             cmd += ["-device", "AC97,audiodev=snd0"]
+        # Intel HD Audio: the controller plus QEMU's output-only codec.
+        # ich9 rather than ich6 because it is the shape of a PCH's, and
+        # both carry MSI, which is the path the driver takes first.
+        if audio == "hda":
+            cmd += ["-device", "ich9-intel-hda,id=hda",
+                    "-device", "hda-output,bus=hda.0,audiodev=snd0"]
         if audio in ("usb", "both"):
             cmd += ["-device", usb_dev]
     # WHICH NIC, and why the default is spelled out rather than left
@@ -696,7 +702,7 @@ def main():
                          "file (--audio-wav then holds the AC97's). Without "
                          "it both cards share one recording, which cannot say "
                          "which of them played.")
-    ap.add_argument("--audio", choices=("ac97", "usb", "both", "none"),
+    ap.add_argument("--audio", choices=("ac97", "hda", "usb", "both", "none"),
                     default=None,
                     help="which sound card to attach; also what --audio-wav "
                          "records from. Defaults to `ac97` WITH --audio-wav "

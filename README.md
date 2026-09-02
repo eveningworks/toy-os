@@ -106,7 +106,8 @@ QEMU, and it does not stop at "hello world from the kernel":
   where the desktop learned to give a right-click to the application
   under the cursor instead of keeping it for the window menu — and
   **DOOM**, with sound and music, in a window like any other app.
-- **Sound, and the kernel does not mix it** — an AC'97 **and a USB
+- **Sound, and the kernel does not mix it** — an AC'97, **Intel HD
+  Audio** (a laptop's own speakers and headphone jack) **and a USB
   audio** driver behind a `sound_device` registry, and a PCM stream that
   is a **mapped ring**
   rather than a `write()` call: the app writes samples ahead of the
@@ -334,6 +335,7 @@ make run VGA=virtio     #    the virtio-gpu driver
 make run VGA=vmware     #    the adapter with a hardware cursor
 make run INPUT=virtio   #    virtio keyboard, mouse and tablet
 make run AUDIO=1        # an AC97 -- needed for any sound at all
+make run AUDIO=hda      # ...or an Intel HD Audio controller with an output codec
 make run AUDIO=usb      # ...or a USB audio card, on an xHCI controller
 make run AUDIO=both     #    both, so the device picker has something to pick
 make run WINDOW=full    # full-screen, pixel-exact, no decorations
@@ -516,8 +518,8 @@ check that finds real bugs and one that reports twenty-two imaginary
 ones. Apps declare a layout rather than coordinates, and a page too big
 for its window scrolls.
 
-**Sound.** An AC'97 and a USB Audio Class 1.0 driver behind a
-`sound_device` registry, and a PCM
+**Sound.** An AC'97, an Intel HD Audio and a USB Audio Class driver
+behind a `sound_device` registry, and a PCM
 stream that is a **mapped ring** rather than a `write()` call — a control
 page plus 64 KiB of samples at a fixed address, the app writing ahead of
 the hardware and the kernel publishing the play position on each

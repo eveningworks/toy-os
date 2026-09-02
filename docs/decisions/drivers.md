@@ -1530,6 +1530,53 @@ halts an endpoint rather than STALL alone. That bug was reachable by
 any device that refuses any request -- it had simply never been reached,
 because QEMU's other devices refuse nothing.
 
+## Intel HDA: a controller and the generic widget walk, with no quirk table
+
+The laptop's own sound card is HD Audio, and the question was how much
+of Linux's HDA stack to copy. Linux is `snd-hda-intel` (the controller),
+a codec bus, a generic parser that walks the codec's widget graph, and
+then a vendor module per codec family carrying the quirks -- the Realtek
+one alone is ~12k lines of "this laptop needs GPIO 2 for its amplifier".
+Windows is the same shape: `hdaudbus.sys`, a generic `hdaudio.sys`, and
+the vendor's driver on top.
+
+**Copy the shape, not the size.** `hda.c` is the controller plus the
+generic walk: choose the output pin from what its default configuration
+says it is wired to, route it back to a DAC through the connection
+lists, unmute every amplifier on the way, set EAPD wherever a pin says it
+has one. No quirk table, because a quirk table with one entry is a
+guess and one with none is honest. The bar for adding an entry is a
+machine that is silent under the walk, diagnosed from `hdadump` -- which
+is why the dump exists as a boot word rather than a debug build.
+
+**Pre-emptive EAPD was the one deliberate deviation** from "do nothing
+speculative": the external amplifier enable is what most laptop speakers
+sit behind, Linux sets it for nearly every Realtek and Conexant codec,
+and it costs nothing on a pin that has no amplifier. The maintainer chose
+it over "report and stop" before the first hardware run, and the test
+laptop's Conexant CX20751 played on the first try.
+
+**Every HDA controller is claimed, only an analog output is registered.**
+A laptop has two controllers (the PCH's, and the GPU's for HDMI/DP), and
+they are the same PCI class. Registering the display one would put a
+device in `lsdev` and the volume flyout that plays nothing; skipping it
+by device id would be a list that rots. So both are brought up, the walk
+decides, and the one with no analog route is logged and put back into
+reset. HDMI audio is a roadmap item because its codec needs the GPU's
+power well (Linux's `snd_hdac_i915` binding), not because the class
+driver is missing anything.
+
+**The volume taper is shared with the USB driver, not invented here.**
+The first version mapped the percentage linearly onto amplifier steps,
+which on a 74-step, 1 dB amplifier put 40% at -44 dB -- and the
+maintainer heard nothing. `sound_usb.c` had already settled the
+convention (0..100 linear in dB across 40 dB, 0 is mute, "the range a
+physical knob covers"); one setting has to mean one thing on every card,
+so `hda.c` follows it. What was NOT done is a perceptual curve (ALSA's
+`-M` and PulseAudio use a cubic mapping, 60·log10(v)), because two
+drivers agreeing beats one driver being more correct -- that move is the
+roadmap's "one taper for every card".
+
 ## Sound device selection: the first one discovered, until somebody chooses
 
 With two cards in a machine the question "which one plays?" has to have

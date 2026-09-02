@@ -424,7 +424,7 @@ help:
 	@echo "   Which driver actually claimed the display: type lsdev at the serial"
 	@echo "   debug console. lspci only says the device is on the bus."
 	@echo ""
-	@echo "   make run AUDIO=1|usb|both PC speaker + a sound card (AUDIODEV=alsa etc.)"
+	@echo "   make run AUDIO=1|hda|usb|both PC speaker + a sound card (AUDIODEV=alsa etc.)"
 	@echo "   make run WINDOW=full      start full-screen -- no decorations, so a guest"
 	@echo "                             mode as big as the monitor is pixel-exact AND fits"
 	@echo "   make run WINDOW=fit       a resizable window the guest is SCALED into (gtk)."
@@ -1728,9 +1728,9 @@ QEMU_NET = $(if $(filter none,$(NET_KIND)),-nic none,\
 # host (`qemu-system-x86_64 -audiodev help` lists them).
 AUDIODEV ?= pa
 # A NAME rather than a boolean, for the reason DISK/VGA/INPUT are:
-# `AUDIO=usb` is a third value. `AUDIO=1` still means the AC'97, so
+# `AUDIO=usb` and `AUDIO=hda` are the others. `AUDIO=1` still means the AC'97, so
 # every existing invocation is unchanged.
-AUDIO_KIND = $(if $(filter usb both,$(AUDIO)),$(AUDIO),$(if $(AUDIO),ac97,none))
+AUDIO_KIND = $(if $(filter usb both hda,$(AUDIO)),$(AUDIO),$(if $(AUDIO),ac97,none))
 # USB audio needs a controller. Derived rather than made the caller's
 # problem -- and skipped when USB= already attached one, since a second
 # `-device qemu-xhci,id=xhci` is a duplicate-id error, not a second bus.
@@ -1740,7 +1740,7 @@ AUDIO_KIND = $(if $(filter usb both,$(AUDIO)),$(AUDIO),$(if $(AUDIO),ac97,none))
 # Without it the controller is attached twice and QEMU refuses the
 # duplicate id.
 AUDIO_XHCI = $(strip $(if $(filter usb both,$(AUDIO_KIND)),$(if $(filter xhci xhci+mouse xhci+hub,$(USB_KIND)),,yes),))
-QEMU_AUDIO = $(if $(filter-out none,$(AUDIO_KIND)),               -audiodev $(AUDIODEV)$(COMMA)id=snd0 -machine pcspk-audiodev=snd0                $(if $(AUDIO_XHCI),-device qemu-xhci$(COMMA)id=xhci,)               $(if $(filter ac97 both,$(AUDIO_KIND)),                 -device AC97$(COMMA)audiodev=snd0,)               $(if $(filter usb both,$(AUDIO_KIND)),                 -device usb-audio$(COMMA)id=usbaud$(COMMA)bus=xhci.0$(COMMA)audiodev=snd0,),)
+QEMU_AUDIO = $(if $(filter-out none,$(AUDIO_KIND)),               -audiodev $(AUDIODEV)$(COMMA)id=snd0 -machine pcspk-audiodev=snd0                $(if $(AUDIO_XHCI),-device qemu-xhci$(COMMA)id=xhci,)               $(if $(filter ac97 both,$(AUDIO_KIND)),                 -device AC97$(COMMA)audiodev=snd0,)               $(if $(filter usb both,$(AUDIO_KIND)),                 -device usb-audio$(COMMA)id=usbaud$(COMMA)bus=xhci.0$(COMMA)audiodev=snd0,)               $(if $(filter hda,$(AUDIO_KIND)),                 -device ich9-intel-hda$(COMMA)id=hda -device hda-output$(COMMA)bus=hda.0$(COMMA)audiodev=snd0,),)
 
 QEMU_EXTRA =
 

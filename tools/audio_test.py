@@ -23,7 +23,12 @@ the mixer and the sink. That second one is the sharper check: the
 fixture is 44.1 kHz, so a build that did not resample at all would play
 it 8.8% sharp (1088 Hz), which the tolerance here is set to catch.
 
-    python3 tools/audio_test.py [--instance N] [--keep]
+    python3 tools/audio_test.py [--instance N] [--keep] [--card ac97|hda]
+
+`--card hda` boots QEMU's `ich9-intel-hda` + `hda-output` instead of the
+AC97 and expects the `hda` driver and KTESTs -- the same oracle, pointed
+at the other PCI sound driver. Everything after the driver line is the
+core and the library, and it is the same code either way.
 
 On demand, not in the gate: it boots its own guest with extra hardware.
 """
@@ -131,7 +136,14 @@ def main():
     ap.add_argument("--instance", type=int, default=0)
     ap.add_argument("--keep", action="store_true",
                     help="keep the recorded wav and print its path")
+    ap.add_argument("--card", choices=("ac97", "hda"), default="ac97",
+                    help="which PCI sound card to attach and which driver "
+                         "to expect (default ac97)")
     args = ap.parse_args()
+    card = args.card
+    # The driver's boot line and the core's registration line name the
+    # device: `ac97` for the AC'97, `hda0` for the first HDA controller.
+    devname = "ac97" if card == "ac97" else "hda0"
     n = args.instance
     sock = ".vm.serial" if n == 0 else f".vm.{n}.serial"
 
@@ -149,6 +161,7 @@ def main():
                         "--instance", str(n), "stop"], capture_output=True)
         return subprocess.run([sys.executable, os.path.join(HERE, "vm.py"),
                                "--instance", str(n), "--disk", img,
+                               "--audio", card,
                                "--audio-wav", recording, "start"], cwd=REPO)
 
     def halt():
@@ -156,7 +169,7 @@ def main():
                         "--instance", str(n), "stop"], capture_output=True)
 
     if boot(wav_path).returncode != 0:
-        res.check("the guest booted with an AC97 attached", False)
+        res.check(f"the guest booted with an {card} attached", False)
         return 1
 
     try:
@@ -166,13 +179,13 @@ def main():
 
         dmesg = dbg.send("sh dmesg") or ""
         res.check("the driver claimed the controller",
-                  "ac97:" in dmesg and "sound: ac97 registered" in dmesg,
+                  f"{devname}:" in dmesg and f"sound: {devname} registered" in dmesg,
                   next((line.strip() for line in dmesg.splitlines()
-                        if "ac97:" in line), "no ac97 line"))
+                        if f"{devname}:" in line), f"no {devname} line"))
 
         # The KTESTs that skip on every other boot -- 0 skipped is the
         # load-bearing half (the ahci_test lesson).
-        for suite in ("ac97", "sound"):
+        for suite in (card, "sound"):
             kt = dbg.send(f"sh ktest {suite}") or ""
             res.check(f"ktest {suite} passes with 0 skipped",
                       "PASSED" in kt and ", 0 skipped" in kt,

@@ -115,6 +115,12 @@ void sound_process_gone(uint64_t pml4_phys);
 // controller is the common case, not an error.
 void ac97_init(void);
 
+// Intel HD Audio's (kernel/drivers/sound/hda.c), same shape: every
+// class-0x0403 controller is brought up, and a codec is registered only
+// when it has an ANALOG output route -- a display-audio controller's
+// HDMI-only codec is claimed and left silent.
+void hda_init(void);
+
 // The two syscall handlers (rows in syscall_table.c).
 struct syscall_ctx;
 int sys_snd_open(struct syscall_ctx *c);

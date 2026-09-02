@@ -1927,6 +1927,12 @@ window without going through it will find its layout polls timing out.
   reject exactly that while accepting the interpolator's own error.
   Nothing else in this repo can see a broken resampler -- `/tests/
   usnd_test` checks frame counts, which a wrong-rate build gets right.
+  **`--card hda` runs the same three boots against QEMU's
+  `ich9-intel-hda` + `hda-output`** and expects the `hda` driver and
+  KTESTs; `ondemand_sweep.py` names both rows. The oracle found the
+  HDA driver's first real bug in one run -- an amplifier-capability
+  field read in the wrong order set "0 dB" to -53 dB, and a tone at
+  4% amplitude measured as silence.
 - **`usb_audio_test.py`** -- USB Audio Class 1.0 playback, on the same
   host-side oracle `audio_test.py` uses, pointed at a different bus. The
   guest plays A440 through an isochronous OUT endpoint and QEMU's wav

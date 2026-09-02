@@ -133,6 +133,7 @@ TOOLS = [
     # the only run in which the ac97 KTESTs do not skip, which is why
     # its own report treats "0 skipped" as an assertion.
     ("audio",       "audio_test.py",           "AC97, the PCM ring and a WAV file",  True,  None,                   False),
+    ("audio_hda",   "audio_test.py --card hda", "Intel HDA through the same oracle", True,  None,                   False),
     # Three guests, and the only run in which anything reaches an
     # isochronous endpoint. Its middle phase gives each card its own wav
     # recording, which is the only way "which device played" is an
@@ -295,6 +296,9 @@ def vm(*args):
 
 def run_one(entry, timeout, logdir):
     name, script, _what, _serial, _needs, wants_vm = entry
+    # A row may carry arguments after the script name (`audio_test.py
+    # --card hda`): one tool, run twice against two cards.
+    script, *extra = script.split()
     path = os.path.join(HERE, script)
 
     # ALWAYS stop first, whatever this tool needs. A guest left running
@@ -306,7 +310,7 @@ def run_one(entry, timeout, logdir):
 
     t0 = time.time()
     try:
-        r = subprocess.run([sys.executable, path], cwd=REPO,
+        r = subprocess.run([sys.executable, path, *extra], cwd=REPO,
                            capture_output=True, text=True, timeout=timeout)
         out, rc = r.stdout + r.stderr, r.returncode
     except subprocess.TimeoutExpired as e:
