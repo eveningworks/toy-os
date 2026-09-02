@@ -2522,3 +2522,12 @@ NEEDS THE WHOLE SUITE, NOT THE SUBSYSTEM'S.**
   dangling mapping). Only breaking both reproduced the original defect.
   Three arms, three different answers, and the first one alone would
   have been read as "the test cannot fail".
+- **NEVER REBUILD WHILE `gui_regress.py` IS RUNNING.** `make all`
+  rewrites `build/kernel.bin`, `iso_guard.py` then refuses every guest
+  launched after it, and the run ends with a dozen or more tools failing
+  as `the guest never started: iso_guard: REFUSING to boot a stale
+  image` -- a list long enough, and containing enough tools the change
+  could not touch, to read as a catastrophic regression. The tools that
+  had already launched pass, so the split looks meaningful and is not.
+  It cost a full suite run. Read one failing tool's line before
+  believing any mass failure: the guard names itself.
