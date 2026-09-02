@@ -856,6 +856,19 @@ raise but a direct-map project, and that `kfree()`'s red-zone detection
 silently depends on heap pointers fitting in 32 bits. Answer with the
 dependency, not with enthusiasm.
 
+**2026-09-02 (the laptop's GPU: an Intel display driver, brightness,
+a triple-buffered page flip, and runtime mode switching). Read before
+touching `kernel/drivers/display/`, `win_surface.c`, or the present
+path in `ugfx.c`.** The state and the design calls are in
+`references/session-design.md`; the five near-misses (rebuilding under
+a running suite, a probe contaminating a guest, a persisted setting
+outliving a crashed tool, a KTEST acting under a live compositor, and
+the laptop's wrong `sum`) in `session-testing.md`; and the one lesson
+that came from the maintainer's eyes rather than any tool -- the
+two-buffer flip that tore -- in `session-diagnosis.md`. What is next is
+marked `**NEXT**` on `docs/roadmap.md`: modesetting on the Intel
+driver, EDID readout first.
+
 ## Verification habits this project rewards
 
 Learned repeatedly, and cheap to repeat:

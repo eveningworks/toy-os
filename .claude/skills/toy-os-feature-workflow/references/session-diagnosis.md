@@ -1417,3 +1417,20 @@ allocating would have mapped it, because identity was impossible; the
 real answer (ioremap into a kernel arena) came from converting the hex
 to a size and comparing it with `uaddr.h`. Two minutes of arithmetic
 before the second theory.
+
+**2026-09-02 (the display day). A REPORT FROM THE USER IS A
+MEASUREMENT: "a lot more tearing now when moving windows" located the
+flaw in one sentence.** The two-buffer flip's wait guarded the DSPSURF
+write, not the compositor's drawing, so the buffer handed back was the
+one on the panel until vblank. Nothing in the suite could see it (QEMU
+does not tear) and the counters said every present flipped. Believe a
+by-eye report on the laptop over a green suite for anything about the
+present path, and go straight to what the design guarantees between
+"buffer handed back" and "buffer drawn into".
+
+**And a driver's own log line is what made a new machine safe to
+touch:** the Intel probe's first flash changed nothing and printed the
+plane, cursor, backlight and power-well registers; every write path was
+then written against those numbers, and the first write build worked.
+On hardware nobody can emulate, a read-only probe flash is the cheapest
+experiment there is.

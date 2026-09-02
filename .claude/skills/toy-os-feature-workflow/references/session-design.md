@@ -2216,3 +2216,54 @@ driver that hands an address to a device.**
 - **About and `meminfo` say what a PROCESS can get**: `QUERY_MEMINFO`
   grew `frame_total_high`/`frame_free_high` (appended), About subtracts
   them until user pages move, ramfs budgets from the DMA32 zone.
+
+**2026-09-02 (the laptop's GPU: an Intel display driver, brightness,
+a page flip, and runtime mode switching -- four commits in one day).**
+
+Where the project stands after it:
+
+- **`intel_display.c` drives the laptop's Broadwell GPU** by READING
+  OUT the mode the firmware lit the panel with (i915's fastboot without
+  the modeset fallback) and adding only what cannot black the screen:
+  the cursor plane, the backlight PWM, the power well, and three
+  scanouts for a flip. It never programs a pipe; that is stage 2.
+- **`DISPLAY_CAP_BACKLIGHT` and `DISPLAY_CAP_FLIP`** joined the display
+  contract, each with a second real implementer (the setting
+  `system.brightness` sits on the first; virtio-gpu got the second so
+  the headless suite could see it).
+- **The screen changes mode at runtime**: `system.resolution` ->
+  `screen_set_mode()` (`kernel/core/screen.c`), the one ordered
+  function, then `WIN_EV_SCREEN` and the compositor's
+  `wm_screen_changed()`. Every QEMU adapter advertises MODESET now, and
+  bochs ADOPTS GRUB's mode instead of declining.
+
+**THE DESIGN LESSON THAT COST A REPORT FROM THE MAINTAINER: a flip
+without a vblank event needs THREE buffers and no wait.** The first
+page flip had two scanouts and waited for the previous flip at the
+start of the next present. That guards the register write, not the
+drawing -- the compositor had already drawn into the buffer it was
+handed, which with two buffers is the LIVE one until the flip lands --
+and window drags tore worse than before any flip existed. Mailbox
+triple buffering (DWM's shape) is what is correct with polling: the
+flip never waits, a later flip replaces a pending one, and the buffer
+handed back is neither live nor pending. Say what real systems do
+BEFORE choosing; this one was in the list and was not chosen.
+
+**A mode change is a kernel setting, not a compositor request, because
+the kernel owns the framebuffer here.** Linux puts modesetting in the
+compositor (KMS); Windows lets any process ask and tells DWM. toy-os
+grants the compositor a mapping of kernel-allocated scanouts, and the
+console draws into the first, so the Windows shape fits: the registry
+gives the setting a System Settings row, `config set`, persistence and
+an `unavailable` sentence for free. **The grant never shrinks**: the
+compositor is a process preempted mid-blit, so every framebuffer slot
+stays mapped up to its high-water mark, padded with one writable
+scratch page -- `comp_span`'s rule for a client window, applied to the
+screen.
+
+**A convention was superseded rather than deleted.** bochs's decision
+entry ("DECLINES unless it can improve the mode") was right when a claim
+meant re-programming a live console; it became wrong the day claiming
+was what made a later mode change possible. The entry got a
+*superseded in part* note pointing at the new one, and the reasoning
+that still holds (write nothing on adoption) stayed.

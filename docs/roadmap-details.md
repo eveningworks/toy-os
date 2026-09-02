@@ -3841,12 +3841,36 @@ is the black-screen-on-boot trap the brightness floor exists to avoid.
 
 ### Intel modesetting: EDID over eDP AUX, the PLLs and the transcoder -- needs runtime mode switching above it first
 
-Thousands of lines in i915 terms, and worth nothing until the layer
-above can survive a mode change (`gfx.c`'s back buffer and every
-compositor mapping are sized at their own init). The order is: runtime
-mode switching in the display layer, then EDID readout, then the DDI
-programming. Every write is a black-screen risk and only the laptop can
-show it.
+Runtime mode switching above it landed on 2026-09-02, so this is
+buildable now. The staged plan, each stage a flash the maintainer can
+look at:
+
+1. **EDID over the eDP AUX channel, read-only.** DDI A's AUX registers
+   (`DDI_AUX_CTL`/`DDI_AUX_DATA` at 0x64010, gen8) speak DisplayPort
+   native AUX; an I2C-over-AUX read of address 0x50 returns the panel's
+   128-byte EDID. Log the detailed timing (pixel clock, h/v active,
+   blanking, sync) and the panel's name. Nothing written but AUX
+   commands, which cannot disturb the pipe. Then `mode_count`/`mode_at`
+   can list the native mode alone, honestly.
+2. **Read out what the firmware programmed** for the same mode --
+   `PIPE_HTOTAL/VTOTAL/HSYNC/VSYNC`, `PIPESRC`, the transcoder's DDI
+   function control, the WRPLL/SPLL registers -- and compare it with
+   the EDID's timing. That comparison is the check that the driver
+   understands the register map before it writes any of it.
+3. **Re-program the native mode** through the full sequence (panel
+   power down, pipe off, PLL, timings, DDI, pipe on, panel power up,
+   backlight) and confirm the panel comes back identical. Only then is
+   a DIFFERENT mode a register change rather than a design change.
+4. **A smaller mode on the panel**, which needs the panel fitter
+   (`PF_CTL`) since an eDP panel shows one native timing; and after
+   that HDMI/DP on DDI B-D for an external monitor, which is where EDID
+   readout of a second display and hotplug arrive.
+
+Every stage past the first is a black-screen risk recovered by reboot
+over `tools/remote.py`, and only the laptop can show any of it. The
+QEMU suite can cover none of it; what it can cover is that the
+`resolution` setting's plumbing behaves when the Intel driver starts
+listing more than one mode.
 
 ### Intel blitter acceleration: `DISPLAY_CAP_ACCEL_FILL`/`_COPY` on the BCS ring
 

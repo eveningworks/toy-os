@@ -63,6 +63,16 @@ def tail(out, n):
     return "\n".join("      " + ln for ln in lines[-n:])
 
 
+def _stash_ref_for(sha):
+    """The stash@{n} ref whose commit is `sha`, or None."""
+    out = git("stash", "list", "--format=%gd %H", check=False) or ""
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1] == sha:
+            return parts[0]
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__.splitlines()[0],
@@ -128,6 +138,7 @@ def main():
     print(f"predates: stashed as {tag} ({stash_sha[:10]})")
 
     head_rc, head_out = None, ""
+    restore_failed = False
     try:
         if args.build:
             rc, _ = run(args.build, "HEAD")
@@ -148,13 +159,22 @@ def main():
             print(f"\npredates: COULD NOT RESTORE automatically.\n{r.stderr.strip()}\n"
                   f"Your work is safe in the stash. Recover it with:\n"
                   f"    git stash apply {stash_sha}", file=sys.stderr)
-            return 2
-        # Dropped only after a CLEAN apply, and never on the failure
-        # path above -- which returns early with the stash intact and
-        # the recovery command printed. A conflicted apply is exactly
-        # when the stash is the only copy of something.
-        git("stash", "drop", stash_sha, check=False)
-        print(f"predates: working tree restored ({n_files} file(s)), stash dropped")
+            restore_failed = True   # returned below: a `return` inside finally swallows exceptions
+        else:
+            # Dropped only after a CLEAN apply, and never on the failure
+            # path above -- which leaves the stash intact with the
+            # recovery command printed. A conflicted apply is exactly
+            # when the stash is the only copy of something. `git stash
+            # drop` wants a stash@{n} REF, not a SHA: it accepted the SHA
+            # silently and dropped nothing, which is how four predates
+            # stashes accumulated over three days.
+            ref = _stash_ref_for(stash_sha)
+            if ref:
+                git("stash", "drop", ref, check=False)
+                print(f"predates: working tree restored ({n_files} file(s)), stash dropped")
+            else:
+                print(f"predates: working tree restored ({n_files} file(s)); "
+                      f"stash {stash_sha[:10]} not found in the list, left as is")
 
         # AND REBUILT, because restoring the SOURCE does not restore the
         # ARTIFACTS: build/ and any boot image still hold what HEAD
@@ -167,6 +187,9 @@ def main():
             print("predates: rebuilding the working tree "
                   "(HEAD's build artifacts are still in place)")
             run(args.build, "restore")
+
+    if restore_failed:
+        return 2
 
     print()
     print(f"  HEAD ({head}):  exit {head_rc}")

@@ -2531,3 +2531,42 @@ NEEDS THE WHOLE SUITE, NOT THE SUBSYSTEM'S.**
   had already launched pass, so the split looks meaningful and is not.
   It cost a full suite run. Read one failing tool's line before
   believing any mass failure: the guard names itself.
+
+**2026-09-02 (the display work). FIVE WAYS A DAY OF GREEN RUNS NEARLY
+LIED, and one measurement that cannot be automated.**
+
+- **REBUILDING WHILE THE SUITE RUNS INVALIDATES THE SUITE.** A `make
+  all` for a KTEST file during `gui_regress` tripped `iso_guard` on
+  every tool that launched afterwards -- 19 "failures" reading as a
+  regression. Everything that ran before the rebuild passed. Do not
+  touch the tree while a suite holds `disk.img`; write docs instead.
+- **A PROBE OF YOUR OWN CONTAMINATES THE GUEST FOR EVERY LATER TOOL.**
+  Three `gui click` presses on the Start button left it OPEN, and the
+  brightness tool that ran next on that guest failed its first two
+  checks. The menubar tool then failed once in that same contaminated
+  guest and never again in four fresh boots plus two paired runs, with
+  `predates.py` finding HEAD and the working tree both green. Recorded
+  in `docs/bugs.md` as unattributed. Reset what a probe changed, or run
+  the tool on a fresh guest, before believing a failure.
+- **A TOOL THAT PERSISTS A SETTING MUST RESTORE IT IN A `finally`.** The
+  mode-change tool crashed once between switching to 1600x900 and
+  switching back; the stored resolution then booted every later guest
+  at 1600x900 (`make iso` syncs, never wipes `/etc`), and the next run
+  SKIPPED as "already at the target". The rule about a setting changing
+  the machine for every later tool now applies to every later BOOT.
+- **A KTEST THAT ACTS ON THE SCREEN MUST SKIP WHILE A COMPOSITOR HOLDS
+  IT.** The virtio flip KTEST counted commands and flipped scanouts
+  under a live desktop presenting concurrently: red inside
+  `virtio_gpu_test.py`, green from `vm.py exec` before the desktop was
+  up. `win_surface_holder()` is the predicate. And the tool's own "did
+  not all skip" check then had to allow the one legitimate skip.
+- **THE LAPTOP'S `sum` IS WRONG ON A LARGE FILE.** A flashed kernel's
+  crc32 disagreed with the host's while a 10-byte file agreed;
+  `remote.py get` plus `cmp` showed zero differing bytes. Verify a
+  flash by pulling it back, not by the checksum (`docs/bugs.md`).
+
+**The measurement that cannot be automated:** tearing. `guictl fb`
+proves flips happen; only the maintainer dragging a window says
+whether they are tear-free, and the first design was wrong exactly
+there. For a change to the present path, ask them to look BEFORE the
+long gate, and say plainly in the commit that it was not measured.
