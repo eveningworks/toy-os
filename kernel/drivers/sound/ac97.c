@@ -84,9 +84,11 @@ static void ac97_irq(uint64_t *regs) {
 
 static int ac97_start(void) {
     // Reset the box, then arm it. RR self-clears when the reset is done.
+    // A SPIN COUNT, not a tick deadline: this runs from SND_CTL_START,
+    // a syscall, where interrupts are off and pit_ticks() stands still.
     outb(g_nabm + PO_CR, CR_RR);
-    uint64_t deadline = pit_ticks() + 10;
-    while ((inb(g_nabm + PO_CR) & CR_RR) && pit_ticks() < deadline) { }
+    uint32_t spins = 0;
+    while ((inb(g_nabm + PO_CR) & CR_RR) && ++spins < 1000000u) { }
     if (inb(g_nabm + PO_CR) & CR_RR) return -1;
 
     outl(g_nabm + PO_BDBAR, (uint32_t)g_bdl_phys);

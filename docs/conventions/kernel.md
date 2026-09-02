@@ -2038,6 +2038,29 @@ measure within bursts and total the tone, never trust the file's
 timeline. The ac97 KTESTs skip on every boot but audio_test's, which
 is why its "0 skipped" assertion is load-bearing (the ahci lesson).
 
+## A SYSCALL HANDLER RUNS WITH INTERRUPTS OFF, AND A WAIT ON `pit_ticks()` THERE NEVER ENDS
+
+`context_switch.asm` re-enables interrupts on the way OUT of a syscall
+and nothing does so on the way in, so every handler -- and everything a
+handler calls, which includes every `sound_device.start()`/`stop()`,
+every setting's `apply`, every fd release -- runs with IF clear. A
+tick deadline in that context is not a deadline: `pit_ticks()` stands
+still, the loop exits only when the hardware condition comes true, and
+if it never does the machine is dead with no panic and no log -- the
+keyboard, the mouse and the network all stop at once, which reads as a
+hardware failure. It has hung the test laptop twice, once from
+`sound_usb.c`'s teardown and once from a `kernel.hda_tone` that slept
+three seconds inside `config set`.
+
+Two rules. **Bound a hardware wait by a SPIN COUNT** (`hda.c`'s
+`HDA_SPIN_MAX`, xhci's `XHCI_POLL_BACKSTOP`) when the caller can be a
+syscall, never by ticks. **Anything that must take real time in a
+syscall is done by the INTERRUPT HANDLER counting it down**, the way the
+diagnostic tone now stops itself after N completions -- a syscall
+returns at once and the hardware keeps the time. `kernel_main()` is
+the one place a tick wait is honest, and only because it runs before
+the first process.
+
 ## INTEL HDA IS THE THIRD SOUND DEVICE, ITS CODEC IS ROUTED BY A GENERIC WALK, AND THE VOLUME TAPER IS THE USB DRIVER'S
 
 `kernel/drivers/sound/hda.c` -- the laptop's own sound card. Matched by
@@ -2082,6 +2105,18 @@ AUDIO=hda`) and a PCH's controller claim alike. Six things to know:
   "nothing at all" from the speakers. The setting has to mean the same
   thing on every card; `ac97.c` still does not follow, and the roadmap
   says so. On a laptop's speakers the audible range starts around 40%.
+- **CLEAR NOSNOOP ON AN INTEL CONTROLLER, OR THE DMA PLAYS STALE RAM.**
+  A PCH's HDA has a NOSNOOP bit in its DEVC config register (0x78, bit
+  11) and firmware leaves it SET: the engine then reads memory without
+  snooping the CPU caches and plays whatever has been evicted so far --
+  a kernel-written sine came out of the test laptop as "continuous
+  clapping", an app's refills as crackle, and QEMU (no cache to be
+  stale) showed nothing. `hda.c` clears it, as Linux's `azx_init_pci()`
+  does; the alternative, mapping the ring uncached, would have to reach
+  the ring's ring-3 mapping too. **`config set kernel.hda_tone on`** is
+  the diagnostic that found it: three seconds of a kernel-written tone
+  with no app, no zeroing and no interrupts in the loop, so what is
+  wrong with it is wrong in DMA, stream or codec alone.
 - **HEADPHONES SWITCH THE PINS, NOT THE STREAM.** Plugging in enables
   the jack's pin and disables the speaker's; both routes share the DAC
   and the volume, so nothing else moves. The jack reports through an

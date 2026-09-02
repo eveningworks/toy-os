@@ -1773,7 +1773,10 @@ CX20751 (`14f1:510f`): speakers, and the headphone jack switching
 both ways through unsolicited responses. The laptop's display-audio
 controller (`8086:160c`) is claimed too and its codec answers nothing
 useful without the GPU's power well, which is the HDMI item above.
-`hdadump` on the GRUB line prints the widget graph.
+`hdadump` on the GRUB line prints the widget graph; `config set
+kernel.hda_tone on` plays a kernel-written tone with nothing else in the
+loop, which is what found the PCH's NOSNOOP bit (clean sine in, clapping
+out) after two refill-path theories had been flashed and withdrawn.
 
 BUILT through the PCM path, 2026-08-29: `kernel/drivers/sound/` holds
 the class registry (`sound.c`, one exclusive stream, the shared ring of

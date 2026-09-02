@@ -121,6 +121,11 @@ void ac97_init(void);
 // HDMI-only codec is claimed and left silent.
 void hda_init(void);
 
+// The kernel.hda_tone tunable: three seconds of a kernel-written tone
+// through the registered HDA controller, no app and no zeroing -- the
+// half of the path a crackle is diagnosed against.
+void hda_diag_tone(void);
+
 // The two syscall handlers (rows in syscall_table.c).
 struct syscall_ctx;
 int sys_snd_open(struct syscall_ctx *c);

@@ -1566,6 +1566,22 @@ reset. HDMI audio is a roadmap item because its codec needs the GPU's
 power well (Linux's `snd_hdac_i915` binding), not because the class
 driver is missing anything.
 
+**NOSNOOP is cleared rather than the ring mapped uncached.** The laptop
+played a kernel-written sine as "continuous clapping" and music as
+crackle, with QEMU clean throughout: firmware leaves the PCH's DEVC
+NOSNOOP bit set, so the DMA engine read RAM without snooping the caches
+and played whatever had been evicted. Linux has two answers -- clear the
+bit (`azx_init_pci()`, the default on Intel) or allocate the buffers
+uncached (`snoop=0`, for controllers that cannot snoop). Clearing wins
+here because the ring is ALSO mapped into the app that writes it, and
+an uncached mapping would have to be made twice and kept in step. Found
+by splitting the path in half: `kernel.hda_tone` plays a ring the kernel
+filled once, with no app, no zeroing and no interrupts, so a bad sound
+there is DMA, stream or codec alone -- two plausible refill-path theories
+(LPIB reading ahead; BCIS firing before the last bytes are fetched) were
+built, flashed and withdrawn before it. The lesson is the repo's own:
+a mechanism that explains the symptoms is not the one that caused them.
+
 **The volume taper is shared with the USB driver, not invented here.**
 The first version mapped the percentage linearly onto amplifier steps,
 which on a 74-step, 1 dB amplifier put 40% at -44 dB -- and the

@@ -48,6 +48,7 @@
 #include "ktest.h"
 #include "driver.h"
 #include "multiboot.h" // multiboot_cmdline() -- the `hdadump` boot word
+#include "fixed.h"     // fx_sin, for the kernel.hda_tone diagnostic
 #include <stdint.h>
 
 DRIVER_DECLARE("hda", "sound", "Intel High Definition Audio");
@@ -73,6 +74,9 @@ DRIVER_DECLARE("hda", "sound", "Intel High Definition Audio");
 #define HDA_RIRBSTS   0x5D // 8, RW1C
 #define HDA_RIRBSIZE  0x5E // 8
 #define HDA_SD_BASE   0x80 // stream descriptors, 0x20 apart, inputs first
+// PCI config space, Intel SCH/PCH controllers only.
+#define HDA_INTEL_DEVC         0x78
+#define HDA_INTEL_DEVC_NOSNOOP (1u << 11)
 
 #define GCTL_CRST   0x001
 #define GCTL_UNSOL  0x100
@@ -243,6 +247,10 @@ struct hda_ctrl {
 
     uint8_t msi_vector, irq;
     uint32_t irqs, jack_events;
+    uint32_t chunk;    // the chunk the engine is in, counted from BCIS
+    uint32_t fifoe, dese; // stream error counts, for the log
+    uint32_t diag;     // kernel.hda_tone: completions left; the handler
+                       // leaves the ring alone and stops the stream at 0
 
     struct sound_device dev;
     char name[SOUND_NAME_MAX];
@@ -270,24 +278,26 @@ static inline void irq_restore(uint64_t f) {
     if (f & 0x200) __asm__ volatile ("sti" ::: "memory");
 }
 
-// Spin until (reg & mask) == want, or the tick deadline. pit_ticks()
-// only advances with interrupts on, which every caller here has.
-static int wait_reg32(struct hda_ctrl *h, uint32_t off, uint32_t mask, uint32_t want, int ticks) {
-    uint64_t deadline = pit_ticks() + (uint64_t)ticks;
-    while ((mr32(h, off) & mask) != want) {
-        if (pit_ticks() >= deadline) return -1;
+// Spin until (reg & mask) == want, bounded by a SPIN COUNT rather than
+// pit_ticks(): start()/stop() run from a syscall, where interrupts are
+// off (context_switch.asm) and a tick deadline never arrives. ~1M
+// MMIO reads is milliseconds on anything real, tens under TCG.
+#define HDA_SPIN_MAX 1000000u
+
+static int wait_reg32(struct hda_ctrl *h, uint32_t off, uint32_t mask, uint32_t want) {
+    for (uint32_t n = 0; n < HDA_SPIN_MAX; n++) {
+        if ((mr32(h, off) & mask) == want) return 0;
         cpu_relax();
     }
-    return 0;
+    return -1;
 }
 
-static int wait_reg8(struct hda_ctrl *h, uint32_t off, uint8_t mask, uint8_t want, int ticks) {
-    uint64_t deadline = pit_ticks() + (uint64_t)ticks;
-    while ((mr8(h, off) & mask) != want) {
-        if (pit_ticks() >= deadline) return -1;
+static int wait_reg8(struct hda_ctrl *h, uint32_t off, uint8_t mask, uint8_t want) {
+    for (uint32_t n = 0; n < HDA_SPIN_MAX; n++) {
+        if ((mr8(h, off) & mask) == want) return 0;
         cpu_relax();
     }
-    return 0;
+    return -1;
 }
 
 // --- CORB / RIRB ---------------------------------------------------------
@@ -360,7 +370,7 @@ static int corb_rirb_init(struct hda_ctrl *h) {
 
     mw8(h, HDA_CORBCTL, 0);
     mw8(h, HDA_RIRBCTL, 0);
-    wait_reg8(h, HDA_CORBCTL, CORBCTL_RUN, 0, 5);
+    wait_reg8(h, HDA_CORBCTL, CORBCTL_RUN, 0);
 
     mw8(h, HDA_CORBSIZE, csel);
     mw32(h, HDA_CORBLBASE, (uint32_t)h->dma_phys);
@@ -657,11 +667,11 @@ static void bdl_fill(struct hda_ctrl *h, uint64_t ring_phys) {
 static int stream_start(struct hda_ctrl *h) {
     uint32_t sd = h->sd;
     mw32(h, sd + SD_CTL, 0);
-    wait_reg32(h, sd + SD_CTL, SD_CTL_RUN, 0, 5);
+    wait_reg32(h, sd + SD_CTL, SD_CTL_RUN, 0);
     mw32(h, sd + SD_CTL, SD_CTL_SRST);
-    wait_reg32(h, sd + SD_CTL, SD_CTL_SRST, SD_CTL_SRST, 5);
+    wait_reg32(h, sd + SD_CTL, SD_CTL_SRST, SD_CTL_SRST);
     mw32(h, sd + SD_CTL, 0);
-    if (wait_reg32(h, sd + SD_CTL, SD_CTL_SRST, 0, 5) != 0) return -1;
+    if (wait_reg32(h, sd + SD_CTL, SD_CTL_SRST, 0) != 0) return -1;
 
     mw32(h, sd + SD_BDPL, (uint32_t)(h->dma_phys + 3072));
     mw32(h, sd + SD_BDPU, (uint32_t)((h->dma_phys + 3072) >> 32));
@@ -679,6 +689,7 @@ static int stream_start(struct hda_ctrl *h) {
         hda_cmd(h, o->dac, V12(VERB_SET_CONV, HDA_STREAM_TAG << 4), 0);
     }
 
+    h->chunk = 0;
     mw32(h, HDA_INTCTL, mr32(h, HDA_INTCTL) | INTCTL_GIE | (1u << h->sd_index));
     mw32(h, sd + SD_CTL, ((uint32_t)HDA_STREAM_TAG << SD_CTL_STREAM_SHIFT) |
                          SD_CTL_RUN | SD_CTL_IOCE | SD_CTL_FEIE | SD_CTL_DEIE);
@@ -688,7 +699,7 @@ static int stream_start(struct hda_ctrl *h) {
 static void stream_stop(struct hda_ctrl *h) {
     uint32_t sd = h->sd;
     mw32(h, sd + SD_CTL, mr32(h, sd + SD_CTL) & ~(uint32_t)(SD_CTL_RUN | SD_CTL_IOCE) & 0x00FFFFFF);
-    wait_reg32(h, sd + SD_CTL, SD_CTL_RUN, 0, 5);
+    wait_reg32(h, sd + SD_CTL, SD_CTL_RUN, 0);
     mw32(h, HDA_INTCTL, mr32(h, HDA_INTCTL) & ~(1u << h->sd_index));
     mw8(h, sd + SD_STS, SD_STS_ACK);
 }
@@ -730,12 +741,31 @@ static void hda_irq_one(struct hda_ctrl *h) {
     h->irqs++;
     if (sts & (1u << h->sd_index)) {
         uint8_t s = mr8(h, h->sd + SD_STS);
-        if (s & SD_STS_BCIS) {
-            // LPIB is the byte position within the lap; it lands at a
-            // chunk boundary give or take the FIFO, so round to nearest.
+        if (s & 0x08) h->fifoe++;
+        if (s & 0x10) h->dese++;
+        if ((s & 0x18) && h->fifoe + h->dese <= 3)
+            klog_printf("%s: stream error sts %#x (fifoe %u dese %u)\n", h->name, s, h->fifoe, h->dese);
+        if ((s & SD_STS_BCIS) && h->diag) {
+            // The diagnostic tone: count it down and stop the engine
+            // from here, with no waiting -- pit_ticks() does not advance
+            // inside a handler, so stream_stop()'s deadline cannot.
+            if (--h->diag == 0) {
+                mw32(h, h->sd + SD_CTL, mr32(h, h->sd + SD_CTL) & ~(uint32_t)(SD_CTL_RUN | SD_CTL_IOCE) & 0x00FFFFFF);
+                klog_printf("%s: hda_tone done -- %u irqs, fifoe %u, dese %u\n",
+                            h->name, h->irqs, h->fifoe, h->dese);
+            }
+        } else if (s & SD_STS_BCIS) {
+            // One BCIS per chunk, so COUNT them rather than trust LPIB,
+            // which a PCH reports ~100 bytes short of the boundary at the
+            // interrupt (measured) and QEMU reports exactly. LPIB only
+            // pulls the count forward when interrupts were coalesced.
             uint32_t lpib = mr32(h, h->sd + SD_LPIB);
-            uint32_t chunk = ((lpib + SND_CHUNK_BYTES / 2) / SND_CHUNK_BYTES) % SND_CHUNKS;
-            sound_period_done(chunk * SND_CHUNK_BYTES);
+            uint32_t lc = (lpib / SND_CHUNK_BYTES) % SND_CHUNKS;
+            uint32_t next = (h->chunk + 1) % SND_CHUNKS;
+            uint32_t ahead = (lc + SND_CHUNKS - next) % SND_CHUNKS;
+            if (ahead >= 2 && ahead < SND_CHUNKS / 2) next = (lc + SND_CHUNKS - 1) % SND_CHUNKS;
+            h->chunk = next;
+            sound_period_done(next * SND_CHUNK_BYTES);
         }
         mw8(h, h->sd + SD_STS, s & SD_STS_ACK);
     }
@@ -778,6 +808,9 @@ static const char *vendor_name(uint32_t vendor) {
     }
 }
 
+static void diag_tone(struct hda_ctrl *h, int16_t *ring);
+static struct hda_ctrl *test_ctrl(void);
+
 static void ctrl_teardown(struct hda_ctrl *h, const char *why) {
     klog_printf("%s: %s -- not registered\n", h->name, why);
     mw32(h, HDA_INTCTL, 0);
@@ -809,6 +842,19 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
     pci_command_update(d, PCI_CMD_MEMORY | PCI_CMD_BUS_MASTER, 0);
     pci_command_update(d, PCI_CMD_INTX_DISABLE, 0);
 
+    // SNOOP. An Intel PCH controller has a NOSNOOP bit in its DEVC config
+    // register; set (firmware's default on the test laptop), its DMA
+    // reads RAM without snooping the CPU caches and plays whatever has
+    // been evicted so far -- a clean sine came out as "clapping", an app's
+    // refills as crackle. Linux's azx_init_pci() clears the same bit.
+    if (d->vendor_id == 0x8086) {
+        uint16_t devc = pci_config_read16(d, HDA_INTEL_DEVC);
+        if (devc & HDA_INTEL_DEVC_NOSNOOP) {
+            pci_config_write16(d, HDA_INTEL_DEVC, devc & (uint16_t)~HDA_INTEL_DEVC_NOSNOOP);
+            klog_printf("%s: DEVC %#x -- NOSNOOP was set, cleared\n", h->name, devc);
+        }
+    }
+
     h->dma_phys = pmm_alloc_contiguous(1, PMM_ZONE_DMA32);
     if (!h->dma_phys) { h->mmio = 0; return; }
     h->corb = (volatile uint32_t *)(uintptr_t)h->dma_phys;
@@ -821,9 +867,9 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
     // plenty and a real codec has been seen to need most of them.
     mw32(h, HDA_INTCTL, 0);
     mw32(h, HDA_GCTL, mr32(h, HDA_GCTL) & ~(uint32_t)GCTL_CRST);
-    wait_reg32(h, HDA_GCTL, GCTL_CRST, 0, 10);
+    wait_reg32(h, HDA_GCTL, GCTL_CRST, 0);
     mw32(h, HDA_GCTL, GCTL_CRST);
-    if (wait_reg32(h, HDA_GCTL, GCTL_CRST, GCTL_CRST, 10) != 0) {
+    if (wait_reg32(h, HDA_GCTL, GCTL_CRST, GCTL_CRST) != 0) {
         ctrl_teardown(h, "controller never left reset");
         return;
     }
@@ -935,6 +981,31 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
                 h->vendor >> 16, h->vendor & 0xFFFF, h->spk.pin, h->spk.dac,
                 h->have_hp ? " hp pin " : " hp ", h->have_hp ? h->hp.pin : 0,
                 h->msi_vector ? "msi" : "intx");
+}
+
+// `config set kernel.hda_tone on`: three seconds of 375 Hz written into
+// the ring ONCE by the kernel and played with nothing refilling or
+// zeroing it. Splits a bad sound in half: this path is DMA, stream and
+// codec only, so what crackles here is not the app or the core. It
+// plays over whatever stream is open, which is fine for a diagnostic.
+// NON-BLOCKING: the handler counts the completions and stops the
+// engine -- a wait on pit_ticks() from a syscall hung the test laptop.
+static void diag_tone(struct hda_ctrl *h, int16_t *ring) {
+    for (uint32_t i = 0; i < SND_RING_BYTES / 4; i++) {
+        int32_t v = (fx_sin((fx_t)((i % 128) * (FX_ONE / 128))) * 8000) >> 16;
+        ring[2 * i] = ring[2 * i + 1] = (int16_t)v;
+    }
+    set_volume(h, 50);
+    h->diag = 3 * SND_RATE * SND_FRAME_BYTES / SND_CHUNK_BYTES; // ~3 s of chunks
+    if (stream_start(h) != 0) h->diag = 0;
+}
+
+void hda_diag_tone(void) {
+    struct hda_ctrl *h = test_ctrl();
+    if (!h) { klog_write("hda: no registered controller for the tone\n"); return; }
+    uint64_t phys = 0;
+    void *ring = sound_ring_alloc(&phys);
+    if (ring) diag_tone(h, (int16_t *)ring);
 }
 
 void hda_init(void) {

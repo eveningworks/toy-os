@@ -32,6 +32,7 @@
 #include "setting_abi.h"   // SETTING_ABI_DESC_MAX -- the reason's own budget
 #include "block.h"        // blk_name() -- what IS carrying the transfers
 #include "keyboard_tap.h" // kbdtap_enabled()/_set_enabled() -- kernel.kbdtap
+#include "sound.h"        // hda_diag_tone() -- kernel.hda_tone
 
 #define TUNABLE_CATEGORY "Kernel"
 
@@ -229,8 +230,36 @@ static const struct setting kbdtap_setting = {
     .apply = kbdtap_apply,
 };
 
+// ---- kernel.hda_tone ------------------------------------------------
+//
+// Write-only: "on" plays three seconds of a kernel-generated tone through
+// the HDA controller with no app and no zeroing (sound.h), then reads
+// back as "off". What a crackle on real hardware is split against.
+
+static void hda_tone_get(char *out, uint32_t cap) { k_strlcpy(out, "off", cap); }
+
+static int hda_tone_apply(const char *value) {
+    int on;
+    if (!parse_onoff(value, &on)) return SETTING_INVALID;
+    if (on) hda_diag_tone();
+    return SETTING_SAVED;
+}
+
+static const struct setting hda_tone_setting = {
+    .name = "hda_tone",
+    .label = "HD Audio diagnostic tone",
+    .type = SETTING_TYPE_ENUM,
+    .file = CONFIG_PATH_RUNTIME,
+    .category = TUNABLE_CATEGORY,
+    .group = "Sound",
+    .choice = onoff_choice,
+    .get = hda_tone_get,
+    .apply = hda_tone_apply,
+};
+
 void tunables_register(void) {
     setting_register(&heap_debug_setting);
+    setting_register(&hda_tone_setting);
     setting_register(&ata_nodma_setting);
     setting_register(&kstack_track_setting);
     setting_register(&kbdtap_setting);

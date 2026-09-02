@@ -55,6 +55,13 @@ obvious-looking wrong answer:
 > the write half of a shell command. See
 > [query-design.md](query-design.md) for what is left.
 
+**A tunable can also be a DIAGNOSTIC ACTION: `kernel.hda_tone`** reads
+as `off` and, set `on`, plays three seconds of a kernel-generated tone
+through the HD Audio controller with no app in the loop (see
+`docs/conventions/kernel.md`'s HDA entry). Write-only and never
+persisted; it is the write half of a probe, the same shape as the
+others.
+
 **A tunable can also be a CONSENT switch, and `kernel.kbdtap` is the
 first.** The others trade performance against diagnostics — turning one
 on costs cycles and tells you more. That one gates whether the kernel
