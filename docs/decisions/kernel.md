@@ -12,6 +12,34 @@ without opening something else is not finished.
 
 ---
 
+## The physical map is the identity map, extended -- not Linux's higher-half direct map
+
+Planned 2026-09-02, before any of the ">4 GiB" work is built, because
+the obvious answer is the wrong one here. Linux keeps a linear map of
+all RAM at `0xffff888000000000` and converts with `__va`/`__pa`; the
+offset exists to free the low addresses for user space, and every
+kernel that copied the layout inherited the conversion at every
+physical access. toy-os's user space is not in the low range -- the
+ring-3 map (`uaddr.h`) starts hundreds of GiB up -- so the only reason
+for the offset does not apply, and a linear map at offset ZERO is the
+existing identity map made longer.
+
+What the audit found is that physical == virtual is load-bearing in
+about 180 places, none of them accidental: the kernel heap is a frame
+cast to a pointer, every DMA ring is programmed with the address it is
+reached by, the user-copy helpers dereference the frame they walked to
+(which is what makes SMAP absolute here), and KASLR's relocation skips
+the P2 entries because identity entries do not depend on where the
+table lives. A higher-half map would convert all of it for no property
+this kernel needs.
+
+The cost accepted: the map is bounded by the first user region, so a
+machine with more RAM than that cannot use it all -- a limit no
+hardware this project will run on approaches. And frames above 4 GiB
+are handed out by ZONE, with every existing caller on `DMA32`, because
+the ATA PRD and AC97 BDL registers are 32-bit by specification and a
+missed caller is a silent DMA into the wrong 4 GiB.
+
 ## IRQ registration: one handler per line, framework-automatic EOI
 
 `kernel/arch/x86_64/irq.c`'s table (`irq_register_handler()`/`irq_dispatch()`)

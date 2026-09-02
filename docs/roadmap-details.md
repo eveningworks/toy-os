@@ -2335,27 +2335,72 @@ measuring it.** Either can be done at any point, including first.
 About shows the gap since 2026-09-02: `phys_usable_bytes` on
 `QUERY_MEMINFO` is the firmware map's usable total before the 4 GiB
 cap, and the row reads "7.9 GiB installed, 3.4 GiB usable" on an 8 GB
-laptop. When this item lands the two numbers meet.
+laptop. When stage 3 lands the two numbers meet.
 
-*Measured 2026-08-18, while raising the per-process heap. This is not a
-constant to raise -- it is a structural property of how this kernel
-reaches physical memory, and it is worth stating precisely before
-anyone tries.*
+**Planned 2026-09-02, after a code audit.** The decision, and the
+reason it is not Linux's layout, is in `docs/decisions/kernel.md`
+("The physical map is the identity map, extended"). The shape:
 
-**There is no higher-half kernel and no separate kernel address space.**
-`boot.asm` identity-maps the low 4 GiB with 2 MiB pages before long
-mode, every user PML4 shares kernel entry 0, and ALL physical access
-goes through that map: `vmm.c` reads page tables as `table_at(phys)`,
-and the copy helpers reach user frames through it (which is exactly what
-makes SMAP absolute here, with no STAC/CLAC window). So a frame above
-4 GiB would have no kernel virtual address at all -- unreachable, not
-merely unallocated.
+*This is not a constant to raise -- it is a structural property of how
+this kernel reaches physical memory.* `boot.asm` identity-maps the low
+4 GiB with 2 MiB pages before long mode; every user PML4 shares kernel
+entry 0; and ALL physical access goes through that map -- `vmm.c` reads
+page tables as `table_at(phys)`, the copy helpers reach user frames
+through it (which is what makes SMAP absolute here, with no STAC/CLAC
+window), the kernel heap IS `pmm_alloc_contiguous()` cast to a pointer,
+every DMA ring is a static or a frame cast the same way, and KASLR's
+relocation leaves the P2 entries alone because they are pure identity.
+About 180 sites in `kernel/` dereference a physical address; none of
+them is wrong, and a higher-half direct map would have to touch every
+one. So the map stays identity and GROWS.
 
-**Items, in full.**
+**Stage 1 -- the allocator.** `PMM_MAX_FRAMES` and the two 128 KiB
+bitmaps (`bitmap[]`, `managed[]`) are sized from the 4 GiB assumption;
+size them from the highest usable address in the memory map instead,
+carving the bitmaps out of a low usable region at `pmm_init()` before
+anything else is handed out. Every allocation takes a ZONE: `DMA32`
+(below 4 GiB) or `ANY`. Every existing caller says `DMA32`, so nothing
+moves yet. The ATA PRD table and the AC97 BDL are 32-bit registers by
+spec and can never say otherwise; xHCI already reads `ac64` and refuses
+a high frame, which is the model. `meminfo audit` and the `mm` KTESTs
+cover the bitmaps; a KTEST asserts that under `vm.py --mem 8192` the
+frames above 4 GiB are MANAGED and none is allocated.
 
-- [ ] A direct map that is not the identity map -- Linux's `__va`/`__pa` at `0xffff888000000000`, i.e. a higher-half kernel. This is the real work; everything below is bookkeeping behind it
+**Stage 2 -- the map.** After `pmm_init()`, walk the memory map and
+map every usable region above 4 GiB at its own address: 1 GiB PDPT
+entries where CPUID reports `pdpe1gb`, 2 MiB PDs from `DMA32` frames
+otherwise, up to `phys_addr_bits()` (`paging.c`, already there for the
+MTRR path). Bounded by where the ring-3 map begins
+(`kernel/include/kernel/uaddr.h`), which is hundreds of GiB up.
+`paging_set_write_combining()` and the `paging` KTESTs assume the 2048
+PDE array and need the second range taught to them.
 
-- [ ] **`kfree()`'s red-zone detection depends on heap pointers fitting in 32 bits.** It tells a red-zoned block from a plain one by reading the eight bytes before the payload -- unambiguous only because a heap pointer's top half is zero while the magic's is not. A kernel heap above 4 GiB breaks that SILENTLY, on the freeing path. See CLAUDE.md and `docs/decisions.md`
+**Stage 3 -- the consumers.** `vmm_map_user_page()`'s frames, the
+kernel heap's regions, mmap fault-ins and the compositor's client
+buffers switch to `ANY`, one at a time, each behind a test that runs
+with 8 GiB and asserts a frame above 4 GiB was actually handed out.
+`/tests/memtest`'s address-derived pattern is the right check for the
+map being correct up there. **`kfree()`'s red-zone check survives**: it
+compares the eight bytes before the payload against a magic whose top
+half is `0xC0DEFACE`; a pointer above 4 GiB has a nonzero top half too,
+but a canonical address never has bits 63:48 set, so the two stay
+distinguishable -- the documented reasoning ("fits in 32 bits") is
+narrower than the property that actually holds, and CLAUDE.md,
+`docs/conventions/kernel.md` and `docs/decisions/kernel.md` should say
+the wider one when this lands.
+
+**Stage 4 -- MMIO.** virtio-pci, xHCI and AHCI refuse a BAR above
+4 GiB with a message naming the missing mapper. With the map extended
+over RAM, an MMIO range up there still needs its own mapping (it is not
+in the memory map), so this stage is a small `paging_map_kernel_range()`
+for a device window -- and it is where the memory type is finally set
+right, since `docs/decisions/drivers.md` records that MMIO goes through
+the write-back identity map today.
+
+**Stage 5 -- proof.** Nothing automated boots with more than 2 GiB
+today; `tools/vm.py --mem 8192` is one flag away. A tool that spawns
+enough `memtest` processes to consume past 4 GiB and then runs
+`meminfo audit`, and About on the laptop reading usable == installed.
 
 ## Swap / paging to disk
 
