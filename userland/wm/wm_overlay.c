@@ -6,6 +6,7 @@
 #include "context_menu.h"
 #include "calendar_popup.h"
 #include "volume_popup.h"
+#include "brightness_popup.h"
 #include "confirm_dialog.h"
 #include "file_picker.h"
 
@@ -18,6 +19,7 @@ static int open_start(void)   { return start_menu_open; }
 static int open_context(void) { return context_menu_open; }
 static int open_calendar(void){ return calendar_open; }
 static int open_volume(void)  { return volume_open; }
+static int open_brightness(void) { return brightness_open; }
 static int open_picker(void)  { return file_picker_open; }
 static int open_confirm(void) { return confirm_dialog_open; }
 
@@ -39,6 +41,8 @@ static const struct wm_overlay g_overlays[] = {
       calendar_hover_at,         calendar_damage,         0 },
     { "volume",   open_volume,   volume_draw,      volume_handle_click,
       volume_hover_at,           volume_damage,           volume_update_press },
+    { "brightness", open_brightness, brightness_draw, brightness_handle_click,
+      brightness_hover_at,       brightness_damage,       brightness_update_press },
 };
 #define OVERLAY_COUNT ((int)(sizeof g_overlays / sizeof g_overlays[0]))
 

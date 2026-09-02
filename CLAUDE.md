@@ -647,6 +647,7 @@ whenever a headline here tells you something you did not already know.
 - **A PCI DRIVER DECLARES A MATCH TABLE AND A `probe()`, AND `pci_bind()` CALLS IT ONCE PER DEVICE**
 - **A SYSCALL HANDLER RUNS WITH INTERRUPTS OFF, AND A WAIT ON `pit_ticks()` THERE NEVER ENDS**
 - **INTEL HDA IS THE THIRD SOUND DEVICE, ITS CODEC IS ROUTED BY A GENERIC WALK, AND THE VOLUME TAPER IS THE USB DRIVER'S**
+- **THE INTEL DISPLAY DRIVER INHERITS THE FIRMWARE'S MODE AND NEVER SETS ONE, AND A BACKLIGHT IS A DISPLAY CAPABILITY**
 - **THERE IS A LOCAL APIC NOW, AND A DEVICE MAY BE ON A VECTOR INSTEAD OF A LINE**
 - **A USB ETHERNET ADAPTER IS A `net_device`, AND ITS CONFIGURATION IS A CHOICE**
 - **A VENDOR CONFIGURATION NEEDS A DRIVER THAT NAMES THE DEVICE, AND AN RTL8153 IS FRAMED RATHER THAN RAW**
@@ -777,6 +778,7 @@ whenever a headline here tells you something you did not already know.
 - **THE COMPOSITOR SLEEPS BETWEEN FRAMES, AND TWO THINGS MUST DEFEAT THE WAIT**
 - **AN OVERLAY IS A ROW IN A TABLE, AND THE TABLE DRIVES DRAWING, CLICKS AND HOVER**
 - **THE TRAY HAS A VOLUME FLYOUT, AND THE PANEL OWNS IT TOO**
+- **THE TRAY HAS A BRIGHTNESS FLYOUT ON EVERY MACHINE, AND A DISPLAY WITHOUT A BACKLIGHT SHOWS THE REGISTRY'S SENTENCE**
 - **THE CLOCK IS ALWAYS THE RIGHTMOST TRAY ITEM, whatever slot it holds**
 - **THE TRAY CLOCK OPENS A CALENDAR, AND THE PANEL OWNS IT**
 - **THE WEEK'S FIRST COLUMN IS A REGISTERED SETTING: `desktop.week_start` = `monday` | `sunday`**
@@ -1310,6 +1312,7 @@ cost".
   it intermittent, and at what RATE), `damage_sweep.py` /
   `damage_hunt.py` (the damage invariant).
 - **GUI tools**, all run by `gui_regress.py` -- `blank_window_test.py`,
+  `brightness_test.py`,
   `calculator_client_test.py`, `calendar_test.py`,
   `compositor_test.py`, `compositor_death_test.py`, `crashtest_test.py`,
   `cursor_theme_test.py`, `desktop_entries_test.py`, `dialog_test.py`,

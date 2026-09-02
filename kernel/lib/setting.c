@@ -14,6 +14,7 @@
 #include "cursor_config.h"
 #include "mouse_config.h"
 #include "sound_config.h"
+#include "display_config.h"
 #include "setting_text.h"
 #include "keyboard_config.h"
 #include "cursor_theme_config.h"
@@ -558,6 +559,7 @@ void settings_init(void) {
     cursor_config_setting_register();
     mouse_config_setting_register();
     sound_config_setting_register();
+    display_config_setting_register();
     keyboard_config_setting_register();
     cursor_theme_setting_register();
     wallpaper_setting_register();

@@ -5829,3 +5829,39 @@ version sent the stop as soon as the debug console was up, which is
 BEFORE init has read `/etc/services.d`, so init answered `supervises no
 service called toywm` and the desktop started anyway. It won the race
 about half the time. The wait is on init's own readiness line now.
+
+## The brightness flyout is shown where there is no backlight, and its floor is 5%
+
+`userland/wm/brightness_popup.c` puts a sun icon in the tray on every
+machine, including a QEMU guest whose adapter has no backlight at all.
+Windows 11 shows the brightness slider only on a machine with one, and
+Plasma's Brightness and Colour applet hides itself the same way; both
+would argue for hiding the icon here.
+
+**Why it is shown anyway.** Two reasons, and the second is the one that
+decided it. The tree already answers "the hardware is missing" one way:
+the setting is registered regardless and reports an `unavailable`
+sentence, the volume item stays in the tray on a machine with no sound
+card, and `setting_abi.h` asks every client to show the sentence rather
+than silently disable the control. A brightness item that vanished
+would be the one control answering differently. And a hidden item
+cannot be tested: every GUI tool runs under QEMU, where the backlight
+never exists, so hiding would leave the flyout's drawing, geometry,
+dismissal and mutual exclusion exercised by nobody -- the exact shape
+of "a green suite that tests nothing". `brightness_test.py` drives the
+degraded path and asserts the sentence is the kernel's own, that the
+slider and the wheel write nothing, and that the panel is painted and
+repainted away. The positive half runs on the laptop through `config`.
+The alternative -- hide the item when the setting's INFO reports
+`unavailable`, and have the test assert the absence -- is a one-line
+change if the visible sun on a desktop ever grates more than the
+untested panel would.
+
+**Why the floor is 5 and not 0.** A backlight duty of zero turns the
+panel off. Mute is a volume of zero and comes back with a click; a
+persisted brightness of zero comes back on the NEXT BOOT as a black
+screen the user cannot see to fix, on a machine whose only recovery is
+`config set` typed blind or a reboot that does not help. So the
+registry refuses anything under 5, the flyout clamps to the registry's
+range, and "screen off" is a separate, unpersisted action that the
+roadmap lists.

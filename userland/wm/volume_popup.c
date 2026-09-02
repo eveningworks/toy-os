@@ -6,6 +6,7 @@
 #include "start_menu.h"
 #include "context_menu.h"
 #include "calendar_popup.h"
+#include "brightness_popup.h"
 #include "ui/uui.h"
 #include "ui/utheme.h"
 #include "lib/icon_cache.h"
@@ -277,6 +278,7 @@ void volume_open_now(void) {
     if (start_menu_open) { start_menu_open = 0; start_menu_damage(); }
     calendar_close();
     context_menu_close();
+    brightness_close();
     reload_level();
     reload_devices();
     volume_open = 1;

@@ -400,7 +400,11 @@ exit), `virtio-rng` feeding the entropy pool, **`virtio-gpu` as a real
 display driver** (resource, scanout, transfer-and-flush, its own cursor
 queue, and it programs the mode itself so `video=1920x1080` is honoured
 rather than left to GRUB), and **`virtio-input`**. One transport, so the
-next device is a driver rather than a bring-up project.
+next device is a driver rather than a bring-up project. On real
+hardware, **an Intel display driver** for a laptop's Broadwell GPU: it
+adopts the mode the firmware lit the panel with, puts the pointer on
+the cursor plane, and drives the backlight -- `system.brightness`, with
+a slider in the tray.
 
 Keyboards, mice and tablets from PS/2, virtio and USB all feed one
 **input core** whose canonical event is evdev-shaped. Its diagnostic

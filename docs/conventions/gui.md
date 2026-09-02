@@ -1491,6 +1491,29 @@ real scanout hardware does. Do not write a pixel assertion for one.
   a control that only sees the button-down edge cannot follow the
   pointer. And **`volume_geometry()` is the one answer** drawing,
   hit-testing and `gui volume --json` all ask.
+- **THE TRAY HAS A BRIGHTNESS FLYOUT ON EVERY MACHINE, AND A DISPLAY
+  WITHOUT A BACKLIGHT SHOWS THE REGISTRY'S SENTENCE --
+  `userland/wm/brightness_popup.c`.** A sun icon left of the speaker
+  opens one slider; the wheel over the icon steps it by 5. It is the
+  volume flyout cut down -- the same debounced write, the same
+  `update_press` drag, the same one geometry function behind drawing,
+  hit-testing and `gui brightness --json` -- and it talks to nothing
+  but `system.brightness` over `SYS_SETTING`. Three things to know.
+  **It is registered whether or not the display has a backlight**, as
+  the volume item is with no sound card: the setting exists on every
+  machine and answers `unavailable` with a sentence, and the panel
+  shows THAT sentence over a disabled track rather than hiding, which
+  is what `setting_abi.h` asks of every client -- and what makes
+  `brightness_test.py` able to run in QEMU, where no adapter has a
+  backlight (Windows and Plasma hide the control instead; the
+  difference is deliberate and recorded in `docs/decisions.md`). **When
+  unavailable it WRITES NOTHING** -- the slider and the wheel leave the
+  level alone, and the test asserts that against `config get`, since
+  a build that skipped the check would push a value the registry
+  refuses and show a level the hardware never took. **The wheel stays
+  consumed over the icon even then**: the notch was aimed at this
+  control, and letting it fall through to a window would scroll
+  something the user was not looking at.
 - **THE CLOCK IS ALWAYS THE RIGHTMOST TRAY ITEM, whatever slot it
   holds.** It takes slot 0 and the strip is walked from the highest slot
   down, so before this the first item registered after it landed between

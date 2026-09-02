@@ -2148,8 +2148,8 @@ AUDIO=hda`) and a PCH's controller claim alike. Six things to know:
   needs more, `hdadump` on the GRUB line is the evidence to add one from.
 - **EVERY HDA CONTROLLER IS CLAIMED; ONLY A CODEC WITH AN ANALOG OUTPUT
   IS REGISTERED.** A laptop has two -- the PCH's and the GPU's
-  display-audio one, whose codec has only digital pins (and, on the
-  test laptop, answers nothing without the GPU's power well). The second
+  display-audio one, whose codec has only digital pins (it needs the
+  GPU's power well, which the firmware and now `intel_display.c` hold). The second
   is brought up, found wanting, logged, and put back into reset, so
   `lsdev` never lists a device that plays nothing.
 - **ACKNOWLEDGE RIRBSTS IN THE DRAIN, NOT ONLY IN THE HANDLER.** QEMU's
@@ -2874,3 +2874,62 @@ cannot see files written at RUNTIME; those are refused rather than
 truncated, which fails safely but only in the moment.
 
 **Reasoning belongs in the man page; the descriptor is configuration.**
+
+## THE INTEL DISPLAY DRIVER INHERITS THE FIRMWARE'S MODE AND NEVER SETS ONE, AND A BACKLIGHT IS A DISPLAY CAPABILITY
+
+`kernel/drivers/display/intel_display.c` -- the bare-metal laptop's own
+GPU (a Broadwell GT1, `8086:161e`), as a `display_driver` registered
+between vmsvga and bochs. What Linux's i915 calls fastboot, without the
+fallback: the GOP has already lit the panel and pointed a plane at the
+framebuffer GRUB reports, and the probe READS that back -- which pipe,
+its stride, its surface offset, the GGTT entry behind it -- and claims
+only when every fact agrees with `vesafb_get_probe_surface()`. On top
+of the inherited scanout it adds what a VESA framebuffer cannot: the
+cursor plane, the backlight PWM and the display power well. Seven
+things to know.
+
+- **NOTHING IT WRITES CAN BLACK THE SCREEN.** The plane, the pipe, the
+  PLL, the transcoder and the panel power sequencer are never touched;
+  a wrong cursor register costs a cursor, a wrong duty a dim screen,
+  and a reboot puts the firmware's state back either way. A modesetting
+  driver -- EDID over the eDP AUX channel, PLLs, external monitors -- is
+  a different driver and a roadmap item, and it needs runtime mode
+  switching ABOVE it before it buys anything.
+- **GEN8 ONLY, BY DEVICE ID.** The register map is Broadwell's; another
+  generation is logged as "not gen8 -- not claimed" and vesafb takes
+  the same pixels. Widening the table means checking every offset
+  against that generation's PRM, not adding an id.
+- **THE PROBE RUNS BEFORE THE TIMER**, like every display probe, so its
+  waits are iteration-bounded spins. Nothing in this driver may wait on
+  `pit_ticks()` -- on this laptop that hangs the machine solid.
+- **THE CURSOR IMAGE LIVES IN SYSTEM MEMORY BEHIND A GGTT ENTRY THE
+  FIRMWARE NEVER MAPPED** (the first slot past the stolen region), with
+  the framebuffer PTE's own low bits copied for cache attributes, the
+  GTT TLB poked after the write, and every line CLFLUSHed after an
+  upload -- the display engine reads memory around the CPU cache, the
+  same failure `hda.c`'s NOSNOOP clear exists for. The plane blends
+  PREMULTIPLIED alpha, so the compositor's straight sprite is
+  premultiplied on upload. `WIN_REQ_FB_CURSOR`'s 64x64 ceiling is
+  exactly this plane's mode.
+- **`DISPLAY_CAP_BACKLIGHT` IS THE SIXTH CAPABILITY**, with
+  `backlight_get`/`backlight_set` in percent and the honesty check
+  extended to them. The firmware decides which PWM drives the pin --
+  PCH override or the CPU's -- and the driver reads that back and
+  writes the duty into whichever it is, never switching modes (Linux
+  switches to PCH override; here the reversible choice wins). The
+  setting is `system.brightness` (`kernel/lib/display_config.c`), 5..100
+  in steps of 5, registered on EVERY machine with an `unavailable()`
+  sentence where the capability is absent; its FLOOR IS 5, because a
+  persisted 0 comes back as a black screen the user cannot see to fix.
+  `get` reads the hardware, so a level set by anything else reports
+  truthfully.
+- **THE POWER WELL IS REQUESTED BY THE DRIVER**, not merely found on:
+  the firmware holds it through `HSW_PWR_WELL_CTL_BIOS`, and the
+  display-audio codec behind `8086:160c` enumerates because of it (it
+  answers as `8086:2808`, digital pins only).
+- **IT IS TESTABLE ONLY ON THE LAPTOP.** No emulator models this GPU and
+  the dev machine's card is not Intel. The KTESTs cover the two
+  encodings as pure functions and assert the driver DECLINES under
+  QEMU; `config set brightness N` followed by `config get` reads the
+  PWM back through the hardware and is the check that ran there. A
+  blank screen is answered with `reboot` over `tools/remote.py`.

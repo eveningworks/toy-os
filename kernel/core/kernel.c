@@ -24,6 +24,7 @@
 #include "ahci.h"
 #include "vmsvga.h"
 #include "bochs.h"
+#include "intel_display.h"
 #include "vesafb.h"
 #include "display.h"
 #include "fs.h"
@@ -179,6 +180,10 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // to come up before that.
     virtio_gpu_display_register();
     vmsvga_register();
+    // Intel integrated graphics: inherits the firmware's mode and adds a
+    // cursor plane and the backlight; declines anything but a gen8 whose
+    // live plane is GRUB's framebuffer. See intel_display.h.
+    intel_display_register();
     // Between the cards that own specific hardware and the fallback:
     // bochs claims the ordinary `-vga std` adapter, but only when it can
     // set a BIGGER mode than GRUB negotiated -- otherwise it declines and

@@ -24,6 +24,7 @@ FIRST, and this is what to do first among things that are all
 buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
+- [ ] A page flip on vblank for the Intel display: two scanouts and a buffer age over `WIN_REQ_FB_MAP`/`WIN_REQ_FB_PRESENT`  *(virtio, and a real GPU driver)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
 - [ ] Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today  *(Networking)*
@@ -612,6 +613,11 @@ run on, not by order.
 - [x] ~~virtio transport: PCI capability parsing, virtqueue (descriptor table / avail / used rings)~~
 - [x] ~~`virtio-gpu`: resource create/attach, set_scanout, transfer + flush, and the CURSOR queue~~
 - [x] ~~The compositor should use the hardware cursor plane instead of a software sprite~~ DONE 2026-08-29 (WIN_REQ_FB_CURSOR)
+- [x] ~~An Intel display driver: fastboot readout, cursor plane, backlight, power well~~ DONE 2026-09-02 -- gen8 only, never sets a mode
+- [ ] **NEXT** A page flip on vblank for the Intel display: two scanouts and a buffer age over `WIN_REQ_FB_MAP`/`WIN_REQ_FB_PRESENT`
+- [ ] Screen blanking: the backlight off on idle or lid, never persisted, and any key or motion brings it back
+- [ ] Intel modesetting: EDID over eDP AUX, the PLLs and the transcoder -- needs runtime mode switching above it first
+- [ ] Intel blitter acceleration: `DISPLAY_CAP_ACCEL_FILL`/`_COPY` on the BCS ring
 - [ ] Runtime mode switching: a display driver can set a mode after boot
 - [ ] Initcall levels: drivers declare a boot slot instead of being called by name from `kernel_main()`
 - [ ] `virtio-net`: a NIC on the same transport, likely easier than e1000 once virtqueues exist
@@ -743,7 +749,7 @@ run on, not by order.
 - [x] ~~Doom sound and music~~ DONE 2026-08-29 -- effects on `usnd` voices, music on Chocolate Doom's own OPL emulation
 - [x] ~~Volume mixer UI, persisted to `/etc`~~ DONE 2026-08-30 -- the tray flyout: slider, mute, device list, wheel
 - [ ] A per-application volume, which needs the sound daemon first -- the flyout has one slider because there is one stream
-- [ ] HDMI/DisplayPort audio -- the display controller's HDA codec is claimed and left silent; its power well is the GPU's
+- [ ] HDMI/DisplayPort audio -- the display controller's codec enumerates now (`intel_display.c` holds the power well) and is left silent
 - [ ] One volume taper for every card -- `hda.c` and `sound_usb.c` share the 40 dB convention, `ac97.c` is still linear in attenuation steps
 - [ ] MPEG-2/2.5 Layer III (the half-rate sample rates), and Layer I/II -- refused with -ENOTSUP today
 - [ ] Intensity stereo in the MP3 decoder -- refused, because nothing available encodes it to test against

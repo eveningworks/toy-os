@@ -2156,3 +2156,71 @@ split too: `dev->driver` is set by the core during bind and cannot be
 forgotten, while `driver_register()` is an explicit call no mechanism
 forces. The waiver is a comment rather than a macro so that a file whose
 whole point is not being a driver need not include `driver.h` to say so.
+
+## The Intel display driver adopts the firmware's mode, because a modeset nobody can test is a black screen
+
+`kernel/drivers/display/intel_display.c` drives the bare-metal laptop's
+Broadwell GPU, and the shape it takes is the opposite of vmsvga's and
+bochs's: it never programs a mode. Linux's i915 reads out the state the
+firmware programmed and adopts it ("fastboot"), then falls back to a
+full modeset when the readout disagrees with what it wants. toy-os keeps
+the readout and drops the fallback.
+
+**Why.** Three facts, all measured on 2026-09-02. Nothing emulates this
+GPU -- QEMU has no Intel display model and the dev machine's card is
+NVIDIA, so there is no passthrough -- which makes every register write
+verifiable only by eye on one machine. The GOP already lights the panel
+at its native 1920x1080, so a modeset at boot would re-derive a mode
+that is already on screen. And nothing above the display layer survives
+a runtime mode change yet (the reason bochs and virtio-gpu refuse
+`DISPLAY_CAP_MODESET`), so a driver that COULD set modes would have no
+caller for it. The cost of a wrong PLL or transcoder write is a dark
+panel and a reboot over the network; the benefit, today, is nothing.
+What the readout enables is everything vesafb lacks that does not touch
+the pipe: the cursor plane, the backlight and the power well.
+
+**The probe claims only on exact agreement.** It finds the pipe whose
+primary plane is enabled, in BGRX8888, with the stride GRUB reports and
+a surface offset equal to GRUB's framebuffer address minus the aperture
+base. Anything else -- a different pipe layout, a tiled surface, a
+framebuffer outside the aperture, a non-gen8 id -- declines, and vesafb
+takes the same pixels. A probe that changes nothing is what made the
+first boot on the laptop safe to look at: it logged the whole readout
+(plane, cursor, backlight and power-well registers, the framebuffer's
+GGTT entry) and the write paths were written against those numbers.
+
+**The cursor's GGTT slot is the first page past the stolen region**
+rather than a free entry found by scanning. Firmware commonly points
+every unused entry at a scratch page WITH the valid bit set, so "free"
+is not a property a PTE reports; an offset the firmware had no reason
+to map is. The slot's previous contents are logged in case a firmware
+ever proves that wrong. The image's cache attributes copy the low bits
+of the framebuffer's own PTE -- the one encoding known to work on that
+machine -- and the buffer is CLFLUSHed after every upload, because the
+display engine's reads do not snoop the CPU cache (the same class of
+bug as HDA's NOSNOOP). The plane blends premultiplied alpha, as a
+Wayland cursor surface is, so the compositor's straight sprite is
+premultiplied on the way in.
+
+**The backlight follows the firmware's PWM choice rather than
+switching it.** Linux's `lpt_setup_backlight` moves a CPU-mode machine
+onto the PCH override and disables the CPU PWM. Here the driver reads
+which PWM is enabled and writes the duty into that one, leaving the
+mode alone: the reversible edit on a machine that can only be watched
+by eye. On the test laptop the firmware already runs PCH override, so
+the two agree; a CPU-mode machine will exercise the other branch.
+
+**What is deliberately not here, and where it went.** A page flip on
+vblank needs the compositor to stop copying only its damage box (a
+second scanout would show pixels two frames old outside it) -- Wayland's
+`buffer_age`, a small protocol change over `WIN_REQ_FB_MAP`/`_PRESENT`
+that `docs/roadmap-details.md` designs and the roadmap marks NEXT.
+Screen blanking, modesetting and the blitter are roadmap items in the
+same section. An HDMI audio codec answers now that the power well is
+requested, and stays a sound-side item.
+
+**One finding on the way, recorded in `docs/bugs.md`:** `sum` on the
+laptop disagrees with zlib's crc32 on a 5 MB file while agreeing on a
+10-byte one, though the bytes on disk are identical. The verified
+flash procedure is therefore `remote.py get` and a host-side compare,
+not the checksum.

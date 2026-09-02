@@ -3347,6 +3347,22 @@ a spurious exit no longer makes the restart check pass for the wrong
 reason -- but it does not fail either, so grep rather than trusting the
 exit code.
 
+### `sum` on the laptop disagrees with crc32 on a large file
+
+Measured 2026-09-02 on the bare-metal laptop. `sum /tmp/version.txt` (10
+bytes) printed the same crc32 as `zlib.crc32` on the host; `sum
+/boot/boot/kernel.bin` and `sum /tmp/k.bin` (the same 5,034,216-byte
+file on FAT32 and on TFS3) both printed 788600261 against the host's
+434594168 -- the same wrong number twice, so deterministic. The bytes
+are NOT the problem: `remote.py get` pulled the file back and `cmp`
+found zero differing bytes. So either `/bin/sum`'s crc32 streaming
+past the first read buffer or the stdio read path is wrong for a large
+file. `tools/hash_hostcheck.py` is the oracle to reproduce it against;
+a positive control is a file just over one read buffer. Until fixed,
+`remote.py sync` re-sends every large file on every run (42 files on
+2026-09-02), and a flashed kernel is verified by `get` and a host-side
+compare rather than by `sum`.
+
 ### `tools/ktest_run.py` reports the debug console never came up
 
 Symptom: either `ktest_run: FAIL -- the serial debug console never came
@@ -3785,6 +3801,74 @@ NEEDS_FLUSH device that is two virtqueue round trips per mouse move.
 
 Until then `hwcursor` (the shell command) is the only caller, and it
 exists so the plane has one at all.
+
+### An Intel display driver: fastboot readout, cursor plane, backlight, power well
+
+Built 2026-09-02 against the test laptop's Broadwell GT1 (`8086:161e`).
+The readout on first boot, which is what the write paths were written
+against: pipe A enabled with `PIPESRC` 1919x1079, the primary plane in
+BGRX8888 at stride 7680 and surface 0, the GGTT entry behind it
+`0xde000001` (16 MiB into a 32 MiB stolen region -- present bit only),
+the backlight in PCH-override mode at period 937 and duty 937, the
+power well already held by `HSW_PWR_WELL_CTL_BIOS`. `config set
+brightness 40` then read back 40 through the PWM register and 100 put
+it back. `docs/decisions.md` has the design; the KTESTs cover the two
+encodings and the QEMU decline.
+
+### A page flip on vblank for the Intel display: two scanouts and a buffer age over `WIN_REQ_FB_MAP`/`WIN_REQ_FB_PRESENT`
+
+The Intel driver can point the primary plane at a second buffer with
+one `DSPSURF` write, which the hardware latches at the next vblank --
+a tear-free desktop for the price of a register. What stops it today is
+the compositor, not the driver: `ugfx_screen_present()` copies only the
+frame's DAMAGE BOX into the scanout, so every scanout is an accumulated
+image, and flipping to a second one shows whatever it held two frames
+ago outside that box (the classic buffer-age bug). The kernel cannot
+repair it cheaply either -- the mapping is write-combined and reading
+it back is what `ugfx.h` warns against.
+
+The design, which is Wayland's `buffer_age`: `WIN_REQ_FB_MAP` grants
+both scanouts (the second at `WIN_FB_VADDR` plus a half, the shape
+`WIN_BUFFER_HALF` already uses for windows) and returns the back index
+in a spare field; `WIN_REQ_FB_PRESENT` flips and returns the new back
+index; `ugfx_screen_present()` blits the UNION of the last two frames'
+damage when the index it is handed differs from the one it drew
+against. About twenty lines in `ugfx.c` plus `win_surface.c`; the QEMU
+drivers keep one buffer and report index 0 forever, so the suite sees
+no change. Two things to settle when building it: the kernel console
+writes through `gfx.c`'s cached surface and must be flipped back to
+buffer 0 when the compositor's grant is revoked, and the second buffer
+is ~8 MiB of contiguous frames mapped into the GGTT past the cursor's
+slot and set write-combining with `paging_set_write_combining()`. A
+vblank wait is a bounded poll of `PIPEFRAME` -- never `pit_ticks()`
+inside a syscall on that machine.
+
+### Screen blanking: the backlight off on idle or lid, never persisted, and any key or motion brings it back
+
+`display_backlight_set(0)` is all the driver needs; what is missing is
+the policy -- an idle timer in the compositor, a lid event from ACPI
+(which needs the GPE work in the ACPI track), and the rule that the
+first key or motion restores the level from `system.brightness` rather
+than from a stored zero. Deliberately NOT a setting: a persisted "off"
+is the black-screen-on-boot trap the brightness floor exists to avoid.
+
+### Intel modesetting: EDID over eDP AUX, the PLLs and the transcoder -- needs runtime mode switching above it first
+
+Thousands of lines in i915 terms, and worth nothing until the layer
+above can survive a mode change (`gfx.c`'s back buffer and every
+compositor mapping are sized at their own init). The order is: runtime
+mode switching in the display layer, then EDID readout, then the DDI
+programming. Every write is a black-screen risk and only the laptop can
+show it.
+
+### Intel blitter acceleration: `DISPLAY_CAP_ACCEL_FILL`/`_COPY` on the BCS ring
+
+A ring buffer or execlist context on the blitter engine and
+`XY_SRC_COPY_BLT`/`XY_COLOR_BLT` commands. The display interface
+already has the two capability bits and `gfx.c` falls back to its own
+loops without them. The compositor blits a frame in a few milliseconds
+in software, so this is a measurement first: `gfxbench` on the laptop
+before and after is the case for it or against it.
 
 ### Runtime mode switching: a display driver can set a mode after boot
 

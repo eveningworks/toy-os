@@ -31,6 +31,7 @@
 #include "context_menu.h"
 #include "calendar_popup.h"
 #include "volume_popup.h"
+#include "brightness_popup.h"
 #include "wm_overlay.h"
 #include "confirm_dialog.h"
 #include "file_picker.h"
@@ -760,6 +761,7 @@ void wm_run(void) {
     wm_render_reset(); // first frame must be a full repaint -- see wm_render.c
     tray_init();
     volume_tray_init();   // the tray's second item, after the clock takes slot 0
+    brightness_tray_init(); // the third
 
     // Announced once per run of this loop. Reset here rather than
     // declared static-and-forgotten, because `gui` can re-enter it:
@@ -879,6 +881,7 @@ void wm_run(void) {
         taskbar_poll_config();
         calendar_poll_config(); // `desktop.week_start`, same generation poll
         volume_poll_config();   // the level and the device list, and the debounced write
+        brightness_poll_config();
 
         // Drain everything the kernel has queued for us, then read the
         // position out of it. One pump per frame, fully draining -- see
@@ -1098,6 +1101,7 @@ void wm_run(void) {
         // put volume-by-wheel. Anywhere else it falls through to the
         // focused window, so a scrollable app is unaffected.
         if (wheel != 0 && volume_handle_wheel(mx, my, wheel)) wheel = 0;
+        if (wheel != 0 && brightness_handle_wheel(mx, my, wheel)) wheel = 0;
 
         if (key != -1 || wheel != 0) {
             // A modal file picker (e.g. Notepad's Save As...) captures

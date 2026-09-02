@@ -46,6 +46,8 @@ static int caps_are_honest(const struct display_driver *d) {
     if ((d->caps & DISPLAY_CAP_ACCEL_COPY) && !d->copy_rect) return 0;
     if ((d->caps & DISPLAY_CAP_MODESET) &&
         (!d->mode_count || !d->mode_at || !d->set_mode)) return 0;
+    if ((d->caps & DISPLAY_CAP_BACKLIGHT) &&
+        (!d->backlight_get || !d->backlight_set)) return 0;
     return 1;
 }
 
@@ -72,13 +74,14 @@ int display_probe(void) {
         // has to hold for whichever driver claimed, not just vesafb.
         g_wc = paging_set_write_combining(s.addr, (uint64_t)s.pitch * s.height);
 
-        klog_printf("display: using \"%s\" -- %ux%u x%u pitch %u, caps:%s%s%s%s%s\n",
+        klog_printf("display: using \"%s\" -- %ux%u x%u pitch %u, caps:%s%s%s%s%s%s\n",
                      d->name, s.width, s.height, (unsigned)s.bpp, s.pitch,
                      (d->caps & DISPLAY_CAP_NEEDS_FLUSH) ? " flush" : "",
                      (d->caps & DISPLAY_CAP_CURSOR)      ? " cursor" : "",
                      (d->caps & DISPLAY_CAP_ACCEL_FILL)  ? " fill" : "",
                      (d->caps & DISPLAY_CAP_ACCEL_COPY)  ? " copy" : "",
-                     (d->caps & DISPLAY_CAP_MODESET)     ? " modeset" : "");
+                     (d->caps & DISPLAY_CAP_MODESET)     ? " modeset" : "",
+                     (d->caps & DISPLAY_CAP_BACKLIGHT)   ? " backlight" : "");
         klog_printf("display: framebuffer write-combining: %s\n", paging_wc_name(g_wc));
         return 1;
     }
@@ -253,4 +256,16 @@ void display_mode_at(int index, struct display_mode *out) {
 int display_set_mode(const struct display_mode *mode) {
     if (!display_has(DISPLAY_CAP_MODESET) || !mode) return 0;
     return g_active->set_mode(mode);
+}
+
+int display_backlight_get(void) {
+    if (!display_has(DISPLAY_CAP_BACKLIGHT)) return -1;
+    return g_active->backlight_get();
+}
+
+int display_backlight_set(int percent) {
+    if (!display_has(DISPLAY_CAP_BACKLIGHT)) return 0;
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    return g_active->backlight_set(percent);
 }

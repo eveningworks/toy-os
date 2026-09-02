@@ -1798,6 +1798,17 @@ window without going through it will find its layout polls timing out.
   empty and unwritable on a machine with no sound card -- it says so and
   skips them rather than failing, so the rows going missing on a machine
   that HAS a card still reads as a failure.
+- **`brightness_test.py`** -- the taskbar's brightness flyout, driven
+  on a machine with NO backlight, which is every QEMU adapter. It
+  asserts the degraded path honestly: the tray item exists, the panel
+  is painted and repainted away, the sentence it shows is the
+  registry's own (`config set brightness` refuses with the same words),
+  and the slider and the wheel WRITE NOTHING -- checked against `config
+  get`, since a build that skipped the availability check would push a
+  value the registry refuses and show a level the hardware never took.
+  The positive half (a real panel dimming) runs on the bare-metal
+  laptop by hand: `config set brightness 40` reads the PWM back. In
+  `gui_regress.py`.
 - **`filemanager_test.py`** -- the File Manager: two panes, marking, and
   real file operations. **The result of every operation is checked
   through `ls`, not through the app** -- the manager is the thing under

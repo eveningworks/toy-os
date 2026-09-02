@@ -51,6 +51,7 @@
 #define DISPLAY_CAP_ACCEL_FILL   (1u << 2) // device-side rectangle fill
 #define DISPLAY_CAP_ACCEL_COPY   (1u << 3) // device-side rectangle copy
 #define DISPLAY_CAP_MODESET      (1u << 4) // can list and select modes
+#define DISPLAY_CAP_BACKLIGHT    (1u << 5) // a panel backlight it can dim
 
 // Where the pixels live and how they're laid out.
 struct display_surface {
@@ -100,6 +101,12 @@ struct display_driver {
     int  (*mode_count)(void);
     void (*mode_at)(int index, struct display_mode *out);
     int  (*set_mode)(const struct display_mode *mode);
+
+    // Required together when DISPLAY_CAP_BACKLIGHT. Levels are PERCENT,
+    // 0..100; the driver owns the PWM duty behind them. set returns 1
+    // when the hardware took it.
+    int  (*backlight_get)(void);
+    int  (*backlight_set)(int percent);
 };
 
 // Called by each driver's own *_init() before display_probe() runs.
@@ -128,6 +135,10 @@ int  display_copy_rect(int sx, int sy, int dx, int dy, int w, int h);
 int  display_mode_count(void);
 void display_mode_at(int index, struct display_mode *out);
 int  display_set_mode(const struct display_mode *mode);
+// Backlight, in percent. get returns -1 and set returns 0 without
+// DISPLAY_CAP_BACKLIGHT.
+int  display_backlight_get(void);
+int  display_backlight_set(int percent);
 
 // Which mechanism made the framebuffer write-combining at probe time
 // (an enum paging_wc_result). Worth asking about because PAGING_WC_NONE

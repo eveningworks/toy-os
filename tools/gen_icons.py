@@ -366,6 +366,18 @@ def icon_tray_volume_muted():
     return im
 
 
+# The tray's brightness item: a sun, one state -- the level lives on
+# the slider, and a sun that changed with it would be a second gauge.
+def icon_tray_brightness():
+    im, d = _tb()
+    d.ellipse([20, 20, 44, 44], fill=TB_INK)
+    for (x0, y0, x1, y1) in [(32, 4, 32, 12), (32, 52, 32, 60), (4, 32, 12, 32),
+                             (52, 32, 60, 32), (12, 12, 18, 18), (46, 46, 52, 52),
+                             (46, 18, 52, 12), (12, 52, 18, 46)]:
+        d.line([(x0, y0), (x1, y1)], fill=TB_INK, width=5)
+    return im
+
+
 # The five file verbs. Copy/Move are a PAIR and read as one: two sheets
 # for copy, one sheet plus an arrow for move -- which is what Explorer's
 # ribbon and every commander's F5/F6 have always drawn.
@@ -605,6 +617,7 @@ ICONS = {
     "tray-volume-high": icon_tray_volume_high,
     "tray-volume-low": icon_tray_volume_low,
     "tray-volume-muted": icon_tray_volume_muted,
+    "tray-brightness": icon_tray_brightness,
 }
 
 # Crash Test deliberately gets NO icon file. It is the one entry that

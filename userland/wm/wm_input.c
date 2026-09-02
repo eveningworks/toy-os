@@ -7,6 +7,7 @@
 #include "context_menu.h"
 #include "calendar_popup.h"
 #include "volume_popup.h"
+#include "brightness_popup.h"
 #include "wm_overlay.h"
 #include "wm_taskbar.h"
 #include "wm_tray.h"
@@ -90,6 +91,7 @@ void wm_handle_left_click(int mx, int my) {
         if (uui_hit(4, ty, sbw, taskbar_h, mx, my)) {
             calendar_close(); // the popups are mutually exclusive
             volume_close();
+            brightness_close();
             start_menu_open_now();
             redraw_pending = 1;
             return;
@@ -104,6 +106,7 @@ void wm_handle_left_click(int mx, int my) {
             if (tray_clock_rect(&cx, &cy, &cw, &ch) &&
                 uui_hit(cx, cy, cw, ch, mx, my)) {
                 volume_close();
+                brightness_close();
                 calendar_open_now();
                 return;
             }
@@ -418,6 +421,7 @@ void wm_handle_right_click(int mx, int my) {
     if (context_menu_open) context_menu_close();
     calendar_close(); // a right-click anywhere dismisses it, as a menu does
     volume_close();
+    brightness_close();
 
     if (my >= screen_h - taskbar_h) {
         taskbar_handle_right_click(mx, my);
