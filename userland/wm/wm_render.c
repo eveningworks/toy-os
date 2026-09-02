@@ -769,35 +769,37 @@ int wm_cursor_shape_changed(int mx, int my) {
 // makes the edge anti-aliased against whatever is really behind it
 // rather than against a guessed colour.
 //
-// THE RADIUS IS FONT-DERIVED (a third of the line height, the tab
-// strip's rule), so it scales with the chrome. Hit testing stays
+// THE RADIUS IS FONT-DERIVED (half the line height, 8 px at the default
+// font -- Breeze's), so it scales with the chrome. Hit testing stays
 // rectangular on purpose: a click in a corner still belongs to the
 // window, as it does on every real desktop.
 
 #define CORNER_MAX_R 16
+#define BEVEL_LIGHT ugfx_rgb(200, 200, 205)   // the same two values draw_window_chrome() uses
+#define BEVEL_DARK  ugfx_rgb(40, 40, 45)
 
 static int corner_radius(const struct window *win) {
     if (win->state == WIN_MAXIMIZED) return 0;
-    int r = ugfx_char_h() / 3;
-    if (r < 3) r = 3;
+    int r = ugfx_char_h() / 2;
+    if (r < 4) r = 4;
     if (r > CORNER_MAX_R) r = CORNER_MAX_R;
     if (2 * r > win->w || 2 * r > win->h) return 0;
     return r;
 }
 
 // Coverage of pixel (px, py) -- measured from the corner's outer edge,
-// 0 being the outermost row/column -- by a quarter disc of radius r,
-// in 0..255. Sixteen sub-samples per pixel; r is a handful of pixels,
-// so the whole corner is a few hundred compares.
-static uint8_t corner_coverage(int r, int px, int py) {
+// 0 being the outermost row/column -- by a disc of radius `rad` centred
+// on the arc centre (r, r), in 0..255. Sixteen sub-samples per pixel; r
+// is a handful of pixels, so the whole corner is a few hundred compares.
+static uint8_t corner_coverage(int r, int rad, int px, int py) {
     int in = 0;
     for (int sy = 0; sy < 4; sy++) {
         for (int sx = 0; sx < 4; sx++) {
-            // Sub-sample centre in eighths, distance to the arc centre
-            // (r, r) in the same units: inside when d^2 <= (8r)^2.
+            // Sub-sample centre in eighths, distance to (r, r) in the
+            // same units: inside when d^2 <= (8 rad)^2.
             int cx = 8 * px + 2 * sx + 1 - 8 * r;
             int cy = 8 * py + 2 * sy + 1 - 8 * r;
-            if (cx * cx + cy * cy <= 64 * r * r) in++;
+            if (cx * cx + cy * cy <= 64 * rad * rad) in++;
         }
     }
     return (uint8_t)(in * 255 / 16);
@@ -842,14 +844,22 @@ static void corners_round(const struct window *win) {
     for (int c = 0; c < 4; c++)
         for (int py = 0; py < r; py++)
             for (int px = 0; px < r; px++) {
-                uint8_t cov = corner_coverage(r, px, py);
-                if (cov == 255) continue;
+                uint8_t cov   = corner_coverage(r, r, px, py);
+                uint8_t inner = corner_coverage(r, r - 1, px, py);
+                if (cov == 255 && inner == 255) continue;
                 int x, y;
                 corner_pixel(win, c, px, py, &x, &y);
                 if (!corner_in_clip(x, y)) continue;
                 uint32_t under = corner_under[c][py * r + px];
-                if (cov == 0) ugfx_put_pixel(wm_surface(), x, y, under);
-                else ugfx_blend_pixel(wm_surface(), x, y, under, (uint8_t)(255 - cov));
+                if (cov == 0) { ugfx_put_pixel(wm_surface(), x, y, under); continue; }
+                if (cov < 255) ugfx_blend_pixel(wm_surface(), x, y, under, (uint8_t)(255 - cov));
+                // THE OUTLINE FOLLOWS THE ARC: the 1px bevel is four straight
+                // lines, so the ring between radius r and r-1 carries its
+                // colour round the corner -- light on the top corners, dark
+                // on the bottom ones, as the straight edges are.
+                uint8_t ring = (uint8_t)(cov - inner);
+                if (ring) ugfx_blend_pixel(wm_surface(), x, y,
+                                           (c & 2) ? BEVEL_DARK : BEVEL_LIGHT, ring);
             }
 }
 
@@ -867,8 +877,8 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
     // function rather than named in theme.h since nothing else draws a
     // bevel yet (see theme.h's top comment on only naming values that
     // actually repeat).
-    uint32_t bevel_light = ugfx_rgb(200, 200, 205);
-    uint32_t bevel_dark = ugfx_rgb(40, 40, 45);
+    uint32_t bevel_light = BEVEL_LIGHT;
+    uint32_t bevel_dark = BEVEL_DARK;
     ugfx_fill_rect(wm_surface(), win->x, win->y, win->w, 1, bevel_light);            // top
     ugfx_fill_rect(wm_surface(), win->x, win->y, 1, win->h, bevel_light);            // left
     ugfx_fill_rect(wm_surface(), win->x, win->y + win->h - 1, win->w, 1, bevel_dark); // bottom

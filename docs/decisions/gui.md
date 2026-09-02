@@ -4939,8 +4939,10 @@ per frame, a few hundred pixel operations at a five-pixel radius, and
 change is `wm_render_cursor_move()`'s save-under, which never repaints
 windows and therefore never sees a corner.
 
-The radius is font-derived (`ugfx_char_h() / 3`, the tab strip's rule)
-because every other chrome measurement here is, and hard pixels were
+The radius is font-derived (`ugfx_char_h() / 2`, 8 px at the default
+font, Breeze's) because every other chrome measurement here is -- a
+third, the tab strip's radius, shipped first and the maintainer read
+it as still square -- and hard pixels were
 rejected for the same reason the title buttons are discs: at this size
 an aliased arc reads as a staircase.
 

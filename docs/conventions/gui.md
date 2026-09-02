@@ -342,8 +342,9 @@ this the obvious way), not from how much history it accumulated.
   or the window below rather than a guessed colour. It works because
   the compositor repaints everything under the damage box back to
   front (`docs/decisions/gui.md`); nothing else knows a corner is
-  transparent, and nothing needs to. **The radius is a third of the
-  line height**, the tab strip's rule, and **a maximized window is
+  transparent, and nothing needs to. **The radius is half the line
+  height**, 8 px at the default font (Breeze's; a third was tried and
+  read as square), and **a maximized window is
   square** -- Breeze's and Windows 11's rule both. **Hit testing stays
   rectangular**: a click in a corner belongs to the window. Two
   consequences for tests: a pixel sampled at a window's outermost

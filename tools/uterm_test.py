@@ -681,6 +681,47 @@ def check_tabs(dbg, qmp, tmp, res):
     res.check("t7. Ctrl+Shift+W closes a tab", tab_count(dbg) == 1,
               f"tabs {tab_count(dbg)}")
 
+    # A tab opened AFTER the window grew. grow_caps() frees every
+    # session's old grids on a resize, and a fresh session struct that
+    # inherited those freed pointers skipped its own allocation and wrote
+    # through them (a GP fault, the Terminal gone). Maximize by a title
+    # bar double-click, then open a tab.
+    win = dbg.window(TITLE)
+    if win:
+        tx, ty = win["x"] + win["w"] // 2, win["y"] + 8
+        dbg.send(f"gui click {tx} {ty}")
+        time.sleep(0.1)
+        dbg.send(f"gui click {tx} {ty}")
+        dbg.settle()
+        win = dbg.window(TITLE)
+    res.check("t8. a title-bar double-click maximizes the Terminal",
+              win is not None and win["state"] == "maximized",
+              f"state {win['state'] if win else 'gone'}")
+    if win:
+        dbg.click(win["x"] + win["w"] // 2, win["y"] + win["h"] // 2)
+        dbg.settle()
+        qmp.combo(["ctrl", "shift", "t"])
+        time.sleep(1.2)
+        dbg.settle()
+        win = dbg.window(TITLE)
+    res.check("t9. a tab opens in the maximized window and it survives",
+              win is not None and tab_count(dbg) == 2,
+              f"window {'alive' if win else 'GONE'}, tabs {tab_count(dbg)}")
+    # Put it back for the checks that follow: one tab, normal size.
+    if win:
+        qmp.combo(["ctrl", "shift", "w"])
+        time.sleep(1.0)
+        dbg.settle()
+        tx, ty = win["x"] + win["w"] // 2, win["y"] + 8
+        dbg.send(f"gui click {tx} {ty}")
+        time.sleep(0.1)
+        dbg.send(f"gui click {tx} {ty}")
+        dbg.settle()
+        win = dbg.window(TITLE)
+        res.check("t10. ...and a second double-click restores it",
+                  win is not None and win["state"] == "normal" and tab_count(dbg) == 1,
+                  f"state {win['state'] if win else 'gone'}, tabs {tab_count(dbg)}")
+
 
 def item_rect(dbg, level, index):
     """One reported menu row: `uterm: layout item <level> <i> x y w h`."""

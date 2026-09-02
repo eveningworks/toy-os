@@ -128,13 +128,17 @@ def run(dbg, qmp, tmp, res):
 
     # The paired half: the CLIENT repainted at the new size. Its border
     # sits at the new bottom-right corner if and only if it did.
+    # THE MIDDLE OF THE BOTTOM EDGE, not the corner: the frame's rounded
+    # corners cover the content's last few pixels there, so a corner
+    # sample reads the outline ring. The border runs the whole edge, and
+    # its middle is as far from a corner as it gets.
     ac = after["content"]
-    corner = pixel(qmp, tmp, "uapp_resized.png", ac["x"] + ac["w"] - 2, ac["y"] + ac["h"] - 2)
+    corner = pixel(qmp, tmp, "uapp_resized.png", ac["x"] + ac["w"] // 2, ac["y"] + ac["h"] - 2)
     old_corner = pixel(qmp, tmp, "uapp_resized.png",
-                       ac["x"] + c["w"] - 2, ac["y"] + c["h"] - 2)
+                       ac["x"] + c["w"] // 2, ac["y"] + c["h"] - 2)
     res.check("the client repainted at the new size, not just the chrome",
               corner == BORDER and old_corner != BORDER,
-              f"new corner {corner} (want {BORDER}), old corner {old_corner} (want != {BORDER})")
+              f"new edge {corner} (want {BORDER}), old edge {old_corner} (want != {BORDER})")
 
     # 5. Below the declared minimum, the proposal is clamped rather than
     #    obeyed. winclient asks for min 120x80 content.

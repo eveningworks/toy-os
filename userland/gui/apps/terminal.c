@@ -663,6 +663,11 @@ static int session_start(int slot) {
     if (!s) {
         s = (struct session *)malloc(sizeof *s);
         if (!s) return 0;
+        // A FRESH STRUCT HAS NO BUFFERS YET, and malloc does not zero:
+        // the pointers carried across the wipe below would otherwise be
+        // whatever last lived here -- after grow_caps() has freed the
+        // old grids, exactly them -- and the allocation would be skipped.
+        s->grid = 0; s->sb = 0; s->saved = 0;
         g_slot[slot] = s;
     }
     // Zeroed whether it is new or reused -- a recycled session must not
