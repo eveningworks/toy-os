@@ -324,7 +324,7 @@ int usb_net_bind(struct usb_device_info *info, const uint8_t *cfg,
     // Two frames' worth: NET_BUFS each way at NET_BUF_SIZE.
     uint64_t need = (uint64_t)NET_BUFS * 2 * NET_BUF_SIZE;
     uint64_t pages = (need + 4095) / 4096;
-    d->mem_phys = pmm_alloc_contiguous(pages);
+    d->mem_phys = pmm_alloc_contiguous(pages, PMM_ZONE_DMA32);
     if (!d->mem_phys) {
         klog_write("usb: no contiguous frames for the CDC-ECM buffers\n");
         return 0;

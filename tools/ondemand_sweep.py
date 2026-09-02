@@ -174,6 +174,11 @@ TOOLS = [
     # --- init ---------------------------------------------------------
     ("init",        "init_test.py",            "init and service supervision",       True,  None,                   False),
 
+    # --- memory -------------------------------------------------------
+    # Boots its own 8 GiB guest through ktest_run.py; the check it
+    # exists for SKIPS on the 256 MiB boot every other runner uses.
+    ("highmem",     "highmem_test.py",         "frames above 4 GiB managed and zoned", True, None,                  False),
+
     # --- the kernel's own output --------------------------------------
     # A COM1 consumer that stops reading must not stop the machine. Its
     # fixture is a reader that goes deaf, so it needs its own boot and

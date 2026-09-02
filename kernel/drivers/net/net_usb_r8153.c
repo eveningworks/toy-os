@@ -832,7 +832,7 @@ int usb_r8153_bind(struct usb_device_info *info, const uint8_t *cfg,
 
     uint64_t need = (uint64_t)R8153_BUFS * (R8153_RX_BUF + R8153_TX_BUF);
     d->mem_pages = (uint32_t)((need + 4095) / 4096);
-    d->mem_phys = pmm_alloc_contiguous(d->mem_pages);
+    d->mem_phys = pmm_alloc_contiguous(d->mem_pages, PMM_ZONE_DMA32);
     if (!d->mem_phys) {
         klog_write("usb: no contiguous frames for the r8153 buffers\n");
         return 0;

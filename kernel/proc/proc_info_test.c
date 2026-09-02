@@ -82,7 +82,7 @@ KTEST("procinfo", "mapping a page adds exactly one page of memory") {
 
     KTEST_ASSERT_EQ(vmm_user_bytes(as), (uint64_t)0);
 
-    uint64_t frame = pmm_alloc_frame();
+    uint64_t frame = pmm_alloc_frame(PMM_ZONE_DMA32);
     KTEST_ASSERT(frame != 0);
     KTEST_ASSERT(vmm_map_user_page(as, TEST_VADDR, frame));
 
@@ -95,7 +95,7 @@ KTEST("procinfo", "unmapping a page gives the memory back") {
     uint64_t as = vmm_create_address_space();
     KTEST_ASSERT(as != 0);
 
-    uint64_t frame = pmm_alloc_frame();
+    uint64_t frame = pmm_alloc_frame(PMM_ZONE_DMA32);
     KTEST_ASSERT(frame != 0);
     KTEST_ASSERT(vmm_map_user_page(as, TEST_VADDR, frame));
     KTEST_ASSERT_EQ(vmm_user_bytes(as), (uint64_t)4096);
@@ -114,7 +114,7 @@ KTEST("procinfo", "remapping the same address does not count twice") {
     uint64_t as = vmm_create_address_space();
     KTEST_ASSERT(as != 0);
 
-    uint64_t a = pmm_alloc_frame(), b = pmm_alloc_frame();
+    uint64_t a = pmm_alloc_frame(PMM_ZONE_DMA32), b = pmm_alloc_frame(PMM_ZONE_DMA32);
     KTEST_ASSERT(a != 0 && b != 0);
 
     KTEST_ASSERT(vmm_map_user_page(as, TEST_VADDR, a));
@@ -135,7 +135,7 @@ KTEST("procinfo", "a destroyed address space does not haunt its successor") {
     uint64_t as = vmm_create_address_space();
     KTEST_ASSERT(as != 0);
 
-    uint64_t frame = pmm_alloc_frame();
+    uint64_t frame = pmm_alloc_frame(PMM_ZONE_DMA32);
     KTEST_ASSERT(frame != 0);
     KTEST_ASSERT(vmm_map_user_page(as, TEST_VADDR, frame));
     KTEST_ASSERT(vmm_user_bytes(as) > 0);

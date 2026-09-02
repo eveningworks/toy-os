@@ -323,7 +323,7 @@ int virtio_gpu_set_mode(uint32_t w, uint32_t h, struct display_surface *out) {
     // display.h requires a failed set_mode to leave the previous mode
     // running. The cost is that both framebuffers are allocated at once
     // for the length of this call -- 16 MiB at 1920x1080, briefly.
-    uint64_t phys = pmm_alloc_contiguous(frames);
+    uint64_t phys = pmm_alloc_contiguous(frames, PMM_ZONE_DMA32);
     if (!phys) {
         klog_printf("virtio-gpu: %ux%u needs %u contiguous frames and none were free\n",
                     w, h, (unsigned)frames);
@@ -532,7 +532,7 @@ static int cursor_init(void) {
         klog_write("virtio-gpu: no cursor queue -- the pointer stays a software sprite\n");
         return 0;
     }
-    g_cursor_phys = pmm_alloc_contiguous((GPU_CURSOR_BYTES + 4095) / 4096);
+    g_cursor_phys = pmm_alloc_contiguous((GPU_CURSOR_BYTES + 4095) / 4096, PMM_ZONE_DMA32);
     if (!g_cursor_phys) {
         klog_write("virtio-gpu: no frames for a cursor resource\n");
         virtqueue_teardown(&g_cursorq);

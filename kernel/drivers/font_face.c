@@ -425,7 +425,7 @@ const struct font_atlas *font_face_build(int px, enum font_weight weight) {
                     cache_count, (unsigned)(cache_bytes / 1024));
         return 0;
     }
-    uint64_t phys = pmm_alloc_contiguous(pages);
+    uint64_t phys = pmm_alloc_contiguous(pages, PMM_ZONE_DMA32);
     if (!phys) {
         klog_printf("font: no %uKB contiguous for a %dpx atlas\n",
                     (unsigned)(pages * 4), px);

@@ -244,7 +244,7 @@ static uint64_t imgcache_get(const char *path, uint64_t off) {
     }
     if (g_imgcache_n >= IMGCACHE_MAX) return 0; // full: caller reads the disk
 
-    uint64_t frame = pmm_alloc_frame();
+    uint64_t frame = pmm_alloc_frame(PMM_ZONE_DMA32);
     if (!frame) return 0;
     for (int i = 0; i < 4096; i++) ((uint8_t *)(uintptr_t)frame)[i] = 0;
     fs_read_range(path, off, (void *)(uintptr_t)frame, 4096);
@@ -260,7 +260,7 @@ int mmap_fault_in(struct sched_mm *mm, uint64_t pml4_phys, uint64_t vaddr) {
     struct mmap_region *r = region_of(mm, page);
     if (!r) return 0; // a wild pointer that happens to land in the arena
 
-    uint64_t frame = pmm_alloc_frame();
+    uint64_t frame = pmm_alloc_frame(PMM_ZONE_DMA32);
     if (!frame) {
         klog_printf("mm: no frame for mmap page %#lx -- the process dies here\n",
                     page);

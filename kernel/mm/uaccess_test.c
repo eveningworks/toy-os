@@ -28,7 +28,7 @@ static uint64_t make_space(int pages, uint64_t *frames) {
     uint64_t as = vmm_create_address_space();
     if (!as) return 0;
     for (int i = 0; i < pages; i++) {
-        uint64_t f = pmm_alloc_frame();
+        uint64_t f = pmm_alloc_frame(PMM_ZONE_DMA32);
         if (!f) return 0;
         frames[i] = f;
         if (!vmm_map_user_page(as, TEST_VADDR + (uint64_t)i * 4096, f)) return 0;
@@ -234,7 +234,7 @@ KTEST("vmm", "destroying an address space frees the frames it OWNS") {
     uint64_t before = pmm_free_frames();
     uint64_t as = vmm_create_address_space();
     KTEST_ASSERT(as != 0);
-    uint64_t f = pmm_alloc_frame();
+    uint64_t f = pmm_alloc_frame(PMM_ZONE_DMA32);
     KTEST_ASSERT(f != 0);
     KTEST_ASSERT(vmm_map_user_page(as, TEST_VADDR, f));
     vmm_destroy_address_space(as);
@@ -243,7 +243,7 @@ KTEST("vmm", "destroying an address space frees the frames it OWNS") {
 }
 
 KTEST("vmm", "destroying an address space leaves a BORROWED frame alone") {
-    uint64_t f = pmm_alloc_frame();
+    uint64_t f = pmm_alloc_frame(PMM_ZONE_DMA32);
     KTEST_ASSERT(f != 0);
 
     uint64_t before = pmm_free_frames();
@@ -308,7 +308,7 @@ KTEST("vmm", "the audit catches a mapping of a FREED frame") {
 }
 
 KTEST("vmm", "a borrowed mapping is counted, and still audited") {
-    uint64_t f = pmm_alloc_frame();
+    uint64_t f = pmm_alloc_frame(PMM_ZONE_DMA32);
     KTEST_ASSERT(f != 0);
     uint64_t as = vmm_create_address_space();
     KTEST_ASSERT(as != 0);

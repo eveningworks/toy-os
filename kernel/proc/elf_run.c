@@ -240,7 +240,7 @@ int elf_run_from_fs(const char *path, const char *args) {
     // space uheap_fault() maps on demand -- see kernel/uaddr.h.
     uint64_t stack_phys = 0;
     for (int pg = 0; pg < UADDR_STACK_INIT_PAGES; pg++) {
-        uint64_t frame = pmm_alloc_frame();
+        uint64_t frame = pmm_alloc_frame(PMM_ZONE_DMA32);
         if (!frame) {
             vga_write("run: out of physical memory for the stack\n");
             return -1;

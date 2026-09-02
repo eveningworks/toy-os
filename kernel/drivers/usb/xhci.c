@@ -420,11 +420,11 @@ static int legacy_handoff(void) {
 
 // One 4 KiB frame, zeroed, identity-mapped. Returns 0 on failure.
 static void *alloc_frame(uint64_t *out_phys) {
-    uint64_t p = pmm_alloc_contiguous(1);
+    uint64_t p = pmm_alloc_contiguous(1, PMM_ZONE_DMA32);
     if (!p) return 0;
     if (p + 4096 > XHCI_ADDR_LIMIT) {
-        // Cannot happen today (pmm never hands out above 4 GiB), but
-        // the cast below would silently truncate if it ever did.
+        // Cannot happen for a DMA32 frame, but the cast below would
+        // silently truncate if the zone above ever changed.
         pmm_free_contiguous(p, 1);
         return 0;
     }

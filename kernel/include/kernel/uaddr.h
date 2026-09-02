@@ -79,6 +79,11 @@
 // stops being an arbitrary constant somebody has to keep raising and
 // becomes physical memory. It is affordable only because neither sbrk
 // nor the loader maps what it reserves.
+// Where the ring-3 image is linked (userland/rt/link.ld). Also the
+// ceiling of the kernel's physical map: identity-mapped RAM can only
+// grow up to here, so pmm manages nothing at or above it.
+#define UADDR_IMAGE_BASE    0x8000000000ULL
+
 #define UADDR_STACK_VADDR   0x807FF00000ULL
 
 // How many pages of stack the LOADER maps before the process runs.

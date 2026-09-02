@@ -558,10 +558,10 @@ static void ata_init_dma(void) {
     // if the pool can't produce that many contiguous frames, since a
     // smaller DMA window is still far better than dropping to PIO.
     uint32_t buf_frames = DMA_BUF_FRAMES;
-    uint64_t frames = pmm_alloc_contiguous(1 + buf_frames);
+    uint64_t frames = pmm_alloc_contiguous(1 + buf_frames, PMM_ZONE_DMA32);
     if (!frames) {
         buf_frames = 1;
-        frames = pmm_alloc_contiguous(1 + buf_frames);
+        frames = pmm_alloc_contiguous(1 + buf_frames, PMM_ZONE_DMA32);
         if (!frames) {
             klog_write("ata: out of contiguous memory for the PRDT/DMA buffer -- staying on PIO\n");
             return;

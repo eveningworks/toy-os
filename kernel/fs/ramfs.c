@@ -405,7 +405,7 @@ static int ramfs_init(const struct block_device *dev) {
     // is tmpfs's own default. Taken at mount rather than fixed at
     // compile time so `make run MEM=512` and a 4 GiB machine both get
     // something sensible, and so the number in `df` means something.
-    uint64_t free_bytes = pmm_free_frames() * 4096ull;
+    uint64_t free_bytes = pmm_zone_free_frames(PMM_ZONE_DMA32) * 4096ull;
     S->budget = free_bytes / 2;
 
     // The root. If this fails the machine has no filesystem at all,

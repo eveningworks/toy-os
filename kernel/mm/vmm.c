@@ -43,7 +43,7 @@ uint64_t vmm_kernel_pml4_phys(void) {
 }
 
 uint64_t vmm_create_address_space(void) {
-    uint64_t pml4_phys = pmm_alloc_frame();
+    uint64_t pml4_phys = pmm_alloc_frame(PMM_ZONE_DMA32);
     if (!pml4_phys) return 0;
     zero_table(pml4_phys);
 
@@ -59,7 +59,7 @@ static uint64_t ensure_next_level(uint64_t *table, int index) {
     if (table[index] & PAGE_PRESENT) {
         return table[index] & ADDR_MASK;
     }
-    uint64_t new_phys = pmm_alloc_frame();
+    uint64_t new_phys = pmm_alloc_frame(PMM_ZONE_DMA32);
     if (!new_phys) return 0;
     zero_table(new_phys);
     // USER must be set at every level of the walk, not just the leaf --

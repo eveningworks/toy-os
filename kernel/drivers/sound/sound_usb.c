@@ -822,7 +822,7 @@ int usb_audio_bind(struct usb_device_info *info, const uint8_t *cfg,
         klog_write("usb: no contiguous frames for the sound ring\n");
         return 0;
     }
-    a->pkt_phys = pmm_alloc_contiguous(1);
+    a->pkt_phys = pmm_alloc_contiguous(1, PMM_ZONE_DMA32);
     if (!a->pkt_phys) return 0;
     a->pkt = (uint8_t *)(uintptr_t)a->pkt_phys;   // identity-mapped
     k_memset(a->pkt, 0, 4096);

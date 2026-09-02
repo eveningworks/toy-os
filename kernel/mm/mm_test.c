@@ -13,6 +13,34 @@ KTEST("mm", "pmm contiguous alloc/free (legacy selftest)") {
     KTEST_ASSERT(pmm_selftest() == 1);
 }
 
+// Needs a guest with more than 4 GiB (`ktest_run.py --mem 8192`); on
+// the ordinary 256 MiB boot it skips, and a skip is reported as one.
+// The FAIL branch is what a wrong cap looks like: the firmware map
+// says memory exists up there and the allocator manages none of it.
+KTEST("mm", "frames above 4 GiB are managed and idle") {
+    uint64_t four_gib = (uint64_t)4 * 1024 * 1024 * 1024;
+    if (pmm_firmware_bytes() <= four_gib) KTEST_SKIP("guest has no memory above 4 GiB");
+    uint64_t high_total = pmm_zone_total_frames(PMM_ZONE_ANY);
+    KTEST_ASSERT(high_total > 0);
+    KTEST_ASSERT(pmm_zone_free_frames(PMM_ZONE_ANY) == high_total); // nobody asks for ANY yet
+    KTEST_ASSERT(pmm_frame_is_managed(four_gib));
+    KTEST_ASSERT(!pmm_frame_is_used(four_gib));
+    // The zones are honoured at the allocator, whatever the map covers:
+    // DMA32 stays low, ANY prefers high. The high frame is never touched.
+    uint64_t low = pmm_alloc_frame(PMM_ZONE_DMA32);
+    uint64_t high = pmm_alloc_frame(PMM_ZONE_ANY);
+    KTEST_ASSERT(low != 0 && low < four_gib);
+    KTEST_ASSERT(high >= four_gib);
+    KTEST_ASSERT(pmm_zone_free_frames(PMM_ZONE_ANY) == high_total - 1);
+    pmm_free_frame(low);
+    pmm_free_frame(high);
+    KTEST_ASSERT(pmm_zone_free_frames(PMM_ZONE_ANY) == high_total);
+    // A DMA32 run never straddles 4 GiB: ask for one that would.
+    uint64_t run = pmm_alloc_contiguous(8, PMM_ZONE_DMA32);
+    KTEST_ASSERT(run != 0 && run + 8 * 4096 <= four_gib);
+    pmm_free_contiguous(run, 8);
+}
+
 KTEST("mm", "heap alloc/free/coalesce (legacy selftest)") {
     KTEST_ASSERT(heap_selftest() == 1);
 }

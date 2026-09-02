@@ -160,7 +160,7 @@ void ac97_init(void) {
         klog_write("ac97: no contiguous frames for the ring\n");
         return;
     }
-    g_bdl_phys = pmm_alloc_contiguous(1);
+    g_bdl_phys = pmm_alloc_contiguous(1, PMM_ZONE_DMA32);
     if (!g_bdl_phys) return;
     g_bdl = (struct bdl_entry *)(uintptr_t)g_bdl_phys;
     for (int i = 0; i < SND_CHUNKS; i++) {

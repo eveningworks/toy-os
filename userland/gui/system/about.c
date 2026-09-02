@@ -161,13 +161,13 @@ static void fill_rows(void) {
     if (sys_query_record(QUERY_MEMINFO, 0, &mem, sizeof mem) >= (int)sizeof mem) {
         // INSTALLED, USABLE, FREE -- Windows' "8.00 GB (7.87 GB usable)"
         // shape. Installed is the firmware map's usable total; usable is
-        // what the allocator manages, which stops at 4 GiB today (the
-        // "More than 4 GiB of RAM" roadmap item), so the gap is shown
-        // rather than hidden behind one number.
+        // what can actually be handed out, which excludes the frames
+        // above 4 GiB until the identity map reaches them ("More than
+        // 4 GiB of RAM", stage 3 -- drop the two subtractions then).
         char inst[24], tot[24], freeb[24];
         gib(inst, sizeof inst, mem.phys_usable_bytes);
-        gib(tot, sizeof tot, mem.frame_total * mem.frame_bytes);
-        gib(freeb, sizeof freeb, mem.frame_free * mem.frame_bytes);
+        gib(tot, sizeof tot, (mem.frame_total - mem.frame_total_high) * mem.frame_bytes);
+        gib(freeb, sizeof freeb, (mem.frame_free - mem.frame_free_high) * mem.frame_bytes);
         r = add("Memory", 0, 0);
         snprintf(r->value, sizeof r->value, "%s installed, %s usable, %s free",
                  inst, tot, freeb);

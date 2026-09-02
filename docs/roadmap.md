@@ -24,7 +24,7 @@ FIRST, and this is what to do first among things that are all
 buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
-- [ ] Stage 1: a pmm bitmap sized from the memory map, and a ZONE on every allocation, every caller on DMA32  *(More than 4 GiB of RAM)*
+- [ ] Stage 2: extend the identity map over every usable region above 4 GiB after `pmm_init()`, 1 GiB pages where the CPU has them  *(More than 4 GiB of RAM)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
 - [ ] Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today  *(Networking)*
@@ -167,8 +167,8 @@ is the bookkeeping that makes any other kind of mapping possible.
 ### More than 4 GiB of RAM
 **Needs:** nothing -- planned 2026-09-02, five stages below in build order.
 
-- [ ] **NEXT** Stage 1: a pmm bitmap sized from the memory map, and a ZONE on every allocation, every caller on DMA32
-- [ ] Stage 2: extend the identity map over every usable region above 4 GiB after `pmm_init()`, 1 GiB pages where the CPU has them
+- [x] ~~Stage 1: a pmm bitmap sized from the memory map, and a ZONE on every allocation, every caller on DMA32~~ DONE 2026-09-02
+- [ ] **NEXT** Stage 2: extend the identity map over every usable region above 4 GiB after `pmm_init()`, 1 GiB pages where the CPU has them
 - [ ] Stage 3: user pages, the kernel heap and mmap fault-ins take frames from ANY, one caller at a time, each with a test
 - [ ] Stage 4: lift the "above 4 GiB" refusals in virtio-pci, xHCI and AHCI once a BAR up there is reachable
 - [ ] Stage 5: `vm.py --mem 8192` in a test that consumes past 4 GiB, and About on the laptop reading usable == installed

@@ -619,6 +619,7 @@ whenever a headline here tells you something you did not already know.
 - **`SYS_WNOHANG` exists, and the bug that produced it is the lesson.**
 - **`SYS_SBRK` RESERVES; THE PAGE ARRIVES ON TOUCH.**
 - **THE RING-3 MAP IS SIZED FOR 4K, and a region's END is what the next thing must clear.**
+- **A FRAME IS ALLOCATED FROM A ZONE, EVERY CALLER NAMES ONE, AND EVERYTHING SAYS `PMM_ZONE_DMA32` TODAY.**
 - **`SYS_SBRK` is PER PROCESS.**
 - **A RING-3 IMAGE HAS NO SIZE LIMIT, BECAUSE THE HEAP STARTS WHERE IT ENDS.**
 - **THE USER STACK IS RESERVED AND GROWN ON FAULT, and the GAP is what keeps that safe.**
@@ -1321,7 +1322,8 @@ cost".
   `demo_test.py`, `diskmark_test.py`, `doom_test.py`,
   `doom_sound_test.py`, `fat32_test.py`, `fileop_test.py`, `frame_balance.py`,
   `fs_switch_test.py`, `grep_test.py`, `guictl_test.py`,
-  `hash_hostcheck.py`,
+  `hash_hostcheck.py`, `highmem_test.py` (the frame allocator on an
+  8 GiB guest -- the one check `make test`'s 256 MiB boot SKIPS),
   `hires_test.py`,
   `init_test.py`, `install_test.py`, `jobs_test.py`, `kbd_test.py`,
   `keyboard_paths_test.py`, `kvm_soak.py`, `live_boot_test.py`,

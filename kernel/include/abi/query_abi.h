@@ -460,6 +460,13 @@ struct query_meminfo {
     uint64_t heap_used_bytes;
     uint64_t phys_usable_bytes; // RAM the firmware map calls usable, UNCAPPED --
                                 // frame_total * frame_bytes is what is managed
+    // The share of frame_total/frame_free at or above 4 GiB: managed
+    // and audited, but handed out only to PMM_ZONE_ANY callers, which
+    // nothing is until the identity map is extended. A reader wanting
+    // "what this machine can use today" subtracts them. APPENDED, so an
+    // older caller's shorter record still reads the fields above.
+    uint64_t frame_total_high;
+    uint64_t frame_free_high;
 };
 
 // QUERY_FSINFO's record.

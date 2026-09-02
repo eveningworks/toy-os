@@ -13,11 +13,30 @@
 // This only manages *physical* frames -- it knows nothing about virtual
 // addresses or page tables. Pairs with paging.c, which does the mapping
 // once you have a frame.
+//
+// EVERY ALLOCATION NAMES A ZONE. The identity map covers the low 4 GiB
+// (boot.asm), so a frame above it is a physical address the kernel
+// cannot dereference until the map is extended ("More than 4 GiB of
+// RAM" in docs/roadmap.md), and the ATA PRD and AC97 BDL registers are
+// 32-bit by specification whatever the map does. A caller that can only
+// use a low frame says DMA32; one that can take any frame says ANY, and
+// ANY prefers the high zone so the low one is kept for the callers that
+// need it (Linux's gfp zone fallback order, in miniature).
+//
+// The bitmaps are sized from the memory map at pmm_init(), not from a
+// constant, and carved out of low usable RAM before anything else is
+// handed out -- so the frames above 4 GiB are MANAGED (accounted for,
+// auditable) from stage 1 on, whether or not anything can map them.
+enum pmm_zone {
+    PMM_ZONE_DMA32 = 0, // below 4 GiB: identity-mapped, reachable by every DMA engine
+    PMM_ZONE_ANY   = 1, // anywhere managed; tries above 4 GiB first
+};
+
 void pmm_init(void);
 
-// Returns the physical address of a free 4KiB-aligned frame (and marks
-// it used), or 0 if none are left.
-uint64_t pmm_alloc_frame(void);
+// Returns the physical address of a free 4KiB-aligned frame in `zone`
+// (and marks it used), or 0 if none are left there.
+uint64_t pmm_alloc_frame(enum pmm_zone zone);
 
 // Marks a frame as free again. `phys_addr` should be a value previously
 // returned by pmm_alloc_frame() -- freeing an address pmm doesn't
@@ -27,7 +46,8 @@ void pmm_free_frame(uint64_t phys_addr);
 // Returns the physical address of the first frame of `count` physically
 // CONTIGUOUS free 4KiB frames (marking all of them used), or 0 if no
 // run that long exists. `count == 1` is just pmm_alloc_frame() under
-// the hood. For `count > 1`: a linear scan of the same bitmap
+// the hood. The run lies entirely inside `zone` -- a DMA32 run never
+// straddles 4 GiB. For `count > 1`: a linear scan of the same bitmap
 // pmm_alloc_frame() uses, looking for a run of `count` consecutive
 // free bits instead of just one -- no new data structure, and no
 // fragmentation-avoidance machinery (a buddy allocator, say) beyond
@@ -39,7 +59,7 @@ void pmm_free_frame(uint64_t phys_addr);
 // buddy allocator would buy over this if fragmentation ever became a
 // real problem. First real caller: a future NIC driver's descriptor
 // ring (see README.md's TCP/IP entry).
-uint64_t pmm_alloc_contiguous(uint64_t count);
+uint64_t pmm_alloc_contiguous(uint64_t count, enum pmm_zone zone);
 
 // Frees `count` frames starting at `phys_addr` (a value previously
 // returned by pmm_alloc_contiguous() with the same `count`) -- mirrors
@@ -65,13 +85,19 @@ int pmm_frame_is_used(uint64_t phys_addr);
 // second page size. sys_sysinfo() open-coded it as `* 4` for KB.
 uint64_t pmm_frame_size(void);
 
+// Over EVERY managed frame, both zones. A reader that can only use low
+// memory (ramfs's budget, About's "usable") asks the per-zone pair --
+// until the consumers move to ANY, a free frame above 4 GiB is free
+// in the books and unusable in practice.
 uint64_t pmm_total_frames(void);
 uint64_t pmm_free_frames(void);
+uint64_t pmm_zone_total_frames(enum pmm_zone zone);
+uint64_t pmm_zone_free_frames(enum pmm_zone zone);
 
-// Bytes of RAM the firmware map calls usable, BEFORE the 4 GiB cap
-// this allocator applies -- what a machine has, as opposed to what
-// pmm_total_frames() manages. The gap is the "More than 4 GiB of RAM"
-// roadmap item, and About shows both so the gap is visible.
+// Bytes of RAM the firmware map calls usable, whole frames only and
+// uncapped -- what a machine has. Differs from pmm_total_frames() by
+// the reservations (the image, the bitmaps, the multiboot info) and by
+// anything above the ring-3 map's base, which is never managed.
 uint64_t pmm_firmware_bytes(void);
 
 // Exercises pmm_alloc_contiguous()/pmm_free_contiguous() once and logs

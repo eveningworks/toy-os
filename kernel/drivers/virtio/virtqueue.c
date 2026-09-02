@@ -121,7 +121,7 @@ int virtqueue_setup(struct virtio_device *d, uint16_t index, struct virtqueue *v
     uint32_t used_pages  = pages_for(6u + (uint32_t)size * 8u);
     uint32_t frames = desc_pages + avail_pages + used_pages;
 
-    uint64_t base = pmm_alloc_contiguous(frames);
+    uint64_t base = pmm_alloc_contiguous(frames, PMM_ZONE_DMA32);
     if (!base) {
         klog_printf("virtio: queue %u needs %u contiguous frames and none were free\n",
                     index, frames);

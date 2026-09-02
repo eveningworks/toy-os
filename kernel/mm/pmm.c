@@ -1,111 +1,200 @@
 // Bitmap-based physical frame allocator. One bit per 4KiB frame, 1 =
 // used/reserved, 0 = free. Built once at boot from the Multiboot2
-// memory map (see multiboot.c) and never resized -- this is deliberately
-// simple, matching the rest of toy-os's approach so far: correct and
-// easy to reason about, not optimized.
+// memory map (see multiboot.c) and never resized -- deliberately
+// simple: correct and easy to reason about, not optimized.
+//
+// THE BITMAPS ARE SIZED FROM THE MEMORY MAP AND LIVE IN LOW RAM THEY
+// RESERVE FOR THEMSELVES. They used to be two static 128 KiB arrays
+// sized for 4 GiB, which capped what the allocator could even see. Now
+// pmm_init() finds the highest usable address, carves both bitmaps out
+// of the first low region that holds them clear of the image, the
+// modules and the multiboot info, and marks that carve used -- so the
+// allocator's own books are the first allocation it makes.
+//
+// ZONES: frames below 4 GiB are DMA32, the rest are the high zone.
+// Both are managed; only the consumers decide what they can reach.
 #include "pmm.h"
 #include "bootstage.h"
 #include "multiboot.h"
 #include "klog.h"
+#include "kfmt.h"
 #include "reloc.h"
+#include "uaddr.h"
+#include "string.h"
 #include <stddef.h>
 
-// Linker symbol from linker.ld: the first physical address after
-// everything the kernel image occupies (code, data, bss). Reserving up
-// to here (rather than a hardcoded guess) means this stays correct if
-// the kernel grows.
+// Linker symbols from linker.ld: the running image's extent. With
+// kernel ASLR, `_kernel_end - kernel_reloc_delta()` is the abandoned
+// original's end, and that copy is still LIVE until gdt_init().
 extern char _kernel_end[];
-// The first address the image occupies. Only needed once the image can
-// MOVE -- see pmm_init()'s two-range reservation under kernel ASLR.
 extern char __kimage_start[];
 
 #define FRAME_SIZE 4096
+#define DMA32_FRAMES ((uint64_t)4 * 1024 * 1024 * 1024 / FRAME_SIZE)
+#define ZONE_COUNT 2
 
-// Frames are only ever handed out within the first 4GiB, matching the
-// range boot.asm identity-maps -- allocating a frame beyond that would
-// produce a physical address paging.c has no mapping for yet.
-#define PMM_MAX_FRAMES ((uint64_t)4 * 1024 * 1024 * 1024 / FRAME_SIZE)
-#define BITMAP_BYTES (PMM_MAX_FRAMES / 8)
+static uint8_t *bitmap;   // 1 = used or reserved
+// Which frames pmm accounts for at all -- set once from the firmware
+// map, never cleared. `bitmap` alone cannot tell an unmanaged frame
+// (MMIO, a framebuffer) from an allocated one: both are a set bit.
+static uint8_t *managed;
+static uint64_t max_frames = 0;    // frames the bitmaps cover
+static uint64_t bitmap_bytes = 0;  // per bitmap
+static uint64_t zone_total[ZONE_COUNT]; // managed frames per zone
+static uint64_t zone_free[ZONE_COUNT];  // allocatable per zone
+static uint64_t zone_hint[ZONE_COUNT];  // avoids rescanning from the zone's start
+static uint64_t firmware_bytes = 0;     // usable per the firmware map, uncapped
 
-static uint8_t bitmap[BITMAP_BYTES];
-// Which frames pmm accounts for at all -- set once, from the firmware's
-// memory map, and never cleared. Distinct from `bitmap`, which says
-// allocated-or-not: an unmanaged frame (MMIO, a framebuffer) and an
-// allocated one look identical there, and an auditor needs to tell them
-// apart. One bit per frame, 128 KiB, same as the bitmap beside it.
-static uint8_t managed[BITMAP_BYTES];
-static uint64_t total_frames = 0; // frames within regions firmware reported as available
-static uint64_t free_frames = 0;  // currently allocatable (total minus reservations)
-static uint64_t firmware_bytes = 0; // usable per the firmware map, uncapped
-static uint64_t alloc_hint = 0;   // avoids rescanning from frame 0 on every alloc
+// Index into the per-zone counters for a frame: the HIGH zone is index
+// 1, which is also PMM_ZONE_ANY -- the two coincide on purpose, since a
+// count "for ANY" has no meaning and a reader asking about frames
+// above 4 GiB is what pmm_zone_total_frames(PMM_ZONE_ANY) answers.
+static inline int zone_of(uint64_t frame) { return frame >= DMA32_FRAMES; }
 
 static inline void mark_used_bit(uint64_t frame) {
-    if (frame >= PMM_MAX_FRAMES) return;
+    if (frame >= max_frames) return;
     bitmap[frame / 8] |= (uint8_t)(1u << (frame % 8));
 }
 
 static inline void mark_free_bit(uint64_t frame) {
-    if (frame >= PMM_MAX_FRAMES) return;
+    if (frame >= max_frames) return;
     bitmap[frame / 8] &= (uint8_t)~(1u << (frame % 8));
 }
 
 static inline int bit_is_used(uint64_t frame) {
+    if (frame >= max_frames) return 1;
     return (bitmap[frame / 8] & (1u << (frame % 8))) != 0;
 }
 
+static inline uint64_t align_up(uint64_t v)   { return (v + FRAME_SIZE - 1) & ~((uint64_t)FRAME_SIZE - 1); }
+static inline uint64_t align_down(uint64_t v) { return v & ~((uint64_t)FRAME_SIZE - 1); }
+
+// ---- pass 1: how much is there? ----------------------------------
+
+static uint64_t highest_usable = 0; // frame-aligned end of the last usable region
+
+static void size_cb(const struct multiboot_mmap_region *region) {
+    if (region->type != 1) return;
+    uint64_t start = align_up(region->base);
+    uint64_t end = align_down(region->base + region->length);
+    if (end <= start) return;
+    firmware_bytes += end - start;              // uncapped: what the machine HAS
+    if (end > UADDR_IMAGE_BASE) end = UADDR_IMAGE_BASE; // the map can never reach past here
+    if (end > highest_usable) highest_usable = end;
+}
+
+// ---- where do the bitmaps go? ------------------------------------
+
+// Ranges pmm must not hand out and must not place its own bitmaps on.
+// The image (both copies under ASLR), every Multiboot2 module (GRUB
+// places one wherever it likes), and the multiboot info block itself
+// (the tag list multiboot_*() keeps reading for the whole boot).
+static int overlaps(uint64_t a0, uint64_t a1, uint64_t b0, uint64_t b1) {
+    return a0 < b1 && b0 < a1;
+}
+
+// If [start, end) touches a reserved range, return 1 and set *bump to
+// the first frame-aligned address past that range.
+static int hits_reserved(uint64_t start, uint64_t end, uint64_t *bump) {
+    uint64_t kend = (uint64_t)(uintptr_t)_kernel_end;
+    uint64_t delta = kernel_reloc_delta();
+    if (overlaps(start, end, 0, delta ? kend - delta : kend)) {
+        *bump = align_up(delta ? kend - delta : kend);
+        return 1;
+    }
+    if (delta && overlaps(start, end, (uint64_t)(uintptr_t)__kimage_start, kend)) {
+        *bump = align_up(kend);
+        return 1;
+    }
+    uint64_t s, e;
+    if (multiboot_get_info_range(&s, &e) && overlaps(start, end, s, e)) {
+        *bump = align_up(e);
+        return 1;
+    }
+    for (int i = 0; ; i++) {
+        struct multiboot_module_info mod;
+        if (!multiboot_get_module(i, &mod)) break;
+        if (overlaps(start, end, mod.start, mod.end)) {
+            *bump = align_up(mod.end);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static uint64_t bitmap_home = 0;  // physical address of both bitmaps, back to back
+static uint64_t bitmap_need = 0;  // bytes for both
+
+static void place_cb(const struct multiboot_mmap_region *region) {
+    if (bitmap_home || region->type != 1) return;
+    uint64_t start = align_up(region->base);
+    uint64_t end = align_down(region->base + region->length);
+    if (end > DMA32_FRAMES * FRAME_SIZE) end = DMA32_FRAMES * FRAME_SIZE; // must be identity-mapped
+    if (start < 0x100000) start = 0x100000; // the legacy area stays reserved
+    while (start + bitmap_need <= end) {
+        uint64_t bump;
+        if (!hits_reserved(start, start + bitmap_need, &bump)) {
+            bitmap_home = start;
+            return;
+        }
+        if (bump <= start) return; // cannot happen; refuse to spin
+        start = bump;
+    }
+}
+
+// ---- pass 2: the books --------------------------------------------
+
 static void mark_available_cb(const struct multiboot_mmap_region *region) {
     if (region->type != 1) return; // only "available" RAM
-
-    uint64_t start = region->base;
-    uint64_t end = region->base + region->length;
-
-    // Only free whole frames fully inside the region -- round the start
-    // up and the end down, rather than risk treating a partial frame at
-    // either edge as usable.
-    start = (start + FRAME_SIZE - 1) & ~((uint64_t)FRAME_SIZE - 1);
-    end = end & ~((uint64_t)FRAME_SIZE - 1);
-    if (end > start) firmware_bytes += end - start;   // counted BEFORE the cap
-    if (end > PMM_MAX_FRAMES * FRAME_SIZE) end = PMM_MAX_FRAMES * FRAME_SIZE;
-
+    uint64_t start = align_up(region->base);
+    uint64_t end = align_down(region->base + region->length);
+    if (end > max_frames * FRAME_SIZE) end = max_frames * FRAME_SIZE;
     for (uint64_t addr = start; addr < end; addr += FRAME_SIZE) {
         uint64_t f = addr / FRAME_SIZE;
         managed[f / 8] |= (uint8_t)(1u << (f % 8));
         mark_free_bit(f);
-        total_frames++;
+        zone_total[zone_of(f)]++;
     }
 }
 
 static void reserve_range(uint64_t start, uint64_t end) {
-    start &= ~((uint64_t)FRAME_SIZE - 1);
-    end = (end + FRAME_SIZE - 1) & ~((uint64_t)FRAME_SIZE - 1);
-    if (end > PMM_MAX_FRAMES * FRAME_SIZE) end = PMM_MAX_FRAMES * FRAME_SIZE;
-
-    for (uint64_t addr = start; addr < end; addr += FRAME_SIZE) {
-        mark_used_bit(addr / FRAME_SIZE);
-    }
+    start = align_down(start);
+    end = align_up(end);
+    if (end > max_frames * FRAME_SIZE) end = max_frames * FRAME_SIZE;
+    for (uint64_t addr = start; addr < end; addr += FRAME_SIZE) mark_used_bit(addr / FRAME_SIZE);
 }
 
 void pmm_init(void) {
-    for (uint64_t i = 0; i < BITMAP_BYTES; i++) bitmap[i] = 0xFF; // start fully reserved
-    total_frames = 0;
     firmware_bytes = 0;
+    highest_usable = 0;
+    multiboot_mmap_foreach(size_cb);
+
+    max_frames = highest_usable / FRAME_SIZE;
+    bitmap_bytes = (max_frames + 7) / 8;
+    bitmap_need = align_up(bitmap_bytes * 2);
+    bitmap_home = 0;
+    multiboot_mmap_foreach(place_cb);
+    if (!bitmap_home) {
+        // No low region holds the books: nothing can be allocated, and
+        // every caller reports that as out of memory. Say why once.
+        klog_printf("pmm: no room for %lu-byte frame bitmaps below 4 GiB -- no memory managed\n",
+                    bitmap_need);
+        max_frames = 0;
+        boot_subsystem_up(BOOT_SUB_PMM);
+        return;
+    }
+    bitmap = (uint8_t *)(uintptr_t)bitmap_home;
+    managed = bitmap + bitmap_bytes;
+    k_memset(bitmap, 0xFF, bitmap_bytes); // start fully reserved
+    k_memset(managed, 0, bitmap_bytes);
+    for (int z = 0; z < ZONE_COUNT; z++) zone_total[z] = zone_free[z] = zone_hint[z] = 0;
 
     multiboot_mmap_foreach(mark_available_cb);
 
-    // Reserve everything below and including the kernel image,
-    // regardless of what the memory map claims about that range --
-    // BIOS/GRUB commonly report it as "available" since they have no
-    // idea a kernel is sitting inside it.
-    //
-    // With kernel ASLR this is TWO ranges, not one. `_kernel_end` is a
-    // relocated symbol, so it names the end of the image that is
-    // actually running -- reserving [0, _kernel_end) would cover the
-    // abandoned original too, but at the cost of reserving every free
-    // byte between them, which on a randomized base is most of RAM.
-    // So the two are reserved separately, and the abandoned image is
-    // reserved rather than reclaimed because it is still LIVE: the CPU
-    // is using the GDT inside it until gdt_init() replaces it, and
-    // handing those frames out would corrupt it long before then.
+    // Reserve the image regardless of what the map says about that
+    // range -- the firmware has no idea a kernel is sitting in it. Under
+    // ASLR that is two ranges, reserved separately: [0, original end)
+    // and the relocated copy, never the span between them.
     uint64_t reloc_delta = kernel_reloc_delta();
     if (reloc_delta) {
         reserve_range(0, (uint64_t)(uintptr_t)_kernel_end - reloc_delta);
@@ -113,201 +202,201 @@ void pmm_init(void) {
     } else {
         reserve_range(0, (uint64_t)(uintptr_t)_kernel_end);
     }
-
-    // Also reserve any Multiboot2 module -- grub.cfg has none as of the
-    // ELF64-binaries-to-/bin migration (see docs/decisions.md), so this
-    // loop is a no-op today, but kept as real infrastructure rather
-    // than deleted: any `module2` line placed a module somewhere in
-    // physical memory GRUB picked, which is NOT necessarily covered by
-    // the kernel image's own range above, and missing this would let
-    // pmm_alloc_frame() hand out a module's own memory to whoever asks
-    // first, silently corrupting it out from under anyone still reading
-    // it (see elf.c, and the changelog entry this bug is documented
-    // under). Reserves however many modules exist, not just the first.
+    // Every Multiboot2 module (none today -- see docs/decisions.md on
+    // the move to /bin -- but a `module2` line lands wherever GRUB
+    // chose), and the info block itself, which is read all boot long.
     for (int i = 0; ; i++) {
         struct multiboot_module_info mod;
         if (!multiboot_get_module(i, &mod)) break;
         reserve_range(mod.start, mod.end);
     }
-
-    // Also reserve the Multiboot2 INFO STRUCTURE itself (the tag list
-    // multiboot_get_module()/multiboot_mmap_foreach() etc. all read) --
-    // a different region from any modules' own content above, and one
-    // that stays alive for the whole boot. Found the hard way, back
-    // when M16's scheduler still spawned processes via
-    // multiboot_get_module() (see scheduler.c's spawn_from_fs() now --
-    // it reads from the persistent filesystem instead, see
-    // docs/decisions.md): without reserving this range, spawning one
-    // ring-3 process could hand out this exact range via
-    // pmm_alloc_frame() (e.g. for that process's user stack), and the
-    // very next multiboot_get_module() call -- looking up a LATER
-    // module index -- would read corrupted tag data and silently fail,
-    // even though the module was really there. Kept reserved regardless
-    // of whether any modules exist today, same "real infrastructure,
-    // not deleted" reasoning as the loop above.
     uint64_t info_start, info_end;
-    if (multiboot_get_info_range(&info_start, &info_end)) {
-        reserve_range(info_start, info_end);
-    }
+    if (multiboot_get_info_range(&info_start, &info_end)) reserve_range(info_start, info_end);
+    // And the books themselves.
+    reserve_range(bitmap_home, bitmap_home + bitmap_need);
 
-    free_frames = 0;
-    for (uint64_t f = 0; f < PMM_MAX_FRAMES; f++) {
-        if (!bit_is_used(f)) free_frames++;
+    for (uint64_t f = 0; f < max_frames; f++) {
+        if (!bit_is_used(f)) zone_free[zone_of(f)]++;
     }
+    zone_hint[1] = DMA32_FRAMES;
+
+    klog_printf("pmm: %lu frames managed (%lu above 4 GiB), bitmaps %lu KiB at 0x%lx\n",
+                zone_total[0] + zone_total[1], zone_total[1], bitmap_need / 1024, bitmap_home);
 
     // See bootstage.h: allocating before this point returns 0, which
-    // every caller reports as "out of memory" -- a driver probing too
-    // early therefore looks like a device or a memory problem. Marked
-    // at the end of pmm_init() itself so it cannot drift.
+    // every caller reports as "out of memory". Marked at the end of
+    // pmm_init() itself so it cannot drift.
     boot_subsystem_up(BOOT_SUB_PMM);
 }
 
-uint64_t pmm_alloc_frame(void) {
-    BOOT_REQUIRE(BOOT_SUB_PMM);
-    for (uint64_t i = 0; i < PMM_MAX_FRAMES; i++) {
-        uint64_t f = (alloc_hint + i) % PMM_MAX_FRAMES;
+// The zone's frame range: DMA32 is [0, 4 GiB) clipped to what exists;
+// the high zone is everything from 4 GiB up, and may be empty.
+static void zone_range(int z, uint64_t *lo, uint64_t *hi) {
+    if (z == 0) {
+        *lo = 0;
+        *hi = max_frames < DMA32_FRAMES ? max_frames : DMA32_FRAMES;
+    } else {
+        *lo = DMA32_FRAMES;
+        *hi = max_frames > DMA32_FRAMES ? max_frames : DMA32_FRAMES;
+    }
+}
+
+static uint64_t alloc_one_in(int z) {
+    uint64_t lo, hi;
+    zone_range(z, &lo, &hi);
+    if (hi <= lo) return 0;
+    uint64_t span = hi - lo;
+    uint64_t start = zone_hint[z] >= lo && zone_hint[z] < hi ? zone_hint[z] : lo;
+    for (uint64_t i = 0; i < span; i++) {
+        uint64_t f = lo + (start - lo + i) % span;
         if (!bit_is_used(f)) {
             mark_used_bit(f);
-            free_frames--;
-            alloc_hint = f + 1;
+            zone_free[z]--;
+            zone_hint[z] = f + 1;
             return f * FRAME_SIZE;
         }
     }
-    return 0; // out of memory
+    return 0;
+}
+
+uint64_t pmm_alloc_frame(enum pmm_zone zone) {
+    BOOT_REQUIRE(BOOT_SUB_PMM);
+    // ANY tries the high zone first so DMA32 is kept for the callers
+    // that have no choice; a machine with nothing up there falls
+    // straight through.
+    if (zone == PMM_ZONE_ANY) {
+        uint64_t p = alloc_one_in(1);
+        if (p) return p;
+    }
+    return alloc_one_in(0);
 }
 
 void pmm_free_frame(uint64_t phys_addr) {
     BOOT_REQUIRE(BOOT_SUB_PMM);
     uint64_t f = phys_addr / FRAME_SIZE;
-    if (f >= PMM_MAX_FRAMES) return;
+    if (f >= max_frames) return;
     if (bit_is_used(f)) {
         mark_free_bit(f);
-        free_frames++;
+        zone_free[zone_of(f)]++;
     }
 }
 
-// See pmm.h's doc comment -- linear scan for a run of `count`
-// consecutive free bits, the same bitmap pmm_alloc_frame() uses. Always
-// scans from frame 0 (not alloc_hint) since this is a rare, not-hot-path
-// call where simplicity matters more than skipping already-scanned
-// ground -- unlike pmm_alloc_frame()'s hint, which earns its keep by
-// running on every single-frame allocation.
-uint64_t pmm_alloc_contiguous(uint64_t count) {
-    BOOT_REQUIRE(BOOT_SUB_PMM);
-    if (count == 0) return 0;
-    if (count == 1) return pmm_alloc_frame(); // fast path, identical to before this existed
-
-    uint64_t run_start = 0;
-    uint64_t run_len = 0;
-    for (uint64_t f = 0; f < PMM_MAX_FRAMES; f++) {
+static uint64_t alloc_run_in(int z, uint64_t count) {
+    uint64_t lo, hi;
+    zone_range(z, &lo, &hi);
+    uint64_t run_start = 0, run_len = 0;
+    for (uint64_t f = lo; f < hi; f++) {
         if (!bit_is_used(f)) {
             if (run_len == 0) run_start = f;
-            run_len++;
-            if (run_len == count) {
+            if (++run_len == count) {
                 for (uint64_t i = 0; i < count; i++) mark_used_bit(run_start + i);
-                free_frames -= count;
-                alloc_hint = run_start + count; // keep pmm_alloc_frame()'s hint sensible too
+                zone_free[z] -= count;
+                zone_hint[z] = run_start + count; // keep the single-frame hint sensible too
                 return run_start * FRAME_SIZE;
             }
         } else {
             run_len = 0;
         }
     }
-    return 0; // no run of `count` contiguous free frames anywhere in range
+    return 0; // no run of `count` contiguous free frames in this zone
+}
+
+// A linear scan for a run, deliberately with no buddy structure (see
+// pmm.h). count == 1 is the single-frame path with its hint.
+uint64_t pmm_alloc_contiguous(uint64_t count, enum pmm_zone zone) {
+    BOOT_REQUIRE(BOOT_SUB_PMM);
+    if (count == 0) return 0;
+    if (count == 1) return pmm_alloc_frame(zone);
+    if (zone == PMM_ZONE_ANY) {
+        uint64_t p = alloc_run_in(1, count);
+        if (p) return p;
+    }
+    return alloc_run_in(0, count);
 }
 
 void pmm_free_contiguous(uint64_t phys_addr, uint64_t count) {
     BOOT_REQUIRE(BOOT_SUB_PMM);
     uint64_t f = phys_addr / FRAME_SIZE;
     for (uint64_t i = 0; i < count; i++) {
-        if (f + i >= PMM_MAX_FRAMES) break;
+        if (f + i >= max_frames) break;
         if (bit_is_used(f + i)) {
             mark_free_bit(f + i);
-            free_frames++;
+            zone_free[zone_of(f + i)]++;
         }
     }
 }
 
 // Is this physical address one pmm accounts for at all? False for MMIO
-// and anything the firmware never reported as available RAM -- a
-// framebuffer, most obviously. An auditor has to tell "not mine" from
-// "mine and free": the first is normal, the second is a live mapping
-// pointing at memory the allocator is free to hand out.
+// and anything the firmware never reported as available RAM. An
+// auditor has to tell "not mine" from "mine and free": the second is a
+// live mapping pointing at memory the allocator may hand out again.
 int pmm_frame_is_managed(uint64_t phys_addr) {
     uint64_t f = phys_addr / FRAME_SIZE;
-    if (f >= PMM_MAX_FRAMES) return 0;
-    // A frame inside a region the firmware reported as available is
-    // accounted for whether it is currently allocated or not; one
-    // outside every such region is not pmm's business. `managed` is
-    // recorded at init because the bitmap alone cannot answer it -- an
-    // unmanaged frame and an allocated one are both a set bit.
+    if (f >= max_frames) return 0;
     return (managed[f / 8] & (1u << (f % 8))) != 0;
 }
 
 // Does pmm consider this frame handed out? Only meaningful for a frame
 // pmm_frame_is_managed() claims.
 int pmm_frame_is_used(uint64_t phys_addr) {
-    uint64_t f = phys_addr / FRAME_SIZE;
-    if (f >= PMM_MAX_FRAMES) return 1; // outside the bitmap: never "free"
-    return bit_is_used(f);
+    return bit_is_used(phys_addr / FRAME_SIZE); // outside the bitmap: never "free"
 }
 
 uint64_t pmm_frame_size(void) { return FRAME_SIZE; }
 
-uint64_t pmm_total_frames(void) { return total_frames; }
+uint64_t pmm_total_frames(void) { return zone_total[0] + zone_total[1]; }
+uint64_t pmm_free_frames(void) { return zone_free[0] + zone_free[1]; }
+uint64_t pmm_zone_total_frames(enum pmm_zone zone) { return zone_total[zone == PMM_ZONE_ANY]; }
+uint64_t pmm_zone_free_frames(enum pmm_zone zone) { return zone_free[zone == PMM_ZONE_ANY]; }
 uint64_t pmm_firmware_bytes(void) { return firmware_bytes; }
-uint64_t pmm_free_frames(void) { return free_frames; }
 
-// See pmm.h's doc comment. Deliberately checks both the returned address
-// and the underlying bitmap/free_frames bookkeeping directly (not just
-// "did it return nonzero") -- a bug that marks the wrong frames used, or
-// gets the free_frames count wrong, would still return a plausible
-// address and pass a shallower check.
+// See pmm.h's doc comment. Checks the bitmap and the free count
+// directly, not just "did it return nonzero" -- a bug marking the wrong
+// frames used would still return a plausible address.
 int pmm_selftest(void) {
-    uint64_t before = free_frames;
+    uint64_t before = pmm_free_frames();
 
-    uint64_t base = pmm_alloc_contiguous(4);
+    uint64_t base = pmm_alloc_contiguous(4, PMM_ZONE_DMA32);
     if (base == 0) {
         klog_write("toy-os: PMM SELFTEST FAILED -- pmm_alloc_contiguous(4) returned 0\n");
-        return 0; // failure -- see the message above
+        return 0;
     }
     if (base % FRAME_SIZE != 0) {
         klog_write("toy-os: PMM SELFTEST FAILED -- unaligned address from pmm_alloc_contiguous\n");
-        return 0; // failure -- see the message above
+        return 0;
     }
 
     uint64_t f = base / FRAME_SIZE;
     for (uint64_t i = 0; i < 4; i++) {
         if (!bit_is_used(f + i)) {
             klog_write("toy-os: PMM SELFTEST FAILED -- frame not marked used after alloc\n");
-            return 0; // failure -- see the message above
+            return 0;
         }
     }
-    if (free_frames != before - 4) {
+    if (pmm_free_frames() != before - 4) {
         klog_write("toy-os: PMM SELFTEST FAILED -- free_frames count wrong after alloc\n");
-        return 0; // failure -- see the message above
+        return 0;
     }
 
     pmm_free_contiguous(base, 4);
     for (uint64_t i = 0; i < 4; i++) {
         if (bit_is_used(f + i)) {
             klog_write("toy-os: PMM SELFTEST FAILED -- frame still marked used after free\n");
-            return 0; // failure -- see the message above
+            return 0;
         }
     }
-    if (free_frames != before) {
+    if (pmm_free_frames() != before) {
         klog_write("toy-os: PMM SELFTEST FAILED -- free_frames count wrong after free\n");
-        return 0; // failure -- see the message above
+        return 0;
     }
 
-    // A second alloc of the same size should land back at the same
-    // address -- proof the free above actually cleared those bits,
-    // rather than just leaving the count right by accident.
-    uint64_t base2 = pmm_alloc_contiguous(4);
+    // A second alloc of the same size lands back at the same address --
+    // proof the free cleared those bits rather than just the count.
+    uint64_t base2 = pmm_alloc_contiguous(4, PMM_ZONE_DMA32);
     if (base2 != base) {
         klog_write("toy-os: PMM SELFTEST FAILED -- reuse after free landed at a different address\n");
         pmm_free_contiguous(base2, 4);
-        return 0; // failure -- see the message above
+        return 0;
     }
     pmm_free_contiguous(base2, 4);
 

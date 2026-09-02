@@ -468,10 +468,10 @@ static void scan_ports(void) {
 
 static int alloc_dma(void) {
     uint32_t frames = DMA_BUF_FRAMES;
-    uint64_t base = pmm_alloc_contiguous(1 + frames);
+    uint64_t base = pmm_alloc_contiguous(1 + frames, PMM_ZONE_DMA32);
     if (!base) {
         frames = 1;
-        base = pmm_alloc_contiguous(1 + frames);
+        base = pmm_alloc_contiguous(1 + frames, PMM_ZONE_DMA32);
         if (!base) return 0;
         klog_write("ahci: only got a 4 KiB DMA buffer (contiguous pool too fragmented)\n");
     }

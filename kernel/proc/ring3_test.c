@@ -54,12 +54,12 @@ static void on_ring3_fault(uint64_t vector, uint64_t error_code, uint64_t cs, ui
 void ring3_test_run(void) {
     vga_write("Allocating code+data+stack frames from the physical allocator...\n");
 
-    uint64_t code_phys = pmm_alloc_frame();
-    data_phys = pmm_alloc_frame();
-    uint64_t stack_phys = pmm_alloc_frame();
+    uint64_t code_phys = pmm_alloc_frame(PMM_ZONE_DMA32);
+    data_phys = pmm_alloc_frame(PMM_ZONE_DMA32);
+    uint64_t stack_phys = pmm_alloc_frame(PMM_ZONE_DMA32);
 
     if (!code_phys || !data_phys || !stack_phys) {
-        vga_write("ring3_test: pmm_alloc_frame() failed -- out of physical memory?\n");
+        vga_write("ring3_test: pmm_alloc_frame(PMM_ZONE_DMA32) failed -- out of physical memory?\n");
         return;
     }
 

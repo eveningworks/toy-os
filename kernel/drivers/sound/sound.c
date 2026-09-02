@@ -98,7 +98,7 @@ static void activate(int idx) {
 
 void *sound_ring_alloc(uint64_t *out_phys) {
     if (!g_map) {
-        uint64_t phys = pmm_alloc_contiguous(SND_MAP_PAGES);
+        uint64_t phys = pmm_alloc_contiguous(SND_MAP_PAGES, PMM_ZONE_DMA32);
         if (!phys) return 0;
         g_map = (uint8_t *)(uintptr_t)phys; // identity-mapped kernel view
         g_map_phys = phys;

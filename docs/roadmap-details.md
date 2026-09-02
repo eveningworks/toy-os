@@ -2348,9 +2348,11 @@ measuring it.** Either can be done at any point, including first.
 ## More than 4 GiB of RAM
 
 About shows the gap since 2026-09-02: `phys_usable_bytes` on
-`QUERY_MEMINFO` is the firmware map's usable total before the 4 GiB
-cap, and the row reads "7.9 GiB installed, 3.4 GiB usable" on an 8 GB
-laptop. When stage 3 lands the two numbers meet.
+`QUERY_MEMINFO` is the firmware map's usable total, and the row reads
+"7.9 GiB installed, 3.4 GiB usable" on an 8 GB laptop. Since stage 1
+the high frames are MANAGED, so usable is `frame_total` minus
+`frame_total_high`; when stage 3 hands them out that subtraction goes
+and the two numbers meet.
 
 **Planned 2026-09-02, after a code audit.** The decision, and the
 reason it is not Linux's layout, is in `docs/decisions/kernel.md`
@@ -2369,17 +2371,20 @@ About 180 sites in `kernel/` dereference a physical address; none of
 them is wrong, and a higher-half direct map would have to touch every
 one. So the map stays identity and GROWS.
 
-**Stage 1 -- the allocator.** `PMM_MAX_FRAMES` and the two 128 KiB
-bitmaps (`bitmap[]`, `managed[]`) are sized from the 4 GiB assumption;
-size them from the highest usable address in the memory map instead,
-carving the bitmaps out of a low usable region at `pmm_init()` before
-anything else is handed out. Every allocation takes a ZONE: `DMA32`
-(below 4 GiB) or `ANY`. Every existing caller says `DMA32`, so nothing
-moves yet. The ATA PRD table and the AC97 BDL are 32-bit registers by
-spec and can never say otherwise; xHCI already reads `ac64` and refuses
-a high frame, which is the model. `meminfo audit` and the `mm` KTESTs
-cover the bitmaps; a KTEST asserts that under `vm.py --mem 8192` the
-frames above 4 GiB are MANAGED and none is allocated.
+**Stage 1 -- the allocator. BUILT 2026-09-02.** The bitmaps are sized
+from the highest usable address in the memory map (capped at
+`UADDR_IMAGE_BASE`, where the identity map can never reach) and carved
+out of low RAM at `pmm_init()` before anything else is handed out.
+Every allocation takes a ZONE, `PMM_ZONE_DMA32` or `PMM_ZONE_ANY`, and
+every caller says `DMA32`, so nothing moves yet; `ANY` prefers the high
+zone. The ATA PRD table and the AC97 BDL are 32-bit registers by spec
+and can never say otherwise; xHCI already reads `ac64` and refuses a
+high frame, which is the model. `QUERY_MEMINFO` grew
+`frame_total_high`/`frame_free_high`, About subtracts them, `meminfo`
+prints them as a row. The `mm` KTEST "frames above 4 GiB are managed
+and idle" SKIPS below 4 GiB and `tools/highmem_test.py` runs it on an
+8 GiB guest, refusing a skip; the positive control (capping the map at
+4 GiB again) fails it on `high_total > 0`.
 
 **Stage 2 -- the map.** After `pmm_init()`, walk the memory map and
 map every usable region above 4 GiB at its own address: 1 GiB PDPT

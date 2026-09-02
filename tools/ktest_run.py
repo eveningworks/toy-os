@@ -70,6 +70,9 @@ def main():
                          "virtio while the [ata] KTESTs keep the IDE drive.")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT,
                     help="COM1's TCP port on the host")
+    ap.add_argument("--mem", type=int, default=256, metavar="MIB",
+                    help="guest RAM in MiB (default 256). 8192 is what makes the "
+                         "mm suite's above-4-GiB check run rather than skip.")
     ap.add_argument("--qemu-log", default="ktest_qemu.log")
     ap.add_argument("-v", "--verbose", action="store_true", help="print the whole serial transcript")
     args = ap.parse_args()
@@ -79,7 +82,8 @@ def main():
         return 1
 
     guest = SerialGuest(args.iso, args.disk, port=args.port,
-                        qemu_log=args.qemu_log, virtio_disk=args.virtio_disk)
+                        qemu_log=args.qemu_log, virtio_disk=args.virtio_disk,
+                        memory=args.mem)
     verdict = None
     timeout_facts = []
     try:

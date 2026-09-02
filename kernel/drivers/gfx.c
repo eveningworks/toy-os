@@ -7,7 +7,7 @@
 #include "knum.h"      // k_parse_u32(), for the baked sizes' numeric names
 #include "random_hw.h" // arch_rdtsc(), for gfx_bench_fill()
 #include "paging.h"    // paging_wc_name(), for gfx_write_combining_name()
-#include "pmm.h"       // pmm_alloc_contiguous(), for the back buffer
+#include "pmm.h"       // pmm_alloc_contiguous(, PMM_ZONE_DMA32), for the back buffer
 #include "klog.h"
 #include "kfmt.h"   // klog_printf()
 #include <stddef.h>
@@ -394,7 +394,7 @@ int gfx_init(void) {
     uint32_t pixels = (uint32_t)width * (uint32_t)height;
     if (!back_buffer) {
         uint64_t pages = ((uint64_t)pixels * 4 + 4095) / 4096;
-        uint64_t phys = pmm_alloc_contiguous(pages);
+        uint64_t phys = pmm_alloc_contiguous(pages, PMM_ZONE_DMA32);
         if (phys) {
             back_buffer = (uint32_t *)(uintptr_t)phys;
             back_buffer_pixels = pixels;

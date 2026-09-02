@@ -477,6 +477,27 @@ this the obvious way), not from how much history it accumulated.
   from `pmm_alloc_contiguous()` (8192 contiguous frames at 4K, refused
   silently under fragmentation). Raising the caps before that is fixed
   turns a hard limit into an intermittent silent failure.
+- **A FRAME IS ALLOCATED FROM A ZONE, EVERY CALLER NAMES ONE, AND
+  EVERYTHING SAYS `PMM_ZONE_DMA32` TODAY.** `pmm_alloc_frame(zone)` and
+  `pmm_alloc_contiguous(count, zone)` -- Linux's gfp mask at every site,
+  in miniature -- with `DMA32` meaning below 4 GiB and `ANY` meaning
+  anywhere managed, high zone first. The bitmaps are SIZED FROM THE
+  MEMORY MAP at `pmm_init()` and carved out of low RAM (the first free
+  frames clear of the image, the modules and the multiboot info), so a
+  machine's frames above 4 GiB are managed and audited from boot even
+  though the identity map stops at 4 GiB and no consumer can reach them
+  yet. Three things to know. **A new caller that writes `ANY` before
+  "More than 4 GiB of RAM" stage 2 has landed gets a physical address
+  the kernel cannot dereference**, and nothing at the call refuses it;
+  the ATA PRD and AC97 BDL registers are 32-bit by specification and can
+  never say `ANY` at all. **`pmm_total_frames()`/`pmm_free_frames()`
+  count BOTH zones**, so a reader that means "what can be used today"
+  asks `pmm_zone_*_frames(PMM_ZONE_DMA32)` -- ramfs's budget does, and
+  About subtracts `QUERY_MEMINFO`'s `frame_total_high`. And **the
+  check that proves any of it SKIPS on the ordinary boot**: the `mm`
+  suite's above-4-GiB test needs `ktest_run.py --mem 8192`, which is
+  what `tools/highmem_test.py` runs and refuses to count as passed if it
+  skipped.
 - **`SYS_SBRK` is PER PROCESS.** The break lives in
   `struct sched_process` as a `struct sched_mm`, armed when the slot
   is created; the syscall reaches it through `scheduler_current_mm()`,

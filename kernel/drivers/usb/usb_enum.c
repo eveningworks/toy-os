@@ -326,7 +326,7 @@ int usb_enumerate_device(uint8_t root_port, uint8_t parent_port,
 
     // Kept, not just walked -- see usb.h's `cfg`. A frame we cannot get
     // costs the dump and nothing else, so this never fails enumeration.
-    d->cfg_phys = pmm_alloc_contiguous(1);
+    d->cfg_phys = pmm_alloc_contiguous(1, PMM_ZONE_DMA32);
     if (d->cfg_phys) {
         d->cfg = (uint8_t *)(uintptr_t)d->cfg_phys;   // identity-mapped
         d->cfg_len = total > 4096 ? 4096 : total;
