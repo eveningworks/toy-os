@@ -45,6 +45,12 @@ static uint64_t zone_total[ZONE_COUNT]; // managed frames per zone
 static uint64_t zone_free[ZONE_COUNT];  // allocatable per zone
 static uint64_t zone_hint[ZONE_COUNT];  // avoids rescanning from the zone's start
 static uint64_t firmware_bytes = 0;     // usable per the firmware map, uncapped
+// The floor an ANY allocation will not drive DMA32 below, so a device
+// that can only reach a low frame still finds one after user pages have
+// taken everything above 4 GiB. Zero when there is no high zone: with
+// nothing to fall back FROM, a floor there would only lose memory.
+// Linux keeps the same kind of floor with lowmem_reserve_ratio.
+static uint64_t dma32_reserve = 0;
 
 // Index into the per-zone counters for a frame: the HIGH zone is index
 // 1, which is also PMM_ZONE_ANY -- the two coincide on purpose, since a
@@ -172,6 +178,24 @@ static void mark_available_cb(const struct multiboot_mmap_region *region) {
     }
 }
 
+// A sixteenth of DMA32, clamped to [16 MiB, 128 MiB] and never more
+// than half the zone. A fraction rather than a constant because the
+// devices that need low memory scale with the machine, not with a
+// number chosen here.
+static uint64_t reserve_policy(uint64_t dma32_total, uint64_t high_total) {
+    if (!high_total) return 0;
+    const uint64_t lo_frames = 16ull * 1024 * 1024 / FRAME_SIZE;
+    const uint64_t hi_frames = 128ull * 1024 * 1024 / FRAME_SIZE;
+    uint64_t r = dma32_total / 16;
+    if (r < lo_frames) r = lo_frames;
+    if (r > hi_frames) r = hi_frames;
+    if (r > dma32_total / 2) r = dma32_total / 2;
+    return r;
+}
+
+uint64_t pmm_dma32_reserve_frames(void) { return dma32_reserve; }
+void pmm_set_dma32_reserve_frames(uint64_t frames) { dma32_reserve = frames; }
+
 static void reserve_range(uint64_t start, uint64_t end) {
     start = align_down(start);
     end = align_up(end);
@@ -234,9 +258,12 @@ void pmm_init(void) {
         if (!bit_is_used(f)) zone_free[zone_of(f)]++;
     }
     zone_hint[1] = DMA32_FRAMES;
+    dma32_reserve = reserve_policy(zone_total[0], zone_total[1]);
 
-    klog_printf("pmm: %lu frames managed (%lu above 4 GiB), bitmaps %lu KiB at 0x%lx\n",
-                zone_total[0] + zone_total[1], zone_total[1], bitmap_need / 1024, bitmap_home);
+    klog_printf("pmm: %lu frames managed (%lu above 4 GiB, %lu reserved for DMA32), "
+                "bitmaps %lu KiB at 0x%lx\n",
+                zone_total[0] + zone_total[1], zone_total[1], dma32_reserve,
+                bitmap_need / 1024, bitmap_home);
 
     // See bootstage.h: allocating before this point returns 0, which
     // every caller reports as "out of memory". Marked at the end of
@@ -256,10 +283,14 @@ static void zone_range(int z, uint64_t *lo, uint64_t *hi) {
     }
 }
 
-static uint64_t alloc_one_in(int z) {
+// `floor` is the free count the zone must still hold AFTER the
+// allocation -- 0 for a caller that named this zone, the reserve for an
+// ANY request falling back into it.
+static uint64_t alloc_one_in(int z, uint64_t floor) {
     uint64_t lo, hi;
     zone_range(z, &lo, &hi);
     if (hi <= lo) return 0;
+    if (zone_free[z] < floor + 1) return 0;
     uint64_t span = hi - lo;
     uint64_t start = zone_hint[z] >= lo && zone_hint[z] < hi ? zone_hint[z] : lo;
     for (uint64_t i = 0; i < span; i++) {
@@ -280,10 +311,11 @@ uint64_t pmm_alloc_frame(enum pmm_zone zone) {
     // that have no choice; a machine with nothing up there falls
     // straight through.
     if (zone == PMM_ZONE_ANY) {
-        uint64_t p = alloc_one_in(1);
+        uint64_t p = alloc_one_in(1, 0);
         if (p) return p;
+        return alloc_one_in(0, dma32_reserve);
     }
-    return alloc_one_in(0);
+    return alloc_one_in(0, 0);
 }
 
 void pmm_free_frame(uint64_t phys_addr) {
@@ -296,9 +328,10 @@ void pmm_free_frame(uint64_t phys_addr) {
     }
 }
 
-static uint64_t alloc_run_in(int z, uint64_t count) {
+static uint64_t alloc_run_in(int z, uint64_t count, uint64_t floor) {
     uint64_t lo, hi;
     zone_range(z, &lo, &hi);
+    if (zone_free[z] < floor + count) return 0;
     uint64_t run_start = 0, run_len = 0;
     for (uint64_t f = lo; f < hi; f++) {
         if (!bit_is_used(f)) {
@@ -323,10 +356,11 @@ uint64_t pmm_alloc_contiguous(uint64_t count, enum pmm_zone zone) {
     if (count == 0) return 0;
     if (count == 1) return pmm_alloc_frame(zone);
     if (zone == PMM_ZONE_ANY) {
-        uint64_t p = alloc_run_in(1, count);
+        uint64_t p = alloc_run_in(1, count, 0);
         if (p) return p;
+        return alloc_run_in(0, count, dma32_reserve);
     }
-    return alloc_run_in(0, count);
+    return alloc_run_in(0, count, 0);
 }
 
 void pmm_free_contiguous(uint64_t phys_addr, uint64_t count) {

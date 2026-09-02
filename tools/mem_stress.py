@@ -105,7 +105,7 @@ def main():
                             % (passed + failed, args.n))
 
         # The kernel must still be answering, and its books must balance.
-        audit = con.send("sh meminfo audit")
+        audit = con.send("sh meminfo --audit")
         print(audit.strip().splitlines()[-1] if audit.strip() else "(no audit output)")
         if "DANGLING" in audit:
             failures.append("meminfo audit found dangling mappings afterwards")

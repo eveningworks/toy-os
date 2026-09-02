@@ -24,7 +24,6 @@ FIRST, and this is what to do first among things that are all
 buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
-- [ ] Stage 3: user pages, mmap fault-ins and window buffers take frames from ANY, one at a time, each with a test (the heap moved)  *(More than 4 GiB of RAM)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
 - [ ] Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today  *(Networking)*
@@ -169,9 +168,10 @@ is the bookkeeping that makes any other kind of mapping possible.
 
 - [x] ~~Stage 1: a pmm bitmap sized from the memory map, and a ZONE on every allocation, every caller on DMA32~~ DONE 2026-09-02
 - [x] ~~Stage 2: extend the identity map over every usable region above 4 GiB after `pmm_init()`~~ DONE 2026-09-02, 2 MiB slots only
-- [ ] **NEXT** Stage 3: user pages, mmap fault-ins and window buffers take frames from ANY, one at a time, each with a test (the heap moved)
+- [x] ~~Stage 3: user pages, mmap fault-ins and window buffers take frames from ANY~~ DONE 2026-09-02 -- page tables too
 - [x] ~~Stage 4: lift the "above 4 GiB" refusals in virtio-pci, xHCI and AHCI~~ DONE 2026-09-02 -- `paging_map_device()` is an ioremap
-- [ ] Stage 5: `vm.py --mem 8192` in a test that consumes past 4 GiB, and About on the laptop reading usable == installed
+- [x] ~~Stage 5: a test that consumes past 4 GiB, and About reading usable == installed~~ DONE 2026-09-02 -- `tools/highmem_consume.py`
+- [ ] Expose the DMA32 reserve as a `kernel.` tunable, the way `vm.lowmem_reserve_ratio` is a sysctl
 
 ### Swap / paging to disk
 **Needs:** Demand paging & shared memory -- swap is demand paging with a backing store.

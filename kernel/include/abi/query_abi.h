@@ -467,6 +467,10 @@ struct query_meminfo {
     // fields above.
     uint64_t frame_total_high;
     uint64_t frame_free_high;
+    // The DMA32 floor an ANY allocation will not cross (api/pmm.h).
+    // Zero on a machine with no memory above 4 GiB. APPENDED, same
+    // rule as the pair above.
+    uint64_t frame_reserve_dma32;
 };
 
 // QUERY_FSINFO's record.

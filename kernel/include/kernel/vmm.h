@@ -143,6 +143,17 @@ typedef void (*vmm_dangling_cb)(uint64_t va, uint64_t frame, void *ctx);
 uint64_t vmm_audit_space_cb(uint64_t pml4_phys, struct vmm_audit *out,
                             vmm_dangling_cb cb, void *ctx);
 
+// The physical address a user virtual address currently resolves to in
+// `pml4_phys`, or 0 for one that is not mapped. The raw walk: it does
+// NOT fault a demand-paged page in, which is what makes it safe to ask
+// about a mapping without creating one.
+//
+// The reason it is public is that a mapping's ZONE is invisible from
+// every other angle -- a KTEST proving user pages come from above 4 GiB
+// has to name the frame behind a page it just mapped, and nothing else
+// here answers that.
+uint64_t vmm_user_phys(uint64_t pml4_phys, uint64_t vaddr);
+
 void vmm_switch_address_space(uint64_t pml4_phys);
 
 // Frees every physical frame this address space privately owns -- every

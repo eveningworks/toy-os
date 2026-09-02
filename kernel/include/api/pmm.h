@@ -14,14 +14,14 @@
 // addresses or page tables. Pairs with paging.c, which does the mapping
 // once you have a frame.
 //
-// EVERY ALLOCATION NAMES A ZONE. The identity map covers the low 4 GiB
-// (boot.asm), so a frame above it is a physical address the kernel
-// cannot dereference until the map is extended ("More than 4 GiB of
-// RAM" in docs/roadmap.md), and the ATA PRD and AC97 BDL registers are
-// 32-bit by specification whatever the map does. A caller that can only
-// use a low frame says DMA32; one that can take any frame says ANY, and
-// ANY prefers the high zone so the low one is kept for the callers that
-// need it (Linux's gfp zone fallback order, in miniature).
+// EVERY ALLOCATION NAMES A ZONE. The identity map reaches every managed
+// frame (paging_extend_identity_map()), so the zones are about DEVICES,
+// not about what the kernel can dereference: the ATA PRD and AC97 BDL
+// registers are 32-bit by specification, and a card without `ac64`
+// cannot address a high frame at all. A caller feeding a DMA engine says
+// DMA32; anything CPU-only says ANY, and ANY prefers the high zone so
+// the low one is kept for the callers that need it (Linux's gfp zone
+// fallback order, in miniature).
 //
 // The bitmaps are sized from the memory map at pmm_init(), not from a
 // constant, and carved out of low usable RAM before anything else is
@@ -69,6 +69,19 @@ uint64_t pmm_alloc_contiguous(uint64_t count, enum pmm_zone zone);
 // remember to make. Frames pmm doesn't recognize as allocated are
 // silently skipped, same as pmm_free_frame().
 void pmm_free_contiguous(uint64_t phys_addr, uint64_t count);
+
+// THE DMA32 RESERVE. An ANY allocation prefers the high zone and falls
+// back into DMA32 when it is empty -- and once user pages, page tables
+// and window buffers all say ANY, that fallback can drain the one zone a
+// 32-bit DMA engine can reach. So the fallback stops at a floor, and a
+// caller that NAMED DMA32 ignores it. Zero on a machine with no memory
+// above 4 GiB, where there is nothing to fall back from.
+//
+// Settable so the floor is a knob rather than a constant -- Linux's
+// equivalent, lowmem_reserve_ratio, is a sysctl. pmm_init() sets the
+// policy value; the `mm` KTEST drives it to prove the refusal fires.
+uint64_t pmm_dma32_reserve_frames(void);
+void pmm_set_dma32_reserve_frames(uint64_t frames);
 
 // For an auditor comparing page tables against the allocator (see
 // vmm_audit_space()): is this frame pmm's to account for, and does pmm

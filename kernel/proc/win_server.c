@@ -285,7 +285,7 @@ static uint64_t g_poison_frame;
 
 static uint64_t poison_frame(void) {
     if (!g_poison_frame) {
-        uint64_t f = pmm_alloc_frame(PMM_ZONE_DMA32);
+        uint64_t f = pmm_alloc_frame(PMM_ZONE_ANY);
         if (!f) return 0;
         k_memset((void *)(uintptr_t)f, 0, 4096);
         g_poison_frame = f;
@@ -526,7 +526,7 @@ static int create_window(int pid, uint64_t pml4, int w, int h, int x, int y,
     // uint32_t* over the whole buffer instead of a per-page walk on
     // every composite. pmm_alloc_contiguous() already exists for the
     // same reason drivers need it.
-    uint64_t phys = pmm_alloc_contiguous(pages, PMM_ZONE_DMA32);
+    uint64_t phys = pmm_alloc_contiguous(pages, PMM_ZONE_ANY);
     if (!phys) {
         klog_write("win_server: create refused -- out of contiguous memory\n");
         return 0;
@@ -559,7 +559,7 @@ static int create_window(int pid, uint64_t pml4, int w, int h, int x, int y,
     // did before double buffering existed. Refusing to open a window
     // because the tear-free path is unavailable would be trading a
     // cosmetic problem for a functional one.
-    uint64_t phys2 = pmm_alloc_contiguous(pages, PMM_ZONE_DMA32);
+    uint64_t phys2 = pmm_alloc_contiguous(pages, PMM_ZONE_ANY);
     if (phys2) {
         k_memset((void *)(uintptr_t)phys2, 0, (size_t)pages * 4096);
         uint64_t v2 = vaddr + WIN_BUFFER_HALF;
@@ -774,7 +774,7 @@ static int resize_window(struct client_window *cw, int w, int h) {
     uint32_t bytes = (uint32_t)w * (uint32_t)h * 4;
     uint32_t pages = (bytes + 4095) / 4096;
 
-    uint64_t phys = pmm_alloc_contiguous(pages, PMM_ZONE_DMA32);
+    uint64_t phys = pmm_alloc_contiguous(pages, PMM_ZONE_ANY);
     if (!phys) {
         klog_write("win_server: resize refused -- out of contiguous memory\n");
         return 0;
@@ -847,7 +847,7 @@ static int resize_window(struct client_window *cw, int w, int h) {
     cw->front = 0;
 
     {
-        uint64_t phys2 = pmm_alloc_contiguous(pages, PMM_ZONE_DMA32);
+        uint64_t phys2 = pmm_alloc_contiguous(pages, PMM_ZONE_ANY);
         if (phys2) {
             k_memset((void *)(uintptr_t)phys2, 0, (size_t)pages * 4096);
             uint64_t v2 = cw->vaddr + WIN_BUFFER_HALF;

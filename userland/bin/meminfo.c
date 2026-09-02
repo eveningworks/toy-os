@@ -191,11 +191,21 @@ int main(int argc, char **argv) {
     snprintf(line, sizeof line, "  free:  %-10s %s\n", n3, f);
     sys_print(line);
     if (m.frame_total_high) {
-        // Mapped and used by the kernel heap; ring-3 pages still come
-        // from below 4 GiB ("More than 4 GiB of RAM", stage 3).
         human_size(t, sizeof t, m.frame_total_high * m.frame_bytes);
+        human_size(f, sizeof f, m.frame_free_high * m.frame_bytes);
         snprintf(n1, sizeof n1, "%llu", (unsigned long long)m.frame_total_high);
-        snprintf(line, sizeof line, "  above 4 GiB: %-4s %s (kernel heap only, not yet for processes)\n", n1, t);
+        snprintf(line, sizeof line, "  above 4 GiB: %-4s %s (%s free)\n", n1, t, f);
+        sys_print(line);
+    }
+    if (m.frame_reserve_dma32) {
+        // The floor an ANY allocation will not drive DMA32 below, so a
+        // 32-bit DMA engine still finds a frame. Printed with what is
+        // actually left below 4 GiB, since the pair is the answer to
+        // "is a driver about to be refused?".
+        uint64_t low_free = m.frame_free - m.frame_free_high;
+        human_size(t, sizeof t, m.frame_reserve_dma32 * m.frame_bytes);
+        human_size(f, sizeof f, low_free * m.frame_bytes);
+        snprintf(line, sizeof line, "  DMA32 reserve: %s (%s free below 4 GiB)\n", t, f);
         sys_print(line);
     }
 

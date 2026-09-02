@@ -486,9 +486,11 @@ this the obvious way), not from how much history it accumulated.
   is EXTENDED over every usable region above 4 GiB in whole 2 MiB slots
   right after (`paging_extend_identity_map()`, PDPT entries in PML4[0],
   so every process sees it), and pmm manages the high zone at that
-  granule so a managed high frame is always a mapped one. The kernel
-  heap is on `ANY`; user pages, mmap and the window buffers are still
-  `DMA32`. Four things to know. **A `kmalloc` buffer is NOT a DMA target
+  granule so a managed high frame is always a mapped one. **Everything
+  CPU-only is on `ANY`** -- the kernel heap, user stacks, the stack and
+  heap fault-ins, mmap's pages, ELF images, page tables and the
+  compositor's window buffers -- and `DMA32` is what a DEVICE reads.
+  Five things to know. **A `kmalloc` buffer is NOT a DMA target
   for a 32-bit engine** -- the ATA PRD and AC97 BDL registers are 32-bit
   by specification, so anything they point at comes from `DMA32` frames,
   and a driver that hands a `kmalloc` pointer to such a register works
@@ -499,12 +501,23 @@ this the obvious way), not from how much history it accumulated.
   the driver keeps that pointer, never the BAR. **`pmm_total_frames()`/
   `pmm_free_frames()` count BOTH zones**, so a reader that means "what
   ring 3 can use today" asks `pmm_zone_*_frames(PMM_ZONE_DMA32)` --
-  ramfs's budget does, and About subtracts `QUERY_MEMINFO`'s
-  `frame_total_high`. And **the checks that prove any of it SKIP on the
+  ramfs's budget does. About no longer subtracts anything: usable is
+  every managed frame. **AND THE FALLBACK STOPS AT A FLOOR** -- `ANY`
+  falls back into DMA32 when the high zone is empty, and without a floor
+  user pages would drain the one zone a 32-bit engine can reach, so a
+  driver is refused with gigabytes free. `pmm_dma32_reserve_frames()` is
+  a sixteenth of DMA32 clamped to [16 MiB, 128 MiB], zero on a machine
+  with no high zone, and a caller that NAMED `DMA32` ignores it
+  (Linux's `lowmem_reserve_ratio`); `meminfo` prints it beside what is
+  left below 4 GiB. And **the checks that prove any of it SKIP on the
   ordinary boot**: the `mm` and `paging` above-4-GiB tests need
   `ktest_run.py --mem 8192`, which is what `tools/highmem_test.py` runs
-  and refuses to count as passed if they skipped. Under 8 GiB the whole
-  suite is run, because that is where the virtio BAR moves.
+  and refuses to count as passed if they skipped -- with the DMA32
+  floor's own check the INVERSE, since the fallback it guards only runs
+  on a machine with no high zone. Under 8 GiB the whole suite is run,
+  because that is where the virtio BAR moves;
+  `tools/highmem_consume.py` is the ring-3 half, six processes holding
+  5 GiB of high frames at once.
 - **`SYS_SBRK` is PER PROCESS.** The break lives in
   `struct sched_process` as a `struct sched_mm`, armed when the slot
   is created; the syscall reaches it through `scheduler_current_mm()`,

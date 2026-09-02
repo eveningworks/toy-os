@@ -53,6 +53,7 @@
 #include "ktest.h"
 #include "win_server.h"
 #include "vmm.h"
+#include "pmm.h"
 #include "scheduler.h"
 #include <stddef.h>
 
@@ -120,6 +121,26 @@ static void fixture_down(struct fixture *f) {
     win_server_set_compositor(0, 0);
     if (f->client_as) vmm_destroy_address_space(f->client_as);
     if (f->comp_as) vmm_destroy_address_space(f->comp_as);
+}
+
+// A window's pixels are CPU-only -- the compositor reads them, the
+// client writes them, and nothing DMAs from them -- so they take frames
+// from PMM_ZONE_ANY ("More than 4 GiB of RAM", stage 3). Asked of the
+// page table rather than of pmm, so it fails if create_window() were
+// changed back.
+KTEST("winshare", "a window's buffer comes from the high zone") {
+    struct fixture f = {0};
+    SKIP_IF_ROLE_HELD;
+    if (pmm_zone_free_frames(PMM_ZONE_ANY) == 0)
+        KTEST_SKIP("guest has no memory above 4 GiB");
+    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
+
+    uint64_t four_gib = (uint64_t)4 * 1024 * 1024 * 1024;
+    uint64_t phys = vmm_user_phys(f.client_as, win_buffer_vaddr(f.id));
+    fixture_down(&f);
+
+    KTEST_ASSERT(phys != 0);
+    KTEST_ASSERT(phys >= four_gib);
 }
 
 KTEST("winshare", "a window maps into the compositor at its derived address") {

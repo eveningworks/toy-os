@@ -87,9 +87,59 @@ no identity mapping of it can exist. So `paging_map_device()` is
 top 32 GiB of PML4[0] (`UADDR_KDEV_BASE`), uncached, and the driver
 keeps the pointer. Below 4 GiB it still returns the physical address,
 write-back as before; retyping those is the separate change
-`docs/decisions/drivers.md` describes. The kernel heap is the first
-`ANY` consumer; user pages stay `DMA32` until each mover carries its
-own test.
+`docs/decisions/drivers.md` describes.
+
+**Every CPU-only consumer moved on the same day.** User stacks, the
+stack and heap fault-ins, mmap's anonymous and file-backed pages, ELF
+images, the compositor's window buffers, and page tables -- which the
+plan had not listed, and which are reached through the identity map
+like anything else, so there was never a reason for them to be low.
+What stays `DMA32` is what a device reads, plus the page directories
+that CREATE the high map: those cannot live in the memory they are
+about to map.
+
+## An ANY allocation stops at a DMA32 floor rather than draining it
+
+Built 2026-09-02, with stage 3 of ">4 GiB", because moving user pages
+to `PMM_ZONE_ANY` created a failure the zones existed to prevent.
+
+`ANY` prefers the high zone and falls back into DMA32 when it is empty.
+On an 8 GiB machine that fallback effectively never runs. On a 5 GiB
+one it runs constantly: a gigabyte of high memory goes quickly, and
+after that every user page, page table and window buffer comes out of
+the zone a 32-bit DMA engine can reach. The first driver to want a
+descriptor ring is then refused while `meminfo` reports gigabytes free
+-- a failure that reads as a driver bug and is an allocator policy
+mistake.
+
+The obvious answer is to do nothing and let it happen, on the grounds
+that the machines this runs on have plenty of high memory. That is true
+of the 8 GiB laptop and of the QEMU guests, and it is exactly the
+reasoning that makes the bug arrive on the machine nobody tested.
+
+So the fallback keeps a floor: a sixteenth of DMA32, clamped to
+[16 MiB, 128 MiB] and never more than half the zone. A fraction rather
+than a constant because the devices needing low memory scale with the
+machine. Zero when there is no high zone at all, since a floor there
+would only lose memory with nothing to fall back FROM. A caller that
+NAMES `DMA32` ignores it entirely -- the floor exists to keep memory
+FOR those callers, so applying it to them would be backwards.
+
+This is Linux's `lowmem_reserve_ratio`, simplified. Linux computes a
+per-zone reserve from the size of the zones ABOVE it, because it has
+several and the fallback order is long; toy-os has two, so the
+arithmetic collapses to one number. Windows does not need an equivalent:
+its PFN database is flat and a driver asks for below-4GB memory
+explicitly through `MmAllocateContiguousMemorySpecifyCache`, which is
+the same bargain reached from the other side.
+
+The value is SETTABLE (`pmm_set_dma32_reserve_frames()`), which is what
+makes the refusal testable: enforcement only fires when the fallback
+runs, and a machine with a high zone almost never runs it. The `mm`
+KTEST jams the floor to four frames below what is free and requires the
+next `ANY` request to be refused while the same request naming `DMA32`
+succeeds. That check runs on the ORDINARY 256 MiB boot and skips at
+8 GiB -- the inverse of every other check in this milestone.
 
 ## IRQ registration: one handler per line, framework-automatic EOI
 

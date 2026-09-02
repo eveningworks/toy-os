@@ -2347,13 +2347,12 @@ measuring it.** Either can be done at any point, including first.
 
 ## More than 4 GiB of RAM
 
-About shows the gap since 2026-09-02: `phys_usable_bytes` on
-`QUERY_MEMINFO` is the firmware map's usable total, and the row reads
-"7.9 GiB installed, 3.4 GiB usable" on an 8 GB laptop. Since stages 1
-and 2 the high frames are managed and mapped, and the kernel heap lives
-up there, so usable is `frame_total` minus `frame_total_high` -- what
-ring 3 can get. When stage 3 moves user pages that subtraction goes and
-the two numbers meet.
+**BUILT 2026-09-02, all five stages.** About's row reads "installed,
+usable, free" with no subtraction now: usable is every frame the
+allocator manages, high zone included, because a process can be handed
+one. The gap that remains between installed and usable is the firmware's
+own reservations plus whatever a partial 2 MiB granule cost -- not a
+zone toy-os declines to use.
 
 **Planned 2026-09-02, after a code audit.** The decision, and the
 reason it is not Linux's layout, is in `docs/decisions/kernel.md`
@@ -2399,15 +2398,34 @@ writable and NX. pmm manages the high zone at the same 2 MiB granule so
 a managed frame is always a mapped one; the `mm` suite writes an
 address-derived pattern through the map and reads it back.
 
-**Stage 3 -- the consumers.** The kernel heap moved first (2026-09-02):
-`heap_os_alloc()` says `ANY`, the `mm` suite asserts a 1 MiB block
-lands above 4 GiB, and `kfree()`'s red-zone reasoning was rewritten to
-the property that actually holds (bits 63:48 clear, not "fits in 32
-bits"). Still `DMA32`: `vmm_map_user_page()`'s frames, mmap fault-ins
-and the compositor's client buffers -- each moves behind a test that
-runs with 8 GiB and asserts a high frame was handed out;
-`/tests/memtest`'s address-derived pattern is the check for user pages.
-Then About stops subtracting `frame_total_high`.
+**Stage 3 -- the consumers. BUILT 2026-09-02.** The kernel heap moved
+first (`heap_os_alloc()`), and `kfree()`'s red-zone reasoning was
+rewritten to the property that actually holds (bits 63:48 clear, not
+"fits in 32 bits"). Then everything else that is CPU-only: the user
+stack laid out at spawn, the stack and heap fault-ins, mmap's anonymous
+and file-backed pages and its `/lib` image cache, ELF image frames, the
+compositor's window buffers -- and PAGE TABLES, which the plan had not
+listed and which are reached through the same identity map as anything
+else. What stays `DMA32` is what a device reads: every virtqueue, the
+ATA PRD and AC97 BDL (32-bit registers by specification), the xHCI and
+AHCI rings, the gfx back buffer, and the page directories
+`paging_extend_identity_map()` allocates to CREATE the high map, which
+cannot live in the memory they are about to map.
+
+Three KTESTs name the frame behind a page the real path produced
+(`vmm_user_phys()`), rather than asking pmm directly -- a check that
+allocated for itself would pass whether or not the consumer had changed.
+Reverting the three consumers turns exactly those three red.
+
+**And the hazard stage 3 CREATES: the fallback.** `ANY` prefers the high
+zone and falls back into DMA32, so on a mid-size machine user pages can
+drain the one zone a 32-bit DMA engine can reach, and a driver is then
+refused with gigabytes free. The fallback stops at a floor -- a
+sixteenth of DMA32, clamped to [16 MiB, 128 MiB] -- which a caller that
+NAMED DMA32 ignores. Linux's equivalent is `lowmem_reserve_ratio`. It is
+zero on a machine with no high zone, which is why the `mm` check for it
+runs on the ORDINARY 256 MiB boot and skips at 8 GiB: enforcement only
+fires when the fallback runs at all.
 
 **Stage 4 -- MMIO. BUILT 2026-09-02, not as planned.** The refusals in
 virtio-pci, xHCI and AHCI are gone, but the mapper is `ioremap`, not an
@@ -2419,10 +2437,25 @@ and the driver keeps the pointer. Found by running the whole suite at
 is the memory type below 4 GiB: those windows still return the
 identity address, write-back, as `docs/decisions/drivers.md` records.
 
-**Stage 5 -- proof.** Nothing automated boots with more than 2 GiB
-today; `tools/vm.py --mem 8192` is one flag away. A tool that spawns
-enough `memtest` processes to consume past 4 GiB and then runs
-`meminfo audit`, and About on the laptop reading usable == installed.
+**Stage 5 -- proof. BUILT 2026-09-02.** `tools/highmem_consume.py`
+spawns six `/tests/memtest` copies at 1 GiB each on an 8 GiB guest and
+polls the high zone's free count for the PEAK, because a copy frees
+everything as it exits and a reading taken afterwards reports an empty
+machine. Measured: **5.00 GiB of high-zone frames held at once**, every
+copy verifying its own address-derived pattern (so none of them shared a
+frame), `meminfo --audit` clean afterwards, and the memory returned. The
+low zone holds about 2.9 GiB on that machine, so a peak that size cannot
+have come from anywhere but above 4 GiB.
+
+`tools/highmem_test.py` carries the cheap version of the same question:
+after the suite, one process must move the high zone's free count by
+more than 128 MiB. The KTESTs name a frame behind a page they mapped
+themselves; this is the half that would survive a KTEST fixture drifting
+away from the path a process really takes.
+
+**What is NOT done: About on the laptop.** The reading has to be taken
+on the 8 GB machine, and the code change it depends on (dropping the
+subtraction) is in.
 
 ## Swap / paging to disk
 

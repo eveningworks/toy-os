@@ -9,6 +9,11 @@
 #include "fault_inject.h"
 #include "kapi.h"
 #include "paging.h"
+#include "vmm.h"
+#include "mmap.h"
+#include "scheduler.h"
+#include "uaddr.h"
+#include "syscall_abi.h"  // SYS_PROT_*
 
 KTEST("mm", "pmm contiguous alloc/free (legacy selftest)") {
     KTEST_ASSERT(pmm_selftest() == 1);
@@ -74,6 +79,99 @@ KTEST("mm", "the kernel heap grows into memory above 4 GiB") {
     for (int i = 0; i < 1024 * 1024; i += 4096) if (blk[i] != (uint8_t)(i >> 12)) bad++;
     kfree(blk);
     KTEST_ASSERT_EQ(bad, 0);
+}
+
+// ---- stage 3: the consumers that now say PMM_ZONE_ANY ---------------
+//
+// Each of these drives the REAL path and then names the frame behind
+// the page it produced (vmm_user_phys()). A check that allocated from
+// pmm itself would pass whether or not the consumer had been changed,
+// which is the whole failure mode this file's older tests warn about.
+// The compositor's half of the same question is in win_server_test.c.
+
+KTEST("mm", "a user address space's page tables come from the high zone") {
+    uint64_t four_gib = (uint64_t)4 * 1024 * 1024 * 1024;
+    if (pmm_zone_free_frames(PMM_ZONE_ANY) == 0) KTEST_SKIP("guest has no memory above 4 GiB");
+
+    uint64_t as = vmm_create_address_space();
+    KTEST_ASSERT(as != 0);
+    KTEST_ASSERT(as >= four_gib); // the PML4 itself
+
+    uint64_t frame = pmm_alloc_frame(PMM_ZONE_ANY);
+    KTEST_ASSERT(frame != 0);
+    // A REAL user address. Anything under PML4 entry 0 shares the
+    // kernel's PDPT (vmm_create_address_space()), so a page mapped
+    // there would go into the kernel's own tables and be walked by
+    // nothing on teardown.
+    uint64_t va = UADDR_IMAGE_BASE;
+    KTEST_ASSERT(vmm_map_user_page(as, va, frame));
+    // The PDPT ensure_next_level() allocated on the way down. Read
+    // straight out of the PML4 -- the identity map reaches it.
+    uint64_t pdpt = ((uint64_t *)(uintptr_t)as)[(va >> 39) & 0x1FF] & 0x000FFFFFFFFFF000ULL;
+    KTEST_ASSERT(pdpt >= four_gib);
+    KTEST_ASSERT(vmm_user_phys(as, va) == frame);
+
+    vmm_destroy_address_space(as); // frees the mapped frame too
+}
+
+KTEST("mm", "a demand-paged mmap page comes from the high zone") {
+    uint64_t four_gib = (uint64_t)4 * 1024 * 1024 * 1024;
+    if (pmm_zone_free_frames(PMM_ZONE_ANY) == 0) KTEST_SKIP("guest has no memory above 4 GiB");
+
+    // kzalloc'd, not a local: struct sched_mm carries 16 regions and
+    // the kernel's frame budget is 1 KiB.
+    struct sched_mm *mm = kzalloc(sizeof *mm);
+    uint64_t as = vmm_create_address_space();
+    KTEST_ASSERT(mm != 0 && as != 0);
+
+    uint64_t base = UADDR_MMAP_BASE;
+    mm->regions[0].base = base;
+    mm->regions[0].npages = 1;
+    mm->regions[0].prot = SYS_PROT_READ | SYS_PROT_WRITE;
+    mm->regions[0].kind = MMAP_KIND_ANON;
+
+    int mapped = mmap_fault_in(mm, as, base + 8);
+    uint64_t phys = vmm_user_phys(as, base);
+    vmm_destroy_address_space(as);
+    kfree(mm);
+
+    KTEST_ASSERT_EQ(mapped, 1);
+    KTEST_ASSERT(phys >= four_gib);
+}
+
+// THE FLOOR, and it runs on the ORDINARY boot rather than the 8 GiB
+// one: enforcement only fires when ANY falls back into DMA32, which a
+// machine with a high zone almost never does. The reserve is jammed to
+// four frames below what is free, so the next ANY request must be
+// refused while the same request naming DMA32 is not.
+KTEST("mm", "an ANY allocation stops at the DMA32 reserve") {
+    if (pmm_zone_free_frames(PMM_ZONE_ANY) != 0)
+        KTEST_SKIP("the high zone would serve this request, so the fallback never runs");
+
+    scheduler_preempt_disable();
+    uint64_t saved = pmm_dma32_reserve_frames();
+    uint64_t free_now = pmm_zone_free_frames(PMM_ZONE_DMA32);
+    pmm_set_dma32_reserve_frames(free_now > 4 ? free_now - 4 : 0);
+    uint64_t refused_run = pmm_alloc_contiguous(16, PMM_ZONE_ANY);
+    uint64_t named_run   = pmm_alloc_contiguous(16, PMM_ZONE_DMA32);
+    if (named_run) pmm_free_contiguous(named_run, 16);
+    // The single-frame path has its own floor check: leave no headroom
+    // at all, so one frame is one too many.
+    pmm_set_dma32_reserve_frames(free_now);
+    uint64_t refused_one = pmm_alloc_frame(PMM_ZONE_ANY);
+    uint64_t named_one   = pmm_alloc_frame(PMM_ZONE_DMA32);
+    if (named_one) pmm_free_frame(named_one);
+    pmm_set_dma32_reserve_frames(saved);
+    uint64_t after = pmm_alloc_contiguous(16, PMM_ZONE_ANY);
+    if (after) pmm_free_contiguous(after, 16);
+    scheduler_preempt_enable();
+
+    KTEST_ASSERT(free_now > 20);   // the fixture needs room either side of the floor
+    KTEST_ASSERT(refused_run == 0); // the fallback respected the floor
+    KTEST_ASSERT(named_run != 0);   // a caller that named DMA32 ignores it
+    KTEST_ASSERT(refused_one == 0); // and the single-frame path has it too
+    KTEST_ASSERT(named_one != 0);
+    KTEST_ASSERT(after != 0);       // restoring the policy value undoes all of it
 }
 
 KTEST("mm", "heap alloc/free/coalesce (legacy selftest)") {

@@ -274,7 +274,7 @@ int sys_sbrk(struct syscall_ctx *c) {
 // surprise to the program and a disclosure between processes. sbrk's
 // eager version zeroed too; nothing changes for a caller.
 static int map_zeroed_user_page(uint64_t pml4_phys, uint64_t page) {
-    uint64_t frame = pmm_alloc_frame(PMM_ZONE_DMA32);
+    uint64_t frame = pmm_alloc_frame(PMM_ZONE_ANY);
     if (!frame) {
         klog_printf("mm: no frame for user page %#lx -- the process dies here\n",
                     page);

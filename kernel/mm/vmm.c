@@ -27,8 +27,8 @@ extern uint64_t p4_table[512];
 // All of this runs with the kernel's own page tables still active (CR3
 // hasn't been switched to the process yet), so every physical address
 // here -- the new PML4 itself, and any PDPT/PD/PT frames allocated along
-// the way -- is safely dereferenceable directly: it's within the low
-// 4GiB the kernel identity-maps for itself.
+// the way -- is safely dereferenceable directly: the identity map covers
+// every frame pmm manages, above 4 GiB included (paging.h).
 static uint64_t *table_at(uint64_t phys) {
     return (uint64_t *)(uintptr_t)phys;
 }
@@ -43,7 +43,7 @@ uint64_t vmm_kernel_pml4_phys(void) {
 }
 
 uint64_t vmm_create_address_space(void) {
-    uint64_t pml4_phys = pmm_alloc_frame(PMM_ZONE_DMA32);
+    uint64_t pml4_phys = pmm_alloc_frame(PMM_ZONE_ANY);
     if (!pml4_phys) return 0;
     zero_table(pml4_phys);
 
@@ -59,7 +59,7 @@ static uint64_t ensure_next_level(uint64_t *table, int index) {
     if (table[index] & PAGE_PRESENT) {
         return table[index] & ADDR_MASK;
     }
-    uint64_t new_phys = pmm_alloc_frame(PMM_ZONE_DMA32);
+    uint64_t new_phys = pmm_alloc_frame(PMM_ZONE_ANY);
     if (!new_phys) return 0;
     zero_table(new_phys);
     // USER must be set at every level of the walk, not just the leaf --
@@ -468,6 +468,10 @@ static uint64_t user_phys_of_walk(uint64_t pml4_phys, uint64_t vaddr) {
     return (e & ADDR_MASK) | (vaddr & 0xFFF);
 }
 
+uint64_t vmm_user_phys(uint64_t pml4_phys, uint64_t vaddr) {
+    return user_phys_of_walk(pml4_phys, vaddr);
+}
+
 // The walk every user access goes through, with ONE retry through the
 // fault-in hook.
 //
@@ -494,8 +498,9 @@ static uint64_t user_phys_of(uint64_t pml4_phys, uint64_t vaddr) {
 // mapping has U=1 unless EFLAGS.AC is set, and the usual answer is to
 // bracket every such access in STAC/CLAC -- which means the protection
 // is off for exactly the window where a bug would use it. Walking to
-// the frame and copying through the kernel's identity mapping (U=0, all
-// 4 GiB of it, see boot.asm) is a supervisor access to a supervisor
+// the frame and copying through the kernel's identity mapping (U=0
+// throughout, see boot.asm and paging_extend_identity_map()) is a
+// supervisor access to a supervisor
 // page, so SMAP never applies and AC is never touched at all. Nothing
 // in this kernel may reach into a user pointer any other way once CR4
 // SMAP is on.

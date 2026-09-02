@@ -199,7 +199,7 @@ int sys_win_create(struct syscall_ctx *c) {
             int ok = 1;
 
             for (i = 0; i < pages_needed; i++) {
-                uint64_t frame = pmm_alloc_frame(PMM_ZONE_DMA32);
+                uint64_t frame = pmm_alloc_frame(PMM_ZONE_ANY);
                 if (!frame) { ok = 0; break; }
                 for (size_t b = 0; b < 4096; b++) ((uint8_t *)(uintptr_t)frame)[b] = 0;
                 if (!vmm_map_user_page(pml4, WIN_BUF_VADDR + (uint64_t)i * 4096, frame)) {

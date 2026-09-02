@@ -903,7 +903,7 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
     // kernel/uaddr.h.
     uint64_t stack_phys = 0;
     for (int pg = 0; pg < UADDR_STACK_INIT_PAGES; pg++) {
-        uint64_t frame = pmm_alloc_frame(PMM_ZONE_DMA32);
+        uint64_t frame = pmm_alloc_frame(PMM_ZONE_ANY);
         if (!frame) { vmm_destroy_address_space(as); return -1; }
         uint64_t va = UADDR_STACK_VADDR - (uint64_t)pg * 4096;
         if (!vmm_map_user_page(as, va, frame)) {

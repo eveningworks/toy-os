@@ -620,6 +620,7 @@ whenever a headline here tells you something you did not already know.
 - **`SYS_SBRK` RESERVES; THE PAGE ARRIVES ON TOUCH.**
 - **THE RING-3 MAP IS SIZED FOR 4K, and a region's END is what the next thing must clear.**
 - **A FRAME IS ALLOCATED FROM A ZONE, EVERY CALLER NAMES ONE, AND `kmalloc` MEMORY MAY BE ABOVE 4 GiB.**
+- **EVERYTHING CPU-ONLY IS ON `ANY` NOW, AND THE FALLBACK INTO DMA32 STOPS AT A RESERVE.**
 - **`SYS_SBRK` is PER PROCESS.**
 - **A RING-3 IMAGE HAS NO SIZE LIMIT, BECAUSE THE HEAP STARTS WHERE IT ENDS.**
 - **THE USER STACK IS RESERVED AND GROWN ON FAULT, and the GAP is what keeps that safe.**
@@ -1324,6 +1325,8 @@ cost".
   `fs_switch_test.py`, `grep_test.py`, `guictl_test.py`,
   `hash_hostcheck.py`, `highmem_test.py` (the frame allocator on an
   8 GiB guest -- the one check `make test`'s 256 MiB boot SKIPS),
+  `highmem_consume.py` (six processes holding 5 GiB of frames above
+  4 GiB at once),
   `hires_test.py`,
   `init_test.py`, `install_test.py`, `jobs_test.py`, `kbd_test.py`,
   `keyboard_paths_test.py`, `kvm_soak.py`, `live_boot_test.py`,

@@ -2839,9 +2839,33 @@ window without going through it will find its layout polls timing out.
   256 MiB boot. The whole suite rather than `mm` because a machine that
   size moves the 64-bit PCI window to 768 GiB, which is what broke every
   virtio test the first time it ran. Proves the high frames are managed,
-  mapped, zoned and taken by the kernel heap; does NOT prove a process
-  gets any ("More than 4 GiB of RAM", stage 3). Named by
-  `ondemand_sweep.py`.
+  mapped and zoned, and that the kernel heap, user pages, page tables
+  and window buffers come from them. Then a second phase asks the same
+  question from OUTSIDE the kernel: one `/tests/memtest` is spawned on
+  its own guest and the high zone's free count must drop by more than
+  128 MiB. That half is what would survive a KTEST fixture drifting away
+  from the path a process really takes. Named by `ondemand_sweep.py`.
+- **`highmem_consume.py`** -- the same question at SCALE, and the proof
+  stage of "More than 4 GiB of RAM". Six `/tests/memtest` copies at 1 GiB
+  each on an 8 GiB guest, with the high zone's free count POLLED for its
+  minimum -- a copy frees everything as it exits, so a reading taken
+  afterwards reports an empty machine. Measured: 5.00 GiB of high frames
+  held at once, which the ~2.9 GiB low zone could not have supplied.
+  Every copy verifies its own address-derived pattern, so two of them
+  sharing a frame is caught rather than assumed, and `meminfo --audit`
+  must be clean afterwards.
+
+  **Its positive control is to put one consumer back on `DMA32`.**
+  Reverting `proc_syscalls.c`'s heap fault-in took the peak from 5.00 GiB
+  to 0.01 GiB and killed every copy, which is the shape to re-run before
+  trusting a clean pass here.
+
+  **It counts memtest results as a DELTA**, because the klog ring keeps
+  whatever an earlier run left in it and a stale `PASSED` satisfies the
+  exit condition while copies are still holding memory -- which then
+  reads as a leak. That is `mem_stress.py`'s "replace, never append"
+  rule arriving from a different direction. Not a gate: it boots its own
+  8 GiB guest and takes about a minute. Named by `ondemand_sweep.py`.
 - **`ondemand_sweep.py`** -- runs the ~30 test tools that **neither**
   `preflight.sh` nor `gui_regress.py` covers, and reports which have
   rotted.

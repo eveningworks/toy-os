@@ -113,7 +113,7 @@ static int load_segment(uint8_t *elf_base, const struct elf64_phdr *ph, uint64_t
     uint64_t seg_file_end = ph->p_vaddr + ph->p_filesz;
 
     for (uint64_t page_va = vaddr_start; page_va < vaddr_end; page_va += PAGE_SIZE) {
-        uint64_t frame = pmm_alloc_frame(PMM_ZONE_DMA32);
+        uint64_t frame = pmm_alloc_frame(PMM_ZONE_ANY);
         if (!frame) return 0;
 
         uint8_t *dst = (uint8_t *)(uintptr_t)frame;

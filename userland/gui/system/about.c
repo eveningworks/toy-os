@@ -161,13 +161,13 @@ static void fill_rows(void) {
     if (sys_query_record(QUERY_MEMINFO, 0, &mem, sizeof mem) >= (int)sizeof mem) {
         // INSTALLED, USABLE, FREE -- Windows' "8.00 GB (7.87 GB usable)"
         // shape. Installed is the firmware map's usable total; usable is
-        // what a PROCESS can get, which excludes the frames above 4 GiB
-        // until user pages take them ("More than 4 GiB of RAM", stage 3
-        // -- drop the two subtractions then).
+        // every frame the allocator manages, high zone included, which
+        // a process can now be handed. The gap between the two is what
+        // the firmware kept and what a partial 2 MiB granule cost.
         char inst[24], tot[24], freeb[24];
         gib(inst, sizeof inst, mem.phys_usable_bytes);
-        gib(tot, sizeof tot, (mem.frame_total - mem.frame_total_high) * mem.frame_bytes);
-        gib(freeb, sizeof freeb, (mem.frame_free - mem.frame_free_high) * mem.frame_bytes);
+        gib(tot, sizeof tot, mem.frame_total * mem.frame_bytes);
+        gib(freeb, sizeof freeb, mem.frame_free * mem.frame_bytes);
         r = add("Memory", 0, 0);
         snprintf(r->value, sizeof r->value, "%s installed, %s usable, %s free",
                  inst, tot, freeb);
