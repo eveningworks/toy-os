@@ -9,21 +9,16 @@
 #include "pci.h"
 #include "pci_internal.h"
 #include "klog.h"
+#include "paging.h"
 #include "kfmt.h"
 #include "timer.h"
 
 // driver-none: the shared virtio-over-PCI transport
 
-// A window has to live somewhere the kernel can reach. The identity map
-// covers the low 4 GiB and there is no paging_map_kernel_range(), so a
-// BAR above that is unreachable rather than merely awkward -- refuse it
-// with a log line instead of dereferencing a truncated pointer.
-//
-// Not reachable on QEMU's pc-i440fx (SeaBIOS assigns the 16 KiB virtio
-// BAR inside the 32-bit hole), which is exactly why it is a check and a
-// message rather than a TODO: the day it fires, the message says what
-// to build.
-#define VIRTIO_ADDR_LIMIT 0x100000000ull
+// A window has to live somewhere the kernel can reach: below 4 GiB it
+// is identity-mapped, above it paging_map_device() hands back a kernel
+// virtual address (on a machine with 8 GiB, SeaBIOS puts the 64-bit
+// virtio BAR at 768 GiB). Callers keep the POINTER, never the BAR.
 
 // Reset is not guaranteed synchronous, so the spec requires reading
 // device_status back until it reads 0. Bounded, because a device that
@@ -87,15 +82,17 @@ static volatile uint8_t *map_window(const struct pci_device *d, uint8_t cap,
         return 0;
     }
     uint64_t addr = base + offset;
-    if (addr + length > VIRTIO_ADDR_LIMIT) {
-        // The one failure that would need real work to fix, so it says so.
-        klog_printf("virtio: %s window at 0x%llx is above 4 GiB -- this kernel identity-maps"
-                    " only the low 4 GiB and has no kernel-range mapper\n",
+    // A 64-bit BAR lands above 4 GiB once the machine has that much RAM
+    // (QEMU with -m 8192 puts virtio-rng at 0xc000000000), so the window
+    // is mapped rather than assumed.
+    volatile void *win = paging_map_device(addr, length);
+    if (!win) {
+        klog_printf("virtio: %s window at 0x%llx could not be mapped\n",
                     what, (unsigned long long)addr);
         return 0;
     }
     if (out_len) *out_len = length;
-    return (volatile uint8_t *)(uintptr_t)addr;  // identity-mapped below 4 GiB
+    return (volatile uint8_t *)win;
 }
 
 int virtio_pci_find(uint16_t type, int index, struct virtio_device *out) {

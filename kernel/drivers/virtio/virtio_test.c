@@ -36,6 +36,7 @@
 #include "virtio_blk.h"
 #include "block.h"
 #include "scheduler.h"
+#include "uaddr.h"
 
 // Is there ANY virtio device on the bus? Asked through pci.c so that a
 // bug in virtio_pci_find() cannot make this answer "no" and skip.
@@ -92,10 +93,12 @@ KTEST("virtio", "a virtio device on the bus is claimed and its windows mapped") 
     KTEST_ASSERT(d.pci != 0);
     KTEST_ASSERT_EQ(d.pci->vendor_id, VIRTIO_PCI_VENDOR);
 
-    // The windows live below 4 GiB or map_window() would have refused
-    // them -- this kernel identity-maps only that much.
-    KTEST_ASSERT((uint64_t)(uintptr_t)d.common < 0x100000000ull);
-    KTEST_ASSERT((uint64_t)(uintptr_t)d.notify < 0x100000000ull);
+    // A window is a KERNEL pointer: identity-mapped below 4 GiB, or in
+    // the device arena when the BAR is up where a big machine's 64-bit
+    // PCI window goes (paging_map_device()). Never anywhere else.
+    uint64_t c = (uint64_t)(uintptr_t)d.common, n = (uint64_t)(uintptr_t)d.notify;
+    KTEST_ASSERT(c < 0x100000000ull || (c >= UADDR_KDEV_BASE && c < UADDR_IMAGE_BASE));
+    KTEST_ASSERT(n < 0x100000000ull || (n >= UADDR_KDEV_BASE && n < UADDR_IMAGE_BASE));
 }
 
 // The device-status handshake, end to end, checked through the device's

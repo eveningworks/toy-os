@@ -1,12 +1,18 @@
 #include "paging.h"
 #include "multiboot.h"
+#include "pmm.h"
+#include "uaddr.h"
 #include "string.h"
 #include <stddef.h>
 
-// boot.asm identity-maps the first 4GiB with 2MiB pages, laid out as one
-// flat 2048-entry PDE array (four 1GiB P2 tables back to back). Exported
-// via `global p2_tables` there.
-extern uint64_t p2_tables[2048];
+// boot.asm identity-maps the first 4GiB with 2MiB pages: PML4[0] ->
+// p3_table, whose first four entries point at four P2 tables laid out as
+// one flat array. Everything here walks from p3_table rather than
+// indexing that array, because paging_extend_identity_map() fills the
+// PDPT's remaining entries with page directories for the RAM above
+// 4 GiB -- and every user address space shares PML4[0], so a PDPT entry
+// written here is visible to every process without a per-process fixup.
+extern uint64_t p3_table[512];
 
 #define PAGE_PRESENT  (1ULL << 0)
 #define PAGE_WRITABLE (1ULL << 1)
@@ -14,8 +20,9 @@ extern uint64_t p2_tables[2048];
 #define PAGE_HUGE     (1ULL << 7)
 #define PAGE_NX       (1ULL << 63) // requires EFER.NXE, set once in boot.asm
 
-#define HUGE_SIZE     0x200000ULL
-#define PDE_COUNT     2048         // 4GiB / 2MiB
+#define HUGE_SIZE     PAGING_HUGE_SIZE
+#define ADDR_MASK     0x000FFFFFFFFFF000ULL
+#define GIB_COUNT     512          // PDPT entries: PML4[0] spans 512 GiB, the ring-3 image base
 
 // Section boundaries from linker.ld. Their VALUES are what matters here,
 // not their contents -- declared as arrays so the symbol's address is
@@ -56,6 +63,73 @@ static void flush_tlb(void) {
     );
 }
 
+// The page directory covering GiB `g` of the kernel map, or NULL where
+// nothing is mapped. The PDPT never holds a 1 GiB leaf here.
+static uint64_t *pd_of_gib(int g) {
+    if (g < 0 || g >= GIB_COUNT) return 0;
+    uint64_t e = p3_table[g];
+    if (!(e & PAGE_PRESENT)) return 0;
+    return (uint64_t *)(uintptr_t)(e & ADDR_MASK);
+}
+
+// The page directory for GiB `g`, allocating an empty one from DMA32
+// if there is none. Present + writable + user on the PDPT entry, as
+// boot.asm sets its parents: permissions AND down the walk and the
+// leaves decide.
+static uint64_t *pd_of_gib_create(int g) {
+    uint64_t *pd = pd_of_gib(g);
+    if (pd) return pd;
+    if (g < 0 || g >= GIB_COUNT) return 0;
+    uint64_t phys = pmm_alloc_frame(PMM_ZONE_DMA32);
+    if (!phys) return 0;
+    pd = (uint64_t *)(uintptr_t)phys;
+    k_memset(pd, 0, 4096);
+    p3_table[g] = phys | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER;
+    return pd;
+}
+
+// The PDE for `vaddr`, or NULL if its GiB is unmapped.
+static uint64_t *pde_ptr(uint64_t vaddr) {
+    uint64_t *pd = pd_of_gib((int)(vaddr >> 30));
+    return pd ? &pd[(vaddr >> 21) & 0x1FF] : 0;
+}
+
+static uint64_t g_identity_limit = (uint64_t)4 * 1024 * 1024 * 1024;
+uint64_t paging_identity_limit(void) { return g_identity_limit; }
+
+// One usable region from the memory map: map every 2 MiB slot that lies
+// wholly inside it and above 4 GiB, allocating a page directory per GiB
+// from DMA32 as needed. Slots are whole on purpose -- pmm manages the
+// high zone at the same granule, so a managed high frame is always a
+// mapped one, and a partial slot's other half (which may be nothing at
+// all) is never given a cached mapping.
+static uint64_t g_extended_slots;
+static void extend_region_cb(const struct multiboot_mmap_region *r) {
+    if (r->type != 1) return;
+    uint64_t four_gib = (uint64_t)4 * 1024 * 1024 * 1024;
+    uint64_t start = r->base < four_gib ? four_gib : r->base;
+    start = (start + HUGE_SIZE - 1) & ~(HUGE_SIZE - 1);
+    uint64_t end = (r->base + r->length) & ~(HUGE_SIZE - 1);
+    if (end > UADDR_KDEV_BASE) end = UADDR_KDEV_BASE;
+    for (uint64_t a = start; a < end; a += HUGE_SIZE) {
+        uint64_t *pd = pd_of_gib_create((int)(a >> 30));
+        if (!pd) return; // out of low frames: stop here, the rest stays unmapped
+        // Supervisor, writable, NX: the same blanket paging_enforce_wx()
+        // lays over RAM below 4 GiB -- and this runs after it, so the
+        // bit is set here rather than by that pass.
+        pd[(a >> 21) & 0x1FF] = a | PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGE | PAGE_NX;
+        g_extended_slots++;
+        if (a + HUGE_SIZE > g_identity_limit) g_identity_limit = a + HUGE_SIZE;
+    }
+}
+
+uint64_t paging_extend_identity_map(void) {
+    g_extended_slots = 0;
+    multiboot_mmap_foreach(extend_region_cb);
+    flush_tlb();
+    return g_extended_slots * HUGE_SIZE;
+}
+
 // NOTE: the pages this hands out are writable AND executable, which is
 // what its one intended caller (the legacy ring-3 test path) needs -- it
 // pokes code into a scratch region and jumps to it. It has no callers
@@ -64,8 +138,9 @@ static void flush_tlb(void) {
 // ever gains a caller again, that caller owes the region an explicit
 // permission split the way elf.c gives one to a real process.
 int paging_make_user_page(uint64_t vaddr) {
-    uint64_t pde_index = (vaddr >> 21) & 0x7FF; // 2048 entries total (4GiB / 2MiB)
-    if (pde_index >= 2048) return 0;
+    uint64_t pde_index = vaddr >> 21; // slot number across the whole kernel map
+    uint64_t *pdep = pde_ptr(vaddr);
+    if (!pdep) return 0;
 
     uint64_t pte_index = (vaddr >> 12) & 0x1FF;
     uint64_t page_base = vaddr & ~0xFFFULL;
@@ -94,7 +169,7 @@ int paging_make_user_page(uint64_t vaddr) {
         // permissions down the hierarchy, so without it here, no 4KB
         // page under this table could ever be user-accessible regardless
         // of its own PTE flags.
-        p2_tables[pde_index] = (uint64_t)(uintptr_t)pt | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER;
+        *pdep = (uint64_t)(uintptr_t)pt | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER;
     }
 
     pt[pte_index] = page_base | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER;
@@ -136,11 +211,16 @@ int paging_enforce_wx(void) {
     uint64_t split_lo = (uintptr_t)__kimage_start & ~(HUGE_SIZE - 1);
     uint64_t split_hi = ((uintptr_t)__kdata_start + HUGE_SIZE - 1) & ~(HUGE_SIZE - 1);
 
-    for (int pde = 0; pde < PDE_COUNT; pde++) {
-        uint64_t base = (uint64_t)pde * HUGE_SIZE;
+    // Only the boot map exists at this point (this runs before pmm, so
+    // before the extension); walking the PDPT still covers it correctly.
+    for (int g = 0; g < GIB_COUNT; g++) {
+      uint64_t *pd = pd_of_gib(g);
+      if (!pd) continue;
+      for (int i = 0; i < 512; i++) {
+        uint64_t base = ((uint64_t)g << 30) + (uint64_t)i * HUGE_SIZE;
 
         if (base < split_lo || base >= split_hi) {
-            p2_tables[pde] |= PAGE_NX;
+            pd[i] |= PAGE_NX;
             continue;
         }
 
@@ -155,7 +235,8 @@ int paging_enforce_wx(void) {
         // writable: permissions are ANDed down the walk, and it is the
         // PTEs above that decide. Supervisor-only -- no USER bit; this
         // region is the kernel's own image.
-        p2_tables[pde] = (uint64_t)(uintptr_t)pt | PAGE_PRESENT | PAGE_WRITABLE;
+        pd[i] = (uint64_t)(uintptr_t)pt | PAGE_PRESENT | PAGE_WRITABLE;
+      }
     }
 
     // CR0.WP is what makes the read-only half of this mean anything.
@@ -201,11 +282,12 @@ static int guard_table_pde[MAX_GUARD_TABLES];
 static int guard_table_count = 0;
 
 int paging_unmap_kernel_page(uint64_t vaddr) {
-    uint64_t pde_index = (vaddr >> 21) & 0x7FF;
-    if (pde_index >= PDE_COUNT) return 0;
+    uint64_t pde_index = vaddr >> 21;
+    uint64_t *pdep = pde_ptr(vaddr);
+    if (!pdep) return 0;
     uint64_t pte_index = (vaddr >> 12) & 0x1FF;
 
-    uint64_t pde = p2_tables[pde_index];
+    uint64_t pde = *pdep;
     uint64_t *pt;
 
     if (pde & PAGE_HUGE) {
@@ -227,10 +309,10 @@ int paging_unmap_kernel_page(uint64_t vaddr) {
                 pt[i] = addr | wx_page_flags(addr);
             }
         }
-        p2_tables[pde_index] = (uint64_t)(uintptr_t)pt | PAGE_PRESENT | PAGE_WRITABLE;
+        *pdep = (uint64_t)(uintptr_t)pt | PAGE_PRESENT | PAGE_WRITABLE;
     } else {
         if (!(pde & PAGE_PRESENT)) return 0;
-        pt = (uint64_t *)(uintptr_t)(pde & 0x000FFFFFFFFFF000ULL);
+        pt = (uint64_t *)(uintptr_t)(pde & ADDR_MASK);
     }
 
     pt[pte_index] = 0; // not present -- the whole point
@@ -239,21 +321,24 @@ int paging_unmap_kernel_page(uint64_t vaddr) {
 }
 
 uint64_t paging_kernel_leaf(uint64_t vaddr) {
-    uint64_t pde_index = (vaddr >> 21) & 0x7FF;
-    if (pde_index >= PDE_COUNT) return 0;
+    uint64_t *pdep = pde_ptr(vaddr);
+    if (!pdep) return 0;
 
-    uint64_t pde = p2_tables[pde_index];
+    uint64_t pde = *pdep;
     if (!(pde & PAGE_PRESENT)) return 0;
     if (pde & PAGE_HUGE) return pde;
 
-    uint64_t *pt = (uint64_t *)(uintptr_t)(pde & 0x000FFFFFFFFFF000ULL);
+    uint64_t *pt = (uint64_t *)(uintptr_t)(pde & ADDR_MASK);
     return pt[(vaddr >> 12) & 0x1FF];
 }
 
 int paging_wx_violations(void) {
     int bad = 0;
-    for (int pde = 0; pde < PDE_COUNT; pde++) {
-        uint64_t e = p2_tables[pde];
+    for (int g = 0; g < GIB_COUNT; g++) {
+      uint64_t *pd = pd_of_gib(g);
+      if (!pd) continue;
+      for (int i = 0; i < 512; i++) {
+        uint64_t e = pd[i];
         if (!(e & PAGE_PRESENT)) continue;
 
         if (e & PAGE_HUGE) {
@@ -265,12 +350,13 @@ int paging_wx_violations(void) {
         // NX on the PDE would forbid execution beneath it regardless, so
         // a table under an NX parent can't produce a violation.
         if (e & PAGE_NX) continue;
-        uint64_t *pt = (uint64_t *)(uintptr_t)(e & 0x000FFFFFFFFFF000ULL);
-        for (int i = 0; i < 512; i++) {
-            uint64_t p = pt[i];
+        uint64_t *pt = (uint64_t *)(uintptr_t)(e & ADDR_MASK);
+        for (int k = 0; k < 512; k++) {
+            uint64_t p = pt[k];
             if (!(p & PAGE_PRESENT)) continue;
             if ((p & PAGE_WRITABLE) && !(p & PAGE_NX)) bad++;
         }
+      }
     }
     return bad;
 }
@@ -432,20 +518,22 @@ static int pat_apply(uint64_t phys, uint64_t size) {
     uint64_t last  = (phys + size - 1) / HUGE_SIZE;
 
     for (uint64_t pde = first; pde <= last; pde++) {
-        uint64_t e = p2_tables[pde];
+        uint64_t *ep = pde_ptr(pde * HUGE_SIZE);
+        if (!ep) continue;
+        uint64_t e = *ep;
         if (!(e & PAGE_PRESENT)) continue;
 
         if (e & PAGE_HUGE) {
             e &= ~(PAGE_PCD | PAGE_PWT);
             e |= PAGE_PAT_HUGE;
-            p2_tables[pde] = e;
+            *ep = e;
             continue;
         }
         // Split by paging_enforce_wx() -- retype the 4KiB leaves instead.
         // Not expected for a framebuffer (it is far above the kernel
         // image), but writing the huge-page bit here would corrupt the
         // mapping rather than fail, so handle it rather than assume.
-        uint64_t *pt = (uint64_t *)(uintptr_t)(e & 0x000FFFFFFFFFF000ULL);
+        uint64_t *pt = (uint64_t *)(uintptr_t)(e & ADDR_MASK);
         for (int i = 0; i < 512; i++) {
             if (!(pt[i] & PAGE_PRESENT)) continue;
             pt[i] = (pt[i] & ~(PAGE_PCD | PAGE_PWT)) | PAGE_PAT_4K;
@@ -538,7 +626,7 @@ static int mtrr_apply(uint64_t phys, uint64_t size) {
 
 int paging_set_write_combining(uint64_t phys, uint64_t size) {
     if (size == 0) return PAGING_WC_NONE;
-    if (phys + size > (uint64_t)PDE_COUNT * HUGE_SIZE) return PAGING_WC_NONE;
+    if (phys + size > g_identity_limit) return PAGING_WC_NONE;
 
     uint32_t edx = cpuid_edx1();
     int have_pat  = (edx >> 16) & 1u;
@@ -555,4 +643,63 @@ const char *paging_wc_name(int result) {
         case PAGING_WC_MTRR: return "MTRR";
         default:             return "none (uncached)";
     }
+}
+
+// ioremap, in miniature. A window below 4 GiB is already identity-
+// mapped and is returned as is -- write-back, which
+// docs/decisions/drivers.md records as the standing wrong-but-working
+// type; retyping it is a separate change. A window above 4 GiB gets
+// 2 MiB slots in the UADDR_KDEV_BASE arena, uncached (PCD|PWT is UC
+// under the default PAT), supervisor, NX -- it cannot be identity-
+// mapped, because QEMU's 64-bit PCI window sits at 768 GiB, inside the
+// ring-3 half. The arena is in PML4[0], so every process sees it.
+//
+// Nothing is ever unmapped: a driver keeps its window for the life of
+// the boot. A single-slot window already mapped is handed back the
+// same virtual slot; a multi-slot one always gets fresh consecutive
+// slots, since mapping MMIO twice costs nothing and contiguity is what
+// the caller needs.
+#define DEV_SLOT_MAX 64
+static uint64_t dev_slot_phys[DEV_SLOT_MAX];
+static uint64_t dev_slot_virt[DEV_SLOT_MAX];
+static int dev_slot_count = 0;
+static uint64_t dev_next = UADDR_KDEV_BASE;
+
+static uint64_t dev_slot_map(uint64_t phys_slot) {
+    if (dev_next + HUGE_SIZE > UADDR_IMAGE_BASE || dev_slot_count >= DEV_SLOT_MAX) return 0;
+    uint64_t *pd = pd_of_gib_create((int)(dev_next >> 30));
+    if (!pd) return 0;
+    uint64_t virt = dev_next;
+    pd[(virt >> 21) & 0x1FF] = phys_slot | PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGE | PAGE_NX
+                             | PAGE_PCD | PAGE_PWT;
+    dev_slot_phys[dev_slot_count] = phys_slot;
+    dev_slot_virt[dev_slot_count] = virt;
+    dev_slot_count++;
+    dev_next += HUGE_SIZE;
+    return virt;
+}
+
+volatile void *paging_map_device(uint64_t phys, uint64_t size) {
+    if (size == 0) return 0;
+    uint64_t four_gib = (uint64_t)4 * 1024 * 1024 * 1024;
+    if (phys + size <= four_gib) return (volatile void *)(uintptr_t)phys;
+    if (phys < four_gib) return 0; // straddles the boundary: no device does this
+
+    uint64_t first = phys & ~(HUGE_SIZE - 1);
+    uint64_t last = (phys + size - 1) & ~(HUGE_SIZE - 1);
+    uint64_t virt0 = 0;
+    if (first == last) {
+        for (int i = 0; i < dev_slot_count; i++) {
+            if (dev_slot_phys[i] == first) { virt0 = dev_slot_virt[i]; break; }
+        }
+    }
+    if (!virt0) {
+        for (uint64_t a = first; a <= last; a += HUGE_SIZE) {
+            uint64_t v = dev_slot_map(a);
+            if (!v) return 0;
+            if (!virt0) virt0 = v;
+        }
+        flush_tlb();
+    }
+    return (volatile void *)(uintptr_t)(virt0 + (phys - first));
 }

@@ -20,6 +20,7 @@
 #include "virtio_blk.h"
 #include "block.h"
 #include "klog.h"
+#include "paging.h"
 #include "kfmt.h"
 #include "string.h"
 
@@ -120,11 +121,12 @@ static int do_request(uint32_t type, uint64_t sector, void *data, uint32_t len, 
     }
 
     // The device DMAs straight into the caller's buffer -- no bounce
-    // buffer, because the low 4 GiB is identity-mapped and therefore a
+    // buffer, because kernel memory is identity-mapped and therefore a
     // virtually-contiguous kernel buffer is physically contiguous by
-    // construction. What that DOES require is that it be down there.
-    if (data && ((uint64_t)(uintptr_t)data + len) > 0xFFFFFFFFull) {
-        klog_write("virtio-blk: buffer above 4 GiB refused\n");
+    // construction. Virtio addresses are 64-bit, so the only bound is
+    // the map itself (a kmalloc buffer may be above 4 GiB now).
+    if (data && ((uint64_t)(uintptr_t)data + len) > paging_identity_limit()) {
+        klog_write("virtio-blk: buffer outside the identity map refused\n");
         return 0;
     }
 

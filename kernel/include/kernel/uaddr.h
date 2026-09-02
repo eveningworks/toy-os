@@ -79,10 +79,16 @@
 // stops being an arbitrary constant somebody has to keep raising and
 // becomes physical memory. It is affordable only because neither sbrk
 // nor the loader maps what it reserves.
-// Where the ring-3 image is linked (userland/rt/link.ld). Also the
-// ceiling of the kernel's physical map: identity-mapped RAM can only
-// grow up to here, so pmm manages nothing at or above it.
+// Where the ring-3 image is linked (userland/rt/link.ld). Everything
+// below it is PML4[0], which every process shares with the kernel.
 #define UADDR_IMAGE_BASE    0x8000000000ULL
+
+// The kernel's device-window arena: the top 32 GiB of PML4[0], where
+// paging_map_device() puts an MMIO range that cannot be identity-mapped
+// (QEMU's 64-bit PCI window is at 768 GiB, inside the ring-3 half). It
+// is also the ceiling of the identity map, so pmm manages nothing at or
+// above it.
+#define UADDR_KDEV_BASE     0x7800000000ULL
 
 #define UADDR_STACK_VADDR   0x807FF00000ULL
 

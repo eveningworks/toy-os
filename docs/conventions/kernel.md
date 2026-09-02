@@ -478,26 +478,33 @@ this the obvious way), not from how much history it accumulated.
   silently under fragmentation). Raising the caps before that is fixed
   turns a hard limit into an intermittent silent failure.
 - **A FRAME IS ALLOCATED FROM A ZONE, EVERY CALLER NAMES ONE, AND
-  EVERYTHING SAYS `PMM_ZONE_DMA32` TODAY.** `pmm_alloc_frame(zone)` and
+  `kmalloc` MEMORY MAY BE ABOVE 4 GiB.** `pmm_alloc_frame(zone)` and
   `pmm_alloc_contiguous(count, zone)` -- Linux's gfp mask at every site,
   in miniature -- with `DMA32` meaning below 4 GiB and `ANY` meaning
   anywhere managed, high zone first. The bitmaps are SIZED FROM THE
-  MEMORY MAP at `pmm_init()` and carved out of low RAM (the first free
-  frames clear of the image, the modules and the multiboot info), so a
-  machine's frames above 4 GiB are managed and audited from boot even
-  though the identity map stops at 4 GiB and no consumer can reach them
-  yet. Three things to know. **A new caller that writes `ANY` before
-  "More than 4 GiB of RAM" stage 2 has landed gets a physical address
-  the kernel cannot dereference**, and nothing at the call refuses it;
-  the ATA PRD and AC97 BDL registers are 32-bit by specification and can
-  never say `ANY` at all. **`pmm_total_frames()`/`pmm_free_frames()`
-  count BOTH zones**, so a reader that means "what can be used today"
-  asks `pmm_zone_*_frames(PMM_ZONE_DMA32)` -- ramfs's budget does, and
-  About subtracts `QUERY_MEMINFO`'s `frame_total_high`. And **the
-  check that proves any of it SKIPS on the ordinary boot**: the `mm`
-  suite's above-4-GiB test needs `ktest_run.py --mem 8192`, which is
-  what `tools/highmem_test.py` runs and refuses to count as passed if it
-  skipped.
+  MEMORY MAP at `pmm_init()` and carved out of low RAM; the identity map
+  is EXTENDED over every usable region above 4 GiB in whole 2 MiB slots
+  right after (`paging_extend_identity_map()`, PDPT entries in PML4[0],
+  so every process sees it), and pmm manages the high zone at that
+  granule so a managed high frame is always a mapped one. The kernel
+  heap is on `ANY`; user pages, mmap and the window buffers are still
+  `DMA32`. Four things to know. **A `kmalloc` buffer is NOT a DMA target
+  for a 32-bit engine** -- the ATA PRD and AC97 BDL registers are 32-bit
+  by specification, so anything they point at comes from `DMA32` frames,
+  and a driver that hands a `kmalloc` pointer to such a register works
+  on every QEMU boot and corrupts memory on the 8 GB laptop. **An MMIO
+  window above 4 GiB is NOT identity-mapped**: QEMU's 64-bit PCI window
+  is at 768 GiB, inside the ring-3 half, so `paging_map_device()` is
+  `ioremap` -- it returns a pointer in the `UADDR_KDEV_BASE` arena and
+  the driver keeps that pointer, never the BAR. **`pmm_total_frames()`/
+  `pmm_free_frames()` count BOTH zones**, so a reader that means "what
+  ring 3 can use today" asks `pmm_zone_*_frames(PMM_ZONE_DMA32)` --
+  ramfs's budget does, and About subtracts `QUERY_MEMINFO`'s
+  `frame_total_high`. And **the checks that prove any of it SKIP on the
+  ordinary boot**: the `mm` and `paging` above-4-GiB tests need
+  `ktest_run.py --mem 8192`, which is what `tools/highmem_test.py` runs
+  and refuses to count as passed if they skipped. Under 8 GiB the whole
+  suite is run, because that is where the virtio BAR moves.
 - **`SYS_SBRK` is PER PROCESS.** The break lives in
   `struct sched_process` as a `struct sched_mm`, armed when the slot
   is created; the syscall reaches it through `scheduler_current_mm()`,
@@ -642,8 +649,9 @@ this the obvious way), not from how much history it accumulated.
   of both shapes coexist, and `kfree()` tells them apart by reading the
   eight bytes before the payload -- `HEAP_RZ_MAGIC` in a red-zoned
   block, the header's `prev` in a plain one. **That is only unambiguous
-  because every heap pointer fits in 32 bits (identity-mapped low 4 GiB)
-  while the magic's top half is nonzero**, and because `prev` is the
+  because every heap pointer is canonical with bits 63:48 clear (the
+  kernel map ends at 512 GiB, the ring-3 map sits just above) while the
+  magic's top 16 bits are `0xC0DE`**, and because `prev` is the
   header's LAST field. Break either and the failure is silent, on the
   freeing path. See `docs/decisions.md`.
 - **The kernel RELOCATES ITSELF at boot -- it is not running where it

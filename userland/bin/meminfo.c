@@ -191,11 +191,11 @@ int main(int argc, char **argv) {
     snprintf(line, sizeof line, "  free:  %-10s %s\n", n3, f);
     sys_print(line);
     if (m.frame_total_high) {
-        // Managed and audited, allocatable only to PMM_ZONE_ANY -- which
-        // no consumer asks for until the identity map is extended.
+        // Mapped and used by the kernel heap; ring-3 pages still come
+        // from below 4 GiB ("More than 4 GiB of RAM", stage 3).
         human_size(t, sizeof t, m.frame_total_high * m.frame_bytes);
         snprintf(n1, sizeof n1, "%llu", (unsigned long long)m.frame_total_high);
-        snprintf(line, sizeof line, "  above 4 GiB: %-4s %s (managed, not yet allocatable)\n", n1, t);
+        snprintf(line, sizeof line, "  above 4 GiB: %-4s %s (kernel heap only, not yet for processes)\n", n1, t);
         sys_print(line);
     }
 

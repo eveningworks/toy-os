@@ -20,6 +20,7 @@
 #include "kfmt.h"
 #include "reloc.h"
 #include "uaddr.h"
+#include "paging.h"
 #include "string.h"
 #include <stddef.h>
 
@@ -79,7 +80,7 @@ static void size_cb(const struct multiboot_mmap_region *region) {
     uint64_t end = align_down(region->base + region->length);
     if (end <= start) return;
     firmware_bytes += end - start;              // uncapped: what the machine HAS
-    if (end > UADDR_IMAGE_BASE) end = UADDR_IMAGE_BASE; // the map can never reach past here
+    if (end > UADDR_KDEV_BASE) end = UADDR_KDEV_BASE; // the identity map can never reach past here
     if (end > highest_usable) highest_usable = end;
 }
 
@@ -144,16 +145,30 @@ static void place_cb(const struct multiboot_mmap_region *region) {
 
 // ---- pass 2: the books --------------------------------------------
 
-static void mark_available_cb(const struct multiboot_mmap_region *region) {
-    if (region->type != 1) return; // only "available" RAM
-    uint64_t start = align_up(region->base);
-    uint64_t end = align_down(region->base + region->length);
-    if (end > max_frames * FRAME_SIZE) end = max_frames * FRAME_SIZE;
+static void manage_range(uint64_t start, uint64_t end) {
     for (uint64_t addr = start; addr < end; addr += FRAME_SIZE) {
         uint64_t f = addr / FRAME_SIZE;
         managed[f / 8] |= (uint8_t)(1u << (f % 8));
         mark_free_bit(f);
         zone_total[zone_of(f)]++;
+    }
+}
+
+static void mark_available_cb(const struct multiboot_mmap_region *region) {
+    if (region->type != 1) return; // only "available" RAM
+    uint64_t start = align_up(region->base);
+    uint64_t end = align_down(region->base + region->length);
+    if (end > max_frames * FRAME_SIZE) end = max_frames * FRAME_SIZE;
+    uint64_t four_gib = DMA32_FRAMES * FRAME_SIZE;
+    // Below 4 GiB every whole frame is managed. Above it only whole
+    // 2 MiB granules are, because that is what paging_extend_identity_map()
+    // maps -- a managed high frame must always be a mapped one.
+    if (start < four_gib) manage_range(start, end < four_gib ? end : four_gib);
+    if (end > four_gib) {
+        uint64_t hs = start > four_gib ? start : four_gib;
+        hs = (hs + PAGING_HUGE_SIZE - 1) & ~(PAGING_HUGE_SIZE - 1);
+        uint64_t he = end & ~(PAGING_HUGE_SIZE - 1);
+        if (he > hs) manage_range(hs, he);
     }
 }
 

@@ -54,6 +54,28 @@ int paging_unmap_kernel_page(uint64_t vaddr);
 
 uint64_t paging_kernel_leaf(uint64_t vaddr);
 
+// The kernel map's 2 MiB granule. pmm manages the zone above 4 GiB in
+// whole granules so that every managed high frame is a mapped one.
+#define PAGING_HUGE_SIZE 0x200000ULL
+
+// Extend the identity map over every usable region above 4 GiB, in
+// whole 2 MiB slots, with page directories taken from PMM_ZONE_DMA32.
+// Runs once, after pmm_init() and after paging_enforce_wx(); the new
+// leaves are writable and NX like the RAM below. Returns bytes mapped.
+uint64_t paging_extend_identity_map(void);
+
+// One past the highest identity-mapped byte: 4 GiB on a small machine,
+// the end of the last extended slot otherwise. A kernel pointer below
+// it is physical by construction; one above it is a bug.
+uint64_t paging_identity_limit(void);
+
+// ioremap: the kernel virtual address for a device's MMIO window, or
+// NULL. Below 4 GiB it is the physical address (the boot map covers it
+// and always has); above, a fresh uncached mapping in the
+// UADDR_KDEV_BASE arena -- so a driver keeps the POINTER, and must not
+// assume it equals the BAR. Never unmapped.
+volatile void *paging_map_device(uint64_t phys, uint64_t size);
+
 // How many pages in the kernel's own map are simultaneously writable
 // and executable, i.e. how many times W^X is violated. Should be 0
 // after paging_enforce_wx(); walks all 2048 PDEs and every split table

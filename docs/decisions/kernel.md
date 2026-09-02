@@ -73,6 +73,24 @@ are handed out by ZONE, with every existing caller on `DMA32`, because
 the ATA PRD and AC97 BDL registers are 32-bit by specification and a
 missed caller is a silent DMA into the wrong 4 GiB.
 
+**Built 2026-09-02, with one exception the plan had not seen: MMIO.**
+The extension itself went as planned -- 2 MiB slots only, because
+QEMU's default CPU has no 1 GiB pages and a path the gate never runs
+is not worth a second path; page directories from `DMA32`; the high
+zone managed at 2 MiB granules so a managed frame is always a mapped
+one; every walker in `paging.c` descending from the boot PDPT instead
+of indexing a 2048-entry array. What the plan got wrong was that a
+64-bit BAR could be identity-mapped: on an 8 GiB machine SeaBIOS puts
+the PCI 64-bit window at 768 GiB, which is INSIDE the ring-3 half, and
+no identity mapping of it can exist. So `paging_map_device()` is
+`ioremap` after all -- a window above 4 GiB gets a virtual slot in the
+top 32 GiB of PML4[0] (`UADDR_KDEV_BASE`), uncached, and the driver
+keeps the pointer. Below 4 GiB it still returns the physical address,
+write-back as before; retyping those is the separate change
+`docs/decisions/drivers.md` describes. The kernel heap is the first
+`ANY` consumer; user pages stay `DMA32` until each mover carries its
+own test.
+
 ## IRQ registration: one handler per line, framework-automatic EOI
 
 `kernel/arch/x86_64/irq.c`'s table (`irq_register_handler()`/`irq_dispatch()`)
@@ -1990,10 +2008,13 @@ The cost is that blocks allocated before and after a toggle coexist, and
 so it decides by reading the eight bytes immediately before the payload:
 `HEAP_RZ_MAGIC` in a red-zoned block, the header's `prev` pointer in a
 plain one. **That is sound rather than a heuristic, and the reason is
-worth keeping**: every heap pointer is an address in the identity-mapped
-low 4 GiB and therefore fits in 32 bits, while the magic's top half is
-nonzero, so no `prev` can ever collide with it. Break either fact -- a
-heap above 4 GiB, or a magic that fits in 32 bits -- and the two cases
+worth keeping**: every heap pointer is a canonical address with bits
+63:48 clear -- the kernel map ends at 512 GiB and the ring-3 map sits
+just above it -- while the magic's top 16 bits are `0xC0DE`, so no
+`prev` can ever collide with it. (It used to say "fits in 32 bits",
+which was true and narrower than the property; the heap lives above
+4 GiB on a big machine now.) Break either fact -- a pointer with bits
+63:48 set, or a magic whose top 16 bits are zero -- and the two cases
 become indistinguishable on the freeing path, silently.
 
 `prev` being the header's LAST field is load-bearing for the same

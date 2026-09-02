@@ -8,11 +8,13 @@ and `ktest_run.py` reports a skip as a pass of everything else -- so
 accounted for. This tool exists so that question has a runner.
 
 What a PASS says: the firmware map's memory above 4 GiB is managed by
-pmm, none of it is allocated, PMM_ZONE_DMA32 stays below 4 GiB and
-PMM_ZONE_ANY reaches above it. What it does NOT say: that anything
-can USE that memory -- the identity map still stops at 4 GiB until
-"More than 4 GiB of RAM" stage 2 lands, and stage 5 is where this tool
-grows a consumer that actually touches a high frame.
+pmm and zoned, the identity map reaches it (a pattern written through
+it reads back), the kernel heap grows into it, and virtio's BAR -- which
+SeaBIOS moves to 768 GiB on a machine this size -- is reachable through
+paging_map_device(). It runs the WHOLE suite rather than `mm`, because
+the BAR move is what an 8 GiB machine changes for everything else. What
+it does NOT say: that a process gets memory up there -- user pages are
+still DMA32 ("More than 4 GiB of RAM", stage 3).
 
     python3 tools/highmem_test.py
     python3 tools/highmem_test.py --mem 6144    # any size past 4 GiB
@@ -37,8 +39,7 @@ def main():
         print("highmem_test: FAIL -- --mem must exceed 4096 or the check under test skips")
         return 1
 
-    cmd = [sys.executable, os.path.join(HERE, "ktest_run.py"),
-           "--suite", "mm", "--mem", str(args.mem)]
+    cmd = [sys.executable, os.path.join(HERE, "ktest_run.py"), "--mem", str(args.mem)]
     if args.port:
         cmd += ["--port", str(args.port)]
     r = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)
@@ -49,17 +50,19 @@ def main():
         for ln in tail:
             print(f"    {ln}")
         return 1
-    # The suite passing is not enough: the check must have RUN. A guest
-    # that somehow came up with less memory than asked would skip it,
-    # and a skip here is the whole hazard this tool is for.
-    m = re.search(r"(\d+) passed, (\d+) failed, (\d+) skipped", out)
-    if not m or int(m.group(3)) != 0:
-        print("highmem_test: FAIL -- the above-4-GiB check skipped instead of running")
+    # The suite passing is not enough: the above-4-GiB checks must have
+    # RUN. A guest that somehow came up with less memory than asked
+    # would skip them, and a skip here is the whole hazard this tool is
+    # for. Other suites skip for their own reasons (no AHCI, no
+    # virtio-gpu), so the test is that none of OUR skip lines appear.
+    if "guest has no memory above 4 GiB" in out:
+        print("highmem_test: FAIL -- an above-4-GiB check skipped instead of running")
         for ln in tail:
             print(f"    {ln}")
         return 1
-    print(f"highmem_test: PASS -- {m.group(1)} mm checks ran on a {args.mem} MiB guest, "
-          f"none skipped")
+    m = re.search(r"(\d+) passed, (\d+) failed, (\d+) skipped", out)
+    print(f"highmem_test: PASS -- {m.group(1) if m else '?'} checks ran on a {args.mem} MiB "
+          f"guest, the above-4-GiB ones among them")
     return 0
 
 

@@ -161,9 +161,9 @@ static void fill_rows(void) {
     if (sys_query_record(QUERY_MEMINFO, 0, &mem, sizeof mem) >= (int)sizeof mem) {
         // INSTALLED, USABLE, FREE -- Windows' "8.00 GB (7.87 GB usable)"
         // shape. Installed is the firmware map's usable total; usable is
-        // what can actually be handed out, which excludes the frames
-        // above 4 GiB until the identity map reaches them ("More than
-        // 4 GiB of RAM", stage 3 -- drop the two subtractions then).
+        // what a PROCESS can get, which excludes the frames above 4 GiB
+        // until user pages take them ("More than 4 GiB of RAM", stage 3
+        // -- drop the two subtractions then).
         char inst[24], tot[24], freeb[24];
         gib(inst, sizeof inst, mem.phys_usable_bytes);
         gib(tot, sizeof tot, (mem.frame_total - mem.frame_total_high) * mem.frame_bytes);

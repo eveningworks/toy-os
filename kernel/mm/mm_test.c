@@ -8,6 +8,7 @@
 #include "ktest.h"
 #include "fault_inject.h"
 #include "kapi.h"
+#include "paging.h"
 
 KTEST("mm", "pmm contiguous alloc/free (legacy selftest)") {
     KTEST_ASSERT(pmm_selftest() == 1);
@@ -17,28 +18,62 @@ KTEST("mm", "pmm contiguous alloc/free (legacy selftest)") {
 // the ordinary 256 MiB boot it skips, and a skip is reported as one.
 // The FAIL branch is what a wrong cap looks like: the firmware map
 // says memory exists up there and the allocator manages none of it.
-KTEST("mm", "frames above 4 GiB are managed and idle") {
+KTEST("mm", "frames above 4 GiB are managed and zoned") {
     uint64_t four_gib = (uint64_t)4 * 1024 * 1024 * 1024;
     if (pmm_firmware_bytes() <= four_gib) KTEST_SKIP("guest has no memory above 4 GiB");
     uint64_t high_total = pmm_zone_total_frames(PMM_ZONE_ANY);
     KTEST_ASSERT(high_total > 0);
-    KTEST_ASSERT(pmm_zone_free_frames(PMM_ZONE_ANY) == high_total); // nobody asks for ANY yet
+    KTEST_ASSERT(pmm_zone_free_frames(PMM_ZONE_ANY) <= high_total);
     KTEST_ASSERT(pmm_frame_is_managed(four_gib));
-    KTEST_ASSERT(!pmm_frame_is_used(four_gib));
     // The zones are honoured at the allocator, whatever the map covers:
     // DMA32 stays low, ANY prefers high. The high frame is never touched.
     uint64_t low = pmm_alloc_frame(PMM_ZONE_DMA32);
+    uint64_t high_free = pmm_zone_free_frames(PMM_ZONE_ANY);
     uint64_t high = pmm_alloc_frame(PMM_ZONE_ANY);
     KTEST_ASSERT(low != 0 && low < four_gib);
     KTEST_ASSERT(high >= four_gib);
-    KTEST_ASSERT(pmm_zone_free_frames(PMM_ZONE_ANY) == high_total - 1);
+    KTEST_ASSERT(pmm_zone_free_frames(PMM_ZONE_ANY) == high_free - 1);
     pmm_free_frame(low);
     pmm_free_frame(high);
-    KTEST_ASSERT(pmm_zone_free_frames(PMM_ZONE_ANY) == high_total);
+    KTEST_ASSERT(pmm_zone_free_frames(PMM_ZONE_ANY) == high_free);
     // A DMA32 run never straddles 4 GiB: ask for one that would.
     uint64_t run = pmm_alloc_contiguous(8, PMM_ZONE_DMA32);
     KTEST_ASSERT(run != 0 && run + 8 * 4096 <= four_gib);
     pmm_free_contiguous(run, 8);
+}
+
+// The identity map reaches a high frame: write an address-derived
+// pattern through it and read it back. A constant fill could not tell
+// a mapping of the wrong frame from the right one (memtest's rule).
+KTEST("mm", "a frame above 4 GiB is reachable through the identity map") {
+    uint64_t four_gib = (uint64_t)4 * 1024 * 1024 * 1024;
+    if (pmm_zone_total_frames(PMM_ZONE_ANY) == 0) KTEST_SKIP("guest has no memory above 4 GiB");
+    uint64_t phys = pmm_alloc_frame(PMM_ZONE_ANY);
+    KTEST_ASSERT(phys >= four_gib);
+    KTEST_ASSERT(phys + 4096 <= paging_identity_limit());
+    volatile uint64_t *p = (volatile uint64_t *)(uintptr_t)phys;
+    for (int i = 0; i < 512; i++) p[i] = (phys + (uint64_t)i * 8) * 0x9E3779B97F4A7C15ULL;
+    int bad = 0;
+    for (int i = 0; i < 512; i++) {
+        if (p[i] != (phys + (uint64_t)i * 8) * 0x9E3779B97F4A7C15ULL) bad++;
+    }
+    pmm_free_frame(phys);
+    KTEST_ASSERT_EQ(bad, 0);
+}
+
+// The kernel heap is the first PMM_ZONE_ANY consumer: a block too big
+// for any existing region forces a fresh one, which must land high.
+KTEST("mm", "the kernel heap grows into memory above 4 GiB") {
+    uint64_t four_gib = (uint64_t)4 * 1024 * 1024 * 1024;
+    if (pmm_zone_total_frames(PMM_ZONE_ANY) == 0) KTEST_SKIP("guest has no memory above 4 GiB");
+    uint8_t *blk = kmalloc(1024 * 1024);
+    KTEST_ASSERT(blk != 0);
+    KTEST_ASSERT((uint64_t)(uintptr_t)blk >= four_gib); // a region, new or existing, is high
+    for (int i = 0; i < 1024 * 1024; i += 4096) blk[i] = (uint8_t)(i >> 12);
+    int bad = 0;
+    for (int i = 0; i < 1024 * 1024; i += 4096) if (blk[i] != (uint8_t)(i >> 12)) bad++;
+    kfree(blk);
+    KTEST_ASSERT_EQ(bad, 0);
 }
 
 KTEST("mm", "heap alloc/free/coalesce (legacy selftest)") {

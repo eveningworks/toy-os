@@ -54,11 +54,12 @@
 // The trap that makes that sound: kfree() decides by reading the eight
 // bytes immediately before the payload, which are HEAP_RZ_MAGIC in a
 // red-zoned block and the header's `prev` pointer in a plain one. That
-// can never be ambiguous because every heap pointer is an address in
-// the identity-mapped low 4GiB and so fits in 32 bits, while
-// HEAP_RZ_MAGIC's top half is nonzero. Change either fact -- a heap
-// above 4GiB, or a magic that fits in 32 bits -- and the two cases
-// become indistinguishable, silently, on the freeing path.
+// can never be ambiguous because every heap pointer is a canonical
+// address with bits 63:48 clear -- the kernel map ends at 512 GiB and
+// the ring-3 map sits just above it -- while HEAP_RZ_MAGIC's top 16
+// bits are 0xC0DE. Change either fact -- a pointer with high bits set,
+// or a magic whose top 16 bits are zero -- and the two cases become
+// indistinguishable, silently, on the freeing path.
 #include "heap.h"
 #include "heap_os.h"  // the three things this file deliberately does not know
 #include "kfmt.h"     // k_snprintf -- freestanding half, see kfmt.h

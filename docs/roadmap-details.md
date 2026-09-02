@@ -2349,10 +2349,11 @@ measuring it.** Either can be done at any point, including first.
 
 About shows the gap since 2026-09-02: `phys_usable_bytes` on
 `QUERY_MEMINFO` is the firmware map's usable total, and the row reads
-"7.9 GiB installed, 3.4 GiB usable" on an 8 GB laptop. Since stage 1
-the high frames are MANAGED, so usable is `frame_total` minus
-`frame_total_high`; when stage 3 hands them out that subtraction goes
-and the two numbers meet.
+"7.9 GiB installed, 3.4 GiB usable" on an 8 GB laptop. Since stages 1
+and 2 the high frames are managed and mapped, and the kernel heap lives
+up there, so usable is `frame_total` minus `frame_total_high` -- what
+ring 3 can get. When stage 3 moves user pages that subtraction goes and
+the two numbers meet.
 
 **Planned 2026-09-02, after a code audit.** The decision, and the
 reason it is not Linux's layout, is in `docs/decisions/kernel.md`
@@ -2386,36 +2387,37 @@ and idle" SKIPS below 4 GiB and `tools/highmem_test.py` runs it on an
 8 GiB guest, refusing a skip; the positive control (capping the map at
 4 GiB again) fails it on `high_total > 0`.
 
-**Stage 2 -- the map.** After `pmm_init()`, walk the memory map and
-map every usable region above 4 GiB at its own address: 1 GiB PDPT
-entries where CPUID reports `pdpe1gb`, 2 MiB PDs from `DMA32` frames
-otherwise, up to `phys_addr_bits()` (`paging.c`, already there for the
-MTRR path). Bounded by where the ring-3 map begins
-(`kernel/include/kernel/uaddr.h`), which is hundreds of GiB up.
-`paging_set_write_combining()` and the `paging` KTESTs assume the 2048
-PDE array and need the second range taught to them.
+**Stage 2 -- the map. BUILT 2026-09-02.** `paging_extend_identity_map()`
+runs right after `pmm_init()`: every usable region above 4 GiB, in
+whole 2 MiB slots, from page directories taken from `DMA32`, capped at
+`UADDR_KDEV_BASE`. 2 MiB only -- QEMU's default CPU has no `pdpe1gb`,
+so a 1 GiB path would run on the laptop alone. Every walker in
+`paging.c` (W^X, the guard-page split, `paging_kernel_leaf()`, PAT
+retyping) descends from the boot PDPT now rather than indexing the
+2048-entry array, and the `paging` suite asserts a high slot is huge,
+writable and NX. pmm manages the high zone at the same 2 MiB granule so
+a managed frame is always a mapped one; the `mm` suite writes an
+address-derived pattern through the map and reads it back.
 
-**Stage 3 -- the consumers.** `vmm_map_user_page()`'s frames, the
-kernel heap's regions, mmap fault-ins and the compositor's client
-buffers switch to `ANY`, one at a time, each behind a test that runs
-with 8 GiB and asserts a frame above 4 GiB was actually handed out.
-`/tests/memtest`'s address-derived pattern is the right check for the
-map being correct up there. **`kfree()`'s red-zone check survives**: it
-compares the eight bytes before the payload against a magic whose top
-half is `0xC0DEFACE`; a pointer above 4 GiB has a nonzero top half too,
-but a canonical address never has bits 63:48 set, so the two stay
-distinguishable -- the documented reasoning ("fits in 32 bits") is
-narrower than the property that actually holds, and CLAUDE.md,
-`docs/conventions/kernel.md` and `docs/decisions/kernel.md` should say
-the wider one when this lands.
+**Stage 3 -- the consumers.** The kernel heap moved first (2026-09-02):
+`heap_os_alloc()` says `ANY`, the `mm` suite asserts a 1 MiB block
+lands above 4 GiB, and `kfree()`'s red-zone reasoning was rewritten to
+the property that actually holds (bits 63:48 clear, not "fits in 32
+bits"). Still `DMA32`: `vmm_map_user_page()`'s frames, mmap fault-ins
+and the compositor's client buffers -- each moves behind a test that
+runs with 8 GiB and asserts a high frame was handed out;
+`/tests/memtest`'s address-derived pattern is the check for user pages.
+Then About stops subtracting `frame_total_high`.
 
-**Stage 4 -- MMIO.** virtio-pci, xHCI and AHCI refuse a BAR above
-4 GiB with a message naming the missing mapper. With the map extended
-over RAM, an MMIO range up there still needs its own mapping (it is not
-in the memory map), so this stage is a small `paging_map_kernel_range()`
-for a device window -- and it is where the memory type is finally set
-right, since `docs/decisions/drivers.md` records that MMIO goes through
-the write-back identity map today.
+**Stage 4 -- MMIO. BUILT 2026-09-02, not as planned.** The refusals in
+virtio-pci, xHCI and AHCI are gone, but the mapper is `ioremap`, not an
+identity extension: on an 8 GiB QEMU machine SeaBIOS puts the 64-bit
+PCI window at 768 GiB, inside the ring-3 half, so `paging_map_device()`
+hands back a virtual slot in the `UADDR_KDEV_BASE` arena (uncached)
+and the driver keeps the pointer. Found by running the whole suite at
+8 GiB, where every virtio test had failed on that BAR. What is NOT done
+is the memory type below 4 GiB: those windows still return the
+identity address, write-back, as `docs/decisions/drivers.md` records.
 
 **Stage 5 -- proof.** Nothing automated boots with more than 2 GiB
 today; `tools/vm.py --mem 8192` is one flag away. A tool that spawns

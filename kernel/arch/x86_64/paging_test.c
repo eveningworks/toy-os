@@ -15,6 +15,7 @@
 
 #include "ktest.h"
 #include "paging.h"
+#include "pmm.h"
 #include <stdint.h>
 
 #define PAGE_PRESENT  (1ULL << 0)
@@ -87,6 +88,24 @@ KTEST("paging", "the low 1MiB stays writable, and RAM above the image is NX") {
     KTEST_ASSERT(far & PAGE_PRESENT);
     KTEST_ASSERT(far & PAGE_WRITABLE);
     KTEST_ASSERT(far & PAGE_NX);
+}
+
+KTEST("paging", "RAM above 4 GiB is mapped huge, writable and NX") {
+    uint64_t four_gib = (uint64_t)4 * 1024 * 1024 * 1024;
+    if (pmm_zone_total_frames(PMM_ZONE_ANY) == 0) KTEST_SKIP("guest has no memory above 4 GiB");
+    KTEST_ASSERT(paging_identity_limit() > four_gib);
+    // The first managed high frame's slot, not 4 GiB itself: a hole may
+    // start there on a real machine.
+    uint64_t probe = pmm_alloc_frame(PMM_ZONE_ANY);
+    KTEST_ASSERT(probe >= four_gib);
+    uint64_t e = paging_kernel_leaf(probe);
+    pmm_free_frame(probe);
+    KTEST_ASSERT(e & PAGE_PRESENT);
+    KTEST_ASSERT(e & (1ULL << 7)); // huge
+    KTEST_ASSERT(e & PAGE_WRITABLE);
+    KTEST_ASSERT(e & PAGE_NX);
+    // And nothing is mapped past the limit.
+    KTEST_ASSERT_EQ((int64_t)paging_kernel_leaf(paging_identity_limit()), 0);
 }
 
 KTEST("paging", "CR0.WP is set, so ring 0 honours the read-only bit") {

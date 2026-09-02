@@ -10,6 +10,7 @@
 #include "pci.h"
 #include "pci_internal.h"
 #include "pmm.h"
+#include "paging.h"
 #include "irq.h"
 #include "pic.h"
 #include "timer.h"
@@ -531,12 +532,11 @@ void ahci_init(void) {
         klog_write("ahci: controller found but BAR5 is unimplemented or I/O space\n");
         return;
     }
-    if (abar + 0x1100 > 0x100000000ull) {
-        klog_printf("ahci: ABAR at 0x%llx is above 4 GiB -- this kernel identity-maps only"
-                    " the low 4 GiB\n", (unsigned long long)abar);
+    g_abar = (volatile uint8_t *)paging_map_device(abar, 0x1100);
+    if (!g_abar) {
+        klog_printf("ahci: ABAR at 0x%llx could not be mapped\n", (unsigned long long)abar);
         return;
     }
-    g_abar = (volatile uint8_t *)(uintptr_t)abar;
 
     pci_command_update(g_pci, PCI_CMD_MEMORY | PCI_CMD_BUS_MASTER | PCI_CMD_INTX_DISABLE, 0);
 

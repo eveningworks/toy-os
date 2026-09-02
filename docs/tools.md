@@ -22,8 +22,8 @@ non-GUI boot check — see `docs/testing.md`), `gen_version.sh`/`set_version.sh`
 it into an exit code -- what `make test` and CI run; `--virtio-disk
 PATH` attaches a second disk on virtio-blk, which then carries the
 filesystem while the IDE drive stays for the `[ata]`/`[atac]` suites,
-`--mem MIB` sizes the guest (256 by default, and the `mm` suite's
-above-4-GiB check SKIPS below 4096 -- `highmem_test.py` is the runner
+`--mem MIB` sizes the guest (256 by default, and the `mm` and `paging`
+above-4-GiB checks SKIP below 4096 -- `highmem_test.py` is the runner
 that refuses the skip), and `-v` prints the WHOLE transcript, boot
 messages included. **It
 stops the desktop before the suite** -- `service stop toywm`, after
@@ -2833,13 +2833,15 @@ window without going through it will find its layout polls timing out.
   human reading the vendored license file, which is why the entries in
   `LICENSE` quote the version language rather than paraphrasing it.
 
-- **`highmem_test.py`** -- the frame allocator on an 8 GiB guest: runs
-  the `mm` KTEST suite through `ktest_run.py --mem 8192` and FAILS if
-  the above-4-GiB check skipped rather than ran, which is what it does
-  on every other runner's 256 MiB boot. Proves the frames up there are
-  managed, idle and zoned; does NOT prove anything can use them (that
-  is "More than 4 GiB of RAM" stage 2 onward, and stage 5 is where this
-  tool grows a consumer). Named by `ondemand_sweep.py`.
+- **`highmem_test.py`** -- the WHOLE KTEST suite on an 8 GiB guest
+  (`ktest_run.py --mem 8192`), failing if an above-4-GiB check skipped
+  rather than ran, which is what those do on every other runner's
+  256 MiB boot. The whole suite rather than `mm` because a machine that
+  size moves the 64-bit PCI window to 768 GiB, which is what broke every
+  virtio test the first time it ran. Proves the high frames are managed,
+  mapped, zoned and taken by the kernel heap; does NOT prove a process
+  gets any ("More than 4 GiB of RAM", stage 3). Named by
+  `ondemand_sweep.py`.
 - **`ondemand_sweep.py`** -- runs the ~30 test tools that **neither**
   `preflight.sh` nor `gui_regress.py` covers, and reports which have
   rotted.

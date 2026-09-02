@@ -619,7 +619,7 @@ whenever a headline here tells you something you did not already know.
 - **`SYS_WNOHANG` exists, and the bug that produced it is the lesson.**
 - **`SYS_SBRK` RESERVES; THE PAGE ARRIVES ON TOUCH.**
 - **THE RING-3 MAP IS SIZED FOR 4K, and a region's END is what the next thing must clear.**
-- **A FRAME IS ALLOCATED FROM A ZONE, EVERY CALLER NAMES ONE, AND EVERYTHING SAYS `PMM_ZONE_DMA32` TODAY.**
+- **A FRAME IS ALLOCATED FROM A ZONE, EVERY CALLER NAMES ONE, AND `kmalloc` MEMORY MAY BE ABOVE 4 GiB.**
 - **`SYS_SBRK` is PER PROCESS.**
 - **A RING-3 IMAGE HAS NO SIZE LIMIT, BECAUSE THE HEAP STARTS WHERE IT ENDS.**
 - **THE USER STACK IS RESERVED AND GROWN ON FAULT, and the GAP is what keeps that safe.**

@@ -23,6 +23,7 @@
 #include "lapic.h"
 #include "pci_internal.h"
 #include "pmm.h"
+#include "paging.h"
 #include "irq.h"
 #include "pic.h"
 #include "input.h"
@@ -38,11 +39,8 @@
 
 DRIVER_DECLARE("xhci", "usb", "USB 3 xHCI host controller");
 
-// The identity map covers the low 4 GiB and there is no
-// paging_map_kernel_range(), so a BAR above that is unreachable rather
-// than merely awkward. Same refusal, and the same reasoning, as
-// virtio_pci.c's VIRTIO_ADDR_LIMIT: when the day comes that this fires,
-// the message says what to build.
+// DMA objects stay below 4 GiB unless the controller says ac64 -- the
+// register window itself is mapped wherever it is (paging_map_device()).
 #define XHCI_ADDR_LIMIT 0x100000000ull
 
 #define TRBS_PER_RING 256   // 4096 / sizeof(struct xhci_trb)
@@ -1558,16 +1556,16 @@ void usb_init(void) {
                     d->bus, d->device, d->function);
         return;
     }
-    if (bar0 + 0x1000 > XHCI_ADDR_LIMIT) {
-        klog_printf("usb: xHCI register window at 0x%llx is above 4 GiB -- this"
-                    " kernel identity-maps only the low 4 GiB and has no"
-                    " kernel-range mapper\n", (unsigned long long)bar0);
+    uint64_t bar0_len = pci_bar_mem_size(d, 0);
+    volatile void *win = paging_map_device(bar0, bar0_len ? bar0_len : 0x1000);
+    if (!win) {
+        klog_printf("usb: xHCI register window at 0x%llx could not be mapped\n",
+                    (unsigned long long)bar0);
         return;
     }
 
     g_hc.pci = d;
-    g_hc.cap = (volatile uint8_t *)(uintptr_t)bar0;
-    uint64_t bar0_len = pci_bar_mem_size(d, 0);
+    g_hc.cap = (volatile uint8_t *)win;
     g_hc.cap_len = (bar0_len && bar0_len <= 0xFFFFFFFFull) ? (uint32_t)bar0_len
                                                             : XHCI_XECP_FALLBACK_LEN;
 

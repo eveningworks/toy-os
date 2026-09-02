@@ -163,6 +163,13 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // purely because nothing earlier had asked for a frame.
     pmm_init();
     klog_write("toy-os: physical frame allocator initialized\n");
+    // The identity map over the RAM above 4 GiB, now that there are
+    // frames for its page directories. Before any consumer of
+    // PMM_ZONE_ANY -- the kernel heap is the first, in heap_init().
+    {
+        uint64_t hi = paging_extend_identity_map();
+        if (hi) klog_printf("toy-os: identity map extended by %lu MiB above 4 GiB\n", hi >> 20);
+    }
 
     // Display drivers register, then probe -- specific cards first, the
     // generic GRUB framebuffer last as the fallback that always claims.

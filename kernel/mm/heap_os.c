@@ -1,12 +1,15 @@
 // The kernel's half of the shared allocator -- see api/heap_os.h.
 //
 // Memory comes from the physical frame allocator directly, with no
-// mapping step: boot.asm identity-maps the whole low 4 GiB as
-// supervisor-only, so a DMA32 frame pmm_alloc_contiguous() hands back
-// is already a valid kernel pointer. That is why the kernel heap needs
-// no vmm involvement at all, and why it stays on PMM_ZONE_DMA32 until
-// the identity map is extended (docs/roadmap.md's "More than 4 GiB of
-// RAM", stage 3).
+// mapping step: every managed frame is identity-mapped (boot.asm below
+// 4 GiB, paging_extend_identity_map() above), so a frame
+// pmm_alloc_contiguous() hands back is already a valid kernel pointer.
+// That is why the kernel heap needs no vmm involvement at all.
+//
+// PMM_ZONE_ANY, so on a big machine the heap lives above 4 GiB and the
+// low zone is left for DMA. THE TRAP: kmalloc memory is therefore NOT
+// a DMA target for a 32-bit engine -- a driver with a 32-bit address
+// register takes DMA32 frames from pmm, never a kmalloc buffer.
 #include "heap_os.h"
 #include "pmm.h"
 #include "klog.h"
@@ -18,7 +21,7 @@ void *heap_os_alloc(uint64_t bytes) {
     uint64_t pages = (bytes + HEAP_PAGE_SIZE - 1) / HEAP_PAGE_SIZE;
     // CONTIGUOUS, not a page at a time: the allocator hands out blocks
     // that span pages, so a region has to be one run.
-    uint64_t phys = pmm_alloc_contiguous(pages, PMM_ZONE_DMA32);
+    uint64_t phys = pmm_alloc_contiguous(pages, PMM_ZONE_ANY);
     return phys ? (void *)(uintptr_t)phys : 0;
 }
 
