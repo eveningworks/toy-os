@@ -780,6 +780,7 @@ whenever a headline here tells you something you did not already know.
 - **THE TRAY HAS A VOLUME FLYOUT, AND THE PANEL OWNS IT TOO**
 - **THE TRAY HAS A BRIGHTNESS FLYOUT ON EVERY MACHINE, AND A DISPLAY WITHOUT A BACKLIGHT SHOWS THE REGISTRY'S SENTENCE**
 - **A PRESENT FLIPS ON A DISPLAY WITH THREE SCANOUTS, THE FLIP NEVER WAITS, AND THE COMPOSITOR REPAINTS BY BUFFER AGE**
+- **THE SCREEN CAN CHANGE MODE AT RUNTIME, `screen_set_mode()` IS THE ONE PLACE THAT DOES IT, AND THE GRANT NEVER SHRINKS**
 - **THE CLOCK IS ALWAYS THE RIGHTMOST TRAY ITEM, whatever slot it holds**
 - **THE TRAY CLOCK OPENS A CALENDAR, AND THE PANEL OWNS IT**
 - **THE WEEK'S FIRST COLUMN IS A REGISTERED SETTING: `desktop.week_start` = `monday` | `sunday`**
@@ -1313,7 +1314,7 @@ cost".
   it intermittent, and at what RATE), `damage_sweep.py` /
   `damage_hunt.py` (the damage invariant).
 - **GUI tools**, all run by `gui_regress.py` -- `blank_window_test.py`,
-  `brightness_test.py`,
+  `brightness_test.py`, `modeset_test.py`,
   `calculator_client_test.py`, `calendar_test.py`,
   `compositor_test.py`, `compositor_death_test.py`, `crashtest_test.py`,
   `cursor_theme_test.py`, `desktop_entries_test.py`, `dialog_test.py`,

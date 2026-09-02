@@ -194,6 +194,20 @@ int display_mode_candidate(int index, int *out_w, int *out_h) {
     return 0;
 }
 
+int display_ladder_mode(int index, int *out_w, int *out_h) {
+    if (index < 0 || index >= DISPLAY_LADDER_COUNT) return 0;
+    if (out_w) *out_w = DISPLAY_LADDER[index].w;
+    if (out_h) *out_h = DISPLAY_LADDER[index].h;
+    return 1;
+}
+
+void display_refresh_write_combining(void) {
+    if (!g_active) return;
+    struct display_surface s;
+    g_active->get_surface(&s);
+    g_wc = paging_set_write_combining(s.addr, (uint64_t)s.pitch * s.height);
+}
+
 int display_has(uint32_t cap) {
     return g_active && (g_active->caps & cap) != 0;
 }

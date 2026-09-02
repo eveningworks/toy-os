@@ -3866,11 +3866,13 @@ new framebuffer and free the old one, while `gfx.c` caches the surface
 pointer it got at `gfx_init()` and `win_surface.c` has mapped those
 frames into the compositor. Both would keep writing into freed memory.
 
-What it needs: `display_set_mode()` re-plumbing `gfx` (a re-init against
-the new surface), revoking and re-granting the compositor's framebuffer
-mapping, and telling the compositor its screen changed size so it can
-re-lay out. None of that is driver work; all of it is display-layer and
-`win_server` work. See `docs/decisions.md`.
+Built 2026-09-02: `kernel/core/screen.c` is the one ordered function,
+`system.resolution` the setting that calls it, `WIN_EV_SCREEN` the
+notification, `win_surface_remode()` the padded re-grant and
+`wm_screen_changed()` the compositor's re-layout. All three QEMU
+drivers advertise `DISPLAY_CAP_MODESET`; the Intel driver does not
+(the next stage). `docs/decisions.md` has the design and what was
+measured; `tools/modeset_test.py` is the check.
 
 ### Initcall levels: drivers declare a boot slot instead of being called by name from `kernel_main()`
 

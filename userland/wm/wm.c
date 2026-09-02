@@ -649,6 +649,55 @@ static void poll_desktop_entries(void) {
 
 // ---- main loop ----
 
+// WIN_EV_SCREEN. Unlike the font, the screen's size IS cached in
+// places: the grant and the back buffer, the pointer's seed, the icon
+// grid's rows, every window's position, and a maximized window's size.
+// Each is re-derived here; the overlays are simply closed, since they
+// re-clamp on their next open, and the last thing is an unconditional
+// frame.
+void wm_screen_changed(void) {
+    if (!ugfx_screen_remode(&g_wm_screen)) {
+        wm_logf("wm: screen changed but the grant could not be re-mapped\n");
+        return;
+    }
+    screen_w = g_wm_screen.back.w;
+    screen_h = g_wm_screen.back.h;
+    wm_rawin_clamp(screen_w, screen_h);
+    desktop_entries_changed();   // the icon grid's rows depend on the height
+
+    if (start_menu_open) { start_menu_open = 0; }
+    context_menu_close();
+    calendar_close();
+    volume_close();
+    brightness_close();
+
+    for (int i = 0; i < window_count; i++) {
+        struct window *w = &windows[i];
+        int is_client = w->client_pid > 0;
+        if (w->state == WIN_MAXIMIZED) {
+            w->x = 0; w->y = 0;
+            if (is_client)
+                wm_client_send_resize(w, screen_w - 2, screen_h - taskbar_h - WM_TITLEBAR_H - 2);
+            else { w->w = screen_w; w->h = screen_h - taskbar_h; }
+            continue;
+        }
+        // The drag clamp's rule: keep a grip's worth of the title bar on
+        // screen and the whole bar clear of the taskbar.
+        int keep = ugfx_char_w() * 8;
+        if (keep > w->w) keep = w->w;
+        if (w->x > screen_w - keep) w->x = screen_w - keep;
+        if (w->x < keep - w->w) w->x = keep - w->w;
+        int max_y = screen_h - taskbar_h - WM_TITLEBAR_H;
+        if (w->y > max_y) w->y = max_y;
+        if (w->y < 0) w->y = 0;
+    }
+    wm_hwcursor_invalidate();
+    wm_render_reset();
+    redraw_pending = 1;
+    wm_logf("wm: screen changed -- %dx%d, %d scanout(s)\n", screen_w, screen_h,
+            g_wm_screen.buffers);
+}
+
 void wm_run(void) {
     // Claim the compositor role, then take the framebuffer grant it
     // gates. Both can be refused -- another process may already hold the

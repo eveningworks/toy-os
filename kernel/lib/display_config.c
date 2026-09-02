@@ -17,7 +17,11 @@
 #include "setting.h"
 #include "kfmt.h"
 #include "knum.h"
+#include "klog.h"
 #include "initcall.h"
+#include "screen.h"
+#include "gfx.h"
+#include "string.h"
 
 #define DISPLAY_CONFIG_FILE "/etc/toyos.conf"
 #define BRIGHTNESS_KEY "brightness"
@@ -35,6 +39,8 @@ static int parse_pct(const char *value) {
     return (int)v;
 }
 
+static void resolution_init(void);
+
 void display_config_init(void) {
     char buf[16];
     if (etc_config_get(DISPLAY_CONFIG_FILE, BRIGHTNESS_KEY, buf, sizeof buf)) {
@@ -46,6 +52,7 @@ void display_config_init(void) {
     // machine keeps the brightness its firmware chose.
     if (display_has(DISPLAY_CAP_BACKLIGHT) && g_brightness != BRIGHTNESS_DEFAULT)
         display_backlight_set(g_brightness);
+    resolution_init();
 }
 INITCALL(display_config_init, INIT_CONFIG);
 
@@ -88,6 +95,87 @@ static const struct setting g_brightness_setting = {
     .unavailable = brightness_unavailable,
 };
 
+// --- the resolution ---------------------------------------------------
+//
+// An ENUM whose choices are the active driver's mode list, so System
+// Settings offers only modes the adapter will show. Stored as "WxH";
+// applied at boot from /etc before init starts the desktop, and live
+// through screen_set_mode() otherwise.
+#define RESOLUTION_KEY "resolution"
+
+static int parse_mode(const char *s, uint32_t *w, uint32_t *h) {
+    uint32_t a = 0, b = 0;
+    const char *p = s;
+    if (!p || !k_isdigit(*p)) return 0;
+    while (k_isdigit(*p)) a = a * 10 + (uint32_t)(*p++ - '0');
+    if (*p != 'x' && *p != 'X') return 0;
+    p++;
+    if (!k_isdigit(*p)) return 0;
+    while (k_isdigit(*p)) b = b * 10 + (uint32_t)(*p++ - '0');
+    if (*p || !a || !b) return 0;
+    *w = a; *h = b;
+    return 1;
+}
+
+static int resolution_choice(int index, char *out, uint32_t out_size) {
+    int n = display_mode_count();
+    if (n == 0) {   // a fixed-mode display lists exactly its own
+        if (index != 0) return 0;
+        k_snprintf(out, out_size, "%dx%d", gfx_width(), gfx_height());
+        return 1;
+    }
+    if (index < 0 || index >= n) return 0;
+    struct display_mode m;
+    display_mode_at(index, &m);
+    k_snprintf(out, out_size, "%ux%u", m.width, m.height);
+    return 1;
+}
+
+static void resolution_get(char *out, uint32_t out_size) {
+    k_snprintf(out, out_size, "%dx%d", gfx_width(), gfx_height());
+}
+
+static int resolution_apply(const char *value) {
+    uint32_t w, h;
+    if (!parse_mode(value, &w, &h)) return SETTING_INVALID;
+    if (!screen_set_mode(w, h)) return SETTING_INVALID;
+    char buf[24];
+    k_snprintf(buf, sizeof buf, "%ux%u", w, h);
+    return etc_config_set(DISPLAY_CONFIG_FILE, RESOLUTION_KEY, buf)
+               ? SETTING_SAVED : SETTING_UNSAVED;
+}
+
+static const char *resolution_unavailable(void) {
+    return display_has(DISPLAY_CAP_MODESET)
+               ? 0 : "This display cannot change mode after boot";
+}
+
+static const struct setting g_resolution_setting = {
+    .name   = RESOLUTION_KEY,
+    .label  = "Resolution",
+    .type   = SETTING_TYPE_ENUM,
+    .file   = DISPLAY_CONFIG_FILE,
+    .category = "Display",
+    .group  = "Screen",
+    .choice = resolution_choice,
+    .get    = resolution_get,
+    .apply  = resolution_apply,
+    .unavailable = resolution_unavailable,
+};
+
+// At boot: a stored mode is applied before the desktop exists, so it is
+// a console re-grid and nothing more. One the driver refuses is logged
+// and the boot mode kept.
+static void resolution_init(void) {
+    char buf[24];
+    if (!etc_config_get(DISPLAY_CONFIG_FILE, RESOLUTION_KEY, buf, sizeof buf)) return;
+    uint32_t w, h;
+    if (!parse_mode(buf, &w, &h)) return;
+    if (!screen_set_mode(w, h))
+        klog_printf("display: stored resolution %ux%u not applied\n", w, h);
+}
+
 void display_config_setting_register(void) {
     setting_register(&g_brightness_setting);
+    setting_register(&g_resolution_setting);
 }

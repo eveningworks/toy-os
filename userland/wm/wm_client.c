@@ -675,6 +675,9 @@ int wm_client_handle_event(const struct win_event *ev) {
         wm_render_reset();
         wm_logf("wm: font changed -- %dx%d cell\n", ugfx_char_w(), ugfx_char_h());
         break;
+    case WIN_EV_SCREEN:
+        wm_screen_changed();
+        break;
     default:
         return 0; // not ours -- raw input, see wm_rawin.c
     }

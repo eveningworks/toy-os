@@ -617,7 +617,7 @@ run on, not by order.
 - [ ] Screen blanking: the backlight off on idle or lid, never persisted, and any key or motion brings it back
 - [ ] Intel modesetting: EDID over eDP AUX, the PLLs and the transcoder -- needs runtime mode switching above it first
 - [ ] Intel blitter acceleration: `DISPLAY_CAP_ACCEL_FILL`/`_COPY` on the BCS ring
-- [ ] Runtime mode switching: a display driver can set a mode after boot
+- [x] ~~Runtime mode switching: a display driver can set a mode after boot~~ DONE 2026-09-02 -- `config set resolution`, every QEMU adapter
 - [ ] Initcall levels: drivers declare a boot slot instead of being called by name from `kernel_main()`
 - [ ] `virtio-net`: a NIC on the same transport, likely easier than e1000 once virtqueues exist
 - [x] ~~`virtio-blk`: a block device that isn't ATA~~

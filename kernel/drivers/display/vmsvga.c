@@ -378,12 +378,40 @@ static int vmsvga_drv_cursor_define(const uint32_t *argb, int w, int h, int hx, 
 static void vmsvga_drv_cursor_move(int x, int y) { vmsvga_cursor_move(x, y); }
 static void vmsvga_drv_cursor_show(int on) { vmsvga_cursor_show(on); }
 
+// The mode list: the ladder, bounded by the adapter's maximum -- the
+// check vmsvga_init() makes before touching a register.
+static int vmsvga_drv_mode_count(void) {
+    uint32_t max_w = reg_read(SVGA_REG_MAX_WIDTH), max_h = reg_read(SVGA_REG_MAX_HEIGHT);
+    int n = 0, w, h;
+    for (int i = 0; display_ladder_mode(i, &w, &h); i++)
+        if ((uint32_t)w <= max_w && (uint32_t)h <= max_h) n++;
+    return n;
+}
+
+static void vmsvga_drv_mode_at(int index, struct display_mode *out) {
+    uint32_t max_w = reg_read(SVGA_REG_MAX_WIDTH), max_h = reg_read(SVGA_REG_MAX_HEIGHT);
+    int n = 0, w, h;
+    out->width = g_surface.width; out->height = g_surface.height; out->bpp = 32;
+    for (int i = 0; display_ladder_mode(i, &w, &h); i++) {
+        if ((uint32_t)w > max_w || (uint32_t)h > max_h) continue;
+        if (n++ == index) { out->width = (uint32_t)w; out->height = (uint32_t)h; return; }
+    }
+}
+
+static int vmsvga_drv_set_mode(const struct display_mode *m) {
+    if (!m || m->bpp != 32) return 0;
+    return vmsvga_init(m->width, m->height);
+}
+
 static struct display_driver vmsvga_driver = {
     .name = "vmsvga",
     .probe = vmsvga_drv_probe,
     .get_surface = vmsvga_drv_get_surface,
-    .caps = DISPLAY_CAP_NEEDS_FLUSH,
+    .caps = DISPLAY_CAP_NEEDS_FLUSH | DISPLAY_CAP_MODESET,
     .flush = vmsvga_drv_flush,
+    .mode_count = vmsvga_drv_mode_count,
+    .mode_at = vmsvga_drv_mode_at,
+    .set_mode = vmsvga_drv_set_mode,
 };
 
 void vmsvga_register(void) {

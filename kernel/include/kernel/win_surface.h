@@ -44,6 +44,11 @@ int win_surface_grant(int pid, uint64_t pml4, uint32_t *out_w, uint32_t *out_h,
 // rather than only the ones that granted.
 void win_surface_revoke(int pid);
 
+// After a mode change: re-grants the current holder (if any) at the new
+// geometry, keeping every address it had mapped. 1 on success or when
+// there is no holder.
+int win_surface_remode(void);
+
 // Publishes a region the holder has written. Clamped to the screen; an
 // empty or fully off-screen rect is a no-op rather than an error.
 //

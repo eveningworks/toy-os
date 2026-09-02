@@ -181,6 +181,9 @@ int win_server_hw_cursor_armed(void);
 // font_config.c, which is the one place a font change is applied for the
 // machine as a whole -- see WIN_EV_FONT in abi/win_proto.h.
 void win_server_font_changed(void);
+// The screen's size changed (WIN_EV_SCREEN, a = w, b = h). One caller:
+// screen_set_mode().
+void win_server_screen_changed(int w, int h);
 
 // The registered presentation layer, or NULL. For KTESTs, which swap in
 // a stub and must put the live desktop's back -- the suite runs inside

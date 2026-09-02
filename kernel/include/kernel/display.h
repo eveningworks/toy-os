@@ -202,4 +202,14 @@ void display_preferred_mode(int *out_w, int *out_h);
 // different kind of wrong from quietly undershooting it.
 int display_mode_candidate(int index, int *out_w, int *out_h);
 
+// The standard sizes themselves, largest first, for a modesetting
+// driver's mode list: returns 1 while `index` names one. A driver
+// lists the entries it accepts, so System Settings offers only modes
+// the adapter can show.
+int display_ladder_mode(int index, int *out_w, int *out_h);
+
+// Re-applies write-combining to the ACTIVE surface -- after a mode
+// change, when the address or the extent has moved.
+void display_refresh_write_combining(void);
+
 #endif

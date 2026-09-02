@@ -1491,6 +1491,38 @@ real scanout hardware does. Do not write a pixel assertion for one.
   a control that only sees the button-down edge cannot follow the
   pointer. And **`volume_geometry()` is the one answer** drawing,
   hit-testing and `gui volume --json` all ask.
+- **THE SCREEN CAN CHANGE MODE AT RUNTIME, `screen_set_mode()` IS THE
+  ONE PLACE THAT DOES IT, AND THE GRANT NEVER SHRINKS.** `config set
+  resolution 1600x900`, or the Resolution dropdown under Display in
+  System Settings, runs `kernel/core/screen.c` in the one safe order:
+  the driver's `set_mode`, write-combining re-applied, `gfx_remode()`,
+  `vga_reflow()`, the pointer's bounds, `win_surface_remode()`, and last
+  a `WIN_EV_SCREEN` broadcast. Five things to know. **Every QEMU adapter
+  advertises `DISPLAY_CAP_MODESET` now** -- bochs ADOPTS GRUB's mode
+  instead of declining (so `-vga std` has a modesetting driver on every
+  boot), vmsvga and virtio-gpu set modes as they always could -- and the
+  Intel driver does not, so on the laptop the setting shows its sentence.
+  **The setting is an ENUM whose choices are the driver's mode list**
+  (`display_ladder_mode()` filtered by what the adapter accepts), so
+  nothing offers a mode the adapter will refuse; an unlisted one is
+  refused before anything is touched, and every driver's refusal leaves
+  the old mode running. **The compositor is a process that may be
+  mid-blit when the mode changes**, so `win_surface.c` keeps a
+  HIGH-WATER MARK: every framebuffer slot stays mapped up to the largest
+  extent it ever had, the tail past the real buffers pointing at one
+  writable scratch frame -- the same rule as `comp_span` for a client
+  window. A shrink therefore never opens a hole, and a stale blit is
+  garbage the next unconditional frame repaints. **The compositor
+  re-maps on `WIN_EV_SCREEN`** (`ugfx_screen_remode()`, then
+  `wm_screen_changed()`: the icon grid, the pointer, every window's
+  position, maximized windows re-proposed at the new size, the overlays
+  closed, then `wm_render_reset()`); clients need nothing, their windows
+  are resized through `WIN_EV_RESIZE` as ever. And **a stored resolution
+  is applied at the config stage of boot**, after the console and before
+  init starts the desktop, so an installed machine no longer needs
+  `video=` on the GRUB line; one the driver refuses is logged and the
+  boot mode kept. `modeset_test.py` measures the change at the DEVICE:
+  a QMP screendump's own size must match what the desktop believes.
 - **A PRESENT FLIPS ON A DISPLAY WITH THREE SCANOUTS, THE FLIP NEVER
   WAITS, AND THE COMPOSITOR REPAINTS BY BUFFER AGE.** `DISPLAY_CAP_FLIP`
   (`display.h`) means a driver has `scanout_count` buffers of the

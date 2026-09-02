@@ -1809,6 +1809,16 @@ window without going through it will find its layout polls timing out.
   The positive half (a real panel dimming) runs on the bare-metal
   laptop by hand: `config set brightness 40` reads the PWM back. In
   `gui_regress.py`.
+- **`modeset_test.py`** -- a runtime resolution change under a live
+  desktop, on the default adapter. **The oracle is the DEVICE**: a QMP
+  screendump's own pixel size is QEMU's scanout geometry, and it must
+  equal both the requested mode and what `gui state` reports -- the
+  two disagreeing is the stale-`gfx_width()` bug the work replaces.
+  Then the Start menu must paint at the new size, a maximized Notepad
+  must fill the new screen with its pixels in the corner outside the
+  old mode, an unlisted mode must be refused with the screen untouched,
+  and the boot mode must come back. It restores the setting, because a
+  stored resolution is applied at the next boot. In `gui_regress.py`.
 - **`filemanager_test.py`** -- the File Manager: two panes, marking, and
   real file operations. **The result of every operation is checked
   through `ls`, not through the app** -- the manager is the thing under

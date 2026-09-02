@@ -526,6 +526,9 @@ struct ugfx_screen {
     int dmg_w[UGFX_DAMAGE_RING], dmg_h[UGFX_DAMAGE_RING];
     // For `gui fb`: how many presents, and how many changed the index.
     uint32_t presents, flips;
+    // The back buffer's capacity in pixels: sbrk only grows, so a smaller
+    // mode keeps the larger allocation and a larger one extends it.
+    uint32_t back_capacity;
 };
 
 // Maps the real framebuffer and allocates a matching back buffer.
@@ -542,6 +545,11 @@ int ugfx_screen_init(struct ugfx_screen *sc);
 // publishes it, then clears the damage. A no-op when nothing was drawn,
 // which is what makes calling it every frame free.
 void ugfx_screen_present(struct ugfx_screen *sc);
+
+// After WIN_EV_SCREEN: re-maps the grant at its new geometry, grows the
+// back buffer if the mode did, and forgets every damage box, which was
+// in the old coordinates. Returns 1, or 0 if the grant was refused.
+int ugfx_screen_remode(struct ugfx_screen *sc);
 
 // --- damage verification (R2) -----------------------------------------
 //

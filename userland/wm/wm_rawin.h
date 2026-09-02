@@ -15,6 +15,7 @@
 // Seeds the pointer at the screen's centre, as mouse_init() used to.
 // Call once, after the screen geometry is known.
 void wm_rawin_init(int screen_w, int screen_h);
+void wm_rawin_clamp(int screen_w, int screen_h);
 
 // Drains every queued input event. Call ONCE per frame, before asking
 // anything below. Draining fully (rather than one event per frame) is

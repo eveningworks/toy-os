@@ -165,6 +165,15 @@
 // produce no character and so have never produced an ordinary key event
 // at all. Nothing else changes: a modifier still rides with the key it
 // modified, and an app that only reads `mods` is unaffected.
+#define WIN_EV_SCREEN    32 // a: width, b: height. THE SCREEN CHANGED
+                           // SIZE (`config set resolution`). The
+                           // compositor re-maps its framebuffer grant
+                           // (WIN_REQ_FB_MAP again: the old addresses
+                           // stay mapped, so a blit in flight lands on
+                           // a page rather than a fault) and re-lays
+                           // out; a client needs nothing, since its
+                           // window is resized through WIN_EV_RESIZE
+                           // like any other.
 #define WIN_EV_CLIPBOARD 31 // a: the new WIN_CLIP_OP_*, b: the serial.
                             // THE CLIPBOARD WAS REPLACED, by anyone --
                             // broadcast so a client drawing a pending

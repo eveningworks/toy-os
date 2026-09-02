@@ -15,9 +15,10 @@
 // register window Linux's `bochs-drm` drives.
 //
 // Register it AFTER virtio-gpu/vmsvga (they own specific hardware) and
-// BEFORE vesafb_register(), which always claims. It DECLINES when no
-// ladder mode is better than what GRUB already left, so vesafb picks up
-// the mode already on screen rather than this driver re-programming it.
+// BEFORE vesafb_register(), which always claims. When no ladder mode is
+// better than what GRUB already left it ADOPTS that mode without a
+// register write and claims anyway, so a runtime change
+// (screen_set_mode()) is possible later; vesafb could never change one.
 void bochs_register(void);
 
 #endif

@@ -898,6 +898,13 @@ device ends up with neither.
 
 ## The `bochs` driver DECLINES the display unless it can improve the mode
 
+*(Superseded in part on 2026-09-02: it now CLAIMS by adopting GRUB's
+mode without a register write when nothing better is on the ladder,
+so that a runtime mode change is possible on `-vga std`. See
+`docs/decisions/gui.md`, "A mode change is a kernel setting". The
+reasoning below about not re-programming a live console still holds
+and is why the adoption writes nothing.)*
+
 `video=<W>x<H>` (docs/boot-flags.md) existed for months and did nothing
 on the adapter every default boot and every headless test actually uses.
 The reason is a layering fact that is easy to miss: `vesafb` is not a

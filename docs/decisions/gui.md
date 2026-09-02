@@ -5929,3 +5929,60 @@ wrong buffer age: a popup closed over stale pixels fails their
 before/after comparison. The KTESTs flip a scanout and read the live
 one back, and skip while a compositor holds the grant -- flipping
 under a live desktop is exactly the thing the protocol forbids.
+
+## A mode change is a kernel setting with one ordered function behind it, not a compositor request
+
+Linux puts modesetting in the compositor: Mutter and KWin own KMS
+through atomic commits, allocate their own framebuffers at the new
+size and tell clients through `wl_output`. Windows lets any process ask
+through `ChangeDisplaySettings`, the display driver switches, DWM
+re-creates its surfaces and every window gets `WM_DISPLAYCHANGE`. toy-os
+takes the Windows shape.
+
+**Why kernel-driven.** The compositor here does not own the
+framebuffer: the kernel allocates the scanouts, `gfx.c` draws the
+console into the first, and the compositor is GRANTED a mapping. A
+compositor-only request would leave the console and a text-mode boot
+with no way to change mode, and would need the desktop to grow its own
+settings UI for one control -- while the registry already gives a
+setting a System Settings row, `config set`, persistence and an
+`unavailable` sentence for free. So `system.resolution` is an ENUM
+whose choices are the driver's mode list, its apply is
+`screen_set_mode()`, and the compositor learns through `WIN_EV_SCREEN`
+exactly as it learns about a font change. `font_config.c`'s discipline
+is copied on purpose: ONE function changes the screen for real, so
+there is one place that can forget a step.
+
+**Why the grant keeps every address it ever had.** The compositor is a
+process, preempted wherever it was -- possibly halfway through
+`ugfx_screen_present()`'s blit. The mode change runs inside one syscall
+with interrupts off, so nothing in ring 3 runs between the driver
+freeing the old framebuffer (virtio-gpu really frees it) and the new
+grant; but the blit RESUMES afterwards at the old geometry. Unmapping
+the old extent would fault the desktop; leaving it mapped to freed
+frames would scribble on whoever got them next. So `win_surface.c`
+keeps a high-water mark and pads every slot past the real buffers with
+one writable scratch frame, which is `comp_span`'s rule for a client
+window applied to the screen. The stale stores land in the scratch
+page, and the first frame after `WIN_EV_SCREEN` is unconditional.
+
+**Why bochs now adopts GRUB's mode instead of declining.** The decision
+below this one records bochs declining a boot it cannot improve, so
+that vesafb takes the same pixels with less machinery. That was right
+when a claim meant re-programming a live console for nothing; it is
+wrong once claiming is what makes a later mode change possible at all,
+since vesafb can never change one. bochs now claims by ADOPTING the
+firmware's surface without a register write -- the same readout the
+Intel driver does -- and the console is never blanked. The `-vga std`
+adapter every headless test boots therefore has a modesetting driver,
+which is what lets `modeset_test.py` run in the ordinary suite.
+
+**What was measured.** On bochs, vmsvga and virtio-gpu a live
+1280x720 to 1600x900 and back: a QMP screendump's own pixel size (the
+device's answer) equals what `gui state` reports (the desktop's
+belief) at every step, the Start menu paints at the new size, and a
+maximized window fills the new screen with its pixels in the corner
+outside the old mode. virtio-gpu keeps its three scanouts across the
+change. Not built: a revert countdown for a mode the monitor cannot
+show (Windows' fifteen seconds); every adapter this covers is an
+emulator that shows any mode, and the Intel driver has no modeset yet.

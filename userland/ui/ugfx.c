@@ -875,6 +875,42 @@ int ugfx_screen_init(struct ugfx_screen *sc) {
     sc->back.pixels = (uint32_t *)back;
     sc->back.w = w;
     sc->back.h = h;
+    sc->back_capacity = (uint32_t)pixels;
+    return 1;
+}
+
+int ugfx_screen_remode(struct ugfx_screen *sc) {
+    if (!sc || !sc->back.pixels) return 0;
+    struct win_request_msg req;
+    for (unsigned i = 0; i < sizeof req; i++) ((uint8_t *)&req)[i] = 0;
+    req.type = WIN_REQ_FB_MAP;
+    if (sys_win_request(&req) != 0) return 0;
+    int w = req.a, h = req.b;
+    if (w <= 0 || h <= 0) return 0;
+    if ((req.d != 32 && req.d != 24) || (uint32_t)req.c < (uint32_t)w * (uint32_t)(req.d / 8))
+        return 0;
+    uint64_t pixels = (uint64_t)w * (uint64_t)h;
+    if (pixels > sc->back_capacity) {
+        // A fresh, larger allocation; the old one stays owned by the
+        // heap (sbrk cannot give it back) and is simply unused.
+        void *back = sys_sbrk((int64_t)(pixels * sizeof(uint32_t)));
+        if (back == (void *)-1) return 0;
+        sc->back.pixels = (uint32_t *)back;
+        sc->back_capacity = (uint32_t)pixels;
+    }
+    sc->pitch = (uint32_t)req.c;
+    sc->bpp = req.d;
+    sc->back.w = w;
+    sc->back.h = h;
+    sc->buffers = (int)req.mods;
+    if (sc->buffers < 1) sc->buffers = 1;
+    if (sc->buffers > UGFX_SCREEN_BUFFERS) sc->buffers = UGFX_SCREEN_BUFFERS;
+    sc->back_index = (int)req.window < sc->buffers ? (int)req.window : 0;
+    sc->seq = 0;
+    for (int i = 0; i < UGFX_SCREEN_BUFFERS; i++) sc->painted_seq[i] = 0;
+    for (int i = 0; i < UGFX_DAMAGE_RING; i++) sc->dmg_w[i] = sc->dmg_h[i] = 0;
+    sc->snapshot_valid = 0;   // a snapshot of the old size compares against nothing
+    ugfx_damage_reset(&sc->back);
     return 1;
 }
 

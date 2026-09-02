@@ -14,6 +14,8 @@
 #include "display.h"
 #include "klog.h"
 #include "kfmt.h" // klog_printf
+#include "pmm.h"
+#include "string.h"
 
 static int      g_holder;      // pid holding the grant, or 0
 static uint64_t g_pml4;        // the address space it was mapped into
@@ -21,6 +23,15 @@ static uint64_t g_pages;       // how many pages PER BUFFER, so revoke needs no 
 static int      g_count;       // scanouts mapped (1 or 2)
 static int      g_front;       // the scanout last flipped to
 static int      g_back;        // the one the holder was told to draw into
+// HIGH-WATER MARKS. A mode change re-grants a holder that may be mid-blit
+// at the OLD geometry (it is a process, preempted wherever it was), so
+// the grant never shrinks: every slot up to g_span_count is kept mapped
+// up to g_span_pages, the tail past the real buffers pointing at one
+// writable scratch frame that absorbs stale stores. Same rule as
+// win_server.c's comp_span for a client window.
+static int      g_span_count;
+static uint64_t g_span_pages;
+static uint64_t g_scratch;     // the frame a padded page points at
 
 int win_surface_holder(void) { return g_holder; }
 
@@ -83,6 +94,22 @@ int win_surface_grant(int pid, uint64_t pml4, uint32_t *out_w, uint32_t *out_h,
         }
     }
 
+    // Pad up to the high-water mark -- see g_span_pages.
+    if ((int)count > g_span_count) g_span_count = count;
+    if (pages > g_span_pages) g_span_pages = pages;
+    if (!g_scratch) {
+        g_scratch = pmm_alloc_frame(PMM_ZONE_DMA32);
+        if (g_scratch) k_memset((void *)(uintptr_t)g_scratch, 0, 4096);
+    }
+    if (g_scratch) {
+        for (int b = 0; b < g_span_count; b++) {
+            uint64_t base = WIN_FB_VADDR + (uint64_t)b * WIN_FB_BUFFER_STRIDE;
+            uint64_t from = b < count ? pages : 0;
+            for (uint64_t i = from; i < g_span_pages; i++)
+                vmm_map_user_borrowed(pml4, base + i * 4096, g_scratch, 1, 0, VMM_MT_WC);
+        }
+    }
+
     g_holder = pid;
     g_pml4   = pml4;
     g_pages  = pages;
@@ -107,8 +134,9 @@ int win_surface_grant(int pid, uint64_t pml4, uint32_t *out_w, uint32_t *out_h,
 
 void win_surface_revoke(int pid) {
     if (!g_holder || g_holder != pid) return;
-    for (int b = 0; b < g_count; b++)
-        for (uint64_t i = 0; i < g_pages; i++)
+    // The whole span, padding included: a padded page is a real mapping.
+    for (int b = 0; b < g_span_count; b++)
+        for (uint64_t i = 0; i < g_span_pages; i++)
             vmm_unmap_user_page(g_pml4, WIN_FB_VADDR + (uint64_t)b * WIN_FB_BUFFER_STRIDE + i * 4096);
     // The console draws into buffer 0 and knows nothing about flips, so
     // the screen goes back to it before anyone else paints.
@@ -120,6 +148,17 @@ void win_surface_revoke(int pid) {
     g_count  = 0;
     g_front  = 0;
     g_back   = 0;
+}
+
+int win_surface_remode(void) {
+    if (!g_holder) return 1;
+    int pid = g_holder;
+    uint64_t pml4 = g_pml4;
+    uint32_t w, h, pitch, bpp;
+    int count, back;
+    // grant() revokes the old mapping first and pads the span, so the
+    // holder keeps a present page under every address it ever had.
+    return win_surface_grant(pid, pml4, &w, &h, &pitch, &bpp, &count, &back);
 }
 
 int win_surface_present(int pid, int x, int y, int w, int h, int *out_back) {

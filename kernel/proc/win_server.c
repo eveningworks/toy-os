@@ -1728,6 +1728,12 @@ void win_server_font_changed(void) {
     win_server_broadcast(WIN_EV_FONT, 0, 0, 0);
 }
 
+// The screen changed size. Same discipline: screen_set_mode() is the
+// one caller.
+void win_server_screen_changed(int w, int h) {
+    win_server_broadcast(WIN_EV_SCREEN, w, h, 0);
+}
+
 void win_server_client_gone(int pid) {
     if (pid < 1 || pid > WIN_SERVER_MAX_PIDS) return;
 

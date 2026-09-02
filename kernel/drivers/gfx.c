@@ -386,12 +386,16 @@ int gfx_init(void) {
     double_buffered = 0;
     dirty_x0 = dirty_y0 = dirty_x1 = dirty_y1 = 0;
 
-    // The back buffer, sized to this mode. Allocated once: gfx_init()
-    // runs exactly once (from vga_init()), and nothing here changes mode
-    // afterwards -- no display driver advertises DISPLAY_CAP_MODESET for
-    // precisely that reason. If that changes, this is the allocation
-    // that has to be redone, and every ring-3 compositor mapping with it.
+    // The back buffer, sized to this mode. gfx_remode() calls back in
+    // here after a mode change and keeps a buffer that is still big
+    // enough (a smaller mode is the common direction to try).
     uint32_t pixels = (uint32_t)width * (uint32_t)height;
+    if (back_buffer && back_buffer_pixels < pixels) {
+        pmm_free_contiguous((uint64_t)(uintptr_t)back_buffer,
+                            ((uint64_t)back_buffer_pixels * 4 + 4095) / 4096);
+        back_buffer = 0;
+        back_buffer_pixels = 0;
+    }
     if (!back_buffer) {
         uint64_t pages = ((uint64_t)pixels * 4 + 4095) / 4096;
         uint64_t phys = pmm_alloc_contiguous(pages, PMM_ZONE_DMA32);
@@ -410,6 +414,18 @@ int gfx_init(void) {
     return 1;
 }
 
+
+// After the display driver has set a new mode: re-read the surface,
+// re-size the back buffer, drop the clip and the dirty box. The
+// double-buffer state is kept -- the console's mode is not the screen's.
+int gfx_remode(void) {
+    int was_double = double_buffered;
+    if (!gfx_init()) return 0;
+    clip_active = 0;
+    if (verify_scratch) { kfree(verify_scratch); verify_scratch = 0; }
+    if (was_double) gfx_set_double_buffered(1);
+    return 1;
+}
 
 int gfx_width(void) { return width; }
 int gfx_height(void) { return height; }

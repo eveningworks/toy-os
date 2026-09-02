@@ -131,6 +131,14 @@ void wm_rawin_init(int screen_w, int screen_h) {
     g_seeded = 1;
 }
 
+// After a mode change: a pointer past the new edge would be off-screen.
+void wm_rawin_clamp(int screen_w, int screen_h) {
+    if (g_mx >= screen_w) g_mx = screen_w - 1;
+    if (g_my >= screen_h) g_my = screen_h - 1;
+    if (g_mx < 0) g_mx = 0;
+    if (g_my < 0) g_my = 0;
+}
+
 void wm_rawin_pump(void) {
     if (!g_seeded) return;
 

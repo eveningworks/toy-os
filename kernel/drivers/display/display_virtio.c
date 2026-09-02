@@ -90,25 +90,32 @@ static void virtio_drv_get_surface(struct display_surface *out) { *out = g_surfa
 
 static void virtio_drv_flush(int x, int y, int w, int h) { virtio_gpu_flush(x, y, w, h); }
 
-// --- why this driver does NOT advertise DISPLAY_CAP_MODESET ----------
+// --- MODESET -----------------------------------------------------------
 //
-// It can set a mode -- that is what the probe above does, and what
-// `video=<W>x<H>` reaches. What it cannot do is set one AFTER boot,
-// and the reason is not in this file: virtio_gpu_set_mode() allocates
-// a new framebuffer and frees the old one, while gfx.c caches the
-// surface pointer it was given at gfx_init() and the ring-3 compositor
-// holds a mapping of those exact frames (win_surface.c). A live mode
-// change would leave both of them writing into freed memory, and
-// nothing in the display layer re-plumbs either.
-//
-// So the capability is not claimed. A driver that advertises modeset
-// and returns 1 from set_mode() while handing the rest of the system a
-// dangling framebuffer is worse than one that never offered -- which is
-// exactly the failure display_probe()'s honesty check exists to stop,
-// arriving from the other direction. vmsvga is in the same position and
-// makes the same choice. docs/roadmap.md carries the runtime mode
-// switch as its own item, because it needs gfx re-init and a compositor
-// re-grant, not a driver change.
+// virtio_gpu_set_mode() FREES the old framebuffer and every extra
+// scanout, so a live mode change is only safe inside screen_set_mode()
+// (kernel/core/screen.c), which re-plumbs gfx.c's cached surface and
+// the compositor's grant before anything runs again. The driver's own
+// contract is unchanged: a refused mode leaves the old one running.
+static int virtio_drv_mode_count(void) {
+    int n = 0, w, h;
+    for (int i = 0; display_ladder_mode(i, &w, &h); i++) n++;
+    return n;
+}
+
+static void virtio_drv_mode_at(int index, struct display_mode *out) {
+    int w, h;
+    out->width = g_surface.width; out->height = g_surface.height; out->bpp = 32;
+    if (display_ladder_mode(index, &w, &h)) { out->width = (uint32_t)w; out->height = (uint32_t)h; }
+}
+
+static void adopt_flip(void);
+static int virtio_drv_set_mode(const struct display_mode *m) {
+    if (!m || m->bpp != 32) return 0;
+    if (!virtio_gpu_set_mode(m->width, m->height, &g_surface)) return 0;
+    adopt_flip();   // the extra resources are re-created best effort
+    return 1;
+}
 
 // --- cursor ------------------------------------------------------------
 
@@ -126,8 +133,11 @@ static struct display_driver virtio_gpu_display = {
     // on command, so pixels written and never transferred are invisible.
     // CURSOR is decided at claim time -- see adopt_cursor_plane(). No
     // MODESET, and the block above says why.
-    .caps = DISPLAY_CAP_NEEDS_FLUSH,
+    .caps = DISPLAY_CAP_NEEDS_FLUSH | DISPLAY_CAP_MODESET,
     .flush = virtio_drv_flush,
+    .mode_count = virtio_drv_mode_count,
+    .mode_at = virtio_drv_mode_at,
+    .set_mode = virtio_drv_set_mode,
 };
 
 void virtio_gpu_display_register(void) {
@@ -142,7 +152,10 @@ static int  virtio_drv_scanout_live(void) { return virtio_gpu_scanout_live(); }
 // FLIP, like CURSOR, is decided at claim time: the second resource is
 // best effort in virtio_gpu_set_mode().
 static void adopt_flip(void) {
-    if (virtio_gpu_scanout_count() < 3) return;
+    if (virtio_gpu_scanout_count() < 3) {
+        virtio_gpu_display.caps &= ~DISPLAY_CAP_FLIP;   // a re-mode may lose the extras
+        return;
+    }
     virtio_gpu_display.caps |= DISPLAY_CAP_FLIP;
     virtio_gpu_display.scanout_count = virtio_drv_scanout_count;
     virtio_gpu_display.scanout_at = virtio_drv_scanout_at;

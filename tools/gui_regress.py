@@ -141,6 +141,7 @@ TOOLS = [
     ("mines", "mines_test.py", "Minesweeper, and a secondary click reaching a client"),
     ("volume", "volume_test.py", "the tray volume flyout: slider, mute, wheel, devices"),
     ("brightness", "brightness_test.py", "the tray brightness flyout, and its answer with no backlight"),
+    ("modeset", "modeset_test.py", "a runtime resolution change: device, desktop and setting agree"),
     ("files", "filemanager_test.py", "the File Manager: two panes, marks, and real file operations"),
 ]
 

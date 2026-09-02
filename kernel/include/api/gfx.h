@@ -155,6 +155,10 @@ int gfx_hw_cursor_define(const uint32_t *argb, int w, int h, int hot_x, int hot_
 void gfx_hw_cursor_move(int x, int y);
 void gfx_hw_cursor_show(int on);
 
+// After a mode change: re-plumbs this file against the new surface.
+// Callers: kernel/core/screen.c only.
+int gfx_remode(void);
+
 int gfx_width(void);
 int gfx_height(void);
 

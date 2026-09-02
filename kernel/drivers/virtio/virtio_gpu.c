@@ -187,6 +187,7 @@ static uint64_t g_fb_frames = 0;
 static uint32_t g_res_extra[EXTRA_SCANOUTS];
 static uint64_t g_fb_extra[EXTRA_SCANOUTS];
 static int g_extra = 0;   // how many of them exist
+static uint32_t g_next_id = 1;   // resource ids are never reused within a boot
 static int g_front = 0;
 static uint32_t g_fb_w = 0, g_fb_h = 0, g_fb_pitch = 0;
 
@@ -343,8 +344,7 @@ int virtio_gpu_set_mode(uint32_t w, uint32_t h, struct display_surface *out) {
     // a real (and briefly visible) information leak.
     k_memset((void *)(uintptr_t)phys, 0, (unsigned)bytes);
 
-    uint32_t new_id = g_res_id + 1;
-    if (new_id == 0) new_id = 1;   // ids are 1-based; 0 means "none"
+    uint32_t new_id = g_next_id++;   // 1-based; 0 means "none"
 
     if (!create_resource(new_id, w, h, VIRTIO_GPU_FORMAT_B8G8R8X8) ||
         !attach_backing(new_id, phys, (uint32_t)bytes)) {
@@ -393,8 +393,7 @@ int virtio_gpu_set_mode(uint32_t w, uint32_t h, struct display_surface *out) {
     for (int i = 0; i < EXTRA_SCANOUTS; i++) {
         uint64_t p = pmm_alloc_contiguous(frames, PMM_ZONE_DMA32);
         if (!p) break;
-        uint32_t id = new_id + 1 + (uint32_t)i;
-        if (id == 0) id = 1;
+        uint32_t id = g_next_id++;
         k_memset((void *)(uintptr_t)p, 0, (unsigned)bytes);
         if (create_resource(id, w, h, VIRTIO_GPU_FORMAT_B8G8R8X8) &&
             attach_backing(id, p, (uint32_t)bytes)) {

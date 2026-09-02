@@ -1,0 +1,4 @@
+Description=The screen's size in pixels. Only modes this display can show are offered
+Widget=dropdown
+Applies=now
+Order=10

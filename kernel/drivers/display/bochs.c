@@ -194,6 +194,43 @@ static int bochs_try_mode(uint32_t w, uint32_t h) {
     return 1;
 }
 
+// The modes this adapter accepts: the ladder, filtered by what GETCAPS
+// says and by video memory -- the same two checks bochs_try_mode()
+// makes, so a listed mode is one it will set. A read of capabilities
+// only; the display is untouched.
+static int bochs_accepts(uint32_t w, uint32_t h) {
+    dispi_write(DISPI_INDEX_ENABLE, DISPI_GETCAPS);
+    uint16_t max_w = dispi_read(DISPI_INDEX_XRES);
+    uint16_t max_h = dispi_read(DISPI_INDEX_YRES);
+    uint32_t mem_64k = dispi_read(DISPI_INDEX_VIDEO_MEMORY_64K);
+    dispi_write(DISPI_INDEX_ENABLE, g_active ? (DISPI_ENABLED | DISPI_LFB_ENABLED | DISPI_NOCLEARMEM)
+                                             : DISPI_DISABLED);
+    if (w > max_w || h > max_h) return 0;
+    if (mem_64k && (uint64_t)w * h * 4 > (uint64_t)mem_64k * 65536ull) return 0;
+    return 1;
+}
+
+static int bochs_drv_mode_count(void) {
+    int n = 0, w, h;
+    for (int i = 0; display_ladder_mode(i, &w, &h); i++)
+        if (bochs_accepts((uint32_t)w, (uint32_t)h)) n++;
+    return n;
+}
+
+static void bochs_drv_mode_at(int index, struct display_mode *out) {
+    int n = 0, w, h;
+    out->width = g_surface.width; out->height = g_surface.height; out->bpp = 32;
+    for (int i = 0; display_ladder_mode(i, &w, &h); i++) {
+        if (!bochs_accepts((uint32_t)w, (uint32_t)h)) continue;
+        if (n++ == index) { out->width = (uint32_t)w; out->height = (uint32_t)h; return; }
+    }
+}
+
+static int bochs_drv_set_mode(const struct display_mode *m) {
+    if (!m || m->bpp != 32) return 0;
+    return bochs_try_mode(m->width, m->height);
+}
+
 static int bochs_drv_probe(void) {
     if (!find_adapter()) return 0;
 
@@ -220,24 +257,34 @@ static int bochs_drv_probe(void) {
             return 1;
         }
     }
+    // Nothing better than GRUB's mode: ADOPT it rather than re-program
+    // it, and claim anyway -- the mode on screen is this adapter's, and
+    // claiming is what makes a RUNTIME change possible later. vesafb
+    // would show the same pixels and could never change them.
+    if (grub.width && grub.addr == g_fb && grub.bpp == 32) {
+        g_surface = grub;
+        g_active = 1;
+        klog_printf("bochs: adopting GRUB's %ux%u -- modeset available\n",
+                     grub.width, grub.height);
+        return 1;
+    }
     return 0;
 }
 
 static void bochs_drv_get_surface(struct display_surface *out) { *out = g_surface; }
 
 // No flush (the adapter scans continuously, like vesafb), no cursor, no
-// acceleration. DISPLAY_CAP_MODESET is deliberately NOT advertised
-// either: this driver picks a mode at probe, and the cap means the
-// display layer may change one at RUNTIME -- which nothing above here
-// can survive yet, since gfx.c's back buffer and every ring-3
-// compositor mapping are sized at their own init. Advertising it would
-// be exactly the kind of dishonest capability display_probe() exists to
-// refuse.
+// acceleration. MODESET: a mode can change after boot now that
+// screen_set_mode() (kernel/core/screen.c) re-plumbs gfx, the console
+// and the compositor's grant around the driver's set_mode.
 static const struct display_driver bochs_driver = {
     .name = "bochs",
     .probe = bochs_drv_probe,
     .get_surface = bochs_drv_get_surface,
-    .caps = 0,
+    .caps = DISPLAY_CAP_MODESET,
+    .mode_count = bochs_drv_mode_count,
+    .mode_at = bochs_drv_mode_at,
+    .set_mode = bochs_drv_set_mode,
 };
 
 void bochs_register(void) {
