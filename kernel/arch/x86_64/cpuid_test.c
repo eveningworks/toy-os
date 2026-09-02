@@ -140,3 +140,14 @@ KTEST("cpuid", "feature table is well-formed") {
         KTEST_ASSERT(CPU_ENABLES[i].bit != 0);
     }
 }
+
+// Topology is consistent or absent: threads per core divides the
+// package's logical count, and neither is reported without the other.
+KTEST("cpuid", "the package topology is consistent") {
+    struct cpu_info ci;
+    cpu_info_get(&ci);
+    if (!ci.cores) KTEST_SKIP("this CPU reports no topology");
+    KTEST_ASSERT(ci.threads_per_core >= 1);
+    KTEST_ASSERT(ci.cores >= 1);
+    KTEST_ASSERT(ci.cores * ci.threads_per_core <= 256);
+}

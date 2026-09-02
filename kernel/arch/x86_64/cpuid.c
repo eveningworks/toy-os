@@ -287,6 +287,39 @@ static uint32_t read_enabled(void) {
     return en;
 }
 
+// Leaf 0BH walks levels: level type 1 is SMT (EBX = threads per core),
+// type 2 is core (EBX = logical per package). Without it, leaf 1 gives
+// logical per package and leaf 4 (Intel) or 80000008H (AMD) cores per
+// package. THE LEAF-1 COUNT IS A MAXIMUM, not what is populated -- the
+// reason 0BH is preferred wherever it exists.
+static void fill_topology(struct cpu_info *out) {
+    uint32_t threads = 0, logical = 0;
+    if (out->max_leaf >= 0xB) {
+        for (uint32_t sub = 0; sub < 4; sub++) {
+            struct regs4 r = cpuid_leaf(0xB, sub);
+            uint32_t type = (r.ecx >> 8) & 0xFF;
+            if (type == 0) break;
+            if (type == 1) threads = r.ebx & 0xFFFF;
+            if (type == 2) logical = r.ebx & 0xFFFF;
+        }
+    }
+    if (!logical && out->max_leaf >= 1) {
+        struct regs4 r1 = cpuid_leaf(1, 0);
+        if (r1.edx & (1u << 28)) logical = (r1.ebx >> 16) & 0xFF;  // HTT
+        else logical = 1;
+        uint32_t cores = 0;
+        if (out->vendor[0] == 'G' && out->max_leaf >= 4)
+            cores = ((cpuid_leaf(4, 0).eax >> 26) & 0x3F) + 1;
+        else if (out->max_ext_leaf >= 0x80000008u)
+            cores = (cpuid_leaf(0x80000008u, 0).ecx & 0xFF) + 1;
+        if (cores && logical >= cores) threads = logical / cores;
+    }
+    if (!threads) threads = 1;
+    if (!logical) return;
+    out->cores = (uint16_t)(logical / threads);
+    out->threads_per_core = (uint16_t)threads;
+}
+
 void cpu_info_get(struct cpu_info *out) {
     if (!out) return;
     k_memset(out, 0, sizeof(*out));
@@ -353,6 +386,7 @@ void cpu_info_get(struct cpu_info *out) {
     }
 
     fill_caches(out, out->max_leaf, out->max_ext_leaf);
+    fill_topology(out);
     out->enabled = read_enabled();
     fill_mhz(out);
 }

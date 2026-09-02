@@ -68,6 +68,12 @@ uint64_t pmm_frame_size(void);
 uint64_t pmm_total_frames(void);
 uint64_t pmm_free_frames(void);
 
+// Bytes of RAM the firmware map calls usable, BEFORE the 4 GiB cap
+// this allocator applies -- what a machine has, as opposed to what
+// pmm_total_frames() manages. The gap is the "More than 4 GiB of RAM"
+// roadmap item, and About shows both so the gap is visible.
+uint64_t pmm_firmware_bytes(void);
+
 // Exercises pmm_alloc_contiguous()/pmm_free_contiguous() once and logs
 // pass/fail via klog_write() -- there's no driver calling these yet (the
 // intended first caller is a future NIC descriptor ring), so without

@@ -36,6 +36,7 @@ static uint8_t bitmap[BITMAP_BYTES];
 static uint8_t managed[BITMAP_BYTES];
 static uint64_t total_frames = 0; // frames within regions firmware reported as available
 static uint64_t free_frames = 0;  // currently allocatable (total minus reservations)
+static uint64_t firmware_bytes = 0; // usable per the firmware map, uncapped
 static uint64_t alloc_hint = 0;   // avoids rescanning from frame 0 on every alloc
 
 static inline void mark_used_bit(uint64_t frame) {
@@ -63,6 +64,7 @@ static void mark_available_cb(const struct multiboot_mmap_region *region) {
     // either edge as usable.
     start = (start + FRAME_SIZE - 1) & ~((uint64_t)FRAME_SIZE - 1);
     end = end & ~((uint64_t)FRAME_SIZE - 1);
+    if (end > start) firmware_bytes += end - start;   // counted BEFORE the cap
     if (end > PMM_MAX_FRAMES * FRAME_SIZE) end = PMM_MAX_FRAMES * FRAME_SIZE;
 
     for (uint64_t addr = start; addr < end; addr += FRAME_SIZE) {
@@ -86,6 +88,7 @@ static void reserve_range(uint64_t start, uint64_t end) {
 void pmm_init(void) {
     for (uint64_t i = 0; i < BITMAP_BYTES; i++) bitmap[i] = 0xFF; // start fully reserved
     total_frames = 0;
+    firmware_bytes = 0;
 
     multiboot_mmap_foreach(mark_available_cb);
 
@@ -252,6 +255,7 @@ int pmm_frame_is_used(uint64_t phys_addr) {
 uint64_t pmm_frame_size(void) { return FRAME_SIZE; }
 
 uint64_t pmm_total_frames(void) { return total_frames; }
+uint64_t pmm_firmware_bytes(void) { return firmware_bytes; }
 uint64_t pmm_free_frames(void) { return free_frames; }
 
 // See pmm.h's doc comment. Deliberately checks both the returned address

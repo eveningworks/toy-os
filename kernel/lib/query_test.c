@@ -58,6 +58,9 @@ KTEST("query", "the memory provider is registered and reports a frame size") {
     KTEST_ASSERT(m.frame_bytes >= 4096);
     KTEST_ASSERT(m.frame_total > 0);
     KTEST_ASSERT(m.frame_free <= m.frame_total);
+    // What the firmware offered is never less than what is managed:
+    // the cap only ever removes frames.
+    KTEST_ASSERT(m.phys_usable_bytes >= m.frame_total * m.frame_bytes);
 }
 
 KTEST("query", "a scalar class has exactly one record") {

@@ -2332,6 +2332,11 @@ measuring it.** Either can be done at any point, including first.
 
 ## More than 4 GiB of RAM
 
+About shows the gap since 2026-09-02: `phys_usable_bytes` on
+`QUERY_MEMINFO` is the firmware map's usable total before the 4 GiB
+cap, and the row reads "7.9 GiB installed, 3.4 GiB usable" on an 8 GB
+laptop. When this item lands the two numbers meet.
+
 *Measured 2026-08-18, while raising the per-process heap. This is not a
 constant to raise -- it is a structural property of how this kernel
 reaches physical memory, and it is worth stating precisely before

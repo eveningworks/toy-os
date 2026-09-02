@@ -113,6 +113,14 @@ struct cpu_info {
     uint32_t feature[CPU_WORD_COUNT];
 
     struct cpu_cache cache[CPU_MAX_CACHES];
+
+    // Topology of ONE package, from CPUID leaf 0BH (leaf 1 + leaf 4 on
+    // parts without it): cores per package and hardware threads per
+    // core. 0 when the CPU does not say. The number of PACKAGES is not
+    // CPUID's to know -- divide the MADT's logical count by
+    // cores * threads for that (lscpu.c, about.c).
+    uint16_t cores;
+    uint16_t threads_per_core;
 };
 
 // One-time setup: works out the clock speed and caches it. Call once

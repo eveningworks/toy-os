@@ -28,6 +28,7 @@ static int meminfo_fill(int index, void *out) {
     m->frame_bytes      = pmm_frame_size();
     m->heap_total_bytes = heap_total_bytes();
     m->heap_used_bytes  = heap_used_bytes();
+    m->phys_usable_bytes = pmm_firmware_bytes();
     return 1;
 }
 
@@ -44,6 +45,7 @@ static const struct query_field meminfo_fields[] = {
     QUERY_FIELD(struct query_meminfo, frame_bytes,      QUERY_TYPE_BYTES),
     QUERY_FIELD(struct query_meminfo, heap_total_bytes, QUERY_TYPE_BYTES),
     QUERY_FIELD(struct query_meminfo, heap_used_bytes,  QUERY_TYPE_BYTES),
+    QUERY_FIELD(struct query_meminfo, phys_usable_bytes, QUERY_TYPE_BYTES),
 };
 
 static const struct query_provider meminfo_provider = {

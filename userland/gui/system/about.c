@@ -30,6 +30,7 @@
 #include "lib/icon_cache.h" // icon_get() -- an icon is a NAME, not a path
 #include "version.h"        // TOYOS_VERSION*, generated -- tools/gen_version.sh
 #include "build_date.h"     // TOYOS_BUILD_DATE -- the DAY this program was built
+#include "cpuinfo.h"        // struct cpu_info -- SYS_CPU_INFO, the brand and topology
 #include <stdio.h>
 #include <string.h>
 
@@ -67,8 +68,12 @@ static struct row *add(const char *label, int heading, int warn) {
 }
 
 // MiB rather than bytes: this is a window somebody reads, not a script.
-static void mib(char *out, int cap, uint64_t bytes) {
-    snprintf(out, cap, "%llu MiB", (unsigned long long)(bytes / (1024 * 1024)));
+// GiB to one decimal, in integer tenths: there is no floating point in
+// this userland either. 3499 MiB reads as "3.4 GiB", which is the
+// figure a person compares against the sticker on the machine.
+static void gib(char *out, int cap, uint64_t bytes) {
+    unsigned long long tenths = (bytes * 10) / (1024ull * 1024 * 1024);
+    snprintf(out, cap, "%llu.%llu GiB", tenths / 10, tenths % 10);
 }
 
 // Idempotent, and called from BOTH the size callback and the draw:
@@ -94,9 +99,12 @@ static void fill_rows(void) {
         snprintf(r->value, sizeof r->value, "%s", kv.stamp);
     }
 
+    // The same two rows as the kernel's, so the two components read as
+    // a pair and a mismatch is visible as one.
     r = add("Desktop", 0, 0);
-    snprintf(r->value, sizeof r->value, "%s, built %s",
-             TOYOS_VERSION_FULL, TOYOS_BUILD_DATE);
+    snprintf(r->value, sizeof r->value, "%s", TOYOS_VERSION_FULL);
+    r = add("Built", 0, 0);
+    snprintf(r->value, sizeof r->value, "%s", TOYOS_BUILD_DATE);
 
     // The row this window exists to make impossible to miss.
     if (have_kv && strcmp(kv.build_id, TOYOS_BUILD_ID) != 0) {
@@ -126,18 +134,43 @@ static void fill_rows(void) {
     while (cpus < 256 &&
            sys_query_record(QUERY_CPUS, cpus, &c, sizeof c) >= (int)sizeof c)
         cpus++;
+    // BRAND, THEN TOPOLOGY -- Windows' About shows the brand and its
+    // Task Manager the cores/threads split. CPUID knows one package;
+    // the number of packages is the MADT's logical count divided by
+    // what one package holds.
+    static struct cpu_info ci;   // 300+ bytes: not a stack local
+    int have_ci = sys_call(SYS_CPU_INFO, (uint64_t)(uintptr_t)&ci, 0, 0) == 0;
+    if (have_ci && ci.brand[0]) {
+        r = add("Processor", 0, 0);
+        snprintf(r->value, sizeof r->value, "%s", ci.brand);
+    }
     if (cpus) {
-        r = add("Processors", 0, 0);
-        snprintf(r->value, sizeof r->value, "%d", cpus);
+        r = add("Cores", 0, 0);
+        int per_pkg = have_ci ? ci.cores * ci.threads_per_core : 0;
+        if (per_pkg > 0) {
+            int pkgs = cpus / per_pkg > 0 ? cpus / per_pkg : 1;
+            snprintf(r->value, sizeof r->value, "%d x %d core%s, %d thread%s",
+                     pkgs, ci.cores, ci.cores == 1 ? "" : "s",
+                     cpus, cpus == 1 ? "" : "s");
+        } else {
+            snprintf(r->value, sizeof r->value, "%d logical", cpus);
+        }
     }
 
     struct query_meminfo mem;
     if (sys_query_record(QUERY_MEMINFO, 0, &mem, sizeof mem) >= (int)sizeof mem) {
-        char tot[24], freeb[24];
-        mib(tot, sizeof tot, mem.frame_total * mem.frame_bytes);
-        mib(freeb, sizeof freeb, mem.frame_free * mem.frame_bytes);
+        // INSTALLED, USABLE, FREE -- Windows' "8.00 GB (7.87 GB usable)"
+        // shape. Installed is the firmware map's usable total; usable is
+        // what the allocator manages, which stops at 4 GiB today (the
+        // "More than 4 GiB of RAM" roadmap item), so the gap is shown
+        // rather than hidden behind one number.
+        char inst[24], tot[24], freeb[24];
+        gib(inst, sizeof inst, mem.phys_usable_bytes);
+        gib(tot, sizeof tot, mem.frame_total * mem.frame_bytes);
+        gib(freeb, sizeof freeb, mem.frame_free * mem.frame_bytes);
         r = add("Memory", 0, 0);
-        snprintf(r->value, sizeof r->value, "%s (%s free)", tot, freeb);
+        snprintf(r->value, sizeof r->value, "%s installed, %s usable, %s free",
+                 inst, tot, freeb);
     }
 
     struct query_ahci ah;
@@ -171,10 +204,18 @@ static int row_y(int i) {
 static void about_size(int *w, int *h) {
     fill_rows();
     int lab = label_col();
+    // MEASURE IN THE WEIGHT THAT DRAWS: the title and the headings are
+    // bold, and bold is wider.
+    const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
     int widest = ugfx_text_width(g_title);
+    for (int i = 0; i < g_nrows; i++)
+        if (g_rows[i].heading && ugfx_text_width(g_rows[i].label) > widest)
+            widest = ugfx_text_width(g_rows[i].label);
+    ugfx_set_font(was);
     for (int i = 0; i < g_nrows; i++) {
-        int tw = g_rows[i].heading || !g_rows[i].label[0]
-                 ? ugfx_text_width(g_rows[i].heading ? g_rows[i].label : g_rows[i].value)
+        if (g_rows[i].heading) continue;
+        int tw = !g_rows[i].label[0]
+                 ? ugfx_text_width(g_rows[i].value)
                  : lab + LABEL_GAP + ugfx_text_width(g_rows[i].value);
         if (tw > widest) widest = tw;
     }
@@ -198,8 +239,13 @@ static void about_draw(struct uapp *a, struct uapp_draw *d) {
                         logo->px, logo->w);
     int text_x = MARGIN + LOGO + LOGO_GAP;
     int right = d->surface->w - MARGIN;
+    // The title and the section headings are BOLD -- the desktop font's
+    // bold weight, which falls back to regular where the face has none.
+    const struct ugfx_font *bold = ugfx_font_session(UGFX_FONT_BOLD);
+    const struct ugfx_font *was = ugfx_set_font(bold);
     ugfx_draw_string_clipped(d->surface, text_x, MARGIN + 6, right - text_x,
                              g_title, UTHEME_TEXT, UTHEME_PANEL_BG);
+    ugfx_set_font(was);
     ugfx_draw_string_clipped(d->surface, text_x, MARGIN + 6 + line_h(),
                              right - text_x, "a small x86-64 operating system",
                              UTHEME_BORDER, UTHEME_PANEL_BG);
@@ -214,8 +260,10 @@ static void about_draw(struct uapp *a, struct uapp_draw *d) {
         // the window is resizable, so a narrowed one truncates rather
         // than painting past its own edge.
         if (r->heading) {
+            ugfx_set_font(bold);
             ugfx_draw_string_clipped(d->surface, text_x, y, right - text_x,
                                      r->label, UTHEME_ACCENT, UTHEME_PANEL_BG);
+            ugfx_set_font(was);
             continue;
         }
         if (r->label[0])
@@ -238,7 +286,9 @@ int main(void) {
         .app_id  = "about",
         .on_size = about_size,
         .on_draw = about_draw,
-        .flags   = UAPP_RESIZABLE | UAPP_SINGLE_INSTANCE,
+        // FIXED SIZE: the window is sized from its rows, and nothing in
+        // it reflows -- every About box is (macOS, GNOME, KDE Info Center).
+        .flags   = UAPP_SINGLE_INSTANCE,
     };
     return uapp_run(&desc);
 }

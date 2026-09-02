@@ -458,6 +458,8 @@ struct query_meminfo {
     uint64_t frame_bytes;      // bytes per frame
     uint64_t heap_total_bytes; // the KERNEL heap (api/heap.h), not a process's
     uint64_t heap_used_bytes;
+    uint64_t phys_usable_bytes; // RAM the firmware map calls usable, UNCAPPED --
+                                // frame_total * frame_bytes is what is managed
 };
 
 // QUERY_FSINFO's record.

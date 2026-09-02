@@ -142,6 +142,12 @@ int main_lscpu(void) {
         }
     }
 
+    if (g_ci.cores) {
+        put_label("Topology");
+        put_udec(g_ci.cores); put(" core(s) per package, ");
+        put_udec(g_ci.threads_per_core); put(" thread(s) per core  (CPUID leaf 0BH)\n");
+    }
+
     // ---- caches --------------------------------------------------------
     put("\nCaches:\n");
     if (g_ci.cache_count == 0) {
