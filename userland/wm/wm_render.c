@@ -251,6 +251,26 @@ static void draw_max_icon(int x, int y, int size, uint32_t color) {
     bar_v(cx + h, cy, h, t, color);
 }
 
+// Restore, shown in the maximize button's place WHILE MAXIMIZED: two
+// overlapping squares, Windows' and Breeze's glyph, so the button says
+// what the next click does.
+static void draw_restore_icon(int x, int y, int size, uint32_t color) {
+    int cx = btn_cx(x, size), cy = btn_cy(y, size);
+    int h = glyph_h(size), t = btn_stroke(size);
+    int o = (h + 1) / 2;         // the two squares are offset by this
+    int q = h - o / 2;           // each square's half-extent
+    int fx = cx - o / 2, fy = cy + o / 2;   // front: down-left
+    int bx = cx + o / 2, by = cy - o / 2;   // back: up-right
+    // The back square shows only its top and right edges; the rest is
+    // behind the front one.
+    bar_h(bx, by - q, q, t, color);
+    bar_v(bx + q, by, q, t, color);
+    bar_h(fx, fy - q, q, t, color);
+    bar_h(fx, fy + q, q, t, color);
+    bar_v(fx - q, fy, q, t, color);
+    bar_v(fx + q, fy, q, t, color);
+}
+
 static void draw_close_icon(int x, int y, int size, uint32_t color) {
     // TWO ANTI-ALIASED DIAGONALS about the same centre as everything
     // else. It was a hand-rolled loop plotting pixels along both
@@ -737,6 +757,102 @@ int wm_cursor_shape_changed(int mx, int my) {
     return (int)resolve_cursor_kind(mx, my) != drawn_cursor_kind;
 }
 
+// --- rounded corners --------------------------------------------------
+//
+// A window that is not maximized has its four corners rounded, KDE
+// Breeze's and Windows 11's frame; a maximized one is square, as both
+// make it. The compositor repaints everything under the damage box
+// back to front (docs/decisions/gui.md), so what lies under a corner --
+// wallpaper or a lower window -- is already on the surface when this
+// window paints. The corner pixels are SAVED before the window draws
+// and blended back afterwards by the arc's coverage, which is what
+// makes the edge anti-aliased against whatever is really behind it
+// rather than against a guessed colour.
+//
+// THE RADIUS IS FONT-DERIVED (a third of the line height, the tab
+// strip's rule), so it scales with the chrome. Hit testing stays
+// rectangular on purpose: a click in a corner still belongs to the
+// window, as it does on every real desktop.
+
+#define CORNER_MAX_R 16
+
+static int corner_radius(const struct window *win) {
+    if (win->state == WIN_MAXIMIZED) return 0;
+    int r = ugfx_char_h() / 3;
+    if (r < 3) r = 3;
+    if (r > CORNER_MAX_R) r = CORNER_MAX_R;
+    if (2 * r > win->w || 2 * r > win->h) return 0;
+    return r;
+}
+
+// Coverage of pixel (px, py) -- measured from the corner's outer edge,
+// 0 being the outermost row/column -- by a quarter disc of radius r,
+// in 0..255. Sixteen sub-samples per pixel; r is a handful of pixels,
+// so the whole corner is a few hundred compares.
+static uint8_t corner_coverage(int r, int px, int py) {
+    int in = 0;
+    for (int sy = 0; sy < 4; sy++) {
+        for (int sx = 0; sx < 4; sx++) {
+            // Sub-sample centre in eighths, distance to the arc centre
+            // (r, r) in the same units: inside when d^2 <= (8r)^2.
+            int cx = 8 * px + 2 * sx + 1 - 8 * r;
+            int cy = 8 * py + 2 * sy + 1 - 8 * r;
+            if (cx * cx + cy * cy <= 64 * r * r) in++;
+        }
+    }
+    return (uint8_t)(in * 255 / 16);
+}
+
+static uint32_t corner_under[4][CORNER_MAX_R * CORNER_MAX_R];
+
+// The screen pixel for corner c's (px, py), px/py counted inward from
+// that corner's own edges.
+static void corner_pixel(const struct window *win, int c, int px, int py,
+                         int *x, int *y) {
+    *x = (c & 1) ? win->x + win->w - 1 - px : win->x + px;
+    *y = (c & 2) ? win->y + win->h - 1 - py : win->y + py;
+}
+
+// Only a pixel the frame will actually REPAINT may be saved and
+// re-blended: one outside the damage clip keeps its previous composite,
+// which already holds a blended corner, and blending it again drifts
+// it a little every frame -- the damage verifier's exact-repaint check
+// caught that on day one.
+static int corner_in_clip(int x, int y) {
+    const struct ugfx_surface *s = wm_surface();
+    if (!s->clip_active) return 1;
+    return x >= s->clip_x0 && x < s->clip_x1 && y >= s->clip_y0 && y < s->clip_y1;
+}
+
+static void corners_save(const struct window *win) {
+    int r = corner_radius(win);
+    if (!r) return;
+    for (int c = 0; c < 4; c++)
+        for (int py = 0; py < r; py++)
+            for (int px = 0; px < r; px++) {
+                int x, y;
+                corner_pixel(win, c, px, py, &x, &y);
+                corner_under[c][py * r + px] = ugfx_get_pixel(wm_surface(), x, y);
+            }
+}
+
+static void corners_round(const struct window *win) {
+    int r = corner_radius(win);
+    if (!r) return;
+    for (int c = 0; c < 4; c++)
+        for (int py = 0; py < r; py++)
+            for (int px = 0; px < r; px++) {
+                uint8_t cov = corner_coverage(r, px, py);
+                if (cov == 255) continue;
+                int x, y;
+                corner_pixel(win, c, px, py, &x, &y);
+                if (!corner_in_clip(x, y)) continue;
+                uint32_t under = corner_under[c][py * r + px];
+                if (cov == 0) ugfx_put_pixel(wm_surface(), x, y, under);
+                else ugfx_blend_pixel(wm_surface(), x, y, under, (uint8_t)(255 - cov));
+            }
+}
+
 static void draw_window_chrome(struct window *win, int idx, int focused) {
     uint32_t titlebar = focused ? ugfx_rgb(50, 90, 160) : ugfx_rgb(120, 120, 130);
     uint32_t titletext = UTHEME_WHITE;
@@ -847,7 +963,8 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
     uint32_t max_fg = can_resize ? btnfg : ugfx_rgb(170, 170, 172);
     draw_btn_disc(r.max_x, r.y, r.size,
                    uui_state_bg(max_bg_base, title_btn_state(1, is_armed, is_hovered)));
-    draw_max_icon(r.max_x, r.y, r.size, max_fg);
+    if (win->state == WIN_MAXIMIZED) draw_restore_icon(r.max_x, r.y, r.size, max_fg);
+    else                             draw_max_icon(r.max_x, r.y, r.size, max_fg);
 
     // close: red button with a hand-drawn X. This used to draw the font
     // glyph 'x' via gfx_draw_char(), which clipped/overflowed once the
@@ -1198,6 +1315,7 @@ static void render_scene(int mx, int my, int has_damage) {
     for (int i = 0; i < window_count; i++) {
         if (windows[i].state == WIN_MINIMIZED) continue;
         if (has_damage && !window_intersects_damage(&windows[i])) continue;
+        corners_save(&windows[i]);   // what is beneath, before this window covers it
         draw_window_chrome(&windows[i], i, i == window_count - 1);
         if (windows[i].app && windows[i].app->on_draw) {
             // Only the app's own draw is confined to its content area.
@@ -1217,6 +1335,7 @@ static void render_scene(int mx, int my, int has_damage) {
             apply_scene_clip(has_damage);
         }
         draw_resize_grip(&windows[i]); // after on_draw() -- see its own comment
+        corners_round(&windows[i]);    // last: the arc cuts chrome, content and grip alike
     }
 
     draw_taskbar();

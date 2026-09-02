@@ -363,7 +363,13 @@ def check_focus_caret(dbg, qmp, tmp, res):
     dbg.settle()
     term = dbg.window("Terminal")
     c = term["content"]
-    box = (c["x"], c["y"], c["x"] + c["w"], c["y"] + c["h"])
+    # INSET BY A CORNER: a window's rounded corners show what is beneath
+    # them, and the thief window opened below lies under this one's left
+    # corners, so the outermost pixels legitimately change. The caret,
+    # which is what this check is about, is nowhere near a corner.
+    inset = 8
+    box = (c["x"] + inset, c["y"] + inset,
+           c["x"] + c["w"] - inset, c["y"] + c["h"] - inset)
 
     # Focus it EXPLICITLY rather than assuming the spawn left it focused
     # -- clicked in the CONTENT, not the title bar, since the window that

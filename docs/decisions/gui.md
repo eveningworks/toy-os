@@ -4911,6 +4911,39 @@ struct. A worker with a larger result puts it where both threads agreed
 and posts an index. That also keeps the door open for the payload to
 cross a process boundary later, which a pointer would have closed.
 
+## Window corners are rounded by blending over the saved backdrop, not by a mask the compositor has to understand
+
+The maintainer asked for subtle rounded corners on windows that are
+not maximized (2026-09-02). KDE's Breeze and Windows 11 both do this,
+and both square the corners of a maximized window; Breeze does it in
+the decoration plugin and DWM in the compositor, and either way the
+compositor knows the window's shape.
+
+toy-os's compositor does not, and deliberately. The obvious design is
+a per-window shape mask consulted by damage tracking, hit testing and
+the blit; that is Wayland's `wl_surface.set_opaque_region` and X11's
+SHAPE extension, and it touches every path that thinks a window is a
+rectangle. What was built instead leans on one property this
+compositor already has: it repaints everything inside the damage box
+back to front, with no occlusion culling. So the backdrop under a
+corner is on the surface the moment a window starts to paint. The
+renderer copies those few pixels aside, lets the window paint its
+rectangle, then blends them back by a quarter-disc's coverage. No
+other code learns that a corner is transparent. Hit testing stays
+rectangular, which is also what Breeze and DWM do -- a click in the
+corner is the window's.
+
+The cost is honest: four small squares saved and blended per window
+per frame, a few hundred pixel operations at a five-pixel radius, and
+`CORNER_MAX_R` caps the static buffer. The one path that must not
+change is `wm_render_cursor_move()`'s save-under, which never repaints
+windows and therefore never sees a corner.
+
+The radius is font-derived (`ugfx_char_h() / 3`, the tab strip's rule)
+because every other chrome measurement here is, and hard pixels were
+rejected for the same reason the title buttons are discs: at this size
+an aliased arc reads as a staircase.
+
 ## Terminal tabs are the application's, not the window manager's
 
 Three places could own tabbing and all three exist in the wild. Konsole,

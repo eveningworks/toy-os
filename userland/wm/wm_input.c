@@ -14,6 +14,7 @@
 #include "file_picker.h"
 #include "desktop.h"
 #include "ui/uui.h"
+#include "rt/sys.h"   // sys_ticks(), for the title-bar double-click
 #include "kapi.h"
 
 // Which window (if any) has a title-bar button under (mx, my), and
@@ -65,6 +66,13 @@ int wm_find_resize_zone(int mx, int my, int *out_right, int *out_bottom) {
 // Defined below, beside the ctx_* handlers it wires up -- both this
 // file's click paths open it, and the title-bar one comes first.
 static void wm_open_window_menu(int idx, int mx, int my);
+static void wm_toggle_maximize(int i);
+
+// The last title-bar press, for the double-click below.
+#define TITLE_DOUBLE_CLICK_TICKS 30   // ~300 ms at 100 Hz, desktop.c's threshold
+static int title_click_pid = 0;
+static uint32_t title_click_win = 0;
+static unsigned long title_click_tick = 0;
 
 void wm_handle_left_click(int mx, int my) {
     // EVERY OVERLAY FIRST, most modal first, from the table in
@@ -192,6 +200,23 @@ void wm_handle_left_click(int mx, int my) {
                 redraw_pending = 1;
                 return;
             }
+
+            // DOUBLE-CLICK ON THE TITLE BAR TOGGLES MAXIMIZE, as on
+            // Windows and KDE. The window is named by its client ids
+            // rather than its index, which bring_to_front() moves.
+            // The same threshold the desktop's icons use.
+            unsigned long now = sys_ticks();
+            int same = w->client_pid == title_click_pid && w->client_win == title_click_win;
+            if (same && now - title_click_tick <= TITLE_DOUBLE_CLICK_TICKS) {
+                title_click_pid = 0;   // a third click is a fresh first one
+                bring_to_front(i);
+                wm_toggle_maximize(window_count - 1);
+                redraw_pending = 1;
+                return;
+            }
+            title_click_pid = w->client_pid;
+            title_click_win = w->client_win;
+            title_click_tick = now;
 
             if (w->state != WIN_MAXIMIZED) {
                 bring_to_front(i);

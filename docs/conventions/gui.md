@@ -334,6 +334,27 @@ this the obvious way), not from how much history it accumulated.
   `tools/hires_test.py` is the check, and it needs an ISO built with
   `KCMDLINE="video=..."` because at the default mode every assertion in
   it passes vacuously.
+- **A WINDOW HAS ROUNDED CORNERS UNLESS IT IS MAXIMIZED, AND THE CORNER
+  IS BLENDED OVER WHAT IS REALLY BENEATH.** `wm_render.c` saves the
+  pixels under each corner before a window paints and blends them back
+  afterwards by the arc's coverage (`corners_save()` /
+  `corners_round()`), so the edge is anti-aliased against the wallpaper
+  or the window below rather than a guessed colour. It works because
+  the compositor repaints everything under the damage box back to
+  front (`docs/decisions/gui.md`); nothing else knows a corner is
+  transparent, and nothing needs to. **The radius is a third of the
+  line height**, the tab strip's rule, and **a maximized window is
+  square** -- Breeze's and Windows 11's rule both. **Hit testing stays
+  rectangular**: a click in a corner belongs to the window. Two
+  consequences for tests: a pixel sampled at a window's outermost
+  corner is backdrop now, so sample inward; and a test that COUNTS
+  colours in a content rect sees the backdrop's in the bottom corners.
+  **THE MAXIMIZE BUTTON SHOWS A RESTORE GLYPH WHILE MAXIMIZED** (two
+  overlapping squares), and **A DOUBLE-CLICK ON THE TITLE BAR TOGGLES
+  MAXIMIZE** -- `wm_input.c` names the window by its client ids rather
+  than its index, which `bring_to_front()` moves, and uses the desktop
+  icons' threshold. Both route through `wm_toggle_maximize()`, so a
+  fixed-size window refuses all three the same way.
 - **A DESKTOP-SIZED WINDOW IS "MAXIMIZED", AND THERE IS NO FULLSCREEN
   STATE.** `wm_toggle_maximize()` (`userland/wm/wm_input.c`) fills the
   screen ABOVE the taskbar and keeps the title bar; nothing removes

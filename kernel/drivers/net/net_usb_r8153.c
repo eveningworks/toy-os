@@ -788,10 +788,26 @@ int usb_r8153_bind(struct usb_device_info *info, const uint8_t *cfg,
     d->mps = mps;
     d->speed = info->speed;
 
+    // WAIT FOR THE CHIP'S AUTOLOAD BEFORE READING ANYTHING. A cold boot
+    // probes this adapter a third of a second in, before its firmware
+    // has loaded the registers, and PLA_TCR1 then answers 0 and PLA_IDR
+    // half a MAC -- which read exactly like an unsupported chip and left
+    // the laptop with no network one boot in three. rtl8153_init() waits
+    // for the same bit, but the version check below comes first.
+    for (int i = 0; i < TIMEOUT_MS / 10; i++) {
+        if (reg_read2(PLA_BOOT_CTRL, MCU_PLA) & AUTOLOAD_DONE) break;
+        wait_ms(10);
+    }
+
     // THE FIRST CHECKPOINT, and the one that says whether any of the
     // rest is honest: a register layer that is wrong here reads back
-    // zeroes and every write after it is silently discarded.
-    d->version = (uint16_t)(reg_read2(PLA_TCR1, MCU_PLA) & VERSION_MASK);
+    // zeroes and every write after it is silently discarded. A zero is
+    // retried a few times rather than believed, for the same reason.
+    d->version = 0;
+    for (int i = 0; i < 5 && !d->version; i++) {
+        if (i) wait_ms(20);
+        d->version = (uint16_t)(reg_read2(PLA_TCR1, MCU_PLA) & VERSION_MASK);
+    }
     uint8_t idr[NET_MAC_LEN];
     if (reg_read_mem(PLA_IDR, MCU_PLA, g_reg_buf, 8) < 8) {
         klog_printf("usb: slot %u: r8153 register read failed -- not bound\n",

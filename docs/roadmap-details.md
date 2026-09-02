@@ -4002,3 +4002,28 @@ size probe fails the same two checks, so neither is that change's.
   seeded image's free-block pattern, or the way the tool measures the
   file could each explain it. The next check, that deleting the file
   hands blocks back through discard, passes.
+
+## The SECOND consecutive `preflight.sh` fails three `fs` KTESTs with `fsck` reporting leaked blocks
+
+Measured 2026-09-02 on 1f79742, the commit before that day's work:
+`make clean-disk`, then `preflight.sh` twice. The first run passes; the
+second fails "fsck reports a clean filesystem", "fsck stays clean across
+a rename and a truncate" and "truncate cuts a file that uses indirect
+blocks", each on `r.leaked`. Two `ktest_run.py` runs in a row on the
+same image stay clean, so the leak is left by something preflight runs
+BETWEEN kernel suites -- the ring-3 `/tests` programs are the suspect,
+none of them named yet. `preflight.sh` starts with `make clean` and
+`make iso`, which re-seed by sync and keep the leftovers; `make
+clean-disk` first is the workaround, and it was reported twice in one
+session as a regression before being measured.
+
+## `damage_sweep.py` reports one violation on `start-menu dismiss`
+
+Measured 2026-09-02 on 540dd6e5 and again with the rounded-corner
+change applied: the same report both times, so it is not the corners.
+Dismissing the Start menu changes a 64x14 box at (4,702) -- the Start
+button's own face, the taskbar's hover/pressed state going back to
+rest -- outside a damage rect that covers only the menu. The button's
+state change needs its own `wm_damage_rect()`; not fixed because it
+was found at the end of a long session, and recorded so the next sweep
+does not report it as new.
