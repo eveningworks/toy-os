@@ -1598,6 +1598,10 @@ and `docs/decisions/drivers.md`'s handoff entry carries the reasoning.
 
 ### `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR
 
+**BUILT 2026-09-02**, at enumeration rather than on demand -- see
+`docs/decisions/drivers.md`, "BAR sizes are probed at enumeration".
+The reasoning below is kept as the problem statement.
+
 `walk_xecp()` follows a device-supplied chain whose every `next` is up
 to 255 DWORDs, so 64 hops can reach ~65 KB from the capability base --
 past a typical 64 KiB xHCI BAR, into MMIO nothing decodes, which on real
@@ -3977,3 +3981,19 @@ just the build. `preflight.sh`, then `gui_regress.py`, then the
 console-driven half of `ondemand_sweep.py` (`ls`, `grep`, `stdin`,
 `jobs`, `ctrlc`, `console`) -- an ordering change shows up there and
 nowhere else.
+
+## `tools/virtio_boot_test.py` fails 2 of 11 checks every run
+
+Measured 2026-09-02 with `tools/predates.py`: the commit before the BAR
+size probe fails the same two checks, so neither is that change's.
+
+- **"virtio-blk became the active block device"** looks for `block:
+  virtio-blk active`; the kernel has logged `block: virtio0 active`
+  since the block registry started naming devices (the partition work,
+  1190cfa). A stale string in the tool, not the driver -- the same run's
+  "TFS3 mounted off virtio" passes.
+- **"writing 40 MiB grows the host image"** measures 10 MiB of growth
+  and wants 40. Cause not established: the write-back cache, the
+  seeded image's free-block pattern, or the way the tool measures the
+  file could each explain it. The next check, that deleting the file
+  hands blocks back through discard, passes.

@@ -99,6 +99,13 @@ int pci_bar_is_64(uint32_t bar);
 // (vmsvga.c, ata.c) pass I/O BARs where the 64-bit rule does not apply.
 uint64_t pci_bar_mem_addr(const struct pci_device *dev, int index);
 
+// Bytes BAR `index` decodes, or 0 for the cases pci_bar_mem_addr()
+// returns 0 for. Probed ONCE in pci_init(), before any driver and before
+// the console reaches a framebuffer -- the probe turns the device's
+// decode off, so a driver-time probe would run under whoever is using
+// the device (Linux sizes at enumeration for the same reason).
+uint64_t pci_bar_mem_size(const struct pci_device *dev, int index);
+
 // --- the Command register --------------------------------------------
 
 #define PCI_CMD_IO           0x0001  // respond to I/O-space accesses

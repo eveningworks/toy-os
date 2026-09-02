@@ -24,7 +24,6 @@ FIRST, and this is what to do first among things that are all
 buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
-- [ ] `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR, not a 64 KiB guess  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
 - [ ] Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today  *(Networking)*
@@ -675,7 +674,7 @@ run on, not by order.
 - [x] ~~PS/2 coexistence -- there is no handoff to do; the input core is a multi-source registry and both paths run at once~~
 - [x] ~~The xHCI USB Legacy Support handoff (xECP id 1)~~ DONE -- confirmed on the laptop 2026-08-28
 - [x] ~~Confirm the xHCI BIOS handoff on the laptop it was written for~~ DONE 2026-08-28 -- a wireless mouse works on the machine
-- [ ] **NEXT** `pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR, not a 64 KiB guess
+- [x] ~~`pci_bar_mem_size()`, so the xHCI capability walk is bounded by the real BAR~~ DONE 2026-09-02 -- sized at enumeration
 - [x] ~~USB audio (isochronous OUT, UAC1)~~ DONE 2026-08-30 -- `kernel/drivers/sound/sound_usb.c`; SIA scheduling is QEMU-tested only
 - [x] ~~UAC2 playback: a set rate, 24-bit samples, 125 us intervals~~ DONE 2026-08-31 -- proven on a Sound BlasterX G6
 - [x] ~~An AML namespace walk, Method bodies skipped~~ DONE 2026-08-31 -- `kernel/acpi/aml.c`, stage 1 of `docs/aml-design.md`

@@ -202,3 +202,33 @@ KTEST("pci", "BAR decoding refuses an out-of-range index") {
     KTEST_ASSERT_EQ(pci_bar_mem_addr(0, 0), 0);
     KTEST_ASSERT_EQ(pci_capability_find(0, PCI_CAP_ID_VNDR, 0), 0);
 }
+
+// The size probe: a memory BAR's size is a power of two no smaller than
+// 16, its address is aligned to it, and -- the part that matters --
+// the raw BAR the probe wrote all-ones over reads back as what
+// enumeration recorded. A restore that missed would leave the device
+// un-mapped with nothing else here noticing.
+KTEST("pci", "every memory BAR is sized, aligned, and restored") {
+    int sized = 0;
+    for (int i = 0; i < pci_device_count(); i++) {
+        const struct pci_device *d = pci_device_at(i);
+        if (!d) continue;
+        for (int b = 0; b < 6; b++) {
+            KTEST_ASSERT_EQ(pci_config_read32(d, (uint8_t)(0x10 + b * 4)), d->bar[b]);
+            uint64_t sz = pci_bar_mem_size(d, b);
+            if (pci_bar_is_io(d->bar[b]) || !pci_bar_mem_addr(d, b)) {
+                KTEST_ASSERT_EQ(sz, 0);
+                continue;
+            }
+            if (!sz) continue;   // decodes nothing, or a bridge BAR the probe skipped
+            sized++;
+            KTEST_ASSERT(sz >= 16);
+            KTEST_ASSERT_EQ(sz & (sz - 1), 0);                   // a power of two
+            KTEST_ASSERT_EQ(pci_bar_mem_addr(d, b) & (sz - 1), 0); // aligned to it
+            if (pci_bar_is_64(d->bar[b]) && b < 5) KTEST_ASSERT_EQ(pci_bar_mem_size(d, b + 1), 0);
+        }
+    }
+    KTEST_ASSERT_EQ(pci_bar_mem_size(pci_device_at(0), 6), 0);
+    KTEST_ASSERT_EQ(pci_bar_mem_size(0, 0), 0);
+    if (sized == 0) KTEST_SKIP("no memory BAR on this machine");
+}

@@ -1145,6 +1145,34 @@ returns its own handle, a queue that starts consuming as it is created.
 it where it can fail (with `/dev/kvm`); it says so when it skips, since
 a check that cannot fail is worse than no check.
 
+## BAR sizes are probed at enumeration, not by the driver that needs one
+
+The obvious shape for `pci_bar_mem_size()` was a function that probes
+on demand: disable decode, write all-ones, read, restore. It is the
+shape the roadmap item named. It was not built that way because the
+probe turns the device's decode OFF for its duration, and a driver-time
+call runs while that device may already be in use -- the framebuffer
+console is a PCI BAR, and a second driver asking about the same device
+would repeat the window. Linux settled this in `__pci_read_base()`: the
+bus enumerator sizes every BAR once, before any driver binds, and a
+driver only ever reads `pci_resource_len()`. Windows' pci.sys does the
+same in its enumerator. toy-os follows: `pci_init()` runs before
+interrupts and before `vga_init()`, so nothing is decoding anything,
+and the result lives in `struct pci_device.bar_size[]`.
+
+Two details are Linux's too and are worth keeping for the reason rather
+than the precedent. The probe writes only the BARs the header type
+actually has (six for type 0, two for type 1), because a bridge's 0x18
+is its bus-number register and all-ones there renumbers the bus behind
+it. And a host bridge keeps decoding throughout (`mmio_always_on`),
+because some chipsets hang when the host bridge stops responding.
+
+The cost accepted: `struct pci_device` is the `SYS_PCI_INFO` snapshot,
+so the field is visible to `lspci`, which now prints it. That is a
+feature rather than a leak -- a size is a fact about the device, not a
+mechanism -- and the header's own rule (`pci_internal.h`) still keeps
+the config-space WRITE that produced it out of ring 3.
+
 ## USB is xHCI only, with no HCD abstraction, and its MMIO is left write-back
 
 Three decisions taken together when `kernel/drivers/usb/` was written,

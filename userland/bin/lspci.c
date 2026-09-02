@@ -291,6 +291,15 @@ int main(void) {
             put("=0x");
             put_hex_digits(is_io ? (bar & 0xFFFFFFFCu) : (bar & 0xFFFFFFF0u), 8);
             put(is_io ? "(io)" : "(mem)");
+            if (!is_io && dev->bar_size[b]) {
+                // Sized in the kernel at enumeration; a whole unit or nothing.
+                uint64_t sz = dev->bar_size[b];
+                put("/");
+                if (sz >= (1ull << 30) && !(sz & ((1ull << 30) - 1))) { put_udec((uint32_t)(sz >> 30)); put("G"); }
+                else if (sz >= (1ull << 20) && !(sz & ((1ull << 20) - 1))) { put_udec((uint32_t)(sz >> 20)); put("M"); }
+                else if (sz >= (1ull << 10) && !(sz & ((1ull << 10) - 1))) { put_udec((uint32_t)(sz >> 10)); put("K"); }
+                else put_udec((uint32_t)sz);
+            }
         }
         put("\n");
 

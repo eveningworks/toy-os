@@ -74,6 +74,51 @@ static void klog_hex_digits(uint32_t v, int digits) {
     klog_write(buf);
 }
 
+// Size every memory BAR by the standard probe: decode off, write
+// all-ones, read the mask back, put the value back, decode on. Runs
+// before interrupts and before the console reaches a framebuffer, and
+// the cli guards that ordering rather than anything happening today.
+//
+// TWO TRAPS. A type-1 (bridge) header has TWO BARs and bus numbers at
+// 0x18 -- writing all-ones there renumbers the bus behind it. And a
+// host bridge keeps decoding throughout (Linux's mmio_always_on):
+// some chipsets hang the machine when it is switched off.
+static void probe_bar_sizes(struct pci_device *d) {
+    uint8_t type = d->header_type & 0x7F;
+    int nbars = type == 0 ? 6 : type == 1 ? 2 : 0;
+    if (!nbars) return;
+
+    uint64_t flags;
+    __asm__ volatile ("pushfq; popq %0; cli" : "=r"(flags) :: "memory");
+
+    int host_bridge = d->class_code == 0x06 && d->subclass == 0x00;
+    uint16_t cmd = pci_config_read16(d, 0x04);
+    if (!host_bridge && (cmd & (PCI_CMD_IO | PCI_CMD_MEMORY)))
+        pci_config_write16(d, 0x04, (uint16_t)(cmd & ~(PCI_CMD_IO | PCI_CMD_MEMORY)));
+
+    for (int i = 0; i < nbars; i++) {
+        uint32_t orig = d->bar[i];
+        uint8_t  off  = (uint8_t)(0x10 + i * 4);
+        if (pci_bar_is_io(orig)) continue;   // memory BARs only
+
+        int wide = pci_bar_is_64(orig) && i + 1 < nbars;
+        pci_config_write32(d, off, 0xFFFFFFFFu);
+        if (wide) pci_config_write32(d, (uint8_t)(off + 4), 0xFFFFFFFFu);
+        uint64_t mask = pci_config_read32(d, off) & 0xFFFFFFF0u;
+        if (wide) mask |= (uint64_t)pci_config_read32(d, (uint8_t)(off + 4)) << 32;
+        else if (mask) mask |= 0xFFFFFFFF00000000ull;  // a 32-bit BAR's mask stops at bit 31
+        if (wide) pci_config_write32(d, (uint8_t)(off + 4), d->bar[i + 1]);
+        pci_config_write32(d, off, orig);
+
+        // Mask 0 is a BAR that decodes nothing; the low set bit is the size.
+        d->bar_size[i] = mask ? (~mask + 1) : 0;
+        if (wide) i++;   // the upper half is not a BAR of its own
+    }
+
+    if (!host_bridge) pci_config_write16(d, 0x04, cmd);
+    __asm__ volatile ("pushq %0; popfq" :: "r"(flags) : "memory", "cc");
+}
+
 void pci_init(void) {
     g_count = 0;
 
@@ -99,7 +144,9 @@ void pci_init(void) {
                 d->interrupt_line = config_read8((uint8_t)bus, (uint8_t)device, (uint8_t)function, 0x3C);
                 for (int i = 0; i < 6; i++) {
                     d->bar[i] = config_read32((uint8_t)bus, (uint8_t)device, (uint8_t)function, (uint8_t)(0x10 + i * 4));
+                    d->bar_size[i] = 0;
                 }
+                probe_bar_sizes(d);
 
                 klog_write("pci: ");
                 klog_hex_digits(d->bus, 2);
@@ -308,6 +355,11 @@ uint64_t pci_bar_mem_addr(const struct pci_device *dev, int index) {
     if (index == 5) return 0;
 
     return ((uint64_t)dev->bar[index + 1] << 32) | (uint64_t)(low & 0xFFFFFFF0u);
+}
+
+uint64_t pci_bar_mem_size(const struct pci_device *dev, int index) {
+    if (!dev || index < 0 || index > 5) return 0;
+    return dev->bar_size[index];
 }
 
 uint16_t pci_command_update(const struct pci_device *dev, uint16_t set, uint16_t clear) {

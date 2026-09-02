@@ -139,7 +139,8 @@ int pci_msix_enable(const struct pci_device *dev, uint8_t vector) {
     uint32_t off = tbl & ~(uint32_t)MSIX_BIR_MASK;
 
     uint64_t bar = pci_bar_mem_addr(dev, bir);
-    if (!bar || bar + off + 16 > 0x100000000ull) {
+    uint64_t bar_len = pci_bar_mem_size(dev, bir);   // 0 if the probe could not size it
+    if (!bar || bar + off + 16 > 0x100000000ull || (bar_len && off + 16 > bar_len)) {
         klog_printf("msix: %02x:%02x.%u table in BAR%u is unreachable\n",
                     dev->bus, dev->device, dev->function, bir);
         return 0;

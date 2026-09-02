@@ -68,6 +68,7 @@ struct xhci_hc {
     // capability base, or 0 for a controller that has none (QEMU).
     // Found by the walk, used by the handoff.
     uint32_t legsup_off;
+    uint32_t cap_len;    // bytes BAR0 decodes: the bound on every register offset
     uint8_t  ac64;
     uint32_t page_size;
 
@@ -291,22 +292,19 @@ static int usb_traced(void) {
 // one Intel laptop hangs on it hard enough that the boot stops mid-log
 // line with no further output at all.
 //
-// 64 KiB because that is the usual window and this driver cannot ask
-// for the real size -- there is no pci_bar_mem_size(). That is the
-// proper fix and it is a PCI change (probe by writing all-ones with
-// decode off), not an xHCI one; until it exists this is a conservative
-// cap plus the all-ones check below, which is what actually stops the
-// runaway.
-#define XHCI_XECP_MAX_OFF 0x10000u
+// The bound is the BAR's probed size (g_hc.cap_len); 64 KiB is the
+// fallback for a controller whose BAR the probe could not size, and
+// the all-ones check below is what stops the runaway either way.
+#define XHCI_XECP_FALLBACK_LEN 0x10000u
 
 static void walk_xecp(uint32_t hcc1) {
     uint32_t off = XHCI_HCC1_XECP(hcc1) * 4;   // xECP is in DWORDS
     int hops = 0;
     USBT("usb: trace: xecp walk from +0x%x\n", off);
     while (off && hops++ < 64) {               // bounded: the chain is device-supplied
-        if (off >= XHCI_XECP_MAX_OFF) {
+        if (off + 4 > g_hc.cap_len) {
             klog_printf("usb: xECP chain leaves the register window at +0x%x "
-                        "-- stopping\n", off);
+                        "(BAR0 is 0x%x bytes) -- stopping\n", off, g_hc.cap_len);
             return;
         }
         // BEFORE the read, not only after: if the read itself is what
@@ -327,6 +325,11 @@ static void walk_xecp(uint32_t hcc1) {
             return;
         }
         uint32_t id = XHCI_XECP_ID(v);
+        if (id == XHCI_XECP_ID_PROTO && off + 12 > g_hc.cap_len) {
+            klog_printf("usb: xECP supported-protocol at +0x%x is cut off by the "
+                        "register window -- stopping\n", off);
+            return;
+        }
         if (id == XHCI_XECP_ID_PROTO) {
             // Supported Protocol: name, then the port range it covers.
             uint32_t name  = mr32(g_hc.cap, off + 4);
@@ -1564,6 +1567,9 @@ void usb_init(void) {
 
     g_hc.pci = d;
     g_hc.cap = (volatile uint8_t *)(uintptr_t)bar0;
+    uint64_t bar0_len = pci_bar_mem_size(d, 0);
+    g_hc.cap_len = (bar0_len && bar0_len <= 0xFFFFFFFFull) ? (uint32_t)bar0_len
+                                                            : XHCI_XECP_FALLBACK_LEN;
 
     // Memory space and bus mastering on; INTx stays DISABLED until every
     // structure the handler reads is published. See the commit point at
@@ -1592,9 +1598,9 @@ void usb_init(void) {
     // by everything that builds a context.
     g_hc.csz64 = (uint8_t)XHCI_HCC1_CSZ(hcc1);
 
-    klog_printf("usb: xHCI controller %04x:%04x at %02x:%02x.%u, BAR0 0x%llx\n",
+    klog_printf("usb: xHCI controller %04x:%04x at %02x:%02x.%u, BAR0 0x%llx (0x%x bytes)\n",
                 d->vendor_id, d->device_id, d->bus, d->device, d->function,
-                (unsigned long long)bar0);
+                (unsigned long long)bar0, g_hc.cap_len);
 
     // THE CAPABILITY WALK COMES FIRST, because the BIOS handoff is in
     // it and the handoff has to happen before the reset -- resetting a

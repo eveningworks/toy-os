@@ -79,6 +79,13 @@ static volatile uint8_t *map_window(const struct pci_device *d, uint8_t cap,
         klog_printf("virtio: %s window offset+length overflows\n", what);
         return 0;
     }
+    // The capability is device-supplied; the BAR's size is not.
+    uint64_t bar_len = pci_bar_mem_size(d, bar_index);
+    if (bar_len && (uint64_t)offset + length > bar_len) {
+        klog_printf("virtio: %s window +0x%x..+0x%x is outside BAR %u (0x%llx bytes)\n",
+                    what, offset, offset + length, bar_index, (unsigned long long)bar_len);
+        return 0;
+    }
     uint64_t addr = base + offset;
     if (addr + length > VIRTIO_ADDR_LIMIT) {
         // The one failure that would need real work to fix, so it says so.

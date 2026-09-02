@@ -34,12 +34,15 @@ struct pci_device {
     uint8_t interrupt_line; // 0xFF conventionally means "not connected"
     // Raw BAR values (offsets 0x10-0x24), decoded only as far as
     // "I/O or memory, and the base address" -- see pci.c's
-    // pci_bar_is_io()/pci_bar_addr() for the decode. NOT size-probed
-    // (the write-0xFFFFFFFF-and-read-back trick that reveals a BAR's
-    // address-space size) -- deferred until an actual driver needs to
-    // map one, since size-probing means temporarily disabling the
-    // device's decode and isn't needed just to enumerate/identify it.
+    // pci_bar_is_io()/pci_bar_addr() for the decode.
     uint32_t bar[6];
+    // Bytes each MEMORY BAR decodes, size-probed once at enumeration
+    // (write all-ones, read back, restore -- the mask's low set bit).
+    // 0 for an I/O BAR, an unimplemented one, or the upper-half slot of
+    // a 64-bit BAR. Drivers ask pci_bar_mem_size() rather than reading
+    // this, so the probe has ONE owner and no driver ever toggles a
+    // device's decode.
+    uint64_t bar_size[6];
 };
 
 #define PCI_MAX_DEVICES 32

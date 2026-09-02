@@ -750,6 +750,29 @@ whole class is invisible to every automated test here, and the only
 oracle is real hardware. That is also why it survived so long: the same
 code enumerated QEMU devices perfectly for months.
 
+## A BAR'S SIZE IS PROBED ONCE, AT ENUMERATION, AND A DRIVER ASKS `pci_bar_mem_size()`
+
+`pci_init()` sizes every memory BAR with the standard probe (decode
+off, write all-ones, read the mask back, restore) and records the
+answer in `struct pci_device.bar_size[]`; `pci_bar_mem_size(dev, index)`
+is how a driver reads it. **No driver runs the probe itself**: it turns
+the device's decode off, so run from a driver it would run under
+whoever is already using the device. Enumeration is before interrupts
+and before the console reaches a framebuffer, which is what makes the
+window safe -- the same reason Linux sizes in `__pci_read_base()` and
+hands drivers `pci_resource_len()`.
+
+Three things to know. **A type-1 bridge header has TWO BARs**, and its
+0x18 holds bus numbers -- the probe is bounded by header type, or it
+renumbers the bus behind a bridge. **A host bridge keeps decoding
+throughout** (Linux's `mmio_always_on`): some chipsets hang when it is
+switched off. And **0 means "could not size"**, not "zero bytes" -- a
+consumer treats it as no bound, which is why the xHCI walk keeps a
+64 KiB fallback. The consumers today: `xhci.c` bounds its extended
+capability walk by BAR0, `virtio_pci.c` refuses a capability window
+past its BAR, and `pci_msi.c` refuses an MSI-X table past its BAR.
+`lspci` prints the size after each memory BAR.
+
 ## USB IS xHCI ONLY, ITS PORTS WAIT ON PED RATHER THAN PRC, AND EVERY DMA OBJECT IS ITS OWN FRAME
 
 `kernel/drivers/usb/` is the BUS: one host controller driver
