@@ -4127,3 +4127,65 @@ rest -- outside a damage rect that covers only the menu. The button's
 state change needs its own `wm_damage_rect()`; not fixed because it
 was found at the end of a long session, and recorded so the next sweep
 does not report it as new.
+
+## The compositor keeps a live mapping of a destroyed window's SECOND buffer, pointing at frames the allocator has taken back
+
+Found 2026-09-02 while checking `meminfo --audit` on the bare-metal
+laptop after the ">4 GiB" work, which is the first time anything had run
+that audit against a desktop that had been USED. It found 1933 dangling
+mappings held by `toywm`, all inside one window slot.
+
+**PRE-EXISTING, measured.** The script below gives 0, then 113, then 208
+on `343b233a` and the identical 0, 113, 208 on `846f91b1`. The
+`>4 GiB` change moved these frames above 4 GiB and did not create the
+dangling mapping.
+
+**The reproduction**, about thirty seconds:
+
+```python
+import sys, time
+sys.path.insert(0, "tools")
+from gui_debug import DebugConsole
+con = DebugConsole(".vm.serial", timeout=60.0)
+def dangling():
+    return con.send("sh meminfo --audit").count("-> frame")
+print(dangling())                 # 0
+con.open_app("Disk Mark"); time.sleep(1.5)
+con.send("gui close 0");   time.sleep(1.5)
+print(dangling())                 # 113 -- exactly the window's page count
+```
+
+The count is exactly `cw->pages` per window destroyed, and the addresses
+begin at `win_compositor_vaddr(pid, id) + WIN_BUFFER_HALF`.
+
+**The cause.** `comp_map()` maps BOTH buffers into the compositor's
+slot: buffer 0 at the slot base and buffer 1 at `+WIN_BUFFER_HALF`,
+deliberately, so that presenting is a number rather than a remap. Every
+revocation path describes only the first range. `comp_clear()` walks
+`[0, comp_span)`; `comp_poison()` and `comp_poison_range()` take indices
+into the same range; and `comp_span` is set to `cw->pages` plus the
+poisoned tail, which never accounts for the second buffer at all. So
+`destroy_window()` poisons buffer 0's range, frees both buffers'
+frames, and leaves the compositor with `cw->pages` present, writable
+PTEs pointing at buffer 1's freed frames.
+
+Three consequences, in increasing order of seriousness. The frames are
+handed out again, so the compositor can read another process's memory
+through a stale mapping. It can WRITE through it -- the second-buffer
+mapping is created writable. And nothing notices, because the
+compositor only reads that range when the window's `front` says buffer
+1, which a destroyed window's slot never says again.
+
+**Why no test caught it.** `win_server_test.c` asserts that destroying a
+window poisons the compositor's mapping, and it does -- of buffer 0. The
+fixture's windows are 64x32, one page each, so the checks look at the
+slot base and never at `+WIN_BUFFER_HALF`. A check that walks the whole
+slot, or that runs `vmm_audit_space()` on the compositor after a
+destroy, is what would have found it.
+
+**The shape of a fix.** Every operation on the compositor's slot has to
+describe TWO ranges rather than one, or `comp_span` has to become an
+extent that covers the second buffer's offset. The invariant to preserve
+is the one `comp_poison()` already states: while the window lives the
+slot is never a hole, and only the compositor's own teardown may leave
+it unmapped.
