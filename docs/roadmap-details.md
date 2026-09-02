@@ -4127,3 +4127,35 @@ rest -- outside a damage rect that covers only the menu. The button's
 state change needs its own `wm_damage_rect()`; not fixed because it
 was found at the end of a long session, and recorded so the next sweep
 does not report it as new.
+
+## `uapp_relayout()`: invalidate the layout and flush ONE pass before the next paint, as `uapp_redraw()` already does for painting
+
+`uapp` runs `uui_layout_run()` on exactly three events: the window
+opening, a resize, and a font change. An app that MUTATES its own layout
+tree gets nothing -- swapping which widget a container holds, or changing
+a `uui_layout.count`, leaves every affected widget with the zero geometry
+it was born with. `uui_meter_draw()` and friends return early on a
+zero-sized box, so the page simply does not appear.
+
+**It has bitten twice.** System Settings re-runs the layout by hand in
+`apply_split()`. Task Manager's Overview tab drew nothing at all the
+first time it was built, for the same reason, and now carries the same
+manual call. A workaround being copied between apps is the signal.
+
+**The fix is NOT to relayout every frame.** `natural_size()` measures
+text, which measures glyphs, and a terminal repainting at speed would
+pay that on every paint. Every comparable toolkit invalidates and
+flushes once instead: Qt's `updateGeometry()`, GTK's
+`gtk_widget_queue_resize()` against the frame clock, Cocoa's
+`setNeedsLayout` plus `layoutIfNeeded`, and the browser's layout flush
+before paint.
+
+Toykit already has this shape for painting -- `uapp_redraw()` sets
+`a->dirty` and one place clears it, and `uapp.h` describes the
+coalescing as the point. The layout twin is a second flag, an
+`uapp_relayout()` beside `uapp_redraw()`, and one `uui_layout_run()` in
+the paint path guarded by it. Both existing manual calls then go away.
+
+**The test that would have caught the original bug**: swap a container's
+child, paint, and assert the new child reports a non-zero rect through
+its `bounds` op.

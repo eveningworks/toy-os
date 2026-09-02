@@ -175,6 +175,36 @@ void geom_fill_circle(const struct geom_target *t, int cx, int cy, int r,
                        uint32_t color) {
     geom_fill_ellipse(t, cx, cy, r, r, color);
 }
+void geom_fill_ring(const struct geom_target *t, int cx, int cy,
+                     int r_outer, int r_inner, fx_t from, fx_t to,
+                     uint32_t color) {
+    if (!t || !t->plot || r_outer < 0) return;
+    if (r_inner < 0) r_inner = 0;
+    if (r_inner > r_outer) return;
+
+    fx_t sweep = to - from;
+    if (sweep <= 0) return;
+    if (sweep > FX_ONE) sweep = FX_ONE;   // more than a full turn is a full turn
+
+    // One full turn is 2*pi*r_outer pixels around, so eight samples per
+    // unit of radius over-samples it comfortably; the +16 keeps a tiny
+    // ring from being drawn as a polygon.
+    int64_t steps = 8 * (int64_t)r_outer + 16;
+    if (steps > 32768) steps = 32768;
+    int64_t n = (steps * sweep) / FX_ONE;
+    if (n < 1) n = 1;
+
+    for (int64_t i = 0; i <= n; i++) {
+        fx_t turns = from + (fx_t)(((int64_t)sweep * i) / n);
+        fx_t c = fx_cos(turns), sn = fx_sin(turns);
+        for (int r = r_inner; r <= r_outer; r++) {
+            fx_t fr = fx_from_int(r);
+            put(t, cx + fx_round(fx_mul(fr, c)),
+                   cy + fx_round(fx_mul(fr, sn)), color, 255);
+        }
+    }
+}
+
 
 // --- transforms -------------------------------------------------------
 

@@ -224,6 +224,20 @@ def main():
     # Wait for the app to report a real layout, not a fixed guess.
     wait_layout(dbg, lambda l: "table" in l and "row_h" in l)
 
+    # TASK MANAGER OPENS ON ITS OVERVIEW PAGE, so every check below --
+    # all of which are about the process table -- has to select the
+    # Processes tab first. The tab rect comes from the app own
+    # "layout tab1" line rather than being computed here: a tab is as
+    # wide as its label, so a guessed x lands on the wrong one the day
+    # somebody renames it.
+    lay0 = layout(dbg)
+    win0 = window(dbg)
+    if "tab1" in lay0 and win0:
+        tx, ty, tw, th = lay0["tab1"]
+        c = win0["content"]
+        dbg.send("gui click %d %d" % (c["x"] + tx + tw // 2, c["y"] + ty + th // 2))
+        dbg.settle()
+
     win = window(dbg)
     if not check("Task Manager opened", win is not None):
         print("\nnothing to drive -- the checks below would be vacuous")

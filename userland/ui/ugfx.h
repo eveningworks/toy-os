@@ -444,6 +444,13 @@ void ugfx_fill_circle(struct ugfx_surface *s, int cx, int cy, int r, uint32_t co
 void ugfx_fill_ellipse(struct ugfx_surface *s, int cx, int cy, int rx, int ry,
                         uint32_t color);
 
+// A filled annulus sector -- what a ring gauge is made of. Angles are
+// TURNS (fixed.h), turn 0 at 3 o'clock, positive going clockwise on
+// screen. See geom_fill_ring().
+void ugfx_fill_ring(struct ugfx_surface *s, int cx, int cy,
+                     int r_outer, int r_inner, fx_t from, fx_t to,
+                     uint32_t color);
+
 // Alpha-blends one pixel into the surface. The geometry above uses it
 // for partial coverage; exposed because a client drawing its own
 // gradients or shadows wants the same thing.

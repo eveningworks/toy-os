@@ -596,6 +596,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] Find/replace in Notepad
 - [x] ~~An image viewer~~ DONE 2026-08-23 -- Image Viewer browses a directory rather than opening a file dialog
 - [ ] Scientific mode for Calculator
+- [ ] `uapp_relayout()`: invalidate the layout and flush ONE pass before the next paint, as `uapp_redraw()` already does for painting
 - [ ] CPU/memory history graphs in Task Manager
 - [ ] Per-app settings persisted via `/etc/<app>.conf` (the convention exists, only `desktop.conf` uses it)
 - [ ] `Terminal=true` on a `.desktop` entry, so a TUI program can be launched from the desktop

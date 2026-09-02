@@ -970,6 +970,13 @@ int  scheduler_test_state(int idx);
 // vga_present()): those belong to whoever owns the screen, and the GUI
 // desktop owns it while it is up. This is idle work that is safe
 // wherever the kernel is idle.
+// The machine's time, split where the scheduler already bills it: total
+// nanoseconds charged to scheduled processes, and total charged to
+// nobody. A caller takes two samples and divides the deltas -- see
+// QUERY_CPULOAD in abi/query_abi.h for what `kernel_ns` does and does
+// not include. Either pointer may be NULL.
+void scheduler_cpu_time(uint64_t *proc_ns, uint64_t *kernel_ns);
+
 void scheduler_idle(void);
 
 // ---- critical sections that must not be preempted -------------------

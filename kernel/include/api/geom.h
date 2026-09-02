@@ -82,6 +82,23 @@ void geom_fill_ellipse(const struct geom_target *t, int cx, int cy, int rx, int 
 void geom_fill_circle(const struct geom_target *t, int cx, int cy, int r,
                        uint32_t color);
 
+// A filled annulus SECTOR: everything between `r_inner` and `r_outer`,
+// swept from `from` to `to`. This is what a ring gauge is made of, and
+// a stack of concentric geom_ellipse() calls is not -- adjacent radii
+// leave gaps the eye reads as moire.
+//
+// Swept as radial SPOKES rather than as scanlines, because a scanline
+// has to be clipped against the angular limits and a spoke already is
+// one. Sampled densely enough that neighbouring spokes touch at the
+// OUTER edge, which is where they are furthest apart.
+//
+// ANGLES ARE TURNS (fixed.h), and turn 0 is at 3 o'clock with positive
+// turns going CLOCKWISE on screen, because y grows downward. A gauge
+// that wants to start at the top passes `from = -FX_ONE / 4`.
+void geom_fill_ring(const struct geom_target *t, int cx, int cy,
+                     int r_outer, int r_inner, fx_t from, fx_t to,
+                     uint32_t color);
+
 // --- 2D transforms ----------------------------------------------------
 //
 // The minimum needed to rotate a shape about a point, which is what

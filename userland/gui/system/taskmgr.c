@@ -49,12 +49,33 @@
 #include "ui/uui_layout.h"
 #include "ui/uui_widget.h"
 #include "ui/uui_route.h"   // UUI_REASON_KEY
+#include "ui/uui_tabs.h"
+#include "ui/uui_meter.h"
+#include "ui/uui_scrollview.h"
+#include "query_abi.h"
 
 
 #define ID_TABLE   1
 #define ID_END     2
 #define ID_KILL    3
 #define ID_BUTTONS 4
+#define ID_TABS    5
+
+// --- the Overview page -----------------------------------------------
+//
+// KDE's System Monitor overview, with the readings this machine can
+// actually back. Its screenshot also carries GPU and Swap rings; toy-os
+// has neither -- there is no GPU utilisation fact anywhere, and the
+// whole swap track is unbuilt (docs/roadmap.md) -- and a gauge that is
+// permanently empty teaches a reader to distrust the ones beside it.
+//
+// CPU and Memory are RINGS because they are a fraction of a fixed
+// whole. Disks are BARS because there may be several and they stack; a
+// row of rings for four mounts is a lot of ink for four percentages.
+// Same widget both times, which is why uui_meter grew a style rather
+// than a sibling.
+#define OV_DISKS_MAX 4
+#define OV_METERS    (2 + OV_DISKS_MAX)
 
 // How often to re-read the process table, in milliseconds. Paced by a
 // TWS timer (uapp.h's tick_ms), so the app BLOCKS in between rather
@@ -245,8 +266,20 @@ static int selected_pid(void) {
     return g_rows[sel].pid;
 }
 
+static struct uui_tab TABS[2] = { { "Overview", 0 }, { "Processes", 0 } };
+static struct uui_tabs g_tabs;
+
+static void select_page(struct uapp *a, int index);
+
 static void on_widget(struct uapp *a, int id, int reason) {
     (void)reason;
+
+    if (id == ID_TABS) {
+        select_page(a, g_tabs.selected);
+        ulogf("taskmgr: page %d\n", g_tabs.selected);
+        uapp_redraw(a);
+        return;
+    }
 
     if (id == ID_TABLE) {
         // The selection moved: any arm was aimed at the previous row and
@@ -346,6 +379,163 @@ static void report_sort(int force) {
     ulogf("taskmgr: order %s\n", order);
 }
 
+// THE BODY IS SWAPPED, NOT REBUILT. Both pages are layouts, so
+// selecting a tab changes one pointer -- the pattern System Settings
+// already uses for its pages. The router descends into whichever body
+// is current through uui_layout_ops' `children`, so `widgets` stays the
+// top-level pair and no input wiring changes with the tab.
+static struct uui_item PROC_ITEMS[2];
+static struct uui_layout PROC_LAYOUT;
+static struct uui_item OV_GAUGES[2];   // CPU and Memory, side by side
+static struct uui_layout OV_GAUGE_ROW;
+static struct uui_item OV_ITEMS[1 + OV_DISKS_MAX];
+static struct uui_layout OV_LAYOUT;
+// THE OVERVIEW CAN OVERFLOW: two gauges plus one tile per mount is more
+// than a small window holds, and uui_layout places the surplus PAST the
+// bottom edge with nothing to say it is there. The tab strip stays
+// OUTSIDE it, or it would scroll away with the page (CLAUDE.md).
+static struct uui_scrollview OV_SCROLL;
+static struct uui_item ITEMS[2];
+static struct uui_layout LAYOUT;
+
+
+static int g_ov_count;   // meters actually in use this refresh
+
+// THE LAYOUT HAS TO BE RE-RUN, and that is the whole trick. uapp runs
+// it on open, on resize and on a font change -- not when an app swaps
+// what a container holds, because it cannot know that happened. Without
+// this the meters keep the zero geometry they were born with and the
+// page draws nothing at all, which is exactly how this shipped its
+// first time. System Settings' apply_split() re-runs it for the same
+// reason.
+static void select_page(struct uapp *a, int index) {
+    ITEMS[1].ops    = (index == 0) ? &uui_scrollview_ops : &uui_layout_ops;
+    ITEMS[1].widget = (index == 0) ? (void *)&OV_SCROLL : (void *)&PROC_LAYOUT;
+    // The Overview's tiles are only as many as the machine has; a stale
+    // count would lay out a meter with no strings in it.
+    // The gauge row plus one tile per disk found. g_ov_count counts
+    // METERS, and the first two of those live inside the nested row.
+    OV_LAYOUT.count = 1 + (g_ov_count > 2 ? g_ov_count - 2 : 0);
+    uui_scrollview_content_changed(&OV_SCROLL);
+    if (a) uui_layout_run(&LAYOUT, 0, 0, uapp_width(a), uapp_height(a));
+}
+
+// --- Overview state ---------------------------------------------------
+//
+// EVERY STRING IS A STATIC BUFFER, because uui_meter POINTS AT its
+// strings rather than copying them (uui_meter.h) -- a formatted local
+// would be a dangling pointer the moment refresh() returned, and it
+// would draw perfectly well until the stack was reused.
+static struct uui_meter g_ov[OV_METERS];
+static char g_ov_cap[OV_METERS][24];
+static char g_ov_val[OV_METERS][16];
+static char g_ov_unit[OV_METERS][24];
+static char g_ov_det[OV_METERS][28];
+
+// The CPU split's previous sample. Cumulative counters, so the reading
+// is a ratio of DELTAS -- see QUERY_CPULOAD.
+static unsigned long long g_cpu_prev_proc, g_cpu_prev_kernel;
+static int g_cpu_have_prev;
+
+// Bytes as one decimal, the same shape `meminfo` prints. Its own
+// function rather than format_bytes() above, which renders "1.2 M" for
+// a table cell; a gauge wants the unit spelled out.
+static void ov_size(char *out, int cap, unsigned long long bytes) {
+    static const char *u[] = { "B", "KiB", "MiB", "GiB", "TiB" };
+    int i = 0;
+    unsigned long long whole = bytes, frac = 0;
+    while (whole >= 1024 && i < 4) { frac = (whole % 1024) * 10 / 1024; whole /= 1024; i++; }
+    if (i == 0) snprintf(out, (size_t)cap, "%llu %s", whole, u[0]);
+    else        snprintf(out, (size_t)cap, "%llu.%llu %s", whole, frac, u[i]);
+}
+
+static void ov_set(int i, const char *caption, int per_mille,
+                   const char *value, const char *unit, const char *detail,
+                   enum uui_meter_style style) {
+    if (i < 0 || i >= OV_METERS) return;
+    snprintf(g_ov_cap[i],  sizeof g_ov_cap[i],  "%s", caption);
+    snprintf(g_ov_val[i],  sizeof g_ov_val[i],  "%s", value ? value : "");
+    snprintf(g_ov_unit[i], sizeof g_ov_unit[i], "%s", unit ? unit : "");
+    snprintf(g_ov_det[i],  sizeof g_ov_det[i],  "%s", detail ? detail : "");
+    uui_meter_set(&g_ov[i], g_ov_cap[i], g_ov_val[i],
+                  g_ov_unit[i][0] ? g_ov_unit[i] : NULL,
+                  g_ov_det[i][0] ? g_ov_det[i] : NULL);
+    uui_meter_set_fill(&g_ov[i], per_mille);
+    uui_meter_set_style(&g_ov[i], style);
+}
+
+// Re-reads the three system facts behind the Overview. Separate from
+// refresh() because the process table is re-read far more often than
+// this needs to be, and because a failed query here must leave the
+// PROCESS list working -- an Overview that cannot read a disk is a
+// missing tile, not a broken app.
+static void refresh_overview(void) {
+    char val[16], unit[24], det[28];
+    int n = 0;
+
+    // CPU: a ratio of deltas. The first sample has nothing to compare
+    // against, so it reads 0 rather than a made-up number.
+    struct query_cpuload cl;
+    int pct = 0;
+    if (sys_query_record(QUERY_CPULOAD, 0, &cl, sizeof cl) >= (int)sizeof cl) {
+        if (g_cpu_have_prev) {
+            unsigned long long dp = cl.proc_ns - g_cpu_prev_proc;
+            unsigned long long dk = cl.kernel_ns - g_cpu_prev_kernel;
+            if (dp + dk > 0) pct = (int)((dp * 100ULL) / (dp + dk));
+            if (pct > 100) pct = 100;
+        }
+        g_cpu_prev_proc = cl.proc_ns;
+        g_cpu_prev_kernel = cl.kernel_ns;
+        g_cpu_have_prev = 1;
+    }
+    snprintf(val, sizeof val, "%d%%", pct);
+    // No unit under the number: a percentage that moves says "busy" on
+    // its own, and a static word inside the hole is one more thing to
+    // clip. Asked for directly.
+    ov_set(n++, "CPU", pct * 10, val, NULL, NULL, UUI_METER_RING);
+
+    // Memory: used against total, which is every frame the allocator
+    // manages -- the same number About calls "usable".
+    struct query_meminfo mi;
+    if (sys_query_record(QUERY_MEMINFO, 0, &mi, sizeof mi) >= (int)sizeof mi) {
+        unsigned long long total = mi.frame_total * mi.frame_bytes;
+        unsigned long long freeb = mi.frame_free * mi.frame_bytes;
+        unsigned long long used  = total > freeb ? total - freeb : 0;
+        int per = total ? (int)((used * 1000ULL) / total) : 0;
+        snprintf(val, sizeof val, "%d%%", per / 10);
+        ov_size(unit, sizeof unit, used);
+        char t[16];
+        ov_size(t, sizeof t, freeb);
+        snprintf(det, sizeof det, "%s free", t);
+        // "used" not "12.0 GiB used": the hole is only as wide as the
+        // ring's inside, and a string longer than that is CLIPPED, which
+        // reads as a rendering bug rather than as a long label.
+        ov_set(n++, "Memory", per, val, unit, det, UUI_METER_RING);
+    }
+
+    // Disks: one bar per mounted filesystem, root first, capped. A
+    // machine with more mounts than tiles shows the first few rather
+    // than overflowing the page -- uui_layout does not shrink children.
+    struct query_fsinfo fs;
+    for (int i = 0; n < OV_METERS; i++) {
+        int got = sys_query_record(QUERY_FSINFO, i, &fs, sizeof fs);
+        if (got <= 0) break;
+        if (got < (int)sizeof fs) break;
+        if (!(fs.flags & QUERY_FS_MOUNTED) || !fs.total_bytes) continue;
+        int per = (int)((fs.used_bytes * 1000ULL) / fs.total_bytes);
+        snprintf(val, sizeof val, "%d%%", per / 10);
+        ov_size(unit, sizeof unit, fs.used_bytes);
+        char t[16];
+        ov_size(t, sizeof t, fs.total_bytes);
+        snprintf(det, sizeof det, "of %s", t);
+        char cap[24];
+        snprintf(cap, sizeof cap, "%s", fs.point[0] ? fs.point : fs.name);
+        ov_set(n++, cap, per, val, unit, det, UUI_METER_BAR);
+    }
+
+    g_ov_count = n;
+}
+
 static int on_tick(struct uapp *a) {
     // Report the table's rect whenever it CHANGES, not just at open.
     // A geometry logged once at startup cannot show whether a resize
@@ -369,6 +559,8 @@ static int on_tick(struct uapp *a) {
     }
 
     refresh();
+    refresh_overview();
+    select_page(a, g_tabs.selected);
     report_sort(0);
     (void)a;
     return 1; // repaint
@@ -378,6 +570,8 @@ static void on_open(struct uapp *a) {
     (void)a;
     g_prev_ns = sys_monotonic_ns();
     refresh();
+    refresh_overview();
+    select_page(a, g_tabs.selected);
     set_labels();
     // Report the layout for the test tool, per this repo's rule that a
     // geometry a tool would otherwise re-derive belongs in the app's own
@@ -396,6 +590,15 @@ static void on_open(struct uapp *a) {
     ulogf("taskmgr: layout btn_kill %d %d %d %d\n",
             g_buttons[BTN_KILL].x, g_buttons[BTN_KILL].y,
             g_buttons[BTN_KILL].w, g_buttons[BTN_KILL].h);
+    // THE TAB RECTS, because a tab is as wide as its label and a tool
+    // that guessed would click the wrong one the day a label changes.
+    // Same rule as every other layout line here: ask the app.
+    for (int i = 0; i < 2; i++) {
+        int tx, ty, tw, th;
+        if (uui_tabs_rect(&g_tabs, i, &tx, &ty, &tw, &th))
+            ulogf("taskmgr: layout tab%d %d %d %d %d\n", i, tx, ty, tw, th);
+    }
+    ulogf("taskmgr: page %d\n", g_tabs.selected);
     ulogf("taskmgr: rows %d\n", g_row_count);
 
     // The sort state, and the pids IN SCREEN ORDER. The order line is
@@ -442,11 +645,13 @@ static void on_size(int *w, int *h) {
     // resizable and the table reflows, so this is a starting point
     // rather than a constraint.
     *w = ugfx_char_w() * 56;
-    *h = ugfx_char_h() * 20;
+    // Taller than the table alone needed: the Overview's two gauges are
+    // nine text rows each and a disk tile follows them. It still
+    // scrolls when it has to, so this is a comfortable start rather
+    // than a requirement.
+    *h = ugfx_char_h() * 26;
 }
 
-static struct uui_item ITEMS[2];
-static struct uui_layout LAYOUT;
 
 int main(void) {
     uui_table_init(&g_table, 0, 0, 100, 100, COLUMNS, COL_COUNT, cell, 0);
@@ -469,11 +674,47 @@ int main(void) {
                      UTHEME_BUTTON_BG, UTHEME_TEXT, ID_KILL);
     uui_button_group_init(&g_group, g_buttons, 2);
 
-    ITEMS[0] = (struct uui_item){ .ops = &uui_table_ops, .widget = &g_table,
-                                   .id = ID_TABLE,
+    PROC_ITEMS[0] = (struct uui_item){ .ops = &uui_table_ops, .widget = &g_table,
+                                        .id = ID_TABLE,
+                                        .flags = UUI_FILL_W | UUI_FILL_H };
+    PROC_ITEMS[1] = (struct uui_item){ .ops = &uui_button_group_ops,
+                                        .widget = &g_group, .id = ID_BUTTONS };
+    PROC_LAYOUT = (struct uui_layout){ .dir = UUI_COLUMN, .items = PROC_ITEMS,
+                                        .count = 2, .margin = 0 };
+
+    // THE TWO RINGS SIDE BY SIDE, the disks stacked underneath: KDE's
+    // arrangement, and the one that stops a full-width tile spending a
+    // whole row on one circle. Nested layouts, which the router
+    // descends through on its own.
+    for (int i = 0; i < OV_METERS; i++) uui_meter_init(&g_ov[i]);
+
+    OV_GAUGES[0] = (struct uui_item){ .ops = &uui_meter_ops, .widget = &g_ov[0],
+                                       .flags = UUI_FILL_W | UUI_FILL_H };
+    OV_GAUGES[1] = (struct uui_item){ .ops = &uui_meter_ops, .widget = &g_ov[1],
+                                       .flags = UUI_FILL_W | UUI_FILL_H };
+    OV_GAUGE_ROW = (struct uui_layout){ .dir = UUI_ROW, .items = OV_GAUGES,
+                                         .count = 2, .margin = 0 };
+
+    OV_ITEMS[0] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &OV_GAUGE_ROW,
+                                      .flags = UUI_FILL_W };
+    for (int i = 0; i < OV_DISKS_MAX; i++) {
+        OV_ITEMS[1 + i] = (struct uui_item){ .ops = &uui_meter_ops,
+                                              .widget = &g_ov[2 + i],
+                                              .flags = UUI_FILL_W };
+    }
+    OV_LAYOUT = (struct uui_layout){ .dir = UUI_COLUMN, .items = OV_ITEMS,
+                                      .count = 1, .margin = 0 };
+    uui_scrollview_init(&OV_SCROLL, &OV_LAYOUT);
+
+    // No on_select callback: the tab arrives through on_widget like
+    // every other control, which is the one path that carries the
+    // `struct uapp *` the re-layout needs.
+    uui_tabs_init(&g_tabs, TABS, 2, NULL);
+
+    ITEMS[0] = (struct uui_item){ .ops = &uui_tabs_ops, .widget = &g_tabs,
+                                   .id = ID_TABS };
+    ITEMS[1] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &PROC_LAYOUT,
                                    .flags = UUI_FILL_W | UUI_FILL_H };
-    ITEMS[1] = (struct uui_item){ .ops = &uui_button_group_ops,
-                                   .widget = &g_group, .id = ID_BUTTONS };
 
     LAYOUT = (struct uui_layout){ .dir = UUI_COLUMN, .items = ITEMS, .count = 2 };
 

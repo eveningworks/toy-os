@@ -2,6 +2,7 @@
 #include "ui/uui_meter.h"
 #include "ui/uui_widget.h"
 #include "ui/utheme.h"
+#include "fixed.h"
 #include <stddef.h>
 
 // Selects the value's font for one measurement or one paint, restoring
@@ -21,6 +22,7 @@ void uui_meter_init(struct uui_meter *m) {
     m->bg = UTHEME_WHITE;
     m->accent = UTHEME_ACCENT;
     m->value_font = NULL;
+    m->style = UUI_METER_BAR;
 }
 
 void uui_meter_set(struct uui_meter *m, const char *caption,
@@ -33,6 +35,30 @@ void uui_meter_set(struct uui_meter *m, const char *caption,
 
 void uui_meter_set_fill(struct uui_meter *m, int per_mille) {
     m->fill = per_mille;
+}
+
+void uui_meter_set_style(struct uui_meter *m, enum uui_meter_style style) {
+    m->style = style;
+}
+
+// --- ring geometry, all of it derived from the font ------------------
+//
+// Not a pixel constant anywhere: the ring is sized in text rows, so the
+// whole gauge grows with the session font exactly as the chrome around
+// it does (docs/gui-guidelines.md's "size everything from the font").
+#define RING_ROWS      9   // the ring's diameter, in text rows
+// THE HOLE HOLDS TWO SHORT ROWS, NOT THREE. `detail` goes BELOW the
+// ring on the tile's full width, because a hole is only as wide as the
+// ring's inside and the strings a caller wants there are not: "7.8 GiB
+// free" was clipped to "7.8 GiB fre", which reads as a rendering bug
+// rather than as a long label. Clipping is the backstop, not the plan.
+#define RING_TEXT_ROWS 2   // value and unit, stacked inside the hole
+
+// The ring's thickness. A fraction of the row pitch rather than a
+// constant, and floored so it never vanishes on a tiny font.
+static int ring_thickness(void) {
+    int t = ugfx_char_h() / 2;
+    return t < 4 ? 4 : t;
 }
 
 // EVERY ROW IS RESERVED WHETHER OR NOT IT IS USED, and that is the
@@ -81,6 +107,117 @@ void uui_meter_natural_size(const struct uui_meter *m, int *out_w, int *out_h) {
         // plus the bar and the padding. Nothing here reads a string.
         *out_h = METER_TEXT_ROWS * line + value_h + line + pad * 2;
     }
+
+    // A RING IS SQUARE-ISH, and its width is a floor rather than a
+    // replacement: a long caption still has to fit, so the wider of the
+    // two wins. Measuring the ring as an EXTENT and not from wherever
+    // the widget currently sits is CLAUDE.md's natural_size rule.
+    if (m->style == UUI_METER_RING) {
+        int d = RING_ROWS * line;
+        if (out_w && d + pad * 2 > *out_w) *out_w = d + pad * 2;
+        // Caption row, the ring, then the detail row under it -- all
+        // three reserved whether or not they carry anything, the same
+        // rule the bar style follows.
+        if (out_h) *out_h = line + d + line + pad * 2;
+    }
+}
+
+// The ring presentation: a caption row, then a track with the filled
+// sweep over it, and the value stacked inside the hole.
+static void draw_ring(struct ugfx_surface *s, const struct uui_meter *m) {
+    int pad = utheme_pad();
+    int line = ugfx_char_h();
+    int x = m->x + pad;
+    int inner = m->w - pad * 2;
+    if (inner <= 0) return;
+
+    int top = m->y + pad;
+    if (m->caption) {
+        // Centred over the ring, which is what makes the tiles read as a
+        // row of gauges rather than as left-aligned boxes.
+        int cw = ugfx_text_width(m->caption);
+        int cx = x + (inner - cw) / 2;
+        if (cx < x) cx = x;
+        ugfx_draw_string_clipped(s, cx, top, inner, m->caption, m->fg, m->bg);
+    }
+    top += line;
+
+    // The largest ring that fits what is left, so a tile stretched by a
+    // layout grows its gauge instead of stranding it in a corner. One
+    // row is held back for the detail line under it.
+    int avail_h = m->y + m->h - pad - top - line;
+    int d = inner < avail_h ? inner : avail_h;
+    // CAPPED. A gauge is a gauge at any window size -- letting it grow
+    // to fill a maximised tile makes a dinner plate, and the arc's cost
+    // is proportional to its radius times its thickness, so an unbounded
+    // ring is also an unbounded amount of work every frame.
+    int dmax = RING_ROWS * line * 2;
+    if (d > dmax) d = dmax;
+    if (d < 8) return;                       // too small to be a gauge at all
+    int r_outer = d / 2 - 1;
+    int thick = ring_thickness();
+    if (thick > r_outer - 2) thick = r_outer - 2;
+    if (thick < 1) return;
+    int r_inner = r_outer - thick;
+    int cx = x + inner / 2;
+    int cy = top + d / 2;
+
+    // TURN 0 IS 3 O'CLOCK and y grows downward, so a gauge that starts
+    // at the top begins a quarter turn earlier (geom.h).
+    fx_t start = -FX_ONE / 4;
+    // THE TRACK NEEDS REAL CONTRAST. The bar style's trough is
+    // UTHEME_PANEL_BG, which works there because it is a thin strip
+    // held by a border -- as a wide arc on this near-white theme it was
+    // invisible, and an empty gauge read as a broken one. Shifted by
+    // uui_state_bg() rather than hand-picked, which is what makes the
+    // direction follow the theme's luminance instead of assuming light.
+    ugfx_fill_ring(s, cx, cy, r_outer, r_inner, start, start + FX_ONE,
+                   uui_state_bg(UTHEME_PANEL_BG, UUI_STATE_PRESSED));
+    if (m->fill >= 0) {
+        int fill = m->fill > 1000 ? 1000 : m->fill;
+        // A sweep rounded to zero would draw nothing, which reads as a
+        // broken gauge rather than as an empty one; the track behind it
+        // is what says "empty", so zero really is nothing here.
+        fx_t sweep = (fx_t)(((int64_t)FX_ONE * fill) / 1000);
+        if (sweep > 0) ugfx_fill_ring(s, cx, cy, r_outer, r_inner,
+                                      start, start + sweep, m->accent);
+    }
+    ugfx_draw_circle(s, cx, cy, r_outer, UTHEME_BORDER, GEOM_AA);
+    ugfx_draw_circle(s, cx, cy, r_inner, UTHEME_BORDER, GEOM_AA);
+
+    // The value, unit and detail stacked and centred in the HOLE. The
+    // hole is 2*r_inner across, and text wider than that is clipped to
+    // it rather than drawn over the ring.
+    int hole = r_inner * 2 - 2;
+    if (hole <= 0) return;
+    const char *rows[RING_TEXT_ROWS] = { m->value, m->unit };
+    int used = 0;
+    for (int i = 0; i < RING_TEXT_ROWS; i++) if (rows[i]) used += line;
+    if (rows[0] && m->value_font) {
+        const struct ugfx_font *was = push_value_font(m);
+        used += ugfx_char_h() - line;
+        ugfx_set_font(was);
+    }
+    int ty = cy - used / 2;
+    for (int i = 0; i < RING_TEXT_ROWS; i++) {
+        if (!rows[i]) continue;
+        const struct ugfx_font *was = (i == 0) ? push_value_font(m) : NULL;
+        int tw = ugfx_text_width(rows[i]);
+        int tx = cx - tw / 2;
+        if (tx < cx - hole / 2) tx = cx - hole / 2;
+        ugfx_draw_string_clipped(s, tx, ty, hole, rows[i], m->fg, m->bg);
+        ty += ugfx_char_h();
+        if (was) ugfx_set_font(was);
+    }
+
+    // The detail, centred UNDER the ring on the tile's full width --
+    // where a long string fits.
+    if (m->detail) {
+        int dw = ugfx_text_width(m->detail);
+        int dx = x + (inner - dw) / 2;
+        if (dx < x) dx = x;
+        ugfx_draw_string_clipped(s, dx, top + d, inner, m->detail, m->fg, m->bg);
+    }
 }
 
 void uui_meter_draw(struct ugfx_surface *s, const struct uui_meter *m) {
@@ -88,6 +225,8 @@ void uui_meter_draw(struct ugfx_surface *s, const struct uui_meter *m) {
 
     ugfx_fill_rect(s, m->x, m->y, m->w, m->h, m->bg);
     ugfx_draw_rect(s, m->x, m->y, m->w, m->h, UTHEME_BORDER);
+
+    if (m->style == UUI_METER_RING) { draw_ring(s, m); return; }
 
     int pad = utheme_pad();
     int line = ugfx_char_h();

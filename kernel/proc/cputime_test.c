@@ -20,6 +20,7 @@
 #include "ktest.h"
 #include "scheduler.h"
 #include "timer.h"
+#include "clocksource.h"
 #include "fs.h"
 
 #define CPUTIME_TEST_PATH "/tests/cputime_test"
@@ -53,3 +54,54 @@ KTEST("sched", "a yielding process is not billed more ticks than elapsed") {
 // scheduler_yield() into a no-op would otherwise pass this file
 // perfectly. The child requires its own loop to have made real progress
 // against the wall clock before it reports success.
+
+// --- the machine-wide split (QUERY_CPULOAD) --------------------------
+//
+// The counters a caller divides for a system CPU percentage. A KTEST
+// runs in the RING-0 context, which is exactly what makes the second
+// check discriminating: work done here must land in `kernel_ns`, and a
+// version that billed everything to `proc_ns` would look perfectly
+// plausible on a busy machine and be wrong on this one.
+KTEST("sched", "the machine-wide CPU split advances and lands in the right bucket") {
+    uint64_t p0 = 0, k0 = 0, p1 = 0, k1 = 0;
+    scheduler_cpu_time(&p0, &k0);
+
+    // Long enough to be several timer ticks at 100 Hz, so the result
+    // does not depend on the clocksource's resolution.
+    uint64_t start = clocksource_now_ns();
+    volatile uint64_t sink = 0;
+    while (clocksource_now_ns() - start < 50ull * 1000 * 1000) sink++;
+    (void)sink;
+
+    scheduler_cpu_time(&p1, &k1);
+
+    // Neither counter may go backwards -- they are cumulative since boot.
+    KTEST_ASSERT(p1 >= p0);
+    KTEST_ASSERT(k1 >= k0);
+
+    // The spin was ring-0 work, so it is the KERNEL bucket that moved,
+    // and it moved by most of the wall time. A tolerance rather than an
+    // equality because the timer interrupt runs during the spin.
+    uint64_t dk = k1 - k0, dp = p1 - p0;
+    KTEST_ASSERT(dk > 40ull * 1000 * 1000);
+    KTEST_ASSERT(dk > dp);
+
+    // And the two together cannot exceed the wall clock: a slice
+    // charged to both buckets, or charged twice, shows up here.
+    KTEST_ASSERT(dk + dp <= (clocksource_now_ns() - start) + 10ull * 1000 * 1000);
+}
+
+// The reading is FRESH: scheduler_cpu_time() bills the slice in
+// progress rather than reporting whatever the last rotation left. Two
+// reads either side of a spin must differ even though no rotation is
+// forced between them.
+KTEST("sched", "the CPU split includes the slice still running") {
+    uint64_t k0 = 0, k1 = 0;
+    scheduler_cpu_time(0, &k0);
+    uint64_t start = clocksource_now_ns();
+    volatile uint64_t sink = 0;
+    while (clocksource_now_ns() - start < 20ull * 1000 * 1000) sink++;
+    (void)sink;
+    scheduler_cpu_time(0, &k1);
+    KTEST_ASSERT(k1 - k0 > 15ull * 1000 * 1000);
+}

@@ -24,6 +24,16 @@
 // one passes through to whatever is behind. That is deliberate -- a
 // reading is not a control.
 
+// HOW THE READING IS PRESENTED. Same widget, same fields, same
+// caller: only the picture differs. A ring is what KDE's System Monitor
+// draws and it says "how full is this, right now"; a bar says the same
+// thing in a strip and packs into a row. Two widgets would mean two
+// places to fix a caption that clips.
+enum uui_meter_style {
+    UUI_METER_BAR = 0,   // caption, value, unit, detail, then a fill bar
+    UUI_METER_RING,      // a caption over a ring, with the value inside it
+};
+
 struct uui_meter {
     int x, y, w, h;
 
@@ -59,6 +69,11 @@ struct uui_meter {
     // drawn in another lands in a box sized for something else. NULL
     // means the session's bold weight.
     const struct ugfx_font *value_font;
+
+    // UUI_METER_BAR unless set. In RING style `fill` is the sweep and a
+    // negative one draws the track alone, exactly as it suppresses the
+    // bar.
+    enum uui_meter_style style;
 };
 
 // Sets the palette from the theme and everything else to empty. Call
@@ -76,6 +91,10 @@ void uui_meter_set(struct uui_meter *m, const char *caption,
 // _set() because a caller often knows the value long before it knows
 // what to compare it against.
 void uui_meter_set_fill(struct uui_meter *m, int per_mille);
+
+// Bar or ring. Separate from _init() so a caller that wants the default
+// never mentions it, and so switching a meter over is one line.
+void uui_meter_set_style(struct uui_meter *m, enum uui_meter_style style);
 
 void uui_meter_natural_size(const struct uui_meter *m, int *out_w, int *out_h);
 void uui_meter_draw(struct ugfx_surface *s, const struct uui_meter *m);

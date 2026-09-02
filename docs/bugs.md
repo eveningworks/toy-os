@@ -56,6 +56,8 @@ it has exonerated one this session and convicted another.
 
 ## Seen once, cause never established
 
+- [ ] Task Manager's title bar read `(Not Responding)` on the bare-metal laptop while the app was drawing and answering clicks normally, 2026-09-02, on the first instance spawned after the Overview page landed. `ps` showed it `block(event)` -- the healthy state -- and the flag is not latched (`on_window_pong()` clears it), so it was failing to pong while its loop turned. NOT REPRODUCED: a fresh spawn on the same build stayed `false` across ~10 minutes of sampling, and 5 samples over 15 s in QEMU never showed it. The WM's own `client pid N is not responding` line had already rolled out of the klog ring, because Task Manager floods it with a `layout col*`/`order` block per sort report -- capture that line before the ring turns over next time. The instance was one the maintainer had been resizing and clicking; an unbounded ring gauge on a maximised window was a plausible per-frame cost and has been capped since, which is a MITIGATION and not a diagnosis
+
 - [ ] `atac`'s "a flush writes back everything dirty" failed once inside a full `preflight.sh` on 2026-09-02 (`FAIL: (int)written`) and passed 3 runs in 3 as `ktest atac` immediately after; cause not established
 - [ ] `tools/poweroff_test.py` reported 18/20 once, on the first run after the GPE mask/clear/restore change, and did not reproduce in 3 runs immediately after on the same build. WHICH TWO CHECKS FAILED WAS NOT CAPTURED -- the run was grepped down to its summary line, which is the mistake to avoid repeating (`tee` the whole output when a session is doing many runs)
 

@@ -379,6 +379,12 @@ _Static_assert(sizeof(struct query_fontglyph) <= 256,
 // was recorded only in the boot log. See api/driver.h.
 #define QUERY_DRIVER 29
 
+// How the machine's time was spent, so a caller can compute a SYSTEM
+// CPU percentage rather than summing per-process ones. Summing misses a
+// process that started and exited between two samples, and it has no
+// denominator of its own.
+#define QUERY_CPULOAD 30
+
 #define QUERY_KLOG_DATA 232
 
 struct query_klog {
@@ -561,6 +567,24 @@ struct query_mmaudit {
 // QUERY_VERSION's record. Fixed char arrays rather than pointers: a
 // query copies a record to ring 3, and a pointer into kernel .rodata is
 // not something ring 3 can follow.
+// QUERY_CPULOAD's record. Two CUMULATIVE nanosecond counters and the
+// clock they were read against: a caller takes two samples and divides
+// the deltas, which is the only form that survives a counter having
+// been running since boot.
+//
+// The split is where the scheduler already bills (bill_current()), so
+// it cannot drift from what `ps` reports. `kernel_ns` is time the
+// machine was NOT running a scheduled process, which on a graphical
+// boot is the halted idle loop -- but on a `text` boot it also holds
+// the ring-0 shell, which is real work counted as not-busy. Stated
+// rather than hidden: a true idle figure needs the halt bracketed, and
+// a halt here can span another process's slice.
+struct query_cpuload {
+    uint64_t proc_ns;   // charged to scheduled processes, all slots
+    uint64_t kernel_ns; // the ring-0 context: the idle halt, and the text shell
+    uint64_t now_ns;    // the monotonic clock both were read against
+};
+
 // QUERY_DRIVER's record. `devices` is space-separated and may be empty,
 // which is a real answer -- "in this build, driving nothing".
 struct query_driver {

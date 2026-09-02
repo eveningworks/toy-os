@@ -163,6 +163,9 @@ void query_init(void);
 // because it is about the registry, not about the allocator.
 void mem_query_init(void);
 
+// The machine's CPU time split (QUERY_CPULOAD). kernel/proc/cpuload_query.c.
+void cpuload_query_init(void);
+
 // kernel/core/'s provider for the firmware memory map. Declared here
 // rather than in multiboot.h for the same reason -- it is about the
 // registry, not about parsing multiboot tags.

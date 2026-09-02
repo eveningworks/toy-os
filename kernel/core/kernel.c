@@ -371,6 +371,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // providers; the core registers the registry's self-description.
     query_init();
     mem_query_init();
+    cpuload_query_init();
     multiboot_query_init();
     fs_query_init();
     mm_audit_query_init();

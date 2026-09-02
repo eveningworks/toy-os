@@ -1178,16 +1178,36 @@ int scheduler_max_procs(void) { return MAX_PROCS; }
 // The invariant: every path that stops running the current process
 // calls bill_current() BEFORE changing current_index. Miss one and
 // that slice is credited to whoever runs next.
+// The same slices, totalled machine-wide, so a caller can divide rather
+// than sum per-process percentages -- which miss a process that started
+// and exited between two samples. Read through QUERY_CPULOAD.
+static uint64_t g_proc_ns = 0;   // charged to some slot
+static uint64_t g_kernel_ns = 0; // charged to nobody: the idle halt, or the text shell
+
 static void bill_current(void) {
     uint64_t now = clocksource_now_ns();
-    if (current_index >= 0 && now > g_run_start_ns) {
-        procs[current_index].cpu_ns += now - g_run_start_ns;
+    if (now > g_run_start_ns) {
+        uint64_t slice = now - g_run_start_ns;
+        if (current_index >= 0) {
+            procs[current_index].cpu_ns += slice;
+            g_proc_ns += slice;
+        } else {
+            g_kernel_ns += slice;
+        }
     }
     // Reset unconditionally, including when the KERNEL context was
-    // running: its time belongs to nobody, and leaving the old start
-    // in place would hand the next process everything the kernel just
-    // spent.
+    // running: leaving the old start in place would hand the next
+    // process everything the kernel just spent.
     g_run_start_ns = now;
+}
+
+void scheduler_cpu_time(uint64_t *proc_ns, uint64_t *kernel_ns) {
+    // Billed first, so the slice in progress is not missing from the
+    // answer -- without it a machine running ONE busy process reports
+    // whatever it had at the last rotation, up to 10 ms stale.
+    bill_current();
+    if (proc_ns) *proc_ns = g_proc_ns;
+    if (kernel_ns) *kernel_ns = g_kernel_ns;
 }
 
 // The rotation, shared by the 100Hz timer and by SYS_YIELD. They are

@@ -335,3 +335,95 @@ KTEST("geom", "geom_transform3 reports the rotated depth it projected with") {
     geom_transform3(pts, 2, 0, 0, 0, 2 * FX_ONE, fx_from_int(100), 200, 100, xs, ys, z2);
     KTEST_ASSERT_EQ(z2[1], fx_from_int(20));
 }
+
+// --- geom_fill_ring ---------------------------------------------------
+//
+// A gauge arc that LOOKS right is the exact failure this file exists to
+// catch, so every check below is about a property a plausible-looking
+// ring would still get wrong: the hole in the middle, the angular
+// limits, and which way round the sweep goes.
+
+// Is any plotted point inside the box [x0,x1] x [y0,y1]?
+static int rec_any_in(int x0, int y0, int x1, int y1) {
+    for (int i = 0; i < g_rec.n; i++) {
+        if (g_rec.xs[i] >= x0 && g_rec.xs[i] <= x1 &&
+            g_rec.ys[i] >= y0 && g_rec.ys[i] <= y1) return 1;
+    }
+    return 0;
+}
+
+KTEST("geom", "a full ring is an annulus -- ink in the band, none in the hole") {
+    struct geom_target t = rec_target();
+    geom_fill_ring(&t, 100, 100, 20, 12, 0, FX_ONE, 0xFFFFFF);
+    KTEST_ASSERT(g_rec.n > 0);
+    KTEST_ASSERT(!g_rec.overflow);
+
+    // THE HOLE, asserted as the annulus invariant rather than as a box:
+    // a box's CORNERS reach further from the centre than its sides, so
+    // one sized by eye either misses ink or fails on a rounded spoke.
+    // Every plotted point must sit in the band, one pixel of rounding
+    // either side. A version that filled a disc passes every "is there
+    // ink" check and fails this.
+    for (int i = 0; i < g_rec.n; i++) {
+        int dx = g_rec.xs[i] - 100, dy = g_rec.ys[i] - 100;
+        KTEST_ASSERT(dx * dx + dy * dy >= 11 * 11);
+    }
+    KTEST_ASSERT(!rec_any_in(100, 100, 100, 100));   // and never the centre
+
+    // ...and the band itself is inked on all four sides, so the sweep
+    // really went the whole way round rather than stopping early.
+    KTEST_ASSERT(rec_any_in(100 + 12, 100, 100 + 20, 100));   // 3 o'clock
+    KTEST_ASSERT(rec_any_in(100 - 20, 100, 100 - 12, 100));   // 9 o'clock
+    KTEST_ASSERT(rec_any_in(100, 100 + 12, 100, 100 + 20));   // 6 o'clock
+    KTEST_ASSERT(rec_any_in(100, 100 - 20, 100, 100 - 12));   // 12 o'clock
+
+    // ...and nothing outside the outer radius, which a spoke drawn one
+    // step too far would produce.
+    for (int i = 0; i < g_rec.n; i++) {
+        int dx = g_rec.xs[i] - 100, dy = g_rec.ys[i] - 100;
+        KTEST_ASSERT(dx * dx + dy * dy <= 21 * 21);
+    }
+}
+
+KTEST("geom", "a quarter sweep inks one quadrant and leaves the rest bare") {
+    // From 3 o'clock, a quarter turn CLOCKWISE on screen -- y grows
+    // downward, so this is the lower-right quadrant. Getting the sign
+    // wrong draws a perfectly good arc in the wrong place.
+    struct geom_target t = rec_target();
+    geom_fill_ring(&t, 100, 100, 20, 12, 0, FX_ONE / 4, 0xFFFFFF);
+    KTEST_ASSERT(g_rec.n > 0);
+
+    // Strictly BELOW the centre row: turn 0 inks y == 100 whichever way
+    // the sweep goes, so a box touching that row cannot tell the two
+    // directions apart. A reversed sweep passed this until it did not
+    // include the shared boundary.
+    KTEST_ASSERT(rec_any_in(100 + 4, 100 + 4, 100 + 20, 100 + 20));  // lower right
+    KTEST_ASSERT(!rec_any_in(100 - 21, 100 - 21, 100 - 1, 100 - 1)); // upper left
+    KTEST_ASSERT(!rec_any_in(100 - 21, 100 + 1, 100 - 1, 100 + 21)); // lower left
+}
+
+KTEST("geom", "a gauge starting at twelve o'clock fills clockwise from the top") {
+    // What a ring gauge actually asks for: start a quarter turn BEFORE
+    // 3 o'clock. A half sweep from there covers the right-hand side.
+    struct geom_target t = rec_target();
+    geom_fill_ring(&t, 100, 100, 20, 12, -FX_ONE / 4, FX_ONE / 4, 0xFFFFFF);
+
+    KTEST_ASSERT(rec_any_in(100 + 12, 100 - 20, 100 + 20, 100 + 20)); // right half
+    KTEST_ASSERT(!rec_any_in(100 - 21, 100 - 21, 100 - 13, 100 + 21)); // left half bare
+}
+
+KTEST("geom", "a degenerate ring draws nothing rather than something") {
+    struct geom_target t = rec_target();
+    geom_fill_ring(&t, 100, 100, 20, 12, 0, 0, 0xFFFFFF);   // zero sweep
+    KTEST_ASSERT_EQ(g_rec.n, 0);
+
+    t = rec_target();
+    geom_fill_ring(&t, 100, 100, 12, 20, 0, FX_ONE, 0xFFFFFF); // inner > outer
+    KTEST_ASSERT_EQ(g_rec.n, 0);
+
+    // A ring with no hole IS a disc, and must still be filled -- this is
+    // the boundary the "inner > outer" refusal must not swallow.
+    t = rec_target();
+    geom_fill_ring(&t, 100, 100, 6, 0, 0, FX_ONE, 0xFFFFFF);
+    KTEST_ASSERT(rec_any_in(100, 100, 100, 100));
+}
