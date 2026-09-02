@@ -12,6 +12,39 @@ without opening something else is not finished.
 
 ---
 
+## A crash report is a text header plus the raw stack, not an ELF core
+
+The maintainer asked for something to read after a process crashed
+(2026-09-02). Linux writes an ELF core -- every mapped page with
+NT_PRSTATUS notes, loaded by gdb; Windows writes a minidump of the
+registers, the stack and the module list; macOS writes a text report
+with a symbolised backtrace. toy-os writes the last two in one file:
+the text macOS writes, then the stack bytes Windows keeps.
+
+Not an ELF core, because the value of a core is a debugger that
+understands it, and this OS has none: gdb would need a target
+description for the layout, and the work is the writer AND the reader.
+What is actually wanted after a crash here is the one thing the kernel
+already declines to do -- walk a user stack for return addresses -- and
+a few kilobytes of stack plus `addr2line` on the host answers it.
+`panic_resolve.py --crash` scans every word of the saved stack for an
+address inside the ELF's executable segments, which finds the frames a
+frame-pointer walk would and some it would not, in the same shape the
+kernel's own panic scan uses.
+
+The text half is there so the file is readable with `cat` on the
+machine, which the macOS report has right and a minidump has not: the
+first question after a crash is "which program, which fault", and
+answering it must not need the host.
+
+**Kept apart from a kernel panic on purpose.** `/var/crash` holds
+processes that faulted while the kernel carried on, and the roadmap's
+crash-reporting milestone insists the two failure classes never share
+a list. A panic's record is a RAM store recovered on the next boot,
+pstore's shape, chosen over writing to disk from the panic path because
+a panic inside the storage stack cannot use the thing it would write
+through; it is planned, not built.
+
 ## The physical map is the identity map, extended -- not Linux's higher-half direct map
 
 Planned 2026-09-02, before any of the ">4 GiB" work is built, because

@@ -80,6 +80,12 @@ TESTS = [
     ("nx_test",
      ["RING-3 CRASH: Page fault"],
      ["Stack overflow"]),
+    # THE CRASH REPORT needs a pid, which the legacy `run` loader has
+    # not got -- so this entry spawns. The kernel names the file it
+    # wrote; the forbidden string is the refusal the legacy path logs.
+    ("spawn /tests/crash_test",
+     ["RING-3 CRASH: Page fault", "crash: report written to /var/crash/crash_test-"],
+     ["crash: no report"]),
 ]
 
 # `stack_smash_test` is deliberately NOT here. Its report comes from
@@ -141,16 +147,19 @@ def run_one(name, required, forbidden, workdir, slot, keep_logs):
             # the boot printed is behind us and cannot satisfy an
             # assertion -- which is what stops a vacuous pass.
             before = len(guest.transcript)
-            if not guest.send(f"sh run {name}"):
+            # An entry may carry its own verb ("spawn /tests/x"); a bare
+            # name goes through the legacy loader as before.
+            if not guest.send(f"sh {name}" if " " in name else f"sh run {name}"):
                 detail = "could not send the command"
             else:
-                # Ends early on the required report, but otherwise reads
-                # to the ceiling: a forbidden string arriving late still
-                # has to be caught.
+                # Ends early once EVERY required string has arrived (the
+                # first alone once ended a wait before the second was
+                # printed), but otherwise reads to the ceiling: a
+                # forbidden string arriving late still has to be caught.
                 deadline = time.time() + SETTLE
                 while time.time() < deadline and guest.sock is not None:
                     guest.pump()
-                    if required and required[0] in guest.transcript[before:]:
+                    if required and all(s in guest.transcript[before:] for s in required):
                         break
 
                 window = guest.transcript[before:]
@@ -167,7 +176,8 @@ def run_one(name, required, forbidden, workdir, slot, keep_logs):
     finally:
         if keep_logs:
             os.makedirs(keep_logs, exist_ok=True)
-            with open(os.path.join(keep_logs, f"{name}.log"), "w") as f:
+            safe = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in name)
+            with open(os.path.join(keep_logs, f"{safe}.log"), "w") as f:
                 f.write(guest.transcript)
         guest.stop()
 

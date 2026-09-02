@@ -74,6 +74,7 @@ in check_layout.py changes with it.)
 | `/home` | Per-user directories | Milestone 17 | reserved |
 | `/usr/share/man` | Manual pages | Milestone 14 | reserved |
 | `/var` | Mutable state: logs, crash dumps, `dhcp-<device>.lease` (the address to ask for again after a reboot). **Partly claimed early**: the milestone below still owns the wider design, but `/var/games` exists now because a game needed somewhere to save and the FHS answer is this one | app | optional |
+| `/var/crash` | Ring-3 crash reports, `<program>-<pid>.crash`, written by the kernel on the way to killing a process that faulted (`kernel/proc/crash_report.c`); `crashlog` lists them. Created on the first crash. NOT kernel panics, deliberately | app | optional |
 | `/var/games` | Per-game mutable state, as the FHS uses it | app | optional |
 | `/var/games/doom` | DOOM's working directory. `/bin/wm/apps/doom` `chdir()`s here before starting the engine, because doomgeneric's config directory is hardcoded to `"."` and a WM-spawned process inherits `/` -- without it Doom writes `/.savegame` into the filesystem root | app | optional |
 | `/var/games/doom/.savegame` | Savegames, in the layout doomgeneric creates. **Upstream's structure, not ours** -- the dot and the per-IWAD subdirectory under it are Chocolate Doom's convention, and this directory is not ours to tidy | app | optional |

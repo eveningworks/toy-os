@@ -28,6 +28,7 @@ buildable now. Something that MISBEHAVES is not here -- that is
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
 - [ ] Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today  *(Networking)*
+- [ ] A panic RAM store, pstore-shaped, AND a panic that warm-resets after a countdown -- a power cycle loses RAM  *(Crash reporting & postmortem debugging)*
 - [ ] System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons  *(Known limitations and papercuts (unscheduled))*
 <!-- END next-up -->
 
@@ -867,10 +868,10 @@ hand as a throwaway probe during a real hunt (see roadmap-details).
 - [ ] A real kernel backtrace on panic -- walk the frame pointers, not just print RIP
 - [ ] Resolve those addresses to function names: the build already emits DWARF (`-g`)
 - [ ] A panic screen worth reading: registers, backtrace, the faulting address, what the kernel was doing
-- [ ] Persist the crash to disk so it survives the reboot that follows
-- [ ] A `crashlog` command to read back the last N panics
-- [ ] Core dumps for a faulting ring-3 process (registers + mapped pages)
-- [ ] A host-side script to inspect a core dump against the ELF's DWARF
+- [ ] **NEXT** A panic RAM store, pstore-shaped, AND a panic that warm-resets after a countdown -- a power cycle loses RAM
+- [ ] `crashlog --panics`, once the RAM store exists (it lists ring-3 reports today)
+- [x] ~~Core dumps for a faulting ring-3 process~~ DONE 2026-09-02 -- a text report plus the raw stack in `/var/crash`
+- [x] ~~A host-side script to inspect a core dump against the ELF's DWARF~~ DONE 2026-09-02 -- `panic_resolve.py --crash`
 - [ ] Distinguish "the kernel faulted" from "a process faulted and the kernel tore it down correctly" in
 - [x] ~~Stack-overflow detection via a guard page, reported as such rather than as a mystery fault~~ done
 

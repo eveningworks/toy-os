@@ -595,6 +595,7 @@ whenever a headline here tells you something you did not already know.
 - **A GUEST SPIN-WAIT NEEDS `cpu_relax()` (`pause`), AND UNDER KVM THAT IS NOT AN OPTIMISATION**
 - **VIRTIO INTERRUPTS ARE OPT-IN, a forgotten ISR read hangs the machine, and ENABLING IS THE LAST STEP**
 - **USING A SUBSYSTEM BEFORE ITS init() IS A PANIC, not a soft failure**
+- **A RING-3 CRASH WRITES A REPORT TO `/var/crash`, AND A KERNEL PANIC DOES NOT**
 - **A panic NAMES THE FUNCTION**
 - **A kernel panic prints enough to diagnose from a pasted log**
 - **Kernel stacks are 16 KiB, have a GUARD PAGE, and carry a CANARY**

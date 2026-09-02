@@ -49,6 +49,31 @@ this the obvious way), not from how much history it accumulated.
   `dbg_dispatch()`'s `arg` points into `line_buf`, so a command typed
   during a long `sh` used to overwrite the running one's arguments. See
   `docs/decisions.md`.
+- **A RING-3 CRASH WRITES A REPORT TO `/var/crash`, AND A KERNEL PANIC
+  DOES NOT.** `kernel/proc/crash_report.c` runs from the fault handler
+  after a caught signal has had its chance and before the process is
+  torn down, while its page tables are still live:
+  `/var/crash/<program>-<pid>.crash` is a text header (program, pid,
+  fault, every register, the memory map, the tail of the kernel log)
+  followed by the raw bytes of the user stack from RSP's page to the
+  top. `crashlog` lists and prints the header on the machine;
+  `tools/panic_resolve.py --crash <file>` on the host finds the ELF from
+  the program line and names RIP and every return address on the stack
+  against its DWARF -- the scan the kernel refuses to do on a user
+  mapping. Three things to know. **It refuses when any filesystem
+  operation is in flight** (`scheduler_preempt_depth() != 0`), because
+  the fault may be inside a copy helper under an `FS_OP` and writing a
+  file from there re-enters the backend's scratch state -- the mmap
+  fault-in's rule, and the refusal is logged so a missing report is
+  never a mystery. **The legacy `run` loader's process has no pid and
+  gets no report**; `spawn` it. And **a kernel panic writes NOTHING
+  here**: `/var/crash` is processes that faulted while the kernel
+  carried on, and a panic's record is a separate mechanism (a RAM store
+  recovered on the next boot, planned in `docs/roadmap.md`'s
+  crash-reporting milestone), kept apart so a list of crashes never
+  conflates the system working with the system failing. The buffers are
+  statics, not locals: the writer runs on the faulting process's kernel
+  stack.
 - **A panic NAMES THE FUNCTION**, on screen and in the log:
   `in crash_gp_fault+0xa`, plus the faulting context, the general
   registers, the build id and the uptime. The symbol table is baked into

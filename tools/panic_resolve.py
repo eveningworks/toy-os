@@ -118,13 +118,106 @@ def addr2line(elf, addrs):
     return resolved
 
 
+# --- ring-3 crash reports (kernel/proc/crash_report.c) -------------------
+#
+# A report is a text header terminated by "---- stack ----\n" and then
+# the raw bytes of the user stack from the page RSP was on up to the top
+# of the stack (the "stack: <va> <len>" line says which). The ELF is
+# found from the "program:" line: /bin/x is build/userland/bin/x.elf,
+# /tests/x is build/userland/tests/x.elf, and a name the Makefile
+# renames at seed time (SEED_NAME_gui/apps/terminal = uterm) is looked
+# up there -- so the reader never guesses a build path a rename broke.
+
+CRASH_MARK = b"---- stack ----\n"
+
+
+def seed_renames():
+    """{seeded name: userland-relative source path} from the Makefile."""
+    out = {}
+    mk = os.path.join(REPO, "Makefile")
+    if os.path.exists(mk):
+        for m in re.finditer(r"^SEED_NAME_(\S+)\s*=\s*(\S+)", open(mk).read(), re.M):
+            out[m.group(2)] = m.group(1)
+    return out
+
+
+def elf_for_program(program):
+    """The build tree's ELF for a program path on the OS's disk."""
+    name = program.rsplit("/", 1)[-1]
+    src = seed_renames().get(name)
+    if src:
+        return os.path.join(REPO, "build", "userland", src + ".elf")
+    if program.startswith("/tests/"):
+        return os.path.join(REPO, "build", "userland", "tests", name + ".elf")
+    build = os.path.join(REPO, "build", "userland")
+    for root, _dirs, files in os.walk(build):
+        if name + ".elf" in files:
+            return os.path.join(root, name + ".elf")
+    return None
+
+
+def text_range(elf):
+    """(start, end) of the ELF's executable segments, from readelf."""
+    out = subprocess.run(["readelf", "-lW", elf], capture_output=True, text=True).stdout
+    ranges = []
+    for line in out.splitlines():
+        m = re.match(r"\s+LOAD\s+0x[0-9a-f]+\s+0x([0-9a-f]+)\s+0x[0-9a-f]+\s+0x[0-9a-f]+\s+0x([0-9a-f]+)\s+([RWE ]+)", line)
+        if m and "E" in m.group(3):
+            base = int(m.group(1), 16)
+            ranges.append((base, base + int(m.group(2), 16)))
+    return ranges
+
+
+def resolve_crash(path, elf_override=None):
+    data = open(path, "rb").read()
+    cut = data.find(CRASH_MARK)
+    if cut < 0:
+        sys.exit(f"panic_resolve: {path} is not a crash report (no stack marker)")
+    header = data[:cut].decode("utf-8", "replace")
+    stack = data[cut + len(CRASH_MARK):]
+    fields = dict(re.findall(r"^(\w+): (.*)$", header, re.M))
+    program = fields.get("program", "?")
+    elf = elf_override or elf_for_program(program)
+    print(header.rstrip("\n"))
+    if not elf or not os.path.exists(elf):
+        print(f"\n(no ELF found for {program}; pass --elf to resolve)")
+        return
+    ranges = text_range(elf)
+    print(f"\nresolved against {os.path.relpath(elf, REPO)}")
+    rip = int(fields.get("rip", "0x0").split()[0], 16)
+    want = [rip]
+    m = re.match(r"0x([0-9a-f]+) (\d+)", fields.get("stack", ""))
+    base = int(m.group(1), 16) if m else 0
+    # Every 8-byte word on the stack that lands in an executable segment
+    # is a candidate return address -- the scan the kernel declines to do
+    # on a user stack. Newest first, as RSP grows down.
+    cands = []
+    for off in range(0, len(stack) - 7, 8):
+        v = int.from_bytes(stack[off:off + 8], "little")
+        if any(lo <= v < hi for lo, hi in ranges):
+            cands.append((base + off, v))
+            want.append(v)
+    names = addr2line(elf, want)
+    print(f"  rip 0x{rip:x} -> {names.get(rip, '?')}")
+    print(f"  stack scan ({len(cands)} candidates, newest first):")
+    for at, v in cands:
+        print(f"    [rsp+0x{at - base:x}] 0x{v:x} -> {names.get(v, '?')}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("file", nargs="?", help="panic text; stdin if omitted")
     ap.add_argument("--elf", default=DEFAULT_ELF,
                     help=f"image to resolve against (default {DEFAULT_ELF})")
     ap.add_argument("--delta", help="relocation offset, if the text lacks one")
+    ap.add_argument("--crash", metavar="REPORT",
+                    help="a ring-3 crash report from /var/crash: print its header "
+                         "and resolve RIP and every return address on its stack")
     args = ap.parse_args()
+
+    if args.crash:
+        resolve_crash(args.crash, None if args.elf == DEFAULT_ELF else args.elf)
+        return
 
     text = open(args.file).read() if args.file else sys.stdin.read()
     if not text.strip():

@@ -18,6 +18,7 @@
 #include "vmm.h"
 #include "reloc.h" // kernel_reloc_delta() -- a panic RIP is meaningless without it
 #include "process.h"
+#include "crash_report.h" // crash_report_write() -- the ring-3 report
 #include "uaddr.h" // uaddr_is_stack_guard() -- naming a stack overflow as one
 #include "ksyms.h" // a panic names the function, not just an address
 #include "version.h" // TOYOS_VERSION_FULL -- a photographed panic identifies its build
@@ -627,6 +628,15 @@ void isr_dispatch(uint64_t *regs) {
 
         if ((cs & 3) == 3 && ring3_hook) {
             ring3_hook(vector, error_code, cs, cr2);
+        }
+        // THE CRASH REPORT, while the process's page tables are still
+        // live and after a caught signal has had its chance above. A
+        // kernel fault writes nothing here, on purpose.
+        if (recoverable) {
+            crash_report_write(kstack_overflow ? "Kernel stack overflow"
+                                              : stack_overflow ? "Stack overflow"
+                                                               : exception_names[vector],
+                               regs, cr2, stack_overflow);
         }
 
         if (recoverable) {

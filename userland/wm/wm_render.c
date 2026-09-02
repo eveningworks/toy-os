@@ -775,8 +775,11 @@ int wm_cursor_shape_changed(int mx, int my) {
 // window, as it does on every real desktop.
 
 #define CORNER_MAX_R 16
-#define BEVEL_LIGHT ugfx_rgb(200, 200, 205)   // the same two values draw_window_chrome() uses
-#define BEVEL_DARK  ugfx_rgb(40, 40, 45)
+// ONE OUTLINE COLOUR ALL THE WAY ROUND, the theme's border: Breeze,
+// Windows 11 and macOS draw a single hairline, and the two-tone bevel
+// this replaced read as a raised Windows 95 panel once the corners
+// rounded.
+#define FRAME_OUTLINE UTHEME_BORDER
 
 static int corner_radius(const struct window *win) {
     if (win->state == WIN_MAXIMIZED) return 0;
@@ -853,13 +856,11 @@ static void corners_round(const struct window *win) {
                 uint32_t under = corner_under[c][py * r + px];
                 if (cov == 0) { ugfx_put_pixel(wm_surface(), x, y, under); continue; }
                 if (cov < 255) ugfx_blend_pixel(wm_surface(), x, y, under, (uint8_t)(255 - cov));
-                // THE OUTLINE FOLLOWS THE ARC: the 1px bevel is four straight
+                // THE OUTLINE FOLLOWS THE ARC: the hairline is four straight
                 // lines, so the ring between radius r and r-1 carries its
-                // colour round the corner -- light on the top corners, dark
-                // on the bottom ones, as the straight edges are.
+                // colour round the corner.
                 uint8_t ring = (uint8_t)(cov - inner);
-                if (ring) ugfx_blend_pixel(wm_surface(), x, y,
-                                           (c & 2) ? BEVEL_DARK : BEVEL_LIGHT, ring);
+                if (ring) ugfx_blend_pixel(wm_surface(), x, y, FRAME_OUTLINE, ring);
             }
 }
 
@@ -871,18 +872,12 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
 
     ugfx_fill_rect(wm_surface(), win->x, win->y, win->w, win->h, winbg);
 
-    // Subtle 1px 3D bevel instead of a flat outline -- a light highlight
-    // on the top/left edge and a dark shadow on the bottom/right edge,
-    // like the window is a slightly raised panel. Kept local to this
-    // function rather than named in theme.h since nothing else draws a
-    // bevel yet (see theme.h's top comment on only naming values that
-    // actually repeat).
-    uint32_t bevel_light = BEVEL_LIGHT;
-    uint32_t bevel_dark = BEVEL_DARK;
-    ugfx_fill_rect(wm_surface(), win->x, win->y, win->w, 1, bevel_light);            // top
-    ugfx_fill_rect(wm_surface(), win->x, win->y, 1, win->h, bevel_light);            // left
-    ugfx_fill_rect(wm_surface(), win->x, win->y + win->h - 1, win->w, 1, bevel_dark); // bottom
-    ugfx_fill_rect(wm_surface(), win->x + win->w - 1, win->y, 1, win->h, bevel_dark); // right
+    // A 1px hairline in one colour, which the rounded corners continue.
+    uint32_t outline = FRAME_OUTLINE;
+    ugfx_fill_rect(wm_surface(), win->x, win->y, win->w, 1, outline);                // top
+    ugfx_fill_rect(wm_surface(), win->x, win->y, 1, win->h, outline);                // left
+    ugfx_fill_rect(wm_surface(), win->x, win->y + win->h - 1, win->w, 1, outline);   // bottom
+    ugfx_fill_rect(wm_surface(), win->x + win->w - 1, win->y, 1, win->h, outline);   // right
 
     ugfx_fill_rect(wm_surface(), win->x + 1, win->y + 1, win->w - 2, WM_TITLEBAR_H, titlebar);
 

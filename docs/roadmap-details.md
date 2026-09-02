@@ -640,6 +640,21 @@ handlers did NOT gate any of this.
 
 ### Crash reporting & postmortem debugging
 
+**The panic store, planned 2026-09-02.** pstore's ramoops shape: a few
+frames at a fixed physical address, left out of the allocator, holding
+a signature, a checksum, the panic text and the tail of the kernel
+log; the next boot verifies the checksum and writes
+`/var/crash/panic-<n>.log`, and a cold boot's garbage simply fails the
+check. **It only works across a WARM reset**, so the panic path must
+stop halting forever: count down (Linux's `panic=N`, Windows'
+automatic restart) and reset through the ACPI reset register, with a
+keypress resetting at once. The maintainer's laptop had to be
+power-cycled after every panic, which would have lost every record.
+Not written to disk from the panic path, because a panic inside the
+storage stack cannot use the thing it would write through. Firmware
+that scrubs memory (ECC, a memory-test option) defeats it, so the
+first boot on hardware measures rather than assumes.
+
 When this kernel panics today it prints a message and stops. When a
 ring-3 process faults, it's torn down and the reason is a line in the
 log. Both are recoverable situations that currently throw away almost

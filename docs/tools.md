@@ -1159,6 +1159,13 @@ window without going through it will find its layout polls timing out.
   nearest-symbol-below over `nm` output named `sys_thread_detach` for an
   address that DWARF resolves to `sys_yield` at `rt/sys.c:217`, and an
   hour went into reconciling a function the program never calls.
+  **`--crash <file>` reads a ring-3 crash report** from `/var/crash`
+  (`kernel/proc/crash_report.c`): prints its text header, finds the ELF
+  from the report's `program:` line (a Makefile seed rename such as
+  `uterm` is looked up, never guessed), and names RIP and every word on
+  the saved stack that lands in an executable segment. Get the file off
+  a machine with `remote.py get`, or out of a disk image with
+  `tfs3_writer.py read`.
 - **`qmp_test.py`'s `QMPSession.hmp(cmd)`** -- run a QEMU MONITOR
   command and get its text. **The one oracle the guest cannot fake**:
   every other probe here asks the guest about itself, in code that is

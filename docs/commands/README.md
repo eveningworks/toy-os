@@ -85,6 +85,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`acpi`](acpi.md)
 - [`ahci`](ahci.md)
 - [`ata`](ata.md)
+- [`crashlog`](crashlog.md)
 - [`dmesg`](dmesg.md)
 - [`font`](font.md)
 - [`heap`](heap.md)
