@@ -2497,3 +2497,28 @@ NEEDS THE WHOLE SUITE, NOT THE SUBSYSTEM'S.**
   four frames below free and require the next request to be refused.
   Linux exposes the same knob as `lowmem_reserve_ratio`, which is the
   argument that it is an interface rather than a hole cut for a test.
+- **A SUITE THAT NAMES ONE ADDRESS CANNOT SEE A RANGE NOBODY NAMES.**
+  Seven `winshare` KTESTs asserted things about the compositor's mapping
+  of a window, all of them at the slot's BASE, and the fixture's windows
+  are 64x32 -- one page. `comp_map()` had always mapped a SECOND buffer
+  at `+WIN_BUFFER_HALF` that no revocation path touched, so every window
+  close left the compositor holding writable PTEs into freed frames, and
+  all seven checks stayed green for months. The check that found it asks
+  the whole address space instead of an address: `vmm_audit_space()` on
+  the compositor after a destroy, requiring zero dangling. When a
+  subsystem has a RANGE, prefer one assertion over the range's invariant
+  to N assertions about points in it.
+- **RUN THE AUDIT YOU ALREADY HAVE AGAINST A MACHINE THAT HAS BEEN
+  USED.** `meminfo --audit` existed for months and every caller ran it on
+  a machine that had just booted or just run one test. Pointed at the
+  bare-metal laptop after ordinary desktop use it reported 1933 dangling
+  mappings immediately. A diagnostic only ever run on a clean fixture is
+  a diagnostic that has never been asked a hard question.
+- **AIM A POSITIVE CONTROL AT THE CODE THAT MAKES THE ASSERTION TRUE,
+  NOT AT THE FIRST PLAUSIBLE LINE.** Breaking `comp_clear()`'s loop
+  changed nothing red, because `comp_poison()` maps over the stale PTEs
+  afterwards and repairs the damage. Breaking `comp_poison()`'s loop
+  reddened a DIFFERENT assertion in the same test (a hole, not a
+  dangling mapping). Only breaking both reproduced the original defect.
+  Three arms, three different answers, and the first one alone would
+  have been read as "the test cannot fail".

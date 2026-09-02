@@ -265,6 +265,49 @@ KTEST("winshare", "a present flips the buffer, so the two never collide") {
 // i.e. the desktop dying. So the assertion is not "nothing is mapped"
 // but "the client's pixels are gone", which is the property that was
 // ever worth having.
+// THE CHECK THAT ASKS THE WHOLE SLOT, and the one whose absence let the
+// second buffer go un-revoked for months. Every other check here names
+// ONE address, and the fixture's windows are a single page, so a range
+// nobody names is a range nobody tests -- while comp_map() has always
+// mapped a second one at +WIN_BUFFER_HALF. vmm_audit_space() needs no
+// address at all: it walks the compositor's whole address space and
+// reports any mapping pointing at a frame the allocator has taken back.
+//
+// Positive control: drop the `for (int b ...)` loop in comp_clear() back
+// to buffer 0 and this goes red with `dangling` equal to the window's
+// page count, while every other check here stays green.
+KTEST("winshare", "destroying a window leaves the compositor no mapping of a freed frame") {
+    struct fixture f = {0};
+    SKIP_IF_ROLE_HELD;
+    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
+
+    uint64_t cvaddr = 0;
+    KTEST_ASSERT(win_server_map_to_compositor(f.comp_pid, f.client_pid, f.id, &cvaddr));
+    // Both halves of the slot are mapped while the window lives -- which
+    // is what makes the second one something that has to be revoked.
+    KTEST_ASSERT(vmm_validate_user_range(f.comp_as, cvaddr, 4096));
+    KTEST_ASSERT(vmm_validate_user_range(f.comp_as, cvaddr + WIN_BUFFER_HALF, 4096));
+
+    KTEST_ASSERT(win_server_destroy_raw(f.client_pid, f.id));
+
+    struct vmm_audit a;
+    uint64_t dangling = vmm_audit_space(f.comp_as, &a);
+
+    // And the second half reads as poison rather than as the dead
+    // window's pixels, the same contract the first half has.
+    uint32_t seen2 = 0xFFFFFFFF;
+    int got2 = vmm_copy_from_user(f.comp_as, &seen2, cvaddr + WIN_BUFFER_HALF, sizeof seen2);
+
+    f.id = 0;
+    win_server_set_compositor(0, 0);
+    if (f.client_as) vmm_destroy_address_space(f.client_as);
+    if (f.comp_as) vmm_destroy_address_space(f.comp_as);
+
+    KTEST_ASSERT_EQ((int)dangling, 0);
+    KTEST_ASSERT(got2);
+    KTEST_ASSERT_EQ(seen2, 0);
+}
+
 KTEST("winshare", "destroying a window poisons the compositor's mapping") {
     struct fixture f = {0};
     SKIP_IF_ROLE_HELD;

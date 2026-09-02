@@ -37,6 +37,14 @@
 _Static_assert(WIN_COMPOSITOR_MAX_PIDS >= SCHED_MAX_PROCS,
                "win_compositor_vaddr() has no room for every process");
 
+// How many buffers a window's compositor slot can hold, and the offset
+// of each: buffer `b` lives at `b * WIN_BUFFER_HALF`, which is what
+// win_buffer_offset() encodes for the client side. Every slot helper
+// below loops over this rather than taking a range from its caller --
+// a call site that has to remember there are two is how the second one
+// stopped being revoked.
+#define COMP_BUFS 2
+
 struct client_window {
     int used;
     int pid;
@@ -76,7 +84,8 @@ struct client_window {
     // frames are gone but the compositor may still blit the slot; the
     // count is the OLD window's page span, which is what has to be
     // unmapped again before the slot can be mapped for real.
-    uint32_t comp_poisoned;
+    // Per buffer -- see COMP_BUFS.
+    uint32_t comp_poisoned[COMP_BUFS];
 
     // How many pages of this window's compositor slot currently have a
     // PTE AT ALL -- real frames plus any poison beyond them. It is the
@@ -98,7 +107,7 @@ struct client_window {
     // frame of black at the bottom of a shrinking window, which the
     // compositor corrects the moment it adopts the new size. Costs only
     // PTEs: every poison page in the system is the same borrowed frame.
-    uint32_t comp_span;
+    uint32_t comp_span[COMP_BUFS];
 
     // What the kernel used to receive and throw away, passing it
     // straight through to a ring-0 WM. A ring-3 one is TOLD a window
@@ -306,23 +315,30 @@ static uint64_t poison_frame(void) {
 // window now needs, and unmapping only `pages` of them would strand the
 // tail's PTEs pointing at the poison page forever.
 static void comp_clear(struct client_window *cw) {
-    if (!g_comp_pml4) { cw->comp_span = cw->comp_poisoned = 0; cw->comp_mapped = 0; return; }
     uint64_t vaddr = win_compositor_vaddr(cw->pid, cw->id);
-    for (uint32_t i = 0; i < cw->comp_span; i++) {
-        vmm_unmap_user_page(g_comp_pml4, vaddr + (uint64_t)i * 4096);
+    for (int b = 0; b < COMP_BUFS; b++) {
+        if (g_comp_pml4) {
+            uint64_t base = vaddr + (uint64_t)b * WIN_BUFFER_HALF;
+            for (uint32_t i = 0; i < cw->comp_span[b]; i++) {
+                vmm_unmap_user_page(g_comp_pml4, base + (uint64_t)i * 4096);
+            }
+        }
+        cw->comp_span[b] = 0;
+        cw->comp_poisoned[b] = 0;
     }
-    cw->comp_span = 0;
-    cw->comp_poisoned = 0;
     cw->comp_mapped = 0;
 }
 
-// Maps the poison page over [from, to) of the slot. Returns how many
-// pages it managed; the caller decides whether a short result matters.
-static uint32_t comp_poison_range(struct client_window *cw, uint32_t from, uint32_t to) {
+// Maps the poison page over [from, to) of BUFFER `b`'s half of the
+// slot. Returns how many pages it managed; the caller decides whether a
+// short result matters.
+static uint32_t comp_poison_range(struct client_window *cw, int b,
+                                  uint32_t from, uint32_t to) {
     if (to <= from) return 0;
     uint64_t phys = poison_frame();
     if (!phys) return 0;               // out of memory: a hole, as before
-    uint64_t vaddr = win_compositor_vaddr(cw->pid, cw->id);
+    uint64_t vaddr = win_compositor_vaddr(cw->pid, cw->id)
+                   + (uint64_t)b * WIN_BUFFER_HALF;
     uint32_t n = 0;
     for (uint32_t i = from; i < to; i++) {
         // BORROWED, and doubly so: one frame mapped at every page of the
@@ -337,9 +353,22 @@ static uint32_t comp_poison_range(struct client_window *cw, uint32_t from, uint3
     return n;
 }
 
+// The physical base of buffer `b`, or 0 when the window does not have
+// one. Buffer 1 is absent on a single-buffered window, which is a
+// working window and not an error (see the struct).
+static uint64_t comp_buf_phys(const struct client_window *cw, int b) {
+    uint32_t *p = (b == 0) ? cw->buf : cw->buf2;
+    return (uint64_t)(uintptr_t)p;
+}
+
 // Maps a window's frames into the compositor at its derived address.
 // Returns 1 on success (including "already mapped"), 0 if the mapping
 // could not be built -- in which case nothing is left half-mapped.
+//
+// ONE LOOP OVER EVERY BUFFER, and that is the point rather than a
+// tidying: the slot holds two, and a version that mapped both here
+// while the teardown paths described one left the compositor holding
+// writable PTEs into buffer 1's freed frames after every window close.
 static int comp_map(struct client_window *cw) {
     if (!g_comp_pid || !g_comp_pml4) return 0;
     uint64_t vaddr = win_compositor_vaddr(cw->pid, cw->id);
@@ -347,8 +376,16 @@ static int comp_map(struct client_window *cw) {
     // The slot's extent never shrinks while the window lives -- see
     // comp_span. Remember it before clearing, because the tail beyond
     // the new frames has to be poisoned back over, not left as a hole.
-    uint32_t span = cw->comp_span;
-    if (span < cw->pages) span = cw->pages;
+    // A buffer this window does not have keeps its high-water mark and
+    // gains nothing, so a window that has never been double-buffered
+    // spends no PTEs on the half it never uses -- while one that just
+    // LOST its second buffer still gets that half poisoned, for the
+    // same reason a shrink does.
+    uint32_t span[COMP_BUFS];
+    for (int b = 0; b < COMP_BUFS; b++) {
+        span[b] = cw->comp_span[b];
+        if (comp_buf_phys(cw, b) && span[b] < cw->pages) span[b] = cw->pages;
+    }
 
     // A poisoned slot has PRESENT page-table entries pointing at the
     // zero page, and mapping over a present entry does NOT invalidate
@@ -356,56 +393,46 @@ static int comp_map(struct client_window *cw) {
     // compositor would go on reading zeros from a live window. Unmap
     // first, which does invalidate.
     comp_clear(cw);
-    for (uint32_t i = 0; i < cw->pages; i++) {
-        uint64_t phys = (uint64_t)(uintptr_t)cw->buf + (uint64_t)i * 4096;
+
+    for (int b = 0; b < COMP_BUFS; b++) {
+        uint64_t phys = comp_buf_phys(cw, b);
+        uint64_t base = vaddr + (uint64_t)b * WIN_BUFFER_HALF;
+        uint32_t done = 0;
         // BORROWED: these frames are the window server's (allocated in
         // create_window(), freed in destroy_window()). The compositor
         // only gets to look at them.
-        if (!vmm_map_user_borrowed(g_comp_pml4, vaddr + (uint64_t)i * 4096, phys,
-                                    1, 0, VMM_MT_NORMAL)) {
-            for (uint32_t j = 0; j < i; j++) {
-                vmm_unmap_user_page(g_comp_pml4, vaddr + (uint64_t)j * 4096);
-            }
-            klog_write("win_server: compositor mapping failed\n");
-            return 0;
-        }
-    }
-    // THE SECOND BUFFER, into the same slot at WIN_BUFFER_HALF. Both
-    // stay mapped for the whole life of the window, which is what makes
-    // a present a number rather than a remap -- see WIN_BUFFER_HALF in
-    // abi/win_proto.h.
-    //
-    // A failure here is NOT fatal and does not unwind the first: the
-    // compositor can still read buffer 0, which is what a
-    // single-buffered window gives it anyway. What it must never do is
-    // leave the second range half-mapped, so the partial work is undone
-    // and the window is treated as single-buffered from here.
-    if (cw->buf2) {
-        uint64_t v2 = vaddr + WIN_BUFFER_HALF;
-        uint32_t done = 0;
-        for (; done < cw->pages; done++) {
-            uint64_t phys = (uint64_t)(uintptr_t)cw->buf2 + (uint64_t)done * 4096;
-            if (!vmm_map_user_borrowed(g_comp_pml4, v2 + (uint64_t)done * 4096,
-                                        phys, 1, 0, VMM_MT_NORMAL))
+        for (; phys && done < cw->pages; done++) {
+            if (!vmm_map_user_borrowed(g_comp_pml4, base + (uint64_t)done * 4096,
+                                        phys + (uint64_t)done * 4096,
+                                        1, 0, VMM_MT_NORMAL))
                 break;
         }
-        if (done < cw->pages) {
+        if (phys && done < cw->pages) {
+            // Never left half-mapped. Buffer 0 failing is fatal to the
+            // whole mapping; buffer 1 failing only makes the window
+            // single-buffered, which is what it would have been if the
+            // second allocation had failed in the first place.
             for (uint32_t j = 0; j < done; j++)
-                vmm_unmap_user_page(g_comp_pml4, v2 + (uint64_t)j * 4096);
+                vmm_unmap_user_page(g_comp_pml4, base + (uint64_t)j * 4096);
+            done = 0;
+            if (b == 0) {
+                klog_write("win_server: compositor mapping failed\n");
+                return 0;   // comp_clear() above already zeroed the spans
+            }
             klog_write("win_server: compositor second-buffer mapping failed -- "
                        "window reads as single-buffered\n");
             cw->front = 0;
         }
+        cw->comp_span[b] = done;
+
+        // THE TAIL. Everything this half of the slot used to cover and
+        // no longer does reads as black rather than faulting, for as
+        // long as it takes the compositor to notice.
+        cw->comp_poisoned[b] = comp_poison_range(cw, b, done, span[b]);
+        cw->comp_span[b] += cw->comp_poisoned[b];
     }
 
     cw->comp_mapped = 1;
-    cw->comp_span = cw->pages;
-
-    // THE TAIL. Everything the slot used to cover and no longer does
-    // reads as black rather than faulting, for as long as it takes the
-    // compositor to notice the window got smaller.
-    cw->comp_poisoned = comp_poison_range(cw, cw->pages, span);
-    cw->comp_span += cw->comp_poisoned;
     return 1;
 }
 
@@ -437,13 +464,17 @@ static void comp_unmap(struct client_window *cw) {
 // rather than silently absorbing into a page every dead window shares.
 static void comp_poison(struct client_window *cw) {
     if (!cw->comp_mapped) return;
-    // The WHOLE span, not just the live frames: a slot that has been
-    // shrunk already has a poisoned tail, and the compositor may still
-    // blit out to the largest size this window ever was.
-    uint32_t span = cw->comp_span;
+    // The WHOLE span of EVERY buffer, not just the live frames: a slot
+    // that has been shrunk already has a poisoned tail, and the
+    // compositor may still blit out to the largest size this window
+    // ever was.
+    uint32_t span[COMP_BUFS];
+    for (int b = 0; b < COMP_BUFS; b++) span[b] = cw->comp_span[b];
     comp_clear(cw);                    // also invalidates the TLB
-    cw->comp_poisoned = comp_poison_range(cw, 0, span);
-    cw->comp_span = cw->comp_poisoned;
+    for (int b = 0; b < COMP_BUFS; b++) {
+        cw->comp_poisoned[b] = comp_poison_range(cw, b, 0, span[b]);
+        cw->comp_span[b] = cw->comp_poisoned[b];
+    }
 }
 
 // Frees a window's frames and unmaps them from its owner's address
