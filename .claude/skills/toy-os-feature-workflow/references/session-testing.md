@@ -2472,3 +2472,28 @@ NEEDS THE WHOLE SUITE, NOT THE SUBSYSTEM'S.**
 - **A doc/comment edit that names a stage number rots in a day.** "Not
   yet allocatable" was true at noon and false by evening. Say what the
   reader can observe ("kernel heap only, not yet for processes").
+- **A CHECK COPIED FROM A WORKING TOOL CAN CARRY A DEAD ASSERTION.**
+  `mem_stress.py` runs `sh meminfo audit` and requires "no dangling" in
+  the reply -- but the command is `meminfo --audit`, so it prints a
+  usage line and exits 1, and that check has been unsatisfiable since it
+  was written. Nobody noticed because nobody looked at a FAILING run of
+  it. Found by copying the three lines into a new tool and watching them
+  fail on a machine that was demonstrably clean. When you lift a check
+  from a tool that "passes", run it once with the outcome you expect it
+  to REJECT.
+- **A KTEST THAT MAPS A USER PAGE MUST USE A REAL USER ADDRESS.**
+  Everything under PML4 entry 0 shares the kernel's own PDPT (every
+  address space points at the same one), so a page mapped at 0x400000
+  goes into the KERNEL's tables, is skipped by
+  `vmm_destroy_address_space()`, and leaks its frame. The mapping works
+  and the copy helpers reach it, so nothing fails -- the check that
+  caught it was asking whether the intermediate table was above 4 GiB
+  and getting the kernel's answer. Map at `UADDR_IMAGE_BASE` or above.
+- **A POLICY THAT ONLY FIRES ON A MACHINE YOU CANNOT BUILD NEEDS A
+  SETTER, and that is not test-only scaffolding.** pmm's DMA32 floor is
+  enforced only when an `ANY` allocation falls back, which a machine
+  with 5 GiB of high zone never does -- and draining that zone is not a
+  test. `pmm_set_dma32_reserve_frames()` lets the check jam the floor to
+  four frames below free and require the next request to be refused.
+  Linux exposes the same knob as `lowmem_reserve_ratio`, which is the
+  argument that it is an interface rather than a hole cut for a test.
