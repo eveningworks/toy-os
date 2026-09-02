@@ -29,6 +29,7 @@
 #include "klog.h"
 #include "string.h"
 #include "scheduler.h" // scheduler_preempt_disable/enable -- see FS_OP below
+#include "initcall.h"
 
 // EVERY backend call runs inside a preemption-free section.
 //
@@ -115,6 +116,7 @@ void fs_init(void) {
     // mount. Rule 3 in kernel/mount.h.
     mount_boot_auto();
 }
+INITCALL(fs_init, INIT_FS);
 
 int fs_is_persistent(void) {
     const struct mount *m = mount_root();

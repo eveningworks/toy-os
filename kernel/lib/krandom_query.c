@@ -16,6 +16,7 @@
 #include "krandom.h"
 #include "string.h"
 #include <stddef.h>
+#include "initcall.h"
 
 static int random_count(void) { return 1; } // scalar
 
@@ -58,3 +59,4 @@ static const struct query_provider random_provider = {
 void krandom_query_init(void) {
     query_register(&random_provider);
 }
+INITCALL(krandom_query_init, INIT_QUERY);

@@ -30,6 +30,7 @@
 #include "mouse.h"
 #include "string.h"
 #include "kfmt.h"
+#include "initcall.h"
 
 #define MOUSE_CONFIG_FILE "/etc/toyos.conf"
 #define MOUSE_SPEED_KEY "mouse_speed"
@@ -151,6 +152,7 @@ void mouse_config_init(void) {
         if (i >= 0) { g_scroll_dir_index = i; mouse_set_scroll_invert(SCROLL_DIRS[i].value); }
     }
 }
+INITCALL(mouse_config_init, INIT_CONFIG);
 
 int mouse_config_speed_pct(void) { return g_speed_pct; }
 

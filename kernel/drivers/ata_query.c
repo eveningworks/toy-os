@@ -14,6 +14,7 @@
 #include "ata.h"
 #include "string.h"
 #include <stddef.h>
+#include "initcall.h"
 
 // driver-none: a QUERY provider over what ata.c found
 
@@ -52,3 +53,4 @@ static const struct query_provider ata_provider = {
 void ata_query_init(void) {
     query_register(&ata_provider);
 }
+INITCALL(ata_query_init, INIT_QUERY);

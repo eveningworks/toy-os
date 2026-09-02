@@ -33,6 +33,7 @@
 #include "knum.h"
 #include "etc_config.h"
 #include "setting.h"
+#include "initcall.h"
 
 enum dst_rule { TZ_DST_NONE, TZ_DST_EU, TZ_DST_US };
 
@@ -546,6 +547,7 @@ void tz_init(void) {
     int idx = tz_find_by_name(value);
     if (idx >= 0) current_index = idx;
 }
+INITCALL(tz_init, INIT_CONFIG);
 
 int tz_city_count(void) {
     return tz_city_count_loaded;

@@ -25,6 +25,7 @@
 #include "multiboot.h"
 #include "string.h"
 #include <stddef.h>
+#include "initcall.h"
 
 // multiboot_mmap_foreach() takes a plain callback with no context
 // argument, so the in-flight state has to be file-scope. Safe for the
@@ -83,3 +84,4 @@ static const struct query_provider memmap_provider = {
 void multiboot_query_init(void) {
     query_register(&memmap_provider);
 }
+INITCALL(multiboot_query_init, INIT_QUERY);

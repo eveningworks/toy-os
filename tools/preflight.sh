@@ -174,6 +174,9 @@ python3 tools/check_key_routing.py || fail "key routing check"
 step "check_drivers.py (a driver that declares itself to nothing)"
 python3 tools/check_drivers.py || fail "driver declaration check"
 
+step "check_initcalls.py (an init both declared and hand-called, or at an unwalked level)"
+python3 tools/check_initcalls.py || fail "initcall check"
+
 step "check_tool_commands.py (a tool driving a command that no longer exists)"
 python3 tools/check_tool_commands.py || fail "tool command check"
 

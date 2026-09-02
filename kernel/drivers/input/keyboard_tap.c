@@ -13,6 +13,7 @@
 #include "timer.h"
 #include "string.h"
 #include <stddef.h>
+#include "initcall.h"
 
 // driver-none: a diagnostic tap on the key path
 
@@ -156,3 +157,4 @@ static const struct query_provider kbdtap_provider = {
 void kbdtap_query_init(void) {
     query_register(&kbdtap_provider);
 }
+INITCALL(kbdtap_query_init, INIT_QUERY);

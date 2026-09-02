@@ -23,6 +23,7 @@
 #include "paging.h"
 #include "kfmt.h"
 #include "string.h"
+#include "initcall.h"
 
 // driver-none: the virtio transport half; block_virtio.c declares the driver
 
@@ -278,3 +279,4 @@ void virtio_blk_init(void) {
                 g_max_discard ? "yes" : "no",
                 g_readonly ? ", READ-ONLY" : "");
 }
+INITCALL(virtio_blk_init, INIT_BUS);

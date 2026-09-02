@@ -50,6 +50,7 @@
 #include "multiboot.h" // multiboot_cmdline() -- the `hdadump` boot word
 #include "fixed.h"     // fx_sin, for the kernel.hda_tone diagnostic
 #include <stdint.h>
+#include "initcall.h"
 
 DRIVER_DECLARE("hda", "sound", "Intel High Definition Audio");
 
@@ -1016,6 +1017,7 @@ void hda_init(void) {
         g_nctrl++;
     }
 }
+INITCALL(hda_init, INIT_DEVICE);
 
 // --- KTESTs -- skip without the device, like ac97's -------------------
 

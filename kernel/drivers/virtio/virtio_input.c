@@ -31,6 +31,7 @@
 #include "kfmt.h"
 #include "string.h"
 #include "driver.h" // DRIVER_DECLARE -- `lsdrv`
+#include "initcall.h"
 
 DRIVER_DECLARE("virtio-input", "input", "virtio keyboard, mouse and tablet");
 
@@ -365,3 +366,4 @@ void virtio_input_init(void) {
         if (g_count >= MAX_INPUT_DEVICES) break;
     }
 }
+INITCALL(virtio_input_init, INIT_BUS);

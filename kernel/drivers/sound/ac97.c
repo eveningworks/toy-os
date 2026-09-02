@@ -31,6 +31,7 @@
 #include "ktest.h"
 #include <stdint.h>
 #include "driver.h" // DRIVER_DECLARE -- `lsdrv`
+#include "initcall.h"
 
 DRIVER_DECLARE("ac97", "sound", "Intel AC'97 audio codec");
 
@@ -193,6 +194,7 @@ void ac97_init(void) {
                 g_pci->bus, g_pci->device, g_pci->function,
                 g_nam, g_nabm, line);
 }
+INITCALL(ac97_init, INIT_DEVICE);
 
 // --- KTESTs -- skip without the device, like ahci's --------------------
 

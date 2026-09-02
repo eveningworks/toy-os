@@ -14,6 +14,7 @@
 // commands onto it".
 #include "query.h"
 #include "klog.h"
+#include "initcall.h"
 
 static int klog_count_records(void) {
     uint32_t retained = klog_retained_bytes();
@@ -61,3 +62,4 @@ static const struct query_provider klog_provider = {
 void klog_query_init(void) {
     query_register(&klog_provider);
 }
+INITCALL(klog_query_init, INIT_QUERY);

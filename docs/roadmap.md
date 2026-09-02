@@ -623,6 +623,8 @@ run on, not by order.
 - [ ] MSI-X vectors per QUEUE rather than one per device -- what multi-queue virtio and NVMe want
 - [ ] Re-key `/etc/kbs` layouts to evdev keycodes, removing the input core's translation table
 
+- [ ] `settings_init()` as initcalls too -- the last hand list; its order is the Settings sidebar's, so it needs an explicit order first
+
 ### other emulated hardware worth claiming
 
 - [ ] e1000 ethernet

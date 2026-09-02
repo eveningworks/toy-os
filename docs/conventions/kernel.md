@@ -2038,6 +2038,39 @@ measure within bursts and total the tone, never trust the file's
 timeline. The ac97 KTESTs skip on every boot but audio_test's, which
 is why its "0 skipped" assertion is load-bearing (the ahci lesson).
 
+## AN INIT IS DECLARED, NOT CALLED: `INITCALL(fn, LEVEL)` BESIDE THE FUNCTION, AND `kernel_main()` WALKS THE LEVELS
+
+`kernel/include/kernel/initcall.h`. A driver, a class core, a query
+provider or an `/etc` reader runs at boot by dropping
+`INITCALL(foo_init, INIT_DEVICE);` at file scope beside `foo_init()` --
+the `.ktests`/`.drivers` mechanism, Linux's `module_init()` levels.
+`kernel_main()` keeps the hand-ordered bring-up (serial, ACPI, PCI, pmm,
+GDT/IDT, LAPIC, clocks, the heap, the console) and then calls
+`initcalls_run()` once per level, in level order. Five things to know:
+
+- **THE LEVELS ARE THE ORDER; WITHIN A LEVEL IT IS LINK ORDER, WHICH
+  NOTHING MAY DEPEND ON.** `INIT_CORE` (a class core owning a table --
+  `net_init`), `INIT_BUS` (AHCI, xHCI, the virtio devices), `INIT_DEVICE`
+  (NICs, sound cards), `INIT_FS`, `INIT_CONFIG` (readers of `/etc`),
+  `INIT_QUERY` (providers, before `settings_init()`). Link order is
+  `find | sort` -- deterministic, and a rename reorders it -- so a real
+  dependency gets a level, never a filename.
+- **DO NOT ALSO CALL IT.** `tools/check_initcalls.py` fails the build on
+  an init that is declared and called by hand (it runs twice, and the
+  second run re-zeroes what the first registered) and on one declared at
+  a level `kernel_main()` never walks (it never runs). The `initcall`
+  KTEST asserts every declared one ran.
+- **`BOOT_REQUIRE()` IS STILL WHAT MAKES A WRONG ORDER LOUD.** A level
+  says when something runs; the bitmask panics when something is used
+  before its init. Both stay.
+- **`settings_init()` IS STILL A HAND LIST**, deliberately: its order is
+  the order settings appear in `config list` and the Settings sidebar,
+  so it is a UI decision rather than a boot one. The roadmap has it.
+- **THE GATE FOR A NEW LEVEL IS A DEPENDENCY, not a category.** Six
+  levels cover fifty inits because most of them only need "after the
+  heap"; add one when something must run between two existing ones,
+  and say why on the enum.
+
 ## A SYSCALL HANDLER RUNS WITH INTERRUPTS OFF, AND A WAIT ON `pit_ticks()` THERE NEVER ENDS
 
 `context_switch.asm` re-enables interrupts on the way OUT of a syscall

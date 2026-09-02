@@ -6,6 +6,7 @@
 #include "netdev.h"
 #include "string.h"
 #include <stddef.h>
+#include "initcall.h"
 
 // driver-none: a QUERY provider over the net devices
 
@@ -57,3 +58,4 @@ static const struct query_provider netdev_provider = {
 void net_query_init(void) {
     query_register(&netdev_provider);
 }
+INITCALL(net_query_init, INIT_QUERY);

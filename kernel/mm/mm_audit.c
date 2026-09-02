@@ -85,6 +85,7 @@ uint64_t mm_audit_report(void) {
 // running between the two syscalls could invalidate. Re-walking always
 // reports what is true NOW.
 #include "query.h"
+#include "initcall.h"
 
 // vmm_audit_space_cb()'s callback takes a ctx, so unlike the memmap
 // provider this needs no file-scope state -- the walk is re-entrant
@@ -150,3 +151,4 @@ static const struct query_provider mmaudit_provider = {
 void mm_audit_query_init(void) {
     query_register(&mmaudit_provider);
 }
+INITCALL(mm_audit_query_init, INIT_QUERY);

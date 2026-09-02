@@ -3417,6 +3417,11 @@ window without going through it will find its layout polls timing out.
   place an edit is forbidden by policy. Doom's `p_spec.c` has a
   72-branch switch written in 1993; it is not a finding, for the same
   reason the Makefile turns `-Wall` off for that directory.
+- **`check_initcalls.py`** -- an init that is both an `INITCALL` and a
+  hand call (it would run twice), or an `INITCALL` at a level
+  `kernel_main()` never walks (it would never run). Static, over the
+  source, because the in-kernel `initcall` KTEST can see "never ran"
+  at boot but not "ran twice". Run by `preflight.sh`.
 - **`loc.py`** -- how big this project is, honestly: source lines with
   generated files, comments and blank lines all excluded, and the
   with-comments figure beside it. Not `wc -l`, because the answer

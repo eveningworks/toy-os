@@ -21,6 +21,7 @@
 #include "barrier.h"
 #include <stddef.h>
 #include "driver.h" // DRIVER_DECLARE -- `lsdrv`
+#include "initcall.h"
 
 DRIVER_DECLARE("ahci", "block", "SATA AHCI host controller");
 
@@ -589,6 +590,7 @@ void ahci_init(void) {
                 g_irq ? "IRQ-driven" : "polled (no interrupt line)");
     if (g_irq) klog_printf("ahci: on IRQ %u\n", g_irq);
 }
+INITCALL(ahci_init, INIT_BUS);
 
 // ---- transfers -------------------------------------------------------
 

@@ -16,6 +16,7 @@
 #include "heap.h"
 #include "string.h"
 #include <stddef.h>
+#include "initcall.h"
 
 static int meminfo_count(void) { return 1; }
 
@@ -68,3 +69,4 @@ static const struct query_provider meminfo_provider = {
 void mem_query_init(void) {
     query_register(&meminfo_provider);
 }
+INITCALL(mem_query_init, INIT_QUERY);

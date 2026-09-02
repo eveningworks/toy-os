@@ -6,6 +6,7 @@
 #include "etc_config.h"
 #include "setting.h"
 #include "string.h"
+#include "initcall.h"
 
 #define CURSOR_CONFIG_FILE "/etc/toyos.conf"
 #define CURSOR_CONFIG_KEY "cursor_style"
@@ -19,6 +20,7 @@ void cursor_config_init(void) {
     // has for a value it doesn't understand.
     if (vga_cursor_style_parse(value, &want)) vga_set_cursor_style(want);
 }
+INITCALL(cursor_config_init, INIT_CONFIG);
 
 int cursor_config_save(enum vga_cursor_style style) {
     if (style >= VGA_CURSOR_STYLE_COUNT) return SETTING_INVALID;

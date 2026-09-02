@@ -30,6 +30,7 @@
 #include "win_server.h"
 #include "string.h"
 #include <stddef.h>
+#include "initcall.h"
 
 static int tty_query_count(void) {
     int n = 0;
@@ -91,3 +92,4 @@ static const struct query_provider tty_provider = {
 void tty_query_init(void) {
     query_register(&tty_provider);
 }
+INITCALL(tty_query_init, INIT_QUERY);

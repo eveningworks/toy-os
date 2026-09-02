@@ -36,6 +36,7 @@
 #include "usb_hid.h"
 #include "multiboot.h" // multiboot_cmdline() -- the `nousb` flag
 #include "driver.h" // DRIVER_DECLARE -- `lsdrv`
+#include "initcall.h"
 
 DRIVER_DECLARE("xhci", "usb", "USB 3 xHCI host controller");
 
@@ -1724,6 +1725,7 @@ void usb_init(void) {
     power_ports();
     scan_ports();
 }
+INITCALL(usb_init, INIT_BUS);
 
 // --- introspection ----------------------------------------------------
 

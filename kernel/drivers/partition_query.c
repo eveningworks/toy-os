@@ -19,6 +19,7 @@
 #include "block.h" // blk_disk_sector_count()
 #include "string.h"
 #include <stddef.h>
+#include "initcall.h"
 
 // driver-none: a QUERY provider over the partition table
 
@@ -125,3 +126,4 @@ void partition_query_init(void) {
     query_register(&parttable_provider);
     query_register(&partition_provider);
 }
+INITCALL(partition_query_init, INIT_QUERY);

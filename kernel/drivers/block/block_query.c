@@ -14,6 +14,7 @@
 #include "block.h"
 #include "string.h"
 #include <stddef.h>
+#include "initcall.h"
 
 // driver-none: a QUERY provider over the block table
 
@@ -56,3 +57,4 @@ static const struct query_provider blkdev_provider = {
 void block_query_init(void) {
     query_register(&blkdev_provider);
 }
+INITCALL(block_query_init, INIT_QUERY);

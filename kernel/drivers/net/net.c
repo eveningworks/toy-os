@@ -24,6 +24,7 @@
 #include "string.h"
 #include "errno.h"
 #include "driver.h" // driver_bound() -- `lsdrv`
+#include "initcall.h"
 
 // driver-none: the net class registry itself
 
@@ -176,3 +177,4 @@ void net_init(void) {
     g_rx_head = g_rx_tail = 0;
     g_inited = 1;
 }
+INITCALL(net_init, INIT_CORE);

@@ -16,6 +16,7 @@
 #include "strace.h"  // kernel-internal now: `strace` is a ring-3 program
 #include "string.h"
 #include <stddef.h>
+#include "initcall.h"
 
 // The ABI carries its own name length so abi/ need not include an api/
 // header. A mismatch would truncate every process name in the report,
@@ -151,3 +152,4 @@ void kstack_query_init(void) {
     query_register(&kstack_provider);
     query_register(&kstack_syscall_provider);
 }
+INITCALL(kstack_query_init, INIT_QUERY);

@@ -8,6 +8,7 @@
 #include "ahci.h"
 #include "string.h"
 #include <stddef.h>
+#include "initcall.h"
 
 // driver-none: a QUERY provider over what ahci.c found
 
@@ -98,3 +99,4 @@ void ahci_query_init(void) {
     query_register(&hba_provider);
     query_register(&port_provider);
 }
+INITCALL(ahci_query_init, INIT_QUERY);

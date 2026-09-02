@@ -5,6 +5,7 @@
 #include "klog.h"
 #include "kfmt.h" // klog_printf
 #include <stddef.h>
+#include "initcall.h"
 
 // The declarations the linker collected. Walked in place rather than
 // copied: they are `const char *` into .rodata, which the relocator has
@@ -151,3 +152,4 @@ static const struct query_provider drv_provider = {
 };
 
 void driver_query_init(void) { query_register(&drv_provider); }
+INITCALL(driver_query_init, INIT_QUERY);

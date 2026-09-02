@@ -3758,6 +3758,30 @@ had exactly one ordering edge that ever mattered. Levels stay on the
 roadmap for when a third driver needs a slot rather than being built on
 speculation.
 
+**REVISITED 2026-09-02: the levels are built, and the bitmask stays.**
+The bar above was met the way it said it would be -- not by a third
+driver but by the fiftieth: `kernel_main()` had grown to ~50 `*_init()`
+lines (a dozen drivers, twenty-two query providers, seven `/etc`
+readers), each one an edit to a file that is not the subsystem's own,
+and the maintainer asked for the list to go. `INITCALL(fn, LEVEL)`
+(`kernel/include/kernel/initcall.h`) is Linux's `module_init()` shape
+on the `.ktests`/`.drivers` mechanism this repo already had: six levels
+in dependency order (core, bus, device, fs, config, query), link order
+within a level, walked by `initcalls_run()` one level at a time from
+`kernel_main()`, which keeps only the genuinely sequential bring-up by
+hand. What the paragraph above got right is kept: the levels do NOT
+make a violation loud, `BOOT_REQUIRE()` still does, and the two are
+complementary rather than alternatives. What it got wrong was the
+forecast that a readable list beats a derived order -- the list stopped
+being readable at fifty lines, and the order it encoded was mostly "any
+time after the heap". The three real edges (a class core before its
+registrants, virtio after the heap, the /etc readers after the mount)
+are now levels, which is the honest way to say "this is the order and
+nothing else is". `tools/check_initcalls.py` fails the build on an init
+that is both declared and hand-called (it would run twice) or declared
+at a level nothing walks (it would never run); the `initcall` KTEST
+checks at boot that every declared one ran.
+
 **No BOOT_SUB_HEAP, and the reason is a trap worth restating.**
 `kernel/lib/heap_core.c` is compiled twice -- kernel and `libuapp.a` --
 so a kernel-only include there would silently take `malloc()` away from

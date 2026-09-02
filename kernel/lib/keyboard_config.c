@@ -11,6 +11,7 @@
 #include "etc_config.h"
 #include "setting.h"
 #include "multiboot.h"
+#include "initcall.h"
 
 #define KEYBOARD_CONFIG_FILE "/etc/toyos.conf"
 #define KEYBOARD_CONFIG_KEY "keyboard_layout"
@@ -70,6 +71,7 @@ void keyboard_config_init(void) {
     }
     keyboard_layout_load(value);
 }
+INITCALL(keyboard_config_init, INIT_CONFIG);
 
 int keyboard_config_save(const char *name) {
     if (!name || !*name) return SETTING_INVALID;

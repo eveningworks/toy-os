@@ -14,6 +14,7 @@
 #include "string.h"
 #include "kfmt.h"
 #include "knum.h"
+#include "initcall.h"
 
 #define SOUND_CONFIG_FILE "/etc/toyos.conf"
 #define VOLUME_KEY "volume"
@@ -59,6 +60,7 @@ void sound_config_init(void) {
     // driver is up -- this runs after ac97_init() (kernel_main's order).
     sound_set_volume(g_volume);
 }
+INITCALL(sound_config_init, INIT_CONFIG);
 
 static void volume_get(char *out, uint32_t out_size) {
     k_snprintf(out, out_size, "%d", g_volume);

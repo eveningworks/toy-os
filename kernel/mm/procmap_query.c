@@ -13,6 +13,7 @@
 #include "uaddr.h"
 #include "string.h"
 #include <stddef.h>
+#include "initcall.h"
 
 #define IMAGE_BASE 0x8000000000ULL // userland/rt/link.ld's origin
 
@@ -98,3 +99,4 @@ static const struct query_provider procmap_provider = {
 void procmap_query_init(void) {
     query_register(&procmap_provider);
 }
+INITCALL(procmap_query_init, INIT_QUERY);

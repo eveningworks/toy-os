@@ -24,6 +24,7 @@
 #include "font_ttf.h"
 #include "gfx.h"
 #include "string.h"
+#include "initcall.h"
 
 // driver-none: a QUERY provider over the loaded faces
 
@@ -183,3 +184,4 @@ static const struct query_provider fontglyph_provider = {
 void fontglyph_query_init(void) {
     query_register(&fontglyph_provider);
 }
+INITCALL(fontglyph_query_init, INIT_QUERY);

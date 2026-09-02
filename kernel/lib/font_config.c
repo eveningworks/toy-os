@@ -19,6 +19,7 @@
 #include "etc_config.h"
 #include "setting.h"
 #include "win_server.h" // win_server_font_changed() -- clients cache the metrics
+#include "initcall.h"
 
 #define FONT_CONFIG_FILE "/etc/toyos.conf"
 #define FONT_CONFIG_KEY "font_size"
@@ -89,6 +90,7 @@ void font_config_init(void) {
         gfx_set_font_px(gfx_font_px());
     }
 }
+INITCALL(font_config_init, INIT_CONFIG);
 
 int font_config_save(enum font_size size) {
     (void)size;

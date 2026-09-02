@@ -17,6 +17,7 @@
 #include "heap.h"
 #include "string.h"
 #include <stddef.h>
+#include "initcall.h"
 
 static int heap_count(void) { return 1; }
 
@@ -93,3 +94,4 @@ void heap_query_init(void) {
     query_register(&heap_provider);
     query_register(&heapcheck_provider);
 }
+INITCALL(heap_query_init, INIT_QUERY);

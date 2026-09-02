@@ -99,6 +99,19 @@ SECTIONS
         __drivers_end = .;
     } :rodata
 
+    /* Initcalls. INITCALL() (kernel/include/kernel/initcall.h) drops one
+       struct initcall per init function into .initcalls and
+       initcalls_run() walks them a level at a time -- so an init runs by
+       being declared, not by a line in kernel_main(). Same mechanism,
+       alignment and placement reasoning as .drivers above. */
+    . = ALIGN(8);
+    .initcalls :
+    {
+        __initcalls_start = .;
+        KEEP(*(.initcalls))
+        __initcalls_end = .;
+    } :rodata
+
     . = ALIGN(4096);
     __kdata_start = .;
 

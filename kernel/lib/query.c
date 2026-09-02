@@ -15,6 +15,7 @@
 #include "klog.h"
 #include "kfmt.h" // klog_printf
 #include <stddef.h>
+#include "initcall.h"
 
 static const struct query_provider *g_providers[QUERY_MAX];
 static int g_count;
@@ -185,3 +186,4 @@ int query_field_get(const char *qualified, uint64_t *out_value, uint32_t *out_ty
 void query_init(void) {
     query_register(&g_providers_provider);
 }
+INITCALL(query_init, INIT_QUERY);

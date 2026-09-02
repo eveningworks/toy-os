@@ -7,6 +7,7 @@
 #include "setting.h"
 #include "multiboot.h"
 #include "string.h"
+#include "initcall.h"
 
 #define TARGET_FILE "/etc/toyos.conf"
 #define TARGET_KEY  "default_target"
@@ -68,6 +69,7 @@ void target_init(void) {
         g_overridden = 1;
     }
 }
+INITCALL(target_init, INIT_CONFIG);
 
 const char *target_get(void) { return g_target; }
 int target_overridden(void) { return g_overridden; }

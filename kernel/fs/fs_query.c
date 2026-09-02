@@ -29,6 +29,7 @@
 #include "block.h"
 #include "string.h"
 #include <stddef.h>
+#include "initcall.h"
 
 static int fsinfo_count(void) {
     int n = mount_count();
@@ -91,3 +92,4 @@ static const struct query_provider fsinfo_provider = {
 void fs_query_init(void) {
     query_register(&fsinfo_provider);
 }
+INITCALL(fs_query_init, INIT_QUERY);

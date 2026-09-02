@@ -5,6 +5,7 @@
 #include "virtio_net.h"
 #include "string.h"
 #include "driver.h" // DRIVER_DECLARE -- `lsdrv`
+#include "initcall.h"
 
 DRIVER_DECLARE("virtio-net", "net", "virtio network device");
 
@@ -36,3 +37,4 @@ void net_virtio_init(void) {
     virtio_net_set_rx(vnet_rx);
     net_register(&VIRTIO_NET_DEV);
 }
+INITCALL(net_virtio_init, INIT_DEVICE);

@@ -41,6 +41,7 @@
 #include "kfmt.h"
 #include "string.h"
 #include "driver.h" // DRIVER_DECLARE -- `lsdrv`
+#include "initcall.h"
 
 DRIVER_DECLARE("virtio-rng", "rng", "virtio entropy source");
 
@@ -145,3 +146,4 @@ void virtio_rng_init(void) {
     klog_printf("virtio-rng: entropy source registered (krandom is now %s)\n",
                 krandom_quality_name(krandom_quality()));
 }
+INITCALL(virtio_rng_init, INIT_BUS);

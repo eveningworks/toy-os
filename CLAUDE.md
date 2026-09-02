@@ -643,6 +643,7 @@ whenever a headline here tells you something you did not already know.
 - **RING-3 `malloc` TAKES A LOCK; THE KERNEL'S DOES NOT**
 - **THE THREAD POINTER IS FS.base, AND THE SCHEDULER RELOADS IT**
 - **THERE IS A SOUND CLASS, ITS STREAM IS EXCLUSIVE, AND THE RING IS SHARED MEMORY**
+- **AN INIT IS DECLARED, NOT CALLED: `INITCALL(fn, LEVEL)` BESIDE THE FUNCTION, AND `kernel_main()` WALKS THE LEVELS**
 - **A SYSCALL HANDLER RUNS WITH INTERRUPTS OFF, AND A WAIT ON `pit_ticks()` THERE NEVER ENDS**
 - **INTEL HDA IS THE THIRD SOUND DEVICE, ITS CODEC IS ROUTED BY A GENERIC WALK, AND THE VOLUME TAPER IS THE USB DRIVER'S**
 - **THERE IS A LOCAL APIC NOW, AND A DEVICE MAY BE ON A VECTOR INSTEAD OF A LINE**
@@ -1271,7 +1272,8 @@ cost".
   guest first** -- it refuses to start while one holds `disk.img`'s
   write lock. Static checks, run by it or beside it: `check_deps.py`,
   `check_layout.py`, `check_dispatch.py`, `check_widget_ops.py`,
-  `check_key_routing.py`, `check_drivers.py`, `check_docs.py`,
+  `check_key_routing.py`, `check_drivers.py`, `check_initcalls.py`,
+  `check_docs.py`,
   `check_licenses.py`, `check_config_size.py`,
   `check_tool_coverage.py`, `check_tool_commands.py`, and
   `tfs3_writer_test.py` (the host seeder's overwrite -- a leak there

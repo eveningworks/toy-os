@@ -27,6 +27,7 @@
 #include "string.h"
 #include "errno.h"
 #include "driver.h" // driver_bound() -- `lsdrv`
+#include "initcall.h"
 
 DRIVER_DECLARE("e1000", "net", "Intel 8254x gigabit Ethernet");
 
@@ -310,3 +311,4 @@ void e1000_init(void) {
 
     if (!net_register(&g_dev)) g_present = 0;
 }
+INITCALL(e1000_init, INIT_DEVICE);

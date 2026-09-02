@@ -14,6 +14,7 @@
 #include "clocksource.h"
 #include "string.h"
 #include <stddef.h>
+#include "initcall.h"
 
 static int cpuload_count(void) { return 1; }
 
@@ -46,3 +47,4 @@ static const struct query_provider cpuload_provider = {
 void cpuload_query_init(void) {
     query_register(&cpuload_provider);
 }
+INITCALL(cpuload_query_init, INIT_QUERY);

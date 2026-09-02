@@ -17,7 +17,7 @@
 #include "pmm.h"
 #include "heap.h"
 #include "pci.h"
-#include "sound.h" // ac97_init(), and the class it registers into
+#include "initcall.h"
 #include "netdev.h" // net_init()/e1000_init()/net_virtio_init() -- the network device class
 #include "sound_config.h"
 #include "virtio_blk.h"
@@ -272,70 +272,14 @@ void kernel_main(uint64_t multiboot_info_addr) {
 
     heap_init(); // kmalloc()/kfree() -- built on pmm, needs it initialized first
 
-    // virtio devices, if any.
-    //
-    // AFTER pmm_init(), and that ordering is load-bearing rather than
-    // tidy: a virtqueue's rings come from pmm_alloc_contiguous(), so
-    // this next to pci_init() -- where a PCI-scanning driver otherwise
-    // belongs -- found its device, negotiated features, and then failed
-    // with "queue 0 needs 3 contiguous frames and none were free". It
-    // fails softly enough to look like a device problem rather than an
-    // ordering one, which is why it is written down here.
-    //
-    // Still BEFORE fs_init(), because probe_and_mount() asks
-    // blk_virtio_init() whether to hand it the disk. Kept out of
-    // fs_init() itself: the driver existing is independent of whether
-    // anything mounts off it, and `dmesg` should report a virtio disk
-    // either way. Silent and allocation-free when there is none.
-    virtio_blk_init();
-
-    // The SATA host bus adapter, if the machine has one. Same ordering
-    // constraint as the virtio devices above (its command list and
-    // bounce buffer come from pmm_alloc_contiguous()) and the same
-    // silence when absent. Before fs_init(), because mount.c asks
-    // blk_ahci_init() whether to hand it the disk.
-    ahci_init();
-
-    // The entropy device, same ordering constraint (it wants a
-    // virtqueue) and the same silence when absent. It raises krandom's
-    // reported quality from TSC jitter to real host entropy, which
-    // under QEMU's default CPU model -- no RDSEED, no RDRAND -- is the
-    // only real entropy this machine can get. It cannot come early
-    // enough to seed the stack canary; see virtio_rng.h.
-    virtio_rng_init();
-
-    // Input devices on the same transport -- a keyboard, a mouse, a
-    // tablet. They register with the input core, so the desktop and the
-    // console consume them without knowing which bus they arrived on.
-    virtio_input_init();
-
-    // The network device core BEFORE the buses that can register into
-    // it. It owns the table, and its init() ZEROES that table -- so a
-    // USB Ethernet adapter enumerating first registered into a table
-    // that was then wiped, and the machine had one fewer interface with
-    // nothing reported. That is CLAUDE.md's using-a-subsystem-before-
-    // its-init rule, and net_register() refuses loudly now as well.
-    net_init();
-
-    // USB last of the input paths, and deliberately so: PS/2 registered
-    // first, so it stays input source 0 and `lsdev`'s ordering does not
-    // shift under the tests. Needs pmm_init() for its DMA frames,
-    // idt_init() for interrupts and a ticking PIT, and pci_init() --
-    // all of which BOOT_REQUIRE() checks rather than assumes.
-    usb_init();
-
-    // The NICs. NO ADDRESSES -- a card comes up with none and
-    // `/bin/dhcp` gives it one, as on Linux. Both drivers are called
-    // unconditionally -- the disk layer's lesson, where a short circuit
-    // meant a machine's second controller did not exist (see CLAUDE.md's
-    // every-disk-driver-runs rule).
-    e1000_init();
-    net_virtio_init();
-
-    // Audio, after pci_init() like every PCI-scanning driver. Finding
-    // no controller is the common case and not an error.
-    ac97_init();
-    hda_init();
+    // Everything from here that is "run after X" is an INITCALL
+    // (kernel/include/kernel/initcall.h): declared at file scope beside
+    // its own init(), walked here a level at a time. The levels are the
+    // order; the comments that used to sit on each call are on the
+    // level definitions and beside the calls that own them.
+    initcalls_run(INIT_CORE);   // the class cores that own a table (net)
+    initcalls_run(INIT_BUS);    // AHCI, xHCI, virtio -- after heap_init(): a virtqueue is contiguous frames
+    initcalls_run(INIT_DEVICE); // NICs and sound cards
 
     klog_write("toy-os: kernel heap initialized\n");
 
@@ -349,20 +293,14 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // They are made by fs_init() itself now, because a mount also
     // happens when `fsformat` reformats a live disk and that path
     // skipped this line entirely -- see vfs.c's ensure_layout().
-    fs_init();
+    initcalls_run(INIT_FS);
     // /bin binaries (e.g. lspci) are no longer bootstrap-installed here
     // at boot time -- tools/tfs3_writer.py seeds them into disk.img at
     // BUILD time now (see the Makefile's `seed` step), so by the time
     // toy-os actually boots they're already on disk. See
     // docs/decisions.md for why this replaced the old GRUB-module/
     // BIN_BOOTSTRAP-table approach.
-    tz_init(); // loads the persisted timezone choice, if any -- needs fs_init()/"/etc" first
-    font_config_init(); // loads the persisted font size, if any -- see kernel/lib/font_config.c
-    cursor_config_init(); // console cursor style, same /etc plumbing as the font size
-    mouse_config_init();  // pointer speed and acceleration
-    sound_config_init();  // output volume, onto whatever ac97_init() found
-    keyboard_config_init(); // loads the persisted keyboard layout, if any -- see kernel/lib/keyboard_config.c
-    target_init(); // what this machine is for -- read BEFORE init is spawned below, since init asks for it first thing
+    initcalls_run(INIT_CONFIG); // /etc readers: timezone, font, cursor, mouse, volume, keyboard, boot target
     vga_reflow(); // apply it to the console's cell layout (no-op if nothing was persisted)
     // Announce those four to the settings registry, AFTER their own
     // init(): a timezone registered before tz_init() would offer an
@@ -370,27 +308,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // The FACT registry, before settings_init() only because a setting
     // may later want to read one. Each subsystem announces its own
     // providers; the core registers the registry's self-description.
-    query_init();
-    mem_query_init();
-    cpuload_query_init();
-    multiboot_query_init();
-    fs_query_init();
-    mm_audit_query_init();
-    procmap_query_init();
-    krandom_query_init();
-    kversion_query_init();
-    driver_query_init();
-    partition_query_init();
-    block_query_init();
-    net_query_init();
-    heap_query_init();
-    ata_query_init();
-    ahci_query_init();
-    kstack_query_init();
-    tty_query_init();
-    kbdtap_query_init();
-    fontglyph_query_init();
-    klog_query_init();
+    initcalls_run(INIT_QUERY);  // SYS_QUERY providers, each announced by its own subsystem
     settings_init();
 
     // One-shot boot-time CMOS/RTC readout, logged for the same reason a

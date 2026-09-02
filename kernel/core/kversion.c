@@ -11,6 +11,7 @@
 #include "version.h"      // TOYOS_VERSION, TOYOS_BUILD_ID
 #include "build_stamp.h"  // TOYOS_BUILD_STAMP -- and NOWHERE else
 #include <stddef.h>
+#include "initcall.h"
 
 const char *kversion_banner(void) {
     return "toy-os " TOYOS_VERSION " (" TOYOS_BUILD_ID ") built " TOYOS_BUILD_STAMP;
@@ -44,3 +45,4 @@ static const struct query_provider version_provider = {
 void kversion_query_init(void) {
     query_register(&version_provider);
 }
+INITCALL(kversion_query_init, INIT_QUERY);
