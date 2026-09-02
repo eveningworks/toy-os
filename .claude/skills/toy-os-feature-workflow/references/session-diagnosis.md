@@ -1406,3 +1406,14 @@ saved (`dmesg > /tmp/boot1.txt`, which survives a reboot) said
 `r8153 version 0x0000` -- the driver refused a chip whose firmware had
 not loaded yet. One saved log from the bad boot was worth more than any
 amount of reasoning about the good ones; ask for it first.
+
+**2026-09-02 (the BAR at 768 GiB). READ THE ADDRESS IN THE ERROR.**
+
+`virtio: notify window at 0xc000007000 could not be mapped` -- the first
+theory was a missing page directory, and the fix would have been to
+allocate one. The address is 768 GiB: above the 512 GiB the kernel's
+PML4[0] spans, inside the ring-3 image's PML4 entry. No amount of
+allocating would have mapped it, because identity was impossible; the
+real answer (ioremap into a kernel arena) came from converting the hex
+to a size and comparing it with `uaddr.h`. Two minutes of arithmetic
+before the second theory.

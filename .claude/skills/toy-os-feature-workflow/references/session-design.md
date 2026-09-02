@@ -2179,3 +2179,40 @@ frame, or anything that reads a device right after enumeration.**
 - **A panic store must warm-reset the machine itself**: the maintainer
   power-cycles after a panic, and a power cycle loses the RAM pstore
   relies on. The roadmap item carries both halves.
+
+**2026-09-02 (More than 4 GiB of RAM: stages 1, 2 and 4, and the first
+stage-3 consumer). Read this before touching pmm, paging.c, or any
+driver that hands an address to a device.**
+
+- **Every allocation names a zone** -- `pmm_alloc_frame(zone)`,
+  `pmm_alloc_contiguous(count, zone)`, Linux's gfp mask in miniature.
+  The signature changed at all 50 sites rather than adding a `_zone`
+  variant, because a caller that never states its zone is exactly the
+  silent wrong-4-GiB DMA the decision entry warns about. A one-line
+  perl over the tree did it; one line with two calls was missed and
+  the compiler named it.
+- **The bitmaps are carved out of RAM, not static** -- sized from the
+  memory map at `pmm_init()`, placed in the first low frames clear of
+  the image, modules and multiboot info, and the carve is the first
+  reservation. Capped at `UADDR_KDEV_BASE`.
+- **The map above 4 GiB is 2 MiB slots only, and pmm manages the high
+  zone at that granule** so a managed frame is always a mapped one.
+  1 GiB pages were declined because QEMU's default CPU has none, and a
+  path the gate never runs is a path the laptop debugs alone.
+- **The plan's MMIO assumption was wrong, and only an 8 GiB boot could
+  show it.** On a machine that size SeaBIOS puts the 64-bit PCI window
+  at 768 GiB -- inside the ring-3 half -- so a BAR up there can never
+  be identity-mapped. `paging_map_device()` is `ioremap`: an uncached
+  slot in the top 32 GiB of PML4[0], and the driver keeps the POINTER.
+  `docs/decisions/kernel.md` ("The physical map is the identity map,
+  extended") carries the correction under the original decision.
+- **The kernel heap is on `ANY`, so `kmalloc` memory is not a DMA
+  target for a 32-bit engine any more.** Audited before moving it: ATA
+  and AHCI bounce through pmm frames, e1000 copies into its own rings,
+  xHCI allocates its DMA objects from pmm; only virtio-blk DMAs from
+  the caller's buffer, and its bound became the map rather than 4 GiB.
+  The red-zone argument in `kfree()` was restated to the property that
+  holds (bits 63:48 clear), not the narrower one ("fits in 32 bits").
+- **About and `meminfo` say what a PROCESS can get**: `QUERY_MEMINFO`
+  grew `frame_total_high`/`frame_free_high` (appended), About subtracts
+  them until user pages move, ramfs budgets from the DMA32 zone.

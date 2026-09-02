@@ -2436,3 +2436,39 @@ start, which landed BEFORE `i` -- duplicated 25 headings in
 `roadmap-details.md`. `check_docs.py` caught it; the fix was
 `s.index(end, i)` plus a line count before and after, which the skill
 already prescribes and I did not do.
+
+**2026-09-02 (the 8 GiB suite). THE THEME IS THAT A NEW MACHINE SHAPE
+NEEDS THE WHOLE SUITE, NOT THE SUBSYSTEM'S.**
+
+- **Run everything at the new configuration, not the tests for the
+  thing you changed.** The `mm` suite was green at 8 GiB while eight
+  VIRTIO tests were red there, because 8 GiB is where SeaBIOS moves the
+  PCI 64-bit window to 768 GiB -- a fact about the machine, not about
+  memory management. `highmem_test.py` runs the whole suite for that
+  reason, and refuses a skip of the above-4-GiB checks by grepping for
+  its own skip text rather than "0 skipped" (other suites skip for
+  their own reasons).
+- **A check that asserts an INTERMEDIATE state breaks the moment the
+  next stage lands.** "Frames above 4 GiB are idle" was true for one
+  commit; the heap became a consumer in the next and the assertion
+  went red for the right reason. Assert the invariant (free <= total,
+  a zoned alloc returns high) rather than the snapshot.
+- **A test can encode the assumption being removed.** `virtio_test`
+  asserted every window is below 4 GiB -- a restatement of the refusal
+  the change deleted. When lifting a limit, grep the tests for the
+  literal.
+- **A positive control for a MAPPING is a crash, not a red line**, if
+  the test dereferences before it asserts. The reachability test asserts
+  `phys + 4096 <= paging_identity_limit()` FIRST so the control goes
+  red instead of faulting ring 0 with no report.
+- **Restoring a control with `git checkout <file>` also reverts every
+  uncommitted edit in that file.** It did, silently; the suite caught
+  it as the heap test going red after the "restore". Undo a control
+  with the inverse `sed`, or copy the file aside before breaking it.
+- **Check an edit script's EXIT before building on its output.** One
+  anchored replacement mismatched on a comment line, the script
+  stopped there, and the next command in the chain built a half-applied
+  tree and ran the suite on it. `&&` between the script and the build.
+- **A doc/comment edit that names a stage number rots in a day.** "Not
+  yet allocatable" was true at noon and false by evening. Say what the
+  reader can observe ("kernel heap only, not yet for processes").
