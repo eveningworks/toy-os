@@ -179,6 +179,15 @@ static uint32_t g_pref_w = 0, g_pref_h = 0;
 static uint32_t g_res_id = 0;
 static uint64_t g_fb_phys = 0;
 static uint64_t g_fb_frames = 0;
+// Two more scanouts: resources of the same geometry, so a present can
+// SET_SCANOUT between them rather than transfer into the one being
+// shown (three, for the mailbox flip win_surface.c runs). g_front is
+// which is on the scanout now; index 0 is g_res_id/g_fb_phys.
+#define EXTRA_SCANOUTS 2
+static uint32_t g_res_extra[EXTRA_SCANOUTS];
+static uint64_t g_fb_extra[EXTRA_SCANOUTS];
+static int g_extra = 0;   // how many of them exist
+static int g_front = 0;
 static uint32_t g_fb_w = 0, g_fb_h = 0, g_fb_pitch = 0;
 
 static uint32_t g_cursor_res = 0;
@@ -360,6 +369,12 @@ int virtio_gpu_set_mode(uint32_t w, uint32_t h, struct display_surface *out) {
     // genuinely unreferenced and safe to release.
     uint32_t old_id = g_res_id;
     uint64_t old_phys = g_fb_phys, old_frames = g_fb_frames;
+    for (int i = 0; i < g_extra; i++) {
+        unref_resource(g_res_extra[i]);
+        pmm_free_contiguous(g_fb_extra[i], old_frames);
+    }
+    g_extra = 0;
+    g_front = 0;
 
     g_res_id = new_id;
     g_fb_phys = phys;
@@ -373,6 +388,25 @@ int virtio_gpu_set_mode(uint32_t w, uint32_t h, struct display_surface *out) {
         pmm_free_contiguous(old_phys, old_frames);
     }
 
+    // The extra buffers, best effort: a mode with one scanout is still
+    // a mode, so a failure here costs the flip and nothing else.
+    for (int i = 0; i < EXTRA_SCANOUTS; i++) {
+        uint64_t p = pmm_alloc_contiguous(frames, PMM_ZONE_DMA32);
+        if (!p) break;
+        uint32_t id = new_id + 1 + (uint32_t)i;
+        if (id == 0) id = 1;
+        k_memset((void *)(uintptr_t)p, 0, (unsigned)bytes);
+        if (create_resource(id, w, h, VIRTIO_GPU_FORMAT_B8G8R8X8) &&
+            attach_backing(id, p, (uint32_t)bytes)) {
+            g_res_extra[g_extra] = id;
+            g_fb_extra[g_extra] = p;
+            g_extra++;
+        } else {
+            pmm_free_contiguous(p, frames);
+            break;
+        }
+    }
+
     if (out) {
         out->addr = phys;
         out->pitch = pitch;
@@ -380,6 +414,48 @@ int virtio_gpu_set_mode(uint32_t w, uint32_t h, struct display_surface *out) {
         out->height = h;
         out->bpp = 32;
     }
+    return 1;
+}
+
+// --- the second scanout and the flip -----------------------------------
+
+int virtio_gpu_scanout_count(void) { return g_res_id ? 1 + g_extra : 0; }
+
+static uint32_t resource_at(int index) {
+    return (index >= 1 && index <= g_extra) ? g_res_extra[index - 1] : g_res_id;
+}
+
+void virtio_gpu_scanout_at(int index, struct display_surface *out) {
+    if (!out) return;
+    out->addr = (index >= 1 && index <= g_extra) ? g_fb_extra[index - 1] : g_fb_phys;
+    out->pitch = g_fb_pitch;
+    out->width = g_fb_w;
+    out->height = g_fb_h;
+    out->bpp = 32;
+}
+
+static uint32_t front_resource(void) { return resource_at(g_front); }
+
+int virtio_gpu_scanout_live(void) { return g_front; }
+
+// SET_SCANOUT is the whole flip: the device reads whichever resource is
+// on scanout 0 at its next TRANSFER/FLUSH, and the previous one is just
+// a resource again. Nothing to wait for -- the command completes before
+// ctl_ok() returns, which is the virtio contract.
+int virtio_gpu_flip(int index) {
+    if (!g_present || !g_res_id) return 0;
+    if (index < 0 || index >= virtio_gpu_scanout_count()) return 0;
+    if (index == g_front) return 1;
+    uint32_t id = resource_at(index);
+    hdr_init(&g_req.scanout.hdr, VIRTIO_GPU_CMD_SET_SCANOUT);
+    g_req.scanout.r.x = 0;
+    g_req.scanout.r.y = 0;
+    g_req.scanout.r.width = g_fb_w;
+    g_req.scanout.r.height = g_fb_h;
+    g_req.scanout.scanout_id = 0;
+    g_req.scanout.resource_id = id;
+    if (!ctl_ok(sizeof g_req.scanout, "SET_SCANOUT (flip)")) return 0;
+    g_front = index;
     return 1;
 }
 
@@ -408,7 +484,7 @@ void virtio_gpu_flush(int x, int y, int w, int h) {
     // device can read a sub-rectangle without being told the pitch --
     // it derives that from the resource's own width.
     g_req.xfer.offset = (uint64_t)y * g_fb_pitch + (uint64_t)x * 4;
-    g_req.xfer.resource_id = g_res_id;
+    g_req.xfer.resource_id = front_resource();
     g_req.xfer.padding = 0;
     if (!ctl_ok(sizeof g_req.xfer, "TRANSFER_TO_HOST_2D")) return;
 
@@ -417,7 +493,7 @@ void virtio_gpu_flush(int x, int y, int w, int h) {
     g_req.flush.r.y = (uint32_t)y;
     g_req.flush.r.width = (uint32_t)w;
     g_req.flush.r.height = (uint32_t)h;
-    g_req.flush.resource_id = g_res_id;
+    g_req.flush.resource_id = front_resource();
     g_req.flush.padding = 0;
     ctl_ok(sizeof g_req.flush, "RESOURCE_FLUSH");
 }

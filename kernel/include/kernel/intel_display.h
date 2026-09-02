@@ -28,5 +28,7 @@ uint32_t intel_display_duty(uint32_t max, int percent);
 int      intel_display_percent(uint32_t max, uint32_t duty);
 // 1 while this driver owns the screen (never under QEMU).
 int intel_display_active(void);
+// How many scanouts it set up: 3 with the flip, 1 without, 0 inactive.
+int intel_display_scanout_count(void);
 
 #endif

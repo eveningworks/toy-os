@@ -427,6 +427,7 @@ gui damage [verify on|off]  the damage rect; verify catches missed damage
 gui open <App>           open a window directly -- no Start-menu clicking
 gui dialog [--json]      the open confirm dialog's message and button CENTRES
 gui compositor [--json]  the registered compositor pid, queue depth, drops
+gui fb [--json]          the framebuffer grant: scanouts, back index, flips
 gui spawn PATH [args]    run a ring-3 binary directly -- no Terminal in the loop
 gui watchdog [<ms>|off]  slow-frame threshold, plus how often it fired
 gui pingtimeout [<ticks>] not-responding timeout -- a TEST LEVER, see below

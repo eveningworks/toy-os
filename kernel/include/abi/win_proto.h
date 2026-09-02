@@ -647,9 +647,15 @@ struct win_event {
                            // framebuffer WRITABLE into the caller at
                            // WIN_FB_VADDR and fills in its geometry:
                            // a = width, b = height, c = pitch in
-                           // BYTES, d = bits per pixel. `window` is
-                           // ignored -- the screen belongs to the
-                           // session, not to a window.
+                           // BYTES, d = bits per pixel. On return
+                           // `mods` = how many SCANOUT buffers were
+                           // mapped (1, or 2 on a display that can
+                           // flip), buffer i at WIN_FB_VADDR + i *
+                           // WIN_FB_BUFFER_STRIDE, and `window` = the
+                           // index of the BACK buffer -- the one to
+                           // draw into next. With one buffer both are
+                           // trivially 1 and 0, and the screen belongs
+                           // to the session, not to a window.
                            //
                            // REFUSED unless the caller is the
                            // registered compositor (WIN_REQ_SET_
@@ -789,7 +795,14 @@ struct win_event {
                            // Compositor only, and same -1-means-gone
                            // contract as WIN_REQ_WINDOW_INFO.
 #define WIN_REQ_FB_PRESENT 16 // a, b, c, d: x, y, w, h of the region
-                           // just written. Publishes it.
+                           // just written. Publishes it. On a display
+                           // with two scanouts this FLIPS to the buffer
+                           // the caller was told to draw into and
+                           // returns the NEW back index in `window`;
+                           // the caller must then treat that buffer's
+                           // contents as two frames old (Wayland's
+                           // buffer_age) and repaint the union of the
+                           // last two frames' damage into it.
                            //
                            // Required, not advisory, and not something
                            // a client may skip after checking the
@@ -1348,6 +1361,9 @@ static inline int win_font_kern(const signed char *kern, int count,
 // uaddr.h is kernel-internal -- the same reason WIN_FONT_VADDR lives
 // here. uaddr.h carries a pointer to it.
 #define WIN_FB_VADDR 0x8500000000ULL
+// Scanout i of the grant is at WIN_FB_VADDR + i * this. 64 MiB holds a
+// 4K buffer (31.6 MiB) with room, and matches the per-window stride.
+#define WIN_FB_BUFFER_STRIDE 0x4000000ULL
 
 static inline uint64_t win_compositor_vaddr(int pid, uint32_t window) {
     return WIN_COMPOSITOR_BASE

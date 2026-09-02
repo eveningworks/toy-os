@@ -134,7 +134,24 @@ void virtio_gpu_display_register(void) {
     display_register(&virtio_gpu_display);
 }
 
+static int  virtio_drv_scanout_count(void) { return virtio_gpu_scanout_count(); }
+static void virtio_drv_scanout_at(int i, struct display_surface *out) { virtio_gpu_scanout_at(i, out); }
+static int  virtio_drv_flip(int i) { return virtio_gpu_flip(i); }
+static int  virtio_drv_scanout_live(void) { return virtio_gpu_scanout_live(); }
+
+// FLIP, like CURSOR, is decided at claim time: the second resource is
+// best effort in virtio_gpu_set_mode().
+static void adopt_flip(void) {
+    if (virtio_gpu_scanout_count() < 3) return;
+    virtio_gpu_display.caps |= DISPLAY_CAP_FLIP;
+    virtio_gpu_display.scanout_count = virtio_drv_scanout_count;
+    virtio_gpu_display.scanout_at = virtio_drv_scanout_at;
+    virtio_gpu_display.flip = virtio_drv_flip;
+    virtio_gpu_display.scanout_live = virtio_drv_scanout_live;
+}
+
 static void adopt_cursor_plane(void) {
+    adopt_flip();
     if (!virtio_gpu_cursor_available()) return;
     virtio_gpu_display.caps |= DISPLAY_CAP_CURSOR;
     virtio_gpu_display.cursor_define = virtio_drv_cursor_define;

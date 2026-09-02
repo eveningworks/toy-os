@@ -52,6 +52,7 @@
 #define DISPLAY_CAP_ACCEL_COPY   (1u << 3) // device-side rectangle copy
 #define DISPLAY_CAP_MODESET      (1u << 4) // can list and select modes
 #define DISPLAY_CAP_BACKLIGHT    (1u << 5) // a panel backlight it can dim
+#define DISPLAY_CAP_FLIP         (1u << 6) // more than one scanout, switched at vblank
 
 // Where the pixels live and how they're laid out.
 struct display_surface {
@@ -107,6 +108,20 @@ struct display_driver {
     // when the hardware took it.
     int  (*backlight_get)(void);
     int  (*backlight_set)(int percent);
+
+    // Required together when DISPLAY_CAP_FLIP. `scanout_count` buffers
+    // (three, for a MAILBOX flip -- see win_surface.c), all the
+    // geometry of get_surface(); index 0 IS that surface. flip(i) asks
+    // for buffer i to be scanned from the next vblank and NEVER WAITS:
+    // a second flip before the first lands simply replaces it, the
+    // hardware showing whichever was last asked for. scanout_live() is
+    // the buffer being scanned RIGHT NOW, which with the last flip
+    // asked for is what tells a caller which buffer is free to draw
+    // into. flip returns 1 when the request was accepted.
+    int  (*scanout_count)(void);
+    void (*scanout_at)(int index, struct display_surface *out);
+    int  (*flip)(int index);
+    int  (*scanout_live)(void);
 };
 
 // Called by each driver's own *_init() before display_probe() runs.
@@ -139,6 +154,12 @@ int  display_set_mode(const struct display_mode *mode);
 // DISPLAY_CAP_BACKLIGHT.
 int  display_backlight_get(void);
 int  display_backlight_set(int percent);
+// Scanouts. Without DISPLAY_CAP_FLIP the count is 1, index 0 is the
+// surface, and flip refuses anything but 0 (which is a no-op).
+int  display_scanout_count(void);
+void display_scanout_at(int index, struct display_surface *out);
+int  display_flip(int index);
+int  display_scanout_live(void);
 
 // Which mechanism made the framebuffer write-combining at probe time
 // (an enum paging_wc_result). Worth asking about because PAGING_WC_NONE

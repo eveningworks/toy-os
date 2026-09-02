@@ -853,6 +853,10 @@ int ugfx_screen_init(struct ugfx_screen *sc) {
     int w = req.a, h = req.b;
     sc->pitch = (uint32_t)req.c;
     sc->bpp = req.d;
+    sc->buffers = (int)req.mods;
+    if (sc->buffers < 1) sc->buffers = 1;
+    if (sc->buffers > UGFX_SCREEN_BUFFERS) sc->buffers = UGFX_SCREEN_BUFFERS;
+    sc->back_index = (int)req.window < sc->buffers ? (int)req.window : 0;
 
     if (w <= 0 || h <= 0) return 0;
     // 24 and 32 are what the kernel's own present path handles, so they
@@ -882,9 +886,38 @@ void ugfx_screen_present(struct ugfx_screen *sc) {
     // the whole reason the damage box exists -- returning here also means
     // an idle compositor makes no syscall at all.
     if (!ugfx_damage(&sc->back, &x, &y, &w, &h)) return;
+    int dx = x, dy = y, dw = w, dh = h;   // this frame's own damage
+
+    // BUFFER AGE. The buffer being written was last painted at
+    // painted_seq[back]; every frame presented since went to another
+    // buffer, so it lacks all of their damage as well as this frame's.
+    // Union them from the ring; anything older than the ring, or never
+    // painted, gets the whole screen.
+    int back = sc->buffers > 1 ? sc->back_index : 0;
+    uint32_t this_seq = sc->seq + 1;
+    if (sc->buffers > 1) {
+        uint32_t last = sc->painted_seq[back];
+        uint32_t age = last ? this_seq - last : 0;   // frames since; 0 = never
+        if (!last || age > UGFX_DAMAGE_RING) {
+            x = 0; y = 0; w = sc->back.w; h = sc->back.h;
+        } else {
+            int x1 = x + w, y1 = y + h;
+            for (uint32_t s = last + 1; s < this_seq; s++) {
+                int r = (int)(s % UGFX_DAMAGE_RING);
+                if (sc->dmg_w[r] <= 0 || sc->dmg_h[r] <= 0) continue;
+                int rx1 = sc->dmg_x[r] + sc->dmg_w[r], ry1 = sc->dmg_y[r] + sc->dmg_h[r];
+                if (sc->dmg_x[r] < x) x = sc->dmg_x[r];
+                if (sc->dmg_y[r] < y) y = sc->dmg_y[r];
+                if (rx1 > x1) x1 = rx1;
+                if (ry1 > y1) y1 = ry1;
+            }
+            w = x1 - x; h = y1 - y;
+        }
+    }
 
     int bytes = sc->bpp / 8;
-    volatile uint8_t *fb = (volatile uint8_t *)(uintptr_t)WIN_FB_VADDR;
+    volatile uint8_t *fb = (volatile uint8_t *)(uintptr_t)
+        (WIN_FB_VADDR + (uint64_t)back * WIN_FB_BUFFER_STRIDE);
 
     for (int j = 0; j < h; j++) {
         const uint32_t *src = sc->back.pixels
@@ -918,7 +951,18 @@ void ugfx_screen_present(struct ugfx_screen *sc) {
     for (unsigned i = 0; i < sizeof pr; i++) ((uint8_t *)&pr)[i] = 0;
     pr.type = WIN_REQ_FB_PRESENT;
     pr.a = x; pr.b = y; pr.c = w; pr.d = h;
-    sys_win_request(&pr);
+    sc->seq = this_seq;
+    if (sys_win_request(&pr) == 0 && sc->buffers > 1) {
+        sc->painted_seq[back] = this_seq;
+        int next = (int)pr.window < sc->buffers ? (int)pr.window : 0;
+        if (next != back) sc->flips++;
+        sc->back_index = next;
+    }
+    sc->presents++;
+    // This frame's OWN damage is what the other buffers will lack, not
+    // the union just copied.
+    int r = (int)(this_seq % UGFX_DAMAGE_RING);
+    sc->dmg_x[r] = dx; sc->dmg_y[r] = dy; sc->dmg_w[r] = dw; sc->dmg_h[r] = dh;
 
     ugfx_damage_reset(&sc->back);
 }

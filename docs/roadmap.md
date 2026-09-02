@@ -24,7 +24,6 @@ FIRST, and this is what to do first among things that are all
 buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
-- [ ] A page flip on vblank for the Intel display: two scanouts and a buffer age over `WIN_REQ_FB_MAP`/`WIN_REQ_FB_PRESENT`  *(virtio, and a real GPU driver)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
 - [ ] Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today  *(Networking)*
@@ -614,7 +613,7 @@ run on, not by order.
 - [x] ~~`virtio-gpu`: resource create/attach, set_scanout, transfer + flush, and the CURSOR queue~~
 - [x] ~~The compositor should use the hardware cursor plane instead of a software sprite~~ DONE 2026-08-29 (WIN_REQ_FB_CURSOR)
 - [x] ~~An Intel display driver: fastboot readout, cursor plane, backlight, power well~~ DONE 2026-09-02 -- gen8 only, never sets a mode
-- [ ] **NEXT** A page flip on vblank for the Intel display: two scanouts and a buffer age over `WIN_REQ_FB_MAP`/`WIN_REQ_FB_PRESENT`
+- [x] ~~A page flip on vblank: three scanouts and a buffer age over the framebuffer grant~~ DONE 2026-09-02 -- Intel and virtio-gpu
 - [ ] Screen blanking: the backlight off on idle or lid, never persisted, and any key or motion brings it back
 - [ ] Intel modesetting: EDID over eDP AUX, the PLLs and the transcoder -- needs runtime mode switching above it first
 - [ ] Intel blitter acceleration: `DISPLAY_CAP_ACCEL_FILL`/`_COPY` on the BCS ring

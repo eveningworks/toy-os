@@ -3815,33 +3815,20 @@ brightness 40` then read back 40 through the PWM register and 100 put
 it back. `docs/decisions.md` has the design; the KTESTs cover the two
 encodings and the QEMU decline.
 
-### A page flip on vblank for the Intel display: two scanouts and a buffer age over `WIN_REQ_FB_MAP`/`WIN_REQ_FB_PRESENT`
+### A page flip on vblank: three scanouts and a buffer age over the framebuffer grant
 
-The Intel driver can point the primary plane at a second buffer with
-one `DSPSURF` write, which the hardware latches at the next vblank --
-a tear-free desktop for the price of a register. What stops it today is
-the compositor, not the driver: `ugfx_screen_present()` copies only the
-frame's DAMAGE BOX into the scanout, so every scanout is an accumulated
-image, and flipping to a second one shows whatever it held two frames
-ago outside that box (the classic buffer-age bug). The kernel cannot
-repair it cheaply either -- the mapping is write-combined and reading
-it back is what `ugfx.h` warns against.
-
-The design, which is Wayland's `buffer_age`: `WIN_REQ_FB_MAP` grants
-both scanouts (the second at `WIN_FB_VADDR` plus a half, the shape
-`WIN_BUFFER_HALF` already uses for windows) and returns the back index
-in a spare field; `WIN_REQ_FB_PRESENT` flips and returns the new back
-index; `ugfx_screen_present()` blits the UNION of the last two frames'
-damage when the index it is handed differs from the one it drew
-against. About twenty lines in `ugfx.c` plus `win_surface.c`; the QEMU
-drivers keep one buffer and report index 0 forever, so the suite sees
-no change. Two things to settle when building it: the kernel console
-writes through `gfx.c`'s cached surface and must be flipped back to
-buffer 0 when the compositor's grant is revoked, and the second buffer
-is ~8 MiB of contiguous frames mapped into the GGTT past the cursor's
-slot and set write-combining with `paging_set_write_combining()`. A
-vblank wait is a bounded poll of `PIPEFRAME` -- never `pit_ticks()`
-inside a syscall on that machine.
+Built 2026-09-02: `DISPLAY_CAP_FLIP` with `scanout_count`/
+`scanout_at`/`flip`/`scanout_live` on `display_driver`, two extra Intel
+scanouts in system memory behind GGTT entries past the cursor's (2025
+pages each at 1080p, write-combining by PAT), `WIN_REQ_FB_MAP` mapping
+every scanout at `WIN_FB_BUFFER_STRIDE` and returning the back index,
+`WIN_REQ_FB_PRESENT` flipping without waiting and handing back the
+buffer that is neither live nor pending, and a damage ring in
+`ugfx_screen_present()` for the buffer age. virtio-gpu creates two
+extra resources beside its first and flips with `SET_SCANOUT`, which is
+what lets the headless suite drive the three-scanout path. The
+two-buffer version that waited was built first and torn worse than no
+flip; `docs/decisions.md` has why. `gui fb` reports the flips.
 
 ### Screen blanking: the backlight off on idle or lid, never persisted, and any key or motion brings it back
 

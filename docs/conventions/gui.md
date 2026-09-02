@@ -1491,6 +1491,37 @@ real scanout hardware does. Do not write a pixel assertion for one.
   a control that only sees the button-down edge cannot follow the
   pointer. And **`volume_geometry()` is the one answer** drawing,
   hit-testing and `gui volume --json` all ask.
+- **A PRESENT FLIPS ON A DISPLAY WITH THREE SCANOUTS, THE FLIP NEVER
+  WAITS, AND THE COMPOSITOR REPAINTS BY BUFFER AGE.** `DISPLAY_CAP_FLIP`
+  (`display.h`) means a driver has `scanout_count` buffers of the
+  surface's geometry, can ask for any of them to be scanned from the
+  next vblank (`flip`), and can say which is being scanned right now
+  (`scanout_live`); the Intel driver (`DSPSURF`/`DSPSURFLIVE`) and
+  virtio-gpu (`SET_SCANOUT`) both do. `WIN_REQ_FB_MAP` maps EVERY
+  scanout, buffer i at `WIN_FB_VADDR + i * WIN_FB_BUFFER_STRIDE`, and
+  returns the count in `mods` and the BACK index in `window`;
+  `WIN_REQ_FB_PRESENT` flips to the buffer the compositor drew and
+  returns the next back index. Five things to know. **THREE BUFFERS,
+  BECAUSE THE FLIP NEVER WAITS** (mailbox mode, what DWM does): a flip
+  asked for before the previous one landed simply replaces it, so a
+  present runs with no wait inside a syscall -- and the buffer handed
+  back is the one that is neither the live scanout nor the one just
+  asked for, which only a third buffer can always be. Two buffers with
+  no wait hand back the LIVE buffer, and drawing into it tore worse
+  than no flip at all (measured by eye on the laptop, the day it was
+  built that way). **The buffer handed back is SEVERAL FRAMES OLD**, so
+  `ugfx_screen_present()` numbers its presents, remembers when each
+  buffer was last painted, and copies the union of every frame's damage
+  since -- Wayland's `buffer_age` -- from a small ring, and the whole
+  screen into a buffer never painted or older than the ring. **A driver
+  with fewer than three scanouts is treated as having one**;
+  `win_surface.c` refuses the two-buffer case for the reason above.
+  **Revoking the grant flips back to buffer 0**, the one `gfx.c` draws
+  the console into; the console knows nothing about flips. And **`gui
+  fb --json` reports buffers, the back index and how many presents
+  flipped** -- a display reporting three buffers whose index never
+  changes is a flip that is not happening, which no screenshot can
+  see. On `-vga std` and vmsvga the count is 1 and nothing changes.
 - **THE TRAY HAS A BRIGHTNESS FLYOUT ON EVERY MACHINE, AND A DISPLAY
   WITHOUT A BACKLIGHT SHOWS THE REGISTRY'S SENTENCE --
   `userland/wm/brightness_popup.c`.** A sun icon left of the speaker

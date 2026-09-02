@@ -5865,3 +5865,67 @@ screen the user cannot see to fix, on a machine whose only recovery is
 registry refuses anything under 5, the flyout clamps to the registry's
 range, and "screen off" is a separate, unpersisted action that the
 roadmap lists.
+
+## The page flip is a buffer-age protocol, and virtio-gpu got it so the suite could see it
+
+A display that can point its scanout at a second buffer gives a
+tear-free desktop for one register write, and the Intel driver can.
+What stood in the way was the compositor: `ugfx_screen_present()`
+copies only each frame's damage box into the scanout, so a second
+scanout would show pixels two frames old outside that box. Three
+shapes were on the table.
+
+**Hide it in the kernel** by copying every damage rect into both
+buffers at present time -- an extra ring-0 copy per frame, from
+write-combined memory, which is exactly the cost the flip was meant to
+remove. **Remap `WIN_FB_VADDR`** to whichever buffer is back on each
+flip -- thousands of PTE writes and a TLB shootdown per frame, the
+trick `win_proto.h` already refuses for window buffers. Or **tell the
+compositor**, which is what Wayland does: `wl_buffer` plus
+`buffer_age` says how many frames old the buffer it is about to draw
+into is, and the client repaints the union of that many frames' damage.
+That is the one built. `WIN_REQ_FB_MAP` maps every scanout and returns
+the back index; `WIN_REQ_FB_PRESENT` flips and returns the new one; the
+compositor keeps the previous frame's damage and copies the union. The
+QEMU adapters with one buffer report index 0 forever, so nothing they
+run changed.
+
+**Three buffers and no wait, after two buffers and a wait tore worse
+than nothing.** A flip lands at the next vblank, up to 16 ms later,
+and the compositor must not draw into a buffer still being scanned.
+The first version had two scanouts and waited for the PREVIOUS flip to
+land at the start of the next present -- which guards the register
+write and not the drawing: the compositor had already drawn the frame
+into the buffer it was handed, and with two buffers that buffer is the
+live one until the pending flip lands. Window drags tore visibly more
+than before the flip existed, and the maintainer said so within the
+hour. Waiting after each flip instead would stall the machine with
+interrupts off for up to a frame per present (a present is a syscall,
+and this laptop hangs outright on a wait there). The answer every
+compositor without a vblank event reaches is triple buffering in
+mailbox mode -- Windows' DWM, and Mutter's triple-buffering option:
+the flip is a register write that never waits, a second write before
+the first lands replaces it, and the buffer handed back is the one that
+is neither live nor just asked for, which a third buffer always
+provides. A frame drawn faster than vsync is dropped rather than shown,
+which is what a desktop wants. The cost is a third framebuffer's worth
+of contiguous frames (8 MiB at 1080p) and a buffer age of up to three
+frames, which the damage ring covers.
+
+**Why virtio-gpu grew a second resource too.** The Intel driver is
+testable by eye on one machine. A protocol change to the path every
+GUI tool drives cannot rest on that, and `SET_SCANOUT` to a second
+resource is a real flip on a device every headless test can boot -- so
+the suite exercises the buffer-age copy, the KTEST counts the commands
+a flip costs, and `gui fb` reports flips happening. It is also the
+second real caller the display capability needed to be a design rather
+than one driver's convenience.
+
+**What was measured.** On the laptop every present flips (`guictl fb`
+reports flips equal to presents after boot). Under the virtio GPU the
+pixel-restoring tools (calendar, volume, brightness, menubar, notepad)
+pass on the three-scanout path, which is the check that catches a
+wrong buffer age: a popup closed over stale pixels fails their
+before/after comparison. The KTESTs flip a scanout and read the live
+one back, and skip while a compositor holds the grant -- flipping
+under a live desktop is exactly the thing the protocol forbids.

@@ -483,6 +483,9 @@ void ugfx_blend_pixel(struct ugfx_surface *s, int x, int y, uint32_t color, uint
 //    a screen is initialised once and lives for the process. There is no
 //    ugfx_screen_free() because there is nothing that could give the
 //    pages back.
+#define UGFX_SCREEN_BUFFERS 3
+#define UGFX_DAMAGE_RING    4
+
 struct ugfx_screen {
     // Draw here. Its `w`/`h` are the screen's -- deliberately NOT
     // repeated as fields on this struct, because two copies of one
@@ -506,6 +509,23 @@ struct ugfx_screen {
     // frame that a later diff would happily compare against.
     uint32_t *snapshot;
     int snapshot_valid;
+
+    // The scanouts the grant mapped (1, or 3 on a display that flips)
+    // and which one to draw into next -- WIN_REQ_FB_PRESENT hands back
+    // the index each frame. The buffer handed back was last painted
+    // some frames ago, so a present repaints the union of every
+    // frame's damage since then (Wayland's buffer_age): `seq` numbers
+    // the presents, `painted_seq` is when each buffer was last drawn,
+    // and `dmg` is a ring of recent frames' damage boxes. A buffer
+    // never painted, or older than the ring, gets the whole screen.
+    int buffers;
+    int back_index;
+    uint32_t seq;
+    uint32_t painted_seq[UGFX_SCREEN_BUFFERS];
+    int dmg_x[UGFX_DAMAGE_RING], dmg_y[UGFX_DAMAGE_RING];
+    int dmg_w[UGFX_DAMAGE_RING], dmg_h[UGFX_DAMAGE_RING];
+    // For `gui fb`: how many presents, and how many changed the index.
+    uint32_t presents, flips;
 };
 
 // Maps the real framebuffer and allocates a matching back buffer.

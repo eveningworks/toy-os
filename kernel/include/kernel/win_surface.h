@@ -33,8 +33,11 @@
 // and gates the request on it, exactly as it gates the per-window
 // compositor mappings. Keeping the access control in one place is why
 // this file has no idea what a compositor is.
+// `out_count` and `out_back`: how many scanouts were mapped, and which
+// one the holder should draw into first -- see WIN_REQ_FB_MAP.
 int win_surface_grant(int pid, uint64_t pml4, uint32_t *out_w, uint32_t *out_h,
-                      uint32_t *out_pitch, uint32_t *out_bpp);
+                      uint32_t *out_pitch, uint32_t *out_bpp,
+                      int *out_count, int *out_back);
 
 // Drops the grant if `pid` holds it, unmapping every page. A no-op for
 // a pid that holds nothing, so it is safe to call on every exit path
@@ -51,7 +54,9 @@ void win_surface_revoke(int pid);
 //
 // Returns 1 if `pid` holds the grant, 0 otherwise -- a process that
 // never mapped the framebuffer cannot flush someone else's writes.
-int win_surface_present(int pid, int x, int y, int w, int h);
+// Flips to the back buffer on a two-scanout display and reports the
+// new back index through `out_back`; publishes the rect either way.
+int win_surface_present(int pid, int x, int y, int w, int h, int *out_back);
 
 // Which pid holds the grant, or 0. For diagnostics (`gui compositor`).
 int win_surface_holder(void);

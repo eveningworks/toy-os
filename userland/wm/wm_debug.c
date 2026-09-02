@@ -644,6 +644,22 @@ static void cmd_volume(struct dbg_out *o, int json) {
     }
 }
 
+// The framebuffer grant as the compositor sees it: how many scanouts,
+// which one it draws into next, and how many presents FLIPPED. The
+// last number is what a test asserts -- a display that reports three
+// buffers and never changes the index is a flip that is not happening.
+static void cmd_fb(struct dbg_out *o, int json) {
+    const struct ugfx_screen *s = &g_wm_screen;
+    if (json) {
+        dbg_out_printf(o, "{\"buffers\":%d,\"back\":%d,\"presents\":%u,\"flips\":%u}\r\n",
+                     s->buffers, s->back_index, s->presents, s->flips);
+        return;
+    }
+    dbg_out_printf(o, "fb: %d scanout%s, back=%d, presents=%u flips=%u\r\n",
+                 s->buffers, s->buffers == 1 ? "" : "s", s->back_index,
+                 s->presents, s->flips);
+}
+
 // The brightness flyout: the same shape as cmd_volume(), plus whether
 // the setting is available and the sentence shown when it is not --
 // which is the whole panel on a machine with no backlight (QEMU).
@@ -1069,6 +1085,7 @@ static void usage(struct dbg_out *o) {
     dbg_out_write(o, "  brightness [--json]   the tray brightness flyout: level, slider, availability\r\n");
     dbg_out_write(o, "  state [--json]        overlays, cursor, armed state, damage rect\r\n");
     dbg_out_write(o, "  compositor [--json]   the registered compositor pid, its queue depth\r\n");
+    dbg_out_write(o, "  fb [--json]           the framebuffer grant: scanouts, back index, flips\r\n");
     dbg_out_write(o, "                        and how much input it has dropped\r\n");
     dbg_out_write(o, "  damage [verify on|off]  the damage rect; verify renders every frame\r\n");
     dbg_out_write(o, "                        twice and reports pixels the damage rect missed\r\n");
@@ -1124,6 +1141,7 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
     if (k_strcmp(sub, "brightness") == 0)   { cmd_brightness(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "state") == 0)        { cmd_state(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "compositor") == 0)   { cmd_compositor(o, wants_json(p)); return 1; }
+    if (k_strcmp(sub, "fb") == 0)           { cmd_fb(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "icons") == 0)        { cmd_icons(o, wants_json(p)); return 1; }
 
     if (k_strcmp(sub, "damage") == 0) {

@@ -29,7 +29,7 @@
 #include "barrier.h"
 #include "klog.h"
 #include "kfmt.h"
-#include "string.h"
+#include "string.h"   // k_memset
 #include "driver.h" // DRIVER_DECLARE -- `lsdrv -v` names THIS file
 
 DRIVER_DECLARE("intel-display", "display", "Intel gen8 display engine: cursor plane, backlight");
@@ -49,6 +49,7 @@ DRIVER_DECLARE("intel-display", "display", "Intel gen8 display engine: cursor pl
 #define DSPCNTR(p)     (0x70180 + (p) * PIPE_STRIDE) // bit31 enable, 29:26 format
 #define DSPSTRIDE(p)   (0x70188 + (p) * PIPE_STRIDE)
 #define DSPSURF(p)     (0x7019C + (p) * PIPE_STRIDE) // GGTT offset; latches at vblank
+#define DSPSURFLIVE(p) (0x701AC + (p) * PIPE_STRIDE) // the offset being scanned NOW
 #define CURCNTR(p)     (0x70080 + (p) * PIPE_STRIDE)
 #define CURBASE(p)     (0x70084 + (p) * PIPE_STRIDE) // GGTT offset; the arming write
 #define CURPOS(p)      (0x70088 + (p) * PIPE_STRIDE)
@@ -110,6 +111,17 @@ static int g_cursor_on;
 // back), and the period that means 100%.
 static int g_bl_cpu_mode;
 static uint32_t g_bl_max;
+
+// Two more scanouts of the firmware's geometry, in system memory
+// behind GGTT entries past the cursor's. A flip is one DSPSURF write,
+// latched at vblank; DSPSURFLIVE says which buffer is being scanned.
+// THREE, not two: with the flip never waiting, the buffer handed back
+// to draw into must be neither the live one nor the one just asked
+// for, and only a third buffer is always both.
+#define SCANOUTS 3
+static struct display_surface g_scanout[SCANOUTS];
+static uint32_t g_scanout_ggtt[SCANOUTS];
+static int g_scanouts = 1;
 
 static inline uint32_t rd(uint32_t off) { return *(volatile uint32_t *)(g_mmio + off); }
 static struct display_driver intel_driver;
@@ -310,6 +322,67 @@ static void intel_cursor_show(int on) {
     wr(CURBASE(g_pipe), g_cursor_ggtt);
 }
 
+// --- the second scanout and the flip -----------------------------------
+
+static void setup_scanouts(void) {
+    g_scanout[0] = g_surface;
+    g_scanout_ggtt[0] = g_fb_ggtt;
+    g_scanouts = 1;
+    if (!g_cursor_ok) return;   // no GGTT slot discipline without it
+    uint64_t bytes = (uint64_t)g_surface.pitch * g_surface.height;
+    uint32_t pages = (uint32_t)((bytes + 4095) / 4096);
+    uint32_t idx = (g_cursor_ggtt >> 12) + CURSOR_PAGES;
+    for (int b = 1; b < SCANOUTS; b++) {
+        if (idx + pages > g_gtt_entries) return;
+        uint64_t phys = pmm_alloc_contiguous(pages, PMM_ZONE_DMA32);
+        if (!phys) {
+            klog_printf("intel-display: no %u contiguous frames for scanout %d -- no flip\n",
+                        pages, b);
+            return;   // an earlier extra buffer is simply unused
+        }
+        k_memset((void *)(uintptr_t)phys, 0, (unsigned)bytes);
+        for (uint32_t i = 0; i < pages; i++)
+            g_gtt[idx + i] = (phys + (uint64_t)i * 4096) | g_fb_pte_flags;
+        ggtt_invalidate();
+        // Write-combining for the CPU side, exactly as display_probe()
+        // does for the first surface; the ring-3 grant maps it WC.
+        int wc = paging_set_write_combining(phys, bytes);
+        g_scanout[b] = g_surface;
+        g_scanout[b].addr = phys;
+        g_scanout_ggtt[b] = idx << 12;
+        klog_printf("intel-display: scanout %d at ggtt %#x -> %#llx (%u pages, wc %s)\n",
+                    b, g_scanout_ggtt[b], (unsigned long long)phys, pages, paging_wc_name(wc));
+        idx += pages;
+    }
+    g_scanouts = SCANOUTS;
+    intel_driver.caps |= DISPLAY_CAP_FLIP;
+}
+
+static int intel_scanout_count(void) { return g_scanouts; }
+
+static void intel_scanout_at(int index, struct display_surface *out) {
+    *out = g_scanout[(index >= 0 && index < g_scanouts) ? index : 0];
+}
+
+// Mailbox: the write is latched at the next vblank, and a second write
+// before then replaces the first. Nothing waits -- this runs inside a
+// syscall with interrupts off, where a wait of up to a frame would
+// stall the keyboard, the mouse and the network a frame at a time.
+static int intel_flip(int index) {
+    if (g_pipe < 0 || index < 0 || index >= g_scanouts) return 0;
+    wr(DSPSURF(g_pipe), g_scanout_ggtt[index]);
+    return 1;
+}
+
+static int intel_scanout_live(void) {
+    uint32_t live = rd(DSPSURFLIVE(g_pipe));
+    for (int b = 0; b < g_scanouts; b++)
+        if (g_scanout_ggtt[b] == live) return b;
+    return 0;
+}
+
+int intel_display_scanout_count(void) { return g_active ? g_scanouts : 0; }
+
 // --- the backlight ---------------------------------------------------
 // Linux's lpt_setup_backlight, minus the mode switch: the duty register
 // written is whichever PWM the firmware left driving the pin.
@@ -430,6 +503,7 @@ static int intel_probe(void) {
     g_active = 1;
     setup_power_well();
     setup_cursor();
+    setup_scanouts();
     setup_backlight();
     return 1;
 }
@@ -448,6 +522,10 @@ static struct display_driver intel_driver = {
     .cursor_show = intel_cursor_show,
     .backlight_get = intel_backlight_get,
     .backlight_set = intel_backlight_set,
+    .scanout_count = intel_scanout_count,
+    .scanout_at = intel_scanout_at,
+    .flip = intel_flip,
+    .scanout_live = intel_scanout_live,
 };
 
 void intel_display_register(void) {

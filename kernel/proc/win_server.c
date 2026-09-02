@@ -1323,17 +1323,24 @@ int win_server_request(int pid, struct win_request_msg *req) {
     if (req->type == WIN_REQ_FB_MAP) {
         if (pid != g_comp_pid || !g_comp_pid) return -1;
         uint32_t w = 0, h = 0, pitch = 0, bpp = 0;
-        if (!win_surface_grant(pid, vmm_current_pml4(), &w, &h, &pitch, &bpp))
+        int count = 1, back = 0;
+        if (!win_surface_grant(pid, vmm_current_pml4(), &w, &h, &pitch, &bpp,
+                               &count, &back))
             return -1;
         req->a = (int32_t)w;
         req->b = (int32_t)h;
         req->c = (int32_t)pitch;
         req->d = (int32_t)bpp;
+        req->mods = (uint32_t)count;
+        req->window = (uint32_t)back;
         return 0;
     }
     if (req->type == WIN_REQ_FB_PRESENT) {
         if (pid != g_comp_pid || !g_comp_pid) return -1;
-        return win_surface_present(pid, req->a, req->b, req->c, req->d) ? 0 : -1;
+        int back = 0;
+        if (!win_surface_present(pid, req->a, req->b, req->c, req->d, &back)) return -1;
+        req->window = (uint32_t)back;
+        return 0;
     }
     // The hardware cursor plane, same role gate. See win_proto.h for
     // the op encoding; the MOVE half deliberately has no request at

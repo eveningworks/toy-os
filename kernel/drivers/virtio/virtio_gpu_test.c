@@ -15,6 +15,7 @@
 #include "display.h"
 #include "string.h"
 #include "ktest.h"
+#include "win_surface.h"
 
 KTEST("virtio-gpu", "the device is claimed and is the active display") {
     if (!virtio_gpu_present()) KTEST_SKIP("no virtio-gpu on this machine");
@@ -80,6 +81,33 @@ KTEST("virtio-gpu", "a flush is two commands, and an off-screen one is none") {
 // The cursor image, static because the ring-0 frame budget is 1 KiB and
 // this is 1 KiB on its own.
 static uint32_t g_cursor[16 * 16];
+
+KTEST("virtio-gpu", "three scanouts, and a flip is one command each way") {
+    if (!virtio_gpu_present()) KTEST_SKIP("no virtio-gpu on this machine");
+    if (virtio_gpu_scanout_count() < 3) KTEST_SKIP("the extra resources were not created");
+    // A compositor presenting concurrently would both count commands
+    // and see its buffers flipped under it.
+    if (win_surface_holder()) KTEST_SKIP("a compositor holds the screen");
+    KTEST_ASSERT(display_has(DISPLAY_CAP_FLIP));
+    KTEST_ASSERT_EQ(display_scanout_live(), 0);
+    struct display_surface s0, s1;
+    display_scanout_at(0, &s0);
+    display_scanout_at(1, &s1);
+    KTEST_ASSERT(s1.addr != 0 && s1.addr != s0.addr);
+    KTEST_ASSERT_EQ(s1.pitch, s0.pitch);
+    // Keep the picture: the second buffer starts black.
+    k_memcpy((void *)(uintptr_t)s1.addr, (void *)(uintptr_t)s0.addr,
+             (unsigned)(s0.pitch * s0.height));
+    uint32_t before = virtio_gpu_commands();
+    KTEST_ASSERT_EQ(display_flip(1), 1);
+    KTEST_ASSERT_EQ(display_scanout_live(), 1);
+    KTEST_ASSERT_EQ(virtio_gpu_commands() - before, 1u);
+    KTEST_ASSERT_EQ(display_flip(1), 1);   // already front: no command
+    KTEST_ASSERT_EQ(virtio_gpu_commands() - before, 1u);
+    KTEST_ASSERT_EQ(display_flip(0), 1);
+    KTEST_ASSERT_EQ(virtio_gpu_commands() - before, 2u);
+    KTEST_ASSERT_EQ(display_flip(3), 0);   // out of range
+}
 
 KTEST("virtio-gpu", "the cursor plane accepts an image, a move and a hide") {
     if (!virtio_gpu_present()) KTEST_SKIP("no virtio-gpu on this machine");
