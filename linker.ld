@@ -112,6 +112,18 @@ SECTIONS
         __initcalls_end = .;
     } :rodata
 
+    /* PCI drivers. PCI_DRIVER() (kernel/include/kernel/pci_driver.h)
+       drops one struct pci_driver -- a match table and a probe -- per
+       driver, and pci_bind() walks devices against them. Same mechanism
+       and placement reasoning as .drivers above. */
+    . = ALIGN(8);
+    .pci_drivers :
+    {
+        __pci_drivers_start = .;
+        KEEP(*(.pci_drivers))
+        __pci_drivers_end = .;
+    } :rodata
+
     . = ALIGN(4096);
     __kdata_start = .;
 

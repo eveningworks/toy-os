@@ -108,7 +108,6 @@ struct usb_device_info {
 // Never panics. A controller that will not come up is a log line and a
 // return, because a hung reset here would hang every headless test in
 // the repo on a machine that happens to have USB.
-void usb_init(void);
 
 // Registers the QUERY_USB provider. Called from usb_init().
 void usb_query_init(void);

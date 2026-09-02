@@ -2071,6 +2071,42 @@ GDT/IDT, LAPIC, clocks, the heap, the console) and then calls
   heap"; add one when something must run between two existing ones,
   and say why on the enum.
 
+## A PCI DRIVER DECLARES A MATCH TABLE AND A `probe()`, AND `pci_bind()` CALLS IT ONCE PER DEVICE
+
+`kernel/include/kernel/pci_driver.h` -- Linux's `pci_driver` + id
+table, NT's PnP. A driver no longer walks `pci_device_at()` looking for
+itself: it declares what it drives (`PCI_MATCH_CLASS(0x04, 0x03,
+PCI_ANY)`, `PCI_MATCH_ID(0x8086, 0x100e)`) and a `probe(dev)`, and
+`pci_bind()` -- one initcall at `INIT_BUS` -- walks the devices in
+enumeration order and hands each to the FIRST driver in link order
+whose table matches. Five things to know:
+
+- **A SECOND CONTROLLER IS A SECOND `probe()`**, not a silent skip.
+  Every driver that keeps one device says so when it is offered
+  another (`ahci`, `xhci`, `e1000`, `ac97`, `virtio-blk`, `virtio-net`);
+  `hda` and `virtio-input` take several. The old loops took the first
+  match and never mentioned the rest.
+- **ORDER IS SLOT ORDER NOW, WHERE IT USED TO BE INIT ORDER.** Two NICs
+  are `net0`/`net1` by bus address; two sound cards are "first
+  discovered" by bus address; `audio_device` and `mount.c`'s explicit
+  disk precedence outrank both, which is why neither policy moved.
+- **TWO TABLES MATCHING ONE DEVICE IS A FILENAME CHOOSING A DRIVER.**
+  The `pci_bind` KTEST fails on any present device two drivers claim;
+  a class match that also needs a prog-if check (xHCI is 0x0C/0x03 with
+  prog-if 0x30; UHCI/OHCI/EHCI share the class) does the check in
+  `probe()` and LOGS the refusal, so a machine with only EHCI still
+  says why USB is missing.
+- **VIRTIO DRIVERS MATCH THE MODERN ID AND THE TRANSITIONAL ONE**
+  (`VIRTIO_PCI_MATCH_MODERN(type)` plus `PCI_MATCH_ID(0x1af4, 0x100x)`),
+  and `virtio_pci_attach()` re-checks the type from the subsystem id.
+  `virtio_pci_find()` stays for `virtio_test.c`, which wants "the
+  spare rng by index" and is not a driver.
+- **WHAT IS NOT BOUND HERE, AND WHY.** `ata` is brought up from
+  `vfs.c` before any backend is probed; the display drivers are chosen
+  by the display registry at `vga_init()`, before the walk; USB class
+  drivers bind at enumeration inside the xHCI's probe. Each has its own
+  registry, which is the right place for its order.
+
 ## A SYSCALL HANDLER RUNS WITH INTERRUPTS OFF, AND A WAIT ON `pit_ticks()` THERE NEVER ENDS
 
 `context_switch.asm` re-enables interrupts on the way OUT of a syscall

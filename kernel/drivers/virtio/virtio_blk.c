@@ -23,7 +23,7 @@
 #include "paging.h"
 #include "kfmt.h"
 #include "string.h"
-#include "initcall.h"
+#include "pci_driver.h"
 
 // driver-none: the virtio transport half; block_virtio.c declares the driver
 
@@ -230,11 +230,18 @@ int virtio_blk_discard(uint32_t lba, uint32_t count) {
     return do_request(VIRTIO_BLK_T_DISCARD, 0, &g_discard, sizeof g_discard, 0);
 }
 
-void virtio_blk_init(void) {
+static const struct pci_match virtio_blk_matches[] = {
+    VIRTIO_PCI_MATCH_MODERN(VIRTIO_ID_BLK), PCI_MATCH_ID(VIRTIO_PCI_VENDOR, 0x1001),
+};
+
+static void virtio_blk_probe(const struct pci_device *pci) {
+    if (g_dev.pci) {
+        klog_printf("virtio-blk: a second device at %02x:%02x.%u -- one is driven\n",
+                    pci->bus, pci->device, pci->function);
+        return;
+    }
     g_dev.name = "virtio-blk";
-    // No such device is the ordinary case: silent, no allocation, no
-    // PCI writes. Anything past here is a device that IS present.
-    if (!virtio_pci_find(VIRTIO_ID_BLK, 0, &g_dev)) return;
+    if (!virtio_pci_attach(pci, VIRTIO_ID_BLK, &g_dev)) return;
 
     uint64_t wanted = VIRTIO_BLK_F_FLUSH | VIRTIO_BLK_F_SIZE_MAX
                     | VIRTIO_BLK_F_SEG_MAX | VIRTIO_BLK_F_RO
@@ -279,4 +286,4 @@ void virtio_blk_init(void) {
                 g_max_discard ? "yes" : "no",
                 g_readonly ? ", READ-ONLY" : "");
 }
-INITCALL(virtio_blk_init, INIT_BUS);
+PCI_DRIVER("virtio-blk", virtio_blk_matches, virtio_blk_probe);

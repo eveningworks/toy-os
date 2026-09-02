@@ -27,7 +27,7 @@
 #include "string.h"
 #include "errno.h"
 #include "driver.h" // driver_bound() -- `lsdrv`
-#include "initcall.h"
+#include "pci_driver.h"
 
 DRIVER_DECLARE("e1000", "net", "Intel 8254x gigabit Ethernet");
 
@@ -219,16 +219,16 @@ static int e1000_transmit(struct net_device *dev, const void *frame, uint32_t le
 // the core polls. Registered as net_device.poll only in that case.
 static void e1000_poll(struct net_device *dev) { drain_rx(dev); }
 
-void e1000_init(void) {
-    const struct pci_device *pci = 0;
-    for (int i = 0; i < pci_device_count(); i++) {
-        const struct pci_device *d = pci_device_at(i);
-        if (d && d->vendor_id == E1000_VENDOR && d->device_id == E1000_DEV_82540EM) {
-            pci = d;
-            break;
-        }
+static int g_probed;
+static const struct pci_match e1000_matches[] = { PCI_MATCH_ID(E1000_VENDOR, E1000_DEV_82540EM) };
+
+static void e1000_probe(const struct pci_device *pci) {
+    if (g_probed) {
+        klog_printf("e1000: a second card at %02x:%02x.%u -- one is driven\n",
+                    pci->bus, pci->device, pci->function);
+        return;
     }
-    if (!pci) return;   // the ordinary case on a machine without one
+    g_probed = 1;
 
     uint64_t bar = pci_bar_mem_addr(pci, 0);
     if (!bar || pci_bar_is_io(pci->bar[0])) {
@@ -311,4 +311,4 @@ void e1000_init(void) {
 
     if (!net_register(&g_dev)) g_present = 0;
 }
-INITCALL(e1000_init, INIT_DEVICE);
+PCI_DRIVER("e1000", e1000_matches, e1000_probe);

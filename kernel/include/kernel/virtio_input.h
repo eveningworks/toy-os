@@ -15,7 +15,6 @@
 // Called from kernel_main() after pmm_init() -- virtqueues need frames
 // -- and after idt_init(), because the devices are serviced by their
 // PCI interrupt line.
-void virtio_input_init(void);
 
 // How many devices were claimed.
 int virtio_input_count(void);

@@ -41,7 +41,7 @@
 #include "kfmt.h"
 #include "string.h"
 #include "driver.h" // DRIVER_DECLARE -- `lsdrv`
-#include "initcall.h"
+#include "pci_driver.h"
 
 DRIVER_DECLARE("virtio-rng", "rng", "virtio entropy source");
 
@@ -112,11 +112,14 @@ int virtio_rng_read(void *buf, size_t n) {
 // size type matches the callback signature exactly.
 static int rng_source(void *buf, size_t n) { return virtio_rng_read(buf, n); }
 
-void virtio_rng_init(void) {
+static const struct pci_match virtio_rng_matches[] = {
+    VIRTIO_PCI_MATCH_MODERN(VIRTIO_ID_RNG), PCI_MATCH_ID(VIRTIO_PCI_VENDOR, 0x1005),
+};
+
+static void virtio_rng_probe(const struct pci_device *pci) {
+    if (g_dev.pci) return; // virtio_test.c keeps a spare one on purpose
     g_dev.name = "virtio-rng";
-    // No such device is the ordinary case: silent, no allocation, no
-    // PCI writes. Anything past here is a device that IS present.
-    if (!virtio_pci_find(VIRTIO_ID_RNG, 0, &g_dev)) return;
+    if (!virtio_pci_attach(pci, VIRTIO_ID_RNG, &g_dev)) return;
 
     // virtio-rng defines no device feature bits at all, so the only
     // thing negotiated is VIRTIO_F_VERSION_1, which virtio_begin() adds.
@@ -146,4 +149,4 @@ void virtio_rng_init(void) {
     klog_printf("virtio-rng: entropy source registered (krandom is now %s)\n",
                 krandom_quality_name(krandom_quality()));
 }
-INITCALL(virtio_rng_init, INIT_BUS);
+PCI_DRIVER("virtio-rng", virtio_rng_matches, virtio_rng_probe);

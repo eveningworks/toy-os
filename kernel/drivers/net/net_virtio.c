@@ -5,7 +5,8 @@
 #include "virtio_net.h"
 #include "string.h"
 #include "driver.h" // DRIVER_DECLARE -- `lsdrv`
-#include "initcall.h"
+#include "pci_driver.h"
+#include "virtio.h"
 
 DRIVER_DECLARE("virtio-net", "net", "virtio network device");
 
@@ -25,16 +26,17 @@ static void vnet_rx(const void *frame, uint32_t len) {
     net_rx(&VIRTIO_NET_DEV, frame, len);
 }
 
-void net_virtio_init(void) {
-    // DECLARED BEFORE THE HARDWARE IS LOOKED FOR, so a driver
-    // that finds nothing still appears in `lsdrv` -- "compiled
-    // in but idle" is the answer somebody is looking for.
-    virtio_net_init();
-    if (!virtio_net_present()) return;   // no such device is the ordinary case
+static const struct pci_match net_virtio_matches[] = {
+    VIRTIO_PCI_MATCH_MODERN(VIRTIO_ID_NET), PCI_MATCH_ID(VIRTIO_PCI_VENDOR, 0x1000),
+};
+
+static void net_virtio_probe(const struct pci_device *pci) {
+    virtio_net_attach(pci);
+    if (!virtio_net_present()) return;
 
     k_memcpy(VIRTIO_NET_DEV.mac, virtio_net_mac(), NET_MAC_LEN);
     VIRTIO_NET_DEV.transmit = vnet_transmit;
     virtio_net_set_rx(vnet_rx);
     net_register(&VIRTIO_NET_DEV);
 }
-INITCALL(net_virtio_init, INIT_DEVICE);
+PCI_DRIVER("virtio-net", net_virtio_matches, net_virtio_probe);

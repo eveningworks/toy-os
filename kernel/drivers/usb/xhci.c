@@ -36,7 +36,7 @@
 #include "usb_hid.h"
 #include "multiboot.h" // multiboot_cmdline() -- the `nousb` flag
 #include "driver.h" // DRIVER_DECLARE -- `lsdrv`
-#include "initcall.h"
+#include "pci_driver.h"
 
 DRIVER_DECLARE("xhci", "usb", "USB 3 xHCI host controller");
 
@@ -226,26 +226,19 @@ static void portsc_write(uint32_t port, uint32_t set, uint32_t rw1c_ack) {
 
 // --- discovery --------------------------------------------------------
 
-static const struct pci_device *find_xhci(void) {
-    int count = pci_device_count();
-    for (int i = 0; i < count; i++) {
-        const struct pci_device *d = pci_device_at(i);
-        if (!d || d->class_code != 0x0C || d->subclass != 0x03) continue;
+// Every USB host controller is class 0x0C/0x03; prog_if tells the four
+// generations apart, and naming the one found beats silence -- on a
+// machine with only an EHCI controller the log then says why USB did
+// not come up.
+static const struct pci_match usb_matches[] = { PCI_MATCH_CLASS(0x0C, 0x03, PCI_ANY) };
 
-        // prog_if is what tells the four USB controller generations
-        // apart. Naming the one we found and refusing it explicitly
-        // beats silence: on a machine with only an EHCI controller the
-        // log then says why USB did not come up.
-        if (d->prog_if == 0x30) return d;
-
-        const char *kind = d->prog_if == 0x00 ? "UHCI" :
-                           d->prog_if == 0x10 ? "OHCI" :
-                           d->prog_if == 0x20 ? "EHCI" : "unknown";
-        klog_printf("usb: %s controller %04x:%04x at %02x:%02x.%u -- "
-                    "this driver is xHCI only, ignoring\n",
-                    kind, d->vendor_id, d->device_id,
-                    d->bus, d->device, d->function);
-    }
+static int is_xhci(const struct pci_device *d) {
+    if (d->prog_if == 0x30) return 1;
+    const char *kind = d->prog_if == 0x00 ? "UHCI" :
+                       d->prog_if == 0x10 ? "OHCI" :
+                       d->prog_if == 0x20 ? "EHCI" : "unknown";
+    klog_printf("usb: %s controller at %02x:%02x.%u (prog_if %#x) -- not supported\n",
+                kind, d->bus, d->device, d->function, d->prog_if);
     return 0;
 }
 
@@ -1539,7 +1532,7 @@ static int usb_disabled(void) {
     return 0;
 }
 
-void usb_init(void) {
+static void usb_probe(const struct pci_device *d) {
     BOOT_REQUIRE(BOOT_SUB_PCI);
     BOOT_REQUIRE(BOOT_SUB_PMM);
 
@@ -1547,9 +1540,12 @@ void usb_init(void) {
         klog_printf("usb: disabled by `nousb` on the boot line\n");
         return;
     }
-
-    const struct pci_device *d = find_xhci();
-    if (!d) return;
+    if (!is_xhci(d)) return;
+    if (g_hc.pci) {
+        klog_printf("usb: a second xHCI at %02x:%02x.%u -- one is driven\n",
+                    d->bus, d->device, d->function);
+        return;
+    }
 
     uint64_t bar0 = pci_bar_mem_addr(d, 0);
     if (!bar0) {
@@ -1725,7 +1721,6 @@ void usb_init(void) {
     power_ports();
     scan_ports();
 }
-INITCALL(usb_init, INIT_BUS);
 
 // --- introspection ----------------------------------------------------
 
@@ -1822,3 +1817,4 @@ void usb_dump(void) {
                     speed_name((uint8_t)XHCI_PORTSC_SPEED(sc)));
     }
 }
+PCI_DRIVER("xhci", usb_matches, usb_probe);

@@ -3418,8 +3418,9 @@ window without going through it will find its layout polls timing out.
   72-branch switch written in 1993; it is not a finding, for the same
   reason the Makefile turns `-Wall` off for that directory.
 - **`check_initcalls.py`** -- an init that is both an `INITCALL` and a
-  hand call (it would run twice), or an `INITCALL` at a level
-  `kernel_main()` never walks (it would never run). Static, over the
+  hand call (it would run twice), an `INITCALL` at a level
+  `kernel_main()` never walks (it would never run), or a `PCI_DRIVER`
+  probe called by hand (the bus already calls it). Static, over the
   source, because the in-kernel `initcall` KTEST can see "never ran"
   at boot but not "ran twice". Run by `preflight.sh`.
 - **`loc.py`** -- how big this project is, honestly: source lines with

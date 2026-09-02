@@ -110,16 +110,10 @@ void sound_set_volume(int pct);
 // other per-process release there.
 void sound_process_gone(uint64_t pml4_phys);
 
-// The AC'97 driver's boot probe (kernel/drivers/sound/ac97.c), called
-// from kernel_main() beside the other PCI-scanning drivers. Finding no
-// controller is the common case, not an error.
-void ac97_init(void);
-
-// Intel HD Audio's (kernel/drivers/sound/hda.c), same shape: every
-// class-0x0403 controller is brought up, and a codec is registered only
-// when it has an ANALOG output route -- a display-audio controller's
-// HDMI-only codec is claimed and left silent.
-void hda_init(void);
+// The AC'97 (ac97.c) and Intel HDA (hda.c) drivers are PCI_DRIVERs,
+// probed per matching device by pci_bind(); an HDA codec is registered
+// only when it has an ANALOG output route -- a display-audio
+// controller's HDMI-only codec is claimed and left silent.
 
 // The kernel.hda_tone tunable: three seconds of a kernel-written tone
 // through the registered HDA controller, no app and no zeroing -- the

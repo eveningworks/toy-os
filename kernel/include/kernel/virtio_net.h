@@ -8,7 +8,8 @@
 // the adapter (kernel/drivers/net/net_virtio.c) is what makes it one,
 // exactly as block_virtio.c does for the disk.
 
-void virtio_net_init(void);
+struct pci_device;
+void virtio_net_attach(const struct pci_device *pci);
 int  virtio_net_present(void);
 const uint8_t *virtio_net_mac(void);
 

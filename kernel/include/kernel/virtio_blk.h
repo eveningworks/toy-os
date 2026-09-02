@@ -13,7 +13,6 @@
 // Called from kernel_main() after pci_init(), NOT from fs_init(): the
 // driver existing is independent of whether anything mounts off it,
 // and `dmesg` should say a virtio disk is present either way.
-void virtio_blk_init(void);
 
 // Is there a working virtio-blk device? 0 when none was found, or when
 // one was found and refused.

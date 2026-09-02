@@ -15,6 +15,8 @@ fails the build on both:
   - an INITCALL names a level that kernel_main() never passes to
     initcalls_run(), so it never runs. The KTEST catches this at boot;
     this catches it before the build finishes.
+  - a PCI_DRIVER's probe() is called by hand somewhere -- the same
+    double-run, through the other section (pci_driver.h).
 
 Exits non-zero with the offending file:line. Run by preflight.sh.
 """
@@ -28,6 +30,8 @@ KERNEL = os.path.join(REPO, "kernel")
 MAIN = os.path.join(KERNEL, "core", "kernel.c")
 
 DECL = re.compile(r"^\s*INITCALL\(\s*(\w+)\s*,\s*(INIT_\w+)\s*\)", re.M)
+PROBE = re.compile(r"^\s*PCI_DRIVER\(\s*\"[^\"]*\"\s*,\s*\w+\s*,\s*(\w+)\s*\)", re.M)
+PCALL = re.compile(r"^\s*(\w+_probe)\((?!const)[^;]*\)\s*;", re.M)
 CALL = re.compile(r"^\s*(\w+_init)\(\)\s*;", re.M)
 RUN = re.compile(r"initcalls_run\(\s*(INIT_\w+)\s*\)")
 
@@ -52,6 +56,12 @@ def main():
                                 f"(also {declared[fn][0]})")
             declared[fn] = (f"{path}:{line}", level)
 
+    probes = {}
+    for path in c_files():
+        src = open(path, encoding="utf-8", errors="replace").read()
+        for m in PROBE.finditer(src):
+            probes[m.group(1)] = f"{path}:{src.count(chr(10), 0, m.start()) + 1}"
+
     main_src = open(MAIN, encoding="utf-8").read()
     walked = set(RUN.findall(main_src))
     for fn, (where, level) in sorted(declared.items()):
@@ -68,12 +78,23 @@ def main():
                 problems.append(f"{path}:{line}: {fn}() is called by hand AND declared "
                                 f"as an INITCALL at {declared[fn][0]} -- it would run twice")
 
+    for path in c_files():
+        if path.endswith(("pci_bind.c", "_test.c")):
+            continue
+        src = open(path, encoding="utf-8", errors="replace").read()
+        for m in PCALL.finditer(src):
+            fn = m.group(1)
+            if fn in probes:
+                line = src.count("\n", 0, m.start()) + 1
+                problems.append(f"{path}:{line}: {fn}() is called by hand AND is a PCI_DRIVER "
+                                f"probe at {probes[fn]} -- pci_bind() already calls it")
+
     if problems:
         for p in problems:
             print(f"check_initcalls: {p}")
         return 1
-    print(f"check_initcalls: ok -- {len(declared)} initcall(s), every level walked, "
-          f"none also called by hand")
+    print(f"check_initcalls: ok -- {len(declared)} initcall(s) and {len(probes)} PCI probe(s), "
+          f"every level walked, none also called by hand")
     return 0
 
 

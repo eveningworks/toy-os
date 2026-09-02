@@ -15,7 +15,6 @@
 // exist, and reordering boot so it could would move the frame allocator
 // ahead of the guard page work that depends on it. The canary keeps
 // whatever krandom_init() had; everything drawn afterwards gets this.
-void virtio_rng_init(void);
 
 // Is there a working virtio-rng device?
 int virtio_rng_present(void);

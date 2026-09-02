@@ -21,7 +21,7 @@
 #include "barrier.h"
 #include <stddef.h>
 #include "driver.h" // DRIVER_DECLARE -- `lsdrv`
-#include "initcall.h"
+#include "pci_driver.h"
 
 DRIVER_DECLARE("ahci", "block", "SATA AHCI host controller");
 
@@ -428,16 +428,10 @@ static void bios_handoff(void) {
     }
 }
 
-static const struct pci_device *find_hba(void) {
-    for (int i = 0; i < pci_device_count(); i++) {
-        const struct pci_device *d = pci_device_at(i);
-        // prog_if 0x01 is "AHCI 1.0"; a 0x06 subclass with anything else
-        // there is a SATA controller in some vendor-specific mode this
-        // driver cannot speak.
-        if (d && d->class_code == 0x01 && d->subclass == 0x06 && d->prog_if == 0x01) return d;
-    }
-    return 0;
-}
+// prog_if 0x01 is "AHCI 1.0"; a 0x06 subclass with anything else there
+// is a SATA controller in some vendor-specific mode this driver cannot
+// speak, so the match names it.
+static const struct pci_match ahci_matches[] = { PCI_MATCH_CLASS(0x01, 0x06, 0x01) };
 
 // Records every implemented port and what is on it. Enumeration is
 // separate from bring-up because the answer is worth reporting even for
@@ -524,9 +518,13 @@ static int claim_port(int index) {
     return 1;
 }
 
-void ahci_init(void) {
-    g_pci = find_hba();
-    if (!g_pci) return;   // the ordinary case on an IDE or virtio machine
+static void ahci_probe(const struct pci_device *dev) {
+    if (g_pci) {
+        klog_printf("ahci: a second HBA at %02x:%02x.%u -- one is driven\n",
+                    dev->bus, dev->device, dev->function);
+        return;
+    }
+    g_pci = dev;
 
     uint64_t abar = pci_bar_mem_addr(g_pci, 5);
     if (!abar) {
@@ -590,7 +588,6 @@ void ahci_init(void) {
                 g_irq ? "IRQ-driven" : "polled (no interrupt line)");
     if (g_irq) klog_printf("ahci: on IRQ %u\n", g_irq);
 }
-INITCALL(ahci_init, INIT_BUS);
 
 // ---- transfers -------------------------------------------------------
 
@@ -684,3 +681,4 @@ int ahci_port_status(int index, struct ahci_port_status *out) {
     *out = g_ports[index];
     return 1;
 }
+PCI_DRIVER("ahci", ahci_matches, ahci_probe);

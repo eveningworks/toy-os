@@ -50,7 +50,7 @@
 #include "multiboot.h" // multiboot_cmdline() -- the `hdadump` boot word
 #include "fixed.h"     // fx_sin, for the kernel.hda_tone diagnostic
 #include <stdint.h>
-#include "initcall.h"
+#include "pci_driver.h"
 
 DRIVER_DECLARE("hda", "sound", "Intel High Definition Audio");
 
@@ -1009,15 +1009,18 @@ void hda_diag_tone(void) {
     if (ring) diag_tone(h, (int16_t *)ring);
 }
 
-void hda_init(void) {
-    for (int i = 0; i < pci_device_count() && g_nctrl < HDA_MAX_CTRL; i++) {
-        const struct pci_device *d = pci_device_at(i);
-        if (d->class_code != 0x04 || d->subclass != 0x03) continue;
-        ctrl_init(&g_hc[g_nctrl], d, g_nctrl);
-        g_nctrl++;
+static const struct pci_match hda_matches[] = { PCI_MATCH_CLASS(0x04, 0x03, PCI_ANY) };
+
+// Once per controller: a laptop has the PCH's and the GPU's.
+static void hda_probe(const struct pci_device *d) {
+    if (g_nctrl >= HDA_MAX_CTRL) {
+        klog_printf("hda: a %dth controller at %02x:%02x.%u -- not driven\n",
+                    g_nctrl + 1, d->bus, d->device, d->function);
+        return;
     }
+    ctrl_init(&g_hc[g_nctrl], d, g_nctrl);
+    g_nctrl++;
 }
-INITCALL(hda_init, INIT_DEVICE);
 
 // --- KTESTs -- skip without the device, like ac97's -------------------
 
@@ -1066,3 +1069,4 @@ KTEST("hda", "a volume change lands in the route's amplifier") {
     KTEST_ASSERT_EQ(hda_cmd(h, h->spk.vol_nid, V4(VERB_GET_AMP, AMP_OUT | AMP_LEFT), &amp), 0);
     KTEST_ASSERT_EQ(amp & 0x7F, h->spk.vol_offset);
 }
+PCI_DRIVER("hda", hda_matches, hda_probe);

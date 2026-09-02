@@ -1593,6 +1593,45 @@ so `hda.c` follows it. What was NOT done is a perceptual curve (ALSA's
 drivers agreeing beats one driver being more correct -- that move is the
 roadmap's "one taper for every card".
 
+## PCI drivers are matched by the bus, not found by the driver
+
+Nine drivers each carried a loop over `pci_device_at()` looking for
+their own class or vendor:device, took the first hit and stopped -- so a
+second controller did not exist, "which driver has that device" was
+answerable only from the boot log, and every one of the nine was a
+line in `kernel_main()`. Linux's `pci_driver` and NT's PnP both turn
+this around: the driver declares an id table and a `probe()`, the bus
+enumerates and calls. `PCI_DRIVER(name, matches, probe)` is that shape
+(`kernel/include/kernel/pci_driver.h`): a `.pci_drivers` section, and
+one `pci_bind()` initcall at `INIT_BUS` that walks devices in
+enumeration order against the tables.
+
+**Why first-match-in-link-order rather than a priority.** A device that
+two tables claim is a design mistake, not a preference to rank, and the
+`pci_bind` KTEST fails on any present device two drivers match. The one
+place a class is genuinely shared -- the USB host controller class,
+where prog-if tells xHCI from EHCI -- is handled INSIDE `probe()`, which
+refuses and logs the kind, so the log still says why USB did not come
+up on an EHCI-only machine.
+
+**Why the order moved from init order to slot order, and what that
+cost.** Two NICs, two sound cards and two disks used to be ranked by
+the order of calls in `kernel_main()`; they are ranked by bus address
+now. Nothing that mattered depended on the old order: disk precedence is
+explicit in `mount.c`, `audio_device` outranks discovery, and the
+`net0`/`net1` assignment on QEMU comes out the same because the e1000 is
+in the lower slot. The USB-before-sound ordering the laptop relied on
+(a USB DAC plugged at boot became the active device) survives for the
+same accidental reason -- the xHCI sits below the HDA on the PCH -- and
+is not a guarantee; the setting is.
+
+**What stays out.** `ata` (brought up from `vfs.c` before backends are
+probed), the display drivers (the display registry chooses one at
+`vga_init()`, before the walk), and USB class drivers (bound at
+enumeration by the xHCI). Each has a registry whose ORDER is a decision
+in its own right, and pulling them under PCI matching would move that
+decision somewhere less visible.
+
 ## Sound device selection: the first one discovered, until somebody chooses
 
 With two cards in a machine the question "which one plays?" has to have

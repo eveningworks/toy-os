@@ -17,8 +17,7 @@
 // wrong order LOUD; this only removes the list. See docs/decisions.md.
 enum init_level {
     INIT_CORE = 0, // a class core that owns a table others register into (net)
-    INIT_BUS,      // buses and transports: AHCI, xHCI, the virtio devices
-    INIT_DEVICE,   // devices on those buses' peers: NICs, sound cards
+    INIT_BUS,      // the PCI bind (kernel/drivers/pci_bind.c), platform devices
     INIT_FS,       // the filesystem
     INIT_CONFIG,   // readers of /etc -- needs INIT_FS
     INIT_QUERY,    // SYS_QUERY providers -- before settings_init()

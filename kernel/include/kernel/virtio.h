@@ -189,6 +189,18 @@ struct virtio_device {
 // and a silent one would be unreadable in dmesg.
 int virtio_pci_find(uint16_t type, int index, struct virtio_device *out);
 
+// The bus-matching half of the same thing: pci_bind() has already named
+// the device, and the driver's probe() attaches to it. Refuses a device
+// whose type is not `type`. virtio_pci_find() is find + this.
+int virtio_pci_attach(const struct pci_device *dev, uint16_t type, struct virtio_device *out);
+
+// VIRTIO_ID_* of a virtio PCI function, modern or transitional.
+uint16_t virtio_pci_type(const struct pci_device *d);
+
+// The PCI ids a driver matches: the modern id (0x1040 + type) and the
+// transitional one where the spec defines it.
+#define VIRTIO_PCI_MATCH_MODERN(type) PCI_MATCH_ID(VIRTIO_PCI_VENDOR, 0x1040 + (type))
+
 // Reset -> ACKNOWLEDGE -> DRIVER -> negotiate -> FEATURES_OK, including
 // the spec-mandated FEATURES_OK re-read. `wanted` is the driver's mask
 // of DEVICE-specific bits it understands; VIRTIO_F_VERSION_1 is added

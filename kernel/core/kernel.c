@@ -278,8 +278,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // order; the comments that used to sit on each call are on the
     // level definitions and beside the calls that own them.
     initcalls_run(INIT_CORE);   // the class cores that own a table (net)
-    initcalls_run(INIT_BUS);    // AHCI, xHCI, virtio -- after heap_init(): a virtqueue is contiguous frames
-    initcalls_run(INIT_DEVICE); // NICs and sound cards
+    initcalls_run(INIT_BUS);    // pci_bind() probes every PCI driver -- after heap_init(): a virtqueue is contiguous frames
 
     klog_write("toy-os: kernel heap initialized\n");
 

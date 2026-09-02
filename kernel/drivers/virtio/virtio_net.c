@@ -138,8 +138,13 @@ static void net_irq(uint64_t *regs) {
     virtio_net_drain();
 }
 
-void virtio_net_init(void) {
-    if (!virtio_pci_find(VIRTIO_ID_NET, 0, &g_vdev)) return;
+void virtio_net_attach(const struct pci_device *pci) {
+    if (g_vdev.pci) {
+        klog_printf("virtio-net: a second device at %02x:%02x.%u -- one is driven\n",
+                    pci->bus, pci->device, pci->function);
+        return;
+    }
+    if (!virtio_pci_attach(pci, VIRTIO_ID_NET, &g_vdev)) return;
     if (!virtio_begin(&g_vdev, VIRTIO_NET_F_MAC)) return;
 
     // No MAC offered means the device expects the driver to invent one.

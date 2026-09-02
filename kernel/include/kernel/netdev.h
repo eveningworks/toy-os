@@ -121,8 +121,6 @@ void net_poll(void);
 // Boot probe for each driver, called from kernel_main() beside the
 // other PCI-scanning drivers. Finding no card is the common case.
 void net_init(void);      // the core: the table and the queue
-void e1000_init(void);
-void net_virtio_init(void);
 
 
 // QUERY_NETDEV's provider (`ifconfig` reads the table through it).

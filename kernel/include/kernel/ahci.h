@@ -40,7 +40,6 @@
 // all -- every other ahci_* call is then a no-op or a zero, never a
 // hang. Call after pmm_init() (the command list and bounce buffer come
 // from pmm_alloc_contiguous()) and before anything mounts.
-void ahci_init(void);
 
 // 1 when a SATA drive answered IDENTIFY and transfers can be issued.
 int ahci_present(void);

@@ -31,7 +31,7 @@
 #include "ktest.h"
 #include <stdint.h>
 #include "driver.h" // DRIVER_DECLARE -- `lsdrv`
-#include "initcall.h"
+#include "pci_driver.h"
 
 DRIVER_DECLARE("ac97", "sound", "Intel AC'97 audio codec");
 
@@ -127,15 +127,15 @@ static const struct sound_device ac97_dev = {
     .set_volume = ac97_set_volume,
 };
 
-void ac97_init(void) {
-    // DECLARED BEFORE THE HARDWARE IS LOOKED FOR, so a driver
-    // that finds nothing still appears in `lsdrv` -- "compiled
-    // in but idle" is the answer somebody is looking for.
-    for (int i = 0; i < pci_device_count(); i++) {
-        const struct pci_device *d = pci_device_at(i);
-        if (d->class_code == 0x04 && d->subclass == 0x01) { g_pci = d; break; }
+static const struct pci_match ac97_matches[] = { PCI_MATCH_CLASS(0x04, 0x01, PCI_ANY) };
+
+static void ac97_probe(const struct pci_device *dev) {
+    if (g_pci) {
+        klog_printf("ac97: a second codec at %02x:%02x.%u -- one is driven\n",
+                    dev->bus, dev->device, dev->function);
+        return;
     }
-    if (!g_pci) return; // no audio controller: not an error
+    g_pci = dev;
 
     if (!pci_bar_is_io(g_pci->bar[0]) || !pci_bar_is_io(g_pci->bar[1])) {
         klog_write("ac97: unexpected memory BARs -- not driving it\n");
@@ -194,7 +194,6 @@ void ac97_init(void) {
                 g_pci->bus, g_pci->device, g_pci->function,
                 g_nam, g_nabm, line);
 }
-INITCALL(ac97_init, INIT_DEVICE);
 
 // --- KTESTs -- skip without the device, like ahci's --------------------
 
@@ -211,3 +210,4 @@ KTEST("ac97", "start runs the engine and stop halts it") {
     ac97_stop();
     KTEST_ASSERT_EQ(inb(g_nabm + PO_CR) & CR_RPBM, 0);
 }
+PCI_DRIVER("ac97", ac97_matches, ac97_probe);

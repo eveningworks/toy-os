@@ -106,10 +106,21 @@ int virtio_pci_find(uint16_t type, int index, struct virtio_device *out) {
         if (device_type(d) != type) continue;
         if (seen++ == index) { dev = d; break; }
     }
-    // No such device is the ordinary case and says nothing. Anything
-    // below this point is a device that IS present and is being
-    // refused, which must be readable.
+    // No such device is the ordinary case and says nothing.
     if (!dev) return 0;
+    return virtio_pci_attach(dev, type, out);
+}
+
+uint16_t virtio_pci_type(const struct pci_device *d) { return device_type(d); }
+
+int virtio_pci_attach(const struct pci_device *dev, uint16_t type, struct virtio_device *out) {
+    if (!dev || !out) return 0;
+    // A transitional id names its type in the subsystem id; a driver
+    // matched by PCI id still checks, so a mislabelled device is refused
+    // rather than driven as something else.
+    if (dev->vendor_id != VIRTIO_PCI_VENDOR || device_type(dev) != type) return 0;
+    // Anything below this point is a device that IS present and is
+    // being refused, which must be readable.
 
     for (int i = 0; i < (int)sizeof *out; i++) ((uint8_t *)out)[i] = 0;
     out->pci = dev;

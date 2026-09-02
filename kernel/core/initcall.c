@@ -12,7 +12,7 @@ extern const struct initcall __initcalls_end[];
 static uint8_t g_ran[INITCALL_MAX];
 
 static const char *const g_level_name[INIT_LEVELS] = {
-    "core", "bus", "device", "fs", "config", "query",
+    "core", "bus", "fs", "config", "query",
 };
 
 int initcall_count(void) {
