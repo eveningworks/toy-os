@@ -1044,6 +1044,22 @@ this the obvious way), not from how much history it accumulated.
   this is the case only the compositor can report. The two are
   distinguishable and a test must keep them apart: `/tests/hangclient`
   has a `b` key that is busy AND alive for exactly that reason.
+- **MOUSE MOTION IS A STATE, NOT A BACKLOG, AND A FULL EVENT QUEUE SHEDS
+  INPUT BEFORE A NOTIFICATION.** `win_events_push()` merges a move into
+  the NEWEST queued move when the buttons (and, for a client, the
+  window) match, so motion never holds more than one of the 32 slots --
+  Windows keeps one `WM_MOUSEMOVE` per queue and X compresses
+  `MotionNotify` for the same reason. When the queue still overflows,
+  the oldest INPUT event goes (raw or delivered: keys, buttons, wheel),
+  and only with no input queued the oldest of all. The trap that made
+  it: `WIN_EV_SCREEN` sat in the compositor's queue behind a real mouse
+  moving through one 300 ms frame, was the oldest event when the 33rd
+  move arrived, and was shed -- the kernel then scanned 1280x1024 while
+  the desktop kept painting 1366x768, which read as a broken panel
+  fitter (a cut right edge, a band of stale boot text flipping between
+  three scanouts). `guictl compositor` shows the drop count; a
+  notification lost to it is otherwise invisible. Only the newest slot
+  merges, so a press between two moves keeps its own position.
 - **EVERY CLIENT IS PINGED ON A CADENCE, not just one being closed.**
   `WM_PING_INTERVAL_DEFAULT` (2s) beside the existing
   `WM_PING_TIMEOUT_DEFAULT` (3s), both in `wm_internal.h`, both with a

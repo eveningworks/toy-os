@@ -55,15 +55,53 @@ void win_events_reset(int pid) {
     q->dropped = 0;
 }
 
+// Input is what a full queue sheds -- the compositor's raw events and a
+// client's delivered ones alike. Everything else, a notification
+// (WIN_EV_SCREEN, WIN_EV_FONT, WIN_EV_CLOSE) or a client's request to
+// the compositor, is a fact the receiver cannot re-derive by looking.
+static int is_input(uint32_t type) {
+    switch (type) {
+    case WIN_EV_RAW_MOUSE: case WIN_EV_RAW_KEY: case WIN_EV_RAW_KEY_UP: case WIN_EV_RAW_WHEEL:
+    case WIN_EV_MOUSE_MOVE: case WIN_EV_MOUSE_DOWN: case WIN_EV_MOUSE_UP:
+    case WIN_EV_KEY: case WIN_EV_KEY_UP: case WIN_EV_WHEEL:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int is_motion(uint32_t type) {
+    return type == WIN_EV_RAW_MOUSE || type == WIN_EV_MOUSE_MOVE;
+}
+
 int win_events_push(int pid, const struct win_event *ev) {
     struct event_queue *q = queue_for(pid);
     if (!q || !ev) return 0;
 
+    // MOTION IS A STATE, NOT A BACKLOG (Windows holds one WM_MOUSEMOVE
+    // per queue; X compresses MotionNotify). A move with the same
+    // buttons as the NEWEST queued move replaces it, so motion never
+    // holds more than one slot -- a mouse moving through one slow frame
+    // evicted a WIN_EV_SCREEN and left the desktop painting the old
+    // mode. Only the newest slot: a press in between keeps its place.
+    if (is_motion(ev->type) && q->count > 0) {
+        struct win_event *last = &q->ring[(q->head + q->count - 1) % WIN_EVENT_QUEUE_MAX];
+        if (last->type == ev->type && last->window == ev->window && last->mods == ev->mods) {
+            *last = *ev;
+            scheduler_wake(q, 0);
+            return 1;
+        }
+    }
+
     if (q->count == WIN_EVENT_QUEUE_MAX) {
-        // Full: drop the OLDEST by advancing head, then write into the
-        // slot it vacated. See WIN_EVENT_QUEUE_MAX's comment for why
-        // this direction rather than refusing the new event.
-        q->head = (q->head + 1) % WIN_EVENT_QUEUE_MAX;
+        // Full: drop the OLDEST INPUT event, and only when there is
+        // none the oldest of all. See WIN_EVENT_QUEUE_MAX's comment for
+        // why the old end rather than refusing the new event.
+        int victim = 0;
+        for (int i = 0; i < q->count; i++)
+            if (is_input(q->ring[(q->head + i) % WIN_EVENT_QUEUE_MAX].type)) { victim = i; break; }
+        for (int i = victim; i < q->count - 1; i++)
+            q->ring[(q->head + i) % WIN_EVENT_QUEUE_MAX] = q->ring[(q->head + i + 1) % WIN_EVENT_QUEUE_MAX];
         q->count--;
         q->dropped++;
     }

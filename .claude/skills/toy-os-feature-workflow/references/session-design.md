@@ -2353,6 +2353,16 @@ one mechanism per flash). Read before touching `intel_modeset.c`.**
   find the driver's own validation function for it rather than the
   register write; i915 keeps its restrictions in `*_check_*` helpers,
   and that is where the sentence quoting the PRM lives.
+- **(2026-09-04) A NOTIFICATION IN A DROP-OLDEST INPUT QUEUE IS LOST
+  EXACTLY WHEN IT MATTERS.** `WIN_EV_SCREEN` was shed by a real mouse
+  moving through one slow frame, and the symptom -- a cut right edge and
+  a band of stale text flipping between scanouts -- read as a panel
+  fitter bug for an hour, because every driver register was right. The
+  discriminator was `guictl state` saying 1366x768 while `lsdisplay`
+  said 1280x1024, then `guictl compositor` showing drops. Motion now
+  coalesces in the kernel (Windows' one `WM_MOUSEMOVE`) and overflow
+  sheds input before anything else. `docs/decisions/gui.md`. Ask what
+  the compositor BELIEVES before blaming what the hardware was told.
 - **The settings registry was full** (28 real + 4 KTEST scratch = 32):
   a new setting would have reddened two tests about something else, as
   the header comment predicted. Raised to 40 in both twins.

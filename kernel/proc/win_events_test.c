@@ -11,6 +11,7 @@
 // drives a real ring-3 process through all of it and checks the one
 // thing that can only be true if every link worked: the exit code.
 #include "ktest.h"
+#include "string.h"
 #include "win_events.h"
 #include "win_server.h"
 #include "scheduler.h"
@@ -75,6 +76,58 @@ KTEST("win_events", "overflow drops the oldest, not the newest") {
 
     win_events_reset(1);
     KTEST_ASSERT_EQ(win_events_dropped(1), 0); // reset clears the counter too
+}
+
+static struct win_event raw_mouse(int x, int y, uint32_t buttons) {
+    struct win_event ev;
+    k_memset(&ev, 0, sizeof ev);
+    ev.type = WIN_EV_RAW_MOUSE;
+    ev.a = x; ev.b = y; ev.mods = buttons;
+    return ev;
+}
+
+KTEST("win_events", "mouse motion coalesces into one slot, and a press keeps its own") {
+    win_events_reset(1);
+    for (int i = 0; i < 3 * WIN_EVENT_QUEUE_MAX; i++) {
+        struct win_event ev = raw_mouse(i, 2 * i, 0);
+        KTEST_ASSERT(win_events_push(1, &ev));
+    }
+    KTEST_ASSERT_EQ(win_events_pending(1), 1);
+    KTEST_ASSERT_EQ(win_events_dropped(1), 0);
+    struct win_event press = raw_mouse(100, 200, 1);   // button down: a new slot
+    KTEST_ASSERT(win_events_push(1, &press));
+    struct win_event drag = raw_mouse(101, 201, 1);    // moving with it held: merges into that slot
+    KTEST_ASSERT(win_events_push(1, &drag));
+    KTEST_ASSERT_EQ(win_events_pending(1), 2);
+    struct win_event got;
+    KTEST_ASSERT(win_events_pop(1, &got));
+    KTEST_ASSERT_EQ(got.a, 3 * WIN_EVENT_QUEUE_MAX - 1);   // the newest position won
+    KTEST_ASSERT(win_events_pop(1, &got));
+    KTEST_ASSERT_EQ(got.a, 101); KTEST_ASSERT_EQ((int)got.mods, 1);
+    win_events_reset(1);
+}
+
+KTEST("win_events", "overflow sheds input before a notification") {
+    win_events_reset(1);
+    struct win_event screen;
+    k_memset(&screen, 0, sizeof screen);
+    screen.type = WIN_EV_SCREEN; screen.a = 1280; screen.b = 1024;
+    KTEST_ASSERT(win_events_push(1, &screen));
+    // The queue fills with keys behind it; the notification is the
+    // OLDEST event and must still not be the one dropped.
+    for (int i = 0; i < WIN_EVENT_QUEUE_MAX; i++) {
+        struct win_event ev = key_event(i);
+        KTEST_ASSERT(win_events_push(1, &ev));
+    }
+    KTEST_ASSERT_EQ(win_events_pending(1), WIN_EVENT_QUEUE_MAX);
+    KTEST_ASSERT_EQ(win_events_dropped(1), 1);
+    struct win_event got;
+    KTEST_ASSERT(win_events_pop(1, &got));
+    KTEST_ASSERT_EQ((int)got.type, WIN_EV_SCREEN);
+    KTEST_ASSERT_EQ(got.a, 1280);
+    KTEST_ASSERT(win_events_pop(1, &got));
+    KTEST_ASSERT_EQ(got.a, 1);   // key 0 was the one shed
+    win_events_reset(1);
 }
 
 KTEST("win_events", "a bad pid is refused, not written out of bounds") {

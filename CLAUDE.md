@@ -739,6 +739,7 @@ whenever a headline here tells you something you did not already know.
 - **THE KERNEL CONSOLE STOPS PRESENTING WHILE A COMPOSITOR OWNS THE SCREEN**
 - **A CLIENT NAMES ITS POINTER SHAPE, AND THE COMPOSITOR CLAMPS IT TO THE CONTENT AREA**
 - **THE BUSY POINTER HAS TWO SOURCES**
+- **MOUSE MOTION IS A STATE, NOT A BACKLOG, AND A FULL EVENT QUEUE SHEDS INPUT BEFORE A NOTIFICATION**
 - **EVERY CLIENT IS PINGED ON A CADENCE**
 - **The cursor's shapes are DATA FILES, and a theme is a directory.**
 - **The cursor's drawn extent is DERIVED, not a constant.**

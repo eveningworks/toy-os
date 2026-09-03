@@ -6007,3 +6007,33 @@ this greyed out". The window maths is a pure function so it is KTESTed
 on every machine, and the arming order of the fitter's registers is the
 driver's trap, recorded in `docs/conventions/gui.md`.
 
+## Motion is coalesced in the kernel queue, and a notification is never the event shed
+
+The compositor's event queue is 32 deep and drops the oldest on
+overflow, which is the right policy for input: a client that has fallen
+behind wants the current state, not the backlog. It was the wrong policy
+for `WIN_EV_SCREEN`, which is not input but a fact -- the screen changed,
+re-map the grant -- that the receiver has no other way to learn. On the
+laptop a real mouse moving through one slow frame pushed 33 events
+behind it and the notification was the one to go; the kernel scanned the
+new mode while the desktop painted the old one.
+
+The obvious fix, a deeper queue, only moves the cliff: a 125 Hz mouse
+fills any depth in a long enough frame. The two rules that hold are the
+ones real windowing systems settled on. **Motion is a state**: Windows
+posts a single `WM_MOUSEMOVE` per thread queue and replaces it, and X
+compresses `MotionNotify` in the server, so the kernel merges a move
+into the newest queued move (same buttons, same window) and the queue
+holds at most one. The compositor was already doing exactly this on its
+side ("newest position wins"), so nothing observable changed except that
+the flood no longer reaches the queue. **A notification outranks
+input**: Wayland never drops an event at all -- the socket fills and the
+client stalls -- and toy-os deliberately keeps dropping, because a
+stalled input path is the worse failure here; but what it sheds is the
+oldest INPUT event, raw or delivered, and only with none queued the
+oldest of all. Both are in `win_events_push()` with a KTEST each, and
+the positive control (both rules off) reddens exactly those two.
+
+Deliberately NOT done: blocking the producer, as Wayland does. The
+producers are the mouse IRQ and a client's syscall, and neither can
+wait on a compositor.

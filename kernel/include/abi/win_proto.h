@@ -1392,10 +1392,15 @@ static inline uint64_t win_glyph_offset(uint32_t index, int w, int h) {
 }
 
 // How many events the server will hold for one client before it starts
-// dropping the OLDEST. Dropping the oldest rather than the newest is
-// deliberate: for input, the most recent state is the one that matters,
-// and a client that has fallen far enough behind to overflow is better
-// served by current events than by a backlog it will never catch up on.
+// dropping the OLDEST INPUT event (and only with none of those queued,
+// the oldest of all). Dropping the oldest rather than the newest
+// is deliberate: for input, the most recent state is the one that
+// matters, and a client that has fallen far enough behind to overflow
+// is better served by current events than by a backlog it will never
+// catch up on. Mouse motion (raw, and a client's WIN_EV_MOUSE_MOVE) is
+// coalesced into one slot before any of this applies (win_events.c),
+// and a notification such as WIN_EV_SCREEN is never the one shed while
+// input is waiting.
 #define WIN_EVENT_QUEUE_MAX 32
 
 #endif
