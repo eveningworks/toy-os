@@ -1,15 +1,12 @@
 // Intel gen8 (Broadwell) integrated graphics -- the display engine as
 // a display_driver. See intel_display.h for what it is and is not.
 //
-// THE INVARIANT: this driver never programs a mode. The firmware's GOP
+// THE INVARIANT: the probe never programs a mode. The firmware's GOP
 // lit the panel, chose the pipe and pointed the primary plane at the
 // framebuffer GRUB reports; the probe reads that back and refuses to
-// claim unless every fact agrees (Linux's fastboot readout, without
-// the fallback modeset). Everything it writes afterwards -- the cursor
-// plane, the backlight duty, the power well -- is a register the plane
-// and pipe do not depend on, so a wrong value costs a cursor or a dim
-// screen, never a black one. Keep it that way: a PLL, a transcoder or
-// the panel power sequencer is a different driver.
+// claim unless every fact agrees (Linux's fastboot readout). A modeset
+// happens only when asked for (set_mode, intel_modeset.c), and today
+// it re-programs the native mode; nothing at boot can black the screen.
 //
 // THE TRAP: the display engine reads memory through the GGTT, not the
 // CPU's page tables, and its reads do not snoop the CPU cache unless
@@ -33,7 +30,7 @@
 #include "driver.h" // DRIVER_DECLARE -- `lsdrv -v` names THIS file
 #include "intel_internal.h"
 
-DRIVER_DECLARE("intel-display", "display", "Intel gen8 display engine: cursor plane, backlight, EDID");
+DRIVER_DECLARE("intel-display", "display", "Intel gen8 display engine: eDP modeset, cursor plane, backlight");
 
 // --- PCI ------------------------------------------------------------
 #define INTEL_VENDOR 0x8086
@@ -470,10 +467,33 @@ static int intel_probe(void) {
     setup_scanouts();
     setup_backlight();
     intel_aux_init();
+    // MODESET is advertised unconditionally: the one listed mode is the
+    // one on screen, and set_mode re-runs the sequence that reaches it.
+    intel_driver.caps |= DISPLAY_CAP_MODESET;
     return 1;
 }
 
 static void intel_get_surface(struct display_surface *out) { *out = g_surface; }
+
+// Modes: the panel's native timing, which is the mode on screen (the
+// probe claims only when the firmware's plane shows it). set_mode runs
+// the whole sequence -- panel power, port clock, link training, the
+// timings from the EDID -- and refuses any other size until the panel
+// fitter exists (stage 4).
+static int intel_mode_count(void) { return 1; }
+
+static void intel_mode_at(int index, struct display_mode *out) {
+    (void)index;
+    out->width = g_surface.width;
+    out->height = g_surface.height;
+    out->bpp = g_surface.bpp;
+}
+
+static int intel_set_mode(const struct display_mode *m) {
+    if (!m || m->bpp != 32) return 0;
+    if (m->width != g_surface.width || m->height != g_surface.height) return 0;
+    return intel_modeset_native();
+}
 
 // Caps are filled in at claim time: the cursor plane once its buffer
 // has a GGTT slot, the backlight once the PWM has a readable period.
@@ -492,6 +512,9 @@ static struct display_driver intel_driver = {
     .flip = intel_flip,
     .scanout_live = intel_scanout_live,
     .read_edid = intel_aux_read_edid,
+    .mode_count = intel_mode_count,
+    .mode_at = intel_mode_at,
+    .set_mode = intel_set_mode,
 };
 
 void intel_display_register(void) {
@@ -502,3 +525,4 @@ int intel_display_active(void) { return g_active; }
 
 int intel_display_pipe_cycle(void) { return g_active ? intel_modeset_pipe_cycle() : 0; }
 int intel_display_link_retrain(void) { return g_active ? intel_modeset_link_retrain() : 0; }
+int intel_display_native(void) { return g_active ? intel_modeset_native() : 0; }

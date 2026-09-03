@@ -876,7 +876,11 @@ laptop's firmware timing matched its panel's EDID to the kHz. What the
 readout found, and what stage 3 (the native re-modeset, with DP link
 training) needs from it, is under "Intel modesetting" in
 `docs/roadmap-details.md`; the design calls are in
-`references/session-design.md`.
+`references/session-design.md`. **Later the same day stage 3 landed too**:
+`intel_modeset.c` re-programs the native mode end to end (panel power,
+port clock, link training, the timings from the EDID) and the driver
+advertises MODESET with that one mode; the lessons -- one mechanism per
+flash, readback over eye, the T3 wait -- are in the same reference file.
 
 ## Verification habits this project rewards
 

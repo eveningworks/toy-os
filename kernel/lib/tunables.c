@@ -262,15 +262,16 @@ static const struct setting hda_tone_setting = {
 //
 // Write-only, like hda_tone: `pipe` turns the laptop panel's transcoder
 // and pipe off and back on, `link` also drops the DP link and retrains
-// it -- stage 3 of Intel modesetting, one mechanism per flash, each
+// it, `native` runs the whole modeset for the mode on screen (what
+// set_mode does) -- stage 3 of Intel modesetting, one mechanism per flash, each
 // logging every readback. Reads back as "off". A machine without the
 // Intel display gets the sentence, not a silent no-op.
 
 static void intel_cycle_get(char *out, uint32_t cap) { k_strlcpy(out, "off", cap); }
 
 static int intel_cycle_choice(int index, char *out, uint32_t cap) {
-    static const char *const names[] = { "off", "pipe", "link" };
-    if (index < 0 || index > 2) return 0;
+    static const char *const names[] = { "off", "pipe", "link", "native" };
+    if (index < 0 || index > 3) return 0;
     k_strlcpy(out, names[index], cap);
     return 1;
 }
@@ -285,6 +286,7 @@ static int intel_cycle_apply(const char *value) {
     if (k_strcmp(value, "off") == 0) return SETTING_SAVED;
     if (k_strcmp(value, "pipe") == 0) return intel_display_pipe_cycle() ? SETTING_SAVED : SETTING_INVALID;
     if (k_strcmp(value, "link") == 0) return intel_display_link_retrain() ? SETTING_SAVED : SETTING_INVALID;
+    if (k_strcmp(value, "native") == 0) return intel_display_native() ? SETTING_SAVED : SETTING_INVALID;
     return SETTING_INVALID;
 }
 

@@ -137,4 +137,5 @@ KTEST("intel-display", "the cycle tunable is unavailable, and refused, without t
     KTEST_ASSERT(s->unavailable && s->unavailable() != 0);
     KTEST_ASSERT_EQ(intel_display_pipe_cycle(), 0);
     KTEST_ASSERT_EQ(intel_display_link_retrain(), 0);
+    KTEST_ASSERT_EQ(intel_display_native(), 0);
 }

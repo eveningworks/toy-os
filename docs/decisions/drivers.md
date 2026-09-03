@@ -2166,6 +2166,15 @@ whole point is not being a driver need not include `driver.h` to say so.
 
 ## The Intel display driver adopts the firmware's mode, because a modeset nobody can test is a black screen
 
+*Superseded in part, 2026-09-03:* the driver still adopts the firmware's
+mode at boot, but it CAN set one now -- the native mode, through
+`intel_modeset.c`, reached only by `set_mode` or the `kernel.intel_cycle`
+tunable. What made that safe was the staging this entry's argument
+implied: the readout first (the EDID entry below), then one mechanism
+per flash with the maintainer at the panel, each logging its readbacks
+and proving itself by the frame counter and the lane status rather than
+by eye. The boot path still writes nothing that can black the screen.
+
 `kernel/drivers/display/intel_display.c` drives the bare-metal laptop's
 Broadwell GPU, and the shape it takes is the opposite of vmsvga's and
 bochs's: it never programs a mode. Linux's i915 reads out the state the

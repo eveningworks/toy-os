@@ -2875,7 +2875,7 @@ truncated, which fails safely but only in the moment.
 
 **Reasoning belongs in the man page; the descriptor is configuration.**
 
-## THE INTEL DISPLAY DRIVER INHERITS THE FIRMWARE'S MODE AND NEVER SETS ONE, AND A BACKLIGHT IS A DISPLAY CAPABILITY
+## THE INTEL DISPLAY DRIVER INHERITS THE FIRMWARE'S MODE AT BOOT AND CAN RE-PROGRAM THE NATIVE ONE, AND A BACKLIGHT IS A DISPLAY CAPABILITY
 
 `kernel/drivers/display/intel_display.c` -- the bare-metal laptop's own
 GPU (a Broadwell GT1, `8086:161e`), as a `display_driver` registered
@@ -2888,13 +2888,14 @@ of the inherited scanout it adds what a VESA framebuffer cannot: the
 cursor plane, the backlight PWM and the display power well. Seven
 things to know.
 
-- **NOTHING IT WRITES CAN BLACK THE SCREEN.** The plane, the pipe, the
-  PLL, the transcoder and the panel power sequencer are never touched;
-  a wrong cursor register costs a cursor, a wrong duty a dim screen,
-  and a reboot puts the firmware's state back either way. A modesetting
-  driver -- EDID over the eDP AUX channel, PLLs, external monitors -- is
-  a different driver and a roadmap item, and it needs runtime mode
-  switching ABOVE it before it buys anything.
+- **NOTHING THE PROBE WRITES CAN BLACK THE SCREEN.** At boot the plane,
+  the pipe, the PLL, the transcoder and the panel power sequencer are
+  never touched; a wrong cursor register costs a cursor, a wrong duty a
+  dim screen, and a reboot puts the firmware's state back either way.
+  A modeset runs only on request -- `set_mode`, or the
+  `kernel.intel_cycle` tunable -- and is `intel_modeset.c`'s (see the
+  EDID entry below). `DISPLAY_CAP_MODESET` is advertised with ONE mode,
+  the native one, until the panel fitter exists.
 - **GEN8 ONLY, BY DEVICE ID.** The register map is Broadwell's; another
   generation is logged as "not gen8 -- not claimed" and vesafb takes
   the same pixels. Widening the table means checking every offset
@@ -2997,5 +2998,12 @@ Five things to know.
   because this runs inside a syscall. Each step logs its readback and
   the exit criterion is the frame counter moving and the panel's lane
   status reading trained; the panel shows a brief flicker, measured by
-  the maintainer's eye. Still to add before `set_mode` exists: the
-  panel power sequencer, the port clock, and writing the timings.
+  the maintainer's eye. `native` (and `set_mode`) is the whole
+  sequence: backlight off, pipe off, port down, `PP_CONTROL` off and
+  the sequencer's cycle delay waited on its status bit, `PORT_CLK_SEL`
+  off and on, panel on, **then the rest of T1+T3 (210 ms) even though
+  AUX answers after 30 ms -- training started early fails with no
+  adjust request, and the DPCD block is NOT what the reset clears (it
+  survives unchanged)**, link training, the transcoder timings and M/N
+  computed from the EDID (they reproduce the firmware's exactly), pipe
+  on, T8, backlight on. About a second dark, and the desktop back.

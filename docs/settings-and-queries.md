@@ -62,8 +62,8 @@ through the HD Audio controller with no app in the loop (see
 persisted; it is the write half of a probe, the same shape as the
 others.
 
-`kernel.intel_cycle` is the same shape with three words: `pipe` and
-`link` each run one mechanism of the Intel display's modeset (see
+`kernel.intel_cycle` is the same shape with four words: `pipe`, `link`
+and `native` each run one mechanism of the Intel display's modeset (see
 `docs/conventions/kernel.md`'s EDID entry) and log every readback;
 `off` does nothing, and the value always reads back as `off`.
 

@@ -79,6 +79,9 @@ int  intel_modeset_pipe_cycle(void);
 // link_retrain() also drops the DDI buffer and retrains the DP link
 // (patterns 1 and 2, the swing loop) before bringing the pipe back.
 int  intel_modeset_link_retrain(void);
+// native() runs the whole sequence -- panel power, port clock, the link,
+// the timings from the EDID -- for the mode already on screen.
+int  intel_modeset_native(void);
 
 // The DDI A port registers, shared with the readout.
 #define DDI_BUF_CTL_A   0x64000

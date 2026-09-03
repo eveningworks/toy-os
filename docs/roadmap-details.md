@@ -3903,11 +3903,22 @@ the input to stage 3:**
   values; a very brief flicker on the panel (three runs). The
   firmware's `DDI_BUF_TRANS` table for port A reads identical to
   i915's Broadwell eDP table (`0xffffff/0x12, 0xebafff/0x20011, ...`).
-- Not yet: the panel power sequencer off/on (`PP_CONTROL` with the
-  delays above, the backlight around it), `PORT_CLK_SEL` off/on, and
-  writing the transcoder timings and M/N from the EDID rather than
-  keeping the firmware's. Then the pieces assemble into `set_mode` for
-  the native mode and `DISPLAY_CAP_MODESET` can be advertised.
+- `native` -- the whole sequence, and what `set_mode` runs now:
+  backlight off, pipe off, port down, panel power off (status
+  `0x8000001`, the cycle delay bit set), `PORT_CLK_SEL` none, the cycle
+  delay waited out, clock back, panel on (status `0x80000008`), 210 ms,
+  link training, the timings and M/N from the EDID, pipe on, T8,
+  backlight. The computed registers reproduce the firmware's to the bit
+  (`0x81f077f 0x81f077f 0x7cf07af 0x4550437 0x4550437 0x44d043f`, data
+  M/N `0x49e1f6/0x800000`, link `0x41ac6/0x80000`). About a second
+  dark, then the desktop back intact (the maintainer's eye).
+  **The one thing that failed on the way**: AUX answers 30 ms after
+  panel-on and training started then fails with lane status 00 and no
+  adjust request; waiting the spec's 210 ms T1+T3 fixed it. The DPCD
+  0x100..0x10F block and 0x600 read identical before and after the
+  power cycle, so the panel's reset does not clear them (they are
+  rewritten anyway, as i915 does). `DISPLAY_CAP_MODESET` is advertised
+  with the native mode as the one choice.
 
 **Stage 3, sized from that.** It is DP link training, not just a
 register sequence: after `DDI_BUF_CTL` goes down the panel must be

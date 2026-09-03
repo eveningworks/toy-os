@@ -2297,3 +2297,31 @@ firmware readout compared against it). Read before touching
   the canned one -- a fixture written from the spec carries the spec's
   assumptions.
 
+**2026-09-03, later (Intel modesetting stage 3: the native re-modeset,
+one mechanism per flash). Read before touching `intel_modeset.c`.**
+
+- **Build a black-screen-risk sequence one mechanism at a time behind
+  a write-only tunable** (`kernel.intel_cycle` = pipe | link | native),
+  each flash adding one thing and logging every readback, the
+  maintainer at the panel. Three flashes, one failure, no reinstall.
+- **The exit criterion is a readback, never the eye**: the transcoder's
+  state bit, the frame counter moving, the panel's lane status 0x77.
+  The eye confirmed afterwards (a flicker for `link`, a second dark
+  for `native`).
+- **The enabled PIPECONF was the EDP transcoder's (0x7F008), not pipe
+  A's** -- pipe A's read as state-only and would have taken a write
+  silently. Read which transcoder is live before writing either.
+- **AUX answering is not the panel being ready**: 30 ms after power-on
+  it answered DPCD reads and training then failed with lane status 00
+  and no adjust request. The spec's T1+T3 (210 ms) was the fix; the
+  DPCD block the reset was suspected of clearing survived unchanged,
+  measured by logging it before and after. Fix the wait, keep the
+  rewrite (i915 does it too), and say which one was the cause.
+- **A failed native run is recoverable without a reboot** only if the
+  panel is on: `link` retrained it, but the image stayed black until
+  the reflash -- so the recovery from a black panel is still `reboot`.
+- **The computed timings and M/N reproduced the firmware's to the bit**
+  (i915's `compute_m_n`: n the power of two at or above the divisor,
+  capped at 0x800000), which is the check that a register the driver
+  will now write is understood.
+

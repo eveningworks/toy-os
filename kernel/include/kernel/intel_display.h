@@ -44,5 +44,6 @@ int      intel_display_timing_same(const struct edid_timing *a, const struct edi
 // register) otherwise. Refused without the hardware.
 int intel_display_pipe_cycle(void);
 int intel_display_link_retrain(void);
+int intel_display_native(void);
 
 #endif

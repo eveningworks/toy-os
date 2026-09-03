@@ -1501,7 +1501,8 @@ real scanout hardware does. Do not write a pixel assertion for one.
   advertises `DISPLAY_CAP_MODESET` now** -- bochs ADOPTS GRUB's mode
   instead of declining (so `-vga std` has a modesetting driver on every
   boot), vmsvga and virtio-gpu set modes as they always could -- and the
-  Intel driver does not, so on the laptop the setting shows its sentence.
+  Intel driver lists the panel's native mode alone, so on the laptop the
+  setting offers one choice until the panel fitter exists.
   **The setting is an ENUM whose choices are the driver's mode list**
   (`display_ladder_mode()` filtered by what the adapter accepts), so
   nothing offers a mode the adapter will refuse; an unlisted one is
