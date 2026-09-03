@@ -1434,3 +1434,24 @@ plane, cursor, backlight and power-well registers; every write path was
 then written against those numbers, and the first write build worked.
 On hardware nobody can emulate, a read-only probe flash is the cheapest
 experiment there is.
+
+## A benchmark run for one decision found a different bug (2026-09-03)
+
+`gfxbench` on the laptop was meant to decide the blitter. Fills ran at
+7.8 GB/s and a one-row scroll at 37 ms a line -- the speed of READING
+write-combined memory, on a path that only touches the cached back
+buffer. The cause was in `pat_apply()`: it retyped every 2 MiB
+identity-map page a range touched, under a comment assuming a
+framebuffer far above RAM, and the day-old scanout buffers were pmm
+frames -- nine huge pages of RAM went write-combined, gfx's back
+buffer among them. Three lessons. **Measure before building the
+thing the measurement is for**: the number said the blitter would buy
+a tenth of a frame and that something else cost two frames. **A
+comment stating an assumption is a place to grep when the assumption's
+world changes** ("not expected for a framebuffer" stopped being true
+the day a framebuffer came from the allocator). And **a probe must
+know which kind of entry it reads**: bit 7 is HUGE in a PDE and PAT in
+a PTE, so a test that read the leaf's bit 7 reported the fixed code as
+broken and passed the positive control for the wrong reason -- the
+control's red has to be on the assertion that names the fix.
+

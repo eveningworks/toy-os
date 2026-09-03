@@ -3930,7 +3930,9 @@ source sat unscaled at the top-left, even its position ignored -- and
 the cause was the write order: `PF_WIN_SZ` arms the fitter, so it goes
 last (`PF_CTL`, `PF_WIN_POS`, `PF_WIN_SZ`, i915's `ilk_pfit_enable`).
 Confirmed by eye at 1600x900 filling the panel. Still to do in stage 4:
-external outputs on DDI B-D.
+external outputs on DDI B-D -- deferred on 2026-09-03 because the test
+laptop's only external connector is micro-HDMI with no adapter to hand;
+the maintainer has a second Broadwell laptop it can be done on later.
 
 **Stage 3, sized from that.** It is DP link training, not just a
 register sequence: after `DDI_BUF_CTL` goes down the panel must be
@@ -3958,6 +3960,25 @@ already has the two capability bits and `gfx.c` falls back to its own
 loops without them. The compositor blits a frame in a few milliseconds
 in software, so this is a measurement first: `gfxbench` on the laptop
 before and after is the case for it or against it.
+
+**Measured 2026-09-03 on the laptop** (`gfxbench 20`, 1920x1080, PAT
+write-combining), before and after the write-combining split fix
+(`docs/decisions/kernel.md`):
+
+| | before | after |
+|---|---|---|
+| full-screen fill | 1.0 ms (7828 MB/s) | 1.0 ms (7813 MB/s) |
+| console scroll, one text line | 36.7 ms | 1.8 ms |
+| one-row move (a full-screen copy) | 37.2 ms | 1.6 ms |
+
+The 37 ms was the bug, not the CPU: reads from RAM that had been typed
+write-combined by accident. With it fixed, a software fill or copy of
+the whole screen is about a millisecond and a half against a 16.7 ms
+frame, so a blitter would recover at most a tenth of a frame per
+present -- and the compositor already copies only the damaged union.
+Not worth the ring, the context and the GGTT mapping of every source
+buffer at this resolution; revisit if a 4K panel or a measured
+compositor frame time says otherwise.
 
 ### Runtime mode switching: a display driver can set a mode after boot
 

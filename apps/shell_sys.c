@@ -1298,6 +1298,27 @@ void cmd_gfxbench(const char *args) {
     vga_write(" ms per text line, ");
     vga_write(gfx_double_buffered() ? "buffered" : "DIRECT (reads the framebuffer)");
     vga_putc('\n');
+
+    // A one-row scroll moves every row but one: the closest thing to
+    // the compositor's per-frame copy, and the number a blitter would
+    // have to beat.
+    uint64_t copy_cycles = gfx_bench_scroll(1, iterations);
+    uint64_t copy_us = copy_cycles ? (copy_cycles / (uint64_t)info.mhz) / (uint64_t)iterations : 0;
+    vga_write("  copy: ");
+    vga_write_dec((uint32_t)(copy_us / 1000));
+    vga_putc('.');
+    vga_write_dec((uint32_t)((copy_us % 1000) / 100));
+    vga_write(" ms per full-screen move\n");
+
+    // The same figures in the kernel log, so a machine with no serial
+    // console can be read over the network after the run.
+    klog_printf("gfxbench: %dx%d x%d, %d fills: wc %s, fill %u.%u ms (%u MB/s), scroll %u.%u ms/line %s, copy %u.%u ms/screen\n",
+                w, h, depth, iterations, gfx_write_combining_name(),
+                (unsigned)(per_us / 1000), (unsigned)((per_us % 1000) / 100),
+                (unsigned)(total_us ? bytes / total_us : 0),
+                (unsigned)(scroll_us / 1000), (unsigned)((scroll_us % 1000) / 100),
+                gfx_double_buffered() ? "buffered" : "direct",
+                (unsigned)(copy_us / 1000), (unsigned)((copy_us % 1000) / 100));
 }
 
 // `hwcursor [demo [x y] | off]` -- the display adapter's own cursor

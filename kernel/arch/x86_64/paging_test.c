@@ -116,3 +116,26 @@ KTEST("paging", "CR0.WP is set, so ring 0 honours the read-only bit") {
     __asm__ volatile ("mov %%cr0, %0" : "=r"(cr0));
     KTEST_ASSERT(cr0 & (1ULL << 16));
 }
+
+// Write-combining is a 4 KiB decision: typing one frame must not type
+// the frames beside it, which means splitting the 2 MiB page it sits
+// in. Under TCG the type is ignored but the bits are what is asserted.
+KTEST("paging", "write-combining a frame splits its huge page and leaves its neighbours cached") {
+    uint64_t phys = pmm_alloc_contiguous(2, PMM_ZONE_DMA32);
+    KTEST_ASSERT(phys != 0);
+    int huge0 = paging_kernel_leaf_is_huge(phys + 4096);
+    KTEST_ASSERT(huge0 >= 0);
+    KTEST_ASSERT_EQ(PAGING_LEAF_WC(paging_kernel_leaf(phys + 4096), huge0), 0);
+    int how = paging_set_write_combining(phys, 4096);
+    if (how != PAGING_WC_PAT) {
+        pmm_free_contiguous(phys, 2);
+        KTEST_SKIP("write-combining is not PAT-backed here");
+    }
+    int huge_a = paging_kernel_leaf_is_huge(phys), huge_b = paging_kernel_leaf_is_huge(phys + 4096);
+    KTEST_ASSERT_EQ(huge_a, 0);                                            // split
+    KTEST_ASSERT_EQ(PAGING_LEAF_WC(paging_kernel_leaf(phys), huge_a), 1);  // the frame asked for
+    KTEST_ASSERT_EQ(PAGING_LEAF_WC(paging_kernel_leaf(phys + 4096), huge_b), 0); // its neighbour
+    KTEST_ASSERT_EQ(paging_clear_write_combining(phys, 4096), 1);
+    KTEST_ASSERT_EQ(PAGING_LEAF_WC(paging_kernel_leaf(phys), paging_kernel_leaf_is_huge(phys)), 0);
+    pmm_free_contiguous(phys, 2);
+}

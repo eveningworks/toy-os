@@ -2875,6 +2875,27 @@ truncated, which fails safely but only in the moment.
 
 **Reasoning belongs in the man page; the descriptor is configuration.**
 
+## WRITE-COMBINING IS A 4 KiB DECISION: A 2 MiB PAGE A RANGE ONLY PARTLY COVERS IS SPLIT BEFORE IT IS TYPED
+
+`paging_set_write_combining()` (PAT path) used to retype every 2 MiB
+identity-map page a range touched, on the assumption -- true of a VESA
+framebuffer far above RAM, false of anything the frame allocator hands
+out -- that nothing else lived in those pages. The Intel driver's extra
+scanouts are pmm frames, so nine 2 MiB pages of ordinary RAM became
+write-combined with them: gfx's back buffer landed there and a console
+scroll cost 37 ms a line (reads from WC memory run at bus speed), and
+any process page in that range would have read as slowly. Now a huge
+page the range covers whole is retyped as one; a partial one is split
+into a 4 KiB table from a small pool (`MAX_WC_TABLES`, each leaf
+keeping its W^X permissions and cache type) and only the covered leaves
+are typed -- Linux's `set_memory_wc` shape. Three things to know. **The
+pool is exhausted loudly**: a range whose split table cannot be had is
+logged and left partly cached, never silently retyped whole. **A test
+can give a frame back**: `paging_clear_write_combining()` exists for
+the KTEST and nothing else. And **`gfxbench` writes its figures to the
+kernel log**, so the laptop's console numbers are readable over the
+network after a Start > Exit to shell run.
+
 ## THE INTEL DISPLAY DRIVER INHERITS THE FIRMWARE'S MODE AT BOOT AND CAN RE-PROGRAM THE NATIVE ONE, AND A BACKLIGHT IS A DISPLAY CAPABILITY
 
 `kernel/drivers/display/intel_display.c` -- the bare-metal laptop's own

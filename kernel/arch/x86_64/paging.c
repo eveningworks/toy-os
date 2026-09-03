@@ -3,6 +3,7 @@
 #include "pmm.h"
 #include "uaddr.h"
 #include "string.h"
+#include "klog.h"
 #include <stddef.h>
 
 // boot.asm identity-maps the first 4GiB with 2MiB pages: PML4[0] ->
@@ -332,6 +333,12 @@ uint64_t paging_kernel_leaf(uint64_t vaddr) {
     return pt[(vaddr >> 12) & 0x1FF];
 }
 
+int paging_kernel_leaf_is_huge(uint64_t vaddr) {
+    uint64_t *pdep = pde_ptr(vaddr);
+    if (!pdep || !(*pdep & PAGE_PRESENT)) return -1;
+    return (*pdep & PAGE_HUGE) ? 1 : 0;
+}
+
 int paging_wx_violations(void) {
     int bad = 0;
     for (int g = 0; g < GIB_COUNT; g++) {
@@ -511,41 +518,95 @@ static void pat_install_wc_slot(void) {
     write_msr_local(MSR_IA32_PAT, pat);
 }
 
-static int pat_apply(uint64_t phys, uint64_t size) {
-    pat_install_wc_slot();
+// Tables for 2 MiB pages a write-combined range only PARTLY covers.
+// THE TRAP: retyping the whole huge page makes every other frame in it
+// write-combined too -- reads from it then run at bus speed, and the
+// frames beside a scanout buffer are handed to gfx's back buffer and to
+// processes (a console scroll measured 37 ms a line on the laptop
+// before this split). A range that covers a huge page whole keeps it
+// huge; only the partial ends are split, the way Linux's set_memory_wc
+// splits a large page.
+#define MAX_WC_TABLES 8
+static uint64_t wc_tables[MAX_WC_TABLES][512] __attribute__((aligned(4096)));
+static int wc_table_pde[MAX_WC_TABLES];
+static int wc_table_count = 0;
 
+// The 4 KiB table for the 2 MiB slot holding `addr`, splitting the huge
+// page on first use with each leaf keeping what the huge page gave it
+// (W^X permissions, and its cache type). NULL when the pool is spent.
+static uint64_t *wc_split(uint64_t *pdep, uint64_t addr) {
+    uint64_t pde = *pdep;
+    if (!(pde & PAGE_HUGE)) return (uint64_t *)(uintptr_t)(pde & ADDR_MASK);
+    int pde_index = (int)(addr >> 21);
+    for (int i = 0; i < wc_table_count; i++)
+        if (wc_table_pde[i] == pde_index) return wc_tables[i];
+    if (wc_table_count >= MAX_WC_TABLES) return 0;
+    uint64_t *pt = wc_tables[wc_table_count];
+    wc_table_pde[wc_table_count] = pde_index;
+    wc_table_count++;
+    uint64_t base = (uint64_t)pde_index * HUGE_SIZE;
+    uint64_t type = (pde & PAGE_PAT_HUGE) ? PAGE_PAT_4K : (pde & (PAGE_PCD | PAGE_PWT));
+    for (int i = 0; i < 512; i++) {
+        uint64_t a = base + (uint64_t)i * 4096;
+        pt[i] = a | wx_page_flags(a) | type;
+    }
+    *pdep = (uint64_t)(uintptr_t)pt | PAGE_PRESENT | PAGE_WRITABLE;
+    return pt;
+}
+
+// Sets (wc) or clears the write-combining type over [phys, phys+size),
+// at 4 KiB granularity: a huge page the range covers whole is retyped as
+// one, a partial one is split first.
+static int pat_retype(uint64_t phys, uint64_t size, int wc) {
     uint64_t first = phys / HUGE_SIZE;
     uint64_t last  = (phys + size - 1) / HUGE_SIZE;
+    int ok = 1;
 
     for (uint64_t pde = first; pde <= last; pde++) {
         uint64_t *ep = pde_ptr(pde * HUGE_SIZE);
         if (!ep) continue;
         uint64_t e = *ep;
         if (!(e & PAGE_PRESENT)) continue;
+        uint64_t slot = pde * HUGE_SIZE;
+        int whole = phys <= slot && phys + size >= slot + HUGE_SIZE;
 
-        if (e & PAGE_HUGE) {
-            e &= ~(PAGE_PCD | PAGE_PWT);
-            e |= PAGE_PAT_HUGE;
+        if ((e & PAGE_HUGE) && whole) {
+            e &= ~(PAGE_PCD | PAGE_PWT | PAGE_PAT_HUGE);
+            if (wc) e |= PAGE_PAT_HUGE;
             *ep = e;
             continue;
         }
-        // Split by paging_enforce_wx() -- retype the 4KiB leaves instead.
-        // Not expected for a framebuffer (it is far above the kernel
-        // image), but writing the huge-page bit here would corrupt the
-        // mapping rather than fail, so handle it rather than assume.
-        uint64_t *pt = (uint64_t *)(uintptr_t)(e & ADDR_MASK);
+        uint64_t *pt = wc_split(ep, slot);
+        if (!pt) { ok = 0; continue; }
         for (int i = 0; i < 512; i++) {
+            uint64_t a = slot + (uint64_t)i * 4096;
+            if (a + 4096 <= phys || a >= phys + size) continue;
             if (!(pt[i] & PAGE_PRESENT)) continue;
-            pt[i] = (pt[i] & ~(PAGE_PCD | PAGE_PWT)) | PAGE_PAT_4K;
+            pt[i] &= ~(PAGE_PCD | PAGE_PWT | PAGE_PAT_4K);
+            if (wc) pt[i] |= PAGE_PAT_4K;
         }
     }
 
-    // The region was uncached, so nothing of it is in cache to write
-    // back -- but the old translations are, and a stale TLB entry would
-    // keep the old type. Cheap once at boot.
+    // Nothing of an uncached region is in cache to write back -- but the
+    // old translations are, and a stale TLB entry keeps the old type.
     __asm__ volatile ("wbinvd" ::: "memory");
     flush_tlb();
+    return ok;
+}
+
+static int pat_apply(uint64_t phys, uint64_t size) {
+    pat_install_wc_slot();
+    if (!pat_retype(phys, size, 1)) {
+        klog_write("paging: write-combining split pool exhausted -- range left partly cached\n");
+    }
     return PAGING_WC_PAT;
+}
+
+int paging_clear_write_combining(uint64_t phys, uint64_t size) {
+    if (size == 0 || phys + size > g_identity_limit) return 0;
+    uint32_t edx = cpuid_edx1();
+    if (!((edx >> 16) & 1u) || nopat_requested()) return 0;
+    return pat_retype(phys, size, 0);
 }
 
 // A variable-range MTRR describes a power-of-two block at a naturally

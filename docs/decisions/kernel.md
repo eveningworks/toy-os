@@ -5929,3 +5929,31 @@ and listed now, and registering it as a third clocksource is the item
 that was waiting on exactly this. It was deliberately not done in the
 same change: it is a clocksource question, not a power question, and
 bundling it would have made the poweroff fix untestable on its own.
+
+## A write-combined range splits the 2 MiB page it lands in, rather than the allocator avoiding the page
+
+Found on 2026-09-03 by `gfxbench` on the laptop, after the Intel
+driver's extra scanouts (2026-09-02) moved write-combined memory from
+the firmware's framebuffer into ordinary frames: a console scroll cost
+37 ms a line. `pat_apply()` retyped every 2 MiB identity-map page a
+range touched, so nine huge pages of RAM around the scanouts became
+write-combined and gfx's back buffer, allocated next, read at bus speed.
+
+Two fixes were possible. The allocator side: align every write-combined
+allocation to 2 MiB and hand out whole huge pages, so nothing shares
+one. The paging side: split a partly covered huge page into 4 KiB
+leaves and type only the covered ones, Linux's `set_memory_wc` and the
+guard-page splitter this file already has. The paging side won because
+the bug is a property of the TYPING, not of one caller: a driver that
+allocates a DMA ring beside a framebuffer, or a test typing one frame,
+hits it just the same, and an alignment rule at every such call site is
+the pointer-someone-must-remember shape. The cost is a fixed pool of
+split tables (8, 32 KiB of bss) and a slightly larger TLB footprint for
+the split ends; a range that covers a huge page whole is still typed
+as one, so a 256 MiB aperture stays huge. The pool exhausting is logged
+and leaves the range partly cached -- slow, never wrong -- rather than
+retyping whole pages, which was the bug.
+
+What the measurement then said about the blitter that prompted it is
+under "Intel blitter acceleration" in `docs/roadmap-details.md`.
+

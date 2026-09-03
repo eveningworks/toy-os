@@ -2348,3 +2348,20 @@ one mechanism per flash). Read before touching `intel_modeset.c`.**
   a new setting would have reddened two tests about something else, as
   the header comment predicted. Raised to 40 in both twins.
 
+**2026-09-03, evening (the blitter measured and declined; write-combining
+split to 4 KiB).**
+
+- **Write-combining is typed per 4 KiB page now**: a partly covered
+  2 MiB page is split from a small pool and only its covered leaves are
+  typed; a whole one stays huge. `docs/decisions/kernel.md` has why the
+  paging side rather than aligning allocations.
+- **The blitter is declined at 1080p by measurement**: fill 1.0 ms,
+  full-screen copy 1.6 ms once the bug was fixed, against a 16.7 ms
+  frame. Recorded with the numbers under the roadmap item; revisit at
+  4K or when a compositor frame time says otherwise.
+- **`gfxbench` writes its line to the kernel log**, so a machine with
+  no serial console is read with `dmesg` over the network after a
+  Start > Exit to shell run.
+- **External outputs are deferred** until the maintainer's second
+  Broadwell laptop: the test laptop has only micro-HDMI and no adapter.
+

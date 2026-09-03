@@ -54,6 +54,19 @@ int paging_unmap_kernel_page(uint64_t vaddr);
 
 uint64_t paging_kernel_leaf(uint64_t vaddr);
 
+// Undoes paging_set_write_combining() over a range (PAT only; an MTRR
+// range stays). For a TEST that types a frame and must give it back
+// cached; nothing in normal operation clears a type.
+int paging_clear_write_combining(uint64_t phys, uint64_t size);
+
+// Whether the kernel map resolves `vaddr` through a 2 MiB PDE (1) or a
+// 4 KiB PTE (0); -1 when nothing is mapped. Asked separately because a
+// leaf cannot say for itself: bit 7 is HUGE in a PDE and PAT in a PTE.
+int paging_kernel_leaf_is_huge(uint64_t vaddr);
+
+// The write-combining (PAT) bit of a leaf, given which kind it is.
+#define PAGING_LEAF_WC(e, huge) ((huge) ? (((e) >> 12) & 1ULL) : (((e) >> 7) & 1ULL))
+
 // The kernel map's 2 MiB granule. pmm manages the zone above 4 GiB in
 // whole granules so that every managed high frame is a mapped one.
 #define PAGING_HUGE_SIZE 0x200000ULL
