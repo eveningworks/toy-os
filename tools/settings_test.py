@@ -948,6 +948,96 @@ def main():
                   and after_server != before_server,
                   f"{before_server!r} -> {after_server!r}")
 
+    # --- THE SIDEBAR SCROLLS, AND ITS SCROLLBAR CAN BE DRAGGED --------
+    #
+    # ASSERTED ON THE APP'S OWN `sidebar top`, not on pixels: a
+    # screendump of a scrolled list would answer the same question with
+    # the cursor sprite inside the crop, and the row dump is taken once
+    # at the top so it cannot answer it at all.
+    #
+    # The three points are three separate refusals uui_sidebar_ops.hit
+    # used to make -- it answered "which ITEM row", and uui_route.c
+    # gates press AND wheel on that slot, so the wheel was dead over a
+    # heading and over the bar, and the thumb could not be pressed.
+    def sidebar_top(dbg):
+        """The scroll position the app last reported, or None."""
+        drain(dbg)
+        hits = _since(0, r"settings: sidebar top (-?\d+) visible (\d+) rows (\d+)")
+        if not hits:
+            return None
+        m = hits[-1]
+        return {"top": int(m.group(1)), "visible": int(m.group(2)),
+                 "rows": int(m.group(3))}
+
+    def to_top():
+        """Back to row 0. Wheeled from an ITEM row, which is the one
+        place the sidebar answered the wheel even when it was broken --
+        so the restore cannot itself depend on the fix."""
+        item = next(r for r in rows if r["depth"] == 1)
+        dbg.warp_cursor(qmp, cx + tx + tw // 2, cy + item["y"])
+        dbg.wheel(len(rows))
+        time.sleep(0.4)
+
+    to_top()
+    sb = sidebar_top(dbg)
+    if check("the sidebar reports where it is scrolled to", sb is not None,
+             f"{sb}"):
+        check("the sidebar is long enough to scroll",
+              sb["rows"] > sb["visible"] > 3,
+              f"{sb['rows']} rows, {sb['visible']} visible")
+        max_top = sb["rows"] - sb["visible"]
+        step = 3   # rows per wheel notch -- uui_sidebar_wheel()
+
+        def wheels_from(where, rel_x, rel_y):
+            to_top()
+            dbg.warp_cursor(qmp, cx + rel_x, cy + rel_y)
+            dbg.wheel(-1)
+            time.sleep(0.4)
+            got = sidebar_top(dbg)
+            check(f"the wheel scrolls the sidebar over {where}",
+                  got is not None and got["top"] == min(step, max_top),
+                  f"top {got and got['top']}, wanted {min(step, max_top)}")
+
+        # Over a HEADING: not a row the sidebar can select, and it was
+        # therefore not a row it would scroll under either.
+        head = next((r for r in rows[:sb["visible"]] if r["depth"] == 0), None)
+        if head:
+            wheels_from("a heading row", tx + tw // 2, head["y"])
+        # Over the SCROLLBAR strip itself, where every desktop scrolls.
+        wheels_from("the scrollbar", tx + tw - 2, ty + th // 2)
+
+        # THE THUMB, dragged the length of the track. Landing at the END
+        # is what a row-pitch drag would also fail, not just a dead one:
+        # the thumb has to map the track's pixels onto the row range.
+        to_top()
+        mark = len(drain(dbg))
+        pitch = th // sb["visible"]
+        dbg.drag(cx + tx + tw - 2, cy + ty + pitch // 2,
+                 cx + tx + tw - 2, cy + ty + th - 1)
+        time.sleep(0.5)
+        got = sidebar_top(dbg)
+        check("dragging the thumb to the bottom of the track reaches the end",
+              got is not None and got["top"] == max_top,
+              f"top {got and got['top']}, wanted {max_top}")
+        # AND THE DRAG MUST NOT NAVIGATE. uui_route.c reports the
+        # sidebar's id on the release whatever the press was for, so the
+        # app has to tell a scroll from a click -- a page re-opened here
+        # would discard whatever the user had staged on it.
+        opened = page_line(dbg, mark)
+        check("dragging the thumb does not re-open the page",
+              opened is None,
+              f"the drag opened {opened and opened['page']!r}")
+        # A CLICK ON THE TRACK PAGES, the other half of a scrollbar.
+        to_top()
+        dbg.warp_cursor(qmp, cx + tx + tw - 2, cy + ty + th - pitch)
+        qmp.click()
+        time.sleep(0.5)
+        got = sidebar_top(dbg)
+        check("clicking the track below the thumb pages down",
+              got is not None and 0 < got["top"] <= max_top,
+              f"top {got and got['top']}, wanted 1..{max_top}")
+        to_top()
+
     # --- Cancel closes without writing --------------------------------
     mark = len(drain(dbg))
     click(tx + tw // 2, mouse_row["y"])

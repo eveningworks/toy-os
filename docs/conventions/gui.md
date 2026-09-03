@@ -475,6 +475,19 @@ this the obvious way), not from how much history it accumulated.
   meant header and scrollbar presses reached nothing), and anything
   comparing `selected` against `top` is mixing an app row with a view
   offset. See `docs/decisions.md`.
+- **A WIDGET WITH A SCROLLBAR ANSWERS `hit` WITH ITS WHOLE RECT, AND
+  `_hit()` KEEPS THE ROW QUESTION.** `uui_route.c` gates press AND wheel
+  on `ops->hit`, so a widget that routes on its row hit -- which
+  deliberately excludes the bar column, and in `uui_sidebar` every
+  heading too -- refuses input exactly where the scrollbar is. It does
+  not look like a routing bug: the rows scroll by wheel and select by
+  click, and only the bar is dead, so it reads as the scrollbar itself
+  being unimplemented. Answer `uui_hit(x, y, w, h, ...)` in the ops slot
+  and keep `_hit()` for "which row"; `>= 0` there is still right for a
+  widget with no bar. Five widgets shipped the conflation --
+  `uui_listbox`, `uui_table` and `uui_fileview` each fixed it, and
+  `uui_sidebar` and `uui_tree` carried it until 2026-09-03, which is why
+  `tools/check_widget_ops.py` now fails the build on it (rule 5).
 - **A `uui_scrollview` NOTICES when its content's item list changes**
   (`sv_children()` compares the `items` pointer and `count` against what
   it last laid out). It used to re-lay-out only on its own rect or

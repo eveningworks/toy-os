@@ -152,6 +152,13 @@ static int  g_prose_fitted;
 static int  g_prose_fit_w;
 static int  g_show_advanced;
 static int  g_page_group = -1;
+// The sidebar node the open page came from. A release the sidebar took
+// for a SCROLLBAR drag names the sidebar just like a row click does
+// (uui_route.c reports the grab's id whatever the press was for), so
+// without this a thumb drag re-opens the page and discards what the
+// user had staged on it. Same guard the File Manager's ID_TREE already
+// makes against its current directory.
+static int  g_page_node = -1;
 // Does the current page have anything the toggle would reveal?
 static int  g_advanced_has;
 // The last control geometry reported, so a CHANGE is what triggers the
@@ -1037,6 +1044,7 @@ static void relayout_page(void) {
 // --- navigation and events -------------------------------------------
 
 static void navigate(int node_id) {
+    g_page_node = node_id;
     // A new page means new labels, so the previous fit says nothing
     // about them even at the same width -- see g_prose_fitted.
     g_prose_fitted = 0;
@@ -1158,6 +1166,7 @@ static void on_widget(struct uapp *a, int id, int reason) {
     case ID_TREE: {
         // The tree hands back the APP's id, not a row -- rows move as
         // categories collapse, ids do not.
+        if (uui_sidebar_selected_id(&g_tree) == g_page_node) break;
         if (page_dirty()) {
             // SAID, not silently dropped. Discarding is the safe choice
             // (Cancel's behaviour), but a change vanishing with no word
@@ -1304,6 +1313,17 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     // status bar still correct -- so it looked like a data problem
     // rather than a paint-order one. Anything that must appear ON TOP
     // of a widget goes in on_draw_over(), below.
+
+    // WHERE THE SIDEBAR IS SCROLLED TO, reported on a CHANGE. It is
+    // not derivable from anything else the app logs -- the row dump is
+    // taken once, at the top -- so a test asking "did the wheel reach
+    // it?" would otherwise have to read pixels.
+    static int last_top = -1;
+    if (g_tree.top != last_top) {
+        last_top = g_tree.top;
+        ulogf("settings: sidebar top %d visible %d rows %d\n", g_tree.top,
+              uui_sidebar_visible_rows(&g_tree), g_node_count);
+    }
 
     // WHERE EACH CONTROL ENDED UP, reported whenever it MOVES -- which
     // covers a page change and a scroll with one rule. Geometry does not

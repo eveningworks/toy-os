@@ -3431,6 +3431,18 @@ window without going through it will find its layout polls timing out.
   tree splitter and hiding the pane splitter hid the CONTEXT MENU: a
   right-click that stopped working in single-pane view, diagnosed from a
   screenshot rather than from any test. Look the widget up by its id.
+
+  **And a widget that DRAWS A SCROLLBAR must not route `hit` through
+  its row hit.** `_hit(...) >= 0` answers "which row", which excludes
+  the bar column -- and `uui_route.c` gates press AND wheel on that
+  slot, so the bar cannot be dragged and the wheel is dead anywhere
+  that is not a row. It reads as an unimplemented scrollbar rather than
+  as a routing bug, because the rows themselves work. Five widgets
+  shipped it: `uui_listbox`, `uui_table` and `uui_fileview` each fixed
+  it and left a comment, and `uui_sidebar` and `uui_tree` still had it
+  in 2026-09-03 -- three comments having failed to stop it twice is
+  what earned a check. Answer `uui_hit(x, y, w, h, ...)` there; `>= 0`
+  stays right for a widget with no bar.
 - **`check_key_routing.py`** -- its sibling, and the inverse question:
   `check_widget_ops.py` catches an ops slot nobody filled, this catches
   a filled slot nobody can REACH. An app whose `struct uapp_desc` names

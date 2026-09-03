@@ -472,10 +472,14 @@ int uui_tree_key(struct uui_tree *t, int key) {
 static void tree_draw_op(struct ugfx_surface *s, const void *w) {
     uui_tree_draw(s, (const struct uui_tree *)w);
 }
-// A BOOLEAN, and this is where uui_listbox and uui_table both got it
-// wrong: uui_tree_hit() returns an INDEX, and node 0 is falsey.
+// THE WHOLE CONTROL, scrollbar strip included -- uui_tree_hit() answers
+// "which NODE", which is a different question, and the router gates
+// press and wheel on this slot (uui_route.c). Answering the node
+// question here left the bar undraggable. A boolean either way, so node
+// 0 is not the falsey trap uui_listbox and uui_table both hit.
 static int tree_hit_op(const void *w, int cx, int cy) {
-    return uui_tree_hit((const struct uui_tree *)w, cx, cy) >= 0;
+    const struct uui_tree *t = (const struct uui_tree *)w;
+    return uui_hit(t->x, t->y, t->w, t->h, cx, cy);
 }
 static int tree_press_op(void *w, int cx, int cy, unsigned mods) {
     (void)mods;

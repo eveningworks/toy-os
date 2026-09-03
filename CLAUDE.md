@@ -156,7 +156,12 @@ trips them before it knows to look anything up.
   `!it->ops->hit(...)` (`userland/ui/uui_route.c`), so returning the
   index makes ROW 0 -- the one row whose index is falsey -- report "not
   hit", and that row silently cannot be clicked while every other row
-  works. Write `>= 0`.
+  works. Write `>= 0`. **UNLESS THE WIDGET HAS A SCROLLBAR, and then
+  `>= 0` is the wrong answer entirely**: `_hit()` excludes the bar
+  column, the router gates press AND wheel on this slot, and the bar
+  goes dead while the rows work. Answer the whole rect there
+  (`uui_hit(x, y, w, h, ...)`); `tools/check_widget_ops.py` fails the
+  build on the conflation now.
 - **A widget's `natural_size` must not depend on where the widget
   currently IS.** Natural size is the size a widget WANTS, asked before
   anyone knows where it goes; measuring from the ORIGIN instead of as an
@@ -416,8 +421,11 @@ trips them before it knows to look anything up.
   has one); a table with `key` needs `accepts_focus` (the focus ring
   SKIPS a widget that refuses focus, so one that takes keys has to say
   whether it wants them -- that rule found `uui_tree` relying on the
-  default the hour it was added). Waive with a `widget-ops-ok: <reason>`
-  comment, as with `check_dispatch.py`.
+  default the hour it was added); and a widget that DRAWS A SCROLLBAR
+  must not route `hit` through its row hit (`_hit(...) >= 0` excludes
+  the bar column, so press and wheel are refused there and the thumb
+  cannot be dragged -- five widgets shipped that). Waive with a
+  `widget-ops-ok: <reason>` comment, as with `check_dispatch.py`.
 - **AND `tools/check_key_routing.py` FAILS THE BUILD ON THE INVERSE:
   A FILLED SLOT NOBODY CAN REACH.** An app whose `uapp_desc` names a
   widget with a `.key` op must declare `.focus` or `.on_key` -- the only
@@ -705,6 +713,7 @@ whenever a headline here tells you something you did not already know.
 - **An app with a cadence sets `tick_ms` and BLOCKS between frames.**
 - **An app refuses its OWN second copy -- the launcher never does.**
 - **`uui_table` sorts on a header click, and an app supplies only a COMPARATOR.**
+- **A WIDGET WITH A SCROLLBAR ANSWERS `hit` WITH ITS WHOLE RECT, AND `_hit()` KEEPS THE ROW QUESTION**
 - **A `uui_scrollview` NOTICES when its content's item list changes**
 - **A STRING SETTING GETS A TEXT FIELD IN SYSTEM SETTINGS, AND ITS `staged` IS A CHANGED FLAG RATHER THAN AN INDEX**
 - **`uui_spinbox` IS FOR A NUMBER; `uui_slider` IS FOR AN ORDERED ENUM.**

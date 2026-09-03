@@ -35,6 +35,16 @@ THE RULES, and each names the failure it prevents:
      right-click that stopped working in single-pane view, and a tree
      drawn over the menu bar. It is the same "prefer facts that cannot
      go stale" rule CLAUDE.md states; look the widget up by its id.
+  5. In a widget that DRAWS A SCROLLBAR, the `.hit` slot must not be the
+     row hit converted with `>= 0`. `_hit()` there answers "which ROW",
+     which excludes the bar column -- and uui_route.c gates press AND
+     wheel on `.hit`, so routing on the row question leaves the
+     scrollbar undraggable and the wheel dead over anything that is not
+     a row. Five widgets shipped that conflation: uui_listbox,
+     uui_table and uui_fileview each fixed it and left a comment,
+     uui_sidebar and uui_tree still had it in 2026-09-03. Answer the
+     WHOLE rect here (`uui_hit(x, y, w, h, ...)`) and keep `_hit()` for
+     the row question. `>= 0` remains right for a widget with no bar.
   3. A table with `key` must have `accepts_focus`. The focus ring SKIPS
      a widget that refuses focus (uui_focus.c), so a widget that takes
      keys but never says whether it wants them is relying on the
@@ -62,6 +72,25 @@ TABLE_RE = re.compile(
 SLOT_RE = re.compile(r"\.(\w+)\s*=")
 
 
+HIT_SLOT_RE = re.compile(r"\.hit\s*=\s*(\w+)")
+
+
+def row_hit_routed(src, body):
+    """Is this table's `.hit` the row hit, converted with `>= 0`?
+
+    That is the exact signature of the conflation rule 5 describes: a
+    function whose whole answer is another `_hit()` tested against zero
+    is answering "which row", and a widget with a scrollbar has a
+    column that is not one.
+    """
+    m = HIT_SLOT_RE.search(body)
+    if not m:
+        return False
+    fn = re.search(r"static\s+int\s+" + re.escape(m.group(1)) +
+                   r"\s*\([^)]*\)\s*\{(.*?)\n\}", src, re.S)
+    return bool(fn) and ">= 0" in fn.group(1)
+
+
 def check_file(path):
     src = path.read_text()
     waived = "widget-ops-ok:" in src
@@ -77,17 +106,24 @@ def check_file(path):
             for need in ("natural_size", "set_geometry"):
                 if need not in slots:
                     problems.append(
-                        (name, need,
+                        (name, f"has no .{need}",
                          "a layout cannot place what it cannot measure"))
         if "press" in slots and "release" not in slots:
             problems.append(
-                (name, "release",
+                (name, "has no .release",
                  "uui_route.c names a widget to its app only when it has one"))
         if "key" in slots and "accepts_focus" not in slots:
             problems.append(
-                (name, "accepts_focus",
+                (name, "has no .accepts_focus",
                  "the focus ring skips a widget that refuses focus, and a "
                  "widget that takes keys must say whether it wants them"))
+        if "uui_scrollbar_draw(" in src and row_hit_routed(src, body):
+            problems.append(
+                (name, "routes .hit through the ROW hit",
+                 "`_hit(...) >= 0` excludes "
+                 "the scrollbar column -- so uui_route.c refuses press and "
+                 "wheel there and the bar cannot be dragged. Answer the "
+                 "whole rect with uui_hit()"))
     if problems and waived:
         return []
     return [(path, *p) for p in problems]
@@ -151,13 +187,13 @@ def main():
             return 1
         print()
 
-    print(f"check_widget_ops: FAIL -- {len(found)} missing slot(s)\n")
-    for path, table, slot, why in found:
+    print(f"check_widget_ops: FAIL -- {len(found)} bad slot(s)\n")
+    for path, table, headline, why in found:
         rel = path.relative_to(UI_DIR.parent.parent)
-        print(f"  {rel}: {table} has no .{slot}")
+        print(f"  {rel}: {table} {headline}")
         print(f"      {why}")
-    print("\nFill it from the function the widget already has, or waive it")
-    print("in that file with a `widget-ops-ok: <reason>` comment.")
+    print("\nFill or correct it from the function the widget already has,")
+    print("or waive it in that file with a `widget-ops-ok: <reason>` comment.")
     return 1
 
 

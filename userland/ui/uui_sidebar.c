@@ -137,6 +137,15 @@ static void clamp_top(struct uui_sidebar *s) {
     if (s->top < 0) s->top = 0;
 }
 
+// The inverse of offset_of(): the scrollbar speaks offsets, `top` is
+// what this widget stores.
+static int set_offset(struct uui_sidebar *s, int offset) {
+    int before = s->top;
+    s->top = s->count - visible_rows(s) - offset;
+    clamp_top(s);
+    return s->top != before;
+}
+
 // Scrolls until `row` is on screen. Called after any keyboard move, so
 // arrowing past the bottom follows rather than silently moving a
 // selection nobody can see.
@@ -302,9 +311,25 @@ static int hover(struct uui_sidebar *s, int cx, int cy) {
 }
 
 int uui_sidebar_press(struct uui_sidebar *s, int cx, int cy) {
-    if (scrollbar_visible(s) && cx >= bar_x(s) &&
-        cx < s->x + s->w && cy >= s->y && cy < s->y + s->h) {
-        s->thumb_grab = cy;
+    if (!uui_hit(s->x, s->y, s->w, s->h, cx, cy)) return 0;
+    if (scrollbar_visible(s) && cx >= bar_x(s)) {
+        int vis = visible_rows(s);
+        int off = offset_of(s);
+        enum uui_scrollbar_zone zone =
+            uui_scrollbar_hit(bar_x(s), s->y, s->bar_w, s->h, s->count, vis,
+                               off, cx, cy, 0);
+        if (zone == UUI_SB_THUMB) {
+            int ty, th;
+            uui_scrollbar_thumb_rect(s->y, s->h, s->count, vis, off,
+                                      &ty, &th, s->bar_w, 0);
+            // The grab offset WITHIN the thumb, so it tracks the cursor
+            // instead of snapping its top to it.
+            s->thumb_grab = cy - ty;
+            return 1;
+        }
+        int page = vis > 1 ? vis - 1 : 1;
+        if (zone == UUI_SB_ABOVE) set_offset(s, off + page);
+        else if (zone == UUI_SB_BELOW) set_offset(s, off - page);
         return 1;
     }
     // ARMED HERE, COMMITTED ON RELEASE (docs/gui-guidelines.md): the
@@ -318,15 +343,11 @@ int uui_sidebar_press(struct uui_sidebar *s, int cx, int cy) {
 
 int uui_sidebar_motion(struct uui_sidebar *s, int cx, int cy, unsigned buttons) {
     if (s->thumb_grab >= 0) {
-        int rh = row_h(s);
-        int delta = (cy - s->thumb_grab) / (rh > 0 ? rh : 1);
-        if (delta) {
-            s->top += delta;
-            s->thumb_grab += delta * rh;
-            clamp_top(s);
-            return 1;
-        }
-        return 0;
+        (void)cx; // a thumb drag follows y only, and survives leaving the bar
+        int off = uui_scrollbar_offset_for_drag(s->y, s->h, s->count,
+                                                 visible_rows(s), cy,
+                                                 s->thumb_grab, s->bar_w, 0);
+        return set_offset(s, off);
     }
     if (buttons) {
         // A drag with the button down keeps moving the highlight, the
@@ -393,11 +414,16 @@ int uui_sidebar_key(struct uui_sidebar *s, int key, unsigned mods) {
 static void draw_op(struct ugfx_surface *surf, const void *w) {
     uui_sidebar_draw(surf, (const struct uui_sidebar *)w);
 }
-// A BOOLEAN, not the row index -- uui_sidebar_hit() returns an index and
-// row 0 is falsey, which is the trap uui_listbox and uui_table both fell
-// into (CLAUDE.md, and uui_route.c tests this as `!ops->hit(...)`).
+// THE WHOLE CONTROL, headings and scrollbar strip included --
+// uui_sidebar_hit() answers "which ITEM row", which is a different
+// question. The router gates press AND wheel on this slot
+// (uui_route.c), so answering the row question here left the scrollbar
+// undraggable and the wheel dead over every heading. Same conflation
+// uui_listbox, uui_table and uui_fileview each shipped; a boolean, so
+// row 0 is not the falsey trap those three also hit.
 static int hit_op(const void *w, int cx, int cy) {
-    return uui_sidebar_hit((const struct uui_sidebar *)w, cx, cy) >= 0;
+    const struct uui_sidebar *s = (const struct uui_sidebar *)w;
+    return uui_hit(s->x, s->y, s->w, s->h, cx, cy);
 }
 static int press_op(void *w, int cx, int cy, unsigned mods) {
     (void)mods;
