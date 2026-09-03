@@ -109,7 +109,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 
-import install_grub  # noqa: E402
+from qmp_test import guarded_boot_args  # noqa: E402
 
 PROMPT = "dbg> "
 BOOT_TIMEOUT_S = 60.0
@@ -390,8 +390,7 @@ def launch(disk, tmp, tag, kind, pcap=None, netdev_extra="", quiet_port=None):
     for f in (serial, pidfile, sock):
         if os.path.exists(f):
             os.remove(f)
-    boot = " ".join(install_grub.qemu_boot_args(
-        install_grub.boot_medium(disk, None), os.path.join(ROOT, "toy-os.iso")))
+    boot = " ".join(guarded_boot_args(disk, os.path.join(ROOT, "toy-os.iso")))
     cmd = (f"qemu-system-x86_64 {boot}"
            f" -drive file={disk},format=raw,if=ide,discard=unmap"
            f"{nic_args(kind, pcap, netdev_extra, quiet_port)}"

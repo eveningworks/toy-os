@@ -58,6 +58,27 @@ def port_is_free(port, host="127.0.0.1"):
         s.close()
 
 
+def port_has_listener(port, host="127.0.0.1"):
+    """True if something is LISTENING on host:port -- the question for a
+    port the caller is about to serve on itself.
+
+    port_is_free() is the wrong probe there: a serial port a tool's own
+    guest just closed sits in TIME_WAIT for a minute, a plain bind
+    fails on it, and nothing is actually there -- QEMU rebinds it with
+    SO_REUSEADDR and always did. This bind sets SO_REUSEADDR too, which
+    on Linux passes TIME_WAIT and still fails against a live listener.
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind((host, port))
+        return False
+    except OSError:
+        return True
+    finally:
+        s.close()
+
+
 def _owner_hint():
     """Which of this repo's own launchers is probably holding it.
 

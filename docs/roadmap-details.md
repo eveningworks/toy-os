@@ -4306,16 +4306,16 @@ console-driven half of `ondemand_sweep.py` (`ls`, `grep`, `stdin`,
 `jobs`, `ctrlc`, `console`) -- an ordering change shows up there and
 nowhere else.
 
-## `tools/virtio_boot_test.py` fails 2 of 11 checks every run
+## `tools/virtio_boot_test.py` and `tools/ahci_test.py` each fail ONE check every run
 
 Measured 2026-09-02 with `tools/predates.py`: the commit before the BAR
 size probe fails the same two checks, so neither is that change's.
 
-- **"virtio-blk became the active block device"** looks for `block:
+- **"virtio-blk became the active block device"** looked for `block:
   virtio-blk active`; the kernel has logged `block: virtio0 active`
   since the block registry started naming devices (the partition work,
-  1190cfa). A stale string in the tool, not the driver -- the same run's
-  "TFS3 mounted off virtio" passes.
+  1190cfa). FIXED 2026-09-03 in both tools: they match the device name
+  (`virtio\d+`, `ahci\d*`).
 - **"writing 40 MiB grows the host image"** measures 10 MiB of growth
   and wants 40. Cause not established: the write-back cache, the
   seeded image's free-block pattern, or the way the tool measures the

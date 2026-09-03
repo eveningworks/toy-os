@@ -35,6 +35,9 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from qmp_test import guarded_boot_args  # noqa: E402
+
 SERIAL_PORT = 4557  # not ktest_run.py's 4555, so both can run at once
 
 
@@ -49,8 +52,7 @@ def launch(iso, virtio_img, qemu_log):
         # filesystem bytes and hangs with NO serial output, which is
         # indistinguishable from a kernel that died before its first
         # print.
-        "-boot", "order=d",
-        "-cdrom", iso,
+        *guarded_boot_args(virtio_img, iso, ports=(SERIAL_PORT,), check_disk=False),
         # THE POINT OF THIS TOOL: no `-drive if=ide`. The only disk is
         # on virtio, so ata_init() finds nothing and the filesystem can
         # only mount if the virtio path works end to end.
@@ -205,7 +207,8 @@ def main():
     # The driver claimed the device and reported a capacity.
     check("virtio-blk claimed the device", "virtio-blk:" in t1 and "sectors" in t1)
     # It took the disk -- which only happens when ATA has none.
-    check("virtio-blk became the active block device", "block: virtio-blk active" in t1)
+    # The registry names the DEVICE (`block: virtio0 active`), not the driver.
+    check("virtio-blk became the active block device", re.search(r"block: virtio\d+ active", t1) is not None)
     # ATA really found nothing, so this is not ATA quietly serving.
     check("no ATA disk was present", "ata: no disk" in t1 or "tfs3: mounted" in t1)
     # And a real filesystem mounted on it, persistent rather than RAM.

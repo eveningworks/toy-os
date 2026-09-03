@@ -41,6 +41,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import install_grub  # noqa: E402
+from qmp_test import guarded_boot_args  # noqa: E402
 
 SERIAL_PORT = 4558  # not virtio_boot_test.py's 4557, so both can run at once
 
@@ -51,7 +52,7 @@ def launch(img, qemu_log):
         # The disk carries GRUB and the kernel, so it is the boot medium
         # and the ISO is not attached at all. Never NO order -- see
         # tools/vm.py on what SeaBIOS does with a bare partition table.
-        "-boot", "order=c",
+        *guarded_boot_args(img, ports=(SERIAL_PORT,)),   # a copy of disk.img: order=c
         # THE POINT OF THIS TOOL: the image hangs off an ICH9 host bus
         # adapter, not the legacy IDE controller. The IDE controller is
         # still on the bus (this is an i440fx machine) with nothing
@@ -226,7 +227,8 @@ def main():
     check("a SATA drive was identified on a port",
           re.search(r'ahci: port \d+: "[^"]+", \d+ sectors', t1) is not None)
     check("completions are interrupt-driven, not polled", "IRQ-driven" in t1)
-    check("AHCI became the active block device", "block: ahci active" in t1)
+    # The registry names the DEVICE (`block: ahci0 active`), not the driver.
+    check("AHCI became the active block device", re.search(r"block: ahci\d* active", t1) is not None)
     # "It booted" proves nothing -- a kernel that ignored the controller
     # falls through to ramfs and still reaches a prompt. A mounted,
     # PERSISTENT tfs3 is what only a working driver produces.

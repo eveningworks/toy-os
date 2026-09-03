@@ -135,6 +135,39 @@ import iso_guard
 import port_guard
 
 
+def guarded_boot_args(disk, iso="toy-os.iso", boot="auto", ports=(), check_disk=True):
+    """The `-boot`/`-cdrom` words for a launch, AFTER the guards every
+    launch owes: the stale-ISO refusal, the stale-copy warning, and a
+    port check for any TCP port the tool is about to listen on.
+
+    For a tool whose machine launch_qemu_cmd() cannot express -- no
+    display head, a serial socket, an AHCI HBA, a second disk, a NIC --
+    and which therefore builds its own argv. Seven did, and none reached
+    a guard: a stale toy-os.iso booted the previous build and passed,
+    and two serial ports clashed as a hang. Returns a list, so it drops
+    into a list argv or `' '.join()`s into a string one.
+
+    `check_disk=False` for an image the tool built itself: the staleness
+    check is about a COPY of disk.img, and a blank image is not one.
+    The boot order is boot_medium()'s answer, never hardcoded -- the
+    'disk' direction fails silently (SeaBIOS boots any 0x55AA sector
+    and hangs in the partition table).
+    """
+    medium = install_grub.boot_medium(disk, None if boot == "auto" else boot)
+    if os.path.basename(iso) == "toy-os.iso":
+        iso_guard.assert_iso_fresh(medium=medium)
+    if check_disk:
+        iso_guard.warn_if_disk_stale(disk)
+    # A LISTENER, not a free bind: a tool that boots several guests in
+    # one run leaves its own serial port in TIME_WAIT between them, and
+    # a guard that fired on that turned a clean sequence into a refusal.
+    for p in ports:
+        if port_guard.port_has_listener(p):
+            raise SystemExit(f"port_guard: REFUSING to launch -- TCP port {p} is already "
+                             f"in use (another guest's serial console?)")
+    return install_grub.qemu_boot_args(medium, iso)
+
+
 def launch_qemu_cmd(iso="toy-os.iso", disk="disk.img", serial_log="serial.log",
                      qmp_port=4445, vnc_display=5, pidfile="qemu.pid",
                      kvm=False, boot="auto", disk_kind="ide"):

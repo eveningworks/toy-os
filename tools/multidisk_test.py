@@ -50,6 +50,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
+from qmp_test import guarded_boot_args  # noqa: E402
 
 BOOT_TIMEOUT_S = 40.0
 PROMPT = "dbg> "
@@ -160,7 +161,7 @@ def launch(boot_img, second_img, tmp, tag, kcmdline_note=""):
     for f in (serial, pidfile, sock):
         if os.path.exists(f):
             os.remove(f)
-    cmd = (f"qemu-system-x86_64 -boot order=c"
+    cmd = (f"qemu-system-x86_64 {' '.join(guarded_boot_args(boot_img))}"
            f" -drive file={boot_img},format=raw,if=ide"
            f" -device ahci,id=ahci"
            f" -drive if=none,id=d1,file={second_img},format=raw"
@@ -183,7 +184,7 @@ def launch_logged(boot_img, second_img, tmp, tag, secs=20):
     log = os.path.abspath(os.path.join(tmp, f"multidisk_{tag}.log"))
     if os.path.exists(log):
         os.remove(log)
-    cmd = (f"timeout {secs} qemu-system-x86_64 -boot order=c"
+    cmd = (f"timeout {secs} qemu-system-x86_64 {' '.join(guarded_boot_args(boot_img))}"
            f" -drive file={boot_img},format=raw,if=ide"
            f" -device ahci,id=ahci"
            f" -drive if=none,id=d1,file={second_img},format=raw"

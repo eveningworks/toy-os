@@ -52,6 +52,9 @@ import tempfile
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from qmp_test import guarded_boot_args  # noqa: E402
+
 SERIAL_PORT = 4559  # not ktest_run.py's 4555 nor virtio_boot_test.py's 4557
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -61,16 +64,11 @@ SECTOR = 512
 def launch(iso, img, qemu_log):
     cmd = [
         "qemu-system-x86_64",
-        # `-boot order=d` IS LOAD-BEARING HERE: this tool builds its own
-        # image, whose partition table gives it a 0x55AA signature and
-        # therefore makes SeaBIOS treat it as bootable, while nothing
-        # has put a bootloader on it. SeaBIOS jumps into 446 bytes of
-        # filesystem data and hangs with NO serial output at all --
-        # indistinguishable from a kernel that died before its first
-        # print. (disk.img itself IS bootable now, and an ordinary run
-        # boots it -- see tools/install_grub.py.)
-        "-boot", "order=d",
-        "-cdrom", iso,
+        # The boot order comes from boot_medium(): this tool's own image
+        # has a 0x55AA signature and no bootloader, so SeaBIOS would jump
+        # into 446 bytes of filesystem data and hang with NO serial
+        # output -- guarded_boot_args() answers order=d plus the ISO.
+        *guarded_boot_args(img, iso, ports=(SERIAL_PORT,), check_disk=False),   # a blank image: order=d + the ISO
         "-drive", f"file={img},format=raw,if=ide,index=0",
         "-m", "256",
         "-display", "none",

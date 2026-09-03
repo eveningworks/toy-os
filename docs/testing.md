@@ -346,14 +346,18 @@ testing:
   `tools/iso_guard.py` compares against `build/.bootdisk` on a disk boot
   and against `toy-os.iso` on a CD boot, so a stale one is refused
   either way.
-- **A tool that builds its own image hardcodes `-boot order=d`** --
-  `partition_test.py`, `virtio_boot_test.py`, `run_release.sh`. Nothing
-  installed a bootloader on those, and omitting the order entirely is
-  the worst option: SeaBIOS boots any disk with `0x55AA` at LBA 0 and
-  then hangs inside the partition table with no serial output at all.
-  `ahci_test.py` is the exception that proves the rule: it COPIES
-  `disk.img`, which carries GRUB, so it is `order=c` and attaches no
-  ISO at all.
+- **A tool that builds its own argv still asks for its boot words:
+  `qmp_test.guarded_boot_args(img, iso, ports=...)`** -- `partition_test.py`,
+  `virtio_boot_test.py`, `ahci_test.py`, `poweroff_test.py`,
+  `multidisk_test.py`, `net_test.py` (`run_release.sh` is shell and
+  still hardcodes `order=d`). It answers the order from
+  `boot_medium()` -- `order=d` plus the ISO for a blank image, `order=c`
+  with no ISO for a copy of `disk.img`, which carries GRUB -- and runs
+  the guards a hand-built launch used to skip: the stale-ISO refusal,
+  the stale-copy warning, and a check on the serial port the tool is
+  about to listen on. Omitting the order entirely is the worst option:
+  SeaBIOS boots any disk with `0x55AA` at LBA 0 and then hangs inside
+  the partition table with no serial output at all.
 
 **`make run` uses `-display sdl,grab-mod=rctrl`, no explicit pointer
 device.** Two things worth knowing if you ever touch this line:
@@ -581,7 +585,10 @@ The gotchas it already gets right, for when you need to know why:
 
 - **Launch via `tools/qmp_test.py`'s `launch_qemu_cmd()` -- call it (or
   copy its returned command verbatim), don't hand-roll a
-  `qemu-system-x86_64` invocation from scratch.** It returns a command
+  `qemu-system-x86_64` invocation from scratch. A machine it cannot
+  express (no display head, a serial socket, an AHCI HBA, a NIC) builds
+  its own argv around `guarded_boot_args()`, never around a literal
+  `-boot`.** It returns a command
   backgrounded with `-daemonize -pidfile <path>`, not a plain `&` or a
   `setsid nohup ... & ); disown -a` -- a bare `&` tied to one Bash tool
   call's shell gets killed when that call returns, and `setsid

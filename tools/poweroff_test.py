@@ -47,6 +47,9 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from qmp_test import guarded_boot_args  # noqa: E402
+
 SERIAL_PORT = 4561  # not ktest_run.py's 4555 nor virtio_boot_test.py's 4557
 
 
@@ -55,7 +58,7 @@ def launch(iso, disk, machine, qemu_log, reboot_ok=False):
     if machine:
         cmd += ["-machine", machine]
     # order=c: the disk carries GRUB and the kernel (tools/install_grub.py).
-    cmd += ["-boot", "order=c"]
+    cmd += guarded_boot_args(disk, iso, ports=(SERIAL_PORT,))
     if machine and machine.startswith("q35"):
         # q35 has no legacy IDE at all -- the same image goes behind the
         # ICH9 HBA instead, or the guest boots nothing and the failure
