@@ -39,4 +39,10 @@ uint32_t intel_display_port_clock_khz(uint32_t port_clk_sel);
 uint32_t intel_display_dotclock_khz(uint32_t port_khz, uint32_t link_m, uint32_t link_n);
 int      intel_display_timing_same(const struct edid_timing *a, const struct edid_timing *b);
 
+// Stage 3, one mechanism at a time: the pipe off and on with the link
+// kept. 1 when it came back trained; 0 (and a log line naming the
+// register) otherwise. Refused without the hardware.
+int intel_display_pipe_cycle(void);
+int intel_display_link_retrain(void);
+
 #endif

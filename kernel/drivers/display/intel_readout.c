@@ -30,14 +30,11 @@
 #define TRANS_LINK_M1  0x040
 #define TRANS_LINK_N1  0x044
 #define TRANS_DDI_FUNC_CTL 0x400
-#define PIPESRC(p)     (0x6001C + (p) * 0x1000)
 #define PIPEMISC(p)    (0x70030 + (p) * 0x1000)
 #define PF_CTL(p)      (0x68080 + (p) * 0x800)
 #define PF_WIN_POS(p)  (0x68070 + (p) * 0x800)
 #define PF_WIN_SZ(p)   (0x68074 + (p) * 0x800)
 #define PORT_CLK_SEL_A 0x46100
-#define DDI_BUF_CTL_A  0x64000
-#define DP_TP_CTL_A    0x64040
 #define PCH_PP_ON_DELAYS  0xC7208
 #define PCH_PP_OFF_DELAYS 0xC720C
 #define PCH_PP_DIVISOR    0xC7210
@@ -129,6 +126,14 @@ void intel_readout_log(const struct display_edid *edid) {
                 intel_rd(PF_CTL(pipe)), intel_rd(PF_WIN_POS(pipe)), intel_rd(PF_WIN_SZ(pipe)),
                 intel_rd(PCH_PP_ON_DELAYS), intel_rd(PCH_PP_OFF_DELAYS), intel_rd(PCH_PP_DIVISOR),
                 intel_rd(LCPLL_CTL));
+
+    // The port's buffer translation table (swing/pre-emphasis levels),
+    // as the firmware programmed it; link training selects an entry.
+    uint32_t bt[18];
+    for (int i = 0; i < 18; i++) bt[i] = intel_rd(DDI_BUF_TRANS_A + 4u * (uint32_t)i);
+    klog_printf("intel-display: ddi a buf trans: %#x/%#x %#x/%#x %#x/%#x %#x/%#x %#x/%#x %#x/%#x %#x/%#x %#x/%#x %#x/%#x\n",
+                bt[0], bt[1], bt[2], bt[3], bt[4], bt[5], bt[6], bt[7], bt[8], bt[9],
+                bt[10], bt[11], bt[12], bt[13], bt[14], bt[15], bt[16], bt[17]);
 
     struct edid_timing hw;
     intel_display_timing_from_regs(&r, &hw);

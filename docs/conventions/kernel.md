@@ -2982,3 +2982,20 @@ Five things to know.
   KTESTed; the comparison is the proof the register map is understood
   before stage 3 writes any of it. `docs/roadmap-details.md`'s "Intel
   modesetting" carries the stages.
+- **STAGE 3 IS BUILT ONE MECHANISM PER FLASH BEHIND A WRITE-ONLY
+  TUNABLE, `kernel.intel_cycle`** (`intel_modeset.c`; `config set
+  kernel.intel_cycle pipe` or `link`, reading back as `off`, with the
+  registry's sentence on any other machine). `pipe` turns the planes,
+  the EDP transcoder (its own `TRANSCONF` at 0x7F008 -- pipe A's
+  `PIPECONF` is state-only on this panel and takes a write silently)
+  and the DDI function off and back on; `link` also drops the DDI
+  buffer and retrains the DP link -- DPCD writes for rate and lanes,
+  pattern 1 until clock recovery, pattern 2 until equalisation, the
+  sink's swing/pre-emphasis requests honoured as an index into the
+  FIRMWARE's translation table (never rewritten), then idle and normal.
+  Every wait is bounded by count as well as by `clocksource_now_ns()`,
+  because this runs inside a syscall. Each step logs its readback and
+  the exit criterion is the frame counter moving and the panel's lane
+  status reading trained; the panel shows a brief flicker, measured by
+  the maintainer's eye. Still to add before `set_mode` exists: the
+  panel power sequencer, the port clock, and writing the timings.

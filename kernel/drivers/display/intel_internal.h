@@ -8,6 +8,56 @@
 
 #include <stdint.h>
 
+// --- display engine registers (MMIO offsets from BAR0) ----------------
+#define PIPE_STRIDE 0x1000
+#define PIPEDSL(p)     (0x70000 + (p) * PIPE_STRIDE) // current scanline
+#define PIPECONF(p)    (0x70008 + (p) * PIPE_STRIDE) // bit31 enable, bit30 state
+#define PIPEFRAME(p)   (0x70040 + (p) * PIPE_STRIDE) // frame counter
+#define PIPESRC(p)     (0x6001C + (p) * PIPE_STRIDE) // (w-1)<<16 | (h-1)
+#define DSPCNTR(p)     (0x70180 + (p) * PIPE_STRIDE) // bit31 enable, 29:26 format
+#define DSPSTRIDE(p)   (0x70188 + (p) * PIPE_STRIDE)
+#define DSPSURF(p)     (0x7019C + (p) * PIPE_STRIDE) // GGTT offset; latches at vblank
+#define DSPSURFLIVE(p) (0x701AC + (p) * PIPE_STRIDE) // the offset being scanned NOW
+#define CURCNTR(p)     (0x70080 + (p) * PIPE_STRIDE)
+#define CURBASE(p)     (0x70084 + (p) * PIPE_STRIDE) // GGTT offset; the arming write
+#define CURPOS(p)      (0x70088 + (p) * PIPE_STRIDE)
+#define TRANS_DDI_FUNC_CTL_EDP 0x6F400
+
+#define DSPCNTR_ENABLE   (1u << 31)
+#define DSPCNTR_FMT_MASK (0xFu << 26)
+#define DSPCNTR_BGRX8888 (0x6u << 26)
+
+#define CURCNTR_MODE_MASK    0x3Fu
+#define CURCNTR_64_ARGB      0x27u
+#define CURPOS_SIGN          0x8000u
+
+#define HSW_PWR_WELL_CTL_BIOS   0x45400
+#define HSW_PWR_WELL_CTL_DRIVER 0x45404
+#define PWR_WELL_REQUEST (1u << 31)
+#define PWR_WELL_STATE   (1u << 30)
+
+// Backlight PWM: the PCH's and the CPU's, and which one drives the pin
+// is the firmware's choice (Linux's lpt_setup_backlight reads it back
+// the same way).
+#define BLC_PWM_CPU_CTL2  0x48250 // bit31 enable
+#define BLC_PWM_CPU_CTL   0x48254 // duty in bits 15:0
+#define BLC_PWM_PCH_CTL1  0xC8250 // bit31 enable, bit30 override (PCH drives), bit29 polarity
+#define BLC_PWM_PCH_CTL2  0xC8254 // 31:16 period (= max duty), 15:0 duty
+#define BLM_PWM_ENABLE          (1u << 31)
+#define BLM_PCH_OVERRIDE_ENABLE (1u << 30)
+#define BLM_PCH_POLARITY        (1u << 29)
+#define PCH_PP_STATUS  0xC7200
+#define PCH_PP_CONTROL 0xC7204
+
+// The EDP transcoder: its own PIPECONF (TRANSCONF) and function control.
+// PIPECONF(p) above is pipe A/B/C's; when the panel is on the EDP
+// transcoder, pipe A's reads as state-only and THIS one is enabled.
+#define TRANSCONF_EDP 0x7F008
+#define PIPECONF_ENABLE (1u << 31)
+#define PIPECONF_STATE  (1u << 30)
+#define TRANS_DDI_FUNC_ENABLE (1u << 31)
+
+
 uint32_t intel_rd(uint32_t off);
 void     intel_wr(uint32_t off, uint32_t v);
 int      intel_display_pipe(void);   // the pipe scanning the framebuffer, or -1
@@ -16,9 +66,23 @@ int      intel_display_pipe(void);   // the pipe scanning the framebuffer, or -1
 void intel_aux_init(void);
 int  intel_aux_read_edid(uint8_t *out, int cap);   // display_driver.read_edid
 int  intel_aux_native_read(uint32_t addr, uint8_t *buf, int len); // DPCD; bytes or -1
+int  intel_aux_native_write(uint32_t addr, const uint8_t *buf, int len);
 
 // intel_readout.c -- what the firmware programmed, decoded and compared.
 struct display_edid;
 void intel_readout_log(const struct display_edid *edid);
+
+// intel_modeset.c -- stage 3. pipe_cycle() turns the transcoder and
+// pipe off and back on with the link and panel power untouched; 1 when
+// the pipe came back and the link is still trained.
+int  intel_modeset_pipe_cycle(void);
+// link_retrain() also drops the DDI buffer and retrains the DP link
+// (patterns 1 and 2, the swing loop) before bringing the pipe back.
+int  intel_modeset_link_retrain(void);
+
+// The DDI A port registers, shared with the readout.
+#define DDI_BUF_CTL_A   0x64000
+#define DP_TP_CTL_A     0x64040
+#define DDI_BUF_TRANS_A 0x64E00   // 9 eDP entries (10 DP), two dwords each
 
 #endif

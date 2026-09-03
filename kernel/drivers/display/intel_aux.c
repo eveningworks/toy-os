@@ -1,7 +1,7 @@
 // The eDP panel's AUX channel (DDI A, gen8): DisplayPort native AUX and
-// I2C-over-AUX, enough to read the panel's EDID and its DPCD. READ-ONLY
-// as far as the panel is concerned -- nothing here writes a DPCD
-// register, and an AUX transaction cannot disturb the pipe.
+// I2C-over-AUX, enough to read the panel's EDID and its DPCD, and to
+// write the DPCD registers link training needs (intel_modeset.c is the
+// only writer). An AUX transaction cannot disturb the pipe.
 //
 // THE INVARIANT: every wait is an iteration-bounded spin. This runs
 // from the display probe, before the timer, and a pit_ticks() wait
@@ -156,6 +156,18 @@ int intel_aux_native_read(uint32_t addr, uint8_t *buf, int len) {
     while (pos < len) {
         int want = len - pos > AUX_I2C_CHUNK ? AUX_I2C_CHUNK : len - pos;
         int n = aux_request(1, 1, 0, addr + (uint32_t)pos, buf + pos, want);
+        if (n <= 0) return pos ? pos : -1;
+        pos += n;
+    }
+    return pos;
+}
+
+int intel_aux_native_write(uint32_t addr, const uint8_t *buf, int len) {
+    int pos = 0;
+    while (pos < len) {
+        int want = len - pos > AUX_I2C_CHUNK ? AUX_I2C_CHUNK : len - pos;
+        // aux_request copies from `buf` for a write and never stores into it.
+        int n = aux_request(1, 0, 0, addr + (uint32_t)pos, (uint8_t *)(uintptr_t)buf + pos, want);
         if (n <= 0) return pos ? pos : -1;
         pos += n;
     }

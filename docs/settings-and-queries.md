@@ -62,6 +62,11 @@ through the HD Audio controller with no app in the loop (see
 persisted; it is the write half of a probe, the same shape as the
 others.
 
+`kernel.intel_cycle` is the same shape with three words: `pipe` and
+`link` each run one mechanism of the Intel display's modeset (see
+`docs/conventions/kernel.md`'s EDID entry) and log every readback;
+`off` does nothing, and the value always reads back as `off`.
+
 **A tunable can also be a CONSENT switch, and `kernel.kbdtap` is the
 first.** The others trade performance against diagnostics — turning one
 on costs cycles and tells you more. That one gates whether the kernel

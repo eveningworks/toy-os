@@ -41,47 +41,6 @@ DRIVER_DECLARE("intel-display", "display", "Intel gen8 display engine: cursor pl
 #define GMCH_CTRL   0x50 // bits 7:6 GGTT size (2^n MiB of PTEs), 15:8 stolen (x32 MiB)
 #define GMCH_BSM    0x5C // base of stolen memory, bits 31:20
 
-// --- display engine registers (MMIO offsets from BAR0) ----------------
-#define PIPE_STRIDE 0x1000
-#define PIPEDSL(p)     (0x70000 + (p) * PIPE_STRIDE) // current scanline
-#define PIPECONF(p)    (0x70008 + (p) * PIPE_STRIDE) // bit31 enable, bit30 state
-#define PIPEFRAME(p)   (0x70040 + (p) * PIPE_STRIDE) // frame counter
-#define PIPESRC(p)     (0x6001C + (p) * PIPE_STRIDE) // (w-1)<<16 | (h-1)
-#define DSPCNTR(p)     (0x70180 + (p) * PIPE_STRIDE) // bit31 enable, 29:26 format
-#define DSPSTRIDE(p)   (0x70188 + (p) * PIPE_STRIDE)
-#define DSPSURF(p)     (0x7019C + (p) * PIPE_STRIDE) // GGTT offset; latches at vblank
-#define DSPSURFLIVE(p) (0x701AC + (p) * PIPE_STRIDE) // the offset being scanned NOW
-#define CURCNTR(p)     (0x70080 + (p) * PIPE_STRIDE)
-#define CURBASE(p)     (0x70084 + (p) * PIPE_STRIDE) // GGTT offset; the arming write
-#define CURPOS(p)      (0x70088 + (p) * PIPE_STRIDE)
-#define TRANS_DDI_FUNC_CTL_EDP 0x6F400
-
-#define DSPCNTR_ENABLE   (1u << 31)
-#define DSPCNTR_FMT_MASK (0xFu << 26)
-#define DSPCNTR_BGRX8888 (0x6u << 26)
-
-#define CURCNTR_MODE_MASK    0x3Fu
-#define CURCNTR_64_ARGB      0x27u
-#define CURPOS_SIGN          0x8000u
-
-#define HSW_PWR_WELL_CTL_BIOS   0x45400
-#define HSW_PWR_WELL_CTL_DRIVER 0x45404
-#define PWR_WELL_REQUEST (1u << 31)
-#define PWR_WELL_STATE   (1u << 30)
-
-// Backlight PWM: the PCH's and the CPU's, and which one drives the pin
-// is the firmware's choice (Linux's lpt_setup_backlight reads it back
-// the same way).
-#define BLC_PWM_CPU_CTL2  0x48250 // bit31 enable
-#define BLC_PWM_CPU_CTL   0x48254 // duty in bits 15:0
-#define BLC_PWM_PCH_CTL1  0xC8250 // bit31 enable, bit30 override (PCH drives), bit29 polarity
-#define BLC_PWM_PCH_CTL2  0xC8254 // 31:16 period (= max duty), 15:0 duty
-#define BLM_PWM_ENABLE          (1u << 31)
-#define BLM_PCH_OVERRIDE_ENABLE (1u << 30)
-#define BLM_PCH_POLARITY        (1u << 29)
-#define PCH_PP_STATUS  0xC7200
-#define PCH_PP_CONTROL 0xC7204
-
 // --- state ----------------------------------------------------------
 static const struct pci_device *g_dev;
 static volatile uint8_t *g_mmio;
@@ -540,3 +499,6 @@ void intel_display_register(void) {
 }
 
 int intel_display_active(void) { return g_active; }
+
+int intel_display_pipe_cycle(void) { return g_active ? intel_modeset_pipe_cycle() : 0; }
+int intel_display_link_retrain(void) { return g_active ? intel_modeset_link_retrain() : 0; }

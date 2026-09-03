@@ -3889,6 +3889,26 @@ the input to stage 3:**
   `0x1f40000`, `PP_DIVISOR` `0x4af06`; `PP_CONTROL` 0x7, status
   `0x80000008`. `LCPLL_CTL` `0x44000000` (540 MHz CDCLK).
 
+**Stage 3 progress (2026-09-03), one mechanism per flash behind
+`config set kernel.intel_cycle <word>`:**
+
+- `pipe` -- planes, the EDP transcoder and the DDI function off and
+  back on, the link and panel power untouched. The frame counter moves
+  again and the lane status still reads 0x77; nothing visible on the
+  panel, at most a blink (three runs).
+- `link` -- the above plus `DDI_BUF_CTL` and `DP_TP_CTL` down and DP
+  link training from scratch. Clock recovery completes on the second
+  100 us poll at swing 0 / pre-emphasis 0, equalisation on the first
+  400 us poll; the port comes back with the firmware's exact register
+  values; a very brief flicker on the panel (three runs). The
+  firmware's `DDI_BUF_TRANS` table for port A reads identical to
+  i915's Broadwell eDP table (`0xffffff/0x12, 0xebafff/0x20011, ...`).
+- Not yet: the panel power sequencer off/on (`PP_CONTROL` with the
+  delays above, the backlight around it), `PORT_CLK_SEL` off/on, and
+  writing the transcoder timings and M/N from the EDID rather than
+  keeping the firmware's. Then the pieces assemble into `set_mode` for
+  the native mode and `DISPLAY_CAP_MODESET` can be advertised.
+
 **Stage 3, sized from that.** It is DP link training, not just a
 register sequence: after `DDI_BUF_CTL` goes down the panel must be
 retrained -- native AUX WRITES to DPCD 0x100..0x103 (link rate, lane

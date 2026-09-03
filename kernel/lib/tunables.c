@@ -33,6 +33,7 @@
 #include "block.h"        // blk_name() -- what IS carrying the transfers
 #include "keyboard_tap.h" // kbdtap_enabled()/_set_enabled() -- kernel.kbdtap
 #include "sound.h"        // hda_diag_tone() -- kernel.hda_tone
+#include "intel_display.h" // intel_display_pipe_cycle()/_link_retrain() -- kernel.intel_cycle
 
 #define TUNABLE_CATEGORY "Kernel"
 
@@ -257,7 +258,51 @@ static const struct setting hda_tone_setting = {
     .apply = hda_tone_apply,
 };
 
+// ---- kernel.intel_cycle -----------------------------------------------
+//
+// Write-only, like hda_tone: `pipe` turns the laptop panel's transcoder
+// and pipe off and back on, `link` also drops the DP link and retrains
+// it -- stage 3 of Intel modesetting, one mechanism per flash, each
+// logging every readback. Reads back as "off". A machine without the
+// Intel display gets the sentence, not a silent no-op.
+
+static void intel_cycle_get(char *out, uint32_t cap) { k_strlcpy(out, "off", cap); }
+
+static int intel_cycle_choice(int index, char *out, uint32_t cap) {
+    static const char *const names[] = { "off", "pipe", "link" };
+    if (index < 0 || index > 2) return 0;
+    k_strlcpy(out, names[index], cap);
+    return 1;
+}
+
+static const char *intel_cycle_unavailable(void) {
+    if (!intel_display_active())
+        return "This machine's display is not driven by the Intel display driver.";
+    return 0;
+}
+
+static int intel_cycle_apply(const char *value) {
+    if (k_strcmp(value, "off") == 0) return SETTING_SAVED;
+    if (k_strcmp(value, "pipe") == 0) return intel_display_pipe_cycle() ? SETTING_SAVED : SETTING_INVALID;
+    if (k_strcmp(value, "link") == 0) return intel_display_link_retrain() ? SETTING_SAVED : SETTING_INVALID;
+    return SETTING_INVALID;
+}
+
+static const struct setting intel_cycle_setting = {
+    .name = "intel_cycle",
+    .label = "Intel display cycle (diagnostic)",
+    .type = SETTING_TYPE_ENUM,
+    .file = CONFIG_PATH_RUNTIME,
+    .category = TUNABLE_CATEGORY,
+    .group = "Display",
+    .choice = intel_cycle_choice,
+    .get = intel_cycle_get,
+    .apply = intel_cycle_apply,
+    .unavailable = intel_cycle_unavailable,
+};
+
 void tunables_register(void) {
+    setting_register(&intel_cycle_setting);
     setting_register(&heap_debug_setting);
     setting_register(&hda_tone_setting);
     setting_register(&ata_nodma_setting);

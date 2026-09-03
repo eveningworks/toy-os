@@ -127,3 +127,14 @@ KTEST("intel-display", "the dot clock is the port clock scaled by link M/N") {
     KTEST_ASSERT_EQ(intel_display_dotclock_khz(270000, 0x40000000u | 138500, 270000), 138500u); // TU bits ignored
     KTEST_ASSERT_EQ(intel_display_dotclock_khz(270000, 1, 0), 0u);
 }
+
+#include "setting.h"
+
+KTEST("intel-display", "the cycle tunable is unavailable, and refused, without the hardware") {
+    if (intel_display_active()) KTEST_SKIP("this machine has the Intel display");
+    const struct setting *s = setting_find("intel_cycle");
+    KTEST_ASSERT(s != 0);
+    KTEST_ASSERT(s->unavailable && s->unavailable() != 0);
+    KTEST_ASSERT_EQ(intel_display_pipe_cycle(), 0);
+    KTEST_ASSERT_EQ(intel_display_link_retrain(), 0);
+}
