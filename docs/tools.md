@@ -3297,6 +3297,48 @@ window without going through it will find its layout polls timing out.
   visible only in the capture. Boots ten guests against a COPY of
   `disk.img`; on demand, not in any gate.
 
+- **`ntp_test.py`** -- network time end to end, against a server on this
+  machine's own loopback. `kernel/core/ktime_test.c` proves the wall
+  clock can be set and read; it says nothing about whether a packet on
+  the wire produces the right number, which is this half.
+
+  **Nothing leaves the machine, and it works with the cable out.** The
+  server is a plain Python UDP socket on `127.0.0.1`, reached because
+  SLIRP maps whatever the guest sends to `10.0.2.2` onto the host's
+  loopback -- `net_test.py`'s UDP phase does the same. It binds an
+  unprivileged port rather than 123, which is the whole reason `/bin/ntpd`
+  has a `-p` flag: a test server cannot bind 123, and the alternative was
+  a suite that reached a real time server on the maintainer's connection.
+
+  **The oracle is the host, and it judges both directions.** The reply
+  carries an instant the test CHOSE -- a date in 2013, BACKWARDS from any
+  plausible boot, so a guest that ignored it and let its clock run
+  forward cannot pass by accident. And the REQUEST is validated here:
+  version 4, mode 3, 48 bytes, a non-zero nonce. A client that sent
+  version 3 would be answered by a real server and would still be wrong.
+
+  **It asserts on state, never on what the guest printed.** An earlier
+  version parsed `ntpd`'s own messages and reported a working client as
+  dead, because a spawned program's stdout does not dependably reach the
+  serial console this drives (`settings_test.py` records the same trap).
+  What the guest DID is visible in two places that cannot lie: the
+  datagram the host received, and the clock afterwards.
+
+  `--positive-control` answers with a deliberately wrong epoch conversion
+  -- 1900 where 1970 was meant, the single likeliest client bug. It lands
+  the guest in 2079 and the clock checks must go red; the tool INVERTS
+  its verdict under the flag, so a control that changes nothing is
+  itself reported as a failure.
+
+  **Its reboot check SKIPS under QEMU, and says so rather than passing.**
+  QEMU re-seeds its emulated MC146818 from the HOST clock on machine
+  reset, so a guest's CMOS write cannot outlive a reboot however correct
+  it is -- measured, by watching the guest's own "rtc: hardware clock
+  reads" boot line come back matching the host to the second. The write
+  itself is proved in the same boot by the KTEST that reads the hardware
+  back through `rtc_read()`. Real hardware is what answers the other
+  half. Boots one guest against a COPY of `disk.img`; on demand.
+
 - **`partition_test.py`** -- boots toy-os with its filesystem **inside**
   an MBR or GPT partition. The only thing that exercises `vfs.c`'s
   boot-time partition scan and `block_part.c`'s window end to end; the

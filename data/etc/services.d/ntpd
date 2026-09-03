@@ -1,0 +1,13 @@
+# Network time. STARTED ALWAYS, and IDLE until `system.ntp` is on --
+# which ships off, so a stock machine sends no packet to anyone.
+#
+# One switch, not two: turning it on in System Settings takes effect
+# with no service to enable as well. systemd-timesyncd is shaped the
+# same way, gated by `timedatectl set-ntp`.
+#
+# After= is ordering only; it waits for an address itself.
+Name=ntpd
+Description=Keep the clock set from a network time server
+Exec=/bin/ntpd
+After=dhcp
+Restart=always

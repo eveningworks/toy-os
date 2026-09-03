@@ -157,7 +157,7 @@ def _since(mark, pattern):
 
 
 CONTROL_RE = (r"settings: control (\d+) (\S+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) "
-               r"rows (\d+) kind (radio|combo|slider|spin)")
+               r"rows (\d+) kind (radio|combo|slider|spin|text)")
 
 
 def slots(dbg, mark):
@@ -881,6 +881,72 @@ def main():
         check("the System Information page draws its text",
               info_ink > control_ink // 4,
               f"sysinfo={info_ink} px vs a settings page={control_ink} px")
+
+    # --- A STRING SETTING IS EDITABLE, not a dead empty control -------
+    #
+    # Until CTRL_TEXT existed, SETTING_TYPE_STRING drew an EMPTY radio
+    # list: a row that looks broken and can only be changed with `config
+    # set`. The Network Time page is the fixture because it carries one
+    # of each kind -- an enum, a string and an int -- so it also proves
+    # a page can mix them.
+    ntp_row = row_named("Network Time")
+    if check("the sidebar offers a Network Time page", ntp_row is not None,
+             f"labels={[r['label'] for r in rows]}"):
+        mark = len(drain(dbg))
+        click(tx + tw // 2, ntp_row["y"])
+        ntp_ctls = controls(dbg, mark)
+        server_ctl = ntp_ctls.get("system.ntp_server")
+        check("the page carries all three network-time settings",
+              len(ntp_ctls) >= 3, f"controls={sorted(ntp_ctls)}")
+        if check("the app reported the server control's rect",
+                 server_ctl is not None, f"controls={sorted(ntp_ctls)}"):
+            # THE CHECK THIS PHASE EXISTS FOR. A string setting used to
+            # report kind `radio` with zero rows -- which is exactly what
+            # "an empty control" looks like in this log.
+            check("a string setting gets a TEXT FIELD, not an empty radio",
+                  server_ctl["kind"] == "text", f"kind={server_ctl['kind']}")
+            check("...and the field has a real width to type into",
+                  server_ctl["w"] > 40, f"w={server_ctl['w']}")
+
+            before_server = stored_value(dbg, "ntp_server")
+            # CLICK TO FOCUS, THEN TYPE. The click both places the caret
+            # and moves the keyboard focus ring (uui_focus_click), which
+            # is what makes the field the widget keys go to -- and it
+            # lands past the end of the value, so the letter appends.
+            #
+            # dbg.key(), not QMP's send_text(): the debug console's key
+            # injection is what every other keyboard check here uses,
+            # and it is the one that reliably reaches the focused widget.
+            click(server_ctl["x"] + server_ctl["w"] // 2,
+                  server_ctl["y"] + server_ctl["h"] // 2)
+            mark_key = len(drain(dbg))
+            dbg.key(ord("z"))
+            time.sleep(0.3)
+            staged_server = staged_for(dbg, mark_key, "system.ntp_server")
+            check("typing into the field stages a value",
+                  staged_server is not None,
+                  f"staged: {staged_server or 'nothing'}")
+            if staged_server:
+                # THE TEXT, not an index. Every other control on this
+                # page stages a number, and a field that reported one
+                # would write "1" as the server name.
+                check("...and what it staged is the TEXT, not an index",
+                      staged_server.endswith("z") and staged_server != before_server,
+                      f"staged {staged_server!r}, was {before_server!r}")
+            # The same load-bearing rule as every other control: staging
+            # must not write.
+            check("typing does NOT write it yet",
+                  stored_value(dbg, "ntp_server") == before_server,
+                  f"{before_server!r} -> {stored_value(dbg, 'ntp_server')!r}")
+
+            click(bx + bw + 6 + bw // 2, by + bh // 2)   # Apply
+            time.sleep(0.5)
+            drain(dbg)
+            after_server = stored_value(dbg, "ntp_server")
+            check("Apply writes the typed value to /etc",
+                  after_server is not None and after_server.endswith("z")
+                  and after_server != before_server,
+                  f"{before_server!r} -> {after_server!r}")
 
     # --- Cancel closes without writing --------------------------------
     mark = len(drain(dbg))

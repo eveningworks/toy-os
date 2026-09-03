@@ -1289,8 +1289,8 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO)
 	# rather than compiled in.
 	mkdir -p $(SEED_DIR)/sync/etc/settings.d
 	@for f in data/etc/settings.d/*; do \
-	    if [ "$$(basename $$f)" != "README.md" ]; then \
-	        cp $$f $(SEED_DIR)/sync/etc/settings.d/; fi; \
+	    if [ "$$(basename "$$f")" != "README.md" ]; then \
+	        cp "$$f" $(SEED_DIR)/sync/etc/settings.d/; fi; \
 	done
 	# The scripted tour. Seeded always -- it is inert unless `demo` is on
 	# the kernel command line, and having it present means a live image

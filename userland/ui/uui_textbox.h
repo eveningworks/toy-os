@@ -19,7 +19,11 @@
 
 // --- single-line text field -------------------------------------------
 
-#define UUI_TEXTBOX_MAX 48
+// 64 rather than 48, so a field can hold a whole setting value:
+// SETTING_ABI_VALUE_MAX is 64, and System Settings edits a string
+// setting through this widget. A shorter field would truncate what it
+// was handed, which is a silent wrong answer rather than a full field.
+#define UUI_TEXTBOX_MAX 64
 
 struct uui_textbox {
     // Content-relative geometry -- see apps/ui/ui_radio_list.h's note.
@@ -41,6 +45,14 @@ struct uui_textbox {
     struct uui_edit ed;
 
     int active; // 1 = focused: draws a caret and accepts keys
+
+    // 1 = greyed and inert, as on every other control here. A field with
+    // no such flag was the odd one out, and System Settings needs it:
+    // a setting the registry has made unavailable must READ as
+    // unavailable, and a live-looking field that silently refuses what
+    // is typed into it is the failure the `unavailable` sentence exists
+    // to prevent.
+    int disabled;
 
     // The widget's OWN colours, defaulted at init from the theme. They
     // used to be arguments to draw(), which meant the toolkit could not

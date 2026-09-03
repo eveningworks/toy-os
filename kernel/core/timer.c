@@ -73,3 +73,69 @@ void rtc_read(struct rtc_time *t) {
     t->month = month;
     t->year = 2000 + year; // assumes 21st century
 }
+
+static uint8_t bin_to_bcd(uint8_t v) {
+    return (uint8_t)(((v / 10) << 4) | (v % 10));
+}
+
+static void cmos_write(uint8_t reg, uint8_t value) {
+    outb(CMOS_ADDR, reg);
+    outb(CMOS_DATA, value);
+}
+
+int rtc_write(const struct rtc_time *t) {
+    if (!t || t->year < 1970 || t->year > 2099 || t->month < 1 || t->month > 12 ||
+        t->day < 1 || t->day > 31 || t->hour > 23 || t->minute > 59 || t->second > 59) {
+        return 0;
+    }
+
+    uint8_t reg_b = cmos_read(0x0B);
+
+    // FREEZE THE UPDATE CYCLE FIRST. With SET clear, the RTC increments
+    // its own registers while these six writes are in flight, so a write
+    // landing on the wrong side of a second boundary is silently undone.
+    cmos_write(0x0B, (uint8_t)(reg_b | 0x80));
+
+    uint8_t hour = t->hour;
+    // 12-HOUR MODE IS READ BACK, NEVER IMPOSED. A machine whose firmware
+    // set the RTC to 12-hour keeps it: switching it to 24-hour here
+    // would be correct for this OS and wrong for whatever else boots on
+    // the same hardware, which is not a trade a clock write gets to make.
+    if (!(reg_b & 0x02)) {
+        uint8_t pm = hour >= 12 ? 0x80 : 0;
+        uint8_t h12 = (uint8_t)(hour % 12);
+        if (h12 == 0) h12 = 12;
+        hour = (uint8_t)(h12 | pm);
+    }
+
+    uint8_t second = t->second, minute = t->minute;
+    uint8_t day = t->day, month = t->month;
+    uint8_t year = (uint8_t)(t->year % 100);
+
+    if (!(reg_b & 0x04)) { // BCD mode -- the same test rtc_read() makes
+        second = bin_to_bcd(second);
+        minute = bin_to_bcd(minute);
+        // The PM flag rides ABOVE the digits, so it is preserved across
+        // the conversion rather than being encoded as part of the hour.
+        hour = (uint8_t)(bin_to_bcd((uint8_t)(hour & 0x7F)) | (hour & 0x80));
+        day = bin_to_bcd(day);
+        month = bin_to_bcd(month);
+        year = bin_to_bcd(year);
+    }
+
+    cmos_write(0x00, second);
+    cmos_write(0x02, minute);
+    cmos_write(0x04, hour);
+    cmos_write(0x07, day);
+    cmos_write(0x08, month);
+    cmos_write(0x09, year);
+
+    // Thaw. The RTC resumes counting from what was just written.
+    cmos_write(0x0B, reg_b);
+
+    // WHAT IS NOT WRITTEN: the century register (0x32 on most chipsets,
+    // and the FADT names it on some). rtc_read() assumes 2000 + year, so
+    // writing a century the reader never consults would be state only
+    // another OS could see.
+    return 1;
+}

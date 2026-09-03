@@ -825,6 +825,97 @@ It also cannot be driven by `usertest_run.py`: `run` is the legacy
 neither itself nor any billing. `kernel/proc/cputime_test.c` spawns it
 properly, the same arrangement `pipe_test` already needed.
 
+## The wall clock is a software clock, and NTP steps it rather than slewing
+
+Three decisions taken together when network time landed, all about the
+same thing: which component gets to know what about the time.
+
+**The wall clock is an epoch plus a monotonic delta, not a CMOS read.**
+`rtc_read_local()` used to poll the RTC on every call -- spinning on
+register 0x0A's update-in-progress flag -- so the taskbar's once-a-second
+redraw paid for a hardware transaction, the clock could only ever move in
+whole seconds, and there was nothing for a time client to correct. It is
+now `api/ktime.h`: read the RTC once at boot, record the clocksource
+reading taken at that instant, and answer every query as the difference
+added to the epoch. That is Linux's timekeeping in miniature.
+
+The obvious alternative was to keep polling the CMOS and have
+`SYS_SETTIME` write it. That is smaller, and it was rejected because it
+leaves the two real costs in place -- second granularity and a port
+transaction per read -- to save state that is two `uint64_t`s.
+
+**It is deliberately not a `struct clocksource`.** `clocksource.h`
+already refuses a wall clock in as many words, and the reason survives
+contact with this: a clocksource must be monotonic, and this one jumps
+whenever it is set. Wall time is built ON a clocksource. Putting it
+behind the same interface would make "how much time has passed" and
+"what time is it" answerable by the same call, which is the confusion
+that interface exists to prevent.
+
+**`SYS_SETTIME` takes UTC while `SYS_GETTIME` answers in local civil
+time, and they are not inverses.** That looks like an oversight and is
+not. The kernel holds UTC (the RTC is read as UTC and `tz.h` applies the
+configured city's offset only when handing out broken-down time), NTP
+hands out UTC, and the filesystem's stored epochs are local-derived for
+reasons this file's own entry on file timestamps sets out. Three
+reckonings already existed; what was new was a caller needing the UTC
+one, so `QUERY_CLOCK` exposes it as a fact rather than bending
+`SYS_GETTIME`'s long-standing contract. The hazard is stated in the ABI
+comment, in the ring-3 wrapper, and here: a client that reads
+`SYS_GETTIME`, adds a second and passes it back moves the clock by the
+timezone offset.
+
+**`/bin/ntpd` steps, and it is SNTP rather than NTP.** Full NTP
+disciplines the clock's RATE against several servers and never lets time
+run backwards. `ktime` has no rate to adjust -- it is an epoch and a
+delta -- so slewing would mean a second kernel feature (a scaled
+clocksource conversion, a servo, and a way to reason about a clock that
+is deliberately running wrong) before a single packet could be useful.
+Stepping is what SNTP specifies and what `systemd-timesyncd` does on a
+first sync, and the blast radius here is small by construction: anything
+measuring an interval uses `SYS_MONOTONIC_NS`, which a step cannot move.
+The honest cost is that a wall-clock deadline can be jumped over, and
+nothing in this tree holds one.
+
+**And the client is a ring-3 program, as DHCP is.** Which server to
+trust, how long to wait, how often to ask and what to do when nobody
+answers are policy. The kernel exposes one verb, `SYS_SETTIME`, and
+holds three settings it never acts on. The service is started always and
+gated by `system.ntp`, which ships off -- one switch rather than two, so
+turning network time on in System Settings needs no service enabled as
+well. `telnetd` and `tftpd` ship disabled instead because they have no
+setting to gate them and listen the moment they run.
+
+## A string setting is editable in System Settings, and the widget grew two things to allow it
+
+`SETTING_TYPE_STRING` rendered as an EMPTY `uui_radio_list` -- a row that
+looks broken, with `config set` as the only way to change it. The app's
+own comment said so and treated it as the design. It was not; it was the
+absence of a control kind.
+
+**The alternative considered was making the setting that prompted it an
+ENUM** of a few known hosts, which needs no toolkit change at all. It was
+rejected because it solves one setting and leaves the gap: the registry
+has a free-text type, System Settings claims to show the whole registry,
+and any future string setting would hit the same wall.
+
+**The interesting part is `struct slot`'s `staged`/`baseline`, which are
+ints** and carry an index for a choice control and the number itself for
+a spinbox -- a deliberate overload, because everything the page does with
+them is an equality test. A text field has no index, so it keeps
+`baseline` at 0 and sets `staged` to 1 when the field differs from the
+value the page opened with. Every existing `staged != baseline` test
+reads unchanged, and only `staged_value()` knows there is a third case.
+Two more fields would have meant a branch in each of those tests.
+
+Two supporting changes were forced. `UUI_TEXTBOX_MAX` went from 48 to 64
+so a field can hold a whole `SETTING_ABI_VALUE_MAX` value, with a
+`_Static_assert` tying them -- a shorter field truncates silently, which
+is a wrong answer rather than a full one. And `uui_textbox` gained a
+`disabled` flag, which every other control here already had: a setting
+the registry has made unavailable must read as unavailable, and the
+sentence beside it is the whole value of disabling a control.
+
 ## Clocksources: timekeeping is an interface, and CPU time is measured not counted
 
 `kernel/clocksource.h` registers sources of monotonic time the way

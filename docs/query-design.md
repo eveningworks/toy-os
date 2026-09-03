@@ -525,3 +525,35 @@ header, which `tools/iso_guard.py` correctly reports as a stale image.
 they differ. Printing only the kernel's would have been tidier and would
 have hidden the case this exists for: a half-updated machine looks
 perfectly consistent when only one side is shown.
+
+## `QUERY_CLOCK` -- the only way ring 3 can read UTC
+
+Added 2026-09-03, alongside the software wall clock, and it exists for
+one reason: **nothing in ring 3 could read UTC at all.**
+
+`SYS_GETTIME` hands back broken-down LOCAL civil time — the kernel
+applies the configured city's offset before it answers — and libc's
+`time()` returns a local-derived epoch, deliberately, so that it is
+comparable against the filesystem's stored timestamps. Neither can be
+compared against a timestamp that arrived off the wire, which is exactly
+what `/bin/ntpd` has to do to report an offset.
+
+**A fact rather than a syscall, and rather than bending `SYS_GETTIME`.**
+Changing what `SYS_GETTIME` returns would silently move `/bin/time`, the
+taskbar clock and the calendar popup by the timezone offset; adding a
+second time syscall would have made three ways to ask about the clock.
+This is a read-only fact about the machine, which is what the query
+registry is for.
+
+The record carries the epoch twice — seconds and nanoseconds — from ONE
+read of the clock. Calling `ktime_now_sec()` and `ktime_now_ns()`
+separately would let a second boundary fall between them, and a record
+whose two halves disagree is worse than either alone. It also carries
+the monotonic reading and the clocksource's NAME, so `config get
+clock.utc` answers "what time does this machine think it is" and the
+record answers "and what is carrying it".
+
+**`last_step` is signed and carried as `u64`**, like every other field
+here. A correction is as often backwards as forwards, and a client casts
+it back — a signed field type would have been the first one in the ABI
+and is not worth being for one number.

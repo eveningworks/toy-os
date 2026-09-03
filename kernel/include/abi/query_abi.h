@@ -391,6 +391,30 @@ _Static_assert(sizeof(struct query_fontglyph) <= 256,
 // ride in the record only, as fs.backend does.
 #define QUERY_DISPLAY 31
 
+// THE CLOCK, as a fact: UTC, uptime, and how far the wall clock has
+// been moved since boot. SCALAR.
+//
+// **THIS IS THE ONLY WAY RING 3 CAN READ UTC.** SYS_GETTIME hands back
+// broken-down LOCAL civil time and libc's time() a local-derived epoch
+// (see abi/syscall_abi.h's SYS_SETTIME), so neither can be compared
+// against a timestamp that arrived off the wire. `/bin/ntpd` needs
+// exactly that comparison to report an offset, which is what this
+// exists for.
+#define QUERY_CLOCK 32
+
+struct query_clock {
+    uint64_t utc;         // seconds since 1970-01-01 00:00:00 UTC
+    uint64_t utc_ns;      // the same instant, to the clocksource's resolution
+    uint64_t monotonic_ns; // since boot; SYS_MONOTONIC_NS's number
+    // How far the last ktime_set() moved the clock, in seconds, and how
+    // many times it has been moved. SIGNED, carried as u64 because every
+    // field here is: a correction is as often backwards as forwards, and
+    // a client casts it back.
+    uint64_t last_step;
+    uint64_t steps;
+    char     source[16];  // the clocksource carrying it: "tsc", "pit"
+};
+
 #define QUERY_KLOG_DATA 232
 
 struct query_klog {

@@ -67,6 +67,7 @@ void uui_textbox_init(struct uui_textbox *f, const char *initial) {
     uui_edit_init(&f->ed);
     f->ed.cursor = i;
     f->active = 0;
+    f->disabled = 0;
     f->bg = ugfx_rgb(255, 255, 255);
     f->fg = ugfx_rgb(20, 20, 20);
     f->border = ugfx_rgb(150, 155, 165);
@@ -148,6 +149,14 @@ int uui_textbox_hit(const struct uui_textbox *f, int cx, int cy) {
 
 void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f) {
     uint32_t bg = f->bg, fg = f->fg, border = f->border;
+    if (f->disabled) {
+        // Derived from the field's OWN colours, never hand-picked --
+        // uui_primitives.h's rule, and what keeps a greyed field greyed
+        // on a dark theme as well as a light one.
+        bg = uui_state_bg(bg, UUI_STATE_DISABLED);
+        fg = uui_state_bg(fg, UUI_STATE_DISABLED);
+        border = uui_state_bg(border, UUI_STATE_DISABLED);
+    }
     int x = f->x, y = f->y, w = f->w, h = f->h;
     ugfx_fill_rect(s, x, y, w, h, bg);
     ugfx_draw_rect(s, x, y, w, h, border);
@@ -207,16 +216,23 @@ void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f) {
 // uui_widget.h), and a field's draw takes three colours the generic
 // signature has nowhere to carry -- so this table is what uui_focus
 // needs and nothing more, rather than a half-honest full one.
+// EVERY interactive slot checks `disabled`, the same sweep uui_spinbox
+// makes: a field is reachable by pointer AND by the focus ring, so
+// refusing in one of them leaves the other way in.
 static int ops_hit(const void *w, int cx, int cy) {
+    if (((const struct uui_textbox *)w)->disabled) return 0;
     return uui_textbox_hit((const struct uui_textbox *)w, cx, cy);
 }
 static int ops_key(void *w, int key, unsigned mods) {
+    if (((struct uui_textbox *)w)->disabled) return 0;
     return uui_textbox_key_mods((struct uui_textbox *)w, key, mods);
 }
 static void ops_set_focused(void *w, int focused) {
     uui_textbox_set_active((struct uui_textbox *)w, focused);
 }
-static int ops_accepts_focus(const void *w) { (void)w; return 1; }
+static int ops_accepts_focus(const void *w) {
+    return !((const struct uui_textbox *)w)->disabled;
+}
 
 const struct uui_widget_ops uui_textbox_focus_ops = {
     .hit = ops_hit,
@@ -237,6 +253,7 @@ static int tb_ops_press(void *w, int cx, int cy, unsigned mods) {
     (void)mods;
     (void)cy;
     struct uui_textbox *f = (struct uui_textbox *)w;
+    if (f->disabled) return 0;
     // Places the caret AND collapses any selection, which is what a
     // plain click does everywhere.
     uui_edit_place(&f->ed, &TB_EDIT_OPS, f, uui_textbox_index_at_x(f, cx), 0);
@@ -251,6 +268,7 @@ static int tb_ops_motion(void *w, int cx, int cy, unsigned buttons) {
     (void)cy;
     if (!buttons) return 0;
     struct uui_textbox *f = (struct uui_textbox *)w;
+    if (f->disabled) return 0;
     uui_edit_place(&f->ed, &TB_EDIT_OPS, f, uui_textbox_index_at_x(f, cx), 1);
     return 1;
 }

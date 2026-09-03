@@ -26,6 +26,7 @@
 // shell clock.
 
 #include "tz.h"
+#include "ktime.h"
 #include "caltime.h"
 #include "fs.h"
 #include "string.h"
@@ -641,7 +642,12 @@ int tz_find_by_name(const char *name) {
 }
 
 void rtc_read_local(struct rtc_time *out) {
-    rtc_read(out);
+    // THE SOFTWARE CLOCK, NOT THE CMOS (api/ktime.h). This used to be a
+    // raw rtc_read(), which meant the taskbar's once-a-second redraw
+    // spun on the update-in-progress flag -- and, more to the point,
+    // there was nothing for `ntpd` to correct. ktime is UTC, exactly as
+    // rtc_read() was, so the offset arithmetic below is unchanged.
+    ktime_read(out);
 
     const struct tz_city *city = &TZ_CITIES[current_index];
     int offset = city->base_offset_minutes;

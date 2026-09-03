@@ -583,6 +583,8 @@ whenever a headline here tells you something you did not already know.
 `docs/conventions/kernel.md`
 
 - **Monotonic time is an INTERFACE, and wall clock is not one of its implementations.**
+- **THE WALL CLOCK IS A SOFTWARE CLOCK ANCHORED TO THE CLOCKSOURCE, AND THE RTC IS READ ONCE AT BOOT -- `ktime` is UTC, `SYS_GETTIME` is LOCAL, and libc's `time()` is a local-derived epoch**
+- **SETTING THE CLOCK IS `SYS_SETTIME`, AND SPEAKING NTP IS A RING-3 PROGRAM'S JOB**
 - **The kernel's idle work has ONE owner: `scheduler_idle()`**
 - **EVERY KEY REPORTS SOMETHING, AND THE KEYPAD REPORTS CHARACTERS**
 - **THE BIOS OWNS THE xHCI UNTIL YOU ASK FOR IT, AND THE ASK COMES BEFORE THE RESET**
@@ -704,6 +706,7 @@ whenever a headline here tells you something you did not already know.
 - **An app refuses its OWN second copy -- the launcher never does.**
 - **`uui_table` sorts on a header click, and an app supplies only a COMPARATOR.**
 - **A `uui_scrollview` NOTICES when its content's item list changes**
+- **A STRING SETTING GETS A TEXT FIELD IN SYSTEM SETTINGS, AND ITS `staged` IS A CHANGED FLAG RATHER THAN AN INDEX**
 - **`uui_spinbox` IS FOR A NUMBER; `uui_slider` IS FOR AN ORDERED ENUM.**
 - **`uui_slider` is for an ORDERED enum**
 - **A DRAG NEEDS THE BUTTON STILL DOWN, AND THE POINTER GRAB IS NOT THAT FACT**
@@ -1347,7 +1350,7 @@ cost".
   `ls_test.py`, `mem_stress.py`, `mkpart_test.py`,
   `multidisk_test.py`, `net_test.py`, `partition_test.py`,
   `poweroff_test.py`, `qemu_matrix.py`, `remote_test.py`, `serial_backpressure_test.py`, `stdin_test.py`,
-  `msi_test.py`, `sum_test.py`, `taskbar_test.py`,
+  `msi_test.py`, `ntp_test.py`, `sum_test.py`, `taskbar_test.py`,
   `terminal_probe.py`, `tfs3_v1_test.py`,
   `usb_audio_test.py`, `usb_test.py`, `virtio_boot_test.py`,
   `virtio_gpu_test.py`, `virtio_input_test.py`.

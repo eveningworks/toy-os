@@ -13,6 +13,7 @@
 #include "fpu.h"
 #include "cpuinfo.h"
 #include "clocksource.h"
+#include "ktime.h"
 #include "multiboot.h"
 #include "pmm.h"
 #include "heap.h"
@@ -243,6 +244,14 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // rather than installed with a calibration that quietly stops being
     // true.
     clocksource_init_tsc();
+
+    // The wall clock, seeded from the RTC and carried by the clocksource
+    // just chosen (api/ktime.h). After clocksource_init_tsc() so the
+    // anchor is taken on the source the machine will actually use --
+    // clocksource_now_ns() stays monotonic across a switch, so this is
+    // tidiness rather than correctness, but an anchor and its clock
+    // having the same origin is one less thing to reason about.
+    ktime_init();
 
     // Entropy (Milestone 2, docs/roadmap.md). Has to be after
     // cpu_info_init() -- it asks CPUID for RDSEED/RDRAND through

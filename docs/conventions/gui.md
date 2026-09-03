@@ -484,6 +484,36 @@ this the obvious way), not from how much history it accumulated.
   broken layout, one layer away from the cause.
   `uui_scrollview_content_changed()` is still the honest thing to call
   at the point of change and is no longer load-bearing.
+- **A STRING SETTING GETS A TEXT FIELD IN SYSTEM SETTINGS, AND ITS
+  `staged` IS A CHANGED FLAG RATHER THAN AN INDEX.**
+  `SETTING_TYPE_STRING` used to draw an EMPTY `uui_radio_list` -- a row
+  that looks broken and could only be changed with `config set`, which
+  the app's own comment admitted. `CTRL_TEXT` wires `uui_textbox` in as
+  a fifth control kind, so every registry client with free text becomes
+  editable, not just the setting that prompted it.
+
+  **The trap is `struct slot`'s `staged`/`baseline` pair, which are
+  INTS.** A field has no choice list to index into, so it keeps
+  `baseline` at 0 and sets `staged` to 1 when the text differs from the
+  value the page opened with -- which leaves every `staged != baseline`
+  test on the page reading exactly as it did. Only `staged_value()`
+  knows the difference, which is what that pair was designed for.
+
+  Two things that had to move with it. **`UUI_TEXTBOX_MAX` is 64 now**,
+  matching `SETTING_ABI_VALUE_MAX`, with a `_Static_assert` tying them
+  together -- a shorter field would silently truncate what it was handed,
+  which is a wrong answer rather than a full field. And **`uui_textbox`
+  grew a `disabled` flag**, because it was the only control here without
+  one: a setting the registry has made unavailable must READ as
+  unavailable, and every interactive slot checks it (pointer AND focus
+  ring, since refusing in one leaves the other way in).
+
+  **AND THE SIDEBAR'S PAGE CAP IS REAL.** `MAX_GROUPS` was 16 and one
+  new page made 17, which dropped the Kernel category's last page with
+  no word said -- caught only because `settings_test.py` asserts that
+  page by name. It is 24 now and an overflow is LOGGED, since a missing
+  page looks exactly like a setting nobody registered.
+
 - **`uui_spinbox` IS FOR A NUMBER; `uui_slider` IS FOR AN ORDERED ENUM.**
   A slider shows a magnitude and cannot show or accept an exact value;
   a spinbox does both. A setting gets one by declaring

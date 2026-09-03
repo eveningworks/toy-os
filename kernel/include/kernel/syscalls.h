@@ -289,6 +289,7 @@ int sys_win_clip(struct syscall_ctx *c);
 
 // kernel/core/sys_syscalls.c -- the machine: hardware, settings, power
 int sys_gettime(struct syscall_ctx *c);
+int sys_settime(struct syscall_ctx *c);
 int sys_pci_count(struct syscall_ctx *c);
 int sys_pci_info(struct syscall_ctx *c);
 int sys_cpu_info(struct syscall_ctx *c);

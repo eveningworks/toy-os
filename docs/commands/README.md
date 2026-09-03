@@ -170,6 +170,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`httpd`](httpd.md)
 - [`ifconfig`](ifconfig.md)
 - [`inetd`](inetd.md)
+- [`ntpd`](ntpd.md)
 - [`ping`](ping.md)
 - [`telnetd`](telnetd.md)
 - [`tftpd`](tftpd.md)

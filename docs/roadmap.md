@@ -356,8 +356,17 @@ No dependency on the phases above; ordered among themselves.
 - [ ] Boot-time `fsck` report (check, never repair) behind a config key
 - [ ] Per-record checksums in the table itself
 
+### The clock
+
+- [x] ~~A settable wall clock, on the clocksource rather than the CMOS~~ DONE 2026-09-03 -- `api/ktime.h`, `SYS_SETTIME`, `QUERY_CLOCK`
+- [x] ~~Network time~~ DONE 2026-09-03 -- `/bin/ntpd`, SNTP, three settings under Time & Locale
+- [ ] A slew instead of a step, which needs a rate-adjustable clocksource conversion first
+- [ ] More than one time server, and discarding the outlier -- one server is trusted completely today
+- [ ] Authenticated NTP (NTS) -- a forged reply can set this machine to any time at all
+- [ ] Write the RTC's century register, which `rtc_read()` does not consult either
+
 ### Timezones out of the kernel
-**Needs:** an epoch-based time ABI -- the kernel would hand out UTC and a ring-3 library convert.
+**Needs:** a ring-3 timezone library -- the kernel already hands out UTC internally (`api/ktime.h`).
 
 - [ ] The kernel returns UTC, not local time -- `fs_stat` converts at the syscall boundary today
 - [ ] A ring-3 timezone library reading `/etc/timezones`, so the city database and the DST rules leave the kernel

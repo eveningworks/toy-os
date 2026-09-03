@@ -285,6 +285,14 @@ int sys_console_size(int *cols);
 
 int sys_gettime(struct rtc_time *out);
 
+// Steps the wall clock to `epoch_sec`, seconds since 1970-01-01 UTC,
+// and writes the RTC. 0 on success, -EINVAL for a time out of range.
+//
+// **UTC, unlike sys_gettime()'s LOCAL answer and unlike libc time()'s
+// local-derived epoch** -- see abi/syscall_abi.h's SYS_SETTIME. Round
+// -tripping gettime through here moves the clock by the timezone offset.
+int sys_settime(uint64_t epoch_sec);
+
 // --- memory ----------------------------------------------------------
 
 // Grows the heap by `increment` bytes and returns the OLD break (a

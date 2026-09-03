@@ -41,6 +41,7 @@
 #include "ui/uui_slider.h"
 #include "ui/uui_spinbox.h"
 #include "ui/uui_checkbox.h"
+#include "ui/uui_textbox.h"
 #include "ui/uui_button.h"
 #include "ui/uui_button_group.h"
 #include "ui/uui_statusbar.h"
@@ -52,11 +53,20 @@
 #include "cpuinfo.h"
 #include "version.h"
 
+_Static_assert(UUI_TEXTBOX_MAX >= SETTING_ABI_VALUE_MAX,
+               "a text field must hold a whole setting value, or editing one "
+               "silently truncates it");
+
 #define MAX_SETTINGS   SETTING_ABI_MAX
 // Room for every timezone the kernel ships plus hand-added rows.
 #define MAX_CHOICES    128
 #define MAX_CATEGORIES 12
-#define MAX_GROUPS     16
+// PAGES IN THE SIDEBAR. Raised from 16 when Network Time made 17 and
+// the Kernel category's last page silently vanished -- the overflow was
+// dropped without a word, which is the failure mode this app reports
+// everywhere else (see open_group's "too many settings for one page").
+// It is logged now, so the next one is visible rather than absent.
+#define MAX_GROUPS     24
 // Controls on one page. A group larger than this would be a page nobody
 // can take in anyway; the overflow is REPORTED rather than silently cut.
 #define PAGE_MAX       6
@@ -67,7 +77,7 @@
 #define CHOICES_DROPDOWN_MIN 7
 
 // struct slot's `kind`.
-enum { CTRL_RADIO = 0, CTRL_COMBO, CTRL_SLIDER, CTRL_SPIN };
+enum { CTRL_RADIO = 0, CTRL_COMBO, CTRL_SLIDER, CTRL_SPIN, CTRL_TEXT };
 
 enum { ID_TREE = 1, ID_SIDE_SPLIT, ID_BODY, ID_PAGE, ID_ADVANCED, ID_BUTTONS, ID_STATUS,
        ID_CONTROL_BASE = 100 }; // + slot, so a control names its own row
@@ -185,7 +195,12 @@ struct slot {
     struct uui_dropdown   combo;
     struct uui_slider     slider;
     struct uui_spinbox    spin;
-    // Which of the four is showing. A KIND rather than a set of flags:
+    // FREE TEXT. Until this existed a STRING setting drew an EMPTY radio
+    // list -- a row that looks broken and can only be changed with
+    // `config set`. Every registry client can now edit one, not just the
+    // setting that prompted it.
+    struct uui_textbox    text;
+    // Which of the five is showing. A KIND rather than a set of flags:
     // booleans can express "both" and "neither", and neither is a state
     // this page has.
     int kind;
@@ -201,6 +216,11 @@ struct slot {
     int staged;
     int baseline;
     char staged_buf[SETTING_ABI_VALUE_MAX]; // CTRL_SPIN's staged, as text
+    // CTRL_TEXT's opening value. A text slot cannot express "changed" as
+    // an index, so it keeps `baseline` at 0 and sets `staged` to 1 when
+    // the field differs from this -- which leaves every `staged !=
+    // baseline` test on this page reading exactly as it did.
+    char baseline_buf[SETTING_ABI_VALUE_MAX];
     int choice_count;
     char choice[MAX_CHOICES][SETTING_ABI_VALUE_MAX];      // display names
     char choice_raw[MAX_CHOICES][SETTING_ABI_VALUE_MAX];  // what gets stored
@@ -278,6 +298,12 @@ static void rebuild_sidebar(void) {
         for (int j = 0; j < g_group_count; j++)
             if (strcmp(g_group_cat[j], g_cat_of[i]) == 0 &&
                 strcmp(g_group_key[j], key) == 0) { g = j; break; }
+        if (g < 0 && g_group_count >= MAX_GROUPS) {
+            // SAID, not silently cut. A missing page looks exactly like
+            // a setting nobody registered.
+            ulogf("settings: OVERFLOW -- more than %d pages; %s/%s is not "
+                  "shown\n", MAX_GROUPS, g_cat_of[i], group_key_of(i));
+        }
         if (g < 0 && g_group_count < MAX_GROUPS) {
             g = g_group_count++;
             strlcpy(g_group_cat[g], g_cat_of[i], sizeof g_group_cat[g]);
@@ -478,6 +504,7 @@ static void set_slot_enabled(struct slot *sl, int idx) {
     sl->combo.disabled  = off;
     sl->slider.disabled = off;
     sl->spin.disabled   = off;
+    sl->text.disabled   = off;
 }
 
 static void load_slot(struct slot *sl, int idx) {
@@ -534,13 +561,15 @@ static void load_slot(struct slot *sl, int idx) {
     }
 
     if (g_type[idx] != SETTING_ABI_TYPE_ENUM) {
-        sl->kind = CTRL_RADIO;
-        // Free text has no choices to offer. Shown as an empty control
-        // with an explanation rather than omitted, so the row does not
-        // look broken -- editing one needs a text field, which is why
-        // `config set` exists for these.
-        sl->radio.options = 0;
-        sl->radio.count = 0;
+        // FREE TEXT GETS A FIELD. There are no choices to enumerate, so
+        // the value is edited directly; `staged` is a CHANGED FLAG here
+        // rather than an index (see struct slot).
+        sl->kind = CTRL_TEXT;
+        uui_textbox_init(&sl->text, g_value[idx]);
+        strlcpy(sl->baseline_buf, g_value[idx], sizeof sl->baseline_buf);
+        sl->baseline = 0;
+        sl->staged = 0;
+        sl->choice_count = 0;
         set_slot_enabled(sl, idx);
         return;
     }
@@ -701,6 +730,7 @@ static void open_group(int g) {
 // line, and the two status-bar messages -- and a kind added later would
 // have to find all of them.
 static const char *staged_value(struct slot *sl) {
+    if (sl->kind == CTRL_TEXT) return uui_textbox_text(&sl->text);
     if (sl->kind == CTRL_SPIN) {
         snprintf(sl->staged_buf, sizeof sl->staged_buf, "%d", sl->staged);
         return sl->staged_buf;
@@ -954,6 +984,15 @@ static void relayout_page(void) {
                                             .id = ID_CONTROL_BASE + i,
                                             .flags = UUI_FILL_W };
             FOCUS[FOCUS_COUNT++] = (struct uui_focusable){ &sl->slider, &uui_slider_ops };
+        } else if (sl->kind == CTRL_TEXT) {
+            // FILL_W, unlike the spinbox: a field has no natural width
+            // at all (uui_textbox_natural_size reports 0, meaning "no
+            // preference"), so an unstretched one would be invisible.
+            PAGE[n++] = (struct uui_item){ .ops = &uui_textbox_ops,
+                                            .widget = &sl->text,
+                                            .id = ID_CONTROL_BASE + i,
+                                            .flags = UUI_FILL_W };
+            FOCUS[FOCUS_COUNT++] = (struct uui_focusable){ &sl->text, &uui_textbox_ops };
         } else if (sl->kind == CTRL_SPIN) {
             // NOT UUI_FILL_W: a spinbox wants exactly the width of its
             // widest number plus its steppers, and stretching it across
@@ -1084,7 +1123,12 @@ static void on_widget(struct uapp *a, int id, int reason) {
         // the widget cannot produce a value outside the range the
         // registry gave it. `staged` therefore holds the number itself
         // here and an index everywhere else; see struct slot.
-        sl->staged = sl->kind == CTRL_COMBO   ? uui_dropdown_selected(&sl->combo)
+        // A FIELD REPORTS WHETHER IT DIFFERS, not an index -- there is
+        // no choice list to index into. `baseline` stays 0, so the
+        // page's `staged != baseline` tests keep working unchanged.
+        sl->staged = sl->kind == CTRL_TEXT
+                        ? (strcmp(uui_textbox_text(&sl->text), sl->baseline_buf) != 0)
+                    : sl->kind == CTRL_COMBO   ? uui_dropdown_selected(&sl->combo)
                     : sl->kind == CTRL_SLIDER ? sl->slider.selected
                     : sl->kind == CTRL_SPIN   ? uui_spinbox_value(&sl->spin)
                                               : sl->radio.selected;
@@ -1270,6 +1314,7 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
         struct slot *sl = &g_slot[i];
         int y = sl->kind == CTRL_COMBO ? sl->combo.y
                 : sl->kind == CTRL_SLIDER ? sl->slider.y
+                : sl->kind == CTRL_TEXT   ? sl->text.y
                 : sl->kind == CTRL_SPIN   ? sl->spin.y : sl->radio.y;
         if (y != g_last_y[i]) moved = 1;
     }
@@ -1284,6 +1329,8 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
                 x = sl->slider.x; y = sl->slider.y; w = sl->slider.w; hh = sl->slider.h;
             } else if (sl->kind == CTRL_SPIN) {
                 x = sl->spin.x; y = sl->spin.y; w = sl->spin.w; hh = sl->spin.h;
+            } else if (sl->kind == CTRL_TEXT) {
+                x = sl->text.x; y = sl->text.y; w = sl->text.w; hh = sl->text.h;
             } else {
                 x = sl->radio.x; y = sl->radio.y; w = sl->radio.w; hh = sl->radio.h;
             }
@@ -1302,18 +1349,28 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
                   sl->choice_count,
                   sl->kind == CTRL_COMBO ? "combo"
                     : sl->kind == CTRL_SLIDER ? "slider"
+                    : sl->kind == CTRL_TEXT ? "text"
                     : sl->kind == CTRL_SPIN ? "spin" : "radio");
+            // READ FROM THE CONTROL THAT IS SHOWING. This asked the
+            // radio whatever kind was on screen, which happened to be
+            // right only because set_slot_enabled() sets all of them
+            // together -- a fact one edit away from being false.
+            int shown_off = sl->kind == CTRL_COMBO  ? sl->combo.disabled
+                          : sl->kind == CTRL_SLIDER ? sl->slider.disabled
+                          : sl->kind == CTRL_SPIN   ? sl->spin.disabled
+                          : sl->kind == CTRL_TEXT   ? sl->text.disabled
+                                                    : sl->radio.disabled;
             ulogf("settings: enabled %d %s %d\n", i,
                   sl->setting >= 0 ? g_name[sl->setting] : "-",
-                  sl->radio.disabled ? 0 : 1);
+                  shown_off ? 0 : 1);
             // WHAT IS STORED AND WHAT IS SHOWN, side by side. They are
             // different strings for a setting whose choices carry
             // display names ("losangeles" / "Los Angeles"), and a
             // screendump cannot tell a missing display name from a
             // value that happens to look like one. `shown` goes LAST
             // because it contains spaces.
-            if (sl->kind != CTRL_SPIN && sl->staged >= 0 &&
-                sl->staged < sl->choice_count) {
+            if (sl->kind != CTRL_SPIN && sl->kind != CTRL_TEXT &&
+                sl->staged >= 0 && sl->staged < sl->choice_count) {
                 ulogf("settings: choice %d %s raw %s shown %s\n", i,
                       sl->setting >= 0 ? g_name[sl->setting] : "-",
                       sl->choice_raw[sl->staged], sl->choice[sl->staged]);

@@ -31,6 +31,61 @@ this the obvious way), not from how much history it accumulated.
   `python3 tools/vm.py --kvm --cpu host,+invtsc`. `notsc` on the GRUB
   line forces the PIT back, so the coarse path stays reachable -- same
   rule as `nopat`/`ata nodma`.
+- **THE WALL CLOCK IS A SOFTWARE CLOCK ANCHORED TO THE CLOCKSOURCE, AND
+  THE RTC IS READ ONCE AT BOOT.** `api/ktime.h` holds two numbers -- an
+  epoch and the clocksource reading it was taken at -- and every query is
+  the difference added to the epoch. Before this, `rtc_read_local()` did
+  a CMOS read per call, so the taskbar's once-a-second redraw spun on the
+  update-in-progress flag and the clock could only ever move in whole
+  seconds. This is Linux's timekeeping in miniature, and it is
+  deliberately NOT a `struct clocksource`: a clocksource must be
+  monotonic and this one jumps whenever it is set, which is the exact
+  distinction `clocksource.h` already refuses to blur.
+
+  **`ktime` IS UTC. `SYS_GETTIME` ANSWERS IN LOCAL CIVIL TIME. libc's
+  `time()` IS A LOCAL-DERIVED EPOCH. No two of those three are
+  interchangeable**, and the one that bites is `SYS_SETTIME`, which takes
+  **UTC** -- so a client that reads `SYS_GETTIME`, adds a second and
+  passes it back moves the clock by the timezone offset. NTP hands out
+  UTC, which is the caller it exists for. `QUERY_CLOCK` is the only way
+  ring 3 can read UTC at all, and it exists because nothing else could.
+
+  **A set STEPS, and write-back to the CMOS is part of it.** `rtc_write()`
+  brackets its six register writes with register B's SET bit, which
+  freezes the RTC's own update cycle -- without it a write landing
+  mid-update is discarded, and the failure is a clock that is right four
+  times in five. It reads back the BCD and 12-hour bits rather than
+  imposing 24-hour binary, because that setting belongs to whatever else
+  boots on the same hardware. A failed CMOS write does NOT fail the set:
+  the correction is already live and all that is lost is its surviving a
+  reboot, which is logged.
+
+  **AND QEMU RE-SEEDS ITS RTC FROM THE HOST CLOCK ON MACHINE RESET**, so
+  no test under emulation can prove the write survived a reboot --
+  measured, by watching the guest's own boot-time "rtc: hardware clock
+  reads" line come back matching the host to the second.
+  `tools/ntp_test.py` SKIPS that one check and says which case it saw;
+  the write itself is proved in-boot by a KTEST reading the hardware back.
+- **SETTING THE CLOCK IS `SYS_SETTIME`, AND SPEAKING NTP IS A RING-3
+  PROGRAM'S JOB.** The kernel exposes one verb for the clock and knows
+  nothing about servers, intervals or protocols -- the same split that
+  keeps DHCP in `/bin/dhcp` behind `SYS_NET_CONFIG`. `/bin/ntpd` is SNTP
+  (RFC 4330): one server, and a STEP rather than a slew, because
+  `ktime`'s epoch-plus-delta has no tick rate to adjust. Anything
+  measuring an interval uses `SYS_MONOTONIC_NS`, which a step cannot
+  move, so the blast radius of a step is bounded to wall-clock readers.
+
+  **The three settings live in the registry, and the service is started
+  always and idle until one of them says otherwise.** `system.ntp` ships
+  `off`, so a stock machine sends no packet to anyone; turning it on in
+  System Settings needs no service enabled as well, which is
+  `systemd-timesyncd`'s shape. Contrast `telnetd`/`tftpd`, which ship
+  DISABLED because they have no setting to gate them.
+
+  **`SYS_SETTIME` has no permission check, and that is a gap rather than
+  a decision** -- there is one user here and no capability model, so any
+  process can move the clock. Linux gates it behind `CAP_SYS_TIME`; this
+  is one of the calls that grows a check when multi-user lands.
 - **The kernel's idle work has ONE owner: `scheduler_idle()`**
   (`api/scheduler.h`). Any loop that is waiting rather than working
   calls it -- the physical shell's key wait, `wm.c`'s event loop, a

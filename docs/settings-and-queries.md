@@ -194,9 +194,18 @@ in the UI drifts the moment a subsystem adds a key.
 `SETTING_TYPE_ENUM` needs a `choice` enumerator and gets radio buttons,
 a dropdown or a slider depending on how many options there are (and on
 what `/etc/settings.d` says). `SETTING_TYPE_STRING` is free text with no
-enumerator. `SETTING_TYPE_INT` is a bounded number: declare `min`, `max`
+enumerator, and System Settings gives it a **text field** — it used to
+draw an empty control that could only be changed with `config set`.
+`SETTING_TYPE_INT` is a bounded number: declare `min`, `max`
 and `step`, optionally a `unit` (`"%"`, `"px"`, `"ms"`), and System
 Settings gives it a spinbox.
+
+**A string setting validates in its own `apply`**, because the registry
+range-checks an INT and enumerates an ENUM's choices but has nothing to
+check free text against. `system.ntp_server` refuses an empty value and
+anything carrying whitespace — the `/etc` parser reads `key=value` to
+end of line, so an embedded space would be stored and read back as a
+different string than was typed.
 
 **The registry enforces an INT's range**, so `config set`, a hand-edited
 `/etc` file and a widget are all checked the same way — a value outside

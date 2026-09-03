@@ -56,6 +56,7 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_LISTDIR]       = { "listdir",       sys_listdir,       { A_PATH, A_HEX, A_INT } },
     [SYS_LISTDIR_AT]    = { "listdir_at",    sys_listdir_at,    { A_HEX } },
     [SYS_GETTIME]       = { "gettime",       sys_gettime,       { A_HEX } },
+    [SYS_SETTIME]       = { "settime",       sys_settime,       { A_INT } },
     [SYS_YIELD]         = { "yield",         sys_yield,         { A_END } },
     [SYS_SOCKET]        = { "socket",        sys_socket,        { A_INT, A_INT, A_INT } },
     [SYS_SEND]          = { "send",          sys_send,          { A_FD, A_BUF, A_INT } },

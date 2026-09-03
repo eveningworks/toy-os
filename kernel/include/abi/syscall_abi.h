@@ -522,6 +522,31 @@ struct listdir_request {
                        // 0.0.0.0) and an Announcement from one that has
                        // it.
 
+#define SYS_SETTIME 95 // RDI = seconds since 1970-01-01 00:00:00 **UTC**.
+                       // Steps the wall clock there and writes the RTC,
+                       // so the correction survives a reboot. Returns 0,
+                       // or -EINVAL for a time outside 1970..9999.
+                       //
+                       // **THE ARGUMENT IS UTC; SYS_GETTIME'S ANSWER IS
+                       // LOCAL.** They are not inverses, and that is
+                       // deliberate rather than an oversight: the kernel
+                       // holds UTC (api/ktime.h) and applies the
+                       // configured city's offset only when handing out
+                       // broken-down civil time (api/tz.h). A client
+                       // that reads SYS_GETTIME, adds a second and
+                       // passes it back here moves the clock by the
+                       // timezone offset. NTP hands out UTC, which is
+                       // the caller this exists for.
+                       //
+                       // Note also that libc's time() is neither -- it
+                       // is a LOCAL-derived epoch, matching the
+                       // filesystem's stored timestamps. See
+                       // userland/include/time.h.
+                       //
+                       // A STEP, not a slew: SYS_MONOTONIC_NS is what an
+                       // interval is measured with, and this cannot move
+                       // it.
+
 #define SYS_LISTDIR_AT 94 // RDI = pointer to a `struct listdir_request`.
                           // SYS_LISTDIR with an OFFSET: fills the array
                           // from the `start`'th entry of the directory

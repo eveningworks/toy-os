@@ -27,4 +27,20 @@ struct rtc_time {
 
 void rtc_read(struct rtc_time *t);
 
+// Writes `t` back to the CMOS. Returns 1, or 0 if the values are not a
+// date the RTC can hold (the caller is expected to have derived them
+// from a real clock, so this is a guard, not a validator).
+//
+// **THE RTC IS NOT THE WALL CLOCK ANY MORE** -- api/ktime.h is, and it
+// reads this once at boot. Call ktime_set() to correct the time;
+// reaching for this directly moves the hardware without moving the
+// clock everything actually reads, and the two then disagree until the
+// next reboot.
+//
+// The write is bracketed by register B's SET bit, which freezes the
+// RTC's own update cycle: without it a write landing mid-update is
+// discarded or half-applied, and the failure is a clock that is right
+// four times out of five.
+int rtc_write(const struct rtc_time *t);
+
 #endif

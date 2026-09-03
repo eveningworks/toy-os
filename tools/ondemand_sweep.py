@@ -122,6 +122,9 @@ TOOLS = [
     # path, since nothing in any gate boots a machine and looks at what
     # it configured itself with.
     ("net",         "net_test.py",             "the stack on both NICs, and DHCP",   True,  None,                   False),
+    # Network time. Its server is on this machine's loopback, so it
+    # reaches no external host and does not need connectivity.
+    ("ntp",         "ntp_test.py",             "SNTP, SYS_SETTIME and the wall clock", True, None,                   False),
     # The remote-access pair, which is the only way to work on the
     # bare-metal laptop at all. Enables services that ship DISABLED and
     # leaves them enabled on disk.img -- run `make clean-disk && make

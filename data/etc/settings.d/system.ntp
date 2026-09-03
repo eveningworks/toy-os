@@ -1,0 +1,4 @@
+Description=Keep the clock set from a time server on the network
+Order=10
+Choice.on=On
+Choice.off=Off

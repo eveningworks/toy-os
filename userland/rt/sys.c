@@ -472,6 +472,10 @@ int sys_gettime(struct rtc_time *out) {
     return (int)err(syscall1(SYS_GETTIME, (uint64_t)(uintptr_t)out));
 }
 
+int sys_settime(uint64_t epoch_sec) {
+    return (int)err(syscall1(SYS_SETTIME, epoch_sec));
+}
+
 // --- memory ----------------------------------------------------------
 
 void *sys_sbrk(int64_t increment) {

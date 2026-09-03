@@ -1,0 +1,2 @@
+Description=How often to ask. A failed sync retries sooner than this
+Order=30

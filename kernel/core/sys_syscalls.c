@@ -23,6 +23,7 @@
 #include "power.h"     // SYS_POWEROFF -- the desktop's shut down/restart
 #include "crashtest.h" // SYS_CRASHTEST -- deliberate faults, see crash_abi.h
 #include "tz.h"
+#include "ktime.h"
 #include "string.h"
 #include <stddef.h>
 
@@ -90,6 +91,25 @@ int sys_gettime(struct syscall_ctx *c) {
         vmm_copy_to_user(pml4, c->a0, &t, sizeof t); // range validated just above
         c->regs[14] = 0;
     }
+    return 0;
+}
+
+int sys_settime(struct syscall_ctx *c) {
+    // NO PERMISSION CHECK, and that is a gap rather than a decision:
+    // there is one user here and no capability model, so any process can
+    // move the clock. Linux gates this behind CAP_SYS_TIME. When
+    // docs/roadmap.md's multi-user work lands, this is one of the calls
+    // that grows a check.
+    if (!ktime_set(c->a0)) {
+        c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+        return 0;
+    }
+    // LOGGED, because a clock stepping under a running system explains
+    // otherwise inexplicable things -- a timeout that fired instantly, a
+    // file whose mtime is in the future -- and `dmesg` is where somebody
+    // looks. Real kernels log the same event for the same reason.
+    klog_printf("ktime: clock stepped by %lld s\n", (long long)ktime_last_step());
+    c->regs[14] = 0;
     return 0;
 }
 
