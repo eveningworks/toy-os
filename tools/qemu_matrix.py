@@ -37,7 +37,6 @@ USAGE
 """
 import argparse
 import os
-import shutil
 import subprocess
 import sys
 
@@ -68,12 +67,14 @@ def run_suite(tag, virtio, timeout):
     # open in the user's own QEMU.
     work = ".qemu_matrix"
     os.makedirs(work, exist_ok=True)
-    shutil.copyfile("disk.img", f"{work}/disk.img")
+    # Sparse, always: disk.img is ~4 MB of data in a 9 GB sparse file, and
+    # a hole-filling copy costs the 9 GB (CLAUDE.md).
+    subprocess.run(["cp", "--reflink=auto", "--sparse=always", "disk.img", f"{work}/disk.img"], check=True)
     args = ["python3", "tools/ktest_run.py", "-v",
             "--disk", f"{work}/disk.img",
             "--qemu-log", f"{work}/qemu.log"]
     if virtio:
-        shutil.copyfile("disk.img", f"{work}/virtio.img")
+        subprocess.run(["cp", "--reflink=auto", "--sparse=always", "disk.img", f"{work}/virtio.img"], check=True)
         args += ["--virtio-disk", f"{work}/virtio.img"]
     cmd = ["docker", "run", "--rm", "-v", f"{os.getcwd()}:/toyos", tag] + args
     try:

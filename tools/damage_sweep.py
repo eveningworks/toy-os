@@ -54,11 +54,10 @@ rather than trusting the existing walk to cover it.
 import argparse
 import random
 import sys
-import time
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gui_debug import DebugConsole              # noqa: E402
+from gui_debug import DebugConsole, enter_gui   # noqa: E402
 from qmp_test import QMPSession                 # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
@@ -246,9 +245,7 @@ def main():
 
     if not args.in_gui:
         qmp = QMPSession(port=args.qmp_port)
-        qmp.send_text("gui")
-        qmp.send_key("ret")
-        time.sleep(2.0)
+        enter_gui(qmp, sock=args.sock)   # types nothing if the desktop is up
 
     dbg = DebugConsole(args.sock)
     dbg.damage_verify(True)

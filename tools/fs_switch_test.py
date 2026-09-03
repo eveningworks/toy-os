@@ -88,8 +88,9 @@ def main():
         sys.exit("fs_switch_test: no disk.img -- run `make iso` first")
     tmp = tempfile.mkdtemp(prefix="fsswitch.")
     copy = os.path.join(tmp, "switch.img")
-    # --reflink keeps the copy cheap on Btrfs/XFS; plain copy elsewhere.
-    subprocess.run(["cp", "--reflink=auto", disk, copy], check=True)
+    # --reflink keeps the copy cheap on Btrfs/XFS; --sparse keeps a 9 GB
+    # sparse image from filling its holes elsewhere (CLAUDE.md).
+    subprocess.run(["cp", "--reflink=auto", "--sparse=always", disk, copy], check=True)
 
     try:
         print("fs_switch_test: boot 1 (build image)")

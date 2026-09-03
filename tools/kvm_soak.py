@@ -77,7 +77,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gui_debug import DebugConsole          # noqa: E402
+from gui_debug import DebugConsole, enter_gui   # noqa: E402
 from qmp_test import QMPSession             # noqa: E402
 import vm                                   # noqa: E402
 
@@ -147,9 +147,7 @@ def real_themes(dbg):
 
 def drive_workload(dbg, qmp, rounds):
     """Enter the GUI, open Control Panel, and change a setting repeatedly."""
-    qmp.send_text("gui")
-    qmp.send_key("ret")
-    time.sleep(2.5)
+    enter_gui(qmp, sock=dbg.sock_path)   # polls readiness; types nothing if up
 
     dbg.send("gui spawn " + CPANEL)
     deadline = time.time() + 12

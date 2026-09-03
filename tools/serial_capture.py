@@ -56,10 +56,9 @@ def capture(sock_path, seconds, send=None, settle=2.0, enter_gui=False,
     if enter_gui:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from qmp_test import QMPSession
+        from gui_debug import enter_gui as _enter_gui
         qmp = QMPSession(port=qmp_port)
-        qmp.send_text("gui")
-        qmp.send_key("ret")
-        time.sleep(4)
+        _enter_gui(qmp, sock=sock_path)   # polls readiness; types nothing if up
 
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.connect(sock_path)
