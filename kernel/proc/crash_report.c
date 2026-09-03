@@ -57,7 +57,7 @@ uint32_t crash_report_write(const char *what, const uint64_t *regs, uint64_t cr2
     }
 
     char exec[64];
-    if (!scheduler_exec_path(pid, exec, sizeof exec)) k_strcpy(exec, "?");
+    if (!scheduler_exec_path(pid, exec, sizeof exec)) k_strlcpy(exec, "?", sizeof exec);
     const char *base = k_path_basename(exec);
 
     char path[64];

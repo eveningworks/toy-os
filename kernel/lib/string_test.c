@@ -20,7 +20,7 @@ KTEST("string", "the original six still do what callers assume") {
     KTEST_ASSERT_EQ((uint8_t)buf[0], 0xAB);
     KTEST_ASSERT_EQ((uint8_t)buf[7], 0xAB);
 
-    k_strcpy(buf, "hi");
+    k_strlcpy(buf, "hi", sizeof buf);
     KTEST_ASSERT(eq(buf, "hi"));
 }
 
@@ -111,12 +111,12 @@ KTEST("string", "memcmp and overlapping memmove") {
 
     // Overlap in both directions -- the case k_memcpy gets wrong.
     char buf[8];
-    k_strcpy(buf, "abcdef");
+    k_strlcpy(buf, "abcdef", sizeof buf);
     k_memmove(buf + 1, buf, 6); // shift right: dst > src
     buf[7] = '\0';
     KTEST_ASSERT(eq(buf, "aabcdef"));
 
-    k_strcpy(buf, "abcdef");
+    k_strlcpy(buf, "abcdef", sizeof buf);
     k_memmove(buf, buf + 1, 6); // shift left: dst < src
     KTEST_ASSERT(eq(buf, "bcdef"));
 }

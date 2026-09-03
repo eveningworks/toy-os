@@ -113,7 +113,7 @@ static void fp_join(char *out, const char *dir, const char *name) {
 // typed filename has no legitimate reason to contain here.
 static void fp_resolve_typed(char *out) {
     const char *typed = g_name_box.buf;
-    if (typed[0] == '/') k_strcpy(out, typed);
+    if (typed[0] == '/') k_strlcpy(out, typed, FS_PATH_MAX);
     else fp_join(out, g_cwd, typed);
 }
 
@@ -154,7 +154,7 @@ static void fp_refresh_listing(void) {
     static struct sys_dirent ents[FP_MAX_ENTRIES];
     int n = wm_fs_list(g_cwd, ents, FP_MAX_ENTRIES);
     for (int i = 0; i < n && g_entry_count < FP_MAX_ENTRIES; i++) {
-        k_strcpy(g_entries[g_entry_count].name, ents[i].name);
+        k_strlcpy(g_entries[g_entry_count].name, ents[i].name, sizeof g_entries[g_entry_count].name);
         g_entries[g_entry_count].is_dir = (int)ents[i].is_dir;
         g_entry_count++;
     }
@@ -179,8 +179,8 @@ static void fp_refresh_listing(void) {
 // turned out to be a directory (fp_confirm()) gets validated before
 // becoming the active listing.
 static void fp_set_dir(const char *dir) {
-    if (dir && (k_strcmp(dir, "/") == 0 || wm_fs_is_dir(dir))) k_strcpy(g_cwd, dir);
-    else k_strcpy(g_cwd, "/");
+    if (dir && (k_strcmp(dir, "/") == 0 || wm_fs_is_dir(dir))) k_strlcpy(g_cwd, dir, sizeof g_cwd);
+    else k_strlcpy(g_cwd, "/", sizeof g_cwd);
     fp_refresh_listing();
 }
 
@@ -250,7 +250,7 @@ void file_picker_open_with(enum file_picker_mode mode, const char *title,
                             void (*on_choose)(const char *path),
                             void (*on_cancel)(void)) {
     g_mode = mode;
-    k_strcpy(g_title, title);
+    k_strlcpy(g_title, title, sizeof g_title);
     g_on_choose = on_choose;
     g_on_cancel = on_cancel;
 
@@ -346,13 +346,13 @@ void file_picker_draw(void) {
 
         char label[FS_PATH_MAX + 2];
         if (is_up) {
-            k_strcpy(label, "../");
+            k_strlcpy(label, "../", sizeof label);
         } else if (e->is_dir) {
-            k_strcpy(label, e->name);
+            k_strlcpy(label, e->name, sizeof label);
             int n = (int)k_strlen(label);
             if (n < (int)sizeof(label) - 1) { label[n] = '/'; label[n + 1] = '\0'; }
         } else {
-            k_strcpy(label, e->name);
+            k_strlcpy(label, e->name, sizeof label);
         }
         // Clipped to the row's pixels, not cut at a character count: the
         // face is proportional, so a count is not a width.

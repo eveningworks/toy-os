@@ -147,6 +147,12 @@ trips them before it knows to look anything up.
     anything kernel-only -- `geom.h` draws through a **callback**, never
     into a framebuffer, which is what lets one implementation serve the
     kernel, a ring-3 app and a test with no display at all.
+  - **There is no `k_strcpy`: a copy is `k_strlcpy` with the DESTINATION's
+    size**, never guessed, and the ring-3 C library keeps `strcpy` on its
+    own loop because its bar is completeness. **And the `write_dec`/
+    `write_hex` chains beside `*_printf` are FROZEN per file** by
+    `tools/check_chains.py` -- a ratchet that only goes down; new number
+    formatting is `vga_printf()`/`klog_printf()`.
   - **A formatter that doesn't fit its buffer writes NOTHING** rather
     than a truncated (i.e. wrong) value, and **a parser REJECTS rather
     than guesses**. Adding follows this file's usual bar: **a second
@@ -1298,7 +1304,7 @@ cost".
   write lock. Static checks, run by it or beside it: `check_deps.py`,
   `check_layout.py`, `check_dispatch.py`, `check_widget_ops.py`,
   `check_key_routing.py`, `check_drivers.py`, `check_initcalls.py`,
-  `check_copy_user.py`,
+  `check_copy_user.py`, `check_chains.py`,
   `check_docs.py`,
   `check_licenses.py`, `check_config_size.py`,
   `check_tool_coverage.py`, `check_tool_commands.py`, and

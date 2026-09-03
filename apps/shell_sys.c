@@ -919,7 +919,7 @@ void cmd_run(const char *name_and_args) {
     // should receive -- the same first-word/rest split dispatch() does,
     // needed again here because `run`'s argument arrives as one string.
     char name[LINE_MAX];
-    k_strcpy(name, name_and_args);
+    k_strlcpy(name, name_and_args, sizeof name);
     char *bin_args = name;
     while (*bin_args && *bin_args != ' ') bin_args++;
     if (*bin_args == ' ') {

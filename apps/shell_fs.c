@@ -261,7 +261,7 @@ void cmd_cd(const char *args) {
         vga_putc('\n');
         return;
     }
-    k_strcpy(cwd, path);
+    k_strlcpy(cwd, path, FS_PATH_MAX);
     // Tell the kernel too, so a ring-3 program started from here with
     // `run` or `spawn` inherits where this shell is standing. Without
     // it the two notions of "here" silently disagree: `cd /docs` then
@@ -448,7 +448,7 @@ void cmd_fsformat(const char *args) {
     }
     vga_write("fsformat: formatting with "); vga_write(name); vga_write("...\n");
     if (fs_format_backend(name)) {
-        k_strcpy(cwd, "/"); // the old working directory no longer exists
+        k_strlcpy(cwd, "/", FS_PATH_MAX); // the old working directory no longer exists
         vga_write("fsformat: done -- active filesystem is now ");
         vga_write(fs_backend_name());
         vga_putc('\n');

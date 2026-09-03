@@ -855,10 +855,10 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [x] ~~Files, Task Manager, Settings and UI Demo onto the layout log's vocabulary~~ DONE 2026-09-03 -- and eight widgets gained `bounds`
 - [x] ~~Two unclipped string draws in fixed boxes, and the tray's `strlen * char_w` hit box~~ DONE 2026-09-03
 - [ ] Calculator sets `.layout` without `.widgets` and lives on `uui_button_group`; a checker for "layout but no router"
-- [ ] `k_strcpy` vs `k_strlcpy`, 161 vs 21, with no rule written anywhere -- decide, then a checker or a doc line
-- [ ] `write_dec`/`write_hex` chains beside `*_printf` -- 82 chains in `apps/`, 59 of them in `shell_sys.c`; nothing says which to use
+- [x] ~~`k_strcpy` vs `k_strlcpy` with no rule written anywhere~~ DONE 2026-09-03 -- `k_strcpy` deleted (it was 30 vs 206)
+- [x] ~~`write_dec`/`write_hex` chains beside `*_printf`~~ DONE 2026-09-03 -- frozen per file by `check_chains.py`
 - [x] ~~26 copy-to/from-user calls discard their result under a "validated above" comment~~ DONE 2026-09-03 -- the checker refuses it
-- [ ] `docs/decisions/` still says `Milestone N` ~50 times in prose; `check_docs.py` only rejects numbered headings
+- [x] ~~`docs/decisions/` still says `Milestone N` in prose~~ DONE 2026-09-03 -- frozen per file by `check_docs.py`
 - [x] ~~~24 GUI tools byte-compare raw screendumps; 8 use `stable_pixels()`~~ DONE 2026-09-03 -- `screenshot()` settles by default
 - [x] ~~51 tools take only `--qmp-port` (default 4445) and never launch, so `port_guard` cannot see them~~ DONE 2026-09-03 -- `--instance N`
 - [x] ~~Three tools hand-roll `send_text("gui")` plus a sleep instead of `enter_gui()`~~ DONE 2026-09-03

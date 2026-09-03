@@ -55,7 +55,7 @@ static void listdir_collect(const char *name, uint32_t size, int is_dir) {
     if (g_listdir_count >= g_listdir_max) return;
     struct sys_dirent entry;
     struct sys_dirent *e = &entry;
-    k_strcpy(e->name, name);
+    k_strlcpy(e->name, name, sizeof e->name);
     e->size = size;
     e->is_dir = (uint32_t)is_dir;
 
@@ -68,12 +68,12 @@ static void listdir_collect(const char *name, uint32_t size, int is_dir) {
     // than reading stale/garbage struct bytes.
     char full_path[FS_PATH_MAX];
     size_t dl = k_strlen(g_listdir_dir_path);
-    k_strcpy(full_path, g_listdir_dir_path);
+    k_strlcpy(full_path, g_listdir_dir_path, sizeof full_path);
     if (dl > 1) { // dir isn't just "/" -- needs a separating slash
         if (dl + 1 < FS_PATH_MAX) { full_path[dl] = '/'; full_path[dl + 1] = '\0'; dl++; }
     }
     size_t nl = k_strlen(name);
-    if (dl + nl < FS_PATH_MAX) k_strcpy(full_path + dl, name);
+    if (dl + nl < FS_PATH_MAX) k_strlcpy(full_path + dl, name, FS_PATH_MAX - dl);
 
     struct fs_stat_info st;
     if (fs_stat(full_path, &st)) {
@@ -193,7 +193,7 @@ int sys_open(struct syscall_ctx *c) {
                     c->regs[14] = (uint64_t)(int64_t)ferr;
                     return 0;
                 }
-                k_strcpy(fd_desc[di].file.name, name);
+                k_strlcpy(fd_desc[di].file.name, name, sizeof fd_desc[di].file.name);
                 fd_desc[di].file.mode = want_write ? FD_MODE_WRITE : FD_MODE_READ;
                 fd_desc[di].file.pos = 0;
                 // Read-only fds ignore it, so it is not worth refusing
@@ -260,7 +260,7 @@ static int listdir_common(struct syscall_ctx *c, uint64_t path_ptr,
         g_listdir_count = 0;
         g_listdir_seen = 0;
         g_listdir_start = start;
-        k_strcpy(g_listdir_dir_path, path); // see listdir_collect()'s per-entry fs_stat()
+        k_strlcpy(g_listdir_dir_path, path, sizeof g_listdir_dir_path); // see listdir_collect()'s per-entry fs_stat()
         fs_list(path, listdir_collect);
         c->regs[14] = g_listdir_count;
         g_listdir_out = 0; // don't leave a stale user pointer armed

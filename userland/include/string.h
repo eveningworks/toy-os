@@ -77,7 +77,13 @@ int memcmp(const void *a, const void *b, size_t n);
 static inline size_t strlen(const char *s) { return k_strlen(s); }
 static inline int strcmp(const char *a, const char *b) { return k_strcmp(a, b); }
 static inline int strncmp(const char *a, const char *b, size_t n) { return k_strncmp(a, b, n); }
-static inline char *strcpy(char *dst, const char *src) { return k_strcpy(dst, src); }
+// C's contract, kept because tolibc aims to be COMPLETE; the kernel has
+// no k_strcpy any more (string.h, api), so this is its own loop.
+static inline char *strcpy(char *dst, const char *src) {
+    char *d = dst;
+    while ((*d++ = *src++)) {}
+    return dst;
+}
 static inline char *strchr(const char *s, int c) { return k_strchr(s, (char)c); }
 static inline char *strrchr(const char *s, int c) { return k_strrchr(s, (char)c); }
 static inline char *strstr(const char *h, const char *n) { return k_strstr(h, n); }

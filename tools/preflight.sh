@@ -180,6 +180,9 @@ python3 tools/check_initcalls.py || fail "initcall check"
 step "check_copy_user.py (a vmm_copy_*_user() result tested as an errno)"
 python3 tools/check_copy_user.py || fail "copy-user check"
 
+step "check_chains.py (a write_dec/write_hex chain that grew)"
+python3 tools/check_chains.py || fail "chain freeze"
+
 step "check_tool_commands.py (a tool driving a command that no longer exists)"
 python3 tools/check_tool_commands.py || fail "tool command check"
 

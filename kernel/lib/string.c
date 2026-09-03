@@ -30,12 +30,6 @@ void k_memcpy(void *dst, const void *src, size_t n) {
     for (size_t i = 0; i < n; i++) d[i] = s[i];
 }
 
-char *k_strcpy(char *dst, const char *src) {
-    char *orig = dst;
-    while ((*dst++ = *src++));
-    return orig;
-}
-
 size_t k_strlcpy(char *dst, const char *src, size_t n) {
     size_t src_len = k_strlen(src);
     if (n > 0) {

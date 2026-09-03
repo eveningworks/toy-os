@@ -3512,6 +3512,13 @@ window without going through it will find its layout polls timing out.
   probe called by hand (the bus already calls it). Static, over the
   source, because the in-kernel `initcall` KTEST can see "never ran"
   at boot but not "ran twice". Run by `preflight.sh`.
+- **`check_chains.py`** -- a file that gained a `vga_write_dec`/`_hex`
+  or `klog_write_dec`/`_hex` chain call beyond its frozen count, or a
+  file that started one. The 109 that exist stay (62 in
+  `apps/shell_sys.c`, which the roadmap wants in ring 3); the point is
+  that `*_printf` is what new code writes. The baseline is a ratchet:
+  the script prints the lower number when a file drops. Run by
+  `preflight.sh`.
 - **`check_copy_user.py`** -- a `vmm_copy_*_user()` result compared
   with `< 0`. The helpers return 1/0 and never negative, so that branch
   is dead and the handler runs on an unfilled buffer; twelve socket

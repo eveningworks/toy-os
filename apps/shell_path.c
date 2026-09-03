@@ -77,7 +77,7 @@ static void parse_path(const char *spec) {
 void shell_path_init(void) {
     char spec[FS_PATH_MAX * 2];
     if (!etc_config_get(SHELL_PATH_CONF, SHELL_PATH_KEY, spec, sizeof(spec)) || spec[0] == '\0') {
-        k_strcpy(spec, SHELL_PATH_DEFAULT);
+        k_strlcpy(spec, SHELL_PATH_DEFAULT, sizeof spec);
     }
     parse_path(spec);
 }
@@ -114,7 +114,7 @@ int shell_path_find(const char *name, char *out) {
             char resolved[FS_PATH_MAX];
             if (!resolve_path(name, resolved)) return 0;
             if (!fs_exists(resolved) || fs_is_dir(resolved)) return 0;
-            k_strcpy(out, resolved);
+            k_strlcpy(out, resolved, FS_PATH_MAX);
             return 1;
         }
     }
@@ -123,7 +123,7 @@ int shell_path_find(const char *name, char *out) {
         char candidate[FS_PATH_MAX];
         if (!join_path(g_dirs[i], name, candidate)) continue;
         if (fs_exists(candidate) && !fs_is_dir(candidate)) {
-            k_strcpy(out, candidate);
+            k_strlcpy(out, candidate, FS_PATH_MAX);
             return 1; // first match wins, left to right
         }
     }

@@ -22,7 +22,7 @@ int k_path_join(const char *dir, const char *name, char *out, size_t cap) {
     // /tmp, it doesn't mean "cwd + /tmp".
     if (k_path_is_absolute(name)) {
         if (k_strlen(name) + 1 > cap) return 0;
-        k_strcpy(out, name);
+        k_strlcpy(out, name, cap);
         return 1;
     }
 

@@ -24,7 +24,6 @@ size_t k_strlen(const char *s);
 int k_strcmp(const char *a, const char *b);
 void k_memset(void *dst, uint8_t val, size_t n);
 void k_memcpy(void *dst, const void *src, size_t n);
-char *k_strcpy(char *dst, const char *src);
 int k_strncmp(const char *a, const char *b, size_t n);
 
 // Copies at most `n` bytes and ALWAYS NUL-terminates, unlike C's
@@ -40,9 +39,10 @@ size_t k_strlcpy(char *dst, const char *src, size_t n);
 // `>= n` means it was truncated -- BSD strlcat's contract, matching
 // k_strlcpy above.
 //
-// Added for the hand-rolled `k_strcpy(dst + k_strlen(dst), src)` idiom,
+// Added for the hand-rolled `strcpy(dst + strlen(dst), src)` idiom,
 // which is an UNBOUNDED append however carefully the destination was
-// sized: the shell's `ls` argument builder overflowed its buffer with
+// sized (there is no k_strcpy any more, for the same reason): the
+// shell's `ls` argument builder overflowed its buffer with
 // enough flags in front of a long path.
 //
 // Not for building a large buffer in a loop: it rescans `dst` on every

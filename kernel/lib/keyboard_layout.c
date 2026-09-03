@@ -247,12 +247,12 @@ int keyboard_layout_load(const char *name) {
     // g_current_name ends up "us" so keyboard_layout_current() always
     // reflects what's actually active, not what was asked for.
     if (k_strcmp(name, "us") != 0 && load_from_file("us")) {
-        k_strcpy(g_current_name, "us");
+        k_strlcpy(g_current_name, "us", sizeof g_current_name);
         return 0;
     }
 
     apply_fallback_us();
-    k_strcpy(g_current_name, "us");
+    k_strlcpy(g_current_name, "us", sizeof g_current_name);
     return 0;
 }
 

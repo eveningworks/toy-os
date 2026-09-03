@@ -85,6 +85,57 @@ def check_roadmap_has_no_versions(problems):
                             f"version\n      {line.strip()[:90]}")
 
 
+# `Milestone N` in PROSE is frozen per file (2026-09-03): a reference
+# written when the number was current stays as history, resolved by the
+# legend at the end of roadmap-details.md, but no file may gain one and
+# no new file may start. A ratchet, not a fact: only ever lower it.
+MILESTONE_PROSE_BASELINE = {
+    "README.md": 1,
+    "apps/README.md": 1,
+    "data/wm/startup/README.md": 1,
+    "kernel/README.md": 1,
+    ".claude/skills/toy-os-feature-workflow/SKILL.md": 3,
+    ".claude/skills/toy-os-feature-workflow/references/delivery-checklist.md": 1,
+    ".claude/skills/toy-os-feature-workflow/references/doc-templates.md": 1,
+    ".claude/skills/toy-os-feature-workflow/references/questions-that-worked.md": 2,
+    ".claude/skills/toy-os-feature-workflow/references/session-design.md": 13,
+    ".claude/skills/toy-os-feature-workflow/references/session-diagnosis.md": 1,
+    ".claude/skills/toy-os-feature-workflow/references/session-gui.md": 2,
+    ".claude/skills/toy-os-feature-workflow/references/session-testing.md": 1,
+    "CLAUDE.md": 1,
+    "docs/decisions.md": 2,
+    "docs/decisions/build.md": 2,
+    "docs/decisions/gui.md": 20,
+    "docs/decisions/kernel.md": 18,
+    "docs/decisions/shell.md": 4,
+    "docs/decisions/storage.md": 9,
+    "docs/filesystem-layout.md": 7,
+    "docs/live-cd-design.md": 1,
+    "docs/process-isolation.md": 3,
+    "docs/roadmap-details.md": 10,
+    "docs/roadmap.md": 2,
+    "docs/testing.md": 2,
+    "docs/tfs2-spec.md": 1,
+    "docs/tfs3-design.md": 10,
+    "docs/tfs3-spec.md": 2,
+    "docs/tools.md": 4,
+    "docs/uapp-design.md": 15,
+    "docs/wm-ring3-design.md": 11,
+}
+MILESTONE_REF = re.compile(r"Milestone [0-9]+|\bM[0-9]{2}\b")
+
+
+def check_milestone_prose_frozen(problems):
+    for rel in tracked_files():
+        if not rel.endswith(".md"):
+            continue
+        n = len(MILESTONE_REF.findall(read(rel)))
+        b = MILESTONE_PROSE_BASELINE.get(rel, 0)
+        if n > b:
+            problems.append(f"{rel}: {n} `Milestone N` reference(s), frozen at {b} -- "
+                            f"name the milestone (docs/roadmap.md) instead")
+
+
 def check_milestones_are_named(problems):
     """Milestones are titles, not numbers -- that is what stopped the
     renumbering treadmill. A heading that reintroduces a number starts
@@ -467,6 +518,7 @@ def main():
     problems = []
     for check in (check_no_changelog_pointers,
                   check_roadmap_has_no_versions,
+                  check_milestone_prose_frozen,
                   check_milestones_are_named,
                   check_no_duplicate_roadmap_entries,
                   check_roadmap_items_are_one_line,

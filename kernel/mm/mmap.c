@@ -140,7 +140,7 @@ int sys_mmap(struct syscall_ctx *c) {
     if (f) {
         r->kind     = MMAP_KIND_FILE;
         r->file_off = m.offset;
-        k_strcpy(r->path, f->file.name);
+        k_strlcpy(r->path, f->file.name, sizeof r->path);
     }
     r->base = base; // last: a non-zero base is what makes the slot live
 
@@ -199,7 +199,7 @@ int sys_munmap(struct syscall_ctx *c) {
         tail->prot     = r->prot;
         tail->kind     = r->kind;
         tail->file_off = r->file_off + (end - r->base);
-        k_strcpy(tail->path, r->path);
+        k_strlcpy(tail->path, r->path, sizeof tail->path);
         tail->base     = end;
         r->npages      = (addr - r->base) / 4096;
     }
@@ -249,7 +249,7 @@ static uint64_t imgcache_get(const char *path, uint64_t off) {
     for (int i = 0; i < 4096; i++) ((uint8_t *)(uintptr_t)frame)[i] = 0;
     fs_read_range(path, off, (void *)(uintptr_t)frame, 4096);
     struct imgcache_ent *e = &g_imgcache[g_imgcache_n++];
-    k_strcpy(e->path, path);
+    k_strlcpy(e->path, path, sizeof e->path);
     e->off = off;
     e->frame = frame;
     return frame;
