@@ -18,10 +18,33 @@ static int toolbar_h(void) { int h; uui_toolbar_natural_size(&g_toolbar, 0, &h);
 
 static int statusbar_h(void) { int h; uui_statusbar_natural_size(&g_status, 0, &h); return h; }
 
-// Each pane carries its OWN path above it. One shared status line
-// cannot say where two panes are, and "which directory does F5 copy
-// into" is a question the window has to answer without being asked.
-static int panehdr_h(void) { return ugfx_char_h() + utheme_gap(); }
+// Each pane carries its OWN path above it -- an address bar (a
+// uui_textbox, see fm_internal.h). One shared status line cannot say
+// where two panes are, and "which directory does F5 copy into" is a
+// question the window has to answer without being asked.
+static int panehdr_h(void) { int h; uui_textbox_natural_size(&g_addr[0], 0, &h); return h; }
+
+// The strip's colours. The ACTIVE pane's is the accent, which is the
+// same thing the outline says and deliberately so: "which pane" should
+// be readable from the text you are already looking at. While it is
+// being EDITED it is a field like any other, white with a caret,
+// because typing over an accent background is unreadable.
+static void addr_style(int i) {
+    struct uui_textbox *f = &g_addr[i];
+    int active_pane = (i == g_active);
+    if (g_addr_edit == i) {
+        f->bg = UTHEME_WHITE; f->fg = UTHEME_TEXT; f->border = UTHEME_ACCENT;
+    } else if (active_pane) {
+        f->bg = UTHEME_ACCENT; f->fg = UTHEME_ACCENT_TEXT; f->border = UTHEME_ACCENT;
+    } else {
+        f->bg = UTHEME_PANEL_BG; f->fg = UTHEME_TEXT; f->border = UTHEME_BORDER;
+    }
+    // Re-synced from the pane while nobody is typing in it, so a
+    // navigation by any other route (Enter, Backspace, the tree) shows
+    // up here without the field having to be told.
+    if (g_addr_edit != i && strcmp(uui_textbox_text(f), uui_fileview_dir(&g_pane[i])) != 0)
+        uui_textbox_init(f, uui_fileview_dir(&g_pane[i]));
+}
 
 // What a pane or the tree must keep however hard the divider is
 // dragged. Font-derived: eight columns is about the least in which a
@@ -102,10 +125,20 @@ void layout_all(int cw, int ch) {
                                    cw - px - split_w, panes_h);
     }
 
+    // The address bars sit in the strip above each pane, same width.
+    for (int i = 0; i < 2; i++) {
+        int px, py, pw2, ph;
+        uui_fileview_ops.bounds(&g_pane[i], &px, &py, &pw2, &ph);
+        uui_textbox_set_geometry(&g_addr[i], px, py - hdr, pw2, hdr);
+        addr_style(i);
+    }
+
     // Visibility is decided beside the geometry: the router skips a
     // hidden item, so a hidden pane cannot be clicked either.
     widget_by_id(ID_LEFT)->hidden  = g_single && g_active != 0;
     widget_by_id(ID_RIGHT)->hidden = g_single && g_active != 1;
+    widget_by_id(ID_ADDR_L)->hidden = widget_by_id(ID_LEFT)->hidden;
+    widget_by_id(ID_ADDR_R)->hidden = widget_by_id(ID_RIGHT)->hidden;
     widget_by_id(ID_TREE)->hidden = !g_tree_on;
     widget_by_id(ID_TREE_SPLIT)->hidden = !g_tree_on;
     widget_by_id(ID_PANE_SPLIT)->hidden = g_single;
@@ -114,33 +147,15 @@ void layout_all(int cw, int ch) {
     // under a menu popup -- see uui_fileview.h's active_mark. With two
     // identical panes and no other mark, "which one does F5 copy FROM"
     // is unanswerable, and a wrong guess deletes the wrong file.
-    for (int i = 0; i < 2; i++)
-        uui_fileview_set_active_mark(&g_pane[i], i == g_active, UTHEME_ACCENT);
-
-}
-
-// The path strip above each pane. The ACTIVE one is drawn in the accent
-// colour, which is the same thing the outline says and deliberately so:
-// the mark that answers "which pane" should be readable at a glance and
-// from the text you are already looking at.
-static void draw_pane_headers(struct ugfx_surface *s) {
-    int hdr = panehdr_h();
     for (int i = 0; i < 2; i++) {
-        if (g_single && i != g_active) continue;
-        int x, y, w, h;
-        uui_fileview_ops.bounds(&g_pane[i], &x, &y, &w, &h);
-        (void)h;
-        int active_pane = (i == g_active);
-        uint32_t bg = active_pane ? UTHEME_ACCENT : UTHEME_PANEL_BG;
-        uint32_t fg = active_pane ? UTHEME_ACCENT_TEXT : UTHEME_TEXT;
-        ugfx_fill_rect(s, x, y - hdr, w, hdr, bg);
-        // Clipped, always: a path is longer than a half-window
-        // routinely, and ugfx_draw_string() does not clip
-        // (docs/gui-guidelines.md's oldest trap).
-        ugfx_draw_string_clipped(s, x + utheme_gap(), y - hdr + utheme_gap() / 2,
-                                  w - utheme_gap() * 2, uui_fileview_dir(&g_pane[i]),
-                                  fg, bg);
+        uui_fileview_set_active_mark(&g_pane[i], i == g_active, UTHEME_ACCENT);
+        // The cursor row wears a focus ring in the active pane. Marks
+        // and the cursor share one background now (ui/uui_fileview.h's
+        // mark_bg), so the ring is what says which row the keys are on
+        // -- and this app has no focus ring of its own to set it.
+        g_pane[i].table.focused = (i == g_active);
     }
+
 }
 
 // docs/gui-guidelines.md: a GUI test asks the app where things are
@@ -189,6 +204,12 @@ void log_layout(void) {
     }
     uapp_logf_layout("files: layout selected %s\n", sel ? sel : "-");
     uapp_logf_layout("files: layout modal %d\n", (int)g_modal);
+    // The status bar's note, which is where a refusal is said.
+    uapp_logf_layout("files: layout note %s\n", g_stat_note);
+    // Which address bar is being edited, -1 for none -- and its text,
+    // since "the field holds what was typed" is what a test asserts.
+    uapp_logf_layout("files: layout addr %d %s\n", g_addr_edit,
+                      g_addr_edit >= 0 ? uui_textbox_text(&g_addr[g_addr_edit]) : "-");
     // WHERE ROW 0 ACTUALLY STARTS, per pane. A test that derives it as
     // "pane top + n * row height" is off by the column header and lands
     // on the row above -- silently, since a neighbouring row is a
@@ -230,7 +251,11 @@ void log_layout(void) {
               cx, cy, cw2, ch2, cols);
     }
     uapp_logf_layout("files: layout job %d %d\n", g_job_at, g_job_count);
-    uapp_logf_layout("files: layout ctx %d\n", uui_menubar_is_open(&g_ctx));
+    // ...and its row count as ONE line: the popup's own per-row lines
+    // are what overflow the layout block, and a count is the fact a
+    // test wants ("Edit in Notepad is there, or is not").
+    uapp_logf_layout("files: layout ctx %d %d\n", uui_menubar_is_open(&g_ctx),
+                      uui_menubar_is_open(&g_ctx) ? g_ctx_rows : 0);
     // Whether the conflict dialog is UP. A test that sleeps and then
     // types is a test whose keys go to the listing when the dialog is
     // half a second late -- and Enter on a listing descends.
@@ -246,7 +271,6 @@ void log_layout(void) {
 void on_draw(struct uapp *a, struct uapp_draw *d) {
     layout_all(d->surface->w, d->surface->h);
     ugfx_fill_rect(d->surface, 0, 0, d->surface->w, d->surface->h, UTHEME_PANEL_BG);
-    draw_pane_headers(d->surface);
     uui_statusbar_draw(d->surface, &g_status);
     if (!widget_by_id(ID_CANCEL)->hidden) uui_button_draw_one(d->surface, &g_cancel_btn);
     log_layout();
@@ -264,11 +288,18 @@ void on_draw_over(struct uapp *a, struct uapp_draw *d) {
     draw_modal(d->surface);
 }
 
-// Which VISIBLE pane holds this point, or -1.
+// Which VISIBLE pane holds this point, or -1. The pane's RECT, so a
+// right-click on the empty space below the rows still gets a menu
+// (Paste and New folder need no row) -- and not uui_fileview_hit(),
+// which answers a ROW INDEX with -1 for a miss: tested as a boolean, a
+// miss on the left pane read as a hit and every right-click in the
+// right pane acted on the left one (the CLAUDE.md `hit` trap).
 int pane_at(int x, int y) {
     for (int i = 0; i < 2; i++) {
         if (widget_by_id(i ? ID_RIGHT : ID_LEFT)->hidden) continue;
-        if (uui_fileview_hit(&g_pane[i], x, y)) return i;
+        int px, py, pw, ph;
+        uui_fileview_ops.bounds(&g_pane[i], &px, &py, &pw, &ph);
+        if (uui_hit(px, py, pw, ph, x, y)) return i;
     }
     return -1;
 }

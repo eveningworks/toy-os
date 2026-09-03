@@ -65,6 +65,7 @@ PROPERTIES_EXEC = "/bin/wm/apps/properties"
 FILES_EXEC = "/bin/wm/apps/files"
 # Ctrl+<letter> arrives as the control code (api/keyboard.h).
 K_CTRL_C, K_CTRL_X, K_CTRL_V, K_TAB = "0x03", "0x18", "0x16", "0x09"
+K_CTRL_L = "0x0c"
 K_ENTER = "0x0d"
 
 # `gui key` takes a character or a code (userland/wm/wm_debug.c), which
@@ -114,6 +115,9 @@ class Layout:
         self.dlghot = None    # ...and which button a Return would commit
         self.ctx = None       # is the context menu open?
         self.ctxbox = None    # its popup [x, y, w, h]
+        self.ctxitems = 0     # rows in that popup, separators included
+        self.addr = None      # (pane, text) of the address bar being edited, or (-1, "-")
+        self.note = None      # the status bar's note
         self.menu = None      # open level-0 popup [x, y, w, h]
         self.menuhot = None   # (open depth, level-0 hot row)
         self.cellgrid = {}    # pane -> [x0, y0, cell_w, cell_h, cols]
@@ -179,8 +183,14 @@ class Layout:
                 self.dlghot = int(p[2])
         elif p[0] == "ctx" and len(p) >= 2:
             self.ctx = int(p[1])
+            if len(p) >= 3:
+                self.ctxitems = int(p[2])
         elif p[0] == "ctxbox" and len(p) >= 5:
             self.ctxbox = [int(v) for v in p[1:5]]
+        elif p[0] == "addr" and len(p) >= 3:
+            self.addr = (int(p[1]), p[2])
+        elif p[0] == "note":
+            self.note = " ".join(p[1:])
         elif p[0] == "split" and len(p) >= 3:
             self.split = (int(p[1]), int(p[2]))
         elif p[0] == "splitbox" and len(p) >= 6:
@@ -455,6 +465,25 @@ def run(dbg, qmp, tmp, res):
     if not lay:
         return
 
+    # --- 0. icons by default, and Details for the sections below --------
+    # The panes open in ICONS view (2) on a fresh config, as every
+    # desktop file manager does. Everything below aims at rows by
+    # height, so both panes are put in Details (1) from the toolbar --
+    # which is a check of the toolbar's Details button too.
+    lay = wait_layout(dbg, win, lambda l: l.view is not None and len(l.tbitems) == 14) or lay
+    res.check("both panes open in icons view by default",
+              lay.view is not None and lay.view[0] == 2 and lay.view[1] == 2,
+              f"view={lay.view}")
+    for i in (1, 0):
+        dbg.click(*lay.pane_centre(i))
+        lay = wait_layout(dbg, win, lambda l, i=i: l.active == i) or lay
+        x, y, w, h = lay.tbitems[9]              # Details (8 is a separator)
+        sure_click(dbg, qmp, lay.ox + x + w // 2, lay.oy + y + h // 2)
+        lay = wait_layout(dbg, win, lambda l, i=i: l.view and l.view[i] == 1) or lay
+    res.check("the toolbar's Details button switches each pane in turn",
+              lay.view is not None and lay.view[0] == 1 and lay.view[1] == 1,
+              f"view={lay.view}")
+
     # --- 1. the listing agrees with the shell --------------------------
     shell = listing(dbg, SRC)
     # +1 for the synthetic ".." row, which /fmtest has because it is not
@@ -545,11 +574,28 @@ def run(dbg, qmp, tmp, res):
     dbg.key(K_HOME)
     dbg.key(K_DOWN)
     dbg.key(K_DOWN)
+    lay = wait_layout(dbg, win, lambda l: l.selected == "one.txt") or lay
+    # The selection colour's footprint with ONE row selected, for the
+    # comparison after marking.
+    sel_rgb = (205, 220, 240)      # utheme's sel_bg
+    png_one = os.path.join(tmp, "fm_sel_one.png")
+    qmp.stable_pixels(png_one)
+    pane_rect = (lay.ox + lay.pane[0][0], lay.oy + lay.pane[0][1], lay.pane[0][2], lay.pane[0][3])
+    blue_one = ink_count(png_one, pane_rect, sel_rgb)
     dbg.key(K_INSERT)
     dbg.key(K_INSERT)
     lay = wait_layout(dbg, win, lambda l: l.marked[0] == 2) or lay
     res.check("Insert marks files, and the app counts them",
               lay.marked[0] == 2, f"marked {lay.marked}")
+    # Two marks plus the cursor row, all in the SELECTION colour -- a
+    # multi-selection is one selection with several rows, not a second
+    # (yellow) kind of highlight. Three rows of blue against one.
+    png_marks = os.path.join(tmp, "fm_sel_marks.png")
+    qmp.stable_pixels(png_marks)
+    blue_marks = ink_count(png_marks, pane_rect, sel_rgb)
+    res.check("marked rows are drawn in the selection colour",
+              blue_one > 0 and blue_marks > 2 * blue_one,
+              f"selection-blue pixels: one row {blue_one}, two marks + cursor {blue_marks}")
 
     # Which two: the pane lists directories first and then files in name
     # order (lib/dirsort.h), so the rows below `sub` are one.txt,
@@ -572,26 +618,26 @@ def run(dbg, qmp, tmp, res):
     victim = lay.selected
 
     dbg.key(K_F8)
-    lay = wait_layout(dbg, win, lambda l: l.modal == 1) or lay
-    res.check("F8 opens a confirmation rather than deleting", lay.modal == 1,
-              f"modal {lay.modal}")
+    lay = wait_layout(dbg, win, lambda l: l.dialog == 1) or lay
+    res.check("F8 opens a confirmation dialog rather than deleting", lay.dialog == 1,
+              f"dialog {lay.dialog}")
     dbg.key(K_ESC)
-    lay = wait_layout(dbg, win, lambda l: l.modal == 0) or lay
+    lay = wait_layout(dbg, win, lambda l: l.dialog == 0) or lay
     still = listing(dbg, DST)
     res.check("Esc cancels it and the file is still there", victim in still,
               f"{victim!r} not in {still}")
 
     dbg.key(K_F8)
-    wait_layout(dbg, win, lambda l: l.modal == 1)
-    dbg.key(K_ENTER)
+    wait_layout(dbg, win, lambda l: l.dialog == 1)
+    dbg.key(K_ENTER)                        # Delete is the default button
     gone = wait_listing(dbg, DST, lambda n: victim not in n)
     res.check("confirming it deletes the file", victim not in gone,
               f"{victim!r} still in {gone}")
 
     # --- 7. a new directory --------------------------------------------
     dbg.key(K_F7)
-    lay = wait_layout(dbg, win, lambda l: l.modal == 2) or lay
-    res.check("F7 asks for a name", lay.modal == 2, f"modal {lay.modal}")
+    lay = wait_layout(dbg, win, lambda l: l.modal == 1) or lay
+    res.check("F7 asks for a name", lay.modal == 1, f"modal {lay.modal}")
     # settle=True (the default) for every typed character: sent
     # back-to-back with settle=False they outrun the client, and the
     # field commits empty -- which reads exactly like a broken mkdir.
@@ -605,7 +651,7 @@ def run(dbg, qmp, tmp, res):
     # --- 8. rename ------------------------------------------------------
     lay = wait_layout(dbg, win, lambda l: l.selected == "newdir") or lay
     dbg.key(K_F2)
-    lay = wait_layout(dbg, win, lambda l: l.modal == 2) or lay
+    lay = wait_layout(dbg, win, lambda l: l.modal == 1) or lay
     # The field is pre-filled with the current name, so clear it first.
     for _ in range(8):
         dbg.key(K_BACKSPACE)
@@ -1105,13 +1151,77 @@ def run(dbg, qmp, tmp, res):
     dbg.key("0x62")                          # 'b' seeks bin/
     lay = wait_layout(dbg, win, lambda l: l.selected not in (None, "-")) or lay
     sure_click(dbg, qmp, *tb_centre(7))          # Delete
-    lay = wait_layout(dbg, win, lambda l: l.modal not in (None, 0)) or lay
+    lay = wait_layout(dbg, win, lambda l: l.dialog == 1) or lay
     res.check("the toolbar's Delete opens the same confirm F8 does",
-              lay.modal not in (None, 0), f"modal={lay and lay.modal}")
+              lay.dialog == 1, f"dialog={lay and lay.dialog}")
     dbg.key(K_ESC)
-    lay = wait_layout(dbg, win, lambda l: l.modal == 0) or lay
+    lay = wait_layout(dbg, win, lambda l: l.dialog == 0) or lay
     res.check("(Esc dismissed it without deleting anything)",
-              lay is not None and lay.modal == 0, f"modal={lay and lay.modal}")
+              lay is not None and lay.dialog == 0, f"dialog={lay and lay.dialog}")
+
+    # --- 13c. the context menu acts on the pane it was opened IN --------
+    # A right-click in the RIGHT pane. pane_at() once tested a row-index
+    # hit as a boolean, so a miss on the left pane (-1) read as a hit and
+    # every menu opened over the right pane acted on the left -- Delete
+    # "only worked on the left pane". The proof is the active pane.
+    lay = wait_layout(dbg, win, lambda l: 1 in l.pane and 1 in l.rowy) or lay
+    rx, ry, rw, _ = lay.pane[1]
+    r = 1 if lay.rows.get(1, 0) >= 2 else 0
+    sure_rclick(dbg, qmp, ox + rx + rw // 2, oy + lay.rowy[1] + lay.rowh * r + lay.rowh // 2)
+    lay = wait_layout(dbg, win, lambda l: l.ctx == 1 and l.active == 1) or lay
+    res.check("a right-click in the right pane opens the menu on the RIGHT pane",
+              lay.ctx == 1 and lay.active == 1,
+              f"ctx={lay and lay.ctx} active={lay and lay.active}")
+    dbg.key(K_ESC)
+    lay = wait_layout(dbg, win, lambda l: l.ctx == 0) or lay
+    dbg.click(*lay.pane_centre(0))
+    lay = wait_layout(dbg, win, lambda l: l.active == 0) or lay
+
+    # --- 13d. the address bar -------------------------------------------
+    # Each pane's path strip is a text field. Clicking it edits the path
+    # in place; Enter navigates, Esc restores, and a directory that does
+    # not exist is refused with the field left up. Dolphin's split view.
+    def type_path(path):
+        for ch in path:
+            dbg.key("0x2f" if ch == "/" else ch)
+
+    dir0 = lay.dir.get(0)
+    sure_click(dbg, qmp, *lay.header_point(0))
+    lay = wait_layout(dbg, win, lambda l: l.addr and l.addr[0] == 0) or lay
+    res.check("clicking a pane's path strip starts editing it",
+              lay.addr is not None and lay.addr[0] == 0, f"addr={lay and lay.addr}")
+    type_path(DST)
+    lay = wait_layout(dbg, win, lambda l: l.addr and l.addr[1] == DST) or lay
+    res.check("...and typing replaces the path (the click selects it all)",
+              lay.addr is not None and lay.addr[1] == DST, f"addr={lay and lay.addr}")
+    dbg.key(K_ENTER)
+    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == DST and l.addr and l.addr[0] == -1) or lay
+    res.check("Enter navigates the pane there and ends the edit",
+              lay.dir.get(0) == DST and lay.addr is not None and lay.addr[0] == -1,
+              f"dir0={lay and lay.dir.get(0)} addr={lay and lay.addr}")
+
+    sure_click(dbg, qmp, *lay.header_point(0))
+    wait_layout(dbg, win, lambda l: l.addr and l.addr[0] == 0)
+    type_path("/nope")
+    dbg.key(K_ENTER)
+    lay = wait_layout(dbg, win, lambda l: "no such" in (l.note or "")) or layout_now(dbg, win) or lay
+    res.check("a directory that does not exist is refused, the pane stays put",
+              lay.dir.get(0) == DST and lay.addr is not None and lay.addr[0] == 0,
+              f"dir0={lay and lay.dir.get(0)} addr={lay and lay.addr}")
+    dbg.key(K_ESC)
+    lay = wait_layout(dbg, win, lambda l: l.addr and l.addr[0] == -1) or lay
+    res.check("Esc ends the edit with the path unchanged",
+              lay.addr is not None and lay.addr[0] == -1 and lay.dir.get(0) == DST,
+              f"dir0={lay and lay.dir.get(0)} addr={lay and lay.addr}")
+
+    # Ctrl+L is the keyboard's way in. Back to where this pane was.
+    dbg.key(K_CTRL_L)
+    lay = wait_layout(dbg, win, lambda l: l.addr and l.addr[0] == 0) or lay
+    res.check("Ctrl+L edits the active pane's path", lay.addr is not None and lay.addr[0] == 0,
+              f"addr={lay and lay.addr}")
+    type_path(dir0 or SRC)
+    dbg.key(K_ENTER)
+    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == (dir0 or SRC)) or lay
 
     # --- 14. the context menu, and Properties ---------------------------
     # A SECONDARY click inside a pane. Two things a broken version would
@@ -1231,6 +1341,71 @@ def run(dbg, qmp, tmp, res):
         if "Properties" in w2["title"]:
             dbg.send(f"gui close {w2['z']}")
             time.sleep(0.3)
+
+    # --- 14a. "Edit in Notepad", only where it applies -------------------
+    # The row is on the menu for a TEXT file and ABSENT -- not greyed --
+    # for a binary (a NUL in its first bytes, git's rule) or a folder.
+    # Its own fixture, so the rows are known: "..", prog, t.txt. The
+    # count comes from the app's own `ctx` line; the labels are not
+    # logged, but 15 rows against 14 is the row.
+    dbg.key(K_ESC)
+    lay = wait_layout(dbg, win, lambda l: l.ctx == 0) or lay
+    EDIT = "/fmedit"
+    dbg.send(f"sh rm -r {EDIT}")
+    dbg.send(f"sh mkdir {EDIT}")
+    dbg.send(f"sh cp /bin/hello {EDIT}/prog")
+    dbg.send(f"sh touch {EDIT}/t.txt")
+    wait_listing(dbg, EDIT, lambda names: "t.txt" in names and "prog" in names)
+    dbg.key(K_CTRL_L)
+    wait_layout(dbg, win, lambda l: l.addr and l.addr[0] == 0)
+    type_path(EDIT)
+    dbg.key(K_ENTER)
+    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == EDIT and l.rows.get(0, 0) == 3) or lay
+    px, py, pw, _ = lay.pane[0]
+
+    def ctx_on(view_row):
+        sure_rclick(dbg, qmp, ox + px + pw // 2,
+                    oy + lay.rowy[0] + lay.rowh * view_row + lay.rowh // 2)
+        return wait_layout(dbg, win, lambda l: l.ctx == 1 and l.ctxitems > 0)
+
+    got = ctx_on(2)
+    res.check("a text file's context menu carries Edit in Notepad",
+              got is not None and got.selected == "t.txt" and got.ctxitems == 15,
+              f"selected={got and got.selected} rows={got and got.ctxitems}")
+    dbg.key(K_ESC)
+    wait_layout(dbg, win, lambda l: l.ctx == 0)
+    got = ctx_on(1)
+    res.check("...and a binary's does not (control: one row fewer)",
+              got is not None and got.selected == "prog" and got.ctxitems == 14,
+              f"selected={got and got.selected} rows={got and got.ctxitems}")
+    dbg.key(K_ESC)
+    wait_layout(dbg, win, lambda l: l.ctx == 0)
+    # Pick it: the second row of the popup, and Notepad opens on the file.
+    got = ctx_on(2)
+    if got and got.ctxbox and got.ctxitems == 15:
+        cbx, cby, cbw, _ = got.ctxbox
+        rowh = got.rowh or 20
+        sure_click(dbg, qmp, ox + cbx + cbw // 2, oy + cby + rowh + rowh // 2 + 1)
+    deadline = time.time() + 8.0
+    titles = []
+    while time.time() < deadline:
+        titles = [w2["title"] for w2 in dbg.windows()]
+        if any("t.txt" in t for t in titles):
+            break
+        time.sleep(0.3)
+    res.check("Edit in Notepad opens the file in Notepad",
+              any("t.txt" in t for t in titles), f"windows={titles}")
+    # Close EVERY other window: one left open takes the keys below.
+    for w2 in sorted(dbg.windows(), key=lambda w2: -w2["z"]):
+        if w2["title"] != TITLE:
+            dbg.send(f"gui close {w2['z']}")
+            time.sleep(0.3)
+    dbg.send(f"sh rm -r {EDIT}")
+    dbg.key(K_CTRL_L)
+    wait_layout(dbg, win, lambda l: l.addr and l.addr[0] == 0)
+    type_path(SRC)
+    dbg.key(K_ENTER)
+    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == SRC) or lay
 
     # NOTHING LEFT OPEN. An open popup swallows every key, so a context
     # menu still up here makes the sections below type into it -- which
@@ -1550,7 +1725,8 @@ def run(dbg, qmp, tmp, res):
 
         res.check("a .jpg cell shows the photo, and the .txt cell stays grey",
                   chroma(cell_rect(2)) > 40 and chroma(cell_rect(3)) < 10,
-                  f"chroma jpg={chroma(cell_rect(2))} txt={chroma(cell_rect(3))}")
+                  f"chroma jpg={chroma(cell_rect(2))} txt={chroma(cell_rect(3))} "
+                  f"grid={lay.cellgrid[0]} origin={(ox, oy)} rects={cell_rect(2)} {cell_rect(3)}")
 
         # The wheel: down scrolls DOWN (this shipped inverted once), and
         # the universal scroll_dir setting flips it for every app at the

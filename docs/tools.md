@@ -1825,7 +1825,9 @@ window without going through it will find its layout polls timing out.
   and the boot mode must come back. It restores the setting, because a
   stored resolution is applied at the next boot. In `gui_regress.py`.
 - **`filemanager_test.py`** -- the File Manager: two panes, marking, and
-  real file operations. **The result of every operation is checked
+  real file operations. **It puts both panes in Details first** (from the
+  toolbar, which is itself a check): the app opens in icons view, and
+  every row this tool aims at is row-height arithmetic. **The result of every operation is checked
   through `ls`, not through the app** -- the manager is the thing under
   test, so it cannot also be the witness; a version that updated its own
   list and spawned nothing would pass its own view. Four checks are

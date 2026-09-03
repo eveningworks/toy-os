@@ -4,6 +4,7 @@
 // where and why these share their state directly.
 #include "fm_internal.h"
 #include "lib/ufileop.h"
+#include "ui/uui_dialog.h"
 #include <pthread.h>
 #include "lib/uclip.h"
 #include "ui/ulog.h"
@@ -379,11 +380,15 @@ void do_move(void) {
     if (queue_from_selection(CMD_MOVE, "Move")) start_job();
 }
 
+// The dialog's rows are caller-owned for as long as it is up
+// (ui/uui_dialog.h), so they live here rather than on the stack.
+static char g_del_row[PATH_MAX_LEN + 48];
+static const char *const g_del_rows[] = { g_del_row, "This cannot be undone." };
+
 void do_delete(void) {
     int n = operand_count();
     if (n == 0) { set_note("nothing selected"); return; }
 
-    char body[PATH_MAX_LEN + 48];
     if (n == 1) {
         const char *name = uui_fileview_selected_name(active());
         int marks = uui_fileview_mark_count(active());
@@ -392,11 +397,18 @@ void do_delete(void) {
             uui_fileview_marked_path(active(), 0, one, sizeof one);
             name = k_path_basename(one);
         }
-        snprintf(body, sizeof body, "Delete %s?", name ? name : "");
+        snprintf(g_del_row, sizeof g_del_row, "Delete %s?", name ? name : "");
     } else {
-        snprintf(body, sizeof body, "Delete %d marked items?", n);
+        snprintf(g_del_row, sizeof g_del_row, "Delete %d marked items?", n);
     }
-    open_confirm(CMD_DELETE, "Delete", body);
+    // Verb buttons, the KDE/GNOME/macOS rule: the button says what it
+    // does. Delete is the default, as it was when Enter meant yes.
+    static const struct uui_dialog_button btns[] = {
+        { "Delete", DLG_DELETE },
+        { "Cancel", DLG_CANCEL },
+    };
+    g_dialog_kind = DIALOG_DELETE;
+    uui_dialog_open(&g_dialog, "Delete", g_del_rows, 2, btns, 2, 0, DLG_CANCEL);
 }
 
 void commit_delete(void) {

@@ -29,10 +29,9 @@
 #include "ui/uapp.h"
 #include "ui/ulog.h"
 #include "ui/utheme.h"
+#include "lib/icon_cache.h"
 
 #define PATH_MAX_LEN 64          // FS_PATH_MAX
-#define MARGIN 10
-#define LINE_GAP 5
 
 static char g_path[PATH_MAX_LEN];
 static struct sys_stat g_stat;
@@ -92,8 +91,13 @@ static int walk_one(void) {
 }
 
 // --- the facts, as rows ------------------------------------------------
+//
+// A row is a label and a value; a SECTION is a row with no label, whose
+// value is the heading. The name is not a row: it is the header, drawn
+// large beside the icon, as Explorer's General tab and Dolphin's
+// Properties both do.
 
-#define ROW_MAX 10
+#define ROW_MAX 12
 static char g_label[ROW_MAX][16];
 static char g_value[ROW_MAX][PATH_MAX_LEN + 24];
 static int g_rows;
@@ -107,6 +111,9 @@ static void row(const char *label, const char *fmt, ...) {
     va_end(ap);
     g_rows++;
 }
+
+static void section(const char *title) { row("", "%s", title); }
+static int is_section(int i) { return g_label[i][0] == '\0'; }
 
 // "TXT file", Windows' own wording, or "Folder". Derived from the
 // extension because that is what this system actually keys on -- there
@@ -127,14 +134,14 @@ static void type_of(char *out, int cap) {
     snprintf(out, (unsigned long)cap, "%s file", ext);
 }
 
+static char g_type[24];
+
 static void build_rows(void) {
     g_rows = 0;
+    type_of(g_type, sizeof g_type);
 
-    char type[24];
-    type_of(type, sizeof type);
-    row("Name", "%s", k_path_basename(g_path));
-    row("Type", "%s", type);
-
+    section("General");
+    row("Type", "%s", g_type);
     char dir[PATH_MAX_LEN];
     k_path_dirname(g_path, dir, sizeof dir);
     row("Location", "%s", dir);
@@ -166,6 +173,7 @@ static void build_rows(void) {
                                                        : "nothing");
     }
 
+    section("Dates");
     row("Created", "%04u-%02u-%02u %02u:%02u:%02u", g_stat.created.year,
          g_stat.created.month, g_stat.created.day, g_stat.created.hour,
          g_stat.created.minute, g_stat.created.second);
@@ -173,6 +181,7 @@ static void build_rows(void) {
          g_stat.modified.month, g_stat.modified.day, g_stat.modified.hour,
          g_stat.modified.minute, g_stat.modified.second);
 
+    section("Details");
     // SAID PLAINLY WHEN IT IS SYNTHETIC. SYS_STAT_INODES is the
     // filesystem answering "this number is mine"; without it the value
     // is a table slot that is stable for this boot and means nothing
@@ -182,9 +191,34 @@ static void build_rows(void) {
 }
 
 // --- the window --------------------------------------------------------
+//
+// FIXED SIZE, sized to its own rows: nothing in it reflows, so a resize
+// handle would only ever crop it or pad it. Every measure is
+// font-derived (docs/gui-guidelines.md).
 
-static int line_h(void) { return ugfx_char_h() + LINE_GAP; }
+#define ICON_PX 48
+
+static int margin(void)  { return utheme_pad() * 2; }
+static int line_h(void)  { return ugfx_char_h() + utheme_gap(); }
 static int label_w(void) { return ugfx_char_w() * 11; }
+static int indent(void)  { return ugfx_char_w(); }   // rows sit in from their heading
+static int header_h(void) {
+    int two = 2 * line_h();
+    return ICON_PX > two ? ICON_PX : two;
+}
+// Where the rows start: under the header and its rule.
+static int rows_y(void) { return margin() + header_h() + utheme_pad() * 2 + 1; }
+
+// A section heading is set off by half a row above it; the first has
+// the rule above it already.
+static int row_y(int i) {
+    int y = rows_y();
+    for (int k = 0; k < i; k++) {
+        y += line_h();
+        if (is_section(k + 1) && k + 1 < g_rows) y += line_h() / 2;
+    }
+    return y;
+}
 
 static void prop_size(int *w, int *h) {
     int widest = 0;
@@ -192,35 +226,69 @@ static void prop_size(int *w, int *h) {
         int tw = ugfx_text_width(g_value[i]);
         if (tw > widest) widest = tw;
     }
+    // The header's name is measured BOLD, since that is how it draws.
+    const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
+    int name_w = ugfx_text_width(k_path_basename(g_path)) + ICON_PX + utheme_pad() - label_w() - indent();
+    ugfx_set_font(was);
+    if (name_w > widest) widest = name_w;
     // A floor and a ceiling: a one-word value must not produce a window
     // too narrow to read its own labels, and a long path must not open a
     // window wider than most screens.
     if (widest < ugfx_char_w() * 24) widest = ugfx_char_w() * 24;
     if (widest > ugfx_char_w() * 60) widest = ugfx_char_w() * 60;
-    *w = 2 * MARGIN + label_w() + widest;
-    // ROW_MAX rows, not g_rows: the walk adds a "Contains" line as it
-    // runs, and a window that grew a row after opening would jump under
-    // the pointer.
-    *h = 2 * MARGIN + ROW_MAX * line_h();
+    *w = 2 * margin() + indent() + label_w() + widest;
+    *h = row_y(g_rows - 1) + line_h() + margin();
 }
 
 static void prop_draw(struct uapp *a, struct uapp_draw *d) {
     (void)a;
-    ugfx_fill(d->surface, UTHEME_PANEL_BG);
-    int avail = d->surface->w - 2 * MARGIN - label_w();
+    struct ugfx_surface *s = d->surface;
+    ugfx_fill(s, UTHEME_PANEL_BG);
+    int m = margin(), lh = line_h();
+
+    // The header: the icon, the name in bold beside it, the type under
+    // the name in the muted colour.
+    const struct uimg *icon = icon_get(g_stat_ok && g_stat.is_dir ? "folder" : "file", ICON_PX);
+    int iy = m + (header_h() - ICON_PX) / 2;
+    if (icon) ugfx_blit_alpha(s, m, iy, icon->w, icon->h, icon->px, icon->w);
+    int tx = m + ICON_PX + utheme_pad();
+    int ty = m + (header_h() - 2 * lh) / 2;
+    int avail = s->w - tx - m;
+    const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
+    ugfx_draw_string_clipped(s, tx, ty, avail, k_path_basename(g_path),
+                              UTHEME_TEXT, UTHEME_PANEL_BG);
+    ugfx_set_font(was);
+    ugfx_draw_string_clipped(s, tx, ty + lh, avail, g_type, UTHEME_BORDER, UTHEME_PANEL_BG);
+
+    // The rule between the header and the facts.
+    int ry = m + header_h() + utheme_pad();
+    ugfx_fill_rect(s, m, ry, s->w - 2 * m, 1, UTHEME_BORDER);
+
+    int lx = m + indent();
+    int vx = lx + label_w();
+    int vw = s->w - vx - m;
     for (int i = 0; i < g_rows; i++) {
-        int y = MARGIN + i * line_h();
-        // Clipped, both halves: the window is resizable and a path is
-        // routinely longer than any width it is given
-        // (docs/gui-guidelines.md's oldest trap).
-        ugfx_draw_string_clipped(d->surface, MARGIN, y, label_w(),
-                                  g_label[i], UTHEME_BORDER, UTHEME_PANEL_BG);
-        ugfx_draw_string_clipped(d->surface, MARGIN + label_w(), y, avail,
-                                  g_value[i], UTHEME_TEXT, UTHEME_PANEL_BG);
+        int y = row_y(i);
+        if (is_section(i)) {
+            // Headings in bold and in the accent: the one colour this
+            // theme reserves for "look here".
+            was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
+            ugfx_draw_string_clipped(s, m, y, s->w - 2 * m, g_value[i],
+                                      UTHEME_ACCENT, UTHEME_PANEL_BG);
+            ugfx_set_font(was);
+            continue;
+        }
+        // Clipped, both halves: a path is routinely longer than any
+        // width it is given (docs/gui-guidelines.md's oldest trap).
+        ugfx_draw_string_clipped(s, lx, y, label_w(), g_label[i],
+                                  UTHEME_BORDER, UTHEME_PANEL_BG);
+        ugfx_draw_string_clipped(s, vx, y, vw, g_value[i], UTHEME_TEXT, UTHEME_PANEL_BG);
     }
 }
 
 // The counts climb while the walk runs, then it stops asking for ticks.
+static void log_rows(void);
+
 static int prop_tick(struct uapp *a) {
     (void)a;
     if (!g_walking) return 0;
@@ -232,7 +300,18 @@ static int prop_tick(struct uapp *a) {
               g_overflow ? " (INCOMPLETE)" : "");
     }
     build_rows();
+    if (!g_walking) log_rows();   // the final totals, for the test that waits on them
     return 1;
+}
+
+// The layout log a test asserts on -- a fact, not a screenshot to
+// interpret (docs/gui-guidelines.md). The name is a row here even
+// though it draws as the header, since "what does the window say" is
+// the question and the header says it.
+static void log_rows(void) {
+    ulogf("properties: row Name=%s\n", k_path_basename(g_path));
+    for (int i = 0; i < g_rows; i++)
+        if (!is_section(i)) ulogf("properties: row %s=%s\n", g_label[i], g_value[i]);
 }
 
 int main(int argc, char **argv) {
@@ -251,17 +330,13 @@ int main(int argc, char **argv) {
 
     snprintf(g_title, sizeof g_title, "%s Properties", k_path_basename(g_path));
 
-    // The layout log a test asserts on -- a fact, not a screenshot to
-    // interpret (docs/gui-guidelines.md).
-    for (int i = 0; i < g_rows; i++)
-        ulogf("properties: row %s=%s\n", g_label[i], g_value[i]);
+    log_rows();
 
     struct uapp_desc desc = {
         .title   = g_title,
         // NOT single-instance: see the header. Named all the same, so
         // the taskbar groups them and the title bar finds the icon.
         .app_id  = "properties",
-        .flags   = UAPP_RESIZABLE,
         .tick_ms = 200,
         .on_size = prop_size,
         .on_draw = prop_draw,

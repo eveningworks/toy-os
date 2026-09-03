@@ -135,11 +135,13 @@ static char g_dlg_rename[PATH_MAX_LEN];
 static int g_apply_all = -1;
 
 static void answer_conflict(int code);   // defined with the dialog
+static void answer_dialog(int code);
+enum dialog_kind g_dialog_kind;
 
-enum {
-    DLG_OVERWRITE = 1, DLG_OVERWRITE_ALL, DLG_SKIP, DLG_SKIP_ALL,
-    DLG_RENAME, DLG_RENAME_ALL, DLG_CANCEL,
-};
+// The address bars (fm_internal.h says what they are). The text is
+// re-synced from the pane on every layout while nobody is editing.
+struct uui_textbox g_addr[2];
+int g_addr_edit = -1;
 
 struct uui_fileview *active(void)  { return &g_pane[g_active]; }
 struct uui_fileview *other(void)   { return &g_pane[!g_active]; }
@@ -208,6 +210,7 @@ static const struct uui_toolbar_item toolbar_items[] = {
 // Properties last with a separator before it.
 static const struct uui_menu_item ctx_items[] = {
     UUI_MENU("Open",        CMD_OPEN,     "Enter"),
+    UUI_MENU("Edit in Notepad", CMD_EDIT, 0),   // dropped for anything but a text file
     UUI_MENU_SEP,
     UUI_MENU("Cut",         CMD_CLIP_CUT,   "Ctrl+X"),
     UUI_MENU("Copy",        CMD_CLIP_COPY,  "Ctrl+C"),
@@ -222,6 +225,42 @@ static const struct uui_menu_item ctx_items[] = {
     UUI_MENU_SEP,
     UUI_MENU("Properties",  CMD_PROPERTIES, 0),
 };
+
+// The context menu as OPENED: ctx_items minus the rows that do not
+// apply to what was clicked. "Edit in Notepad" is absent -- not greyed
+// -- for a folder or a binary, since a row that can never apply here
+// is noise rather than a hint. Static because the popup keeps the
+// pointer while it is up.
+static struct uui_menu_item g_ctx_built[sizeof ctx_items / sizeof ctx_items[0]];
+int g_ctx_rows;   // how many of them the open popup holds (fm_view.c logs it)
+
+// Text or binary, git's rule: a NUL in the first bytes says binary. A
+// short read (an empty file, a permission problem) counts as text --
+// the item then opens Notepad on it, which is the safe wrong answer.
+static int looks_like_text(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return 1;
+    unsigned char buf[512];
+    size_t n = fread(buf, 1, sizeof buf, f);
+    fclose(f);
+    for (size_t i = 0; i < n; i++)
+        if (buf[i] == 0) return 0;
+    return 1;
+}
+
+static int build_ctx_items(void) {
+    int can_edit = 0;
+    char path[PATH_MAX_LEN];
+    if (uui_fileview_selected_path(active(), path, sizeof path) &&
+        !uui_fileview_selected_is_dir(active()))
+        can_edit = looks_like_text(path);
+    int n = 0;
+    for (int i = 0; i < (int)(sizeof ctx_items / sizeof ctx_items[0]); i++) {
+        if (ctx_items[i].code == CMD_EDIT && !can_edit) continue;
+        g_ctx_built[n++] = ctx_items[i];
+    }
+    return n;
+}
 
 static const struct uui_menu_item menu_items[] = {
     UUI_SUBMENU("File", file_items),
@@ -279,6 +318,8 @@ struct uui_item g_widgets[] = {
     { .ops = &uui_splitter_ops, .widget = &g_tree_split, .id = ID_TREE_SPLIT, .name = "treesplit" },
     { .ops = &uui_splitter_ops, .widget = &g_pane_split, .id = ID_PANE_SPLIT, .name = "panesplit" },
     { .ops = &uui_button_ops, .widget = &g_cancel_btn, .id = ID_CANCEL, .hidden = 1 },
+    { .ops = &uui_textbox_ops, .widget = &g_addr[0], .id = ID_ADDR_L, .name = "addr0" },
+    { .ops = &uui_textbox_ops, .widget = &g_addr[1], .id = ID_ADDR_R, .name = "addr1" },
     // LAST, so it is hit-tested FIRST: input order is the reverse of
     // draw order, and its popup covers whatever is under it.
     { .ops = &uui_menubar_ops, .widget = &g_ctx, .id = ID_CTX, .name = "ctxmenu" },  // not "ctx": the app's own `ctx <open>` line keeps that key
@@ -300,6 +341,47 @@ struct uui_item *widget_by_id(int id) {
 }
 
 void set_note(const char *s) { strlcpy(g_stat_note, s, sizeof g_stat_note); }
+
+// --- the address bars ---------------------------------------------------
+
+void addr_begin_edit(int pane) {
+    if (g_addr_edit >= 0 && g_addr_edit != pane) addr_end_edit(0);
+    g_active = pane;
+    g_addr_edit = pane;
+    uui_textbox_init(&g_addr[pane], uui_fileview_dir(&g_pane[pane]));
+    uui_textbox_set_active(&g_addr[pane], 1);
+    uui_textbox_key(&g_addr[pane], 0x01);   // Ctrl-A: typing replaces the path
+    refresh_status();
+}
+
+// `commit` navigates the pane to what was typed -- resolved against the
+// pane's own directory, so "sub" and "../etc" both mean what a shell
+// would take them to mean. A directory that does not exist is said so
+// and the field stays up, holding what was typed, for a second try.
+void addr_end_edit(int commit) {
+    int pane = g_addr_edit;
+    if (pane < 0) return;
+    if (commit) {
+        char path[PATH_MAX_LEN], was[PATH_MAX_LEN];
+        strlcpy(was, uui_fileview_dir(&g_pane[pane]), sizeof was);
+        const char *typed = uui_textbox_text(&g_addr[pane]);
+        if (!k_path_resolve(was, typed, path, sizeof path)) {
+            set_note("path too long");
+            return;
+        }
+        if (!uui_fileview_set_dir(&g_pane[pane], path)) {
+            // The failed listing left the pane EMPTY (ui/uui_fileview.h);
+            // put the directory it had back rather than show a hole.
+            uui_fileview_set_dir(&g_pane[pane], was);
+            snprintf(g_stat_note, sizeof g_stat_note, "no such directory: %s",
+                      k_path_basename(path));
+            return;
+        }
+    }
+    g_addr_edit = -1;
+    uui_textbox_set_active(&g_addr[pane], 0);
+    refresh_status();
+}
 
 // A divider's position, written when the drag ENDS rather than per
 // motion: a drag is hundreds of events and every one of them would be a
@@ -363,6 +445,21 @@ void do_command(struct uapp *a, int code) {
         // the Handles= declarations resolve to (lib/uopen.h).
         if (!uui_fileview_activate(active())) set_note("nothing selected");
         break;
+    case CMD_EDIT: {
+        // A launch, like on_pane_open(): not waited for.
+        char path[PATH_MAX_LEN];
+        if (!uui_fileview_selected_path(active(), path, sizeof path)) {
+            set_note("nothing selected");
+            break;
+        }
+        if (sys_spawn(NOTEPAD_EXEC, path, -1) < 0) {
+            set_note("could not start Notepad");
+            ulogf("files: edit %s -- spawn %s FAILED\n", path, NOTEPAD_EXEC);
+        } else {
+            snprintf(g_stat_note, sizeof g_stat_note, "editing %s", k_path_basename(path));
+        }
+        break;
+    }
     case CMD_PROPERTIES: {
         char path[PATH_MAX_LEN];
         if (!uui_fileview_selected_path(active(), path, sizeof path)) {
@@ -449,7 +546,14 @@ static void on_widget(struct uapp *a, int id, int reason) {
     }
     if (id == ID_DIALOG) {
         int code = uui_dialog_take_code(&g_dialog);
-        if (code > 0) answer_conflict(code);
+        if (code > 0) answer_dialog(code);
+        uapp_redraw(a);
+        return;
+    }
+    if (id == ID_ADDR_L || id == ID_ADDR_R) {
+        // A click in a path strip starts editing it (and makes that
+        // pane the active one, as clicking anywhere in a pane does).
+        if (reason == UUI_REASON_PRESS) addr_begin_edit(id == ID_ADDR_R);
         uapp_redraw(a);
         return;
     }
@@ -502,6 +606,13 @@ static void on_widget(struct uapp *a, int id, int reason) {
 // A SECONDARY CLICK ARMS THE CONTEXT MENU. It opens on the release --
 // uui_menubar.h says why in full, and it is not a style choice.
 static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
+    // A press anywhere but the field being edited ends the edit,
+    // keeping the path as it was -- Dolphin's and Explorer's rule, and
+    // the only one under which a click on a row cannot ALSO navigate.
+    if (g_addr_edit >= 0 && !uui_textbox_hit(&g_addr[g_addr_edit], x, y)) {
+        addr_end_edit(0);
+        uapp_redraw(a);
+    }
     if (!(buttons & 0x2) || g_modal != MODAL_NONE) return;
     if (uui_menubar_is_open(&g_ctx)) {
         uui_menubar_close(&g_ctx);  // a second right-click dismisses
@@ -527,9 +638,8 @@ static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
     if (!g_ctx_armed) return;
     g_ctx_armed = 0;
     if (g_modal != MODAL_NONE) return;
-    uui_menubar_open_at(&g_ctx, ctx_items,
-                         (int)(sizeof ctx_items / sizeof ctx_items[0]),
-                         g_ctx_x, g_ctx_y);
+    g_ctx_rows = build_ctx_items();
+    uui_menubar_open_at(&g_ctx, g_ctx_built, g_ctx_rows, g_ctx_x, g_ctx_y);
     uapp_redraw(a);
 }
 
@@ -539,11 +649,26 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     if (uui_dialog_is_open(&g_dialog)) {
         uui_dialog_key(&g_dialog, key);
         int code = uui_dialog_take_code(&g_dialog);
-        if (code > 0) answer_conflict(code);
+        if (code > 0) answer_dialog(code);
         uapp_redraw(a);
         return;
     }
     if (modal_key(a, key)) return;
+
+    // THE ADDRESS BAR BEING EDITED takes every key: Enter navigates,
+    // Esc puts the path back, the rest is typing.
+    if (g_addr_edit >= 0) {
+        if (key == '\n' || key == '\r') addr_end_edit(1);
+        else if (key == 0x1B) addr_end_edit(0);
+        else uui_textbox_key_mods(&g_addr[g_addr_edit], key, mods);
+        uapp_redraw(a);
+        return;
+    }
+    if (key == 0x0C) {   // Ctrl-L: edit the active pane's path, as in every file manager
+        addr_begin_edit(g_active);
+        uapp_redraw(a);
+        return;
+    }
 
     // ESC STOPS A RUNNING OPERATION, and only then -- asked AFTER the
     // dialog and the prompts above, so an Esc meant for one of those
@@ -756,11 +881,26 @@ static void answer_conflict(int code) {
     }
 }
 
+// One dialog widget, two questions: which one is up decides what an
+// answer means.
+static void answer_dialog(int code) {
+    enum dialog_kind kind = g_dialog_kind;
+    g_dialog_kind = DIALOG_NONE;
+    if (kind == DIALOG_DELETE) {
+        if (code == DLG_DELETE) commit_delete();
+        else set_note("cancelled");
+        refresh_status();
+        return;
+    }
+    answer_conflict(code);
+}
+
 static void raise_conflict(struct uapp *a) {
     // ANSWERED WITHOUT ASKING when an apply-to-all is standing. The
     // dialog is not even built, which is the point of the checkbox
     // every real file manager has.
     if (g_apply_all > 0) { answer_conflict(g_apply_all); return; }
+    g_dialog_kind = DIALOG_CONFLICT;
 
     const char *src = fm_conflict_src(), *dst = fm_conflict_dst();
     snprintf(g_dlg_rows[0], sizeof g_dlg_rows[0], "%s already exists.",
@@ -890,10 +1030,13 @@ int main(int argc, char **argv) {
         g_single = (opt[0] == '1');
     if (uconf_get(FILES_CONF, "tree", opt, sizeof opt))
         g_tree_on = (opt[0] == '1');
-    if (uconf_get(FILES_CONF, "left_view", opt, sizeof opt) && !strcmp(opt, "icons"))
+    // ICONS unless the file says details: the default every desktop
+    // file manager opens in, and what the thumbnails were built for.
+    if (!uconf_get(FILES_CONF, "left_view", opt, sizeof opt) || strcmp(opt, "details") != 0)
         uui_fileview_set_mode(&g_pane[0], UUI_FILEVIEW_ICONS);
-    if (uconf_get(FILES_CONF, "right_view", opt, sizeof opt) && !strcmp(opt, "icons"))
+    if (!uconf_get(FILES_CONF, "right_view", opt, sizeof opt) || strcmp(opt, "details") != 0)
         uui_fileview_set_mode(&g_pane[1], UUI_FILEVIEW_ICONS);
+    for (int i = 0; i < 2; i++) uui_textbox_init(&g_addr[i], "/");
 
     uui_splitter_init(&g_tree_split, 1, TREE_SPLIT_DEFAULT);
     uui_splitter_init(&g_pane_split, 1, PANE_SPLIT_DEFAULT);

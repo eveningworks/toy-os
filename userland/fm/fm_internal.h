@@ -31,7 +31,7 @@
 //   fm_jobs.c    the operation queue and its spawned children
 //   fm_tree.c    the lazy folder tree
 //   fm_thumbs.c  the lazy thumbnail cache
-//   fm_modal.c   Rename / New folder / the delete confirmation
+//   fm_modal.c   Rename / New folder (the two prompts with a text field)
 
 #define PATH_MAX_LEN 64          // FS_PATH_MAX
 #define PANE_FILES  SYS_LISTDIR_MAX
@@ -39,6 +39,11 @@
 // The Properties window is a PROCESS, not a dialog in this one. See
 // userland/gui/apps/properties.c.
 #define PROPERTIES_EXEC "/bin/wm/apps/properties"
+// "Edit in Notepad" on the context menu. Named here rather than
+// resolved through Handles=, because the item exists for the files
+// Notepad does NOT claim -- a README, a .desktop -- and is what "open
+// this as text anyway" means.
+#define NOTEPAD_EXEC "/bin/wm/apps/notepad"
 
 // The router's ids. A widget reports its own (ui/uui_widget.h).
 #define ID_LEFT  1
@@ -51,6 +56,8 @@
 #define ID_CTX   8
 #define ID_DIALOG 9
 #define ID_CANCEL 10
+#define ID_ADDR_L 11
+#define ID_ADDR_R 12
 
 // The commands, shared by the menu bar, the toolbar, the context menu
 // and the function keys -- one code per act, so those four cannot
@@ -61,7 +68,19 @@ enum {
     CMD_VIEW_DETAILS, CMD_VIEW_ICONS, CMD_VIEW_PANES, CMD_VIEW_TREE,
     CMD_UP, CMD_OPEN, CMD_PROPERTIES,
     CMD_CLIP_COPY, CMD_CLIP_CUT, CMD_CLIP_PASTE,
+    CMD_EDIT,
 };
+
+// The dialog's answers. ONE widget serves both questions the app asks
+// (a conflict, a delete), so `g_dialog_kind` says which one is up and
+// the codes never overlap.
+enum {
+    DLG_OVERWRITE = 1, DLG_OVERWRITE_ALL, DLG_SKIP, DLG_SKIP_ALL,
+    DLG_RENAME, DLG_RENAME_ALL, DLG_CANCEL,
+    DLG_DELETE,
+};
+enum dialog_kind { DIALOG_NONE, DIALOG_CONFLICT, DIALOG_DELETE };
+extern enum dialog_kind g_dialog_kind;
 
 // --- the app's own state (files.c) -----------------------------------
 
@@ -73,11 +92,21 @@ extern int g_single;             // one pane shown, not two
 extern int g_tree_on;
 extern struct uui_menubar g_menu;
 extern struct uui_menubar g_ctx; // the context menu -- no bar of its own
+extern int g_ctx_rows;           // rows in the open popup, separators included
 struct uui_dialog;
 extern struct uui_dialog g_dialog;
 extern struct uui_toolbar g_toolbar;
 extern struct uui_statusbar g_status;
 extern struct uui_button g_cancel_btn;
+
+// THE ADDRESS BARS. Each pane's path strip is a text field: read-only
+// looking until it is clicked (or Ctrl+L), then edited in place, Enter
+// navigates and Esc puts the path back -- Dolphin's split view. Only
+// one can be editing, `g_addr_edit` (-1 for none).
+extern struct uui_textbox g_addr[2];
+extern int g_addr_edit;
+void addr_begin_edit(int pane);
+void addr_end_edit(int commit);
 extern char g_stat_dir[PATH_MAX_LEN + 8];
 extern char g_stat_items[48];
 extern char g_stat_note[64];
@@ -146,7 +175,7 @@ extern int g_job_at, g_job_count;
 
 void do_copy(void);
 void do_move(void);
-void do_delete(void);
+void do_delete(void);     // opens the dialog; commit_delete() acts
 void commit_delete(void);
 void commit_mkdir(const char *name);
 void commit_rename(const char *name);
@@ -177,11 +206,13 @@ void clip_paste(void);
 
 // --- the modal (fm_modal.c) ------------------------------------------
 
-enum modal_kind { MODAL_NONE, MODAL_CONFIRM, MODAL_PROMPT };
+// Rename and New folder only: the delete confirmation is a
+// uui_dialog now (files.c's open_delete_dialog), since a question with
+// buttons is what that widget is.
+enum modal_kind { MODAL_NONE, MODAL_PROMPT };
 extern enum modal_kind g_modal;
 
 void open_prompt(int cmd, const char *title, const char *initial);
-void open_confirm(int cmd, const char *title, const char *body);
 int  modal_key(struct uapp *a, int key);
 void draw_modal(struct ugfx_surface *s);
 

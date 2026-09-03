@@ -280,10 +280,11 @@ void uui_fileview_init(struct uui_fileview *fv, int x, int y, int w, int h,
     uui_table_set_compare(&fv->table, fv_compare);
     uui_table_set_tint(&fv->table, fv_tint);
     uui_table_set_fade(&fv->table, fv_fade);
-    // Marked rows read as marked on this near-white theme by being
-    // WARMER, not lighter -- the same reasoning ui_state_bg() applies
-    // to hover (docs/gui-guidelines.md).
-    fv->mark_bg = ugfx_rgb(250, 232, 190);
+    // Marked rows wear the SELECTION colour, as in Explorer and Dolphin:
+    // a multi-selection is one selection with several rows, not a
+    // second kind of highlight. The cursor row is told apart by its
+    // focus ring, which is what the ring is for.
+    fv->mark_bg = fv->table.sel_bg;
     uui_table_set_sort(&fv->table, FV_COL_NAME, 1);
     // Typing a letter seeks by NAME, in both modes. Stated rather than
     // left to the default, so a reordered column list moves it too.

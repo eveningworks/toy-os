@@ -6090,3 +6090,23 @@ clicks live in `on_press`, and the router's press does not tell an app
 whether a click dismissed a popup -- so it reports the bar through
 `uapp_log_widget()` instead of joining the walk.
 
+
+## Marked rows wear the selection colour, and the cursor row is the focus ring
+
+The File Manager's marks (Insert/Space, a rubber band, Ctrl-click) were
+drawn in a warm yellow, chosen so a mark and the selection could never
+be confused: the selection is where the KEYS are, a mark is what an
+operation will act on, and one colour for both seemed to hide the
+first. Explorer, Dolphin, Nautilus and the Finder all disagree, and
+they are right: a multi-selection is ONE selection with several rows,
+and a second highlight colour makes the user learn a distinction the
+operations do not make -- F5 copies the marked set OR the cursor row,
+never both. So `uui_fileview.mark_bg` is the table's `sel_bg` now.
+
+What the yellow was doing -- saying which row the keys are on -- is the
+FOCUS RING's job, and the manager sets `table.focused` on its active
+pane so the cursor row carries one. The inactive pane's selection has no
+ring, which is also what every desktop does. The one thing a second
+colour could still do, and this deliberately does not, is show marks in
+a pane that is not active more loudly than its stale cursor; the
+outline on the active pane already answers "which pane".

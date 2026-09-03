@@ -394,30 +394,45 @@ def icon_tb_copy():
     return im
 
 
+def _folder_outline(d, x, y, w, h):
+    # The body, then the tab on its top-left -- the folder every desktop
+    # draws, as an outline so it matches the sheets beside it.
+    tab_w, tab_h = w * 2 // 5, 6
+    d.rounded_rectangle([x, y + tab_h, x + w, y + h], radius=3,
+                        outline=TB_INK, width=4)
+    d.rectangle([x, y, x + tab_w, y + tab_h + 2], fill=TB_INK)
+
+
 def icon_tb_move():
+    # A sheet leaving through the right edge: the arrow starts INSIDE
+    # the sheet and crosses its border, which is what says "this one
+    # goes there" rather than "a sheet, and separately an arrow".
     im, d = _tb()
-    _sheet(d, 4, 12, 26, 40)
-    d.rectangle([34, 28, 50, 36], fill=TB_INK)
-    d.polygon([(60, 32), (46, 22), (46, 42)], fill=TB_INK)
+    _sheet(d, 6, 8, 30, 44)
+    d.rectangle([20, 27, 46, 35], fill=TB_INK)
+    d.polygon([(60, 31), (44, 17), (44, 45)], fill=TB_INK)
     return im
 
 
 def icon_tb_mkdir():
+    # A folder with a plus in it -- freedesktop's folder-new.
     im, d = _tb()
-    d.polygon([(6, 52), (6, 14), (24, 14), (30, 22), (50, 22), (50, 52)],
-              fill=TB_INK)
-    # The "new" plus, drawn in the hole so it reads at 20px.
-    d.rectangle([42, 34, 62, 42], fill=TB_INK)
-    d.rectangle([48, 28, 56, 48], fill=TB_INK)
+    _folder_outline(d, 4, 12, 56, 42)
+    d.rectangle([22, 34, 46, 40], fill=TB_INK)
+    d.rectangle([31, 25, 37, 49], fill=TB_INK)
     return im
 
 
 def icon_tb_rename():
+    # A text field with the caret in it: rename is TYPING a name, and
+    # an I-beam is the one glyph that means "edit this text" on every
+    # desktop (edit-rename in Breeze, the F2 field in Explorer).
     im, d = _tb()
-    _sheet(d, 6, 8, 30, 44)
-    # A pencil across it: rename is an EDIT, not a move.
-    d.line([(26, 52), (58, 20)], fill=TB_INK, width=8)
-    d.polygon([(60, 12), (62, 26), (48, 24)], fill=TB_INK)
+    d.rounded_rectangle([4, 18, 60, 46], radius=3, outline=TB_INK, width=4)
+    d.rectangle([20, 26, 24, 38], fill=TB_INK)      # the caret's stem
+    d.rectangle([15, 24, 29, 27], fill=TB_INK)      # ...and its serifs
+    d.rectangle([15, 37, 29, 40], fill=TB_INK)
+    d.rectangle([32, 30, 50, 34], fill=TB_INK)      # a line of text after it
     return im
 
 

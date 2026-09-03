@@ -203,8 +203,13 @@ A progress protocol is a later stage and needs something to carry it.
     │ 3 items, 1.4 K        F5 Copy  F6 Move  F8 Del│
     └──────────────────────────────────────────────┘
 
-Two `uui_fileview`s in details mode, one active. The keymap is the one
-every commander shares:
+Two `uui_fileview`s, one active, opening in icons view and switchable
+per pane. The strip above each pane is its ADDRESS BAR -- a
+`uui_textbox` that reads as a path until it is clicked (or Ctrl-L), then
+edits in place: Enter navigates, Esc restores, a directory that does not
+exist is refused with the field left up. Dolphin's split view; the
+active pane's strip is in the accent colour. The keymap is the one every
+commander shares:
 
     Tab         switch the active pane
     Enter       descend into a directory / open a file with its app
@@ -213,9 +218,14 @@ every commander shares:
     F6          move it there (SYS_RENAME, or copy-then-delete across
                 filesystems -- there is only one today, so rename)
     F7          create a directory
-    F8 / Del    delete, behind a confirmation
+    F8 / Del    delete, behind a Delete / Cancel dialog (`uui_dialog`)
     F2          rename in place
+    Ctrl-L      edit the active pane's path
     Ctrl-R      re-read both panes
+
+The context menu adds one row the menu bar does not have: **Edit in
+Notepad**, present only for a text file (no NUL in its first 512 bytes,
+git's rule) and absent -- not greyed -- for a folder or a binary.
 
 Refresh is `SYS_FS_GENERATION` polled in `on_tick`, the desktop's idiom:
 one integer compare per tick, no disk I/O, and a copy that finishes
@@ -246,8 +256,9 @@ Stated so they are limitations rather than discoveries:
   cell math, with `api/rubberband.h`'s sweep marking files -- the
   second caller both were written for.
 - ~~**No multi-selection.**~~ BUILT after all, at the maintainer's
-  request: Insert or Space marks a row and steps down, marked rows are
-  tinted, and F5/F6/F8 act on the whole set through a job QUEUE that
+  request: Insert or Space marks a row and steps down, marked rows wear
+  the selection colour (the cursor row is the focus ring -- see
+  `docs/decisions.md`), and F5/F6/F8 act on the whole set through a job QUEUE that
   runs one child at a time. The marks are a BITMAP in the widget and are
   cleared by every reload, so a caller acting on them snapshots the
   paths first -- which the manager does, because a copy in progress
