@@ -157,6 +157,77 @@ def find_free_instance(count=16, base_qmp=4445, base_vnc=5):
     return None
 
 
+# --- the one flag a tool takes to name its guest ---------------------
+#
+# A tool that CONNECTS to a guest used to take `--sock` and `--qmp-port`
+# separately, each defaulting to slot 0 -- so `--qmp-port 4447` alone
+# drove slot 2's screen while reading slot 0's log, and 47 tools carried
+# the pair with no check between them. `--instance N` is vm.py's
+# numbering (QMP 4445+N, `.vm.N.serial`), derived here so the two
+# endpoints cannot disagree. The legacy pair still works for a caller
+# that passes both (gui_regress.py did); a lone one derives its partner
+# from the same slot and says so; mixing `--instance` with either is
+# refused rather than guessed.
+
+QMP_BASE = 4445
+VNC_BASE = 5
+
+
+def instance_qmp(n):
+    return QMP_BASE + int(n)
+
+
+def instance_sock(n):
+    n = int(n)
+    return ".vm.serial" if n == 0 else f".vm.{n}.serial"
+
+
+def add_instance_args(ap):
+    """`--instance N`, plus the legacy `--sock`/`--qmp-port` pair, on a
+    tool that drives an already-running guest. Pair with
+    resolve_instance() after parse_args()."""
+    ap.add_argument("--instance", type=int, default=None, metavar="N",
+                    help="the VM slot to drive, vm.py's numbering: QMP 4445+N "
+                         "and .vm.N.serial (default: slot 0)")
+    ap.add_argument("--sock", default=None,
+                    help="serial socket; --instance derives it")
+    ap.add_argument("--qmp-port", type=int, default=None,
+                    help="QMP port; --instance derives it")
+
+
+def resolve_instance(args, tool="tool"):
+    """Fill args.sock and args.qmp_port from args.instance, or from
+    whichever of the pair was given. Refuses a mix."""
+    if args.instance is not None:
+        if args.sock is not None or args.qmp_port is not None:
+            raise SystemExit(f"{tool}: pass --instance OR --sock/--qmp-port, "
+                             f"not both -- they would name two guests")
+        args.sock = instance_sock(args.instance)
+        args.qmp_port = instance_qmp(args.instance)
+        return args
+    if args.qmp_port is not None and args.sock is None:
+        n = args.qmp_port - QMP_BASE
+        args.sock = instance_sock(n)
+        if n:
+            print(f"{tool}: --qmp-port {args.qmp_port} is slot {n}; reading "
+                  f"{args.sock} to match (say --instance {n} next time)")
+    elif args.sock is not None and args.qmp_port is None:
+        n = 0
+        if args.sock.startswith(".vm.") and args.sock.endswith(".serial"):
+            mid = args.sock[len(".vm."):-len(".serial")]
+            n = int(mid) if mid.isdigit() else 0
+        args.qmp_port = instance_qmp(n)
+        if n:
+            print(f"{tool}: --sock {args.sock} is slot {n}; QMP {args.qmp_port} "
+                  f"to match (say --instance {n} next time)")
+    else:
+        if args.sock is None:
+            args.sock = instance_sock(0)
+        if args.qmp_port is None:
+            args.qmp_port = instance_qmp(0)
+    return args
+
+
 if __name__ == "__main__":
     # Usable on its own: `python3 tools/port_guard.py 4445` exits 0 when
     # that port is free.

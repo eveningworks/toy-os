@@ -39,6 +39,7 @@ import sys, tempfile, time
 sys.path.insert(0, "tools")
 from qmp_test import QMPSession
 from gui_debug import DebugConsole, enter_gui
+import port_guard  # noqa: E402
 from PIL import Image
 
 # Scratch screenshots go to a temp directory, NOT the working tree.
@@ -73,11 +74,11 @@ def main():
     # to slot 0's socket, found nothing there, and timed out in six
     # seconds looking like a dialog bug.
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--sock", default=".vm.serial")
-    ap.add_argument("--qmp-port", type=int, default=4445)
+    port_guard.add_instance_args(ap)   # --instance N, or the legacy --sock/--qmp-port
     ap.add_argument("--in-gui", action="store_true")
     ap.add_argument("--tmp", default=OUT)
     args = ap.parse_args()
+    port_guard.resolve_instance(args, "dialog_test")
     OUT = args.tmp
 
     qmp = QMPSession(port=args.qmp_port)

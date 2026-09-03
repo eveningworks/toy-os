@@ -1085,8 +1085,13 @@ window without going through it will find its layout polls timing out.
   and rewrites `/etc`); run it after touching init's services, the
   console claim, or `apps/apps.c`.
 - **`port_guard.py`** -- refuses to start a guest on a QMP or VNC port
-  another guest already holds, and picks a free slot for callers that
-  ask. It exists because **a QMP port clash does not fail as a port
+  another guest already holds, picks a free slot for callers that ask,
+  and is where a tool that DRIVES a guest gets its `--instance N` flag
+  (`add_instance_args()` + `resolve_instance()`): one number derives
+  both the QMP port and the serial socket, so the two cannot name
+  different guests -- which `--qmp-port 4447` with the default socket
+  silently did across 47 tools. The legacy pair still works; a lone one
+  derives its partner from its slot and prints which; a mix is refused. It exists because **a QMP port clash does not fail as a port
   clash**: everything here defaults to 4445, a second launch silently
   fights the first, and the error lands minutes later as a
   `BrokenPipeError`/`ConnectionResetError` against whichever tool was

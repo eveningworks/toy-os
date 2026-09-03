@@ -58,6 +58,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole, enter_gui
 from qmp_test import QMPSession
+import port_guard  # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
 SPAWN_PATH = "/bin/wm/apps/notepad"   # spawned directly -- see run()
@@ -314,11 +315,11 @@ def run(dbg, qmp, tmp, res):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--sock", default=DEFAULT_SOCK)
-    ap.add_argument("--qmp-port", type=int, default=4445)
+    port_guard.add_instance_args(ap)   # --instance N, or the legacy --sock/--qmp-port
     ap.add_argument("--in-gui", action="store_true")
     ap.add_argument("--tmp", default="/tmp")
     args = ap.parse_args()
+    port_guard.resolve_instance(args, "scrollbar_test")
 
     qmp = QMPSession(port=args.qmp_port)
     if not args.in_gui:

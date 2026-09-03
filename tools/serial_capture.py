@@ -50,11 +50,13 @@ import socket
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import port_guard  # noqa: E402
+
 
 def capture(sock_path, seconds, send=None, settle=2.0, enter_gui=False,
             qmp_port=4445, out=None):
     if enter_gui:
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from qmp_test import QMPSession
         from gui_debug import enter_gui as _enter_gui
         qmp = QMPSession(port=qmp_port)
@@ -98,17 +100,16 @@ def main():
     ap = argparse.ArgumentParser(
         description=__doc__.splitlines()[0],
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--sock", default=".vm.serial",
-                    help="serial socket (vm.py slot N is .vm.N.serial)")
+    port_guard.add_instance_args(ap)   # --instance N, or the legacy --sock/--qmp-port
     ap.add_argument("--seconds", type=float, default=10.0,
                     help="how long to capture after sending (default 10)")
     ap.add_argument("--send", default=None,
                     help="one console command to send first")
     ap.add_argument("--gui", action="store_true",
                     help="type `gui` over QMP first, to bring the desktop up")
-    ap.add_argument("--qmp-port", type=int, default=4445)
     ap.add_argument("--out", default=None, help="write the capture here too")
     args = ap.parse_args()
+    port_guard.resolve_instance(args, "serial_capture")
 
     text = capture(args.sock, args.seconds, send=args.send,
                    enter_gui=args.gui, qmp_port=args.qmp_port, out=args.out)

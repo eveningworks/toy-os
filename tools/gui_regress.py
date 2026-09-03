@@ -256,8 +256,6 @@ def run_one(name, script, disk_src, timeout, keep_logs, slot, kvm=False):
     img = os.path.join(tempfile.gettempdir(), f"gui_regress_{name}.img")
     vm = os.path.join(HERE, "vm.py")
     inst = ["--instance", str(slot)]
-    sock = ".vm.serial" if slot == 0 else f".vm.{slot}.serial"
-    qmp_port = 4445 + slot
 
     subprocess.run([sys.executable, vm] + inst + ["stop"], cwd=REPO,
                    capture_output=True)
@@ -296,8 +294,7 @@ def run_one(name, script, disk_src, timeout, keep_logs, slot, kvm=False):
             return ("FAIL", time.time() - started,
                     "the guest never started: "
                     + (why[0] if why else f"vm.py exited {boot.returncode}"))
-        r = subprocess.run([sys.executable, tool,
-                            "--sock", sock, "--qmp-port", str(qmp_port)],
+        r = subprocess.run([sys.executable, tool, "--instance", str(slot)],
                            cwd=REPO, capture_output=True, text=True,
                            timeout=timeout)
         out = r.stdout + r.stderr

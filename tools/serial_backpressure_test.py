@@ -52,6 +52,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from qmp_test import QMPSession  # noqa: E402
+import port_guard  # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
 
@@ -83,9 +84,9 @@ def clock_box(size):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--sock", default=DEFAULT_SOCK)
-    ap.add_argument("--qmp-port", type=int, default=4445)
+    port_guard.add_instance_args(ap)   # --instance N, or the legacy --sock/--qmp-port
     args = ap.parse_args()
+    port_guard.resolve_instance(args, "serial_backpressure_test")
 
     from PIL import Image
 

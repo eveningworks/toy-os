@@ -1249,8 +1249,11 @@ opening it:
   `ConnectionResetError` in whichever tool was mid-command -- which is
   never the tool that caused it. `tools/port_guard.py` refuses at the
   launch now, from the same two chokepoints `iso_guard.py` guards.
-  **Use `--instance auto` (or `--instance N`) whenever anything else
-  might be running** -- `gui_regress.py` holds slots `0..DEFAULT_JOBS-1`
+  **Every tool takes `--instance N` now** (`port_guard.add_instance_args()`),
+  which derives the QMP port AND the serial socket from one number so
+  they cannot name two guests; a lone `--qmp-port` is mapped to its
+  slot and says so. **Use `--instance auto` (or `--instance N`) whenever
+  anything else might be running** -- `gui_regress.py` holds slots `0..DEFAULT_JOBS-1`
   while it runs (up to 8, i.e. QMP 4445-4452), so don't hand-pick a low
   slot; `auto` probes for the lowest free one and prints it, which is
   what makes the run replayable. **What it does NOT fix is CPU contention**: a tool

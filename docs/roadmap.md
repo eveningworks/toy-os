@@ -859,7 +859,7 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [ ] 26 copy-to/from-user calls discard their result under a "validated above" comment -- the pre-helper idiom the header retires
 - [ ] `docs/decisions/` still says `Milestone N` ~50 times in prose; `check_docs.py` only rejects numbered headings
 - [x] ~~~24 GUI tools byte-compare raw screendumps; 8 use `stable_pixels()`~~ DONE 2026-09-03 -- `screenshot()` settles by default
-- [ ] 51 tools take only `--qmp-port` (default 4445) and never launch, so `port_guard` cannot see them; move them to `--instance`
+- [x] ~~51 tools take only `--qmp-port` (default 4445) and never launch, so `port_guard` cannot see them~~ DONE 2026-09-03 -- `--instance N`
 - [x] ~~Three tools hand-roll `send_text("gui")` plus a sleep instead of `enter_gui()`~~ DONE 2026-09-03
 - [x] ~~`fat32_test.py` and `kvm_soak.py` test readiness with `"ready" in out`~~ DONE 2026-09-03 -- `vm.started_ok()`
 - [ ] Seven tools build their own QEMU argv and bypass both `iso_guard` and `port_guard`; `docs/testing.md` half-blesses it

@@ -65,6 +65,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "tools"))
 from gui_debug import DebugConsole, enter_gui                 # noqa: E402
 from qmp_test import QMPSession                               # noqa: E402
+import port_guard  # noqa: E402
 
 # Characters `gui key` wants as a hex code rather than as themselves.
 # `gui key` takes a hex code for anything the console will not pass
@@ -441,9 +442,9 @@ def main():
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--keys", action="store_true", help="the keymap probes only")
     ap.add_argument("--pixels", action="store_true", help="the pixel probes only")
-    ap.add_argument("--sock", default=".vm.serial")
-    ap.add_argument("--qmp-port", type=int, default=4445)
+    port_guard.add_instance_args(ap)   # --instance N, or the legacy --sock/--qmp-port
     args = ap.parse_args()
+    port_guard.resolve_instance(args, "terminal_probe")
     both = not (args.keys or args.pixels)
 
     r = subprocess.run([sys.executable, "tools/vm.py", "start"], cwd=REPO,

@@ -64,6 +64,7 @@ from gui_debug import DebugConsole, enter_gui          # noqa: E402
 # the colour out of the guest would agree with a broken guest.
 UTHEME_ACCENT_RGB = (70, 110, 160)
 from qmp_test import QMPSession             # noqa: E402
+import port_guard  # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
 SPAWN_PATH = "/bin/wm/demos/uidemo"   # a ring-3 process since M41's stage 0
@@ -541,15 +542,14 @@ def check_focus_is_visible(d, qmp, tmp):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--sock", default=DEFAULT_SOCK,
-                    help=f"serial unix socket (default {DEFAULT_SOCK}, what tools/vm.py creates)")
-    ap.add_argument("--qmp-port", type=int, default=4445)
+    port_guard.add_instance_args(ap)   # --instance N, or the legacy --sock/--qmp-port
     ap.add_argument("--in-gui", action="store_true",
                     help="the VM already shows the desktop; don't type `gui` first")
     ap.add_argument("--shot", metavar="DIR",
                     help="also write uidemo-widgets.png / uidemo-dropdown-open.png here")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
+    port_guard.resolve_instance(args, "uidemo_test")
 
     qmp = QMPSession(port=args.qmp_port)
     if not args.in_gui:

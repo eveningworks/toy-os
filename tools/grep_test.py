@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from gui_debug import DebugConsole, enter_gui       # noqa: E402
 from qmp_test import QMPSession                     # noqa: E402
+import port_guard  # noqa: E402
 from terminal_probe import Terminal                  # noqa: E402
 
 OUT = "/tmp/grep_out.txt"
@@ -91,9 +92,9 @@ def run(term, dbg, cmdline):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--qmp-port", type=int, default=4445)
-    ap.add_argument("--sock", default=".vm.serial")
+    port_guard.add_instance_args(ap)   # --instance N, or the legacy --sock/--qmp-port
     args = ap.parse_args()
+    port_guard.resolve_instance(args, "grep_test")
 
     qmp = QMPSession(port=args.qmp_port)
     enter_gui(qmp, args.sock)

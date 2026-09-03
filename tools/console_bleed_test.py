@@ -44,6 +44,7 @@ from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole, enter_gui   # noqa: E402
 from qmp_test import QMPSession                 # noqa: E402
+import port_guard  # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
 # The loudest thing in /bin: the whole kernel ring buffer, hundreds of
@@ -85,9 +86,9 @@ def diff_pct(a, b, skip_bottom=0):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--sock", default=DEFAULT_SOCK)
-    ap.add_argument("--qmp-port", type=int, default=4445)
+    port_guard.add_instance_args(ap)   # --instance N, or the legacy --sock/--qmp-port
     args = ap.parse_args()
+    port_guard.resolve_instance(args, "console_bleed_test")
 
     tmp = tempfile.mkdtemp(prefix="bleed_")
     dbg = DebugConsole(args.sock)

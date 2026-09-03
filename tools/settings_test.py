@@ -54,6 +54,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole, changed_rows, enter_gui   # noqa: E402
 from qmp_test import QMPSession             # noqa: E402
+import port_guard  # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
 SETTINGS = "/bin/wm/system/settings"
@@ -244,11 +245,11 @@ def advanced_toggle(dbg, mark):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--sock", default=DEFAULT_SOCK)
-    ap.add_argument("--qmp-port", type=int, default=4445)
+    port_guard.add_instance_args(ap)   # --instance N, or the legacy --sock/--qmp-port
     ap.add_argument("--in-gui", action="store_true")
     ap.add_argument("--tmp", default="/tmp")
     args = ap.parse_args()
+    port_guard.resolve_instance(args, "settings_test")
 
     qmp = QMPSession(port=args.qmp_port)
     if not args.in_gui:
