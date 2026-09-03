@@ -41,8 +41,16 @@ static void action_shutdown(void) {
     confirm_dialog_open_with("Shut down? Unsaved changes will be lost.", do_shutdown, 0);
 }
 
+// Restart -- the same syscall with the other argument (the FADT's reset
+// register, kernel/acpi/). Before Shutdown, as KDE orders them.
+static void do_restart(void) { sys_poweroff(1); }
+static void action_restart(void) {
+    confirm_dialog_open_with("Restart? Unsaved changes will be lost.", do_restart, 0);
+}
+
 const struct start_action wm_system_actions[] = {
     { "Exit to shell", action_exit_to_shell },
+    { "Restart", action_restart },
     { "Shutdown", action_shutdown },
 };
 const int wm_system_action_count = sizeof(wm_system_actions) / sizeof(wm_system_actions[0]);

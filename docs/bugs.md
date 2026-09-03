@@ -237,3 +237,16 @@ Reproduce: `make clean-disk && make iso && python3 tools/ondemand_sweep.py --log
   harness rot, not the dynamic-userland change; cause not established.
 
 Reproduce: `python3 tools/ansi_cursor_test.py` (boots its own guest).
+
+- **`taskbar_test.py`** — its overflow section fails three checks every
+  run: `every window is accounted for (21 windows)` (20 buttons + 0
+  hidden), `windows of one app collapse into one button` (20 Notepads,
+  no grouping) and `a different application gets its own button`.
+  Measured PRE-EXISTING with `predates.py` against a54649ec on
+  2026-09-03: HEAD fails the same three. Plausibly harness rot -- the
+  floor is `3*char_w+16` now, so twenty floor-width buttons fit a
+  1280px strip without grouping, and the 21st spawn hits `no free
+  descriptor table` -- but NOT verified by hand. The
+  `desktop.taskbar_height` checks that now run first pass.
+
+Reproduce: `python3 tools/vm.py --disk <copy> start && python3 tools/taskbar_test.py`.

@@ -139,6 +139,7 @@ void tray_update_clock(void) {
 // (docs/gui-guidelines.md): the taskbar's height is, so this is.
 static int tray_icon_size(void) {
     int s = taskbar_h - 6;
+    if (s > TASKBAR_ICON_MAX + 4) s = TASKBAR_ICON_MAX + 4; // still larger than a button's
     return s < 8 ? 0 : s;
 }
 

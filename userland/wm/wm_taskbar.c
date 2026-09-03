@@ -8,6 +8,7 @@
 #include "kapi.h"
 #include "rt/sys.h"
 #include "wm/wm_conf.h"   // struct setting_msg, SETTING_OP_*
+#include "taskbar_config.h" // TASKBAR_H_MIN/MAX/DEFAULT
 
 #define TB_GAP 4
 
@@ -36,8 +37,30 @@ enum start_button_mode taskbar_start_mode(void) { return g_start_mode; }
 
 int start_icon_size(void) {
     if (g_start_mode == START_BUTTON_TEXT) return 0;
-    int s = taskbar_h - 10;
-    return s < 8 ? 0 : s;
+    return taskbar_icon_size();
+}
+
+int taskbar_default_h(void) { return TASKBAR_H_DEFAULT; }
+
+static void setting_get(const char *name, struct setting_msg *msg) {
+    for (unsigned i = 0; i < sizeof *msg; i++) ((uint8_t *)msg)[i] = 0;
+    msg->op = SETTING_OP_GET;
+    k_strlcpy(msg->name, name, sizeof msg->name);
+    if (sys_setting(msg) != 0) msg->value[0] = 0;
+}
+
+// `desktop.taskbar_height` as the registry answers it, or the default
+// if the registry could not be asked. The registry bounds a WRITTEN
+// value; the clamp here covers a hand-edited file, since a 4px strip
+// has no button left to recover from.
+static int read_height(void) {
+    struct setting_msg msg;
+    setting_get("desktop.taskbar_height", &msg);
+    int64_t v;
+    if (!msg.value[0] || !k_parse_i64(msg.value, &v)) return taskbar_default_h();
+    if (v < TASKBAR_H_MIN) v = TASKBAR_H_MIN;
+    if (v > TASKBAR_H_MAX) v = TASKBAR_H_MAX;
+    return (int)v;
 }
 
 void taskbar_poll_config(void) {
@@ -48,12 +71,20 @@ void taskbar_poll_config(void) {
     seen_gen = gen;
     primed = 1;
 
+    // THE HEIGHT FIRST, because everything below the strip moves with
+    // it: the desktop grid, every maximized window, the Start menu's
+    // anchor. wm_layout_changed() re-derives all of that, the same walk
+    // a screen-size change makes.
+    int h = read_height();
+    if (h != taskbar_h) {
+        taskbar_h = h;
+        wm_layout_changed();
+    }
+
     enum start_button_mode want = START_BUTTON_TEXT;
     struct setting_msg msg;
-    for (unsigned i = 0; i < sizeof msg; i++) ((uint8_t *)&msg)[i] = 0;
-    msg.op = SETTING_OP_GET;
-    k_strlcpy(msg.name, "desktop.start_button", sizeof msg.name);
-    if (sys_setting(&msg) == 0 && msg.value[0]) {
+    setting_get("desktop.start_button", &msg);
+    if (msg.value[0]) {
         if (k_strcmp(msg.value, "icon") == 0) want = START_BUTTON_ICON;
         else if (k_strcmp(msg.value, "both") == 0) want = START_BUTTON_BOTH;
     }
@@ -145,6 +176,9 @@ static int fit_width(int avail, int n, int natural) {
 // scales with the font like everything else on it.
 int taskbar_icon_size(void) {
     int s = taskbar_h - 10;
+    // Capped: the masters are 64px and a thick strip would otherwise
+    // ask for an upscaled icon. 32 is Windows 11's in a 48px bar.
+    if (s > TASKBAR_ICON_MAX) s = TASKBAR_ICON_MAX;
     return s < 8 ? 0 : s;
 }
 

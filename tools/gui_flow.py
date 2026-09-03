@@ -59,7 +59,8 @@ SCREEN_H = 720
 # These track the DEFAULT FONT and have been re-measured three times
 # now, once per change to it: gfx_char_h()=18 (TASKBAR_H 32, ITEM_H 24),
 # then 21 (29, 27), and now 16 at the FONT_SIZE_14 default (24, 22).
-# TASKBAR_H is WM_TITLEBAR_H = gfx_char_h()+8; ITEM_H is gfx_char_h()+6.
+# TASKBAR_H is TASKBAR_H_DEFAULT unless `desktop.taskbar_height` says
+# otherwise; ITEM_H is gfx_char_h()+6.
 #
 # The lesson those three re-measurements teach is not "keep them
 # updated" -- it is don't depend on them. `gui menu --json` /
@@ -69,7 +70,7 @@ SCREEN_H = 720
 # and pixel-scan for the top border row and the divider row between the
 # app list and the system actions -- both draw in THEME_BORDER, a solid
 # distinctive colour run, unlike the surrounding text glyph rows.
-TASKBAR_H = 24       # WM_TITLEBAR_H -- taskbar strip is the same height as a title bar
+TASKBAR_H = 40       # desktop.taskbar_height's default (api/taskbar_config.h)
 ITEM_H = 22           # Start menu row height (gfx_char_h() + 6 -- see above)
 START_BTN = (50, 703)  # inside the taskbar's Start button, safely off any edge
 
@@ -201,7 +202,7 @@ class GuiFlow:
         self.click_menu_row(name, settle=settle, _menu_already_open=True)
 
     def run_system_action(self, label, settle=0.5):
-        """`Exit to shell` / `Shutdown` -- the rows below the divider.
+        """`Exit to shell` / `Restart` / `Shutdown` -- the rows below the divider.
         Same mechanism as open_app(); they are menu rows like any other,
         and were only ever a separate list because the index arithmetic
         needed to know how many apps came first.

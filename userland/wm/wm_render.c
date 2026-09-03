@@ -88,8 +88,13 @@ const struct uimg *start_icon(int *out_x, int *out_y, int *out_size) {
     return ico;
 }
 
+// A button's natural width: the label's characters, the padding, AND
+// the icon column -- make_label() subtracts that column from the width
+// it is handed, so leaving it out here spent the label on the icon
+// ("untitled" drew as "un" once the strip, and so the icon, grew).
 int win_btn_w(void) {
-    return WIN_LABEL_MAX_CHARS * ugfx_char_w() + 24;
+    int icon = taskbar_icon_size();
+    return WIN_LABEL_MAX_CHARS * ugfx_char_w() + 24 + (icon ? icon + 4 : 0);
 }
 
 // The minimize/maximize/close title-bar buttons used to be a fixed

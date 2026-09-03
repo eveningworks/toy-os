@@ -21,6 +21,7 @@
 #include "cursor_theme_config.h"
 #include "wallpaper_config.h"
 #include "start_button_config.h"
+#include "taskbar_config.h"
 #include "week_start_config.h"
 #include "target.h"
 #include "setting_abi.h"
@@ -566,6 +567,7 @@ void settings_init(void) {
     cursor_theme_setting_register();
     wallpaper_setting_register();
     start_button_setting_register();
+    taskbar_setting_register();
     week_start_setting_register();
     target_setting_register();
     tunables_register();

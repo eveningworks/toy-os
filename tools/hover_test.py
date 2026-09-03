@@ -85,6 +85,7 @@ def main():
     sx, sy = int(m.group(1)), int(m.group(2))
 
     raw(f"gui click {sx} {sy}")
+    dbg.settle()   # a queued click is consumed on the WM's next frame, not on ours
     state = raw("gui state")
     check("the Start menu opened", "start_menu=1" in state, state[:120])
 
@@ -107,6 +108,7 @@ def main():
           f"(the bug gives 0-1, from the clock)")
 
     raw(f"gui click {sx} {sy}")   # close the menu again
+    dbg.settle()
 
     # THE INVERSE, and it is what stops this passing on a WM that simply
     # repaints on every move. With no overlay open a move changes no

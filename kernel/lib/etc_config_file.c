@@ -83,12 +83,18 @@ static int rewrite(const char *path, const char *key, const char *value) {
         in->size = 0;
         in->data[0] = '\0';
     }
-    uint32_t n = etc_config_buf_set(in->data, in->size, key, value,
-                                     out, ETC_CONFIG_MAX);
+    // An unset is answered from the document BEFORE the rewrite,
+    // because etc_config_buf_set() returns the new length and removing
+    // a file's only key produces an EMPTY document -- length 0, the same
+    // answer as "not there". That refused every unset of a lone key.
+    char probe[128];
+    int absent = !value && !(in->valid && etc_config_buf_get(in, key, probe, sizeof probe));
+    uint32_t n = absent ? 0 : etc_config_buf_set(in->data, in->size, key, value,
+                                                   out, ETC_CONFIG_MAX);
     int rc = 0;
-    // n == 0 is "the key was absent" for an unset and "it would not
-    // fit" for a set; neither writes anything.
-    if (n != 0) rc = fs_write(path, out, 0);
+    // A set that produced nothing would not fit; an unset of a present
+    // key always writes, even the empty document.
+    if (!absent && (n != 0 || !value)) rc = fs_write(path, out, 0);
     kfree(in);
     kfree(out);
     return rc;

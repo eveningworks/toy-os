@@ -24,7 +24,9 @@
 // which is the failure this file exists to end. A second row is the
 // obvious next step and is deliberately not taken -- `taskbar_h` is a
 // constant that the desktop icon area, the Start menu's anchor, the
-// context-menu clamp and every damage rect all derive from.
+// context-menu clamp and every damage rect all derive from -- and now
+// a SETTING, `desktop.taskbar_height`, adopted through
+// taskbar_poll_config() and relaid through wm_layout_changed().
 //
 // GROUPING KEY: `struct window.app_id` -- the client's own name for what
 // its window IS ("notepad"), which is why every uapp now sets one. A
@@ -67,6 +69,12 @@ int taskbar_layout(struct taskbar_button *out, int max);
 // WHICH icon is not a taskbar question and no longer lives here: a
 // title bar asks it too, so it is wm_window_icon_name() in wm.c.
 int taskbar_icon_size(void);
+#define TASKBAR_ICON_MAX 32
+
+// The strip's height with `desktop.taskbar_height` unset -- the
+// registry's constant (api/taskbar_config.h), NOT a font formula: the
+// two rings' fonts do not share a line height.
+int taskbar_default_h(void);
 
 // HOW THE START BUTTON LOOKS: the word, the mark, or both --
 // `desktop.start_button`, an enum the registry owns
@@ -93,8 +101,8 @@ enum start_button_mode taskbar_start_mode(void);
 // start_btn_w() reserves it.
 int start_icon_size(void);
 
-// Re-reads `desktop.start_button` if anything on the filesystem has
-// changed. Called once per frame from wm.c, beside desktop_poll_config()
+// Re-reads `desktop.taskbar_height` and `desktop.start_button` if
+// anything on the filesystem has changed. Called once per frame from wm.c, beside desktop_poll_config()
 // and for the same reason -- there is no inotify here, so a generation
 // counter is what says "ask again". The idle cost is one compare.
 void taskbar_poll_config(void);

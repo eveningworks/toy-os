@@ -663,6 +663,18 @@ void wm_screen_changed(void) {
     screen_w = g_wm_screen.back.w;
     screen_h = g_wm_screen.back.h;
     wm_rawin_clamp(screen_w, screen_h);
+    wm_layout_changed();
+    wm_hwcursor_invalidate();
+    wm_logf("wm: screen changed -- %dx%d, %d scanout(s)\n", screen_w, screen_h,
+            g_wm_screen.buffers);
+}
+
+// The usable area moved -- a new screen size, or a new taskbar height
+// (wm_taskbar.c). Everything derived from `screen_h - taskbar_h` is
+// re-derived here: the icon grid's rows, each maximized window's size,
+// every other window's clamp, and the overlays, which are simply closed
+// since they re-clamp on their next open.
+void wm_layout_changed(void) {
     desktop_entries_changed();   // the icon grid's rows depend on the height
 
     if (start_menu_open) { start_menu_open = 0; }
@@ -691,11 +703,8 @@ void wm_screen_changed(void) {
         if (w->y > max_y) w->y = max_y;
         if (w->y < 0) w->y = 0;
     }
-    wm_hwcursor_invalidate();
     wm_render_reset();
     redraw_pending = 1;
-    wm_logf("wm: screen changed -- %dx%d, %d scanout(s)\n", screen_w, screen_h,
-            g_wm_screen.buffers);
 }
 
 void wm_run(void) {
@@ -749,10 +758,9 @@ void wm_run(void) {
 
     screen_w = g_wm_screen.back.w;
     screen_h = g_wm_screen.back.h;
-    // AFTER the font: WM_TITLEBAR_H is `ugfx_char_h() + 8`, so computing
-    // this first pins the chrome at 8px for the life of the session no
-    // matter what the font does afterwards.
-    taskbar_h = WM_TITLEBAR_H;
+    // The configured height, if any, arrives on the first
+    // taskbar_poll_config() before the first frame.
+    taskbar_h = taskbar_default_h();
 
     // Registers the two cursor settings and loads the configured theme.
     // Before the first frame, so the pointer is themed from the moment

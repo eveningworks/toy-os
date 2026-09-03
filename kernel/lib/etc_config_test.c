@@ -43,6 +43,18 @@ KTEST("etc_config", "set then get round-trips a value") {
     fs_delete(SCRATCH);
 }
 
+KTEST("etc_config", "unsetting a file's only key empties it rather than refusing") {
+    fs_delete(SCRATCH);
+    KTEST_ASSERT_EQ(etc_config_set(SCRATCH, "only", "one"), 1);
+    // The rewrite's length is 0 here, which used to read as "absent".
+    KTEST_ASSERT_EQ(etc_config_unset(SCRATCH, "only"), 1);
+    char v[16];
+    KTEST_ASSERT_EQ(etc_config_get(SCRATCH, "only", v, sizeof v), 0);
+    // And a key that genuinely is not there is still refused.
+    KTEST_ASSERT_EQ(etc_config_unset(SCRATCH, "only"), 0);
+    fs_delete(SCRATCH);
+}
+
 KTEST("etc_config", "a write under a missing directory FAILS, and says so") {
     // The exact shape of the original bug: no directory, so the write
     // cannot land. What matters is that this returns 0 rather than

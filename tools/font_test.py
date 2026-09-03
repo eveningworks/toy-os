@@ -52,6 +52,9 @@ PROP = "liberation-sans"
 # show (those are clipped to the icon cell, so a narrower font mostly
 # just un-truncates them).
 TEXT_X0, TEXT_X1 = 700, 1280
+# The rows just above the taskbar, where desktop.c draws the version text.
+# Set from the guest's own strip height in main(): the band used to be
+# fixed at 655..690 and read the strip itself as ink once it grew.
 TEXT_Y0, TEXT_Y1 = 655, 690
 BG = (24, 60, 90)
 
@@ -527,6 +530,10 @@ def main():
         enter_gui(qmp, args.sock)
 
     dbg = DebugConsole(args.sock)
+    global TEXT_Y0, TEXT_Y1
+    st = dbg.state()
+    TEXT_Y1 = st["screen"]["h"] - st["taskbar_h"]
+    TEXT_Y0 = TEXT_Y1 - 35
     print("runtime fonts")
 
     # --- FIRST, before anything is set ---------------------------------

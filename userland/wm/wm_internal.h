@@ -22,6 +22,7 @@
 extern struct ugfx_screen g_wm_screen;
 // WIN_EV_SCREEN: re-map the grant and re-lay out for the new size (wm.c).
 void wm_screen_changed(void);
+void wm_layout_changed(void); // the usable area moved: relay windows and the grid
 
 // The drawable. Written as an accessor rather than a bare
 // `&g_wm_screen.back` at each site so the indirection stays greppable

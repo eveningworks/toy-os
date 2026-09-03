@@ -280,6 +280,42 @@ def check_pixels(dbg, qmp, tb, res):
               f"hovered pixel moved={moved}, control point unchanged={still}")
 
 
+def check_height(dbg, qmp, res):
+    """`desktop.taskbar_height` moves the strip, live, and `unset` puts
+    the font-derived default back. Checked against the WM's own report
+    AND a pixel: the strip's top row is its background colour at the new
+    y and the row above is not, which a stale report could not fake."""
+    base = strip(dbg)
+    sh = dbg.state()["screen"]["h"]
+    want = 60 if base["h"] != 60 else 64
+    dbg.send(f"sh config set desktop.taskbar_height {want}")
+    dbg.settle()
+    time.sleep(0.5)
+    tb = strip(dbg)
+    res.check("desktop.taskbar_height re-lays the strip live",
+              tb["h"] == want and tb["y"] == sh - want,
+              f"asked {want}, got h={tb['h']} y={tb['y']} (screen h {sh})")
+    from PIL import Image
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="taskbar_h_")
+    p = os.path.join(tmp, "thick.png")
+    qmp.screenshot(p)
+    img = Image.open(p).convert("RGB")
+    x = tb["tray_x"] - 8 if tb["tray_x"] > 8 else img.width // 2
+    top = img.getpixel((x, sh - want))
+    above = img.getpixel((x, sh - want - 1))
+    res.check("the strip's top edge is drawn where it is reported",
+              top == (30, 30, 34) and above != (30, 30, 34),
+              f"row {sh - want} = {top}, row above = {above}")
+    dbg.send("sh config unset desktop.taskbar_height")
+    dbg.settle()
+    time.sleep(0.5)
+    back = strip(dbg)
+    res.check("unset returns the strip to its default height",
+              back["h"] == base["h"],
+              f"default {base['h']}, got {back['h']}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -297,6 +333,9 @@ def main():
     res = Result()
     with DebugConsole(args.sock) as dbg:
         dbg.settle()
+        # FIRST: the overflow checks below leave twenty Notepads open,
+        # past which nothing more can spawn -- `config` included.
+        check_height(dbg, qmp, res)
         run(dbg, qmp, res, args.pixels)
 
     n_ok, n_bad = len(res.passes), len(res.fails)

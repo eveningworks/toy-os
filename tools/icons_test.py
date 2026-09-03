@@ -121,8 +121,42 @@ def shot(qmp, tmp, name):
 def host_icon(name, size):
     """The same file, decoded and scaled on the host. RGBA."""
     from PIL import Image
-    im = Image.open(os.path.join(ICON_DIR, name + ".qoi")).convert("RGBA")
-    return im.resize((size, size), Image.BOX)
+    src = Image.open(os.path.join(ICON_DIR, name + ".qoi")).convert("RGBA")
+    # AN EXACT AREA AVERAGE, colour weighted by alpha and alpha by area
+    # -- what uimg_scale() documents, written here in floats so it shares
+    # no code. Pillow's BOX is NOT that at a fractional ratio: at 64->30
+    # it disagreed with the guest by ~30 per channel on an edge pixel
+    # while this agrees within 1 everywhere. Slow (size^2 * ratio^2
+    # loops) and fine for a few icons.
+    sp = src.load()
+    sw, sh = src.size
+    out = Image.new("RGBA", (size, size))
+    op = out.load()
+    rx, ry = sw / size, sh / size
+    for oy in range(size):
+        y0, y1 = oy * ry, (oy + 1) * ry
+        for ox in range(size):
+            x0, x1 = ox * rx, (ox + 1) * rx
+            a = 0.0
+            c = [0.0, 0.0, 0.0]
+            tot = 0.0
+            for sy in range(int(y0), min(sh, int(y1) + 1)):
+                wy = min(y1, sy + 1) - max(y0, sy)
+                if wy <= 0:
+                    continue
+                for sx in range(int(x0), min(sw, int(x1) + 1)):
+                    wx = min(x1, sx + 1) - max(x0, sx)
+                    if wx <= 0:
+                        continue
+                    w = wx * wy
+                    px = sp[sx, sy]
+                    tot += w
+                    a += w * px[3]
+                    for i in range(3):
+                        c[i] += w * px[3] * px[i]
+            rgb = tuple(int(round(c[i] / a)) if a > 0 else 0 for i in range(3))
+            op[ox, oy] = rgb + (int(round(a / tot)),)
+    return out
 
 
 def over(fg, bg):

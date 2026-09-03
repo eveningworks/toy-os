@@ -787,6 +787,7 @@ whenever a headline here tells you something you did not already know.
 - **TEXT ON A WALLPAPER IS `ugfx_draw_string_shadowed()`, NEVER A GUESSED `bg`**
 - **`uui_image` IS THE ONLY WIDGET THAT OWNS MEMORY, AND IT MUST BE RELEASED.**
 - **THE WALLPAPER IS A REGISTERED SETTING, AND ITS VALUE IS A NAME**
+- **THE TASKBAR'S THICKNESS IS A REGISTERED SETTING: `desktop.taskbar_height`, in PIXELS, 24..96, default 40.**
 - **THE START BUTTON'S APPEARANCE IS A REGISTERED SETTING**
 - **THE `gui` DIAGNOSTICS ARE REACHABLE FROM RING 3 NOW: `/bin/guictl`**
 - **DAMAGING A RECT DOES NOT ASK FOR A FRAME -- SET `redraw_pending` TOO**

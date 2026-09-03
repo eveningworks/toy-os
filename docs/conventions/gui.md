@@ -1480,6 +1480,33 @@ real scanout hardware does. Do not write a pixel assertion for one.
   wallpaper saturates them -- establish the precondition, do not weaken
   the assertion.
 
+- **THE TASKBAR'S THICKNESS IS A REGISTERED SETTING:
+  `desktop.taskbar_height`, in PIXELS, 24..96, default 40.** Registered
+  in `kernel/lib/taskbar_config.c` as a PERSIST-ONLY `SETTING_TYPE_INT`
+  beside the Start button and the wallpaper in `/etc/desktop.conf`, so
+  System Settings shows it as a spinbox with no app edit. A pixel count
+  rather than small/medium/large because that is XFCE's "Row size
+  (pixels)" and the number KDE stores for a panel (Windows 11 fixes 48,
+  GNOME exposes nothing). **The default is a CONSTANT, not a font
+  formula**: the registry answers from ring 0 and the strip is drawn in
+  ring 3, and the two tiers' fonts do not share a line height -- a
+  formula gave 36 on one side and 40 on the other. **`taskbar_h` is no
+  longer `WM_TITLEBAR_H`**: a panel and a title bar are separate
+  measurements on every desktop, and the title bar stays font-derived.
+  The WM adopts a change on `taskbar_poll_config()`'s generation poll
+  and relays through `wm_layout_changed()` -- the walk
+  `wm_screen_changed()` already made (icon grid, maximized windows, the
+  clamp, the overlays), factored out so a height change and a mode
+  change cannot re-derive the usable area differently. Two things that
+  scale with it are CAPPED: a button's icon at `TASKBAR_ICON_MAX` (32,
+  Windows 11's in a 48px bar) and the tray's at that plus 4, because the
+  masters are 64px and a 96px strip would otherwise upscale. And **a
+  button's natural width includes the icon column** (`win_btn_w()`),
+  since `make_label()` subtracts it -- at 40px the icon grew to 30 and
+  "untitled" drew as "un" until it did. `tools/taskbar_test.py` sets,
+  reads back and unsets it, before its overflow section fills the
+  process table.
+
 - **THE START BUTTON'S APPEARANCE IS A REGISTERED SETTING:
   `desktop.start_button` = `text` | `icon` | `both`.** Registered in
   `kernel/lib/start_button_config.c` as a PERSIST-ONLY descriptor
