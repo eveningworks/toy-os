@@ -204,7 +204,6 @@ struct t3_state {
         uint8_t buf[T3_BLOCK];
     } pcache;
 
-    void *read_buf;            // tfs_read()-style whole-file buffer, freed on next call
 };
 
 // THE CURRENT MOUNT'S STATE, and NULL between calls on purpose: the VFS
@@ -2111,24 +2110,6 @@ static uint32_t read_range_impl(const struct t3_inode *node, uint64_t offset,
     return total;
 }
 
-static const char *tfs3_read(const char *path, uint32_t *out_size) {
-    struct t3_inode node;
-    if (!lookup(path, 0, &node) || node.type != T3_TYPE_FILE) return 0;
-    if (node.size > 0xFFFFFFFFu - 1) return 0; // whole-buffer call -- use fs_read_range()
-    uint32_t size = (uint32_t)node.size;
-
-    if (S->read_buf) { kfree(S->read_buf); S->read_buf = 0; }
-    S->read_buf = kmalloc((size_t)size + 1);
-    if (!S->read_buf) return 0;
-    if (size > 0 && read_range_impl(&node, 0, S->read_buf, size) != size) {
-        kfree(S->read_buf); S->read_buf = 0;
-        return 0;
-    }
-    ((uint8_t *)S->read_buf)[size] = 0;
-    if (out_size) *out_size = size;
-    return (const char *)S->read_buf;
-}
-
 static uint64_t tfs3_size(const char *path) {
     struct t3_inode node;
     if (!lookup(path, 0, &node) || node.type != T3_TYPE_FILE) return 0;
@@ -3144,7 +3125,6 @@ static void tfs3_state_free(void *st) {
     if (!st) return;
     void *prev = tfs3_state_activate(st);
     unmount_state();          // the caches hanging off it, and the read buffer
-    if (S->read_buf) { kfree(S->read_buf); S->read_buf = 0; }
     tfs3_state_activate((prev == st) ? NULL : prev);
     kfree(st);
 }
@@ -3173,7 +3153,6 @@ const struct fs_ops tfs3_ops = {
     .write = tfs3_write,
     .mkdir = tfs3_mkdir,
     .del = tfs3_delete,
-    .read = tfs3_read,
     .size = tfs3_size,
     .read_range = tfs3_read_range,
     .write_range = tfs3_write_range,

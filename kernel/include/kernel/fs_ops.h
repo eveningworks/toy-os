@@ -186,7 +186,6 @@ struct fs_ops {
     int (*write)(const char *path, const char *data, int append);
     int (*mkdir)(const char *path);
     int (*del)(const char *path); // backs fs_delete() -- named del, not delete, to read fine if this header is ever pulled into a C++ tool
-    const char *(*read)(const char *path, uint32_t *out_size);
     uint64_t (*size)(const char *path);
     uint32_t (*read_range)(const char *path, uint64_t offset, void *buf, uint32_t len);
     int (*write_range)(const char *path, uint64_t offset, const void *buf, uint32_t len);

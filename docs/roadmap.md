@@ -848,7 +848,7 @@ split. One line per pair here; the site lists are in roadmap-details.
 
 - [x] ~~A checker for `vmm_copy_*_user()` results~~ DONE 2026-09-03 -- `check_copy_user.py`, and the twelve sites fixed
 - [x] ~~Move the kernel-context `fs_read()` callers to `fs_read_into()`~~ DONE 2026-09-03 -- and `fs_read()` deleted
-- [ ] Retire `fs_ops.read` and each backend's staging buffer: only `ramfs_test` calls the op now
+- [x] ~~Retire `fs_ops.read` and each backend's staging buffer~~ DONE 2026-09-03
 - [x] ~~Move the kernel's `etc_config_get()` callers to load-once~~ DONE 2026-09-03 -- the three multi-key readers; the rest ask one key
 - [x] ~~Image Viewer and Player hand-route a menu bar beside routed widgets~~ DONE 2026-09-03 -- `check_key_routing.py` refuses the pair
 - [x] ~~`uapp_log_layout()` only walks `.widgets`, so 7 apps hand-roll ~60 layout lines~~ DONE 2026-09-03 -- widgets describe themselves

@@ -161,7 +161,8 @@ along with the nested-read refusal that guarded it: the small readers
 got a static buffer sized for their file, the ELF loaders `kmalloc` at
 `fs_size()` and free after `elf_load()`, and `stat` asks `fs_size()`
 instead of reading the whole file to print a number. The backends'
-`read` op still exists for `ramfs_test`; retiring it is a roadmap item.
+`read` op and the staging buffer each of the three kept for it went the
+same day: `read_range()` into caller memory is the only read there is.
 The preemption guard above and `fs_read_into()` are complementary, not
 alternatives: the guard protects the backend DURING a call, this removes
 the shared buffer AFTER it returns.

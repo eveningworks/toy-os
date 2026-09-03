@@ -107,7 +107,6 @@ struct ramfs_state {
     // the same contract tfs3.c's read() has, and the same hazard: it is
     // freed on the next call. fs.h's own comment tells kernel-side
     // callers to prefer fs_read_into(); nothing changes here.
-    void *read_buf;
 };
 
 static struct ramfs_state *S;   // NULL between calls -- see fs_ops.h
@@ -387,7 +386,6 @@ static int ramfs_wipe(const struct block_device *dev) {
 static void drop_everything(void) {
     for (int i = 1; i < RAMFS_MAX_NODES; i++) node_free(i);
     if (S->nodes[0]) node_free(0);
-    if (S->read_buf) { kfree(S->read_buf); S->read_buf = 0; }
     S->used = 0;
 }
 
@@ -483,26 +481,6 @@ static int ramfs_del(const char *path) {
     if (S->nodes[idx]->is_dir && has_children(idx)) return 0;
     node_free(idx);
     return 1;
-}
-
-static const char *ramfs_read(const char *path, uint32_t *out_size) {
-    if (out_size) *out_size = 0;
-    if (!S->mounted) return 0;
-    int idx = find(path);
-    if (idx < 0 || S->nodes[idx]->is_dir) return 0;
-    struct rnode *n = S->nodes[idx];
-    if (n->size > 0xFFFFFFFFull) return 0;
-
-    if (S->read_buf) { kfree(S->read_buf); S->read_buf = 0; }
-    S->read_buf = kmalloc((size_t)n->size + 1);
-    if (!S->read_buf) return 0;
-    if (n->size && read_at(n, 0, S->read_buf, (uint32_t)n->size) != n->size) {
-        kfree(S->read_buf); S->read_buf = 0;
-        return 0;
-    }
-    ((uint8_t *)S->read_buf)[n->size] = 0;
-    if (out_size) *out_size = (uint32_t)n->size;
-    return (const char *)S->read_buf;
 }
 
 static uint64_t ramfs_size(const char *path) {
@@ -714,7 +692,6 @@ static void ramfs_state_free(void *st) {
     void *prev = ramfs_state_activate(st);
     drop_everything();                 // every node, and the chunks under it
     node_free(0);
-    if (S->read_buf) { kfree(S->read_buf); S->read_buf = 0; }
     ramfs_state_activate((prev == st) ? NULL : prev);
     kfree(st);
 }
@@ -747,7 +724,6 @@ const struct fs_ops ramfs_ops = {
     .write = ramfs_write,
     .mkdir = ramfs_mkdir,
     .del = ramfs_del,
-    .read = ramfs_read,
     .size = ramfs_size,
     .read_range = ramfs_read_range,
     .write_range = ramfs_write_range,

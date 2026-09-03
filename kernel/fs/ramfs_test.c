@@ -48,10 +48,8 @@ KTEST("ramfs", "a file written is a file read back") {
     KTEST_ASSERT(!R()->is_dir("/hello.txt"));
     KTEST_ASSERT_EQ((int)R()->size("/hello.txt"), 5);
 
-    uint32_t got = 0;
-    const char *data = R()->read("/hello.txt", &got);
-    KTEST_ASSERT(data != 0);
-    KTEST_ASSERT_EQ((int)got, 5);
+    char data[8] = {0};
+    KTEST_ASSERT_EQ((int)R()->read_range("/hello.txt", 0, data, sizeof data), 5);
     KTEST_ASSERT_EQ(k_memcmp(data, "ramfs", 5), 0);
 
     ramfs_test_unmount();
@@ -213,9 +211,8 @@ KTEST("ramfs", "rename moves a file, and refuses to move a directory into itself
 
     KTEST_ASSERT(R()->rename("/a/f.txt", "/a/b/g.txt"));
     KTEST_ASSERT(!R()->exists("/a/f.txt"));
-    uint32_t got = 0;
-    const char *d = R()->read("/a/b/g.txt", &got);
-    KTEST_ASSERT(d && got == 4 && k_memcmp(d, "data", 4) == 0);
+    char d[8] = {0};
+    KTEST_ASSERT(R()->read_range("/a/b/g.txt", 0, d, sizeof d) == 4 && k_memcmp(d, "data", 4) == 0);
 
     // Into itself: this is what detaches a subtree from the root, and
     // nothing below would notice -- the tree would simply have a piece
@@ -233,14 +230,12 @@ KTEST("ramfs", "append adds, and a non-append write replaces") {
     KTEST_ASSERT(R()->write("/log", "one", 0));
     KTEST_ASSERT(R()->write("/log", "two", 1));
     KTEST_ASSERT_EQ((int)R()->size("/log"), 6);
-    uint32_t got = 0;
-    const char *d = R()->read("/log", &got);
-    KTEST_ASSERT(d && k_memcmp(d, "onetwo", 6) == 0);
+    char d[8] = {0};
+    KTEST_ASSERT(R()->read_range("/log", 0, d, sizeof d) == 6 && k_memcmp(d, "onetwo", 6) == 0);
 
     KTEST_ASSERT(R()->write("/log", "fresh", 0));
     KTEST_ASSERT_EQ((int)R()->size("/log"), 5);
-    d = R()->read("/log", &got);
-    KTEST_ASSERT(d && got == 5 && k_memcmp(d, "fresh", 5) == 0);
+    KTEST_ASSERT(R()->read_range("/log", 0, d, sizeof d) == 5 && k_memcmp(d, "fresh", 5) == 0);
 
     ramfs_test_unmount();
 }

@@ -130,7 +130,6 @@ struct fat32_state {
     uint32_t fatsec_lba;        // which one, 0 = nothing cached
     int fatsec_dirty;
 
-    void *read_buf;             // whole-file read staging, see fat32_read()
 };
 
 static struct fat32_state *S;   // NULL between calls -- see fs_ops.h
@@ -1421,7 +1420,6 @@ static int fat32_init(const struct block_device *dev) {
     S->v.mounted = 0;
     S->fatsec_lba = 0;
     S->fatsec_dirty = 0;
-    if (S->read_buf) { kfree(S->read_buf); S->read_buf = 0; }
 
     if (!dev) {
         // FAT32 has no RAM-only mode -- that is ramfs's job. -1, not 0:
@@ -1449,7 +1447,6 @@ static int fat32_init(const struct block_device *dev) {
 static void fat32_umount(const struct block_device *dev) {
     (void)dev;
     if (S->v.mounted) fat_sync();
-    if (S->read_buf) { kfree(S->read_buf); S->read_buf = 0; }
     S->fatsec_lba = 0;
     S->fatsec_dirty = 0;
     S->v.mounted = 0;
@@ -1490,28 +1487,6 @@ static uint32_t fat32_read_range(const char *path, uint64_t offset, void *buf, u
 // The whole file into one staging buffer -- the same shape every
 // backend here has, and the same hazard: vfs.c refuses a NESTED call
 // because the buffer is freed and reallocated per read.
-static const char *fat32_read(const char *path, uint32_t *out_size) {
-    if (out_size) *out_size = 0;
-    struct dirent_info e;
-    if (!lookup(path, &e)) return 0;
-    if (e.attr & ATTR_DIRECTORY) return 0;
-
-    if (S->read_buf) { kfree(S->read_buf); S->read_buf = 0; }
-    S->read_buf = kmalloc((size_t)e.size + 1);
-    if (!S->read_buf) return 0;
-    uint8_t *dst = S->read_buf;
-
-    uint32_t got = 0;
-    while (got < e.size) {
-        uint32_t n = chain_read(e.cluster, e.size, got, dst + got, e.size - got);
-        if (!n) break;
-        got += n;
-    }
-    dst[got] = '\0';
-    if (out_size) *out_size = got;
-    return (const char *)S->read_buf;
-}
-
 static void fat32_list(const char *dir_path, void (*cb)(const char *, uint32_t, int)) {
     if (!S->v.mounted || !cb) return;
     uint32_t dir;
@@ -1908,7 +1883,6 @@ static void *fat32_state_activate(void *st) {
 static void fat32_state_free(void *st) {
     if (!st) return;
     void *prev = fat32_state_activate(st);
-    if (S->read_buf) { kfree(S->read_buf); S->read_buf = 0; }
     fat32_state_activate((prev == st) ? NULL : prev);
     kfree(st);
 }
@@ -1938,7 +1912,6 @@ const struct fs_ops fat32_ops = {
     .write = fat32_write,
     .mkdir = fat32_mkdir,
     .del = fat32_del,
-    .read = fat32_read,
     .size = fat32_size,
     .read_range = fat32_read_range,
     .write_range = fat32_write_range,
