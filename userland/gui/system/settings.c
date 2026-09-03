@@ -1412,6 +1412,12 @@ static void on_open(struct uapp *a) {
     // report the first button's, which is what a test clicks anyway.
     uapp_logf_layout("settings: layout buttons %d %d %d %d\n",
           g_btn[0].x, g_btn[0].y, g_btn[0].w, g_btn[0].h);
+    // And each by its label, since a group's members have no names of
+    // their own and a test that means Apply must not click OK.
+    static const char *const BTN_LABELS[] = { "ok", "apply", "cancel" };
+    for (int b = 0; b < 3; b++)
+        uapp_logf_layout("settings: layout button %s %d %d %d %d\n", BTN_LABELS[b],
+                         g_btn[b].x, g_btn[b].y, g_btn[b].w, g_btn[b].h);
     // Every visible sidebar row, with the y a click should land on --
     // reported by the app rather than re-derived in Python, for the
     // reason DebugConsole.menu_row() exists.

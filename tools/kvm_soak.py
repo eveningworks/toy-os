@@ -88,8 +88,6 @@ CPANEL = "/bin/wm/system/settings"
 # was hit through, and because changing a setting is the cheapest thing
 # that makes the desktop do real filesystem work: it writes /etc, which
 # bumps fs_generation(), while a ring-3 client is live and busy.
-SETTINGS_ROW_H = 20
-CHOICE_ROW_H = 22
 
 
 def kvm_available():
@@ -145,24 +143,52 @@ def real_themes(dbg):
     return names
 
 
-def drive_workload(dbg, qmp, rounds):
-    """Enter the GUI, open Control Panel, and change a setting repeatedly."""
-    enter_gui(qmp, sock=dbg.sock_path)   # polls readiness; types nothing if up
+ROW_RE = re.compile(r"settings: row (\d+) id (\d+) y (-?\d+) depth (\d+) (.+)")
+TREE_RE = re.compile(r"settings: layout tree (-?\d+) (-?\d+) (\d+) (\d+)")
+BUTTONS_RE = re.compile(r"settings: layout button apply (-?\d+) (-?\d+) (\d+) (\d+)")
+CONTROL_RE = re.compile(r"settings: control (\d+) (\S+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) "
+                        r"rows (\d+) kind (radio|combo|slider|spin|text)")
+K_UP, K_DOWN, K_LEFT, K_RIGHT = "0x91", "0x92", "0x95", "0x96"
+# The keys that CHANGE each kind of control (ui/uui_*.c key ops); a
+# closed dropdown ignores arrows on purpose, so `combo` is not driven.
+KEYS = {"spin": (K_UP, K_DOWN), "radio": (K_DOWN, K_UP), "slider": (K_RIGHT, K_LEFT)}
 
+
+def drive_workload(dbg, qmp, rounds):
+    """Enter the GUI, open System Settings, and change settings on every
+    page while the desktop's entry directory churns underneath.
+
+    GEOMETRY COMES FROM THE APP, never from arithmetic here: the sidebar
+    rows carry the y to click (`settings: row`), the tree its rect
+    (`settings: layout tree`), and each page its controls
+    (`settings: control ... kind ...`). A change is made with the
+    KEYBOARD on a focused spinbox, radio list or slider and committed
+    with the Apply button the app also reports -- a key-driven change is
+    reported and committed like a click (docs/conventions/gui.md), and
+    a Down arrow needs no knowledge of where the choice rows are. The
+    first version clicked rows at a hardcoded pitch and broke the day
+    the sidebar became a tree.
+    """
     dbg.send("gui spawn " + CPANEL)
     deadline = time.time() + 12
-    geo = {}
-    seen = []
+    seen, tree, rows, apply = [], None, [], None
     while time.time() < deadline:
         time.sleep(0.3)
         seen.extend(l.strip() for l in dbg.logs())
         for line in seen:
-            m = re.search(r"settings: layout (\w+) (-?\d+) (-?\d+) (-?\d+) (-?\d+)", line)
+            m = TREE_RE.search(line)
             if m:
-                geo[m.group(1)] = tuple(int(v) for v in m.groups()[1:])
-        if "list" in geo and "choices" in geo:
+                tree = tuple(int(v) for v in m.groups())
+            m = BUTTONS_RE.search(line)
+            if m:
+                apply = tuple(int(v) for v in m.groups())
+            m = ROW_RE.search(line)
+            if m and int(m.group(4)) == 1 and int(m.group(2)) not in [r[0] for r in rows]:
+                rows.append((int(m.group(2)), int(m.group(3))))
+        if tree and rows and apply:
             break
-    if "list" not in geo:
+    if not tree or not rows or not apply:
+        seen.append(f"kvm_soak: no layout -- tree {tree} rows {len(rows)} apply {apply}")
         return seen, False
 
     wins = [w for w in dbg.json("gui windows --json")["windows"]
@@ -170,12 +196,9 @@ def drive_workload(dbg, qmp, rounds):
     if not wins:
         return seen, False
     c = wins[-1]["content"]
-    lx, ly = geo["list"][0], geo["list"][1]
-    chx, chy = geo["choices"][0], geo["choices"][1]
 
-    # Walk every settings row, and on each one commit a couple of
-    # choices. Which rows exist is deliberately not hardcoded -- the
-    # registry is meant to grow.
+    # Every page, and on each one the first key-driven control -- which pages
+    # exist is deliberately not hardcoded, the registry is meant to grow.
     #
     # THE DIRECTORY CHURN IS LOAD-BEARING, not decoration. The desktop
     # only re-reads /usr/wm/desktop when that directory actually
@@ -188,23 +211,46 @@ def drive_workload(dbg, qmp, rounds):
     # read every .desktop file again, from disk, while a ring-3 client
     # is live and writing /etc -- which is exactly the collision that
     # corrupted kernel-side lookups.
-    for row in range(6):
-        dbg.send(f"gui click {c['x']+lx+40} {c['y']+ly+int(SETTINGS_ROW_H*(row+0.5))}")
+    changes = 0
+    for n, (_id, ry) in enumerate(rows[:8]):
+        mark = len(seen)
+        dbg.click(c['x'] + tree[0] + 24, c['y'] + ry)
+        # A SECOND FRAME, forced: the app reports a page's controls from
+        # on_draw, which runs before the layout has placed a newly opened
+        # page, so the first frame still describes the previous one (the
+        # same nudge tools/settings_test.py makes).
+        dbg.move(c['x'] + tree[0] + 24, c['y'] + ry + 1)
+        time.sleep(0.4)
+        seen.extend(l.strip() for l in dbg.logs())
+        ctls = [m for m in (CONTROL_RE.search(l) for l in seen[mark:]) if m and m.group(8) in KEYS]
+        if not ctls:
+            continue
+        m = ctls[0]
+        fwd, back = KEYS[m.group(8)]
+        cx = c["x"] + int(m.group(3)) + int(m.group(5)) // 2
+        cy = c["y"] + int(m.group(4)) + int(m.group(6)) // 2
+        dbg.send(f"gui click {cx} {cy}")     # focus it (and select the row under the pointer)
         time.sleep(0.5)
         for which in range(rounds):
-            dbg.send(f"gui click {c['x']+chx+30} "
-                     f"{c['y']+chy+int(CHOICE_ROW_H*which+CHOICE_ROW_H/2)}")
-            time.sleep(0.9)
+            # A key STAGES the change; Apply commits it, which is the
+            # /etc write this workload exists to put under load.
+            dbg.send(f"gui key {fwd if which % 2 == 0 else back}")
+            time.sleep(0.5)
+            dbg.click(c["x"] + apply[0] + apply[2] // 2, c["y"] + apply[1] + apply[3] // 2)
+            time.sleep(0.6)
             # Force a genuine reload of every entry, concurrent with
-            # whatever the click just made Control Panel do.
-            dbg.send(f"sh write /usr/wm/desktop/zz{row}{which}.desktop x")
+            # whatever the key just made System Settings write.
+            dbg.send(f"sh write /usr/wm/desktop/zz{n}{which}.desktop x")
             time.sleep(0.9)
-            dbg.send(f"sh rm /usr/wm/desktop/zz{row}{which}.desktop")
+            dbg.send(f"sh rm /usr/wm/desktop/zz{n}{which}.desktop")
             time.sleep(0.9)
         seen.extend(l.strip() for l in dbg.logs())
+        changes += sum(1 for l in seen[mark:] if l.startswith("settings: set "))
     time.sleep(1.0)
     seen.extend(l.strip() for l in dbg.logs())
-    return seen, True
+    # The workload must have CHANGED something, or the disk saw nothing.
+    seen.append(f"kvm_soak: changes committed {changes}")
+    return seen, changes > 0
 
 
 def check(log, slow_ms, themes):
@@ -285,8 +331,12 @@ def main():
             bad_rounds += 1
             continue
         try:
-            dbg = DebugConsole(boot.sock, timeout=30)
             qmp = QMPSession(port=boot.qmp)
+            # enter_gui() opens its own console to turn the layout log
+            # on, so it goes BEFORE this tool's: two consoles on one
+            # socket steal each other's replies, and the write was lost.
+            enter_gui(qmp, sock=boot.sock)
+            dbg = DebugConsole(boot.sock, timeout=30)
             # A tighter threshold than the kernel's default, so the
             # tool's bound is the one that decides.
             dbg.send(f"gui watchdog {max(60, args.slow_ms // 2)}")
@@ -299,8 +349,13 @@ def main():
                 time.sleep(0.5)
                 dbg.logs()
             log, ok = drive_workload(dbg, qmp, args.changes)
+            if args.keep:
+                with open(os.path.join(args.keep, f"round{i}.log"), "w") as f:
+                    f.write("\n".join(log))
             if not ok:
-                print(f"  round {i}: ERROR -- Control Panel never reported its layout")
+                why = [l for l in log if l.startswith("kvm_soak: ")]
+                print(f"  round {i}: ERROR -- System Settings never reported its layout, "
+                      f"or no setting changed ({why[-1] if why else 'no detail'})")
                 bad_rounds += 1
                 continue
             problems, info = check(log, args.slow_ms, themes)
