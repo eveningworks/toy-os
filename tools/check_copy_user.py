@@ -10,7 +10,8 @@ way; the header's comment did not stop them, so the build does.
 
 Flags any `vmm_copy_from_user`, `vmm_copy_to_user` or
 `vmm_copy_string_from_user` call whose result is compared with `<`,
-`<=` or against a negative literal. The idioms it accepts:
+`<=` or against a negative literal -- or DISCARDED (a bare statement),
+which 26 sites did under a "validated above" comment. The idioms it accepts:
 `!vmm_copy_...(...)`, `if (vmm_copy_...(...))`, or the result stored and
 tested as a boolean. Exits non-zero with file:line. Run by preflight.sh.
 """
@@ -30,6 +31,12 @@ BAD = re.compile(
     r"\s*(?:<=?\s*|[=!]=\s*-)")
 
 
+# A copy whose result is DISCARDED: the statement is the bare call. Every
+# one of the 26 that shipped sat under a "validated above" comment, and
+# the header says the copy is the check.
+DISCARDED = re.compile(r"^[ \t]*vmm_copy_(?:from|to|string_from)_user\s*\(", re.M)
+
+
 def c_files():
     for root in ROOTS:
         for d, _dirs, files in os.walk(os.path.join(REPO, root)):
@@ -42,11 +49,15 @@ def main():
     problems = []
     for path in c_files():
         src = open(path, encoding="utf-8", errors="replace").read()
+        rel = os.path.relpath(path, REPO)
         for m in BAD.finditer(src):
             line = src.count("\n", 0, m.start()) + 1
-            rel = os.path.relpath(path, REPO)
             problems.append(f"{rel}:{line}: vmm_copy_*_user() returns 1/0, "
                             f"never negative -- test it with `!`")
+        for m in DISCARDED.finditer(src):
+            line = src.count("\n", 0, m.start()) + 1
+            problems.append(f"{rel}:{line}: vmm_copy_*_user()'s result is "
+                            f"discarded -- the copy IS the check; return -EFAULT")
     if problems:
         print("check_copy_user: a copy helper's result tested as an errno:")
         for p in problems:

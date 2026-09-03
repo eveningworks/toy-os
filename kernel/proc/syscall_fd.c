@@ -1006,12 +1006,6 @@ int sys_fstat(struct syscall_ctx *c) {
         c->regs[14] = (uint64_t)(int64_t)-EBADF;
         return 0;
     }
-    if (!vmm_validate_user_range(c->pml4, c->a1, sizeof(struct sys_stat))) {
-        klog_write("syscall: fstat() rejected -- invalid output pointer\n");
-        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
-        return 0;
-    }
-
     struct sys_stat out;
     k_memset(&out, 0, sizeof out);
     switch (f->kind) {
@@ -1040,7 +1034,11 @@ int sys_fstat(struct syscall_ctx *c) {
         // no length for a pipe to have, and the flags say so.
         break;
     }
-    vmm_copy_to_user(c->pml4, c->a1, &out, sizeof out); // validated above
+    if (!vmm_copy_to_user(c->pml4, c->a1, &out, sizeof out)) {
+        klog_write("syscall: fstat() rejected -- invalid output pointer\n");
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
     c->regs[14] = 0;
     return 0;
 }
@@ -1521,8 +1519,9 @@ int sys_pipe(struct syscall_ctx *c) {
             c->regs[14] = (uint64_t)(int64_t)(idx < 0 ? -ENFILE : -EMFILE);
         } else {
             int out[2] = { rfd, wfd };
-            vmm_copy_to_user(pml4, c->a0, out, sizeof out); // range validated above
-            c->regs[14] = 0;
+            // Validated above BEFORE the fds existed; a copy that still
+            // fails is reported rather than pretending two numbers landed.
+            c->regs[14] = vmm_copy_to_user(pml4, c->a0, out, sizeof out) ? 0 : (uint64_t)(int64_t)-EFAULT;
         }
     }
     return 0;

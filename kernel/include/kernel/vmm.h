@@ -258,8 +258,12 @@ int vmm_fault_in(uint64_t pml4_phys, uint64_t vaddr);
 // They also subsume vmm_validate_user_range() at the call sites that
 // used to pair it with a manual copy loop: the walk and the copy are one
 // operation per page here, so there is no window between checking a
-// mapping and using it. Keep using the validator on its own only where
-// nothing is copied (a pointer's mere validity is the question).
+// mapping and using it. Keep using the validator only where nothing is
+// copied (a pointer's mere validity is the question), or where a SIDE
+// EFFECT sits between the check and the copy -- an event popped, a pipe
+// created -- so a bad pointer is refused before it; and check the copy's
+// result even then. A copy whose result is discarded fails the build
+// (tools/check_copy_user.py).
 //
 // All three return 1 on success, 0 if any byte of the range is not
 // present-and-user-accessible. **A failed copy is all-or-nothing from

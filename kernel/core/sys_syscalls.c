@@ -65,13 +65,12 @@ SYSCALL_HANDLER sys_do_getrandom(uint64_t *regs, uint64_t pml4,
 SYSCALL_HANDLER sys_do_setting(uint64_t *regs, uint64_t rdi) {
     uint64_t pml4 = vmm_current_pml4();
     struct setting_msg msg;
-    if (!vmm_validate_user_range(pml4, rdi, sizeof msg)) {
+    if (!vmm_copy_from_user(pml4, &msg, rdi, sizeof msg)) {
         klog_write("syscall: setting() rejected -- invalid user pointer\n");
         regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
-        vmm_copy_from_user(pml4, &msg, rdi, sizeof msg);
         int ok = setting_dispatch(&msg);
-        vmm_copy_to_user(pml4, rdi, &msg, sizeof msg); // validated above
+        if (!vmm_copy_to_user(pml4, rdi, &msg, sizeof msg)) ok = 0; // a bad range reads as a refusal
         // setting_dispatch() answers yes or no. EINVAL covers both of
         // its refusals -- an unknown setting and a value it will not
         // accept -- because it does not distinguish them either, and a
@@ -82,13 +81,12 @@ SYSCALL_HANDLER sys_do_setting(uint64_t *regs, uint64_t rdi) {
 
 int sys_gettime(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
-    if (!vmm_validate_user_range(pml4, c->a0, sizeof(struct rtc_time))) {
+    struct rtc_time t;
+    rtc_read_local(&t);
+    if (!vmm_copy_to_user(pml4, c->a0, &t, sizeof t)) {
         klog_write("syscall: gettime() rejected -- invalid pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
-        struct rtc_time t;
-        rtc_read_local(&t);
-        vmm_copy_to_user(pml4, c->a0, &t, sizeof t); // range validated just above
         c->regs[14] = 0;
     }
     return 0;
@@ -122,11 +120,10 @@ int sys_pci_info(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
     int index = (int)c->a0;
     const struct pci_device *dev = pci_device_at(index);
-    if (!dev || !vmm_validate_user_range(pml4, c->a1, sizeof(struct pci_device))) {
+    if (!dev || !vmm_copy_to_user(pml4, c->a1, dev, sizeof *dev)) {
         klog_write("syscall: pci_info() rejected -- bad index or invalid pointer\n");
         c->regs[14] = (uint64_t)(int64_t)(dev ? -EFAULT : -EINVAL);
     } else {
-        vmm_copy_to_user(pml4, c->a1, dev, sizeof *dev); // range validated just above
         c->regs[14] = 0;
     }
     return 0;
@@ -134,13 +131,12 @@ int sys_pci_info(struct syscall_ctx *c) {
 
 int sys_cpu_info(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
-    if (!vmm_validate_user_range(pml4, c->a0, sizeof(struct cpu_info))) {
+    struct cpu_info ci;
+    cpu_info_get(&ci);
+    if (!vmm_copy_to_user(pml4, c->a0, &ci, sizeof ci)) {
         klog_write("syscall: cpu_info() rejected -- invalid user pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
-        struct cpu_info ci;
-        cpu_info_get(&ci);
-        vmm_copy_to_user(pml4, c->a0, &ci, sizeof ci); // range validated just above
         c->regs[14] = 0;
     }
     return 0;
@@ -173,31 +169,30 @@ int sys_setting(struct syscall_ctx *c) {
 int sys_sysinfo(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
     struct sys_info info;
-    if (!vmm_validate_user_range(pml4, c->a0, sizeof info)) {
+    uint64_t used = 0, total = 0;
+    k_memset(&info, 0, sizeof info);
+    // THROUGH THE REGISTRY, not straight to pmm. This syscall and
+    // the kernel shell's `meminfo` and /bin/meminfo are now one
+    // reader rather than three that agree -- which is the property
+    // that makes them unable to drift, instead of a test that has
+    // to notice afterwards when they have.
+    //
+    // The KB conversion derives the frame size rather than assuming
+    // 4096, which is what the `* 4` here used to do.
+    struct query_meminfo mem;
+    if (query_read(QUERY_MEMINFO, 0, &mem, sizeof mem) > 0) {
+        info.mem_free_kb  = mem.frame_free * mem.frame_bytes / 1024;
+        info.mem_total_kb = mem.frame_total * mem.frame_bytes / 1024;
+    }
+    if (fs_disk_usage(&used, &total)) {
+        info.disk_used_bytes = used;
+        info.disk_total_bytes = total;
+        info.flags |= SYS_INFO_DISK_VALID;
+    }
+    if (!vmm_copy_to_user(pml4, c->a0, &info, sizeof info)) {
         klog_write("syscall: sysinfo() rejected -- invalid user pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
-        uint64_t used = 0, total = 0;
-        k_memset(&info, 0, sizeof info);
-        // THROUGH THE REGISTRY, not straight to pmm. This syscall and
-        // the kernel shell's `meminfo` and /bin/meminfo are now one
-        // reader rather than three that agree -- which is the property
-        // that makes them unable to drift, instead of a test that has
-        // to notice afterwards when they have.
-        //
-        // The KB conversion derives the frame size rather than assuming
-        // 4096, which is what the `* 4` here used to do.
-        struct query_meminfo mem;
-        if (query_read(QUERY_MEMINFO, 0, &mem, sizeof mem) > 0) {
-            info.mem_free_kb  = mem.frame_free * mem.frame_bytes / 1024;
-            info.mem_total_kb = mem.frame_total * mem.frame_bytes / 1024;
-        }
-        if (fs_disk_usage(&used, &total)) {
-            info.disk_used_bytes = used;
-            info.disk_total_bytes = total;
-            info.flags |= SYS_INFO_DISK_VALID;
-        }
-        vmm_copy_to_user(pml4, c->a0, &info, sizeof info); // validated above
         c->regs[14] = 0;
     }
     return 0;
@@ -230,11 +225,10 @@ int sys_query(struct syscall_ctx *c) {
         // failing because the kernel's struct grew.
         uint32_t want = (uint32_t)n;
         if (msg.len < want) want = msg.len;
-        if (!want || !vmm_validate_user_range(pml4, msg.buf, want)) {
+        if (!want || !vmm_copy_to_user(pml4, msg.buf, rec, want)) {
             err = -EFAULT;
             break;
         }
-        vmm_copy_to_user(pml4, msg.buf, rec, want); // validated above
         msg.returned = want;
         break;
     }
@@ -329,14 +323,13 @@ int sys_crashtest(struct syscall_ctx *c) {
             k_strlcpy(m.name, k->name, sizeof m.name);
             k_strlcpy(m.desc, k->desc, sizeof m.desc);
         }
-        vmm_copy_to_user(pml4, c->a0, &m, sizeof m);
-        c->regs[14] = 0;
+        c->regs[14] = vmm_copy_to_user(pml4, c->a0, &m, sizeof m) ? 0 : (uint64_t)(int64_t)-EFAULT;
     } else if (m.op == CRASH_OP_TRIGGER) {
         // Does not return when it works -- the machine panics.
         int ok = crash_trigger(m.index);
         m.flags = crash_armed() ? CRASH_F_ARMED : 0;
         m.count = crash_kind_count();
-        vmm_copy_to_user(pml4, c->a0, &m, sizeof m);
+        if (!vmm_copy_to_user(pml4, c->a0, &m, sizeof m)) ok = 0;
         // Refused because the build is not armed with `faultinject`,
         // or the index names no kind. EPERM either way: the caller may
         // not do this, which is exactly what the Crash Test app shows.

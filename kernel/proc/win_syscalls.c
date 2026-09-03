@@ -122,16 +122,15 @@ static void win_present(void) {
 int sys_gui_init(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
 
-    if (!vmm_validate_user_range(pml4, c->a0, sizeof(struct gui_info))) {
+    struct gui_info info;
+    info.width = (uint32_t)gfx_width();
+    info.height = (uint32_t)gfx_height();
+    info.pitch = gfx_framebuffer_pitch();
+    info.bpp = gfx_framebuffer_bpp();
+    if (!vmm_copy_to_user(pml4, c->a0, &info, sizeof info)) {
         klog_write("syscall: gui_init() rejected -- invalid info pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
-        struct gui_info info;
-        info.width = (uint32_t)gfx_width();
-        info.height = (uint32_t)gfx_height();
-        info.pitch = gfx_framebuffer_pitch();
-        info.bpp = gfx_framebuffer_bpp();
-        vmm_copy_to_user(pml4, c->a0, &info, sizeof info); // range validated just above
 
         uint64_t fb_phys = gfx_framebuffer_phys();
         uint64_t fb_size = (uint64_t)info.pitch * info.height;
@@ -181,12 +180,11 @@ int sys_read_key(struct syscall_ctx *c) {
 int sys_win_create(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
 
-    if (!vmm_validate_user_range(pml4, c->a0, sizeof(struct win_request))) {
+    struct win_request req;
+    if (!vmm_copy_from_user(pml4, &req, c->a0, sizeof req)) {
         klog_write("syscall: win_create() rejected -- invalid request pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
-        struct win_request req;
-        vmm_copy_from_user(pml4, &req, c->a0, sizeof req); // range validated just above
         int bad_size = (req.w == 0 || req.h == 0 || req.w > WIN_MAX_W || req.h > WIN_MAX_H);
 
         if (bad_size) {
@@ -225,8 +223,7 @@ int sys_win_create(struct syscall_ctx *c) {
 
                 req.pitch = g_win_pitch;
                 req.bpp = 32;
-                vmm_copy_to_user(pml4, c->a0, &req, sizeof req);
-                c->regs[14] = 0;
+                c->regs[14] = vmm_copy_to_user(pml4, c->a0, &req, sizeof req) ? 0 : (uint64_t)(int64_t)-EFAULT;
             }
         }
     }
@@ -251,7 +248,8 @@ int sys_win_request(struct syscall_ctx *c) {
     // the same event queue rather than a fresh, empty client.
     int pid = scheduler_current_tgid();
 
-    if (!vmm_validate_user_range(pml4, c->a0, sizeof(struct win_request_msg))) {
+    struct win_request_msg req;
+    if (!vmm_copy_from_user(pml4, &req, c->a0, sizeof req)) {
         klog_write("syscall: win_request() rejected -- invalid user pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else if (pid == 0) {
@@ -268,8 +266,6 @@ int sys_win_request(struct syscall_ctx *c) {
         // The copy happens BEFORE the "is there a window server"
         // gate below, because that gate now has a typed exception
         // and the type is only knowable from the copy.
-        struct win_request_msg req;
-        vmm_copy_from_user(pml4, &req, c->a0, sizeof req); // range validated above
 
         // "Is there a window server?" has two answers now. A
         // registered ring-0 presentation layer is one; a REGISTERED
@@ -324,20 +320,19 @@ int sys_win_debug(struct syscall_ctx *c) {
     // change a field between validation and use.
     uint64_t pml4 = c->pml4;
     int pid = scheduler_current_tgid(); // the process -- see sys_win_request()
-    if (!vmm_validate_user_range(pml4, c->a0, sizeof(struct win_debug_msg))) {
+    struct win_debug_msg msg;
+    if (!vmm_copy_from_user(pml4, &msg, c->a0, sizeof msg)) {
         klog_write("syscall: win_debug() rejected -- invalid user pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else if (pid == 0) {
         c->regs[14] = (uint64_t)(int64_t)-EPERM;
     } else {
-        struct win_debug_msg msg;
-        vmm_copy_from_user(pml4, &msg, c->a0, sizeof msg);
         // Straight to the server, not over the transport: the
         // transport carries messages TO the window server, and this
         // is the server's own client answering it. Routing it back
         // out through the transport would be a loop.
         int rc = win_server_debug(pid, &msg);
-        vmm_copy_to_user(pml4, c->a0, &msg, sizeof msg);
+        if (!vmm_copy_to_user(pml4, c->a0, &msg, sizeof msg)) rc = -EFAULT;
         c->regs[14] = (uint64_t)(int64_t)rc;
     }
     return 0;
@@ -362,27 +357,35 @@ int sys_win_clip(struct syscall_ctx *c) {
         return 0;
     }
 
+    // The whole message stays validated up front (above): a SET copies its
+    // payload into the server's buffer BEFORE committing, and a refusal
+    // must come before anything is half-copied.
     struct { uint32_t type, op, count, len, serial, reserved; } hdr;
-    vmm_copy_from_user(pml4, &hdr, c->a0, sizeof hdr);
+    if (!vmm_copy_from_user(pml4, &hdr, c->a0, sizeof hdr)) {
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
 
     int rc = 0;
     if (hdr.type == WIN_REQ_CLIP_GET) {
         win_server_clip_get(&hdr.op, &hdr.count, &hdr.len, &hdr.serial);
         hdr.reserved = 0;
-        vmm_copy_to_user(pml4, c->a0, &hdr, sizeof hdr);
-        if (hdr.len)
-            vmm_copy_to_user(pml4, c->a0 + CLIP_HDR_BYTES,
-                              win_server_clip_buf(), hdr.len);
-        rc = 1;
+        int ok = vmm_copy_to_user(pml4, c->a0, &hdr, sizeof hdr);
+        if (ok && hdr.len)
+            ok = vmm_copy_to_user(pml4, c->a0 + CLIP_HDR_BYTES,
+                                   win_server_clip_buf(), hdr.len);
+        rc = ok ? 1 : -EFAULT;
     } else if (hdr.type == WIN_REQ_CLIP_SET) {
         // Validated BEFORE anything is copied, so a refusal cannot
         // leave half a payload in the buffer.
         if (win_server_clip_would_fit(hdr.op, hdr.count, hdr.len)) {
-            vmm_copy_from_user(pml4, win_server_clip_buf(),
-                                c->a0 + CLIP_HDR_BYTES, hdr.len);
+            if (!vmm_copy_from_user(pml4, win_server_clip_buf(),
+                                     c->a0 + CLIP_HDR_BYTES, hdr.len)) {
+                c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+                return 0;
+            }
             hdr.serial = win_server_clip_commit(hdr.op, hdr.count, hdr.len);
-            vmm_copy_to_user(pml4, c->a0, &hdr, sizeof hdr);
-            rc = 1;
+            rc = vmm_copy_to_user(pml4, c->a0, &hdr, sizeof hdr) ? 1 : -EFAULT;
         }
     }
     c->regs[14] = (uint64_t)(int64_t)rc;
@@ -410,8 +413,9 @@ static int event_get(struct syscall_ctx *c, int blocking) {
     } else {
         struct win_event ev;
         if (win_events_pop(pid, &ev)) {
-            vmm_copy_to_user(pml4, c->a0, &ev, sizeof ev); // range validated above
-            c->regs[14] = 1;
+            // Validated above BEFORE the pop, so a bad pointer cannot
+            // lose an event; a copy that still fails says so.
+            c->regs[14] = vmm_copy_to_user(pml4, c->a0, &ev, sizeof ev) ? 1 : (uint64_t)(int64_t)-EFAULT;
         } else if (!blocking) {
             c->regs[14] = 0; // empty, and this one never blocks
         } else {

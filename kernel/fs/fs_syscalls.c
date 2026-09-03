@@ -459,11 +459,6 @@ int sys_stat(struct syscall_ctx *c) {
         c->regs[14] = (uint64_t)(int64_t)err;
         return 0;
     }
-    if (!vmm_validate_user_range(c->pml4, c->a1, sizeof(struct sys_stat))) {
-        klog_write("syscall: stat() rejected -- invalid output pointer\n");
-        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
-        return 0;
-    }
     int is_root = k_strcmp(path, "/") == 0;
     if (!is_root && !fs_exists(path)) {
         c->regs[14] = (uint64_t)(int64_t)-ENOENT;
@@ -486,7 +481,11 @@ int sys_stat(struct syscall_ctx *c) {
     }
     // Only the implicit root reaches fs_stat() failing, and its zeroed
     // timestamps are the honest answer: it has no entry to carry any.
-    vmm_copy_to_user(c->pml4, c->a1, &out, sizeof out); // validated above
+    if (!vmm_copy_to_user(c->pml4, c->a1, &out, sizeof out)) {
+        klog_write("syscall: stat() rejected -- invalid output pointer\n");
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
     c->regs[14] = 0;
     return 0;
 }

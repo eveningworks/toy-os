@@ -50,18 +50,17 @@ void syscall_reset_mm(uint64_t pml4_phys, uint64_t image_end) {
 SYSCALL_HANDLER sys_do_proc_info(uint64_t *regs, uint64_t rdi, uint64_t rsi) {
     uint64_t pml4 = vmm_current_pml4();
     struct proc_info info;
-    if (!vmm_validate_user_range(pml4, rsi, sizeof info)) {
-        klog_write("syscall: proc_info() rejected -- invalid user pointer\n");
-        regs[14] = (uint64_t)(int64_t)-EFAULT;
-    } else if (!scheduler_proc_info((int)rdi, &info)) {
+    if (!scheduler_proc_info((int)rdi, &info)) {
         // -EINVAL for a bad index -- which is also every enumerator's
         // TERMINATOR, so a caller loops on `== 0` now and still skips
         // empty slots (pid 0) itself: an empty slot is a SUCCESS.
         regs[14] = (uint64_t)(int64_t)-EINVAL;
+    } else if (!vmm_copy_to_user(pml4, rsi, &info, sizeof info)) {
+        klog_write("syscall: proc_info() rejected -- invalid user pointer\n");
+        regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         // Filled in a KERNEL struct and copied out, never written
         // through the user pointer (vmm.h).
-        vmm_copy_to_user(pml4, rsi, &info, sizeof info); // validated above
         regs[14] = 0;
     }
 }
