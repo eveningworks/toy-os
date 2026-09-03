@@ -49,6 +49,7 @@
 #define ID_STOP  5
 #define ID_PREV  6
 #define ID_NEXT  7
+#define ID_MENU  8
 
 enum {
     CMD_RELOAD = 1,
@@ -97,7 +98,11 @@ static const struct uui_menu_item menu_items[] = {
     UUI_SUBMENU("Playback", play_items),
 };
 
+// The menu bar is ROUTED, not hand-pressed: an app with routed widgets
+// must declare it here so its popup is offered every press first
+// (docs/conventions/gui.md).
 static struct uui_item g_widgets[] = {
+    { .ops = &uui_menubar_ops,  .widget = &g_menu, .id = ID_MENU },
     { .ops = &uui_fileview_ops, .widget = &g_list, .id = ID_LIST },
     { .ops = &uui_scale_ops, .widget = &g_pos, .id = ID_POS },
     { .ops = &uui_scale_ops, .widget = &g_vol, .id = ID_VOL },
@@ -288,14 +293,8 @@ static void log_layout(void) {
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
     (void)a;
     layout_all(d->surface->w, d->surface->h);
-    uui_menubar_draw(d->surface, &g_menu);
     uui_statusbar_draw(d->surface, &g_status);
     log_layout();
-}
-
-static void on_draw_over(struct uapp *a, struct uapp_draw *d) {
-    (void)a;
-    uui_menubar_draw_popup(d->surface, &g_menu);
 }
 
 // --- input ------------------------------------------------------------
@@ -326,6 +325,13 @@ static void do_command(struct uapp *a, int code) {
 
 static void on_widget(struct uapp *a, int id, int reason) {
     switch (id) {
+    case ID_MENU: {
+        // The commit is PARKED in the widget (ui/uui_menubar.h).
+        int code = uui_menubar_take_code(&g_menu);
+        if (code > 0) do_command(a, code);
+        else uapp_redraw(a);
+        return;
+    }
     case ID_LIST:
         if (reason == UUI_REASON_RELEASE) { play_selected(); uapp_redraw(a); }
         return;
@@ -353,21 +359,6 @@ static void on_widget(struct uapp *a, int id, int reason) {
     case ID_PREV: do_command(a, CMD_PREV); break;
     case ID_NEXT: do_command(a, CMD_NEXT); break;
     }
-}
-
-static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
-    (void)buttons;
-    if (uui_menubar_press(&g_menu, x, y)) uapp_redraw(a);
-}
-static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
-    (void)buttons;
-    if (uui_menubar_motion(&g_menu, x, y)) uapp_redraw(a);
-}
-static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
-    (void)buttons;
-    int code = uui_menubar_release(&g_menu, x, y);
-    if (code > 0) do_command(a, code);
-    else if (code == 0 && !uui_menubar_is_open(&g_menu)) uapp_redraw(a);
 }
 
 static void on_key(struct uapp *a, int key, unsigned mods) {
@@ -486,11 +477,7 @@ int main(int argc, char **argv) {
         .widget_count = (int)(sizeof g_widgets / sizeof g_widgets[0]),
         .on_open      = on_open,
         .on_draw      = on_draw,
-        .on_draw_over = on_draw_over,
         .on_widget    = on_widget,
-        .on_press     = on_press,
-        .on_motion    = on_motion,
-        .on_release   = on_release,
         .on_key       = on_key,
         .on_tick      = on_tick,
         .on_resize    = on_resize,

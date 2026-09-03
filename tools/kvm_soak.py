@@ -79,6 +79,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole          # noqa: E402
 from qmp_test import QMPSession             # noqa: E402
+import vm                                   # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CPANEL = "/bin/wm/system/settings"
@@ -117,7 +118,7 @@ class Boot:
         run(["cp", "--reflink=auto", "--sparse=always", "disk.img", self.img])
         r = run(["python3", "tools/vm.py", "--kvm", "--instance", str(self.slot),
                  "--disk", self.img, "start"])
-        return "ready" in r.stdout
+        return vm.started_ok(r.stdout)
 
     def stop(self):
         run(["python3", "tools/vm.py", "--instance", str(self.slot), "stop"])

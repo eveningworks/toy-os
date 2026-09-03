@@ -3447,7 +3447,11 @@ window without going through it will find its layout polls timing out.
   `check_widget_ops.py` catches an ops slot nobody filled, this catches
   a filled slot nobody can REACH. An app whose `struct uapp_desc` names
   a widget whose ops table has a `.key` must declare `.focus` or
-  `.on_key`, because those are the only two doors in `uapp.c`. It
+  `.on_key`, because those are the only two doors in `uapp.c`. Its
+  second rule is the same shape from the pointer's side: an app that
+  declares `.widgets` and calls `uui_menubar_press()` is hand-routing a
+  menu bar the router should own, so a popup row's click also lands on
+  the widget beneath (Image Viewer and Player shipped that way). It
   exists because type-ahead was added to `uui_table`, tested, and
   shipped doing nothing in Task Manager -- which declared neither, so no
   key had ever reached the widget and its arrows and paging had been

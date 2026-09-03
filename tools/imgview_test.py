@@ -125,6 +125,26 @@ def compare_points(got, want, points, tol=TOL):
     return worst <= tol, worst, at
 
 
+def wait_points(qmp, tmp, name, want, points, tol=TOL, timeout=6.0):
+    """Settled frames until `points` match `want`, or the deadline.
+
+    The app's "shown" log line precedes the frame on screen by the
+    paint plus the compositor hop -- measured at ~0.2 s under TCG, which
+    is LONGER than stable_pixels()'s 0.15 s window, so a settled shot
+    taken on the log line photographs the previous picture and two
+    consecutive dumps agree on it. SETTLED IS NOT CAUGHT UP (CLAUDE.md):
+    wait for the observable itself. Returns the last frame and the last
+    comparison, so a timeout still reports the worst point.
+    """
+    deadline = time.time() + timeout
+    while True:
+        im = shot(qmp, tmp, name)
+        ok, worst, at = compare_points(im, want, points, tol)
+        if ok or time.time() >= deadline:
+            return im, ok, worst, at
+        time.sleep(0.1)
+
+
 class Layout:
     """Image Viewer's self-reported rectangles, from its most recent draw.
 
@@ -402,12 +422,11 @@ def run(dbg, qmp, tmp, res):
               any("imgview: shown dusk.jpg" in l for l in lines3),
               f"shown lines: {[l for l in lines3 if 'shown' in l]}")
 
-    im2 = shot(qmp, tmp, "view-dusk.png")
     px, py, pw, ph = lay3.screen_rect("picture")
     pts = [((px + int(pw * fx), py + int(ph * fy)),
             (int(dusk.width * fx), int(dusk.height * fy)))
            for fx in (0.3, 0.6) for fy in (0.3, 0.7)]
-    ok, worst, at = compare_points(im2, dusk, pts, tol=40)
+    im2, ok, worst, at = wait_points(qmp, tmp, "view-dusk.png", dusk, pts, tol=40)
     res.check("the second picture is dusk.jpg", ok,
               f"worst channel difference {worst} at {at}")
 

@@ -25,6 +25,13 @@ all. That is why the key-capable set is derived from the `.key` slot in
 `userland/ui/*.c` rather than listed here -- `uui_menubar_ops` has no
 `.key` and correctly does not count.
 
+THE SECOND RULE, same file because it is the same shape (a filled slot
+the router bypasses): an app that declares `uapp_desc.widgets` and
+calls `uui_menubar_press()` is hand-routing a menu bar beside routed
+widgets, so a click on a popup row also lands on the widget under it.
+Such an app must put `uui_menubar_ops` in its widget array instead
+(docs/conventions/gui.md). Image Viewer and Player shipped that way.
+
 WAIVE IN PLACE with a `key-routing-ok: <reason>` comment in the app,
 the mechanism check_dispatch.py and check_widget_ops.py both use -- and
 the reason is the MECHANISM, not the waiver.
@@ -95,6 +102,20 @@ def check_app(path, capable):
     return [(path, used)] if used else []
 
 
+HAND_MENU_RE = re.compile(r"\buui_menubar_press\s*\(")
+
+
+def check_hand_routed_menu(path):
+    """An app with routed widgets that presses its menu bar by hand."""
+    raw = path.read_text()
+    if "key-routing-ok:" in raw:
+        return []
+    src = strip_comments(raw)
+    if not re.search(r"\.widgets\s*=", src):
+        return []
+    return [path] if HAND_MENU_RE.search(src) else []
+
+
 def main():
     if not UI_DIR.is_dir() or not GUI_DIR.is_dir():
         print("check_key_routing: no userland/ui or userland/gui",
@@ -109,8 +130,21 @@ def main():
 
     apps = sorted(GUI_DIR.rglob("*.c"))
     found = []
+    hand = []
     for path in apps:
         found.extend(check_app(path, capable))
+        hand.extend(check_hand_routed_menu(path))
+
+    if hand:
+        print(f"check_key_routing: FAIL -- {len(hand)} app(s) hand-route a "
+              f"menu bar beside routed widgets\n")
+        for path in hand:
+            print(f"  {path.relative_to(ROOT)}: declares .widgets and calls "
+                  f"uui_menubar_press()")
+        print("\nPut `uui_menubar_ops` in the widget array and take the")
+        print("commit with uui_menubar_take_code() from on_widget, as")
+        print("terminal.c and files.c do (docs/conventions/gui.md).")
+        return 1
 
     if not found:
         print(f"check_key_routing: ok -- every app in {len(apps)} file(s) "

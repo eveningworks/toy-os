@@ -320,16 +320,10 @@ void file_picker_draw(void) {
 
     ugfx_draw_string(wm_surface(), g_x + FP_PAD, g_y + FP_PAD, g_title, fg, bg);
 
-    // Current path, truncated to fit if it's longer than the dialog is
-    // wide -- FS_PATH_MAX (64) can exceed what 44 columns comfortably
-    // shows at a large font size.
-    int max_path_chars = g_list_w / ugfx_char_w();
-    char path_buf[FS_PATH_MAX];
-    int pl = (int)k_strlen(g_cwd);
-    if (pl > max_path_chars) pl = max_path_chars;
-    k_memcpy(path_buf, g_cwd, pl);
-    path_buf[pl] = '\0';
-    ugfx_draw_string(wm_surface(), g_list_x, g_path_y, path_buf, ugfx_rgb(90, 90, 90), bg);
+    // Current path, clipped to the dialog's width -- FS_PATH_MAX (64)
+    // can exceed what fits at a large font size.
+    ugfx_draw_string_clipped(wm_surface(), g_list_x, g_path_y, g_list_w, g_cwd,
+                             ugfx_rgb(90, 90, 90), bg);
 
     // The list box itself.
     ugfx_fill_rect(wm_surface(), g_list_x, g_list_y, g_list_w, g_list_h, UTHEME_WHITE);
@@ -337,8 +331,6 @@ void file_picker_draw(void) {
 
     int show_scrollbar = fp_row_count() > FP_ROWS_VISIBLE;
     int text_w = g_list_w - (show_scrollbar ? FP_SCROLLBAR_W : 0);
-    int max_chars = (text_w - 8) / ugfx_char_w();
-    if (max_chars < 1) max_chars = 1;
 
     for (int row = 0; row < FP_ROWS_VISIBLE; row++) {
         int idx = g_scroll_offset + row;
@@ -362,10 +354,10 @@ void file_picker_draw(void) {
         } else {
             k_strcpy(label, e->name);
         }
-        int ln = (int)k_strlen(label);
-        if (ln > max_chars) { label[max_chars] = '\0'; }
-
-        ugfx_draw_string(wm_surface(), g_list_x + 4, ry + 3, label, row_fg, row_bg);
+        // Clipped to the row's pixels, not cut at a character count: the
+        // face is proportional, so a count is not a width.
+        ugfx_draw_string_clipped(wm_surface(), g_list_x + 4, ry + 3, text_w - 8,
+                                 label, row_fg, row_bg);
     }
 
     if (show_scrollbar) {

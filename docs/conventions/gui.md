@@ -2302,7 +2302,10 @@ friends from them. That is correct for an app whose other controls are
 hand-drawn, and Notepad declares no routed widgets at all.
 
 **AN APP THAT DECLARES `uapp_desc.widgets` MUST USE THE OPS TABLE
-INSTEAD**, because a popup drops down OVER whatever is below the bar and
+INSTEAD** -- `tools/check_key_routing.py` fails the build on the other
+pair now, after Image Viewer and Player shipped it (a click on a popup
+row re-selected the list row beneath and decoded the file again) --
+because a popup drops down OVER whatever is below the bar and
 `uui_router_press()` runs before the app's own `on_press` (`uapp.c`).
 Hand-routing there means a click on the File menu's first row ALSO lands
 on the widget underneath it -- in Terminal, on a tab. That is the exact

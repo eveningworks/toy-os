@@ -49,6 +49,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import install_grub  # noqa: E402  (path set above)
+import vm  # noqa: E402
 
 SECTOR = 512
 
@@ -83,7 +84,7 @@ class Guest:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
     def start(self):
-        return "ready" in self._vm("start").stdout
+        return vm.started_ok(self._vm("start").stdout)
 
     def stop(self):
         self._vm("stop")

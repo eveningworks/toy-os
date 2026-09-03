@@ -164,8 +164,9 @@ static int tray_walk(int want, int *out_x, int *out_w,
     for (int i = TRAY_MAX_ITEMS - 1; i >= 0; i--) {
         if (!tray_items[i].active) continue;
         if ((pass == 0) != (i == clock_tray_id)) continue;
+        // Measured, never strlen * char_w: the face is proportional now.
         int text_w = tray_items[i].icon ? tray_icon_size()
-                                       : (int)k_strlen(tray_items[i].text) * ugfx_char_w();
+                                       : ugfx_text_width(tray_items[i].text);
         cx -= text_w;
         // The item's BOX, not its text: the fill draw_tray() paints
         // starts 4px left of the glyphs and runs 4px past them, and a
@@ -232,7 +233,7 @@ static void tray_draw_item(int id, int x, int w, void *vctx) {
         return;
     }
     int text_y = c->taskbar_y + (taskbar_h - ugfx_char_h()) / 2;
-    ugfx_draw_string(wm_surface(), x, text_y, tray_items[id].text, c->fg, c->bg);
+    ugfx_draw_string_clipped(wm_surface(), x, text_y, w, tray_items[id].text, c->fg, c->bg);
 }
 
 void draw_tray(int taskbar_y, uint32_t bg, uint32_t fg) {

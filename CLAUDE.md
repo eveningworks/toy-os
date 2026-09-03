@@ -435,7 +435,9 @@ trips them before it knows to look anything up.
   arrows, paging and type-ahead were dead there for months while every
   check in its test drove by MOUSE. The key-capable set is DERIVED from
   `userland/ui/*.c`, so a new widget is covered the day it gains a key
-  handler. Waive with `key-routing-ok: <reason>`.
+  handler. **It also refuses an app that declares `.widgets` and
+  hand-routes its menu bar with `uui_menubar_press()`**, the pair the
+  GUI convention forbids. Waive with `key-routing-ok: <reason>`.
 - **AND `tools/check_drivers.py` FAILS THE BUILD ON A DRIVER THAT
   DECLARES ITSELF TO NOTHING.** A `.c` under `kernel/drivers/` -- or
   anywhere calling a class registry -- must carry a `DRIVER_DECLARE`
