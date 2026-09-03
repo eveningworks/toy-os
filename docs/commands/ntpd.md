@@ -120,8 +120,17 @@ rather than this OS: QEMU re-seeds its emulated MC146818 from the *host*
 clock on machine reset, so a guest's CMOS write cannot outlive a reboot
 however correct it is. The write itself is proved in the same boot by
 `kernel/core/ktime_test.c`'s "the RTC takes what was written to it",
-which reads the hardware back through `rtc_read()`. Real hardware is
-what answers the other half.
+which reads the hardware back through `rtc_read()`.
+
+**On real hardware it survives, and that is measured** (2026-09-03, the
+bare-metal test laptop). Its RTC was running 2h 59m fast; one `ntpd -1`
+against a server on the local network brought it to the second, and
+after a reboot `clock.utc` still matched that server exactly while
+`clock.steps` read **0** — nothing had set the clock since boot, so the
+time came from the CMOS. The kernel's own boot line agreed:
+`rtc: hardware clock reads 2026-09-03 11:09:11 UTC`, where before the
+sync it would have read three hours later. That is the half QEMU cannot
+answer.
 
 ## Examples
 

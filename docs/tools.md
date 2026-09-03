@@ -3336,8 +3336,13 @@ window without going through it will find its layout polls timing out.
   it is -- measured, by watching the guest's own "rtc: hardware clock
   reads" boot line come back matching the host to the second. The write
   itself is proved in the same boot by the KTEST that reads the hardware
-  back through `rtc_read()`. Real hardware is what answers the other
-  half. Boots one guest against a COPY of `disk.img`; on demand.
+  back through `rtc_read()`.
+
+  **On the bare-metal laptop it does survive, measured 2026-09-03**: a
+  sync, a reboot, and `clock.steps` back at 0 with the time still
+  correct -- so the clock had come from the CMOS rather than from
+  anything that ran after boot. Boots one guest against a COPY of
+  `disk.img`; on demand.
 
 - **`partition_test.py`** -- boots toy-os with its filesystem **inside**
   an MBR or GPT partition. The only thing that exercises `vfs.c`'s

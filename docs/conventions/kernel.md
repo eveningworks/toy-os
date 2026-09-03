@@ -66,6 +66,9 @@ this the obvious way), not from how much history it accumulated.
   reads" line come back matching the host to the second.
   `tools/ntp_test.py` SKIPS that one check and says which case it saw;
   the write itself is proved in-boot by a KTEST reading the hardware back.
+  **On real hardware it survives** -- measured on the test laptop
+  2026-09-03: after a sync and a reboot the clock was still right with
+  `clock.steps` at 0, so it had come from the CMOS.
 - **SETTING THE CLOCK IS `SYS_SETTIME`, AND SPEAKING NTP IS A RING-3
   PROGRAM'S JOB.** The kernel exposes one verb for the clock and knows
   nothing about servers, intervals or protocols -- the same split that
