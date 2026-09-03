@@ -95,6 +95,30 @@ unconditionally is correct today and puts the clock 136 years in the past
 the moment it wraps — the shape of bug that ships precisely because
 nothing can test it.
 
+## How often it asks, and how close it gets
+
+**One exchange per interval, and nothing in between.** Measured on the
+test laptop with the interval set to its minimum of one minute: the
+server it was pointed at logged requests at 11:13:47, 11:14:47,
+11:15:47, 11:16:47 and 11:17:47 — five in a row, exactly sixty seconds
+apart, with no extras. At the default of sixty minutes that is one NTP
+packet and one DNS lookup an hour.
+
+A sync that FAILS retries sooner, starting at thirty seconds and
+doubling until it reaches the interval. So a machine whose first attempt
+raced the network recovers in half a minute, and one on a segment with
+no time server does not keep asking every thirty seconds for ever.
+Within a single exchange the request is retransmitted at one, two and
+four seconds if nothing answers, inside an eight second budget.
+
+**Accuracy, measured the same day against `fi.pool.ntp.org`:** three
+different pool members put the laptop at −2 ms, +0 ms and −4 ms
+immediately after a sync, over round trips of 9 to 20 ms. That is the
+half-round-trip assumption working as well as it can on a local network.
+Before `SYS_SETTIME` carried nanoseconds the same machine sat a few
+hundred milliseconds behind after every sync, which is what that bug
+cost and why the fraction is not decoration.
+
 ## What is not built
 
 - **No slew.** See above; the clock has no rate to adjust.
