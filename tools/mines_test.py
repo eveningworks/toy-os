@@ -92,9 +92,9 @@ class Layout:
                 self.face = tuple(int(v) for v in p[1:5])
             elif p[0] == "cell" and len(p) >= 2:
                 self.cell = int(p[1])
-            elif p[0] == "menutitle" and len(p) >= 6:
+            elif p[0] == "menu.title" and len(p) >= 6:
                 self.titles[int(p[1])] = tuple(int(v) for v in p[2:6])
-            elif p[0] == "menuitem" and len(p) >= 7:
+            elif p[0] == "menu.item" and len(p) >= 7:
                 self.items[(int(p[1]), int(p[2]))] = tuple(int(v) for v in p[3:7])
 
     def complete(self):

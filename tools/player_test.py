@@ -86,7 +86,7 @@ def poll_logs(dbg):
 class Layout:
     """The app's self-reported rectangles, from its MOST RECENT frame.
 
-    `layout pos` is emitted first on every draw, so it is the frame
+    `layout menu` is emitted first on every draw, so it is the frame
     boundary -- parsing the whole accumulated log would report a popup
     that closed three frames ago as still open (menubar_test's trap).
     """
@@ -97,7 +97,7 @@ class Layout:
         self.cx, self.cy = content["x"], content["y"]
         last = -1
         for i, line in enumerate(lines):
-            if "player: layout pos" in line:
+            if "player: layout menu " in line:   # the walk's first line
                 last = i
         if last >= 0:
             lines = lines[last:]
@@ -118,6 +118,9 @@ class Layout:
             if what == "state":
                 # playing paused position duration volume
                 self.state = nums
+                continue
+            if len(nums) == 1:            # a scalar part: menu.open, list.selected
+                self.r[what] = nums[0]
                 continue
             if len(nums) < 4:
                 continue

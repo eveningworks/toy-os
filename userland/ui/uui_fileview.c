@@ -1111,6 +1111,10 @@ static int fv_ops_wheel(void *w, int notches) {
     return uui_fileview_wheel((struct uui_fileview *)w, notches);
 }
 
+static void ops_describe(const void *w, const struct uui_describe *d) {
+    uui_describe_int(d, "selected", ((const struct uui_fileview *)w)->table.selected);
+}
+
 const struct uui_widget_ops uui_fileview_ops = {
     .natural_size = fv_ops_natural_size,
     .set_geometry = fv_ops_set_geometry,
@@ -1124,4 +1128,5 @@ const struct uui_widget_ops uui_fileview_ops = {
     .motion = fv_ops_motion,
     .release = fv_ops_release,
     .wheel = fv_ops_wheel,
+    .describe     = ops_describe,
 };

@@ -261,22 +261,61 @@ static void layout_log_flush(void) {
     g_block_len = 0;
 }
 
-// Emits `<prefix>: layout <id> x y w h` for every declared widget that
-// has an id and a `bounds` op. Content-relative, exactly as the apps
-// logged it; a test adds the window's content origin. Widgets with no
-// id (0) or no bounds op are skipped, as are hidden ones.
+// The layout walk (ui/uui_describe.h has the vocabulary). Every NAMED
+// item with a `bounds` op gets `<prefix>: layout <name> x y w h`, then
+// whatever its `describe` op adds; containers are entered through
+// `children`, so a widget inside a scroll view or a splitter is reported
+// like any other. Content-relative; a test adds the window's content
+// origin. Unnamed and hidden items are skipped -- a name is what says
+// "a test may want this".
+static void describe_line(void *ctx, const char *line) {
+    (void)ctx;
+    uapp_log_layout_line(line);
+}
+
+static void log_items(const char *prefix, struct uui_item *items, int count) {
+    for (int i = 0; i < count; i++) {
+        struct uui_item *it = &items[i];
+        if (it->hidden || !it->ops) continue;
+        if (it->name && it->ops->bounds) {
+            int x, y, w, h;
+            it->ops->bounds(it->widget, &x, &y, &w, &h);
+            char line[96];
+            snprintf(line, sizeof line, "%s: layout %s %d %d %d %d\n",
+                     prefix, it->name, x, y, w, h);
+            uapp_log_layout_line(line);
+            if (it->ops->describe) {
+                struct uui_describe d = { describe_line, 0, prefix, it->name };
+                it->ops->describe(it->widget, &d);
+            }
+        }
+        if (it->ops->children) {
+            int n = 0;
+            struct uui_item *sub = it->ops->children(it->widget, &n);
+            if (sub) log_items(prefix, sub, n);
+        }
+    }
+}
+
+void uapp_log_widget(struct uapp *a, const char *prefix, const char *name,
+                     const struct uui_widget_ops *ops, const void *widget) {
+    (void)a;
+    if (!layout_log_enabled() || !ops || !ops->bounds) return;
+    int x, y, w, h;
+    ops->bounds(widget, &x, &y, &w, &h);
+    char line[96];
+    snprintf(line, sizeof line, "%s: layout %s %d %d %d %d\n", prefix, name, x, y, w, h);
+    uapp_log_layout_line(line);
+    if (ops->describe) {
+        struct uui_describe d = { describe_line, 0, prefix, name };
+        ops->describe(widget, &d);
+    }
+}
+
 void uapp_log_layout(struct uapp *a, const char *prefix) {
     if (!layout_log_enabled()) return;
-    for (int i = 0; i < a->router.count; i++) {
-        struct uui_item *it = &a->router.items[i];
-        if (it->hidden || !it->id || !it->ops || !it->ops->bounds) continue;
-        int x, y, w, h;
-        it->ops->bounds(it->widget, &x, &y, &w, &h);
-        char line[96];
-        snprintf(line, sizeof line, "%s: layout %d %d %d %d %d\n",
-                 prefix, it->id, x, y, w, h);
-        uapp_log_layout_line(line);
-    }
+    if (a->desc->layout) log_items(prefix, a->desc->layout->items, a->desc->layout->count);
+    if (a->router.count) log_items(prefix, a->router.items, a->router.count);
 }
 
 void uapp_flush(struct uapp *a) { flush(a); }

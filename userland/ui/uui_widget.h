@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "ui/ugfx.h"
+#include "ui/uui_describe.h"
 
 // uui_widget_ops -- the ONE table a widget exports to be handled
 // generically: laid out, drawn, hit-tested, focused.
@@ -123,6 +124,12 @@ struct uui_widget_ops {
     // The container's own `draw` still runs first, for a background.
     void (*children_begin)(struct ugfx_surface *s, void *w);
     void (*children_end)(struct ugfx_surface *s, void *w);
+
+    // Report the sub-rects a test drives this widget by -- a menu's
+    // titles and popup rows, a strip's slots -- through ui/uui_describe.h.
+    // Bounds are reported by the walk from `bounds`; this is for what
+    // bounds cannot say. Optional.
+    void (*describe)(const void *w, const struct uui_describe *d);
 };
 
 // One thing in a container. `widget` is whatever `ops` expects, not
@@ -160,6 +167,11 @@ struct uui_item {
     // Ignored by UUI_GRID, whose cells are uniform by definition, and
     // LAST in this struct because apps initialise it positionally.
     int main_size;
+
+    // The app's name for this widget in the layout log, and NULL for a
+    // widget the log leaves out (ui/uui_describe.h). After main_size,
+    // so a positional initialiser still lands where it did.
+    const char *name;
 };
 
 // Stretch to the container's cross-axis size instead of taking the

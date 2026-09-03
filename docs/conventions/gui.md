@@ -1376,13 +1376,25 @@ real scanout hardware does. Do not write a pixel assertion for one.
   hand-roll `uui_focus_click`/`uui_focus_key` in `on_press`/`on_key`;
   `on_key` still fires so an app can re-read a widget the ring changed.
 
-- **A WIDGET REPORTS ITS RECT THROUGH THE `bounds` OP; a test-facing
-  geometry log is `uapp_log_layout(a, prefix)`.** `uui_widget_ops.bounds`
-  is the getter `set_geometry` lacked; `uapp_log_layout()` walks the
-  router and emits `<prefix>: layout <id> x y w h` per declared widget, so
-  a test drives a control by asking rather than guessing pixels. Add
-  `bounds` to a widget when a test needs to drive it; don't re-hand-roll
-  the per-app geometry logger.
+- **A WIDGET DESCRIBES ITSELF, AND THE LAYOUT LOG HAS ONE VOCABULARY:
+  `<prefix>: layout <name>[.<part>] [i [j]] x y w h`.** An app names a
+  widget with `uui_item.name` and calls `uapp_log_layout(a, prefix)`
+  from `on_draw`; the walk emits every named widget's `bounds` and then
+  whatever its `describe` op adds -- a menu's `title i`, `popup l`,
+  `item l i` and `open`; a strip's `slot i`, `new` and `selected`; an
+  image's `picture`; a file view's `selected` (`ui/uui_describe.h`).
+  Containers are entered, so a widget inside a scroll view reports like
+  any other. **A widget that a test needs to drive gains a `describe`
+  op, never a per-app logger**: the seven hand-rolled loggers this
+  replaced each spelled the same menu rects in their own words
+  (`menutitle`, `title`, `layout item`), so nothing written for one
+  tool served the next. An app with hand-drawn chrome that still owns
+  a real widget reports it with `uapp_log_widget()` (Minesweeper's menu
+  bar); what it draws itself -- a board, a caret cell, a canvas -- it
+  still logs through `uapp_logf_layout()`, which is the same gate and
+  the same per-frame dedupe. `.name` sits AFTER `main_size` so a
+  positional initialiser is unchanged; an unnamed item is left out of
+  the log, which is how a label stays quiet.
 
 - **AN IMAGE IS DECODED IN RING 3, AND `lib/uimg.h`'s CODEC TABLE IS THE
   EXTENSION POINT.** `uimg_load(path, &im)` gives a `struct uimg` of

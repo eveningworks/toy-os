@@ -698,6 +698,23 @@ static int ops_release(void *w, int cx, int cy) {
     return 1;
 }
 
+// title i, popup l, item l i -- the rects tests click, in one vocabulary
+// for every app (ui/uui_describe.h). `open` says whether a popup is up.
+static void ops_describe(const void *w, const struct uui_describe *d) {
+    const struct uui_menubar *m = (const struct uui_menubar *)w;
+    int x, y, wd, h;
+    for (int i = 0; i < m->count; i++)
+        if (uui_menubar_title_rect(m, i, &x, &y, &wd, &h))
+            uui_describe_rect_i(d, "title", i, x, y, wd, h);
+    for (int l = 0; l < m->depth; l++) {
+        if (uui_menubar_popup_rect(m, l, &x, &y, &wd, &h))
+            uui_describe_rect_i(d, "popup", l, x, y, wd, h);
+        for (int i = 0; uui_menubar_item_rect(m, l, i, &x, &y, &wd, &h); i++)
+            uui_describe_rect_ij(d, "item", l, i, x, y, wd, h);
+    }
+    uui_describe_int(d, "open", m->depth > 0);
+}
+
 const struct uui_widget_ops uui_menubar_ops = {
     .natural_size   = ops_natural,
     .set_geometry   = ops_geometry,
@@ -709,4 +726,5 @@ const struct uui_widget_ops uui_menubar_ops = {
     .motion         = ops_motion,
     .release        = ops_release,
     .overlay_active = ops_overlay_active,
+    .describe       = ops_describe,
 };

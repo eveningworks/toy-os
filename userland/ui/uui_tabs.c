@@ -423,6 +423,16 @@ static int ops_release(void *w, int cx, int cy) {
     return 1;
 }
 
+static void ops_describe(const void *w, const struct uui_describe *d) {
+    const struct uui_tabs *t = (const struct uui_tabs *)w;
+    int x, y, wd, h;
+    for (int i = 0; uui_tabs_rect(t, i, &x, &y, &wd, &h); i++)
+        uui_describe_rect_i(d, "slot", i, x, y, wd, h);
+    if (uui_tabs_new_rect(t, &x, &y, &wd, &h))
+        uui_describe_rect(d, "new", x, y, wd, h);
+    uui_describe_int(d, "selected", t->selected);
+}
+
 const struct uui_widget_ops uui_tabs_ops = {
     .natural_size = ops_natural,
     .set_geometry = ops_geometry,
@@ -432,4 +442,5 @@ const struct uui_widget_ops uui_tabs_ops = {
     .press        = ops_press,
     .motion       = ops_motion,
     .release      = ops_release,
+    .describe     = ops_describe,
 };

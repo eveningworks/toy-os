@@ -111,10 +111,11 @@ static const struct uui_menu_item menu_items[] = {
 // The menu bar is ROUTED, not hand-pressed: an app with routed widgets
 // must declare it here so its popup is offered every press first
 // (docs/conventions/gui.md).
+// `.name` is what the layout log reports each one as (ui/uui_describe.h).
 static struct uui_item g_widgets[] = {
-    { .ops = &uui_menubar_ops,  .widget = &g_menu, .id = ID_MENU },
-    { .ops = &uui_fileview_ops, .widget = &g_list, .id = ID_LIST },
-    { .ops = &uui_image_ops, .widget = &g_view, .id = ID_IMAGE },
+    { .ops = &uui_menubar_ops,  .widget = &g_menu, .id = ID_MENU,  .name = "menu" },
+    { .ops = &uui_fileview_ops, .widget = &g_list, .id = ID_LIST,  .name = "list" },
+    { .ops = &uui_image_ops,    .widget = &g_view, .id = ID_IMAGE, .name = "image" },
 };
 
 // --- loading ----------------------------------------------------------
@@ -319,36 +320,11 @@ static void layout_all(int cw, int ch) {
 // `layout image` is emitted FIRST on every draw, so a parser has a frame
 // boundary and cannot report a popup that closed three frames ago as
 // still open (the trap tools/menubar_test.py documents).
-static void log_layout(void) {
-    int x, y, w, h;
-
-    uapp_logf_layout("imgview: layout image %d %d %d %d\n", g_view.x, g_view.y, g_view.w, g_view.h);
-    // Where the PICTURE landed inside that box, which is not the same
-    // rect: a letterboxed image is smaller than its widget, and a test
-    // sampling the widget would be sampling the bars.
-    if (uui_image_drawn_rect(&g_view, &x, &y, &w, &h))
-        uapp_logf_layout("imgview: layout picture %d %d %d %d\n", x, y, w, h);
-    uui_fileview_ops.bounds(&g_list, &x, &y, &w, &h);
-    uapp_logf_layout("imgview: layout list %d %d %d %d\n", x, y, w, h);
-    uapp_logf_layout("imgview: layout menubar %d %d %d %d\n", g_menu.x, g_menu.y, g_menu.w, g_menu.h);
-    for (int i = 0; i < (int)(sizeof menu_items / sizeof menu_items[0]); i++) {
-        if (!uui_menubar_title_rect(&g_menu, i, &x, &y, &w, &h)) continue;
-        uapp_logf_layout("imgview: layout title %d %d %d %d %d\n", i, x, y, w, h);
-    }
-    for (int l = 0; l < uui_menubar_depth(&g_menu); l++) {
-        if (uui_menubar_popup_rect(&g_menu, l, &x, &y, &w, &h))
-            uapp_logf_layout("imgview: layout popup %d %d %d %d %d\n", l, x, y, w, h);
-        for (int i = 0; uui_menubar_item_rect(&g_menu, l, i, &x, &y, &w, &h); i++)
-            uapp_logf_layout("imgview: layout item %d %d %d %d %d %d\n", l, i, x, y, w, h);
-    }
-    uapp_logf_layout("imgview: layout selected %d\n", g_list.table.selected);
-}
-
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
     (void)a;
     layout_all(d->surface->w, d->surface->h);
     uui_statusbar_draw(d->surface, &g_status);
-    log_layout();
+    uapp_log_layout(a, "imgview");   // every widget, by name (ui/uui_describe.h)
 }
 
 static void do_command(struct uapp *a, int code) {

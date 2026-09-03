@@ -109,10 +109,13 @@ def main():
         print(f"  {'ok  ' if ok else 'FAIL'}  {name}" + (f"  -- {detail}" if detail and not ok else ""))
 
     qmp = QMPSession(port=args.qmp_port)
-    con = DebugConsole(args.sock)
     # enter_gui() takes the SESSION, not the port -- and it is what turns
-    # `desktop.layout_log` on for every tool, before any app starts.
+    # `desktop.layout_log` on for every tool, before any app starts. It
+    # opens its own console on the socket, so it goes BEFORE this tool's:
+    # two consoles on one socket steal each other's replies, and the
+    # setting write was lost that way while ulogf() hid it.
     enter_gui(qmp, sock=args.sock)
+    con = DebugConsole(args.sock)
 
     con.open_app(TITLE)
     con.settle()

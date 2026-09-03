@@ -273,8 +273,8 @@ static int g_rename_slot = -1;
 #define ID_MENU 1
 #define ID_TABS 2
 static struct uui_item g_widgets[] = {
-    { .ops = &uui_menubar_ops, .widget = &g_menu,  .id = ID_MENU },
-    { .ops = &uui_tabs_ops,    .widget = &g_strip, .id = ID_TABS },
+    { .ops = &uui_menubar_ops, .widget = &g_menu,  .id = ID_MENU, .name = "menu" },
+    { .ops = &uui_tabs_ops,    .widget = &g_strip, .id = ID_TABS, .name = "tabs" },
 };
 
 static struct uapp *g_app;
@@ -937,22 +937,6 @@ static int chrome_moved(void) {
     return 1;
 }
 
-// One reported rect, optionally carrying an index. See log_layout() on
-// why these do not go through ulogf().
-static void emit_rect(const char *prefix, int index, int x, int y, int w, int h) {
-    char b[96];
-    if (index < 0) snprintf(b, sizeof b, "%s %d %d %d %d\n", prefix, x, y, w, h);
-    else snprintf(b, sizeof b, "%s %d %d %d %d %d\n", prefix, index, x, y, w, h);
-    uapp_log_layout_line(b);
-}
-
-static void emit_item(int level, int index, int x, int y, int w, int h) {
-    char b[96];
-    snprintf(b, sizeof b, "uterm: layout item %d %d %d %d %d %d\n",
-             level, index, x, y, w, h);
-    uapp_log_layout_line(b);
-}
-
 static void log_layout(void) {
     struct session *s = active();
     if (!s) return;
@@ -987,27 +971,18 @@ static void log_layout(void) {
     // shell prints, so they carry their own guard.
     if (!chrome_moved()) return;
 
-    int x, y, w, h;
-    if (uui_tabs_new_rect(&g_strip, &x, &y, &w, &h))
-        emit_rect("uterm: layout newtab", -1, x, y, w, h);
-    for (int i = 0; i < g_strip.count; i++)
-        if (uui_tabs_rect(&g_strip, i, &x, &y, &w, &h))
-            emit_rect("uterm: layout tab", i, x, y, w, h);
-    // WHICH SESSION IS AT WHICH POSITION. A rect says where a tab is
-    // drawn and nothing about which shell it holds, so a test checking
-    // that a new tab was APPENDED rather than dropped into a recycled
-    // slot's hole cannot see the difference without this.
+    // The chrome's own rects -- the strip's slots, the menu's titles and
+    // rows -- come from the widgets themselves, in the shared vocabulary
+    // (ui/uui_describe.h). WHICH SESSION IS AT WHICH POSITION stays the
+    // app's: a rect says where a tab is drawn and nothing about which
+    // shell it holds, so a test checking that a new tab was APPENDED
+    // rather than dropped into a recycled slot's hole needs this.
+    uapp_log_layout(g_app, "uterm");
     for (int i = 0; i < g_ntabs; i++) {
         char b[64];
         snprintf(b, sizeof b, "uterm: layout tabslot %d %d\n", i, g_tab_slot[i]);
         uapp_log_layout_line(b);
     }
-    for (int i = 0; i < (int)(sizeof menu_bar / sizeof menu_bar[0]); i++)
-        if (uui_menubar_title_rect(&g_menu, i, &x, &y, &w, &h))
-            emit_rect("uterm: layout title", i, x, y, w, h);
-    for (int l = 0; l < uui_menubar_depth(&g_menu); l++)
-        for (int i = 0; uui_menubar_item_rect(&g_menu, l, i, &x, &y, &w, &h); i++)
-            emit_item(l, i, x, y, w, h);
 }
 
 static void size_changed(int w, int h);

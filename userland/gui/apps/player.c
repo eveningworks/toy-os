@@ -101,15 +101,16 @@ static const struct uui_menu_item menu_items[] = {
 // The menu bar is ROUTED, not hand-pressed: an app with routed widgets
 // must declare it here so its popup is offered every press first
 // (docs/conventions/gui.md).
+// `.name` is what the layout log reports each one as (ui/uui_describe.h).
 static struct uui_item g_widgets[] = {
-    { .ops = &uui_menubar_ops,  .widget = &g_menu, .id = ID_MENU },
-    { .ops = &uui_fileview_ops, .widget = &g_list, .id = ID_LIST },
-    { .ops = &uui_scale_ops, .widget = &g_pos, .id = ID_POS },
-    { .ops = &uui_scale_ops, .widget = &g_vol, .id = ID_VOL },
-    { .ops = &uui_button_ops, .widget = &g_play, .id = ID_PLAY },
-    { .ops = &uui_button_ops, .widget = &g_stop, .id = ID_STOP },
-    { .ops = &uui_button_ops, .widget = &g_prev, .id = ID_PREV },
-    { .ops = &uui_button_ops, .widget = &g_next, .id = ID_NEXT },
+    { .ops = &uui_menubar_ops,  .widget = &g_menu, .id = ID_MENU, .name = "menu" },
+    { .ops = &uui_fileview_ops, .widget = &g_list, .id = ID_LIST, .name = "list" },
+    { .ops = &uui_scale_ops, .widget = &g_pos, .id = ID_POS, .name = "pos" },
+    { .ops = &uui_scale_ops, .widget = &g_vol, .id = ID_VOL, .name = "vol" },
+    { .ops = &uui_button_ops, .widget = &g_play, .id = ID_PLAY, .name = "play" },
+    { .ops = &uui_button_ops, .widget = &g_stop, .id = ID_STOP, .name = "stop" },
+    { .ops = &uui_button_ops, .widget = &g_prev, .id = ID_PREV, .name = "prev" },
+    { .ops = &uui_button_ops, .widget = &g_next, .id = ID_NEXT, .name = "next" },
     { .ops = &uui_label_ops, .widget = &g_now },
     { .ops = &uui_label_ops, .widget = &g_fmt },
     { .ops = &uui_label_ops, .widget = &g_time },
@@ -263,27 +264,10 @@ static void layout_all(int cw, int ch) {
 // Self-reported geometry, so a GUI test asks the app where things are
 // rather than guessing pixels (docs/gui-guidelines.md). The grammar is
 // notepad.c's and imgview.c's, deliberately: one parser in tools/.
-static void log_layout(void) {
-    int x, y, w, h;
-    uapp_logf_layout("player: layout pos %d %d %d %d\n", g_pos.x, g_pos.y, g_pos.w, g_pos.h);
-    uapp_logf_layout("player: layout vol %d %d %d %d\n", g_vol.x, g_vol.y, g_vol.w, g_vol.h);
-    uapp_logf_layout("player: layout play %d %d %d %d\n", g_play.x, g_play.y, g_play.w, g_play.h);
-    uapp_logf_layout("player: layout stop %d %d %d %d\n", g_stop.x, g_stop.y, g_stop.w, g_stop.h);
-    uapp_logf_layout("player: layout prev %d %d %d %d\n", g_prev.x, g_prev.y, g_prev.w, g_prev.h);
-    uapp_logf_layout("player: layout next %d %d %d %d\n", g_next.x, g_next.y, g_next.w, g_next.h);
-    uui_fileview_ops.bounds(&g_list, &x, &y, &w, &h);
-    uapp_logf_layout("player: layout list %d %d %d %d\n", x, y, w, h);
-    uapp_logf_layout("player: layout menubar %d %d %d %d\n", g_menu.x, g_menu.y, g_menu.w, g_menu.h);
-    for (int i = 0; i < (int)(sizeof menu_items / sizeof menu_items[0]); i++) {
-        if (!uui_menubar_title_rect(&g_menu, i, &x, &y, &w, &h)) continue;
-        uapp_logf_layout("player: layout title %d %d %d %d %d\n", i, x, y, w, h);
-    }
-    for (int l = 0; l < uui_menubar_depth(&g_menu); l++) {
-        if (uui_menubar_popup_rect(&g_menu, l, &x, &y, &w, &h))
-            uapp_logf_layout("player: layout popup %d %d %d %d %d\n", l, x, y, w, h);
-        for (int i = 0; uui_menubar_item_rect(&g_menu, l, i, &x, &y, &w, &h); i++)
-            uapp_logf_layout("player: layout item %d %d %d %d %d %d\n", l, i, x, y, w, h);
-    }
+// The widgets report themselves (uapp_log_layout); what remains is
+// the one fact no widget knows -- the transport's state.
+static void log_layout(struct uapp *a) {
+    uapp_log_layout(a, "player");
     uapp_logf_layout("player: layout state %d %d %llu %llu %d\n",
                      usnd_playing(), usnd_paused(),
                      (unsigned long long)usnd_position(),
@@ -294,7 +278,7 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     (void)a;
     layout_all(d->surface->w, d->surface->h);
     uui_statusbar_draw(d->surface, &g_status);
-    log_layout();
+    log_layout(a);
 }
 
 // --- input ------------------------------------------------------------

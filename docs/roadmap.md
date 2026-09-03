@@ -850,7 +850,8 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [ ] Move the kernel-context `fs_read()` callers to `fs_read_into()` -- 7 live vs 2, the discouraged form is the majority
 - [ ] Move the kernel's 42 `etc_config_get()` callers to load-once -- zero use the load form; mouse config reads its file 4 times
 - [x] ~~Image Viewer and Player hand-route a menu bar beside routed widgets~~ DONE 2026-09-03 -- `check_key_routing.py` refuses the pair
-- [ ] `uapp_log_layout()` only walks `.widgets`, so 7 apps hand-roll ~60 layout lines; make it serve a layout-only app too
+- [x] ~~`uapp_log_layout()` only walks `.widgets`, so 7 apps hand-roll ~60 layout lines~~ DONE 2026-09-03 -- widgets describe themselves
+- [ ] Files, Task Manager, Settings and UI Demo onto the layout log's vocabulary; two still `ulogf()` past its gate
 - [x] ~~Two unclipped string draws in fixed boxes, and the tray's `strlen * char_w` hit box~~ DONE 2026-09-03
 - [ ] Calculator sets `.layout` without `.widgets` and lives on `uui_button_group`; a checker for "layout but no router"
 - [ ] `k_strcpy` vs `k_strlcpy`, 161 vs 21, with no rule written anywhere -- decide, then a checker or a doc line
@@ -859,10 +860,10 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [ ] `docs/decisions/` still says `Milestone N` ~50 times in prose; `check_docs.py` only rejects numbered headings
 - [x] ~~~24 GUI tools byte-compare raw screendumps; 8 use `stable_pixels()`~~ DONE 2026-09-03 -- `screenshot()` settles by default
 - [ ] 51 tools take only `--qmp-port` (default 4445) and never launch, so `port_guard` cannot see them; move them to `--instance`
-- [ ] Three tools hand-roll `send_text("gui")` plus a sleep instead of `enter_gui()`: `damage_sweep`, `kvm_soak`, `serial_capture`
+- [x] ~~Three tools hand-roll `send_text("gui")` plus a sleep instead of `enter_gui()`~~ DONE 2026-09-03
 - [x] ~~`fat32_test.py` and `kvm_soak.py` test readiness with `"ready" in out`~~ DONE 2026-09-03 -- `vm.started_ok()`
 - [ ] Seven tools build their own QEMU argv and bypass both `iso_guard` and `port_guard`; `docs/testing.md` half-blesses it
-- [ ] `qemu_matrix.py` copies `disk.img` with `shutil.copyfile` and `fs_switch_test.py` without `--sparse`; a 9 GB hole-fill each
+- [x] ~~`qemu_matrix.py` copies `disk.img` with `shutil.copyfile` and `fs_switch_test.py` without `--sparse`~~ DONE 2026-09-03
 
 ### Benchmark suite
 

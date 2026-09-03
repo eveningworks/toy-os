@@ -151,9 +151,18 @@ static void ops_draw(struct ugfx_surface *s, const void *w) {
 // consumed presses and did nothing with them would be worse.
 // widget-ops-ok: display only -- no input slots, so none of the paired
 // slots check_widget_ops.py enforces apply.
+// The picture's own rect, which is smaller than the box when
+// letterboxed -- a test sampling the box would be sampling the bars.
+static void ops_describe(const void *w, const struct uui_describe *d) {
+    int x, y, wd, h;
+    if (uui_image_drawn_rect((const struct uui_image *)w, &x, &y, &wd, &h))
+        uui_describe_rect(d, "picture", x, y, wd, h);
+}
+
 const struct uui_widget_ops uui_image_ops = {
     .natural_size = ops_natural,
     .set_geometry = ops_geom,
     .bounds       = ops_bounds,
     .draw         = ops_draw,
+    .describe     = ops_describe,
 };

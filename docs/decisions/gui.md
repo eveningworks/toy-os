@@ -6037,3 +6037,52 @@ the positive control (both rules off) reddens exactly those two.
 Deliberately NOT done: blocking the producer, as Wayland does. The
 producers are the mouse IRQ and a client's syscall, and neither can
 wait on a compositor.
+
+## The layout log is written by the widgets, in one vocabulary, not by each app
+
+**Decision.** A widget reports its own test-facing geometry: `bounds`
+for its rect and a `describe` op for the sub-rects a driver needs (a
+menu's titles and popup rows, a tab strip's slots, the picture inside an
+image box), emitted through `ui/uui_describe.h` as
+`<prefix>: layout <name>[.<part>] [i [j]] x y w h`. The app names each
+widget (`uui_item.name`) and calls `uapp_log_layout()` once; a widget it
+owns outside its arrays goes through `uapp_log_widget()`; only what the
+app draws by hand is logged by the app.
+
+**Why not the obvious way.** The obvious way had already been built:
+`uapp_log_layout()` walked the router and printed `layout <id-number>
+x y w h`, and seven apps still carried a logger of their own -- about
+sixty lines -- because a numeric id is not what a test greps for, and a
+bounds rect cannot say where a popup row is. Each app then spelled the
+same menu geometry in its own words (`menutitle` in Minesweeper, `title`
+in Image Viewer, `layout item` in Terminal), so a test helper written
+for one app read nothing from the next, and a widget that gained a
+sub-rect had to be re-logged in every app that used it.
+
+This is the shape every desktop toolkit reached for the same audience:
+Qt's `QAccessible` and GTK's AT-SPI expose a widget's geometry and
+role BY NAME to a driver outside the process, and the widget answers
+for itself. Copied for the shape only -- there is no role taxonomy and
+no event stream here, just the rects a tool clicks.
+
+**Two constraints that fixed the details.** The widgets are linked into
+the compositor too, which has no `uapp`, so `describe` emits through a
+callback in `struct uui_describe` rather than logging directly -- the
+same call is what puts every line through uapp's `desktop.layout_log`
+gate and per-frame dedupe. And `uui_item.main_size` was documented as
+LAST because apps initialise the struct positionally, so `.name` sits
+after it; a positional initialiser leaves it NULL, and an unnamed item
+is simply absent from the log.
+
+**What is deliberately not done.** Files, Task Manager, Settings and UI
+Demo keep their own loggers for now (two of them through `ulogf()`,
+which bypasses the gate); they are a roadmap item, since each needs a
+`describe` op on a table or a tree and its tool moved to the
+vocabulary. Disk Mark's tiles stay the app's -- one bounds line has no
+slot for a profile index -- and go through the gate now, which is what
+exposed its tool writing the gate setting through a second console on
+the same socket. Minesweeper keeps hand-routing its menu bar -- its board
+clicks live in `on_press`, and the router's press does not tell an app
+whether a click dismissed a popup -- so it reports the bar through
+`uapp_log_widget()` instead of joining the walk.
+

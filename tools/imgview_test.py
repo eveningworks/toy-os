@@ -150,7 +150,7 @@ class Layout:
 
     Only the LAST frame is parsed: the log accumulates, so a popup that
     has since closed would otherwise still be reported as open -- the
-    trap tools/menubar_test.py documents. `layout image` is the frame
+    trap tools/menubar_test.py documents. `layout menu` is the frame
     boundary, emitted first on every draw.
     """
 
@@ -159,7 +159,7 @@ class Layout:
         self.cx, self.cy = content["x"], content["y"]
         last = -1
         for i, line in enumerate(lines):
-            if "imgview: layout image" in line:
+            if "imgview: layout menu " in line:   # the walk's first line
                 last = i
         if last >= 0:
             lines = lines[last:]
@@ -177,8 +177,8 @@ class Layout:
                     break
             if not ok or not nums:
                 continue
-            if what == "selected":
-                self.r["selected"] = nums[0]
+            if len(nums) == 1:            # a scalar part: list.selected, menu.open
+                self.r[what] = nums[0]
                 continue
             if len(nums) < 4:
                 continue
@@ -200,7 +200,7 @@ class Layout:
         return (x + w // 2, y + h // 2)
 
     def popups(self):
-        return sorted(int(k.split()[1]) for k in self.r if k.startswith("popup "))
+        return sorted(int(k.split()[1]) for k in self.r if k.startswith("menu.popup "))
 
 
 # EVERY LINE THE APP HAS EVER LOGGED, kept for the whole run.
@@ -243,10 +243,10 @@ def open_menu_item(dbg, content, title_index, item_index):
     `gui click`, which is a press and a release at one point, so this is
     two clicks and not a drag.
     """
-    lay, _ = wait_layout(dbg, content, lambda l: l.has("title %d" % title_index))
-    dbg.click(*lay.centre("title %d" % title_index))
+    lay, _ = wait_layout(dbg, content, lambda l: l.has("menu.title %d" % title_index))
+    dbg.click(*lay.centre("menu.title %d" % title_index))
     lay2, _ = wait_layout(dbg, content, lambda l: l.popups() == [0])
-    key = "item 0 %d" % item_index
+    key = "menu.item 0 %d" % item_index
     if not lay2.has(key):
         return None
     dbg.click(*lay2.centre(key))
@@ -338,7 +338,7 @@ def run(dbg, qmp, tmp, res):
               f"client_pid {win.get('client_pid')} -- 0 would mean ring 0 drew it")
 
     lay, lines = wait_layout(dbg, content,
-                             lambda l: l.has("picture") and l.has("list"))
+                             lambda l: l.has("image.picture") and l.has("list"))
     listed = [l for l in lines if "imgview: listing" in l]
     res.check("it listed the wallpapers directory",
               any(WALLPAPER_DIR in l and "2 image(s)" in l for l in listed),
@@ -348,9 +348,9 @@ def run(dbg, qmp, tmp, res):
               any("aurora.jpg 1280x720" in l for l in shown),
               f"shown lines: {shown}")
     res.check("it reports where the picture landed",
-              lay.has("picture") and lay.has("image"),
+              lay.has("image.picture") and lay.has("image"),
               "no `layout picture` line")
-    if not lay.has("picture"):
+    if not lay.has("image.picture"):
         return
 
     # --- 3. the picture on screen is that file ------------------------
@@ -362,7 +362,7 @@ def run(dbg, qmp, tmp, res):
     # about 2.5x, where libjpeg's own pixels are the reference for a
     # different filter.
     im = shot(qmp, tmp, "view-aurora.png")
-    px, py, pw, ph = lay.screen_rect("picture")
+    px, py, pw, ph = lay.screen_rect("image.picture")
     pts = []
     for fx in (0.25, 0.5, 0.75):
         for fy in (0.3, 0.6):
@@ -374,7 +374,7 @@ def run(dbg, qmp, tmp, res):
 
     # --- 4. the fit modes are real ------------------------------------
     ix, iy, iw, ih = lay.rect("image")
-    pxr, pyr, pwr, phr = lay.rect("picture")
+    pxr, pyr, pwr, phr = lay.rect("image.picture")
     res.check("Fit to window letterboxes rather than cropping",
               pwr <= iw and phr < ih and pwr > 0,
               f"picture {pwr}x{phr} in a {iw}x{ih} box -- a fitted 16:9 "
@@ -395,15 +395,15 @@ def run(dbg, qmp, tmp, res):
 
     open_menu_item(dbg, content, 1, 1)    # View > Actual size
     lay2, _ = wait_layout(dbg, content,
-                          lambda l: l.has("picture") and l.rect("picture")[3] >= ih)
+                          lambda l: l.has("image.picture") and l.rect("image.picture")[3] >= ih)
     res.check("Actual size fills the box and crops",
-              lay2.has("picture") and lay2.rect("picture")[2] == iw
-              and lay2.rect("picture")[3] == ih,
-              f"picture {lay2.rect('picture') if lay2.has('picture') else None} "
+              lay2.has("image.picture") and lay2.rect("image.picture")[2] == iw
+              and lay2.rect("image.picture")[3] == ih,
+              f"picture {lay2.rect('image.picture') if lay2.has('image.picture') else None} "
               f"in a {iw}x{ih} box -- a 1280x720 image at 1:1 must fill it")
 
     open_menu_item(dbg, content, 1, 0)    # View > Fit to window
-    wait_layout(dbg, content, lambda l: l.has("picture") and l.rect("picture")[3] < ih)
+    wait_layout(dbg, content, lambda l: l.has("image.picture") and l.rect("image.picture")[3] < ih)
 
     # --- 5. selecting the other image ---------------------------------
     lx, ly, lw, lh = lay.screen_rect("list")
@@ -415,14 +415,14 @@ def run(dbg, qmp, tmp, res):
     row_h = max(12, int(lh / 20))
     dbg.click(lx + lw // 2, ly + row_h + row_h // 2)
     lay3, lines3 = wait_layout(dbg, content,
-                               lambda l: l.r.get("selected") == 1, timeout=20)
-    res.check("clicking the second row selects it", lay3.r.get("selected") == 1,
+                               lambda l: l.r.get("list.selected") == 1, timeout=20)
+    res.check("clicking the second row selects it", lay3.r.get("list.selected") == 1,
               f"selected {lay3.r.get('selected')}")
     res.check("and it decodes the other file",
               any("imgview: shown dusk.jpg" in l for l in lines3),
               f"shown lines: {[l for l in lines3 if 'shown' in l]}")
 
-    px, py, pw, ph = lay3.screen_rect("picture")
+    px, py, pw, ph = lay3.screen_rect("image.picture")
     pts = [((px + int(pw * fx), py + int(ph * fy)),
             (int(dusk.width * fx), int(dusk.height * fy)))
            for fx in (0.3, 0.6) for fy in (0.3, 0.7)]

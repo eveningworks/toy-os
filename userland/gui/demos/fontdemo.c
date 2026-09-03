@@ -236,7 +236,7 @@ static void log_preview(struct uapp *a) {
 
     // Each control's rect (content-relative), so a test drives it by
     // asking rather than guessing pixels -- now the toolkit's job, one
-    // `fontdemo: layout <id> x y w h` line per declared widget.
+    // `fontdemo: layout <name> x y w h` line per named widget.
     uapp_log_layout(a, "fontdemo");
 }
 
@@ -379,10 +379,10 @@ int main(void) {
     uui_spinbox_init(&g.size, FD_SIZE_DEF, FD_SIZE_MIN, FD_SIZE_MAX, 2, "px");
     uui_textbox_init(&g.text, PANGRAM);
 
-    g.items[0] = (struct uui_item){ .ops = &uui_dropdown_ops, .widget = &g.family, .id = ID_FAMILY };
-    g.items[1] = (struct uui_item){ .ops = &uui_checkbox_ops, .widget = &g.bold,   .id = ID_BOLD };
-    g.items[2] = (struct uui_item){ .ops = &uui_spinbox_ops,  .widget = &g.size,   .id = ID_SIZE };
-    g.items[3] = (struct uui_item){ .ops = &uui_textbox_ops,  .widget = &g.text,   .id = ID_TEXT };
+    g.items[0] = (struct uui_item){ .ops = &uui_dropdown_ops, .widget = &g.family, .id = ID_FAMILY, .name = "family" };
+    g.items[1] = (struct uui_item){ .ops = &uui_checkbox_ops, .widget = &g.bold,   .id = ID_BOLD,   .name = "bold" };
+    g.items[2] = (struct uui_item){ .ops = &uui_spinbox_ops,  .widget = &g.size,   .id = ID_SIZE,   .name = "size" };
+    g.items[3] = (struct uui_item){ .ops = &uui_textbox_ops,  .widget = &g.text,   .id = ID_TEXT,   .name = "text" };
 
     g.focus_items[0] = (struct uui_focusable){ &g.text,   &uui_textbox_focus_ops };
     g.focus_items[1] = (struct uui_focusable){ &g.family, &uui_dropdown_focus_ops };

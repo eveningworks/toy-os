@@ -346,11 +346,20 @@ int uapp_post(struct uapp *a, int a0, int a1);
 // don't forget to present".
 void uapp_redraw(struct uapp *a);
 
-// Logs `<prefix>: layout <id> x y w h` for each declared widget with an
-// id and a `bounds` op -- the geometry a test drives the app by. Replaces
-// the hand-rolled per-app geometry logger; call it from on_draw or
-// on_open (once the widgets are placed). Content-relative.
+// Logs `<prefix>: layout <name> x y w h` for each NAMED item (uui_item
+// .name) with a `bounds` op, then whatever the widget's own `describe`
+// op adds -- the geometry a test drives the app by, in the vocabulary
+// ui/uui_describe.h states. Walks `.layout` and `.widgets`, entering
+// containers. Call it from on_draw, after the app has placed anything
+// it places by hand. Content-relative. An app adds only what no widget
+// knows (a board it draws itself) through uapp_logf_layout().
 void uapp_log_layout(struct uapp *a, const char *prefix);
+
+// The same report for ONE widget the app owns outside its arrays -- a
+// menu bar an app with hand-drawn chrome routes itself (Minesweeper).
+// Same vocabulary, so a test helper written for the walk reads it.
+void uapp_log_widget(struct uapp *a, const char *prefix, const char *name,
+                     const struct uui_widget_ops *ops, const void *widget);
 
 // One extra layout line, for an app whose report says something the
 // widget walk above cannot -- a cursor cell, a pane rect it draws

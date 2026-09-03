@@ -328,11 +328,13 @@ static void on_open(struct uapp *a) {
 
     // GEOMETRY AS THE CLIENT SEES IT, so a test clicks what the layout
     // produced rather than re-deriving it in Python.
-    ulogf("diskmark: layout run %d %d %d %d\n", g_run.x, g_run.y, g_run.w, g_run.h);
-    for (int i = 0; i < PROFILES; i++)
-        ulogf("diskmark: layout tile %d %d %d %d %d\n", i,
-              g_meter[i].x, g_meter[i].y, g_meter[i].w, g_meter[i].h);
+    // The named widgets report themselves (`run`, `size`); the tiles are
+    // indexed by profile, which a bounds line has no slot for, so they
+    // stay the app's -- through the gate, never ulogf().
     uapp_log_layout(a, "diskmark");
+    for (int i = 0; i < PROFILES; i++)
+        uapp_logf_layout("diskmark: layout tile %d %d %d %d %d\n", i,
+                         g_meter[i].x, g_meter[i].y, g_meter[i].w, g_meter[i].h);
     ulog("diskmark: ready\n");
 }
 
@@ -382,9 +384,11 @@ int main(void) {
     // under the roadmap's papercuts.
     g_bar_items[0].ops = &uui_dropdown_ops;
     g_bar_items[0].widget = &g_size;
+    g_bar_items[0].name = "size";
     g_bar_items[1].ops = &uui_button_ops;
     g_bar_items[1].widget = &g_run;
     g_bar_items[1].id = ID_RUN;
+    g_bar_items[1].name = "run";
     g_bar.dir = UUI_ROW;
     g_bar.margin = 0;
     g_bar.items = g_bar_items;

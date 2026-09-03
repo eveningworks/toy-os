@@ -724,11 +724,11 @@ def check_tabs(dbg, qmp, tmp, res):
 
 
 def item_rect(dbg, level, index):
-    """One reported menu row: `uterm: layout item <level> <i> x y w h`."""
+    """One reported menu row: `uterm: layout menu.item <level> <i> x y w h`."""
     if index is None:
         return None
-    for l in reversed(dbg.logs("uterm: layout item ", clear=False)):
-        v = [int(n) for n in l.split("uterm: layout item ")[1].split()[:6]]
+    for l in reversed(dbg.logs("uterm: layout menu.item ", clear=False)):
+        v = [int(n) for n in l.split("uterm: layout menu.item ")[1].split()[:6]]
         if v[0] == level and v[1] == index:
             return v[2:]
     return None
@@ -742,7 +742,7 @@ def open_menu(dbg, win, title):
     -- and names a row the open popup does not have. That is this repo's
     stale-log trap, and it read exactly like the menu item not working.
     """
-    dbg.logs("uterm: layout item ", clear=True)
+    dbg.logs("uterm: layout menu.item ", clear=True)
     dbg.click(*centre(win, title))
     dbg.settle()
 
@@ -751,8 +751,8 @@ def last_item_index(dbg, level):
     """The bottom row of an open popup, so a test names a row by where it
     is rather than by counting the menu tree in two places."""
     best = None
-    for l in dbg.logs("uterm: layout item ", clear=False):
-        v = [int(n) for n in l.split("uterm: layout item ")[1].split()[:6]]
+    for l in dbg.logs("uterm: layout menu.item ", clear=False):
+        v = [int(n) for n in l.split("uterm: layout menu.item ")[1].split()[:6]]
         if v[0] == level:
             best = v[1] if best is None else max(best, v[1])
     return best
@@ -794,7 +794,7 @@ def check_chrome(dbg, qmp, res):
     # The strip is drawn at ONE tab now, which is what makes "+" reachable
     # before a second tab exists. Asserted as the button's own rect --
     # "the strip is tall enough" is a different claim.
-    plus = rect(dbg, "newtab")
+    plus = rect(dbg, "tabs.new")
     res.check("c1. the + button has a rect at one tab",
               plus is not None and plus[2] > 0 and tab_count(dbg) == 1,
               f"newtab {plus} tabs {tab_count(dbg)}")
@@ -812,7 +812,7 @@ def check_chrome(dbg, qmp, res):
               layout_field(dbg, "menu") == 1,
               f"menu {layout_field(dbg, 'menu')}")
 
-    title0 = rect(dbg, "title", 0)
+    title0 = rect(dbg, "menu.title", 0)
     res.check("c4. the File title has a reported rect", title0 is not None)
     if not title0:
         return
@@ -833,7 +833,7 @@ def check_chrome(dbg, qmp, res):
               f"tabs {before} -> {tab_count(dbg)}")
 
     # --- the fall-through triple -------------------------------------
-    term = rect(dbg, "title", 1)      # "Terminal"; row 0 is Rename Tab
+    term = rect(dbg, "menu.title", 1)      # "Terminal"; row 0 is Rename Tab
     res.check("c7. the Terminal title has a reported rect", term is not None)
     if not term:
         return
@@ -841,7 +841,7 @@ def check_chrome(dbg, qmp, res):
     count_before = tab_count(dbg)
     open_menu(dbg, win, term)
     row = item_rect(dbg, 0, 0)
-    tab0 = rect(dbg, "tab", 0)
+    tab0 = rect(dbg, "tabs.slot", 0)
     covered = (row is not None and tab0 is not None
                and row[1] < tab0[1] + tab0[3]
                and row[0] < tab0[0] + tab0[2])
@@ -873,7 +873,7 @@ def check_chrome(dbg, qmp, res):
 
     # Hiding the bar, and F10 getting it back -- the half that makes the
     # toggle a toggle rather than a one-way door.
-    view = rect(dbg, "title", 2)
+    view = rect(dbg, "menu.title", 2)
     res.check("c9. the View title has a reported rect", view is not None)
     if not view:
         return
@@ -1005,7 +1005,7 @@ def check_tab_legibility(dbg, qmp, res):
         res.check("c16pre. a Terminal is up for the legibility checks", False)
         return
 
-    tabs = [rect(dbg, "tab", i) for i in range(3)]
+    tabs = [rect(dbg, "tabs.slot", i) for i in range(3)]
     res.check("c16pre. three tabs, so two of them are resting",
               all(t is not None for t in tabs) and tab_count(dbg) == 3,
               f"tabs {tab_count(dbg)}")
@@ -1103,7 +1103,7 @@ def check_tab_order(dbg, qmp, res):
     dbg.settle()
 
     # Get to exactly three tabs, whatever the checks above left behind.
-    plus = rect(dbg, "newtab")
+    plus = rect(dbg, "tabs.new")
     if not plus:
         res.check("c19pre. the + button has a rect", False)
         return
