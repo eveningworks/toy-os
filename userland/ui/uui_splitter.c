@@ -245,6 +245,10 @@ static void sp_set_focused(void *w, int focused) {
 
 // FILLED AGAINST uui_widget.h, not against the widget this was modelled
 // on: a copied table inherits its gaps.
+static void sp_describe(const void *w, const struct uui_describe *d) {
+    uui_describe_int(d, "frac", uui_splitter_frac((const struct uui_splitter *)w));
+}
+
 const struct uui_widget_ops uui_splitter_ops = {
     .natural_size  = sp_natural,
     .set_geometry  = sp_geometry,
@@ -258,4 +262,5 @@ const struct uui_widget_ops uui_splitter_ops = {
     .key           = sp_key,
     .accepts_focus = sp_accepts_focus,
     .set_focused   = sp_set_focused,
+    .describe      = sp_describe,
 };

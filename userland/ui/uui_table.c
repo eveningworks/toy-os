@@ -683,6 +683,26 @@ static int tb_ops_wheel(void *w, int notches) {
     return uui_table_wheel((struct uui_table *)w, notches);
 }
 
+// The rows' pitch, the header's height, each column's x and width, and
+// the selection -- what a test needs to click a header or a row
+// (ui/uui_describe.h).
+static void tb_ops_describe(const void *w, const struct uui_describe *d) {
+    const struct uui_table *t = (const struct uui_table *)w;
+    uui_describe_int(d, "row_h", uui_table_row_h(t));
+    uui_describe_int(d, "header_h", uui_table_header_h(t));
+    for (int c = 0; c < t->col_count; c++) {
+        int cx, cw;
+        uui_table_column_rect(t, c, &cx, &cw);
+        uui_describe_rect_i(d, "col", c, cx, t->y, cw, t->h);
+    }
+    uui_describe_int(d, "selected", t->selected);
+}
+
+static void tb_ops_bounds(const void *w, int *x, int *y, int *ow, int *oh) {
+    const struct uui_table *s = (const struct uui_table *)w;
+    *x = s->x; *y = s->y; *ow = s->w; *oh = s->h;
+}
+
 const struct uui_widget_ops uui_table_ops = {
     .natural_size = tb_ops_natural_size,
     .set_geometry = tb_ops_set_geometry,
@@ -695,4 +715,6 @@ const struct uui_widget_ops uui_table_ops = {
     .motion = tb_ops_motion,
     .release = tb_ops_release,
     .wheel = tb_ops_wheel,
+    .describe = tb_ops_describe,
+    .bounds = tb_ops_bounds,
 };

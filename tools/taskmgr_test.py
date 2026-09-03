@@ -130,10 +130,17 @@ def layout(dbg):
         m = re.search(r"taskmgr: layout (\w+) (-?\d+) (-?\d+) (\d+) (\d+)", line)
         if m:
             out[m.group(1)] = tuple(int(v) for v in m.groups()[1:])
-        m2 = re.search(r"taskmgr: layout row_h (\d+) header_h (\d+)", line)
+        # The table describes itself (ui/uui_describe.h): `table.row_h`,
+        # `table.header_h`, `table.col i x y w h`; the strip's `tabs.slot`.
+        m2 = re.search(r"taskmgr: layout table\.row_h (\d+)", line)
         if m2:
             out["row_h"] = int(m2.group(1))
-            out["header_h"] = int(m2.group(2))
+        m2b = re.search(r"taskmgr: layout table\.header_h (\d+)", line)
+        if m2b:
+            out["header_h"] = int(m2b.group(1))
+        m7 = re.search(r"taskmgr: layout tabs\.slot (\d+) (-?\d+) (-?\d+) (\d+) (\d+)", line)
+        if m7:
+            out[f"tab{m7.group(1)}"] = tuple(int(v) for v in m7.groups()[1:])
         # The row count is parsed HERE rather than in its own pass over
         # logs(): that call clears what it returns, so a second reader
         # finds nothing and reports 0 rows against a table that listed
@@ -147,9 +154,9 @@ def layout(dbg):
         # The pids in SCREEN order. Read from the app rather than from
         # pixels, which would mean OCR -- and asserted on directly,
         # because "the table repainted" is satisfied by anything.
-        m6 = re.search(r"taskmgr: layout col(\d+) (-?\d+) (\d+)", line)
+        m6 = re.search(r"taskmgr: layout table\.col (\d+) (-?\d+) (-?\d+) (\d+) (\d+)", line)
         if m6:
-            out[f"col{m6.group(1)}"] = (int(m6.group(2)), int(m6.group(3)))
+            out[f"col{m6.group(1)}"] = (int(m6.group(2)), int(m6.group(4)))
         m5 = re.search(r"taskmgr: order (.*)$", line)
         if m5:
             out["order"] = [int(v) for v in m5.group(1).split() if v.strip().isdigit()]

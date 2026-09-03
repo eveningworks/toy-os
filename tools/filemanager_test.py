@@ -185,8 +185,11 @@ class Layout:
             self.split = (int(p[1]), int(p[2]))
         elif p[0] == "splitbox" and len(p) >= 6:
             self.splitbox[int(p[1])] = [int(v) for v in p[2:6]]
-        elif p[0] == "menu" and len(p) >= 5:
-            self.menu = [int(v) for v in p[1:5]]
+        elif p[0] == "menu.popup" and len(p) >= 6:
+            # The open level-0 popup, from the menu's own describe op
+            # (ui/uui_describe.h); the bare `menu` line is the BAR.
+            if int(p[1]) == 0:
+                self.menu = [int(v) for v in p[2:6]]
         elif p[0] == "menuhot" and len(p) >= 3:
             self.menuhot = (int(p[1]), int(p[2]))
         elif p[0] == "cellgrid" and len(p) >= 7:

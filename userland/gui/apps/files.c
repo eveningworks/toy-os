@@ -271,17 +271,17 @@ static unsigned menu_item_flags(int code) {
 // popup made a click on a View item ALSO select the folder-tree row
 // under it (CLAUDE.md's exact rule; the tree made it visible).
 struct uui_item g_widgets[] = {
-    { .ops = &uui_menubar_ops, .widget = &g_menu, .id = ID_MENU },
-    { .ops = &uui_toolbar_ops, .widget = &g_toolbar, .id = ID_TOOLBAR },
-    { .ops = &uui_fileview_ops, .widget = &g_pane[0], .id = ID_LEFT },
-    { .ops = &uui_fileview_ops, .widget = &g_pane[1], .id = ID_RIGHT },
-    { .ops = &uui_tree_ops, .widget = &g_tree, .id = ID_TREE },
-    { .ops = &uui_splitter_ops, .widget = &g_tree_split, .id = ID_TREE_SPLIT },
-    { .ops = &uui_splitter_ops, .widget = &g_pane_split, .id = ID_PANE_SPLIT },
+    { .ops = &uui_menubar_ops, .widget = &g_menu, .id = ID_MENU, .name = "menu" },
+    { .ops = &uui_toolbar_ops, .widget = &g_toolbar, .id = ID_TOOLBAR, .name = "toolbar" },
+    { .ops = &uui_fileview_ops, .widget = &g_pane[0], .id = ID_LEFT, .name = "left" },
+    { .ops = &uui_fileview_ops, .widget = &g_pane[1], .id = ID_RIGHT, .name = "right" },
+    { .ops = &uui_tree_ops, .widget = &g_tree, .id = ID_TREE, .name = "tree" },
+    { .ops = &uui_splitter_ops, .widget = &g_tree_split, .id = ID_TREE_SPLIT, .name = "treesplit" },
+    { .ops = &uui_splitter_ops, .widget = &g_pane_split, .id = ID_PANE_SPLIT, .name = "panesplit" },
     { .ops = &uui_button_ops, .widget = &g_cancel_btn, .id = ID_CANCEL, .hidden = 1 },
     // LAST, so it is hit-tested FIRST: input order is the reverse of
     // draw order, and its popup covers whatever is under it.
-    { .ops = &uui_menubar_ops, .widget = &g_ctx, .id = ID_CTX },
+    { .ops = &uui_menubar_ops, .widget = &g_ctx, .id = ID_CTX, .name = "ctxmenu" },  // not "ctx": the app's own `ctx <open>` line keeps that key
     // LAST OF ALL: a modal has to be offered every press before
     // anything else, and it draws over everything.
     { .ops = &uui_dialog_ops, .widget = &g_dialog, .id = ID_DIALOG },

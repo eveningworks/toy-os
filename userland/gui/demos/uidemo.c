@@ -278,21 +278,11 @@ static void layout(void) {
 // in Python -- which drifts silently the moment a row is added.
 static void log_layout(void) {
     char m[96];
-    struct { const char *name; int x, y, w, h; } rows[] = {
-        { "btn1",       g.buttons[0].x, g.buttons[0].y, g.buttons[0].w, g.buttons[0].h },
-        { "chk_alpha",  g.chk[0].x, g.chk[0].y, g.chk[0].w, g.chk[0].h },
-        { "radio",      g.radio.x, g.radio.y, g.radio.w, g.radio.h },
-        { "textbox",    g.textbox.x, g.textbox.y, g.textbox.w, g.textbox.h },
-        { "dropdown",   g.dropdown.x, g.dropdown.y, g.dropdown.w, g.dropdown.h },
-        { "listbox",    g.list.x, g.list.y, g.list.w, g.list.h },
-        { "scrollback", g.view.x, g.view.y, g.view.w, g.view.h },
-    };
-    for (unsigned i = 0; i < sizeof rows / sizeof rows[0]; i++) {
-        snprintf(m, sizeof m, "layout %s %d %d %d %d",
-                 rows[i].name, rows[i].x, rows[i].y, rows[i].w, rows[i].h);
-        logline_layout(m);
-    }
-    snprintf(m, sizeof m, "layout listbox_row_h %d", uui_listbox_row_h(&g.list));
+    // The named widgets report themselves (ui/uui_describe.h), the
+    // listbox's row pitch included; btn1 is a group member with no item
+    // of its own, so it stays here.
+    snprintf(m, sizeof m, "layout btn1 %d %d %d %d",
+             g.buttons[0].x, g.buttons[0].y, g.buttons[0].w, g.buttons[0].h);
     logline_layout(m);
 }
 
@@ -410,6 +400,7 @@ static void on_open(struct uapp *a) {
 }
 
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
+    uapp_log_layout(a, "uidemo");   // every named widget, by name (ui/uui_describe.h)
     (void)a;
     struct ugfx_surface *s = d->surface;
     // KEPT ON PURPOSE, as a canary. The toolkit already cleared, so this
@@ -663,13 +654,13 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
 // everything regardless of where it sits in this array.
 static struct uui_item ITEMS[] = {
     { .ops = &uui_button_group_ops, .widget = &g.group, .id = ID_BUTTONS },
-    { .ops = &uui_checkbox_ops, .widget = &g.chk[0], .id = ID_CHK_ALPHA },
+    { .ops = &uui_checkbox_ops, .widget = &g.chk[0], .id = ID_CHK_ALPHA, .name = "chk_alpha" },
     { .ops = &uui_checkbox_ops, .widget = &g.chk[1], .id = ID_CHK_BETA },
-    { .ops = &uui_radio_list_ops, .widget = &g.radio, .id = ID_RADIO },
-    { .ops = &uui_textbox_ops, .widget = &g.textbox, .id = ID_TEXTBOX },
-    { .ops = &uui_listbox_ops, .widget = &g.list, .id = ID_LISTBOX },
-    { .ops = &uui_textview_ops, .widget = &g.view, .id = ID_VIEW },
-    { .ops = &uui_dropdown_ops, .widget = &g.dropdown, .id = ID_DROPDOWN },
+    { .ops = &uui_radio_list_ops, .widget = &g.radio, .id = ID_RADIO, .name = "radio" },
+    { .ops = &uui_textbox_ops, .widget = &g.textbox, .id = ID_TEXTBOX, .name = "textbox" },
+    { .ops = &uui_listbox_ops, .widget = &g.list, .id = ID_LISTBOX, .name = "listbox" },
+    { .ops = &uui_textview_ops, .widget = &g.view, .id = ID_VIEW, .name = "scrollback" },
+    { .ops = &uui_dropdown_ops, .widget = &g.dropdown, .id = ID_DROPDOWN, .name = "dropdown" },
 };
 
 int main(void) {

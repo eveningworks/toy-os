@@ -112,8 +112,14 @@ static void sb_ops_draw(struct ugfx_surface *s, const void *w) {
     uui_statusbar_draw(s, (const struct uui_statusbar *)w);
 }
 
+static void st_ops_bounds(const void *w, int *x, int *y, int *ow, int *oh) {
+    const struct uui_statusbar *s = (const struct uui_statusbar *)w;
+    *x = s->x; *y = s->y; *ow = s->w; *oh = s->h;
+}
+
 const struct uui_widget_ops uui_statusbar_ops = {
     .natural_size = sb_ops_natural_size,
     .set_geometry = sb_ops_set_geometry,
     .draw         = sb_ops_draw,
+    .bounds = st_ops_bounds,
 };

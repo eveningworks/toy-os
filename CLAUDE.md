@@ -411,7 +411,10 @@ trips them before it knows to look anything up.
   with a slot it needs left NULL**, because four widgets shipped that
   way in one day and every one of them failed silently and at a
   distance. A table with `draw` needs `natural_size` and `set_geometry`
-  (a layout cannot place what it cannot measure); a table with `press`
+  (a layout cannot place what it cannot measure); a table with
+  `set_geometry` needs `bounds` (the layout log reports only what has
+  one, and eight widgets a layout could place were invisible to every
+  test); a table with `press`
   needs `release` (`uui_route.c` names a widget to its app only when it
   has one); a table with `key` needs `accepts_focus` (the focus ring
   SKIPS a widget that refuses focus, so one that takes keys has to say

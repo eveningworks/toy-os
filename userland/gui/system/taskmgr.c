@@ -368,14 +368,7 @@ static void report_sort(int force) {
     strlcpy(last_order, order, sizeof last_order);
 
     ulogf("taskmgr: sort col %d dir %d\n", g_table.sort_col, g_table.sort_dir);
-    // Each column's own rect, so a test can click a HEADER without
-    // re-deriving column widths from the character counts in COLUMNS[]
-    // -- the re-derivation that has drifted in four tools here already.
-    for (int c = 0; c < COL_COUNT; c++) {
-        int colx, colw;
-        uui_table_column_rect(&g_table, c, &colx, &colw);
-        ulogf("taskmgr: layout col%d %d %d\n", c, colx, colw);
-    }
+    // The columns' rects come from the table itself (`table.col i`).
     ulogf("taskmgr: order %s\n", order);
 }
 
@@ -540,23 +533,9 @@ static int on_tick(struct uapp *a) {
     // Report the table's rect whenever it CHANGES, not just at open.
     // A geometry logged once at startup cannot show whether a resize
     // reflowed, which is exactly the question a resize bug raises.
-    static int last_w, last_h;
-    if (g_table.w != last_w || g_table.h != last_h) {
-        last_w = g_table.w;
-        last_h = g_table.h;
-        ulogf("taskmgr: layout table %d %d %d %d\n",
-                g_table.x, g_table.y, g_table.w, g_table.h);
-        // The BUTTONS move with it -- they sit below the table, so a
-        // resize relocates them. Reporting only the table left a tool
-        // clicking the buttons' pre-resize coordinates, which misses
-        // them entirely and reads as "the button does nothing".
-        ulogf("taskmgr: layout btn_end %d %d %d %d\n",
-                g_buttons[BTN_END].x, g_buttons[BTN_END].y,
-                g_buttons[BTN_END].w, g_buttons[BTN_END].h);
-        ulogf("taskmgr: layout btn_kill %d %d %d %d\n",
-                g_buttons[BTN_KILL].x, g_buttons[BTN_KILL].y,
-                g_buttons[BTN_KILL].w, g_buttons[BTN_KILL].h);
-    }
+    // The table and the tabs report themselves from on_draw (the walk,
+    // deduped per frame); only the buttons, members of a group with no
+    // rect of its own, are reported here.
 
     refresh();
     refresh_overview();
@@ -564,6 +543,19 @@ static int on_tick(struct uapp *a) {
     report_sort(0);
     (void)a;
     return 1; // repaint
+}
+
+// The widgets report themselves (ui/uui_describe.h); the two buttons
+// live in a group with no rect of its own, so they are the app's.
+static void on_draw(struct uapp *a, struct uapp_draw *d) {
+    (void)d;
+    uapp_log_layout(a, "taskmgr");
+    uapp_logf_layout("taskmgr: layout btn_end %d %d %d %d\n",
+            g_buttons[BTN_END].x, g_buttons[BTN_END].y,
+            g_buttons[BTN_END].w, g_buttons[BTN_END].h);
+    uapp_logf_layout("taskmgr: layout btn_kill %d %d %d %d\n",
+            g_buttons[BTN_KILL].x, g_buttons[BTN_KILL].y,
+            g_buttons[BTN_KILL].w, g_buttons[BTN_KILL].h);
 }
 
 static void on_open(struct uapp *a) {
@@ -576,28 +568,19 @@ static void on_open(struct uapp *a) {
     // Report the layout for the test tool, per this repo's rule that a
     // geometry a tool would otherwise re-derive belongs in the app's own
     // log (four tools have been bitten by re-deriving one).
-    ulogf("taskmgr: layout table %d %d %d %d\n",
-            g_table.x, g_table.y, g_table.w, g_table.h);
-    ulogf("taskmgr: layout row_h %d header_h %d\n",
-            uui_table_row_h(&g_table), uui_table_header_h(&g_table));
     // The BUTTONS too. A geometry an app does not report is one a test
     // re-derives in Python and gets wrong -- which happened here on the
     // first attempt at driving this window, and is the same mistake four
     // other tools in this repo have already paid for.
-    ulogf("taskmgr: layout btn_end %d %d %d %d\n",
+    uapp_logf_layout("taskmgr: layout btn_end %d %d %d %d\n",
             g_buttons[BTN_END].x, g_buttons[BTN_END].y,
             g_buttons[BTN_END].w, g_buttons[BTN_END].h);
-    ulogf("taskmgr: layout btn_kill %d %d %d %d\n",
+    uapp_logf_layout("taskmgr: layout btn_kill %d %d %d %d\n",
             g_buttons[BTN_KILL].x, g_buttons[BTN_KILL].y,
             g_buttons[BTN_KILL].w, g_buttons[BTN_KILL].h);
     // THE TAB RECTS, because a tab is as wide as its label and a tool
     // that guessed would click the wrong one the day a label changes.
     // Same rule as every other layout line here: ask the app.
-    for (int i = 0; i < 2; i++) {
-        int tx, ty, tw, th;
-        if (uui_tabs_rect(&g_tabs, i, &tx, &ty, &tw, &th))
-            ulogf("taskmgr: layout tab%d %d %d %d %d\n", i, tx, ty, tw, th);
-    }
     ulogf("taskmgr: page %d\n", g_tabs.selected);
     ulogf("taskmgr: rows %d\n", g_row_count);
 
@@ -675,7 +658,7 @@ int main(void) {
     uui_button_group_init(&g_group, g_buttons, 2);
 
     PROC_ITEMS[0] = (struct uui_item){ .ops = &uui_table_ops, .widget = &g_table,
-                                        .id = ID_TABLE,
+                                        .id = ID_TABLE, .name = "table",
                                         .flags = UUI_FILL_W | UUI_FILL_H };
     PROC_ITEMS[1] = (struct uui_item){ .ops = &uui_button_group_ops,
                                         .widget = &g_group, .id = ID_BUTTONS };
@@ -712,7 +695,7 @@ int main(void) {
     uui_tabs_init(&g_tabs, TABS, 2, NULL);
 
     ITEMS[0] = (struct uui_item){ .ops = &uui_tabs_ops, .widget = &g_tabs,
-                                   .id = ID_TABS };
+                                   .id = ID_TABS, .name = "tabs" };
     ITEMS[1] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &PROC_LAYOUT,
                                    .flags = UUI_FILL_W | UUI_FILL_H };
 
@@ -720,6 +703,7 @@ int main(void) {
 
     struct uapp_desc desc = {
         .title = "Task Manager",
+        .on_draw = on_draw,
         // Exactly one of these is useful: a second copy shows the same
         // table, costs a process slot, and adds its own polling to the
         // CPU figures it is meant to be reporting. Opening it again

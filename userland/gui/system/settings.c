@@ -1077,20 +1077,6 @@ static void navigate(int node_id) {
 // could have moved. The track leaves out the layout's own margins and
 // the two gaps it puts around the band -- those pixels belong to
 // neither child, and counting them would offset every drag by one gap.
-// The geometry a test asserts on. Emitted whenever the layout MOVES,
-// not only at open: a tool re-reading this after dragging something
-// would otherwise be handed the opening snapshot and conclude nothing
-// moved -- a test reading the same state twice and calling it a
-// measurement.
-static void log_geometry(void) {
-    ulogf("settings: layout tree %d %d %d %d\n",
-          g_tree.x, g_tree.y, g_tree.w, g_tree.h);
-    ulogf("settings: layout page %d %d %d %d\n",
-          PAGE_SCROLL.x, PAGE_SCROLL.y, PAGE_SCROLL.w, PAGE_SCROLL.h);
-    ulogf("settings: layout split %d %d %d %d %d\n", g_side_split.x, g_side_split.y,
-          g_side_split.w, g_side_split.h, uui_splitter_frac(&g_side_split));
-}
-
 static void apply_split(struct uapp *a) {
     int m = uui_layout_margin(&BODY_LAYOUT), g = uui_layout_gap(&BODY_LAYOUT);
     int lo = BODY_LAYOUT.x + m;
@@ -1099,7 +1085,6 @@ static void apply_split(struct uapp *a) {
                             ugfx_char_w() * 10, ugfx_char_w() * 24);
     ITEMS_BODY[0].main_size = uui_splitter_before(&g_side_split);
     uui_layout_run(&LAYOUT, 0, 0, uapp_width(a), uapp_height(a));
-    log_geometry();
 }
 
 static void save_split(void) {
@@ -1269,6 +1254,7 @@ static int refit_prose(void) {
 }
 
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
+    uapp_log_layout(a, "settings");   // tree, split (+frac), page, by name
     // WHICH LABEL'S WIDTH DECIDES, and when to do this again.
     //
     // It used to be "once per page, as soon as g_page_desc has a width",
@@ -1422,10 +1408,9 @@ static void on_open(struct uapp *a) {
     ulogf("settings: categories %d\n", g_cat_count);
     ulogf("settings: groups %d\n", g_group_count);
     ulogf("settings: nodes %d\n", g_node_count);
-    log_geometry();
     // The button group holds its buttons' geometry, not its own -- so
     // report the first button's, which is what a test clicks anyway.
-    ulogf("settings: layout buttons %d %d %d %d\n",
+    uapp_logf_layout("settings: layout buttons %d %d %d %d\n",
           g_btn[0].x, g_btn[0].y, g_btn[0].w, g_btn[0].h);
     // Every visible sidebar row, with the y a click should land on --
     // reported by the app rather than re-derived in Python, for the
@@ -1595,11 +1580,11 @@ int main(void) {
     uui_scrollview_set_preferred_rows(&PAGE_SCROLL, 14);
 
     ITEMS_BODY[0] = (struct uui_item){ .ops = &uui_sidebar_ops, .widget = &g_tree,
-                                        .id = ID_TREE, .flags = UUI_FILL_H };
+                                        .id = ID_TREE, .flags = UUI_FILL_H, .name = "tree" };
     ITEMS_BODY[1] = (struct uui_item){ .ops = &uui_splitter_ops, .widget = &g_side_split,
-                                        .id = ID_SIDE_SPLIT, .flags = UUI_FILL_H };
+                                        .id = ID_SIDE_SPLIT, .flags = UUI_FILL_H, .name = "split" };
     ITEMS_BODY[2] = (struct uui_item){ .ops = &uui_scrollview_ops, .widget = &PAGE_SCROLL,
-                                        .id = ID_PAGE,
+                                        .id = ID_PAGE, .name = "page",
                                         .flags = UUI_FILL_W | UUI_FILL_H };
     BODY_LAYOUT = (struct uui_layout){ .dir = UUI_ROW, .items = ITEMS_BODY,
                                         .count = 3, .margin = 0 };

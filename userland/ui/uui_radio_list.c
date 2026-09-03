@@ -238,6 +238,11 @@ static int rl_ops_accepts_focus(const void *w) {
     return !l->disabled && l->count > 0;
 }
 
+static void rl_ops_bounds(const void *w, int *x, int *y, int *ow, int *oh) {
+    const struct uui_radio_list *s = (const struct uui_radio_list *)w;
+    *x = s->x; *y = s->y; *ow = s->w; *oh = s->h;
+}
+
 const struct uui_widget_ops uui_radio_list_ops = {
     .natural_size = rl_ops_natural_size,
     .set_geometry = rl_ops_set_geometry,
@@ -249,4 +254,5 @@ const struct uui_widget_ops uui_radio_list_ops = {
     .key    = rl_ops_key,
     .set_focused   = rl_ops_set_focused,
     .accepts_focus = rl_ops_accepts_focus,
+    .bounds = rl_ops_bounds,
 };

@@ -385,6 +385,17 @@ static void lb_ops_draw(struct ugfx_surface *s, const void *w) {
     uui_listbox_draw(s, (const struct uui_listbox *)w);
 }
 
+static void lb_ops_describe(const void *w, const struct uui_describe *d) {
+    const struct uui_listbox *lb = (const struct uui_listbox *)w;
+    uui_describe_int(d, "row_h", uui_listbox_row_h(lb));
+    uui_describe_int(d, "selected", lb->selected);
+}
+
+static void lb_rect_op(const void *w, int *x, int *y, int *ow, int *oh) {
+    const struct uui_listbox *s = (const struct uui_listbox *)w;
+    *x = s->x; *y = s->y; *ow = s->w; *oh = s->h;
+}
+
 const struct uui_widget_ops uui_listbox_ops = {
     .natural_size  = lb_ops_natural_size,
     .set_geometry  = lb_ops_set_geometry,
@@ -397,4 +408,6 @@ const struct uui_widget_ops uui_listbox_ops = {
     .motion        = lb_ops_motion,
     .release       = lb_ops_release,
     .wheel         = lb_ops_wheel,
+    .describe      = lb_ops_describe,
+    .bounds = lb_rect_op,
 };

@@ -242,11 +242,17 @@ static struct uui_item *layout_children(void *w, int *out_count) {
     return l->items;
 }
 
+static void layout_bounds(const void *w, int *x, int *y, int *ow, int *oh) {
+    const struct uui_layout *s = (const struct uui_layout *)w;
+    *x = s->x; *y = s->y; *ow = s->w; *oh = s->h;
+}
+
 const struct uui_widget_ops uui_layout_ops = {
     .children = layout_children,
     .natural_size = layout_natural,
     .set_geometry = layout_geometry,
     .draw         = layout_draw,
+    .bounds = layout_bounds,
 };
 
 // --- the custom item --------------------------------------------------
@@ -265,8 +271,14 @@ static void custom_draw(struct ugfx_surface *s, const void *w) {
     if (c->draw) c->draw(s, c);
 }
 
+static void custom_bounds(const void *w, int *x, int *y, int *ow, int *oh) {
+    const struct uui_custom *c = (const struct uui_custom *)w;
+    *x = c->x; *y = c->y; *ow = c->w; *oh = c->h;
+}
+
 const struct uui_widget_ops uui_custom_ops = {
     .natural_size = custom_natural,
     .set_geometry = custom_geometry,
     .draw         = custom_draw,
+    .bounds = custom_bounds,
 };

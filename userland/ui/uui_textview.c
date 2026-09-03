@@ -258,6 +258,11 @@ static int tv_ops_cursor(const void *w, int cx, int cy) {
     return WIN_CURSOR_TEXT;
 }
 
+static void tv_ops_bounds(const void *w, int *x, int *y, int *ow, int *oh) {
+    const struct uui_textview *s = (const struct uui_textview *)w;
+    *x = s->x; *y = s->y; *ow = s->w; *oh = s->h;
+}
+
 const struct uui_widget_ops uui_textview_ops = {
     .natural_size = te_ops_natural_size,
     .set_geometry = te_ops_set_geometry,
@@ -268,4 +273,5 @@ const struct uui_widget_ops uui_textview_ops = {
     .release = tv_ops_release,
     .wheel   = tv_ops_wheel,
     .cursor  = tv_ops_cursor,
+    .bounds = tv_ops_bounds,
 };

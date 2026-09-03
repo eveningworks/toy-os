@@ -454,6 +454,11 @@ static int accepts_focus_op(const void *w) {
     return first_item((const struct uui_sidebar *)w) >= 0;
 }
 
+static void sb_ops_bounds(const void *w, int *x, int *y, int *ow, int *oh) {
+    const struct uui_sidebar *s = (const struct uui_sidebar *)w;
+    *x = s->x; *y = s->y; *ow = s->w; *oh = s->h;
+}
+
 const struct uui_widget_ops uui_sidebar_ops = {
     .draw = draw_op,
     .accepts_focus = accepts_focus_op,
@@ -466,4 +471,5 @@ const struct uui_widget_ops uui_sidebar_ops = {
     .key = key_op,
     .natural_size = natural_op,
     .set_geometry = set_geometry_op,
+    .bounds = sb_ops_bounds,
 };

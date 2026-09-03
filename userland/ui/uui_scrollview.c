@@ -310,6 +310,11 @@ static int sv_wheel(void *w, int notches) {
     return uui_scrollview_set_offset(sv, sv->offset - notches * 3 * row_px(sv));
 }
 
+static void sv_bounds(const void *w, int *x, int *y, int *ow, int *oh) {
+    const struct uui_scrollview *s = (const struct uui_scrollview *)w;
+    *x = s->x; *y = s->y; *ow = s->w; *oh = s->h;
+}
+
 const struct uui_widget_ops uui_scrollview_ops = {
     .natural_size = sv_natural_size,
     .set_geometry = sv_set_geometry,
@@ -321,4 +326,5 @@ const struct uui_widget_ops uui_scrollview_ops = {
     .motion       = sv_motion,
     .release      = sv_release,
     .wheel        = sv_wheel,
+    .bounds = sv_bounds,
 };

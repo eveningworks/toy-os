@@ -273,11 +273,24 @@ static void describe_line(void *ctx, const char *line) {
     uapp_log_layout_line(line);
 }
 
+// A widget reachable both through `.layout` and through `.widgets` (the
+// usual shape: the tree draws it, the flat list routes it) is reported
+// ONCE -- the second sighting is skipped, not re-logged.
+#define LOG_SEEN_MAX 128
+static const void *g_log_seen[LOG_SEEN_MAX];
+static int g_log_seen_n;
+
+static int log_seen(const void *w) {
+    for (int i = 0; i < g_log_seen_n; i++) if (g_log_seen[i] == w) return 1;
+    if (g_log_seen_n < LOG_SEEN_MAX) g_log_seen[g_log_seen_n++] = w;
+    return 0;
+}
+
 static void log_items(const char *prefix, struct uui_item *items, int count) {
     for (int i = 0; i < count; i++) {
         struct uui_item *it = &items[i];
         if (it->hidden || !it->ops) continue;
-        if (it->name && it->ops->bounds) {
+        if (it->name && it->ops->bounds && !log_seen(it->widget)) {
             int x, y, w, h;
             it->ops->bounds(it->widget, &x, &y, &w, &h);
             char line[96];
@@ -314,6 +327,7 @@ void uapp_log_widget(struct uapp *a, const char *prefix, const char *name,
 
 void uapp_log_layout(struct uapp *a, const char *prefix) {
     if (!layout_log_enabled()) return;
+    g_log_seen_n = 0;
     if (a->desc->layout) log_items(prefix, a->desc->layout->items, a->desc->layout->count);
     if (a->router.count) log_items(prefix, a->router.items, a->router.count);
 }

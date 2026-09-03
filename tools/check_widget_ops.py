@@ -108,6 +108,12 @@ def check_file(path):
                     problems.append(
                         (name, f"has no .{need}",
                          "a layout cannot place what it cannot measure"))
+        if "set_geometry" in slots and "bounds" not in slots:
+            problems.append(
+                (name, "has no .bounds",
+                 "uapp_log_layout() reports only what has one, so a widget "
+                 "a layout can PLACE but not REPORT is invisible to every "
+                 "test; eight shipped that way"))
         if "press" in slots and "release" not in slots:
             problems.append(
                 (name, "has no .release",

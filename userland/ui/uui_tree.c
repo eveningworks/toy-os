@@ -536,6 +536,13 @@ static int tree_accepts_focus_op(const void *w) {
     return ((const struct uui_tree *)w)->count > 0;
 }
 
+static void tree_describe_op(const void *w, const struct uui_describe *d) {
+    const struct uui_tree *t = (const struct uui_tree *)w;
+    uui_describe_int(d, "row_h", uui_tree_row_h(t));
+    uui_describe_int(d, "rows", uui_tree_visible_count(t));
+    uui_describe_int(d, "selected", t->selected);
+}
+
 const struct uui_widget_ops uui_tree_ops = {
     .draw = tree_draw_op,
     .bounds = tree_bounds_op,
@@ -549,4 +556,5 @@ const struct uui_widget_ops uui_tree_ops = {
     .key = tree_key_op,
     .natural_size = tree_natural_op,
     .set_geometry = tree_set_geometry_op,
+    .describe     = tree_describe_op,
 };

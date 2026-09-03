@@ -175,6 +175,8 @@ static void bg_ops_geometry(void *w, int x, int y, int width, int height) {
     }
 }
 
+// widget-ops-ok: the group holds its BUTTONS' geometry and has no rect of
+// its own to report; apps log the member they click (taskmgr, uidemo).
 const struct uui_widget_ops uui_button_group_ops = {
     .natural_size = bg_ops_natural_size,
     .set_geometry = bg_ops_geometry,

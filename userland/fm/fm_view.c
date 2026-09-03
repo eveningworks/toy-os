@@ -165,11 +165,7 @@ void log_layout(void) {
     uapp_logf_layout("files: layout toolbar %d %d %d %d\n", x, y, w, h);
     for (int i = 0; uui_toolbar_item_rect(&g_toolbar, i, &x, &y, &w, &h); i++)
         uapp_logf_layout("files: layout tbitem %d %d %d %d %d\n", i, x, y, w, h);
-    if (uui_menubar_is_open(&g_menu)) {
-        int mx, my, mw, mh;
-        if (uui_menubar_popup_rect(&g_menu, 0, &mx, &my, &mw, &mh))
-            uapp_logf_layout("files: layout menu %d %d %d %d\n", mx, my, mw, mh);
-    }
+    // The popup's rect is the menu's own `menu.popup 0` line now.
     // Depth and the top popup's hot row: the one logged fact that CHANGES
     // as the pointer crosses an open menu. Without it a hover test's
     // frames are identical, the dedup drops them, and "nothing arrived"
@@ -248,13 +244,15 @@ void log_layout(void) {
 }
 
 void on_draw(struct uapp *a, struct uapp_draw *d) {
-    (void)a;
     layout_all(d->surface->w, d->surface->h);
     ugfx_fill_rect(d->surface, 0, 0, d->surface->w, d->surface->h, UTHEME_PANEL_BG);
     draw_pane_headers(d->surface);
     uui_statusbar_draw(d->surface, &g_status);
     if (!widget_by_id(ID_CANCEL)->hidden) uui_button_draw_one(d->surface, &g_cancel_btn);
     log_layout();
+    // AFTER the app's own report: tools/filemanager_test.py takes `pane 0`
+    // as the start of a frame, so the widgets' lines must follow it.
+    uapp_log_layout(a, "files");   // the widgets by name (ui/uui_describe.h)
 }
 
 void on_draw_over(struct uapp *a, struct uapp_draw *d) {

@@ -265,6 +265,11 @@ const struct uui_widget_ops uui_slider_focus_ops = {
 // FILLED AGAINST uui_widget.h, not against a neighbouring widget: three
 // tables were found short on 2026-08-19, each missing a slot that failed
 // silently and at a distance. See docs/decisions.md.
+static void sl_ops_bounds(const void *w, int *x, int *y, int *ow, int *oh) {
+    const struct uui_slider *s = (const struct uui_slider *)w;
+    *x = s->x; *y = s->y; *ow = s->w; *oh = s->h;
+}
+
 const struct uui_widget_ops uui_slider_ops = {
     .natural_size  = sl_natural,
     .set_geometry  = sl_geometry,
@@ -277,4 +282,5 @@ const struct uui_widget_ops uui_slider_ops = {
     .key           = sl_key,
     .accepts_focus = sl_accepts_focus,
     .set_focused   = sl_set_focused,
+    .bounds = sl_ops_bounds,
 };

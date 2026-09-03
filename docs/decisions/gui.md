@@ -6074,11 +6074,15 @@ LAST because apps initialise the struct positionally, so `.name` sits
 after it; a positional initialiser leaves it NULL, and an unnamed item
 is simply absent from the log.
 
-**What is deliberately not done.** Files, Task Manager, Settings and UI
-Demo keep their own loggers for now (two of them through `ulogf()`,
-which bypasses the gate); they are a roadmap item, since each needs a
-`describe` op on a table or a tree and its tool moved to the
-vocabulary. Disk Mark's tiles stay the app's -- one bounds line has no
+**What the second round found.** Files, Task Manager, Settings and UI
+Demo followed the same day, with `describe` ops on the table, tree,
+splitter and listbox -- and the walk reported nothing for half their
+widgets, because eight ops tables had `set_geometry` and no `bounds`:
+a widget a layout could PLACE but not REPORT. `check_widget_ops.py`
+refuses that pairing now. The walk also reports a widget once even when
+it is reachable through both `.layout` and `.widgets`. What stays the
+app's is what no widget owns: a button inside a group, the File
+Manager's selection and marks, a board. Disk Mark's tiles stay the app's -- one bounds line has no
 slot for a profile index -- and go through the gate now, which is what
 exposed its tool writing the gate setting through a second console on
 the same socket. Minesweeper keeps hand-routing its menu bar -- its board

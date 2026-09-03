@@ -202,14 +202,14 @@ class Demo:
             # check -- a run that measured nothing. CLAUDE.md records the
             # trap; this is it biting.
             lines += self.dbg.logs("uidemo:")
-            if any("layout listbox_row_h" in l for l in lines):
+            if any("layout listbox.row_h" in l for l in lines):
                 break
             time.sleep(0.2)
         for line in lines:
             p = line.split()
             if len(p) >= 7 and p[1] == "layout":
                 self.layout[p[2]] = tuple(int(v) for v in p[3:7])
-            elif len(p) == 4 and p[2] == "listbox_row_h":
+            elif len(p) == 4 and p[2] == "listbox.row_h":
                 self.row_h = int(p[3])
 
         self.win = [w for w in self.dbg.json("gui windows --json")["windows"]
