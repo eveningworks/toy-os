@@ -2344,6 +2344,15 @@ one mechanism per flash). Read before touching `intel_modeset.c`.**
   each: same-aspect filling the panel, centred with borders, letterboxed
   without distortion. The window maths was wrong once (fixed-point
   truncation gave 1918x1078) and the KTEST caught it before the eye.
+- **(2026-09-04) A "rounded to even, which the hardware wants" was an
+  unchecked claim, and it cost a skewed screen.** Rounding the fitter's
+  position and size to even INDEPENDENTLY broke the real rule --
+  `panel = 2 * position + size`, i915's `intel_pch_pfit_check_dst_window`
+  -- for 1366x768 centred, while the one case tested by eye (1600x900)
+  satisfied it by luck. When a constraint is asserted about hardware,
+  find the driver's own validation function for it rather than the
+  register write; i915 keeps its restrictions in `*_check_*` helpers,
+  and that is where the sentence quoting the PRM lives.
 - **The settings registry was full** (28 real + 4 KTEST scratch = 32):
   a new setting would have reddened two tests about something else, as
   the header comment predicted. Raised to 40 in both twins.

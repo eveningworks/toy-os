@@ -144,7 +144,7 @@ KTEST("intel-display", "the fitter window keeps the aspect, fills, or centres") 
     uint32_t x, y, w, h;
     intel_display_fit_window(DISPLAY_SCALING_ASPECT, 1280, 1024, 1920, 1080, &x, &y, &w, &h);
     KTEST_ASSERT_EQ(w, 1350u); KTEST_ASSERT_EQ(h, 1080u);
-    KTEST_ASSERT_EQ(x, 284u);  KTEST_ASSERT_EQ(y, 0u);      // 285 rounded to even
+    KTEST_ASSERT_EQ(x, 285u);  KTEST_ASSERT_EQ(y, 0u);      // half the border, odd
     intel_display_fit_window(DISPLAY_SCALING_ASPECT, 800, 600, 1920, 1080, &x, &y, &w, &h);
     KTEST_ASSERT_EQ(w, 1440u); KTEST_ASSERT_EQ(h, 1080u);
     KTEST_ASSERT_EQ(x, 240u);  KTEST_ASSERT_EQ(y, 0u);
@@ -158,6 +158,31 @@ KTEST("intel-display", "the fitter window keeps the aspect, fills, or centres") 
     KTEST_ASSERT_EQ(x, 320u);  KTEST_ASSERT_EQ(y, 28u);
     intel_display_fit_window(DISPLAY_SCALING_ASPECT, 1920, 1080, 1920, 1080, &x, &y, &w, &h);
     KTEST_ASSERT_EQ(w, 1920u); KTEST_ASSERT_EQ(h, 1080u);   // native: pass-through
+    intel_display_fit_window(DISPLAY_SCALING_CENTER, 1366, 768, 1920, 1080, &x, &y, &w, &h);
+    KTEST_ASSERT_EQ(w, 1366u); KTEST_ASSERT_EQ(h, 768u);    // the skewed case: 2*276+1366 was 1918
+    KTEST_ASSERT_EQ(x, 277u);  KTEST_ASSERT_EQ(y, 156u);
+    intel_display_fit_window(DISPLAY_SCALING_ASPECT, 1366, 768, 1920, 1080, &x, &y, &w, &h);
+    KTEST_ASSERT_EQ(w, 1920u); KTEST_ASSERT_EQ(h, 1080u);   // 1079 rounds UP, never to 1078 at y 0
+    KTEST_ASSERT_EQ(y, 0u);
+}
+
+// The hardware rule behind every case above (i915's
+// intel_pch_pfit_check_dst_window): panel = 2 * position + size on
+// each axis, and a position of 1 is forbidden. Every ladder mode below
+// a 1080p panel, under every policy.
+KTEST("intel-display", "every fitter window equals the pipe active area") {
+    int lw, lh;
+    for (int i = 0; display_ladder_mode(i, &lw, &lh); i++) {
+        if (lw > 1920 || lh > 1080) continue;
+        for (int sc = DISPLAY_SCALING_ASPECT; sc <= DISPLAY_SCALING_CENTER; sc++) {
+            uint32_t x, y, w, h;
+            intel_display_fit_window(sc, (uint32_t)lw, (uint32_t)lh, 1920, 1080, &x, &y, &w, &h);
+            KTEST_ASSERT_EQ(2 * x + w, 1920u);
+            KTEST_ASSERT_EQ(2 * y + h, 1080u);
+            KTEST_ASSERT(x != 1 && y != 1);
+            KTEST_ASSERT(!(w & 1) && !(h & 1));
+        }
+    }
 }
 
 KTEST("display", "the scaling policy is stored on every machine, and refused out of range") {

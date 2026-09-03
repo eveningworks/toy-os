@@ -3929,7 +3929,13 @@ fitter appearing inert -- every register read back as written and the
 source sat unscaled at the top-left, even its position ignored -- and
 the cause was the write order: `PF_WIN_SZ` arms the fitter, so it goes
 last (`PF_CTL`, `PF_WIN_POS`, `PF_WIN_SZ`, i915's `ilk_pfit_enable`).
-Confirmed by eye at 1600x900 filling the panel. Still to do in stage 4:
+Confirmed by eye at 1600x900 filling the panel. The next day 1366x768
+centred came up SKEWED: the window's position and size were each
+rounded to even, which left it two pixels narrower than the pipe's
+active area, and the hardware rule (i915's
+`intel_pch_pfit_check_dst_window`) is `panel = 2 * position + size`
+exactly. Fixed in `intel_display_fit_window()` and held by a KTEST
+over every ladder mode and policy. Still to do in stage 4:
 external outputs on DDI B-D -- deferred on 2026-09-03 because the test
 laptop's only external connector is micro-HDMI with no adapter to hand;
 the maintainer has a second Broadwell laptop it can be done on later.

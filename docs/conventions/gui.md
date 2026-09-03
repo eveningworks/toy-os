@@ -1540,7 +1540,15 @@ real scanout hardware does. Do not write a pixel assertion for one.
   Intel fitter's `PF_WIN_SZ` is the arming write, DSPSURF-style, so the
   order is `PF_CTL`, `PF_WIN_POS`, `PF_WIN_SZ` (i915's `ilk_pfit_enable`)
   -- written control-last, every register read back as asked and the
-  source sat unscaled at the top-left, position included.
+  source sat unscaled at the top-left, position included. **The second
+  trap, a skewed screen**: the window must EQUAL the pipe's active area,
+  `panel = 2 * position + size` on each axis (i915's
+  `intel_pch_pfit_check_dst_window`), so the size rounds UP to even and
+  the position is exactly half the border, odd if it must be -- rounding
+  both to even left 1366x768 centred two pixels short (2*276+1366) and
+  the fitter walked every line out of step, while 1600x900 centred
+  satisfied the rule by luck. A KTEST holds the invariant over every
+  ladder mode and policy.
 - **A PRESENT FLIPS ON A DISPLAY WITH THREE SCANOUTS, THE FLIP NEVER
   WAITS, AND THE COMPOSITOR REPAINTS BY BUFFER AGE.** `DISPLAY_CAP_FLIP`
   (`display.h`) means a driver has `scanout_count` buffers of the

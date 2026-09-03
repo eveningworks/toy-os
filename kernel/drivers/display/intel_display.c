@@ -508,9 +508,24 @@ static void intel_mode_at(int index, struct display_mode *out) {
     }
 }
 
+// One axis of the fitter's window. THE INVARIANT (the PRM's, checked by
+// i915's intel_pch_pfit_check_dst_window): the fitter's output must
+// equal the pipe's active area, so panel = 2 * position + size. Rounding
+// position and size to even INDEPENDENTLY left a 1366-wide window two
+// pixels short, and the fitter walked every line out of step -- a
+// skewed screen. So the size is rounded UP to even (as i915 does) and
+// the position is exactly half the border, odd if it must be; the one
+// forbidden position is 1, which becomes the whole axis instead.
+static uint32_t fit_axis(uint32_t f, uint32_t p, uint32_t *pos) {
+    if (f > p) f = p;
+    if (f < p && ((p - f) & 1)) f++;
+    if (p - f == 2) f = p;
+    *pos = (p - f) / 2;
+    return f;
+}
+
 // The fitter's window for a mode on the panel: exact for the limiting
-// axis (a same-aspect mode fills the panel to the pixel), rounded to
-// even, which the fitter's window wants.
+// axis, so a same-aspect mode fills the panel to the pixel.
 void intel_display_fit_window(int scaling, uint32_t w, uint32_t h, uint32_t pw, uint32_t ph,
                               uint32_t *x, uint32_t *y, uint32_t *ww, uint32_t *wh) {
     uint32_t fw = pw, fh = ph;
@@ -520,12 +535,8 @@ void intel_display_fit_window(int scaling, uint32_t w, uint32_t h, uint32_t pw, 
         if ((uint64_t)w * ph >= (uint64_t)h * pw) { fw = pw; fh = (uint32_t)((uint64_t)h * pw / w); }
         else                                       { fh = ph; fw = (uint32_t)((uint64_t)w * ph / h); }
     }
-    if (fw > pw) fw = pw;
-    if (fh > ph) fh = ph;
-    fw &= ~1u; fh &= ~1u;
-    *ww = fw; *wh = fh;
-    *x = ((pw - fw) / 2) & ~1u;
-    *y = ((ph - fh) / 2) & ~1u;
+    *ww = fit_axis(fw, pw, x);
+    *wh = fit_axis(fh, ph, y);
 }
 
 static int fit_current(uint32_t w, uint32_t h) {
