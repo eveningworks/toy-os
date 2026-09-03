@@ -127,9 +127,15 @@ static int find_level(const struct named_level *tbl, int count, const char *name
     return -1;
 }
 
+// Loaded ONCE and asked four questions (etc_config.h): the per-key
+// getter re-reads the whole file per call. Static, not a local -- the
+// buffer is 4 KiB against a 1 KiB frame budget.
+static struct etc_config_buf g_cfg;
+
 void mouse_config_init(void) {
     char value[16];
-    if (etc_config_get(MOUSE_CONFIG_FILE, MOUSE_SPEED_KEY, value, sizeof value)) {
+    etc_config_load(MOUSE_CONFIG_FILE, &g_cfg);   // a missing file: every get below says 0
+    if (etc_config_buf_get(&g_cfg, MOUSE_SPEED_KEY, value, sizeof value)) {
         // An unparseable or out-of-range value leaves the default in
         // place rather than failing the boot -- the same tolerance every
         // other /etc reader here has. The RANGE is checked here as well
@@ -138,16 +144,16 @@ void mouse_config_init(void) {
         int pct = parse_speed(value);
         if (pct >= SPEED_MIN && pct <= SPEED_MAX) apply_speed_pct(pct);
     }
-    if (etc_config_get(MOUSE_CONFIG_FILE, MOUSE_ACCEL_KEY, value, sizeof value)) {
+    if (etc_config_buf_get(&g_cfg, MOUSE_ACCEL_KEY, value, sizeof value)) {
         int i = find_level(ACCELS, ACCEL_COUNT, value);
         if (i >= 0) { g_accel_index = i; mouse_set_accel_threshold(ACCELS[i].value); }
     }
-    if (etc_config_get(MOUSE_CONFIG_FILE, SCROLL_STEP_KEY, value, sizeof value)) {
+    if (etc_config_buf_get(&g_cfg, SCROLL_STEP_KEY, value, sizeof value)) {
         int step = parse_speed(value); // a plain number; the legacy names miss
         if (step >= SCROLL_STEP_MIN && step <= SCROLL_STEP_MAX)
             mouse_set_scroll_step(step);
     }
-    if (etc_config_get(MOUSE_CONFIG_FILE, SCROLL_DIR_KEY, value, sizeof value)) {
+    if (etc_config_buf_get(&g_cfg, SCROLL_DIR_KEY, value, sizeof value)) {
         int i = find_level(SCROLL_DIRS, SCROLL_DIR_COUNT, value);
         if (i >= 0) { g_scroll_dir_index = i; mouse_set_scroll_invert(SCROLL_DIRS[i].value); }
     }

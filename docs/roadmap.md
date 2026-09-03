@@ -849,7 +849,7 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [x] ~~A checker for `vmm_copy_*_user()` results~~ DONE 2026-09-03 -- `check_copy_user.py`, and the twelve sites fixed
 - [x] ~~Move the kernel-context `fs_read()` callers to `fs_read_into()`~~ DONE 2026-09-03 -- and `fs_read()` deleted
 - [ ] Retire `fs_ops.read` and each backend's staging buffer: only `ramfs_test` calls the op now
-- [ ] Move the kernel's 42 `etc_config_get()` callers to load-once -- zero use the load form; mouse config reads its file 4 times
+- [x] ~~Move the kernel's `etc_config_get()` callers to load-once~~ DONE 2026-09-03 -- the three multi-key readers; the rest ask one key
 - [x] ~~Image Viewer and Player hand-route a menu bar beside routed widgets~~ DONE 2026-09-03 -- `check_key_routing.py` refuses the pair
 - [x] ~~`uapp_log_layout()` only walks `.widgets`, so 7 apps hand-roll ~60 layout lines~~ DONE 2026-09-03 -- widgets describe themselves
 - [x] ~~Files, Task Manager, Settings and UI Demo onto the layout log's vocabulary~~ DONE 2026-09-03 -- and eight widgets gained `bounds`
@@ -857,7 +857,7 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [ ] Calculator sets `.layout` without `.widgets` and lives on `uui_button_group`; a checker for "layout but no router"
 - [ ] `k_strcpy` vs `k_strlcpy`, 161 vs 21, with no rule written anywhere -- decide, then a checker or a doc line
 - [ ] `write_dec`/`write_hex` chains beside `*_printf` -- 82 chains in `apps/`, 59 of them in `shell_sys.c`; nothing says which to use
-- [ ] 26 copy-to/from-user calls discard their result under a "validated above" comment -- the pre-helper idiom the header retires
+- [x] ~~26 copy-to/from-user calls discard their result under a "validated above" comment~~ DONE 2026-09-03 -- the checker refuses it
 - [ ] `docs/decisions/` still says `Milestone N` ~50 times in prose; `check_docs.py` only rejects numbered headings
 - [x] ~~~24 GUI tools byte-compare raw screendumps; 8 use `stable_pixels()`~~ DONE 2026-09-03 -- `screenshot()` settles by default
 - [x] ~~51 tools take only `--qmp-port` (default 4445) and never launch, so `port_guard` cannot see them~~ DONE 2026-09-03 -- `--instance N`

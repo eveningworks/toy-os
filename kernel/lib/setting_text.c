@@ -83,6 +83,11 @@ uint32_t setting_text_widget(const char *ns, const char *name) {
     return SETTING_ABI_WIDGET_AUTO;
 }
 
+// The two-key readers below load once (etc_config.h). Static: 4 KiB
+// against a 1 KiB frame budget, and a syscall handler runs with
+// interrupts off, so one buffer serves them.
+static struct etc_config_buf g_text_buf;
+
 uint32_t setting_text_sflags(const char *ns, const char *name) {
     char path[FS_PATH_MAX];
     if (!text_path(ns, name, path, sizeof path)) return 0;
@@ -90,13 +95,14 @@ uint32_t setting_text_sflags(const char *ns, const char *name) {
 
     uint32_t flags = 0;
     char value[16];
-    if (etc_config_get(path, SETTING_TEXT_KEY_APPLIES, value, sizeof value) &&
+    etc_config_load(path, &g_text_buf);   // one read, two keys
+    if (etc_config_buf_get(&g_text_buf, SETTING_TEXT_KEY_APPLIES, value, sizeof value) &&
         k_strcmp(value, "reboot") == 0)
         flags |= SETTING_ABI_SF_REBOOT;
     // Anything other than an explicit "1" is not advanced. A key present
     // but empty means somebody started to write it and stopped, which is
     // not a reason to hide a setting from them.
-    if (etc_config_get(path, SETTING_TEXT_KEY_ADVANCED, value, sizeof value) &&
+    if (etc_config_buf_get(&g_text_buf, SETTING_TEXT_KEY_ADVANCED, value, sizeof value) &&
         k_strcmp(value, "1") == 0)
         flags |= SETTING_ABI_SF_ADVANCED;
     return flags;
@@ -131,7 +137,8 @@ int setting_text_group(const char *category, const char *group,
         return 0;
     if (!fs_exists(path)) return 0;
 
-    etc_config_get(path, SETTING_TEXT_KEY_LABEL, out_label, label_size);
-    etc_config_get(path, SETTING_TEXT_KEY_DESC, out_desc, desc_size);
+    etc_config_load(path, &g_text_buf);   // one read, two keys
+    etc_config_buf_get(&g_text_buf, SETTING_TEXT_KEY_LABEL, out_label, label_size);
+    etc_config_buf_get(&g_text_buf, SETTING_TEXT_KEY_DESC, out_desc, desc_size);
     return 1;
 }

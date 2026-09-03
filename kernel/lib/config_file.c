@@ -97,6 +97,10 @@ void config_files_scan(void) {
     }
     g_count = keep;
 
+// One read per descriptor, three keys out of it (etc_config.h); static
+// because 4 KiB does not belong on a 16 KiB kernel stack.
+static struct etc_config_buf g_scan_buf;
+
     // The kernel's own. Registered here rather than by each owning
     // subsystem because three of the four are DATA files with no
     // subsystem that would naturally announce them -- and a rescan has
@@ -131,9 +135,10 @@ void config_files_scan(void) {
         // missing either is skipped silently -- it is a file someone
         // may still be writing, and one bad file must not cost the
         // whole index.
-        if (!etc_config_get(full, "Name", name, sizeof name)) continue;
-        if (!etc_config_get(full, "Path", path, sizeof path)) continue;
-        if (!etc_config_get(full, "Description", desc, sizeof desc)) desc[0] = '\0';
+        if (!etc_config_load(full, &g_scan_buf)) continue;   // unreadable or oversize: skipped
+        if (!etc_config_buf_get(&g_scan_buf, "Name", name, sizeof name)) continue;
+        if (!etc_config_buf_get(&g_scan_buf, "Path", path, sizeof path)) continue;
+        if (!etc_config_buf_get(&g_scan_buf, "Description", desc, sizeof desc)) desc[0] = '\0';
         if (!name[0] || path[0] != '/') continue;
 
         config_file_register(name, path, desc, 0);
