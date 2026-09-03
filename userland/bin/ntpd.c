@@ -366,8 +366,13 @@ static int sync_once(int apply) {
         return 1;
     }
 
+    // SECONDS AND NANOSECONDS, both. Passing only the seconds was the
+    // first version and it discarded the sub-second part of every
+    // correction -- so a sync that measured a 7 ms round trip left the
+    // clock a few hundred milliseconds behind, every time, for ever.
     uint64_t target = server_ns / 1000000000ull;
-    if (sys_settime(target) != 0) {
+    uint32_t target_ns = (uint32_t)(server_ns % 1000000000ull);
+    if (sys_settime(target, target_ns) != 0) {
         say("ntpd: the kernel refused %llu as a time\n", (unsigned long long)target);
         return 0;
     }

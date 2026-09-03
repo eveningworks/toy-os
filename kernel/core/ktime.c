@@ -68,9 +68,10 @@ uint64_t ktime_now_sec(void) {
     return ktime_now_ns() / NS_PER_SEC;
 }
 
-void ktime_read(struct rtc_time *out) {
-    if (!out) return;
-    uint64_t sec = ktime_now_sec();
+// An epoch second as broken-down civil time. Split out of ktime_read()
+// so ktime_set() can convert the value it is WRITING rather than
+// re-reading the clock it has just moved.
+static void epoch_to_rtc(uint64_t sec, struct rtc_time *out) {
     uint64_t days = sec / 86400ull;
     uint32_t rem = (uint32_t)(sec % 86400ull);
 
@@ -84,22 +85,33 @@ void ktime_read(struct rtc_time *out) {
     out->second = (uint8_t)(rem % 60);
 }
 
-int ktime_set(uint64_t epoch_sec) {
+void ktime_read(struct rtc_time *out) {
+    if (!out) return;
+    epoch_to_rtc(ktime_now_sec(), out);
+}
+
+int ktime_set(uint64_t sec, uint32_t nsec) {
     // 1970-01-01 .. 9999-12-31, the range the RTC's two-digit year plus
     // an assumed century and cal_civil_from_days() can both hold.
-    if (epoch_sec > 253402300799ull) return 0;
+    if (sec > 253402300799ull) return 0;
+    if (nsec >= NS_PER_SEC) return 0;
 
     int64_t before = (int64_t)ktime_now_sec();
 
     g_mono_ns = clocksource_now_ns();
-    g_epoch_ns = epoch_sec * NS_PER_SEC;
+    g_epoch_ns = sec * NS_PER_SEC + nsec;
     g_ready = 1;
 
-    g_last_step = (int64_t)epoch_sec - before;
+    g_last_step = (int64_t)sec - before;
     g_step_count++;
 
+    // THE RTC HAS NO SUB-SECOND FIELD, so this ROUNDS to the nearest
+    // second rather than truncating: half a second of error at the next
+    // boot instead of up to a whole one. Rounded BEFORE the calendar
+    // conversion, so a value half a second before midnight rolls the
+    // date over correctly instead of being clamped.
     struct rtc_time t;
-    ktime_read(&t);
+    epoch_to_rtc(sec + (nsec >= NS_PER_SEC / 2 ? 1 : 0), &t);
     // A FAILED RTC WRITE IS NOT A FAILED SET. The correction is already
     // live; all that is lost is its surviving a reboot, and saying so is
     // more useful than refusing a call that mostly worked.

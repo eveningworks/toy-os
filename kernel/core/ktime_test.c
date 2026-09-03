@@ -60,7 +60,7 @@ KTEST("ktime", "the clock advances with monotonic time, not in jumps") {
 KTEST("ktime", "set and read round-trip to the same second") {
     uint64_t saved = ktime_now_sec();
 
-    KTEST_ASSERT(ktime_set(FIXTURE_EPOCH) == 1);
+    KTEST_ASSERT(ktime_set(FIXTURE_EPOCH, 0) == 1);
     uint64_t got = ktime_now_sec();
     // Not equality: real time passes between the set and the read, and
     // demanding an exact match would make this fail on a slow host for
@@ -76,7 +76,7 @@ KTEST("ktime", "set and read round-trip to the same second") {
     KTEST_ASSERT_EQ(t.hour, 12);
     KTEST_ASSERT_EQ(t.minute, 34);
 
-    ktime_set(saved);
+    ktime_set(saved, 0);
 }
 
 KTEST("ktime", "a step is reported, and its size is the difference") {
@@ -86,13 +86,13 @@ KTEST("ktime", "a step is reported, and its size is the difference") {
     // Forward an hour from wherever the clock is, so the expected step
     // is known without depending on what the RTC happens to say.
     uint64_t target = ktime_now_sec() + 3600;
-    KTEST_ASSERT(ktime_set(target) == 1);
+    KTEST_ASSERT(ktime_set(target, 0) == 1);
     KTEST_ASSERT_EQ(ktime_step_count(), before + 1);
 
     int64_t step = ktime_last_step();
     KTEST_ASSERT(step >= 3595 && step <= 3600);
 
-    ktime_set(saved);
+    ktime_set(saved, 0);
 }
 
 KTEST("ktime", "an out-of-range epoch is refused and moves nothing") {
@@ -102,7 +102,7 @@ KTEST("ktime", "an out-of-range epoch is refused and moves nothing") {
     // Year 10000 and beyond: the RTC's two-digit year plus an assumed
     // century cannot hold it, so accepting it would store a time that
     // reads back as something else entirely.
-    KTEST_ASSERT_EQ(ktime_set(253402300800ull), 0);
+    KTEST_ASSERT_EQ(ktime_set(253402300800ull, 0), 0);
     KTEST_ASSERT_EQ(ktime_step_count(), before);
 
     uint64_t now = ktime_now_sec();
@@ -118,7 +118,7 @@ KTEST("ktime", "the RTC takes what was written to it") {
     // rather than being tested against the same conversion that wrote it.
     uint64_t saved = ktime_now_sec();
 
-    KTEST_ASSERT(ktime_set(FIXTURE_EPOCH) == 1);
+    KTEST_ASSERT(ktime_set(FIXTURE_EPOCH, 0) == 1);
 
     struct rtc_time hw;
     rtc_read(&hw);
@@ -129,5 +129,42 @@ KTEST("ktime", "the RTC takes what was written to it") {
 
     KTEST_ASSERT(hw_epoch >= FIXTURE_EPOCH && hw_epoch < FIXTURE_EPOCH + 5);
 
-    ktime_set(saved);
+    ktime_set(saved, 0);
+}
+
+KTEST("ktime", "a sub-second part is kept, not rounded away") {
+    // THE REGRESSION TEST FOR THE BUG THIS API SHIPPED WITH. ktime_set()
+    // took whole seconds, so every correction landed up to a second
+    // late -- invisible to a test that only compares seconds, and
+    // measured on real hardware as a clock that was reliably a few
+    // hundred milliseconds behind right after a sync.
+    uint64_t saved = ktime_now_sec();
+
+    KTEST_ASSERT(ktime_set(FIXTURE_EPOCH, 750000000u) == 1);
+    uint64_t ns = ktime_now_ns();
+    uint64_t frac = ns % 1000000000ull;
+
+    // The fraction must still be around 0.75 s. Generous at both ends
+    // because real time passes between the set and the read; a
+    // truncating set puts it near 0 and fails by a wide margin.
+    KTEST_ASSERT(frac > 700000000ull && frac < 900000000ull);
+
+    // AND THE RTC IS ROUNDED, NOT TRUNCATED -- 0.75 s rounds UP, so the
+    // hardware holds the NEXT second. That is half a second of error at
+    // the next boot instead of most of one.
+    struct rtc_time hw;
+    rtc_read(&hw);
+    int64_t days = cal_days_from_civil(hw.year, hw.month, hw.day);
+    uint64_t hw_epoch = (uint64_t)days * 86400ull +
+                        hw.hour * 3600ull + hw.minute * 60ull + hw.second;
+    KTEST_ASSERT_EQ(hw_epoch, FIXTURE_EPOCH + 1);
+
+    ktime_set(saved, 0);
+}
+
+KTEST("ktime", "a nanosecond outside its second is refused") {
+    uint64_t saved = ktime_now_sec();
+    KTEST_ASSERT_EQ(ktime_set(FIXTURE_EPOCH, 1000000000u), 0);
+    uint64_t now = ktime_now_sec();
+    KTEST_ASSERT(now >= saved && now < saved + 5);
 }

@@ -100,7 +100,7 @@ int sys_settime(struct syscall_ctx *c) {
     // move the clock. Linux gates this behind CAP_SYS_TIME. When
     // docs/roadmap.md's multi-user work lands, this is one of the calls
     // that grows a check.
-    if (!ktime_set(c->a0)) {
+    if (!ktime_set(c->a0, (uint32_t)c->a1)) {
         c->regs[14] = (uint64_t)(int64_t)-EINVAL;
         return 0;
     }

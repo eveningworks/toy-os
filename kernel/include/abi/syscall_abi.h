@@ -522,10 +522,20 @@ struct listdir_request {
                        // 0.0.0.0) and an Announcement from one that has
                        // it.
 
-#define SYS_SETTIME 95 // RDI = seconds since 1970-01-01 00:00:00 **UTC**.
-                       // Steps the wall clock there and writes the RTC,
-                       // so the correction survives a reboot. Returns 0,
-                       // or -EINVAL for a time outside 1970..9999.
+#define SYS_SETTIME 95 // RDI = seconds since 1970-01-01 00:00:00 **UTC**,
+                       // RSI = nanoseconds within that second (0 is
+                       // fine). Steps the wall clock there and writes
+                       // the RTC, so the correction survives a reboot.
+                       // Returns 0, or -EINVAL for a time outside
+                       // 1970..9999 or an out-of-range nanosecond.
+                       //
+                       // **THE NANOSECONDS MATTER.** This took whole
+                       // seconds at first and threw away the sub-second
+                       // part of every correction, leaving the clock up
+                       // to a second late right after a sync that had
+                       // just measured a 7 ms round trip. The RTC still
+                       // stores whole seconds -- it has no other field
+                       // -- so it is written ROUNDED.
                        //
                        // **THE ARGUMENT IS UTC; SYS_GETTIME'S ANSWER IS
                        // LOCAL.** They are not inverses, and that is

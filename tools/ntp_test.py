@@ -82,6 +82,15 @@ def check(label, ok, detail=""):
         FAILURES.append(label)
 
 
+# A NON-ZERO FRACTION, so the reply exercises the client's fixed-point
+# decode rather than a whole second that a truncating parser handles by
+# accident. Whether the sub-second part SURVIVES the set is asserted by
+# kernel/core/ktime_test.c, which can read the clock immediately -- the
+# fraction advances continuously, so a check made a serial round trip
+# later could not tell 0.75 from anything else.
+TARGET_FRACTION = 0.75
+
+
 def to_ntp(unix_seconds, broken=False):
     """A 64-bit NTP timestamp for a Unix time.
 
@@ -90,7 +99,8 @@ def to_ntp(unix_seconds, broken=False):
     as already being a Unix time. The resulting date is ~70 years off,
     which every check below must notice."""
     secs = unix_seconds if broken else unix_seconds + NTP_TO_UNIX
-    return (secs << 32)
+    frac = int(TARGET_FRACTION * (1 << 32))
+    return (secs << 32) | frac
 
 
 class SntpServer:

@@ -38,8 +38,16 @@ uint64_t ktime_now_ns(void);
 // what rtc_read_local() adds the timezone offset to.
 void ktime_read(struct rtc_time *out);
 
-// Steps the clock to `epoch_sec` (UTC), and writes the RTC so the
-// correction survives a reboot.
+// Steps the clock to `sec` seconds plus `nsec` nanoseconds since
+// 1970-01-01 UTC, and writes the RTC so the correction survives a
+// reboot.
+//
+// **THE NANOSECONDS ARE NOT DECORATION.** This took whole seconds at
+// first, which threw away the sub-second part of every correction and
+// left the clock up to a second late -- measured on the test laptop as
+// a steady few hundred milliseconds behind, immediately after a sync
+// that had just reported a 7 ms round trip. A clock built to carry
+// sub-second time has to be settable to one.
 //
 // A STEP, NOT A SLEW. A real NTP implementation adjusts the tick rate
 // so time never runs backwards; SNTP steps, this steps, and a caller
@@ -51,7 +59,7 @@ void ktime_read(struct rtc_time *out);
 // failing does NOT fail the call: the in-memory clock is corrected
 // either way, and a machine whose CMOS is unwritable still wants the
 // right time until it reboots.
-int ktime_set(uint64_t epoch_sec);
+int ktime_set(uint64_t sec, uint32_t nsec);
 
 // How far the clock has been moved since boot, in seconds, and how many
 // times. Both are diagnostics -- `/bin/uptime` and the NTP client print
