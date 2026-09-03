@@ -48,12 +48,17 @@
 #define VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D   0x0105
 #define VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING 0x0106
 #define VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING 0x0107
+#define VIRTIO_GPU_CMD_GET_EDID              0x010A
 
 #define VIRTIO_GPU_CMD_UPDATE_CURSOR         0x0300
 #define VIRTIO_GPU_CMD_MOVE_CURSOR           0x0301
 
 #define VIRTIO_GPU_RESP_OK_NODATA            0x1100
 #define VIRTIO_GPU_RESP_OK_DISPLAY_INFO      0x1101
+#define VIRTIO_GPU_RESP_OK_EDID              0x1104
+
+// Feature bit 1: the device answers GET_EDID (spec 5.7.3).
+#define VIRTIO_GPU_F_EDID (1ull << 1)
 
 #define VIRTIO_GPU_MAX_SCANOUTS 16
 
@@ -85,6 +90,19 @@ struct gpu_display_one {
 struct gpu_resp_display_info {
     struct gpu_ctrl_hdr hdr;
     struct gpu_display_one pmodes[VIRTIO_GPU_MAX_SCANOUTS];
+};
+
+struct gpu_get_edid {
+    struct gpu_ctrl_hdr hdr;
+    uint32_t scanout;
+    uint32_t padding;
+};
+
+struct gpu_resp_edid {
+    struct gpu_ctrl_hdr hdr;
+    uint32_t size;
+    uint32_t padding;
+    uint8_t  edid[1024];
 };
 
 struct gpu_resource_create_2d {
@@ -153,6 +171,7 @@ _Static_assert(sizeof(struct gpu_rect) == 16, "gpu rect is 16 bytes");
 _Static_assert(sizeof(struct gpu_resp_display_info) == 24 + 24 * 16, "display info response");
 _Static_assert(sizeof(struct gpu_transfer_to_host_2d) == 56, "transfer_to_host_2d is 56 bytes");
 _Static_assert(sizeof(struct gpu_update_cursor) == 56, "update_cursor is 56 bytes");
+_Static_assert(sizeof(struct gpu_resp_edid) == 24 + 8 + 1024, "edid response");
 
 // --- state ------------------------------------------------------------
 
@@ -209,9 +228,12 @@ static union {
     struct gpu_set_scanout scanout;
     struct gpu_transfer_to_host_2d xfer;
     struct gpu_resource_flush flush;
+    struct gpu_get_edid get_edid;
 } g_req __attribute__((aligned(16)));
 
 static struct gpu_resp_display_info g_resp __attribute__((aligned(16)));
+// GET_EDID's reply is bigger than any other; its own buffer, used once.
+static struct gpu_resp_edid g_resp_edid __attribute__((aligned(16)));
 static struct gpu_update_cursor g_cursor_req __attribute__((aligned(16)));
 
 // Not locks -- there is no lock primitive here. They make a re-entrant
@@ -225,7 +247,7 @@ static int g_cur_busy = 0;
 
 // Send whatever is in g_req (of `len` bytes) and wait for the response.
 // Returns the response type, or 0 if the request never completed.
-static uint32_t ctl_send(uint32_t len) {
+static uint32_t ctl_send_into(uint32_t len, void *resp, uint32_t resp_len) {
     if (!g_dev.common) return 0;
     if (g_ctl_busy) {
         klog_write("virtio-gpu: re-entrant command refused\n");
@@ -233,10 +255,10 @@ static uint32_t ctl_send(uint32_t len) {
     }
     g_ctl_busy = 1;
 
-    k_memset(&g_resp, 0, sizeof g_resp);
+    k_memset(resp, 0, resp_len);
 
     struct virtio_sg out = { .phys = (uint64_t)(uintptr_t)&g_req, .len = len };
-    struct virtio_sg in  = { .phys = (uint64_t)(uintptr_t)&g_resp, .len = sizeof g_resp };
+    struct virtio_sg in  = { .phys = (uint64_t)(uintptr_t)resp, .len = resp_len };
 
     int head = virtqueue_submit(&g_control, &out, 1, &in, 1);
     if (head < 0) {
@@ -252,8 +274,10 @@ static uint32_t ctl_send(uint32_t len) {
     if (!done) return 0;          // virtqueue_poll() logged it
 
     g_commands++;
-    return g_resp.hdr.type;
+    return ((struct gpu_ctrl_hdr *)resp)->type;
 }
+
+static uint32_t ctl_send(uint32_t len) { return ctl_send_into(len, &g_resp, sizeof g_resp); }
 
 // The common case: a command whose only answer is "fine".
 static int ctl_ok(uint32_t len, const char *what) {
@@ -291,6 +315,27 @@ static void read_display_info(void) {
     if (!g_resp.pmodes[0].enabled) return;   // no preference, not a failure
     g_pref_w = g_resp.pmodes[0].r.width;
     g_pref_h = g_resp.pmodes[0].r.height;
+}
+
+// GET_EDID for scanout 0, when the device offered the feature. The
+// reply carries up to 1024 bytes; the base block is what the parser
+// wants, so the copy is capped by the caller's buffer.
+int virtio_gpu_read_edid(uint8_t *out, int cap) {
+    if (!g_present || !out || cap <= 0) return 0;
+    if (!virtio_has_feature(&g_dev, VIRTIO_GPU_F_EDID)) return 0;
+    hdr_init(&g_req.get_edid.hdr, VIRTIO_GPU_CMD_GET_EDID);
+    g_req.get_edid.scanout = 0;
+    g_req.get_edid.padding = 0;
+    uint32_t type = ctl_send_into(sizeof g_req.get_edid, &g_resp_edid, sizeof g_resp_edid);
+    if (type != VIRTIO_GPU_RESP_OK_EDID) {
+        klog_printf("virtio-gpu: GET_EDID not answered (response 0x%x)\n", type);
+        return 0;
+    }
+    uint32_t n = g_resp_edid.size;
+    if (n > sizeof g_resp_edid.edid) n = sizeof g_resp_edid.edid;
+    if (n > (uint32_t)cap) n = (uint32_t)cap;
+    k_memcpy(out, g_resp_edid.edid, n);
+    return (int)n;
 }
 
 // --- mode setting -----------------------------------------------------
@@ -637,10 +682,10 @@ int virtio_gpu_init(void) {
     // PCI writes.
     if (!virtio_pci_find(VIRTIO_ID_GPU, 0, &g_dev)) return 0;
 
-    // Neither VIRGL nor EDID is asked for: this is a 2D driver, and a
+    // EDID is asked for and VIRGL is not: this is a 2D driver, and a
     // feature negotiated but unimplemented is the kind of half-support
     // virtio_begin()'s modern-only refusal exists to avoid.
-    if (!virtio_begin(&g_dev, 0)) return 0;
+    if (!virtio_begin(&g_dev, VIRTIO_GPU_F_EDID)) return 0;
 
     if (!virtqueue_setup(&g_dev, 0, &g_control)) {
         klog_write("virtio-gpu: could not set up its control queue\n");

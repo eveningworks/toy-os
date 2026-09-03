@@ -6,6 +6,7 @@
 #include "multiboot.h" // multiboot_cmdline() -- the video= flag
 #include "string.h"    // k_strstr, k_isdigit
 #include "driver.h" // driver_bound() -- which driver owns the screen
+#include "edid.h"
 
 // driver-none: the display class registry itself
 
@@ -53,6 +54,47 @@ static int caps_are_honest(const struct display_driver *d) {
     return 1;
 }
 
+static struct display_edid g_edid;
+static int g_have_edid;
+
+const struct display_edid *display_edid(void) { return g_have_edid ? &g_edid : 0; }
+
+// The EDID is a FACT about the monitor, so it is read here once and
+// logged in the display layer's voice, whichever driver fetched the
+// bytes. A block that fails to parse is logged as such -- a panel
+// answering garbage is worth knowing about before a modeset trusts it.
+static void read_edid(const struct display_driver *d) {
+    static uint8_t raw[EDID_BLOCK];
+    g_have_edid = 0;
+    if (!d->read_edid) return;
+    int n = d->read_edid(raw, sizeof raw);
+    if (n <= 0) {
+        klog_printf("display: no EDID from \"%s\"\n", d->name);
+        return;
+    }
+    if (!edid_parse(raw, n, &g_edid)) {
+        klog_printf("display: EDID from \"%s\" rejected (%d bytes, header %02x %02x .. checksum %02x)\n",
+                    d->name, n, raw[0], raw[1], raw[127]);
+        return;
+    }
+    g_have_edid = 1;
+    klog_printf("display: EDID %s %04x \"%s\" %s %ux%u cm, %d detailed timing(s)\n",
+                g_edid.vendor, g_edid.product, g_edid.name,
+                g_edid.digital ? "digital" : "analog",
+                g_edid.width_cm, g_edid.height_cm, g_edid.timing_count);
+    for (int i = 0; i < g_edid.timing_count; i++) {
+        const struct edid_timing *t = &g_edid.timing[i];
+        uint32_t mhz = edid_refresh_mhz(t);
+        klog_printf("display: timing %d: %ux%u%s @ %u.%02u Hz, %u.%02u MHz, h %u %u %u %u v %u %u %u %u%s%s\n",
+                    i, t->hactive, t->vactive, t->interlaced ? "i" : "",
+                    mhz / 1000, (mhz % 1000) / 10,
+                    t->pixel_khz / 1000, (t->pixel_khz % 1000) / 10,
+                    t->hactive, t->hsync_off, t->hsync_w, t->hblank,
+                    t->vactive, t->vsync_off, t->vsync_w, t->vblank,
+                    t->hsync_pos ? " +hsync" : " -hsync", t->vsync_pos ? " +vsync" : " -vsync");
+    }
+}
+
 int display_probe(void) {
     for (int i = 0; i < g_count; i++) {
         const struct display_driver *d = g_drivers[i];
@@ -86,6 +128,7 @@ int display_probe(void) {
                      (d->caps & DISPLAY_CAP_BACKLIGHT)   ? " backlight" : "",
                      (d->caps & DISPLAY_CAP_FLIP)        ? " flip" : "");
         klog_printf("display: framebuffer write-combining: %s\n", paging_wc_name(g_wc));
+        read_edid(d);
         return 1;
     }
     klog_write("display: no driver claimed the hardware\n");

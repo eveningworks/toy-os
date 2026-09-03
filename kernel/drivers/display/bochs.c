@@ -14,6 +14,8 @@
 #include "bochs.h"
 #include "display.h"
 #include "pci.h"
+#include "pci_internal.h" // pci_bar_mem_addr/_size -- the EDID BAR
+#include "paging.h"       // paging_map_device
 #include "klog.h"
 #include "kfmt.h"
 #include "io.h"
@@ -65,6 +67,7 @@ DRIVER_DECLARE("bochs", "display", "Bochs/QEMU stdvga, modesetting");
 
 static struct display_surface g_surface;
 static uint64_t g_fb;      // BAR0, the linear framebuffer
+static const struct pci_device *g_pci;
 static int g_active;
 
 static void dispi_write(uint16_t index, uint16_t value) {
@@ -92,6 +95,7 @@ static int find_adapter(void) {
         }
     }
     if (!dev) return 0;
+    g_pci = dev;
 
     // BAR0 is the linear framebuffer, a 32-bit memory BAR under 4 GiB on
     // every machine this boots on -- which the kernel identity-maps, so
@@ -273,6 +277,22 @@ static int bochs_drv_probe(void) {
 
 static void bochs_drv_get_surface(struct display_surface *out) { *out = g_surface; }
 
+// QEMU's stdvga keeps the monitor's EDID at offset 0 of its MMIO BAR
+// (BAR2, `edid=on`, the default); an adapter without that BAR, or one
+// whose block starts with anything but the EDID header, reports none.
+static int bochs_drv_read_edid(uint8_t *out, int cap) {
+    if (!g_pci || !out || cap <= 0) return 0;
+    uint64_t base = pci_bar_mem_addr(g_pci, 2);
+    uint64_t size = pci_bar_mem_size(g_pci, 2);
+    if (!base || size < 0x400) return 0;
+    volatile uint8_t *m = paging_map_device(base, 0x1000);
+    if (!m) return 0;
+    if (m[0] != 0x00 || m[1] != 0xFF) return 0;
+    int n = cap < 128 ? cap : 128;
+    for (int i = 0; i < n; i++) out[i] = m[i];
+    return n;
+}
+
 // No flush (the adapter scans continuously, like vesafb), no cursor, no
 // acceleration. MODESET: a mode can change after boot now that
 // screen_set_mode() (kernel/core/screen.c) re-plumbs gfx, the console
@@ -285,6 +305,7 @@ static const struct display_driver bochs_driver = {
     .mode_count = bochs_drv_mode_count,
     .mode_at = bochs_drv_mode_at,
     .set_mode = bochs_drv_set_mode,
+    .read_edid = bochs_drv_read_edid,
 };
 
 void bochs_register(void) {

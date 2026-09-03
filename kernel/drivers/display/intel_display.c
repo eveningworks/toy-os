@@ -31,8 +31,9 @@
 #include "kfmt.h"
 #include "string.h"   // k_memset
 #include "driver.h" // DRIVER_DECLARE -- `lsdrv -v` names THIS file
+#include "intel_internal.h"
 
-DRIVER_DECLARE("intel-display", "display", "Intel gen8 display engine: cursor plane, backlight");
+DRIVER_DECLARE("intel-display", "display", "Intel gen8 display engine: cursor plane, backlight, EDID");
 
 // --- PCI ------------------------------------------------------------
 #define INTEL_VENDOR 0x8086
@@ -127,6 +128,10 @@ static inline uint32_t rd(uint32_t off) { return *(volatile uint32_t *)(g_mmio +
 static struct display_driver intel_driver;
 
 static inline void wr(uint32_t off, uint32_t v) { *(volatile uint32_t *)(g_mmio + off) = v; }
+
+uint32_t intel_rd(uint32_t off) { return rd(off); }
+void intel_wr(uint32_t off, uint32_t v) { wr(off, v); }
+int intel_display_pipe(void) { return g_active ? g_pipe : -1; }
 
 // Broadwell device ids, GT1..GT3, mobile and desktop. Only gen8 is
 // claimed: the register map below is that generation's, and the one
@@ -505,6 +510,7 @@ static int intel_probe(void) {
     setup_cursor();
     setup_scanouts();
     setup_backlight();
+    intel_aux_init();
     return 1;
 }
 
@@ -526,6 +532,7 @@ static struct display_driver intel_driver = {
     .scanout_at = intel_scanout_at,
     .flip = intel_flip,
     .scanout_live = intel_scanout_live,
+    .read_edid = intel_aux_read_edid,
 };
 
 void intel_display_register(void) {

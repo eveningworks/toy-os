@@ -31,4 +31,12 @@ int intel_display_active(void);
 // How many scanouts it set up: 3 with the flip, 1 without, 0 inactive.
 int intel_display_scanout_count(void);
 
+// intel_readout.c's pure decoders, exposed for the KTESTs.
+struct edid_timing;
+struct intel_trans_regs { uint32_t htotal, hblank, hsync, vtotal, vblank, vsync; };
+void     intel_display_timing_from_regs(const struct intel_trans_regs *r, struct edid_timing *out);
+uint32_t intel_display_port_clock_khz(uint32_t port_clk_sel);
+uint32_t intel_display_dotclock_khz(uint32_t port_khz, uint32_t link_m, uint32_t link_n);
+int      intel_display_timing_same(const struct edid_timing *a, const struct edid_timing *b);
+
 #endif

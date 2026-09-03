@@ -125,6 +125,8 @@ static int virtio_drv_cursor_define(const uint32_t *argb, int w, int h, int hx, 
 static void virtio_drv_cursor_move(int x, int y) { virtio_gpu_cursor_move(x, y); }
 static void virtio_drv_cursor_show(int on) { virtio_gpu_cursor_show(on); }
 
+static int virtio_drv_read_edid(uint8_t *out, int cap) { return virtio_gpu_read_edid(out, cap); }
+
 static struct display_driver virtio_gpu_display = {
     .name = "virtio-gpu",
     .probe = virtio_drv_probe,
@@ -138,6 +140,7 @@ static struct display_driver virtio_gpu_display = {
     .mode_count = virtio_drv_mode_count,
     .mode_at = virtio_drv_mode_at,
     .set_mode = virtio_drv_set_mode,
+    .read_edid = virtio_drv_read_edid,
 };
 
 void virtio_gpu_display_register(void) {

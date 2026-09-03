@@ -2933,3 +2933,52 @@ things to know.
   QEMU; `config set brightness N` followed by `config get` reads the
   PWM back through the hardware and is the check that ran there. A
   blank screen is answered with `reboot` over `tools/remote.py`.
+
+## THE MONITOR'S EDID IS A DISPLAY-LAYER FACT READ ONCE AT PROBE, AND THE INTEL DRIVER READS ITS FIRMWARE TIMINGS BACK BEFORE IT MAY WRITE ANY
+
+`kernel/drivers/display/edid.c` parses the 128-byte base block into a
+`struct display_edid` (vendor letters, product, name, size, up to four
+detailed timings, the preferred one first); `display_probe()` asks the
+claiming driver's optional `read_edid` op for the raw bytes once, parses
+them, logs `display: EDID ...` and every timing, and keeps the result
+behind `display_edid()`. `QUERY_DISPLAY` carries it to ring 3 with the
+mode on screen; `lsdisplay` prints it and About shows the panel's name.
+Five things to know.
+
+- **A DRIVER FETCHES BYTES AND NEVER PARSES.** Three sources feed the one
+  parser -- the Intel driver's eDP AUX channel, virtio-gpu's `GET_EDID`
+  (feature bit 1, negotiated now) and the `-vga std` adapter's EDID at
+  offset 0 of its MMIO BAR -- so the QEMU suite exercises the parser and
+  the log line on every default boot, and `edid_test.c` pins every
+  nibble of the descriptor against a canned panel. A second display
+  layer parsing EDID would be the drift this shape exists to prevent.
+- **THE PARSER REJECTS RATHER THAN GUESSES.** A wrong header, a bad
+  checksum or a short block returns 0 with the output untouched, and
+  `display.c` logs the rejection with the header bytes. A guessed native
+  timing is what a modeset would program.
+- **`read_edid` IS NOT A CAPABILITY BIT.** It is a fact about the
+  monitor, not something the layer draws with, so it is a nullable op
+  the honesty check does not cover; a driver without one is simply a
+  display with no EDID.
+- **THE INTEL AUX CHANNEL IS DDI A'S (`0x64010`), ITS DIVIDER AND
+  PRECHARGE ARE THE FIRMWARE'S, AND EVERY WAIT IS A BOUNDED SPIN.**
+  The GOP already read this EDID over the same channel, so the control
+  register's bit-clock divider is read back and used; the value derived
+  from the CDCLK is logged beside it as a cross-check and is the
+  fallback when the register reads zero (`intel_aux.c`). A wrong divider
+  does not fail loudly, it times out on every request. The probe runs
+  before the timer, so the engine is polled with iteration caps and
+  `cpu_relax()`; a DEFER from the panel is retried a bounded number of
+  times. The DPCD (revision, max link rate and lanes, the trained link's
+  settings, lane status) is read natively and logged for stage 3; no
+  DPCD register is ever written.
+- **STAGE 2 IS A READOUT COMPARED AGAINST THE EDID, LOGGED AS `MATCHES`
+  OR `DIFFERS FROM`.** `intel_readout.c` decodes the transcoder's
+  `HTOTAL/HBLANK/HSYNC/VTOTAL/VBLANK/VSYNC` (the EDP transcoder when its
+  function control is enabled and its input names our pipe), the DDI
+  function control (port, mode, bpc, lanes, sync polarity), `PORT_CLK_SEL`
+  and link M/N into an `edid_timing` and a pixel clock, and says whether
+  they are the EDID's preferred timing. The decoders are pure and
+  KTESTed; the comparison is the proof the register map is understood
+  before stage 3 writes any of it. `docs/roadmap-details.md`'s "Intel
+  modesetting" carries the stages.

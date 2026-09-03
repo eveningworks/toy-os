@@ -122,6 +122,12 @@ struct display_driver {
     void (*scanout_at)(int index, struct display_surface *out);
     int  (*flip)(int index);
     int  (*scanout_live)(void);
+
+    // Optional, and NOT a capability: the monitor's EDID base block,
+    // raw. Copies up to `cap` bytes into `out` and returns how many, 0
+    // when there is none. display_probe() asks once after a claim and
+    // parses it (kernel/edid.h); a driver never parses its own.
+    int  (*read_edid)(uint8_t *out, int cap);
 };
 
 // Called by each driver's own *_init() before display_probe() runs.
@@ -207,6 +213,12 @@ int display_mode_candidate(int index, int *out_w, int *out_h);
 // lists the entries it accepts, so System Settings offers only modes
 // the adapter can show.
 int display_ladder_mode(int index, int *out_w, int *out_h);
+
+// What the monitor said about itself, parsed, or NULL when the active
+// driver read none. Read at probe, never re-read: a hotplug is a later
+// milestone. The preferred timing is timing[0].
+struct display_edid;
+const struct display_edid *display_edid(void);
 
 // Re-applies write-combining to the ACTIVE surface -- after a mode
 // change, when the address or the extent has moved.

@@ -86,3 +86,44 @@ KTEST("intel-display", "on the hardware the backlight reads back what was set") 
     KTEST_ASSERT_EQ(display_backlight_set(was), 1);
     KTEST_ASSERT_EQ(display_backlight_get(), was);
 }
+
+#include "edid.h"
+
+// The transcoder registers for the canned panel in edid_test.c
+// (1920x1080, h 48/32/160, v 3/5/31): each field is (value - 1), the
+// end in the high half. A decoded timing must round-trip to the EDID's.
+KTEST("intel-display", "the transcoder timing registers decode to an EDID timing") {
+    struct intel_trans_regs r = {
+        .htotal = ((2080 - 1) << 16) | (1920 - 1),
+        .hblank = ((2080 - 1) << 16) | (1920 - 1),
+        .hsync  = ((2000 - 1) << 16) | (1968 - 1),
+        .vtotal = ((1111 - 1) << 16) | (1080 - 1),
+        .vblank = ((1111 - 1) << 16) | (1080 - 1),
+        .vsync  = ((1088 - 1) << 16) | (1083 - 1),
+    };
+    struct edid_timing t;
+    intel_display_timing_from_regs(&r, &t);
+    KTEST_ASSERT_EQ(t.hactive, 1920u);
+    KTEST_ASSERT_EQ(t.hblank, 160u);
+    KTEST_ASSERT_EQ(t.hsync_off, 48u);
+    KTEST_ASSERT_EQ(t.hsync_w, 32u);
+    KTEST_ASSERT_EQ(t.vactive, 1080u);
+    KTEST_ASSERT_EQ(t.vblank, 31u);
+    KTEST_ASSERT_EQ(t.vsync_off, 3u);
+    KTEST_ASSERT_EQ(t.vsync_w, 5u);
+    struct edid_timing e = t;
+    KTEST_ASSERT_EQ(intel_display_timing_same(&t, &e), 1);
+    e.hsync_w = 44;
+    KTEST_ASSERT_EQ(intel_display_timing_same(&t, &e), 0);
+}
+
+KTEST("intel-display", "the dot clock is the port clock scaled by link M/N") {
+    KTEST_ASSERT_EQ(intel_display_port_clock_khz(2u << 29), 162000u);   // LCPLL 810
+    KTEST_ASSERT_EQ(intel_display_port_clock_khz(1u << 29), 270000u);   // LCPLL 1350
+    KTEST_ASSERT_EQ(intel_display_port_clock_khz(0), 540000u);          // LCPLL 2700
+    KTEST_ASSERT_EQ(intel_display_port_clock_khz(4u << 29), 0u);        // WRPLL: not a DP tap
+    // 138.5 MHz over a 2.7 Gbps link: m/n = 138500/270000 -> 0x8000 * 138500 / 270000
+    KTEST_ASSERT_EQ(intel_display_dotclock_khz(270000, 138500, 270000), 138500u);
+    KTEST_ASSERT_EQ(intel_display_dotclock_khz(270000, 0x40000000u | 138500, 270000), 138500u); // TU bits ignored
+    KTEST_ASSERT_EQ(intel_display_dotclock_khz(270000, 1, 0), 0u);
+}

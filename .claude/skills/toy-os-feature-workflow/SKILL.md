@@ -869,6 +869,15 @@ two-buffer flip that tore -- in `session-diagnosis.md`. What is next is
 marked `**NEXT**` on `docs/roadmap.md`: modesetting on the Intel
 driver, EDID readout first.
 
+**2026-09-03 (Intel modesetting stages 1 and 2: EDID over eDP AUX, the
+firmware readout).** The EDID is a display-layer fact now
+(`edid.c`, `read_edid`, `QUERY_DISPLAY`, `lsdisplay`), and the
+laptop's firmware timing matched its panel's EDID to the kHz. What the
+readout found, and what stage 3 (the native re-modeset, with DP link
+training) needs from it, is under "Intel modesetting" in
+`docs/roadmap-details.md`; the design calls are in
+`references/session-design.md`.
+
 ## Verification habits this project rewards
 
 Learned repeatedly, and cheap to repeat:

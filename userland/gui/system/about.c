@@ -173,6 +173,21 @@ static void fill_rows(void) {
                  inst, tot, freeb);
     }
 
+    // The monitor by its own name when it gave one, else the driver.
+    struct query_display disp;
+    if (sys_query_record(QUERY_DISPLAY, 0, &disp, sizeof disp) >= (int)sizeof disp &&
+        disp.driver[0]) {
+        r = add("Display", 0, 0);
+        if ((disp.flags & QUERY_DISPLAY_F_EDID) && disp.panel[0])
+            snprintf(r->value, sizeof r->value, "%s %s, %llux%llu",
+                     disp.vendor, disp.panel,
+                     (unsigned long long)disp.width, (unsigned long long)disp.height);
+        else
+            snprintf(r->value, sizeof r->value, "%llux%llu (%s)",
+                     (unsigned long long)disp.width, (unsigned long long)disp.height,
+                     disp.driver);
+    }
+
     struct query_ahci ah;
     if (sys_query_record(QUERY_AHCI, 0, &ah, sizeof ah) >= (int)sizeof ah &&
         (ah.flags & QUERY_AHCI_DRIVE) && ah.model[0]) {

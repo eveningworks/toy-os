@@ -2570,3 +2570,17 @@ proves flips happen; only the maintainer dragging a window says
 whether they are tear-free, and the first design was wrong exactly
 there. For a change to the present path, ask them to look BEFORE the
 long gate, and say plainly in the commit that it was not measured.
+
+## A laptop that does not answer after a flash is not necessarily the kernel (2026-09-03)
+
+The first boot of the EDID-probe kernel never came back on the network
+and the session had no way to tell a hung display probe from the
+known 1-in-~9 boot that loses the whole xHCI enumeration
+(`docs/bugs.md`). It was the latter: the maintainer saw a desktop with
+no mouse and no NIC, rebooted, and everything was there. Two things to
+do before concluding a flash broke boot: wait longer than one boot's
+worth, then ASK what the screen shows -- the question has three
+answers (desktop up, black, panic text) and each sends the next step
+somewhere different. And a `$R exec ...` with `R` a string does not
+word-split under zsh; a function or a script file does.
+

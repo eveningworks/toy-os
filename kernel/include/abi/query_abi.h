@@ -385,6 +385,12 @@ _Static_assert(sizeof(struct query_fontglyph) <= 256,
 // denominator of its own.
 #define QUERY_CPULOAD 30
 
+// The screen: the mode being shown and, when the monitor answered an
+// EDID, what it said about itself. SCALAR. Numbers first so they are
+// addressable by name (`config get display.native_width`); the strings
+// ride in the record only, as fs.backend does.
+#define QUERY_DISPLAY 31
+
 #define QUERY_KLOG_DATA 232
 
 struct query_klog {
@@ -977,6 +983,25 @@ struct query_acpi_table {
     char     signature[8];
     char     oem_id[8];
     char     oem_table_id[12];
+};
+
+#define QUERY_DISPLAY_F_EDID    (1u << 0) // the monitor answered a parseable EDID
+#define QUERY_DISPLAY_F_DIGITAL (1u << 1) // its input is digital
+#define QUERY_DISPLAY_NAME_MAX 16
+
+struct query_display {
+    uint64_t width, height;    // the mode on screen now
+    uint64_t bpp, pitch;
+    uint64_t caps;             // DISPLAY_CAP_* (kernel/display.h)
+    uint64_t scanouts;
+    uint64_t flags;            // QUERY_DISPLAY_F_*
+    uint64_t native_width, native_height;   // EDID's preferred timing, 0 without one
+    uint64_t pixel_khz;        // its pixel clock
+    uint64_t refresh_mhz;      // its refresh, in millihertz
+    uint64_t width_mm, height_mm;           // the image size that timing describes
+    char     driver[QUERY_DISPLAY_NAME_MAX]; // "intel-display"
+    char     panel[QUERY_DISPLAY_NAME_MAX];  // the EDID monitor name, or ""
+    char     vendor[4];                      // the PNP id's three letters
 };
 
 struct query_cpu {

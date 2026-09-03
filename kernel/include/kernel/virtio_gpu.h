@@ -81,4 +81,8 @@ void virtio_gpu_cursor_show(int on);
 // can assert the driver really talked to the device.
 uint32_t virtio_gpu_commands(void);
 
+// The monitor's EDID for scanout 0, when the device offers it (a
+// display_driver.read_edid). Bytes copied, 0 without the feature.
+int virtio_gpu_read_edid(uint8_t *out, int cap);
+
 #endif

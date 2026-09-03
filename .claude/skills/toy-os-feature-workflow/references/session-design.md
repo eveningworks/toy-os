@@ -2267,3 +2267,33 @@ meant re-programming a live console; it became wrong the day claiming
 was what made a later mode change possible. The entry got a
 *superseded in part* note pointing at the new one, and the reasoning
 that still holds (write nothing on adoption) stayed.
+
+**2026-09-03 (Intel modesetting stages 1 and 2: EDID over eDP AUX, the
+firmware readout compared against it). Read before touching
+`kernel/drivers/display/intel_*.c` or `edid.c`.**
+
+- **The EDID is parsed ONCE, in the display layer, and drivers only
+  fetch bytes** (`display_driver.read_edid`, a nullable op that is not
+  a capability). Three sources on day one: the Intel AUX channel,
+  virtio-gpu `GET_EDID`, bochs's EDID BAR -- which is what lets the
+  default `-vga std` boot exercise the parser and the log line the
+  laptop's driver shares. `docs/decisions/drivers.md`.
+- **The AUX channel inherits the firmware's divider and precharge**
+  from the control register, with the CDCLK-derived value logged as a
+  cross-check; both said 270. A wrong divider times out silently, so
+  inheriting was the reversible choice, the same call the backlight
+  made.
+- **Stage 2 is i915's fastboot comparison, not a detour**: decode the
+  transcoder, DDI, port clock and M/N into the parser's own
+  `edid_timing`, log MATCHES/DIFFERS. It matched to the kHz first time
+  (138530), which is the proof the register map is understood before
+  stage 3 writes it. The decoders are pure and KTESTed; only the walk
+  needs the laptop.
+- **What the laptop told stage 3** is in `docs/roadmap-details.md`
+  under "Intel modesetting": DPCD 1.1, 2.7 Gbps x2 trained, the panel
+  fitter already ON in pass-through, the sequencer's delays.
+- **A panel may have no 0xFC name descriptor** (AUO's did not); the
+  longest 0xFE text stands in. Found by the first real EDID, not by
+  the canned one -- a fixture written from the spec carries the spec's
+  assumptions.
+

@@ -2231,3 +2231,55 @@ laptop disagrees with zlib's crc32 on a 5 MB file while agreeing on a
 10-byte one, though the bytes on disk are identical. The verified
 flash procedure is therefore `remote.py get` and a host-side compare,
 not the checksum.
+
+## EDID is parsed once by the display layer, and the Intel driver proves its register map by readout before it writes it
+
+Two calls made on 2026-09-03, the first day of Intel modesetting.
+
+**The EDID lives in `display.c`, not in the driver that fetched it.**
+Linux keeps one `drm_edid` parser and every connector -- DP, HDMI, eDP,
+the virtio-gpu model -- hands it bytes; Windows likewise parses in the
+OS and caches the block in the registry, and the miniport only reads
+the wire. The obvious toy-os shape was a parser inside
+`intel_display.c`, since the laptop's panel was the one reason to want
+it. That was declined for a testing reason as much as a layering one:
+nothing but the laptop can run the Intel driver, so a parser there is
+untestable anywhere the gate runs, while QEMU's `-vga std` and
+virtio-gpu both offer an EDID for the asking. With `read_edid` a
+nullable op on `display_driver` and the parser in
+`kernel/drivers/display/edid.c`, the suite exercises the parser and the
+`display: EDID` log line on every default boot, a KTEST pins the
+descriptor's nibble packing against a canned panel, and the Intel AUX
+channel is one more source of bytes. It is deliberately NOT a
+capability bit: capabilities are things the layer draws with and the
+honesty check refuses a driver that claims one without the function; an
+EDID is a fact about the monitor, and a display without one is not a
+lying driver.
+
+The fact reaches ring 3 as `QUERY_DISPLAY` -- a scalar record with the
+mode on screen, the driver's name and capabilities, and the EDID's name
+and preferred timing -- because a monitor's name is user-facing (About
+shows it) and because a test tool needs a text answer. `lsdisplay` is
+the `ls*` sibling that prints it.
+
+**Stage 2 of the modesetting plan is a readout, and it is the design
+rather than a detour.** i915's fastboot reads the hardware state back
+into a `crtc_state` and runs the same comparison it uses to verify its
+own modesets (`intel_pipe_config_compare`); a mismatch there is a bug in
+the readout or in the encoder code, and it is found before a modeset,
+not by one. toy-os copies that shape: `intel_readout.c` decodes the
+transcoder timings, the DDI function control, the port clock and the
+link M/N into the same `edid_timing` the parser produces, and logs
+`MATCHES` or `DIFFERS FROM` against the panel's preferred timing. The
+alternative -- write the native mode and see whether the panel comes
+back -- costs a black screen per wrong bit on a machine that can only be
+reached over the network, and a panel that comes back proves only that
+the firmware's values were re-written, not that they were understood.
+The decoders are pure functions so they are KTESTed on every machine;
+the register walk itself is the one part only the laptop can run.
+
+What was deliberately not done: `DISPLAY_CAP_MODESET` on the Intel
+driver. Listing the native mode alone would be honest, but the setting
+would then offer one choice where it now shows its sentence, and
+`set_mode` would have nothing to do until stage 3 exists.
+

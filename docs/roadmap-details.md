@@ -3841,22 +3841,16 @@ is the black-screen-on-boot trap the brightness floor exists to avoid.
 
 ### Intel modesetting: EDID over eDP AUX, the PLLs and the transcoder -- needs runtime mode switching above it first
 
-Runtime mode switching above it landed on 2026-09-02, so this is
-buildable now. The staged plan, each stage a flash the maintainer can
-look at:
+Runtime mode switching above it landed on 2026-09-02. The staged plan,
+each stage a flash the maintainer can look at:
 
-1. **EDID over the eDP AUX channel, read-only.** DDI A's AUX registers
-   (`DDI_AUX_CTL`/`DDI_AUX_DATA` at 0x64010, gen8) speak DisplayPort
-   native AUX; an I2C-over-AUX read of address 0x50 returns the panel's
-   128-byte EDID. Log the detailed timing (pixel clock, h/v active,
-   blanking, sync) and the panel's name. Nothing written but AUX
-   commands, which cannot disturb the pipe. Then `mode_count`/`mode_at`
-   can list the native mode alone, honestly.
-2. **Read out what the firmware programmed** for the same mode --
-   `PIPE_HTOTAL/VTOTAL/HSYNC/VSYNC`, `PIPESRC`, the transcoder's DDI
-   function control, the WRPLL/SPLL registers -- and compare it with
-   the EDID's timing. That comparison is the check that the driver
-   understands the register map before it writes any of it.
+1. **EDID over the eDP AUX channel, read-only.** BUILT 2026-09-03:
+   `intel_aux.c` speaks native AUX and I2C-over-AUX on DDI A, the
+   display layer parses and logs it (`docs/conventions/kernel.md`, the
+   EDID entry), `lsdisplay` prints it.
+2. **Read out what the firmware programmed and compare it with the
+   EDID.** BUILT 2026-09-03: `intel_readout.c`, logged as `MATCHES` or
+   `DIFFERS FROM`.
 3. **Re-program the native mode** through the full sequence (panel
    power down, pipe off, PLL, timings, DDI, pipe on, panel power up,
    backlight) and confirm the panel comes back identical. Only then is
@@ -3866,11 +3860,52 @@ look at:
    that HDMI/DP on DDI B-D for an external monitor, which is where EDID
    readout of a second display and hotplug arrive.
 
-Every stage past the first is a black-screen risk recovered by reboot
-over `tools/remote.py`, and only the laptop can show any of it. The
-QEMU suite can cover none of it; what it can cover is that the
-`resolution` setting's plumbing behaves when the Intel driver starts
-listing more than one mode.
+**What stages 1 and 2 measured on the laptop (2026-09-03), which is
+the input to stage 3:**
+
+- The panel is an AUO B133HAN02.1 (0x212d), 293x165 mm, one detailed timing:
+  1920x1080 at 60.00 Hz, 138.53 MHz, h 1920 48 32 160, v 1080 8 14 30,
+  -hsync -vsync. Its name is in a 0xFE descriptor, not a 0xFC one.
+- The AUX channel: the firmware's control word was `0x4423010e`
+  (divider 270, precharge 3), and the CDCLK-derived divider agreed
+  (540 MHz / 2000). Every request succeeded first time; no DEFERs seen.
+- DPCD: rev 1.1, max link 2.70 Gbps, max 2 lanes, enhanced framing,
+  eDP configuration cap 0x0b, training AUX read interval 0 (100 us).
+  The trained link is 2.70 Gbps x2, pattern 0 (normal), lane status
+  0x77 0x00, align 0x01 -- both lanes clock-recovered, equalised and
+  symbol-locked.
+- The firmware drives the EDP transcoder from pipe A: `HTOTAL`
+  `0x81f077f`, `HSYNC` `0x7cf07af`, `VTOTAL` `0x4550437`, `VSYNC`
+  `0x44d043f`, DDI function control `0x82200002` (DP SST, 6 bpc,
+  2 lanes), `PORT_CLK_SEL_A` = LCPLL 1350 (0x20000000), `DDI_BUF_CTL_A`
+  `0x80000013` (enabled, 2 lanes, DDI_A_4_LANES), `DP_TP_CTL_A`
+  `0x80040300` (normal pattern, enhanced framing), `PIPEMISC` `0x50`.
+  Link M/N `0x41ac6/0x80000` gives 138530 kHz, equal to the EDID's.
+  Data M/N `0x7e49e1f6/0x800000`, TU 64.
+- **The panel fitter is ON in pass-through**: `PF_CTL` `0x80800000`
+  with a 1920x1080 window at 0,0 -- so stage 4's fitter is a size
+  change on an already-enabled block, not an enable.
+- The panel power sequencer: `PP_ON_DELAYS` 0, `PP_OFF_DELAYS`
+  `0x1f40000`, `PP_DIVISOR` `0x4af06`; `PP_CONTROL` 0x7, status
+  `0x80000008`. `LCPLL_CTL` `0x44000000` (540 MHz CDCLK).
+
+**Stage 3, sized from that.** It is DP link training, not just a
+register sequence: after `DDI_BUF_CTL` goes down the panel must be
+retrained -- native AUX WRITES to DPCD 0x100..0x103 (link rate, lane
+count, training pattern), `DP_TP_CTL` patterns 1 then 2 with the
+lane status read back at each step and the voltage swing/pre-emphasis
+loop (`DDI_BUF_TRANS` entries for eDP on BDW), then the normal pattern.
+Around it: the pipe/transcoder disable order from the PRM, `PP_CONTROL`
+with the sequencer's own delays honoured by iteration-bounded spins
+(this runs inside a syscall on the laptop -- no `pit_ticks()`), and the
+backlight last. Every wait is bounded, every step logs its readback,
+and the exit criterion is the readout above reporting `MATCHES` after
+the driver's own programming. Only the laptop can show any of it, with
+`reboot` over `tools/remote.py` as the recovery.
+
+The QEMU suite can cover none of stages 3-4; what it covers is the
+EDID parser, the readout's decoders, and the `resolution` setting's
+plumbing when the Intel driver starts listing more than one mode.
 
 ### Intel blitter acceleration: `DISPLAY_CAP_ACCEL_FILL`/`_COPY` on the BCS ring
 
