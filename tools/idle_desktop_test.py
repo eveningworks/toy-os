@@ -81,7 +81,7 @@ def settle(qmp, tmp, box, timeout_s=25.0):
     prev = None
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        path = qmp.screenshot(os.path.join(tmp, "settle.png"))
+        path = qmp.screenshot(os.path.join(tmp, "settle.png"), stable=False)  # this loop IS the settle
         cur = hashlib.md5(
             Image.open(path).convert("RGB").crop(box).tobytes()).hexdigest()
         if cur == prev:
@@ -96,7 +96,7 @@ def region_hashes(qmp, tmp, boxes, interval_s=None):
     from PIL import Image
     out = {name: [] for name in boxes}
     for i in range(SAMPLES):
-        path = qmp.screenshot(os.path.join(tmp, f"idle{i}.png"))
+        path = qmp.screenshot(os.path.join(tmp, f"idle{i}.png"), stable=False)  # measuring motion
         im = Image.open(path).convert("RGB")
         for name, box in boxes.items():
             out[name].append(hashlib.md5(im.crop(box).tobytes()).hexdigest()[:10])

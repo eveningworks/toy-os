@@ -499,9 +499,20 @@ class QMPSession:
 
     # -- screenshots --------------------------------------------------------
 
-    def screenshot(self, png_path, ppm_path=None, settle=0.3):
+    def screenshot(self, png_path, ppm_path=None, settle=0.3, stable=True,
+                   tries=6, interval=0.15):
         """screendump -> .ppm (native QMP format) -> .png (via Pillow),
         so the result can go straight to the Read tool / an image viewer.
+
+        SETTLED BY DEFAULT: the frame is dumped until two consecutive
+        dumps are byte-identical, so a caller never compares a capture
+        that landed mid-paint (see stable_pixels() for why that matters).
+        After `tries` the last dump is returned as-is, so a screen that
+        genuinely animates costs at most tries * interval and does not
+        hang. Pass `stable=False` to photograph motion -- a running
+        demo, a game, the idle watcher measuring the clock -- where a
+        settled frame is the wrong question; `settle` is the post-dump
+        sleep on that raw path only.
         """
         ppm_path = ppm_path or (png_path.rsplit(".", 1)[0] + ".ppm")
         # QEMU resolves `filename` relative to ITS OWN working directory,
@@ -513,8 +524,19 @@ class QMPSession:
         # that looks obviously correct. Always hand QEMU an absolute
         # path; the .png is still written wherever the caller asked.
         ppm_path = os.path.abspath(ppm_path)
-        self._cmd({"execute": "screendump", "arguments": {"filename": ppm_path}})
-        time.sleep(settle)
+        if not stable:
+            self._cmd({"execute": "screendump", "arguments": {"filename": ppm_path}})
+            time.sleep(settle)
+        else:
+            prev = None
+            for _ in range(tries):
+                self._cmd({"execute": "screendump", "arguments": {"filename": ppm_path}})
+                with open(ppm_path, "rb") as f:
+                    cur = f.read()
+                if cur == prev:
+                    break
+                prev = cur
+                time.sleep(interval)
         try:
             from PIL import Image
         except ImportError as e:
@@ -546,24 +568,16 @@ class QMPSession:
         that proved the mechanism showed EVERY capture needing at least
         one retry, the startup one needing two.
 
-        A capture is therefore two identical consecutive reads. Falling
-        back to the last read after `tries` keeps a genuinely animating
-        window (a blinking caret, a running demo) from hanging a test
-        rather than pretending it settled -- so a caller that expects
-        animation should not use this.
+        screenshot() settles the same way now, so this is that plus a
+        crop; it stays because a byte string for a box is what a
+        comparison wants. A caller that expects animation should use
+        neither.
         """
         from PIL import Image
-        prev = None
-        for _ in range(tries):
-            self.screenshot(png_path)
-            with Image.open(png_path) as im:
-                im = im.convert("RGB")
-                cur = (im.crop(box) if box else im).tobytes()
-            if cur == prev:
-                return cur
-            prev = cur
-            time.sleep(settle)
-        return prev
+        self.screenshot(png_path, stable=True, tries=tries, interval=settle)
+        with Image.open(png_path) as im:
+            im = im.convert("RGB")
+            return (im.crop(box) if box else im).tobytes()
 
     def close(self):
         self._sock.close()

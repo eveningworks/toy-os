@@ -156,7 +156,7 @@ class Shapes:
         """Screenshot, cropped to the canvas. Returns a PIL image."""
         from PIL import Image
         path = os.path.join(tempfile.gettempdir(), f"gfxdemo-{tag}.png")
-        self.qmp.screenshot(os.path.abspath(path))
+        self.qmp.screenshot(os.path.abspath(path), stable=False)  # the demo animates
         img = Image.open(path).convert("RGB")
         cx, cy, cw, ch = self.canvas
         x0 = self.win["content"]["x"] + cx

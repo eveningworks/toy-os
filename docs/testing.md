@@ -737,7 +737,12 @@ The gotchas it already gets right, for when you need to know why:
   is worth reshaping rather than documenting.
 - **Screenshots:** `screendump` writes a `.ppm`; `QMPSession.screenshot()`
   converts to `.png` via Pillow in one call so it's ready for the Read
-  tool. It hands QEMU an ABSOLUTE path on purpose --
+  tool. **It is SETTLED by default** -- dumped until two consecutive
+  dumps are byte-identical, at most `tries` times -- because a capture
+  landing mid-paint fails a comparison with nothing wrong with it, and
+  that was the top cause of intermittent GUI failures here. A tool
+  photographing motion on purpose (Doom, the shapes demo, the idle
+  watcher) passes `stable=False`. It hands QEMU an ABSOLUTE path on purpose --
   QEMU resolves `screendump`'s filename against its own working
   directory, and `-daemonize` leaves that somewhere other than the repo,
   so a relative path reports `{"return": {}}` (success) and writes the

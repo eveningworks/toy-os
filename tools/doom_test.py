@@ -164,7 +164,7 @@ def run(dbg, qmp, tmp, res):
 
     def shot(tag):
         p = os.path.join(tmp, f"doom_{tag}.png")
-        qmp.screenshot(p)
+        qmp.screenshot(p, stable=False)  # the game animates
         return Image.open(p).convert("RGB").crop(box)
 
     # Focus it, or keys go somewhere else and every check below fails for
