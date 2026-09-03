@@ -4378,3 +4378,145 @@ the paint path guarded by it. Both existing manual calls then go away.
 **The test that would have caught the original bug**: swap a container's
 child, paint, and assert the new child reports a non-zero rect through
 its `bounds` op.
+
+## Every EFAULT branch in the socket syscalls is dead code
+
+`kernel/include/kernel/vmm.h` states the contract: all three
+`vmm_copy_*_user()` helpers return 1 on success and 0 when any byte of
+the range is not present-and-user-accessible, and `copy_user()` in
+`kernel/mm/vmm.c` returns nothing else. Forty-two call sites across
+thirteen files test `!vmm_copy_...`. Twelve sites, all in
+`kernel/proc/syscall_fd.c`, test `< 0` instead: lines 825, 1148, 1162,
+1215, 1227, 1295, 1296, 1314, 1328, 1385, 1445 and 1478 as of
+2026-09-03. Since 0 is not less than 0, every one of those `-EFAULT`
+returns is unreachable, and the handler continues with whatever the
+kernel buffer held before the failed copy.
+
+What that means for a caller: `send`, `recv`, `recvfrom`, `bind`,
+`connect`, `accept` and the net-config syscall accept a user pointer
+into unmapped or kernel memory and proceed on a zero-filled or stale
+struct rather than failing. Nothing crashes, which is why no test found
+it -- the fuzzing track's "pointer-argument torture" item is exactly
+the test that would have.
+
+The fix is mechanical: `< 0` becomes `!` at each site. Worth doing in
+the same change: a `tools/check_*.py` rule, or a grep in
+`check_docs.py`'s style, that fails the build on `vmm_copy_.*< 0`, since
+the header's comment did not stop the twelve.
+
+## Convention drift: rules that live only in prose
+
+An audit on 2026-09-03 looked for places where two ways of doing one
+thing coexist in live, non-test code, such that a new session could
+pick either. The finding that organises the rest: every rule with a
+checker behind it (`check_widget_ops.py`'s hit-rule, `check_initcalls.py`,
+`check_drivers.py`, the syscall table) had converged completely, and
+every rule stated only in prose had not. Counts below are snapshots
+from that day, kept so the direction of travel can be measured later.
+
+**Kernel**
+
+- `fs_read()` vs `fs_read_into()`. CLAUDE.md and `fs.h` both prefer the
+  latter in kernel context. Live `fs_read()`: `kernel/lib/keyboard_layout.c`,
+  `kernel/lib/tz.c`, `kernel/proc/scheduler.c` (two sites),
+  `kernel/proc/elf_run.c`, `apps/shell.c`, `apps/shell_fs.c`,
+  `apps/demo.c`. Live `fs_read_into()`: `kernel/drivers/font_face.c`,
+  `kernel/lib/etc_config_file.c`. The scheduler and ELF runner are the
+  two that parse in a context where a ring-3 syscall can preempt them.
+- `etc_config_get()` vs `etc_config_load()` + `etc_config_buf_get()`.
+  The per-key form re-reads the whole file per key; 42 kernel callers
+  use it and none use the load form (only `userland/` does).
+  `kernel/lib/mouse_config.c` reads one file four times.
+- `k_strcpy()` vs `k_strlcpy()`, 161 vs 21. `string.h` declares the
+  unbounded one with no comment and gives the bounded one the "chosen
+  deliberately" paragraph. No doc names a rule; decide one first.
+- `*_printf` vs `write` + `write_dec`/`write_hex` chains. `klog_printf`
+  415 vs 31 chain sites (`tfs3.c` 14, `ata.c` 10); `vga_printf` 41 vs 82
+  chains, 59 of them in `apps/shell_sys.c`. `kfmt.h` shows the chain
+  as what it replaced and nothing marks it retired.
+- Validate-then-copy vs copy-and-check. `vmm.h` says the copy helpers
+  subsume `vmm_validate_user_range()` wherever something is copied. 23
+  validator sites remain, most followed by a copy whose result is
+  discarded; 26 copy calls ignore their return under a "validated
+  above" comment (`sys_syscalls.c`, `win_syscalls.c`, `fs_syscalls.c`).
+- Two program loaders in `apps/shell_path.c`: `elf_run_from_fs()`
+  (blocking, no scheduler slot, refuses `PT_INTERP`) and
+  `scheduler_spawn()`, chosen by an argument. Documented in
+  `docs/conventions/kernel.md`; the legacy one silently breaks dynamic
+  executables and `waitpid`. One live caller of the legacy path.
+
+**Userland**
+
+- Menu bar routing. Terminal and Files use `uui_menubar_ops` through
+  the router. Notepad and Mines hand-route and declare no `.widgets`,
+  which is legitimate. Image Viewer and Player hand-route AND declare
+  `.widgets`, the combination CLAUDE.md forbids. `check_key_routing.py`
+  exempts menubar, so it cannot catch this; a new app copying either
+  inherits it.
+- `.layout` vs `.widgets` in `uapp_desc`. `.layout` measures and draws,
+  `.widgets` alone builds the router. Four apps set both; six set
+  `.widgets` only; Calculator sets `.layout` only and gets input through
+  the legacy `uui_button_group`. A layout-only app draws widgets that
+  cannot be clicked, silently. `uapp.h` documents each field and not
+  the pairing.
+- `uapp_log_layout()` vs hand-written layout logs. Two apps (Disk Mark,
+  Font Demo) use the helper; seven hand-roll about sixty lines
+  (`fm/fm_view.c`, `player.c`, `imgview.c`, `mines.c`, `notepad.c`,
+  `terminal.c`, `uidemo.c`). The helper walks only `.widgets`, so it
+  cannot serve a layout-only app or non-widget geometry, which is why
+  the hand-rolled side keeps winning. Fix the helper first.
+- `ugfx_draw_string()` vs `_clipped()`, 36 vs 65. Two fixed-box sites
+  still unclipped: `userland/wm/file_picker.c` (truncates a row label
+  by character count, then draws it unclipped) and
+  `userland/wm/wm_tray.c`. The same tray file sizes an item's hit box
+  as `k_strlen() * ugfx_char_w()`, the multiplication CLAUDE.md's
+  "measure, never multiply" rule forbids; `confirm_dialog.c` carries a
+  comment warning against exactly that. The other ~50 multiplications
+  in the tree are minimum-width reservations and are fine.
+- `ulog()`/`ulogf()` vs a local wrapper over `sys_eprint()`: 125 vs two
+  holdouts, `notepad.c`'s `emit` and `uidemo.c`'s `logline`.
+
+**Tools and docs**
+
+- `--qmp-port` (default 4445) vs `--instance`. 51 tools take only the
+  port; 8 take `--instance` and derive port and socket from
+  `port_guard.find_free_instance()`. `port_guard` fires at launch, and
+  a port-only tool does not launch, so it connects to whoever holds
+  4445 and the clash surfaces minutes later as a `BrokenPipeError` in
+  some other tool.
+- Raw screendump byte-compare vs `stable_pixels()`: ~24 tools vs 8.
+  `QMPSession.screenshot()` only sleeps a fixed 0.3 s. Documented as
+  the top flake cause; nothing checks it.
+- `enter_gui()` vs `send_text("gui")` plus a sleep: 48 importers vs
+  three hand-rolled with three different sleeps (`damage_sweep.py`
+  2.0 s, `kvm_soak.py` 2.5 s, `serial_capture.py` 4 s). The hand-rolled
+  path skips the already-up check (queued keys leak into the first
+  client window) and never turns on `desktop.layout_log`.
+- `vm.started_ok(out)` vs `"ready" in out`: 10 vs 2 (`fat32_test.py`,
+  `kvm_soak.py`). The substring matches `vm: already running`, which is
+  the bug the helper was written to kill.
+- `launch_qemu_cmd()` vs a hand-built argv: 12 vs 7 (`ahci_test.py`,
+  `partition_test.py`, `poweroff_test.py`, `virtio_boot_test.py`,
+  `multidisk_test.py` twice, `net_test.py`). None of the seven reach
+  `iso_guard` or `port_guard`. `docs/testing.md` says not to hand-roll
+  in one place and partly blesses it for own-image tools in another;
+  resolve the doc before the tools.
+- Sparse `cp` vs `shutil.copyfile`: `qemu_matrix.py` copies `disk.img`
+  with `shutil.copyfile` twice, and `fs_switch_test.py` uses
+  `--reflink=auto` without `--sparse=always`. `gui_regress.py`'s comment
+  records `damage_hunt.py` already losing this once.
+- `Milestone N` in prose. `check_milestones_are_named` rejects numbered
+  headings in the two roadmap files only. About 50 numbered references
+  survive: `docs/decisions/gui.md` (16), `kernel.md` (13),
+  `storage.md` (8), `docs/filesystem-layout.md` (6), `docs/testing.md`.
+  Either extend the check to prose across `docs/` or convert them
+  through the legend at the end of this file.
+
+**Checked and not split**, so nobody re-audits them: widget `hit`
+booleans (rule 5 of `check_widget_ops.py`), `INITCALL`, `DRIVER_DECLARE`,
+the syscall table, `-1` vs `-errno` handler returns, the
+slider/scale/spinbox split, `sys_*` vs libc names (a clean
+per-directory boundary, `lib/tosh.c` and `bin/ntpd.c` the only mixes),
+`gui move` vs `hover_frames()` (the five raw `gui move` sites all
+deliberately want the one-iteration semantics), `gui_flow.py`'s pixel
+constants, the single `run` target, and the single version source.
