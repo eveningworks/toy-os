@@ -30,14 +30,11 @@ int demo_load(const char *path) {
     g_count = g_next = g_gui_started = 0;
     g_wait_until = 0;
 
-    // fs_read() hands back the backend's own staging buffer, valid only
-    // until the next filesystem call -- and this parser makes none, so
-    // reading straight out of it is safe. Copying 4 KiB to be "careful"
-    // would need somewhere to copy it TO, which is the thing this
-    // kernel does not hand out casually.
-    uint32_t size = 0;
-    const char *buf = fs_read(path, &size);
-    if (!buf || size == 0) return 0;
+    // Into this file's own buffer (fs_read_into): a script is a few
+    // hundred bytes, and an oversize one is refused rather than cut.
+    static char buf[8192];
+    uint32_t size = fs_read_into(path, buf, sizeof buf);
+    if (size == 0) return 0;
     int n = (int)size;
 
     int i = 0;

@@ -847,7 +847,8 @@ behind it converged, and every rule stated only in CLAUDE.md still
 split. One line per pair here; the site lists are in roadmap-details.
 
 - [x] ~~A checker for `vmm_copy_*_user()` results~~ DONE 2026-09-03 -- `check_copy_user.py`, and the twelve sites fixed
-- [ ] Move the kernel-context `fs_read()` callers to `fs_read_into()` -- 7 live vs 2, the discouraged form is the majority
+- [x] ~~Move the kernel-context `fs_read()` callers to `fs_read_into()`~~ DONE 2026-09-03 -- and `fs_read()` deleted
+- [ ] Retire `fs_ops.read` and each backend's staging buffer: only `ramfs_test` calls the op now
 - [ ] Move the kernel's 42 `etc_config_get()` callers to load-once -- zero use the load form; mouse config reads its file 4 times
 - [x] ~~Image Viewer and Player hand-route a menu bar beside routed widgets~~ DONE 2026-09-03 -- `check_key_routing.py` refuses the pair
 - [x] ~~`uapp_log_layout()` only walks `.widgets`, so 7 apps hand-roll ~60 layout lines~~ DONE 2026-09-03 -- widgets describe themselves

@@ -262,18 +262,22 @@ int shell_resolve_path(const char *input, char *out) {
 // overwrite-the-whole-file primitive every other /etc setting uses.
 #define HISTORY_FILE "/etc/history"
 
+// One staging buffer for the save AND the load: 8 KiB does not belong
+// on a 16 KiB kernel stack, and both are reached only from the single
+// console shell. The load reads into it (fs_read_into) rather than
+// borrowing the backend's buffer, which a ring-3 syscall could free.
+static char g_history_buf[HISTORY_MAX * LINE_MAX];
+
 static void history_save(void) {
-    // Still a fixed staging buffer, and it now SKIPS an entry that will
-    // not fit rather than the whole save failing -- the file is a
-    // convenience, and a shorter one beats a truncated line in it.
-    // static: 8 KiB does not belong on a 16 KiB kernel stack, and
-    // history_save() is reached only from the single console shell.
-    static char buf[HISTORY_MAX * LINE_MAX];
+    // A fixed staging buffer, and it SKIPS an entry that will not fit
+    // rather than the whole save failing -- the file is a convenience,
+    // and a shorter one beats a truncated line in it.
+    char *buf = g_history_buf;
     size_t pos = 0;
     for (int i = 0; i < history_count; i++) {
         if (!history[i]) continue;
         size_t len = k_strlen(history[i]);
-        if (pos + len + 1 >= sizeof(buf)) continue; // skip one that will not fit; never overrun
+        if (pos + len + 1 >= sizeof g_history_buf) continue; // skip one that will not fit; never overrun
         k_memcpy(buf + pos, history[i], len);
         pos += len;
         buf[pos++] = '\n';
@@ -288,9 +292,9 @@ static void history_save(void) {
 // /etc reader in this kernel rolls its own small split, see that
 // file's precedent).
 static void history_load(void) {
-    uint32_t size = 0;
-    const char *data = fs_read(HISTORY_FILE, &size);
-    if (!data) return; // no history file yet -- fresh boot or RAM-only mode
+    const char *data = g_history_buf;
+    uint32_t size = fs_read_into(HISTORY_FILE, g_history_buf, sizeof g_history_buf);
+    if (size == 0) return; // no history file yet -- fresh boot or RAM-only mode
 
     uint32_t pos = 0;
     while (pos < size && history_count < HISTORY_MAX) {

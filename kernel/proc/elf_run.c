@@ -7,6 +7,7 @@
 #include "pmm.h"
 #include "process.h"
 #include "fs.h"
+#include "heap.h"
 #include "syscall.h"
 #include "vga.h"
 #include "klog.h"
@@ -188,33 +189,24 @@ int elf_build_argv_on_stack(uint64_t stack_phys, uint64_t stack_vaddr,
 }
 
 int elf_run_from_fs(const char *path, const char *args) {
-    uint32_t size = 0;
-    const char *data = fs_read(path, &size);
-    if (!data) {
+    // Into memory this function owns (fs_read_into), never the backend's
+    // staging buffer, which a ring-3 file read could free mid-load.
+    // kmalloc memory is carved out of the identity-mapped low 4 GiB (see
+    // heap_core.c), so elf_load() takes its address directly, exactly as
+    // it takes a GRUB module's -- no scratch copy.
+    uint64_t fsz = fs_size(path);
+    char *data = fsz && fsz < 0xFFFFFFFFu - 1 ? kmalloc((size_t)fsz + 1) : 0;
+    uint32_t size = data ? fs_read_into(path, data, (uint32_t)fsz + 1) : 0;
+    if (size == 0) {
+        if (data) kfree(data);
         vga_write("run: couldn't read "); vga_write(path); vga_write(" from disk\n");
         return -1;
     }
-
-    // fs_read()'s buffer is a kmalloc()'d heap allocation -- and, like
-    // every kmalloc() allocation, carved out of the same identity-mapped
-    // low-4GiB physical range a GRUB module lives in (see heap_core.c's top
-    // comment on why: this kernel identity-maps the whole low 4GiB as
-    // kernel/supervisor-only, and heap_init() just hands out pieces of
-    // that same range). elf_load() takes its address directly here with
-    // just a cast, exactly like it takes a multiboot_module_info's
-    // `start` field in file_test.c/newsyscalls_test.c -- no separate
-    // copy into a scratch buffer needed, unlike what an earlier version
-    // of this plan assumed (see docs/decisions.md). This DOES mean
-    // nothing may call fs_read() again (on this or any other path)
-    // until this function returns -- already true of every existing
-    // fs_read() caller, since the backend only keeps one such buffer
-    // alive at a time (see fs.h's fs_read() doc comment) -- process_run_
-    // ring3() below runs entirely through syscalls (SYS_READ/SYS_WRITE/
-    // etc.), none of which go through fs_read() itself, so this holds.
     uint64_t elf_phys = (uint64_t)(uintptr_t)data;
 
     uint64_t as = vmm_create_address_space();
     if (!as) {
+        kfree(data);
         vga_write("run: vmm_create_address_space() failed\n");
         return -1;
     }
@@ -229,7 +221,9 @@ int elf_run_from_fs(const char *path, const char *args) {
     // `size` comes from fs_read() above and used to be discarded here;
     // it is what bounds every offset in the file. On failure the address
     // space is destroyed rather than leaked -- see elf.h.
-    if (!elf_load(elf_phys, size, as, &entry, &image_end, 0)) {
+    int loaded = elf_load(elf_phys, size, as, &entry, &image_end, 0);
+    kfree(data);   // segments and phdrs are in the address space now
+    if (!loaded) {
         vga_write("run: "); vga_write(path); vga_write(" isn't a valid ELF64 executable\n");
         vmm_destroy_address_space(as);
         return -1;

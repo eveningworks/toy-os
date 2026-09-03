@@ -152,11 +152,19 @@ refuses a file larger than the buffer rather than truncating, because a
 half-read config file parses as a valid config file with keys silently
 missing.
 
-`fs_read()` stays, since plenty of callers are one-shot and fine, but
-anything the kernel context parses should prefer `fs_read_into()`. Note
-the preemption guard above and this are complementary, not alternatives:
-the guard protects the backend DURING a call, this removes the shared
-buffer AFTER it returns.
+`fs_read()` stayed at first, for the one-shot callers, and "prefer"
+converged nothing: two weeks later the kernel had seven live callers of
+it and two of `fs_read_into()`, the scheduler's ELF loader among the
+seven -- which parses an image in a context a ring-3 file read can
+preempt, the exact exposure. **So `fs_read()` was deleted (2026-09-03)**
+along with the nested-read refusal that guarded it: the small readers
+got a static buffer sized for their file, the ELF loaders `kmalloc` at
+`fs_size()` and free after `elf_load()`, and `stat` asks `fs_size()`
+instead of reading the whole file to print a number. The backends'
+`read` op still exists for `ramfs_test`; retiring it is a roadmap item.
+The preemption guard above and `fs_read_into()` are complementary, not
+alternatives: the guard protects the backend DURING a call, this removes
+the shared buffer AFTER it returns.
 
 ## The disk cache is under the ATA DRIVER, not the block layer -- and its flush can fail
 

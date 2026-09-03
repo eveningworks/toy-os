@@ -377,25 +377,18 @@ trips them before it knows to look anything up.
   unbalanced `disable()` hangs the machine, which is why `_enable()`
   clamps at zero instead of going negative and silently disarming the
   next section. See `docs/decisions.md`.
-- **Prefer `fs_read_into()` to `fs_read()` in anything the kernel
-  context parses.** `fs_read()` hands back a pointer into a shared
-  staging buffer, and that contract is unstatable in a preemptible
-  kernel -- a caller can honour it perfectly and still lose the buffer
-  to a ring-3 syscall mid-parse (`cursor_theme.c` did, with a comment
-  reasoning the parse happens first: true of the function, not of the
-  machine). `fs_read_into(path, buf, cap)` reads into memory the caller
-  owns, so there is no shared buffer to invalidate, and REFUSES an
-  oversized file rather than truncating. The same shape exists for
-  config files: `etc_config_load()` + `etc_config_buf_get()` read once
-  and answer many keys, because `etc_config_get()` re-reads the whole
-  file PER KEY -- which made a nine-entry desktop reload 54 whole-file
-  reads.
-- **`fs_read()` REFUSES a nested whole-file read**, returning NULL as it
-  does for a missing file, because every backend frees one shared
-  staging buffer and does a BLOCKING read into it -- so a preempted read
-  has its buffer freed underneath it. **The cost to know**: a refusal
-  looks exactly like "no such file" at the call site, so it is logged.
-  See `docs/decisions.md`.
+- **THERE IS NO `fs_read()`. A whole-file read goes into memory the
+  caller owns: `fs_read_into(path, buf, cap)`**, which REFUSES an
+  oversized file rather than truncating; a file that may be large is
+  `kmalloc`'d at `fs_size()` by its caller (the ELF loaders) or streamed
+  with `fs_read_range()`. The pointer-into-a-shared-staging-buffer form
+  was deleted on 2026-09-03 because its lifetime could not be stated in
+  a preemptible kernel -- a ring-3 syscall freed it under a kernel-side
+  parse (`cursor_theme.c`), and the scheduler's ELF loader carried the
+  same exposure for months. The same shape exists for config files:
+  `etc_config_load()` + `etc_config_buf_get()` read once and answer
+  many keys, because `etc_config_get()` re-reads the whole file PER KEY
+  -- which made a nine-entry desktop reload 54 whole-file reads.
 - **Split a file once it's grown big enough to be genuinely harder to
   work with -- don't wait for it to become unmanageable, but don't
   split preemptively either.** There's no hard line-count rule; the

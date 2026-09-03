@@ -42,6 +42,14 @@
 // double- and triple-indirect tables is tens of megabytes, which is
 // why it wants its own tool rather than a KTEST.
 
+// A whole small file, into this test's own buffer (fs_read_into): NULL
+// for a missing file, exactly as the callers assert.
+static const char *read_whole(const char *path, uint32_t *size) {
+    static char buf[4096];
+    *size = fs_read_into(path, buf, sizeof buf);
+    return *size ? buf : 0;
+}
+
 KTEST("fs", "tfs3 declares its format capabilities") {
     // Static declaration check -- runs regardless of which backend is
     // mounted. The live tfs3 read/mount/switch behavior is covered by
@@ -100,7 +108,7 @@ KTEST("fs", "write then read back") {
     FRESH("/.ktest_rw");
     KTEST_ASSERT(fs_write("/.ktest_rw", "hello ktest", 0) == 1);
     uint32_t size = 0;
-    const char *data = fs_read("/.ktest_rw", &size);
+    const char *data = read_whole("/.ktest_rw", &size);
     KTEST_ASSERT(data != 0);
     KTEST_ASSERT_EQ(size, 11);
     KTEST_ASSERT(k_strcmp(data, "hello ktest") == 0);
@@ -148,7 +156,7 @@ KTEST("fs", "rename moves a file, content and identity intact") {
     KTEST_ASSERT(fs_exists("/.ktest_mv_b") == 1);
 
     uint32_t size = 0;
-    const char *data = fs_read("/.ktest_mv_b", &size);
+    const char *data = read_whole("/.ktest_mv_b", &size);
     KTEST_ASSERT(data != 0);
     KTEST_ASSERT_EQ(size, 7);
     KTEST_ASSERT(k_strcmp(data, "payload") == 0);
@@ -174,7 +182,7 @@ KTEST("fs", "rename refuses an existing destination and the root") {
     // and the destination still holds its own content.
     KTEST_ASSERT(fs_exists("/.ktest_mvx_a") == 1);
     uint32_t size = 0;
-    const char *data = fs_read("/.ktest_mvx_b", &size);
+    const char *data = read_whole("/.ktest_mvx_b", &size);
     KTEST_ASSERT(data != 0 && k_strcmp(data, "two") == 0);
 
     KTEST_ASSERT_EQ(fs_rename("/", "/.ktest_mvx_c"), 0);
@@ -234,7 +242,7 @@ KTEST("fs", "rename moves a directory and its contents between parents") {
     // The descendant moved with it -- the part a rename that only
     // repoints the directory itself gets wrong.
     uint32_t size = 0;
-    const char *data = fs_read("/.ktest_md2/sub/f", &size);
+    const char *data = read_whole("/.ktest_md2/sub/f", &size);
     KTEST_ASSERT(data != 0);
     KTEST_ASSERT(k_strcmp(data, "deep") == 0);
     // And listing the new parent finds it, which is what proves the
@@ -374,7 +382,7 @@ KTEST("fs", "truncate refuses a directory and no-ops at the same size") {
     KTEST_ASSERT(fs_write("/.ktest_tn", "1234", 0) == 1);
     KTEST_ASSERT(fs_truncate("/.ktest_tn", 4) == 1);
     uint32_t size = 0;
-    const char *data = fs_read("/.ktest_tn", &size);
+    const char *data = read_whole("/.ktest_tn", &size);
     KTEST_ASSERT(data != 0);
     KTEST_ASSERT_EQ(size, 4);
     KTEST_ASSERT(k_strcmp(data, "1234") == 0);
@@ -480,7 +488,7 @@ KTEST("fs", "a failed rename leaves both names as they were") {
     KTEST_ASSERT_EQ(fs_exists("/.ktest_mvf_b"), 0);
 
     uint32_t size = 0;
-    const char *data = fs_read("/.ktest_mvf_a", &size);
+    const char *data = read_whole("/.ktest_mvf_a", &size);
     KTEST_ASSERT(data != 0);
     KTEST_ASSERT(k_strcmp(data, "keepme") == 0);
 
@@ -565,7 +573,7 @@ KTEST("fs", "append preserves the bytes already in the block") {
     KTEST_ASSERT(fs_write("/.ktest_append", "BBBB", 1) == 1);
 
     uint32_t size = 0;
-    const char *data = fs_read("/.ktest_append", &size);
+    const char *data = read_whole("/.ktest_append", &size);
     KTEST_ASSERT(data != 0);
     KTEST_ASSERT_EQ(size, 8);
     // The whole point: the HEAD survived. A size check alone passes
@@ -587,7 +595,7 @@ KTEST("fs", "repeated appends build one continuous file") {
     KTEST_ASSERT(fs_write("/.ktest_append2", "four\n", 1) == 1);
 
     uint32_t size = 0;
-    const char *data = fs_read("/.ktest_append2", &size);
+    const char *data = read_whole("/.ktest_append2", &size);
     KTEST_ASSERT(data != 0);
     KTEST_ASSERT_EQ(size, 19);
     KTEST_ASSERT(k_strcmp(data, "one\ntwo\nthree\nfour\n") == 0);
@@ -610,7 +618,7 @@ KTEST("fs", "an append that crosses a block boundary keeps both halves") {
     KTEST_ASSERT(fs_write("/.ktest_append3", "TAIL", 1) == 1);
 
     uint32_t size = 0;
-    const char *data = fs_read("/.ktest_append3", &size);
+    const char *data = read_whole("/.ktest_append3", &size);
     KTEST_ASSERT(data != 0);
     KTEST_ASSERT_EQ(size, sizeof(head) - 1 + 4);
     KTEST_ASSERT(data[0] == 'x');

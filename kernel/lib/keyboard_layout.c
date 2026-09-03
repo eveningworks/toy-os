@@ -198,9 +198,12 @@ static int load_from_file(const char *name) {
     k_memcpy(path + dir_len, name, name_len);
     path[dir_len + name_len] = '\0';
 
-    uint32_t size = 0;
-    const char *data = fs_read(path, &size);
-    if (!data || size == 0) return 0;
+    // Into memory this file owns (fs_read_into), never the backend's
+    // staging buffer: a ring-3 syscall can preempt this parse. The
+    // largest shipped layout is ~3 KB; an oversize file is refused.
+    static char data[8192];
+    uint32_t size = fs_read_into(path, data, sizeof data);
+    if (size == 0) return 0;
 
     k_memset(g_table, 0, sizeof(g_table));
     k_memset(g_table_shift, 0, sizeof(g_table_shift));

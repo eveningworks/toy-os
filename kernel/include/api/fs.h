@@ -102,41 +102,16 @@ int fs_rename(const char *oldpath, const char *newpath);
 // Setting the size a file already has is a successful no-op.
 int fs_truncate(const char *path, uint64_t size);
 
-// Returns pointer to file data (not null-terminated beyond size) and sets
-// *out_size, or NULL if not found or if `path` names a directory.
-//
-// This loads the WHOLE file into one heap-allocated (kmalloc, see
-// heap.h) buffer and hands back a pointer into it -- fine for the
-// small config/text files every existing caller (Notepad, the shell's
-// cat/write, editor.c) actually uses, but it cannot work at all for a
-// file that doesn't fit in available RAM (this kernel has no virtual
-// memory/swap): a multi-GB file will simply fail here (returns NULL)
-// once the allocation itself fails, no matter how big TFS2's on-disk
-// format can go. For anything that might be large, check fs_size()
-// first and use fs_read_range() to read it in bounded chunks instead
-// -- see those two below. The returned pointer is only valid until the
-// next fs_read()/fs_write() call (the backend reuses one staging
-// buffer rather than leaking a fresh allocation every call -- see
-// TFS2).
-const char *fs_read(const char *path, uint32_t *out_size);
-
-// The same "read a small file whole", into memory the CALLER owns.
-//
-// **Prefer this to fs_read() in anything the kernel context runs**, and
-// the reason is not style. fs_read() hands back a pointer into ONE
-// shared staging buffer, and that pointer's lifetime is not protected
-// against preemption: the kernel context is a scheduler participant, so
-// a ring-3 process can make a file-reading syscall while a kernel-side
-// parse is still walking the buffer, and the parse then reads somebody
-// else's file. That is not hypothetical -- it made the cursor theme
-// report perfectly good shape files as "malformed" on about one boot in
-// three under KVM, silently, because a shape that fails to parse falls
-// back to the built-in one. The nested-read refusal in vfs.c protects a
-// read in FLIGHT; it cannot protect the buffer after fs_read() returns.
-//
-// There is no shared buffer anywhere in this path -- it is fs_size()
-// plus fs_read_range() into `buf` -- so there is nothing for a
-// concurrent reader to invalidate.
+// Read a small file whole, into memory the CALLER owns. THIS IS THE
+// ONLY WHOLE-FILE READ: the one that handed back a pointer into a
+// backend's shared staging buffer is gone, because that pointer's
+// lifetime could not be stated in a preemptible kernel -- a ring-3
+// file read freed it under a kernel-side parse (docs/decisions.md,
+// "fs_read_into() reads into the CALLER's buffer"). There is no shared
+// buffer anywhere in this path -- fs_size() plus fs_read_range() into
+// `buf` -- so there is nothing for a concurrent reader to invalidate.
+// A file that may be large is kmalloc'd at fs_size() by its caller
+// (the ELF loaders) or streamed with fs_read_range().
 //
 // Returns the number of bytes read, or 0 for a missing file, a
 // directory, a read failure, or a file that does not fit. A file larger
@@ -149,12 +124,11 @@ uint32_t fs_read_into(const char *path, void *buf, uint32_t cap);
 
 // Returns a file's size in bytes without reading any of its data, or 0
 // if `path` doesn't exist or names a directory -- the cheap way to
-// find out whether a file is small enough to fs_read() whole, or large
-// enough that it needs fs_read_range() instead.
+// find out whether a file fits a fs_read_into() buffer, or needs
+// fs_read_range() instead.
 uint64_t fs_size(const char *path);
 
-// Streaming read for files too large to load whole (see fs_read()'s
-// updated doc comment above) -- copies up to `len` bytes starting at
+// Streaming read for files too large to load whole -- copies up to `len` bytes starting at
 // byte `offset` into caller-owned `buf`. Returns the number of bytes
 // actually copied: less than `len` at/near end-of-file, 0 at or past
 // EOF (or on any error -- this doesn't distinguish the two, same

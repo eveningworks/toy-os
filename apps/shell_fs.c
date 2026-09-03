@@ -220,9 +220,7 @@ void cmd_stat(const char *name) {
     vga_write("  path:     "); vga_write(path); vga_putc('\n');
     vga_write("  type:     "); vga_write(fs_is_dir(path) ? "directory" : "file"); vga_putc('\n');
     if (!fs_is_dir(path)) {
-        uint32_t size;
-        fs_read(path, &size);
-        vga_write("  size:     "); vga_write_dec(size); vga_write(" bytes\n");
+        vga_write("  size:     "); vga_write_dec((uint32_t)fs_size(path)); vga_write(" bytes\n");
     }
     struct fs_stat_info st;
     if (fs_stat(path, &st)) {

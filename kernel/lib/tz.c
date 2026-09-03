@@ -523,9 +523,11 @@ static void tz_seed_default_db(void) {
 static void tz_load_or_seed_db(void) {
     if (!fs_exists(TZ_DB_FILE)) tz_seed_default_db();
 
-    uint32_t size = 0;
-    const char *data = fs_read(TZ_DB_FILE, &size);
-    tz_city_count_loaded = (data && size > 0) ? tz_load_cities(data, size) : 0;
+    // Caller-owned (fs_read_into): TZ_MAX_CITIES lines of well under
+    // 128 bytes each. An oversize file is refused and the defaults win.
+    static char data[TZ_MAX_CITIES * 128];
+    uint32_t size = fs_read_into(TZ_DB_FILE, data, sizeof data);
+    tz_city_count_loaded = size > 0 ? tz_load_cities(data, size) : 0;
 
     if (tz_city_count_loaded == 0) {
         int n = TZ_DEFAULT_CITY_COUNT;

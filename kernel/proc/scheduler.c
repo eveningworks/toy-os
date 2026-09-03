@@ -109,6 +109,7 @@
 #include "signal.h"     // signal_send() -- SIGCHLD to a parent, see notify_parent()
 #include "errno.h"     // -EINTR, what a signal makes a blocking syscall return
 #include "fs.h"
+#include "heap.h"
 #include "gdt.h"
 #include "fpu.h"
 #include "tls.h"    // FS.base -- a thread pointer is per THREAD, see switch_to()
@@ -828,13 +829,21 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
     }
     if (slot < 0) return -1;
 
-    uint32_t size = 0;
-    const char *data = fs_read(path, &size);
+    // THE IMAGE IS READ INTO MEMORY THIS FUNCTION OWNS (fs_read_into),
+    // never the backend's staging buffer: this runs in the kernel
+    // context as well as under a syscall, and a ring-3 file read could
+    // free that buffer under elf_load(). kmalloc memory is identity-
+    // mapped, so elf_load() takes its address directly (elf_run.c).
+    uint64_t fsz = fs_size(path);
+    if (fsz == 0 || fsz > 0xFFFFFFFFu - 1) return -1;
+    char *data = kmalloc((size_t)fsz + 1);
     if (!data) return -1;
-    uint64_t elf_phys = (uint64_t)(uintptr_t)data; // no copy needed -- see elf_run.c's top comment
+    uint32_t size = fs_read_into(path, data, (uint32_t)fsz + 1);
+    if (size == 0) { kfree(data); return -1; }
+    uint64_t elf_phys = (uint64_t)(uintptr_t)data;
 
     uint64_t as = vmm_create_address_space();
-    if (!as) return -1;
+    if (!as) { kfree(data); return -1; }
 
     // Same one-line hook elf_run_from_fs() has -- a no-op unless the
     // shell's `strace` armed tracing, which keeps the mechanism
@@ -851,8 +860,10 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
     // it and every segment frame.
     if (!elf_load(elf_phys, size, as, &entry, &image_end, &dyn)) {
         vmm_destroy_address_space(as);
+        kfree(data);
         return -1;
     }
+    kfree(data);   // everything the process needs from it is in the address space now
 
     // A DYNAMIC executable: load the interpreter it names as a second
     // image and enter THAT (Linux's split -- the kernel's part in
@@ -862,9 +873,6 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
     // the same bounds serve both images; the guard is the executable
     // growing up into it, which no real program here approaches.
     //
-    // NOTE the second fs_read() FREES the first one's buffer, so the
-    // exe's `data` is dead past this point -- everything the process
-    // needs from it (segments, phdrs) is already IN the address space.
     uint64_t auxv[4][2];
     int auxc = 0;
     if (dyn.interp[0]) {
@@ -874,15 +882,19 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
             vmm_destroy_address_space(as);
             return -1;
         }
-        uint32_t isize = 0;
-        const char *idata = fs_read(dyn.interp, &isize);
-        if (!idata) {
+        uint64_t ifsz = fs_size(dyn.interp);
+        char *idata = ifsz && ifsz < 0xFFFFFFFFu - 1 ? kmalloc((size_t)ifsz + 1) : 0;
+        uint32_t isize = idata ? fs_read_into(dyn.interp, idata, (uint32_t)ifsz + 1) : 0;
+        if (isize == 0) {
             klog_printf("spawn: interpreter %s missing\n", dyn.interp);
+            if (idata) kfree(idata);
             vmm_destroy_address_space(as);
             return -1;
         }
         uint64_t ientry = 0, iend = 0;
-        if (!elf_load((uint64_t)(uintptr_t)idata, isize, as, &ientry, &iend, 0)) {
+        int iok = elf_load((uint64_t)(uintptr_t)idata, isize, as, &ientry, &iend, 0);
+        kfree(idata);
+        if (!iok) {
             klog_printf("spawn: interpreter %s did not load\n", dyn.interp);
             vmm_destroy_address_space(as);
             return -1;
