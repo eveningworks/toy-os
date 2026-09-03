@@ -846,7 +846,7 @@ An audit on 2026-09-03 found every rule with a `tools/check_*.py`
 behind it converged, and every rule stated only in CLAUDE.md still
 split. One line per pair here; the site lists are in roadmap-details.
 
-- [ ] A checker for `vmm_copy_*_user()` results -- `!ok` is the contract, and `< 0` is the dead-branch bug in `docs/bugs.md`
+- [x] ~~A checker for `vmm_copy_*_user()` results~~ DONE 2026-09-03 -- `check_copy_user.py`, and the twelve sites fixed
 - [ ] Move the kernel-context `fs_read()` callers to `fs_read_into()` -- 7 live vs 2, the discouraged form is the majority
 - [ ] Move the kernel's 42 `etc_config_get()` callers to load-once -- zero use the load form; mouse config reads its file 4 times
 - [ ] Image Viewer and Player hand-route a menu bar beside routed widgets -- the forbidden pair; `check_key_routing.py` exempts menubar
@@ -857,7 +857,7 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [ ] `write_dec`/`write_hex` chains beside `*_printf` -- 82 chains in `apps/`, 59 of them in `shell_sys.c`; nothing says which to use
 - [ ] 26 copy-to/from-user calls discard their result under a "validated above" comment -- the pre-helper idiom the header retires
 - [ ] `docs/decisions/` still says `Milestone N` ~50 times in prose; `check_docs.py` only rejects numbered headings
-- [ ] ~24 GUI tools byte-compare raw screendumps; 8 use `stable_pixels()` -- the documented top flake cause, unenforced
+- [x] ~~~24 GUI tools byte-compare raw screendumps; 8 use `stable_pixels()`~~ DONE 2026-09-03 -- `screenshot()` settles by default
 - [ ] 51 tools take only `--qmp-port` (default 4445) and never launch, so `port_guard` cannot see them; move them to `--instance`
 - [ ] Three tools hand-roll `send_text("gui")` plus a sleep instead of `enter_gui()`: `damage_sweep`, `kvm_soak`, `serial_capture`
 - [ ] `fat32_test.py` and `kvm_soak.py` test readiness with `"ready" in out`, which matches `already running`; use `started_ok()`

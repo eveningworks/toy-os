@@ -178,6 +178,18 @@ int main(void) {
     if (fd >= 0) {
         check(sys_send(fd, "x", 1) < 0, "send() on a peerless socket fails");
         check_errno(sys_errno(), EINVAL, "send() with no peer named");
+
+        // --- EFAULT on a struct argument, through the raw entry ------
+        // The wrappers build the `struct net_msg` themselves, so only a
+        // raw call can hand the kernel a bad one. A handler that tests
+        // the copy helper's 1/0 result with `< 0` never sees the fault
+        // and binds whatever its stack held; this is the check for that.
+        check(sys_call(SYS_BIND, (uint64_t)fd, 0x1000, 0) == -EFAULT,
+              "bind() of a kernel-only struct pointer fails with EFAULT");
+        check(sys_call(SYS_CONNECT, (uint64_t)fd, 0x1000, 0) == -EFAULT,
+              "connect() of a kernel-only struct pointer fails with EFAULT");
+        check(sys_call(SYS_SENDTO, (uint64_t)fd, 0x1000, 0) == -EFAULT,
+              "sendto() of a kernel-only struct pointer fails with EFAULT");
         sys_close(fd);
     }
 

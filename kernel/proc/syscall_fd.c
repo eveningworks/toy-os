@@ -822,7 +822,7 @@ int sys_write(struct syscall_ctx *c) {
         uint64_t n = len;
         char *kbuf = bounce_alloc(&n);
         if (!kbuf) { c->regs[14] = (uint64_t)(int64_t)-ENOMEM; break; }
-        if (vmm_copy_from_user(pml4, kbuf, buf_ptr, n) < 0) {
+        if (!vmm_copy_from_user(pml4, kbuf, buf_ptr, n)) {
             kfree(kbuf);
             c->regs[14] = (uint64_t)(int64_t)-EFAULT;
             break;
@@ -1145,7 +1145,7 @@ int sys_sendto(struct syscall_ctx *c) {
     if (sock < 0) { c->regs[14] = (uint64_t)(int64_t)-EBADF; return 0; }
 
     struct net_msg m;
-    if (vmm_copy_from_user(c->pml4, &m, c->a1, sizeof m) < 0) {
+    if (!vmm_copy_from_user(c->pml4, &m, c->a1, sizeof m)) {
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
         return 0;
     }
@@ -1159,7 +1159,7 @@ int sys_sendto(struct syscall_ctx *c) {
     // a datagram, where a short buffer is a different message.
     uint8_t *payload = m.len ? kmalloc(m.len) : (uint8_t *)"";
     if (!payload) { c->regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
-    if (m.len && vmm_copy_from_user(c->pml4, payload, m.buf, m.len) < 0) {
+    if (m.len && !vmm_copy_from_user(c->pml4, payload, m.buf, m.len)) {
         kfree(payload);
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
         return 0;
@@ -1212,7 +1212,7 @@ static int stream_read(struct syscall_ctx *c, int sock, uint64_t ubuf,
     }
 
     if (rc == -EAGAIN) rc = 0;            // non-blocking: nothing yet
-    if (rc > 0 && vmm_copy_to_user(c->pml4, ubuf, kbuf, (uint64_t)rc) < 0) rc = -EFAULT;
+    if (rc > 0 && !vmm_copy_to_user(c->pml4, ubuf, kbuf, (uint64_t)rc)) rc = -EFAULT;
     kfree(kbuf);
     net_sock_set_deadline(sock, 0);
     c->regs[14] = (uint64_t)(int64_t)rc;
@@ -1224,7 +1224,7 @@ int sys_recvfrom(struct syscall_ctx *c) {
     if (sock < 0) { c->regs[14] = (uint64_t)(int64_t)-EBADF; return 0; }
 
     struct net_msg m;
-    if (vmm_copy_from_user(c->pml4, &m, c->a1, sizeof m) < 0) {
+    if (!vmm_copy_from_user(c->pml4, &m, c->a1, sizeof m)) {
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
         return 0;
     }
@@ -1292,8 +1292,8 @@ int sys_recvfrom(struct syscall_ctx *c) {
         m.addr = src;
         m.port = port;
         m.len = (uint32_t)rc;
-        if (vmm_copy_to_user(c->pml4, m.buf, payload, (uint64_t)rc) < 0 ||
-            vmm_copy_to_user(c->pml4, c->a1, &m, sizeof m) < 0) {
+        if (!vmm_copy_to_user(c->pml4, m.buf, payload, (uint64_t)rc) ||
+            !vmm_copy_to_user(c->pml4, c->a1, &m, sizeof m)) {
             kfree(payload);
             net_sock_set_deadline(sock, 0);
             c->regs[14] = (uint64_t)(int64_t)-EFAULT;
@@ -1311,7 +1311,7 @@ int sys_bind(struct syscall_ctx *c) {
     if (sock < 0) { c->regs[14] = (uint64_t)(int64_t)-EBADF; return 0; }
 
     struct net_msg m;
-    if (vmm_copy_from_user(c->pml4, &m, c->a1, sizeof m) < 0) {
+    if (!vmm_copy_from_user(c->pml4, &m, c->a1, sizeof m)) {
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
         return 0;
     }
@@ -1325,7 +1325,7 @@ int sys_connect(struct syscall_ctx *c) {
     if (sock < 0) { c->regs[14] = (uint64_t)(int64_t)-EBADF; return 0; }
 
     struct net_msg m;
-    if (vmm_copy_from_user(c->pml4, &m, c->a1, sizeof m) < 0) {
+    if (!vmm_copy_from_user(c->pml4, &m, c->a1, sizeof m)) {
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
         return 0;
     }
@@ -1382,7 +1382,7 @@ int sys_accept(struct syscall_ctx *c) {
 
     struct net_msg m;
     k_memset(&m, 0, sizeof m);
-    if (c->a1 && vmm_copy_from_user(c->pml4, &m, c->a1, sizeof m) < 0) {
+    if (c->a1 && !vmm_copy_from_user(c->pml4, &m, c->a1, sizeof m)) {
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
         return 0;
     }
@@ -1442,7 +1442,7 @@ int sys_accept(struct syscall_ctx *c) {
 
 int sys_net_config(struct syscall_ctx *c) {
     struct net_ifconfig req;
-    if (vmm_copy_from_user(c->pml4, &req, c->a0, sizeof req) < 0) {
+    if (!vmm_copy_from_user(c->pml4, &req, c->a0, sizeof req)) {
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
         return 0;
     }
@@ -1475,7 +1475,7 @@ int sys_net_config(struct syscall_ctx *c) {
 // address has been applied.
 int sys_net_arp_probe(struct syscall_ctx *c) {
     struct net_arp_probe req;
-    if (vmm_copy_from_user(c->pml4, &req, c->a0, sizeof req) < 0) {
+    if (!vmm_copy_from_user(c->pml4, &req, c->a0, sizeof req)) {
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
         return 0;
     }

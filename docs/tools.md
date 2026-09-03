@@ -3503,6 +3503,11 @@ window without going through it will find its layout polls timing out.
   probe called by hand (the bus already calls it). Static, over the
   source, because the in-kernel `initcall` KTEST can see "never ran"
   at boot but not "ran twice". Run by `preflight.sh`.
+- **`check_copy_user.py`** -- a `vmm_copy_*_user()` result compared
+  with `< 0`. The helpers return 1/0 and never negative, so that branch
+  is dead and the handler runs on an unfilled buffer; twelve socket
+  syscalls shipped that way with the contract stated in the header
+  above them. Static, over `kernel/` and `apps/`. Run by `preflight.sh`.
 - **`loc.py`** -- how big this project is, honestly: source lines with
   generated files, comments and blank lines all excluded, and the
   with-comments figure beside it. Not `wc -l`, because the answer

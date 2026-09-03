@@ -177,6 +177,9 @@ python3 tools/check_drivers.py || fail "driver declaration check"
 step "check_initcalls.py (an init both declared and hand-called, or at an unwalked level)"
 python3 tools/check_initcalls.py || fail "initcall check"
 
+step "check_copy_user.py (a vmm_copy_*_user() result tested as an errno)"
+python3 tools/check_copy_user.py || fail "copy-user check"
+
 step "check_tool_commands.py (a tool driving a command that no longer exists)"
 python3 tools/check_tool_commands.py || fail "tool command check"
 

@@ -269,8 +269,10 @@ trips them before it knows to look anything up.
   nothing, suspect the fixture before the harness, and ask what input
   size/shape actually reaches the branch.
 - **A screendump compared against another screendump must be a SETTLED
-  frame** -- `QMPSession.stable_pixels()` (two identical consecutive
-  reads). **And so must one compared against ITSELF**: `mines_test`
+  frame** -- and `QMPSession.screenshot()` IS one by default now (two
+  identical consecutive dumps, bounded); `stable=False` is the opt-out
+  for a screen that animates on purpose, and `stable_pixels()` is the
+  same plus a crop. **And so must one compared against ITSELF**: `mines_test`
   read a cell face and the backdrop beside it out of one raw grab, and
   a capture landing mid-paint reads the backdrop in both places --
   which is exactly what that check calls "not painted". A client that has drawn into its buffer, and even logged that
@@ -1295,6 +1297,7 @@ cost".
   write lock. Static checks, run by it or beside it: `check_deps.py`,
   `check_layout.py`, `check_dispatch.py`, `check_widget_ops.py`,
   `check_key_routing.py`, `check_drivers.py`, `check_initcalls.py`,
+  `check_copy_user.py`,
   `check_docs.py`,
   `check_licenses.py`, `check_config_size.py`,
   `check_tool_coverage.py`, `check_tool_commands.py`, and

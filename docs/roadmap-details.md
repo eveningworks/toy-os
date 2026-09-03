@@ -4379,31 +4379,6 @@ the paint path guarded by it. Both existing manual calls then go away.
 child, paint, and assert the new child reports a non-zero rect through
 its `bounds` op.
 
-## Every EFAULT branch in the socket syscalls is dead code
-
-`kernel/include/kernel/vmm.h` states the contract: all three
-`vmm_copy_*_user()` helpers return 1 on success and 0 when any byte of
-the range is not present-and-user-accessible, and `copy_user()` in
-`kernel/mm/vmm.c` returns nothing else. Forty-two call sites across
-thirteen files test `!vmm_copy_...`. Twelve sites, all in
-`kernel/proc/syscall_fd.c`, test `< 0` instead: lines 825, 1148, 1162,
-1215, 1227, 1295, 1296, 1314, 1328, 1385, 1445 and 1478 as of
-2026-09-03. Since 0 is not less than 0, every one of those `-EFAULT`
-returns is unreachable, and the handler continues with whatever the
-kernel buffer held before the failed copy.
-
-What that means for a caller: `send`, `recv`, `recvfrom`, `bind`,
-`connect`, `accept` and the net-config syscall accept a user pointer
-into unmapped or kernel memory and proceed on a zero-filled or stale
-struct rather than failing. Nothing crashes, which is why no test found
-it -- the fuzzing track's "pointer-argument torture" item is exactly
-the test that would have.
-
-The fix is mechanical: `< 0` becomes `!` at each site. Worth doing in
-the same change: a `tools/check_*.py` rule, or a grep in
-`check_docs.py`'s style, that fails the build on `vmm_copy_.*< 0`, since
-the header's comment did not stop the twelve.
-
 ## Convention drift: rules that live only in prose
 
 An audit on 2026-09-03 looked for places where two ways of doing one
