@@ -51,6 +51,7 @@ static int caps_are_honest(const struct display_driver *d) {
         (!d->backlight_get || !d->backlight_set)) return 0;
     if ((d->caps & DISPLAY_CAP_FLIP) &&
         (!d->scanout_count || !d->scanout_at || !d->flip || !d->scanout_live)) return 0;
+    if ((d->caps & DISPLAY_CAP_SCALING) && !d->set_scaling) return 0;
     return 1;
 }
 
@@ -118,7 +119,7 @@ int display_probe(void) {
         // has to hold for whichever driver claimed, not just vesafb.
         g_wc = paging_set_write_combining(s.addr, (uint64_t)s.pitch * s.height);
 
-        klog_printf("display: using \"%s\" -- %ux%u x%u pitch %u, caps:%s%s%s%s%s%s%s\n",
+        klog_printf("display: using \"%s\" -- %ux%u x%u pitch %u, caps:%s%s%s%s%s%s%s%s\n",
                      d->name, s.width, s.height, (unsigned)s.bpp, s.pitch,
                      (d->caps & DISPLAY_CAP_NEEDS_FLUSH) ? " flush" : "",
                      (d->caps & DISPLAY_CAP_CURSOR)      ? " cursor" : "",
@@ -126,7 +127,8 @@ int display_probe(void) {
                      (d->caps & DISPLAY_CAP_ACCEL_COPY)  ? " copy" : "",
                      (d->caps & DISPLAY_CAP_MODESET)     ? " modeset" : "",
                      (d->caps & DISPLAY_CAP_BACKLIGHT)   ? " backlight" : "",
-                     (d->caps & DISPLAY_CAP_FLIP)        ? " flip" : "");
+                     (d->caps & DISPLAY_CAP_FLIP)        ? " flip" : "",
+                     (d->caps & DISPLAY_CAP_SCALING)     ? " scaling" : "");
         klog_printf("display: framebuffer write-combining: %s\n", paging_wc_name(g_wc));
         read_edid(d);
         return 1;
@@ -345,6 +347,18 @@ int display_flip(int index) {
     if (!display_has(DISPLAY_CAP_FLIP)) return index == 0 && g_active != 0;
     if (index < 0 || index >= g_active->scanout_count()) return 0;
     return g_active->flip(index);
+}
+
+static int g_scaling = DISPLAY_SCALING_ASPECT;
+
+int display_scaling(void) { return g_scaling; }
+
+int display_set_scaling(int mode) {
+    if (mode < DISPLAY_SCALING_ASPECT || mode > DISPLAY_SCALING_CENTER) return 0;
+    g_scaling = mode;
+    if (display_has(DISPLAY_CAP_SCALING) && !g_active->set_scaling(mode))
+        klog_printf("display: the driver did not re-place the mode for scaling %d\n", mode);
+    return 1;
 }
 
 int display_scanout_live(void) {

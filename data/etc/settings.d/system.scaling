@@ -1,0 +1,7 @@
+Description=How a mode smaller than the panel is placed on it: scaled with its shape kept, stretched to fill, or centred unscaled
+Widget=dropdown
+Applies=now
+Order=11
+Choice.aspect=Keep aspect ratio
+Choice.full=Stretch to fill
+Choice.center=Centred, no scaling

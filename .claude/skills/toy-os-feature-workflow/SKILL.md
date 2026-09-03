@@ -880,7 +880,9 @@ training) needs from it, is under "Intel modesetting" in
 `intel_modeset.c` re-programs the native mode end to end (panel power,
 port clock, link training, the timings from the EDID) and the driver
 advertises MODESET with that one mode; the lessons -- one mechanism per
-flash, readback over eye, the T3 wait -- are in the same reference file.
+flash, readback over eye, the T3 wait -- are in the same reference file. Stage 4a followed: smaller modes through
+the panel fitter and a `system.scaling` setting (aspect | full |
+center); the fitter's size register is its ARMING write.
 
 ## Verification habits this project rewards
 

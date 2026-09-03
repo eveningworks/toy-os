@@ -53,6 +53,7 @@
 #define DISPLAY_CAP_MODESET      (1u << 4) // can list and select modes
 #define DISPLAY_CAP_BACKLIGHT    (1u << 5) // a panel backlight it can dim
 #define DISPLAY_CAP_FLIP         (1u << 6) // more than one scanout, switched at vblank
+#define DISPLAY_CAP_SCALING      (1u << 7) // a scaler between the mode and a fixed panel
 
 // Where the pixels live and how they're laid out.
 struct display_surface {
@@ -66,6 +67,16 @@ struct display_surface {
 struct display_mode {
     uint32_t width, height;
     uint8_t  bpp;
+};
+
+// How a mode smaller than the panel is placed on it, when the display
+// has a scaler (DISPLAY_CAP_SCALING): i915's scaling-mode property and
+// the Intel Windows driver's three choices. A driver with no scaler
+// shows every mode at its own size and the enum is unused.
+enum display_scaling {
+    DISPLAY_SCALING_ASPECT = 0,   // largest same-aspect rectangle, centred
+    DISPLAY_SCALING_FULL   = 1,   // stretched to the whole panel
+    DISPLAY_SCALING_CENTER = 2,   // unscaled, centred
 };
 
 struct display_driver {
@@ -128,6 +139,12 @@ struct display_driver {
     // when there is none. display_probe() asks once after a claim and
     // parses it (kernel/edid.h); a driver never parses its own.
     int  (*read_edid)(uint8_t *out, int cap);
+
+    // Required when DISPLAY_CAP_SCALING: re-place the CURRENT mode on
+    // the panel per `mode` (enum display_scaling). set_mode reads
+    // display_scaling() itself; this is for a change with no mode
+    // change. Returns 1 when the hardware took it.
+    int  (*set_scaling)(int mode);
 };
 
 // Called by each driver's own *_init() before display_probe() runs.
@@ -219,6 +236,14 @@ int display_ladder_mode(int index, int *out_w, int *out_h);
 // milestone. The preferred timing is timing[0].
 struct display_edid;
 const struct display_edid *display_edid(void);
+
+// The scaling policy (enum display_scaling), kept by the display layer
+// so a driver's set_mode can read it and a setting can store it before
+// any mode is set. display_set_scaling() stores it and, with the
+// capability, asks the driver to re-place the current mode; 1 when
+// stored (the driver's refusal is logged, not returned).
+int  display_scaling(void);
+int  display_set_scaling(int mode);
 
 // Re-applies write-combining to the ACTIVE surface -- after a mode
 // change, when the address or the extent has moved.

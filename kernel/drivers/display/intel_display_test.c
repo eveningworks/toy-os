@@ -139,3 +139,32 @@ KTEST("intel-display", "the cycle tunable is unavailable, and refused, without t
     KTEST_ASSERT_EQ(intel_display_link_retrain(), 0);
     KTEST_ASSERT_EQ(intel_display_native(), 0);
 }
+
+KTEST("intel-display", "the fitter window keeps the aspect, fills, or centres") {
+    uint32_t x, y, w, h;
+    intel_display_fit_window(DISPLAY_SCALING_ASPECT, 1280, 1024, 1920, 1080, &x, &y, &w, &h);
+    KTEST_ASSERT_EQ(w, 1350u); KTEST_ASSERT_EQ(h, 1080u);
+    KTEST_ASSERT_EQ(x, 284u);  KTEST_ASSERT_EQ(y, 0u);      // 285 rounded to even
+    intel_display_fit_window(DISPLAY_SCALING_ASPECT, 800, 600, 1920, 1080, &x, &y, &w, &h);
+    KTEST_ASSERT_EQ(w, 1440u); KTEST_ASSERT_EQ(h, 1080u);
+    KTEST_ASSERT_EQ(x, 240u);  KTEST_ASSERT_EQ(y, 0u);
+    intel_display_fit_window(DISPLAY_SCALING_ASPECT, 1280, 720, 1920, 1080, &x, &y, &w, &h);
+    KTEST_ASSERT_EQ(w, 1920u); KTEST_ASSERT_EQ(h, 1080u);   // same aspect: the whole panel
+    intel_display_fit_window(DISPLAY_SCALING_FULL, 1024, 768, 1920, 1080, &x, &y, &w, &h);
+    KTEST_ASSERT_EQ(w, 1920u); KTEST_ASSERT_EQ(h, 1080u);
+    KTEST_ASSERT_EQ(x, 0u);    KTEST_ASSERT_EQ(y, 0u);
+    intel_display_fit_window(DISPLAY_SCALING_CENTER, 1280, 1024, 1920, 1080, &x, &y, &w, &h);
+    KTEST_ASSERT_EQ(w, 1280u); KTEST_ASSERT_EQ(h, 1024u);
+    KTEST_ASSERT_EQ(x, 320u);  KTEST_ASSERT_EQ(y, 28u);
+    intel_display_fit_window(DISPLAY_SCALING_ASPECT, 1920, 1080, 1920, 1080, &x, &y, &w, &h);
+    KTEST_ASSERT_EQ(w, 1920u); KTEST_ASSERT_EQ(h, 1080u);   // native: pass-through
+}
+
+KTEST("display", "the scaling policy is stored on every machine, and refused out of range") {
+    int was = display_scaling();
+    KTEST_ASSERT_EQ(display_set_scaling(DISPLAY_SCALING_FULL), 1);
+    KTEST_ASSERT_EQ(display_scaling(), DISPLAY_SCALING_FULL);
+    KTEST_ASSERT_EQ(display_set_scaling(7), 0);
+    KTEST_ASSERT_EQ(display_scaling(), DISPLAY_SCALING_FULL);
+    KTEST_ASSERT_EQ(display_set_scaling(was), 1);
+}

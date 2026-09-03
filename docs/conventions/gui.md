@@ -1501,8 +1501,10 @@ real scanout hardware does. Do not write a pixel assertion for one.
   advertises `DISPLAY_CAP_MODESET` now** -- bochs ADOPTS GRUB's mode
   instead of declining (so `-vga std` has a modesetting driver on every
   boot), vmsvga and virtio-gpu set modes as they always could -- and the
-  Intel driver lists the panel's native mode alone, so on the laptop the
-  setting offers one choice until the panel fitter exists.
+  Intel driver lists the panel's native mode and every ladder entry
+  smaller than it, shown through the panel fitter with the native timing
+  kept (the buffer never moves: a smaller mode is the same stride
+  scanned w x h).
   **The setting is an ENUM whose choices are the driver's mode list**
   (`display_ladder_mode()` filtered by what the adapter accepts), so
   nothing offers a mode the adapter will refuse; an unlisted one is
@@ -1524,6 +1526,21 @@ real scanout hardware does. Do not write a pixel assertion for one.
   `video=` on the GRUB line; one the driver refuses is logged and the
   boot mode kept. `modeset_test.py` measures the change at the DEVICE:
   a QMP screendump's own size must match what the desktop believes.
+- **A MODE SMALLER THAN THE PANEL IS PLACED BY `system.scaling`, A
+  SETTING ON EVERY MACHINE, AND THE FITTER'S SIZE REGISTER IS THE ARMING
+  WRITE.** `aspect` (the largest same-shape rectangle, centred; the
+  default, i915's eDP default), `full` (stretched) or `center`
+  (unscaled), a dropdown under Display > Screen beside Resolution, with
+  the registry's sentence on a display without `DISPLAY_CAP_SCALING`.
+  The policy lives in the display layer (`display_scaling()`), so a
+  driver's `set_mode` reads it and the boot-time resolution is placed
+  the way the user chose; `set_scaling` re-places the current mode.
+  `intel_display_fit_window()` is the pure window maths, exact on the
+  limiting axis and KTESTed. **The trap that cost three flashes**: the
+  Intel fitter's `PF_WIN_SZ` is the arming write, DSPSURF-style, so the
+  order is `PF_CTL`, `PF_WIN_POS`, `PF_WIN_SZ` (i915's `ilk_pfit_enable`)
+  -- written control-last, every register read back as asked and the
+  source sat unscaled at the top-left, position included.
 - **A PRESENT FLIPS ON A DISPLAY WITH THREE SCANOUTS, THE FLIP NEVER
   WAITS, AND THE COMPOSITOR REPAINTS BY BUFFER AGE.** `DISPLAY_CAP_FLIP`
   (`display.h`) means a driver has `scanout_count` buffers of the

@@ -455,7 +455,8 @@ int intel_modeset_native(void) {
     intel_wr(TRANS_EDP_BASE_R + 0x34, data_n);
     intel_wr(TRANS_EDP_BASE_R + 0x40, link_m);
     intel_wr(TRANS_EDP_BASE_R + 0x44, link_n);
-    intel_wr(PIPESRC(st.pipe), ((uint32_t)(t->hactive - 1) << 16) | (uint32_t)(t->vactive - 1));
+    // PIPESRC and the fitter window are left as they are: they describe
+    // the mode on screen, which may be a fitted one (intel_modeset_fit).
     int on = pipe_on(&st);
     udelay(50000);   // T8, the backlight's own delay, also zero in PP_ON_DELAYS here
     intel_wr(PCH_PP_CONTROL_R, pp_control() | PP_BLC_ENABLE);
@@ -463,4 +464,37 @@ int intel_modeset_native(void) {
                 off && pp_off && pp_on && trained && on ? "done" : "INCOMPLETE",
                 off, pp_off, cycled, pp_on, trained, on);
     return off && pp_off && pp_on && trained && on;
+}
+
+// --- a fitted mode -----------------------------------------------------
+// The transcoder keeps the panel's native timing; PIPESRC is the mode
+// and the panel fitter scales it into a window. The fitter is already
+// enabled in pass-through by the firmware on this panel, so this is a
+// window change under a pipe cycle, and the eye sees a blink.
+
+int intel_modeset_fit(uint32_t w, uint32_t h, uint32_t x, uint32_t y, uint32_t ww, uint32_t wh) {
+    struct pipe_state st;
+    if (!begin(&st, "fit")) return 0;
+    int pipe = st.pipe;
+    uint32_t pf = intel_rd(PF_CTL(pipe));
+    klog_printf("intel-display: fit: %ux%u into %ux%u at %u,%u (pf ctl %#x, pipesrc %#x)\n",
+                w, h, ww, wh, x, y, pf, intel_rd(PIPESRC(pipe)));
+    int off = pipe_off(&st);
+    // THE TRAP: PF_WIN_SZ is the ARMING write -- the fitter takes its
+    // control and position with the size, DSPSURF-style -- so the order
+    // is CTL, POS, SZ (i915's ilk_pfit_enable). Written CTL-last, a
+    // 1600x900 source sat unscaled at the top-left with the registers
+    // reading back exactly as asked. Disabled first, as i915 does.
+    intel_wr(PF_CTL(pipe), 0);
+    intel_wr(PF_WIN_POS(pipe), 0);
+    intel_wr(PF_WIN_SZ(pipe), 0);
+    intel_wr(PIPESRC(pipe), ((w - 1) << 16) | (h - 1));
+    intel_wr(PF_CTL(pipe), pf | PF_ENABLE);
+    intel_wr(PF_WIN_POS(pipe), (x << 16) | y);
+    intel_wr(PF_WIN_SZ(pipe), (ww << 16) | wh);
+    int on = pipe_on(&st);
+    klog_printf("intel-display: fit: %s -- pipesrc %#x pf ctl %#x pos %#x size %#x\n",
+                off && on ? "done" : "INCOMPLETE", intel_rd(PIPESRC(pipe)),
+                intel_rd(PF_CTL(pipe)), intel_rd(PF_WIN_POS(pipe)), intel_rd(PF_WIN_SZ(pipe)));
+    return off && on;
 }

@@ -49,6 +49,7 @@ static uint64_t g_stolen_base, g_stolen_size;
 static int g_pipe = -1;            // the pipe scanning GRUB's framebuffer
 static uint32_t g_fb_ggtt;         // its DSPSURF
 static struct display_surface g_surface;
+static uint32_t g_native_w, g_native_h;   // what the firmware lit: the panel's size
 static int g_active;
 static uint64_t g_fb_pte_flags;    // low 12 bits of the firmware's framebuffer PTE, reused as-is
 
@@ -467,32 +468,92 @@ static int intel_probe(void) {
     setup_scanouts();
     setup_backlight();
     intel_aux_init();
-    // MODESET is advertised unconditionally: the one listed mode is the
-    // one on screen, and set_mode re-runs the sequence that reaches it.
-    intel_driver.caps |= DISPLAY_CAP_MODESET;
+    // MODESET and SCALING: the native mode is what the firmware lit, the
+    // smaller ones are the fitter's, and the buffer never moves.
+    g_native_w = g_surface.width;
+    g_native_h = g_surface.height;
+    intel_driver.caps |= DISPLAY_CAP_MODESET | DISPLAY_CAP_SCALING;
     return 1;
 }
 
 static void intel_get_surface(struct display_surface *out) { *out = g_surface; }
 
-// Modes: the panel's native timing, which is the mode on screen (the
-// probe claims only when the firmware's plane shows it). set_mode runs
-// the whole sequence -- panel power, port clock, link training, the
-// timings from the EDID -- and refuses any other size until the panel
-// fitter exists (stage 4).
-static int intel_mode_count(void) { return 1; }
+// Modes: the panel's native size (what the firmware lit, index 0) and
+// every ladder entry smaller than it, shown through the panel fitter
+// with the native timing kept. The framebuffer never moves: a smaller
+// mode is the same buffer at the same stride, scanned w x h.
+static int ladder_fits(int index, uint32_t *w, uint32_t *h) {
+    int lw, lh;
+    if (!display_ladder_mode(index, &lw, &lh)) return 0;
+    *w = (uint32_t)lw; *h = (uint32_t)lh;
+    return *w < g_native_w && *h <= g_native_h && !(*w == g_native_w && *h == g_native_h);
+}
+
+static int intel_mode_count(void) {
+    int n = 1, w_, h_;
+    uint32_t w, h;
+    for (int i = 0; display_ladder_mode(i, &w_, &h_); i++)
+        if (ladder_fits(i, &w, &h)) n++;
+    return n;
+}
 
 static void intel_mode_at(int index, struct display_mode *out) {
-    (void)index;
-    out->width = g_surface.width;
-    out->height = g_surface.height;
-    out->bpp = g_surface.bpp;
+    out->width = g_native_w; out->height = g_native_h; out->bpp = 32;
+    if (index <= 0) return;
+    int n = 0, w_, h_;
+    uint32_t w, h;
+    for (int i = 0; display_ladder_mode(i, &w_, &h_); i++) {
+        if (!ladder_fits(i, &w, &h)) continue;
+        if (++n == index) { out->width = w; out->height = h; return; }
+    }
+}
+
+// The fitter's window for a mode on the panel: exact for the limiting
+// axis (a same-aspect mode fills the panel to the pixel), rounded to
+// even, which the fitter's window wants.
+void intel_display_fit_window(int scaling, uint32_t w, uint32_t h, uint32_t pw, uint32_t ph,
+                              uint32_t *x, uint32_t *y, uint32_t *ww, uint32_t *wh) {
+    uint32_t fw = pw, fh = ph;
+    if (scaling == DISPLAY_SCALING_CENTER) {
+        fw = w; fh = h;
+    } else if (scaling == DISPLAY_SCALING_ASPECT) {
+        if ((uint64_t)w * ph >= (uint64_t)h * pw) { fw = pw; fh = (uint32_t)((uint64_t)h * pw / w); }
+        else                                       { fh = ph; fw = (uint32_t)((uint64_t)w * ph / h); }
+    }
+    if (fw > pw) fw = pw;
+    if (fh > ph) fh = ph;
+    fw &= ~1u; fh &= ~1u;
+    *ww = fw; *wh = fh;
+    *x = ((pw - fw) / 2) & ~1u;
+    *y = ((ph - fh) / 2) & ~1u;
+}
+
+static int fit_current(uint32_t w, uint32_t h) {
+    uint32_t x, y, ww, wh;
+    intel_display_fit_window(display_scaling(), w, h, g_native_w, g_native_h, &x, &y, &ww, &wh);
+    if (!intel_modeset_fit(w, h, x, y, ww, wh)) return 0;
+    g_surface.width = w;
+    g_surface.height = h;
+    for (int b = 0; b < SCANOUTS; b++) { g_scanout[b].width = w; g_scanout[b].height = h; }
+    return 1;
 }
 
 static int intel_set_mode(const struct display_mode *m) {
     if (!m || m->bpp != 32) return 0;
-    if (m->width != g_surface.width || m->height != g_surface.height) return 0;
-    return intel_modeset_native();
+    int listed = 0, n = intel_mode_count();
+    for (int i = 0; i < n && !listed; i++) {
+        struct display_mode c;
+        intel_mode_at(i, &c);
+        listed = c.width == m->width && c.height == m->height;
+    }
+    if (!listed) return 0;
+    return fit_current(m->width, m->height);
+}
+
+static int intel_set_scaling(int mode) {
+    (void)mode;   // read back through display_scaling() by fit_current
+    if (g_surface.width == g_native_w && g_surface.height == g_native_h) return 1;
+    return fit_current(g_surface.width, g_surface.height);
 }
 
 // Caps are filled in at claim time: the cursor plane once its buffer
@@ -515,6 +576,7 @@ static struct display_driver intel_driver = {
     .mode_count = intel_mode_count,
     .mode_at = intel_mode_at,
     .set_mode = intel_set_mode,
+    .set_scaling = intel_set_scaling,
 };
 
 void intel_display_register(void) {

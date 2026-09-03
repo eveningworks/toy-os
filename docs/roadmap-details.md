@@ -3917,8 +3917,20 @@ the input to stage 3:**
   adjust request; waiting the spec's 210 ms T1+T3 fixed it. The DPCD
   0x100..0x10F block and 0x600 read identical before and after the
   power cycle, so the panel's reset does not clear them (they are
-  rewritten anyway, as i915 does). `DISPLAY_CAP_MODESET` is advertised
-  with the native mode as the one choice.
+  rewritten anyway, as i915 does).
+
+**Stage 4a, the panel fitter (2026-09-03):** the mode list is the
+native size plus every ladder entry below it; `set_mode` is a pipe
+cycle around `PIPESRC` and the fitter window (`intel_modeset_fit`),
+the link and panel power untouched, a blink on the panel.
+`system.scaling` = aspect | full | center chooses the window
+(`intel_display_fit_window`, KTESTed). Three flashes went to the
+fitter appearing inert -- every register read back as written and the
+source sat unscaled at the top-left, even its position ignored -- and
+the cause was the write order: `PF_WIN_SZ` arms the fitter, so it goes
+last (`PF_CTL`, `PF_WIN_POS`, `PF_WIN_SZ`, i915's `ilk_pfit_enable`).
+Confirmed by eye at 1600x900 filling the panel. Still to do in stage 4:
+external outputs on DDI B-D.
 
 **Stage 3, sized from that.** It is DP link training, not just a
 register sequence: after `DDI_BUF_CTL` goes down the panel must be

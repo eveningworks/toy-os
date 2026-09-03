@@ -31,9 +31,6 @@
 #define TRANS_LINK_N1  0x044
 #define TRANS_DDI_FUNC_CTL 0x400
 #define PIPEMISC(p)    (0x70030 + (p) * 0x1000)
-#define PF_CTL(p)      (0x68080 + (p) * 0x800)
-#define PF_WIN_POS(p)  (0x68070 + (p) * 0x800)
-#define PF_WIN_SZ(p)   (0x68074 + (p) * 0x800)
 #define PORT_CLK_SEL_A 0x46100
 #define PCH_PP_ON_DELAYS  0xC7208
 #define PCH_PP_OFF_DELAYS 0xC720C

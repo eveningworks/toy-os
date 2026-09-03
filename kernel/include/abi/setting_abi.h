@@ -77,7 +77,7 @@ enum setting_result {
 // telling the same kind of lie SETTING_UNSAVED exists to prevent.
 #define SETTING_ABI_SF_REBOOT   (1u << 0) // takes effect at the next boot
 #define SETTING_ABI_SF_ADVANCED (1u << 1) // a UI may keep it behind a disclosure
-#define SETTING_ABI_MAX       32
+#define SETTING_ABI_MAX       40
 
 #define SETTING_ABI_NAME_MAX  24 // the /etc key, e.g. "font_size"
 #define SETTING_ABI_LABEL_MAX 40 // human-facing, e.g. "Font size"

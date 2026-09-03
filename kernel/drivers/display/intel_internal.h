@@ -82,6 +82,13 @@ int  intel_modeset_link_retrain(void);
 // native() runs the whole sequence -- panel power, port clock, the link,
 // the timings from the EDID -- for the mode already on screen.
 int  intel_modeset_native(void);
+// fit() re-places a mode: pipe off, PIPESRC = w x h, the fitter window
+// at x,y of ww x wh, pipe on. The link and panel power are untouched.
+int  intel_modeset_fit(uint32_t w, uint32_t h, uint32_t x, uint32_t y, uint32_t ww, uint32_t wh);
+#define PF_CTL(p)      (0x68080 + (p) * 0x800)
+#define PF_WIN_POS(p)  (0x68070 + (p) * 0x800)
+#define PF_WIN_SZ(p)   (0x68074 + (p) * 0x800)
+#define PF_ENABLE      (1u << 31)
 
 // The DDI A port registers, shared with the readout.
 #define DDI_BUF_CTL_A   0x64000

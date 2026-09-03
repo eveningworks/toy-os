@@ -5986,3 +5986,24 @@ outside the old mode. virtio-gpu keeps its three scanouts across the
 change. Not built: a revert countdown for a mode the monitor cannot
 show (Windows' fifteen seconds); every adapter this covers is an
 emulator that shows any mode, and the Intel driver has no modeset yet.
+
+## The scaling policy is a display-layer setting, not a driver detail
+
+`system.scaling` (aspect, full, center) decides where a mode smaller
+than a fixed panel lands. Linux exposes this per connector as the
+`scaling mode` property, set by the compositor; Windows' Intel driver
+puts three radio buttons in its own control panel. toy-os makes it a
+registered setting beside Resolution, stored in the display layer
+(`display_scaling()`), for the reason the resolution is one: the kernel
+owns the framebuffer and the mode here, the registry gives a System
+Settings row, `config set`, persistence and an `unavailable` sentence
+for free, and a policy held by the layer is read by whichever driver's
+`set_mode` runs -- at boot, before any compositor exists, the stored
+resolution is placed the way the user chose. The alternative, a
+per-driver knob, would have needed a third path into the Intel driver
+and would have been invisible on every other machine; the registry's
+sentence on a display without a scaler is the better answer to "why is
+this greyed out". The window maths is a pure function so it is KTESTed
+on every machine, and the arming order of the fitter's registers is the
+driver's trap, recorded in `docs/conventions/gui.md`.
+

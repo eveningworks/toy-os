@@ -40,6 +40,7 @@ static int parse_pct(const char *value) {
 }
 
 static void resolution_init(void);
+static void scaling_init(void);
 
 void display_config_init(void) {
     char buf[16];
@@ -52,6 +53,7 @@ void display_config_init(void) {
     // machine keeps the brightness its firmware chose.
     if (display_has(DISPLAY_CAP_BACKLIGHT) && g_brightness != BRIGHTNESS_DEFAULT)
         display_backlight_set(g_brightness);
+    scaling_init();
     resolution_init();
 }
 INITCALL(display_config_init, INIT_CONFIG);
@@ -175,7 +177,67 @@ static void resolution_init(void) {
         klog_printf("display: stored resolution %ux%u not applied\n", w, h);
 }
 
+// --- the scaling policy ------------------------------------------------
+//
+// How a mode smaller than the panel lands on it. Registered on every
+// machine so the row exists with its sentence; stored as a word, read
+// back from the display layer, applied through display_set_scaling().
+#define SCALING_KEY "scaling"
+
+static const char *const SCALING_WORDS[] = { "aspect", "full", "center" };
+
+static int scaling_parse(const char *s) {
+    for (int i = 0; i < 3; i++)
+        if (k_strcmp(s, SCALING_WORDS[i]) == 0) return i;
+    return -1;
+}
+
+static int scaling_choice(int index, char *out, uint32_t out_size) {
+    if (index < 0 || index > 2) return 0;
+    k_strlcpy(out, SCALING_WORDS[index], out_size);
+    return 1;
+}
+
+static void scaling_get(char *out, uint32_t out_size) {
+    k_strlcpy(out, SCALING_WORDS[display_scaling()], out_size);
+}
+
+static int scaling_apply(const char *value) {
+    int mode = scaling_parse(value);
+    if (mode < 0 || !display_set_scaling(mode)) return SETTING_INVALID;
+    return etc_config_set(DISPLAY_CONFIG_FILE, SCALING_KEY, SCALING_WORDS[mode])
+               ? SETTING_SAVED : SETTING_UNSAVED;
+}
+
+static const char *scaling_unavailable(void) {
+    return display_has(DISPLAY_CAP_SCALING)
+               ? 0 : "This display has no scaler -- every mode is shown at its own size";
+}
+
+static const struct setting g_scaling_setting = {
+    .name   = SCALING_KEY,
+    .label  = "Scaling",
+    .type   = SETTING_TYPE_ENUM,
+    .file   = DISPLAY_CONFIG_FILE,
+    .category = "Display",
+    .group  = "Screen",
+    .choice = scaling_choice,
+    .get    = scaling_get,
+    .apply  = scaling_apply,
+    .unavailable = scaling_unavailable,
+};
+
+// Stored before the resolution is applied, so the boot-time set_mode
+// places the mode the way the user chose.
+static void scaling_init(void) {
+    char buf[16];
+    if (!etc_config_get(DISPLAY_CONFIG_FILE, SCALING_KEY, buf, sizeof buf)) return;
+    int mode = scaling_parse(buf);
+    if (mode >= 0) display_set_scaling(mode);
+}
+
 void display_config_setting_register(void) {
     setting_register(&g_brightness_setting);
     setting_register(&g_resolution_setting);
+    setting_register(&g_scaling_setting);
 }

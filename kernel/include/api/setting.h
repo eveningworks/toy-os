@@ -46,8 +46,9 @@
 // (`setting_register(&g_scratch2)` refused, registry full). If this is
 // hit again, raise it -- the cost is a few KB of bss in System
 // Settings, which sizes its arrays from the ABI twin below. Raised
-// to 32 when `brightness` made 25.
-#define SETTING_MAX        32 // registered settings
+// to 32 when `brightness` made 25, to 40 when `scaling` made 29 (the
+// KTESTs' four scratch settings had filled the rest).
+#define SETTING_MAX        40 // registered settings
 _Static_assert(SETTING_MAX == SETTING_ABI_MAX,
                "SETTING_MAX and SETTING_ABI_MAX must agree -- a client sizes "
                "its array from the ABI one and would truncate the list");

@@ -2325,3 +2325,26 @@ one mechanism per flash). Read before touching `intel_modeset.c`.**
   capped at 0x800000), which is the check that a register the driver
   will now write is understood.
 
+**2026-09-03, later still (stage 4a: the panel fitter and
+`system.scaling`).**
+
+- **A policy the kernel's set_mode needs lives in the display layer as
+  a registered setting**, not in the driver: it gets a Settings row,
+  persistence, `config set` and the sentence for free, and the boot-time
+  resolution is placed the way the user chose before any compositor
+  exists. `docs/decisions/gui.md`.
+- **A register that reads back as written can still be doing nothing:
+  ask which write ARMS it.** The Intel fitter took `PF_WIN_SZ` as its
+  arming write, so control-last programming left it inert -- scaling
+  and position alike -- for three flashes. i915's write ORDER
+  (`ilk_pfit_enable`: CTL, POS, SZ) was the answer, and the discriminating
+  experiment (`center` moved nothing either) is what ruled out the
+  scaler and pointed at the whole block.
+- **Test the policy's three words and a 4:3 mode by eye**, one look
+  each: same-aspect filling the panel, centred with borders, letterboxed
+  without distortion. The window maths was wrong once (fixed-point
+  truncation gave 1918x1078) and the KTEST caught it before the eye.
+- **The settings registry was full** (28 real + 4 KTEST scratch = 32):
+  a new setting would have reddened two tests about something else, as
+  the header comment predicted. Raised to 40 in both twins.
+

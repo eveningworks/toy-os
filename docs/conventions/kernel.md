@@ -2894,8 +2894,10 @@ things to know.
   dim screen, and a reboot puts the firmware's state back either way.
   A modeset runs only on request -- `set_mode`, or the
   `kernel.intel_cycle` tunable -- and is `intel_modeset.c`'s (see the
-  EDID entry below). `DISPLAY_CAP_MODESET` is advertised with ONE mode,
-  the native one, until the panel fitter exists.
+  EDID entry below). `DISPLAY_CAP_MODESET` lists the native mode and the
+  ladder below it, the smaller ones through the panel fitter under a
+  pipe cycle (`docs/conventions/gui.md`'s scaling entry has the setting
+  and the fitter's arming order).
 - **GEN8 ONLY, BY DEVICE ID.** The register map is Broadwell's; another
   generation is logged as "not gen8 -- not claimed" and vesafb takes
   the same pixels. Widening the table means checking every offset

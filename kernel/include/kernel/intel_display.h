@@ -39,6 +39,11 @@ uint32_t intel_display_port_clock_khz(uint32_t port_clk_sel);
 uint32_t intel_display_dotclock_khz(uint32_t port_khz, uint32_t link_m, uint32_t link_n);
 int      intel_display_timing_same(const struct edid_timing *a, const struct edid_timing *b);
 
+// The panel fitter's window for a mode of w x h on a panel of pw x ph
+// under `scaling` (enum display_scaling); pure, for the KTESTs.
+void intel_display_fit_window(int scaling, uint32_t w, uint32_t h, uint32_t pw, uint32_t ph,
+                              uint32_t *x, uint32_t *y, uint32_t *ww, uint32_t *wh);
+
 // Stage 3, one mechanism at a time: the pipe off and on with the link
 // kept. 1 when it came back trained; 0 (and a log line naming the
 // register) otherwise. Refused without the hardware.
