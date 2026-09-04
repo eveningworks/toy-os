@@ -223,6 +223,49 @@ appends, and requires the appended bytes -- a stale table answers with a
 zero pointer, which reads as a hole, so the data comes back blank.
 
 
+## tfs3 caches whole path -> inode, and the invalidation rides the name cache
+
+Every `fs_*(path, ...)` call resolved from the root: one uncached inode
+read per component plus a directory scan. Measured at a fifth to two
+thirds of every block read the filesystem issued -- and the driver is
+COUNT, not depth, since one 64 KiB write syscall triggers several
+resolutions. `lcache` (16 entries per mount, 64-byte keys) answers the
+whole question.
+
+Per-lookup block reads fell from ~3.9 to 1.2-1.8, floor 1.0. On a clean
+A/B: sequential write 9.40 -> 16.29 MB/s, sequential read 15.93 -> 173.84,
+random 4 KiB read 1.53 -> 6.63. Random 4 KiB WRITE did not move, which
+is the expected answer -- it is flush-dominated, and no amount of read
+saving touches that.
+
+**The number only, never the inode's contents.** Size, mtime and block
+pointers change on every write, so caching the struct would mean
+invalidating on the hot path; the path -> number mapping changes only
+when the namespace does.
+
+**Flushed from `ncache_flush()` rather than through its own entry
+point.** Create, delete, link, rename and unmount already call it, and
+those are exactly the operations that can change which inode a path
+names. A separate function would have to be added to all five, and the
+one that got missed would return another file's inode -- silently, with
+the right byte count.
+
+**A failed resolution is not cached.** The thing that makes a negative
+entry wrong is a create at that path, which is common; one stale "no
+such file" is worse than every miss it saves.
+
+**THE TEST NEEDED A DECOY, and this is the transferable part.** The
+obvious check -- write, read, delete, recreate, read -- PASSES with the
+invalidation disabled: the recreated file is handed the inode the
+deleted one just freed, so the stale entry is accidentally correct. It
+took creating a second file in between, to claim that inode, before the
+recreate landed on a different one and the test could fail. The general
+form is this project's oldest testing rule, arriving from a new
+direction: ask what a broken version would still pass, and here the
+answer was "all of it", because the allocator was quietly repairing the
+bug.
+
+
 ## `sync` flushes every mount through the block layer, not the ATA cache
 
 `sys_sync()` opened with `if (!ata_cache_active()) { return 0; }` and a

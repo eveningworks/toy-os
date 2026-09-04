@@ -312,6 +312,85 @@ KTEST("fs", "truncate shrinks, frees blocks, and grows sparsely") {
     fs_delete("/.ktest_trunc");
 }
 
+// THE RESOLVED-PATH CACHE IS ONLY SAFE IF THE NAMESPACE INVALIDATES IT.
+// tfs3 caches whole path -> inode now, so a read or write does not walk
+// from the root again -- and the entry is wrong the moment the path
+// names a DIFFERENT inode. Deleting a file and creating another at the
+// same name does exactly that, and a stale entry then reads the old
+// inode: either the previous file's bytes or a freed inode's garbage,
+// silently and with the right byte count.
+//
+// The invalidation rides ncache_flush(), which create, delete, link and
+// rename already call. This is the check that the ride is real.
+KTEST("fs", "a path recreated after delete resolves to the NEW file") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    FRESH("/.ktest_lc");
+    FRESH("/.ktest_lz");
+
+    enum { N = 4096 };
+    static char a[N], b[N], back[N];
+    k_memset(a, 'A', N);
+    k_memset(b, 'B', N);
+
+    KTEST_ASSERT_EQ(fs_touch("/.ktest_lc"), 1);
+    KTEST_ASSERT_EQ(fs_write_range("/.ktest_lc", 0, a, N), 1);
+
+    // READ IT FIRST -- this is what caches the resolution. Without it
+    // the cache is empty and the recreate below is trivially correct,
+    // so a test that skipped this would pass either way.
+    KTEST_ASSERT_EQ((int64_t)fs_read_range("/.ktest_lc", 0, back, N), (int64_t)N);
+    KTEST_ASSERT_EQ((int64_t)back[0], (int64_t)'A');
+
+    KTEST_ASSERT_EQ(fs_delete("/.ktest_lc"), 1);
+
+    // A DECOY, AND IT IS THE WHOLE TEST. Recreating the path straight
+    // after deleting it hands the new file the inode the old one just
+    // freed -- so a stale cache entry is accidentally CORRECT and this
+    // test passed with invalidation disabled. Taking that inode first
+    // forces the recreate onto a different one, which is the case a
+    // stale entry gets wrong.
+    KTEST_ASSERT_EQ(fs_touch("/.ktest_lz"), 1);
+
+    KTEST_ASSERT_EQ(fs_touch("/.ktest_lc"), 1);
+    KTEST_ASSERT_EQ(fs_write_range("/.ktest_lc", 0, b, N), 1);
+
+    k_memset(back, 0, N);
+    KTEST_ASSERT_EQ((int64_t)fs_read_range("/.ktest_lc", 0, back, N), (int64_t)N);
+    for (int i = 0; i < N; i++) {
+        if (back[i] != 'B') { KTEST_ASSERT_EQ((int64_t)back[i], (int64_t)'B'); }
+    }
+
+    fs_delete("/.ktest_lc");
+    fs_delete("/.ktest_lz");
+}
+
+// The other way a path stops naming its inode. Renaming AWAY must make
+// the old name resolve to nothing rather than to the file it used to
+// name -- a cached entry would keep answering for a path that no longer
+// exists.
+KTEST("fs", "a renamed-away path stops resolving") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    FRESH("/.ktest_lr");
+    FRESH("/.ktest_lr2");
+
+    enum { N = 512 };
+    static char a[N], back[N];
+    k_memset(a, 'R', N);
+    KTEST_ASSERT_EQ(fs_touch("/.ktest_lr"), 1);
+    KTEST_ASSERT_EQ(fs_write_range("/.ktest_lr", 0, a, N), 1);
+    KTEST_ASSERT_EQ((int64_t)fs_read_range("/.ktest_lr", 0, back, N), (int64_t)N);
+
+    KTEST_ASSERT_EQ(fs_rename("/.ktest_lr", "/.ktest_lr2"), 1);
+    KTEST_ASSERT_EQ(fs_exists("/.ktest_lr"), 0);
+    KTEST_ASSERT_EQ(fs_exists("/.ktest_lr2"), 1);
+    // ...and the new name reads the bytes.
+    k_memset(back, 0, N);
+    KTEST_ASSERT_EQ((int64_t)fs_read_range("/.ktest_lr2", 0, back, N), (int64_t)N);
+    KTEST_ASSERT_EQ((int64_t)back[0], (int64_t)'R');
+
+    fs_delete("/.ktest_lr2");
+}
+
 // DOUBLE- AND TRIPLE-INDIRECT ADDRESSING, reached by writing SPARSELY
 // rather than by filling a file to get there. Block 12+1024 is the
 // first double-indirect one (~4.2 MB in) and block 12+1024+1024*1024

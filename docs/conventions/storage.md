@@ -319,6 +319,24 @@ this the obvious way), not from how much history it accumulated.
     to be unwieldy there should get its own `/etc/<name>.conf` rather
     than cramming in to match convention.
 
+## A RESOLVED PATH IS CACHED, AND `ncache_flush()` IS WHAT INVALIDATES IT
+
+tfs3's `lcache` holds whole path -> inode so a read or write does not
+walk from the root again. **If you add an operation that changes which
+inode a path names, it must call `ncache_flush()`** -- create, delete,
+link, rename and unmount already do, and the cache rides that call
+precisely so a new one cannot forget half of it.
+
+**Only the NUMBER is cached, never the inode's contents**, which change
+on every write. A negative result is not cached either.
+
+**And if you write a test for it, it needs a decoy.** Delete-then-
+recreate hands the new file the inode the old one just freed, so a stale
+entry is accidentally correct and the obvious test passes with the
+invalidation disabled. Create a second file in between to claim that
+inode first. See `docs/decisions.md`.
+
+
 ## `sync` IS `fs_sync()`, IT FLUSHES EVERY MOUNT, AND ZERO SECTORS IS NORMAL
 
 Two stages: write back a driver's software cache (only ATA has one),

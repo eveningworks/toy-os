@@ -145,6 +145,14 @@ struct t3_gd { uint32_t free_blocks, free_inodes; };
 #define T3_NCACHE 16
 #define T3_NCACHE_NAME 48
 
+// THE RESOLVED-PATH CACHE. Sized 64 bytes because `fs.h`'s FS_PATH_MAX
+// is 64, so every path arriving through the VFS fits; a longer one
+// (T3_PATH_BUF is 256, for internal use) is simply not cached, which is
+// correct and merely not fast. 16 entries at 72 bytes is ~1.2 KiB per
+// mount, against a mount that costs ~7 KiB.
+#define T3_LCACHE 16
+#define T3_LCACHE_PATH 64
+
 struct t3_state {
     struct t3_vol vol;
     int mounted;
@@ -198,6 +206,20 @@ struct t3_state {
     } ncache[T3_NCACHE];
     int ncache_next;
 
+    // WHOLE PATH -> INODE, so a read or write does not walk the path
+    // from the root again. `ncache` above caches ONE COMPONENT's
+    // name->inode within a directory, which still leaves resolve()
+    // reading an inode per component; this caches the whole answer.
+    //
+    // Measured before building: path resolution was a fifth to two
+    // thirds of every block read this filesystem issued
+    // (docs/pagecache-design.md).
+    struct {
+        char path[T3_LCACHE_PATH];  // normalized; "" = empty slot
+        uint64_t ino;
+    } lcache[T3_LCACHE];
+    int lcache_next;
+
     // One-deep cache of the last-level pointer block being filled, so a
     // long sequential write patches it in RAM and writes it once per
     // 1024 data blocks instead of read-modify-writing 4 KiB per block.
@@ -231,9 +253,18 @@ static uint32_t g_txn_target[T3_JSLOTS_MAX];
 static int g_txn_count = 0;
 static int g_txn_credits = 0; // what txn_begin() promised; see txn_stage()
 
+// FLUSHES BOTH CACHES, and the resolved-path one rides here rather than
+// getting its own entry point on purpose: the five call sites that
+// already invalidate names -- create, delete, link, rename, unmount --
+// are exactly the operations that can change which inode a path names.
+// A second function would have to be added to all five, and the one
+// that got missed would hand back a stale inode number, which is a read
+// of somebody else's file.
 static void ncache_flush(void) {
     for (int i = 0; i < T3_NCACHE; i++) S->ncache[i].dir = 0;
     S->ncache_next = 0;
+    for (int i = 0; i < T3_LCACHE; i++) S->lcache[i].path[0] = '\0';
+    S->lcache_next = 0;
 }
 
 // One block of scratch for everything on this (single-threaded)
@@ -725,6 +756,32 @@ void tfs3_lookup_stats(uint64_t *calls, uint64_t *reads, uint64_t *ns) {
     if (ns)    *ns    = g_lookup_ns;
 }
 
+// A CACHED RESOLUTION, or 0. Only ever holds paths that RESOLVED: a
+// negative result is deliberately not cached, because the thing that
+// would make it wrong -- a create at that path -- is common, and one
+// stale "no such file" is worse than every miss it would have saved.
+static uint64_t lcache_get(const char *norm) {
+    for (int i = 0; i < T3_LCACHE; i++) {
+        if (S->lcache[i].path[0] &&
+            k_strcmp(S->lcache[i].path, norm) == 0) return S->lcache[i].ino;
+    }
+    return 0;
+}
+
+static void lcache_put(const char *norm, uint64_t ino) {
+    if (k_strlen(norm) >= T3_LCACHE_PATH) return;  // longer than the ABI allows
+    for (int i = 0; i < T3_LCACHE; i++) {
+        if (S->lcache[i].path[0] && k_strcmp(S->lcache[i].path, norm) == 0) {
+            S->lcache[i].ino = ino;
+            return;
+        }
+    }
+    int s = S->lcache_next;
+    S->lcache_next = (S->lcache_next + 1) % T3_LCACHE;
+    k_strlcpy(S->lcache[s].path, norm, T3_LCACHE_PATH);
+    S->lcache[s].ino = ino;
+}
+
 static int lookup(const char *path, uint64_t *out_ino, struct t3_inode *out_node) {
     char norm[T3_PATH_BUF];
     if (!S->mounted || !normalize(path, norm)) return 0;
@@ -733,10 +790,19 @@ static int lookup(const char *path, uint64_t *out_ino, struct t3_inode *out_node
     blk_stat_get(BLK_STAT_READ, &reads0, NULL, NULL, NULL);
     uint64_t t0 = clocksource_now_ns();
 
-    uint64_t ino;
-    int ok = resolve(norm, &ino);
+    uint64_t ino = lcache_get(norm);
+    int ok = 1;
+    if (!ino) {
+        ok = resolve(norm, &ino);
+        if (ok) lcache_put(norm, ino);
+    }
     if (ok) {
         if (out_ino) *out_ino = ino;
+        // STILL READ, never cached. The inode's CONTENTS change on
+        // every write -- size, mtime, block pointers -- so caching the
+        // struct would need invalidating on the hot path rather than on
+        // the rare one. Only the path -> number mapping is cached, and
+        // that changes solely when the namespace does.
         if (out_node) ok = read_inode(ino, out_node);
     }
 

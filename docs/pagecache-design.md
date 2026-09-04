@@ -106,13 +106,49 @@ simply finding the file again.
 
 Each one ships on its own and is worth having if the next never lands.
 
-### Stage 0 -- MEASURE the resolution cost, then decide  [MEASURED]
+### Stage 0 -- cache the resolved path  [BUILT]
 
-**Done: `QUERY_FSSTAT` and `/bin/diskbench`'s `lookup` line.** The
-numbers are in the table above -- 29-66% of all block reads -- so the
-change is justified rather than assumed.
+**Measured first (`QUERY_FSSTAT`, `/bin/diskbench`'s `lookup` line),
+then built.** tfs3 caches whole path -> inode in a 16-entry per-mount
+`lcache`, checked at the top of `lookup()`.
 
-The change itself is small: `struct open_file` holds
+A/B on a freshly seeded disk each way, QEMU/KVM + AHCI, 2 MiB:
+
+| profile | without | with |
+|---|---|---|
+| SEQ-write | 9.40 MB/s | **16.29** |
+| SEQ-read | 15.93 | **173.84** |
+| RND4K-write | 0.852 | 0.889 |
+| RND4K-read | 1.53 | **6.63** |
+
+**The reliable number is per-lookup block reads, which fell from ~3.9 to
+1.2-1.8 across all four profiles** (1.0 is the floor -- the inode read
+itself, which is never cached). Throughput multiples vary run to run,
+SEQ-read especially, so read those as "large" rather than as exact.
+
+**RND4K-write barely moved, and that is the expected answer**: it is
+flush-dominated (67% of its block time on hardware), so removing reads
+cannot help it. Only stage 2 can.
+
+**Design, in three decisions.** The cache holds path -> inode NUMBER
+only, never the inode's contents: those change on every write, so
+caching them would need invalidating on the hot path instead of the rare
+one. It is flushed from `ncache_flush()`, which create, delete, link,
+rename and unmount already call -- a second entry point would have to be
+added to all five, and the one that got missed would hand back another
+file's inode. And a FAILED resolution is deliberately not cached,
+because the thing that would make it wrong -- a create at that path --
+is common.
+
+**The test needed a decoy, and that is the part worth copying.** The
+obvious check -- write a file, read it, delete it, recreate it, read it
+-- PASSES with the invalidation disabled, because the recreated file is
+handed the inode the deleted one just freed, so the stale entry is
+accidentally correct. Creating a second file in between takes that inode
+and forces the recreate onto a different one, which is the case a stale
+entry gets wrong. Without the decoy the test proves nothing.
+
+If more is wanted here later, the bigger version is: `struct open_file` holds
 `char name[64]` and a position, so give it the resolved inode as well
 and a read or write on an open fd skips resolution entirely. That needs
 an `fs_ops` entry taking a resolved handle, or a VFS inode cache keyed
