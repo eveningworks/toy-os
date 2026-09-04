@@ -39,6 +39,13 @@ static inline int   dup2(int o, int n)            { return sys_dup2(o, n); }
 static inline off_t lseek(int fd, off_t off, int whence) {
     return (off_t)sys_lseek(fd, off, whence);
 }
+static inline int   fsync(int fd)                 { return sys_fsync(fd); }
+// THE SAME CALL, and the duplication is honest rather than lazy.
+// fdatasync(2) may skip metadata not needed to retrieve the data -- and
+// here what a deferred write holds back IS the inode, so the metadata
+// it is allowed to skip is exactly what has to land for the bytes to be
+// findable. There is no cheaper subset to offer.
+static inline int   fdatasync(int fd)             { return sys_fsync(fd); }
 static inline int   unlink(const char *p)         { return sys_unlink(p); }
 static inline int   rmdir(const char *p)          { return sys_unlink(p); }
 static inline int   chdir(const char *p)          { return sys_chdir(p); }

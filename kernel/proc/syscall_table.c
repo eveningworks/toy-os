@@ -101,6 +101,7 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_STAT]          = { "stat",          sys_stat,          { A_PATH, A_HEX } },
     [SYS_LINK]          = { "link",          sys_link,          { A_PATH, A_PATH } },
     [SYS_SYNC]          = { "sync",          sys_sync,          { A_END } },
+    [SYS_FSYNC]         = { "fsync",         sys_fsync,         { A_FD } },
     [SYS_QUERY]         = { "query",         sys_query,         { A_HEX } },
     // The offset traces as a signed decimal and the whence as a plain
     // one: SEEK_SET/CUR/END would want a third argument formatter for

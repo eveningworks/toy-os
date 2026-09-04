@@ -354,6 +354,23 @@ the backend real hardware actually uses has no coverage -- test it with
 `vm.py --disk-kind ahci` by hand.
 
 
+## `fsync(fd)` IS SCOPED TO THE VOLUME, NOT THE FILE
+
+`SYS_FSYNC` commits the backend holding that file's path and flushes the
+device under it. Narrower than `sync` (other mounts are untouched),
+wider than POSIX describes -- nothing here is held per FILE, so there is
+no narrower thing to flush: a deferred transaction may carry several
+files' inodes and a device flush is a whole-drive operation anyway.
+
+**`fdatasync()` is the same call.** What a deferred write holds back IS
+the inode, so the metadata fdatasync may skip is exactly what has to
+land for the data to be findable.
+
+**It flushes the device, following Linux.** macOS's `fsync()` does not,
+which is why `F_FULLFSYNC` exists and every database there works around
+it.
+
+
 ## `storage.sync = batched` HOLDS A TRANSACTION OPEN, AND THREE THINGS MUST KEEP IT HONEST
 
 The transaction covers the INODE BLOCK only -- data and bitmaps are on

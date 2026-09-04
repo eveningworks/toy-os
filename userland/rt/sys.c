@@ -399,6 +399,10 @@ int sys_sync(void) {
     return (int)err(syscall0(SYS_SYNC));
 }
 
+int sys_fsync(int fd) {
+    return (int)err(syscall1(SYS_FSYNC, (uint64_t)(int64_t)fd));
+}
+
 // The message is zeroed before each call rather than partly filled: it
 // carries out-fields the kernel writes, and a stale `value` from a
 // previous call reading as this call's answer is the kind of bug that

@@ -288,6 +288,35 @@ uint64_t fs_generation(void) { return g_generation; }
 // a machine that has none and is not a measure of how much work this
 // did. Returns 0 if anything failed, and the caller must not treat that
 // as cosmetic: it means data is still only in RAM or only in the drive.
+// ONE FILE'S DURABILITY, which is what fsync(2) means -- but scoped to
+// that file's VOLUME, and the difference is worth stating rather than
+// glossing.
+//
+// There is no page cache here, so nothing is held per FILE: what is
+// deferred under `storage.sync = batched` is a journal transaction that
+// may carry several files' inode blocks at once, and a device flush is
+// a whole-drive operation either way. So this commits the backend
+// holding that path and flushes the device under it -- everything
+// needed for THIS file to be durable, plus whatever else shares the
+// transaction. Narrower than `sync` (other mounts are untouched) and
+// wider than POSIX promises.
+//
+// Per-file granularity would need the write-back page cache
+// docs/pagecache-design.md stages, which is precisely why that document
+// puts fsync AFTER it.
+int fs_sync_path(const char *path) {
+    struct resolved r;
+    if (!resolve(path, &r)) return 0;
+    if (r.m->fs->sync && !FS_OP(r.m, r.m->fs->sync())) {
+        klog_printf("fs: fsync FAILED -- %s could not commit\n", r.m->point);
+        return 0;
+    }
+    // A mount with no device (ramfs) has nothing to flush and is
+    // durable in the only sense it can be.
+    if (!r.m->dev) return 1;
+    return blkdev_flush(r.m->dev);
+}
+
 // The kernel's idle work, for any backend that defers something --
 // scheduler_idle() is its one owner (scheduler.c), and this sits beside
 // atac_idle() for the same reason: a threshold bounds how MUCH can

@@ -529,6 +529,19 @@ int sys_link(struct syscall_ctx *c) {
 // in the drive's volatile cache, one power cut from gone. It also left
 // `storage.sync = lazy` with nothing able to force durability, which is
 // that mode's whole safety story.
+// One file's durability, on the volume that holds it -- see
+// SYS_FSYNC's ABI comment for why it is scoped to the volume rather
+// than to the file, and why fdatasync is the same call.
+int sys_fsync(struct syscall_ctx *c) {
+    struct open_file *f = fd_get(c->pml4, (int)c->a0);
+    if (!f || f->kind != FD_KIND_FILE) {
+        c->regs[14] = (uint64_t)(int64_t)-EBADF;
+        return 0;
+    }
+    c->regs[14] = fs_sync_path(f->file.name) ? 0 : (uint64_t)(int64_t)-EIO;
+    return 0;
+}
+
 int sys_sync(struct syscall_ctx *c) {
     uint32_t wrote = 0;
     if (!fs_sync(&wrote)) {

@@ -557,6 +557,26 @@ struct listdir_request {
                        // interval is measured with, and this cannot move
                        // it.
 
+
+// RDI = an open file descriptor. Commits whatever the filesystem is
+// holding back for that file's volume and flushes the device under it,
+// so the bytes already written through this fd are on the platter when
+// it returns. 0, or -EBADF / -EIO.
+//
+// SCOPED TO THE VOLUME, not to the file, and the name is POSIX's rather
+// than a promise this kernel can keep more narrowly. Nothing is held
+// per file -- `storage.sync = batched` defers a journal transaction
+// that may carry several files' inodes, and a device flush is a
+// whole-drive operation regardless. So this is everything needed for
+// THIS file, plus whatever shares its transaction: narrower than
+// SYS_SYNC (other mounts are untouched), wider than POSIX describes.
+//
+// `fdatasync()` in tolibc calls this same number. There is no cheaper
+// subset here: what a batched write defers IS the inode, so the
+// metadata fdatasync is allowed to skip is exactly the thing that has
+// to land for the data to be findable.
+#define SYS_FSYNC 96
+
 #define SYS_LISTDIR_AT 94 // RDI = pointer to a `struct listdir_request`.
                           // SYS_LISTDIR with an OFFSET: fills the array
                           // from the `start`'th entry of the directory

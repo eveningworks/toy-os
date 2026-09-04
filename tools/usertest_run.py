@@ -215,6 +215,12 @@ TESTS = [
     # landing at the wrong offset reads the wrong letter -- a file of
     # identical bytes cannot tell a working seek from a dead one.
     ("seek_test", None, None, None),
+    # fsync(2) from ring 3. The KTESTs beside `storage.sync` cover the
+    # half that commits; this covers the half a PROGRAM sees -- the
+    # descriptor lookup, the kind check and the errno on a bad fd, none
+    # of which the kernel's own tests go near because they call
+    # fs_sync_path() directly and never touch a descriptor table.
+    ("fsync_test", None, None, None),
     # The C library's stream layer. Two of its required lines are load-
     # bearing and neither is the verdict: "atexit:BA" can only appear if
     # exit() ran the handlers in LIFO order AND flushed an unterminated

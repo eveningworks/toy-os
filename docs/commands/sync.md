@@ -18,3 +18,9 @@ Flushes everything buffered on the way to the platter, on **every mounted volume
 2. the **drive's own** volatile cache, which only a device flush empties.
 
 It used to do stage 1 alone, and skip both when the ATA cache was absent — so on AHCI or virtio-blk, which is every modern machine, `sync` asked the disk for nothing and reported success. The sector count is stage 1 only, so **zero is normal and does not mean nothing happened**: on a machine with no software cache the real work is the flush every mounted disk just took.
+**`fsync(2)` is the per-file version.** `SYS_FSYNC` takes a descriptor,
+commits the backend holding that file's path and flushes the device
+under it, leaving other mounts alone. A program that wants its own data
+durable at a moment of its choosing calls that; this command is for the
+whole machine. It matters most under `storage.sync = batched`, where a
+write returns before its commit — see `docs/pagecache-design.md`.

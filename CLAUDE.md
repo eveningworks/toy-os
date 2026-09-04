@@ -866,6 +866,7 @@ whenever a headline here tells you something you did not already know.
 - **`/etc` on the persistent filesystem is the config-file convention.**
 - **A RESOLVED PATH IS CACHED, AND `ncache_flush()` IS WHAT INVALIDATES IT**
 - **`sync` IS `fs_sync()`, IT FLUSHES EVERY MOUNT, AND ZERO SECTORS IS NORMAL**
+- **`fsync(fd)` IS SCOPED TO THE VOLUME, NOT THE FILE**
 - **`storage.sync = batched` HOLDS A TRANSACTION OPEN, AND THREE THINGS MUST KEEP IT HONEST**
 - **`storage.sync = lazy` TURNS OFF THE JOURNAL'S BARRIERS, AND THAT IS ext4's `nobarrier`**
 - **A READ THAT CROSSES BLOCKS COALESCES, AND A POINTER TABLE IS CACHED PER LEVEL -- BUT ONLY UNTIL THE NEXT WRITE**

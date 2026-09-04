@@ -250,6 +250,10 @@ int     sys_link(const char *existing, const char *newpath);
 // EIO if some could NOT be written, which is the one disk answer a
 // caller must not read as success: that data is in RAM only.
 int     sys_sync(void);
+// One file's durability: commits what the filesystem holds back for
+// that file's volume and flushes the device under it. Scoped to the
+// VOLUME rather than the file -- see SYS_FSYNC's ABI comment.
+int     sys_fsync(int fd);
 
 // Convenience over sys_write(): writes a NUL-terminated string to
 // stdout. The one wrapper here that is not a bare syscall, because

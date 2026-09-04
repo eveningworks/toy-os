@@ -335,21 +335,36 @@ rather than as a single switch-flip nobody can bisect.
 
 **Buys:** the flush cost -- the 53% and 67% above.
 
-### Stage 3 -- `fsync()` and `fdatasync()`
+### Stage 3 -- `fsync()` and `fdatasync()`  [BUILT, scoped to the VOLUME]
 
-Now they mean something: flush this file's dirty pages and commit.
-Per-file granularity is possible ONLY because the cache is keyed by
-file; the sector cache below could never have offered it, since it is
-keyed by LBA and cannot know which file owns a sector.
+`SYS_FSYNC` (96) takes an fd, commits the backend holding that file's
+path and flushes the device under it. `fsync()` and `fdatasync()` in
+`<unistd.h>` both call it.
 
-Three edits, as every syscall is: a number in `syscall_abi.h`, a handler
-plus its prototype, a row in `syscall_table.c`. Highest number in use is
-95.
+**SCOPED TO THE VOLUME, NOT THE FILE, and that is the honest name for
+what it does.** This document assumed fsync would arrive after the page
+cache and inherit per-file granularity from it. It arrived before,
+because stage 1a made it necessary -- `batched` gives a program no way
+to force durability at a moment of its choosing, and `sync` is
+whole-system. Nothing is held per file: the deferred transaction may
+carry several files' inode blocks, and a device flush is a whole-drive
+operation regardless. So it is narrower than `sync` (other mounts are
+untouched) and wider than POSIX describes, and the ABI comment says so.
 
-**A DECISION TO MAKE HERE, not to inherit:** does `fsync()` issue a
-device flush, or only push to the drive? Linux's does flush; macOS's
-does NOT, which is why `F_FULLFSYNC` exists and why every database on
-macOS has a workaround. Follow Linux.
+**`fdatasync()` is the same call, deliberately.** It may skip metadata
+not needed to retrieve the data -- and what a deferred write holds back
+IS the inode, so the metadata it is allowed to skip is exactly what has
+to land for the bytes to be findable. There is no cheaper subset to
+offer, and pretending otherwise would be a second name for one
+behaviour.
+
+Per-file granularity still needs the page cache below.
+
+**IT ISSUES A DEVICE FLUSH, following Linux rather than macOS.**
+macOS's `fsync()` pushes to the drive and does NOT flush its cache,
+which is why `F_FULLFSYNC` exists and why every database on macOS has a
+workaround for it. A call that returns without the data being on the
+platter is a trap dressed as an optimisation.
 
 ### Stage 4 -- the writeback interval as a setting  [BUILT, with stage 1a]
 

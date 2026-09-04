@@ -224,6 +224,7 @@ int sys_lseek(struct syscall_ctx *c);
 int sys_fstat(struct syscall_ctx *c);
 int sys_link(struct syscall_ctx *c);
 int sys_sync(struct syscall_ctx *c);
+int sys_fsync(struct syscall_ctx *c);
 
 
 // kernel/proc/proc_syscalls.c -- processes, the heap, and time

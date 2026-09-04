@@ -157,6 +157,57 @@ KTEST("storage", "a batched write is visible to a reader before it commits") {
     fs_delete(SCRATCH);
 }
 
+// fsync() MUST COMMIT, and the assertion is on WRITES rather than on
+// flushes: it flushes the device whatever the backend does, so a flush
+// count rises even if the commit were skipped entirely. A commit
+// writes -- journal data, the header, the target, the header again --
+// and a device flush writes nothing.
+KTEST("storage", "fsync commits a batched write") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+
+    static uint8_t buf[4096];
+    k_memset(buf, 0x6D, sizeof buf);
+    int restore = storage_sync_strict(), restore_b = storage_sync_batched();
+
+    fs_delete(SCRATCH);
+    KTEST_ASSERT_EQ(fs_touch(SCRATCH), 1);
+    storage_config_set_mode_for_test(1, 1);   // batched
+
+    KTEST_ASSERT_EQ(fs_write_range(SCRATCH, 0, buf, sizeof buf), 1);
+    uint64_t w0 = 0;
+    blk_stat_get(BLK_STAT_WRITE, &w0, NULL, NULL, NULL);
+
+    KTEST_ASSERT_EQ(fs_sync_path(SCRATCH), 1);
+
+    uint64_t w1 = 0;
+    blk_stat_get(BLK_STAT_WRITE, &w1, NULL, NULL, NULL);
+    KTEST_ASSERT(w1 > w0);
+
+    // ...AND IT IS SCOPED TO A MOUNT, which is the claim that separates
+    // it from `sync`. Syncing a path on a DIFFERENT mount must not
+    // commit this one's transaction.
+    //
+    // Not tested with a nonexistent path: mount_resolve() falls back to
+    // the root for any absolute path, so "/nonexistent/x" is a perfectly
+    // ordinary path ON the root mount and syncing it is correct. There
+    // is no such thing as a path with no mount, which is what the first
+    // version of this check assumed.
+    if (fs_exists("/boot")) {
+        KTEST_ASSERT_EQ(fs_write_range(SCRATCH, sizeof buf, buf, sizeof buf), 1);
+        uint64_t o0 = 0;
+        blk_stat_get(BLK_STAT_WRITE, &o0, NULL, NULL, NULL);
+        fs_sync_path("/boot");
+        uint64_t o1 = 0;
+        blk_stat_get(BLK_STAT_WRITE, &o1, NULL, NULL, NULL);
+        // A tfs3 commit is four block writes; /boot is FAT32 and
+        // declares no `sync`, so syncing it can only flush a device.
+        KTEST_ASSERT(o1 - o0 < 4);
+    }
+
+    storage_config_set_mode_for_test(restore, restore_b);
+    fs_delete(SCRATCH);
+}
+
 // A DEFERRED COMMIT MUST LAND ON ITS OWN. Without the idle path,
 // `batched` commits only when another transaction opens, a second mount
 // activates, `sync` runs, or the volume unmounts -- so a machine that
