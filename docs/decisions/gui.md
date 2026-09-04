@@ -12,6 +12,45 @@ without opening something else is not finished.
 
 ---
 
+## Reading the bochs adapter's capabilities is a WRITE, so it happens once
+
+`bochs_accepts()` put the adapter into `DISPI_GETCAPS`, read the maximum
+resolution and video memory, then wrote `ENABLE` back -- under a comment
+saying "A read of capabilities only; the display is untouched". That
+comment was wrong in the way that matters: GETCAPS is entered and left
+by WRITING a live ENABLE register, and `bochs_drv_mode_count()` calls
+`bochs_accepts()` once per ladder mode.
+
+So every enumeration of the mode list toggled ENABLE dozens of times
+while the desktop was on screen. Reported from a real session as the
+screen breaking into coloured vertical bars for about a second on
+opening System Settings, on selecting its Screen page, and on changing
+resolution -- which are exactly the three things that enumerate modes.
+Captured at 1920x1080: one frame per trigger where QEMU's surface is
+**1920x56**, magenta and yellow-green.
+
+The limits cannot change while the machine runs, so they are read once
+at probe and answered from RAM. Three opens, zero bad frames, against
+one per open before.
+
+**The fix's own first version broke something else, and how says more
+than what.** It restored ENABLE by rebuilding the value from `g_active`
+-- which is 0 during probe, so the call DISABLED an adapter GRUB had
+left enabled, and the mode-adoption path below it then claimed a display
+that was switched off. `settings_test` went from 71 passed to 68 passed
+and 1 failed, on a hover check with no visible connection to the
+display. It saves and restores the register now, which is correct
+wherever the call happens rather than correct where it was first put.
+
+**The general shape, and it is not specific to this adapter:** a
+function whose comment says it only reads, which reaches hardware
+through a mode register, is worth distrusting. The cost here was
+invisible to every automated test -- the suite drives the GUI and
+asserts on settled frames, and this defect lives entirely in the frames
+between them.
+
+
+
 ## Windows remember their geometry per APP, saved on close, keyed by a string
 
 Every app reopened at a cascade position and its `default_size()`, so a

@@ -198,19 +198,36 @@ static int bochs_try_mode(uint32_t w, uint32_t h) {
     return 1;
 }
 
-// The modes this adapter accepts: the ladder, filtered by what GETCAPS
-// says and by video memory -- the same two checks bochs_try_mode()
-// makes, so a listed mode is one it will set. A read of capabilities
-// only; the display is untouched.
-static int bochs_accepts(uint32_t w, uint32_t h) {
+// THE ADAPTER'S LIMITS, READ ONCE. Asking for them means putting the
+// adapter into GETCAPS and taking it out again, which is a WRITE to a
+// live ENABLE register -- so this is emphatically not the "read of
+// capabilities only; the display is untouched" its comment used to
+// claim. The limits cannot change while the machine runs, so they are
+// read at probe and answered from RAM afterwards.
+static uint16_t g_caps_max_w, g_caps_max_h;
+static uint32_t g_caps_mem_64k;
+
+// RESTORES WHAT WAS THERE, read back rather than derived. The version
+// this replaced rebuilt the ENABLE value from `g_active` -- which is 0
+// during probe, so calling it there DISABLED an adapter that GRUB had
+// left enabled, and the mode-adoption path then claimed a display that
+// was switched off. Saving and restoring the register makes the call
+// safe wherever it happens.
+static void bochs_read_caps(void) {
+    uint16_t saved = dispi_read(DISPI_INDEX_ENABLE);
     dispi_write(DISPI_INDEX_ENABLE, DISPI_GETCAPS);
-    uint16_t max_w = dispi_read(DISPI_INDEX_XRES);
-    uint16_t max_h = dispi_read(DISPI_INDEX_YRES);
-    uint32_t mem_64k = dispi_read(DISPI_INDEX_VIDEO_MEMORY_64K);
-    dispi_write(DISPI_INDEX_ENABLE, g_active ? (DISPI_ENABLED | DISPI_LFB_ENABLED | DISPI_NOCLEARMEM)
-                                             : DISPI_DISABLED);
-    if (w > max_w || h > max_h) return 0;
-    if (mem_64k && (uint64_t)w * h * 4 > (uint64_t)mem_64k * 65536ull) return 0;
+    g_caps_max_w = dispi_read(DISPI_INDEX_XRES);
+    g_caps_max_h = dispi_read(DISPI_INDEX_YRES);
+    g_caps_mem_64k = dispi_read(DISPI_INDEX_VIDEO_MEMORY_64K);
+    dispi_write(DISPI_INDEX_ENABLE, saved);
+}
+
+// The modes this adapter accepts: the ladder, filtered by the cached
+// limits and by video memory -- the same two checks bochs_try_mode()
+// makes, so a listed mode is one it will set. Touches no register.
+static int bochs_accepts(uint32_t w, uint32_t h) {
+    if (w > g_caps_max_w || h > g_caps_max_h) return 0;
+    if (g_caps_mem_64k && (uint64_t)w * h * 4 > (uint64_t)g_caps_mem_64k * 65536ull) return 0;
     return 1;
 }
 
@@ -244,6 +261,11 @@ static int bochs_drv_probe(void) {
     struct display_surface grub;
     extern void vesafb_get_probe_surface(struct display_surface *out);
     vesafb_get_probe_surface(&grub);
+
+    // THE LIMITS, ONCE. Reading them toggles ENABLE on a live adapter,
+    // so it must not happen while anything is on screen -- see
+    // bochs_read_caps(). Here it is free: nothing has been drawn yet.
+    bochs_read_caps();
 
     int w, h;
     for (int i = 0; display_mode_candidate(i, &w, &h); i++) {
