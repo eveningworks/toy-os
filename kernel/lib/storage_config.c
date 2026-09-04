@@ -33,11 +33,28 @@
 #include "setting.h"
 #include "etc_config.h"
 #include "string.h"
+#include "kfmt.h"      // k_snprintf
+#include "timer.h"     // PIT_HZ
 #include "storage_config.h"
 #include "initcall.h"
 
 #define STORAGE_CONFIG_FILE "/etc/storage.conf"
 #define SYNC_KEY "sync"
+#define WRITEBACK_KEY "writeback_interval"
+
+// SECONDS OF QUIET before a deferred commit is forced. The visible half
+// of what ext4 spells `commit=5` and Linux spells
+// dirty_expire_centisecs. Only `batched` consults it; in `strict` every
+// write commits before it returns and there is nothing to expire.
+//
+// 1 second by default, matching the sector cache's own idle threshold
+// (ATAC_IDLE_TICKS) so the two halves of "a quiet machine ends up on
+// the platter" agree. The ceiling is deliberately low: this is how long
+// a crash can cost you, and a number nobody would accept as a data-loss
+// window is not a number to offer.
+#define WRITEBACK_MIN 1
+#define WRITEBACK_MAX 30
+#define WRITEBACK_DEFAULT 1
 
 // ORDERED BY SAFETY, strongest first, because that is the order a
 // person reads a choice list in and the default must be the first thing
@@ -57,9 +74,16 @@ static const char *const g_modes[] = { "strict", "batched", "lazy" };
 // has to be the one that needs no file to have been read.
 static int g_strict = 1;    // 0 only in `lazy`: whether barriers are issued
 static int g_batched = 0;   // 1 only in `batched`: whether commits defer
+static int g_writeback_s = WRITEBACK_DEFAULT;
 
 int storage_sync_strict(void) { return g_strict; }
 int storage_sync_batched(void) { return g_batched; }
+
+// In PIT TICKS, converted here rather than at the call site so the
+// unit conversion lives with the setting that owns the number.
+uint32_t storage_writeback_ticks(void) {
+    return (uint32_t)g_writeback_s * PIT_HZ;
+}
 
 static int mode_choice(int index, char *out, uint32_t out_size) {
     if (index < 0 || index >= MODE_COUNT) return 0;
@@ -88,6 +112,49 @@ static int mode_apply(const char *value) {
                ? SETTING_SAVED : SETTING_UNSAVED;
 }
 
+static void writeback_get(char *out, uint32_t out_size) {
+    k_snprintf(out, out_size, "%d", g_writeback_s);
+}
+
+static int writeback_apply(const char *value) {
+    if (!value) return SETTING_INVALID;
+    int n = 0;
+    for (const char *p = value; *p; p++) {
+        if (*p < '0' || *p > '9') return SETTING_INVALID;
+        n = n * 10 + (*p - '0');
+        if (n > WRITEBACK_MAX) return SETTING_INVALID;
+    }
+    if (n < WRITEBACK_MIN) return SETTING_INVALID;
+    g_writeback_s = n;
+    return etc_config_set(STORAGE_CONFIG_FILE, WRITEBACK_KEY, value)
+               ? SETTING_SAVED : SETTING_UNSAVED;
+}
+
+// UNAVAILABLE IN EVERY MODE BUT `batched`, with the reason said rather
+// than the control merely greyed out. In `strict` a write commits
+// before it returns and in `lazy` nothing is deferred either, so there
+// is no interval to set -- and a spinbox that silently does nothing is
+// the failure `setting.unavailable` exists to prevent.
+static const char *writeback_unavailable(void) {
+    return g_batched ? 0 : "Only Grouped writes defer a commit long enough to expire";
+}
+
+static const struct setting g_writeback_setting = {
+    .name  = WRITEBACK_KEY,
+    .label = "Group writes for",
+    .type  = SETTING_TYPE_INT,
+    .file  = STORAGE_CONFIG_FILE,
+    .category = "Storage",
+    .group    = "Filesystem",
+    .min   = WRITEBACK_MIN,
+    .max   = WRITEBACK_MAX,
+    .step  = 1,
+    .unit  = "s",
+    .get   = writeback_get,
+    .apply = writeback_apply,
+    .unavailable = writeback_unavailable,
+};
+
 static const struct setting g_sync_setting = {
     .name  = SYNC_KEY,
     .label = "Write durability",
@@ -102,6 +169,7 @@ static const struct setting g_sync_setting = {
 
 void storage_config_setting_register(void) {
     setting_register(&g_sync_setting);
+    setting_register(&g_writeback_setting);
 }
 
 void storage_config_set_mode_for_test(int strict, int batched) {
@@ -114,6 +182,13 @@ static struct etc_config_buf g_cfg;
 void storage_config_init(void) {
     char value[16];
     etc_config_load(STORAGE_CONFIG_FILE, &g_cfg);
+    if (etc_config_buf_get(&g_cfg, WRITEBACK_KEY, value, sizeof value)) {
+        int n = 0, ok = value[0] != '\0';
+        for (const char *p = value; *p && ok; p++) {
+            if (*p < '0' || *p > '9') ok = 0; else n = n * 10 + (*p - '0');
+        }
+        if (ok && n >= WRITEBACK_MIN && n <= WRITEBACK_MAX) g_writeback_s = n;
+    }
     if (etc_config_buf_get(&g_cfg, SYNC_KEY, value, sizeof value)) {
         // A hand-edited file reaches this reader without passing
         // through setting_set(), so it is validated here too -- and an

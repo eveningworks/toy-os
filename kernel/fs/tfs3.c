@@ -24,6 +24,7 @@
 #include "string.h"
 #include "block.h"    // TFS3 talks to a BLOCK DEVICE, not to a disk --
                     // that is what lets a live image mount from RAM
+#include "timer.h"          // pit_ticks() -- the idle commit
 #include "storage_config.h" // storage.sync -- whether the barriers are real
 #include "block_stat.h"     // the read counter lookup() brackets itself with
 #include "clocksource.h"    // clocksource_now_ns()
@@ -256,6 +257,7 @@ static int g_txn_count = 0;
 // hazard they close are documented above txn_begin().
 static int g_txn_deferred;
 static struct t3_state *g_txn_owner;
+static uint64_t g_txn_staged_tick;   // when the deferred txn last grew
 static int g_txn_credits = 0; // what txn_begin() promised; see txn_stage()
 
 // FLUSHES BOTH CACHES, and the resolved-path one rides here rather than
@@ -1622,6 +1624,7 @@ static int do_write_inner(uint64_t ino, struct t3_inode *node, uint64_t offset,
             g_txn_deferred = 1;
             g_txn_owner = S;
         }
+        g_txn_staged_tick = pit_ticks();
         if (!txn_stage_inode(ino, node)) {
             // Out of slots: commit what is there and start again. The
             // retry cannot fail for the same reason, because the fresh
@@ -3521,6 +3524,31 @@ static int tfs3_sync(void) {
     return txn_flush_deferred();
 }
 
+// BOUNDS HOW LONG A DEFERRED COMMIT CAN SIT. Without this, `batched`
+// lands a transaction only when another one opens, a second mount
+// becomes active, `sync` runs, or the volume unmounts -- so a machine
+// that writes a file and is then left alone could hold that inode
+// update indefinitely. The dirty-slot ceiling bounds how MUCH
+// accumulates; this bounds how long, which is the same pair
+// `atac_idle()` already implements for the sector cache.
+// COUNTED, because a test cannot otherwise tell an idle commit from
+// somebody else's. Anything that opens a transaction commits the
+// deferred one on its way past, and the desktop is always writing --
+// so "a commit happened after waiting" is true whether or not this
+// function does anything at all. That is exactly how the first version
+// of the test for it passed with the idle path disabled.
+static uint64_t g_idle_commits;
+
+uint64_t tfs3_idle_commits(void) { return g_idle_commits; }
+
+static void tfs3_idle(void) {
+    if (!g_txn_deferred) return;
+    uint32_t quiet = storage_writeback_ticks();
+    if (pit_ticks() - g_txn_staged_tick < quiet) return;
+    g_idle_commits++;
+    txn_flush_deferred();
+}
+
 const struct fs_ops tfs3_ops = {
     .name = "tfs3",
     // Format truths, not implementation status: inodes and epoch
@@ -3560,6 +3588,7 @@ const struct fs_ops tfs3_ops = {
     .stat = tfs3_stat,
     .disk_usage = tfs3_disk_usage,
     .sync = tfs3_sync,
+    .idle = tfs3_idle,
     .check = tfs3_check,
     .link = tfs3_link, // optional op, paired with FS_CAP_HARDLINKS above
 };

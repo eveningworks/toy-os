@@ -288,6 +288,22 @@ uint64_t fs_generation(void) { return g_generation; }
 // a machine that has none and is not a measure of how much work this
 // did. Returns 0 if anything failed, and the caller must not treat that
 // as cosmetic: it means data is still only in RAM or only in the drive.
+// The kernel's idle work, for any backend that defers something --
+// scheduler_idle() is its one owner (scheduler.c), and this sits beside
+// atac_idle() for the same reason: a threshold bounds how MUCH can
+// accumulate, only a timer bounds how LONG a machine nobody is touching
+// holds it.
+//
+// Cheap when there is nothing to do, because it runs in every wait loop
+// in the kernel: a backend with no `idle` costs one NULL test.
+void fs_idle(void) {
+    for (int i = 0; i < mount_count(); i++) {
+        const struct mount *m = mount_at(i);
+        if (!m || !m->fs || !m->fs->idle) continue;
+        FS_OP_VOID(m, m->fs->idle());
+    }
+}
+
 int fs_sync(uint32_t *wrote_out) {
     uint32_t wrote = 0, pending = 0;
     int ok = 1;

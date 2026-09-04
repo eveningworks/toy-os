@@ -2629,6 +2629,12 @@ void scheduler_idle(void) {
     // there, so a machine nobody is touching ends up with its writes on
     // the platter rather than waiting for the next barrier.
     atac_idle();
+    // ...and the same half of the policy for a FILESYSTEM that is
+    // holding a journal transaction open (storage.sync = batched). The
+    // slot ceiling bounds how much accumulates; this bounds how long,
+    // so a machine that wrote a file and was then left alone does not
+    // hold that inode update indefinitely.
+    fs_idle();
     // Received frames, and the protocols above them. The NIC's own
     // interrupt only queues a frame (kernel/drivers/net/net.c); this is
     // where ARP gets answered and an echo request becomes a reply, so a

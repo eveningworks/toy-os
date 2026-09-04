@@ -148,6 +148,10 @@ uint32_t fs_read_range(const char *path, uint64_t offset, void *buf, uint32_t le
 // data is still only in RAM, or only in the drive's volatile cache.
 int fs_sync(uint32_t *wrote_out);
 
+// Idle-time work for any backend that defers something. Called from
+// scheduler_idle(); cheap when there is nothing to do.
+void fs_idle(void);
+
 // Streaming write -- writes exactly `len` bytes from `buf` starting at
 // byte `offset`, extending the file (allocating new blocks as needed)
 // if `offset + len` goes past the current end. NOT the same as

@@ -1,0 +1,2 @@
+Description=How long grouped writes may wait before being committed
+Widget=spinbox

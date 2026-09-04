@@ -9,6 +9,8 @@
 #include "storage_config.h"
 #include "block_stat.h"
 #include "fs.h"
+#include "timer.h"
+#include "tfs3.h"
 #include "string.h"
 
 #define SCRATCH "/tmp/ktest_sync.bin"
@@ -152,6 +154,53 @@ KTEST("storage", "a batched write is visible to a reader before it commits") {
     }
 
     storage_config_set_mode_for_test(restore, restore_b);
+    fs_delete(SCRATCH);
+}
+
+// A DEFERRED COMMIT MUST LAND ON ITS OWN. Without the idle path,
+// `batched` commits only when another transaction opens, a second mount
+// activates, `sync` runs, or the volume unmounts -- so a machine that
+// wrote a file and was then left alone would hold that inode update
+// indefinitely, which is a durability hole rather than a slow path.
+//
+// Asserted by WAITING rather than by calling sync: calling it would
+// prove the commit works, which is already covered, not that anything
+// makes it happen unprompted.
+KTEST("storage", "a deferred commit lands on the idle path, unprompted") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+
+    static uint8_t buf[4096];
+    k_memset(buf, 0x2B, sizeof buf);
+    int restore = storage_sync_strict(), restore_b = storage_sync_batched();
+
+    fs_delete(SCRATCH);
+    KTEST_ASSERT_EQ(fs_touch(SCRATCH), 1);
+    storage_config_set_mode_for_test(1, 1);   // batched
+
+    uint64_t w0 = 0;
+    blk_stat_get(BLK_STAT_WRITE, &w0, NULL, NULL, NULL);
+    KTEST_ASSERT_EQ(fs_write_range(SCRATCH, 0, buf, sizeof buf), 1);
+
+    // Long enough for the interval to expire several times over, and
+    // bounded so a broken idle path fails rather than hangs. fs_idle()
+    // is what scheduler_idle() calls; driving it directly keeps the
+    // test independent of whether this machine happens to go idle.
+    // COUNTS THE IDLE PATH'S OWN COMMITS, not commits in general.
+    // Asserting "a commit happened" cannot work: anything that opens a
+    // transaction commits the deferred one on its way past, and the
+    // desktop is always writing -- so the first version of this test
+    // passed with the idle path disabled entirely.
+    uint64_t idle0 = tfs3_idle_commits();
+    int landed = 0;
+    uint64_t deadline = pit_ticks() + storage_writeback_ticks() * 4 + PIT_HZ;
+    while (pit_ticks() < deadline) {
+        fs_idle();
+        if (tfs3_idle_commits() > idle0) { landed = 1; break; }
+    }
+    (void)w0;
+    storage_config_set_mode_for_test(restore, restore_b);
+    KTEST_ASSERT(landed);
+
     fs_delete(SCRATCH);
 }
 

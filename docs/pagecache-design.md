@@ -351,11 +351,33 @@ device flush, or only push to the drive? Linux's does flush; macOS's
 does NOT, which is why `F_FULLFSYNC` exists and why every database on
 macOS has a workaround. Follow Linux.
 
-### Stage 4 -- the writeback interval as a setting
+### Stage 4 -- the writeback interval as a setting  [BUILT, with stage 1a]
 
-`storage.writeback_interval`, the visible half of ext4's `commit=5` and
-Linux's `dirty_expire_centisecs`. Only meaningful once stage 2 exists,
-which is why it is last rather than bundled with the mode.
+`storage.writeback_interval` (seconds, 1-30, default 1), the visible
+half of ext4's `commit=5` and Linux's `dirty_expire_centisecs`. It
+landed WITH stage 1a rather than after it, because that stage created
+the thing it bounds.
+
+**It is not a nicety, it closes a hole.** `batched` as first written
+committed only when another transaction opened, a second mount became
+active, `sync` ran, or the volume unmounted -- so a machine that wrote a
+file and was then left alone could hold that inode update
+INDEFINITELY. The idle path (`fs_ops.idle` -> `tfs3_idle()`, called from
+`scheduler_idle()` beside `atac_idle()`) bounds how long; the journal's
+slot ceiling already bounded how much. Both halves, the same shape the
+sector cache has had all along.
+
+The setting reports itself UNAVAILABLE outside `batched`, with the
+reason, rather than offering a spinbox that does nothing: in `strict` a
+write commits before it returns, and in `lazy` nothing defers either.
+
+**AND THE TEST FOR IT PASSED WITH THE IDLE PATH DISABLED**, which is the
+second time on this feature that the obvious assertion was satisfied by
+somebody else's work. "A commit happened after waiting" is true whether
+or not the idle path exists, because anything that opens a transaction
+commits the deferred one on its way past and the desktop is always
+writing. It counts the idle path's OWN commits now
+(`tfs3_idle_commits()`), which is the only way to tell the two apart.
 
 ## The honest case against
 

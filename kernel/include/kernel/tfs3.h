@@ -19,4 +19,9 @@ extern const struct fs_ops tfs3_ops;
 // traffic beside it. Any pointer may be NULL.
 void tfs3_lookup_stats(uint64_t *calls, uint64_t *reads, uint64_t *ns);
 
+// How many transactions the IDLE path has forced (storage.sync =
+// batched). Distinct from commits caused by anything else opening a
+// transaction, which is the only way a test can tell the two apart.
+uint64_t tfs3_idle_commits(void);
+
 #endif

@@ -1,6 +1,8 @@
 #ifndef STORAGE_CONFIG_H
 #define STORAGE_CONFIG_H
 
+#include <stdint.h>
+
 // `storage.sync` -- whether a write is durable when it returns.
 //
 // TFS3 commits one journal transaction per fs_write*() call and ends it
@@ -17,6 +19,11 @@
 // The choices are ext4's `barrier`/`nobarrier` under different names.
 int storage_sync_strict(void);  // 0 only in `lazy`: are barriers issued?
 int storage_sync_batched(void); // 1 only in `batched`: do commits defer?
+
+// How long a deferred commit may sit before the idle path forces it,
+// in PIT ticks. ext4's `commit=` and Linux's dirty_expire_centisecs,
+// made visible. Meaningless outside `batched`.
+uint32_t storage_writeback_ticks(void);
 
 void storage_config_init(void);          // adopt /etc/storage.conf at boot
 void storage_config_setting_register(void);

@@ -373,8 +373,18 @@ If you touch this, know the three:
   `read_block()` -- `read_inode()` reads one SECTOR, so a block-level
   overlay misses the only read that matters.
 
+- **The idle path is what bounds how LONG a commit can sit.**
+  `fs_ops.idle` -> `tfs3_idle()`, from `scheduler_idle()` beside
+  `atac_idle()`, on `storage.writeback_interval` seconds of quiet.
+  Without it `batched` can hold an inode update indefinitely on a
+  machine nobody is touching.
+
 **And a test here needs to EXTEND a file**, not re-write one: if the
 size never changes, a stale inode looks exactly like a current one.
+**A test for the idle path must count the IDLE path's own commits**
+(`tfs3_idle_commits()`), because anything opening a transaction commits
+the deferred one anyway -- "a commit happened" passes with the idle path
+disabled entirely.
 
 
 ## `storage.sync = lazy` TURNS OFF THE JOURNAL'S BARRIERS, AND THAT IS ext4's `nobarrier`

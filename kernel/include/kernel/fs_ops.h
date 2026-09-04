@@ -248,6 +248,17 @@ struct fs_ops {
     // which fs_sync() must not treat as cosmetic.
     int (*sync)(void);
 
+    // Called from the kernel's idle work when nothing else is running.
+    // OPTIONAL. A backend that defers anything uses it to bound how LONG
+    // that can sit unwritten -- the same half of the policy
+    // `atac_idle()` provides for the sector cache, and for the same
+    // reason: a threshold bounds how MUCH accumulates, only a timer
+    // bounds how long a machine nobody is touching holds it.
+    //
+    // Must be cheap when there is nothing to do: it runs in every wait
+    // loop in the kernel.
+    void (*idle)(void);
+
     int (*check)(int repair, struct fs_check_result *out);
 
     // ---- optional ops (the caps rule becomes real here) ----
