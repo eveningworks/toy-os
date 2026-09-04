@@ -3052,6 +3052,98 @@ caller is a test.
 
 - [x] ~~The toolkit as a real shared library rather than static per client~~ DONE 2026-09-04 -- `/lib/libuapp.so`; the measurement that decided it is in `docs/decisions.md` ("The toolkit is a shared library"). What follows is the note as it stood. Right now `ugfx.o` + `uui.o` are linked per binary, which is fine at two clients and wasteful at ten. The font already set the precedent for the answer (share one copy, no drift) -- but sharing CODE needs the dynamic-linking work in Dynamic linking / shared libraries, which is why this is a note and not a task yet.
 
+### Finish the app-deduplication pass: three WIP branches (WM tray popups, Notepad onto the toolkit, `utest.h`) plus the smaller survey items
+
+Started 2026-09-04 and stopped mid-flight for budget. What LANDED on
+main that day: `lib/usetting.h`, `lib/udate.h`, `human_size_iec()`,
+the `uui_*_height()` accessors, and `/lib/libuapp.so`. What did NOT
+land is on three local branches, each a single WIP commit made by a
+worktree agent on top of `84725d17`, each UNTESTED beyond what its
+note says. **Merge one at a time onto main, finish its list, run its
+tools, then `gui_regress.py --logs`, then `preflight.sh`.** Expect
+small conflicts in `userland/ui/uui_menubar.h`/`uui_statusbar.h` (the
+Notepad branch re-added the `_height()` accessors main already has).
+
+- **`worktree-agent-abef8b8c7b3674da6` (`wm:` WIP, ec26a4a5).**
+  `userland/wm/tray_slider_popup.c/.h` is the shared slider flyout (a
+  `uui_scale` row, the debounced write, drag/wheel/hover/click);
+  `volume_popup.c` and `brightness_popup.c` sit on it. `wm_popup_place()`
+  + `WM_POPUP_MARGIN` in `wm_overlay.h`, used by both flyouts, the
+  calendar and the context menu. `struct wm_overlay.close` +
+  `wm_overlay_close_others()`, used by every open path, `wm.c`'s Super
+  key and `wm_input.c` -- this fixes the hole where Super left an open
+  volume or brightness flyout under the Start menu. Builds; `volume_test`
+  28/28 and `brightness_test` 19/19 on a guest, including a new Super-key
+  check and a pixel thumb check. LEFT: the positive control for the
+  Super check (revert `wm_overlay_close_others()` in the Super path and
+  watch the new check go red); `calendar`, `hover`, `idle`, `taskbar`,
+  `settings`, `menubar` tools; the `docs/conventions/gui.md` entries for
+  the volume and brightness flyouts and the overlay table (name the new
+  file and the `close` verb); the five static checks.
+- **`worktree-agent-a5da01fc058804666` (`notepad:` WIP, 0a6cde4e).**
+  `notepad.c` 1097 -> ~690 lines: the private Open/Save dialog is a
+  `uui_dialog` whose body is a `uui_layout` of `uui_fileview` +
+  `uui_textbox`; menu bar, status bar and dialog are declared in
+  `desc.widgets`; `put_int` (which printed every negative as 0),
+  `slen`/`scopy`/`seq` and the hand-rolled layout logger are gone. The
+  toolkit changed too: `uui_dialog` gained body/focus/children/describe
+  ops, `uui_route.c` lets a container own the overlay and absorb the
+  wheel, `uui_statusbar` gained `describe` (`pane i`). Compiles; NOTHING
+  run. LEFT: `menubar_test.py`'s layout keys move to the toolkit
+  vocabulary (`menu.title i`, `menu.popup l`, `menu.item l i`, `status`,
+  `status.pane i`); `notepad_client_test.py`'s Open row index must
+  follow the fileview's directories-first order; `notepad`, `menubar`,
+  `uapp`, `keyup`, `dialog` tools; docs that still describe the old code
+  (`conventions/gui.md` lines naming Notepad's hand-routed menu and
+  private dialog, `decisions/gui.md`'s "Notepad has none" entry, the
+  fileview roadmap item); `check_widget_ops`/`check_key_routing`.
+- **`worktree-agent-a1adf21deefc8d3d3` (`tests:` WIP, b40a9a1f).**
+  `userland/lib/utest.h`: `utest_begin(name, title, flags)`,
+  `utest_check`/`_check_detail`/`_checkf`/`_notef`, `utest_skip`,
+  `utest_failed`, `utest_end`; reports through `sys_write()` (never
+  stdio, since some tests test stdio); flags `UTEST_VERDICT_FILE`
+  (`/tmp/<name>.out`), `UTEST_KLOG`, `UTEST_QUIET`; one epilogue shape
+  `<name>: all checks passed (N checks)` / `<name>: FAILED -- N of M
+  checks`. 13 of ~36 tests migrated (libc, cwd, errno, fd, pipefull,
+  query, stdio compiled clean; bigimage, fsgen, guard, random, stackgrow,
+  cjson edited, NOT compiled). LEFT: libc3/4/5, libm, thread, heaprace,
+  env, mmap, seek, dyn, ttf, udp, klineedit, kfmt, and the eleven
+  transposed-argument files (complete, hash, malloc, posix, signal,
+  sleep, usnd, focusring, typeahead, uimg, wrap -- their `check()` takes
+  `(what, ok, detail)`, so transpose with care). Leave alone:
+  dynlibc_test (its fprintf report IS the check), fpu, newsyscalls,
+  socket, memtest, cjson_bench, the fault tests. Then shrink
+  `usertest_run.py`'s success-string table, fix `net_test.py` ("0 failed"
+  for udp_test) and `init_test.py` ("sleep: all checks passed"), and
+  write the docs (`conventions/build.md` + CLAUDE.md index,
+  `testing.md`, `tools.md`). Run `usertest_run`, `faulttest_run`,
+  `ktest_run`, and a positive control (break one migrated check, see
+  the summary name it).
+
+**Smaller survey findings, not started** (file:line as of that day):
+`start_menu.c:174-252` and `context_menu.c:76-98` hand-draw a vertical
+menu that `uui_menubar_open_at()` + `uui_menubar_draw_popup()` draw
+(Start carries icons and a flash state the menubar has no slot for);
+a `QUERY_FOREACH` macro for the `sys_query_record` loop restated in
+three dialects across ~20 `/bin` programs; `cmd_fail_err(prog, subject,
+err)` in `lib/cmd.h` for the `on_error` callbacks in `cp.c`, `rm.c`,
+`mv.c`, `install.c`; `ufile_slurp(path, &len)` for `install.c:116` and
+`uimg.c:68`; `ufileop_read_head()` for `keep_images` (`imgview.c:147`)
+and `keep_audio` (`player.c:128`); `files.c:783-806` re-implements
+`uopen_spawn()`; a `uui_icon_label()` primitive for the icon-then-label
+row drawn five ways; `crashlog.c`, `httpd.c` and `install.c` list
+directories UNSORTED (`httpd`'s index is user-visible); the file picker
+sorts its own `struct fp_entry` beside `dirsort.h`; and the codec tables
+in `uimg.c`/`usnd.c` pull every decoder into every program that touches
+an image or a sound, which `libuapp.so` now absorbs but a static build
+still pays.
+
+`preflight.sh` on main that day: build, boot smoke and usertest green;
+ktest 633 passed, 3 failed, all three `r.leaked` -- the shape of the
+known "ATA fault-injection KTESTs leak a failed write into the NEXT
+test" item below, not re-measured against the previous commit.
+
+
 - [x] ~~Make the ring-3 apps reachable from the desktop~~ -- done: `gui_apps.h`'s `exec_path` turns a registry entry into a launcher for a `/bin` binary, so Shapes, Calculator (ring 3), Notepad (ring 3) and Terminal (ring 3) are in the Start menu and on the desktop. The apps also moved `/tests` -> `/bin`, where a user-facing program belongs.
 
 - [ ] Remove the kernel-space Calculator once the ring-3 one is the default. **This is the next step, and it now has a second reason:** the Start menu carries both, distinguished only by a "(ring 3)" suffix on the label. Retiring the kernel-space Calculator, Notepad and Terminal drops the suffix and halves those menu rows. What it costs is the side-by-side comparison that made the migration verifiable, so the ring-3 versions should get a round of testing as the ONLY implementation first. Deliberately NOT done in the same change: keeping both is what made the migration verifiable (the two were compared side by side, and the shared engine means they cannot disagree on arithmetic). Retiring the old one is its own decision.

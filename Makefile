@@ -816,22 +816,6 @@ LIBC_PIC_OBJS = $(patsubst userland/%.c,$(BUILD)/userland-pic/%.o,$(filter-out u
 
 LIBC_NONSHARED = $(BUILD)/userland/libc_nonshared.a
 
-# libuapp.so -- the TOOLKIT (userland/ui + userland/lib + the shared
-# kernel/lib sources) as one shared object, from the same sources as
-# libuapp.a compiled a second time with -fpic, exactly as libc.so is.
-# Every dynamic /bin and GUI program links it; libuapp.a stays for the
-# static set (init, toywm, /tests). Measured before building it: the
-# toolkit was 45-138 KB of text in every GUI binary against 10-30 KB of
-# the app's own, and /lib pages are shared through the image cache, so
-# this is one copy of the widgets, the JPEG decoder and the TrueType
-# rasteriser in memory rather than one per window. No --gc-sections on
-# a .so: it carries the whole toolkit, and only touched pages are read.
-LIBUAPP_PIC_OBJS = $(patsubst $(BUILD)/userland/%.o,$(BUILD)/userland-pic/%.o,$(LIBUAPP_OBJS))
-LIBUAPP_SO = $(BUILD)/lib/libuapp.so
-$(LIBUAPP_SO): $(LIBUAPP_PIC_OBJS) $(LIBC_SO)
-	@mkdir -p $(dir $@)
-	$(LD) -shared --hash-style=sysv -z max-page-size=4096 -soname libuapp.so -o $@ $(LIBUAPP_PIC_OBJS) $(LIBC_SO)
-
 $(BUILD)/userland-pic/%.o: userland/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(LIBC_PIC_CFLAGS) $< -o $@
@@ -852,6 +836,22 @@ LIBC_SO = $(BUILD)/lib/libc.so
 $(LIBC_SO): $(LIBC_PIC_OBJS)
 	@mkdir -p $(dir $@)
 	$(LD) -shared --hash-style=sysv -z max-page-size=4096 -soname libc.so -o $@ $(LIBC_PIC_OBJS)
+
+# libuapp.so -- the TOOLKIT (userland/ui + userland/lib + the shared
+# kernel/lib sources) as one shared object, from the same sources as
+# libuapp.a compiled a second time with -fpic, exactly as libc.so is.
+# Every dynamic /bin and GUI program links it; libuapp.a stays for the
+# static set (init, toywm, /tests). Measured before building it: the
+# toolkit was 45-138 KB of text in every GUI binary against 10-30 KB of
+# the app's own, and /lib pages are shared through the image cache, so
+# this is one copy of the widgets, the JPEG decoder and the TrueType
+# rasteriser in memory rather than one per window. No --gc-sections on
+# a .so: it carries the whole toolkit, and only touched pages are read.
+LIBUAPP_PIC_OBJS = $(patsubst $(BUILD)/userland/%.o,$(BUILD)/userland-pic/%.o,$(LIBUAPP_OBJS))
+LIBUAPP_SO = $(BUILD)/lib/libuapp.so
+$(LIBUAPP_SO): $(LIBUAPP_PIC_OBJS) $(LIBC_SO)
+	@mkdir -p $(dir $@)
+	$(LD) -shared --hash-style=sysv -z max-page-size=4096 -soname libuapp.so -o $@ $(LIBUAPP_PIC_OBJS) $(LIBC_SO)
 
 $(LIBC_NONSHARED): $(BUILD)/userland/libc/pthread.o
 	@mkdir -p $(dir $@)
