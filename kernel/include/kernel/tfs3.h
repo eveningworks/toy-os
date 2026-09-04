@@ -1,6 +1,7 @@
 #ifndef TFS3_H
 #define TFS3_H
 
+#include <stdint.h>
 #include "fs_ops.h"
 
 // The TFS3 backend (kernel/fs/tfs3.c): block groups + inodes + dirent
@@ -9,5 +10,13 @@
 // B of the plan); the write path, journal transactions and fsck land
 // in Stages C/D -- until then every mutating op fails honestly.
 extern const struct fs_ops tfs3_ops;
+
+// WHAT PATH RESOLUTION HAS COST SINCE BOOT: lookups, the block reads
+// they caused, and the time in them. Read by QUERY_FSSTAT.
+//
+// Every fs_*(path, ...) call resolves from the root, so this is a
+// per-syscall cost a throughput number cannot separate from the data
+// traffic beside it. Any pointer may be NULL.
+void tfs3_lookup_stats(uint64_t *calls, uint64_t *reads, uint64_t *ns);
 
 #endif

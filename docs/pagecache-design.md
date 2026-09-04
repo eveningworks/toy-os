@@ -65,39 +65,48 @@ sequential WRITE spends most of its block time READING (252 ms of 737 on
 the laptop; 76% of block-layer time in QEMU).
 
 **An attempt to confirm it by PATH DEPTH failed, and the failure is
-worth recording rather than the hypothesis.** Running the same 4 MiB
-benchmark at `/d.tmp` and at `/aa/bb/cc/d.tmp`, each on a freshly seeded
-disk, the two profiles disagreed in direction:
+worth recording alongside the answer.** Running the same 4 MiB benchmark
+at `/d.tmp` and at `/aa/bb/cc/d.tmp`, each on a freshly seeded disk, the
+two profiles disagreed in direction:
 
 | | SEQ-write | its reads | RND4K-write | its reads |
 |---|---|---|---|---|
 | depth 1 | 10.25 MB/s | 3274 | 0.834 MB/s | 3629 |
 | depth 4 | 7.00 MB/s | 4448 | 0.780 MB/s | 3486 |
 
-Sequential got worse with depth and random got slightly better, and the
-sequential delta (+18 reads per syscall for three extra components) is
-far larger than three inode reads can explain. **Block allocation layout
-varies more between runs than path depth costs**, so this experiment
-does not isolate the thing it was built to isolate.
+Sequential got worse with depth, random got slightly better, and block
+allocation layout varies between runs more than depth costs. **Depth is
+not the driver, so depth cannot measure it.**
 
-So the resolution cost is real in the code and its SIZE is unknown.
-Stage 0's first job is therefore to measure it directly -- a counter on
-`resolve()` and on the reads it issues -- and its second is to decide
-whether to build anything at all. Writing the cache first and measuring
-after is how a plausible mechanism gets credited with somebody else's
-cost, which this project has done before.
+**Counting it directly settled it.** `lookup()` now brackets itself with
+the block layer's read counter, so the delta is exactly the disk traffic
+a resolution caused, and `QUERY_FSSTAT` reports it. On QEMU/KVM with
+AHCI, 1 MiB:
+
+| profile | block reads | caused by lookup | share |
+|---|---|---|---|
+| SEQ-write | 1712 | 503 | **29%** |
+| SEQ-read | 1556 | 1033 | **66%** |
+| RND4K-write | 2493 | 1187 | **48%** |
+| RND4K-read | 1709 | 854 | **50%** |
+
+**Path resolution is between a third and two thirds of every block read
+this filesystem issues**, and the driver is not depth but COUNT: a
+single 64 KiB write syscall triggers about eight resolutions, each
+costing ~3.6 block reads. The hypothesis was right and the first
+experiment was simply built on the wrong variable.
 
 ## The stages
 
 Each one ships on its own and is worth having if the next never lands.
 
-### Stage 0 -- MEASURE the resolution cost, then decide
+### Stage 0 -- MEASURE the resolution cost, then decide  [MEASURED]
 
-Count `resolve()` calls and the block reads they issue, per syscall, and
-report them the way `QUERY_BLKSTAT` reports the block layer. Only then
-is there a number to justify -- or refuse -- the change.
+**Done: `QUERY_FSSTAT` and `/bin/diskbench`'s `lookup` line.** The
+numbers are in the table above -- 29-66% of all block reads -- so the
+change is justified rather than assumed.
 
-If it is worth doing, the change is small: `struct open_file` holds
+The change itself is small: `struct open_file` holds
 `char name[64]` and a position, so give it the resolved inode as well
 and a read or write on an open fd skips resolution entirely. That needs
 an `fs_ops` entry taking a resolved handle, or a VFS inode cache keyed
@@ -182,10 +191,10 @@ which is why it is last rather than bundled with the mode.
   that flushed nothing, a truncation mid-word, a cache invalidated only
   by its owner's writes. This is a large new surface of exactly that
   kind.
-- **Stage 0 may be most of the win, or none of it.** Reads are 34% of a
-  sequential write's block time on hardware and 76% in QEMU, and nobody
-  yet knows how much of that is path resolution -- the one experiment
-  tried disagreed with itself. If stage 0 removes most of it and
-  `storage.sync` already offers the flush trade, the case for stages 1-4
-  is smaller than it looks from here. That is a measurement to take
-  after stage 0, not an argument to have now.
+- **Stage 0 may be most of the win.** It is now measured at 29-66% of
+  all block reads, and reads are 34% of a sequential write's block time
+  on hardware. If caching resolution removes most of that, and
+  `storage.sync` already offers the flush trade, the remaining case for
+  stages 1-4 is smaller than it looked when this document was started --
+  which is an argument for building stage 0 and re-measuring before
+  committing to the rest.

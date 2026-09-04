@@ -57,6 +57,16 @@ of the wall clock — and on emulated hardware it is nearly free while on
 a real SSD it forces DRAM to NAND, which is exactly how a number
 measured in QEMU gets believed about a laptop.
 
+**A `lookup` line is `<profile> <calls> <reads> <microseconds>`** -- what
+the filesystem spent RESOLVING PATHS during that profile
+(`QUERY_FSSTAT`). The `io` lines cannot separate it: every read a
+resolution issues is attributed to the block layer along with the data
+traffic beside it. There is no inode cache, so each `read()`/`write()`
+resolves from the root again, and this is the only place that
+per-syscall cost is visible. Measured at **29-66% of all block reads**
+depending on profile, which is why `docs/pagecache-design.md` puts
+caching it first.
+
 **`clock-granularity-ns` says whether to believe the `io` microseconds.**
 The kernel times each call with its clocksource, and in every default
 QEMU configuration that is the PIT: a guest is not offered an invariant

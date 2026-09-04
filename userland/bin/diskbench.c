@@ -28,6 +28,7 @@
 //   diskbench: progress <profile> <percent>
 //   diskbench: result <profile> <milli-MB/s> <iops> <micros>
 //   diskbench: io <profile> <op> <calls> <sectors> <micros>
+//   diskbench: lookup <profile> <calls> <reads> <micros>
 //   diskbench: clock-granularity-ns <n>
 //   diskbench: done
 //   diskbench: error <reason>
@@ -50,6 +51,13 @@
 // the most misleading answer a profiler can give. Real hardware has the
 // TSC and resolves it; a granularity in the millions means the `io`
 // micros are floor-zero noise rather than a measurement.
+//
+// A `lookup` line is `<profile> <calls> <reads> <micros>` -- what the
+// filesystem spent RESOLVING PATHS during that profile. The `io` lines
+// cannot separate it: every read a resolution issues is attributed to
+// the block layer along with the data traffic beside it. There is no
+// inode cache, so each read()/write() syscall resolves from the root
+// again, and this is the only place that per-syscall cost is visible.
 //
 // Throughput is in THOUSANDTHS of a MB/s and latency in MICROSECONDS,
 // so a reader needs no floating point -- there is none in this project's
@@ -294,6 +302,10 @@ static uint64_t clock_granularity_ns(void) {
     return best;
 }
 
+static void k_memset_fsstat(struct query_fsstat *f) {
+    f->lookup_calls = f->lookup_reads = f->lookup_ns = 0;
+}
+
 static int run_profile(int profile, const char *path, uint64_t total, int first) {
     int writing = (profile == P_SEQ_WRITE || profile == P_RND_WRITE);
     int random = (profile == P_RND_READ || profile == P_RND_WRITE);
@@ -319,6 +331,9 @@ static int run_profile(int profile, const char *path, uint64_t total, int first)
 
     struct io_snap io_before, io_after;
     io_snapshot(&io_before);
+    struct query_fsstat fs_before;
+    k_memset_fsstat(&fs_before);
+    sys_query_record(QUERY_FSSTAT, 0, &fs_before, sizeof fs_before);
 
     uint64_t began = sys_monotonic_ns();
     while (moved < want) {
@@ -352,6 +367,18 @@ static int run_profile(int profile, const char *path, uint64_t total, int first)
            (unsigned long long)mbps_milli(moved, elapsed),
            (unsigned long long)iops, (unsigned long long)us);
     io_report(profile, &io_before, &io_after);
+    // WHAT THE FILESYSTEM SPENT FINDING THE FILE, which the `io` lines
+    // above cannot separate out: every one of those reads is attributed
+    // to the block layer, and some fraction of them is the path being
+    // resolved from the root again for this profile's every syscall.
+    struct query_fsstat fs_after;
+    if (sys_query_record(QUERY_FSSTAT, 0, &fs_after, sizeof fs_after)
+            >= (int)sizeof fs_after) {
+        emit("diskbench: lookup %s %llu %llu %llu\n", NAME[profile],
+             (unsigned long long)(fs_after.lookup_calls - fs_before.lookup_calls),
+             (unsigned long long)(fs_after.lookup_reads - fs_before.lookup_reads),
+             (unsigned long long)((fs_after.lookup_ns - fs_before.lookup_ns) / 1000ull));
+    }
     return 1;
 }
 

@@ -25,6 +25,8 @@
 #include "block.h"    // TFS3 talks to a BLOCK DEVICE, not to a disk --
                     // that is what lets a live image mount from RAM
 #include "storage_config.h" // storage.sync -- whether the barriers are real
+#include "block_stat.h"     // the read counter lookup() brackets itself with
+#include "clocksource.h"    // clocksource_now_ns()
 #include "ata.h"   // ATA_SECTOR_SIZE only: 512 is the sector size every
                     // block device here uses, and it is spelled once there
 #include "klog.h"
@@ -701,14 +703,49 @@ static int normalize(const char *path, char *out /* T3_PATH_BUF */) {
 }
 
 // resolve() + normalize() in one, the common op prologue.
+// WHAT PATH RESOLUTION COSTS, counted rather than reasoned about.
+//
+// Every fs_*(path, ...) call resolves from the root: one uncached inode
+// read per component, plus a directory scan the 16-entry `ncache` only
+// sometimes absorbs. That is plainly a per-syscall cost in the code,
+// and its SIZE was unknown -- an attempt to infer it by comparing path
+// depths disagreed with itself, because block allocation layout varies
+// between runs more than depth costs (docs/pagecache-design.md).
+//
+// So it is measured at the source: bracket the resolve with the block
+// layer's own read counter and the delta is exactly the disk traffic
+// this lookup caused, with nothing attributed by argument.
+static uint64_t g_lookup_calls;
+static uint64_t g_lookup_reads;
+static uint64_t g_lookup_ns;
+
+void tfs3_lookup_stats(uint64_t *calls, uint64_t *reads, uint64_t *ns) {
+    if (calls) *calls = g_lookup_calls;
+    if (reads) *reads = g_lookup_reads;
+    if (ns)    *ns    = g_lookup_ns;
+}
+
 static int lookup(const char *path, uint64_t *out_ino, struct t3_inode *out_node) {
     char norm[T3_PATH_BUF];
     if (!S->mounted || !normalize(path, norm)) return 0;
+
+    uint64_t reads0 = 0;
+    blk_stat_get(BLK_STAT_READ, &reads0, NULL, NULL, NULL);
+    uint64_t t0 = clocksource_now_ns();
+
     uint64_t ino;
-    if (!resolve(norm, &ino)) return 0;
-    if (out_ino) *out_ino = ino;
-    if (out_node) return read_inode(ino, out_node);
-    return 1;
+    int ok = resolve(norm, &ino);
+    if (ok) {
+        if (out_ino) *out_ino = ino;
+        if (out_node) ok = read_inode(ino, out_node);
+    }
+
+    uint64_t reads1 = 0;
+    blk_stat_get(BLK_STAT_READ, &reads1, NULL, NULL, NULL);
+    g_lookup_calls++;
+    g_lookup_reads += reads1 - reads0;
+    g_lookup_ns += clocksource_now_ns() - t0;
+    return ok;
 }
 
 // ---- allocation (RAM bitmaps, write-through, leak-safe ordering) ---------

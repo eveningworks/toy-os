@@ -414,6 +414,23 @@ _Static_assert(sizeof(struct query_fontglyph) <= 256,
 // the shape a MB/s figure hides.
 #define QUERY_BLKSTAT 33
 
+// WHAT PATH RESOLUTION COSTS: how many times the filesystem has looked
+// a path up from the root, how many block reads those lookups caused,
+// and how long they took. SCALAR.
+//
+// Every fs_*(path, ...) call resolves from the root -- there is no
+// inode cache -- so this is a per-SYSCALL cost that a throughput figure
+// cannot separate from the data traffic beside it. It is counted rather
+// than inferred because inferring it failed: comparing path depths
+// disagreed with itself (docs/pagecache-design.md).
+#define QUERY_FSSTAT 34
+
+struct query_fsstat {
+    uint64_t lookup_calls;  // path resolutions since boot
+    uint64_t lookup_reads;  // block-device reads they caused
+    uint64_t lookup_ns;     // nanoseconds spent in them
+};
+
 struct query_clock {
     uint64_t utc;         // seconds since 1970-01-01 00:00:00 UTC
     uint64_t utc_ns;      // the same instant, to the clocksource's resolution
