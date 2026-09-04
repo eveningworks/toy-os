@@ -17,31 +17,33 @@
 //
 // None of that is needed here. This is a separate process: it calls
 // sys_read() and blocks, and the desktop keeps running because the
-// kernel context is a scheduler participant now (Milestone 41 stage 1).
-// So the whole stepped-I/O apparatus collapses into an ordinary
-// read-the-file-into-a-buffer loop. That is a real architectural
-// dividend of moving apps out of the kernel, not a shortcut.
+// kernel context is a scheduler participant now (the GUI-in-ring-3
+// milestone's first stage). So the whole stepped-I/O apparatus
+// collapses into an ordinary read-the-file-into-a-buffer loop. That is
+// a real architectural dividend of moving apps out of the kernel, not a
+// shortcut.
 //
-// THE FILE DIALOG IS DRAWN BY THIS PROCESS, not the window server.
-// apps/wm/file_picker.c is a WM modal built on wm_internal.h and could
-// not be ported; more to the point, it SHOULDN'T be. A display server
-// has no business owning file dialogs -- GTK and Qt each draw their
-// own, and a portal is a later refinement rather than the starting
-// point. So the picker below is part of the application, using
-// sys_listdir() for the listing.
+// THE FILE DIALOG IS THE TOOLKIT'S, DRAWN BY THIS PROCESS. A display
+// server has no business owning file dialogs -- GTK and Qt each draw
+// their own -- so it is a `uui_dialog` with a body of `uui_fileview`
+// (the listing, navigation, sorting) and `uui_textbox` (the name), in
+// this window. It used to be ~230 lines of hand-drawn rows and a caret
+// here, the third copy of a directory listing in the tree.
 //
-// THE THREE-BUTTON TOOLBAR IS GONE, replaced by a real menu bar
-// (ui/uui_menubar.h) and a real status bar (ui/uui_statusbar.h). New /
-// Open / Save were the only commands this editor could offer while they
-// each had to be a button wide enough to read; a menu holds Save As,
-// Select All, a Recent list and the view commands without spending any
-// window on them, which is exactly why every desktop editor has one.
+// THE CHROME IS ROUTED. The menu bar, the status bar and the dialog are
+// declared in `desc.widgets`, so the router owns their input and the
+// layout log; what this file still draws and hit-tests by hand is the
+// document and its scrollbar, which have no widget yet.
 #include <stdint.h>
+#include <string.h>
+#include <stdio.h>
 #include "rt/sys.h"
-#include "lib/dirsort.h"
+#include "kpath.h"   // k_path_join/_dirname/_basename -- the kernel's, linked into ring 3
 #include "ui/ugfx.h"
 #include "ui/uui.h"
+#include "ui/uui_fileview.h"
 #include "ui/uapp.h"
+#include "ui/ulog.h"
 #include "ui/utext.h"
 #include "ui/utheme.h"
 #include "keyboard.h" // KEY_* codes, the same ones the WM delivers
@@ -59,6 +61,15 @@
 #define TEXT_PAD 3
 
 #define PATH_MAX_LEN 64 // FS_PATH_MAX
+#define DIALOG_MAX_FILES 64
+
+// --- widget ids -------------------------------------------------------
+
+#define ID_MENU     1
+#define ID_STATUS   2
+#define ID_DIALOG   3
+#define ID_DLG_LIST 4
+#define ID_DLG_NAME 5
 
 // --- menu command codes -----------------------------------------------
 //
@@ -80,8 +91,13 @@
 #define CMD_GOTO_END   14
 #define CMD_STATUSBAR  15
 
+// The dialog's own codes -- a different widget, so a different space.
+#define CMD_DLG_OK     1
+#define CMD_DLG_CANCEL 2
+
 #define RECENT_MAX 3
 
+static struct uapp *g_app;   // for the fileview's callbacks, which carry no uapp
 static struct utext g_text;
 
 static char g_path[PATH_MAX_LEN];   // "" until saved/opened
@@ -142,53 +158,55 @@ static const struct uui_menu_item menu_bar[] = {
     UUI_SUBMENU("View", view_items),
 };
 
-// --- the open dialog --------------------------------------------------
+// --- the file dialog --------------------------------------------------
 //
-// A modal panel drawn over the editor, inside this window. Entirely the
-// application's own -- see the file header.
-#define DIALOG_MAX_FILES 32
-static int g_dialog_open;
-static struct sys_dirent g_entries[DIALOG_MAX_FILES];
-static int g_entry_count;
-static int g_sel;
-static int g_dialog_saving; // 1 = "Save As" flavour: type a name
+// One dialog, two flavours: Open lists and takes a selection, Save As
+// lists and takes a typed name. Both have the field -- typing a path
+// into an Open dialog is what Win32's chooser allows too.
+static struct uui_dialog g_dialog;
+static int g_dlg_saving;
 
-static char g_name_field[PATH_MAX_LEN];
-static int g_name_len;
+// The listing's storage: uui_fileview does not own it (ui/uui_fileview.h),
+// and 64 entries is 5 KB, which is why this is file-scope and not a
+// local (the ring-3 frame budget is 2 KiB).
+static struct sys_dirent g_dlg_entries[DIALOG_MAX_FILES];
+static struct uui_fileview g_dlg_list;
+static struct uui_textbox g_dlg_name;
 
-// The directory the open dialog is showing. A file dialog that cannot
-// leave one directory is not much of a dialog -- selecting a directory
-// descends into it, and ".." (synthesised as the first row whenever
-// we are below the root) goes back up.
-static char g_dialog_dir[PATH_MAX_LEN] = "/";
+static struct uui_item g_dlg_items[] = {
+    { .ops = &uui_fileview_ops, .widget = &g_dlg_list, .flags = UUI_FILL_W | UUI_FILL_H,
+      .id = ID_DLG_LIST, .name = "flist" },
+    { .ops = &uui_textbox_ops,  .widget = &g_dlg_name, .flags = UUI_FILL_W,
+      .id = ID_DLG_NAME, .name = "fname" },
+};
+static struct uui_layout g_dlg_layout;
+static struct uui_item g_dlg_body = { .ops = &uui_layout_ops, .widget = &g_dlg_layout };
 
-// --- small helpers (no libc) -----------------------------------------
+// The one text row: which directory the listing shows. Rewritten by
+// the fileview's own navigation callback, so it cannot lag the list.
+static char g_dlg_row[PATH_MAX_LEN + 16];
+static const char *const g_dlg_rows[1] = { g_dlg_row };
 
-static int slen(const char *s) { int n = 0; while (s && s[n]) n++; return n; }
+// --- the routed widgets ---------------------------------------------
+//
+// `.name` is what the layout log reports each one as (ui/uui_describe.h).
+// The dialog is LAST: with a body it is drawn in the items pass, and
+// last is what keeps it over the bars (ui/uui_dialog.h).
+static struct uui_item g_widgets[] = {
+    { .ops = &uui_menubar_ops,   .widget = &g_menu,      .id = ID_MENU,   .name = "menu" },
+    { .ops = &uui_statusbar_ops, .widget = &g_statusbar, .id = ID_STATUS, .name = "status" },
+    { .ops = &uui_dialog_ops,    .widget = &g_dialog,    .id = ID_DIALOG, .name = "dialog" },
+};
 
-static void scopy(char *dst, const char *src, int cap) {
-    int i = 0;
-    for (; src[i] && i < cap - 1; i++) dst[i] = src[i];
-    dst[i] = '\0';
+// By ID, never by index (docs/conventions/gui.md).
+static struct uui_item *item_by_id(struct uui_item *items, int n, int id) {
+    for (int i = 0; i < n; i++) if (items[i].id == id) return &items[i];
+    return NULL;
 }
+#define WIDGET(id)   item_by_id(g_widgets, (int)(sizeof g_widgets / sizeof g_widgets[0]), (id))
+#define DLG_ITEM(id) item_by_id(g_dlg_items, (int)(sizeof g_dlg_items / sizeof g_dlg_items[0]), (id))
 
-static int seq(const char *a, const char *b) {
-    int i = 0;
-    for (; a[i] && a[i] == b[i]; i++) {}
-    return a[i] == b[i];
-}
-
-static void set_status(const char *s) { scopy(g_status, s, (int)sizeof g_status); }
-
-// Appends `v` as decimal at `n`; returns the new length.
-static int put_int(char *b, int n, int v) {
-    char d[12];
-    int c = 0;
-    if (v <= 0) d[c++] = '0';
-    while (v > 0) { d[c++] = (char)('0' + v % 10); v /= 10; }
-    while (c > 0) b[n++] = d[--c];
-    return n;
-}
+static void set_status(const char *s) { strlcpy(g_status, s, sizeof g_status); }
 
 // The title carries the filename and a dirty marker, so it changes as
 // the document does. Sent only when it ACTUALLY changed: this used to
@@ -198,17 +216,9 @@ static char g_shown_title[WIN_TITLE_LEN];
 
 static void set_title(struct uapp *a) {
     char t[WIN_TITLE_LEN];
-    const char *name = g_path[0] ? g_path : "untitled";
-    int i = 0;
-    if (g_dirty && i < WIN_TITLE_LEN - 2) t[i++] = '*';
-    for (int j = 0; name[j] && i < WIN_TITLE_LEN - 1; j++) t[i++] = name[j];
-    t[i] = '\0';
-
-    for (int j = 0;; j++) {
-        if (t[j] != g_shown_title[j]) break;
-        if (!t[j]) return; // identical -- nothing to send
-    }
-    scopy(g_shown_title, t, WIN_TITLE_LEN);
+    snprintf(t, sizeof t, "%s%s", g_dirty ? "*" : "", g_path[0] ? g_path : "untitled");
+    if (strcmp(t, g_shown_title) == 0) return;
+    strlcpy(g_shown_title, t, sizeof g_shown_title);
     uapp_set_title(a, t);
 }
 
@@ -218,10 +228,10 @@ static void set_title(struct uapp *a) {
 static void recent_push(const char *path) {
     int at = RECENT_MAX - 1;
     for (int i = 0; i < g_recent_count; i++)
-        if (seq(g_recent[i], path)) { at = i; break; }
+        if (strcmp(g_recent[i], path) == 0) { at = i; break; }
 
-    for (int i = at; i > 0; i--) scopy(g_recent[i], g_recent[i - 1], PATH_MAX_LEN);
-    scopy(g_recent[0], path, PATH_MAX_LEN);
+    for (int i = at; i > 0; i--) strlcpy(g_recent[i], g_recent[i - 1], PATH_MAX_LEN);
+    strlcpy(g_recent[0], path, PATH_MAX_LEN);
     if (g_recent_count < RECENT_MAX) g_recent_count++;
 }
 
@@ -251,7 +261,7 @@ static int load_file(struct uapp *a, const char *path) {
     g_text.ed.cursor = 0;
     g_text.scroll_offset = 0;
     utext_sel_clear(&g_text);
-    scopy(g_path, path, PATH_MAX_LEN);
+    strlcpy(g_path, path, PATH_MAX_LEN);
     g_dirty = 0;
     recent_push(path);
     set_status("opened");
@@ -284,7 +294,7 @@ static int save_file(struct uapp *a, const char *path) {
     sys_close(fd);
     uapp_busy_end(a);
 
-    scopy(g_path, path, PATH_MAX_LEN);
+    strlcpy(g_path, path, PATH_MAX_LEN);
     g_dirty = 0;
     recent_push(path);
     set_status("saved");
@@ -293,18 +303,8 @@ static int save_file(struct uapp *a, const char *path) {
 
 // --- layout -----------------------------------------------------------
 
-static int menubar_h(void) {
-    int h;
-    uui_menubar_natural_size(&g_menu, 0, &h);
-    return h;
-}
-
-static int statusbar_h(void) {
-    if (!g_show_status) return 0;
-    int h;
-    uui_statusbar_natural_size(&g_statusbar, 0, &h);
-    return h;
-}
+static int menubar_h(void) { return uui_menubar_height(&g_menu); }
+static int statusbar_h(void) { return g_show_status ? uui_statusbar_height(&g_statusbar) : 0; }
 
 // The scrollbar's width comes from the WIDGET, not from a number here.
 // It used to be `#define SCROLLBAR_W 8` with a matching hardcoded "10px
@@ -328,17 +328,15 @@ static void text_rect_for(int cw, int ch, int *x, int *y, int *w, int *h) {
     *h = ch - *y - statusbar_h();
 }
 
-static void text_rect(struct ugfx_surface *s, int *x, int *y, int *w, int *h) {
-    text_rect_for(s->w, s->h, x, y, w, h);
-}
-
 // Placed against the CONTENT rect, which is also the popup bounds handed
-// to the menu bar -- see ui/uui_menubar.h on why that rectangle is the
-// whole difference between this and a real desktop's popups.
+// to the menu bar and the box the dialog centres in. Run every draw:
+// no `.layout` places these, and the app is resizable.
 static void layout_chrome(int cw, int ch) {
     uui_menubar_set_geometry(&g_menu, 0, 0, cw, menubar_h());
     uui_menubar_set_bounds(&g_menu, 0, 0, cw, ch);
     uui_statusbar_set_geometry(&g_statusbar, 0, ch - statusbar_h(), cw, statusbar_h());
+    WIDGET(ID_STATUS)->hidden = !g_show_status;
+    uui_dialog_set_bounds(&g_dialog, 0, 0, cw, ch);
 }
 
 // LOGICAL lines, not wrapped rows: "Ln 12" in every editor's status bar
@@ -350,16 +348,8 @@ static void update_indicators(void) {
         if (utext_at(&g_text, i) == '\n') { line++; col = 1; }
         else col++;
     }
-
-    int n = 0;
-    g_lncol[n++] = 'L'; g_lncol[n++] = 'n'; g_lncol[n++] = ' ';
-    n = put_int(g_lncol, n, line);
-    g_lncol[n++] = ','; g_lncol[n++] = ' ';
-    g_lncol[n++] = 'C'; g_lncol[n++] = 'o'; g_lncol[n++] = 'l'; g_lncol[n++] = ' ';
-    n = put_int(g_lncol, n, col);
-    g_lncol[n] = '\0';
-
-    scopy(g_modflag, g_dirty ? "MOD" : "--", (int)sizeof g_modflag);
+    snprintf(g_lncol, sizeof g_lncol, "Ln %d, Col %d", line, col);
+    strlcpy(g_modflag, g_dirty ? "MOD" : "--", sizeof g_modflag);
 }
 
 // --- item state -------------------------------------------------------
@@ -414,73 +404,11 @@ static void draw_scrollbar(struct ugfx_surface *s, int tx, int ty, int tw, int t
                         NP_SCROLLBAR_FLAGS);
 }
 
-// ONE FUNCTION FOR BOTH the drawing and the cursor hit test, per
-// title_icon()'s rule -- computed twice is computed differently.
-// Returns 0 when no field is on screen (closed, or the Open listing).
-static int dialog_field_rect(int cw, int ch, int *fx, int *fy, int *fw, int *fh) {
-    if (!g_dialog_open || !g_dialog_saving) return 0;
-    int w = cw - 80, x = 40, y = 40;
-    (void)ch;
-    *fx = x + 10;
-    *fy = y + 10 + ugfx_char_h() + 8;
-    *fw = w - 20;
-    *fh = ugfx_char_h() + 4;
-    return 1;
-}
-
-static void draw_dialog(struct ugfx_surface *s) {
-    int w = s->w - 80, h = s->h - 80;
-    int x = 40, y = 40;
-
-    ugfx_fill_rect(s, x, y, w, h, UTHEME_PANEL_BG);
-    ugfx_draw_rect(s, x, y, w, h, ugfx_rgb(150, 155, 165));
-
-    if (g_dialog_saving) {
-        ugfx_draw_string(s, x + 10, y + 8, "Save as -- type a name, Enter to save",
-                          UTHEME_TEXT, UTHEME_PANEL_BG);
-    } else {
-        // Showing the path matters once directories can be entered --
-        // otherwise a listing three levels down is indistinguishable
-        // from the root's.
-        char hdr[PATH_MAX_LEN + 8];
-        scopy(hdr, "Open: ", (int)sizeof hdr);
-        int hl = slen(hdr);
-        for (int i = 0; g_dialog_dir[i] && hl < (int)sizeof hdr - 1; i++) hdr[hl++] = g_dialog_dir[i];
-        hdr[hl] = '\0';
-        ugfx_draw_string_clipped(s, x + 10, y + 8, w - 20, hdr, UTHEME_TEXT, UTHEME_PANEL_BG);
-    }
-
-    int row_h = ugfx_char_h() + 4;
-    int list_y = y + 10 + ugfx_char_h() + 8;
-
-    if (g_dialog_saving) {
-        int fx = 0, fy = 0, fw = 0, fh = 0;
-        if (!dialog_field_rect(s->w, s->h, &fx, &fy, &fw, &fh)) return;
-        ugfx_fill_rect(s, fx, fy, fw, fh, UTHEME_WHITE);
-        ugfx_draw_string(s, fx + 4, fy + 2, g_name_field, UTHEME_TEXT, UTHEME_WHITE);
-        // Caret, so it reads as an editable field rather than a label.
-        ugfx_fill_rect(s, fx + 4 + ugfx_text_width(g_name_field), fy + 2,
-                        2, ugfx_char_h(), UTHEME_TEXT);
-        return;
-    }
-
-    for (int i = 0; i < g_entry_count; i++) {
-        int ry = list_y + i * row_h;
-        if (ry + row_h > y + h - 10) break;
-        uint32_t bg = (i == g_sel) ? ugfx_rgb(205, 220, 240) : UTHEME_PANEL_BG;
-        ugfx_fill_rect(s, x + 10, ry, w - 20, row_h, bg);
-        ugfx_draw_string_clipped(s, x + 14, ry + 2, w - 28, g_entries[i].name, UTHEME_TEXT, bg);
-    }
-}
-
-static void draw(struct ugfx_surface *s, int focused) {
-    ugfx_fill(s, UTHEME_PANEL_BG);
-
-    layout_chrome(s->w, s->h);
-    uui_menubar_draw(s, &g_menu);
-
+// The document. The toolkit has already cleared the window and paints
+// the declared widgets -- bars, dialog -- on top of this afterwards.
+static void draw_document(struct ugfx_surface *s, int focused) {
     int tx, ty, tw, th;
-    text_rect(s, &tx, &ty, &tw, &th);
+    text_rect_for(s->w, s->h, &tx, &ty, &tw, &th);
     ugfx_draw_rect(s, tx - 1, ty - 1, tw + 2, th + 2, ugfx_rgb(200, 205, 215));
     utext_draw(&g_text, s, tx, ty, tw, th,
                 // The caret shows only when this window has keyboard
@@ -489,150 +417,104 @@ static void draw(struct ugfx_surface *s, int focused) {
                 // taking input that is going somewhere else -- see TWP's
                 // WIN_EV_FOCUS.
                 UTHEME_TEXT, UTHEME_WHITE, ugfx_rgb(205, 220, 240),
-                focused && !g_dialog_open && !uui_menubar_is_open(&g_menu));
+                focused && !uui_dialog_is_open(&g_dialog) && !uui_menubar_is_open(&g_menu));
     draw_scrollbar(s, tx, ty, tw, th);
-
-    if (g_show_status) {
-        update_indicators();
-        uui_statusbar_draw(s, &g_statusbar);
-    }
-
-    if (g_dialog_open) draw_dialog(s);
-
-    // LAST. Drawing is immediate-mode, so z-order is call order -- a
-    // menu drawn in place would be painted over by the text area.
-    uui_menubar_draw_popup(s, &g_menu);
 }
 
 // --- the dialog's behaviour -------------------------------------------
 
-// Rereads g_dialog_dir into g_entries[], with a ".." row first when
-// there is somewhere to go up to.
-static void refresh_listing(void) {
-    g_entry_count = 0;
-    g_sel = 0;
-
-    int at_root = (g_dialog_dir[0] == '/' && g_dialog_dir[1] == '\0');
-    if (!at_root) {
-        scopy(g_entries[0].name, "..", (int)sizeof g_entries[0].name);
-        g_entries[0].is_dir = 1;
-        g_entry_count = 1;
-    }
-
-    int n = sys_listdir(g_dialog_dir, g_entries + g_entry_count,
-                         DIALOG_MAX_FILES - g_entry_count);
-    if (n > 0) {
-        // SORTED, and by the SAME function /bin/ls uses (lib/dirsort.h).
-        // SYS_LISTDIR returns whatever order the filesystem walked, so
-        // this dialog used to list files in an order nothing could
-        // predict -- bad on its own, and it also has to match `ls`,
-        // since that is how a test derives which row to click.
-        //
-        // Only the entries AFTER the ".." row are sorted; that row is
-        // already at index 0 and belongs there.
-        dirsort(g_entries + g_entry_count, n, DIRSORT_NAME, 0);
-        g_entry_count += n;
-    }
-    if (g_entry_count == 0) set_status("empty directory");
+// The field's text, keeping whether it currently draws a caret:
+// uui_textbox_init() resets `active`, and the focus is the dialog's.
+static void dlg_name_set(const char *s) {
+    uui_textbox_init(&g_dlg_name, s);
+    uui_textbox_set_active(&g_dlg_name, g_dialog.focus == DLG_ITEM(ID_DLG_NAME));
 }
 
-// Joins g_dialog_dir and `name` into `out`, keeping exactly one '/'.
-static void join_path(char *out, const char *name) {
-    int i = 0;
-    for (; g_dialog_dir[i] && i < PATH_MAX_LEN - 2; i++) out[i] = g_dialog_dir[i];
-    if (i > 0 && out[i - 1] != '/') out[i++] = '/';
-    for (int j = 0; name[j] && i < PATH_MAX_LEN - 1; j++) out[i++] = name[j];
-    out[i] = '\0';
+static void dlg_on_dir_changed(void *ctx, const char *dir) {
+    (void)ctx;
+    snprintf(g_dlg_row, sizeof g_dlg_row, "Folder: %s", dir);
 }
 
-// Drops the last component of g_dialog_dir, never past the root.
-static void dir_up(void) {
-    int n = slen(g_dialog_dir);
-    while (n > 1 && g_dialog_dir[n - 1] == '/') n--;
-    while (n > 1 && g_dialog_dir[n - 1] != '/') n--;
-    if (n < 1) n = 1;
-    g_dialog_dir[n] = '\0';
-    if (n > 1 && g_dialog_dir[n - 1] == '/') g_dialog_dir[n - 1] = '\0';
-    if (g_dialog_dir[0] == '\0') scopy(g_dialog_dir, "/", PATH_MAX_LEN);
+// A file ACTIVATED in the listing (Enter, double-click). Directories
+// never reach here -- the fileview descends into those itself.
+static void dlg_on_open(void *ctx, const char *path) {
+    (void)ctx;
+    if (g_dlg_saving) { dlg_name_set(k_path_basename(path)); return; }
+    uui_dialog_close(&g_dialog);
+    load_file(g_app, path);
 }
 
-// Acts on whatever row is selected: descend into a directory, or open a
-// file. Returns 1 if the dialog should close.
-static int dialog_activate(struct uapp *a) {
-    if (g_sel < 0 || g_sel >= g_entry_count) return 1;
-    struct sys_dirent *e = &g_entries[g_sel];
-
-    if (e->is_dir) {
-        if (e->name[0] == '.' && e->name[1] == '.' && e->name[2] == '\0') dir_up();
-        else {
-            char next[PATH_MAX_LEN];
-            join_path(next, e->name);
-            scopy(g_dialog_dir, next, PATH_MAX_LEN);
-        }
-        refresh_listing();
-        return 0; // stay open, now showing the new directory
-    }
-
-    char p[PATH_MAX_LEN];
-    join_path(p, e->name);
-    load_file(a, p);
-    return 1;
+// Save As: the selected file's name lands in the field, as in every
+// desktop's chooser, so "save over that one" is a click and Return.
+static void dlg_on_select(void *ctx, const char *path, int is_dir) {
+    (void)ctx;
+    if (g_dlg_saving && !is_dir) dlg_name_set(k_path_basename(path));
 }
 
-static void open_dialog(int saving) {
-    g_dialog_open = 1;
-    g_dialog_saving = saving;
-    g_sel = 0;
+// (Re)opens the widget around the current flavour, directory and name.
+static void dialog_show(void) {
+    static const struct uui_dialog_button open_btns[] = {
+        { "Open", CMD_DLG_OK }, { "Cancel", CMD_DLG_CANCEL },
+    };
+    static const struct uui_dialog_button save_btns[] = {
+        { "Save", CMD_DLG_OK }, { "Cancel", CMD_DLG_CANCEL },
+    };
+    // Font-derived: the listing's natural height plus a few rows, and
+    // the field's. The dialog clamps this to the window.
+    int lw, lh, fw, fh;
+    uui_fileview_natural_size(&g_dlg_list, &lw, &lh);
+    lh += uui_table_row_h(&g_dlg_list.table) * 4;
+    uui_textbox_natural_size(&g_dlg_name, &fw, &fh);
+    int body_w = ugfx_char_w() * 44;
+    int body_h = lh + fh + uui_layout_gap(&g_dlg_layout) + 2 * uui_layout_margin(&g_dlg_layout);
+
+    uui_dialog_set_body(&g_dialog, &g_dlg_body, body_w, body_h);
+    uui_dialog_open(&g_dialog, g_dlg_saving ? "Save As" : "Open", g_dlg_rows, 1,
+                     g_dlg_saving ? save_btns : open_btns, 2, 0, CMD_DLG_CANCEL);
+    uui_dialog_focus(&g_dialog, DLG_ITEM(g_dlg_saving ? ID_DLG_NAME : ID_DLG_LIST));
+}
+
+static void file_dialog(int saving) {
+    g_dlg_saving = saving;
     uui_menubar_close(&g_menu); // a modal owns the input; the menu steps aside
-    if (saving) {
-        scopy(g_name_field, g_path[0] ? g_path : "", PATH_MAX_LEN);
-        g_name_len = slen(g_name_field);
-    } else {
-        scopy(g_dialog_dir, "/", PATH_MAX_LEN);
-        refresh_listing();
-    }
+    uui_dialog_focus(&g_dialog, NULL);
+
+    // The document's directory, or the root -- and for Save As its name,
+    // selected so that typing replaces it.
+    char dir[PATH_MAX_LEN];
+    if (!g_path[0] || !k_path_dirname(g_path, dir, sizeof dir)) strlcpy(dir, "/", sizeof dir);
+    uui_fileview_set_dir(&g_dlg_list, dir);
+    dlg_name_set(saving && g_path[0] ? k_path_basename(g_path) : "");
+    dialog_show();
+    if (saving && g_path[0]) uui_textbox_key(&g_dlg_name, 0x01); // Ctrl-A
 }
 
-// Returns 1 if the dialog consumed the key.
-static int dialog_key(struct uapp *a, int key) {
-    if (key == 0x1B) { g_dialog_open = 0; set_status("cancelled"); return 1; }
+// A button committed (or Return/Escape did). Typed name first, then
+// the selection; OK on a folder enters it and keeps the dialog up, as
+// every chooser does.
+static void dialog_answer(struct uapp *a, int code) {
+    if (code != CMD_DLG_OK) { set_status("cancelled"); return; }
 
-    if (g_dialog_saving) {
-        if (key == '\n' || key == '\r') {
-            g_dialog_open = 0;
-            if (g_name_len > 0) {
-                // Normalise to an absolute path. A bare name typed here
-                // used to be stored as-is, so the title read
-                // "notes.txt" after a save and "/notes.txt" after an
-                // open -- the same file described two ways, and a later
-                // Save then wrote through a relative path whose meaning
-                // depended on the kernel's cwd rather than on where the
-                // dialog actually was.
-                char full[PATH_MAX_LEN];
-                if (g_name_field[0] == '/') scopy(full, g_name_field, PATH_MAX_LEN);
-                else join_path(full, g_name_field);
-                save_file(a, full);
-            }
-            return 1;
-        }
-        if (key == '\b') {
-            if (g_name_len > 0) g_name_field[--g_name_len] = '\0';
-            return 1;
-        }
-        if (key >= 32 && key < 127 && g_name_len < PATH_MAX_LEN - 1) {
-            g_name_field[g_name_len++] = (char)key;
-            g_name_field[g_name_len] = '\0';
-        }
-        return 1;
+    char full[PATH_MAX_LEN];
+    const char *typed = uui_textbox_text(&g_dlg_name);
+    const char *sel = uui_fileview_selected_name(&g_dlg_list);
+    if (typed[0]) {
+        // Normalised to an absolute path: a bare name is relative to
+        // the listing, never to the kernel's cwd, so the title reads the
+        // same after a save as after an open of the same file.
+        int ok = typed[0] == '/' ? (int)strlcpy(full, typed, sizeof full) < (int)sizeof full
+                                 : k_path_join(uui_fileview_dir(&g_dlg_list), typed, full, sizeof full);
+        if (!ok) { set_status("path too long"); return; }
+    } else if (uui_fileview_selected_is_dir(&g_dlg_list) || (sel && strcmp(sel, "..") == 0)) {
+        uui_fileview_activate(&g_dlg_list);
+        dialog_show();
+        return;
+    } else if (!uui_fileview_selected_path(&g_dlg_list, full, sizeof full)) {
+        set_status("no file chosen");
+        return;
     }
-
-    if (key == KEY_ARROW_UP)   { if (g_sel > 0) g_sel--; return 1; }
-    if (key == KEY_ARROW_DOWN) { if (g_sel < g_entry_count - 1) g_sel++; return 1; }
-    if (key == '\n' || key == '\r') {
-        if (dialog_activate(a)) g_dialog_open = 0;
-        return 1;
-    }
-    return 1; // modal: swallow everything else
+    if (g_dlg_saving) save_file(a, full);
+    else load_file(a, full);
 }
 
 // --- commands ---------------------------------------------------------
@@ -641,10 +523,10 @@ static int dialog_key(struct uapp *a, int key) {
 // the Ctrl accelerators -- which is what stops "Ctrl-S" and "File >
 // Save" from being two implementations of saving.
 
-static void log_action(int code);
-
 static void do_command(struct uapp *a, int code) {
-    log_action(code);
+    // An ACTION is an event a test waits for exactly once, so it is
+    // never a layout line (docs/conventions/gui.md).
+    ulogf("notepad: action %d\n", code);
     switch (code) {
     case CMD_NEW:
         utext_clear(&g_text);
@@ -653,14 +535,14 @@ static void do_command(struct uapp *a, int code) {
         set_status("new file");
         break;
     case CMD_OPEN:
-        open_dialog(0);
+        file_dialog(0);
         break;
     case CMD_SAVE:
         if (g_path[0]) save_file(a, g_path);
-        else open_dialog(1);
+        else file_dialog(1);
         break;
     case CMD_SAVE_AS:
-        open_dialog(1);
+        file_dialog(1);
         break;
     case CMD_EXIT:
         uapp_quit(a, 0);
@@ -673,7 +555,7 @@ static void do_command(struct uapp *a, int code) {
             // A copy: load_file() calls recent_push(), which rewrites the
             // very slot the path is being read out of.
             char p[PATH_MAX_LEN];
-            scopy(p, g_recent[i], PATH_MAX_LEN);
+            strlcpy(p, g_recent[i], sizeof p);
             load_file(a, p);
         }
         break;
@@ -749,125 +631,73 @@ static void editor_key(int key) {
 
 // --- Toykit callbacks -------------------------------------------------
 //
-// Notepad does NOT use uapp's `buttons` routing, on purpose: its file
-// dialog is modal and its menu bar owns input ahead of everything else.
-// `desc.buttons` is optional for exactly this case -- an app with its
-// own precedence rules keeps them, and still gets the loop, the
-// handshake and the resize handling.
+// The bars and the dialog are ROUTED (desc.widgets); the document is
+// not a widget, so its clicks, drags and wheel are still handled here.
 
 static int g_dragging;
 static int g_scrollbar_drag;
 static int g_scrollbar_grab; // how far down the thumb the drag started
 
-// --- self-reported layout ----------------------------------------------
-//
-// docs/gui-guidelines.md: a GUI test asks the app where things are.
-// Re-deriving a menu's rectangles in Python would be hopeless anyway --
-// they depend on which submenu is open and on how the placement flipped
-// -- so every rect a test could want is reported here, from the SAME
-// accessors the widget draws with.
+// Set when the router named a widget for the press now being delivered
+// -- on_widget runs before on_press for the same event -- so a click a
+// menu swallowed to dismiss itself never also moves the caret.
+static int g_press_taken;
 
-// Builds one report line into `b`. Two sinks use it, and the split
-// matters: a LAYOUT line is a per-frame report and goes through the
-// toolkit's gated, deduped path, while an ACTION is an event a test
-// waits for exactly once and must never be suppressed.
-static void fmt_line(char *b, int cap, const char *prefix, const int *v, int n);
-
-static void emit(const char *prefix, const int *v, int n) {
-    char b[96];
-    fmt_line(b, sizeof b, prefix, v, n);
-    sys_eprint(b);
-}
-
-// The same line, on the layout path.
-static void emit_layout(const char *prefix, const int *v, int n) {
-    char b[96];
-    fmt_line(b, sizeof b, prefix, v, n);
-    uapp_log_layout_line(b);
-}
-
-static void fmt_line(char *b, int cap, const char *prefix, const int *v, int n) {
-    (void)cap;
-    int i = 0;
-    while (prefix[i]) { b[i] = prefix[i]; i++; }
-    for (int k = 0; k < n; k++) {
-        b[i++] = ' ';
-        i = put_int(b, i, v[k]);
-    }
-    b[i++] = '\n';
-    b[i] = '\0';
-}
-
-static void log_action(int code) {
-    int v[1] = { code };
-    emit("notepad: action", v, 1);
-}
-
+// docs/gui-guidelines.md: a GUI test asks the app where things are. The
+// widgets report themselves through the toolkit's walk; the two rects
+// only this file knows are added first. `layout scrollbar` LEADS every
+// frame -- tests cut the log to the current frame at that line.
 static void log_layout(struct uapp *a) {
-    int cw = uapp_width(a), ch = uapp_height(a);
-
     int tx, ty, tw, th, x, y, w, h;
-    text_rect_for(cw, ch, &tx, &ty, &tw, &th);
+    text_rect_for(uapp_width(a), uapp_height(a), &tx, &ty, &tw, &th);
     scrollbar_rect(tx, ty, tw, th, &x, &y, &w, &h);
-    { int v[4] = { x, y, w, h }; emit_layout("notepad: layout scrollbar", v, 4); }
-
-    // The editable area itself. Added when the toolbar became a menu
-    // bar: the text moved up by the difference in chrome height, and a
-    // test sampling a hardcoded band below it went on comparing three
-    // identical patches of blank background and reporting them as
-    // passes. A rect the app states cannot drift that way.
-    { int v[4] = { tx, ty, tw, th }; emit_layout("notepad: layout text", v, 4); }
-
-    { int v[4] = { g_menu.x, g_menu.y, g_menu.w, g_menu.h };
-      emit_layout("notepad: layout menubar", v, 4); }
-
-    for (int i = 0; i < (int)(sizeof menu_bar / sizeof menu_bar[0]); i++) {
-        if (!uui_menubar_title_rect(&g_menu, i, &x, &y, &w, &h)) continue;
-        int v[5] = { i, x, y, w, h };
-        emit_layout("notepad: layout title", v, 5);
-    }
-
-    if (g_show_status) {
-        { int v[4] = { g_statusbar.x, g_statusbar.y, g_statusbar.w, g_statusbar.h };
-          emit_layout("notepad: layout statusbar", v, 4); }
-        for (int i = 0; i < g_statusbar.count; i++) {
-            if (!uui_statusbar_pane_rect(&g_statusbar, i, &x, &y, &w, &h)) continue;
-            int v[5] = { i, x, y, w, h };
-            emit_layout("notepad: layout pane", v, 5);
-        }
-    }
-
-    for (int l = 0; l < uui_menubar_depth(&g_menu); l++) {
-        if (uui_menubar_popup_rect(&g_menu, l, &x, &y, &w, &h)) {
-            int v[5] = { l, x, y, w, h };
-            emit_layout("notepad: layout popup", v, 5);
-        }
-        for (int i = 0; uui_menubar_item_rect(&g_menu, l, i, &x, &y, &w, &h); i++) {
-            int v[6] = { l, i, x, y, w, h };
-            emit_layout("notepad: layout item", v, 6);
-        }
-    }
+    uapp_logf_layout("notepad: layout scrollbar %d %d %d %d\n", x, y, w, h);
+    uapp_logf_layout("notepad: layout text %d %d %d %d\n", tx, ty, tw, th);
+    uapp_log_layout(a, "notepad");
 }
 
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
     set_title(a);
-    draw(uapp_surface(d), uapp_focused(a));
+    layout_chrome(d->surface->w, d->surface->h);
+    if (g_show_status) update_indicators();
+    draw_document(uapp_surface(d), uapp_focused(a));
     log_layout(a);
+}
+
+static void on_widget(struct uapp *a, int id, int reason) {
+    if (reason == UUI_REASON_PRESS) g_press_taken = 1;
+    switch (id) {
+    case ID_MENU: {
+        // The commit is PARKED in the widget (ui/uui_menubar.h).
+        int code = uui_menubar_take_code(&g_menu);
+        if (code > 0) do_command(a, code);
+        break;
+    }
+    case ID_DIALOG: {
+        int code = uui_dialog_take_code(&g_dialog);
+        if (code > 0) dialog_answer(a, code);
+        break;
+    }
+    case ID_DLG_LIST:
+    case ID_DLG_NAME:
+        // Keys follow the click; the router names the child, so the
+        // dialog is told here (ui/uui_dialog.h).
+        if (reason == UUI_REASON_PRESS) uui_dialog_focus(&g_dialog, DLG_ITEM(id));
+        break;
+    default:
+        break;
+    }
+    uapp_redraw(a);
 }
 
 static void on_key(struct uapp *a, int key, unsigned mods) {
     (void)mods;
-    if (g_dialog_open) {
-        dialog_key(a, key);
-        uapp_redraw(a);
-        return;
-    }
-
-    // The menu bar gets first refusal. When closed it takes only F10, so
-    // Esc still quits and every editing key is untouched.
-    int code = -1;
+    // An open dialog never reaches here: the router hands it every key
+    // first (ui/uui_route.h). An open menu does -- its ops table has
+    // no key slot -- and when closed it takes only F10.
+    int code = 0;
     if (uui_menubar_key(&g_menu, key, &code)) {
-        if (code >= 0) do_command(a, code);
+        if (code > 0) do_command(a, code);
         uapp_redraw(a);
         return;
     }
@@ -881,9 +711,7 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     // both handled above -- and otherwise does nothing. Closing the
     // window is Alt+F4, which never reaches here: the WM takes it and
     // asks through the same handshake the X button uses, so this app's
-    // on_close (uapp's default, accept) still decides. That matters
-    // most here of all the clients: Esc was one stray press away from
-    // destroying unsaved text, and it became the menu-close key too.
+    // on_close (uapp's default, accept) still decides.
     editor_key(key);
     uapp_redraw(a);
 }
@@ -935,37 +763,21 @@ static int scrollbar_press(int px, int py, int tx, int ty, int tw, int th) {
 }
 
 static void on_wheel(struct uapp *a, int notches) {
-    // Three lines a notch, the same step the kernel-space scrollback
-    // uses. utext_scroll clamps for us.
+    // Only reached when no widget took the wheel -- an open dialog or
+    // menu absorbs it (ui/uui_route.h). Three lines a notch, the same
+    // step the kernel-space scrollback uses. utext_scroll clamps for us.
     utext_scroll(&g_text, notches * 3);
     uapp_redraw(a);
 }
 
 static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
     (void)buttons;
+    if (g_press_taken) { g_press_taken = 0; return; }
+    if (uui_dialog_is_open(&g_dialog)) return; // a secondary press; the modal keeps it
+
     int tx, ty, tw, th;
     text_rect_for(uapp_width(a), uapp_height(a), &tx, &ty, &tw, &th);
-
-    if (g_dialog_open) {
-        if (!g_dialog_saving) {
-            int row_h = ugfx_char_h() + 4;
-            int list_y = 40 + 10 + ugfx_char_h() + 8;
-            int idx = (y - list_y) / row_h;
-            if (idx >= 0 && idx < g_entry_count) {
-                // Clicking the already-selected row activates it. There
-                // is no double-click concept in TWP, and requiring a
-                // trip to the keyboard to enter a directory would be
-                // worse.
-                if (idx == g_sel) {
-                    if (dialog_activate(a)) g_dialog_open = 0;
-                } else {
-                    g_sel = idx;
-                }
-            }
-        }
-    } else if (uui_menubar_press(&g_menu, x, y)) {
-        // the menu opened, switched, or swallowed a dismissing click
-    } else if (scrollbar_press(x, y, tx, ty, tw, th)) {
+    if (scrollbar_press(x, y, tx, ty, tw, th)) {
         // handled: jumped to the clicked position
     } else if (x >= tx && x < tx + tw && y >= ty && y < ty + th) {
         g_text.ed.cursor = utext_index_at_point(&g_text, tx, ty, tw, th, x, y);
@@ -981,58 +793,39 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
 
     // The I-beam over the document and nothing else. Set on EVERY
     // motion, including back to the arrow -- it is a state (ui/uapp.h).
-    {
-        int fx, fy, fw, fh;
-        int over_text;
-        if (dialog_field_rect(uapp_width(a), uapp_height(a), &fx, &fy, &fw, &fh)) {
-            // The dialog COVERS the document, so its rect must not
-            // answer while the field is the only text in reach.
-            over_text = x >= fx && x < fx + fw && y >= fy && y < fy + fh;
-        } else {
-            over_text = x >= tx && x < tx + tw && y >= ty && y < ty + th &&
-                        !uui_menubar_is_open(&g_menu) && !g_dialog_open;
-        }
+    // With the dialog up the widget tree's answer stands (its field
+    // names the I-beam itself), so this says nothing then.
+    if (!uui_dialog_is_open(&g_dialog)) {
+        int over_text = x >= tx && x < tx + tw && y >= ty && y < ty + th &&
+                        !uui_menubar_is_open(&g_menu);
         uapp_set_cursor(a, over_text ? WIN_CURSOR_TEXT : WIN_CURSOR_DEFAULT);
     }
 
-    // The menu tracks the cursor whether or not a button is held -- that
-    // is what makes press-on-a-title, drag-down, release-on-an-item work,
-    // and it is how every real menu bar behaves. Skipped only while a
-    // text or scrollbar drag owns the mouse.
-    if (!g_dragging && !g_scrollbar_drag && !g_dialog_open) {
-        if (uui_menubar_motion(&g_menu, x, y)) uapp_redraw(a);
-        if (uui_menubar_is_open(&g_menu)) return;
-    }
-
-    if (buttons) {
-        if (g_scrollbar_drag) {
-            int total, visible;
-            utext_metrics(&g_text, tw, th, &total, &visible);
-            if (total > visible) {
-                int bx, by, bw, bh;
-                scrollbar_rect(tx, ty, tw, th, &bx, &by, &bw, &bh);
-                // The widget's own drag mapping -- so the thumb tracks
-                // the cursor the same way it is drawn, arrows included.
-                g_text.scroll_offset =
-                    uui_scrollbar_offset_for_drag(by, bh, total, visible, y,
-                                                   g_scrollbar_grab,
-                                                   bw, NP_SCROLLBAR_FLAGS);
-                uapp_redraw(a);
-            }
-        } else if (g_dragging) {
-            g_text.ed.cursor = utext_index_at_point(&g_text, tx, ty, tw, th, x, y);
+    if (!buttons) return;
+    if (g_scrollbar_drag) {
+        int total, visible;
+        utext_metrics(&g_text, tw, th, &total, &visible);
+        if (total > visible) {
+            int bx, by, bw, bh;
+            scrollbar_rect(tx, ty, tw, th, &bx, &by, &bw, &bh);
+            // The widget's own drag mapping -- so the thumb tracks
+            // the cursor the same way it is drawn, arrows included.
+            g_text.scroll_offset =
+                uui_scrollbar_offset_for_drag(by, bh, total, visible, y,
+                                               g_scrollbar_grab,
+                                               bw, NP_SCROLLBAR_FLAGS);
             uapp_redraw(a);
         }
+    } else if (g_dragging) {
+        g_text.ed.cursor = utext_index_at_point(&g_text, tx, ty, tw, th, x, y);
+        uapp_redraw(a);
     }
 }
 
 static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
-    (void)buttons;
+    (void)x; (void)y; (void)buttons;
     g_dragging = 0;
     g_scrollbar_drag = 0;
-
-    int code = uui_menubar_release(&g_menu, x, y);
-    if (code >= 0) do_command(a, code);
     uapp_redraw(a);
 }
 
@@ -1043,11 +836,12 @@ static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
 static char g_arg_path[PATH_MAX_LEN];
 
 static void on_open_cb(struct uapp *a) {
+    g_app = a;
     utext_init(&g_text);
     g_path[0] = '\0';
     set_status("F10 for the menu -- Ctrl-O open, Ctrl-S save, Alt+F4 quit");
 
-    for (int i = 0; i < RECENT_MAX; i++) scopy(g_recent[i], "(empty)", PATH_MAX_LEN);
+    for (int i = 0; i < RECENT_MAX; i++) strlcpy(g_recent[i], "(empty)", PATH_MAX_LEN);
 
     uui_menubar_init(&g_menu, menu_bar, (int)(sizeof menu_bar / sizeof menu_bar[0]));
     g_menu.item_flags = menu_item_flags;
@@ -1059,6 +853,18 @@ static void on_open_cb(struct uapp *a) {
     g_statusbar.panes[2].text = g_modflag;  g_statusbar.panes[2].chars = 4;
     update_indicators();
 
+    uui_dialog_init(&g_dialog);
+    uui_fileview_init(&g_dlg_list, 0, 0, 100, 100, g_dlg_entries, DIALOG_MAX_FILES);
+    uui_fileview_set_mode(&g_dlg_list, UUI_FILEVIEW_LIST);
+    g_dlg_list.on_open = dlg_on_open;
+    g_dlg_list.on_select = dlg_on_select;
+    g_dlg_list.on_dir_changed = dlg_on_dir_changed;
+    uui_textbox_init(&g_dlg_name, "");
+    g_dlg_layout.dir = UUI_COLUMN;
+    g_dlg_layout.margin = 1;   // the dialog's own padding is the moat
+    g_dlg_layout.items = g_dlg_items;
+    g_dlg_layout.count = (int)(sizeof g_dlg_items / sizeof g_dlg_items[0]);
+
     // AFTER the widgets are set up, not before: load_file() writes the
     // status bar and the title, and both have to exist first.
     if (g_arg_path[0]) {
@@ -1068,30 +874,33 @@ static void on_open_cb(struct uapp *a) {
 }
 
 int main(int argc, char **argv) {
-    if (argc > 1 && argv[1][0]) scopy(g_arg_path, argv[1], PATH_MAX_LEN);
+    if (argc > 1 && argv[1][0]) strlcpy(g_arg_path, argv[1], sizeof g_arg_path);
 
     struct uapp_desc desc = {
-        .title      = "untitled",
-        .app_id     = "notepad",
-        .w          = WIN_W,
-        .h          = WIN_H,
-        .x          = 180,
-        .y          = 90,
+        .title        = "untitled",
+        .app_id       = "notepad",
+        .w            = WIN_W,
+        .h            = WIN_H,
+        .x            = 180,
+        .y            = 90,
         // Resizable: an editor is the app that most wants it, and it
         // needs no resize code -- text_rect_for() already derives the
         // text area from the content size, so a bigger window is a
         // bigger page. The minimum keeps the menu bar, one text row and
         // the status bar visible.
-        .flags      = UAPP_RESIZABLE,
-        .min_w      = 240,
-        .min_h      = 120,
-        .on_open    = on_open_cb,
-        .on_draw    = on_draw,
-        .on_key     = on_key,
-        .on_press   = on_press,
-        .on_motion  = on_motion,
-        .on_release = on_release,
-        .on_wheel   = on_wheel,
+        .flags        = UAPP_RESIZABLE,
+        .min_w        = 240,
+        .min_h        = 120,
+        .widgets      = g_widgets,
+        .widget_count = (int)(sizeof g_widgets / sizeof g_widgets[0]),
+        .on_open      = on_open_cb,
+        .on_draw      = on_draw,
+        .on_widget    = on_widget,
+        .on_key       = on_key,
+        .on_press     = on_press,
+        .on_motion    = on_motion,
+        .on_release   = on_release,
+        .on_wheel     = on_wheel,
     };
     return uapp_run(&desc);
 }

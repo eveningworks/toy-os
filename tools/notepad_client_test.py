@@ -69,6 +69,17 @@ def type_text(dbg, text):
     dbg.settle()
 
 
+def fileview_selected(dbg, default=-1):
+    """The Open dialog's selected row, as the app reports it. -1 when
+    the app has not drawn a fileview since the log was last read."""
+    for l in reversed(dbg.logs("notepad: layout flist.selected", clear=False)):
+        try:
+            return int(l.split("flist.selected")[1].split()[0])
+        except (IndexError, ValueError):
+            continue
+    return default
+
+
 def find_window(dbg, want):
     """Notepad's title is the file's path with a leading '*' while
     dirty, so match on the BASENAME rather than the whole string --
@@ -217,31 +228,45 @@ def run(dbg, qmp, tmp, shot_dir, res):
     res.check("New clears the editor", cleared != typed)
     blank_ref = cleared
 
-    # Navigate the dialog deterministically: `ls /` lists in the same
-    # table order sys_listdir() returns, so the row index is derivable
-    # rather than guessed. Guessing is what made an earlier version of
-    # this test reopen the dialog in a loop and reset its own selection.
-    # Parse ONLY the entry lines. `ls`'s output is interleaved with
-    # kernel log lines ("elf_run: calling process_run_ring3() ...") on
-    # this console, and a naive split()[-1] picks those up too -- which
-    # is exactly how an earlier version of this test computed an index
-    # one row off and then blamed the app.
+    # The file is really there, asked of the filesystem rather than of
+    # the app. Parse ONLY the entry lines: `ls`'s output is interleaved
+    # with kernel log lines on this console, and a naive split()[-1]
+    # picks those up too -- which is how an earlier version of this test
+    # computed an index one row off and then blamed the app.
     import re as _re
     entry = _re.compile(r"^[A-Za-z0-9._-]+/?$")
     names = [l.strip().rstrip("/") for l in dbg.send("sh ls /").splitlines()
              if entry.match(l.strip())]
-    idx = names.index(SAVE_NAME) if SAVE_NAME in names else -1
-    res.check("the saved file appears in the directory listing", idx >= 0,
-              f"{SAVE_NAME} not among {names}")
+    res.check("the saved file appears in the directory listing",
+              SAVE_NAME in names, f"{SAVE_NAME} not among {names}")
 
+    # SELECT THE ROW BY TYPE-AHEAD, WITH ONE LETTER, and both halves of
+    # that matter.
+    #
+    # Counting arrow presses is out: the dialog's body is a uui_fileview
+    # now, which groups directories before files and sorts within each
+    # group, so `ls`'s order is not the list's order and an index derived
+    # from it lands on a directory. Re-deriving the list's order here
+    # would be the same mistake in a longer form -- the app already knows
+    # it (docs/conventions/gui.md).
+    #
+    # ONE letter, not the whole name: uui_seek's window is
+    # UUI_SEEK_WINDOW_MS between keystrokes, so a multi-letter search
+    # sent over this console restarts if any one key is slow, which under
+    # a loaded suite it will be. The first keystroke starts a fresh
+    # search and waits on nothing. `np` is the only entry at "/" starting
+    # with that letter; if that ever stops being true the title check
+    # below fails loudly rather than passing on the wrong file.
     found = False
-    if idx >= 0:
+    if SAVE_NAME in names:
         key(dbg, CTRL_O)
         dbg.settle()
         time.sleep(0.5)
-        for _ in range(idx):
-            key(dbg, "0x92")  # arrow down
+        key(dbg, SAVE_NAME[0])
         dbg.settle()
+        res.check("typing a letter moves the dialog's selection",
+                  fileview_selected(dbg) > 0,
+                  "the fileview never reported a selection past row 0")
         key(dbg, ENTER)
         dbg.settle()
         time.sleep(1.0)

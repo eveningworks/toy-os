@@ -5025,13 +5025,21 @@ never declared it. So it got an ops table, and the ordering is now a
 property of the design rather than of a guard someone has to remember.
 
 **The obvious next step was to delete the hand-routed calls and convert
-Notepad, Files, Imgview and Mines. That was not done, and the reason is
-that the two interfaces are not redundant.** An app with no routed
-widgets — Notepad has none — gains nothing from the table and loses the
-ability to sequence the menu against its own modal state, which is real
-there: Notepad's file dialog has to outrank the menu, and it expresses
-that by simply not calling into it. Converting would mean giving the
-router a notion of app-level modality that nothing else wants.
+Notepad, Files, Imgview and Mines. Three of the four are converted; the
+two interfaces are still not redundant.** An app with no routed widgets
+— Minesweeper has none, and paints its board itself — gains nothing from
+the table.
+
+The argument that kept Notepad out was app-level modality: its file
+dialog has to outrank the menu, and it expressed that by simply not
+calling into it, where converting looked like it would need the router
+to learn a notion of modality nothing else wanted. That turned out to be
+wrong, and the reason is worth keeping. The dialog became a routed
+`uui_dialog` declared LAST in `desc.widgets`, and modality is then a
+property the widget already had: a widget claiming the overlay is
+offered every press first, with no hit test, and is drawn after the
+others. The app sequences nothing. What looked like a missing router
+feature was a widget that had not been written yet.
 
 So the rule is a rule about the APP, not about the widget:
 `uapp_desc.widgets` non-empty means use the table. That is stated in

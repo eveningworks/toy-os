@@ -1988,9 +1988,10 @@ real scanout hardware does. Do not write a pixel assertion for one.
   Viewer's sidebar -- all doing `sys_listdir()`, `dirsort()`, a
   synthetic `..` row and descend-on-activate. No real toolkit ships four
   (Windows has one `SysListView32`, Qt one `QFileSystemModel`, GTK one
-  `GtkFileChooser`). **Image Viewer is converted; the other two are
-  NOT** (`docs/roadmap.md` carries it), so the duplication is smaller
-  and still there. Seven things to know:
+  `GtkFileChooser`). **Image Viewer and Notepad are converted; the WM's
+  file picker is NOT** (`docs/roadmap.md` carries it) -- and it is the
+  awkward one, since it is the compositor's rather than an app's.
+  Seven things to know:
   - **It COMPOSES `uui_table`** rather than reimplementing rows,
     scrolling, the sorting header and keyboard motion. What it adds is
     what is specific to directories.
@@ -2340,10 +2341,12 @@ handing one back through a pipe that carries 1 KiB a read is absurd.
 `uui_menubar` has two interfaces now and picking the wrong one is a
 silent bug rather than a style choice.
 
-The HAND-ROUTED one is what Notepad uses: the app owns its
+The HAND-ROUTED one is what Minesweeper uses: the app owns its
 `on_press`/`on_motion`/`on_release` and calls `uui_menubar_press()` and
 friends from them. That is correct for an app whose other controls are
-hand-drawn, and Notepad declares no routed widgets at all.
+hand-drawn -- Minesweeper's board is a grid it paints itself -- and it
+declares no routed widgets at all. Notepad was the other one and is not
+any more; its bars and its file dialog are routed now.
 
 **AN APP THAT DECLARES `uapp_desc.widgets` MUST USE THE OPS TABLE
 INSTEAD** -- `tools/check_key_routing.py` fails the build on the other

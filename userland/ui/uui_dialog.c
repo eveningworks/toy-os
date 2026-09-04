@@ -47,13 +47,38 @@ static void layout(struct uui_dialog *d) {
     int row_w = d->button_count * bw + (d->button_count - 1) * gap;
     if (row_w > widest) widest = row_w;
 
+    int body_h = 0;
+    if (d->body) {
+        if (d->body_w > widest) widest = d->body_w;
+        body_h = d->body_h + gap;
+    }
+
     d->w = widest + pad * 2;
     if (d->w > d->bw - gap * 2) d->w = d->bw - gap * 2;
-    d->h = pad * 2 + line_h() * (d->row_count + 1) + gap + btn_h();
+    int text_h = pad * 2 + line_h() * (d->row_count + 1) + gap + btn_h();
+    // The body gives way before the box leaves the window: a listing
+    // with fewer rows beats a Cancel button below the bottom edge.
+    if (body_h > 0 && text_h + body_h > d->bh - gap * 2) {
+        body_h = d->bh - gap * 2 - text_h;
+        if (body_h < line_h() + gap) body_h = line_h() + gap;
+    }
+    d->h = text_h + body_h;
 
     d->x = d->bx + (d->bw - d->w) / 2;
     d->y = d->by + (d->bh - d->h) / 2;
     if (d->y < d->by) d->y = d->by;
+
+    if (d->body && d->body->ops && d->body->ops->set_geometry) {
+        d->body->ops->set_geometry(d->body->widget, d->x + pad,
+                                   d->y + pad + line_h() * (d->row_count + 1),
+                                   d->w - pad * 2, body_h - gap);
+    }
+}
+
+int uui_dialog_body_rect(const struct uui_dialog *d, int *x, int *y, int *w, int *h) {
+    if (!d->open || !d->body || !d->body->ops || !d->body->ops->bounds) return 0;
+    d->body->ops->bounds(d->body->widget, x, y, w, h);
+    return 1;
 }
 
 // Button `i`'s rect. ONE calculation, shared by the draw and the hit
@@ -112,14 +137,32 @@ void uui_dialog_close(struct uui_dialog *d) {
 
 int uui_dialog_is_open(const struct uui_dialog *d) { return d->open; }
 
+void uui_dialog_set_body(struct uui_dialog *d, struct uui_item *body, int w, int h) {
+    d->body = body;
+    d->body_w = w;
+    d->body_h = h;
+    if (!body) d->focus = NULL;
+    if (d->open) layout(d);
+}
+
+void uui_dialog_focus(struct uui_dialog *d, struct uui_item *it) {
+    if (d->focus == it) return;
+    if (d->focus && d->focus->ops && d->focus->ops->set_focused)
+        d->focus->ops->set_focused(d->focus->widget, 0);
+    d->focus = it;
+    if (it && it->ops && it->ops->set_focused) it->ops->set_focused(it->widget, 1);
+}
+
 int uui_dialog_take_code(struct uui_dialog *d) {
     int c = d->committed;
     d->committed = -1;
     return c;
 }
 
-void uui_dialog_draw(struct ugfx_surface *s, const struct uui_dialog *d) {
-    if (!d->open) return;
+// The box, its title and its rows. Split from the buttons because a
+// dialog WITH A BODY draws these around its children (children_begin /
+// children_end); one without draws both at once.
+static void draw_frame(struct ugfx_surface *s, const struct uui_dialog *d) {
     int pad = utheme_pad();
 
     ugfx_fill_rect(s, d->x, d->y, d->w, d->h, UTHEME_WINDOW_BG);
@@ -142,7 +185,9 @@ void uui_dialog_draw(struct ugfx_surface *s, const struct uui_dialog *d) {
                                       d->rows[i], UTHEME_TEXT, UTHEME_WINDOW_BG);
         y += line_h();
     }
+}
 
+static void draw_buttons(struct ugfx_surface *s, const struct uui_dialog *d) {
     for (int i = 0; i < d->button_count; i++) {
         int bx, by, bw, bh;
         button_rect(d, i, &bx, &by, &bw, &bh);
@@ -157,6 +202,12 @@ void uui_dialog_draw(struct ugfx_surface *s, const struct uui_dialog *d) {
                                   uui_state_bg(UTHEME_BUTTON_BG, st));
         if (d->hot == i) uui_focus_ring(s, bx, by, bw, bh);
     }
+}
+
+void uui_dialog_draw(struct ugfx_surface *s, const struct uui_dialog *d) {
+    if (!d->open) return;
+    draw_frame(s, d);
+    draw_buttons(s, d);
 }
 
 // --- input ------------------------------------------------------------
@@ -178,6 +229,11 @@ static void commit(struct uui_dialog *d, int index) {
 
 int uui_dialog_key(struct uui_dialog *d, int key) {
     if (!d->open) return 0;
+    // The focused body item first: a fileview's Enter opens, a field's
+    // Left moves its caret. What it declines falls to the buttons -- a
+    // field never takes Enter, so Return still commits the default.
+    if (d->focus && d->focus->ops && d->focus->ops->key &&
+        d->focus->ops->key(d->focus->widget, key, 0)) return 1;
     switch (key) {
     case 0x1B:   // Esc answers the cancel code, whatever it is
         d->committed = d->cancel_code;
@@ -225,6 +281,31 @@ static void dlg_bounds(const void *w, int *x, int *y, int *out_w, int *out_h) {
 }
 static void dlg_draw_overlay(struct ugfx_surface *s, const void *w) {
     uui_dialog_draw(s, (const struct uui_dialog *)w);
+}
+// With a body the dialog is a container, and the router paints it in
+// the items pass: frame, then the body's items, then the buttons. The
+// overlay slot above is never reached for one (ui/uui_route.c draws
+// a container's children instead), so nothing paints twice.
+static struct uui_item *dlg_children(void *w, int *out_count) {
+    struct uui_dialog *d = w;
+    if (!d->open || !d->body) { *out_count = 0; return NULL; }
+    *out_count = 1;
+    return d->body;
+}
+static void dlg_children_begin(struct ugfx_surface *s, void *w) {
+    draw_frame(s, (const struct uui_dialog *)w);
+}
+static void dlg_children_end(struct ugfx_surface *s, void *w) {
+    draw_buttons(s, (const struct uui_dialog *)w);
+}
+static void dlg_describe(const void *w, const struct uui_describe *desc) {
+    const struct uui_dialog *d = w;
+    if (!d->open) return;
+    for (int i = 0; i < d->button_count; i++) {
+        int x, y, bw, bh;
+        button_rect(d, i, &x, &y, &bw, &bh);
+        uui_describe_rect_i(desc, "button", i, x, y, bw, bh);
+    }
 }
 static int dlg_overlay_active(const void *w) {
     return ((const struct uui_dialog *)w)->open;
@@ -289,4 +370,8 @@ const struct uui_widget_ops uui_dialog_ops = {
     .key             = dlg_key,
     .accepts_focus   = dlg_accepts_focus,
     .set_focused     = dlg_set_focused,
+    .children        = dlg_children,
+    .children_begin  = dlg_children_begin,
+    .children_end    = dlg_children_end,
+    .describe        = dlg_describe,
 };

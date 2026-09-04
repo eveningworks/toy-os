@@ -62,19 +62,22 @@ static struct uui_item *press_item(struct uui_item *it, int cx, int cy,
 
 // Any item claiming an overlay, searched depth-first. Offered every
 // press first, whatever the coordinates.
+//
+// A CONTAINER MAY BE THE OWNER: a modal dialog with a body is one, and
+// it is asked before its children are searched, so the whole subtree is
+// then routed through it (press_item/motion_item/wheel_item recurse).
 static struct uui_item *overlay_owner(struct uui_item *items, int count) {
     for (int i = count - 1; i >= 0; i--) {
+        if (items[i].hidden) continue;
+        const struct uui_widget_ops *ops = items[i].ops;
+        if (ops && ops->overlay_active && ops->overlay_active(items[i].widget)) {
+            return &items[i];
+        }
         int n = 0;
         struct uui_item *sub = nested(&items[i], &n);
         if (sub) {
             struct uui_item *o = overlay_owner(sub, n);
             if (o) return o;
-            continue;
-        }
-        if (items[i].hidden) continue;
-        const struct uui_widget_ops *ops = items[i].ops;
-        if (ops && ops->overlay_active && ops->overlay_active(items[i].widget)) {
-            return &items[i];
         }
     }
     return NULL;
@@ -85,11 +88,11 @@ int uui_router_press(struct uui_router *r, int cx, int cy, unsigned mods,
     int changed = 0;
     struct uui_item *taken = NULL;
 
+    // Through press_item(), not the owner's press directly: an owner
+    // with children (a dialog's body) offers them the press first and
+    // its own press only takes what they declined.
     struct uui_item *ov = overlay_owner(r->items, r->count);
-    if (ov && ov->ops->press && ov->ops->press(ov->widget, cx, cy, mods)) {
-        changed = 1;
-        taken = ov;
-    }
+    if (ov) taken = press_item(ov, cx, cy, mods, &changed);
 
     if (!taken) {
         for (int i = r->count - 1; i >= 0 && !taken; i--) {
@@ -174,10 +177,7 @@ int uui_router_motion(struct uui_router *r, int cx, int cy, unsigned buttons,
     // and wheel already give it -- and it is skipped in the walk below,
     // since hearing the move twice would light a row and clear it again.
     struct uui_item *ov = overlay_owner(r->items, r->count);
-    if (ov && ov->ops->motion && ov->ops->motion(ov->widget, cx, cy, buttons)) {
-        changed = 1;
-        id = ov->id;
-    }
+    if (ov && motion_item(ov, cx, cy, buttons, NULL, &id)) changed = 1;
 
     // AN OPEN POPUP OWNS THE POINTER: everyone else is told "nowhere",
     // never the real point. Press already stops at the overlay owner;
@@ -218,9 +218,19 @@ int uui_router_cursor(const struct uui_router *r, int cx, int cy) {
     // An open popup answers first: its rows are outside its own `hit`,
     // so the walk below would never reach them.
     struct uui_item *ov = overlay_owner(r->items, r->count);
-    if (ov && ov->ops->cursor) {
-        int c = ov->ops->cursor(ov->widget, cx, cy);
-        if (c != WIN_CURSOR_DEFAULT) return c;
+    if (ov) {
+        int n = 0;
+        struct uui_item *sub = nested(ov, &n);
+        if (sub && container_admits(ov, cx, cy)) {
+            for (int i = n - 1; i >= 0; i--) {
+                int c = cursor_item(&sub[i], cx, cy);
+                if (c != WIN_CURSOR_DEFAULT) return c;
+            }
+        }
+        if (ov->ops->cursor) {
+            int c = ov->ops->cursor(ov->widget, cx, cy);
+            if (c != WIN_CURSOR_DEFAULT) return c;
+        }
     }
     for (int i = r->count - 1; i >= 0; i--) {
         int c = cursor_item(&r->items[i], cx, cy);
@@ -343,10 +353,13 @@ int uui_router_wheel(struct uui_router *r, int cx, int cy, int notches,
     // Under the cursor, not down a fixed chain. An app that tried each
     // scrollable widget in turn scrolled whichever came first in its own
     // list, so the wheel over one control moved another.
+    // AN OPEN POPUP OWNS THE WHEEL AS IT OWNS THE POINTER: it (or its
+    // subtree) takes the notches or nobody does. Letting the walk run
+    // scrolled the list UNDER an open menu, which no desktop's grab
+    // allows -- and would scroll the document behind a modal.
     struct uui_item *ov = overlay_owner(r->items, r->count);
-    if (ov && ov->ops->wheel && ov->ops->wheel(ov->widget, notches)) {
-        changed = 1;
-        id = ov->id;
+    if (ov) {
+        wheel_item(ov, cx, cy, notches, &changed, &id);
     } else {
         for (int i = r->count - 1; i >= 0; i--) {
             if (wheel_item(&r->items[i], cx, cy, notches, &changed, &id)) break;

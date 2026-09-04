@@ -24,7 +24,7 @@ FIRST, and this is what to do first among things that are all
 buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
-- [ ] Finish the app-deduplication pass: two WIP branches and the smaller survey items  *(The GUI in ring 3)*
+- [ ] Finish the app-deduplication pass: one WIP branch and the smaller survey items  *(The GUI in ring 3)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
 - [ ] Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today  *(Networking)*
@@ -511,7 +511,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Clipping RECTANGLES as a first-class concept in `ugfx`~~ DONE 2026-08-18
 - [x] ~~An animation/timer event, so a client does not have to poll~~ DONE 2026-08-18 -- `tick_ms` / `WIN_EV_TIMER`
 - [x] ~~The toolkit as a real shared library rather than static per client~~ DONE 2026-09-04 -- `/lib/libuapp.so`
-- [ ] **NEXT** Finish the app-deduplication pass: two WIP branches and the smaller survey items
+- [ ] **NEXT** Finish the app-deduplication pass: one WIP branch and the smaller survey items
 - [x] ~~Make the ring-3 apps reachable from the desktop~~ done
 - [x] ~~Remove the kernel-space Calculator once the ring-3 one is the default~~ DONE 2026-08-18 -- `apps/` holds no GUI at all
 - [x] ~~ELF loader hardening~~ DONE 2026-08-18
@@ -601,7 +601,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~File operations in-process, with a conflict dialog~~ DONE 2026-08-30 -- `lib/ufileop.h` on a worker thread
 - [ ] An automated check for Shift+click's range -- aiming a click at a chosen list row is not reliable yet (`filemanager_test.py`'s `aim`)
 - [ ] The folder tree follows the active pane -- built and REVERTED: it fights a branch the user collapsed while standing in it
-- [ ] Move Notepad's dialog and the WM's file picker onto `uui_fileview`
+- [ ] Move the WM's file picker onto `uui_fileview` -- Notepad's dialog did, 2026-09-04
 - [x] ~~Desktop calendar widget~~ DONE 2026-08-24 -- a panel popup on the tray clock, not an app
 - [x] ~~Control panel with pluggable applets~~ done
 - [ ] Find/replace in Notepad

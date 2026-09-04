@@ -117,9 +117,20 @@ static void st_ops_bounds(const void *w, int *x, int *y, int *ow, int *oh) {
     *x = s->x; *y = s->y; *ow = s->w; *oh = s->h;
 }
 
+// pane i -- the rects a test samples (ui/uui_describe.h).
+static void sb_ops_describe(const void *w, const struct uui_describe *d) {
+    const struct uui_statusbar *sb = w;
+    for (int i = 0; i < sb->count; i++) {
+        int x, y, pw, ph;
+        if (uui_statusbar_pane_rect(sb, i, &x, &y, &pw, &ph))
+            uui_describe_rect_i(d, "pane", i, x, y, pw, ph);
+    }
+}
+
 const struct uui_widget_ops uui_statusbar_ops = {
     .natural_size = sb_ops_natural_size,
     .set_geometry = sb_ops_set_geometry,
     .draw         = sb_ops_draw,
     .bounds = st_ops_bounds,
+    .describe     = sb_ops_describe,
 };

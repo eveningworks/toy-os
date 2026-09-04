@@ -3056,14 +3056,12 @@ caller is a test.
 
 Started 2026-09-04 and stopped mid-flight for budget. What LANDED on
 main that day: `lib/usetting.h`, `lib/udate.h`, `human_size_iec()`,
-the `uui_*_height()` accessors, and `/lib/libuapp.so`. The `wm:`
-branch landed on 2026-09-04 as well and is struck through below. What
-did NOT land is on two local branches, each a single WIP commit made
-by a worktree agent on top of `84725d17`, each UNTESTED beyond what
-its note says. **Merge one at a time onto main, finish its list, run
-its tools, then `gui_regress.py --logs`, then `preflight.sh`.** Expect
-small conflicts in `userland/ui/uui_menubar.h`/`uui_statusbar.h` (the
-Notepad branch re-added the `_height()` accessors main already has).
+the `uui_*_height()` accessors, and `/lib/libuapp.so`. The `wm:` and
+`notepad:` branches landed the same day and are struck through below.
+What did NOT land is on one local branch, a single WIP commit made by
+a worktree agent on top of `84725d17`, UNTESTED beyond what its note
+says. **Merge it onto main, finish its list, run its tools, then
+`gui_regress.py --logs`, then `preflight.sh`.**
 
 - [x] ~~**The `wm:` branch.**~~ LANDED 2026-09-04 as 3f559427.
   `userland/wm/tray_slider_popup.c/.h` is the shared slider flyout that
@@ -3079,23 +3077,22 @@ Notepad branch re-added the `_height()` accessors main already has).
   and nothing else). `taskbar_test.py`'s three overflow failures were
   MEASURED against unmodified main and are identical there --
   `docs/bugs.md` already carries them.
-- **`worktree-agent-a5da01fc058804666` (`notepad:` WIP, 0a6cde4e).**
-  `notepad.c` 1097 -> ~690 lines: the private Open/Save dialog is a
+- [x] ~~**The `notepad:` branch.**~~ LANDED 2026-09-04 as d86d1113.
+  `notepad.c` 1097 -> 906 lines: the private Open/Save dialog is a
   `uui_dialog` whose body is a `uui_layout` of `uui_fileview` +
-  `uui_textbox`; menu bar, status bar and dialog are declared in
+  `uui_textbox`; the menu bar, status bar and dialog are declared in
   `desc.widgets`; `put_int` (which printed every negative as 0),
   `slen`/`scopy`/`seq` and the hand-rolled layout logger are gone. The
-  toolkit changed too: `uui_dialog` gained body/focus/children/describe
-  ops, `uui_route.c` lets a container own the overlay and absorb the
-  wheel, `uui_statusbar` gained `describe` (`pane i`). Compiles; NOTHING
-  run. LEFT: `menubar_test.py`'s layout keys move to the toolkit
-  vocabulary (`menu.title i`, `menu.popup l`, `menu.item l i`, `status`,
-  `status.pane i`); `notepad_client_test.py`'s Open row index must
-  follow the fileview's directories-first order; `notepad`, `menubar`,
-  `uapp`, `keyup`, `dialog` tools; docs that still describe the old code
-  (`conventions/gui.md` lines naming Notepad's hand-routed menu and
-  private dialog, `decisions/gui.md`'s "Notepad has none" entry, the
-  fileview roadmap item); `check_widget_ops`/`check_key_routing`.
+  toolkit gained body/focus/children/describe ops on `uui_dialog`, a
+  container that can own the overlay and absorb the wheel in
+  `uui_route.c`, and `describe` on `uui_statusbar`. Two things the merge
+  needed: the branch re-added the `uui_*_height()` accessors main
+  already had, so both copies compiled and collided, and the test's
+  Open-dialog navigation counted arrow presses down an `ls` ordering the
+  fileview does not use. Verified: five static checks, ktest, usertest,
+  all 36 GUI tools including `notepad` 21/21 and `menubar` 22/22, and a
+  positive control (type-ahead disabled in `uui_seek.c` reddens both new
+  checks).
 - **`worktree-agent-a1adf21deefc8d3d3` (`tests:` WIP, b40a9a1f).**
   `userland/lib/utest.h`: `utest_begin(name, title, flags)`,
   `utest_check`/`_check_detail`/`_checkf`/`_notef`, `utest_skip`,

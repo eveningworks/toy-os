@@ -29,7 +29,9 @@ through the only app that uses them. Fifteen checks, grouped:
 GEOMETRY COMES FROM THE APP
 --------------------------
 Every rectangle is read from Notepad's own `notepad: layout ...` lines
-(menubar, title N, popup LEVEL, item LEVEL INDEX, statusbar, pane N).
+(menu, menu.title N, menu.popup LEVEL, menu.item LEVEL INDEX, status,
+status.pane N -- the toolkit's own describe vocabulary now that the bars
+are routed widgets, not the app's private names).
 Re-deriving a menu's rectangles in Python would be hopeless anyway --
 they depend on which submenu is open and on which way the placement
 flipped -- but the rule holds regardless: four tools have been bitten by
@@ -105,7 +107,7 @@ class Layout:
     """Notepad's self-reported rectangles, content-relative.
 
     Keys are the layout line's words after `notepad: layout`, joined --
-    "menubar", "title 0", "popup 1", "item 0 3", "pane 2".
+    "menu", "menu.title 0", "menu.popup 1", "menu.item 0 3", "status.pane 2".
 
     ONLY THE MOST RECENT DRAW is parsed, and that matters more than it
     sounds. The log accumulates, and a `popup 1` line from a submenu that
@@ -158,7 +160,7 @@ class Layout:
         return (x + w // 2, y + h // 2)
 
     def popups(self):
-        return sorted(int(k.split()[1]) for k in self.r if k.startswith("popup "))
+        return sorted(int(k.split()[1]) for k in self.r if k.startswith("menu.popup "))
 
 
 def npwin(dbg):
@@ -290,8 +292,8 @@ def run(dbg, qmp, tmp, res):
     content = win["content"]
 
     # --- 1. the app reports what it drew -------------------------------
-    want = ["menubar", "title 0", "title 1", "title 2", "statusbar",
-            "pane 0", "pane 1", "pane 2"]
+    want = ["menu", "menu.title 0", "menu.title 1", "menu.title 2", "status",
+            "status.pane 0", "status.pane 1", "status.pane 2"]
     lay = wait_layout(dbg, content, lambda l: all(l.has(k) for k in want))
     missing = [k for k in want if not lay.has(k)]
     res.check("Notepad reports its menu bar and status bar geometry",
@@ -301,7 +303,7 @@ def run(dbg, qmp, tmp, res):
 
     # --- 2. the bar is DRAWN, not merely present -----------------------
     im = shot(qmp, tmp, "mb_rest.png")
-    bx, by, bw, bh = lay.rect("menubar")
+    bx, by, bw, bh = lay.rect("menu")
     strip = [im.getpixel((x, by + bh // 2)) for x in range(bx + 2, bx + bw - 2, 3)]
     ink = sum(1 for p in strip if p != BAR_BG)
     res.check("the menu bar strip is painted and has titles in it",
@@ -309,10 +311,10 @@ def run(dbg, qmp, tmp, res):
               f"{ink} non-background samples of {len(strip)} across the strip")
 
     # --- 3. a title opens on PRESS, and reads as pressed ---------------
-    t0 = lay.centre("title 0")   # File
-    t1c = lay.rect("title 1")    # Edit -- the control point
+    t0 = lay.centre("menu.title 0")   # File
+    t1c = lay.rect("menu.title 1")    # Edit -- the control point
     before_t1 = region(im, t1c)
-    before_t0 = region(im, lay.rect("title 0"))
+    before_t0 = region(im, lay.rect("menu.title 0"))
 
     dbg.click(*t0)
     dbg.settle()
@@ -322,7 +324,7 @@ def run(dbg, qmp, tmp, res):
     res.check("clicking a title opens its menu", lay2.popups() == [0],
               f"open popup levels: {lay2.popups()}")
     res.check("the open title reads as pressed, and its neighbour does not",
-              region(im2, lay.rect("title 0")) != before_t0
+              region(im2, lay.rect("menu.title 0")) != before_t0
               and region(im2, t1c) == before_t1,
               "half the assertion is Edit staying put")
 
@@ -330,10 +332,10 @@ def run(dbg, qmp, tmp, res):
         return
 
     # --- 4. the popup is really painted --------------------------------
-    px, py, pw, ph = lay2.rect("popup 0")
+    px, py, pw, ph = lay2.rect("menu.popup 0")
     # The popup's own background, sampled clear of any label: a column
     # just inside its right border, down the middle of the first row.
-    ix, iy, iw, ih = lay2.rect("item 0 0")
+    ix, iy, iw, ih = lay2.rect("menu.item 0 0")
     bgpix = im2.getpixel((px + pw - 3, iy + ih // 2))
     outside = im2.getpixel((px + pw + 12, iy + ih // 2))
     res.check("the popup is drawn (its own background reaches the screen)",
@@ -344,8 +346,8 @@ def run(dbg, qmp, tmp, res):
     # File > Save is item 4, greyed while the document is clean... except
     # it is dirty now (text was typed), so use the RECENT submenu, which
     # is empty until something has been saved.
-    dis = lay2.rect("item 0 2")   # Recent files
-    ena = lay2.rect("item 0 1")   # Open...
+    dis = lay2.rect("menu.item 0 2")   # Recent files
+    ena = lay2.rect("menu.item 0 1")   # Open...
     row_ink = lambda r: sum(1 for x in range(r[0] + 4, r[0] + r[2] - 4)
                             if im2.getpixel((x, r[1] + r[3] // 2)) != POPUP_BG)
     res.check("a disabled item is drawn differently from an enabled one",
@@ -362,29 +364,29 @@ def run(dbg, qmp, tmp, res):
     # --- 6. submenus: open on hover, placed to the right --------------
     dbg.send(f"gui key {ESC}")
     dbg.settle()
-    dbg.click(*lay.centre("title 2"))   # View
+    dbg.click(*lay.centre("menu.title 2"))   # View
     dbg.settle()
-    lay3 = wait_layout(dbg, content, lambda l: l.has("item 0 0"))
-    if not lay3.has("item 0 0"):
+    lay3 = wait_layout(dbg, content, lambda l: l.has("menu.item 0 0"))
+    if not lay3.has("menu.item 0 0"):
         res.check("hovering a submenu parent opens the next level", False,
                   "View menu did not open")
         return
-    go = lay3.rect("item 0 0")          # "Go to"
+    go = lay3.rect("menu.item 0 0")          # "Go to"
     hover(dbg, qmp, go)
     lay4 = wait_layout(dbg, content, lambda l: l.popups() == [0, 1])
     res.check("hovering a submenu parent opens the next level",
               lay4.popups() == [0, 1], f"open levels: {lay4.popups()}")
 
     if lay4.popups() == [0, 1]:
-        p0 = lay4.rect("popup 0")
-        p1 = lay4.rect("popup 1")
+        p0 = lay4.rect("menu.popup 0")
+        p1 = lay4.rect("menu.popup 1")
         res.check("a submenu opens to the RIGHT of its parent, aligned to its row",
                   p1[0] >= p0[0] + p0[2] - 2 and abs(p1[1] - go[1]) <= 4,
                   f"parent {p0}, submenu {p1}, parent row y {go[1]}")
 
         # --- 7. commit on release, from the deepest level -------------
         actions(dbg)
-        top = lay4.rect("item 1 0")     # "Top of file"
+        top = lay4.rect("menu.item 1 0")     # "Top of file"
         dbg.click(top[0] + top[2] // 2, top[1] + top[3] // 2)
         dbg.settle()
         got = wait_actions(dbg)
@@ -408,13 +410,13 @@ def run(dbg, qmp, tmp, res):
     # Press an item, drag off the menu entirely, release. Nothing may
     # happen. This is the only check that can tell press-then-commit
     # from commit-on-press; see the positive control in the docstring.
-    dbg.click(*lay.centre("title 2"))
+    dbg.click(*lay.centre("menu.title 2"))
     dbg.settle()
-    lay5 = wait_layout(dbg, content, lambda l: l.has("item 0 2"))
-    if lay5.has("item 0 2"):
-        sb = lay5.rect("item 0 2")      # "Status bar"
+    lay5 = wait_layout(dbg, content, lambda l: l.has("menu.item 0 2"))
+    if lay5.has("menu.item 0 2"):
+        sb = lay5.rect("menu.item 0 2")      # "Status bar"
         actions(dbg)
-        tx, ty, tw, th = lay.rect("menubar")
+        tx, ty, tw, th = lay.rect("menu")
         dbg.drag(sb[0] + sb[2] // 2, sb[1] + sb[3] // 2,
                  tx + tw - 20, ty + th + 200)   # off the menu, into the text
         dbg.settle()
@@ -425,15 +427,15 @@ def run(dbg, qmp, tmp, res):
         dbg.settle()
 
     # --- 9. dismissing, and NOT reaching the text underneath ----------
-    dbg.click(*lay.centre("title 0"))
+    dbg.click(*lay.centre("menu.title 0"))
     dbg.settle()
     wait_layout(dbg, content, lambda l: l.popups() == [0])
     im3 = shot(qmp, tmp, "mb_before_dismiss.png")
-    caret_pane = lay.rect("pane 1")     # "Ln n, Col n"
+    caret_pane = lay.rect("status.pane 1")     # "Ln n, Col n"
     before_caret = region(im3, caret_pane)
 
     # Somewhere in the text, well clear of the popup.
-    tr = lay.rect("menubar")
+    tr = lay.rect("menu")
     away = (tr[0] + tr[2] - 60, tr[1] + tr[3] + 120)
     actions(dbg)
     dbg.click(*away)
@@ -507,47 +509,47 @@ def run(dbg, qmp, tmp, res):
     # text). Keep it a settle-plus-grace so the compositor has painted.
     time.sleep(0.4)
     im5 = shot(qmp, tmp, "mb_status_a.png")
-    msg_before = region(im5, lay.rect("pane 0"))
-    ind_before = region(im5, lay.rect("pane 1"))
+    msg_before = region(im5, lay.rect("status.pane 0"))
+    ind_before = region(im5, lay.rect("status.pane 1"))
 
     dbg.send("gui key 0x98")   # KEY_END -- moves the cursor, nothing else
     dbg.settle()
     time.sleep(0.4)
     im6 = shot(qmp, tmp, "mb_status_b.png")
     res.check("the status bar's indicator tracks the cursor while the message does not",
-              region(im6, lay.rect("pane 1")) != ind_before
-              and region(im6, lay.rect("pane 0")) == msg_before,
+              region(im6, lay.rect("status.pane 1")) != ind_before
+              and region(im6, lay.rect("status.pane 0")) == msg_before,
               "either half alone is satisfied by a bug: a dead indicator "
               "passes the second, a repainting-everything bar passes the first")
 
     # --- 12. a checkable item, round trip ------------------------------
-    dbg.click(*lay.centre("title 2"))
+    dbg.click(*lay.centre("menu.title 2"))
     dbg.settle()
-    lay6 = wait_layout(dbg, content, lambda l: l.has("item 0 2"))
-    if lay6.has("item 0 2"):
-        sb = lay6.rect("item 0 2")
+    lay6 = wait_layout(dbg, content, lambda l: l.has("menu.item 0 2"))
+    if lay6.has("menu.item 0 2"):
+        sb = lay6.rect("menu.item 0 2")
         actions(dbg)
         dbg.click(sb[0] + sb[2] // 2, sb[1] + sb[3] // 2)
         dbg.settle()
         got = wait_actions(dbg)
-        # has("statusbar") reads the CURRENT frame, so it drops as soon as
+        # has("status") reads the CURRENT frame, so it drops as soon as
         # the app redraws with the bar hidden -- an observable, not a sleep.
-        gone = wait_layout(dbg, content, lambda l: not l.has("statusbar"))
+        gone = wait_layout(dbg, content, lambda l: not l.has("status"))
         res.check("View > Status bar hides the status bar",
-                  got == [CMD_STATUSBAR] and not gone.has("statusbar"),
+                  got == [CMD_STATUSBAR] and not gone.has("status"),
                   f"actions {got}, statusbar still reported: {gone.has('statusbar')}")
 
-        dbg.click(*lay.centre("title 2"))
+        dbg.click(*lay.centre("menu.title 2"))
         dbg.settle()
-        lay7 = wait_layout(dbg, content, lambda l: l.has("item 0 2"))
-        if lay7.has("item 0 2"):
-            sb = lay7.rect("item 0 2")
+        lay7 = wait_layout(dbg, content, lambda l: l.has("menu.item 0 2"))
+        if lay7.has("menu.item 0 2"):
+            sb = lay7.rect("menu.item 0 2")
             dbg.click(sb[0] + sb[2] // 2, sb[1] + sb[3] // 2)
             dbg.settle()
-            wait_layout(dbg, content, lambda l: l.has("statusbar"))
+            wait_layout(dbg, content, lambda l: l.has("status"))
         back = layout(dbg, content)
         res.check("toggling it back restores the status bar exactly",
-                  back.has("statusbar") and back.r.get("statusbar") == lay.r.get("statusbar"),
+                  back.has("status") and back.r.get("status") == lay.r.get("status"),
                   f"was {lay.r.get('statusbar')}, now {back.r.get('statusbar')}")
 
     # --- 13. state is asked for: Recent fills in after a save ----------
@@ -560,11 +562,11 @@ def run(dbg, qmp, tmp, res):
     time.sleep(0.8)             # deliberate: wait out the blocking disk write
                                 # (no clean completion signal exposed)
 
-    dbg.click(*lay.centre("title 0"))
+    dbg.click(*lay.centre("menu.title 0"))
     dbg.settle()
-    lay8 = wait_layout(dbg, content, lambda l: l.has("item 0 2"))
-    if lay8.has("item 0 2"):
-        rec = lay8.rect("item 0 2")
+    lay8 = wait_layout(dbg, content, lambda l: l.has("menu.item 0 2"))
+    if lay8.has("menu.item 0 2"):
+        rec = lay8.rect("menu.item 0 2")
         hover(dbg, qmp, rec)
         lay9 = wait_layout(dbg, content, lambda l: l.popups() == [0, 1])
         res.check("Recent files is greyed until a save, then opens a real submenu",

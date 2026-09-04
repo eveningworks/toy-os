@@ -53,7 +53,6 @@ void uui_statusbar_set_geometry(struct uui_statusbar *sb, int x, int y, int w, i
 // status bar takes whatever its window is wide -- see uui_primitives.h
 // on what 0 means and why a caller must handle it.
 void uui_statusbar_natural_size(const struct uui_statusbar *sb, int *out_w, int *out_h);
-
 // Its height alone -- what an app laying out by hand asks, and ten
 // of them wrapped natural_size() to answer it.
 static inline int uui_statusbar_height(const struct uui_statusbar *sb) {
