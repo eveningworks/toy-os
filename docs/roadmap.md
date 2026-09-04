@@ -343,7 +343,7 @@ No dependency on the phases above; ordered among themselves.
 - [x] ~~GPT/MBR partition table parsing~~ done
 - [x] ~~Mounting a filesystem from a partition, and writing a table (`mkpart`)~~ done
 - [ ] LBA48 addressing
-- [ ] A TFS3 test reaching double- and triple-indirect addressing (TFS2's selftest covered this and went with it)
+- [x] ~~A TFS3 test reaching double- and triple-indirect addressing~~ done -- sparse writes make it a KTEST
 - [x] ~~`root=` names the device to mount as the root~~ DONE 2026-08-27 -- every driver enumerates into a device table (`lsblk`)
 - [x] ~~A `ramfs` backend -- a real in-memory filesystem, the root wherever there is no usable drive~~ done
 - [x] ~~Report nothing mounted as NOTHING MOUNTED, instead of as an active backend that fails every call~~ done

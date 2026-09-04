@@ -258,7 +258,17 @@ everything else depends on. The doc also enumerates exactly what
 refusing a flat volume breaks -- six things, including the live image,
 which gains a partition table rather than an exemption.
 
-A TFS3 test reaching double- and triple-indirect addressing -- TFS3 has
+~~A TFS3 test reaching double- and triple-indirect addressing~~ --
+**done.** `fs_test.c`'s two "indirect blocks survive a write and a read
+back" tests reach both tables, and the entry below was wrong about what
+made it expensive: it assumed a file of tens of megabytes and therefore
+a host-side tool. Writing SPARSELY costs the pointer chain and one data
+block instead of everything in front of it, which is how TFS2's own
+selftest reached 4.6 GB, so both are ordinary KTESTs. The gap was real
+and it cost something: the write path's middle-level walk was rewritten
+with the whole suite green, because nothing exercised it.
+
+The original entry, kept for the reasoning it still carries: TFS3 has
 the same 12 direct + 3 indirect-level inode as TFS2, but the deepest
 thing any current test touches is SINGLE-indirect (`fs_test.c`'s
 "truncate cuts a file that uses indirect blocks", 20 blocks). The test

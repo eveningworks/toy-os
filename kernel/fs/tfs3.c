@@ -1153,7 +1153,55 @@ static uint64_t now_epoch(void) {
 // ---- block-map allocation (write side) ------------------------------------
 
 
+// THE MIDDLE LEVELS OF THE WRITE WALK, cached the way `pcache` caches
+// the leaf. Without this, map_get_or_alloc_tables() re-read the mid
+// table from the device for EVERY block written past 4 MiB -- the same
+// defect block_for_index() had on the read side, and the comment below
+// the walk claimed the opposite ("one RMW per 1024 data blocks"), which
+// described the intent rather than the code.
+//
+// Two entries because a triple-indirect walk touches two middle levels.
+// File scope rather than `struct t3_state` for the reason g_txn_img is
+// (see its comment): the lifetime is one op inside one global critical
+// section, so a per-mount copy would cost 8 KiB a mount for a cache
+// only one of them can be using. Its flush and drop are folded into
+// pcache's below, so every existing call site covers it.
+static struct {
+    uint32_t blk;   // 0 = empty
+    int dirty;
+    uint8_t buf[T3_BLOCK];
+} g_mcache[2];
+
+static int mcache_flush(void) {
+    for (int i = 0; i < 2; i++) {
+        if (g_mcache[i].blk && g_mcache[i].dirty) {
+            if (!write_block(g_mcache[i].blk, g_mcache[i].buf)) return 0;
+            g_mcache[i].dirty = 0;
+        }
+    }
+    return 1;
+}
+
+static int mcache_load(int level, uint32_t blk, int fresh) {
+    if (g_mcache[level].blk == blk) return 1;
+    if (g_mcache[level].blk && g_mcache[level].dirty) {
+        if (!write_block(g_mcache[level].blk, g_mcache[level].buf)) return 0;
+    }
+    g_mcache[level].blk = blk;
+    g_mcache[level].dirty = 0;
+    if (fresh) {
+        // A FRESH TABLE IS DIRTY IMMEDIATELY, so it lands on disk even
+        // if nothing else writes into it -- the write the old walk did
+        // unconditionally for the same reason.
+        k_memset(g_mcache[level].buf, 0, T3_BLOCK);
+        g_mcache[level].dirty = 1;
+        return 1;
+    }
+    return read_block(blk, g_mcache[level].buf);
+}
+
 static int pcache_flush(void) {
+    if (!mcache_flush()) return 0;
     if (S->pcache.blk && S->pcache.dirty) {
         if (!write_block(S->pcache.blk, S->pcache.buf)) return 0;
         S->pcache.dirty = 0;
@@ -1170,7 +1218,11 @@ static int pcache_load(uint32_t blk, int fresh) {
     return read_block(blk, S->pcache.buf);
 }
 
-static void pcache_drop(void) { S->pcache.blk = 0; S->pcache.dirty = 0; }
+static void pcache_drop(void) {
+    S->pcache.blk = 0;
+    S->pcache.dirty = 0;
+    for (int i = 0; i < 2; i++) { g_mcache[i].blk = 0; g_mcache[i].dirty = 0; }
+}
 
 // Allocate (if needed) and return the pointer-table slot chain for
 // file-block `idx`, allocating intermediate pointer blocks as it
@@ -1213,28 +1265,26 @@ static int map_get_or_alloc_tables(struct t3_inode *node, uint32_t idx,
         return 1;
     }
 
-    // Middle level(s): walked with read-modify-write (rare compared
-    // to leaf patches -- one RMW per 1024 (or 1024^2) data blocks).
+    // Middle level(s), through g_mcache -- so a long write reads each
+    // one ONCE and patches it in RAM, which is what the old comment
+    // here already claimed was happening. It was not: the read and the
+    // write-back were both inside this loop, so every data block past
+    // 4 MiB paid a table round trip.
     uint32_t levels = (ptr_index == 13) ? 1 : 2;
     uint32_t divisors[2] = { l1, 1 };
     if (levels == 2) { divisors[0] = l2; divisors[1] = l1; }
     for (uint32_t d = 0; d < levels; d++) {
         uint32_t slot = rem / divisors[d];
         rem = rem % divisors[d];
-        if (fresh) k_memset(g_ptr_blk, 0, T3_BLOCK);
-        else if (!read_block(table, g_ptr_blk)) return 0;
-        uint32_t next = rd32(g_ptr_blk + slot * 4);
+        if (!mcache_load((int)d, table, fresh)) return 0;
+        uint32_t next = rd32(g_mcache[d].buf + slot * 4);
         int next_fresh = 0;
         if (!next) {
             next = alloc_block(prefer_group, 0);
             if (!next) return 0;
-            wr32(g_ptr_blk + slot * 4, next);
-            if (!write_block(table, g_ptr_blk)) return 0;
+            wr32(g_mcache[d].buf + slot * 4, next);
+            g_mcache[d].dirty = 1;
             next_fresh = 1;
-        } else if (fresh) {
-            // Can't happen (a fresh table has no entries), but keep
-            // the write so a fresh middle table always lands on disk.
-            if (!write_block(table, g_ptr_blk)) return 0;
         }
         table = next;
         fresh = next_fresh;

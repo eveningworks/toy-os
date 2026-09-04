@@ -223,6 +223,47 @@ appends, and requires the appended bytes -- a stale table answers with a
 zero pointer, which reads as a hole, so the data comes back blank.
 
 
+## The write walk caches middle pointer tables too, and its comment had claimed it already did
+
+`map_get_or_alloc_tables()` walked the middle levels with a read and a
+write-back INSIDE the per-block loop, so every data block written past
+4 MiB paid a table round trip. The comment above it said "rare compared
+to leaf patches -- one RMW per 1024 (or 1024^2) data blocks", which
+described the intended design rather than the code: `pcache` gave the
+LEAF that property and the levels above it never got one.
+
+Measured A/B on a freshly seeded disk, KVM + AHCI, 16 MiB sequential
+write: 7.08 -> 9.31 MB/s, read sectors 53223 -> 26990, read calls
+13598 -> 9761. Write calls (2427 -> 2426) and flushes (622 -> 622) are
+unchanged, which is the internal control -- the change is confined to
+the read side of the write path, as intended.
+
+**Folded into `pcache_flush()`/`pcache_drop()` rather than given its
+own pair.** Both caches have exactly the same lifetime -- one
+filesystem operation -- and there are nine call sites that drop the
+leaf cache, including the steppable-write path. A second pair would
+have to be added to every one of them, and the one that got missed
+would lose a middle table's pointer silently.
+
+**A fresh table is dirty the moment it is loaded**, which preserves what
+the old walk did with an unconditional write whose comment said it
+"can't happen": a middle table allocated but never written into must
+still reach the disk, or the level below it is unreachable.
+
+**The reason this could be rewritten with the suite green is the
+coverage gap the roadmap already named.** Nothing wrote a file past the
+single-indirect table, so the entire double- and triple-indirect walk
+was untested. That entry assumed reaching them meant a file of tens of
+megabytes and a host-side tool; writing SPARSELY costs the pointer chain
+and one data block instead, which is how TFS2's removed selftest reached
+4.6 GB, so both are ordinary KTESTs now. The positive control matters as
+much as the tests: disabling the dirty marking reddens both, and the
+FIRST version of the triple test passed anyway -- its chain was
+allocated entirely fresh, and a fresh table is written whatever else is
+broken. It needed a second range under an EXISTING middle table before
+it could fail.
+
+
 ## The block layer counts TIME per operation, not just calls
 
 `QUERY_BLKSTAT` records calls, sectors, nanoseconds and failures for

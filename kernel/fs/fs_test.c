@@ -312,6 +312,115 @@ KTEST("fs", "truncate shrinks, frees blocks, and grows sparsely") {
     fs_delete("/.ktest_trunc");
 }
 
+// DOUBLE- AND TRIPLE-INDIRECT ADDRESSING, reached by writing SPARSELY
+// rather than by filling a file to get there. Block 12+1024 is the
+// first double-indirect one (~4.2 MB in) and block 12+1024+1024*1024
+// the first triple (~4.3 GB), and a write at either offset allocates
+// the pointer chain and one data block -- not the 4 GB in front of it.
+// That is how TFS2's own selftest did it before TFS2 was removed, and
+// its removal is why the middle-level walk could be rewritten with the
+// whole suite staying green.
+//
+// This is the coverage `docs/roadmap.md` lists as missing. It is a
+// KTEST after all because SPARSENESS makes it cheap; the item assumed a
+// file of tens of megabytes and therefore a host-side tool.
+#define T3_BLK 4096u
+#define T3_PTRS 1024u
+#define T3_DOUBLE_FIRST (12u + T3_PTRS)
+#define T3_TRIPLE_FIRST (12u + T3_PTRS + T3_PTRS * T3_PTRS)
+
+static void indirect_pattern(char *buf, uint32_t blk_index) {
+    // ADDRESS-DERIVED: a walk that lands on the wrong block returns
+    // another block's bytes rather than a plausible constant.
+    for (uint32_t i = 0; i < T3_BLK; i++)
+        buf[i] = (char)(((blk_index * 31u) + i * 7u) & 0xFF);
+}
+
+static int indirect_roundtrip(const char *path, uint32_t first_blk, uint32_t nblk,
+                              struct ktest_ctx *ctx) {
+    static char chunk[T3_BLK];
+    static char back[T3_BLK];
+
+    // ONE call spanning several blocks, so the middle tables are
+    // loaded once and reused -- the case the cache exists for.
+    for (uint32_t b = 0; b < nblk; b++) {
+        indirect_pattern(chunk, first_blk + b);
+        if (fs_write_range(path, (uint64_t)(first_blk + b) * T3_BLK, chunk, T3_BLK) != 1) {
+            ktest_fail(ctx, "fs_write_range at an indirect offset", __FILE__, __LINE__);
+            return 0;
+        }
+    }
+    for (uint32_t b = 0; b < nblk; b++) {
+        k_memset(back, 0, T3_BLK);
+        if (fs_read_range(path, (uint64_t)(first_blk + b) * T3_BLK, back, T3_BLK) != T3_BLK) {
+            ktest_fail(ctx, "fs_read_range at an indirect offset", __FILE__, __LINE__);
+            return 0;
+        }
+        indirect_pattern(chunk, first_blk + b);
+        for (uint32_t i = 0; i < T3_BLK; i++) {
+            if (back[i] != chunk[i]) {
+                ktest_fail_eq(ctx, "indirect block byte", (int64_t)back[i],
+                              (int64_t)chunk[i], __FILE__, __LINE__);
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+KTEST("fs", "double-indirect blocks survive a write and a read back") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    FRESH("/.ktest_dind");
+
+    // Blocks either side of the boundary: the last single-indirect one
+    // and the first few double-indirect ones, so one test covers the
+    // step from a leaf hanging off the inode to one hanging off a
+    // middle table.
+    if (!indirect_roundtrip("/.ktest_dind", T3_DOUBLE_FIRST - 1, 5, ctx)) return;
+
+    // A SECOND mid table, far enough along to be a different block:
+    // the cache has to notice the change rather than answer from the
+    // one it already holds.
+    if (!indirect_roundtrip("/.ktest_dind", T3_DOUBLE_FIRST + T3_PTRS + 3, 3, ctx)) return;
+
+    // The gap between them was never written and must read as zeros --
+    // a hole, not whatever the walk last had in a buffer.
+    static char back[T3_BLK];
+    k_memset(back, 0xEE, T3_BLK);
+    KTEST_ASSERT_EQ((int64_t)fs_read_range("/.ktest_dind",
+                        (uint64_t)(T3_DOUBLE_FIRST + 8) * T3_BLK, back, T3_BLK),
+                    (int64_t)T3_BLK);
+    for (uint32_t i = 0; i < T3_BLK; i++) {
+        if (back[i] != 0) { KTEST_ASSERT_EQ((int64_t)back[i], 0); }
+    }
+
+    fs_delete("/.ktest_dind");
+}
+
+KTEST("fs", "triple-indirect blocks survive a write and a read back") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    // ~4.3 GB of file OFFSET, but only a handful of blocks of it. The
+    // volume still has to be able to address that far.
+    if ((uint64_t)blk_sector_count() * 512ull < (uint64_t)(T3_TRIPLE_FIRST + 8) * T3_BLK)
+        KTEST_SKIP("volume too small to reach the triple-indirect table");
+    FRESH("/.ktest_tri");
+
+    if (!indirect_roundtrip("/.ktest_tri", T3_TRIPLE_FIRST, 3, ctx)) return;
+
+    // A SECOND leaf under the SAME middle table, which is the case the
+    // first range cannot reach: that one allocates the whole chain
+    // fresh, and a fresh table is written whatever else happens. Here
+    // the middle table already exists, so the new leaf pointer has to
+    // be noticed as a change to it. Without that, this range reads back
+    // as a hole while the first one still passes.
+    if (!indirect_roundtrip("/.ktest_tri", T3_TRIPLE_FIRST + T3_PTRS + 3, 3, ctx)) return;
+
+    KTEST_ASSERT_EQ((int64_t)fs_size("/.ktest_tri"),
+                    (int64_t)((uint64_t)(T3_TRIPLE_FIRST + T3_PTRS + 6) * T3_BLK));
+
+    fs_delete("/.ktest_tri");
+}
+
 // THE POINTER-TABLE READ CACHE IS ONLY SAFE IF A WRITE DROPS IT, and
 // nothing here covered that until this test: disabling the invalidation
 // in tfs3.c's vol_write_sectors() left all 640 KTESTs green, exactly
