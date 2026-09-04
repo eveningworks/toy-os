@@ -130,6 +130,27 @@ SEQ-read especially, so read those as "large" rather than as exact.
 flush-dominated (67% of its block time on hardware), so removing reads
 cannot help it. Only stage 2 can.
 
+**On the bare-metal laptop the mechanism reaches its floor.** Same
+benchmark before and after, 4 MiB, per-lookup block reads:
+
+| profile | before | after |
+|---|---|---|
+| SEQ-write | 3.95 | 1.73 |
+| SEQ-read | 3.01 | **1.00** |
+| RND4K-write | 3.05 | **1.00** |
+| RND4K-read | 3.00 | **1.00** |
+
+1.00 is the floor -- the inode read that is deliberately never cached --
+so on three of four profiles there is nothing left to remove.
+
+**The hardware THROUGHPUT numbers are not a controlled comparison and
+should not be quoted as one.** SEQ-write went 12.39 -> 14.48 MB/s, but
+SEQ-read read 116.17 -> 56.05 and RND4K-read 6.24 -> 5.07 -- both within
+the range this machine has shown across runs all day, and neither
+measured with the A/B discipline the QEMU table above used (that would
+mean reflashing the old kernel). The per-lookup column is the claim; the
+throughput column is an observation with a caveat attached.
+
 **Design, in three decisions.** The cache holds path -> inode NUMBER
 only, never the inode's contents: those change on every write, so
 caching them would need invalidating on the hot path instead of the rare
