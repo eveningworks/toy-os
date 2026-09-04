@@ -80,21 +80,27 @@ not the driver, so depth cannot measure it.**
 
 **Counting it directly settled it.** `lookup()` now brackets itself with
 the block layer's read counter, so the delta is exactly the disk traffic
-a resolution caused, and `QUERY_FSSTAT` reports it. On QEMU/KVM with
-AHCI, 1 MiB:
+a resolution caused, and `QUERY_FSSTAT` reports it. Measured on both,
+because the two disagree about the mix:
 
-| profile | block reads | caused by lookup | share |
-|---|---|---|---|
-| SEQ-write | 1712 | 503 | **29%** |
-| SEQ-read | 1556 | 1033 | **66%** |
-| RND4K-write | 2493 | 1187 | **48%** |
-| RND4K-read | 1709 | 854 | **50%** |
+| profile | QEMU/KVM AHCI, 1 MiB | bare metal, 4 MiB |
+|---|---|---|
+| SEQ-write | 503 of 1712 reads (**29%**) | 1188 of 3063 (**39%**) |
+| SEQ-read | 1033 of 1556 (**66%**) | 331 of 622 (**53%**) |
+| RND4K-write | 1187 of 2493 (**48%**) | 232 of 1181 (**20%**) |
+| RND4K-read | 854 of 1709 (**50%**) | 522 of 876 (**60%**) |
 
-**Path resolution is between a third and two thirds of every block read
+**Path resolution is between a fifth and two thirds of every block read
 this filesystem issues**, and the driver is not depth but COUNT: a
-single 64 KiB write syscall triggers about eight resolutions, each
-costing ~3.6 block reads. The hypothesis was right and the first
-experiment was simply built on the wrong variable.
+64 KiB write syscall triggers several resolutions, each costing ~3-4
+block reads. The hypothesis was right and the first experiment was built
+on the wrong variable.
+
+The two columns are not directly comparable -- different sizes, and the
+laptop's own layout -- so read them as "large on both" rather than as a
+delta. The one number worth taking from the hardware column on its own
+is that a sequential WRITE spends 75 ms of its 197 ms of read time
+simply finding the file again.
 
 ## The stages
 
