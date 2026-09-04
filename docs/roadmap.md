@@ -666,8 +666,9 @@ run on, not by order.
 - [ ] One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy
 - [ ] NCQ (queued commands) -- needs an ASYNCHRONOUS block interface first, not more AHCI code
 - [ ] An asynchronous `block_device` submit/complete split, which NCQ, readahead and writeback all wait on
-- [ ] Batched journal barriers -- `ata_flush_begin()`/`_end()` generalised into the block layer, so a write shares ONE flush
-- [ ] A write-back page cache with `fsync()` as the opt-in durability call -- staged in `docs/pagecache-design.md`
+- [x] ~~Batched journal barriers~~ done -- `storage.sync = batched` defers the COMMIT rather than generalising flush_begin/end
+- [x] ~~`fsync()`/`fdatasync()`~~ done -- `SYS_FSYNC`, scoped to the volume rather than the file
+- [ ] A write-back page cache -- `docs/pagecache-design.md`, DEMOTED there by measurement: the workload is not read-bound
 - [ ] A second drive, which needs a block layer whose active device is not singular
 - [ ] A sector cache shared with ATA, if one is ever measured to be worth it
 - [ ] A fault-injection hook that makes the DRIVE refuse a command, so `port_recover()` is exercised

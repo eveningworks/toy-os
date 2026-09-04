@@ -396,6 +396,9 @@ benchmark says:
 | RND4K-write | 730 ms (1108 calls) | **67%** | 1.09 MB/s | **4.01** |
 
 **One flush costs 659 us on the drive against 95 us emulated** -- 7x,
+and **2.8-3.3 ms once the drive has been writing for a while**, so the
+ratio understates it for exactly the workload that issues the most
+barriers --
 and it is a fixed cost per transaction rather than per byte, which is
 why the 4 KiB profile suffers most. That single ratio is the whole
 reason this is a setting and not a constant somebody could have tuned

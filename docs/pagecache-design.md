@@ -18,7 +18,12 @@ the first time. On the bare-metal laptop (AHCI, SATA SSD), 16 MiB:
 | SEQ-write | 14.68 | 252 ms | 87 ms | **393 ms** | **53%** |
 | RND4K-write | 1.09 | 301 ms | 56 ms | **730 ms** | **67%** |
 
-One flush costs **659 us** on the drive against 95 us emulated. Every
+One flush costs **659 us** on the drive against 95 us emulated -- **and
+that figure is the LIGHT-LOAD one.** Measured again over 8 MiB of
+sustained writing the same drive takes **2.8-3.3 ms** per flush, four to
+five times more, as its SLC cache fills and garbage collection starts
+competing. So the cost of a barrier here is not a constant to look up;
+it grows with exactly the workload that issues the most of them. Every
 `fs_write*()` call is one TFS3 transaction ending in two of them, so at
 64 KiB a syscall that is 32 flushes per MiB, and 512 per MiB at 4 KiB.
 
@@ -296,6 +301,35 @@ file and checks the size after every step -- and a single extend-then-
 read is racy, because anything else opening a transaction commits this
 one on its way past, so it takes a dozen steps for one to land in a
 window where nothing intervened.
+
+### Where the time goes with 0, 1a, 3 and 4 all built
+
+Bare-metal laptop, 8 MiB, sequential write, both modes:
+
+| | strict | batched |
+|---|---|---|
+| throughput | 3.97 MB/s | **26.77** |
+| read | 240 ms | 339 ms |
+| write | 61 ms | 54 ms |
+| **flush** | **1780 ms (85%)** | **301 ms (43%)** |
+| lookup | 22 ms | 11 ms |
+
+**Flush is STILL the largest term even in `batched`.** Not because the
+count is high -- 92 against 632 -- but because each one now costs
+~3.3 ms under sustained writing. Reads are 16% and lookup is under 1%.
+
+**What further reduction would take, and it is not a page cache.** The
+92 remaining commits are forced by OTHER operations: anything calling
+`txn_begin()` commits the deferred transaction on its way past, and the
+desktop writes constantly. Holding more than one transaction open at a
+time would need per-transaction journal staging rather than the single
+file-scope `g_txn_img`, which is a real change to the journal rather
+than a cache above it.
+
+So the honest state of stages 1 and 2 is: **the workload that motivated
+them is not read-bound any more, and the remaining cost is in a place a
+page cache does not sit.** They stay designed and unbuilt, and the
+reason is a measurement rather than a preference.
 
 ### Stage 1 -- one cache, above the VFS, read-only first
 

@@ -416,7 +416,8 @@ flag, so without them a crash can leave a state replay cannot repair.
 Say that, not "faster", whenever it is offered to anyone.
 
 **A QEMU measurement of this is worthless, and here is the ratio.** One
-flush costs ~95 us emulated and **659 us on a real SATA SSD**. So the
+flush costs ~95 us emulated and **659 us on a real SATA SSD -- rising
+to ~3 ms under sustained writing**, as the drive's SLC cache fills. So the
 flushes are under 5% of a sequential write in QEMU and **53% on the
 laptop** -- 67% at 4 KiB, where the cost is per transaction and the
 transactions are smallest. `strict` -> `lazy` on that machine is 14.7 ->

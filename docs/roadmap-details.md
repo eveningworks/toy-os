@@ -258,9 +258,26 @@ everything else depends on. The doc also enumerates exactly what
 refusing a flat volume breaks -- six things, including the live image,
 which gains a partition table rather than an exemption.
 
-A write-back page cache with `fsync()` -- **designed, not built:
-`docs/pagecache-design.md`** has the five stages, what each buys on its
-own, and the honest case against.
+~~Batched journal barriers~~ -- **done, and it landed differently from
+how this item framed it.** The framing was `ata_flush_begin()`/`_end()`
+generalised into the block layer so a write shares one flush. What
+shipped defers the COMMIT itself (`storage.sync = batched`), which is
+strictly more: skipping the barriers alone still performs every commit's
+four block writes, and measuring showed that batching beats `lazy` --
+which does skip the barriers -- by more than 2x on hardware.
+
+A write-back page cache -- **stages 0, 1a, 3 and 4 are BUILT; stages 1
+and 2 are demoted by measurement.** `docs/pagecache-design.md` has the
+detail. `fsync()` arrived early, scoped to the volume rather than the
+file, because `batched` needed it.
+
+What the last measurement says about the rest: with everything built, a
+sequential write on the laptop spends 43% of its block time in flush
+even in `batched`, 16% in reads and under 1% in path resolution. The
+remaining commits are forced by OTHER operations opening transactions,
+so reducing them further needs per-transaction journal staging -- a
+change to the journal, not a cache above it. **The workload is no longer
+read-bound, and a page cache does not sit where the cost is.**
 
 The number it chases is measured rather than guessed: on the bare-metal
 laptop, `storage.sync = lazy` (barriers off entirely) gives 36.55 MB/s
