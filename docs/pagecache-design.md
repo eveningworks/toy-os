@@ -185,7 +185,69 @@ semantic, not an oversight.
 **Buys:** unknown until measured, which is the point of the stage.
 **Does not buy:** anything about flushes.
 
+### Re-measured after stage 0, and it REORDERS what follows
+
+With path resolution cached, the same benchmark on the laptop (8 MiB)
+attributes the block layer's time like this:
+
+| profile | flush | read | write | lookup |
+|---|---|---|---|---|
+| SEQ-write | **56%** | 31% | 12% | **2.7%** |
+| RND4K-write | **69%** | 25% | 5% | **1.0%** |
+
+Lookup is finished as a cost -- it was ~38% of SEQ-write's read time
+before stage 0 and is under 3% of all block time now. **Flush dominates
+outright.**
+
+**And the flush is buying almost nothing.** `do_write_inner()` writes
+its data blocks DIRECTLY (`vol_write_sectors`), then writes the
+allocation bitmaps (`flush_alloc_state()`, set-before-use), and only
+then opens a transaction -- `txn_begin(1)`, one credit, staging the
+INODE BLOCK and nothing else. So 56-69% of block time is two device
+barriers per syscall, spent making a single 4 KiB inode block durable,
+while the file's actual data reached the disk before the transaction
+started.
+
+**That can be batched WITHOUT a page cache**, which the original staging
+here did not consider and which changes the order of the rest.
+
+### Stage 1a -- batch the metadata commit (NEW, and it comes first)
+
+Keep the journal transaction open across writes instead of committing
+per call, and commit when the journal's 32 slots would overflow, when a
+timer elapses, at `fsync`/`sync`/unmount, or when an operation needs the
+journal for something else (create, delete, rename force it first).
+
+**What a crash costs, stated exactly:** the data blocks and the
+allocation bitmaps are already on disk, so what is lost is the INODE
+UPDATE -- a just-extended file comes back at its old size and the blocks
+past it are unreferenced. That is a LEAK, not corruption, and `fsck`
+already reclaims leaks; "prefer a leak to a double-allocation" is the
+ordering this filesystem was built on. It is much weaker than what
+`storage.sync = lazy` risks, which is a journal that cannot be replayed.
+
+**THE CONSTRAINT THAT DECIDES THE DESIGN:** `g_txn_img` is file-scope,
+not per mount, and its comment says why -- "a transaction begins and
+commits inside one op, so no second mount can be between them". Holding
+one open across syscalls breaks that premise. Either the staging becomes
+per-mount (+128 KiB a mount, against a mount that costs ~7 KiB) or the
+VFS commits the open transaction whenever a DIFFERENT mount becomes
+active. The second is cheap and is the one to build.
+
+Gated behind `storage.sync` like everything else here, default `strict`.
+
+**Buys:** most of the 56-69%, with no cache, no eviction and no reclaim
+mechanism. **Does not buy:** repeat reads, which is what the page cache
+below is actually for.
+
 ### Stage 1 -- one cache, above the VFS, read-only first
+
+**Demoted by the re-measure.** Reads are 25-31% of block time now and
+the ones that remain are bitmap, group-descriptor and inode-table
+traffic plus read-modify-write, not REPEATS -- and a cache pays for
+repeats. A linear benchmark has few, so this stage would barely move
+these numbers. It is worth building for real workloads that re-read, and
+it is no longer the next thing.
 
 A page cache keyed by (mount, inode, block index), consulted by
 `fs_read_range()`. Read-only means it can be wrong about nothing: a hit
