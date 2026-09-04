@@ -233,15 +233,28 @@ writeback runs on a timer, and the journal commits every few seconds
 with one barrier for thousands of operations. toy-os makes the stronger
 promise and pays for it.
 
-**How much it pays is the part nobody knew**, and it is why this is a
-setting rather than a fix. Measured on QEMU/KVM with AHCI, 16 MiB
-sequential write: 622 flushes costing 59 ms out of 1288 ms of
-block-layer time -- **4.6%**. Removing them there is worth almost
-nothing. On a real SSD a FLUSH CACHE forces the drive's DRAM to NAND and
-costs on the order of a millisecond, so the same 622 would be 0.2-1.9 s
-against a 1.7 s baseline -- somewhere between a tenth and half the wall
-clock, and nothing in this repo can settle which. The setting is the
-instrument for answering that on the machine that has the problem.
+**How much it pays was the part nobody knew, and it is now measured on
+both.** On QEMU/KVM with AHCI, 16 MiB sequential write: 622 flushes
+costing 59 ms out of 1288 ms of block-layer time -- **4.6%**, i.e.
+almost nothing. On the bare-metal laptop (AHCI, SATA SSD) the same
+benchmark says:
+
+| profile | flush time | share of block I/O | `strict` | `lazy` |
+|---|---|---|---|---|
+| SEQ-write | 393 ms (596 calls) | **53%** | 14.7 MB/s | **36.6** |
+| RND4K-write | 730 ms (1108 calls) | **67%** | 1.09 MB/s | **4.01** |
+
+**One flush costs 659 us on the drive against 95 us emulated** -- 7x,
+and it is a fixed cost per transaction rather than per byte, which is
+why the 4 KiB profile suffers most. That single ratio is the whole
+reason this is a setting and not a constant somebody could have tuned
+from a QEMU run: the term that dominates on the hardware is the one the
+emulator very nearly hides.
+
+(Read throughput moved 87.1 -> 63.5 MB/s across those two runs, which is
+run-to-run variance and not an effect: reads issue 84 flushes to the
+writes' 596, and the read call counts were within 3%. Quoted here so
+the number is not mistaken for a regression later.)
 
 **`strict` and `lazy` are ext4's `barrier` and `nobarrier`**, and the
 warning is the same. Both barriers are load-bearing: the first orders

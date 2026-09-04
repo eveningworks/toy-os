@@ -330,11 +330,14 @@ the journal against the targets and the targets against the commit
 flag, so without them a crash can leave a state replay cannot repair.
 Say that, not "faster", whenever it is offered to anyone.
 
-**Measure before believing it is worth it.** On QEMU the flushes are
-under 5% of a sequential write, because an emulated flush barely costs
-anything; on a real SSD they force DRAM to NAND and the same count could
-be a third of the wall clock. `/bin/diskbench`'s `io ... flush` line is
-the measurement, and it must be taken on the machine in question.
+**A QEMU measurement of this is worthless, and here is the ratio.** One
+flush costs ~95 us emulated and **659 us on a real SATA SSD**. So the
+flushes are under 5% of a sequential write in QEMU and **53% on the
+laptop** -- 67% at 4 KiB, where the cost is per transaction and the
+transactions are smallest. `strict` -> `lazy` on that machine is 14.7 ->
+36.6 MB/s sequential and 1.09 -> 4.01 MB/s at 4 KiB. Take the
+measurement on the machine in question; `/bin/diskbench`'s `io ... flush`
+line is it.
 
 
 ## A READ THAT CROSSES BLOCKS COALESCES, AND A POINTER TABLE IS CACHED PER LEVEL -- BUT ONLY UNTIL THE NEXT WRITE
