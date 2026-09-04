@@ -2,9 +2,9 @@
 #define BRIGHTNESS_POPUP_H
 
 // The taskbar's brightness flyout: one slider for the panel backlight,
-// anchored above its tray icon. volume_popup.h's shape, cut down -- it
-// talks to nothing but the registered `system.brightness` setting over
-// SYS_SETTING, and its write is debounced for the same reason.
+// anchored above its tray icon. A tray_slider_popup.h instance and
+// nothing else -- it talks to nothing but the registered
+// `system.brightness` setting over SYS_SETTING.
 //
 // A DISPLAY WITH NO BACKLIGHT STILL HAS THE ITEM. The setting is
 // registered on every machine and answers `unavailable` with a sentence

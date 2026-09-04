@@ -677,11 +677,7 @@ void wm_screen_changed(void) {
 void wm_layout_changed(void) {
     desktop_entries_changed();   // the icon grid's rows depend on the height
 
-    if (start_menu_open) { start_menu_open = 0; }
-    context_menu_close();
-    calendar_close();
-    volume_close();
-    brightness_close();
+    wm_overlay_close_others(0);
 
     for (int i = 0; i < window_count; i++) {
         struct window *w = &windows[i];
@@ -799,9 +795,7 @@ void wm_run(void) {
     gui_apps_load();
 
     window_count = 0;
-    start_menu_open = 0;
-    context_menu_close();
-    calendar_close();
+    wm_overlay_close_others(0);
     dragging = -1;
     resizing = -1;
     content_dragging = -1;
@@ -1228,14 +1222,10 @@ void wm_run(void) {
                     }
                 } else if (key == KEY_SUPER) {
                     if (!confirm_dialog_open && !file_picker_open) {
-                        if (start_menu_open) {
-                            start_menu_open = 0;
-                            start_menu_damage(); // the rows it just vacated
-                        } else {
-                            start_menu_open_now();
-                        }
-                        context_menu_open = 0;
-                        calendar_close();
+                        // Toggle; opening closes every other popup
+                        // through the overlay table (wm_overlay.h).
+                        if (start_menu_open) start_menu_close();
+                        else start_menu_open_now();
                         redraw_pending = 1;
                     }
                 } else if (key == KEY_F4 && (key_mods & KEY_MOD_ALT) && f >= 0 && !file_picker_open) {

@@ -21,21 +21,18 @@
 // card plugged in after boot appears here with no code in this file
 // knowing what a card is.
 //
-// THE WRITE IS DEBOUNCED, and that is the one thing to know before
-// editing. A setting write is validated, applied AND persisted -- one
-// /etc write per call -- so a dragged slider would be a hundred of
-// them. The level is applied on a short delay after the last movement
-// (VOLUME_COMMIT_MS); the number under the pointer is the popup's own
-// state until then, which is why drawing reads a local and not the
-// setting.
+// THE SLIDER ROW, THE DEBOUNCED WRITE AND THE OVERLAY VERBS ARE
+// tray_slider_popup.c's, shared with the brightness flyout; this file
+// is only what the volume owns -- mute, the device rows, the speaker
+// icon. Read that header before editing how the level is committed.
 
 #include <stdint.h>
 
 // Whether the popup is open -- read by wm_render.c and wm_input.c.
 extern int volume_open;
 
-// Opens it, closing the Start menu, the calendar and the context menu:
-// the four are mutually exclusive, as on every desktop.
+// Opens it, closing every other dismissable overlay (wm_overlay.h);
+// closes it with no action.
 void volume_open_now(void);
 void volume_close(void);
 

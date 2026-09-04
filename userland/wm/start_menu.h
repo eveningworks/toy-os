@@ -42,7 +42,11 @@ int start_menu_w(void);
 void start_menu_geometry(int *out_menu_x, int *out_menu_y, int *out_menu_w,
                           int *out_item_h, int *out_total_items);
 
+// Opens it, closing every other dismissable overlay (wm_overlay.h).
 void start_menu_open_now(void);
+// Closes it with no action -- the overlay table's close op. Safe to
+// call when it is already closed.
+void start_menu_close(void);
 
 // Draws the popup at its fixed taskbar-anchored position, using the
 // live mouse position for hover -- a no-op if start_menu_open is 0 (the

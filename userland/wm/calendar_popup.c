@@ -2,8 +2,7 @@
 #include "wm_internal.h"
 #include "calendar_popup.h"
 #include "wm_tray.h"
-#include "start_menu.h"
-#include "context_menu.h"
+#include "wm_overlay.h"
 #include "ui/uui.h"
 #include "ui/utheme.h"
 #include "kapi.h"
@@ -106,18 +105,12 @@ void calendar_geometry(struct calendar_geom *g) {
 
     // ANCHORED TO THE CLOCK, not to the screen's right edge: the clock
     // is the control that was clicked, and a popup that opens somewhere
-    // else has to be explained. Clamped so a narrow screen (or a tray
-    // full of app items pushing the clock left) cannot put the panel
-    // half off the display -- the same clamp context_menu_open_at()
-    // applies to a right-click near an edge.
+    // else has to be explained. wm_popup_place() keeps it on a narrow
+    // screen (or with a tray full of app items pushing the clock left).
     int cx, cy, cw, ch;
     int right = screen_w - 8;
     if (tray_clock_rect(&cx, &cy, &cw, &ch)) right = cx + cw;
-    g->x = right - g->w;
-    if (g->x + g->w > screen_w - 4) g->x = screen_w - 4 - g->w;
-    if (g->x < 4) g->x = 4;
-    g->y = screen_h - taskbar_h - g->h;
-    if (g->y < 0) g->y = 0;
+    wm_popup_place(right - g->w, screen_h - taskbar_h - g->h, g->w, g->h, &g->x, &g->y);
 
     // The header: `<` and `>` are squares at the ends, the title takes
     // everything between them so the click target for "back to today"
@@ -159,13 +152,8 @@ static void go_today(void) {
 
 void calendar_open_now(void) {
     go_today();
+    wm_overlay_close_others("calendar");   // the popups are mutually exclusive
     calendar_open = 1;
-    // The three popups are mutually exclusive, as on every desktop --
-    // and wm_render.c's overlay repaint does not care which is up, so
-    // leaving two open would leave one of them drawn over the other
-    // with both still taking clicks.
-    if (start_menu_open) { start_menu_open = 0; start_menu_damage(); }
-    context_menu_close();
     redraw_pending = 1;
 }
 

@@ -1545,10 +1545,10 @@ real scanout hardware does. Do not write a pixel assertion for one.
 
 - **AN OVERLAY IS A ROW IN A TABLE, AND THE TABLE DRIVES DRAWING,
   CLICKS AND HOVER -- `userland/wm/wm_overlay.h`.** The Start menu, the
-  context menu, the calendar, the volume flyout, the file picker and
-  the confirm dialog are six rows in modality order; drawing walks it
-  BACKWARDS, so the row that gets the first click is painted last and
-  lands on top. **The hover op is the reason it exists.** An overlay
+  context menu, the calendar, the two tray flyouts, the file picker
+  and the confirm dialog are seven rows in modality order; drawing
+  walks it BACKWARDS, so the row that gets the first click is painted
+  last and lands on top. **The hover op is the reason it exists.** An overlay
   supplies `hover_at(mx, my)` returning an OPAQUE TOKEN for whichever
   control the pointer is over, plus `damage()`; the core compares the
   token against the last one and damages on a change, which is the
@@ -1565,12 +1565,43 @@ real scanout hardware does. Do not write a pixel assertion for one.
   since it was written. And **nothing re-hovers while the primary
   button is down**, stated once in the core rather than guarded per
   overlay, so a dragged slider or an armed button keeps its highlight.
+  **A DISMISSABLE OVERLAY DECLARES `close`, AND AN OPEN PATH CALLS
+  `wm_overlay_close_others(keep)` RATHER THAN NAMING ITS PEERS** --
+  which is what makes the popups mutually exclusive, and what the
+  hand-written version got wrong: the Super key closed two of the four
+  it should have, so opening the Start menu over a volume or brightness
+  flyout left the flyout drawn underneath it. A MODAL row leaves `close`
+  NULL (the confirm dialog, the file picker), so another popup opening
+  cannot dismiss it. **And a popup is placed by `wm_popup_place()`**,
+  one clamp for the four that each had their own: `WM_POPUP_MARGIN`
+  from the left and right edges and from the taskbar, never above the
+  top. Adopting it moved the calendar and a taskbar-anchored context
+  menu up 4 px (their gap was 0) and pulled the tray flyouts' right
+  edge in by 4 (it was 8).
+- **BOTH TRAY FLYOUTS ARE ONE FILE: `userland/wm/tray_slider_popup.c`.**
+  A tray flyout that is a slider over a registered setting -- a panel
+  anchored above its tray item, a `uui_scale` with an icon cell left and
+  a "NN%" caption right, the debounced write, the drag, the wheel, and
+  the overlay row's open/close/damage -- is written once, and
+  `volume_popup.c` and `brightness_popup.c` sit on it. They were the
+  same file twice: the same 250 ms debounce, the same `update_press`
+  drag, the same wheel scoping, the same geometry-is-the-one-answer
+  rule, each fixed separately or not at all. Two things to know. **The
+  OWNER keeps what is only its own** -- volume's mute toggle and device
+  rows, brightness's `unavailable` sentence -- below the slider row,
+  starting at the geometry's `below_y`, and it keeps its own
+  `*_geometry()`. And **the shared half owes the write, not the
+  owner**: `tray_slider_set_level()` takes a `commit_now` flag for the
+  paths that must not wait out the debounce (a release, a mute).
 - **THE TRAY HAS A VOLUME FLYOUT, AND THE PANEL OWNS IT TOO --
   `userland/wm/volume_popup.c`.** A speaker icon left of the clock opens
   a panel with a level slider, a mute toggle and the output devices;
   the WHEEL over the icon moves the level by 5 without opening
   anything. That is Windows 11's flyout, Plasma's audio applet and
-  GNOME's quick settings, wheel included. Six things to know.
+  GNOME's quick settings, wheel included. The slider row, the debounce
+  and the drag are `tray_slider_popup.c`'s, shared with the brightness
+  flyout; what follows is what this file still owns or still decides.
+  Six things to know.
   **It knows nothing about audio**: it reads and writes `system.volume`
   and `system.audio_device` over `SYS_SETTING`, and its device rows ARE
   that setting's CHOICE list -- so a card plugged in after boot appears
@@ -1682,7 +1713,8 @@ real scanout hardware does. Do not write a pixel assertion for one.
   WITHOUT A BACKLIGHT SHOWS THE REGISTRY'S SENTENCE --
   `userland/wm/brightness_popup.c`.** A sun icon left of the speaker
   opens one slider; the wheel over the icon steps it by 5. It is the
-  volume flyout cut down -- the same debounced write, the same
+  volume flyout's twin -- literally, since both are
+  `tray_slider_popup.c` now: the same debounced write, the same
   `update_press` drag, the same one geometry function behind drawing,
   hit-testing and `gui brightness --json` -- and it talks to nothing
   but `system.brightness` over `SYS_SETTING`. Three things to know.

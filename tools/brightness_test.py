@@ -28,7 +28,13 @@ WHAT IT ASSERTS
 4. THE WHEEL IS STILL SCOPED: a notch over the desktop reaches the
    focused window, not this panel (the pointer is WARPED, never
    `gui move`).
-5. THE START MENU CLOSES IT, as with every popup.
+5. THE START MENU CLOSES IT, as with every popup -- opened by a CLICK
+   and by the SUPER KEY. The two are different code paths in the WM,
+   and the key one once closed the context menu and the calendar but
+   not this flyout, leaving it drawn under the Start menu and still
+   taking clicks. The overlay table's `close` op is what makes them one
+   path now; this is the check that goes red if a popup's open path
+   goes back to naming its peers by hand.
 
 The positive half -- the slider dimming a real panel -- is reachable
 only on hardware with a backlight (the bare-metal laptop), and is
@@ -174,6 +180,22 @@ def main():
               st["start_menu"] is True and st["brightness"] is False, str(st))
         dbg.send(f"gui click {tb['cx']} {tb['cy']}")
         dbg.settle()
+
+    # --- 5b. ...and so does the Super key --------------------------------
+    g = bri(dbg)
+    dbg.send(f"gui click {g['tray']['cx']} {g['tray']['cy']}")
+    dbg.settle(); time.sleep(0.3)
+    if check("reopened for the Super-key check", bri(dbg)["open"]):
+        dbg.send("gui key 0xa6")   # KEY_SUPER (keyboard.h); the WM toggles the Start menu
+        dbg.settle(); time.sleep(0.3)
+        st = dbg.json("gui state --json")["overlays"]
+        check("the Super key opens the Start menu and closes the brightness popup",
+              st["start_menu"] is True and st["brightness"] is False, str(st))
+        dbg.send("gui key 0xa6")
+        dbg.settle(); time.sleep(0.3)
+        st = dbg.json("gui state --json")["overlays"]
+        check("...and Super again closes the Start menu",
+              st["start_menu"] is False and st["brightness"] is False, str(st))
 
     # --- 6. the two flyouts are mutually exclusive --------------------
     v = dbg.json("gui volume --json")

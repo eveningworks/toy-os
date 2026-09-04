@@ -1,6 +1,7 @@
 // See context_menu.h for the design writeup.
 #include "context_menu.h"
 #include "wm_internal.h"
+#include "wm_overlay.h"
 #include "ui/uui.h"
 #include "ui/utheme.h"
 #include "kapi.h"
@@ -29,16 +30,11 @@ void context_menu_open_at(int x, int y, const struct context_menu_item *items, i
     g_w = menu_w(items, count);
     int h = g_item_h * count;
 
-    // Clamp so the whole menu stays on screen -- a right-click near the
-    // taskbar or the right/bottom edge would otherwise draw partly off
-    // it. taskbar_h/screen_w/screen_h come from wm_internal.h.
-    g_x = x;
-    g_y = y;
-    if (g_x + g_w > screen_w) g_x = screen_w - g_w;
-    if (g_x < 0) g_x = 0;
-    if (g_y + h > screen_h - taskbar_h) g_y = screen_h - taskbar_h - h;
-    if (g_y < 0) g_y = 0;
+    // At the pointer, kept whole on screen -- a right-click near the
+    // taskbar or an edge would otherwise draw partly off it.
+    wm_popup_place(x, y, g_w, h, &g_x, &g_y);
 
+    wm_overlay_close_others("context");
     context_menu_open = 1;
     redraw_pending = 1;
 }

@@ -35,6 +35,11 @@ FOUR THINGS THIS ASSERTS THAT AN "IT OPENED" CHECK WOULD NOT
    with one card the list is `auto` plus that card, which is still two
    rows and still exercises the write.
 
+5. THE THUMB MOVES ON SCREEN, read as PIXEL VALUES rather than a
+   screenshot looked at: the thumb's old and new positions both change
+   colour, and the mute button beside the track stays byte-identical.
+   The level reaching the setting says nothing about what was drawn.
+
 The level and the device are both RESTORED at the end: a tool that
 leaves a setting changed changes the machine for every later tool
 (CLAUDE.md), which is how a faster pointer once made two unrelated
@@ -120,6 +125,51 @@ def setting(dbg, name):
     return next((ln.strip() for ln in reply.splitlines() if ln.strip()), "")
 
 
+def thumb_check(g, at_100_png, moved_png):
+    """The slider's thumb moved, and the mute button beside it did not.
+
+    `g` is the geometry AFTER the click. The scale is a uui_scale: its
+    track is inset by half a thumb (the thumb is a text row square, so
+    `slider.h / 2`) at each end, and the thumb sits at the level's share
+    of what is left. Both positions are read from the two captures, so a
+    thumb that reached the setting and never repainted is caught here.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        check("the thumb moved on screen", True, "skipped -- no Pillow")
+        return
+    s = g["slider"]
+    half = s["h"] // 2
+    x0, x1 = s["x"] + half, s["x"] + s["w"] - half
+    old_x = x1
+    new_x = x0 + (x1 - x0) * g["level"] // 100
+    before = Image.open(at_100_png).convert("RGB")
+    after = Image.open(moved_png).convert("RGB")
+    cy = s["cy"]
+    check("the thumb left its old position",
+          before.getpixel((old_x, cy)) != after.getpixel((old_x, cy)),
+          f"({old_x},{cy}) {before.getpixel((old_x, cy))} -> {after.getpixel((old_x, cy))}")
+    # Sampled ABOVE the track band, inside the thumb's square: on the
+    # band itself the fill and the thumb are both the accent, so a
+    # thumb that never moved reads the same as one that did.
+    ty = cy - half + 2
+    check("...and arrived at the new one",
+          before.getpixel((new_x, ty)) != after.getpixel((new_x, ty)),
+          f"({new_x},{ty}) {before.getpixel((new_x, ty))} -> {after.getpixel((new_x, ty))}")
+    # The neighbour is the first device row, not the mute button: the
+    # speaker icon FOLLOWS the level (high/low/muted), so it is expected
+    # to change here and would measure nothing.
+    if not g["devices"]:
+        check("...while the row below it did not change", True,
+              "skipped -- no device rows to compare")
+        return
+    d = g["devices"][0]
+    dbox = (d["cx"] - 6, d["cy"] - 6, d["cx"] + 6, d["cy"] + 6)
+    check("...while the device row below it did not change",
+          before.crop(dbox).tobytes() == after.crop(dbox).tobytes(), str(dbox))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     port_guard.add_instance_args(ap)   # --instance N, or the legacy --sock/--qmp-port
@@ -199,6 +249,8 @@ def main():
     check("...and the level reached /etc through the setting",
           stored.isdigit() and abs(int(stored) - g["level"]) <= 1,
           f"config get volume -> {stored!r}")
+    qmp.stable_pixels(shot("vol_moved.png"), box=box)
+    thumb_check(g, shot("vol_open.png"), shot("vol_moved.png"))
 
     # --- 4. mute is a level of zero, and it comes back -----------------
     dbg.send(f"gui click {g['mute']['cx']} {g['mute']['cy']}")

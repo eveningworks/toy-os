@@ -72,6 +72,16 @@ struct wm_overlay {
     // DRAGGED -- a slider, a dialog button that arms on press. NULL
     // when nothing in the overlay is draggable.
     void (*update_press)(int mx, int my, uint8_t buttons);
+
+    // Dismiss it with no action; safe to call when it is closed. This
+    // is what makes the popups MUTUALLY EXCLUSIVE: an open path calls
+    // wm_overlay_close_others() instead of naming its peers, so a
+    // popup that joins the table is dismissed by every other one --
+    // where each open path naming the others by hand left the Super
+    // key closing two of four. NULL for a MODAL overlay (the confirm
+    // dialog, the file picker), which another popup opening must not
+    // dismiss; those two stay up through close_others().
+    void (*close)(void);
 };
 
 // Draws every open overlay, least modal first. Called once per frame
@@ -97,5 +107,21 @@ void wm_overlay_press(int mx, int my, uint8_t buttons);
 // debug console, so a test can ask what is on screen without knowing
 // the table.
 const char *wm_overlay_topmost(void);
+
+// Closes every overlay with a `close` op except the one named `keep`
+// (NULL keeps none: every dismissable popup goes). Called from each
+// popup's open path, from the Super key, and when the usable area
+// changes.
+void wm_overlay_close_others(const char *keep);
+
+// Places a popup of (w, h) whose preferred top-left is (want_x,
+// want_y) -- a tray flyout's right edge on its item, a context menu at
+// the pointer -- inside the usable screen: WM_POPUP_MARGIN from the
+// left and right edges and from the taskbar, never above the top.
+// One rule for the four popups that each clamped by hand. Adopting it
+// moved the calendar and a taskbar-anchored context menu up 4 px (their
+// gap was 0), and the tray flyouts' right-edge clamp in by 4 (it was 8).
+#define WM_POPUP_MARGIN 4
+void wm_popup_place(int want_x, int want_y, int w, int h, int *out_x, int *out_y);
 
 #endif

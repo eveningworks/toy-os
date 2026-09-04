@@ -1,5 +1,6 @@
 // See start_menu.h.
 #include "start_menu.h"
+#include "wm_overlay.h"
 #include "lib/icon_cache.h"
 #include "wm_internal.h"
 #include "confirm_dialog.h"
@@ -142,10 +143,20 @@ void start_menu_geometry(int *out_menu_x, int *out_menu_y, int *out_menu_w,
 }
 
 void start_menu_open_now(void) {
+    wm_overlay_close_others("start");
     start_menu_open = 1;
     flash_index = -1;
     hover_index = -1;
     start_menu_damage();
+}
+
+void start_menu_close(void) {
+    if (!start_menu_open) return;
+    start_menu_open = 0;
+    flash_index = -1;
+    hover_index = -1;
+    start_menu_damage(); // the rows it just vacated
+    redraw_pending = 1;
 }
 
 // App items (gui_app_registry) first, then wm_system_actions ("Exit to

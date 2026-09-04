@@ -3056,30 +3056,29 @@ caller is a test.
 
 Started 2026-09-04 and stopped mid-flight for budget. What LANDED on
 main that day: `lib/usetting.h`, `lib/udate.h`, `human_size_iec()`,
-the `uui_*_height()` accessors, and `/lib/libuapp.so`. What did NOT
-land is on three local branches, each a single WIP commit made by a
-worktree agent on top of `84725d17`, each UNTESTED beyond what its
-note says. **Merge one at a time onto main, finish its list, run its
-tools, then `gui_regress.py --logs`, then `preflight.sh`.** Expect
+the `uui_*_height()` accessors, and `/lib/libuapp.so`. The `wm:`
+branch landed on 2026-09-04 as well and is struck through below. What
+did NOT land is on two local branches, each a single WIP commit made
+by a worktree agent on top of `84725d17`, each UNTESTED beyond what
+its note says. **Merge one at a time onto main, finish its list, run
+its tools, then `gui_regress.py --logs`, then `preflight.sh`.** Expect
 small conflicts in `userland/ui/uui_menubar.h`/`uui_statusbar.h` (the
 Notepad branch re-added the `_height()` accessors main already has).
 
-- **`worktree-agent-abef8b8c7b3674da6` (`wm:` WIP, ec26a4a5).**
-  `userland/wm/tray_slider_popup.c/.h` is the shared slider flyout (a
-  `uui_scale` row, the debounced write, drag/wheel/hover/click);
-  `volume_popup.c` and `brightness_popup.c` sit on it. `wm_popup_place()`
-  + `WM_POPUP_MARGIN` in `wm_overlay.h`, used by both flyouts, the
-  calendar and the context menu. `struct wm_overlay.close` +
-  `wm_overlay_close_others()`, used by every open path, `wm.c`'s Super
-  key and `wm_input.c` -- this fixes the hole where Super left an open
-  volume or brightness flyout under the Start menu. Builds; `volume_test`
-  28/28 and `brightness_test` 19/19 on a guest, including a new Super-key
-  check and a pixel thumb check. LEFT: the positive control for the
-  Super check (revert `wm_overlay_close_others()` in the Super path and
-  watch the new check go red); `calendar`, `hover`, `idle`, `taskbar`,
-  `settings`, `menubar` tools; the `docs/conventions/gui.md` entries for
-  the volume and brightness flyouts and the overlay table (name the new
-  file and the `close` verb); the five static checks.
+- [x] ~~**The `wm:` branch (ec26a4a5).**~~ LANDED 2026-09-04.
+  `userland/wm/tray_slider_popup.c/.h` is the shared slider flyout that
+  `volume_popup.c` and `brightness_popup.c` now sit on; `wm_popup_place()`
+  + `WM_POPUP_MARGIN` is the one clamp for four popups; `struct
+  wm_overlay.close` + `wm_overlay_close_others()` is what makes them
+  mutually exclusive, which fixes the hole where Super left an open
+  volume or brightness flyout under the Start menu. Verified: the five
+  static checks, `volume` 28/28, `brightness` 19/19, `calendar` 24/24,
+  `hover` 5/5, `idle` 5/5, `menubar` 22/22, `settings` 71/71, and a
+  positive control (`wm_overlay_close_others()` removed from the Start
+  menu's open path reddens the two Super checks in `brightness_test.py`
+  and nothing else). `taskbar_test.py`'s three overflow failures were
+  MEASURED against unmodified main and are identical there --
+  `docs/bugs.md` already carries them.
 - **`worktree-agent-a5da01fc058804666` (`notepad:` WIP, 0a6cde4e).**
   `notepad.c` 1097 -> ~690 lines: the private Open/Save dialog is a
   `uui_dialog` whose body is a `uui_layout` of `uui_fileview` +

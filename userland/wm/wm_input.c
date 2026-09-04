@@ -89,10 +89,7 @@ void wm_handle_left_click(int mx, int my) {
         int ty = screen_h - taskbar_h;
         int sbw = start_btn_w();
         if (uui_hit(4, ty, sbw, taskbar_h, mx, my)) {
-            calendar_close(); // the popups are mutually exclusive
-            volume_close();
-            brightness_close();
-            start_menu_open_now();
+            start_menu_open_now();   // closes the other popups itself
             redraw_pending = 1;
             return;
         }
@@ -105,8 +102,6 @@ void wm_handle_left_click(int mx, int my) {
             int cx, cy, cw, ch;
             if (tray_clock_rect(&cx, &cy, &cw, &ch) &&
                 uui_hit(cx, cy, cw, ch, mx, my)) {
-                volume_close();
-                brightness_close();
                 calendar_open_now();
                 return;
             }
@@ -405,9 +400,7 @@ void wm_handle_right_click(int mx, int my) {
         int menu_y = (screen_h - taskbar_h) - item_h * total_items;
         int hit_row = uui_hit(menu_x, menu_y, menu_w, item_h * total_items, mx, my)
                       ? (my - menu_y) / item_h : -1;
-        start_menu_open = 0;
-        start_menu_damage(); // the rows it just vacated
-        redraw_pending = 1;
+        start_menu_close();
         if (hit_row >= 0 && hit_row < gui_app_registry_count) {
             static struct context_menu_item item[1];
             item[0].label = "Open";
@@ -418,10 +411,7 @@ void wm_handle_right_click(int mx, int my) {
         return;
     }
 
-    if (context_menu_open) context_menu_close();
-    calendar_close(); // a right-click anywhere dismisses it, as a menu does
-    volume_close();
-    brightness_close();
+    wm_overlay_close_others(0); // a right-click anywhere dismisses a popup, as a menu does
 
     if (my >= screen_h - taskbar_h) {
         taskbar_handle_right_click(mx, my);

@@ -2,6 +2,7 @@
 // verbs rather than one.
 #include "wm_internal.h"
 #include "wm_overlay.h"
+#include "kapi.h"
 #include "start_menu.h"
 #include "context_menu.h"
 #include "calendar_popup.h"
@@ -30,19 +31,19 @@ static int open_confirm(void) { return confirm_dialog_open; }
 // drifting apart, which they had already started to do.
 static const struct wm_overlay g_overlays[] = {
     { "confirm",  open_confirm,  draw_confirm,     confirm_dialog_handle_click,
-      confirm_dialog_hover_at,   confirm_dialog_damage,   confirm_dialog_update_press },
+      confirm_dialog_hover_at,   confirm_dialog_damage,   confirm_dialog_update_press, 0 },
     { "picker",   open_picker,   draw_file_picker, file_picker_handle_click,
-      file_picker_hover_at,      file_picker_damage,      file_picker_update_press },
+      file_picker_hover_at,      file_picker_damage,      file_picker_update_press, 0 },
     { "context",  open_context,  context_menu_draw, context_menu_handle_click,
-      context_menu_hover_at,     context_menu_damage,     0 },
+      context_menu_hover_at,     context_menu_damage,     0, context_menu_close },
     { "start",    open_start,    start_menu_draw,  start_menu_handle_click,
-      start_menu_hover_at,       start_menu_damage,       0 },
+      start_menu_hover_at,       start_menu_damage,       0, start_menu_close },
     { "calendar", open_calendar, calendar_draw,    calendar_handle_click,
-      calendar_hover_at,         calendar_damage,         0 },
+      calendar_hover_at,         calendar_damage,         0, calendar_close },
     { "volume",   open_volume,   volume_draw,      volume_handle_click,
-      volume_hover_at,           volume_damage,           volume_update_press },
+      volume_hover_at,           volume_damage,           volume_update_press, volume_close },
     { "brightness", open_brightness, brightness_draw, brightness_handle_click,
-      brightness_hover_at,       brightness_damage,       brightness_update_press },
+      brightness_hover_at,       brightness_damage,       brightness_update_press, brightness_close },
 };
 #define OVERLAY_COUNT ((int)(sizeof g_overlays / sizeof g_overlays[0]))
 
@@ -102,4 +103,24 @@ const char *wm_overlay_topmost(void) {
     for (int i = 0; i < OVERLAY_COUNT; i++)
         if (g_overlays[i].is_open()) return g_overlays[i].name;
     return 0;
+}
+
+void wm_overlay_close_others(const char *keep) {
+    for (int i = 0; i < OVERLAY_COUNT; i++) {
+        const struct wm_overlay *o = &g_overlays[i];
+        if (!o->close) continue;
+        if (keep && k_strcmp(o->name, keep) == 0) continue;
+        if (o->is_open()) o->close();
+    }
+}
+
+void wm_popup_place(int want_x, int want_y, int w, int h, int *out_x, int *out_y) {
+    int x = want_x, y = want_y;
+    if (x + w > screen_w - WM_POPUP_MARGIN) x = screen_w - WM_POPUP_MARGIN - w;
+    if (x < WM_POPUP_MARGIN) x = WM_POPUP_MARGIN;
+    if (y + h > screen_h - taskbar_h - WM_POPUP_MARGIN)
+        y = screen_h - taskbar_h - WM_POPUP_MARGIN - h;
+    if (y < 0) y = 0;
+    *out_x = x;
+    *out_y = y;
 }
