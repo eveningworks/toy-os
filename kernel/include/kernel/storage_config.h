@@ -15,7 +15,8 @@
 // hardware, and why this knob exists at all.
 //
 // The choices are ext4's `barrier`/`nobarrier` under different names.
-int storage_sync_strict(void); // 1 = strict (the default), 0 = lazy
+int storage_sync_strict(void);  // 0 only in `lazy`: are barriers issued?
+int storage_sync_batched(void); // 1 only in `batched`: do commits defer?
 
 void storage_config_init(void);          // adopt /etc/storage.conf at boot
 void storage_config_setting_register(void);
@@ -23,6 +24,6 @@ void storage_config_setting_register(void);
 // FOR THE KTEST ONLY: set the live flag without touching /etc. The
 // setting's own apply() persists, and a test that used it would leave
 // the machine in whichever mode it happened to finish in.
-void storage_config_set_strict_for_test(int strict);
+void storage_config_set_mode_for_test(int strict, int batched);
 
 #endif

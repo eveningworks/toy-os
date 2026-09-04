@@ -211,7 +211,7 @@ started.
 **That can be batched WITHOUT a page cache**, which the original staging
 here did not consider and which changes the order of the rest.
 
-### Stage 1a -- batch the metadata commit (NEW, and it comes first)
+### Stage 1a -- batch the metadata commit  [BUILT]
 
 Keep the journal transaction open across writes instead of committing
 per call, and commit when the journal's 32 slots would overflow, when a
@@ -239,6 +239,47 @@ Gated behind `storage.sync` like everything else here, default `strict`.
 **Buys:** most of the 56-69%, with no cache, no eviction and no reclaim
 mechanism. **Does not buy:** repeat reads, which is what the page cache
 below is actually for.
+
+**Built, and measured in one guest, QEMU/KVM + AHCI, 2 MiB:**
+
+| profile | strict | batched | flushes |
+|---|---|---|---|
+| SEQ-write | 11.95 MB/s | 13.43 | 148 -> 84 |
+| RND4K-write | 1.381 | **2.636** | 212 -> 84 |
+
+`fsck` reports 0 leaked blocks afterwards. The flush count does not fall
+further than that because the DESKTOP is writing throughout, and any
+operation that opens its own transaction commits the deferred one on its
+way past -- on a quiet machine the reduction is much larger.
+
+**TWO BUGS IN THE FIRST VERSION, both found by measuring rather than by
+reading, and both worth the space.**
+
+The commit was forced on every operation and batching saved nothing.
+`tfs3_state_activate()` committed whenever the incoming state differed
+from the transaction's owner -- and `vfs.c`'s `FS_OP` DEACTIVATES after
+every backend call, activating `NULL`. So "a different mount" was true
+every single time. Nothing can reach the journal while no state is
+current, so the fix is to ignore a NULL activation.
+
+And a batched write was invisible to readers. The newest inode image
+lives in the journal staging buffer while the disk still holds the
+previous one, so `fs_size()` returned the size the file had BEFORE
+writes that had already returned success, and `diskbench`'s read pass
+died with a short read. The staged image is the current truth, so reads
+consult it -- **at `vol_read_sectors()`, not at `read_block()`**, because
+`read_inode()` reads ONE SECTOR rather than a block and a block-level
+overlay missed the only read that mattered, without changing the
+symptom.
+
+**THE TEST THAT PASSED WITH THAT BUG IS THE LESSON.** It wrote eight
+blocks in `strict` first and then re-wrote the SAME offsets in
+`batched`, so the file's size never changed and a stale inode was
+indistinguishable from a fresh one. The test that catches it EXTENDS the
+file and checks the size after every step -- and a single extend-then-
+read is racy, because anything else opening a transaction commits this
+one on its way past, so it takes a dozen steps for one to land in a
+window where nothing intervened.
 
 ### Stage 1 -- one cache, above the VFS, read-only first
 

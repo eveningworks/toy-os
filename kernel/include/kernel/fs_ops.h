@@ -237,6 +237,17 @@ struct fs_ops {
     // repair pass will and won't fix, and why double-allocation is
     // deliberately report-only). Required, not optional/NULLable, same
     // reasoning as the steppable pairs above.
+    // Land anything the backend is holding back, before the block layer
+    // is flushed. OPTIONAL -- NULL means "nothing is ever deferred",
+    // which is true of every backend that commits as it goes.
+    //
+    // It exists because `storage.sync = batched` lets TFS3 keep a
+    // journal transaction open across writes, and a `sync` that flushed
+    // the DEVICE without first committing that transaction would report
+    // durability it had not achieved. Returns 0 if the commit failed,
+    // which fs_sync() must not treat as cosmetic.
+    int (*sync)(void);
+
     int (*check)(int repair, struct fs_check_result *out);
 
     // ---- optional ops (the caps rule becomes real here) ----

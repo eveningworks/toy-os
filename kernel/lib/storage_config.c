@@ -1,6 +1,15 @@
 // The `storage.sync` setting: a registry descriptor and the live flag
 // TFS3's journal reads. See storage_config.h for what it is for.
 //
+// WHAT `batched` GIVES UP, which is much less than `lazy`. A write's
+// DATA blocks and its allocation bitmaps reach the disk before the
+// transaction is even opened (tfs3.c's do_write_inner) -- the
+// transaction covers the INODE block alone. So deferring the commit
+// risks the inode update, not the data: a just-extended file comes back
+// at its old size with the blocks past it unreferenced. That is a LEAK,
+// which `fsck` reclaims, and it is the ordering this filesystem was
+// built on ("prefer a leak to a double-allocation").
+//
 // WHAT `lazy` ACTUALLY GIVES UP, because a durability knob whose
 // description is vague is worse than no knob. Both of txn_commit()'s
 // barriers are load-bearing and neither is merely an optimisation:
@@ -30,15 +39,27 @@
 #define STORAGE_CONFIG_FILE "/etc/storage.conf"
 #define SYNC_KEY "sync"
 
-static const char *const g_modes[] = { "strict", "lazy" };
+// ORDERED BY SAFETY, strongest first, because that is the order a
+// person reads a choice list in and the default must be the first thing
+// they see.
+static const char *const g_modes[] = { "strict", "batched", "lazy" };
 #define MODE_COUNT ((int)(sizeof g_modes / sizeof g_modes[0]))
 
-// 1 until /etc says otherwise. The journal runs during MOUNT and during
-// replay, both before storage_config_init(), so the safe answer has to
-// be the one that needs no file to have been read.
-static int g_strict = 1;
+// THE THREE MODES, as two flags rather than an enum, because the two
+// questions they answer are independent and every caller asks only one:
+//
+//   strict   barriers real, commit per write   -- the default
+//   batched  barriers real, commit DEFERRED    -- one commit for many
+//   lazy     barriers skipped entirely         -- ext4's nobarrier
+//
+// `strict` until /etc says otherwise. The journal runs during MOUNT and
+// during replay, both before storage_config_init(), so the safe answer
+// has to be the one that needs no file to have been read.
+static int g_strict = 1;    // 0 only in `lazy`: whether barriers are issued
+static int g_batched = 0;   // 1 only in `batched`: whether commits defer
 
 int storage_sync_strict(void) { return g_strict; }
+int storage_sync_batched(void) { return g_batched; }
 
 static int mode_choice(int index, char *out, uint32_t out_size) {
     if (index < 0 || index >= MODE_COUNT) return 0;
@@ -47,7 +68,7 @@ static int mode_choice(int index, char *out, uint32_t out_size) {
 }
 
 static void mode_get(char *out, uint32_t out_size) {
-    k_strlcpy(out, g_modes[g_strict ? 0 : 1], out_size);
+    k_strlcpy(out, g_modes[!g_strict ? 2 : (g_batched ? 1 : 0)], out_size);
 }
 
 // Applies AND persists, which is the contract (`setting.h`). The
@@ -55,8 +76,9 @@ static void mode_get(char *out, uint32_t out_size) {
 // writing the file back it just read.
 static int mode_set(const char *value) {
     if (!value) return 0;
-    if (k_strcmp(value, "strict") == 0) { g_strict = 1; return 1; }
-    if (k_strcmp(value, "lazy") == 0)   { g_strict = 0; return 1; }
+    if (k_strcmp(value, "strict") == 0)  { g_strict = 1; g_batched = 0; return 1; }
+    if (k_strcmp(value, "batched") == 0) { g_strict = 1; g_batched = 1; return 1; }
+    if (k_strcmp(value, "lazy") == 0)    { g_strict = 0; g_batched = 0; return 1; }
     return 0;
 }
 
@@ -82,7 +104,10 @@ void storage_config_setting_register(void) {
     setting_register(&g_sync_setting);
 }
 
-void storage_config_set_strict_for_test(int strict) { g_strict = strict ? 1 : 0; }
+void storage_config_set_mode_for_test(int strict, int batched) {
+    g_strict = strict ? 1 : 0;
+    g_batched = batched ? 1 : 0;
+}
 
 static struct etc_config_buf g_cfg;
 

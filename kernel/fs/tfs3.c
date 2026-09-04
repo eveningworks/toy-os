@@ -251,6 +251,11 @@ static struct t3_state *S;
 static uint8_t g_txn_img[T3_JSLOTS_MAX][T3_BLOCK];
 static uint32_t g_txn_target[T3_JSLOTS_MAX];
 static int g_txn_count = 0;
+// Declared here with the rest of the journal staging, because
+// read_block() consults them -- see its comment. Their meaning and the
+// hazard they close are documented above txn_begin().
+static int g_txn_deferred;
+static struct t3_state *g_txn_owner;
 static int g_txn_credits = 0; // what txn_begin() promised; see txn_stage()
 
 // FLUSHES BOTH CACHES, and the resolved-path one rides here rather than
@@ -286,8 +291,37 @@ static void wr16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v
 
 // ---- volume I/O ----------------------------------------------------------
 
+// A STAGED SECTOR IS READ FROM THE TRANSACTION, NOT FROM THE DISK.
+//
+// Under `storage.sync = batched` a transaction stays open across
+// writes, so the newest image of an inode block lives in g_txn_img
+// while the disk still holds the previous one. A reader going to the
+// disk sees a STALE inode -- the old size, the old block pointers --
+// and that is not subtle: `diskbench`'s read pass failed outright with
+// a short read, because fs_size() reported the size the file had before
+// writes that had already returned success.
+//
+// HERE, not in read_block(), and that is the whole point. read_inode()
+// reads ONE SECTOR (`vol_read_sectors(lba, 1, ...)`), not a block, so a
+// block-level overlay missed exactly the read that mattered and the
+// symptom did not change. This is the one function every read in this
+// backend passes through, which is what makes the overlay complete
+// rather than nearly complete.
+//
+// The staged image IS the current truth; that is what an open
+// transaction means. Only the DEFERRED one is consulted -- an ordinary
+// transaction opens, stages and commits with no read in between.
 static int vol_read_sectors(uint32_t lba, int count, void *buf) {
     if (lba + (uint32_t)count > S->vol.sector_count) return 0;
+    if (g_txn_deferred && g_txn_owner == S) {
+        for (int i = 0; i < g_txn_count; i++) {
+            uint32_t base = g_txn_target[i] * T3_SPB;
+            if (lba < base || lba + (uint32_t)count > base + T3_SPB) continue;
+            k_memcpy(buf, g_txn_img[i] + (lba - base) * ATA_SECTOR_SIZE,
+                     (uint32_t)count * ATA_SECTOR_SIZE);
+            return 1;
+        }
+    }
     return blkdev_read_sectors(S->vol.dev, S->vol.base_lba + lba, count, buf);
 }
 
@@ -1068,7 +1102,52 @@ static void txn_reset(void) { g_txn_count = 0; g_txn_credits = 0; }
 // which is the whole reason it exists, since a v1 image (four slots)
 // genuinely cannot express a directory move. Callers turn that into a
 // refusal with an explanation, not a corrupt half-operation.
+// ---- the DEFERRED transaction (storage.sync = batched) ---------------
+//
+// Under `batched` a write stages its inode and does NOT commit; many
+// writes then share one commit, which is what removes the barriers that
+// are 56-69% of block time on real hardware. What is deferred is only
+// the INODE UPDATE: do_write_inner() has already written the data
+// blocks and the allocation bitmaps by the time it opens a transaction,
+// so a crash loses a size update and leaks the blocks past it -- a leak
+// `fsck` reclaims, not a journal that cannot be replayed.
+//
+// THE HAZARD IS txn_begin() ITSELF. It zeroes g_txn_count, so any
+// operation that opened a transaction while one was deferred would
+// silently discard every inode staged in it -- writes reported as
+// succeeded, vanishing. So the commit is forced HERE, in the one
+// function every transaction in this file goes through, rather than at
+// the call sites: create, delete, rename, truncate and the rest are
+// covered without being edited, and a new one cannot forget.
+//
+// g_txn_owner is which MOUNT's state the staged blocks belong to.
+// g_txn_img is file-scope, not per mount, precisely because a
+// transaction has always begun and committed inside one operation; a
+// deferred one breaks that premise, so a second mount becoming active
+// commits the first's work before touching it.
+static int txn_commit(void);
+
+// Commit whatever is deferred, whoever it belongs to. Safe to call with
+// nothing open. Returns 0 only if the commit itself failed.
+static int txn_flush_deferred(void) {
+    if (!g_txn_deferred) return 1;
+    g_txn_deferred = 0;
+    struct t3_state *owner = g_txn_owner;
+    g_txn_owner = 0;
+    if (!owner) { txn_reset(); return 1; }
+    // txn_commit() reads S->vol and S->jrn_seq, so the owner has to be
+    // current for the length of the commit even when somebody else is
+    // the mount being activated.
+    struct t3_state *save = S;
+    S = owner;
+    int ok = txn_commit();
+    S = save;
+    return ok;
+}
+
 static int txn_begin(int credits) {
+    // See the hazard note above: never discard staged work.
+    if (g_txn_deferred) txn_flush_deferred();
     g_txn_count = 0;
     g_txn_credits = 0;
     if (credits <= 0 || credits > (int)S->jslots) return 0;
@@ -1531,6 +1610,31 @@ static int do_write_inner(uint64_t ino, struct t3_inode *node, uint64_t offset,
     node->modified = now_epoch();
 
     if (!flush_alloc_state()) return 0;       // set-before-use
+
+    // BATCHED: stage the inode into a transaction that stays open, so
+    // many writes share one commit. Re-staging the same inode block
+    // returns the SAME image (txn_stage), which txn_stage_inode()
+    // patches in place -- so a second write to the same file updates
+    // the staged copy rather than needing a slot of its own.
+    if (storage_sync_batched()) {
+        if (!g_txn_deferred || g_txn_owner != S) {
+            if (!txn_begin((int)S->jslots)) return 0;  // flushes any other mount's
+            g_txn_deferred = 1;
+            g_txn_owner = S;
+        }
+        if (!txn_stage_inode(ino, node)) {
+            // Out of slots: commit what is there and start again. The
+            // retry cannot fail for the same reason, because the fresh
+            // transaction is empty.
+            if (!txn_flush_deferred()) return 0;
+            if (!txn_begin((int)S->jslots)) return 0;
+            g_txn_deferred = 1;
+            g_txn_owner = S;
+            if (!txn_stage_inode(ino, node)) { txn_reset(); return 0; }
+        }
+        return 1;   // durable at the next commit -- see txn_flush_deferred()
+    }
+
     if (!txn_begin(1)) return 0;
     if (!txn_stage_inode(ino, node)) { txn_reset(); return 0; }
     return txn_commit();                       // the commit point: file grows atomically
@@ -2215,6 +2319,10 @@ static int tfs3_format_inner(const struct block_device *dev) {
 }
 
 static void unmount_state(void) {
+    // Anything still staged has to land before the state it describes
+    // is freed -- after this the journal could not be replayed against
+    // a mount that no longer exists.
+    if (g_txn_deferred && g_txn_owner == S) txn_flush_deferred();
     if (S->gd) { kfree(S->gd); S->gd = 0; }
     if (S->bbm) { kfree(S->bbm); S->bbm = 0; }
     if (S->ibm) { kfree(S->ibm); S->ibm = 0; }
@@ -3380,6 +3488,18 @@ static void *tfs3_state_alloc(void) {
 }
 
 static void *tfs3_state_activate(void *st) {
+    // A DEFERRED TRANSACTION BELONGS TO ONE MOUNT, and g_txn_img is
+    // file-scope. Committing another mount's staged work before this
+    // one touches it is what keeps that shared buffer honest -- see the
+    // note above txn_begin().
+    //
+    // ONLY FOR A DIFFERENT, REAL MOUNT. `st` is NULL on every
+    // DEACTIVATION -- vfs.c's FS_OP calls mount_leave() after each
+    // backend call, which activates `prev` -- so testing `!= st` alone
+    // committed on every single operation and batching saved nothing at
+    // all. Nothing can reach the journal while no state is current, so
+    // leaving the transaction open across the gap is safe.
+    if (st && g_txn_deferred && g_txn_owner != st) txn_flush_deferred();
     void *prev = S;
     S = st;
     return prev;
@@ -3391,6 +3511,14 @@ static void tfs3_state_free(void *st) {
     unmount_state();          // the caches hanging off it, and the read buffer
     tfs3_state_activate((prev == st) ? NULL : prev);
     kfree(st);
+}
+
+// Land a deferred transaction. Ordered BEFORE the device flush by
+// fs_sync(), because committing after the barrier would leave the very
+// thing being made durable behind it.
+static int tfs3_sync(void) {
+    if (!S) return 1;
+    return txn_flush_deferred();
 }
 
 const struct fs_ops tfs3_ops = {
@@ -3431,6 +3559,7 @@ const struct fs_ops tfs3_ops = {
     .list = tfs3_list,
     .stat = tfs3_stat,
     .disk_usage = tfs3_disk_usage,
+    .sync = tfs3_sync,
     .check = tfs3_check,
     .link = tfs3_link, // optional op, paired with FS_CAP_HARDLINKS above
 };

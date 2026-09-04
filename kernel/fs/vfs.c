@@ -292,6 +292,21 @@ int fs_sync(uint32_t *wrote_out) {
     uint32_t wrote = 0, pending = 0;
     int ok = 1;
 
+    // STAGE 0: land whatever a BACKEND is holding back, before either
+    // of the stages below. `storage.sync = batched` lets TFS3 keep a
+    // journal transaction open across writes, and flushing the device
+    // without committing it first would report a durability that had
+    // not been reached. Optional per backend -- NULL means nothing is
+    // ever deferred, which is true of fat32 and ramfs.
+    for (int i = 0; i < mount_count(); i++) {
+        const struct mount *m = mount_at(i);
+        if (!m || !m->fs || !m->fs->sync) continue;
+        if (!FS_OP(m, m->fs->sync())) {
+            klog_printf("fs: sync FAILED -- %s could not commit\n", m->point);
+            ok = 0;
+        }
+    }
+
     if (ata_cache_active() && !ata_sync(&wrote, &pending)) {
         klog_printf("fs: sync FAILED -- %u sector(s) still in RAM\n", pending);
         if (wrote_out) *wrote_out = wrote;

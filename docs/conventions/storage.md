@@ -354,6 +354,29 @@ the backend real hardware actually uses has no coverage -- test it with
 `vm.py --disk-kind ahci` by hand.
 
 
+## `storage.sync = batched` HOLDS A TRANSACTION OPEN, AND THREE THINGS MUST KEEP IT HONEST
+
+The transaction covers the INODE BLOCK only -- data and bitmaps are on
+disk before it opens -- so deferring the commit risks a lost size
+update and a leak `fsck` reclaims, not an unreplayable journal.
+
+If you touch this, know the three:
+
+- **`txn_begin()` commits any deferred transaction first.** It zeroes
+  `g_txn_count`, so an operation opening its own would discard every
+  staged inode -- writes reported as succeeded, gone. Forced there so no
+  call site has to remember.
+- **A NULL activation is NOT a mount switch.** `FS_OP` deactivates after
+  every backend call; treating that as "a different mount" committed on
+  every write and made the feature a no-op.
+- **Reads consult the staged image at `vol_read_sectors()`**, not at
+  `read_block()` -- `read_inode()` reads one SECTOR, so a block-level
+  overlay misses the only read that matters.
+
+**And a test here needs to EXTEND a file**, not re-write one: if the
+size never changes, a stale inode looks exactly like a current one.
+
+
 ## `storage.sync = lazy` TURNS OFF THE JOURNAL'S BARRIERS, AND THAT IS ext4's `nobarrier`
 
 Every `fs_write*()` call is one TFS3 transaction ending in two real

@@ -1,4 +1,5 @@
 Description=When writes reach the disk. Deferred is faster but can lose data if power fails
 Widget=radio
 Choice.strict=Immediate
+Choice.batched=Grouped
 Choice.lazy=Deferred

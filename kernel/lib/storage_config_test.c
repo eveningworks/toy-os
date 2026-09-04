@@ -33,6 +33,169 @@ KTEST("storage", "an unknown sync mode is refused and leaves the mode alone") {
 // rather than against a fixed number, because the desktop is running
 // and flushing on its own -- a test that read an absolute count would
 // be measuring whatever else the machine did.
+// BATCHED IS THE MODE WITH THE INTERESTING FAILURE. It keeps a journal
+// transaction open across writes, so the two things that could go wrong
+// are losing the staged inode (a write that reports success and is not
+// there) and never committing at all.
+//
+// Asserted as a comparison, not against a fixed count, because the
+// desktop is writing on its own throughout.
+KTEST("storage", "batched commits fewer times than strict, and keeps the data") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+
+    static uint8_t buf[4096];
+    static uint8_t back[4096];
+    k_memset(buf, 0x3C, sizeof buf);
+    int restore = storage_sync_strict();
+    int restore_b = storage_sync_batched();
+
+    fs_delete(SCRATCH);
+    KTEST_ASSERT_EQ(fs_touch(SCRATCH), 1);
+    enum { WRITES = 8 };
+
+    storage_config_set_mode_for_test(1, 0);   // strict
+    uint64_t a0 = flushes();
+    for (int i = 0; i < WRITES; i++)
+        KTEST_ASSERT_EQ(fs_write_range(SCRATCH, (uint64_t)i * sizeof buf, buf, sizeof buf), 1);
+    uint64_t strict_cost = flushes() - a0;
+
+    storage_config_set_mode_for_test(1, 1);   // batched
+    uint64_t b0 = flushes();
+    for (int i = 0; i < WRITES; i++)
+        KTEST_ASSERT_EQ(fs_write_range(SCRATCH, (uint64_t)i * sizeof buf, buf, sizeof buf), 1);
+    uint64_t batched_cost = flushes() - b0;
+
+    KTEST_ASSERT(batched_cost < strict_cost);
+
+    // AND THE BYTES ARE THERE, which the flush comparison alone would
+    // be perfectly happy about if the staged inode had been dropped.
+    // Read back BEFORE forcing a commit: a batched write must be
+    // visible to a reader immediately, only not yet durable.
+    for (int i = 0; i < WRITES; i++) {
+        k_memset(back, 0, sizeof back);
+        KTEST_ASSERT_EQ((int64_t)fs_read_range(SCRATCH, (uint64_t)i * sizeof buf,
+                                               back, sizeof back), (int64_t)sizeof back);
+        KTEST_ASSERT_EQ((int64_t)back[0], (int64_t)0x3C);
+    }
+    KTEST_ASSERT_EQ((int64_t)fs_size(SCRATCH), (int64_t)(WRITES * (int)sizeof buf));
+
+    // fs_sync() must land the deferred transaction, and the assertion
+    // is on WRITES rather than flushes: fs_sync() flushes every mounted
+    // device whatever the backend does, so a flush count would go up
+    // even if the commit had been skipped entirely. A commit writes --
+    // journal data, the header, the target, the header again -- and a
+    // device flush writes nothing.
+    uint64_t w0 = 0;
+    blk_stat_get(BLK_STAT_WRITE, &w0, NULL, NULL, NULL);
+    uint32_t wrote = 0;
+    KTEST_ASSERT_EQ(fs_sync(&wrote), 1);
+    uint64_t w1 = 0;
+    blk_stat_get(BLK_STAT_WRITE, &w1, NULL, NULL, NULL);
+    KTEST_ASSERT(w1 > w0);
+
+    storage_config_set_mode_for_test(restore, restore_b);
+    fs_delete(SCRATCH);
+}
+
+// A BATCHED WRITE MUST BE VISIBLE BEFORE IT IS DURABLE, and this is the
+// bug that shipped in the first version of `batched`.
+//
+// A deferred transaction holds the newest inode image in the journal
+// staging buffer while the DISK still holds the previous one. Readers
+// go through vol_read_sectors(), so without an overlay there they see
+// the old size and the old block pointers -- `fs_size()` reporting the
+// size the file had before writes that already returned success.
+// `diskbench`'s read pass failed outright with a short read.
+//
+// EXTENDS THE FILE MANY TIMES IN ONE BATCH, deliberately: a single
+// write-then-read is racy, because anything else on the machine that
+// opens a transaction commits this one on its way past (txn_begin), and
+// the desktop is running. Growing the file repeatedly and checking the
+// size after EVERY step fails on whichever step no commit happened to
+// intervene in -- and with the overlay it passes on all of them.
+KTEST("storage", "a batched write is visible to a reader before it commits") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+
+    static uint8_t buf[4096];
+    static uint8_t back[4096];
+    k_memset(buf, 0x71, sizeof buf);
+    int restore = storage_sync_strict(), restore_b = storage_sync_batched();
+
+    fs_delete(SCRATCH);
+    KTEST_ASSERT_EQ(fs_touch(SCRATCH), 1);
+    storage_config_set_mode_for_test(1, 1);   // batched
+
+    enum { STEPS = 12 };
+    for (int i = 0; i < STEPS; i++) {
+        KTEST_ASSERT_EQ(fs_write_range(SCRATCH, (uint64_t)i * sizeof buf,
+                                       buf, sizeof buf), 1);
+        // The size the write just established, read back through the
+        // ordinary path -- which is where a stale inode surfaces.
+        if ((int64_t)fs_size(SCRATCH) != (int64_t)((i + 1) * (int)sizeof buf)) {
+            storage_config_set_mode_for_test(restore, restore_b);
+            ktest_fail_eq(ctx, "fs_size after a batched write",
+                          (int64_t)fs_size(SCRATCH),
+                          (int64_t)((i + 1) * (int)sizeof buf), __FILE__, __LINE__);
+            return;
+        }
+        // ...and the bytes at the new tail, which a stale block map
+        // would report as a hole.
+        k_memset(back, 0, sizeof back);
+        if ((int64_t)fs_read_range(SCRATCH, (uint64_t)i * sizeof buf,
+                                   back, sizeof back) != (int64_t)sizeof back ||
+            back[0] != 0x71) {
+            storage_config_set_mode_for_test(restore, restore_b);
+            ktest_fail(ctx, "a batched write read back short or empty",
+                       __FILE__, __LINE__);
+            return;
+        }
+    }
+
+    storage_config_set_mode_for_test(restore, restore_b);
+    fs_delete(SCRATCH);
+}
+
+// THE HAZARD txn_begin() EXISTS TO CLOSE. An operation that opens its
+// own transaction while one is deferred would discard every inode
+// staged in it -- writes reported as succeeded, silently gone. A create
+// between two writes is the cheapest way to provoke exactly that.
+KTEST("storage", "an operation between batched writes does not lose them") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+
+    static uint8_t buf[4096];
+    static uint8_t back[4096];
+    k_memset(buf, 0x5E, sizeof buf);
+    int restore = storage_sync_strict(), restore_b = storage_sync_batched();
+
+    fs_delete(SCRATCH);
+    fs_delete("/tmp/ktest_sync2.bin");
+    KTEST_ASSERT_EQ(fs_touch(SCRATCH), 1);
+
+    storage_config_set_mode_for_test(1, 1);   // batched
+    KTEST_ASSERT_EQ(fs_write_range(SCRATCH, 0, buf, sizeof buf), 1);
+
+    // A create opens its OWN transaction (credits=3), which is what
+    // would blow away the staged inode above.
+    KTEST_ASSERT_EQ(fs_touch("/tmp/ktest_sync2.bin"), 1);
+
+    KTEST_ASSERT_EQ(fs_write_range(SCRATCH, sizeof buf, buf, sizeof buf), 1);
+    KTEST_ASSERT_EQ(fs_sync(NULL), 1);
+    storage_config_set_mode_for_test(restore, restore_b);
+
+    // Both halves, and the size -- a lost first inode shows up as a
+    // file that is 4096 bytes long instead of 8192.
+    KTEST_ASSERT_EQ((int64_t)fs_size(SCRATCH), (int64_t)(2 * (int)sizeof buf));
+    for (int i = 0; i < 2; i++) {
+        k_memset(back, 0, sizeof back);
+        KTEST_ASSERT_EQ((int64_t)fs_read_range(SCRATCH, (uint64_t)i * sizeof buf,
+                                               back, sizeof back), (int64_t)sizeof back);
+        KTEST_ASSERT_EQ((int64_t)back[0], (int64_t)0x5E);
+    }
+
+    fs_delete(SCRATCH);
+    fs_delete("/tmp/ktest_sync2.bin");
+}
+
 KTEST("storage", "lazy issues fewer device flushes than strict for the same write") {
     if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
 
@@ -47,19 +210,19 @@ KTEST("storage", "lazy issues fewer device flushes than strict for the same writ
     // is a margin rather than one flush either way.
     enum { WRITES = 8 };
 
-    storage_config_set_strict_for_test(1);
+    storage_config_set_mode_for_test(1, 0);
     uint64_t a0 = flushes();
     for (int i = 0; i < WRITES; i++)
         KTEST_ASSERT_EQ(fs_write_range(SCRATCH, (uint64_t)i * sizeof buf, buf, sizeof buf), 1);
     uint64_t strict_cost = flushes() - a0;
 
-    storage_config_set_strict_for_test(0);
+    storage_config_set_mode_for_test(1, 0), storage_config_set_mode_for_test(0, 0);
     uint64_t b0 = flushes();
     for (int i = 0; i < WRITES; i++)
         KTEST_ASSERT_EQ(fs_write_range(SCRATCH, (uint64_t)i * sizeof buf, buf, sizeof buf), 1);
     uint64_t lazy_cost = flushes() - b0;
 
-    storage_config_set_strict_for_test(restore);
+    storage_config_set_mode_for_test(restore, 0);
 
     KTEST_ASSERT(strict_cost >= (uint64_t)WRITES);   // two barriers a write
     KTEST_ASSERT(lazy_cost < strict_cost);

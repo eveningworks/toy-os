@@ -306,6 +306,63 @@ on ATA and fail on AHCI -- a suite that only runs the backend WITH the
 cache cannot see a bug in the ones without it. On the roadmap now.
 
 
+## `storage.sync = batched` defers the COMMIT, and the data is already on disk
+
+After the resolved-path cache, flush was 56-69% of block time on real
+hardware -- and it was buying almost nothing. `do_write_inner()` writes
+its data blocks directly, then the allocation bitmaps, and only then
+opens a transaction: `txn_begin(1)`, one credit, staging the INODE BLOCK
+alone. Two device barriers per syscall, to make one 4 KiB block durable,
+after the file's data had already reached the disk.
+
+`batched` keeps that transaction open across writes. Measured in one
+guest, QEMU/KVM + AHCI, 2 MiB: sequential write 11.95 -> 13.43 MB/s and
+random 4 KiB write 1.381 -> 2.636, with flushes 148 -> 84 and 212 -> 84.
+`fsck` clean afterwards.
+
+**What a crash costs, exactly.** The data and the bitmaps are on disk;
+what is lost is the inode update, so a just-extended file returns at its
+old size with the blocks past it unreferenced. That is a LEAK, which
+`fsck` reclaims, and it is the ordering this filesystem already chose
+("prefer a leak to a double-allocation"). Far weaker than `lazy`, which
+risks a journal that cannot be replayed at all.
+
+**The commit is forced in `txn_begin()`, not at the call sites.**
+`txn_begin()` zeroes `g_txn_count`, so any operation opening its own
+transaction while one was deferred would silently discard every inode
+staged in it -- writes reported as succeeded, gone. Forcing it in the
+one function every transaction passes through covers create, delete,
+rename and truncate without editing them, and a new operation cannot
+forget.
+
+**A NULL activation is not a mount switch, and getting that wrong made
+the whole feature a no-op.** The deferred transaction belongs to one
+mount because `g_txn_img` is file-scope, so activating a DIFFERENT mount
+must commit it first. The first version tested `owner != st` -- and
+`FS_OP` deactivates after every backend call by activating NULL, so that
+was true every single time and every write still committed. Nothing can
+reach the journal while no state is current, so a NULL activation is
+ignored.
+
+**Readers consult the staged image, at `vol_read_sectors()`.** The
+newest inode lives in the staging buffer while the disk holds the
+previous one, so without an overlay `fs_size()` reports the size from
+before writes that already returned success -- `diskbench`'s read pass
+died with a short read. It has to sit at `vol_read_sectors()` rather
+than `read_block()`, because `read_inode()` reads ONE SECTOR and a
+block-level overlay missed exactly the read that mattered while leaving
+the symptom unchanged.
+
+**AND THE TEST THAT PASSED WITH THAT BUG IS THE PART TO REMEMBER.** It
+wrote eight blocks in `strict`, then re-wrote the SAME offsets in
+`batched` -- so the file's size never changed and a stale inode was
+indistinguishable from a current one. Catching it needs a test that
+EXTENDS the file and checks the size after every step, and even then a
+single step is racy, because anything else opening a transaction commits
+this one on its way past. A dozen steps is what makes one land in a
+window where nothing intervened.
+
+
 ## `storage.sync` is a setting because the barriers' cost cannot be measured where they are cheap
 
 TFS3 commits one journal transaction per `fs_write*()` call and ends it
