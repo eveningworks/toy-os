@@ -3052,7 +3052,7 @@ caller is a test.
 
 - [x] ~~The toolkit as a real shared library rather than static per client~~ DONE 2026-09-04 -- `/lib/libuapp.so`; the measurement that decided it is in `docs/decisions.md` ("The toolkit is a shared library"). What follows is the note as it stood. Right now `ugfx.o` + `uui.o` are linked per binary, which is fine at two clients and wasteful at ten. The font already set the precedent for the answer (share one copy, no drift) -- but sharing CODE needs the dynamic-linking work in Dynamic linking / shared libraries, which is why this is a note and not a task yet.
 
-### Finish the app-deduplication pass: three WIP branches (WM tray popups, Notepad onto the toolkit, `utest.h`) plus the smaller survey items
+### Finish the app-deduplication pass: three WIP branches and the smaller survey items
 
 Started 2026-09-04 and stopped mid-flight for budget. What LANDED on
 main that day: `lib/usetting.h`, `lib/udate.h`, `human_size_iec()`,
