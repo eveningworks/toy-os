@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include "rt/sys.h"
 #include "lib/cmd.h"
+#include "lib/dirsort.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -27,6 +28,10 @@ static int list(void) {
         sys_print("crashlog: no reports (" CRASH_DIR " does not exist)\n");
         return 0;
     }
+    // NEWEST FIRST, unlike the other listings here: the report anyone
+    // wants is the one from the crash that just happened. dirsort's name
+    // tie-break keeps it deterministic if two share a timestamp.
+    dirsort(ents, n, DIRSORT_TIME, 0);
     int shown = 0;
     for (int i = 0; i < n; i++) {
         if (ents[i].is_dir) continue;

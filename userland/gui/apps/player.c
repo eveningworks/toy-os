@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include "rt/sys.h"
 #include "lib/usnd.h"
+#include "lib/ufile.h"
 #include "kpath.h"
 #include "ui/ugfx.h"
 #include "ui/uui.h"
@@ -132,11 +133,8 @@ static int keep_audio(void *ctx, const char *dir, const struct sys_dirent *e) {
     if (!k_path_join(dir, e->name, path, sizeof path)) return 0;
 
     uint8_t head[16];
-    int fd = sys_open(path, 0);
-    if (fd < 0) return 0;
-    long got = (long)sys_read(fd, head, sizeof head);
-    sys_close(fd);
-    return got >= 12 && usnd_probe(head, (size_t)got);
+    size_t got = ufile_read_head(path, head, sizeof head);
+    return got >= 12 && usnd_probe(head, got);
 }
 
 // --- formatting -------------------------------------------------------

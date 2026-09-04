@@ -35,6 +35,8 @@
 #include "lib/cmd.h"
 #include "lib/ufileop.h"
 #include "lib/human.h"
+#include "lib/dirsort.h"
+#include "lib/ufile.h"
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -110,26 +112,14 @@ static uint64_t disk_sectors(const char *name) {
     return 0;
 }
 
-// A whole file into a fresh buffer. The caller frees it. Used for
-// boot.img (512 bytes) and core.img (tens of KiB), neither of which
-// belongs on a 2 KiB frame.
+// A whole file into a fresh buffer (lib/ufile.h). The caller frees it.
+// Used for boot.img (512 bytes) and core.img (tens of KiB), neither of
+// which belongs on a 2 KiB frame. No cap: these are our own artifacts.
 static void *slurp(const char *path, uint64_t *out_size) {
-    struct sys_stat st;
-    if (sys_stat(path, &st) < 0) return 0;
-    if (st.size == 0) return 0;
-    uint8_t *buf = malloc((size_t)st.size);
-    if (!buf) return 0;
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) { free(buf); return 0; }
-    uint64_t got = 0;
-    while (got < st.size) {
-        int64_t n = read(fd, buf + got, (size_t)(st.size - got));
-        if (n <= 0) break;
-        got += (uint64_t)n;
-    }
-    close(fd);
-    if (got != st.size) { free(buf); return 0; }
-    *out_size = got;
+    uint8_t *buf = 0;
+    size_t len = 0;
+    if (ufile_slurp(path, 0, &buf, &len) != UFILE_OK) return 0;
+    *out_size = len;
     return buf;
 }
 
@@ -193,7 +183,7 @@ static int mount_one(const char *part, const char *point) {
 // still says failed.
 static void copy_error(void *ctx, const char *path, int err) {
     (void)ctx;
-    printf("install: %s: %s\n", path, sys_strerror(err));
+    cmd_fail_err("install", path, err);
 }
 
 static const struct ufileop_policy COPY_POLICY = {
@@ -208,6 +198,9 @@ static int copy_system(void) {
     if (!ents) { refuse("out of memory"); return 0; }
     int n = sys_listdir("/", ents, SYS_LISTDIR_MAX);
     if (n < 0) { free(ents); cmd_fail("install", "/"); return 0; }
+    // Sorted so the progress this prints is the same on two machines,
+    // which is what makes a transcript of a failed install comparable.
+    dirsort(ents, n, DIRSORT_NAME, 0);
 
     int ok = 1;
     for (int i = 0; i < n; i++) {

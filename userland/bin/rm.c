@@ -15,11 +15,7 @@ static struct ufileop g_op;
 
 static void on_error(void *ctx, const char *path, int err) {
     (void)ctx;
-    sys_print("rm: ");
-    sys_print(path);
-    sys_print(": ");
-    sys_print(sys_strerror(err));
-    sys_print("\n");
+    cmd_fail_err("rm", path, err);
 }
 
 int main(int argc, char **argv) {

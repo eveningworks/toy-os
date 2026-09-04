@@ -1,6 +1,7 @@
 // uimg -- the codec table, the file front end, and the resampler.
 // See uimg.h for why any of this is in ring 3 rather than in the kernel.
 #include "lib/uimg.h"
+#include "lib/ufile.h"
 #include "rt/sys.h"
 #include <kerrno.h>
 #include <stdlib.h>
@@ -60,52 +61,40 @@ void uimg_free(struct uimg *im) {
     im->w = im->h = 0;
 }
 
-// Reads a whole file into one allocation. The caller frees it.
+// Reads a whole file into one allocation (lib/ufile.h). The caller
+// frees it.
 //
-// It REFUSES a file over UIMG_MAX_FILE rather than reading a prefix,
-// because a truncated JPEG decodes -- to a grey-tailed picture that
-// looks like a decoder bug rather than like a file that did not fit.
+// The wording is HERE rather than in the shared reader because these
+// sentences reach a person in the Image Viewer, and an errno cannot
+// carry them: an empty file and one past the ceiling are both EINVAL,
+// and they are not the same problem.
 static int read_file(const char *path, uint8_t **out, size_t *out_len) {
-    struct sys_stat st;
-    if (sys_stat(path, &st) < 0) {
+    switch (ufile_slurp(path, UIMG_MAX_FILE, out, out_len)) {
+    case UFILE_OK:
+        return 0;
+    case UFILE_NOENT:
         uimg_set_error("no such file");
         return -ENOENT;
-    }
-    if (st.size == 0) {
+    case UFILE_EMPTY:
         uimg_set_error("the file is empty");
         return -EINVAL;
-    }
-    if (st.size > UIMG_MAX_FILE) {
+    case UFILE_TOO_BIG:
+        // REFUSED rather than read as a prefix: a truncated JPEG
+        // decodes, to a grey-tailed picture that looks like a decoder
+        // bug rather than like a file that did not fit.
         uimg_set_error("the file is larger than this decoder will read");
         return -EINVAL;
-    }
-    size_t len = (size_t)st.size;
-    uint8_t *buf = malloc(len);
-    if (!buf) {
+    case UFILE_NOMEM:
         uimg_set_error("not enough memory to read the file");
         return -ENOMEM;
-    }
-    int fd = sys_open(path, 0);
-    if (fd < 0) {
-        free(buf);
+    case UFILE_OPEN:
         uimg_set_error("the file could not be opened");
         return -EIO;
-    }
-    size_t got = 0;
-    while (got < len) {
-        int64_t r = sys_read(fd, buf + got, len - got);
-        if (r <= 0) break;
-        got += (size_t)r;
-    }
-    sys_close(fd);
-    if (got != len) {
-        free(buf);
+    case UFILE_SHORT:
+    default:
         uimg_set_error("the file ended early");
         return -EIO;
     }
-    *out = buf;
-    *out_len = len;
-    return 0;
 }
 
 int uimg_load_info(const char *path, struct uimg_info *out) {

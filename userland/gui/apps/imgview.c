@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include "rt/sys.h"
 #include "lib/uimg.h"
+#include "lib/ufile.h"
 #include "lib/usetting.h"
 #include "kpath.h"   // k_path_join/_dirname -- the KERNEL's, linked into ring 3
 #include <dirent.h>
@@ -146,10 +147,7 @@ static int keep_images(void *ctx, const char *dir, const struct sys_dirent *e) {
 
     // Sixteen bytes is more than any probe needs and one read either way.
     uint8_t head[16];
-    FILE *f = fopen(path, "rb");
-    if (!f) return 0;
-    size_t got = fread(head, 1, sizeof head, f);
-    fclose(f);
+    size_t got = ufile_read_head(path, head, sizeof head);
     return got >= 4 && uimg_probe(head, got);
 }
 

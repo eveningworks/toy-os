@@ -1,6 +1,7 @@
 // ugfx -- see ugfx.h for what this is and why the font arrives the way
 // it does.
 #include "ui/ugfx.h"
+#include "lib/ufile.h"
 #include "syscall_abi.h"
 #include "rt/sys.h" // sys_sbrk, sys_win_request -- the screen half, below
 #include "ttf.h"    // the SAME rasterizer the kernel uses -- see ugfx_font_load
@@ -406,26 +407,12 @@ int ugfx_font_load(const char *path, int px, int bold,
     // self-contained and the file can go. Making the caller hold half a
     // megabyte of .ttf forever, for a font it has already rendered,
     // would be the wrong contract.
-    struct sys_stat st;
-    if (sys_stat(path, &st) != 0) return 0;
-    unsigned long size = (unsigned long)st.size;
-    if (size == 0 || size > 4ul * 1024 * 1024) return 0;
-
-    unsigned char *file = (unsigned char *)malloc(size);
-    if (!file) return 0;
-    int fd = sys_open(path, 0);
-    if (fd < 0) { free(file); return 0; }
-    // Read in a LOOP: sys_read() is allowed to return short, and a
-    // single call that happened to fill a whole font on the shipped
-    // filesystem would be a latent bug on any other one.
-    unsigned long got = 0;
-    while (got < size) {
-        int64_t n = sys_read(fd, file + got, size - got);
-        if (n <= 0) break;
-        got += (unsigned long)n;
-    }
-    sys_close(fd);
-    if (got != size) { free(file); return 0; }
+    // lib/ufile.h, which owns the short-read loop this used to spell
+    // out. Nothing here distinguishes the failures -- a face that will
+    // not load falls back to the built-in one either way.
+    unsigned char *file = 0;
+    size_t size = 0;
+    if (ufile_slurp(path, 4ul * 1024 * 1024, &file, &size) != UFILE_OK) return 0;
 
     struct ttf_font t;
     if (!ttf_open(&t, file, (uint32_t)size)) { free(file); return 0; }

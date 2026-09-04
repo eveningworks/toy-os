@@ -930,6 +930,7 @@ whenever a headline here tells you something you did not already know.
 - **In ring 3 the toolkit is reachable under the C names -- don't hand-roll a `my_strlen` or a digit loop there either.**
 - **EVERY RING-3 PROGRAM CARRIES A TLS BLOCK, AND `crt0` INSTALLS IT BEFORE `main()`**
 - **RING-3 CODE HAS A FRAME BUDGET, and a link-time bound on the image.**
+- **READING A WHOLE FILE IS `lib/ufile.h`, AND THE PART IT EXISTS FOR IS THE LOOP**
 - **A SELF-CHECKING `/tests` PROGRAM REPORTS THROUGH `userland/lib/utest.h`, AND ITS EPILOGUE IS ONE LINE IN ONE SHAPE**
 - **Every ring-3 program is just a `main()`.**
 - **`linker.ld` decides kernel memory PERMISSIONS, not just placement.**

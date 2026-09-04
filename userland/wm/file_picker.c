@@ -8,6 +8,7 @@
 #include "kpath.h"
 #include "rt/sys.h"
 #include "wm/wm_fs.h"
+#include "lib/dirsort.h"
 
 int file_picker_open = 0;
 
@@ -104,21 +105,27 @@ static void fp_resolve_typed(char *out) {
 // ---- listing ----
 
 // Directories first, then alphabetical within each group -- a directory
-// listing arrives in table order (insertion order), not sorted. FP_MAX_ENTRIES is small (<=32) so a plain insertion sort costs
-// nothing worth optimizing.
-static void fp_sort_entries(void) {
-    for (int i = 1; i < g_entry_count; i++) {
-        struct fp_entry key = g_entries[i];
+// listing arrives in the filesystem's walk order, which is not an
+// order. DIRECTORIES FIRST is this picker's own policy, as in every
+// chooser; the comparison WITHIN a group is lib/dirsort.h's, because
+// that is what keeps this listing in the same order as /bin/ls and
+// uui_fileview -- a test that reads a row index from one and clicks it
+// in another is only correct while the three agree. FP_MAX_ENTRIES is
+// small (<=32) so a plain insertion sort costs nothing worth
+// optimizing.
+static void fp_sort_listing(struct sys_dirent *e, int n) {
+    for (int i = 1; i < n; i++) {
+        struct sys_dirent key = e[i];
         int j = i - 1;
         while (j >= 0) {
-            int key_first = key.is_dir && !g_entries[j].is_dir;
-            int same_kind = key.is_dir == g_entries[j].is_dir;
-            int later_alpha = same_kind && k_strcmp(key.name, g_entries[j].name) < 0;
-            if (!key_first && !later_alpha) break;
-            g_entries[j + 1] = g_entries[j];
+            int key_first = key.is_dir && !e[j].is_dir;
+            int same_kind = (key.is_dir != 0) == (e[j].is_dir != 0);
+            int before = same_kind && dirsort_cmp(&key, &e[j], DIRSORT_NAME) < 0;
+            if (!key_first && !before) break;
+            e[j + 1] = e[j];
             j--;
         }
-        g_entries[j + 1] = key;
+        e[j + 1] = key;
     }
 }
 
@@ -137,12 +144,12 @@ static void fp_refresh_listing(void) {
     // this does not recurse.
     static struct sys_dirent ents[FP_MAX_ENTRIES];
     int n = wm_fs_list(g_cwd, ents, FP_MAX_ENTRIES);
+    fp_sort_listing(ents, n);
     for (int i = 0; i < n && g_entry_count < FP_MAX_ENTRIES; i++) {
         k_strlcpy(g_entries[g_entry_count].name, ents[i].name, sizeof g_entries[g_entry_count].name);
         g_entries[g_entry_count].is_dir = (int)ents[i].is_dir;
         g_entry_count++;
     }
-    fp_sort_entries();
     g_has_up = (k_strcmp(g_cwd, "/") != 0);
     g_selected_row = -1;
     g_scroll_offset = 0;

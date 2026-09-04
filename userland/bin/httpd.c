@@ -23,6 +23,7 @@
 #include "rt/sys.h"
 #include "net_abi.h"
 #include "lib/cmd.h"
+#include "lib/dirsort.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -79,6 +80,9 @@ static void serve_listing(int fd, const char *path) {
     static struct sys_dirent ents[64];
     int n = sys_listdir(path, ents, (int)(sizeof ents / sizeof ents[0]));
     if (n < 0) { serve_error(fd, "404 Not Found", "No such directory."); return; }
+    // SYS_LISTDIR returns the filesystem's walk order, which is not an
+    // order -- and this index is read by a person in a browser.
+    dirsort(ents, n, DIRSORT_NAME, 0);
 
     int len = snprintf(page, sizeof page,
                        "<html><body><h1>%s</h1><ul>\n", path);

@@ -26,18 +26,27 @@
 // see -- it is one line, in one file, because of this header.
 #include "rt/sys.h"
 
-// "<prog>: <subject>: <reason>", where the reason is the errno the last
-// failing syscall left. Pass NULL for `subject` when the failure is not
-// about a particular argument (sync).
-static inline void cmd_fail(const char *prog, const char *subject) {
+// "<prog>: <subject>: <reason>", with the errno given rather than read.
+// This is the shape a `ufileop_policy.on_error` callback needs: it is
+// HANDED the errno, and reading sys_errno() there would report whatever
+// syscall ran last instead of the one that failed. cp, rm, mv and
+// install each wrote this out.
+static inline void cmd_fail_err(const char *prog, const char *subject, int err) {
     sys_print(prog);
     sys_print(": ");
     if (subject) {
         sys_print(subject);
         sys_print(": ");
     }
-    sys_print(sys_strerror(sys_errno()));
+    sys_print(sys_strerror(err));
     sys_print("\n");
+}
+
+// The same line, for the errno the last failing syscall left. Pass NULL
+// for `subject` when the failure is not about a particular argument
+// (sync).
+static inline void cmd_fail(const char *prog, const char *subject) {
+    cmd_fail_err(prog, subject, sys_errno());
 }
 
 // "usage: <text>", same stream as cmd_fail() and for the same reason. Its own function only so the word `usage`

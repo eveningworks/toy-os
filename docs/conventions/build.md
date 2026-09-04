@@ -340,6 +340,21 @@ this the obvious way), not from how much history it accumulated.
   which does not merely overflow but steps clean OVER the single 4 KiB
   guard page into unmapped space (the Stack Clash shape). Note the
   warning names the function where a wider guard would only hide it.
+- **READING A WHOLE FILE IS `lib/ufile.h`, AND THE PART IT EXISTS FOR IS
+  THE LOOP.** `ufile_slurp(path, cap, &buf, &len)` returns a fresh
+  allocation the caller frees, `ufile_read_head(path, buf, cap)` reads a
+  header for a caller deciding WHAT a file is. Three places had written
+  the same twenty lines -- `/bin/install`, `lib/uimg.c`, `ui/ugfx.c` --
+  and the part that is invisible in all three is that **`sys_read()` may
+  return SHORT**, so the read is a loop; a single call that happens to
+  fill the whole file on the shipped filesystem is a latent bug on any
+  other one. Two things to know. **It reports an OUTCOME, not an
+  errno**, because EMPTY and TOO_BIG are both `EINVAL` and "the file is
+  larger than this decoder will read" is not the same sentence as "the
+  file is empty" -- uimg's wording reaches a person in the Image Viewer.
+  And **it REFUSES an oversized file rather than reading a prefix**, the
+  same rule as `fs_read_into()` in the kernel: a truncated JPEG decodes,
+  to a grey-tailed picture that reads as a decoder bug.
 - **A SELF-CHECKING `/tests` PROGRAM REPORTS THROUGH `userland/lib/utest.h`,
   AND ITS EPILOGUE IS ONE LINE IN ONE SHAPE.** `utest_begin(name, title,
   flags)`, `utest_check(ok, what)` (or `_check_detail` / `_checkf` for a

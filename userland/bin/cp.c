@@ -27,7 +27,7 @@ static void fail_msg(const char *subject, const char *why) {
 
 static void on_error(void *ctx, const char *path, int err) {
     (void)ctx;
-    fail_msg(path, sys_strerror(err));
+    cmd_fail_err("cp", path, err);
 }
 
 int main(int argc, char **argv) {

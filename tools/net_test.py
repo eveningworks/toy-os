@@ -1251,6 +1251,13 @@ SERVER_PORT = 18089
 SERVER_FILE = "httpd_probe.txt"
 SERVER_TEXT = "served from inside toy-os\n" * 3
 
+# Staged in an order the answer must NOT be: the index is sorted by name,
+# so a listing that echoes the filesystem's walk order comes back with
+# these in roughly the order below. Three names rather than one, because
+# "the file appears" cannot tell a sorted listing from an unsorted one --
+# with a single entry every order is the same order.
+SERVER_EXTRA = ["zeta.txt", "alpha.txt", "middle.txt"]
+
 
 def _stage_probe(disk, tmp):
     """Write the file the guest will serve into the image, from here."""
@@ -1260,10 +1267,18 @@ def _stage_probe(disk, tmp):
     probe = os.path.join(tmp, SERVER_FILE)
     with open(probe, "w") as f:
         f.write(SERVER_TEXT)
-    return subprocess.run([sys.executable, os.path.join(HERE, "tfs3_writer.py"),
-                           "write", disk, probe, "/tmp/" + SERVER_FILE,
-                           *_volume_args(disk)],
-                          cwd=ROOT, capture_output=True, text=True)
+    w = subprocess.run([sys.executable, os.path.join(HERE, "tfs3_writer.py"),
+                        "write", disk, probe, "/tmp/" + SERVER_FILE,
+                        *_volume_args(disk)],
+                       cwd=ROOT, capture_output=True, text=True)
+    for name in SERVER_EXTRA:
+        extra = os.path.join(tmp, name)
+        with open(extra, "w") as f:
+            f.write(name + "\n")
+        subprocess.run([sys.executable, os.path.join(HERE, "tfs3_writer.py"),
+                        "write", disk, extra, "/tmp/" + name, *_volume_args(disk)],
+                       cwd=ROOT, capture_output=True)
+    return w
 
 
 def phase_server(r, disk, tmp):
@@ -1325,6 +1340,18 @@ def phase_server(r, disk, tmp):
             listing = f"<{e}>"
         r.check("[server] a directory is served as a listing",
                 SERVER_FILE in listing, listing[:300])
+
+        # AND IN NAME ORDER. SYS_LISTDIR returns the filesystem's walk
+        # order, which is not an order at all -- the same directory can
+        # list differently on two machines, and this index is read by a
+        # person in a browser. Asserted on the staged names only, since
+        # the guest puts files of its own in /tmp.
+        import re as _re
+        seen = [n for n in _re.findall(r'>([A-Za-z0-9._-]+)</a>', listing)
+                if n in SERVER_EXTRA]
+        r.check("[server] and the listing is in NAME order",
+                len(seen) == len(SERVER_EXTRA) and seen == sorted(seen),
+                f"saw {seen}, wanted {sorted(SERVER_EXTRA)}")
 
         # A SECOND request proves the server went back to accepting --
         # a listener consumed by its first connection passes everything

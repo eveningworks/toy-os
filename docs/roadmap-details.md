@@ -3105,23 +3105,35 @@ left is the survey findings, none of them started.
   control (one check in `libc3_test` broken; the epilogue names it and
   reports 1 of 43).
 
-**Smaller survey findings, not started** (file:line as of that day):
+**Smaller survey findings.** DONE 2026-09-04: `cmd_fail_err()` in
+`lib/cmd.h` (cp, rm, mv, install each wrote the line out);
+`lib/ufile.h`'s `ufile_slurp()` for `install.c`, `lib/uimg.c` and
+`ui/ugfx.c` -- three copies of a read loop whose short-read handling is
+the part that is easy to get wrong -- and `ufile_read_head()` for
+`keep_images` and `keep_audio`; the three UNSORTED listings
+(`crashlog.c` newest-first, `httpd.c` and `install.c` by name), with a
+name-order check added to `net_test.py`'s server phase since "the file
+appears" could not see order; and the file picker's own insertion sort,
+which now defers to `dirsort_cmp()` within a group so its order matches
+`/bin/ls` and `uui_fileview`.
+
+**One finding was WRONG and is withdrawn**: `files.c` was said to
+re-implement `uopen_spawn()`. It does not -- it calls the shared
+`uopen_resolve()` and then spawns, deliberately, because it reports "no
+app for x" and "could not start y" as different sentences in its status
+bar and `uopen_spawn()` collapses both into -1. Folding it in would lose
+a distinction a person reads.
+
+**Still not started** (file:line as of 2026-09-04):
 `start_menu.c:174-252` and `context_menu.c:76-98` hand-draw a vertical
 menu that `uui_menubar_open_at()` + `uui_menubar_draw_popup()` draw
 (Start carries icons and a flash state the menubar has no slot for);
 a `QUERY_FOREACH` macro for the `sys_query_record` loop restated in
-three dialects across ~20 `/bin` programs; `cmd_fail_err(prog, subject,
-err)` in `lib/cmd.h` for the `on_error` callbacks in `cp.c`, `rm.c`,
-`mv.c`, `install.c`; `ufile_slurp(path, &len)` for `install.c:116` and
-`uimg.c:68`; `ufileop_read_head()` for `keep_images` (`imgview.c:147`)
-and `keep_audio` (`player.c:128`); `files.c:783-806` re-implements
-`uopen_spawn()`; a `uui_icon_label()` primitive for the icon-then-label
-row drawn five ways; `crashlog.c`, `httpd.c` and `install.c` list
-directories UNSORTED (`httpd`'s index is user-visible); the file picker
-sorts its own `struct fp_entry` beside `dirsort.h`; and the codec tables
-in `uimg.c`/`usnd.c` pull every decoder into every program that touches
-an image or a sound, which `libuapp.so` now absorbs but a static build
-still pays.
+three dialects across ~20 `/bin` programs; a `uui_icon_label()`
+primitive for the icon-then-label row drawn five ways; and the codec
+tables in `uimg.c`/`usnd.c` pull every decoder into every program that
+touches an image or a sound, which `libuapp.so` now absorbs but a static
+build still pays.
 
 `preflight.sh` on main that day: build, boot smoke and usertest green;
 ktest 633 passed, 3 failed, all three `r.leaked` -- the shape of the
