@@ -3077,7 +3077,7 @@ says. **Merge it onto main, finish its list, run its tools, then
   and nothing else). `taskbar_test.py`'s three overflow failures were
   MEASURED against unmodified main and are identical there --
   `docs/bugs.md` already carries them.
-- [x] ~~**The `notepad:` branch.**~~ LANDED 2026-09-04 as d86d1113.
+- [x] ~~**The `notepad:` branch.**~~ LANDED 2026-09-04 as b7635f2a.
   `notepad.c` 1097 -> 906 lines: the private Open/Save dialog is a
   `uui_dialog` whose body is a `uui_layout` of `uui_fileview` +
   `uui_textbox`; the menu bar, status bar and dialog are declared in
