@@ -12,6 +12,63 @@ without opening something else is not finished.
 
 ---
 
+## Windows remember their geometry per APP, saved on close, keyed by a string
+
+Every app reopened at a cascade position and its `default_size()`, so a
+window you had sized and placed came back wrong every launch. The
+compositor stores per-application geometry in `/etc/windows.conf` now
+and applies it at create time.
+
+**Keyed by `app_id`, not by `app_identity`.** The identity int looks
+like the natural key -- it is the kernel's, which is exactly what
+CLAUDE.md says a window's application identity is -- and it is wrong
+here: `win_server.c` interns it from a spawn path into a per-boot table
+in launch order, so "identity 3" is a different app tomorrow. `app_id`
+is a string the app declares (`"settings"`) and the registry defaults to
+its Exec basename. Desktop icon positions already key on a name for the
+same reason.
+
+**Saved in `close_window()`, not where geometry changes.** Geometry is
+written at five call sites -- two drags, maximize, a client's resize
+ack, and the pull-back-on-screen -- and a drag rewrites x/y every frame,
+so saving there would be hundreds of whole-file rewrites per drag.
+`close_window()` is one chokepoint that sees the final answer while the
+slot is still live.
+
+**A maximized window saves its RESTORE rect.** Saving the maximized
+geometry would reopen the app at exactly screen size but not maximized:
+a window that looks maximized, has no restore size to go back to, and
+covers the taskbar. The restore rect is already maintained for
+un-maximize, so this costs nothing.
+
+**A client's size is a REQUEST, not an assignment.** A client owns its
+buffer, so the WM cannot widen its window; the restore asks through
+`wm_client_send_resize()`, the same path a user's resize drag uses, and
+the client acks through `on_window_resized()`.
+
+**Position is clamped against the SCREEN, size against the WORK AREA,
+and the difference is deliberate.** A window may be dragged off an edge
+or under the taskbar on purpose, so clamping position to the work area
+would silently move a window the user had placed -- 200,150 came back as
+200,120 the first time. But a window LARGER than the work area has its
+close button off the edge, so size is clamped harder. `wm_ensure_reachable()`
+is not enough on its own: its guarantee is that a sliver stays grabbable,
+which restored 4000x3000 at (5000,5000) as a 1280-wide window at x=1216.
+
+**Default on, `RememberGeometry=false` in the `.desktop` entry opts
+out** -- because the alternative is every app asking for behaviour
+people expect from all of them.
+
+**The cache that had to go.** The parsed file was cached and invalidated
+only when this module's own save rewrote it, which makes the WM blind to
+every other writer -- a person editing the file, and the test that
+writes a known geometry before opening a window. It reads fresh per
+window opened now. The general shape is worth the sentence: **a cache
+invalidated only by its owner's writes is correct only while its owner
+is the only writer, and nothing had said that it was.**
+
+
+
 ## A meter reserves every row it could use, because its content is a value that changes
 
 `uui_meter` (`userland/ui/uui_meter.h`) shows a caption, a big number,

@@ -1319,6 +1319,27 @@ this the obvious way), not from how much history it accumulated.
   single `!g_ops` guard refused everything** -- a window server is now
   either a ring-0 layer or a registered compositor.
 
+## A WINDOW'S GEOMETRY IS REMEMBERED PER APP, AND THE KEY IS `app_id` -- NEVER `app_identity`
+
+`userland/wm/wm_geometry.c` saves position and size in
+`/etc/windows.conf` at `close_window()` and applies them at create time,
+for kernel-space apps and ring-3 clients alike. Default on; an app opts
+out with `RememberGeometry=false` in its `.desktop` entry.
+
+**`app_identity` is a per-boot spawn-order index** (`win_server.c`), so
+it is not a persistence key however much it looks like one -- "identity
+3" is a different app after a reboot. `app_id` is the app's own stable
+string.
+
+**Saving belongs at the close, not where geometry changes.** Five call
+sites write x/y/w/h and a drag writes them every frame.
+
+**A client's size is a request.** It owns its buffer, so a restore asks
+via `wm_client_send_resize()` and the client acks; the WM cannot just
+assign `win->w`.
+
+
+
 ## `-vga virtio` IS A REAL DISPLAY DRIVER, and nothing else boots it
 
 `virtio-gpu` (`kernel/drivers/virtio/virtio_gpu.c` plus

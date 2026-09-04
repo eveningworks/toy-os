@@ -1888,6 +1888,22 @@ window without going through it will find its layout polls timing out.
   and a 35-check suite passed it: every check asserted on the app's LOG,
   and the widgets were live, hit-testable and simply never painted. In
   `gui_regress.py`.
+- **`window_geometry_test.py`** -- windows come back where you left
+  them (`userland/wm/wm_geometry.c`). Most of it drives the RESTORE half
+  from a hand-written `/etc/windows.conf` rather than from a previous
+  run, on purpose: a round-trip test alone passes if both halves are
+  broken the same way -- save the wrong rect, restore the wrong rect,
+  get it back. Writing a known geometry and demanding exactly that one
+  cannot be satisfied by a symmetric bug. The SAVE half is covered
+  separately by dragging a window and reading the file.
+
+  **Its checks were written twice, and the first set was nearly
+  worthless**: with restore disabled entirely, five of six still passed,
+  because "the window is on screen" and "reopening matches" are both
+  true of default placement. They assert exact sizes that can only have
+  come from the file now -- 4 of 6 go red under that control, and the
+  drag check goes red under the save control. Worth reading before
+  adding a check here. In `gui_regress.py`.
 - **`diskmark_test.py`** -- drives the **Disk Mark** GUI benchmark and
   asserts on it. **The load-bearing check is the NUMBERS, not the run
   finishing**: a build whose throughput arithmetic truncated to zero

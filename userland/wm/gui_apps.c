@@ -179,6 +179,20 @@ static void load_entry(const char *file) {
     a->icon_name = g_icons[i];
     a->app_id = g_appids[i];
     a->resizable = 1;
+    // DEFAULT ON, so only `RememberGeometry=false` turns it off. A
+    // missing key, an empty one, or anything unrecognised means yes --
+    // the same tolerance ShowIn= has, pointed the way round that makes
+    // a typo harmless rather than silently disabling a behaviour the
+    // entry never mentioned.
+    {
+        char raw[16];
+        a->remember_geometry = 1;
+        if (etc_config_buf_get(&cfg, "RememberGeometry", raw, sizeof raw) &&
+            (k_strcmp(raw, "false") == 0 || k_strcmp(raw, "0") == 0 ||
+             k_strcmp(raw, "no") == 0)) {
+            a->remember_geometry = 0;
+        }
+    }
     a->show_in = parse_show_in(&cfg, file);
 
     // Every app is a ring-3 binary now. An entry still naming the

@@ -24,6 +24,7 @@
 // with nothing else changing -- cheap without needing real dirty-rect
 // tracking of the scene: see wm_render_cursor_move() in wm_render.c.
 #include "wm_internal.h"
+#include "wm_geometry.h"
 #include "wm_debug.h"
 #include "win_server.h"
 #include "win_events.h"
@@ -321,6 +322,10 @@ void open_app(const struct gui_app *app) {
     win->title[i] = '\0';
 
     window_count++;
+    // AFTER window_count++, because restoring takes an INDEX: it calls
+    // wm_ensure_reachable(), which addresses windows by index and would
+    // not see a slot the count does not cover yet.
+    wm_geometry_restore(window_count - 1);
     if (app->on_open) app->on_open(win);
     redraw_pending = 1;
     // A new taskbar button appears -- compute_window_damage()
@@ -488,6 +493,14 @@ void close_window(int idx) {
     if (windows[idx].app && windows[idx].app->on_close) {
         windows[idx].app->on_close(&windows[idx]);
     }
+
+    // WHERE THIS WINDOW WAS, for the next launch. Here rather than at
+    // the five places geometry actually changes: a drag rewrites x/y
+    // every frame, so saving there would be hundreds of whole-file
+    // rewrites per drag. This is the one chokepoint that sees the final
+    // answer, and it still has the live slot -- the array shift at the
+    // bottom of this function is what would lose it.
+    wm_geometry_save(&windows[idx]);
 
     // If the FRONT window is going away, whatever ends up frontmost
     // gains keyboard focus -- and a client has to be told, since it

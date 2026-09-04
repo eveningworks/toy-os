@@ -123,6 +123,7 @@ TOOLS = [
     ("dialog", "dialog_test.py", "the confirm dialog, by pixel value"),
     ("sched", "sched_gui_test.py", "the desktop stays live while a process runs"),
     ("blank", "blank_window_test.py", "no app opens a blank window"),
+    ("wingeom", "window_geometry_test.py", "windows come back where you left them"),
     ("compositor", "compositor_test.py", "raw input to a ring-3 compositor"),
     ("screen", "screen_surface_test.py", "a ring-3 compositor's screen surface"),
     ("compdeath", "compositor_death_test.py", "the compositor death path (R7)"),
@@ -197,6 +198,7 @@ COST_S = {
     "taskmgr": 19,
     "uidemo": 17,
     "blank": 17,
+    "wingeom": 70,
     "uterm": 16,
     "hover": 5,        # eight injected moves and two counter reads
     "singleinst": 16,  # six launches, each waiting out a client's first frame

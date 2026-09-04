@@ -241,6 +241,15 @@ struct gui_app {
     // fixed size makes sense is an app-content question, not a WM one.
     int resizable;
 
+    // 1 to remember this window's position and size across launches
+    // (wm_geometry.h), which is the DEFAULT -- `RememberGeometry=false`
+    // in the `.desktop` entry is how an app opts out. Default-on
+    // because the alternative is every app having to ask for behaviour
+    // people expect from all of them; the opt-out exists for a window
+    // whose size is not the user's to choose, or one that should always
+    // open where the app puts it.
+    int remember_geometry;
+
     // 1 to allow more than one window of this app open at once (each
     // opened fresh from the Start menu, never reusing an existing
     // window -- see open_app()); 0 (the default) keeps the original

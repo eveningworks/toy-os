@@ -694,6 +694,7 @@ whenever a headline here tells you something you did not already know.
 
 `docs/conventions/gui.md`
 
+- **A WINDOW'S GEOMETRY IS REMEMBERED PER APP, AND THE KEY IS `app_id` -- NEVER `app_identity`**
 - **MEASURE TEXT, NEVER MULTIPLY: `gfx_char_advance()` / `ugfx_char_advance()`.**
 - **A LOADED FACE STILL ONLY DRAWS 101 GLYPHS.**
 - **`font glyph <char>` SHOWS WHAT WILL ACTUALLY BE DRAWN, AND IT READS BOTH SIDES.**
@@ -1363,7 +1364,8 @@ cost".
   `sched_gui_test.py`, `screen_surface_test.py`, `scrollbar_test.py`,
   `settings_test.py`, `single_instance_test.py`, `taskmgr_test.py`,
   `uapp_test.py`, `uiclient_test.py`, `uidemo_test.py`,
-  `uterm_test.py`, `volume_test.py`, `winclient_test.py`.
+  `uterm_test.py`, `volume_test.py`, `winclient_test.py`,
+  `window_geometry_test.py`.
 - **Run on demand, not in the gate** -- `ahci_test.py`,
   `ansi_cursor_test.py`, `audio_test.py`, `console_bleed_test.py`,
   `console_shell_test.py`, `ctrlc_test.py`, `cursor_ibeam_test.py`,
