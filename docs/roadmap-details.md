@@ -277,6 +277,23 @@ knowing before assuming this is emulator overhead: real hardware does
 real DMA, so the bounce copy and the poll are a larger share there, not
 a smaller one.
 
+Run the kernel suite on AHCI too. `ktest_run.py` defaults to ATA and CI
+runs the suite twice, on ATA and on virtio-blk (`docs/conventions/build.md`)
+-- so **AHCI, which is what every modern machine and the bare-metal
+laptop actually boot, is the one backend no automated run covers.**
+
+That is not hypothetical. `sys_sync()` was ATA-only: with no software
+sector cache it returned "nothing was pending" having asked the drive
+for nothing, so `sync` was a silent no-op on AHCI and virtio-blk alike.
+The KTEST written for it (`blkstat`, "sync flushes the device even with
+no software cache") demonstrates the gap exactly -- restore the old
+early return and it PASSES on ATA and FAILS on AHCI. A suite that only
+ever runs the backend with the cache cannot see a bug in the ones
+without it.
+
+`vm.py --disk-kind ahci` already exists, so this is a runner change
+rather than new machinery.
+
 A sector cache on the AHCI and virtio paths -- `ata_cache.c`'s 256 KiB
 write-back cache is reached only through `ata.c`'s read/write, so a
 machine whose root is AHCI (every modern laptop) or virtio-blk has no

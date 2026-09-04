@@ -1,4 +1,4 @@
-Description=Whether a write is on the disk before it returns. `lazy` is faster and can lose or corrupt recent work in a crash
+Description=When writes reach the disk. Deferred is faster but can lose data if power fails
 Widget=radio
-Choice.strict=Durable (safe, slower)
-Choice.lazy=Deferred (faster, unsafe on power loss)
+Choice.strict=Immediate
+Choice.lazy=Deferred

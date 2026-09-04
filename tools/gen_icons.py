@@ -592,12 +592,49 @@ def icon_cat_kernel():
     return im
 
 
+def icon_cat_display():
+    # A monitor: a screen on a stand. The category is about the panel
+    # itself -- brightness, resolution, scaling -- not about what is
+    # drawn on it, which is Appearance.
+    im, d = tile((70, 130, 180))
+    d.rounded_rectangle([12, 16, 52, 42], radius=3, outline=WHITE, width=4)
+    d.line([32, 42, 32, 50], fill=WHITE, width=4)      # stand
+    d.line([22, 51, 42, 51], fill=WHITE, width=4)      # foot
+    return im
+
+
+def icon_cat_storage():
+    # A disk platter seen edge-on: the stacked-cylinder shape every file
+    # manager and every OS has used for a drive since the 1980s.
+    im, d = tile((120, 125, 140))
+    d.ellipse([12, 12, 52, 24], outline=WHITE, width=4)   # top rim
+    d.line([12, 18, 12, 44], fill=WHITE, width=4)         # left wall
+    d.line([52, 18, 52, 44], fill=WHITE, width=4)         # right wall
+    d.arc([12, 32, 52, 44], 0, 180, fill=WHITE, width=4)  # middle band
+    d.arc([12, 40, 52, 52], 0, 180, fill=WHITE, width=4)  # bottom
+    return im
+
+
+def icon_cat_sound():
+    # A speaker with one arc. Deliberately ONE arc, not the tray
+    # volume icon's three: this is the category heading, and it should
+    # not read as a live volume level.
+    im, d = tile((90, 150, 120))
+    d.polygon([(16, 26), (26, 26), (38, 14), (38, 50), (26, 38), (16, 38)],
+              outline=WHITE, fill=WHITE)
+    d.arc([36, 18, 54, 46], -60, 60, fill=WHITE, width=4)
+    return im
+
+
 ICONS = {
     "cat-time": icon_cat_time,
     "cat-appearance": icon_cat_appearance,
     "cat-input": icon_cat_input,
     "cat-startup": icon_cat_startup,
     "cat-kernel": icon_cat_kernel,
+    "cat-display": icon_cat_display,
+    "cat-storage": icon_cat_storage,
+    "cat-sound": icon_cat_sound,
     "start": icon_start,
     "toyos": icon_toyos,
     "notepad": icon_notepad,

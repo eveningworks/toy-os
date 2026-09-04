@@ -29,6 +29,14 @@ against ETC_CONFIG_BUF_MAX, read from the header rather than repeated
 here -- a limit copied into a checker is a limit that drifts from the
 code it checks.
 
+IT ALSO CHECKS A SETTING DESCRIPTOR'S TEXT against the ABI's own caps.
+`Description=` and `Label=` cross the setting ABI in fixed-size fields
+(`SETTING_ABI_DESC_MAX`, `SETTING_ABI_LABEL_MAX`), and a longer one is
+`k_strlcpy`'d -- TRUNCATED MID-WORD, silently, with the file itself
+still small enough to pass every other check here. That shipped: a
+group description ended "...which is a s" on the page it introduced,
+and only a person looking at the window could tell.
+
 WHAT IT DOES NOT CHECK, said plainly: files written at RUNTIME.
 `/etc/resolv.conf`, `/etc/desktop.conf` and the settings files grow as
 the system uses them, and nothing here can see that. The rewrite path
@@ -43,7 +51,45 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 HEADER = os.path.join(REPO, "kernel/include/api/etc_config.h")
+SETTING_ABI = os.path.join(REPO, "kernel/include/abi/setting_abi.h")
 DIRS = ("data/etc", "data/usr/share/services")
+
+# The descriptor keys that cross the ABI, and the constant bounding each.
+# Read from the header rather than repeated here, same rule as the buffer
+# limit above: a limit copied into a checker drifts from the code.
+TEXT_KEYS = {
+    "Description": "SETTING_ABI_DESC_MAX",
+    "Label": "SETTING_ABI_LABEL_MAX",
+}
+
+
+def abi_caps():
+    """The ABI's text caps, minus one for the NUL k_strlcpy writes."""
+    src = open(SETTING_ABI).read()
+    caps = {}
+    for key, name in TEXT_KEYS.items():
+        m = re.search(r"#define\s+" + name + r"\s+(\d+)", src)
+        if m:
+            caps[key] = int(m.group(1)) - 1
+    return caps
+
+
+def descriptor_text_problems(caps):
+    """Over-long Description=/Label= lines in every settings descriptor."""
+    out = []
+    for rel in tracked("data/etc/settings.d"):
+        path = os.path.join(REPO, rel)
+        if not os.path.isfile(path) or rel.endswith(".md"):
+            continue
+        for line in open(path, encoding="utf-8", errors="replace"):
+            line = line.rstrip("\n")
+            if "=" not in line or line.lstrip().startswith("#"):
+                continue
+            key, _, value = line.partition("=")
+            cap = caps.get(key.strip())
+            if cap is not None and len(value.encode("utf-8")) > cap:
+                out.append((rel, key.strip(), len(value.encode("utf-8")), cap, value))
+    return out
 
 
 def limit():
@@ -78,17 +124,29 @@ def main():
             if n > cap:
                 bad.append((rel, n))
 
+    caps = abi_caps()
+    long_text = descriptor_text_problems(caps) if caps else []
+    for rel, key, n, lim, value in long_text:
+        print(f"  {rel}: {key} is {n} bytes, over the {lim}-byte ABI field "
+              f"-- it would be TRUNCATED MID-WORD in System Settings, at "
+              f"...{value[:lim][-14:]!r}")
+
     for rel, n in bad:
         print(f"  {rel} is {n} bytes, over the {cap}-byte config limit "
               f"-- its last keys would be IGNORED, and the machine would "
               f"report the missing key rather than the size")
-    if bad:
-        print(f"check_config_size: FAIL -- {len(bad)} of {seen} file(s) too "
-              f"large. Move the prose to docs/commands/; the descriptor is "
-              f"configuration.")
+    if bad or long_text:
+        if bad:
+            print(f"check_config_size: FAIL -- {len(bad)} of {seen} file(s) "
+                  f"too large. Move the prose to docs/commands/; the "
+                  f"descriptor is configuration.")
+        if long_text:
+            print(f"check_config_size: FAIL -- {len(long_text)} descriptor "
+                  f"field(s) over the ABI cap. A System Settings description "
+                  f"is one short line, not a paragraph.")
         return 1
     print(f"check_config_size: ok -- {seen} config file(s), all within "
-          f"{cap} bytes")
+          f"{cap} bytes; descriptor text within the ABI caps")
     return 0
 
 

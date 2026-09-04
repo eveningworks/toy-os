@@ -270,6 +270,58 @@ static uint64_t g_generation;
 
 uint64_t fs_generation(void) { return g_generation; }
 
+// Everything buffered anywhere on the way to a platter, on EVERY
+// mounted volume. Two stages, because they are two different places
+// data can be sitting and only one of them used to be emptied:
+//
+//   1. a driver's software write-back cache (only ATA has one), which
+//      holds sectors in RAM;
+//   2. the DRIVE's own volatile cache, which a device flush empties.
+//
+// `sys_sync()` did stage 1 alone and skipped both when the ATA cache
+// was absent -- so on AHCI or virtio-blk it asked the disk for nothing
+// and reported success. Backend- and driver-agnostic here: the block
+// layer knows how to flush whatever is under each mount, and the
+// filesystem on top of it never comes into it.
+//
+// `*wrote_out` is sectors moved out of a SOFTWARE cache, which is 0 on
+// a machine that has none and is not a measure of how much work this
+// did. Returns 0 if anything failed, and the caller must not treat that
+// as cosmetic: it means data is still only in RAM or only in the drive.
+int fs_sync(uint32_t *wrote_out) {
+    uint32_t wrote = 0, pending = 0;
+    int ok = 1;
+
+    if (ata_cache_active() && !ata_sync(&wrote, &pending)) {
+        klog_printf("fs: sync FAILED -- %u sector(s) still in RAM\n", pending);
+        if (wrote_out) *wrote_out = wrote;
+        return 0;   // a barrier cannot rescue a write that never left
+    }
+
+    // Deduped by DEVICE. Two partitions of one disk still cost two
+    // flushes -- a partition forwards flush to its parent
+    // (block_part.c) and nothing here can see that it did -- which is
+    // correct, merely not minimal, and a flush is ~0.7 ms on real
+    // hardware rather than free.
+    const struct block_device *done[MOUNT_MAX];
+    int ndone = 0;
+    for (int i = 0; i < mount_count(); i++) {
+        const struct mount *m = mount_at(i);
+        if (!m || !m->dev) continue;    // ramfs has no volume to flush
+        int seen = 0;
+        for (int j = 0; j < ndone; j++) if (done[j] == m->dev) { seen = 1; break; }
+        if (seen) continue;
+        if (ndone < MOUNT_MAX) done[ndone++] = m->dev;
+        if (!blkdev_flush(m->dev)) {
+            klog_printf("fs: sync FAILED -- %s did not flush\n", m->point);
+            ok = 0;
+        }
+    }
+
+    if (wrote_out) *wrote_out = wrote;
+    return ok;
+}
+
 // Bump on a truthy result, and pass that result straight through, so a
 // wrapper stays a one-liner and no call site can bump without also
 // returning what the backend said.

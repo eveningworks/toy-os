@@ -223,6 +223,46 @@ appends, and requires the appended bytes -- a stale table answers with a
 zero pointer, which reads as a hole, so the data comes back blank.
 
 
+## `sync` flushes every mount through the block layer, not the ATA cache
+
+`sys_sync()` opened with `if (!ata_cache_active()) { return 0; }` and a
+comment arguing that with no write-back cache "every write has already
+reached [the disk]". That is true of the DRIVE and false of the
+PLATTER: the bytes were in the drive's own volatile cache, and only a
+device flush moves them. So on AHCI and virtio-blk -- every modern
+machine, and the bare-metal laptop -- `sync` asked the disk for nothing
+and returned success.
+
+`fs_sync()` (vfs.c) does both stages now: write back a driver's software
+cache where one exists, then `blkdev_flush()` **every mounted volume**,
+whatever backend is on it. Filesystem- and driver-agnostic, because the
+block layer already knows how to flush whatever is under a mount and the
+filesystem never needed to come into it.
+
+**It became a `fs_*` function rather than staying in the syscall**
+because it has three callers coming: `sync`, a KTEST that can only tell
+a flush from a no-op by counting device flushes, and `fsync`.
+
+**Deduped by device, and two partitions of one disk still cost two
+flushes.** A partition forwards flush to its parent (block_part.c) and
+nothing above can see that it did. Correct, merely not minimal -- and a
+flush is ~0.7 ms on real hardware rather than free, so this is worth
+knowing before mounting many partitions of one disk.
+
+**Zero sectors is not "did nothing", and `/bin/sync` had to stop saying
+it was.** The count is stage 1 only, so a machine with no software cache
+legitimately reports zero while the flush was the entire point. "nothing
+was pending" reported a working sync as a no-op on exactly the machines
+where it had just started working.
+
+**THE REASON IT SURVIVED IS THE TEST MATRIX, and that is the
+transferable part.** `ktest_run.py` defaults to ATA and CI runs ATA and
+virtio-blk; **nothing automated boots AHCI**, which is what real
+hardware uses. Restoring the old early return makes the new KTEST pass
+on ATA and fail on AHCI -- a suite that only runs the backend WITH the
+cache cannot see a bug in the ones without it. On the roadmap now.
+
+
 ## `storage.sync` is a setting because the barriers' cost cannot be measured where they are cheap
 
 TFS3 commits one journal transaction per `fs_write*()` call and ends it

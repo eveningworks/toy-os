@@ -110,6 +110,29 @@ KTEST("blkstat", "a flush is counted and moves no sectors") {
     KTEST_ASSERT_EQ(sectors1, sectors0);
 }
 
+// SYNC MUST REACH THE DEVICE, and this is the check that was missing
+// when it did not. `sys_sync()` was ATA-only -- with no software sector
+// cache it returned "nothing was pending" having asked the drive for
+// nothing at all, which is every AHCI and virtio-blk machine. Counting
+// FLUSHES rather than inspecting the code is the point: the broken
+// version returned success, so only the device counter can tell the
+// difference between a sync and a no-op.
+KTEST("blkstat", "sync flushes the device even with no software cache") {
+    if (!fs_is_persistent()) { KTEST_SKIP("no persistent filesystem"); return; }
+
+    uint64_t before = 0;
+    blk_stat_get(BLK_STAT_FLUSH, &before, NULL, NULL, NULL);
+
+    uint32_t wrote = 0;
+    KTEST_ASSERT_EQ(fs_sync(&wrote), 1);
+
+    uint64_t after = 0;
+    blk_stat_get(BLK_STAT_FLUSH, &after, NULL, NULL, NULL);
+    // At least one mounted volume, so at least one flush. Not an exact
+    // count: the desktop is running and syncs on its own.
+    KTEST_ASSERT(after > before);
+}
+
 // `/bin/diskbench` subtracts two snapshots, so a counter that went
 // BACKWARDS would hand it a wrapped unsigned delta and a nonsense
 // report. Reset is the only thing that may do that, and nothing on the

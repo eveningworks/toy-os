@@ -17,9 +17,19 @@ int main(int argc, char **argv) {
         return 1;
     }
     char msg[64];
-    snprintf(msg, sizeof msg, "sync: wrote %d sector%s back to disk%s\n",
-             wrote, wrote == 1 ? "" : "s",
-             wrote == 0 ? " (nothing was pending)" : "");
+    // ZERO IS NOT "DID NOTHING". Only the ATA path has a software cache
+    // that can hold sectors in RAM; everywhere else the count is
+    // legitimately zero and the real work was the device flush every
+    // mounted volume just took. Saying "nothing was pending" there
+    // reported a working sync as a no-op, which is what it looked like
+    // on the machine that needed it most.
+    snprintf(msg, sizeof msg, "sync: %s\n",
+             wrote == 0 ? "flushed every mounted disk (nothing was buffered in RAM)"
+                        : "");
+    if (wrote > 0)
+        snprintf(msg, sizeof msg,
+                 "sync: wrote %d sector%s back, then flushed every mounted disk\n",
+                 wrote, wrote == 1 ? "" : "s");
     sys_print(msg);
     return 0;
 }

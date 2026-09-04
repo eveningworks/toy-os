@@ -319,6 +319,23 @@ this the obvious way), not from how much history it accumulated.
     to be unwieldy there should get its own `/etc/<name>.conf` rather
     than cramming in to match convention.
 
+## `sync` IS `fs_sync()`, IT FLUSHES EVERY MOUNT, AND ZERO SECTORS IS NORMAL
+
+Two stages: write back a driver's software cache (only ATA has one),
+then `blkdev_flush()` every mounted volume. The reported sector count is
+stage 1 only, so **zero means "no software cache", not "nothing
+happened"**.
+
+**Do not reach for `ata_*` in anything that means "the disk".** That is
+how `sync` came to be a no-op on AHCI and virtio-blk for months while
+returning success. The block layer is the disk-agnostic seam.
+
+**And remember what the matrix does not cover: nothing automated boots
+AHCI.** `ktest_run.py` defaults to ATA, CI adds virtio-blk. A defect on
+the backend real hardware actually uses has no coverage -- test it with
+`vm.py --disk-kind ahci` by hand.
+
+
 ## `storage.sync = lazy` TURNS OFF THE JOURNAL'S BARRIERS, AND THAT IS ext4's `nobarrier`
 
 Every `fs_write*()` call is one TFS3 transaction ending in two real

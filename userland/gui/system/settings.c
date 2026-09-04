@@ -275,6 +275,9 @@ static const char *category_icon(const char *cat) {
         { "Input",         "cat-input" },
         { "Startup",       "cat-startup" },
         { "Kernel",        "cat-kernel" },
+        { "Display",       "cat-display" },
+        { "Storage",       "cat-storage" },
+        { "Sound",         "cat-sound" },
     };
     for (unsigned i = 0; i < sizeof MAP / sizeof MAP[0]; i++)
         if (strcmp(cat, MAP[i].cat) == 0) return MAP[i].icon;
@@ -939,23 +942,47 @@ static void relayout_page(void) {
                                     .id = 0, .flags = UUI_FILL_W };
     PAGE[n++] = (struct uui_item){ .ops = &uui_label_ops, .widget = &g_page_desc,
                                     .id = 0, .flags = UUI_FILL_W };
-    // A ONE-CONTROL PAGE DOES NOT REPEAT ITS OWN TITLE. A setting that
-    // declares no `group` gets a page of its own NAMED BY ITS LABEL
-    // (group_key_of), so the heading and the sole caption are the same
-    // string -- "Time zone" printed twice, and the same on every other
-    // single-setting page. The title is the one to keep: it is what the
+    // A PAGE DOES NOT REPEAT ITS OWN TITLE. A setting that declares no
+    // `group` gets a page of its own NAMED BY ITS LABEL (group_key_of),
+    // so the heading and that caption are the same string -- "Time zone"
+    // printed twice. The title is the one to keep: it is what the
     // sidebar row says, so dropping the caption leaves the page named
     // exactly once and named the same way it was reached.
     //
+    // PER SETTING AND CASE-INSENSITIVE, not once per single-control
+    // page. Network Time is a page of THREE settings whose first is
+    // labelled "Network time", so neither half of the old test fired
+    // and the page opened with "Network Time" directly above "Network
+    // time" -- a duplicate that differed only in one capital letter,
+    // which is exactly the kind a case-sensitive compare cannot see.
+    //
     // Compared rather than inferred from "did it declare a group?",
-    // because a declared group whose name happens to match its only
-    // setting reads identically to a reader and should behave the same.
-    int drop_caption = (g_slot_count == 1 && g_slot[0].setting >= 0 &&
-                        strcmp(g_label[g_slot[0].setting], g_page_title_text) == 0);
+    // because a declared group whose name happens to match one of its
+    // settings reads identically to a reader and should behave the same.
+    int title_dup = 0;
+    for (int i = 0; i < g_slot_count; i++) {
+        if (g_slot[i].setting >= 0 &&
+            strcasecmp(g_label[g_slot[i].setting], g_page_title_text) == 0) {
+            title_dup = 1;
+            break;
+        }
+    }
+
+    // AND THE GROUP BLURB GOES WITH IT. Once a caption is dropped the
+    // page reads title -> group description -> that setting's own
+    // description -> control: two blocks of prose stacked before the
+    // first thing you can click, saying overlapping things. The
+    // setting's is the one to keep, because it sits against the control
+    // it explains; the group's is orientation the title already gave.
+    // Only fires where the duplication is, so a page whose captions all
+    // survive keeps its blurb.
+    if (title_dup) g_page_desc_text[0] = '\0';
 
     g_page_captions = 0;
     for (int i = 0; i < g_slot_count; i++) {
         struct slot *sl = &g_slot[i];
+        int drop_caption = (sl->setting >= 0 &&
+                            strcasecmp(g_label[sl->setting], g_page_title_text) == 0);
         if (!drop_caption) {
             PAGE[n++] = (struct uui_item){ .ops = &uui_label_ops, .widget = &sl->caption,
                                             .id = 0, .flags = UUI_FILL_W };

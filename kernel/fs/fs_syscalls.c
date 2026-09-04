@@ -16,7 +16,7 @@
 #include "tz.h"
 #include "kpath.h"    // k_path_resolve() -- one resolution rule, kernel-side
 #include "scheduler.h" // struct sched_cwd -- the per-process current directory
-#include "ata.h"       // the write-back cache SYS_SYNC flushes
+#include "ata.h"       // the ATA write-back cache SYS_SYNC writes back
 #include "kfmt.h"      // klog_printf
 #include <stddef.h>
 
@@ -518,22 +518,26 @@ int sys_link(struct syscall_ctx *c) {
     return 0;
 }
 
+// The work is fs_sync() (vfs.c), which walks every mount. It used to be
+// here and ATA-only:
+//
+//     if (!ata_cache_active()) { c->regs[14] = 0; return 0; }
+//
+// so on AHCI or virtio-blk -- every modern machine, and the bare-metal
+// laptop -- `sync` returned "nothing was pending" without asking the
+// drive for anything. That reads as success and is not: the bytes sat
+// in the drive's volatile cache, one power cut from gone. It also left
+// `storage.sync = lazy` with nothing able to force durability, which is
+// that mode's whole safety story.
 int sys_sync(struct syscall_ctx *c) {
-    if (!ata_cache_active()) {
-        // Not a failure: with no write-back cache in front of the disk,
-        // every write has already reached it. 0 sectors is the truth.
-        c->regs[14] = 0;
+    uint32_t wrote = 0;
+    if (!fs_sync(&wrote)) {
+        // The one disk answer a caller must not read as success.
+        c->regs[14] = (uint64_t)(int64_t)-EIO;
         return 0;
     }
-    uint32_t wrote = 0, pending = 0;
-    int ok = ata_sync(&wrote, &pending);
-    if (!ok) {
-        // The one disk answer a caller must not read as success: those
-        // sectors exist in RAM only, and powering off loses them.
-        klog_printf("syscall: sync() FAILED -- %u sector(s) still pending\n", pending);
-        c->regs[14] = (uint64_t)(int64_t)-EIO;
-    } else {
-        c->regs[14] = wrote;
-    }
+    // Sectors written back, as before -- a caller that printed this
+    // number keeps meaning the same thing by it.
+    c->regs[14] = wrote;
     return 0;
 }
