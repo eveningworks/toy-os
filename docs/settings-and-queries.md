@@ -143,6 +143,11 @@ sys_setting(&m);
 Read the `result`, not just the return value — the call SUCCEEDED in
 asking; whether it applied and persisted is separate.
 
+For one setting by name, `userland/lib/usetting.h` builds that message
+for you: `usetting_get(name, buf, cap)`, `usetting_set(name, value)`
+(returning the `result`, or -1 when the call itself failed), the
+`_int` variants, and `usetting_find(name, &msg)` for the INFO record.
+
 Enumeration is `SETTING_OP_COUNT` → `SETTING_OP_INFO` → `SETTING_OP_CHOICE`,
 and `SETTING_OP_GET` reads one. That is all Control Panel does: it is
 GENERATED from the registry, which is why **a setting registered

@@ -12,11 +12,9 @@
 
 // --- layout and drawing ------------------------------------------------
 
-static int menubar_h(void) { int h; uui_menubar_natural_size(&g_menu, 0, &h); return h; }
-
-static int toolbar_h(void) { int h; uui_toolbar_natural_size(&g_toolbar, 0, &h); return h; }
-
-static int statusbar_h(void) { int h; uui_statusbar_natural_size(&g_status, 0, &h); return h; }
+static int menubar_h(void) { return uui_menubar_height(&g_menu); }
+static int toolbar_h(void) { return uui_toolbar_height(&g_toolbar); }
+static int statusbar_h(void) { return uui_statusbar_height(&g_status); }
 
 // Each pane carries its OWN path above it -- an address bar (a
 // uui_textbox, see fm_internal.h). One shared status line cannot say

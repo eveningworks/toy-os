@@ -5,6 +5,7 @@
 #include "ui/uui.h"
 #include "ui/utheme.h"
 #include "kapi.h"
+#include "kpath.h"
 #include "rt/sys.h"
 #include "wm/wm_fs.h"
 
@@ -82,28 +83,11 @@ static struct uui_button_group g_group;
 
 // ---- path helpers ----
 
-// Appends `name` (one path component, no '/') onto `dir` (an already-
-// normalized absolute path -- "/" or "/a/b", never a trailing slash
-// except root itself) into `out`, truncating to fit FS_PATH_MAX. Same
-// join logic apps/shell.c's resolve_path() folds into its own bigger
-// ".."-collapsing routine -- this is the simpler "append one known-good
-// component" case, no ".." parsing needed since directory names never
-// contain one.
+// One component onto an absolute directory, truncation REFUSED: the
+// kernel's k_path_join() leaves `out` empty rather than naming a path
+// that is not the one asked for, and an empty path opens nothing.
 static void fp_join(char *out, const char *dir, const char *name) {
-    int dl = (int)k_strlen(dir);
-    if (dl > FS_PATH_MAX - 2) dl = FS_PATH_MAX - 2;
-    k_memcpy(out, dir, dl);
-    out[dl] = '\0';
-    if (dl == 0 || out[dl - 1] != '/') {
-        out[dl] = '/';
-        out[dl + 1] = '\0';
-        dl++;
-    }
-    int remaining = (FS_PATH_MAX - 1) - dl;
-    int nl = (int)k_strlen(name);
-    if (nl > remaining) nl = remaining;
-    if (nl > 0) k_memcpy(out + dl, name, nl);
-    out[dl + nl] = '\0';
+    if (!k_path_join(dir, name, out, FS_PATH_MAX)) out[0] = '\0';
 }
 
 // Resolves the filename field's current text against g_cwd: absolute
@@ -185,12 +169,10 @@ static void fp_set_dir(const char *dir) {
 }
 
 static void fp_go_up(void) {
+    char parent[FS_PATH_MAX];
     if (k_strcmp(g_cwd, "/") == 0) return;
-    int i = (int)k_strlen(g_cwd) - 1;
-    while (i > 0 && g_cwd[i] != '/') i--;
-    if (i == 0) g_cwd[1] = '\0'; // parent of a single top-level dir ("/docs") is root
-    else g_cwd[i] = '\0';
-    fp_set_dir(g_cwd);
+    if (!k_path_dirname(g_cwd, parent, sizeof parent)) return;
+    fp_set_dir(parent);
 }
 
 // ---- open / geometry ----

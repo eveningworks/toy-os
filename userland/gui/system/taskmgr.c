@@ -42,6 +42,7 @@
 #include <stdio.h>
 #include "ui/ugfx.h"
 #include "ui/uapp.h"
+#include "lib/human.h"
 #include "ui/utheme.h"
 #include "ui/uui_table.h"
 #include "ui/uui_button.h"
@@ -181,20 +182,6 @@ static const char *state_name(unsigned s) {
     }
 }
 
-// Bytes as a human-readable size. A task manager column is a few
-// characters wide, so "1.2M" beats "1258291" -- and the integer maths
-// keeps one decimal without any floating point (this is a freestanding
-// binary; the kernel has no FP at all and userland has no printf %f).
-static void format_bytes(char *out, int cap, unsigned long b) {
-    if (b < 1024UL) { snprintf(out, (size_t)cap, "%lu B", b); return; }
-    if (b < 1024UL * 1024UL) {
-        unsigned long k10 = (b * 10UL) / 1024UL;
-        snprintf(out, (size_t)cap, "%lu.%lu K", k10 / 10, k10 % 10);
-        return;
-    }
-    unsigned long m10 = (b * 10UL) / (1024UL * 1024UL);
-    snprintf(out, (size_t)cap, "%lu.%lu M", m10 / 10, m10 % 10);
-}
 
 // Re-reads the process table and recomputes the CPU percentages.
 static void refresh(void) {
@@ -244,7 +231,7 @@ static void cell(void *ctx, int row, int col, char *out, int cap) {
         case 1: strlcpy(out, r->name[0] ? r->name : "(unnamed)", (size_t)cap); break;
         case 2: strlcpy(out, state_name(r->state), (size_t)cap); break;
         case 3: snprintf(out, (size_t)cap, "%u%%", r->cpu_pct); break;
-        case 4: format_bytes(out, cap, r->mem_bytes); break;
+        case 4: human_size(out, cap, r->mem_bytes); break;
         default: out[0] = '\0'; break;
     }
 }
@@ -430,17 +417,6 @@ static char g_ov_det[OV_METERS][28];
 static unsigned long long g_cpu_prev_proc, g_cpu_prev_kernel;
 static int g_cpu_have_prev;
 
-// Bytes as one decimal, the same shape `meminfo` prints. Its own
-// function rather than format_bytes() above, which renders "1.2 M" for
-// a table cell; a gauge wants the unit spelled out.
-static void ov_size(char *out, int cap, unsigned long long bytes) {
-    static const char *u[] = { "B", "KiB", "MiB", "GiB", "TiB" };
-    int i = 0;
-    unsigned long long whole = bytes, frac = 0;
-    while (whole >= 1024 && i < 4) { frac = (whole % 1024) * 10 / 1024; whole /= 1024; i++; }
-    if (i == 0) snprintf(out, (size_t)cap, "%llu %s", whole, u[0]);
-    else        snprintf(out, (size_t)cap, "%llu.%llu %s", whole, frac, u[i]);
-}
 
 static void ov_set(int i, const char *caption, int per_mille,
                    const char *value, const char *unit, const char *detail,
@@ -496,9 +472,9 @@ static void refresh_overview(void) {
         unsigned long long used  = total > freeb ? total - freeb : 0;
         int per = total ? (int)((used * 1000ULL) / total) : 0;
         snprintf(val, sizeof val, "%d%%", per / 10);
-        ov_size(unit, sizeof unit, used);
+        human_size_iec(unit, sizeof unit, used);
         char t[16];
-        ov_size(t, sizeof t, freeb);
+        human_size_iec(t, sizeof t, freeb);
         snprintf(det, sizeof det, "%s free", t);
         // "used" not "12.0 GiB used": the hole is only as wide as the
         // ring's inside, and a string longer than that is CLIPPED, which
@@ -517,9 +493,9 @@ static void refresh_overview(void) {
         if (!(fs.flags & QUERY_FS_MOUNTED) || !fs.total_bytes) continue;
         int per = (int)((fs.used_bytes * 1000ULL) / fs.total_bytes);
         snprintf(val, sizeof val, "%d%%", per / 10);
-        ov_size(unit, sizeof unit, fs.used_bytes);
+        human_size_iec(unit, sizeof unit, fs.used_bytes);
         char t[16];
-        ov_size(t, sizeof t, fs.total_bytes);
+        human_size_iec(t, sizeof t, fs.total_bytes);
         snprintf(det, sizeof det, "of %s", t);
         char cap[24];
         snprintf(cap, sizeof cap, "%s", fs.point[0] ? fs.point : fs.name);

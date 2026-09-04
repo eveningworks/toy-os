@@ -74,6 +74,14 @@ void uui_toolbar_init(struct uui_toolbar *t,
 // The strip wants one row of buttons; width is every item side by side.
 void uui_toolbar_natural_size(const struct uui_toolbar *t, int *out_w, int *out_h);
 
+// Its height alone -- what an app laying out by hand asks, and ten
+// of them wrapped natural_size() to answer it.
+static inline int uui_toolbar_height(const struct uui_toolbar *t) {
+    int h = 0;
+    uui_toolbar_natural_size(t, 0, &h);
+    return h;
+}
+
 // Item `i`'s rect, for tests and layout logs. Returns 0 past the end.
 int  uui_toolbar_item_rect(const struct uui_toolbar *t, int i,
                             int *x, int *y, int *w, int *h);

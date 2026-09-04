@@ -54,6 +54,14 @@ void uui_statusbar_set_geometry(struct uui_statusbar *sb, int x, int y, int w, i
 // on what 0 means and why a caller must handle it.
 void uui_statusbar_natural_size(const struct uui_statusbar *sb, int *out_w, int *out_h);
 
+// Its height alone -- what an app laying out by hand asks, and ten
+// of them wrapped natural_size() to answer it.
+static inline int uui_statusbar_height(const struct uui_statusbar *sb) {
+    int h = 0;
+    uui_statusbar_natural_size(sb, 0, &h);
+    return h;
+}
+
 void uui_statusbar_draw(struct ugfx_surface *s, const struct uui_statusbar *sb);
 
 // Where pane `index` ended up. For an app reporting its own layout to a

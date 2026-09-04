@@ -26,6 +26,7 @@
 #include "rt/sys.h"
 #include "ui/ugfx.h"
 #include "ui/uapp.h"
+#include "lib/human.h"
 #include "ui/utheme.h"
 #include "lib/icon_cache.h" // icon_get() -- an icon is a NAME, not a path
 #include "version.h"        // TOYOS_VERSION*, generated -- tools/gen_version.sh
@@ -67,14 +68,6 @@ static struct row *add(const char *label, int heading, int warn) {
     return r;
 }
 
-// MiB rather than bytes: this is a window somebody reads, not a script.
-// GiB to one decimal, in integer tenths: there is no floating point in
-// this userland either. 3499 MiB reads as "3.4 GiB", which is the
-// figure a person compares against the sticker on the machine.
-static void gib(char *out, int cap, uint64_t bytes) {
-    unsigned long long tenths = (bytes * 10) / (1024ull * 1024 * 1024);
-    snprintf(out, cap, "%llu.%llu GiB", tenths / 10, tenths % 10);
-}
 
 // Idempotent, and called from BOTH the size callback and the draw:
 // about_size() runs first and measures these strings, so they have to
@@ -165,9 +158,9 @@ static void fill_rows(void) {
         // a process can now be handed. The gap between the two is what
         // the firmware kept and what a partial 2 MiB granule cost.
         char inst[24], tot[24], freeb[24];
-        gib(inst, sizeof inst, mem.phys_usable_bytes);
-        gib(tot, sizeof tot, mem.frame_total * mem.frame_bytes);
-        gib(freeb, sizeof freeb, mem.frame_free * mem.frame_bytes);
+        human_size_iec(inst, sizeof inst, mem.phys_usable_bytes);
+        human_size_iec(tot, sizeof tot, mem.frame_total * mem.frame_bytes);
+        human_size_iec(freeb, sizeof freeb, mem.frame_free * mem.frame_bytes);
         r = add("Memory", 0, 0);
         snprintf(r->value, sizeof r->value, "%s installed, %s usable, %s free",
                  inst, tot, freeb);

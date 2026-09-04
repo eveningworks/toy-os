@@ -155,6 +155,14 @@ void uui_menubar_set_bounds(struct uui_menubar *m, int x, int y, int w, int h);
 // would be wrong here -- a bar narrower than its titles clips them.
 void uui_menubar_natural_size(const struct uui_menubar *m, int *out_w, int *out_h);
 
+// Its height alone -- what an app laying out by hand asks, and ten
+// of them wrapped natural_size() to answer it.
+static inline int uui_menubar_height(const struct uui_menubar *m) {
+    int h = 0;
+    uui_menubar_natural_size(m, 0, &h);
+    return h;
+}
+
 // The strip. Draw it with the rest of the window's chrome.
 void uui_menubar_draw(struct ugfx_surface *s, const struct uui_menubar *m);
 

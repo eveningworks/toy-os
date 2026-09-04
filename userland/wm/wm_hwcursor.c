@@ -21,6 +21,7 @@
 // neither drawing -- the stranded-sprite class the roadmap warns
 // about.
 #include "wm_internal.h"
+#include "kapi.h"
 #include "cursor_theme.h"
 #include "win_proto.h"
 #include "rt/sys.h"
@@ -38,7 +39,7 @@ static uint32_t g_sprite[HWC_DIM * HWC_DIM];
 
 static int fb_cursor_req(int op, int32_t b, int32_t c, int32_t d) {
     struct win_request_msg q;
-    for (unsigned i = 0; i < sizeof q; i++) ((uint8_t *)&q)[i] = 0;
+    k_memset(&q, 0, sizeof q);
     q.type = WIN_REQ_FB_CURSOR;
     q.a = op;
     q.b = b;

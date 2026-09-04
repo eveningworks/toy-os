@@ -1049,7 +1049,7 @@ static void cmd_compositor(struct dbg_out *o, int json) {
     // carries the registered pid so the answer cannot disagree with who
     // the kernel thinks is composing.
     struct win_request_msg q;
-    for (unsigned i = 0; i < sizeof q; i++) ((uint8_t *)&q)[i] = 0;
+    k_memset(&q, 0, sizeof q);
     q.type = WIN_REQ_EVENT_STATS;
     q.a = 0; // 0 = "me" -- see WIN_REQ_EVENT_STATS
     int pid = 0, pending = 0, dropped = 0;

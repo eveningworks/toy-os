@@ -39,6 +39,7 @@
 #include "kpath.h"
 #include "lib/uconf.h"
 #include "lib/human.h"
+#include "lib/udate.h"
 #include "lib/uopen.h"
 #include "lib/uclip.h"
 #include "ui/uui.h"
@@ -847,11 +848,10 @@ static void on_pane_dir(void *ctx, const char *dir) {
 static void describe(char *out, int cap, const char *label, const char *path) {
     struct sys_stat st;
     if (sys_stat(path, &st) != 0) { snprintf(out, (size_t)cap, "%s: gone", label); return; }
-    char human[24];
+    char human[24], when[32];
     human_size(human, sizeof human, st.size);
-    snprintf(out, (size_t)cap, "%s  %s  %04u-%02u-%02u %02u:%02u", label, human,
-              st.modified.year, st.modified.month, st.modified.day,
-              st.modified.hour, st.modified.minute);
+    rtc_format_iso(when, sizeof when, &st.modified, 0);
+    snprintf(out, (size_t)cap, "%s  %s  %s", label, human, when);
 }
 
 // Answers the worker, and remembers the answer when it was an

@@ -13,6 +13,7 @@
 // machine thinks it is.
 #include "rt/sys.h"
 #include "lib/cmd.h"
+#include "lib/usetting.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -29,12 +30,7 @@ static const char *const MONTHS[] = {
 // still has a clock -- so the caller prints the time either way rather
 // than failing over a label.
 static void timezone_name(char *out, unsigned long cap) {
-    struct setting_msg msg;
-    out[0] = '\0';
-    memset(&msg, 0, sizeof msg);
-    msg.op = SETTING_OP_GET;
-    strlcpy(msg.name, "system.timezone", sizeof msg.name);
-    if (sys_setting(&msg) == 0) strlcpy(out, msg.value, cap);
+    usetting_get("system.timezone", out, cap);
 }
 
 int main(int argc, char **argv) {

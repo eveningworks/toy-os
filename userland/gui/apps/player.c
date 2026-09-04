@@ -222,8 +222,8 @@ static void toggle_play(void) {
 
 // --- layout -----------------------------------------------------------
 
-static int menubar_h(void) { int h; uui_menubar_natural_size(&g_menu, 0, &h); return h; }
-static int statusbar_h(void) { int h; uui_statusbar_natural_size(&g_status, 0, &h); return h; }
+static int menubar_h(void) { return uui_menubar_height(&g_menu); }
+static int statusbar_h(void) { return uui_statusbar_height(&g_status); }
 
 static void layout_all(int cw, int ch) {
     int mb = menubar_h(), sb = statusbar_h();

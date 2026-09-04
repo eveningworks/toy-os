@@ -24,6 +24,7 @@
 #include "rt/sys.h"
 #include "kpath.h"
 #include "lib/human.h"
+#include "lib/udate.h"
 #include "lib/uopen.h"
 #include "ui/ugfx.h"
 #include "ui/uapp.h"
@@ -174,12 +175,11 @@ static void build_rows(void) {
     }
 
     section("Dates");
-    row("Created", "%04u-%02u-%02u %02u:%02u:%02u", g_stat.created.year,
-         g_stat.created.month, g_stat.created.day, g_stat.created.hour,
-         g_stat.created.minute, g_stat.created.second);
-    row("Modified", "%04u-%02u-%02u %02u:%02u:%02u", g_stat.modified.year,
-         g_stat.modified.month, g_stat.modified.day, g_stat.modified.hour,
-         g_stat.modified.minute, g_stat.modified.second);
+    char when[32];
+    rtc_format_iso(when, sizeof when, &g_stat.created, 1);
+    row("Created", "%s", when);
+    rtc_format_iso(when, sizeof when, &g_stat.modified, 1);
+    row("Modified", "%s", when);
 
     section("Details");
     // SAID PLAINLY WHEN IT IS SYNTHETIC. SYS_STAT_INODES is the

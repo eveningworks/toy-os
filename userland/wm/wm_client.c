@@ -467,7 +467,7 @@ static int query_window(int pid, uint32_t id, int *w, int *h,
                          unsigned *flags, int *min_w, int *min_h,
                          char *title, unsigned title_cap) {
     struct win_request_msg q;
-    for (unsigned i = 0; i < sizeof q; i++) ((uint8_t *)&q)[i] = 0;
+    k_memset(&q, 0, sizeof q);
     q.type = WIN_REQ_WINDOW_INFO;
     q.a = pid;
     q.window = id;
@@ -500,7 +500,7 @@ static void query_app_id(int pid, uint32_t id, char *out, unsigned cap,
     if (out && cap) out[0] = '\0';
     if (out_identity) *out_identity = -1;
     struct win_request_msg q;
-    for (unsigned i = 0; i < sizeof q; i++) ((uint8_t *)&q)[i] = 0;
+    k_memset(&q, 0, sizeof q);
     q.type = WIN_REQ_WINDOW_APPID;
     q.a = pid;
     q.window = id;
@@ -518,7 +518,7 @@ static void query_app_id(int pid, uint32_t id, char *out, unsigned cap,
 // are reallocated, and the old mapping is revoked with them.
 static uint32_t *map_client_window(int pid, uint32_t id) {
     struct win_request_msg q;
-    for (unsigned i = 0; i < sizeof q; i++) ((uint8_t *)&q)[i] = 0;
+    k_memset(&q, 0, sizeof q);
     q.type = WIN_REQ_MAP_WINDOW;
     q.a = pid;
     q.window = id;
@@ -550,7 +550,7 @@ static uint32_t *map_client_window(int pid, uint32_t id) {
 // common case and the whole cost.
 void wm_client_poll_debug(void) {
     struct win_debug_msg q;
-    for (unsigned i = 0; i < sizeof q; i++) ((uint8_t *)&q)[i] = 0;
+    k_memset(&q, 0, sizeof q);
     q.type = WIN_REQ_DEBUG_TAKE;
     if (sys_win_debug(&q) != 1) return; // nothing waiting
 

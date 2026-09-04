@@ -813,10 +813,7 @@ static void close_tab(int tab) {
 // bar rather than like coloured letters.
 
 static int menubar_h(void) {
-    if (!g_menu_shown) return 0;
-    int h = 0;
-    uui_menubar_natural_size(&g_menu, 0, &h);
-    return h;
+    return g_menu_shown ? uui_menubar_height(&g_menu) : 0;
 }
 
 // **THE STRIP IS ALWAYS DRAWN NOW, EVEN AT ONE TAB.** It used to hide

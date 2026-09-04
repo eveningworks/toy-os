@@ -46,4 +46,20 @@ static inline void human_size(char *out, unsigned long cap, unsigned long long n
     else snprintf(out, cap, "%llu.%llu%c", whole, (rem * 10) / 1024, unit[u]);
 }
 
+// "1.2 MiB", "3.4 GiB" -- the same number with the unit spelled out and
+// a space before it, for a window somebody reads (a gauge, an About
+// box) rather than a column. Task Manager and About each had one.
+static inline void human_size_iec(char *out, unsigned long cap, unsigned long long n) {
+    static const char *const unit[] = { "B", "KiB", "MiB", "GiB" };
+    int u = 0;
+    unsigned long long whole = n, rem = 0;
+    while (whole >= 1024 && u < 3) {
+        rem = whole % 1024;
+        whole /= 1024;
+        u++;
+    }
+    if (u == 0) snprintf(out, cap, "%llu %s", whole, unit[0]);
+    else snprintf(out, cap, "%llu.%llu %s", whole, (rem * 10) / 1024, unit[u]);
+}
+
 #endif // ULIB_HUMAN_H

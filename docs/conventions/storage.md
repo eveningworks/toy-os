@@ -129,6 +129,23 @@ this the obvious way), not from how much history it accumulated.
   everything watching `setting_generation()` does real work when it
   moves (the desktop re-reads every `.desktop` file), so a UI that
   over-reports a change turns into disk I/O and a desktop-wide reload.
+- **A RING-3 PROGRAM READS AND WRITES ONE SETTING THROUGH
+  `userland/lib/usetting.h`, AND `usetting_set()` RETURNS THE REGISTRY'S
+  THREE-WAY ANSWER.** `usetting_get()`/`_get_int()`, `usetting_set()`/
+  `_set_int()` and `usetting_find()` (the INFO record by qualified name,
+  which is also the index `SETTING_OP_CHOICE` takes) build the
+  `struct setting_msg` so a caller does not. Seven programs had their
+  own dozen lines for this, and they disagreed about what a successful
+  SET was: Image Viewer demanded `SETTING_SAVED`, the tray popups and
+  `kbd` accepted anything but `SETTING_INVALID`. Both are right for
+  their caller -- a dragged slider wants the LIVE change, a preference
+  wants the persisted one -- so the wrapper returns
+  `enum setting_result` (or -1 when the syscall failed) and the caller
+  says which it means: `> 0` is live, `== SETTING_SAVED` is on disk.
+  **Do not collapse that to a boolean in a new caller**: `SETTING_UNSAVED`
+  reported as success is the lie `enum setting_result` exists to stop.
+  Enumeration by index stays with `struct setting_msg` directly --
+  System Settings and `config` want the whole record, not a name.
 - **`etc_config.c` is SPLIT: the parser is shared, the file I/O is
   kernel-only.** `kernel/lib/etc_config.c` holds the `name=value` parser
   plus the buffer accessors, is freestanding, and is compiled a second

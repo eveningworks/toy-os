@@ -350,7 +350,7 @@ static int cell_px(void) {
 }
 static int pad_px(void)   { return 8; }
 static int panel_h(void)  { return ugfx_char_h() + 14; }
-static int menu_h(void)   { int h = 0; uui_menubar_natural_size(&g_menu, 0, &h); return h; }
+static int menu_h(void)   { return uui_menubar_height(&g_menu); }
 static int board_w(void)  { return g_cols * cell_px(); }
 static int board_h(void)  { return g_rows * cell_px(); }
 

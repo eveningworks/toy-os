@@ -12,7 +12,8 @@
 #include "lib/icon_cache.h"
 #include "kapi.h"
 #include "rt/sys.h"
-#include "wm/wm_conf.h"   // struct setting_msg, SETTING_OP_*
+#include "wm/wm_conf.h"   // wm_setting_generation()
+#include "lib/usetting.h"
 
 #define VOLUME_SETTING "system.volume"
 #define DEVICE_SETTING "system.audio_device"
@@ -62,72 +63,22 @@ static int g_hover = HOVER_NONE;
 
 // --- the settings behind it -------------------------------------------
 
-static void msg_clear(struct setting_msg *m) {
-    for (unsigned i = 0; i < sizeof *m; i++) ((uint8_t *)m)[i] = 0;
-}
-
-static int setting_get(const char *name, char *out, uint32_t out_size) {
-    struct setting_msg m;
-    msg_clear(&m);
-    m.op = SETTING_OP_GET;
-    k_strlcpy(m.name, name, sizeof m.name);
-    if (sys_setting(&m) != 0) return 0;
-    k_strlcpy(out, m.value, out_size);
-    return 1;
-}
-
-static int setting_set(const char *name, const char *value) {
-    struct setting_msg m;
-    msg_clear(&m);
-    m.op = SETTING_OP_SET;
-    k_strlcpy(m.name, name, sizeof m.name);
-    k_strlcpy(m.value, value, sizeof m.value);
-    if (sys_setting(&m) != 0) return 0;
-    return m.result != SETTING_INVALID;
-}
-
-static int parse_int(const char *s) {
-    int v = 0;
-    if (!s || !s[0]) return -1;
-    for (; *s; s++) {
-        if (*s < '0' || *s > '9') return -1;
-        v = v * 10 + (*s - '0');
-    }
-    return v;
-}
-
 // The device rows ARE the `audio_device` setting's choice list, which
 // is why nothing here knows what a sound card is: the kernel's setting
 // computes its choices from the registered drivers, so a card plugged
 // in after boot turns up as a row.
 static void reload_devices(void) {
     struct setting_msg m;
-    int index = -1, count = 0;
-
-    msg_clear(&m);
-    m.op = SETTING_OP_COUNT;
-    if (sys_setting(&m) != 0) return;
-    count = (int)m.count;
-
-    for (int i = 0; i < count; i++) {
-        msg_clear(&m);
-        m.op = SETTING_OP_INFO;
-        m.index = i;
-        if (sys_setting(&m) != 0) continue;
-        // Qualified, because a bare `audio_device` is only unique until
-        // something else registers one.
-        char qualified[SETTING_ABI_QUALIFIED_MAX];
-        k_snprintf(qualified, sizeof qualified, "%s.%s", m.ns, m.name);
-        if (k_strcmp(qualified, DEVICE_SETTING) == 0) { index = i; break; }
-    }
+    int index = usetting_find(DEVICE_SETTING, &m);
     g_dev_count = 0;
     if (index < 0) return;
 
     char current[SETTING_ABI_VALUE_MAX] = "auto";
-    setting_get(DEVICE_SETTING, current, sizeof current);
+    if (!usetting_get(DEVICE_SETTING, current, sizeof current))
+        k_strlcpy(current, "auto", sizeof current);
 
     for (int c = 0; c < VOLUME_MAX_DEVICES; c++) {
-        msg_clear(&m);
+        k_memset(&m, 0, sizeof m);
         m.op = SETTING_OP_CHOICE;
         m.index = index;
         m.choice = c;
@@ -141,9 +92,8 @@ static void reload_devices(void) {
 }
 
 static void reload_level(void) {
-    char buf[SETTING_ABI_VALUE_MAX];
-    if (!setting_get(VOLUME_SETTING, buf, sizeof buf)) return;
-    int v = parse_int(buf);
+    int v;
+    if (!usetting_get_int(VOLUME_SETTING, &v)) return;
     if (v >= 0 && v <= 100) {
         g_level = v;
         if (v > 0) g_premute_level = v;
@@ -318,9 +268,7 @@ void volume_poll_config(void) {
         unsigned long long now = sys_monotonic_ns();
         if (g_pending_at == 0 ||
             now - g_pending_at >= (unsigned long long)VOLUME_COMMIT_MS * 1000000ull) {
-            char buf[16];
-            k_snprintf(buf, sizeof buf, "%d", g_level);
-            setting_set(VOLUME_SETTING, buf);
+            usetting_set_int(VOLUME_SETTING, g_level);
             g_pending = 0;
             // Our own write bumps the generation; adopting it here stops
             // the reload below from immediately re-reading what we just
@@ -392,7 +340,7 @@ int volume_handle_click(int mx, int my) {
         if (!uui_hit(g.list_x, g.list_y + i * g.row_h, g.w - (g.list_x - g.x) * 2,
                      g.row_h, mx, my))
             continue;
-        if (setting_set(DEVICE_SETTING, g_dev_value[i])) {
+        if (usetting_set(DEVICE_SETTING, g_dev_value[i]) > 0) {
             g_dev_selected = i;
             // The labels move with the choice: "Automatic (ac97)" names
             // what auto resolved to, and that changes when the pick does.

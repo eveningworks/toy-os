@@ -46,6 +46,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "lib/dirsort.h"
+#include "lib/udate.h"
 #include "kpath.h"    // k_path_basename, for a path that names a file
 #include <unistd.h>
 
@@ -113,8 +114,7 @@ static void put_size(const struct opts *o, uint32_t n) {
 
 static void put_timestamp(const struct rtc_time *t) {
     char buf[32];
-    snprintf(buf, sizeof buf, "%04u-%02u-%02u %02u:%02u:%02u",
-             t->year, t->month, t->day, t->hour, t->minute, t->second);
+    rtc_format_iso(buf, sizeof buf, t, 1);
     put(buf);
 }
 

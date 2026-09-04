@@ -24,7 +24,7 @@
 #include <stdio.h>
 #include "rt/sys.h"
 #include "lib/uimg.h"
-#include "setting_abi.h"
+#include "lib/usetting.h"
 #include "kpath.h"   // k_path_join/_dirname -- the KERNEL's, linked into ring 3
 #include <dirent.h>
 #include <stdlib.h>
@@ -120,17 +120,8 @@ static struct uui_item g_widgets[] = {
 
 // --- loading ----------------------------------------------------------
 
-static int menubar_h(void) {
-    int h;
-    uui_menubar_natural_size(&g_menu, 0, &h);
-    return h;
-}
-
-static int statusbar_h(void) {
-    int h;
-    uui_statusbar_natural_size(&g_status, 0, &h);
-    return h;
-}
+static int menubar_h(void) { return uui_menubar_height(&g_menu); }
+static int statusbar_h(void) { return uui_statusbar_height(&g_status); }
 
 // The sidebar's filter: keep only the files a codec claims. THE PROBE
 // DECIDES, not the extension -- uimg_probe() reads the magic bytes, so a
@@ -244,16 +235,10 @@ static void show_selected(struct uapp *a) {
 // refused with a sentence rather than silently doing nothing -- copy it
 // in and it becomes selectable everywhere at once, including in
 // System Settings.
+// SETTING_UNSAVED means live but not persisted, which a caller must
+// not report as success (setting_abi.h says so in as many words).
 static int set_setting(const char *name, const char *value) {
-    struct setting_msg msg;
-    memset(&msg, 0, sizeof msg);
-    msg.op = SETTING_OP_SET;
-    strlcpy(msg.name, name, sizeof msg.name);
-    strlcpy(msg.value, value, sizeof msg.value);
-    if (sys_setting(&msg) != 0) return 0;
-    // SETTING_UNSAVED means live but not persisted, which a caller must
-    // not report as success (setting_abi.h says so in as many words).
-    return msg.result == SETTING_SAVED;
+    return usetting_set(name, value) == SETTING_SAVED;
 }
 
 static void set_wallpaper(struct uapp *a, const char *mode) {

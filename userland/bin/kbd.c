@@ -40,7 +40,7 @@
 #include <keyboard.h>    // KEY_* and the modifier bits, named below
 #include <signal.h>      // SIGINT -- one of the three ways out
 #include "query_abi.h"   // QUERY_KBDTAP and its record
-#include "setting_abi.h" // kernel.kbdtap -- the tap's own switch
+#include "lib/usetting.h" // kernel.kbdtap -- the tap's own switch
 
 // Records fetched in one poll. A burst faster than this is not lost --
 // it is still in the kernel's ring and comes out on the next poll -- so
@@ -299,22 +299,13 @@ static unsigned long long print_batch(int n, unsigned long *prev,
 #define TAP_SETTING "kernel.kbdtap"
 
 static int tap_is_on(void) {
-    struct setting_msg m;
-    memset(&m, 0, sizeof m);
-    m.op = SETTING_OP_GET;
-    strlcpy(m.name, TAP_SETTING, sizeof m.name);
-    if (sys_setting(&m) != 0) return -1;
-    return strcmp(m.value, "on") == 0;
+    char v[SETTING_ABI_VALUE_MAX];
+    if (!usetting_get(TAP_SETTING, v, sizeof v)) return -1;
+    return strcmp(v, "on") == 0;
 }
 
 static int tap_set(int on) {
-    struct setting_msg m;
-    memset(&m, 0, sizeof m);
-    m.op = SETTING_OP_SET;
-    strlcpy(m.name, TAP_SETTING, sizeof m.name);
-    strlcpy(m.value, on ? "on" : "off", sizeof m.value);
-    if (sys_setting(&m) != 0) return 0;
-    return m.result != SETTING_INVALID;
+    return usetting_set(TAP_SETTING, on ? "on" : "off") > 0;
 }
 
 static void say_it_is_off(void) {

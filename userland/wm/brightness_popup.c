@@ -12,7 +12,8 @@
 #include "lib/icon_cache.h"
 #include "kapi.h"
 #include "rt/sys.h"
-#include "wm/wm_conf.h"   // struct setting_msg, SETTING_OP_*
+#include "wm/wm_conf.h"   // wm_setting_generation()
+#include "lib/usetting.h"
 
 #define BRIGHTNESS_SETTING "system.brightness"
 #define BRIGHTNESS_STEP 5
@@ -35,52 +36,15 @@ static int g_hover = HOVER_NONE;
 
 // --- the setting behind it --------------------------------------------
 
-static void msg_clear(struct setting_msg *m) {
-    for (unsigned i = 0; i < sizeof *m; i++) ((uint8_t *)m)[i] = 0;
-}
-
-static int setting_set(const char *name, const char *value) {
-    struct setting_msg m;
-    msg_clear(&m);
-    m.op = SETTING_OP_SET;
-    k_strlcpy(m.name, name, sizeof m.name);
-    k_strlcpy(m.value, value, sizeof m.value);
-    if (sys_setting(&m) != 0) return 0;
-    return m.result != SETTING_INVALID;
-}
-
-static int parse_int(const char *s) {
-    int v = 0;
-    if (!s || !s[0]) return -1;
-    for (; *s; s++) {
-        if (*s < '0' || *s > '9') return -1;
-        v = v * 10 + (*s - '0');
-    }
-    return v;
-}
-
 // INFO rather than GET: the one op that carries the range and the
 // `unavailable` sentence beside the value.
 static void reload(void) {
     struct setting_msg m;
-    msg_clear(&m);
-    m.op = SETTING_OP_COUNT;
-    if (sys_setting(&m) != 0) return;
-    int count = (int)m.count;
-    for (int i = 0; i < count; i++) {
-        msg_clear(&m);
-        m.op = SETTING_OP_INFO;
-        m.index = i;
-        if (sys_setting(&m) != 0) continue;
-        char qualified[SETTING_ABI_QUALIFIED_MAX];
-        k_snprintf(qualified, sizeof qualified, "%s.%s", m.ns, m.name);
-        if (k_strcmp(qualified, BRIGHTNESS_SETTING) != 0) continue;
-        int v = parse_int(m.value);
-        if (v >= 0 && v <= 100) g_level = v;
-        if (m.imax > m.imin) { g_min = m.imin; g_max = m.imax; }
-        k_strlcpy(g_unavailable, m.unavailable, sizeof g_unavailable);
-        return;
-    }
+    if (usetting_find(BRIGHTNESS_SETTING, &m) < 0) return;
+    uint32_t v;
+    if (k_parse_u32(m.value, &v) && v <= 100) g_level = (int)v;
+    if (m.imax > m.imin) { g_min = m.imin; g_max = m.imax; }
+    k_strlcpy(g_unavailable, m.unavailable, sizeof g_unavailable);
 }
 
 const char *brightness_unavailable_text(void) { return g_unavailable; }
@@ -194,9 +158,7 @@ void brightness_poll_config(void) {
         unsigned long long now = sys_monotonic_ns();
         if (g_pending_at == 0 ||
             now - g_pending_at >= (unsigned long long)BRIGHTNESS_COMMIT_MS * 1000000ull) {
-            char buf[16];
-            k_snprintf(buf, sizeof buf, "%d", g_level);
-            setting_set(BRIGHTNESS_SETTING, buf);
+            usetting_set_int(BRIGHTNESS_SETTING, g_level);
             g_pending = 0;
             g_seen_generation = wm_setting_generation();
         }
