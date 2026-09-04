@@ -28,25 +28,15 @@
 #include <stdlib.h>
 #include "rt/sys.h"
 
-#define VERDICT_PATH "/tmp/env_test.out"
 
-static FILE *g_log;
-static void say(const char *s) { fputs(s, stdout); if (g_log) fputs(s, g_log); }
 
-static int g_fail;
+#include "lib/utest.h"
 
-static void check(int ok, const char *what) {
-    say(ok ? "  ok   " : "  FAIL ");
-    say(what);
-    say("\n");
-    if (!ok) g_fail++;
-}
 
 static char putenv_buf[] = "PUTENV_VAR=static-storage";
 
 int main(void) {
-    g_log = fopen(VERDICT_PATH, "w");
-    say("env_test: getenv/setenv, and a child inheriting\n");
+    utest_begin("env_test", "getenv/setenv, and a child inheriting", UTEST_VERDICT_FILE);
 
     // --- what init seeded, IF this process descends from init --------
     //
@@ -63,25 +53,25 @@ int main(void) {
     const char *path = getenv("PATH");
     int from_init = (path != 0);
     if (from_init) {
-        check(strcmp(path, "/bin") == 0, "PATH was inherited from init");
+        utest_check(strcmp(path, "/bin") == 0, "PATH was inherited from init");
         const char *home = getenv("HOME");
-        check(home && strcmp(home, "/") == 0, "and HOME");
+        utest_check(home && strcmp(home, "/") == 0, "and HOME");
     } else {
-        say("  note   no inherited environment -- this process's parent had\n"
-            "         none to pass. The child below must MIRROR that, which\n"
-            "         is the property being tested either way.\n");
+        utest_notef("note: no inherited environment -- this process's parent "
+                    "had none to pass. The child below must MIRROR that, which "
+                    "is the property being tested either way.");
     }
-    check(getenv("DEFINITELY_NOT_SET") == 0, "an unset variable answers NULL");
-    check(getenv("") == 0, "and so does an empty name");
+    utest_check(getenv("DEFINITELY_NOT_SET") == 0, "an unset variable answers NULL");
+    utest_check(getenv("") == 0, "and so does an empty name");
 
     // --- setenv -------------------------------------------------------
-    check(setenv("TOYOS_A", "one", 1) == 0, "setenv adds");
-    check(strcmp(getenv("TOYOS_A"), "one") == 0, "and the value reads back");
-    check(setenv("TOYOS_A", "two", 0) == 0, "setenv with overwrite=0 succeeds");
-    check(strcmp(getenv("TOYOS_A"), "one") == 0, "...and leaves the old value");
-    check(setenv("TOYOS_A", "two", 1) == 0, "setenv with overwrite=1");
-    check(strcmp(getenv("TOYOS_A"), "two") == 0, "...replaces it");
-    check(setenv("TOYOS_EQ=BAD", "x", 1) == -1, "a name containing '=' is refused");
+    utest_check(setenv("TOYOS_A", "one", 1) == 0, "setenv adds");
+    utest_check(strcmp(getenv("TOYOS_A"), "one") == 0, "and the value reads back");
+    utest_check(setenv("TOYOS_A", "two", 0) == 0, "setenv with overwrite=0 succeeds");
+    utest_check(strcmp(getenv("TOYOS_A"), "one") == 0, "...and leaves the old value");
+    utest_check(setenv("TOYOS_A", "two", 1) == 0, "setenv with overwrite=1");
+    utest_check(strcmp(getenv("TOYOS_A"), "two") == 0, "...replaces it");
+    utest_check(setenv("TOYOS_EQ=BAD", "x", 1) == -1, "a name containing '=' is refused");
 
     // The FIRST setenv moved the whole environment off the initial
     // stack onto the heap, and the casualties of a wrong copy would be
@@ -89,14 +79,14 @@ int main(void) {
     // above), so the real check for that lives in the child, which
     // always has one.
     if (from_init)
-        check(getenv("PATH") && strcmp(getenv("PATH"), "/bin") == 0,
+        utest_check(getenv("PATH") && strcmp(getenv("PATH"), "/bin") == 0,
               "PATH survived the move to the heap");
 
     // --- many entries, to force the array to grow ---------------------
     char name[32];
     for (int i = 0; i < 40; i++) {
         snprintf(name, sizeof name, "TOYOS_N%d", i);
-        if (setenv(name, "v", 1) != 0) { check(0, "setenv failed while growing"); break; }
+        if (setenv(name, "v", 1) != 0) { utest_check(0, "setenv failed while growing"); break; }
     }
     int found = 1;
     for (int i = 0; i < 40; i++) {
@@ -104,33 +94,33 @@ int main(void) {
         const char *v = getenv(name);
         if (!v || strcmp(v, "v") != 0) { found = 0; break; }
     }
-    check(found, "40 additions all survive the array growing");
+    utest_check(found, "40 additions all survive the array growing");
     if (from_init)
-        check(getenv("PATH") && strcmp(getenv("PATH"), "/bin") == 0,
+        utest_check(getenv("PATH") && strcmp(getenv("PATH"), "/bin") == 0,
               "and PATH still does too");
 
     // --- unsetenv -----------------------------------------------------
-    check(unsetenv("TOYOS_A") == 0, "unsetenv removes");
-    check(getenv("TOYOS_A") == 0, "and it is gone");
-    check(unsetenv("NEVER_EXISTED") == 0, "removing something absent is not an error");
+    utest_check(unsetenv("TOYOS_A") == 0, "unsetenv removes");
+    utest_check(getenv("TOYOS_A") == 0, "and it is gone");
+    utest_check(unsetenv("NEVER_EXISTED") == 0, "removing something absent is not an error");
     // unsetenv moves the LAST entry into the gap, so the entry that was
     // last is the one that would vanish if that swap were wrong.
-    check(getenv("TOYOS_N39") != 0, "the entry moved into the gap is still there");
+    utest_check(getenv("TOYOS_N39") != 0, "the entry moved into the gap is still there");
 
     // --- putenv -------------------------------------------------------
-    check(putenv(putenv_buf) == 0, "putenv accepts an entry");
-    check(strcmp(getenv("PUTENV_VAR"), "static-storage") == 0, "which reads back");
-    check(putenv((char *)"NO_EQUALS_SIGN") == -1, "and refuses one with no '='");
+    utest_check(putenv(putenv_buf) == 0, "putenv accepts an entry");
+    utest_check(strcmp(getenv("PUTENV_VAR"), "static-storage") == 0, "which reads back");
+    utest_check(putenv((char *)"NO_EQUALS_SIGN") == -1, "and refuses one with no '='");
 
     // --- THE REAL CHECK: a child inherits -----------------------------
-    check(setenv("TOYOS_SECRET", "passed-down", 1) == 0, "set a variable for the child");
+    utest_check(setenv("TOYOS_SECRET", "passed-down", 1) == 0, "set a variable for the child");
 
     int p[2];
     if (sys_pipe(p) != 0) {
-        check(0, "could not make a pipe");
+        utest_check(0, "could not make a pipe");
     } else {
         int pid = sys_spawn("/tests/env_child", "TOYOS_SECRET", p[1]);
-        check(pid > 0, "spawned /tests/env_child");
+        utest_check(pid > 0, "spawned /tests/env_child");
         sys_close(p[1]);   // the parent's copy, so the child's is the last writer
 
         static char buf[256];
@@ -165,20 +155,12 @@ int main(void) {
         static char want[128];
         snprintf(want, sizeof want, "passed-down|kept|%s\n",
                  mypath ? mypath : "(unset)");
-        check(strcmp(buf, want) == 0,
+        utest_check(strcmp(buf, want) == 0,
               "the CHILD inherited it, kept it across a heap move, and mirrors PATH");
         if (strcmp(buf, want) != 0) {
-            static char msg[320];
-            snprintf(msg, sizeof msg, "       child said \"%s\", wanted \"%s\"\n",
-                     buf, want);
-            say(msg);
+            utest_notef("child said \"%s\", wanted \"%s\"", buf, want);
         }
     }
 
-    static char verdict[64];
-    if (g_fail) snprintf(verdict, sizeof verdict, "env_test: %d FAILURES\n", g_fail);
-    else        snprintf(verdict, sizeof verdict, "env_test: all checks passed\n");
-    say(verdict);
-    if (g_log) fclose(g_log);
-    return g_fail;
+    return utest_end();
 }

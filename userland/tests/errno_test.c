@@ -23,56 +23,42 @@
 #include "net_abi.h"
 #include <string.h>
 
-static int g_fail;
-
-static void put(const char *s) { sys_write(1, s, strlen(s)); }
-
-static void check(int ok, const char *what) {
-    put(ok ? "  ok   " : "  FAIL ");
-    put(what);
-    put("\n");
-    if (!ok) g_fail++;
-}
+#include "lib/utest.h"
 
 // Reports the code as well as the verdict, so a failure says what it
 // actually got instead of only that it was wrong.
 static void check_errno(int got, int want, const char *what) {
-    put(got == want ? "  ok   " : "  FAIL ");
-    put(what);
-    put(" -- got ");
-    put(sys_strerror(got));
-    if (got != want) { put(", wanted "); put(sys_strerror(want)); }
-    put("\n");
-    if (got != want) g_fail++;
+    utest_checkf(got == want, "%s -- got %s%s%s", what, sys_strerror(got),
+                 got != want ? ", wanted " : "", got != want ? sys_strerror(want) : "");
 }
 
 #define PROBE "/tmp/errno_probe.txt"
 
 int main(void) {
-    put("errno_test: a failed syscall says why\n");
+    utest_begin("errno_test", "a failed syscall says why", 0);
 
     // --- a successful call leaves no error -----------------------------
     // Stage 1's exit criterion. sys_errno() is not cleared on success
     // (POSIX's rule), so this is only meaningful as the FIRST thing
     // asked -- nothing has failed yet at this point in the process.
-    check(sys_errno() == 0, "sys_errno() is 0 before anything has failed");
+    utest_check(sys_errno() == 0, "sys_errno() is 0 before anything has failed");
 
     // --- ENOENT vs EFAULT, the two ways open() can refuse a path -------
     int fd = sys_open("/definitely/not/here.txt", 0);
-    check(fd < 0, "open() of a missing file fails");
+    utest_check(fd < 0, "open() of a missing file fails");
     check_errno(sys_errno(), ENOENT, "open() of a missing file");
 
     // A pointer this process may not read. The kernel walks page tables
     // rather than dereferencing it, so this is a refusal and not a
     // fault -- see vmm.h.
     fd = sys_open((const char *)0x1000, 0);
-    check(fd < 0, "open() of a kernel-only pointer fails");
+    utest_check(fd < 0, "open() of a kernel-only pointer fails");
     check_errno(sys_errno(), EFAULT, "open() of a bad pointer");
 
     // --- a file that definitely exists, for the EMFILE fixture ---------
     fd = sys_open(PROBE, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
-    check(fd >= 0, "created " PROBE);
-    if (fd < 0) { put("errno_test: cannot build the fixture\n"); sys_exit(g_fail + 1); }
+    utest_check(fd >= 0, "created " PROBE);
+    if (fd < 0) { utest_check(0, "build the fixture"); sys_exit(utest_end()); }
     sys_write(fd, "x", 1);
     sys_close(fd);
 
@@ -81,7 +67,7 @@ int main(void) {
     // EMFILE check would be asserting against a file it never
     // established was there.
     fd = sys_open(PROBE, 0);
-    check(fd >= 0, "the probe file opens with a free descriptor table");
+    utest_check(fd >= 0, "the probe file opens with a free descriptor table");
     if (fd >= 0) sys_close(fd);
 
     // --- O_CREAT into a directory that is not there -------------------
@@ -92,24 +78,24 @@ int main(void) {
     // check; the third is here for the OTHER failure -- a version that
     // reports the error and creates the file anyway.
     fd = sys_open("/definitely/not/here.txt", SYS_O_WRITE | SYS_O_CREAT);
-    check(fd < 0, "open(O_CREAT) into a missing directory fails");
+    utest_check(fd < 0, "open(O_CREAT) into a missing directory fails");
     check_errno(sys_errno(), ENOENT, "open(O_CREAT) with no parent directory");
     fd = sys_open("/definitely/not/here.txt", 0);
-    check(fd < 0, "and the file was NOT created");
+    utest_check(fd < 0, "and the file was NOT created");
     if (fd >= 0) sys_close(fd);
 
     // A parent that exists and is a FILE. Distinct from ENOENT: one
     // says the path is absent, the other that it is wrong.
     fd = sys_open(PROBE "/child.txt", SYS_O_WRITE | SYS_O_CREAT);
-    check(fd < 0, "open(O_CREAT) under a file used as a directory fails");
+    utest_check(fd < 0, "open(O_CREAT) under a file used as a directory fails");
     check_errno(sys_errno(), ENOTDIR, "open(O_CREAT) with a file as the parent");
     if (fd >= 0) sys_close(fd);
 
     // mkdir() answers the same two, having previously guessed ENOENT
     // for every refusal.
-    check(sys_mkdir("/definitely/not/here") == -1 && sys_errno() == ENOENT,
+    utest_check(sys_mkdir("/definitely/not/here") == -1 && sys_errno() == ENOENT,
           "mkdir() with no parent directory is -1 ENOENT");
-    check(sys_mkdir(PROBE "/sub") == -1 && sys_errno() == ENOTDIR,
+    utest_check(sys_mkdir(PROBE "/sub") == -1 && sys_errno() == ENOTDIR,
           "mkdir() under a file is -1 ENOTDIR");
 
     // --- EMFILE: exhaust this process's table for real ------------------
@@ -123,48 +109,47 @@ int main(void) {
         if (h < 0) break;
         held[n++] = h;
     }
-    check(n > 0, "opened the probe file until the table was full");
+    utest_check(n > 0, "opened the probe file until the table was full");
     check_errno(sys_errno(), EMFILE, "open() with a full descriptor table");
 
     // THE POINT OF ALL OF IT: the same path, the same process, two
     // different answers. Anything that merges these two is the bug.
-    put("  ---- ENOENT and EMFILE are distinct: ");
-    put(ENOENT != EMFILE ? "yes\n" : "NO\n");
+    utest_notef("ENOENT and EMFILE are distinct: %s", ENOENT != EMFILE ? "yes" : "NO");
 
     // dup() runs out of descriptors the same way, and must say so the
     // same way rather than reporting a bad fd.
-    check(sys_dup(0) < 0, "dup() fails with a full table");
+    utest_check(sys_dup(0) < 0, "dup() fails with a full table");
     check_errno(sys_errno(), EMFILE, "dup() with a full descriptor table");
 
     for (int i = 0; i < n; i++) sys_close(held[i]);
 
     // --- EBADF, its three shapes --------------------------------------
     char buf[8];
-    check(sys_read(99, buf, sizeof buf) < 0, "read() of an fd that was never opened fails");
+    utest_check(sys_read(99, buf, sizeof buf) < 0, "read() of an fd that was never opened fails");
     check_errno(sys_errno(), EBADF, "read() of an unopened fd");
 
-    check(sys_close(99) < 0, "close() of an unopened fd fails");
+    utest_check(sys_close(99) < 0, "close() of an unopened fd fails");
     check_errno(sys_errno(), EBADF, "close() of an unopened fd");
 
     // Open for WRITING and then read it -- the fd is perfectly valid and
     // still the wrong way round, which POSIX also calls EBADF.
     fd = sys_open(PROBE, SYS_O_WRITE);
-    check(fd >= 0, "reopened the probe for writing");
+    utest_check(fd >= 0, "reopened the probe for writing");
     if (fd >= 0) {
-        check(sys_read(fd, buf, sizeof buf) < 0, "read() of a write-only fd fails");
+        utest_check(sys_read(fd, buf, sizeof buf) < 0, "read() of a write-only fd fails");
         check_errno(sys_errno(), EBADF, "read() of a write-only fd");
         sys_close(fd);
     }
 
     // --- EFAULT on a buffer, not a path -------------------------------
-    check(sys_write(1, (const void *)0x1000, 8) < 0, "write() of a kernel-only buffer fails");
+    utest_check(sys_write(1, (const void *)0x1000, 8) < 0, "write() of a kernel-only buffer fails");
     check_errno(sys_errno(), EFAULT, "write() of a bad buffer");
 
     // --- EINVAL: arguments the kernel will not take -------------------
-    check(sys_getrandom(buf, 1000000) < 0, "getrandom() over the maximum fails");
+    utest_check(sys_getrandom(buf, 1000000) < 0, "getrandom() over the maximum fails");
     check_errno(sys_errno(), EINVAL, "getrandom() with too large a count");
 
-    check(sys_socket(1, NET_ABI_SOCK_DGRAM, NET_ABI_IPPROTO_ICMP) < 0,
+    utest_check(sys_socket(1, NET_ABI_SOCK_DGRAM, NET_ABI_IPPROTO_ICMP) < 0,
           "socket() with an unsupported address family fails");
     check_errno(sys_errno(), EINVAL, "socket() with a family that is not AF_INET");
 
@@ -174,9 +159,9 @@ int main(void) {
     // send() on a datagram socket cannot know where to send -- nothing
     // names a peer -- so it is the call that is wrong, not the fd.
     fd = sys_socket(NET_ABI_AF_INET, NET_ABI_SOCK_DGRAM, NET_ABI_IPPROTO_ICMP);
-    check(fd >= 0, "socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP) succeeds");
+    utest_check(fd >= 0, "socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP) succeeds");
     if (fd >= 0) {
-        check(sys_send(fd, "x", 1) < 0, "send() on a peerless socket fails");
+        utest_check(sys_send(fd, "x", 1) < 0, "send() on a peerless socket fails");
         check_errno(sys_errno(), EINVAL, "send() with no peer named");
 
         // --- EFAULT on a struct argument, through the raw entry ------
@@ -184,11 +169,11 @@ int main(void) {
         // raw call can hand the kernel a bad one. A handler that tests
         // the copy helper's 1/0 result with `< 0` never sees the fault
         // and binds whatever its stack held; this is the check for that.
-        check(sys_call(SYS_BIND, (uint64_t)fd, 0x1000, 0) == -EFAULT,
+        utest_check(sys_call(SYS_BIND, (uint64_t)fd, 0x1000, 0) == -EFAULT,
               "bind() of a kernel-only struct pointer fails with EFAULT");
-        check(sys_call(SYS_CONNECT, (uint64_t)fd, 0x1000, 0) == -EFAULT,
+        utest_check(sys_call(SYS_CONNECT, (uint64_t)fd, 0x1000, 0) == -EFAULT,
               "connect() of a kernel-only struct pointer fails with EFAULT");
-        check(sys_call(SYS_SENDTO, (uint64_t)fd, 0x1000, 0) == -EFAULT,
+        utest_check(sys_call(SYS_SENDTO, (uint64_t)fd, 0x1000, 0) == -EFAULT,
               "sendto() of a kernel-only struct pointer fails with EFAULT");
         sys_close(fd);
     }
@@ -197,12 +182,12 @@ int main(void) {
     // An init loop that confuses these two either spins forever or stops
     // reaping (see docs/init-design.md), so the code matters more here
     // than anywhere else in this file.
-    check(sys_waitpid(-1, 0) < 0, "waitpid(-1) with no children fails");
+    utest_check(sys_waitpid(-1, 0) < 0, "waitpid(-1) with no children fails");
     check_errno(sys_errno(), ECHILD, "waitpid(-1) with no children at all");
 
     // --- strerror ------------------------------------------------------
-    check(strerror(ENOENT)[0] != '\0', "strerror(ENOENT) is a real message");
-    check(strerror(4242)[0] != '\0', "strerror() of an unknown code still says something");
+    utest_check(strerror(ENOENT)[0] != '\0', "strerror(ENOENT) is a real message");
+    utest_check(strerror(4242)[0] != '\0', "strerror() of an unknown code still says something");
 
     // --- and the reason is STICKY, which callers must know -------------
     // Not cleared by a success, exactly as POSIX specifies. Asserted so
@@ -211,31 +196,28 @@ int main(void) {
     sys_open("/definitely/not/here.txt", 0);
     int before = sys_errno();
     sys_close(sys_dup(1));
-    check(sys_errno() == before, "a successful call does NOT clear sys_errno()");
+    utest_check(sys_errno() == before, "a successful call does NOT clear sys_errno()");
 
     // --- the flipped bucket: the calls whose failure was 0 -------------
     // Converted in one commit with every caller (docs/errno-design.md's
     // leftover). 0 is success now, and the refusals carry reasons.
-    check(sys_unlink("/definitely/not/here.txt") == -1 && sys_errno() == ENOENT,
+    utest_check(sys_unlink("/definitely/not/here.txt") == -1 && sys_errno() == ENOENT,
           "unlink() of a missing file is -1 ENOENT");
-    check(sys_kill(4000, SIGTERM) == -1 && sys_errno() == ESRCH,
+    utest_check(sys_kill(4000, SIGTERM) == -1 && sys_errno() == ESRCH,
           "kill() of a missing pid is -1 ESRCH");
-    check(sys_proc_info(SYS_PROC_MAX + 5, &(struct proc_info){0}) == -1 &&
+    utest_check(sys_proc_info(SYS_PROC_MAX + 5, &(struct proc_info){0}) == -1 &&
           sys_errno() == EINVAL,
           "proc_info() past the table is -1 EINVAL (the enumeration terminator)");
-    check(sys_proc_info(0, &(struct proc_info){0}) == 0,
+    utest_check(sys_proc_info(0, &(struct proc_info){0}) == 0,
           "proc_info(0) succeeds -- slot 0 is init on any boot with one");
     struct rtc_time t;
-    check(sys_gettime(&t) == 0, "gettime() succeeds with 0 now");
+    utest_check(sys_gettime(&t) == 0, "gettime() succeeds with 0 now");
     int pfd[2];
-    check(sys_pipe(pfd) == 0, "pipe() succeeds with 0 now");
+    utest_check(sys_pipe(pfd) == 0, "pipe() succeeds with 0 now");
     sys_close(pfd[0]);
     sys_close(pfd[1]);
 
     sys_unlink(PROBE);
 
-    put("errno_test: ");
-    if (g_fail == 0) put("all checks passed\n");
-    else { put("FAILURES\n"); }
-    sys_exit(g_fail);
+    sys_exit(utest_end());
 }

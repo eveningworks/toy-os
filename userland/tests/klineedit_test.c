@@ -25,9 +25,7 @@
 #include "klineedit.h"
 #include "klineedit_cases.h"
 
-static int g_fail;
-
-static void put(const char *s) { sys_write(1, s, strlen(s)); }
+#include "lib/utest.h"
 
 // Ring 3's allocator, for the same reason the kernel driver supplies
 // one: the undo cases need memory and are silently skipped without it.
@@ -36,7 +34,7 @@ static void u_free(void *p) { free(p); }
 static const struct kline_mem u_mem = { u_alloc, u_free, 0 }; // 0: no ceiling
 
 int main(void) {
-    put("klineedit_test: the shared line editor, built for ring 3\n");
+    utest_begin("klineedit_test", "the shared line editor, built for ring 3", 0);
 
     // Static: struct kline_edit is ~1.2 KiB, which is why
     // kline_case_run() takes it rather than holding one --
@@ -44,37 +42,26 @@ int main(void) {
     // array in ring 3 steps over the single guard page.
     static struct kline_edit ed;
     static char got[KLINE_MAX];
-    char msg[160];
+    char detail[160];
 
     for (int i = 0; i < kline_case_count; i++) {
         int cursor = 0;
         int ok = kline_case_run(&kline_cases[i], &ed, got, sizeof got, &cursor, &u_mem);
-        if (ok) {
-            snprintf(msg, sizeof msg, "  ok   %s\n", kline_cases[i].name);
-        } else {
-            // Say what it got, not just that it differed: a mismatch
-            // here is a two-compilations question, and the actual bytes
-            // are the first thing anyone will want.
-            snprintf(msg, sizeof msg,
-                     "  FAIL %s -- got \"%s\"@%d want \"%s\"@%d\n",
-                     kline_cases[i].name, got, cursor,
-                     kline_cases[i].want, kline_cases[i].want_cursor);
-            g_fail++;
-        }
-        put(msg);
+        // Say what it got, not just that it differed: a mismatch here is
+        // a two-compilations question, and the actual bytes are the
+        // first thing anyone will want. The detail is printed only on a
+        // failure (utest_check_detail).
+        snprintf(detail, sizeof detail, "got \"%s\"@%d want \"%s\"@%d",
+                 got, cursor, kline_cases[i].want, kline_cases[i].want_cursor);
+        utest_check_detail(ok, kline_cases[i].name, detail);
     }
 
     // The table being EMPTY would print nothing and exit 0, which reads
     // exactly like every case passing -- the failure mode this repo
     // keeps rediscovering. Assert it was reachable and populated.
-    if (kline_case_count < 10) {
-        snprintf(msg, sizeof msg,
-                 "  FAIL only %d cases -- the shared table is not linked\n",
+    utest_checkf(kline_case_count >= 10,
+                 "only %d cases -- the shared table is not linked",
                  kline_case_count);
-        put(msg);
-        g_fail++;
-    }
 
-    if (g_fail == 0) put("klineedit_test: all checks passed\n");
-    return g_fail;
+    return utest_end();
 }

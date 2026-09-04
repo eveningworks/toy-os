@@ -23,25 +23,15 @@
 #define TOTAL (16 * 1024)   // four times the pipe buffer
 #define CHUNK 256
 
-static int g_fail;
-static char msg[160];
-
-static void put(const char *s) { sys_write(1, s, strlen(s)); }
-
-static void check(int ok, const char *what) {
-    put(ok ? "  ok   " : "  FAIL ");
-    put(what);
-    put("\n");
-    if (!ok) g_fail++;
-}
+#include "lib/utest.h"
 
 static char byte_at(int i) { return (char)((i * 7 + (i >> 8)) & 0x7f); }
 
 int main(void) {
-    put("pipefull_test: a full pipe blocks its writer\n");
+    utest_begin("pipefull_test", "a full pipe blocks its writer", 0);
 
     int fds[2];
-    if (sys_pipe(fds) != 0) { put("  FAIL could not create a pipe\n"); return 1; }
+    if (sys_pipe(fds) != 0) { utest_check(0, "create a pipe"); return utest_end(); }
 
     // The CHILD drains; this process writes. That way the writer is the
     // one that must block, which is the property under test -- and the
@@ -54,7 +44,7 @@ int main(void) {
     int pid = sys_spawn("/tests/pipedrain", 0, -1);
     sys_dup2(saved_in, 0);
     sys_close(saved_in);
-    if (pid < 0) { put("  FAIL could not spawn /tests/pipedrain\n"); return 1; }
+    if (pid < 0) { utest_check(0, "spawn /tests/pipedrain"); return utest_end(); }
     // Drop OUR read end: the child holds its own. Leaving it open would
     // not break this test, but it would stop the pipe ever reporting
     // that the reader had gone.
@@ -71,22 +61,19 @@ int main(void) {
     }
     sys_close(fds[1]);
 
-    check(!short_write, "every write took the WHOLE buffer");
-    check(sent == TOTAL, "all of it was written");
+    utest_check(!short_write, "every write took the WHOLE buffer");
+    utest_check(sent == TOTAL, "all of it was written");
     if (sent != TOTAL) {
-        snprintf(msg, sizeof msg, "       (sent %d of %d)\n", (int)sent, TOTAL);
-        put(msg);
+        utest_notef("(sent %d of %d)", (int)sent, TOTAL);
     }
 
     int code = -1;
     sys_waitpid(pid, &code);
     // pipedrain exits with 0 when it read TOTAL correct bytes.
-    check(code == 0, "the reader got every byte, in order");
+    utest_check(code == 0, "the reader got every byte, in order");
     if (code != 0) {
-        snprintf(msg, sizeof msg, "       (reader exited %d)\n", code);
-        put(msg);
+        utest_notef("(reader exited %d)", code);
     }
 
-    if (g_fail == 0) put("pipefull_test: all checks passed\n");
-    return g_fail;
+    return utest_end();
 }

@@ -21,40 +21,20 @@
 #include <stdio.h>
 #include "syscall_abi.h"
 
-static int g_fail;
-
 // A SPAWNED test's verdict has to reach a FILE as well as the console.
 // This binary is dynamic, so the legacy `run` loader refuses it and
 // tools/usertest_run.py spawns it instead -- and a spawned child's
 // output arrives on the shared serial console across several reads,
-// with no exit code the harness can see. It reads /tmp/<name>.out.
-// Same shape dyn_test.c and mmap_test.c use.
-static char g_log[2048];
-static int g_len;
+// with no exit code the harness can see. It reads /tmp/<name>.out,
+// which UTEST_VERDICT_FILE writes.
+#include "lib/utest.h"
 
-static void put(const char *s) {
-    int n = (int)strlen(s);
-    sys_write(1, s, (size_t)n);
-    if (g_len + n < (int)sizeof g_log) {
-        memcpy(g_log + g_len, s, (size_t)n);
-        g_len += n;
-    }
-}
-
-static void flush_verdict(void) {
-    int fd = sys_open("/tmp/hash_test.out",
-                      SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
-    if (fd < 0) return;
-    sys_write(fd, g_log, (uint64_t)g_len);
-    sys_close(fd);
-}
-
+// The call sites here read `check(what, ok, detail)`; the harness takes
+// the boolean first. One adapter rather than transposing a hundred call
+// sites: a transposed argument pair compiles and INVERTS the check,
+// which is the failure a green suite hides.
 static void check(const char *what, int ok, const char *detail) {
-    char line[160];
-    snprintf(line, sizeof line, "hash_test: %s %s%s%s\n", ok ? "ok  " : "FAIL",
-             what, detail[0] ? " -- " : "", detail);
-    put(line);
-    if (!ok) g_fail++;
+    utest_check_detail(ok, what, detail);
 }
 
 // Hashes `data` in `chunk`-byte pieces and returns the hex digest.
@@ -78,6 +58,8 @@ static void digest(const char *alg_name, const void *data, size_t len,
 }
 
 int main(void) {
+    utest_begin("hash_test", "uhash: md5, sha1, sha256, crc32", UTEST_VERDICT_FILE);
+
     char hex[UHASH_DIGEST_MAX * 2 + 1];
 
     check("the table has crc32 and sha256",
@@ -130,9 +112,5 @@ int main(void) {
     }
     check("crc32 is chunk-independent", same, one);
 
-    char tail[64];
-    snprintf(tail, sizeof tail, "hash_test: %d failure(s)\n", g_fail);
-    put(tail);
-    flush_verdict();
-    return g_fail;
+    return utest_end();
 }

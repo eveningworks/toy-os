@@ -32,18 +32,9 @@
 #include <pthread.h>
 #include "rt/sys.h"
 
-#define VERDICT_PATH "/tmp/thread_test.out"
 
-static FILE *g_log;
-static void say(const char *s) { fputs(s, stdout); if (g_log) fputs(s, g_log); }
 
-static int g_fail;
-static void check(int ok, const char *what) {
-    say(ok ? "  ok   " : "  FAIL ");
-    say(what);
-    say("\n");
-    if (!ok) g_fail++;
-}
+#include "lib/utest.h"
 
 // --- what the threads report back ------------------------------------
 
@@ -161,8 +152,7 @@ static void *forever(void *arg) {
 #define MANY 6
 
 int main(void) {
-    g_log = fopen(VERDICT_PATH, "w");
-    say("thread_test: threads, TLS and mutual exclusion\n");
+    utest_begin("thread_test", "threads, TLS and mutual exclusion", UTEST_VERDICT_FILE);
 
     // --- one thread, everything it shares and everything it does not --
     struct shared s;
@@ -177,25 +167,25 @@ int main(void) {
 
     pthread_t t;
     int rc = pthread_create(&t, NULL, worker, &s);
-    check(rc == 0, "pthread_create() started a thread");
+    utest_check(rc == 0, "pthread_create() started a thread");
 
     void *ret = NULL;
-    check(rc == 0 && pthread_join(t, &ret) == 0, "pthread_join() collected it");
-    check(ret == (void *)0xC0FFEE, "the thread's return value survived the join");
-    check(s.ran == 1, "the thread ran");
+    utest_check(rc == 0 && pthread_join(t, &ret) == 0, "pthread_join() collected it");
+    utest_check(ret == (void *)0xC0FFEE, "the thread's return value survived the join");
+    utest_check(s.ran == 1, "the thread ran");
     // THE ONE A FORK WOULD FAIL: `s` lives on main's stack and the
     // thread wrote through a pointer to it.
-    check(s.stack_probe != NULL, "it wrote through the parent's pointer -- ONE address space");
-    check(s.tid != 0 && s.tid != main_tid, "gettid() differs between the two threads");
-    check(s.pid == main_pid, "getpid() is the SAME in both -- a thread is not a process");
-    check(s.stack_probe != (void *)&s, "its locals are on a different stack");
+    utest_check(s.stack_probe != NULL, "it wrote through the parent's pointer -- ONE address space");
+    utest_check(s.tid != 0 && s.tid != main_tid, "gettid() differs between the two threads");
+    utest_check(s.pid == main_pid, "getpid() is the SAME in both -- a thread is not a process");
+    utest_check(s.stack_probe != (void *)&s, "its locals are on a different stack");
 
-    check(t_local == 11, "the main thread's __thread variable is untouched");
-    check(t_local_from_thread == 22, "the thread saw its OWN copy of it");
-    check(s.errno_seen != 0, "the thread's failing call set an errno");
+    utest_check(t_local == 11, "the main thread's __thread variable is untouched");
+    utest_check(t_local_from_thread == 22, "the thread saw its OWN copy of it");
+    utest_check(s.errno_seen != 0, "the thread's failing call set an errno");
     // THE TLS CHECK THAT MATTERS: two threads, two failures, two
     // reasons, neither overwritten by the other.
-    check(sys_errno() == main_errno_before,
+    utest_check(sys_errno() == main_errno_before,
           "the main thread's errno survived a failure in another thread");
 
     // --- several threads at once ---------------------------------------
@@ -205,7 +195,7 @@ int main(void) {
     int started = 0;
     for (int i = 0; i < MANY; i++)
         if (pthread_create(&ts[i], NULL, worker, &many[i]) == 0) started++;
-    check(started == MANY, "six more threads started at once");
+    utest_check(started == MANY, "six more threads started at once");
 
     int joined = 0, all_ran = 1, distinct_stacks = 1;
     for (int i = 0; i < started; i++) {
@@ -215,9 +205,9 @@ int main(void) {
         for (int j = 0; j < i; j++)
             if (many[i].stack_probe == many[j].stack_probe) distinct_stacks = 0;
     }
-    check(joined == MANY, "all six joined");
-    check(all_ran, "all six ran");
-    check(distinct_stacks, "each got a stack of its own");
+    utest_check(joined == MANY, "all six joined");
+    utest_check(all_ran, "all six ran");
+    utest_check(distinct_stacks, "each got a stack of its own");
 
     // --- mutual exclusion -----------------------------------------------
     pthread_t locks[3];
@@ -225,8 +215,8 @@ int main(void) {
     for (int i = 0; i < 3; i++)
         if (pthread_create(&locks[i], NULL, section_worker, NULL) == 0) lockers++;
     for (int i = 0; i < lockers; i++) pthread_join(locks[i], NULL);
-    check(lockers == 3 && g_section_runs == 3 * 20, "three threads ran 60 critical sections");
-    check(!g_section_broken, "no thread entered a section another held ACROSS A YIELD");
+    utest_check(lockers == 3 && g_section_runs == 3 * 20, "three threads ran 60 critical sections");
+    utest_check(!g_section_broken, "no thread entered a section another held ACROSS A YIELD");
 
     // --- a condition variable --------------------------------------------
     pthread_t cvt;
@@ -235,20 +225,20 @@ int main(void) {
         while (!g_handed_over) pthread_cond_wait(&g_cv, &g_cv_lock);
         pthread_mutex_unlock(&g_cv_lock);
         pthread_join(cvt, NULL);
-        check(g_handed_over, "a condition variable carried a handover");
+        utest_check(g_handed_over, "a condition variable carried a handover");
     } else {
-        check(0, "a condition variable carried a handover");
+        utest_check(0, "a condition variable carried a handover");
     }
 
     // --- detaching ---------------------------------------------------------
     pthread_t det;
     if (pthread_create(&det, NULL, detached_worker, NULL) == 0) {
-        check(pthread_detach(det) == 0, "a running thread can be detached");
-        check(pthread_join(det, NULL) != 0, "a detached thread refuses to be joined");
+        utest_check(pthread_detach(det) == 0, "a running thread can be detached");
+        utest_check(pthread_join(det, NULL) != 0, "a detached thread refuses to be joined");
         for (int spins = 0; spins < 1000 && !g_detached_ran; spins++) sys_yield();
-        check(g_detached_ran, "the detached thread still ran");
+        utest_check(g_detached_ran, "the detached thread still ran");
     } else {
-        check(0, "a running thread can be detached");
+        utest_check(0, "a running thread can be detached");
     }
 
     pthread_t sse;
@@ -257,12 +247,12 @@ int main(void) {
         // Reaching this at all is most of the assertion: a misaligned
         // stack faults rather than computing the wrong answer, and the
         // fault kills the whole process.
-        check(g_sse_ok, "a worker can use SSE -- its stack is aligned as SysV requires");
+        utest_check(g_sse_ok, "a worker can use SSE -- its stack is aligned as SysV requires");
     } else {
-        check(0, "a worker can use SSE -- its stack is aligned as SysV requires");
+        utest_check(0, "a worker can use SSE -- its stack is aligned as SysV requires");
     }
 
-    check(pthread_equal(pthread_self(), pthread_self()), "pthread_self() is stable");
+    utest_check(pthread_equal(pthread_self(), pthread_self()), "pthread_self() is stable");
 
     // A THREAD LEFT RUNNING AT EXIT, on purpose and never joined.
     // Without it nothing here reaches the group teardown at all: every
@@ -272,13 +262,8 @@ int main(void) {
     // kernel/proc/thread_test.c is what looks, from outside, for the
     // slot this must not leave behind.
     pthread_t spinner;
-    check(pthread_create(&spinner, NULL, forever, NULL) == 0,
+    utest_check(pthread_create(&spinner, NULL, forever, NULL) == 0,
           "a thread the process will not wait for is running at exit");
 
-    static char verdict[64];
-    if (g_fail) snprintf(verdict, sizeof verdict, "thread_test: %d FAILURES\n", g_fail);
-    else        snprintf(verdict, sizeof verdict, "thread_test: all checks passed\n");
-    say(verdict);
-    if (g_log) fclose(g_log);
-    return g_fail;
+    return utest_end();
 }

@@ -27,17 +27,10 @@
 #include <string.h>
 #include "proc_info.h"
 
-static int failures;
-
-static void check(int ok, const char *what) {
-    sys_print(ok ? "  ok   " : "  FAIL ");
-    sys_print(what);
-    sys_print("\n");
-    if (!ok) failures++;
-}
+#include "lib/utest.h"
 
 int main(void) {
-    sys_print("guard_test: SYS_SBRK stops at the stack guard\n");
+    utest_begin("guard_test", "SYS_SBRK stops at the stack guard", 0);
 
     // A canary in THIS frame, checked at the end. It sits on the user
     // stack, which is precisely what an unbounded heap walked over.
@@ -46,11 +39,11 @@ int main(void) {
 
     // --- an ordinary request still works ---------------------------
     void *base = sys_sbrk(0);
-    check(base != (void *)-1, "sbrk(0) reports the current break");
+    utest_check(base != (void *)-1, "sbrk(0) reports the current break");
 
     void *first = sys_sbrk(4096);
-    check(first == base, "sbrk() returns the OLD break");
-    check(sys_sbrk(0) == (void *)((unsigned char *)base + 4096),
+    utest_check(first == base, "sbrk() returns the OLD break");
+    utest_check(sys_sbrk(0) == (void *)((unsigned char *)base + 4096),
           "the break advanced by exactly what was asked for");
 
     // The page it just handed back must be real memory, not a number.
@@ -58,7 +51,7 @@ int main(void) {
     memset(p, 0x5A, 4096);
     int readable = 1;
     for (int i = 0; i < 4096; i++) if (p[i] != 0x5A) readable = 0;
-    check(readable, "the newly-broken page is actually mapped");
+    utest_check(readable, "the newly-broken page is actually mapped");
 
     // --- the gap is finite -----------------------------------------
     //
@@ -93,14 +86,14 @@ int main(void) {
         memset(chunk, 0, STEP);
         steps++;
     }
-    check(steps == STEPS, "sbrk grows, and every page it hands back is writable");
+    utest_check(steps == STEPS, "sbrk grows, and every page it hands back is writable");
 
     before = sys_sbrk(0);
     // A terabyte. Bigger than the address space the map reserves, so no
     // bound-checking kernel can accept it and an unbounded one will.
-    check(sys_sbrk((int64_t)1 << 40) == (void *)-1,
+    utest_check(sys_sbrk((int64_t)1 << 40) == (void *)-1,
           "sbrk stops before the stack rather than growing forever");
-    check(sys_sbrk(0) == before, "a refused request left the break alone");
+    utest_check(sys_sbrk(0) == before, "a refused request left the break alone");
     #undef STEP
     #undef STEPS
 
@@ -110,9 +103,9 @@ int main(void) {
     // `brk + inc > limit` instead of `inc > limit - brk` computes a
     // small sum, passes the check, and then loops mapping pages from
     // the break to an address below it.
-    check(sys_sbrk(-4096) == (void *)-1,
+    utest_check(sys_sbrk(-4096) == (void *)-1,
           "a request that overflows the sum is refused");
-    check(sys_sbrk(0) == before, "that one left the break alone too");
+    utest_check(sys_sbrk(0) == before, "that one left the break alone too");
 
     // --- a page the KERNEL touches first ----------------------------
     //
@@ -132,25 +125,20 @@ int main(void) {
     // the entire point -- a memset here would map the page from ring 3
     // and the check would pass either way.
     struct proc_info *info = (struct proc_info *)sys_sbrk(4096);
-    check(info != (struct proc_info *)-1, "sbrk handed back a fresh page");
+    utest_check(info != (struct proc_info *)-1, "sbrk handed back a fresh page");
     if (info != (struct proc_info *)-1) {
         int got = sys_proc_info(0, info);
-        check(got == 0, "a syscall can write into an untouched sbrk page");
+        utest_check(got == 0, "a syscall can write into an untouched sbrk page");
         // And it wrote something real, not zeros a blank page would
         // also show: slot 0 is init on any boot that has one.
-        check(got == 0 && info->pid != 0,
+        utest_check(got == 0 && info->pid != 0,
               "and what it wrote is the real process table");
     }
 
     // --- and the stack survived ------------------------------------
     int intact = 1;
     for (int i = 0; i < 64; i++) if (canary[i] != (unsigned char)(i * 7 + 3)) intact = 0;
-    check(intact, "this frame's stack canary is untouched");
+    utest_check(intact, "this frame's stack canary is untouched");
 
-    if (failures) {
-        sys_print("guard_test: FAILED\n");
-        return 1;
-    }
-    sys_print("guard_test: all checks passed\n");
-    return 0;
+    return utest_end();
 }

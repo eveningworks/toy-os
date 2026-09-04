@@ -812,7 +812,7 @@ def phase_udp(r, disk, tmp):
     try:
         out = sh.run("udp_test")
         r.check("[udp] the socket API's own checks pass in the guest",
-                "0 failed" in out, out.strip()[-500:])
+                "udp_test: all checks passed" in out, out.strip()[-500:])
 
         _, got = udp_echo_server(UDP_ECHO_PORT)
         payload = "toyos-udp-payload"

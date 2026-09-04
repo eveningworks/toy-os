@@ -21,27 +21,31 @@
 #include "ui/ugfx.h"
 #include "ui/uui_label.h"
 
-#define VERDICT_PATH "/tmp/wrap_test.out"
+#include "lib/utest.h"
 
-static int g_fail;
-
-static void put(const char *s) { sys_write(1, s, strlen(s)); }
-
+// The call sites here read `ok(name, cond, detail)`; the harness takes
+// the boolean first. One adapter rather than transposing every call
+// site: a transposed argument pair compiles and INVERTS the check,
+// which is the failure a green suite hides.
 static void ok(const char *name, int cond, const char *detail) {
-    put(cond ? "  ok    " : "  FAIL  ");
-    put(name);
-    if (!cond && detail) { put("   -- "); put(detail); }
-    put("\n");
-    if (!cond) g_fail++;
+    utest_check_detail(cond, name, detail);
 }
 
 int main(int argc, char **argv) {
+    // AND THE VERDICT TO A FILE (UTEST_VERDICT_FILE). This test has to
+    // be SPAWNED rather than `run` (the font needs a real scheduler slot
+    // -- see the top of this file), and a spawned program's console
+    // output arrives while the harness is between commands, where it is
+    // dropped. A file is an artifact the harness can ask for whenever it
+    // likes, which is this repo's own rule about waiting on the artifact
+    // rather than on the timing.
+    utest_begin("wrap_test", "uui_label word wrapping", UTEST_VERDICT_FILE);
+
     (void)argc; (void)argv;
     // Without this every measurement is zero and every check below
     // passes for the wrong reason -- see uapp.c on the font not being
     // free in ring 3.
     ugfx_font_init();
-    put("uui_label word wrapping\n");
     ok("the font loaded, so widths are real", ugfx_char_w() > 0, "char_w is 0");
 
     char line[128];
@@ -90,22 +94,5 @@ int main(int argc, char **argv) {
     ok("leading spaces are skipped", line[0] == 'i', line);
     ok("...and it still advanced", next > indented, "cursor did not move");
 
-    char msg[64];
-    snprintf(msg, sizeof msg, "%d failure(s)\n", g_fail);
-    put(msg);
-
-    // AND THE SAME VERDICT TO A FILE. This test has to be SPAWNED
-    // rather than `run` (the font needs a real scheduler slot -- see the
-    // top of this file), and a spawned program's console output arrives
-    // while the harness is between commands, where it is dropped. A file
-    // is an artifact the harness can ask for whenever it likes, which is
-    // this repo's own rule about waiting on the artifact rather than on
-    // the timing. Best effort: if /tmp is unwritable the printed line
-    // above is still there for a human.
-    int fd = sys_open(VERDICT_PATH, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
-    if (fd >= 0) {
-        sys_write(fd, msg, strlen(msg));
-        sys_close(fd);
-    }
-    return g_fail;
+    return utest_end();
 }

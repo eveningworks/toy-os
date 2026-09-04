@@ -34,21 +34,19 @@
 #include <kerrno.h>
 #include "uimg_vectors.h"
 
-static int g_fail;
+#include "lib/utest.h"
 
-static void put(const char *s) { sys_write(1, s, strlen(s)); }
-
+// The call sites here read `ok(name, cond, detail)`; the harness takes
+// the boolean first. One adapter rather than transposing every call
+// site: a transposed argument pair compiles and INVERTS the check,
+// which is the failure a green suite hides.
 static void ok(const char *name, int cond, const char *detail) {
-    char line[192];
-    snprintf(line, sizeof line, "  %s  %s%s%s\n", cond ? "ok  " : "FAIL",
-             name, (!cond && detail) ? "  -- " : "", (!cond && detail) ? detail : "");
-    put(line);
-    if (!cond) g_fail++;
+    utest_check_detail(cond, name, detail);
 }
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
-    put("uimg_test: the image decoders, against Pillow's own output\n");
+    utest_begin("uimg_test", "the image decoders, against Pillow's own output", 0);
 
     for (int i = 0; i < UIMG_VECTOR_COUNT; i++) {
         const struct uimg_vector *v = &uimg_vectors[i];
@@ -209,9 +207,5 @@ int main(int argc, char **argv) {
     uimg_fit_size(200, 100, 50, 50, UIMG_FIT_COVER, &fw, &fh);
     ok("cover fills the short axis", fw == 100 && fh == 50, "wrong cover size");
 
-    char tail[64];
-    snprintf(tail, sizeof tail, "uimg_test: %d failure(s)\n", g_fail);
-    put(tail);
-    if (g_fail == 0) put("uimg_test: all checks passed\n");
-    return g_fail;
+    return utest_end();
 }

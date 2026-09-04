@@ -26,16 +26,14 @@
 #include "ui/uui_listbox.h"
 #include "ui/uui_table.h"
 
-static int g_fail;
+#include "lib/utest.h"
 
-static void put(const char *s) { sys_write(1, s, strlen(s)); }
-
+// The call sites here read `ok(name, cond, detail)`; the harness takes
+// the boolean first. One adapter rather than transposing every call
+// site: a transposed argument pair compiles and INVERTS the check,
+// which is the failure a green suite hides.
 static void ok(const char *name, int cond, const char *detail) {
-    put(cond ? "  ok    " : "  FAIL  ");
-    put(name);
-    if (!cond && detail) { put("   -- "); put(detail); }
-    put("\n");
-    if (!cond) g_fail++;
+    utest_check_detail(cond, name, detail);
 }
 
 static void oki(const char *name, int got, int want) {
@@ -230,12 +228,9 @@ static void table_checks(void) {
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
-    put("typeahead_test: type-ahead in uui_listbox and uui_table\n");
+    utest_begin("typeahead_test", "type-ahead in uui_listbox and uui_table", 0);
     listbox_checks();
     table_checks();
 
-    char line[64];
-    snprintf(line, sizeof line, "typeahead_test: %d failure(s)\n", g_fail);
-    put(line);
-    return g_fail;
+    return utest_end();
 }

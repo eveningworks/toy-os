@@ -18,19 +18,21 @@
 #include <stdio.h>
 #include <string.h>
 
-static int fails;
+#include "lib/utest.h"
 
+// The call sites here read `check(what, ok, detail)`; the harness takes
+// the boolean first. One adapter rather than transposing a hundred call
+// sites: a transposed argument pair compiles and INVERTS the check,
+// which is the failure a green suite hides.
 static void check(const char *what, int ok, const char *detail) {
-    char line[160];
-    snprintf(line, sizeof line, "malloc_test: %s %s%s%s\n", ok ? "ok  " : "FAIL",
-             what, detail ? " -- " : "", detail ? detail : "");
-    sys_eprint(line);
-    if (!ok) fails++;
+    utest_check_detail(ok, what, detail);
 }
 
 #define N 32
 
 int main(void) {
+    utest_begin("malloc_test", "malloc, free and coalescing", UTEST_KLOG);
+
     char detail[64];
 
     // The break BEFORE anything is allocated, so the footprint reported
@@ -141,7 +143,5 @@ int main(void) {
     sys_eprint(detail);
     sys_eprint("\n");
 
-    if (fails) { sys_eprint("malloc_test: FAILED\n"); return 1; }
-    sys_eprint("malloc_test: all checks passed\n");
-    return 0;
+    return utest_end();
 }

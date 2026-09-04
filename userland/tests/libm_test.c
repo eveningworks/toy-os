@@ -27,18 +27,18 @@
 #include <math.h>
 #include "rt/sys.h"
 
-static int g_fail;
-static int g_checked;
+#include "lib/utest.h"
 
+// UTEST_QUIET, because this is a table of a couple of hundred values
+// and the count in the epilogue is the evidence. The detail is
+// formatted only for a failure.
 static void report(const char *name, double got, double want, double tol) {
-    g_checked++;
     double err;
     if (want == 0.0) err = fabs(got);
     else             err = fabs((got - want) / want);
-    if (err <= tol && !isnan(got)) return;
-    g_fail++;
-    printf("  FAIL %s: got %.17g, wanted %.17g (relative error %.3g)\n",
-           name, got, want, err);
+    utest_checkf(err <= tol && !isnan(got),
+                 "%s: got %.17g, wanted %.17g (relative error %.3g)",
+                 name, got, want, err);
 }
 
 // The ordinary bound.
@@ -50,7 +50,7 @@ static void chk2(const char *n, double got, double want) { report(n, got, want, 
 static void chkp(const char *n, double got, double want) { report(n, got, want, 1e-11); }
 
 int main(void) {
-    printf("libm_test: the transcendentals, against independently computed values\n");
+    utest_begin("libm_test", "the transcendentals, against independently computed values", UTEST_QUIET);
 
     chk1("sin", sin(0), 0);
     chk1("sin", sin(0.5), 0.47942553860420301);
@@ -173,24 +173,20 @@ int main(void) {
     //
     // Where libms actually disagree with each other, and where a
     // polynomial that is accurate in the middle says nothing.
-    if (pow(2.0, 10.0) != 1024.0) { g_fail++; printf("  FAIL pow(2,10) is not exactly 1024\n"); }
-    if (pow(0.0, 0.0) != 1.0) { g_fail++; printf("  FAIL pow(0,0) must be 1\n"); }
-    if (pow(1.0, 1.0/0.0) != 1.0) { g_fail++; printf("  FAIL pow(1,inf) must be 1\n"); }
-    if (!isnan(pow(-8.0, 0.5))) { g_fail++; printf("  FAIL a negative base with a fractional exponent must be NaN\n"); }
-    if (pow(-2.0, 3.0) != -8.0) { g_fail++; printf("  FAIL a negative base with an integer exponent must work\n"); }
-    if (!isinf(hypot(1.0/0.0, 0.0))) { g_fail++; printf("  FAIL hypot of infinity\n"); }
-    if (log(0.0) != -1.0/0.0) { g_fail++; printf("  FAIL log(0) must be -inf\n"); }
-    if (!isnan(log(-1.0))) { g_fail++; printf("  FAIL log of a negative must be NaN\n"); }
-    if (!isnan(asin(2.0))) { g_fail++; printf("  FAIL asin out of domain must be NaN\n"); }
-    if (tanh(100.0) != 1.0) { g_fail++; printf("  FAIL tanh saturates at 1\n"); }
-    if (exp(-1000.0) != 0.0) { g_fail++; printf("  FAIL exp underflows to 0\n"); }
-    if (!isinf(exp(1000.0))) { g_fail++; printf("  FAIL exp overflows to inf\n"); }
+    utest_check(!(pow(2.0, 10.0) != 1024.0), "pow(2,10) is not exactly 1024");
+    utest_check(!(pow(0.0, 0.0) != 1.0), "pow(0,0) must be 1");
+    utest_check(!(pow(1.0, 1.0/0.0) != 1.0), "pow(1,inf) must be 1");
+    utest_check(!(!isnan(pow(-8.0, 0.5))), "a negative base with a fractional exponent must be NaN");
+    utest_check(!(pow(-2.0, 3.0) != -8.0), "a negative base with an integer exponent must work");
+    utest_check(!(!isinf(hypot(1.0/0.0, 0.0))), "hypot of infinity");
+    utest_check(!(log(0.0) != -1.0/0.0), "log(0) must be -inf");
+    utest_check(!(!isnan(log(-1.0))), "log of a negative must be NaN");
+    utest_check(!(!isnan(asin(2.0))), "asin out of domain must be NaN");
+    utest_check(!(tanh(100.0) != 1.0), "tanh saturates at 1");
+    utest_check(!(exp(-1000.0) != 0.0), "exp underflows to 0");
+    utest_check(!(!isinf(exp(1000.0))), "exp overflows to inf");
     double ip = 0;
-    if (modf(-2.5, &ip) != -0.5 || ip != -2.0) { g_fail++; printf("  FAIL modf keeps the sign\n"); }
-    g_checked += 13;
+    utest_check(!(modf(-2.5, &ip) != -0.5 || ip != -2.0), "modf keeps the sign");
 
-    printf("  %d values checked\n", g_checked);
-    if (g_fail) printf("libm_test: %d FAILURES\n", g_fail);
-    else        printf("libm_test: all checks passed\n");
-    return g_fail;
+    return utest_end();
 }

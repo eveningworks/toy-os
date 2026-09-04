@@ -34,6 +34,19 @@ off the boot path), and `kernel/include/kernel/fault_inject.h` can fail
 the next N ATA writes/reads or kmalloc calls, which is how the error
 paths get tested at all. Nothing runs tests at boot any more.
 
+**Its ring-3 counterpart is `/tests`, and those report through
+`userland/lib/utest.h`.** A KTEST runs inside the kernel; a `/tests`
+program is an ordinary ring-3 binary that checks something the kernel
+cannot see from the inside -- that the C library links, that the shared
+line editor was compiled twice, that a widget rings itself when focused.
+Write one as `utest_begin(name, title, flags)`, a `utest_check(ok, what)`
+per assertion, and `return utest_end();`. The epilogue is one line in one
+shape, `<name>: all checks passed (N checks)` or `<name>: FAILED -- N of
+M checks`, which is what `tools/usertest_run.py` matches on by default --
+so a new test needs a row naming only itself, not a string to keep in
+sync. Zero checks is a failure, not a pass. `docs/conventions/build.md`
+has the flags and the traps.
+
 **`tools/vm.py` -- start a VM once, then talk to it in TEXT.** This is
 the fastest path for anything that isn't about pixels:
 

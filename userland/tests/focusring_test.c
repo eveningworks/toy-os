@@ -36,37 +36,24 @@
 #include "ui/uui_textbox.h"
 #include "ui/uui_tree.h"
 
-#define VERDICT_PATH "/tmp/focusring_test.out"
 #define SURF_W 320
 #define SURF_H 240
 
 static uint32_t g_px[SURF_W * SURF_H];
 static struct ugfx_surface g_surf;
-static int g_fail;
+// UTEST_VERDICT_FILE carries the per-check lines rather than only the
+// count -- a spawned program's console output arrives while the harness
+// is between commands and is dropped, so "0 failure(s)" alone would be
+// the only thing anyone could ever read back. See wrap_test.c on why
+// the file exists at all.
+#include "lib/utest.h"
 
-// Everything printed is also kept, so the VERDICT FILE carries the
-// per-check lines rather than only the count -- a spawned program's
-// console output arrives while the harness is between commands and is
-// dropped, so "0 failure(s)" alone would be the only thing anyone could
-// ever read back. See wrap_test.c on why the file exists at all.
-static char g_log[2048];
-static int g_log_len;
-
-static void put(const char *s) {
-    sys_write(1, s, strlen(s));
-    int n = (int)strlen(s);
-    if (g_log_len + n < (int)sizeof g_log) {
-        memcpy(g_log + g_log_len, s, n);
-        g_log_len += n;
-    }
-}
-
+// The call sites here read `ok(name, cond, detail)`; the harness takes
+// the boolean first. One adapter rather than transposing every call
+// site: a transposed argument pair compiles and INVERTS the check,
+// which is the failure a green suite hides.
 static void ok(const char *name, int cond, const char *detail) {
-    put(cond ? "  ok    " : "  FAIL  ");
-    put(name);
-    if (!cond && detail) { put("   -- "); put(detail); }
-    put("\n");
-    if (!cond) g_fail++;
+    utest_check_detail(cond, name, detail);
 }
 
 // The accent pixels' bounding box. Returns the count; `h` is the box's
@@ -103,8 +90,7 @@ static void check(const char *name, const struct uui_widget_ops *ops, void *w) {
     snprintf(detail, sizeof detail, "%s: %d accent px unfocused", name, off);
     ok(name, off == 0 && on > 0, detail);
     if (off != 0 || on <= 0) {
-        snprintf(detail, sizeof detail, "  (%s: unfocused %d, focused %d)", name, off, on);
-        put(detail); put("\n");
+        utest_notef("(%s: unfocused %d, focused %d)", name, off, on);
     }
     (void)h_off;
 }
@@ -128,7 +114,7 @@ int main(int argc, char **argv) {
     g_surf.w = SURF_W;
     g_surf.h = SURF_H;
 
-    put("focus indicators\n");
+    utest_begin("focusring_test", "focus indicators", UTEST_VERDICT_FILE);
     ok("the font loaded, so metrics are real", ugfx_char_w() > 0, "char_w is 0");
 
     char detail[96];
@@ -242,15 +228,5 @@ int main(int argc, char **argv) {
              h, uui_sidebar_row_h(&sb));
     ok("uui_sidebar rings the selected ROW", h == uui_sidebar_row_h(&sb), detail);
 
-    char msg[64];
-    snprintf(msg, sizeof msg, "%d failure(s)\n", g_fail);
-    put(msg);
-
-    // The verdict to a file as well: this test has to be SPAWNED (the
-    // font needs a real scheduler slot), and a spawned program's console
-    // output arrives while the harness is between commands. See
-    // wrap_test.c.
-    int fd = sys_open(VERDICT_PATH, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
-    if (fd >= 0) { sys_write(fd, g_log, g_log_len); sys_close(fd); }
-    return g_fail;
+    return utest_end();
 }

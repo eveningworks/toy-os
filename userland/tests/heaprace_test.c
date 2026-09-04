@@ -47,18 +47,9 @@
 #include <pthread.h>
 #include "rt/sys.h"
 
-#define VERDICT_PATH "/tmp/heaprace_test.out"
 
-static FILE *g_log;
-static void say(const char *s) { fputs(s, stdout); if (g_log) fputs(s, g_log); }
 
-static int g_fail;
-static void check(int ok, const char *what) {
-    say(ok ? "  ok   " : "  FAIL ");
-    say(what);
-    say("\n");
-    if (!ok) g_fail++;
-}
+#include "lib/utest.h"
 
 #define WORKERS 4
 #define ROUNDS  200
@@ -130,8 +121,7 @@ static void *worker_main(void *arg) {
 }
 
 int main(void) {
-    g_log = fopen(VERDICT_PATH, "w");
-    say("heaprace_test: malloc/free from several threads at once\n");
+    utest_begin("heaprace_test", "malloc/free from several threads at once", UTEST_VERDICT_FILE);
 
     // Everything this needs is allocated BEFORE the workers start, so
     // the harness itself is not part of what is being measured.
@@ -147,14 +137,14 @@ int main(void) {
         if (!frag[i]) frag_ok = 0;
     }
     for (int i = 0; i < FRAGMENT_BLOCKS; i += 2) { free(frag[i]); frag[i] = NULL; }
-    check(frag_ok, "the fixture built a long, fragmented free list");
+    utest_check(frag_ok, "the fixture built a long, fragmented free list");
 
     uint64_t brk_before = (uint64_t)(uintptr_t)sys_sbrk(0);
 
     int started = 0;
     for (int i = 0; i < WORKERS; i++)
         if (pthread_create(&t[i], NULL, worker_main, &w[i]) == 0) started++;
-    check(started == WORKERS, "four threads started");
+    utest_check(started == WORKERS, "four threads started");
 
     unsigned long long t0 = sys_monotonic_ns();
     for (int i = 0; i < started; i++) pthread_join(t[i], NULL);
@@ -167,21 +157,18 @@ int main(void) {
         nulls        += w[i].nulls;
     }
 
-    static char msg[128];
     // The ELAPSED TIME is reported because it is what says whether the
     // walk was long enough to be interruptible at all: a run that
     // finishes in milliseconds never gave the timer a chance.
-    snprintf(msg, sizeof msg,
-             "       %d allocations in %u ms, %d mismatches, %d nulls\n",
-             total_rounds, (unsigned)ms, mismatches, nulls);
-    say(msg);
+    utest_notef("%d allocations in %u ms, %d mismatches, %d nulls",
+                total_rounds, (unsigned)ms, mismatches, nulls);
 
-    check(total_rounds == WORKERS * ROUNDS, "every round completed");
-    check(nulls == 0, "no allocation was refused");
+    utest_check(total_rounds == WORKERS * ROUNDS, "every round completed");
+    utest_check(nulls == 0, "no allocation was refused");
     // THE LOAD-BEARING CHECK: a corrupted free list hands two threads
     // memory that overlaps, and the address-derived pattern is what
     // notices.
-    check(mismatches == 0, "no thread's block held another thread's bytes");
+    utest_check(mismatches == 0, "no thread's block held another thread's bytes");
 
     // The list still works AFTER the hammering -- a corruption that did
     // not overlap anything live can still have left the list unwalkable,
@@ -193,24 +180,17 @@ int main(void) {
         if (!big[i]) alloc_ok = 0;
     }
     for (int i = 0; i < 16; i++) free(big[i]);
-    check(alloc_ok, "the heap still serves large allocations afterwards");
+    utest_check(alloc_ok, "the heap still serves large allocations afterwards");
 
     // Freed memory is REUSED rather than the break marching upward
     // forever: with the list intact, 600 allocations of at most 1 KiB
     // do not need much beyond what the first few rounds claimed.
     uint64_t brk_after = (uint64_t)(uintptr_t)sys_sbrk(0);
     uint64_t grew = brk_after - brk_before;
-    snprintf(msg, sizeof msg, "       the break moved %u KiB\n",
-             (unsigned)(grew / 1024));
-    say(msg);
-    check(grew < 1024 * 1024, "the break did not run away -- blocks were reused");
+    utest_notef("the break moved %u KiB", (unsigned)(grew / 1024));
+    utest_check(grew < 1024 * 1024, "the break did not run away -- blocks were reused");
 
     for (int i = 1; i < FRAGMENT_BLOCKS; i += 2) free(frag[i]);
 
-    static char verdict[64];
-    if (g_fail) snprintf(verdict, sizeof verdict, "heaprace_test: %d FAILURES\n", g_fail);
-    else        snprintf(verdict, sizeof verdict, "heaprace_test: all checks passed\n");
-    say(verdict);
-    if (g_log) fclose(g_log);
-    return g_fail;
+    return utest_end();
 }

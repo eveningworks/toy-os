@@ -3056,12 +3056,9 @@ caller is a test.
 
 Started 2026-09-04 and stopped mid-flight for budget. What LANDED on
 main that day: `lib/usetting.h`, `lib/udate.h`, `human_size_iec()`,
-the `uui_*_height()` accessors, and `/lib/libuapp.so`. The `wm:` and
-`notepad:` branches landed the same day and are struck through below.
-What did NOT land is on one local branch, a single WIP commit made by
-a worktree agent on top of `84725d17`, UNTESTED beyond what its note
-says. **Merge it onto main, finish its list, run its tools, then
-`gui_regress.py --logs`, then `preflight.sh`.**
+the `uui_*_height()` accessors, and `/lib/libuapp.so`. **All three
+branches landed on 2026-09-04 and are struck through below.** What is
+left is the survey findings, none of them started.
 
 - [x] ~~**The `wm:` branch.**~~ LANDED 2026-09-04 as 3f559427.
   `userland/wm/tray_slider_popup.c/.h` is the shared slider flyout that
@@ -3093,28 +3090,20 @@ says. **Merge it onto main, finish its list, run its tools, then
   all 36 GUI tools including `notepad` 21/21 and `menubar` 22/22, and a
   positive control (type-ahead disabled in `uui_seek.c` reddens both new
   checks).
-- **`worktree-agent-a1adf21deefc8d3d3` (`tests:` WIP, b40a9a1f).**
-  `userland/lib/utest.h`: `utest_begin(name, title, flags)`,
-  `utest_check`/`_check_detail`/`_checkf`/`_notef`, `utest_skip`,
-  `utest_failed`, `utest_end`; reports through `sys_write()` (never
-  stdio, since some tests test stdio); flags `UTEST_VERDICT_FILE`
-  (`/tmp/<name>.out`), `UTEST_KLOG`, `UTEST_QUIET`; one epilogue shape
-  `<name>: all checks passed (N checks)` / `<name>: FAILED -- N of M
-  checks`. 13 of ~36 tests migrated (libc, cwd, errno, fd, pipefull,
-  query, stdio compiled clean; bigimage, fsgen, guard, random, stackgrow,
-  cjson edited, NOT compiled). LEFT: libc3/4/5, libm, thread, heaprace,
-  env, mmap, seek, dyn, ttf, udp, klineedit, kfmt, and the eleven
-  transposed-argument files (complete, hash, malloc, posix, signal,
-  sleep, usnd, focusring, typeahead, uimg, wrap -- their `check()` takes
-  `(what, ok, detail)`, so transpose with care). Leave alone:
-  dynlibc_test (its fprintf report IS the check), fpu, newsyscalls,
-  socket, memtest, cjson_bench, the fault tests. Then shrink
-  `usertest_run.py`'s success-string table, fix `net_test.py` ("0 failed"
-  for udp_test) and `init_test.py` ("sleep: all checks passed"), and
-  write the docs (`conventions/build.md` + CLAUDE.md index,
-  `testing.md`, `tools.md`). Run `usertest_run`, `faulttest_run`,
-  `ktest_run`, and a positive control (break one migrated check, see
-  the summary name it).
+- [x] ~~**The `tests:` branch.**~~ LANDED 2026-09-04. `userland/lib/utest.h`
+  is the harness every self-checking `/tests` program reports through,
+  and all 38 are migrated: one banner, one line per check, one epilogue
+  in one shape. `UTEST_VERDICT_FILE` replaces the hand-rolled
+  `/tmp/<name>.out` seven tests carried, and STREAMS rather than
+  buffering, so a test that dies part-way leaves the lines it reached.
+  `usertest_run.py`'s table went from a success string per test to 28
+  rows that just say `None`; `net_test.py` and `init_test.py` follow the
+  new epilogue. Where a test's own `check()` took its arguments in the
+  other order, it keeps a three-line adapter rather than having its call
+  sites transposed -- a transposed pair compiles and INVERTS the check.
+  Verified: usertest 38/38, faulttest 4/4, ktest 636/0, and a positive
+  control (one check in `libc3_test` broken; the epilogue names it and
+  reports 1 of 43).
 
 **Smaller survey findings, not started** (file:line as of that day):
 `start_menu.c:174-252` and `context_menu.c:76-98` hand-draw a vertical

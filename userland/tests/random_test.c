@@ -19,38 +19,31 @@
 #include <stdio.h>
 #include <string.h>
 
-static int failures;
-
-static void check(int ok, const char *what) {
-    sys_print(ok ? "  ok   " : "  FAIL ");
-    sys_print(what);
-    sys_print("\n");
-    if (!ok) failures++;
-}
+#include "lib/utest.h"
 
 int main(void) {
-    sys_print("random_test: SYS_GETRANDOM\n");
+    utest_begin("random_test", "SYS_GETRANDOM", 0);
 
     // --- fills exactly, and not one byte more ---------------------
     unsigned char buf[64];
     memset(buf, 0xAA, sizeof buf);
     int n = sys_getrandom(buf + 8, 32);
-    check(n == 32, "returns the requested count");
+    utest_check(n == 32, "returns the requested count");
 
     int guard_ok = 1;
     for (int i = 0; i < 8; i++) if (buf[i] != 0xAA) guard_ok = 0;
     for (int i = 40; i < 64; i++) if (buf[i] != 0xAA) guard_ok = 0;
-    check(guard_ok, "wrote nothing outside the requested range");
+    utest_check(guard_ok, "wrote nothing outside the requested range");
 
     int any_set = 0;
     for (int i = 8; i < 40; i++) if (buf[i] != 0xAA) any_set = 1;
-    check(any_set, "actually wrote into the buffer");
+    utest_check(any_set, "actually wrote into the buffer");
 
     // --- two calls differ ------------------------------------------
     unsigned char a[32], b[32];
     sys_getrandom(a, sizeof a);
     sys_getrandom(b, sizeof b);
-    check(memcmp(a, b, sizeof a) != 0, "two calls return different bytes");
+    utest_check(memcmp(a, b, sizeof a) != 0, "two calls return different bytes");
 
     // A buffer that came back all-zero is the RDRAND-failure value and
     // also what a kernel that validated the pointer but forgot to fill
@@ -58,17 +51,12 @@ int main(void) {
     // differ" would not catch a source stuck at zero on both.
     int all_zero = 1;
     for (unsigned i = 0; i < sizeof a; i++) if (a[i]) all_zero = 0;
-    check(!all_zero, "output is not all zero");
+    utest_check(!all_zero, "output is not all zero");
 
     // --- refusals ---------------------------------------------------
-    check(sys_getrandom((void *)0x10, 16) == -1, "refuses an unmapped pointer");
-    check(sys_getrandom(buf, 100000) == -1, "refuses a count over the maximum");
-    check(sys_getrandom(buf, 0) == 0, "a zero-length request is a no-op, not an error");
+    utest_check(sys_getrandom((void *)0x10, 16) == -1, "refuses an unmapped pointer");
+    utest_check(sys_getrandom(buf, 100000) == -1, "refuses a count over the maximum");
+    utest_check(sys_getrandom(buf, 0) == 0, "a zero-length request is a no-op, not an error");
 
-    if (failures) {
-        sys_print("random_test: FAILED\n");
-        return 1;
-    }
-    sys_print("random_test: all checks passed\n");
-    return 0;
+    return utest_end();
 }

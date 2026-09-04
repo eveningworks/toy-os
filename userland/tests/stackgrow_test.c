@@ -32,14 +32,7 @@
 #include <stdio.h>
 #include <string.h>
 
-static int failures;
-
-static void check(int ok, const char *what) {
-    sys_print(ok ? "  ok   " : "  FAIL ");
-    sys_print(what);
-    sys_print("\n");
-    if (!ok) failures++;
-}
+#include "lib/utest.h"
 
 // Each frame's own bytes, from its own address. Kept invertible so a
 // mismatch could in principle say whose frame the memory holds.
@@ -70,9 +63,8 @@ static const void *descend(int depth) {
     // the deeper calls did to the stack below it.
     for (int i = 0; i < FRAME_BYTES; i++) {
         if (frame[i] != pattern_for(frame, i)) {
-            failures++;
-            printf("  FAIL  frame at %lx corrupted at byte %d\n",
-                   (unsigned long)(unsigned long long)(const void *)frame, i);
+            utest_checkf(0, "frame at %lx corrupted at byte %d",
+                         (unsigned long)(unsigned long long)(const void *)frame, i);
             break;
         }
     }
@@ -80,7 +72,7 @@ static const void *descend(int depth) {
 }
 
 int main(void) {
-    sys_print("stackgrow_test: the user stack grows past its initial pages\n");
+    utest_begin("stackgrow_test", "the user stack grows past its initial pages", 0);
 
     volatile unsigned char top_marker[64];
     for (int i = 0; i < 64; i++) top_marker[i] = pattern_for(top_marker, i);
@@ -95,39 +87,37 @@ int main(void) {
 
     unsigned long span = (unsigned long)((const unsigned char *)top_marker
                                           - (const unsigned char *)deepest);
-    printf("  reached %lu KiB below the entry frame (%lx .. %lx)\n",
+    utest_notef("reached %lu KiB below the entry frame (%lx .. %lx)",
            span / 1024,
            (unsigned long)(unsigned long long)deepest,
            (unsigned long)(unsigned long long)top_marker);
 
     // THE CHECK THE OLD KERNEL COULD NOT PASS. Four pages is 16 KiB, so
     // anything past that was unmapped address space a moment ago.
-    check(span > 64u * 1024u, "the stack reached more than 64 KiB deep");
-    check(span > 1024u * 1024u, "the stack reached more than 1 MiB deep");
+    utest_check(span > 64u * 1024u, "the stack reached more than 64 KiB deep");
+    utest_check(span > 1024u * 1024u, "the stack reached more than 1 MiB deep");
 
     // The entry frame is the one furthest from anything that grew. If
     // growth mapped a page over it, this is what notices.
     int top_ok = 1;
     for (int i = 0; i < 64; i++)
         if (top_marker[i] != pattern_for(top_marker, i)) top_ok = 0;
-    check(top_ok, "the entry frame survived the descent");
+    utest_check(top_ok, "the entry frame survived the descent");
 
     // Growth must not have handed the stack pages the HEAP is using.
     // Anything sbrk returns has to sit below everything the recursion
     // touched -- if the two regions ever met, this is the cheap way to
     // see it, and it costs one syscall.
     void *heap = sys_sbrk(4096);
-    check(heap != (void *)-1, "sbrk still works after the stack grew");
+    utest_check(heap != (void *)-1, "sbrk still works after the stack grew");
     if (heap != (void *)-1) {
-        check((const void *)heap < deepest,
+        utest_check((const void *)heap < deepest,
               "the heap is still below the deepest stack page");
         // Writing to it is the half that would corrupt rather than
         // merely look wrong, the same reason guard_test.c memsets.
         memset(heap, 0xA5, 4096);
-        check(top_ok, "the entry frame survived a heap write");
+        utest_check(top_ok, "the entry frame survived a heap write");
     }
 
-    if (failures == 0) sys_print("stackgrow_test: all checks passed\n");
-    else               printf("stackgrow_test: %d failure(s)\n", failures);
-    return failures ? 1 : 0;
+    return utest_end();
 }

@@ -25,8 +25,7 @@
 #include <stdio.h>
 #include "lib/ucomplete.h"
 
-static int g_fail;
-static void put(const char *s) { sys_write(1, s, strlen(s)); }
+#include "lib/utest.h"
 
 static struct completion_result g_r;
 
@@ -40,12 +39,12 @@ static int has(const char *want) {
     return 0;
 }
 
-static void check(const char *name, int ok, const char *detail) {
-    char msg[200];
-    snprintf(msg, sizeof msg, "%s %s%s%s\n", ok ? "ok  " : "FAIL", name,
-             detail && detail[0] ? " -- " : "", detail ? detail : "");
-    put(msg);
-    if (!ok) g_fail++;
+// The call sites here read `check(what, ok, detail)`; the harness takes
+// the boolean first. One adapter rather than transposing a hundred call
+// sites: a transposed argument pair compiles and INVERTS the check,
+// which is the failure a green suite hides.
+static void check(const char *what, int ok, const char *detail) {
+    utest_check_detail(ok, what, detail);
 }
 
 // The fixture: a directory and a FILE sharing a prefix, which is what
@@ -67,7 +66,7 @@ static void fixture_remove(void) {
 }
 
 int main(void) {
-    put("complete_test: the shared completion engine, built for ring 3\n");
+    utest_begin("complete_test", "the shared completion engine, built for ring 3", 0);
     fixture_remove();   // a previous run's leftovers would change the counts
     fixture_make();
 
@@ -128,8 +127,5 @@ int main(void) {
 
     fixture_remove();
 
-    char tail[80];
-    snprintf(tail, sizeof tail, "complete_test: %d failure(s)\n", g_fail);
-    put(tail);
-    return g_fail;
+    return utest_end();
 }

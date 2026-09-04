@@ -25,49 +25,23 @@ extern int hello_dl_counter;
 // What the LIBRARY calls back into -- must survive --export-dynamic.
 int dyn_test_callback(int x) { return x + 100; }
 
-static int g_fail;
-static char g_log[2048];
-static int g_len;
-
-static void put(const char *s) {
-    sys_write(1, s, strlen(s));
-    int n = (int)strlen(s);
-    if (g_len + n < (int)sizeof g_log) {
-        memcpy(g_log + g_len, s, (size_t)n);
-        g_len += n;
-    }
-}
-
-static void flush_verdict(void) {
-    int fd = sys_open("/tmp/dyn_test.out",
-                      SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
-    if (fd < 0) return;
-    sys_write(fd, g_log, (uint64_t)g_len);
-    sys_close(fd);
-}
-
-static void check(int ok, const char *what) {
-    put(ok ? "  ok   " : "  FAIL ");
-    put(what);
-    put("\n");
-    if (!ok) g_fail++;
-}
+#include "lib/utest.h"
 
 int main(void) {
-    put("dyn_test: dynamic linking through /lib/ld-toy.so\n");
+    utest_begin("dyn_test", "dynamic linking through /lib/ld-toy.so", UTEST_VERDICT_FILE);
 
-    check(hello_dl_add(2, 40) == 42, "exe calls a library function (PLT)");
-    check(hello_dl_counter == 41, "exe reads a library global (GOT)");
+    utest_check(hello_dl_add(2, 40) == 42, "exe calls a library function (PLT)");
+    utest_check(hello_dl_counter == 41, "exe reads a library global (GOT)");
     hello_dl_counter++;
-    check(hello_dl_counter == 42, "...and writes it");
-    check(hello_dl_via_table(0, 10) == 11 && hello_dl_via_table(1, 10) == 12,
+    utest_check(hello_dl_counter == 42, "...and writes it");
+    utest_check(hello_dl_via_table(0, 10) == 11 && hello_dl_via_table(1, 10) == 12,
           "library-internal pointer table (RELATIVE relocs)");
-    check(hello_dl_callback(5) == 210,
+    utest_check(hello_dl_callback(5) == 210,
           "library calls back into the executable");
 
     errno = 0;
     void *bad = sys_mmap((void *)0, 0, 1, 0x22, -1, 0);
-    check(bad == (void *)-1 && sys_errno() == EINVAL,
+    utest_check(bad == (void *)-1 && sys_errno() == EINVAL,
           "static tolibc + TLS errno still work in a dynamic binary");
 
     // The library shows up in this process's own map as a FILE region.
@@ -81,17 +55,8 @@ int main(void) {
                 strcmp(q.path, "/lib/libhello.so") == 0)
                 found = 1;
         }
-        check(found, "pmap shows /lib/libhello.so mapped");
+        utest_check(found, "pmap shows /lib/libhello.so mapped");
     }
 
-    if (g_fail) {
-        char m[48];
-        snprintf(m, sizeof m, "dyn_test: %d FAILED\n", g_fail);
-        put(m);
-        flush_verdict();
-        return g_fail;
-    }
-    put("dyn_test: all checks passed\n");
-    flush_verdict();
-    return 0;
+    return utest_end();
 }

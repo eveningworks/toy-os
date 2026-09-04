@@ -464,12 +464,12 @@ def main():
         out = ""
         while time.time() < deadline:
             out = vm.sh("dmesg")
-            if "sleep: all checks passed" in out or "sleep: FAILED" in out:
+            if "sleep_test: all checks passed" in out or "sleep_test: FAILED" in out:
                 break
             time.sleep(0.5)
-        bad = [l for l in out.splitlines() if "sleep: FAIL" in l]
+        bad = [l for l in out.splitlines() if "sleep_test: FAIL" in l]
         check("SYS_SLEEP passes its own checks",
-              "sleep: all checks passed" in out and not bad,
+              "sleep_test: all checks passed" in out and not bad,
               bad[0].strip()[:90] if bad else "")
 
         # --- the desktop comes back without the shell -----------------

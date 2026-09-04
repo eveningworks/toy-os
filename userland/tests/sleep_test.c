@@ -12,14 +12,14 @@
 #include "rt/sys.h"
 #include <stdio.h>
 
-static int fails = 0;
+#include "lib/utest.h"
 
+// The call sites here read `check(what, ok, detail)`; the harness takes
+// the boolean first. One adapter rather than transposing a hundred call
+// sites: a transposed argument pair compiles and INVERTS the check,
+// which is the failure a green suite hides.
 static void check(const char *what, int ok, const char *detail) {
-    char line[160];
-    snprintf(line, sizeof line, "sleep: %s %s%s%s\n", ok ? "ok  " : "FAIL",
-             what, detail ? " -- " : "", detail ? detail : "");
-    sys_eprint(line);
-    if (!ok) fails++;
+    utest_check_detail(ok, what, detail);
 }
 
 // One tick is 10 ms at the PIT's 100 Hz, and a sleep is rounded UP to
@@ -35,6 +35,8 @@ static unsigned long long slept_ms(int ms) {
 }
 
 int main(void) {
+    utest_begin("sleep_test", "SYS_SLEEP", UTEST_KLOG);
+
     char detail[64];
 
     // Never EARLY. This is the assertion a broken deadline fails: a
@@ -63,10 +65,5 @@ int main(void) {
     for (int i = 0; i < 5; i++) if (sys_sleep_ms(10) != 0) ok = 0;
     check("five sleeps in a row all return", ok, 0);
 
-    if (fails) {
-        sys_eprint("sleep: FAILED\n");
-        return 1;
-    }
-    sys_eprint("sleep: all checks passed\n");
-    return 0;
+    return utest_end();
 }

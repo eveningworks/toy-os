@@ -59,8 +59,12 @@ VM = os.path.join(REPO, "tools", "vm.py")
 # asks for the kernel's glyph tables through SYS_WIN_REQUEST) gets
 # refused there and would measure nothing. Such a test is spawned as a
 # real process instead, which costs the exit code, so its own printed
-# verdict has to carry the whole assertion. That is why wrap_test prints
-# "0 failure(s)" rather than only exiting 0.
+# verdict has to carry the whole assertion -- which is what
+# UTEST_VERDICT_FILE is for (userland/lib/utest.h).
+#
+# `None` for the two string lists means the harness's own epilogue,
+# which every migrated test prints in one shape. State them only where a
+# test deviates.
 #
 # A FORBIDDEN substring is matched only against lines the test itself
 # printed -- lines carrying its own name -- never against everything the
@@ -71,8 +75,7 @@ VM = os.path.join(REPO, "tools", "vm.py")
 # newsyscalls_test as FAILED on a run whose captured output ended with
 # "all phases passed" and exit code 0.
 TESTS = [
-    ("libc_test", 0,
-     ["libc_test: all checks passed"], ["FAIL"]),
+    ("libc_test", 0, None, None),
     # The UDP socket API, with no network at all: binding, the ephemeral
     # range, a port refused twice, and what each protocol will not
     # accept. What it CANNOT cover is a datagram reaching anything --
@@ -86,14 +89,13 @@ TESTS = [
     # block at all -- the kernel correctly gives it the non-blocking
     # answer, and both checks measure nothing there. Same reason
     # cputime_test is spawned.
-    ("udp_test", None,
-     ["0 failed"], ["FAIL"]),
+    ("udp_test", None, None, None),
     # Tab completion's engine, built for ring 3. The KTESTs cover the
     # same source through the KERNEL shell's environment and would pass
     # whether or not a byte of it linked into libuapp.a -- this is the
     # link, plus userland/lib/ucomplete.c's own filesystem hooks.
     ("complete_test", 0,
-     ["complete_test: 0 failure(s)"], ["FAIL"]),
+     None, None),
     # The checksum table, in the ring its only caller runs in.
     # tools/hash_hostcheck.py sweeps the same source far harder against
     # hashlib and zlib, and kernel/lib/kcrc_test.c covers the CRC in ring
@@ -104,13 +106,13 @@ TESTS = [
     # one by name ("isn't a valid ELF64 executable"). Same reason
     # dyn_test and dynlibc_test are spawned.
     ("hash_test", None,
-     ["hash_test: 0 failure(s)"], ["FAIL"]),
+     None, None),
     # uui_label's word wrapping. Its load-bearing check is that a word
     # wider than the line is BROKEN rather than refused: refusing it
     # returns the same cursor and loops forever inside a draw call,
     # which hangs the compositor rather than drawing something wrong.
     ("wrap_test", None,
-     ["0 failure(s)"], ["FAIL"]),
+     None, None),
     # A focus indicator on every widget that accepts focus. Its
     # load-bearing checks are the ROW ones: a ring round the whole box
     # and a ring on the selected row both put accent pixels on the
@@ -119,14 +121,14 @@ TESTS = [
     # a one-sided check passes on a control that rings itself
     # unconditionally.
     ("focusring_test", None,
-     ["0 failure(s)"], ["FAIL"]),
+     None, None),
     # Type-ahead in uui_listbox and uui_table. Its load-bearing checks
     # are the SORTED ones: a table's rows are pulled and its app indices
     # are not the order on screen, so a search walking app order cycles
     # somewhere the user is not looking while every single-match check
     # still passes. The fixture is stored in reverse for that reason.
     ("typeahead_test", 0,
-     ["typeahead_test: 0 failure(s)"], ["FAIL"]),
+     None, None),
     # The audio decode path -- the half of lib/usnd.h that needs no
     # sound card. Playback is judged on the HOST instead
     # (tools/audio_test.py records what the device emitted), so these
@@ -136,15 +138,14 @@ TESTS = [
     # lies about its length, and a float WAV that must be refused as
     # UNPLAYABLE rather than as broken.
     ("usnd_test", 0,
-     ["usnd_test: 0 failure(s)"], ["FAIL"]),
+     None, None),
     # Error codes reaching ring 3. Its load-bearing check is that a full
     # descriptor table and a missing file are DIFFERENT answers, which
     # needs a process that has really run out of fds -- see the file.
     ("errno_test", 0,
      ["errno_test: all checks passed",
       "ENOENT and EMFILE are distinct: yes"], ["FAIL"]),
-    ("fpu_test", 0,
-     ["fpu_test: all checks passed"], ["FAIL"]),
+    ("fpu_test", 0, None, None),
     # tolibc's <regex.h>. The engine's own correctness is checked
     # against the SAME case table on the host, and against glibc as an
     # independent oracle (tools/regex_hostcheck.py) -- what this run
@@ -156,13 +157,12 @@ TESTS = [
     # The shared line editor's SECOND compilation. Same gap libc_test
     # covers: klineedit.c has KTESTs, and they would pass whether or not
     # ring 3 could link a byte of it.
-    ("klineedit_test", 0,
-     ["klineedit_test: all checks passed"], ["FAIL"]),
+    ("klineedit_test", 0, None, None),
     # The SECOND BUILD of the formatter, not its logic -- the KTEST
     # beside it runs the identical cases in ring 0. What this pins is
     # that libc.a has the same kfmt at all, which is the gap a
     # kernel-only include in the shared half opens silently.
-    ("kfmt_test", 0, ["cases passed"], ["FAIL"]),
+    ("kfmt_test", 0, None, None),
     # The TrueType rasterizer's SECOND compilation, and the same gap
     # klineedit_test covers: kernel/lib/ttf.c has KTESTs, and every one
     # of them would pass whether or not ring 3 could link a byte of it.
@@ -176,8 +176,7 @@ TESTS = [
      ["filetest: round trip OK"], []),
     ("write_test", 0,
      ["Hello from ring 3"], []),
-    ("random_test", 0,
-     ["random_test: all checks passed"], ["FAIL"]),
+    ("random_test", 0, None, None),
     # Takes every byte SYS_SBRK will give (~14 MiB), writes an
     # address-derived pattern and reads it back, so it also asserts the
     # heap bound holds -- "sbrk refused" is a REQUIRED line, not an
@@ -188,43 +187,34 @@ TESTS = [
     # out. The old kernel mapped four pages eagerly and died on the
     # guard below them, so the depth line is the assertion -- see the
     # file's note on why no KTEST can cover this.
-    ("stackgrow_test", 0,
-     ["stackgrow_test: all checks passed"], ["FAIL"]),
+    ("stackgrow_test", 0, None, None),
     # A 4 MiB image, four times the ceiling userland/rt/link.ld used to
     # ASSERT against, plus the aliasing check that ceiling existed to
     # make unnecessary. That it LINKS is half the test.
-    ("bigimage_test", 0,
-     ["bigimage_test: all checks passed"], ["FAIL"]),
-    ("guard_test", 0,
-     ["guard_test: all checks passed"], ["FAIL"]),
+    ("bigimage_test", 0, None, None),
+    ("guard_test", 0, None, None),
     # malloc/free in ring 3 -- the kernel's own allocator over sbrk.
     # Its coalescing and reuse checks are measured through sbrk(0), an
     # independent path from the allocator's own bookkeeping.
-    ("malloc_test", 0,
-     ["malloc_test: all checks passed"], ["FAIL"]),
+    ("malloc_test", 0, None, None),
     # mmap/munmap: the arena, file backing, MAP_FIXED, the split, and
     # the 16-region table bound. Address-derived patterns (memtest.c's
     # reason); the fault-fatal cases are deliberately absent here.
     # Spawned: SYS_MMAP needs a scheduler slot to own the mappings, and
     # `run` is the legacy loader, which has none.
-    ("mmap_test", None,
-     ["mmap_test: all checks passed"], ["FAIL"]),
+    ("mmap_test", None, None, None),
     # The first DYNAMIC executable: /lib/ld-toy.so loads libhello.so,
     # applies every relocation class, and jumps to the real entry.
     # Spawned twice over: dynamic needs PT_INTERP, which the legacy
     # `run` loader refuses by design.
-    ("dyn_test", None,
-     ["dyn_test: all checks passed"], ["FAIL"]),
+    ("dyn_test", None, None, None),
     # tolibc AS the shared library: no libc.a in the binary at all.
-    ("dynlibc_test", None,
-     ["dynlibc_test: all checks passed"], ["FAIL"]),
-    ("fsgen_test", 0,
-     ["fsgen_test: all checks passed"], ["FAIL"]),
+    ("dynlibc_test", None, None, None),
+    ("fsgen_test", 0, None, None),
     # lseek/fstat/O_APPEND. Its pattern is POSITION-DERIVED, so a seek
     # landing at the wrong offset reads the wrong letter -- a file of
     # identical bytes cannot tell a working seek from a dead one.
-    ("seek_test", None,
-     ["seek_test: all checks passed"], ["FAIL"]),
+    ("seek_test", None, None, None),
     # The C library's stream layer. Two of its required lines are load-
     # bearing and neither is the verdict: "atexit:BA" can only appear if
     # exit() ran the handlers in LIFO order AND flushed an unterminated
@@ -236,8 +226,7 @@ TESTS = [
     # post-sign position for a failed parse (both pointers are equal for
     # that input), and nothing else in the file can see whether longjmp
     # restored rsp, because it also restores rbp. See the test's header.
-    ("libc3_test", 0,
-     ["libc3_test: all checks passed"], ["FAIL"]),
+    ("libc3_test", 0, None, None),
     # Stage 4: %f/%e/%g, strtod and math.h. Asserted as formatted TEXT
     # against literals, since that is the only thing a printf caller can
     # observe -- and the accuracy limit is real (printf_float.c), so
@@ -248,8 +237,7 @@ TESTS = [
     # supported; this one was written years before the OS existed. Its
     # value checks are load-bearing -- a broken strtod still produces
     # VALID JSON, so "it parsed" would measure nothing.
-    ("cjson_test", 0,
-     ["cjson_test: all checks passed"], ["FAIL"]),
+    ("cjson_test", 0, None, None),
     # tolibc's <math.h> transcendentals, against values generated by the
     # host's Python rather than by running toy-os. 405 checks, including
     # identities -- but only where they are WELL CONDITIONED, which cost
@@ -258,33 +246,27 @@ TESTS = [
     # single process can make: that a CHILD inherits. Spawned rather
     # than `run` because the parent blocks reading the child's pipe and
     # the legacy loader has no scheduler slot to block on.
-    ("env_test", None,
-     ["env_test: all checks passed"], ["FAIL"]),
-    ("libm_test", 0,
-     ["libm_test: all checks passed"], ["FAIL"]),
-    ("libc4_test", 0,
-     ["libc4_test: all checks passed"], ["FAIL"]),
+    ("env_test", None, None, None),
+    ("libm_test", 0, None, None),
+    ("libc4_test", 0, None, None),
     # Stage 5: time_t, struct tm, mktime, strftime. Every date is a
     # FIXED known one -- nothing asserts against the current clock, and
     # every expected value was checked against the host's Python
     # datetime rather than against the code under test.
-    ("libc5_test", 0,
-     ["libc5_test: all checks passed"], ["FAIL"]),
+    ("libc5_test", 0, None, None),
     ("stdio_test", 0,
      ["stdio_test: all checks passed", "atexit:BA"], ["FAIL"]),
     # SYS_QUERY from ring 3. Runs fine under `run`: it spawns nothing and
     # waits for nothing, so the legacy loader's missing scheduler slot
     # costs it nothing.
-    ("query_test", 0,
-     ["query_test: all checks passed"], ["FAIL"]),
+    ("query_test", 0, None, None),
     # The JPEG decoder in the ring it runs in. Its reference pixels are
     # LIBJPEG's, recorded by tools/gen_imgdata.py -- a decoder compared
     # against its own output is self-consistent, which a decoder with a
     # wrong IDCT constant also is. The breadth (182 images across every
     # subsampling and quality) is tools/uimg_hostcheck.py's job; this one
     # proves the same .c file works on this heap, in a real process.
-    ("uimg_test", 0,
-     ["uimg_test: all checks passed"], ["FAIL"]),
+    ("uimg_test", 0, None, None),
     # Not a self-checker: it exists to prove an exit code survives the
     # round trip out of ring 3, so the CODE is the whole assertion.
     ("exit_test", 42, [], []),
@@ -459,6 +441,16 @@ def main():
         results = []
         for name, want_code, want, forbid in selected:
             spawned = want_code is None
+            # `None` means the harness's own epilogue (userland/lib/utest.h),
+            # which every migrated test prints in one shape. A row states
+            # its strings only where it deviates -- a test that reports
+            # something else, or that must be judged on a second line as
+            # well. That is what took this table from a per-test string
+            # each to a handful of exceptions.
+            if want is None:
+                want = [f"{name}: all checks passed"]
+            if forbid is None:
+                forbid = ["FAIL"]
             code, out = run_one(args, name, spawned)
             problems = []
             if spawned:

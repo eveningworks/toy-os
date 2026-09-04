@@ -18,18 +18,21 @@
 #include "kfmt_cases.h"
 #include <stdio.h>
 #include <string.h>
+#include "lib/utest.h"
 
 int main(void) {
-    char line[192], got[128];
-    int fails = 0;
+    char got[128];
+
+    // UTEST_KLOG because a KTEST spawns this with no terminal and reads
+    // the report back from `dmesg`; UTEST_QUIET because the table runs
+    // to hundreds of cases and the epilogue's count is the evidence.
+    utest_begin("kfmt_test", "the shared kfmt case table, in ring 3",
+                UTEST_KLOG | UTEST_QUIET);
 
     for (int i = 0; i < kfmt_case_count; i++) {
-        if (kfmt_case_run(&kfmt_cases[i], got, sizeof got)) continue;
-        fails++;
-        snprintf(line, sizeof line,
-                 "kfmt: FAIL \"%s\" gave \"%s\", wanted \"%s\"\n",
-                 kfmt_cases[i].fmt, got, kfmt_cases[i].want);
-        sys_eprint(line);
+        utest_checkf(kfmt_case_run(&kfmt_cases[i], got, sizeof got),
+                     "\"%s\" gave \"%s\", wanted \"%s\"",
+                     kfmt_cases[i].fmt, got, kfmt_cases[i].want);
     }
 
     // The SAME assertion made through <stdio.h>'s own entry point, so a
@@ -37,25 +40,15 @@ int main(void) {
     // implementation, a wrapper that lost a flag -- would be caught
     // here rather than agreeing with itself.
     snprintf(got, sizeof got, "U+%04X slot %d", 0x67, 71);
-    if (strcmp(got, "U+0067 slot 71") != 0) {
-        fails++;
-        snprintf(line, sizeof line,
-                 "kfmt: FAIL stdio snprintf gave \"%s\"\n", got);
-        sys_eprint(line);
-    }
+    utest_checkf(strcmp(got, "U+0067 slot 71") == 0,
+                 "stdio snprintf gave \"%s\"", got);
 
     // A table that has been emptied must fail rather than pass
-    // vacuously -- the whole value here is breadth.
-    if (kfmt_case_count < 40) {
-        fails++;
-        snprintf(line, sizeof line,
-                 "kfmt: FAIL only %d cases in the shared table\n",
-                 kfmt_case_count);
-        sys_eprint(line);
-    }
+    // vacuously -- the whole value here is breadth. (utest_end() also
+    // refuses a run with no checks at all, which is the same rule one
+    // step further out.)
+    utest_checkf(kfmt_case_count >= 40,
+                 "only %d cases in the shared table", kfmt_case_count);
 
-    snprintf(line, sizeof line, "kfmt: %d/%d cases passed\n",
-             kfmt_case_count - fails, kfmt_case_count);
-    sys_eprint(line);
-    return fails ? 1 : 0;
+    return utest_end();
 }

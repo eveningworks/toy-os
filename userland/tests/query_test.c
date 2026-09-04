@@ -20,36 +20,22 @@
 #include "rt/sys.h"
 #include <string.h>
 
-static int g_fail;
-
-static void put(const char *s) { sys_write(1, s, strlen(s)); }
-
-static void check(int ok, const char *what) {
-    put(ok ? "  ok   " : "  FAIL ");
-    put(what);
-    put("\n");
-    if (!ok) g_fail++;
-}
+#include "lib/utest.h"
 
 static void check_errno(int got, int want, const char *what) {
-    put(got == want ? "  ok   " : "  FAIL ");
-    put(what);
-    put(" -- got ");
-    put(sys_strerror(got));
-    if (got != want) { put(", wanted "); put(sys_strerror(want)); }
-    put("\n");
-    if (got != want) g_fail++;
+    utest_checkf(got == want, "%s -- got %s%s%s", what, sys_strerror(got),
+                 got != want ? ", wanted " : "", got != want ? sys_strerror(want) : "");
 }
 
 int main(void) {
-    put("query_test: facts, read from ring 3\n");
+    utest_begin("query_test", "facts, read from ring 3", 0);
 
     // --- the scalar class ---------------------------------------------
     struct query_meminfo m;
     int n = sys_query_record(QUERY_MEMINFO, 0, &m, sizeof m);
-    check(n == (int)sizeof m, "read the memory record whole");
-    check(m.frame_bytes >= 4096, "frame size is reported, not left 0");
-    check(m.frame_total > 0 && m.frame_free <= m.frame_total,
+    utest_check(n == (int)sizeof m, "read the memory record whole");
+    utest_check(m.frame_bytes >= 4096, "frame size is reported, not left 0");
+    utest_check(m.frame_total > 0 && m.frame_free <= m.frame_total,
           "free frames never exceed the total");
 
     // --- version tolerance: a SHORT buffer truncates, it does not fail -
@@ -69,14 +55,14 @@ int main(void) {
     memset(&probe, 0, sizeof probe);
     probe.sentinel = 0xA5A5A5A5A5A5A5A5ull;
     n = sys_query_record(QUERY_MEMINFO, 0, probe.partial, SHORT_LEN);
-    check(n == SHORT_LEN, "a short buffer reports how much it got");
+    utest_check(n == SHORT_LEN, "a short buffer reports how much it got");
     // The prefix must be RIGHT, not merely present: frame_total is the
     // record's first field, so a kernel writing the wrong offset would
     // still fill these bytes.
     uint64_t prefix = 0;
     memcpy(&prefix, probe.partial, sizeof prefix);
-    check(prefix == m.frame_total, "the prefix it did write is correct");
-    check(probe.sentinel == 0xA5A5A5A5A5A5A5A5ull,
+    utest_check(prefix == m.frame_total, "the prefix it did write is correct");
+    utest_check(probe.sentinel == 0xA5A5A5A5A5A5A5A5ull,
           "and it wrote NOTHING past the length it was given");
 
     // --- the list class, and discovery from the number 0 --------------
@@ -87,45 +73,45 @@ int main(void) {
         providers++;
         if (strcmp(p.name, "mem") == 0) {
             saw_mem = 1;
-            check(!(p.flags & QUERY_F_LIST), "mem announces itself as a scalar");
-            check(p.record_size == sizeof(struct query_meminfo),
+            utest_check(!(p.flags & QUERY_F_LIST), "mem announces itself as a scalar");
+            utest_check(p.record_size == sizeof(struct query_meminfo),
                   "mem's record size matches this build's struct");
         }
         if (p.cls == QUERY_PROVIDERS) saw_self = 1;
     }
-    check(providers >= 2, "walking class 0 found the registered providers");
-    check(saw_mem, "found the memory provider BY NAME, knowing only class 0");
-    check(saw_self, "the registry lists itself");
+    utest_check(providers >= 2, "walking class 0 found the registered providers");
+    utest_check(saw_mem, "found the memory provider BY NAME, knowing only class 0");
+    utest_check(saw_self, "the registry lists itself");
 
     // --- walking past the end is an ERROR, not an empty record --------
     // The distinction an enumerator's exit condition depends on.
-    check(sys_query_record(QUERY_MEMINFO, 1, &m, sizeof m) < 0,
+    utest_check(sys_query_record(QUERY_MEMINFO, 1, &m, sizeof m) < 0,
           "index 1 of a scalar is refused");
     check_errno(sys_errno(), ERANGE, "past the end says out of range");
-    check(sys_query_record(4242, 0, &m, sizeof m) < 0, "an unknown class is refused");
+    utest_check(sys_query_record(4242, 0, &m, sizeof m) < 0, "an unknown class is refused");
     check_errno(sys_errno(), ENOENT, "an unknown class says no such fact");
 
     // --- named fields, resolved kernel-side ---------------------------
     unsigned long long v = 0;
     unsigned type = 99;
-    check(sys_query_field_get("mem.frame_total", &v, &type) == 0,
+    utest_check(sys_query_field_get("mem.frame_total", &v, &type) == 0,
           "read a field by qualified name");
     // Compared against the RECORD, not merely nonzero: a field table
     // with two offsets swapped passes any "is it plausible" check.
-    check(v == m.frame_total, "the field agrees with the whole record");
-    check(type == QUERY_TYPE_U64, "and reports its type");
-    check(sys_query_field_get("mem.heap_total_bytes", &v, &type) == 0 &&
+    utest_check(v == m.frame_total, "the field agrees with the whole record");
+    utest_check(type == QUERY_TYPE_U64, "and reports its type");
+    utest_check(sys_query_field_get("mem.heap_total_bytes", &v, &type) == 0 &&
           type == QUERY_TYPE_BYTES, "a byte-count field says it is bytes");
 
-    check(sys_query_field_get("providers.anything", &v, &type) < 0,
+    utest_check(sys_query_field_get("providers.anything", &v, &type) < 0,
           "a LIST class has no single value");
     check_errno(sys_errno(), ENOTSUP, "and says so distinctly from 'no such fact'");
-    check(sys_query_field_get("mem.nope", &v, &type) < 0, "an unknown field is refused");
+    utest_check(sys_query_field_get("mem.nope", &v, &type) < 0, "an unknown field is refused");
     check_errno(sys_errno(), ENOENT, "an unknown field says no such fact");
 
     // --- the schema ops -----------------------------------------------
     int fields = sys_query_field_count(QUERY_MEMINFO);
-    check(fields > 0, "the memory class reports how many fields it has");
+    utest_check(fields > 0, "the memory class reports how many fields it has");
     int named = 0;
     for (int i = 0; i < fields; i++) {
         char name[QUERY_FIELD_PATH_MAX];
@@ -133,7 +119,7 @@ int main(void) {
         if (sys_query_field_info(QUERY_MEMINFO, i, name, &t) != 0) break;
         if (strcmp(name, "frame_free") == 0) named = 1;
     }
-    check(named, "enumerating the fields finds one by name");
+    utest_check(named, "enumerating the fields finds one by name");
 
     // --- a fact is LIVE, which is what makes it a fact -----------------
     // Two reads of a counter that must move. Allocating is what moves it,
@@ -147,9 +133,8 @@ int main(void) {
         for (int i = 0; i < (1 << 20); i += 4096) touch[i] = 1; // fault them in
     }
     sys_query_record(QUERY_MEMINFO, 0, &after, sizeof after);
-    check(after.frame_free < before.frame_free,
+    utest_check(after.frame_free < before.frame_free,
           "free frames FELL after this process touched a megabyte");
 
-    put(g_fail ? "query_test: FAILURES\n" : "query_test: all checks passed\n");
-    return g_fail;
+    return utest_end();
 }

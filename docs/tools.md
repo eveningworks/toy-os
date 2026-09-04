@@ -575,7 +575,15 @@ manual steps to be worth automating:
   verdict carries the whole assertion, and it writes that verdict to
   `/tmp/<name>.out`: a spawned program's console output arrives while
   the harness is between commands, where it is dropped, so the harness
-  waits on the ARTIFACT rather than on the timing. `focusring_test` is
+  waits on the ARTIFACT rather than on the timing. **That file is
+  `UTEST_VERDICT_FILE`'s now, not each test's own** -- every self-checking
+  `/tests` program reports through `userland/lib/utest.h`, which streams
+  each line to the file as it is produced rather than buffering the
+  transcript and writing it at the end, so a test that dies part-way
+  leaves the lines it reached. **The table therefore states its expected
+  strings only where a test DEVIATES from the harness's one epilogue**;
+  `None` in both string columns means the default, which is what took it
+  from a string per test to a handful of exceptions. `focusring_test` is
   the same shape and covers the eleven widgets that accept keyboard
   focus, drawing each into a plain surface and counting accent pixels
   -- **both ways**, absent unfocused and present focused, since a

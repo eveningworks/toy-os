@@ -19,7 +19,7 @@
 #include <setjmp.h>
 #include "errno.h"
 
-static int fails;
+#include "lib/utest.h"
 
 // **`noinline` IS LOAD BEARING, not style.** These carry a 192-byte
 // line buffer each, and inlined into a main() with two dozen calls the
@@ -27,12 +27,12 @@ static int fails;
 // 16 KB ring-3 stack. One out-of-line copy costs nothing this test
 // measures.
 __attribute__((noinline))
+// The call sites here read `check(what, ok, detail)`; the harness takes
+// the boolean first. One adapter rather than transposing a hundred call
+// sites: a transposed argument pair compiles and INVERTS the check,
+// which is the failure a green suite hides.
 static void check(const char *what, int ok, const char *detail) {
-    char line[192];
-    snprintf(line, sizeof line, "signal: %s %s%s%s\n", ok ? "ok  " : "FAIL",
-             what, detail ? " -- " : "", detail ? detail : "");
-    sys_eprint(line);
-    if (!ok) fails++;
+    utest_check_detail(ok, what, detail);
 }
 
 __attribute__((noinline))
@@ -129,6 +129,8 @@ static int wait_until_blocked(int pid) {
 #define SPIN_ARGS "100000"
 
 int main(void) {
+    utest_begin("signal_test", "signals: delivery, handlers and groups", UTEST_KLOG);
+
     int me = sys_getpid();
 
     // --- groups -------------------------------------------------------
@@ -189,7 +191,7 @@ int main(void) {
     int child = sys_spawn_group(SPINNER, SPIN_ARGS, -1, 0, PGID_NEW);
     if (child <= 0) {
         check("spawned a long-running child", 0, "spawn failed");
-        return fails ? 1 : 0;
+        return utest_end();
     }
     checkf("a child can be spawned into a group of its OWN",
            sys_getpgid(child) == child, sys_getpgid(child), child);
@@ -475,8 +477,5 @@ int main(void) {
     check("a group with no members is refused", sys_kill(-4000, SIGTERM) != 0, 0);
     check("a number that is not a signal is refused", sys_kill(me, 99) != 0, 0);
 
-    char sum[96];
-    snprintf(sum, sizeof sum, "signal: %s\n", fails ? "FAILURES" : "all checks passed");
-    sys_eprint(sum);
-    return fails ? 1 : 0;
+    return utest_end();
 }

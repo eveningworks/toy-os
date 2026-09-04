@@ -29,17 +29,17 @@
 #include <unistd.h>
 #include <errno.h>
 
-static int fails;
+#include "lib/utest.h"
 
 // noinline for the same reason signal_test.c states: a 192-byte line
 // buffer per call, inlined into one main(), overruns the frame budget.
 __attribute__((noinline))
+// The call sites here read `check(what, ok, detail)`; the harness takes
+// the boolean first. One adapter rather than transposing a hundred call
+// sites: a transposed argument pair compiles and INVERTS the check,
+// which is the failure a green suite hides.
 static void check(const char *what, int ok, const char *detail) {
-    char line[192];
-    snprintf(line, sizeof line, "posix: %s %s%s%s\n", ok ? "ok  " : "FAIL",
-             what, detail ? " -- " : "", detail ? detail : "");
-    sys_eprint(line);
-    if (!ok) fails++;
+    utest_check_detail(ok, what, detail);
 }
 
 __attribute__((noinline))
@@ -53,6 +53,8 @@ static volatile sig_atomic_t g_hits;
 static void on_term(int sig) { (void)sig; g_hits++; }
 
 int main(void) {
+    utest_begin("posix_test", "the POSIX headers over the syscalls", UTEST_KLOG);
+
     // --- <strings.h> ---------------------------------------------------
     check("strncasecmp matches ignoring case", strncasecmp("HeLLo", "hello", 5) == 0, 0);
     check("strncasecmp respects its bound",
@@ -348,8 +350,5 @@ int main(void) {
     check("getpid agrees with the syscall", getpid() == sys_getpid(), 0);
     check("getpgrp answers this process's group", getpgrp() == sys_getpgid(0), 0);
 
-    char sum[96];
-    snprintf(sum, sizeof sum, "posix: %s\n", fails ? "FAILURES" : "all checks passed");
-    sys_eprint(sum);
-    return fails ? 1 : 0;
+    return utest_end();
 }

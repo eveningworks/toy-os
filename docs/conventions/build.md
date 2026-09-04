@@ -340,6 +340,29 @@ this the obvious way), not from how much history it accumulated.
   which does not merely overflow but steps clean OVER the single 4 KiB
   guard page into unmapped space (the Stack Clash shape). Note the
   warning names the function where a wider guard would only hide it.
+- **A SELF-CHECKING `/tests` PROGRAM REPORTS THROUGH `userland/lib/utest.h`,
+  AND ITS EPILOGUE IS ONE LINE IN ONE SHAPE.** `utest_begin(name, title,
+  flags)`, `utest_check(ok, what)` (or `_check_detail` / `_checkf` for a
+  formatted one), `utest_notef()` for a measurement that is not a check,
+  `utest_skip()` for a fixture the image was built without, and
+  `utest_end()` as the return value. Every line carries the test's name,
+  because a spawned test's output lands in the kernel log between
+  everything else the machine says and the runner scopes its FAIL search
+  to lines that name the test. Five things to know. **It writes with
+  `sys_write()`, never through stdio** -- a test of the stream layer must
+  not report through the thing under test, or a broken `fputs` takes the
+  FAIL line with it. **`UTEST_VERDICT_FILE` replaces the hand-rolled
+  `/tmp/<name>.out`** every spawned test used to carry, and STREAMS
+  rather than buffering, so a test that dies part-way leaves the lines it
+  reached -- which the 2-4 KiB buffers it replaced could not. **Zero
+  checks is a FAILURE**, so an emptied table cannot read as green.
+  **`tools/usertest_run.py`'s table states its expected strings only
+  where a test DEVIATES** from that epilogue; `None` means the default,
+  which is what took it from a string per test to a handful of
+  exceptions. And **where a test's own `check()` takes its arguments in
+  the other order, it keeps a three-line adapter** rather than having a
+  hundred call sites transposed by hand: a transposed pair compiles and
+  INVERTS the check, which is the failure a green suite hides.
 - **Every ring-3 program is just a `main()`.** `userland/rt/crt0.asm`
   provides `_start` (reads argc/argv off the stack per SysV, calls
   `main`, passes its return to `sys_exit`) and `userland/rt/sys.c` is

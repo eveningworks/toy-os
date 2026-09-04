@@ -18,18 +18,18 @@
 #include <stdio.h>
 #include <string.h>
 
-static int g_fails;
+#include "lib/utest.h"
 
+// The call sites here read `check(what, ok, detail)`; the harness takes
+// the boolean first. One adapter rather than transposing thirty call
+// sites: a transposed argument pair compiles and INVERTS the check,
+// which is the failure a green suite hides.
 static void check(const char *what, int ok, const char *detail) {
-    if (ok) return;
-    g_fails++;
-    printf("usnd_test: FAIL %s -- %s\n", what, detail);
+    utest_check_detail(ok, what, detail);
 }
 
 static void eq(const char *what, long got, long want) {
-    if (got == want) return;
-    g_fails++;
-    printf("usnd_test: FAIL %s -- got %ld, wanted %ld\n", what, got, want);
+    utest_checkf(got == want, "%s -- got %ld, wanted %ld", what, got, want);
 }
 
 // --- building a WAV ---------------------------------------------------
@@ -319,6 +319,8 @@ static void check_mp3(void) {
 }
 
 int main(void) {
+    utest_begin("usnd_test", "the audio DECODE path, with no sound hardware involved", UTEST_QUIET);
+
     check_header();
     check_chunk_walk();
     check_truncated();
@@ -331,6 +333,5 @@ int main(void) {
     check_mp3();
 
     sys_unlink(FIX);
-    printf("usnd_test: %d failure(s)\n", g_fails);
-    return g_fails ? 1 : 0;
+    return utest_end();
 }

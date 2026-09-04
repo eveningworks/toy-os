@@ -27,15 +27,9 @@
 #include <math.h>
 #include "rt/sys.h"
 
-static int g_fail;
-static char buf[128];
+#include "lib/utest.h"
 
-static void check(int ok, const char *what) {
-    fputs(ok ? "  ok   " : "  FAIL ", stdout);
-    fputs(what, stdout);
-    fputc('\n', stdout);
-    if (!ok) g_fail++;
-}
+static char buf[128];
 
 // Formats and compares against the expected text, printing what came
 // out when they differ -- a bare pass/fail on a formatter is very hard
@@ -46,14 +40,14 @@ static void fmt_is(const char *fmt, double v, const char *want, const char *what
     if (!ok) {
         static char msg[192];
         snprintf(msg, sizeof msg, "%s   -- got \"%s\", wanted \"%s\"", what, buf, want);
-        check(0, msg);
+        utest_check(0, msg);
     } else {
-        check(1, what);
+        utest_check(1, what);
     }
 }
 
 int main(void) {
-    printf("libc4_test: %%f/%%e/%%g, strtod and math.h\n");
+    utest_begin("libc4_test", "%%f/%%e/%%g, strtod and math.h", 0);
 
     // --- %f ----------------------------------------------------------
     fmt_is("%f", 0.0, "0.000000", "%f defaults to six places");
@@ -90,43 +84,43 @@ int main(void) {
 
     // --- width applies to floats too ---------------------------------
     snprintf(buf, sizeof buf, "[%10.2f][%-10.2f]", 3.5, 3.5);
-    check(strcmp(buf, "[      3.50][3.50      ]") == 0, "width and '-' work on a float");
+    utest_check(strcmp(buf, "[      3.50][3.50      ]") == 0, "width and '-' work on a float");
 
     // --- strtod ------------------------------------------------------
     char *end;
-    check(strtod("1.5", &end) == 1.5 && *end == '\0', "strtod reads a simple value");
-    check(strtod("-0.25xyz", &end) == -0.25 && strcmp(end, "xyz") == 0,
+    utest_check(strtod("1.5", &end) == 1.5 && *end == '\0', "strtod reads a simple value");
+    utest_check(strtod("-0.25xyz", &end) == -0.25 && strcmp(end, "xyz") == 0,
           "and endptr is the first unused byte");
-    check(strtod("1e3", &end) == 1000.0, "an exponent");
-    check(strtod("1.5e-3", &end) == 0.0015, "a negative exponent");
+    utest_check(strtod("1e3", &end) == 1000.0, "an exponent");
+    utest_check(strtod("1.5e-3", &end) == 0.0015, "a negative exponent");
     const char *bad = "abc";
-    check(strtod(bad, &end) == 0.0 && end == bad, "no conversion returns the original pointer");
+    utest_check(strtod(bad, &end) == 0.0 && end == bad, "no conversion returns the original pointer");
     // "1e" is a value followed by a letter, NOT a number with an empty
     // exponent -- the classic strtod edge case.
     const char *trunc_exp = "1e";
-    check(strtod(trunc_exp, &end) == 1.0 && end == trunc_exp + 1,
+    utest_check(strtod(trunc_exp, &end) == 1.0 && end == trunc_exp + 1,
           "\"1e\" parses as 1 with the 'e' left over");
-    check(isinf(strtod("inf", &end)) && isnan(strtod("nan", &end)),
+    utest_check(isinf(strtod("inf", &end)) && isnan(strtod("nan", &end)),
           "inf and nan are accepted");
     // Round trip through the formatter at a precision the accuracy note
     // actually promises.
     snprintf(buf, sizeof buf, "%.6f", strtod("3.141593", &end));
-    check(strcmp(buf, "3.141593") == 0, "a six-place value survives text -> double -> text");
+    utest_check(strcmp(buf, "3.141593") == 0, "a six-place value survives text -> double -> text");
 
     // --- math.h ------------------------------------------------------
-    check(sqrt(144.0) == 12.0, "sqrt");
-    check(fabs(-3.5) == 3.5 && fabs(3.5) == 3.5, "fabs");
-    check(floor(2.7) == 2.0 && floor(-2.1) == -3.0, "floor goes toward -inf");
-    check(ceil(2.1) == 3.0 && ceil(-2.7) == -2.0, "ceil goes toward +inf");
-    check(trunc(2.7) == 2.0 && trunc(-2.7) == -2.0, "trunc goes toward zero");
-    check(round(2.5) == 3.0 && round(-2.5) == -3.0, "round goes half AWAY from zero");
-    check(floor(1e300) == 1e300, "floor of a value with no fraction bits is itself");
-    check(copysign(3.0, -1.0) == -3.0, "copysign");
-    check(ldexp(1.5, 3) == 12.0, "ldexp");
+    utest_check(sqrt(144.0) == 12.0, "sqrt");
+    utest_check(fabs(-3.5) == 3.5 && fabs(3.5) == 3.5, "fabs");
+    utest_check(floor(2.7) == 2.0 && floor(-2.1) == -3.0, "floor goes toward -inf");
+    utest_check(ceil(2.1) == 3.0 && ceil(-2.7) == -2.0, "ceil goes toward +inf");
+    utest_check(trunc(2.7) == 2.0 && trunc(-2.7) == -2.0, "trunc goes toward zero");
+    utest_check(round(2.5) == 3.0 && round(-2.5) == -3.0, "round goes half AWAY from zero");
+    utest_check(floor(1e300) == 1e300, "floor of a value with no fraction bits is itself");
+    utest_check(copysign(3.0, -1.0) == -3.0, "copysign");
+    utest_check(ldexp(1.5, 3) == 12.0, "ldexp");
     int e;
-    check(frexp(12.0, &e) == 0.75 && e == 4, "frexp splits into mantissa and exponent");
-    check(fmod(10.0, 3.0) == 1.0, "fmod");
-    check(fmod(-10.0, 3.0) == -1.0, "fmod keeps the dividend's sign");
+    utest_check(frexp(12.0, &e) == 0.75 && e == 4, "frexp splits into mantissa and exponent");
+    utest_check(fmod(10.0, 3.0) == 1.0, "fmod");
+    utest_check(fmod(-10.0, 3.0) == -1.0, "fmod keeps the dividend's sign");
     // EXACT expected values, not a range. "the answer is in [0, y)" is
     // satisfied by the naive x - trunc(x/y)*y, which returns 0.0 here
     // -- a control that broke fmod this way changed nothing until this
@@ -137,13 +131,11 @@ int main(void) {
     // multiple of 4, so 2^100 == 1 (mod 5). Both answers are 1.0, and
     // both ratios are far past what a 53-bit mantissa can hold.
     double big = ldexp(1.0, 100);
-    check(fmod(big, 3.0) == 1.0, "fmod(2^100, 3) is exactly 1, not an approximation");
-    check(fmod(big, 5.0) == 1.0, "fmod(2^100, 5) too -- the ratio is past the mantissa");
-    check(isnan(fmod(1.0, 0.0)), "fmod by zero is NaN");
-    check(isinf(INFINITY) && !isfinite(INFINITY) && isnan(NAN), "the classification macros");
-    check(signbit(-0.0) && !signbit(0.0), "signbit sees a negative zero");
+    utest_check(fmod(big, 3.0) == 1.0, "fmod(2^100, 3) is exactly 1, not an approximation");
+    utest_check(fmod(big, 5.0) == 1.0, "fmod(2^100, 5) too -- the ratio is past the mantissa");
+    utest_check(isnan(fmod(1.0, 0.0)), "fmod by zero is NaN");
+    utest_check(isinf(INFINITY) && !isfinite(INFINITY) && isnan(NAN), "the classification macros");
+    utest_check(signbit(-0.0) && !signbit(0.0), "signbit sees a negative zero");
 
-    if (g_fail) printf("libc4_test: %d FAILURES\n", g_fail);
-    else        printf("libc4_test: all checks passed\n");
-    return g_fail;
+    return utest_end();
 }

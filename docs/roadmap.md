@@ -24,7 +24,7 @@ FIRST, and this is what to do first among things that are all
 buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
-- [ ] Finish the app-deduplication pass: one WIP branch and the smaller survey items  *(The GUI in ring 3)*
+- [ ] Finish the app-deduplication pass: the smaller survey items, all three branches landed  *(The GUI in ring 3)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
 - [ ] Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today  *(Networking)*
@@ -511,7 +511,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Clipping RECTANGLES as a first-class concept in `ugfx`~~ DONE 2026-08-18
 - [x] ~~An animation/timer event, so a client does not have to poll~~ DONE 2026-08-18 -- `tick_ms` / `WIN_EV_TIMER`
 - [x] ~~The toolkit as a real shared library rather than static per client~~ DONE 2026-09-04 -- `/lib/libuapp.so`
-- [ ] **NEXT** Finish the app-deduplication pass: one WIP branch and the smaller survey items
+- [ ] **NEXT** Finish the app-deduplication pass: the smaller survey items, all three branches landed
 - [x] ~~Make the ring-3 apps reachable from the desktop~~ done
 - [x] ~~Remove the kernel-space Calculator once the ring-3 one is the default~~ DONE 2026-08-18 -- `apps/` holds no GUI at all
 - [x] ~~ELF loader hardening~~ DONE 2026-08-18
