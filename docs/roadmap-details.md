@@ -3124,16 +3124,26 @@ app for x" and "could not start y" as different sentences in its status
 bar and `uopen_spawn()` collapses both into -1. Folding it in would lose
 a distinction a person reads.
 
+**`QUERY_FOREACH` is done, and the finding was half wrong.** The macro
+is in `userland/rt/sys.h` and eleven programs use it. But the survey
+said "three dialects across ~20 programs", and the measurement was: of
+57 `sys_query_record` call sites, 21 read a single record at index 0 and
+only 34 are loops at all. Of those, `/bin/df`, `/bin/mount` and
+`/bin/dmesg` break on `<= 0` rather than on a short read, which ACCEPTS
+a record shorter than this build's struct -- forward compatibility the
+ABI explicitly promises, and one of them has a comment about it. Those
+are not a dialect of the same idiom, they are a different decision, and
+converting them would have deleted the allowance silently. See
+`docs/conventions/storage.md`.
+
 **Still not started** (file:line as of 2026-09-04):
 `start_menu.c:174-252` and `context_menu.c:76-98` hand-draw a vertical
 menu that `uui_menubar_open_at()` + `uui_menubar_draw_popup()` draw
 (Start carries icons and a flash state the menubar has no slot for);
-a `QUERY_FOREACH` macro for the `sys_query_record` loop restated in
-three dialects across ~20 `/bin` programs; a `uui_icon_label()`
-primitive for the icon-then-label row drawn five ways; and the codec
-tables in `uimg.c`/`usnd.c` pull every decoder into every program that
-touches an image or a sound, which `libuapp.so` now absorbs but a static
-build still pays.
+a `uui_icon_label()` primitive for the icon-then-label row drawn five
+ways; and the codec tables in `uimg.c`/`usnd.c` pull every decoder into
+every program that touches an image or a sound, which `libuapp.so` now
+absorbs but a static build still pays.
 
 `preflight.sh` on main that day: build, boot smoke and usertest green;
 ktest 633 passed, 3 failed, all three `r.leaked` -- the shape of the

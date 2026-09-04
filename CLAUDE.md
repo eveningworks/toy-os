@@ -846,6 +846,7 @@ whenever a headline here tells you something you did not already know.
 - **Six filesystem syscalls exist**
 - **The disk has a WRITE-BACK CACHE, and its flush can fail**
 - **A FACT IS READ THROUGH `SYS_QUERY`, AND ADDING ONE IS A PROVIDER, NOT A SYSCALL.**
+- **WALKING A LIST CLASS IS `QUERY_FOREACH(cls, var, idx)`, AND THE LOOSE LOOPS BESIDE IT ARE A DIFFERENT DECISION, NOT A DIALECT**
 - **THERE ARE THREE WORDS FOR SYSTEM STATE AND THEY ARE FIXED: FACT, SETTING, TUNABLE.**
 - **Setting a setting to the value it already has does NOTHING**
 - **A RING-3 PROGRAM READS AND WRITES ONE SETTING THROUGH `userland/lib/usetting.h`, AND `usetting_set()` RETURNS THE REGISTRY'S THREE-WAY ANSWER.**

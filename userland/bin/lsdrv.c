@@ -37,10 +37,8 @@ int main(int argc, char **argv) {
     printf("%-14s %-8s %s\n", "DRIVER", "CLASS", verbose ? "SOURCE" : "DEVICES");
 
     int shown = 0;
-    for (int i = 0; ; i++) {
-        struct query_driver d;
-        int n = sys_query_record(QUERY_DRIVER, i, &d, sizeof d);
-        if (n < (int)sizeof d) break;
+    struct query_driver d;
+    QUERY_FOREACH(QUERY_DRIVER, d, i) {
         shown++;
         if (verbose) {
             printf("%-14s %-8s %s\n", d.name, d.cls,

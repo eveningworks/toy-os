@@ -59,6 +59,20 @@ this the obvious way), not from how much history it accumulated.
   the write-back path**, because with a cache in front "the drive
   refused this write" no longer happens during the caller's `write()` at
   all.
+- **WALKING A LIST CLASS IS `QUERY_FOREACH(cls, var, idx)`
+  (`userland/rt/sys.h`), AND THE LOOSE LOOPS BESIDE IT ARE NOT A
+  DIALECT -- THEY ARE A DIFFERENT DECISION.** The macro stops on the
+  first SHORT read, which is how a list ends: there is no count to ask
+  for, deliberately, because a count read separately from the records
+  can disagree with them by the time they are read. Eleven programs use
+  it. **What is NOT converted, and must not be**: `/bin/df`, `/bin/mount`
+  and `/bin/dmesg` break on `<= 0` instead, which ACCEPTS a record
+  shorter than this build's struct -- the ABI promises `min(len,
+  record)`, so a kernel whose struct is older leaves the tail reading as
+  zeroes and those three tolerate that on purpose. Folding them into the
+  strict macro would silently delete a compatibility allowance one of
+  them has a comment about. The survey that found "three dialects"
+  across twenty programs was counting those two intents as one.
 - **A FACT IS READ THROUGH `SYS_QUERY`, AND ADDING ONE IS A PROVIDER,
   NOT A SYSCALL.** `api/query.h` + `abi/query_abi.h`: one syscall, an
   information CLASS, a typed record, and a registry a subsystem

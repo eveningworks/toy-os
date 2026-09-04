@@ -54,9 +54,8 @@ static int parse_ip(const char *s, uint32_t *out) {
 
 static int show(void) {
     int n = 0;
-    for (unsigned i = 0; ; i++) {
-        struct query_netdev d;
-        if (sys_query_record(QUERY_NETDEV, i, &d, sizeof d) < (int)sizeof d) break;
+    struct query_netdev d;
+    QUERY_FOREACH(QUERY_NETDEV, d, i) {
         n++;
 
         char ip[24], mask[24], gw[24], line[200];

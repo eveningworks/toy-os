@@ -125,9 +125,8 @@ int main_lscpu(void) {
     // `online` is always no -- this kernel schedules on one core.
     {
         int cores = 0, enabled = 0;
-        for (unsigned i = 0; ; i++) {
-            struct query_cpu c;
-            if (sys_query_record(QUERY_CPUS, i, &c, sizeof c) < (int)sizeof c) break;
+        struct query_cpu c;
+        QUERY_FOREACH(QUERY_CPUS, c, i) {
             cores++;
             if (c.flags & 1u) enabled++; // ACPI_CPU_ENABLED
         }

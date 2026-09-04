@@ -73,9 +73,8 @@ int main(int argc, char **argv) {
     // The loop ends on the record that is NOT THERE rather than on
     // `entry_count`: a list's length is itself a fact and can change
     // between reads. Same rule every other list consumer here follows.
-    for (unsigned i = 0; ; i++) {
-        struct query_partition p;
-        if (sys_query_record(QUERY_PARTITION, i, &p, sizeof p) < (int)sizeof p) break;
+    struct query_partition p;
+    QUERY_FOREACH(QUERY_PARTITION, p, i) {
         human_size(size, sizeof size, p.lba_count * (unsigned long long)SECTOR_BYTES);
         if (p.kind == QUERY_PART_GPT) {
             put_guid(guid, sizeof guid, p.type_guid);

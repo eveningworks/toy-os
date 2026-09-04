@@ -201,9 +201,7 @@ static uint8_t g_desc[DESC_MAX];
 static unsigned load_desc(unsigned long long slot) {
     struct query_usbdesc r;
     unsigned len = 0;
-    for (int i = 0; ; i++) {
-        if (sys_query_record(QUERY_USBDESC, (unsigned)i, &r, sizeof r)
-            < (int)sizeof r) break;
+    QUERY_FOREACH(QUERY_USBDESC, r, i) {
         if (r.slot != slot) continue;
         if (r.offset >= DESC_MAX || r.len > DESC_MAX - r.offset) continue;
         memcpy(g_desc + r.offset, r.data, r.len);

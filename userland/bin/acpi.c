@@ -78,9 +78,7 @@ static int dump_table(const char *sig, long at, long want) {
     char line[128];
     long total = -1, shown = 0;
 
-    for (int i = 0; ; i++) {
-        if (sys_query_record(QUERY_ACPIDUMP, (unsigned)i, &r, sizeof r)
-            < (int)sizeof r) break;
+    QUERY_FOREACH(QUERY_ACPIDUMP, r, i) {
         if (strncmp(r.signature, sig, 4) != 0) continue;
         if (total < 0) {
             total = (long)r.total;
@@ -198,9 +196,8 @@ int main(int argc, char **argv) {
     }
 
     put("\nTables:\n");
-    for (unsigned i = 0; ; i++) {
-        struct query_acpi_table t;
-        if (sys_query_record(QUERY_ACPI_TABLE, i, &t, sizeof t) < (int)sizeof t) break;
+    struct query_acpi_table t;
+    QUERY_FOREACH(QUERY_ACPI_TABLE, t, i) {
         snprintf(line, sizeof line, "  %-5s 0x%08llx  %6llu bytes  rev %-3llu  %s %s\n",
                  t.signature, (unsigned long long)t.address,
                  (unsigned long long)t.length, (unsigned long long)t.revision,
@@ -213,9 +210,8 @@ int main(int argc, char **argv) {
     // keeps the list from reading as a claim.
     put("\nProcessors (MADT):\n");
     int n = 0;
-    for (unsigned i = 0; ; i++) {
-        struct query_cpu c;
-        if (sys_query_record(QUERY_CPUS, i, &c, sizeof c) < (int)sizeof c) break;
+    struct query_cpu c;
+    QUERY_FOREACH(QUERY_CPUS, c, i) {
         n++;
         snprintf(line, sizeof line, "  cpu%-3u  %s id %-4llu  acpi id %-4llu  %s  online: no\n",
                  i, (c.flags & ACPI_CPU_X2APIC) ? "x2apic" : "apic  ",

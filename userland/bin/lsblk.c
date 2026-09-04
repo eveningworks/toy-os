@@ -31,9 +31,8 @@ int main(void) {
     // The loop ends on the record that is NOT THERE rather than on a
     // count read first: a list's length is itself a fact and can change
     // between reads. Same rule every other list consumer here follows.
-    for (unsigned i = 0; ; i++) {
-        struct query_blkdev d;
-        if (sys_query_record(QUERY_BLKDEV, i, &d, sizeof d) < (int)sizeof d) break;
+    struct query_blkdev d;
+    QUERY_FOREACH(QUERY_BLKDEV, d, i) {
         n++;
 
         human_size(size, sizeof size, d.sectors * (unsigned long long)SECTOR_BYTES);

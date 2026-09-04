@@ -968,9 +968,8 @@ int main(int argc, char **argv) {
     }
 
     int tried = 0, done = 0;
-    for (unsigned i = 0; ; i++) {
-        struct query_netdev dev;
-        if (sys_query_record(QUERY_NETDEV, i, &dev, sizeof dev) < (int)sizeof dev) break;
+    struct query_netdev dev;
+    QUERY_FOREACH(QUERY_NETDEV, dev, i) {
 
         if (want) {
             if (strcmp(dev.name, want)) continue;

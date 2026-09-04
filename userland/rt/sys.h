@@ -412,6 +412,24 @@ int sys_sysinfo(struct sys_info *out);
 // number to discover every other class -- and a purpose-built command
 // that already knows its class skips discovery and asks directly.
 int sys_query_record(unsigned cls, unsigned index, void *out, unsigned len);
+
+// WALKING A LIST CLASS. A record-by-record loop that stops on the first
+// short read, which is how every list class ends -- there is no count to
+// ask for, deliberately, because a count read separately from the
+// records is a count that can disagree with them by the time they are
+// read. `idx` is declared by the macro and usable in the body.
+//
+//     struct query_blkdev d;
+//     QUERY_FOREACH(QUERY_BLKDEV, d, i) { ... }
+//
+// It exists because about twenty /bin programs wrote this out, in three
+// dialects that differed only in whether the index was `int` or
+// `unsigned` and whether the short read was compared inline or through
+// a named variable.
+#define QUERY_FOREACH(cls, var, idx) \
+    for (unsigned idx = 0; \
+         sys_query_record((cls), (idx), &(var), sizeof (var)) >= (int)sizeof (var); \
+         (idx)++)
 int sys_query_field_count(unsigned cls);
 // Fills `name` (at least QUERY_FIELD_PATH_MAX bytes) and `*out_type`.
 int sys_query_field_info(unsigned cls, unsigned index, char *name, unsigned *out_type);

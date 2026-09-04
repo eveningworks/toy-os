@@ -63,9 +63,7 @@ int main(int argc, char **argv) {
     char line[160], sz[24], prot[8];
     int rows = 0;
 
-    for (unsigned i = 0; ; i++) {
-        if (sys_query_record(QUERY_PROCMAP, i, &q, sizeof q) < (int)sizeof q)
-            break;
+    QUERY_FOREACH(QUERY_PROCMAP, q, i) {
         if ((int)q.pid != pid) continue;
         if (!rows) {
             snprintf(line, sizeof line, "pid %d\n", pid);
