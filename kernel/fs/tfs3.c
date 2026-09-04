@@ -3335,6 +3335,15 @@ static int tfs3_check(int repair, struct fs_check_result *out) {
     k_memset(r, 0, sizeof(*r));
     if (!S->mounted) return 0;
 
+    // LAND ANY DEFERRED COMMIT FIRST. fsck walks what is ON THE DISK,
+    // and under `storage.sync = batched` an inode update can be sitting
+    // in the journal staging buffer -- so the blocks it references look
+    // allocated-but-unreferenced and get counted as LEAKED. They are
+    // not: they are referenced by an inode that has not landed yet.
+    // Reporting a healthy filesystem as leaking is exactly the kind of
+    // false alarm that teaches people to ignore the checker.
+    txn_flush_deferred();
+
     struct t3_fsck fk;
     k_memset(&fk, 0, sizeof(fk));
     fk.r = r;

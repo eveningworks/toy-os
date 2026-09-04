@@ -69,11 +69,42 @@ static const char *const g_modes[] = { "strict", "batched", "lazy" };
 //   batched  barriers real, commit DEFERRED    -- one commit for many
 //   lazy     barriers skipped entirely         -- ext4's nobarrier
 //
-// `strict` until /etc says otherwise. The journal runs during MOUNT and
-// during replay, both before storage_config_init(), so the safe answer
-// has to be the one that needs no file to have been read.
+// `batched` IS THE DEFAULT (2026-09-04), on a measurement rather than a
+// preference: on the bare-metal laptop it is 6.7x faster than `strict`
+// on a sequential write and 8.9x at 4 KiB. What a crash costs is an
+// inode update -- a just-extended file returns at its old size with the
+// blocks past it unreferenced, which `fsck` reclaims. `strict` is one
+// `config set` away for anyone who wants every write durable before it
+// returns.
+//
+// BARRIERS STAY REAL, which is the half that keeps this defensible:
+// `g_strict` is still 1 here. Only `lazy` turns them off, and only
+// `lazy` risks a journal that cannot be replayed.
+//
+// These values also stand during MOUNT and journal replay, both of
+// which run before storage_config_init(). That is safe: deferral only
+// affects do_write_inner()'s path, replay writes its targets directly,
+// and anything opening a transaction commits a deferred one on its way
+// past.
+//
+// TWO THINGS HAD TO BE FIXED BEFORE THIS COULD BE THE DEFAULT, both
+// found by making it one: `fsck` had to commit a deferred transaction
+// before walking the disk (blocks referenced by an uncommitted inode
+// are not leaked), and a fault-injection test had to make its fixture
+// durable before arming, because a deferred commit is otherwise flushed
+// into somebody else's injected failure.
+//
+// BARRIERS STAY REAL, which is the half that keeps this defensible:
+// `g_strict` is still 1 here. Only `lazy` turns them off, and only
+// `lazy` risks a journal that cannot be replayed.
+//
+// These values also stand during MOUNT and journal replay, both of
+// which run before storage_config_init(). That is safe: deferral only
+// affects do_write_inner()'s path, replay writes its targets directly,
+// and anything opening a transaction commits a deferred one on its way
+// past.
 static int g_strict = 1;    // 0 only in `lazy`: whether barriers are issued
-static int g_batched = 0;   // 1 only in `batched`: whether commits defer
+static int g_batched = 1;   // 1 only in `batched`: whether commits defer
 static int g_writeback_s = WRITEBACK_DEFAULT;
 
 int storage_sync_strict(void) { return g_strict; }

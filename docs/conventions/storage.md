@@ -373,9 +373,11 @@ it.
 
 ## `storage.sync = batched` HOLDS A TRANSACTION OPEN, AND THREE THINGS MUST KEEP IT HONEST
 
-The transaction covers the INODE BLOCK only -- data and bitmaps are on
-disk before it opens -- so deferring the commit risks a lost size
-update and a leak `fsck` reclaims, not an unreplayable journal.
+**It is the DEFAULT since 2026-09-04.** The transaction covers the
+INODE BLOCK only -- data and bitmaps are on disk before it opens -- so
+deferring the commit risks a lost size update and a leak `fsck`
+reclaims, not an unreplayable journal. `storage.sync = strict` restores
+commit-per-write.
 
 If you touch this, know the three:
 

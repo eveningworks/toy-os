@@ -25,6 +25,7 @@ buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
 - [ ] Finish the app-deduplication pass: the smaller survey items, all three branches landed  *(The GUI in ring 3)*
+- [ ] One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy  *(AHCI/SATA driver)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
 - [ ] Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today  *(Networking)*
@@ -663,7 +664,7 @@ run on, not by order.
 - [x] ~~IRQ-driven write + `ata.c` parity~~
 - [x] ~~Multi-sector transfers (PRDT scatter-gather)~~
 - [x] ~~Backend selection + fallback~~
-- [ ] One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy
+- [ ] **NEXT** One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy
 - [ ] NCQ (queued commands) -- needs an ASYNCHRONOUS block interface first, not more AHCI code
 - [ ] An asynchronous `block_device` submit/complete split, which NCQ, readahead and writeback all wait on
 - [x] ~~Batched journal barriers~~ done -- `storage.sync = batched` defers the COMMIT rather than generalising flush_begin/end

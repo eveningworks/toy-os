@@ -1,4 +1,4 @@
-Description=When writes reach the disk. Deferred is faster but can lose data if power fails
+Description=When writes reach the disk. Grouped is the default and much faster; Immediate is safest
 Widget=radio
 Choice.strict=Immediate
 Choice.batched=Grouped

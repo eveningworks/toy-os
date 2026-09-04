@@ -760,6 +760,17 @@ KTEST("fs", "a failed rename leaves both names as they were") {
     FRESH("/.ktest_mvf_a");
     FRESH("/.ktest_mvf_b");
     KTEST_ASSERT(fs_write("/.ktest_mvf_a", "keepme", 0) == 1);
+    // THE FIXTURE MUST BE DURABLE BEFORE THE FAULT IS ARMED. Under
+    // `storage.sync = batched` this write's inode commit is deferred,
+    // and fs_rename() below opens its own transaction -- which commits
+    // the deferred one on its way past, straight into the injected
+    // failure. The fixture would then be lost by the very failure the
+    // test is arming for something else, and the check that reads it
+    // back fails for a reason that has nothing to do with rename.
+    //
+    // Free in `strict`, where the write had already committed. That is
+    // the precondition this test used to inherit rather than establish.
+    KTEST_ASSERT_EQ(fs_sync(NULL), 1);
 
     // A rename that can't reach the disk must report failure AND leave
     // the namespace exactly as it found it -- the source still there,

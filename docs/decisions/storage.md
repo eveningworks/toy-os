@@ -429,7 +429,10 @@ issued" as "the barrier failed", because failure ABANDONS the
 transaction -- doing that on every write would be a filesystem that
 refuses to write at all.
 
-**Default strict, and an unparseable value stays strict.** Every other
+**Default `batched` since 2026-09-04, and an unparseable value stays
+STRICT.** The default moved on the measurement above; the fallback did
+not, because a value nobody can parse is not a request for less
+durability. Every other
 `/etc` reader here tolerates a bad value by keeping its default; this
 one is the same rule pointed the safe way, because the value trades
 correctness for speed. `storage_sync_strict()` also answers 1 before
