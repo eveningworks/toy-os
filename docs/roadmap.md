@@ -509,7 +509,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] Fill a POLYGON, not just an ellipse
 - [x] ~~Clipping RECTANGLES as a first-class concept in `ugfx`~~ DONE 2026-08-18
 - [x] ~~An animation/timer event, so a client does not have to poll~~ DONE 2026-08-18 -- `tick_ms` / `WIN_EV_TIMER`
-- [ ] Decide whether the userland widget/graphics code becomes a real shared library rather than being statically linked into each client
+- [x] ~~The toolkit as a real shared library rather than static per client~~ DONE 2026-09-04 -- `/lib/libuapp.so`
 - [x] ~~Make the ring-3 apps reachable from the desktop~~ done
 - [x] ~~Remove the kernel-space Calculator once the ring-3 one is the default~~ DONE 2026-08-18 -- `apps/` holds no GUI at all
 - [x] ~~ELF loader hardening~~ DONE 2026-08-18

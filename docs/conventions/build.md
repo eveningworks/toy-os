@@ -504,6 +504,19 @@ means its own link rule (`hash_test.elf` has one, as `dyn_test.elf` and
 dynamic binary, so such a test is spawned. A static test of a `.so`
 proves the algorithms and nothing about the library.
 
+**The toolkit itself is `/lib/libuapp.so`**, and it is the one library
+built the way `libc.so` is rather than this way: the same sources as
+`libuapp.a`, compiled a second time with `-fpic` into
+`build/userland-pic/`, because the archive is still what init, toywm and
+`/tests` link. It carries the WHOLE toolkit -- no `--gc-sections` on a
+shared object -- which is fine because a `.so` is demand-paged from the
+`/lib` image cache and an app pays only for the pages it touches. What
+it changes for a program: nothing. The generic `/bin` and GUI link
+lines name it, so a new `.c` in `userland/gui/` links it with no edit,
+exactly as before. What it changes for the toolkit: a widget's data
+(`uui_menubar_ops`, a theme struct) is reached through the GOT now, so
+`-z nocopyreloc` on the link line is load-bearing, not tidiness.
+
 **Do NOT also leave the sources in `userland/lib/`.** That directory is
 globbed wholesale into `libuapp.a`, so a copy there would be linked
 statically into every caller and the `.so` would never be reached --

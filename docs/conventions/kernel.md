@@ -686,8 +686,12 @@ this the obvious way), not from how much history it accumulated.
   lets a library call back into the program (`--export-dynamic`'s
   whole point, and the shape a shared libc's `__errno_location` call
   needs).
-- **EVERY `/bin` AND GUI PROGRAM LINKS `/lib/libc.so`; init, toywm AND
-  `/tests` ARE STATIC; AND THE `#` SHELL'S BARE NAME SPAWNS.** The
+- **EVERY `/bin` AND GUI PROGRAM LINKS `/lib/libc.so` AND
+  `/lib/libuapp.so`; init, toywm AND `/tests` ARE STATIC; AND THE `#`
+  SHELL'S BARE NAME SPAWNS.** `libuapp.so` is the toolkit (`userland/ui`
+  + `userland/lib` + the compiled-twice `kernel/lib` sources) built from
+  `libuapp.a`'s sources a second time with `-fpic`, as `libc.so` is; the
+  archive stays for the static set. The
   static set is a rescue-and-harness contract: init boots a machine
   with `/lib` missing, a rescue happens on the desktop, and
   `usertest_run.py` drives `/tests` through `run` -- the legacy

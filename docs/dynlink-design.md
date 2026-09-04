@@ -196,6 +196,13 @@ again per process, or dynamic linking costs MORE memory than static did.
 `vmm_map_user_borrowed()` is the mechanism; the accounting is the risk,
 and `meminfo audit` is the check that already exists for it.
 
+### Stage 3b -- shared toolkit -- BUILT 2026-09-04
+
+`/lib/libuapp.so`, the toolkit beside the C library, linked by every
+dynamic program. The case-against above said the memory saving is near
+zero for libc, and it was; the toolkit measured differently -- see
+`docs/decisions.md`, "The toolkit is a shared library".
+
 ### Stage 4 -- `dlopen`
 
 `dlopen`/`dlsym`/`dlclose`, which is the plugin case and the reason

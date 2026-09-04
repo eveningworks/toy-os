@@ -1404,6 +1404,55 @@ of putting it in `kernel/lib/`: `-mcmodel=kernel` for the GPT code,
 `tools/hash_hostcheck.py`. A GPT header's CRC and `sum -a crc32` cannot
 disagree, because there is nothing to disagree with.
 
+## The toolkit is a shared library, and the measurement that decided it
+
+`docs/dynlink-design.md` argued, correctly, that a shared libc saves
+almost no memory here: `--gc-sections` strips each program to what it
+calls, and a `/bin` program calls little. The roadmap carried "decide
+whether the widget code becomes a shared library" as a note for months
+because nobody had measured the toolkit the same way.
+
+**The measurement.** Summing the text of every symbol each GUI binary
+takes from `libuapp.a` (a script over `nm -S`, 2026-09-04): the app's
+OWN code is 10-30 KB in every GUI program but Doom and the compositor,
+and the toolkit linked beside it is 45-138 KB -- three to ten times the
+app. Across the eighteen GUI binaries that was 635 KB of application
+text and 1,373 KB of toolkit. Two things drove it that `--gc-sections`
+cannot touch: the image and sound codec TABLES (`uimg.c`, `usnd.c`)
+reference every decoder, so the 19 KB JPEG decoder rides into About and
+Properties because the icon cache touches `uimg`; and the TrueType
+rasteriser, `uapp`, `ugfx` and the router are in everything that draws.
+`/lib` pages are served from the kernel image cache and mapped BORROWED
+into every process, so a `.so` genuinely is one copy.
+
+**What real systems do.** GTK, Qt, `user32.dll`/`comctl32.dll` and
+AppKit are all shared, and what they buy is not memory first but ONE
+BUILD of the toolkit that every program on the machine runs -- a widget
+fix reaches every window without relinking anything. Plan 9's libdraw
+and Go went the other way on purpose, so "real systems share their
+toolkit" is a majority, not a law.
+
+**The honest payoff.** With five apps open the saving is a few hundred
+KB on a machine with hundreds of MB, which is not why it was built. It
+was built because the mechanism already existed (`libc.so` is the same
+sources compiled twice with `-fpic`; the loader walks a library's own
+`DT_NEEDED`; the image cache shares pages), the toolkit uses no TLS and
+no constructors so the loader needed no change, and the cost was one
+Makefile stanza. `libuapp.a` stays for the static set (init, toywm,
+`/tests`), which is why the sources stay in `userland/lib/` and
+`userland/ui/` rather than moving to `userland/dynlib/` as an ordinary
+library's would.
+
+**What was checked rather than assumed.** `readelf -d` on a GUI binary
+shows `NEEDED libuapp.so` then `libc.so`; the `.so`'s own undefined
+symbols are libc's and the executable's `sys_*` (resolved exe-first,
+the same shape `__errno_location` already relied on); and five GUI
+tools plus the whole `/tests` suite passed on the first boot. What was
+NOT measured: startup time. Eager relocation of a few thousand more
+entries per spawn was assumed to be microseconds, as the design doc
+assumes for libc, and a spawn that visibly slowed would be the signal
+to measure it.
+
 ## `sum` is a checksum calculator with an algorithm table, and its crc32 is not `cksum`'s
 
 `/bin/sum` used to read two integers from stdin and print their sum --

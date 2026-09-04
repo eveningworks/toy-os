@@ -643,7 +643,7 @@ whenever a headline here tells you something you did not already know.
 - **The ring-3 address-space map is `kernel/include/kernel/uaddr.h`, stated once.**
 - **`SYS_MMAP` IS A REGION LIST, ITS ARENA IS ITS OWN RANGE, AND A FILE-BACKED FAULT-IN REFUSES INSIDE AN `FS_OP`**
 - **A DYNAMIC EXECUTABLE IS ENTERED THROUGH `/lib/ld-toy.so`, AND THE KERNEL NEVER LEARNS ET_DYN**
-- **EVERY `/bin` AND GUI PROGRAM LINKS `/lib/libc.so`; init, toywm AND `/tests` ARE STATIC; AND THE `#` SHELL'S BARE NAME SPAWNS**
+- **EVERY `/bin` AND GUI PROGRAM LINKS `/lib/libc.so` AND `/lib/libuapp.so`; init, toywm AND `/tests` ARE STATIC; AND THE `#` SHELL'S BARE NAME SPAWNS**
 - **The kernel heap has a debug mode, and it is a RUNTIME toggle**
 - **The kernel RELOCATES ITSELF at boot -- it is not running where it was linked.**
 - **A BLOCKED PROCESS WAITS ON A CHANNEL, AND A CHANNEL IS AN ADDRESS.**

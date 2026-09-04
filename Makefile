@@ -378,7 +378,7 @@ VERSION_GEN := $(shell sh tools/gen_version.sh >/dev/null 2>&1 && echo ok)
 version:
 	@sh tools/gen_version.sh
 
-all: $(KERNEL) $(USERLAND_ELVES) $(LDSO) $(DYNLIBS) $(LIBC_SO)
+all: $(KERNEL) $(USERLAND_ELVES) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LIBUAPP_SO)
 
 help:
 	@echo "toy-os -- available targets:"
@@ -816,6 +816,22 @@ LIBC_PIC_OBJS = $(patsubst userland/%.c,$(BUILD)/userland-pic/%.o,$(filter-out u
 
 LIBC_NONSHARED = $(BUILD)/userland/libc_nonshared.a
 
+# libuapp.so -- the TOOLKIT (userland/ui + userland/lib + the shared
+# kernel/lib sources) as one shared object, from the same sources as
+# libuapp.a compiled a second time with -fpic, exactly as libc.so is.
+# Every dynamic /bin and GUI program links it; libuapp.a stays for the
+# static set (init, toywm, /tests). Measured before building it: the
+# toolkit was 45-138 KB of text in every GUI binary against 10-30 KB of
+# the app's own, and /lib pages are shared through the image cache, so
+# this is one copy of the widgets, the JPEG decoder and the TrueType
+# rasteriser in memory rather than one per window. No --gc-sections on
+# a .so: it carries the whole toolkit, and only touched pages are read.
+LIBUAPP_PIC_OBJS = $(patsubst $(BUILD)/userland/%.o,$(BUILD)/userland-pic/%.o,$(LIBUAPP_OBJS))
+LIBUAPP_SO = $(BUILD)/lib/libuapp.so
+$(LIBUAPP_SO): $(LIBUAPP_PIC_OBJS) $(LIBC_SO)
+	@mkdir -p $(dir $@)
+	$(LD) -shared --hash-style=sysv -z max-page-size=4096 -soname libuapp.so -o $@ $(LIBUAPP_PIC_OBJS) $(LIBC_SO)
+
 $(BUILD)/userland-pic/%.o: userland/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(LIBC_PIC_CFLAGS) $< -o $@
@@ -856,7 +872,7 @@ DYN_LINK = $(LD) --gc-sections -T userland/rt/link-dyn.ld -nostdlib \
 $(BUILD)/userland/tests/dynlibc_test.elf: $(BUILD)/userland/tests/dynlibc_test.o $(USERLAND_RT) userland/rt/link-dyn.ld $(LIBUAPP) $(LIBC_NONSHARED) $(LIBC_SO) $(LDSO)
 	$(DYN_LINK) -o $@ $(BUILD)/userland/rt/crt0.o $< $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(BUILD)/userland/rt/tls.o $(LIBUAPP) $(LIBC_NONSHARED) $(LIBC_SO)
 
-# EVERY /bin AND GUI PROGRAM LINKS libc.so (the user's 2026-08-28
+# EVERY /bin AND GUI PROGRAM LINKS libc.so AND libuapp.so (the user's 2026-08-28
 # call, docs/decisions.md): both are only ever started through
 # SYS_SPAWN -- a bare name at either shell spawns -- so nothing loses
 # the legacy `run`, which refuses dynamic by design. /tests stays
@@ -870,11 +886,11 @@ $(BUILD)/userland/tests/dynlibc_test.elf: $(BUILD)/userland/tests/dynlibc_test.o
 #   (toywm is outside USERLAND_PROGRAM_DIRS and stays static by
 #    construction -- same reasoning: the desktop is what a rescue
 #    happens on.)
-$(BUILD)/userland/bin/%.elf: $(BUILD)/userland/bin/%.o $(USERLAND_RT) userland/rt/link-dyn.ld $(LIBUAPP) $(LIBC_NONSHARED) $(LIBC_SO) $(LDSO) $$(call uextra,$$*) $$(call ulibso,$$*)
-	$(DYN_LINK) -o $@ $(BUILD)/userland/rt/crt0.o $< $(call uextra,$*) $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(BUILD)/userland/rt/tls.o $(call ulibso,$*) $(LIBUAPP) $(LIBC_NONSHARED) $(LIBC_SO)
+$(BUILD)/userland/bin/%.elf: $(BUILD)/userland/bin/%.o $(USERLAND_RT) userland/rt/link-dyn.ld $(LIBUAPP_SO) $(LIBC_NONSHARED) $(LIBC_SO) $(LDSO) $$(call uextra,$$*) $$(call ulibso,$$*)
+	$(DYN_LINK) -o $@ $(BUILD)/userland/rt/crt0.o $< $(call uextra,$*) $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(BUILD)/userland/rt/tls.o $(call ulibso,$*) $(LIBUAPP_SO) $(LIBC_NONSHARED) $(LIBC_SO)
 
-$(BUILD)/userland/gui/%.elf: $(BUILD)/userland/gui/%.o $(USERLAND_RT) userland/rt/link-dyn.ld $(LIBUAPP) $(LIBC_NONSHARED) $(LIBC_SO) $(LDSO) $$(call uextra,$$*) $$(call ulibso,$$*)
-	$(DYN_LINK) -o $@ $(BUILD)/userland/rt/crt0.o $< $(call uextra,$*) $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(BUILD)/userland/rt/tls.o $(call ulibso,$*) $(LIBUAPP) $(LIBC_NONSHARED) $(LIBC_SO)
+$(BUILD)/userland/gui/%.elf: $(BUILD)/userland/gui/%.o $(USERLAND_RT) userland/rt/link-dyn.ld $(LIBUAPP_SO) $(LIBC_NONSHARED) $(LIBC_SO) $(LDSO) $$(call uextra,$$*) $$(call ulibso,$$*)
+	$(DYN_LINK) -o $@ $(BUILD)/userland/rt/crt0.o $< $(call uextra,$*) $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(BUILD)/userland/rt/tls.o $(call ulibso,$*) $(LIBUAPP_SO) $(LIBC_NONSHARED) $(LIBC_SO)
 
 $(BUILD)/userland/bin/init.elf: $(BUILD)/userland/bin/init.o $(USERLAND_RT) userland/rt/link.ld $(LIBUAPP) $(LIBC)
 	$(LD) -n --gc-sections -T userland/rt/link.ld -nostdlib -o $@ $(BUILD)/userland/rt/crt0.o $< $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(BUILD)/userland/rt/tls.o $(LIBUAPP) $(LIBC)
@@ -1118,13 +1134,13 @@ $(DISK_IMG):
 # holds the registry and the reasoning.
 EXTRAS ?=
 LICENSE ?=
-seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO)
+seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LIBUAPP_SO)
 	$(if $(EXTRAS),TOYOS_LICENSE=$(LICENSE) python3 tools/fetch_extras.py,@true)
 	mkdir -p $(SEED_DIR)/sync/bin $(SEED_DIR)/sync/tests
 	# The dynamic loader and the shared libraries -- /lib is theirs
 	# (docs/filesystem-layout.md).
 	mkdir -p $(SEED_DIR)/sync/lib
-	cp $(LDSO) $(DYNLIBS) $(LIBC_SO) $(SEED_DIR)/sync/lib/
+	cp $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LIBUAPP_SO) $(SEED_DIR)/sync/lib/
 	# Destination comes from the SOURCE DIRECTORY, not from a list:
 	# build/userland/{gui,bin}/x.elf -> /bin/x, build/userland/tests/x.elf
 	# -> /tests/x, with $(call seed_name,...) applying the three renames.
