@@ -3090,7 +3090,7 @@ left is the survey findings, none of them started.
   all 36 GUI tools including `notepad` 21/21 and `menubar` 22/22, and a
   positive control (type-ahead disabled in `uui_seek.c` reddens both new
   checks).
-- [x] ~~**The `tests:` branch.**~~ LANDED 2026-09-04. `userland/lib/utest.h`
+- [x] ~~**The `tests:` branch.**~~ LANDED 2026-09-04 as af706100. `userland/lib/utest.h`
   is the harness every self-checking `/tests` program reports through,
   and all 38 are migrated: one banner, one line per check, one epilogue
   in one shape. `UTEST_VERDICT_FILE` replaces the hand-rolled
