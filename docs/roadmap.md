@@ -349,6 +349,7 @@ No dependency on the phases above; ordered among themselves.
 - [x] ~~Report nothing mounted as NOTHING MOUNTED, instead of as an active backend that fails every call~~ done
 - [x] ~~Refuse a whole-disk volume: a drive's root must be a partition, and a flat image says so and boots to ramfs~~ done
 - [ ] The live CD unpacks into ramfs rather than mounting a RAM block device, retiring `block_ram.c`
+- [ ] A sector cache on the AHCI and virtio paths -- `ata_cache.c` is wired only into `ata.c`, and `atac_ops` is already the seam
 - [ ] A block/buffer cache with write-back
 - [ ] Directory index
 - [x] ~~`fs_rename()`~~ done
@@ -661,6 +662,7 @@ run on, not by order.
 - [x] ~~IRQ-driven write + `ata.c` parity~~
 - [x] ~~Multi-sector transfers (PRDT scatter-gather)~~
 - [x] ~~Backend selection + fallback~~
+- [ ] One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy
 - [ ] NCQ (queued commands) -- needs an ASYNCHRONOUS block interface first, not more AHCI code
 - [ ] An asynchronous `block_device` submit/complete split, which NCQ, readahead and writeback all wait on
 - [ ] Batched journal barriers -- `ata_flush_begin()`/`_end()` generalised into the block layer, so a write shares ONE flush

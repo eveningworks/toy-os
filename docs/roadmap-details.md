@@ -258,6 +258,49 @@ everything else depends on. The doc also enumerates exactly what
 refusing a flat volume breaks -- six things, including the live image,
 which gains a partition table rather than an exemption.
 
+One AHCI command at a time costs ~7x virtio per command -- measured
+2026-09-04 with `QUERY_BLKSTAT`, KVM, 16 MiB: a sequential read issued
+13189 block reads at **100 us each on AHCI** against **14 us on
+virtio-blk**, with the call counts within 4% of each other because they
+are the filesystem's and not the driver's. That control is what
+separates the two problems: the filesystem was issuing too many
+commands (fixed), and AHCI is slow per command (not).
+
+Three candidates, none yet measured against each other: `run_command()`
+uses ONE command slot and waits for it, so the round trip cannot be
+pipelined; inside a syscall the wait is a busy-poll on `PxCI` with
+interrupts off and no `pause`; and every transfer is memcpy'd through a
+64 KiB DMA bounce buffer rather than mapping the caller's pages. The
+first is what NCQ and the async block interface below would address, and
+the third is a PRDT that describes the caller's buffer instead. Worth
+knowing before assuming this is emulator overhead: real hardware does
+real DMA, so the bounce copy and the poll are a larger share there, not
+a smaller one.
+
+A sector cache on the AHCI and virtio paths -- `ata_cache.c`'s 256 KiB
+write-back cache is reached only through `ata.c`'s read/write, so a
+machine whose root is AHCI (every modern laptop) or virtio-blk has no
+sector cache at all. `struct atac_ops` is already a three-function
+abstraction, so the code is close to reusable; what needs deciding is
+OWNERSHIP, because the cache is a singleton and all three drivers
+initialise at boot. Claiming it when the ROOT is chosen is the obvious
+answer and is not what happens today -- `ata_init()` takes it
+unconditionally, so on a machine with both, ATA holds a cache it barely
+uses while the root gets none.
+
+Why it is worth doing, measured on QEMU/KVM/AHCI, 16 MiB sequential
+write: after the pointer-table caching landed, reads are still **76% of
+block-layer time** (974 ms of 1288) at 2.4 read calls per block written.
+Those are bitmap, group-descriptor, inode and dirent reads -- small,
+repeated, and exactly what a sector cache absorbs. The pointer tables
+themselves are already handled inside TFS3 and are not the remainder.
+
+The caution from `docs/decisions.md` still stands and is why this is not
+simply "move it to the block layer": a cache above the drivers would sit
+where `g_whole` and a partition on it alias the same physical sectors at
+different LBAs, so a partition write and a whole-disk read of the same
+sector would be different keys and could disagree silently.
+
 ~~A TFS3 test reaching double- and triple-indirect addressing~~ --
 **done.** `fs_test.c`'s two "indirect blocks survive a write and a read
 back" tests reach both tables, and the entry below was wrong about what
