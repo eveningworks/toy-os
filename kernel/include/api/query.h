@@ -31,11 +31,17 @@
 // duration. Registering a stack local leaves the registry holding a
 // dangling pointer that reads as plausible garbage rather than crashing.
 
-// Registered providers. Raised from 16 as the introspection commands
-// moved to /bin: each one is a class, and the remaining set (dmesg,
-// fsck, debug) will want more. A provider is a pointer, so the table is
-// cheap; the cap exists to bound the walk, not to ration them.
-#define QUERY_MAX 32
+// Registered providers. Raised from 16, then from 32 as the
+// introspection commands moved to /bin: each one is a class, and the
+// remaining set (dmesg, fsck, debug) will want more. A provider is a
+// pointer, so the table is cheap; the cap exists to bound the walk, not
+// to ration them.
+//
+// KEEP HEADROOM ABOVE THE REGISTERED COUNT. query_test.c registers a
+// FIXTURE provider at runtime, so a table that is merely full at boot
+// fails three tests with "registry full" rather than anything naming
+// the cap -- which is how the 32 was found, by filling it.
+#define QUERY_MAX 48
 
 // The largest record any class may declare. It bounds the one stack
 // buffer that reads a record in order to pull a named field out of it,

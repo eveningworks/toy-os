@@ -319,6 +319,48 @@ this the obvious way), not from how much history it accumulated.
     to be unwieldy there should get its own `/etc/<name>.conf` rather
     than cramming in to match convention.
 
+## A READ THAT CROSSES BLOCKS COALESCES, AND A POINTER TABLE IS CACHED PER LEVEL -- BUT ONLY UNTIL THE NEXT WRITE
+
+`read_range_impl()` gathers the contiguous on-disk run of whole blocks a
+read covers and issues it as ONE transfer straight into the caller's
+buffer, the mirror of what the write path has done since TFS2. Beside
+it, `rcache_get()` holds one indirect-table image PER LEVEL (leaf, mid,
+top -- numbered from the leaf), so a sequential read walks the tables
+once rather than re-reading them for every 4 KiB block.
+
+**The invalidation is the part you can break.** `vol_write_sectors()`
+drops the whole cache on EVERY write, unconditionally, and that bluntness
+is the safety argument: an entry may only hold what is on the device,
+and a cache that tried to be selective would need to know which blocks
+are pointer tables. Get it wrong once and a read served from a stale
+table returns another file's data -- silently, as a hole full of zeros.
+
+**If you touch this, know that the suite did not cover it.** Disabling
+the invalidation left all 640 KTESTs green. Catching it needs a file
+past the twelve direct pointers, READ BACK first (that is what caches
+the table), then appended to, then read again -- `fs_test.c`'s "appended
+blocks are visible after the pointer table is re-read". The general
+shape is the one the truncate tests already learned: a fixture too small
+to reach the branch tests nothing. See `docs/decisions.md`.
+
+
+## THE BLOCK LAYER TIMES EVERY OPERATION, AND `clock-granularity-ns` SAYS WHETHER TO BELIEVE IT
+
+`QUERY_BLKSTAT` carries calls, sectors, nanoseconds and failures for
+read, write, flush and trim; `/bin/diskbench` prints the delta per
+profile as its `io` lines. Reach for it before theorising about disk
+performance -- it is what showed a sequential WRITE spending 79% of its
+time in READS.
+
+**The reading is worthless on the default QEMU clocksource.** A guest is
+not offered an invariant TSC unless the CPU model says `+invtsc` (QEMU
+masks it because it blocks migration), so toy-os falls back to the PIT,
+which cannot resolve a single driver call -- every duration reads as
+zero and the profiler reports that nothing costs anything. Measure with
+`vm.py --kvm --cpu host,+invtsc`, and check the `clock-granularity-ns`
+line before quoting any microsecond figure.
+
+
 ## A PARTITION IS A BLOCK DEVICE, AND THE FILESYSTEM NEVER LEARNS ITS OFFSET
 
 `kernel/drivers/block/block_part.c` wraps a parent `struct

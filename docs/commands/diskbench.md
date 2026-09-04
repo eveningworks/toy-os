@@ -15,20 +15,29 @@ profiles, in the shape CrystalDiskMark made familiar — sequential and
 random, read and write — over a temp file it creates and removes.
 
     $ diskbench --size 16
-    diskbench: progress SEQ1K-write 1
+    diskbench: syscall-bytes 65536
+    diskbench: clock-granularity-ns 140
+    diskbench: progress SEQ-write 1
     ...
-    diskbench: result SEQ1K-write 3426 3508 285
-    diskbench: result SEQ1K-read 10958 11221 89
-    diskbench: result RND4K-write 3508 898 1113
-    diskbench: result RND4K-read 9523 2438 410
+    diskbench: result SEQ-write 7509 120 8323
+    diskbench: io SEQ-write read 13223 50484 1319043
+    diskbench: io SEQ-write write 2331 45164 242459
+    diskbench: io SEQ-write flush 596 0 56392
+    diskbench: result SEQ-read 62692 1003 996
+    diskbench: io SEQ-read read 1385 34565 145042
+    ...
     diskbench: done
 
 **`--out FILE` writes the report to a file instead of stdout, and
 changes its SHAPE: a file gets the whole current state rewritten each
-time, at most six lines, rather than an appended log.** That is what a
-poller needs — `sys_read` carries at most 1 KiB per call, so an appended
-log puts the results, which come last, past where a poller ever reaches.
-Disk Mark sat at "Done." with four empty tiles for exactly that reason.
+time rather than an appended log.** That is what a poller needs: it
+re-reads the file in one `sys_read`, so an appended log would put the
+results, which come last, past where a poller ever reaches. Disk Mark
+sat at "Done." with four empty tiles for exactly that reason. The
+snapshot is bounded so it stays inside the reader's buffer, and a report
+that outgrew it would end with `diskbench: error report-truncated`
+rather than silently stopping — which is what it did when the `io` lines
+were added and the buffer was still sized for the results alone.
 A file rather than a pipe because `SYS_SPAWN`'s `stdout_fd` must be a
 pipe write end, and `PIPE_MAX` is 8 KiB kernel-wide — a GUI slow to
 drain would block the benchmark it is timing.
@@ -36,19 +45,42 @@ drain would block the benchmark it is timing.
 **The output is parsed, so its shape is a contract.** A `result` line is
 `<profile> <milli-MB/s> <IOPS> <microseconds>` — thousandths and
 microseconds, so a reader needs no floating point, of which there is
-none in this project's shared code. Disk Mark spawns this and displays
-what it prints; that split is the point rather than a convenience, since
-these passes take minutes and a GUI client that blocked through one
-would stop answering the compositor's pings.
+none in this project's shared code.
+
+**An `io` line is `<profile> <op> <calls> <sectors> <microseconds>`,
+one per block-layer operation kind, as a delta across that profile
+(`QUERY_BLKSTAT`).** It is where the time actually went, and it exists
+because a MB/s figure cannot tell apart the three things that make a
+disk slow here: commands that are too small, commands that are too many,
+and cache flushes. A flush moves no sectors at all and can still be most
+of the wall clock — and on emulated hardware it is nearly free while on
+a real SSD it forces DRAM to NAND, which is exactly how a number
+measured in QEMU gets believed about a laptop.
+
+**`clock-granularity-ns` says whether to believe the `io` microseconds.**
+The kernel times each call with its clocksource, and in every default
+QEMU configuration that is the PIT: a guest is not offered an invariant
+TSC unless the CPU model says `+invtsc` (it blocks migration), so a
+single command rounds to zero and the whole column reads as "this cost
+nothing". Real hardware has the TSC and resolves it. A granularity in
+the millions means the `io` micros are floor-zero noise; use
+`vm.py --kvm --cpu host,+invtsc` to get a real one.
+
+Disk Mark spawns this and displays what it prints; that split is the
+point rather than a convenience, since these passes take minutes and a
+GUI client that blocked through one would stop answering the
+compositor's pings.
 
 **Why the profiles are not called SEQ1M.** Two things CrystalDiskMark
 reports that this OS cannot deliver are stated rather than implied:
 
-- **1 KiB per syscall.** `SYS_WRITE_MAX` is 1024 bytes — an artefact of
-  the bounce buffer the syscall copies through — and libsys loops to
-  complete a bigger buffer. A "1 MiB transfer" is therefore 1024
-  syscalls and the disk never sees one, so the sequential profile is
-  **SEQ1K**.
+- **64 KiB per syscall.** `SYS_WRITE_MAX` is 65536 bytes — an artefact
+  of the bounce buffer the syscall copies through — and libsys loops to
+  complete a bigger buffer. A "1 MiB transfer" is therefore 16 syscalls
+  and the disk never sees one, so the profile is plain **SEQ** and the
+  program prints the size it actually used as `syscall-bytes`. (This
+  page said 1 KiB and **SEQ1K** for a while after the constant was
+  raised; the number a reader wants is the one on the line.)
 - **Q1T1.** One request in flight, always: there is no asynchronous
   block interface and no threads here, so Q8T1 and Q32T1 have nothing to
   express.

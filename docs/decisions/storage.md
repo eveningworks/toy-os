@@ -167,6 +167,104 @@ The preemption guard above and `fs_read_into()` are complementary, not
 alternatives: the guard protects the backend DURING a call, this removes
 the shared buffer AFTER it returns.
 
+## The read path caches pointer tables per LEVEL and drops them on any write
+
+`read_range_impl()` called `block_for_index()` once per 4 KiB block, and
+that function re-read the indirect table from the device every time. The
+write path had solved the same problem years earlier with `pcache` and
+run coalescing (the 18 -> 25 MB/s commit); the read half was simply
+never done, and nothing measured it because a MB/s figure does not say
+how many commands produced it.
+
+Measured on QEMU/KVM with AHCI, 16 MiB: a sequential read issued 13189
+block-device calls moving 93689 sectors to deliver 32768 sectors of
+data -- 3.2 commands per block and 2.9x sector amplification, because a
+file past 4 MiB is double-indirect and every block re-read both tables
+above it. Fixing it took the same run coalescing the write path has plus
+a table cache: 1385 calls, 34565 sectors, and 6.87 -> 62.7 MB/s.
+
+**Per LEVEL, not one entry.** A walk touches top, then mid, then leaf.
+A single slot evicts the level above on every step, so three reads per
+block become three misses per block -- which is what the uncached code
+already did. Three entries, numbered from the LEAF so a single- and a
+triple-indirect walk agree about which slot a leaf occupies; numbering
+from the top puts the leaf at a different level per depth and evicts it
+on every step.
+
+**Per CALL, not per mount**, for the reason `g_txn_img` already is: the
+filesystem is one global critical section (`vfs.c`'s `FS_OP` preemption
+guard), so no second mount can be between a load and its use. Making it
+per mount would cost 12 KiB on every mount for a cache only one of them
+can be using.
+
+**Invalidated by ANY write, in `vol_write_sectors()`.** This is the
+whole safety argument and it is deliberately blunt: an entry may only
+hold what is on the device, and anything cleverer needs to know which
+blocks are pointer tables. Being wrong once means a read served from a
+stale table returns another file's data. It sits at `vol_write_sectors`
+rather than `write_block` because a coalesced data run goes straight to
+the device, and a block that was a pointer table before it was freed and
+reused as data would otherwise still be cached under its old number.
+
+**What this did NOT fix**, stated because the measurement says so:
+random 4 KiB reads gained almost nothing (3.41 -> 3.67 MB/s) -- they
+cannot coalesce and each seek lands in a different leaf -- and the
+sequential WRITE path was unchanged, because its metadata reads go
+through `map_get_or_alloc_tables()` and the allocator, not through
+`block_for_index()`.
+
+**The positive control is the part worth keeping.** Disabling the
+invalidation left all 640 KTESTs green -- the same shape as the truncate
+tests that stayed green with the indirect boundary handling disabled,
+and for the same reason: nothing wrote a file big enough to load a table
+and then re-read it. The test that closes it grows a file across the
+direct-pointer boundary, reads it back (which is what ARMS the bug),
+appends, and requires the appended bytes -- a stale table answers with a
+zero pointer, which reads as a hole, so the data comes back blank.
+
+
+## The block layer counts TIME per operation, not just calls
+
+`QUERY_BLKSTAT` records calls, sectors, nanoseconds and failures for
+read, write, flush and trim, timed around the driver call in
+`block.c`'s four `io_*` helpers -- the one place `blk_*`, `blk_disk_*`
+and `blkdev_*` all funnel through, so a caller can be counted neither
+twice nor not at all. `/bin/diskbench` snapshots it around each profile
+and reports the delta.
+
+It exists because three unrelated things make a disk slow here and
+throughput tells them apart from none of them: commands too small,
+commands too many, and cache flushes. A flush moves no sectors and can
+still dominate -- and it is nearly free on emulated hardware while a
+real SSD must push DRAM to NAND, which is precisely how a number
+measured in QEMU gets believed about a laptop. The first run with it
+attached showed a sequential WRITE spending 79% of its time in READS,
+which no throughput figure would ever have said.
+
+**Always on, like `net_device`'s counters.** Two clocksource reads per
+operation is nothing beside a disk command, and a counter that must be
+enabled first is a counter nobody has when they need it.
+
+**A failed call is still timed.** A command that timed out is the most
+expensive one the layer issues; dropping it would make a disk look
+faster the worse it was behaving.
+
+**Deltas, not a reset.** Reset exists for tests, but ring 3 subtracts
+two snapshots: a reset would be a WRITE to a class that is a fact, and
+two readers of it must not be able to blank each other's baseline.
+
+**The trap it exposed, which is about the CLOCK rather than the disk.**
+In every default QEMU configuration toy-os runs on the PIT, because a
+guest is not offered an invariant TSC unless the CPU model says
+`+invtsc` -- QEMU masks it since it blocks migration. The PIT cannot
+resolve one driver call, so every duration reads as zero and the
+profiler confidently reports that nothing costs anything. `diskbench`
+prints the observed `clock-granularity-ns` so that case names itself,
+and the KTEST for the counters SKIPS its timing assertion rather than
+failing on it, saying which clocksource it needed. Use
+`vm.py --kvm --cpu host,+invtsc` for a real measurement.
+
+
 ## The disk cache is under the ATA DRIVER, not the block layer -- and its flush can fail
 
 The block layer is the tidier home for a cache and it is the wrong one.

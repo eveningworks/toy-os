@@ -8,6 +8,8 @@
 #include "kfmt.h" // klog_printf
 #include <stddef.h>
 #include "driver.h" // driver_bound() -- `lsdrv`
+#include "block_stat.h"
+#include "clocksource.h" // clocksource_now_ns() -- the stat timers
 
 // driver-none: the block class registry itself
 
@@ -199,17 +201,63 @@ uint32_t blk_disk_sector_count(void) {
     return g_whole ? g_whole->sector_count() : 0;
 }
 
+// ---- the timed driver calls -----------------------------------------
+//
+// EVERY path below goes through these four, so a caller cannot be
+// counted twice and cannot escape being counted at all -- the same
+// reason fault injection sits at this layer rather than in a driver.
+// blk_*, blk_disk_* and blkdev_* differ only in WHICH device they pick;
+// what they do with it is here, once.
+//
+// A FAILED CALL IS STILL TIMED. A command that timed out is the most
+// expensive one the layer ever issues, and dropping it from the total
+// would make a disk look faster the worse it was behaving.
+static int io_read(const struct block_device *dev, uint32_t lba,
+                   int count, void *buf) {
+    if (fault_should_fail_block_read()) return 0;
+    if (!dev) return 0;
+    uint64_t t0 = clocksource_now_ns();
+    int ok = dev->read_sectors(lba, count, buf);
+    blk_stat_add(BLK_STAT_READ, (uint32_t)(count < 0 ? 0 : count),
+                 clocksource_now_ns() - t0, ok);
+    return ok;
+}
+
+static int io_write(const struct block_device *dev, uint32_t lba,
+                    int count, const void *buf) {
+    if (fault_should_fail_block_write()) return 0;
+    if (!dev) return 0;
+    uint64_t t0 = clocksource_now_ns();
+    int ok = dev->write_sectors(lba, count, buf);
+    blk_stat_add(BLK_STAT_WRITE, (uint32_t)(count < 0 ? 0 : count),
+                 clocksource_now_ns() - t0, ok);
+    return ok;
+}
+
+static int io_flush(const struct block_device *dev) {
+    if (!dev || !(dev->caps & BLK_CAP_FLUSH)) return 1;
+    uint64_t t0 = clocksource_now_ns();
+    int ok = dev->flush();
+    blk_stat_add(BLK_STAT_FLUSH, 0, clocksource_now_ns() - t0, ok);
+    return ok;
+}
+
+static int io_trim(const struct block_device *dev, uint32_t lba, uint32_t count) {
+    uint64_t t0 = clocksource_now_ns();
+    int ok = dev->trim(lba, count);
+    blk_stat_add(BLK_STAT_TRIM, count, clocksource_now_ns() - t0, ok);
+    return ok;
+}
+
 // The fault-injection hooks are the same ones blk_read_sectors() uses:
 // a partition-table read failing under injection is a case worth being
 // able to test, and there is no reason for it to be exempt.
 int blk_disk_read_sectors(uint32_t lba, int count, void *buf) {
-    if (fault_should_fail_block_read()) return 0;
-    return g_whole ? g_whole->read_sectors(lba, count, buf) : 0;
+    return io_read(g_whole, lba, count, buf);
 }
 
 int blk_disk_write_sectors(uint32_t lba, int count, const void *buf) {
-    if (fault_should_fail_block_write()) return 0;
-    return g_whole ? g_whole->write_sectors(lba, count, buf) : 0;
+    return io_write(g_whole, lba, count, buf);
 }
 
 const struct block_device *blk_active(void) { return g_dev; }
@@ -227,13 +275,11 @@ uint32_t blk_sector_count(void) { return g_dev ? g_dev->sector_count() : 0; }
 // fault_inject.h -- the ATA-specific pair still exists for ATA's own
 // write-back cache tests, which sit below this layer.
 int blk_read_sectors(uint32_t lba, int count, void *buf) {
-    if (fault_should_fail_block_read()) return 0;
-    return g_dev ? g_dev->read_sectors(lba, count, buf) : 0;
+    return io_read(g_dev, lba, count, buf);
 }
 
 int blk_write_sectors(uint32_t lba, int count, const void *buf) {
-    if (fault_should_fail_block_write()) return 0;
-    return g_dev ? g_dev->write_sectors(lba, count, buf) : 0;
+    return io_write(g_dev, lba, count, buf);
 }
 
 int blk_max_sectors_per_xfer(void) {
@@ -251,8 +297,7 @@ int blk_max_sectors_per_xfer(void) {
 // else. Only a device that HAS a cache and does not flush it would be
 // lying, and blk_register() refuses that shape.
 int blk_flush(void) {
-    if (g_dev && (g_dev->caps & BLK_CAP_FLUSH)) return g_dev->flush();
-    return 1;
+    return io_flush(g_dev);
 }
 
 // `notrim` ON THE BOOT LINE STOPS EVERY BACKEND DISCARDING. Gated HERE,
@@ -290,7 +335,7 @@ int blk_trim_supported(void) {
 
 int blk_trim(uint32_t lba, uint32_t count) {
     if (!blk_trim_supported()) return 0;
-    return g_dev->trim(lba, count);
+    return io_trim(g_dev, lba, count);
 }
 
 // ---- I/O on a NAMED device ------------------------------------------
@@ -301,13 +346,11 @@ int blk_trim(uint32_t lba, uint32_t count) {
 // fault-injection hooks are the same ones, deliberately: an error path
 // does not become untestable by being on a second mount.
 int blkdev_read_sectors(const struct block_device *dev, uint32_t lba, int count, void *buf) {
-    if (fault_should_fail_block_read()) return 0;
-    return dev ? dev->read_sectors(lba, count, buf) : 0;
+    return io_read(dev, lba, count, buf);
 }
 
 int blkdev_write_sectors(const struct block_device *dev, uint32_t lba, int count, const void *buf) {
-    if (fault_should_fail_block_write()) return 0;
-    return dev ? dev->write_sectors(lba, count, buf) : 0;
+    return io_write(dev, lba, count, buf);
 }
 
 int blkdev_max_sectors_per_xfer(const struct block_device *dev) {
@@ -317,8 +360,7 @@ int blkdev_max_sectors_per_xfer(const struct block_device *dev) {
 // Same contract as blk_flush(): 1 on a device with no cache, because
 // there is nothing that can be lost independently of everything else.
 int blkdev_flush(const struct block_device *dev) {
-    if (dev && (dev->caps & BLK_CAP_FLUSH)) return dev->flush();
-    return 1;
+    return io_flush(dev);
 }
 
 int blkdev_trim_supported(const struct block_device *dev) {
@@ -331,7 +373,7 @@ int blkdev_trim_supported(const struct block_device *dev) {
 
 int blkdev_trim(const struct block_device *dev, uint32_t lba, uint32_t count) {
     if (!blkdev_trim_supported(dev)) return 0;
-    return dev->trim(lba, count);
+    return io_trim(dev, lba, count);
 }
 
 uint32_t blkdev_sector_count(const struct block_device *dev) {

@@ -27,8 +27,29 @@
 //
 //   diskbench: progress <profile> <percent>
 //   diskbench: result <profile> <milli-MB/s> <iops> <micros>
+//   diskbench: io <profile> <op> <calls> <sectors> <micros>
+//   diskbench: clock-granularity-ns <n>
 //   diskbench: done
 //   diskbench: error <reason>
+//
+// THE `io` LINES ARE WHERE THE TIME WENT, one per block-layer operation
+// kind (QUERY_BLKSTAT), as a DELTA across the profile. They exist
+// because a MB/s figure cannot tell apart the three things that make a
+// disk slow -- commands too small, commands too many, and cache
+// flushes. A flush moves no sectors and can still be most of the wall
+// clock, and on emulated hardware it is nearly free while on a real SSD
+// it forces DRAM to NAND. Reading the profile's throughput without them
+// is how a measurement taken in QEMU gets believed about a laptop.
+//
+// AND `clock-granularity-ns` IS WHAT SAYS WHETHER TO BELIEVE THE `io`
+// MICROSECONDS AT ALL. The kernel times each call with its clocksource,
+// and in every default QEMU configuration that is the PIT -- an
+// invariant TSC is not offered to a guest unless the CPU model says
+// `+invtsc`, because it blocks migration. A single disk command then
+// rounds to zero and the column reads as "this cost nothing", which is
+// the most misleading answer a profiler can give. Real hardware has the
+// TSC and resolves it; a granularity in the millions means the `io`
+// micros are floor-zero noise rather than a measurement.
 //
 // Throughput is in THOUSANDTHS of a MB/s and latency in MICROSECONDS,
 // so a reader needs no floating point -- there is none in this project's
@@ -54,18 +75,32 @@
 // file neither side waits for the other.
 // TO STDOUT IT STREAMS; TO A FILE IT SNAPSHOTS, and the difference is
 // forced by how each is consumed. A shell reads a log top to bottom. A
-// polling GUI re-reads the file, and sys_read carries at most 1 KiB per
-// call -- so an appended log puts the RESULTS after a kilobyte of
-// progress lines where a poller never reaches them. That shipped: the
-// window sat at "Done." with four empty tiles and nothing logged.
+// polling GUI re-reads the file in ONE read -- so an appended log puts
+// the RESULTS after a wall of progress lines where a poller never
+// reaches them. That shipped: the window sat at "Done." with four empty
+// tiles and nothing logged. (This used to say sys_read carried at most
+// 1 KiB per call; that was true when SYS_WRITE_MAX was 1024 and is not
+// now -- the live bound is the READER's buffer, 4 KiB in diskmark.c.)
 //
 // So a file gets the whole state rewritten each time: at most six
 // lines, always complete, always readable in one call.
 static int g_to_file = 0;
 static const char *g_out_path = 0;
 
-static char g_report[512];
+// SIZED FROM THE WORST CASE, which is not obvious and was wrong once:
+// 3 header lines + PROFILES result lines + PROFILES * 4 `io` lines (one
+// per block-layer op), at ~64 bytes each -- about 1.4 KB. It was 512
+// while only the results were sticky, and adding the `io` lines
+// silently dropped every line past the fourth profile's first: the
+// benchmark ran correctly and the report simply stopped growing, which
+// reads exactly like a hang. Kept under the READER's 4 KiB buffer
+// (diskmark.c's g_out), which is the real ceiling.
+#define REPORT_MAX 2048
+static char g_report[REPORT_MAX + 64];
 static unsigned g_report_len = 0;
+// Set once a sticky line did not fit. A truncated report must SAY so --
+// silently losing results is the bug this buffer already had.
+static int g_truncated = 0;
 
 static void report_flush(void) {
     if (!g_to_file) return;
@@ -77,7 +112,7 @@ static void report_flush(void) {
 
 // One line of the snapshot. `sticky` lines (results) accumulate;
 // progress replaces whatever transient line was there last.
-static char g_sticky[384];
+static char g_sticky[REPORT_MAX];
 static unsigned g_sticky_len = 0;
 
 static void emit_ex(int sticky, const char *fmt, va_list ap) {
@@ -87,8 +122,12 @@ static void emit_ex(int sticky, const char *fmt, va_list ap) {
 
     if (!g_to_file) { write(1, line, (unsigned)n); return; }
 
-    if (sticky && g_sticky_len + (unsigned)n < sizeof g_sticky) {
-        for (int i = 0; i < n; i++) g_sticky[g_sticky_len++] = line[i];
+    if (sticky) {
+        if (g_sticky_len + (unsigned)n < sizeof g_sticky) {
+            for (int i = 0; i < n; i++) g_sticky[g_sticky_len++] = line[i];
+        } else {
+            g_truncated = 1;
+        }
     }
     // The snapshot is every sticky line so far, plus this one if it is
     // transient.
@@ -98,6 +137,11 @@ static void emit_ex(int sticky, const char *fmt, va_list ap) {
     if (!sticky) {
         for (int i = 0; i < n && g_report_len < sizeof g_report; i++)
             g_report[g_report_len++] = line[i];
+    }
+    if (g_truncated) {
+        const char *t = "diskbench: error report-truncated\n";
+        for (int i = 0; t[i] && g_report_len < sizeof g_report; i++)
+            g_report[g_report_len++] = t[i];
     }
     report_flush();
 }
@@ -202,6 +246,54 @@ static uint64_t mbps_milli(uint64_t bytes, uint64_t ns) {
     return (bytes * 1000ull / 1048576ull) * 1000000000ull / ns;
 }
 
+// A snapshot of QUERY_BLKSTAT, so a profile can report its OWN I/O
+// rather than everything since boot. Deltas rather than a reset,
+// because a reset would be a WRITE and this class is a fact: two
+// readers of it must not be able to blank each other's baseline.
+#define BLKSTAT_OPS_MAX 8
+struct io_snap {
+    unsigned n;
+    struct query_blkstat op[BLKSTAT_OPS_MAX];
+};
+
+static void io_snapshot(struct io_snap *s) {
+    s->n = 0;
+    struct query_blkstat r;
+    QUERY_FOREACH(QUERY_BLKSTAT, r, i) {
+        if (s->n >= BLKSTAT_OPS_MAX) break;
+        s->op[s->n++] = r;
+    }
+}
+
+// SILENT WHEN AN OP DID NOTHING. A zero row per profile is four lines of
+// noise in a report a GUI re-reads whole; a missing row already means
+// "no calls", which is the only thing the row would have said.
+static void io_report(int profile, const struct io_snap *before,
+                      const struct io_snap *after) {
+    for (unsigned i = 0; i < after->n && i < before->n; i++) {
+        uint64_t calls = after->op[i].calls - before->op[i].calls;
+        if (!calls) continue;
+        emit("diskbench: io %s %s %llu %llu %llu\n", NAME[profile],
+             after->op[i].name, (unsigned long long)calls,
+             (unsigned long long)(after->op[i].sectors - before->op[i].sectors),
+             (unsigned long long)((after->op[i].ns - before->op[i].ns) / 1000ull));
+    }
+}
+
+// The smallest non-zero gap the monotonic clock will show -- the same
+// clocksource the kernel times block operations with. Sampled rather
+// than asked for: nothing reports a clocksource's resolution, and what
+// a reader needs is what can actually be OBSERVED.
+static uint64_t clock_granularity_ns(void) {
+    uint64_t best = 0;
+    for (int i = 0; i < 64; i++) {
+        uint64_t a = sys_monotonic_ns();
+        uint64_t b = sys_monotonic_ns();
+        if (b > a && (!best || b - a < best)) best = b - a;
+    }
+    return best;
+}
+
 static int run_profile(int profile, const char *path, uint64_t total, int first) {
     int writing = (profile == P_SEQ_WRITE || profile == P_RND_WRITE);
     int random = (profile == P_RND_READ || profile == P_RND_WRITE);
@@ -224,6 +316,9 @@ static int run_profile(int profile, const char *path, uint64_t total, int first)
     // figure does not get truer for being slower.
     uint64_t want = random ? total / 8 : total;
     if (random && !blocks) { close(fd); fail("file-too-small-for-random"); return 0; }
+
+    struct io_snap io_before, io_after;
+    io_snapshot(&io_before);
 
     uint64_t began = sys_monotonic_ns();
     while (moved < want) {
@@ -248,6 +343,7 @@ static int run_profile(int profile, const char *path, uint64_t total, int first)
         began = sys_monotonic_ns();
     }
     elapsed += sys_monotonic_ns() - began;
+    io_snapshot(&io_after);
     close(fd);
 
     uint64_t iops = elapsed ? (ops * 1000000000ull) / elapsed : 0;
@@ -255,6 +351,7 @@ static int run_profile(int profile, const char *path, uint64_t total, int first)
     emit("diskbench: result %s %llu %llu %llu\n", NAME[profile],
            (unsigned long long)mbps_milli(moved, elapsed),
            (unsigned long long)iops, (unsigned long long)us);
+    io_report(profile, &io_before, &io_after);
     return 1;
 }
 
@@ -285,6 +382,8 @@ int main(int argc, char **argv) {
     // STATED, so a reader of the report knows what "SEQ" meant on the
     // build that produced it.
     emit("diskbench: syscall-bytes %u\n", (unsigned)SEQ_BLOCK);
+    emit("diskbench: clock-granularity-ns %llu\n",
+         (unsigned long long)clock_granularity_ns());
 
     uint64_t total = (uint64_t)mib * 1024u * 1024u;
     for (int step = 0; step < PROFILES; step++) {

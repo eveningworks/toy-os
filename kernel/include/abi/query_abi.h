@@ -402,6 +402,18 @@ _Static_assert(sizeof(struct query_fontglyph) <= 256,
 // exists for.
 #define QUERY_CLOCK 32
 
+// WHERE THE TIME WENT IN THE BLOCK LAYER: one record per operation kind
+// -- read, write, flush, trim -- carrying the call count, the sectors
+// moved and the nanoseconds spent inside the driver. LIST. Read by
+// `/bin/diskbench`, which snapshots it around each profile.
+//
+// It exists because the three things that make a disk slow here are
+// indistinguishable from a throughput number: commands that are too
+// small, commands that are too many, and cache flushes. A flush moves
+// no sectors and can still be most of the wall clock, which is exactly
+// the shape a MB/s figure hides.
+#define QUERY_BLKSTAT 33
+
 struct query_clock {
     uint64_t utc;         // seconds since 1970-01-01 00:00:00 UTC
     uint64_t utc_ns;      // the same instant, to the clocksource's resolution
@@ -465,6 +477,21 @@ struct query_acpidump {
 
 _Static_assert(sizeof(struct query_acpidump) <= 256,
                "a query record must fit QUERY_RECORD_MAX -- see api/query.h");
+
+// QUERY_BLKSTAT's record -- one kind of block-layer operation.
+//
+// `sectors` is 0 for flush and counts the range for trim, which moves
+// none either. Timed around the DRIVER call, so a hit in a sector cache
+// below this layer shows up as a fast call rather than as no call --
+// the count is what the filesystem asked for, not what reached a disk.
+#define QUERY_BLKSTAT_NAME 16
+struct query_blkstat {
+    char name[QUERY_BLKSTAT_NAME]; // "read", "write", "flush", "trim"
+    uint64_t calls;
+    uint64_t sectors;
+    uint64_t ns;
+    uint64_t failures;  // calls that returned 0
+};
 
 // QUERY_PROVIDERS' record.
 struct query_provider_info {

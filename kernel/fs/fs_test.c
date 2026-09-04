@@ -312,6 +312,104 @@ KTEST("fs", "truncate shrinks, frees blocks, and grows sparsely") {
     fs_delete("/.ktest_trunc");
 }
 
+// THE POINTER-TABLE READ CACHE IS ONLY SAFE IF A WRITE DROPS IT, and
+// nothing here covered that until this test: disabling the invalidation
+// in tfs3.c's vol_write_sectors() left all 640 KTESTs green, exactly
+// the way the truncate tests above stayed green with the indirect
+// boundary handling disabled.
+//
+// The failure it has to provoke is a leaf pointer table that is CACHED
+// and then CHANGED. Growing a file past the direct pointers does that
+// to one block: the leaf gains slots, is rewritten in place, and keeps
+// its block number -- so a cache keyed by block number reports a hit
+// and answers from the old image, in which the new slots are still
+// zero. A zero pointer is a HOLE, and a hole reads as zeros, so the
+// appended data comes back blank.
+KTEST("fs", "appended blocks are visible after the pointer table is re-read") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    FRESH("/.ktest_rcache");
+
+    // Past the 12 direct pointers on BOTH sides of the append, so the
+    // single-indirect leaf is what changes. A file that fits in the
+    // direct pointers never loads a table at all and cannot fail here.
+    enum { BLK = 4096, FIRST = 16, GROWN = 24 };
+    static char chunk[BLK];
+    static char back[BLK];
+
+    for (int b = 0; b < FIRST; b++) {
+        for (int i = 0; i < BLK; i++) chunk[i] = (char)('a' + ((b + i) % 26));
+        KTEST_ASSERT(fs_write_range("/.ktest_rcache", (uint64_t)b * BLK, chunk, BLK) == 1);
+    }
+
+    // READ IT BACK FIRST. This is the step that arms the bug -- without
+    // it nothing has cached the leaf and the append is trivially
+    // visible. A test that skipped this would pass either way.
+    KTEST_ASSERT_EQ((int64_t)fs_read_range("/.ktest_rcache", (uint64_t)(FIRST - 1) * BLK,
+                                           back, BLK), (int64_t)BLK);
+
+    for (int b = FIRST; b < GROWN; b++) {
+        for (int i = 0; i < BLK; i++) chunk[i] = (char)('A' + ((b + i) % 26));
+        KTEST_ASSERT(fs_write_range("/.ktest_rcache", (uint64_t)b * BLK, chunk, BLK) == 1);
+    }
+
+    // Every appended block, byte for byte. Zeros here mean the read
+    // walked a stale table and found a hole where the data is.
+    for (int b = FIRST; b < GROWN; b++) {
+        k_memset(back, 0, BLK);
+        KTEST_ASSERT_EQ((int64_t)fs_read_range("/.ktest_rcache", (uint64_t)b * BLK,
+                                               back, BLK), (int64_t)BLK);
+        for (int i = 0; i < BLK; i++) {
+            if (back[i] != (char)('A' + ((b + i) % 26))) {
+                KTEST_ASSERT_EQ((int64_t)back[i], (int64_t)('A' + ((b + i) % 26)));
+            }
+        }
+    }
+
+    fs_delete("/.ktest_rcache");
+}
+
+// The read path coalesces contiguous blocks into one transfer now, so
+// what it hands back must not depend on WHERE a read starts or how long
+// it is -- a run assembled from the wrong block would still return the
+// right number of bytes. Unaligned offsets and lengths straddle the
+// coalesced and the read-modify-write paths in one test.
+KTEST("fs", "a coalesced read returns the same bytes at any offset and length") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    FRESH("/.ktest_rrun");
+
+    enum { BLK = 4096, NBLK = 20 };
+    static char chunk[BLK];
+    for (int b = 0; b < NBLK; b++) {
+        // ADDRESS-DERIVED, so a run that reads the wrong blocks returns
+        // another block's bytes rather than a plausible constant.
+        for (int i = 0; i < BLK; i++) chunk[i] = (char)((b * 7 + i * 3) & 0xFF);
+        KTEST_ASSERT(fs_write_range("/.ktest_rrun", (uint64_t)b * BLK, chunk, BLK) == 1);
+    }
+
+    static char back[BLK * 3];
+    const uint64_t offs[] = { 0, 1, BLK - 1, BLK, BLK + 17, (uint64_t)13 * BLK + 5 };
+    const uint32_t lens[] = { 1, BLK - 1, BLK, BLK + 1, BLK * 2, BLK * 3 };
+    for (unsigned oi = 0; oi < sizeof offs / sizeof offs[0]; oi++) {
+        for (unsigned li = 0; li < sizeof lens / sizeof lens[0]; li++) {
+            uint64_t off = offs[oi];
+            uint32_t want = lens[li];
+            if (off + want > (uint64_t)NBLK * BLK) continue;
+            k_memset(back, 0, want);
+            KTEST_ASSERT_EQ((int64_t)fs_read_range("/.ktest_rrun", off, back, want),
+                            (int64_t)want);
+            for (uint32_t i = 0; i < want; i++) {
+                uint64_t abs = off + i;
+                char expect = (char)(((abs / BLK) * 7 + (abs % BLK) * 3) & 0xFF);
+                if (back[i] != expect) {
+                    KTEST_ASSERT_EQ((int64_t)back[i], (int64_t)expect);
+                }
+            }
+        }
+    }
+
+    fs_delete("/.ktest_rrun");
+}
+
 KTEST("fs", "truncate cuts a file that uses indirect blocks") {
     if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
     FRESH("/.ktest_tind");

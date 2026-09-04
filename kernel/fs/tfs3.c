@@ -237,7 +237,6 @@ static void ncache_flush(void) {
 // kernel -- same convention as TFS2's g_io_scratch.
 static uint8_t g_blk[T3_BLOCK];
 static uint8_t g_ptr_blk[T3_BLOCK]; // indirect-pointer scratch, kept separate from data
-
 // ---- little-endian field access (hand-serialized on disk) ---------------
 
 static uint32_t rd32(const uint8_t *p) {
@@ -258,8 +257,16 @@ static int vol_read_sectors(uint32_t lba, int count, void *buf) {
     return blkdev_read_sectors(S->vol.dev, S->vol.base_lba + lba, count, buf);
 }
 
+static void rcache_drop(void);
+
 static int vol_write_sectors(uint32_t lba, int count, const void *buf) {
     if (lba + (uint32_t)count > S->vol.sector_count) return 0;
+    // ANY write drops the pointer-table read cache -- see rcache_get().
+    // Here rather than in write_block() because a coalesced data run
+    // goes straight to the device, and a block that was a pointer table
+    // before it was freed and reused as data would otherwise still be
+    // cached under its old number.
+    rcache_drop();
     return blkdev_write_sectors(S->vol.dev, S->vol.base_lba + lba, count, buf);
 }
 
@@ -269,6 +276,56 @@ static int read_block(uint32_t blk, void *buf) {
 
 static int write_block(uint32_t blk, const void *buf) {
     return vol_write_sectors(blk * T3_SPB, (int)T3_SPB, buf);
+}
+
+// ---- the read side's pointer-table cache -----------------------------
+//
+// THE READ HALF OF WHAT `pcache` DOES FOR WRITES, and the reason reads
+// were the slow direction: block_for_index() re-read the indirect table
+// from the device for EVERY 4 KiB block, so a sequential read of a file
+// past the double-indirect boundary issued three commands per block --
+// measured at 13189 reads and 93689 sectors for 4096 blocks of data,
+// a 2.9x sector amplification the write path had not had since run
+// coalescing landed.
+//
+// ONE ENTRY PER LEVEL, not one entry total. A walk touches top, then
+// mid, then leaf, and a single slot would evict the level above on
+// every step -- turning three reads per block into three misses per
+// block, which is what it already did.
+//
+// PER CALL, NOT PER MOUNT, for the same reason g_txn_img is (see its
+// comment): the filesystem is one global critical section, so no second
+// mount can be between a load and its use. That keeps a mount at ~7 KiB
+// instead of paying 12 KiB per mount for a cache only one of them can
+// be using at a time.
+//
+// THE INVARIANT, AND IT IS THE WHOLE SAFETY ARGUMENT: an entry may only
+// hold what is on the device. write_block() therefore DROPS the cache
+// -- every write, unconditionally, whether or not it targeted a
+// pointer table. Anything cleverer needs to know which blocks are
+// tables, and being wrong once means a read served from a stale table
+// returns another file's data.
+#define T3_RCACHE_LEVELS 3
+static struct {
+    uint32_t blk;              // 0 = empty
+    uint8_t buf[T3_BLOCK];
+} g_rcache[T3_RCACHE_LEVELS];
+
+static void rcache_drop(void) {
+    for (int i = 0; i < T3_RCACHE_LEVELS; i++) g_rcache[i].blk = 0;
+}
+
+// Returns the cached image of pointer-table block `blk` at `level`,
+// reading it if it is not already there. NULL on a device error.
+static const uint8_t *rcache_get(int level, uint32_t blk) {
+    if (level < 0 || level >= T3_RCACHE_LEVELS || !blk) return NULL;
+    if (g_rcache[level].blk == blk) return g_rcache[level].buf;
+    if (!read_block(blk, g_rcache[level].buf)) {
+        g_rcache[level].blk = 0;
+        return NULL;
+    }
+    g_rcache[level].blk = blk;
+    return g_rcache[level].buf;
 }
 
 // The whole of the device we were handed. "Flat" means volume-relative
@@ -528,32 +585,43 @@ static int read_inode(uint64_t ino, struct t3_inode *out) {
 
 // Data-block number for file-block index `idx`, or 0 for a hole /
 // out-of-range. Reads at most two pointer blocks into g_ptr_blk.
+// LEVELS ARE NUMBERED FROM THE LEAF (0 = the table holding data-block
+// numbers), so a single- and a triple-indirect walk agree about which
+// slot a leaf goes in. Numbering from the top instead would put the
+// leaf at a different level per depth and evict it on every step.
+#define T3_RC_LEAF 0
+#define T3_RC_MID  1
+#define T3_RC_TOP  2
+
 static uint32_t block_for_index(const struct t3_inode *node, uint32_t idx) {
     if (idx < 12) return node->ptrs[idx];
     idx -= 12;
     if (idx < T3_PTRS_PER_BLOCK) {
-        if (!node->ptrs[12]) return 0;
-        if (!read_block(node->ptrs[12], g_ptr_blk)) return 0;
-        return rd32(g_ptr_blk + idx * 4);
+        const uint8_t *leaf = rcache_get(T3_RC_LEAF, node->ptrs[12]);
+        if (!leaf) return 0;
+        return rd32(leaf + idx * 4);
     }
     idx -= T3_PTRS_PER_BLOCK;
     if (idx < T3_PTRS_PER_BLOCK * T3_PTRS_PER_BLOCK) {
-        if (!node->ptrs[13]) return 0;
-        if (!read_block(node->ptrs[13], g_ptr_blk)) return 0;
-        uint32_t mid = rd32(g_ptr_blk + (idx / T3_PTRS_PER_BLOCK) * 4);
-        if (!mid || !read_block(mid, g_ptr_blk)) return 0;
-        return rd32(g_ptr_blk + (idx % T3_PTRS_PER_BLOCK) * 4);
+        const uint8_t *mid_tbl = rcache_get(T3_RC_MID, node->ptrs[13]);
+        if (!mid_tbl) return 0;
+        uint32_t mid = rd32(mid_tbl + (idx / T3_PTRS_PER_BLOCK) * 4);
+        const uint8_t *leaf = rcache_get(T3_RC_LEAF, mid);
+        if (!leaf) return 0;
+        return rd32(leaf + (idx % T3_PTRS_PER_BLOCK) * 4);
     }
     idx -= T3_PTRS_PER_BLOCK * T3_PTRS_PER_BLOCK;
     {
-        if (!node->ptrs[14]) return 0;
-        if (!read_block(node->ptrs[14], g_ptr_blk)) return 0;
-        uint32_t hi = rd32(g_ptr_blk + (idx / (T3_PTRS_PER_BLOCK * T3_PTRS_PER_BLOCK)) * 4);
-        if (!hi || !read_block(hi, g_ptr_blk)) return 0;
+        const uint8_t *top = rcache_get(T3_RC_TOP, node->ptrs[14]);
+        if (!top) return 0;
+        uint32_t hi = rd32(top + (idx / (T3_PTRS_PER_BLOCK * T3_PTRS_PER_BLOCK)) * 4);
+        const uint8_t *mid_tbl = rcache_get(T3_RC_MID, hi);
+        if (!mid_tbl) return 0;
         uint32_t rem = idx % (T3_PTRS_PER_BLOCK * T3_PTRS_PER_BLOCK);
-        uint32_t mid = rd32(g_ptr_blk + (rem / T3_PTRS_PER_BLOCK) * 4);
-        if (!mid || !read_block(mid, g_ptr_blk)) return 0;
-        return rd32(g_ptr_blk + (rem % T3_PTRS_PER_BLOCK) * 4);
+        uint32_t mid = rd32(mid_tbl + (rem / T3_PTRS_PER_BLOCK) * 4);
+        const uint8_t *leaf = rcache_get(T3_RC_LEAF, mid);
+        if (!leaf) return 0;
+        return rd32(leaf + (rem % T3_PTRS_PER_BLOCK) * 4);
     }
 }
 
@@ -2101,6 +2169,28 @@ static uint32_t read_range_impl(const struct t3_inode *node, uint64_t offset,
             // A hole reads as zeros (the format allows them even
             // though the Stage C writer never creates one).
             k_memset(dst + total, 0, chunk);
+        } else if (chunk == T3_BLOCK) {
+            // Run coalescing, the mirror of the write path's: gather
+            // the contiguous on-disk run of whole blocks this read
+            // covers and issue it as ONE transfer straight into the
+            // caller's buffer -- no bounce through g_blk, no per-block
+            // command. The write side has done this since TFS2; the
+            // read side issued a command per 4 KiB until now.
+            uint32_t run = 1;
+            uint32_t want = (len - total) / T3_BLOCK;
+            uint32_t cap = (uint32_t)blkdev_max_sectors_per_xfer(S->vol.dev) / T3_SPB;
+            if (cap < 1) cap = 1;
+            if (want > cap) want = cap;
+            while (run < want) {
+                // A HOLE ENDS THE RUN, and so does any block that is not
+                // the next one: both would make this transfer read
+                // sectors the caller did not ask for.
+                if (block_for_index(node, bi + run) != blk + run) break;
+                run++;
+            }
+            if (!vol_read_sectors(blk * T3_SPB, (int)(run * T3_SPB), dst + total)) break;
+            total += run * T3_BLOCK;
+            continue;
         } else {
             if (!read_block(blk, g_blk)) break;
             k_memcpy(dst + total, g_blk + within, chunk);
