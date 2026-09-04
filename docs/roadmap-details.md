@@ -258,6 +258,23 @@ everything else depends on. The doc also enumerates exactly what
 refusing a flat volume breaks -- six things, including the live image,
 which gains a partition table rather than an exemption.
 
+A write-back page cache with `fsync()` -- **designed, not built:
+`docs/pagecache-design.md`** has the five stages, what each buys on its
+own, and the honest case against.
+
+The number it chases is measured rather than guessed: on the bare-metal
+laptop, `storage.sync = lazy` (barriers off entirely) gives 36.55 MB/s
+sequential against strict's 14.68, and 4.01 against 1.09 at 4 KiB. That
+is what removing flush cost is worth on real hardware, and a page cache
+aims to reach it by BATCHING barriers rather than skipping them.
+
+Two things in that document are worth knowing before starting: the
+journal can already group-commit (32 slots, and `create_entry()` and
+`fs_rename()` each stage several blocks and two inodes under one
+transaction), so no format change is needed; and the kernel has NO
+reclaim mechanism of any kind, so a page cache is the first thing here
+that would have to give memory back.
+
 One AHCI command at a time costs ~7x virtio per command -- measured
 2026-09-04 with `QUERY_BLKSTAT`, KVM, 16 MiB: a sequential read issued
 13189 block reads at **100 us each on AHCI** against **14 us on

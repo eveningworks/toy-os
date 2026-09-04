@@ -667,7 +667,7 @@ run on, not by order.
 - [ ] NCQ (queued commands) -- needs an ASYNCHRONOUS block interface first, not more AHCI code
 - [ ] An asynchronous `block_device` submit/complete split, which NCQ, readahead and writeback all wait on
 - [ ] Batched journal barriers -- `ata_flush_begin()`/`_end()` generalised into the block layer, so a write shares ONE flush
-- [ ] A write-back page cache with `fsync()` as the opt-in durability call -- why Linux writes ~1000x faster
+- [ ] A write-back page cache with `fsync()` as the opt-in durability call -- staged in `docs/pagecache-design.md`
 - [ ] A second drive, which needs a block layer whose active device is not singular
 - [ ] A sector cache shared with ATA, if one is ever measured to be worth it
 - [ ] A fault-injection hook that makes the DRIVE refuse a command, so `port_recover()` is exercised
