@@ -22,8 +22,9 @@
 #include "tfs3.h"
 #include "mount.h" // MOUNT_MAX -- the mount limit this backend declares
 #include "string.h"
-#include "block.h" // TFS3 talks to a BLOCK DEVICE, not to a disk --
+#include "block.h"    // TFS3 talks to a BLOCK DEVICE, not to a disk --
                     // that is what lets a live image mount from RAM
+#include "storage_config.h" // storage.sync -- whether the barriers are real
 #include "ata.h"   // ATA_SECTOR_SIZE only: 512 is the sector size every
                     // block device here uses, and it is spelled once there
 #include "klog.h"
@@ -1023,6 +1024,26 @@ static int write_journal_header(int commit) {
     return vol_write_sectors(T3_JH_BLOCK * T3_SPB, 1, sec);
 }
 
+// A journal barrier, or a no-op under `storage.sync = lazy`.
+//
+// BOTH of txn_commit()'s barriers go through here, because neither is
+// the optional one: the first orders the journal against the targets so
+// a crash mid-target-write can be replayed, the second orders the
+// targets against clearing the commit flag so a crash cannot leave the
+// journal saying "nothing to do" over work that never landed. Turning
+// them off trades crash recoverability for throughput, which is ext4's
+// `nobarrier` exactly -- see storage_config.c for what it costs and why
+// the default is the other one.
+//
+// It still returns 1 when skipped. A caller must not read "no barrier
+// was issued" as "the barrier failed": failure ABANDONS the
+// transaction, and doing that on every write would be a filesystem that
+// refuses to write at all.
+static int txn_barrier(void) {
+    if (!storage_sync_strict()) return 1;
+    return blkdev_flush(S->vol.dev);
+}
+
 static int txn_commit(void) {
     if (g_txn_count == 0) return 1;
     S->jrn_seq++;
@@ -1039,7 +1060,7 @@ static int txn_commit(void) {
     // nothing that was not already lost. blkdev_flush(S->vol.dev) returned void until
     // a write-back cache went in underneath (ata_cache.h) -- that is
     // where a deferred write's failure now surfaces.
-    if (!blkdev_flush(S->vol.dev)) {
+    if (!txn_barrier()) {
         klog_write("tfs3: journal barrier failed -- transaction abandoned, "
                    "targets untouched\n");
         txn_reset();
@@ -1056,7 +1077,7 @@ static int txn_commit(void) {
     // work that never reached the disk. A failure here takes the same
     // path a failed target write does -- leave the header committed and
     // let replay finish the job next boot.
-    if (!blkdev_flush(S->vol.dev)) ok = 0;
+    if (!txn_barrier()) ok = 0;
     if (ok) {
         int saved = g_txn_count;
         g_txn_count = 0;

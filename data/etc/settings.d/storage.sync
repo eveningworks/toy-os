@@ -1,0 +1,4 @@
+Description=Whether a write is on the disk before it returns. `lazy` is faster and can lose or corrupt recent work in a crash
+Widget=radio
+Choice.strict=Durable (safe, slower)
+Choice.lazy=Deferred (faster, unsafe on power loss)

@@ -1,0 +1,2 @@
+Label=Filesystem
+Description=How the filesystem trades durability against speed. The default keeps every write durable when it returns, which is a stronger promise than Linux or Windows make

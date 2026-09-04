@@ -112,6 +112,8 @@ static struct etc_config_buf g_scan_buf;
                          "The timezone city database", 1);
     config_file_register("desktop", "/etc/desktop.conf",
                          "Desktop icon positions and wallpaper", 1);
+    config_file_register("storage", "/etc/storage.conf",
+                         "Filesystem and disk behaviour", 1);
     config_file_register("keymaps", "/etc/kbs",
                          "Keyboard layout tables (dir)", 1);
     config_file_register("apps", "/usr/wm/desktop",

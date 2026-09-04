@@ -319,6 +319,24 @@ this the obvious way), not from how much history it accumulated.
     to be unwieldy there should get its own `/etc/<name>.conf` rather
     than cramming in to match convention.
 
+## `storage.sync = lazy` TURNS OFF THE JOURNAL'S BARRIERS, AND THAT IS ext4's `nobarrier`
+
+Every `fs_write*()` call is one TFS3 transaction ending in two real
+device flushes. `storage.sync` (default `strict`) is the switch;
+`txn_barrier()` in `tfs3.c` is the one place both barriers go through.
+
+**`lazy` risks corruption, not just lost writes.** Both barriers order
+the journal against the targets and the targets against the commit
+flag, so without them a crash can leave a state replay cannot repair.
+Say that, not "faster", whenever it is offered to anyone.
+
+**Measure before believing it is worth it.** On QEMU the flushes are
+under 5% of a sequential write, because an emulated flush barely costs
+anything; on a real SSD they force DRAM to NAND and the same count could
+be a third of the wall clock. `/bin/diskbench`'s `io ... flush` line is
+the measurement, and it must be taken on the machine in question.
+
+
 ## A READ THAT CROSSES BLOCKS COALESCES, AND A POINTER TABLE IS CACHED PER LEVEL -- BUT ONLY UNTIL THE NEXT WRITE
 
 `read_range_impl()` gathers the contiguous on-disk run of whole blocks a

@@ -223,6 +223,62 @@ appends, and requires the appended bytes -- a stale table answers with a
 zero pointer, which reads as a hole, so the data comes back blank.
 
 
+## `storage.sync` is a setting because the barriers' cost cannot be measured where they are cheap
+
+TFS3 commits one journal transaction per `fs_write*()` call and ends it
+with two real device flushes. At 64 KiB a syscall that is 32 flushes per
+MiB written, and 512 per MiB at 4 KiB. Linux and Windows do not flush on
+write at all -- a `write(2)` lands in the page cache and returns,
+writeback runs on a timer, and the journal commits every few seconds
+with one barrier for thousands of operations. toy-os makes the stronger
+promise and pays for it.
+
+**How much it pays is the part nobody knew**, and it is why this is a
+setting rather than a fix. Measured on QEMU/KVM with AHCI, 16 MiB
+sequential write: 622 flushes costing 59 ms out of 1288 ms of
+block-layer time -- **4.6%**. Removing them there is worth almost
+nothing. On a real SSD a FLUSH CACHE forces the drive's DRAM to NAND and
+costs on the order of a millisecond, so the same 622 would be 0.2-1.9 s
+against a 1.7 s baseline -- somewhere between a tenth and half the wall
+clock, and nothing in this repo can settle which. The setting is the
+instrument for answering that on the machine that has the problem.
+
+**`strict` and `lazy` are ext4's `barrier` and `nobarrier`**, and the
+warning is the same. Both barriers are load-bearing: the first orders
+the journal against the targets so a crash mid-target-write can be
+replayed, the second orders the targets against clearing the commit flag
+so a crash cannot leave the journal saying "nothing to do" over work
+that never landed. `lazy` therefore risks a filesystem replay cannot
+repair, not merely the loss of recent writes. It is meant for a device
+whose cache is battery-backed, or for a measurement.
+
+**One function, `txn_barrier()`, not a flag tested at each call.** Both
+sites go through it, so neither can be given the exemption separately --
+there is no coherent middle position where one barrier is skipped, and
+a reader of `txn_commit()` should not have to work that out.
+
+**It returns 1 when it skips.** A caller must not read "no barrier was
+issued" as "the barrier failed", because failure ABANDONS the
+transaction -- doing that on every write would be a filesystem that
+refuses to write at all.
+
+**Default strict, and an unparseable value stays strict.** Every other
+`/etc` reader here tolerates a bad value by keeping its default; this
+one is the same rule pointed the safe way, because the value trades
+correctness for speed. `storage_sync_strict()` also answers 1 before
+`/etc` has been read at all, which matters because mount and journal
+replay both run before `INIT_CONFIG`.
+
+**The test asserts the flag reaches the JOURNAL, not that a string
+parses.** The whole setting is one branch in `txn_commit()`, and a flag
+nothing reads is exactly what a parse test cannot see -- so it counts
+real device flushes across identical work in each mode, through
+`QUERY_BLKSTAT`. It compares the two modes rather than checking an
+absolute count, because the desktop is running and flushing on its own.
+It also reads the bytes back: a mode that quietly lost them would
+satisfy a flush comparison perfectly.
+
+
 ## The write walk caches middle pointer tables too, and its comment had claimed it already did
 
 `map_get_or_alloc_tables()` walked the middle levels with a read and a

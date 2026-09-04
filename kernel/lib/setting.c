@@ -24,6 +24,7 @@
 #include "taskbar_config.h"
 #include "week_start_config.h"
 #include "target.h"
+#include "storage_config.h"
 #include "setting_abi.h"
 #include "config_file.h"
 #include "fs.h"
@@ -569,6 +570,7 @@ void settings_init(void) {
     start_button_setting_register();
     taskbar_setting_register();
     week_start_setting_register();
+    storage_config_setting_register();
     target_setting_register();
     tunables_register();
     config_files_scan();
