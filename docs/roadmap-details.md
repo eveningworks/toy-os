@@ -3065,7 +3065,7 @@ its tools, then `gui_regress.py --logs`, then `preflight.sh`.** Expect
 small conflicts in `userland/ui/uui_menubar.h`/`uui_statusbar.h` (the
 Notepad branch re-added the `_height()` accessors main already has).
 
-- [x] ~~**The `wm:` branch (ec26a4a5).**~~ LANDED 2026-09-04.
+- [x] ~~**The `wm:` branch.**~~ LANDED 2026-09-04 as 3f559427.
   `userland/wm/tray_slider_popup.c/.h` is the shared slider flyout that
   `volume_popup.c` and `brightness_popup.c` now sit on; `wm_popup_place()`
   + `WM_POPUP_MARGIN` is the one clamp for four popups; `struct
