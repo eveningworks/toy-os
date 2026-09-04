@@ -240,14 +240,30 @@ Gated behind `storage.sync` like everything else here, default `strict`.
 mechanism. **Does not buy:** repeat reads, which is what the page cache
 below is actually for.
 
-**Built, and measured in one guest, QEMU/KVM + AHCI, 2 MiB:**
+**Built. On the BARE-METAL LAPTOP, 4 MiB, both modes back to back:**
 
 | profile | strict | batched | flushes |
 |---|---|---|---|
-| SEQ-write | 11.95 MB/s | 13.43 | 148 -> 84 |
-| RND4K-write | 1.381 | **2.636** | 212 -> 84 |
+| SEQ-write | 12.91 MB/s | **80.02** | 212 -> 84 |
+| RND4K-write | 1.077 | **9.56** | 340 -> 84 |
 
-`fsck` reports 0 leaked blocks afterwards. The flush count does not fall
+**6.2x and 8.9x.** The same A/B in QEMU gives 11.95 -> 13.43 and
+1.381 -> 2.636, because an emulated flush costs 95 us against the
+drive's 659 -- the gap between the two columns IS the thing this stage
+was built to remove, and it only exists on real hardware.
+
+**AND IT BEATS `lazy`, which is the surprise.** `lazy` measured 36.55
+and 4.01 on the same machine; `batched` is more than twice that on both
+profiles while being far safer. The reason is that `lazy` skips the
+BARRIERS but still performs every commit's WRITES -- journal data, the
+header, the target, the header again, four block writes per syscall.
+Batching removes the commits themselves, so it removes the writes too.
+That makes `lazy` hard to justify for anything but measuring what a
+barrier costs.
+
+`fsck` reports 0 leaked blocks afterwards -- verified in QEMU, where
+`fsck` is reachable; it is a ring-0 shell builtin, so a telnet session
+to the laptop cannot run it. The flush count does not fall
 further than that because the DESKTOP is writing throughout, and any
 operation that opens its own transaction commits the deferred one on its
 way past -- on a quiet machine the reduction is much larger.

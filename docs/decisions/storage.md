@@ -315,10 +315,21 @@ opens a transaction: `txn_begin(1)`, one credit, staging the INODE BLOCK
 alone. Two device barriers per syscall, to make one 4 KiB block durable,
 after the file's data had already reached the disk.
 
-`batched` keeps that transaction open across writes. Measured in one
-guest, QEMU/KVM + AHCI, 2 MiB: sequential write 11.95 -> 13.43 MB/s and
-random 4 KiB write 1.381 -> 2.636, with flushes 148 -> 84 and 212 -> 84.
-`fsck` clean afterwards.
+`batched` keeps that transaction open across writes. On the bare-metal
+laptop, 4 MiB, both modes back to back: sequential write **12.91 ->
+80.02 MB/s** and random 4 KiB write **1.077 -> 9.56**, with flushes
+212 -> 84 and 340 -> 84. The same A/B in QEMU gives 11.95 -> 13.43 and
+1.381 -> 2.636 -- an emulated flush costs 95 us against the drive's 659,
+and that gap is exactly what this stage removes.
+
+**It also beats `lazy` by more than 2x** (36.55 and 4.01 on the same
+machine), which was not expected. `lazy` skips the BARRIERS but still
+performs every commit's WRITES -- journal data, header, target, header
+again. Batching removes the commits, so it removes those too. `lazy` is
+now hard to justify for anything except measuring what a barrier costs.
+
+`fsck` clean afterwards, verified in QEMU; it is a ring-0 shell builtin,
+so a telnet session to the laptop cannot run it.
 
 **What a crash costs, exactly.** The data and the bitmaps are on disk;
 what is lost is the inode update, so a just-extended file returns at its
