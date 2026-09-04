@@ -242,13 +242,26 @@ def run(dbg, qmp, tmp, res):
     #
     # >= 9 revealed is what the 3x3 safe neighbourhood guarantees. Run
     # over three fresh boards: one lucky board proves nothing.
+    #
+    # A WIN COUNTS AS PASSING. `phase` 1 is in progress and 2 is over;
+    # requiring 1 fails a board whose first click cascaded to every safe
+    # cell, which is a legal and occasionally-real Minesweeper outcome --
+    # measured once in four full-suite runs, board 9x9/10, all 71 safe
+    # cells opened at once. What this check is about is `boom` and the
+    # opened area, and a win satisfies both maximally. Requiring the
+    # game to still be running turned the luckiest possible board into a
+    # failure, and took the clock check below down with it, because a
+    # finished game's clock correctly stops.
     ok_first, detail = True, ""
+    won_instantly = False
     for i in range(3):
         st = state_after(dbg, lambda: dbg.send("gui click %d %d" % lay.cell_centre(4, 4)))
-        if st is None or st["phase"] != 1 or st["boom"] != -1 or st["revealed"] < 9:
+        if st is None or st["phase"] not in (1, 2) or st["boom"] != -1 or st["revealed"] < 9:
             ok_first = False
             detail = f"board {i}: {st}"
             break
+        if st["phase"] == 2:
+            won_instantly = True
         if i < 2:
             state_after(dbg, lambda: dbg.send("gui click %d %d" % lay.face_centre()))
     res.check("the first click never hits a mine and always opens an area",
@@ -262,6 +275,13 @@ def run(dbg, qmp, tmp, res):
     # so a check comparing guest seconds against host seconds is a flake
     # dressed up as a measurement. A right-click on an already-open cell
     # is the sampling poke: it logs the state and changes nothing.
+    #
+    # A GAME THAT ENDED CANNOT BE TIMED, so start a fresh one when the
+    # loop above finished on a won board -- otherwise this asserts that
+    # a stopped clock advances, which is the app behaving correctly.
+    if won_instantly:
+        state_after(dbg, lambda: dbg.send("gui click %d %d" % lay.face_centre()))
+        state_after(dbg, lambda: dbg.send("gui click %d %d" % lay.cell_centre(4, 4)))
     sample = lay.cell_centre(4, 4)
     t1 = state_after(dbg, lambda: dbg.rclick(*sample))
     advanced = False
