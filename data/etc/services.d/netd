@@ -1,0 +1,13 @@
+# Naming and addresses for every network card.
+#
+# Replaces the `dhcp` service, which supervised only the FIRST card --
+# so a machine with two held one lease nothing renewed. netd holds one
+# per card, and applies the naming rules in /etc/net.conf.
+#
+# Arguments go in Args=, not on Exec=.
+# The whole file must fit in 512 bytes, comments included.
+# See docs/commands/netd.md.
+Name=netd
+Description=Name the network cards, and keep an address on each
+Exec=/bin/netd
+Restart=always

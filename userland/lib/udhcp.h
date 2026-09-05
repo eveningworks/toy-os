@@ -54,9 +54,10 @@ struct udhcp {
 // a prompt wants fd 1, where the person can see them.
 void udhcp_log_to_kernel(int yes);
 
-// Start tracking `dev`. Reads back a remembered lease if there is one,
-// so the first step can ask for the address this card had (INIT-REBOOT)
-// rather than take whatever is free.
+// Start tracking `dev`: state only, and it holds NO lease yet. The
+// remembered one is read later, inside the first exchange, which is
+// what turns it into an INIT-REBOOT REQUEST for the address this card
+// had rather than a DISCOVER for whatever is free.
 void udhcp_init(struct udhcp *u, const char *dev, const uint8_t *mac);
 
 // Do whatever this interface is due for and return when to come back.

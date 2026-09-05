@@ -9,5 +9,5 @@
 Name=ntpd
 Description=Keep the clock set from a network time server
 Exec=/bin/ntpd
-After=dhcp
+After=netd
 Restart=always

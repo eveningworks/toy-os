@@ -2552,7 +2552,7 @@ with the answer).
   oversight: renewal at T1 needs a daemon, and a daemon needs a reason
   to exist beyond one timer.
 
-## NOTHING INVENTS AN ADDRESS: A CARD COMES UP UNCONFIGURED, `/bin/dhcp` RUNS AT BOOT, AND NO SERVER MEANS LINK-LOCAL
+## NOTHING INVENTS AN ADDRESS: A CARD COMES UP UNCONFIGURED, `/bin/netd` RUNS AT BOOT, AND NO SERVER MEANS LINK-LOCAL
 
 `net_autoconfig()` is gone. It gave the first card 10.0.2.15/24 via
 10.0.2.2 at boot -- QEMU's user-networking defaults -- and its own
@@ -2560,14 +2560,16 @@ comment called itself a placeholder for DHCP. `docs/decisions.md` has
 why it went; the rule is that the kernel assigns nothing and one ring-3
 program is where an address comes from, as on Linux.
 
-- **IT RUNS AT BOOT AS A ONE-SHOT.** `data/etc/services.d/dhcp`,
-  `Restart=no`, no `Target=` (the network is not the desktop's). That
-  key is systemd's `Type=oneshot` and init already had every piece of
-  it: a `done` state, and a readiness barrier that releases for a
-  service which has had its single run. What was missing was the exit
-  CODE -- a one-shot that failed reported `done` like one that worked,
-  so `service` could not answer "did this machine get an address?".
-  It reports `failed` now.
+- **`/bin/netd` IS WHAT RUNS AT BOOT**, `data/etc/services.d/netd`, no
+  `Target=` (the network is not the desktop's). It replaced a `dhcp`
+  service that supervised exactly ONE card, so the second card on a
+  two-NIC machine held a lease nothing renewed and lost its address at
+  whatever hour the server chose. netd holds one per card, and also
+  applies the naming rules in `/etc/net.conf` -- see `docs/commands/netd.md`.
+- **`/bin/dhcp` IS STILL THE COMMAND**, over the same client
+  (`userland/lib/udhcp.c`), and is how a card is leased by hand. Running
+  it while netd is up means two clients on one port and the second fails
+  to bind, which is the honest answer rather than a race.
 - **A BARE `dhcp` TAKES EVERY CARD WITHOUT AN ADDRESS**, which is
   dhclient's rule when no interface is named, and says so about the ones
   it leaves alone. Naming a device takes it whatever state it is in,
@@ -3334,4 +3336,43 @@ comes back must not come back holding a lease on a network it may no
 longer be attached to. The STORAGE is never freed -- it is static
 driver state -- which is exactly what lets the same struct register
 again when the hardware returns.
+
+## THERE IS A NETWORK DAEMON, IT OWNS NAMING AND ADDRESSES, AND ITS RULES ARE A FILE
+
+`/bin/netd`, started by init from `/etc/services.d/netd`. It replaced
+the `dhcp` service outright.
+
+**IT EXISTS BECAUSE TWO JOBS HAD NO OWNER.** Naming was the kernel's,
+which made an interface name a kernel policy nobody could change without
+a rebuild. And `dhcp -k` supervised exactly ONE card -- its own comment
+said "no machine here has ever held two leases at once", which stopped
+being true the day the laptop gained a second NIC -- so the second
+card's lease was renewed by nothing and its address expired at whatever
+hour the server chose.
+
+**THE RULES ARE `/etc/net.conf`, READ IN RING 3.** `scheme` (mac |
+location | driver | kernel) and `prefix` build a name for a card the
+file does not name; a line keyed by MAC, by location or by driver names
+one explicitly, most specific first. The kernel only validates and
+applies through `SYS_NET_RENAME` and has no opinion about what a name
+should be -- udev renaming what Linux called `eth0`, and the same split
+already made for NTP, DHCP and DNS.
+
+**ONE PROCESS, N CARDS, NO THREADS.** `udhcp_step()` advances one
+interface and returns when it wants to be called again, so the loop
+sleeps until the earliest deadline across every card. A process per card
+would need its own supervision each, and a card with no cable would
+still hold a ten-second carrier wait somebody was queued behind.
+
+**IT POLLS CARRIER RATHER THAN WAITING ON IT.** `/bin/dhcp` waits ten
+seconds for the wire, which is right for a command typed at a prompt and
+wrong here for exactly that reason. netd does not step a card whose
+driver reports the link down; a driver that cannot report carrier is not
+"down" and is stepped normally.
+
+**AND THE CLIENT IS A LIBRARY, NOT A SECOND COPY.**
+`userland/lib/udhcp.c` serves both netd and `/bin/dhcp`, the same
+one-implementation-two-front-ends shape as `klineedit`, `geom` and
+`ansi`. Running both at once means two clients on one port and the
+second fails to bind, which is the honest answer rather than a race.
 

@@ -1289,6 +1289,14 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LI
 	    if [ "$$(basename $$f)" != "README.md" ]; then \
 	        cp $$f $(SEED_DIR)/sync/etc/services.d/; fi; \
 	done
+	# Config files that live directly in /etc rather than in a directory
+	# of their own. net.conf is the naming and addressing rules /bin/netd
+	# reads; it is seeded rather than compiled in for the same reason
+	# settings.d is -- absent is a supported state, and the point of a
+	# rules file is that it can be edited on the machine.
+	@for f in data/etc/*.conf; do \
+	    if [ -f "$$f" ]; then cp "$$f" $(SEED_DIR)/sync/etc/; fi; \
+	done
 	# AVAILABLE services, which init never reads: /usr/share/services is
 	# the descriptor a `service enable` copies into /etc/services.d. The
 	# split is systemd's /lib vs /etc, and it is what lets a service ship

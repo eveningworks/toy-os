@@ -355,6 +355,10 @@ int sys_bind(int fd, uint32_t addr, uint16_t port, const char *dev);
 // A zero field is left alone, so one address can be changed on its own.
 int sys_net_config(const char *dev, uint32_t ip, uint32_t netmask, uint32_t gateway);
 
+// Give an interface a different name. 0, or -ENODEV / -EINVAL.
+// Naming POLICY is /bin/netd's -- see /etc/net.conf.
+int sys_net_rename(const char *dev, const char *to);
+
 // Does anybody answer for `ip` on `dev`? 1 yes, 0 not yet, -1 with
 // sys_errno(). NON-BLOCKING: it puts one ARP request on the wire (at
 // most one a second) and reports whether a reply has come back YET, so

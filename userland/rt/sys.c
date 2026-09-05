@@ -635,6 +635,15 @@ int sys_net_config(const char *dev, uint32_t ip, uint32_t netmask, uint32_t gate
     return (int)err(syscall1(SYS_NET_CONFIG, (uint64_t)(uintptr_t)&req));
 }
 
+int sys_net_rename(const char *dev, const char *to) {
+    struct net_rename req;
+    for (unsigned i = 0; i < sizeof req.name; i++) req.name[i] = 0;
+    for (unsigned i = 0; i < sizeof req.to; i++) req.to[i] = 0;
+    for (unsigned i = 0; dev && dev[i] && i < sizeof req.name - 1; i++) req.name[i] = dev[i];
+    for (unsigned i = 0; to && to[i] && i < sizeof req.to - 1; i++) req.to[i] = to[i];
+    return (int)err(syscall1(SYS_NET_RENAME, (uint64_t)(uintptr_t)&req));
+}
+
 int sys_net_arp_probe(const char *dev, uint32_t ip) {
     struct net_arp_probe req;
     for (unsigned i = 0; i < sizeof req.name; i++) req.name[i] = 0;

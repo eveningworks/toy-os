@@ -28,7 +28,6 @@ buildable now. Something that MISBEHAVES is not here -- that is
 - [ ] One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy  *(AHCI/SATA driver)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
-- [ ] `/bin/netd`: interface naming rules from `/etc/net.conf`, and a DHCP lease per card rather than only the first  *(Networking)*
 - [ ] Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today  *(Networking)*
 - [ ] A panic RAM store, pstore-shaped, AND a panic that warm-resets after a countdown -- a power cycle loses RAM  *(Crash reporting & postmortem debugging)*
 - [ ] System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons  *(Known limitations and papercuts (unscheduled))*
@@ -743,11 +742,12 @@ run on, not by order.
 - [x] ~~**A connection per child process**~~ DONE 2026-08-29 -- `/bin/inetd`; the spawn NAMES fd 0/1, so `inetd -p 7 /bin/cat` echoes
 - [x] ~~An RTL8111/8168 driver, for the Ethernet built into most laptops~~ DONE 2026-09-05 -- `r8169.c`; DHCP and 5.5 MB of TFTP
 - [x] ~~Remove a network device when it is unplugged~~ DONE 2026-09-05 -- `net_unregister()`; net was the last class registry without one
-- [ ] **NEXT** `/bin/netd`: interface naming rules from `/etc/net.conf`, and a DHCP lease per card rather than only the first
+- [x] ~~`/bin/netd`: naming rules from `/etc/net.conf`, and a lease per card~~ DONE 2026-09-05 -- replaced the `dhcp` service
 - [ ] **NEXT** Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today
 - [ ] An RTT estimate, and Nagle -- the retransmit timeout is a fixed floor with backoff
 - [x] ~~Run `dhcp` at boot~~ DONE 2026-08-29 -- init's `dhcp` one-shot; the kernel invents no address at all now
 - [x] ~~A link-local address when no server answers~~ DONE 2026-08-29 -- RFC 3927 / APIPA, probed over `SYS_NET_ARP_PROBE`
+- [ ] A restarted `netd` leaves an already-addressed card alone, so that lease is never renewed -- the lease file records no grant time
 - [ ] Defend a link-local address -- it is claimed and then never watched, so a later conflict goes unnoticed
 - [x] ~~Renew the lease before it expires~~ DONE 2026-09-01 -- resident, re-requests at T1; `dhcp -1` is the old one-shot
 - [x] ~~Wait for carrier before the boot-time DISCOVER~~ DONE 2026-09-01 -- the boot attempt used to race a USB PHY's 4-6s link

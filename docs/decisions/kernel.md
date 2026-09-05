@@ -6147,3 +6147,50 @@ kernel would also have needed a rename pass at `INIT_CONFIG`, because
 cards register at PCI bind long before a filesystem is mounted -- a
 moving part that exists only to work around being in the wrong ring.
 
+## A network daemon, rather than a bigger DHCP client
+
+`/bin/dhcp -k` was resident and supervised one card. On a machine with
+two it renewed the first and left the second's lease to expire, and its
+own comment recorded the assumption that had stopped being true: "no
+machine here has ever held two leases at once".
+
+The obvious fix -- make `dhcp -k` supervise every card -- was tried on
+paper and is the wrong shape twice over. Its loop SLEEPS between
+renewals, so the second card's timer waits behind the first's; and its
+carrier wait is ten seconds, so a port with no cable in it stalls every
+other card on every pass. Both are correct behaviour for a command
+somebody typed and wrong for a daemon, which is the tell that the two
+want to be different programs.
+
+**What everyone else does.** Linux splits it three ways: the kernel
+names a card, udev renames it from rules, and networkd/NetworkManager/
+dhcpcd hold addresses. Windows has NDIS plus a user-mode DHCP Client
+service. dhcpcd historically ran a process per interface; systemd-
+networkd runs one process for all of them. Nobody puts naming policy in
+the kernel.
+
+**Per-card processes were the other candidate here**, and would have
+reused `/bin/dhcp` unchanged -- netd spawning `dhcp -k <card>` each. It
+was rejected for the sleeping: each child still blocks its own ten
+seconds on carrier, and supervising N children to notice cards
+appearing and going away is most of a daemon anyway. Inverting the
+loop instead -- `udhcp_step()` returns a deadline and never sleeps --
+made one process serve N cards in about 150 lines, and made
+`/bin/dhcp` a front end over the same library rather than a second
+implementation.
+
+**The rules are a file because the alternative was a rebuild.** A
+MAC-derived name is correct and useless to type; `lan` is what a person
+wants. Compiling that in would mean a kernel change to rename a card,
+which is the thing udev exists to avoid. `/etc/net.conf` carries the
+scheme, the prefix and per-card overrides, and is re-read on every pass
+so an edit needs no restart -- the file is under 2 KB and the pass is
+seconds apart, so caching it would buy nothing and cost the property
+that makes it a rules file.
+
+**The name is applied once, at discovery.** Re-applying on every pass
+would let an edit rename a live interface, and a socket bound by name
+(`socket.c` keeps a string) would silently follow to whatever now holds
+that name -- the hazard the naming scheme was changed to remove. A
+rename takes effect on the next boot, or when the card is replugged.
+

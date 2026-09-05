@@ -654,8 +654,15 @@ def _sha256(sess, remote, timeout):
 # fields under binaries compiled against the old layout, and the failure
 # is not a crash -- it is a machine that boots perfectly and cannot be
 # given an address. That happened, from this tool, on 2026-09-05.
-USERLAND_TREES = (("bin", "/bin"), ("lib", "/lib"),
-                  ("tests", "/tests"), ("usr", "/usr"))
+# /lib LAST, and that ordering is load-bearing. Replacing a shared
+# library under a running system is the one part of this that hurts
+# immediately rather than at the next boot -- a flash interrupted after
+# /lib leaves a machine whose telnetd accepts a connection and closes
+# it, which is how it was found. Doing it last keeps the window between
+# "libraries replaced" and "rebooted into the matching kernel" as small
+# as this can make it.
+USERLAND_TREES = (("bin", "/bin"), ("tests", "/tests"),
+                  ("usr", "/usr"), ("lib", "/lib"))
 
 
 def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
@@ -686,6 +693,12 @@ def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
     still running the kernel it booted. It does leave a short window of
     new userland on the old kernel, which the reboot closes -- and which
     is why this reboots for you when asked rather than leaving it.
+
+    DO NOT PUT A WALL-CLOCK TIMEOUT AROUND THIS. A full userland is
+    ~25 MB over TFTP and takes minutes; one killed part-way leaves a
+    machine with some trees replaced and no matching kernel, which needs
+    a power cycle to recover because the half that broke is the half
+    that answers telnet. If you must bound it, bound it generously.
     """
     if not os.path.isfile(local):
         print(f"remote: no such file: {local}", file=sys.stderr)

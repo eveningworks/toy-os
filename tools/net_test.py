@@ -745,14 +745,13 @@ def phase_no_nic(r, disk, tmp):
                 "100% packet loss" in out or "failed" in out or "no ARP reply" in out,
                 out.strip()[-300:])
 
-        # THE FAILING SIDE OF THE ONE-SHOT. A machine with no card is
-        # the one boot where the client can do nothing at all, and
-        # `failed` rather than `done` is what makes `service` able to
-        # answer "did this machine get an address?" -- a status word
-        # that said `done` either way would answer nothing.
-        status = wait_service_settled(sh, "dhcp")
-        r.check("[none] init reports the address one-shot as failed",
-                "dhcp" in status and "failed" in status, status.strip()[-400:])
+        # A MACHINE WITH NO CARD IS NOT A BROKEN ONE. netd is resident
+        # rather than a one-shot -- a card can appear at any time -- so
+        # what says the machine is healthy is that it is still RUNNING
+        # with nothing to do, not that it reported a verdict and left.
+        status = wait_service_settled(sh, "netd")
+        r.check("[none] netd stays running on a machine with no card",
+                "netd" in status and "running" in status, status.strip()[-400:])
     finally:
         kill(pidfile)
         sh.close()
@@ -964,9 +963,9 @@ def phase_dhcp(r, disk, tmp):
         r.check("[dhcp] and no address the kernel could have invented",
                 "10.0.2.15" not in boot, boot.strip()[-400:])
 
-        status = wait_service_settled(sh, "dhcp")
-        r.check("[dhcp] init reports the one-shot as done rather than running",
-                "dhcp" in status and "done" in status, status.strip()[-400:])
+        status = wait_service_settled(sh, "netd")
+        r.check("[dhcp] netd is running, holding the lease it took",
+                "netd" in status and "running" in status, status.strip()[-400:])
 
         # A NAMED DEVICE IS RE-LEASED WHATEVER STATE IT IS IN; a bare
         # run leaves a card that already has an address alone. The two
@@ -1059,12 +1058,12 @@ def phase_linklocal(r, disk, tmp):
         r.check("[link-local] with the /16 the RFC gives it and no gateway",
                 "255.255.0.0" in cfg and "gateway -" in cfg, cfg.strip()[-400:])
 
-        # A CLAIM IS A SUCCESS. Reported as `done` rather than `failed`
-        # is what says a machine with no DHCP server is a configured
-        # machine and not a broken one.
-        status = wait_service_settled(sh, "dhcp", timeout=60.0)
-        r.check("[link-local] init reports the one-shot as done, not failed",
-                "dhcp" in status and "done" in status, status.strip()[-400:])
+        # A CLAIM IS A SUCCESS: a machine that fell back to link-local is
+        # a configured machine, and netd goes on holding it rather than
+        # reporting a failure and leaving.
+        status = wait_service_settled(sh, "netd", timeout=60.0)
+        r.check("[link-local] netd is still running on a link-local claim",
+                "netd" in status and "running" in status, status.strip()[-400:])
 
         # THE SECOND ANNOUNCEMENT LANDS TWO SECONDS AFTER THE ADDRESS
         # DOES, so reading the wire the moment ifconfig answers sees
@@ -1196,10 +1195,13 @@ def phase_connlog(r, disk, tmp):
         wait_configured(sh)
 
         # The boot-time DHCP client is the first thing that ever sends,
-        # so its flow is in the log before anything here runs.
+        # so its flow is in the log before anything here runs. The
+        # PROGRAM is netd -- the log names the process that opened the
+        # socket, and the client is a library inside it rather than a
+        # process of its own.
         out = sh.run("netlog", timeout=30.0)
         r.check("[connlog] the boot DHCP exchange is recorded",
-                "dhcp" in out and ":67" in out, out.strip()[-400:])
+                "netd" in out and ":67" in out, out.strip()[-400:])
 
         sh.run(f"wget -O /tmp/c.txt http://{GATEWAY}:{HTTP_PORT}/x", timeout=60.0)
         out = sh.run("netlog -o", timeout=30.0)
