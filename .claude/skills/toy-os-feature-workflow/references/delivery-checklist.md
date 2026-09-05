@@ -254,7 +254,18 @@ them has its own checks:
   longer needs.** `ps aux | grep "[z]sh -c source"`; `preflight.sh`
   prints any `until`/`while` poll among them with its elapsed time.
   Minutes is a live run, hours is a leak.
-- **The leak has one shape**: a waiter polling for an artifact that will
+- **THE LEAK HAS A SECOND SHAPE, AND IT IS A QUOTING BUG -- IN ANY
+  POSIX SHELL, NOT A zsh QUIRK.** A backtick inside DOUBLE quotes is
+  command substitution in bash and zsh alike, so a grep pattern written
+  as `"^## <backtick>sum<backtick>"` RUNS `sum`, which reads stdin and
+  blocks forever, holding the shell open with no output and no error.
+  One sat for 63 minutes on 2026-09-05 and surfaced only because the
+  maintainer asked; the Python heredoc chained before it had already
+  succeeded, so the edit had landed and nothing looked wrong.
+  SINGLE-QUOTE any pattern containing a backtick, and treat "a command
+  I chained after a heredoc never returned" as a quoting question
+  before a hang.
+- **The first shape**: a waiter polling for an artifact that will
   never appear -- a superseded run's log, a job that finished writing
   nothing. `until [ -s out.log ]` cannot tell "not yet" from "never", so
   it spins until the session ends and nothing mentions it again. Five
