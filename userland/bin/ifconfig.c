@@ -64,9 +64,12 @@ static int show(void) {
         print_ip(gw, sizeof gw, d.gateway);
 
         // WHERE the card is, beside what it is called. The name is an
-        // identity that follows the card, so this is the only thing
-        // that says which socket to actually look at -- and it changes
-        // when somebody moves it, which the name deliberately does not.
+        // identity that follows the card; this is the changeable half.
+        //
+        // FOR USB IT IS THE CONTROLLER'S PORT, NOT THE SOCKET: a USB3
+        // controller numbers the same socket twice, once per speed
+        // range, so a device that falls back from SuperSpeed reports a
+        // different port without having moved (docs/bugs.md).
         char at[20] = "";
         if (d.location[0]) snprintf(at, sizeof at, "  at %s", d.location);
 

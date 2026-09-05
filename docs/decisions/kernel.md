@@ -6129,6 +6129,15 @@ people who need otherwise; this has two cards and one of them is on a
 cable that moves. So the identity is the CARD: the last three bytes of
 the MAC, which are the part a vendor assigns per device.
 
+**And the location is less stable than it looks.** On 2026-09-05 the
+USB adapter on the test laptop reported `at usb12` on one boot and
+`at usb1` on the next without being moved: a USB3 controller gives the
+same physical socket two port numbers, one per speed range, and the
+adapter had fallen back from SuperSpeed to high-speed. A
+location-derived name would have renamed an interface because of a
+link-speed renegotiation. That was not the reason the MAC was chosen,
+and it is a better one than the reason that was.
+
 **Location did not go away, it stopped being the name.** `dev->location`
 carries `pci3.0` or `usb13` and `ifconfig` prints it as `at pci3.0`, so
 a card is still findable physically. Splitting them is the whole point:
