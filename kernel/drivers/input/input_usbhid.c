@@ -321,10 +321,26 @@ int usb_hid_bind(struct usb_device_info *info) {
     int took = 0;
     for (int i = 0; i < info->if_count; i++) {
         const struct usb_interface_info *ifc = &info->ifs[i];
-        if (ifc->if_class != 3 || ifc->if_subclass != HID_SUB_BOOT) continue;
-        if (ifc->if_protocol != HID_IF_KEYBOARD &&
-            ifc->if_protocol != HID_IF_MOUSE) continue;
-        if (!ifc->ep) continue;
+
+        // SAY WHY AN INTERFACE WAS PASSED OVER. This filter used to drop
+        // one in silence, so a mouse this driver cannot drive and a
+        // mouse that failed to enumerate produced the same dmesg --
+        // nothing. A HID interface is worth a line either way; a
+        // non-HID one is not, since every composite device has several.
+        if (ifc->if_class != 3) continue;
+        if (ifc->if_subclass != HID_SUB_BOOT ||
+            (ifc->if_protocol != HID_IF_KEYBOARD &&
+             ifc->if_protocol != HID_IF_MOUSE)) {
+            klog_printf("usb: slot %u if %u: HID 3/%u/%u -- not a boot "
+                        "keyboard or mouse, skipped\n",
+                        info->slot, ifc->ifnum, ifc->if_subclass, ifc->if_protocol);
+            continue;
+        }
+        if (!ifc->ep) {
+            klog_printf("usb: slot %u if %u: boot HID with no interrupt "
+                        "endpoint, skipped\n", info->slot, ifc->ifnum);
+            continue;
+        }
 
         struct hid_dev *d = hid_alloc();
         if (!d) break;
@@ -339,8 +355,12 @@ int usb_hid_bind(struct usb_device_info *info) {
             continue;
         }
         if (xhci_add_interrupt_in(info->slot, ifc->ep,
-                                  ifc->mps, ifc->interval) < 0)
+                                  ifc->mps, ifc->interval) < 0) {
+            klog_printf("usb: slot %u if %u: no interrupt endpoint for "
+                        "ep 0x%x (mps %u, interval %u)\n",
+                        info->slot, ifc->ifnum, ifc->ep, ifc->mps, ifc->interval);
             continue;
+        }
 
         k_snprintf(d->name, sizeof d->name, "usb-%s",
                    d->is_mouse ? "mouse" : "keyboard");
