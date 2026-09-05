@@ -957,6 +957,7 @@ whenever a headline here tells you something you did not already know.
 - **`kernel/include/api/version.h` is GENERATED, not hand-edited**
 - **Versioning is semver + a `-dev` suffix, not a per-change build number.**
 - **A SHARED LIBRARY IS `userland/dynlib/` PLUS ONE MAKEFILE LINE, AND A PROGRAM OPTS IN**
+- **THE BARE-METAL KERNEL IS REPLACED WITH `remote.py flash`, AND THE RESCUE ENTRY NEEDS A GRUB TIMEOUT**
 - **A GitHub Release's notes follow ONE shape, and it is terse.**
 
 ## This checkout, and the repo it pushes to
@@ -1338,7 +1339,9 @@ cost".
   run when somebody types it, which is never. Never a gate itself.
 - **Drive the BARE-METAL machine** -- `remote.py` (`exec` runs commands
   and returns text, `put`/`get` move files, `sync` copies a whole tree
-  and sends only what differs, `shell` is interactive). **A PUSH needs
+  and sends only what differs, `flash` replaces the KERNEL on its own
+  boot partition -- and refuses while `grub.cfg` has no timeout, since
+  the rescue entry would be unreachable -- `shell` is interactive). **A PUSH needs
   `telnetd`/`tftpd` listening, which is why `docs/update-design.md`
   argues for a pull.**
   **Its address is in `local_info.txt` at the repo root -- an UNTRACKED

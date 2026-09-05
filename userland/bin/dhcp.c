@@ -986,8 +986,10 @@ int main(int argc, char **argv) {
         // THE FIRST DEVICE TRIED IS THE ONE SUPERVISED, whether or not
         // it got a lease -- a card that fell back to link-local is
         // precisely the one worth asking again. One supervisor for one
-        // card: a second would need its own timer, and no machine here
-        // has ever held two leases at once.
+        // card: a second would need its own timer. A machine with two
+        // cards now exists (the laptop's built-in r8169 beside a USB
+        // adapter), so the SECOND card's lease is not renewed -- see
+        // docs/bugs.md.
         if (!renew_dev[0]) {
             k_lease = got.server ? got : (struct lease){0};
             strncpy(renew_dev, dev.name, sizeof renew_dev - 1);

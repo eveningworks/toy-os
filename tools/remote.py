@@ -42,6 +42,7 @@ looks like one, will confuse it -- which is why `exec` sends a marker
 guest echoes back is a frame the guest cannot accidentally produce.
 """
 import argparse
+import hashlib
 import os
 import re
 import socket
@@ -612,6 +613,125 @@ def do_sync(host, telnet_port, tftp_port, local_dir, remote_dir, timeout,
     return 0
 
 
+def _boot_device(sess, timeout):
+    """The block device mounted at /boot, and whether it is writable."""
+    for ln in sess.run("mount", timeout):
+        f = ln.split()
+        if len(f) >= 4 and f[1] == "/boot":
+            return f[0], f[3]
+    return None, None
+
+
+def _grub_timeout_ok(sess, timeout):
+    """True if grub.cfg draws a menu -- see do_flash's docstring.
+
+    Asked with `grep` rather than `cat`: the config is a few KB of
+    commentary and reading it whole over telnet outruns the session
+    timeout, which reads as the machine not answering.
+
+    THE PATTERN IS ONE WORD BECAUSE `tosh` DOES NOT QUOTE -- it splits
+    a line on whitespace and hands the pieces over as they are, so
+    `'^set timeout='` arrives as two arguments and grep reads the
+    second as a filename. Anchoring is done here instead.
+    """
+    for ln in sess.run("grep timeout /boot/boot/grub/grub.cfg", timeout):
+        t = ln.strip()
+        if t.startswith("set timeout=") and t != "set timeout=0":
+            return True
+    return False
+
+
+def _sha256(sess, remote, timeout):
+    for ln in sess.run(f"sum -a sha256 {remote}", timeout):
+        f = ln.split()
+        if len(f) == 2 and len(f[0]) == 64:
+            return f[0]
+    return None
+
+
+def do_flash(host, telnet_port, tftp_port, local, timeout, reboot):
+    """Replace the kernel on the machine's own boot partition.
+
+    THE RESCUE ENTRY IS THE POINT. grub.cfg already offers "toy-os
+    (previous kernel)" reading /boot/kernel.old, so a kernel that will
+    not boot is one menu pick away from one that will -- but only if
+    GRUB draws a menu at all, and an installed machine has
+    `set timeout=0`. So this refuses to flash until the timeout is
+    nonzero, and rotates the RUNNING kernel into kernel.old rather than
+    trusting whatever was there.
+
+    The order is what makes it survivable: menu first, rescue copy
+    second, the new kernel last, and a sha256 read back off the
+    partition before anything reboots.
+    """
+    if not os.path.isfile(local):
+        print(f"remote: no such file: {local}", file=sys.stderr)
+        return 1
+    with open(local, "rb") as fh:
+        want = hashlib.sha256(fh.read()).hexdigest()
+
+    sess = Session(host, telnet_port, timeout)
+    try:
+        dev, opts = _boot_device(sess, timeout)
+        if not dev:
+            print("remote: nothing is mounted at /boot", file=sys.stderr)
+            return 1
+        if opts != "rw":
+            sess.run("umount /boot", timeout)
+            sess.run(f"mount {dev} /boot", timeout)
+            dev, opts = _boot_device(sess, timeout)
+            if opts != "rw":
+                print("remote: /boot will not mount read-write",
+                      file=sys.stderr)
+                return 1
+
+        if not _grub_timeout_ok(sess, timeout):
+            print("remote: /boot/boot/grub/grub.cfg has `set timeout=0`, so "
+                  "the rescue entry\nremote: cannot be reached. Fix that "
+                  "first -- a bad flash would need a USB stick.",
+                  file=sys.stderr)
+            return 1
+
+        if _sha256(sess, "/boot/boot/kernel.bin", timeout) == want:
+            print("remote: that kernel is already installed")
+            return 0
+
+        print("remote: rotating the running kernel to /boot/boot/kernel.old")
+        sess.run("cp /boot/boot/kernel.bin /boot/boot/kernel.old", timeout)
+    finally:
+        sess.close()
+
+    rc = do_put(host, tftp_port, local, "/boot/boot/kernel.bin", timeout)
+    if rc:
+        return rc
+
+    sess = Session(host, telnet_port, timeout)
+    try:
+        sess.run("sync", timeout)
+        got = _sha256(sess, "/boot/boot/kernel.bin", timeout)
+        if got != want:
+            print(f"remote: FLASH DID NOT VERIFY\nremote:   want {want}"
+                  f"\nremote:   got  {got}\nremote: kernel.old still holds "
+                  "the kernel this machine is running -- do not reboot "
+                  "before\nremote: retrying, and pick the rescue entry if "
+                  "you already have.", file=sys.stderr)
+            return 1
+        print(f"remote: flashed and verified {os.path.basename(local)} "
+              f"({os.path.getsize(local)} bytes)")
+        if reboot:
+            print("remote: rebooting")
+            try:
+                sess.run("reboot", 3.0)
+            except (TimeoutError, EOFError, OSError):
+                pass          # the machine going away IS the reply
+    finally:
+        try:
+            sess.close()
+        except OSError:
+            pass
+    return 0
+
+
 def do_shell(host, port, timeout):
     """A raw interactive session, for a human. Ctrl-] quits."""
     import termios
@@ -669,6 +789,12 @@ def main():
     y.add_argument("--dry-run", action="store_true",
                    help="say what would be sent, send nothing")
 
+    f = sub.add_parser("flash", help="replace the kernel on the machine's "
+                                     "own boot partition")
+    f.add_argument("kernel", nargs="?", default="build/kernel.bin")
+    f.add_argument("--reboot", action="store_true",
+                   help="reboot once the new kernel has verified")
+
     sub.add_parser("shell", help="an interactive session (Ctrl-] quits)")
 
     a = ap.parse_args()
@@ -682,6 +808,9 @@ def main():
         if a.cmd == "sync":
             return do_sync(a.host, a.telnet_port, a.tftp_port,
                            a.local, a.remote, a.timeout, a.dry_run)
+        if a.cmd == "flash":
+            return do_flash(a.host, a.telnet_port, a.tftp_port,
+                            a.kernel, a.timeout, a.reboot)
         if a.cmd == "shell":
             return do_shell(a.host, a.telnet_port, a.timeout)
     except (OSError, RuntimeError) as ex:

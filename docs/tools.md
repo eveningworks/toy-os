@@ -343,6 +343,7 @@ manual steps to be worth automating:
       python3 tools/remote.py --host 192.168.200.104 get /tmp/crash.log ./crash.log
       python3 tools/remote.py --host 192.168.200.104 shell      # Ctrl-] quits
       python3 tools/remote.py --host 192.168.200.104 sync seed/sync/bin /bin
+      python3 tools/remote.py --host 192.168.200.104 --timeout 60 flash build/kernel.bin
 
   **This is the tool for the BARE-METAL laptop**, which `vm.py` cannot
   reach: `vm.py` drives a QEMU guest through its serial debug console,
@@ -361,6 +362,21 @@ manual steps to be worth automating:
   question about a dead keyboard. Anything with its own duration
   (`kbd`, a sleep, a long `sum`) needs `--timeout` set above it; the
   error message says so now.
+
+  **`flash` REPLACES THE KERNEL ON THE MACHINE'S OWN BOOT PARTITION**,
+  which is four commands with one irreversible step in the middle when
+  done by hand. It remounts the read-only `/boot` writable, rotates the
+  RUNNING kernel to `/boot/boot/kernel.old` so the "previous kernel"
+  entry in `grub.cfg` is known-good, writes the new one, and reads a
+  sha256 back off the partition. `--reboot` restarts the machine once
+  that verifies, and only then.
+
+  **It REFUSES while `grub.cfg` says `set timeout=0`.** That is the
+  whole safety argument: the rescue entry exists on every installed
+  machine, and with no timeout GRUB draws no menu, so it cannot be
+  picked and a bad kernel needs a USB stick. Fixing that is a one-line
+  edit to `/boot/boot/grub/grub.cfg` and deliberately not something
+  this does for you -- see `docs/conventions/build.md`.
 
   **`sync` sends only what differs, and ASKS the machine rather than
   remembering.** It uploads a manifest of `<crc32> <size> <path>` and

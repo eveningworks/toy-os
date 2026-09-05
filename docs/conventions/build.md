@@ -559,3 +559,34 @@ exactly as before. What it changes for the toolkit: a widget's data
 globbed wholesale into `libuapp.a`, so a copy there would be linked
 statically into every caller and the `.so` would never be reached --
 with nothing failing, because both copies work.
+
+## THE BARE-METAL KERNEL IS REPLACED WITH `remote.py flash`, AND THE RESCUE ENTRY NEEDS A GRUB TIMEOUT
+
+`/boot` on an installed machine is FAT32 and mounts READ-ONLY
+(`kernel/fs/mount.c`'s `mount_boot_auto`), so putting a new kernel on
+one is `umount /boot`, `mount <dev> /boot`, write, `sync`. That is four
+commands with one irreversible step in the middle, and doing it by hand
+is how a machine ends up unbootable.
+
+    python3 tools/remote.py --host <ip> --timeout 60 flash build/kernel.bin
+
+**THE ORDER IS WHAT MAKES IT SURVIVABLE, and the tool refuses rather
+than working around a missing step.** `grub.cfg` already carries a
+"toy-os (previous kernel)" entry reading `/boot/kernel.old` -- but an
+installed machine has `set timeout=0`, which draws NO MENU, so that
+entry cannot be reached and a bad kernel needs a USB stick. So the
+flash checks the timeout FIRST and stops if it is zero; then copies the
+RUNNING kernel over `kernel.old`, so the rescue entry is known-good
+rather than whatever was there; then writes the new one; then reads a
+sha256 back OFF THE PARTITION before anything reboots.
+
+Two things it will not do. It does not EDIT `grub.cfg` for you -- a
+flash silently rewriting the bootloader config is a worse surprise than
+a refusal. And it does not reboot unless asked (`--reboot`), because a
+verify failure is exactly when you want the machine still up.
+
+**`tosh` DOES NOT QUOTE**, which is a trap for anything driving a
+machine this way: it splits a line on whitespace and passes the pieces
+through, so `grep '^set timeout=' file` arrives as two arguments and
+grep reads the second as a filename. Anchor on the host side instead.
+

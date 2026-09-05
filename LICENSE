@@ -116,8 +116,21 @@ which register writes that sequence needs, both of which were taken from
 ure(4). Linux's r8152.c describes the same hardware and is GPL-2.0; it
 was deliberately not consulted, because this repository is MIT.
 
-BSD-2-Clause is compatible with the MIT License and requires only that
-the notice travel with the source:
+The RTL8111/8168 PCI Express Ethernet driver,
+kernel/drivers/net/r8169.c, is original work under the MIT License
+above, written against FreeBSD's re(4) driver (sys/dev/re/if_re.c and
+sys/dev/rl/if_rlreg.h) as its reference. The same split applies: the
+register map and descriptor layout are facts about the hardware, and
+what the reference supplied is the ORDER of the bring-up -- in
+particular that the receive configuration is written AFTER the receive
+engine is enabled. Linux's r8169.c describes the same hardware and is
+GPL-2.0; it was deliberately not consulted, for the same reason.
+
+  Copyright (c) 1997, 1998-2003 Bill Paul <wpaul@windriver.com>
+  All rights reserved.
+
+Both are under BSD-2-Clause, which is compatible with the MIT License
+and requires only that the notice travel with the source:
 
   Copyright (c) 2015-2016 Kevin Lo <kevlo@FreeBSD.org>
   All rights reserved.

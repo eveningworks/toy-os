@@ -740,6 +740,7 @@ run on, not by order.
 - [x] ~~**TCP**~~ DONE 2026-08-29 -- client side: active open, in-order stream, retransmission, orderly close
 - [x] ~~**A passive open: listen and accept**, so something can connect TO toy-os~~ DONE 2026-08-29 -- `/bin/httpd` serves the filesystem
 - [x] ~~**A connection per child process**~~ DONE 2026-08-29 -- `/bin/inetd`; the spawn NAMES fd 0/1, so `inetd -p 7 /bin/cat` echoes
+- [x] ~~An RTL8111/8168 driver, for the Ethernet built into most laptops~~ DONE 2026-09-05 -- `r8169.c`; DHCP and 5.5 MB of TFTP
 - [ ] **NEXT** Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today
 - [ ] An RTT estimate, and Nagle -- the retransmit timeout is a fixed floor with backoff
 - [x] ~~Run `dhcp` at boot~~ DONE 2026-08-29 -- init's `dhcp` one-shot; the kernel invents no address at all now

@@ -2339,3 +2339,49 @@ virtio device on MSI could signal configuration changes and nothing
 else. No virtio device offers MSI without MSI-X, so the rung is dead
 either way -- but taking it would have been a device that enumerates
 perfectly and never delivers.
+
+## A driver for hardware nothing emulates is written in two halves
+
+QEMU models no Realtek PCIe NIC -- `rtl8139` is a different chip with a
+different register set -- so `r8169.c` is the first driver here whose
+hardware cannot be reached by any automated test. The obvious answers
+were both bad: ship it untested, or refuse to write it.
+
+What it does instead is split. The descriptor rules -- what a transmit
+`opts1` must carry, what a completed receive `opts1` means -- are three
+functions in `kernel/include/kernel/r8169.h` with no register access in
+them, and `r8169_test.c` KTESTs them in QEMU like anything else. That
+is `net_usb_r8153.c`'s shape, and it is chosen for the same reason: the
+silent bugs live there. A receive length used as reported delivers four
+bytes of Ethernet FCS as payload, which every checksum above then fails
+on; a transmit ring with EOR nowhere sends the engine off the end of
+it. Both look like a working driver right up until they do not, and
+both were confirmed to fail the tests before the tests were believed.
+
+The other half -- bring-up order, interrupts, the PHY -- is only ever
+exercised on the real card, so the machine has to survive being wrong
+about it. Two things make that true, and they are a pair. `grub.cfg`'s
+"previous kernel" entry needs a nonzero GRUB timeout to be reachable at
+all, which `remote.py flash` refuses to proceed without. And `nor8169`
+on the boot line keeps the NEW kernel while leaving the card alone,
+which is the more useful of the two when the question is whether the
+NIC is what broke: the old kernel answers "it works without your
+change", the flag answers "it works without your driver".
+
+**The PHY is checked before it is forced.** Firmware that has no reason
+to bring the PHY up -- PXE and wake-on-LAN both off -- leaves it
+powered down, and the symptom is a link that never arrives with nothing
+to retry. Always restarting autonegotiation would undo a working
+firmware setup and add a wait to every boot; never doing it leaves that
+machine dead. So the link state is read at probe and the MDIO power-up
+and autonegotiation restart happen only when there is none, without
+blocking the boot on the result -- the link-change interrupt is what
+reports the answer.
+
+**The match table is two device IDs, not the family.** `0x8168` and
+`0x8136` share the registers and the bring-up. The PCI RTL8169
+(`0x8169`) and the 2.5G RTL8125 (`0x8125`) each differ in the parts
+this file would have to get right, and neither can be tested here --
+claiming hardware on the strength of a family resemblance is how a
+driver writes to somebody else's registers.
+
