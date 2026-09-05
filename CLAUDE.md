@@ -1574,6 +1574,12 @@ detail there, and keep the pointer here to a line. What each file is:
   (non-bevelled) rendering, the press-then-commit-on-release rule, the
   `on_hover` contract, text/layout budgeting, and how to verify a GUI
   change properly. **Read it before touching anything drawn.**
+- **`docs/driver-guide.md`** -- how to write a driver, ordered by the
+  task rather than by topic: find the device, pick the class registry,
+  declare yourself as data, DMA and interrupt rules, how to make the
+  half no emulator can reach testable, and how to bring it up on real
+  hardware without losing the machine. `e1000.c` and `r8169.c` are the
+  two worked examples.
 - **`docs/devices.md`** -- every driver in the tree, by class registry,
   and what each one claims. `tools/check_docs.py` fails the build when a
   `DRIVER_DECLARE` has no row, so the list cannot silently fall behind;
