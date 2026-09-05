@@ -2064,6 +2064,42 @@ merely corrupt: the lock is not recursive, so a signal handler that
 allocates while its own thread holds it deadlocks. That is true of every
 libc's malloc, glibc's included.
 
+## AN INTEL xHCI'S USB2 PORTS MAY BE ROUTED TO AN EHCI, AND SWITCHING THEM IS A SECOND QUIRK
+
+On an Intel PCH the USB2 ports are physically shared between the xHC
+and an EHCI companion, and the firmware commonly leaves them on the
+EHCI. The xHC then comes up perfectly -- handoff done, MSI taken, full
+port count reported -- and sees NOTHING on any port, including the
+machine's own internal devices. `lsusb` prints "No USB devices" and the
+only clue is an EHCI function in `lspci`.
+
+`intel_port_mux()` in `xhci.c` writes the four PCI config registers
+Linux writes in `usb_enable_intel_xhci_ports()`: `USB3PRM` (0xDC) into
+`USB3_PSSEN` (0xD8), then `XUSB2PRM` (0xD4) into `XUSB2PR` (0xD0).
+Four things to know.
+
+- **IT IS A SEPARATE QUIRK FROM THE HANDOFF, and a machine can need one,
+  both or neither.** The handoff decides WHO owns the controller; this
+  decides WHICH PORTS it can see. Linux keeps them as two functions in
+  `pci-quirks.c` for the same reason.
+- **IT GATES ITSELF ON THE MASK, so there is no device-id list.** Each
+  routing register has a mask register beside it naming the switchable
+  ports, and the write is that mask verbatim. A part without the mux
+  reads a zero mask and the write is a no-op -- which also means a
+  machine with no EHCI is a usable CONTROL for the change.
+- **WRITING THE MASK CANNOT UN-ROUTE A WORKING PORT**, measured rather
+  than assumed: on a machine already routed to the xHC, `XUSB2PR` read
+  `0x7ff` against a mask of `0x4ff`, took the write, and read back
+  `0x7ff`. The bits outside the mask are read-only.
+- **SUPERSPEED FIRST, THEN USB2** -- Linux's order. A USB3 port whose SS
+  half is not enabled falls back to its USB2 half, so the other order
+  can route a port to the xHC at full speed and leave it there.
+
+It runs AFTER the handoff and BEFORE the reset, and logs its
+before/after values on every machine even when nothing moves: a no-op
+and a controller that silently refused the write look identical
+otherwise, and a laptop has no serial console to ask.
+
 ## THE BIOS OWNS THE xHCI UNTIL YOU ASK FOR IT, AND THE ASK COMES FIRST.
 
 `legacy_handoff()` (`kernel/drivers/usb/xhci.c`) sets the OS Owned

@@ -366,6 +366,64 @@ static void walk_xecp(uint32_t hcc1) {
 // a BIOS that will not answer has usually stopped caring rather than
 // stayed active, and the SMI disable below is what actually protects
 // us either way.
+// --- the Intel port mux -----------------------------------------------
+//
+// ON AN INTEL PCH THE USB2 PORTS ARE SHARED WITH AN EHCI COMPANION, AND
+// THE FIRMWARE USUALLY LEAVES THEM ROUTED TO IT. The xHC then comes up
+// perfectly, reports its full port count, and sees NOTHING on any of
+// them -- including the machine's own internal devices. That is not a
+// hypothetical: it is the Lenovo Yoga 500-15IBD, where `lsusb` found
+// nothing at all while an EHCI sat at 00:1d.0 holding the ports.
+//
+// Linux does this as a second, separate quirk beside the handoff
+// (usb_enable_intel_xhci_ports() in pci-quirks.c) and the split is
+// worth keeping in mind: the handoff decides WHO owns the controller,
+// this decides WHICH PORTS the controller can see. A machine can need
+// one, both or neither.
+//
+// IT GATES ITSELF ON THE HARDWARE. Each routing register has a MASK
+// register beside it saying which ports are switchable at all, and the
+// write is that mask, verbatim. A controller without the mux reads a
+// zero mask and the write is a no-op -- which is why this needs no
+// device-id list to maintain, and why the machine that does NOT have an
+// EHCI is a usable control for it.
+//
+// WRITING THE MASK CANNOT UN-ROUTE A PORT, and that is measured rather
+// than assumed: on a machine whose ports were already on the xHC,
+// XUSB2PR read 0x7ff against a mask of 0x4ff, took the 0x4ff write, and
+// read back 0x7ff. The bits outside the mask are read-only, which is
+// what makes Linux's plain write of the mask safe rather than a way to
+// switch working ports away.
+#define INTEL_XUSB2PR    0xD0   // xHC USB2 port routing (write)
+#define INTEL_XUSB2PRM   0xD4   // ...and which ports may be routed (read)
+#define INTEL_USB3_PSSEN 0xD8   // SuperSpeed enable (write)
+#define INTEL_USB3PRM    0xDC   // ...and which may be enabled (read)
+
+static void intel_port_mux(const struct pci_device *d) {
+    if (d->vendor_id != 0x8086) return;
+
+    // SUPERSPEED FIRST, then USB2 -- Linux's order. A USB3 port whose
+    // SS half is not enabled falls back to its USB2 half, so doing it
+    // the other way round can route a port to the xHC at full speed and
+    // leave it there.
+    uint32_t ss_mask = pci_config_read32(d, INTEL_USB3PRM);
+    uint32_t ss_before = pci_config_read32(d, INTEL_USB3_PSSEN);
+    if (ss_mask) pci_config_write32(d, INTEL_USB3_PSSEN, ss_mask);
+
+    uint32_t hs_mask = pci_config_read32(d, INTEL_XUSB2PRM);
+    uint32_t hs_before = pci_config_read32(d, INTEL_XUSB2PR);
+    if (hs_mask) pci_config_write32(d, INTEL_XUSB2PR, hs_mask);
+
+    // Reported even when nothing moved: a no-op and a controller whose
+    // registers did not take the write look identical otherwise, and
+    // this is the only evidence available on a machine with no serial
+    // console.
+    klog_printf("usb: intel port mux: usb2 0x%x -> 0x%x (mask 0x%x)\n",
+                hs_before, pci_config_read32(d, INTEL_XUSB2PR), hs_mask);
+    klog_printf("usb: intel port mux: usb3 0x%x -> 0x%x (mask 0x%x)\n",
+                ss_before, pci_config_read32(d, INTEL_USB3_PSSEN), ss_mask);
+}
+
 static int legacy_handoff(void) {
     if (!g_hc.legsup_off) return 1;   // no such capability; nothing owns it
 
@@ -1604,6 +1662,11 @@ static void usb_probe(const struct pci_device *d) {
     // owned the controller hung before reaching any of the rest.
     walk_xecp(hcc1);
     legacy_handoff();
+
+    // AFTER the handoff, BEFORE the reset: routing is the firmware's to
+    // hand over first, and a port that arrives during the reset is one
+    // the port scan below will find anyway.
+    intel_port_mux(d);
 
     if (!reset_controller()) return;
 
