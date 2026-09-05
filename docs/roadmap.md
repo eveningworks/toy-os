@@ -954,7 +954,7 @@ this to be better?".
 - [x] ~~Run the full gate over the About rewrite and the logo~~ DONE 2026-09-02 -- preflight and `gui_regress.py` green
 - [ ] A key event carries the translated code only, not the physical keycode
 
-- [ ] The desktop decodes a new wallpaper on the COMPOSITOR's thread -- one frame, ~20 ms under KVM; a mode change no longer decodes
+- [ ] The desktop decodes a new wallpaper on the COMPOSITOR's thread -- a 640 ms frame on the laptop; a mode change no longer decodes
 - [ ] Four overlays still opt out of damage tracking -- see `docs/roadmap-details.md`
 - [ ] `damage_sweep.py`'s random walk can open Notepad's file picker by chance -- harmless, but confusing in a state dump
 - [x] ~~`SYS_LISTDIR` truncates at 256 entries and TFS3 has no such cap~~ done -- `SYS_LISTDIR_AT` pages
