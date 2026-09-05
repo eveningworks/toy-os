@@ -114,6 +114,13 @@ ktest_qemu.log
 # tools/hires_test.py's screendumps (its default --shots directory).
 .hires_shots/
 
+# tools/ahci_test.py's working image and log -- same shape as
+# poweroff_test.img and virtio_boot.img above, and missed when they were
+# added. The image is a 9.6 GB sparse copy of disk.img in the repo root,
+# so a `git add -A` after an AHCI run stages something GitHub refuses.
+ahci_test.img
+ahci_qemu.log
+
 # tools/virtio_boot_test.py's working image and log (it copies disk.img
 # rather than writing to it, and the copy is disposable), and the second
 # disk image CI's virtio job makes.
