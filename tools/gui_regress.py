@@ -143,6 +143,7 @@ TOOLS = [
     ("volume", "volume_test.py", "the tray volume flyout: slider, mute, wheel, devices"),
     ("brightness", "brightness_test.py", "the tray brightness flyout, and its answer with no backlight"),
     ("modeset", "modeset_test.py", "a runtime resolution change: device, desktop and setting agree"),
+    ("wallpaper", "wallpaper_mode_test.py", "fit vs fill, at a mode where they differ, and when the picture is decoded"),
     ("files", "filemanager_test.py", "the File Manager: two panes, marks, and real file operations"),
 ]
 
@@ -190,6 +191,7 @@ COST_S = {
     "menubar": 32,
     "idle": 10,        # eight captures a third of a second apart
     "imgview": 30,     # two decodes, several settled frames, a wallpaper hop
+    "wallpaper": 30,   # a resolution change out and back, plus five settled frames
     "icons": 25,       # three draw sites, each a settled frame
     "font": 19,        # two face switches and a size change, each settled
     "gfxdemo": 24,

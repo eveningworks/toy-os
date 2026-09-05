@@ -268,18 +268,13 @@ static void wallpaper_reload(void) {
     k_strlcpy(msg.name, "desktop.wallpaper_mode", sizeof msg.name);
     if (sys_setting(&msg) == 0 && msg.value[0]) k_strlcpy(mode, msg.value, sizeof mode);
 
-    if (k_strcmp(name, wallpaper_name) == 0 && k_strcmp(mode, wallpaper_mode) == 0)
-        return;
+    int name_changed = k_strcmp(name, wallpaper_name) != 0;
+    int mode_changed = k_strcmp(mode, wallpaper_mode) != 0;
+    if (!name_changed && !mode_changed) return;
 
     k_strlcpy(wallpaper_name, name, sizeof wallpaper_name);
     k_strlcpy(wallpaper_mode, mode, sizeof wallpaper_mode);
 
-    // THE WHOLE DESKTOP IS NOW WRONG, so say so. Without this the new
-    // background sits in memory until something else happens to damage
-    // the desktop -- and because the taskbar clock, a mouse move and a
-    // window opening all do, it LOOKED like it worked while depending on
-    // whatever came next. A wallpaper set on an idle desktop appeared
-    // seconds later or not at all.
     // THE WHOLE DESKTOP IS NOW WRONG, so declare it rather than waiting
     // to be noticed. Honest scope: this makes the change PROMPT, not
     // correct -- the desktop is repainted on its own cadence anyway, so
@@ -295,6 +290,13 @@ static void wallpaper_reload(void) {
     // crops, which is what every desktop defaults to.
     uui_image_set_fit(&wallpaper_view,
                       k_strcmp(mode, "fit") == 0 ? UIMG_FIT_CONTAIN : UIMG_FIT_COVER);
+
+    // A MODE CHANGE IS NOT A NEW PICTURE. uui_image_draw() derives the
+    // drawn size from `fit` every frame and rescales its own cache, so
+    // the same decoded source serves either mode -- decoding it again
+    // would spend a whole JPEG to arrive at identical pixels, on the
+    // thread that owes the next frame.
+    if (!name_changed && wallpaper_loaded) return;
 
     uui_image_set(&wallpaper_view, NULL);
     if (wallpaper_loaded) {

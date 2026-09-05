@@ -1862,6 +1862,27 @@ window without going through it will find its layout polls timing out.
   to establish its own selection with Home rather than inheriting the
   phase above's -- the insertion broke it on the first run, which is the
   argument for the rule rather than a reason to move the phase.
+- **`wallpaper_mode_test.py`** -- `desktop.wallpaper_mode`, at a screen
+  mode where the setting can actually be seen. **It sets 1024x768
+  because at the default it would measure nothing**: both stock
+  wallpapers are exactly 1280x720 and so is the boot mode, and at a
+  matching aspect ratio `fit` and `fill` produce the SAME pixels -- so a
+  check taken there passes whether the setting works or not. Its first
+  check asserts that premise rather than assuming it, so a future
+  wallpaper that breaks it says so here instead of quietly making the
+  tool pointless.
+
+  **The pair is what makes it evidence.** One check requires a MODE
+  change to log no decode (`uui_image_draw()` re-fits the same decoded
+  source every frame, so re-decoding would spend a whole JPEG to reach
+  identical pixels); on its own that passes just as well for a broken
+  log line or an absent wallpaper. The next changes the NAME and
+  requires a decode to appear, from the same log in the same run.
+  Neither half means anything alone. The round trip is the third: `fit`
+  then `fill` must restore the original bytes, which "the pixels
+  changed" cannot tell from "the pixels changed to something else".
+  Every setting it touches is restored, the resolution included. In
+  `gui_regress.py`.
 - **`imgview_test.py`** -- JPEG decoding all the way to a screen (15
   checks), and the only one of the three decoder checks that can see a
   pixel. Its oracle is the host: `data/wallpapers/aurora.jpg` is

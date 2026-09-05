@@ -268,14 +268,27 @@ int cursor_theme_scale(void) { return g_scale; }
 static void adopt_settings(void) {
     char val[SETTING_VALUE_MAX];
 
+    // ONE read for BOTH keys. wm_conf_get() re-reads the whole document
+    // per call, and this runs on every settings generation bump -- which
+    // moves for any setting anywhere, so the common case is two whole-file
+    // reads to discover that nothing about the cursor changed.
+    //
+    // static, not a 4 KiB stack frame: a ring-3 stack is 16 KiB with one
+    // guard page below it, so a local of this size steps clean over the
+    // guard (etc_config.h says so). Safe as a static because the WM is
+    // one event loop and this does not recurse -- the same property the
+    // shape loader's `body` relies on.
+    static struct etc_config_buf conf;
+    int have = wm_conf_load(CURSOR_CONFIG_FILE, &conf);
+
     int scale = 1;
-    if (wm_conf_get(CURSOR_CONFIG_FILE, "cursor_size", val, sizeof val)) {
+    if (have && etc_config_buf_get(&conf, "cursor_size", val, sizeof val)) {
         if (k_strcmp(val, "large") == 0) scale = 2;
         else if (k_strcmp(val, "huge") == 0) scale = 3;
     }
     g_scale = scale;
 
-    if (!wm_conf_get(CURSOR_CONFIG_FILE, "cursor_theme", val, sizeof val) || !val[0])
+    if (!have || !etc_config_buf_get(&conf, "cursor_theme", val, sizeof val) || !val[0])
         k_strlcpy(val, "default", sizeof val);
     if (k_strcmp(val, g_theme) != 0 || !g_shapes[0].loaded) {
         k_strlcpy(g_theme, val, sizeof g_theme);

@@ -4525,19 +4525,37 @@ size probe fails the same two checks, so neither is that change's.
   file could each explain it. The next check, that deleting the file
   hands blocks back through discard, passes.
 
-## The SECOND consecutive `preflight.sh` fails three `fs` KTESTs with `fsck` reporting leaked blocks
+## ONE ORDINARY GUEST BOOT LEAKS 2 BLOCKS, and that is what reddens every `preflight.sh`
 
-Measured 2026-09-02 on 1f79742, the commit before that day's work:
-`make clean-disk`, then `preflight.sh` twice. The first run passes; the
-second fails "fsck reports a clean filesystem", "fsck stays clean across
-a rename and a truncate" and "truncate cuts a file that uses indirect
-blocks", each on `r.leaked`. Two `ktest_run.py` runs in a row on the
-same image stay clean, so the leak is left by something preflight runs
-BETWEEN kernel suites -- the ring-3 `/tests` programs are the suspect,
-none of them named yet. `preflight.sh` starts with `make clean` and
-`make iso`, which re-seed by sync and keep the leftovers; `make
-clean-disk` first is the workaround, and it was reported twice in one
-session as a regression before being measured.
+Isolated 2026-09-05 by a three-way comparison on one build, which is
+what turned a "second consecutive run" story into a one-step
+reproduction:
+
+    make clean-disk && make iso && ktest_run.py            -> PASS 654/0
+    ... and a second bare ktest_run.py on the same image   -> PASS 654/0
+    make clean-disk && make iso
+        && boot_smoke_test.py && ktest_run.py              -> FAIL 651/3
+
+The three failures are `r.leaked expected 0, got 2` at
+`kernel/fs/fs_test.c:646`, `:695` and `:799` -- "truncate cuts a file
+that uses indirect blocks", "fsck stays clean across a rename and a
+truncate" and "fsck reports a clean filesystem". PRE-EXISTING: measured
+by `predates.py` at a07a0b12, which fails with identical counts.
+
+So the earlier framing was wrong in a way worth recording. It is not the
+SECOND run, and the ring-3 `/tests` programs are not the suspect: a
+single plain boot to the desktop leaks the blocks, and `preflight.sh`
+performs one in `boot_smoke_test.py` BEFORE it runs `ktest_run.py`.
+That is why `make clean-disk` before the gate does not help -- it clears
+the leftovers and the gate immediately makes two more. It helps a BARE
+`ktest_run.py`, which is where the original workaround came from.
+
+WHAT leaks the two blocks is still not established. What is now ruled
+out is the host seeder, a long-lived image, and any particular VM tool.
+The next step is to bisect the boot itself: init, the services it
+starts, and the desktop each write to `/etc` and `/var`, and a boot to a
+`text` target rather than `graphical` would say whether the desktop is
+involved at all.
 
 ## `damage_sweep.py` reports one violation on `start-menu dismiss`
 
