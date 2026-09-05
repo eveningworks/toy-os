@@ -2584,3 +2584,53 @@ answers (desktop up, black, panic text) and each sends the next step
 somewhere different. And a `$R exec ...` with `R` a string does not
 word-split under zsh; a function or a script file does.
 
+
+## THE DEBUG CONSOLE IS NOT A TERMINAL A LONG-RUNNING PROGRAM CAN WRITE TO (2026-09-05)
+
+`vm.py exec "spawn /bin/foo"` returns the output `foo` produces around
+the spawn and **nothing it prints later**, even while the socket stays
+open. This was diagnosed twice as "the feature is broken" before an
+instrument settled it: a `netlog -f` poll loop printed its first pass
+and then appeared dead, so the flag was written up as not working. It
+works.
+
+The sequence that got there, and the order matters:
+
+- **`ps` first.** The process was `block(timer)`, which says it is
+  alive and sleeping -- so "it exited" and "it never loops" were both
+  out before any theory was formed.
+- **`strace` second**, read back through `dmesg`, which does not depend
+  on the console staying attached: `sleep(500) = ?` then two `query()`
+  calls, repeating. That is the loop running. Nothing else had to be
+  guessed after that line.
+- **A second `vm.py exec` beside the first is not a second channel** --
+  two `DebugConsole`s on one serial socket steal each other's replies,
+  and connecting a raw socket to `.vm.serial` behaves the same way.
+
+**The way to observe such a program is to give it somewhere durable to
+write.** `spawn /bin/tosh -c netlog -f > /follow.log` works and the
+quoting is the trick: the `#` shell's `spawn` splits argv on
+whitespace with no quote handling, and `tosh -c` REJOINS argv[2..] into
+one line, so an UNQUOTED redirect survives the round trip and a quoted
+one does not. Then `cat /follow.log` from an ordinary `exec`, twice,
+and assert it GREW.
+
+Two smaller ones from the same afternoon:
+
+- **`vm.py exec` takes one command per flag.** `exec "a" exec "b"` is
+  parsed with the literal word `exec` as a command ("Unknown command:
+  exec") and everything after it silently belongs to the first
+  invocation -- which reads as the second command doing nothing.
+- **An outer `timeout` equal to `--timeout` races the reader.**
+  `_exec_one` returns its buffer only after its own deadline, so
+  `timeout 30 ... --timeout 30` kills the process just before it
+  prints. Give the outer one slack.
+
+And the fixture note, which cost a wrong verdict on an unrelated tool:
+**files an interactive session writes into the guest land on the real
+`disk.img` and outlive it.** `net_test.py`'s `[server]` phase serves a
+directory listing and compares it, so `/tmp/ex.html` left behind by
+hand failed it. `make clean-disk && make iso` before believing any
+listing-shaped failure -- and then MEASURE with `predates.py` anyway,
+because on that occasion the clean image failed identically and the
+real answer was "pre-existing".
