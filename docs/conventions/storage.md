@@ -625,6 +625,41 @@ destructive pointed at a partition where it is unrecoverable. Real
 installers make exactly this distinction: an ESP is never offered as a
 root filesystem target.
 
+## THE INSTALLER WRITES GPT BY DEFAULT AND MBR ON REQUEST, AND A LEGACY BIOS IS WHY
+
+`install` produces GPT with a BIOS-boot partition. **That is a legacy
+BIOS booting a GPT disk, and it is the combination consumer firmware
+most often refuses** -- the machine can be in CSM mode, with the disk in
+its boot order, and simply not touch it. `install --mbr` writes the
+other layout for those machines. Four things to know.
+
+- **EVERYTHING SHIFTS DOWN ONE.** MBR has no BIOS-boot partition type,
+  so the core image goes in the GAP at sectors 1..2047, the FAT32 boot
+  partition is p1 and the root is p2. `install.c` derives the partition
+  names from the flag; hard-coding `p2`/`p3` is how the first version
+  formatted the wrong things.
+- **THE CHOICE IS BAKED INTO `core.img`, NOT MADE AT INSTALL TIME.** A
+  core image carries its prefix -- the table format AND the partition
+  number -- from `grub-mkimage`, and the target has no `grub-mkimage`.
+  So the build stages TWO (`core.img` at `(hd0,gpt2)`, `core-msdos.img`
+  at `(hd0,msdos1)`) and the installer picks. A build staged without the
+  second refuses `--mbr` before erasing anything.
+- **THE BOOT PARTITION KEEPS THE ESP ROLE, AND THEREFORE MBR TYPE
+  0xEF**, on a disk no UEFI will ever boot. The type is what
+  `partition_is_firmware()` reads to keep a partition OUT of the root
+  scan; typing it 0x0C instead made the boot scan mount `/boot` as the
+  root. Measured, not reasoned -- and it costs nothing, because a BIOS
+  boots this disk through `boot.img` in the MBR, which never reads a
+  partition's type.
+- **THE ACTIVE FLAG IS NOT DECORATION.** `partition.c` writes 0x80 on
+  the ESP-role entry of an MBR table now; before, no partition was ever
+  marked, and a number of BIOSes refuse a disk on which nothing is.
+
+**NOTHING HERE INSTALLS A UEFI BOOTLOADER.** `install_grub.py` builds
+i386-pc GRUB only, so a machine switched to UEFI-only mode cannot boot a
+toy-os install at all -- the partition named "EFI System" is just where
+the kernel and `grub.cfg` live.
+
 ## THERE IS AN INSTALLER, AND IT IS FIVE ORDINARY OPERATIONS
 
 `/bin/install --disk <name> confirm` partitions, formats, mounts, copies

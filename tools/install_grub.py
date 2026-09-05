@@ -370,6 +370,17 @@ def has_boot_partition(disk):
 # whatever this ends up installed onto.
 PAYLOAD_PREFIX = "(hd0,gpt2)/boot/grub"
 
+# THE SECOND CORE IMAGE, for `install --mbr`. A prefix is baked in at
+# mkimage time and names the TABLE FORMAT as well as the partition
+# number, so one image cannot serve both layouts -- and the target has
+# no grub-mkimage to build its own. Staging both here is what lets the
+# installer offer a choice at all.
+#
+# msdos1, not msdos2: an MBR install needs no BIOS-boot partition (the
+# core image goes in the gap before the first partition), so the FAT32
+# boot partition is the first one.
+PAYLOAD_PREFIX_MBR = "(hd0,msdos1)/boot/grub"
+
 
 def stage_payload(outdir, kernel, grub_cfg, verbose=True):
     mkimage = _tool("grub-mkimage", "grub2-mkimage")
@@ -387,6 +398,8 @@ def stage_payload(outdir, kernel, grub_cfg, verbose=True):
     core = os.path.join(outdir, "core.img")
     _run([mkimage, "-O", "i386-pc", "-d", mods, "-p", PAYLOAD_PREFIX,
           "-o", core, *CORE_MODULES])
+    _run([mkimage, "-O", "i386-pc", "-d", mods, "-p", PAYLOAD_PREFIX_MBR,
+          "-o", os.path.join(outdir, "core-msdos.img"), *CORE_MODULES])
     shutil.copyfile(os.path.join(mods, "boot.img"), os.path.join(outdir, "boot.img"))
     shutil.copyfile(kernel, os.path.join(outdir, "kernel.bin"))
     shutil.copyfile(grub_cfg, os.path.join(outdir, "grub.cfg"))
@@ -394,7 +407,8 @@ def stage_payload(outdir, kernel, grub_cfg, verbose=True):
         total = sum(os.path.getsize(os.path.join(outdir, f))
                     for f in os.listdir(outdir))
         print(f"install_grub: staged the install payload into {outdir} "
-              f"({total // 1024} KiB, prefix {PAYLOAD_PREFIX})")
+              f"({total // 1024} KiB, prefixes {PAYLOAD_PREFIX} "
+              f"and {PAYLOAD_PREFIX_MBR})")
     return True
 
 

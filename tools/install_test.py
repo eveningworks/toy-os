@@ -57,6 +57,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 
+import port_guard  # noqa: E402
+
 VM = [sys.executable, os.path.join(HERE, "vm.py")]
 
 # 512 MiB: big enough for the system (~50 MB) plus the 64 MiB ESP with
@@ -95,6 +97,8 @@ class Checks:
 
 def vm(args, media, *cmds, timeout=600):
     """Run vm.py with this run's disks, returning its stdout."""
+    if media == "mbr":
+        media = "live"     # the same medium; only the install FLAG differs
     base = VM + ["--instance", str(args.instance), "--disk", args.target]
     if media in ("live", "grown"):
         # The ISO is the system; the only drive is the blank target.
@@ -154,6 +158,11 @@ def run_media(args, c, media):
     def add(name, ok, detail=""):
         return c.add(f"[{media}] {name}", ok, detail)
 
+    # MBR has no BIOS-boot partition, so every partition shifts down one
+    # and the GPT's last-33 reservation does not apply.
+    mbr = (media == "mbr")
+    boot_n, root_n = (1, 2) if mbr else (2, 3)
+
     if os.path.exists(args.target):
         os.remove(args.target)
     with open(args.target, "wb") as f:
@@ -165,7 +174,7 @@ def run_media(args, c, media):
         # leaves behind: a disk reporting its full size whose GPT still
         # describes the smaller layout.
         print(f"install_test: {media} -- seeding a smaller install first")
-        if "ready" not in vm(args, "live", "start", timeout=400):
+        if "vm: ready" not in vm(args, "live", "start", timeout=400):
             return add("the seeding guest came up", False)
         seed_out = vm(args, "live", "--timeout", "400", "exec",
                       "install --disk ata0 confirm", timeout=900)
@@ -177,12 +186,29 @@ def run_media(args, c, media):
 
     print(f"install_test: {media} -- installing onto a blank disk")
     out = vm(args, media, "start", timeout=400)
-    if "ready" not in out:
+    # "vm: ready", NOT "ready": vm.py's refusal is "vm: already running",
+    # and "already" contains "ready". That made a guest this run never
+    # started look like one that came up, so every command afterwards
+    # went to whatever guest was left over -- ten checks failing for a
+    # reason none of them named.
+    if "vm: ready" not in out:
         print(out)
         return add("the guest came up", False)
     try:
-        seen = vm(args, media, "exec", "lsblk")
-        if media in ("live", "grown"):
+        # WAIT ON THE CONSOLE ANSWERING, not on `start` returning. On the
+        # live media `vm.py` reports ready before the debug console is
+        # taking commands, so the first exec comes back EMPTY and every
+        # check after it fails for a reason none of them names. `lsblk`
+        # always prints its NAME header, so that is the observable.
+        seen = ""
+        for _ in range(10):
+            seen = vm(args, media, "exec", "lsblk")
+            if "NAME" in seen:
+                break
+            time.sleep(3)
+        if not add("the console answers", "NAME" in seen, seen[:120]):
+            return False
+        if media in ("live", "grown", "mbr"):
             # Its root is a RAM image, so the IDE disk is the only thing
             # on the machine that could be a target.
             add("the live root is RAM and the target is a plain disk",
@@ -194,18 +220,21 @@ def run_media(args, c, media):
             add("the target's old table describes a SMALLER layout",
                 "ata0p3" in seen and "445.9M" in seen,
                 "stale p3 named before the install")
-        else:
+        elif media == "disk":
             add("the blank target is a disk the system did not boot from",
                 "ata0" in seen and "virtio0p3" in seen)
 
-        out = vm(args, media, "--timeout", "400", "exec",
-                 "install --disk ata0 confirm", timeout=900)
+        cmd = ("install --disk ata0 --mbr confirm" if mbr
+               else "install --disk ata0 confirm")
+        out = vm(args, media, "--timeout", "400", "exec", cmd, timeout=900)
         add("the installer runs to completion", "install: done." in out)
-        add("it partitioned the target", "3 partition(s) named" in out)
+        add("it partitioned the target",
+            ("2 partition(s) named" if mbr else "3 partition(s) named") in out)
         add("it formatted both target filesystems",
             "formatted as fat32" in out and "formatted as tfs3" in out)
         add("it mounted the target while its own root stayed mounted",
-            "mounted at /mnt on ata0p3" in out and "mounted at /mnt/boot on ata0p2" in out)
+            f"mounted at /mnt on ata0p{root_n}" in out and
+            f"mounted at /mnt/boot on ata0p{boot_n}" in out)
         add("it copied the system and wrote the target's /boot",
             "copying the system" in out and "/install/kernel.bin" in out)
         add("nothing was truncated or ran out of room", "no space left" not in out)
@@ -231,24 +260,28 @@ def run_media(args, c, media):
     # nothing else is attached.
     add("the installed disk boots on its own", "kernel_main reached" in boot)
     add("it mounts ITS OWN root, not somebody else's",
-        "tfs3 mounted at / on ata0p3" in boot)
+        f"tfs3 mounted at / on ata0p{root_n}" in boot)
     # THE DISCRIMINATOR between "the install worked" and "something else
     # booted and mounted the target": the source's root is a different
     # size, so a machine that came up on the wrong volume says so in a
     # number. It also proves the 4.7 MB kernel round-tripped through the
     # host writer's double-indirect map -- GRUB executed it.
     size_mb = GROWN_MB if media == "grown" else TARGET_MB
-    want = size_mb * 1024 * 1024 // 512 - 135168 - 33   # GPT keeps the last 33
+    # GPT keeps the last 33 sectors for its backup header; MBR keeps
+    # none, and its root starts 2048 sectors earlier for want of a
+    # BIOS-boot partition.
+    want = (size_mb * 1024 * 1024 // 512 - 133120 if mbr
+            else size_mb * 1024 * 1024 // 512 - 135168 - 33)
     add("its root partition is the target's size, not the source's",
         f"{want} sectors" in boot, f"{want} sectors")
-    add("/boot is the ESP this install wrote",
-        "fat32 mounted at /boot on ata0p2" in boot)
+    add("/boot is the boot partition this install wrote",
+        f"fat32 mounted at /boot on ata0p{boot_n}" in boot)
 
     # THE FILESYSTEM FILLS ITS PARTITION. Two different numbers in the
     # boot log: the partition's sectors, and TFS3's group count -- and a
     # stale partition window makes them disagree while everything else
     # still looks right.
-    part = re.search(r"mounting tfs3 from partition 3 \(LBA \d+, (\d+) sectors\)", boot)
+    part = re.search(rf"mounting tfs3 from partition {root_n} \(LBA \d+, (\d+) sectors\)", boot)
     groups = re.search(r"tfs3: mounted \(v\d+, (\d+) groups", boot)
     if part and groups:
         want_groups = math.ceil(int(part.group(1)) * 512 / TFS3_GROUP_BYTES)
@@ -272,7 +305,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--instance", default="auto")
-    ap.add_argument("--media", choices=("disk", "live", "grown", "all"), default="all",
+    ap.add_argument("--media", choices=("disk", "live", "grown", "mbr", "all"), default="all",
                     help="which run to make (default all three)")
     ap.add_argument("--keep", action="store_true",
                     help="leave the images behind for inspection")
@@ -284,7 +317,20 @@ def main():
                          "been seen to fail.")
     args = ap.parse_args()
 
-    media = ("disk", "live", "grown") if args.media == "all" else (args.media,)
+    # RESOLVE `auto` ONCE. Every vm.py call below is handed this value,
+    # and vm.py resolves `auto` per invocation -- so passing the word
+    # through gave `start` one slot and each later `exec` a DIFFERENT
+    # free one, with no guest in it. The execs came back empty and every
+    # check failed for a reason none of them named.
+    if args.instance == "auto":
+        n = port_guard.find_free_instance()
+        if n is None:
+            print("install_test: no free VM slot")
+            return 2
+        args.instance = n
+        print(f"install_test: using VM slot {args.instance}")
+
+    media = ("disk", "live", "grown", "mbr") if args.media == "all" else (args.media,)
     if ("live" in media or "grown" in media) and not os.path.exists(os.path.join(ROOT, LIVE_ISO)):
         print(f"install_test: no {LIVE_ISO} -- run `make live-iso` "
               "(or pass --media disk)")

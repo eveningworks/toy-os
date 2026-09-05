@@ -153,6 +153,16 @@ int sys_mkpart(struct syscall_ctx *c) {
         dst->mbr_num_sectors = (uint32_t)src->sectors;
         if (src->mbr_type) dst->mbr_type = src->mbr_type;
 
+        // ON MBR, THE ESP-ROLE PARTITION IS THE ACTIVE ONE. It holds
+        // grub.cfg and the kernel, so it is what a BIOS should chain to
+        // -- and a disk with nothing marked active is one a number of
+        // firmwares refuse outright. Derived from the role rather than
+        // given its own request field: there is exactly one sensible
+        // answer, and a caller free to mark the wrong partition would
+        // only be free to make an unbootable disk.
+        if (tbl.kind == PART_TABLE_MBR && src->role == MKPART_ROLE_ESP)
+            dst->mbr_active = 1;
+
         // An MBR field is 32 bits. Refuse rather than truncate -- a
         // truncated start LBA is a partition somewhere else entirely.
         if (tbl.kind == PART_TABLE_MBR &&
@@ -215,11 +225,17 @@ int sys_mkpart(struct syscall_ctx *c) {
 // boot sector by the BIOS, not by anything this kernel chose.
 #define BOOT_SECTOR_SIZE INSTALL_BOOT_SECTOR_BYTES
 
-// Where a core image goes on this disk: the BIOS boot partition, which
-// is a partition with no filesystem in it that exists for exactly this.
-// Returns 0 when the disk has none, which is the honest answer for a
-// disk nobody partitioned for booting -- guessing at the MBR gap
-// instead would write into whatever a foreign table put there.
+// Where a core image goes on this disk: on GPT the BIOS boot partition,
+// which is a partition with no filesystem in it that exists for exactly
+// this; on MBR the gap before the first partition, which is where GRUB
+// has always put it.
+//
+// NEITHER IS A GUESS. The GPT case matches a type GUID; the MBR case
+// ends the window at the earliest partition's start LBA, so a disk
+// somebody else partitioned from sector 1 reports no room and is
+// refused rather than written into. Returns 0 when there is nowhere to
+// put it, which is the honest answer for a disk nobody partitioned for
+// booting.
 static int bios_boot_window(const struct block_device *disk,
                             uint32_t *out_lba, uint32_t *out_sectors) {
     // STATIC, not a stack local: struct partition_table is ~1.5 KB
@@ -227,7 +243,24 @@ static int bios_boot_window(const struct block_device *disk,
     // table write below is -- the preemption guard is taken around it.
     static struct partition_table tbl;
     if (!partition_read_table_of(disk, &tbl)) return 0;
-    if (tbl.kind != PART_TABLE_GPT) return 0;   // MBR has no BIOS boot type
+
+    // MBR HAS NO BIOS-BOOT TYPE, so core.img goes in the GAP between
+    // the boot sector and the first partition -- the layout GRUB has
+    // used on MBR disks forever. This is DERIVED from the table, not
+    // guessed at: the window ends where the earliest partition begins,
+    // so a disk somebody else partitioned tightly reports a gap too
+    // small and is refused rather than written into.
+    if (tbl.kind == PART_TABLE_MBR) {
+        uint32_t first = 0xFFFFFFFFu;
+        for (int i = 0; i < tbl.entry_count; i++)
+            if (tbl.entries[i].mbr_lba_start < first)
+                first = tbl.entries[i].mbr_lba_start;
+        if (first == 0xFFFFFFFFu || first < 2) return 0;
+        *out_lba = 1;
+        *out_sectors = first - 1;
+        return 1;
+    }
+    if (tbl.kind != PART_TABLE_GPT) return 0;
 
     uint8_t want[16];
     if (!partition_type_guid(PART_ROLE_BIOS_BOOT, want)) return 0;

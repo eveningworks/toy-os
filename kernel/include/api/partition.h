@@ -60,6 +60,12 @@ enum partition_table_kind {
 struct partition_entry {
     // MBR fields, always valid for a PART_TABLE_MBR entry.
     uint8_t mbr_type;
+    // The boot indicator, 0x80 in the table and 1 here. A legacy BIOS
+    // picks the ACTIVE partition to chain to, and a number of them
+    // refuse a disk on which nothing is marked -- so this is not
+    // decoration, it is whether the firmware will boot the disk at all.
+    // Meaningless on GPT, whose protective entry stays 0 by spec.
+    uint8_t mbr_active;
     uint32_t mbr_lba_start;
     uint32_t mbr_num_sectors;
 

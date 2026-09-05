@@ -2043,6 +2043,21 @@ window without going through it will find its layout polls timing out.
   get`, since boot chatter mentions `ac97` too and a substring match
   passed on a guest whose setting had not been restored at all. On
   demand, not in the gate: it boots its own guest with extra hardware.
+- **`install_test.py`** gained an `mbr` medium (`--media mbr`) covering
+  `install --mbr` end to end, and **three fixes to the tool itself, all
+  of which made a healthy system report as broken**. `--instance auto`
+  was passed through to EVERY `vm.py` call, and vm.py resolves `auto`
+  per invocation -- so `start` took one slot and each later `exec`
+  resolved to a DIFFERENT free one with no guest in it; every command
+  came back empty, ten checks failed naming nothing, and the guest was
+  left running to poison the next run. It resolves the slot ONCE now.
+  The readiness check tested `"ready" not in out` against vm.py's
+  refusal message, **"al*ready* running"** -- so a guest that never
+  started looked like one that came up. And the first `exec` now waits
+  on the console ANSWERING rather than on `start` returning, since on
+  live media vm.py reports ready before the debug console takes
+  commands. Its `--positive-control` zeroes the installed boot sector
+  and must redden the six boot checks.
 - **`osk_test.py`** -- the on-screen keyboard (`userland/wm/osk.c`).
   **Its load-bearing check is a ROUND TRIP THROUGH THE FILESYSTEM**: it
   types `mkdir /<name>` into the Terminal with keycap clicks and then

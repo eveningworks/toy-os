@@ -19,6 +19,22 @@
 //   p2  64 MiB  ESP (FAT32)  the kernel, grub.cfg, the modules
 //   p3  rest    TFS3         the root
 //
+// `--mbr` WRITES THE OTHER LAYOUT, and it exists because a GPT disk
+// booted by a legacy BIOS is the combination consumer firmware most
+// often refuses -- a machine can be in CSM mode, have the disk in its
+// boot order, and still not touch it. MBR has no BIOS-boot type, so
+// there the core image goes in the gap before the first partition and
+// the FAT32 partition is the first one, marked ACTIVE:
+//
+//   gap 1 MiB   (no entry)   GRUB's core.img, sectors 1..2047
+//   p1  64 MiB  FAT32        the kernel, grub.cfg, the modules  [active]
+//   p2  rest    TFS3         the root
+//
+// That moves the boot partition from 2 to 1 and the table format from
+// gpt to msdos, and BOTH are baked into core.img's prefix -- which is
+// why the build stages a second core image (`core-msdos.img`,
+// tools/install_grub.py) rather than this choosing at install time.
+//
 // WHAT IT REFUSES: the disk this machine is running from. An installer
 // handed the running root is an installer being asked to saw off its own
 // branch, and there is no reading of "reinstall over myself" that ends
@@ -42,9 +58,11 @@
 #include <unistd.h>
 
 #define USAGE \
-    "install [--disk <name>] [--esp <MiB>] confirm\n" \
+    "install [--disk <name>] [--esp <MiB>] [--mbr] confirm\n" \
     "  --disk <name>  the target (`lsblk`); refuses the one this machine runs from\n" \
     "  --esp <MiB>    size of the FAT32 /boot partition (default 64)\n" \
+    "  --mbr          write an MBR table instead of GPT, for firmware that\n" \
+    "                 will not boot a GPT disk in legacy/CSM mode\n" \
     "  confirm        required -- this ERASES the target disk"
 
 #define SECTOR_BYTES 512
@@ -124,15 +142,49 @@ static void *slurp(const char *path, uint64_t *out_size) {
 }
 
 // One partition table: BIOS boot, ESP, and the root taking the rest.
-static int partition(const char *disk, uint64_t sectors, uint64_t esp_mib) {
+static int partition(const char *disk, uint64_t sectors, uint64_t esp_mib, int mbr) {
     struct mkpart_request req;
     memset(&req, 0, sizeof req);
     snprintf(req.device, sizeof req.device, "%s", disk);
-    req.kind = MKPART_KIND_GPT;
-    req.count = 3;
     req.flags = MKPART_CONFIRM;
 
     uint64_t esp = esp_mib * 1024 * 1024 / SECTOR_BYTES;
+
+    if (mbr) {
+        // No BIOS-boot partition: core.img lives in the gap below
+        // FIRST_LBA, which is why the boot partition is p1 here.
+        //
+        // IT KEEPS THE ESP ROLE, and therefore MBR type 0xEF, even
+        // though nothing here will ever be booted by UEFI. The type is
+        // what `partition_is_firmware()` reads to keep a partition OUT
+        // of the root scan, and typing it 0x0C instead made the boot
+        // scan mount /boot as the root -- measured, not guessed. It
+        // costs nothing: a BIOS boots this disk through boot.img in the
+        // MBR, which never looks at a partition's type.
+        req.kind = MKPART_KIND_MBR;
+        req.count = 2;
+        uint64_t usable = sectors - FIRST_LBA;
+        if (usable <= esp) {
+            refuse("the disk is too small for the boot partition and a root");
+            return 0;
+        }
+        req.entries[0].start_lba = FIRST_LBA;
+        req.entries[0].sectors = esp;
+        req.entries[0].role = MKPART_ROLE_ESP;   // also what marks it ACTIVE
+        snprintf(req.entries[0].name, sizeof req.entries[0].name, "boot");
+
+        req.entries[1].start_lba = FIRST_LBA + esp;
+        req.entries[1].sectors = usable - esp;
+        req.entries[1].role = MKPART_ROLE_DATA;
+        snprintf(req.entries[1].name, sizeof req.entries[1].name, "toyos");
+
+        if (sys_mkpart(&req) < 0) { cmd_fail("install", "mkpart"); return 0; }
+        return 1;
+    }
+
+    req.kind = MKPART_KIND_GPT;
+    req.count = 3;
+
     // GPT keeps its backup header and entry array in the last 33.
     uint64_t usable = sectors - FIRST_LBA - 33;
     if (usable <= BIOS_BOOT_SECTORS + esp) {
@@ -254,10 +306,14 @@ static int copy_boot(void) {
 // GRUB's BIOS target stages no payload -- it boots perfectly and cannot
 // do this, which is worth saying before erasing a disk rather than after
 // the copy.
-static int payload_present(void) {
-    static const char *const NEED[] = {
+static int payload_present(int mbr) {
+    const char *const NEED[] = {
         PAYLOAD "/kernel.bin", PAYLOAD "/grub.cfg",
-        PAYLOAD "/boot.img",   PAYLOAD "/core.img",
+        PAYLOAD "/boot.img",
+        // Checked BEFORE the disk is erased, and it is the image this
+        // run will actually use: a build staged without the MBR one
+        // must refuse `--mbr` rather than partition and then discover it.
+        mbr ? PAYLOAD "/core-msdos.img" : PAYLOAD "/core.img",
     };
     struct sys_stat st;
     for (unsigned i = 0; i < sizeof NEED / sizeof NEED[0]; i++) {
@@ -270,7 +326,7 @@ static int payload_present(void) {
     return 1;
 }
 
-static int write_bootloader(const char *disk) {
+static int write_bootloader(const char *disk, int mbr) {
     struct install_boot_request req;
     memset(&req, 0, sizeof req);
     snprintf(req.device, sizeof req.device, "%s", disk);
@@ -278,8 +334,12 @@ static int write_bootloader(const char *disk) {
     uint64_t boot_size = 0, core_size = 0;
     void *boot = slurp(PAYLOAD "/boot.img", &boot_size);
     if (!boot) { cmd_fail("install", PAYLOAD "/boot.img"); return 0; }
-    void *core = slurp(PAYLOAD "/core.img", &core_size);
-    if (!core) { free(boot); cmd_fail("install", PAYLOAD "/core.img"); return 0; }
+    // The prefix baked into a core image names the table format AND the
+    // partition number, so the layout chosen above decides which of the
+    // two staged images can find its grub.cfg.
+    const char *core_path = mbr ? PAYLOAD "/core-msdos.img" : PAYLOAD "/core.img";
+    void *core = slurp(core_path, &core_size);
+    if (!core) { free(boot); cmd_fail("install", core_path); return 0; }
 
     req.boot_img = (uint64_t)(uintptr_t)boot;
     req.boot_size = boot_size;
@@ -297,10 +357,12 @@ int main(int argc, char **argv) {
     const char *disk = 0;
     uint64_t esp_mib = 64;
     int confirmed = 0;
+    int mbr = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--disk") == 0 && i + 1 < argc) { disk = argv[++i]; continue; }
         if (strcmp(argv[i], "--esp") == 0 && i + 1 < argc) { esp_mib = (uint64_t)atoi(argv[++i]); continue; }
+        if (strcmp(argv[i], "--mbr") == 0) { mbr = 1; continue; }
         if (strcmp(argv[i], "confirm") == 0) { confirmed = 1; continue; }
         cmd_usage(USAGE);
         return 1;
@@ -317,7 +379,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    if (!payload_present()) return 1;
+    if (!payload_present(mbr)) return 1;
 
     uint64_t sectors = disk_sectors(disk);
     if (!sectors) {
@@ -328,33 +390,43 @@ int main(int argc, char **argv) {
     char size[16];
     human_size(size, sizeof size, sectors * SECTOR_BYTES);
     if (!confirmed) {
-        printf("install: this ERASES %s (%s) and puts this system on it:\n", disk, size);
-        printf("  %sp1  1M    BIOS boot  (GRUB's core.img)\n", disk);
-        printf("  %sp2  %lluM  ESP        (FAT32 -- the kernel and grub.cfg)\n",
-               disk, (unsigned long long)esp_mib);
-        printf("  %sp3  rest  TFS3       (the root)\n", disk);
+        printf("install: this ERASES %s (%s) and puts this system on it, as %s:\n",
+               disk, size, mbr ? "MBR" : "GPT");
+        if (mbr) {
+            printf("  (gap)  1M    -          (GRUB's core.img, sectors 1..2047)\n");
+            printf("  %sp1  %lluM  FAT32      (the kernel and grub.cfg) [active]\n",
+                   disk, (unsigned long long)esp_mib);
+            printf("  %sp2  rest  TFS3       (the root)\n", disk);
+        } else {
+            printf("  %sp1  1M    BIOS boot  (GRUB's core.img)\n", disk);
+            printf("  %sp2  %lluM  ESP        (FAT32 -- the kernel and grub.cfg)\n",
+                   disk, (unsigned long long)esp_mib);
+            printf("  %sp3  rest  TFS3       (the root)\n", disk);
+        }
         printf("install: re-run with `confirm` as the last argument if that is what you want.\n");
         return 1;
     }
 
-    char p2[24], p3[24];
-    snprintf(p2, sizeof p2, "%sp2", disk);
-    snprintf(p3, sizeof p3, "%sp3", disk);
+    // WHICH PARTITIONS THOSE ARE DEPENDS ON THE LAYOUT: MBR has no
+    // BIOS-boot partition, so everything shifts down by one.
+    char pboot[24], proot[24];
+    snprintf(pboot, sizeof pboot, "%sp%d", disk, mbr ? 1 : 2);
+    snprintf(proot, sizeof proot, "%sp%d", disk, mbr ? 2 : 3);
 
     step("partitioning");
-    if (!partition(disk, sectors, esp_mib)) return 1;
+    if (!partition(disk, sectors, esp_mib, mbr)) return 1;
 
     step("formatting");
-    if (!format_one(p2, "fat32")) return 1;
-    if (!format_one(p3, "tfs3")) return 1;
+    if (!format_one(pboot, "fat32")) return 1;
+    if (!format_one(proot, "tfs3")) return 1;
 
     step("mounting the target");
-    if (!mount_one(p3, TARGET_ROOT)) return 1;
+    if (!mount_one(proot, TARGET_ROOT)) return 1;
     // The mount point has to exist on the volume it is mounted onto,
     // which is the target's root -- so this is made after it is mounted,
     // not before.
     mkdir(TARGET_BOOT, 0755);
-    if (!mount_one(p2, TARGET_BOOT)) { sys_umount(TARGET_ROOT); return 1; }
+    if (!mount_one(pboot, TARGET_BOOT)) { sys_umount(TARGET_ROOT); return 1; }
 
     step("copying the system");
     int ok = copy_system();
@@ -372,7 +444,7 @@ int main(int argc, char **argv) {
     sys_umount(TARGET_ROOT);
 
     step("writing the bootloader");
-    if (ok) ok = write_bootloader(disk);
+    if (ok) ok = write_bootloader(disk, mbr);
 
     if (!ok) {
         printf("install: FAILED -- %s is in an unknown state; re-run to start over.\n", disk);

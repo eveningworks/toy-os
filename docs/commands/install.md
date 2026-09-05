@@ -6,9 +6,11 @@
 
 ## Synopsis
 
-    install [--disk <name>] [--esp <MiB>] confirm
+    install [--disk <name>] [--esp <MiB>] [--mbr] confirm
       --disk <name>  the target (`lsblk`); refuses the one this machine runs from
       --esp <MiB>    size of the FAT32 /boot partition (default 64)
+      --mbr          write an MBR table instead of GPT, for firmware that
+                     will not boot a GPT disk in legacy/CSM mode
       confirm        required -- this ERASES the target disk
 
 ## Description
@@ -91,6 +93,36 @@ the moment that disk is attached as something other than `ata0`.
 `mkpart` and `mkfs` carry, and for the same reason: this OS has no privilege
 model.
 
+## `--mbr`, for firmware that will not boot a GPT disk
+
+The default layout is GPT with a BIOS boot partition. **That combination —
+a legacy BIOS booting a GPT disk — is the one consumer firmware most often
+refuses**: the machine can be in CSM/legacy mode, with the disk in its boot
+order, and simply not touch it. A Lenovo Yoga 500-15IBD did exactly that.
+
+`--mbr` writes the other layout:
+
+| | Default (GPT) | `--mbr` |
+|---|---|---|
+| `core.img` | p1, a 1 MiB BIOS boot partition | the gap at sectors 1–2047 |
+| `/boot` | p2, FAT32 | **p1**, FAT32, marked **active** |
+| root | p3, TFS3 | **p2**, TFS3 |
+
+Everything shifts down one, because MBR has no BIOS-boot partition type and
+GRUB's core image goes in the gap before the first partition instead.
+
+**It is not a runtime choice in GRUB's eyes.** A core image carries its
+prefix — the table format *and* the partition number — baked in at
+`grub-mkimage` time, and the target has no `grub-mkimage` of its own. So the
+build stages **two** core images (`core.img` and `core-msdos.img`,
+`tools/install_grub.py`) and this picks between them. A build staged without
+the second one refuses `--mbr` before erasing anything.
+
+Use it when the default install produced a disk the firmware will not boot.
+There is no reason to prefer it otherwise, and no reason to switch the
+machine to UEFI — **nothing here installs a UEFI bootloader**, so a UEFI-only
+machine cannot boot a toy-os install at all.
+
 ## Limits
 
 - **The target must be a whole disk**, not a partition.
@@ -110,6 +142,9 @@ model.
     install --disk virtio0             # prints the plan, changes nothing
     install --disk virtio0 confirm     # ~30 seconds
     poweroff
+
+If that disk then does not boot, the firmware may be refusing GPT in legacy
+mode; re-run with `--mbr`.
 
 Then boot that disk on its own. From live media it is the same three lines,
 with the machine's own disk as the target.

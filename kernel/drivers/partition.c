@@ -98,6 +98,7 @@ static void parse_mbr_entries(const uint8_t *mbr, struct partition_table *out) {
         struct partition_entry *pe = &out->entries[out->entry_count++];
         k_memset(pe, 0, sizeof(*pe));
         pe->mbr_type = type;
+        pe->mbr_active = (e[0] == 0x80);   // read back, so `parttable` can show it
         pe->mbr_lba_start = read_le32(e + 8);
         pe->mbr_num_sectors = read_le32(e + 12);
     }
@@ -442,6 +443,7 @@ static __attribute__((noinline)) int write_mbr(const struct block_device *dev,
     } else {
         for (int i = 0; i < in->entry_count; i++) {
             uint8_t *e = sec + MBR_ENTRY_TABLE_OFFSET + i * MBR_ENTRY_SIZE;
+            e[0] = in->entries[i].mbr_active ? 0x80 : 0x00;   // the boot indicator
             e[4] = in->entries[i].mbr_type ? in->entries[i].mbr_type : 0x83; // 0x83 = Linux data, the sane default
             write_le32(e + 8, in->entries[i].mbr_lba_start);
             write_le32(e + 12, in->entries[i].mbr_num_sectors);
