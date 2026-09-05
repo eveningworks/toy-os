@@ -131,6 +131,13 @@ struct window {
     // DRAWN it yet; this follows the frames, adopted in the present
     // handler.
     int client_w, client_h;
+    // HOW LONG THIS WINDOW LAST TOOK to become a size it was asked for,
+    // in milliseconds; 0 until one has been measured. `auto` reads it
+    // when a drag begins, which is what lets a slow app be outlined from
+    // the first pixel of the second drag rather than lagging through the
+    // first. Per window rather than global: two windows of different
+    // apps have nothing to say about each other.
+    unsigned resize_lag_ms;
     // Last cursor position delivered to this client, so a stationary
     // cursor doesn't generate a WIN_EV_MOUSE_MOVE every single frame.
     // Without this the WM wakes the client once per frame forever, and

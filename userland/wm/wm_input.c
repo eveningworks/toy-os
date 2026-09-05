@@ -16,7 +16,56 @@
 #include "desktop.h"
 #include "ui/uui.h"
 #include "rt/sys.h"   // sys_ticks(), for the title-bar double-click
+#include "lib/usetting.h" // desktop.move_mode / desktop.resize_mode
+#include "wm_log.h"
 #include "kapi.h"
+
+// How long a window may take to BE the size that was asked for before
+// `auto` stops asking it to keep up: a tenth of a second, the threshold
+// below which a response reads as instantaneous and above which it
+// reads as the machine lagging (Card, Robertson and Newell; Nielsen's
+// 0.1 s).
+#define RESIZE_AUTO_LAG_MS 100
+
+// --- what a drag SHOWS: the window, or an outline ---------------------
+//
+// `desktop.move_mode` and `desktop.resize_mode` (kernel/lib/
+// window_drag_config.c). Read ONCE when a drag begins rather than
+// polled: a drag is short, a setting cannot usefully change during one,
+// and one syscall per drag needs no generation tracking at all.
+
+// The outline rect is thrown away and rebuilt as the pointer moves, so
+// both the old and the new one have to be damaged. One helper, because
+// a move and a resize differ only in which corner is pinned.
+static void drag_outline_set(int idx, int x, int y, int w, int h) {
+    if (drag_outline_win >= 0) {
+        wm_damage_rect(drag_outline_x, drag_outline_y,
+                       drag_outline_w, drag_outline_h);
+    }
+    drag_outline_win = idx;
+    drag_outline_x = x; drag_outline_y = y;
+    drag_outline_w = w; drag_outline_h = h;
+    if (idx >= 0) wm_damage_rect(x, y, w, h);
+    redraw_pending = 1;
+}
+
+static void drag_outline_clear(void) { drag_outline_set(-1, 0, 0, 0, 0); }
+
+// "outline" from a setting; anything else -- including a value nothing
+// recognises -- means show the window, which is the behaviour a machine
+// with no /etc/desktop.conf gets.
+static int mode_is_outline(const char *name) {
+    char v[SETTING_ABI_VALUE_MAX];
+    if (!usetting_get(name, v, sizeof v)) return 0;
+    return k_strcmp(v, "outline") == 0;
+}
+
+static int mode_is_auto(const char *name) {
+    char v[SETTING_ABI_VALUE_MAX];
+    if (!usetting_get(name, v, sizeof v)) return 1;  // auto is the default
+    return v[0] == '\0' || k_strcmp(v, "auto") == 0;
+}
+
 
 // Which window (if any) has a title-bar button under (mx, my), and
 // which one -- mirrors the same top-to-bottom z-order search
@@ -128,6 +177,19 @@ void wm_handle_left_click(int mx, int my) {
             resize_start_my = my;
             resize_start_w = windows[resizing].w;
             resize_start_h = windows[resizing].h;
+            // WHAT THIS DRAG SHOWS, decided once, here.
+            //
+            // `auto` ASKS WHAT HAPPENED LAST TIME. A window already
+            // measured as slow is outlined from the first pixel; one
+            // that has never been measured starts live and is watched
+            // (see wm_resize_shown()), which is the only way a window
+            // nobody has dragged yet can be judged at all. Both
+            // directions self-correct, because even an outlined drag
+            // measures its one resize on release.
+            resize_outline_mode = mode_is_outline("desktop.resize_mode");
+            resize_auto = !resize_outline_mode && mode_is_auto("desktop.resize_mode");
+            if (resize_auto && windows[resizing].resize_lag_ms > RESIZE_AUTO_LAG_MS)
+                resize_outline_mode = 1;
             // A NEW DRAG FORGETS THE LAST ONE'S ASK. The ask outlives
             // the drag that made it (see resize_pump()), and anything
             // that resized this window since -- maximize, a restored
@@ -229,6 +291,7 @@ void wm_handle_left_click(int mx, int my) {
                 dragging = window_count - 1;
                 drag_off_x = mx - windows[dragging].x;
                 drag_off_y = my - windows[dragging].y;
+                move_outline_mode = mode_is_outline("desktop.move_mode");
             } else {
                 bring_to_front(i);
             }
@@ -541,6 +604,17 @@ static void resize_pump(void) {
     int idx = resize_ask_target();
     if (idx < 0 || resize_want_w <= 0) return;
     if (resize_want_w == resize_sent_w && resize_want_h == resize_sent_h) return;
+    // A PROPOSAL FOR THE SIZE IT ALREADY IS IS NOT A RESIZE. The press
+    // that begins a drag is itself a motion, with a delta of zero, so
+    // this is the first thing a drag would otherwise ask for -- and the
+    // answer is a present that changes nothing, which is the one thing
+    // the pacing below cannot use.
+    if (resize_want_w == windows[idx].client_w &&
+        resize_want_h == windows[idx].client_h) {
+        resize_sent_w = resize_want_w;
+        resize_sent_h = resize_want_h;
+        return;
+    }
     if (resize_inflight && sys_ticks() - resize_sent_tick < RESIZE_ACK_TIMEOUT_TICKS)
         return;
 
@@ -552,9 +626,45 @@ static void resize_pump(void) {
     resize_sent_tick = sys_ticks();
 }
 
-void wm_resize_acked(int idx) {
+// THE CLIENT HAS SHOWN THE SIZE IT WAS ASKED FOR. Called from the
+// PRESENT that adopts it, not from the ack -- and that distinction is
+// the whole measurement. A client acks a proposal the moment it gets
+// one, from inside uapp's event handler, and only then draws; so the
+// ack times a syscall round trip (a few ms for anything) while the
+// present times what the user actually waits for. Pacing on it is also
+// what Wayland does: a compositor waits for the COMMIT, not for the
+// ack_configure.
+void wm_resize_shown(int idx, int size_changed) {
     if (idx != resize_ask_target()) return;
+
+    // CLEARED BY ANY PRESENT, not only by one that changed the size. A
+    // client may present for its own reasons, and it may answer a
+    // proposal with a size the server clamped to what it already had --
+    // and a rule that waited for a CHANGE would then wait forever, with
+    // the drag's remaining sizes queued behind it. Sending the next
+    // proposal a frame early is harmless; never sending it is a wedged
+    // drag.
     resize_inflight = 0;
+
+    // The MEASUREMENT still needs a real one, or an unrelated repaint
+    // arriving late would read as the client lagging.
+    if (!size_changed) { resize_pump(); return; }
+    resize_lag_ms = (unsigned)((sys_ticks() - resize_sent_tick) * (1000 / PIT_HZ));
+    windows[idx].resize_lag_ms = resize_lag_ms;
+
+    // ONE STRIKE, AND NO WAY BACK WITHIN THE DRAG. A client that missed
+    // one deadline will miss the next -- the cost is its own repaint --
+    // and a window alternating between following the pointer and being
+    // an outline mid-drag would be worse than either. The next drag
+    // re-reads the setting and starts live again.
+    if (resize_auto && resizing >= 0 && resize_lag_ms > RESIZE_AUTO_LAG_MS) {
+        resize_auto = 0;
+        resize_outline_mode = 1;
+        drag_outline_set(resizing, windows[resizing].x, windows[resizing].y,
+                         windows[resizing].w, windows[resizing].h);
+        wm_logf("wm: resize fell back to an outline -- the window took %ums "
+                "to become the size it was asked for\n", resize_lag_ms);
+    }
     resize_pump();
 }
 
@@ -577,8 +687,8 @@ void wm_update_drag_resize(int mx, int my, uint8_t buttons) {
     if (dragging >= 0) {
         if (buttons & 0x1) {
             struct window *w = &windows[dragging];
-            w->x = mx - drag_off_x;
-            w->y = my - drag_off_y;
+            int nx = mx - drag_off_x;
+            int ny = my - drag_off_y;
 
             // A window may hang off the left, right and bottom edges,
             // the way it can on Windows and KDE -- partially hiding a
@@ -611,12 +721,31 @@ void wm_update_drag_resize(int mx, int my, uint8_t buttons) {
             int max_x = screen_w - keep;         // mostly off the RIGHT
             int max_y = screen_h - WM_TITLEBAR_H; // down BEHIND the taskbar
 
-            if (w->x < min_x) w->x = min_x;
-            if (w->x > max_x) w->x = max_x;
-            if (w->y < 0) w->y = 0;
-            if (w->y > max_y) w->y = max_y;
-            redraw_pending = 1;
+            if (nx < min_x) nx = min_x;
+            if (nx > max_x) nx = max_x;
+            if (ny < 0) ny = 0;
+            if (ny > max_y) ny = max_y;
+
+            // CLAMPED FIRST, whichever is shown. An outline that
+            // wandered somewhere the window may not go would be lying
+            // about where the window will land.
+            if (move_outline_mode) {
+                drag_outline_set(dragging, nx, ny, w->w, w->h);
+            } else {
+                w->x = nx;
+                w->y = ny;
+                redraw_pending = 1;
+            }
         } else {
+            // RELEASED: the window goes where the outline was.
+            if (move_outline_mode && drag_outline_win == dragging) {
+                struct window *w = &windows[dragging];
+                wm_damage_rect(w->x, w->y, w->w, w->h);   // vacated
+                w->x = drag_outline_x;
+                w->y = drag_outline_y;
+                wm_damage_rect(w->x, w->y, w->w, w->h);   // arrived
+                drag_outline_clear();
+            }
             dragging = -1;
         }
     }
@@ -641,7 +770,14 @@ void wm_update_drag_resize(int mx, int my, uint8_t buttons) {
                 if (w->y + newh > screen_h - taskbar_h) newh = screen_h - taskbar_h - w->y;
             }
 
-            if (is_client) {
+            if (resize_outline_mode) {
+                // The window keeps its size; the outline says what it
+                // will become. A non-client window is outlined too --
+                // the setting is about what a DRAG looks like, and the
+                // WM owning those pixels is no reason to answer
+                // differently.
+                drag_outline_set(resizing, w->x, w->y, neww, newh);
+            } else if (is_client) {
                 // ASK, every step of the drag. The window changes size
                 // when the client presents a frame at the new one, so it
                 // follows the pointer at the client's own latency
@@ -653,11 +789,26 @@ void wm_update_drag_resize(int mx, int my, uint8_t buttons) {
                 redraw_pending = 1;
             }
         } else {
-            // Released. The last size asked for is already queued, and
-            // the ask outlives the drag on purpose: a client still
-            // answering the previous proposal gets the final one when
-            // it does.
-            if (is_client) resize_pump();
+            // RELEASED. In outline mode this is the only size anyone is
+            // told about; otherwise the last size asked for is already
+            // queued, and the ask outlives the drag on purpose -- a
+            // client still answering the previous proposal gets the
+            // final one when it does.
+            if (resize_outline_mode && drag_outline_win == resizing) {
+                int fw = drag_outline_w, fh = drag_outline_h;
+                drag_outline_clear();
+                if (is_client) {
+                    resize_ask(resizing, fw - 2, fh - WM_TITLEBAR_H - 2);
+                } else {
+                    wm_damage_rect(w->x, w->y, w->w, w->h);
+                    w->w = fw;
+                    w->h = fh;
+                    wm_damage_rect(w->x, w->y, w->w, w->h);
+                    redraw_pending = 1;
+                }
+            } else if (is_client) {
+                resize_pump();
+            }
             resizing = -1;
         }
     }

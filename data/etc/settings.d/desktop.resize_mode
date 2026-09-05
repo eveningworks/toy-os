@@ -1,0 +1,6 @@
+Description=Whether a window follows the pointer as it is resized, or an outline does until you let go
+Widget=radio
+Order=20
+Choice.auto=Show the window unless the app lags
+Choice.live=Always show the window
+Choice.outline=Always show an outline

@@ -1,0 +1,5 @@
+Description=Whether a window follows the pointer as it is moved, or an outline does until you let go
+Widget=radio
+Order=21
+Choice.live=Show the window
+Choice.outline=Show an outline

@@ -121,6 +121,27 @@ int resize_want_w = -1, resize_want_h = -1;
 int resize_sent_w = -1, resize_sent_h = -1;
 int resize_inflight = 0;
 uint64_t resize_sent_tick = 0;
+
+// THE OUTLINE A DRAG IS SHOWING, or window index -1 when the drag is
+// moving the real window (which is the default for both). Screen
+// coordinates, frame size -- wm_render.c draws exactly this rect and
+// decides nothing.
+int drag_outline_win = -1;
+int drag_outline_x, drag_outline_y, drag_outline_w, drag_outline_h;
+
+// What THIS drag is showing, resolved once when it starts from
+// `desktop.move_mode` / `desktop.resize_mode`. `resize_auto` is the
+// third resize choice still watching: live until the client misses a
+// deadline, an outline after that (see wm_input.c's resize_pump()).
+int move_outline_mode = 0;
+int resize_outline_mode = 0;
+int resize_auto = 0;
+
+// The last ask-to-shown latency, in MILLISECONDS: how long the window
+// took to become a size it was asked for. `auto` compares this against
+// its threshold; `gui state` reports it, because the number is the
+// whole basis of that decision and nothing else can see it.
+unsigned resize_lag_ms = 0;
 // Proposals sent, ever. Monotonic, and reported by `gui state`,
 // because whether a resize is INTERACTIVE is a count rather than
 // anything a screenshot can show: a WM that only asked on release
@@ -560,6 +581,20 @@ void close_window(int idx) {
     sys_eprint("wm: closed ");
     sys_eprint(windows[idx].app ? windows[idx].app->name : windows[idx].title);
     sys_eprint("\n");
+
+    // A DRAG IN PROGRESS NAMES A WINDOW BY INDEX, and the shift below
+    // makes that index somebody else. Cancel it here rather than let a
+    // release move or resize the wrong window; an outline on screen is
+    // dropped with it.
+    if (dragging == idx || resizing == idx || drag_outline_win == idx) {
+        if (drag_outline_win >= 0) {
+            wm_damage_rect(drag_outline_x, drag_outline_y,
+                           drag_outline_w, drag_outline_h);
+        }
+        drag_outline_win = -1;
+        if (dragging == idx) dragging = -1;
+        if (resizing == idx) resizing = -1;
+    }
 
     for (int i = idx; i < window_count - 1; i++) windows[i] = windows[i + 1];
     window_count--;

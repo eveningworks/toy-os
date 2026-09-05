@@ -174,45 +174,94 @@ def run(dbg, qmp, tmp, res):
 DRAG_STEPS = 48
 
 
+def set_setting(dbg, key, value):
+    """Through the KERNEL shell, not `gui spawn` -- a `gui` command makes
+    the WM repaint, and these checks are about what a DRAG did."""
+    dbg.send(f"sh config set {key} {value}")
+    time.sleep(0.5)
+
+
+def drag_grip(dbg, dx=40, dy=28):
+    """One grip drag, and what the WM says it cost."""
+    w = dbg.window(TITLE)
+    if not w:
+        return None
+    before = dbg.state()["resizes_asked"]
+    dbg.drag(w["x"] + w["w"] - 2, w["y"] + w["h"] - 2,
+             w["x"] + w["w"] - 2 + dx, w["y"] + w["h"] - 2 + dy, steps=DRAG_STEPS)
+    dbg.settle()
+    time.sleep(1.0)          # the client's repaint, not the WM's
+    st = dbg.state()
+    now = dbg.window(TITLE)
+    return {"asks": st["resizes_asked"] - before, "paint": st["resize_paint"],
+            "lag": st["resize_lag_ms"], "before": (w["w"], w["h"]),
+            "after": (now["w"], now["h"]) if now else None}
+
+
 def check_live_resize(dbg, qmp, tmp, res):  # noqa: ARG001 -- qmp/tmp unused
-    """The window follows the drag rather than jumping on release.
+    """`desktop.resize_mode`, on a client that is FAST.
 
-    Not by watching, which cannot work: injected input is drained as
-    fast as the WM iterates, so a scripted drag is over in ~150 ms
-    whatever step count it asks for, and any size polled during it is
-    luck. The WM COUNTS its proposals instead (`gui state`), and a
-    window manager that only asked on release would move that counter by
-    exactly one per drag.
+    Three modes, and the WM's own proposal counter is what tells them
+    apart. Watching cannot: injected input is drained as fast as the WM
+    iterates, so a scripted drag is over in ~150 ms whatever step count
+    it asks for, and any size polled during it is luck. A window manager
+    that only asked on release moves `resizes_asked` by exactly one per
+    drag; one that follows the pointer moves it by many.
 
-    The other half of interactive resize -- that the window does not go
-    BLANK while it follows -- is checked in tools/imgview_test.py, and
-    it has to be: it needs a client slow enough to repaint that the gap
-    is visible, and winclient is deliberately the opposite of that.
+    **`auto` IS HALF-TESTED HERE ON PURPOSE.** Its whole job is to tell
+    a fast client from a slow one, so one client can only ever
+    demonstrate one half. winclient repaints in a couple of frames and
+    must therefore stay LIVE; tools/imgview_test.py holds the other half
+    -- a client whose repaint is a rescale, which must fall back to an
+    outline. Neither check means much without the other.
 
-    Positive control, run when this was written: send the proposal only
-    on release (drop the resize_ask() call from wm_input.c's drag arm
-    and pass the final size at the release instead). This goes red with
-    five proposals over five drags.
+    Positive controls, run when this was written: send the proposal only
+    on release (drop the resize_ask() call from wm_input.c's drag arm)
+    and the live check goes red; ignore `desktop.resize_mode` at the
+    drag's start and the outline check goes red with a proposal per
+    motion instead of one.
     """
-    win = dbg.window(TITLE)
-    if not win:
+    if not dbg.window(TITLE):
         res.check("the client window survived to be resized live", False, "no window")
         return
 
-    asks_before = dbg.state()["resizes_asked"]
-    for _ in range(5):
-        w = dbg.window(TITLE)
-        if not w:
-            break
-        gx, gy = w["x"] + w["w"] - 2, w["y"] + w["h"] - 2
-        dbg.drag(gx, gy, gx + 40, gy + 28, steps=DRAG_STEPS)
-    dbg.settle()
-    asks = dbg.state()["resizes_asked"] - asks_before
+    # LIVE: the window follows, so many proposals go out for one drag.
+    set_setting(dbg, "desktop.resize_mode", "live")
+    live = [drag_grip(dbg) for _ in range(3)]
+    asks = sum(d["asks"] for d in live if d)
+    res.check("live: the window follows the drag instead of jumping on release",
+              asks > 5 and all(d and d["paint"] == "live" for d in live),
+              f"{asks} proposals over 3 drags, paints "
+              f"{[d['paint'] for d in live if d]}")
 
-    res.check("the window follows the drag instead of jumping on release",
-              asks > 5,
-              f"{asks} resize proposals over 5 drags -- one per drag means "
-              f"the WM only asked on release")
+    # OUTLINE: exactly one proposal per drag, on release -- and the
+    # window still ends up the size that was dragged to, which is the
+    # half that would pass if the outline simply did nothing.
+    set_setting(dbg, "desktop.resize_mode", "outline")
+    out = [drag_grip(dbg) for _ in range(3)]
+    ok = all(d and d["asks"] == 1 and d["paint"] == "outline" for d in out)
+    grew = all(d and d["after"] and d["after"][0] > d["before"][0] for d in out)
+    res.check("outline: one proposal per drag, and the window still resizes",
+              ok and grew,
+              f"asks {[d['asks'] for d in out if d]}, "
+              f"paints {[d['paint'] for d in out if d]}, "
+              f"sizes {[(d['before'], d['after']) for d in out if d]}")
+
+    # AUTO on a FAST client: stays live, and the number it decided on is
+    # reported so the assertion is about the RULE rather than about this
+    # machine's speed.
+    set_setting(dbg, "desktop.resize_mode", "auto")
+    a1 = drag_grip(dbg)
+    a2 = drag_grip(dbg)
+    res.check("auto: a client that keeps up is never outlined",
+              a2 and a2["paint"] == "live" and a2["lag"] <= 100 and a2["asks"] > 1,
+              f"second drag: paint {a2['paint']}, lag {a2['lag']}ms, "
+              f"{a2['asks']} proposals (first drag lag {a1['lag']}ms)"
+              if a2 else "no window")
+
+    # BACK TO THE DEFAULT. A setting left applied is a machine changed
+    # for every later tool, not just for this one (CLAUDE.md).
+    set_setting(dbg, "desktop.resize_mode", "auto")
 
 
 # The old WIN_CLIENT_MAX_W/H. Named rather than inlined because what is

@@ -23,6 +23,7 @@
 #include "start_button_config.h"
 #include "taskbar_config.h"
 #include "week_start_config.h"
+#include "window_drag_config.h"
 #include "target.h"
 #include "storage_config.h"
 #include "setting_abi.h"
@@ -570,6 +571,7 @@ void settings_init(void) {
     start_button_setting_register();
     taskbar_setting_register();
     week_start_setting_register();
+    window_drag_setting_register();
     storage_config_setting_register();
     target_setting_register();
     tunables_register();

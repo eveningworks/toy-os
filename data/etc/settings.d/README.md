@@ -24,6 +24,13 @@ Choice.veryfast=Very fast
 | `Description` | One line, shown under the setting's label. Not a paragraph. |
 | `Widget` | `auto` (default), `radio`, `dropdown`, `slider`. A **hint** — a client with no such control still shows the setting some other way. `slider` suits an ORDERED enum (off/low/medium/high), where a radio list says nothing about the order. |
 | `Choice.<value>` | The display name for one choice. The stored value is still `<value>`; only what is shown differs. |
+| `Applies` | `now` (default) or `reboot` — whether the change takes effect immediately. |
+| `Order` | An integer, lower first, for where the setting sits on its page. Unordered settings follow. |
+| `Label` | **Group files only** (`group.<category>.<group>`), which carry a `Label` and a `Description` for the PAGE rather than for a setting. |
+
+A file named `group.<category>.<group>` describes the page itself —
+`group.Appearance.Windows` names and explains the Windows page, and
+carries no `Choice.` lines.
 
 **The compiled-in label is the floor.** A missing or malformed file costs
 that one setting its extra text and nothing else: no description, and

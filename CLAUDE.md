@@ -831,6 +831,7 @@ whenever a headline here tells you something you did not already know.
 - **A SETTING WHOSE CHOICES ARE DATA NAMES THEM ITSELF: `choice_label`, tried after `/etc/settings.d` and before the raw value.**
 - **THE ICON CACHE IS THE TOOLKIT'S NOW (`userland/lib/icon_cache.h`), AND A SIDEBAR HEADING CAN CARRY AN ICON.**
 - **A WINDOW HAS TWO BUFFERS, AND THE COMPOSITOR NEVER READS THE ONE BEING DRAWN.**
+- **A DRAG'S APPEARANCE IS A SETTING, AND `auto` LEARNS RATHER THAN GUESSES** -- `desktop.resize_mode` / `desktop.move_mode`, and the WM remembers each window's measured lag
 - **A WINDOW'S SIZE BELONGS TO ITS BUFFER, AND THE COMPOSITOR ADOPTS IT ON THE PRESENT** -- a resize rebuilds only the BACK buffer, so nothing goes black; and a client's window follows the drag, one proposal in flight
 - **THE LAYOUT LOG IS OFF UNLESS A TEST TURNS IT ON, AND DEDUPED WHEN IT IS.**
 - **THE TERMINAL SCROLLS BY WHEEL AS WELL AS BY KEY, AND BOTH MOVE THE SAME STATE.**

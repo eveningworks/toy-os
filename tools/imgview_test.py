@@ -435,6 +435,7 @@ def run(dbg, qmp, tmp, res):
               f"worst channel difference {worst} at {at}")
 
     check_resize_never_blanks(dbg, qmp, tmp, res, win)
+    check_auto_resize_falls_back(dbg, res)
 
     # --- 6. set as wallpaper, and the DESKTOP picks it up -------------
     open_menu_item(dbg, content, 2, 0)    # Desktop > Set as wallpaper (fill)
@@ -451,10 +452,22 @@ def run(dbg, qmp, tmp, res):
 
     # The desktop is a different process and hears about this through the
     # filesystem generation counter, so poll rather than assume.
-    wx, wy = win["x"], win["y"]
-    ww, wh = win["w"], win["h"]
+    #
+    # THE WINDOW'S RECT IS RE-READ, not the one captured when it opened:
+    # everything above resizes it, and a stale rect let four sample
+    # points drift INSIDE the window -- which compares the viewer's own
+    # pixels against the wallpaper and fails looking like a desktop that
+    # never noticed. An empty spot list is a harness failure, not a pass.
+    cur = dbg.window(TITLE_VIEWER) or win
+    wx, wy = cur["x"], cur["y"]
+    ww, wh = cur["w"], cur["h"]
     spots = [(x, y) for x in (1150, 1200) for y in (100, 300)
              if not (wx <= x <= wx + ww and wy <= y <= wy + wh)]
+    if len(spots) < 2:
+        res.check("the desktop picked the new wallpaper up", False,
+                  f"only {len(spots)} sample points are outside the window "
+                  f"at {wx},{wy} {ww}x{wh} -- nothing was measured")
+        return
     ok = False
     deadline = time.time() + 20
     while time.time() < deadline and not ok:
@@ -522,10 +535,82 @@ def check_resize_never_blanks(dbg, qmp, tmp, res, win):
             if all(p[0] < 24 and p[1] < 24 and p[2] < 24 for p in px):
                 blanks += 1
     dbg.settle()
+    restore_window_size(dbg, w)
 
     res.check("resizing the viewer never shows a blank window",
               blanks == 0 and samples >= 8,
               f"{blanks} all-black samples of {samples}")
+
+
+def restore_window_size(dbg, was):
+    """Drag the grip back to the size the window was.
+
+    NOT a courtesy: the compositor SAVES a window's geometry when it
+    closes and restores it at the next launch (`/etc/windows.conf`), so
+    a check that leaves the viewer covering the screen hands the next
+    RUN of this tool a window with no desktop beside it -- which is how
+    a wallpaper check that samples the desktop starts failing a day
+    later, in a tool nobody changed. See CLAUDE.md on persisted state.
+    """
+    if not was:
+        return
+    now = dbg.window(TITLE_VIEWER)
+    if not now:
+        return
+    dbg.drag(now["x"] + now["w"] - 2, now["y"] + now["h"] - 2,
+             now["x"] + now["w"] - 2 + (was["w"] - now["w"]),
+             now["y"] + now["h"] - 2 + (was["h"] - now["h"]))
+    dbg.settle()
+    time.sleep(1.0)
+
+
+def check_auto_resize_falls_back(dbg, res):
+    """`desktop.resize_mode = auto` on a client that CANNOT keep up.
+
+    The other half of the pair tools/uapp_test.py holds. `auto` exists
+    to tell a fast client from a slow one, so one client can only ever
+    show one half: winclient repaints in a couple of frames and must
+    stay live, and this viewer rescales a JPEG per proposed size and
+    must not. Measured here: ~200-300 ms to become a size it was asked
+    for, against winclient's 20-30 ms, and a threshold of 100 ms.
+
+    THE FIRST DRAG IS LIVE AND THAT IS CORRECT -- a window nobody has
+    dragged has no measurement, and `auto` refuses to guess from
+    anything but one. It learns from that drag, so the SECOND is the
+    one that must be an outline. Asserting on the second is also what
+    makes this independent of how fast the host is: whatever the lag
+    turns out to be, the check is that the WM acted on the number it
+    measured.
+
+    Positive control, run when this was written: drop the remembered
+    `windows[resizing].resize_lag_ms` test from wm_input.c's drag start
+    and this goes red -- the second drag stays live, because an injected
+    drag is over before the client's slow frame arrives, which is
+    exactly why the WM remembers rather than only reacting.
+    """
+    start = dbg.window(TITLE_VIEWER)
+
+    def drag_grip(dx, dy):
+        w = dbg.window(TITLE_VIEWER)
+        if not w:
+            return None
+        dbg.drag(w["x"] + w["w"] - 2, w["y"] + w["h"] - 2,
+                 w["x"] + w["w"] - 2 + dx, w["y"] + w["h"] - 2 + dy)
+        dbg.settle()
+        time.sleep(1.2)      # the rescale, which is the whole point
+        st = dbg.state()
+        return {"paint": st["resize_paint"], "lag": st["resize_lag_ms"]}
+
+    set_setting(dbg, "desktop.resize_mode", "auto")
+    first = drag_grip(90, 60)
+    second = drag_grip(90, 60)
+    res.check("auto: a client too slow to follow is outlined on the next drag",
+              first and second and first["lag"] > 100 and second["paint"] == "outline",
+              f"first drag lag {first['lag']}ms paint {first['paint']}, "
+              f"second paint {second['paint']}"
+              if first and second else "no window")
+    set_setting(dbg, "desktop.resize_mode", "auto")
+    restore_window_size(dbg, start)
 
 
 def main():

@@ -721,12 +721,31 @@ static void save_cursor_under(int x, int y, enum wm_cursor_kind kind) {
 // into the framebuffer the compositor was already granted (R1). See
 // docs/decisions.md.
 
+// The outline a drag is proposing, when the drag is showing one rather
+// than moving the window itself (`desktop.move_mode`,
+// `desktop.resize_mode` -- see wm_input.c). A 1px rectangle: cheap,
+// unmistakable, and the idiom every WM used before compositing made
+// live dragging affordable.
+//
+// Drawn just before the cursor, so it sits over the windows it
+// describes.
+static void draw_drag_outline(void) {
+    int i = drag_outline_win;
+    if (i < 0 || i >= window_count) return;
+    if (drag_outline_w <= 0 || drag_outline_h <= 0) return;
+    ugfx_draw_rect(wm_surface(), drag_outline_x, drag_outline_y,
+                   drag_outline_w, drag_outline_h, UTHEME_WHITE);
+    ugfx_draw_rect(wm_surface(), drag_outline_x + 1, drag_outline_y + 1,
+                   drag_outline_w - 2, drag_outline_h - 2, ugfx_rgb(50, 90, 160));
+}
+
 // Saves what's under (x, y) before drawing the cursor there, so a later
 // cursor-only move can restore it. Used by both render paths.
 // What was last actually drawn, recorded by the code that drew it.
 static int drawn_cursor_kind = -1;
 
 static void draw_cursor_at(int x, int y) {
+    draw_drag_outline();
     enum wm_cursor_kind kind = resolve_cursor_kind(x, y);
     if (wm_hwcursor_sync(kind)) {
         // The plane shows the pointer: nothing saved, nothing drawn.

@@ -146,9 +146,19 @@ extern int resize_inflight;
 extern uint64_t resize_sent_tick;
 extern unsigned resize_asks;
 
-// The client accepted a proposal (WIN_EV_CLIENT_RESIZED): send the next
-// one if the drag has moved on. Called from wm_client.c.
-void wm_resize_acked(int idx);
+// The outline a drag is showing, and which drag style is in force --
+// see wm.c. wm_render.c reads the rect; wm_input.c owns the rest.
+extern int drag_outline_win;
+extern int drag_outline_x, drag_outline_y, drag_outline_w, drag_outline_h;
+extern int move_outline_mode;
+extern int resize_outline_mode;
+extern int resize_auto;
+extern unsigned resize_lag_ms;
+
+// The client has PRESENTED a frame at the size it was asked for: send
+// the next proposal if the drag has moved on. Called from wm_client.c's
+// present handler -- see wm_resize_shown() on why not from the ack.
+void wm_resize_shown(int idx, int size_changed);
 
 // index into windows[], or -1 if no app is currently capturing a
 // content-area drag via its on_drag_start callback (see gui_apps.h) --

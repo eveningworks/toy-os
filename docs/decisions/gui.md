@@ -6288,3 +6288,74 @@ client that does must not take the grip with it. And the ask is keyed on
 the window's (pid, id) rather than only its index into `windows[]`,
 because closing a window compacts that array -- a bare index would then
 name somebody else and resize the wrong app.
+
+
+## The outline came back as a setting, and `auto` is the default
+
+Live resize landed by deleting the rubber-band outline outright, on the
+grounds that Windows and KDE both drag windows live and an outline is
+what X11 window managers did before compositing. That was right about
+the default and wrong about the choice: KDE could delete its
+*"Display content in moving/resizing windows"* switch in Plasma 5
+because a KWin client redraws in milliseconds, and toy-os's do not.
+Image Viewer takes 200-300 ms to become a size it was asked for under
+TCG -- it rescales a JPEG per proposed size -- while Terminal takes
+20-30 ms. A window lagging a third of a second behind the pointer is
+worse than an outline that does not lag at all, and no single default
+is right for both.
+
+So the outline is back, as `desktop.resize_mode`. What is new is the
+third choice.
+
+**`auto` measures instead of asking the user to.** Windows and KDE both
+make the choice in advance, for every application at once, which is the
+part that has aged badly: the answer differs per app and the user has
+no way to know which of theirs is slow. The window manager does know --
+it already times each resize proposal against the present that adopts
+it, because that pairing is what paces the proposals. A window over 100
+ms (Nielsen's threshold for a response that reads as instantaneous) is
+outlined; one under it follows.
+
+**It REMEMBERS, per window, rather than only reacting.** A reaction
+alone is nearly useless: a slow client's first frame arrives after a
+short drag has already ended, so the fallback would never fire on the
+drags that provoke it. `struct window.resize_lag_ms` holds the last
+measurement, `auto` reads it when a drag begins, and a window already
+known to be slow is outlined from the first pixel. The mid-drag switch
+is kept for the long human drag whose measurement arrives while the
+button is still down. Both directions self-correct, because even an
+outlined drag measures its one resize on release. Per WINDOW rather
+than per app because identity is the kernel's and a lag is not: two
+windows of one program can be very different sizes, and size is most of
+what the number measures.
+
+**MOVING GETS NO `auto`.** Windows covers dragging and sizing with one
+switch, and that is a fair fit for a system where both go through the
+same repaint. Here the WM owns a window's position and moves it with no
+client in the loop, so a move cannot fall behind and an `auto` for it
+would be a choice that never happens. `desktop.move_mode` is therefore
+`live` | `outline` -- offered because an outline move is a thing some
+people want, not because anything is slow.
+
+## Pace an interactive resize on the PRESENT, and clear on any of them
+
+The first version paced proposals on the ACK: send one, wait for the
+client to accept it, send the next. It looked right and measured
+nothing useful, because a Toykit client acks from inside its event
+handler and draws afterwards -- so the ack times a syscall round trip
+(a few milliseconds for anything at all) while the present times what
+the user actually waits for. Every client looked fast, and `auto` never
+fired. Pacing on the present is also what Wayland does: a compositor
+waits for the commit, not for `ack_configure`.
+
+Two traps came with it, and both wedged a drag rather than degrading
+it. **A proposal for the size a window already is produces a present
+that changes nothing** -- and the press that begins a drag is itself a
+motion, with a zero delta, so that is the first thing a drag asks for.
+**And a rule that waited for a size-CHANGING present then waited
+forever**, with every later size in the drag queued behind an in-flight
+slot nothing would clear. The answers are separate: never propose the
+size a window already has, and let ANY present clear the slot while
+only a size-changing one feeds the measurement. Sending the next
+proposal a frame early is harmless; never sending it is a drag that
+stops following after its first step.

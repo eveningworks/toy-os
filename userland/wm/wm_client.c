@@ -183,6 +183,10 @@ static void on_window_present(int pid, uint32_t id, int front, int w, int h) {
         win->h = h + WM_TITLEBAR_H + 2;
         wm_damage_rect(win->x, win->y, win->w, win->h);
         redraw_pending = 1;
+        // An interactive resize sends its next proposal now: one FRAME
+        // in flight at a time, so the client's real repaint sets the
+        // pace rather than its syscall latency.
+        wm_resize_shown(idx, 1);
         return;
     }
 
@@ -192,6 +196,7 @@ static void on_window_present(int pid, uint32_t id, int front, int w, int h) {
     wm_damage_rect(window_content_x(win), window_content_y(win),
                     window_content_w(win), window_content_h(win));
     redraw_pending = 1;
+    wm_resize_shown(idx, 0);
 }
 
 static void on_window_destroyed(int pid, uint32_t id) {
@@ -269,11 +274,6 @@ static void on_window_resized(int pid, uint32_t id, uint32_t *buf, int w, int h)
 
     win->client_base = buf;
     win->client_buf = buf + (win->client_front ? WIN_BUFFER_HALF / 4 : 0);
-
-    // An interactive resize sends its next proposal now: one in flight
-    // at a time, so a slow client sets the pace instead of being handed
-    // a queue of sizes it will draw and throw away.
-    wm_resize_acked(idx);
 }
 
 // Defined below with the rest of the liveness code, which reads more

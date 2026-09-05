@@ -794,6 +794,13 @@ static void cmd_state(struct dbg_out *o, int json) {
         // Resize proposals sent since boot -- see wm.c. One per drag
         // would mean the window only resizes on release.
         dbg_out_printf(o, "\"resizes_asked\":%u,", resize_asks);
+        // WHAT THE LAST DRAG ACTUALLY SHOWED, not what the setting
+        // says: `auto` resolves to one or the other while the drag runs
+        // (wm_input.c), and nothing else can report which way it went.
+        dbg_out_printf(o, "\"resize_paint\":\"%s\",\"move_paint\":\"%s\",",
+                     resize_outline_mode ? "outline" : "live",
+                     move_outline_mode ? "outline" : "live");
+        dbg_out_printf(o, "\"resize_lag_ms\":%u,", resize_lag_ms);
         dbg_out_printf(o, "\"redraw_pending\":%s,\"pending\":%d,",
                      redraw_pending ? "true" : "false", wm_debug_input_pending());
         dbg_out_printf(o, "\"hwcursor\":%s,",
@@ -844,6 +851,10 @@ static void cmd_state(struct dbg_out *o, int json) {
     dbg_out_printf(o, "dragging=%d resizing=%d content_pressed=%d redraw_pending=%d\r\n",
                  dragging, resizing, content_pressed, redraw_pending);
     dbg_out_printf(o, "resize proposals sent: %u\r\n", resize_asks);
+    dbg_out_printf(o, "last resize lag: %ums\r\n", resize_lag_ms);
+    dbg_out_printf(o, "last drag showed: resize=%s move=%s\r\n",
+                 resize_outline_mode ? "outline" : "live",
+                 move_outline_mode ? "outline" : "live");
     dbg_out_printf(o, "injected events pending: %d\r\n", wm_debug_input_pending());
     dbg_out_printf(o, "scene repaints: %u\r\n", wm_scene_frames());
     dbg_out_write(o, "launched (still running):");

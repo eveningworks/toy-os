@@ -2831,3 +2831,60 @@ goes black -- needs a client slow enough to repaint that the gap is
 visible, which is why it is checked in `imgview_test.py` and not in
 `uapp_test.py` (winclient repaints instantly, and the check passes there
 with the bug present).
+
+
+## A DRAG'S APPEARANCE IS A SETTING, AND `auto` LEARNS RATHER THAN GUESSES.
+
+`desktop.resize_mode` (`auto` | `live` | `outline`, default `auto`) and
+`desktop.move_mode` (`live` | `outline`, default `live`), registered in
+`kernel/lib/window_drag_config.c`, persisted to `/etc/desktop.conf`,
+read by the WM when a drag BEGINS -- one syscall per drag, so there is
+no poll and no generation tracking.
+
+Windows has had this switch since XP (`SPI_SETDRAGFULLWINDOWS`, "Show
+window contents while dragging") and KDE DELETED its version in Plasma
+5, on the grounds that a compositor makes live dragging always
+affordable. KWin is right about KWin, whose clients redraw in
+milliseconds. It is wrong here, because a resize is a round trip to a
+client that may be rescaling a JPEG: Image Viewer measures 200-300 ms to
+become a size it was asked for under TCG, against Terminal's 20-30 ms.
+
+**`auto` IS THE THIRD CHOICE NEITHER SYSTEM OFFERS, and it works by
+REMEMBERING.** The WM already times each proposal against the PRESENT
+that adopts it, so `struct window.resize_lag_ms` is free; a window
+measured over 100 ms (Nielsen's "instantaneous" threshold) is outlined
+from the first pixel of its NEXT drag. Three things follow:
+
+- **The first drag of a never-measured window is live, and that is
+  correct** -- there is nothing to judge it on, and `auto` will not
+  guess from the app's name or its size.
+- **A mid-drag fallback exists too**, for the long human drag where the
+  measurement arrives while the button is still down. One strike and no
+  way back within that drag: a window alternating between following the
+  pointer and being an outline is worse than either.
+- **It self-corrects in both directions**, because even an outlined
+  drag measures its one resize on release.
+
+**MOVING HAS NO `auto`, deliberately.** The WM owns a window's position
+and moves it with no client involved, so a move cannot fall behind and
+a third choice would be one that never happens. The outline is offered
+for moving because some people want it, not because anything is slow.
+
+**PACE ON THE PRESENT, NOT THE ACK, AND CLEAR ON ANY PRESENT.** A client
+acks a proposal from inside its event handler and draws afterwards, so
+the ack times a syscall and the present times what the user waits for --
+pacing on the ack sends proposals a slow client will never draw, and
+measuring it reports every client as fast. Two traps came out of
+getting that right: a proposal for the size the window ALREADY IS
+produces a present that changes nothing (the press beginning a drag is
+a motion with a zero delta, so it is the first thing a drag asks for),
+and a rule that waited for a CHANGED size then waited forever with the
+rest of the drag queued behind it. So: never propose the current size,
+and let any present clear the in-flight slot while only a size-changing
+one feeds the measurement.
+
+**THE COUNTS AND THE NUMBER ARE IN `gui state`** -- `resizes_asked`,
+`resize_paint`/`move_paint` (what the last drag actually SHOWED, which
+is the only place `auto`'s decision is visible), and `resize_lag_ms`.
+A test asserts on those, because a scripted drag is over in ~150 ms and
+nothing about a drag can be watched.
