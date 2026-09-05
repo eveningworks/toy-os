@@ -616,11 +616,16 @@ def iface_names(cfg):
     """
     out = []
     for ln in cfg.splitlines():
-        # A device line starts at column 0 and is "<name>: ...";
-        # everything about it is indented under it. Splitting on the
-        # FIRST colon is what keeps the MAC further along the line from
-        # looking like a second device.
-        if not ln or ln[0].isspace() or ":" not in ln:
+        # A device line is "<name>: <driver>  <mac>  [at <where>]  mtu N",
+        # at column 0, with everything about it indented underneath.
+        #
+        # `mtu ` IS THE DISCRIMINATOR, and matching on "<word>:" alone is
+        # not enough: the guest's console carries kernel log lines in the
+        # same capture -- `init: started dhcp`, `wm: entering GUI mode` --
+        # and every one of them is a word, a colon and a space. Taking
+        # those as interfaces produced `dhcp init` and a cascade of
+        # failures that read as an OS regression.
+        if not ln or ln[0].isspace() or ":" not in ln or " mtu " not in ln:
             continue
         name = ln.split(":", 1)[0]
         if name and " " not in name:

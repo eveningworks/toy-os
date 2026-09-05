@@ -51,6 +51,8 @@ static const char *wait_name(uint32_t w) {
         case PROC_WAIT_TIMER: return "timer";
         case PROC_WAIT_KEY:   return "key";
         case PROC_WAIT_TTY:   return "tty";
+        case PROC_WAIT_THREAD: return "thread";
+        case PROC_WAIT_NET:   return "net";
         default:              return "?";
     }
 }

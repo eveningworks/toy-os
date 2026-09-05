@@ -15,6 +15,16 @@ exchange every DHCP client runs (DISCOVER, OFFER, REQUEST, ACK), applies
 the result to the device, and writes the nameserver it was given to
 `/etc/resolv.conf`.
 
+**THE CLIENT ITSELF IS `userland/lib/udhcp.c`, and this is a front end
+over it.** The protocol, the lease file, the RFC 3927 fallback and RFC
+2131's renewal states all live there so that `/bin/netd` — which holds a
+lease per card rather than one — runs the same code rather than a second
+copy of it. What is left in this program is what a command is: argument
+parsing, which cards to act on, and a loop that sleeps between steps.
+The library never sleeps on a caller's behalf; it returns a deadline and
+the front end decides what to do until then, which is what lets netd
+hold several cards without one blocking the others.
+
 **Nothing else here hands out an address.** The kernel brings a card up
 unconfigured and this program is where an address comes from, as on
 Linux. It applies its result through `SYS_NET_CONFIG`, the same call
