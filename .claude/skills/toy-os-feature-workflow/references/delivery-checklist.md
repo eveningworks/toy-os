@@ -268,3 +268,57 @@ them has its own checks:
   and kill only the PID your own launch wrote to its `-pidfile` -- never
   by pattern, which cannot tell your headless launch from the
   maintainer's `make run` window.
+
+## Flashing the bare-metal laptop (2026-09-05)
+
+The maintainer's standing request is that every delivery reaches the
+laptop. The procedure was not written down anywhere; here it is.
+Address in `local_info.txt` (untracked, never commit it).
+
+**`/boot` IS MOUNTED READ-ONLY, so the first attempt fails with
+`input/output error` and that is correct, not a broken FAT32 driver.**
+It is the ESP, `mount.c` mounts it `ro` on purpose, and a reboot puts
+it back that way -- so leave it `ro` when you are done.
+
+    remote.py --host $H exec "umount /boot"
+    remote.py --host $H exec "mount ahci0p2 /boot"        # rw
+    remote.py --host $H exec "cp /boot/boot/kernel.bin /boot/boot/kernel.old"
+    remote.py --host $H put build/kernel.bin /boot/boot/kernel.new
+    remote.py --host $H get /boot/boot/kernel.new /tmp/back && cmp build/kernel.bin /tmp/back
+    remote.py --host $H exec "cp /boot/boot/kernel.new /boot/boot/kernel.bin"
+    remote.py --host $H sync seed/sync/bin /bin      # ~43s, 90 files
+    remote.py --host $H sync seed/sync/lib /lib
+    remote.py --host $H sync seed/sync/tests /tests
+    remote.py --host $H exec "sync" ; remote.py --host $H exec "reboot"
+
+Four things that make it safe rather than fast:
+
+- **STAGE, VERIFY, THEN SWAP.** Writing straight to `kernel.bin` means
+  a truncated transfer leaves the machine unbootable, which is the one
+  thing the maintainer asked never to do. `kernel.new` costs 5 MB of
+  63 and the swap is atomic enough at this scale.
+- **VERIFY BY PULLING IT BACK AND `cmp`, NEVER BY `sum`** -- the
+  laptop's crc32 is wrong on large files (`docs/bugs.md`).
+- **REFRESH `kernel.old` FIRST**, from the kernel that is currently
+  BOOTING, so the fallback is known-good rather than whatever a
+  previous session left.
+- **`remote.py` needs `--timeout` above the command's own duration**,
+  and `cp` of a 5 MB file on FAT32 wants ~90s. The default 15s returns
+  a truncated capture that reads like the command's answer.
+
+**Every /bin binary changes when `userland/rt/sys.c` does**, since
+`rt/sys.o` is statically linked into each one -- so a one-line syscall
+wrapper is a full `/bin` sync, not a single `put`.
+
+**`about` is the check that the flash landed**: it prints the kernel's
+and the userland's commit separately and says `** kernel and userland
+are from different builds **` when they disagree. Syncing `/bin` and
+forgetting the kernel (or the reverse) is the easy mistake, and that
+line is what catches it.
+
+**`ktest` and `rescue` are NOT reachable over `remote.py`** -- telnet
+lands at the ring-3 `$` prompt and both are kernel-shell things, so
+in-kernel suites stay a QEMU or physical-console job. What hardware
+uniquely proves is the DRIVER-facing half: on a real r8153 the
+connection log showed the boot DHCP, the inbound telnet connections
+`remote.py` itself was making, and an outgoing ICMP flow.
