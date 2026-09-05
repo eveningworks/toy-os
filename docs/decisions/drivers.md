@@ -2292,3 +2292,50 @@ driver. Listing the native mode alone would be honest, but the setting
 would then offer one choice where it now shows its sentence, and
 `set_mode` would have nothing to do until stage 3 exists.
 
+
+## One MSI-X vector per device, not one per queue
+
+Every driver here that takes interrupts now asks for a message-signalled
+vector before falling back to its pin, and each takes exactly ONE --
+config-change notifications and every virtqueue point at MSI-X table
+entry 0.
+
+Linux does not do this. `virtio_pci_common.c` tries a vector for config
+plus one per virtqueue, falls back to config plus one shared by all
+queues, and only then to INTx; `pci_alloc_irq_vectors()` is built around
+a caller asking for a RANGE and accepting fewer. Windows is the same
+shape from the other end -- a driver declares `MessageNumberLimit` in
+its INF and the HAL grants up to that, with StorAHCI taking a message
+per port and NDIS RSS one per receive queue.
+
+The reason to differ is that **a vector per queue is a CPU-steering
+mechanism, and there is nothing here to steer at**. What per-queue
+vectors buy is two queues being serviced on two cores at once; Linux has
+`pci_alloc_irq_vectors_affinity()` for exactly that, and the MSI message
+address carries the destination LAPIC id in bits 19:12 to make it
+possible. `QUERY_CPUS` reports every application processor `online: no`
+(`docs/smp-design.md` -- designed, not built), so N vectors on this
+machine are N entries in a table all delivering to the same LAPIC,
+running the same handler on the same core. The extra table entries would
+be real and the benefit exactly zero.
+
+So the shape is deliberately the cheap one, and the point to revisit it
+is NAMED rather than left to be rediscovered: **when a second CPU comes
+online, or when NVMe arrives** -- whichever is first. Both are roadmap
+items. At that point `pci_msix_enable()` grows into a multi-entry
+allocator and `MSI_ADDR_DEST(lapic_id())` in `pci_msi.c` stops being a
+constant; that one line is where affinity will live, and it is the only
+place in the kernel that names a message's destination.
+
+Two smaller calls fell out of the same work. **The ladder helper stops
+at MSI**, not at the pin: `pci_msi_request()` tries MSI-X then MSI and
+returns 0 for "use your pin", because what a driver does without a
+vector is the part that genuinely differs -- AHCI stays polled, e1000
+switches to a poll, AC'97 gives up, the xHCI polls regardless. A helper
+that owned the third rung would have to encode four different answers.
+And **virtio refuses plain MSI** rather than accepting it: a virtqueue
+names its message by MSI-X table entry, which MSI has not got, so a
+virtio device on MSI could signal configuration changes and nothing
+else. No virtio device offers MSI without MSI-X, so the rung is dead
+either way -- but taking it would have been a device that enumerates
+perfectly and never delivers.

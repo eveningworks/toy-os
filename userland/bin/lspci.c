@@ -278,9 +278,23 @@ int main(void) {
         // decode as pci.c's pci_bar_is_io()/pci_bar_addr(), which is
         // kernel-space and can't be called from ring 3 (see this file's
         // top comment); it's three bits of masking, not worth a syscall.
-        if (dev->interrupt_line != 0 && dev->interrupt_line != 0xFF) {
+        // What this device is ACTUALLY on, then what it could have
+        // been. A driver that took a vector had its INTx pin disabled,
+        // so printing the routed line there would name something the
+        // device can no longer assert.
+        if (dev->irq_vector) {
+            put(dev->irq_msix ? "  msix vector " : "  msi vector ");
+            put_udec(dev->irq_vector);
+        } else if (dev->interrupt_line != 0 && dev->interrupt_line != 0xFF) {
             put("  irq ");
             put_udec(dev->interrupt_line);
+        }
+        if (dev->msix_cap) {
+            put("  [msix/");
+            put_udec(dev->msix_entries);
+            put("]");
+        } else if (dev->msi_cap) {
+            put("  [msi]");
         }
         for (int b = 0; b < 6; b++) {
             uint32_t bar = dev->bar[b];

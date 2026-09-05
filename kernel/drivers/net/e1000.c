@@ -124,6 +124,7 @@ struct e1000 {
 static struct e1000 g_e1000;
 static struct net_device g_dev;
 static int g_present;
+static uint8_t g_msi_vector;   // LAPIC vector, 0 when on the INTx pin
 
 static inline uint32_t reg_read(uint32_t off) {
     return *(volatile uint32_t *)(g_e1000.mmio + off);
@@ -298,8 +299,17 @@ static void e1000_probe(const struct pci_device *pci) {
     // documents for the same reason.
     g_present = 1;
 
+    // A vector if the card offers one, else the pin, else a poll.
+    // QEMU's 82540EM advertises neither capability -- so does Linux's
+    // `e1000` driver, which is INTx-only for the same parts; MSI-X
+    // arrived with e1000e, which this driver does not match.
     uint8_t line = pci->interrupt_line;
-    if (line != 0xFF && line < 16) {
+    g_msi_vector = pci_msi_request(pci, e1000_irq);
+    if (g_msi_vector) {
+        reg_write(REG_IMS, ICR_RXT0 | ICR_RXDMT0 | ICR_RXO);
+        klog_printf("e1000: on %s vector %u\n",
+                    pci->irq_msix ? "MSI-X" : "MSI", g_msi_vector);
+    } else if (line != 0xFF && line < 16) {
         g_e1000.irq = line;
         irq_register_handler(line, e1000_irq);
         pic_clear_mask(line);

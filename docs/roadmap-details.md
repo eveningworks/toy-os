@@ -4525,6 +4525,46 @@ size probe fails the same two checks, so neither is that change's.
   file could each explain it. The next check, that deleting the file
   hands blocks back through discard, passes.
 
+## System Settings' SIDEBAR DOES NOT SCROLL
+
+`tools/settings_test.py` fails six checks together and they are one
+fault: the sidebar's scroll offset never leaves 0.
+
+    make clean-disk && make iso
+    python3 tools/vm.py --instance 5 start
+    python3 tools/settings_test.py --instance 5
+    python3 tools/vm.py --instance 5 stop
+
+    settings_test: 59 passed, 6 failed
+      FAILED: the wheel scrolls the sidebar over a heading row
+      FAILED: the wheel scrolls the sidebar over the scrollbar
+      FAILED: dragging the thumb to the bottom of the track reaches the end
+      FAILED: clicking the track below the thumb pages down
+      FAILED: the page carries all three network-time settings
+      FAILED: the app reported the server control's rect
+
+Each scroll check reports `top 0, wanted 3` (or `wanted 13`, or
+`1..13`). **The last two are consequences, not separate faults**: the
+sidebar offers a "Network Time" row and the test finds it, but it sits
+below the fold, so the click lands on nothing and the page reports
+`controls=[]`. Fix the scrolling and expect all six to go.
+
+**Measured 2026-09-05, deterministic (2 runs in 2), and PRE-EXISTING.**
+`tools/predates.py` built HEAD (5c58ee6b) with the working tree stashed
+and got the identical failures on both sides. It also reproduces on a
+`make clean && make clean-disk && make iso` image, which rules out the
+dirty-fixture explanation that `settings_test` writing to `/etc`
+usually earns.
+
+**Cause NOT established.** Nothing has yet distinguished the three
+candidates: `uui_scrollview` not seeing the sidebar's content height,
+`uui_sidebar`'s own `hit` refusing the scrollbar column (the trap
+`tools/check_widget_ops.py` exists for, though it passes here), or the
+wheel event not reaching the widget at all. The cheap next step is
+`uapp_log_layout()` on the sidebar to see whether its content extent is
+larger than its viewport, since a scroll view with nothing to scroll
+behaves exactly like this.
+
 ## `damage_sweep.py` reports one violation on `start-menu dismiss`
 
 Measured 2026-09-02 on 540dd6e5 and again with the rounded-corner

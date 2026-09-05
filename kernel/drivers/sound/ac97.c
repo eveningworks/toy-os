@@ -68,6 +68,7 @@ struct bdl_entry {
 };
 
 static const struct pci_device *g_pci;
+static uint8_t g_msi_vector;   // LAPIC vector, 0 when on the INTx pin
 static uint16_t g_nam, g_nabm;
 static struct bdl_entry *g_bdl; // one pmm frame; identity-mapped
 static uint64_t g_bdl_phys;
@@ -173,26 +174,37 @@ static void ac97_probe(const struct pci_device *dev) {
     }
 
     // The commit point, AHCI's ordering: the handler exists before the
-    // line is unmasked, and registration is last.
+    // line is unmasked, and registration is last. A vector if the
+    // device offers one, else the pin -- QEMU's AC97 advertises
+    // neither capability, so this is the pin on every emulated boot.
     uint8_t line = g_pci->interrupt_line;
-    if (line == 0xFF || line == 0 || line >= 16) {
-        klog_write("ac97: no usable INTx line -- not driving it\n");
-        return;
+    g_msi_vector = pci_msi_request(g_pci, ac97_irq);
+    if (!g_msi_vector) {
+        if (line == 0xFF || line == 0 || line >= 16) {
+            klog_write("ac97: no usable INTx line -- not driving it\n");
+            return;
+        }
+        irq_register_handler(line, ac97_irq);
+        // INTx may arrive DISABLED in the command register (firmware's
+        // choice); clearing it is the half AHCI's bring-up calls the
+        // commit point. Without it the engine plays but never reports a
+        // completion, hw_pos freezes, and the ring loops its primed lap
+        // forever -- measured as a 2.8s recording whose tail never went
+        // quiet.
+        pci_command_update(g_pci, 0, PCI_CMD_INTX_DISABLE);
+        pic_clear_mask(line);
     }
-    irq_register_handler(line, ac97_irq);
-    // INTx may arrive DISABLED in the command register (firmware's
-    // choice); clearing it is the half AHCI's bring-up calls the
-    // commit point. Without it the engine plays but never reports a
-    // completion, hw_pos freezes, and the ring loops its primed lap
-    // forever -- measured as a 2.8s recording whose tail never went
-    // quiet.
-    pci_command_update(g_pci, 0, PCI_CMD_INTX_DISABLE);
-    pic_clear_mask(line);
 
     if (!sound_register(&ac97_dev, ring, ring_phys)) return;
-    klog_printf("ac97: %02x:%02x.%u nam %#x nabm %#x irq %u\n",
-                g_pci->bus, g_pci->device, g_pci->function,
-                g_nam, g_nabm, line);
+    if (g_msi_vector)
+        klog_printf("ac97: %02x:%02x.%u nam %#x nabm %#x %s vector %u\n",
+                    g_pci->bus, g_pci->device, g_pci->function,
+                    g_nam, g_nabm, g_pci->irq_msix ? "MSI-X" : "MSI",
+                    g_msi_vector);
+    else
+        klog_printf("ac97: %02x:%02x.%u nam %#x nabm %#x irq %u\n",
+                    g_pci->bus, g_pci->device, g_pci->function,
+                    g_nam, g_nabm, line);
 }
 
 // --- KTESTs -- skip without the device, like ahci's --------------------

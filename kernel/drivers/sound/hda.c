@@ -951,11 +951,7 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
     // Interrupts: a vector if the machine has one, else the pin. The
     // handler exists before either is armed; registration is last.
     uint8_t line = d->interrupt_line;
-    h->msi_vector = lapic_alloc_vector(hda_irq);
-    if (h->msi_vector) {
-        if (!pci_msix_enable(d, h->msi_vector) && !pci_msi_enable(d, h->msi_vector))
-            h->msi_vector = 0;
-    }
+    h->msi_vector = pci_msi_request(d, hda_irq);
     if (!h->msi_vector) {
         if (line == 0xFF || line == 0 || line >= 16) {
             ctrl_teardown(h, "no MSI and no usable INTx line");

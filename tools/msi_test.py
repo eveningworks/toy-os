@@ -18,6 +18,21 @@ and requires BOTH the controller's interrupt count and its decoded-report
 count to rise. With INTx disabled by the MSI-X programming, an interrupt
 that arrives can only have come from the vector.
 
+PHASE 2 IS VIRTIO, and it is the busier case: virtio-input and
+virtio-net take a vector each through virtio_msix_enable(), which also
+has to write the config-change and per-queue MSI-X table entries. The
+same "it enumerates fine while nothing is delivered" hazard applies, so
+the load-bearing check is again that a COUNT rises -- decoded input
+events, and an ICMP round trip through the receive queue.
+
+WHAT A CONTROL HERE MEASURED, because it is worth not re-deriving:
+making virtio_irq_is_ours() gate on the ISR byte under MSI-X changed no
+count at all. QEMU's virtio_irq() writes the ISR before dispatching the
+vector, so the pre-MSI-X handler shape keeps working in emulation. The
+control that DOES go red is returning 0 from it outright (0 events
+decoded against 33 vectors delivered), which is what proves this tool
+can see a dead path.
+
 THE CONTROL IS A BOOT FLAG, and it is worth running by hand at least
 once when this code changes:
 
@@ -45,6 +60,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 
+import port_guard  # noqa: E402
 from gui_debug import DebugConsole  # noqa: E402
 from qmp_test import QMPSession  # noqa: E402
 
@@ -67,11 +83,72 @@ def reports_and_irqs(dbg):
             int(reps.group(1)) if reps else -1)
 
 
+def decoded_events(dbg):
+    """virtio-input's own decode counter, out of `lsdev`."""
+    m = re.search(r"virtio-input: (\d+) event\(s\) decoded", dbg.send("lsdev") or "")
+    return int(m.group(1)) if m else -1
+
+
+def virtio_phase(n, img):
+    """virtio-input and virtio-net on vectors of their own."""
+    print("\nmsi_test: virtio-input and virtio-net on MSI-X")
+    if n is None:
+        check("a free VM slot for the virtio phase", False)
+        return
+    sock = port_guard.instance_sock(n)
+    boot = subprocess.run([sys.executable, os.path.join(HERE, "vm.py"),
+                           "--instance", str(n), "--disk", img,
+                           "--virtio-input", "--net", "virtio", "start"], cwd=REPO)
+    if not check("the guest boots with virtio input and networking",
+                 boot.returncode == 0):
+        return
+    try:
+        time.sleep(3)
+        dbg = DebugConsole(sock)
+        qmp = QMPSession(port=4445 + n)
+
+        lsdev = dbg.send("lsdev") or ""
+        check("every virtio-input device took a vector, none a line",
+              "[msi " in lsdev and "Virtio" in lsdev
+              and not re.search(r"Virtio.*\[irq ", lsdev),
+              "; ".join(ln.strip() for ln in lsdev.splitlines() if "Virtio" in ln))
+
+        # THE LOAD-BEARING CHECK, same shape as the xHCI's: enumeration
+        # proves nothing, a rising count does.
+        ev0 = decoded_events(dbg)
+        for _ in range(12):
+            qmp.move_rel(9, 6)
+            time.sleep(0.05)
+        qmp.send_text("abc")
+        time.sleep(1.0)
+        ev1 = decoded_events(dbg)
+        check("input on a vector reaches the input core",
+              ev1 > ev0, f"{ev0} -> {ev1} events decoded")
+
+        # virtio-net's receive queue is the other half: an ICMP reply
+        # only arrives through the queue the vector notifies. 10.0.2.2
+        # is QEMU's own SLIRP, so nothing leaves this machine.
+        out = dbg.send("sh ping -c 3 10.0.2.2") or ""
+        check("virtio-net receives on its vector",
+              "0% packet loss" in out,
+              next((ln.strip() for ln in out.splitlines() if "packet loss" in ln),
+                   "no ping summary"))
+        dbg.close()
+    finally:
+        subprocess.run([sys.executable, os.path.join(HERE, "vm.py"),
+                        "--instance", str(n), "stop"], capture_output=True)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--instance", type=int, default=0)
+    ap.add_argument("--instance", default="auto",
+                    help="VM slot, or `auto` to take the lowest free one")
     args = ap.parse_args()
-    n = args.instance
+    n = (port_guard.find_free_instance() if args.instance == "auto"
+         else int(args.instance))
+    if n is None:
+        print("msi_test: no free VM slot")
+        return 2
     sock = os.path.join(REPO, ".vm.serial" if n == 0 else f".vm.{n}.serial")
 
     img = os.path.join("/tmp", f"msi_test_{n}.img")
@@ -145,6 +222,12 @@ def main():
     finally:
         subprocess.run([sys.executable, os.path.join(HERE, "vm.py"),
                         "--instance", str(n), "stop"], capture_output=True)
+
+    # A FRESH SLOT, not this one: QMPSession leaves the port in
+    # TIME_WAIT for about a minute after phase 1, so reusing the slot
+    # either waits that out or is refused as a clash with the guest
+    # just killed (kbd_test.py hit the same thing).
+    virtio_phase(port_guard.find_free_instance(), img)
 
     passed = sum(1 for _, ok, _ in checks if ok)
     print(f"\nmsi_test: {passed} passed, {len(checks) - passed} failed")

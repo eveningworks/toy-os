@@ -2056,7 +2056,24 @@ window without going through it will find its layout polls timing out.
   control is a boot flag** -- `make iso KCMDLINE="nomsi"` puts the
   machine back on the 8259 -- and it is documented in the tool rather
   than run by it, since baking a flag rewrites the shared media
-  (`ahci_test.py` makes the same call about `noahci`). On demand.
+  (`ahci_test.py` makes the same call about `noahci`).
+
+  **A SECOND PHASE covers virtio**, in its own VM slot: virtio-input and
+  virtio-net take a vector each, and the same "enumerates fine, delivers
+  nothing" hazard applies, so the checks are again counts that must rise
+  -- decoded input events, and an ICMP round trip to QEMU's own SLIRP
+  gateway that can only arrive through the receive queue. **The two
+  phases must not share a slot**: `QMPSession` leaves the QMP port in
+  `TIME_WAIT` for about a minute, so reusing it either waits that out or
+  is refused by `port_guard` as a clash with the guest just killed
+  (`kbd_test.py` hit the same thing and solved it the same way).
+
+  **What a control here MEASURED, and it is worth not re-deriving:**
+  gating `virtio_irq_is_ours()` on the ISR byte under MSI-X changed no
+  count at all, because QEMU's `virtio_irq()` writes the ISR before
+  dispatching the vector. The control that DOES go red is returning 0
+  from it outright -- 0 events decoded against 33 vectors delivered --
+  and that is what shows the tool can see a dead path. On demand.
 - **`ahci_test.py`** -- boots with the filesystem on a **SATA drive
   behind an ICH9 host bus adapter**, which is the only thing here that
   reaches `kernel/drivers/ahci.c` at all. Several boots, on demand.

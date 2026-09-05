@@ -131,16 +131,26 @@ uint16_t pci_command_update(const struct pci_device *dev, uint16_t set, uint16_t
 // line. `vector` comes from lapic_alloc_vector().
 int pci_msi_enable(const struct pci_device *dev, uint8_t vector);
 
-// Does the device advertise MSI at all? For reporting, and for a
-// driver that wants to say WHY it is still on a pin.
-int pci_msi_capable(const struct pci_device *dev);
-
 // MSI-X: the same, with the message table in a BAR instead of in config
 // space. PREFER THIS ONE -- it is what a PCIe device actually offers
 // (QEMU's own xHCI has MSI-X and no MSI), and it is the only form that
 // could later give a multi-queue device a vector per queue. One entry
 // is programmed; the rest of the table stays masked.
 int pci_msix_enable(const struct pci_device *dev, uint8_t vector);
-int pci_msix_capable(const struct pci_device *dev);
+
+// Undoes that: MSI-X off, INTx back on. Needed because MSI-X OUTRANKS
+// the pin while it is enabled, so a caller that gave up half way and
+// fell back to its line would find the line never asserts.
+void pci_msix_disable(const struct pci_device *dev);
+
+// WHAT A DRIVER SHOULD ACTUALLY CALL: claim a vector for `handler` and
+// try MSI-X then MSI. Returns the vector, or 0 meaning "this device has
+// neither -- use your pin", which is an ordinary answer. Whether a pin
+// is usable, and what to do when it is not, stays with the driver.
+uint8_t pci_msi_request(const struct pci_device *dev, void (*handler)(uint64_t *regs));
+
+// Records the vector a device was given, for `lspci`. Called by
+// pci_msi.c only; a driver reads it back as pci_device.irq_vector.
+void pci_note_vector(const struct pci_device *dev, uint8_t vector, int msix);
 
 #endif

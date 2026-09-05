@@ -634,12 +634,13 @@ run on, not by order.
 - [x] ~~Runtime mode switching: a display driver can set a mode after boot~~ DONE 2026-09-02 -- `config set resolution`, every QEMU adapter
 - [ ] Initcall levels: drivers declare a boot slot instead of being called by name from `kernel_main()`
 - [ ] `virtio-net`: a NIC on the same transport, likely easier than e1000 once virtqueues exist
+- [x] ~~Every interrupt-taking driver on a vector where its device offers one~~ DONE 2026-09-05
 - [x] ~~`virtio-blk`: a block device that isn't ATA~~
 - [x] ~~`virtio-rng`: entropy, registered as a krandom source~~
 - [x] ~~`virtio-input`: keyboard/mouse/tablet that isn't PS/2, on an input core with a source registry~~
 - [x] ~~A Local APIC, and MSI-X interrupts on top of it~~ DONE 2026-08-30 -- the xHCI is on a vector; `nomsi` falls back to the PIC
 - [ ] An I/O APIC, so the legacy lines stop going through the 8259 as well
-- [ ] MSI-X vectors per QUEUE rather than one per device -- what multi-queue virtio and NVMe want
+- [ ] MSI-X vectors per QUEUE rather than one per device -- wanted by multi-queue virtio and NVMe, worth it once a second CPU is online
 - [ ] Re-key `/etc/kbs` layouts to evdev keycodes, removing the input core's translation table
 
 - [ ] `settings_init()` as initcalls too -- the last hand list; its order is the Settings sidebar's, so it needs an explicit order first

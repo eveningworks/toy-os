@@ -176,6 +176,21 @@ int virtqueue_setup(struct virtio_device *d, uint16_t index, struct virtqueue *v
     }
     vq->notify = (volatile uint16_t *)(d->notify + byte_off);
 
+    // The queue's MSI-X entry, written while this queue is still the
+    // selected one -- which is why it belongs here and not in
+    // virtio_msix_enable(). A device that cannot take the entry writes
+    // 0xFFFF back, and a queue whose notifications go nowhere is a
+    // silent stall rather than an error, so refuse the setup instead.
+    if (d->msix_vector) {
+        common_w16(d, VIRTIO_COMMON_Q_MSIX, VIRTIO_MSIX_ENTRY);
+        if (common_r16(d, VIRTIO_COMMON_Q_MSIX) == VIRTIO_MSI_NO_VECTOR) {
+            klog_printf("virtio: queue %u refused an MSI-X entry\n", index);
+            pmm_free_contiguous(base, frames);
+            k_memset(vq, 0, sizeof *vq);
+            return 0;
+        }
+    }
+
     common_w16(d, VIRTIO_COMMON_Q_ENABLE, 1);
     return 1;
 }

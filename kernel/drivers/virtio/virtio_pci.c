@@ -8,6 +8,7 @@
 #include "virtio.h"
 #include "pci.h"
 #include "pci_internal.h"
+#include "lapic.h"
 #include "klog.h"
 #include "paging.h"
 #include "kfmt.h"
@@ -204,6 +205,42 @@ uint8_t virtio_intx_line(const struct virtio_device *d) {
 void virtio_intx_enable(struct virtio_device *d) {
     if (!d || !d->pci) return;
     pci_command_update(d->pci, 0, PCI_CMD_INTX_DISABLE);
+}
+
+int virtio_msix_enable(struct virtio_device *d, void (*handler)(uint64_t *regs)) {
+    if (!d || !d->pci || !d->common || !handler) return 0;
+
+    // MSI-X ONLY, deliberately not pci_msi_request()'s ladder: a queue
+    // names its message by MSI-X TABLE ENTRY, which plain MSI has not
+    // got, so a virtio device on MSI could signal config changes and
+    // nothing else. No virtio device offers MSI without MSI-X anyway.
+    uint8_t vector = lapic_alloc_vector(handler);
+    if (!vector) return 0;
+    if (!pci_msix_enable(d->pci, vector)) {
+        lapic_free_vector(vector);
+        return 0;
+    }
+
+    // Config-change notifications. The device WRITES BACK the vector it
+    // accepted, and 0xFFFF means it could not take one -- the spec's
+    // way of saying "no", and the only way to find out.
+    mmio_w16(d->common, VIRTIO_COMMON_MSIX_CFG, VIRTIO_MSIX_ENTRY);
+    if (mmio_r16(d->common, VIRTIO_COMMON_MSIX_CFG) == VIRTIO_MSI_NO_VECTOR) {
+        klog_printf("virtio: %s refused an MSI-X entry for config changes\n", d->name);
+        pci_msix_disable(d->pci);   // or the caller's fallback line never asserts
+        lapic_free_vector(vector);
+        return 0;
+    }
+
+    d->msix_vector = vector;
+    klog_printf("virtio: %s on MSI-X vector %u\n", d->name, vector);
+    return 1;
+}
+
+int virtio_irq_is_ours(const struct virtio_device *d) {
+    if (!d) return 0;
+    if (d->msix_vector) return 1;   // a vector is never shared
+    return (virtio_isr_read(d) & VIRTIO_ISR_HAS_QUEUE) != 0;
 }
 
 // Reads (and thereby CLEARS) the ISR status byte. Bit 0 means "one of

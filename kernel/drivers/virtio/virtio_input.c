@@ -263,8 +263,9 @@ static void input_irq_handler(uint64_t *regs) {
     (void)regs;
     for (int i = 0; i < MAX_INPUT_DEVICES; i++) {
         struct input_dev *d = &g_devs[i];
-        if (!d->present || !d->irq) continue;
-        if (!(virtio_isr_read(&d->vdev) & VIRTIO_ISR_HAS_QUEUE)) continue;
+        if (!d->present) continue;
+        if (!d->irq && !d->vdev.msix_vector) continue;   // a polled device is the idle path's
+        if (!virtio_irq_is_ours(&d->vdev)) continue;
         drain(d);
     }
 }
@@ -278,6 +279,11 @@ static int claim_dev(const struct pci_device *pci, struct input_dev *d) {
     // No device-specific features are defined for virtio-input beyond
     // the transport's own, so nothing is asked for.
     if (!virtio_begin(&d->vdev, 0)) return 0;
+
+    // MSI-X before the queue, which is what writes its table entry.
+    // The vector's handler is live from here, and it tolerates a device
+    // that is not `present` yet.
+    virtio_msix_enable(&d->vdev, input_irq_handler);
 
     if (!virtqueue_setup(&d->vdev, 0, &d->eventq)) {
         klog_write("virtio-input: could not set up its event queue\n");
@@ -347,14 +353,16 @@ static void virtio_input_probe(const struct pci_device *pci) {
         // (a level-triggered line is deasserted BY that read). It
         // reproduced every time the pointer moved during boot and never
         // when it did not -- see docs/decisions/drivers.md.
-        d->irq = virtio_intx_line(&d->vdev);
+        // A vector, else the line, else the idle poll.
+        d->irq = d->vdev.msix_vector ? 0 : virtio_intx_line(&d->vdev);
         if (d->irq) irq_register_handler(d->irq, input_irq_handler);
 
         g_sources[g_count].name = d->name;
         g_sources[g_count].driver = "virtio-input";
         g_sources[g_count].caps = d->caps;
-        g_sources[g_count].poll = d->irq ? 0 : POLLS[g_count];
+        g_sources[g_count].poll = (d->irq || d->vdev.msix_vector) ? 0 : POLLS[g_count];
         g_sources[g_count].irq = d->irq;
+        g_sources[g_count].msi_vector = d->vdev.msix_vector;
         input_register_source(&g_sources[g_count]);
 
         // The commit point -- everything above is what the handler
@@ -368,8 +376,12 @@ static void virtio_input_probe(const struct pci_device *pci) {
                     (d->caps & INPUT_CAP_KEYS) ? "keys " : "",
                     (d->caps & INPUT_CAP_REL) ? "rel " : "",
                     (d->caps & INPUT_CAP_ABS) ? "abs" : "",
-                    d->irq ? "IRQ-driven" : "polled (no interrupt line)");
-        if (d->irq) klog_printf("virtio-input: \"%s\" on IRQ %u\n", d->name, d->irq);
+                    (d->irq || d->vdev.msix_vector) ? "IRQ-driven"
+                                                    : "polled (no interrupt line)");
+        if (d->vdev.msix_vector)
+            klog_printf("virtio-input: \"%s\" on MSI-X vector %u\n",
+                        d->name, d->vdev.msix_vector);
+        else if (d->irq) klog_printf("virtio-input: \"%s\" on IRQ %u\n", d->name, d->irq);
         g_count++;
         if (g_count >= MAX_INPUT_DEVICES) return;
     }

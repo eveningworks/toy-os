@@ -1648,16 +1648,8 @@ static void usb_probe(const struct pci_device *d) {
     // older CPU, or `nomsi` on the GRUB line) and no MSI capability
     // both mean the pin, exactly as before.
     uint8_t line = d->interrupt_line;
-    g_hc.msi_vector = lapic_alloc_vector(xhci_irq_handler);
-    if (g_hc.msi_vector) {
-        // MSI-X FIRST, then MSI -- the order Linux's
-        // pci_alloc_irq_vectors() tries, and for the same reason: MSI-X
-        // is what a PCIe device actually offers (QEMU's qemu-xhci has
-        // MSI-X and no MSI at all), and it is the only form that could
-        // later give this controller's other interrupters a vector each.
-        if (pci_msix_enable(d, g_hc.msi_vector))      g_hc.msix = 1;
-        else if (!pci_msi_enable(d, g_hc.msi_vector)) g_hc.msi_vector = 0;
-    }
+    g_hc.msi_vector = pci_msi_request(d, xhci_irq_handler);
+    g_hc.msix = d->irq_msix;
 
     if (g_hc.msi_vector) {
         g_hc.irq = 0;   // nothing on a line any more

@@ -100,6 +100,12 @@
 #define VIRTIO_COMMON_Q_SELECT   0x16  // u16 queue_select
 #define VIRTIO_COMMON_Q_SIZE     0x18  // u16 queue_size
 #define VIRTIO_COMMON_Q_MSIX     0x1A  // u16
+// The MSI-X table entry every vector-carrying notification from a
+// device points at -- one, because this kernel hands out one vector per
+// device. 0xFFFF is the spec's "I could not take it", written back by
+// the device into whichever of the two registers was just set.
+#define VIRTIO_MSIX_ENTRY        0
+#define VIRTIO_MSI_NO_VECTOR     0xFFFF
 #define VIRTIO_COMMON_Q_ENABLE   0x1C  // u16 queue_enable
 #define VIRTIO_COMMON_Q_NOFF     0x1E  // u16 queue_notify_off  (ro)
 #define VIRTIO_COMMON_Q_DESC     0x20  // u64 queue_desc
@@ -176,6 +182,7 @@ struct virtio_device {
     uint32_t notify_len;        // for bounds-checking a doorbell
     uint32_t notify_off_multiplier;
     uint64_t features;          // NEGOTIATED; valid only after virtio_begin()
+    uint8_t msix_vector;        // LAPIC vector, 0 when on the INTx pin
 };
 
 // Finds the `index`-th virtio device of type `type` and maps its modern
@@ -229,10 +236,6 @@ int virtio_has_feature(const struct virtio_device *d, uint64_t bit);
 // way; virtio-input asks for interrupts, because an event queue has
 // nothing to poll FOR.
 //
-// NOT MSI-X, and the reason is not virtio's: MSI is delivered as a
-// memory write to the Local APIC, and this kernel has none (the PIC is
-// all there is -- kernel/arch/x86_64/irq.c). See docs/roadmap.md.
-//
 // TWO CALLS, NOT ONE, AND THE SPLIT IS THE WHOLE POINT. Asking which
 // line a function is on has no side effects; ENABLING is what lets the
 // device start asserting it. A single call that did both forced every
@@ -259,6 +262,40 @@ uint8_t virtio_intx_line(const struct virtio_device *d);
 // its line at any moment, so everything its handler depends on must
 // already be in place.
 void virtio_intx_enable(struct virtio_device *d);
+
+// --- MSI-X, which is what to reach for first --------------------------
+//
+// Claims one vector for `handler` and points the device's config-change
+// notification and every queue at it. 1 on success; 0 means the machine
+// or the device has no MSI-X and the caller should climb down to
+// virtio_intx_line().
+//
+// CALL IT BETWEEN virtio_begin() AND THE FIRST virtqueue_setup().
+// Later is too late -- a queue's vector is written while that queue is
+// SELECTED, so virtqueue_setup() is the only place that can do it, and
+// it looks at d->msix_vector to decide whether to. Earlier is wrong
+// because the device must have accepted FEATURES_OK first.
+//
+// One vector for the whole device, not one per queue: a per-queue
+// vector is only worth its table entries once messages can be steered
+// at different CPUs, and every AP here is offline. See
+// docs/roadmap.md's per-queue item.
+int virtio_msix_enable(struct virtio_device *d, void (*handler)(uint64_t *regs));
+
+// "Is this interrupt mine, and does it need servicing?" -- ask this
+// rather than virtio_isr_read() directly.
+//
+// The ISR byte answers "was it me?" only for a SHARED line. A vector is
+// never shared, so on MSI-X the answer is yes without reading anything
+// -- and the spec puts the ISR on the no-MSI-X path, so a device is not
+// obliged to write it once MSI-X is on.
+//
+// QEMU DOES WRITE IT ANYWAY (virtio_irq() sets the ISR before
+// dispatching the vector), so gating on the ISR under MSI-X was
+// measured to work here -- a positive control that removed this
+// early-return changed no count. That is emulator behaviour to not
+// depend on, not a property to rely on.
+int virtio_irq_is_ours(const struct virtio_device *d);
 
 #define VIRTIO_ISR_HAS_QUEUE  0x1
 #define VIRTIO_ISR_HAS_CONFIG 0x2

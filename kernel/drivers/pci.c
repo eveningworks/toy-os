@@ -148,6 +148,18 @@ void pci_init(void) {
                 }
                 probe_bar_sizes(d);
 
+                // The two interrupt capabilities, recorded once rather
+                // than re-walked per query. MSI-X's Message Control is
+                // at cap+2 and its low 11 bits are the table size minus
+                // one.
+                d->msi_cap  = pci_capability_find(d, PCI_CAP_ID_MSI, 0);
+                d->msix_cap = pci_capability_find(d, PCI_CAP_ID_MSIX, 0);
+                d->msix_entries = d->msix_cap
+                    ? (uint16_t)((pci_config_read16(d, (uint8_t)(d->msix_cap + 2)) & 0x7FF) + 1)
+                    : 0;
+                d->irq_vector = 0;
+                d->irq_msix = 0;
+
                 klog_write("pci: ");
                 klog_hex_digits(d->bus, 2);
                 klog_write(":");
@@ -332,6 +344,24 @@ uint8_t pci_capability_find(const struct pci_device *dev, uint8_t cap_id, uint8_
         offset = pci_config_read8(dev, (uint8_t)(offset + 1));
     }
     return 0;  // cycle, or a chain longer than any real device has
+}
+
+// Records which LAPIC vector a device ended up on, so `lspci` can say
+// so. Looked up by bus/device/function rather than taking the caller's
+// pointer as writable: every driver holds a `const struct pci_device *`
+// into g_devices, and keeping the ONE mutable path inside this file is
+// what stops a driver editing the enumerator's record directly.
+void pci_note_vector(const struct pci_device *dev, uint8_t vector, int msix) {
+    if (!dev) return;
+    for (int i = 0; i < g_count; i++) {
+        struct pci_device *d = &g_devices[i];
+        if (d->bus == dev->bus && d->device == dev->device &&
+            d->function == dev->function) {
+            d->irq_vector = vector;
+            d->irq_msix = (uint8_t)(msix ? 1 : 0);
+            return;
+        }
+    }
 }
 
 int pci_bar_is_64(uint32_t bar) {

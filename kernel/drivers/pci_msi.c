@@ -94,6 +94,7 @@ int pci_msi_enable(const struct pci_device *dev, uint8_t vector) {
     // able to deliver.
     pci_command_update(dev, PCI_CMD_INTX_DISABLE, 0);
 
+    pci_note_vector(dev, vector, 0);
     klog_printf("msi: %02x:%02x.%u -> vector %u (%s addressing, cap at 0x%x)\n",
                 dev->bus, dev->device, dev->function, vector,
                 (ctl & MSI_CTL_64BIT) ? "64-bit" : "32-bit", cap);
@@ -166,18 +167,50 @@ int pci_msix_enable(const struct pci_device *dev, uint8_t vector) {
     pci_config_write16(dev, (uint8_t)(cap + MSIX_CTL), ctl);
     pci_command_update(dev, PCI_CMD_INTX_DISABLE, 0);
 
+    pci_note_vector(dev, vector, 1);
     klog_printf("msix: %02x:%02x.%u -> vector %u (entry 0 of %u, BAR%u+0x%x)\n",
                 dev->bus, dev->device, dev->function, vector,
                 MSIX_CTL_TABLE_SIZE(ctl), bir, off);
     return 1;
 }
 
-int pci_msix_capable(const struct pci_device *dev) {
-    if (!dev) return 0;
-    return pci_capability_find(dev, PCI_CAP_ID_MSIX, 0) != 0;
+
+// Puts a device back on its pin: MSI-X off, INTx re-enabled. For the
+// one case that needs it -- a device that took the capability and then
+// refused to be programmed further, leaving a caller about to fall back
+// to a line the device would never assert, because MSI-X outranks INTx
+// for as long as it is enabled.
+void pci_msix_disable(const struct pci_device *dev) {
+    if (!dev) return;
+    uint8_t cap = pci_capability_find(dev, PCI_CAP_ID_MSIX, 0);
+    if (!cap) return;
+    uint16_t ctl = pci_config_read16(dev, (uint8_t)(cap + MSIX_CTL));
+    pci_config_write16(dev, (uint8_t)(cap + MSIX_CTL),
+                       (uint16_t)(ctl & ~MSIX_CTL_ENABLE));
+    pci_command_update(dev, 0, PCI_CMD_INTX_DISABLE);
+    pci_note_vector(dev, 0, 0);
 }
 
-int pci_msi_capable(const struct pci_device *dev) {
-    if (!dev) return 0;
-    return pci_capability_find(dev, PCI_CAP_ID_MSI, 0) != 0;
+// --- the ladder every driver climbs -----------------------------------
+//
+// MSI-X, then MSI, then 0 meaning "use your pin" -- the order and the
+// give-up shape of Linux's pci_alloc_irq_vectors(dev, 1, 1,
+// PCI_IRQ_MSIX | PCI_IRQ_MSI), and for its reason: MSI-X is what a PCIe
+// device actually offers, and several devices here have one and not the
+// other. The INTx half is deliberately NOT in here, because it is the
+// part that genuinely differs -- AHCI stays polled, e1000 switches to a
+// poll, AC'97 gives up, xHCI polls anyway.
+//
+// A vector is claimed BEFORE the device is programmed, so the handler is
+// installed for a message that can arrive the instant the capability is
+// armed; a device with neither capability hands it straight back.
+uint8_t pci_msi_request(const struct pci_device *dev, void (*handler)(uint64_t *regs)) {
+    if (!dev || !handler) return 0;
+
+    uint8_t vector = lapic_alloc_vector(handler);
+    if (!vector) return 0;
+    if (pci_msix_enable(dev, vector) || pci_msi_enable(dev, vector)) return vector;
+
+    lapic_free_vector(vector);
+    return 0;
 }

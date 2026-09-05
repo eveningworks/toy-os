@@ -134,7 +134,7 @@ int virtio_net_transmit(const void *frame, uint32_t len) {
 static void net_irq(uint64_t *regs) {
     (void)regs;
     if (!g_present) return;
-    if (!(virtio_isr_read(&g_vdev) & VIRTIO_ISR_HAS_QUEUE)) return;  // shared line
+    if (!virtio_irq_is_ours(&g_vdev)) return;
     virtio_net_drain();
 }
 
@@ -158,6 +158,12 @@ void virtio_net_attach(const struct pci_device *pci) {
     for (int i = 0; i < 6; i++)
         g_mac[i] = virtio_cfg_read8(&g_vdev, NET_CFG_MAC + (uint32_t)i);
 
+    // MSI-X BEFORE THE QUEUES: virtqueue_setup() is what writes each
+    // queue's table entry, so a later call would leave both queues
+    // notifying nothing. Nothing can be delivered yet -- no queue is
+    // enabled and DRIVER_OK is not set.
+    int msix = virtio_msix_enable(&g_vdev, net_irq);
+
     if (!virtqueue_setup(&g_vdev, 0, &g_rxq) || !virtqueue_setup(&g_vdev, 1, &g_txq)) {
         klog_write("virtio-net: could not set up the receive/transmit queues\n");
         virtio_fail(&g_vdev);
@@ -167,16 +173,20 @@ void virtio_net_attach(const struct pci_device *pci) {
     for (uint16_t i = 0; i < RX_BUFS; i++) post_rx(i);
     virtqueue_kick(&g_rxq);
 
-    virtio_driver_ok(&g_vdev);
+    // Publish first, arm last: a device that can interrupt before its
+    // handler can see a built driver hangs the machine, and only under
+    // KVM (see CLAUDE.md's virtio interrupt rule). With MSI-X the arming
+    // write is DRIVER_OK, not the INTx enable, so g_present has to be
+    // set before it rather than after.
     g_present = 1;
+    virtio_driver_ok(&g_vdev);
 
-    // Publish first, enable last: a device that can interrupt before
-    // its handler can see a built driver hangs the machine, and only
-    // under KVM (see CLAUDE.md's virtio interrupt rule).
-    uint8_t line = virtio_intx_line(&g_vdev);
-    if (line) {
-        irq_register_handler(line, net_irq);
-        pic_clear_mask(line);
-        virtio_intx_enable(&g_vdev);
+    if (!msix) {
+        uint8_t line = virtio_intx_line(&g_vdev);
+        if (line) {
+            irq_register_handler(line, net_irq);
+            pic_clear_mask(line);
+            virtio_intx_enable(&g_vdev);
+        }
     }
 }

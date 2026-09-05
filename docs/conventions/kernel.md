@@ -1027,7 +1027,9 @@ self-controlling.
 
 `kernel/arch/x86_64/lapic.c` enables the Local APIC; `pci_msi.c`
 programs a device's MSI or MSI-X capability to deliver on one of its
-vectors. The xHCI is the first (and so far only) device to take one.
+vectors. Every driver that takes interrupts asks for one now -- the
+xHCI, Intel HDA, AHCI, AC'97, e1000, virtio-input and virtio-net --
+and each falls back to its pin on a machine or a device that has none.
 Five things to know:
 
 - **ENABLING THE LAPIC MOVES THE 8259's WIRE, and that is the one way
@@ -1038,10 +1040,13 @@ Five things to know:
   Get that wrong and the timer, the keyboard and the disk stop at once,
   which does not look like an APIC bug, it looks like a hang on the
   first tick.
-- **MSI-X FIRST, THEN MSI, THEN THE PIN.** The order Linux's
-  `pci_alloc_irq_vectors()` uses, and not academic: QEMU's `qemu-xhci`
-  offers MSI-X and NO MSI at all, so a driver that only knew MSI would
-  silently stay on its line on the default machine.
+- **MSI-X FIRST, THEN MSI, THEN THE PIN, AND THE FIRST TWO RUNGS ARE
+  `pci_msi_request()`.** The order Linux's `pci_alloc_irq_vectors()`
+  uses, and not academic: QEMU's `qemu-xhci` offers MSI-X and NO MSI at
+  all, so a driver that only knew MSI would silently stay on its line on
+  the default machine. The INTx rung is deliberately NOT in the helper,
+  because it is the part that genuinely differs -- AHCI stays polled,
+  e1000 switches to a poll, AC'97 gives up, the xHCI polls anyway.
 - **AN MSI VECTOR IS NOT AN IRQ NUMBER**, and `struct input_source` has
   a separate field for it. Reusing `irq` made every HID device on an MSI
   controller report itself POLLED (`irq == 0` already means that) and
@@ -1061,7 +1066,55 @@ transfer in the xHCI driver polls the event ring, so a controller whose
 interrupts go nowhere still enumerates, registers its devices and logs
 "running". `tools/msi_test.py` moves the mouse and requires the
 interrupt count and the decoded-report count to rise together, which is
-the only thing here an interrupt is load-bearing for.
+the only thing here an interrupt is load-bearing for. Its second phase
+does the same for virtio: decoded input events, and an ICMP round trip
+that can only arrive through the receive queue.
+
+**AND WHAT LOOKS LIKE A TRAP HERE IS NOT ONE ON QEMU.** The ISR byte
+answers "was it me?" for a shared line, and the spec puts it on the
+no-MSI-X path -- so a handler gating on `virtio_isr_read()` under MSI-X
+*ought* to drop everything. It does not: QEMU's `virtio_irq()` writes
+the ISR before dispatching the vector, and a positive control that
+removed `virtio_irq_is_ours()`'s early return changed no count at all.
+Ask through `virtio_irq_is_ours()` anyway -- the emulator's incidental
+behaviour is not something to build on -- but do not claim the trap has
+been demonstrated, because it has not been.
+
+## A VIRTIO DEVICE TAKES MSI-X ONLY, ITS QUEUE VECTORS ARE WRITTEN BY `virtqueue_setup()`, AND ITS ARMING WRITE IS `DRIVER_OK`
+
+`virtio_msix_enable()` claims a vector and points the device's
+config-change notifications at MSI-X table entry 0; `virtqueue_setup()`
+points each QUEUE at the same entry. Four things follow from that split.
+
+- **THE VECTOR IS WRITTEN IN TWO PLACES, and the queue half has to be in
+  `virtqueue_setup()`** because a queue's vector is written while that
+  queue is SELECTED, and that function is the only thing that selects
+  one. So the enable call goes between `virtio_begin()` and the FIRST
+  `virtqueue_setup()`. Later and every queue notifies nothing -- which
+  is a device that enumerates perfectly and delivers nothing, not an
+  error anybody sees.
+- **THE DEVICE ANSWERS BY WRITING BACK.** `0xFFFF`
+  (`VIRTIO_MSI_NO_VECTOR`) in either register means it could not take
+  the entry, and re-reading is the only way to find out. A queue that
+  refuses fails the setup rather than being left silent.
+- **PLAIN MSI IS REFUSED, not used as a rung.** A virtqueue names its
+  message by MSI-X TABLE ENTRY, which MSI has not got, so a virtio
+  device on MSI could signal config changes and nothing else. That is
+  why this does not call `pci_msi_request()`. And a half-programmed
+  device is put back with `pci_msix_disable()` -- MSI-X outranks the pin
+  while it is enabled, so a caller falling back to its line would find
+  the line never asserts.
+- **THE ARMING WRITE IS `DRIVER_OK`, NOT THE INTx ENABLE.** The "publish
+  first, enable last" ordering the INTx path documents still holds, but
+  the point of no return MOVES: on a pin it is `virtio_intx_enable()` at
+  the very end, on a vector it is `virtio_driver_ok()`. A driver that
+  sets its own `present` flag after `virtio_driver_ok()` drops whatever
+  arrives in between -- `virtio_net.c` sets it before, for that reason.
+
+**Ask `virtio_irq_is_ours()`, not `virtio_isr_read()`.** The ISR byte
+answers "was it me?" for a shared line, and a vector is never shared.
+See the LAPIC entry above for what a control measured about the ISR
+under MSI-X, which is not what the spec would lead you to expect.
 
 ## A USB ETHERNET ADAPTER IS A `net_device`, AND ITS CONFIGURATION IS A CHOICE
 

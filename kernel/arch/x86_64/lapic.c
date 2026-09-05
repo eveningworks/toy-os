@@ -144,6 +144,12 @@ uint8_t lapic_alloc_vector(void (*handler)(uint64_t *regs)) {
     return 0;
 }
 
+void lapic_free_vector(uint8_t vector) {
+    int i = vector - LAPIC_VECTOR_BASE;
+    if (i < 0 || i >= LAPIC_VECTOR_COUNT) return;
+    g_vector_handlers[i] = 0;
+}
+
 void lapic_dispatch_vector(uint8_t vector, uint64_t *regs) {
     int i = vector - LAPIC_VECTOR_BASE;
     if (i < 0 || i >= LAPIC_VECTOR_COUNT) return;

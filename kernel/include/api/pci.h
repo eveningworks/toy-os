@@ -43,6 +43,20 @@ struct pci_device {
     // this, so the probe has ONE owner and no driver ever toggles a
     // device's decode.
     uint64_t bar_size[6];
+    // Config offset of the MSI / MSI-X capability, 0 when the device
+    // has none, and MSI-X's table size in entries. Recorded at
+    // enumeration so a reporting tool need not walk config space --
+    // which ring 3 has no mechanism for (see pci_internal.h).
+    uint8_t  msi_cap, msix_cap;
+    uint16_t msix_entries;
+    // The LAPIC vector this device was programmed with, or 0 for a
+    // device still on its INTx pin, and which of the two capabilities
+    // carries it. Written by pci_msi.c when a driver takes one; 0 is
+    // safe as "none" because vector 0 is a CPU exception and is never
+    // allocatable. `irq_msix` is not derivable from `msix_cap`: a
+    // device can advertise MSI-X, fail to have its table programmed,
+    // and end up on MSI.
+    uint8_t  irq_vector, irq_msix;
 };
 
 #define PCI_MAX_DEVICES 32

@@ -74,6 +74,12 @@ uint8_t lapic_id(void);
 // EOI is sent for you, exactly as irq.c does for a line.
 uint8_t lapic_alloc_vector(void (*handler)(uint64_t *regs));
 
+// Hands a vector back. Only for a caller that claimed one and then
+// found the device had no MSI capability to program it into -- the
+// vector space is small (LAPIC_VECTOR_COUNT), and a driver that fell
+// back to its pin must not keep a slot it will never be delivered on.
+void lapic_free_vector(uint8_t vector);
+
 // Dispatches a delivered MSI vector. Called from isr_dispatch() and
 // from nowhere else.
 void lapic_dispatch_vector(uint8_t vector, uint64_t *regs);

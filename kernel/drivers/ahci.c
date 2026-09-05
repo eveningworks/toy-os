@@ -153,7 +153,8 @@ static uint32_t g_sectors;
 static int g_lba48;
 static int g_trim;                    // IDENTIFY word 169 bit 0
 static char g_model[41];
-static uint8_t g_irq;
+static uint8_t g_irq;          // INTx line, 0 when not on one
+static uint8_t g_msi_vector;   // LAPIC vector, 0 when not on one
 static volatile int g_irq_fired;
 static volatile uint32_t g_irq_status;   // PxIS as the handler saw it
 
@@ -572,8 +573,15 @@ static void ahci_probe(const struct pci_device *dev) {
 
     // THE COMMIT POINT. Everything the handler reads exists now; before
     // this the device is free to assert nothing.
+    // A vector if the controller offers one, else the pin. QEMU's
+    // ich9-ahci advertises neither capability, so this takes the pin
+    // on every emulated boot; a real ICH9-and-later part has MSI.
     uint8_t line = g_pci->interrupt_line;
-    if (line != 0xFF && line != 0 && line < 16) {
+    g_msi_vector = pci_msi_request(g_pci, irq_handler);
+    if (g_msi_vector) {
+        px_w(g_preg, PX_IE, PXIE_MASK);
+        hba_w(HBA_GHC, hba_r(HBA_GHC) | GHC_IE);
+    } else if (line != 0xFF && line != 0 && line < 16) {
         g_irq = line;
         irq_register_handler(g_irq, irq_handler);
         px_w(g_preg, PX_IE, PXIE_MASK);
@@ -585,8 +593,11 @@ static void ahci_probe(const struct pci_device *dev) {
     klog_printf("ahci: port %u: \"%s\", %u sectors, LBA%s, %d sectors/transfer, %s\n",
                 g_ports[g_active].port, g_model, g_sectors, g_lba48 ? "48" : "28",
                 ahci_max_sectors_per_xfer(),
-                g_irq ? "IRQ-driven" : "polled (no interrupt line)");
-    if (g_irq) klog_printf("ahci: on IRQ %u\n", g_irq);
+                (g_irq || g_msi_vector) ? "IRQ-driven" : "polled (no interrupt line)");
+    if (g_msi_vector)
+        klog_printf("ahci: on %s vector %u\n",
+                    g_pci->irq_msix ? "MSI-X" : "MSI", g_msi_vector);
+    else if (g_irq) klog_printf("ahci: on IRQ %u\n", g_irq);
 }
 
 // ---- transfers -------------------------------------------------------
@@ -671,7 +682,10 @@ uint32_t ahci_capabilities(void) { return g_cap; }
 int ahci_command_slots(void) { return g_abar ? (int)(((g_cap >> CAP_NCS_SHIFT) & CAP_NCS) + 1) : 0; }
 int ahci_active_port(void) { return g_active >= 0 ? g_ports[g_active].port : -1; }
 uint8_t ahci_irq_line(void) { return g_irq; }
-int ahci_irq_driven(void) { return g_irq != 0; }
+// EITHER kind of interrupt. Asking `g_irq != 0` alone reported a
+// controller on a vector as POLLED -- the same shape as the
+// input_source.irq/msi_vector conflation in docs/conventions/kernel.md.
+int ahci_irq_driven(void) { return g_irq != 0 || g_msi_vector != 0; }
 int ahci_lba48(void) { return g_lba48; }
 const char *ahci_model(void) { return g_model; }
 int ahci_port_count(void) { return g_port_count; }
