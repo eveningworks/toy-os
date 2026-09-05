@@ -640,6 +640,8 @@ run on, not by order.
 - [x] ~~`virtio-input`: keyboard/mouse/tablet that isn't PS/2, on an input core with a source registry~~
 - [x] ~~A Local APIC, and MSI-X interrupts on top of it~~ DONE 2026-08-30 -- the xHCI is on a vector; `nomsi` falls back to the PIC
 - [ ] An I/O APIC, so the legacy lines stop going through the 8259 as well
+- [ ] An ACPI PM-timer clocksource, so a machine without an invariant TSC still has a clock that advances with interrupts off
+- [ ] A clocksource watchdog, cross-checking the TSC against a second source the way Linux does
 - [ ] MSI-X vectors per QUEUE rather than one per device -- wanted by multi-queue virtio and NVMe, worth it once a second CPU is online
 - [ ] Re-key `/etc/kbs` layouts to evdev keycodes, removing the input core's translation table
 - [ ] The on-screen keyboard should draw the CONFIGURED layout, not its own copy of US QWERTY

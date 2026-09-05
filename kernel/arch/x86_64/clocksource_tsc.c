@@ -47,6 +47,7 @@ static struct clocksource g_tsc_cs = {
     .name   = "tsc",
     .read   = tsc_cs_read,
     .mask   = CLOCKSOURCE_MASK(64),
+    .irq_independent = 1,   // a free-running CPU counter; see clocksource.h
     .rating = CLOCKSOURCE_RATING_TSC,
 };
 

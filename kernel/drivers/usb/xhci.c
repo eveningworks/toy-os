@@ -27,6 +27,7 @@
 #include "irq.h"
 #include "pic.h"
 #include "input.h"
+#include "clocksource.h"
 #include "klog.h"
 #include "kfmt.h"
 #include "string.h"
@@ -366,6 +367,47 @@ static void walk_xecp(uint32_t hcc1) {
 // a BIOS that will not answer has usually stopped caring rather than
 // stayed active, and the SMI disable below is what actually protects
 // us either way.
+// --- bounded waits ----------------------------------------------------
+//
+// A POLL COUNT IS NOT A TIMEOUT, and on real hardware that is the
+// difference between a device that enumerates and one that does not.
+// 2,000,000 spins is however long 2,000,000 spins take on THIS CPU --
+// on a 2.2 GHz Broadwell laptop that expired before a camera and a USB
+// hub had answered, and the same devices enumerated fine on a slower
+// boot. Every failure reported exactly "2000001 polls", which is the
+// ceiling rather than a device saying no.
+//
+// So: a real deadline WHERE ONE CAN BE TRUSTED, and the poll count
+// where it cannot. `clocksource_deadline_capable()` is the test, and it
+// is a property of the source rather than its name -- the TSC advances
+// with interrupts off, the PIT source (a count the timer INTERRUPT
+// increments) does not, and a deadline off a stopped clock never
+// expires. That was the original objection to deadlines here and it was
+// right; what it did not have was a way to ask.
+//
+// The poll count stays as the backstop on the deadline path too, at a
+// much higher ceiling: a clocksource that lies still has to terminate
+// the loop somehow.
+#define XHCI_WAIT_SPIN_CEILING (XHCI_POLL_BACKSTOP * 64u)
+
+struct xhci_wait { uint32_t spins; uint64_t deadline; };
+
+static void xhci_wait_start(struct xhci_wait *w, uint32_t ms) {
+    w->spins = 0;
+    w->deadline = clocksource_deadline_capable()
+                ? clocksource_now_ns() + (uint64_t)ms * 1000000ull
+                : 0;
+}
+
+// 1 when the caller should give up.
+static int xhci_wait_over(struct xhci_wait *w) {
+    w->spins++;
+    if (w->deadline)
+        return clocksource_now_ns() >= w->deadline ||
+               w->spins > XHCI_WAIT_SPIN_CEILING;
+    return w->spins > XHCI_POLL_BACKSTOP;
+}
+
 // --- the Intel port mux -----------------------------------------------
 //
 // ON AN INTEL PCH THE USB2 PORTS ARE SHARED WITH AN EHCI COMPANION, AND
@@ -432,9 +474,10 @@ static int legacy_handoff(void) {
         klog_printf("usb: BIOS owns the controller -- requesting handoff\n");
         mw32(g_hc.cap, g_hc.legsup_off, legsup | XHCI_LEGSUP_OS_OWNED);
 
-        uint32_t spins = 0;
+        // The spec allows a BIOS a full second to let go.
+        struct xhci_wait w; xhci_wait_start(&w, 1000);
         while (mr32(g_hc.cap, g_hc.legsup_off) & XHCI_LEGSUP_BIOS_OWNED) {
-            if (++spins > XHCI_POLL_BACKSTOP) {
+            if (xhci_wait_over(&w)) {
                 klog_printf("usb: BIOS did not release the controller -- "
                             "taking it anyway\n");
                 // Force both bits: claim ownership and drop the BIOS's
@@ -490,9 +533,10 @@ static int reset_controller(void) {
     uint32_t cmd = mr32(g_hc.op, XHCI_USBCMD);
     if (cmd & XHCI_CMD_RS) {
         mw32(g_hc.op, XHCI_USBCMD, cmd & ~(uint32_t)XHCI_CMD_RS);
-        uint32_t spins = 0;
+        // The spec gives the controller 16 ms to halt.
+        struct xhci_wait w; xhci_wait_start(&w, 100);
         while (!(mr32(g_hc.op, XHCI_USBSTS) & XHCI_STS_HCH)) {
-            if (++spins > XHCI_POLL_BACKSTOP) {
+            if (xhci_wait_over(&w)) {
                 klog_printf("usb: controller will not halt (usbsts 0x%x)\n",
                             mr32(g_hc.op, XHCI_USBSTS));
                 return 0;
@@ -506,12 +550,12 @@ static int reset_controller(void) {
     // only the first is a real bug: the controller can drop HCRST while
     // still refusing register writes, and everything programmed in that
     // window is silently discarded.
-    uint32_t spins = 0;
+    struct xhci_wait w; xhci_wait_start(&w, 1000);
     for (;;) {
         uint32_t c = mr32(g_hc.op, XHCI_USBCMD);
         uint32_t s = mr32(g_hc.op, XHCI_USBSTS);
         if (!(c & XHCI_CMD_HCRST) && !(s & XHCI_STS_CNR)) break;
-        if (++spins > XHCI_POLL_BACKSTOP) {
+        if (xhci_wait_over(&w)) {
             klog_printf("usb: reset did not complete (usbcmd 0x%x usbsts 0x%x)\n", c, s);
             return 0;
         }
@@ -650,11 +694,15 @@ static uint16_t default_mps(uint8_t speed) {
 // what lets the polled fallback path be the same code. xhci_service()'s
 // re-entrancy guard is what makes the two safe together.
 static int wait_completion(volatile struct xhci_completion *c, const char *what) {
-    uint32_t spins = 0;
+    // A SECOND, which is a thousandfold what a healthy control transfer
+    // takes and the ceiling this driver used to hit on real hardware.
+    // Linux gives its command ring five.
+    struct xhci_wait w; xhci_wait_start(&w, 1000);
     while (!c->done) {
         xhci_service();
-        if (++spins > XHCI_POLL_BACKSTOP) {
-            klog_printf("usb: %s timed out after %u polls\n", what, spins);
+        if (xhci_wait_over(&w)) {
+            klog_printf("usb: %s timed out after %u polls (%s)\n", what, w.spins,
+                        w.deadline ? "1000 ms" : "poll ceiling, no usable clock");
             return -1;
         }
     }
@@ -1447,12 +1495,13 @@ static void reset_port(uint32_t p) {
     //
     // PED is what the reset was FOR, so waiting on it is both correct
     // and portable; PRC is acknowledged below if it did appear.
-    uint32_t spins = 0;
+    // 50 ms of reset plus recovery, with room for a slow hub.
+    struct xhci_wait w; xhci_wait_start(&w, 500);
     for (;;) {
         uint32_t v = mr32(g_hc.op, XHCI_PORTSC(p));
         if (v & XHCI_PORTSC_PED) break;         // reset succeeded
         if (!(v & XHCI_PORTSC_CCS)) return;     // device left mid-reset
-        if (++spins > XHCI_POLL_BACKSTOP) {
+        if (xhci_wait_over(&w)) {
             klog_printf("usb: port %u reset did not complete, portsc 0x%x\n",
                         p + 1, v);
             return;
@@ -1739,9 +1788,9 @@ static void usb_probe(const struct pci_device *d) {
     // Run before arming, so a device already attached raises its port
     // change against a controller that is actually running.
     mw32(g_hc.op, XHCI_USBCMD, mr32(g_hc.op, XHCI_USBCMD) | XHCI_CMD_RS);
-    uint32_t spins = 0;
+    struct xhci_wait w; xhci_wait_start(&w, 100);
     while (mr32(g_hc.op, XHCI_USBSTS) & XHCI_STS_HCH) {
-        if (++spins > XHCI_POLL_BACKSTOP) {
+        if (xhci_wait_over(&w)) {
             klog_printf("usb: controller will not start (usbsts 0x%x)\n",
                         mr32(g_hc.op, XHCI_USBSTS));
             return;

@@ -50,6 +50,16 @@ struct clocksource {
     uint32_t mult;   // ns = (delta * mult) >> shift -- see calc below
     uint32_t shift;
     int rating;      // higher wins; ties keep the incumbent
+
+    // DOES read() ADVANCE WITH INTERRUPTS OFF? The TSC does -- it is a
+    // free-running CPU counter. The PIT source does NOT: its read() is
+    // pit_ticks(), a count the timer INTERRUPT increments, so with IF
+    // clear it stands still however long the caller waits.
+    //
+    // The distinction matters to any bounded WAIT: a deadline computed
+    // from a source that stops never expires, which is why the xHCI
+    // driver bounds its waits by a poll count wherever this is 0.
+    uint8_t irq_independent;
 };
 
 // Registers a source. The highest-rated one becomes current; a lower
@@ -82,6 +92,12 @@ uint64_t clocksource_now_ns(void);
 // are actually measuring -- a test that cannot say whether it ran
 // against the PIT or the TSC is measuring something it cannot name.
 const struct clocksource *clocksource_current(void);
+
+// Can a WAIT be bounded by a deadline right now? True only when the
+// current source advances with interrupts off -- see irq_independent.
+// A caller that gets 0 must bound itself some other way; it must not
+// fall back to spinning on clocksource_now_ns() forever.
+int clocksource_deadline_capable(void);
 
 // Works out a mult/shift pair for a counter running at `freq` Hz, such
 // that ns = (delta * mult) >> shift holds to within rounding for any

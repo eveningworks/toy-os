@@ -23,6 +23,11 @@ static uint64_t g_last_raw;   // last raw value read from g_cs
 static uint64_t g_acc_ns;     // nanoseconds accumulated before that point
 static uint64_t g_max_delta;  // largest delta g_cs->mult can convert safely
 
+int clocksource_deadline_capable(void) {
+    const struct clocksource *cs = clocksource_current();
+    return cs && cs->irq_independent;
+}
+
 const struct clocksource *clocksource_current(void) { return g_cs; }
 
 void clocksource_calc_mult_shift(uint32_t *mult, uint32_t *shift,

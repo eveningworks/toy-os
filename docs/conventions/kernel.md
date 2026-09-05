@@ -1023,6 +1023,37 @@ from PS/2** because QEMU routes keystrokes to it -- which is why the
 axis is off by default, and what makes `tools/usb_test.py`
 self-controlling.
 
+## A BOUNDED WAIT USES A DEADLINE WHERE THE CLOCK ADVANCES WITH INTERRUPTS OFF, AND A POLL COUNT WHERE IT DOES NOT
+
+**A POLL COUNT IS NOT A TIMEOUT.** `XHCI_POLL_BACKSTOP` spins take
+however long they take on the CPU running them, and on a 2.2 GHz
+Broadwell laptop that expired before a webcam and a USB hub had
+answered -- every failure reporting exactly `2000001 polls`, which is
+the ceiling rather than a device saying no. The same devices enumerated
+on a slower boot, which is what an intermittent enumeration failure
+looks like from outside.
+
+`clocksource_deadline_capable()` is the question to ask, and it is a
+property of the source rather than its name: `struct clocksource` now
+carries `irq_independent`. The TSC sets it -- a free-running CPU
+counter, and `clocksource_tsc.c` already refuses to register a
+non-invariant one. The PIT source does NOT: its `read()` is
+`pit_ticks()`, a count the timer INTERRUPT increments, so with IF clear
+it stands still however long the caller waits and a deadline off it
+never expires. That was the original objection to deadlines in the xHCI
+driver and it was correct; what it lacked was a way to ask.
+
+So `xhci_wait_start()`/`xhci_wait_over()` take a deadline when one can
+be trusted and the poll count when it cannot, and the poll count stays
+as a much higher ceiling on the deadline path -- a clocksource that lies
+still has to terminate the loop somehow.
+
+**THE GAP THIS EXPOSES: there is no free-running FALLBACK.** A machine
+without an invariant TSC has only the tick counter, so nothing there can
+bound a wait by time. Linux has HPET and the ACPI PM timer between its
+TSC and `jiffies`; `docs/roadmap.md` carries the PM timer, which is the
+cheap one because the FADT already gives the address.
+
 ## THERE IS A LOCAL APIC NOW, AND A DEVICE MAY BE ON A VECTOR INSTEAD OF A LINE
 
 `kernel/arch/x86_64/lapic.c` enables the Local APIC; `pci_msi.c`
