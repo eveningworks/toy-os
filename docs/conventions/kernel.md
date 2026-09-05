@@ -3092,3 +3092,52 @@ Five things to know.
   survives unchanged)**, link training, the transcoder timings and M/N
   computed from the EDID (they reproduce the firmware's exactly), pipe
   on, T8, backlight on. About a second dark, and the desktop back.
+
+## A CONNECTION IS LOGGED WHERE IT IS OPENED, AND THE NAME COMES FROM THE RESOLVER
+
+`kernel/net/conn_log.c`, read through `QUERY_CONNLOG` by `/bin/netlog`.
+128 records in a ring, each carrying the time (UTC and monotonic), the
+direction, the protocol, the remote address and port, the local port,
+and the pid and name of the process that asked.
+
+**A CONNECTION, NOT A PACKET.** Every real system that logs this makes
+the same choice, because a packet log fills faster than anybody reads
+it: netfilter's `-m conntrack --ctstate NEW -j LOG`, bcc's `tcpconnect`
+hooking `tcp_v4_connect`, and Windows' WFP audit 5156 / Sysmon Event 3
+all record the START of a flow. So a TCP open is one record however
+many segments follow it, and a UDP or ICMP socket makes one the first
+time it sends to a given destination — conntrack's flow.
+
+**THE HOOKS ARE AT THE SOCKET LAYER, NOT AT `ipv4_output()`,** and both
+halves of that matter. A retransmit, an ARP retry and datagram number
+two are the same connection, and only the socket layer sees them as
+one. And `ipv4_output()` is also reached from `net_poll()` on behalf of
+whichever process happened to be in a syscall, so a record made there
+would name the wrong program — which is why an INBOUND connection is
+recorded at `accept()` and not when its SYN arrives.
+
+The per-socket memo that turns a datagram stream into one record is ONE
+SLOT (`logged_ip`/`logged_port`), so a socket alternating between two
+servers logs each switch. That is the cost of not carrying a table, and
+it is stated rather than hidden.
+
+**A GAP IN `seq` IS THE ONLY THING THAT CAN SAY RECORDS WERE LOST.**
+The ring overwrites; a reader that only counted would see a full ring
+and a quiet network as the same picture.
+
+**AND THE KERNEL NEVER PARSES DNS.** `SYS_NET_RESOLVED` is a resolver
+REPORTING what it looked up — `uresolv_lookup()` calls it, so every
+name-using program here feeds it — and the kernel keeps a 16-entry
+`address → name` cache that a record consults. That is Sysmon's
+correlation (its Event 22 gives Event 3 its name) rather than Zeek's
+wire snooping, and the reason to prefer it is `ttf.c`'s: a DNS reply is
+attacker-shaped data, and there is a parser for it in ring 3 already.
+The honest cost is that any process may claim any name for any address,
+which there is no privilege model here to gate; the ADDRESS in a record
+is unaffected, which is why `netlog` prints the name in brackets after
+it and never instead of it.
+
+**What is recorded is `system.conn_log`** — `all` (the default), `tcp`,
+or `off` — held as live state and read from `/etc` once at boot, because
+it is consulted on every connection and `etc_config_get()` re-reads a
+whole file per key.

@@ -743,6 +743,8 @@ run on, not by order.
 - [x] ~~Renew the lease before it expires~~ DONE 2026-09-01 -- resident, re-requests at T1; `dhcp -1` is the old one-shot
 - [x] ~~Wait for carrier before the boot-time DISCOVER~~ DONE 2026-09-01 -- the boot attempt used to race a USB PHY's 4-6s link
 - [ ] An ICMP error reaching the socket that caused it -- reports are sent, and an arriving one is dropped for want of an error queue
+- [x] ~~A log of what this machine connects to~~ DONE 2026-09-05 -- a kernel ring, `QUERY_CONNLOG`, `/bin/netlog`
+- [ ] Draining the connection log to a file, so it survives a reboot -- the ring is memory today
 - [ ] An `arp` command -- the cache is diagnosable only from inside the kernel today
 - [ ] A routing table -- routing is "my subnet, or the gateway", per device
 - [ ] `/etc/hosts`, and a resolver cache -- every lookup goes to the wire

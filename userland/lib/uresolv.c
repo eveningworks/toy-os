@@ -181,6 +181,12 @@ int uresolv_lookup(const char *name, uint32_t server, uint32_t *out_ip) {
         if (type == DNS_TYPE_A && cls == DNS_CLASS_IN && rdlen == 4) {
             *out_ip = ((uint32_t)reply[off] << 24) | ((uint32_t)reply[off + 1] << 16) |
                       ((uint32_t)reply[off + 2] << 8) | (uint32_t)reply[off + 3];
+            // Told to the kernel HERE rather than by each caller: this
+            // is the one place a name and an address are both in hand,
+            // and a caller that forgot would leave a nameless record in
+            // somebody else's log. Its failure is ignored -- a lookup
+            // that worked has not failed because a log did not want it.
+            sys_net_resolved(name, *out_ip);
             return 0;
         }
         off += rdlen;

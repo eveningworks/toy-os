@@ -364,6 +364,13 @@ int sys_net_config(const char *dev, uint32_t ip, uint32_t netmask, uint32_t gate
 // on one that has an address it is an ARP Announcement.
 int sys_net_arp_probe(const char *dev, uint32_t ip);
 
+// Tell the kernel that `name` resolved to `ip`, so the connection log
+// (QUERY_CONNLOG, `/bin/netlog`) can print a name beside the address.
+// A REPORT with no answer to read: a program that skips it loses
+// nothing but the name in somebody else's log. uresolv_lookup() calls
+// it for every caller, so nothing else normally needs to.
+int sys_net_resolved(const char *name, uint32_t ip);
+
 // --- machine info ----------------------------------------------------
 
 int sys_pci_count(void);

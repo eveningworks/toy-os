@@ -20,6 +20,7 @@
 // reason pipe and pty fds store one.
 #include "net.h"
 #include "netdev.h"
+#include "conn_log.h"
 #include "string.h"
 #include "errno.h"
 
@@ -47,6 +48,13 @@ struct socket {
     uint64_t deadline_ns;   // a blocked receive's ceiling; 0 = none
     uint32_t local_addr;    // UDP: 0 means any
     uint16_t local_port;    // UDP: 0 means unbound
+    // The destination this socket last made a connection-log record
+    // for. ONE SLOT, not a set: it turns a datagram stream into one
+    // record per destination, which is what makes a UDP flow look like
+    // a connection. A socket alternating between two servers logs each
+    // switch, and that is the honest cost of not carrying a table.
+    uint32_t logged_ip;
+    uint16_t logged_port;
     char dev[NET_NAME_MAX]; // bound device, empty for any
     struct sock_msg q[SOCK_QUEUE];
     int head, tail;   // tail == head means empty; one slot is left unused
@@ -165,6 +173,10 @@ int net_sock_connect(int sock, uint32_t ip, uint16_t port) {
     int rc = tcp_connect(idx, ip, port);
     if (rc < 0) { tcp_release(idx); return rc; }
     s->tcp = idx;
+    // LOGGED AT THE OPEN, not when the handshake finishes: a SYN that
+    // nothing answers is exactly the connection somebody reading this
+    // log is looking for.
+    conn_log_record(QUERY_CONNLOG_OUT, IP_PROTO_TCP, ip, port, s->local_port);
     return 0;
 }
 
@@ -215,6 +227,12 @@ int net_sock_accept(int sock) {
         g_socks[i].id = (uint16_t)(SOCK_ID_BASE + i);
         g_socks[i].local_port = s->local_port;
         g_socks[i].tcp = conn;
+
+        uint32_t peer_ip = 0;
+        uint16_t peer_port = 0;
+        tcp_peer(conn, &peer_ip, &peer_port);
+        conn_log_record(QUERY_CONNLOG_IN, IP_PROTO_TCP, peer_ip, peer_port,
+                        s->local_port);
         return i;
     }
     // No socket to put it in. The connection is handshaken and the peer
@@ -271,6 +289,17 @@ int net_sock_bind(int sock, uint32_t addr, uint16_t port, const char *dev) {
     return port;
 }
 
+// A DATAGRAM SOCKET'S FIRST SEND TO A DESTINATION IS A CONNECTION.
+// Only ever called after a send actually left: an -EAGAIN is an ARP
+// resolution in progress and the caller retries the same request, so
+// logging the attempt would record one "connection" per retry.
+static void log_flow(struct socket *s, uint8_t proto, uint32_t ip, uint16_t port) {
+    if (s->logged_ip == ip && s->logged_port == port) return;
+    s->logged_ip = ip;
+    s->logged_port = port;
+    conn_log_record(QUERY_CONNLOG_OUT, proto, ip, port, s->local_port);
+}
+
 static int send_icmp(struct socket *s, uint32_t dst_ip, const void *buf, uint32_t len) {
     // THE SEQUENCE ADVANCES ONLY WHEN A PACKET REALLY LEAVES. A send
     // that comes back -EAGAIN is an ARP resolution in progress, and the
@@ -293,6 +322,7 @@ static int send_icmp(struct socket *s, uint32_t dst_ip, const void *buf, uint32_
     int rc = ipv4_output(0, dst_ip, IP_PROTO_ICMP, g_out, total);
     if (rc < 0) return rc;
     s->seq = seq;
+    log_flow(s, IP_PROTO_ICMP, dst_ip, 0);
     return (int)len;
 }
 
@@ -317,7 +347,9 @@ int net_sock_sendto(int sock, uint32_t dst_ip, uint16_t dst_port,
 
     struct net_device *dev = s->dev[0] ? net_device_by_name(s->dev) : 0;
     int rc = udp_output(dev, dst_ip, dst_port, s->local_port, buf, len);
-    return rc < 0 ? rc : (int)len;
+    if (rc < 0) return rc;
+    log_flow(s, IP_PROTO_UDP, dst_ip, dst_port);
+    return (int)len;
 }
 
 int net_sock_recvfrom(int sock, void *buf, uint32_t cap,

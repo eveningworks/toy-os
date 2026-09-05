@@ -6048,3 +6048,57 @@ retyping whole pages, which was the bug.
 What the measurement then said about the blitter that prompted it is
 under "Intel blitter acceleration" in `docs/roadmap-details.md`.
 
+
+## The connection log records flows, and hostnames come from the resolver rather than from DNS in ring 0
+
+Asked for on 2026-09-05 as "log all the outgoing connections -- IP /
+hostname and port and time". Three forks, each with an obvious wrong
+answer.
+
+**What to log.** The obvious reading is "every outgoing packet", which
+is a packet log: on a stack whose ring holds 128 records, one `wget`
+buries the DHCP and DNS that preceded it, and CLAUDE.md's rule about a
+probe outrunning its log applies to the log itself. Every system that
+does this in production records the START of a flow instead --
+netfilter's `--ctstate NEW`, bcc's `tcpconnect`, Sysmon's Event 3 -- so
+a TCP open is one record and a datagram socket makes one per
+destination. The narrowing is a setting (`system.conn_log`: `all`,
+`tcp`, `off`) rather than a compile-time choice, because the
+interesting cases differ: a person debugging DNS wants the UDP flows
+and a person watching a server wants only the TCP opens.
+
+**Where to hook.** `ipv4_output()` is the one place every outbound
+datagram passes, and it is the wrong place twice over. It cannot tell a
+retransmit from a new connection, so the dedupe would have to be
+rebuilt above it; and it is reached from `net_poll()` on behalf of
+whichever process is in a syscall, so it would attribute connections to
+the wrong program -- which is exactly why an inbound connection is
+recorded at `accept()` rather than when its SYN arrives. The socket
+layer sees a connection as one object and runs in the caller's context,
+so both problems disappear.
+
+**Where hostnames come from.** The kernel has no resolver and never
+sees a name. Two shapes exist in the wild: snoop DNS on the wire (Zeek,
+dnstap) or have the resolver report what it looked up (Sysmon's Event
+22 feeding its Event 3). Snooping needs a DNS parser in ring 0 over
+attacker-shaped data, which is the surface `ttf.c` is bounds-checked
+for and the one Windows moved out of the kernel entirely -- and it would
+be a SECOND parser, since `uresolv.c` already has one. So
+`SYS_NET_RESOLVED` is a report: `uresolv_lookup()` calls it, the kernel
+keeps a 16-entry address-to-name cache, and a record picks up whatever
+name is there.
+
+The cost is stated rather than hidden: any process can claim any name
+for any address, and there is no privilege model here to gate that with.
+It is acceptable because the address in a record is never affected --
+`netlog` prints a name in brackets after the address, never instead of
+it -- so the worst a lie achieves is a wrong label beside a correct
+fact. The alternative that would fix it (a resolver daemon owning the
+cache, D-Bus-style) is a bigger structure than the log it would serve.
+
+**Not persisted, deliberately.** The ring is memory, so the log dies
+with the machine. Writing it to `/var/log` from the socket layer would
+mean a filesystem write inside a preemption-guarded `FS_OP` on the
+connect path; the shape that works is a ring-3 drainer reading the ring
+and appending, which is `journald` reading `/dev/kmsg`, and it is a
+roadmap item rather than something smuggled in here.

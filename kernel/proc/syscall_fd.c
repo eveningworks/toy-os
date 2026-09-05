@@ -26,6 +26,7 @@
 #include "fs.h"
 #include "net.h"     // the socket layer behind SYS_SOCKET and friends
 #include "netdev.h"  // net_poll(), and the device SYS_NET_CONFIG names
+#include "conn_log.h" // SYS_NET_RESOLVED feeds the connection log
 #include "net_abi.h" // struct net_msg / struct net_ifconfig
 #include "clocksource.h" // a receive deadline is real time
 #include "string.h"
@@ -1457,6 +1458,23 @@ int sys_net_config(struct syscall_ctx *c) {
     // was learned under the OLD address; keeping them would answer for
     // a subnet this card has just left.
     arp_cache_flush();
+    c->regs[14] = 0;
+    return 0;
+}
+
+// A resolver reporting what it just looked up, so the connection log
+// can print a name beside an address. See abi/syscall_abi.h for why
+// this is a report rather than a lookup, and what trusting it costs.
+int sys_net_resolved(struct syscall_ctx *c) {
+    struct net_resolved req;
+    if (!vmm_copy_from_user(c->pml4, &req, c->a0, sizeof req)) {
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+    req.name[sizeof req.name - 1] = 0;
+    if (!req.ip || !req.name[0]) { c->regs[14] = (uint64_t)(int64_t)-EINVAL; return 0; }
+
+    conn_log_name_hint(req.ip, req.name);
     c->regs[14] = 0;
     return 0;
 }

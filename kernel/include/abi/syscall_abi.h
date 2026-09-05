@@ -522,6 +522,17 @@ struct listdir_request {
                        // 0.0.0.0) and an Announcement from one that has
                        // it.
 
+#define SYS_NET_RESOLVED 97 // RDI = a `struct net_resolved *` (abi/
+                       // net_abi.h): the name a resolver just looked up
+                       // and the address it got. Returns 0, or -EFAULT
+                       // / -EINVAL for an empty name or a zero address.
+                       //
+                       // IT REPORTS, IT DOES NOT ASK. The kernel's only
+                       // use for it is naming an address in the
+                       // connection log (QUERY_CONNLOG); nothing here
+                       // resolves anything, and a program that never
+                       // calls it is not disadvantaged.
+
 #define SYS_SETTIME 95 // RDI = seconds since 1970-01-01 00:00:00 **UTC**,
                        // RSI = nanoseconds within that second (0 is
                        // fine). Steps the wall clock there and writes

@@ -144,6 +144,7 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_RECVFROM]      = { "recvfrom",      sys_recvfrom,      { A_FD, A_HEX } },
     [SYS_NET_CONFIG]    = { "net_config",    sys_net_config,    { A_HEX } },
     [SYS_NET_ARP_PROBE] = { "net_arp_probe", sys_net_arp_probe, { A_HEX } },
+    [SYS_NET_RESOLVED]  = { "net_resolved",  sys_net_resolved,  { A_HEX } },
     [SYS_BIND]          = { "bind",          sys_bind,          { A_FD, A_HEX } },
     [SYS_CONNECT]       = { "connect",       sys_connect,       { A_FD, A_HEX } },
     [SYS_LISTEN]        = { "listen",        sys_listen,        { A_FD } },

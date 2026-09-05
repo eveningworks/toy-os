@@ -26,6 +26,7 @@
 #include "window_drag_config.h"
 #include "target.h"
 #include "storage_config.h"
+#include "conn_log.h"
 #include "setting_abi.h"
 #include "config_file.h"
 #include "fs.h"
@@ -560,6 +561,7 @@ int setting_dispatch(struct setting_msg *msg) {
 void settings_init(void) {
     tz_setting_register();
     ntp_setting_register();
+    conn_log_setting_register();
     font_config_setting_register();
     cursor_config_setting_register();
     mouse_config_setting_register();

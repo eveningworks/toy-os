@@ -89,6 +89,12 @@ THE PHASES, and what a broken build would still pass
      a client that connects and SAYS NOTHING failing to block the next
      one. "Both were answered eventually" is what a one-at-a-time
      server passes, so the first connection is left hanging on purpose.
+ 14. THE CONNECTION LOG, through real connections. The KTESTs drive
+     conn_log_record() directly and so cannot tell whether anything
+     CALLS it -- every one of them passes with the hooks in socket.c
+     deleted. This checks that a wget, a ping and the boot-time DHCP
+     each land in `netlog` attributed to the right program, and turns
+     `system.conn_log` off to prove the records were not unconditional.
 
     python3 tools/net_test.py
     echo $?
@@ -1124,7 +1130,74 @@ def phase_dns(r, disk, tmp):
         out = sh.run("ping -c 2 example.com", timeout=60.0)
         r.check("[dns] ping resolves a name and reaches it",
                 "0% packet loss" in out, out.strip()[-400:])
+
+        # THE NAME REACHED THE KERNEL. uresolv_lookup() reports every
+        # answer through SYS_NET_RESOLVED, so the connection made right
+        # after one must carry the name -- which is the only end-to-end
+        # check of that path, since the kernel parses no DNS itself.
+        out = sh.run("netlog -o", timeout=30.0)
+        r.check("[dns] a resolved name reaches the connection log",
+                "(example.com)" in out, out.strip()[-400:])
     finally:
+        kill(pidfile)
+        sh.close()
+
+
+def phase_connlog(r, disk, tmp):
+    """The connection log: does a real connection produce a real record.
+
+    THE KTESTS COVER THE RING; THIS COVERS THE HOOKS. kernel/net/
+    conn_log_test.c drives conn_log_record() directly, so it cannot tell
+    whether anything CALLS it -- every assertion there would pass with
+    every hook in socket.c deleted. What only a live guest can say is
+    that a wget, a ping and an inbound connection each land in the log,
+    attributed to the right program.
+    """
+    srv, state = http_server(HTTP_PORT)
+    sh, pidfile = launch(disk, tmp, "connlog", "e1000")
+    try:
+        wait_configured(sh)
+
+        # The boot-time DHCP client is the first thing that ever sends,
+        # so its flow is in the log before anything here runs.
+        out = sh.run("netlog", timeout=30.0)
+        r.check("[connlog] the boot DHCP exchange is recorded",
+                "dhcp" in out and ":67" in out, out.strip()[-400:])
+
+        sh.run(f"wget -O /tmp/c.txt http://{GATEWAY}:{HTTP_PORT}/x", timeout=60.0)
+        out = sh.run("netlog -o", timeout=30.0)
+        r.check("[connlog] an outgoing TCP open is recorded, with the program",
+                f"{GATEWAY}:{HTTP_PORT}" in out and "wget" in out,
+                out.strip()[-400:])
+        r.check("[connlog] and it is recorded as OUTGOING",
+                all(" in " not in ln for ln in out.splitlines() if GATEWAY in ln),
+                out.strip()[-400:])
+
+        sh.run(f"ping -c 1 {GATEWAY}", timeout=40.0)
+        out = sh.run("netlog -o", timeout=30.0)
+        r.check("[connlog] an ICMP flow is recorded and carries no port",
+                any("icmp" in ln and "ping" in ln and ln.rstrip().endswith(GATEWAY)
+                    for ln in out.splitlines()), out.strip()[-400:])
+
+        # THE PAIR. "records appear" is satisfied by a log that records
+        # everything unconditionally, so the setting is turned off and
+        # the SAME fetch must add nothing -- then turned back on and the
+        # next one must.
+        before = sh.run("netlog", timeout=30.0).count("\n")
+        sh.run("config set system.conn_log off", timeout=30.0)
+        sh.run(f"wget -O /tmp/d.txt http://{GATEWAY}:{HTTP_PORT}/y", timeout=60.0)
+        after = sh.run("netlog", timeout=30.0).count("\n")
+        r.check("[connlog] `off` records nothing", after == before,
+                f"{before} lines before, {after} after")
+
+        sh.run("config set system.conn_log all", timeout=30.0)
+        sh.run(f"wget -O /tmp/e.txt http://{GATEWAY}:{HTTP_PORT}/z", timeout=60.0)
+        again = sh.run("netlog", timeout=30.0).count("\n")
+        r.check("[connlog] and turning it back on resumes", again > after,
+                f"{after} lines off, {again} after re-enabling")
+    finally:
+        srv.shutdown()
+        srv.server_close()
         kill(pidfile)
         sh.close()
 
@@ -1558,6 +1631,8 @@ def main():
         phase_server(r, disk, tmp)
         print("Phase 13: inetd -- a connection per child process")
         phase_inetd(r, disk, tmp)
+        print("Phase 14: the connection log, through real connections")
+        phase_connlog(r, disk, tmp)
     finally:
         if not args.keep:
             shutil.rmtree(tmp, ignore_errors=True)

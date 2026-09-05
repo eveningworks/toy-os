@@ -22,6 +22,12 @@
 
 #define NET_ABI_NAME_MAX 8   // "net0" -- matches NET_NAME_MAX
 
+// The longest hostname SYS_NET_RESOLVED carries, NUL included.
+// Matches QUERY_CONNLOG_HOST_MAX, which is where such a name ends
+// up -- two different caps would truncate silently at whichever is
+// smaller.
+#define NET_ABI_HOST_MAX 64
+
 // The largest datagram either direction. One IPv4 datagram inside a
 // 1500-byte MTU, minus the IP and transport headers -- a bigger one
 // would need fragmentation, which kernel/net/ipv4.c does not do. Both
@@ -91,6 +97,25 @@ struct net_ifconfig {
 struct net_arp_probe {
     char name[NET_ABI_NAME_MAX];
     uint32_t ip;
+};
+
+
+// SYS_NET_RESOLVED's argument: a name a ring-3 resolver has just
+// looked up, and what it resolved to.
+//
+// THE KERNEL NEVER PARSES DNS. It keeps a small (address -> name) cache
+// purely so the connection log can print a name beside an address, and
+// the cache is fed by whoever did the resolving -- which is Sysmon's
+// shape (its Event 22 DNS records are what give its Event 3 connection
+// records a name) rather than Zeek's, which snoops the wire.
+//
+// WHAT THAT COSTS, stated plainly: any process may claim any name for
+// any address, so a name here is what a program SAID, not what the
+// network answered. There is no privilege model in this kernel to gate
+// it with, and the address in a log record is always the real one.
+struct net_resolved {
+    uint32_t ip;                        // host byte order
+    char name[NET_ABI_HOST_MAX];        // NUL-terminated; longer is refused
 };
 
 #endif

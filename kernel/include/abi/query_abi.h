@@ -431,6 +431,46 @@ struct query_fsstat {
     uint64_t lookup_ns;     // nanoseconds spent in them
 };
 
+// WHO THIS MACHINE HAS TALKED TO: one record per connection, newest
+// last. LIST, and a RING -- the oldest record is overwritten, which is
+// what `seq` exists to make visible.
+//
+// A CONNECTION, NOT A PACKET. A TCP open (either direction) is one
+// record; a UDP or ICMP socket makes one the first time it sends to a
+// given destination, which is conntrack's flow rather than tcpdump's
+// packet. What gets logged is `system.conn_log`'s business.
+#define QUERY_CONNLOG 35
+
+#define QUERY_CONNLOG_OUT 0 // this machine opened it
+#define QUERY_CONNLOG_IN  1 // something connected to this machine
+
+// The longest hostname carried with a record. Shorter than DNS's 253
+// because this is a display field beside an address, not a name being
+// resolved; a longer one is truncated and the address is still exact.
+#define QUERY_CONNLOG_HOST_MAX 64
+
+struct query_connlog {
+    // Records are numbered from the first one this boot, so a reader
+    // that saw `seq` last time knows both what is new and HOW MANY IT
+    // MISSED -- a gap is records the ring dropped. Without it a full
+    // ring and a quiet network look identical.
+    uint64_t seq;
+    uint64_t utc;           // seconds since 1970-01-01 UTC
+    uint64_t monotonic_ns;  // the same instant, since boot
+    uint64_t remote_ip;     // host byte order
+    uint64_t remote_port;   // 0 for ICMP, which has no ports
+    uint64_t local_port;
+    uint64_t proto;         // IP_PROTO_* -- 1 ICMP, 6 TCP, 17 UDP
+    uint64_t direction;     // QUERY_CONNLOG_*
+    uint64_t pid;           // who asked; 0 when the kernel did
+    char     comm[24];      // that process's name (PROC_NAME_MAX)
+    // The name `remote_ip` was resolved from, or empty. The kernel
+    // never parses DNS: a resolver REPORTS what it looked up
+    // (SYS_NET_RESOLVED), so a name is present only for an address
+    // something resolved through it on this boot.
+    char     host[QUERY_CONNLOG_HOST_MAX];
+};
+
 struct query_clock {
     uint64_t utc;         // seconds since 1970-01-01 00:00:00 UTC
     uint64_t utc_ns;      // the same instant, to the clocksource's resolution

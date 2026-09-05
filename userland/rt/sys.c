@@ -643,6 +643,15 @@ int sys_net_arp_probe(const char *dev, uint32_t ip) {
     return (int)err(syscall1(SYS_NET_ARP_PROBE, (uint64_t)(uintptr_t)&req));
 }
 
+int sys_net_resolved(const char *name, uint32_t ip) {
+    struct net_resolved req;
+    for (unsigned i = 0; i < sizeof req.name; i++) req.name[i] = 0;
+    for (unsigned i = 0; name && name[i] && i < sizeof req.name - 1; i++)
+        req.name[i] = name[i];
+    req.ip = ip;
+    return (int)err(syscall1(SYS_NET_RESOLVED, (uint64_t)(uintptr_t)&req));
+}
+
 int64_t sys_send(int fd, const void *buf, size_t len) {
     return err(syscall3(SYS_SEND, (uint64_t)fd, (uint64_t)(uintptr_t)buf, (uint64_t)len));
 }
