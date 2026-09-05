@@ -1568,6 +1568,10 @@ detail there, and keep the pointer here to a line. What each file is:
   (non-bevelled) rendering, the press-then-commit-on-release rule, the
   `on_hover` contract, text/layout budgeting, and how to verify a GUI
   change properly. **Read it before touching anything drawn.**
+- **`docs/devices.md`** -- every driver in the tree, by class registry,
+  and what each one claims. `tools/check_docs.py` fails the build when a
+  `DRIVER_DECLARE` has no row, so the list cannot silently fall behind;
+  `lsdrv` on a running machine is the live answer.
 - **`docs/filesystem-layout.md`** -- what lives where on the OS's own
   disk (`/bin` vs `/tests` vs `/usr/share` vs `/etc`), the deliberate
   divergences from the FHS, and the budgets that constrain it (64-byte

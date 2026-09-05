@@ -334,6 +334,31 @@ COMMAND_PAGE_EXEMPT = {
 }
 
 
+def check_every_driver_is_listed(problems):
+    """Every DRIVER_DECLARE has a row in docs/devices.md.
+
+    A hand-written inventory drifts -- LICENSE's did, twice, which is
+    why check_licenses.py exists. This is the same guard for the driver
+    list: it checks the NAME appears, not that what the page says about
+    the driver is true, because nothing static can read a match table
+    and know what hardware it means.
+    """
+    page = read("docs/devices.md")
+    if page is None:
+        problems.append("docs/devices.md is missing")
+        return
+    for rel in tracked_files():
+        if not rel.startswith("kernel/") or not rel.endswith(".c"):
+            continue
+        body = read(rel)
+        if body is None:
+            continue
+        for name in re.findall(r'DRIVER_DECLARE\(\s*"([^"]+)"', body):
+            if f"`{name}`" not in page:
+                problems.append(f"{rel}: driver `{name}` has no row in "
+                                f"docs/devices.md")
+
+
 def shell_commands():
     """Every command a person can type: /bin programs and shell builtins.
 
@@ -527,6 +552,7 @@ def main():
                   check_next_up_is_current,
                   check_internal_doc_links,
                   check_tools_are_documented,
+                  check_every_driver_is_listed,
                   check_every_command_has_a_page,
                   check_commands_index_is_current,
                   check_command_synopsis_matches):
@@ -538,7 +564,7 @@ def main():
               "per roadmap item, the decisions index and Next up are "
               "current, no broken "
               "doc links, every tool documented, every command has a page "
-              "and a link")
+              "and a link, every driver listed")
         return 0
 
     print(f"check_docs: {len(problems)} problem(s)\n")
