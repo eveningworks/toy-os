@@ -59,7 +59,7 @@
 //
 // fd 2 IS THE KERNEL LOG here (abi/syscall_abi.h), so a diagnostic
 // written there lands in `dmesg`. At a prompt that is the wrong place --
-// the person typing `dhcp net0` wants to see the answer -- so this
+// the person typing `dhcp net-718ebf` wants to see the answer -- so this
 // picks, and WHAT IT PICKS ON IS `-k`, not isatty().
 //
 // isatty(1) was the first version and does not work: init hands a
@@ -948,7 +948,7 @@ static void supervise(void) {
 
 int main(int argc, char **argv) {
     // ONE-SHOT BY DEFAULT, and staying resident is what has to be asked
-    // for. The other way round was tried and is wrong: `dhcp net0` typed
+    // for. The other way round was tried and is wrong: `dhcp net-718ebf` typed
     // at a prompt then never returned, because the supervisor below does
     // not exit. A command that hangs the terminal unless you know a flag
     // is a worse default than one that needs a flag to do the new thing.
@@ -1004,7 +1004,7 @@ int main(int argc, char **argv) {
     // --- SUPERVISING (RFC 2131's renewal, plus a retry) ---------------
     //
     // Only when asked to: `-1` is the one-shot the boot used to be, and
-    // is what a person typing `dhcp net0` at a prompt wants. As a
+    // is what a person typing `dhcp net-718ebf` at a prompt wants. As a
     // service this stays resident, because a lease that is never renewed
     // silently expires and the machine loses its address at an hour a
     // server chose.

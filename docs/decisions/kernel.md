@@ -6102,3 +6102,48 @@ mean a filesystem write inside a preemption-guarded `FS_OP` on the
 connect path; the shape that works is a ring-3 drainer reading the ring
 and appending, which is `journald` reading `/dev/kmsg`, and it is a
 roadmap item rather than something smuggled in here.
+
+## An interface name is the card's identity, not the socket it is in
+
+Interface names used to be `net` plus the table index, handed out in
+probe order. That broke twice in one afternoon on a two-card machine: a
+USB adapter unplugged and replugged registered a second time and was
+listed as both `net1` and `net2`, and adding a built-in NIC renamed the
+USB one from `net0` to `net1` -- which matters because sockets bind to a
+device by NAME (`socket.c` keeps a string, not a pointer), so a reused
+name silently moves a bound socket onto different hardware.
+
+**What everyone else does.** Linux's kernel names by probe order too
+(`eth0`) and then lets udev rename; systemd's predictable scheme derives
+the name from the bus path (`enp3s0`), with `enx<mac>` available as an
+alternative. Windows keeps a per-adapter GUID with a friendly name in
+the registry. FreeBSD never renames at all -- `re0` is the driver plus a
+unit number, and moving the card changes it.
+
+**Why not `enp3s0` here.** It encodes the SOCKET. The machine this OS is
+actually tested on has a USB Ethernet adapter that gets moved between
+ports, and under that scheme every move is a new interface with a new
+lease file and a broken socket binding. Linux can afford it because
+servers do not get rearranged and because udev offers `enx<mac>` for
+people who need otherwise; this has two cards and one of them is on a
+cable that moves. So the identity is the CARD: the last three bytes of
+the MAC, which are the part a vendor assigns per device.
+
+**Location did not go away, it stopped being the name.** `dev->location`
+carries `pci3.0` or `usb13` and `ifconfig` prints it as `at pci3.0`, so
+a card is still findable physically. Splitting them is the whole point:
+one answers "which card is this" and never changes, the other answers
+"where is it right now" and changes freely. A single string cannot do
+both, which is the mistake `enp3s0` makes.
+
+**Why the kernel does not read /etc/net.conf.** A MAC-derived name is
+correct and useless to type. The rules that turn it into `lan` live in a
+file, and the file is read by `/bin/netd` in ring 3, which renames
+through `SYS_NET_RENAME` -- the kernel validates a name and applies it
+and has no opinion about what it should be. That is udev renaming what
+the kernel called `eth0`, and it is the same split already made for NTP
+(`SYS_SETTIME` plus a ring-3 client), DHCP and DNS. Doing it in the
+kernel would also have needed a rename pass at `INIT_CONFIG`, because
+cards register at PCI bind long before a filesystem is mounted -- a
+moving part that exists only to work around being in the wrong ring.
+

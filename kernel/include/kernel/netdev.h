@@ -20,17 +20,40 @@
 //
 // A DEVICE IS STATIC STORAGE THE DRIVER OWNS. The core keeps the
 // pointer, never a copy: a driver updating dev->mac or a counter is
-// seen by the stack immediately, and there is no lifetime question
-// because nothing here can be unregistered (no hotplug).
+// seen by the stack immediately. net_unregister() takes it back out of
+// the table; the storage itself is never freed, so a driver may
+// re-register the same struct when its hardware comes back.
 
-#define NET_NAME_MAX   8     // "net0".."net7", NUL included
+#define NET_NAME_MAX   16    // "net-718ebf", or a name from /etc/net.conf
+#define NET_LOC_MAX    12    // "pci3.0", "usb2.13" -- NUL included
 #define NET_MAX_DEVS   4
 #define NET_MTU        1500  // payload; the frame is this + 14
 #define NET_FRAME_MAX  1518  // 14 header + MTU + 4 FCS, the classic cap
 #define NET_MAC_LEN    6
 
 struct net_device {
-    char name[NET_NAME_MAX];  // assigned by net_register(), never the driver
+    // ASSIGNED BY net_register(), NEVER THE DRIVER. A NAME IS AN
+    // IDENTITY AND IDENTITY FOLLOWS THE CARD, so it is made from the
+    // MAC -- "net-718ebf", the last three bytes, which are the vendor's
+    // own serial for that card (the first three are the vendor). Moving
+    // an adapter to a different socket therefore renames NOTHING, which
+    // is where systemd's enp3s0 scheme was rejected: it encodes the
+    // socket, so the same USB adapter in another port is a new
+    // interface. A friendlier name comes from /etc/net.conf
+    // (net_config.c); this is the fallback and the bootstrap.
+    //
+    // Nothing derives it from an INDEX any more. Probe order used to
+    // decide it, which meant a name was handed to the next card once
+    // the first went away -- and sockets bind by NAME (socket.c), so a
+    // reused name silently moves a bound socket onto other hardware.
+    char name[NET_NAME_MAX];
+
+    // WHERE THE DEVICE IS, filled by the driver BEFORE net_register():
+    // "pci3.0", "usb13". REPORTED, never part of the name -- `ifconfig`
+    // prints it so a card can still be found physically, and it changes
+    // freely when one is moved. Empty when the driver does not know.
+    char location[NET_LOC_MAX];
+
     const char *driver;       // "e1000", "virtio-net" -- for lsdev/ifconfig
     uint8_t mac[NET_MAC_LEN];
     uint32_t mtu;             // 0 at registration means NET_MTU
@@ -77,9 +100,38 @@ struct net_device {
 };
 
 // Called by a driver once its device can transmit and its interrupt is
-// live. The core assigns `name` (net0, net1, ...) and takes the
-// pointer. Returns 1, or 0 when the table is full.
+// live. The core assigns `name` (from /etc/net.conf if that names this
+// card, else from its MAC) and takes the pointer.
+// Returns 1, or 0 when the table is full or a device with that name is
+// already registered -- the second is a double-register bug, and being
+// refused is how the driver hears about it.
 int net_register(struct net_device *dev);
+
+// Fill in `location` from where the device actually is. A driver calls
+// the one for its bus before net_register(); anything else leaves the
+// field empty and `ifconfig` says nothing about where the card sits.
+void net_location_pci(struct net_device *dev, uint8_t bus, uint8_t device,
+                      uint8_t function);
+void net_location_usb(struct net_device *dev, uint8_t root_port, uint8_t port);
+
+// Give a registered device a different name. Refuses an empty, an
+// over-long, a badly-shaped or an already-taken name -- a name reaches
+// a lease filename and a socket binding, so it may not contain a space,
+// an '=' or a '/'. Returns 1 when the device now holds `name`.
+int net_rename(struct net_device *dev, const char *name);
+
+// The device is GONE -- a USB adapter unplugged. It leaves the table,
+// its ARP entries are flushed, frames of its already sitting in the
+// receive queue are dropped, and its address is cleared, so nothing is
+// left holding a pointer to a card that is not there. `lsdrv` stops
+// naming it. Unknown devices are ignored, so a driver may call this
+// unconditionally on teardown.
+//
+// THE NAME IS NOT FREED FOR REUSE, because it was never an index: the
+// same hardware in the same socket registers under the same name
+// again, and different hardware could not have had it in the first
+// place.
+void net_unregister(struct net_device *dev);
 
 int net_device_count(void);
 struct net_device *net_device_at(int index);

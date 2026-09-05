@@ -289,6 +289,7 @@ static void e1000_probe(const struct pci_device *pci) {
         return;
     }
 
+    net_location_pci(&g_dev, pci->bus, pci->device, pci->function);
     g_dev.driver = "e1000";
     g_dev.transmit = e1000_transmit;
     g_dev.drv = &g_e1000;

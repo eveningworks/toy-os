@@ -163,6 +163,7 @@ void sound_unregister(const struct sound_device *dev) {
         g_last_pos = 0;
         g_active = -1;
     }
+    driver_unbound(dev->driver, dev->name);
     for (int i = idx; i + 1 < g_dev_count; i++) g_devs[i] = g_devs[i + 1];
     g_dev_count--;
     if (g_active > idx) g_active--;

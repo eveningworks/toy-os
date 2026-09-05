@@ -41,6 +41,7 @@ static int netdev_fill(int index, void *out) {
     q->link_known = d->link_known;
     q->link_up    = d->link_up;
     q->link_bps   = d->link_bps;
+    k_strlcpy(q->location, d->location, sizeof q->location);
     return 1;
 }
 

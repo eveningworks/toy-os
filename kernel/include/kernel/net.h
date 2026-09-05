@@ -69,6 +69,9 @@ int arp_cache_count(void);
 int arp_cache_at(int index, struct arp_entry_view *out);
 void arp_cache_flush(void);
 
+// One device's entries, for net_unregister() -- see arp.c.
+void arp_flush_device(const struct net_device *dev);
+
 // --- IPv4 (ipv4.c) ----------------------------------------------------
 
 #define IP_PROTO_ICMP 1

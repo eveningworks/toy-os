@@ -63,12 +63,19 @@ static int show(void) {
         print_ip(mask, sizeof mask, d.netmask);
         print_ip(gw, sizeof gw, d.gateway);
 
+        // WHERE the card is, beside what it is called. The name is an
+        // identity that follows the card, so this is the only thing
+        // that says which socket to actually look at -- and it changes
+        // when somebody moves it, which the name deliberately does not.
+        char at[20] = "";
+        if (d.location[0]) snprintf(at, sizeof at, "  at %s", d.location);
+
         snprintf(line, sizeof line,
-                 "%s: %s  %02llx:%02llx:%02llx:%02llx:%02llx:%02llx  mtu %llu\n",
+                 "%s: %s  %02llx:%02llx:%02llx:%02llx:%02llx:%02llx%s  mtu %llu\n",
                  d.name, d.driver,
                  (d.mac) & 0xFF, (d.mac >> 8) & 0xFF, (d.mac >> 16) & 0xFF,
                  (d.mac >> 24) & 0xFF, (d.mac >> 32) & 0xFF, (d.mac >> 40) & 0xFF,
-                 (unsigned long long)d.mtu);
+                 at, (unsigned long long)d.mtu);
         sys_print(line);
 
         if (d.ip)

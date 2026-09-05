@@ -69,7 +69,7 @@ accident* — `sendto()` on a down link returns `EAGAIN`, and the retry
 loop spent the DISCOVER's own four-second budget on it — so the attempt
 expired at about 5.45 s. That is a coin flip against a 4–6 s link, and
 it behaved like one: an address on some boots and link-local on others,
-with `dhcp net0` by hand always working afterwards because by then the
+with `dhcp net-718ebf` by hand always working afterwards because by then the
 wire was up.
 
 A driver that cannot report carrier (`link_known` 0) is **not** treated
@@ -125,7 +125,7 @@ freshly-carrier-up interface goes nowhere, and a single-shot INIT-REBOOT
 lost the boot lease on real hardware every time. Measured on the
 bare-metal laptop: `asking for 192.168.200.107 again` at 1.46 s then
 `no usable answer` at 5.44 s, against the request now succeeding at
-4.44 s — two hundredths of a second before `net0 link UP` is even
+4.44 s — two hundredths of a second before `net-718ebf link UP` is even
 logged. A network with genuinely no server costs exactly what it did
 before, since the budget is unchanged.
 
@@ -135,7 +135,7 @@ split the FHS makes and `dhclient` follows with
 
 **One-shot is the default**; `-k` is what keeps it resident, and the
 service descriptor passes it. The other way round was tried and was
-wrong: `dhcp net0` typed at a prompt never returned, because the
+wrong: `dhcp net-718ebf` typed at a prompt never returned, because the
 supervisor does not exit. A command that holds the terminal unless you
 know a flag is a worse default than one that needs a flag for the new
 behaviour. (`-1` is accepted as a no-op, since it is what the first
@@ -159,14 +159,14 @@ the kernel does not report a conflict to anybody.
 
 ## Output
 
-    dhcp: net0: 192.168.76.20 netmask 255.255.255.0 gateway 192.168.76.2
+    dhcp: net-718ebf: 192.168.76.20 netmask 255.255.255.0 gateway 192.168.76.2
     dhcp: nameserver 192.168.76.3 -> /etc/resolv.conf
     dhcp: lease 86400 seconds
 
 and where nothing answered:
 
-    dhcp: no offer on net0
-    dhcp: net0: 169.254.205.161 netmask 255.255.0.0 link-local, no gateway
+    dhcp: no offer on net-718ebf
+    dhcp: net-718ebf: 169.254.205.161 netmask 255.255.0.0 link-local, no gateway
 
 On QEMU's default network the lease is `10.0.2.15`, which is also what a
 stack with a hardcoded address would show — so a default boot cannot
@@ -175,7 +175,7 @@ guest on `192.168.76.0/24` for exactly that reason, and boots another on
 a segment with no server at all for the link-local half.
 
 A failure names which half did not happen, because they send you to
-different places: `no offer on net0` means nothing answered the
+different places: `no offer on net-718ebf` means nothing answered the
 broadcast, while `offered … and did not acknowledge it` means a server
 is there and refused the request. Both then fall back to a link-local
 claim, so neither is the end of the run.

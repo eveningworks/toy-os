@@ -26,7 +26,7 @@ virtio-blk     block    (none)
 vesafb         display  fb0
 i8042          input    ps2-keyboard ps2-mouse
 usb-hid        input    (none)
-e1000          net      net0
+e1000          net      net-123456
 xhci           usb      (none)
 virtio-rng     rng      (none)
 ```

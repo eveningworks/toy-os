@@ -1462,6 +1462,25 @@ int sys_net_config(struct syscall_ctx *c) {
     return 0;
 }
 
+// Renaming is the whole of what the kernel lets ring 3 do to a name:
+// it validates and applies, and has no opinion about what the name
+// should be. /bin/netd holds the rules.
+int sys_net_rename(struct syscall_ctx *c) {
+    struct net_rename req;
+    if (!vmm_copy_from_user(c->pml4, &req, c->a0, sizeof req)) {
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+    req.name[sizeof req.name - 1] = 0;
+    req.to[sizeof req.to - 1] = 0;
+
+    struct net_device *d = net_device_by_name(req.name);
+    if (!d) { c->regs[14] = (uint64_t)(int64_t)-ENODEV; return 0; }
+
+    c->regs[14] = net_rename(d, req.to) ? 0 : (uint64_t)(int64_t)-EINVAL;
+    return 0;
+}
+
 // A resolver reporting what it just looked up, so the connection log
 // can print a name beside an address. See abi/syscall_abi.h for why
 // this is a report rather than a lookup, and what trusting it costs.

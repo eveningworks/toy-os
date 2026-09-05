@@ -607,6 +607,27 @@ def tx_of(text, name):
     return None
 
 
+def iface_names(cfg):
+    """The interface names in an `ifconfig` dump, in listed order.
+
+    ASKED, NOT ASSUMED. A name is derived from the card's MAC, and can
+    be overridden per machine, so hardcoding one here would bake this
+    guest's addresses into an assertion about the OS.
+    """
+    out = []
+    for ln in cfg.splitlines():
+        # A device line starts at column 0 and is "<name>: ...";
+        # everything about it is indented under it. Splitting on the
+        # FIRST colon is what keeps the MAC further along the line from
+        # looking like a second device.
+        if not ln or ln[0].isspace() or ":" not in ln:
+            continue
+        name = ln.split(":", 1)[0]
+        if name and " " not in name:
+            out.append(name)
+    return out
+
+
 # --- the phases -------------------------------------------------------
 
 def phase_one_nic(r, disk, tmp, kind, driver):
@@ -614,8 +635,10 @@ def phase_one_nic(r, disk, tmp, kind, driver):
     sh, pidfile = launch(disk, tmp, kind, kind, pcap)
     try:
         cfg = wait_for_addr(sh, GUEST_IP)
-        r.check(f"[{kind}] the card is registered as net0 and named {driver}",
-                "net0:" in cfg and driver in cfg, cfg.strip()[-300:])
+        names = iface_names(cfg)
+        r.check(f"[{kind}] one card is registered and named {driver}",
+                len(names) == 1 and driver in cfg, cfg.strip()[-300:])
+        dev = names[0] if names else "en?"
         r.check(f"[{kind}] it is leased the user-networking address at boot",
                 GUEST_IP in cfg, cfg.strip()[-300:])
 
@@ -627,7 +650,7 @@ def phase_one_nic(r, disk, tmp, kind, driver):
 
         moved = sh.run("ifconfig")
         r.check(f"[{kind}] the device counters moved",
-                (tx_of(moved, "net0") or 0) >= 3, moved.strip()[-300:])
+                (tx_of(moved, dev) or 0) >= 3, moved.strip()[-300:])
     finally:
         kill(pidfile)
         sh.close()
@@ -661,9 +684,15 @@ def phase_two_nics(r, disk, tmp):
     sh, pidfile = launch(disk, tmp, "both", "both")
     try:
         cfg = wait_for_addr(sh, "192.168.77.")
+        names = iface_names(cfg)
         r.check("[both] both cards are registered, on both drivers",
-                "net0:" in cfg and "net1:" in cfg and "e1000" in cfg and "virtio-net" in cfg,
+                len(names) == 2 and "e1000" in cfg and "virtio-net" in cfg,
                 cfg.strip()[-400:])
+        # Two cards, two MACs, so two names -- which is the property
+        # that broke when a name was an index handed out in probe order.
+        r.check("[both] the two cards have different names",
+                len(set(names)) == 2, str(names))
+        dev0, dev1 = (names + ["en?", "en?"])[:2]
         # EVERY card without an address is leased one, which is what a
         # bare `dhcp` means (dhclient's behaviour with no interface
         # named). The two servers are on different subnets, so this
@@ -679,21 +708,21 @@ def phase_two_nics(r, disk, tmp):
         # user-network address on the virtio card instead. A stack that
         # routes by "the first device" rather than by SUBNET now sends
         # everything into the void.
-        sh.run("ifconfig net0 192.168.5.15 255.255.255.0 192.168.5.1")
-        sh.run(f"ifconfig net1 {GUEST_IP} 255.255.255.0 {GATEWAY}")
+        sh.run(f"ifconfig {dev0} 192.168.5.15 255.255.255.0 192.168.5.1")
+        sh.run(f"ifconfig {dev1} {GUEST_IP} 255.255.255.0 {GATEWAY}")
         before = sh.run("ifconfig")
         out = sh.run(f"ping -c 2 {GATEWAY}", timeout=40.0)
         after = sh.run("ifconfig")
 
         r.check("[both] the ping still answers once the address moved",
                 "0% packet loss" in out, out.strip()[-400:])
-        b0, a0 = tx_of(before, "net0"), tx_of(after, "net0")
-        b1, a1 = tx_of(before, "net1"), tx_of(after, "net1")
+        b0, a0 = tx_of(before, dev0), tx_of(after, dev0)
+        b1, a1 = tx_of(before, dev1), tx_of(after, dev1)
         r.check("[both] the traffic left through the card that owns the subnet",
                 a1 is not None and b1 is not None and a1 > b1,
-                f"net1 tx {b1} -> {a1}")
+                f"{dev1} tx {b1} -> {a1}")
         r.check("[both] and NOT through the other one",
-                a0 == b0, f"net0 tx {b0} -> {a0}")
+                a0 == b0, f"{dev0} tx {b0} -> {a0}")
     finally:
         kill(pidfile)
         sh.close()
@@ -735,11 +764,12 @@ def phase_arp_rate(r, disk, tmp):
     sh, pidfile = launch(disk, tmp, "rate", "e1000")
     try:
         before = sh.run("ifconfig")
+        dev = (iface_names(before) + ["en?"])[0]
         out = sh.run(f"ping -c 2 {UNANSWERED}", timeout=40.0)
         after = sh.run("ifconfig")
         r.check("[arp] an unanswered address is reported as such",
                 "no ARP reply" in out, out.strip()[-300:])
-        sent = (tx_of(after, "net0") or 0) - (tx_of(before, "net0") or 0)
+        sent = (tx_of(after, dev) or 0) - (tx_of(before, dev) or 0)
         r.check("[arp] the requests are rate limited, not one per retry",
                 sent <= 12, f"{sent} frames sent for two pings (was 104 unlimited)")
     finally:
@@ -938,7 +968,8 @@ def phase_dhcp(r, disk, tmp):
         # spellings are the difference between "configure this machine"
         # and "configure this card", and only the second can be a
         # re-lease.
-        out = sh.run("dhcp net0", timeout=40.0)
+        dev = (iface_names(sh.run("ifconfig")) + ["en?"])[0]
+        out = sh.run(f"dhcp {dev}", timeout=40.0)
         r.check("[dhcp] a named device is re-leased on demand",
                 "192.168.76." in out, out.strip()[-400:])
         r.check("[dhcp] and a nameserver with it",
@@ -975,11 +1006,11 @@ def phase_dhcp(r, disk, tmp):
         # FILE rather than on the address, because SLIRP hands out the
         # same one either way -- an address that did not move is not
         # evidence that anything remembered it.
-        lease = sh.run("cat /var/dhcp-net0.lease", timeout=20.0)
-        r.check("[dhcp] the lease is written to /var/dhcp-net0.lease",
+        lease = sh.run(f"cat /var/dhcp-{dev}.lease", timeout=20.0)
+        r.check(f"[dhcp] the lease is written to /var/dhcp-{dev}.lease",
                 "ip=192.168.76." in lease, lease.strip()[-400:])
         r.check("[dhcp] and keyed to the card that holds it",
-                "device=net0" in lease and "mac=" in lease,
+                f"device={dev}" in lease and "mac=" in lease,
                 lease.strip()[-400:])
         r.check("[dhcp] with the server that granted it, for a unicast renewal",
                 "server=192.168.76.2" in lease, lease.strip()[-400:])
@@ -1109,7 +1140,8 @@ def phase_dns(r, disk, tmp):
 
         # NAMED, because the boot-time one-shot has already addressed
         # this card and a bare run would leave it alone.
-        out = sh.run("dhcp net0", timeout=40.0)
+        dev = (iface_names(sh.run("ifconfig")) + ["en?"])[0]
+        out = sh.run(f"dhcp {dev}", timeout=40.0)
         r.check("[dns] dhcp writes the resolver it was given",
                 "/etc/resolv.conf" in out, out.strip()[-300:])
 

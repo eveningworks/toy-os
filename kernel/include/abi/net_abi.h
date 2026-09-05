@@ -20,7 +20,10 @@
 #define NET_ABI_SOCK_STREAM  1
 #define NET_ABI_IPPROTO_TCP  6
 
-#define NET_ABI_NAME_MAX 8   // "net0" -- matches NET_NAME_MAX
+// Must match NET_NAME_MAX (kernel/include/kernel/netdev.h): an
+// interface name is "en" plus where the device is, and its longest
+// form is the MAC fallback, "enx54ee75718ebf" -- 15 and a NUL.
+#define NET_ABI_NAME_MAX 16
 
 // The longest hostname SYS_NET_RESOLVED carries, NUL included.
 // Matches QUERY_CONNLOG_HOST_MAX, which is where such a name ends
@@ -89,6 +92,13 @@ struct net_ifconfig {
     uint32_t ip;
     uint32_t netmask;
     uint32_t gateway;
+};
+
+// SYS_NET_RENAME. `name` is the interface as it is called now, `to` is
+// what it should be called instead.
+struct net_rename {
+    char name[NET_ABI_NAME_MAX];
+    char to[NET_ABI_NAME_MAX];
 };
 
 // SYS_NET_ARP_PROBE's argument: which device to ask on, and the address

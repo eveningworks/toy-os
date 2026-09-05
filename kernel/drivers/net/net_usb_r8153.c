@@ -887,6 +887,7 @@ int usb_r8153_bind(struct usb_device_info *info, const uint8_t *cfg,
     d->dev.poll = r8153_poll;      // link state only; receive is pushed
     d->dev.drv = d;
 
+    net_location_usb(&d->dev, info->root_port, info->port);
     if (!net_register(&d->dev)) {
         d->in_use = 0;
         pmm_free_contiguous(d->mem_phys, d->mem_pages);
@@ -905,10 +906,6 @@ int usb_r8153_bind(struct usb_device_info *info, const uint8_t *cfg,
 void usb_r8153_unbind(uint8_t slot) {
     struct r8153_dev *d = &g_r8153;
     if (!d->in_use || d->slot != slot) return;
-    // As with cdc-ecm: netdev.h has no way to unregister, so the device
-    // stays listed and its transmit refuses. A card that cannot send is
-    // a better answer than a dangling pointer.
-    d->in_use = 0;
-    klog_printf("usb-net: %s removed -- the interface stays listed and "
-                "cannot send\n", d->dev.name);
+    d->in_use = 0;   // unpublished before the core can call transmit()
+    net_unregister(&d->dev);
 }

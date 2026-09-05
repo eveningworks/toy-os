@@ -169,3 +169,14 @@ void arp_cache_flush(void) {
     k_memset(g_cache, 0, sizeof g_cache);
     g_victim = 0;
 }
+
+// One device's entries only -- what net_unregister() calls when a card
+// is unplugged. Leaving them would be worse than untidy: the driver's
+// struct is static and can be registered again, so a stale entry would
+// be MATCHED by the same adapter replugged onto a different network,
+// and its first frame sent to a MAC that is not there any more.
+void arp_flush_device(const struct net_device *dev) {
+    if (!dev) return;
+    for (int i = 0; i < ARP_CACHE_MAX; i++)
+        if (g_cache[i].dev == dev) g_cache[i].dev = 0;
+}

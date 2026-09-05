@@ -649,7 +649,17 @@ def _sha256(sess, remote, timeout):
     return None
 
 
-def do_flash(host, telnet_port, tftp_port, local, timeout, reboot):
+# What `make iso` stages, and where each tree lives on the machine. The
+# kernel is only half of a build: a change to a syscall ABI struct moves
+# fields under binaries compiled against the old layout, and the failure
+# is not a crash -- it is a machine that boots perfectly and cannot be
+# given an address. That happened, from this tool, on 2026-09-05.
+USERLAND_TREES = (("bin", "/bin"), ("lib", "/lib"),
+                  ("tests", "/tests"), ("usr", "/usr"))
+
+
+def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
+             kernel_only=False, staging="seed/sync"):
     """Replace the kernel on the machine's own boot partition.
 
     THE RESCUE ENTRY IS THE POINT. grub.cfg already offers "toy-os
@@ -663,6 +673,19 @@ def do_flash(host, telnet_port, tftp_port, local, timeout, reboot):
     The order is what makes it survivable: menu first, rescue copy
     second, the new kernel last, and a sha256 read back off the
     partition before anything reboots.
+
+    AND THE USERLAND GOES WITH IT. A kernel is half a build. Flashing
+    one alone is fine until an ABI struct changes size, at which point
+    the machine boots and every syscall taking that struct reads the
+    wrong fields -- which presented as a laptop that came up healthy
+    with no network and could not be reached to fix it. So /bin, /lib,
+    /tests and /usr are synced from the build staging first, and
+    --kernel-only is the deliberate way to not.
+
+    The sync goes FIRST so a failure there costs nothing: the machine is
+    still running the kernel it booted. It does leave a short window of
+    new userland on the old kernel, which the reboot closes -- and which
+    is why this reboots for you when asked rather than leaving it.
     """
     if not os.path.isfile(local):
         print(f"remote: no such file: {local}", file=sys.stderr)
@@ -700,6 +723,19 @@ def do_flash(host, telnet_port, tftp_port, local, timeout, reboot):
         sess.run("cp /boot/boot/kernel.bin /boot/boot/kernel.old", timeout)
     finally:
         sess.close()
+
+    if not kernel_only:
+        for sub, remote in USERLAND_TREES:
+            local_dir = os.path.join(staging, sub)
+            if not os.path.isdir(local_dir):
+                print(f"remote: no {local_dir} -- run `make iso` first",
+                      file=sys.stderr)
+                return 1
+            if do_sync(host, telnet_port, tftp_port, local_dir, remote,
+                       timeout, False):
+                print(f"remote: FAILED syncing {remote} -- the kernel has "
+                      "NOT been written", file=sys.stderr)
+                return 1
 
     rc = do_put(host, tftp_port, local, "/boot/boot/kernel.bin", timeout)
     if rc:
@@ -794,6 +830,11 @@ def main():
     f.add_argument("kernel", nargs="?", default="build/kernel.bin")
     f.add_argument("--reboot", action="store_true",
                    help="reboot once the new kernel has verified")
+    f.add_argument("--kernel-only", action="store_true",
+                   help="do NOT sync /bin, /lib, /tests and /usr first. An "
+                        "ABI change then leaves the machine unreachable")
+    f.add_argument("--staging", default="seed/sync",
+                   help="what `make iso` staged (default: seed/sync)")
 
     sub.add_parser("shell", help="an interactive session (Ctrl-] quits)")
 
@@ -810,7 +851,8 @@ def main():
                            a.local, a.remote, a.timeout, a.dry_run)
         if a.cmd == "flash":
             return do_flash(a.host, a.telnet_port, a.tftp_port,
-                            a.kernel, a.timeout, a.reboot)
+                            a.kernel, a.timeout, a.reboot,
+                            a.kernel_only, a.staging)
         if a.cmd == "shell":
             return do_shell(a.host, a.telnet_port, a.timeout)
     except (OSError, RuntimeError) as ex:

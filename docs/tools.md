@@ -371,6 +371,11 @@ manual steps to be worth automating:
   sha256 back off the partition. `--reboot` restarts the machine once
   that verifies, and only then.
 
+  **It SYNCS /bin, /lib, /tests and /usr FIRST**, because a kernel is
+  half a build: an ABI struct that changes size moves fields under every
+  binary compiled against the old one, and the machine then boots
+  perfectly and cannot be given an address. `--kernel-only` skips it.
+
   **It REFUSES while `grub.cfg` says `set timeout=0`.** That is the
   whole safety argument: the rescue entry exists on every installed
   machine, and with no timeout GRUB draws no menu, so it cannot be

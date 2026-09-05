@@ -59,8 +59,6 @@ it has exonerated one this session and convicted another.
 
 - [ ] `tools/init_test.py`'s `an After= naming nothing loaded is reported and ignored` fails -- 36/37 checks. Measured 2026-09-04 by `predates.py`: HEAD (930d4d79) fails the identical check with the identical score, so PRE-EXISTING. Cause NOT established, and it is not known whether init's handling or the tool's expectation is the wrong half. Separately, under load the same tool loses the desktop's readiness announcement and drops to 29/37 (`ready None`) -- that is the known parallel-load flake, not this
 
-- [ ] A USB Ethernet adapter unplugged and plugged back in registers a SECOND `net_device` table entry for the same static struct, so `ifconfig` lists one adapter twice under the new name and `lsdrv` shows `r8153 net1 net2` -- `net_register()` has no unregister and `netdev.h` says so, which was true of a machine with one card. Reproduced on the laptop 2026-09-05, 1 replug in 1; NOT measured against an earlier commit, but the mechanism is in `net.c` and the USB path and is independent of the r8169 driver that made it visible
-
 - [ ] On a machine with TWO network cards, only the FIRST is supervised by `dhcp -k`, so the second's lease is never renewed and its address silently expires at the server's T2 -- `dhcp.c` supervises `renew_dev`, set from the first device it tried. Reproduced on the laptop 2026-09-05 by adding the built-in NIC beside the USB one; the comment saying no machine here holds two leases at once was true until then
 
 ## Seen once, cause never established

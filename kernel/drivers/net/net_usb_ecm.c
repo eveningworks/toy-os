@@ -384,6 +384,7 @@ int usb_net_bind(struct usb_device_info *info, const uint8_t *cfg,
     d->dev.poll = e.ep_notify ? ecm_poll : 0;
     d->dev.drv = d;
 
+    net_location_usb(&d->dev, info->root_port, info->port);
     if (!net_register(&d->dev)) {
         d->in_use = 0;
         pmm_free_contiguous(d->mem_phys, pages);
@@ -410,12 +411,6 @@ int usb_net_bind(struct usb_device_info *info, const uint8_t *cfg,
 void usb_net_unbind(uint8_t slot) {
     struct ecm_dev *d = &g_ecm;
     if (!d->in_use || d->slot != slot) return;
-    // NOTHING UNREGISTERS from the net core -- netdev.h says a device is
-    // never removed, because the stack holds the pointer and there is no
-    // hotplug path. So the device stays listed and its transmit refuses:
-    // `ifconfig` showing a card that cannot send is a better answer than
-    // a dangling pointer.
-    d->in_use = 0;
-    klog_printf("usb-net: %s removed -- the interface stays listed and "
-                "cannot send\n", d->dev.name);
+    d->in_use = 0;   // unpublished before the core can call transmit()
+    net_unregister(&d->dev);
 }

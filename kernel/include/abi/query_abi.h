@@ -706,7 +706,7 @@ struct query_driver {
     char cls[12];       // "block", "net", "input", ...
     char file[64];      // the source file it declared itself in, for -v
     char desc[48];      // one line saying what it is, or "" -- also -v
-    char devices[64];   // "net0 usb:13", or "" for none
+    char devices[64];   // "enp3s0 usb:13", or "" for none
 };
 
 struct query_version {
@@ -745,7 +745,7 @@ struct query_blkdev {
 // handed frames faster than net_poll() drains them, which is a
 // different fault from a silent one.
 struct query_netdev {
-    char name[16];       // "net0"
+    char name[16];       // "enp3s0", "enx54ee75718ebf" (the longest)
     char driver[16];     // "e1000", "virtio-net"
     uint64_t mac;        // six bytes, low-order first (mac[0] is bits 0-7)
     uint64_t ip;         // host byte order; 0 means unconfigured
@@ -762,6 +762,13 @@ struct query_netdev {
     uint64_t link_known;
     uint64_t link_up;
     uint64_t link_bps;
+
+    // WHERE THE CARD IS PLUGGED IN -- "pci3.0", "usb13", or "" when the
+    // driver does not know. REPORTED, never part of the name: a name is
+    // an identity and this changes when somebody moves the card, which
+    // is exactly why the two are separate fields. Empty-string rather
+    // than absent so `ifconfig` needs no second query to find out.
+    char location[12];
 };
 
 // QUERY_PARTTABLE's record -- the table, not its entries.

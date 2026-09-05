@@ -508,6 +508,22 @@ struct listdir_request {
                        // privilege model -- see docs/roadmap.md's
                        // multi-user track, which is where one goes.
 
+#define SYS_NET_RENAME 98 // RDI = a `struct net_rename *`: an
+                       // interface, and what to call it instead.
+                       // Returns 0, -ENODEV for a name no device
+                       // answers to, or -EINVAL for a new name that is
+                       // empty, too long, already taken, or carries a
+                       // character a lease filename or a socket
+                       // binding could not survive (space, '=', '/').
+                       //
+                       // NAMING IS POLICY AND POLICY IS RING 3's. The
+                       // kernel gives a card a bootstrap name from its
+                       // MAC and nothing else; /bin/netd reads the
+                       // rules in /etc/net.conf and calls this. That is
+                       // udev renaming what the kernel called eth0, and
+                       // the same split this project already made for
+                       // NTP, DHCP and DNS.
+
 #define SYS_NET_ARP_PROBE 90 // RDI = a `struct net_arp_probe *`: does
                        // anybody on this device's segment answer for
                        // this address? Returns 1 if a reply is already

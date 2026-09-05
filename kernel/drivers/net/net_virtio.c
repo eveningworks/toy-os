@@ -34,6 +34,7 @@ static void net_virtio_probe(const struct pci_device *pci) {
     virtio_net_attach(pci);
     if (!virtio_net_present()) return;
 
+    net_location_pci(&VIRTIO_NET_DEV, pci->bus, pci->device, pci->function);
     k_memcpy(VIRTIO_NET_DEV.mac, virtio_net_mac(), NET_MAC_LEN);
     VIRTIO_NET_DEV.transmit = vnet_transmit;
     virtio_net_set_rx(vnet_rx);

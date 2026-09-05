@@ -51,6 +51,66 @@ static volatile uint32_t g_rx_tail;  // producer (interrupt context)
 // Set by net_init(). The table below is only meaningful after it.
 static int g_inited;
 
+// "pci<bus>.<device>", with ".<function>" only when it is not 0 -- and
+// this is REPORTED, not part of the name. See netdev.h.
+void net_location_pci(struct net_device *dev, uint8_t bus, uint8_t device,
+                      uint8_t function) {
+    if (!dev) return;
+    if (function)
+        k_snprintf(dev->location, NET_LOC_MAX, "pci%u.%u.%u", bus, device, function);
+    else
+        k_snprintf(dev->location, NET_LOC_MAX, "pci%u.%u", bus, device);
+}
+
+// "usb<root port>", with ".<port>" when the device hangs off a hub.
+void net_location_usb(struct net_device *dev, uint8_t root_port, uint8_t port) {
+    if (!dev) return;
+    if (port && port != root_port)
+        k_snprintf(dev->location, NET_LOC_MAX, "usb%u.%u", root_port, port);
+    else
+        k_snprintf(dev->location, NET_LOC_MAX, "usb%u", root_port);
+}
+
+// THE DEFAULT NAME IS THE CARD'S OWN SERIAL. The last three bytes of a
+// MAC are the part the vendor assigns per device; the first three are
+// the vendor. So this is an identity the card carries with it rather
+// than a truncation chosen for length.
+static void default_name(struct net_device *dev) {
+    k_snprintf(dev->name, NET_NAME_MAX, "net-%02x%02x%02x",
+               dev->mac[3], dev->mac[4], dev->mac[5]);
+}
+
+// A name reaches a DHCP lease filename (/var/dhcp-<name>.lease) and a
+// socket's device binding, so the characters that would break either
+// are refused here rather than at whichever of them noticed first.
+static int name_is_usable(const char *name) {
+    if (!name || !name[0]) return 0;
+    uint32_t n = (uint32_t)k_strlen(name);
+    if (n >= NET_NAME_MAX) return 0;
+    for (uint32_t i = 0; i < n; i++) {
+        char c = name[i];
+        if (c == ' ' || c == '\t' || c == '=' || c == '/' || c == '\n') return 0;
+    }
+    return 1;
+}
+
+int net_rename(struct net_device *dev, const char *name) {
+    if (!dev || !name_is_usable(name)) return 0;
+    if (k_strcmp(dev->name, name) == 0) return 1;
+    struct net_device *clash = net_device_by_name(name);
+    if (clash && clash != dev) {
+        klog_printf("net: %s cannot be renamed to %s -- that name is taken\n",
+                    dev->name, name);
+        return 0;
+    }
+    // lsdrv records a binding by name, so the old one has to go before
+    // the new one arrives or the driver lists the card twice.
+    driver_unbound(dev->driver, dev->name);
+    k_strlcpy(dev->name, name, NET_NAME_MAX);
+    driver_bound(dev->driver, dev->name);
+    return 1;
+}
+
 int net_register(struct net_device *dev) {
     if (!dev || !dev->transmit) return 0;
     // REFUSED, LOUDLY, rather than accepted into a table net_init() is
@@ -68,10 +128,22 @@ int net_register(struct net_device *dev) {
         klog_printf("net: no room for another device (max %d)\n", NET_MAX_DEVS);
         return 0;
     }
-    dev->name[0] = 'n'; dev->name[1] = 'e'; dev->name[2] = 't';
-    dev->name[3] = (char)('0' + g_count);
+    // THE BOOTSTRAP NAME ONLY. /etc/net.conf is read by /bin/netd, which
+    // renames through SYS_NET_RENAME once the filesystem is up -- naming
+    // POLICY is not the kernel's, the same call this project already
+    // made for NTP, DHCP and DNS.
+    default_name(dev);
+
+    // A name already in the table means the same device was registered
+    // twice -- which is what an unplug with no net_unregister() used to
+    // produce, one adapter listed under two names. Refused rather than
+    // accepted, so the driver hears about its own bug.
+    if (net_device_by_name(dev->name)) {
+        klog_printf("net: %s is already registered -- refused\n", dev->name);
+        return 0;
+    }
+
     driver_bound(dev->driver, dev->name);
-    dev->name[4] = 0;
     if (!dev->mtu) dev->mtu = NET_MTU;
 
     g_devs[g_count++] = dev;
@@ -80,6 +152,34 @@ int net_register(struct net_device *dev) {
                 dev->mac[0], dev->mac[1], dev->mac[2],
                 dev->mac[3], dev->mac[4], dev->mac[5], dev->mtu);
     return 1;
+}
+
+// Compacting under net_poll()'s device walk is safe on this
+// uniprocessor for the reason input_unregister_source() gives: the
+// unregister runs FROM a driver's own teardown, so the walk merely sees
+// a shorter list on its next index. What it must not leave behind is a
+// pointer to the departed device, and there are exactly two -- frames
+// already in the receive queue, and the ARP entries it resolved.
+void net_unregister(struct net_device *dev) {
+    int idx = -1;
+    for (int i = 0; i < g_count; i++) if (g_devs[i] == dev) { idx = i; break; }
+    if (idx < 0) return;
+
+    // Published slots are the consumer's; the producer only ever moves
+    // tail, so marking these is safe against an interrupt still filling
+    // the ring behind us. net_poll() skips a zero-length slot.
+    for (uint32_t i = g_rx_head; i != g_rx_tail; i = (i + 1) % NET_RX_QUEUE)
+        if (g_rxq[i].dev == dev) g_rxq[i].len = 0;
+
+    arp_flush_device(dev);
+    dev->ip = dev->netmask = dev->gateway = 0;
+    dev->link_known = dev->link_up = 0;
+    dev->link_bps = 0;
+
+    driver_unbound(dev->driver, dev->name);
+    for (int i = idx; i + 1 < g_count; i++) g_devs[i] = g_devs[i + 1];
+    g_count--;
+    klog_printf("net: %s removed\n", dev->name);
 }
 
 const void *net_wait_chan(void) { return &g_net_chan; }
@@ -165,7 +265,10 @@ void net_poll(void) {
 
     while (g_rx_head != g_rx_tail) {
         struct rx_slot *s = &g_rxq[g_rx_head];
-        eth_input(s->dev, s->data, s->len);
+        // Zero length is a frame whose device was unregistered while it
+        // sat here -- dropped rather than parsed against a card that is
+        // gone. net_rx() never queues one, having refused it as short.
+        if (s->len) eth_input(s->dev, s->data, s->len);
         g_rx_head = (g_rx_head + 1) % NET_RX_QUEUE;
     }
 

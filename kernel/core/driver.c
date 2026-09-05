@@ -37,6 +37,28 @@ static int decl_count(void) {
     return (int)n;
 }
 
+// Removes `dev` from a space-separated list, closing the gap. Matching
+// is on a WHOLE entry: "net1" must not match inside "net12", which is
+// reachable now that names can be several characters long.
+static void remove_dev(char *devs, const char *dev) {
+    uint32_t want = (uint32_t)k_strlen(dev);
+    if (!want) return;
+    for (uint32_t i = 0; devs[i]; ) {
+        uint32_t end = i;
+        while (devs[end] && devs[end] != ' ') end++;
+        if (end - i == want && k_memcmp(devs + i, dev, want) == 0) {
+            // Take the separator with it: the one BEFORE when this is
+            // the last entry, the one after otherwise, so the list
+            // never gains a leading or doubled space.
+            uint32_t from = devs[end] == ' ' ? end + 1 : end;
+            uint32_t to = (devs[end] != ' ' && i > 0) ? i - 1 : i;
+            k_memmove(devs + to, devs + from, k_strlen(devs + from) + 1);
+            return;
+        }
+        i = devs[end] ? end + 1 : end;
+    }
+}
+
 // The index of `name` among the declarations, or -1.
 static int decl_index(const char *name) {
     int n = decl_count();
@@ -57,6 +79,21 @@ static void append_dev(char *devs, const char *dev) {
     if (need + 1 > DRIVER_DEVS_MAX) return;
     if (have) devs[have++] = ' ';
     k_strlcpy(devs + have, dev, DRIVER_DEVS_MAX - have);
+}
+
+// The inverse, for a device that has been unplugged. An unknown driver
+// or device is ignored, so a class registry may call it unconditionally.
+void driver_unbound(const char *name, const char *dev) {
+    if (!name || !name[0] || !dev || !dev[0]) return;
+
+    int i = decl_index(name);
+    if (i >= 0) { remove_dev(g_devs[i], dev); return; }
+
+    for (int e = 0; e < g_extra_count; e++)
+        if (k_strcmp(g_extra[e].name, name) == 0) {
+            remove_dev(g_extra[e].devs, dev);
+            return;
+        }
 }
 
 void driver_bound(const char *name, const char *dev) {

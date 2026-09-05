@@ -15,13 +15,19 @@ and their traffic counters. With arguments, it sets one device's
 addresses.
 
 Every NIC driver runs at boot and registers what it finds into the
-device table (`kernel/include/kernel/netdev.h`), named `net0`, `net1` in
-registration order. **No device gets an address from the kernel** — one
-comes from `/bin/dhcp`, which init runs at boot and which takes every
-card that has none, or from this command.
+device table (`kernel/include/kernel/netdev.h`). **A NAME IS AN IDENTITY
+AND FOLLOWS THE CARD**: the kernel makes one from the last three bytes of
+the MAC — `net-718ebf`, the vendor's own serial for that card — so
+moving an adapter to a different socket renames nothing. Where it
+currently sits is REPORTED beside it (`at pci3.0`) rather than encoded
+into the name, which is where systemd's `enp3s0` scheme was deliberately
+not followed. **No device gets an address from the kernel** — one comes
+from `/bin/dhcp`, which init runs at boot and which takes every card
+that has none, or from this command.
 
 A field left out is left alone rather than cleared, so
-`ifconfig net0 10.0.2.20` moves an address without restating the netmask.
+`ifconfig net-718ebf 10.0.2.20` moves an address without restating the
+netmask.
 The honest cost of that is that an address cannot be *removed*.
 
 ## What it is not
@@ -42,7 +48,7 @@ exactly the diagnosis.
 
 ## Output
 
-    net0: e1000  52:54:00:12:34:56  mtu 1500
+    net-123456: e1000  52:54:00:12:34:56  at pci0.3  mtu 1500
         inet 10.0.2.15  netmask 255.255.255.0  gateway 10.0.2.2
         rx 4 packets, 358 bytes, 0 dropped
         tx 5 packets, 414 bytes, 0 dropped

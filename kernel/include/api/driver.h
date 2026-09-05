@@ -83,7 +83,7 @@ struct driver_decl {
             .desc = desc_str,                                                 \
         }
 
-// Records that `name` is now driving `dev` -- "ahci0", "net0", "usb:13".
+// Records that `name` is now driving `dev` -- "ahci0", "enp3s0", "usb:13".
 //
 // CALLED BY THE CLASS REGISTRY, not by the driver: block, net, input,
 // sound, display and clocksource each do it as they accept a device,
@@ -96,6 +96,12 @@ struct driver_decl {
 // with an unknown class rather than dropping the fact, because a
 // binding nobody can see is the thing this exists to fix.
 void driver_bound(const char *name, const char *dev);
+
+// The inverse: `dev` is gone -- a USB adapter unplugged. Called by the
+// same class registry, from its unregister path, so `lsdrv` stops
+// naming hardware that is not there. An unknown driver or device is
+// ignored, so a registry may call it unconditionally.
+void driver_unbound(const char *name, const char *dev);
 
 int driver_count(void);
 const char *driver_name_at(int i);

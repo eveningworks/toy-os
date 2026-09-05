@@ -95,3 +95,35 @@ KTEST("driver", "a device name that does not fit is dropped whole") {
     driver_bound("ktest-d", big);
     KTEST_ASSERT(devs_of("ktest-d")[0] == '\0');   // refused, not truncated
 }
+
+// The unbind path, and the trap in it: a device list is one string of
+// space-separated names, so removing "net1" must not match inside
+// "net12". Names got long enough for that to be reachable when they
+// became "enp3s0" rather than an index.
+KTEST("driver", "unbinding removes one whole device name") {
+    // THE LONGER NAME IS BOUND FIRST ON PURPOSE. With it second, a
+    // prefix match would still remove the right entry -- the correct one
+    // comes first and wins either way -- and the test would pass on
+    // broken code. Ask what a broken version would still pass.
+    driver_bound("ktest-unbind", "enp3s01");
+    driver_bound("ktest-unbind", "enp3s0");
+    driver_bound("ktest-unbind", "enu13");
+    KTEST_ASSERT(k_strcmp(devs_of("ktest-unbind"), "enp3s01 enp3s0 enu13") == 0);
+
+    driver_unbound("ktest-unbind", "enp3s0");
+    KTEST_ASSERT(k_strcmp(devs_of("ktest-unbind"), "enp3s01 enu13") == 0);
+
+    driver_unbound("ktest-unbind", "enu13");           // the last entry
+    KTEST_ASSERT(k_strcmp(devs_of("ktest-unbind"), "enp3s01") == 0);
+
+    driver_unbound("ktest-unbind", "enp3s01");         // the only entry
+    KTEST_ASSERT(k_strcmp(devs_of("ktest-unbind"), "") == 0);
+}
+
+KTEST("driver", "unbinding something not bound changes nothing") {
+    driver_bound("ktest-unbind2", "enp1s0");
+    driver_unbound("ktest-unbind2", "enp1s1");
+    driver_unbound("ktest-nosuchdriver", "enp1s0");
+    KTEST_ASSERT(k_strcmp(devs_of("ktest-unbind2"), "enp1s0") == 0);
+}
+

@@ -692,6 +692,8 @@ whenever a headline here tells you something you did not already know.
 - **A SEND WINDOW MAY NOT EXCEED THE RECEIVER'S SOCKET QUEUE, OR IT IS SLOWER THAN NO WINDOW**
 - **AN MTU-SIZED DATAGRAM IS THE CEILING, BECAUSE NOTHING FRAGMENTS**
 - **A CONNECTION IS LOGGED WHERE IT IS OPENED, AND THE NAME COMES FROM THE RESOLVER**
+- **A NETWORK INTERFACE IS NAMED BY THE CARD, NOT BY THE SOCKET -- AND RENAMING IS RING 3's**
+- **A NETWORK DEVICE CAN BE REMOVED NOW, AND REMOVAL HAS TO UNDO THREE THINGS**
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
 
 ### GUI, Toykit and the desktop
@@ -1340,8 +1342,11 @@ cost".
 - **Drive the BARE-METAL machine** -- `remote.py` (`exec` runs commands
   and returns text, `put`/`get` move files, `sync` copies a whole tree
   and sends only what differs, `flash` replaces the KERNEL on its own
-  boot partition -- and refuses while `grub.cfg` has no timeout, since
-  the rescue entry would be unreachable -- `shell` is interactive). **A PUSH needs
+  boot partition AND syncs the userland with it -- a kernel alone is
+  half a build, and an ABI struct that changes size leaves a machine
+  booting perfectly with no way to give it an address; it also refuses
+  while `grub.cfg` has no timeout, since the rescue entry would be
+  unreachable -- `shell` is interactive). **A PUSH needs
   `telnetd`/`tftpd` listening, which is why `docs/update-design.md`
   argues for a pull.**
   **Its address is in `local_info.txt` at the repo root -- an UNTRACKED

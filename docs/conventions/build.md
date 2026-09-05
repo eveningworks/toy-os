@@ -580,6 +580,17 @@ RUNNING kernel over `kernel.old`, so the rescue entry is known-good
 rather than whatever was there; then writes the new one; then reads a
 sha256 back OFF THE PARTITION before anything reboots.
 
+**AND A KERNEL IS HALF A BUILD, SO THE USERLAND GOES WITH IT.** Flashing
+a kernel alone is harmless right up until an ABI struct changes SIZE, at
+which point every binary on the machine compiled against the old layout
+reads the wrong fields -- and the failure is not a crash. On 2026-09-05
+`NET_ABI_NAME_MAX` went from 8 to 16, which moved `net_ifconfig.ip` from
+offset 8 to 16; the laptop booted perfectly, `/bin/dhcp` could no longer
+configure an interface, and the machine was unreachable BECAUSE it had
+no address. So `flash` syncs /bin, /lib, /tests and /usr from
+`seed/sync` first, and `--kernel-only` is the deliberate way to skip
+that. The sync goes first because a failure there costs nothing.
+
 Two things it will not do. It does not EDIT `grub.cfg` for you -- a
 flash silently rewriting the bootloader config is a worse surprise than
 a refusal. And it does not reboot unless asked (`--reboot`), because a

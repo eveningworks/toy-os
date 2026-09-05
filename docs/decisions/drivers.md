@@ -1625,9 +1625,9 @@ up on an EHCI-only machine.
 cost.** Two NICs, two sound cards and two disks used to be ranked by
 the order of calls in `kernel_main()`; they are ranked by bus address
 now. Nothing that mattered depended on the old order: disk precedence is
-explicit in `mount.c`, `audio_device` outranks discovery, and the
-`net0`/`net1` assignment on QEMU comes out the same because the e1000 is
-in the lower slot. The USB-before-sound ordering the laptop relied on
+explicit in `mount.c`, `audio_device` outranks discovery, and network
+interface names never depended on order in the first place (they are
+made from each card's MAC). The USB-before-sound ordering the laptop relied on
 (a USB DAC plugged at boot became the active device) survives for the
 same accidental reason -- the xHCI sits below the HDA on the PCH -- and
 is not a guarantee; the setting is.

@@ -2269,7 +2269,8 @@ whose table matches. Five things to know:
   `hda` and `virtio-input` take several. The old loops took the first
   match and never mentioned the rest.
 - **ORDER IS SLOT ORDER NOW, WHERE IT USED TO BE INIT ORDER.** Two NICs
-  are `net0`/`net1` by bus address; two sound cards are "first
+  are enumerated by bus address (their NAMES come from their MACs and
+  do not depend on order at all); two sound cards are "first
   discovered" by bus address; `audio_device` and `mount.c`'s explicit
   disk precedence outrank both, which is why neither policy moved.
 - **TWO TABLES MATCHING ONE DEVICE IS A FILENAME CHOOSING A DRIVER.**
@@ -3261,3 +3262,76 @@ it and never instead of it.
 or `off` — held as live state and read from `/etc` once at boot, because
 it is consulted on every connection and `etc_config_get()` re-reads a
 whole file per key.
+
+## A NETWORK INTERFACE IS NAMED BY THE CARD, NOT BY THE SOCKET -- AND RENAMING IS RING 3's
+
+The kernel gives a card ONE name and it is made from the last three
+bytes of its MAC: `net-718ebf`. Those three bytes are the part the
+vendor assigns per device (the first three name the vendor), so the
+name is an identity the card carries with it. Move a USB adapter to a
+different port and it is still `net-718ebf`.
+
+**WHERE IT IS PLUGGED IN IS A SEPARATE FIELD** -- `dev->location`,
+`"pci3.0"` or `"usb13"`, filled by the driver and printed by `ifconfig`
+as `at pci3.0`. It is never part of the name, because it changes when
+somebody moves the card and a name that changes is not an identity.
+
+This is where systemd's predictable names were deliberately NOT
+followed. `enp3s0` encodes the socket, so the same adapter in another
+port is a different interface -- which is the problem here rather than
+the solution, since the machine this OS is tested on has a USB adapter
+that gets moved. Linux can afford it because udev also offers `enx<mac>`
+and because nothing on a server moves; this has two cards and one of
+them is on a cable.
+
+**NOTHING DERIVES A NAME FROM AN INDEX.** It used to be `net` plus the
+table index, and both halves of that were hazards rather than
+untidiness. Sockets bind to a device by NAME (`socket.c` stores a
+string, not a pointer), so a name handed to the next card once the first
+went away would silently move a bound socket onto other hardware. And a
+replugged adapter came back as a different interface, which is how one
+card came to be listed twice.
+
+**A FRIENDLIER NAME IS POLICY AND POLICY IS RING 3's.** `SYS_NET_RENAME`
+validates and applies; it has no opinion about what the name should be.
+`/bin/netd` reads the rules in `/etc/net.conf` and calls it -- which is
+udev renaming what the kernel called `eth0`, and the same split this
+project already made for NTP, DHCP and DNS.
+
+**A NAME REACHES A FILENAME AND A SOCKET BINDING.** It ends up in
+`/var/dhcp-<name>.lease` and in a socket's device field, so a space, an
+`=`, a `/`, an empty name, one over `NET_NAME_MAX` and one another
+device already holds are all refused by `net_rename()` rather than by
+whichever of those noticed first.
+
+## A NETWORK DEVICE CAN BE REMOVED NOW, AND REMOVAL HAS TO UNDO THREE THINGS
+
+`net_unregister()` exists, and `net` was the last class registry without
+one -- `sound_unregister()` and `input_unregister_source()` had had one
+since USB hot-plug landed. Until it did, `usb_r8153_unbind()` set a flag
+and left the interface listed, with a comment saying netdev.h gave it
+nothing to call; an adapter unplugged and plugged back in registered a
+SECOND time and `ifconfig` showed one card twice.
+
+Three things hold a `struct net_device *` and all three must be dealt
+with, in this order, before the table forgets it:
+
+  * **frames already in the receive queue** -- marked zero-length and
+    skipped by `net_poll()`, rather than parsed against a card that is
+    gone. Safe against a concurrent interrupt because the producer only
+    ever moves `tail` and these slots are already published;
+  * **the ARP cache** (`arp_flush_device()`) -- and this one is not
+    tidiness. The driver's struct is static and can be registered
+    again, so a stale entry would be MATCHED by the same adapter
+    replugged onto a DIFFERENT network, and its first frame sent to a
+    MAC that is not there;
+  * **`lsdrv`** -- `driver_unbound()`, the inverse `driver_bound()`
+    never had. Without it the driver still names hardware that is gone,
+    which is how `r8153  net  net1 net2` was reported.
+
+The device's own address and link state are cleared too: a card that
+comes back must not come back holding a lease on a network it may no
+longer be attached to. The STORAGE is never freed -- it is static
+driver state -- which is exactly what lets the same struct register
+again when the hardware returns.
+

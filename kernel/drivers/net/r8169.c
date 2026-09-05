@@ -412,6 +412,7 @@ static void r8169_probe(const struct pci_device *pci) {
     reg_write32(REG_MAR0, 0xFFFFFFFFu);
     reg_write32(REG_MAR0 + 4, 0xFFFFFFFFu);
 
+    net_location_pci(&g_dev, pci->bus, pci->device, pci->function);
     g_dev.driver = "r8169";
     g_dev.transmit = r8169_transmit;
     g_dev.drv = &g_r;
