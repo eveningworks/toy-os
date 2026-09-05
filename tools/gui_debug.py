@@ -580,8 +580,16 @@ class DebugConsole:
             self.settle()
         return []
 
-    def drag(self, x0, y0, x1, y1, settle=True):
-        self.send(f"gui drag {x0} {y0} {x1} {y1}")
+    def drag(self, x0, y0, x1, y1, settle=True, steps=0):
+        """`steps` is how many intermediate positions the WM sees.
+
+        It is NOT a duration: the queue is drained one position per WM
+        iteration and the loop spins while input is pending, so 48 steps
+        take about as long as the default 8 (~150 ms). Ask for more when
+        a hit region could be stepped over; nothing here can make a
+        scripted drag LAST, which is why a test about what happens during
+        one has to ask the WM for a count rather than watch."""
+        self.send(f"gui drag {x0} {y0} {x1} {y1}" + (f" {steps}" if steps else ""))
         if not settle:
             return []
         self.settle(SETTLE_S * 2)  # a drag queues ~11 events, not 4

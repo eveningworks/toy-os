@@ -428,21 +428,25 @@ client; only the client can decide when it changes.
 So, following Wayland's `xdg_toplevel` configure/ack (the same problem,
 solved the same way, for the same reason):
 
-1. The user drags the grip. The WM tracks a proposed size and draws a
-   **rubber-band outline** -- the window itself does not change yet.
-2. On release the WM clamps the proposal to the client's hinted minimum
-   and sends `WIN_EV_RESIZE(w, h)`.
-3. `uapp` receives it, issues `WIN_REQ_RESIZE`, and the server frees the
-   old frames, allocates new ones and maps them **at the same virtual
+1. The user drags the grip. The WM clamps the proposal to the client's
+   hinted minimum and sends `WIN_EV_RESIZE(w, h)` **during the drag**,
+   one proposal in flight at a time so the client sets the pace, and the
+   last one on release.
+2. `uapp` receives it, issues `WIN_REQ_RESIZE`, and the server rebuilds
+   the **back** buffer at the new size, mapped **at the same virtual
    address** -- which the protocol already guarantees, since
    `win_buffer_vaddr(id)` is derived from the window id and not returned
    by the server. The client's buffer pointer stays valid across a
    resize by construction. This is the fixed-vaddr decision paying off
    in a way it wasn't designed for.
+3. The FRONT buffer is untouched, so the compositor goes on showing the
+   last finished frame at the size it was drawn at. Rebuilding both is
+   what used to make a resize flash black for a whole round trip.
 4. `uapp` rebuilds its surface (stride changes with width), **re-runs
    the layout pass**, calls `on_resize` if the app supplied one, then
-   `on_draw`, then presents. The WM adopts the new content size when the
-   present arrives.
+   `on_draw`, then presents. The present event carries the new front
+   buffer's own dimensions, and the WM adopts the content size THERE --
+   with the pixels in hand, never a size it was promised earlier.
 5. If the server refuses (out of frames, over `WIN_CLIENT_MAX_W/H`), the
    client keeps the size it had and the window does not change. A
    refusal is a normal outcome, not an error path.

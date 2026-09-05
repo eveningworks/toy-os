@@ -128,6 +128,13 @@ void wm_handle_left_click(int mx, int my) {
             resize_start_my = my;
             resize_start_w = windows[resizing].w;
             resize_start_h = windows[resizing].h;
+            // A NEW DRAG FORGETS THE LAST ONE'S ASK. The ask outlives
+            // the drag that made it (see resize_pump()), and anything
+            // that resized this window since -- maximize, a restored
+            // geometry -- did not go through it, so the remembered
+            // "already sent" size can no longer be trusted.
+            resize_sent_w = resize_sent_h = -1;
+            resize_inflight = 0;
             redraw_pending = 1;
             return;
         }
@@ -504,6 +511,68 @@ int wm_ensure_reachable(int idx) {
     return 1;
 }
 
+// --- the interactive resize's ask ------------------------------------
+//
+// A client owns its buffer, so the WM cannot simply widen its window:
+// it proposes a size and the client answers (abi/win_proto.h). What
+// makes that feel like Windows' and KDE's live resize rather than a
+// rubber-band outline is doing it DURING the drag -- and what keeps it
+// from drowning a slow app is that only one proposal is outstanding.
+
+// A proposal is with the client until it acks, and ignoring one is
+// legal, so an unanswered proposal cannot be allowed to take the grip
+// with it.
+#define RESIZE_ACK_TIMEOUT_TICKS (PIT_HZ / 2)
+
+// The window the ask names, or -1. The pid/id pair is checked because
+// closing a window compacts windows[] -- a bare index would then name
+// somebody else and resize the wrong app.
+static int resize_ask_target(void) {
+    if (resize_ask_idx < 0 || resize_ask_idx >= window_count) return -1;
+    const struct window *w = &windows[resize_ask_idx];
+    if (w->client_pid != resize_ask_pid || w->client_win != resize_ask_win)
+        return -1;
+    return resize_ask_idx;
+}
+
+// Send the next proposal, if the drag has asked for a size the client
+// has not been told about and nothing is outstanding.
+static void resize_pump(void) {
+    int idx = resize_ask_target();
+    if (idx < 0 || resize_want_w <= 0) return;
+    if (resize_want_w == resize_sent_w && resize_want_h == resize_sent_h) return;
+    if (resize_inflight && sys_ticks() - resize_sent_tick < RESIZE_ACK_TIMEOUT_TICKS)
+        return;
+
+    wm_client_send_resize(&windows[idx], resize_want_w, resize_want_h);
+    resize_asks++;
+    resize_sent_w = resize_want_w;
+    resize_sent_h = resize_want_h;
+    resize_inflight = 1;
+    resize_sent_tick = sys_ticks();
+}
+
+void wm_resize_acked(int idx) {
+    if (idx != resize_ask_target()) return;
+    resize_inflight = 0;
+    resize_pump();
+}
+
+// Point the ask at a window and give it a size. `w`/`h` are CONTENT
+// pixels -- a client knows nothing about chrome.
+static void resize_ask(int idx, int w, int h) {
+    if (idx != resize_ask_target()) {
+        resize_ask_idx = idx;
+        resize_ask_pid = windows[idx].client_pid;
+        resize_ask_win = windows[idx].client_win;
+        resize_sent_w = resize_sent_h = -1;
+        resize_inflight = 0;
+    }
+    resize_want_w = w;
+    resize_want_h = h;
+    resize_pump();
+}
+
 void wm_update_drag_resize(int mx, int my, uint8_t buttons) {
     if (dragging >= 0) {
         if (buttons & 0x1) {
@@ -573,32 +642,22 @@ void wm_update_drag_resize(int mx, int my, uint8_t buttons) {
             }
 
             if (is_client) {
-                // Propose only -- an outline, drawn by wm_render.c. The
-                // window keeps its real size until the client answers.
-                if (resize_prop_w != neww || resize_prop_h != newh) {
-                    // The old outline has to be erased as well as the
-                    // new one drawn, so damage both.
-                    if (resize_prop_w > 0) wm_damage_rect(w->x, w->y, resize_prop_w, resize_prop_h);
-                    resize_prop_w = neww;
-                    resize_prop_h = newh;
-                    wm_damage_rect(w->x, w->y, neww, newh);
-                    redraw_pending = 1;
-                }
+                // ASK, every step of the drag. The window changes size
+                // when the client presents a frame at the new one, so it
+                // follows the pointer at the client's own latency
+                // instead of jumping on release.
+                resize_ask(resizing, neww - 2, newh - WM_TITLEBAR_H - 2);
             } else {
                 w->w = neww;
                 w->h = newh;
                 redraw_pending = 1;
             }
         } else {
-            if (is_client && resize_prop_w > 0) {
-                // Released: ask. The CONTENT size, not the frame's --
-                // the client knows nothing about chrome.
-                wm_damage_rect(w->x, w->y, resize_prop_w, resize_prop_h);
-                wm_client_send_resize(w, resize_prop_w - 2,
-                                       resize_prop_h - WM_TITLEBAR_H - 2);
-                redraw_pending = 1;
-            }
-            resize_prop_w = resize_prop_h = -1;
+            // Released. The last size asked for is already queued, and
+            // the ask outlives the drag on purpose: a client still
+            // answering the previous proposal gets the final one when
+            // it does.
+            if (is_client) resize_pump();
             resizing = -1;
         }
     }

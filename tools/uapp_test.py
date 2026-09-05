@@ -4,9 +4,10 @@
 WHAT THIS COVERS
 ----------------
 Resize is a configure/ack handshake (see kernel/include/abi/win_proto.h):
-the window manager PROPOSES a size with WIN_EV_RESIZE and draws an
-outline, the client answers with WIN_REQ_RESIZE, and only then does the
-window actually change. Nothing else in the suite exercises it.
+the window manager PROPOSES a size with WIN_EV_RESIZE, the client
+answers with WIN_REQ_RESIZE, and the window changes when the client
+PRESENTS a frame at the new size -- which is what stops a resize showing
+a blank window. Nothing else in the suite exercises it.
 
 It drives `winclient` (userland/tests/winclient.c), which is the right
 target precisely because it contains no resize code at all -- it sets
@@ -161,7 +162,57 @@ def run(dbg, qmp, tmp, res):
         res.check("the client is still drawing after being resized twice",
                   edge == BORDER, f"top-left content pixel {edge}, want {BORDER}")
 
+    check_live_resize(dbg, qmp, tmp, res)
     check_maximize(dbg, qmp, tmp, res)
+
+
+# A drag long enough to WATCH. One interpolated position is consumed per
+# WM iteration (see gui_debug.drag), so the default eight are gone in
+# under a fifth of a second -- less than one client round trip, which
+# would make an interactive resize indistinguishable from a resize on
+# release.
+DRAG_STEPS = 48
+
+
+def check_live_resize(dbg, qmp, tmp, res):  # noqa: ARG001 -- qmp/tmp unused
+    """The window follows the drag rather than jumping on release.
+
+    Not by watching, which cannot work: injected input is drained as
+    fast as the WM iterates, so a scripted drag is over in ~150 ms
+    whatever step count it asks for, and any size polled during it is
+    luck. The WM COUNTS its proposals instead (`gui state`), and a
+    window manager that only asked on release would move that counter by
+    exactly one per drag.
+
+    The other half of interactive resize -- that the window does not go
+    BLANK while it follows -- is checked in tools/imgview_test.py, and
+    it has to be: it needs a client slow enough to repaint that the gap
+    is visible, and winclient is deliberately the opposite of that.
+
+    Positive control, run when this was written: send the proposal only
+    on release (drop the resize_ask() call from wm_input.c's drag arm
+    and pass the final size at the release instead). This goes red with
+    five proposals over five drags.
+    """
+    win = dbg.window(TITLE)
+    if not win:
+        res.check("the client window survived to be resized live", False, "no window")
+        return
+
+    asks_before = dbg.state()["resizes_asked"]
+    for _ in range(5):
+        w = dbg.window(TITLE)
+        if not w:
+            break
+        gx, gy = w["x"] + w["w"] - 2, w["y"] + w["h"] - 2
+        dbg.drag(gx, gy, gx + 40, gy + 28, steps=DRAG_STEPS)
+    dbg.settle()
+    asks = dbg.state()["resizes_asked"] - asks_before
+
+    res.check("the window follows the drag instead of jumping on release",
+              asks > 5,
+              f"{asks} resize proposals over 5 drags -- one per drag means "
+              f"the WM only asked on release")
 
 
 # The old WIN_CLIENT_MAX_W/H. Named rather than inlined because what is

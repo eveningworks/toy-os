@@ -134,9 +134,21 @@ extern int resize_right, resize_bottom;
 extern int resize_start_mx, resize_start_my;
 extern int resize_start_w, resize_start_h;
 
-// The outline a client-window resize drag is proposing (see wm.c).
-// -1/-1 when there is none.
-extern int resize_prop_w, resize_prop_h;
+// The interactive resize's ask (see wm.c). resize_ask_idx is -1 when
+// there is none; the pid/id pair beside it is what makes a stale index
+// detectable after a window closes.
+extern int resize_ask_idx;
+extern int resize_ask_pid;
+extern unsigned resize_ask_win;
+extern int resize_want_w, resize_want_h;
+extern int resize_sent_w, resize_sent_h;
+extern int resize_inflight;
+extern uint64_t resize_sent_tick;
+extern unsigned resize_asks;
+
+// The client accepted a proposal (WIN_EV_CLIENT_RESIZED): send the next
+// one if the drag has moved on. Called from wm_client.c.
+void wm_resize_acked(int idx);
 
 // index into windows[], or -1 if no app is currently capturing a
 // content-area drag via its on_drag_start callback (see gui_apps.h) --

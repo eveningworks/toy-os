@@ -244,15 +244,26 @@
 // win_server_ops calls were skipped when nothing had registered.
 #define WIN_EV_CLIENT_CREATED   15 // a: pid. A window exists; read it.
 #define WIN_EV_CLIENT_PRESENT   16 // a: pid, b: the FRONT buffer index
-                                    // (0 or 1). Its buffer has new
-                                    // pixels, and `b` says which of the
-                                    // two to read -- see
+                                    // (0 or 1), mods: that buffer's own
+                                    // WIDTH and HEIGHT, packed by
+                                    // WIN_PRESENT_SIZE(). Its buffer has
+                                    // new pixels, and `b` says which of
+                                    // the two to read -- see
                                     // WIN_BUFFER_HALF. A compositor
                                     // remembers this per window,
                                     // because it also repaints for its
                                     // own reasons (the clock, another
                                     // window) when no present has
                                     // arrived.
+                                    //
+                                    // **THE SIZE IS THE FRAME'S, NOT THE
+                                    // WINDOW'S.** It is what makes a
+                                    // resize invisible: a compositor
+                                    // adopts the geometry of the pixels
+                                    // it is about to show, so it never
+                                    // has to guess whether this frame
+                                    // was drawn before or after a
+                                    // resize it proposed.
 #define WIN_EV_CLIENT_DESTROYED 17 // a: pid. It is going away. The
                                     // buffer is ALREADY freed when this
                                     // arrives -- unlike the ring-0
@@ -263,8 +274,19 @@
 #define WIN_EV_CLIENT_TITLE     18 // a: pid. Title changed; re-read it.
 #define WIN_EV_CLIENT_HINTS     19 // a: pid. Hints changed; re-read.
 #define WIN_EV_CLIENT_RESIZED   20 // a: pid, b: new w, mods: new h. The
-                                    // buffer was reallocated, so the
-                                    // compositor must re-map it.
+                                    // client ACCEPTED a proposal: its
+                                    // BACK buffer is now this size and
+                                    // was reallocated, so the compositor
+                                    // must re-map it. **Not the moment
+                                    // to adopt the size** -- the front
+                                    // buffer still holds the last frame
+                                    // at the old one, and that frame is
+                                    // what is on screen until the
+                                    // present that carries the new size.
+                                    // Useful for pacing: a compositor
+                                    // resizing interactively can send
+                                    // its next proposal when this
+                                    // arrives.
 #define WIN_EV_CLIENT_PONG      21 // a: pid, b: the serial echoed back.
 #define WIN_EV_CLIENT_TIMER     22 // a: pid. This window's timer is due.
 #define WIN_EV_CLIENT_CLOSE     23 // a: pid, window unused. Close every
@@ -1090,20 +1112,32 @@ struct win_debug_msg {
 // So, following Wayland's xdg_toplevel configure/ack -- the same
 // problem, solved the same way, for the same reason:
 //
-//   1. The user drags the resize grip. The WM tracks a proposed size
-//      and draws a rubber-band outline; the window itself does not
-//      change yet.
-//   2. On release the WM clamps to the client's hinted minimum and
-//      sends WIN_EV_RESIZE(w, h) -- a proposal.
-//   3. The client answers with WIN_REQ_RESIZE. The server frees the old
-//      frames, allocates new ones and maps them at the same virtual
-//      address, so the client's buffer pointer survives.
-//   4. The client redraws and presents. The WM adopts the new content
-//      size when that present arrives.
-//   5. If the server refuses (out of contiguous memory, over
+//   1. The user drags the resize grip. The WM clamps to the client's
+//      hinted minimum and sends WIN_EV_RESIZE(w, h) -- a proposal, one
+//      in flight at a time, the last one on release.
+//   2. The client answers with WIN_REQ_RESIZE. The server rebuilds the
+//      BACK buffer at the new size and maps it at the same virtual
+//      address, so the client's buffer pointer survives. **The FRONT
+//      buffer is left alone**, still holding the last finished frame at
+//      the size it was drawn at -- which is what the compositor goes on
+//      showing.
+//   3. The client redraws at the new size and presents. The server
+//      flips, and the present event carries the new front buffer's own
+//      dimensions (WIN_PRESENT_SIZE). The WM adopts the geometry THERE,
+//      with the pixels in hand.
+//   4. If the server refuses (out of contiguous memory, over
 //      WIN_CLIENT_MAX_*), the client keeps the size it had and the
 //      window does not change. A refusal is a normal outcome, not an
 //      error path.
+//
+// Step 2's asymmetry is the reason a resize here does not flash. The
+// obvious implementation rebuilds both buffers and tells the compositor
+// at once -- and then the compositor paints a freshly zeroed window for
+// the whole round trip, which measured 100-240 ms under TCG and reads
+// as the window going black. Keeping the size ON THE BUFFER is
+// Wayland's answer to the same problem (a wl_buffer carries its
+// dimensions; a surface adopts them at commit); X11's resize-then-
+// repaint is the shape that flickers.
 //
 // A client that ignores WIN_EV_RESIZE simply does not resize, which is
 // the same politeness WIN_EV_CLOSE has: see "a client window's close
@@ -1256,6 +1290,16 @@ static inline uint64_t win_buffer_back_offset(int front) {
 static inline uint64_t win_buffer_front_offset(int front) {
     return front ? WIN_BUFFER_HALF : 0;
 }
+
+// A PRESENT EVENT'S `mods`: the front buffer's own size, width in the
+// high half and height in the low one. Both are bounded by
+// WIN_CLIENT_MAX_W/H (1920x1080), so 16 bits each is room to spare --
+// and packing beats widening struct win_event, which is on the path of
+// every event the system delivers.
+#define WIN_PRESENT_SIZE(w, h) ((((uint32_t)(w) & 0xFFFFu) << 16) | \
+                                 ((uint32_t)(h) & 0xFFFFu))
+#define WIN_PRESENT_W(m)       ((int)(((uint32_t)(m) >> 16) & 0xFFFFu))
+#define WIN_PRESENT_H(m)       ((int)((uint32_t)(m) & 0xFFFFu))
 #define WIN_CLIENT_MAX    4 // windows one client may hold at once
 
 static inline uint64_t win_buffer_vaddr(uint32_t window) {

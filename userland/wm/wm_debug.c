@@ -791,6 +791,9 @@ static void cmd_state(struct dbg_out *o, int json) {
                      brightness_open ? "true" : "false");
         dbg_out_printf(o, "\"dragging\":%d,\"resizing\":%d,\"content_pressed\":%d,",
                      dragging, resizing, content_pressed);
+        // Resize proposals sent since boot -- see wm.c. One per drag
+        // would mean the window only resizes on release.
+        dbg_out_printf(o, "\"resizes_asked\":%u,", resize_asks);
         dbg_out_printf(o, "\"redraw_pending\":%s,\"pending\":%d,",
                      redraw_pending ? "true" : "false", wm_debug_input_pending());
         dbg_out_printf(o, "\"hwcursor\":%s,",
@@ -840,6 +843,7 @@ static void cmd_state(struct dbg_out *o, int json) {
                  calendar_open, volume_open, brightness_open);
     dbg_out_printf(o, "dragging=%d resizing=%d content_pressed=%d redraw_pending=%d\r\n",
                  dragging, resizing, content_pressed, redraw_pending);
+    dbg_out_printf(o, "resize proposals sent: %u\r\n", resize_asks);
     dbg_out_printf(o, "injected events pending: %d\r\n", wm_debug_input_pending());
     dbg_out_printf(o, "scene repaints: %u\r\n", wm_scene_frames());
     dbg_out_write(o, "launched (still running):");
@@ -976,13 +980,23 @@ static int cmd_click(int x, int y) {
 // jumped straight to its destination would never exercise the
 // per-tick "is the cursor still over the armed control" tracking, which
 // is most of what a drag test is for.
+//
+// **MORE STEPS IS FINER MOTION, NOT A LONGER DRAG.** One queued position
+// is consumed per wm_run() iteration and the loop iterates as fast as it
+// can while input is pending, so 48 steps take about as long as 8. What
+// they buy is intermediate positions a hit region cannot be stepped
+// over -- see docs/roadmap-details.md's "Finer `gui drag`
+// interpolation".
 #define DRAG_STEPS 8
-static int cmd_drag(int x0, int y0, int x1, int y1) {
+#define DRAG_STEPS_MAX (INJECT_MAX - 4)  // room for the press and release
+static int cmd_drag(int x0, int y0, int x1, int y1, int steps) {
+    if (steps < 1) steps = DRAG_STEPS;
+    if (steps > DRAG_STEPS_MAX) steps = DRAG_STEPS_MAX;
     if (!inject_push(x0, y0, 0)) return 0;
     if (!inject_push(x0, y0, 1)) return 0;
-    for (int i = 1; i <= DRAG_STEPS; i++) {
-        int x = x0 + (x1 - x0) * i / DRAG_STEPS;
-        int y = y0 + (y1 - y0) * i / DRAG_STEPS;
+    for (int i = 1; i <= steps; i++) {
+        int x = x0 + (x1 - x0) * i / steps;
+        int y = y0 + (y1 - y0) * i / steps;
         if (!inject_push(x, y, 1)) return 0;
     }
     return inject_push(x1, y1, 0);
@@ -1094,7 +1108,7 @@ static void usage(struct dbg_out *o) {
     dbg_out_write(o, "  close <index>         close window <index> from `gui windows`\r\n");
     dbg_out_write(o, "  move X Y              move the cursor, nothing held (for hover)\r\n");
     dbg_out_write(o, "  click X Y             synthetic press+release at a point\r\n");
-    dbg_out_write(o, "  drag X1 Y1 X2 Y2      synthetic press, interpolated move, release\r\n");
+    dbg_out_write(o, "  drag X1 Y1 X2 Y2 [N]  synthetic press, N interpolated moves, release\r\n");
     dbg_out_write(o, "  key <c|0xNN>          synthetic keypress to the focused window\r\n");
     dbg_out_write(o, "  wheel <n>             synthetic wheel notches (+up / -down)\r\n");
     dbg_out_write(o, "  icons                 how many app icons are decoded and cached\r\n");
@@ -1328,13 +1342,14 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
     }
 
     if (k_strcmp(sub, "drag") == 0) {
-        int x0, y0, x1, y1;
+        int x0, y0, x1, y1, steps = 0;
         if (!parse_int(next_tok(&p), &x0) || !parse_int(next_tok(&p), &y0) ||
             !parse_int(next_tok(&p), &x1) || !parse_int(next_tok(&p), &y1)) {
-            dbg_out_write(o, "usage: gui drag X1 Y1 X2 Y2\r\n");
+            dbg_out_write(o, "usage: gui drag X1 Y1 X2 Y2 [STEPS]\r\n");
             return 1;
         }
-        dbg_out_printf(o, cmd_drag(x0, y0, x1, y1)
+        parse_int(next_tok(&p), &steps);   // optional; 0 keeps the default
+        dbg_out_printf(o, cmd_drag(x0, y0, x1, y1, steps)
                      ? "gui: queued drag (%d,%d) -> (%d,%d)\r\n"
                      : "gui: input queue full, drag (%d,%d) -> (%d,%d) DROPPED\r\n",
                      x0, y0, x1, y1);

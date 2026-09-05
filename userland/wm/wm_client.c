@@ -107,6 +107,7 @@ static int on_window_created(int pid, uint32_t id, uint32_t *buf,
     win->client_win = id;
     win->client_buf = buf;
     win->client_base = buf;   // front is 0 until the first present
+    win->client_front = 0;
     win->client_w = w;
     win->client_h = h;
     win->client_last_mx = INT32_MIN; // nothing delivered yet
@@ -156,22 +157,40 @@ static int on_window_created(int pid, uint32_t id, uint32_t *buf,
 // pixels -- the kernel flipped it inside WIN_REQ_PRESENT, before this
 // event was queued, so by the time this runs the client is already
 // drawing into the other one.
-static void on_window_present(int pid, uint32_t id, int front) {
+static void on_window_present(int pid, uint32_t id, int front, int w, int h) {
     int idx = find_client_window(pid, id);
     if (idx < 0) return;
+
+    struct window *win = &windows[idx];
 
     // Point at the finished buffer. A single-buffered window (its
     // second allocation failed) always reports 0, so this is a no-op
     // there and the old behaviour is preserved exactly.
-    if (windows[idx].client_base)
-        windows[idx].client_buf = windows[idx].client_base
-                                + (front ? WIN_BUFFER_HALF / 4 : 0);
+    win->client_front = front;
+    if (win->client_base)
+        win->client_buf = win->client_base + (front ? WIN_BUFFER_HALF / 4 : 0);
+
+    // THE FRAME BRINGS ITS OWN SIZE, and this is where a resize lands.
+    // Adopting it when the client ACCEPTED the proposal instead would
+    // put the chrome around a buffer with nothing in it yet -- a whole
+    // window of black for the length of the client's repaint. See
+    // abi/win_proto.h's configure/ack.
+    if (w > 0 && h > 0 && (w != win->client_w || h != win->client_h)) {
+        wm_damage_rect(win->x, win->y, win->w, win->h);   // the rect being left
+        win->client_w = w;
+        win->client_h = h;
+        win->w = w + 2;
+        win->h = h + WM_TITLEBAR_H + 2;
+        wm_damage_rect(win->x, win->y, win->w, win->h);
+        redraw_pending = 1;
+        return;
+    }
 
     // Damage only the CONTENT area, not the whole window: the chrome
     // hasn't changed, and over-damaging is how a compositor quietly
     // stops being a compositor.
-    wm_damage_rect(window_content_x(&windows[idx]), window_content_y(&windows[idx]),
-                    window_content_w(&windows[idx]), window_content_h(&windows[idx]));
+    wm_damage_rect(window_content_x(win), window_content_y(win),
+                    window_content_w(win), window_content_h(win));
     redraw_pending = 1;
 }
 
@@ -235,28 +254,26 @@ static void on_window_hints(int pid, uint32_t id, unsigned flags, int min_w, int
     redraw_pending = 1;
 }
 
-// The client answered a WIN_EV_RESIZE proposal: its buffer is now this
-// size. The WM adopts it here rather than when the proposal was sent,
-// which is what stops the chrome and the content ever disagreeing --
-// see abi/win_proto.h's configure/ack description.
+// The client ACCEPTED a WIN_EV_RESIZE proposal: its back buffer is now
+// this size and its frames moved, so the mapping is re-taken here.
+//
+// **THE SIZE IS NOT ADOPTED HERE.** What is on screen is still the front
+// buffer at the old size, and it stays that way until the client has
+// drawn the new one -- on_window_present() above does the adopting, with
+// the pixels in hand. Doing it here is what made a resize flash black.
 static void on_window_resized(int pid, uint32_t id, uint32_t *buf, int w, int h) {
+    (void)w; (void)h;
     int idx = find_client_window(pid, id);
     if (idx < 0) return;
     struct window *win = &windows[idx];
 
-    // Damage the OLD rect before moving to the new one: shrinking
-    // leaves desktop behind that nothing else would repaint.
-    wm_damage_rect(win->x, win->y, win->w, win->h);
-
-    win->client_buf = buf;
     win->client_base = buf;
-    win->client_w = w;
-    win->client_h = h;
-    win->w = w + 2;
-    win->h = h + WM_TITLEBAR_H + 2;
+    win->client_buf = buf + (win->client_front ? WIN_BUFFER_HALF / 4 : 0);
 
-    wm_damage_rect(win->x, win->y, win->w, win->h);
-    redraw_pending = 1;
+    // An interactive resize sends its next proposal now: one in flight
+    // at a time, so a slow client sets the pace instead of being handed
+    // a queue of sizes it will draw and throw away.
+    wm_resize_acked(idx);
 }
 
 // Defined below with the rest of the liveness code, which reads more
@@ -621,7 +638,8 @@ int wm_client_handle_event(const struct win_event *ev) {
         break;
     }
     case WIN_EV_CLIENT_PRESENT:
-        on_window_present(pid, id, (int)ev->b);
+        on_window_present(pid, id, (int)ev->b,
+                          WIN_PRESENT_W(ev->mods), WIN_PRESENT_H(ev->mods));
         break;
     case WIN_EV_CLIENT_DESTROYED:
         // The buffer is ALREADY freed by the time this arrives, unlike

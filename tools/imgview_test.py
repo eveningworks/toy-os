@@ -81,6 +81,9 @@ HOST_WALLPAPERS = os.path.join(
 # 3, and the framebuffer adds nothing of its own at 32bpp.
 TOL = 5
 
+# The viewer's window title, as the WM reports it.
+TITLE_VIEWER = "Image Viewer"
+
 
 class Result:
     def __init__(self):
@@ -330,7 +333,7 @@ def run(dbg, qmp, tmp, res):
     deadline = time.time() + 20
     while time.time() < deadline and win is None:
         time.sleep(0.4)
-        win = dbg.window("Image Viewer")
+        win = dbg.window(TITLE_VIEWER)
     if win is None:
         print("imgview_test: no Image Viewer window appeared")
         return
@@ -431,6 +434,8 @@ def run(dbg, qmp, tmp, res):
     res.check("the second picture is dusk.jpg", ok,
               f"worst channel difference {worst} at {at}")
 
+    check_resize_never_blanks(dbg, qmp, tmp, res, win)
+
     # --- 6. set as wallpaper, and the DESKTOP picks it up -------------
     open_menu_item(dbg, content, 2, 0)    # Desktop > Set as wallpaper (fill)
     conf = ""
@@ -466,6 +471,61 @@ def run(dbg, qmp, tmp, res):
     # previous tool's cleanup to have happened is a tool that fails
     # depending on the order the suite ran in.
     set_setting(dbg, "desktop.wallpaper", "aurora")
+
+
+def check_resize_never_blanks(dbg, qmp, tmp, res, win):
+    """Resizing the viewer never shows a black window.
+
+    THE SLOW CLIENT IS THE POINT. A resize rebuilds the client's buffer,
+    and if the buffer the compositor is reading is one of the rebuilt
+    ones it composites freshly zeroed memory until the client repaints
+    -- which for this app means decoding scale plus a full redraw. That
+    gap measured 100-240 ms under TCG here, two whole frames of black
+    window, and it is why the front buffer keeps its last frame while
+    only the back one is rebuilt (abi/win_proto.h's configure/ack).
+
+    Checked HERE rather than in tools/uapp_test.py, which owns the rest
+    of the handshake, because winclient repaints instantly: with that
+    client the gap is a few milliseconds and no sampling rate catches it
+    -- the check passes with the bug present, which is the shape
+    CLAUDE.md calls a test that measures nothing.
+
+    RAW frames, never settled ones: settling waits for two identical
+    dumps, which is precisely a way of skipping the frames in question.
+
+    Positive control, run when this was written: rebuild BOTH buffers in
+    win_server.c's resize_window() (pass `cw->front` as well as `back`)
+    and this goes red with several all-black samples.
+    """
+    from PIL import Image
+
+    w = dbg.window(TITLE_VIEWER) or win
+    c = w["content"]
+    # Inside the content's top-left, which stays inside the window at
+    # every size a grow passes through -- the grip is the far corner.
+    box = (c["x"] + 4, c["y"] + 4, c["x"] + 64, c["y"] + 64)
+
+    blanks, samples = 0, 0
+    for _ in range(4):
+        cur = dbg.window(TITLE_VIEWER)
+        if not cur:
+            break
+        gx, gy = cur["x"] + cur["w"] - 2, cur["y"] + cur["h"] - 2
+        dbg.drag(gx, gy, gx + 50, gy + 34, settle=False)
+        until = time.time() + 0.8
+        while time.time() < until:
+            path = os.path.abspath(os.path.join(tmp, "resize-raw.png"))
+            qmp.screenshot(path, stable=False, settle=0.0)
+            with Image.open(path) as im:
+                px = list(im.convert("RGB").crop(box).getdata())
+            samples += 1
+            if all(p[0] < 24 and p[1] < 24 and p[2] < 24 for p in px):
+                blanks += 1
+    dbg.settle()
+
+    res.check("resizing the viewer never shows a blank window",
+              blanks == 0 and samples >= 8,
+              f"{blanks} all-black samples of {samples}")
 
 
 def main():

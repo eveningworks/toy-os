@@ -45,17 +45,29 @@ _Static_assert(WIN_COMPOSITOR_MAX_PIDS >= SCHED_MAX_PROCS,
 // stopped being revoked.
 #define COMP_BUFS 2
 
+// ONE BUFFER, WITH ITS OWN SIZE. The dimensions belong to the BUFFER
+// rather than to the window, which is what lets a resize rebuild the
+// back buffer while the front still holds the last finished frame at
+// the size it was drawn at -- Wayland's model, where a wl_buffer
+// carries its dimensions and the surface adopts them on commit. The
+// window's own w/h below is the CLIENT's current size; the front
+// buffer catches up at the next present.
+struct win_buf {
+    uint32_t *phys;   // kernel-visible (identity-mapped) pixels, NULL if absent
+    uint32_t pages;   // frames it spans
+    int w, h;         // what was drawn into it
+};
+
 struct client_window {
     int used;
     int pid;
     uint32_t id;      // index into the owner's slots, so
                        // win_buffer_vaddr(id) is stable per window
     uint64_t pml4;    // the owner's address space, needed to unmap
-    uint32_t *buf;    // kernel-visible (identity-mapped) pixels
-    uint64_t vaddr;   // where the client sees it
-    uint32_t pages;   // how many frames `buf` spans
+    uint64_t vaddr;   // where the client sees buffer 0
 
-    // THE SECOND BUFFER, or NULL when this window is single-buffered.
+    // THE TWO BUFFERS. `bufs[1].phys` is NULL when this window is
+    // single-buffered.
     //
     // A window is double-buffered so the compositor never reads memory
     // a client is drawing into (see WIN_BUFFER_HALF in abi/win_proto.h).
@@ -69,8 +81,13 @@ struct client_window {
     // It then tears exactly as every window did before this, which is
     // strictly better than refusing to open. `front` stays 0 and the
     // flip is a no-op.
-    uint32_t *buf2;
+    struct win_buf bufs[COMP_BUFS];
     int front;        // 0 or 1: which buffer the compositor reads
+
+    // THE CLIENT'S CURRENT SIZE -- what it draws and what the BACK
+    // buffer is built to. The front buffer may still be the previous
+    // size, so a caller that means "the pixels the compositor is
+    // reading" must ask bufs[front], not this.
     int w, h;
     // Is this window's buffer currently mapped into the compositor's
     // address space? Tracked per window rather than inferred, because
@@ -357,8 +374,7 @@ static uint32_t comp_poison_range(struct client_window *cw, int b,
 // one. Buffer 1 is absent on a single-buffered window, which is a
 // working window and not an error (see the struct).
 static uint64_t comp_buf_phys(const struct client_window *cw, int b) {
-    uint32_t *p = (b == 0) ? cw->buf : cw->buf2;
-    return (uint64_t)(uintptr_t)p;
+    return (uint64_t)(uintptr_t)cw->bufs[b].phys;
 }
 
 // Maps a window's frames into the compositor at its derived address.
@@ -384,7 +400,8 @@ static int comp_map(struct client_window *cw) {
     uint32_t span[COMP_BUFS];
     for (int b = 0; b < COMP_BUFS; b++) {
         span[b] = cw->comp_span[b];
-        if (comp_buf_phys(cw, b) && span[b] < cw->pages) span[b] = cw->pages;
+        if (comp_buf_phys(cw, b) && span[b] < cw->bufs[b].pages)
+            span[b] = cw->bufs[b].pages;
     }
 
     // A poisoned slot has PRESENT page-table entries pointing at the
@@ -401,13 +418,13 @@ static int comp_map(struct client_window *cw) {
         // BORROWED: these frames are the window server's (allocated in
         // create_window(), freed in destroy_window()). The compositor
         // only gets to look at them.
-        for (; phys && done < cw->pages; done++) {
+        for (; phys && done < cw->bufs[b].pages; done++) {
             if (!vmm_map_user_borrowed(g_comp_pml4, base + (uint64_t)done * 4096,
                                         phys + (uint64_t)done * 4096,
                                         1, 0, VMM_MT_NORMAL))
                 break;
         }
-        if (phys && done < cw->pages) {
+        if (phys && done < cw->bufs[b].pages) {
             // Never left half-mapped. Buffer 0 failing is fatal to the
             // whole mapping; buffer 1 failing only makes the window
             // single-buffered, which is what it would have been if the
@@ -501,27 +518,26 @@ static void destroy_window(struct client_window *cw) {
     // the event above: see comp_poison().
     comp_poison(cw);
 
-    for (uint32_t i = 0; i < cw->pages; i++) {
-        vmm_unmap_user_page(cw->pml4, cw->vaddr + (uint64_t)i * 4096);
-    }
-    // pmm_free_contiguous(), not a pmm_free_frame() loop -- the buffer
-    // came from pmm_alloc_contiguous() and the two allocators are not
-    // interchangeable (see api/pmm.h).
-    pmm_free_contiguous((uint64_t)(uintptr_t)cw->buf, cw->pages);
-    // ...and the second one, when there is one. Unmapped first for the
-    // same reason the first is: a mapping outliving its frames points
-    // at whatever the allocator hands out next.
-    if (cw->buf2) {
-        for (uint32_t i = 0; i < cw->pages; i++)
-            vmm_unmap_user_page(cw->pml4,
-                                cw->vaddr + WIN_BUFFER_HALF + (uint64_t)i * 4096);
-        pmm_free_contiguous((uint64_t)(uintptr_t)cw->buf2, cw->pages);
+    // Both buffers, each at its OWN page count -- they can differ while
+    // a resize is in flight. Unmapped before freeing for the same reason
+    // throughout: a mapping outliving its frames points at whatever the
+    // allocator hands out next.
+    for (int b = 0; b < COMP_BUFS; b++) {
+        struct win_buf *wb = &cw->bufs[b];
+        if (!wb->phys) continue;
+        uint64_t base = cw->vaddr + (uint64_t)b * WIN_BUFFER_HALF;
+        for (uint32_t i = 0; i < wb->pages; i++)
+            vmm_unmap_user_page(cw->pml4, base + (uint64_t)i * 4096);
+        // pmm_free_contiguous(), not a pmm_free_frame() loop -- the
+        // buffer came from pmm_alloc_contiguous() and the two allocators
+        // are not interchangeable (see api/pmm.h).
+        pmm_free_contiguous((uint64_t)(uintptr_t)wb->phys, wb->pages);
+        wb->phys = NULL;
+        wb->pages = 0;
+        wb->w = wb->h = 0;
     }
     cw->used = 0;
-    cw->buf = NULL;
-    cw->buf2 = NULL;
     cw->front = 0;
-    cw->pages = 0;
 }
 
 // `pml4` is passed in rather than read from vmm_current_pml4() here.
@@ -618,11 +634,16 @@ static int create_window(int pid, uint64_t pml4, int w, int h, int x, int y,
     cw->pid = pid;
     cw->id = (uint32_t)slot;
     cw->pml4 = pml4;
-    cw->buf = (uint32_t *)(uintptr_t)phys;
-    cw->buf2 = (uint32_t *)(uintptr_t)phys2;
+    cw->bufs[0].phys = (uint32_t *)(uintptr_t)phys;
+    cw->bufs[0].pages = pages;
+    cw->bufs[0].w = w;
+    cw->bufs[0].h = h;
+    cw->bufs[1].phys = (uint32_t *)(uintptr_t)phys2;
+    cw->bufs[1].pages = phys2 ? pages : 0;
+    cw->bufs[1].w = phys2 ? w : 0;
+    cw->bufs[1].h = phys2 ? h : 0;
     cw->front = 0;
     cw->vaddr = vaddr;
-    cw->pages = pages;
     cw->w = w;
     cw->h = h;
     cw->comp_mapped = 0;
@@ -649,7 +670,7 @@ static int create_window(int pid, uint64_t pml4, int w, int h, int x, int y,
     tell_compositor(WIN_EV_CLIENT_CREATED, pid, cw->id, w, (uint32_t)h);
 
     if (g_ops && g_ops->window_created) {
-        if (!g_ops->window_created(pid, cw->id, cw->buf, w, h, x, y, app_id)) {
+        if (!g_ops->window_created(pid, cw->id, cw->bufs[0].phys, w, h, x, y, app_id)) {
             // Not destroy_window() -- that would call window_destroyed()
             // for a window the presentation layer just refused and never
             // recorded.
@@ -785,127 +806,108 @@ static int map_font(int pid, struct win_request_msg *req) {
     return 1;
 }
 
-// Reallocate a window's buffer, mapped AT THE SAME VIRTUAL ADDRESS.
+// Rebuild ONE of a window's buffers at a new size, at the same virtual
+// address it already has -- win_buffer_vaddr() derives that from the
+// window id plus the buffer index, so the client's pointer never moves
+// and it is never told its pixels went anywhere.
 //
-// That last part is what makes a client-driven resize simple rather
-// than a lifetime problem: win_buffer_vaddr() derives the address from
-// the window id, so the client's pointer is unchanged and it never has
-// to be told where its pixels moved. The fixed-vaddr decision was made
-// for a different reason (a client can compute its own buffer address)
-// and pays off here.
-//
-// Ordering is chosen so a FAILURE leaves the window exactly as it was:
+// Ordering is chosen so a FAILURE leaves the buffer exactly as it was:
 // the new frames are allocated and zeroed BEFORE anything is unmapped,
-// so running out of memory means the old buffer is still mapped and
-// still correct. A refusal is a normal outcome of this call, not an
-// error path -- see abi/win_proto.h.
-static int resize_window(struct client_window *cw, int w, int h) {
-    if (w <= 0 || h <= 0 || w > WIN_CLIENT_MAX_W || h > WIN_CLIENT_MAX_H) return 0;
-
+// and a half-built mapping puts the original frames back (they are
+// still allocated -- nothing has freed them yet). A refusal is a normal
+// outcome of this call, not an error path -- see abi/win_proto.h.
+//
+// The COMPOSITOR's view is deliberately NOT touched here: the caller
+// remaps the whole slot once, because poisoning the front buffer to
+// rebuild the back one is exactly the black frame this file is shaped
+// to avoid.
+static int rebuild_buffer(struct client_window *cw, int b, int w, int h) {
+    struct win_buf *wb = &cw->bufs[b];
     uint32_t bytes = (uint32_t)w * (uint32_t)h * 4;
     uint32_t pages = (bytes + 4095) / 4096;
+    uint64_t base = cw->vaddr + (uint64_t)b * WIN_BUFFER_HALF;
 
     uint64_t phys = pmm_alloc_contiguous(pages, PMM_ZONE_ANY);
     if (!phys) {
-        klog_write("win_server: resize refused -- out of contiguous memory\n");
+        klog_write("win_server: buffer rebuild refused -- out of contiguous memory\n");
         return 0;
     }
+    // Zeroed before the client ever sees it: these frames may have been
+    // another process's a moment ago.
     k_memset((void *)(uintptr_t)phys, 0, (size_t)pages * 4096);
 
-    // Only now is the old mapping disturbed.
-    for (uint32_t i = 0; i < cw->pages; i++) {
-        vmm_unmap_user_page(cw->pml4, cw->vaddr + (uint64_t)i * 4096);
-    }
+    uint32_t old_pages = wb->pages;
+    for (uint32_t i = 0; i < old_pages; i++)
+        vmm_unmap_user_page(cw->pml4, base + (uint64_t)i * 4096);
+
     for (uint32_t i = 0; i < pages; i++) {
-        if (!vmm_map_user_page(cw->pml4, cw->vaddr + (uint64_t)i * 4096,
-                                phys + (uint64_t)i * 4096)) {
-            // Half-mapped and the old frames are already unmapped: put
-            // the ORIGINAL buffer back rather than leaving the client
-            // with an address that faults. The old frames are still
-            // allocated -- nothing has freed them yet -- so this can
-            // always succeed with the memory it had a moment ago.
-            for (uint32_t j = 0; j < i; j++) {
-                vmm_unmap_user_page(cw->pml4, cw->vaddr + (uint64_t)j * 4096);
-            }
-            for (uint32_t j = 0; j < cw->pages; j++) {
-                vmm_map_user_page(cw->pml4, cw->vaddr + (uint64_t)j * 4096,
-                                   (uint64_t)(uintptr_t)cw->buf + (uint64_t)j * 4096);
-            }
-            pmm_free_contiguous(phys, pages);
-            klog_write("win_server: resize refused -- mapping failed\n");
-            return 0;
-        }
+        // BORROWED: these frames are the window server's, freed by
+        // destroy_window() and by this function. A mapping that owned
+        // them would have the client's teardown free them too.
+        if (vmm_map_user_borrowed(cw->pml4, base + (uint64_t)i * 4096,
+                                   phys + (uint64_t)i * 4096, 1, 0, VMM_MT_NORMAL))
+            continue;
+        // Half-mapped and the old frames are already unmapped: put the
+        // ORIGINAL buffer back rather than leaving the client with an
+        // address that faults. Nothing has been freed yet, so this can
+        // always succeed with the memory it had a moment ago.
+        for (uint32_t j = 0; j < i; j++)
+            vmm_unmap_user_page(cw->pml4, base + (uint64_t)j * 4096);
+        for (uint32_t j = 0; j < old_pages; j++)
+            vmm_map_user_borrowed(cw->pml4, base + (uint64_t)j * 4096,
+                                   (uint64_t)(uintptr_t)wb->phys + (uint64_t)j * 4096,
+                                   1, 0, VMM_MT_NORMAL);
+        pmm_free_contiguous(phys, pages);
+        klog_write("win_server: buffer rebuild refused -- mapping failed\n");
+        return 0;
     }
 
-    // The compositor's mapping still points at the OLD frames, which are
-    // about to be freed. Revoke before the free, then rebuild against
-    // the new ones -- at the same virtual address, so the compositor's
-    // pointer is unchanged and it need not be told anything (see
-    // win_compositor_vaddr()).
-    //
-    // Order matters twice over: the unmap has to happen before
-    // pmm_free_contiguous(), and the remap has to use the new frames,
-    // so this cannot be collapsed into one call either side of the
-    // free. If the remap fails, the window is left UNMAPPED rather than
-    // stale -- a compositor that finds its mapping gone can ask again,
-    // whereas one reading freed frames cannot tell anything is wrong.
-    int was_comp_mapped = cw->comp_mapped;
-    comp_poison(cw);   // never a hole while the window lives -- see comp_poison()
+    if (wb->phys) pmm_free_contiguous((uint64_t)(uintptr_t)wb->phys, old_pages);
+    wb->phys = (uint32_t *)(uintptr_t)phys;
+    wb->pages = pages;
+    wb->w = w;
+    wb->h = h;
+    return 1;
+}
 
-    pmm_free_contiguous((uint64_t)(uintptr_t)cw->buf, cw->pages);
+// A client accepted a proposed size: rebuild the buffer it is about to
+// draw into, and LEAVE THE FRONT ONE ALONE.
+//
+// That asymmetry is the whole of it. The front buffer still holds the
+// last finished frame, at the size it was drawn at, so the compositor
+// goes on showing real pixels for the rest of the round trip instead of
+// a freshly zeroed buffer -- which is a whole window of black for as
+// long as the client takes to repaint (measured at 100-240 ms under
+// TCG). The new size arrives with the frame drawn at it, at the next
+// present. That is Wayland's rule that a buffer carries its own
+// dimensions; X11's server-resizes-then-app-repaints is the shape this
+// used to have, flicker included.
+//
+// A SINGLE-BUFFERED window has nowhere to hide the change and rebuilds
+// the one buffer it has, blank frame and all -- the same degradation it
+// already accepts for tearing.
+static int resize_window(struct client_window *cw, int w, int h) {
+    if (w <= 0 || h <= 0 || w > WIN_CLIENT_MAX_W || h > WIN_CLIENT_MAX_H) return 0;
 
-    // THE SECOND BUFFER IS REBUILT AT THE NEW SIZE, and its old frames
-    // go back whatever happens. A resize that cannot find contiguous
-    // memory for it leaves the window SINGLE-BUFFERED at the new size
-    // rather than refusing the resize -- the same trade create_window()
-    // makes, and for the same reason: a window that tears is better
-    // than one that will not change size.
-    if (cw->buf2) {
-        uint64_t v2 = cw->vaddr + WIN_BUFFER_HALF;
-        for (uint32_t i = 0; i < cw->pages; i++)
-            vmm_unmap_user_page(cw->pml4, v2 + (uint64_t)i * 4096);
-        pmm_free_contiguous((uint64_t)(uintptr_t)cw->buf2, cw->pages);
-        cw->buf2 = NULL;
-    }
+    int back = cw->bufs[1].phys ? (cw->front ^ 1) : cw->front;
+    if (!rebuild_buffer(cw, back, w, h)) return 0;
 
-    cw->buf = (uint32_t *)(uintptr_t)phys;
-    cw->pages = pages;
     cw->w = w;
     cw->h = h;
-    // BACK TO BUFFER 0. The client rebuilds its surface from the window
-    // base after a resize, so the two must agree on where that is --
-    // and the only value both can assume without being told is 0.
-    cw->front = 0;
 
-    {
-        uint64_t phys2 = pmm_alloc_contiguous(pages, PMM_ZONE_ANY);
-        if (phys2) {
-            k_memset((void *)(uintptr_t)phys2, 0, (size_t)pages * 4096);
-            uint64_t v2 = cw->vaddr + WIN_BUFFER_HALF;
-            uint32_t done = 0;
-            for (; done < pages; done++) {
-                if (!vmm_map_user_borrowed(cw->pml4, v2 + (uint64_t)done * 4096,
-                                            phys2 + (uint64_t)done * 4096, 1, 0,
-                                            VMM_MT_NORMAL))
-                    break;
-            }
-            if (done < pages) {
-                for (uint32_t j = 0; j < done; j++)
-                    vmm_unmap_user_page(cw->pml4, v2 + (uint64_t)j * 4096);
-                pmm_free_contiguous(phys2, pages);
-            } else {
-                cw->buf2 = (uint32_t *)(uintptr_t)phys2;
-            }
-        }
-        if (!cw->buf2)
-            klog_write("win_server: resized window is single-buffered\n");
+    // The compositor's mapping still describes the old frames of the
+    // buffer that just changed. Revoke and rebuild the whole slot --
+    // both halves, because comp_map() is the only thing that knows how
+    // to poison a shrunken tail. This runs inside the client's syscall,
+    // so the compositor cannot composite between the two.
+    if (cw->comp_mapped) {
+        comp_poison(cw);  // never a hole while the window lives
+        comp_map(cw);
     }
-
-    if (was_comp_mapped) comp_map(cw);
 
     tell_compositor(WIN_EV_CLIENT_RESIZED, cw->pid, cw->id, w, (uint32_t)h);
     if (g_ops && g_ops->window_resized) {
-        g_ops->window_resized(cw->pid, cw->id, cw->buf, w, h);
+        g_ops->window_resized(cw->pid, cw->id, cw->bufs[0].phys, w, h);
     }
     return 1;
 }
@@ -1516,9 +1518,40 @@ int win_server_request(int pid, struct win_request_msg *req) {
         // so the client keeps drawing where it was and the compositor
         // keeps reading the same place. That is the old behaviour, and
         // the caller needs no special case for it.
-        if (cw->buf2) cw->front ^= 1;
+        if (cw->bufs[1].phys) {
+            // THE BUFFER ABOUT TO BECOME THE BACK ONE IS THE STALE ONE.
+            // A resize rebuilt only the buffer the client drew this
+            // frame into (see resize_window()), so the other half is
+            // still the previous size -- and the client draws into it
+            // next. Rebuild it here, where the pixels it holds have
+            // just stopped being needed.
+            //
+            // A failure means NO FLIP: the compositor keeps the frame
+            // it has and the client redraws the same buffer, so the
+            // window stops updating until memory frees up rather than
+            // overrunning a too-small one. The next present retries.
+            struct win_buf *stale = &cw->bufs[cw->front];
+            if (stale->w != cw->w || stale->h != cw->h) {
+                if (!rebuild_buffer(cw, cw->front, cw->w, cw->h)) {
+                    klog_write("win_server: present deferred -- no memory for "
+                               "the back buffer\n");
+                    return cw->front + 1;
+                }
+                // Only when frames actually moved: comp_map() is a
+                // page-table rebuild, and doing it per present would put
+                // one on every client frame.
+                if (cw->comp_mapped) { comp_poison(cw); comp_map(cw); }
+            }
+            cw->front ^= 1;
+        }
+        // THE SIZE TRAVELS WITH THE FRAME. `mods` carries the front
+        // buffer's own dimensions so the compositor adopts the geometry
+        // of the pixels it is about to show, never a size it was
+        // promised earlier -- see WIN_EV_CLIENT_PRESENT.
         tell_compositor(WIN_EV_CLIENT_PRESENT, pid, cw->id,
-                        (uint32_t)cw->front, 0);
+                        (uint32_t)cw->front,
+                        WIN_PRESENT_SIZE(cw->bufs[cw->front].w,
+                                         cw->bufs[cw->front].h));
         if (g_ops && g_ops->window_present) g_ops->window_present(pid, cw->id);
         // The new FRONT index: what the compositor will read, and
         // therefore what the client must NOT draw into.

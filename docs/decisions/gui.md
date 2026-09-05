@@ -6214,3 +6214,77 @@ ring, which is also what every desktop does. The one thing a second
 colour could still do, and this deliberately does not, is show marks in
 a pane that is not active more loudly than its stale cursor; the
 outline on the active pane already answers "which pane".
+
+
+## A resized window adopts its new size when the client PRESENTS, not when it acks
+
+Resizing a client window flashed: the whole content went black for
+100-240 ms under TCG, measured on Image Viewer by sampling raw frames
+through a grip drag. The cause was in two halves that agreed with each
+other. `resize_window()` allocated new frames for BOTH of a window's
+buffers and zeroed them, and `on_window_resized()` in the WM adopted the
+new geometry the moment the client acked -- so the compositor drew
+chrome around a buffer that was, by construction, empty, until the
+client got a repaint out.
+
+The obvious repairs both fall short. Copying the old pixels into the new
+buffer (Windows' `WVR_VALIDRECTS` BitBlt, which is exactly what USER32
+does to fill this gap) removes the black but shows content in the wrong
+place for a frame, and content that MOVED -- a centred image -- lands
+visibly offset. Snapshotting the composited window and stretching it
+until the client catches up (KWin, DWM) is more code and a scratch
+buffer, and it papers over the timing rather than removing it.
+
+Wayland does not have the gap at all, because a `wl_buffer` carries its
+own dimensions and a surface adopts them at `commit`: the compositor
+keeps showing the old buffer at the old size until a new one arrives.
+toy-os had already copied the configure/ack handshake and stopped one
+step short of that. So the size is on the buffer now
+(`struct win_buf`), a resize rebuilds only the BACK one, and
+`WIN_EV_CLIENT_PRESENT` carries the front buffer's w/h for the WM to
+adopt. There is no intermediate state to see, and no frame is ever
+composited that was not fully drawn at the size it is shown at.
+
+Three consequences worth knowing. The buffer left at the old size is
+rebuilt inside the NEXT present, which is the only moment its pixels
+have stopped being needed and the client has not yet started on it; a
+failure there defers the flip rather than handing the client a buffer it
+would overrun. A single-buffered window (its second allocation failed)
+has nowhere to hide the change and still flashes -- the same degradation
+it already accepts for tearing. And peak memory is unchanged at three
+buffers during a resize, because the old back buffer is freed before the
+replacement for the front one is asked for.
+
+The alternative that was NOT taken, and why: keeping the old FRONT
+frames alive as a third allocation until the present would let the
+window shrink and grow with no rebuild at present time at all, but it
+raises peak contiguous memory to four buffers -- 32 MiB at 1080p, from
+an allocator `abi/win_proto.h` already documents as the thing that
+refuses a window when memory fragments.
+
+## A client window resizes LIVE, and the pacing is one proposal in flight
+
+The rubber-band outline is gone. It was there because a client's buffer
+cannot be resized by the WM, so the frame could not follow the pointer
+without showing content stuck in a corner -- but that reasoning was
+about the FRAME being ahead of the pixels, which adopting on the present
+fixes outright. Windows and KDE both resize live, users expect it, and
+an outline is what X11 window managers did before compositing made
+anything else affordable.
+
+What live resize needs that release-only did not is pacing: a drag
+produces a motion event per frame, and a proposal per motion would queue
+sizes a slow client draws and throws away, each costing two contiguous
+allocations and a zeroed buffer. So `resize_pump()` sends the next
+proposal only when the client ACKS the last one -- the client sets the
+rate, exactly as a Wayland compositor waits for `ack_configure`. The
+drag records what it WANTS and the ack sends it, which is also why the
+ask outlives the drag: a client still answering the second-to-last
+proposal gets the final size when it comes back.
+
+Two details. An unanswered proposal times out after half a second,
+because ignoring `WIN_EV_RESIZE` is legal (`abi/win_proto.h`) and a
+client that does must not take the grip with it. And the ask is keyed on
+the window's (pid, id) rather than only its index into `windows[]`,
+because closing a window compacts that array -- a bare index would then
+name somebody else and resize the wrong app.

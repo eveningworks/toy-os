@@ -108,13 +108,24 @@ int resize_right = 0, resize_bottom = 0;
 int resize_start_mx, resize_start_my;
 int resize_start_w, resize_start_h;
 
-// A CLIENT window's resize is a PROPOSAL, not a live change: the buffer
-// belongs to the client, so the WM tracks the size the drag implies and
-// draws an outline, rather than growing a frame around pixels that are
-// still the old size. Sent as WIN_EV_RESIZE on release. -1 = no
-// proposal in flight, which is also what an app window's resize leaves
-// it at (those still resize live -- the WM owns their pixels).
-int resize_prop_w = -1, resize_prop_h = -1;
+// THE INTERACTIVE RESIZE, at most one at a time. A client's window
+// follows the pointer like any other (as it does on Windows and in
+// KDE), but it does so by ASKING: `want` is the content size the drag
+// implies, `sent` is the last size actually proposed, and only one
+// proposal is with the client at a time so a slow app sets the pace.
+// See wm_input.c's resize_pump().
+int resize_ask_idx = -1;
+int resize_ask_pid = 0;
+unsigned resize_ask_win = 0;
+int resize_want_w = -1, resize_want_h = -1;
+int resize_sent_w = -1, resize_sent_h = -1;
+int resize_inflight = 0;
+uint64_t resize_sent_tick = 0;
+// Proposals sent, ever. Monotonic, and reported by `gui state`,
+// because whether a resize is INTERACTIVE is a count rather than
+// anything a screenshot can show: a WM that only asked on release
+// would move this by exactly one per drag.
+unsigned resize_asks = 0;
 
 int content_dragging = -1; // index into windows[], or -1 -- see wm_internal.h
 int content_pressed = -1; // index into windows[], or -1 -- see wm_internal.h

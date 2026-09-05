@@ -2779,3 +2779,55 @@ view, because no check had ever turned the second pane off.
 changed: a test that leaves the app in single-pane mode hands the next
 section a layout it did not expect. That is also why `make clean-disk`
 can "fix" a bug -- it resets the config, not the code.
+
+
+## A WINDOW'S SIZE BELONGS TO ITS BUFFER, AND THE COMPOSITOR ADOPTS IT ON THE PRESENT.
+
+A client owns its pixels, so a resize is a proposal it answers
+(`WIN_EV_RESIZE` out, `WIN_REQ_RESIZE` back). The question this rule
+settles is WHEN the window changes size, and the obvious answer is
+wrong: adopting at the ACK puts the chrome around a buffer with nothing
+in it yet, and the compositor paints a freshly zeroed window until the
+client repaints. That measured **100-240 ms of solid black** on Image
+Viewer under TCG -- two whole frames -- and reads as the window
+flashing.
+
+So the size travels with the pixels:
+
+- **A resize rebuilds only the BACK buffer.** The front still holds the
+  last finished frame at the size it was drawn at, and the compositor
+  keeps showing it for the whole round trip.
+- **`WIN_EV_CLIENT_PRESENT` carries the front buffer's own w/h**
+  (`WIN_PRESENT_SIZE`), and the WM adopts THERE. It never has to guess
+  whether a frame was drawn before or after the resize it proposed.
+- **The buffer left at the old size is rebuilt inside the next
+  present**, where the pixels it holds have just stopped being needed.
+  A failure there means NO FLIP -- the compositor keeps the frame it has
+  and the next present retries -- rather than handing the client a
+  buffer it would overrun.
+- **A SINGLE-BUFFERED window still flashes**, because it has nowhere to
+  hide the change. That is the same degradation it already accepts for
+  tearing.
+
+This is Wayland's rule (a `wl_buffer` carries its dimensions; a surface
+adopts them at commit). X11's server-resizes-then-app-repaints is the
+shape that flickers, and is what this used to be.
+
+**A resize is INTERACTIVE, and the pacing is one proposal in flight.**
+The window follows the pointer during the drag, as on Windows and in
+KDE -- there is no rubber-band outline any more. What keeps that from
+drowning a slow app is that the next proposal goes out when the client
+ACKS the previous one (`wm_input.c`'s `resize_pump()`), so the client
+sets the pace; an unanswered proposal times out after half a second,
+because ignoring one is legal and a client that does must not take the
+grip with it.
+
+**WHETHER IT IS INTERACTIVE IS A COUNT, NOT A SCREENSHOT.** Injected
+input drains as fast as the WM iterates, so a scripted drag is over in
+~150 ms whatever step count it asks for and any size polled during it is
+luck. `gui state` reports `resizes_asked`; a WM that only asked on
+release moves it by exactly one per drag. The other half -- that nothing
+goes black -- needs a client slow enough to repaint that the gap is
+visible, which is why it is checked in `imgview_test.py` and not in
+`uapp_test.py` (winclient repaints instantly, and the check passes there
+with the bug present).

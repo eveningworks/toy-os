@@ -374,7 +374,14 @@ KTEST("winshare", "a client dying revokes it too") {
     if (f.comp_as) vmm_destroy_address_space(f.comp_as);
 }
 
-KTEST("winshare", "a resize re-points the mapping at the NEW frames") {
+// THE PROPERTY THAT STOPS A RESIZE FLASHING BLACK, stated as memory:
+// the buffer the compositor is reading still holds the last frame after
+// the resize, and only the one the client is about to draw into moved.
+//
+// Positive control: rebuild both buffers in resize_window() (pass
+// `cw->front` as well as `back`) and the first assertion goes red with
+// `seen` at 0, which is precisely the blank window.
+KTEST("winshare", "a resize leaves the FRONT frame showing and rebuilds the back") {
     struct fixture f = {0};
     SKIP_IF_ROLE_HELD;
     if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
@@ -382,12 +389,15 @@ KTEST("winshare", "a resize re-points the mapping at the NEW frames") {
     uint64_t cvaddr = 0;
     KTEST_ASSERT(win_server_map_to_compositor(f.comp_pid, f.client_pid, f.id, &cvaddr));
 
-    // Mark the OLD buffer. After the resize this value must be gone --
-    // if it is still readable through the compositor's mapping, the
-    // mapping is still pointing at frames the resize freed, which is
-    // precisely the use-after-free this test exists for.
-    uint32_t marker = 0xDEADBEEF;
-    KTEST_ASSERT(vmm_copy_to_user(f.comp_as, cvaddr, &marker, sizeof marker));
+    // A window starts at front 0, so the compositor reads buffer 0 and
+    // the client draws into buffer 1. Mark both, through the address
+    // space that owns each one.
+    uint32_t shown = 0xDEADBEEF, drawing = 0xFEEDFACE;
+    KTEST_ASSERT(vmm_copy_to_user(f.comp_as, cvaddr + win_buffer_front_offset(0),
+                                   &shown, sizeof shown));
+    KTEST_ASSERT(vmm_copy_to_user(f.client_as,
+                                   win_buffer_vaddr(f.id) + win_buffer_back_offset(0),
+                                   &drawing, sizeof drawing));
 
     // Not through win_server_request(): that refuses everything when no
     // presentation layer is registered, and a `ktest` run has no
@@ -399,19 +409,80 @@ KTEST("winshare", "a resize re-points the mapping at the NEW frames") {
     KTEST_ASSERT(win_server_is_mapped_to_compositor(f.client_pid, f.id));
     KTEST_ASSERT(vmm_validate_user_range(f.comp_as, cvaddr, 4096));
 
-    // A fresh buffer is zeroed, so the marker cannot survive unless the
-    // mapping never moved.
-    uint32_t seen = 0xFFFFFFFF;
-    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen, cvaddr, sizeof seen));
+    // THE FRONT FRAME SURVIVED: same frames, same pixels, so there is
+    // something real to composite for the whole of the client's repaint.
+    uint32_t seen = 0;
+    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen,
+                                     cvaddr + win_buffer_front_offset(0),
+                                     sizeof seen));
+    KTEST_ASSERT_EQ(seen, 0xDEADBEEF);
+
+    // ...and the BACK one is new frames, zeroed. If the old marker were
+    // still readable there, the mapping would be pointing at frames the
+    // resize freed -- the use-after-free half of this test.
+    seen = 0xFFFFFFFF;
+    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen,
+                                     cvaddr + win_buffer_back_offset(0),
+                                     sizeof seen));
     KTEST_ASSERT_EQ(seen, 0);
 
-    // And it is genuinely the new buffer: write through the client's
-    // view and see it through the compositor's.
+    // And it is genuinely the client's new buffer: write through the
+    // client's view and see it through the compositor's.
     uint32_t pixel = 0x11223344;
-    KTEST_ASSERT(vmm_copy_to_user(f.client_as, win_buffer_vaddr(f.id),
+    KTEST_ASSERT(vmm_copy_to_user(f.client_as,
+                                   win_buffer_vaddr(f.id) + win_buffer_back_offset(0),
                                    &pixel, sizeof pixel));
-    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen, cvaddr, sizeof seen));
+    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen,
+                                     cvaddr + win_buffer_back_offset(0),
+                                     sizeof seen));
     KTEST_ASSERT_EQ(seen, 0x11223344);
+
+    fixture_down(&f);
+}
+
+// The other half: the new size arrives WITH the frame drawn at it.
+// A resize that never completes is as bad as one that flashes, and the
+// two are one code path -- the present is what rebuilds the buffer left
+// at the old size.
+KTEST("winshare", "the present after a resize hands over the new size") {
+    struct fixture f = {0};
+    SKIP_IF_ROLE_HELD;
+    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
+
+    uint64_t cvaddr = 0;
+    KTEST_ASSERT(win_server_map_to_compositor(f.comp_pid, f.client_pid, f.id, &cvaddr));
+    KTEST_ASSERT(win_server_resize_raw(f.client_pid, f.id, WIN_W * 3, WIN_H * 3));
+
+    // The client draws its first frame at the new size -- far enough in
+    // to be past the OLD buffer's last pixel, so a present that handed
+    // over a buffer still the old size could not answer this.
+    uint64_t far = (uint64_t)(WIN_W * WIN_H) * 4 + 4096;
+    uint32_t pixel = 0xC0FFEE00;
+    KTEST_ASSERT(vmm_copy_to_user(f.client_as,
+                                   win_buffer_vaddr(f.id) + win_buffer_back_offset(0) + far,
+                                   &pixel, sizeof pixel));
+
+    struct win_request_msg req;
+    for (unsigned i = 0; i < sizeof req; i++) ((uint8_t *)&req)[i] = 0;
+    req.type = WIN_REQ_PRESENT;
+    req.window = f.id;
+    int rc = win_server_request(f.client_pid, &req);
+    KTEST_ASSERT(rc > 0);
+    int front = rc - 1;
+
+    uint32_t seen = 0;
+    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen,
+                                     cvaddr + win_buffer_front_offset(front) + far,
+                                     sizeof seen));
+    KTEST_ASSERT_EQ(seen, 0xC0FFEE00);
+
+    // And the buffer the client draws into NEXT is the new size too --
+    // it was the front one a moment ago and still held the old size, so
+    // a present that forgot to rebuild it would hand the client a
+    // buffer it overruns on its very next frame.
+    KTEST_ASSERT(vmm_validate_user_range(
+        f.client_as,
+        win_buffer_vaddr(f.id) + win_buffer_back_offset(front) + far, 4096));
 
     fixture_down(&f);
 }

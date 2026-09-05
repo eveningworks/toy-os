@@ -358,9 +358,13 @@ int uapp_resize(struct uapp *a, int w, int h) {
     // before -- win_buffer_vaddr() derives it from the window id, so
     // the pointer never moves. Rebuilding the surface is only about the
     // new width being the new row stride.
+    //
+    // STILL THE BACK BUFFER FOR THE CURRENT FRONT: only that one was
+    // rebuilt at the new size, and the front is still showing the last
+    // frame at the old one (abi/win_proto.h's configure/ack).
     a->w = req.a;
     a->h = req.b;
-    a->surface = ugfx_surface_for_window(a->window, a->w, a->h);
+    a->surface = ugfx_surface_for_window_buf(a->window, a->w, a->h, a->front);
     if (a->desc->layout) uui_layout_run(a->desc->layout, 0, 0, a->w, a->h);
     return 1;
 }

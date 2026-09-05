@@ -449,7 +449,7 @@ gui spawn PATH [args]    run a ring-3 binary directly -- no Terminal in the loop
 gui watchdog [<ms>|off]  slow-frame threshold, plus how often it fired
 gui pingtimeout [<ticks>] not-responding timeout -- a TEST LEVER, see below
 gui kill PID             end a process -- `gui spawn`'s counterpart
-gui click X Y | gui rclick X Y | gui drag X1 Y1 X2 Y2 | gui key <c> [alt|ctrl|shift]
+gui click X Y | gui rclick X Y | gui drag X1 Y1 X2 Y2 [STEPS] | gui key <c> [alt|ctrl|shift]
 ```
 
 **`gui pingtimeout` exists to make a test faster, and that is a

@@ -721,30 +721,12 @@ static void save_cursor_under(int x, int y, enum wm_cursor_kind kind) {
 // into the framebuffer the compositor was already granted (R1). See
 // docs/decisions.md.
 
-// The outline a client-window resize drag is proposing. Drawn instead
-// of resizing the window, because a client's buffer is still the old
-// size until the client itself changes it -- growing the frame around
-// it would show a window with its content stuck in one corner, which is
-// the whole reason resize is a handshake (abi/win_proto.h).
-//
-// Drawn just before the cursor, so it sits over the windows it
-// describes. A 1px rectangle: cheap, unmistakable, and the same idiom
-// every WM used before compositing made live resize affordable.
-static void draw_resize_outline(void) {
-    if (resizing < 0 || resize_prop_w <= 0 || resize_prop_h <= 0) return;
-    const struct window *w = &windows[resizing];
-    ugfx_draw_rect(wm_surface(), w->x, w->y, resize_prop_w, resize_prop_h, UTHEME_WHITE);
-    ugfx_draw_rect(wm_surface(), w->x + 1, w->y + 1, resize_prop_w - 2, resize_prop_h - 2,
-                   ugfx_rgb(50, 90, 160));
-}
-
 // Saves what's under (x, y) before drawing the cursor there, so a later
 // cursor-only move can restore it. Used by both render paths.
 // What was last actually drawn, recorded by the code that drew it.
 static int drawn_cursor_kind = -1;
 
 static void draw_cursor_at(int x, int y) {
-    draw_resize_outline();
     enum wm_cursor_kind kind = resolve_cursor_kind(x, y);
     if (wm_hwcursor_sync(kind)) {
         // The plane shows the pointer: nothing saved, nothing drawn.

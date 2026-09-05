@@ -122,6 +122,14 @@ struct window {
     // The base of the pair, because `client_buf` moves and a resize has
     // to remap from somewhere fixed.
     uint32_t *client_base;
+    // Which half `client_buf` is, 0 or 1. Kept because a resize remaps
+    // the pair without changing which one is in front -- the pointer
+    // alone cannot be recomputed from the base without it.
+    int client_front;
+    // THE FRONT BUFFER'S SIZE, which is the size of the pixels on
+    // screen. A client that has accepted a new size has not necessarily
+    // DRAWN it yet; this follows the frames, adopted in the present
+    // handler.
     int client_w, client_h;
     // Last cursor position delivered to this client, so a stationary
     // cursor doesn't generate a WIN_EV_MOUSE_MOVE every single frame.
