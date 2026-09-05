@@ -126,3 +126,53 @@ compliance scanner, or files being copied out of here often enough for
 it to be a real event rather than a hypothetical. Any of those makes
 SPDX tags worth the eight hundred lines -- and it is SPDX tags, not
 boilerplate, that they would be worth.
+
+## The test harness shuts the guest down, because a power cut leaks blocks BY DESIGN
+
+`vm.py stop` used to be `os.kill(pid, 15)` and `boot_smoke_test.py`
+called `proc.terminate()`. Both are a power cut from the guest's side:
+QEMU goes away without the guest being told, so anything mid-write is
+simply lost.
+
+That is not a filesystem bug, and the distinction is the whole point of
+this entry. `tfs3.c`'s `flush_alloc_state()` writes the allocation
+bitmap **unjournaled and set-before-use**, so a crash between marking a
+block allocated and committing the transaction that references it leaks
+that block -- deliberately, because the alternative ordering risks
+DOUBLE-ALLOCATING it, and a leak is the safe direction. `fsck` exists to
+reclaim exactly this.
+
+The consequence nobody had connected: `preflight.sh` runs
+`boot_smoke_test.py` and then `ktest_run.py`, and three `fs` KTESTs
+assert `r.leaked == 0`. So the gate booted the image, cut its power
+mid-write, and then failed a suite on the debris it had just created --
+reliably, on the FIRST run, on a freshly seeded disk. It was recorded in
+`docs/bugs.md` for three days as a filesystem defect, twice with the
+wrong reproduction ("the SECOND consecutive preflight", then "one
+ordinary boot"), because every attempt to characterise it changed the
+timing and so changed the answer.
+
+Isolated by a three-way comparison on one build: fresh disk then
+`ktest_run.py` passes 654/0 and passes again on a second bare run; the
+same fresh disk with one `boot_smoke_test.py` in between fails three
+checks; the same fresh disk with an **8 second wait** before the kill
+passes. Time, not booting, was the variable. `fsck` instrumented to name
+what it found reported a DATA block (`group 0 idx 13152`), not an
+orphaned inode -- both are counted through `r->leaked`, which is why
+"2 blocks" had been an assumption rather than a reading.
+
+So both tools ask the guest to shut down first and fall back to the
+signal: `vm.py stop` sends QMP `system_powerdown` and waits, with
+`--hard` to skip it for a wedged guest, and `boot_smoke_test.py` does
+the same over a **unix** QMP socket -- a unix socket rather than a TCP
+port because that needs no slot from `port_guard` and cannot clash with
+another guest. Stopping a VM must never itself be able to hang, so the
+fallback is unconditional after a timeout.
+
+What this does NOT do is remove the underlying gap, and it is worth
+naming: an unclean shutdown still leaves debris that only `fsck`
+reclaims. ext3/4 do better -- an orphan inode list replayed at mount, so
+a crash mid-unlink or mid-truncate recovers itself without a full check.
+That is the honest upgrade path if this ever costs anything real; it
+touches the journal, which is the one part of TFS3 with a
+credit-counting design, so it was not worth doing to fix a harness bug.

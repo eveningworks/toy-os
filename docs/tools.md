@@ -445,6 +445,25 @@ manual steps to be worth automating:
   later, on something unrelated. `DebugConsole.open_app()` RAISES on
   that now, quoting the guest's own list -- one line instead of a
   debugging round.
+- **`vm.py stop` ASKS THE GUEST TO SHUT DOWN, and only then signals
+  QEMU** -- QMP `system_powerdown`, waited for, with SIGTERM as an
+  unconditional fallback so stopping a VM can never itself hang.
+  `--hard` skips straight to the signal, for a guest wedged badly enough
+  not to act on ACPI.
+
+  **It is not politeness, it is the gate's correctness.** Terminating
+  QEMU is a power cut from the guest's side, and `tfs3` writes its
+  allocation bitmap unjournaled and set-before-use, so a crash between
+  marking a block allocated and committing the transaction that
+  references it LEAKS that block -- deliberately, because the other
+  ordering risks double-allocating it. `fsck` then reports the debris
+  and the three `fs` KTESTs that assert `leaked == 0` go red. That is
+  how `preflight.sh` came to fail, on the first run and on a freshly
+  seeded disk, a suite it had dirtied itself: it boots the image in
+  `boot_smoke_test.py` and then runs `ktest_run.py`.
+  `boot_smoke_test.py` shuts down the same way, over a **unix** QMP
+  socket -- no `port_guard` slot, so it cannot clash with another guest.
+  See `docs/decisions.md`.
 - **`vm.py --machine <type>`** -- the QEMU CHIPSET, default i440fx
   because that is what every existing test was written against.
   `--machine q35` is the only way to reach an ACPI 2.0-era machine here:

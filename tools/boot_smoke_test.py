@@ -30,6 +30,7 @@ consumer), unlike qmp_test.py.
 
 import argparse
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -67,6 +68,48 @@ DEFAULT_TIMEOUT = 12.0
 POLL_INTERVAL = 0.2
 
 
+QMP_SOCK = ".smoke.qmp"
+
+
+def qmp_powerdown(sock_path, timeout=6.0):
+    """Ask the guest to shut down over QMP, and wait for it to say it did.
+
+    WHY THIS TEST SHUTS DOWN CLEANLY. Terminating QEMU is a power cut
+    from the guest's side, and tfs3 writes its allocation bitmap
+    UNJOURNALED and set-before-use (`flush_alloc_state()`): a crash
+    between marking a block allocated and committing the transaction
+    that references it LEAKS that block, deliberately, so that it can
+    never be double-allocated. `fsck` then reports the debris, and the
+    three fs KTESTs asserting `leaked == 0` go red -- which is how every
+    `preflight.sh` came to fail a suite this very test had dirtied. A
+    unix socket rather than a TCP port so this needs no slot from
+    port_guard and cannot clash with another guest.
+
+    Returns True if the guest powered itself down.
+    """
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(timeout)
+            s.connect(sock_path)
+            f = s.makefile("rwb")
+            f.readline()                                   # the QMP greeting
+            f.write(b'{"execute":"qmp_capabilities"}\n')
+            f.flush()
+            f.readline()                                   # its return
+            f.write(b'{"execute":"system_powerdown"}\n')
+            f.flush()
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                line = f.readline()
+                if not line:
+                    return False
+                if b'"SHUTDOWN"' in line:
+                    return True
+    except (OSError, socket.timeout):
+        return False
+    return False
+
+
 def launch_qemu(iso, disk, serial_log, qemu_log):
     # -no-reboot -no-shutdown: a triple fault would otherwise just
     # silently reset the VM (or QEMU would exit) with nothing useful in
@@ -96,6 +139,10 @@ def launch_qemu(iso, disk, serial_log, qemu_log):
         "-serial", f"file:{serial_log}",
         "-no-reboot",
         "-no-shutdown",
+        # Only so the guest can be asked to shut down cleanly at the end
+        # -- this test still sends no input and reads only the serial
+        # log. See qmp_powerdown().
+        "-qmp", f"unix:{QMP_SOCK},server,nowait",
     ]
     qlog = open(qemu_log, "wb")
     return subprocess.Popen(cmd, stdout=qlog, stderr=subprocess.STDOUT)
@@ -182,6 +229,13 @@ def main():
 
         return 1
     finally:
+        # CLEAN FIRST, KILL SECOND. -no-shutdown means QEMU stops the VM
+        # rather than exiting, so this still terminates afterwards -- the
+        # point is that the GUEST completed its flush before it did.
+        if proc.poll() is None:
+            qmp_powerdown(QMP_SOCK)
+        if os.path.exists(QMP_SOCK):
+            os.unlink(QMP_SOCK)
         if proc.poll() is None:
             proc.terminate()
             try:

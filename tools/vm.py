@@ -610,12 +610,50 @@ def cmd_status(args):
     return 0
 
 
+def _acpi_powerdown(port, pid, timeout=8.0):
+    """Ask the GUEST to shut down, and wait for it to actually go.
+
+    SIGTERM to QEMU is a POWER CUT from the guest's side -- it is never
+    told, so anything mid-write is simply lost. That is not a filesystem
+    bug but it does leave debris: tfs3's allocation bitmap is written
+    UNJOURNALED and set-before-use (`flush_alloc_state()`), so a crash
+    between marking a block allocated and committing the transaction
+    that references it leaks the block, deliberately, to guarantee it is
+    never double-allocated. `fsck` then reports it and the three fs
+    KTESTs that assert `leaked == 0` go red -- which is how every
+    `preflight.sh` came to fail a suite the gate had dirtied itself.
+
+    Returns 1 if the guest powered itself down, 0 to fall back.
+    """
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from qmp_test import QMPSession
+        q = QMPSession(port=port)
+        try:
+            q._cmd({"execute": "system_powerdown"})
+        finally:
+            q.close()
+    except Exception:                       # noqa: BLE001
+        return 0                            # no QMP, or it refused -- fall back
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not _running(pid):
+            return 1
+        time.sleep(0.1)
+    return 0
+
+
 def cmd_stop(args):
     pid = _read_pid()
     if not pid:
         print("vm: not running")
         return 0
-    os.kill(pid, 15)
+    # Clean first, kill second. A guest that ignores ACPI, or one wedged
+    # badly enough not to act on it, still gets SIGTERM -- stopping the
+    # VM must never itself be able to hang.
+    graceful = _acpi_powerdown(args.qmp_port, pid) if not getattr(args, "hard", False) else 0
+    if not graceful:
+        os.kill(pid, 15)
     for _ in range(50):
         if not _running(pid):
             break
@@ -623,7 +661,7 @@ def cmd_stop(args):
     for f in (PIDFILE, SERIAL_SOCK):
         if os.path.exists(f):
             os.unlink(f)
-    print("vm: stopped")
+    print("vm: stopped" + ("" if graceful else " (SIGTERM)"))
     return 0
 
 
@@ -731,7 +769,10 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("start").set_defaults(func=cmd_start)
-    sub.add_parser("stop").set_defaults(func=cmd_stop)
+    p_stop = sub.add_parser("stop")
+    p_stop.add_argument("--hard", action="store_true",
+                        help="SIGTERM straight away, no ACPI shutdown -- for a wedged guest")
+    p_stop.set_defaults(func=cmd_stop)
     sub.add_parser("status").set_defaults(func=cmd_status)
 
     p_exec = sub.add_parser("exec", help="run shell command(s) and print their output")
