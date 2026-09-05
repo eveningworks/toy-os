@@ -2888,3 +2888,58 @@ one feeds the measurement.
 is the only place `auto`'s decision is visible), and `resize_lag_ms`.
 A test asserts on those, because a scripted drag is over in ~150 ms and
 nothing about a drag can be watched.
+
+## THERE IS AN ON-SCREEN KEYBOARD, IT IS A WM OVERLAY, AND IT ENCODES KEYS THE WAY THE PHYSICAL ONE DOES
+
+`userland/wm/osk.c`: a panel of keycaps above the taskbar, toggled by a
+tray item, that types into the focused client. It exists because a
+machine can have a working pointer and no usable keyboard, which is not
+hypothetical here.
+
+**AN OVERLAY, NOT AN APP, AND THAT IS THE WHOLE DESIGN.** GNOME's OSK is
+part of gnome-shell; Windows ships `osk.exe` as an app using `SendInput`
+with `WS_EX_NOACTIVATE`; KDE uses maliit over Wayland's
+`input-method-v1`. Being an overlay buys two things at once: an overlay
+is not a window, so a keycap click cannot take focus from the window
+being typed into, and the keystroke is a direct `wm_client_send_key()`
+call, so no ring-3 program gains the ability to type into another one --
+the hole X11's XTEST leaves open and `virtual-keyboard-v1` was written
+to close. The cost is that the compositor contains a keyboard; see
+`docs/decisions/gui.md`.
+
+Four things to know before editing it:
+
+- **IT ENCODES KEYS THE WAY `keyboard.c` DOES, and every branch fails
+  SILENTLY if it does not.** Ctrl-C is the control code `0x03`, not
+  `'c'` with `KEY_MOD_CTRL` -- `api/keyboard.h` tells an app not to test
+  that bit for a letter, so the naive version reaches the Terminal and
+  does nothing at all. Alt-B is ESC then `'b'`, two keystrokes. Ctrl
+  with a non-letter is DROPPED rather than given an invented code.
+- **ITS LAYOUT IS A SECOND COPY OF `FALLBACK_US`** in
+  `kernel/lib/keyboard_layout.c`, and the two must agree character for
+  character. A cap that disagrees types something the physical keyboard
+  would not, on this machine only.
+- **THE MODIFIERS ARE STICKY**, armed by a click and consumed by the
+  next ordinary key, because one pointer cannot hold Ctrl and click C.
+  An armed modifier draws in the ACCENT rather than as hovered --
+  selection outranks hover.
+- **ITS OVERLAY ROW HAS NO `close` OP**, which is what stops another
+  popup dismissing it (`wm_overlay.h`): a keyboard has to survive the
+  click that puts the caret in the field it is typing into. It is LAST
+  in the table, so a menu overlapping it takes the click and paints on
+  top.
+
+**Test it through the filesystem, not through pixels.**
+`tools/osk_test.py` types `mkdir /<name>` into the Terminal and asks the
+shell whether the directory exists -- one assertion covering the keycap
+hit-test, `wm_client_send_key()`, the client, the line editor and the
+disk. Ink rising in a Notepad window is the "it responds, therefore it
+works" trap: a blinking caret moves those pixels too. And **warp the
+cursor rather than clicking open-loop** -- the WM accelerates an
+injected delta, so `click_at()` alone misses a 42x40 tray item and reads
+as a dead control.
+
+**`gui osk` and `gui osk key <cap>` report the panel, the tray item and
+any keycap's box**, so a test never derives a cap's position; the caps
+are named (`Space`, `Left`, `Enter`) partly for that reason, since a cap
+labelled `" "` cannot be passed as a console token.

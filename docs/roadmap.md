@@ -642,6 +642,8 @@ run on, not by order.
 - [ ] An I/O APIC, so the legacy lines stop going through the 8259 as well
 - [ ] MSI-X vectors per QUEUE rather than one per device -- wanted by multi-queue virtio and NVMe, worth it once a second CPU is online
 - [ ] Re-key `/etc/kbs` layouts to evdev keycodes, removing the input core's translation table
+- [ ] The on-screen keyboard should draw the CONFIGURED layout, not its own copy of US QWERTY
+- [ ] A virtual-keyboard protocol, so the on-screen keyboard can be a ring-3 app instead of compositor code
 
 - [ ] `settings_init()` as initcalls too -- the last hand list; its order is the Settings sidebar's, so it needs an explicit order first
 

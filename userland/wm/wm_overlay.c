@@ -10,6 +10,7 @@
 #include "brightness_popup.h"
 #include "confirm_dialog.h"
 #include "file_picker.h"
+#include "osk.h"
 
 // The two that take no cursor, adapted rather than changed: their
 // drawing genuinely does not depend on where the pointer is.
@@ -23,6 +24,7 @@ static int open_volume(void)  { return volume_open; }
 static int open_brightness(void) { return brightness_open; }
 static int open_picker(void)  { return file_picker_open; }
 static int open_confirm(void) { return confirm_dialog_open; }
+static int open_osk(void)     { return osk_open; }
 
 // MOST MODAL FIRST. This order is the click priority -- a modal dialog
 // takes a click before a menu does -- and drawing walks it BACKWARDS,
@@ -44,6 +46,11 @@ static const struct wm_overlay g_overlays[] = {
       volume_hover_at,           volume_damage,           volume_update_press, volume_close },
     { "brightness", open_brightness, brightness_draw, brightness_handle_click,
       brightness_hover_at,       brightness_damage,       brightness_update_press, brightness_close },
+    // LAST, so it is the least modal: a menu overlapping the keyboard
+    // takes the click and paints on top. No `close` op -- a keyboard
+    // must survive the click that puts the caret where it is typing.
+    { "osk",      open_osk,      osk_draw,         osk_handle_click,
+      osk_hover_at,              osk_damage,              osk_update_press, 0 },
 };
 #define OVERLAY_COUNT ((int)(sizeof g_overlays / sizeof g_overlays[0]))
 

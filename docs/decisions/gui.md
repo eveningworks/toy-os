@@ -6359,3 +6359,54 @@ size a window already has, and let ANY present clear the slot while
 only a size-changing one feeds the measurement. Sending the next
 proposal a frame early is harmless; never sending it is a drag that
 stops following after its first step.
+
+## The on-screen keyboard is compositor code, not an app
+
+`userland/wm/osk.c` is a `wm_overlay` row that calls
+`wm_client_send_key()` on the focused window. The obvious alternative --
+an ordinary ring-3 program in `userland/gui/` -- was considered and
+deliberately not built, and the reason is worth recording because the
+app version is the one that looks more correct.
+
+The three real systems split the same way. Windows ships `osk.exe`, an
+ordinary process that calls `SendInput` and sets `WS_EX_NOACTIVATE` so
+clicking it cannot take focus. KDE runs maliit as a separate process
+speaking Wayland's `input-method-v1`. GNOME's is part of gnome-shell,
+drawn by the compositor. X11's `xvkbd` and `onboard` fake events through
+XTEST, and "any client can synthesise input into any other" is precisely
+the property `virtual-keyboard-v1` exists to remove.
+
+An app here would need TWO new mechanisms before a single key could be
+typed: a way to send a key to a DIFFERENT client, and a window type that
+does not take focus when clicked. The first is the expensive one -- it
+is a general input-injection protocol, and once any ring-3 program can
+call it, a keylogger and a click-jacker are ordinary programs. Wayland
+gates its equivalent behind a compositor-granted privilege for exactly
+this reason, which means the honest ring-3 design here is "an injection
+syscall plus a permission model", not "an injection syscall".
+
+The overlay needs neither. It is not a window, so focus is not a
+question that arises; and the keystroke never leaves the compositor, so
+no new capability is exposed to ring 3 at all. That is a smaller change
+AND a smaller attack surface, which is an unusual pairing and the reason
+this was not a close call.
+
+What it costs is that the compositor now contains a keyboard layout --
+a second copy of `kernel/lib/keyboard_layout.c`'s `FALLBACK_US`, which
+is a real duplication and is why the convention entry says the two must
+agree character for character. The roadmap carries both follow-ups:
+reading `/etc/kbs` so the caps match the configured layout, and moving
+the panel to a ring-3 app once there is a virtual-keyboard protocol
+worth having. Neither is needed for the thing this was built for, which
+is a machine whose only working input device is a touchpad.
+
+**The encoding is the part that had to be got right, not the drawing.**
+A keycap does not send "the letter plus a modifier bit": Ctrl-C is the
+control code `0x03` and Alt-B is ESC then `'b'`, because that is what
+`kernel/drivers/input/keyboard.c` produces and what every consumer --
+the line editor above all -- already expects. `api/keyboard.h` even
+warns that an app cannot usefully test `KEY_MOD_CTRL` for a letter,
+since the fold has already happened by the time the key arrives. An OSK
+that passed the bit instead would draw correctly, respond to every
+click, and leave Ctrl-C doing nothing in the Terminal -- which is most
+of what a machine with no keyboard needs it for.

@@ -378,6 +378,21 @@ def icon_tray_brightness():
     return im
 
 
+# The tray's on-screen-keyboard item: a key grid, one state. It toggles
+# a panel rather than opening a flyout, so unlike the volume speaker
+# there is no level for it to show.
+def icon_tray_keyboard():
+    im, d = _tb()
+    d.rectangle([4, 16, 60, 48], outline=TB_INK, width=4)
+    for row, (x0, n) in enumerate([(11, 6), (14, 5), (11, 6)]):
+        y = 23 + row * 8
+        for i in range(n):
+            x = x0 + i * 7
+            d.rectangle([x, y, x + 3, y + 3], fill=TB_INK)
+    d.rectangle([22, 39, 42, 43], fill=TB_INK)   # the space bar
+    return im
+
+
 # The five file verbs. Copy/Move are a PAIR and read as one: two sheets
 # for copy, one sheet plus an arrow for move -- which is what Explorer's
 # ribbon and every commander's F5/F6 have always drawn.
@@ -670,6 +685,7 @@ ICONS = {
     "tray-volume-low": icon_tray_volume_low,
     "tray-volume-muted": icon_tray_volume_muted,
     "tray-brightness": icon_tray_brightness,
+    "tray-keyboard": icon_tray_keyboard,
 }
 
 # Crash Test deliberately gets NO icon file. It is the one entry that

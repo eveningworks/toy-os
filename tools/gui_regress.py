@@ -132,6 +132,7 @@ TOOLS = [
     ("entries", "desktop_entries_test.py", "ShowIn= and live .desktop reload"),
     ("taskmgr", "taskmgr_test.py", "the table widget, resize reflow, ending a process"),
     ("singleinst", "single_instance_test.py", "one copy of an app, and relaunch raises it"),
+    ("osk", "osk_test.py", "the on-screen keyboard types into the focused client"),
     ("settings", "settings_test.py", "the settings registry, in ring 3"),
     ("font", "font_test.py", "runtime TTF faces, live switching, proportional widths"),
     ("idle", "idle_desktop_test.py", "nothing paints over an idle desktop"),
@@ -203,6 +204,7 @@ COST_S = {
     "wingeom": 70,
     "uterm": 16,
     "hover": 5,        # eight injected moves and two counter reads
+    "osk": 20,         # ~40 keycap clicks, each confirmed against the WM
     "singleinst": 16,  # six launches, each waiting out a client's first frame
     "scrollbar": 15,
     "settings": 20,   # +4 scroll checks, incl. a resize and a wheel

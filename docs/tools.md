@@ -2043,6 +2043,23 @@ window without going through it will find its layout polls timing out.
   get`, since boot chatter mentions `ac97` too and a substring match
   passed on a guest whose setting had not been restored at all. On
   demand, not in the gate: it boots its own guest with extra hardware.
+- **`osk_test.py`** -- the on-screen keyboard (`userland/wm/osk.c`).
+  **Its load-bearing check is a ROUND TRIP THROUGH THE FILESYSTEM**: it
+  types `mkdir /<name>` into the Terminal with keycap clicks and then
+  asks the shell whether the directory exists, which covers the
+  hit-test, `wm_client_send_key()`, the client, the line editor and the
+  disk in one assertion. Ink rising in a Notepad window would not --
+  a blinking caret moves those pixels, which is the trap CLAUDE.md
+  names. **Shift and Ctrl get DISCRIMINATING checks** because both fail
+  silently: `mkdir /Zz` distinguishes a modifier that stuck (`ZZ`) from
+  one that never armed (`zz`), and the Ctrl check types `xyz`, presses
+  Ctrl-C and then a real command -- if Ctrl were sent as the modifier
+  BIT rather than folded to a control code, a literal `c` would land in
+  the line and nothing would be created. Its control is breaking that
+  fold, which reddens two checks. **Warp the cursor, never `click_at`
+  alone** -- the WM accelerates an injected delta, so an open-loop move
+  misses the tray item and reads as a dead control. Run by
+  `gui_regress.py`.
 - **`msi_test.py`** -- the Local APIC, and the xHCI delivering through
   MSI-X instead of its shared pin. **Its load-bearing check is that
   interrupts ARRIVE, and enumeration cannot show that**: every control

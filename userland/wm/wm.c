@@ -34,6 +34,7 @@
 #include "volume_popup.h"
 #include "brightness_popup.h"
 #include "wm_overlay.h"
+#include "osk.h"
 #include "confirm_dialog.h"
 #include "file_picker.h"
 #include "desktop.h"
@@ -870,6 +871,7 @@ void wm_run(void) {
 
     wm_render_reset(); // first frame must be a full repaint -- see wm_render.c
     tray_init();
+    osk_init();   // its tray item, beside the clock's
     volume_tray_init();   // the tray's second item, after the clock takes slot 0
     brightness_tray_init(); // the third
 

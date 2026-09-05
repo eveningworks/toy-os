@@ -812,6 +812,7 @@ whenever a headline here tells you something you did not already know.
 - **THE CLOCK IS ALWAYS THE RIGHTMOST TRAY ITEM, whatever slot it holds**
 - **THE TRAY CLOCK OPENS A CALENDAR, AND THE PANEL OWNS IT**
 - **THE WEEK'S FIRST COLUMN IS A REGISTERED SETTING: `desktop.week_start` = `monday` | `sunday`**
+- **THERE IS AN ON-SCREEN KEYBOARD, IT IS A WM OVERLAY, AND IT ENCODES KEYS THE WAY THE PHYSICAL ONE DOES**
 - **A KEY RELEASE IS `WIN_EV_KEY_UP`, AND THE FOUR MODIFIER KEYS ARE KEYS**
 - **A SECONDARY CLICK IS THE CLIENT'S INSIDE ITS CONTENT AREA, AND THE WM'S EVERYWHERE ELSE**
 - **DOOM IS A VENDORED PORT IN `userland/ports/doom/`, LINKED INTO ONE BINARY**
@@ -1367,7 +1368,8 @@ cost".
   `gfxdemo_test.py`, `hover_test.py`, `icons_test.py`,
   `idle_desktop_test.py`,
   `imgview_test.py`, `keyup_test.py`, `menubar_test.py`,
-  `mines_test.py`, `notepad_client_test.py`, `player_test.py`,
+  `mines_test.py`, `notepad_client_test.py`, `osk_test.py`,
+  `player_test.py`,
   `sched_gui_test.py`, `screen_surface_test.py`, `scrollbar_test.py`,
   `settings_test.py`, `single_instance_test.py`, `taskmgr_test.py`,
   `uapp_test.py`, `uiclient_test.py`, `uidemo_test.py`,

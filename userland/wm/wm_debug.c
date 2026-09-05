@@ -7,6 +7,7 @@
 #include "volume_popup.h"
 #include "brightness_popup.h"
 #include "wm_overlay.h"
+#include "osk.h"
 #include "wm_debug.h"
 #include "start_menu.h"
 #include "context_menu.h"
@@ -597,6 +598,45 @@ static void cmd_taskbar(struct dbg_out *o, int json) {
 // and what the kernel's `audio_device` choice list computed; a test
 // asserting on them is asserting the whole path from the registered
 // driver to the row.
+// The on-screen keyboard: the panel, the tray item that toggles it, the
+// armed modifiers, and a keycap's box BY LABEL. `gui osk key <cap>` is
+// the one a test uses -- deriving a cap's centre from the panel rect
+// would be a second copy of osk.c's span walk.
+static void cmd_osk(struct dbg_out *o, const char *arg, int json) {
+    struct osk_report r;
+    osk_report(&r);
+
+    int kx, ky, kw, kh;
+    if (arg && *arg && osk_key_box(arg, &kx, &ky, &kw, &kh)) {
+        if (json)
+            dbg_out_printf(o, "{\"cap\":\"%s\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,"
+                         "\"cx\":%d,\"cy\":%d}\r\n", arg, kx, ky, kw, kh,
+                         kx + kw / 2, ky + kh / 2);
+        else
+            dbg_out_printf(o, "osk key \"%s\": x=%d y=%d w=%d h=%d centre=(%d,%d)\r\n",
+                         arg, kx, ky, kw, kh, kx + kw / 2, ky + kh / 2);
+        return;
+    }
+    if (arg && *arg) {
+        dbg_out_printf(o, "osk: no key labelled \"%s\"\r\n", arg);
+        return;
+    }
+
+    if (json) {
+        dbg_out_printf(o, "{\"open\":%s,\"mods\":%u,", osk_open ? "true" : "false", r.mods);
+        dbg_out_printf(o, "\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,", r.x, r.y, r.w, r.h);
+        dbg_out_printf(o, "\"tray\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"cx\":%d,\"cy\":%d}}\r\n",
+                     r.tray_x, r.tray_y, r.tray_w, r.tray_h,
+                     r.tray_x + r.tray_w / 2, r.tray_y + r.tray_h / 2);
+        return;
+    }
+    dbg_out_printf(o, "osk: %s  mods=0x%x  x=%d y=%d w=%d h=%d\r\n",
+                 osk_open ? "open" : "closed", r.mods, r.x, r.y, r.w, r.h);
+    dbg_out_printf(o, "  tray x=%d y=%d w=%d h=%d centre=(%d,%d)\r\n",
+                 r.tray_x, r.tray_y, r.tray_w, r.tray_h,
+                 r.tray_x + r.tray_w / 2, r.tray_y + r.tray_h / 2);
+}
+
 static void cmd_volume(struct dbg_out *o, int json) {
     struct volume_geom g;
     volume_geometry(&g);
@@ -845,9 +885,9 @@ static void cmd_state(struct dbg_out *o, int json) {
                  (unsigned)buttons, (int)wm_cursor_kind_at(cx, cy));
     dbg_out_printf(o, "overlays: topmost=%s\r\n",
                  wm_overlay_topmost() ? wm_overlay_topmost() : "none");
-    dbg_out_printf(o, "overlays: start_menu=%d context_menu=%d file_picker=%d confirm=%d calendar=%d volume=%d brightness=%d\r\n",
+    dbg_out_printf(o, "overlays: start_menu=%d context_menu=%d file_picker=%d confirm=%d calendar=%d volume=%d brightness=%d osk=%d\r\n",
                  start_menu_open, context_menu_open, file_picker_open, confirm_dialog_open,
-                 calendar_open, volume_open, brightness_open);
+                 calendar_open, volume_open, brightness_open, osk_open);
     dbg_out_printf(o, "dragging=%d resizing=%d content_pressed=%d redraw_pending=%d\r\n",
                  dragging, resizing, content_pressed, redraw_pending);
     dbg_out_printf(o, "resize proposals sent: %u\r\n", resize_asks);
@@ -1163,6 +1203,15 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
     if (k_strcmp(sub, "taskbar") == 0)      { cmd_taskbar(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "calendar") == 0)     { cmd_calendar(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "volume") == 0)       { cmd_volume(o, wants_json(p)); return 1; }
+    if (k_strcmp(sub, "osk") == 0) {
+        // `gui osk key <cap>`. The positional word is taken BEFORE
+        // wants_json() consumes the rest, per the note above.
+        char *arg = next_tok(&p);
+        if (arg && k_strcmp(arg, "key") == 0) arg = next_tok(&p);
+        else if (arg && arg[0] == '-') arg = 0;   // a flag, not a cap
+        cmd_osk(o, arg, wants_json(p));
+        return 1;
+    }
     if (k_strcmp(sub, "brightness") == 0)   { cmd_brightness(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "state") == 0)        { cmd_state(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "compositor") == 0)   { cmd_compositor(o, wants_json(p)); return 1; }
