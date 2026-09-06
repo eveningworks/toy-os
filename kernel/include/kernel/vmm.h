@@ -105,6 +105,22 @@ int vmm_unmap_user_page(uint64_t pml4_phys, uint64_t vaddr);
 // for itself. Returns 1 if a mapping was removed, 0 if none was there.
 int vmm_release_user_page(uint64_t pml4_phys, uint64_t vaddr);
 
+// ---- swapped-out pages ----------------------------------------------
+//
+// A swapped page's PTE is NOT PRESENT and carries the swap slot the
+// page's contents are parked in (kernel/swap.h). The encoding is
+// private to vmm.c; these are the two operations anything else needs.
+//
+// vmm_set_swap_entry() is where "what may be evicted" is decided --
+// present, OWNED (not borrowed) and managed, refused otherwise -- and
+// it FREES the frame, so the caller must have written it to `slot`
+// first. Returns 1 if the page was evicted.
+//
+// vmm_swap_entry() answers 0 for a page that is not swapped, which is
+// why swap slot 0 is the header and never handed out.
+int vmm_set_swap_entry(uint64_t pml4_phys, uint64_t vaddr, uint32_t slot);
+uint32_t vmm_swap_entry(uint64_t pml4_phys, uint64_t vaddr);
+
 // What one address space's user mappings look like to the physical
 // allocator. `dangling` is the one that is a BUG: a present mapping
 // pointing at a frame pmm considers free, i.e. memory the allocator may
@@ -115,6 +131,10 @@ struct vmm_audit {
     uint64_t borrowed;        // of which mapped with vmm_map_user_borrowed()
     uint64_t unmanaged;       // frames pmm doesn't account for (MMIO) -- normal
     uint64_t huge;            // 2MiB leaves, not walked -- none today
+    // Swapped out: no frame to check, so NOT covered by the invariant
+    // below. Counted rather than skipped so that "the audit found
+    // nothing" and "the audit could not look" are different answers.
+    uint64_t swapped;
     uint64_t dangling;        // present mappings of a FREE frame -- the violation
     uint64_t first_bad_va;    // where the first one was, for reporting
     uint64_t first_bad_frame;
@@ -190,6 +210,12 @@ void vmm_destroy_address_space(uint64_t pml4_phys);
 // replaces a frame and does not double count. 0 for an address space
 // that has mapped nothing, and for one that no longer exists.
 uint64_t vmm_user_bytes(uint64_t pml4_phys);
+
+// The same address space's SWAPPED pages, in bytes. Separate from the
+// resident figure above rather than folded into it: eviction moves a
+// page from one to the other, and a reader shown only the first watches
+// a process appear to shrink while it is doing nothing of the kind.
+uint64_t vmm_user_swapped_bytes(uint64_t pml4_phys);
 
 uint64_t vmm_current_pml4(void);
 

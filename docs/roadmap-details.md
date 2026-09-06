@@ -1928,22 +1928,36 @@ first rough breakdown:
 
 ### Swap / paging to disk
 
-New milestone, lightly scoped. Today's virtual memory is identity-mapped
-physical RAM with no reclaim path at all -- running out of physical frames
-is just a hard allocation failure (`pmm_alloc_frame()` returning 0), not
-something a swap file could relieve. A first rough breakdown:
+**Designed in full in `docs/swap-design.md`; stages 0 and 1 are BUILT
+(2026-09-06).** Read that before anything here.
 
-- A swap-backed page reclaim path -- pick a reclaim policy (even a simple
-  one, e.g. clock/second-chance) for choosing which page to evict under
-  pressure.
-- Page-out under memory pressure -- write an evicted page's contents to
-  the swap area, free its physical frame.
-- Page-in on fault -- a page fault on a swapped-out page's now-invalid
-  PTE reads it back in from swap instead of the fault being fatal.
-- A swap file on TFS2 (or a raw disk region) -- needs contiguous,
-  reliably-addressable disk space; a raw reserved region (like TFS2's own
-  bitmap/journal areas) is simpler to start than a real swap *file*
-  routed through the filesystem.
+This entry used to say "today's virtual memory is identity-mapped
+physical RAM with no reclaim path at all" and named TFS2 as the swap
+file's host. Both were stale and are corrected here rather than left to
+be re-derived: demand paging landed 2026-08-18 and file-backed `mmap`
+fault-in on 2026-08-28, so the fault hook swap needs already exists, and
+TFS2 has been gone for months.
+
+The three findings that shaped the design, none of them obvious from
+the item list:
+
+- **The backing store cannot go through the filesystem.** A page fault
+  can happen inside an `FS_OP` -- which is exactly why
+  `mmap_fault_in()` refuses a file-backed fault-in there -- so swap is
+  addressed as SECTORS on a `struct block_device`. A swap FILE is the
+  same thing with its blocks resolved once at swapon, which is what
+  Linux's swap extents are for.
+- **No reverse map is needed, and building one would be wrong.** With
+  no `fork()`, no COW and no shared anonymous memory, a swappable page
+  has exactly one PTE, so victims are chosen by walking a process's
+  page tables FORWARD. `PAGE_BORROWED` already names the non-candidates
+  exactly -- every shared, DMA and cross-process mapping in the system
+  is borrowed for the reason that disqualifies it.
+- **It does NOT give `/tmp` a swappable tmpfs.** ramfs file data is
+  `kmalloc`'d kernel heap, and kernel heap is not swappable by any of
+  this. Linux's tmpfs is swappable because its pages are shmem pages
+  rather than slab. That is stage 6, and everything before it leaves
+  `/tmp` exactly as unswappable as it is today.
 
 ### UTF-8 migration
 

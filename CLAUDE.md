@@ -631,6 +631,7 @@ whenever a headline here tells you something you did not already know.
 - **`SYS_SLEEP` exists, and a caller with no scheduler slot gets -1.**
 - **`ps` is a REAL `/bin` PROGRAM, not a builtin**
 - **A PROCESS'S MEMORY IS FREED WHEN IT DIES, NOT WHEN IT IS REAPED -- and killing needs a DIFFERENT entry point from exiting.**
+- **A SWAPPED PAGE IS A NON-PRESENT PTE THAT STILL RECORDS THE PAGE, and a walker that reads one as a hole LEAKS ITS SLOT -- which nothing audits.**
 - **A USER MAPPING SAYS WHETHER IT OWNS ITS FRAME, and getting that wrong is silent.**
 - **Kernel code touches user memory ONLY through `vmm.h`'s copy helpers**
 - **`SYS_WNOHANG` exists, and the bug that produced it is the lesson.**

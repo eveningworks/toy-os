@@ -181,7 +181,10 @@ int scheduler_exec_path(int pid, char *out, unsigned cap);
 // than tracking it: the page tables already record which pages exist,
 // and a second record of the same fact could only ever disagree with
 // them, silently and in the direction that matters (a page believed
-// mapped that is not). `stack_bottom` below is NOT a return of that
+// mapped that is not). **"Record" is not "present"** -- a swapped-out
+// page's entry is not present and still records the page, in the slot
+// it went to (kernel/vmm.h), so a walker that reads a non-present entry
+// as a hole is wrong rather than merely incomplete. `stack_bottom` below is NOT a return of that
 // mistake, and the difference is worth being precise about: it is the
 // LIMIT the fault handler grows from, not a claim about what is mapped.
 // Pages between it and UADDR_STACK_VADDR are all mapped, because the

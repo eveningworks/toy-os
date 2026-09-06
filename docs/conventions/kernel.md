@@ -463,6 +463,23 @@ this the obvious way), not from how much history it accumulated.
   `win_server_client_gone()` (which reaches into address spaces and
   needs this one alive), and `pml4_phys` is zeroed straight after so
   nothing follows it again. `tools/frame_balance.py` covers both paths.
+- **A SWAPPED PAGE IS A NON-PRESENT PTE THAT STILL RECORDS THE PAGE, AND
+  A WALKER THAT READS ONE AS A HOLE LEAKS ITS SLOT.** `PAGE_SWAPPED` is
+  PTE bit 10 with `PAGE_PRESENT` clear and the swap slot where the
+  frame's address used to be (`kernel/mm/vmm.c`, Linux's `swp_entry_t`).
+  So "not present" no longer means "nothing was mapped here": unmap,
+  release and address-space teardown each have to give the slot back,
+  because the process cannot -- it does not know the number -- and
+  **nothing audits slot usage the way `meminfo --audit` audits frames**,
+  so a leak here has no detector at all. It would surface much later as
+  a swap area that fills up with nothing swapped. Two more things.
+  `vmm_set_swap_entry()` is the ONE place that decides what may be
+  evicted (present, OWNED, and a frame pmm manages), so a reclaimer
+  cannot get the rule wrong without editing that function. And leaving
+  `PAGE_PRESENT` set -- the obvious way to write the entry, since the
+  slot needs somewhere to live -- makes it a present mapping of a freed
+  frame, which the existing audit correctly calls `dangling`. Nothing
+  evicts yet; see `docs/swap-design.md` for the stage that will.
 - **A USER MAPPING SAYS WHETHER IT OWNS ITS FRAME, and getting that
   wrong is silent.** `vmm_destroy_address_space()` frees every frame it
   finds in a dying process's page tables, so anything mapped in that the

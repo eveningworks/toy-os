@@ -176,15 +176,15 @@ is the bookkeeping that makes any other kind of mapping possible.
 - [ ] Expose the DMA32 reserve as a `kernel.` tunable, the way `vm.lowmem_reserve_ratio` is a sysctl
 
 ### Swap / paging to disk
-**Needs:** Demand paging & shared memory -- swap is demand paging with a backing store.
+**Needs:** Demand paging & shared memory -- swap is demand paging with a backing store. Designed in `docs/swap-design.md`.
 
-- [ ] A swap-backed page reclaim path
-- [ ] Page-out under memory pressure
-- [ ] Page-in on fault
-- [ ] A swap file on the active filesystem (or a raw disk region)
-- [ ] LRU-ish page aging to choose victims
-- [ ] Dirty-page writeback before eviction
-- [ ] Swap usage reported in `meminfo` and Task Manager
+- [x] ~~Stage 0: the page table can say "swapped", and every walker reads it~~ DONE 2026-09-06
+- [x] ~~Stage 1: the swap area -- a formatted block device, slots, and a page in each direction~~ DONE 2026-09-06
+- [ ] Stage 2: page-out, driven by a debug command rather than by pressure
+- [ ] Stage 3: page-in on fault, with a control proving a missing one FAULTS rather than reading zeroes
+- [ ] Stage 4: direct reclaim on frame exhaustion, clock/second-chance over the Accessed bit
+- [ ] Stage 5: swap usage in `meminfo` and Task Manager, and a swap FILE via extents
+- [ ] Stage 6: ramfs off the kernel heap, which is the only thing that makes `/tmp` swappable
 
 ## Phase 3 -- the process model
 

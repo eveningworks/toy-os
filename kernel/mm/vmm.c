@@ -1,5 +1,6 @@
 #include "vmm.h"
 #include "pmm.h"
+#include "swap.h"
 #include "string.h" // k_memcpy() -- the user-copy helpers below
 #include <stddef.h>
 
@@ -16,6 +17,10 @@ extern uint64_t p4_table[512];
 // it, so vmm_destroy_address_space() must not free it. See
 // vmm_map_user_borrowed().
 #define PAGE_BORROWED (1ULL << 9)
+// The second software bit, and it is only ever set with PAGE_PRESENT
+// CLEAR: the page is swapped out and the rest of the entry holds its
+// slot, not a frame. See the swap-entry section further down.
+#define PAGE_SWAPPED  (1ULL << 10)
 #define PAGE_NX       (1ULL << 63) // requires EFER.NXE, set once in boot.asm
 // Selects PAT slot 4 (paging.c points it at write-combining at boot).
 // Bit 7 on a 4KiB PTE -- note that is the same bit PAGE_HUGE uses at the
@@ -86,7 +91,12 @@ static uint64_t ensure_next_level(uint64_t *table, int index) {
 // the page-table walk it accompanies.
 #define VMM_ACCT_MAX 72
 
-static struct { uint64_t pml4; uint32_t pages; } g_acct[VMM_ACCT_MAX];
+// `pages` is RESIDENT -- what is mapped right now. `swapped` is what
+// this address space still owns but is not holding a frame for. They
+// are two numbers rather than one because eviction moves a page from
+// the first to the second, and a reader shown only the first watches a
+// process appear to shrink while it is doing nothing of the kind.
+static struct { uint64_t pml4; uint32_t pages; uint32_t swapped; } g_acct[VMM_ACCT_MAX];
 
 static int acct_slot(uint64_t pml4_phys, int create) {
     int free_slot = -1;
@@ -97,12 +107,23 @@ static int acct_slot(uint64_t pml4_phys, int create) {
     if (!create || free_slot < 0) return -1;
     g_acct[free_slot].pml4 = pml4_phys;
     g_acct[free_slot].pages = 0;
+    g_acct[free_slot].swapped = 0;
     return free_slot;
 }
+
+// Defined with the other swap-entry code below; declared here because
+// unmap, release and teardown all sit above it and all three have to
+// give a slot back.
+static int drop_swap_entry(uint64_t *pt, int i);
 
 uint64_t vmm_user_bytes(uint64_t pml4_phys) {
     int i = acct_slot(pml4_phys, 0);
     return i < 0 ? 0 : (uint64_t)g_acct[i].pages * 4096;
+}
+
+uint64_t vmm_user_swapped_bytes(uint64_t pml4_phys) {
+    int i = acct_slot(pml4_phys, 0);
+    return i < 0 ? 0 : (uint64_t)g_acct[i].swapped * 4096;
 }
 
 static int map_user(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
@@ -223,7 +244,17 @@ int vmm_unmap_user_page(uint64_t pml4_phys, uint64_t vaddr) {
     uint64_t *pd = table_at(pdpt[pdpt_index] & ADDR_MASK);
     if (!(pd[pd_index] & PAGE_PRESENT)) return 0;
     uint64_t *pt = table_at(pd[pd_index] & ADDR_MASK);
-    if (!(pt[pt_index] & PAGE_PRESENT)) return 0;
+    if (!(pt[pt_index] & PAGE_PRESENT)) {
+        // Not present is usually "nothing was mapped here" -- except
+        // for a swapped page, whose storage is a slot rather than a
+        // frame and which nobody else can give back.
+        if (drop_swap_entry(pt, pt_index)) {
+            int i = acct_slot(pml4_phys, 0);
+            if (i >= 0 && g_acct[i].swapped) g_acct[i].swapped--;
+            return 1;
+        }
+        return 0;
+    }
 
     pt[pt_index] = 0;
     {
@@ -260,7 +291,14 @@ int vmm_release_user_page(uint64_t pml4_phys, uint64_t vaddr) {
     if (!(pd[pd_index] & PAGE_PRESENT)) return 0;
     uint64_t *pt = table_at(pd[pd_index] & ADDR_MASK);
     uint64_t pte = pt[pt_index];
-    if (!(pte & PAGE_PRESENT)) return 0;
+    if (!(pte & PAGE_PRESENT)) {
+        if (drop_swap_entry(pt, pt_index)) {
+            int i = acct_slot(pml4_phys, 0);
+            if (i >= 0 && g_acct[i].swapped) g_acct[i].swapped--;
+            return 1;
+        }
+        return 0;
+    }
 
     pt[pt_index] = 0;
     {
@@ -271,6 +309,87 @@ int vmm_release_user_page(uint64_t pml4_phys, uint64_t vaddr) {
         __asm__ volatile ("invlpg (%0)" : : "r"(vaddr) : "memory");
     }
     if (!(pte & PAGE_BORROWED)) pmm_free_frame(pte & ADDR_MASK);
+    return 1;
+}
+
+// ---- swapped-out pages ----------------------------------------------
+//
+// A swapped page's PTE has PRESENT clear, so the hardware faults on the
+// next touch, PAGE_SWAPPED set so a walker can tell it from an address
+// that was never mapped, and the SLOT where the frame's address used to
+// be. Linux's swp_entry_t, and it costs no memory anywhere: the record
+// of where the page went IS the entry that used to point at it.
+//
+// Slot 0 is the swap header and is never handed out (swap.h), so a
+// zeroed PTE cannot read as "swapped to slot 0".
+static uint64_t swap_pte(uint32_t slot) {
+    return ((uint64_t)slot << 12) | PAGE_SWAPPED;
+}
+
+// The page table holding `vaddr`, or NULL. Walks without creating: an
+// absent level means the address was never mapped.
+static uint64_t *pt_for(uint64_t pml4_phys, uint64_t vaddr) {
+    uint64_t *pml4 = table_at(pml4_phys);
+    if (!(pml4[(vaddr >> 39) & 0x1FF] & PAGE_PRESENT)) return 0;
+    uint64_t *pdpt = table_at(pml4[(vaddr >> 39) & 0x1FF] & ADDR_MASK);
+    if (!(pdpt[(vaddr >> 30) & 0x1FF] & PAGE_PRESENT)) return 0;
+    uint64_t *pd = table_at(pdpt[(vaddr >> 30) & 0x1FF] & ADDR_MASK);
+    if (!(pd[(vaddr >> 21) & 0x1FF] & PAGE_PRESENT)) return 0;
+    return table_at(pd[(vaddr >> 21) & 0x1FF] & ADDR_MASK);
+}
+
+// THIS FUNCTION IS WHERE "WHAT MAY BE EVICTED" IS DECIDED, and it is
+// the only place that should decide it. A candidate is PRESENT, OWNED
+// (not PAGE_BORROWED -- somebody else's frame, and every shared or DMA
+// mapping in the system is borrowed for exactly that reason) and
+// MANAGED (pmm accounts for it; the raw framebuffer is mapped owned but
+// unmanaged, so the bit alone is not enough). Anything else is refused.
+//
+// The frame is freed here, so the caller must have written it to `slot`
+// FIRST -- there is no way back afterwards.
+int vmm_set_swap_entry(uint64_t pml4_phys, uint64_t vaddr, uint32_t slot) {
+    if (!slot) return 0;
+    uint64_t *pt = pt_for(pml4_phys, vaddr);
+    if (!pt) return 0;
+    int i = (int)((vaddr >> 12) & 0x1FF);
+    uint64_t pte = pt[i];
+    if (!(pte & PAGE_PRESENT)) return 0;
+    if (pte & PAGE_BORROWED) return 0;
+    uint64_t frame = pte & ADDR_MASK;
+    if (!pmm_frame_is_managed(frame)) return 0;
+
+    pt[i] = swap_pte(slot);
+    if (vmm_current_pml4() == pml4_phys) {
+        __asm__ volatile ("invlpg (%0)" : : "r"(vaddr) : "memory");
+    }
+    pmm_free_frame(frame);
+    int a = acct_slot(pml4_phys, 0);
+    if (a >= 0) {
+        if (g_acct[a].pages) g_acct[a].pages--;
+        g_acct[a].swapped++;
+    }
+    return 1;
+}
+
+// The slot `vaddr` is swapped to, or 0 if it is not swapped.
+uint32_t vmm_swap_entry(uint64_t pml4_phys, uint64_t vaddr) {
+    uint64_t *pt = pt_for(pml4_phys, vaddr);
+    if (!pt) return 0;
+    uint64_t pte = pt[(vaddr >> 12) & 0x1FF];
+    if (pte & PAGE_PRESENT) return 0;
+    if (!(pte & PAGE_SWAPPED)) return 0;
+    return (uint32_t)(pte >> 12);
+}
+
+// Drop a swap entry and the slot behind it. Shared by unmap, release
+// and teardown, because "this address no longer refers to anything" has
+// to give the slot back in all three -- the process cannot, it does not
+// know the number, and nothing audits slot usage to catch the leak.
+static int drop_swap_entry(uint64_t *pt, int i) {
+    uint64_t pte = pt[i];
+    if ((pte & PAGE_PRESENT) || !(pte & PAGE_SWAPPED)) return 0;
+    swap_slot_free((uint32_t)(pte >> 12));
+    pt[i] = 0;
     return 1;
 }
 
@@ -289,7 +408,11 @@ static void destroy_pt(uint64_t pt_phys) {
         // it is not. Without this an exiting GUI client returned pages
         // of kernel .rodata (the glyph tables it had mapped read-only)
         // to the physical allocator, which then handed them out again.
-        if (!(pt[i] & PAGE_PRESENT)) continue;
+        // A swapped page holds no frame, but it does hold a SLOT, and
+        // a process that dies swapped would otherwise leak it with no
+        // detector -- nothing audits slot usage the way meminfo audits
+        // frames.
+        if (!(pt[i] & PAGE_PRESENT)) { drop_swap_entry(pt, i); continue; }
         if (pt[i] & PAGE_BORROWED) continue;
         pmm_free_frame(pt[i] & ADDR_MASK);
     }
@@ -330,7 +453,7 @@ void vmm_destroy_address_space(uint64_t pml4_phys) {
     // inherit this one's page count.
     {
         int i = acct_slot(pml4_phys, 0);
-        if (i >= 0) { g_acct[i].pml4 = 0; g_acct[i].pages = 0; }
+        if (i >= 0) { g_acct[i].pml4 = 0; g_acct[i].pages = 0; g_acct[i].swapped = 0; }
     }
 }
 
@@ -370,7 +493,15 @@ static void audit_pt(uint64_t pt_phys, uint64_t base_va, struct audit_ctx *c) {
     struct vmm_audit *a = c->a;
     uint64_t *pt = table_at(pt_phys);
     for (int i = 0; i < 512; i++) {
-        if (!(pt[i] & PAGE_PRESENT)) continue;
+        if (!(pt[i] & PAGE_PRESENT)) {
+            // A SWAPPED PAGE IS COUNTED, NOT SKIPPED. This walk's
+            // invariant is about frames, and a swapped page has none --
+            // so it cannot be checked. Saying how many were not checked
+            // is the difference between a bounded answer and a silence
+            // that reads like a clean bill of health.
+            if (pt[i] & PAGE_SWAPPED) a->swapped++;
+            continue;
+        }
         uint64_t frame = pt[i] & ADDR_MASK;
         uint64_t va = base_va + (uint64_t)i * 4096;
         a->pages++;

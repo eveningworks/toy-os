@@ -26,7 +26,7 @@
 #include "kfmt.h"
 
 uint64_t mm_audit_report(void) {
-    uint64_t pages = 0, borrowed = 0, unmanaged = 0, dangling = 0;
+    uint64_t pages = 0, borrowed = 0, unmanaged = 0, dangling = 0, swapped = 0;
     int spaces = 0;
 
     vga_write("Auditing live address spaces against the frame allocator...\n");
@@ -40,8 +40,15 @@ uint64_t mm_audit_report(void) {
 
         struct proc_info info;
         const char *name = scheduler_proc_info(slot, &info) ? info.name : "?";
-        vga_printf("  pid %d %s: %lu pages, %lu borrowed, %lu unmanaged\n",
-                    slot + 1, name, a.pages, a.borrowed, a.unmanaged);
+        if (a.swapped) {
+            vga_printf("  pid %d %s: %lu pages, %lu borrowed, %lu unmanaged, "
+                        "%lu swapped\n",
+                        slot + 1, name, a.pages, a.borrowed, a.unmanaged,
+                        a.swapped);
+        } else {
+            vga_printf("  pid %d %s: %lu pages, %lu borrowed, %lu unmanaged\n",
+                        slot + 1, name, a.pages, a.borrowed, a.unmanaged);
+        }
         if (a.dangling) {
             vga_printf("    DANGLING: %lu mapping(s) of a FREE frame, "
                         "first va 0x%lx -> frame 0x%lx\n",
@@ -52,6 +59,7 @@ uint64_t mm_audit_report(void) {
         borrowed += a.borrowed;
         unmanaged += a.unmanaged;
         dangling += a.dangling;
+        swapped += a.swapped;
     }
 
     if (dangling) {
@@ -60,6 +68,14 @@ uint64_t mm_audit_report(void) {
     } else {
         vga_printf("  %d space(s), %lu pages (%lu borrowed, %lu unmanaged) "
                     "-- no dangling mappings\n", spaces, pages, borrowed, unmanaged);
+    }
+    // SAID SEPARATELY, AND ONLY WHEN THERE ARE ANY. A swapped page has
+    // no frame, so this walk's invariant cannot cover it; reporting the
+    // count is what stops "no dangling mappings" being read as "every
+    // page was checked".
+    if (swapped) {
+        vga_printf("  %lu page(s) swapped out -- not covered by this audit, "
+                    "which is about frames\n", swapped);
     }
     return dangling;
 }

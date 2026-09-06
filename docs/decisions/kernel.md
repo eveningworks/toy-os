@@ -98,6 +98,50 @@ What stays `DMA32` is what a device reads, plus the page directories
 that CREATE the high map: those cannot live in the memory they are
 about to map.
 
+## Swap picks its victims by walking FORWARD, and builds no reverse map
+
+Every real system that swaps can answer "which page tables point at this
+frame?". Linux builds `anon_vma` chains for it; Windows NT has the PFN
+database and prototype PTEs. toy-os deliberately answers a different
+question instead, and it is worth recording why, because the missing
+structure looks like an omission.
+
+**A reverse map exists to disambiguate.** It is needed when one frame
+can be referenced by many PTEs, which is what `fork()`, copy-on-write
+and `MAP_SHARED` create. toy-os has none of the three: there is no
+`fork()`, no COW, and no shared anonymous memory. So a swappable page
+has exactly ONE page table entry, and the reclaimer can pick a process,
+walk its page tables forward, and take pages -- it never has to start
+from a frame.
+
+**The candidate rule was already in the tree, under another name.** A
+page may be evicted iff its PTE is present, OWNED (not `PAGE_BORROWED`)
+and pointing at a frame pmm manages. `PAGE_BORROWED` means "this address
+space does not own this frame", and every mapping that must never be
+evicted is borrowed for exactly the reason that disqualifies it: the
+sound ring is a live DMA target, window buffers are contiguous runs a
+per-page evictor cannot break up, the shared font is kernel image, the
+compositor's poison page is many PTEs onto one frame, and shm and the
+`/lib` image cache are shared between processes. That alignment is not
+luck -- it falls out of `PAGE_BORROWED`'s own rule, "who calls
+`pmm_free_frame()` for this frame?" -- but it is load-bearing, so
+`vmm_set_swap_entry()` is the single place that applies it.
+
+**One mapping escapes the bit**, and a reclaimer has to exclude it
+separately: `win_syscalls.c` maps the raw framebuffer into a legacy GUI
+client as OWNED, not borrowed. It is harmless today only because
+framebuffer frames are unmanaged, so freeing one is a no-op. Hence the
+"and managed" half of the rule.
+
+**What this costs, stated plainly:** a future `fork()` or `MAP_SHARED`
+invalidates the premise, and reclaim would have to stop until there is a
+per-frame refcount -- which is the same prerequisite `fork()` already
+carries on the roadmap, so the two arrive together or not at all. The
+alternative was to build rmap first, for a machine with nothing to
+disambiguate, and carry it unexercised until fork lands.
+
+See `docs/swap-design.md` for the staged plan this belongs to.
+
 ## An ANY allocation stops at a DMA32 floor rather than draining it
 
 Built 2026-09-02, with stage 3 of ">4 GiB", because moving user pages
