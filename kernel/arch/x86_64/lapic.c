@@ -7,6 +7,9 @@
 #include "kfmt.h"
 #include "string.h"
 #include "cpuinfo.h"
+#include "clockevent.h"
+#include "timer.h"   // pit_ticks(), PIT_HZ -- the calibration reference
+#include "barrier.h" // cpu_relax()
 
 // The MSR that says where the LAPIC is and whether it is enabled. Its
 // base field is the same address the MADT reports; they are read from
@@ -25,6 +28,10 @@
 #define LAPIC_REG_SVR       0x0F0
 #define LAPIC_REG_LVT_LINT0 0x350
 #define LAPIC_REG_LVT_LINT1 0x360
+#define LAPIC_REG_LVT_TIMER 0x320
+#define LAPIC_REG_TIMER_INIT 0x380
+#define LAPIC_REG_TIMER_CUR  0x390
+#define LAPIC_REG_TIMER_DIV  0x3E0
 
 #define SVR_ENABLE          (1u << 8)
 
@@ -32,6 +39,14 @@
 #define LVT_DELIVERY_EXTINT (7u << 8)
 #define LVT_DELIVERY_NMI    (4u << 8)
 #define LVT_MASKED          (1u << 16)
+#define LVT_TIMER_PERIODIC  (1u << 17)
+
+// Divide-by-16. The divisor is encoded across bits 3,1,0 with bit 2
+// skipped, which is why 16 is 0x3 and not 0x4. Sixteen keeps a 100 Hz
+// period inside 32 bits on every bus frequency this will meet while
+// leaving the counter coarse enough that calibration is not measuring
+// its own overhead.
+#define TIMER_DIV_16        0x3
 
 static volatile uint8_t *g_base;
 static uint8_t g_id;
@@ -160,6 +175,115 @@ void lapic_dispatch_vector(uint8_t vector, uint64_t *regs) {
     // interrupt of that class and looks nothing like a missing EOI.
     lapic_eoi();
 }
+
+// --- the LAPIC timer -------------------------------------------------
+//
+// A per-core tick, and the reason this file is part of docs/smp-design.md
+// rather than only of the MSI work: the PIT delivers one interrupt for
+// the whole machine, so an application processor started in stage 3
+// would have nothing to preempt it with.
+
+// How many times the timer counts in a second, at TIMER_DIV_16.
+// Measured once; the bus frequency it derives from does not change.
+static uint32_t g_timer_rate;
+static uint8_t g_timer_vector;
+static uint32_t g_timer_ticks;
+
+// How long to count for. Four PIT ticks is 40ms -- long enough that the
+// quantisation of a whole-tick reference is under a percent, short
+// enough not to be felt at boot.
+#define CALIBRATE_PIT_TICKS 4
+
+static int interrupts_enabled(void) {
+    uint64_t flags;
+    __asm__ volatile ("pushfq; popq %0" : "=r"(flags));
+    return (flags & (1u << 9)) != 0;
+}
+
+// Counts down from the maximum across a whole number of PIT ticks. The
+// PIT is the only reference that exists this early, and it is exact by
+// construction rather than measured.
+static uint32_t lapic_timer_calibrate(void) {
+    // WITHOUT INTERRUPTS THIS NEVER RETURNS. pit_ticks() advances only
+    // from the timer interrupt, so the loops below would spin forever --
+    // the deadlock cpuinfo.h describes for the TSC, refused here rather
+    // than hit.
+    if (!interrupts_enabled()) return 0;
+
+    lapic_write(LAPIC_REG_TIMER_DIV, TIMER_DIV_16);
+    lapic_write(LAPIC_REG_LVT_TIMER, LVT_MASKED); // count, deliver nothing
+
+    uint64_t edge = pit_ticks();
+    while (pit_ticks() == edge) cpu_relax(); // start on a tick boundary
+
+    lapic_write(LAPIC_REG_TIMER_INIT, 0xFFFFFFFFu);
+    uint64_t t0 = pit_ticks();
+    while (pit_ticks() - t0 < CALIBRATE_PIT_TICKS) cpu_relax();
+    uint32_t remaining = lapic_read(LAPIC_REG_TIMER_CUR);
+    uint64_t elapsed = pit_ticks() - t0;
+    lapic_write(LAPIC_REG_TIMER_INIT, 0);
+
+    // A counter that reached ZERO ran out mid-window, so the count is a
+    // floor rather than a measurement -- and believing it would set a
+    // silently wrong tick rate, which makes every timeout in the kernel
+    // wrong rather than failing anywhere visible.
+    uint32_t counted = 0xFFFFFFFFu - remaining;
+    if (!elapsed || !counted || !remaining) return 0;
+    return (uint32_t)(((uint64_t)counted * PIT_HZ) / elapsed);
+}
+
+static void lapic_timer_isr(uint64_t *regs) {
+    g_timer_ticks++;
+    clockevent_tick(regs);
+}
+
+static int lapic_ce_start(uint32_t hz) {
+    if (!g_base || !hz) return 0;
+
+    if (!g_timer_rate) g_timer_rate = lapic_timer_calibrate();
+    if (!g_timer_rate) return 0;
+
+    uint32_t count = g_timer_rate / hz;
+    if (!count) return 0; // asked for a rate faster than the timer counts
+
+    if (!g_timer_vector) {
+        g_timer_vector = lapic_alloc_vector(lapic_timer_isr);
+        if (!g_timer_vector) return 0;
+    }
+
+    lapic_write(LAPIC_REG_TIMER_DIV, TIMER_DIV_16);
+    lapic_write(LAPIC_REG_LVT_TIMER, LVT_TIMER_PERIODIC | g_timer_vector);
+    // THE INITIAL COUNT IS THE ARMING WRITE, and it must be last: the
+    // timer starts the instant it is written, so an LVT still holding a
+    // masked or stale vector delivers the first tick somewhere wrong.
+    lapic_write(LAPIC_REG_TIMER_INIT, count);
+
+    klog_printf("lapic: timer at %u Hz -- %u counts, %u/s calibrated, vector %u\n",
+                hz, count, g_timer_rate, g_timer_vector);
+    return 1;
+}
+
+static void lapic_ce_stop(void) {
+    if (!g_base) return;
+    lapic_write(LAPIC_REG_TIMER_INIT, 0);
+    lapic_write(LAPIC_REG_LVT_TIMER, LVT_MASKED);
+}
+
+static const struct clockevent g_lapic_ce = {
+    .name    = "lapic-timer",
+    .start   = lapic_ce_start,
+    .stop    = lapic_ce_stop,
+    .rating  = CLOCKEVENT_RATING_LAPIC,
+    .per_cpu = 1,
+};
+
+void clockevent_init_lapic(void) {
+    if (!g_base) return; // no LAPIC, or `nomsi` -- the PIT keeps the tick
+    clockevent_register(&g_lapic_ce);
+}
+
+uint32_t lapic_timer_rate(void) { return g_timer_rate; }
+uint32_t lapic_timer_ticks(void) { return g_timer_ticks; }
 
 int lapic_summary(char *buf, uint32_t cap) {
     if (!g_base || !buf || cap == 0) return 0;

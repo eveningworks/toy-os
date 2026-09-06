@@ -15,7 +15,7 @@ void pit_init(uint32_t frequency_hz) {
     outb(PIT_CHANNEL0, (uint8_t)((divisor >> 8) & 0xFF));
 }
 
-void pit_handle_irq(void) {
+void timer_tick_advance(void) {
     ticks++;
     serial_tx_poll(); // a queued log line still moves with nothing printing
 }

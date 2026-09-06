@@ -10,9 +10,8 @@
 // This is Linux's `clocksource` in miniature, and the split it encodes
 // is the one worth keeping: TIMEKEEPING (a counter you read, this file)
 // is a different job from TIMER EVENTS (deciding when to interrupt,
-// which is still the PIT's fixed 100Hz here -- Linux calls that a
-// clock_event_device). Conflating them is how a tick rate ends up
-// meaning both "how often we interrupt" and "how precisely we can
+// which is kernel/clockevent.h). Conflating them is how a tick rate
+// ends up meaning both "how often we interrupt" and "how precisely we can
 // measure", which is exactly the confusion that produced this kernel's
 // CPU-accounting bug: billing incremented a TICK COUNTER instead of
 // asking a clock how much time had passed, so a yield -- microseconds

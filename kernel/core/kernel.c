@@ -35,6 +35,7 @@
 #include "font_config.h"
 #include "setting.h"
 #include "lapic.h"  // lapic_init() -- the LAPIC, and the vectors MSI uses
+#include "clockevent.h" // clockevent_init_lapic() -- the tick, per core
 #include "acpi.h"   // acpi_init() -- the firmware tables, and what poweroff needs from them
 #include "query.h"   // the fact registry -- query_init() and the core's providers
 #include "mm_audit.h" // mm_audit_query_init() -- QUERY_MMAUDIT
@@ -242,6 +243,14 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // rather than installed with a calibration that quietly stops being
     // true.
     clocksource_init_tsc();
+
+    // The tick moves to the LAPIC timer, if there is one. AFTER
+    // lapic_init() for the obvious reason and after idt_init() for a
+    // less obvious one: calibrating it counts against pit_ticks(), which
+    // needs the PIT already ticking and interrupts already on. A machine
+    // with no APIC, or one booted with `nomsi`, keeps the PIT's tick and
+    // nothing here fails.
+    clockevent_init_lapic();
 
     // The wall clock, seeded from the RTC and carried by the clocksource
     // just chosen (api/ktime.h). After clocksource_init_tsc() so the

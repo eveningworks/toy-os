@@ -1128,6 +1128,59 @@ Ask through `virtio_irq_is_ours()` anyway -- the emulator's incidental
 behaviour is not something to build on -- but do not claim the trap has
 been demonstrated, because it has not been.
 
+## THE TICK IS A CLOCKEVENT, AND ON A MACHINE WITH A LAPIC IT IS NOT THE PIT
+
+`kernel/clockevent.h` is the device that decides WHEN to interrupt --
+Linux's `clock_event_device`, and the other half of the split
+`clocksource.h` describes. A clocksource is READ; a clockevent FIRES.
+Two implementations: `pit` (rating 100, every machine) and
+`lapic-timer` (rating 200, per core), and the higher-rated one takes the
+tick at boot. `lsdev` reports which holds it and how many interrupts it
+has delivered.
+
+The reason it is a registry rather than an `if`: the PIT delivers ONE
+interrupt for the whole machine, so an application processor would have
+nothing to preempt it with. A per-core timer is what
+`docs/smp-design.md`'s stage 3 needs, and the clockevent is the object
+each core gets one of. Six things to know:
+
+- **THE TICK BODY LIVES IN `clockevent_tick()`, not in a device's
+  handler**, so a second device cannot drift from the first. A device
+  registers and calls it; what the tick DOES is not the device's
+  business.
+- **THE INITIAL-COUNT WRITE IS THE ARMING WRITE, and it must be last.**
+  The LAPIC timer starts the instant `LAPIC_REG_TIMER_INIT` is written,
+  so an LVT still holding a masked or stale vector delivers the first
+  tick somewhere wrong. Same shape as the fitter's size register and
+  virtio's `DRIVER_OK`.
+- **THE OUTGOING DEVICE IS STOPPED ONLY ONCE ITS REPLACEMENT IS
+  RUNNING.** The other order leaves a failed `start()` with no tick at
+  all -- and nothing able to deliver one to notice. The cost is a
+  microsecond window where both fire, which double-counts at most one
+  tick.
+- **CALIBRATING THE LAPIC TIMER NEEDS INTERRUPTS ON.** It counts against
+  `pit_ticks()`, which advances only from the timer interrupt, so
+  calibrating with IF clear waits forever -- the deadlock `cpuinfo.h`
+  describes for the TSC. `lapic_ce_start()` reads RFLAGS and refuses
+  rather than hanging. This is also why `clockevent_init_lapic()` is a
+  separate call from `kernel_main()` rather than part of `lapic_init()`.
+- **THE PIT IS MASKED, NOT STOPPED.** Channel 0 keeps counting when the
+  LAPIC takes over, so anything calibrating against it still can and
+  re-taking the tick is one write. `pit_ticks()` keeps advancing either
+  way -- it is incremented by `clockevent_tick()`, whichever device
+  called it, which is why the name is the only thing about it that is
+  now wrong.
+- **TESTING IT IS ABOUT DELIVERY, NOT CONFIGURATION** -- the same rule
+  the MSI entry above states. A LAPIC timer configured and not
+  delivering is a machine that has already stopped, and asking the LVT
+  what it holds would pass either way. `lapic_timer_ticks()` counts
+  interrupts, the KTEST requires it to RISE, and removing the arming
+  write kills the boot outright.
+
+**`nomsi` KEEPS THE TICK ON THE PIT**, along with everything else, and
+so does a CPU with no APIC -- both paths verified, and neither logs a
+failure, because neither is one.
+
 ## A VIRTIO DEVICE TAKES MSI-X ONLY, ITS QUEUE VECTORS ARE WRITTEN BY `virtqueue_setup()`, AND ITS ARMING WRITE IS `DRIVER_OK`
 
 `virtio_msix_enable()` claims a vector and points the device's

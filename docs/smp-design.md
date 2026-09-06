@@ -1,12 +1,16 @@
 # SMP: more than one core, staged
 
-**Status: STAGE 1 IS BUILT (2026-08-30); STAGES 2-7 ARE DESIGNED, NOT
-BUILT.** The ACPI table walk and the MADT's processor list exist --
-`kernel/acpi/`, read by `/bin/acpi` and by `/bin/lscpu`'s "Logical CPUs"
-line -- and nothing acts on them: this kernel still schedules on one
-core, and every entry reports `online: no`. Everything from the Local
-APIC onwards is unwritten. The document is still meant to be executed in
-order, each stage shippable and testable on its own, with the honest
+**Status: STAGE 1 IS BUILT (2026-08-30); STAGE 2 IS BUILT (the Local
+APIC 2026-08-30, its TIMER 2026-09-06) EXCEPT THE I/O APIC; STAGES 3-7
+ARE DESIGNED, NOT BUILT.** The ACPI table walk and the MADT's processor
+list exist (`kernel/acpi/`, read by `/bin/acpi` and `/bin/lscpu`), the
+Local APIC is enabled and carries MSI-X for seven drivers, and the tick
+now runs on the LAPIC timer through `kernel/clockevent.h` -- but nothing
+starts a second core, and every MADT entry still reports `online: no`.
+What stage 2 still lacks is the I/O APIC and the MADT's interrupt source
+overrides; legacy lines are still delivered by the 8259 through the
+LAPIC's LINT0 in virtual wire mode. The document is meant to be executed
+in order, each stage shippable and testable on its own, with the honest
 case against at the end.
 
 **Stage 1 landed for a different reason than SMP**, which is worth
@@ -82,7 +86,7 @@ counted in the tree on 2026-08-26.
 | GDT, TSS, `kernel_stack0` | one of each (`kernel/arch/x86_64/gdt.c`) | `TSS.RSP0` is per CPU: two cores sharing one would land two ring-3 traps on one stack |
 | IDT | one, loaded once | shareable as-is -- the IDT is read-only to the CPU. Each core must still `lidt` it |
 | interrupt controller | 8259 PIC, 16 lines, handler chain per line (`irq.c`, 75 lines) | the PIC delivers to one CPU. MSI and IPIs both need a Local APIC, which this kernel has none of |
-| timer | fixed 100 Hz PIT | one interrupt for the whole machine; SMP wants a per-core timer, which is the LAPIC timer |
+| timer | LAPIC timer at 100 Hz, PIT as fallback (2026-09-06) | this row is DONE for the BSP -- `kernel/clockevent.h`. Each AP still needs its own, which is what `per_cpu` on the device marks |
 | "what is running" | `current_index`, `rotation_pos`, `g_next_kernel_rsp` -- three file-scope globals | each has to become per CPU. `g_next_kernel_rsp` is read by `isr_common`'s epilogue in assembly |
 | run queue | one `procs[64]` array scanned by `find_next_runnable()` | correct under a lock; a per-core queue is a later optimisation, not a correctness fix |
 | mutual exclusion | `scheduler_preempt_disable()`, 11 call sites outside tests, in 4 files | turning preemption off on ONE core stops nothing on another. Every one of these is a critical section that needs a real lock |
@@ -140,12 +144,30 @@ right address rather than the 32-bit field's. It does NOT yet read the
 type-2 interrupt source overrides, which stage 2's own trap note is
 about -- that is a loop body in `acpi_madt_init()`, not new machinery.
 
-### Stage 2 -- the Local APIC, still one core
+### Stage 2 -- the Local APIC, still one core -- PARTLY DONE
 
 Enable the BSP's LAPIC, move the timer off the PIT and onto the LAPIC
 timer, and keep the PIC path working for a machine that reports no APIC.
 Route the legacy IRQs through the I/O APIC using the MADT's interrupt
 source overrides.
+
+**The LAPIC itself landed 2026-08-30** and brought MSI/MSI-X with it,
+which this section did not anticipate as part of the stage -- it framed
+MSI-X as a later beneficiary. **The TIMER landed 2026-09-06**, behind a
+`clockevent` registry rather than the bare switch sketched here: two
+implementations exist (`pit`, `lapic-timer`), the higher-rated one takes
+the tick at boot, and `nomsi` or a CPU with no APIC keeps the PIT. That
+registry is the shape stage 3 wants, since a per-CPU timer is one
+clockevent per core. The calibration is against the PIT, which is why it
+happens in `kernel_main()` and not in `lapic_init()` -- it needs
+interrupts already on.
+
+**What is left in this stage is the I/O APIC**, and with it the
+interrupt source overrides. `acpi_madt_init()` currently COUNTS type-1
+entries and discards the address, and does not look at type-2 at all;
+both have to land before a redirection entry can be programmed. That is
+also the step that retires virtual wire mode, and the one that can
+silently kill the timer, the keyboard and the disk together.
 
 This is worth landing alone even if SMP stops here: it is what MSI-X
 needs (`docs/roadmap.md`'s Local APIC item), it gives more than 16

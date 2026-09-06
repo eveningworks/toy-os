@@ -95,8 +95,29 @@ int clocksource_register(const struct clocksource *cs) {
     return 1;
 }
 
+// READ, CONVERT AND ACCUMULATE ARE ONE CRITICAL SECTION, and interrupts
+// are what this is protecting against rather than preemption: the timer
+// ISR reads this clock too (CPU accounting), so a caller that has read
+// `raw` and not yet stored it can be overtaken by an ISR that stores a
+// LATER one. The caller then resumes and computes raw - g_last_raw with
+// g_last_raw one tick AHEAD -- a delta of (uint64_t)-1, which the clamp
+// below turns into a ~7 second jump forward in accumulated time.
+// scheduler_preempt_disable() cannot help here; the racing party is an
+// interrupt handler, not another process.
+static inline uint64_t irq_save(void) {
+    uint64_t f;
+    __asm__ volatile ("pushfq; popq %0; cli" : "=r"(f) :: "memory");
+    return f;
+}
+
+static inline void irq_restore(uint64_t f) {
+    if (f & (1ull << 9)) __asm__ volatile ("sti" ::: "memory");
+}
+
 uint64_t clocksource_now_ns(void) {
     if (!g_cs) return 0;
+
+    uint64_t flags = irq_save();
 
     uint64_t raw = g_cs->read() & g_cs->mask;
     // Masked subtraction, so a counter that wrapped since the last read
@@ -104,19 +125,30 @@ uint64_t clocksource_now_ns(void) {
     // conversion is done on deltas rather than on the absolute value.
     uint64_t delta = (raw - g_last_raw) & g_cs->mask;
 
-    if (delta > g_max_delta) {
+    int clamped = delta > g_max_delta;
+    uint64_t reported = delta;   // before the clamp -- the offending value
+    if (clamped) {
         // Nothing read the clock for long enough that converting the
         // delta would overflow. Clamping loses time, which is bad --
         // but wrapping makes it go BACKWARDS, which breaks every
         // caller's arithmetic silently, so say so and lose it.
-        klog_printf("clocksource: %s delta %lu exceeds max %lu -- time clamped\n",
-                     g_cs->name, (unsigned long)delta, (unsigned long)g_max_delta);
         delta = g_max_delta;
     }
 
     g_acc_ns += (delta * g_cs->mult) >> g_cs->shift;
     g_last_raw = raw;
-    return g_acc_ns;
+    uint64_t now = g_acc_ns;
+
+    irq_restore(flags);
+
+    // Outside the section: klog is queued, but a print is still far
+    // longer than the arithmetic it would sit inside.
+    if (clamped)
+        klog_printf("clocksource: %s delta %lu exceeds max %lu -- time clamped\n",
+                     g_cs->name, (unsigned long)reported,
+                     (unsigned long)g_max_delta);
+
+    return now;
 }
 
 // --- the PIT source ---------------------------------------------------

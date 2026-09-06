@@ -8,6 +8,7 @@
 #include "keyboard.h"
 #include "i8042.h"
 #include "timer.h"
+#include "clockevent.h" // the tick, whichever device is delivering it
 #include "string.h"
 #include "mouse.h"
 #include "syscall.h"
@@ -123,8 +124,7 @@ void idt_set_ring3_fault_hook(ring3_fault_hook_fn hook) {
 // function handles which line, the same way the pic_clear_mask() calls
 // in idt_init() already wire up which lines are even unmasked.
 static void timer_irq_handler(uint64_t *regs) {
-    pit_handle_irq();
-    scheduler_tick(regs); // no-op unless scheduler_demo_run() armed it
+    clockevent_tick(regs);
 }
 
 static void keyboard_irq_handler(uint64_t *regs) {
@@ -168,7 +168,6 @@ void idt_init(void) {
     idt_load((uint64_t)&idtp);
 
     pic_remap();
-    pit_init(PIT_HZ);
 
     irq_register_handler(0, timer_irq_handler);
     irq_register_handler(1, keyboard_irq_handler);
@@ -177,7 +176,11 @@ void idt_init(void) {
     // unmask timer (IRQ0), keyboard (IRQ1), cascade (IRQ2, needed for
     // any slave-PIC line to reach the CPU), and mouse (IRQ12)
     for (uint8_t irq = 0; irq < 16; irq++) pic_set_mask(irq);
-    pic_clear_mask(0);
+
+    // The PIT takes the tick, which is what programs it and unmasks
+    // IRQ0. Every machine boots on it; kernel_main() offers the LAPIC
+    // timer later, once there is something to calibrate against.
+    clockevent_init();
     pic_clear_mask(1);
     pic_clear_mask(2);
     pic_clear_mask(12);

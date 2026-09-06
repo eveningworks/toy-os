@@ -40,12 +40,13 @@
 
 void scheduler_init(void);
 
-// Called from idt.c's isr_dispatch for every timer tick (vector 32),
-// after pit_handle_irq()+EOI. `regs` is the saved-register pointer for
-// whatever was interrupted -- exactly the pointer isr_common's epilogue
-// will resume from via g_next_kernel_rsp, unless this call decides to
-// switch it to somewhere else. No-op if the scheduler hasn't been armed
-// (see scheduler_demo_run()).
+// Called on every timer tick, from clockevent_tick() -- which arrives on
+// vector 32 when the PIT holds the tick and on a LAPIC vector when the
+// LAPIC timer does (kernel/clockevent.h). `regs` is the saved-register
+// pointer for whatever was interrupted -- exactly the pointer
+// isr_common's epilogue will resume from via g_next_kernel_rsp, unless
+// this call decides to switch it to somewhere else. No-op if the
+// scheduler hasn't been armed (see scheduler_demo_run()).
 void scheduler_tick(uint64_t *regs);
 
 // SYS_YIELD's entry into the same rotation. Identical to

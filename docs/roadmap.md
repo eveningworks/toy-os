@@ -25,6 +25,7 @@ buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
 - [ ] Finish the app-deduplication pass: the smaller survey items, all three branches landed  *(The GUI in ring 3)*
+- [ ] An I/O APIC and the MADT interrupt source overrides, so the legacy lines stop going through the 8259  *(virtio, and a real GPU driver)*
 - [ ] One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy  *(AHCI/SATA driver)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
@@ -640,7 +641,7 @@ run on, not by order.
 - [x] ~~`virtio-rng`: entropy, registered as a krandom source~~
 - [x] ~~`virtio-input`: keyboard/mouse/tablet that isn't PS/2, on an input core with a source registry~~
 - [x] ~~A Local APIC, and MSI-X interrupts on top of it~~ DONE 2026-08-30 -- the xHCI is on a vector; `nomsi` falls back to the PIC
-- [ ] An I/O APIC, so the legacy lines stop going through the 8259 as well
+- [ ] **NEXT** An I/O APIC and the MADT interrupt source overrides, so the legacy lines stop going through the 8259
 - [ ] An ACPI PM-timer clocksource, so a machine without an invariant TSC still has a clock that advances with interrupts off
 - [ ] A clocksource watchdog, cross-checking the TSC against a second source the way Linux does
 - [ ] MSI-X vectors per QUEUE rather than one per device -- wanted by multi-queue virtio and NVMe, worth it once a second CPU is online
@@ -815,7 +816,8 @@ run on, not by order.
 Staged in `docs/smp-design.md`, including the case AGAINST and the
 measurement of what is single-core in the tree today.
 
-- [ ] Discover other cores via MADT
+- [x] ~~Discover other cores via MADT~~ DONE 2026-08-30 -- `kernel/acpi/`, `/bin/acpi`; every core still reports `online: no`
+- [x] ~~The tick on the LAPIC timer, not the PIT~~ DONE 2026-09-06 -- `kernel/clockevent.h`, rating `pit` against `lapic-timer`
 - [ ] Bring up application processors (INIT-SIPI-SIPI)
 - [ ] Per-core GDT/IDT/stack
 - [ ] Scheduler aware of multiple cores

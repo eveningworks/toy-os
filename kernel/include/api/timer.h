@@ -13,7 +13,12 @@
 #define PIT_HZ 100
 
 void pit_init(uint32_t frequency_hz);
-void pit_handle_irq(void);
+// Advances the tick counter pit_ticks() returns, and drains the queued
+// kernel log. Called from clockevent_tick(), NOT from an interrupt
+// handler directly -- which device is interrupting is the clockevent's
+// business (kernel/clockevent.h), and by the time this runs it may not
+// be the PIT at all.
+void timer_tick_advance(void);
 uint64_t pit_ticks(void);
 
 struct rtc_time {

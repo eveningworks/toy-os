@@ -6455,3 +6455,44 @@ Releasing the device when no client is playing is PipeWire's
 `suspend-on-idle` and is on the roadmap; it was not built here because a
 reopen that loses the race introduces a failure mode the exclusive hold
 does not have.
+
+## The tick is a registry, not an `if`, and the PIT is masked rather than stopped
+
+The tick moved from the 8259-routed PIT to the LAPIC timer behind
+`kernel/clockevent.h` -- a device with a `start`/`stop`/`rating`, the
+same shape as `clocksource`, `display_driver` and `block_device`.
+
+**Why a registry for two devices**, when this project's usual bar is a
+second real caller rather than a plausible one. There are two real
+implementations today, so the bar is met -- but the argument that
+decided it is stage 3 of `docs/smp-design.md`. A per-core timer means
+one clockevent instance per core, and the thing an application processor
+needs at bringup is exactly "give me the tick device and let me start
+it". An `if (lapic_present())` in `idt_init()` would have had to become
+this anyway, with the per-core work layered on top; building the seam
+now costs one file and a header.
+
+**Why the PIT is masked rather than stopped.** Channel 0 keeps counting
+when the LAPIC takes over. Anything calibrating against it still can --
+including the LAPIC timer's own calibration, which is what makes
+re-taking the tick a single write rather than a reprogram. Linux does
+the same thing for the same reason.
+
+**Why calibration is in `kernel_main()` and not in `lapic_init()`.** The
+LAPIC timer counts at a bus frequency nothing reports, so it has to be
+measured, and the only reference this early is the PIT. `pit_ticks()`
+advances only from the timer interrupt, so calibrating with interrupts
+off waits forever -- the deadlock `cpuinfo.h` already describes for the
+TSC, which is why `cpu_info_init()` is a separate call too. The
+calibration reads RFLAGS and refuses rather than hanging, so getting the
+ordering wrong is a boot that keeps the PIT rather than a boot that
+stops.
+
+**What was NOT done, deliberately.** TSC-deadline mode, which is what
+modern Linux prefers: it needs no calibration, but it is one-shot, so
+the tick has to re-arm on every interrupt and the periodic path would
+still exist for machines without it. Two mechanisms for one tick is
+worth it when tickless idle arrives and not before. And `pit_ticks()`
+kept its name through this change even though the PIT no longer feeds
+it -- 163 call sites in 43 files, renamed separately so the interesting
+diff stayed readable.

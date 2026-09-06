@@ -23,7 +23,8 @@
 #include "display.h"  // lsdev names the active display driver
 #include "usb.h"
 #include "aml.h"      // the ACPI namespace, for `aml`
-#include "lapic.h"    // lsdev reports the LAPIC and its MSI vectors
+#include "lapic.h"       // lsdev reports the LAPIC and its MSI vectors
+#include "clockevent.h"  // ...and which device is driving the tick
 #include "idt.h"      // idt_spurious_count()
 #include "sound.h"    // lsdev names the sound devices and which is active
 #include "input.h"    // ...and every registered input source
@@ -212,6 +213,17 @@ static void dbg_cmd_lsdev(void) {
             klog_printf("LAPIC: %s, %u spurious\r\n", apic, idt_spurious_count());
         else
             klog_write("LAPIC: not enabled -- every device is on the 8259 PIC\r\n");
+    }
+
+    // WHICH DEVICE DRIVES THE TICK, and how many it has delivered. The
+    // count is the half that matters: a LAPIC timer configured and not
+    // delivering is a machine that has already stopped, so a rising
+    // number here is the only proof the switch actually took.
+    {
+        char tick[96];
+        clockevent_summary(tick, sizeof tick);
+        klog_printf("Tick: %s, %u lapic-timer interrupt(s)\r\n",
+                    tick, lapic_timer_ticks());
     }
 
     char usbline[96];

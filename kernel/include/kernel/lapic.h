@@ -86,6 +86,13 @@ void lapic_dispatch_vector(uint8_t vector, uint64_t *regs);
 
 // How many vectors are claimed, and one line about the controller, for
 // `lsdev`. Returns 0 when there is no LAPIC.
+// The LAPIC timer's measured count rate, and how many ticks it has
+// delivered. Both 0 until clockevent_init_lapic() hands it the tick --
+// which is what makes the second one a DELIVERY check rather than a
+// configuration one (see docs/conventions/kernel.md on MSI testing).
+uint32_t lapic_timer_rate(void);
+uint32_t lapic_timer_ticks(void);
+
 int lapic_summary(char *buf, uint32_t cap);
 
 #endif
