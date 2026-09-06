@@ -12,6 +12,70 @@ without opening something else is not finished.
 
 ---
 
+## `/tmp` is a ramfs mount and `/var/tmp` is the disk, and the split is not cosmetic
+
+`/tmp` was an ordinary directory on the TFS3 root: persistent, uncapped,
+never emptied. It is a mount point now, with a ramfs over it put there
+at boot by a one-shot service (`data/etc/services.d/tmpfs`).
+
+**What real systems do.** Linux has mounted `/tmp` as tmpfs by default
+for years (systemd's `tmp.mount`), keeps `/var/tmp` on the disk for
+scratch that must survive, and puts runtime state in `/run` — three
+directories because they are three different promises. Windows has none
+of this: `%TEMP%` is a plain NTFS directory and the pagefile backs
+anonymous memory only. macOS is the same shape as Windows. toy-os
+follows Linux, because Linux is the only one of the three that has the
+problem — a machine where scratch I/O is worth not paying for.
+
+**Why it is a SERVICE and not `fs_init()`.** Mount policy is userland's
+on Linux (fstab, `tmp.mount`) and there is no reason for it to be the
+kernel's here: the descriptor is a file, turning it off is deleting
+that file, and the kernel learns nothing new. The cost is that `/tmp` is
+a plain disk directory for the first fraction of a second of boot, which
+nothing observes.
+
+**The size has three sources and the DEFAULT IS THE SUBTLE ONE.**
+`mount -o size=` wins, then `storage.ramfs_size`, then half of free
+memory — tmpfs's own default. That last step is not a mere fallback: a
+diskless boot mounts its ROOT as ramfs from `fs_init()`, before `/etc`
+is readable and before `storage_config_init()` has run, so the compiled
+default is what that root sees. **Any non-zero default silently shrinks
+a diskless root to it**, which is why the setting's default is 0 and why
+that is written down in three places.
+
+**The option is a typed field, not an options string.**
+`abi/mount_abi.h` argued against a `data` string on the grounds that no
+backend had per-filesystem options; ramfs is the first that does, and
+the answer is a `size_mib` in the struct rather than a parser. A number
+needs no parser and cannot be mistyped into something that silently
+means nothing. It fit in what was already a `reserved` word, so the ABI
+did not change size — which is exactly what that word was for.
+
+**What this broke, and the general lesson.** Six KTESTs failed
+immediately, all of them using `/tmp` as *disk-backed* scratch: the
+block-stat counters stopped moving, the `storage.sync` tests could not
+tell `strict` from `lazy`, and `cwd_test` got ramfs's error code for a
+refused hardlink instead of TFS3's. They were relying on a property
+`/tmp` should never have carried. Three more would have been worse
+because they would NOT have failed: `diskbench`, Disk Benchmark and the
+shell's `stress` measure the disk by writing a real file, and against a
+ramfs they would have reported an enormous, entirely meaningless number
+with nothing about it looking wrong. `remote.py`'s sync checksums are
+the fourth — that file exists precisely to still be there next run.
+
+So: **when a directory's guarantees change, the things that break
+loudly are the lucky ones.** The dangerous callers are the ones whose
+assumption was about performance or durability rather than correctness,
+because they keep working and start lying. Grepping for the path is what
+finds them; nothing else does.
+
+**And init's own channel had to move.** `init.c` put its control file
+and status in `/tmp` with a comment saying it wanted `/run` and that
+`/tmp` was the only such directory. That stopped being tenable the
+moment `/tmp` became a mount point one of init's own services mounts:
+init's control channel cannot live under a filesystem init is
+responsible for putting there. `/run` exists now.
+
 ## `SYS_WRITE_MAX` is a throughput constant, because every write is a journal commit
 
 It was 1024, described in its own comment as "an artefact of the bounce

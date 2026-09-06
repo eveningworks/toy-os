@@ -26,7 +26,7 @@
 
 static int mnt_ramfs(const char *point) {
     const char *why = "";
-    return mount_add(0, "ramfs", point, 0, &why);
+    return mount_add(0, "ramfs", point, 0, 0, &why);
 }
 
 KTEST("mount", "the root answers for everything nothing else claims") {
@@ -107,16 +107,16 @@ KTEST("mount", "the refusals: the root, a missing point, a double mount, a busy 
 
     // A mount point that does not exist is refused -- Linux's rule, and
     // the reason `ensure_layout()` creates /boot and /mnt.
-    KTEST_ASSERT(!mount_add(0, "ramfs", "/definitely-not-a-directory", 0, &why));
+    KTEST_ASSERT(!mount_add(0, "ramfs", "/definitely-not-a-directory", 0, 0, &why));
     // ...and so is a relative one, and one with a trailing slash.
-    KTEST_ASSERT(!mount_add(0, "ramfs", "mnt", 0, &why));
-    KTEST_ASSERT(!mount_add(0, "ramfs", "/mnt/", 0, &why));
+    KTEST_ASSERT(!mount_add(0, "ramfs", "mnt", 0, 0, &why));
+    KTEST_ASSERT(!mount_add(0, "ramfs", "/mnt/", 0, 0, &why));
     // ...and an unknown filesystem type.
-    KTEST_ASSERT(!mount_add(0, "notafilesystem", "/mnt", 0, &why));
+    KTEST_ASSERT(!mount_add(0, "notafilesystem", "/mnt", 0, 0, &why));
 
     if (!mnt_ramfs("/mnt")) { KTEST_SKIP("could not mount ramfs at /mnt"); }
     // Something is already there.
-    KTEST_ASSERT(!mount_add(0, "ramfs", "/mnt", 0, &why));
+    KTEST_ASSERT(!mount_add(0, "ramfs", "/mnt", 0, 0, &why));
     KTEST_ASSERT(mount_remove("/mnt", &why));
 }
 
@@ -129,43 +129,43 @@ KTEST("mount", "two mounts of one backend are two filesystems") {
     const char *why = "";
     if (!mnt_ramfs("/mnt")) { KTEST_SKIP("could not mount ramfs at /mnt"); }
 
-    fs_mkdir("/tmp/second");
-    if (!fs_is_dir("/tmp/second")) {
+    fs_mkdir("/var/tmp/second");
+    if (!fs_is_dir("/var/tmp/second")) {
         mount_remove("/mnt", &why);
         KTEST_SKIP("could not make a second mount point");
     }
-    if (!mount_add(0, "ramfs", "/tmp/second", 0, &why)) {
+    if (!mount_add(0, "ramfs", "/var/tmp/second", 0, 0, &why)) {
         mount_remove("/mnt", &why);
-        fs_delete("/tmp/second");
+        fs_delete("/var/tmp/second");
         KTEST_SKIP("could not mount a second ramfs");
     }
 
     KTEST_ASSERT(fs_write("/mnt/a.txt", "first volume", 0));
-    KTEST_ASSERT(fs_write("/tmp/second/b.txt", "second volume, and longer", 0));
+    KTEST_ASSERT(fs_write("/var/tmp/second/b.txt", "second volume, and longer", 0));
 
     // Neither can see the other's file...
     KTEST_ASSERT(fs_exists("/mnt/a.txt"));
     KTEST_ASSERT(!fs_exists("/mnt/b.txt"));
-    KTEST_ASSERT(fs_exists("/tmp/second/b.txt"));
-    KTEST_ASSERT(!fs_exists("/tmp/second/a.txt"));
+    KTEST_ASSERT(fs_exists("/var/tmp/second/b.txt"));
+    KTEST_ASSERT(!fs_exists("/var/tmp/second/a.txt"));
     // ...and the sizes differ, so a single shared table serving both
     // could not pass by coincidence.
     KTEST_ASSERT_EQ((int)fs_size("/mnt/a.txt"), 12);
-    KTEST_ASSERT_EQ((int)fs_size("/tmp/second/b.txt"), 25);
+    KTEST_ASSERT_EQ((int)fs_size("/var/tmp/second/b.txt"), 25);
 
     // Unmounting one leaves the other whole -- state_free() frees a
     // mount's own tree and nobody else's.
-    KTEST_ASSERT(mount_remove("/tmp/second", &why));
+    KTEST_ASSERT(mount_remove("/var/tmp/second", &why));
     KTEST_ASSERT(fs_exists("/mnt/a.txt"));
     KTEST_ASSERT_EQ((int)fs_size("/mnt/a.txt"), 12);
 
     KTEST_ASSERT(mount_remove("/mnt", &why));
-    fs_delete("/tmp/second");
+    fs_delete("/var/tmp/second");
 }
 
 KTEST("mount", "a read-only mount refuses every mutating call") {
     const char *why = "";
-    if (!mount_add(0, "ramfs", "/mnt", MNT_RDONLY, &why)) {
+    if (!mount_add(0, "ramfs", "/mnt", MNT_RDONLY, 0, &why)) {
         KTEST_SKIP("could not mount ramfs read-only at /mnt");
     }
     KTEST_ASSERT(!fs_write("/mnt/nope.txt", "x", 0));
@@ -184,13 +184,13 @@ KTEST("mount", "a read-only mount refuses every mutating call") {
 KTEST("mount", "rename across a mount boundary is refused") {
     if (!mnt_ramfs("/mnt")) { KTEST_SKIP("could not mount ramfs at /mnt"); }
 
-    KTEST_ASSERT(fs_write("/tmp/crossmount.txt", "here", 0));
-    KTEST_ASSERT(!fs_rename("/tmp/crossmount.txt", "/mnt/crossmount.txt"));
+    KTEST_ASSERT(fs_write("/var/tmp/crossmount.txt", "here", 0));
+    KTEST_ASSERT(!fs_rename("/var/tmp/crossmount.txt", "/mnt/crossmount.txt"));
     // Refused means UNCHANGED, not moved-and-failed.
-    KTEST_ASSERT(fs_exists("/tmp/crossmount.txt"));
+    KTEST_ASSERT(fs_exists("/var/tmp/crossmount.txt"));
     KTEST_ASSERT(!fs_exists("/mnt/crossmount.txt"));
 
-    fs_delete("/tmp/crossmount.txt");
+    fs_delete("/var/tmp/crossmount.txt");
     const char *why = "";
     KTEST_ASSERT(mount_remove("/mnt", &why));
 }
@@ -233,4 +233,35 @@ KTEST("mount", "df's per-mount records name every mount, root first") {
 
     const char *why = "";
     KTEST_ASSERT(mount_remove("/mnt", &why));
+}
+
+// The size a mount was given must reach the backend. Worth its own test
+// because the value crosses four layers to get there -- the ABI's
+// size_mib, the syscall's unit conversion, mount_add() and fs_ops.init()
+// -- and a drop anywhere in that chain looks exactly like "the default
+// applied", which is a plausible number rather than a visible failure.
+KTEST("mount", "a mount's size reaches the backend, and 0 means the default") {
+    const char *why = "";
+    uint64_t asked = 8 * 1024 * 1024;
+    if (!mount_add(0, "ramfs", "/mnt", 0, asked, &why)) {
+        KTEST_SKIP("could not mount a sized ramfs at /mnt");
+    }
+    uint64_t used = 0, total = 0;
+    const struct mount *m = mount_resolve("/mnt", (char[64]){0}, 64);
+    int got = m && fs_mount_usage(m, &used, &total);
+    KTEST_ASSERT(mount_remove("/mnt", &why));
+    KTEST_ASSERT(got);
+    KTEST_ASSERT_EQ(total, asked);
+
+    // ...and 0 is NOT "zero bytes". A backend that took the number
+    // literally would mount a filesystem nothing could be written to.
+    if (!mount_add(0, "ramfs", "/mnt", 0, 0, &why)) {
+        KTEST_SKIP("could not mount a default-sized ramfs at /mnt");
+    }
+    uint64_t deflt = 0;
+    m = mount_resolve("/mnt", (char[64]){0}, 64);
+    got = m && fs_mount_usage(m, &used, &deflt);
+    KTEST_ASSERT(mount_remove("/mnt", &why));
+    KTEST_ASSERT(got);
+    KTEST_ASSERT(deflt > asked);
 }

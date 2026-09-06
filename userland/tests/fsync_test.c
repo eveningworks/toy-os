@@ -17,7 +17,7 @@
 #include <fcntl.h>
 #include <string.h>
 
-#define PATH "/tmp/fsync_test.bin"
+#define PATH "/var/tmp/fsync_test.bin"  /* durability needs a real device */
 #define N 8192
 
 int main(void) {

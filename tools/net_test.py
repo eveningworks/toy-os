@@ -1374,13 +1374,13 @@ SERVER_EXTRA = ["zeta.txt", "alpha.txt", "middle.txt"]
 def _stage_probe(disk, tmp):
     """Write the file the guest will serve into the image, from here."""
     subprocess.run([sys.executable, os.path.join(HERE, "tfs3_writer.py"),
-                    "mkdir", disk, "/tmp", *_volume_args(disk)],
+                    "mkdir", disk, "/var/tmp", *_volume_args(disk)],
                    cwd=ROOT, capture_output=True)
     probe = os.path.join(tmp, SERVER_FILE)
     with open(probe, "w") as f:
         f.write(SERVER_TEXT)
     w = subprocess.run([sys.executable, os.path.join(HERE, "tfs3_writer.py"),
-                        "write", disk, probe, "/tmp/" + SERVER_FILE,
+                        "write", disk, probe, "/var/tmp/" + SERVER_FILE,
                         *_volume_args(disk)],
                        cwd=ROOT, capture_output=True, text=True)
     for name in SERVER_EXTRA:
@@ -1388,7 +1388,7 @@ def _stage_probe(disk, tmp):
         with open(extra, "w") as f:
             f.write(name + "\n")
         subprocess.run([sys.executable, os.path.join(HERE, "tfs3_writer.py"),
-                        "write", disk, extra, "/tmp/" + name, *_volume_args(disk)],
+                        "write", disk, extra, "/var/tmp/" + name, *_volume_args(disk)],
                        cwd=ROOT, capture_output=True)
     return w
 
@@ -1420,7 +1420,7 @@ def phase_server(r, disk, tmp):
         # for -- the assertion is what answers on the socket, not what
         # the shell prints.
         sh.drain_start()
-        sh.s.sendall(b"sh httpd /tmp\n")
+        sh.s.sendall(b"sh httpd /var/tmp\n")
         time.sleep(3.0)
 
         body, status, listing = None, 0, ""

@@ -41,7 +41,19 @@ struct mount_request {
     char fstype[MOUNT_FSTYPE_MAX];  // empty = probe every backend that could claim it
     char point[MOUNT_POINT_MAX];    // a normalized absolute path that already exists
     uint32_t flags;                 // SYS_MNT_*
-    uint32_t reserved;
+    // A SIZE LIMIT FOR THIS MOUNT, in MiB; 0 means the backend decides.
+    //
+    // This is the `data` string's job in Linux, done as a typed field
+    // instead -- the header above argues against inventing a parser for
+    // options no backend had, and ramfs is the first backend that has
+    // one. A number needs no parser and cannot be mistyped into
+    // something that silently means nothing.
+    //
+    // It fits in what used to be `reserved`, so the struct is the same
+    // size it always was and a caller built before this still compiles
+    // to a zero here, which is the default. That is why the field was
+    // reserved in the first place.
+    uint32_t size_mib;
 };
 
 // --- SYS_MKFS ---------------------------------------------------------

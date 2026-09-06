@@ -2335,7 +2335,10 @@ static void unmount_state(void) {
     txn_reset();
 }
 
-static int tfs3_init(const struct block_device *dev) {
+static int tfs3_init(const struct block_device *dev, uint64_t size_bytes) {
+    // A volume's capacity is the volume's; only a backend that lives
+    // in memory has a size to be told (fs_ops.h).
+    (void)size_bytes;
     S->mounted = 0;
     unmount_state();
     if (!dev) {

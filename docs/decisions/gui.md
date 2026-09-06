@@ -5922,7 +5922,8 @@ role, which makes a hand-run `make test` safe instead of destructive;
 and `tools/ktest_run.py` frees the role first with `service stop
 toywm`, so the gate still exercises them. `service stop` rather than
 deleting the descriptor because init keeps `admin_stopped` in memory
-and the request file is in `/tmp` -- nothing survives to the next boot,
+and the request file is in `/run`, which init empties at startup --
+nothing survives to the next boot,
 so the next tool inherits no fixture.
 
 **The harness asserts that the precondition actually held.** A suite

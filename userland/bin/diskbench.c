@@ -164,7 +164,11 @@ static void emit_transient(const char *fmt, ...) {
     va_list ap; va_start(ap, fmt); emit_ex(0, fmt, ap); va_end(ap);
 }
 
-#define DEFAULT_PATH "/tmp/diskbench.tmp"
+// /var/tmp, NOT /tmp. /tmp is a ramfs mount now, and a disk benchmark
+// pointed at RAM reports a number that is both enormous and meaningless
+// -- the worst shape a measurement can have, because nothing about it
+// looks wrong.
+#define DEFAULT_PATH "/var/tmp/diskbench.tmp"
 #define DEFAULT_MIB  64
 
 // The sequential request IS whatever one syscall carries. Asking for

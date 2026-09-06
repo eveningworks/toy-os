@@ -41,6 +41,7 @@
 #define STORAGE_CONFIG_FILE "/etc/storage.conf"
 #define SYNC_KEY "sync"
 #define WRITEBACK_KEY "writeback_interval"
+#define RAMFS_SIZE_KEY "ramfs_size"
 
 // SECONDS OF QUIET before a deferred commit is forced. The visible half
 // of what ext4 spells `commit=5` and Linux spells
@@ -55,6 +56,20 @@
 #define WRITEBACK_MIN 1
 #define WRITEBACK_MAX 30
 #define WRITEBACK_DEFAULT 1
+
+// MiB a ramfs mount may hold. **THE DEFAULT IS 0 AND MUST STAY 0**: 0
+// means "half of free memory", ramfs's own rule and tmpfs's default,
+// and it is what a DISKLESS ROOT gets -- that mount happens in
+// fs_init(), before /etc is readable and before this file's init() has
+// run, so whatever is compiled in here is what it sees. A non-zero
+// default would silently shrink a diskless root to it.
+//
+// The ceiling is a sanity bound, not a memory limit: ramfs refuses an
+// allocation past its budget exactly as a full disk does, so asking for
+// more than the machine has costs nothing until something writes.
+#define RAMFS_SIZE_MIN 0
+#define RAMFS_SIZE_MAX 4096
+#define RAMFS_SIZE_DEFAULT 0
 
 // ORDERED BY SAFETY, strongest first, because that is the order a
 // person reads a choice list in and the default must be the first thing
@@ -106,8 +121,15 @@ static const char *const g_modes[] = { "strict", "batched", "lazy" };
 static int g_strict = 1;    // 0 only in `lazy`: whether barriers are issued
 static int g_batched = 1;   // 1 only in `batched`: whether commits defer
 static int g_writeback_s = WRITEBACK_DEFAULT;
+static int g_ramfs_size_mib = RAMFS_SIZE_DEFAULT;
 
 int storage_sync_strict(void) { return g_strict; }
+
+// Bytes, converted here rather than at the call site so the unit lives
+// with the setting that owns the number. 0 means "the backend decides".
+uint64_t storage_ramfs_size_bytes(void) {
+    return (uint64_t)g_ramfs_size_mib * 1024 * 1024;
+}
 int storage_sync_batched(void) { return g_batched; }
 
 // In PIT TICKS, converted here rather than at the call site so the
@@ -186,6 +208,42 @@ static const struct setting g_writeback_setting = {
     .unavailable = writeback_unavailable,
 };
 
+static void ramfs_size_get(char *out, uint32_t out_size) {
+    k_snprintf(out, out_size, "%d", g_ramfs_size_mib);
+}
+
+static int ramfs_size_apply(const char *value) {
+    if (!value || !value[0]) return SETTING_INVALID;
+    int n = 0;
+    for (const char *p = value; *p; p++) {
+        if (*p < '0' || *p > '9') return SETTING_INVALID;
+        n = n * 10 + (*p - '0');
+        if (n > RAMFS_SIZE_MAX) return SETTING_INVALID;
+    }
+    if (n < RAMFS_SIZE_MIN) return SETTING_INVALID;
+    g_ramfs_size_mib = n;
+    return etc_config_set(STORAGE_CONFIG_FILE, RAMFS_SIZE_KEY, value)
+               ? SETTING_SAVED : SETTING_UNSAVED;
+}
+
+// TAKEN AT MOUNT, so changing it moves nothing that is already mounted.
+// Said here because a size control that appears to do nothing is worse
+// than one that is not offered.
+static const struct setting g_ramfs_size_setting = {
+    .name  = RAMFS_SIZE_KEY,
+    .label = "Scratch filesystem size",
+    .type  = SETTING_TYPE_INT,
+    .file  = STORAGE_CONFIG_FILE,
+    .category = "Storage",
+    .group    = "Filesystem",
+    .min   = RAMFS_SIZE_MIN,
+    .max   = RAMFS_SIZE_MAX,
+    .step  = 16,
+    .unit  = "MiB",
+    .get   = ramfs_size_get,
+    .apply = ramfs_size_apply,
+};
+
 static const struct setting g_sync_setting = {
     .name  = SYNC_KEY,
     .label = "Write durability",
@@ -201,6 +259,7 @@ static const struct setting g_sync_setting = {
 void storage_config_setting_register(void) {
     setting_register(&g_sync_setting);
     setting_register(&g_writeback_setting);
+    setting_register(&g_ramfs_size_setting);
 }
 
 void storage_config_set_mode_for_test(int strict, int batched) {
@@ -219,6 +278,13 @@ void storage_config_init(void) {
             if (*p < '0' || *p > '9') ok = 0; else n = n * 10 + (*p - '0');
         }
         if (ok && n >= WRITEBACK_MIN && n <= WRITEBACK_MAX) g_writeback_s = n;
+    }
+    if (etc_config_buf_get(&g_cfg, RAMFS_SIZE_KEY, value, sizeof value)) {
+        int n = 0, ok = value[0] != '\0';
+        for (const char *p = value; *p && ok; p++) {
+            if (*p < '0' || *p > '9') ok = 0; else n = n * 10 + (*p - '0');
+        }
+        if (ok && n >= RAMFS_SIZE_MIN && n <= RAMFS_SIZE_MAX) g_ramfs_size_mib = n;
     }
     if (etc_config_buf_get(&g_cfg, SYNC_KEY, value, sizeof value)) {
         // A hand-edited file reaches this reader without passing

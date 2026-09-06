@@ -24,7 +24,7 @@
 // Scratch, under /tmp -- deliberately NOT /etc/toyos.conf, which holds
 // the live machine's real settings and which a test has no business
 // rewriting (tests run inside the booted kernel, see ktest.h).
-#define SCRATCH "/tmp/ktest_etc.conf"
+#define SCRATCH "/var/tmp/ktest_etc.conf"
 
 KTEST("etc_config", "set then get round-trips a value") {
     fs_delete(SCRATCH); // may not exist; a failure here is not interesting
@@ -118,7 +118,7 @@ KTEST("etc_config", "an unloaded buffer answers nothing rather than garbage") {
     // kernel's per-function frame budget (Makefile's
     // -Wframe-larger-than), and a KTEST body is never reentered.
     static struct etc_config_buf buf;
-    KTEST_ASSERT_EQ(etc_config_load("/tmp/ktest_no_such_file.conf", &buf), 0);
+    KTEST_ASSERT_EQ(etc_config_load("/var/tmp/ktest_no_such_file.conf", &buf), 0);
 
     char out[16];
     KTEST_ASSERT_EQ(etc_config_buf_get(&buf, "alpha", out, sizeof out), 0);

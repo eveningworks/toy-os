@@ -40,7 +40,9 @@
 #include <stdlib.h>
 
 #define RESULT_PATH "/tmp/diskmark.out"
-#define WORK_PATH   "/tmp/diskmark.tmp"
+// /var/tmp: /tmp is in RAM, and a disk benchmark run against it
+// measures memcpy. See diskbench.c.
+#define WORK_PATH   "/var/tmp/diskmark.tmp"
 #define BENCH_PATH  "/bin/diskbench"
 
 // Display order is CrystalDiskMark's read-then-write; diskbench runs

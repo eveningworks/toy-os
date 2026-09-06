@@ -1,0 +1,2 @@
+Description=Size cap for a RAM filesystem such as /tmp; 0 means half of free memory
+Widget=spinbox

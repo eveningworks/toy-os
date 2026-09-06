@@ -180,7 +180,11 @@ struct fs_ops {
     // not persistent", announced an active backend on a machine where
     // every single fs_* call failed. The same 1/0/-1 shape probe()
     // already uses, for the same reason: two different kinds of no.
-    int (*init)(const struct block_device *dev);
+    // `size_bytes` caps what this mount may hold; 0 means the backend
+    // decides. Only a backend whose capacity is NOT fixed by its device
+    // has anything to do with it -- ramfs is the only one, and tfs3 and
+    // fat32 ignore it because a volume's size is the volume's.
+    int (*init)(const struct block_device *dev, uint64_t size_bytes);
 
     int (*touch)(const char *path);
     int (*write)(const char *path, const char *data, int append);

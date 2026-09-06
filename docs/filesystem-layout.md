@@ -50,7 +50,9 @@ in check_layout.py changes with it.)
 | `/tests` | Test/demo binaries -- one kernel mechanism each -- plus two FIXTURES, `sample.txt` and `sine1k.wav`. Every line names its own number, because moving identical content is pixel-identical and a scroll test over repeated lines cannot tell a working scroll from a dead one; the content is hostile on purpose (a 400-column line, an exactly-80 one, trailing spaces, a tab, a last line with no newline). Kept apart from `/usr/share/doc/toy-os.txt` so the fixture can be awkward without making the document worse to read, and so editing the document cannot break a test's line numbers. `sine1k.wav` is a steady 1 kHz tone at 44.1 kHz: the shipped sounds under `/usr/share/sounds` are musical and cannot be measured by a zero-crossing count, which is what `tools/audio_test.py` does on the host | build | present |
 | `/install` | The four files `/bin/install` needs to make another disk boot: `kernel.bin`, `grub.cfg`, `boot.img` and `core.img`. In the ROOT rather than in `/boot` because a LIVE boot has no `/boot` at all -- GRUB loads the kernel and a filesystem image into RAM and nothing drives the medium afterwards -- and installing from live media is how a real machine gets toy-os. Every toy-os filesystem carries it, so `install` reads one path on every medium. Staged by `tools/install_grub.py --stage-payload`; ABSENT on a build made without GRUB's BIOS target, which boots fine and cannot install itself | build | optional |
 | `/lib` | The dynamic loader (`ld-toy.so`) and the shared libraries (`lib*.so`) -- where every Unix keeps them, and short because every caller-side path buffer is 64 bytes. `PT_INTERP` names the loader by this absolute path, and the loader resolves a `DT_NEEDED` name against this one directory (no search path, no rpath) | build | present |
-| `/tmp` | Scratch space | boot | present |
+| `/tmp` | Scratch space, and a MOUNT POINT: the `tmpfs` service puts a ramfs over it at boot (`data/etc/services.d/tmpfs`), so it is in RAM and does not survive a reboot. Sized by `storage.ramfs_size`, whose default of 0 means half of free memory -- tmpfs's own default. The directory created here is what a machine sees only if that service is removed, and what was in it is HIDDEN rather than lost while the mount stands | boot | present |
+| `/var/tmp` | Scratch that must SURVIVE a reboot, and must be REAL STORAGE. The FHS's distinction from `/tmp`, and Linux's reason for keeping both once `/tmp` is a tmpfs. Anything measuring the disk belongs here -- `diskbench`, Disk Benchmark's scratch file, the shell's `stress` -- because the same work against a ramfs measures memcpy and reports a number that is enormous and meaningless. So do `remote.py`'s sync checksums and the KTESTs that assert what the DEVICE did | boot | present |
+| `/run` | RUNTIME state: init's control file and status (`init.ctl`, `init.status`) and a service's stop marker. The FHS's directory for this, and what `init.c`'s own comment asked for while settling for `/tmp`. It stopped being a tenable stand-in when `/tmp` became a mount point one of init's SERVICES mounts -- init's control channel cannot live under a filesystem init is responsible for putting there. Not emptied at boot, so init unlinks both files itself at startup | boot | present |
 | `/boot` | MOUNT POINT for the boot volume -- the disk's FAT32 ESP, mounted here READ-ONLY at boot (`kernel/fs/mount.c`). Empty on the root itself, and it stays empty on a machine whose disk has no ESP (a live ISO, a hand-made image), which is the honest picture: that build's kernel came from somewhere else. What is INSIDE it is the ESP's own layout, not this table's -- `tools/install_grub.py` writes `boot/kernel.bin` and `boot/grub/` there, so the running kernel is at `/boot/boot/kernel.bin` | boot | present |
 | `/mnt` | MOUNT POINT for anything mounted by hand (`mount 3 /mnt`, `mount -t ramfs none /mnt`). Empty otherwise, and deliberately: it exists so `mount` has somewhere to attach, since a mount point must already be a directory | boot | present |
 | `/usr` | Container only -- holds `share/`, nothing of its own | build | present |
@@ -152,10 +154,19 @@ distinguishes admin binaries from user ones (no users yet -- Milestone
 there are no shared libraries (Milestone 35). `/proc` is Milestone 26's
 introspection tree and will need mount points first.
 
-**`/tmp` is not emptied at boot.** It's created if missing and otherwise
-left alone. `fs_delete()` refuses non-empty directories by design and
-there is no recursive delete (see `docs/decisions.md`), so clearing it
-means a real directory walk that nothing has needed yet.
+**`/tmp` is in RAM, and that is what empties it.** The `tmpfs` service
+mounts a ramfs over it at boot, so nothing carries across a reboot and
+no recursive delete is needed to make that true -- which is convenient,
+because `fs_delete()` refuses non-empty directories by design and there
+is no recursive delete (see `docs/decisions.md`). The directory on the
+ROOT is still created if missing and still never emptied; it is simply
+hidden while the mount stands, and comes back if the service is removed.
+
+**So `/tmp` and `/var/tmp` are no longer interchangeable, and picking
+the wrong one fails silently.** `/tmp` is fast, volatile and capped;
+`/var/tmp` is the disk. Anything that measures storage, or that expects
+a file to still be there next boot, wants the second -- and gets a
+plausible wrong answer from the first rather than an error.
 
 ## Rules for adding something
 

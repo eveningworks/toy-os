@@ -17,6 +17,11 @@
 // IT IS `ramfs`, NOT `tmpfs`, and the distinction is real rather than
 // cosmetic: tmpfs can page to swap, this kernel has no swap, and
 // borrowing the name would promise a mechanism that does not exist.
+// **That stays true now that this backs `/tmp`**, which is the obvious
+// moment to start calling it tmpfs. What is missing is not the mount,
+// it is that these chunks are kmalloc'd KERNEL HEAP, which no page
+// reclaim can evict -- Linux's tmpfs is swappable because its pages are
+// shmem rather than slab. See docs/swap-design.md, stage 6.
 //
 // ---- the three decisions worth knowing before editing ----
 //
@@ -61,6 +66,7 @@
 #include "string.h"
 #include "pmm.h"
 #include "tz.h"
+#include "storage_config.h" // storage.ramfs_size -- the budget's middle source
 
 // One path COMPONENT, not a path: FS_PATH_MAX (64) bounds the whole
 // thing, so a name longer than this could only appear in a path no
@@ -395,16 +401,32 @@ static int ramfs_format(const struct block_device *dev) {
     return 1;
 }
 
-static int ramfs_init(const struct block_device *dev) {
+static int ramfs_init(const struct block_device *dev, uint64_t size_bytes) {
     (void)dev; // ramfs has no volume -- it IS the volume
     drop_everything();
 
-    // The budget: half of what the frame allocator says is free, which
-    // is tmpfs's own default. Taken at mount rather than fixed at
-    // compile time so `make run MEM=512` and a 4 GiB machine both get
-    // something sensible, and so the number in `df` means something.
-    uint64_t free_bytes = pmm_zone_free_frames(PMM_ZONE_DMA32) * 4096ull;
-    S->budget = free_bytes / 2;
+    // THE BUDGET, IN THREE STEPS, MOST SPECIFIC FIRST: what this mount
+    // asked for (`mount -o size=`), then `storage.ramfs_size`, then half
+    // of what the frame allocator says is free -- tmpfs's own default.
+    //
+    // The last step is not merely a fallback, it is what keeps a
+    // DISKLESS BOOT working: the root ramfs is mounted from fs_init(),
+    // before /etc is readable and before storage_config_init() has run,
+    // so the setting is still 0 there and the root gets the whole rule
+    // rather than a /tmp-sized cap. Anything that gave the setting a
+    // non-zero compiled default would shrink a diskless root to it, and
+    // nothing would say so.
+    const char *why = "half of free memory";
+    if (size_bytes) {
+        S->budget = size_bytes;
+        why = "this mount";
+    } else if (storage_ramfs_size_bytes()) {
+        S->budget = storage_ramfs_size_bytes();
+        why = "storage.ramfs_size";
+    } else {
+        uint64_t free_bytes = pmm_zone_free_frames(PMM_ZONE_DMA32) * 4096ull;
+        S->budget = free_bytes / 2;
+    }
 
     // The root. If this fails the machine has no filesystem at all,
     // which is exactly what ramfs exists to prevent -- so it is the one
@@ -421,7 +443,7 @@ static int ramfs_init(const struct block_device *dev) {
     S->used = sizeof(struct rnode);
     S->mounted = 1;
 
-    ramfs_log_budget("half of free memory");
+    ramfs_log_budget(why);
     // 0, NOT 1: mounted, and never persistent. fs_is_persistent()
     // reports this straight through to `df`, `fsck` and About, so the
     // truth is stated once here rather than special-cased there.
@@ -759,11 +781,10 @@ int ramfs_test_mount(uint64_t budget_bytes) {
     g_test_state = ramfs_state_alloc();
     if (!g_test_state) return 0;
     ramfs_state_activate(g_test_state);
-    if (ramfs_init(NULL) < 0) { ramfs_test_unmount(); return 0; }
-    if (budget_bytes) {
-        S->budget = budget_bytes;
-        ramfs_log_budget("test override");
-    }
+    // Straight through init() now that a mount carries its own size --
+    // this used to poke S->budget afterwards, which meant the test seam
+    // exercised a path no real mount took.
+    if (ramfs_init(NULL, budget_bytes) < 0) { ramfs_test_unmount(); return 0; }
     return 1;
 }
 

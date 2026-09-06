@@ -406,7 +406,7 @@ this the obvious way), not from how much history it accumulated.
     `stop` (undone by `start` or a reboot) and DELETING the descriptor
     (systemd's `disable`, survives a reboot) stay different requests.
   - **`/tmp` IS NOT `/run`, so init CLEARS BOTH FILES at startup**, and
-    before it spawns anything -- `/tmp` is not emptied at boot here, so
+    before it spawns anything -- `/run` is not emptied at boot here, so
     a request left by a machine that lost power would be obeyed and last
     boot's status read as this boot's. Ordering them ahead of the first
     spawn was ALSO believed to matter because a write during the

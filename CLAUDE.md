@@ -856,6 +856,8 @@ whenever a headline here tells you something you did not already know.
 
 `docs/conventions/storage.md`
 
+- **`/tmp` IS IN RAM AND `/var/tmp` IS THE DISK, and picking the wrong one fails SILENTLY -- anything measuring the disk, or expected to survive a reboot, wants the second. Runtime state is `/run`.**
+- **A RAMFS MOUNT'S SIZE IS `-o size=`, THEN `storage.ramfs_size`, THEN HALF OF FREE -- and the setting's default MUST stay 0, or a diskless root gets a /tmp-sized cap.**
 - **THE CURRENT DIRECTORY IS THE KERNEL'S, and every path syscall resolves against it.**
 - **Six filesystem syscalls exist**
 - **The disk has a WRITE-BACK CACHE, and its flush can fail**
@@ -1354,7 +1356,8 @@ cost".
   **Its address is in `local_info.txt` at the repo root -- an UNTRACKED
   file (excluded through `.git/info/exclude`) that must never be
   committed; read it rather than guessing.** A file the laptop wrote
-  comes back with `get`, and `/tmp` there survives a reboot.
+  comes back with `get`, and `/var/tmp` there survives a reboot (`/tmp`
+  does NOT any more -- it is a ramfs mount).
   `vm.py` cannot reach it: that drives a QEMU guest through its serial
   debug console and the laptop has no serial console attached. Needs
   `service enable telnetd` / `tftpd` on the target, both shipped OFF.

@@ -137,7 +137,7 @@ static int fresh(void) {
     if (g_have_sc) { mount_scratch_end(&g_sc); g_have_sc = 0; }
     if (!mount_scratch_begin(F(), &g_sc)) return 0;
     g_have_sc = 1;
-    if (!F()->format(&IMG_DEV) || F()->init(&IMG_DEV) != 1) {
+    if (!F()->format(&IMG_DEV) || F()->init(&IMG_DEV, 0) != 1) {
         mount_scratch_end(&g_sc);
         g_have_sc = 0;
         return 0;
@@ -442,7 +442,7 @@ KTEST("fat32", "two volumes are mounted at once and neither sees the other") {
         KTEST_SKIP("could not allocate a second backend state");
     }
     void *second = sc2.st;
-    int ok = F()->format(&IMG2_DEV) && F()->init(&IMG2_DEV) == 1 &&
+    int ok = F()->format(&IMG2_DEV) && F()->init(&IMG2_DEV, 0) == 1 &&
              F()->write("/second.txt", "volume two, which is longer", 0);
     KTEST_ASSERT(ok);
 

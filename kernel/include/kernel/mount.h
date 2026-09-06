@@ -124,8 +124,11 @@ const struct mount *mount_at(int index);
 // `fstype` names a backend, or is NULL to probe every one that could
 // claim the device. `point` is a normalized absolute path that must
 // already exist as a directory on whatever currently answers for it.
+// `size_bytes` caps what the mount may hold, 0 meaning the backend
+// decides. Only ramfs has anything to do with it (fs_ops.h's init).
 int mount_add(const struct block_device *dev, const char *fstype,
-              const char *point, unsigned flags, const char **why);
+              const char *point, unsigned flags, uint64_t size_bytes,
+              const char **why);
 
 // Refuses the root, and refuses a mount with an open file under it.
 int mount_remove(const char *point, const char **why);

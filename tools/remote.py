@@ -499,7 +499,10 @@ def do_get(host, port, remote, local, timeout):
 # already correct. `sum -c LISTFILE` reads the expected checksums from a
 # file instead, which is one command whatever the tree's size.
 
-SUMS_REMOTE = "/tmp/sync.sums"
+# /var/tmp, not /tmp: this file's whole job is to still be there on the
+# NEXT run, so `sync` can send only what differs, and /tmp on the target
+# is a ramfs mount now. /var/tmp is the FHS's "scratch that survives".
+SUMS_REMOTE = "/var/tmp/sync.sums"
 
 
 def _local_manifest(local_dir):

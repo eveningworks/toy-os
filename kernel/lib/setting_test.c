@@ -27,7 +27,7 @@
 #include "gfx.h"
 #include "font_config.h"
 
-#define SCRATCH_FILE "/tmp/ktest_setting.conf"
+#define SCRATCH_FILE "/var/tmp/ktest_setting.conf"
 #define SCRATCH_NAME "ktest_colour"
 
 static const char *const g_scratch_choices[] = { "amber", "green", "white" };
@@ -186,7 +186,7 @@ KTEST("setting", "a duplicate name IN THE SAME FILE is refused, not shadowed") {
 // files is two settings, which is the whole point: two programs may
 // each own a `theme`. Nothing in the kernel registers such a pair
 // today, so these build one.
-#define SCRATCH2_FILE "/tmp/ktest_setting2.conf"
+#define SCRATCH2_FILE "/var/tmp/ktest_setting2.conf"
 
 static char g_scratch2_value[SETTING_VALUE_MAX] = "blue";
 

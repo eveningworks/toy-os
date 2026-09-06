@@ -103,13 +103,19 @@
 // from the process table. runit writes the same file per service; this
 // one is text and greppable, so `cat` is a working `service list`.
 //
-// BOTH LIVE IN /tmp because they are runtime state, which is what /run
-// is for on a real system and /tmp is the only such directory here.
-// /tmp is NOT emptied at boot (docs/filesystem-layout.md), so a request
-// left by a machine that lost power would otherwise be obeyed by the
-// next boot: init deletes the control file at startup for that reason.
-#define CONTROL_PATH   "/tmp/init.ctl"
-#define STATUS_PATH    "/tmp/init.status"
+// BOTH LIVE IN /run, which is the FHS's directory for runtime state and
+// is what this comment used to say it wanted while settling for /tmp.
+// The settling stopped being tenable when /tmp became a MOUNT POINT one
+// of init's own services mounts (data/etc/services.d/tmpfs): init's
+// control channel cannot live under a filesystem init is responsible
+// for putting there, and a status file written before that mount would
+// be hidden by it.
+//
+// /run is not emptied at boot, so a request left by a machine that lost
+// power would otherwise be obeyed by the next boot: init deletes the
+// control file at startup for that reason.
+#define CONTROL_PATH   "/run/init.ctl"
+#define STATUS_PATH    "/run/init.status"
 
 // Sixteen, not eight: ordering only means anything with several
 // services, and the table is static rather than on the stack, so the
@@ -1104,11 +1110,11 @@ int main(void) {
 
     seed_environment();
     install_hup_handler();
-    // NEITHER FILE SURVIVES A BOOT. /tmp is not emptied here
-    // (docs/filesystem-layout.md), which is the one way it differs from
-    // /run being a tmpfs: a request left behind by a machine that lost
-    // power would otherwise be obeyed by the next one, and last boot's
-    // status would be read as this boot's.
+    // NEITHER FILE SURVIVES A BOOT. /run is not emptied here, which is
+    // the one way it differs from /run being a tmpfs on a real system:
+    // a request left behind by a machine that lost power would
+    // otherwise be obeyed by the next one, and last boot's status would
+    // be read as this boot's.
     //
     // BEFORE ANYTHING IS SPAWNED, deliberately. These are the only
     // writes init makes during startup, and doing them here puts them

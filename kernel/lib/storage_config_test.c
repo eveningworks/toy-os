@@ -13,7 +13,7 @@
 #include "tfs3.h"
 #include "string.h"
 
-#define SCRATCH "/tmp/ktest_sync.bin"
+#define SCRATCH "/var/tmp/ktest_sync.bin"
 
 static uint64_t flushes(void) {
     uint64_t c = 0;
@@ -268,7 +268,7 @@ KTEST("storage", "an operation between batched writes does not lose them") {
     int restore = storage_sync_strict(), restore_b = storage_sync_batched();
 
     fs_delete(SCRATCH);
-    fs_delete("/tmp/ktest_sync2.bin");
+    fs_delete("/var/tmp/ktest_sync2.bin");
     KTEST_ASSERT_EQ(fs_touch(SCRATCH), 1);
 
     storage_config_set_mode_for_test(1, 1);   // batched
@@ -276,7 +276,7 @@ KTEST("storage", "an operation between batched writes does not lose them") {
 
     // A create opens its OWN transaction (credits=3), which is what
     // would blow away the staged inode above.
-    KTEST_ASSERT_EQ(fs_touch("/tmp/ktest_sync2.bin"), 1);
+    KTEST_ASSERT_EQ(fs_touch("/var/tmp/ktest_sync2.bin"), 1);
 
     KTEST_ASSERT_EQ(fs_write_range(SCRATCH, sizeof buf, buf, sizeof buf), 1);
     KTEST_ASSERT_EQ(fs_sync(NULL), 1);
@@ -293,7 +293,7 @@ KTEST("storage", "an operation between batched writes does not lose them") {
     }
 
     fs_delete(SCRATCH);
-    fs_delete("/tmp/ktest_sync2.bin");
+    fs_delete("/var/tmp/ktest_sync2.bin");
 }
 
 KTEST("storage", "lazy issues fewer device flushes than strict for the same write") {

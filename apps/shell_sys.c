@@ -544,7 +544,10 @@ static uint8_t g_stress_chunk[STRESS_CHUNK_BYTES];
 // is where it used to live -- scratch space is exactly what /tmp is
 // for, and a multi-gigabyte temp file sitting in / was the single
 // biggest argument for having the directory at all.
-#define STRESS_TEST_PATH "/tmp/stress_test"
+// /var/tmp: `stress` writes real, non-sparse data to measure the
+// FILESYSTEM, and /tmp is a ramfs mount now -- which would turn a
+// multi-gigabyte disk test into a way to exhaust memory.
+#define STRESS_TEST_PATH "/var/tmp/stress_test"
 
 // Fills g_stress_chunk with a pattern that varies both by chunk index
 // and byte offset, so two different chunks (or a chunk read back from

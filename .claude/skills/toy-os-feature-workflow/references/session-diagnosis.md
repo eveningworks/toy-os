@@ -1402,7 +1402,8 @@ same resolution works from a laptop crash after the fact:
 
 The maintainer read `ifconfig: no network devices` on the laptop, which
 looked like the known intermittent USB bind bug. The log the maintainer
-saved (`dmesg > /tmp/boot1.txt`, which survives a reboot) said
+saved (`dmesg > /var/tmp/boot1.txt`, which survives a reboot -- /tmp
+no longer does, it is a ramfs mount) said
 `r8153 version 0x0000` -- the driver refused a chip whose firmware had
 not loaded yet. One saved log from the bad boot was worth more than any
 amount of reasoning about the good ones; ask for it first.

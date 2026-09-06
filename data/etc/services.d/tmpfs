@@ -1,0 +1,13 @@
+# /tmp in RAM, not on the disk. A ONE-SHOT: it mounts and is finished.
+#
+# HOW BIG: `storage.ramfs_size` decides, and its default of 0 means half
+# of free memory -- tmpfs's own default. `config set storage.ramfs_size
+# 64` caps it at the next mount. To pin it here, add `-o size=64M`.
+#
+# The on-disk /tmp is HIDDEN while this is mounted, not deleted (the
+# Unix rule). Remove this file to get it back.
+Name=tmpfs
+Description=Mount /tmp in RAM
+Exec=/bin/mount
+Args=-t ramfs none /tmp
+Restart=no

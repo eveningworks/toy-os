@@ -222,7 +222,8 @@ static void record(struct mount *slot, const struct fs_ops *fs,
 }
 
 int mount_add(const struct block_device *dev, const char *fstype,
-              const char *point, unsigned flags, const char **why) {
+              const char *point, unsigned flags, uint64_t size_bytes,
+              const char **why) {
     static const char *dummy;
     if (!why) why = &dummy;
     *why = "";
@@ -321,7 +322,7 @@ int mount_add(const struct block_device *dev, const char *fstype,
     }
 
     void *prev = chosen->state_activate ? chosen->state_activate(state) : NULL;
-    int r = chosen->init(dev);
+    int r = chosen->init(dev, size_bytes);
     if (chosen->state_activate) chosen->state_activate(prev);
     if (r < 0) {
         if (state) chosen->state_free(state);
@@ -719,7 +720,7 @@ static int try_partitions(void) {
                 klog_printf("fs: mounting %s from partition %d (LBA %u, %u sectors)\n",
                             fs->name, i + 1, base, count);
                 const char *why;
-                if (mount_add(dev, fs->name, "/", 0, &why)) return 1;
+                if (mount_add(dev, fs->name, "/", 0, 0, &why)) return 1;
                 klog_printf("fs: partition %d would not mount: %s\n", i + 1, why);
             }
         }
@@ -762,7 +763,7 @@ static void mount_ramfs_root(const char *why_log) {
     // The honesty check runs inside mount_add() -- ramfs is never
     // probed, so skipping it would leave the one backend that can
     // always be reached as the one nothing validates.
-    if (!mount_add(NULL, g_ram_backend->name, "/", 0, &why)) {
+    if (!mount_add(NULL, g_ram_backend->name, "/", 0, 0, &why)) {
         klog_printf("fs: ramfs did not mount either (%s) -- NO FILESYSTEM this boot\n", why);
     }
 }
@@ -902,7 +903,7 @@ void mount_boot_auto(void) {
         if (!dev) continue;
 
         const char *why;
-        if (mount_add(dev, NULL, "/boot", MNT_RDONLY, &why)) return;
+        if (mount_add(dev, NULL, "/boot", MNT_RDONLY, 0, &why)) return;
         // Not an error worth alarming about: a machine whose ESP holds
         // a FAT this kernel cannot read still boots perfectly, and the
         // only thing lost is being able to look at /boot.

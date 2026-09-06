@@ -8,13 +8,13 @@
 // THE READ HALF AND THE WRITE HALF REACH INIT DIFFERENTLY, and that is
 // the design rather than an accident:
 //
-//   list/status read /tmp/init.status, which init rewrites whenever
+//   list/status read /run/init.status, which init rewrites whenever
 //   anything changes. They ask init nothing. It is the only source that
 //   can say a service is down ON PURPOSE -- the process table shows an
 //   absence, and an absence cannot tell "stopped" from "crash-looping"
 //   from "never declared".
 //
-//   start/stop append a line to /tmp/init.ctl and then send SIGHUP to
+//   start/stop append a line to /run/init.ctl and then send SIGHUP to
 //   init, which is what wakes it out of waitpid(-1) to read the file.
 //   runit's `supervise/control` plus SysV's `kill -HUP 1`; systemd's
 //   D-Bus and /run/initctl's FIFO both need transports this system has
@@ -41,8 +41,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#define CONTROL_PATH "/tmp/init.ctl"
-#define STATUS_PATH  "/tmp/init.status"
+#define CONTROL_PATH "/run/init.ctl"
+#define STATUS_PATH  "/run/init.status"
 #define SERVICES_DIR "/etc/services.d"
 
 // How long to wait for init to act on a request before reporting
@@ -345,7 +345,12 @@ static int cmd_enable(const char *name) {
     // ordering key it correctly ignores, so it starts wrongly and
     // nothing looks broken. data/etc/services.d/README.md says to do
     // exactly this; writing in place got the half-read on the first try.
-    snprintf(tmp, sizeof tmp, "/tmp/.svc-%s", name);
+    // /run, NOT /tmp, and this one is load-bearing rather than tidy:
+    // the rename below crosses from here into /etc/services.d, and
+    // kernel/mount.h's rule 4 REFUSES a rename that crosses a mount.
+    // /tmp is a ramfs mount now, so leaving this here would have made
+    // `service enable` fail with EXDEV every time.
+    snprintf(tmp, sizeof tmp, "/run/.svc-%s", name);
     if (!copy_file(from, tmp) || rename(tmp, to) < 0) {
         unlink(tmp);
         snprintf(msg, sizeof msg,

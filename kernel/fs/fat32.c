@@ -1416,7 +1416,10 @@ static int fat32_format(const struct block_device *dev) {
     return 1;
 }
 
-static int fat32_init(const struct block_device *dev) {
+static int fat32_init(const struct block_device *dev, uint64_t size_bytes) {
+    // A volume's capacity is the volume's; only a backend that lives
+    // in memory has a size to be told (fs_ops.h).
+    (void)size_bytes;
     S->v.mounted = 0;
     S->fatsec_lba = 0;
     S->fatsec_dirty = 0;

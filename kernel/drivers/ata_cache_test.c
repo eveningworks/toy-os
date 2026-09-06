@@ -26,7 +26,7 @@
 #include "string.h"
 #include "fault_inject.h"
 
-#define SCRATCH "/tmp/ktest_atac.bin"
+#define SCRATCH "/var/tmp/ktest_atac.bin"
 
 KTEST("atac", "the cache is active on a machine with a disk") {
     // Not a tautology: atac_init() REFUSES an ops table missing an

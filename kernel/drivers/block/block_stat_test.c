@@ -14,7 +14,7 @@
 #include "string.h"
 #include "clocksource.h"
 
-#define SCRATCH "/tmp/ktest_blkstat.bin"
+#define SCRATCH "/var/tmp/ktest_blkstat.bin"
 
 static uint64_t calls_of(int op) {
     uint64_t c = 0;

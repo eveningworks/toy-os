@@ -77,7 +77,11 @@ Linux draws the same line: `ramfs`/`tmpfs` are filesystem
 implementations over the page cache, not a disk format on a ramdisk,
 and `/dev/ram*` survives mainly for compatibility. **The name here is
 `ramfs`, not `tmpfs`**, and the distinction is real rather than
-cosmetic: tmpfs can page to swap and this cannot, so borrowing the name
+cosmetic — it survives this backend becoming what `/tmp` is mounted
+from (2026-09-06), which is the obvious moment to rename it. What is
+missing is not the mount but that its chunks are kmalloc'd kernel heap,
+which no page reclaim can evict: tmpfs can page to swap and this cannot,
+so borrowing the name
 would promise something the kernel has no mechanism for.
 
 ## What ramfs owes the VFS

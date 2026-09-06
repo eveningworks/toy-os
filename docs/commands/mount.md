@@ -6,7 +6,7 @@
 
 ## Synopsis
 
-    mount [-r] [-t <fstype>] <device|partition|none> <mountpoint>
+    mount [-r] [-t <fstype>] [-o size=<n>[K|M|G]] <device|partition|none> <mountpoint>
            mount                  list what is mounted
 
 ## Description
@@ -35,7 +35,30 @@ because it is what `parttable` prints and what existing scripts pass.
 
 A filesystem that needs no volume at all is named by type instead, with `none`
 as the source — `mount -t ramfs none /mnt` gives you a scratch filesystem in
-RAM.
+RAM. That is how `/tmp` is mounted at boot, by the `tmpfs` service.
+
+**`-o size=` caps a mount, and only ramfs has anything to do with it.** A
+disk filesystem's capacity is its volume's, so the option is accepted and
+ignored there. `size=64M` means 64 MiB; a bare number is MiB, and `K`, `M`
+and `G` all work. It is rounded UP to a whole MiB, because that is the unit
+the ABI carries and rounding `size=1K` down to 0 would silently mean "the
+backend decides" — the opposite of what was asked.
+
+**There is exactly one option, deliberately.** Linux's `-o` is a
+comma-separated string each filesystem parses for itself; this takes one
+option because there is one, and a parser for a list of one would be the
+second implementation of nothing. `kernel/include/abi/mount_abi.h` makes the
+same argument about the ABI, which carries a typed `size_mib` rather than a
+`data` string.
+
+**Without `-o size=`, a ramfs mount takes `storage.ramfs_size`**, and that
+setting's default of 0 means half of free memory — tmpfs's own default. So
+the size has three sources, most specific first: this option, then the
+setting, then half of free. The kernel log says which one decided:
+
+    ramfs: mounted, budget 32 MiB (this mount)
+    ramfs: mounted, budget 8 MiB (storage.ramfs_size)
+    ramfs: mounted, budget 1011 MiB (half of free memory)
 
 **A name this boot did not find is refused by name**, which is a different
 answer from "nothing recognises the filesystem on that volume" — the first

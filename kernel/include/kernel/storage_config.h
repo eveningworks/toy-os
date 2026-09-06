@@ -33,4 +33,9 @@ void storage_config_setting_register(void);
 // the machine in whichever mode it happened to finish in.
 void storage_config_set_mode_for_test(int strict, int batched);
 
+// The `storage.ramfs_size` setting, in BYTES; 0 means "the backend
+// decides", which for ramfs is half of free memory. Read at MOUNT, so
+// changing it moves nothing already mounted.
+uint64_t storage_ramfs_size_bytes(void);
+
 #endif

@@ -17,6 +17,28 @@ this the obvious way), not from how much history it accumulated.
 
 ---
 
+- **`/tmp` IS IN RAM AND `/var/tmp` IS THE DISK, AND PICKING THE WRONG
+  ONE FAILS SILENTLY.** The `tmpfs` service mounts a ramfs over `/tmp` at
+  boot (`data/etc/services.d/tmpfs`), so it is fast, capped and gone on
+  the next boot. `/var/tmp` is the FHS's other half: scratch that must
+  SURVIVE and must be REAL STORAGE. Two things belong there and get a
+  plausible wrong answer from `/tmp` rather than an error -- **anything
+  measuring the disk** (`diskbench`, Disk Benchmark, the shell's
+  `stress`, and the KTESTs that assert what the DEVICE did, six of which
+  were quietly relying on `/tmp` being a disk), and **anything expected
+  to be there next boot** (`remote.py`'s sync checksums). Runtime state
+  is a third place again: `/run`, where init's control file and status
+  live, because init's own channel cannot sit under a filesystem one of
+  init's services mounts.
+- **A RAMFS MOUNT'S SIZE HAS THREE SOURCES, MOST SPECIFIC FIRST**:
+  `mount -o size=`, then `storage.ramfs_size`, then half of free memory.
+  **The setting's default MUST stay 0**, which is what selects the last
+  one -- a diskless boot mounts its ROOT ramfs from `fs_init()`, before
+  `/etc` is readable and before `storage_config_init()` runs, so
+  whatever is compiled in as the default is what that root gets. A
+  non-zero default would silently shrink a diskless root to a
+  `/tmp`-sized cap. The kernel log names the source that decided, which
+  is how you tell the three apart without reading any of this.
 - **THE CURRENT DIRECTORY IS THE KERNEL'S, and every path syscall
   resolves against it.** `struct sched_cwd` in the process slot beside
   `struct sched_heap` (`api/scheduler.h`), reached by `SYS_CHDIR`/

@@ -36,7 +36,10 @@ static int exists(const char *path) {
     return sys_stat(path, &st) == 0;
 }
 
-#define BASE "/tmp/cwdt"
+// /var/tmp, not /tmp: this test asserts what the ROOT filesystem does
+// -- including that it refuses a hardlink with EPERM -- and /tmp is a
+// ramfs mount now, which answers differently and correctly.
+#define BASE "/var/tmp/cwdt"
 #define SUB  BASE "/sub"
 
 int main(void) {

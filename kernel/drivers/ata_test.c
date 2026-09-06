@@ -16,7 +16,7 @@
 #include "fs.h"
 #include "string.h"
 
-#define PIO_TEST_PATH "/tmp/.ata_pio_test"
+#define PIO_TEST_PATH "/var/tmp/.ata_pio_test"
 
 // Runs `body` with DMA forced off, then restores the previous mode --
 // even if an assertion inside `body` would have returned early, which

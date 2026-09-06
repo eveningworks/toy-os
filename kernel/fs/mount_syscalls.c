@@ -163,7 +163,11 @@ int sys_mount(struct syscall_ctx *c) {
     if (req.flags & SYS_MNT_RDONLY) flags |= MNT_RDONLY;
 
     const char *why = "";
-    if (!mount_add(dev, req.fstype[0] ? req.fstype : NULL, req.point, flags, &why)) {
+    // MiB in the ABI, bytes below: the unit hop happens once, here,
+    // rather than at each of mount_add()'s callers.
+    uint64_t size_bytes = (uint64_t)req.size_mib * 1024 * 1024;
+    if (!mount_add(dev, req.fstype[0] ? req.fstype : NULL, req.point, flags,
+                   size_bytes, &why)) {
         klog_printf("mount: %s -- %s\n", req.point, why);
         c->regs[14] = (uint64_t)(int64_t)why_to_errno(why);
         return 0;

@@ -214,7 +214,10 @@ def main():
 
     # SELF-CLEANING. The temp file is the only litter this app can leave,
     # and the size picker exists to bound it.
-    ls = con.send("sh ls /tmp")
+    # TWO directories now: the worker's scratch is on real storage
+    # (/var/tmp) because a disk benchmark against a ramfs measures
+    # memcpy, while the report the GUI polls is ordinary runtime litter.
+    ls = con.send("sh ls /var/tmp") + con.send("sh ls /tmp")
     # BOTH of them: the worker's scratch file and the report the GUI
     # polls. An interrupted run leaving either behind is the litter the
     # size picker exists to bound.

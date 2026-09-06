@@ -236,7 +236,23 @@ int fs_format_backend(const char *name) {
 //         fs_delete() refuses non-empty directories on purpose and
 //         there is no recursive delete (see docs/decisions.md), so
 //         clearing it needs a real directory walk that nothing has
-//         needed yet.
+//         needed yet. It is a MOUNT POINT now -- the `tmpfs` service
+//         puts a ramfs over it at boot -- so what is created here is
+//         what a machine sees only if that service is removed.
+//   /run  RUNTIME state -- init's control file and its status, and a
+//         service's stop marker. The FHS's directory for exactly this,
+//         and what init's own comment asked for while saying "/tmp is
+//         the only such directory here". It stopped being a reasonable
+//         stand-in the moment /tmp became a mount point a SERVICE
+//         mounts: init's own channel cannot live under a filesystem one
+//         of init's services puts there.
+//   /var/tmp  scratch that must SURVIVE, and must be real storage.
+//         Once /tmp is in RAM the two stop being interchangeable, which
+//         is exactly the FHS's distinction and Linux's reason for
+//         keeping both. Anything that needs a file to still be there
+//         after a reboot, or needs the disk to actually be written,
+//         belongs here -- six KTESTs were quietly relying on /tmp for
+//         the second of those.
 //   /boot  THE MOUNT POINT FOR THE ESP, and it has to exist on the ROOT
 //         before anything can be mounted over it -- kernel/mount.h's
 //         rule 3, which is Linux's. On a machine with no ESP it stays
@@ -252,6 +268,9 @@ int fs_format_backend(const char *name) {
 static void ensure_layout(void) {
     fs_mkdir("/etc");
     fs_mkdir("/tmp");
+    fs_mkdir("/var");
+    fs_mkdir("/var/tmp");
+    fs_mkdir("/run");
     fs_mkdir("/boot");
     fs_mkdir("/mnt");
     // Where a config FILE declares itself -- one descriptor per file,

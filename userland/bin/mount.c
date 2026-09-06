@@ -24,8 +24,38 @@
 #include <string.h>
 
 static const char *USAGE =
-    "mount [-r] [-t <fstype>] <device|partition|none> <mountpoint>\n"
+    "mount [-r] [-t <fstype>] [-o size=<n>[K|M|G]] <device|partition|none> <mountpoint>\n"
     "       mount                  list what is mounted";
+
+// `-o size=` and nothing else. Linux's -o is a comma-separated string a
+// filesystem parses for itself; this takes ONE option because there is
+// one, and a parser for a list of one would be the second
+// implementation of nothing (abi/mount_abi.h makes the same argument
+// about the ABI). Returns MiB, or -1 if it is not a size.
+//
+// Rounds UP to a whole MiB, which is the ABI's unit: `-o size=1K` is a
+// mount somebody asked to be small, and answering 0 would silently mean
+// "the backend decides" -- the opposite.
+static long parse_size_mib(const char *opt) {
+    if (strncmp(opt, "size=", 5) != 0) return -1;
+    const char *p = opt + 5;
+    if (!*p) return -1;
+    unsigned long long bytes = 0;
+    for (; *p >= '0' && *p <= '9'; p++) {
+        bytes = bytes * 10 + (unsigned)(*p - '0');
+        if (bytes > (1ULL << 50)) return -1;
+    }
+    if (p == opt + 5) return -1;                 // no digits at all
+    unsigned long long mul = 1024 * 1024;        // a bare number is MiB
+    if (*p == 'K' || *p == 'k') { mul = 1024; p++; }
+    else if (*p == 'M' || *p == 'm') { mul = 1024 * 1024; p++; }
+    else if (*p == 'G' || *p == 'g') { mul = 1024ULL * 1024 * 1024; p++; }
+    if (*p) return -1;                           // trailing rubbish
+    unsigned long long total = bytes * mul;
+    unsigned long long mib = (total + (1024 * 1024 - 1)) / (1024 * 1024);
+    if (mib > 0xFFFFFFFFULL) return -1;
+    return (long)mib;
+}
 
 static int list(void) {
     struct query_fsinfo fs;
@@ -58,6 +88,11 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "-t") == 0) {
             if (++i >= argc) { cmd_usage(USAGE); return 1; }
             snprintf(req.fstype, sizeof req.fstype, "%s", argv[i]);
+        } else if (strcmp(argv[i], "-o") == 0) {
+            if (++i >= argc) { cmd_usage(USAGE); return 1; }
+            long mib = parse_size_mib(argv[i]);
+            if (mib < 0) { cmd_usage(USAGE); return 1; }
+            req.size_mib = (unsigned)mib;
         } else {
             cmd_usage(USAGE);
             return 1;

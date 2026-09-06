@@ -35,7 +35,7 @@ KTEST("ramfs", "mounts, and reports itself as NOT persistent") {
     // backend reached with none faults (fs_ops.h).
     KTEST_ASSERT(ramfs_test_mount(TEST_BUDGET));
     KTEST_ASSERT(R()->is_dir("/"));
-    KTEST_ASSERT_EQ(R()->init(NULL), 0);
+    KTEST_ASSERT_EQ(R()->init(NULL, 0), 0);
     KTEST_ASSERT(R()->is_dir("/"));
     ramfs_test_unmount();
 }
