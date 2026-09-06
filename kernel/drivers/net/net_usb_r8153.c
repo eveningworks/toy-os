@@ -268,6 +268,11 @@ struct r8153_dev {
     uint8_t tx_next;
 
     uint64_t link_checked;         // pit_ticks() of the last PHY read
+    // Consecutive failed link reads, and the latch that stops them. A
+    // device that has gone away without a detach event is polled
+    // forever otherwise -- see r8153_poll().
+    uint8_t  link_fails;
+    uint8_t  link_gone;
 
     struct net_device dev;
 };
@@ -319,6 +324,17 @@ static int reg_write_mem(uint16_t addr, uint16_t index, void *buf, uint16_t len)
 static uint32_t reg_read4(uint16_t reg, uint16_t index) {
     if (reg_read_mem(reg, index, g_reg_buf, 4) < 4) return 0;
     return le32(g_reg_buf);
+}
+
+// The same read, but SAYING whether it worked. reg_read4() cannot: it
+// returns 0 for a failure and 0 is a legitimate register value. That is
+// fine for setup, where a wrong value fails loudly a moment later, and
+// wrong for a POLL whose whole job is to notice its device has gone.
+static int reg_read2_ok(uint16_t reg, uint16_t index, uint16_t *out) {
+    if (reg_read_mem((uint16_t)(reg & ~3u), index, g_reg_buf, 4) < 4) return 0;
+    uint8_t shift = (uint8_t)((reg & 2) << 3);
+    *out = (uint16_t)((le32(g_reg_buf) >> shift) & 0xFFFF);
+    return 1;
 }
 
 static uint16_t reg_read2(uint16_t reg, uint16_t index) {
@@ -693,14 +709,43 @@ static int r8153_transmit(struct net_device *dev, const void *frame, uint32_t le
 // because this is a synchronous CONTROL TRANSFER and net_poll() runs
 // from scheduler_idle() -- net_poll()'s own re-entrancy guard is what
 // keeps two of them off endpoint 0 at once.
+// A DEVICE THAT HAS GONE MUST STOP BEING POLLED, and three seconds of
+// silence is enough to say so. Without this a vanished adapter is asked
+// once a second forever, and each ask is a CONTROL TRANSFER that burns
+// its full 1000 ms timeout inside scheduler_idle() and logs a line --
+// so the machine spends about a second of every second on a doomed
+// transfer, and the klog ring loses its boot history in a few minutes.
+// Measured on the ASUS: 72 timeouts, and the boot log gone with them,
+// which is precisely the "a probe that outruns the log destroys the
+// evidence" trap CLAUDE.md warns about, arrived at from the driver side.
+//
+// Nothing has to un-latch this: a replug re-enumerates the adapter and
+// binds a fresh r8153_dev, which is where the state lives.
+#define R8153_LINK_FAILS_MAX 3
+
 static void r8153_poll(struct net_device *dev) {
     struct r8153_dev *d = dev->drv;
-    if (!d->in_use) return;
+    if (!d->in_use || d->link_gone) return;
     uint64_t now = pit_ticks();
     if (d->link_checked && now - d->link_checked < 100) return;
     d->link_checked = now;
 
-    uint16_t st = reg_read2(PLA_PHYSTATUS, MCU_PLA);
+    uint16_t st;
+    if (!reg_read2_ok(PLA_PHYSTATUS, MCU_PLA, &st)) {
+        if (++d->link_fails < R8153_LINK_FAILS_MAX) return;
+        d->link_gone = 1;
+        // ONCE, and it says what stopped as well as why -- a link that
+        // simply goes down is a different event from one nobody is
+        // watching any more.
+        klog_printf("usb-net: %s not answering after %u tries -- link "
+                    "polling stopped; replug to recover\n",
+                    dev->name, (unsigned)R8153_LINK_FAILS_MAX);
+        dev->link_up = 0;
+        dev->link_bps = 0;
+        dev->link_known = 1;
+        return;
+    }
+    d->link_fails = 0;
     uint8_t up = (st & PHYSTATUS_LINK) ? 1 : 0;
     uint32_t bps = !up ? 0
                  : (st & PHYSTATUS_1000MBPS) ? 1000000000u

@@ -2373,6 +2373,20 @@ window without going through it will find its layout polls timing out.
   **build before running it** -- a tool that restores a working tree
   without rebuilding (`predates.py`) leaves it testing the other
   kernel.
+- **`boot_rate.py`** -- reboots a BARE-METAL machine N times and counts
+  how often a substring appears in its `dmesg`. An intermittent fault is
+  a RATE, and `docs/bugs.md` asks for exactly this by name for the USB
+  enumeration bug ("reboot that machine 5-10 times counting `dmesg |
+  grep -c polls`"). Three things it gets right that doing it by hand
+  does not: it waits for the machine to go DOWN and come back rather
+  than sleeping, so it cannot read the previous boot's log; it stops
+  dead if the machine does not return, because every boot counted after
+  a machine you have lost is a lie in the denominator; and it prints a
+  line per boot as well as the rate, since an intermittent that CLUSTERS
+  is a different animal from one evenly spread and a total hides that.
+  It does not flash -- measure one kernel, and change kernels
+  deliberately between runs. On demand only: it needs hardware.
+
 - **`compositor_death_test.py`** -- the compositor death path (M41's
   R7, 10 checks). Killing the compositor must not panic the kernel, and
   must not take the desktop with it. Two things it encodes. **The

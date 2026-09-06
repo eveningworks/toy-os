@@ -1370,6 +1370,12 @@ cost".
   `shell_flow.py`, `serial_console.py` (COM1 as a socket, and it does
   not care who owns the keyboard), `serial_capture.py` (read a guest
   that is DYING), `watch_vm.sh` (view-only VNC), `run_release.sh`.
+- **Is it INTERMITTENT on real hardware, and at what rate?** --
+  `boot_rate.py --host <ip> -n 10 --grep "<text>"`. Reboots a bare-metal
+  machine N times and counts a substring in each boot's `dmesg`. It
+  waits for the machine to go down and come back rather than sleeping,
+  so it cannot read the previous boot's log, and it STOPS if the machine
+  does not return. `flake_hunt.py` is the same question for a VM.
 - **Test runners** -- `boot_smoke_test.py` (does it boot),
   `ktest_run.py` (`make test`), `usertest_run.py` (the `/tests` ELFs),
   `faulttest_run.py` (the ones that fault ON PURPOSE),

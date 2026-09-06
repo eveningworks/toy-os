@@ -217,6 +217,9 @@ TOOLS = [
 DIRTIES_IMAGE = {"console_bleed"}
 
 # Deliberately NOT here, each for a stated reason:
+#   boot_rate.py   -- reboots a BARE-METAL machine N times; it needs
+#                     hardware this repo cannot assume and leaves the
+#                     machine rebooted, which no sweep should do.
 #   qemu_matrix.py -- needs Docker, and pulls images.
 #   kvm_soak.py    -- needs KVM and takes many minutes by design.
 #   flake_hunt.py  -- runs something else N times; it has no verdict of

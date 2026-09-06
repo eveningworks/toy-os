@@ -1571,7 +1571,21 @@ static void reset_port(uint32_t p, int force) {
 // nothing rather than from a device stuck mid-enumeration.
 static void attach_root_port(uint32_t p) {
     for (int attempt = 0; attempt < 2; attempt++) {
-        reset_port(p, 0);
+        // THE RETRY FORCES THE RESET, and until 2026-09-06 it did not.
+        // reset_port() returns early on a port that already reports PED
+        // -- which, after attempt 0's own successful reset, is every
+        // port -- so the second attempt repeated the first byte for
+        // byte and this loop's "resetting and retrying" was a lie. Both
+        // test laptops showed it, and the Lenovo showed why it matters
+        // in one boot: port 2 survived a control-transfer timeout and
+        // enumerated, while port 5 hit the same timeout, fell into the
+        // retry, and died with nothing having changed between attempts.
+        //
+        // NOT on a SuperSpeed port: asserting PR on one is a separate
+        // question (see reset_port()), and every failure measured here
+        // is low-, full- or high-speed. Attempt 0 read the speed.
+        int force = attempt && g_hc.ports[p].speed != XHCI_SPEED_SUPER;
+        reset_port(p, force);
         uint32_t sc = mr32(g_hc.op, XHCI_PORTSC(p));
         g_hc.ports[p].connected = (sc & XHCI_PORTSC_CCS) ? 1 : 0;
         g_hc.ports[p].enabled   = (sc & XHCI_PORTSC_PED) ? 1 : 0;
@@ -1584,8 +1598,16 @@ static void attach_root_port(uint32_t p) {
         if (!g_hc.ports[p].enabled) return;
         if (usb_enumerate_port((uint8_t)(p + 1), g_hc.ports[p].speed) >= 0)
             return;
-        klog_printf("usb: port %u: enumeration failed%s\n", p + 1,
-                    attempt ? "" : " -- resetting and retrying");
+        // THE TWO OUTCOMES MUST NOT SHARE A PREFIX. "enumeration
+        // failed -- resetting and retrying" is a device that may still
+        // come back, and since the retry started actually re-resetting
+        // it usually does; "gave up" is one that did not. Counting
+        // "enumeration failed" over a run of boots silently conflated
+        // them and made a rate that could not tell a recovery from a
+        // loss (tools/boot_rate.py).
+        klog_printf("usb: port %u: %s\n", p + 1,
+                    attempt ? "enumeration GAVE UP"
+                            : "enumeration failed -- resetting and retrying");
     }
 }
 
