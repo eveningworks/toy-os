@@ -519,7 +519,8 @@ def _local_manifest(local_dir):
     return out
 
 
-def _remote_mismatches(sess, host, tftp_port, remote_dir, want, timeout):
+def _remote_mismatches(sess, host, tftp_port, remote_dir, want, timeout,
+                       missing_only=False):
     """Which of `want` the machine does NOT already have, byte for byte.
 
     Asks the machine rather than trusting a local record of what was
@@ -545,13 +546,26 @@ def _remote_mismatches(sess, host, tftp_port, remote_dir, want, timeout):
         path, _, verdict = line.rpartition(": ")
         if verdict.startswith("OK"):
             continue
+        # "FAILED open or read" is ABSENT; a bare "FAILED" is PRESENT AND
+        # DIFFERENT. `sum` is the only thing that tells those apart
+        # cheaply, and for /etc they mean opposite things -- see
+        # do_sync()'s missing_only.
+        if missing_only and not verdict.startswith("FAILED open"):
+            continue
         if path.startswith(base + "/"):
             bad.append(path[len(base) + 1:])
     return bad
 
 
 def do_sync(host, telnet_port, tftp_port, local_dir, remote_dir, timeout,
-            dry_run=False):
+            dry_run=False, missing_only=False):
+    """`missing_only` sends only what the machine does NOT already have.
+
+    That is dpkg's conffile rule, and it is what /etc needs: a new
+    service or setting descriptor has to ARRIVE, while a file the
+    machine already has is its CONFIGURATION -- overwriting it would
+    throw away whatever was set on that machine.
+    """
     if not os.path.isdir(local_dir):
         print(f"remote: {local_dir} is not a directory", file=sys.stderr)
         return 1
@@ -569,7 +583,7 @@ def do_sync(host, telnet_port, tftp_port, local_dir, remote_dir, timeout,
 
     try:
         todo = _remote_mismatches(sess, host, tftp_port, remote_dir, want,
-                                  timeout)
+                                  timeout, missing_only)
 
         # Every directory a file needs, THE ROOT INCLUDED, parents
         # first. `mkdir` on one that exists is harmless, and asking
@@ -706,6 +720,17 @@ def _verify_offline(host, tftp_port, local, want, timeout):
 # fields under binaries compiled against the old layout, and the failure
 # is not a crash -- it is a machine that boots perfectly and cannot be
 # given an address. That happened, from this tool, on 2026-09-05.
+# /etc IS IN THE LIST AND IS SYNCED NEW-FILES-ONLY (do_sync's
+# missing_only), which is dpkg's conffile rule. It has to be here at all
+# because a NEW service or setting descriptor otherwise never reaches a
+# machine: `flash` replaced the kernel and the binaries, the machine
+# came up perfectly, and the feature simply was not there -- which is
+# how the `tmpfs` service was found missing on both laptops on
+# 2026-09-06, with /tmp still on disk and nothing saying why. And it has
+# to be new-files-only because everything else under /etc is that
+# machine's CONFIGURATION; sending the staged copy would throw away
+# whatever was set on it.
+#
 # /lib LAST, and that ordering is load-bearing. Replacing a shared
 # library under a running system is the one part of this that hurts
 # immediately rather than at the next boot -- a flash interrupted after
@@ -713,8 +738,10 @@ def _verify_offline(host, tftp_port, local, want, timeout):
 # it, which is how it was found. Doing it last keeps the window between
 # "libraries replaced" and "rebooted into the matching kernel" as small
 # as this can make it.
-USERLAND_TREES = (("bin", "/bin"), ("tests", "/tests"),
-                  ("usr", "/usr"), ("lib", "/lib"))
+# (staged subdirectory, path on the machine, new files only)
+USERLAND_TREES = (("bin", "/bin", False), ("tests", "/tests", False),
+                  ("usr", "/usr", False), ("etc", "/etc", True),
+                  ("lib", "/lib", False))
 
 
 def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
@@ -740,6 +767,10 @@ def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
     with no network and could not be reached to fix it. So /bin, /lib,
     /tests and /usr are synced from the build staging first, and
     --kernel-only is the deliberate way to not.
+
+    /etc goes too, but NEW FILES ONLY -- a new service or setting
+    descriptor has to arrive, and a file the machine already has is its
+    configuration and is not ours to overwrite.
 
     The sync goes FIRST so a failure there costs nothing: the machine is
     still running the kernel it booted. It does leave a short window of
@@ -795,14 +826,14 @@ def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
         sess.close()
 
     if not kernel_only:
-        for sub, remote in USERLAND_TREES:
+        for sub, remote, new_only in USERLAND_TREES:
             local_dir = os.path.join(staging, sub)
             if not os.path.isdir(local_dir):
                 print(f"remote: no {local_dir} -- run `make iso` first",
                       file=sys.stderr)
                 return 1
             if do_sync(host, telnet_port, tftp_port, local_dir, remote,
-                       timeout, False):
+                       timeout, False, new_only):
                 print(f"remote: FAILED syncing {remote} -- the kernel has "
                       "NOT been written", file=sys.stderr)
                 return 1
@@ -912,6 +943,9 @@ def main():
     y.add_argument("remote")
     y.add_argument("--dry-run", action="store_true",
                    help="say what would be sent, send nothing")
+    y.add_argument("--new-only", action="store_true",
+                   help="send only files the machine does NOT have, never "
+                        "overwrite one it does -- what /etc needs")
 
     f = sub.add_parser("flash", help="replace the kernel on the machine's "
                                      "own boot partition")
@@ -936,7 +970,8 @@ def main():
             return do_get(a.host, a.tftp_port, a.remote, a.local, a.timeout)
         if a.cmd == "sync":
             return do_sync(a.host, a.telnet_port, a.tftp_port,
-                           a.local, a.remote, a.timeout, a.dry_run)
+                           a.local, a.remote, a.timeout, a.dry_run,
+                           a.new_only)
         if a.cmd == "flash":
             return do_flash(a.host, a.telnet_port, a.tftp_port,
                             a.kernel, a.timeout, a.reboot,
