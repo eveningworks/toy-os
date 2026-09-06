@@ -89,6 +89,13 @@ struct xhci_hc {
     // event drain would deadlock on the single-consumer guard.
     volatile uint32_t attach_pending;
     volatile uint32_t detach_pending;
+    // kernel.usb_reset, one bit per port. DEFERRED for the same reason
+    // hot-plug is, plus a sharper one: the tunable is written from a
+    // SYSCALL, which runs with interrupts off, and reset_port()'s
+    // recovery wait spins on pit_ticks() -- a counter the timer
+    // interrupt advances. Done inline it never returns, which is how it
+    // froze a laptop the first time it was tried.
+    volatile uint32_t diag_reset_pending;
 
     struct xhci_ring cmd;
     struct xhci_ring evt;
@@ -389,6 +396,34 @@ static void walk_xecp(uint32_t hcc1) {
 // much higher ceiling: a clocksource that lies still has to terminate
 // the loop somehow.
 #define XHCI_WAIT_SPIN_CEILING (XHCI_POLL_BACKSTOP * 64u)
+
+// BURN TIME, on a clock that advances where we are standing.
+//
+// Both callers below are MINIMA the USB spec owes a device -- reset
+// recovery and the attach debounce -- so they burn time rather than
+// detect anything. They used pit_ticks() with the note that it was
+// "the only 10 ms-granularity source here", which stopped being true
+// when the clocksource arrived: clocksource_now_ns() is finer AND, when
+// it is deadline-capable, advances with interrupts off, where a counter
+// the timer INTERRUPT increments does not.
+//
+// That difference is not academic. It is why `kernel.usb_reset` froze a
+// laptop on its first outing: a syscall runs with interrupts off, and
+// the pit_ticks() loop there could never end. The PIT path is kept for
+// a machine whose clocksource cannot be trusted with a deadline, and
+// there it carries the old precondition -- interrupts on.
+static void xhci_delay_ms(uint32_t ms) {
+    if (clocksource_deadline_capable()) {
+        uint64_t end = clocksource_now_ns() + (uint64_t)ms * 1000000ull;
+        while (clocksource_now_ns() < end) { }
+        return;
+    }
+    // Ticks are 10 ms and the first may land immediately, so ask for one
+    // more than the arithmetic needs.
+    uint64_t start = pit_ticks();
+    uint64_t want = (uint64_t)(ms / 10) + 1;
+    while (pit_ticks() - start < want) { }
+}
 
 struct xhci_wait { uint32_t spins; uint64_t deadline; };
 
@@ -1472,7 +1507,7 @@ static struct input_source g_hc_source;
 
 // --- ports ------------------------------------------------------------
 
-static void reset_port(uint32_t p) {
+static void reset_port(uint32_t p, int force) {
     uint32_t sc = mr32(g_hc.op, XHCI_PORTSC(p));
     if (!(sc & XHCI_PORTSC_CCS)) return;
 
@@ -1480,7 +1515,21 @@ static void reset_port(uint32_t p) {
     // PR on one is wrong. A USB2 port never enables without an explicit
     // reset. Discriminating on PED rather than on the port range works
     // for both and needs no Supported Protocol lookup.
-    if (sc & XHCI_PORTSC_PED) return;
+    //
+    // **THAT SECOND SENTENCE IS CONTRADICTED BY BOTH TEST LAPTOPS**, on
+    // which USB2 ports arrive already ENABLED because the firmware
+    // enabled them -- so the reset is skipped and the device is left in
+    // whatever state the firmware left it. Whether that is the cause of
+    // the intermittent enumeration failures is NOT established (an
+    // always-skipped reset should fail every boot, and it does not), so
+    // the behaviour is UNCHANGED and the skip is merely reported. See
+    // docs/bugs.md, and `config set kernel.usb_reset <port>` for the
+    // experiment that would settle it.
+    if ((sc & XHCI_PORTSC_PED) && !force) {
+        klog_printf("usb: port %u: arrived ENABLED (portsc 0x%x) -- "
+                    "reset skipped\n", p + 1, sc);
+        return;
+    }
 
     portsc_write(p, XHCI_PORTSC_PR, XHCI_PORTSC_CSC);
 
@@ -1509,13 +1558,10 @@ static void reset_port(uint32_t p) {
     }
     portsc_write(p, 0, XHCI_PORTSC_PRC | XHCI_PORTSC_CSC | XHCI_PORTSC_PEC);
 
-    // The USB2 reset-recovery wait is a MINIMUM, not a timeout -- the
-    // device is entitled to 10 ms of quiet before it is addressed, so
-    // this one burns time rather than detecting something. pit_ticks()
-    // is the only 10 ms-granularity source here, and it works because
-    // USB init runs well after idt_init() with interrupts on.
-    uint64_t start = pit_ticks();
-    while (pit_ticks() - start < 2) { }   // 2 ticks = 20 ms, comfortably over
+    // The USB2 reset-recovery wait (TRSTRCY) is a MINIMUM, not a
+    // timeout: the device is entitled to 10 ms of quiet before it is
+    // addressed.
+    xhci_delay_ms(20);
 }
 
 // Reset then enumerate one root port, with ONE retry through a fresh
@@ -1525,22 +1571,93 @@ static void reset_port(uint32_t p) {
 // nothing rather than from a device stuck mid-enumeration.
 static void attach_root_port(uint32_t p) {
     for (int attempt = 0; attempt < 2; attempt++) {
-        reset_port(p);
+        reset_port(p, 0);
         uint32_t sc = mr32(g_hc.op, XHCI_PORTSC(p));
         g_hc.ports[p].connected = (sc & XHCI_PORTSC_CCS) ? 1 : 0;
         g_hc.ports[p].enabled   = (sc & XHCI_PORTSC_PED) ? 1 : 0;
         g_hc.ports[p].speed     = (uint8_t)XHCI_PORTSC_SPEED(sc);
         if (!g_hc.ports[p].connected) return;
         if (attempt == 0)
-            klog_printf("usb: port %u: connected, %s, %s\n", p + 1,
-                        speed_name(g_hc.ports[p].speed),
-                        g_hc.ports[p].enabled ? "enabled" : "not enabled");
+            klog_printf("usb: port %u: connected, %s, %s (portsc 0x%x)\n",
+                        p + 1, speed_name(g_hc.ports[p].speed),
+                        g_hc.ports[p].enabled ? "enabled" : "not enabled", sc);
         if (!g_hc.ports[p].enabled) return;
         if (usb_enumerate_port((uint8_t)(p + 1), g_hc.ports[p].speed) >= 0)
             return;
         klog_printf("usb: port %u: enumeration failed%s\n", p + 1,
                     attempt ? "" : " -- resetting and retrying");
     }
+}
+
+// THE EXPERIMENT `kernel.usb_reset` RUNS. Force a port through a real
+// reset and re-enumerate it, without anyone touching the cable.
+//
+// It exists to settle one question and it is worth stating so that the
+// answer is not misread. The intermittent enumeration failure
+// (docs/bugs.md) survives a boot and is cured by REPLUGGING the device,
+// which points at the boot-time path -- but a replug does two things at
+// once: it gives the port a genuine connect, AND it power-cycles the
+// device. This does only the first. So:
+//
+//   works  -> the port state was the problem, and the skipped reset
+//             above is implicated
+//   fails  -> the device itself needs a real disconnect, and the reset
+//             theory is dead
+//
+// Either answer is worth having, which is why this is a diagnostic and
+// not a fix.
+int usb_diag_reset_port(unsigned port) {
+    if (!g_hc.running) return 0;
+    if (port < 1 || port > g_hc.max_ports || port > XHCI_MAX_PORTS) return 0;
+    // QUEUED, NEVER DONE HERE. The caller is a syscall (kernel.usb_reset)
+    // and this work spins on pit_ticks(), which only the timer interrupt
+    // advances -- see diag_reset_pending. Returns 1 for "accepted"; the
+    // OUTCOME is in the log a moment later, because there is nobody left
+    // to return it to.
+    g_hc.diag_reset_pending |= (1u << (port - 1));
+    klog_printf("usb: port %u: forced reset queued\n", port);
+    return 1;
+}
+
+// The queued reset, run from deferred work with interrupts on.
+static void diag_reset_port(uint32_t p) {
+    uint32_t before = mr32(g_hc.op, XHCI_PORTSC(p));
+    klog_printf("usb: port %u: FORCED reset, portsc 0x%x\n", p + 1, before);
+    if (!(before & XHCI_PORTSC_CCS)) {
+        klog_printf("usb: port %u: nothing connected\n", p + 1);
+        return;
+    }
+
+    unsigned port = p + 1;
+
+    // A PORT THAT ALREADY HAS A DEVICE MUST BE TORN DOWN FIRST. Its
+    // slot is still allocated, and enumerating over the top of one
+    // fails -- which is not a finding, it is the diagnostic failing to
+    // work. attach_root_port()'s retry gets this for free because a
+    // FAILED attempt disables its own slot; a working port has to be
+    // detached deliberately.
+    //
+    // This is also what makes a success on a good port mean something:
+    // an instrument that cannot re-enumerate a device that is working
+    // says nothing when it cannot re-enumerate one that is not.
+    if (usb_root_port_slot((uint8_t)port)) {
+        klog_printf("usb: port %u: releasing the existing device first\n", port);
+        usb_detach_root_port((uint8_t)port);
+    }
+
+    reset_port(p, 1);
+    uint32_t sc = mr32(g_hc.op, XHCI_PORTSC(p));
+    g_hc.ports[p].connected = (sc & XHCI_PORTSC_CCS) ? 1 : 0;
+    g_hc.ports[p].enabled   = (sc & XHCI_PORTSC_PED) ? 1 : 0;
+    g_hc.ports[p].speed     = (uint8_t)XHCI_PORTSC_SPEED(sc);
+    klog_printf("usb: port %u: after reset %s, %s (portsc 0x%x)\n", port,
+                speed_name(g_hc.ports[p].speed),
+                g_hc.ports[p].enabled ? "enabled" : "not enabled", sc);
+    if (!g_hc.ports[p].connected || !g_hc.ports[p].enabled) return;
+
+    int rc = usb_enumerate_port((uint8_t)port, g_hc.ports[p].speed);
+    klog_printf("usb: port %u: forced re-enumeration %s\n", port,
+                rc >= 0 ? "SUCCEEDED" : "FAILED");
 }
 
 // On a controller with Port Power Control, ports come out of reset
@@ -1578,6 +1695,13 @@ void xhci_deferred_work(void) {
             klog_printf("usb: port %u: device removed\n", p + 1);
             usb_detach_root_port((uint8_t)(p + 1));
         }
+        // The forced diagnostic reset (kernel.usb_reset). Before the
+        // attach below, so a port that is pending both is reset once
+        // deliberately rather than attached and then reset under it.
+        if (g_hc.diag_reset_pending & (1u << p)) {
+            g_hc.diag_reset_pending &= ~(1u << p);
+            diag_reset_port(p);
+        }
         if (g_hc.attach_pending & (1u << p)) {
             g_hc.attach_pending &= ~(1u << p);
             // The bring-up ITSELF raises a connect change for a device
@@ -1591,8 +1715,7 @@ void xhci_deferred_work(void) {
             // The USB2 attach debounce (TATTDB): a plug is a mechanical
             // event, and enumerating mid-bounce is what the retry would
             // otherwise spend itself on.
-            uint64_t start = pit_ticks();
-            while (pit_ticks() - start < 10) { }   // 100 ms
+            xhci_delay_ms(100);
             attach_root_port(p);
         }
     }

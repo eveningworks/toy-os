@@ -33,6 +33,7 @@
 #include "block.h"        // blk_name() -- what IS carrying the transfers
 #include "keyboard_tap.h" // kbdtap_enabled()/_set_enabled() -- kernel.kbdtap
 #include "sound.h"        // hda_diag_tone() -- kernel.hda_tone
+#include "usb.h"          // usb_diag_reset_port() -- kernel.usb_reset
 #include "intel_display.h" // intel_display_pipe_cycle()/_link_retrain() -- kernel.intel_cycle
 
 #define TUNABLE_CATEGORY "Kernel"
@@ -258,6 +259,49 @@ static const struct setting hda_tone_setting = {
     .apply = hda_tone_apply,
 };
 
+// ---- kernel.usb_reset ------------------------------------------------
+//
+// Write-only, like hda_tone: a PORT NUMBER forces that root port through
+// a real reset and re-enumerates it, and it reads back as "off". The
+// experiment for docs/bugs.md's intermittent enumeration failure, whose
+// only known cure is replugging the device -- this does the re-connect
+// half without the power-cycle half, so which one matters becomes a
+// measurement instead of an argument.
+
+static void usb_reset_get(char *out, uint32_t cap) { k_strlcpy(out, "off", cap); }
+
+static int usb_reset_apply(const char *value) {
+    if (!value || !value[0]) return SETTING_INVALID;
+    unsigned port = 0;
+    for (const char *c = value; *c; c++) {
+        if (*c < '0' || *c > '9') return SETTING_INVALID;
+        port = port * 10 + (unsigned)(*c - '0');
+        if (port > 255) return SETTING_INVALID;
+    }
+    if (!port) return SETTING_INVALID;   // ports are 1-based, as logged
+    // QUEUED, not performed: this runs in a SYSCALL, with interrupts
+    // off, and the reset's recovery wait spins on a counter only the
+    // timer interrupt advances -- done inline it never returns, which
+    // is how the first version of this froze a laptop. The result is in
+    // the kernel log a moment later, which is also the honest place for
+    // it: a refused port and a device that would not come back are both
+    // "we tried", and calling the second an invalid SETTING would be a
+    // lie about what was wrong.
+    usb_diag_reset_port(port);
+    return SETTING_SAVED;
+}
+
+static const struct setting usb_reset_setting = {
+    .name = "usb_reset",
+    .label = "Force a USB port reset",
+    .type = SETTING_TYPE_STRING,
+    .file = CONFIG_PATH_RUNTIME,
+    .category = TUNABLE_CATEGORY,
+    .group = "Diagnostics",
+    .get = usb_reset_get,
+    .apply = usb_reset_apply,
+};
+
 // ---- kernel.intel_cycle -----------------------------------------------
 //
 // Write-only, like hda_tone: `pipe` turns the laptop panel's transcoder
@@ -307,6 +351,7 @@ void tunables_register(void) {
     setting_register(&intel_cycle_setting);
     setting_register(&heap_debug_setting);
     setting_register(&hda_tone_setting);
+    setting_register(&usb_reset_setting);
     setting_register(&ata_nodma_setting);
     setting_register(&kstack_track_setting);
     setting_register(&kbdtap_setting);

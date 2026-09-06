@@ -21,6 +21,8 @@
 #include "mouse.h"
 #include "scheduler.h"
 #include "ktest.h"
+#include "driver.h"
+#include "string.h"
 
 // evdev keycodes for the keys used below. Named here rather than in
 // input.h because input.h carries only what a DRIVER reports; these are
@@ -333,4 +335,37 @@ KTEST("input", "a source that is neither polled nor on an interrupt is refused")
     int before = input_source_count();
     input_register_source(&orphan);
     KTEST_ASSERT_EQ(input_source_count(), before);
+}
+
+// The bug this covers: input.c registered the source with `lsdrv` and
+// never told it on the way out, so an unplugged HID device kept its row
+// and a REPLUG added a second one. That is the "phantom second mouse"
+// docs/bugs.md carried as an enumeration fault for weeks -- it was a
+// reporting leak, and only the second half of the round trip was
+// missing. Asserting the count either side is what makes that visible.
+KTEST("input", "unregistering a source takes its `lsdrv` row with it") {
+    static const struct input_source svc = {
+        .name = "ktest-lsdrv", .driver = "ktest-lsdrv-drv", .caps = 0,
+        .poll = probe_poll,
+    };
+
+    // Count how many times this driver names this device, so the check
+    // is about THIS source rather than about the table's length -- a
+    // stale row survives a shorter table perfectly well.
+    input_register_source(&svc);
+    int named_while_registered = 0;
+    for (int i = 0; i < driver_count(); i++)
+        if (k_strcmp(driver_name_at(i), "ktest-lsdrv-drv") == 0 &&
+            k_strstr(driver_devices_at(i), "ktest-lsdrv"))
+            named_while_registered = 1;
+
+    input_unregister_source(&svc);
+    int named_after = 0;
+    for (int i = 0; i < driver_count(); i++)
+        if (k_strcmp(driver_name_at(i), "ktest-lsdrv-drv") == 0 &&
+            k_strstr(driver_devices_at(i), "ktest-lsdrv"))
+            named_after = 1;
+
+    KTEST_ASSERT(named_while_registered);
+    KTEST_ASSERT(!named_after);
 }

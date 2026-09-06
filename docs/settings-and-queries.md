@@ -67,6 +67,17 @@ and `native` each run one mechanism of the Intel display's modeset (see
 `docs/conventions/kernel.md`'s EDID entry) and log every readback;
 `off` does nothing, and the value always reads back as `off`.
 
+`kernel.usb_reset` takes a PORT NUMBER and forces that root port
+through a real reset and re-enumeration, without anyone touching the
+cable. It exists to settle one question: the intermittent USB
+enumeration failure in `docs/bugs.md` is cured by REPLUGGING the
+device, and a replug does two things at once -- it gives the port a
+genuine connect and it power-cycles the device. This does only the
+first, so whichever half matters becomes a measurement rather than an
+argument. The result is in the kernel log, not in the setting's answer,
+because "the port was refused" and "the device would not come back" are
+both "we tried" and only one of them is an invalid value.
+
 **A tunable can also be a CONSENT switch, and `kernel.kbdtap` is the
 first.** The others trade performance against diagnostics — turning one
 on costs cycles and tells you more. That one gates whether the kernel

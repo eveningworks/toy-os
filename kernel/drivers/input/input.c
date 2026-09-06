@@ -66,6 +66,13 @@ void input_unregister_source(const struct input_source *src) {
         if (g_sources[i] != src) continue;
         for (int j = i; j + 1 < g_count; j++) g_sources[j] = g_sources[j + 1];
         g_count--;
+        // AND TELL `lsdrv`, which register_source() already tells. Every
+        // other class registry that can lose a device does this from its
+        // unregister path (net.c, sound.c); this one did not, so an
+        // unplugged HID device kept its row and a replug added a SECOND
+        // -- the "phantom second mouse" docs/bugs.md had recorded as an
+        // enumeration fault for weeks. It was a reporting leak.
+        driver_unbound(src->driver, src->name);
         klog_printf("input: %s unregistered\n", src->name);
         return;
     }

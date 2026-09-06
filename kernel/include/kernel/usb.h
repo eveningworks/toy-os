@@ -245,4 +245,13 @@ uint32_t usb_irqs_seen(void);
 // debugged, so it exists from the start rather than being retrofitted.
 void usb_dump(void);
 
+// `config set kernel.usb_reset <port>`: force a root port through a
+// real reset and re-enumerate it, without touching the cable. A
+// DIAGNOSTIC for the intermittent enumeration failure in docs/bugs.md,
+// whose known cure is a replug -- and a replug both re-connects the
+// port and power-cycles the device, where this does only the first. So
+// a success implicates the port state and a failure clears it.
+// Returns 1 if the device enumerated. Ports are 1-based, as logged.
+int usb_diag_reset_port(unsigned port);
+
 #endif
