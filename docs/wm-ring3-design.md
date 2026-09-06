@@ -1194,12 +1194,14 @@ What REMAINS, and it is design rather than mechanics:
   `rammeter_tick` and `vga_*` (kernel-side by R7, so the ring-3 WM
   should not call them), and `gfx_hw_cursor_*` (R3 removed these --
   delete the paths rather than porting them).
-- **The scripted demo.** `apps/demo.c` is split-brained -- its
-  `demo_load`/`demo_requested`/`demo_run_cli` are the kernel's boot
-  path and `demo_gui_tick` is the WM's per-frame hook -- so it has to be
-  SPLIT before it can move. Left out of 4b deliberately; the demo has an
-  on-demand-only test, so its absence costs nothing until the ring-3 WM
-  is actually the desktop.
+- **The scripted demo.** `apps/demo.c` was split-brained -- its
+  `demo_load`/`demo_requested`/`demo_run_cli` were the kernel's boot
+  path and `demo_gui_tick` the WM's per-frame hook -- so it had to be
+  SPLIT before it could move. Left out of 4b deliberately, and never
+  done: `demo_gui_tick()` sat with zero callers until the whole feature
+  was removed on 2026-09-06. See `docs/decisions/build.md`, "The
+  scripted demo tour was REMOVED" -- an on-demand-only test is what let
+  a half-migrated feature stay broken and quiet.
 
 **The four decisions R1/R3 will be built on**, settled 2026-08-17
 before any of it exists, because each had a defensible cheaper answer:

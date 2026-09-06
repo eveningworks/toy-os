@@ -345,7 +345,7 @@ copy could only disagree with it silently. See `docs/decisions.md`.
 ordinary `make run` -- and every headless launch through `vm.py`,
 `launch_qemu_cmd()`, `boot_smoke_test.py` or `serial_console.py` -- is
 `-boot order=c` with **no `-cdrom` at all**. The ISO is still what the
-live and demo images ARE, and what a release ships.
+live image IS, and what a release ships.
 
 The choice is DERIVED from the image, by `install_grub.boot_medium()`:
 an image with no GRUB on it (one built before this layout) boots the ISO
@@ -387,7 +387,7 @@ driver now (`kernel/drivers/usb/`), but it is reached through the axis
 by adding a device to this recipe by hand. Bit an actual user session once (see the commit for build 293's Makefile fix) -- looked exactly like a driver bug, wasn't one.
 
 
-**The live and demo ISOs are SEPARATE artifacts, on purpose.** The
+**The live ISO is a SEPARATE artifact, on purpose.** The
 ordinary `toy-os.iso` carries no GRUB module: a 129 MiB one took the
 boot smoke test from 1.6s to 7.0s locally and blew CI's 12s timeout
 outright, because GRUB reads the whole module off the emulated CD-ROM
@@ -395,9 +395,7 @@ before the kernel starts. The live image is 24 MiB now (partial block
 groups), so folding it back into the default ISO is possible -- but
 measure the boot first. `tools/live_boot_test.py` drives the live one
 (launch with `launch_qemu_cmd(disk=None)`, which omits `-drive`
-entirely); the demo one is `data/wm/demo.script`, a text file on the
-image, performed one step per WM iteration through `wm_debug_dispatch()`
--- the same path the GUI tests use.
+entirely).
 
 
 ## Driving the desktop: the apps built to be tested against

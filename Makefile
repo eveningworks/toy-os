@@ -388,7 +388,6 @@ help:
 	@echo "                 it carries GRUB; BOOT=cd for the ISO -- implies iso)"
 	@echo "  usb-image      Build toyos-usb.img -- compact, self-booting, for dd to a USB stick"
 	@echo "  live-iso       Build toy-os-live.iso -- carries a filesystem image, boots with NO disk"
-	@echo "  demo-iso       Build toy-os-demo.iso -- boots straight into a scripted tour"
 	@echo ""
 	@echo " Any of the three ISO targets can BAKE IN boot flags, so they need not be"
 	@echo " typed into the GRUB menu every boot -- docs/boot-flags.md lists every word:"
@@ -434,7 +433,6 @@ help:
 	@echo "   make run MENU=1           show the GRUB boot menu (5s) instead of booting"
 	@echo "   make run MEM=512          a smaller machine"
 	@echo "   make run LIVE=1           the live ISO, with NO disk attached (implies live-iso)"
-	@echo "   make run DEMO=1           the scripted tour, no disk (implies demo-iso)"
 	@echo "   make run NODISK=1         the ordinary ISO with no disk attached either"
 	@echo "   make run BOOT=cd          boot the ISO instead of the disk (default: the"
 	@echo "                             disk, when disk.img carries GRUB -- BOOT=disk"
@@ -1322,10 +1320,6 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LI
 	    if [ "$$(basename "$$f")" != "README.md" ]; then \
 	        cp "$$f" $(SEED_DIR)/sync/etc/settings.d/; fi; \
 	done
-	# The scripted tour. Seeded always -- it is inert unless `demo` is on
-	# the kernel command line, and having it present means a live image
-	# can be edited into a demo without a rebuild.
-	cp data/wm/demo.script $(SEED_DIR)/sync/usr/wm/demo.script
 	@if [ -n "$$(ls -A data/wm/startup 2>/dev/null)" ]; then \
 	    cp data/wm/startup/* $(SEED_DIR)/sync/usr/wm/startup/; fi
 	@if command -v xkbcli >/dev/null 2>&1; then \
@@ -1484,29 +1478,6 @@ live-iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG)
 	$(GRUB_MKRESCUE) -o $(LIVE_ISO) iso-live
 	@echo "live-iso: $(LIVE_ISO) -- boots with no disk; see docs/live-cd-design.md"
 
-# The DEMO ISO: the live ISO plus `demo` on the kernel command line, so
-# it boots straight into the scripted tour with nobody touching a key.
-# For showing the system on real hardware -- write it to a USB stick and
-# boot it.
-#
-# Deliberately its own target and its own grub.cfg rather than a runtime
-# toggle: a demo that can start itself by accident is a demo that starts
-# during something else.
-DEMO_ISO = toy-os-demo.iso
-
-demo-iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG)
-	rm -rf iso-demo
-	mkdir -p iso-demo/boot/grub
-	cp $(KERNEL) iso-demo/boot/kernel.bin
-	cp $(LIVE_IMG) iso-demo/boot/live.img
-	sed -e 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' -e 's|@KCMDLINE@|$(KCMDLINE)|' grub-demo.cfg > iso-demo/boot/grub/grub.cfg
-	@if [ -z "$(GRUB_MKRESCUE)" ]; then \
-		echo "make: grub-mkrescue not found -- see README.md's dependency table."; \
-		exit 1; \
-	fi
-	$(GRUB_MKRESCUE) -o $(DEMO_ISO) iso-demo
-	@echo "demo-iso: $(DEMO_ISO) -- boots the tour with no input; see data/wm/demo.script"
-
 # -vga std: explicit (matches QEMU's own default, but pinned here so the
 #   higher 1280x720 mode boot.asm requests isn't at the mercy of a
 #   per-host/per-distro QEMU default changing underneath us).
@@ -1563,7 +1534,6 @@ demo-iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG)
 #   make run MENU=1                 show GRUB's menu instead of booting
 #   make run MEM=512                a smaller machine
 #   make run LIVE=1                 the live ISO, with NO disk attached
-#   make run DEMO=1                 the scripted tour, with no disk
 #   make run KVM=1 VIRTIO=1         ...and any mix; a per-class value like
 #                                   VGA=std overrides what VIRTIO=1 chose
 #
@@ -1583,13 +1553,13 @@ COMMA := ,
 
 MEM ?= 2048
 
-# WHICH ISO, and what has to be built first. LIVE and DEMO are ordinary
-# axes like the rest, but they are the two that change the PREREQUISITE
-# as well as the command line -- which works because a command-line
-# variable is set before the Makefile is parsed, so $(if) expands
-# correctly even in a prerequisite list.
-QEMU_ISO     = $(if $(DEMO),$(DEMO_ISO),$(if $(LIVE),$(LIVE_ISO),$(ISO)))
-RUN_PREREQ   = $(if $(DEMO),demo-iso,$(if $(LIVE),live-iso,iso $(DISK_IMG)))
+# WHICH ISO, and what has to be built first. LIVE is an ordinary axis
+# like the rest, but it is the one that changes the PREREQUISITE as well
+# as the command line -- which works because a command-line variable is
+# set before the Makefile is parsed, so $(if) expands correctly even in
+# a prerequisite list.
+QEMU_ISO     = $(if $(LIVE),$(LIVE_ISO),$(ISO))
+RUN_PREREQ   = $(if $(LIVE),live-iso,iso $(DISK_IMG))
 QEMU_ACCEL   = $(if $(KVM),-enable-kvm -cpu host,)
 
 # WHAT THE FRAMEBUFFER APPEARS IN, and whether it may be SCALED.
@@ -1668,11 +1638,10 @@ QEMU_DISK_VIRTIO = -drive file=$(DISK_IMG),format=raw,if=none,id=vblk,discard=un
 QEMU_DISK_AHCI   = -device ich9-ahci,id=ahci \
                    -drive file=$(DISK_IMG),format=raw,if=none,id=sata0,discard=unmap \
                    -device ide-hd,drive=sata0,bus=ahci.0
-# LIVE and DEMO attach NO -drive at all, and that is the whole point of
-# them rather than an optimisation: pointing the live ISO at disk.img
-# would let the ordinary disk path run and prove nothing about the live
-# one.
-QEMU_DISK = $(if $(NODISK)$(LIVE)$(DEMO),,\
+# LIVE attaches NO -drive at all, and that is the whole point of it
+# rather than an optimisation: pointing the live ISO at disk.img would
+# let the ordinary disk path run and prove nothing about the live one.
+QEMU_DISK = $(if $(NODISK)$(LIVE),,\
               $(if $(filter virtio,$(DISK_KIND)),$(QEMU_DISK_VIRTIO),\
                 $(if $(filter ahci,$(DISK_KIND)),$(QEMU_DISK_AHCI),$(QEMU_DISK_IDE))))
 
@@ -1779,8 +1748,8 @@ QEMU_EXTRA =
 # The disk is the boot medium now: disk.img carries GRUB and the kernel
 # (tools/install_grub.py), so `-boot order=c` boots the machine the way
 # a real one boots. The ISO is still a boot medium -- it is what the
-# live and demo images ARE, and what a release ships -- so this is a
-# choice rather than a replacement.
+# live image IS, and what a release ships -- so this is a choice rather
+# than a replacement.
 #
 # It is DERIVED because an image built before the boot partition existed
 # has no GRUB on it and must still work: is_bootable() asks the image,
@@ -1793,7 +1762,7 @@ QEMU_EXTRA =
 # looks for GRUB's own stamp instead.
 BOOT ?= auto
 DISK_BOOTABLE = $(shell python3 tools/install_grub.py $(DISK_IMG) --check >/dev/null 2>&1 && echo 1)
-BOOT_MEDIUM = $(if $(NODISK)$(LIVE)$(DEMO),cd,\
+BOOT_MEDIUM = $(if $(NODISK)$(LIVE),cd,\
                 $(if $(filter disk,$(BOOT)),disk,\
                   $(if $(filter cd,$(BOOT)),cd,\
                     $(if $(DISK_BOOTABLE),disk,cd))))
@@ -1923,7 +1892,7 @@ clean:
 	# other build product. This used to name 21 $(FOO_ELF) variables by
 	# hand -- they built into the source tree next to their .c files and
 	# needed a .gitignore entry to stay out of the repo.
-	rm -rf $(BUILD) $(ISO) $(LIVE_ISO) $(DEMO_ISO) $(USB_IMG) iso/boot/kernel.bin iso/boot/live.img iso-live iso-demo $(SEED_DIR)/sync
+	rm -rf $(BUILD) $(ISO) $(LIVE_ISO) $(USB_IMG) iso/boot/kernel.bin iso/boot/live.img iso-live $(SEED_DIR)/sync
 	# Deliberately NOT touching $(DISK_IMG) here -- see its comment above.
 	# Use `make clean-disk` to explicitly wipe the persistent filesystem.
 

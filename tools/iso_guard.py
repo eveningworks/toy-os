@@ -251,7 +251,7 @@ def check_iso_fresh(repo: Path = REPO, iso_name: str = "toy-os.iso",
     """Return a list of complaint strings; empty means the boot media are current.
 
     Returns rather than raises so a caller can decide -- `vm.py` fails
-    hard, but a tool booting a DIFFERENT image (the live or demo ISO)
+    hard, but a tool booting a DIFFERENT image (the live ISO)
     can ask about its own and ignore the answer.
 
     `medium` is 'cd' or 'disk'. It changes only what the kernel is

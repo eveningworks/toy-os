@@ -495,7 +495,7 @@ first before re-litigating it from scratch.
 
 - [There is no changelog, milestones are named, and nothing carries a target version](decisions/build.md#there-is-no-changelog-milestones-are-named-and-nothing-carries-a-target-version)
 - [Third-party extras are FETCHED, opt-in, and the image says it carries them](decisions/build.md#third-party-extras-are-fetched-opt-in-and-the-image-says-it-carries-them)
-- [The demo ISO is a separate image, and its tour is a file on it](decisions/build.md#the-demo-iso-is-a-separate-image-and-its-tour-is-a-file-on-it)
+- [The scripted demo tour was REMOVED, and the ring-3 migration is why](decisions/build.md#the-scripted-demo-tour-was-removed-and-the-ring-3-migration-is-why)
 - [Build-number scheme: fix/feature/major tiers, not dates or semver](decisions/build.md#build-number-scheme-fixfeaturemajor-tiers-not-dates-or-semver)
 - [Versioning: semver + `-dev` suffix, not a per-change build number](decisions/build.md#versioning-semver--dev-suffix-not-a-per-change-build-number)
 - [A dev build shows its commit; a release shows only its version](decisions/build.md#a-dev-build-shows-its-commit-a-release-shows-only-its-version)

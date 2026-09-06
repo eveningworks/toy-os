@@ -179,6 +179,6 @@ command: how a name is resolved, and the line-editing keys.
 ## See also
 
 - [boot-flags.md](boot-flags.md) — what you can put on the GRUB command
-  line (`nokaslr`, `nopat`, `live`, `demo`).
+  line (`nokaslr`, `nopat`, `live`).
 - [filesystem-layout.md](filesystem-layout.md) — what lives where on the
   OS's own disk, and the rules for adding to it.

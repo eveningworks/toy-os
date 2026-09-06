@@ -846,7 +846,7 @@ image predating this layout has nowhere to install to, so nothing is
 installed and it keeps booting off the ISO. `make clean-disk && make
 iso` is the opt-in.
 
-**The ISO is still a boot medium** — the live and demo images boot with
+**The ISO is still a boot medium** — the live image boots with
 NO disk, and a release is an ISO. What changed is which medium the
 ordinary path uses.
 

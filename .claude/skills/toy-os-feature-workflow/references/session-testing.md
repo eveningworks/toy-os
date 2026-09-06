@@ -392,9 +392,9 @@ trimming them, and five smaller lessons.**
   submission order longest-first (LPT) took it to 1:30 -- a 23% cut for
   a sort, with nothing removed. Dropping tests is the expensive fix;
   reach for it last.
-- **A user-reported bug's SURVIVORS are the diagnosis.** The demo tour
-  printed "Unknown command: lscpu" while `about`, `df`, `fsck`, `ls`
-  and `lspci` all worked. That pattern *was* the answer: every survivor
+- **A user-reported bug's SURVIVORS are the diagnosis.** A boot mode
+  that ran canned commands printed "Unknown command: lscpu" while
+  `about`, `df`, `fsck`, `ls` and `lspci` all worked. That pattern *was* the answer: every survivor
   has its own builtin dispatch entry and `lscpu` was the one command
   resolved through PATH. Read what still works, not just what broke.
 - **...and don't abandon a correct diagnosis when one fact seems to
@@ -405,17 +405,21 @@ trimming them, and five smaller lessons.**
   either.
 - **An init step reachable by only ONE entry point is a bug waiting for
   a second entry point.** `shell_main()` held the only calls to
-  `history_load()`/`shell_path_init()`, and `apps/demo.c` and the serial
-  debug console both reach `shell_dispatch()` without it. Now an
+  `history_load()`/`shell_path_init()`, while a scripted boot mode and
+  the serial debug console both reached `shell_dispatch()` without it.
+  Now an
   idempotent `shell_session_init()` called from both. Same family as
   `vfs.c`'s `ensure_layout()`; the `static int done` guard is what makes
   the rule unconditional.
-- **`tools/demo_test.py` exists and is ON DEMAND ONLY** -- standing
-  request; do not add it to `preflight.sh`, `gui_regress.py` or CI, it
-  boots its own ISO and the demo is a showpiece. Its positive control is
-  the reusable part: reverting the fix reddened exactly one of six
-  checks and left "booted / reached the desktop / opened windows" green,
-  which is the proof those three were never evidence the tour worked.
+- **AN ON-DEMAND-ONLY TEST CANNOT NOTICE A REGRESSION.** The scripted
+  demo tour had exactly one test, kept out of every suite by standing
+  request because it booted its own ISO. When the desktop moved to
+  ring 3 the tour's GUI half was left behind with zero callers, and
+  nothing said so for weeks -- the removal on 2026-09-06 is what found
+  it (`docs/decisions/build.md`). Its positive control is the reusable
+  part: reverting the PATH fix reddened exactly one of six checks and
+  left "booted / reached the desktop / opened windows" green, which is
+  the proof those three were never evidence the tour worked.
 - **A pasted screenshot can arrive as raw PNG bytes.** When that
   happens, don't ask the user to re-send -- read the clipboard directly:
   `wl-paste -t image/png > shot.png` (or `xclip -selection clipboard -t

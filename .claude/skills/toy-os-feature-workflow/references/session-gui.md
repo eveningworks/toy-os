@@ -258,7 +258,7 @@ that could do far better. It walks a fallback LADDER now
 should mean "then try 1600x900", not "keep whatever GRUB left".
 
 `make iso KCMDLINE="video=1920x1080 nokaslr"` bakes boot words into the
-ISO (also `live-iso`/`demo-iso`), so trying a flag no longer means
+ISO (also `live-iso`), so trying a flag no longer means
 pressing `e` in the GRUB menu every boot. The `grub*.cfg` files carry a
 one-screen summary of `docs/boot-flags.md` for whoever reads them on the
 ISO.

@@ -2015,7 +2015,7 @@ read back from `dmesg`:
 
 So making text mode selectable needs one of: a second kernel image built
 without the framebuffer tag (a `make text-iso` variant, the way
-`live-iso` and `demo-iso` are already separate artifacts), or a runtime
+`live-iso` is already a separate artifact), or a runtime
 VGA mode-3 switch by banging registers directly, since there is no BIOS
 `int 10h` in long mode. Neither is built. This is recorded rather than
 attempted because the first is a whole second build of the kernel for a

@@ -2373,17 +2373,6 @@ window without going through it will find its layout polls timing out.
   **build before running it** -- a tool that restores a working tree
   without rebuilding (`predates.py`) leaves it testing the other
   kernel.
-- **`demo_test.py`** -- boots `toy-os-demo.iso` and asserts the scripted
-  tour actually PERFORMS (6 checks). **On demand only** -- do not add it
-  to `preflight.sh`, `gui_regress.py` or CI (standing request: it boots
-  its own ISO and the demo is a showpiece, not something an ordinary
-  change breaks). Reach for it when the tour is suspect, or after
-  touching `apps/demo.c`, `data/wm/demo.script` or shell dispatch/init.
-  Its load-bearing check is that a PATH-RESOLVED command really reached
-  `elf_run` -- the other five stayed green through a real shipped bug
-  where every PATH lookup in the tour failed, because "it booted,
-  reached the desktop and opened windows" is satisfied by a tour whose
-  every command failed. See `docs/decisions.md`.
 - **`compositor_death_test.py`** -- the compositor death path (M41's
   R7, 10 checks). Killing the compositor must not panic the kernel, and
   must not take the desktop with it. Two things it encodes. **The
@@ -3094,11 +3083,10 @@ window without going through it will find its layout polls timing out.
   NEVER A GATE. Several need hardware, Docker or a fetched IWAD, and a
   check that cannot pass on a clean checkout is one people learn to
   ignore. Run it before a release, or when you want to know whether the
-  on-demand half of this directory still works. `demo_test.py` is
-  deliberately excluded even from here -- CLAUDE.md says on demand
-  ONLY; `mkpart_test.py` is excluded because despite the name it is a
-  WRITER that takes a disk-image argument, so running it bare is an
-  argparse error rather than a result.
+  on-demand half of this directory still works. `mkpart_test.py` is
+  excluded because despite the name it is a WRITER that takes a
+  disk-image argument, so running it bare is an argparse error rather
+  than a result.
 
   **Five tools were missing from it for an unknown period** and were
   found the same way its own first run found two red ones -- by
@@ -3195,8 +3183,8 @@ window without going through it will find its layout polls timing out.
   it wrong makes a tool fail on a missing socket rather than on its own
   subject -- three of the five needed it), nor that the tool passes.
   Green means "nothing is orphaned". Waive with a reason in `EXEMPT`;
-  three are (`demo_test.py`, `mkpart_test.py`, and `qmp_test.py`, a
-  library with an unfortunate name).
+  two are (`mkpart_test.py`, and `qmp_test.py`, a library with an
+  unfortunate name).
 
 - **`regex_hostcheck.py`** -- compiles `userland/tests/regex_cases.h`
   twice, once against the real `userland/libc/regex.c` and once against

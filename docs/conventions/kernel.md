@@ -92,7 +92,7 @@ this the obvious way), not from how much history it accumulated.
 - **The kernel's idle work has ONE owner: `scheduler_idle()`**
   (`api/scheduler.h`). Any loop that is waiting rather than working
   calls it -- the physical shell's key wait, `wm.c`'s event loop, a
-  long `cat`, the demo's timer. What it owns today is
+  long `cat`. What it owns today is
   `debug_console_poll()`, and it exists because the serial debug console
   had no owner at all: it was polled by whichever loop happened to be
   running, and every GUI tool's checks arrive over that console.

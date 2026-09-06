@@ -217,9 +217,6 @@ TOOLS = [
 DIRTIES_IMAGE = {"console_bleed"}
 
 # Deliberately NOT here, each for a stated reason:
-#   demo_test.py   -- a showpiece; CLAUDE.md says on demand ONLY, never
-#                     in any suite, and putting it in one would be
-#                     ignoring an explicit standing instruction.
 #   qemu_matrix.py -- needs Docker, and pulls images.
 #   kvm_soak.py    -- needs KVM and takes many minutes by design.
 #   flake_hunt.py  -- runs something else N times; it has no verdict of

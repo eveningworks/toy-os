@@ -36,8 +36,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Tools deliberately named by no runner. A reason, not a silencer.
 EXEMPT = {
-    "demo_test.py":
-        "a showpiece; CLAUDE.md says on demand ONLY, never in a suite",
     "mkpart_test.py":
         "despite the name a WRITER -- it takes a disk image argument, so "
         "running it bare is an argparse error rather than a result",

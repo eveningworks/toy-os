@@ -43,7 +43,6 @@
 #include "keyboard_config.h"
 #include "tty.h"    // tty_init() -- the console terminal, before input arrives
 #include "apps.h"
-#include "demo.h"
 #include "scheduler.h"
 #include "syscalls.h"   // uheap_fault_init() -- demand paging for ring-3 heaps
 
@@ -51,7 +50,6 @@
 // program seeded to /bin like any other.
 #define INIT_PATH "/bin/init"
 #include "process.h"  // process_guard_page_init() -- the legacy loader's stack
-#include "gui3.h"     // gui3_main() -- the desktop, a ring-3 process
 #include "target.h"   // target_init() -- the boot target init starts services for
 #include "debug_console.h"
 #include "i8042.h"      // i8042_register_sources() -- the PS/2 pair, into the input core
@@ -413,14 +411,6 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // shell or the GUI draws. `dmesg`, the serial port and the console's
     // own scrollback all still have them.
     klog_set_console_echo(0);
-
-    // A scripted tour, if the command line asked for one. Runs the CLI
-    // half here and hands the rest to the desktop; see apps/demo.h.
-    if (demo_requested() && demo_load("/usr/wm/demo.script") > 0) {
-        if (demo_run_cli()) {
-            gui3_main();
-        }
-    }
 
     apps_start();
 

@@ -583,7 +583,6 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] Finish the 2026-08-21 toolkit centralizations -- only System Settings and Font Demo set `desc.focus`
 - [ ] A screenshot tool that writes a real image file to disk
 - [ ] A tween/easing helper, once a second real caller exists
-- [ ] Scripted interaction that spans frames, so the demo tour can show real use
 
 ### GUI clipboard + drag-and-drop
 

@@ -1028,7 +1028,6 @@ make verify # the full pre-delivery gate: clean build + iso + boot test + ktest
 make run    # boots in QEMU with an SDL window (the user's machine, not headless)
 make live-iso   # toy-os-live.iso -- carries a TFS3 image as a GRUB module
 make usb-image  # toyos-usb.img -- compact and self-booting, to dd to a USB stick
-make demo-iso   # toy-os-demo.iso -- boots straight into a scripted tour
 make debug  # boots frozen (-s -S) for real GDB debugging -- see below
 ```
 
@@ -1040,7 +1039,6 @@ make run KVM=1 VIRTIO=1 AUDIO=1 NOGRAPHIC=1 MENU=1 MEM=512
 make run WINDOW=full   # or WINDOW=fit -- see below; sdl cannot scale
 make run DISK=virtio VGA=virtio INPUT=virtio   # what VIRTIO=1 is short for
 make run LIVE=1    # the live ISO, no disk attached (implies live-iso)
-make run DEMO=1    # the scripted tour, no disk (implies demo-iso)
 make run BOOT=cd   # boot the ISO; BOOT=disk forces the other way
 ```
 
@@ -1081,8 +1079,8 @@ gone too, because a name per combination multiplies exactly as fast as a
 recipe per combination; `debug` survives only because it is not a
 combination of the axes.
 
-Three traps if you touch it. **`LIVE` and `DEMO` change the PREREQUISITE
-as well as the command line**, which works only because a command-line
+Three traps if you touch it. **`LIVE` changes the PREREQUISITE as well
+as the command line**, which works only because a command-line
 variable is set before the Makefile is parsed, so `$(if)` expands
 correctly even in a prerequisite list -- a target-specific variable would
 not. **Every definition is DEFERRED (`=`, never `:=`) and uses `$(if
@@ -1107,7 +1105,7 @@ image carries `/usr/share/licenses/extras.txt` saying what is inside it.
 
 **Boot flags can be baked into the media** rather than typed into the
 GRUB menu each boot: `make iso KCMDLINE="video=1920x1080 nokaslr"` (also
-`live-iso`/`demo-iso`) -- into the ISO and into `disk.img`'s
+`live-iso`) -- into the ISO and into `disk.img`'s
 `/boot/grub/grub.cfg` alike, from one source file. Empty by default, so every automated path is
 unaffected. `docs/boot-flags.md` lists every word. **GRUB's `e` editor
 shows the menuentry BODY only**, so the boot-word summary is repeated
@@ -1392,7 +1390,7 @@ cost".
 - **Run on demand, not in the gate** -- `ahci_test.py`,
   `ansi_cursor_test.py`, `audio_test.py`, `console_bleed_test.py`,
   `console_shell_test.py`, `ctrlc_test.py`, `cursor_ibeam_test.py`,
-  `demo_test.py`, `diskmark_test.py`, `doom_test.py`,
+  `diskmark_test.py`, `doom_test.py`,
   `doom_sound_test.py`, `fat32_test.py`, `fileop_test.py`, `frame_balance.py`,
   `fs_switch_test.py`, `grep_test.py`, `guictl_test.py`,
   `hash_hostcheck.py`, `highmem_test.py` (the frame allocator on an
@@ -1532,9 +1530,6 @@ Standing rules that are cheaper to know than to rediscover:
   own layout/log reports. `DEFAULT_JOBS` is `min(12, cores//2)`: the cap
   only bites a host with more than 24 hardware threads, so
   oversubscription stays off the common box.
-- **`demo_test.py` is ON DEMAND ONLY.** Never add it to `preflight.sh`,
-  `gui_regress.py` or CI; it boots its own ISO and the demo is a
-  showpiece, not something an ordinary change breaks.
 - **A clean `damage_sweep.py` proves nothing until `--positive-control`
   has shown the harness can fail.** Same for any positive control here.
 - **`iso_guard.py` refuses a stale `toy-os.iso`**, from `vm.py` and
@@ -1594,7 +1589,7 @@ detail there, and keep the pointer here to a line. What each file is:
   in either direction. Read it before adding a directory, a config file
   or any seeded data.
 - **`docs/boot-flags.md`** -- every word the kernel looks for on the
-  GRUB command line (`nokaslr`, `nopat`, `live`, `demo`).
+  GRUB command line (`nokaslr`, `nopat`, `live`).
   Matching is by SUBSTRING with no parser, spread across five files with
   no registry, so **this table is the only list of them** -- add a row
   when adding a flag.

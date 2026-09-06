@@ -143,19 +143,23 @@ parses PATH, is idempotent, and is called from both `shell_main()` and
 `shell_dispatch()`. Those two lines used to sit at the top of
 `shell_main()` alone, which is correct exactly as long as the
 interactive REPL is the only way into the dispatcher -- and it isn't.
-Two other callers reach `shell_dispatch()` directly: `apps/demo.c`'s
-`sh` verb, and the serial debug console's `sh` command
-(`kernel/core/debug_console.c`, which is what `tools/vm.py exec` drives).
+Another caller reaches `shell_dispatch()` directly: the serial debug
+console's `sh` command (`kernel/core/debug_console.c`, which is what
+`tools/vm.py exec` drives).
 
-On a demo boot, `demo_run_cli()` runs from `kernel_main()` *before*
-`apps_start()`, so `shell_main()` is never reached and PATH was left
-empty for the whole tour. The failure was almost invisible: every other
-command in `data/wm/demo.script` -- `about`, `df`, `fsck`, `ls`,
-`lspci` -- has its own builtin dispatch entry and worked perfectly, so
-the single casualty was `lscpu`, the one command in the script with no
-builtin, printing "Unknown command" in a screen that scrolls past. (`ls`
-is a builtin *wrapper* that hands `/bin/ls` an absolute path, per the
-entry above, which is why even it was unaffected.)
+The bug that made the point was a boot mode that ran a canned sequence
+of commands from `kernel_main()` *before* `apps_start()`, so
+`shell_main()` was never reached and PATH was left empty for the whole
+run. The failure was almost invisible: every command in the sequence but
+one -- `about`, `df`, `fsck`, `ls`, `lspci` -- has its own builtin
+dispatch entry and worked perfectly, so the single casualty was
+`lscpu`, the one with no builtin, printing "Unknown command" in a screen
+that scrolls past. (`ls` is a builtin *wrapper* that hands `/bin/ls` an
+absolute path, per the entry above, which is why even it was
+unaffected.) That mode -- the scripted demo tour -- is gone
+(`decisions/build.md`), and the reason it is still worth recording is
+that the hazard is not: any second entry point into the dispatcher has
+the same exposure.
 
 The general shape is the same one `ensure_layout()` records above: **if
 a step belongs to "having a shell" rather than to "running the
@@ -164,12 +168,12 @@ one of them.** What makes the rule cheap here is the same thing that
 made it cheap there -- a `static int done` guard means it can be called
 unconditionally with no ordering to get wrong.
 
-`tools/demo_test.py` is the regression test, and its load-bearing check
-is that a PATH-resolved command really reached `elf_run`. Its positive
-control is worth repeating before trusting it: reverting the
-`shell_dispatch()` call reddens exactly that one check and leaves the
-other five green -- so "the demo booted, reached the desktop and opened
-windows" is, on its own, no evidence at all that the tour worked.
+The tool that caught it is gone with the boot mode it tested, and its
+positive control is the part worth keeping: reverting the
+`shell_dispatch()` call reddened exactly one check -- "a PATH-resolved
+command really reached `elf_run`" -- and left the other five green. So
+"it booted, reached the desktop and opened windows" was, on its own, no
+evidence at all that anything had run.
 
 ## The CLI editor's status bar needs its own line-wrapping pass, not a plain dump-and-let-the-console-wrap
 

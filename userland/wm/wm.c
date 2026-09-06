@@ -954,25 +954,6 @@ void wm_run(void) {
         // the console from its own idle path, whoever is running.
         wmwd_phase("idle");
 
-        // The scripted demo tour does NOT run in the ring-3 WM yet, and
-        // that is a deferral with a reason rather than an oversight.
-        //
-        // `apps/demo.c` is split-brained: `demo_load`/`demo_requested`/
-        // `demo_run_cli` are the KERNEL's boot path (kernel/core/
-        // kernel.c), while `demo_gui_tick` is one scripted step per WM
-        // iteration. So it cannot simply move with the WM the way
-        // wm_debug.c did in stage 3 -- it has to be SPLIT first, its CLI
-        // half staying with the shell and its GUI half coming here.
-        //
-        // Left out of 4b because the demo is a showpiece with an
-        // on-demand-only test (tools/demo_test.py, never in CI by
-        // standing request), so it is the one thing here whose absence
-        // costs nothing until the ring-3 WM is actually the desktop.
-        // Stage 4c does the split. Until then `demo` on the kernel
-        // command line drives the ring-0 desktop, which is still the
-        // live one.
-        wmwd_phase("demo");
-
         // One integer compare unless the filesystem actually changed.
         wmwd_phase("desktop_entries");
         poll_desktop_entries();

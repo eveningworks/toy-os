@@ -1442,16 +1442,3 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
 
     return 0;
 }
-
-int wm_debug_dispatch(char *line) {
-    // Sized to hold the longest reply any subcommand produces (`gui
-    // help`, ~1.8 KB). This path exists only for the demo tour, which
-    // discards the text anyway -- the console's path goes over the
-    // transport and gets win_server.c's chunking.
-    static char buf[2560];
-    struct dbg_out o = { .buf = buf, .cap = sizeof buf, .len = 0, .overflow = 0 };
-    int known = wm_debug_dispatch_out(line, &o);
-    if (o.len) sys_eprint(o.buf);
-    if (o.overflow) sys_eprint("gui: (output truncated)\r\n");
-    return known;
-}

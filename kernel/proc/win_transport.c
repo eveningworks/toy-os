@@ -6,7 +6,6 @@
 #include "win_transport.h"
 #include "win_server.h"
 #include "klog.h"
-#include "win_debug.h"   // the apps/-facing wrapper at the bottom
 #include "string.h"
 
 // --- the direct transport --------------------------------------------
@@ -57,13 +56,4 @@ int win_transport_request(int pid, struct win_request_msg *req) {
 
 int win_transport_debug(int pid, struct win_debug_msg *msg) {
     return g_transport->debug(pid, msg);
-}
-
-// See api/win_debug.h -- the apps/-facing one-liner over the transport.
-int win_debug_command(const char *cmd) {
-    struct win_debug_msg msg;
-    k_memset(&msg, 0, sizeof msg);
-    msg.type = WIN_REQ_DEBUG_CMD;
-    k_strlcpy(msg.text, cmd ? cmd : "", WIN_DEBUG_CMD_LEN);
-    return win_transport_debug(WIN_PID_KERNEL, &msg) ? 1 : 0;
 }

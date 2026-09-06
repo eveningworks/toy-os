@@ -319,13 +319,14 @@ static void history_load(void) {
 // Everything that belongs to "having a shell session" rather than to
 // "running the interactive REPL". Idempotent and called from BOTH
 // shell_main() and shell_dispatch(), because the REPL is not the only
-// way into the dispatcher: apps/demo.c's `sh` verb and the serial debug
-// console's `sh` both reach it without shell_main() ever running.
+// way into the dispatcher: the serial debug console's `sh` reaches it
+// without shell_main() ever running.
 //
-// The trap this closes: with the demo ISO, shell_main() is never
-// reached at all, so PATH was left empty and every command resolved
-// through it reported "Unknown command" while builtins beside it worked
-// perfectly. Same shape as vfs.c's ensure_layout() -- an init step that
+// The trap this closes: a caller that dispatches without shell_main()
+// leaves PATH empty, so every command resolved through it reports
+// "Unknown command" while builtins beside it work perfectly (which is
+// exactly how it presented on the scripted demo boot, since removed).
+// Same shape as vfs.c's ensure_layout() -- an init step that
 // belongs to a THING must not live only in one of the paths that
 // creates it. See docs/decisions.md.
 static void shell_session_init(void) {

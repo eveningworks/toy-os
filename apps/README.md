@@ -10,8 +10,8 @@ add something new.
 processes under `userland/`, with their own address spaces, and that is
 where anything new should go unless it genuinely has to run inside the
 kernel. What is left here is what does: the shell (it is what the kernel
-starts), the `edit` command, the scripted demo, and the one-line launcher
-that spawns the desktop.
+starts), the `edit` command, and the one-line launcher that spawns the
+desktop.
 
 The rule: app code includes `kapi.h` (and `apps.h` if it wants to launch
 other apps) and nothing else. It never includes a driver header directly,
@@ -102,9 +102,6 @@ ring-3 processes now; see the next section.)
   it spawns `/bin/wm/system/toywm` and waits for it. Registered as both
   `gui` and `gui3`, the second an alias kept so notes and scripts that
   ask for the ring-3 desktop by name keep selecting what they meant.
-- **demo** (`demo.c`) -- the scripted tour on the demo ISO. Its `gui`
-  steps travel over the window transport now (`api/win_debug.h`), the
-  same path the debug console and every test tool use.
 
 
 ## The GUI is not here any more (userland/wm/, userland/ui/)

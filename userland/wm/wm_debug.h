@@ -99,13 +99,6 @@ void dbg_out_rollback(struct dbg_out *o, int mark);
 // `line` is tokenised IN PLACE, so it must be writable.
 int wm_debug_dispatch_out(char *line, struct dbg_out *out);
 
-// The same, writing straight to the kernel log. For in-kernel callers
-// that are already inside the WM and want the old behaviour -- the demo
-// tour (apps/demo.c) is the only one. NOT the path the serial console
-// takes any more: that one goes over the transport, which is the whole
-// point of stage 3.
-int wm_debug_dispatch(char *line);
-
 // --- synthetic input, drained by wm_run() ---------------------------
 //
 // One queued (x, y, buttons) triple per call, consumed at most one per

@@ -313,7 +313,6 @@ make            # kernel.bin + the userland ELF binaries
 make iso        # + toy-os.iso; also seeds disk.img and installs GRUB on it
 make run        # build + boot in QEMU with a graphical window
 make live-iso   # a Live CD that boots with no disk attached at all
-make demo-iso   # boots straight into a scripted tour
 make debug      # boot frozen (-s -S) for GDB
 make test       # boot headless, run the in-kernel test suite
 make verify     # full gate: clean build + iso + boot test + test suite
@@ -345,7 +344,6 @@ make run NOGRAPHIC=1    # serial console only -- use this over SSH
 make run MENU=1         # show GRUB's menu instead of booting through
 make run MEM=512        # a smaller machine
 make run LIVE=1         # the Live CD, no disk attached
-make run DEMO=1         # the scripted tour
 ```
 
 <details>
@@ -623,7 +621,7 @@ kernel/
                 (what apps may use), abi/ (the kernel<->userland
                 contract), kernel/ (internal, off apps/'s path)
 
-apps/           kernel-space programs: the shell, the demo, tab completion.
+apps/           kernel-space programs: the shell, tab completion.
                 No GUI lives here any more.
 
 userland/       ring-3 programs, split by ROLE:

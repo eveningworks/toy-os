@@ -158,7 +158,7 @@ def cmd_start(args):
 
     # WHICH MEDIUM. The kernel is on disk.img now (tools/install_grub.py),
     # so the disk boots itself and the ISO is for the images that have no
-    # disk -- live, demo, a release download. Derived rather than fixed
+    # disk -- live, or a release download. Derived rather than fixed
     # because an image built before the boot partition existed has no
     # GRUB on it and must keep working; `--boot` overrides.
     medium = install_grub.boot_medium(args.disk, args.boot)

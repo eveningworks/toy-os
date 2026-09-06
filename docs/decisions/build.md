@@ -114,29 +114,47 @@ shape as the mtools trap this repo already records (mtools opens
 `/dev/tty`, so a captured prompt hangs). Such a build stops and names the
 flag: `LICENSE=agree`, or `TOYOS_LICENSE=agree` in the environment.
 
-## The demo ISO is a separate image, and its tour is a file on it
+## The scripted demo tour was REMOVED, and the ring-3 migration is why
 
-Asked for a way to show the system on a laptop with nobody typing.
-Three shapes were possible: a boot flag on the normal ISO, a recorded
-input trace, or a scripted tour. The tour won on the same grounds the
-`gui` debug commands did -- it drives the real system through the real
-paths, so it cannot drift out of sync with the software it is
-demonstrating, and when it breaks it breaks visibly.
+`make demo-iso` built an ISO that booted straight into a tour scripted
+by a text file on the image (`data/wm/demo.script`, verbs in
+`apps/demo.h`): `say`/`sh`/`wait` at the console, then `gui` and
+`open`/`click`/`key` performed one step per WM iteration. Deleted
+2026-09-06 at the maintainer's request, as maintenance the feature was
+no longer earning.
 
-**It is its own ISO (`make demo-iso`) rather than a runtime toggle**, for
-one reason: a demo that can start itself by accident is a demo that
-starts during something else. The `demo` keyword is on the kernel
-command line in a grub.cfg that only that image carries.
+**Why it was built:** to show the system on a laptop with nobody typing
+at it. Of the three shapes possible -- a boot flag on the normal ISO, a
+recorded input trace, or a script -- the tour won on the grounds the
+`gui` debug commands did: it drives the real system through the real
+paths, so it cannot drift out of sync with the software it demonstrates,
+and when it breaks it breaks visibly.
 
-**The script is a FILE on the image** (`/usr/wm/demo.script`, source
-`data/wm/demo.script`), not compiled in, so the tour can be edited on a
-live USB stick with no toolchain present. Its CLI half runs at the
-console; its GUI half is performed **one step per WM iteration** from
-inside `wm_run()`'s loop, through the same `wm_debug_dispatch()` path
-the 175 GUI checks already use. That is not an implementation detail --
-driving a desktop from outside its own event loop is precisely what
-makes a scripted demo hang, and the debug console already had the
-answer.
+**Why it went: half of it had already stopped running, invisibly.**
+`demo_gui_tick()` was called from `wm_run()`'s loop, and when the
+desktop became a ring-3 process that loop moved to `userland/wm/`. The
+demo could not move with it -- `demo_load`/`demo_requested`/
+`demo_run_cli` were the KERNEL's boot path while `demo_gui_tick` was the
+WM's per-frame hook, so it had to be SPLIT first, and that split was
+deferred to a stage nobody ever did. The function was left with **zero
+callers**. So a demo boot ran its console half and then sat at an
+ordinary desktop, and every `open`/`click`/`key` line in the script was
+dead. Nothing said so, because the one test that would have noticed
+(`tools/demo_test.py`, which waits for `gfxdemo: scene 3d` -- a marker
+only those dead steps produce) was on-demand-only by standing
+instruction and so was never run again.
+
+That is the real cost being removed: not the 159 lines of `apps/demo.c`,
+but a second boot artifact, a second `grub.cfg`, a seeded data file and
+a Makefile axis, all maintained for a feature that had been broken for
+weeks with a green suite. **The lesson generalises past the demo: a
+component split across a boundary that later moves is the shape that
+rots silently, and an on-demand-only test cannot notice.**
+
+**If a tour is ever wanted again**, it should be a ring-3 program
+driving the desktop through `wm_debug_dispatch()` the way the GUI test
+tools already do -- one process, one side of the boundary, and reusing a
+path ~300 checks exercise on every run. `git log` has the original.
 
 **The live ISO stays a separate artifact from the normal one**, which
 cost a red CI to learn: a 129 MiB GRUB module took the boot smoke test
@@ -758,13 +776,13 @@ invisible.
 CPU for a debugger; that is a different thing to do with the same
 command line, not a different way to configure the machine.
 
-**`LIVE=1` and `DEMO=1` were the interesting ones to fold in.** They are
-not pure command-line axes -- each selects a different ISO and has to
-BUILD it first -- so they change the prerequisite list as well. That
-works because a command-line variable is set before the Makefile is
-parsed, so `$(if $(LIVE),live-iso,iso)` expands correctly in a
-prerequisite. A target-specific variable would not have; this is
-precisely why they were targets in the first place.
+**`LIVE=1` was the interesting one to fold in.** It is not a pure
+command-line axis -- it selects a different ISO and has to BUILD it
+first -- so it changes the prerequisite list as well. That works because
+a command-line variable is set before the Makefile is parsed, so
+`$(if $(LIVE),live-iso,iso)` expands correctly in a prerequisite. A
+target-specific variable would not have; this is precisely why it was a
+target in the first place.
 
 **`MENU=1` is the odd axis**, since GRUB's timeout is baked into
 `grub.cfg` at BUILD time rather than passed to QEMU. It derives

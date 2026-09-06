@@ -191,8 +191,8 @@ def launch_qemu_cmd(iso="toy-os.iso", disk="disk.img", serial_log="serial.log",
     # so a stale one is tested silently and PASSES. Checked here because
     # this function is the single chokepoint every GUI tool launches
     # through -- see tools/iso_guard.py. Only the ordinary ISO is
-    # guarded: `live_boot_test.py` and `demo_test.py` pass their own,
-    # which are built by separate targets and legitimately lag.
+    # guarded: `live_boot_test.py` passes its own, built by a separate
+    # target and legitimately lagging.
     #
     # WHICH MEDIUM has to be decided first, because it decides what
     # "stale" means: the disk carries GRUB and the kernel now

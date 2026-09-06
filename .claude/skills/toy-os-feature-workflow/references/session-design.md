@@ -467,8 +467,9 @@ desktop or the filesystem -- most of it invalidates older advice above.**
   `group_span(g)` answers "how big is group g"; `T3_BPG` is the stride.
   This also recovered ~127 MB on a 9 GiB disk that floor division had
   been wasting.
-- **There is a Live CD and a demo ISO**, both SEPARATE artifacts:
-  `make live-iso` / `make run LIVE=1`, `make demo-iso` / `make run DEMO=1`.
+- **There is a Live CD**, a SEPARATE artifact: `make live-iso` /
+  `make run LIVE=1`. (There was a demo ISO beside it; it was removed on
+  2026-09-06 -- `docs/decisions/build.md`.)
   The ordinary ISO carries no GRUB module on purpose -- a 129 MiB one
   took the boot smoke test from 1.6s to 7.0s and turned CI red, because
   GRUB reads the whole module off the emulated CD before the kernel
@@ -617,7 +618,7 @@ you intend to seed onto the disk.**
   the WM binary itself.
 - **`scheduler_idle()` owns the kernel's idle work** (`api/scheduler.h`).
   Any loop that is WAITING rather than working calls it -- the shell's
-  key wait, `wm.c`'s event loop, a long `cat`, the demo's timer. Do not
+  key wait, `wm.c`'s event loop, a long `cat`. Do not
   add a bare `debug_console_poll()` to a new waiting loop. The reason is
   Milestone 41: the serial debug console had no owner, it was polled by
   whichever loop happened to be running, and the WM's copy is the
