@@ -184,6 +184,12 @@ def main():
         if not res.check("the serial console answers", dbg is not None):
             return 1
 
+        # IT SHIPS DISABLED (docs/bugs.md), so the tool turns it on
+        # rather than assuming a machine that has it running.
+        dbg.send("sh service enable soundd")
+        dbg.send("sh service start soundd")
+        time.sleep(2.0)
+
         services = dbg.send("sh service list") or ""
         row = next((ln for ln in services.splitlines()
                     if ln.split()[:1] == ["soundd"]), "")
@@ -213,6 +219,24 @@ def main():
 
         # 1.5s of audio, and TCG stretch means several wall seconds.
         time.sleep(12.0)
+
+        # THEY MUST ALSO FINISH. Being audible is not the whole contract:
+        # a client whose write cursor the daemon overtakes reads "no room"
+        # forever and never exits.
+        #
+        # **THIS CHECK DOES NOT REPRODUCE THAT BUG**, and the honesty is
+        # the point: with the guard deliberately removed it stayed GREEN,
+        # because two equal 1.5s tones started together do not leave a
+        # client idle-but-running long enough to be lapped. It reproduced
+        # on the LAPTOP, with a 78s track and a short effect over it. So
+        # this is a cheap regression tripwire, not coverage -- provoking
+        # it here needs fixtures of very different lengths, which is on
+        # docs/roadmap.md.
+        ps = dbg.send("sh ps") or ""
+        res.check("both players exited instead of stalling",
+                  "aplay" not in ps,
+                  next((ln.strip() for ln in ps.splitlines()
+                        if "aplay" in ln), "") + " -- still running")
         dbg.close()
     finally:
         halt()

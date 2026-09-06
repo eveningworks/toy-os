@@ -60,6 +60,17 @@ struct snd_ctl_page {
     // gone", which is the difference between resuming and reopening.
     // Cleared by the next SYS_SND_OPEN.
     uint32_t device_gone;
+    // HOW FAR THE WRITER HAS GOT -- a DAEMON CLIENT RING only; the
+    // kernel's own stream never reads or writes it and leaves it 0.
+    //
+    // The hardware does not need this because it is free to run ahead of
+    // a starved writer: the kernel zeroes what it consumes, so overrun
+    // plays silence. A DAEMON must not, and the difference is that its
+    // client uses `hw_pos` to work out where it may write -- a consumer
+    // that overtakes the producer eventually parks exactly one chunk
+    // ahead of it, which reads as "no room" forever and stalls the
+    // client's decoder rather than merely playing quiet.
+    uint32_t wr_pos;
 };
 
 // --- the sound daemon's client rings ---------------------------------

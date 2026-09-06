@@ -56,6 +56,7 @@ static int daemon_open(void) {
     g_ctl->channels = USND_CHANNELS;
     g_ctl->ring_bytes = SND_RING_BYTES;
     g_ctl->hw_pos = 0;
+    g_ctl->wr_pos = 0;
     g_ctl->running = 0;
     g_ctl->device_gone = 0;
     // LAST, and that is the handshake: the daemon ignores a ring whose
@@ -91,6 +92,9 @@ static long daemon_write(const int16_t *pcm, long frames) {
     if (bytes > first)
         memcpy((void *)g_ring, (const uint8_t *)pcm + first, bytes - first);
     g_wr = (g_wr + bytes) % SND_RING_BYTES;
+    // PUBLISHED BEFORE `running`, so the daemon never sees a ring it is
+    // allowed to consume with a write cursor still at zero.
+    g_ctl->wr_pos = g_wr;
 
     // After the first write, as the device sink starts the engine after
     // its first: the ring is primed, so the daemon's first pass finds
@@ -108,6 +112,7 @@ static long daemon_pending(void) {
 static void daemon_flush(void) {
     if (!g_ctl) return;
     g_wr = (g_ctl->hw_pos + SND_CHUNK_BYTES) % SND_RING_BYTES;
+    g_ctl->wr_pos = g_wr;
 }
 
 static void daemon_close(void) {

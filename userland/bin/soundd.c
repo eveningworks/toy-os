@@ -153,6 +153,15 @@ static void mix_chunk(uint32_t dst) {
         struct client *c = &g_cl[i];
         if (!c->ctl || !c->ctl->running) continue;
         uint32_t src = c->ctl->hw_pos;
+        // NEVER OVERTAKE THE WRITER. The hardware may run ahead of a
+        // starved client -- the kernel zeroes what it consumed, so
+        // overrun plays silence -- but a daemon must not, because its
+        // client derives "where may I write" from `hw_pos`. Parked one
+        // chunk ahead of the writer, that reads as no room FOREVER and
+        // stalls the client's decoder instead of merely going quiet
+        // (aplay never exited; found on the laptop, not in QEMU).
+        if (src == c->ctl->wr_pos) continue; // nothing new: silence
+
         const volatile int16_t *s = c->ring + src / 2;
         for (unsigned k = 0; k < SND_CHUNK_BYTES / 2; k++)
             acc[k] = sat_add(acc[k], s[k]);

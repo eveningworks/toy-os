@@ -183,15 +183,11 @@ def main():
                   next((line.strip() for line in dmesg.splitlines()
                         if f"{devname}:" in line), f"no {devname} line"))
 
-        # THE DAEMON HOLDS THE CARD, so everything below wants it back.
-        # /tests/tone opens SYS_SND_OPEN directly and the `sound` KTESTs
-        # skip while any process holds the stream -- both deliberate, and
-        # both -EBUSY while soundd is serving. Stopping it is what WASAPI
-        # calls taking the device exclusively; docs/commands/soundd.md
-        # says so, and docs/roadmap.md carries releasing it when idle
-        # (PipeWire's suspend-on-idle), which would remove this step.
+        # Harmless while soundd ships DISABLED, and kept for the day it
+        # does not: /tests/tone opens SYS_SND_OPEN directly and the
+        # `sound` KTESTs skip while any process holds the stream, so both
+        # are -EBUSY whenever the daemon is serving.
         dbg.send("sh service stop soundd")
-        time.sleep(1.0)
 
         # The KTESTs that skip on every other boot -- 0 skipped is the
         # load-bearing half (the ahci_test lesson).

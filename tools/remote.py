@@ -58,6 +58,10 @@ OPT_ECHO, OPT_SGA, OPT_NAWS = 1, 3, 31
 DEFAULT_TELNET_PORT = 23
 DEFAULT_TFTP_PORT = 69
 
+# The rescue-kernel copy is a multi-megabyte filesystem operation, so it
+# gets a floor of its own rather than inheriting --timeout.
+ROTATE_TIMEOUT = 180.0
+
 # TFTP, RFC 1350.
 OP_RRQ, OP_WRQ, OP_DATA, OP_ACK, OP_ERROR = 1, 2, 3, 4, 5
 
@@ -649,6 +653,51 @@ def _sha256(sess, remote, timeout):
     return None
 
 
+def _verify_offline(host, tftp_port, local, want, timeout):
+    """Verify the flashed kernel WITHOUT a shell, and say what to do.
+
+    Reached when the telnet session dies after the /lib sync -- see
+    do_flash(). TFTP is a separate service and keeps working, so the
+    kernel can still be read back and checked; what cannot be done is
+    rebooting the machine, which is why this ends in an instruction
+    rather than an error.
+    """
+    print("remote: the shell went away after the /lib sync -- verifying "
+          "over TFTP instead", file=sys.stderr)
+    fd, tmp = tempfile.mkstemp(prefix="remote_verify_")
+    os.close(fd)
+    try:
+        if do_get(host, tftp_port, "/boot/boot/kernel.bin", tmp, timeout):
+            print("remote: COULD NOT READ THE KERNEL BACK. Its state is "
+                  "unknown.\nremote: /boot/boot/kernel.old still holds the "
+                  "kernel this machine\nremote: is running -- pick "
+                  "\"toy-os (previous kernel)\" in GRUB if it will not boot.",
+                  file=sys.stderr)
+            return 1
+        with open(tmp, "rb") as fh:
+            got = hashlib.sha256(fh.read()).hexdigest()
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+    if got != want:
+        print(f"remote: FLASH DID NOT VERIFY\nremote:   want {want}"
+              f"\nremote:   got  {got}\nremote: DO NOT REBOOT -- pick "
+              "\"toy-os (previous kernel)\" in GRUB if you already have.",
+              file=sys.stderr)
+        return 1
+
+    print(f"remote: flashed and verified {os.path.basename(local)} "
+          f"({os.path.getsize(local)} bytes), over TFTP")
+    print("remote: PRESS THE POWER BUTTON. The new kernel and userland are "
+          "both in place,\nremote: but this machine is running the old "
+          "kernel with the new shared\nremote: libraries, so nothing here "
+          "can reboot it. It comes back on the\nremote: new kernel.")
+    return 0
+
+
 # What `make iso` stages, and where each tree lives on the machine. The
 # kernel is only half of a build: a change to a syscall ABI struct moves
 # fields under binaries compiled against the old layout, and the failure
@@ -733,7 +782,12 @@ def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
             return 0
 
         print("remote: rotating the running kernel to /boot/boot/kernel.old")
-        sess.run("cp /boot/boot/kernel.bin /boot/boot/kernel.old", timeout)
+        # ITS OWN TIMEOUT, not --timeout. This copies ~5 MB through the
+        # guest's filesystem and took longer than the 15s default on a
+        # real laptop, which aborted the flash before it had sent a byte
+        # -- and left the rescue slot holding a partial copy.
+        sess.run("cp /boot/boot/kernel.bin /boot/boot/kernel.old",
+                 max(timeout, ROTATE_TIMEOUT))
     finally:
         sess.close()
 
@@ -754,7 +808,23 @@ def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
     if rc:
         return rc
 
-    sess = Session(host, telnet_port, timeout)
+    # THE VERIFY SESSION IS ON THE WRONG SIDE OF THE /lib SYNC, and that
+    # is not a hypothetical: the new libc.so and libuapp.so are already
+    # in place while the machine still runs the OLD kernel, so when the
+    # two disagree about an ABI struct, telnetd's child dies the moment
+    # it spawns and every later connection is accepted and closed. The
+    # flash itself is fine at that point -- the kernel reached /boot --
+    # but nothing can be asked about it and nothing can reboot it.
+    #
+    # So a dead session here falls back to reading the kernel BACK over
+    # TFTP, which is a different service and keeps working, and says
+    # plainly that the machine needs its power button. Failing with
+    # "connection closed" instead sent two sessions looking for a fault
+    # that was not there.
+    try:
+        sess = Session(host, telnet_port, timeout)
+    except (TimeoutError, EOFError, OSError):
+        return _verify_offline(host, tftp_port, local, want, timeout)
     try:
         sess.run("sync", timeout)
         got = _sha256(sess, "/boot/boot/kernel.bin", timeout)
@@ -773,6 +843,8 @@ def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
                 sess.run("reboot", 3.0)
             except (TimeoutError, EOFError, OSError):
                 pass          # the machine going away IS the reply
+    except (TimeoutError, EOFError, OSError):
+        return _verify_offline(host, tftp_port, local, want, timeout)
     finally:
         try:
             sess.close()

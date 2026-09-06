@@ -1,0 +1,13 @@
+# The system sound daemon: it owns the card and mixes every program
+# into it, so two can be audible at once.
+#
+# SHIPS DISABLED, like telnetd and tftpd, for a concrete reason rather
+# than caution: a client STALLS on the real test laptop while every
+# emulated card passes (docs/bugs.md). `service enable soundd`.
+#
+# The whole file must fit in 512 bytes, comments included.
+Name=soundd
+Description=Mix every program's audio into the one sound stream
+Exec=/bin/soundd
+Restart=on-failure
+Ready=notify

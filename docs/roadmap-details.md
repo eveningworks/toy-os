@@ -4724,3 +4724,41 @@ per-directory boundary, `lib/tosh.c` and `bin/ntpd.c` the only mixes),
 `gui move` vs `hover_frames()` (the five raw `gui move` sites all
 deliberately want the one-iteration semantics), `gui_flow.py`'s pixel
 constants, the single `run` target, and the single version source.
+
+## An audio client STALLS instead of finishing while `soundd` mixes it, on real hardware only
+
+On the Lenovo Yoga 500-15IBD, kernel built 2026-09-06:
+
+    service enable soundd        # it ships disabled
+    reboot
+    aplay /usr/share/sounds/chime.wav
+
+The header prints (`wav, PCM 16-bit stereo 44100 Hz, 0.420 s`), the
+sound plays, and the process never exits -- `ps` shows it
+`block(timer)` indefinitely. `service stop soundd` and the same command
+returns immediately, which is the control.
+
+**Four runs in four, and it does not need two clients**: it was first
+seen with a 78 s track and a short effect over it (both `aplay`
+processes left alive), then reproduced with a single short file and
+nothing else playing.
+
+**It does not reproduce in QEMU.** `tools/soundd_test.py` passes 9 of 9
+on `--card ac97` and on `--card hda`, including a check that both
+players exited rather than stalling -- and that check was confirmed
+useless for this bug by a positive control: with the daemon's overtake
+guard deliberately removed it stayed green, because two equal 1.5 s
+tones started together never leave a client idle-but-running long
+enough. Provoking it in emulation likely needs fixtures of very
+different lengths, and may need real hardware timing regardless.
+
+**One theory tried and withdrawn.** The daemon advanced each client's
+read position once per mixed chunk whether or not the client had
+written anything, so the consumer could overtake the producer and park
+one chunk ahead of it -- which the client reads as "no room" forever.
+That is a real defect and the fix (a published `wr_pos` in the client
+ring, `abi/sound_abi.h`) is kept on its own merits, but it did NOT fix
+this: the stall reproduced identically on the flashed fix. So the cause
+is not established, and the next step is to instrument the daemon's own
+cursors (rate-limited, under a line a second -- CLAUDE.md's probe rule)
+rather than to reason about them a third time.

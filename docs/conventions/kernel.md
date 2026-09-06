@@ -3406,7 +3406,7 @@ there is no `ftruncate` and POSIX's pair is not yet expressible; the
 call is `sys_shm_open()` in `rt/sys.h` rather than a libc function whose
 arguments would mean something else.
 
-## SOUND IS MIXED BY A SERVICE, AND THE CARD IS STILL EXCLUSIVE
+## SOUND IS MIXED BY A SERVICE THAT SHIPS DISABLED, AND THE CARD IS STILL EXCLUSIVE
 
 `/bin/soundd` holds the machine's one PCM stream and mixes every client
 into it, so two programs can be audible at once. A client is any
@@ -3421,7 +3421,13 @@ purpose, so anything driving them needs `service stop soundd` first --
 `tools/audio_test.py` does exactly that and says why.
 
 **Nothing moved into the kernel.** The kernel's contract is unchanged
-and it still never mixes; the daemon is an ordinary ring-3 service with
-a descriptor in `data/etc/services.d/`, `Restart=on-failure` and
-`Ready=notify`. It exits 0 on a machine with no sound card, so such a
-machine leaves it `exited` rather than crash-looping.
+and it still never mixes; the daemon is an ordinary ring-3 service,
+`Restart=on-failure` and `Ready=notify`. It exits 0 on a machine with no
+sound card, so such a machine leaves it `exited` rather than
+crash-looping.
+
+**IT SHIPS DISABLED** (`data/usr/share/services/soundd`, not
+`data/etc/services.d/`) because a client stalls instead of finishing
+while it mixes, on real hardware and not in QEMU -- see `docs/bugs.md`.
+So the DEFAULT machine still has the one-exclusive-stream behaviour, and
+`service enable soundd` is the opt-in.
