@@ -28,6 +28,7 @@
 #include "pic.h"
 #include "input.h"
 #include "clocksource.h"
+#include "usb_trace.h"
 #include "klog.h"
 #include "kfmt.h"
 #include "string.h"
@@ -758,8 +759,13 @@ static int cmd_submit(uint64_t param, uint32_t control, uint8_t *out_slot) {
     g_cmd_done.trb = at;
     ring_doorbell(0, 0);
 
-    if (wait_completion(&g_cmd_done, "command") < 0) return -XHCI_CC_INVALID - 1;
+    if (wait_completion(&g_cmd_done, "command") < 0) {
+        usb_trace(USB_TR_CMD, 0, 0, XHCI_TRB_TYPE(control), 0xFFu); // timeout
+        return -XHCI_CC_INVALID - 1;
+    }
     if (out_slot) *out_slot = g_cmd_done.slot;
+    usb_trace(USB_TR_CMD, 0, g_cmd_done.slot,
+              XHCI_TRB_TYPE(control), g_cmd_done.code);
     return (int)g_cmd_done.code;
 }
 
@@ -932,8 +938,19 @@ int xhci_control(uint8_t slot, const uint8_t setup[8],
 
     if (wait_completion(&g_xfer_done, "control transfer") < 0) {
         g_xfer_done.ring_lo = g_xfer_done.ring_hi = 0;
+        // The first four setup bytes identify the request
+        // (bmRequestType, bRequest, wValue) -- enough to say WHICH
+        // request went unanswered, which is the whole question.
+        usb_trace(USB_TR_CTRL, 0, slot,
+                  (uint32_t)setup[0] | ((uint32_t)setup[1] << 8) |
+                  ((uint32_t)setup[2] << 16) | ((uint32_t)setup[3] << 24),
+                  0xFFu);
         return -1;
     }
+    usb_trace(USB_TR_CTRL, 0, slot,
+              (uint32_t)setup[0] | ((uint32_t)setup[1] << 8) |
+              ((uint32_t)setup[2] << 16) | ((uint32_t)setup[3] << 24),
+              g_xfer_done.code);
     if (g_xfer_done.code != XHCI_CC_SUCCESS &&
         g_xfer_done.code != XHCI_CC_SHORT_PACKET) {
         // A STALL is a legitimate answer to a request the device does
@@ -1616,6 +1633,10 @@ static void reset_port(uint32_t p, int force) {
 #define ATTACH_ATTEMPTS 3
 
 static void attach_root_port(uint32_t p) {
+    // One mark for the whole attach, so the dump carries every attempt
+    // -- the interesting comparison is what the retry did DIFFERENTLY,
+    // which a per-attempt mark would throw away.
+    uint32_t trace_mark = usb_trace_mark();
     for (int attempt = 0; attempt < ATTACH_ATTEMPTS; attempt++) {
         // THE RETRY FORCES THE RESET, and until 2026-09-06 it did not.
         // reset_port() returns early on a port that already reports PED
@@ -1650,6 +1671,7 @@ static void attach_root_port(uint32_t p) {
                         p + 1, speed_name(g_hc.ports[p].speed),
                         g_hc.ports[p].enabled ? "enabled" : "not enabled", sc);
         } else {
+            usb_trace(USB_TR_PORT, (uint8_t)(p + 1), 0, sc, (uint32_t)attempt);
             klog_printf("usb: port %u: retry %d %s, %s (portsc 0x%x)%s\n",
                         p + 1, attempt, speed_name(g_hc.ports[p].speed),
                         g_hc.ports[p].enabled ? "enabled" : "not enabled", sc,
@@ -1677,11 +1699,15 @@ static void attach_root_port(uint32_t p) {
         // The speed rides the failure line too, so one grep for the
         // give-up carries what the device negotiated without needing
         // the surrounding lines -- which a truncated log may not have.
+        int gave_up = attempt + 1 >= ATTACH_ATTEMPTS;
         klog_printf("usb: port %u: %s (at %s)\n", p + 1,
-                    attempt + 1 >= ATTACH_ATTEMPTS
-                        ? "enumeration GAVE UP"
-                        : "enumeration failed -- resetting and retrying",
+                    gave_up ? "enumeration GAVE UP"
+                            : "enumeration failed -- resetting and retrying",
                     speed_name(g_hc.ports[p].speed));
+        // ONLY ON THE WAY OUT. A retry that is about to try again does
+        // not need its history printed; a port being lost does, and it
+        // is the one case where the log lines are worth their space.
+        if (gave_up) usb_trace_dump(trace_mark, (uint8_t)(p + 1));
     }
 }
 
@@ -1702,6 +1728,13 @@ static void attach_root_port(uint32_t p) {
 //
 // Either answer is worth having, which is why this is a diagnostic and
 // not a fix.
+// The controller's own status word, for usb_trace_dump() -- which must
+// be able to say "the controller halted" without reaching into g_hc.
+uint32_t xhci_usbsts(void) {
+    if (!g_hc.present) return 0;
+    return mr32(g_hc.op, XHCI_USBSTS);
+}
+
 int usb_diag_reset_port(unsigned port) {
     if (!g_hc.running) return 0;
     if (port < 1 || port > g_hc.max_ports || port > XHCI_MAX_PORTS) return 0;
