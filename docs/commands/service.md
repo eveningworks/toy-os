@@ -31,7 +31,7 @@ A line reads:
 
     # NAME             STATE       PID  FAILS  READY    EXEC
     toywm              running       2      0  yes      /bin/wm/system/toywm
-    dhcp               done          0      0  -        /bin/dhcp
+    tmpfs              done          0      0  -        /bin/mount
 
 `STATE` is one word for why the service is where it is: `running`,
 `stopped` (somebody asked for it to be down), `exited` (it returned 0

@@ -45,7 +45,8 @@ gets its ONE start -- the key says what happens when it EXITS, not
 whether it runs).
 
 **`Restart=no` IS THE ONE-SHOT**, systemd's `Type=oneshot`: something
-that does a job and is finished, like `/bin/dhcp` asking for an address.
+that does a job and is finished, like `tmpfs` mounting the scratch
+directory.
 `service` reports it as `done` or `failed` by its exit code, because a
 one-shot is down either way and the code is the only thing left that
 says whether it worked. Nothing is ordered after a one-shot yet -- and

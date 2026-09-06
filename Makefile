@@ -1699,13 +1699,13 @@ QEMU_USB = $(if $(filter xhci xhci+mouse xhci+hub,$(USB_KIND)),\
 #
 # `NET=both` is the multi-NIC configuration, and it is the shape no other
 # test here boots -- the same reason tools/multidisk_test.py exists. Both
-# cards are leased an address by /bin/dhcp at boot, each from its own
+# cards are leased an address by /bin/netd at boot, each from its own
 # SLIRP network.
 #
 # `NET=quiet` IS A SEGMENT WITH NOBODY ON IT -- a socket netdev listening
 # for a peer that never connects. It is the one network SLIRP cannot be,
 # because SLIRP always answers DHCP, and it is therefore the only way to
-# SEE the link-local fallback (RFC 3927) that /bin/dhcp reaches for when
+# SEE the link-local fallback (RFC 3927) that /bin/netd reaches for when
 # nothing offers a lease. `NET=none` is a different thing: no card at all.
 #
 # On a SLIRP network the guest is leased 10.0.2.15, the gateway and DNS

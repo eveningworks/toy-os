@@ -22,7 +22,7 @@ moving an adapter to a different socket renames nothing. Where it
 currently sits is REPORTED beside it (`at pci3.0`) rather than encoded
 into the name, which is where systemd's `enp3s0` scheme was deliberately
 not followed. **No device gets an address from the kernel** — one comes
-from `/bin/dhcp`, which init runs at boot and which takes every card
+from `/bin/netd`, which init runs at boot and which takes every card
 that has none, or from this command.
 
 A field left out is left alone rather than cleared, so

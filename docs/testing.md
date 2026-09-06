@@ -214,10 +214,10 @@ it. `NET=virtio` is the only way to reach
 nothing else boots; `NET=none` is a machine with no card, which is what
 makes "no network device" a tested state rather than an assumption.
 `NET=quiet` is the one SLIRP cannot be -- a socket netdev listening for
-a peer that never connects, so nothing answers DHCP and `/bin/dhcp`
+a peer that never connects, so nothing answers DHCP and `/bin/netd`
 falls through to its RFC 3927 link-local claim; it is the only way to
 watch that happen on a real boot. The
-guest is leased 10.0.2.15 at boot (init's `dhcp` one-shot; nothing
+guest is leased 10.0.2.15 at boot (init starts `netd`; nothing
 assigns an address, so it arrives about a second AFTER the console
 prompt does and a test that pings sooner is driving an unconfigured
 machine), the gateway is 10.0.2.2, and **SLIRP answers ICMP to the

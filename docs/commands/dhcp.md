@@ -40,10 +40,13 @@ Linux's `SO_BINDTODEVICE`, and the reason `bind` takes a device at all:
 a client must broadcast out of a *named* interface before any interface
 has an address to route by.
 
-**It runs at boot**, as init's `dhcp` one-shot
-(`data/etc/services.d/dhcp`). `Restart=no`, because it asks once and
-exits; `service` reports it as `done` or `failed`, which is how a
-machine answers "did I get an address?".
+**It does NOT run at boot.** `/bin/netd` does, and holds a lease per
+card; this is the tool for reaching in by hand — re-leasing one card,
+or asking again after unplugging something. There was a `dhcp` one-shot
+descriptor until 2026-09-06, and on a machine that still carried one it
+raced `netd` for port 68 and logged `dhcp: bind: device or resource
+busy` on the boot it lost. Only one program may hold the client port,
+so only one of them may be a service.
 
 ## No server is not a failure
 
@@ -198,17 +201,21 @@ worked, `host` for what the nameserver is for, and
 
 ## Its diagnostics go to the kernel log when it is a service
 
-A service started by init has **no stdout anybody reads**, so every
-`printf` here reached nothing — which is how a boot that fell back to
-link-local left no record of why, and why the first diagnosis of it had
-to be done by adding up timings from `dmesg`. It writes to fd 2 (the
+A service started by init used to have **no stdout anybody reads**, so
+every `printf` here reached nothing — which is how a boot that fell back
+to link-local left no record of why, and why the first diagnosis of it
+had to be done by adding up timings from `dmesg`. It writes to fd 2 (the
 kernel log) when stdout is not a terminal, and to the terminal when it
 is, so `dmesg` carries the boot story and a prompt still shows you the
-answer.
+answer. (A service's stdout **is** captured now — `SPAWN_FD_LOG`, tagged
+per service and persisted by `logd` — so a program written today would
+not need the fd 2 trick. This one keeps it because `netd`, not this,
+is what runs at boot.)
 
-## The service descriptor has a size budget
+## A descriptor has a size budget
 
-`/etc/services.d/dhcp` — like every descriptor — is read through
+This applies to any descriptor, and it was found on this program's:
+`/etc/services.d/<name>` is read through
 `etc_config.c`'s buffer, **comments included**, and a file over that has
 its last keys silently ignored. It happened while writing the comment
 that used to explain all of the above, which is why the reasoning lives
@@ -222,6 +229,6 @@ path's buffer and never fires for a read. They are the same number now,
 and `tools/check_config_size.py` fails the build before either can bite
 again.
 
-**And arguments go in `Args=`, not on `Exec=`.** `Exec=/bin/dhcp -k` is
+**And arguments go in `Args=`, not on `Exec=`.** `Exec=/bin/dhcp -k` was
 reported as `dhcp failed to start`; the key that carries them is
 `Args=`, as `tftpd`'s descriptor has always shown.
