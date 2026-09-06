@@ -127,13 +127,23 @@ const struct usb_device_info *usb_device_at(int index);
 // port scan; the split is the seam xhci.h describes. Cleans its slot up
 // and retries once internally -- a real low/full-speed device is
 // entitled to fumble its first descriptor read, and Linux retries too.
-int usb_enumerate_port(uint8_t port, uint8_t speed);
+// Burn `ms` on whichever clock actually advances here -- the
+// clocksource when it is deadline-capable, the PIT otherwise. Shared so
+// the enumeration layer can pace a device without a second
+// implementation of the same choice.
+void xhci_delay_ms(uint32_t ms);
+
+// `patient` inserts the pauses a slow device needs (see
+// usb_enum.c's read_configuration). It is 0 on the first attempt and 1
+// on a retry: fast when the device is well, careful when it is not.
+int usb_enumerate_port(uint8_t port, uint8_t speed, int patient);
 
 // The same, for a device behind a hub: the route string and TT fields
 // come from the hub driver, which is the only caller that has them.
 int usb_enumerate_device(uint8_t root_port, uint8_t parent_port,
                          uint32_t route, uint8_t depth, uint8_t speed,
-                         uint8_t parent_slot, uint8_t tt_slot, uint8_t tt_port);
+                         uint8_t parent_slot, uint8_t tt_slot, uint8_t tt_port,
+                         int patient);
 
 // Tears down every device on `root_port` -- the device itself and, when
 // it is a hub, everything behind it. Called from the deferred detach

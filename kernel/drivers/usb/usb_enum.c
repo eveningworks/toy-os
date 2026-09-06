@@ -181,12 +181,33 @@ int usb_parse_config_interfaces(const uint8_t *cfg, uint32_t total,
 // so a device claiming more than 4 KiB is refused rather than allowed to
 // overrun.
 static int read_configuration(uint8_t slot, uint8_t index,
-                              uint32_t *out_total, uint8_t *out_value) {
+                              uint32_t *out_total, uint8_t *out_value,
+                              int patient) {
     int got = get_descriptor(slot, DESC_CONFIG, index, 0, g_desc_buf, 9);
     if (got < 9) return 0;
     uint32_t total = (uint32_t)(g_desc_buf[2] | ((uint32_t)g_desc_buf[3] << 8));
     if (total < 9 || total > sizeof g_desc_buf) return 0;
     if (out_value) *out_value = g_desc_buf[5];
+
+    // A PAUSE BETWEEN THE TWO GET CONFIGURATION REQUESTS, on a retry.
+    //
+    // Linux carries this as USB_QUIRK_DELAY_INIT plus a 100 ms sleep
+    // between exactly these two requests, added for the Logitech HD Pro
+    // C920 and C930e -- webcams, which is what makes it interesting
+    // here: every device this OS repeatedly loses at
+    // `configuration N unreadable` is a webcam too (a Bison 5986:0670
+    // on one laptop, a SuYin 064e:9700 on the other). Same request,
+    // same class of device, same symptom.
+    //
+    // WHERE WE DIFFER FROM LINUX, deliberately: Linux gates it behind a
+    // per-device quirk table because 100 ms on every device on every
+    // boot is a real cost, and toy-os has no quirk table and does not
+    // want one. Instead the pause is on the RETRY -- the first attempt
+    // stays fast, and a device that has already failed once is asked
+    // again slowly. That gets the quirk's benefit with none of its cost
+    // on a healthy boot, and needs no list of device ids to maintain.
+    if (patient) xhci_delay_ms(100);
+
     got = get_descriptor(slot, DESC_CONFIG, index, 0, g_desc_buf, (uint16_t)total);
     if (got < (int)total) total = (uint32_t)(got < 0 ? 0 : got);
     if (out_total) *out_total = total;
@@ -231,16 +252,17 @@ static int configuration_is_driveable(const uint8_t *cfg, uint32_t total,
 // wrong here is a device that used to work and stops, which is why the
 // rule is "only when index 0 offers nothing".
 static uint8_t pick_configuration(uint8_t slot, uint8_t configs,
-                                  uint8_t port, uint16_t vid, uint16_t pid) {
+                                  uint8_t port, uint16_t vid, uint16_t pid,
+                                  int patient) {
     if (configs <= 1) return 0;
 
     uint32_t total = 0;
-    if (read_configuration(slot, 0, &total, 0) &&
+    if (read_configuration(slot, 0, &total, 0, patient) &&
         configuration_is_driveable(g_desc_buf, total, vid, pid))
         return 0;
 
     for (uint8_t i = 1; i < configs && i < 8; i++) {
-        if (!read_configuration(slot, i, &total, 0)) continue;
+        if (!read_configuration(slot, i, &total, 0, patient)) continue;
         if (!configuration_is_driveable(g_desc_buf, total, vid, pid)) continue;
         klog_printf("usb: port %u: %u configurations, choosing %u "
                     "(the first this build can drive)\n", port, configs, i);
@@ -262,7 +284,8 @@ static struct usb_device_info *dev_alloc(void) {
 // from nothing instead of from a wedged half-enumeration.
 int usb_enumerate_device(uint8_t root_port, uint8_t parent_port,
                          uint32_t route, uint8_t depth, uint8_t speed,
-                         uint8_t parent_slot, uint8_t tt_slot, uint8_t tt_port) {
+                         uint8_t parent_slot, uint8_t tt_slot, uint8_t tt_port,
+                         int patient) {
     struct usb_device_info *d = dev_alloc();
     if (!d) return -1;
 
@@ -313,11 +336,11 @@ int usb_enumerate_device(uint8_t root_port, uint8_t parent_port,
     // allowed to overrun.
     uint8_t configs = g_desc_buf[17];      // bNumConfigurations
     uint8_t pick = pick_configuration((uint8_t)slot, configs, parent_port,
-                                      d->vendor_id, d->product_id);
+                                      d->vendor_id, d->product_id, patient);
 
     uint32_t total = 0;
     uint8_t cfg_value = 0;
-    if (!read_configuration((uint8_t)slot, pick, &total, &cfg_value)) {
+    if (!read_configuration((uint8_t)slot, pick, &total, &cfg_value, patient)) {
         klog_printf("usb: port %u: configuration %u unreadable\n",
                     parent_port, pick);
         xhci_disable_slot((uint8_t)slot);
@@ -405,8 +428,8 @@ int usb_enumerate_device(uint8_t root_port, uint8_t parent_port,
     return (int)(d - g_devs);
 }
 
-int usb_enumerate_port(uint8_t port, uint8_t speed) {
-    return usb_enumerate_device(port, port, 0, 0, speed, 0, 0, 0);
+int usb_enumerate_port(uint8_t port, uint8_t speed, int patient) {
+    return usb_enumerate_device(port, port, 0, 0, speed, 0, 0, 0, patient);
 }
 
 // --- detach -----------------------------------------------------------

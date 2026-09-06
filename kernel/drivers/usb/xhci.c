@@ -417,7 +417,7 @@ static void walk_xecp(uint32_t hcc1) {
 // the pit_ticks() loop there could never end. The PIT path is kept for
 // a machine whose clocksource cannot be trusted with a deadline, and
 // there it carries the old precondition -- interrupts on.
-static void xhci_delay_ms(uint32_t ms) {
+void xhci_delay_ms(uint32_t ms) {
     if (clocksource_deadline_capable()) {
         uint64_t end = clocksource_now_ns() + (uint64_t)ms * 1000000ull;
         while (clocksource_now_ns() < end) { }
@@ -1597,8 +1597,26 @@ static void reset_port(uint32_t p, int force) {
 // descriptor read (Linux retries and re-resets for the same reason),
 // and a failed attempt disables its slot, so the retry starts from
 // nothing rather than from a device stuck mid-enumeration.
+// THREE ATTEMPTS, NOT TWO, and the third exists on a measurement rather
+// than on principle. 2026-09-06, one boot on the Lenovo: port 5's
+// control transfer timed out on attempt 0 and the device enumerated on
+// attempt 1, while port 4 timed out on BOTH and was lost -- so the loop
+// gave up at exactly the point where a device might still have come
+// back. Linux retries port initialisation several times for the same
+// reason. Every failure measured on these machines is the same shape: a
+// device that does not answer GET_DESCRIPTOR(CONFIG) within a second
+// (docs/bugs.md), which is a device to ask again rather than a device
+// that is not there.
+//
+// WHAT IT COSTS, since this is on the boot path: one more 1000 ms
+// timeout per port that is going to be lost anyway. A boot losing three
+// devices pays three extra seconds. That is the trade -- boot time on a
+// bad boot against a device on a recoverable one -- and it is worth
+// re-measuring if the failure rate ever drops.
+#define ATTACH_ATTEMPTS 3
+
 static void attach_root_port(uint32_t p) {
-    for (int attempt = 0; attempt < 2; attempt++) {
+    for (int attempt = 0; attempt < ATTACH_ATTEMPTS; attempt++) {
         // THE RETRY FORCES THE RESET, and until 2026-09-06 it did not.
         // reset_port() returns early on a port that already reports PED
         // -- which, after attempt 0's own successful reset, is every
@@ -1632,8 +1650,8 @@ static void attach_root_port(uint32_t p) {
                         p + 1, speed_name(g_hc.ports[p].speed),
                         g_hc.ports[p].enabled ? "enabled" : "not enabled", sc);
         } else {
-            klog_printf("usb: port %u: retry %s, %s (portsc 0x%x)%s\n",
-                        p + 1, speed_name(g_hc.ports[p].speed),
+            klog_printf("usb: port %u: retry %d %s, %s (portsc 0x%x)%s\n",
+                        p + 1, attempt, speed_name(g_hc.ports[p].speed),
                         g_hc.ports[p].enabled ? "enabled" : "not enabled", sc,
                         // Called out rather than left to be diffed: a
                         // speed that CHANGES across a reset is the chirp
@@ -1644,7 +1662,10 @@ static void attach_root_port(uint32_t p) {
                             ? "  <- SPEED CHANGED" : "");
         }
         if (!g_hc.ports[p].enabled) return;
-        if (usb_enumerate_port((uint8_t)(p + 1), g_hc.ports[p].speed) >= 0)
+        // `attempt` is the patience flag too: the first try is fast,
+        // and a device that has already failed is asked again slowly.
+        if (usb_enumerate_port((uint8_t)(p + 1), g_hc.ports[p].speed,
+                               attempt) >= 0)
             return;
         // THE TWO OUTCOMES MUST NOT SHARE A PREFIX. "enumeration
         // failed -- resetting and retrying" is a device that may still
@@ -1657,8 +1678,9 @@ static void attach_root_port(uint32_t p) {
         // give-up carries what the device negotiated without needing
         // the surrounding lines -- which a truncated log may not have.
         klog_printf("usb: port %u: %s (at %s)\n", p + 1,
-                    attempt ? "enumeration GAVE UP"
-                            : "enumeration failed -- resetting and retrying",
+                    attempt + 1 >= ATTACH_ATTEMPTS
+                        ? "enumeration GAVE UP"
+                        : "enumeration failed -- resetting and retrying",
                     speed_name(g_hc.ports[p].speed));
     }
 }
@@ -1729,7 +1751,10 @@ static void diag_reset_port(uint32_t p) {
                 g_hc.ports[p].enabled ? "enabled" : "not enabled", sc);
     if (!g_hc.ports[p].connected || !g_hc.ports[p].enabled) return;
 
-    int rc = usb_enumerate_port((uint8_t)port, g_hc.ports[p].speed);
+    // PATIENT: a forced reset is a diagnostic on a device that has
+    // already misbehaved, so there is nothing to be gained by being
+    // quick about it.
+    int rc = usb_enumerate_port((uint8_t)port, g_hc.ports[p].speed, 1);
     klog_printf("usb: port %u: forced re-enumeration %s\n", port,
                 rc >= 0 ? "SUCCEEDED" : "FAILED");
 }

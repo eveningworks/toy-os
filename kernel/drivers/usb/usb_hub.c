@@ -150,9 +150,11 @@ static void hub_attach_port(struct usb_hub *h, uint8_t port) {
             tt_slot = h->slot;
             tt_port = port;
         }
+        // `attempt` doubles as the patience flag, exactly as the root
+        // port's loop uses it: fast first, careful once it has failed.
         if (usb_enumerate_device(h->root_port, port, route,
                                  (uint8_t)(h->depth + 1), speed,
-                                 h->slot, tt_slot, tt_port) >= 0)
+                                 h->slot, tt_slot, tt_port, attempt) >= 0)
             return;
         klog_printf("usb: hub slot %u port %u: enumeration failed%s\n",
                     h->slot, port, attempt ? "" : " -- retrying");
