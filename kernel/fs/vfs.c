@@ -23,6 +23,7 @@
 #include "fs.h"
 #include "fs_ops.h"
 #include "mount.h"
+#include "tmppath.h"
 #include "block.h"
 #include "ata.h"
 #include "kfmt.h"    // klog_printf
@@ -267,10 +268,15 @@ int fs_format_backend(const char *name) {
 // left the directories missing until the next reboot.
 static void ensure_layout(void) {
     fs_mkdir("/etc");
-    fs_mkdir("/tmp");
+    // THE COMPILED DEFAULTS, not the settings. This pass runs before
+    // /etc can be read -- it is what creates /etc -- so it cannot ask
+    // where scratch is configured to be. storage_config_init() makes
+    // the configured ones once it has read them (INIT_CONFIG, after
+    // INIT_FS), which is the second half of the same job.
+    fs_mkdir(TMP_DIR_DEFAULT);
     fs_mkdir("/var");
-    fs_mkdir("/var/tmp");
-    fs_mkdir("/run");
+    fs_mkdir(TMP_VARDIR_DEFAULT);
+    fs_mkdir(TMP_RUNDIR);
     fs_mkdir("/boot");
     fs_mkdir("/mnt");
     // Where a config FILE declares itself -- one descriptor per file,

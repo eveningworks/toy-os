@@ -246,6 +246,7 @@ everything libc-shaped is waiting on it. Full plan and staging:
 - [ ] AF_UNIX sockets, the portable spelling of the same thing -- what ported software expects
 - [ ] Raise `PIPE_MAX` above its kernel-wide 8, which bounds how many clients any daemon can have
 - [ ] POSIX `shm_open(3)` in tolibc, which needs `ftruncate` on an shm fd -- a size is fixed at creation today
+- [ ] `tmpfile()` and `mkstemp()` in tolibc, so a caller that does not care where scratch goes never names a path
 - [x] ~~A real C library -- staged in `docs/libc-design.md`~~ BUILT, all stages -- the proof ran twice (cJSON, then Doom)
 - [x] ~~FAT16/FAT32 driver -- `/boot` readable from inside toy-os~~ done -- FAT32 only, read-write; see the FAT32 section
 - [ ] `g_next_kernel_rsp` reentrancy fixed properly

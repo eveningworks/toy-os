@@ -16,8 +16,15 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <string.h>
+#include "tmppath.h"
 
-#define PATH "/var/tmp/fsync_test.bin"  /* durability needs a real device */
+// TMP_PERSISTENT: durability is the subject, and a ramfs cannot have it.
+static const char *p_path(void) {
+    static char p[64];
+    if (!p[0]) tmppath(p, sizeof p, TMP_PERSISTENT, "fsync_test.bin");
+    return p;
+}
+#define PATH p_path()
 #define N 8192
 
 int main(void) {

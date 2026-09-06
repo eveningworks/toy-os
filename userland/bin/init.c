@@ -79,6 +79,7 @@
 #include "syscall_abi.h" // struct sys_dirent
 #include <fcntl.h>
 #include <unistd.h>
+#include "tmppath.h"
 
 #define SERVICES_DIR   "/etc/services.d"
 #define TARGET_SETTING "system.default_target"
@@ -114,8 +115,8 @@
 // /run is not emptied at boot, so a request left by a machine that lost
 // power would otherwise be obeyed by the next boot: init deletes the
 // control file at startup for that reason.
-#define CONTROL_PATH   "/run/init.ctl"
-#define STATUS_PATH    "/run/init.status"
+#define CONTROL_PATH   TMP_RUNDIR "/init.ctl"
+#define STATUS_PATH    TMP_RUNDIR "/init.status"
 
 // Sixteen, not eight: ordering only means anything with several
 // services, and the table is static rather than on the stack, so the
@@ -666,11 +667,45 @@ static void service_failed(struct service *s) {
     s->due_ms = now_ms() + backoff_ms(s->fast_failures);
 }
 
+// %T and %V into the configured directories; every other character is
+// copied through. A specifier that would not fit is dropped along with
+// the rest of the line rather than half-written -- the same rule every
+// formatter here follows -- and the caller then spawns with the raw
+// text, which fails visibly instead of silently naming the wrong path.
+static const char *expand_specifiers(const char *in, char *out, unsigned cap) {
+    unsigned o = 0;
+    for (unsigned i = 0; in[i]; i++) {
+        if (in[i] == '%' && (in[i + 1] == 'T' || in[i + 1] == 'V')) {
+            const char *dir = tmpdir_for(in[i + 1] == 'V' ? TMP_PERSISTENT
+                                                          : TMP_VOLATILE);
+            for (unsigned k = 0; dir[k]; k++) {
+                if (o + 1 >= cap) return in;
+                out[o++] = dir[k];
+            }
+            i++;
+            continue;
+        }
+        if (o + 1 >= cap) return in;
+        out[o++] = in[i];
+    }
+    out[o] = '\0';
+    return out;
+}
+
 static void start_service(struct service *s) {
     s->started_once = 1;
     s->last_exit = 0;
 
-    int pid = sys_spawn(s->exec, s->args[0] ? s->args : 0, -1);
+    // SPECIFIERS, expanded here rather than baked into the descriptor:
+    // %T is the volatile scratch directory and %V the persistent one,
+    // which are systemd's letters for exactly these two categories.
+    // Without this the tmpfs service would carry a literal path and
+    // stop agreeing with `storage.tmpdir` the moment anyone changed it
+    // -- the mount would be in one place and every caller looking in
+    // another.
+    char args[SVC_ARGS_MAX];
+    const char *use = s->args[0] ? expand_specifiers(s->args, args, sizeof args) : 0;
+    int pid = sys_spawn(s->exec, use, -1);
     if (pid > 0) {
         s->pid = pid;
         s->started_ms = now_ms();

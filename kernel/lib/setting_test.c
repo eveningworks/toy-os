@@ -15,6 +15,10 @@
 // and "it was accepted" are indistinguishable.
 
 #include "ktest.h"
+#include "tmppath.h"
+#include "klog.h"
+#include "kfmt.h"
+#include "fs.h"
 #include "setting.h"
 #include "setting_abi.h"
 #include "etc_config.h"
@@ -27,7 +31,20 @@
 #include "gfx.h"
 #include "font_config.h"
 
-#define SCRATCH_FILE "/var/tmp/ktest_setting.conf"
+// Built from the configured directory rather than spelled out
+// (api/tmppath.h), so moving scratch is a setting rather than a grep.
+static const char *scratch_file_path(void) {
+    static char p[FS_PATH_MAX];
+    if (!p[0]) tmppath(p, sizeof p, TMP_PERSISTENT, "ktest_setting.conf");
+    return p;
+}
+#define SCRATCH_FILE scratch_file_path()
+static const char *scratch2_file_path(void) {
+    static char p[FS_PATH_MAX];
+    if (!p[0]) tmppath(p, sizeof p, TMP_PERSISTENT, "ktest_setting2.conf");
+    return p;
+}
+#define SCRATCH2_FILE scratch2_file_path()
 #define SCRATCH_NAME "ktest_colour"
 
 static const char *const g_scratch_choices[] = { "amber", "green", "white" };
@@ -67,11 +84,15 @@ static const char *scratch_unavailable(void) {
     return g_scratch_unavailable ? "this machine has no such hardware" : 0;
 }
 
-static const struct setting g_scratch = {
+// NOT const, and `.file` is filled in by scratch_begin(): the scratch
+// path is built from a setting now, so it is not a compile-time
+// constant. What it points at is scratch_file_path()'s own static
+// buffer, which outlives the registration -- a stack local here would
+// leave the registry holding a dangling pointer (api/setting.h).
+static struct setting g_scratch = {
     .name   = SCRATCH_NAME,
     .label  = "Scratch colour",
     .type   = SETTING_TYPE_ENUM,
-    .file   = SCRATCH_FILE,
     .choice = scratch_choice,
     .get    = scratch_get,
     .apply  = scratch_apply,
@@ -82,12 +103,22 @@ static const struct setting g_scratch = {
 // establish its own preconditions rather than inherit them from
 // whatever ran before (ktest.h) -- and a `ktest setting` run of one
 // test has to work as well as a run of all of them.
+static struct setting g_scratch2;   // defined below; scratch_begin() fills its .file
+
 static void scratch_begin(void) {
     setting_unregister(SCRATCH_NAME); // in case a previous test left it
     k_strlcpy(g_scratch_value, "amber", sizeof g_scratch_value);
     g_scratch_applies = 1;
     g_scratch_apply_calls = 0;
     g_scratch_unavailable = 0;
+    // BOTH descriptors, here, because two tests register g_scratch2 and
+    // a NULL .file makes the registry's duplicate check compare two
+    // NULLs equal -- which reads as "the same file" and refuses a
+    // registration that should have succeeded. It was a compile-time
+    // constant before the path became a setting; this is the one place
+    // that has to remember now.
+    g_scratch.file = SCRATCH_FILE;
+    g_scratch2.file = SCRATCH2_FILE;
     fs_delete(SCRATCH_FILE); // may not exist
     setting_register(&g_scratch);
 }
@@ -186,7 +217,9 @@ KTEST("setting", "a duplicate name IN THE SAME FILE is refused, not shadowed") {
 // files is two settings, which is the whole point: two programs may
 // each own a `theme`. Nothing in the kernel registers such a pair
 // today, so these build one.
-#define SCRATCH2_FILE "/var/tmp/ktest_setting2.conf"
+// Built from the configured directory rather than spelled out
+// (api/tmppath.h), so moving scratch is a setting rather than a grep.
+
 
 static char g_scratch2_value[SETTING_VALUE_MAX] = "blue";
 
@@ -200,12 +233,12 @@ static int scratch2_apply(const char *value) {
                ? SETTING_SAVED : SETTING_UNSAVED;
 }
 
-// Same NAME as g_scratch, different FILE.
-static const struct setting g_scratch2 = {
+// Same NAME as g_scratch, different FILE. Not const, and `.file` set
+// before registration, for the same reason g_scratch is not.
+static struct setting g_scratch2 = {
     .name   = SCRATCH_NAME,
     .label  = "Scratch two",
     .type   = SETTING_TYPE_STRING,
-    .file   = SCRATCH2_FILE,
     .choice = 0,
     .get    = scratch2_get,
     .apply  = scratch2_apply,
@@ -282,14 +315,20 @@ KTEST("setting", "a malformed descriptor is refused at registration") {
     // An ENUM with no choice enumerator would draw an empty picker --
     // a control that appears and cannot be used. Caught here rather
     // than discovered in a UI.
-    static const struct setting bad_enum = {
+    // `.file` is assigned rather than initialised because the path is
+    // built at runtime now. Neither descriptor is ever registered, so
+    // the value plays no part in what is asserted -- it is set only so
+    // that nothing here spells a directory out.
+    static struct setting bad_enum = {
         .name = "ktest_bad_enum", .label = "Bad", .type = SETTING_TYPE_ENUM,
-        .file = SCRATCH_FILE, .choice = 0, .get = scratch_get, .apply = 0,
+        .choice = 0, .get = scratch_get, .apply = 0,
     };
-    static const struct setting no_get = {
+    static struct setting no_get = {
         .name = "ktest_no_get", .label = "Bad", .type = SETTING_TYPE_STRING,
-        .file = SCRATCH_FILE, .choice = 0, .get = 0, .apply = 0,
+        .choice = 0, .get = 0, .apply = 0,
     };
+    bad_enum.file = SCRATCH_FILE;
+    no_get.file = SCRATCH_FILE;
     KTEST_ASSERT_EQ(setting_register(&bad_enum), 0);
     KTEST_ASSERT_EQ(setting_register(&no_get), 0);
     KTEST_ASSERT(setting_find("ktest_bad_enum") == 0);

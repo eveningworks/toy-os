@@ -38,11 +38,25 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include "tmppath.h"
 
-#define RESULT_PATH "/tmp/diskmark.out"
-// /var/tmp: /tmp is in RAM, and a disk benchmark run against it
-// measures memcpy. See diskbench.c.
-#define WORK_PATH   "/var/tmp/diskmark.tmp"
+// TMP_VOLATILE: a report the GUI polls and then deletes, wanted for
+// seconds and never across a boot.
+static const char *result_path(void) {
+    static char p[64];
+    if (!p[0]) tmppath(p, sizeof p, TMP_VOLATILE, "diskmark.out");
+    return p;
+}
+#define RESULT_PATH result_path()
+// TMP_PERSISTENT, never TMP_VOLATILE: a disk benchmark pointed at the
+// RAM scratch directory measures memcpy and reports a number that is
+// enormous and meaningless, with nothing about it looking wrong.
+static const char *work_path(void) {
+    static char p[64];
+    if (!p[0]) tmppath(p, sizeof p, TMP_PERSISTENT, "diskmark.tmp");
+    return p;
+}
+#define WORK_PATH work_path()
 #define BENCH_PATH  "/bin/diskbench"
 
 // Display order is CrystalDiskMark's read-then-write; diskbench runs

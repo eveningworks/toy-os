@@ -17,6 +17,8 @@
 #include "mount.h"
 #include "fs.h"
 #include "string.h"
+#include "tmppath.h"
+#include "kfmt.h"
 
 // A mount point NEXT TO /mnt whose name starts with the same letters.
 // This is rule 1's whole point: a prefix match that does not stop at a
@@ -28,6 +30,30 @@ static int mnt_ramfs(const char *point) {
     const char *why = "";
     return mount_add(0, "ramfs", point, 0, 0, &why);
 }
+
+static const char *second_mount_path(void) {
+    static char p[FS_PATH_MAX];
+    if (!p[0]) tmppath(p, sizeof p, TMP_PERSISTENT, "second");
+    return p;
+}
+#define SECOND_MOUNT second_mount_path()
+
+// The mount point's own children. A path built at runtime cannot be
+// concatenated with a literal, so the suffix is an argument.
+static const char *second_under(const char *rel) {
+    static char p[FS_PATH_MAX];
+    char base[FS_PATH_MAX];
+    k_snprintf(base, sizeof base, "second%s", rel);
+    if (!tmppath(p, sizeof p, TMP_PERSISTENT, base)) p[0] = '\0';
+    return p;
+}
+
+static const char *crossmount_path(void) {
+    static char p[FS_PATH_MAX];
+    if (!p[0]) tmppath(p, sizeof p, TMP_PERSISTENT, "crossmount.txt");
+    return p;
+}
+#define CROSSMOUNT crossmount_path()
 
 KTEST("mount", "the root answers for everything nothing else claims") {
     const struct mount *root = mount_root();
@@ -129,38 +155,38 @@ KTEST("mount", "two mounts of one backend are two filesystems") {
     const char *why = "";
     if (!mnt_ramfs("/mnt")) { KTEST_SKIP("could not mount ramfs at /mnt"); }
 
-    fs_mkdir("/var/tmp/second");
-    if (!fs_is_dir("/var/tmp/second")) {
+    fs_mkdir(SECOND_MOUNT);
+    if (!fs_is_dir(SECOND_MOUNT)) {
         mount_remove("/mnt", &why);
         KTEST_SKIP("could not make a second mount point");
     }
-    if (!mount_add(0, "ramfs", "/var/tmp/second", 0, 0, &why)) {
+    if (!mount_add(0, "ramfs", SECOND_MOUNT, 0, 0, &why)) {
         mount_remove("/mnt", &why);
-        fs_delete("/var/tmp/second");
+        fs_delete(SECOND_MOUNT);
         KTEST_SKIP("could not mount a second ramfs");
     }
 
     KTEST_ASSERT(fs_write("/mnt/a.txt", "first volume", 0));
-    KTEST_ASSERT(fs_write("/var/tmp/second/b.txt", "second volume, and longer", 0));
+    KTEST_ASSERT(fs_write(second_under("/b.txt"), "second volume, and longer", 0));
 
     // Neither can see the other's file...
     KTEST_ASSERT(fs_exists("/mnt/a.txt"));
     KTEST_ASSERT(!fs_exists("/mnt/b.txt"));
-    KTEST_ASSERT(fs_exists("/var/tmp/second/b.txt"));
-    KTEST_ASSERT(!fs_exists("/var/tmp/second/a.txt"));
+    KTEST_ASSERT(fs_exists(second_under("/b.txt")));
+    KTEST_ASSERT(!fs_exists(second_under("/a.txt")));
     // ...and the sizes differ, so a single shared table serving both
     // could not pass by coincidence.
     KTEST_ASSERT_EQ((int)fs_size("/mnt/a.txt"), 12);
-    KTEST_ASSERT_EQ((int)fs_size("/var/tmp/second/b.txt"), 25);
+    KTEST_ASSERT_EQ((int)fs_size(second_under("/b.txt")), 25);
 
     // Unmounting one leaves the other whole -- state_free() frees a
     // mount's own tree and nobody else's.
-    KTEST_ASSERT(mount_remove("/var/tmp/second", &why));
+    KTEST_ASSERT(mount_remove(SECOND_MOUNT, &why));
     KTEST_ASSERT(fs_exists("/mnt/a.txt"));
     KTEST_ASSERT_EQ((int)fs_size("/mnt/a.txt"), 12);
 
     KTEST_ASSERT(mount_remove("/mnt", &why));
-    fs_delete("/var/tmp/second");
+    fs_delete(SECOND_MOUNT);
 }
 
 KTEST("mount", "a read-only mount refuses every mutating call") {
@@ -184,13 +210,13 @@ KTEST("mount", "a read-only mount refuses every mutating call") {
 KTEST("mount", "rename across a mount boundary is refused") {
     if (!mnt_ramfs("/mnt")) { KTEST_SKIP("could not mount ramfs at /mnt"); }
 
-    KTEST_ASSERT(fs_write("/var/tmp/crossmount.txt", "here", 0));
-    KTEST_ASSERT(!fs_rename("/var/tmp/crossmount.txt", "/mnt/crossmount.txt"));
+    KTEST_ASSERT(fs_write(CROSSMOUNT, "here", 0));
+    KTEST_ASSERT(!fs_rename(CROSSMOUNT, "/mnt/crossmount.txt"));
     // Refused means UNCHANGED, not moved-and-failed.
-    KTEST_ASSERT(fs_exists("/var/tmp/crossmount.txt"));
+    KTEST_ASSERT(fs_exists(CROSSMOUNT));
     KTEST_ASSERT(!fs_exists("/mnt/crossmount.txt"));
 
-    fs_delete("/var/tmp/crossmount.txt");
+    fs_delete(CROSSMOUNT);
     const char *why = "";
     KTEST_ASSERT(mount_remove("/mnt", &why));
 }

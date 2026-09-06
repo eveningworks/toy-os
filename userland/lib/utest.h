@@ -29,6 +29,8 @@
 #include <string.h>
 #include "rt/sys.h"
 #include "syscall_abi.h"
+#include "tmppath.h"
+#include "lib/utmppath.h"
 
 enum {
     // Tee every line to /tmp/<name>.out, which is what usertest_run.py
@@ -70,9 +72,13 @@ static inline void utest_begin(const char *name, const char *title, int flags) {
     utest_flags = flags;
     utest_checks = utest_fails = 0;
     if (flags & UTEST_VERDICT_FILE) {
-        char path[64];
-        snprintf(path, sizeof path, "/tmp/%s.out", name);
-        // Best effort: with /tmp unwritable the console copy still stands.
+        // TMP_VOLATILE: the harness reads this back in the same boot and
+        // never after it.
+        char base[64], path[64];
+        snprintf(base, sizeof base, "%s.out", name);
+        if (!tmppath(path, sizeof path, TMP_VOLATILE, base)) return;
+        // Best effort: with the scratch directory unwritable, or the
+        // name too long to fit under it, the console copy still stands.
         utest_verdict_fd = sys_open(path, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
     }
     if (title) utest_line(title);

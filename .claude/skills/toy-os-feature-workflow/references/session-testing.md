@@ -14,6 +14,19 @@ anything here. These are lessons, not specifications.
 **Three testing lessons from that day, the first of which generalises
 past this repo:**
 
+- **DO NOT TOUCH THE TREE WHILE A SUITE IS RUNNING -- AND "TOUCH" MEANS
+  EDIT, NOT ONLY REBUILD.** `iso_guard` refuses a stale image, and a
+  tool that never launches reports as a FAIL with **no log file at
+  all** -- which looks nothing like the guard and everything like a
+  regression. It cost two full `gui_regress` runs in one session: the
+  first from a `make all` mid-run, the second from plain source edits
+  with no build at all. Eight tools "failed" the first time and
+  twenty-two the second, while the change's real state was 38/40 and
+  37/39. **The tell is a failing tool with an EMPTY log** -- check that
+  before reading a single assertion, because the summary line looks
+  exactly like a real failure. Docs-only edits are safe; anything inside
+  a build's dependency graph is not. Start the suite, then work outside
+  the repo, or wait.
 - **A positive control can turn nothing red because the test's DATA
   never reached the code under test.** The truncate tests wrote 16 KB,
   which fits TFS3's twelve direct pointers, so disabling the

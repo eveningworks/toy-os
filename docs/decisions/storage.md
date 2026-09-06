@@ -69,6 +69,50 @@ assumption was about performance or durability rather than correctness,
 because they keep working and start lying. Grepping for the path is what
 finds them; nothing else does.
 
+**THE LOCATIONS ARE SETTINGS, AND NOTHING SPELLS THEM OUT.** Thirty-odd
+files named the two directories literally, which made moving either a
+grep and made picking the wrong one a silent bug. They are
+`storage.tmpdir` and `storage.vartmpdir` now, read through one API
+(`api/tmppath.h`) whose join half is shared source compiled twice --
+the same seam `geom.c` and `klineedit.c` use, with only "where does the
+directory come from" differing per ring. That is what makes it
+impossible for a KTEST and a ring-3 program to disagree.
+
+**Why a BUILDER rather than an accessor.** `tmppath()` does the join
+and REFUSES if the result will not fit, rather than returning a
+directory each caller concatenates for itself. Every caller-side path
+buffer here is 64 bytes, and making the prefix configurable is exactly
+what turns truncation from impossible into likely -- `/tmp/x` fits where
+a hand-set `/mnt/scratch/deep/x` may not. One place answers that
+question instead of thirty.
+
+**What it cost, which is the part to know before doing this again.** A
+path built at runtime cannot be concatenated with a string literal, so
+every `PATH "/child"` had to become an argument (`PROBE_UNDER("/child")`,
+`SUB_AT("/made")`) and every `"created " PATH` message had to become
+plain text. That conversion, not the API, was the bulk of the work.
+
+**And it exposed a latent bug the literal had been masking.**
+`setting_test.c` registers one descriptor from two tests, and only one
+of them set `.file`; as a compile-time constant that was always right,
+and as a runtime assignment it left the other NULL. The registry's
+duplicate check compares `a == b` first, so two NULLs read as "the same
+file" and it refused a registration that should have succeeded. A
+constant folded into the binary hides the question of who initialises
+it.
+
+**`%T` and `%V` in a service descriptor** are systemd's specifiers for
+these same two categories, expanded by init before the spawn. A
+descriptor naming a configurable directory literally would stop agreeing
+with the setting the moment anyone changed it -- and the `tmpfs` service
+is the case in point, since it is what mounts the volatile one.
+
+**`tmpfile()` and `mkstemp()` were considered and deferred.** They are
+the POSIX answer to "I want scratch and do not care where", they belong
+in tolibc on its completeness bar, and they do not solve this problem:
+`mkstemp` takes a template, so the caller still writes a path. They are
+a roadmap item rather than part of this change.
+
 **And init's own channel had to move.** `init.c` put its control file
 and status in `/tmp` with a comment saying it wanted `/run` and that
 `/tmp` was the only such directory. That stopped being tenable the

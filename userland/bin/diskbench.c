@@ -71,6 +71,7 @@
 #include <stdarg.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include "tmppath.h"
 
 // WHERE THE REPORT GOES. Default stdout, so a shell run reads normally;
 // `--out FILE` writes it to a file instead.
@@ -164,11 +165,15 @@ static void emit_transient(const char *fmt, ...) {
     va_list ap; va_start(ap, fmt); emit_ex(0, fmt, ap); va_end(ap);
 }
 
-// /var/tmp, NOT /tmp. /tmp is a ramfs mount now, and a disk benchmark
-// pointed at RAM reports a number that is both enormous and meaningless
-// -- the worst shape a measurement can have, because nothing about it
-// looks wrong.
-#define DEFAULT_PATH "/var/tmp/diskbench.tmp"
+// TMP_PERSISTENT, never TMP_VOLATILE: a disk benchmark pointed at the
+// RAM scratch directory measures memcpy and reports a number that is
+// enormous and meaningless, with nothing about it looking wrong.
+static const char *default_path(void) {
+    static char p[64];
+    if (!p[0]) tmppath(p, sizeof p, TMP_PERSISTENT, "diskbench.tmp");
+    return p;
+}
+#define DEFAULT_PATH default_path()
 #define DEFAULT_MIB  64
 
 // The sequential request IS whatever one syscall carries. Asking for

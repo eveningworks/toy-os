@@ -17,6 +17,19 @@ this the obvious way), not from how much history it accumulated.
 
 ---
 
+- **ASK FOR A SCRATCH PATH, NEVER SPELL ONE: `tmppath(buf, sizeof buf,
+  TMP_VOLATILE | TMP_PERSISTENT, "name")`** (`api/tmppath.h`, and
+  `utest_path()` in ring 3 when a path is wanted in one expression).
+  Both directories are SETTINGS -- `storage.tmpdir` and
+  `storage.vartmpdir` -- and the same registry answers in both rings, so
+  a KTEST and a ring-3 program cannot disagree about where scratch is.
+  Three things follow. A literal is now a BUG rather than a shortcut: it
+  keeps working on a default machine and silently ignores the setting on
+  any other. **A path built at runtime cannot be concatenated with a
+  literal**, so `PATH "/child"` becomes an argument
+  (`PROBE_UNDER("/child")`) -- that conversion is most of what adopting
+  this costs. And a service descriptor says **`%T`** or **`%V`**, which
+  init expands: systemd's own letters for these two categories.
 - **`/tmp` IS IN RAM AND `/var/tmp` IS THE DISK, AND PICKING THE WRONG
   ONE FAILS SILENTLY.** The `tmpfs` service mounts a ramfs over `/tmp` at
   boot (`data/etc/services.d/tmpfs`), so it is fast, capped and gone on

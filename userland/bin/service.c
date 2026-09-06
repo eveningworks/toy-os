@@ -40,9 +40,10 @@
 #include "syscall_abi.h"
 #include <fcntl.h>
 #include <unistd.h>
+#include "tmppath.h"
 
-#define CONTROL_PATH "/run/init.ctl"
-#define STATUS_PATH  "/run/init.status"
+#define CONTROL_PATH TMP_RUNDIR "/init.ctl"
+#define STATUS_PATH  TMP_RUNDIR "/init.status"
 #define SERVICES_DIR "/etc/services.d"
 
 // How long to wait for init to act on a request before reporting
@@ -350,7 +351,7 @@ static int cmd_enable(const char *name) {
     // kernel/mount.h's rule 4 REFUSES a rename that crosses a mount.
     // /tmp is a ramfs mount now, so leaving this here would have made
     // `service enable` fail with EXDEV every time.
-    snprintf(tmp, sizeof tmp, "/run/.svc-%s", name);
+    snprintf(tmp, sizeof tmp, TMP_RUNDIR "/.svc-%s", name);
     if (!copy_file(from, tmp) || rename(tmp, to) < 0) {
         unlink(tmp);
         snprintf(msg, sizeof msg,

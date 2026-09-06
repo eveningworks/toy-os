@@ -41,6 +41,7 @@
 #include <stdarg.h>
 #include "rt/sys.h"
 #include "ports/cjson/cJSON.h"
+#include "tmppath.h"
 
 // Sized against the CLOCK'S RESOLUTION, not by taste. The monotonic
 // clock ticks at 100 Hz here, so a phase that finishes in 40 ms is
@@ -60,7 +61,12 @@
 static char *g_doc;
 static size_t g_doclen;
 
-#define LOG_PATH "/tmp/cjson_bench.out"
+static const char *p_log_path(void) {
+    static char p[64];
+    if (!p[0]) tmppath(p, sizeof p, TMP_VOLATILE, "cjson_bench.out");
+    return p;
+}
+#define LOG_PATH p_log_path()
 static FILE *g_log;
 
 // Everything goes to the console AND to a file, because the useful way

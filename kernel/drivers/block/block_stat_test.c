@@ -8,13 +8,22 @@
 // with a desktop doing its own reads, so nothing here may assume it is
 // the only writer.
 #include "ktest.h"
+#include "tmppath.h"
+#include "fs.h"
 #include "block.h"
 #include "block_stat.h"
 #include "fs.h"
 #include "string.h"
 #include "clocksource.h"
 
-#define SCRATCH "/var/tmp/ktest_blkstat.bin"
+// Built from the configured directory rather than spelled out
+// (api/tmppath.h), so moving scratch is a setting rather than a grep.
+static const char *scratch_path(void) {
+    static char p[FS_PATH_MAX];
+    if (!p[0]) tmppath(p, sizeof p, TMP_PERSISTENT, "ktest_blkstat.bin");
+    return p;
+}
+#define SCRATCH scratch_path()
 
 static uint64_t calls_of(int op) {
     uint64_t c = 0;

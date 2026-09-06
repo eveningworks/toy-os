@@ -32,9 +32,20 @@
 #include <stdlib.h>
 #include "rt/sys.h"
 #include "syscall_abi.h"
+#include "tmppath.h"
 
-#define PATH "/tmp/stdio_test.txt"
-#define BIG  "/tmp/stdio_big.txt"
+static const char *p_path(void) {
+    static char p[64];
+    if (!p[0]) tmppath(p, sizeof p, TMP_VOLATILE, "stdio_test.txt");
+    return p;
+}
+#define PATH p_path()
+static const char *p_big(void) {
+    static char p[64];
+    if (!p[0]) tmppath(p, sizeof p, TMP_VOLATILE, "stdio_big.txt");
+    return p;
+}
+#define BIG p_big()
 
 #include "lib/utest.h"   // reports with sys_write(), not the stdio under test
 

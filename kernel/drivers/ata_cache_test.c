@@ -20,13 +20,22 @@
 // scribbling on raw LBAs in a booted kernel would corrupt the volume
 // the rest of the suite is using.
 #include "ktest.h"
+#include "tmppath.h"
+#include "fs.h"
 #include "ata.h"
 #include "ata_cache.h"
 #include "fs.h"
 #include "string.h"
 #include "fault_inject.h"
 
-#define SCRATCH "/var/tmp/ktest_atac.bin"
+// Built from the configured directory rather than spelled out
+// (api/tmppath.h), so moving scratch is a setting rather than a grep.
+static const char *scratch_path(void) {
+    static char p[FS_PATH_MAX];
+    if (!p[0]) tmppath(p, sizeof p, TMP_PERSISTENT, "ktest_atac.bin");
+    return p;
+}
+#define SCRATCH scratch_path()
 
 KTEST("atac", "the cache is active on a machine with a disk") {
     // Not a tautology: atac_init() REFUSES an ops table missing an

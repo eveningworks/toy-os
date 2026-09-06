@@ -856,6 +856,7 @@ whenever a headline here tells you something you did not already know.
 
 `docs/conventions/storage.md`
 
+- **ASK FOR A SCRATCH PATH, NEVER SPELL ONE -- `tmppath(buf, cap, TMP_VOLATILE|TMP_PERSISTENT, "name")` (`api/tmppath.h`). Both directories are SETTINGS, one registry answers in both rings, and a service descriptor says `%T`/`%V`.**
 - **`/tmp` IS IN RAM AND `/var/tmp` IS THE DISK, and picking the wrong one fails SILENTLY -- anything measuring the disk, or expected to survive a reboot, wants the second. Runtime state is `/run`.**
 - **A RAMFS MOUNT'S SIZE IS `-o size=`, THEN `storage.ramfs_size`, THEN HALF OF FREE -- and the setting's default MUST stay 0, or a diskless root gets a /tmp-sized cap.**
 - **THE CURRENT DIRECTORY IS THE KERNEL'S, and every path syscall resolves against it.**

@@ -558,7 +558,8 @@ LIBUAPP_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBUAPP_SRCS)) \
                $(BUILD)/userland/shared/klineedit.o \
                $(BUILD)/userland/shared/completion.o \
                $(BUILD)/userland/shared/ttf.o \
-               $(BUILD)/userland/shared/klineedit_cases.o
+               $(BUILD)/userland/shared/klineedit_cases.o \
+               $(BUILD)/userland/shared/tmppath.o
 LIBUAPP      = $(BUILD)/userland/libuapp.a
 
 # libc.a -- the C LIBRARY, a second archive beside the toolkit.

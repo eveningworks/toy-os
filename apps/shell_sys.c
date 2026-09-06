@@ -8,7 +8,9 @@
 // happened in. Shares `shell_fg`/history[]/history_count with shell.c
 // (and shell_fs.c) via shell_internal.h.
 #include "shell_internal.h"
-#include "shell.h" // shell_path_find()
+#include "shell.h"
+#include "tmppath.h"
+#include "fs.h" // shell_path_find()
 #include "apps.h"
 
 // Prints `lines` one at a time (each expected to be one console line,
@@ -547,7 +549,14 @@ static uint8_t g_stress_chunk[STRESS_CHUNK_BYTES];
 // /var/tmp: `stress` writes real, non-sparse data to measure the
 // FILESYSTEM, and /tmp is a ramfs mount now -- which would turn a
 // multi-gigabyte disk test into a way to exhaust memory.
-#define STRESS_TEST_PATH "/var/tmp/stress_test"
+// Built from the configured directory rather than spelled out
+// (api/tmppath.h), so moving scratch is a setting rather than a grep.
+static const char *stress_test_path_path(void) {
+    static char p[FS_PATH_MAX];
+    if (!p[0]) tmppath(p, sizeof p, TMP_PERSISTENT, "stress_test");
+    return p;
+}
+#define STRESS_TEST_PATH stress_test_path_path()
 
 // Fills g_stress_chunk with a pattern that varies both by chunk index
 // and byte offset, so two different chunks (or a chunk read back from

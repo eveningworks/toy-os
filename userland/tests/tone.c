@@ -14,6 +14,8 @@
 #include "sound_abi.h"
 #include "fixed.h"
 #include <stdint.h>
+#include "tmppath.h"
+#include "lib/utmppath.h"
 
 #define TONE_HZ     440
 #define TONE_FRAMES (2 * SND_RATE) // two seconds
@@ -73,7 +75,7 @@ int main(void) {
     // THROUGH THE FILESYSTEM as well as the console: a spawned child's
     // console lines reach the serial capture unreliably, and bytes on
     // disk do not race anything (the keymap tests' idiom).
-    int fd = sys_open("/tmp/tone_done", SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
+    int fd = sys_open(utest_path(TMP_VOLATILE, "tone_done"), SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
     if (fd >= 0) {
         static const char msg[] = "played 440Hz for 2s\n";
         sys_write(fd, msg, sizeof msg - 1);

@@ -1,0 +1,2 @@
+Description=Where scratch files go; in RAM and emptied at every boot
+Widget=text

@@ -37,11 +37,16 @@
 #include "timer.h"     // PIT_HZ
 #include "storage_config.h"
 #include "initcall.h"
+#include "tmppath.h"
+#include "fs.h"      // FS_PATH_MAX, fs_mkdir()
+#include "string.h"  // k_strlcpy
 
 #define STORAGE_CONFIG_FILE "/etc/storage.conf"
 #define SYNC_KEY "sync"
 #define WRITEBACK_KEY "writeback_interval"
 #define RAMFS_SIZE_KEY "ramfs_size"
+#define TMPDIR_KEY     "tmpdir"
+#define VARTMPDIR_KEY  "vartmpdir"
 
 // SECONDS OF QUIET before a deferred commit is forced. The visible half
 // of what ext4 spells `commit=5` and Linux spells
@@ -122,6 +127,35 @@ static int g_strict = 1;    // 0 only in `lazy`: whether barriers are issued
 static int g_batched = 1;   // 1 only in `batched`: whether commits defer
 static int g_writeback_s = WRITEBACK_DEFAULT;
 static int g_ramfs_size_mib = RAMFS_SIZE_DEFAULT;
+
+// WHERE SCRATCH GOES (api/tmppath.h). Held as strings rather than read
+// per call because tmpdir_for() is on the path of every temp file the
+// kernel makes, and etc_config_get() re-reads the whole file per key.
+//
+// Sized to FS_PATH_MAX so a value that fits here fits everywhere a
+// path does; anything longer is refused at the setting rather than
+// truncated into a directory nobody meant.
+static char g_tmpdir[FS_PATH_MAX]    = TMP_DIR_DEFAULT;
+static char g_vartmpdir[FS_PATH_MAX] = TMP_VARDIR_DEFAULT;
+
+const char *tmpdir_for(enum tmp_kind kind) {
+    return kind == TMP_PERSISTENT ? g_vartmpdir : g_tmpdir;
+}
+
+// A DIRECTORY, not a path: absolute, no trailing slash, and it must fit.
+// Refused rather than corrected, because "we fixed your value" is how a
+// setting ends up meaning something the person who set it did not ask
+// for -- and this one decides where files go.
+static int dir_ok(const char *v) {
+    if (!v || v[0] != '/') return 0;
+    uint32_t n = 0;
+    while (v[n]) {
+        if (n + 1 >= FS_PATH_MAX) return 0;
+        n++;
+    }
+    if (n > 1 && v[n - 1] == '/') return 0;   // "/tmp/" is not "/tmp"
+    return 1;
+}
 
 int storage_sync_strict(void) { return g_strict; }
 
@@ -244,6 +278,58 @@ static const struct setting g_ramfs_size_setting = {
     .apply = ramfs_size_apply,
 };
 
+static void tmpdir_get(char *out, uint32_t out_size) {
+    k_strlcpy(out, g_tmpdir, out_size);
+}
+
+static void vartmpdir_get(char *out, uint32_t out_size) {
+    k_strlcpy(out, g_vartmpdir, out_size);
+}
+
+// CHANGING EITHER MOVES NOTHING THAT ALREADY EXISTS. The directory is
+// created if it is missing, so the next file lands there; files already
+// written under the old one stay where they are, and a `/tmp` that is
+// already MOUNTED stays mounted where it is until the next boot. Said
+// in the description too, because a path setting that appeared to
+// relocate a live mount would be the most surprising control here.
+static int dir_apply(const char *value, char *slot, const char *key) {
+    if (!dir_ok(value)) return SETTING_INVALID;
+    k_strlcpy(slot, value, FS_PATH_MAX);
+    fs_mkdir(slot);
+    return etc_config_set(STORAGE_CONFIG_FILE, key, value)
+               ? SETTING_SAVED : SETTING_UNSAVED;
+}
+
+static int tmpdir_apply(const char *value) {
+    return dir_apply(value, g_tmpdir, TMPDIR_KEY);
+}
+
+static int vartmpdir_apply(const char *value) {
+    return dir_apply(value, g_vartmpdir, VARTMPDIR_KEY);
+}
+
+static const struct setting g_tmpdir_setting = {
+    .name  = TMPDIR_KEY,
+    .label = "Scratch directory",
+    .type  = SETTING_TYPE_STRING,
+    .file  = STORAGE_CONFIG_FILE,
+    .category = "Storage",
+    .group    = "Filesystem",
+    .get   = tmpdir_get,
+    .apply = tmpdir_apply,
+};
+
+static const struct setting g_vartmpdir_setting = {
+    .name  = VARTMPDIR_KEY,
+    .label = "Lasting scratch directory",
+    .type  = SETTING_TYPE_STRING,
+    .file  = STORAGE_CONFIG_FILE,
+    .category = "Storage",
+    .group    = "Filesystem",
+    .get   = vartmpdir_get,
+    .apply = vartmpdir_apply,
+};
+
 static const struct setting g_sync_setting = {
     .name  = SYNC_KEY,
     .label = "Write durability",
@@ -260,6 +346,8 @@ void storage_config_setting_register(void) {
     setting_register(&g_sync_setting);
     setting_register(&g_writeback_setting);
     setting_register(&g_ramfs_size_setting);
+    setting_register(&g_tmpdir_setting);
+    setting_register(&g_vartmpdir_setting);
 }
 
 void storage_config_set_mode_for_test(int strict, int batched) {
@@ -286,6 +374,23 @@ void storage_config_init(void) {
         }
         if (ok && n >= RAMFS_SIZE_MIN && n <= RAMFS_SIZE_MAX) g_ramfs_size_mib = n;
     }
+    // THE DIRECTORIES ARE READ HERE AND CREATED HERE. This runs at
+    // INIT_CONFIG, after fs_init()'s layout pass has already made the
+    // DEFAULTS -- so a machine whose setting names somewhere else gets
+    // that directory made now, and a machine with no setting has had
+    // its directories since before /etc was readable. The two passes
+    // are what break the circularity: the layout pass is what creates
+    // /etc, and /etc is where this answer lives.
+    char dir[FS_PATH_MAX];
+    if (etc_config_buf_get(&g_cfg, TMPDIR_KEY, dir, sizeof dir) && dir_ok(dir)) {
+        k_strlcpy(g_tmpdir, dir, sizeof g_tmpdir);
+    }
+    if (etc_config_buf_get(&g_cfg, VARTMPDIR_KEY, dir, sizeof dir) && dir_ok(dir)) {
+        k_strlcpy(g_vartmpdir, dir, sizeof g_vartmpdir);
+    }
+    fs_mkdir(g_tmpdir);
+    fs_mkdir(g_vartmpdir);
+
     if (etc_config_buf_get(&g_cfg, SYNC_KEY, value, sizeof value)) {
         // A hand-edited file reaches this reader without passing
         // through setting_set(), so it is validated here too -- and an

@@ -22,6 +22,8 @@
 #include "rt/sys.h"
 #include "net_abi.h"
 #include <string.h>
+#include "tmppath.h"
+#include "lib/utmppath.h"
 
 #include "lib/utest.h"
 
@@ -32,7 +34,15 @@ static void check_errno(int got, int want, const char *what) {
                  got != want ? ", wanted " : "", got != want ? sys_strerror(want) : "");
 }
 
-#define PROBE "/tmp/errno_probe.txt"
+static const char *p_probe(void) {
+    static char p[64];
+    if (!p[0]) tmppath(p, sizeof p, TMP_VOLATILE, "errno_probe.txt");
+    return p;
+}
+#define PROBE p_probe()
+// PATH "/sub" cannot be spelled as a concatenation once the prefix is
+// built at runtime; this is that, done at the one place that needs it.
+#define PROBE_UNDER(rel) utest_path(TMP_VOLATILE, "errno_probe.txt" rel)
 
 int main(void) {
     utest_begin("errno_test", "a failed syscall says why", 0);
@@ -57,7 +67,7 @@ int main(void) {
 
     // --- a file that definitely exists, for the EMFILE fixture ---------
     fd = sys_open(PROBE, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
-    utest_check(fd >= 0, "created " PROBE);
+    utest_check(fd >= 0, "created the probe file");
     if (fd < 0) { utest_check(0, "build the fixture"); sys_exit(utest_end()); }
     sys_write(fd, "x", 1);
     sys_close(fd);
@@ -86,7 +96,7 @@ int main(void) {
 
     // A parent that exists and is a FILE. Distinct from ENOENT: one
     // says the path is absent, the other that it is wrong.
-    fd = sys_open(PROBE "/child.txt", SYS_O_WRITE | SYS_O_CREAT);
+    fd = sys_open(PROBE_UNDER("/child.txt"), SYS_O_WRITE | SYS_O_CREAT);
     utest_check(fd < 0, "open(O_CREAT) under a file used as a directory fails");
     check_errno(sys_errno(), ENOTDIR, "open(O_CREAT) with a file as the parent");
     if (fd >= 0) sys_close(fd);
@@ -95,7 +105,7 @@ int main(void) {
     // for every refusal.
     utest_check(sys_mkdir("/definitely/not/here") == -1 && sys_errno() == ENOENT,
           "mkdir() with no parent directory is -1 ENOENT");
-    utest_check(sys_mkdir(PROBE "/sub") == -1 && sys_errno() == ENOTDIR,
+    utest_check(sys_mkdir(PROBE_UNDER("/sub")) == -1 && sys_errno() == ENOTDIR,
           "mkdir() under a file is -1 ENOTDIR");
 
     // --- EMFILE: exhaust this process's table for real ------------------

@@ -11,6 +11,8 @@
 // is reportable and the four setters report it".
 
 #include "ktest.h"
+#include "tmppath.h"
+#include "fs.h"
 #include "etc_config.h"
 #include "font_config.h"
 #include "cursor_config.h"
@@ -24,7 +26,21 @@
 // Scratch, under /tmp -- deliberately NOT /etc/toyos.conf, which holds
 // the live machine's real settings and which a test has no business
 // rewriting (tests run inside the booted kernel, see ktest.h).
-#define SCRATCH "/var/tmp/ktest_etc.conf"
+// Built from the configured directory rather than spelled out
+// (api/tmppath.h), so moving scratch is a setting rather than a grep.
+static const char *scratch_path(void) {
+    static char p[FS_PATH_MAX];
+    if (!p[0]) tmppath(p, sizeof p, TMP_PERSISTENT, "ktest_etc.conf");
+    return p;
+}
+#define SCRATCH scratch_path()
+
+static const char *missing_conf_path(void) {
+    static char p[FS_PATH_MAX];
+    if (!p[0]) tmppath(p, sizeof p, TMP_PERSISTENT, "ktest_no_such_file.conf");
+    return p;
+}
+#define MISSING_CONF missing_conf_path()
 
 KTEST("etc_config", "set then get round-trips a value") {
     fs_delete(SCRATCH); // may not exist; a failure here is not interesting
@@ -118,7 +134,7 @@ KTEST("etc_config", "an unloaded buffer answers nothing rather than garbage") {
     // kernel's per-function frame budget (Makefile's
     // -Wframe-larger-than), and a KTEST body is never reentered.
     static struct etc_config_buf buf;
-    KTEST_ASSERT_EQ(etc_config_load("/var/tmp/ktest_no_such_file.conf", &buf), 0);
+    KTEST_ASSERT_EQ(etc_config_load(MISSING_CONF, &buf), 0);
 
     char out[16];
     KTEST_ASSERT_EQ(etc_config_buf_get(&buf, "alpha", out, sizeof out), 0);

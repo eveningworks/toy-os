@@ -39,7 +39,7 @@ int main(void) {
     utest_check(sys_fs_generation() == g0, "stable across a read-only open");
 
     // --- a real mutation ------------------------------------------
-    fd = sys_open("/tmp/fsgen.tmp", SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
+    fd = sys_open(utest_path(TMP_VOLATILE, "fsgen.tmp"), SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
     utest_check(fd >= 0, "created a file to mutate with");
     if (fd >= 0) {
         const char *msg = "generation";
@@ -56,7 +56,7 @@ int main(void) {
     // -- usertest_run.py works against a copy, but `run fsgen_test` by
     // hand does not, and a test that litters is a test that changes the
     // next one's starting conditions.
-    sys_unlink("/tmp/fsgen.tmp");
+    sys_unlink(utest_path(TMP_VOLATILE, "fsgen.tmp"));
     utest_check(sys_fs_generation() > g1, "moved after a delete");
 
     return utest_end();

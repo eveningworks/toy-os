@@ -17,6 +17,7 @@
 #include "lib/usnd_internal.h"
 #include <stdio.h>
 #include <string.h>
+#include "tmppath.h"
 
 #include "lib/utest.h"
 
@@ -79,7 +80,12 @@ static const char *write_fixture(const char *path) {
     return n == g_len ? 0 : "short write";
 }
 
-#define FIX "/tmp/usnd_fix.wav"
+static const char *p_fix(void) {
+    static char p[64];
+    if (!p[0]) tmppath(p, sizeof p, TMP_VOLATILE, "usnd_fix.wav");
+    return p;
+}
+#define FIX p_fix()
 
 // --- the checks -------------------------------------------------------
 

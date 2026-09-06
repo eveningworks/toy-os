@@ -20,6 +20,20 @@ so there is no second format to maintain.
 | `Ready` | no | `spawn` (default) or `notify` -- what "started" MEANS. |
 | `ReadyTimeout` | no | Milliseconds to wait for a `Ready=notify` service. Default 5000. |
 
+**`Args=` UNDERSTANDS TWO SPECIFIERS, `%T` AND `%V`.** They expand to the
+scratch directories -- `storage.tmpdir` and `storage.vartmpdir` -- and
+they are systemd's letters for exactly these two categories (`%T` is its
+"directory for temporary files", `%V` its "directory for larger and
+persistent temporary files"). init expands them just before the spawn.
+
+They exist because a descriptor that names a configurable directory
+LITERALLY stops agreeing with the setting the moment anyone changes it,
+and the `tmpfs` service is the case in point: it mounts the volatile
+scratch directory, so a literal `/tmp` there would leave the mount in
+one place and every program looking in another. Anything else after a
+`%` is passed through unchanged; there is no escape, because there is
+nothing yet that needs a literal one.
+
 `Restart=on-failure` (the default) restarts the service if it CRASHED or
 was killed, and leaves it down if it exited cleanly -- a process that
 returned 0 asked to stop. That distinction is load-bearing rather than

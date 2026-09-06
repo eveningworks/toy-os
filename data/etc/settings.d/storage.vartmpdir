@@ -1,0 +1,2 @@
+Description=Where scratch files go when they must survive a reboot
+Widget=text

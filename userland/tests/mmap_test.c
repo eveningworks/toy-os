@@ -17,6 +17,7 @@
 #include <errno.h>
 #include <sys/mman.h>
 #include "syscall_abi.h"
+#include "tmppath.h"
 
 // Console AND /tmp/mmap_test.out (UTEST_VERDICT_FILE): this test is
 // SPAWNED (mmap needs a scheduler slot), and a spawned program's
@@ -45,7 +46,12 @@ static int holds(const uint8_t *p, uint64_t n) {
     return 1;
 }
 
-#define FILE_PATH  "/tmp/mmap_test.dat"
+static const char *p_file_path(void) {
+    static char p[64];
+    if (!p[0]) tmppath(p, sizeof p, TMP_VOLATILE, "mmap_test.dat");
+    return p;
+}
+#define FILE_PATH p_file_path()
 #define FILE_BYTES (3 * 4096 + 100) // three pages and a ragged tail
 
 static uint8_t fbyte(uint64_t off) { return (uint8_t)((off * 7) + 3); }

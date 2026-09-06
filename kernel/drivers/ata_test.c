@@ -12,11 +12,20 @@
 // test in the suite, `make test` itself, and every boot already exercise
 // end to end.
 #include "ktest.h"
+#include "tmppath.h"
+#include "fs.h"
 #include "ata.h"
 #include "fs.h"
 #include "string.h"
 
-#define PIO_TEST_PATH "/var/tmp/.ata_pio_test"
+// Built from the configured directory rather than spelled out
+// (api/tmppath.h), so moving scratch is a setting rather than a grep.
+static const char *pio_test_path_path(void) {
+    static char p[FS_PATH_MAX];
+    if (!p[0]) tmppath(p, sizeof p, TMP_PERSISTENT, ".ata_pio_test");
+    return p;
+}
+#define PIO_TEST_PATH pio_test_path_path()
 
 // Runs `body` with DMA forced off, then restores the previous mode --
 // even if an assertion inside `body` would have returned early, which

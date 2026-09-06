@@ -28,8 +28,14 @@
 #include <string.h>
 #include <stdio.h>
 #include "syscall_abi.h"
+#include "tmppath.h"
 
-#define PATH "/tmp/seek_test.bin"
+static const char *p_path(void) {
+    static char p[64];
+    if (!p[0]) tmppath(p, sizeof p, TMP_VOLATILE, "seek_test.bin");
+    return p;
+}
+#define PATH p_path()
 #define N    512
 
 

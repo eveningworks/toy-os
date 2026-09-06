@@ -259,7 +259,7 @@ int main(void) {
     // O_CREAT|O_TRUNC has to actually create and truncate, and the mode
     // argument has to be accepted and ignored.
     {
-        const char *path = "/tmp/posix_test.txt";
+        const char *path = utest_path(TMP_VOLATILE, "posix_test.txt");
         int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         check("open(O_WRONLY|O_CREAT|O_TRUNC) with a mode argument", fd >= 0, 0);
         if (fd >= 0) {

@@ -6,6 +6,8 @@
 // test cannot see. So this counts real device flushes across a write,
 // through the block layer's own counters.
 #include "ktest.h"
+#include "tmppath.h"
+#include "fs.h"
 #include "storage_config.h"
 #include "block_stat.h"
 #include "fs.h"
@@ -13,13 +15,27 @@
 #include "tfs3.h"
 #include "string.h"
 
-#define SCRATCH "/var/tmp/ktest_sync.bin"
+// Built from the configured directory rather than spelled out
+// (api/tmppath.h), so moving scratch is a setting rather than a grep.
+static const char *scratch_path(void) {
+    static char p[FS_PATH_MAX];
+    if (!p[0]) tmppath(p, sizeof p, TMP_PERSISTENT, "ktest_sync.bin");
+    return p;
+}
+#define SCRATCH scratch_path()
 
 static uint64_t flushes(void) {
     uint64_t c = 0;
     blk_stat_get(BLK_STAT_FLUSH, &c, NULL, NULL, NULL);
     return c;
 }
+
+static const char *scratch2_path(void) {
+    static char p[FS_PATH_MAX];
+    if (!p[0]) tmppath(p, sizeof p, TMP_PERSISTENT, "ktest_sync2.bin");
+    return p;
+}
+#define SCRATCH2 scratch2_path()
 
 KTEST("storage", "an unknown sync mode is refused and leaves the mode alone") {
     int was = storage_sync_strict();
@@ -268,7 +284,7 @@ KTEST("storage", "an operation between batched writes does not lose them") {
     int restore = storage_sync_strict(), restore_b = storage_sync_batched();
 
     fs_delete(SCRATCH);
-    fs_delete("/var/tmp/ktest_sync2.bin");
+    fs_delete(SCRATCH2);
     KTEST_ASSERT_EQ(fs_touch(SCRATCH), 1);
 
     storage_config_set_mode_for_test(1, 1);   // batched
@@ -276,7 +292,7 @@ KTEST("storage", "an operation between batched writes does not lose them") {
 
     // A create opens its OWN transaction (credits=3), which is what
     // would blow away the staged inode above.
-    KTEST_ASSERT_EQ(fs_touch("/var/tmp/ktest_sync2.bin"), 1);
+    KTEST_ASSERT_EQ(fs_touch(SCRATCH2), 1);
 
     KTEST_ASSERT_EQ(fs_write_range(SCRATCH, sizeof buf, buf, sizeof buf), 1);
     KTEST_ASSERT_EQ(fs_sync(NULL), 1);
@@ -293,7 +309,7 @@ KTEST("storage", "an operation between batched writes does not lose them") {
     }
 
     fs_delete(SCRATCH);
-    fs_delete("/var/tmp/ktest_sync2.bin");
+    fs_delete(SCRATCH2);
 }
 
 KTEST("storage", "lazy issues fewer device flushes than strict for the same write") {
