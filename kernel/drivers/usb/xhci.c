@@ -105,6 +105,11 @@ struct xhci_hc {
 
     uint32_t events_seen;
     uint32_t irqs_seen;
+    // Command completions that named a TRB nobody was waiting for --
+    // see the CMD_COMPLETION arm of xhci_service(). Non-zero means a
+    // late completion arrived from a command this driver had already
+    // given up on, which is the shape docs/bugs.md's cascade needs.
+    uint32_t cmd_stale;
     uint32_t xfer_ok;
     uint32_t xfer_bad;
     uint32_t xfer_orphan;
@@ -1377,10 +1382,33 @@ void xhci_service(void) {
         if (type == XHCI_TRB_PORT_STATUS_CHANGE) {
             note_port_change();
         } else if (type == XHCI_TRB_CMD_COMPLETION) {
-            g_cmd_done.trb  = src;
-            g_cmd_done.code = code;
-            g_cmd_done.slot = (uint8_t)((ev.control >> 24) & 0xFFu);
-            g_cmd_done.done = 1;
+            // MATCHED ON ITS TRB, exactly as a Transfer Event is below.
+            // This arm used to overwrite g_cmd_done.trb and set done
+            // unconditionally, so ANY command completion satisfied
+            // whichever command was currently waiting -- and handed it
+            // that event's completion code AND slot id.
+            //
+            // That is not hypothetical: wait_completion() gives up after
+            // a second and cmd_submit() leaves the command ON THE RING,
+            // so a controller that completes it late posts an event with
+            // nobody waiting for it. The next port's cmd_submit() then
+            // took it, read the OLD command's slot id, and failed --
+            // which is exactly the "address device (slot N) failed"
+            // signature, and exactly why one port's stumble broke every
+            // port after it (docs/bugs.md's cascade). The command ring
+            // and this matcher are per-CONTROLLER, which is how a
+            // per-port fault crossed ports.
+            if (src == g_cmd_done.trb) {
+                g_cmd_done.code = code;
+                g_cmd_done.slot = (uint8_t)((ev.control >> 24) & 0xFFu);
+                g_cmd_done.done = 1;
+            } else {
+                g_hc.cmd_stale++;
+                klog_printf("usb: stale command completion for trb %#lx "
+                            "(waiting on %#lx) -- ignored\n",
+                            (unsigned long)src,
+                            (unsigned long)g_cmd_done.trb);
+            }
         } else if (type == XHCI_TRB_TRANSFER_EVENT) {
             // A Transfer Event names the TRB that finished. Control
             // transfers wait on their Status Stage TRB; interrupt
