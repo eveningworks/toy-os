@@ -43,6 +43,43 @@ KTEST("applog", "a line with nothing but a newline is not a record") {
     KTEST_ASSERT_EQ((int)(applog_total() - before), 0);
 }
 
+KTEST("applog", "a fragment says it did not end the line, and the last one does") {
+    // The shape cmd_fail_err() writes: five writes, one line. Only the
+    // last carries the newline, and a reader with no `eol` could not
+    // tell this from five separate messages.
+    uint64_t before = applog_total();
+    applog_write("ktest", "prog", 4);
+    applog_write("ktest", ": ", 2);
+    applog_write("ktest", "reason\n", 7);
+
+    struct applog_rec r;
+    KTEST_ASSERT(applog_get(before + 1, &r));
+    KTEST_ASSERT_EQ(r.eol, 0);
+    KTEST_ASSERT(applog_get(before + 2, &r));
+    KTEST_ASSERT_EQ(r.eol, 0);
+    KTEST_ASSERT(applog_get(before + 3, &r));
+    KTEST_ASSERT_EQ(r.eol, 1);
+}
+
+KTEST("applog", "a bare newline closes the SAME writer's fragment, not a stranger's") {
+    uint64_t before = applog_total();
+    applog_write("ktest", "held", 4);
+    // Another program's line terminator must not finish this one --
+    // two processes interleave freely in this ring.
+    applog_write("other", "\n", 1);
+
+    struct applog_rec r;
+    KTEST_ASSERT(applog_get(before + 1, &r));
+    KTEST_ASSERT_EQ(r.eol, 0);
+
+    // The writer's own does.
+    applog_write("ktest", "\n", 1);
+    KTEST_ASSERT(applog_get(before + 1, &r));
+    KTEST_ASSERT_EQ(r.eol, 1);
+    // And it added no record of its own.
+    KTEST_ASSERT_EQ((int)(applog_total() - before), 1);
+}
+
 KTEST("applog", "an over-long line is truncated and stays NUL-terminated") {
     char big[APPLOG_TEXT_MAX * 2];
     for (unsigned i = 0; i < sizeof big; i++) big[i] = 'x';

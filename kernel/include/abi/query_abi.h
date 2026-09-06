@@ -461,6 +461,7 @@ struct query_applog {
     char     tag[16];  // the writing program
     char     text[200];
     uint16_t len;
+    uint8_t  eol;      // this record ENDED a line -- see api/applog.h
 };
 
 _Static_assert(sizeof(struct query_applog) <= 256,

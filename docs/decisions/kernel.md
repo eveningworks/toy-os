@@ -6122,13 +6122,29 @@ opposite: the text is whatever the program printed and the useful fact is
 in the same slice, so the ring stores one record per write, each carrying
 its writer.
 
-**One write is one record**, stated rather than hidden. `stdio`
-line-buffers by default, so a `printf` arrives whole and this is right in
-practice. A program that writes half a line gets half a record. Holding
-partial lines per writer would fix it and costs a buffer per open
-descriptor, which nothing here needs — `logd` already reassembles the
-kernel's byte stream, and doing it twice in the kernel for a case nothing
-produces is the wrong place to spend it.
+**One write is one record, and the reader joins them.** The first cut of
+this assumed `stdio` line-buffering made a record a line in practice.
+That was wrong, and real hardware showed it within a boot: `cmd_fail_err()`
+in `lib/cmd.h` sends five separate `sys_print()` calls, so `netd`'s one
+DHCP failure arrived in `/var/log` as five lines. Thirty-five files here
+write through `sys_print` chains that bypass `stdio` entirely —
+`service.c` has 21 calls, `meminfo.c` 19 — so fragments are the common
+case, not the corner.
+
+The fix is one bit, not a buffer. Stripping the trailing newline destroys
+the only evidence that a write finished a line, so each record now
+RECORDS it (`eol`), and `logd` joins fragments per tag until one carries
+it. The buffer lives in ring 3, where `logd` already reassembles the
+kernel's byte stream; the kernel would need one per open descriptor to
+hold the same state, which is what makes ring 3 the right side of the
+boundary for it.
+
+**Per TAG, not by arrival**: two processes interleave freely in one ring,
+so joining whatever arrived next would splice one program's line into
+another's. For the same reason a write of nothing but a newline closes
+only the SAME writer's pending fragment — handing one program's
+terminator to another's half-line is the exact bug the tag exists to make
+impossible.
 
 **The tag is the KERNEL's, not the caller's.** `sys_write()` reads the
 writing process's name out of its scheduler slot. A tag passed in would

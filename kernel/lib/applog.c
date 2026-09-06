@@ -18,9 +18,22 @@ void applog_write(const char *tag, const char *text, uint32_t len) {
     if (!text || !len) return;
     // A trailing newline is the writer's line terminator, not part of
     // what it said. Stripped here so every record is a bare line and
-    // whoever renders it decides the separator.
-    while (len && (text[len - 1] == '\n' || text[len - 1] == '\r')) len--;
-    if (!len) return;
+    // whoever renders it decides the separator -- but REMEMBERED, since
+    // it is what tells a reader the line is finished.
+    int eol = 0;
+    while (len && (text[len - 1] == '\n' || text[len - 1] == '\r')) { len--; eol = 1; }
+    // A write of nothing but a newline still ENDS a line, and dropping it
+    // would strand whatever fragments came before it. Only the SAME
+    // writer's fragment may be closed this way: two processes interleave
+    // freely here, so marking whatever happens to be last would hand one
+    // program's terminator to another's half-line.
+    if (!len) {
+        if (eol && g_next > 1) {
+            struct applog_rec *prev = &g_rec[(g_next - 1) % APPLOG_RECS];
+            if (!k_strcmp(prev->tag, (tag && tag[0]) ? tag : "?")) prev->eol = 1;
+        }
+        return;
+    }
     if (len > APPLOG_TEXT_MAX - 1) len = APPLOG_TEXT_MAX - 1;
 
     struct applog_rec *r = &g_rec[g_next % APPLOG_RECS];
@@ -30,6 +43,7 @@ void applog_write(const char *tag, const char *text, uint32_t len) {
     k_memcpy(r->text, text, len);
     r->text[len] = '\0';
     r->len = (uint16_t)len;
+    r->eol = (uint8_t)eol;
     g_next++;
 }
 

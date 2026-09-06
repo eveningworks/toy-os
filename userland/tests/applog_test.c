@@ -26,8 +26,8 @@
 static char g_logged[64];
 static char g_console[64];
 
-static int run_echo(const char *text, int stdout_fd) {
-    int pid = sys_spawn("/bin/echo", text, stdout_fd);
+static int run(const char *prog, const char *text, int stdout_fd) {
+    int pid = sys_spawn(prog, text, stdout_fd);
     if (pid <= 0) return -1;
     int status = 0;
     sys_waitpid(pid, &status);
@@ -55,9 +55,9 @@ int main(void) {
     snprintf(g_logged, sizeof g_logged, "applog-logged-%llu", stamp);
     snprintf(g_console, sizeof g_console, "applog-console-%llu", stamp);
 
-    utest_check(run_echo(g_logged, SPAWN_FD_LOG) == 0,
+    utest_check(run("/bin/echo", g_logged, SPAWN_FD_LOG) == 0,
                 "a child spawned onto the log runs and exits");
-    utest_check(run_echo(g_console, -1) == 0,
+    utest_check(run("/bin/echo", g_console, -1) == 0,
                 "the same child spawned onto the console runs and exits");
 
     char tag[APPLOG_TAG_MAX];
@@ -72,6 +72,26 @@ int main(void) {
     char other[APPLOG_TAG_MAX];
     utest_check(find(g_console, other, sizeof other) == 0,
                 "a child with an ordinary stdout leaves no record");
+
+    // A LINE BUILT FROM SEVERAL WRITES. cmd_fail_err() sends five, so
+    // `cat` on a missing file is the natural fixture -- and the three
+    // records it leaves are what logd has to join back into one line.
+    // Asserted on the RING rather than on the file, because logd's poll
+    // is a second away and this test must not wait on it.
+    uint64_t before = 0;
+    struct query_applog q;
+    if (sys_query_record(QUERY_APPLOG, 0, &q, sizeof q) > 0) before = q.total;
+    run("/bin/cat", "/no/such/file/applog-probe", SPAWN_FD_LOG);
+
+    int frags = 0, ended = 0;
+    for (unsigned i = 0; ; i++) {
+        if (sys_query_record(QUERY_APPLOG, i, &q, sizeof q) <= 0) break;
+        if (q.seq <= before || strcmp(q.tag, "cat") != 0) continue;
+        frags++;
+        if (q.eol) ended++;
+    }
+    utest_check(frags > 1, "a message built from several writes is several records");
+    utest_check(ended == 1, "exactly one of them says it ended the line");
 
     return utest_end();
 }

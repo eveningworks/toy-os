@@ -42,6 +42,7 @@ static int applog_fill(int index, void *out) {
     k_strlcpy(q->tag, rec.tag, sizeof q->tag);
     k_memcpy(q->text, rec.text, rec.len + 1u);
     q->len = rec.len;
+    q->eol = rec.eol;
     return 1;
 }
 

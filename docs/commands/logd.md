@@ -28,8 +28,13 @@ writer, so it cannot be forged:
     [netd  ] [3.21] netd: eth0 is now net-123456
 
 Both carry the same boot-relative stamp, so the merged file reads in
-order. A service's line is stamped when it was WRITTEN, not when `logd`
-drained it, which can be a second later.
+order. A service's line is stamped when its FIRST fragment was written,
+not when `logd` drained it, which can be a second later.
+
+**A record is a write, not a line**, and several programs here build one
+line from several writes -- `cmd_fail_err()` sends five. `logd` joins
+fragments per tag until a record says it ended the line, so the file
+carries whole messages rather than the pieces they were sent in.
 
 Nothing is reformatted. The kernel's `[0.90]` is boot-relative and is the
 most reliable clock the machine has early on, before anything has set the

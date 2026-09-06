@@ -17,12 +17,13 @@
 // undiagnosable. A chatty PROGRAM must not be able to do that to kernel
 // evidence, and sharing one ring is exactly how it could.
 //
-// ONE WRITE IS ONE RECORD. stdio line-buffers by default, so a program's
-// printf arrives whole and this is right in practice; a program that
-// writes half a line gets half a record, which is stated here rather
-// than hidden because the alternative -- holding partial lines per
-// writer -- costs a buffer per open descriptor to fix a case nothing
-// here produces.
+// ONE WRITE IS ONE RECORD, AND `eol` IS WHAT MAKES THAT USABLE. Plenty
+// of programs here build a line from several writes (`cmd_fail_err()` in
+// lib/cmd.h sends five), so a record is a FRAGMENT as often as a line.
+// Each one records whether its write ended a line, and the reader joins
+// fragments until it sees one that did -- ring 3 is where that buffer
+// belongs, since the kernel would need one per open descriptor to hold
+// the same state.
 
 #define APPLOG_TAG_MAX  16   // PROC_NAME_MAX-ish; a tag is a program name
 #define APPLOG_TEXT_MAX 200  // beyond this a line is truncated, not split
@@ -42,6 +43,10 @@ struct applog_rec {
     char     tag[APPLOG_TAG_MAX];
     char     text[APPLOG_TEXT_MAX];
     uint16_t len;
+    // The write ended with a newline, i.e. this record COMPLETES a line.
+    // Recorded because stripping the newline destroys the only evidence
+    // of it, and a reader joining fragments has nothing else to stop on.
+    uint8_t  eol;
 };
 
 // Append one record. `tag` is the writing program's name; a NULL or

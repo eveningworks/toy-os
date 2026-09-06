@@ -141,9 +141,46 @@ static int drain_klog(void) {
     return 1;
 }
 
-// The application ring, one record per pass. A record is already one
-// line -- the kernel strips the newline the writer sent -- so there is
-// no line reassembly here and no partial-record state to hold.
+// The application ring, one record per pass.
+//
+// A RECORD IS A WRITE, NOT A LINE. Several programs here build one line
+// from several writes (`cmd_fail_err()` sends five), so fragments are
+// joined until a record says it ended the line -- per TAG, since two
+// processes interleave freely and joining by arrival would splice one
+// program's line into another's.
+#define FRAG_TAGS 4
+
+static struct {
+    char tag[16];
+    char text[APPLOG_TEXT_MAX * 2];
+    unsigned len;
+    unsigned long long cs;   // the stamp of the line's FIRST fragment
+} g_frag[FRAG_TAGS];
+
+static void frag_flush(unsigned i) {
+    if (!g_frag[i].len) return;
+    char line[sizeof g_frag[0].text + 24];
+    int n = snprintf(line, sizeof line, "[%llu.%02llu] %s",
+                     g_frag[i].cs / 100, g_frag[i].cs % 100, g_frag[i].text);
+    if (n > 0) emit(g_frag[i].tag, line, (unsigned)n);
+    g_frag[i].len = 0;
+    g_frag[i].tag[0] = '\0';
+}
+
+// The slot for `tag`, evicting the oldest holder if every slot is busy.
+// FOUR SLOTS, and a fifth concurrent writer FLUSHES one rather than
+// dropping it: a half-line in the file is worse than a late one, but a
+// lost line is worse than both.
+static unsigned frag_slot(const char *tag) {
+    for (unsigned i = 0; i < FRAG_TAGS; i++)
+        if (g_frag[i].len && !strcmp(g_frag[i].tag, tag)) return i;
+    for (unsigned i = 0; i < FRAG_TAGS; i++)
+        if (!g_frag[i].len) { snprintf(g_frag[i].tag, sizeof g_frag[i].tag, "%s", tag); return i; }
+    frag_flush(0);
+    snprintf(g_frag[0].tag, sizeof g_frag[0].tag, "%s", tag);
+    return 0;
+}
+
 static int drain_applog(void) {
     struct query_applog a;
     if (sys_query_record(QUERY_APPLOG, 0, &a, sizeof a) <= 0) return 0;
@@ -162,14 +199,19 @@ static int drain_applog(void) {
     unsigned idx = (unsigned)(g_seq + 1 - a.oldest);
     if (sys_query_record(QUERY_APPLOG, idx, &a, sizeof a) <= 0) return 0;
 
-    // The stamp is prepended here rather than stored with the text,
-    // because the kernel's own lines carry theirs inside the bytes and
-    // the two have to come out looking the same.
-    char line[APPLOG_TEXT_MAX + 24];
-    int n = snprintf(line, sizeof line, "[%llu.%02llu] %s",
-                     (unsigned long long)(a.cs / 100),
-                     (unsigned long long)(a.cs % 100), a.text);
-    if (n > 0) emit(a.tag, line, (unsigned)n);
+    // The stamp is prepended when the line is FLUSHED, from the first
+    // fragment's time, because the kernel's own lines carry theirs
+    // inside the bytes and the two have to come out looking the same.
+    unsigned i = frag_slot(a.tag);
+    if (!g_frag[i].len) g_frag[i].cs = a.cs;
+    unsigned room = sizeof g_frag[i].text - 1 - g_frag[i].len;
+    unsigned take = a.len < room ? a.len : room;
+    memcpy(g_frag[i].text + g_frag[i].len, a.text, take);
+    g_frag[i].len += take;
+    g_frag[i].text[g_frag[i].len] = '\0';
+    // A line longer than the buffer is flushed as it stands rather than
+    // growing without bound -- the same call feed() makes for the kernel.
+    if (a.eol || take < a.len) frag_flush(i);
     g_seq = a.seq;
     return 1;
 }
@@ -202,6 +244,10 @@ int main(void) {
     for (;;) {
         while (drain_klog()) { }
         while (drain_applog()) { }
+        // A program that never terminated its last line would otherwise
+        // hold it forever. Once the ring is drained there is nothing
+        // more coming this second, so write what is held.
+        for (unsigned i = 0; i < FRAG_TAGS; i++) frag_flush(i);
         rotate_if_needed();
         sys_sleep_ms(POLL_MS);
     }

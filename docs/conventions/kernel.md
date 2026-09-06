@@ -1720,6 +1720,14 @@ logged and nothing refused.
 whole value of `log -u`. It truncates `PROC_NAME_MAX` (24) to
 `APPLOG_TAG_MAX` (16).
 
+**A RECORD IS A WRITE, NOT A LINE, AND `eol` IS WHAT MAKES THAT USABLE.**
+Plenty of programs build one line from several writes (`cmd_fail_err()`
+sends five), so each record says whether its write ENDED a line and
+`logd` joins fragments until one did -- per TAG, since two processes
+interleave freely and joining by arrival splices one program's line into
+another's. Assuming `stdio` buffering made this a non-issue is what
+shipped `netd`'s one DHCP failure as five log lines.
+
 **THE RING IS SEPARATE FROM klog ON PURPOSE**: a chatty program must not
 be able to evict kernel evidence, which is the failure `logd` exists
 because of. It is 64 records -- a BUFFER in front of a one-second poll,
