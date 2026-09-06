@@ -695,6 +695,8 @@ whenever a headline here tells you something you did not already know.
 - **THERE IS A NETWORK DAEMON, IT OWNS NAMING AND ADDRESSES, AND ITS RULES ARE A FILE**
 - **A NETWORK INTERFACE IS NAMED BY THE CARD, NOT BY THE SOCKET -- AND RENAMING IS RING 3's**
 - **A NETWORK DEVICE CAN BE REMOVED NOW, AND REMOVAL HAS TO UNDO THREE THINGS**
+- **TWO PROCESSES SHARE MEMORY THROUGH A NAME, AND THE NAME IS THE HARD PART**
+- **SOUND IS MIXED BY A SERVICE, AND THE CARD IS STILL EXCLUSIVE**
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
 
 ### GUI, Toykit and the desktop
@@ -1402,7 +1404,7 @@ cost".
   `keyboard_paths_test.py`, `kvm_soak.py`, `live_boot_test.py`,
   `ls_test.py`, `mem_stress.py`, `mkpart_test.py`,
   `multidisk_test.py`, `net_test.py`, `partition_test.py`,
-  `poweroff_test.py`, `qemu_matrix.py`, `remote_test.py`, `serial_backpressure_test.py`, `stdin_test.py`,
+  `poweroff_test.py`, `qemu_matrix.py`, `remote_test.py`, `serial_backpressure_test.py`, `soundd_test.py`, `stdin_test.py`,
   `msi_test.py`, `ntp_test.py`, `sum_test.py`, `taskbar_test.py`,
   `terminal_probe.py`, `tfs3_v1_test.py`,
   `usb_audio_test.py`, `usb_test.py`, `virtio_boot_test.py`,

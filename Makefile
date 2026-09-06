@@ -1261,6 +1261,10 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LI
 	# measures on the host, and the shipped sounds are musical rather
 	# than measurable.
 	cp data/tests/sine1k.wav $(SEED_DIR)/sync/tests/sine1k.wav
+	# A SECOND tone, because one recording containing one frequency
+	# cannot judge a mixer -- tools/soundd_test.py plays both at once
+	# and requires both in the same recording.
+	cp data/tests/sine440.wav $(SEED_DIR)/sync/tests/sine440.wav
 	# ...and the same tone as an MP3, so the one host-side oracle that
 	# measures FREQUENCY covers the decoder as well as the WAV path.
 	cp data/tests/sine1k.mp3 $(SEED_DIR)/sync/tests/sine1k.mp3

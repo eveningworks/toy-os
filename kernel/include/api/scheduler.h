@@ -207,9 +207,12 @@ struct mmap_region {
     uint8_t  kind;     // MMAP_KIND_*
     char     path[64]; // absolute; FS_PATH_MAX, asserted in scheduler.c
     uint64_t file_off; // file offset backing `base`
+    int32_t  shm_idx;  // MMAP_KIND_SHM: which object (kernel/mm/shm.c)
+    int32_t  reserved;
 };
 #define MMAP_KIND_ANON 0
 #define MMAP_KIND_FILE 1
+#define MMAP_KIND_SHM  2 // MAP_SHARED over a SYS_SHM_OPEN descriptor
 
 // Per address space, not per slot: a thread resolves to its group's
 // sched_mm the same way the heap does, so the group shares one list.

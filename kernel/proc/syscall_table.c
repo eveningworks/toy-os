@@ -151,6 +151,8 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_LISTEN]        = { "listen",        sys_listen,        { A_FD } },
     [SYS_ACCEPT]        = { "accept",        sys_accept,        { A_FD, A_HEX } },
     [SYS_WAIT_READY]    = { "wait_ready",    sys_wait_ready,    { A_INT } },
+    [SYS_SHM_OPEN]      = { "shm_open",      sys_shm_open,      { A_HEX } },
+    [SYS_SHM_UNLINK]    = { "shm_unlink",    sys_shm_unlink,    { A_PATH } },
 };
 
 #define SYSCALL_TABLE_COUNT (sizeof SYSCALL_TABLE / sizeof SYSCALL_TABLE[0])

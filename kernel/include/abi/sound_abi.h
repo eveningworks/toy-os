@@ -62,6 +62,35 @@ struct snd_ctl_page {
     uint32_t device_gone;
 };
 
+// --- the sound daemon's client rings ---------------------------------
+//
+// A client of /bin/soundd writes into a ring of EXACTLY THIS SHAPE, in
+// a shared-memory object it creates (SYS_SHM_OPEN) and the daemon maps.
+// One control page then the samples, the same struct above, and the
+// same refill rule -- so a sink written against the kernel's stream
+// works against the daemon's by changing where the pointers come from.
+//
+// THE DAEMON PLAYS THE ROLE THE HARDWARE PLAYS: it advances `hw_pos`
+// as it consumes, and ZEROES each chunk before moving past it. That is
+// what makes an abandoned ring go quiet instead of looping, exactly as
+// it does for the kernel -- and it is why a client that dies needs no
+// cleanup path in the daemon at all.
+//
+// `running` is the CLIENT saying it wants to be mixed; `device_gone` is
+// the daemon saying it is going away, so a client can fall back to the
+// kernel stream rather than writing into a ring nobody reads.
+#define SND_CLIENT_BYTES (4096 + SND_RING_BYTES)
+
+// The daemon's presence beacon: an object of this name exists exactly
+// while a daemon is running, which is how a client chooses a sink
+// without a connect() to fail. Its content is unused.
+#define SND_SERVER_NAME "snd.server"
+
+// A client's own ring is "snd." plus its pid -- unique without a
+// registry, and the pid is what QUERY_SHM already reports, so the
+// daemon can tell a live client from a stale name.
+#define SND_CLIENT_PREFIX "snd."
+
 // SYS_SND_CTL ops (RDI).
 #define SND_CTL_START 1 // begin playback from the ring's start
 #define SND_CTL_STOP  2 // stop the engine; the ring stays mapped

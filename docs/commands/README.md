@@ -178,6 +178,10 @@ a command), and the `gui3`/`nano` aliases.
 - [`tftpd`](tftpd.md)
 - [`wget`](wget.md)
 
+### Services and the system
+
+- [`soundd`](soundd.md)
+
 ### Storage
 
 - [`install`](install.md)

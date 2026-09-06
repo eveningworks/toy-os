@@ -137,6 +137,7 @@ TOOLS = [
     # its own report treats "0 skipped" as an assertion.
     ("audio",       "audio_test.py",           "AC97, the PCM ring and a WAV file",  True,  None,                   False),
     ("audio_hda",   "audio_test.py --card hda", "Intel HDA through the same oracle", True,  None,                   False),
+    ("soundd",      "soundd_test.py",          "two programs audible at once, mixed by the daemon", True, None,    False),
     # Three guests, and the only run in which anything reaches an
     # isochronous endpoint. Its middle phase gives each card its own wav
     # recording, which is the only way "which device played" is an

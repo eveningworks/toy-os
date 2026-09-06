@@ -90,6 +90,12 @@ TESTS = [
     # answer, and both checks measure nothing there. Same reason
     # cputime_test is spawned.
     ("udp_test", None, None, None),
+    # Named shared memory across two processes, which is the only shape
+    # that can see it working: one process mapping its own object twice
+    # sees its own writes whether or not the frames are shared. SPAWNED
+    # (exit code None) because it blocks in waitpid for /tests/shm_child,
+    # which the legacy `run` loader has no scheduler slot to do.
+    ("shm_test", None, None, None),
     # Tab completion's engine, built for ring 3. The KTESTs cover the
     # same source through the KERNEL shell's environment and would pass
     # whether or not a byte of it linked into libuapp.a -- this is the

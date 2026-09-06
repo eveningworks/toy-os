@@ -89,7 +89,12 @@ enum fd_kind {
     // than one with a flag, because every switch in syscall_fd.c
     // dispatches on the kind and the two ends do OPPOSITE things: a
     // write to the master is input, a write to the slave is output.
-    FD_KIND_TTY_MASTER, FD_KIND_TTY_SLAVE
+    FD_KIND_TTY_MASTER, FD_KIND_TTY_SLAVE,
+    // A named shared-memory object (kernel/mm/shm.c). It is never read
+    // or written through -- the only thing you may do with one is
+    // SYS_MMAP it -- so every I/O path refuses it by falling off its
+    // kind switch, which is what a new kind should cost.
+    FD_KIND_SHM
 };
 
 struct open_file {
@@ -122,6 +127,9 @@ struct open_file {
         struct {
             int idx; // index into pty.c's table
         } pty;
+        struct {
+            int idx; // index into shm.c's object table
+        } shm;
     };
 };
 
@@ -147,8 +155,14 @@ void fd_desc_unref(int di);
 // kernel log. Idempotent. Called for a process's own address space the
 // first time anything asks about its fds.
 int  fd_space_open(uint64_t pml4);
-// The lowest free descriptor in `pml4` naming description `di`, which
-// it takes a reference to. -1 when the table is full.
+// The lowest free descriptor in `pml4` naming description `di`. -1 when
+// the table is full.
+//
+// IT TAKES NO REFERENCE. fd_desc_alloc() hands back the one reference
+// the description starts with and this only points a descriptor at it,
+// so a caller unrefs on the FAILURE path and never on success -- an
+// unref after a successful install tears the description down under a
+// live descriptor, and the fd then reads as EBADF.
 int  fd_install(uint64_t pml4, int di);
 // The description behind one descriptor, or NULL if it is not open.
 struct open_file *fd_get(uint64_t pml4, int fd);
@@ -235,6 +249,8 @@ int sys_yield(struct syscall_ctx *c);
 int sys_sbrk(struct syscall_ctx *c);
 int sys_mmap(struct syscall_ctx *c);   // kernel/mm/mmap.c
 int sys_munmap(struct syscall_ctx *c); // kernel/mm/mmap.c
+int sys_shm_open(struct syscall_ctx *c);   // kernel/mm/shm.c
+int sys_shm_unlink(struct syscall_ctx *c); // kernel/mm/shm.c
 int sys_snd_open(struct syscall_ctx *c); // kernel/drivers/sound/sound.c
 int sys_snd_ctl(struct syscall_ctx *c);  // kernel/drivers/sound/sound.c
 int sys_spawn(struct syscall_ctx *c);

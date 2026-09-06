@@ -6203,3 +6203,101 @@ would let an edit rename a live interface, and a socket bound by name
 that name -- the hazard the naming scheme was changed to remove. A
 rename takes effect on the next boot, or when the card is replugged.
 
+## Shared memory is a NAMED object, and the name is the point
+
+`SYS_SHM_OPEN` creates a run of kernel-owned frames under a name; a
+process maps it with `SYS_MMAP`'s `MAP_SHARED`. It arrived because two
+ring-3 processes here could not share a byte: every cross-process
+mapping was bespoke and kernel-managed -- the sound ring to its one
+owner, a window buffer to the registered compositor -- and `MAP_SHARED`
+was refused outright.
+
+**The NAMESPACE is the harder half, and it is what was actually
+missing.** Shared frames alone are useless when neither side can say
+which frames: there are no unix sockets here, no fd passing and no
+connect-by-name, so two processes that never shared a parent had no way
+to agree on anything. A name in a kernel-held namespace is that
+agreement, and `QUERY_SHM` -- which lists every object with its size,
+reference count and creating pid -- is how a server finds the clients
+that have opened a channel to it. The roadmap had this the right way
+round before it was built: *"the missing primitive is rendezvous, not
+shared memory"*.
+
+**Why not the compositor's pattern.** Windows already do cross-process
+sharing here: `WIN_REQ_SET_COMPOSITOR` registers one role and
+`WIN_REQ_MAP_WINDOW` lets that role map another process's buffer. A
+sound server could have been a second copy of that -- kernel-owned
+per-client rings plus a privileged mapper -- and it would have been less
+code. It was rejected because the third caller would have been a third
+copy: a settings daemon and `AF_UNIX` both want the same thing, and
+three bespoke role-gated mechanisms is the shape this project deletes
+wherever it finds one. POSIX's `shm_open` + `mmap` is the portable
+spelling and costs one syscall pair.
+
+**Two reference holders, and both are counted.** A descriptor and a
+mapping. POSIX says `close(2)` leaves an existing mapping alone, so the
+mapping table in `kernel/mm/shm.c` is not redundant with the fd table --
+it is the half that survives the close, and without it the frames are
+freed under a live mapping. An unlinked object keeps working for
+everyone already holding it and merely accepts no new openers, which is
+what makes "no new clients" expressible.
+
+**Frames are zeroed at CREATION, not at fault.** A private mapping can
+zero on first touch because each mapper faults separately; a shared one
+has no per-mapper first touch to hang it on, and the second mapper must
+never read what a previous owner of those frames left behind.
+
+**No permissions, stated rather than implied.** Any process may open any
+name. This system has no users, so a mode argument would be decoration
+-- and a shared object is exactly as private as its name is unguessable,
+which is not a security property and is not claimed as one.
+
+**What it is not.** The size is fixed at creation: there is no
+`ftruncate`, which is why `sys_shm_open()` takes a length and is
+deliberately NOT spelled `shm_open(3)` in tolibc -- a function with that
+name taking arguments that mean something else is worse than an honest
+local one. The POSIX pair is on the roadmap.
+
+## The kernel still never mixes: a sound DAEMON owns the one stream
+
+`/bin/soundd` opens the machine's single exclusive PCM stream and mixes
+every client into it. Nothing about the kernel's contract changed --
+`SYS_SND_OPEN` is still exclusive, still refuses a second opener with
+`-EBUSY`, and still knows nothing about mixing.
+
+**Why a daemon and not kernel mixing.** The original sound decision
+already said it: *"If two audible apps ever matter here, the answer is a
+userspace sound daemon owning the one stream."* Mixing drags resampling,
+format policy and per-client state in with it, which is why ALSA's
+`dmix` is a library, PulseAudio and PipeWire are daemons, Windows' audio
+engine is a service, and Android's AudioFlinger is one too. A malformed
+stream can at worst take down the daemon, which init restarts.
+
+**The problem it fixes was not theoretical.** An app asks for sound once,
+at startup, and treats failure as "no sound is not an error" -- so
+starting Minesweeper while the Audio Player held the card left the game
+**silent for its entire life**, with the only notice in a log. It was
+reported as "audio does not work on this machine", and the machine's
+driver was fine.
+
+**A client ring is the KERNEL's ring, shape for shape.** The daemon
+plays the part the hardware plays: it advances `hw_pos` as it consumes
+and zeroes each chunk before moving past it. That one inherited rule is
+why a client that dies needs no cleanup path in the daemon at all -- its
+ring goes quiet instead of looping -- and why `usnd_sink.h`'s two rows
+share their cursor arithmetic.
+
+**It blocks on TIME, never on its clients.** There is no `poll()` here,
+so a server that waited on N clients would need N threads. The hardware
+ring's position is the clock instead: the daemon wakes on a timer, mixes
+whatever each client has left it, and a client that stopped writing
+contributes silence. That is what lets one single-threaded loop serve
+every client on a system with no readiness primitive.
+
+**It still holds the card while it runs**, so a program opening
+`SYS_SND_OPEN` directly gets `-EBUSY` -- `/tests/tone` and the `sound`
+KTESTs both do, deliberately, and both need `service stop soundd` first.
+Releasing the device when no client is playing is PipeWire's
+`suspend-on-idle` and is on the roadmap; it was not built here because a
+reopen that loses the race introduces a failure mode the exclusive hold
+does not have.

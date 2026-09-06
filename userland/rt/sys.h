@@ -315,6 +315,18 @@ void *sys_mmap(void *addr, uint64_t length, int prot, int flags,
                int fd, uint64_t offset);
 int sys_munmap(void *addr, uint64_t length);
 
+// SYS_SHM_OPEN / SYS_SHM_UNLINK: a named shared-memory object, which
+// sys_mmap() maps with MAP_SHARED. Returns an fd, or -1 with the reason
+// in sys_errno().
+//
+// NOT SPELLED shm_open(3), and the difference is the SIZE. POSIX's takes
+// a mode and sizes the object with a later ftruncate(); here the size is
+// fixed at creation, so the POSIX pair is not yet expressible and a
+// function with that name would take arguments meaning something else.
+// See docs/roadmap.md's IPC track.
+int sys_shm_open(const char *name, uint64_t length, int flags);
+int sys_shm_unlink(const char *name);
+
 // --- sockets ---------------------------------------------------------
 //
 // There is no NIC driver or protocol stack yet, so send/recv always

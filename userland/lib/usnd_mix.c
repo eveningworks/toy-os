@@ -191,10 +191,13 @@ static int g_users;
 int usnd_init(void) {
     if (g_ready) { g_users++; return 0; }
 
-    // One row today. A daemon sink goes FIRST in this list, with the
-    // device as the fallback -- an app that got the daemon and an app
-    // that got the device are the same app.
-    static const struct usnd_sink *const sinks[] = { &usnd_sink_device };
+    // The daemon FIRST, the device as the fallback -- an app that got
+    // the daemon and an app that got the device are the same app. The
+    // daemon's open() returns -ENODEV when none is running, so a
+    // machine without one falls straight through.
+    static const struct usnd_sink *const sinks[] = {
+        &usnd_sink_daemon, &usnd_sink_device,
+    };
 
     int rc = -ENODEV;
     for (int i = 0; i < (int)(sizeof sinks / sizeof sinks[0]); i++) {

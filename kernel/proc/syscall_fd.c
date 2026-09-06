@@ -12,6 +12,7 @@
 // to a pipe, or to a file depending only on the fd. The file-shaped
 // ends of each are the two sys_do_*_file() helpers below.
 #include "syscalls.h"
+#include "shm.h"
 #include "syscall_abi.h"
 #include "errno.h"
 #include "klog.h"
@@ -102,6 +103,7 @@ int fd_desc_alloc(enum fd_kind kind, int aux_idx) {
             fd_desc[i].pipe.idx = aux_idx;
         if (kind == FD_KIND_TTY_MASTER || kind == FD_KIND_TTY_SLAVE)
             fd_desc[i].pty.idx = aux_idx;
+        if (kind == FD_KIND_SHM) fd_desc[i].shm.idx = aux_idx;
         return i;
     }
     return -1;
@@ -125,6 +127,9 @@ void fd_desc_unref(int di) {
     // waited for forever; pty.c owns that rule, here as for a pipe.
     case FD_KIND_TTY_MASTER: pty_close_master(f->pty.idx); break;
     case FD_KIND_TTY_SLAVE:  pty_close_slave(f->pty.idx);  break;
+    // A MAPPING outlives its descriptor, so this drops one reference
+    // and not necessarily the object -- POSIX's close-then-keep-the-map.
+    case FD_KIND_SHM: shm_put(f->shm.idx); break;
     // A socket holds a table entry, a bound port and a queue. Without
     // this it leaks all three: the table is eight entries wide, so two
     // runs of a program that opens four sockets leave the third unable

@@ -34,6 +34,12 @@ TEST_TONE_HZ = 1000
 TEST_TONE_MS = 1500
 TEST_TONE_RATE = 44100          # NOT 48000: the resampler is in the path
 
+# The second fixture exists so TWO of them can play at once, which is
+# the only way to judge a mixer: one recording must contain both
+# frequencies. Well separated from TEST_TONE_HZ so neither lands on the
+# other's harmonics -- 1000 and 440 share no low multiple.
+TEST_TONE2_HZ = 440
+
 
 def write_wav(path, frames, rate, channels, bits):
     """frames: a list of per-channel int lists, already at `bits` scale."""
@@ -149,6 +155,9 @@ def main():
     print("fixtures:")
     write_wav(os.path.join(args.out_tests, "sine1k.wav"),
               steady(TEST_TONE_RATE, TEST_TONE_MS, TEST_TONE_HZ),
+              TEST_TONE_RATE, 2, 16)
+    write_wav(os.path.join(args.out_tests, "sine440.wav"),
+              steady(TEST_TONE_RATE, TEST_TONE_MS, TEST_TONE2_HZ),
               TEST_TONE_RATE, 2, 16)
 
 

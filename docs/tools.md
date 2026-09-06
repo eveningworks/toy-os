@@ -2046,6 +2046,30 @@ window without going through it will find its layout polls timing out.
   HDA driver's first real bug in one run -- an amplifier-capability
   field read in the wrong order set "0 dB" to -53 dB, and a tone at
   4% amplitude measured as silence.
+- **`soundd_test.py`** -- the sound daemon, judged on the HOST by the
+  one question no in-guest check can answer: are TWO programs audible at
+  the same time? A mixer that silently served one client and dropped the
+  other passes every "did it crash", "did aplay return 0" and "is the
+  service running" check there is. So the guest plays `sine1k.wav` and
+  `sine440.wav` from two separate processes AT ONCE and the host
+  requires BOTH frequencies in the one recording.
+  **Zero crossings cannot do this** -- two mixed tones cross zero at
+  neither of their frequencies -- so it measures energy at each
+  frequency with a Goertzel filter, and samples a THIRD frequency
+  nobody played as the control: if 700 Hz reads as loud as 440, the
+  measurement is noise and the two real readings mean nothing. It
+  measures the loudest half-second rather than the whole file, for
+  `audio_test.py`'s reason (TCG pads the recording with host silence).
+  **`--positive-control` is built in**: it stops the daemon first, so
+  the second `aplay` gets -EBUSY and only one tone can reach the card.
+  That run MUST show one frequency and not two -- it is what proves the
+  measurement can distinguish the states at all, and it reproduces the
+  exact bug the daemon exists to fix. On demand, not in the gate.
+
+  One trap it encodes: **no trailing `&`**. `spawn` at the ring-0 shell
+  already returns as soon as the child exists and that shell has no job
+  control, so an ampersand arrives as a second ARGUMENT -- it failed
+  once as "cannot open file", with the daemon working perfectly.
 - **`usb_audio_test.py`** -- USB Audio Class 1.0 playback, on the same
   host-side oracle `audio_test.py` uses, pointed at a different bus. The
   guest plays A440 through an isochronous OUT endpoint and QEMU's wav

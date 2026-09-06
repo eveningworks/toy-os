@@ -19,6 +19,7 @@
 #include "pmm.h"
 #include "fs.h"
 #include "uaddr.h"
+#include "shm.h"
 #include "string.h"
 #include "kfmt.h"     // klog_printf
 
@@ -89,16 +90,31 @@ int sys_mmap(struct syscall_ctx *c) {
         (m.prot & ~(SYS_PROT_READ | SYS_PROT_WRITE | SYS_PROT_EXEC))) {
         ret = -EINVAL; goto out;
     }
-    if (!(m.flags & SYS_MAP_PRIVATE) ||
-        (m.flags & ~(SYS_MAP_PRIVATE | SYS_MAP_FIXED | SYS_MAP_ANONYMOUS))) {
+    // Exactly one of PRIVATE/SHARED, and nothing this kernel does not
+    // implement. SHARED is meaningful only over an shm object, which
+    // the fd check below enforces.
+    int shared = (m.flags & SYS_MAP_SHARED) != 0;
+    if (shared == ((m.flags & SYS_MAP_PRIVATE) != 0) ||
+        (m.flags & ~(SYS_MAP_SHARED | SYS_MAP_PRIVATE | SYS_MAP_FIXED |
+                     SYS_MAP_ANONYMOUS))) {
         ret = -EINVAL; goto out;
     }
+    if (shared && (m.flags & SYS_MAP_ANONYMOUS)) { ret = -EINVAL; goto out; }
     if (!m.length || (m.offset & 0xFFF)) { ret = -EINVAL; goto out; }
 
     uint64_t npages = (m.length + 4095) / 4096;
 
     struct open_file *f = 0;
-    if (!(m.flags & SYS_MAP_ANONYMOUS)) {
+    int shm_idx = -1;
+    if (shared) {
+        f = fd_get(c->pml4, m.fd);
+        if (!f || f->kind != FD_KIND_SHM) { ret = -EBADF; goto out; }
+        shm_idx = f->shm.idx;
+        // The object's size is fixed at creation, so a mapping longer
+        // than it would have pages nothing can fault in.
+        if (npages > shm_npages(shm_idx)) { ret = -EINVAL; goto out; }
+        f = 0; // not a file mapping; nothing below should treat it as one
+    } else if (!(m.flags & SYS_MAP_ANONYMOUS)) {
         f = fd_get(c->pml4, m.fd);
         // "Open the wrong way" is EBADF here (errno.h's own words): a
         // mapping is a read of the file, so a write-mode fd cannot
@@ -136,8 +152,17 @@ int sys_mmap(struct syscall_ctx *c) {
     r->prot     = (uint8_t)m.prot;
     r->file_off = 0;
     r->kind     = MMAP_KIND_ANON;
+    r->shm_idx  = -1;
     r->path[0]  = '\0';
-    if (f) {
+    if (shm_idx >= 0) {
+        // The reference is taken BEFORE the slot goes live, so a failure
+        // here leaves nothing half-registered.
+        if (shm_map_add(c->pml4, shm_idx, base, npages) != 0) {
+            ret = -ENOMEM; goto out;
+        }
+        r->kind    = MMAP_KIND_SHM;
+        r->shm_idx = shm_idx;
+    } else if (f) {
         r->kind     = MMAP_KIND_FILE;
         r->file_off = m.offset;
         k_strlcpy(r->path, f->file.name, sizeof r->path);
@@ -174,6 +199,14 @@ int sys_munmap(struct syscall_ctx *c) {
     rend = r->base + r->npages * 4096ULL;
     if (end > rend) { ret = -EINVAL; goto out; }
 
+    // A SHARED region goes whole or not at all. Trimming one would split
+    // the object's frames between two entries, and the mapping table
+    // keys on a base address -- a refusal can be widened later; a
+    // half-dropped reference cannot be found again.
+    if (r->kind == MMAP_KIND_SHM && (addr != r->base || end != rend)) {
+        ret = -EINVAL; goto out;
+    }
+
     // A middle cut needs a slot for the tail BEFORE anything is
     // unmapped, so a full table refuses with every page still mapped
     // rather than half-applying.
@@ -185,6 +218,7 @@ int sys_munmap(struct syscall_ctx *c) {
 
     for (uint64_t p = addr; p < end; p += 4096)
         vmm_release_user_page(c->pml4, p); // untouched pages: nothing there
+    if (r->kind == MMAP_KIND_SHM) shm_unmap_range(c->pml4, addr, npages);
 
     if (addr == r->base && end == rend) {
         r->base = 0;
@@ -199,6 +233,7 @@ int sys_munmap(struct syscall_ctx *c) {
         tail->prot     = r->prot;
         tail->kind     = r->kind;
         tail->file_off = r->file_off + (end - r->base);
+        tail->shm_idx  = r->shm_idx;
         k_strlcpy(tail->path, r->path, sizeof tail->path);
         tail->base     = end;
         r->npages      = (addr - r->base) / 4096;
@@ -259,6 +294,16 @@ int mmap_fault_in(struct sched_mm *mm, uint64_t pml4_phys, uint64_t vaddr) {
     uint64_t page = vaddr & ~0xFFFULL;
     struct mmap_region *r = region_of(mm, page);
     if (!r) return 0; // a wild pointer that happens to land in the arena
+
+    if (r->kind == MMAP_KIND_SHM) {
+        // BORROWED: the frames belong to the object, not to this address
+        // space, so teardown must walk past them. Writable regardless of
+        // PROT_WRITE would be wrong; the prot is honoured like any other.
+        uint64_t f = shm_frame(r->shm_idx, (page - r->base) / 4096);
+        if (!f) return 0;
+        return vmm_map_user_borrowed(pml4_phys, page, f,
+                                     (r->prot & SYS_PROT_WRITE) != 0, 0, 0);
+    }
 
     uint64_t frame = pmm_alloc_frame(PMM_ZONE_ANY);
     if (!frame) {

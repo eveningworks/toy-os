@@ -1932,9 +1932,10 @@ struct sys_stat {
                       // first touch; what the file held AT THAT MOMENT
                       // is what the page gets, and a later write to
                       // the file does not update pages already faulted
-                      // in. MAP_SHARED is refused (-EINVAL) -- every
-                      // mapping is private, and writes never reach the
-                      // file.
+                      // in. MAP_SHARED is accepted ONLY over a
+                      // descriptor from SYS_SHM_OPEN: a shared mapping
+                      // of a FILE is still refused (-EINVAL), because
+                      // writes never reach the file.
 
 #define SYS_SND_OPEN 80 // No arguments. Claims the machine's ONE PCM
                          // playback stream (exclusive -- -EBUSY while
@@ -1959,6 +1960,44 @@ struct sys_stat {
                       // spanning several; this does not, yet) -- it
                       // may trim an edge or split the middle. Returns
                       // 0 or -ERRNO.
+
+#define SYS_SHM_OPEN 99   // RDI = pointer to a `struct shm_open_msg`.
+                          // Returns a descriptor naming a SHARED
+                          // MEMORY OBJECT -- a run of frames the
+                          // kernel owns, which any process that knows
+                          // the name can map with SYS_MMAP's
+                          // MAP_SHARED. Returns an fd, or -errno.
+                          //
+                          // THE NAME IS THE RENDEZVOUS. There are no
+                          // unix sockets here and no fd passing, so a
+                          // name in a kernel-held namespace is how two
+                          // processes that never shared a parent find
+                          // one channel. POSIX shm_open(3)'s shape,
+                          // minus a mode: this system has no users, so
+                          // any process may open any name.
+
+#define SYS_SHM_UNLINK 100 // RDI = a name. Removes it from the
+                           // namespace; the frames go when the last
+                           // descriptor and mapping do, so unlinking
+                           // an object somebody is still using is safe
+                           // and is how a creator says "no new
+                           // openers". Returns 0, or -ENOENT.
+
+// What SYS_SHM_OPEN takes.
+#define SHM_NAME_MAX 32 // including the terminator
+
+#define SHM_CREATE 0x1 // make it if it does not exist
+#define SHM_EXCL   0x2 // with CREATE: refuse (-EEXIST) if it does
+
+struct shm_open_msg {
+    const char *name;   // no '/' and no '..'; SHM_NAME_MAX bytes
+    uint64_t    length; // bytes, rounded up to whole pages. Ignored
+                        // when opening an object that already exists --
+                        // its size was fixed at creation, which is why
+                        // there is no ftruncate() here.
+    int32_t     flags;  // SHM_*
+    int32_t     reserved;
+};
 
 // What SYS_THREAD_CREATE takes. A struct because the call needs five
 // arguments and this ABI carries three -- the same thing SYS_SPAWN did
@@ -1988,6 +2027,11 @@ struct openpty_msg {
 #define SYS_PROT_WRITE 0x2
 #define SYS_PROT_EXEC  0x4
 
+#define SYS_MAP_SHARED    0x01 // shm objects only (SYS_SHM_OPEN). Every
+                               // mapper sees one set of frames, so a
+                               // write in one process is visible in
+                               // another -- the only way two ring-3
+                               // processes share memory here.
 #define SYS_MAP_PRIVATE   0x02
 #define SYS_MAP_FIXED     0x10 // `addr` is a demand, not a hint; it must
                                // be page-aligned and inside the arena,
@@ -2006,8 +2050,8 @@ struct mmap_msg {
     uint64_t addr;   // 0 = kernel picks; else a hint (FIXED: a demand)
     uint64_t length; // bytes; rounded up to whole pages
     int32_t  prot;   // SYS_PROT_* -- PROT_READ is required
-    int32_t  flags;  // SYS_MAP_* -- MAP_PRIVATE is required
-    int32_t  fd;     // an open file, or -1 with MAP_ANONYMOUS
+    int32_t  flags;  // SYS_MAP_* -- exactly one of PRIVATE/SHARED
+    int32_t  fd;     // an open file or shm object; -1 with ANONYMOUS
     int32_t  reserved;
     uint64_t offset; // into the file; page-aligned
 };

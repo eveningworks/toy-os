@@ -509,6 +509,17 @@ int sys_munmap(void *addr, uint64_t length) {
     return (int)err(syscall2(SYS_MUNMAP, (uint64_t)(uintptr_t)addr, length));
 }
 
+int sys_shm_open(const char *name, uint64_t length, int flags) {
+    struct shm_open_msg m = {
+        .name = name, .length = length, .flags = flags, .reserved = 0,
+    };
+    return (int)err(syscall1(SYS_SHM_OPEN, (uint64_t)(uintptr_t)&m));
+}
+
+int sys_shm_unlink(const char *name) {
+    return (int)err(syscall1(SYS_SHM_UNLINK, (uint64_t)(uintptr_t)name));
+}
+
 // --- windowing -------------------------------------------------------
 
 int sys_win_request(struct win_request_msg *req) {

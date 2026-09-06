@@ -12,12 +12,10 @@
 // made when PulseAudio appeared, where an app kept calling
 // snd_pcm_writei() and a plugin redirected it.
 //
-// **WHAT A DAEMON STILL NEEDS, so the next session does not discover it
-// halfway in**: there are no unix sockets here, PIPE_MAX is 8 kernel-
-// wide, and a pipe carries no credentials -- so the real shape is a
-// shared-memory ring per client, which is what PipeWire uses memfds
-// for and which needs a kernel primitive this system has not got. See
-// docs/roadmap.md's Sound track.
+// BOTH ROWS EXIST NOW. The daemon's is a shared-memory ring per client
+// (SYS_SHM_OPEN, the primitive PipeWire uses memfds for), and it is
+// tried FIRST -- the device row is what a machine with no daemon, or a
+// daemon that has died, falls back to.
 
 struct usnd_sink {
     const char *name;
@@ -54,5 +52,10 @@ struct usnd_sink {
 
 // The kernel's exclusive PCM stream (SYS_SND_OPEN + the mapped ring).
 extern const struct usnd_sink usnd_sink_device;
+
+// /bin/soundd, through a shared-memory ring this process owns. `open`
+// returns -ENODEV when no daemon is running, which is the ordinary
+// case on a machine that never started one.
+extern const struct usnd_sink usnd_sink_daemon;
 
 #endif

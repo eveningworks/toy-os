@@ -3376,3 +3376,52 @@ one-implementation-two-front-ends shape as `klineedit`, `geom` and
 `ansi`. Running both at once means two clients on one port and the
 second fails to bind, which is the honest answer rather than a race.
 
+## TWO PROCESSES SHARE MEMORY THROUGH A NAME, AND THE NAME IS THE HARD PART
+
+`SYS_SHM_OPEN(name, bytes, flags)` creates or opens a shared-memory
+object; `SYS_MMAP` with `MAP_SHARED` maps it. That is the only way two
+ring-3 processes share writable memory here -- `MAP_SHARED` over a FILE
+is still refused, and every other cross-process mapping in the tree
+(the sound ring, a window buffer) is kernel-managed and role-gated.
+
+**The namespace is the rendezvous.** There are no unix sockets, no fd
+passing and no connect-by-name, so a name in a kernel-held namespace is
+how two processes that never shared a parent agree on anything.
+`QUERY_SHM` lists every object -- name, size, reference count, creating
+pid -- which is how a server enumerates clients it was never told about.
+`/bin/soundd` is the worked example.
+
+**Three things that bite:**
+
+- **A mapping outlives its descriptor**, POSIX's rule, so the object is
+  referenced by BOTH and `kernel/mm/shm.c` counts both. Closing the fd
+  does not free the frames.
+- **An unlinked object keeps working** for everyone already holding it;
+  unlink means "no new openers", not "destroy".
+- **A shared mapping unmaps whole or not at all.** `munmap` refuses a
+  partial trim of one (-EINVAL) where it will trim a private mapping.
+
+**It is NOT `shm_open(3)`.** An object's size is fixed at creation, so
+there is no `ftruncate` and POSIX's pair is not yet expressible; the
+call is `sys_shm_open()` in `rt/sys.h` rather than a libc function whose
+arguments would mean something else.
+
+## SOUND IS MIXED BY A SERVICE, AND THE CARD IS STILL EXCLUSIVE
+
+`/bin/soundd` holds the machine's one PCM stream and mixes every client
+into it, so two programs can be audible at once. A client is any
+program calling `usnd_init()`: the library picks the daemon sink when
+the `snd.server` beacon exists and the kernel's stream otherwise, and
+**no application code knows which it got** -- that is what
+`usnd_sink.h`'s two rows are for.
+
+**A program that opens `SYS_SND_OPEN` DIRECTLY still gets -EBUSY while
+the daemon runs.** `/tests/tone` and the `sound` KTESTs both do, on
+purpose, so anything driving them needs `service stop soundd` first --
+`tools/audio_test.py` does exactly that and says why.
+
+**Nothing moved into the kernel.** The kernel's contract is unchanged
+and it still never mixes; the daemon is an ordinary ring-3 service with
+a descriptor in `data/etc/services.d/`, `Restart=on-failure` and
+`Ready=notify`. It exits 0 on a machine with no sound card, so such a
+machine leaves it `exited` rather than crash-looping.

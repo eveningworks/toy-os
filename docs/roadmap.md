@@ -159,7 +159,7 @@ is the bookkeeping that makes any other kind of mapping possible.
 - [x] ~~File-backed `mmap`~~ DONE 2026-08-28 -- the fault-in REFUSES inside an FS_OP; see `docs/decisions.md`
 - [ ] Shared read-only text pages between instances of the same binary
 - [ ] A per-frame reference count
-- [ ] `MAP_SHARED` memory between two processes
+- [x] ~~`MAP_SHARED` memory between two processes~~ DONE 2026-09-06 -- `SYS_SHM_OPEN` names an object, `MAP_SHARED` maps it
 - [ ] Copy-on-write, shared between this and `fork()`
 - [ ] Guard pages around USER and THREAD stacks -- kernel stacks have them; a thread stack is ring 3's own allocation and has none
 - [x] ~~A frame-size bound for ring 3~~ DONE 2026-08-18
@@ -242,9 +242,10 @@ everything libc-shaped is waiting on it. Full plan and staging:
 ### Runtime + interop
 
 - [ ] Inter-process IPC (message passing)
-- [ ] Connect-by-name endpoints, generalising TWP's compositor role -- the missing primitive is rendezvous, not shared memory
+- [x] ~~Connect-by-name endpoints~~ DONE 2026-09-06 -- the shm namespace is the rendezvous, `QUERY_SHM` the enumeration
 - [ ] AF_UNIX sockets, the portable spelling of the same thing -- what ported software expects
 - [ ] Raise `PIPE_MAX` above its kernel-wide 8, which bounds how many clients any daemon can have
+- [ ] POSIX `shm_open(3)` in tolibc, which needs `ftruncate` on an shm fd -- a size is fixed at creation today
 - [x] ~~A real C library -- staged in `docs/libc-design.md`~~ BUILT, all stages -- the proof ran twice (cJSON, then Doom)
 - [x] ~~FAT16/FAT32 driver -- `/boot` readable from inside toy-os~~ done -- FAT32 only, read-write; see the FAT32 section
 - [ ] `g_next_kernel_rsp` reentrancy fixed properly
@@ -770,11 +771,12 @@ run on, not by order.
 - [x] ~~A WAV player app~~ DONE 2026-08-29 -- `/bin/wm/apps/player` and `/bin/aplay`, over `userland/lib/usnd.h`
 - [x] ~~A second sound device, to prove the class is not shaped around the first~~ DONE 2026-08-30 -- USB audio
 - [x] ~~Choosing between sound devices, and surviving one being unplugged~~ DONE 2026-08-30 -- `audio_device`, and `device_gone`
-- [ ] A system-wide sound daemon, so two programs can be audible at once -- `usnd_sink.h`'s second row
+- [x] ~~A system-wide sound daemon, so two programs can be audible at once~~ DONE 2026-09-06 -- `/bin/soundd`, `usnd_sink.h`'s second row
 - [x] ~~A second codec (MP3 or Vorbis) -- a file and a row in `usnd.c`'s table~~ DONE 2026-08-31 -- MPEG-1 Layer III, written here
 - [x] ~~Doom sound and music~~ DONE 2026-08-29 -- effects on `usnd` voices, music on Chocolate Doom's own OPL emulation
 - [x] ~~Volume mixer UI, persisted to `/etc`~~ DONE 2026-08-30 -- the tray flyout: slider, mute, device list, wheel
-- [ ] A per-application volume, which needs the sound daemon first -- the flyout has one slider because there is one stream
+- [ ] A per-application volume, now that the daemon tells its clients apart -- the flyout has one slider because it had one stream
+- [ ] Release the card when no client plays, PipeWire's suspend-on-idle -- `/tests/tone` needs `service stop soundd` today
 - [ ] HDMI/DisplayPort audio -- the display controller's codec enumerates now (`intel_display.c` holds the power well) and is left silent
 - [ ] One volume taper for every card -- `hda.c` and `sound_usb.c` share the 40 dB convention, `ac97.c` is still linear in attenuation steps
 - [ ] MPEG-2/2.5 Layer III (the half-rate sample rates), and Layer I/II -- refused with -ENOTSUP today

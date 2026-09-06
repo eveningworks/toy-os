@@ -431,6 +431,29 @@ struct query_fsstat {
     uint64_t lookup_ns;     // nanoseconds spent in them
 };
 
+// SHARED MEMORY OBJECTS: every named region SYS_SHM_OPEN has created,
+// one record each. LIST.
+//
+// This is the RENDEZVOUS half of shared memory -- a server finds the
+// clients that have opened a channel to it by looking here, because
+// there is no connect-by-name and no fd passing. `refs` counts open
+// descriptors plus live mappings, so a record with refs == 1 and no
+// mapper is a client that has not started yet or has gone away.
+#define QUERY_SHM 36
+
+#define QUERY_SHM_UNLINKED (1u << 0) // no new openers; still alive
+
+#define QUERY_SHM_NAME_MAX 32 // SHM_NAME_MAX (abi/syscall_abi.h)
+
+struct query_shm {
+    char     name[QUERY_SHM_NAME_MAX];
+    uint64_t bytes;
+    uint32_t refs;
+    int32_t  creator_pid;
+    uint32_t flags;       // QUERY_SHM_*
+    uint32_t reserved;
+};
+
 // WHO THIS MACHINE HAS TALKED TO: one record per connection, newest
 // last. LIST, and a RING -- the oldest record is overwritten, which is
 // what `seq` exists to make visible.
