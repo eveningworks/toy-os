@@ -47,6 +47,7 @@
 #define RAMFS_SIZE_KEY "ramfs_size"
 #define TMPDIR_KEY     "tmpdir"
 #define VARTMPDIR_KEY  "vartmpdir"
+#define LOG_MAX_KEY    "log_max"
 
 // SECONDS OF QUIET before a deferred commit is forced. The visible half
 // of what ext4 spells `commit=5` and Linux spells
@@ -75,6 +76,19 @@
 #define RAMFS_SIZE_MIN 0
 #define RAMFS_SIZE_MAX 4096
 #define RAMFS_SIZE_DEFAULT 0
+
+// MiB the persistent log may occupy, counting the current file and the
+// one rotated behind it. 0 turns logging off entirely, which is the
+// honest way to say "do not write to my disk" -- a logger with no cap
+// is a slow-motion outage, and one that cannot be refused is worse.
+//
+// 4 MiB is ~70k lines at the sizes this kernel logs, which is several
+// boots' worth. The ceiling is a sanity bound rather than a policy: a
+// machine with a 118 GB disk may want more, and `logd` stops at
+// whatever it is told.
+#define LOG_MAX_MIN     0
+#define LOG_MAX_MAX     512
+#define LOG_MAX_DEFAULT 4
 
 // ORDERED BY SAFETY, strongest first, because that is the order a
 // person reads a choice list in and the default must be the first thing
@@ -127,6 +141,7 @@ static int g_strict = 1;    // 0 only in `lazy`: whether barriers are issued
 static int g_batched = 1;   // 1 only in `batched`: whether commits defer
 static int g_writeback_s = WRITEBACK_DEFAULT;
 static int g_ramfs_size_mib = RAMFS_SIZE_DEFAULT;
+static int g_log_max_mib = LOG_MAX_DEFAULT;
 
 // WHERE SCRATCH GOES (api/tmppath.h). Held as strings rather than read
 // per call because tmpdir_for() is on the path of every temp file the
@@ -278,6 +293,41 @@ static const struct setting g_ramfs_size_setting = {
     .apply = ramfs_size_apply,
 };
 
+static void log_max_get(char *out, uint32_t out_size) {
+    k_snprintf(out, out_size, "%d", g_log_max_mib);
+}
+
+static int log_max_apply(const char *value) {
+    if (!value || !value[0]) return SETTING_INVALID;
+    int n = 0;
+    for (const char *p = value; *p; p++) {
+        if (*p < '0' || *p > '9') return SETTING_INVALID;
+        n = n * 10 + (*p - '0');
+        if (n > LOG_MAX_MAX) return SETTING_INVALID;
+    }
+    if (n < LOG_MAX_MIN) return SETTING_INVALID;
+    g_log_max_mib = n;
+    return etc_config_set(STORAGE_CONFIG_FILE, LOG_MAX_KEY, value)
+               ? SETTING_SAVED : SETTING_UNSAVED;
+}
+
+// READ BY logd AT EACH ROTATION CHECK, not cached at start: lowering it
+// on a machine that is filling up should take effect without a restart.
+static const struct setting g_log_max_setting = {
+    .name  = LOG_MAX_KEY,
+    .label = "Log size limit",
+    .type  = SETTING_TYPE_INT,
+    .file  = STORAGE_CONFIG_FILE,
+    .category = "Storage",
+    .group    = "Filesystem",
+    .min   = LOG_MAX_MIN,
+    .max   = LOG_MAX_MAX,
+    .step  = 1,
+    .unit  = "MiB",
+    .get   = log_max_get,
+    .apply = log_max_apply,
+};
+
 static void tmpdir_get(char *out, uint32_t out_size) {
     k_strlcpy(out, g_tmpdir, out_size);
 }
@@ -348,6 +398,7 @@ void storage_config_setting_register(void) {
     setting_register(&g_ramfs_size_setting);
     setting_register(&g_tmpdir_setting);
     setting_register(&g_vartmpdir_setting);
+    setting_register(&g_log_max_setting);
 }
 
 void storage_config_set_mode_for_test(int strict, int batched) {
@@ -391,6 +442,13 @@ void storage_config_init(void) {
     fs_mkdir(g_tmpdir);
     fs_mkdir(g_vartmpdir);
 
+    if (etc_config_buf_get(&g_cfg, LOG_MAX_KEY, value, sizeof value)) {
+        int n = 0, ok = value[0] != '\0';
+        for (const char *p = value; *p && ok; p++) {
+            if (*p < '0' || *p > '9') ok = 0; else n = n * 10 + (*p - '0');
+        }
+        if (ok && n >= LOG_MAX_MIN && n <= LOG_MAX_MAX) g_log_max_mib = n;
+    }
     if (etc_config_buf_get(&g_cfg, SYNC_KEY, value, sizeof value)) {
         // A hand-edited file reaches this reader without passing
         // through setting_set(), so it is validated here too -- and an

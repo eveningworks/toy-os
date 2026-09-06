@@ -163,6 +163,8 @@ a command), and the `gui3`/`nano` aliases.
 ### Diagnostics
 
 - [`diskbench`](diskbench.md)
+- [`log`](log.md)
+- [`logd`](logd.md)
 
 ### Networking
 

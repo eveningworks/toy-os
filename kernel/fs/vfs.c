@@ -276,6 +276,7 @@ static void ensure_layout(void) {
     fs_mkdir(TMP_DIR_DEFAULT);
     fs_mkdir("/var");
     fs_mkdir(TMP_VARDIR_DEFAULT);
+    fs_mkdir("/var/log");
     fs_mkdir(TMP_RUNDIR);
     fs_mkdir("/boot");
     fs_mkdir("/mnt");

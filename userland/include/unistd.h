@@ -22,6 +22,19 @@
 #include <stdint.h>
 #include "rt/sys.h"
 
+// THE THREE DESCRIPTORS EVERY PROCESS STARTS WITH. POSIX fixes the
+// numbers and this kernel matches them; the names exist because ported
+// code writes STDOUT_FILENO and would otherwise not compile over a
+// difference that is not real.
+//
+// fd 2 is worth one clause: it always reaches the kernel log here, so a
+// diagnostic is readable whoever spawned the process and wherever its
+// stdout went -- which is why sys_eprint() is the channel a test tool
+// asserts on. See docs/decisions.md, "stderr goes to the kernel log".
+#define STDIN_FILENO  0
+#define STDOUT_FILENO 1
+#define STDERR_FILENO 2
+
 // The POSIX type names live in <sys/types.h> now, guarded so that
 // whichever header arrives first defines them -- code including only
 // this one keeps working, which is what most of userland/ does.

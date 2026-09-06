@@ -1,0 +1,10 @@
+# The persistent log. Keeps /var/log/toyos.log, and the previous boot's
+# in toyos.log.1 -- the kernel ring holds a few hundred lines and loses
+# a boot's evidence to any flood, which is what this is for.
+#
+# Size: `storage.log_max` in MiB, shared between the two files.
+# 0 turns logging off and this exits cleanly.
+Name=logd
+Description=Keep the kernel log in /var/log
+Exec=/bin/logd
+Restart=always
