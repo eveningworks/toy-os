@@ -904,11 +904,25 @@ struct listdir_request {
 // inherited would have to store an environment per process, and the
 // one thing every caller then wants -- "like my parent's, but with one
 // change" -- would need a second syscall to express.
+// stdout_fd: everything this program writes to fd 1 goes to the
+// application log, tagged with its own name (api/applog.h). What init
+// gives a service, so `log -u toywm` means what it says.
+#define SPAWN_FD_LOG (-2)
+
 struct spawn_msg {
     const char *path;
     const char *args;      // whitespace-separated, or NULL
     const char *env;       // "K=V\0K=V\0\0", or NULL
-    int32_t stdout_fd;     // a pipe write end or socket, or -1
+    // A pipe write end or socket this process owns, or -1 for the
+    // console, or SPAWN_FD_LOG for the application log.
+    //
+    // SPAWN_FD_LOG IS A SENTINEL RATHER THAN AN fd, and that is what
+    // makes per-service logging cost nothing: the alternative is a pipe
+    // per service, and PIPE_MAX is 8 KERNEL-WIDE against six services --
+    // which would leave the shell unable to run `ls | grep`. A sentinel
+    // needs no resource, cannot fill, and cannot block the writer, which
+    // a pipe to a stalled reader does.
+    int32_t stdout_fd;
     // The child's fd 0, same rule as `stdout_fd` above. A SOCKET is
     // accepted on both because that is what a connection per child
     // needs: inetd's handler is an ordinary filter reading fd 0 and

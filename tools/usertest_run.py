@@ -76,6 +76,11 @@ VM = os.path.join(REPO, "tools", "vm.py")
 # "all phases passed" and exit code 0.
 TESTS = [
     ("libc_test", 0, None, None),
+    # SPAWN_FD_LOG: a child's stdout landing in the application log,
+    # tagged with the CHILD's name. SPAWNED (exit code None) because the
+    # thing under test is a spawn -- it waits for two children, which the
+    # legacy `run` loader has no scheduler slot to do.
+    ("applog_test", None, None, None),
     # The UDP socket API, with no network at all: binding, the ephemeral
     # range, a port refused twice, and what each protocol will not
     # accept. What it CANNOT cover is a datagram reaching anything --

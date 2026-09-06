@@ -17,6 +17,7 @@ so there is no second format to maintain.
 | `Restart` | no | `on-failure` (default), `always`, or `no`. |
 | `After` | no | Space-separated service **names** that must be started first. |
 | `Before` | no | Space-separated service names this one must be started before. |
+| `StandardOutput` | no | `log` (default) or `inherit`. Where the service's fd 1 goes. |
 | `Ready` | no | `spawn` (default) or `notify` -- what "started" MEANS. |
 | `ReadyTimeout` | no | Milliseconds to wait for a `Ready=notify` service. Default 5000. |
 
@@ -114,6 +115,31 @@ waiting.
 Services with no constraints between them keep the order their
 descriptors were read in: the sort is stable, so adding an ordering key
 to one service cannot reshuffle unrelated ones.
+
+## `StandardOutput=` decides where fd 1 goes
+
+By default a service's standard output goes to the **application log**,
+tagged with the program's own name, and `logd` persists it to
+`/var/log/toyos.log`. So this:
+
+    $ log -u netd
+
+is everything `/bin/netd` has printed, this boot and the last one.
+systemd's default is the same (`StandardOutput=journal`), and for the
+same reason: once a compositor owns the screen there is no console
+anybody is reading.
+
+`StandardOutput=inherit` gives the service init's own fd 1 instead --
+the console. **An interactive program needs it**, which is why `tosh`
+carries it: a shell whose prompt goes to a log file answers nothing.
+Nothing else here should.
+
+Two properties worth knowing. The log is a **sentinel, not a pipe**
+(`abi/syscall_abi.h`'s `SPAWN_FD_LOG`): it needs no resource, cannot
+fill, and a service writing to it can never block on a stalled reader.
+And **one write is one line** -- `stdio` line-buffers, so an ordinary
+`printf` arrives whole; a program that writes half a line gets half a
+record.
 
 ## `Ready=` decides what "started" MEANS
 

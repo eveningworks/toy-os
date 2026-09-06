@@ -6093,6 +6093,85 @@ What the measurement then said about the blitter that prompted it is
 under "Intel blitter acceleration" in `docs/roadmap-details.md`.
 
 
+## A service's stdout goes to a second log ring, addressed by sequence, and a spawn names it with a sentinel
+
+The kernel ring holds a few hundred lines, and on 2026-09-06 a driver
+polling a device that had gone away logged a line a second and flushed a
+laptop's whole boot log — the boot that mattered could not be diagnosed
+at all. `logd` and `/var/log/toyos.log` were the answer to keeping it.
+This is the second half: attributing what a **program** said, so
+`log -u netd` means what it says.
+
+**Why a second ring rather than more klog.** The obvious move is to have
+a service's stdout call `klog_write()` with its name prefixed, and it is
+wrong for the reason the file exists: a chatty program could then evict
+kernel evidence, which is exactly the failure being fixed. systemd's
+journal merges kernel and userspace into one store and gets away with it
+because the store is on disk and large; toy-os's is 64 records of `.bss`
+in front of a one-second poll. Two rings mean a program flooding its own
+ring costs only its own lines. Linux draws the same line the other way —
+`/dev/kmsg` accepts writes from userspace — and toy-os deliberately
+differs, because a kernel ring nothing can flood is worth more here than
+one stream.
+
+**Why records and not bytes.** `QUERY_KLOG` hands out byte slices because
+a kernel line is already prefixed with its subsystem and nothing needs to
+attribute it afterwards (see the entry above). Application output is the
+opposite: the text is whatever the program printed and the useful fact is
+*who*. A tag per byte slice would be a lie the moment two processes wrote
+in the same slice, so the ring stores one record per write, each carrying
+its writer.
+
+**One write is one record**, stated rather than hidden. `stdio`
+line-buffers by default, so a `printf` arrives whole and this is right in
+practice. A program that writes half a line gets half a record. Holding
+partial lines per writer would fix it and costs a buffer per open
+descriptor, which nothing here needs — `logd` already reassembles the
+kernel's byte stream, and doing it twice in the kernel for a case nothing
+produces is the wrong place to spend it.
+
+**The tag is the KERNEL's, not the caller's.** `sys_write()` reads the
+writing process's name out of its scheduler slot. A tag passed in would
+be a tag a program could forge, and the entire value of `log -u toywm` is
+that it cannot be. It costs the truncation from `PROC_NAME_MAX` (24) to
+`APPLOG_TAG_MAX` (16), which is a real limit and is cheap next to a
+forgeable one.
+
+**The sequence is the interface**, the same call `QUERY_KLOG`'s absolute
+offset makes: a reader compares the sequence it wants against the
+`oldest` every record reports, so records lost to the ring moving are
+*visible* rather than silent, and `logd` writes a line saying how many.
+`applog_get()` re-checks the sequence against the record after the bound
+check, because the kernel is preemptible and the slot can be overwritten
+between the two — handing back a newer record wearing an older sequence
+would be worse than reporting the gap, since nothing downstream could
+ever notice.
+
+**`SPAWN_FD_LOG` is a sentinel, not an fd**, and that is what makes
+per-service logging cost nothing. The alternative is a pipe per service
+with `logd` reading them, which is what a Unix-shaped answer looks like
+and is unaffordable here: `PIPE_MAX` is 8 **kernel-wide** against six
+services, so it would leave the shell unable to run `ls | grep`. A
+sentinel needs no resource, cannot fill, and cannot block its writer —
+which a pipe to a stalled reader does, and a service blocked on its own
+log output is a worse failure than losing the line. systemd solves the
+same problem with a socket per unit; that needs a socket type and a
+per-unit connection this system has no reason to build yet.
+
+**The trap the sentinel introduced**, and it cost a red test to find:
+`sys_spawn()` guarded its stdout handling with `if (stdout_fd >= 0)`, so
+`SPAWN_FD_LOG` (-2) fell through to "the console" with nothing refused
+and nothing logged. The test is `!= -1` now — `-1` is the only value
+meaning the console, and every other negative is a sentinel or a mistake,
+so an unknown one is refused rather than silently reinterpreted.
+
+**`StandardOutput=` and its one exception.** A service's output goes to
+the log by default, which is systemd's default (`StandardOutput=journal`)
+and for the same reason: once a compositor owns the screen there is no
+console anybody is reading. `StandardOutput=inherit` is the opt-out, and
+`tosh` is the only descriptor carrying it — an interactive shell whose
+prompt went to a log file would answer nothing.
+
 ## The connection log records flows, and hostnames come from the resolver rather than from DNS in ring 0
 
 Asked for on 2026-09-05 as "log all the outgoing connections -- IP /

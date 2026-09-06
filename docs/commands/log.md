@@ -12,7 +12,9 @@
 
 ## Description
 
-`log` reads the persistent log that `logd` keeps in `/var/log/toyos.log`.
+`log` reads the persistent log that `logd` keeps in `/var/log/toyos.log` —
+the kernel's own output, tagged `kernel`, plus whatever each service
+printed, tagged with the service's name.
 
 **It is not `dmesg`, and the difference is the point.** `dmesg` shows the
 kernel's RING: what is still in memory, this boot only, gone the moment it

@@ -1695,6 +1695,48 @@ echo server) and gives every connection its own reader, so no
 connection's retransmission timers are left to the idle loop.
 `/bin/httpd -1` serves one connection on fd 0/1 and exits.
 
+## A SERVICE'S STDOUT IS A LOG RECORD TAGGED WITH ITS NAME, AND `SPAWN_FD_LOG` IS HOW A SPAWN ASKS FOR IT
+
+`SPAWN_FD_LOG` (-2) in a spawn's `stdout_fd` gives the child a
+description of kind `FD_KIND_LOG`: everything it writes to fd 1 becomes
+one record in the APPLICATION ring (`api/applog.h`), tagged with the
+child's own name. `logd` drains that ring alongside the kernel's and
+writes both to `/var/log/toyos.log`, so `log -u netd` is everything
+`/bin/netd` printed.
+
+**IT IS A SENTINEL, NOT AN fd.** It is not looked up, holds no resource,
+cannot fill and cannot block its writer. A pipe per service would do all
+four wrong ways round: `PIPE_MAX` is 8 KERNEL-WIDE, against six services.
+Only `stdout_fd` accepts it -- there is nothing to read back from a log.
+
+**THE GUARD IS `!= -1`, NOT `>= 0`.** `-1` is the only value meaning "the
+console"; every other negative is a sentinel or a mistake, and an unknown
+one is REFUSED (-EBADF). Written as `>= 0`, `sys_spawn()` swallowed the
+sentinel silently and the service printed to the console with nothing
+logged and nothing refused.
+
+**THE TAG IS THE KERNEL'S**, read from the writer's scheduler slot in
+`sys_write()`. A caller-supplied tag would be forgeable, which is the
+whole value of `log -u`. It truncates `PROC_NAME_MAX` (24) to
+`APPLOG_TAG_MAX` (16).
+
+**THE RING IS SEPARATE FROM klog ON PURPOSE**: a chatty program must not
+be able to evict kernel evidence, which is the failure `logd` exists
+because of. It is 64 records -- a BUFFER in front of a one-second poll,
+not a history; the history is the file. A reader compares the sequence it
+wants against the `oldest` every `QUERY_APPLOG` record reports, so a gap
+is visible and `logd` says how many lines it lost.
+
+**A NEW `enum fd_kind` NEEDS ITS ROW IN `sys_write()`'s SWITCH** as well
+as its description: adding `FD_KIND_LOG` without one left every write to
+it falling through the default, so a spawn that took effect still logged
+nothing. `docs/decisions.md` has the rest.
+
+**INIT SPAWNS EVERY SERVICE THIS WAY** unless its descriptor says
+`StandardOutput=inherit`, which is systemd's default and its opt-out.
+`tosh` is the only descriptor carrying the opt-out; an interactive shell
+whose prompt went to a log file would answer nothing.
+
 ## A SIGNAL SETS A BIT; THE KERNEL ACTS ON IT WHEN IT IS SAFE TO.
 
 `abi/signal_abi.h` for the numbers, `kernel/signal.h` for the policy,

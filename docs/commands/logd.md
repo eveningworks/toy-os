@@ -18,9 +18,18 @@ read with `log`.
 power-cycled never reaches a shutdown, and those are exactly the boots
 worth reading afterwards.
 
-**It writes what the kernel said, verbatim, with a tag in front:**
+**It drains TWO rings.** The kernel's, and the APPLICATION ring — one
+record per write from any process whose stdout a spawn pointed at the log
+(`SPAWN_FD_LOG`), which is what init gives every service. The tag is the
+program's own name, taken by the kernel rather than supplied by the
+writer, so it cannot be forged:
 
     [kernel] [0.90] usb: port 2: connected, low-speed, enabled
+    [netd  ] [3.21] netd: eth0 is now net-123456
+
+Both carry the same boot-relative stamp, so the merged file reads in
+order. A service's line is stamped when it was WRITTEN, not when `logd`
+drained it, which can be a second later.
 
 Nothing is reformatted. The kernel's `[0.90]` is boot-relative and is the
 most reliable clock the machine has early on, before anything has set the
@@ -32,10 +41,11 @@ when the wall clock is wanted.
 runs, so everything logged before the daemon existed — the whole of boot —
 is persisted too.
 
-**A gap is reported rather than hidden.** `logd` tracks an absolute offset
-into the kernel's byte stream and compares it against the oldest byte the
-kernel still holds; if the ring outran it, it writes a line saying how many
-bytes were lost. A reader can tell the difference between a quiet machine
+**A gap is reported rather than hidden**, on both rings. `logd` tracks an
+absolute offset into the kernel's byte stream and a sequence number into
+the application ring, and compares each against the oldest the kernel
+still holds; if either outran it, it writes a line saying how much was
+lost. A reader can tell the difference between a quiet machine
 and one whose evidence was destroyed, which is the whole reason `klog_read()`
 takes an absolute offset rather than a ring position.
 

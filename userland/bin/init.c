@@ -218,6 +218,7 @@ struct service {
     // one-shot that did its job from one that could not: both are down
     // for good, and `Restart=no` never records a failure anywhere else.
     int  last_exit;
+    int  stdout_log;            // 1 = stdout goes to the log, 0 = inherited
     char after[SVC_DEPS_MAX];   // names that must be spawned before this
     char before[SVC_DEPS_MAX];  // names this must be spawned before
     int  seen;         // survived the last scan
@@ -439,6 +440,20 @@ static void load_service(const char *file) {
             // it SAYS so, because a typo that silently changes a restart
             // policy is found the day the service dies and stays dead.
             logf1("init: %s has an unknown Restart=, using on-failure\n",
+                  s->name);
+    }
+
+    // systemd's StandardOutput=, with its default: a service's output
+    // belongs in the log, tagged with the service's name, rather than on
+    // a console nothing is watching once the compositor owns the screen.
+    // `inherit` is the opt-out, for something that genuinely writes to
+    // the terminal it was started from.
+    char out[16];
+    s->stdout_log = 1;
+    if (etc_config_buf_get(&g_cfg, "StandardOutput", out, sizeof out)) {
+        if (k_strcmp(out, "inherit") == 0) s->stdout_log = 0;
+        else if (k_strcmp(out, "log") != 0)
+            logf1("init: %s has an unknown StandardOutput=, using log\n",
                   s->name);
     }
 
@@ -705,7 +720,7 @@ static void start_service(struct service *s) {
     // another.
     char args[SVC_ARGS_MAX];
     const char *use = s->args[0] ? expand_specifiers(s->args, args, sizeof args) : 0;
-    int pid = sys_spawn(s->exec, use, -1);
+    int pid = sys_spawn(s->exec, use, s->stdout_log ? SPAWN_FD_LOG : -1);
     if (pid > 0) {
         s->pid = pid;
         s->started_ms = now_ms();

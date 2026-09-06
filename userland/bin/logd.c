@@ -23,6 +23,12 @@
 // anything has set the time. Tag first and fixed-width so `log -u
 // kernel` matches at a fixed offset rather than hunting for a substring
 // that a MESSAGE might also contain.
+//
+// TWO SOURCES, ONE FILE: the kernel ring (QUERY_KLOG, bytes) and the
+// application ring (QUERY_APPLOG, records -- what a service wrote to a
+// stdout the spawn pointed at the log). They are drained on the same
+// pass and both carry the same boot-relative stamp, so the file reads
+// in order even though nothing merges them by timestamp.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,6 +38,7 @@
 #include "lib/usetting.h"
 #include "lib/utmppath.h"
 #include "query_abi.h"
+#include "applog.h"
 
 #define LOG_PATH   "/var/log/toyos.log"
 #define LOG_PREV   "/var/log/toyos.log.1"
@@ -43,6 +50,11 @@
 // moves under a reader (api/klog.h). Comparing it against the `first`
 // the kernel reports is how a gap becomes visible instead of silent.
 static unsigned long long g_seen;
+
+// The application ring is addressed by SEQUENCE, not by byte, so this
+// is the last record persisted rather than an offset. Same gap check:
+// compare it against the oldest the kernel still holds.
+static unsigned long long g_seq;
 
 static int g_fd = -1;
 static unsigned long long g_written;   // bytes in the current file
@@ -101,7 +113,7 @@ static void feed(const char *p, unsigned n) {
 }
 
 // One pass over whatever is new. Returns 0 when caught up.
-static int drain(void) {
+static int drain_klog(void) {
     struct query_klog r;
     if (sys_query_record(QUERY_KLOG, 0, &r, sizeof r) <= 0) return 0;
 
@@ -129,6 +141,39 @@ static int drain(void) {
     return 1;
 }
 
+// The application ring, one record per pass. A record is already one
+// line -- the kernel strips the newline the writer sent -- so there is
+// no line reassembly here and no partial-record state to hold.
+static int drain_applog(void) {
+    struct query_applog a;
+    if (sys_query_record(QUERY_APPLOG, 0, &a, sizeof a) <= 0) return 0;
+
+    if (g_seq + 1 < a.oldest) {
+        char note[96];
+        int n = snprintf(note, sizeof note,
+                         "logd: %llu application line(s) lost before "
+                         "they were persisted",
+                         (unsigned long long)(a.oldest - g_seq - 1));
+        if (n > 0) emit("logd", note, (unsigned)n);
+        g_seq = a.oldest - 1;
+    }
+    if (g_seq >= a.total) return 0;
+
+    unsigned idx = (unsigned)(g_seq + 1 - a.oldest);
+    if (sys_query_record(QUERY_APPLOG, idx, &a, sizeof a) <= 0) return 0;
+
+    // The stamp is prepended here rather than stored with the text,
+    // because the kernel's own lines carry theirs inside the bytes and
+    // the two have to come out looking the same.
+    char line[APPLOG_TEXT_MAX + 24];
+    int n = snprintf(line, sizeof line, "[%llu.%02llu] %s",
+                     (unsigned long long)(a.cs / 100),
+                     (unsigned long long)(a.cs % 100), a.text);
+    if (n > 0) emit(a.tag, line, (unsigned)n);
+    g_seq = a.seq;
+    return 1;
+}
+
 int main(void) {
     if (!cap_bytes()) {
         // 0 means the maintainer asked for no logging. Exiting cleanly
@@ -151,9 +196,12 @@ int main(void) {
     // worth keeping, and it is still in the ring at this point.
     struct query_klog r;
     if (sys_query_record(QUERY_KLOG, 0, &r, sizeof r) > 0) g_seen = r.first;
+    struct query_applog a;
+    if (sys_query_record(QUERY_APPLOG, 0, &a, sizeof a) > 0) g_seq = a.oldest - 1;
 
     for (;;) {
-        while (drain()) { }
+        while (drain_klog()) { }
+        while (drain_applog()) { }
         rotate_if_needed();
         sys_sleep_ms(POLL_MS);
     }

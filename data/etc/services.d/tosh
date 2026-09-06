@@ -18,6 +18,11 @@ Description=The console shell
 Exec=/bin/tosh
 Target=text
 Restart=always
+# THE ONE SERVICE THAT MUST NOT LOG ITS STDOUT: this is an interactive
+# shell and fd 1 is where its prompt and every command's output goes.
+# Sent to the log instead, a `text` boot reaches a shell that answers
+# nothing.
+StandardOutput=inherit
 # Ready at the first prompt: a shell that has printed nothing has not
 # installed its signal handlers or its job table yet.
 Ready=notify

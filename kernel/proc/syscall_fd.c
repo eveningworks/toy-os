@@ -16,6 +16,7 @@
 #include "syscall_abi.h"
 #include "errno.h"
 #include "klog.h"
+#include "applog.h"
 #include "heap.h"  // bounce buffers come from here, not the stack
 #include "vga.h"
 #include "keyboard.h"
@@ -642,7 +643,17 @@ SYSCALL_HANDLER sys_do_write_console(uint64_t *regs, uint64_t pml4, int kind,
         // reaches the serial console and `dmesg` no matter where
         // stdout went, so a GUI client with no terminal attached can
         // still say something a test can read.
-        if (kind == FD_KIND_KLOG) {
+        if (kind == FD_KIND_LOG) {
+            // TAGGED BY WHO IS WRITING, which the kernel knows and the
+            // program cannot lie about -- a tag a caller supplied would
+            // be a tag a caller could forge, and the whole value of
+            // `log -u toywm` is that it means what it says.
+            struct proc_info info;
+            const char *tag = "?";
+            if (scheduler_proc_info(scheduler_current_pid() - 1, &info))
+                tag = info.name;
+            applog_write(tag, (const char *)buf, (uint32_t)len);
+        } else if (kind == FD_KIND_KLOG) {
             for (uint64_t i = 0; i < len; i++) klog_putc(buf[i]);
         } else {
             for (uint64_t i = 0; i < len; i++) vga_putc(buf[i]);
@@ -814,6 +825,7 @@ int sys_write(struct syscall_ctx *c) {
     switch (f->kind) {
     case FD_KIND_CONSOLE:
     case FD_KIND_KLOG:
+    case FD_KIND_LOG:
         sys_do_write_console(c->regs, pml4, f->kind, buf_ptr, len);
         break;
     case FD_KIND_SOCKET: {

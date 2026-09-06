@@ -441,6 +441,31 @@ struct query_fsstat {
 // mapper is a client that has not started yet or has gone away.
 #define QUERY_SHM 36
 
+// WHAT A PROCESS SAID, one record per write, tagged with the program
+// that wrote it (api/applog.h). A LIST. This is what `logd` drains to
+// give /var/log a per-service tag, and it is separate from QUERY_KLOG
+// because the two rings are separate -- a chatty program must not be
+// able to flush kernel evidence, which is a thing that has happened.
+//
+// The SEQUENCE is the interface, not the index: a reader asks for the
+// records it has not seen and compares `oldest` against what it wanted,
+// so a gap is visible rather than silent. Same guarantee QUERY_KLOG's
+// absolute offset gives, in the shape a record list needs.
+#define QUERY_APPLOG 37
+
+struct query_applog {
+    uint64_t seq;      // this record's sequence, from 1
+    uint64_t cs;       // hundredths of a second since boot, as klog stamps
+    uint64_t total;    // records ever written, as of this call
+    uint64_t oldest;   // the oldest still held
+    char     tag[16];  // the writing program
+    char     text[200];
+    uint16_t len;
+};
+
+_Static_assert(sizeof(struct query_applog) <= 256,
+               "a query record must fit QUERY_RECORD_MAX -- see api/query.h");
+
 #define QUERY_SHM_UNLINKED (1u << 0) // no new openers; still alive
 
 #define QUERY_SHM_NAME_MAX 32 // SHM_NAME_MAX (abi/syscall_abi.h)

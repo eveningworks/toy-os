@@ -94,7 +94,13 @@ enum fd_kind {
     // or written through -- the only thing you may do with one is
     // SYS_MMAP it -- so every I/O path refuses it by falling off its
     // kind switch, which is what a new kind should cost.
-    FD_KIND_SHM
+    FD_KIND_SHM,
+    // A write goes to the application log (api/applog.h), tagged with
+    // the writing program's name. What a SERVICE's stdout is, so its
+    // ordinary output is captured and attributed instead of landing on
+    // a console nobody is reading. Never readable: there is nothing to
+    // read back through a descriptor, and `log` reads the file.
+    FD_KIND_LOG
 };
 
 struct open_file {

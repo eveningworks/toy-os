@@ -495,6 +495,13 @@ static size_t copy_env_from_user(uint64_t pml4, uint64_t uptr, char *out, size_t
 // handler spawned per connection be an ordinary filter. Returns -1 for
 // anything else, including an fd this process does not hold.
 static int spawn_std_desc(uint64_t pml4, int fd, enum fd_kind want) {
+    // The sentinel is not an fd and is not looked up: it asks for a
+    // FRESH log description, which the child then owns. Only for the
+    // child's stdout -- there is nothing to read back from a log, so
+    // accepting it for stdin would be a descriptor that answers every
+    // read with failure.
+    if (fd == SPAWN_FD_LOG && want == FD_KIND_PIPE_W)
+        return fd_desc_alloc(FD_KIND_LOG, -1);
     struct open_file *f = fd_get(pml4, fd);
     if (!f) return -1;
     if (f->kind != want && f->kind != FD_KIND_SOCKET) return -1;
@@ -592,9 +599,15 @@ int sys_spawn(struct syscall_ctx *c) {
         // REFUSED rather than quietly ignored -- spawning with console
         // output instead would leave the parent blocked on a pipe
         // nothing will ever write to.
+        //
+        // THE TEST IS `!= -1`, NOT `>= 0`: -1 is the only value meaning
+        // "the console", and every other negative is a sentinel or a
+        // mistake. Written as `>= 0` it silently swallowed
+        // SPAWN_FD_LOG, so a service spawned onto the log printed to the
+        // console with nothing refused and nothing logged.
         int stdout_desc = -1, stdin_desc = -1;
         int ok = 1;
-        if (msg.stdout_fd >= 0) {
+        if (msg.stdout_fd != -1) {
             stdout_desc = spawn_std_desc(pml4, (int)msg.stdout_fd, FD_KIND_PIPE_W);
             if (stdout_desc < 0) {
                 klog_write("syscall: spawn() rejected -- stdout fd isn't this process's pipe write end or socket\n");
@@ -602,7 +615,7 @@ int sys_spawn(struct syscall_ctx *c) {
                 ok = 0;
             }
         }
-        if (ok && msg.stdin_fd >= 0) {
+        if (ok && msg.stdin_fd != -1) {
             stdin_desc = spawn_std_desc(pml4, (int)msg.stdin_fd, FD_KIND_PIPE_R);
             if (stdin_desc < 0) {
                 klog_write("syscall: spawn() rejected -- stdin fd isn't this process's pipe read end or socket\n");
