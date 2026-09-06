@@ -81,8 +81,17 @@
 #include "keyboard.h"
 #include "ansi.h"   // the kernel's parser, compiled into libuapp too
 
-#define WIN_W 640
-#define WIN_H 400
+// THE WINDOW IS SIZED FOR A GRID, NOT IN PIXELS. A fixed pair does not
+// survive the font: 640x400 was 78x21 at size 14 and 44x12 at size 24,
+// so the one setting that is meant to reflow the whole desktop
+// (kernel/drivers/gfx.c) made this window progressively useless.
+//
+// 120x30 is Windows Terminal's default. The VT100 grid every other
+// terminal still opens at -- xterm, GNOME Terminal, Konsole, macOS
+// Terminal, all 80x24 -- is inherited rather than chosen, and this
+// window is resizable anyway.
+#define WIN_COLS 120
+#define WIN_ROWS 30
 #define MARGIN 6
 
 #define SHELL "/bin/tosh"
@@ -1404,12 +1413,23 @@ static int on_close_cb(struct uapp *a) {
     return 1; // yes, close
 }
 
+// The exact inverse of size_changed(), which is what keeps the two
+// honest: it derives the grid from the window, this derives the window
+// from the grid, and both read the same chrome and margin.
+//
+// It runs BEFORE on_open (userland/ui/uapp.c), so nothing here may touch
+// g_menu -- chrome_h() is safe only because both halves of it are pure
+// font arithmetic.
+static void default_size(int *w, int *h) {
+    *w = WIN_COLS * ugfx_char_w() + 2 * MARGIN;
+    *h = WIN_ROWS * ugfx_char_h() + chrome_h() + 2 * MARGIN;
+}
+
 int main(void) {
     struct uapp_desc desc = {
         .title   = "Terminal",
         .app_id  = "terminal",
-        .w       = WIN_W,
-        .h       = WIN_H,
+        .on_size = default_size,
         .x       = 120,
         .y       = 120,
         .flags   = UAPP_RESIZABLE,
