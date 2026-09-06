@@ -1585,16 +1585,36 @@ static void attach_root_port(uint32_t p) {
         // question (see reset_port()), and every failure measured here
         // is low-, full- or high-speed. Attempt 0 read the speed.
         int force = attempt && g_hc.ports[p].speed != XHCI_SPEED_SUPER;
+        uint8_t was_speed = g_hc.ports[p].speed;
         reset_port(p, force);
         uint32_t sc = mr32(g_hc.op, XHCI_PORTSC(p));
         g_hc.ports[p].connected = (sc & XHCI_PORTSC_CCS) ? 1 : 0;
         g_hc.ports[p].enabled   = (sc & XHCI_PORTSC_PED) ? 1 : 0;
         g_hc.ports[p].speed     = (uint8_t)XHCI_PORTSC_SPEED(sc);
         if (!g_hc.ports[p].connected) return;
-        if (attempt == 0)
+        // THE SPEED ON EVERY ATTEMPT, not just the first. A device that
+        // comes up at the WRONG speed is the sharpest lead this bug has
+        // (docs/bugs.md): the gigabit adapter enumerated `full-speed` on
+        // a failing boot and `high-speed` on working ones, which is a
+        // high-speed CHIRP that did not happen during reset. The retry
+        // used to log nothing, so nobody could see whether the forced
+        // reset re-negotiated it -- which is exactly the question.
+        if (attempt == 0) {
             klog_printf("usb: port %u: connected, %s, %s (portsc 0x%x)\n",
                         p + 1, speed_name(g_hc.ports[p].speed),
                         g_hc.ports[p].enabled ? "enabled" : "not enabled", sc);
+        } else {
+            klog_printf("usb: port %u: retry %s, %s (portsc 0x%x)%s\n",
+                        p + 1, speed_name(g_hc.ports[p].speed),
+                        g_hc.ports[p].enabled ? "enabled" : "not enabled", sc,
+                        // Called out rather than left to be diffed: a
+                        // speed that CHANGES across a reset is the chirp
+                        // succeeding the second time, and it is the one
+                        // observation that would turn the lead into a
+                        // cause.
+                        g_hc.ports[p].speed != was_speed
+                            ? "  <- SPEED CHANGED" : "");
+        }
         if (!g_hc.ports[p].enabled) return;
         if (usb_enumerate_port((uint8_t)(p + 1), g_hc.ports[p].speed) >= 0)
             return;
@@ -1605,9 +1625,13 @@ static void attach_root_port(uint32_t p) {
         // "enumeration failed" over a run of boots silently conflated
         // them and made a rate that could not tell a recovery from a
         // loss (tools/boot_rate.py).
-        klog_printf("usb: port %u: %s\n", p + 1,
+        // The speed rides the failure line too, so one grep for the
+        // give-up carries what the device negotiated without needing
+        // the surrounding lines -- which a truncated log may not have.
+        klog_printf("usb: port %u: %s (at %s)\n", p + 1,
                     attempt ? "enumeration GAVE UP"
-                            : "enumeration failed -- resetting and retrying");
+                            : "enumeration failed -- resetting and retrying",
+                    speed_name(g_hc.ports[p].speed));
     }
 }
 
