@@ -14,15 +14,9 @@ The system sound daemon. It owns the machine's one PCM stream and mixes
 every program that wants audio into it, so two programs can be audible
 at the same time.
 
-It is a **service**, not something to type. **It ships DISABLED**, like
-`telnetd` and `tftpd` — `service enable soundd` copies its descriptor
-into `/etc/services.d` and init starts it from then on.
-
-**Why disabled**: an audio client stalls instead of finishing while the
-daemon mixes it, on real hardware, deterministically — and not in QEMU
-on either emulated card (`docs/bugs.md`). Until that is understood,
-turning it on trades "two programs can be audible" for "a program that
-plays a sound may not exit", which is the worse of the two.
+It is a **service**, not something to type: `data/etc/services.d/soundd`
+starts it at boot and init restarts it if it crashes. Run it by hand
+only to see what it says.
 
 The kernel deliberately hands out **one exclusive stream** and never
 mixes — `docs/decisions/drivers.md` has why, and it is the same call
@@ -58,9 +52,18 @@ plays the part the hardware plays for a single client: it advances
 That one rule is why a client that dies needs no cleanup here — its ring
 goes quiet on its own instead of looping.
 
-The namespace itself is a queryable fact, `QUERY_SHM` — one record per
-object, with its size, its reference count and the pid that created it —
-so the daemon's client list is readable from outside the daemon.
+`lsshm` lists the namespace, so the daemon's clients are readable from
+outside the daemon — one row per ring, named `snd.<pid>`. A healthy
+client reads `REFS 4`: its own descriptor and mapping, plus the
+daemon's.
+
+**An `(unlinked)` row is not a client.** The kernel releases an object's
+name when its creator dies, and the daemon ignores anything so marked —
+without that it went on holding a dead client's ring, and its own
+reference was then the only thing keeping that name alive, so it never
+noticed the loss and refused to adopt the live ring a recycled pid
+created behind it. The symptom was an `aplay` that played its file and
+never exited.
 
 ## What it deliberately does not do
 

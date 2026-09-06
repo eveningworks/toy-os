@@ -6247,6 +6247,21 @@ zero on first touch because each mapper faults separately; a shared one
 has no per-mapper first touch to hang it on, and the second mapper must
 never read what a previous owner of those frames left behind.
 
+**A DEAD CREATOR'S NAME IS RELEASED AT ONCE, and that is not tidiness --
+it breaks a deadlock.** A server holds a reference to each client's
+object, so the object outlives the client; while it lives the NAME is
+still in the namespace, and the namespace is the only thing the server
+can watch. So the server never learns the client is gone, its own
+reference is what keeps the name alive, and the next process to reuse
+that pid unlinks a name it cannot free and creates a SECOND object
+behind it -- which the server, still matching by name against the
+corpse, never adopts. The client's ring is then read by nobody. That is
+not a hypothetical: it is why `aplay` played its file and never exited,
+found on real hardware after three wrong theories, and it took two
+halves to fix -- the kernel releasing the name here, and the SERVER
+skipping anything flagged `QUERY_SHM_UNLINKED`. Either alone leaves the
+loop intact.
+
 **No permissions, stated rather than implied.** Any process may open any
 name. This system has no users, so a mode argument would be decoration
 -- and a shared object is exactly as private as its name is unguessable,

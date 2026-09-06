@@ -122,6 +122,15 @@ static void rescan(void) {
     struct query_shm rec;
     QUERY_FOREACH(QUERY_SHM, rec, i) {
         if (!name_is_client(rec.name)) continue;
+        // AN UNLINKED OBJECT IS OUT OF THE NAMESPACE, so it is not a
+        // client any more even though it still has frames and still
+        // appears here. The kernel releases a dead creator's name
+        // (kernel/mm/shm.c), and THIS is what turns that into the
+        // daemon letting go: watching the list without the flag, it
+        // kept holding a corpse -- whose own reference was the only
+        // thing keeping the name alive -- and then refused to adopt the
+        // live ring a recycled pid created behind it.
+        if (rec.flags & QUERY_SHM_UNLINKED) continue;
         if (nseen < (int)(sizeof seen / sizeof seen[0]))
             strlcpy(seen[nseen++], rec.name, SHM_NAME_MAX);
     }

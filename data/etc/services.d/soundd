@@ -1,9 +1,9 @@
 # The system sound daemon: it owns the card and mixes every program
-# into it, so two can be audible at once.
+# into it, so two can be audible at once. Without it the FIRST program
+# to ask gets the card and every later one is silent.
 #
-# SHIPS DISABLED, like telnetd and tftpd, for a concrete reason rather
-# than caution: a client STALLS on the real test laptop while every
-# emulated card passes (docs/bugs.md). `service enable soundd`.
+# Ready=notify: a client ordered after this waits for the beacon.
+# See docs/commands/soundd.md.
 #
 # The whole file must fit in 512 bytes, comments included.
 Name=soundd

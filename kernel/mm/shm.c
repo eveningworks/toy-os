@@ -48,6 +48,7 @@ struct shm_object {
     int      refs;      // descriptors + mappings; 0 = the slot is free
     int      unlinked;  // no new openers; the frames still live
     int      creator;   // pid, for QUERY_SHM
+    uint64_t creator_mm; // its address space, so death can be noticed
     uint64_t frames[SHM_PAGES_MAX];
 };
 
@@ -133,6 +134,19 @@ void shm_process_gone(uint64_t pml4) {
         k_memset(&g_map[i], 0, sizeof g_map[i]);
         shm_put(idx);
     }
+    // A DEAD CREATOR'S NAME GOES WITH IT, and the reason is a deadlock
+    // rather than tidiness: a server holds a reference to each client's
+    // object, so the object outlives the client -- and while it lives
+    // the NAME is still in the namespace, which is the only way the
+    // server has to notice the client is gone. It never does. The next
+    // process to reuse that pid then unlinks a name it cannot free and
+    // creates a SECOND object behind it, the server keeps mixing the
+    // first, and the new client's ring is read by nobody (docs/bugs.md).
+    //
+    // The frames still go at the last reference; only the name goes now.
+    for (int i = 0; i < SHM_MAX; i++)
+        if (g_obj[i].refs && g_obj[i].creator_mm == pml4)
+            g_obj[i].unlinked = 1;
 }
 
 // --- the syscalls ----------------------------------------------------
@@ -147,7 +161,8 @@ static int name_ok(const char *n) {
     return !(n[0] == '.' && (!n[1] || (n[1] == '.' && !n[2])));
 }
 
-static int obj_create(const char *name, uint64_t npages, int pid) {
+static int obj_create(const char *name, uint64_t npages, int pid,
+                      uint64_t pml4) {
     for (int i = 0; i < SHM_MAX; i++) {
         if (g_obj[i].refs) continue;
         struct shm_object *o = &g_obj[i];
@@ -168,6 +183,7 @@ static int obj_create(const char *name, uint64_t npages, int pid) {
         k_strlcpy(o->name, name, sizeof o->name);
         o->npages = (uint32_t)npages;
         o->creator = pid;
+        o->creator_mm = pml4;
         o->refs = 1; // the descriptor about to be installed
         return i;
     }
@@ -193,7 +209,7 @@ int sys_shm_open(struct syscall_ctx *c) {
         if (!(m.flags & SHM_CREATE)) { ret = -ENOENT; goto out; }
         uint64_t npages = (m.length + 4095) / 4096;
         if (!npages || npages > SHM_PAGES_MAX) { ret = -EINVAL; goto out; }
-        idx = obj_create(name, npages, scheduler_current_pid());
+        idx = obj_create(name, npages, scheduler_current_pid(), c->pml4);
         if (idx < 0) { ret = idx; goto out; }
     }
 
@@ -274,7 +290,7 @@ INITCALL(shm_query_init, INIT_QUERY);
 // --- tests -----------------------------------------------------------
 
 KTEST("shm", "an object outlives its unlink while somebody holds it") {
-    int idx = obj_create("ktest-shm", 2, 0);
+    int idx = obj_create("ktest-shm", 2, 0, 0);
     KTEST_ASSERT(idx >= 0);
     KTEST_ASSERT_EQ((int)shm_npages(idx), 2);
     KTEST_ASSERT(shm_frame(idx, 0) != 0 && shm_frame(idx, 1) != 0);
@@ -292,7 +308,7 @@ KTEST("shm", "an object outlives its unlink while somebody holds it") {
 }
 
 KTEST("shm", "two frames of one object are distinct and zeroed") {
-    int idx = obj_create("ktest-shm2", 2, 0);
+    int idx = obj_create("ktest-shm2", 2, 0, 0);
     KTEST_ASSERT(idx >= 0);
     uint64_t a = shm_frame(idx, 0), b = shm_frame(idx, 1);
     KTEST_ASSERT(a && b && a != b);
@@ -311,8 +327,35 @@ KTEST("shm", "a name is refused before a slot is spent on it") {
     KTEST_ASSERT_EQ(name_ok("snd.3"), 1);
 }
 
+KTEST("shm", "a dead creator's NAME goes, so a server notices") {
+    // The deadlock this exists to break: a server holds a reference to
+    // each client's object, so the object outlives the client -- and
+    // while it lives the name is in the namespace, which is the only
+    // thing the server can watch. Without this the name never goes.
+    int idx = obj_create("ktest-shm4", 1, 42, 0xBEEF000);
+    KTEST_ASSERT(idx >= 0);
+    shm_get(idx);                       // stand in for the server's hold
+    KTEST_ASSERT_EQ(shm_lookup("ktest-shm4"), idx);
+
+    shm_process_gone(0xBEEF000);        // the creator dies
+    KTEST_ASSERT_EQ(shm_lookup("ktest-shm4"), -1); // the name is gone...
+    KTEST_ASSERT_EQ((int)shm_npages(idx), 1);      // ...the frames are not
+
+    // And the name is free at once, rather than after the last holder:
+    // a process reusing that pid must not collide with the corpse.
+    int second = obj_create("ktest-shm4", 1, 42, 0xCAFE000);
+    KTEST_ASSERT(second >= 0 && second != idx);
+    KTEST_ASSERT_EQ(shm_lookup("ktest-shm4"), second);
+
+    shm_put(idx);                       // the creator's own reference
+    KTEST_ASSERT_EQ((int)shm_npages(idx), 1); // the server still holds it
+    shm_put(idx);                       // the server lets go
+    KTEST_ASSERT_EQ((int)shm_npages(idx), 0);
+    shm_put(second);
+}
+
 KTEST("shm", "a dead address space drops its mappings") {
-    int idx = obj_create("ktest-shm3", 1, 0);
+    int idx = obj_create("ktest-shm3", 1, 0, 0);
     KTEST_ASSERT(idx >= 0);
     KTEST_ASSERT_EQ(shm_map_add(0xDEAD000, idx, 0x9000000000ULL, 1), 0);
     KTEST_ASSERT_EQ(g_obj[idx].refs, 2);

@@ -152,6 +152,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`gfxbench`](gfxbench.md)
 - [`guictl`](guictl.md)
 - [`ktest`](ktest.md)
+- [`lsshm`](lsshm.md)
 - [`random`](random.md)
 - [`reboot`](reboot.md)
 - [`ring3test`](ring3test.md)
