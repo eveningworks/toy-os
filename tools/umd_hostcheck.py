@@ -60,7 +60,10 @@ int main(int argc, char **argv) {
     if (!src || fread(src, 1, (size_t)n, f) != (size_t)n) return 2;
     fclose(f);
 
-    char small[1024];
+    // Generous on purpose: the real callers size this for what they
+    // will PRINT (doc's summary is 512), and a check that shared
+    // that bound would report a truncated paragraph as lost words.
+    static char small[8192];
     if (strcmp(argv[1], "title") == 0) {
         umd_title(src, (int)n, small, sizeof small);
         fputs(small, stdout);
@@ -200,6 +203,32 @@ def check_fields(exe, path, problems):
     para = run(exe, "section", path, "Description").strip()
     if not para:
         problems.append("%s: empty Description section" % name)
+    else:
+        # THE WORD COUNT MUST SURVIVE. A line break between two source
+        # lines is whitespace, and a reader that feeds the lines without
+        # it joins the last word of one to the first of the next --
+        # "for one character: itscoverage map". Squeezed comparison
+        # cannot see that (removing spaces hides exactly the missing
+        # space), so this counts tokens instead. `doc -k` is where it
+        # shows, because a summary is the one place a paragraph is
+        # rebuilt from several lines.
+        src_para = []
+        inside = False
+        for ln in src.splitlines():
+            if ln.startswith("## Description"):
+                inside = True
+                continue
+            if not inside:
+                continue
+            if not ln.strip() and src_para:
+                break
+            if ln.strip():
+                src_para.append(ln)
+        want = len(" ".join(src_para).split())
+        got = len(para.split())
+        if want and got < want:
+            problems.append("%s: Description lost %d word breaks (%d of %d)"
+                            % (name, want - got, got, want))
 
     # AN ODD NUMBER OF BACKTICKS IN THE LEAD PARAGRAPH means a code span
     # that never closes, so everything after it renders as code and its

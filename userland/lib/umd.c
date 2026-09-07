@@ -599,7 +599,12 @@ int umd_section_para(const char *src, int len, const char *name,
         e.out = &o;
         e.cols = 1 << 24;
         for (;;) {
-            inline_text(&e, l.s, l.n);
+            // inline_LINE: the newline between two source lines is
+            // whitespace, and feeding the lines without it joins the
+            // last word of one to the first of the next. The renderer
+            // has the same trap and the same fix; this copy was written
+            // before that one existed and inherited the bug.
+            inline_line(&e, l.s, l.n);
             if (i >= len) break;
             int save = i;
             l = next_line(src, len, &i);
